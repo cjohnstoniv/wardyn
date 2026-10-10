@@ -52,11 +52,15 @@ var sourceRank = map[types.LimitSource]int{
 //
 //   - the pool: PoolSource (a pool with no limits passes an empty one, or none);
 //   - the person's governance ceiling: GovernanceSource (an operator has none);
-//   - the deployment: its default sandbox size as Defaults, the request
-//     contract's bound and WARDYN_RUN_MAX_AGE as maxima, and its concurrency cap;
+//   - the deployment: DeploymentSource, ALWAYS, exactly once (its default sandbox
+//     size, the request contract's bounds, WARDYN_RUN_MAX_AGE, its concurrency
+//     cap);
 //   - self-hosted pools only: RunnerCapacitySource over the run's candidates.
 //
-// A value is unlimited only when no source bounds it. An untouched run gets the
+// A value is unlimited only when no source bounds it, and the deployment source
+// is always there to bound it: Effective refuses to compute without exactly one,
+// and without more than one pool source, because a dropped source would silently
+// widen every field. An untouched run gets the
 // lowest default any source names, never above the cap; with none it gets the
 // cap, which is today's rule for a run's end. Each answer names the source that
 // bound it, for the preview and for explaining a reduction. A source with a
@@ -67,9 +71,19 @@ func Effective(runType types.RunnerPoolRunType, sources ...SourceLimits) (types.
 		return types.EffectiveRunLimits{}, fmt.Errorf("run type %q is not background or interactive", runType)
 	}
 	ordered := slices.Clone(sources)
+	count := map[types.LimitSource]int{}
 	for _, s := range ordered {
 		if _, ok := sourceRank[s.Source]; !ok {
 			return types.EffectiveRunLimits{}, fmt.Errorf("limit source %q is unknown", s.Source)
+		}
+		count[s.Source]++
+	}
+	if count[types.LimitSourceDeployment] != 1 {
+		return types.EffectiveRunLimits{}, fmt.Errorf("exactly one deployment source is needed, got %d", count[types.LimitSourceDeployment])
+	}
+	for src, n := range count {
+		if n > 1 {
+			return types.EffectiveRunLimits{}, fmt.Errorf("limit source %q is given %d times", src, n)
 		}
 	}
 	slices.SortStableFunc(ordered, func(a, b SourceLimits) int { return cmp.Compare(sourceRank[a.Source], sourceRank[b.Source]) })
@@ -163,9 +177,35 @@ func foldField(ordered []SourceLimits, pick func(SourceLimits) Bound) (types.Eff
 	return out, nil
 }
 
+// DeploymentSource is the deployment's side of Effective, the one every call
+// carries: defaults is its default sandbox size (sizing.EffectiveLimits), CPU and
+// memory are bounded by the request contract's own bounds, maxAgeSec is
+// WARDYN_RUN_MAX_AGE (0 = none) and concurrentRuns the deployment's cap on
+// running runs (0 = none).
+func DeploymentSource(defaults types.ResourceLimits, maxAgeSec, concurrentRuns int) (SourceLimits, error) {
+	if defaults.CPUMillis < 1 || defaults.MemoryMiB < 1 || maxAgeSec < 0 || concurrentRuns < 0 {
+		return SourceLimits{}, fmt.Errorf("the deployment's default size is 1 or more and its age and run caps 0 or more, got %+v, %d, %d", defaults, maxAgeSec, concurrentRuns)
+	}
+	out := SourceLimits{Source: types.LimitSourceDeployment,
+		CPUMillis: Bound{Max: Int(types.RunnerPoolCPUMillisMax), Default: Int(defaults.CPUMillis)},
+		MemoryMiB: Bound{Max: Int(types.RunnerPoolMemoryMiBMax), Default: Int(defaults.MemoryMiB)},
+	}
+	if maxAgeSec > 0 {
+		out.LifetimeSec.Max = Int(maxAgeSec)
+	}
+	if concurrentRuns > 0 {
+		out.ConcurrentRuns = Int(concurrentRuns)
+	}
+	return out, nil
+}
+
 // PoolSource is the pool's side of Effective for one run type. A pool with no
 // limits adds no bound. A run type the pool does not serve is a refusal, so a
 // pool never answers limits for a run it would not take.
+//
+// runType is the run's STORED experience (background or interactive), never one
+// inferred from the request: an empty or unknown value (the older-client shape)
+// never satisfies a pool's run-type list and is refused.
 func PoolSource(p types.RunnerPool, runType types.RunnerPoolRunType) (SourceLimits, *Refusal) {
 	out := SourceLimits{Source: types.LimitSourcePool}
 	l := p.Limits
@@ -208,19 +248,18 @@ func CheckBarrier(p types.RunnerPool, barrier types.ConfinementClass) *Refusal {
 	return &Refusal{Reason: ReasonBarrierNotAllowed, Name: p.Name, Barrier: barrier, Allowed: p.Limits.Barriers}
 }
 
-// AtCapacity reports that the pool is already running its cap, so a new run
-// waits for a slot: it is a queue decision, not a refusal of the launch. The
-// returned Refusal only carries the reason a queued run records
-// (runner_pool_at_capacity) and the sentence that says it is waiting; a caller
-// that cannot queue is the one place it answers as a refusal. The queue itself
-// is not here. running is the pool's non-terminal runs counted in the same
-// transaction that inserts the new run, under the pool's row lock; a count read
-// outside it lets two launches both pass.
-func AtCapacity(p types.RunnerPool, running int) *Refusal {
+// AtCapacity reports that the pool is running its cap, so a new run waits for a
+// slot: it returns a Wait, not a Refusal, so it cannot be answered as a refusal.
+// nil means a slot is free. running counts the pool's runs that HOLD a slot
+// (dispatched or running), never queued ones; a queue of max waiting runs must
+// not read the pool as full for ever. It is counted in the same transaction that
+// inserts the new run, under the pool's row lock; a count read outside it lets
+// two launches both pass. The queue itself is not here.
+func AtCapacity(p types.RunnerPool, running int) *Wait {
 	if p.Limits == nil || p.Limits.MaxConcurrentRuns == nil || running < *p.Limits.MaxConcurrentRuns {
 		return nil
 	}
-	return &Refusal{Reason: ReasonAtCapacity, Name: p.Name, Max: *p.Limits.MaxConcurrentRuns}
+	return &Wait{Pool: p.Name, Max: *p.Limits.MaxConcurrentRuns}
 }
 
 // GovernanceSource is the person's governance ceiling's side of Effective:
@@ -228,11 +267,17 @@ func AtCapacity(p types.RunnerPool, running int) *Refusal {
 //
 // CPU and memory are the member cap (#1949): the most a governed request may
 // ask for is max(untouched, size), where untouched is what the run already gets
-// (the resolved policy's size, an unset field at the deployment's default) and
-// size is the ceiling policy's own size. A profile's maximum counts as the
-// ceiling's size: with no ceiling size set, the maximum IS the size (a maximum
-// above the deployment's default raises the cap to it); with both set, the lower
-// of the two. A zero field in all three leaves the bound nil (unrestricted).
+// (the admin-authored resolved policy's size after the policy step, never
+// derived from the request) and size is the ceiling policy's own size. A
+// profile's maximum counts as the ceiling's size: with no ceiling size set, the
+// maximum IS the size (a maximum above the deployment's default raises the cap
+// to it); with both set, the lower of the two. A governed member is never left
+// unbounded: a field where untouched is 0 (unset) starts from deploymentDefault,
+// per field, so a ceiling that sets only memory still bounds CPU at the default.
+// A deploymentDefault with a field below 1 is an error.
+//
+// l must be the limits the run is judged under: for an extension, the limits the
+// run captured at create, not the live profile.
 //
 // The lifetime is a lease: a finite end may be at most MaxEndAheadSec ahead of
 // now, whether or not No end is also on offer (AllowNoEnd with
@@ -242,7 +287,7 @@ func AtCapacity(p types.RunnerPool, running int) *Refusal {
 // unbounded. The default is the profile's default end, else its maximum, as a
 // new run's end is today. Governance has no idle-stop ceiling (PauseIdleAfterSec
 // pauses, it does not stop), so IdleSec is never set.
-func GovernanceSource(l types.GovernanceLimits, ceiling, untouched types.ResourceLimits) SourceLimits {
+func GovernanceSource(l types.GovernanceLimits, ceiling, untouched, deploymentDefault types.ResourceLimits) (SourceLimits, error) {
 	out := SourceLimits{Source: types.LimitSourceGovernance}
 	positive := func(n int) *int {
 		if n > 0 {
@@ -250,8 +295,11 @@ func GovernanceSource(l types.GovernanceLimits, ceiling, untouched types.Resourc
 		}
 		return nil
 	}
-	out.CPUMillis.Max = memberCap(ceiling.CPUMillis, l.MaxCPUMillis, untouched.CPUMillis)
-	out.MemoryMiB.Max = memberCap(ceiling.MemoryMiB, l.MaxMemoryMiB, untouched.MemoryMiB)
+	if deploymentDefault.CPUMillis < 1 || deploymentDefault.MemoryMiB < 1 {
+		return out, errors.New("governance needs the deployment's default size to bound a member")
+	}
+	out.CPUMillis.Max = Int(memberCap(ceiling.CPUMillis, l.MaxCPUMillis, cmp.Or(untouched.CPUMillis, deploymentDefault.CPUMillis)))
+	out.MemoryMiB.Max = Int(memberCap(ceiling.MemoryMiB, l.MaxMemoryMiB, cmp.Or(untouched.MemoryMiB, deploymentDefault.MemoryMiB)))
 	noEnd := l.AllowNoEnd && l.UserChangesLimits
 	out.NoEnd = &noEnd
 	switch {
@@ -264,13 +312,13 @@ func GovernanceSource(l types.GovernanceLimits, ceiling, untouched types.Resourc
 	}
 	out.LifetimeSec.Default = positive(cmp.Or(l.DefaultEndSec, l.MaxEndAheadSec))
 	out.ConcurrentRuns = positive(l.MaxConcurrentRuns)
-	return out
+	return out, nil
 }
 
 // memberCap is one field of the member cap: max(untouched, size), where the
 // profile's maximum is the size when the ceiling sets none and lowers it when it
-// does. Nil when nothing sets the field.
-func memberCap(ceiling, profileMax, untouched int) *int {
+// does. untouched is at least 1, so the cap always is.
+func memberCap(ceiling, profileMax, untouched int) int {
 	size := ceiling
 	switch {
 	case size < 1:
@@ -278,10 +326,7 @@ func memberCap(ceiling, profileMax, untouched int) *int {
 	case profileMax > 0:
 		size = min(size, profileMax)
 	}
-	if size = max(size, untouched); size > 0 {
-		return Int(size)
-	}
-	return nil
+	return max(size, untouched)
 }
 
 // RunnerCapacity is what one runner advertises for a single run.

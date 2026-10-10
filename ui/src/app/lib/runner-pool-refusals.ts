@@ -23,7 +23,6 @@ export const RUNNER_POOL_REASONS = [
   "runner_pools_unavailable",
   "runner_pool_run_type_not_allowed",
   "runner_pool_barrier_not_allowed",
-  "runner_pool_at_capacity",
 ] as const;
 
 export type RunnerPoolReason = (typeof RUNNER_POOL_REASONS)[number];
@@ -64,8 +63,18 @@ export const RUNNER_POOL_REFUSAL = {
     const list = labels.length > 1 ? `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}` : labels.join("");
     return `${name} doesn't allow the ${BARRIER_LABEL[asked]} barrier. It allows ${list}.`;
   },
+} as const;
+
+/**
+ * Why a run waits instead of starting (runnerpool.Wait). Not a refusal: no HTTP status, never in
+ * RUNNER_POOL_REASONS, and the console shows it on a queued run, not on a rejected launch.
+ */
+export const RUN_WAIT = {
   AT_CAPACITY: (name: string, max: number) => `${name} is running its limit of ${max}. This run starts when one finishes.`,
 } as const;
+
+/** The reason a waiting run carries for each RUN_WAIT sentence. */
+export const RUN_WAIT_REASON: Record<keyof typeof RUN_WAIT, string> = { AT_CAPACITY: "runner_pool_at_capacity" };
 
 /** The reason each sentence belongs to; the console matches on these, never on the text. */
 export const RUNNER_POOL_REFUSAL_REASON: Record<keyof typeof RUNNER_POOL_REFUSAL, RunnerPoolReason> = {
@@ -84,7 +93,6 @@ export const RUNNER_POOL_REFUSAL_REASON: Record<keyof typeof RUNNER_POOL_REFUSAL
   UNAVAILABLE_SERVER: "runner_pools_unavailable",
   RUN_TYPE_NOT_ALLOWED: "runner_pool_run_type_not_allowed",
   BARRIER_NOT_ALLOWED: "runner_pool_barrier_not_allowed",
-  AT_CAPACITY: "runner_pool_at_capacity",
 };
 
 /** Every sentence function by key, for the parity test. */
@@ -105,5 +113,4 @@ export const RUNNER_POOL_REFUSAL_BY_KEY: Record<keyof typeof RUNNER_POOL_REFUSAL
   RUN_TYPE_NOT_ALLOWED: (...a) => RUNNER_POOL_REFUSAL.RUN_TYPE_NOT_ALLOWED(a[0], a[1] as keyof typeof RUN_TYPE_PLURAL),
   BARRIER_NOT_ALLOWED: (...a) =>
     RUNNER_POOL_REFUSAL.BARRIER_NOT_ALLOWED(a[0], a[1] as keyof typeof BARRIER_LABEL, a.slice(2) as (keyof typeof BARRIER_LABEL)[]),
-  AT_CAPACITY: (...a) => RUNNER_POOL_REFUSAL.AT_CAPACITY(a[0], Number(a[1])),
 };

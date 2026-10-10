@@ -39,6 +39,12 @@ func TestRunnerPoolLimitsValidate(t *testing.T) {
 			l.Interactive.Lifetime = RunnerPoolDuration{DefaultSec: 3600, Unlimited: true}
 			l.Interactive.Idle = RunnerPoolDuration{Unlimited: true}
 		}, ""},
+		{"interactive unlimited lifetime needs a finite default", func(l *RunnerPoolLimits) {
+			l.Interactive.Lifetime = RunnerPoolDuration{Unlimited: true}
+		}, "interactive.lifetime: an unlimited lifetime still needs a finite default"},
+		{"background unlimited lifetime may default to no end", func(l *RunnerPoolLimits) {
+			l.Background.Lifetime = RunnerPoolDuration{Unlimited: true}
+		}, ""},
 		{"background only", func(l *RunnerPoolLimits) { l.Interactive = nil }, ""},
 		{"interactive only", func(l *RunnerPoolLimits) { l.Background = nil }, ""},
 		{"a concurrency cap", func(l *RunnerPoolLimits) { l.MaxConcurrentRuns = &one }, ""},

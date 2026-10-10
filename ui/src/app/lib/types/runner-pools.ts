@@ -43,7 +43,9 @@ export interface RunnerPoolAmount {
 
 /**
  * Go: types.RunnerPoolDuration, in seconds. Either a finite `max_sec` with a default of 1 to `max_sec`, or
- * `unlimited` with no `max_sec` (for an idle stop, "never"). Never encoded by an absent number alone.
+ * `unlimited` with no `max_sec` (for an idle stop, "never"). Never encoded by an absent number alone. An
+ * Interactive `lifetime` that is unlimited still needs a `default_sec` of at least 1 (No end is chosen per
+ * run); a Background `lifetime` may default to no end (`default_sec` 0).
  */
 export interface RunnerPoolDuration {
   default_sec: number;

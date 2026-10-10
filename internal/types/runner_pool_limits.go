@@ -74,7 +74,9 @@ func (a RunnerPoolAmount) validate(field, unit string, bound int) error {
 // or Unlimited, with MaxSec 0 and a DefaultSec of 0 (no end, or never stop
 // for idleness, by default) up to RunnerPoolSecondsMax. Unlimited is never
 // encoded by a zero MaxSec alone, so an omitted number cannot read as it. For an
-// idle stop, Unlimited is "never".
+// idle stop, Unlimited is "never". An Interactive lifetime that is Unlimited
+// still needs a DefaultSec of at least 1; a Background lifetime may default to
+// no end.
 type RunnerPoolDuration struct {
 	DefaultSec int  `json:"default_sec"`
 	MaxSec     int  `json:"max_sec,omitempty"`
@@ -156,6 +158,12 @@ func (l RunnerPoolLimits) Validate() error {
 			i.Idle.validate("interactive.idle"),
 		); err != nil {
 			return err
+		}
+		// An Interactive environment is never left to run with no end by default:
+		// No end is chosen per run, so an unlimited lifetime still names a finite
+		// default. A Background task may default to No end.
+		if i.Lifetime.Unlimited && i.Lifetime.DefaultSec < 1 {
+			return errors.New("interactive.lifetime: an unlimited lifetime still needs a finite default of at least 1 second; No end is chosen per run")
 		}
 	}
 	if len(l.Barriers) == 0 {

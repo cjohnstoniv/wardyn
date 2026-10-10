@@ -139,7 +139,10 @@ const (
 
 // UpdateRunnerPoolRequest renames, switches off/on or re-limits one pool.
 // Revision is the revision the caller read: a stale one is refused with
-// runner_pool_stale. Limits replace the pool's limits as a whole.
+// runner_pool_stale. A present Limits replaces the pool's limits as a WHOLE
+// block, so a client sends back the block it read with its change in it (an
+// omitted max_concurrent_runs removes the cap); an absent Limits leaves the
+// stored block unchanged.
 type UpdateRunnerPoolRequest struct {
 	Revision int64             `json:"revision"`
 	Name     *string           `json:"name,omitempty"`

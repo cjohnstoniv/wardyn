@@ -50,7 +50,7 @@ func TestRefusalSentencesMatchGolden(t *testing.T) {
 			}
 			return BarrierNotAllowedMsg(a[0], types.ConfinementClass(a[1]), allowed)
 		},
-		"AT_CAPACITY": func(a []string) string { n, _ := strconv.Atoi(a[1]); return AtCapacityMsg(a[0], n) },
+		"WAIT_AT_CAPACITY": func(a []string) string { n, _ := strconv.Atoi(a[1]); return WaitAtCapacityMsg(a[0], n) },
 	}
 	var golden []struct {
 		Key  string   `json:"key"`
@@ -220,7 +220,6 @@ func TestEveryReasonHasItsOwnSentence(t *testing.T) {
 		ReasonPoolsUnavailable:   {{Reason: ReasonPoolsUnavailable}},
 		ReasonRunTypeNotAllowed:  {{Reason: ReasonRunTypeNotAllowed, Name: "P", RunType: types.RunnerPoolRunBackground}},
 		ReasonBarrierNotAllowed:  {{Reason: ReasonBarrierNotAllowed, Name: "P", Barrier: types.CC1, Allowed: []types.ConfinementClass{types.CC3}}},
-		ReasonAtCapacity:         {{Reason: ReasonAtCapacity, Name: "P", Max: 2}},
 	}
 	for _, reason := range Reasons() {
 		if reason == ReasonInvalid {

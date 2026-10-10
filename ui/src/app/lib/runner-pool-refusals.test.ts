@@ -11,6 +11,8 @@ import {
   BARRIER_LABEL,
   HOSTING_LABEL,
   RUN_END_REASON_SENTENCE,
+  RUN_WAIT,
+  RUN_WAIT_REASON,
   RUN_TYPE_PLURAL,
   RUNNER_POOL_REASONS,
   RUNNER_POOL_REFUSAL,
@@ -31,8 +33,8 @@ const root = repoRoot();
 
 describe("runner pool refusal sentences", () => {
   it("are the golden bytes the server's twin is pinned to", () => {
-    expect(golden.map((g) => g.key).sort()).toEqual(Object.keys(RUNNER_POOL_REFUSAL).sort());
-    for (const g of golden) {
+    expect(golden.map((g) => g.key).sort()).toEqual([...Object.keys(RUNNER_POOL_REFUSAL), "WAIT_AT_CAPACITY"].sort());
+    for (const g of golden.filter((x) => x.key !== "WAIT_AT_CAPACITY")) {
       expect(RUNNER_POOL_REFUSAL_BY_KEY[g.key as keyof typeof RUNNER_POOL_REFUSAL](...g.args), g.key).toBe(g.text);
     }
   });
@@ -42,6 +44,13 @@ describe("runner pool refusal sentences", () => {
     for (const reason of Object.values(RUNNER_POOL_REFUSAL_REASON)) expect(RUNNER_POOL_REASONS).toContain(reason);
     // Every reason has a sentence, so none can reach a person as a bare code.
     expect(new Set(Object.values(RUNNER_POOL_REFUSAL_REASON))).toEqual(new Set(RUNNER_POOL_REASONS));
+  });
+
+  it("says a full pool as a wait, not a refusal", () => {
+    const g = golden.find((x) => x.key === "WAIT_AT_CAPACITY")!;
+    expect(RUN_WAIT.AT_CAPACITY(g.args[0], Number(g.args[1]))).toBe(g.text);
+    expect(RUNNER_POOL_REASONS as readonly string[]).not.toContain(RUN_WAIT_REASON.AT_CAPACITY);
+    expect(readFileSync(join(root, "internal/runnerpool/wait.go"), "utf8")).toContain(`WaitReason = "${RUN_WAIT_REASON.AT_CAPACITY}"`);
   });
 
   it("names the hosting types as the server does", () => {
@@ -83,7 +92,7 @@ describe("reasons", () => {
   it("are the Go closed set of internal/runnerpool/reasons.go", () => {
     const go = readFileSync(join(root, "internal/runnerpool/reasons.go"), "utf8");
     const goReasons = [...go.matchAll(/\bReason\w+\s+Reason = "([a-z_]+)"/g)].map((m) => m[1]);
-    expect(goReasons).toHaveLength(12);
+    expect(goReasons).toHaveLength(11);
     expect(new Set(RUNNER_POOL_REASONS)).toEqual(new Set(goReasons));
   });
 });

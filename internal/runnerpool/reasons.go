@@ -32,11 +32,10 @@ const (
 	ReasonMemberMismatch     Reason = "runner_pool_member_mismatch"
 	ReasonPoolsUnavailable   Reason = "runner_pools_unavailable"
 	// The pool's own limits refuse a request that names a pool: a run type or a
-	// barrier the pool does not allow. AtCapacity is the reason a run queued behind
-	// the pool's concurrent-run cap carries; it refuses only where queueing is impossible.
+	// barrier the pool does not allow. A pool at its concurrent-run cap is not a
+	// refusal: see Wait.
 	ReasonRunTypeNotAllowed Reason = "runner_pool_run_type_not_allowed"
 	ReasonBarrierNotAllowed Reason = "runner_pool_barrier_not_allowed"
-	ReasonAtCapacity        Reason = "runner_pool_at_capacity"
 )
 
 var reasonStatus = map[Reason]int{
@@ -51,7 +50,6 @@ var reasonStatus = map[Reason]int{
 	ReasonPoolsUnavailable:   http.StatusNotImplemented,
 	ReasonRunTypeNotAllowed:  http.StatusUnprocessableEntity,
 	ReasonBarrierNotAllowed:  http.StatusUnprocessableEntity,
-	ReasonAtCapacity:         http.StatusUnprocessableEntity,
 }
 
 // Status is the HTTP status the reason answers with; 0 for a reason outside the set.
@@ -130,7 +128,11 @@ func HostingMismatchMsg(name, label string) string {
 }
 
 func RunTypeNotAllowedMsg(name string, t types.RunnerPoolRunType) string {
-	return fmt.Sprintf("%s doesn't take %s. Choose another pool or run type.", name, t.Plural())
+	kind := t.Plural()
+	if kind == "" {
+		kind = "this kind of run"
+	}
+	return fmt.Sprintf("%s doesn't take %s. Choose another pool or run type.", name, kind)
 }
 
 // BarrierNotAllowedMsg names the barrier asked for and the ones the pool allows.
@@ -144,11 +146,6 @@ func BarrierNotAllowedMsg(name string, asked types.ConfinementClass, allowed []t
 		list = strings.Join(labels[:n-1], ", ") + " and " + labels[n-1]
 	}
 	return fmt.Sprintf("%s doesn't allow the %s barrier. It allows %s.", name, types.BarrierLabel(asked), list)
-}
-
-// AtCapacityMsg is what a queued run says: it is waiting, not refused.
-func AtCapacityMsg(name string, max int) string {
-	return fmt.Sprintf("%s is running its limit of %d. This run starts when one finishes.", name, max)
 }
 
 func UnavailableServerMsg() string { return "This server does not manage runner pools yet." }

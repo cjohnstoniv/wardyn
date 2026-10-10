@@ -178,3 +178,35 @@ func TestPoolChoiceCarriesLimitsAndProvenance(t *testing.T) {
 		t.Errorf("a pool with no limits sends none: %s", plain)
 	}
 }
+
+// TestAbsentLimitsLeaveThePoolsLimitsAlone: an update that names no limits does
+// not carry the key at all, so a writer can tell "leave the block" from "replace
+// it"; a present block is the whole block.
+func TestAbsentLimitsLeaveThePoolsLimitsAlone(t *testing.T) {
+	name := "Renamed"
+	raw, err := json.Marshal(client.UpdateRunnerPoolRequest{Revision: 2, Name: &name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "limits") {
+		t.Errorf("an update without limits carries the key: %s", raw)
+	}
+	var in client.UpdateRunnerPoolRequest
+	if err := json.Unmarshal([]byte(`{"revision":2,"name":"x"}`), &in); err != nil || in.Limits != nil {
+		t.Errorf("a body without limits decodes to %+v, %v", in.Limits, err)
+	}
+	one := 1
+	withBlock := client.UpdateRunnerPoolRequest{Revision: 2, Limits: &client.RunnerPoolLimits{
+		Background: &client.RunnerPoolBackgroundLimits{
+			CPUMillis: client.RunnerPoolAmount{Default: 1, Cap: 2}, MemoryMiB: client.RunnerPoolAmount{Default: 1, Cap: 2},
+			Lifetime: client.RunnerPoolDuration{DefaultSec: 1, MaxSec: 2}},
+		Barriers: []types.ConfinementClass{types.CC1}, MaxConcurrentRuns: &one,
+	}}
+	raw, _ = json.Marshal(withBlock)
+	if !strings.Contains(string(raw), `"max_concurrent_runs":1`) || withBlock.Validate() != nil {
+		t.Errorf("a present block is sent whole and valid: %s, %v", raw, withBlock.Validate())
+	}
+	if (client.UpdateRunnerPoolRequest{Revision: 2}).Validate() == nil {
+		t.Error("an update that changes nothing was accepted")
+	}
+}
