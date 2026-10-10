@@ -38,6 +38,7 @@ func adminTokenMention(tok token.Token, lit string) bool {
 // (#1162). A grant must read what authenticated the request
 // (actorFromRequest's ActorSystem, AgentRun.OperatorOwned) instead.
 var adminTokenCompareAllowed = map[string]string{
+	"internal/api/runner_registration.go|if owner == \"\" || len(owner) > 512 || !controlCharFree(owner) || s.isReservedPrincipal(owner) {":                   "refuses minting a runner registration for a reserved mechanism principal",
 	"internal/api/reserved_principal.go|return p == adminTokenPrincipal || (op != \"\" && p == op) ||":                                                        "the reserved set itself",
 	"internal/api/approvals_second_human.go|if actorType == types.ActorSystem && principal == adminTokenPrincipal {":                                          "break-glass, paired with the typed ActorSystem",
 	"internal/api/approvals_decidable.go|if actorType == types.ActorSystem && principal == adminTokenPrincipal {":                                             "#1197: mayDecide's read-only mirror of the same break-glass, paired with the typed ActorSystem",

@@ -215,7 +215,11 @@ var routeMatrix = map[string]classifiedRoute{
 	// Hybrid enrolment: a laptop's first boot holds no credential yet, only the
 	// single-use enrolment token in its BODY, so the route is anonymous by
 	// necessity and rate-limited per TCP peer instead (handleDeviceEnrol).
-	"POST /api/v1/devices/enrol": {class: classAnonymous},
+	"POST /api/v1/devices/enrol":         {class: classAnonymous},
+	"POST /api/v1/runners/register":      {class: classAnonymous},
+	"POST /api/v1/runners/tokens":        {class: classAdmin},
+	"POST /api/v1/me/runners/tokens":     {class: classMember},
+	"POST /api/v1/me/runners/{id}/claim": {class: classMember},
 	// Console branding (#1125): the sign-in page draws the brand before anyone
 	// has signed in, so its read and the logo it names are anonymous. The
 	// read is the public subset only (TestBrandingAnonymousReadIsThePublicSubset).
@@ -841,9 +845,10 @@ func (fakeAuthzSessionRevocations) RevokeAll(context.Context) error         { re
 // authzMatrixSiteConfig is the roster the matrix walks under: ONE enabled
 // row for claude-code.
 func authzMatrixSiteConfig() types.SiteConfig {
-	return types.SiteConfig{AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{{
-		ID: "claude-code",
-	}}}}
+	return types.SiteConfig{
+		Runners: &types.RunnerSettings{Enabled: true}, AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{{
+			ID: "claude-code",
+		}}}}
 }
 
 // shape, when given, adjusts the config before New — the deployment-shape knobs
