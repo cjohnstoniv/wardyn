@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -43,6 +44,10 @@ func TestRunContractRefusals(t *testing.T) {
 		{"runner id not a uuid", `,"placement":"local","runner_id":"x"`, reasonPlacementInvalid, "", 400},
 		{"local is unavailable", `,"placement":"local"`, string(placement.ReasonPlacementUnavailable), "", 422},
 		{"remote is today's behaviour", `,"placement":"remote"`, "", "", 200},
+		{"pool id not a uuid", `,"runner_pool_id":"build-farm"`, string(runnerpool.ReasonInvalid), runnerpool.InvalidMsg(), 400},
+		{"pool id nil uuid", `,"runner_pool_id":"00000000-0000-0000-0000-000000000000"`, string(runnerpool.ReasonInvalid), runnerpool.InvalidMsg(), 400},
+		{"pool id is not dropped", `,"runner_pool_id":"` + ws1 + `"`, reasonRequestFieldUnavailable, "", 422},
+		{"pool id beside remote is not dropped", `,"placement":"remote","runner_pool_id":"` + ws2 + `"`, reasonRequestFieldUnavailable, "", 422},
 		{"allowed image is not dropped", `,"allowed_image":"ghcr.io/acme/dev:1"`, reasonRequestFieldUnavailable, "", 422},
 		{"allowed image with spaces", `,"allowed_image":"a b"`, reasonAllowedImageInvalid, "", 400},
 		{"negative cpu", `,"resources":{"cpu_millis":-1}`, reasonResourcesInvalid, "", 400},
@@ -212,10 +217,13 @@ func TestPreviewAndPreflightCarryTheNewFacts(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 			t.Fatal(err)
 		}
-		for _, field := range []string{"resources", "local_placement", "allowed_images"} {
+		for _, field := range []string{"resources", "local_placement", "allowed_images", "runner_pools"} {
 			if string(body[field]) != "[]" {
 				t.Errorf("%s %s = %s, want []", door.name, field, body[field])
 			}
+		}
+		if _, ok := body["runner_pool"]; ok {
+			t.Errorf("%s names a resolved pool before any lane resolves one: %s", door.name, body["runner_pool"])
 		}
 	}
 }
@@ -288,5 +296,19 @@ func TestAllowedImageIsNeverBesideABuiltImage(t *testing.T) {
 		if refusal == nil || refusal.body.Reason != reasonAllowedImageInvalid {
 			t.Errorf("got %+v, want %s", refusal, reasonAllowedImageInvalid)
 		}
+	}
+}
+
+// TestRunnerPoolIDIsRefusedNotDropped pins the stub at the contract step itself:
+// a pool the server cannot honour is never silently ignored, and a request that
+// names none is untouched.
+func TestRunnerPoolIDIsRefusedNotDropped(t *testing.T) {
+	s := &Server{}
+	if refusal := s.runContractRefusal(createRunRequest{}); refusal != nil {
+		t.Fatalf("a request with no pool is refused: %+v", refusal)
+	}
+	refusal := s.runContractRefusal(createRunRequest{RunnerPoolID: "5b2f1c1e-7a4e-4a39-9f6e-0a8f4c1d2b3c"})
+	if refusal == nil || refusal.body.Reason != reasonRequestFieldUnavailable || refusal.status != http.StatusUnprocessableEntity {
+		t.Fatalf("a named pool was not refused as unavailable: %+v", refusal)
 	}
 }

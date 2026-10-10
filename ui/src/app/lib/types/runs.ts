@@ -13,6 +13,7 @@ import type { ComponentFact } from "./components";
 import type { ProvenanceEntry } from "./policy-preview";
 import type { AllowedImage, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
 import type { RunPolicySpec } from "./policy";
+import type { ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
 import type { SCMAccess } from "./setup";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
@@ -808,6 +809,11 @@ export interface PreflightResult {
   // lane resolves it), and the images the organisation lets the person choose.
   image?: ImageFact;
   allowed_images?: AllowedImage[];
+  // The pool the request resolves to and how it was chosen (absent until the
+  // pool lane resolves one), and the pools the person may choose, each with
+  // whether it is available; empty until that lane fills it.
+  runner_pool?: ResolvedRunnerPool;
+  runner_pools?: RunnerPoolChoice[];
 }
 
 // Where a run's MODEL credential lands (internal/api.modelCredentialResidency).

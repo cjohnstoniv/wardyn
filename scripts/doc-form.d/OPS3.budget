@@ -7,7 +7,7 @@
 # docs/operations/who-gets-in.md=1453 is the "Multi-user: who can change what" preamble, "Who decides
 # who gets in: chart vs console vs IdP" and "Wins a collision: chart / env", less the "What admin-only
 # still means" block (below) and the page lead.
-# docs/operations/admin-only-writes.md=2869 is "**What admin-only still means**" through the ratchet
+# docs/operations/admin-only-writes.md=2948 is "**What admin-only still means**" through the ratchet
 # paragraph — the `| Surface | Gate |` tier table operations_tier_doc_test.go reads cell by cell.
 # docs/operations/three-roles.md=4012 is "Three roles, and who sets the walls", "When everyone is an
 # admin, and what a refused person is told" and "UI apps with more than one user: use host mode".
@@ -29,7 +29,7 @@
 # docs/operations/denials.md=4636 is "Every denial that isn't a 404" — the `| reason |` table
 # authz_denied_doc_test.go and docs_r3_guard_test.go read.
 docs/operations/who-gets-in.md=1453 share=35
-docs/operations/admin-only-writes.md=2869 share=35
+docs/operations/admin-only-writes.md=2948 share=35
 docs/operations/three-roles.md=4012 share=35
 docs/operations/provider-policy.md=1278 share=35
 docs/operations/ownership-and-offboarding.md=2370 share=35
@@ -52,3 +52,4 @@ docs/operations/denials.md=4636 share=35
 # Round 1: docs/operations/custom-components.md measured 1184 after the split banner and heading cleanup.
 # Round 1: docs/operations/api-tokens.md measured 3991 after the split banner and heading cleanup.
 # Round 1: docs/operations/denials.md measured 4636 after the split banner and heading cleanup.
+# Round 1 merge: docs/operations/admin-only-writes.md 2869 -> 2948 (+79), two runner-pool route rows moved verbatim.
