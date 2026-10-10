@@ -618,15 +618,22 @@ func TestTemplateImportValidation(t *testing.T) {
 // unapplied is refused in a template, and one it accepts is accepted.
 func TestTemplateUnavailableMirrorsRunRefusal(t *testing.T) {
 	for name, body := range map[string]string{
-		"local placement":  `{"placement":"local"}`,
-		"allowed image":    `{"allowed_image":"img"}`,
-		"runner pool":      `{"runner_pool_id":"6f1c2a52-5b1e-4d45-9d6b-0c4f1b2a7e10"}`,
-		"overrides":        `{"overrides":{"agent":{"add_hosts":["a.example.com"]}}}`,
-		"built-in":         `{"components":[{"builtin":"github","org":"acme","repos":["acme/api"]}]}`,
-		"remote placement": `{"placement":"remote"}`,
-		"inline component": `{"components":[{"inline":{"hosts":["a.example.com"]}}]}`,
-		"resources":        `{"resources":{"cpu_millis":1000}}`,
-		"empty overrides":  `{"overrides":{}}`,
+		"local placement":      `{"placement":"local"}`,
+		"allowed image":        `{"allowed_image":"img"}`,
+		"runner pool":          `{"runner_pool_id":"6f1c2a52-5b1e-4d45-9d6b-0c4f1b2a7e10"}`,
+		"overrides":            `{"overrides":{"agent":{"add_hosts":["a.example.com"]}}}`,
+		"built-in":             `{"components":[{"builtin":"github","org":"acme","repos":["acme/api"]}]}`,
+		"remote placement":     `{"placement":"remote"}`,
+		"inline component":     `{"components":[{"inline":{"hosts":["a.example.com"]}}]}`,
+		"resources":            `{"resources":{"cpu_millis":1000}}`,
+		"empty overrides":      `{"overrides":{}}`,
+		"two tools":            `{"tools":[{"id":"a","kind":"harness"},{"id":"b","kind":"harness"}]}`,
+		"per-tool rules":       `{"tools":[{"id":"a","kind":"harness","default_effect":"hold"}]}`,
+		"component tool":       `{"tools":[{"id":"a","kind":"component","component":{"inline":{"hosts":["a.example.com"]}}}]}`,
+		"folder in attachment": `{"start_folder":{"kind":"attachment","attachment":"drive"}}`,
+		"default folder":       `{"start_folder":{"kind":"image_default"}}`,
+		"one harness":          `{"tools":[{"id":"a","kind":"harness"}]}`,
+		"experience alone":     `{"experience":"interactive"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			var req createRunRequest

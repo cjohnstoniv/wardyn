@@ -236,17 +236,22 @@ func TestBackgroundOnlyRefusal(t *testing.T) {
 func backgroundDoorBodies(t *testing.T) map[string]*ast.BlockStmt {
 	t.Helper()
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := map[string]*ast.BlockStmt{}
-	for _, pkg := range pkgs {
-		for _, f := range pkg.Files {
-			for _, d := range f.Decls {
-				if fn, ok := d.(*ast.FuncDecl); ok && fn.Body != nil {
-					out[fn.Name.Name] = fn.Body
-				}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, e.Name(), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range f.Decls {
+			if fn, ok := d.(*ast.FuncDecl); ok && fn.Body != nil {
+				out[fn.Name.Name] = fn.Body
 			}
 		}
 	}

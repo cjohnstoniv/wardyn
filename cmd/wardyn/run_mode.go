@@ -28,7 +28,7 @@ type runModeFlags struct {
 }
 
 func (f *runModeFlags) bind(fs *pflag.FlagSet) {
-	fs.StringVar(&f.experience, "experience", "", "what you are starting: background (an agent task or a command, with no terminal, SSH or web access) or interactive (a sandbox you work in). Required to use the other run-mode flags; never inferred. With it, --agent and --task become the agent task (background) and --agent the one included harness (interactive)")
+	fs.StringVar(&f.experience, "experience", "", "what you are starting: background (an agent task or a command, with no terminal, SSH or web access) or interactive (a sandbox you work in). Never inferred, and required by the other run-mode flags. --agent and --task become the agent task, or --agent the one included tool")
 	fs.StringVar(&f.command, "command", "", "background command to run in the governed sandbox (with --experience background; no agent). The same as --task-mode exec")
 	fs.StringArrayVar(&f.tools, "tool", nil, "interactive: an included tool as ID or ID=MODEL_PROVIDER, for example claude-code=bedrock-team. Repeatable where the server allows more than one; --agent is the same as one --tool")
 	fs.StringVar(&f.startup, "startup", "", "interactive: what starts on its own: none, harness:ID (one included tool) or command:COMMAND. One choice; unset is none")

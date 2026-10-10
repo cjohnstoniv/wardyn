@@ -60,7 +60,7 @@ export const RUN_MODE_REFUSAL_BY_KEY: Record<keyof typeof RUN_MODE_REFUSAL, (...
 export function startFolderSubpathOk(sub: string): boolean {
   if (sub === "") return true;
   if (sub.length > 512 || sub.startsWith("/") || sub.includes("\\")) return false;
-  // eslint-disable-next-line no-control-regex -- the server refuses C0, DEL and C1 characters (controlCharFree)
+  // The server refuses C0, DEL and C1 characters (controlCharFree).
   if (/[\u0000-\u001f\u007f-\u009f]/.test(sub)) return false;
   // Cleaned: no empty, "." or ".." element (a "//", a trailing "/", "./x").
   return !sub.split("/").some((part) => part === "" || part === "." || part === "..");
