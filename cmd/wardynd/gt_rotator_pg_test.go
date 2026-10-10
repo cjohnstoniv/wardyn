@@ -128,3 +128,53 @@ func TestGroundtruthRotatorLock_MutualExclusionAndTakeover(t *testing.T) {
 	}
 	releaseB()
 }
+
+// TestGroundtruthRotatorLock_StandbyDoesNotDialASessionEveryTick: the rotator
+// standby retries every groundtruthRotatorLockBackoff, and it must not open a
+// database session each time only to be told the leader holds the lock — the
+// pooled probe answers that. Cumulative pg_stat_database.sessions is the
+// measure, because the dedicated connection is closed again immediately and is
+// invisible in pg_stat_activity by the time anyone could look.
+func TestGroundtruthRotatorLock_StandbyDoesNotDialASessionEveryTick(t *testing.T) {
+	const attempts = 6
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	holder, err := db.Connect(ctx, os.Getenv("WARDYN_TEST_PG"))
+	if err != nil {
+		t.Fatalf("connect holder: %v", err)
+	}
+	defer holder.Close()
+	standby := pgPool(t)
+
+	// The leader holds the rotator lock for the duration.
+	_, release, ok, err := db.TryAdvisoryLockDedicated(ctx, holder, db.GroundTruthRotatorLockKey)
+	if err != nil || !ok {
+		t.Fatalf("the leader took the lock = %v, %v", ok, err)
+	}
+	defer release()
+
+	lock := groundtruthRotatorLock(standby)
+	if _, ok, err := lock(ctx); err != nil || ok {
+		t.Fatalf("warm-up standby attempt = ok %v, err %v; want standby", ok, err)
+	}
+
+	var before int64
+	if err := standby.QueryRow(ctx, `SELECT sessions FROM pg_stat_database WHERE datname = current_database()`).Scan(&before); err != nil {
+		t.Fatalf("read pg_stat_database.sessions: %v", err)
+	}
+	for i := range attempts {
+		if _, ok, err := lock(ctx); err != nil || ok {
+			t.Fatalf("standby attempt %d = ok %v, err %v; want standby", i+1, ok, err)
+		}
+	}
+	var after int64
+	if err := standby.QueryRow(ctx, `SELECT sessions FROM pg_stat_database WHERE datname = current_database()`).Scan(&after); err != nil {
+		t.Fatalf("re-read pg_stat_database.sessions: %v", err)
+	}
+
+	if dialed := after - before; dialed > 1 {
+		t.Fatalf("%d standby attempts opened %d database sessions, want at most 1: a standby must not dial a session per tick", attempts, dialed)
+	}
+}

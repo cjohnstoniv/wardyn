@@ -187,6 +187,32 @@ func TryAdvisoryLockConn(ctx context.Context, pool *pgxpool.Pool, key int64) (co
 	}, true, nil
 }
 
+// AdvisoryLockHeld reports whether key is held by another session RIGHT NOW,
+// probing on a connection borrowed from the pool and released before it
+// returns.
+//
+// A follower whose lock is held for the process lifetime
+// (TryAdvisoryLockDedicated) would otherwise dial a dedicated session on every
+// retry — one every sweeperLeaderRetry for the sweeper leader, one every
+// groundtruthRotatorLockBackoff for the ground-truth rotator — and close it
+// again the moment the try came back false. The probe answers "is anyone else
+// holding this?" from the pool, so only a replica that can win pays for a
+// session of its own.
+//
+// NOT a fence, and deliberately so: the probe takes and drops the lock, so
+// another replica can win that gap. The dedicated try is still what decides the
+// holder, and a follower that loses the race backs off exactly as before.
+func AdvisoryLockHeld(ctx context.Context, pool *pgxpool.Pool, key int64) (bool, error) {
+	release, ok, err := TryAdvisoryLock(ctx, pool, key)
+	if err != nil {
+		return false, fmt.Errorf("db: probe advisory lock: %w", err)
+	}
+	if ok {
+		release()
+	}
+	return !ok, nil
+}
+
 // dedicatedLockReleaseWait bounds a dedicated lock's release: the unlock and
 // the close together.
 const dedicatedLockReleaseWait = 2 * time.Second
