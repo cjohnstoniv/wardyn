@@ -6,8 +6,9 @@ package offline
 import (
 	"context"
 	"errors"
-	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 // CreateFailed retains the durable intent and contains even ambiguous partial
