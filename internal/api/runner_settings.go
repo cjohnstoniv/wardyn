@@ -15,6 +15,19 @@ import (
 
 func runnersEnabled(cfg types.SiteConfig) bool { return cfg.Runners != nil && cfg.Runners.Enabled }
 
+// carryRunners keeps the stored runner settings on a generic site-config write. Enablement has its own
+// audited, HTTPS-validated door, so a document naming a different value is refused rather than quietly
+// ignored; an echo of the stored one, or no mention at all, carries it forward. False: answered.
+func carryRunners(w http.ResponseWriter, cfg *types.SiteConfig, existing types.SiteConfig) bool {
+	if cfg.Runners != nil && cfg.Runners.Enabled != runnersEnabled(existing) {
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigRunnersViaOwnRoute,
+			"runners.enabled is a super-admin switch: change it with PUT /runners/settings, not PUT /site-config")
+		return false
+	}
+	cfg.Runners = existing.Runners
+	return true
+}
+
 // handleGetRunnerSettings is GET /api/v1/runners/settings: whether runners are on, which the
 // runners page reads while the runner routes themselves answer runners_disabled.
 func (s *Server) handleGetRunnerSettings(w http.ResponseWriter, r *http.Request) {

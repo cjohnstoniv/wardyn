@@ -54,7 +54,7 @@ func TestRunnerClaimUsesLocalFingerprintAndOrgBinding(t *testing.T) {
 
 func TestRunnerListAndTokensCommands(t *testing.T) {
 	id := uuid.New()
-	seen := time.Date(2026, 10, 10, 9, 0, 0, 0, time.UTC)
+	seen := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	views := []types.RunnerView{{ID: id, Owner: "alice@example.com", Name: "laptop-7", State: types.RunnerClaimed, Online: true, LastSeenAt: &seen, RunsActive: 2, KeyFingerprint: "abcd1234"}}
 	srv := newCmdServer(t, http.StatusOK, views)
 

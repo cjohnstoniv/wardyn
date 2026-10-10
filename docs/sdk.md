@@ -457,11 +457,11 @@ silent gap:
 | `runner_registration_rate_limited` | Too many registration attempts; retry later. |
 | `runner_registration_invalid` / `runner_owner_invalid` | Registration fields or token owner are invalid. |
 | `runner_key_already_registered` | This key is already registered; generate a new identity. |
-| `runner_not_found` / `runner_token_not_found` | No such runner, or no such unused registration token, for this caller. Another person's runner and an absent id answer alike. |
-| `runner_filter_invalid` | `GET /runners` `state` is not `active`, `revoked` or `all`. |
-| `runner_session_required` | `/me/runners` needs the person's own signed-in session; an administrative or delegated credential owns no runner. |
-| `runners_org_url_invalid` | Runners cannot be turned on until the public organisation URL (and the control-plane URL) is HTTPS. |
-| `site_config_runners_via_own_route` | `PUT /site-config` named a different `runners.enabled`; use `PUT /runners/settings`. |
+| `runner_not_found` / `runner_token_not_found` | No such runner or unused token for this caller; another person's runner answers as an absent id. |
+| `runner_filter_invalid` | `state` is not `active`, `revoked` or `all`. |
+| `runner_session_required` | `/me/runners` needs the person's own session; administrative and delegated credentials own no runner. |
+| `runners_org_url_invalid` | Runners cannot be turned on until the organisation and control-plane URLs are HTTPS. |
+| `site_config_runners_via_own_route` | Change `runners.enabled` with `PUT /runners/settings`. |
 | `runner_token_invalid` | Registration token is unknown, expired, consumed, or bound to another org. |
 | `runner_claim_mismatch` | The personal owner, fingerprint, org binding, claim state, or expiry does not match. |
 | `missing_scope_snapshot` | The grant names the credential sentinel but carries no dispatch-time snapshot (a hand-authored grant). Azure DevOps, AWS SSO; and every grant naming `bedrock-api-key`, which is no longer a model credential. |
