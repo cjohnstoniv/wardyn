@@ -59,6 +59,45 @@ docker build -q -f deploy/images/claude-code/Dockerfile -t "${AGENT_IMAGE}" .
 kind load docker-image "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${BASE_IMAGE}" --name "${CLUSTER}"
 
 KIT=deploy/azure-entra-sso
+# shellcheck source=../../scripts/lib/common.sh
+. "${BUILD}/scripts/lib/common.sh" # wait_healthy
+
+# quickstart.sh's demo Postgres has no volume (it is the same bare
+# `kubectl create deployment` `make helm-install-test` uses, and that
+# cluster is disposable by construction). This estate is not: it is walked
+# for hours, and a `docker restart` of the kind node — the kindest thing
+# anyone does to a box — takes every run, policy and console row with it.
+# So the claim is created here, not in quickstart.sh, which every quickstart
+# would then carry. Re-running is a no-op: `apply` on an unchanged object.
+#
+# FIRST adoption costs the database's current contents: mounting a PVC where
+# there was none restarts the pod against an empty volume. That is the walk's
+# setup to lose, once, before the walk — never a steady-state deploy, where
+# the claim already exists and the patch below changes nothing.
+kubectl --context "${CTX}" -n wardyn apply -f - <<YAML
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+YAML
+kubectl --context "${CTX}" -n wardyn patch deployment postgres --type=strategic -p '{
+  "spec": {"template": {"spec": {
+    "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "postgres-data"}}],
+    "containers": [{"name": "postgres", "volumeMounts": [{"name": "data", "mountPath": "/var/lib/postgresql/data"}]}]
+  }}}}'
+# A cluster with no provisioner for the claim leaves the pod Pending on the
+# mount forever, so name that state rather than letting the timeout read as a
+# Postgres crash: it is the only way this rollout hangs.
+if ! kubectl --context "${CTX}" -n wardyn rollout status deployment/postgres --timeout=300s; then
+  kubectl --context "${CTX}" -n wardyn get pvc postgres-data >&2 || true
+  die "deployment/postgres never rolled out — if pvc/postgres-data is Pending, this cluster has no StorageClass to bind it (kind's default local-path one does)"
+fi
+
 printf 'TENANT_ID=%s\nCLIENT_ID=%s\nHTTP_PORT=%s\n' "${TENANT_ID}" "${CLIENT_ID}" "${HTTP_PORT}" >"${KIT}/.env.local"
 "${KIT}/04-values.sh" >/dev/null
 cat >"${BUILD}/org.yaml" <<EOF
@@ -75,6 +114,15 @@ helm --kube-context "${CTX}" upgrade wardyn deploy/helm/wardyn -n wardyn --reuse
   --set-file defaultPolicy=deploy/kind/sso/default-policy.json
 kubectl --context "${CTX}" -n wardyn rollout status deployment/wardyn --timeout=300s
 
-# The NodePort resets connections for a few seconds after the rollout reports done.
-curl -fsS --retry 10 --retry-all-errors --retry-delay 3 "http://localhost:${HTTP_PORT}/healthz" >/dev/null
+# The NodePort resets connections for a few seconds after the rollout reports
+# done, so this polls for readiness. `curl --retry` printed its own
+# `curl: (56)` on each failed attempt — an expected first failure that reads
+# like a deploy failure in the log a 06 run tees; wait_healthy polls quietly and
+# only the FINAL failure is reported, with the pod state that explains it.
+# -m 3 bounds each attempt so a port that accepts and never replies still
+# reaches the next one (common.sh's own note on the ceiling).
+if ! wait_healthy "http://localhost:${HTTP_PORT}" 30 2; then
+  kubectl --context "${CTX}" -n wardyn get pods >&2 || true
+  die "/healthz never answered on http://localhost:${HTTP_PORT} after ${SHA} — the deploy above did not come up"
+fi
 echo "==> deployed ${SHA} to ${CTX}: http://localhost:${HTTP_PORT}"
