@@ -213,7 +213,8 @@
   - enforced both at the Wardyn boundary and, for agents that support managed settings, by generating that agent's enterprise policy file.
 - Researched during 0.7 and deliberately not built in it; the groundwork is that the posture inputs and the approval FSM it would ride already exist.
 
-- **Planned for 0.9: hybrid local + remote.**
+- **Planned for 0.9: hybrid local + remote, as client-mode runners ([design](docs/design/0.9/PLAN.md)).**
+- Where this section still says laptops "enrol" into the org, 0.9 supersedes it: the laptop runs `wardyn-runnerd`, its owner claims it, and the org is the only scheduler and audit writer. 0.8's enrolment (`WARDYN_ORG_URL`) is deprecated in 0.9 and removed in 1.0.
 - Today Wardyn has two tiers that do not know about each other —
   - an org control plane on Kubernetes ([docs/OPERATIONS.md](docs/OPERATIONS.md)) and a local daemon per laptop, MDM-managed, one machine per developer ([docs/DESKTOP.md](docs/DESKTOP.md): "A local daemon per laptop. No shared control plane, no cluster").
 - Hybrid is the deployment where they are one product:
@@ -221,7 +222,7 @@
   - and the **same person under the same org-managed policy flexes a sandbox between local and remote hardware** —
   - a quick edit on the laptop's own CPU, a long build on the cluster's —
   - with one identity, one ceiling, one audit stream.
-- The disk half follows: a local directory linked into a remote sandbox, and a remote drive readable locally.
+- The disk half follows: a local directory synced into a remote sandbox (`wardyn sync`), with drive-as-source as the shortcut when storage is shared.
 - The groundwork exists —
   - member mode (`m′`) already makes the developer a non-operator against an org IdP,
   - 0.7.2's `SiteConfig.WorkspaceProviders` is already an org-authored provider policy MDM delivers as `/etc/wardyn/site-config.json`,
@@ -248,9 +249,9 @@
 
 - **Hybrid local + remote.**
 - MDM-managed laptops enrolled into a remote org control plane on Kubernetes:
-- the org's authorization kernel decides for every enrolled daemon (signed policy snapshots so a laptop keeps working offline under its last policy; the org decides anything that touches org resources),
+- client-mode runners: the org schedules, enforces and audits, and a laptop runs no control plane (an offline runner starts no new governed run),
 - per-run placement between the laptop and the org's cluster, and mixing the two under one identity, one ceiling and one audit stream ·
-- the disk link (a local directory in a remote sandbox, a remote drive read locally) ·
+- the disk link (`wardyn sync` into a remote sandbox; drive-as-source) ·
 - the `member` role alias removed (0.8 warns)
 
 ### v1.0 scope

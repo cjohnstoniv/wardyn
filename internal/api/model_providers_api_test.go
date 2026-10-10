@@ -588,7 +588,7 @@ func TestSetupStatusNilBlockIsToday(t *testing.T) {
 	want := []string{
 		"age_key", "auth", "checks", "checks_redacted", "credential_storage", "harnesses",
 		"has_runs", "host_proxy", "llm_ready", "onboarding_complete", "platform", "providers", "ready", "runner", "scm",
-		"secrets",
+		"secrets", "tier",
 	}
 	if got := slices.Sorted(maps.Keys(st)); !slices.Equal(got, want) {
 		t.Errorf("member /setup/status keys = %v\nwant today's %v", got, want)

@@ -1,3 +1,5 @@
+> **Hybrid sections superseded** (#78, #79 and the hybrid phase entries) by [0.9/PLAN.md](../0.9/PLAN.md): the laptop is a client-mode runner; see its §1.2 for each rule's disposition.
+
 # Wardyn 0.8 — design
 
 Wardyn 0.8 is the alpha release candidate — the last planned candidate before the alpha
