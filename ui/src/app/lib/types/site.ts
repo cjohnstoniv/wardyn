@@ -345,6 +345,8 @@ export interface GitProvider {
   // (LegacyGitLane) — the field narrows, it never widens, and a lane added
   // after that list was frozen must be NAMED here to be usable.
   lanes?: GitLane[];
+  // Nonsecret operator-configured metadata; run facts expose it only to operators.
+  github_app_install_url?: string;
   // Whose credential this row's lanes use. Absent reads as "shared". The
   // "entra" lane REQUIRES "per_user" — the server refuses anything else,
   // because there is no such thing as a shared Entra sign-in.

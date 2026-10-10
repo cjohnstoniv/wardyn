@@ -168,7 +168,7 @@ func TestEgressBaselineLiftsTheComponentVaultFloorAtBothDryDoors(t *testing.T) {
 				f := newComponentFixture(t)
 				f.st.siteConfig.Components = &types.ComponentSettings{RequireVaultForCredentials: true}
 				f.st.siteConfig.Egress = tc.site
-				facts := doorFacts(t, door, f.ask(t, door, componentBody(header)))
+				facts := nonAgentDoorFacts(t, door, f.ask(t, door, componentBody(header)))
 				if len(facts) != 1 {
 					t.Fatalf("components = %v, want one", facts)
 				}

@@ -357,6 +357,10 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// and seedAndAdmitWorkspace each gate at launch.
 	runRepos := append([]string{req.Repo, req.DevcontainerRepo}, repoLocatorsOf(spec.WorkspaceRepos)...)
 	resp.GitCredential = s.gitCredentialFactForRepos(ctx, oidcHumanFromContext(ctx), runRepos)
-	resp.Components = componentFacts(req, spec, f.scmSite, f.comps, resp.GitCredential, f.baseline)
+	resp.Components = componentFacts(componentFactInputs{
+		req: f.req, spec: f.spec, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
+		ceiling: f.ceiling, mpChoice: f.mpChoice, autonomy: f.autonomy,
+		credentialChecked: true, autonomyResolved: true,
+	}, resp.GitCredential)
 	writeJSON(w, http.StatusOK, resp)
 }

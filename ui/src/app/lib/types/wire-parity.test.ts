@@ -267,6 +267,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     // #1428: the Azure DevOps row's `entra` block, which now carries the token
     // lifetimes (pat_max_hours, pat_max_days) the console writes.
     ["ADOEntraConfig", "internal/types/workspace_provider.go", "ADOEntraConfig", "ui/src/app/lib/types/site.ts"],
+    ["GitProvider", "internal/types/workspace_provider.go", "GitProvider", "ui/src/app/lib/types/site.ts"],
     // #1428: the per-person token console's reads.
     ["adoOrgCheckResult", "internal/api/ado_pat_orgcheck.go", "ADOOrgCheck", "ui/src/app/lib/types/ado-pat.ts"],
     ["adoPATRefusal", "internal/api/ado_pat_refusal.go", "ADOPATRefusal", "ui/src/app/lib/types/ado-pat.ts"],
@@ -516,7 +517,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(union("ComponentFactStatus")).toEqual(consts(statusSrc!, '\\bcomponent\\w+\\s*=\\s*"([a-z_]+)"'));
     expect(union("ComponentFactStatus").size).toBeGreaterThanOrEqual(4);
     // org, self and inline are the gate's; "workspace" is the Git provider row's literal.
-    expect(union("ComponentFactReason")).toEqual(new Set([...consts(runGo, '\\bcomponentSource\\w+\\s*=\\s*"([a-z_]+)"'), "workspace"]));
+    expect(union("ComponentFactReason")).toEqual(new Set([...consts(runGo, '\\bcomponentSource\\w+\\s*=\\s*"([a-z_]+)"'), "workspace", "agent"]));
     expect(factsGo).toMatch(/Reason: "workspace"/);
     expect(union("ComponentFactLane")).toEqual(
       new Set([...consts(providerGo, '\\bGitLane\\w+\\s+GitLane = "([a-z_]+)"'), ...consts(factsGo, '\\bgitLane\\w+\\s*=\\s*"([a-z_]+)"')]),

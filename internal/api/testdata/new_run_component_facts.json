@@ -1,0 +1,201 @@
+{
+  "agent_claude-code": {
+    "kind": "agent",
+    "id": "agent:claude-code",
+    "reason": "agent",
+    "status": "unknown",
+    "requirements": [],
+    "agent": {
+      "agent": "claude-code",
+      "hosts": [],
+      "secrets": [],
+      "telemetry": {
+        "off": true,
+        "env": [
+          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+          "DISABLE_TELEMETRY"
+        ]
+      },
+      "managed_settings": {
+        "path": "/etc/claude-code/managed-settings.json",
+        "document": "{\n  \"permissions\": {\n    \"defaultMode\": \"default\",\n    \"disableBypassPermissionsMode\": \"disable\",\n    \"disableAutoMode\": \"disable\"\n  },\n  \"allowManagedHooksOnly\": true,\n  \"allowManagedPermissionRulesOnly\": true\n}\n"
+      }
+    }
+  },
+  "agent_codex-cli": {
+    "kind": "agent",
+    "id": "agent:codex-cli",
+    "reason": "agent",
+    "status": "unknown",
+    "requirements": [],
+    "agent": {
+      "agent": "codex-cli",
+      "hosts": [],
+      "secrets": [],
+      "telemetry": {
+        "off": true,
+        "env": [
+          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+          "DISABLE_TELEMETRY"
+        ]
+      }
+    }
+  },
+  "agent_none": {
+    "kind": "agent",
+    "id": "agent:none",
+    "reason": "agent",
+    "status": "ready",
+    "requirements": [],
+    "agent": {
+      "agent": "none",
+      "hosts": [],
+      "secrets": [],
+      "telemetry": {
+        "off": true,
+        "env": [
+          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+          "DISABLE_TELEMETRY"
+        ]
+      }
+    }
+  },
+  "github_acme_false": {
+    "kind": "git_provider",
+    "provider": "github",
+    "id": "git_provider:github:direct:acme",
+    "reason": "workspace",
+    "status": "unknown",
+    "requirements": [
+      {
+        "kind": "repo_credential",
+        "id": "git_provider:github:direct:acme",
+        "label": "GitHub App installation",
+        "required_by": "workspace",
+        "status": "unverified",
+        "detail": "Ask an operator to verify the GitHub App installation for this organisation."
+      }
+    ],
+    "lane": "direct",
+    "org": "acme",
+    "repos": [
+      "https://github.com/acme/one"
+    ],
+    "push_rules": {
+      "deny_paths": [
+        "private/**"
+      ]
+    },
+    "repo_access": [
+      {
+        "repo": "https://github.com/acme/one",
+        "access": "read",
+        "can_write": false
+      }
+    ]
+  },
+  "github_acme_true": {
+    "kind": "git_provider",
+    "provider": "github",
+    "id": "git_provider:github:direct:acme",
+    "reason": "workspace",
+    "status": "unknown",
+    "requirements": [
+      {
+        "kind": "repo_credential",
+        "id": "git_provider:github:direct:acme",
+        "label": "GitHub App installation",
+        "required_by": "workspace",
+        "status": "unverified",
+        "detail": "Ask an operator to verify the GitHub App installation for this organisation."
+      }
+    ],
+    "lane": "direct",
+    "org": "acme",
+    "repos": [
+      "https://github.com/acme/one"
+    ],
+    "push_rules": {
+      "deny_paths": [
+        "private/**"
+      ]
+    },
+    "repo_access": [
+      {
+        "repo": "https://github.com/acme/one",
+        "access": "read",
+        "can_write": false
+      }
+    ],
+    "install_url": "https://github.com/apps/wardyn-test/installations/new"
+  },
+  "github_other_false": {
+    "kind": "git_provider",
+    "provider": "github",
+    "id": "git_provider:github:direct:other",
+    "reason": "workspace",
+    "status": "unknown",
+    "requirements": [
+      {
+        "kind": "repo_credential",
+        "id": "git_provider:github:direct:other",
+        "label": "GitHub App installation",
+        "required_by": "workspace",
+        "status": "unverified",
+        "detail": "Ask an operator to verify the GitHub App installation for this organisation."
+      }
+    ],
+    "lane": "direct",
+    "org": "other",
+    "repos": [
+      "https://github.com/other/two"
+    ],
+    "push_rules": {
+      "deny_paths": [
+        "private/**"
+      ]
+    },
+    "repo_access": [
+      {
+        "repo": "https://github.com/other/two",
+        "access": "read",
+        "can_write": false
+      }
+    ]
+  },
+  "github_other_true": {
+    "kind": "git_provider",
+    "provider": "github",
+    "id": "git_provider:github:direct:other",
+    "reason": "workspace",
+    "status": "unknown",
+    "requirements": [
+      {
+        "kind": "repo_credential",
+        "id": "git_provider:github:direct:other",
+        "label": "GitHub App installation",
+        "required_by": "workspace",
+        "status": "unverified",
+        "detail": "Ask an operator to verify the GitHub App installation for this organisation."
+      }
+    ],
+    "lane": "direct",
+    "org": "other",
+    "repos": [
+      "https://github.com/other/two"
+    ],
+    "push_rules": {
+      "deny_paths": [
+        "private/**"
+      ]
+    },
+    "repo_access": [
+      {
+        "repo": "https://github.com/other/two",
+        "access": "read",
+        "can_write": false
+      }
+    ],
+    "install_url": "https://github.com/apps/wardyn-test/installations/new"
+  }
+}
