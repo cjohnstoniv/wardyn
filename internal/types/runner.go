@@ -38,9 +38,10 @@ type RunnerPosture struct {
 // Runner is one registered wardyn-runnerd. Owner is a person's principal, so the
 // row is personal data.
 type Runner struct {
-	ID    uuid.UUID `json:"id"`
-	Owner string    `json:"owner"`
-	Name  string    `json:"name"`
+	ID           uuid.UUID `json:"id"`
+	Owner        string    `json:"owner"`
+	Name         string    `json:"name"`
+	OrgURLSHA256 string    `json:"-"`
 	// PublicKey is the runner's Ed25519 key. The private half never leaves the runner.
 	PublicKey      []byte        `json:"-"`
 	KeyFingerprint string        `json:"key_fingerprint"`
