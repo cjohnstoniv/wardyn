@@ -70,7 +70,10 @@ type RunnerExitWork struct {
 // ListRunnerExitWork pages by run UUID. Generation cannot advance while one
 // incomplete receipt exists, so a run has at most one item in this work list.
 func (s PG) ListRunnerExitWork(ctx context.Context, after uuid.UUID) ([]RunnerExitWork, error) {
-	return collect(ctx, s.Pool, "list", "runner exit work", `SELECT x.runner_id,x.run_id,x.payload FROM runner_execution_exits x JOIN runner_executions e ON e.run_id=x.run_id AND e.generation=x.generation WHERE NOT x.tail_complete AND x.run_id>$1 AND e.exec_id<>'' AND e.exec_id=x.payload->>'exec_id' ORDER BY x.run_id LIMIT 100`, []any{after}, func(row pgx.Row) (RunnerExitWork, error) {
+	return collect(ctx, s.Pool, "list", "runner exit work", `SELECT x.runner_id,x.run_id,x.payload FROM runner_execution_exits x
+ JOIN runner_executions e ON e.run_id=x.run_id AND e.generation=x.generation
+ WHERE NOT x.tail_complete AND x.run_id>$1 AND e.exec_id<>'' AND e.exec_id=x.payload->>'exec_id'
+ ORDER BY x.run_id LIMIT 100`, []any{after}, func(row pgx.Row) (RunnerExitWork, error) {
 		var out RunnerExitWork
 		var payload []byte
 		err := row.Scan(&out.RunnerID, &out.RunID, &payload)
