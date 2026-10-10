@@ -99,6 +99,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- UI e2e: a later step in the same job no longer empties `flaky.tsv`, so a shard's flaky tests reach the flaky-test
+  notifier; `make test-e2e-ui` starts each local run with an empty file.
+- The audit screen describes `run.policy.resolve` and `run.upstream_proxy.resolve` in words instead of raw action names.
+- Docs: under `helm upgrade --reuse-values`, a chart block added in the new release does not render, so wardynd keeps
+  its built-in sandbox sizes; pass `-f values.yaml` to pick up new defaults.
 - Paused-run resumes hold the run lock; concurrent notification raises share the run
   budget; revived runs reapply stored Git PAT restrictions (#1819, #1812, #1825).
 - SMTP channels without recipients or route targets refuse boot. Key rotation and rewrapping
