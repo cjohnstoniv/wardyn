@@ -43,7 +43,7 @@ func (s PG) BeginRunnerExecution(ctx context.Context, runnerID, runID, previous,
 		return out, err
 	}
 	defer unlock()
-	tx, err := s.Pool.Begin(ctx)
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return out, err
 	}
@@ -102,7 +102,7 @@ func (s PG) BindRunnerExecution(ctx context.Context, runnerID, runID, generation
 		return err
 	}
 	defer unlock()
-	tx, err := s.Pool.Begin(ctx)
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
 	}

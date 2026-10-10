@@ -9,13 +9,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // TouchRunnerActivity is only for H2's current-connection, nonreplayed signal.
 // The committing transaction rechecks runner ownership and lapse; timestamps
 // come from the database. Neither audit ingestion nor replay calls this method.
 func (s PG) TouchRunnerActivity(ctx context.Context, runnerID, runID uuid.UUID) error {
-	tx, err := s.Pool.Begin(ctx)
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
 	}
