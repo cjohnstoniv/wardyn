@@ -104,6 +104,7 @@ describe("health — site-config integrations round-trip", () => {
   // SERVER_OWNED_SITE_CONFIG_KEYS so a THIRD one cannot ship unstripped.
   it("strips EVERY server-owned key a GET echoes, not just integrations", async () => {
     const echoed: Record<string, unknown> = {
+      runners: { enabled: true },
       scm_hosts: ["github.com"],
       integrations: [{ id: "anthropic_api_key" }],
       onboarding_completed_at: aheadByHours(-1),

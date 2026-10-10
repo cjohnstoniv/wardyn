@@ -35,7 +35,13 @@ export interface EgressRedirect {
   ecosystem?: string;
 }
 
+export interface RunnerSettings {
+  enabled: boolean;
+}
+
 export interface SiteConfig {
+  // Dedicated runner administration owns changes; generic PUT retains this block.
+  readonly runners?: RunnerSettings;
   upstream_proxy_secret_ref?: string;
   // The corporate upstream proxy URL written IN THE CLEAR — topology, not a
   // credential. Must not embed a userinfo (user:pass@); the server 400s that
@@ -192,6 +198,7 @@ export interface PolicyContact {
 // does, through PUT /workspace-providers with an If-Match — and a stale spread
 // would silently revert an admin's providers to whatever this tab last read.
 export const SERVER_OWNED_SITE_CONFIG_KEYS = [
+  "runners",
   "integrations",
   "onboarding_completed_at",
   "workspace_providers",
