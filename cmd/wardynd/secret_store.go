@@ -334,14 +334,26 @@ func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519
 }
 
 // refuseKEKRequired refuses a serving boot when WARDYN_KEK_REQUIRED is set and
-// neither a key service wraps the credentials nor an external store holds them,
-// so the local key (set or ephemeral) would. It sits in the serving path, not in
-// newSecretStore, so `wardynd -rewrap`, the remedy, still runs.
+// neither a key service wraps new credential writes nor an external store holds
+// them, so the local key (set or ephemeral) would. It checks configuration
+// only: rows already wrapped by the local key do not refuse a boot (an operator
+// mid-migration must be able to start wardynd and run `-rewrap`; /setup/status
+// warns with their count). It sits in the serving path, not in newSecretStore,
+// so `wardynd -rewrap`, the remedy, still runs.
 func refuseKEKRequired(required bool, s secretstore.Store) error {
 	if !required || keyService(s) != "" || storesExternally(s) != "" {
 		return nil
 	}
-	return fmt.Errorf("refusing to start: WARDYN_KEK_REQUIRED is set but credentials are wrapped by the local key — set WARDYN_KEK=transit|azurekv and run `wardynd -rewrap` to move them onto it")
+	return fmt.Errorf("refusing to start: WARDYN_KEK_REQUIRED is set but no key service wraps new credential writes — set WARDYN_KEK=transit|azurekv, then run `wardynd -rewrap` to move the rows the local key still wraps")
+}
+
+// localRowsCounter is the store's count of rows still wrapped by the local key,
+// or nil for a store that keeps none.
+func localRowsCounter(s secretstore.Store) func(context.Context) (int, error) {
+	if ps, ok := s.(*secretstorepg.Store); ok {
+		return ps.LocalRows
+	}
+	return nil
 }
 
 // refuseIdleAgeKey refuses boot when a key service wraps every write

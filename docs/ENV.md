@@ -107,7 +107,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_VAULT_KV_PREFIX` | string | `wardyn`; the chart sets the release namespace | this install's path prefix under the mount (flag `-vault-kv-prefix`). Values live at `<prefix>/platform/<name>` (Wardyn's boot keys), `<prefix>/operator/<name>` and `<prefix>/people/<owner in base32hex>/<name>` |
 | `WARDYN_VAULT_KV_MAX_VERSIONS` | int | `1` | `max_versions` set on each secret the store creates (flag `-vault-kv-max-versions`); 1 means a replaced value does not linger |
 | `WARDYN_KEK` | string | `local` | the key that wraps each stored credential's data key in Postgres (flag `-kek`): `local`, `transit` or `azurekv`; anything else refuses boot. [Details](#wardyn_kek) |
-| `WARDYN_KEK_REQUIRED` | bool | `false` | refuse to start while the local key wraps credentials (flag `-kek-required`, chart `kek.required`): wardynd exits unless a key service or an external store holds them. [Details](#wardyn_kek_required) |
+| `WARDYN_KEK_REQUIRED` | bool | `false` | require a key service for new credential writes (flag `-kek-required`, chart `kek.required`): wardynd exits unless a key service or an external store is configured. [Details](#wardyn_kek_required) |
 | `WARDYN_PRINCIPAL_KEYS` | string | `off` | `on` seals each person's stored credentials under a key of that person's own (envelope `enc_version=3`, flag `-principal-keys`, chart `kek.principalKeys`); `off` keeps the credential key. Enabling it is one-way across a downgrade below 0.8.6. [Details](#wardyn_principal_keys) |
 | `WARDYN_KEY_DOMAINS_FILE` | string (path) | (unset) | the file that declares key domains (flag `-key-domains-file`, chart `kek.domains`): a JSON object from domain name to a Transit or Azure Key Vault key. Domains come from this file alone. [Details](#wardyn_key_domains_file) |
 | `WARDYN_VAULT_TRANSIT_MOUNT` | string | `transit` | mount of Vault's Transit engine (flag `-vault-transit-mount`) |
@@ -396,8 +396,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_KEK_REQUIRED`
 
-- Refuse to start while the local key wraps credentials (flag `-kek-required`, chart `kek.required`): wardynd exits unless a key service (`WARDYN_KEK=transit` or `azurekv`) or an external store holds them, whether or not `WARDYN_AGE_KEY` is set.
-- `wardynd -rewrap` still runs, and `/setup/status` shows `kek_required_unmet`.
+- Require a key service for new credential writes (flag `-kek-required`, chart `kek.required`): wardynd exits unless a key service (`WARDYN_KEK=transit` or `azurekv`) or an external store is configured, whether or not `WARDYN_AGE_KEY` is set.
+- It checks configuration only. Rows already wrapped by the local key are not moved and do not stop wardynd starting; `wardynd -rewrap` moves them.
+- `/setup/status` shows `kek_required_unmet` while no key service is configured, and `kek_local_rows` (a warning with the row count) while a key service is configured and local-key rows remain.
+- `wardynd -rewrap` still runs with the flag set.
 
 ### `WARDYN_PRINCIPAL_KEYS`
 
