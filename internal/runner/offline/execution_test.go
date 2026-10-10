@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
 
@@ -55,7 +56,17 @@ func TestExecutionIntentSurvivesAmbiguousRetryAndRestart(t *testing.T) {
 	if err := restarted.BeforeRefCall(ctx, runnerwire.MethodExec, id.String(), generation); err == nil {
 		t.Fatal("restart forgot execution intent")
 	}
-	if err := restarted.AfterRefCall(ctx, runnerwire.MethodExec, id.String(), "exec-1", generation); err != nil {
+	// A real correlated result can be persisted, but restart ambiguity remains
+	// faulted until the org explicitly reconciles and echoes its failure marker.
+	if err := restarted.AfterRefCall(ctx, runnerwire.MethodExec, id.String(), "exec-1", generation); err == nil {
+		t.Fatal("ambiguous restart bypassed recovery barrier")
+	}
+	if err := restarted.CheckLapses(ctx); err != nil {
+		t.Fatal(err)
+	}
+	proof := *restarted.state.Runs[id].MutationFailure
+	action := runnerwire.PendingAction{ID: uuid.New(), Kind: types.RunnerActionRecoverMutation, RunID: id, Ref: "runner:" + restarted.runnerID.String() + "/" + id.String(), Recovery: &proof}
+	if _, err := restarted.apply(ctx, action); err != nil {
 		t.Fatal(err)
 	}
 	if err := restarted.AfterRefCall(ctx, runnerwire.MethodExec, id.String(), "exec-2", generation); err == nil {

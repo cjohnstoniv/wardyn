@@ -47,7 +47,7 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 		return runnerwire.ActionResult{}, runnerwire.ErrRevoked
 	}
 	if old, ok := m.state.Actions[a.ID]; ok {
-		if old.Action != a {
+		if !samePendingAction(old.Action, a) {
 			return runnerwire.ActionResult{}, errors.New("pending action identity changed")
 		}
 		return old.Result, m.save()
@@ -59,6 +59,12 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	local, belongs := strings.CutPrefix(a.Ref, placement.RunnerRefPrefix(m.runnerID.String()))
 	if !ok || !belongs || local == "" || r.Ref != local {
 		return runnerwire.ActionResult{}, errors.New("pending action does not match a local run")
+	}
+	if a.Kind == types.RunnerActionRecoverMutation {
+		return m.recoverMutation(a, r)
+	}
+	if a.Recovery != nil {
+		return runnerwire.ActionResult{}, errors.New("unexpected mutation recovery proof")
 	}
 	m.mu.Unlock()
 	var err error
@@ -110,7 +116,7 @@ func (m *Manager) AgentExited(ctx context.Context, id uuid.UUID, localRef string
 		if r.Exit.Code != code {
 			return errors.New("agent exit code changed")
 		}
-		return nil
+		return m.ensureDurable()
 	}
 	r.Exit = &runnerwire.AgentExit{Generation: r.Generation, ExecID: r.ExecID, Ref: placement.RunnerRefPrefix(m.runnerID.String()) + localRef, Code: code, ObservedAt: m.now().UTC()}
 	m.state.Runs[id] = r
@@ -121,13 +127,21 @@ func (m *Manager) AgentExited(ctx context.Context, id uuid.UUID, localRef string
 // rolled back by a subsequent output-binding failure.
 func (m *Manager) State(ctx context.Context) ([]runnerwire.RunState, error) {
 	m.mu.Lock()
+	if err := m.ensureDurable(); err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
 	ids := m.runIDs()
 	m.mu.Unlock()
 	out := make([]runnerwire.RunState, 0, len(ids))
 	for _, id := range ids {
 		m.mu.Lock()
+		if err := m.ensureDurable(); err != nil {
+			m.mu.Unlock()
+			return nil, err
+		}
 		r := m.state.Runs[id]
-		row := runnerwire.RunState{RunID: id, ProxyStoppedAt: r.ProxyStoppedAt, Execution: durableExecutionResult(r)}
+		row := runnerwire.RunState{RunID: id, MutationFailure: r.MutationFailure, ProxyStoppedAt: r.ProxyStoppedAt, Execution: durableExecutionResult(r)}
 		m.mu.Unlock()
 		if r.Ref != "" {
 			st, err := m.sub.Status(ctx, r.Ref)
@@ -210,6 +224,10 @@ func (m *Manager) Replay(ctx context.Context, peer *runnerwire.Peer) error {
 			return err
 		}
 		m.mu.Lock()
+		if err := m.ensureDurable(); err != nil {
+			m.mu.Unlock()
+			return err
+		}
 		r := m.state.Runs[id]
 		m.mu.Unlock()
 		if r.Exit == nil || r.ExitAcked {

@@ -43,6 +43,7 @@ type Manager struct {
 	activitySeen  map[uuid.UUID]uuid.UUID
 	peer          *runnerwire.Peer
 	state         localState
+	dirty         bool
 	deadlines     map[uuid.UUID]deadline
 	pending       map[uuid.UUID]runnerwire.Lease
 }
@@ -150,6 +151,9 @@ func (m *Manager) BeforeReady(ctx context.Context, peer *runnerwire.Peer, _ bool
 	if m.state.Revoked {
 		return runnerwire.ErrRevoked
 	}
+	if err := m.ensureDurable(); err != nil {
+		return err
+	}
 	if peer == nil {
 		return errors.New("offline admission requires an authenticated peer")
 	}
@@ -249,6 +253,9 @@ func (m *Manager) BeforeCreate(ctx context.Context, spec runner.SandboxSpec) err
 	if !m.online || m.state.Revoked {
 		return runner.ErrRunnerOffline
 	}
+	if err := m.ensureDurable(); err != nil {
+		return err
+	}
 	if spec.RunID == uuid.Nil {
 		return errors.New("runner create has no run id")
 	}
@@ -310,7 +317,7 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 	for _, id := range ids {
 		m.mu.Lock()
 		r := m.state.Runs[id]
-		expired := m.state.Revoked || r.FailedCreation || m.expired(id)
+		expired := m.state.Revoked || r.FailedCreation || (r.MutationFailure != nil && !r.MutationFailure.Contained) || m.expired(id)
 		m.mu.Unlock()
 		if r.Ref == "" || !expired {
 			continue
@@ -321,13 +328,19 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 		}
 		m.mu.Lock()
 		r = m.state.Runs[id]
-		if r.ProxyStoppedAt == nil {
+		if r.ProxyStoppedAt == nil || (r.MutationFailure != nil && !r.MutationFailure.Contained) {
+			before := r
 			at := m.now().UTC()
 			r.ProxyStoppedAt = &at
+			if r.MutationFailure != nil {
+				confirmed := *r.MutationFailure
+				confirmed.Contained = true
+				r.MutationFailure = &confirmed
+			}
 			m.state.Runs[id] = r
 			if err := m.save(); err != nil {
-				r.ProxyStoppedAt = nil
-				m.state.Runs[id] = r
+				// Confirmation is not durable; retain the obligation independently of lease.
+				m.state.Runs[id] = before
 				errs = append(errs, err)
 			}
 		}

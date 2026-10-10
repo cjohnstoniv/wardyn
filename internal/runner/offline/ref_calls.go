@@ -10,6 +10,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
 
@@ -30,6 +31,11 @@ func (m *Manager) BeforeRefCall(ctx context.Context, method, ref string, generat
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if !isContainmentMethod(method) {
+		if err := m.ensureDurable(); err != nil {
+			return err
+		}
+	}
 	id, r, ok := m.findRef(ref)
 	if !ok {
 		if isContainmentMethod(method) {
@@ -39,7 +45,7 @@ func (m *Manager) BeforeRefCall(ctx context.Context, method, ref string, generat
 	}
 	switch method {
 	case runnerwire.MethodExec, runnerwire.MethodStart, runnerwire.MethodReplaceProxy:
-		if !m.online || m.state.Revoked || r.FailedCreation || m.expired(id) {
+		if !m.online || m.state.Revoked || r.FailedCreation || r.MutationFailure != nil || m.expired(id) {
 			return runner.ErrRunnerOffline
 		}
 	}
@@ -104,8 +110,14 @@ func (m *Manager) AfterRefCall(ctx context.Context, method, ref, execID string, 
 			err = m.save()
 		}
 	}
-	if err == nil && (method == runnerwire.MethodStart || method == runnerwire.MethodReplaceProxy || method == runnerwire.MethodExec) && (!m.online || m.state.Revoked || r.FailedCreation || m.expired(id)) {
+	if err == nil && (method == runnerwire.MethodStart || method == runnerwire.MethodReplaceProxy || method == runnerwire.MethodExec) && (!m.online || m.state.Revoked || r.FailedCreation || r.MutationFailure != nil || m.expired(id)) {
 		err = runner.ErrRunnerOffline
+	}
+	if err != nil && ok {
+		current := m.state.Runs[id]
+		current.MutationFailure = &types.RunnerMutationFailure{ID: uuid.New(), Generation: current.Generation, Operation: method}
+		m.state.Runs[id] = current
+		err = errors.Join(err, m.save())
 	}
 	m.mu.Unlock()
 	if err == nil {
@@ -113,6 +125,9 @@ func (m *Manager) AfterRefCall(ctx context.Context, method, ref, execID string, 
 	}
 	safety, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
+	if ok {
+		return errors.Join(err, m.CheckLapses(safety))
+	}
 	return errors.Join(err, m.stopper.StopProxy(safety, ref))
 }
 

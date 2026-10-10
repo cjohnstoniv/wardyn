@@ -43,7 +43,7 @@ func (m *Manager) activityLoop(ctx context.Context) {
 			}
 			m.mu.Lock()
 			peer, epoch := m.peer, m.activityEpoch
-			eligible := m.online && m.replayReady && peer != nil && epoch != uuid.Nil && marker.Epoch == epoch && m.activitySeen[id] != marker.ID && !m.expired(id) && !m.state.Runs[id].FailedCreation
+			eligible := !m.dirty && m.state.Runs[id].MutationFailure == nil && m.online && m.replayReady && peer != nil && epoch != uuid.Nil && marker.Epoch == epoch && m.activitySeen[id] != marker.ID && !m.expired(id) && !m.state.Runs[id].FailedCreation
 			if eligible {
 				m.activitySeen[id] = marker.ID
 			}

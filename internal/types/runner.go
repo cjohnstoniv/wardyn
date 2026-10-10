@@ -61,23 +61,33 @@ type Runner struct {
 type RunnerActionKind string
 
 const (
-	RunnerActionKill      RunnerActionKind = "kill"
-	RunnerActionEnd       RunnerActionKind = "end"
-	RunnerActionStopProxy RunnerActionKind = "stop_proxy"
+	RunnerActionKill            RunnerActionKind = "kill"
+	RunnerActionEnd             RunnerActionKind = "end"
+	RunnerActionStopProxy       RunnerActionKind = "stop_proxy"
+	RunnerActionRecoverMutation RunnerActionKind = "recover_mutation"
 )
 
-// RunnerPendingAction is an action queued for a runner that is offline, applied
-// first when it reconnects.
+// RunnerMutationFailure is an immutable failure identity. Contained becomes true
+// only after proxy containment and lifecycle persistence both succeed.
+type RunnerMutationFailure struct {
+	ID         uuid.UUID `json:"id"`
+	Generation uuid.UUID `json:"generation"`
+	Operation  string    `json:"operation"`
+	Contained  bool      `json:"contained"`
+}
+
+// RunnerPendingAction is applied before readiness when a runner reconnects.
 type RunnerPendingAction struct {
-	ID         uuid.UUID        `json:"id"`
-	RunnerID   uuid.UUID        `json:"runner_id"`
-	RunID      uuid.UUID        `json:"run_id"`
-	Kind       RunnerActionKind `json:"kind"`
-	Ref        string           `json:"ref"`
-	QueuedAt   time.Time        `json:"queued_at"`
-	AppliedAt  *time.Time       `json:"applied_at,omitempty"`
-	Outcome    string           `json:"outcome,omitempty"`
-	ObservedAt *time.Time       `json:"observed_at,omitempty"`
+	Recovery   *RunnerMutationFailure `json:"recovery,omitempty"`
+	ID         uuid.UUID              `json:"id"`
+	RunnerID   uuid.UUID              `json:"runner_id"`
+	RunID      uuid.UUID              `json:"run_id"`
+	Kind       RunnerActionKind       `json:"kind"`
+	Ref        string                 `json:"ref"`
+	QueuedAt   time.Time              `json:"queued_at"`
+	AppliedAt  *time.Time             `json:"applied_at,omitempty"`
+	Outcome    string                 `json:"outcome,omitempty"`
+	ObservedAt *time.Time             `json:"observed_at,omitempty"`
 }
 
 // CredentialDeliveryPolicyDoc is the stored local_credential_delivery document.

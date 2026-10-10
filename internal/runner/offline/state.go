@@ -12,20 +12,22 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
 
 type localRun struct {
-	Generation     uuid.UUID             `json:"generation,omitempty"`
-	Executions     map[uuid.UUID]string  `json:"executions,omitempty"`
-	FailedCreation bool                  `json:"failed_creation,omitempty"`
-	ExecID         string                `json:"exec_id,omitempty"`
-	RunID          uuid.UUID             `json:"run_id"`
-	Ref            string                `json:"ref"`
-	Lease          runnerwire.Lease      `json:"lease"`
-	ProxyStoppedAt *time.Time            `json:"proxy_stopped_at,omitempty"`
-	Exit           *runnerwire.AgentExit `json:"exit,omitempty"`
-	ExitAcked      bool                  `json:"exit_acked,omitempty"`
+	Generation      uuid.UUID                    `json:"generation,omitempty"`
+	Executions      map[uuid.UUID]string         `json:"executions,omitempty"`
+	MutationFailure *types.RunnerMutationFailure `json:"mutation_failure,omitempty"`
+	FailedCreation  bool                         `json:"failed_creation,omitempty"`
+	ExecID          string                       `json:"exec_id,omitempty"`
+	RunID           uuid.UUID                    `json:"run_id"`
+	Ref             string                       `json:"ref"`
+	Lease           runnerwire.Lease             `json:"lease"`
+	ProxyStoppedAt  *time.Time                   `json:"proxy_stopped_at,omitempty"`
+	Exit            *runnerwire.AgentExit        `json:"exit,omitempty"`
+	ExitAcked       bool                         `json:"exit_acked,omitempty"`
 }
 type localState struct {
 	RunnerID uuid.UUID                   `json:"runner_id"`
@@ -76,11 +78,36 @@ func (m *Manager) load() error {
 		if id == uuid.Nil || id != r.RunID || r.Lease.RunID != id || r.Ref != m.expectedRef(id) {
 			return errors.New("runner lifecycle run mismatch")
 		}
+		if r.Generation != uuid.Nil && r.Executions[r.Generation] != "" && r.ExecID == "" {
+			// A previous daemon may have executed before losing its durable result.
+			// Fresh leases cannot authorize more work or discharge this uncertainty.
+			if r.MutationFailure == nil {
+				r.MutationFailure = &types.RunnerMutationFailure{ID: uuid.New(), Generation: r.Generation, Operation: r.Executions[r.Generation]}
+				m.state.Runs[id] = r
+				m.dirty = true
+			}
+		}
 	}
 	return nil
 }
 
-func (m *Manager) save() error {
+// ensureDurable is called under mu before publishing lifecycle facts or
+// admitting governed work. Failed writes retain safety intent in memory.
+func (m *Manager) ensureDurable() error {
+	if !m.dirty {
+		return nil
+	}
+	return m.save()
+}
+
+func (m *Manager) save() (err error) {
+	m.dirty = true
+	defer func() {
+		if err == nil {
+			m.dirty = false
+		}
+	}()
+
 	b, err := json.Marshal(m.state)
 	if err != nil {
 		return err
