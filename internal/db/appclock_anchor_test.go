@@ -22,7 +22,7 @@ func (f clockQueryFunc) QueryRow(ctx context.Context, q string, args ...any) pgx
 }
 
 func TestAppClockAnchorResponseDelayCannotAdvanceAdmission(t *testing.T) {
-	base := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	base := time.Now().UTC().Truncate(time.Microsecond)
 	issued := base.Add(time.Minute)
 	appAt := issued
 	scanned := false
