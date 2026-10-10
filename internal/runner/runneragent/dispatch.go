@@ -32,6 +32,9 @@ type Config struct {
 	BeforeCreate func(context.Context, runner.SandboxSpec) error
 	// Created durably binds the run to its local ref before success is reported.
 	Created func(context.Context, runner.SandboxSpec, string) error
+	// CreateFailed durably contains a failed NEW intent, including partial
+	// provisioning. It must retain output and retry proxy containment locally.
+	CreateFailed func(context.Context, runner.SandboxSpec) error
 	// BeforeRefCall enforces offline/lease policy before a state-changing call.
 	BeforeRefCall func(context.Context, string, string) error
 	// AfterRefCall persists successful state changes. The final argument is
@@ -51,7 +54,7 @@ type Dispatcher struct{ cfg Config }
 
 func New(cfg Config) (*Dispatcher, error) {
 	id, err := uuid.Parse(cfg.RunnerID)
-	if err != nil || id.String() != cfg.RunnerID || cfg.Substrate == nil || cfg.BeforeCreate == nil || cfg.Created == nil || cfg.BeforeRefCall == nil || cfg.AfterRefCall == nil {
+	if err != nil || id.String() != cfg.RunnerID || cfg.Substrate == nil || cfg.BeforeCreate == nil || cfg.Created == nil || cfg.CreateFailed == nil || cfg.BeforeRefCall == nil || cfg.AfterRefCall == nil {
 		return nil, errors.New("runner dispatcher requires a registered id, local substrate and durable creation guards")
 	}
 	if substrate.IsRemote(cfg.Substrate) {
@@ -109,7 +112,7 @@ func (d *Dispatcher) local(ref string) (string, error) {
 	return local, nil
 }
 
-func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint32, args json.RawMessage) (any, error) {
+func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint32, args json.RawMessage) (result any, err error) {
 	var a runnerwire.CreateSandboxArgs
 	if err := runnerwire.Unmarshal(args, &a); err != nil {
 		return nil, err
@@ -120,6 +123,13 @@ func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint3
 	if err := d.cfg.BeforeCreate(ctx, a.Spec); err != nil {
 		return nil, err
 	}
+	defer func() {
+		if err != nil {
+			contain, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			err = errors.Join(err, d.cfg.CreateFailed(contain, a.Spec))
+		}
+	}()
 	if a.ExecOutput {
 		if d.cfg.Output == nil || d.cfg.BindOutput == nil || d.cfg.ForgetOutput == nil {
 			return nil, runnerwire.Refuse("durable output adapter is unavailable")

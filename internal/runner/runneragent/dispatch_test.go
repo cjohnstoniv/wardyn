@@ -134,6 +134,9 @@ func TestDispatcherDurableBindingSurvivesCallCancellation(t *testing.T) {
 
 // These tests isolate creation; lifecycle policy is exercised separately.
 func newTestDispatcher(cfg Config) (*Dispatcher, error) {
+	if cfg.CreateFailed == nil {
+		cfg.CreateFailed = func(context.Context, runner.SandboxSpec) error { return nil }
+	}
 	cfg.BeforeRefCall = func(context.Context, string, string) error { return nil }
 	cfg.AfterRefCall = func(context.Context, string, string, string) error { return nil }
 	return New(cfg)

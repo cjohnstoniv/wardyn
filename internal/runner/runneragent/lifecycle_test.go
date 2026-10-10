@@ -27,7 +27,7 @@ func (f failedCreate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec
 func TestDispatcherRetainsOutputForAmbiguousCreateAndRefusesRetry(t *testing.T) {
 	for _, existing := range []bool{false, true} {
 		id, run := uuid.NewString(), uuid.New()
-		intent, outputs, forgotten := existing, 0, 0
+		intent, outputs, forgotten, contained := existing, 0, 0, 0
 		d, err := newTestDispatcher(Config{RunnerID: id, Substrate: failedCreate{runnertest.NewFake()},
 			BeforeCreate: func(context.Context, runner.SandboxSpec) error {
 				if intent {
@@ -38,6 +38,13 @@ func TestDispatcherRetainsOutputForAmbiguousCreateAndRefusesRetry(t *testing.T) 
 			},
 			Created: func(context.Context, runner.SandboxSpec, string) error {
 				t.Fatal("created despite provisioning failure")
+				return nil
+			},
+			CreateFailed: func(_ context.Context, spec runner.SandboxSpec) error {
+				if spec.RunID != run {
+					t.Fatal("contained another run")
+				}
+				contained++
 				return nil
 			},
 			Output:     func(uuid.UUID) (io.Writer, error) { outputs++; return io.Discard, nil },
@@ -67,8 +74,8 @@ func TestDispatcherRetainsOutputForAmbiguousCreateAndRefusesRetry(t *testing.T) 
 		if existing {
 			want = 0
 		}
-		if outputs != want || forgotten != 0 {
-			t.Fatalf("existing=%v outputs=%d forgotten=%d", existing, outputs, forgotten)
+		if outputs != want || forgotten != 0 || contained != want {
+			t.Fatalf("existing=%v outputs=%d forgotten=%d contained=%d", existing, outputs, forgotten, contained)
 		}
 	}
 }
@@ -97,6 +104,7 @@ func TestDispatcherRefGuardAndDurableExecIdentity(t *testing.T) {
 	d, err := New(Config{RunnerID: id, Substrate: cancelAfterExec{fake, cancel},
 		BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
 		Created:      func(context.Context, runner.SandboxSpec, string) error { return nil },
+		CreateFailed: func(context.Context, runner.SandboxSpec) error { return nil },
 		BeforeRefCall: func(_ context.Context, method, ref string) error {
 			if method != runnerwire.MethodExec || ref != sb.Ref {
 				t.Fatal("wrong mutation guard identity")
