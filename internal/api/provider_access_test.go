@@ -373,7 +373,7 @@ func TestSetupStatusProviderAccess(t *testing.T) {
 	if got := status(t, "sub-alice").ProviderAccess; len(got) != 1 || got[0] != (SetupProviderAccess{Provider: "anthropic", State: modelAccessLive}) {
 		t.Errorf("alice, own key stored: provider_access = %+v, want [anthropic live]", got)
 	}
-	want := SetupProviderAccess{Provider: "anthropic", State: modelAccessNotConfigured, Action: providerAccessAddKeyAction}
+	want := SetupProviderAccess{Provider: "anthropic", State: modelAccessNotConfigured, Action: providerAccessAddKeyAction, Cause: "never_connected"}
 	if got := status(t, "sub-bob").ProviderAccess; len(got) != 1 || got[0] != want {
 		t.Errorf("bob, only alice's key stored: provider_access = %+v, want [%+v]", got, want)
 	}

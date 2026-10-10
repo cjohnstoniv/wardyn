@@ -1196,7 +1196,7 @@ erases one person's retained records by explicit scope, in one audited act
 | `run_tasks` | the task text of the runs the person created |
 | `components` | the components the person saved, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
-| `credentials` | the person's stored credentials and the key they sit under (the same erase as `DELETE /people/{principal}/credentials`, which erases credentials only and nothing else) |
+| `credentials` | the person's stored credentials, their encryption key and provider connection-change records (also erased by `DELETE /people/{principal}/credentials`) |
 
 - The scopes run in the order above whatever order the body lists them: the person's live consumers are fenced first,
   the data they could still reach next, the keys last.
@@ -3085,6 +3085,17 @@ Naming these is the point of the walk, not a caveat on it:
 | 0.7.5 CLI reading a `credential_reauth` row | The kind is a plain string on the wire; the 0.7.5 `approvals list` prints it verbatim. |
 
 ### Internal model gateway
+
+<!-- Provider connection causes: itemised retention and disclosure rules; no additional prose budget. -->
+- Changing a provider’s address, header scheme or kind removes each person’s credential; nothing silently follows the new destination.
+- Affected people see the reason and new destination host in Your model connections and launch recovery, then review it before connecting again.
+- The owner-scoped change record contains only owner, provider ID and UID, reason, time and the already-disclosed destination host.
+  - It contains no secret, encrypted copy, hash or secret-store reference.
+  - Reconnecting clears it in the credential-write transaction; deleting the provider removes it.
+  - Recreating the same provider ID with a new UID inherits neither credentials nor connection history.
+- “Could not check” means the credential store could not be read: wait, then re-check; the credential may still exist.
+- Older clients retain the neutral unavailable wording because cause fields are optional.
+- Migration `0143_provider_connection_changes` creates an empty history table; pre-upgrade removals have no recorded cause.
 
 - Point a provider's model calls at an internal endpoint instead of `api.anthropic.com`/`api.openai.com`.
 - An Anthropic or OpenAI provider's `base_url` (Settings → Model providers) re-points the proxy's own brokered `/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at the gateway, and a `custom_endpoint` provider is addressed by its `base_url` alone.

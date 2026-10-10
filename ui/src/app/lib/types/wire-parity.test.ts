@@ -36,6 +36,7 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { CONNECTIONS } from "../../components/wardyn/copy/door";
 
 function repoRoot(): string {
   let dir = resolve(process.cwd());
@@ -639,4 +640,27 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(tsValues).toEqual(assigned);
   });
 
+});
+
+
+describe("SetupProviderAccess cause fields", () => {
+  it("keeps the Go and TypeScript optional wire fields in parity", () => {
+    const root = repoRoot();
+    const go = readFileSync(join(root, "internal/api/provider_access.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/setup.ts"), "utf8");
+    expect(tsInterfaceTopKeys(ts, "SetupProviderAccess").sort()).toEqual(goJSONTags(go, "SetupProviderAccess").sort());
+    for (const key of ["cause", "changed_at", "new_destination"]) {
+      expect(go).toContain(`json:"${key},omitempty"`);
+      expect(tsInterfaceBody(ts, "SetupProviderAccess")).toContain(`${key}?:`);
+    }
+  });
+});
+
+
+it("connection re-check sentence matches the server", () => {
+  const src = readFileSync(join(repoRoot(), "internal/api/provider_connection_changes.go"), "utf8");
+  const sentence = src.match(/const providerAccessRecheck = ("[^"\n]*")/);
+  expect(sentence).not.toBeNull();
+  expect(JSON.parse(sentence![1])).toBe(CONNECTIONS.STORE_UNREADABLE);
+  expect(CONNECTIONS.STORE_UNREADABLE).toContain("Your credential may still be stored");
 });

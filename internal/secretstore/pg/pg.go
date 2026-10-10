@@ -495,6 +495,9 @@ func (s *Store) DeleteEverywhere(ctx context.Context, names []string) (int, erro
 		return 0, fmt.Errorf("pg secretstore: delete everywhere: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if err := recordProviderChanges(ctx, tx); err != nil {
+		return 0, err
+	}
 	rows, err := tx.Query(ctx, `SELECT owned_by, name FROM secrets WHERE name = ANY($1) ORDER BY owned_by, name`, names)
 	if err != nil {
 		return 0, fmt.Errorf("pg secretstore: delete everywhere: %w", err)

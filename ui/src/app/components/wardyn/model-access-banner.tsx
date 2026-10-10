@@ -33,6 +33,7 @@ import { toast } from "sonner";
 
 import { relativeTime, absoluteTime } from "../../lib/format";
 import { harnessDisplayNames, providerAttention, type ProviderAttention } from "../../lib/model-access";
+import { modelConnectionCause } from "../../lib/model-connection-cause";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
 import { useModelAccessDoor, useShellSetupStatus } from "./model-access-context";
@@ -61,6 +62,8 @@ export function providerStripLine(
   harnesses: string,
 ): { sentence: string; action?: string; button: string; title: string; tone: "warning" | "info"; dismissible: boolean } | null {
   const name = a.provider.name || a.provider.id;
+  const cause = modelConnectionCause(a.provider, { ...a, provider: a.provider.id });
+  if (cause?.button) return { sentence: cause.line, button: cause.button, title: "", tone: "warning", dismissible: false };
   switch (a.provider.kind) {
     case "bedrock_sso":
       if (a.state === "expired_signin")
@@ -80,13 +83,13 @@ export function providerStripLine(
         return when ? { sentence: BANNER.B3(name, when), button: AGENTS.SIGN_IN_AWS, title, tone: "info", dismissible: false } : null;
       }
       // B1 is the first-run state, the one line with "Not now".
-      return { sentence: BANNER.B1(harnesses, name), button: AGENTS.SIGN_IN_AWS, title: "", tone: "warning", dismissible: true };
+      return { sentence: cause?.line ?? BANNER.B1(harnesses, name), button: AGENTS.SIGN_IN_AWS, title: "", tone: "warning", dismissible: true };
     case "anthropic_subscription":
-      return { sentence: BANNER.B5(harnesses), button: CONNECTIONS.SIGN_IN_CLAUDE, title: "", tone: "warning", dismissible: false };
+      return { sentence: cause?.line ?? BANNER.B5(harnesses), button: CONNECTIONS.SIGN_IN_CLAUDE, title: "", tone: "warning", dismissible: false };
     default: {
       const token = a.provider.kind === "custom_endpoint";
       return {
-        sentence: BANNER.B4(harnesses, name, token),
+        sentence: cause?.line ?? BANNER.B4(harnesses, name, token),
         button: token ? CONNECTIONS.ADD_TOKEN : CONNECTIONS.ADD_KEY,
         title: "",
         tone: "warning",
@@ -214,6 +217,10 @@ export function ModelAccessBanner() {
             <button
               type="button"
               onClick={() => {
+                if (one.a.state === "not_configured" && one.a.cause === "store_unreadable") {
+                  void door.refresh();
+                  return;
+                }
                 openedHere.current = true;
                 door.openDoor({ for: { provider: one.a.provider.id } });
               }}
@@ -234,6 +241,8 @@ export function ModelAccessBanner() {
         // /setup/status's credential_storage (design F-3) — the key door's
         // store-mode notice line and remove-confirm retention line key off it.
         credentialStorage={status?.credential_storage}
+        access={status?.provider_access}
+        onRecheck={door.refresh}
         focusSeq={door.focusSeq}
         onCancel={door.closeDoor}
         onDone={(message) => {

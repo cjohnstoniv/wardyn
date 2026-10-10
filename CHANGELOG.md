@@ -10,6 +10,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- Migration `0143_provider_connection_changes` adds an empty, secret-free history table for why a model connection
+  became unavailable. Removals from before the upgrade have no recorded cause.
 - For filtered OIDC group claims, check the new transitive-membership procedure in Operations:
   Wardyn cannot detect groups omitted by the identity provider. Re-key affected grants and
   governance assignments to groups actually present in the claim (#1518).
@@ -44,6 +46,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- Model connections say why they became unavailable: never connected, removed because an admin changed the provider's
+  address or kind (with the new destination host to review before reconnecting), or the credential store could not be
+  read ("could not check"; the credential may still be there). The record is owner-scoped and holds no secret; it is
+  cleared on reconnect, removed with the provider or by person erasure, and a provider recreated with a new identity
+  inherits no history. Older clients keep the neutral wording.
 - `GET /api/v1/setup/status` gains `tier` (`local-only`, `runner`, `org`); `wardyn setup status` prints it, the
   console account menu names it and the top bar shows a chip on local-only installs.
 - Run template contract: reusable run setups published per person, organisation or group. A template is read strictly

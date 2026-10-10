@@ -258,6 +258,9 @@ export interface SetupModelProvider {
 // is already composed by the server and rendered verbatim — never reworded
 // client-side.
 export interface SetupProviderAccess {
+  cause?: "never_connected" | "destination_changed" | "kind_changed" | "store_unreadable" | (string & {});
+  changed_at?: string;
+  new_destination?: string;
   provider: string;
   state: "live" | "expiring" | "expired_signin" | "not_configured" | "not_applicable" | (string & {});
   action?: string;
