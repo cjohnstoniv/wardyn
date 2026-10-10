@@ -36,21 +36,21 @@ func (s *Server) handleRunnerStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if federation.CheckOrgURL(s.cfg.RunnerOrgURL) != nil {
-		http.Error(w, "runner stream unavailable: set WARDYN_RUNNER_ORG_URL to the public HTTPS organisation URL", http.StatusServiceUnavailable)
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunnerStreamUnavailable, "runner stream unavailable: set WARDYN_RUNNER_ORG_URL to the public HTTPS organisation URL")
 		return
 	}
 	st, ok := s.cfg.Store.(store.RunnerStore)
 	if !ok {
-		http.Error(w, "runner stream requires the Postgres runner store", http.StatusNotImplemented)
+		writeErrorReason(w, http.StatusNotImplemented, reasonRunnerStreamUnavailable, "runner stream requires the Postgres runner store")
 		return
 	}
 	if !s.runnerStreams.limiter.allow(peerKey(r.RemoteAddr), s.cfg.Now()) {
-		http.Error(w, "runner stream connection rate exceeded", http.StatusTooManyRequests)
+		writeErrorReason(w, http.StatusTooManyRequests, reasonRunnerStreamRateLimited, "runner stream connection rate exceeded")
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil || id.String() != chi.URLParam(r, "id") {
-		http.Error(w, "invalid runner id", http.StatusBadRequest)
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidIDParam, "invalid runner id")
 		return
 	}
 	s.runnerStreams.once.Do(func() {

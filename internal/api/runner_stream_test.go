@@ -56,14 +56,44 @@ func TestRunnerStreamPublicURLFailClosed(t *testing.T) {
 		r.Header.Set("X-Forwarded-Host", "trusted.example")
 		r.Header.Set("X-Forwarded-Proto", "https")
 		w := httptest.NewRecorder()
-		s.Handler().ServeHTTP(w, r)
-		if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "WARDYN_RUNNER_ORG_URL") {
+		panicFails(t, s.Handler()).ServeHTTP(w, r)
+		if w.Code != http.StatusServiceUnavailable || errorReason(w) != "runner_stream_unavailable" || !strings.Contains(w.Body.String(), "WARDYN_RUNNER_ORG_URL") {
 			t.Fatalf("%q: %d %s", raw, w.Code, w.Body.String())
 		}
 	}
 }
 
-func TestRunnerStreamAdminBearerCannotReplaceSignature(t *testing.T) {
+func TestRunnerStreamPreHandshakeReasons(t *testing.T) {
+	st := &fakeSiteConfigStore{cfg: types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true}}}
+	s, _ := newSiteConfigHarness(t, st)
+	s.cfg.RunnerOrgURL = "https://org.example"
+	w := do(t, s, http.MethodGet, "/api/v1/runners/"+uuid.NewString()+"/stream", "", "")
+	if w.Code != http.StatusNotImplemented || errorReason(w) != "runner_stream_unavailable" {
+		t.Fatalf("missing runner store: %d %s", w.Code, w.Body.String())
+	}
+	var lookups atomic.Int32
+	s = New(Config{RunnerOrgURL: "https://org.example", Now: func() time.Time { return time.Unix(100, 0) },
+		Store: streamRunnerStore{settings: &types.RunnerSettings{Enabled: true}, lookups: &lookups}})
+	s.runnerStreams.limiter = principalLimiter{rate: 1, burst: 1, max: 1}
+	for _, want := range []struct {
+		status int
+		reason string
+	}{{http.StatusBadRequest, "invalid_id_param"}, {http.StatusTooManyRequests, "runner_stream_rate_limited"}} {
+		w := do(t, s, http.MethodGet, "/api/v1/runners/not-an-id/stream", "", "")
+		if w.Code != want.status || errorReason(w) != want.reason || lookups.Load() != 0 || s.runnerStreams.hub != nil {
+			t.Fatalf("pre-handshake refusal: %d %s lookup=%d hub=%v", w.Code, w.Body.String(), lookups.Load(), s.runnerStreams.hub != nil)
+		}
+	}
+}
+
+func TestRunnerStreamBearerCannotReplaceSignature(t *testing.T) {
+	for _, token := range []string{"", "test-admin", deviceTokenPrefix + "test-device", "delegated-bearer"} {
+		t.Run(token, func(t *testing.T) { testRunnerStreamSignature(t, token) })
+	}
+}
+
+func testRunnerStreamSignature(t *testing.T, token string) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
@@ -78,10 +108,10 @@ func TestRunnerStreamAdminBearerCannotReplaceSignature(t *testing.T) {
 			},
 		},
 	})
-	server := httptest.NewServer(s.Handler())
+	server := httptest.NewServer(panicFails(t, s.Handler()))
 	defer server.Close()
 	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/api/v1/runners/"+row.ID.String()+"/stream",
-		&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer test-admin"}}})
+		&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer " + token}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +146,7 @@ func TestRunnerStreamDefaultOffAndConfigFailureHaveNoAuthSideEffects(t *testing.
 			r := httptest.NewRequest(http.MethodGet, "/api/v1/runners/"+uuid.NewString()+"/stream", nil)
 			r.Header.Set("Connection", "Upgrade")
 			r.Header.Set("Upgrade", "websocket")
-			s.Handler().ServeHTTP(w, r)
+			panicFails(t, s.Handler()).ServeHTTP(w, r)
 			if w.Code != tc.want || lookups.Load() != 0 || admits.Load() != 0 || s.runnerStreams.hub != nil {
 				t.Fatalf("status=%d lookup=%d admits=%d hub=%v", w.Code, lookups.Load(), admits.Load(), s.runnerStreams.hub != nil)
 			}
