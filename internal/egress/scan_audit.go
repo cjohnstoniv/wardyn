@@ -5,12 +5,14 @@ package egress
 
 import "encoding/json"
 
+const maxAuditFindings = 100
+
 // ScanAudit builds the shared content-free scan event for direct decisions and
-// durable runner replay. Findings stay capped at100; the total stays honest.
+// durable runner replay. Findings stay capped at 100; the total stays honest.
 func ScanAudit(sc *ScanSummary, host string) (action, outcome string, data json.RawMessage) {
 	findings := sc.Findings
-	if len(findings) > 100 {
-		findings = findings[:100]
+	if len(findings) > maxAuditFindings {
+		findings = findings[:maxAuditFindings]
 	}
 	outcome = "success"
 	switch sc.Action {
