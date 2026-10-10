@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"regexp"
@@ -109,6 +110,9 @@ func resolveSSHGateway(ctx context.Context, c *sdk.Client) (sshGateway, error) {
 	if host == "" {
 		return sshGateway{}, errors.New("ssh: the gateway is enabled but advertises no address — set WARDYN_SSH_ADVERTISE (the externally-reachable host[:port], e.g. \"wardyn.example.com:2222\") where wardynd runs")
 	}
+	if err := checkGatewayAddr(host, port); err != nil {
+		return sshGateway{}, err
+	}
 	proxy := health.SSH.ProxyCommand
 	// The daemon refuses these at boot; a skewed or hostile one could still
 	// publish a value that breaks out of the quoted one-liner or the config line.
@@ -117,6 +121,27 @@ func resolveSSHGateway(ctx context.Context, c *sdk.Client) (sshGateway, error) {
 	}
 	return sshGateway{host: host, port: port, fingerprint: health.SSH.HostKeyFingerprint, proxy: proxy}, nil
 }
+
+// checkGatewayAddr refuses an advertised address that is not a DNS name or IP
+// literal with a numeric port. The value is spliced into an ssh_config line, a
+// pasted shell line and a ProxyCommand's %h and %p, so anything else (a
+// newline, a $(...), a quote) would run or inject something.
+func checkGatewayAddr(host, port string) error {
+	if a, err := netip.ParseAddr(host); err != nil || a.Zone() != "" {
+		if len(host) > 253 || !gatewayDNSName.MatchString(host) {
+			return fmt.Errorf("ssh: the gateway advertises the host %q, which is not a DNS name or an IP address, so it is not used; ask your operator", host)
+		}
+	}
+	if port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 || strings.Trim(port, "0123456789") != "" {
+			return fmt.Errorf("ssh: the gateway advertises the port %q, which is not a number from 1 to 65535, so it is not used; ask your operator", port)
+		}
+	}
+	return nil
+}
+
+var gatewayDNSName = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
 
 // sshTarget is `wardyn run ssh --json`'s output: everything an external tool needs
 // to dial a sandbox over the gateway. Port is always populated (22 when the

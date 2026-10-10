@@ -79,21 +79,26 @@ func TestSyncCollisions(t *testing.T) {
 	}
 }
 
-func TestSyncLocalPath(t *testing.T) {
-	root := t.TempDir()
+func TestSyncCheckLocal(t *testing.T) {
+	dir := t.TempDir()
 	outside := t.TempDir()
-	_ = os.Symlink(outside, filepath.Join(root, "link"))
-	_ = os.MkdirAll(filepath.Join(root, "real"), 0o755)
-	_ = os.Symlink(outside, filepath.Join(root, "real", "inner"))
+	_ = os.Symlink(outside, filepath.Join(dir, "link"))
+	_ = os.MkdirAll(filepath.Join(dir, "real"), 0o755)
+	_ = os.Symlink(outside, filepath.Join(dir, "real", "inner"))
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
 
 	for _, rel := range []string{"a.txt", "real/x", "new/deep/x"} {
-		if _, err := syncLocalPath(root, rel); err != nil {
+		if err := syncCheckLocal(root, rel); err != nil {
 			t.Errorf("%q refused: %v", rel, err)
 		}
 	}
 	for _, rel := range []string{"", "..", "../x", "a/../../x", "/etc/passwd", "a//b", "./a", "a/./b", "link", "link/x", "real/inner/x", "a/..\x00"} {
-		if got, err := syncLocalPath(root, rel); err == nil {
-			t.Errorf("%q = %q, want refused", rel, got)
+		if err := syncCheckLocal(root, rel); err == nil {
+			t.Errorf("%q accepted", rel)
 		}
 	}
 }

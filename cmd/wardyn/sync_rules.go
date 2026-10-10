@@ -14,6 +14,9 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 )
 
 // The safety rules of `wardyn sync` (docs/design/0.9/PLAN.md §9.3). They run
@@ -28,10 +31,10 @@ const (
 // root) is one of the paths that run code on the laptop when an editor, a
 // shell or git next touches the tree: .git (hooks included), direnv's files,
 // and the editor task/launch/run-configuration files. Matched at any depth and
-// case-insensitively, so a case-folding filesystem cannot reach one by another
-// spelling. Both directions use it.
+// case- and normalisation-insensitively (syncFold), so a folding filesystem
+// cannot reach one by another spelling. Both directions use it.
 func syncDenied(rel string) bool {
-	segs := strings.Split(strings.ToLower(rel), "/")
+	segs := strings.Split(syncFold(rel), "/")
 	for i, seg := range segs {
 		switch seg {
 		case ".git", ".envrc", ".direnv":
@@ -47,6 +50,23 @@ func syncDenied(rel string) bool {
 		}
 	}
 	return false
+}
+
+// syncFold is the key two names are compared by: NFC, then Unicode case
+// folding. APFS and HFS+ treat names equal under it, so two paths with one key
+// are one file on a laptop.
+func syncFold(s string) string {
+	return cases.Fold().String(norm.NFC.String(s))
+}
+
+// syncInvisible reports a name holding a default-ignorable code point (zero
+// width joiners, variation selectors, soft hyphen and the like). HFS+ ignores
+// them when comparing, so ".g\u200cit" is ".git" there.
+func syncInvisible(name string) bool {
+	return strings.ContainsFunc(name, func(r rune) bool {
+		return unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Variation_Selector, r) ||
+			unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r)
+	})
 }
 
 // syncRemoteDir validates --remote-dir the way the gateway does (an absolute,
@@ -80,17 +100,19 @@ func syncEntryName(name string) error {
 		return fmt.Errorf("entry name %q", name)
 	case strings.ContainsAny(name, "/\\\x00") || !utf8.ValidString(name):
 		return fmt.Errorf("entry name %q is not a plain file name", name)
+	case syncInvisible(name):
+		return fmt.Errorf("entry name %q holds an invisible character", name)
 	}
 	return nil
 }
 
-// syncCollisions returns the paths that differ only by case from another path
-// in rels: a case-insensitive filesystem would write both to one file, so
-// neither is synced.
+// syncCollisions returns the paths that differ only by case or Unicode
+// normalisation from another path in rels: such a filesystem would write both
+// to one file, so neither is synced.
 func syncCollisions(rels []string) map[string]bool {
 	byFold := map[string][]string{}
 	for _, r := range rels {
-		k := strings.ToLower(r)
+		k := syncFold(r)
 		if !slices.Contains(byFold[k], r) {
 			byFold[k] = append(byFold[k], r)
 		}
@@ -107,33 +129,33 @@ func syncCollisions(rels []string) map[string]bool {
 	return out
 }
 
-// syncLocalPath joins rel under root, failing when any component of it that
-// already exists is a symlink or when rel could leave root. A pulled file is
-// the sandbox's choice of content and name; this is what keeps it from
-// writing through a link on the laptop. A missing component is fine (it is
-// created by the caller, as a real directory).
-func syncLocalPath(root, rel string) (string, error) {
+// syncCheckLocal fails when rel could leave the root or when any component of
+// it that already exists is a symlink. A pulled file is the sandbox's choice of
+// content and name; this keeps it from being written through a link on the
+// laptop. A missing component is fine (the caller creates it, as a real
+// directory). The root itself confines every later operation to its tree.
+func syncCheckLocal(root *os.Root, rel string) error {
 	if rel == "" || path.IsAbs(rel) || path.Clean(rel) != rel || rel == ".." || strings.HasPrefix(rel, "../") {
-		return "", fmt.Errorf("path %q escapes the local directory", rel)
+		return fmt.Errorf("path %q escapes the local directory", rel)
 	}
-	cur := root
+	cur := ""
 	for _, seg := range strings.Split(rel, "/") {
 		if err := syncEntryName(seg); err != nil {
-			return "", err
+			return err
 		}
-		cur = filepath.Join(cur, seg)
-		fi, err := os.Lstat(cur)
+		cur = path.Join(cur, seg)
+		fi, err := root.Lstat(cur)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
-			return "", err
+			return err
 		}
 		if fi.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("%s is a symlink", rel)
+			return fmt.Errorf("%s is a symlink", rel)
 		}
 	}
-	return cur, nil
+	return nil
 }
 
 // syncSide is what one side looked like the last time the file was synced.

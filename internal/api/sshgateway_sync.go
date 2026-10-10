@@ -76,8 +76,10 @@ type runSyncOpen struct {
 	OpenedAt time.Time `json:"opened_at"`
 }
 
-// runSyncView is the run detail's sync field: the sessions open now, from the
-// per-run sync budget. Ended sessions are the ssh.sync.transfer rows.
+// runSyncView is the run detail's sync field: the sessions open now on THIS
+// replica, from the per-run sync budget (a replica that does not hold the
+// channel shows none). Dir is the directory the client requested, not proof
+// the sandbox started there. Ended sessions are the ssh.sync.transfer rows.
 type runSyncView struct {
 	Open []runSyncOpen `json:"open"`
 }

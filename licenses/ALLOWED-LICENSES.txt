@@ -7,7 +7,7 @@
 # (copyleft-ish). An allowlist with a wildcard in it is a denylist wearing a costume.
 #
 # Every id below is present in the current dependency set:
-#   Go, 84 shipped modules : Apache-2.0 42, BSD-3-Clause 23, MIT 16, ISC 2, BSD-2-Clause 1
+#   Go, 86 shipped modules : Apache-2.0 42, BSD-3-Clause 24, MIT 16, ISC 2, BSD-2-Clause 2
 #   UI, 91 production deps : MIT 85, Apache-2.0 2, OFL-1.1 2, ISC 1, 0BSD 1
 #
 # Every id here is BACKED by a canonical text in licenses/canonical/ and IN USE by

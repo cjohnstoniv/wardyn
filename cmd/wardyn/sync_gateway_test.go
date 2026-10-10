@@ -110,6 +110,15 @@ func (a *syncAudit) row(t *testing.T) (string, map[string]any) {
 type syncRunner struct {
 	runner.Runner
 	sandbox string
+	// exitDelay is how long the sandbox's sftp-server takes to exit after its
+	// stdin closes; exitCode is what it exits with.
+	exitDelay time.Duration
+	exitCode  int
+	// hangRead names a file whose read blocks until release is closed (a FIFO
+	// or a trickling sandbox); liar lists a file's size as a smaller number.
+	hangRead string
+	release  chan struct{}
+	liar     map[string]int64
 }
 
 func (r *syncRunner) ExecStream(ctx context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
@@ -134,6 +143,7 @@ func (r *syncRunner) ExecStream(ctx context.Context, _ string, spec runner.ExecS
 		_ = srv.Serve()
 		_ = outW.Close()
 		_ = errW.Close()
+		time.Sleep(r.exitDelay)
 	}()
 	return &runner.ExecSession{
 		Stdin: inW, Stdout: outR, Stderr: errR,
@@ -142,12 +152,7 @@ func (r *syncRunner) ExecStream(ctx context.Context, _ string, spec runner.ExecS
 		Wait: func() (int, error) {
 			select {
 			case <-done:
-				return 0, nil
-			default:
-			}
-			select {
-			case <-done:
-				return 0, nil
+				return r.exitCode, nil
 			case <-ctx.Done():
 				return 137, nil
 			}
@@ -168,6 +173,9 @@ func (r *syncRunner) handlers() sftp.Handlers {
 type rootedFS struct{ r *syncRunner }
 
 func (h *rootedFS) Fileread(rq *sftp.Request) (io.ReaderAt, error) {
+	if h.r.hangRead != "" && path.Base(rq.Filepath) == h.r.hangRead {
+		<-h.r.release
+	}
 	return os.Open(h.r.host(rq.Filepath))
 }
 
@@ -202,6 +210,13 @@ func (h *rootedFS) Filecmd(rq *sftp.Request) error {
 	return errors.New("unsupported")
 }
 
+type liarInfo struct {
+	os.FileInfo
+	size int64
+}
+
+func (l liarInfo) Size() int64 { return l.size }
+
 type fileLister []os.FileInfo
 
 func (l fileLister) ListAt(out []os.FileInfo, off int64) (int, error) {
@@ -229,6 +244,9 @@ func (h *rootedFS) Filelist(rq *sftp.Request) (sftp.ListerAt, error) {
 			if err != nil {
 				return nil, err
 			}
+			if size, ok := h.r.liar[e.Name()]; ok {
+				fi = liarInfo{fi, size}
+			}
 			out = append(out, fi)
 		}
 		return out, nil
@@ -250,6 +268,7 @@ type syncRig struct {
 	sandbox string
 	audit   *syncAudit
 	st      *syncStore
+	rn      *syncRunner
 }
 
 func newSyncRig(t *testing.T) *syncRig {
@@ -271,8 +290,10 @@ func newSyncRig(t *testing.T) *syncRig {
 	audit := &syncAudit{}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	rn := &syncRunner{sandbox: sandbox, release: make(chan struct{})}
+	t.Cleanup(func() { close(rn.release) })
 	srv := api.New(api.Config{
-		Store: st, Audit: audit, Runner: &syncRunner{sandbox: sandbox}, BaseCtx: ctx,
+		Store: st, Audit: audit, Runner: rn, BaseCtx: ctx,
 		SSHListenAddr: addr, SSHAdvertiseAddr: addr, SSHHostKey: hostPriv,
 	})
 	go func() { _ = srv.ServeSSHGateway(ctx) }()
@@ -286,7 +307,7 @@ func newSyncRig(t *testing.T) *syncRig {
 	}
 	host, port := splitHostPort(addr)
 	return &syncRig{t: t, gw: sshGateway{host: host, port: port, fingerprint: ssh.FingerprintSHA256(hostSigner.PublicKey())},
-		runID: run.ID.String(), signer: signer, sandbox: sandbox, audit: audit, st: st}
+		runID: run.ID.String(), signer: signer, sandbox: sandbox, audit: audit, st: st, rn: rn}
 }
 
 // mkSandboxDir creates a sandbox directory and returns its host path.
@@ -327,7 +348,12 @@ func (g *syncRig) syncer(remote string, pull bool) (*syncer, *syncSession, strin
 	if err != nil {
 		g.t.Fatal(err)
 	}
-	return &syncer{c: sess.sftp, o: syncOptions{root: root, remote: remote, pull: pull}, st: st, stateFile: stateFile}, sess, root
+	lroot, err := os.OpenRoot(root)
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	g.t.Cleanup(func() { _ = lroot.Close() })
+	return &syncer{c: sess.sftp, root: lroot, o: syncOptions{remote: remote, pull: pull, maxPullBytes: defaultMaxPullBytes}, st: st, stateFile: stateFile}, sess, root
 }
 
 func putSyncFile(t *testing.T, p, body string, mode os.FileMode) {
@@ -354,7 +380,7 @@ func getSyncFile(t *testing.T, p string) string {
 
 func mustPass(t *testing.T, sy *syncer) *syncReport {
 	t.Helper()
-	rep, err := sy.pass()
+	rep, err := sy.pass(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

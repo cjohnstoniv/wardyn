@@ -339,8 +339,11 @@ export interface AdminRestartResponse {
   results: AdminRestartResult[];
 }
 
-// sync (GET /runs/{id} only) lists the wardyn-sync sessions open now, from the
-// gateway's live per-run sync budget; ended ones are the ssh.sync.transfer rows.
+// sync (GET /runs/{id} only) lists the wardyn-sync sessions open now on the
+// replica that answers, from the gateway's live per-run sync budget; another
+// replica's sessions are not listed. dir is the directory the client requested,
+// not proof the sandbox started there. Ended sessions are the ssh.sync.transfer
+// rows.
 export interface RunSyncOpen {
   dir: string;
   opened_at: string;

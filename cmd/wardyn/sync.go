@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -42,6 +43,7 @@ type syncFlags struct {
 	watch           bool
 	asJSON          bool
 	advertisedProxy bool
+	maxPullBytes    int64
 }
 
 func syncCmd(client clientFn) *cobra.Command {
@@ -77,6 +79,7 @@ computer, so it needs --advertised-proxy (same as 'wardyn run ssh').
 	cmd.Flags().BoolVar(&f.pull, "pull", false, "also pull the sandbox's changes to this computer")
 	cmd.Flags().BoolVar(&f.watch, "watch", false, "keep syncing every couple of seconds until interrupted")
 	cmd.Flags().BoolVar(&f.asJSON, "json", false, "print each pass as JSON")
+	cmd.Flags().Int64Var(&f.maxPullBytes, "max-pull-bytes", defaultMaxPullBytes, "most bytes one pass may pull from the sandbox (a single file over 256 MiB is always refused)")
 	cmd.Flags().BoolVar(&f.advertisedProxy, "advertised-proxy", false, "connect through the ProxyCommand this deployment advertises (it runs on this computer)")
 	return cmd
 }
@@ -84,6 +87,12 @@ computer, so it needs --advertised-proxy (same as 'wardyn run ssh').
 func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFlags) error {
 	if _, err := parseID("run", runID); err != nil {
 		return err
+	}
+	if err := syncRefusePlainHTTP(c.BaseURL); err != nil {
+		return err
+	}
+	if f.maxPullBytes <= 0 {
+		return errors.New("sync: --max-pull-bytes must be positive")
 	}
 	root, err := filepath.Abs(localDir)
 	if err != nil {
@@ -112,8 +121,8 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 		return err
 	}
 	if gw.proxy != "" && !f.advertisedProxy {
-		return fmt.Errorf("sync: this deployment advertises a ProxyCommand, which would run on this computer:\n  %s\n"+
-			"run again with --advertised-proxy to connect through it", gw.proxy)
+		return fmt.Errorf("sync: this deployment advertises a ProxyCommand, which would run on this computer as:\n  %s\n"+
+			"run again with --advertised-proxy to connect through it", expandProxyCommand(gw.proxy, gw.host, portOr22(gw.port), runID))
 	}
 	if gw.fingerprint == "" {
 		return errors.New("sync: the gateway publishes no host key fingerprint, so its identity cannot be checked; ask your operator")
@@ -122,13 +131,19 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	if err != nil {
 		return err
 	}
+	// The first Ctrl-C cancels ctx; stop() then restores the default, so a
+	// second one ends the process even if the wind-down hangs.
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
 	defer stop()
+	go func() { <-ctx.Done(); stop() }()
 	sshc, err := dialSyncGateway(ctx, gw, runID, signer)
 	if err != nil {
 		return err
 	}
 	defer sshc.Close()
+	// Closing the client unblocks any sftp call stuck on a sandbox that stalls
+	// (a file swapped for a FIFO, a trickling read).
+	defer context.AfterFunc(ctx, func() { _ = sshc.Close() })()
 
 	direction := "push"
 	if f.pull {
@@ -138,7 +153,13 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	if err != nil {
 		return err
 	}
-	sy := &syncer{c: sess.sftp, o: syncOptions{root: root, remote: remote, pull: f.pull}, st: st, stateFile: stateFile}
+	lroot, err := os.OpenRoot(root)
+	if err != nil {
+		_ = sess.close()
+		return fmt.Errorf("sync: %w", err)
+	}
+	defer lroot.Close()
+	sy := &syncer{c: sess.sftp, root: lroot, o: syncOptions{remote: remote, pull: f.pull, maxPullBytes: f.maxPullBytes}, st: st, stateFile: stateFile}
 	runErr := runSyncLoop(ctx, cmd, sy, f)
 	if cerr := sess.close(); runErr == nil {
 		runErr = cerr
@@ -146,10 +167,35 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	return runErr
 }
 
+// syncRefusePlainHTTP refuses a plain-http, non-loopback server: the gateway's
+// address, host key fingerprint and ProxyCommand all come from its /healthz, so
+// anyone on the path could supply all three.
+func syncRefusePlainHTTP(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "http" {
+		return nil
+	}
+	host := u.Hostname()
+	if host == "localhost" || net.ParseIP(host).IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("sync: %s is plain http: the gateway's address, host key fingerprint and ProxyCommand are read from its /healthz, so anyone on the path could supply all three; use https://", host)
+}
+
+func portOr22(port string) string {
+	if port == "" {
+		return "22"
+	}
+	return port
+}
+
 func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *syncer, f syncFlags) error {
 	for first := true; ; first = false {
-		rep, err := sy.pass()
+		rep, err := sy.pass(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				return errors.New("sync: interrupted")
+			}
 			return fmt.Errorf("sync: %w", err)
 		}
 		if f.asJSON {
@@ -204,10 +250,7 @@ func loadSyncSigner() (ssh.Signer, error) {
 // dialSyncGateway connects to the gateway as the run, trusting only the host
 // key whose fingerprint /healthz advertised.
 func dialSyncGateway(ctx context.Context, gw sshGateway, runID string, signer ssh.Signer) (*ssh.Client, error) {
-	port := gw.port
-	if port == "" {
-		port = "22"
-	}
+	port := portOr22(gw.port)
 	var conn net.Conn
 	var err error
 	if gw.proxy != "" {
@@ -264,12 +307,17 @@ type procAddr struct{}
 func (procAddr) Network() string { return "proxycommand" }
 func (procAddr) String() string  { return "proxycommand" }
 
-// dialProxyCommand runs the advertised ProxyCommand, expanding the same %h,
-// %p, %r and %% tokens ssh_config does, with the child environment scrubbed
-// as for ssh(1).
+// expandProxyCommand expands the same %h, %p, %r and %% tokens ssh_config does.
+// resolveSSHGateway has already limited host and port to characters that mean
+// nothing to a shell.
+func expandProxyCommand(proxy, host, port, user string) string {
+	return strings.NewReplacer("%%", "%", "%h", host, "%p", port, "%r", user).Replace(proxy)
+}
+
+// dialProxyCommand runs the advertised ProxyCommand with the child environment
+// scrubbed as for ssh(1).
 func dialProxyCommand(ctx context.Context, proxy, host, port, user string) (net.Conn, error) {
-	line := strings.NewReplacer("%%", "%", "%h", host, "%p", port, "%r", user).Replace(proxy)
-	cmd := exec.CommandContext(ctx, "sh", "-c", line)
+	cmd := exec.CommandContext(ctx, "sh", "-c", expandProxyCommand(proxy, host, port, user))
 	cmd.Env = cliutil.ScrubChildEnv(os.Environ())
 	cmd.Stderr = os.Stderr
 	w, err := cmd.StdinPipe()
@@ -403,8 +451,18 @@ func (s *syncSession) close() error {
 	if !s.finish() {
 		return errors.New("sync: the sandbox did not report the end of the sync session in time")
 	}
-	if s.status > 0 {
-		return fmt.Errorf("sync: the sandbox's sftp-server exited %d: %s", s.status, strings.TrimSpace(s.stderr.String()))
+	return syncExitError(s.status, s.stderr.String())
+}
+
+// syncExitError reads the channel's exit-status: 0 is a clean end; anything
+// else, including no status at all (-1, the channel closed without one), is a
+// failure, because the gateway then records the sync as failed too.
+func syncExitError(status int, stderr string) error {
+	switch status {
+	case 0:
+		return nil
+	case -1:
+		return errors.New("sync: the channel ended without an exit status from the sandbox's sftp-server")
 	}
-	return nil
+	return fmt.Errorf("sync: the sandbox's sftp-server exited %d: %s", status, strings.TrimSpace(stderr))
 }

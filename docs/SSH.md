@@ -389,7 +389,7 @@ scp ./local-file <run-id>@<advertise-host>:/home/agent/  -P <port>
 
 ```sh
 wardyn ssh-key ensure                      # once
-wardyn sync <run-id> ./project [--remote-dir /home/agent/work] [--watch] [--pull] [--json]
+wardyn sync <run-id> ./project [--remote-dir /home/agent/work] [--watch] [--pull] [--max-pull-bytes N] [--json]
 ```
 
 Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
@@ -398,10 +398,13 @@ Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
 - Never deletes; refuses symlinks both ways; a pulled file never gets an exec bit.
 - Never syncs `.git/`, `.envrc`, `.direnv/`, `.vscode/tasks.json`, `.vscode/launch.json`, `.idea/runConfigurations/`, `.idea/workspace.xml`.
 - A file changed on both sides since the last sync is not pulled: the laptop's copy wins and the path is listed.
-- Paths differing only by case are refused. State lives in `~/.local/state/wardyn/sync/<run-id>.json`.
+- Paths equal under case or Unicode normalisation, and names with invisible characters, are refused. State lives in `~/.local/state/wardyn/sync/<run-id>.json`.
+- A pass pulls at most `--max-pull-bytes` (1 GiB), and never a file over 256 MiB; a refused path is listed and the pass goes on.
+- It refuses a plain-http, non-loopback server: the gateway address and host key come from `/healthz`.
 - The directory is a start point, not a boundary; the CLI aborts unless `RealPath(".")` is the directory it asked for.
+- The sandbox's mtime has one-second resolution, so a same-size edit inside that second is not seen.
 
-`rsync` works too, over `wardyn run ssh --config`'s `Host` block; add `--chmod=F644,D755` to pull:
+`rsync` works too, over `wardyn run ssh --config`'s `Host` block; add `--chmod=F644,D755` to pull. It applies none of the conflict, collision or size rules, so prefer `wardyn sync --pull`:
 
 ```sh
 rsync -rt --no-perms --no-links --exclude='.git/' --exclude='.envrc' --exclude='.direnv/' \
