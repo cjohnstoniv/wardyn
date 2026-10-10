@@ -61,6 +61,7 @@ type Runner struct {
 type RunnerActionKind string
 
 const (
+	RunnerActionRetire             RunnerActionKind = "retire_run"
 	RunnerActionKill               RunnerActionKind = "kill"
 	RunnerActionEnd                RunnerActionKind = "end"
 	RunnerActionStopProxy          RunnerActionKind = "stop_proxy"
@@ -87,6 +88,7 @@ type RunnerMutationFailure struct {
 
 // RunnerPendingAction is applied before readiness when a runner reconnects.
 type RunnerPendingAction struct {
+	Retirement *RunnerRetirement      `json:"retirement,omitempty"`
 	Quarantine *RunnerQuarantine      `json:"quarantine,omitempty"`
 	Recovery   *RunnerMutationFailure `json:"recovery,omitempty"`
 	ID         uuid.UUID              `json:"id"`

@@ -49,6 +49,11 @@ func newLocalDecisionSink(dir string, id uuid.UUID, out io.Writer) (*decisionSin
 		spool.Close()
 		return nil, errors.New("another proxy owns this run spool")
 	}
+	if err := spool.CanRecord(context.Background()); err != nil && !errors.Is(err, runnerspool.ErrFull) {
+		lock.Close()
+		spool.Close()
+		return nil, err
+	}
 	return &decisionSink{local: spool, writerLock: lock, out: out, activityDir: dir, reservations: map[uuid.UUID]uuid.UUID{}}, nil
 }
 

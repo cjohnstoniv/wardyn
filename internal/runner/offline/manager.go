@@ -33,6 +33,7 @@ type Manager struct {
 	root          *os.Root
 	sub           substrate.Substrate
 	expectedRef   func(uuid.UUID) string
+	outputSettled func(context.Context, uuid.UUID, string) (int64, bool, error)
 	stopper       runner.ProxyStopper
 	clock         *Clock
 	now           func() time.Time
@@ -58,8 +59,8 @@ type deadline struct {
 // New recovers local state. Run must start before connecting: a restart cannot
 // reconstruct a monotonic deadline, so existing proxies are contained until
 // an authenticated fresh lease establishes one.
-func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedRef func(uuid.UUID) string) (*Manager, error) {
-	if runnerID == uuid.Nil || sub == nil || substrate.IsRemote(sub) || expectedRef == nil {
+func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedRef func(uuid.UUID) string, outputSettled func(context.Context, uuid.UUID, string) (int64, bool, error)) (*Manager, error) {
+	if runnerID == uuid.Nil || sub == nil || substrate.IsRemote(sub) || expectedRef == nil || outputSettled == nil {
 		return nil, errors.New("offline manager requires a registered runner and local substrate")
 	}
 	stopper, ok := sub.(runner.ProxyStopper)
@@ -98,7 +99,7 @@ func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedR
 		root.Close()
 		return nil, errors.New("runner lifecycle directory is already active")
 	}
-	m := &Manager{lock: lock, runnerID: runnerID, dir: stateDir, root: root, sub: sub, expectedRef: expectedRef, stopper: stopper, clock: NewClock(nil), now: time.Now, since: time.Since, deadlines: map[uuid.UUID]deadline{}, pending: map[uuid.UUID]runnerwire.Lease{}}
+	m := &Manager{lock: lock, runnerID: runnerID, dir: stateDir, root: root, sub: sub, expectedRef: expectedRef, outputSettled: outputSettled, stopper: stopper, clock: NewClock(nil), now: time.Now, since: time.Since, deadlines: map[uuid.UUID]deadline{}, pending: map[uuid.UUID]runnerwire.Lease{}}
 	if err := m.load(); err != nil {
 		lock.Close()
 		root.Close()
@@ -324,7 +325,7 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 		r := m.state.Runs[id]
 		expired := m.state.Revoked || r.FailedCreation || (r.Containment != nil && !r.Containment.Contained) || (r.Quarantine != nil && r.ProxyStoppedAt == nil) || (r.MutationFailure != nil && !r.MutationFailure.Contained) || m.expired(id)
 		m.mu.Unlock()
-		if r.Ref == "" || !expired {
+		if r.Retired || r.Ref == "" || !expired {
 			continue
 		}
 		if err := m.stopper.StopProxy(ctx, r.Ref); err != nil {

@@ -5,6 +5,8 @@ package offline
 
 import (
 	"errors"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -12,7 +14,7 @@ import (
 )
 
 func missingIdentityAction(a runnerwire.PendingAction) bool {
-	return a.RunID != uuid.Nil && a.Recovery == nil && a.Quarantine == nil &&
+	return a.RunID != uuid.Nil && a.Recovery == nil && a.Quarantine == nil && a.Retirement == nil &&
 		(a.Kind == types.RunnerActionKill || a.Kind == types.RunnerActionStopProxy)
 }
 
@@ -26,4 +28,24 @@ func (m *Manager) containmentIdentity(a runnerwire.PendingAction, local string) 
 	m.state.Runs[a.RunID] = r
 	m.state.Actions[a.ID] = appliedAction{Action: a}
 	return r, m.save()
+}
+
+func (m *Manager) pendingRun(a runnerwire.PendingAction) (localRun, error) {
+	if a.ID == uuid.Nil {
+		return localRun{}, errors.New("pending action has no identity")
+	}
+	r, ok := m.state.Runs[a.RunID]
+	local, belongs := strings.CutPrefix(a.Ref, placement.RunnerRefPrefix(m.runnerID.String()))
+	if !ok && belongs && local != "" && local == m.expectedRef(a.RunID) {
+		var err error
+		r, err = m.containmentIdentity(a, local)
+		if err != nil {
+			return localRun{}, err
+		}
+		ok = true
+	}
+	if !ok || !belongs || local == "" || r.Ref != local {
+		return localRun{}, errors.New("pending action does not match a local run")
+	}
+	return r, nil
 }
