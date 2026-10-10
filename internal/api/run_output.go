@@ -195,18 +195,14 @@ func (s *Server) openExecOutput(run types.AgentRun, interactive bool) io.Writer 
 	// masking corpus this server cannot prove whole, and its writer drops a
 	// chunk the moment that stops being true.
 	if !s.maskCovered(context.Background(), runID) {
+		s.refuseExecRelay(runID)
 		return nil
 	}
 	// The pending row is the durable record that a capture is owed. A failed
 	// insert is logged and does not fail the run: the final UPSERT still writes
 	// the row. A tombstone means the run's output was erased: keep nothing.
-	if st := s.runOutputStore(); st != nil {
-		if err := st.InsertPendingRunOutput(context.Background(), runID); errors.Is(err, store.ErrRunOutputErased) {
-			s.fenceRunOutput(runID)
-			return nil
-		} else if err != nil {
-			slog.Warn("wardynd: could not record that a run's output capture is owed", slog.String("run_id", runID.String()), slog.Any("err", err))
-		}
+	if s.owePendingOutput(runID) {
+		return nil
 	}
 	e := newExecOutputTail(s.cfg.RunOutputTailBytes, s.cfg.Now)
 	e.sink = s.newTailSink(runID, &e.ring)
@@ -221,6 +217,34 @@ func (s *Server) openExecOutput(run types.AgentRun, interactive bool) io.Writer 
 	}
 	t.m[runID] = e
 	return &tailWriter{t: e}
+}
+
+// owePendingOutput records that runID's capture is owed and reports whether the
+// run's output was erased, in which case nothing is kept.
+func (s *Server) owePendingOutput(runID uuid.UUID) (erased bool) {
+	st := s.runOutputStore()
+	if st == nil {
+		return false
+	}
+	err := st.InsertPendingRunOutput(context.Background(), runID)
+	if errors.Is(err, store.ErrRunOutputErased) {
+		s.fenceRunOutput(runID)
+		return true
+	}
+	if err != nil {
+		slog.Warn("wardynd: could not record that a run's output capture is owed", slog.String("run_id", runID.String()), slog.Any("err", err))
+	}
+	return false
+}
+
+// refuseExecRelay is door 3's refusal made visible: the relay keeps nothing,
+// the denial is audited, and the pending row still goes in, so a process that
+// dies before the run's finalisation leaves the sweeper a capture gap to write
+// with its reason, not a run that owes nothing.
+func (s *Server) refuseExecRelay(runID uuid.UUID) {
+	slog.Warn("wardynd: the exec output relay is refused: the run's masking corpus is not provably whole", slog.String("run_id", runID.String()))
+	s.auditUncovered(context.Background(), runID, types.ActorSystem, "wardynd", "exec.relay")
+	s.owePendingOutput(runID)
 }
 
 // releasedHoldback is what a masker's withheld bytes become once no more output

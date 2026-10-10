@@ -50,7 +50,7 @@ func (s *Server) outputRecoverWait() time.Duration {
 // capture-gap row. reason is the gap's audited reason when there is nothing to
 // recover from at all (no recoverer, no sandbox). A final row is never replaced.
 func (s *Server) recoverRunOutput(ctx context.Context, st store.RunOutputStore, run types.AgentRun, reason string) {
-	if !s.recoveryOwed(ctx, st, run.ID) {
+	if !s.recoveryOwed(ctx, st, run) {
 		return
 	}
 	rec, ok := s.cfg.Runner.(runner.OutputRecoverer)
@@ -74,8 +74,11 @@ func (s *Server) recoverRunOutput(ctx context.Context, st store.RunOutputStore, 
 }
 
 // recoveryOwed reports whether a recovery may run at all: no final row exists
-// (a recovery would replace it) and the run was not erased.
-func (s *Server) recoveryOwed(ctx context.Context, st store.RunOutputStore, runID uuid.UUID) bool {
+// (a recovery would replace it) and the run was not erased. A run with no row
+// of any kind and no sandbox never reached dispatch's output step (it failed
+// while STARTING): nothing was owed, so it gets no gap row.
+func (s *Server) recoveryOwed(ctx context.Context, st store.RunOutputStore, run types.AgentRun) bool {
+	runID := run.ID
 	row, found, err := st.GetRunOutput(ctx, runID)
 	switch {
 	case errors.Is(err, store.ErrRunOutputErased):
@@ -84,6 +87,9 @@ func (s *Server) recoveryOwed(ctx context.Context, st store.RunOutputStore, runI
 	case err != nil:
 		slog.WarnContext(ctx, "wardynd: could not read a run's output row before recovering it",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
+		return false
+	}
+	if !found && run.SandboxRef == "" {
 		return false
 	}
 	return !found || row.CapturedAt == nil
@@ -169,7 +175,7 @@ func (s *Server) resumeRunOutput(ctx context.Context, runID uuid.UUID, ref strin
 		return
 	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err != nil || run.Interactive || runIsUnrecordable(run) || !s.recoveryOwed(ctx, st, runID) || !s.maskCovered(ctx, runID) {
+	if err != nil || run.Interactive || runIsUnrecordable(run) || !s.recoveryOwed(ctx, st, run) || !s.maskCovered(ctx, runID) {
 		return
 	}
 	tw := s.openRecoveryTail(run)

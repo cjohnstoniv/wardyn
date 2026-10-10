@@ -39,7 +39,7 @@ docs/operations/user-drives.md=4804 share=35
 docs/operations/capabilities.md=3861 share=35
 docs/operations/custom-components.md=1184 share=35
 docs/operations/api-tokens.md=3991 share=35
-docs/operations/denials.md=4677 share=35
+docs/operations/denials.md=4696 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.
@@ -54,3 +54,4 @@ docs/operations/denials.md=4677 share=35
 # Round 1: docs/operations/denials.md measured 4636 after the split banner and heading cleanup.
 # Round 1 merge: docs/operations/admin-only-writes.md 2869 -> 2948 (+79), two runner-pool route rows moved verbatim.
 # Batch merge of F-1519: admin-only-writes.md 2994 (+46, the template-group-admins route row from C-templates); denials.md 4677 (+41, the placement_component_self_defined reason row from H7).
+# docs/operations/denials.md 4696 adds 19 (0.9 G-sec-rest, #1976): the exec relay refusal's denied row (target `exec.relay`) and pending output row.
