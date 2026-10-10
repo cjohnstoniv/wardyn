@@ -32,7 +32,7 @@ func TestRunnerStatePG_OfflineUsesExistingHeadlessLossPath(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET interactive=false,ends_at=NULL WHERE id=$1`, run.ID); err != nil {
 		t.Fatal(err)
 	}
-	srv := NewServer(cfg)
+	srv := New(cfg)
 	if err := srv.OfflineFromRunner(ctx, rn.ID); err != nil {
 		t.Fatal(err)
 	}
