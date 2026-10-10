@@ -130,12 +130,13 @@ func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal s
 	dir, dirErr := sshSyncDir(env[sshSyncDirEnv])
 	// BaseCtx, not ctx: the client may close the channel the moment it sees the
 	// subsystem ack, which cancels ctx; see bridgeSSHExec's trailing-write comment.
+	var sandboxRef string
 	record := func(outcome string, extra map[string]any) {
 		extra["direction"] = direction
 		if dirErr == nil {
 			extra["dir"] = dir
 		}
-		s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sync.transfer",
+		s.recordStreamAudit(s.cfg.BaseCtx, sandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sync.transfer",
 			runID.String(), outcome, mustJSON(extra)))
 	}
 	fail := func(errText, clientMsg string) {
@@ -151,6 +152,7 @@ func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal s
 		fail(msg, msg)
 		return
 	}
+	sandboxRef = run.SandboxRef
 	sess, reason, err := s.execSFTPServer(ctx, run, "-d", dir)
 	if err != nil {
 		fail(err.Error(), reason)

@@ -63,13 +63,13 @@ type Substrate struct {
 
 	mu       sync.Mutex
 	caps     *runnerwire.Caps
-	outputs  map[uuid.UUID]io.Writer
+	outputs  map[uuid.UUID]*outputSink
 	resident map[uuid.UUID]leafHashes // SHA-256 of what DeliverResident delivered; never the value
 }
 
 // New builds the substrate of runnerID over t.
 func New(runnerID string, t Transport, opts Options) *Substrate {
-	s := &Substrate{id: runnerID, t: t, opts: opts, outputs: map[uuid.UUID]io.Writer{}, resident: map[uuid.UUID]leafHashes{}}
+	s := &Substrate{id: runnerID, t: t, opts: opts, outputs: map[uuid.UUID]*outputSink{}, resident: map[uuid.UUID]leafHashes{}}
 	t.SetHandler(s)
 	return s
 }
@@ -117,34 +117,6 @@ func (s *Substrate) HandleEvent(ev runnerwire.Event) {
 	}
 }
 
-// HandleOpen serves the runner-opened `output` stream: the agent's output
-// copied into the writer the run's CreateSandbox supplied.
-func (s *Substrate) HandleOpen(st *runnerwire.Stream, o runnerwire.Open) error {
-	if o.Kind != runnerwire.KindOutput {
-		return ErrUnsupportedStream
-	}
-	runID, err := uuid.Parse(o.Target)
-	if err != nil {
-		return ErrUnsupportedStream
-	}
-	s.mu.Lock()
-	w := s.outputs[runID]
-	s.mu.Unlock()
-	if w == nil {
-		return ErrUnsupportedStream
-	}
-	end := runner.BeginOutputDrain(w)
-	go func() {
-		_, err := io.Copy(w, st)
-		_ = st.Close() // releases the stream on both peers: a finished output must not count toward MaxStreams
-		s.mu.Lock()
-		delete(s.outputs, runID)
-		s.mu.Unlock()
-		end(err)
-	}()
-	return nil
-}
-
 // Classes serves the last `caps` event: no call is made.
 func (s *Substrate) Classes(context.Context) (substrate.ClassSupport, error) {
 	if !s.t.Online() {
@@ -187,7 +159,9 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 	}
 	if spec.ExecOutput != nil {
 		s.mu.Lock()
-		s.outputs[spec.RunID] = spec.ExecOutput
+		if s.outputs[spec.RunID] == nil {
+			s.outputs[spec.RunID] = &outputSink{writer: spec.ExecOutput}
+		}
 		s.mu.Unlock()
 	}
 	var res runnerwire.CreateSandboxResult
@@ -201,9 +175,8 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 		err = s.own(res.Sandbox.Ref)
 	}
 	if err != nil {
-		s.mu.Lock()
-		delete(s.outputs, spec.RunID)
-		s.mu.Unlock()
+		// A lost reply cannot tell whether the runner created the sandbox. Keep
+		// the output cursor for a retry or reconnect instead of dropping its tail.
 		return runner.Sandbox{}, err
 	}
 	return res.Sandbox, nil
@@ -356,6 +329,7 @@ func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) 
 		return err
 	}
 	defer st.Close()
+	_ = st.CloseWrite()
 	_, err = io.Copy(w, st)
 	return err
 }

@@ -5,7 +5,9 @@ package remote
 
 import (
 	"context"
+	"errors"
 	"io"
+	"sync"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -61,6 +63,11 @@ func (s *Substrate) ExecStream(ctx context.Context, ref string, spec runner.Exec
 			return nil, err
 		}
 	}
+	if stderr != nil {
+		_ = stderr.CloseWrite()
+	}
+	var closeOnce sync.Once
+	var closeErr error
 	sess := &runner.ExecSession{
 		Stdin:  stdin{ex},
 		Stdout: ex,
@@ -75,10 +82,16 @@ func (s *Substrate) ExecStream(ctx context.Context, ref string, spec runner.Exec
 			return w.ExitCode, err
 		},
 		Close: func() error {
-			if stderr != nil {
-				_ = stderr.Close()
-			}
-			return ex.Close()
+			closeOnce.Do(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+				defer cancel()
+				closeErr = s.call(ctx, runnerwire.MethodExecClose, runnerwire.ExecWaitArgs{Stream: ex.ID()}, nil)
+				if stderr != nil {
+					closeErr = errors.Join(closeErr, stderr.Close())
+				}
+				closeErr = errors.Join(closeErr, ex.Close())
+			})
+			return closeErr
 		},
 	}
 	if stderr != nil {

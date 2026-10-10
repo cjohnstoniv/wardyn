@@ -548,13 +548,14 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	// winner's tmux window.
 	var holder *attachHolder
 	holder = &attachHolder{
-		principal: principal,
-		actorType: types.ActorHuman,
-		since:     s.cfg.Now().UTC(),
-		source:    attachSourceSSH,
-		onInput:   func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") },
-		cols:      cols,
-		rows:      rows,
+		sandboxRef: run.SandboxRef,
+		principal:  principal,
+		actorType:  types.ActorHuman,
+		since:      s.cfg.Now().UTC(),
+		source:     attachSourceSSH,
+		onInput:    func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") },
+		cols:       cols,
+		rows:       rows,
 		// Promotion: this channel just became the writer without reconnecting.
 		// Its exec is still the observer's, so a writer exec is opened at its own
 		// size first (the RESIZE is the act), and the line is a courtesy after
@@ -572,7 +573,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 					return // evicted or gone meanwhile: its channel is closing by other means
 				}
 				slog.WarnContext(pumpCtx, "wardynd: promoted ssh attach could not open a writer exec", "run_id", runID, "err", err)
-				s.recordAudit(finishCtx, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
+				s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
 					runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "state": "attaching", "error": err.Error(), "promotion": true})))
 				_, _ = fmt.Fprintln(channel.Stderr(), "wardyn: could not take over this terminal: "+err.Error())
 				cancel()
@@ -616,7 +617,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 
 	// The first of two session.attach rows (see handleAttachWS): registered, exec
 	// not yet open.
-	s.recordAudit(finishCtx, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
+	s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
 		runID.String(), "success", mustJSON(map[string]any{
 			"transport": "ssh", "cols": cols, "rows": rows, "state": "attaching", "read_only": readOnly,
 		})))
@@ -637,14 +638,14 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	var closeReason string
 	attachErr := s.establishExec(pumpCtx, runID, holder, run.SandboxRef)
 	if attachErr != nil {
-		s.recordAudit(finishCtx, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
+		s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
 			runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "state": "attaching", "error": attachErr.Error()})))
 		if !errors.Is(attachErr, errAttachCancelled) {
 			sendChannelError(channel, "attach failed: "+attachErr.Error())
 		}
 		closeReason = "attach failed"
 	} else {
-		s.recordAudit(finishCtx, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
+		s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
 			runID.String(), "success", mustJSON(map[string]any{
 				"transport": "ssh", "state": "ready", "read_only": !holder.writable.Load(),
 			})))
@@ -661,7 +662,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 
 	// read_only is the LIVE flag (see attach.go's twin): a channel that
 	// arrived as an observer and was promoted mid-session detaches as a writer.
-	s.recordAudit(finishCtx, s.auditEvent(&runID, types.ActorHuman, principal, "session.detach",
+	s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.detach",
 		runID.String(), "success", mustJSON(map[string]any{"transport": "ssh", "reason": closeReason, "read_only": !holder.writable.Load()})))
 
 	if attachErr == nil {
@@ -850,7 +851,7 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 		Env:  env,
 	})
 	if err != nil {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",
+		s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",
 			runID.String(), "failure", mustJSON(map[string]any{"argv": command, "error": err.Error()})))
 		sendChannelError(channel, sshExecStreamErrorMessage(err))
 		return
@@ -871,7 +872,7 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 	// session.detach write above / attach.go's identical seam: use
 	// s.cfg.BaseCtx (daemon-lifetime) for a write that must outlive the
 	// connection it is reporting the end of.
-	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",
+	s.recordStreamAudit(s.cfg.BaseCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",
 		runID.String(), "success", mustJSON(map[string]any{"argv": command, "exit": exit})))
 }
 
@@ -908,7 +909,7 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 		Argv: []string{"socat", "-", fmt.Sprintf("TCP:127.0.0.1:%d", m.DestPort)},
 	})
 	if err != nil {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
+		s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
 			fmt.Sprintf("127.0.0.1:%d", m.DestPort), "failure",
 			mustJSON(map[string]any{"port": m.DestPort, "error": err.Error()})))
 		_ = newCh.Reject(ssh.ConnectionFailed, sshExecStreamErrorMessage(err))
@@ -931,7 +932,7 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 	// the exact call the live e2e's -L forward step caught losing its
 	// ssh.forward row to a killed session (scripts/run-e2e-ssh.sh, step 5's
 	// comment); TestSSHGateway_ForwardAuditSurvivesKill pins it.
-	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
+	s.recordStreamAudit(s.cfg.BaseCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
 		fmt.Sprintf("127.0.0.1:%d", m.DestPort), "success",
 		mustJSON(map[string]any{"port": m.DestPort, "bytes": bytesOut})))
 }

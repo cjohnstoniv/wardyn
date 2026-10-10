@@ -318,17 +318,18 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	wa := &webAttach{s: s, c: c, run: run, principalType: principalType, principal: principal,
 		finishCtx: finishCtx, pumpCtx: pumpCtx, cancel: cancel}
 	holder := &attachHolder{
-		principal: principal,
-		actorType: principalType,
-		since:     s.cfg.Now().UTC(),
-		source:    attachSourceWeb,
-		onInput:   func() { _ = s.markPresent(ctx, id, principalType, principal, "presence") },
-		cols:      opts.Cols,
-		rows:      opts.Rows,
-		via:       via,
-		notify:    wa.notify,
-		displace:  wa.displace,
-		ping:      c.Ping,
+		sandboxRef: run.SandboxRef,
+		principal:  principal,
+		actorType:  principalType,
+		since:      s.cfg.Now().UTC(),
+		source:     attachSourceWeb,
+		onInput:    func() { _ = s.markPresent(ctx, id, principalType, principal, "presence") },
+		cols:       opts.Cols,
+		rows:       opts.Rows,
+		via:        via,
+		notify:     wa.notify,
+		displace:   wa.displace,
+		ping:       c.Ping,
 	}
 	holder.lastOutput.Store(time.Now().UnixNano())
 	wa.holder = holder
@@ -351,7 +352,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// is being opened. The audit log is append-only and hash-chained, so the
 	// outcome is a second row, never an update; this one exists before any
 	// take-over can be audited against it.
-	s.recordAudit(finishCtx, s.auditEvent(&id, principalType, principal, "session.attach",
+	s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&id, principalType, principal, "session.attach",
 		id.String(), "success", mustJSON(map[string]any{
 			"sandbox_ref": run.SandboxRef, "cols": opts.Cols, "rows": opts.Rows,
 			"state": "attaching", "read_only": readOnly,
@@ -453,7 +454,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// the mode this socket connected with: an observer promoted mid-session
 	// ends as a writer, and recording its connect-time mode would say the human
 	// who was driving had only been watching.
-	s.recordAudit(finishCtx, s.auditEvent(&id, principalType, principal, "session.detach",
+	s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&id, principalType, principal, "session.detach",
 		id.String(), "success", mustJSON(map[string]any{"reason": closeReason, "read_only": !holder.writable.Load()})))
 
 	// Best-effort clean close; the deferred CloseNow is the fail-closed backstop.

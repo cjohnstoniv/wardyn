@@ -35,19 +35,38 @@ type Stream struct {
 	localClosed  bool
 	reset        error
 	opened       chan struct{}
+	done         chan struct{}
+	doneOnce     sync.Once
 	unacked      int64 // consumed by Read, not yet returned to the sender as WINDOW
 	heldReleased bool  // both ends closed: the unread buffer no longer counts toward Peer.held
 }
 
 func (p *Peer) newStream(id uint32, kind string) *Stream {
 	ctx, cancel := context.WithCancel(p.ctx)
-	s := &Stream{p: p, id: id, kind: kind, send: NewStreamCredit(p.connSend), ctx: ctx, cancel: cancel, opened: make(chan struct{})}
+	s := &Stream{p: p, id: id, kind: kind, send: NewStreamCredit(p.connSend), ctx: ctx, cancel: cancel, opened: make(chan struct{}), done: make(chan struct{})}
 	s.cond = sync.NewCond(&s.mu)
 	return s
 }
 
 func (s *Stream) ID() uint32   { return s.id }
 func (s *Stream) Kind() string { return s.kind }
+
+// Context ends on reset or connection loss. Graceful half-closes leave it live
+// so a consumer can acknowledge its final buffered bytes.
+func (s *Stream) Context() context.Context { return s.ctx }
+
+// Done closes after a reset or both half-closes. A graceful close leaves any
+// buffered bytes readable; Done alone does not mean the reader has drained them.
+func (s *Stream) Done() <-chan struct{} { return s.done }
+
+// Err is nil on graceful completion or before termination, otherwise the reset.
+func (s *Stream) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reset
+}
+
+func (s *Stream) finish() { s.doneOnce.Do(func() { close(s.done) }) }
 
 // Read returns buffered bytes, io.EOF once the peer half-closed and the buffer
 // is drained, or a *ResetError after an abort.
@@ -136,6 +155,7 @@ func (s *Stream) CloseWrite() error {
 	err := s.p.send(s.ctx, Frame{Type: TypeClose, Stream: s.id})
 	if both {
 		s.p.forget(s.id)
+		s.finish()
 	}
 	return err
 }
@@ -167,6 +187,7 @@ func (s *Stream) abort(code uint32) bool {
 	s.mu.Unlock()
 	s.send.Close()
 	s.cancel()
+	s.finish()
 	return true
 }
 
@@ -199,6 +220,7 @@ func (s *Stream) remoteClose() (both bool) {
 	s.cond.Broadcast()
 	if s.localClosed {
 		s.releaseHeldLocked()
+		s.finish()
 	}
 	return s.localClosed
 }

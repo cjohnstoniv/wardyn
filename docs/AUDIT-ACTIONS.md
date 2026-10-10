@@ -41,6 +41,12 @@ CI enforces doc↔emit parity in both directions:
 - `GET /audit` and `GET /audit/export` do not select them, so they are absent there, and neither is filterable; the chain is checked through `GET /api/v1/audit/chain/verify`, not by reading rows back.
 - The sweep emits no audit action of its own — writing an integrity finding into the log the finding is *about* would record it in the one place already under suspicion.
 
+**Runner stream metadata.** Web terminal, SSH shell/exec/sftp/forward/sync, UI gateway,
+files, resources and output snapshot rows add `data.relay: "runner:<id>"` when their
+sandbox stream uses that runner. The tag comes from the authorized run's substrate
+reference. Actor, outcome and `data.via` retain their existing meanings; connecting
+through a runner grants no additional authority. Local substrate rows omit the tag.
+
 ## Grammar
 
 - Every action is `<noun>[.<sub>].<verb>`: two or three dot-separated `snake_case` segments, the last an imperative verb from the list below — never a past tense (`capability.grant.create`, not `capability.grant.created`) and never a noun (`run.policy.resolve`, not `run.policy.effective`).
