@@ -635,7 +635,9 @@ func TestTemplateUnavailableMirrorsRunRefusal(t *testing.T) {
 			if err := json.Unmarshal([]byte(body), &req); err != nil {
 				t.Fatal(err)
 			}
-			runRefuses := unappliedFieldsRefusal(req) != nil
+			// placement: local is refused by stepLocalEligibility (placement_unavailable)
+			// until own-runner routing lands, not by unappliedFieldsRefusal.
+			runRefuses := unappliedFieldsRefusal(req) != nil || req.Placement == client.PlacementLocal
 			d := &templateDecoder{}
 			d.checkAvailable(req)
 			if templateRefuses := len(d.diags) > 0; templateRefuses != runRefuses {
