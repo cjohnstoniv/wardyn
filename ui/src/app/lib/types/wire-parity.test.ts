@@ -200,6 +200,13 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInterfaceTopKeys(siteTs, "ModelProviders"))).toEqual(new Set(goJSONTags(blockGo, "ModelProviders")));
   });
 
+  it("RunnerSettings: default-off admission block mirrors the Go wire shape", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "RunnerSettings");
+    expect(goTags).toEqual(["enabled"]);
+    const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "RunnerSettings");
+    expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
+
   // #1215: the site config's branding block — one tag today (logo_path), so it
   // cannot ride the it.each below, whose stale-regex guard wants two.
   it("SiteBranding (`branding` in site config): full parity with the TS mirror", () => {
