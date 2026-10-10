@@ -126,7 +126,7 @@ func TestOfflineKeepsAgentUntilMonotonicProxyLapse(t *testing.T) {
 	if len(rows) != 1 || rows[0].ProxyStoppedAt == nil || !rows[0].SandboxPresent {
 		t.Fatalf("STATE lost agent or containment: %+v", rows)
 	}
-	if err := m.BeforeRefCall(ctx, runnerwire.MethodReplaceProxy, id.String()); !errors.Is(err, runner.ErrRunnerOffline) {
+	if err := m.BeforeRefCall(ctx, runnerwire.MethodReplaceProxy, id.String(), uuid.Nil); !errors.Is(err, runner.ErrRunnerOffline) {
 		t.Fatalf("expired revive accepted: %v", err)
 	}
 }
@@ -193,7 +193,8 @@ func TestAgentExitUsesPersistedExecAndPendingActionsAreStable(t *testing.T) {
 	m, sub, _, org := managerFixture(t)
 	id := createLocal(t, m, org)
 	ctx := context.Background()
-	if err := m.AfterRefCall(ctx, runnerwire.MethodExec, id.String(), "exec-1"); err != nil {
+	generation := executionIntent(t, m, id, org, runnerwire.MethodExec)
+	if err := m.AfterRefCall(ctx, runnerwire.MethodExec, id.String(), "exec-1", generation); err != nil {
 		t.Fatal(err)
 	}
 	code := 7
@@ -266,27 +267,28 @@ func TestExecLessSentinelAndLateReviveContainment(t *testing.T) {
 	m, sub, elapsed, org := managerFixture(t)
 	id := createLocal(t, m, org)
 	ctx := context.Background()
-	if err := m.AfterRefCall(ctx, runnerwire.MethodExec, id.String(), ""); err != nil {
+	generation := executionIntent(t, m, id, org, runnerwire.MethodExec)
+	if err := m.AfterRefCall(ctx, runnerwire.MethodExec, id.String(), "", generation); err != nil {
 		t.Fatal(err)
 	}
 	if m.state.Runs[id].ExecID != runner.MainProcessExecID {
 		t.Fatal("exec-less agent looks never launched")
 	}
-	if err := m.BeforeRefCall(ctx, runnerwire.MethodReplaceProxy, id.String()); err != nil {
+	if err := m.BeforeRefCall(ctx, runnerwire.MethodReplaceProxy, id.String(), uuid.Nil); err != nil {
 		t.Fatal(err)
 	}
 	*elapsed = identity.RunTokenLapseAfter
-	if err := m.AfterRefCall(ctx, runnerwire.MethodReplaceProxy, id.String(), ""); !errors.Is(err, runner.ErrRunnerOffline) {
+	if err := m.AfterRefCall(ctx, runnerwire.MethodReplaceProxy, id.String(), "", uuid.Nil); !errors.Is(err, runner.ErrRunnerOffline) {
 		t.Fatalf("late revive accepted: %v", err)
 	}
 	if sub.stops != 1 {
 		t.Fatal("late revive was not contained")
 	}
 	for _, method := range []string{runnerwire.MethodKill, runnerwire.MethodStop, runnerwire.MethodStopProxy, runnerwire.MethodEnd} {
-		if err := m.BeforeRefCall(ctx, method, "missing"); err != nil {
+		if err := m.BeforeRefCall(ctx, method, "missing", uuid.Nil); err != nil {
 			t.Fatal(err)
 		}
-		if err := m.AfterRefCall(ctx, method, "missing", ""); err != nil {
+		if err := m.AfterRefCall(ctx, method, "missing", "", uuid.Nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -347,7 +349,7 @@ func TestFailedCreateContainsImmediatelyAndRetriesWhileLeaseLive(t *testing.T) {
 	if err := restarted.Created(ctx, spec, id.String()); err == nil {
 		t.Fatal("failed intent became live")
 	}
-	if err := restarted.BeforeRefCall(ctx, runnerwire.MethodReplaceProxy, id.String()); !errors.Is(err, runner.ErrRunnerOffline) {
+	if err := restarted.BeforeRefCall(ctx, runnerwire.MethodReplaceProxy, id.String(), uuid.Nil); !errors.Is(err, runner.ErrRunnerOffline) {
 		t.Fatalf("failed intent revived: %v", err)
 	}
 }

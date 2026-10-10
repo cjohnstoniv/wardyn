@@ -94,28 +94,6 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	return result, nil
 }
 
-// RecordExec keeps the substrate's restart-safe agent liveness handle.
-func (m *Manager) RecordExec(ctx context.Context, localRef, execID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if execID == "" {
-		return errors.New("empty runner agent exec id")
-	}
-	for id, r := range m.state.Runs {
-		if r.Ref == localRef {
-			r.ExecID = execID
-			r.Exit = nil
-			r.ExitAcked = false
-			m.state.Runs[id] = r
-			return m.save()
-		}
-	}
-	return errors.New("agent exec has no durable run binding")
-}
-
 // AgentExited records exit before reporting it. Only org reconciliation may
 // decide whether a kept headless run becomes terminal.
 func (m *Manager) AgentExited(ctx context.Context, id uuid.UUID, localRef string, code int) error {
@@ -125,7 +103,7 @@ func (m *Manager) AgentExited(ctx context.Context, id uuid.UUID, localRef string
 		return err
 	}
 	r, ok := m.state.Runs[id]
-	if !ok || r.Ref != localRef {
+	if !ok || r.Ref != localRef || r.Generation == uuid.Nil || r.ExecID == "" {
 		return errors.New("agent exit has no matching local run")
 	}
 	if r.Exit != nil {
@@ -134,7 +112,7 @@ func (m *Manager) AgentExited(ctx context.Context, id uuid.UUID, localRef string
 		}
 		return nil
 	}
-	r.Exit = &runnerwire.AgentExit{Ref: placement.RunnerRefPrefix(m.runnerID.String()) + localRef, Code: code, ObservedAt: m.now().UTC()}
+	r.Exit = &runnerwire.AgentExit{Generation: r.Generation, ExecID: r.ExecID, Ref: placement.RunnerRefPrefix(m.runnerID.String()) + localRef, Code: code, ObservedAt: m.now().UTC()}
 	m.state.Runs[id] = r
 	return m.save()
 }
@@ -157,7 +135,7 @@ func (m *Manager) State(ctx context.Context) ([]runnerwire.RunState, error) {
 				return nil, err
 			}
 			row.SandboxPresent = st.State != types.RunStopped || st.ExitCode != nil
-			if r.ExecID != "" {
+			if r.ExecID != "" && r.Generation != uuid.Nil {
 				agent, err := m.sub.AgentStatus(ctx, r.Ref, r.ExecID)
 				if err != nil {
 					return nil, err
@@ -167,8 +145,8 @@ func (m *Manager) State(ctx context.Context) ([]runnerwire.RunState, error) {
 				if agent.ExitCode != nil && r.Exit == nil {
 					m.mu.Lock()
 					current := m.state.Runs[id]
-					if current.ExecID == r.ExecID && current.Ref == r.Ref && current.Exit == nil {
-						current.Exit = &runnerwire.AgentExit{Ref: placement.RunnerRefPrefix(m.runnerID.String()) + r.Ref, Code: *agent.ExitCode, ObservedAt: m.now().UTC()}
+					if current.Generation == r.Generation && current.ExecID == r.ExecID && current.Ref == r.Ref && current.Exit == nil {
+						current.Exit = &runnerwire.AgentExit{Generation: r.Generation, ExecID: r.ExecID, Ref: placement.RunnerRefPrefix(m.runnerID.String()) + r.Ref, Code: *agent.ExitCode, ObservedAt: m.now().UTC()}
 						m.state.Runs[id] = current
 						err = m.save()
 					}

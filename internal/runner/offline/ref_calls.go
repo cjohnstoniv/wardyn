@@ -24,7 +24,7 @@ func (m *Manager) findRef(ref string) (uuid.UUID, localRun, bool) {
 
 // BeforeRefCall refuses any start, revive or agent execution without the
 // authenticated connection's live lease. Containment never needs permission.
-func (m *Manager) BeforeRefCall(ctx context.Context, method, ref string) error {
+func (m *Manager) BeforeRefCall(ctx context.Context, method, ref string, generation uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -43,12 +43,30 @@ func (m *Manager) BeforeRefCall(ctx context.Context, method, ref string) error {
 			return runner.ErrRunnerOffline
 		}
 	}
+	if method == runnerwire.MethodExec || method == runnerwire.MethodStart {
+		if generation == uuid.Nil || r.Lease.ExecutionGeneration != generation {
+			return errors.New("execution generation does not match authenticated lease")
+		}
+		if r.Executions[generation] != "" {
+			return errors.New("execution generation already attempted; reconcile its durable result")
+		}
+		if r.Executions == nil {
+			r.Executions = map[uuid.UUID]string{}
+		}
+		r.Executions[generation] = method
+		r.Generation = generation
+		r.ExecID = ""
+		r.Exit = nil
+		r.ExitAcked = false
+		m.state.Runs[id] = r
+		return m.save()
+	}
 	return nil
 }
 
 // AfterRefCall records real substrate changes before the org receives success.
 // A durable-state failure contains the proxy even when the wire call was lost.
-func (m *Manager) AfterRefCall(ctx context.Context, method, ref, execID string) error {
+func (m *Manager) AfterRefCall(ctx context.Context, method, ref, execID string, generation uuid.UUID) error {
 	m.mu.Lock()
 	id, r, ok := m.findRef(ref)
 	var err error
@@ -60,7 +78,15 @@ func (m *Manager) AfterRefCall(ctx context.Context, method, ref, execID string) 
 		err = errors.New("runner reference has no durable binding")
 	} else {
 		switch method {
-		case runnerwire.MethodExec:
+		case runnerwire.MethodExec, runnerwire.MethodStart:
+			if generation == uuid.Nil || r.Generation != generation || r.Executions[generation] != method {
+				err = errors.New("execution result has no matching durable intent")
+				break
+			}
+			if r.ExecID != "" && r.ExecID != execID && !(execID == "" && r.ExecID == runner.MainProcessExecID) {
+				err = errors.New("execution handle changed")
+				break
+			}
 			if execID == "" {
 				execID = runner.MainProcessExecID
 			}

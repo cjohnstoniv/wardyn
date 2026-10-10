@@ -16,6 +16,8 @@ import (
 )
 
 type localRun struct {
+	Generation     uuid.UUID             `json:"generation,omitempty"`
+	Executions     map[uuid.UUID]string  `json:"executions,omitempty"`
 	FailedCreation bool                  `json:"failed_creation,omitempty"`
 	ExecID         string                `json:"exec_id,omitempty"`
 	RunID          uuid.UUID             `json:"run_id"`
