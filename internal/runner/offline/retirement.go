@@ -11,6 +11,7 @@ import (
 	"errors"
 	"path/filepath"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -39,6 +40,9 @@ func (m *Manager) retireRun(ctx context.Context, a runnerwire.PendingAction, r l
 		return m.actionReceipt(a, "deferred")
 	}
 	end, settled, err := m.outputSettled(ctx, a.RunID, r.Ref)
+	if errors.Is(err, runner.ErrOutputUnrecoverable) {
+		return m.actionReceipt(a, "deferred")
+	}
 	if err != nil {
 		return runnerwire.ActionResult{}, err
 	}
