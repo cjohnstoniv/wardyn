@@ -42,6 +42,8 @@ type Config struct {
 	// The exec id is populated for MethodExec, empty otherwise. Persistence
 	// failures must contain the proxy before returning their error.
 	AfterRefCall func(context.Context, string, string, string, uuid.UUID) error
+	// ExecutionResult recovers a durable intent/handle without executing it again.
+	ExecutionResult func(context.Context, string, uuid.UUID) (runnerwire.ExecutionResult, error)
 	// Streams serves attach/exec/resize/wait/output, with ref validation of its own.
 	Streams      func(context.Context, *runnerwire.Peer, uint32, string, json.RawMessage) (any, error)
 	Output       func(uuid.UUID) (io.Writer, error)
@@ -55,8 +57,8 @@ type Dispatcher struct{ cfg Config }
 
 func New(cfg Config) (*Dispatcher, error) {
 	id, err := uuid.Parse(cfg.RunnerID)
-	if err != nil || id.String() != cfg.RunnerID || cfg.Substrate == nil || cfg.BeforeCreate == nil || cfg.Created == nil || cfg.CreateFailed == nil || cfg.BeforeRefCall == nil || cfg.AfterRefCall == nil {
-		return nil, errors.New("runner dispatcher requires a registered id, local substrate and durable creation guards")
+	if err != nil || id.String() != cfg.RunnerID || cfg.Substrate == nil || cfg.BeforeCreate == nil || cfg.Created == nil || cfg.CreateFailed == nil || cfg.BeforeRefCall == nil || cfg.AfterRefCall == nil || cfg.ExecutionResult == nil {
+		return nil, errors.New("runner dispatcher requires a registered id, local substrate and durable lifecycle handlers")
 	}
 	if substrate.IsRemote(cfg.Substrate) {
 		return nil, errors.New("runner dispatcher requires a local substrate")
@@ -73,6 +75,8 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 	switch method {
 	case runnerwire.MethodCreateSandbox:
 		return d.create(ctx, peer, id, args)
+	case runnerwire.MethodExecutionResult:
+		return d.executionResult(ctx, args)
 	case runnerwire.MethodAttach, runnerwire.MethodExecStream, runnerwire.MethodResize, runnerwire.MethodExecWait, runnerwire.MethodRecoverOutput, runnerwire.MethodOutputAck, runnerwire.MethodExecClose:
 		if d.cfg.Streams == nil {
 			return nil, runnerwire.Refuse("runner stream adapter is unavailable")
