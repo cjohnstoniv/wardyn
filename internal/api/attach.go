@@ -318,17 +318,18 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	wa := &webAttach{s: s, c: c, run: run, principalType: principalType, principal: principal,
 		finishCtx: finishCtx, pumpCtx: pumpCtx, cancel: cancel}
 	holder := &attachHolder{
-		principal: principal,
-		actorType: principalType,
-		since:     s.cfg.Now().UTC(),
-		source:    attachSourceWeb,
-		onInput:   func() { _ = s.markPresent(ctx, id, principalType, principal, "presence") },
-		cols:      opts.Cols,
-		rows:      opts.Rows,
-		via:       via,
-		notify:    wa.notify,
-		displace:  wa.displace,
-		ping:      c.Ping,
+		sandboxRef: run.SandboxRef,
+		principal:  principal,
+		actorType:  principalType,
+		since:      s.cfg.Now().UTC(),
+		source:     attachSourceWeb,
+		onInput:    func() { _ = s.markPresent(ctx, id, principalType, principal, "presence") },
+		cols:       opts.Cols,
+		rows:       opts.Rows,
+		via:        via,
+		notify:     wa.notify,
+		displace:   wa.displace,
+		ping:       c.Ping,
 	}
 	holder.lastOutput.Store(time.Now().UnixNano())
 	wa.holder = holder
