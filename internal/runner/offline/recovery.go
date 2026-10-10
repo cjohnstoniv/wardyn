@@ -10,6 +10,16 @@ import (
 	"github.com/google/uuid"
 )
 
+func sameContainmentTarget(a, b localRun) bool {
+	if a.Ref != b.Ref || a.Generation != b.Generation {
+		return false
+	}
+	if a.MutationFailure == nil || b.MutationFailure == nil {
+		return a.MutationFailure == nil && b.MutationFailure == nil
+	}
+	return *a.MutationFailure == *b.MutationFailure
+}
+
 func samePendingAction(a, b runnerwire.PendingAction) bool {
 	if a.ID != b.ID || a.Kind != b.Kind || a.RunID != b.RunID || a.Ref != b.Ref {
 		return false

@@ -327,7 +327,13 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 			continue
 		}
 		m.mu.Lock()
-		r = m.state.Runs[id]
+		current := m.state.Runs[id]
+		if !sameContainmentTarget(r, current) {
+			m.mu.Unlock()
+			errs = append(errs, fmt.Errorf("contain run %s: mutation changed during containment", id))
+			continue
+		}
+		r = current
 		if r.ProxyStoppedAt == nil || (r.MutationFailure != nil && !r.MutationFailure.Contained) {
 			before := r
 			at := m.now().UTC()
