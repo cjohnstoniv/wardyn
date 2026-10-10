@@ -129,7 +129,10 @@ func remoteDockerRunner(t *testing.T, local substrate.Substrate, realWire bool) 
 	}
 	row := types.Runner{ID: uuid.New(), PublicKey: pub, State: types.RunnerClaimed}
 	link := &remote.Link{}
-	sub := remote.New(row.ID.String(), link, remote.Options{})
+	generation := uuid.New()
+	sub := remote.New(row.ID.String(), link, remote.Options{
+		ExecutionGeneration: func(context.Context, string, string) (uuid.UUID, error) { return generation, nil },
+	})
 	streams, err := runnerio.New(local, row.ID.String(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)

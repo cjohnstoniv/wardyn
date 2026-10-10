@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -40,6 +41,7 @@ func TestHubLocalAdmissionPrecedesFreshAndResumedDispatch(t *testing.T) {
 	online, resumed := make(chan *runnerwire.Peer, 2), make(chan bool, 2)
 	entered, release := make(chan bool, 2), make(chan struct{})
 	var admitted atomic.Bool
+	var executions atomic.Int32
 	hooks := sessionHooks(online, resumed)
 	hooks.BeforeReady = func(ctx context.Context, _ *runnerwire.Peer, resume bool) error {
 		entered <- resume
@@ -51,7 +53,10 @@ func TestHubLocalAdmissionPrecedesFreshAndResumedDispatch(t *testing.T) {
 			return ctx.Err()
 		}
 	}
-	hooks.Call = func(context.Context, *runnerwire.Peer, uint32, string, json.RawMessage) (any, error) {
+	hooks.Call = func(_ context.Context, _ *runnerwire.Peer, _ uint32, method string, _ json.RawMessage) (any, error) {
+		if method == runnerwire.MethodExec || method == runnerwire.MethodStart {
+			executions.Add(1)
+		}
 		if !admitted.Load() {
 			return nil, errors.New("dispatch raced durable local admission")
 		}
@@ -98,6 +103,13 @@ func TestHubLocalAdmissionPrecedesFreshAndResumedDispatch(t *testing.T) {
 			t.Fatal("wrong session phase")
 		}
 		waitOnline(t, ctx, link)
+		ref := placement.RunnerRefPrefix(row.ID.String()) + "sandbox"
+		if _, err := sub.Exec(ctx, ref, []string{"agent"}); err == nil {
+			t.Fatal("authenticated substrate dispatched without a generation hook")
+		}
+		if err := sub.StartSandbox(ctx, ref); err == nil || executions.Load() != 0 {
+			t.Fatal("missing generation hook reached runner", err)
+		}
 		if wantResume {
 			if err := awaitValue(t, ctx, callDone); err != nil {
 				t.Fatal(err)

@@ -117,6 +117,9 @@ func (h *Hub) Serve(ctx context.Context, conn runnerwire.Conn, id uuid.UUID) err
 		a.Pending == nil || a.State == nil || a.Event == nil {
 		return errors.New("runner hub admission is incomplete or bound to another runner")
 	}
+	a.Substrate.mu.Lock()
+	a.Substrate.requireExecutionGeneration = true
+	a.Substrate.mu.Unlock()
 	return h.serveClaimed(ctx, conn, current, auth, a)
 }
 
