@@ -633,10 +633,12 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-gpl-source-offer.sh
 	./scripts/test-green-by-tree.sh
 	./scripts/test-helm-schema.sh
+	./scripts/test-helm-templates.sh
 	./scripts/test-image-pins.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
 	./scripts/test-kind-sso-walk-log.sh
+	./scripts/test-lane-preflight.sh
 	./scripts/test-migration-numbers.sh
 	./scripts/test-narrate-speakable.sh
 	./scripts/test-nightly-migration-merge-check.sh
