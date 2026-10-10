@@ -545,6 +545,11 @@ func run() error {
 		return err
 	}
 
+	// The remote-provided runner pool an upgraded deployment starts with, once. Before anything is served.
+	if err := srv.BootstrapRunnerPools(bootCtx); err != nil {
+		return err
+	}
+
 	// Refuse a metrics bind failure before workers or optional gateways start.
 	if err := startMetricsListener(rootCtx, *f.metricsListen, srv.MetricsListenerHandler()); err != nil {
 		return err

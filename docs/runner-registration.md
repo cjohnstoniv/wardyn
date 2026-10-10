@@ -16,6 +16,8 @@ The API doors are `POST /api/v1/me/runners/tokens`, operator-only `POST /api/v1/
 
 Migration `0142_runner_registration` adds hashed single-use registration tokens and organisation URL bindings to the existing runners table. It does not change run placement records.
 
+Migration `0192_runner_pools` adds the runner pool catalogue: pools, their members, remote-provided use policies and the organisation defaults. It records no run binding, and a pool never claims or transfers a runner.
+
 ## Runner enablement
 
 | Stored configuration | Admission |

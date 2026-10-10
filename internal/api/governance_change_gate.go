@@ -166,15 +166,16 @@ type govApplied struct {
 // mapping is written on the operatorOnly tier, so only a super admin approves it; every other kind is
 // written on securityOps.
 var governanceChangeKinds = map[string]govKind{
-	govKindProfile:        {approver: securityApprover, apply: applyProfileChange},
-	govKindAssignment:     {approver: securityApprover, apply: applyAssignmentChange},
-	govKindGrant:          {approver: securityApprover, apply: applyGrantChange},
-	govKindEnforcement:    {approver: securityApprover, apply: applyEnforcementChange},
-	govKindAvailability:   {approver: securityApprover, apply: applyAvailabilityChange},
-	govKindUserType:       {approver: securityApprover, apply: applyUserTypeChange},
-	govKindRoleMapping:    {approver: operatorApprover, apply: applyRoleMappingChange},
-	govKindKeyDomain:      {approver: securityApprover, apply: applyKeyDomainAssignmentChange},
-	govKindEgressBaseline: {approver: securityApprover, apply: applyEgressBaselineChange},
+	govKindProfile:             {approver: securityApprover, apply: applyProfileChange},
+	govKindAssignment:          {approver: securityApprover, apply: applyAssignmentChange},
+	govKindGrant:               {approver: securityApprover, apply: applyGrantChange},
+	govKindEnforcement:         {approver: securityApprover, apply: applyEnforcementChange},
+	govKindAvailability:        {approver: securityApprover, apply: applyAvailabilityChange},
+	govKindUserType:            {approver: securityApprover, apply: applyUserTypeChange},
+	govKindRoleMapping:         {approver: operatorApprover, apply: applyRoleMappingChange},
+	govKindKeyDomain:           {approver: securityApprover, apply: applyKeyDomainAssignmentChange},
+	govKindEgressBaseline:      {approver: securityApprover, apply: applyEgressBaselineChange},
+	govKindRunnerPoolUsePolicy: {approver: securityApprover, apply: applyRunnerPoolUsePolicyChange},
 }
 
 // canSeeGovernanceKind reports whether the caller may list or read changes of kind: the approver

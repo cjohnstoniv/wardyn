@@ -12,9 +12,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 )
 
-// TestRunnerPoolRoutesAnswerTheStubRefusal pins what every reserved pool route
-// says until the pool storage lands: 501, the reason and the sentence.
-func TestRunnerPoolRoutesAnswerTheStubRefusal(t *testing.T) {
+// TestRunnerPoolRoutesAnswerWithoutPoolStorage pins what every pool route says
+// on a store that has no pool storage: 501, the reason and the sentence, never
+// an empty catalogue.
+func TestRunnerPoolRoutesAnswerWithoutPoolStorage(t *testing.T) {
 	fill := strings.NewReplacer("{id}", "11111111-1111-1111-1111-111111111111", "{runner}", "22222222-2222-2222-2222-222222222222", "{executor}", "build-1")
 	var routes []string
 	for key := range routeMatrix {

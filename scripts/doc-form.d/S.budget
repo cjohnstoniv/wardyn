@@ -6,10 +6,11 @@
 # docs/sdk.md 12203 adds 372 over 11831 (12273 with the four New Run request-contract reason rows, +70): 7 (the export comment no longer says ready for PolicyRequest.Spec), 116 (Reusing the spec), 15 (the preview names `components`), 225 (the Custom components section), 19 (the CLI mirrors all but `origin` and `action`); the diff tool sums 382, the gate 372 (link text).
 # docs/sdk.md 12388: measured combined New Run contract reasons, baseline and identity-unbind additions.
 # 0.9 C-pools: docs/sdk.md 12481 adds 18 over 12463 for the two published runner pool reasons.
-docs/sdk.md=12691 share=21
+docs/sdk.md=12761 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.
 # Run templates add 187 measured words for sixteen template refusal reasons in four table rows: docs/sdk.md 12650.
 # Run templates add 23 more measured words for templates_unavailable and the launch-time exclusion: docs/sdk.md 12673.
 # Run templates: docs/sdk.md 12691 adds 210 over 12481 for the template refusal reasons (five rows) after merging the runner pool reasons.
+# Runner pools add 70 measured words for the five pool reasons the routes send: docs/sdk.md 12761.
