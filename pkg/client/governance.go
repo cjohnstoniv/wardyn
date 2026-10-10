@@ -169,6 +169,32 @@ func governanceAssignmentKey(subjectType CapabilitySubjectType, subject string) 
 	return string(subjectType) + "\x00" + subject
 }
 
+// governanceProfileChangedFields returns the JSON names of the fields that
+// writing p over existing would change, in a fixed order. Empty means the
+// write changes nothing observable.
+func governanceProfileChangedFields(existing, p GovernanceProfile) []string {
+	var fields []string
+	if !reflect.DeepEqual(existing.Ceiling, p.Ceiling) {
+		fields = append(fields, "ceiling")
+	}
+	if !reflect.DeepEqual(existing.Limits, p.Limits) {
+		fields = append(fields, "limits")
+	}
+	if p.Contact != nil && !reflect.DeepEqual(existing.Contact, p.Contact) {
+		fields = append(fields, "contact")
+	}
+	if !reflect.DeepEqual(existing.BaseProfileID, p.BaseProfileID) {
+		fields = append(fields, "base_profile_id")
+	}
+	if !reflect.DeepEqual(existing.Overlay, p.Overlay) {
+		fields = append(fields, "overlay")
+	}
+	if !reflect.DeepEqual(existing.OverlayLimits, p.OverlayLimits) {
+		fields = append(fields, "overlay_limits")
+	}
+	return fields
+}
+
 // governanceProfileUnchanged reports whether writing p over existing would
 // change nothing observable — the check ApplyGovernance runs before every
 // profile write so a `get | apply` round trip on an unchanged install issues
@@ -176,11 +202,7 @@ func governanceAssignmentKey(subjectType CapabilitySubjectType, subject string) 
 // profile's content on every apply (#1108's stated no-op contract; stricter
 // than ApplyDrives, which always re-PUTs/re-POSTs).
 func governanceProfileUnchanged(existing, p GovernanceProfile) bool {
-	return reflect.DeepEqual(existing.Ceiling, p.Ceiling) && reflect.DeepEqual(existing.Limits, p.Limits) &&
-		(p.Contact == nil || reflect.DeepEqual(existing.Contact, p.Contact)) &&
-		reflect.DeepEqual(existing.BaseProfileID, p.BaseProfileID) &&
-		reflect.DeepEqual(existing.Overlay, p.Overlay) &&
-		reflect.DeepEqual(existing.OverlayLimits, p.OverlayLimits)
+	return len(governanceProfileChangedFields(existing, p)) == 0
 }
 
 // governanceWriteOrder returns the indexes of profiles with every base before the profiles composed
