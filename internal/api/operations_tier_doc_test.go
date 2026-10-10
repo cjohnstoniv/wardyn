@@ -39,6 +39,7 @@ var docTierGate = map[routeClass]string{
 // here until the table moves with it.
 var docTierRows = []struct{ route, token string }{
 	// operatorOnly (SUPER)
+	{"POST /api/v1/runners/tokens", "`POST /runners/tokens`"},
 	{"PUT /api/v1/site-config", "`PUT /site-config`"},
 	// R1's four operator-topology reads: re-tiered to admin this wave and
 	// filed as docTierUndocumented until the docs pass landed the row naming
