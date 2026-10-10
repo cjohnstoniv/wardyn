@@ -5,7 +5,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -14,29 +13,31 @@ import (
 	"github.com/google/uuid"
 )
 
-// StateFromRunner runs on H2's checked STATE path. An open action left after
-// this session's PENDING page refuses READY; returned containment requests are
-// queued before reconciliation-required, so the next fresh PENDING applies
-// them. This method performs no runner RPC, renewal or transition.
-func (s *Server) StateFromRunner(ctx context.Context, runnerID uuid.UUID, rows []runnerwire.RunState) ([]store.RunnerContainment, error) {
+// StatePageFromRunner is Admission.StatePage, on the peer read loop: one
+// short intake transaction, no runner call. It answers nil only after the page
+// committed. A Final page needing reconciliation refuses READY; any stop_proxy
+// it requires committed with its page. An open action left after this
+// session's PENDING page refuses READY too, so the next session carries it.
+func (s *Server) StatePageFromRunner(ctx context.Context, runnerID uuid.UUID, sessionID string, page runnerwire.StatePage) error {
 	st, ok := s.cfg.Store.(store.PG)
 	if !ok {
-		return nil, store.ErrRunnerExecutionRefused
+		return store.ErrRunnerExecutionRefused
+	}
+	result, err := st.IntakeRunnerStatePage(ctx, runnerID, sessionID, page)
+	if err != nil || !result.Complete {
+		return err
+	}
+	if result.NeedsReconciliation {
+		return store.ErrRunnerReconciliationRequired
 	}
 	open, _, err := st.ListPendingRunnerActions(ctx, runnerID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if len(open) > 0 {
-		return nil, store.ErrRunnerReconciliationRequired
+		return store.ErrRunnerReconciliationRequired
 	}
-	requests, err := st.ReconcileRunnerState(ctx, runnerID, rows)
-	if errors.Is(err, store.ErrRunnerReconciliationRequired) {
-		if qerr := queueRunnerContainment(ctx, st, runnerID, requests); qerr != nil {
-			return requests, errors.Join(err, qerr)
-		}
-	}
-	return requests, err
+	return nil
 }
 
 type runnerLossClaim struct {

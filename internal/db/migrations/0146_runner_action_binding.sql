@@ -5,6 +5,7 @@
 -- runner owner, the run's execution generation (NULL on a bound row: no
 -- execution had been issued) and, for stop_proxy, the loss it contains. These
 -- columns are written once at queue time; only the receipt columns change after.
+-- queue_seq is the delivery order: queued_at can tie within a microsecond.
 -- binding_version 0 is a row queued before this migration. It carries no owner,
 -- generation or loss authority: it still fences its run, is never delivered and
 -- cannot be settled by an action_result.
@@ -13,7 +14,8 @@ ALTER TABLE runner_pending_actions
     ADD COLUMN IF NOT EXISTS owner                TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS execution_generation UUID,
     ADD COLUMN IF NOT EXISTS containment_lost_at  TIMESTAMPTZ,
-    ADD COLUMN IF NOT EXISTS proof                JSONB;
+    ADD COLUMN IF NOT EXISTS proof                JSONB,
+    ADD COLUMN IF NOT EXISTS queue_seq            BIGINT GENERATED ALWAYS AS IDENTITY;
 
 -- proof is the closed disposition metadata of the kinds that need one: the
 -- mutation failure marker (recover_*), the quarantine or the retirement receipt.
@@ -35,5 +37,28 @@ ALTER TABLE runner_pending_actions
 
 -- The fence reads open and deferred rows: a deferred receipt is final for its
 -- action but leaves the obligation unresolved.
+CREATE INDEX IF NOT EXISTS runner_pending_actions_runner_page
+    ON runner_pending_actions (runner_id, queue_seq) WHERE applied_at IS NULL AND binding_version = 1;
 CREATE INDEX IF NOT EXISTS runner_pending_actions_run_unsettled
     ON runner_pending_actions (run_id) WHERE applied_at IS NULL OR outcome = 'deferred';
+
+-- The binding columns never change after insert, and a receipt is written once.
+-- The store is the only writer; this refuses any other UPDATE at the database.
+CREATE OR REPLACE FUNCTION runner_pending_actions_immutable() RETURNS trigger AS $$
+BEGIN
+    IF (NEW.id, NEW.runner_id, NEW.run_id, NEW.kind, NEW.ref, NEW.queued_at, NEW.binding_version, NEW.owner,
+            NEW.execution_generation, NEW.containment_lost_at, NEW.proof::text, NEW.queue_seq)
+        IS DISTINCT FROM (OLD.id, OLD.runner_id, OLD.run_id, OLD.kind, OLD.ref, OLD.queued_at, OLD.binding_version,
+            OLD.owner, OLD.execution_generation, OLD.containment_lost_at, OLD.proof::text, OLD.queue_seq)
+        OR (OLD.applied_at IS NOT NULL AND (NEW.applied_at, NEW.outcome, NEW.observed_at)
+            IS DISTINCT FROM (OLD.applied_at, OLD.outcome, OLD.observed_at)) THEN
+        RAISE EXCEPTION 'runner_pending_actions: binding and receipt columns are immutable';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS runner_pending_actions_immutable ON runner_pending_actions;
+CREATE TRIGGER runner_pending_actions_immutable
+    BEFORE UPDATE ON runner_pending_actions
+    FOR EACH ROW EXECUTE FUNCTION runner_pending_actions_immutable();

@@ -157,6 +157,54 @@ func beginRunnerActionTx(ctx context.Context, s PG) (pgx.Tx, error) {
 // waits for it and then refuses. Recovery, quarantine and retirement need
 // explicit org authority that this queue does not establish, so they refuse.
 func (s PG) QueueRunnerAction(ctx context.Context, a types.RunnerPendingAction) (types.RunnerPendingAction, bool, error) {
+	tx, err := beginRunnerActionTx(ctx, s)
+	if err != nil {
+		return types.RunnerPendingAction{}, false, err
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	out, queued, err := queueRunnerActionTx(ctx, tx, a)
+	if err != nil {
+		return types.RunnerPendingAction{}, false, err
+	}
+	return out, queued, tx.Commit(ctx)
+}
+
+// QueueRunnerTeardown queues the org's own offline teardown of ref (the
+// remote substrate's Queue seam): it binds the run's identity as the org holds
+// it under the same locks, then queues through the exact-binding path. A
+// stop_proxy binds the current kept outage loss and refuses without one.
+func (s PG) QueueRunnerTeardown(ctx context.Context, runnerID uuid.UUID, kind types.RunnerActionKind, ref string) (types.RunnerPendingAction, bool, error) {
+	tx, err := beginRunnerActionTx(ctx, s)
+	if err != nil {
+		return types.RunnerPendingAction{}, false, err
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	var runID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT id FROM agent_runs WHERE runner_id = $1 AND sandbox_ref = $2 AND sandbox_ref <> ''`, runnerID, ref).Scan(&runID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return types.RunnerPendingAction{}, false, ErrNotFound
+	}
+	if err != nil {
+		return types.RunnerPendingAction{}, false, err
+	}
+	_, run, generation, err := lockRunnerActionRun(ctx, tx, runnerID, runID)
+	if err != nil {
+		return types.RunnerPendingAction{}, false, err
+	}
+	a := types.RunnerPendingAction{ID: uuid.New(), RunnerID: runnerID, RunID: runID, Kind: kind, Ref: ref, Generation: generation}
+	if kind == types.RunnerActionStopProxy {
+		a.LostAt = run.LostAt
+	}
+	out, queued, err := queueRunnerActionTx(ctx, tx, a)
+	if err != nil {
+		return types.RunnerPendingAction{}, false, err
+	}
+	return out, queued, tx.Commit(ctx)
+}
+
+// queueRunnerActionTx is QueueRunnerAction inside the caller's READ COMMITTED
+// transaction, which must not hold locks out of the runner → run → execution order.
+func queueRunnerActionTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAction) (types.RunnerPendingAction, bool, error) {
 	switch a.Kind {
 	case types.RunnerActionKill, types.RunnerActionEnd, types.RunnerActionStopProxy:
 	default:
@@ -170,11 +218,6 @@ func (s PG) QueueRunnerAction(ctx context.Context, a types.RunnerPendingAction) 
 		lost := a.LostAt.UTC().Truncate(time.Microsecond)
 		a.LostAt = &lost
 	}
-	tx, err := beginRunnerActionTx(ctx, s)
-	if err != nil {
-		return types.RunnerPendingAction{}, false, err
-	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
 	owner, run, generation, err := lockRunnerActionRun(ctx, tx, a.RunnerID, a.RunID)
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
@@ -189,7 +232,7 @@ func (s PG) QueueRunnerAction(ctx context.Context, a types.RunnerPendingAction) 
 		if !sameRunnerAction(existing, a) {
 			return types.RunnerPendingAction{}, false, ErrConflict
 		}
-		return existing, false, tx.Commit(ctx)
+		return existing, false, nil
 	}
 	if !errors.Is(err, ErrNotFound) {
 		return types.RunnerPendingAction{}, false, err
@@ -205,7 +248,7 @@ func (s PG) QueueRunnerAction(ctx context.Context, a types.RunnerPendingAction) 
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
-	return out, true, tx.Commit(ctx)
+	return out, true, nil
 }
 
 // ListPendingRunnerActions is the runner's PENDING payload: at most one page of
@@ -213,7 +256,7 @@ func (s PG) QueueRunnerAction(ctx context.Context, a types.RunnerPendingAction) 
 // binding is never delivered; it keeps fencing its run instead.
 func (s PG) ListPendingRunnerActions(ctx context.Context, runnerID uuid.UUID) ([]types.RunnerPendingAction, bool, error) {
 	const q = `SELECT ` + actionCols + ` FROM runner_pending_actions
-		WHERE runner_id = $1 AND applied_at IS NULL AND binding_version = 1 ORDER BY queued_at, id LIMIT $2`
+		WHERE runner_id = $1 AND applied_at IS NULL AND binding_version = 1 ORDER BY queue_seq LIMIT $2`
 	page, err := collect(ctx, s.Pool, "list", "runner pending actions", q, []any{runnerID, runnerActionPageLimit + 1}, scanAction)
 	if err != nil || len(page) <= runnerActionPageLimit {
 		return page, false, err
