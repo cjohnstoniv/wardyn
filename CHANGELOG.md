@@ -46,6 +46,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- `wardyn run --placement remote|local` and `--runner <id>` choose where a run's sandbox lives. Both are passed to the
+  server unchanged, so its placement refusals reach the CLI as they are. `--pool` is accepted and refused at run create
+  until runner-pool selection lands (#109).
 - Model connections say why they became unavailable: never connected, removed because an admin changed the provider's
   address or kind (with the new destination host to review before reconnecting), or the credential store could not be
   read ("could not check"; the credential may still be there). The record is owner-scoped and holds no secret; it is
