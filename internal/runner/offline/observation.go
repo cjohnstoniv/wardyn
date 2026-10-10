@@ -64,9 +64,11 @@ func (m *Manager) observeRun(ctx context.Context, id uuid.UUID) (*runnerwire.Run
 		return nil, err
 	}
 	depth, _, drops, err := spool.Stats(ctx)
-	if err := errors.Join(err, spool.Close()); err != nil {
+	receipt, receiptErr := spool.Receipt(ctx)
+	if err := errors.Join(err, receiptErr, spool.Close()); err != nil {
 		return nil, err
 	}
+	row.SpoolReceipt = &receipt
 	row.SpoolDepth = depth
 	row.SpoolDrops = int(min(drops, uint64(^uint(0)>>1)))
 	return row, nil
