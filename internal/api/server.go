@@ -98,6 +98,9 @@ type Config struct {
 	// failed durable write is masked, logged loudly, and spooled to the local
 	// append-only fallback for EVERY writer — the API layer no longer spools itself.
 	Audit audit.Recorder
+	// RunnerAuditPrepare applies the serving audit mask/seal policy before the
+	// spool receipt and audit row commit in one database transaction.
+	RunnerAuditPrepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)
 	// AuditSpool is the SAME durable fallback spool the recorder chain appends to on
 	// a failed store write (see cmd/wardynd buildAuditChain). When set together with
 	// AuditDrainRecorder, New starts a background loop that replays spooled events

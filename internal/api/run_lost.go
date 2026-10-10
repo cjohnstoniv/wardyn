@@ -6,10 +6,10 @@ package api
 import (
 	"context"
 	"errors"
-	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"log/slog"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -158,7 +158,9 @@ func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store
 	s.revokeRunBroker(ctx, run.ID)
 	s.leaseEnded.Store(run.ID, struct{}{})
 	data, outcome := map[string]any{"reason": string(reason)}, "success"
-	if err := s.stopLostSandbox(ctx, run, now); err != nil {
+	if err := s.stopLostSandbox(ctx, run, now); errors.Is(err, runner.ErrPendingOnRunner) {
+		data["containment"] = "pending_runner"
+	} else if err != nil {
 		data["lost_error"] = err.Error()
 		if errors.Is(err, runner.ErrEndUnsupported) {
 			data["kept"] = false
@@ -180,10 +182,10 @@ func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store
 	return loseApplied
 }
 
-// lostRunKeepable: an interactive RUNNING run with a sandbox, not already
-// kept, whose lease or ended-run grace is still live.
+// lostRunKeepable preserves local headless agents as well as interactive
+// sandboxes. Runner lifecycle evidence finalizes a kept headless agent later.
 func (s *Server) lostRunKeepable(run types.AgentRun, now time.Time) bool {
-	if run.State != types.RunRunning || !run.Interactive || run.SandboxRef == "" || runIsKept(run) {
+	if run.State != types.RunRunning || (!run.Interactive && run.Placement != types.PlacementLocal) || run.SandboxRef == "" || runIsKept(run) {
 		return false
 	}
 	return run.EndsAt == nil || now.Before(run.EndsAt.Add(s.cfg.EndedRunGrace))

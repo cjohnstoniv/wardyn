@@ -25,8 +25,10 @@ import (
 )
 
 const (
-	MaxRecords = 50000
-	MaxBytes   = 32 << 20
+	// ReplayBatch bounds the uncommitted local ACK window retained by org receipts.
+	ReplayBatch = 64
+	MaxRecords  = 50000
+	MaxBytes    = 32 << 20
 	// MaxRecordBytes leaves the record envelope below the wire control bound.
 	MaxRecordBytes = (1 << 20) - 4096
 )

@@ -1,0 +1,82 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package offline
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/google/uuid"
+)
+
+func (m *Manager) findRef(ref string) (uuid.UUID, localRun, bool) {
+	for id, r := range m.state.Runs {
+		if r.Ref == ref && ref != "" {
+			return id, r, true
+		}
+	}
+	return uuid.Nil, localRun{}, false
+}
+
+// BeforeRefCall refuses any start, revive or agent execution without the
+// authenticated connection's live lease. Containment never needs permission.
+func (m *Manager) BeforeRefCall(ctx context.Context, method, ref string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	id, _, ok := m.findRef(ref)
+	if !ok {
+		return errors.New("runner reference has no durable binding")
+	}
+	switch method {
+	case runnerwire.MethodExec, runnerwire.MethodStart, runnerwire.MethodReplaceProxy:
+		if !m.online || m.state.Revoked || m.expired(id) {
+			return runner.ErrRunnerOffline
+		}
+	}
+	return nil
+}
+
+// AfterRefCall records real substrate changes before the org receives success.
+// A durable-state failure contains the proxy even when the wire call was lost.
+func (m *Manager) AfterRefCall(ctx context.Context, method, ref, execID string) error {
+	m.mu.Lock()
+	id, r, ok := m.findRef(ref)
+	var err error
+	if !ok {
+		err = errors.New("runner reference has no durable binding")
+	} else {
+		switch method {
+		case runnerwire.MethodExec:
+			if execID == "" {
+				err = errors.New("runner execution has no liveness handle")
+			} else {
+				r.ExecID = execID
+				r.Exit = nil
+				r.ExitAcked = false
+			}
+		case runnerwire.MethodReplaceProxy:
+			r.ProxyStoppedAt = nil
+		case runnerwire.MethodStopProxy, runnerwire.MethodStop, runnerwire.MethodKill, runnerwire.MethodEnd:
+			at := m.now().UTC()
+			r.ProxyStoppedAt = &at
+		}
+		if err == nil {
+			m.state.Runs[id] = r
+			err = m.save()
+		}
+	}
+	m.mu.Unlock()
+	if err == nil {
+		return nil
+	}
+	safety, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	return errors.Join(err, m.stopper.StopProxy(safety, ref))
+}

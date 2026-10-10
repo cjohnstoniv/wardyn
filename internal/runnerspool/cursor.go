@@ -183,7 +183,7 @@ func (s *Spool) Replay(ctx context.Context, send func(context.Context, Record) e
 	if send == nil {
 		return errors.New("spool replay needs a durable acknowledgement")
 	}
-	c := ackcursor.Cursor[Record]{Source: s, Sink: delivery{send: send}, Store: s, Key: Record.Position, Batch: 64}
+	c := ackcursor.Cursor[Record]{Source: s, Sink: delivery{send: send}, Store: s, Key: Record.Position, Batch: ReplayBatch}
 	if err := c.Load(ctx); err != nil {
 		return err
 	}

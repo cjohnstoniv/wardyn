@@ -404,6 +404,9 @@ func run() error {
 		// configured, which omits the row.
 		GitHubRulesets: gh,
 		Audit:          maskedRec,
+		RunnerAuditPrepare: func(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
+			return prepareRunnerAudit(ctx, ev, maskingRecorder{reg: maskReg, scope: maskScopes}, sealSrc)
+		},
 		// hand the raw spool + raw store recorder to the server so it starts
 		// the background drain that replays spooled events back into the store once
 		// PG recovers (both nil when no spool is configured => drain is a no-op).
