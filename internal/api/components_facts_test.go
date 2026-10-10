@@ -24,12 +24,15 @@ import (
 var factKeys = []string{
 	"kind", "provider", "id", "name", "version", "reason", "status", "requirements", "lane", "org", "repos",
 	"hosts", "secrets", "config_keys", "self_defined", "autonomy_cap", "vault_floor", "tls_intercept", "high_risk",
+	"agent", "capabilities", "capability_ceiling", "push_rules", "token_mode", "token_scopes", "repo_access", "install_url",
 }
 
-// doorFacts is the `components` of a dry door's 200, each fact as the bytes
+// nonAgentDoorFacts preserves the custom/Git isolation matrices while agent
+// facts are checked separately through the actual SDK shape. It checks every
+// fact's top-level keys, including agent facts. Each non-agent fact is the bytes
 // the door wrote. It fails the test on any other status and on a fact that
 // carries a field outside factKeys.
-func doorFacts(t *testing.T, door string, w *httptest.ResponseRecorder) []string {
+func nonAgentDoorFacts(t *testing.T, door string, w *httptest.ResponseRecorder) []string {
 	t.Helper()
 	if w.Code != http.StatusOK {
 		t.Fatalf("%s = %d %s, want 200", door, w.Code, w.Body.String())
@@ -40,12 +43,14 @@ func doorFacts(t *testing.T, door string, w *httptest.ResponseRecorder) []string
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("%s: %v (%s)", door, err, w.Body.String())
 	}
-	out := make([]string, len(body.Components))
+	out := []string{}
 	for i, raw := range body.Components {
-		out[i] = string(raw)
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &fields); err != nil {
 			t.Fatalf("%s: components[%d] is not an object: %s", door, i, raw)
+		}
+		if string(fields["kind"]) != `"agent"` {
+			out = append(out, string(raw))
 		}
 		for k := range fields {
 			if !slices.Contains(factKeys, k) {
@@ -149,7 +154,7 @@ func TestComponentFacts_GrantedUngrantedAbsentAtEveryDoor(t *testing.T) {
 						}
 						continue
 					}
-					if got := doorFacts(t, door, w); !slices.Equal(got, []string{tc.fact}) {
+					if got := nonAgentDoorFacts(t, door, w); !slices.Equal(got, []string{tc.fact}) {
 						t.Errorf("%s components =\n %v\nwant\n %v", door, got, []string{tc.fact})
 					}
 					continue
@@ -212,7 +217,7 @@ func TestComponentFacts_PreviewReportsAMissingOwnSecretAsASetupItem(t *testing.T
 			f := newComponentFixture(t)
 			body := componentBody(tc.ref(f))
 			w := f.ask(t, componentDoors[2], body)
-			if got := doorFacts(t, componentDoors[2], w); !slices.Equal(got, []string{tc.fact}) {
+			if got := nonAgentDoorFacts(t, componentDoors[2], w); !slices.Equal(got, []string{tc.fact}) {
 				t.Errorf("preview components =\n %v\nwant\n %v", got, []string{tc.fact})
 			}
 			if strings.Contains(w.Body.String(), compOwnSecret) {
@@ -250,7 +255,7 @@ func TestComponentFacts_NoDoorNamesASharedSecretOrAConfigValue(t *testing.T) {
 	w := f.ask(t, componentDoors[2], componentBody(org))
 	want := `{"kind":"custom","id":"` + compOrgID + `","name":"Org Tool","version":3,"reason":"org","status":"unavailable","requirements":[],` +
 		`"hosts":["org-api.example"],"secrets":[{"delivery":"header","shared":true}],"config_keys":["ORG_REGION"]}`
-	if got := doorFacts(t, componentDoors[2], w); !slices.Equal(got, []string{want}) {
+	if got := nonAgentDoorFacts(t, componentDoors[2], w); !slices.Equal(got, []string{want}) {
 		t.Errorf("preview components =\n %v\nwant\n %v", got, []string{want})
 	}
 	bodies := []string{w.Body.String()}
@@ -269,7 +274,7 @@ func TestComponentFacts_NoDoorNamesASharedSecretOrAConfigValue(t *testing.T) {
 		`"hosts":["person-api.example"],"config_keys":["PERSON_REGION"],"self_defined":true}`
 	for _, door := range dryDoors {
 		w := f.ask(t, door, componentBody(own))
-		if got := doorFacts(t, door, w); !slices.Equal(got, []string{ownFact}) {
+		if got := nonAgentDoorFacts(t, door, w); !slices.Equal(got, []string{ownFact}) {
 			t.Errorf("%s components =\n %v\nwant\n %v", door, got, []string{ownFact})
 		}
 		bodies = append(bodies, w.Body.String())
@@ -326,7 +331,7 @@ func TestComponentFacts_FlagsFollowTheRunAndTheOrganisationsSettings(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			f := newComponentFixture(t)
 			f.st.siteConfig.Components = tc.settings
-			facts := doorFacts(t, componentDoors[2], f.ask(t, componentDoors[2], componentBody(tc.ref(f))))
+			facts := nonAgentDoorFacts(t, componentDoors[2], f.ask(t, componentDoors[2], componentBody(tc.ref(f))))
 			if len(facts) != 1 {
 				t.Fatalf("components = %v, want one", facts)
 			}
@@ -341,12 +346,12 @@ func TestComponentFacts_FlagsFollowTheRunAndTheOrganisationsSettings(t *testing.
 	}
 }
 
-// A run that names no component and no repository answers the body it always
-// did: neither dry door grows a `components` key.
+// An exec run has no agent process. With no component or repository, neither
+// dry door grows a components key.
 func TestComponentFacts_NoneIsToday(t *testing.T) {
 	f := newComponentFixture(t)
 	for _, door := range dryDoors {
-		w := f.ask(t, door, map[string]any{"agent": "claude-code", "task": "components"})
+		w := f.ask(t, door, map[string]any{"agent": "claude-code", "task": "echo ok", "task_mode": "exec"})
 		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"components"`) {
 			t.Errorf("%s = %d %s, want a 200 with no components key", door, w.Code, w.Body.String())
 		}
@@ -469,7 +474,7 @@ type gitFact struct {
 func gitFacts(t *testing.T, door string, w *httptest.ResponseRecorder) []gitFact {
 	t.Helper()
 	var out []gitFact
-	for _, raw := range doorFacts(t, door, w) {
+	for _, raw := range nonAgentDoorFacts(t, door, w) {
 		var fact gitFact
 		if err := json.Unmarshal([]byte(raw), &fact); err != nil {
 			t.Fatal(err)
@@ -489,7 +494,7 @@ func gitFacts(t *testing.T, door string, w *httptest.ResponseRecorder) []gitFact
 func TestComponentFacts_GitProviderRows(t *testing.T) {
 	const ghRepo = "https://github.com/acme/one"
 	github := func(lane string) gitFact {
-		return gitFact{Provider: "github", ID: "git_provider:github:" + lane, Reason: "workspace", Status: "unknown", Lane: lane, Repos: []string{ghRepo}}
+		return gitFact{Provider: "github", ID: "git_provider:github:" + lane + ":acme", Reason: "workspace", Status: "unknown", Lane: lane, Org: "acme", Repos: []string{ghRepo}}
 	}
 	ado := func(status string) gitFact {
 		return gitFact{Provider: "azure_devops", ID: "git_provider:azure_devops:entra:" + scmTestADOOrg, Reason: "workspace", Status: status,

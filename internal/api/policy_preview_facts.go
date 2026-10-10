@@ -27,7 +27,7 @@ type policyPreviewResponse struct {
 	Pending          []policyPreviewPending    `json:"pending"`
 	RepositoryAccess []policyPreviewRepository `json:"repository_access"`
 	// Components is what the draft is given access to (componentFacts): absent
-	// for a draft with no repository on a Git provider and no component.
+	// for an exec draft with no Git provider or attached component.
 	Components []componentFact `json:"components,omitempty"`
 	// Provenance says why each entry of the spec is there (runFold.prov); never null.
 	Provenance []provenanceRow `json:"provenance"`
@@ -71,7 +71,7 @@ type policyPreviewRepository struct {
 }
 
 func policyPreviewFacts(req createRunRequest, spec types.RunPolicySpec, source policySourceRecord,
-	warnings []string, site types.SiteConfig, choice runProviderChoice, comps runComponents, baseline composer.Baseline) policyPreviewResponse {
+	warnings []string, site types.SiteConfig, choice runProviderChoice) policyPreviewResponse {
 	out := redactSpecForRead(spec, false)
 	if out.LLMInspection != nil {
 		inspection := *out.LLMInspection
@@ -87,7 +87,6 @@ func policyPreviewFacts(req createRunRequest, spec types.RunPolicySpec, source p
 		Provisional: true, Redacted: redacted,
 		Warnings: previewSafeWarnings(warnings), Pending: previewPending(req, choice),
 		RepositoryAccess: previewRepositoryAccess(req, out, site),
-		Components:       componentFacts(req, spec, site, comps, nil, baseline),
 		Provenance:       []provenanceRow{},
 		Resources:        []client.PlacementResources{}, LocalPlacement: []client.LocalPlacementFact{}, AllowedImages: []client.AllowedImage{},
 	}

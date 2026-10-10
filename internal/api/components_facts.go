@@ -26,6 +26,8 @@ import (
 // domains do. A fact never carries the name of a secret the organisation
 // provides, the value of a setting, or a provider row's id: a secret is how it
 // is delivered and whose it is, a setting is its key, a provider is its kind.
+// The one approved document is agentpolicy's nonsecret managed policy; it is
+// never an arbitrary dispatch file or environment map.
 type componentFact struct {
 	Kind types.ComponentKind `json:"kind"`
 	// Provider is a git_provider's kind: github or azure_devops.
@@ -69,7 +71,7 @@ type componentFact struct {
 
 	// Agent is the agent component's own facts (kind agent) and the rest are a
 	// git_provider's additions (see client.ComponentFact). The New Run contract
-	// declares them; the facts lane fills them, so a door sends none yet.
+	// declares their member-safe wire shape.
 	Agent             *client.AgentFact       `json:"agent,omitempty"`
 	Capabilities      []string                `json:"capabilities,omitempty"`
 	CapabilityCeiling []string                `json:"capability_ceiling,omitempty"`
@@ -112,14 +114,18 @@ const (
 )
 
 // componentFacts is the `components` of Review and of the policy preview: the
-// Git providers the draft's repositories live on, then its components in
-// request order. Pure — everything it says was decided by the caller's gates.
+// Git providers the draft's repositories live on, its agent, then attached
+// components in request order. Everything was decided by the caller's gates.
 // scm is Review's git_credential fact; the preview reads no credential and
-// passes nil. Nil when the run has neither, so its body is the one it was.
-func componentFacts(req createRunRequest, spec types.RunPolicySpec, site types.SiteConfig, comps runComponents, scm *SCMAccess, baseline composer.Baseline) []componentFact {
-	facts := gitProviderFacts(req, spec, site, scm)
-	for i, a := range comps.attached {
-		facts = append(facts, a.fact(i, comps, baseline))
+// passes nil. Nil when an exec run has no Git provider or attached component.
+func componentFacts(f runFold, scm *SCMAccess) []componentFact {
+	facts := gitProviderFacts(*f.req, f.spec, f.scmSite, scm)
+	enrichGitFacts(f, facts)
+	if agent, ok := agentComponentFact(f); ok {
+		facts = append(facts, agent)
+	}
+	for i, a := range f.comps.attached {
+		facts = append(facts, a.fact(i, f.comps, f.baseline))
 	}
 	return facts
 }
@@ -179,6 +185,7 @@ func gitProviderFacts(req createRunRequest, spec types.RunPolicySpec, site types
 			continue
 		}
 		lane := gitProviderLane(repo, spec, site)
+		repo.org = gitFactOrg(repo)
 		id := string(types.ComponentGitProvider) + ":" + repo.kind + ":" + lane
 		if repo.org != "" {
 			id += ":" + repo.org

@@ -104,7 +104,7 @@ func TestComponentFacts_PGGrantedUngrantedAbsentAtEveryDoor(t *testing.T) {
 						t.Errorf("%s = %d %s, want 201", door, w.Code, w.Body.String())
 					}
 				default:
-					if got := doorFacts(t, door, w); !slices.Equal(got, []string{tc.fact}) {
+					if got := nonAgentDoorFacts(t, door, w); !slices.Equal(got, []string{tc.fact}) {
 						t.Errorf("%s components =\n %v\nwant\n %v", door, got, []string{tc.fact})
 					}
 				}
