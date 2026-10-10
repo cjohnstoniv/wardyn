@@ -220,7 +220,9 @@ func (s *Server) endedKept(run types.AgentRun, now time.Time) *store.EndedKept {
 
 // stopLostSandbox stops a lost run's proxy. An outage run inside its lease
 // keeps its agent running; any other lost run (a reboot, or an outage past
-// its end) has its agent stopped as at the end.
+// its end) has its agent stopped as at the end. An outage run's stopped agent
+// is recorded (store.RunLeaser.MarkRunAgentStopped), so extending the run
+// later does not make it hold a slot again.
 func (s *Server) stopLostSandbox(ctx context.Context, run types.AgentRun, now time.Time) error {
 	if run.LostReason == types.LostOutage && (run.EndsAt == nil || now.Before(*run.EndsAt)) {
 		stopper, ok := s.cfg.Runner.(runner.ProxyStopper)
@@ -229,5 +231,14 @@ func (s *Server) stopLostSandbox(ctx context.Context, run types.AgentRun, now ti
 		}
 		return stopper.StopProxy(ctx, run.SandboxRef)
 	}
-	return s.endSandbox(ctx, run)
+	err := s.endSandbox(ctx, run)
+	if leaser, ok := s.cfg.Store.(store.RunLeaser); ok && err == nil && run.LostReason == types.LostOutage && run.LostAt != nil {
+		// A failed write only leaves the run counted; the lease sweep re-asserts
+		// this stop every pass and retries it.
+		if merr := leaser.MarkRunAgentStopped(ctx, run.ID, *run.LostAt); merr != nil {
+			slog.WarnContext(ctx, "wardynd: recording a kept run's stopped agent failed",
+				slog.String("run_id", run.ID.String()), slog.Any("err", merr))
+		}
+	}
+	return err
 }

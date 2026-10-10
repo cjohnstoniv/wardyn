@@ -265,11 +265,17 @@ func TestLostRun_KeptUntilItsEndAndGrace(t *testing.T) {
 	if f.lr.proxyStopCount() != 1 || f.rn.endCount() != 0 {
 		t.Fatalf("inside the lease: StopProxy %d, EndSandbox %d; want 1, 0", f.lr.proxyStopCount(), f.rn.endCount())
 	}
+	if f.st.agentStopped {
+		t.Fatal("inside the lease the agent still runs, yet its stop was recorded")
+	}
 
 	f.now = end.Add(time.Minute)
 	f.sweep(t)
 	if f.rn.endCount() != 1 || f.st.State() != types.RunRunning {
 		t.Fatalf("past the end: EndSandbox %d, state %s; want the agent stopped and the run kept", f.rn.endCount(), f.st.State())
+	}
+	if !f.st.agentStopped {
+		t.Error("the stopped agent of an outage run past its end was not recorded, so extending it would read as a held slot")
 	}
 
 	f.now = end.Add(7 * 24 * time.Hour)
