@@ -22,6 +22,7 @@ const (
 	MethodResize          = "resize"
 	MethodExecStream      = "exec_stream"
 	MethodExecWait        = "exec_wait"
+	MethodExecClose       = "exec_close"
 	MethodStatus          = "status"
 	MethodAgentStatus     = "agent_status"
 	MethodStop            = "stop"
@@ -34,6 +35,7 @@ const (
 	MethodStart           = "start"
 	MethodProbeDrive      = "probe_drive"
 	MethodRecoverOutput   = "recover_output"
+	MethodOutputAck       = "output_ack"
 	MethodSweep           = "sweep_orphans"
 	MethodDeliverResident = "deliver_resident"
 	MethodEraseResident   = "erase_resident"
@@ -144,4 +146,11 @@ type DeliverResidentArgs struct {
 
 type EraseResidentArgs struct {
 	RunID uuid.UUID `json:"run_id"`
+}
+
+// OutputAckArgs acknowledges bytes accepted by the org's output writer, never
+// merely bytes received in the transport's buffer. Offset is the next byte.
+type OutputAckArgs struct {
+	RunID  uuid.UUID `json:"run_id"`
+	Offset int64     `json:"offset"`
 }
