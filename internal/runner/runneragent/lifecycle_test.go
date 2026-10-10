@@ -106,6 +106,9 @@ func TestDispatcherRefGuardAndDurableExecIdentity(t *testing.T) {
 		BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
 		Created:      func(context.Context, runner.SandboxSpec, string) error { return nil },
 		CreateFailed: func(context.Context, runner.SandboxSpec) error { return nil },
+		ExecutionResult: func(context.Context, string, uuid.UUID) (runnerwire.ExecutionResult, error) {
+			return runnerwire.ExecutionResult{}, runnerwire.Refuse("not queried in this fixture")
+		},
 		BeforeRefCall: func(_ context.Context, method, ref string, gotGeneration uuid.UUID) error {
 			if method != runnerwire.MethodExec || ref != sb.Ref || gotGeneration != generation {
 				t.Fatal("wrong mutation guard identity")

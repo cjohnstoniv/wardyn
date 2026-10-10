@@ -143,7 +143,10 @@ func remoteDockerRunner(t *testing.T, local substrate.Substrate, realWire bool) 
 		CreateFailed:  func(context.Context, runner.SandboxSpec) error { return nil },
 		BeforeRefCall: func(context.Context, string, string, uuid.UUID) error { return nil },
 		AfterRefCall:  func(context.Context, string, string, string, uuid.UUID) error { return nil },
-		Streams:       streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
+		ExecutionResult: func(context.Context, string, uuid.UUID) (runnerwire.ExecutionResult, error) {
+			return runnerwire.ExecutionResult{}, runnerwire.Refuse("execution recovery requires lifecycle adapter")
+		},
+		Streams: streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
 	})
 	if err != nil {
 		t.Fatal(err)

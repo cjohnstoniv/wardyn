@@ -40,6 +40,9 @@ func TestDispatcherCarriesExplicitExecutionGeneration(t *testing.T) {
 					BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
 					Created:      func(context.Context, runner.SandboxSpec, string) error { return nil },
 					CreateFailed: func(context.Context, runner.SandboxSpec) error { return nil },
+					ExecutionResult: func(context.Context, string, uuid.UUID) (runnerwire.ExecutionResult, error) {
+						return runnerwire.ExecutionResult{}, runnerwire.Refuse("not queried in this fixture")
+					},
 					BeforeRefCall: func(_ context.Context, m, ref string, value uuid.UUID) error {
 						before++
 						if m != method || ref != sb.Ref || value != got {
