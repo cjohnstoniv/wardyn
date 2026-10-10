@@ -17,6 +17,7 @@ import (
 const (
 	MethodCreateSandbox   = "create_sandbox"
 	MethodExec            = "exec"
+	MethodExecutionResult = "execution_result"
 	MethodWait            = "wait"
 	MethodAttach          = "attach"
 	MethodResize          = "resize"
@@ -155,4 +156,18 @@ type EraseResidentArgs struct {
 type OutputAckArgs struct {
 	RunID  uuid.UUID `json:"run_id"`
 	Offset int64     `json:"offset"`
+}
+
+// ExecutionResultArgs requests reconciliation of one exact org-issued intent.
+type ExecutionResultArgs struct {
+	Ref        string    `json:"ref"`
+	Generation uuid.UUID `json:"generation"`
+}
+
+// ExecutionResult reports durable local state; it never starts or retries work.
+type ExecutionResult struct {
+	Generation uuid.UUID `json:"generation"`
+	Operation  string    `json:"operation"`
+	ExecID     string    `json:"exec_id"`
+	Attempted  bool      `json:"attempted"`
 }
