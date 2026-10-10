@@ -56,12 +56,14 @@ type CreateSandboxResult struct {
 }
 
 type RefArgs struct {
-	Ref string `json:"ref"`
+	ExecutionGeneration uuid.UUID `json:"execution_generation,omitempty"`
+	Ref                 string    `json:"ref"`
 }
 
 type ExecArgs struct {
-	Ref  string   `json:"ref"`
-	Argv []string `json:"argv"`
+	ExecutionGeneration uuid.UUID `json:"execution_generation"`
+	Ref                 string    `json:"ref"`
+	Argv                []string  `json:"argv"`
 }
 
 type ExecResult struct {
