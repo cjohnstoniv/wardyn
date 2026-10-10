@@ -19,6 +19,8 @@
 | Sandbox, proxy sidecar, local Docker | No | Yes, driven through `wardyn-runnerd` |
 | The runner's private key | Never seen | `runner.key`, `0600`, never leaves the host |
 
+- Azure DevOps: connected at the org; on a local run only the person's own PAT is used directly, see [Azure DevOps on a laptop runner](../AZURE-DEVOPS.md#on-a-laptop-runner-local-placement).
+
 ## Claiming a runner
 
 1. The owner (or an admin, for a named person) mints a single-use `wdr_` registration token. The owner's token lasts 1 hour; an admin-minted one lasts 72 hours so MDM can deliver it.

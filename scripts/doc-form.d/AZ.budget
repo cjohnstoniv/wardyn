@@ -1,2 +1,3 @@
 # docs/AZURE-DEVOPS.md 10637 adds 25: the two 'never enters the sandbox' statements now say the sandbox holds an inert placeholder and link docs/CREDENTIALS.md (19 + 9 by the diff tool; the gate counts 25).
-docs/AZURE-DEVOPS.md=10637 share=35
+# docs/AZURE-DEVOPS.md 10762 adds 125 (#475), the "On a laptop runner (local placement)" section: heading 6; connect bullet 22; local-run bullet 14; token_mode table 50 (header 9, own_pat row 29, minted_pat/bearer row 12); test-pin bullet 10; refusal bullet 5; where-each-thing-lives bullet 18.
+docs/AZURE-DEVOPS.md=10762 share=35

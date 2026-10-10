@@ -340,6 +340,20 @@ That has two consequences worth knowing before you hit them:
   - It never carries a token value or an authorization id.
   - The run's owner and admins read it; anyone else gets the run's own `404`.
 
+## On a laptop runner (local placement)
+
+- Connect Azure DevOps at the organisation's console, as for any run. Nothing about Azure DevOps is configured or captured on the laptop.
+- A run placed on the person's own runner gets the credential its `token_mode` allows:
+
+| `token_mode` | What the run gets on a laptop | Why |
+|---|---|---|
+| `own_pat` | The person's own PAT, only when the Azure DevOps row is theirs and the PAT is stored in their own namespace; otherwise refused ([`internal/api/run_placement_intents.go#Server.localADOOrigin`](../internal/api/run_placement_intents.go)) | It is their credential |
+| `minted_pat`, `bearer` | Refused today (`placement_credential`) | The organisation mints or holds the token |
+
+- `TestDeliveryClassesMatchDesign` in [`internal/placement/placement_test.go`](../internal/placement/placement_test.go) pins that `ado_minted_pat` has no `runner_resident` mode.
+- The refusal is `classifyCredential` ([`internal/placement/eligibility.go`](../internal/placement/eligibility.go)).
+- Where each thing lives is in [Managed laptops: client-mode runners](operations/hybrid-laptops.md#where-each-thing-lives). The delivery rules are in [Credential delivery (OD-12)](design/0.9/PLAN.md#7-credential-delivery-od-12).
+
 ## Check organisation settings
 
 - On a `minted_pat` row, an administrator runs **Check organisation settings**.
