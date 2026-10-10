@@ -65,6 +65,21 @@ var (
 	_ client.PresetsDocument
 	_ client.Preset
 	_ client.PresetRequest
+	_ client.TemplateList
+	_ client.TemplateSummary
+	_ client.Template
+	_ client.TemplateSaveRequest
+	_ client.TemplateImportRequest
+	_ client.TemplateImportResult
+	_ client.TemplateDiagnostic
+	_ client.TemplateDocument
+	_ client.TemplateIntent
+	_ client.TemplateCopyRequest
+	_ client.TemplateGroupAdmins
+	_ client.TemplateScope
+	_ client.TemplateGroupAdmin
+	_ client.ComponentConfigSchema
+	_ client.ComponentConfigValues
 	_ client.GovernanceDocument
 	_ client.GovernanceProfile
 	_ client.GovernanceAssignment
@@ -89,6 +104,7 @@ func routeFamilies() map[string][]string {
 		"secrets":      {"ListSecrets", "ListSecretsPage", "ListSecretsScoped", "ListSecretsScopedPage", "SetSecret", "DeleteSecret"},
 		"site-config":  {"GetSiteConfig", "PutSiteConfig", "PutSiteConfigResult"},
 		"drives":       {"GetDrives", "ApplyDrives"},
+		"templates":    {"ListTemplates", "GetTemplate", "SaveTemplate", "DeleteTemplate", "CopyTemplate", "ImportTemplate", "ListTemplateGroupAdmins", "GrantTemplateGroupAdmin", "RevokeTemplateGroupAdmin"},
 		"presets":      {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
 		"governance":   {"GetGovernance", "ApplyGovernance", "ApplyGovernanceResult"},
 		"gov.changes":  {"ListGovernanceChanges", "GetGovernanceChange", "ApproveGovernanceChange", "RejectGovernanceChange"},

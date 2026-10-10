@@ -59,14 +59,18 @@ const (
 // first. A method on Server for the reason validateRunTextFields is: the parity
 // guard reads gates as `s.<Gate>(…)` calls.
 func (s *Server) runContractRefusal(req createRunRequest) *runRefusal {
-	for _, check := range []func(createRunRequest) *runRefusal{
-		placementShapeRefusal, runnerPoolShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, runOverridesRefusal, builtinComponentsRefusal,
-	} {
+	for _, check := range runContractShapeChecks {
 		if refusal := check(req); refusal != nil {
 			return refusal
 		}
 	}
 	return unappliedFieldsRefusal(req)
+}
+
+// runContractShapeChecks are the contract's shape checks, in answer order. A
+// template document is held to the same list when it is imported.
+var runContractShapeChecks = []func(createRunRequest) *runRefusal{
+	placementShapeRefusal, runnerPoolShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, runOverridesRefusal, builtinComponentsRefusal,
 }
 
 func placementShapeRefusal(req createRunRequest) *runRefusal {

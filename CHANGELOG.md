@@ -44,6 +44,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- Run template contract: reusable run setups published per person, organisation or group. A template is read strictly
+  (unknown fields, secrets, run state, owner fields, titles and descriptions are refused) through one validator for
+  text and structs, and its partial policy is laid onto the source policy rather than replacing it. Adds the
+  `template_*` reasons, a declarative configuration schema for custom components, `wardyn template` and SDK methods.
+  The `/templates` and `/admin/template-group-admins` routes answer `501 templates_unavailable` until the template
+  store lands.
 - Runner pool contract: the run-create, preflight and policy-preview requests accept `runner_pool_id`, which the
   server refuses with `request_field_unavailable` until runner pools are managed (never ignored). Preflight and the
   preview return `runner_pools` (empty until then). The pool routes (`/runner-pools`, `/runner-pool-defaults`,

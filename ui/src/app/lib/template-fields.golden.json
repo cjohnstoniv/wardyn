@@ -1,0 +1,643 @@
+{
+  "nested_carried": {
+    "ADOOverrides": [
+      "capabilities"
+    ],
+    "AgentOverrides": [
+      "add_hosts",
+      "remove_hosts",
+      "add_secrets",
+      "remove_secrets",
+      "tool_rules"
+    ],
+    "ComponentDefinition": [
+      "hosts",
+      "secrets",
+      "config"
+    ],
+    "ComponentDelivery": [
+      "mode",
+      "host",
+      "header",
+      "format",
+      "plain_http",
+      "var",
+      "file"
+    ],
+    "ComponentRef": [
+      "id",
+      "inline",
+      "name",
+      "builtin",
+      "org",
+      "repos",
+      "access"
+    ],
+    "ComponentSecret": [
+      "secret_name",
+      "shared",
+      "delivery"
+    ],
+    "DriveSelection": [
+      "enabled",
+      "read_only"
+    ],
+    "GitPATOverride": [
+      "host",
+      "repos",
+      "access",
+      "api"
+    ],
+    "GrantSpec": [
+      "kind",
+      "scope",
+      "ttl_seconds",
+      "requires_approval",
+      "owner_only"
+    ],
+    "LLMInspectionSpec": [
+      "mode",
+      "workspace_secret_names",
+      "detect_secrets",
+      "detect_secret_patterns",
+      "detect_entropy",
+      "detect_pii",
+      "detector_sidecar_url",
+      "classified_markers",
+      "scan_attachments",
+      "inspect_forward_egress",
+      "max_scan_bytes",
+      "on_scanner_error",
+      "require_inspectable_llm",
+      "intercept_tls",
+      "block_min_severity"
+    ],
+    "PushRuleOverride": [
+      "provider",
+      "org",
+      "deny_paths",
+      "require_review_paths"
+    ],
+    "PushRulesSpec": [
+      "deny_paths",
+      "max_inspect_pack_mib",
+      "require_review_paths",
+      "hold_seconds",
+      "deny_new_executables",
+      "max_file_size_mib"
+    ],
+    "ResourceLimits": [
+      "cpu_millis",
+      "memory_mib",
+      "pids_limit",
+      "disk_mib"
+    ],
+    "RunOverrides": [
+      "agent",
+      "azure_devops",
+      "git_pat",
+      "push_rules"
+    ],
+    "RunResources": [
+      "cpu_millis",
+      "memory_mib"
+    ],
+    "SecretOverride": [
+      "secret_name",
+      "host",
+      "header",
+      "format"
+    ],
+    "ToolRule": [
+      "tool",
+      "effect"
+    ],
+    "UIApp": [
+      "name",
+      "port",
+      "path"
+    ],
+    "WorkspaceMount": [
+      "source",
+      "target",
+      "read_only"
+    ],
+    "WorkspaceRepo": [
+      "repo",
+      "target",
+      "ref"
+    ],
+    "WorkspaceSelection": [
+      "workspace_id",
+      "enabled_optional",
+      "read_only",
+      "target"
+    ]
+  },
+  "nested_excluded": [
+    {
+      "path": "LLMInspectionSpec.workspace_secret_values",
+      "excluded": "secret",
+      "why": "Secret values are runtime-only: the server resolves them, and a template names secrets instead."
+    }
+  ],
+  "policy": [
+    {
+      "name": "allowed_domains",
+      "tab": "access",
+      "part": "egress",
+      "omitted": "baseline",
+      "empty": "value",
+      "meaning": "The organisation's default allowlist applies. An empty list is a choice: nothing is reachable unless a component adds it.",
+      "section": "run_wide"
+    },
+    {
+      "name": "denied_domains",
+      "tab": "access",
+      "part": "egress",
+      "omitted": "baseline",
+      "empty": "value",
+      "meaning": "Managed denials still apply. A template that drops its own denial can widen access.",
+      "section": "run_wide"
+    },
+    {
+      "name": "allow_all_egress",
+      "tab": "access",
+      "part": "egress",
+      "omitted": "baseline",
+      "empty": "value",
+      "meaning": "Egress follows the baseline. False is a choice of default-deny.",
+      "section": "run_wide"
+    },
+    {
+      "name": "first_use_approval",
+      "tab": "access",
+      "part": "egress",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "Unknown destinations are handled as the baseline says.",
+      "section": "run_wide"
+    },
+    {
+      "name": "first_use_hold_seconds",
+      "tab": "access",
+      "part": "egress",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "A held connection waits the built-in time. Zero is the same.",
+      "section": "run_wide"
+    },
+    {
+      "name": "max_holds",
+      "tab": "access",
+      "part": "egress",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "The built-in cap on concurrent holds applies. Zero is the same.",
+      "section": "run_wide"
+    },
+    {
+      "name": "allowed_methods",
+      "tab": "access",
+      "part": "egress",
+      "omitted": "baseline",
+      "empty": "all",
+      "meaning": "Methods follow the baseline. An empty list allows every method.",
+      "section": "run_wide"
+    },
+    {
+      "name": "min_confinement_class",
+      "tab": "runner",
+      "part": "runner",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "The floor follows the organisation's. A template cannot lower a managed floor.",
+      "section": "run_wide"
+    },
+    {
+      "name": "eligible_grants",
+      "tab": "access",
+      "part": "credentials",
+      "omitted": "unset_optional",
+      "empty": "value",
+      "meaning": "No credential eligibility comes from the template: the person's own ceiling decides.",
+      "section": "run_wide"
+    },
+    {
+      "name": "auto_stop_after_sec",
+      "tab": "runner",
+      "part": "resources",
+      "omitted": "baseline",
+      "empty": "never",
+      "meaning": "Idle stop follows the baseline. Zero or a negative number is a choice to never stop for idleness.",
+      "section": "run_wide"
+    },
+    {
+      "name": "workspace_mounts",
+      "tab": "repositories_drives",
+      "part": "repositories",
+      "omitted": "unset_optional",
+      "empty": "value",
+      "meaning": "No host path is mounted.",
+      "section": "run_wide"
+    },
+    {
+      "name": "workspace_repos",
+      "tab": "repositories_drives",
+      "part": "repositories",
+      "omitted": "unset_optional",
+      "empty": "value",
+      "meaning": "No extra repository is cloned.",
+      "section": "run_wide"
+    },
+    {
+      "name": "llm_inspection",
+      "tab": "access",
+      "part": "access_rules",
+      "omitted": "baseline",
+      "empty": "value",
+      "meaning": "Content inspection follows the organisation's policy, off unless it is turned on.",
+      "section": "run_wide"
+    },
+    {
+      "name": "ui_apps",
+      "tab": "tools_image",
+      "part": "tools_image",
+      "omitted": "unset_optional",
+      "empty": "value",
+      "meaning": "No application is declared for the browser.",
+      "section": "run_wide"
+    },
+    {
+      "name": "resources",
+      "tab": "runner",
+      "part": "resources",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "Limits follow the platform defaults. A zero field means the default.",
+      "section": "run_wide"
+    },
+    {
+      "name": "tool_rules",
+      "tab": "access",
+      "part": "access_rules",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No tool rules are added.",
+      "section": "harness",
+      "keyed_by": "harness"
+    },
+    {
+      "name": "git_push_any_branch",
+      "tab": "access",
+      "part": "access_rules",
+      "omitted": "baseline",
+      "empty": "value",
+      "meaning": "Pushes stay inside the run's own branch namespace. False is a choice to keep that.",
+      "section": "scm_entry",
+      "keyed_by": "provider+org"
+    },
+    {
+      "name": "push_rules",
+      "tab": "access",
+      "part": "access_rules",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "Push rules exist only inside an SCM entry, one set per provider and organisation. This run-wide block is not accepted until the keyed carrier lands.",
+      "section": "scm_entry",
+      "keyed_by": "provider+org",
+      "pending": "A-L3/A-L10"
+    },
+    {
+      "name": "azure_devops_capabilities",
+      "tab": "access",
+      "part": "credentials",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "The provider's default profile applies.",
+      "section": "scm_entry",
+      "keyed_by": "provider+org"
+    },
+    {
+      "name": "github_capabilities",
+      "tab": "access",
+      "part": "credentials",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "The provider's default profile applies.",
+      "section": "scm_entry",
+      "keyed_by": "provider+org"
+    }
+  ],
+  "request": [
+    {
+      "name": "agent",
+      "tab": "tools_image",
+      "part": "tools_image",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No agent is chosen. A background agent task needs one; a command or an interactive environment does not. A task is never turned into a shell command.",
+      "section": "harness",
+      "keyed_by": "harness"
+    },
+    {
+      "name": "repo",
+      "tab": "repositories_drives",
+      "part": "repositories",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No repository is attached through this older single-repository field.",
+      "section": "run_wide"
+    },
+    {
+      "name": "task",
+      "tab": "tools_image",
+      "part": "tools_image",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No task text is carried: the person who uses the template writes it.",
+      "sensitive": true,
+      "section": "run_wide"
+    },
+    {
+      "name": "title",
+      "excluded": "launch",
+      "why": "A run is named when it is launched: the Name this run dialog opens empty in this release, so a template carries no title."
+    },
+    {
+      "name": "description",
+      "excluded": "launch",
+      "why": "A run is described when it is launched: the Name this run dialog opens empty in this release, so a template carries no description."
+    },
+    {
+      "name": "policy_id",
+      "tab": "access",
+      "part": "policy_ref",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "The organisation's default policy applies when the template is used, and that default can change. It is a whole reference and never appears beside inline_policy.",
+      "section": "run_wide"
+    },
+    {
+      "name": "confinement_class",
+      "tab": "runner",
+      "part": "runner",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "The barrier follows the organisation's default and floor when the template is used.",
+      "section": "run_wide"
+    },
+    {
+      "name": "interactive",
+      "tab": "runner",
+      "part": "runner",
+      "omitted": "unset_required",
+      "empty": "value",
+      "meaning": "No run mode is assumed: the person chooses Background task or Interactive environment. false is the choice of a background task.",
+      "section": "run_wide"
+    },
+    {
+      "name": "workspace_id",
+      "tab": "repositories_drives",
+      "part": "repositories",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No workspace is attached through this older single-workspace field.",
+      "section": "run_wide"
+    },
+    {
+      "name": "inline_policy",
+      "tab": "access",
+      "omitted": "baseline",
+      "empty": "value",
+      "meaning": "No policy field is set by the template. Only the policy keys it names are laid onto the source policy; a key it leaves out keeps the source's value.",
+      "section": "run_wide"
+    },
+    {
+      "name": "devcontainer_repo",
+      "tab": "tools_image",
+      "part": "tools_image",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No image is built from a repository.",
+      "section": "run_wide"
+    },
+    {
+      "name": "devcontainer_ref",
+      "tab": "tools_image",
+      "part": "tools_image",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "The build uses the repository's default branch.",
+      "section": "run_wide"
+    },
+    {
+      "name": "image",
+      "tab": "tools_image",
+      "part": "tools_image",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No image of the person's own is named: the run uses the agent's or the organisation's image.",
+      "section": "run_wide"
+    },
+    {
+      "name": "task_mode",
+      "tab": "tools_image",
+      "part": "tools_image",
+      "omitted": "unset_required",
+      "empty": "same_as_omitted",
+      "meaning": "Under a background task the person chooses an agent task or a command. A harness is inferred only when an agent is present, and a task is never turned into a command.",
+      "section": "run_wide"
+    },
+    {
+      "name": "interactive_start",
+      "tab": "tools_image",
+      "part": "tools_image",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "Nothing starts automatically unless chosen. A removed startup tool is never replaced by another.",
+      "section": "run_wide"
+    },
+    {
+      "name": "seed_auto_tools",
+      "tab": "access",
+      "part": "access_rules",
+      "omitted": "baseline",
+      "empty": "value",
+      "meaning": "The starting prompt asks before using tools. False is a choice to keep asking.",
+      "section": "harness",
+      "keyed_by": "harness"
+    },
+    {
+      "name": "tool_approvals",
+      "tab": "access",
+      "part": "access_rules",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "Tool use follows the default approval behaviour.",
+      "section": "harness",
+      "keyed_by": "harness"
+    },
+    {
+      "name": "workspaces",
+      "tab": "repositories_drives",
+      "part": "repositories",
+      "omitted": "unset_optional",
+      "empty": "value",
+      "meaning": "No workspace is attached. An empty list says no workspace; it is not the tab's explicit choice of no repositories or drives.",
+      "section": "run_wide"
+    },
+    {
+      "name": "integration_id",
+      "excluded": "retired",
+      "why": "The server refuses integration_id at launch. Choose a model provider instead."
+    },
+    {
+      "name": "model_provider",
+      "tab": "access",
+      "part": "credentials",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "The run uses the model provider the person's defaults give.",
+      "section": "harness",
+      "keyed_by": "harness"
+    },
+    {
+      "name": "drive",
+      "tab": "repositories_drives",
+      "part": "drives",
+      "omitted": "unset_optional",
+      "empty": "value",
+      "meaning": "No drive is attached or declined. enabled false is a choice to leave the drive out.",
+      "section": "run_wide"
+    },
+    {
+      "name": "components",
+      "tab": "access",
+      "part": "components",
+      "omitted": "unset_optional",
+      "empty": "value",
+      "meaning": "No component is attached.",
+      "section": "component",
+      "keyed_by": "component"
+    },
+    {
+      "name": "allowed_image",
+      "tab": "tools_image",
+      "part": "tools_image",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No image is chosen from the organisation's allowed list.",
+      "section": "run_wide"
+    },
+    {
+      "name": "placement",
+      "tab": "runner",
+      "part": "runner",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "The run is placed by the pool defaults when the template is used.",
+      "section": "run_wide"
+    },
+    {
+      "name": "runner_id",
+      "tab": "runner",
+      "part": "runner",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No runner is pinned: any of the person's eligible runners may take the run.",
+      "person_only": true,
+      "section": "run_wide"
+    },
+    {
+      "name": "resources",
+      "tab": "runner",
+      "part": "resources",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "CPU and memory follow the placement's defaults. A zero field asks for the default.",
+      "section": "run_wide"
+    },
+    {
+      "name": "overrides",
+      "tab": "access",
+      "part": "components",
+      "omitted": "unset_optional",
+      "empty": "value",
+      "meaning": "No per-run edits are applied to components.",
+      "section": "component",
+      "keyed_by": "component"
+    },
+    {
+      "name": "preset",
+      "excluded": "origin",
+      "why": "A preset is a launch shortcut. A template records its own origin, and the setup it holds is carried field by field."
+    },
+    {
+      "name": "preset_version",
+      "excluded": "origin",
+      "why": "A preset's version only means something beside its preset."
+    },
+    {
+      "name": "runner_pool_id",
+      "tab": "runner",
+      "part": "runner",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "The pool resolves from the person's own default, then the organisation's, when the template is used. A default that is unavailable or refused never falls through to another pool: the person chooses. A named pool narrows where the run may go and grants nothing, and the launcher's pool-use policy is checked at use.",
+      "section": "run_wide",
+      "pending": "C-pools"
+    },
+    {
+      "name": "experience",
+      "tab": "runner",
+      "part": "runner",
+      "omitted": "unset_required",
+      "empty": "same_as_omitted",
+      "meaning": "No mode is assumed: Background task or Interactive environment is chosen.",
+      "section": "run_wide",
+      "pending": "A-L6/A-L8"
+    },
+    {
+      "name": "included_tools",
+      "tab": "tools_image",
+      "part": "tools_image",
+      "omitted": "unset_optional",
+      "empty": "value",
+      "meaning": "No harness is included. An interactive environment may include several, and including none is valid.",
+      "section": "harness",
+      "keyed_by": "harness",
+      "pending": "A-L9"
+    },
+    {
+      "name": "startup",
+      "tab": "tools_image",
+      "part": "tools_image",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "Nothing starts automatically unless chosen: one included harness, one command, or none.",
+      "section": "run_wide",
+      "pending": "A-L9"
+    },
+    {
+      "name": "starting_folder",
+      "tab": "repositories_drives",
+      "part": "repositories",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "The first attached repository, or the sandbox's default working directory when none is attached.",
+      "section": "run_wide",
+      "pending": "A-L7/D112113"
+    },
+    {
+      "name": "no_repositories_or_drives",
+      "tab": "repositories_drives",
+      "part": "repositories",
+      "omitted": "unset_required",
+      "empty": "same_as_omitted",
+      "meaning": "The tab stays incomplete until something is attached or the person explicitly chooses no repositories or drives. Choosing none warns that nothing in the sandbox is kept unless it is pushed or copied out.",
+      "section": "run_wide",
+      "pending": "D112113"
+    }
+  ]
+}

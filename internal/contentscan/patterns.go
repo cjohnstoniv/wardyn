@@ -33,6 +33,18 @@ var secretRules = []secretRule{
 	{"jwt", regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b`), SevMedium},
 }
 
+// MatchSecretFormat names the first well-known secret format found in text. It
+// is for callers that refuse content outright instead of scanning traffic, and
+// returns the format's name only, never the matched bytes.
+func MatchSecretFormat(text string) (string, bool) {
+	for _, rule := range secretRules {
+		if rule.re.MatchString(text) {
+			return rule.name, true
+		}
+	}
+	return "", false
+}
+
 // regexSecretDetector flags well-known secret formats (DetectSecretPatterns).
 type regexSecretDetector struct{}
 

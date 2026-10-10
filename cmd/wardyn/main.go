@@ -216,6 +216,7 @@ func rootCmd() *cobra.Command {
 		setupCmd(client),
 		siteConfigCmd(client),
 		presetCmd(client),
+		templateCmd(client),
 		governanceCmd(client),
 		sessionCmd(client),
 		peopleCmd(client),
