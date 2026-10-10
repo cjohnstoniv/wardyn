@@ -172,3 +172,25 @@ func TestComponentFacts_ADOServerTokenScopes(t *testing.T) {
 		t.Fatalf("Server's git-only token must not acquire Services Graph scope: %+v", git)
 	}
 }
+
+func TestComponentFacts_GitHubMixedHostInstallBinding(t *testing.T) {
+	const install = "https://github.com/apps/wardyn-test/installations/new"
+	row := githubRow("private-mixed-row", false, "https://github.com/acme", "https://git.corp.example/acme")
+	row.GitHubAppInstallURL = install
+	if err := validateWorkspaceProviders(&types.WorkspaceProviders{Git: []types.GitProvider{row}}, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range []string{"github.com", "git.corp.example"} {
+		for _, operator := range []bool{false, true} {
+			req := createRunRequest{Agent: "none", Repo: "https://" + host + "/acme/one"}
+			fold := runFold{mode: foldPreview, req: &req, spec: types.RunPolicySpec{AllowAllEgress: true},
+				scmSite: types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{row}}},
+				ceiling: governanceCeiling{Operator: operator}}
+			git := componentFacts(fold, nil)[0]
+			if (git.InstallURL == install) != (operator && host == "github.com") ||
+				(len(git.Requirements) != 0) != (host == "github.com") {
+				t.Fatalf("host=%s operator=%v: cloud App metadata crossed forge: %+v", host, operator, git)
+			}
+		}
+	}
+}

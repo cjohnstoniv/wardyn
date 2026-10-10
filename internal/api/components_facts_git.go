@@ -42,9 +42,9 @@ func enrichGitFacts(f runFold, facts []componentFact) {
 		}
 		fact := &facts[i]
 		fact.PushRules = f.spec.PushRules // current global block; keyed overrides remain refused
-		if f.ceiling.Operator && repo.verdict.Admitted && repo.verdict.Provider.Kind == types.GitProviderGitHub &&
-			validateGitHubAppInstallURL(0, repo.verdict.Provider) == nil {
-			fact.InstallURL = repo.verdict.Provider.GitHubAppInstallURL
+		installURL := gitFactInstallURL(repo)
+		if f.ceiling.Operator {
+			fact.InstallURL = installURL
 		}
 		if a, on := adoEntraRunForRepo(f.scmSite, repo.locator, ""); on {
 			canWrite := slices.Contains(a.ceiling, adoscope.CapCodeWrite) && (f.ceiling.Operator ||
@@ -69,12 +69,23 @@ func enrichGitFacts(f runFold, facts []componentFact) {
 				appendRepoAccess(fact, repo.url, access == types.PATAccessWrite, canWrite)
 			}
 		}
-		if repo.kind == "github" && repo.verdict.Provider.GitHubAppInstallURL != "" {
+		if installURL != "" {
 			// Presence of a configured link says nothing about installation.
 			// Members receive useful action text without the operator's URL.
 			fact.Requirements = []SetupItem{{Kind: "repo_credential", ID: fact.ID, Label: "GitHub App installation", RequiredBy: "workspace", Status: "unverified", Detail: "Ask an operator to verify the GitHub App installation for this organisation."}}
 		}
 	}
+}
+
+// One provider row may claim both cloud and enterprise addresses. Its cloud
+// App metadata applies only to a repository on the broker's supported forge.
+func gitFactInstallURL(repo previewRepo) string {
+	row := repo.verdict.Provider
+	if repo.host == "github.com" && repo.verdict.Admitted && row.Kind == types.GitProviderGitHub &&
+		validateGitHubAppInstallURL(0, row) == nil {
+		return row.GitHubAppInstallURL
+	}
+	return ""
 }
 
 func capabilityStrings(caps []adoscope.Capability) []string {
