@@ -40,6 +40,8 @@ type inventoryStore struct {
 	refuseAt  int
 	pageErr   error
 	pageCalls int
+	// stateFrames counts raw STATE frames the org read, valid or not.
+	stateFrames int
 }
 
 func newInventoryStore(link *Link) *inventoryStore {
@@ -74,6 +76,12 @@ func (f *inventoryStore) calls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.pageCalls
+}
+
+func (f *inventoryStore) framesRead() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stateFrames
 }
 
 func (f *inventoryStore) begin(_ context.Context, session string) error {
@@ -121,6 +129,16 @@ func (f *inventoryStore) admission(sub *Substrate, link *Link) Admission {
 type recordingConn struct {
 	runnerwire.Conn
 	store *inventoryStore
+}
+
+func (c recordingConn) ReadFrame(ctx context.Context) (runnerwire.Frame, error) {
+	f, err := c.Conn.ReadFrame(ctx)
+	if err == nil && f.Type == runnerwire.TypeState {
+		c.store.mu.Lock()
+		c.store.stateFrames++
+		c.store.mu.Unlock()
+	}
+	return f, err
 }
 
 func (c recordingConn) WriteFrame(ctx context.Context, f runnerwire.Frame) error {
@@ -481,5 +499,78 @@ func TestClientRefusesReadyWithoutFinalPage(t *testing.T) {
 	}
 	if f.link.Online() {
 		t.Fatal("incomplete inventory admitted dispatch")
+	}
+}
+
+// A READY earlier session must not make the next fresh, incomplete one resumable.
+func TestHubInventoryEarlierReadyCannotResumeIncompleteFreshSession(t *testing.T) {
+	eachTransport(t, func(t *testing.T, realWire bool) {
+		f := newInventoryFixture(t, realWire)
+		a, _, _ := f.open(t, nil)
+		writeFrames(t, f.ctx, a, 0, stateFrame(t, inventoryPages(orderedRuns(1))[0]), runnerwire.Frame{Type: runnerwire.TypeReady})
+		waitOnline(t, f.ctx, f.link)
+		_ = a.Close()
+		awaitValue(t, f.ctx, f.hubDone)
+
+		b, okB, seqB := f.open(t, nil)
+		writeFrames(t, f.ctx, b, 0, stateFrame(t, inventoryPages(orderedRuns(runnerwire.StatePageRows + 1))[0]))
+		_ = b.Close()
+		awaitValue(t, f.ctx, f.hubDone)
+
+		c := f.dial()
+		t.Cleanup(func() { _ = c.Close() })
+		okC, err := runnerwire.AuthenticateOrg(f.ctx, c, f.row.ID.String(), f.orgURL, f.key, &runnerwire.Resume{SessionID: okB.SessionID, LastSeq: seqB})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if okC.Resumed || f.link.Online() {
+			t.Fatalf("incomplete fresh session resumed on an earlier READY: resumed=%v online=%v", okC.Resumed, f.link.Online())
+		}
+	})
+}
+
+func TestClientValidatesPagesBeforeSending(t *testing.T) {
+	runs := orderedRuns(2)
+	id := uuid.New()
+	final := runnerwire.StatePage{InventoryID: id, Final: true}
+	unordered := runnerwire.StatePage{InventoryID: id, Runs: []runnerwire.RunState{runs[1], runs[0]}, Final: true}
+	for name, tc := range map[string]struct {
+		pages   []runnerwire.StatePage
+		discard bool
+		sent    int
+	}{
+		"unordered rows":     {pages: []runnerwire.StatePage{unordered}},
+		"wrong after":        {pages: []runnerwire.StatePage{{InventoryID: id, After: runs[0].RunID, Runs: runs[1:], Final: true}}},
+		"page after final":   {pages: []runnerwire.StatePage{final, {InventoryID: id, Runs: runs[:1], Final: true}}, discard: true, sent: 1},
+		"discarded refusal":  {pages: []runnerwire.StatePage{unordered}, discard: true},
+		"oversized row page": {pages: []runnerwire.StatePage{{InventoryID: id, Runs: orderedRuns(runnerwire.StatePageRows + 1), Final: true}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			eachTransport(t, func(t *testing.T, realWire bool) {
+				f := newInventoryFixture(t, realWire)
+				online, resumed := make(chan *runnerwire.Peer, 1), make(chan bool, 1)
+				hooks := sessionHooks(online, resumed)
+				hooks.StatePages = func(_ context.Context, send func(runnerwire.StatePage) error) error {
+					for _, page := range tc.pages {
+						if err := send(page); err != nil && !tc.discard {
+							return err
+						}
+					}
+					return nil
+				}
+				client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: f.orgURL, RunnerID: f.row.ID.String(), PrivateKey: f.key, Hooks: hooks,
+					Dial: func(context.Context) (runnerwire.Conn, error) { return f.dial(), nil }})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := client.Connect(f.ctx); !errors.Is(err, runnerwire.ErrBadFrame) {
+					t.Fatal("client accepted an invalid inventory", err)
+				}
+				awaitValue(t, f.ctx, f.hubDone)
+				if got := f.store.framesRead(); got != tc.sent || f.link.Online() {
+					t.Fatalf("org read %d STATE frames (want %d), online=%v", got, tc.sent, f.link.Online())
+				}
+			})
+		})
 	}
 }
