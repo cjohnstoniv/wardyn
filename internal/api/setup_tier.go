@@ -13,14 +13,19 @@ const (
 	TierOrg       = "org"
 )
 
-// setupTier names who governs this install: an org-enrolled laptop is a
-// runner, a daemon with SSO is the organisation's, anything else answers
-// only to the person at the keyboard.
+// setupTier names who governs this install. LocalMode comes first: it
+// bypasses auth even with OIDC set. A member-mode laptop owns its own control
+// plane, so it is local-only; a shared server (SSO or an admin token) is the
+// organisation's.
 func (s *Server) setupTier() string {
 	switch {
+	case s.cfg.LocalMode:
+		return TierLocalOnly
 	case s.cfg.OrgFederation != nil:
 		return TierRunner
-	case s.cfg.OIDC != nil:
+	case s.cfg.MemberMode:
+		return TierLocalOnly
+	case s.cfg.OIDC != nil || s.cfg.AdminToken != "":
 		return TierOrg
 	default:
 		return TierLocalOnly

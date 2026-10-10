@@ -15,7 +15,7 @@ import { WardynWordmark } from "../wardyn/logo";
 import { BrandSlot } from "../wardyn/branding-context";
 import { Chip } from "../wardyn/primitives";
 import { NO_BARRIER } from "../wardyn/copy";
-import { TIER } from "../wardyn/copy/tier";
+import { TIER } from "../wardyn/copy";
 import { useTheme } from "../wardyn/theme-provider";
 import { useGuardedNavClick } from "../../lib/use-unsaved-guard";
 import { Button } from "../ui/button";
@@ -107,7 +107,7 @@ export function TopBar({
       )}
 
       {tier === "local-only" && (
-        <Chip tone="neutral" className="hidden sm:inline-flex" title={TIER.LABEL["local-only"]}>
+        <Chip tone="neutral" className="hidden sm:inline-flex" srLabel={TIER.LABEL["local-only"]}>
           {TIER.CHIP}
         </Chip>
       )}

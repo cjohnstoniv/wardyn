@@ -231,10 +231,9 @@
 - Researched in 0.7.2 and written up in [docs/design/hybrid-0.8.md](docs/design/hybrid-0.8.md).
 - **0.8 ships the seams, not the rollout:**
   - device enrolment into an org control plane and the one audit stream (the laptop's audit rows federated to the org) have landed,
-  - and 0.8's authorization kernel is built to become the control plane's decision API
-  - (decisions that serialize, stable refusal codes, a versioned list of resource kinds, a principal that carries its device and origin).
+  - and 0.8's authorization decisions serialize, with stable refusal codes, a versioned list of resource kinds, and a principal that carries its device and origin.
 - **The rollout is 0.9:**
-  - the org control plane deciding for enrolled laptops (signed policy snapshots for offline use, the org deciding anything that touches org resources),
+  - client-mode runners, with the org as the only decider and a runner offline starting nothing new,
   - per-run placement between the laptop and the org's cluster and mixing the two, and the disk link.
 - Tracked on milestone `0.9.0`.
 

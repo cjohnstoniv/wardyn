@@ -19,6 +19,9 @@ func TestSetupTier(t *testing.T) {
 	}{
 		{"bare daemon", Config{}, TierLocalOnly},
 		{"local mode", Config{LocalMode: true}, TierLocalOnly},
+		{"local mode with sso", Config{LocalMode: true, OIDC: &oidc.Authenticator{}}, TierLocalOnly},
+		{"member mode with sso", Config{MemberMode: true, OIDC: &oidc.Authenticator{}}, TierLocalOnly},
+		{"token-only server", Config{AdminToken: "x"}, TierOrg},
 		{"sso", Config{OIDC: &oidc.Authenticator{}}, TierOrg},
 		{"org-enrolled laptop", Config{OrgFederation: enrolled}, TierRunner},
 		{"enrolled beats sso", Config{OIDC: &oidc.Authenticator{}, OrgFederation: enrolled}, TierRunner},

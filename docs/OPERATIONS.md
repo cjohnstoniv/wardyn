@@ -42,7 +42,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Kubernetes: day-2](#kubernetes-day-2)
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md)
-- Task pages under [`docs/operations/`](operations/): [Managed laptops: hybrid enrolment](operations/hybrid-laptops.md), [Launch presets](operations/launch-presets.md), [Console branding](operations/console-branding.md)
+- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Launch presets](operations/launch-presets.md), [Console branding](operations/console-branding.md)
 
 </details>
 
