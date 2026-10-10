@@ -127,6 +127,9 @@ type Config struct {
 	AuditSinkDrops func() map[string]int64
 	// Runner launches sandboxes. Nil => headless API-only mode.
 	Runner runner.Runner
+	// RunnerOrgURL is the public organisation URL bound into runner identities.
+	// Empty disables runner registration and streams; never infer it from Host.
+	RunnerOrgURL string
 	// AdminToken gates the public API (constant-time bearer compare). Empty
 	// disables the public API entirely (fail closed) except /healthz.
 	AdminToken string
