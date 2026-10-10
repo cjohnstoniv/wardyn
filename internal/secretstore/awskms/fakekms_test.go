@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"encoding/pem"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -38,6 +39,12 @@ type kmsFault struct {
 	code   string
 }
 
+// nthFault is the answer to the nth (1-based) call of one operation.
+type nthFault struct {
+	n int
+	kmsFault
+}
+
 // fakeKMS is an in-process AWS KMS speaking the JSON 1.1 protocol for
 // TrentService.Encrypt and TrentService.Decrypt. The ciphertext blob holds the
 // encryption context beside an AES-GCM seal of the plaintext under a random
@@ -54,6 +61,7 @@ type fakeKMS struct {
 	answerKeyID   string // when set, echoed in KeyId instead
 	ignoreContext bool   // Decrypt skips the context comparison
 	faults        map[string]kmsFault
+	nthFault      map[string]nthFault // an answer to the nth call of an operation only
 	calls         map[string]int
 	contexts      []map[string]string // every request's encryption context
 	keyIDs        []string            // every request's KeyId
@@ -61,7 +69,13 @@ type fakeKMS struct {
 	shortAnswer   bool                // Decrypt answers a plaintext of the wrong length
 }
 
-func newFakeKMS(t *testing.T) *fakeKMS {
+func newFakeKMS(t *testing.T) *fakeKMS { return newFakeKMSAt(t, false) }
+
+// newFakeKMSTLS is a fake served over https with the httptest certificate,
+// which no system root vouches for: the client must be given its CA.
+func newFakeKMSTLS(t *testing.T) *fakeKMS { return newFakeKMSAt(t, true) }
+
+func newFakeKMSAt(t *testing.T, useTLS bool) *fakeKMS {
 	t.Helper()
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
@@ -75,8 +89,13 @@ func newFakeKMS(t *testing.T) *fakeKMS {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fakeKMS{t: t, gcm: gcm, arn: testARN, faults: map[string]kmsFault{}, calls: map[string]int{}}
-	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
+	f := &fakeKMS{t: t, gcm: gcm, arn: testARN, faults: map[string]kmsFault{}, nthFault: map[string]nthFault{}, calls: map[string]int{}}
+	f.srv = httptest.NewUnstartedServer(http.HandlerFunc(f.serve))
+	if useTLS {
+		f.srv.StartTLS()
+	} else {
+		f.srv.Start()
+	}
 	t.Cleanup(f.srv.Close)
 	return f
 }
@@ -85,6 +104,23 @@ func (f *fakeKMS) fail(op string, status int, code string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.faults[op] = kmsFault{status, code}
+}
+
+func (f *fakeKMS) failNth(op string, n, status int, code string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nthFault[op] = nthFault{n, kmsFault{status, code}}
+}
+
+// caFile writes the fake's certificate as a PEM bundle and returns its path.
+func (f *fakeKMS) caFile() string {
+	f.t.Helper()
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: f.srv.Certificate().Raw})
+	p := filepath.Join(f.t.TempDir(), "ca.pem")
+	if err := os.WriteFile(p, pemBytes, 0o600); err != nil {
+		f.t.Fatal(err)
+	}
+	return p
 }
 
 func (f *fakeKMS) callCount(op string) int {
@@ -126,6 +162,10 @@ func (f *fakeKMS) serve(w http.ResponseWriter, r *http.Request) {
 	f.contexts = append(f.contexts, maps.Clone(req.EncryptionContext))
 	f.keyIDs = append(f.keyIDs, req.KeyId)
 	f.algorithms = append(f.algorithms, req.EncryptionAlgorithm)
+	if nf, ok := f.nthFault[op]; ok && nf.n == f.calls[op] {
+		f.reply(w, nf.status, map[string]string{"__type": nf.code, "message": "forced " + nf.code})
+		return
+	}
 	if ft, ok := f.faults[op]; ok {
 		f.reply(w, ft.status, map[string]string{"__type": ft.code, "message": "forced " + ft.code})
 		return

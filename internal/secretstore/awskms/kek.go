@@ -12,11 +12,14 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -53,6 +56,9 @@ type Config struct {
 	// KeyARN is the full ARN of the symmetric key, arn:<partition>:kms:<region>:<account>:key/<id>.
 	KeyARN  string
 	Timeout time.Duration
+	// CACertFile is a PEM bundle trusted beside the system roots for the
+	// KMS and credential endpoints (WARDYN_TRUSTED_CA_FILE); empty = system roots.
+	CACertFile string
 	// Endpoint overrides the KMS endpoint; tests only.
 	Endpoint string
 	// KeySetting names the setting KeyARN came from, for the boot errors;
@@ -92,8 +98,15 @@ func NewKEK(ctx context.Context, cfg Config) (*KEK, error) {
 		return nil, err
 	}
 	timeout := cmp.Or(cfg.Timeout, defaultTimeout)
-	// The boot transport carries WARDYN_DAEMON_PROXY_URL and the trusted CA.
-	hc := &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()}
+	// The transport starts from a clone of http.DefaultTransport, which carries
+	// WARDYN_DAEMON_PROXY_URL once the caller has installed it (serving boot
+	// and each maintenance mode do); the trusted CA is added here, so it does
+	// not depend on that order.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	if tr.TLSClientConfig, err = tlsConfig(tr.TLSClientConfig, cfg.CACertFile); err != nil {
+		return nil, fmt.Errorf("AWS KMS: %w", err)
+	}
+	hc := &http.Client{Transport: tr}
 	sdkCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(a.Region), config.WithHTTPClient(hc))
 	if err != nil {
 		return nil, fmt.Errorf("AWS KMS: load the AWS configuration: %w", err)
@@ -117,6 +130,31 @@ func NewKEK(ctx context.Context, cfg Config) (*KEK, error) {
 		return nil, fmt.Errorf("AWS KMS KEK %s: %w", k.id, err)
 	}
 	return k, nil
+}
+
+// tlsConfig is base (or a fresh config) with the CA bundle at caFile added to
+// the system roots.
+func tlsConfig(base *tls.Config, caFile string) (*tls.Config, error) {
+	cfg := base.Clone()
+	if base == nil {
+		cfg = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	if caFile == "" {
+		return cfg, nil
+	}
+	pem, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("read the trusted CA bundle: %w", err)
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("the trusted CA bundle %s holds no PEM certificate", caFile)
+	}
+	cfg.RootCAs = pool
+	return cfg, nil
 }
 
 // parseKeyARN accepts only a full key ARN: an alias can be re-pointed, and a
@@ -158,12 +196,16 @@ func (k *KEK) selfTest(ctx context.Context) error {
 	if !bytes.Equal(got, dek) {
 		return errors.New("a probe data key unwrapped to different bytes")
 	}
+	// Only KMS's own refusal of the context proves the binding: any other
+	// answer (an access error, a missing key, a proxy's 4xx) says nothing about it.
 	_, err = k.Unwrap(ctx, w, kek.Bind("", probeName+"-moved"))
 	switch {
 	case err == nil:
 		return errors.New("refusing it: a probe data key unwrapped under another row, so this key service does not bind a wrap to its row")
 	case errors.Is(err, secretstore.ErrUnavailable):
 		return err
+	case !errors.Is(err, kek.ErrRefused):
+		return fmt.Errorf("a probe data key moved to another row was answered with %v, not KMS's refusal of the context, so the binding is unproven", err)
 	}
 	return nil
 }

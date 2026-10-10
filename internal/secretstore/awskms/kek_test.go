@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -362,5 +363,45 @@ func TestKEK_StaticKeyIsReported(t *testing.T) {
 		if k.StaticKey() != tc.static {
 			t.Errorf("%s: StaticKey() = %v, want %v", name, k.StaticKey(), tc.static)
 		}
+	}
+}
+
+// A KMS reached over a private CA is reachable only with the CA file the daemon
+// is given (WARDYN_TRUSTED_CA_FILE): NewKEK builds its own trust, so a maintenance
+// mode that has not installed the boot transport still gets it.
+func TestNewKEK_TrustsOnlyTheGivenCA(t *testing.T) {
+	f := newFakeKMSTLS(t)
+	useCreds(t, sessionKeyID, "token")
+	if _, err := NewKEK(t.Context(), Config{KeyARN: f.arn, Endpoint: f.srv.URL}); err == nil || !strings.Contains(err.Error(), "certificate") {
+		t.Fatalf("NewKEK over a private CA without the CA file = %v; want an x509 refusal", err)
+	}
+	if k, err := NewKEK(t.Context(), Config{KeyARN: f.arn, Endpoint: f.srv.URL, CACertFile: f.caFile()}); err != nil || k == nil {
+		t.Fatalf("NewKEK over a private CA with the CA file = (%v, %v); want it reachable", k, err)
+	}
+	empty := t.TempDir() + "/empty.pem"
+	if err := os.WriteFile(empty, []byte("not a certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewKEK(t.Context(), Config{KeyARN: f.arn, Endpoint: f.srv.URL, CACertFile: empty}); err == nil || !strings.Contains(err.Error(), "holds no PEM certificate") {
+		t.Fatalf("NewKEK with a CA bundle that holds no certificate = %v; want a refusal", err)
+	}
+}
+
+// The moved-row probe proves the binding only when KMS itself refuses the
+// context. A transient answer fails boot as unavailable, and any other answer
+// (here an access error, as a proxy or policy might give) fails it unproven.
+func TestNewKEK_MovedProbeNeedsKMSsRefusal(t *testing.T) {
+	useCreds(t, sessionKeyID, "token")
+	// Decrypt call 1 is the round trip, call 2 the moved probe.
+	f := newFakeKMS(t)
+	f.failNth("Decrypt", 2, http.StatusServiceUnavailable, "KMSInternalException")
+	if _, err := NewKEK(t.Context(), Config{KeyARN: f.arn, Endpoint: f.srv.URL}); !errors.Is(err, secretstore.ErrUnavailable) {
+		t.Fatalf("NewKEK with a transient moved probe = %v; want secretstore.ErrUnavailable", err)
+	}
+	f = newFakeKMS(t)
+	f.failNth("Decrypt", 2, http.StatusBadRequest, "AccessDeniedException")
+	_, err := NewKEK(t.Context(), Config{KeyARN: f.arn, Endpoint: f.srv.URL})
+	if err == nil || errors.Is(err, secretstore.ErrUnavailable) || !strings.Contains(err.Error(), "binding is unproven") {
+		t.Fatalf("NewKEK with an access error on the moved probe = %v; want the unproven-binding refusal", err)
 	}
 }

@@ -481,7 +481,7 @@ func buildKEK(ctx context.Context, v vaultFlags, az azureFlags, trustedCAFile st
 			return buildAzureKEK(ctx, v, az, trustedCAFile, false)
 		}
 		if awsKey != "" {
-			return buildAWSKEK(ctx, v, awsKey, false)
+			return buildAWSKEK(ctx, v, awsKey, trustedCAFile, false)
 		}
 		if key == "" {
 			return nil, false, nil
@@ -493,7 +493,7 @@ func buildKEK(ctx context.Context, v vaultFlags, az azureFlags, trustedCAFile st
 	case kekAzure:
 		return buildAzureKEK(ctx, v, az, trustedCAFile, true)
 	case kekAWS:
-		return buildAWSKEK(ctx, v, awsKey, true)
+		return buildAWSKEK(ctx, v, awsKey, trustedCAFile, true)
 	default:
 		return nil, false, fmt.Errorf("refusing to start: WARDYN_KEK is %q; want %q, %q, %q or %q", sel, kekLocal, kekTransit, kekAzure, kekAWS)
 	}
@@ -533,8 +533,8 @@ func checkKEKServices(sel, transitKey, awsKey, azKey, azSig string, v vaultFlags
 
 // buildAWSKEK builds the AWS KMS KEK. It needs no other setting: the region is
 // the key ARN's, and the identity comes from the AWS SDK's default chain.
-func buildAWSKEK(ctx context.Context, v vaultFlags, key string, writes bool) (kek.KEK, bool, error) {
-	k, err := awskms.NewKEK(ctx, awskms.Config{KeyARN: key, Timeout: *v.timeout})
+func buildAWSKEK(ctx context.Context, v vaultFlags, key, trustedCAFile string, writes bool) (kek.KEK, bool, error) {
+	k, err := awskms.NewKEK(ctx, awskms.Config{KeyARN: key, Timeout: *v.timeout, CACertFile: strings.TrimSpace(trustedCAFile)})
 	if err != nil {
 		return nil, false, fmt.Errorf("refusing to start: %w", err)
 	}
