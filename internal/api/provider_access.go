@@ -12,6 +12,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -245,11 +246,7 @@ func (s *Server) gradeProviderKey(ctx context.Context, row *SetupProviderAccess,
 		unreadableProvider(row)
 		return
 	}
-	if found && len(raw) == 0 {
-		unreadableProvider(row)
-		return
-	}
-	live := found
+	live := found && len(raw) > 0
 	addAction := providerAccessAddKeyAction
 	if p.Kind == types.ModelProviderCustomEndpoint {
 		addAction = providerAccessAddTokenAction
@@ -273,11 +270,7 @@ func (s *Server) gradeProviderSubscription(ctx context.Context, row *SetupProvid
 		return
 	}
 	var blob managedCredBlob
-	if found && (json.Unmarshal(raw, &blob) != nil || blob.Token == "") {
-		unreadableProvider(row)
-		return
-	}
-	if found {
+	if found && json.Unmarshal(raw, &blob) == nil && blob.Token != "" {
 		row.SourceRunID = blob.SourceRunID
 		if s.cfg.Now().UTC().Sub(blob.CapturedAt) > harnessTokenAging {
 			row.State = modelAccessExpiring
@@ -302,7 +295,9 @@ func (s *Server) gradeProviderSubscription(ctx context.Context, row *SetupProvid
 func (s *Server) gradeProviderBedrockSSO(ctx context.Context, row *SetupProviderAccess, p types.ModelProvider, owner string) {
 	scope := chosenProvider{provider: p, owner: owner}.awsScope()
 	blob, found, err := s.readAWSSSOBlob(ctx, scope)
-	if err != nil {
+	var syntax *json.SyntaxError
+	var shape *json.UnmarshalTypeError
+	if err != nil && !errors.As(err, &syntax) && !errors.As(err, &shape) {
 		unreadableProvider(row)
 		return
 	}

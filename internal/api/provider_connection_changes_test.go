@@ -225,13 +225,13 @@ func TestProviderCause_HistoryReadFailureIsNotAbsence(t *testing.T) {
 	}
 }
 
-func TestProviderCause_UnreadableStoredSubscription(t *testing.T) {
+func TestProviderCause_MalformedSubscriptionAllowsReconnect(t *testing.T) {
 	h, sec := newSecretsHarness(t)
 	p := paKeyProvider("subscription", types.ModelProviderAnthropicSubscription)
 	if err := sec.For(paOwner).Put(t.Context(), providerCredentialName(p), []byte("invalid-json")); err != nil {
 		t.Fatal(err)
 	}
-	if got := h.srv.providerAccessFor(t.Context(), p, paOwner); got.Cause != "store_unreadable" {
+	if got := h.srv.providerAccessFor(t.Context(), p, paOwner); got.Cause == "store_unreadable" || got.Action != providerAccessSignInClaude {
 		t.Fatalf("decode failure: %+v", got)
 	}
 }
