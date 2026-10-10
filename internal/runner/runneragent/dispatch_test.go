@@ -21,7 +21,12 @@ func TestDispatcherChecksRunnerAndDurableGuardBeforeCreate(t *testing.T) {
 	id := uuid.NewString()
 	fake := runnertest.NewFake()
 	guard := errors.New("offline lease unavailable")
-	d, err := New(Config{RunnerID: id, Substrate: fake, BeforeCreate: func(context.Context, runner.SandboxSpec) error { return guard }})
+	d, err := newTestDispatcher(Config{RunnerID: id, Substrate: fake, BeforeCreate: func(context.Context, runner.SandboxSpec) error { return guard },
+		Created: func(context.Context, runner.SandboxSpec, string) error {
+			t.Fatal("created after failed guard")
+			return nil
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,8 +56,10 @@ func TestDispatcherOutputBindingFailureRollsBackSandbox(t *testing.T) {
 	fake := runnertest.NewFake()
 	id, run := uuid.NewString(), uuid.New()
 	failure := errors.New("persist output binding failed")
-	d, err := New(Config{RunnerID: id, Substrate: fake, BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
-		Output: func(uuid.UUID) (io.Writer, error) { return io.Discard, nil }, BindOutput: func(uuid.UUID, string) error { return failure },
+	d, err := newTestDispatcher(Config{RunnerID: id, Substrate: fake, BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+		Created: func(context.Context, runner.SandboxSpec, string) error { return nil },
+		Output:  func(uuid.UUID) (io.Writer, error) { return io.Discard, nil }, BindOutput: func(uuid.UUID, string) error { return failure },
+		ForgetOutput: func(uuid.UUID) error { return nil },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -68,4 +75,66 @@ func TestDispatcherOutputBindingFailureRollsBackSandbox(t *testing.T) {
 	if !fake.Called("kill", "fake-"+run.String()) {
 		t.Fatal("unreported sandbox remained running")
 	}
+}
+
+type cancelAfterCreate struct {
+	*runnertest.Fake
+	cancel context.CancelFunc
+}
+
+func (f cancelAfterCreate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	sandbox, err := f.Fake.CreateSandbox(ctx, spec)
+	f.cancel()
+	return sandbox, err
+}
+
+func TestDispatcherDurableBindingSurvivesCallCancellation(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(map[bool]string{false: "persist", true: "rollback"}[fail], func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			fake := runnertest.NewFake()
+			id, run := uuid.NewString(), uuid.New()
+			failure := errors.New("local state could not be persisted")
+			bound := false
+			d, err := newTestDispatcher(Config{RunnerID: id, Substrate: cancelAfterCreate{fake, cancel},
+				BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+				Created: func(persist context.Context, spec runner.SandboxSpec, ref string) error {
+					if persist.Err() != nil || ctx.Err() == nil || spec.RunID != run || ref != "fake-"+run.String() {
+						t.Fatal("lost local identity or inherited dropped call cancellation")
+					}
+					if _, bounded := persist.Deadline(); !bounded {
+						t.Fatal("durable binding is unbounded")
+					}
+					bound = true
+					if fail {
+						return failure
+					}
+					return nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			a, b := runnerwire.Loopback()
+			defer b.Close()
+			peer := runnerwire.NewPeer(a, runnerwire.PeerConfig{})
+			defer peer.Close()
+			data, _ := runnerwire.Marshal(runnerwire.CreateSandboxArgs{Spec: runner.SandboxSpec{RunID: run, RunnerID: id}})
+			_, err = d.Call(ctx, peer, 2, runnerwire.MethodCreateSandbox, data)
+			if !bound || errors.Is(err, failure) != fail || (err != nil && !fail) {
+				t.Fatalf("binding result: bound=%v error=%v", bound, err)
+			}
+			if fake.Called("kill", "fake-"+run.String()) != fail {
+				t.Fatal("sandbox cleanup did not distinguish durable failure from link cancellation")
+			}
+		})
+	}
+}
+
+// These tests isolate creation; lifecycle policy is exercised separately.
+func newTestDispatcher(cfg Config) (*Dispatcher, error) {
+	cfg.BeforeRefCall = func(context.Context, string, string) error { return nil }
+	cfg.AfterRefCall = func(context.Context, string, string, string) error { return nil }
+	return New(cfg)
 }

@@ -43,15 +43,16 @@ func sessionHooks(online chan<- *runnerwire.Peer, resumed chan<- bool) runnerwir
 		Call: func(_ context.Context, _ *runnerwire.Peer, _ uint32, _ string, _ json.RawMessage) (any, error) {
 			return "reply", nil
 		},
-		Open:    func(*runnerwire.Peer, *runnerwire.Stream, runnerwire.Open) error { return runnerwire.ErrNotReady },
-		Clock:   func(runnerwire.Hello, time.Time) error { return nil },
-		Pending: func(context.Context, *runnerwire.Peer, []runnerwire.PendingAction) error { return nil },
-		State:   func(context.Context) ([]runnerwire.RunState, error) { return nil, nil },
-		Replay:  func(context.Context, *runnerwire.Peer) error { return nil },
-		Lease:   func(context.Context, runnerwire.Lease) error { return nil },
-		Revoked: func(context.Context) error { return nil },
-		Offline: func(context.Context) {},
-		Online:  func(p *runnerwire.Peer, r bool) { resumed <- r; online <- p },
+		Open:        func(*runnerwire.Peer, *runnerwire.Stream, runnerwire.Open) error { return runnerwire.ErrNotReady },
+		Clock:       func(runnerwire.Hello, time.Time) error { return nil },
+		Pending:     func(context.Context, *runnerwire.Peer, []runnerwire.PendingAction) error { return nil },
+		State:       func(context.Context) ([]runnerwire.RunState, error) { return nil, nil },
+		Replay:      func(context.Context, *runnerwire.Peer) error { return nil },
+		BeforeReady: func(context.Context, *runnerwire.Peer, bool) error { return nil },
+		Lease:       func(context.Context, runnerwire.Lease) error { return nil },
+		Revoked:     func(context.Context) error { return nil },
+		Offline:     func(context.Context) {},
+		Online:      func(p *runnerwire.Peer, r bool) { resumed <- r; online <- p },
 	}
 }
 
