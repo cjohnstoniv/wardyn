@@ -31,7 +31,8 @@ type RunnerExecution struct {
 // BeginRunnerExecution persists the H3-selected generation before LEASE and
 // Exec/Start. Retries retain generation; a new incarnation supplies the previous
 // generation as a CAS. The existing run-operation lock serializes its entire
-// dispatch with exit teardown when H3 holds the returned lock context upstream.
+// state phases with exit teardown. H3 releases this phase before waiting for
+// remote Exec/Start, then reacquires through Bind with the exact generation.
 func (s PG) BeginRunnerExecution(ctx context.Context, runnerID, runID, previous, generation uuid.UUID, operation string) (RunnerExecution, error) {
 	var out RunnerExecution
 	if generation == uuid.Nil || (operation != runnerwire.MethodExec && operation != runnerwire.MethodStart) {

@@ -44,14 +44,17 @@ func (s PG) AcceptRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exi
 	}
 	payload, hash := runnerExitHash(exit)
 	var oldHash string
-	err = tx.QueryRow(ctx, `SELECT payload_hash FROM runner_execution_exits WHERE run_id=$1 AND generation=$2`, runID, exit.Generation).Scan(&oldHash)
+	var acceptedAt *time.Time
+	err = tx.QueryRow(ctx, `SELECT payload_hash,accepted_at FROM runner_execution_exits WHERE run_id=$1 AND generation=$2`, runID, exit.Generation).Scan(&oldHash, &acceptedAt)
 	if err == nil {
 		if oldHash != hash {
 			return false, ErrRunnerExecutionRefused
 		}
-		return false, tx.Commit(ctx)
+		if acceptedAt != nil {
+			return false, tx.Commit(ctx)
+		}
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return false, err
 	}
 	current, err := readRunnerExecution(ctx, tx, runID)
@@ -85,7 +88,7 @@ func (s PG) AcceptRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exi
 	if _, err := tx.Exec(ctx, `UPDATE agent_runs SET state=$2,updated_at=clock_timestamp() WHERE id=$1`, runID, terminal); err != nil {
 		return false, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO runner_execution_exits(run_id,generation,runner_id,payload,payload_hash) VALUES($1,$2,$3,$4,$5)`, runID, exit.Generation, runnerID, payload, hash); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO runner_execution_exits(run_id,generation,runner_id,payload,payload_hash,accepted_at) VALUES($1,$2,$3,$4,$5,clock_timestamp()) ON CONFLICT(run_id,generation) DO UPDATE SET accepted_at=EXCLUDED.accepted_at`, runID, exit.Generation, runnerID, payload, hash); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -152,8 +155,12 @@ func (s PG) runnerExitTail(ctx context.Context, runnerID, runID, generation uuid
 		return run, exit, false, err
 	}
 	var payload []byte
-	if err := tx.QueryRow(ctx, `SELECT payload,tail_complete FROM runner_execution_exits WHERE run_id=$1 AND generation=$2 AND runner_id=$3`, runID, generation, runnerID).Scan(&payload, &complete); err != nil {
+	var acceptedAt *time.Time
+	if err := tx.QueryRow(ctx, `SELECT payload,tail_complete,accepted_at FROM runner_execution_exits WHERE run_id=$1 AND generation=$2 AND runner_id=$3`, runID, generation, runnerID).Scan(&payload, &complete, &acceptedAt); err != nil {
 		return run, exit, false, err
+	}
+	if acceptedAt == nil {
+		return run, exit, false, ErrRunnerExecutionRefused
 	}
 	if complete {
 		return run, exit, true, tx.Commit(ctx)
