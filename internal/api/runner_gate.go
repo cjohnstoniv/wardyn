@@ -7,6 +7,10 @@ import "net/http"
 
 // Read on each admission so a stored disable takes effect without a restart.
 func (s *Server) requireRunnersEnabled(w http.ResponseWriter, r *http.Request) bool {
+	if s.cfg.Store == nil {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunnersConfigUnavailable, "runner configuration is unavailable; retry later")
+		return false
+	}
 	cfg, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunnersConfigUnavailable, "runner configuration is unavailable; retry later")
