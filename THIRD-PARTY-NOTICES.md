@@ -57,6 +57,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `github.com/jackc/pgx/v5` | MIT | https://github.com/jackc/pgx/blob/v5.11.0/LICENSE |
 | `github.com/jackc/puddle/v2` | MIT | https://github.com/jackc/puddle/blob/v2.2.2/LICENSE |
 | `github.com/json-iterator/go` | MIT | https://github.com/json-iterator/go/blob/v1.1.12/LICENSE |
+| `github.com/kr/fs` | BSD-3-Clause | https://github.com/kr/fs/blob/v0.1.0/LICENSE |
 | `github.com/moby/docker-image-spec/specs-go/v1` | Apache-2.0 | https://github.com/moby/docker-image-spec/blob/v1.3.1/LICENSE |
 | `github.com/moby/moby/api` | Apache-2.0 | https://github.com/moby/moby/blob/api/v1.56.0/api/LICENSE |
 | `github.com/moby/moby/client` | Apache-2.0 | https://github.com/moby/moby/blob/client/v0.6.0/client/LICENSE |
@@ -67,6 +68,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `github.com/munnerz/goautoneg` | BSD-3-Clause | https://github.com/munnerz/goautoneg/blob/a7dc8b61c822/LICENSE |
 | `github.com/opencontainers/go-digest` | Apache-2.0 | https://github.com/opencontainers/go-digest/blob/v1.0.0/LICENSE |
 | `github.com/opencontainers/image-spec/specs-go` | Apache-2.0 | https://github.com/opencontainers/image-spec/blob/v1.1.1/LICENSE |
+| `github.com/pkg/sftp` | BSD-2-Clause | https://github.com/pkg/sftp/blob/v1.13.11/LICENSE |
 | `github.com/spf13/cobra` | Apache-2.0 | https://github.com/spf13/cobra/blob/v1.10.2/LICENSE.txt |
 | `github.com/spf13/pflag` | BSD-3-Clause | https://github.com/spf13/pflag/blob/v1.0.10/LICENSE |
 | `github.com/spiffe/go-spiffe/v2/spiffeid` | Apache-2.0 | https://github.com/spiffe/go-spiffe/blob/v2.8.2/LICENSE |

@@ -7,7 +7,9 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -68,6 +70,57 @@ func sshSyncDirection(v string) string {
 	return "unknown"
 }
 
+// runSyncOpen is one live wardyn-sync channel as GET /runs/{id} shows it.
+type runSyncOpen struct {
+	Dir      string    `json:"dir"`
+	OpenedAt time.Time `json:"opened_at"`
+}
+
+// runSyncView is the run detail's sync field: the sessions open now on THIS
+// replica, from the per-run sync budget (a replica that does not hold the
+// channel shows none). Dir is the directory the client requested, not proof
+// the sandbox started there. Ended sessions are the ssh.sync.transfer rows.
+type runSyncView struct {
+	Open []runSyncOpen `json:"open"`
+}
+
+// sshSyncOpened records a live sync channel and returns the func that removes it.
+func (s *Server) sshSyncOpened(runID uuid.UUID, dir string) func() {
+	e := &runSyncOpen{Dir: dir, OpenedAt: time.Now().UTC()}
+	s.sshSessionsMu.Lock()
+	defer s.sshSessionsMu.Unlock()
+	if s.sshSyncOpen == nil {
+		s.sshSyncOpen = map[uuid.UUID][]*runSyncOpen{}
+	}
+	s.sshSyncOpen[runID] = append(s.sshSyncOpen[runID], e)
+	return func() {
+		s.sshSessionsMu.Lock()
+		defer s.sshSessionsMu.Unlock()
+		if left := slices.DeleteFunc(s.sshSyncOpen[runID], func(o *runSyncOpen) bool { return o == e }); len(left) > 0 {
+			s.sshSyncOpen[runID] = left
+		} else {
+			delete(s.sshSyncOpen, runID)
+		}
+	}
+}
+
+// runSyncOpenView lists runID's open sync channels, oldest first, never nil.
+func (s *Server) runSyncOpenView(runID uuid.UUID) runSyncView {
+	s.sshSessionsMu.Lock()
+	open := make([]runSyncOpen, 0, len(s.sshSyncOpen[runID]))
+	for _, e := range s.sshSyncOpen[runID] {
+		open = append(open, *e)
+	}
+	s.sshSessionsMu.Unlock()
+	slices.SortFunc(open, func(a, b runSyncOpen) int {
+		if c := a.OpenedAt.Compare(b.OpenedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Dir, b.Dir)
+	})
+	return runSyncView{Open: open}
+}
+
 // bridgeSSHSync runs the sandbox's own sftp-server started in the validated
 // directory, and records one ssh.sync.transfer row when the channel ends. The
 // directory is a start point, not a boundary: sftp-server reaches whatever the
@@ -103,6 +156,7 @@ func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal s
 		fail(err.Error(), reason)
 		return
 	}
+	defer s.sshSyncOpened(runID, dir)()
 	exit, bytesIn, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, true)
 	extra := map[string]any{"bytes_in": bytesIn, "bytes_out": bytesOut}
 	outcome := "success"

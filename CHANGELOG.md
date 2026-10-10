@@ -10,6 +10,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- For filtered OIDC group claims, check the new transitive-membership procedure in Operations:
+  Wardyn cannot detect groups omitted by the identity provider. Re-key affected grants and
+  governance assignments to groups actually present in the claim (#1518).
+
 - Migration `0140_audit_legacy_manifest` records the expected legacy audit partition, so verify detects
   its removal even when it held only hashless rows (#1809).
 - Migration `0139_runner_delivery` adds the `runners` and `runner_pending_actions` tables, the
@@ -35,6 +39,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Repoint any dashboard or SIEM rule on `auth.member_mode` to `auth.user_view.set` (#623).
 
 ### Added
+
+- `wardyn sync <run> <directory>` pushes a local directory over the audited SSH sync subsystem.
+  `--pull` opts into receiving files; pulls refuse symlinks, unsafe names and executable modes,
+  keep local edits on conflict and never delete files. `--watch` repeats the sync.
 
 - New Run request contracts cover per-component overrides, workspace targets, placement, resources
   and allowed-image choices across create, preflight and preview. Fields whose behavior is not yet
