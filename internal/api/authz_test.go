@@ -97,6 +97,10 @@ const (
 	classOwner routeClass = "owner"
 	// classAnonymous: no credential required at all (health/UI/OIDC bootstrap).
 	classAnonymous routeClass = "anonymous"
+	// Runner streams prove the registered Ed25519 key after WebSocket upgrade;
+	// human/admin credentials do not authorize them. runner_stream_test.go
+	// exercises the signature boundary over an actual connection.
+	classRunnerStream routeClass = "runner_stream"
 	// classInternal: gated by a run-scoped or ground-truth-scoped bearer
 	// token (internalAuth / internalAuthGroundtruth) — NEITHER the admin
 	// token NOR an SSO session satisfies it.
@@ -215,7 +219,8 @@ var routeMatrix = map[string]classifiedRoute{
 	// Hybrid enrolment: a laptop's first boot holds no credential yet, only the
 	// single-use enrolment token in its BODY, so the route is anonymous by
 	// necessity and rate-limited per TCP peer instead (handleDeviceEnrol).
-	"POST /api/v1/devices/enrol": {class: classAnonymous},
+	"POST /api/v1/devices/enrol":      {class: classAnonymous},
+	"GET /api/v1/runners/{id}/stream": {class: classRunnerStream},
 	// Console branding (#1125): the sign-in page draws the brand before anyone
 	// has signed in, so its read and the logo it names are anonymous. The
 	// read is the public subset only (TestBrandingAnonymousReadIsThePublicSubset).
@@ -1033,6 +1038,15 @@ func TestAuthzMatrix(t *testing.T) {
 				srv = uiSrv
 			}
 			switch rc.class {
+			case classRunnerStream:
+				// This matrix has runners disabled. The route must fail
+				// closed before accepting any connection, regardless of bearer.
+				for _, token := range []string{"", adminToken} {
+					w := do(t, srv, method, buildPath(pattern, "x1"), token, body)
+					if w.Code != http.StatusForbidden {
+						t.Errorf("runner stream while disabled: %d", w.Code)
+					}
+				}
 			case classAnonymous:
 				// Auth-independent by definition: the only meaningful signal is
 				// that NO credential still works. (An authed caller getting the
