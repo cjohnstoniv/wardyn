@@ -27,8 +27,9 @@ func activityFixture(t *testing.T) (*Hub, *hubSession, types.Runner, *runnerwire
 	if err := link.Ready(peer); err != nil {
 		t.Fatal(err)
 	}
-	s := &hubSession{peer: peer, link: link}
-	s.ready.Store(true)
+	s := &hubSession{id: "session", peer: peer, link: link}
+	id := s.id
+	s.readyID.Store(&id)
 	hub.sessions[row.ID] = s
 	return hub, s, row, peer
 }
@@ -40,7 +41,7 @@ func TestCurrentActivityRejectsStaleSessionAndChangedIdentity(t *testing.T) {
 			current := row
 			switch mode {
 			case "not ready":
-				s.ready.Store(false)
+				s.readyID.Store(nil)
 			case "old peer":
 				s.peer = &runnerwire.Peer{}
 			case "expired session":

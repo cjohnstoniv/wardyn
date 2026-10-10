@@ -53,14 +53,23 @@ type HubConfig struct {
 }
 
 type hubSession struct {
-	mu        sync.Mutex
-	id        string
-	peer      *runnerwire.Peer
-	link      *Link
-	ended     time.Time
-	ready     atomic.Bool
+	mu    sync.Mutex
+	id    string
+	peer  *runnerwire.Peer
+	link  *Link
+	ended time.Time
+	// readyID names the session whose own READY was admitted. A late READY
+	// from a superseded session stores its own id, never the current one.
+	readyID   atomic.Pointer[string]
 	timer     *time.Timer
 	connected bool
+}
+
+// readyFor reports whether id is the current session and reached READY
+// itself. Callers hold s.mu, which guards s.id.
+func (s *hubSession) readyFor(id string) bool {
+	p := s.readyID.Load()
+	return id != "" && p != nil && *p == id && id == s.id
 }
 
 // Hub retains only authenticated sessions, for the bounded resume window.
@@ -257,7 +266,7 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 }
 
 func (h *Hub) resume(ctx context.Context, s *hubSession, request *runnerwire.Resume) (runnerwire.PeerConfig, bool, error) {
-	if request == nil || request.SessionID != s.id || s.peer == nil || !s.ready.Load() ||
+	if request == nil || !s.readyFor(request.SessionID) || s.peer == nil ||
 		(!s.ended.IsZero() && time.Since(s.ended) > runnerwire.ResumeWindow) {
 		return runnerwire.PeerConfig{}, false, nil
 	}
@@ -272,7 +281,7 @@ func (h *Hub) resume(ctx context.Context, s *hubSession, request *runnerwire.Res
 // inventory or PENDING read leaves nothing resumable.
 func (h *Hub) fresh(ctx context.Context, s *hubSession, a Admission, id uuid.UUID) ([]runnerwire.PendingAction, error) {
 	s.id = uuid.NewString()
-	s.ready.Store(false)
+	s.readyID.Store(nil)
 	if err := a.BeginInventory(ctx, s.id); err != nil {
 		return nil, err
 	}
@@ -325,7 +334,7 @@ func configureAdmission(ctx context.Context, cfg *runnerwire.PeerConfig, resumed
 				return err
 			}
 			ready = true
-			session.ready.Store(true)
+			session.readyID.Store(&sessionID)
 		default:
 			return fmt.Errorf("%w: unexpected %s", runnerwire.ErrBadFrame, f.Type)
 		}
