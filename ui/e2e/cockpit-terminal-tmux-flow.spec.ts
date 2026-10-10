@@ -16,6 +16,7 @@
  *
  * Named cockpit-terminal-tmux-* so run-ui-e2e.sh serves it from the e2etmux build.
  */
+import type { Route } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { findRunningFixture, stubInteractiveRun } from "./attach-stub";
 import { termText } from "./terminal-text";
@@ -114,6 +115,16 @@ test("50 MB of output keeps the page responsive and ends on the right screen", a
     };
   });
 
+  // Hold the run-detail poll for the measured window: usePoll waits on its in-flight request, so a
+  // held GET pauses it. Released (and unrouted) once the worst frame is read.
+  let releasePoll!: () => void;
+  const pollHeld = new Promise<void>((r) => (releasePoll = r));
+  const hold = async (route: Route) => {
+    if (route.request().method() === "GET") await pollHeld;
+    return route.fallback();
+  };
+  await page.route(`**/api/v1/runs/${runId}`, hold);
+
   // 50 MiB of 100-byte lines, then a sentinel the final screen must show.
   await page.keyboard.type(`yes "$(printf 'x%.0s' $(seq 1 99))" | head -c 52428800; echo; echo flow-done-$((6*7))`);
   await page.keyboard.press("Enter");
@@ -121,6 +132,8 @@ test("50 MB of output keeps the page responsive and ends on the right screen", a
   const worst = await page.evaluate(() =>
     (window as unknown as { __flowWorst: () => { what: string; ms: number } }).__flowWorst(),
   );
+  releasePoll();
+  await page.unroute(`**/api/v1/runs/${runId}`, hold);
   test.info().annotations.push({ type: "main-thread worst", description: `${worst.what}: ${Math.round(worst.ms)} ms` });
   expect(worst.ms, `longest main-thread work while streaming: ${worst.what}`).toBeLessThan(MAIN_THREAD_BUDGET_MS);
 
