@@ -221,6 +221,7 @@ func rootCmd() *cobra.Command {
 		peopleCmd(client),
 		personCmd(client),
 		deviceCmd(client),
+		runnerCmd(client),
 		supportBundleCmd(client),
 	)
 	return root

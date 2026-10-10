@@ -26,6 +26,9 @@ import (
 // SECURITY: secret VALUES never live here — only secret NAMES (refs) the
 // broker/proxy resolve at dispatch/injection time, mirroring GrantSpec.Scope.
 type SiteConfig struct {
+	// Runners defaults off. PUT /site-config retains the stored value; the
+	// dedicated audited runner enablement operation owns changes.
+	Runners *RunnerSettings `json:"runners,omitempty"`
 	// UpstreamProxySecretRef names a secret holding the corporate upstream
 	// proxy URL, or "" for none. UpstreamProxyURL wins if both are set (not
 	// rejected, so an operator can migrate between the two).
@@ -257,4 +260,9 @@ type WithheldScmHost struct {
 	Host         string          `json:"host"`
 	ProviderID   string          `json:"provider_id"`
 	ProviderKind GitProviderKind `json:"provider_kind"`
+}
+
+// RunnerSettings controls admission to runner routes. Nil and false both deny.
+type RunnerSettings struct {
+	Enabled bool `json:"enabled"`
 }

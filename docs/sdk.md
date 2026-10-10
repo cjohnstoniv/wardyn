@@ -452,6 +452,13 @@ silent gap:
 
 | Reason | Meaning |
 |---|---|
+| `runners_disabled` / `runners_config_unavailable` | Runner routes require enabled, readable site configuration. |
+| `runner_registration_unavailable` | Runner registration requires a configured public org URL and registration store. |
+| `runner_registration_rate_limited` | Too many registration attempts; retry later. |
+| `runner_registration_invalid` / `runner_owner_invalid` | Registration fields or token owner are invalid. |
+| `runner_key_already_registered` | This key is already registered; generate a new identity. |
+| `runner_token_invalid` | Registration token is unknown, expired, consumed, or bound to another org. |
+| `runner_claim_mismatch` | The personal owner, fingerprint, org binding, claim state, or expiry does not match. |
 | `missing_scope_snapshot` | The grant names the credential sentinel but carries no dispatch-time snapshot (a hand-authored grant). Azure DevOps, AWS SSO; and every grant naming `bedrock-api-key`, which is no longer a model credential. |
 | `owner_not_caller` | The grant's snapshot owner is not the run token's own subject. Azure DevOps. |
 | `roster_unreadable` | The site configuration could not be read; nothing is resolved from a failed read. Azure DevOps, AWS SSO. |

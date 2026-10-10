@@ -215,7 +215,11 @@ var routeMatrix = map[string]classifiedRoute{
 	// Hybrid enrolment: a laptop's first boot holds no credential yet, only the
 	// single-use enrolment token in its BODY, so the route is anonymous by
 	// necessity and rate-limited per TCP peer instead (handleDeviceEnrol).
-	"POST /api/v1/devices/enrol": {class: classAnonymous},
+	"POST /api/v1/devices/enrol":         {class: classAnonymous},
+	"POST /api/v1/runners/register":      {class: classAnonymous},
+	"POST /api/v1/runners/tokens":        {class: classAdmin},
+	"POST /api/v1/me/runners/tokens":     {class: classMember},
+	"POST /api/v1/me/runners/{id}/claim": {class: classMember},
 	// Console branding (#1125): the sign-in page draws the brand before anyone
 	// has signed in, so its read and the logo it names are anonymous. The
 	// read is the public subset only (TestBrandingAnonymousReadIsThePublicSubset).
@@ -848,9 +852,10 @@ func (fakeAuthzSessionRevocations) RevokeAll(context.Context) error         { re
 // authzMatrixSiteConfig is the roster the matrix walks under: ONE enabled
 // row for claude-code.
 func authzMatrixSiteConfig() types.SiteConfig {
-	return types.SiteConfig{AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{{
-		ID: "claude-code",
-	}}}}
+	return types.SiteConfig{
+		Runners: &types.RunnerSettings{Enabled: true}, AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{{
+			ID: "claude-code",
+		}}}}
 }
 
 // shape, when given, adjusts the config before New — the deployment-shape knobs
@@ -1553,8 +1558,9 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// 0.9 B-P1's GET and PUT /governance/egress-baseline sit with the other governance writes
 	// (= 59 SEC).
 	// 0.9 adds the SUPER identity-unbind route (= 53 SUPER).
-	if sec != 59 || super != 53 {
-		t.Errorf("tier split = %d security / %d admin, want 59 / 53 (the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect, PLUS the identity unbind)", sec, super)
+	// Runner registration token mint adds one more admin route (= 54 SUPER).
+	if sec != 59 || super != 54 {
+		t.Errorf("tier split = %d security / %d admin, want 59 / 54 (the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect, PLUS the identity unbind and runner registration token mint)", sec, super)
 	}
 }
 
