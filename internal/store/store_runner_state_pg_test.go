@@ -143,7 +143,7 @@ func runnerLateContainmentProof(t *testing.T, issued bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, _, err := st.QueueRunnerAction(ctx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: rn.ID, RunID: run.ID, Kind: types.RunnerActionStopProxy, Ref: ref})
+	a, _, err := st.QueueRunnerAction(ctx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: rn.ID, RunID: run.ID, Kind: types.RunnerActionStopProxy, Ref: ref, Generation: gen, LostAt: got.LostAt})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -100,7 +100,22 @@ type RunnerPendingAction struct {
 	AppliedAt  *time.Time             `json:"applied_at,omitempty"`
 	Outcome    string                 `json:"outcome,omitempty"`
 	ObservedAt *time.Time             `json:"observed_at,omitempty"`
+	// Bound, Owner, Generation and LostAt are the org identity persisted when
+	// the action was queued. A row that is not Bound predates that binding and
+	// grants nothing. On a Bound row a nil Generation means no execution had
+	// been issued; LostAt is set for stop_proxy only.
+	Bound      bool       `json:"-"`
+	Owner      string     `json:"-"`
+	Generation uuid.UUID  `json:"-"`
+	LostAt     *time.Time `json:"-"`
 }
+
+// Runner action outcomes an action_result may carry. A deferred receipt is
+// final for its action ID but does not settle the obligation it carried.
+const (
+	RunnerActionSuccess  = "success"
+	RunnerActionDeferred = "deferred"
+)
 
 // CredentialDeliveryPolicyDoc is the stored local_credential_delivery document.
 // Policy is the JSON of placement.DeliveryPolicy, validated by the writer; the

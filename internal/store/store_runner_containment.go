@@ -78,8 +78,9 @@ func (s PG) RecordRunnerContainmentTx(ctx context.Context, tx pgx.Tx, proof Runn
 }
 
 func runnerContainmentActionMatches(action types.RunnerPendingAction, proof RunnerContainmentProof) bool {
-	return action.RunnerID == proof.RunnerID && action.RunID == proof.RunID &&
+	return action.Bound && action.RunnerID == proof.RunnerID && action.RunID == proof.RunID &&
 		action.Kind == types.RunnerActionStopProxy && action.Ref == proof.Ref &&
+		action.Generation == proof.Generation && action.LostAt != nil && action.LostAt.Equal(proof.LostAt) &&
 		action.AppliedAt != nil && action.Outcome == "success" &&
 		action.ObservedAt != nil && action.ObservedAt.Equal(proof.ObservedAt)
 }

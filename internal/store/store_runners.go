@@ -1,7 +1,8 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Registered runners, their pending actions and the credential delivery policy (migration 0139).
+// Registered runners and the credential delivery policy (migration 0139); pending actions are in
+// store_runner_actions.go.
 // Registration tokens and the routes that mint and consume them are a later lane's; this file is the
 // rows the stream, the claim and the pending-action queue read and write.
 package store
@@ -34,9 +35,9 @@ type RunnerStore interface {
 	ExpireUnclaimedRunners(ctx context.Context, createdBefore time.Time) (int, error)
 
 	QueueRunnerAction(ctx context.Context, a types.RunnerPendingAction) (action types.RunnerPendingAction, queued bool, err error)
-	ListPendingRunnerActions(ctx context.Context, runnerID uuid.UUID) ([]types.RunnerPendingAction, error)
+	ListPendingRunnerActions(ctx context.Context, runnerID uuid.UUID) (page []types.RunnerPendingAction, more bool, err error)
 	RunHasPendingRunnerAction(ctx context.Context, runID uuid.UUID) (bool, error)
-	ApplyRunnerAction(ctx context.Context, id uuid.UUID, outcome string, observedAt, now time.Time) (types.RunnerPendingAction, error)
+	RecordRunnerActionResult(ctx context.Context, runnerID, runID, actionID uuid.UUID, outcome string, observedAt time.Time, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (action types.RunnerPendingAction, first bool, err error)
 
 	GetCredentialDeliveryPolicy(ctx context.Context) (types.CredentialDeliveryPolicyDoc, error)
 	PutCredentialDeliveryPolicy(ctx context.Context, policy json.RawMessage, by string, now time.Time) (types.CredentialDeliveryPolicyDoc, error)
@@ -184,70 +185,6 @@ func (s PG) ExpireUnclaimedRunners(ctx context.Context, createdBefore time.Time)
 		return 0, fmt.Errorf("store: expire unclaimed runners: %w", err)
 	}
 	return int(tag.RowsAffected()), nil
-}
-
-const actionCols = `id, runner_id, run_id, kind, ref, queued_at, applied_at, outcome, observed_at`
-
-func scanAction(row pgx.Row) (types.RunnerPendingAction, error) {
-	var a types.RunnerPendingAction
-	var kind string
-	err := row.Scan(&a.ID, &a.RunnerID, &a.RunID, &kind, &a.Ref, &a.QueuedAt, &a.AppliedAt, &a.Outcome, &a.ObservedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return types.RunnerPendingAction{}, ErrNotFound
-	}
-	if err != nil {
-		return types.RunnerPendingAction{}, fmt.Errorf("store: scan runner action: %w", err)
-	}
-	a.Kind = types.RunnerActionKind(kind)
-	return a, nil
-}
-
-// QueueRunnerAction queues a for a claimed runner, idempotently per (run, kind): when an unapplied one
-// exists it is returned with queued=false instead of a second row. A runner that is not claimed (revoked,
-// unclaimed, unknown) takes none, so no row can exist that nothing will ever apply: ErrNotFound. The runner row is locked FOR SHARE, so a queue
-// that meets a revoke in flight waits for it and then sees the runner revoked.
-func (s PG) QueueRunnerAction(ctx context.Context, a types.RunnerPendingAction) (types.RunnerPendingAction, bool, error) {
-	const ins = `
-		INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref)
-		SELECT $1,$2,$3,$4,$5 WHERE EXISTS (SELECT 1 FROM runners WHERE id = $2 AND state = 'claimed' FOR SHARE)
-		ON CONFLICT (run_id, kind) WHERE applied_at IS NULL DO NOTHING
-		RETURNING ` + actionCols
-	out, err := scanAction(s.Pool.QueryRow(ctx, ins, a.ID, a.RunnerID, a.RunID, string(a.Kind), a.Ref))
-	if err == nil {
-		return out, true, nil
-	}
-	if !errors.Is(err, ErrNotFound) {
-		return types.RunnerPendingAction{}, false, err
-	}
-	const sel = `SELECT ` + actionCols + ` FROM runner_pending_actions WHERE run_id = $1 AND kind = $2 AND applied_at IS NULL`
-	out, err = scanAction(s.Pool.QueryRow(ctx, sel, a.RunID, string(a.Kind)))
-	return out, false, err
-}
-
-// ListPendingRunnerActions is the runner's unapplied actions, oldest first: the PENDING payload.
-func (s PG) ListPendingRunnerActions(ctx context.Context, runnerID uuid.UUID) ([]types.RunnerPendingAction, error) {
-	const q = `SELECT ` + actionCols + ` FROM runner_pending_actions WHERE runner_id = $1 AND applied_at IS NULL ORDER BY queued_at, id`
-	return collect(ctx, s.Pool, "list", "runner pending actions", q, []any{runnerID}, scanAction)
-}
-
-// RunHasPendingRunnerAction is the fence: a run with an unapplied action gets no relay.
-func (s PG) RunHasPendingRunnerAction(ctx context.Context, runID uuid.UUID) (bool, error) {
-	var has bool
-	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_pending_actions WHERE run_id = $1 AND applied_at IS NULL)`, runID).Scan(&has)
-	if err != nil {
-		return false, fmt.Errorf("store: check pending runner actions: %w", err)
-	}
-	return has, nil
-}
-
-// ApplyRunnerAction records the runner's action_result. An action already applied, or unknown, is
-// ErrNotFound: a replayed result changes nothing.
-func (s PG) ApplyRunnerAction(ctx context.Context, id uuid.UUID, outcome string, observedAt, now time.Time) (types.RunnerPendingAction, error) {
-	const q = `
-		UPDATE runner_pending_actions SET applied_at = $4, outcome = $2, observed_at = $3
-		WHERE id = $1 AND applied_at IS NULL
-		RETURNING ` + actionCols
-	return scanAction(s.Pool.QueryRow(ctx, q, id, outcome, observedAt, now))
 }
 
 // GetCredentialDeliveryPolicy reads the local_credential_delivery document: an empty one (every class
