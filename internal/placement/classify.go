@@ -41,6 +41,17 @@ const (
 	RuleNotConfigured Rule = "not_configured" // refused, and not a configurable class
 )
 
+// Rules and Classes are closed sets: a row naming anything else is refused by
+// TestTableRowsAreWellFormed, and at runtime an unknown rule is a gated rule
+// with no gate, which refuses; it is never an allow.
+var (
+	allRules   = []Rule{RuleAllow, RuleDelivery, RuleViaOrgRefuse, RuleRefuse, RuleBound, RuleNotSent, RuleStrip, RuleExempt, RuleOwnerOnlyOwn, RuleNotConfigured}
+	allClasses = []Class{ClassOwn, ClassOperator, ClassBrokered, ClassPlatform, ClassExempt, ClassComposite}
+)
+
+func (r Rule) known() bool  { return slices.Contains(allRules, r) }
+func (c Class) known() bool { return slices.Contains(allClasses, c) }
+
 // The structs the table covers.
 const (
 	StructSandboxSpec = "SandboxSpec"
@@ -188,7 +199,11 @@ func Unclassified() []string {
 
 // unclassifiedPaths lists the exported fields of t, the type of struct.field,
 // that no row names by Path (a row for "A.B" names A). One level: a field of a
-// field is its row's to describe.
+// field is its row's to describe. Residual, by design: a child of a nested
+// carrier (Policy.LLMInspection, Resources, ...) inherits that row's rule once
+// it is listed in the nested manifest (nestedFields), so a manifest addition
+// under Policy is a classification decision for review, not a mechanical
+// edit. The closed-schema walk still refuses an unlisted child.
 func unclassifiedPaths(structName, field string, t reflect.Type) []string {
 	var out []string
 	for i := range t.NumField() {

@@ -107,6 +107,12 @@ func TestTableRowsAreWellFormed(t *testing.T) {
 	}
 }
 
+func TestTableIsClosedAndUnambiguous(t *testing.T) {
+	if problems := tableProblems(Table); len(problems) != 0 {
+		t.Fatalf("ill-formed table: %v", problems)
+	}
+}
+
 func TestEveryClassHasARowOrIsNotSent(t *testing.T) {
 	used := map[string]bool{}
 	for _, e := range Table {

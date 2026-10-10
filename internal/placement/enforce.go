@@ -39,6 +39,8 @@ func rulesOf(rows []Entry) ruleSet {
 			if e.Class != ClassComposite {
 				r.strip = true
 			}
+		default:
+			r.gated = !e.Rule.known() || r.gated // an unknown rule is gated with no gate: it refuses
 		}
 	}
 	return r

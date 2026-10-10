@@ -100,6 +100,24 @@ func LocalEligibility(p LocalPlan) (runner.SandboxSpec, *Refusal) {
 
 func indexed(path string, i int) string { return path + "[" + strconv.Itoa(i) + "]" }
 
+// matchingRows are the rows of the origin's class, the rows naming its exact
+// delivery first: a row with no delivery applies to any origin of the class
+// only after every exact row has had its say, so it can never shadow a
+// refusing row (well-formedness also forbids the two sharing a class).
+func matchingRows(rows []Entry, origin CredentialOrigin) []Entry {
+	var exact, general []Entry
+	for _, row := range rows {
+		switch {
+		case row.Class != origin.Class:
+		case row.Delivery == "":
+			general = append(general, row)
+		case row.Delivery == origin.Delivery:
+			exact = append(exact, row)
+		}
+	}
+	return append(exact, general...)
+}
+
 func classifyCredential(entries entrySource, path string, origin CredentialOrigin, delivery DeliveryPolicy) *Refusal {
 	if origin.Class == "" {
 		return refuse(ReasonPlacementCredential, path, "credential provenance is unknown")
@@ -114,11 +132,7 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 	if field == "Policy.EligibleGrants" {
 		st, field = StructGrantKind, string(origin.GrantKind)
 	}
-	rows := entries(st, field)
-	for _, row := range rows {
-		if row.Class != origin.Class || (row.Delivery != "" && row.Delivery != origin.Delivery) {
-			continue
-		}
+	for _, row := range matchingRows(entries(st, field), origin) {
 		switch row.Rule {
 		case RuleAllow, RuleOwnerOnlyOwn:
 			if origin.Class == ClassOwn && !origin.OwnNamespace {
@@ -134,6 +148,8 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 		case RuleDelivery, RuleViaOrgRefuse, RuleNotConfigured:
 			mode := delivery.For(row.Delivery).Mode
 			return refuse(ReasonPlacementCredential, path, fmt.Sprintf("%s credential is unavailable on a local runner (delivery %s has no implemented authority)", row.Delivery, mode))
+		default:
+			return refuse(ReasonPlacementCredential, path, "credential row has a rule this server does not implement")
 		}
 	}
 	return refuse(ReasonPlacementCredential, path, "credential variant has no permitted local rule")

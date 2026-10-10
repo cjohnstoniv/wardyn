@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -64,6 +66,46 @@ func fillSentinel(v reflect.Value) {
 	}
 }
 
+// tableProblems is the table's well-formedness rule beyond the per-row checks:
+// every Rule and Class is in its closed set, and where a (Struct, Field, Class)
+// has a credential-refusing row, every row of that set names a distinct,
+// non-empty delivery, so no delivery-less row can shadow a refusal.
+func tableProblems(rows []Entry) []string {
+	var out []string
+	type set struct {
+		s, f string
+		c    Class
+	}
+	groups := map[set][]Entry{}
+	for _, e := range rows {
+		where := e.Struct + "." + e.Field + " (" + e.Variant + ")"
+		if !e.Rule.known() {
+			out = append(out, where+": unknown rule "+string(e.Rule))
+		}
+		if !e.Class.known() {
+			out = append(out, where+": unknown class "+string(e.Class))
+		}
+		groups[set{e.Struct, e.Field, e.Class}] = append(groups[set{e.Struct, e.Field, e.Class}], e)
+	}
+	for k, g := range groups {
+		if !slices.ContainsFunc(g, func(e Entry) bool {
+			return slices.Contains([]Rule{RuleDelivery, RuleViaOrgRefuse, RuleNotConfigured}, e.Rule)
+		}) {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, e := range g {
+			if e.Delivery == "" || seen[e.Delivery] {
+				out = append(out, k.s+"."+k.f+" class "+string(k.c)+": a refusing set needs distinct non-empty deliveries")
+				break
+			}
+			seen[e.Delivery] = true
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 // expectedOutcome restates, independently of rulesOf, what a field's rows
 // demand, so the guard cannot agree with a wrong rulesOf.
 func expectedOutcome(rows []Entry) ruleSet {
@@ -72,7 +114,7 @@ func expectedOutcome(rows []Entry) ruleSet {
 	}
 	return ruleSet{
 		credential: has(RuleDelivery, RuleViaOrgRefuse, RuleNotConfigured, RuleOwnerOnlyOwn),
-		gated:      has(RuleRefuse, RuleBound),
+		gated:      has(RuleRefuse, RuleBound) || slices.ContainsFunc(rows, func(e Entry) bool { return !slices.Contains(allRules, e.Rule) }),
 		notSent:    has(RuleNotSent),
 		strip:      has(RuleStrip),
 	}
@@ -318,5 +360,51 @@ func TestSchemaWalkFlagsAnEmbeddedStructOnATableRoot(t *testing.T) {
 	got := SchemaUnclassified(typ, "root", map[reflect.Type][]string{typ: {"Known"}, reflect.TypeFor[embeddedProbe](): {"Token"}}, nil)
 	if !slices.Contains(got, "root.embeddedProbe") {
 		t.Fatalf("an embedded unexported struct escaped a table root: %v", got)
+	}
+}
+
+// Fable's probe: a typo in a rule name must not be an allow.
+func TestUnknownRuleRefusesAndIsRejectedByTheTable(t *testing.T) {
+	typo := Entry{Struct: StructProxyConfig, Field: "GitGrants", Class: ClassBrokered, Rule: Rule("via_org_refus"), Delivery: ClassGitHubToken, Reason: ReasonPlacementCredential}
+	if problems := tableProblems([]Entry{typo}); len(problems) != 1 || !strings.Contains(problems[0], "unknown rule") {
+		t.Fatalf("problems=%v", problems)
+	}
+	src := func(s, f string) []Entry {
+		if s == typo.Struct && f == typo.Field {
+			return []Entry{typo}
+		}
+		return nil
+	}
+	spec := runner.SandboxSpec{ProxyConfig: runner.ProxyConfig{GitGrants: map[string]uuid.UUID{"org/repo": uuid.New()}}}
+	if r := enforceStruct(src, LocalPlan{Spec: spec}, &spec, StructProxyConfig, "ProxyConfig", reflect.ValueOf(&spec.ProxyConfig).Elem()); r == nil || r.Field != "ProxyConfig.GitGrants" {
+		t.Fatalf("an unknown rule was not treated as gated-without-gate: %v", r)
+	}
+	for _, origin := range []CredentialOrigin{{Class: ClassBrokered, Delivery: ClassGitHubToken}} {
+		if r := classifyCredential(src, "ProxyConfig.GitGrants[org/repo]", origin, DeliveryPolicy{}); r == nil {
+			t.Fatal("an unknown rule admitted a credential")
+		}
+	}
+	if !rulesOf([]Entry{typo}).gated {
+		t.Fatal("rulesOf does not gate an unknown rule")
+	}
+}
+
+// Fable's shadow probe: a future own refusing row after delivery-less own rows.
+func TestDeliveryLessRowCannotShadowALaterRefusingRow(t *testing.T) {
+	rows := []Entry{
+		{Struct: StructProxyConfig, Field: "Injection", Class: ClassOwn, Rule: RuleAllow, Variant: "a"},
+		{Struct: StructProxyConfig, Field: "Injection", Class: ClassOwn, Rule: RuleAllow, Variant: "b"},
+		{Struct: StructProxyConfig, Field: "Injection", Class: ClassOwn, Rule: RuleDelivery, Delivery: ClassAPIKey, Reason: ReasonPlacementCredential, Variant: "future"},
+	}
+	if problems := tableProblems(rows); len(problems) != 1 || !strings.Contains(problems[0], "distinct non-empty deliveries") {
+		t.Fatalf("the ambiguous set was accepted: %v", problems)
+	}
+	src := func(s, f string) []Entry { return rows }
+	own := CredentialOrigin{Class: ClassOwn, Delivery: ClassAPIKey, Stored: true, OwnNamespace: true, OwnerOnly: true}
+	if r := classifyCredential(src, "ProxyConfig.Injection[0]", own, DeliveryPolicy{}); r == nil {
+		t.Fatal("a delivery-less row shadowed the refusing row")
+	}
+	if r := classifyCredential(src, "ProxyConfig.Injection[0]", CredentialOrigin{Class: ClassOwn, OwnNamespace: true}, DeliveryPolicy{}); r != nil {
+		t.Fatalf("an origin with no delivery should still reach the general rows: %v", r)
 	}
 }
