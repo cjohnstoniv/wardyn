@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 )
 
 func TestLocalDecisionActivityUsesAdmissionEpochOnly(t *testing.T) {
-	dir := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "spool")
 	id := uuid.New()
 	ctx := context.Background()
 	sink, err := newLocalDecisionSink(dir, id, nil)
