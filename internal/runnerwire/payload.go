@@ -108,6 +108,8 @@ type Waiting struct {
 
 // AgentExit is the durable `agent_exit` event's data.
 type AgentExit struct {
+	Generation uuid.UUID `json:"generation"`
+	ExecID     string    `json:"exec_id"`
 	Ref        string    `json:"ref"`
 	Code       int       `json:"code"`
 	ObservedAt time.Time `json:"observed_at"`
@@ -116,9 +118,10 @@ type AgentExit struct {
 // Lease is the LEASE payload, sent after each renew or extend.
 // Zero EndsAt means authenticated no-end policy; token lapse is always finite.
 type Lease struct {
-	RunID          uuid.UUID `json:"run_id"`
-	TokenRenewedAt time.Time `json:"token_renewed_at"`
-	EndsAt         time.Time `json:"ends_at"`
+	ExecutionGeneration uuid.UUID `json:"execution_generation"`
+	RunID               uuid.UUID `json:"run_id"`
+	TokenRenewedAt      time.Time `json:"token_renewed_at"`
+	EndsAt              time.Time `json:"ends_at"`
 }
 
 // PendingAction is one entry of the PENDING payload, oldest first.
