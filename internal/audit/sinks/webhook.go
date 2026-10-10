@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,12 +24,25 @@ import (
 // on this constant (internal/api TestShutdownGraceCoversTheBudget).
 const WebhookTimeout = 15 * time.Second
 
+// Delivery modes for WebhookConfig. "" is the best-effort fan-out sink this
+// config has always built; "acknowledged" is the opt-in mode where a
+// leader-only loop reads the stored trail from a durable checkpoint instead
+// (see AckedWebhook), so ParseSinks builds no fan-out sink for it.
+const (
+	DeliveryBestEffort   = "best_effort"
+	DeliveryAcknowledged = "acknowledged"
+)
+
 // WebhookConfig holds the configuration for a WebhookSink.
 type WebhookConfig struct {
 	// URL is the HTTP endpoint that receives JSON-lines batches (required).
 	URL string `json:"url"`
 	// BearerToken is sent as "Authorization: Bearer <token>"; requires https://.
 	BearerToken string `json:"bearer_token,omitempty"`
+	// Delivery is "" or DeliveryBestEffort for the buffered fan-out sink, or
+	// DeliveryAcknowledged for the checkpointed loop; any other value refuses
+	// boot. Syslog has no acceptance signal, so it stays best-effort.
+	Delivery string `json:"delivery,omitempty"`
 	// BatchSize is the maximum number of events per HTTP POST (default 100).
 	BatchSize int `json:"batch_size,omitempty"`
 	// FlushInterval is how long to wait before flushing a partial batch
@@ -97,39 +111,9 @@ type WebhookSink struct {
 // non-https URL.
 func NewWebhookSink(cfg WebhookConfig) (*WebhookSink, error) {
 	cfg = cfg.withDefaults()
-	if cfg.URL == "" {
-		return nil, fmt.Errorf("sinks.webhook: URL is required")
-	}
-	// The bearer is a long-lived, replayable SIEM credential resent on every
-	// POST, so the gate is on the credential, not the scheme: a tokenless
-	// http:// collector still boots (matches the syslog sink over plaintext).
-	if cfg.BearerToken != "" {
-		u, err := url.Parse(cfg.URL)
-		if err != nil {
-			// Do NOT echo the raw URL — it may carry user:pass credentials.
-			return nil, fmt.Errorf("sinks.webhook: malformed url (redacted)")
-		}
-		if !strings.EqualFold(u.Scheme, "https") {
-			return nil, fmt.Errorf("sinks.webhook: bearer_token requires an https:// url (scheme %q would send the SIEM credential in cleartext)", u.Scheme)
-		}
-	}
-	interval, err := time.ParseDuration(cfg.FlushInterval)
+	interval, base, timeout, err := cfg.validate()
 	if err != nil {
-		return nil, fmt.Errorf("sinks.webhook: invalid flush_interval %q: %w", cfg.FlushInterval, err)
-	}
-	base, err := time.ParseDuration(cfg.RetryBaseDelay)
-	if err != nil {
-		return nil, fmt.Errorf("sinks.webhook: invalid retry_base_delay %q: %w", cfg.RetryBaseDelay, err)
-	}
-	timeout, err := time.ParseDuration(cfg.Timeout)
-	if err != nil {
-		return nil, fmt.Errorf("sinks.webhook: invalid timeout %q: %w", cfg.Timeout, err)
-	}
-	if timeout <= 0 {
-		return nil, fmt.Errorf("sinks.webhook: timeout %q must be positive (zero would never time out a wedged collector)", cfg.Timeout)
-	}
-	if timeout > WebhookTimeout {
-		return nil, fmt.Errorf("sinks.webhook: timeout %q exceeds %s, the final flush wardynd's shutdown grace waits for", cfg.Timeout, WebhookTimeout)
+		return nil, err
 	}
 	return &WebhookSink{
 		cfg:       cfg,
@@ -140,6 +124,55 @@ func NewWebhookSink(cfg WebhookConfig) (*WebhookSink, error) {
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
 	}, nil
+}
+
+// validate checks cfg and returns the parsed durations its delivery loop
+// needs. It runs on a defaulted config (withDefaults first), because an unset
+// duration string only parses once the default fills it. Every caller that
+// turns a webhook config into a delivery — the fan-out sink and the
+// acknowledged loop alike — goes through here, so the refusals cannot drift
+// apart.
+func (c WebhookConfig) validate() (interval, base, timeout time.Duration, err error) {
+	switch c.Delivery {
+	case "", DeliveryBestEffort, DeliveryAcknowledged:
+	default:
+		return 0, 0, 0, fmt.Errorf("sinks.webhook: delivery %q must be %q or %q", c.Delivery, DeliveryBestEffort, DeliveryAcknowledged)
+	}
+	if c.URL == "" {
+		return 0, 0, 0, fmt.Errorf("sinks.webhook: URL is required")
+	}
+	// The bearer is a long-lived, replayable SIEM credential resent on every
+	// POST, so the gate is on the credential, not the scheme: a tokenless
+	// http:// collector still boots (matches the syslog sink over plaintext).
+	if c.BearerToken != "" {
+		u, err := url.Parse(c.URL)
+		if err != nil {
+			// Do NOT echo the raw URL — it may carry user:pass credentials.
+			return 0, 0, 0, fmt.Errorf("sinks.webhook: malformed url (redacted)")
+		}
+		if !strings.EqualFold(u.Scheme, "https") {
+			return 0, 0, 0, fmt.Errorf("sinks.webhook: bearer_token requires an https:// url (scheme %q would send the SIEM credential in cleartext)", u.Scheme)
+		}
+	}
+	interval, err = time.ParseDuration(c.FlushInterval)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("sinks.webhook: invalid flush_interval %q: %w", c.FlushInterval, err)
+	}
+	base, err = time.ParseDuration(c.RetryBaseDelay)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("sinks.webhook: invalid retry_base_delay %q: %w", c.RetryBaseDelay, err)
+	}
+	timeout, err = time.ParseDuration(c.Timeout)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("sinks.webhook: invalid timeout %q: %w", c.Timeout, err)
+	}
+	if timeout <= 0 {
+		return 0, 0, 0, fmt.Errorf("sinks.webhook: timeout %q must be positive (zero would never time out a wedged collector)", c.Timeout)
+	}
+	if timeout > WebhookTimeout {
+		return 0, 0, 0, fmt.Errorf("sinks.webhook: timeout %q exceeds %s, the final flush wardynd's shutdown grace waits for", c.Timeout, WebhookTimeout)
+	}
+	return interval, base, timeout, nil
 }
 
 // Name implements audit.Sink.
@@ -282,24 +315,51 @@ func (w *WebhookSink) deliverWithRetry(ctx context.Context, batch []types.AuditE
 	}
 }
 
+// post is the sink's half of postNDJSON: the error is all deliverWithRetry
+// acts on.
 func (w *WebhookSink) post(ctx context.Context, body []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.cfg.URL, bytes.NewReader(body))
+	_, _, err := postNDJSON(ctx, w.client, w.cfg, body)
+	return err
+}
+
+// postNDJSON POSTs body to cfg's URL with the sink's JSON-lines Content-Type
+// and bearer rule, returning the collector's status and any Retry-After it
+// asked for. A non-2xx status comes back with an error carrying the same text
+// the sink has always logged, so its meaning is unchanged for the best-effort
+// path while the acknowledged loop can read the status off the error.
+//
+// The bearer token and any URL userinfo are sent on the wire and never in an
+// error, so a caller recording the failure cannot leak either.
+func postNDJSON(ctx context.Context, client *http.Client, cfg WebhookConfig, body []byte) (int, time.Duration, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return 0, 0, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-ndjson")
-	if w.cfg.BearerToken != "" {
-		req.Header.Set("Authorization", "Bearer "+w.cfg.BearerToken)
+	if cfg.BearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.BearerToken)
 	}
-	resp, err := w.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("http post: %w", err)
+		return 0, 0, fmt.Errorf("http post: %w", err)
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("http post: unexpected status %d", resp.StatusCode)
+		return resp.StatusCode, parseRetryAfter(resp.Header.Get("Retry-After")),
+			fmt.Errorf("http post: unexpected status %d", resp.StatusCode)
 	}
-	return nil
+	return resp.StatusCode, 0, nil
+}
+
+// parseRetryAfter reads a collector's Retry-After in seconds, the only form
+// Wardyn documents for it; anything else (an HTTP-date, garbage) reads as 0,
+// which backs off on its own schedule instead of guessing.
+func parseRetryAfter(h string) time.Duration {
+	secs, err := strconv.Atoi(h)
+	if err != nil || secs <= 0 {
+		return 0
+	}
+	return time.Duration(secs) * time.Second
 }
 
 // encodeBatch serialises each event as JSON-lines / NDJSON via marshalEvent,
