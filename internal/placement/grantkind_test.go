@@ -166,7 +166,7 @@ func TestLocalEligibilityOwnWithoutNamespaceProofRefusesEvenWhenNotStored(t *tes
 
 func TestLocalEligibilityMountsAndDriveStayBoundToTheRunner(t *testing.T) {
 	mount := func(authored bool) LocalPlan {
-		return LocalPlan{Spec: runner.SandboxSpec{Mounts: []runner.Mount{{Source: "/home/p/src", Target: "/w", MemberAuthored: authored}}}}
+		return LocalPlan{Spec: runner.SandboxSpec{Mounts: []runner.Mount{{Source: "/work/src", Target: "/w", MemberAuthored: authored}}}}
 	}
 	if _, r := LocalEligibility(mount(false)); r == nil || r.Reason != ReasonPlacementCapability {
 		t.Fatalf("operator host mount: %v", r)
