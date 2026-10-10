@@ -4,4 +4,6 @@
 # docs/AUDIT-ACTIONS.md 39656 adds 1 (0.9 C-H): the verb `claim`, for `runner.claim`.
 # docs/AUDIT-ACTIONS.md 39610 adds 85 for the egress baseline: the `governance.egress_baseline.write` row and the propose row's covered-write list (the count after the merge with the SSH lane's rows and another lane's trims).
 # docs/AUDIT-ACTIONS.md 39611 measured after the B-P1 merge (B-P1 egress baseline rows, the SSH rows and the C-H verb).
-docs/AUDIT-ACTIONS.md=39611 share=8
+# docs/AUDIT-ACTIONS.md 39761 adds 106 over 39655 (0.9 G-sec-2, #1818): 104 (the `identity.unbind` row), 2 (the `unbind` verb in the Grammar list).
+# docs/AUDIT-ACTIONS.md 39770: Measured after combining baseline, SSH, claim and the reviewed unbind row/verb.
+docs/AUDIT-ACTIONS.md=39770 share=8

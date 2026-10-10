@@ -620,6 +620,9 @@ func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.
 	defer func() { _ = tx.Rollback(ctx) }()
 	var profileID *uuid.UUID
 	if notify.Enabled() {
+		if _, err := tx.Exec(ctx, notify.BudgetLockSQL, a.RunID.String()); err != nil {
+			return types.ApprovalRequest{}, fmt.Errorf("store: lock the run's notification budget: %w", err)
+		}
 		// Read in the approval's own transaction, so a concurrent profile change cannot route it by stale data.
 		if err := tx.QueryRow(ctx, notify.ProfileSQL, a.RunID).Scan(&profileID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return types.ApprovalRequest{}, fmt.Errorf("store: read run profile: %w", err)

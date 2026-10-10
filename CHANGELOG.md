@@ -10,6 +10,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- Migration `0140_audit_legacy_manifest` records the expected legacy audit partition, so verify detects
+  its removal even when it held only hashless rows (#1809).
 - Migration `0139_runner_delivery` adds the `runners` and `runner_pending_actions` tables, the
   `credential_delivery_policy` document and `credential_grants.delivery`, for 0.9 client mode and
   credential delivery; grant the app role `SELECT, INSERT, UPDATE, DELETE` on the two new tables. Nothing
@@ -34,6 +36,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- Super admins can unbind an Entra identity after app re-registration with
+  `POST /api/v1/admin/identities/{id}/unbind`. It refuses while the old principal has live tokens, SSH keys
+  or runs, cuts its sessions and records `identity.unbind` (#1818).
 - Policy preview and preflight return per-entry provenance: the source that added, clamped or narrowed
   each resolved policy value. Saved-policy values removed by a ceiling remain hidden.
 
@@ -79,6 +84,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- Paused-run resumes hold the run lock; concurrent notification raises share the run
+  budget; revived runs reapply stored Git PAT restrictions (#1819, #1812, #1825).
+- SMTP channels without recipients or route targets refuse boot. Key rotation and rewrapping
+  report an unmigrated database, and legacy audit splitting works immediately after migration (#1825).
 - The runs search field preserves characters typed quickly and follows browser history changes.
 - Audit rows that waited under a pending subject key reach the SIEM sinks once the spool drain re-seals
   and stores them, so the sink chain has no gap (#1821).

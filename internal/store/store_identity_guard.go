@@ -46,8 +46,7 @@ func identityGuardFrom(ctx context.Context) (IdentityGuard, bool) {
 }
 
 // checkIdentityGuard locks every identity row bound to g.Principal FOR SHARE and refuses when one
-// is deactivated, purged, or past g.Epoch. A principal with no row passes: only a sign-in or a
-// SCIM suspension writes one.
+// is deactivated, purged, past g.Epoch, or revoked after this transaction began.
 func checkIdentityGuard(ctx context.Context, tx pgx.Tx, g IdentityGuard) error {
 	rows, err := tx.Query(ctx, `
 		SELECT deactivated_at IS NOT NULL OR purged_at IS NOT NULL, authority_epoch
@@ -69,6 +68,16 @@ func checkIdentityGuard(ctx context.Context, tx pgx.Tx, g IdentityGuard) error {
 		return fmt.Errorf("store: identity guard: %w", err)
 	}
 	if refused {
+		return ErrIdentityDeactivated
+	}
+	// An unbind releases the principal while this guard waits for its row lock.
+	// The row no longer matches, so its revocation cutoff must refuse the queued write.
+	var cut bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM oidc_session_revocations
+		WHERE sub = $1 AND revoked_at > transaction_timestamp())`, g.Principal).Scan(&cut); err != nil {
+		return fmt.Errorf("store: identity guard: %w", err)
+	}
+	if cut {
 		return ErrIdentityDeactivated
 	}
 	return nil

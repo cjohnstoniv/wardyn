@@ -281,12 +281,15 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
 
 ## This repository's own CI
 
-Everything above is about running Wardyn in *your* pipeline. This section is the budget for Wardyn's own [`ci.yml`](../.github/workflows/ci.yml), which runs on every pull request and every push to `main`. What it runs short of is runner slots, not the length of any one run: with many pull requests open, a run waits in the queue far longer than it executes. So the budget is counted in checks and runner-minutes as well as minutes.
+Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request and push to `main`. Runner slots constrain throughput: with many open pull requests, queueing takes longer than execution. This section therefore measures check counts, runner-minutes and elapsed time.
 
 - `pull_request:` carries no `branches:` filter — that field matches the PR's *base*, and the 0.8 working practice stacks lanes on `<kind>/<issue#>-<slug>` branches (#90), not on `main`, so a filtered trigger gave a stacked PR no checks at all.
 - `push:` stays narrow to `main`, `master` and `feature/**`, since every other commit already gets a run from its own PR.
 - It has no `release/**`: `release.yml` accepts CI by tree (#1461), and [`release-branch-checks.yml`](../.github/workflows/release-branch-checks.yml) runs only DCO and gitleaks there (#1466).
 - The push-gate DCO exemption for GitHub-made merges needs gpg and GitHub's web-flow key id `B5690EEEBB952194`; if GitHub rotates that key, update the id in the Makefile's `dco` recipe.
+
+Image-script tests set `WARDYN_MITM_CA_DIR` to a private temporary directory to isolate generated CA files.
+The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 
 **Before and after #211**, measured from the GitHub Actions API:
 

@@ -665,6 +665,44 @@ func TestReviveRun_AgentStatusProbeErrorRefuses(t *testing.T) {
 	}
 }
 
+// TestRevive_RescopesAStoredAllowlistFromItsGrantRow: a run dispatched under 0.8.5 stored its git_pat
+// allowlist without the narrowing, which that release ignored on the grant row. The revived proxy carries
+// the row's repos and access as dispatch would, and a grant whose row is gone revives as stored.
+func TestRevive_RescopesAStoredAllowlistFromItsGrantRow(t *testing.T) {
+	t.Run("the row's narrowing reaches the new proxy", func(t *testing.T) {
+		f := newReviveFixture(t)
+		cfg, err := proxy.LoadConfigBytes(f.rs.cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		g := cfg.PATGrants["git.example"]
+		if g.Access != "" || g.Repos != nil {
+			t.Fatalf("fixture: the stored allowlist is already narrowed: %+v", g)
+		}
+		row := patGrantRow(g.GrantID, f.run.ID, "git.example")
+		row.Spec.Scope = mustJSON(types.GitPATScope{Host: "git.example", SecretName: "pat-git.example",
+			Repos: types.PATRepoSet("team/app"), Access: types.PATAccessRead})
+		f.rs.credGrants = []types.CredentialGrant{row}
+		if code := f.revive(t); code != http.StatusOK {
+			t.Fatalf("revive = %d, want 200", code)
+		}
+		got := f.newConfig(t).PATGrants["git.example"]
+		if got.Access != types.PATAccessRead || got.Repos == nil || !slices.Equal(*got.Repos, []string{"team/app"}) {
+			t.Fatalf("the revived allowlist = %+v, want the row's repos and read access", got)
+		}
+	})
+	t.Run("a grant whose row is gone revives as stored", func(t *testing.T) {
+		f := newReviveFixture(t)
+		f.rs.credGrants = []types.CredentialGrant{patGrantRow(uuid.New(), f.run.ID, "git.example")}
+		if code := f.revive(t); code != http.StatusOK {
+			t.Fatalf("revive = %d, want 200", code)
+		}
+		if got := f.newConfig(t).PATGrants["git.example"]; got.Access != "" || got.Repos != nil {
+			t.Fatalf("the revived allowlist = %+v, want it as stored", got)
+		}
+	})
+}
+
 // TestRevive_NarrowedPATRefusedWhenBrokerOff: a revive re-asks dispatch's
 // narrowing refusals. A run whose git_pat grant is narrowed, revived after the
 // PAT broker was turned off, would keep the narrowed lane and lose the raw-mint

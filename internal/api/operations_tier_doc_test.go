@@ -186,6 +186,7 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/admin/sandboxes/sweep", "`POST /admin/sandboxes/sweep`"},
 	{"GET /api/v1/admin/runs/proxy-window", "`GET /admin/runs/proxy-window` and `POST /admin/runs/restart`"},
 	{"POST /api/v1/admin/runs/restart", "`GET /admin/runs/proxy-window` and `POST /admin/runs/restart`"},
+	{"POST /api/v1/admin/identities/{id}/unbind", "`POST /admin/identities/{id}/unbind`"},
 	{"POST /api/v1/setup/onboarding-complete", "`POST /setup/onboarding-complete`"},
 	{"GET /api/v1/runs/{id}/attach", "`GET /runs/{id}/attach`"},
 	// Hybrid enrolment (0.8): the mint is SUPER, the inventory and revoke are

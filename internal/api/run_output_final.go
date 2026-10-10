@@ -485,6 +485,9 @@ func (s *Server) fenceRunOutput(runID uuid.UUID) {
 	e.fmu.Lock()
 	e.fenced = true
 	e.fmu.Unlock()
+	// The chunk queue holds masked bytes of its own, retried while the database is down: stop it
+	// before the ring is zeroed, or the erased bytes outlive the erasure until a write reaches the tombstone.
+	e.dropChunks()
 	e.mw.mu.Lock()
 	clear(e.ring.buf[:cap(e.ring.buf)])
 	clear(e.mw.tail)

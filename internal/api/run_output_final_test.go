@@ -795,3 +795,33 @@ func TestEraseRunOutputs_FinaliserTouchFencesTheTail(t *testing.T) {
 		t.Fatal("a fenced writer must still accept writes")
 	}
 }
+
+// An erasure fence drops the tail's queued chunk bytes too, not only the ring: the queue retries
+// them while the database is unreachable, so they would outlive the erasure in memory.
+func TestFenceRunOutput_DropsTheQueuedChunks(t *testing.T) {
+	f := newOutputFixture(t)
+	f.open(t)
+	f.srv.execOutputs.mu.Lock()
+	tail := f.srv.execOutputs.m[f.run.ID]
+	f.srv.execOutputs.mu.Unlock()
+	q := &chunkQueue{s: f.srv, run: f.run.ID}
+	tail.mw.mu.Lock()
+	tail.sink.q = q
+	tail.mw.mu.Unlock()
+	q.add([]byte("masked bytes the database has not taken"))
+	q.mu.Lock()
+	held := q.pend
+	q.mu.Unlock()
+
+	f.srv.fenceRunOutput(f.run.ID)
+
+	if strings.Trim(string(held), "\x00") != "" {
+		t.Errorf("the queued bytes were dropped but not zeroed: %q", held)
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.pend) != 0 || !q.stopped {
+		t.Fatalf("after the fence the chunk queue holds %d byte(s), stopped=%v; want it emptied and stopped", len(q.pend), q.stopped)
+	}
+}

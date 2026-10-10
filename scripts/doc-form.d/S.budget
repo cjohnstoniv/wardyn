@@ -1,4 +1,6 @@
 # Prose must not grow beyond the base count (11806) plus cell-expansion summaries: R0030 (the `changes` cell of the run-policy view table) leaves a 25-word summary in the cell and moves in full to the "#### `changes`" subsection (heading counts 0, summary 25 words).
 # docs/sdk.md 12203 adds 372 over 11831: 7 (the export comment no longer says ready for PolicyRequest.Spec), 116 (Reusing the spec), 15 (the preview names `components`), 225 (the Custom components section), 19 (the CLI mirrors all but `origin` and `action`); the diff tool sums 382, the gate 372 (link text).
 # docs/sdk.md 12242 adds 39 over 12203 for the egress baseline: three wire reasons and the covered write.
-docs/sdk.md=12242 share=21
+# 0.9 G-sec-2: docs/sdk.md 12285 adds 82 over 12203 for four `/admin/identities/{id}/unbind` reasons (#1818): identity_not_found ~14, identity_not_bound ~25, identity_not_rebindable ~20, identity_principal_in_use ~23.
+# docs/sdk.md 12324: Measured after combining baseline reasons and four identity-unbind reasons.
+docs/sdk.md=12324 share=21

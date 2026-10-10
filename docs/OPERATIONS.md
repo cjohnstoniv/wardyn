@@ -1167,7 +1167,10 @@ wardyn audit retention                                              # the legacy
     largest `time` it holds, which is what its retention eligibility reads.
   - `row_hash` does not cover `recorded_at`, so no hash changes.
   - The ranges are named `audit_events_legacy_<YYYYMM>` and written to the expected partition manifest, with one
-    `kind='split'` anchor each (its row count, `seq` range and digest).
+    `kind='split'` anchor each (its row count, `seq` range and digest). They replace the manifest's `audit_events_legacy`
+    entry, which migration `0140_audit_legacy_manifest` seeds unless an anchor attests its split or drop, so that
+    verify reports the partition missing if it is ever removed without an attested drop, even when it held only
+    pre-chain rows; an attested drop of the whole partition removes the entry.
 
 - **What it proves before it commits.**
   - For every range, the digest `audit_partition_digest` computes over the copy equals the fold over the source rows,
@@ -1525,6 +1528,7 @@ and, with `hmac_secret` set, `X-Wardyn-Signature`. Only these fields are ever se
   - With no recipient left the row is dead as `no_recipient` and the relay is not contacted.
   - The `password` has the same custody as a SIEM bearer token: keep the value in `WARDYN_APPROVAL_NOTIFY_FILE`.
   - Boot refuses a CR or LF in any smtp field and an address that is not a bare mailbox.
+  - Boot refuses an smtp channel with no `to` unless a route tier that lists it names a notify target: without one every row for it would end dead as `no_recipient`.
 
 **Verifying the signature.** `X-Wardyn-Signature: t=<unix seconds>,v1=<hex>`, where `v1` is the
 HMAC-SHA256 of `<t>.<body>` (the timestamp, a dot, the exact bytes received) keyed with `hmac_secret`.
@@ -1735,6 +1739,7 @@ A signed-in human who matches nothing in a valid map, with no default role set, 
 | `PUT`/`DELETE /integrations/{id}` — editing or removing one integration credential reference outside a full whole-site-config replace | ⛔ admin only |
 | `POST /admin/sandboxes/sweep` — force-reaping sandboxes across every workspace, not just the caller's own | ⛔ admin only |
 | `GET /admin/runs/proxy-window` and `POST /admin/runs/restart` — listing the runs whose proxy was started by a release older than wardynd N−1, and giving named runs a new proxy on the current release under each OWNER's current profile denies ("Restart with current limits"). Proxy-only: a run lost to a reboot is reported, never started; its owner revives it. Not the security tier: a restart replaces proxies on runs the caller does not own. The runs are restarted one at a time, each audited as `run.revive`, so when a response is cut off part-way those rows say which were. On Kubernetes every run is refused, nothing changed, with `reason` `revive_unsupported` (`runner.ErrReviveUnsupported`): stop it and start a new run | ⛔ admin only |
+| `POST /admin/identities/{id}/unbind` — clearing the principal an identity row is bound to, so the person's next sign-in binds it afresh: the remedy after an Entra app re-registration (see "After replacing the app registration"). It decides who a sign-in becomes, so it is not the security tier's. Refused (`409`) for a deactivated or purged identity | ⛔ admin only |
 | `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the model-provider rows below | ⛔ admin only |
 | `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
@@ -3165,6 +3170,19 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
   - Setting up an Entra person by email alone is not supported.
   - On an Entra issuer the plain form refuses a `principal` in the `entra:` namespace (`422`, `person_principal_reserved`), since no sign-in can become it.
   - On any other issuer the object-id form is refused `422`, and sign-in keys people by `sub` exactly as before.
+- **After replacing the app registration (Entra ID).**
+  - A new app registration gives every person a new pairwise `sub`.
+  - Everyone whose identity row is bound to a `sub` is then refused at sign-in (the log names both principals).
+  - People keyed by object id (`entra:<tenant id>:<object id>`) are unaffected.
+  - Adding the person on People by object id does not help: the row stays bound to the old `sub`.
+  - Unbind the row so the next sign-in binds it to the new `sub`: `POST /api/v1/admin/identities/{id}/unbind` (admin only; no body).
+  - Find the id with `SELECT id, principal, email_lower FROM principal_identities WHERE issuer = '<issuer>' AND object_id <> '' AND principal NOT LIKE 'entra:%' AND deactivated_at IS NULL;`.
+  - Only a row keyed by tenant and object id can be unbound (`409`, `identity_not_rebindable`, otherwise); any other is found by its principal alone and would be orphaned.
+  - A deactivated or purged identity is refused too (`409`, `identity_deactivated`).
+  - The unbind clears only the row's principal. It keeps `authority_epoch`, `deactivated_at` and the SCIM linkage, and it cuts the released `sub`'s sessions.
+  - **The old `sub` must hold nothing first.** After the re-bind a suspension reaches only the new `sub`, so the unbind is refused (`409`, `identity_principal_in_use`, with the counts) while the old `sub` still holds an API token, an SSH key or a run that has not ended. Revoke or end them, then unbind.
+  - Its stored credentials, workspaces and drive stay under the old principal, which the person no longer signs in as: expect to re-create them.
+  - It writes an `identity.unbind` audit row naming the principal it released and the admin who did it. The next sign-in's bind is not audited; it shows as the identity's new principal on People.
 - `POST /people` answers `409` rather than create an ambiguous identity.
   - That happens when the email already names another known subject, when the subject is already known under a different email, when the subject differs from a known one only by case, or when the subject is another person's email.
   - It answers `422` for the reserved subjects `admin-token`, the local-mode operator, `local:…`, `device:…`, `delegate:…` and `subject:…`, in any case — the same set a sign-in is refused for (see "Some subjects never sign in").

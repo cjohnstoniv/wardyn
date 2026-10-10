@@ -152,3 +152,30 @@ func TestParse_SMTPRefusals(t *testing.T) {
 		}
 	}
 }
+
+// TestParse_SMTPChannelWithNoToNeedsARouteThatNotifiesATarget: an smtp channel with no static `to` has
+// recipients only through a route tier's notify targets. Without one every row would end dead
+// no_recipient, one failure audit row per approval, so the boot config is refused instead.
+func TestParse_SMTPChannelWithNoToNeedsARouteThatNotifiesATarget(t *testing.T) {
+	chans := `"channels":[{"id":"mail","type":"smtp","host":"smtp.example.com","port":587,"from":"w@example.com"}]`
+	route := func(tier string) string {
+		return `,"routes":[{"kinds":["tool_call"],"tiers":[` + tier + `]}]`
+	}
+	for name, c := range map[string]struct {
+		cfg string
+		ok  bool
+	}{
+		"no routes":                      {`{` + chans + `}`, false},
+		"a tier with no notify":          {`{` + chans + route(`{"after":"0s","channels":["mail"]}`) + `}`, false},
+		"notify on another channel":      {`{"channels":[{"id":"hook","type":"webhook","url":"https://h.example.com/x"},{"id":"mail","type":"smtp","host":"smtp.example.com","port":587,"from":"w@example.com"}]` + route(`{"after":"0s","channels":["hook"],"notify":["run_owner"]}`) + `}`, false},
+		"a tier that notifies the owner": {`{` + chans + route(`{"after":"0s","channels":["mail"],"notify":["run_owner"]}`) + `}`, true},
+	} {
+		_, err := Parse(c.cfg)
+		switch {
+		case c.ok && err != nil:
+			t.Errorf("%s: refused: %v", name, err)
+		case !c.ok && (err == nil || !strings.Contains(err.Error(), `"mail"`)):
+			t.Errorf("%s: err = %v, want a refusal naming the channel", name, err)
+		}
+	}
+}
