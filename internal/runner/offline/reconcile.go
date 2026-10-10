@@ -82,11 +82,17 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	if r.ContainmentOnly && !missingIdentityAction(a) {
 		return runnerwire.ActionResult{}, errors.New("containment-only identity refuses this action")
 	}
+	if a.Kind == types.RunnerActionRecoverContainment {
+		return m.recoverContainment(a, r)
+	}
 	if a.Kind == types.RunnerActionRecoverMutation {
 		return m.recoverMutation(a, r)
 	}
 	if a.Recovery != nil {
 		return runnerwire.ActionResult{}, errors.New("unexpected mutation recovery proof")
+	}
+	if err := m.beginContainment(a, r); err != nil {
+		return runnerwire.ActionResult{}, err
 	}
 	m.mu.Unlock()
 	var err error
@@ -113,8 +119,15 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	r = m.state.Runs[a.RunID]
 	at := m.now().UTC()
 	r.ProxyStoppedAt = &at
+	outcome := "deferred"
+	if m.mutationsDrained(a.RunID) && r.Containment.Operation == string(a.Kind) {
+		outcome = "success"
+		marker := *r.Containment
+		marker.Contained = true
+		r.Containment = &marker
+	}
 	m.state.Runs[a.RunID] = r
-	result := runnerwire.ActionResult{ID: a.ID, Outcome: "success", ObservedAt: at}
+	result := runnerwire.ActionResult{ID: a.ID, Outcome: outcome, ObservedAt: at}
 	m.state.Actions[a.ID] = appliedAction{Action: a, Result: result}
 	if err := m.save(); err != nil {
 		return runnerwire.ActionResult{}, err
@@ -167,7 +180,7 @@ func (m *Manager) stateRows(ctx context.Context, ids []uuid.UUID) ([]runnerwire.
 			return nil, err
 		}
 		r := m.state.Runs[id]
-		row := runnerwire.RunState{RunID: id, ContainmentOnly: r.ContainmentOnly, MutationFailure: r.MutationFailure, ProxyStoppedAt: r.ProxyStoppedAt, Execution: durableExecutionResult(r)}
+		row := runnerwire.RunState{RunID: id, Containment: r.Containment, ContainmentOnly: r.ContainmentOnly, MutationFailure: r.MutationFailure, ProxyStoppedAt: r.ProxyStoppedAt, Execution: durableExecutionResult(r)}
 		m.mu.Unlock()
 		if r.Ref != "" {
 			st, err := m.sub.Status(ctx, r.Ref)

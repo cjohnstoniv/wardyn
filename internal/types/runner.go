@@ -61,11 +61,12 @@ type Runner struct {
 type RunnerActionKind string
 
 const (
-	RunnerActionKill            RunnerActionKind = "kill"
-	RunnerActionEnd             RunnerActionKind = "end"
-	RunnerActionStopProxy       RunnerActionKind = "stop_proxy"
-	RunnerActionRecoverMutation RunnerActionKind = "recover_mutation"
-	RunnerActionQuarantine      RunnerActionKind = "quarantine_run"
+	RunnerActionKill               RunnerActionKind = "kill"
+	RunnerActionEnd                RunnerActionKind = "end"
+	RunnerActionStopProxy          RunnerActionKind = "stop_proxy"
+	RunnerActionRecoverMutation    RunnerActionKind = "recover_mutation"
+	RunnerActionQuarantine         RunnerActionKind = "quarantine_run"
+	RunnerActionRecoverContainment RunnerActionKind = "recover_containment"
 )
 
 // RunnerQuarantine identifies an org-authorized isolation disposition, not an

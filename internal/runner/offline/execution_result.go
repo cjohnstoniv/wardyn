@@ -37,5 +37,5 @@ func durableExecutionResult(r localRun) *runnerwire.ExecutionResult {
 	if r.Generation == uuid.Nil || r.Executions[r.Generation] == "" {
 		return nil
 	}
-	return &runnerwire.ExecutionResult{Generation: r.Generation, Operation: r.Executions[r.Generation], ExecID: r.ExecID, Attempted: true, MutationFailure: r.MutationFailure}
+	return &runnerwire.ExecutionResult{Generation: r.Generation, Operation: r.Executions[r.Generation], ExecID: r.ExecID, Attempted: true, MutationFailure: r.MutationFailure, Containment: r.Containment}
 }

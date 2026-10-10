@@ -167,6 +167,7 @@ type ExecutionResultArgs struct {
 
 // ExecutionResult reports durable local state; it never starts or retries work.
 type ExecutionResult struct {
+	Containment     *types.RunnerMutationFailure `json:"containment,omitempty"`
 	MutationFailure *types.RunnerMutationFailure `json:"mutation_failure,omitempty"`
 	Generation      uuid.UUID                    `json:"generation"`
 	Operation       string                       `json:"operation"`

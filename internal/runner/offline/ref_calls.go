@@ -48,7 +48,7 @@ func (m *Manager) BeforeRefCall(ctx context.Context, method, ref string, generat
 	}
 	switch method {
 	case runnerwire.MethodExec, runnerwire.MethodStart, runnerwire.MethodReplaceProxy:
-		if !m.online || m.state.Revoked || r.FailedCreation || r.ContainmentOnly || r.Quarantine != nil || r.MutationFailure != nil || m.expired(id) {
+		if !m.online || m.state.Revoked || r.FailedCreation || r.ContainmentOnly || r.Quarantine != nil || r.Containment != nil || r.MutationFailure != nil || m.expired(id) {
 			return runner.ErrRunnerOffline
 		}
 	}
@@ -116,7 +116,7 @@ func (m *Manager) AfterRefCall(ctx context.Context, method, ref, execID string, 
 			err = m.save()
 		}
 	}
-	if err == nil && (method == runnerwire.MethodStart || method == runnerwire.MethodReplaceProxy || method == runnerwire.MethodExec) && (!m.online || m.state.Revoked || r.FailedCreation || r.Quarantine != nil || r.MutationFailure != nil || m.expired(id)) {
+	if err == nil && (method == runnerwire.MethodStart || method == runnerwire.MethodReplaceProxy || method == runnerwire.MethodExec) && (!m.online || m.state.Revoked || r.FailedCreation || r.Quarantine != nil || r.Containment != nil || r.MutationFailure != nil || m.expired(id)) {
 		err = runner.ErrRunnerOffline
 	}
 	if err != nil && ok {

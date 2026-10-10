@@ -206,7 +206,7 @@ func (m *Manager) Lease(ctx context.Context, l runnerwire.Lease) error {
 	if l.RunID == uuid.Nil {
 		return errors.New("runner lease lacks run identity")
 	}
-	if r := m.state.Runs[l.RunID]; r.ContainmentOnly || r.Quarantine != nil {
+	if r := m.state.Runs[l.RunID]; r.ContainmentOnly || r.Quarantine != nil || r.Containment != nil || (!r.LeaseAfter.IsZero() && !l.TokenRenewedAt.After(r.LeaseAfter)) {
 		return errors.New("containment-only identity cannot receive a lease")
 	}
 	tokenLeft, err := m.clock.TokenRemaining(l.TokenRenewedAt)
@@ -294,7 +294,7 @@ func (m *Manager) Created(ctx context.Context, spec runner.SandboxSpec, localRef
 		return err
 	}
 	r, ok := m.state.Runs[spec.RunID]
-	if !ok || localRef == "" || r.FailedCreation || r.ContainmentOnly || r.Quarantine != nil || (r.Ref != "" && r.Ref != localRef) {
+	if !ok || localRef == "" || r.FailedCreation || r.ContainmentOnly || r.Quarantine != nil || r.Containment != nil || (r.Ref != "" && r.Ref != localRef) {
 		return errors.New("runner creation has no matching durable intent")
 	}
 	r.Ref = localRef
@@ -322,7 +322,7 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 	for _, id := range ids {
 		m.mu.Lock()
 		r := m.state.Runs[id]
-		expired := m.state.Revoked || r.FailedCreation || (r.Quarantine != nil && r.ProxyStoppedAt == nil) || (r.MutationFailure != nil && !r.MutationFailure.Contained) || m.expired(id)
+		expired := m.state.Revoked || r.FailedCreation || (r.Containment != nil && !r.Containment.Contained) || (r.Quarantine != nil && r.ProxyStoppedAt == nil) || (r.MutationFailure != nil && !r.MutationFailure.Contained) || m.expired(id)
 		m.mu.Unlock()
 		if r.Ref == "" || !expired {
 			continue

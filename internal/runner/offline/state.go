@@ -17,6 +17,8 @@ import (
 )
 
 type localRun struct {
+	Containment     *types.RunnerMutationFailure `json:"containment,omitempty"`
+	LeaseAfter      time.Time                    `json:"lease_after,omitempty"`
 	Quarantine      *types.RunnerQuarantine      `json:"quarantine,omitempty"`
 	ContainmentOnly bool                         `json:"containment_only,omitempty"`
 	Generation      uuid.UUID                    `json:"generation,omitempty"`

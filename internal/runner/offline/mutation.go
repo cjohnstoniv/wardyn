@@ -62,8 +62,8 @@ func (m *Manager) MutationFinished(ctx context.Context, method, ref string, runI
 	var err error
 	id, r, known := m.findRef(ref)
 	var late error
-	if known && r.Quarantine != nil {
-		late = errors.New("mutation completed after run quarantine")
+	if known && (r.Quarantine != nil || r.Containment != nil) {
+		late = errors.New("mutation completed after run containment disposition")
 		cause = errors.Join(cause, late)
 	}
 	if cause != nil && known {
