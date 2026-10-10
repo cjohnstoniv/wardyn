@@ -57,7 +57,7 @@ func (wa *webAttach) fail(err error, promotion bool) {
 
 func (wa *webAttach) audit(outcome string, data map[string]any) {
 	id := wa.run.ID
-	wa.s.recordAudit(wa.finishCtx, wa.s.auditEvent(&id, wa.principalType, wa.principal, "session.attach",
+	wa.s.recordStreamAudit(wa.finishCtx, wa.run.SandboxRef, wa.s.auditEvent(&id, wa.principalType, wa.principal, "session.attach",
 		id.String(), outcome, mustJSON(data)))
 }
 

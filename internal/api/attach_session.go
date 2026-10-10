@@ -155,7 +155,7 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 			outcome = "failure"
 			data["error"] = err.Error()
 		}
-		s.recordAudit(ctx, s.auditEvent(&runID, principalType, principal, "session.recording.write",
+		s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&runID, principalType, principal, "session.recording.write",
 			key, outcome, mustJSON(data)))
 	}
 

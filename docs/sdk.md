@@ -446,13 +446,12 @@ start.
     refusal (its two Hidden-effect reasons are never themselves a wire value — see
     the authz section below).
 
-`TestReasonDocsMatchReasonsGo` checks both sources
-against this whole table, so a value missing here is a red build, not a
-silent gap:
+`TestReasonDocsMatchReasonsGo` requires this table to match both sources:
 
 | Reason | Meaning |
 |---|---|
 | `runners_disabled` / `runners_config_unavailable` | Runner routes require enabled, readable site configuration. |
+| `runner_stream_unavailable` / `runner_stream_rate_limited` | Runner stream URL/store unavailable, or peer connection rate exceeded. |
 | `runner_registration_unavailable` | Runner registration requires a configured public org URL and registration store. |
 | `runner_registration_rate_limited` | Too many registration attempts; retry later. |
 | `runner_registration_invalid` / `runner_owner_invalid` | Registration fields or token owner are invalid. |

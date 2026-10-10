@@ -27,9 +27,9 @@ func TestServeValidatesIdentityBeforeDependencies(t *testing.T) {
 		t.Fatal(err)
 	}
 	called := false
-	cmd := newServeCommand(func(context.Context, runneridentity.Identity, string) (runnerwire.RunnerHooks, error) {
+	cmd := newServeCommand(func(context.Context, runneridentity.Identity, string, serveOptions) (runnerRuntime, error) {
 		called = true
-		return runnerwire.RunnerHooks{}, nil
+		return runnerRuntime{}, nil
 	})
 	cmd.SetArgs([]string{"--org", "https://other.example", "--state-dir", stateDir})
 	if err := cmd.Execute(); err == nil || called {
@@ -38,7 +38,20 @@ func TestServeValidatesIdentityBeforeDependencies(t *testing.T) {
 }
 
 func TestServeMissingProductionHooksRefuses(t *testing.T) {
-	if _, err := productionRunnerHooks(context.Background(), runneridentity.Identity{}, t.TempDir()); err == nil {
+	if _, err := productionRunnerHooks(context.Background(), runneridentity.Identity{}, t.TempDir(), serveOptions{}); err == nil {
 		t.Fatal("missing durable handlers accepted")
+	}
+}
+
+func TestServeRecordingModeMatchesCapture(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		on   bool
+		bad  bool
+	}{{"pg", true, false}, {"fs", true, false}, {"off", false, false}, {"unknown", false, true}} {
+		got, err := (serveOptions{recording: tc.mode}).recordingEnabled()
+		if got != tc.on || (err != nil) != tc.bad {
+			t.Fatalf("mode=%s enabled=%v error=%v", tc.mode, got, err)
+		}
 	}
 }

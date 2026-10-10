@@ -422,7 +422,9 @@ func TestDevices_DeviceTokenRefusedOnEveryHumanRoute(t *testing.T) {
 	}
 	swept := 0
 	for key, rc := range routeMatrix {
-		if rc.class == classAnonymous || rc.class == classDevice {
+		// Runner streams require their signed nonce, independently of bearer
+		// headers; TestRunnerStreamBearerCannotReplaceSignature pins that door.
+		if rc.class == classAnonymous || rc.class == classDevice || rc.class == classRunnerStream {
 			continue
 		}
 		method, pattern, _ := strings.Cut(key, " ")

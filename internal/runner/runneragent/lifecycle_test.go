@@ -19,11 +19,12 @@ import (
 
 type failedCreate struct{ *runnertest.Fake }
 
-func (failedCreate) CreateSandbox(context.Context, runner.SandboxSpec) (runner.Sandbox, error) {
-	return runner.Sandbox{}, errors.New("new sandbox could not be provisioned")
+func (f failedCreate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	_, _ = f.Fake.CreateSandbox(ctx, spec)
+	return runner.Sandbox{}, errors.New("create response lost and cleanup unconfirmed")
 }
 
-func TestDispatcherForgetsOnlyDurablyNewFailedOutput(t *testing.T) {
+func TestDispatcherRetainsOutputForAmbiguousCreateAndRefusesRetry(t *testing.T) {
 	for _, existing := range []bool{false, true} {
 		id, run := uuid.NewString(), uuid.New()
 		intent, outputs, forgotten := existing, 0, 0
@@ -66,7 +67,7 @@ func TestDispatcherForgetsOnlyDurablyNewFailedOutput(t *testing.T) {
 		if existing {
 			want = 0
 		}
-		if outputs != want || forgotten != want {
+		if outputs != want || forgotten != 0 {
 			t.Fatalf("existing=%v outputs=%d forgotten=%d", existing, outputs, forgotten)
 		}
 	}

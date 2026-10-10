@@ -4,4 +4,5 @@
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # docs/sdk.md 12203 adds 372 over 11831 (12273 with the four New Run request-contract reason rows, +70): 7 (the export comment no longer says ready for PolicyRequest.Spec), 116 (Reusing the spec), 15 (the preview names `components`), 225 (the Custom components section), 19 (the CLI mirrors all but `origin` and `action`); the diff tool sums 382, the gate 372 (link text).
 # Combined request-contract and runner refusal rows: 12273 + 75 measured words.
-docs/sdk.md=12348 share=21
+# Combined runner transport, registration and request-contract text measures 12341 after shared setup wording was tightened.
+docs/sdk.md=12341 share=21
