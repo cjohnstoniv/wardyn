@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/google/uuid"
 	"golang.org/x/sys/unix"
 )
 
@@ -60,6 +62,18 @@ func TestSealRequiresDrainedWriterAndExactReceipt(t *testing.T) {
 	accepted, err = s.Receipt(ctx)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, change := range []func(*types.RunnerSpoolReceipt){
+		func(p *types.RunnerSpoolReceipt) { p.SpoolID = uuid.New() },
+		func(p *types.RunnerSpoolReceipt) { p.Seq++ },
+		func(p *types.RunnerSpoolReceipt) { p.Hash = "foreign" },
+		func(p *types.RunnerSpoolReceipt) { p.ReportedDrops++ },
+	} {
+		bad := accepted
+		change(&bad)
+		if sealed, err := s.Seal(ctx, bad); err != nil || sealed {
+			t.Fatal("different settled receipt sealed")
+		}
 	}
 	if sealed, err := s.Seal(ctx, accepted); err != nil || !sealed {
 		t.Fatalf("settled seal: %v %v", sealed, err)

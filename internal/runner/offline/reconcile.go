@@ -57,22 +57,11 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 			return old.Result, m.save()
 		}
 	}
-	if a.ID == uuid.Nil {
-		return runnerwire.ActionResult{}, errors.New("pending action has no identity")
+	r, err := m.pendingRun(a)
+	if err != nil {
+		return runnerwire.ActionResult{}, err
 	}
-	r, ok := m.state.Runs[a.RunID]
-	local, belongs := strings.CutPrefix(a.Ref, placement.RunnerRefPrefix(m.runnerID.String()))
-	if !ok && belongs && local != "" && local == m.expectedRef(a.RunID) {
-		var err error
-		r, err = m.containmentIdentity(a, local)
-		if err != nil {
-			return runnerwire.ActionResult{}, err
-		}
-		ok = true
-	}
-	if !ok || !belongs || local == "" || r.Ref != local {
-		return runnerwire.ActionResult{}, errors.New("pending action does not match a local run")
-	}
+	local := r.Ref
 	if a.Kind == types.RunnerActionRetire {
 		return m.retireRun(ctx, a, r)
 	}
@@ -101,7 +90,7 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 		return runnerwire.ActionResult{}, err
 	}
 	m.mu.Unlock()
-	var err error
+	err = nil
 	switch a.Kind {
 	case types.RunnerActionKill:
 		err = m.sub.KillSandbox(ctx, local)
