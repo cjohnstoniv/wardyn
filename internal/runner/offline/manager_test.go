@@ -310,17 +310,44 @@ func TestFailedCreateContainsImmediatelyAndRetriesWhileLeaseLive(t *testing.T) {
 	if sub.stops != 1 || sub.kills != 0 {
 		t.Fatal("ambiguous failure not contained immediately")
 	}
-	sub.stopErr = nil
-	if err := m.CheckLapses(ctx); err != nil {
+
+	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if sub.stops != 2 || sub.kills != 0 {
-		t.Fatal("failed intent was not retried")
+	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := m.Created(ctx, spec, id.String()); err == nil {
+	defer restarted.Close()
+	if !restarted.state.Runs[id].FailedCreation {
+		t.Fatal("failed intent latch lost on restart")
+	}
+	if err := restarted.Clock(runnerwire.Hello{ServerTime: org}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.BeforeReady(ctx, &runnerwire.Peer{}, false); err == nil {
+		t.Fatal("restart admitted despite failed containment")
+	}
+	sub.stopErr = nil
+	if err := restarted.BeforeReady(ctx, &runnerwire.Peer{}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Lease(ctx, runnerwire.Lease{RunID: id, TokenRenewedAt: org, EndsAt: org.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if restarted.expired(id) {
+		t.Fatal("fixture did not restore a live authenticated lease")
+	}
+	if err := restarted.CheckLapses(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if sub.stops != 4 || sub.kills != 0 {
+		t.Fatalf("failed intent not retried independently of lease: stops%d kills%d", sub.stops, sub.kills)
+	}
+	if err := restarted.Created(ctx, spec, id.String()); err == nil {
 		t.Fatal("failed intent became live")
 	}
-	if err := m.BeforeRefCall(ctx, runnerwire.MethodReplaceProxy, id.String()); !errors.Is(err, runner.ErrRunnerOffline) {
+	if err := restarted.BeforeRefCall(ctx, runnerwire.MethodReplaceProxy, id.String()); !errors.Is(err, runner.ErrRunnerOffline) {
 		t.Fatalf("failed intent revived: %v", err)
 	}
 }
