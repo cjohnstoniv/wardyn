@@ -4,6 +4,8 @@
 package runnerio
 
 import (
+	"errors"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"io"
 	"testing"
 
@@ -49,5 +51,19 @@ func TestOutputSettlementRequiresProducerCompletionAndAck(t *testing.T) {
 	}
 	if len(s.outputs) != 1 {
 		t.Fatal("settlement forgot output")
+	}
+}
+
+func TestOutputSettlementRefusesMissingProducerHistory(t *testing.T) {
+	s, err := New(runnertest.NewFake(), uuid.NewString(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.New()
+	if end, settled, err := s.OutputSettled(t.Context(), id, "sandbox"); end != 0 || settled || !errors.Is(err, runner.ErrOutputUnrecoverable) {
+		t.Fatalf("missing output falsely settled: %d %v %v", end, settled, err)
+	}
+	if len(s.outputs) != 0 {
+		t.Fatal("settlement invented output history")
 	}
 }
