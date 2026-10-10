@@ -53,6 +53,7 @@ describe("runner pool calls", () => {
   it("surface the server's refusal with its reason, never an empty catalogue", async () => {
     wfetchMock.mockImplementation(async () => refusal());
     await expect(runnerPools.list()).rejects.toMatchObject({ status: 501, reason: "runner_pools_unavailable" });
-    await expect(runnerPools.clearMyDefaults()).rejects.toBeInstanceOf(HttpError);
+    await expect(runnerPools.clearMyDefaults()).rejects.toMatchObject({ status: 501, reason: "runner_pools_unavailable" });
+    await expect(runnerPools.removeMyRunner("p1", "r1")).rejects.toBeInstanceOf(HttpError);
   });
 });

@@ -9,7 +9,7 @@
 // console must show that sentence, never an empty catalogue. The admin routes
 // (pool writes, executor membership, the organisation default, the use policy)
 // are authored by the admin lane's own module.
-import { asJson, errText, HttpError, wfetch } from "./core";
+import { asJson, asNoContent, wfetch } from "./core";
 import type { RunnerPool, RunnerPoolDefaults, RunnerPoolList, RunnerPoolMember } from "../types/runner-pools";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
@@ -19,8 +19,7 @@ async function send<T>(path: string, init: RequestInit): Promise<T> {
 }
 
 async function sendNoBody(path: string, method: string): Promise<void> {
-  const res = await wfetch(path, { method });
-  if (!res.ok) throw new HttpError(res.status, await errText(res));
+  return asNoContent(await wfetch(path, { method }));
 }
 
 const memberPath = (poolId: string, runnerId: string) =>

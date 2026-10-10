@@ -10,7 +10,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { RUNNER_POOL_DEFAULTS_PREF_KEY } from "./runner-pools";
 
 function repoRoot(): string {
   let dir = resolve(process.cwd());
@@ -89,9 +88,7 @@ describe("runner pool carriers", () => {
     expect(union("RunnerPoolState").size).toBe(3);
     expect(union("RunnerPoolSelection").size).toBe(3);
     expect(union("RunnerPoolAvailability").size).toBe(3);
-  });
-
-  it("the personal defaults key is the Go key", () => {
-    expect(typesGo).toContain(`RunnerPoolDefaultsPrefKey = "${RUNNER_POOL_DEFAULTS_PREF_KEY}"`);
+    expect(union("RunnerPoolSwitch")).toEqual(consts(clientGo, '\\bRunnerPoolSwitch\\w+\\s+RunnerPoolSwitch = "([a-z_]+)"'));
+    expect(union("RunnerPoolSwitch")).toEqual(new Set(["active", "disabled"]));
   });
 });

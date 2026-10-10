@@ -79,7 +79,7 @@ func runnerPoolDefaultCmd(client clientFn) *cobra.Command {
 		Use:   "set",
 		Short: "Replace your own defaults",
 		Long: "Replace your own defaults with exactly the flags given; a field you leave out\n" +
-			"inherits the organisation's. Use `clear` to inherit everything.",
+			"inherits the organisation's once the server manages pools. Use `clear` to inherit everything.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			d := sdk.RunnerPoolDefaults{PreferredHosting: sdk.RunnerPoolHosting(hosting)}

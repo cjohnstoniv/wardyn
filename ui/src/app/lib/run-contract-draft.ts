@@ -44,7 +44,7 @@ export interface RunnerDraft {
   /** "Runs on". Absent until chosen: there is no default between two eligible placements (OD-8). */
   placement?: PlacementValue;
   runnerId?: string;
-  /** The pool the run starts on. Absent is untouched: the server applies the person's, then the organisation's, default. */
+  /** The pool the run starts on. Absent is untouched: today's placement, and once pools are managed the person's, then the organisation's, default. */
   poolId?: string;
   /** The ref of an image the organisation allows (preview `allowed_images`), sent as `allowed_image`. Absent keeps the resolved image. */
   imageRef?: string;

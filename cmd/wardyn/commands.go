@@ -144,8 +144,8 @@ func runCmd(client clientFn) *cobra.Command {
 			if err := setOptionalID("--workspace", workspaceID, &body.WorkspaceID); err != nil {
 				return err
 			}
-			// --pool names the runner pool the run starts on; unset inherits your
-			// own default, then the organisation's.
+			// --pool names the runner pool the run starts on; unset keeps today's
+			// unpooled placement until the server manages pools.
 			pool, err := poolIDFlag("--pool", poolID)
 			if err != nil {
 				return err
@@ -219,7 +219,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&title, "title", "", "short name for this run; runs sharing a title are grouped in the console (optional here, required in the console)")
 	cmd.Flags().StringVar(&description, "description", "", "optional free-text note: why this run exists")
 	cmd.Flags().StringVar(&policyID, "policy", "", "policy id (optional; uses the default policy if unset)")
-	cmd.Flags().StringVar(&poolID, "pool", "", "runner pool id to start the run on (optional; unset uses your own default pool, then the organisation's — see 'wardyn runner pool list')")
+	cmd.Flags().StringVar(&poolID, "pool", "", "runner pool id to start the run on (optional; unset keeps today's placement, and once the server manages pools applies your own default, then the organisation's — see 'wardyn runner pool list')")
 	cmd.Flags().StringVar(&workspaceID, "workspace", "", "onboarded workspace id to launch against (optional; seeds its source, egress, image and bound model creds — composes with --policy/--policy-file)")
 	cmd.Flags().StringVar(&policyFile, "policy-file", "", "path to a JSON or YAML RunPolicySpec applied inline (optional; mutually exclusive with --policy, enforced server-side)")
 	cmd.Flags().StringVar(&confinement, "confinement", "", "confinement class (CC1|CC2|CC3, or fence|wall|vault; optional — unset defaults to the strongest class the runner advertises at or above the policy minimum, never the bare minimum itself)")

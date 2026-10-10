@@ -107,7 +107,8 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   placement?: PlacementValue;
   runner_id?: string;
   // The pool the run starts on (pkg/client.CreateRunRequest.RunnerPoolID); absent
-  // inherits the person's own default, then the organisation's.
+  // keeps today's placement, and once pools are managed applies the person's
+  // own default, then the organisation's.
   runner_pool_id?: string;
   // One of the preview's allowed_images, by ref (pkg/client.CreateRunRequest.AllowedImage).
   allowed_image?: string;

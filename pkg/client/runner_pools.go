@@ -5,6 +5,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -77,13 +78,37 @@ type CreateRunnerPoolRequest struct {
 	HostingType RunnerPoolHosting `json:"hosting_type"`
 }
 
+// RunnerPoolSwitch is the state an update may put a pool in: active or disabled.
+// Deleting a pool is DeleteRunnerPool alone, so it has one audit action.
+type RunnerPoolSwitch string
+
+const (
+	RunnerPoolSwitchActive   RunnerPoolSwitch = "active"
+	RunnerPoolSwitchDisabled RunnerPoolSwitch = "disabled"
+)
+
 // UpdateRunnerPoolRequest renames or switches off/on one pool. Revision is the
 // revision the caller read: a stale one is refused with runner_pool_stale.
-// Deleting a pool is DeleteRunnerPool, not a state here.
 type UpdateRunnerPoolRequest struct {
-	Revision int64            `json:"revision"`
-	Name     *string          `json:"name,omitempty"`
-	State    *RunnerPoolState `json:"state,omitempty"`
+	Revision int64             `json:"revision"`
+	Name     *string           `json:"name,omitempty"`
+	State    *RunnerPoolSwitch `json:"state,omitempty"`
+}
+
+// Validate refuses an update that changes nothing, a revision that was never
+// read, a bad name, and any state but active or disabled (never deleted).
+func (r UpdateRunnerPoolRequest) Validate() error {
+	switch {
+	case r.Revision < 1:
+		return errors.New("revision is the revision you read")
+	case r.Name == nil && r.State == nil:
+		return errors.New("change the name or the state")
+	case r.State != nil && *r.State != RunnerPoolSwitchActive && *r.State != RunnerPoolSwitchDisabled:
+		return errors.New("state is active or disabled; delete a pool with DELETE")
+	case r.Name != nil:
+		return types.ValidateRunnerPoolName(*r.Name)
+	}
+	return nil
 }
 
 // ListRunnerPools lists the pools the caller may use.

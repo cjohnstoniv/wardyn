@@ -108,6 +108,9 @@ func NoOwnRunnerMsg(name string) string {
 	return fmt.Sprintf("None of your own runners in %s can run this right now.", name)
 }
 
+// MemberMismatchMsg names the runner the caller asked for: their own runner's
+// name, or the id as they sent it. Never another person's runner's name; a
+// runner that is not the caller's is answered exactly like an unknown one.
 func MemberMismatchMsg(runner, name string) string {
 	return fmt.Sprintf("%s is not one of your runners in %s.", runner, name)
 }

@@ -37,6 +37,7 @@ func TestRunnerPoolMemberKindsAreNeverMixed(t *testing.T) {
 		{"no target", RunnerPoolMember{}, RunnerPoolSelfHosted, false},
 		{"nil runner id", RunnerPoolMember{RunnerID: &nilID}, RunnerPoolSelfHosted, false},
 		{"an address is not an executor id", RunnerPoolMember{ExecutorID: "tcp://10.0.0.1:2376"}, RunnerPoolRemoteProvided, false},
+		{"a claimed runner's substrate name is not an executor id", RunnerPoolMember{ExecutorID: "runner:" + id.String()}, RunnerPoolRemoteProvided, false},
 		{"a socket path is not an executor id", RunnerPoolMember{ExecutorID: "/var/run/docker.sock"}, RunnerPoolRemoteProvided, false},
 	} {
 		if err := tc.m.Validate(tc.hosting); (err == nil) != tc.ok {
@@ -82,6 +83,21 @@ func TestRunnerPoolUseSubjectsOnlyNarrow(t *testing.T) {
 		if err := ValidateRunnerPoolUseSubjects(tc.in); (err == nil) != tc.ok {
 			t.Errorf("%s: err = %v, want ok=%v", tc.name, err, tc.ok)
 		}
+	}
+}
+
+func TestRunnerPoolUsePolicyNarrowsRemoteProvidedPoolsOnly(t *testing.T) {
+	policy := RunnerPoolUsePolicy{Subjects: []RunnerPoolSubject{{CapabilitySubjectGroup, "eng"}}}
+	if err := policy.Validate(RunnerPoolRemoteProvided); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []RunnerPoolHosting{RunnerPoolSelfHosted, "", "cloud"} {
+		if err := policy.Validate(h); err == nil {
+			t.Errorf("a use policy on a %q pool was accepted", h)
+		}
+	}
+	if err := (RunnerPoolUsePolicy{}).Validate(RunnerPoolRemoteProvided); err == nil {
+		t.Error("an empty policy on a remote-provided pool was accepted")
 	}
 }
 

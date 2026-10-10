@@ -25,9 +25,6 @@ export type RunnerPoolSelection = "explicit" | "personal_default" | "organisatio
 /** Whether a permitted pool can take a run right now; `unknown` is never read as available. */
 export type RunnerPoolAvailability = "available" | "unavailable" | "unknown";
 
-/** The principal_prefs key of a person's own pool defaults (types.RunnerPoolDefaultsPrefKey). */
-export const RUNNER_POOL_DEFAULTS_PREF_KEY = "runner_pool_defaults.v1";
-
 /** Go: types.RunnerPool. */
 export interface RunnerPool {
   id: string;
@@ -98,9 +95,12 @@ export interface CreateRunnerPoolRequest {
   hosting_type: RunnerPoolHosting;
 }
 
+/** The state an update may put a pool in (Go: client.RunnerPoolSwitch); deleting is the DELETE route alone. */
+export type RunnerPoolSwitch = "active" | "disabled";
+
 /** Go: client.UpdateRunnerPoolRequest. `revision` is the one the caller read; a stale one is refused. */
 export interface UpdateRunnerPoolRequest {
   revision: number;
   name?: string;
-  state?: RunnerPoolState;
+  state?: RunnerPoolSwitch;
 }

@@ -118,23 +118,24 @@ func TestResolvePrecedence(t *testing.T) {
 		sel      types.RunnerPoolSelection
 		reason   Reason
 		source   types.RunnerPoolSelection
+		msg      string
 	}{
 		{name: "organisation default seeds the choice", org: org, pool: &remoteA, sel: types.RunnerPoolSelectedOrg},
 		{name: "a person's default beats the organisation's", personal: types.RunnerPoolDefaults{RemoteProvided: idp(remoteB)}, org: org, pool: &remoteB, sel: types.RunnerPoolSelectedPersonal},
 		{name: "explicit pool beats both", choice: Choice{PoolID: idp(remoteB)}, personal: types.RunnerPoolDefaults{RemoteProvided: idp(remoteA)}, org: org, pool: &remoteB, sel: types.RunnerPoolSelectedExplicit},
 		{name: "personal preferred hosting beats the organisation's", personal: types.RunnerPoolDefaults{PreferredHosting: types.RunnerPoolSelfHosted}, org: org, pool: &selfC, sel: types.RunnerPoolSelectedOrg},
 		{name: "explicit hosting beats the personal preference", choice: Choice{Hosting: types.RunnerPoolRemoteProvided}, personal: types.RunnerPoolDefaults{PreferredHosting: types.RunnerPoolSelfHosted}, org: org, pool: &remoteA, sel: types.RunnerPoolSelectedOrg},
-		{name: "a refused personal default never falls through to the organisation's", personal: types.RunnerPoolDefaults{RemoteProvided: idp(gone)}, org: org, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedPersonal},
-		{name: "a disabled personal default is refused", choice: Choice{Hosting: types.RunnerPoolSelfHosted}, personal: types.RunnerPoolDefaults{SelfHosted: idp(selfOff)}, org: org, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedPersonal},
-		{name: "an unknown organisation default is refused", org: types.RunnerPoolDefaults{RemoteProvided: &uuid.UUID{1}, PreferredHosting: types.RunnerPoolRemoteProvided}, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedOrg},
-		{name: "a wrong-kind default is refused, not flipped to the other type", org: types.RunnerPoolDefaults{PreferredHosting: types.RunnerPoolRemoteProvided, RemoteProvided: idp(selfC)}, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedOrg},
-		{name: "no default at all asks for a choice", org: types.RunnerPoolDefaults{PreferredHosting: types.RunnerPoolSelfHosted}, reason: ReasonRequired},
-		{name: "no hosting type asks for a choice", reason: ReasonRequired},
-		{name: "an inaccessible explicit pool is not found", choice: Choice{PoolID: &uuid.UUID{9}}, org: org, reason: ReasonNotFound},
-		{name: "a deleted explicit pool is not found", choice: Choice{PoolID: idp(gone)}, org: org, reason: ReasonNotFound},
-		{name: "a disabled explicit pool is unavailable", choice: Choice{PoolID: idp(selfOff)}, org: org, reason: ReasonUnavailable},
-		{name: "an explicit pool contradicting the hosting choice is a mismatch", choice: Choice{PoolID: idp(selfC), Hosting: types.RunnerPoolRemoteProvided}, org: org, reason: ReasonMemberMismatch},
-		{name: "a garbage hosting choice is invalid", choice: Choice{Hosting: "cloud"}, org: org, reason: ReasonInvalid},
+		{name: "a refused personal default never falls through to the organisation's", personal: types.RunnerPoolDefaults{RemoteProvided: idp(gone)}, org: org, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedPersonal, msg: DefaultUnavailablePersonalMsg()},
+		{name: "a disabled personal default is refused", choice: Choice{Hosting: types.RunnerPoolSelfHosted}, personal: types.RunnerPoolDefaults{SelfHosted: idp(selfOff)}, org: org, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedPersonal, msg: DefaultUnavailablePersonalMsg()},
+		{name: "an unknown organisation default is refused", org: types.RunnerPoolDefaults{RemoteProvided: &uuid.UUID{1}, PreferredHosting: types.RunnerPoolRemoteProvided}, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedOrg, msg: DefaultUnavailableOrgMsg()},
+		{name: "a wrong-kind default is refused, not flipped to the other type", org: types.RunnerPoolDefaults{PreferredHosting: types.RunnerPoolRemoteProvided, RemoteProvided: idp(selfC)}, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedOrg, msg: DefaultUnavailableOrgMsg()},
+		{name: "no default at all asks for a choice", org: types.RunnerPoolDefaults{PreferredHosting: types.RunnerPoolSelfHosted}, reason: ReasonRequired, msg: RequiredMsg("Self-Hosted")},
+		{name: "no hosting type asks for a choice", reason: ReasonRequired, msg: RequiredMsg("")},
+		{name: "an inaccessible explicit pool is not found", choice: Choice{PoolID: &uuid.UUID{9}}, org: org, reason: ReasonNotFound, msg: NotFoundMsg()},
+		{name: "a deleted explicit pool is not found", choice: Choice{PoolID: idp(gone)}, org: org, reason: ReasonNotFound, msg: NotFoundMsg()},
+		{name: "a disabled explicit pool is unavailable", choice: Choice{PoolID: idp(selfOff)}, org: org, reason: ReasonUnavailable, msg: UnavailableMsg("Off")},
+		{name: "an explicit pool contradicting the hosting choice is a mismatch", choice: Choice{PoolID: idp(selfC), Hosting: types.RunnerPoolRemoteProvided}, org: org, reason: ReasonMemberMismatch, msg: HostingMismatchMsg("C", "Self-Hosted")},
+		{name: "a garbage hosting choice is invalid", choice: Choice{Hosting: "cloud"}, org: org, reason: ReasonInvalid, msg: InvalidMsg()},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -143,8 +144,8 @@ func TestResolvePrecedence(t *testing.T) {
 				if refusal == nil || refusal.Reason != tc.reason || refusal.Source != tc.source {
 					t.Fatalf("got %+v %+v, want refusal %s (source %q)", got, refusal, tc.reason, tc.source)
 				}
-				if refusal.Message() == "" {
-					t.Error("a refusal has a sentence")
+				if refusal.Message() != tc.msg || tc.msg == "" {
+					t.Errorf("sentence = %q, want %q", refusal.Message(), tc.msg)
 				}
 				return
 			}
@@ -191,6 +192,49 @@ func TestOwnRunnerCandidatesAreOnlyThePersonsOwn(t *testing.T) {
 	for _, who := range []string{"", "carol", "ALICE"} {
 		if got := OwnRunnerCandidates(who, members, runners); got != nil {
 			t.Fatalf("%q was handed candidates %v", who, got)
+		}
+	}
+}
+
+// TestEveryReasonHasItsOwnSentence: a refusal never falls through to the
+// "invalid" sentence, so a D-117 refusal built from any reason says its own words.
+func TestEveryReasonHasItsOwnSentence(t *testing.T) {
+	variants := map[Reason][]*Refusal{
+		ReasonRequired:           {{Reason: ReasonRequired, Hosting: types.RunnerPoolSelfHosted}},
+		ReasonNotFound:           {{Reason: ReasonNotFound}},
+		ReasonUnavailable:        {{Reason: ReasonUnavailable, Name: "Build farm"}},
+		ReasonDefaultUnavailable: {{Reason: ReasonDefaultUnavailable}, {Reason: ReasonDefaultUnavailable, Source: types.RunnerPoolSelectedOrg}},
+		ReasonStale:              {{Reason: ReasonStale, Name: "Build farm"}},
+		ReasonNoEligibleMember:   {{Reason: ReasonNoEligibleMember, Name: "P"}, {Reason: ReasonNoEligibleMember, Name: "P", Hosting: types.RunnerPoolSelfHosted}},
+		ReasonMemberMismatch:     {{Reason: ReasonMemberMismatch, Name: "P", Hosting: types.RunnerPoolSelfHosted}, {Reason: ReasonMemberMismatch, Name: "P", Runner: "desk-1"}},
+		ReasonPoolsUnavailable:   {{Reason: ReasonPoolsUnavailable}},
+	}
+	for _, reason := range Reasons() {
+		if reason == ReasonInvalid {
+			continue
+		}
+		list, ok := variants[reason]
+		if !ok {
+			t.Errorf("%s has no case here", reason)
+		}
+		for _, r := range list {
+			if got := r.Message(); got == InvalidMsg() || got == "" {
+				t.Errorf("%+v answers %q, the invalid sentence", r, got)
+			}
+		}
+	}
+	for _, c := range []struct {
+		r    *Refusal
+		want string
+	}{
+		{&Refusal{Reason: ReasonMemberMismatch, Name: "Team laptops", Runner: "desk-1"}, MemberMismatchMsg("desk-1", "Team laptops")},
+		{&Refusal{Reason: ReasonMemberMismatch, Name: "Team laptops", Hosting: types.RunnerPoolSelfHosted}, HostingMismatchMsg("Team laptops", "Self-Hosted")},
+		{&Refusal{Reason: ReasonNoEligibleMember, Name: "Team laptops", Hosting: types.RunnerPoolSelfHosted}, NoOwnRunnerMsg("Team laptops")},
+		{&Refusal{Reason: ReasonNoEligibleMember, Name: "Build farm", Hosting: types.RunnerPoolRemoteProvided}, NoEligibleMemberMsg("Build farm")},
+		{&Refusal{Reason: ReasonPoolsUnavailable}, UnavailableServerMsg()},
+	} {
+		if got := c.r.Message(); got != c.want {
+			t.Errorf("%+v = %q, want %q", c.r, got, c.want)
 		}
 	}
 }

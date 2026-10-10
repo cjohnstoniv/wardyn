@@ -233,6 +233,17 @@ type RunnerPoolUsePolicy struct {
 	UpdatedBy string    `json:"updated_by,omitempty"`
 }
 
+// Validate checks a policy before it is stored against the pool it narrows: a
+// use policy narrows a Remote Provided pool only. On a Self-Hosted pool it would
+// either be stored and ignored, reading as a restriction that does not exist, or
+// become a sharing ACL over people's own runners, which 0.9 does not have.
+func (p RunnerPoolUsePolicy) Validate(hosting RunnerPoolHosting) error {
+	if hosting != RunnerPoolRemoteProvided {
+		return errors.New("a use policy narrows a Remote Provided pool only")
+	}
+	return ValidateRunnerPoolUseSubjects(p.Subjects)
+}
+
 // RunnerPoolUseSubjectsMax bounds a policy's subject list.
 const RunnerPoolUseSubjectsMax = 64
 

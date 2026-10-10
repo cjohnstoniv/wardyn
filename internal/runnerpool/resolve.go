@@ -28,6 +28,10 @@ type Refusal struct {
 	Name string
 	// Hosting is the hosting type the sentence is about.
 	Hosting types.RunnerPoolHosting
+	// Runner names the runner a ReasonMemberMismatch is about: the caller's own
+	// runner's name, or the id as the caller sent it. A runner that is not the
+	// caller's is never named, it is answered like an unknown one.
+	Runner string
 }
 
 func (r *Refusal) Error() string { return r.Message() }
@@ -49,7 +53,17 @@ func (r *Refusal) Message() string {
 	case ReasonStale:
 		return StaleMsg(r.Name)
 	case ReasonMemberMismatch:
+		if r.Runner != "" {
+			return MemberMismatchMsg(r.Runner, r.Name)
+		}
 		return HostingMismatchMsg(r.Name, HostingLabel(r.Hosting))
+	case ReasonNoEligibleMember:
+		if r.Hosting == types.RunnerPoolSelfHosted {
+			return NoOwnRunnerMsg(r.Name)
+		}
+		return NoEligibleMemberMsg(r.Name)
+	case ReasonPoolsUnavailable:
+		return UnavailableServerMsg()
 	}
 	return InvalidMsg()
 }

@@ -156,9 +156,10 @@ type CreateRunRequest struct {
 	RunnerID string `json:"runner_id,omitempty"`
 	// RunnerPoolID names the pool the run starts on (RunnerPoolChoice.ID).
 	// Choosing a pool grants no runner, credential or drive: it only narrows
-	// where the run may go. Empty asks for the person's, then the
-	// organisation's, default. Accepted and validated; a server that cannot
-	// honour pools yet refuses it with request_field_unavailable, never ignores it.
+	// where the run may go. Empty keeps today's placement; once the server
+	// manages pools it applies the person's, then the organisation's, default.
+	// Accepted and validated; a server that cannot honour pools yet refuses it
+	// with request_field_unavailable, never ignores it.
 	RunnerPoolID string `json:"runner_pool_id,omitempty"`
 	// Resources is the CPU and memory this run asks for, clamped by the server
 	// to the caps of the placement it lands on. Absent leaves the source

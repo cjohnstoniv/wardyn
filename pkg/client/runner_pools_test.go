@@ -30,6 +30,29 @@ func TestCreateRunRequest_RunnerPoolIDIsOmittedUntilChosen(t *testing.T) {
 	}
 }
 
+func TestUpdateRunnerPoolRequestNeverDeletes(t *testing.T) {
+	sw := func(v client.RunnerPoolSwitch) *client.RunnerPoolSwitch { return &v }
+	name, bad := "Build farm", " x"
+	for _, tc := range []struct {
+		name string
+		r    client.UpdateRunnerPoolRequest
+		ok   bool
+	}{
+		{"rename", client.UpdateRunnerPoolRequest{Revision: 2, Name: &name}, true},
+		{"disable", client.UpdateRunnerPoolRequest{Revision: 2, State: sw("disabled")}, true},
+		{"enable", client.UpdateRunnerPoolRequest{Revision: 2, State: sw("active")}, true},
+		{"delete is the DELETE route", client.UpdateRunnerPoolRequest{Revision: 2, State: sw("deleted")}, false},
+		{"unknown state", client.UpdateRunnerPoolRequest{Revision: 2, State: sw("paused")}, false},
+		{"no change", client.UpdateRunnerPoolRequest{Revision: 2}, false},
+		{"no revision", client.UpdateRunnerPoolRequest{Name: &name}, false},
+		{"bad name", client.UpdateRunnerPoolRequest{Revision: 2, Name: &bad}, false},
+	} {
+		if err := tc.r.Validate(); (err == nil) != tc.ok {
+			t.Errorf("%s: err = %v, want ok=%v", tc.name, err, tc.ok)
+		}
+	}
+}
+
 func TestPreflightResultDecodesThePoolFacts(t *testing.T) {
 	var res client.PreflightResult
 	body := `{"setup_items":[],"provenance":[],"resources":[],"local_placement":[],"allowed_images":[],
