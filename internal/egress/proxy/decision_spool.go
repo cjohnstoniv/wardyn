@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/runneractivity"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/google/uuid"
 	"golang.org/x/sys/unix"
@@ -48,7 +49,7 @@ func newLocalDecisionSink(dir string, id uuid.UUID, out io.Writer) (*decisionSin
 		spool.Close()
 		return nil, errors.New("another proxy owns this run spool")
 	}
-	return &decisionSink{local: spool, writerLock: lock, out: out, reservations: map[uuid.UUID]struct{}{}}, nil
+	return &decisionSink{local: spool, writerLock: lock, out: out, activityDir: dir, reservations: map[uuid.UUID]uuid.UUID{}}, nil
 }
 
 // Reserve the largest wire record before forwarding. The mutex covers both
@@ -75,7 +76,7 @@ func (s *decisionSink) reserve(ctx context.Context) (uuid.UUID, error) {
 		return uuid.Nil, errors.Join(runnerspool.ErrFull, s.local.Refuse(ctx))
 	}
 	id := uuid.New()
-	s.reservations[id] = struct{}{}
+	s.reservations[id] = runneractivity.Capture(s.activityDir)
 	return id, nil
 }
 func (s *decisionSink) release(id uuid.UUID) { s.mu.Lock(); delete(s.reservations, id); s.mu.Unlock() }
@@ -107,7 +108,7 @@ func (s *decisionSink) emitLocal(log egress.DecisionLog) {
 		return
 	}
 	id := log.Request.AuditReservation
-	_, admitted := s.reservations[id]
+	epoch, admitted := s.reservations[id]
 	admitted = admitted && log.Decision != egress.Pending
 	b, err := json.Marshal(log)
 	if err == nil {
@@ -128,6 +129,9 @@ func (s *decisionSink) emitLocal(log egress.DecisionLog) {
 		} else {
 			err = s.local.Append(ctx, log)
 		}
+	}
+	if err == nil && admitted && log.RuleSource != ruleSourceApprovals && log.RuleSource != "credential:reauth-timeout" {
+		_ = runneractivity.Record(s.activityDir, epoch)
 	}
 	if err != nil && !errors.Is(err, runnerspool.ErrFull) {
 		s.localErr = err
