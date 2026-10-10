@@ -1,10 +1,10 @@
+> Part of the [Operations](../OPERATIONS.md) split (task pages under `docs/operations/`).
+
 # Three roles, and who sets the walls
 
 What a super admin, a security admin and a member may do, and the governance profiles that
 bound them. Read this after [who-gets-in.md](who-gets-in.md), which says how a session
 derives its role.
-
-## Three roles, and who sets the walls
 
 - **Super admin (the deployer).**
   - Installs the chart, connects the IdP, and owns everything only the chart can say:

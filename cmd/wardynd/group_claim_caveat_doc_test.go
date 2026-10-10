@@ -131,12 +131,12 @@ func TestGroupClaimOverageWarningAndProcedure(t *testing.T) {
 	for _, block := range strings.Split(readRepo(t, "threatmodel/THREAT-MODEL.md"), "\n\n") {
 		flat := strings.ToLower(strings.Join(strings.Fields(block), " "))
 		if strings.Contains(flat, "filter") && strings.Contains(flat, "re-key") &&
-			strings.Contains(flat, "docs/operations.md") {
+			strings.Contains(flat, "(../docs/operations/capabilities.md#re-key-before-changing-the-claim)") {
 			return
 		}
 	}
 	t.Error("threatmodel/THREAT-MODEL.md §5 has no residual that publishes the filtered-claim ceiling AND " +
-		"links docs/operations.md for the procedure")
+		"links docs/operations/capabilities.md#re-key-before-changing-the-claim for the procedure")
 }
 
 // overageProcedure returns docs/operations/capabilities.md's re-key-before-you-change

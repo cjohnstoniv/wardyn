@@ -1,3 +1,5 @@
+> Part of the [Operations](../OPERATIONS.md) split (task pages under `docs/operations/`).
+
 # What a member's own run may reach
 
 The scopes an approval decision can carry, the clamp on a member's inline policy, and what

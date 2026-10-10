@@ -1,10 +1,10 @@
+> Part of the [Operations](../OPERATIONS.md) split (task pages under `docs/operations/`).
+
 # Every denial that isn't a 404
 
 The `reason` vocabulary of `authz.denied`, one row per reason with the targets it is
 raised at. The source of record the console's field help and the audit-action table both
 read.
-
-## Every denial that isn't a 404
 
 > [!NOTE]
 > (This section is the source of record for `authz.denied`'s `reason` values; [`docs/AUDIT-ACTIONS.md`](../AUDIT-ACTIONS.md) is the vocabulary reference for every *other* audit `action` and points back here for this one.)

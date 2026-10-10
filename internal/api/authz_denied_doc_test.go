@@ -84,7 +84,7 @@ func denialDoc(t *testing.T) string {
 func documentedAuthzDeniedReasons(t *testing.T) []string {
 	t.Helper()
 	doc := denialDoc(t)
-	i := strings.Index(doc, "## Every denial that isn't a 404")
+	i := strings.Index(doc, "# Every denial that isn't a 404")
 	if i < 0 {
 		t.Fatal(`docs/operations/denials.md has no "Every denial that isn't a 404" section`)
 	}

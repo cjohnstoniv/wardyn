@@ -4,6 +4,7 @@
 package main
 
 import (
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -107,10 +108,20 @@ func TestNoDowngradePathIsDocumented(t *testing.T) {
 		"There is no downgrade: a 0.8.5 binary refuses")
 	wantAll(t, "docs/OPERATIONS.md", readRepo(t, "docs/OPERATIONS.md"),
 		"refuses to boot, naming the newest one")
-	wantNone(t, "docs/operations/three-roles.md", ops,
-		"before a downgrade convert every composed profile to standalone",
-		"**it boots anyway**",
-		"nothing there refuses a schema newer than the binary")
+	pages, err := filepath.Glob(filepath.Join(repoRoot(t), "docs/operations/*.md"))
+	if err != nil || len(pages) == 0 {
+		t.Fatalf("find operations task pages: %v", err)
+	}
+	for _, page := range append(pages, filepath.Join(repoRoot(t), "docs/OPERATIONS.md")) {
+		rel, err := filepath.Rel(repoRoot(t), page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantNone(t, rel, readRepo(t, rel),
+			"before a downgrade convert every composed profile to standalone",
+			"**it boots anyway**",
+			"nothing there refuses a schema newer than the binary")
+	}
 	// The changelog's 0.8.6 entries make the same promise: the dump is the only way back.
 	cl := strings.Join(strings.Fields(changelog086(t)), " ")
 	wantAll(t, "CHANGELOG.md [0.8.6]", cl, "restore the pre-upgrade dump")

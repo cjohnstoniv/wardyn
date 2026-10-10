@@ -124,7 +124,7 @@ func TestAuditActionsDocAnchorsResolve(t *testing.T) {
 	for _, c := range []struct{ doc, anchor string }{
 		{"docs/SSH.md", "bounds"},
 		{"docs/operations/denials.md", "every-denial-that-isnt-a-404"},
-		{"docs/OPERATIONS.md", "multi-user-who-can-change-what"},
+		{"docs/operations/who-gets-in.md", "multi-user-who-can-change-what"},
 		{"docs/ENV.md", "wardynd-control-plane"},
 	} {
 		bodies, _, _, err := citedSymbolBodies(c.doc, []byte(readRepo(t, c.doc)))

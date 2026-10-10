@@ -1,9 +1,9 @@
+> Part of the [Operations](../OPERATIONS.md) split (task pages under `docs/operations/`).
+
 # Custom components
 
 What an admin controls on a component row, and what a launch leaves behind on the
 [policy](../POLICIES.md#custom-components) a run carries.
-
-## Custom components
 
 - A **component** is a named set of destinations and secrets that a run carries beside its policy.
 - [POLICIES.md](../POLICIES.md#custom-components) gives the definition and its rules. This section is what an admin controls and what a launch leaves behind.

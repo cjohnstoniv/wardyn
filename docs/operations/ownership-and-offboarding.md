@@ -1,9 +1,9 @@
+> Part of the [Operations](../OPERATIONS.md) split (task pages under `docs/operations/`).
+
 # Ownership scoping, and offboarding a person
 
 What a member owns, what stays operator-owned, and the ordered procedure for removing a
 departed person: sessions, tokens, keys, runs, credentials, workspaces and drives.
-
-## Ownership scoping, and offboarding a person
 
 **Ownership scoping — real, not just admin-vs-everyone.**
 

@@ -1,3 +1,5 @@
+> Part of the [Operations](../OPERATIONS.md) split (task pages under `docs/operations/`).
+
 # Governance writes, and the second human
 
 The optional switches that hold a write until a second human decides it, and the walkthrough

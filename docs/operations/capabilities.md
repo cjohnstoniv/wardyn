@@ -1,10 +1,10 @@
+> Part of the [Operations](../OPERATIONS.md) split (task pages under `docs/operations/`).
+
 # Capabilities: what one member, or one group, may do
 
 The ten capability kinds, the precedence that resolves them, and the group snapshot's
 ceiling. One sentence is the doctrine: a capability bounds what the MEMBER chose, never what
 the ADMIN pre-authorized.
-
-## Capabilities: what one member, or one group, may do
 
 - The role split above is deployment-wide.
 - A **capability grant** is per-human: a row naming a *subject*, a *kind*, a *value*, and an effect of `allow` or `deny` (`capability_grants`, migration 0042), with a per-kind **enforcement switch** beside it (`capability_enforcement`).
@@ -140,6 +140,8 @@ the ADMIN pre-authorized.
 - The same rule governs group-based **App Role** assignment.
 - Nested group memberships are not supported for group-based assignment to an application, so a role assigned to a group reaches its direct members only ([Manage users and groups assignment](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/assign-user-or-group-access-portal)).
 - App Roles are a smaller claim, not automatically a safer one.
+
+<a id="re-key-before-changing-the-claim"></a>
 
 - **So re-key before you change the claim, not after:**
 

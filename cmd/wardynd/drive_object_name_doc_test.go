@@ -210,37 +210,37 @@ func TestDriveSubstrateSectionsUseTheirOwnShape(t *testing.T) {
 	if docker == k8s {
 		t.Skipf("both minted backends name objects %q — nothing to disagree about", docker)
 	}
-	b, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "OPERATIONS.md"))
-	if err != nil {
-		t.Fatalf("read docs/OPERATIONS.md: %v", err)
-	}
-	src := string(b)
-	for _, sec := range []struct{ heading, want string }{
-		{"### User drives on Docker", docker},
-		{"### User drives on Kubernetes", k8s},
+	for _, sec := range []struct{ heading, want, doc string }{
+		{"## User drives on Docker", docker, "docs/operations/user-drives.md"},
+		{"### User drives on Kubernetes", k8s, "docs/OPERATIONS.md"},
 	} {
-		body, ok := sectionBody(src, sec.heading)
+		b, err := os.ReadFile(filepath.Join(repoRoot(t), sec.doc))
+		if err != nil {
+			t.Fatalf("read %s: %v", sec.doc, err)
+		}
+		body, ok := sectionBody(string(b), sec.heading)
 		if !ok {
-			t.Errorf("docs/OPERATIONS.md has no %q section — it is where the reclaim commands live", sec.heading)
+			t.Errorf("%s has no %q section — it is where the reclaim commands live", sec.doc, sec.heading)
 			continue
 		}
 		for _, tok := range driveNameToken.FindAllString(body, -1) {
 			if strings.HasSuffix(tok, "*") || tok == sec.want {
 				continue
 			}
-			t.Errorf("%q documents %q; that substrate's objects are named %q", sec.heading, tok, sec.want)
+			t.Errorf("%s %q documents %q; that substrate's objects are named %q", sec.doc, sec.heading, tok, sec.want)
 		}
 	}
 }
 
-// sectionBody returns the text from heading to the next same-level heading.
+// sectionBody supports both standalone H2 sections and the manual's H3 sections.
 func sectionBody(src, heading string) (string, bool) {
 	i := strings.Index(src, heading)
 	if i < 0 {
 		return "", false
 	}
+	level := heading[:len(heading)-len(strings.TrimLeft(heading, "#"))]
 	rest := src[i+len(heading):]
-	if j := strings.Index(rest, "\n### "); j >= 0 {
+	if j := strings.Index(rest, "\n"+level+" "); j >= 0 {
 		return rest[:j], true
 	}
 	return rest, true

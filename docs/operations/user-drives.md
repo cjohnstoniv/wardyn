@@ -1,3 +1,5 @@
+> Part of the [Operations](../OPERATIONS.md) split (task pages under `docs/operations/`).
+
 # User drives, and reclaiming a departed person's storage
 
 Per-person persistent storage on Docker: the two backends, the labels that identify an

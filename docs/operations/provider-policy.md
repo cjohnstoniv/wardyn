@@ -1,9 +1,9 @@
-# Who writes the provider policy
+> Part of the [Operations](../OPERATIONS.md) split (task pages under `docs/operations/`).
+
+# Who writes the provider policy: console vs CLI/MDM
 
 Two doors write the organisation's provider policy: the console's `/admin/providers` screen
 and `PUT /site-config` from the CLI or MDM. This says which one wins, and what each carries.
-
-## Who writes the provider policy: console vs CLI/MDM
 
 - An Azure DevOps row has no shared credential.
 - Its `workspace_providers` row names how each person connects:

@@ -30,7 +30,7 @@
 | Give each person their own Azure DevOps access | [AZURE-DEVOPS.md](AZURE-DEVOPS.md) |
 | See which writes are admin-only and which sit on the security-admin tier | [operations/admin-only-writes.md](operations/admin-only-writes.md) |
 | Cap what one person or group may do — governance profiles, the security-admin tier, capability grants | [operations/three-roles.md](operations/three-roles.md) + [operations/capabilities.md](operations/capabilities.md) |
-| Narrow what a member's own run may reach — egress, secrets, images, agents, features | [operations/capabilities.md](operations/capabilities.md) |
+| Narrow what a member's own run may reach — egress, secrets, images, agents, features | [operations/member-runs.md](operations/member-runs.md) + [operations/capabilities.md](operations/capabilities.md) |
 | Turn a governance write into a two-human decision, and work the approval queue | [operations/governance-writes.md](operations/governance-writes.md) |
 | Stop sharing the admin token — a token per person, and tokens for someone who never signs in | [operations/api-tokens.md](operations/api-tokens.md) |
 | Give each person persistent storage, and reclaim it when they leave | [operations/user-drives.md](operations/user-drives.md) |
@@ -49,7 +49,7 @@
 | Prepare or cut a release (milestone → PRs → release branch → tag) | [../RELEASING.md](../RELEASING.md#how-a-release-is-prepared) |
 | Answer a vendor security questionnaire — what leaves the box, what never does | [DATA-FLOW.md](DATA-FLOW.md) |
 | Verify a release artifact (cosign signatures, SBOM attestations) | [VERIFY.md](VERIFY.md) |
-| Answer a data-subject request — what Wardyn retains, and why there is no selective erasure | [OPERATIONS.md](OPERATIONS.md#retention-erasure-and-gdpr--a-residual-not-a-solved-problem) + [operations/member-runs.md](operations/member-runs.md) |
+| Answer a data-subject request — what Wardyn retains, and why there is no selective erasure | [OPERATIONS.md](OPERATIONS.md#retention-erasure-and-gdpr--a-residual-not-a-solved-problem) |
 | State an export-control classification (ECCN, EAR) for a procurement form | [EXPORT.md](EXPORT.md) |
 | Look up an audit action's meaning and emit site | [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md) |
 | Record or re-record the demo video series | [DEMO-SCRIPT.md](DEMO-SCRIPT.md) |

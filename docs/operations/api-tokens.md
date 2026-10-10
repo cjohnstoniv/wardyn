@@ -1,3 +1,5 @@
+> Part of the [Operations](../OPERATIONS.md) split (task pages under `docs/operations/`).
+
 # Per-user API tokens
 
 Stop sharing the admin token: a token per person, what it may reach, the stamp that keeps

@@ -5,6 +5,7 @@ package api
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -370,18 +371,28 @@ func TestOperationsDocDescribesThreeRoleAuthz(t *testing.T) {
 			t.Errorf("docs/operations/who-gets-in.md never names the derivable role %q", role)
 		}
 	}
-	for _, stale := range []struct{ claim, why string }{
-		{"a real two-role model",
-			"deriveRole derives three roles (oidc.ValidRole)"},
-		{"**Any match resolving to `admin` wins** over one resolving to `member`",
-			"the fold is roleRank's three ranks: user < security_admin < admin"},
-		{"both already `operatorOnly`",
-			"approved-egress and denied-egress are registered on securityOps (routes.go)"},
-		{"(all `operatorOnly` except the last)",
-			"the four /permissions routes are mounted on securityOps (mountPermissionRoutes)"},
-	} {
-		if strings.Contains(doc, unwrapped(stale.claim)) {
-			t.Errorf("docs/operations/who-gets-in.md still claims %q — %s", stale.claim, stale.why)
+	pages, err := filepath.Glob("../../docs/operations/*.md")
+	if err != nil || len(pages) == 0 {
+		t.Fatalf("find operations task pages: %v", err)
+	}
+	for _, page := range append(pages, "../../docs/OPERATIONS.md") {
+		body, err := os.ReadFile(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, stale := range []struct{ claim, why string }{
+			{"a real two-role model",
+				"deriveRole derives three roles (oidc.ValidRole)"},
+			{"**Any match resolving to `admin` wins** over one resolving to `member`",
+				"the fold is roleRank's three ranks: user < security_admin < admin"},
+			{"both already `operatorOnly`",
+				"approved-egress and denied-egress are registered on securityOps (routes.go)"},
+			{"(all `operatorOnly` except the last)",
+				"the four /permissions routes are mounted on securityOps (mountPermissionRoutes)"},
+		} {
+			if strings.Contains(unwrapped(string(body)), unwrapped(stale.claim)) {
+				t.Errorf("%s still claims %q — %s", page, stale.claim, stale.why)
+			}
 		}
 	}
 	// And it must say what the fold actually is, not merely stop being wrong.

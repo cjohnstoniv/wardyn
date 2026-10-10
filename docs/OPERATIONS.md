@@ -10,7 +10,7 @@ corporate-network sections are written against
 [Kubernetes runner substrate](operations/kubernetes-known-gaps.md) with its own run/recording
 state — see [Kubernetes: day-2](#kubernetes-day-2) for the chart's own backup,
 restore, upgrade and key-persistence commands.
-"[Multi-user: who can change what](#multi-user-who-can-change-what)" and
+"[Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what)" and
 "[High availability](#high-availability)" apply to both
 substrates identically: authorization and the per-process constraints live in
 `internal/api`, above the runner seam.
@@ -20,20 +20,20 @@ here — [README.md](../README.md) (single vs. multi-user) or
 [TRY-IT.md](TRY-IT.md) (a 10-minute walkthrough); this file starts from a stack
 that is already up. Adding the second person to an existing install: "[Second
 user, same host](#second-user-same-host)". Deciding who can do what:
-"[Multi-user: who can change what](#multi-user-who-can-change-what)".
+"[Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what)".
 
 <details>
 <summary>Table of contents</summary>
 
 - [State stores](#state-stores)
-- [Monitoring](operations/monitoring.md)
+- [Monitoring](operations/monitoring.md#monitoring)
 - [Approval notifications](#approval-notifications)
-- [Multi-user: who can change what](#multi-user-who-can-change-what)
-- [Run lifetime: lease, extend, revive, ends](operations/run-lifetime.md)
-- [Exercising member mode as an admin](operations/member-mode.md)
+- [Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what)
+- [Run lifetime: lease, extend, revive, ends](operations/run-lifetime.md#run-lifetime-lease-extend-revive-ends)
+- [Exercising member mode as an admin](operations/member-mode.md#exercising-member-mode-as-an-admin)
 - [Second user, same host](#second-user-same-host)
 - [Workspaces: three tiers](#workspaces-three-tiers)
-- [Integrations](operations/integrations.md)
+- [Integrations](operations/integrations.md#integrations)
 - [Network: upstream proxy and egress redirects](#network-upstream-proxy-and-egress-redirects)
 - [Toolchain, build images and recommended builds](operations/build-images.md)
 - [Secrets from files, age-key rotation and external key stores](operations/secrets-and-keys.md)
@@ -41,8 +41,8 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Upgrades](#upgrades)
 - [Kubernetes: day-2](#kubernetes-day-2)
 - [High availability](#high-availability)
-- [Kubernetes: known gaps](operations/kubernetes-known-gaps.md)
-- Task pages under [`docs/operations/`](operations/): [Managed laptops: hybrid enrolment](operations/hybrid-laptops.md), [Launch presets](operations/launch-presets.md), [Console branding](operations/console-branding.md)
+- [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
+- Task pages under [`docs/operations/`](operations/): [Managed laptops: hybrid enrolment](operations/hybrid-laptops.md), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding)
 
 </details>
 
@@ -1016,7 +1016,7 @@ lever today**. Concretely:
   - A member whose ownership of the requested `run_id` cannot be checked gets `503` (`audit_scope_unavailable`), not
     an empty export; a run that is not theirs or does not exist still answers the same empty `200`.
   - Below the security tier both `GET /audit` and the export leave out the name of an organisation's `shared` component
-    secret; `admin` and `security_admin` receive the rows as recorded ([Custom components](#custom-components)).
+    secret; `admin` and `security_admin` receive the rows as recorded ([Custom components](operations/custom-components.md#custom-components)).
 
 - **This is asymmetric with session recordings**, which have the retention lever audit lacks:
   `WARDYN_RECORDING_RETENTION_DAYS` ([ENV.md](ENV.md#wardyn_recording_retention_days)) age-deletes stored PTY casts, defaulting to
@@ -1423,7 +1423,7 @@ lose access now, do not wait for it:
 
 ## Monitoring
 
-Moved to [monitoring.md](operations/monitoring.md).
+Moved to [monitoring.md](operations/monitoring.md#monitoring).
 
 ## Approval notifications
 
@@ -1617,99 +1617,99 @@ per run per hour (per replica).
 
 ## Managed laptops: hybrid enrolment and audit federation
 
-Moved to [hybrid-laptops.md](operations/hybrid-laptops.md).
+Moved to [hybrid-laptops.md](operations/hybrid-laptops.md#managed-laptops-hybrid-enrolment-and-audit-federation).
 
 ## Multi-user: who can change what
 
-Moved to [who-gets-in.md](operations/who-gets-in.md).
+Moved to [who-gets-in.md](operations/who-gets-in.md#multi-user-who-can-change-what).
 
 ### Who decides who gets in: chart vs console vs IdP
 
-Moved to [who-gets-in.md](operations/who-gets-in.md).
+Moved to [who-gets-in.md](operations/who-gets-in.md#who-decides-who-gets-in-chart-vs-console-vs-idp).
 
 #### Wins a collision: chart / env
 
-Moved to [who-gets-in.md](operations/who-gets-in.md).
+Moved to [who-gets-in.md](operations/who-gets-in.md#wins-a-collision-chart--env).
 
 ### Who writes the provider policy: console vs CLI/MDM
 
-Moved to [provider-policy.md](operations/provider-policy.md).
+Moved to [provider-policy.md](operations/provider-policy.md#who-writes-the-provider-policy-console-vs-climdm).
 
 #### Clearing a block
 
-Moved to [provider-policy.md](operations/provider-policy.md).
+Moved to [provider-policy.md](operations/provider-policy.md#clearing-a-block).
 
 ### Four-eyes on governance writes: a walkthrough
 
-Moved to [governance-writes.md](operations/governance-writes.md).
+Moved to [governance-writes.md](operations/governance-writes.md#four-eyes-on-governance-writes-a-walkthrough).
 
 ### Reclaiming a departed person's storage
 
-Moved to [user-drives.md](operations/user-drives.md).
+Moved to [user-drives.md](operations/user-drives.md#reclaiming-a-departed-persons-storage).
 
 #### 409 refusal
 
-Moved to [user-drives.md](operations/user-drives.md).
+Moved to [user-drives.md](operations/user-drives.md#409-refusal).
 
 ### User drives on Docker
 
-Moved to [user-drives.md](operations/user-drives.md).
+Moved to [user-drives.md](operations/user-drives.md#user-drives-on-docker).
 
 #### The two lists name the same tree
 
-Moved to [user-drives.md](operations/user-drives.md).
+Moved to [user-drives.md](operations/user-drives.md#the-two-lists-name-the-same-tree).
 
 #### A member root CONTAINS a drive root
 
-Moved to [user-drives.md](operations/user-drives.md).
+Moved to [user-drives.md](operations/user-drives.md#a-member-root-contains-a-drive-root).
 
 ### Capabilities: what one member, or one group, may do
 
-Moved to [capabilities.md](operations/capabilities.md).
+Moved to [capabilities.md](operations/capabilities.md#capabilities-what-one-member-or-one-group-may-do).
 
 #### `workspace_provider`
 
-Moved to [capabilities.md](operations/capabilities.md).
+Moved to [capabilities.md](operations/capabilities.md#workspace_provider).
 
 #### `model_provider`
 
-Moved to [capabilities.md](operations/capabilities.md).
+Moved to [capabilities.md](operations/capabilities.md#model_provider).
 
 #### `feature`
 
-Moved to [capabilities.md](operations/capabilities.md).
+Moved to [capabilities.md](operations/capabilities.md#feature).
 
 #### `GET /permissions/explain`
 
-Moved to [capabilities.md](operations/capabilities.md).
+Moved to [capabilities.md](operations/capabilities.md#get-permissionsexplain).
 
 ### Custom components
 
-Moved to [custom-components.md](operations/custom-components.md).
+Moved to [custom-components.md](operations/custom-components.md#custom-components).
 
 ### Per-user API tokens: stop sharing the admin token
 
-Moved to [api-tokens.md](operations/api-tokens.md).
+Moved to [api-tokens.md](operations/api-tokens.md#per-user-api-tokens-stop-sharing-the-admin-token).
 
 ### Tokens for a person who never signs in
 
-Moved to [api-tokens.md](operations/api-tokens.md).
+Moved to [api-tokens.md](operations/api-tokens.md#tokens-for-a-person-who-never-signs-in).
 
 ### Delegated run management (portals)
 
-Moved to [api-tokens.md](operations/api-tokens.md).
+Moved to [api-tokens.md](operations/api-tokens.md#delegated-run-management-portals).
 
 ### Three roles, and who sets the walls
 
-Moved to [three-roles.md](operations/three-roles.md).
+Moved to [three-roles.md](operations/three-roles.md#three-roles-and-who-sets-the-walls).
 
 ### When everyone is an admin, and what a refused person is told
 
-Moved to [three-roles.md](operations/three-roles.md).
+Moved to [three-roles.md](operations/three-roles.md#when-everyone-is-an-admin-and-what-a-refused-person-is-told).
 
 ### UI apps with more than one user: use host mode
 
-Moved to [three-roles.md](operations/three-roles.md).
+Moved to [three-roles.md](operations/three-roles.md#ui-apps-with-more-than-one-user-use-host-mode).
 
 ## The policy a run got
 
@@ -1751,17 +1751,17 @@ enforces, not a re-derivation:
 
 ## Run lifetime: lease, extend, revive, ends
 
-Moved to [run-lifetime.md](operations/run-lifetime.md).
+Moved to [run-lifetime.md](operations/run-lifetime.md#run-lifetime-lease-extend-revive-ends).
 
 ## Exercising member mode as an admin
 
-Moved to [member-mode.md](operations/member-mode.md).
+Moved to [member-mode.md](operations/member-mode.md#exercising-member-mode-as-an-admin).
 
 ## Second user, same host
 
 > [!NOTE]
 > This recipe gives a second person their own SSO identity instead of the shared admin token.
-> What that identity *can do* is exactly the **admin/member** model in [Multi-user: who can change what](#multi-user-who-can-change-what) above.
+> What that identity *can do* is exactly the **admin/member** model in [Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what) above.
 > Under OIDC, `WARDYN_OIDC_OPERATOR_EMAILS` is the boot-required allowlist — an empty one **refuses to boot** unless `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true`, which, absent a role map, instead makes every signed-in human admin (`validateOperatorPosture`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)).
 > The admin token is always an admin and cannot be demoted ([ROADMAP.md](../ROADMAP.md)).
 
@@ -1868,11 +1868,11 @@ Moved to [member-mode.md](operations/member-mode.md).
 
 ## Launch presets
 
-Moved to [launch-presets.md](operations/launch-presets.md).
+Moved to [launch-presets.md](operations/launch-presets.md#launch-presets).
 
 ## Console branding
 
-Moved to [console-branding.md](operations/console-branding.md).
+Moved to [console-branding.md](operations/console-branding.md#console-branding).
 
 ## Workspaces: three tiers
 
@@ -1929,7 +1929,7 @@ predates it.
 
 ## Integrations
 
-Moved to [integrations.md](operations/integrations.md).
+Moved to [integrations.md](operations/integrations.md#integrations).
 
 ## Network: upstream proxy and egress redirects
 
@@ -2324,7 +2324,7 @@ Delivery per install path:
 - The shape generalized to "a list of From → To pairs over any URL, host, or IP".
 - The token comes from either of two places, mutually exclusive — a row setting both is rejected.
 - `token_secret_ref` names a bare secret directly.
-- `token_integration_ref` instead names an [**Integration**](#integrations) (above) to take the token from: the integration owns the system and its credential, the redirect owns rerouting a public endpoint to it.
+- `token_integration_ref` instead names an [**Integration**](operations/integrations.md) (above) to take the token from: the integration owns the system and its credential, the redirect owns rerouting a public endpoint to it.
 - Pointing at an integration carries more than its secret name.
 - The header and format of that row's `proxy_header` delivery come with it, so a feed authenticating with something other than `Authorization: Bearer` (the bare-secret path's hardcoded shape) finally can.
 - Which secret that is follows the delivery, not the role name: whatever the row calls it, its `proxy_header` secret is the credential this redirect presents.
@@ -3240,7 +3240,7 @@ curl -s -X POST http://localhost:8080/api/v1/site-config/test-proxy \
   - Every exec-mode run's task is wrapped by `wardyn-rec`, which PUTs the recording to the proxy pod in parts while the run goes on and flushes the rest at exit (`http://wardyn-proxy:3128/wardyn/v1/recordings/<runID>`, then `…/parts/<n>`), which forwards it to `WARDYN_CONTROL_PLANE_URL`.
   - The chart points this at the control plane's in-cluster Service FQDN, on the internal TLS port ([Control-plane to proxy TLS](#control-plane-to-proxy-tls)).
   - Delivery failure is deliberately non-fatal to the task but bounded ([`cmd/wardyn-rec/main.go`](../cmd/wardyn-rec/main.go)'s upload client timeout), so it cannot hold a finished task's exit longer.
-  - A cluster-wide baseline default-deny NetworkPolicy or a mesh authorization policy can drop the proxy-pod → control-plane hop even with the ambient-deny ack in place (`WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY`, "[Kubernetes: known gaps](#kubernetes-known-gaps)" below).
+  - A cluster-wide baseline default-deny NetworkPolicy or a mesh authorization policy can drop the proxy-pod → control-plane hop even with the ambient-deny ack in place (`WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY`, "[Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)" below).
   - Wardyn's own per-run NetworkPolicy allows are additive only within the namespaced policy model and cannot override a platform-applied deny elsewhere.
   - The probe's `warning` field and `timed_out` state are how you find out.
 
@@ -5199,10 +5199,10 @@ What the switch needs, and refuses to render or boot without:
 
 ## Kubernetes: known gaps
 
-Moved to [kubernetes-known-gaps.md](operations/kubernetes-known-gaps.md).
+Moved to [kubernetes-known-gaps.md](operations/kubernetes-known-gaps.md#kubernetes-known-gaps).
 
 The member draft endpoint `POST /runs/policy-preview` shares the authorization decisions described above, but leaves credential liveness, autonomy/tool approvals and execution readiness pending. It uses its own `WARDYN_POLICY_PREVIEW_RATE_PER_MIN` bucket. Its dry-run denials share preflight's coalescing key and window; no credential value read or renewal occurs. See [the SDK contract](sdk.md#policy-preview).
 
 ### Every denial that isn't a 404
 
-Moved to [denials.md](operations/denials.md).
+Moved to [denials.md](operations/denials.md#every-denial-that-isnt-a-404).
