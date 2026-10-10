@@ -20,6 +20,10 @@ func TestExecutionResultRequiresExactDurableIntent(t *testing.T) {
 	if err != nil || !result.Attempted || result.ExecID != "" || result.Generation != gen || result.Operation != runnerwire.MethodExec {
 		t.Fatalf("ambiguous result %+v %v", result, err)
 	}
+	rows, err := m.State(ctx)
+	if err != nil || len(rows) != 1 || rows[0].Execution == nil || *rows[0].Execution != result {
+		t.Fatalf("ambiguous STATE differs from query: %+v %v", rows, err)
+	}
 	for _, wrong := range []uuid.UUID{uuid.Nil, uuid.New()} {
 		if _, err := m.ExecutionResult(ctx, id.String(), wrong); err == nil {
 			t.Fatal("unissued generation returned a result")
@@ -34,6 +38,10 @@ func TestExecutionResultRequiresExactDurableIntent(t *testing.T) {
 	result, err = m.ExecutionResult(ctx, id.String(), gen)
 	if err != nil || result.ExecID != "exec-1" {
 		t.Fatalf("bound result %+v %v", result, err)
+	}
+	rows, err = m.State(ctx)
+	if err != nil || len(rows) != 1 || rows[0].Execution == nil || *rows[0].Execution != result {
+		t.Fatalf("bound STATE differs from query: %+v %v", rows, err)
 	}
 	if err := m.BeforeRefCall(ctx, runnerwire.MethodExec, id.String(), gen); err == nil {
 		t.Fatal("query made generation executable again")

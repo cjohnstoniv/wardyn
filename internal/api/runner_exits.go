@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"time"
@@ -45,23 +46,30 @@ func (s *Server) SweepRunnerExits(ctx context.Context) error {
 		return nil
 	}
 	after := uuid.Nil
-	var errs []error
+	var firstErr error
+	failures := 0
 	for {
 		rows, err := st.ListRunnerExitWork(ctx, after)
 		if err != nil {
-			return errors.Join(append(errs, err)...)
+			return errors.Join(firstErr, err)
 		}
 		for _, row := range rows {
 			bounded, cancel := context.WithTimeout(ctx, 30*time.Second)
 			err := s.applyRunnerExit(bounded, st, row)
 			cancel()
 			if err != nil {
-				errs = append(errs, err)
+				failures++
+				if firstErr == nil {
+					firstErr = err
+				}
 			}
 			after = row.RunID
 		}
 		if len(rows) < 100 || ctx.Err() != nil {
-			return errors.Join(append(errs, ctx.Err())...)
+			if failures != 0 {
+				return errors.Join(fmt.Errorf("%d runner exits remain pending: %w", failures, firstErr), ctx.Err())
+			}
+			return ctx.Err()
 		}
 	}
 }

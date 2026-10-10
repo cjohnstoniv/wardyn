@@ -20,8 +20,19 @@ func (m *Manager) ExecutionResult(ctx context.Context, ref string, generation uu
 		return runnerwire.ExecutionResult{}, err
 	}
 	_, r, ok := m.findRef(ref)
-	if !ok || generation == uuid.Nil || r.Generation != generation || r.Executions[generation] == "" {
+	if !ok || generation == uuid.Nil || r.Generation != generation {
 		return runnerwire.ExecutionResult{}, errors.New("execution result has no matching durable intent")
 	}
-	return runnerwire.ExecutionResult{Generation: generation, Operation: r.Executions[generation], ExecID: r.ExecID, Attempted: true}, nil
+	result := durableExecutionResult(r)
+	if result == nil {
+		return runnerwire.ExecutionResult{}, errors.New("execution result has no matching durable intent")
+	}
+	return *result, nil
+}
+
+func durableExecutionResult(r localRun) *runnerwire.ExecutionResult {
+	if r.Generation == uuid.Nil || r.Executions[r.Generation] == "" {
+		return nil
+	}
+	return &runnerwire.ExecutionResult{Generation: r.Generation, Operation: r.Executions[r.Generation], ExecID: r.ExecID, Attempted: true}
 }

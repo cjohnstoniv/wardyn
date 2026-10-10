@@ -141,14 +141,15 @@ type ActionResult struct {
 
 // RunState is one run's entry in the STATE payload; all runner_asserted.
 type RunState struct {
-	RunID          uuid.UUID  `json:"run_id"`
-	SandboxPresent bool       `json:"sandbox_present"`
-	AgentState     string     `json:"agent_state,omitempty"`
-	ExitCode       *int       `json:"exit_code,omitempty"`
-	ProxyStoppedAt *time.Time `json:"proxy_stopped_at,omitempty"`
-	SpoolDepth     int        `json:"spool_depth"`
-	SpoolDrops     int        `json:"spool_drops"`
-	ResidentGrants []string   `json:"resident_grants,omitempty"`
+	Execution      *ExecutionResult `json:"execution,omitempty"`
+	RunID          uuid.UUID        `json:"run_id"`
+	SandboxPresent bool             `json:"sandbox_present"`
+	AgentState     string           `json:"agent_state,omitempty"`
+	ExitCode       *int             `json:"exit_code,omitempty"`
+	ProxyStoppedAt *time.Time       `json:"proxy_stopped_at,omitempty"`
+	SpoolDepth     int              `json:"spool_depth"`
+	SpoolDrops     int              `json:"spool_drops"`
+	ResidentGrants []string         `json:"resident_grants,omitempty"`
 }
 
 // Byte-stream kinds carried by OPEN.
