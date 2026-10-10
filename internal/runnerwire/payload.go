@@ -116,6 +116,7 @@ type AgentExit struct {
 }
 
 // Lease is the LEASE payload, sent after each renew or extend.
+// Zero EndsAt means authenticated no-end policy; token lapse is always finite.
 type Lease struct {
 	ExecutionGeneration uuid.UUID `json:"execution_generation"`
 	RunID               uuid.UUID `json:"run_id"`
