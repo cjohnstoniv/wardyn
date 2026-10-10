@@ -12,6 +12,8 @@ Migration `0143_runner_spool_cursors` adds metadata-only receipts with run and r
 
 Migration `0145_runner_inventories` stores an authenticated session's original run candidates and bounded STATE page observations. Page progress and observations commit together. Only a complete inventory can identify an omitted, unchanged original run; interrupted pages and newly created runs cannot imply loss. These internal records neither acknowledge audit history nor authorize execution. A fresh session replaces the preceding inventory records.
 
+Migration `0146_runner_action_binding` binds each queued runner action to the runner owner, the run's exact reference and execution generation, and for a proxy stop the exact loss it contains. The binding is written once and checked again when the runner reports the result; a result from another runner, run or identity is refused. Results are `success` or `deferred` only and use the organisation's arrival time. A repeated identical result is acknowledged without a second effect; a changed one is refused. A deferred result keeps the run fenced. Actions queued before this migration still fence their run but are never delivered or settled. Each reconnect delivers at most 100 actions, oldest first, and readiness waits until none remain open.
+
 Historical replay for a killed run records audit history only. It cannot revive the run, renew credentials, update the activity clock or grant authority. Audit events use the organisation arrival time; the runner's timestamp appears as `observed_at` with `spooled: true` and `evidence_source: runner_asserted`.
 
 Org execution identity is stored separately in `runner_executions`; immutable

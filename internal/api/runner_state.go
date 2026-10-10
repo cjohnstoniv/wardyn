@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -13,15 +14,29 @@ import (
 	"github.com/google/uuid"
 )
 
-// StateFromRunner runs on H2's checked STATE path. H3 must persist returned
-// requests before returning reconciliation-required; next fresh PENDING applies
-// them before READY. This method performs no runner RPC, renewal or transition.
+// StateFromRunner runs on H2's checked STATE path. An open action left after
+// this session's PENDING page refuses READY; returned containment requests are
+// queued before reconciliation-required, so the next fresh PENDING applies
+// them. This method performs no runner RPC, renewal or transition.
 func (s *Server) StateFromRunner(ctx context.Context, runnerID uuid.UUID, rows []runnerwire.RunState) ([]store.RunnerContainment, error) {
 	st, ok := s.cfg.Store.(store.PG)
 	if !ok {
 		return nil, store.ErrRunnerExecutionRefused
 	}
-	return st.ReconcileRunnerState(ctx, runnerID, rows)
+	open, _, err := st.ListPendingRunnerActions(ctx, runnerID)
+	if err != nil {
+		return nil, err
+	}
+	if len(open) > 0 {
+		return nil, store.ErrRunnerReconciliationRequired
+	}
+	requests, err := st.ReconcileRunnerState(ctx, runnerID, rows)
+	if errors.Is(err, store.ErrRunnerReconciliationRequired) {
+		if qerr := queueRunnerContainment(ctx, st, runnerID, requests); qerr != nil {
+			return requests, errors.Join(err, qerr)
+		}
+	}
+	return requests, err
 }
 
 type runnerLossClaim struct {
