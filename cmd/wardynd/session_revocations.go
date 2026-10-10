@@ -108,46 +108,25 @@ func (r *pgSessionRevocations) SessionStatusQ(ctx context.Context, q store.Queri
 }
 
 func (r *pgSessionRevocations) sessionStatus(ctx context.Context, querier store.Querier, sub, email string, issuedAt time.Time, identity bool, epoch int64, cuts bool) (oidc.SessionStatus, error) {
-	// Asked on both clocks, and either answer of "revoked" wins.
-	//
-	// revoked_at is stamped by POSTGRES. issuedAt is stamped by WARDYND — and by
-	// wardynd in two different senses, which is why this cannot simply pick one
-	// clock and convert: an SSO cookie's `iat` is a wall-clock reading taken when
-	// the cookie was minted, while an API token's created_at is now written on
-	// the database's own clock (store.CreateAPIToken). This function is handed
-	// both and cannot tell them apart, and there is no signature here to widen —
-	// the interface is internal/auth/oidc's.
-	//
-	// So it asks the question twice and takes the earlier-revoking answer:
-	// directly against the cutoff (exact when issuedAt is already on the database
-	// clock), and against the database's now() minus the age wardynd measured for
-	// it (exact when issuedAt is an app wall-clock reading). Under a skew of d
-	// the two disagree by at most d, and OR-ing them means the disagreement
-	// always resolves toward REVOKED. That asymmetry is the whole point: a revoke
-	// that fires d early during a clock skew is a session re-authenticating; a
-	// revoke that fires d late is the admin's "revoke every session for this
-	// human" silently not doing it, which is the finding.
-	//
-	// The age is measured entirely on wardynd's clock (now minus issuedAt), so no
-	// skew rides in on it — see db.AppClockAgeMicros, whose contract is that both
-	// of its arguments come from one clock.
-	//
+	// Either clock's revocation wins. The database clock is returned with the
+	// cutoff; app age is sampled after Scan so pool/server/response waits cannot
+	// translate an old cookie forward across the cutoff. Raw-time comparison
+	// retains the conservative earlier-revoking answer for DB-stamped tokens.
 	// cuts says the browser-session cuts (CutSessions) count too: for IsSessionRevoked and for a credential
 	// that carries an epoch, a session cookie, and not for an API token or an SSH key.
 	q := `
-		SELECT MAX(revoked_at), MAX(revoked_at) >= ` + db.AppClockAgeSQL("$4") + `,
-		       $5::boolean AND EXISTS (SELECT 1 FROM principal_identities WHERE principal = $1
-		          AND (deactivated_at IS NOT NULL OR purged_at IS NOT NULL OR ($6::bigint >= 0 AND authority_epoch > $6::bigint)))
+		SELECT MAX(revoked_at), clock_timestamp(),
+		        $4::boolean AND EXISTS (SELECT 1 FROM principal_identities WHERE principal = $1
+		          AND (deactivated_at IS NOT NULL OR purged_at IS NOT NULL OR ($5::bigint >= 0 AND authority_epoch > $5::bigint)))
 		FROM (SELECT sub, revoked_at FROM oidc_session_revocations
-		      UNION ALL SELECT sub, cut_at FROM oidc_session_cuts WHERE $7::boolean) r
+		      UNION ALL SELECT sub, cut_at FROM oidc_session_cuts WHERE $6::boolean) r
 		WHERE sub = $1
 		   OR lower(sub) = lower($2)
 		   OR sub = $3`
 	var cutoff sql.NullTime
-	var byDBClock sql.NullBool
+	var databaseAt time.Time
 	var blocked bool
-	age := db.AppClockAgeMicros(issuedAt, r.appNow())
-	if err := querier.QueryRow(ctx, q, sub, email, globalRevokeSub, age, identity, epoch, cuts).Scan(&cutoff, &byDBClock, &blocked); err != nil {
+	if err := querier.QueryRow(ctx, q, sub, email, globalRevokeSub, identity, epoch, cuts).Scan(&cutoff, &databaseAt, &blocked); err != nil {
 		return oidc.SessionLive, fmt.Errorf("wardynd: is-session-revoked query: %w", err)
 	}
 	if blocked {
@@ -162,7 +141,8 @@ func (r *pgSessionRevocations) sessionStatus(ctx context.Context, querier store.
 	// deliberate rather than a bug. Said here rather than left to the arithmetic:
 	// db.AppClockAgeMicros CLAMPS an age at a century, so the zero time would
 	// otherwise be answered by a clamp rather than by the rule.
-	if issuedAt.IsZero() || !issuedAt.After(cutoff.Time) || byDBClock.Bool {
+	anchor := db.AppClockAnchor{DatabaseAt: databaseAt, AppAt: r.appNow()}
+	if issuedAt.IsZero() || !issuedAt.After(cutoff.Time) || !anchor.Translate(issuedAt).After(cutoff.Time) {
 		return oidc.SessionRevoked, nil
 	}
 	return oidc.SessionLive, nil

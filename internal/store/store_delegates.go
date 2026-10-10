@@ -129,15 +129,19 @@ func (s PG) MintDelegatedToken(ctx context.Context, t types.DelegatedToken, raw 
 	if err != nil {
 		return types.DelegatedToken{}, err
 	}
-	age := db.AppClockAgeMicros(t.CreatedAt, now)
-	q := `
+	anchor, err := db.CaptureAppClock(ctx, s.Pool, s.now)
+	if err != nil {
+		return types.DelegatedToken{}, err
+	}
+	createdAt := anchor.Translate(t.CreatedAt)
+	const q = `
 		WITH swept AS (DELETE FROM delegated_tokens WHERE expires_at <= $11),
 		     touched AS (UPDATE delegates SET last_used_at = $11 WHERE id = $2)
 		INSERT INTO delegated_tokens AS t (id, delegate_id, token_sha256, principal, email, user_type, groups, groups_truncated, created_at, expires_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,` + db.AppClockAgeSQL("$9") + `,$10)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		RETURNING ` + delegatedTokenCols
 	return scanDelegatedToken(s.Pool.QueryRow(ctx, q, t.ID, t.DelegateID, hashToken(raw), t.Principal, t.Email,
-		t.UserType, groups, t.GroupsTruncated, age, t.ExpiresAt, now))
+		t.UserType, groups, t.GroupsTruncated, createdAt, t.ExpiresAt, now))
 }
 
 // GetDelegatedTokenByRaw is the delegated lane's auth lookup: the token must
