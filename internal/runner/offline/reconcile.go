@@ -127,8 +127,8 @@ func (m *Manager) State(ctx context.Context) ([]runnerwire.RunState, error) {
 	for _, id := range ids {
 		m.mu.Lock()
 		r := m.state.Runs[id]
-		m.mu.Unlock()
 		row := runnerwire.RunState{RunID: id, ProxyStoppedAt: r.ProxyStoppedAt, Execution: durableExecutionResult(r)}
+		m.mu.Unlock()
 		if r.Ref != "" {
 			st, err := m.sub.Status(ctx, r.Ref)
 			if err != nil {
