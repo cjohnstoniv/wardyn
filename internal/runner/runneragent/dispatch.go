@@ -27,12 +27,22 @@ import (
 type Config struct {
 	RunnerID  string
 	Substrate substrate.Substrate
-	// BeforeCreate durably establishes lease/offline state before provisioning.
+	// BeforeCreate durably establishes a unique creation intent and live lease.
+	// Nil proves a NEW run; every existing or ambiguous intent must refuse.
 	BeforeCreate func(context.Context, runner.SandboxSpec) error
+	// Created durably binds the run to its local ref before success is reported.
+	Created func(context.Context, runner.SandboxSpec, string) error
+	// BeforeRefCall enforces offline/lease policy before a state-changing call.
+	BeforeRefCall func(context.Context, string, string) error
+	// AfterRefCall persists successful state changes. The final argument is
+	// the agent exec id for MethodExec, empty otherwise. Persistence failures
+	// must contain the proxy before returning their error.
+	AfterRefCall func(context.Context, string, string, string) error
 	// Streams serves attach/exec/resize/wait/output, with ref validation of its own.
-	Streams    func(context.Context, *runnerwire.Peer, uint32, string, json.RawMessage) (any, error)
-	Output     func(uuid.UUID) (io.Writer, error)
-	BindOutput func(uuid.UUID, string) error
+	Streams      func(context.Context, *runnerwire.Peer, uint32, string, json.RawMessage) (any, error)
+	Output       func(uuid.UUID) (io.Writer, error)
+	BindOutput   func(uuid.UUID, string) error
+	ForgetOutput func(uuid.UUID) error
 	// Resident is the credential-delivery adapter; nil refuses both verbs.
 	Resident func(context.Context, string, json.RawMessage) (any, error)
 }
@@ -41,8 +51,8 @@ type Dispatcher struct{ cfg Config }
 
 func New(cfg Config) (*Dispatcher, error) {
 	id, err := uuid.Parse(cfg.RunnerID)
-	if err != nil || id.String() != cfg.RunnerID || cfg.Substrate == nil || cfg.BeforeCreate == nil {
-		return nil, errors.New("runner dispatcher requires a registered id, local substrate and durable creation guard")
+	if err != nil || id.String() != cfg.RunnerID || cfg.Substrate == nil || cfg.BeforeCreate == nil || cfg.Created == nil || cfg.BeforeRefCall == nil || cfg.AfterRefCall == nil {
+		return nil, errors.New("runner dispatcher requires a registered id, local substrate and durable creation guards")
 	}
 	if substrate.IsRemote(cfg.Substrate) {
 		return nil, errors.New("runner dispatcher requires a local substrate")
@@ -59,7 +69,7 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 	switch method {
 	case runnerwire.MethodCreateSandbox:
 		return d.create(ctx, peer, id, args)
-	case runnerwire.MethodAttach, runnerwire.MethodExecStream, runnerwire.MethodResize, runnerwire.MethodExecWait, runnerwire.MethodRecoverOutput, "output_ack", "exec_close":
+	case runnerwire.MethodAttach, runnerwire.MethodExecStream, runnerwire.MethodResize, runnerwire.MethodExecWait, runnerwire.MethodRecoverOutput, runnerwire.MethodOutputAck, runnerwire.MethodExecClose:
 		if d.cfg.Streams == nil {
 			return nil, runnerwire.Refuse("runner stream adapter is unavailable")
 		}
@@ -111,7 +121,7 @@ func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint3
 		return nil, err
 	}
 	if a.ExecOutput {
-		if d.cfg.Output == nil || d.cfg.BindOutput == nil {
+		if d.cfg.Output == nil || d.cfg.BindOutput == nil || d.cfg.ForgetOutput == nil {
 			return nil, runnerwire.Refuse("durable output adapter is unavailable")
 		}
 		var err error
@@ -126,28 +136,49 @@ func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint3
 	}
 	sandbox, err := d.cfg.Substrate.CreateSandbox(ctx, a.Spec)
 	if err != nil {
-		return nil, err
+		return nil, d.forgetNewOutput(a, err)
+	}
+	// Once provisioning succeeds, link cancellation alone must not prevent
+	// durable local state from keeping the existing sandbox enforceable.
+	persist, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	err = d.cfg.Created(persist, a.Spec, sandbox.Ref)
+	cancel()
+	if err != nil {
+		return nil, d.forgetNewOutput(a, d.rollbackCreate(ctx, sandbox.Ref, err))
 	}
 	if a.ExecOutput {
 		if err := d.cfg.BindOutput(a.Spec.RunID, sandbox.Ref); err != nil {
-			// A fresh create must not report success without persistent output.
-			// Output records are retained: a retry may refer to an existing run.
-			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-			return nil, errors.Join(err, d.cfg.Substrate.KillSandbox(cleanup, sandbox.Ref))
+			return nil, d.forgetNewOutput(a, d.rollbackCreate(ctx, sandbox.Ref, err))
 		}
 	}
 	sandbox.Ref = placement.RunnerRefPrefix(d.cfg.RunnerID) + sandbox.Ref
 	return runnerwire.CreateSandboxResult{Sandbox: sandbox}, nil
 }
 
-func (d *Dispatcher) refCall(ctx context.Context, method string, args json.RawMessage) (any, error) {
-	var a struct {
-		Ref         string   `json:"ref"`
-		Argv        []string `json:"argv"`
-		AgentExecID string   `json:"agent_exec_id"`
-		CfgJSON     []byte   `json:"cfg_json"`
+func (d *Dispatcher) forgetNewOutput(a runnerwire.CreateSandboxArgs, err error) error {
+	// The durable create-once guard proved this attempt new before Output.
+	// Its lifecycle intent remains durable, so an ambiguous retry refuses.
+	if a.ExecOutput {
+		return errors.Join(err, d.cfg.ForgetOutput(a.Spec.RunID))
 	}
+	return err
+}
+
+func (d *Dispatcher) rollbackCreate(ctx context.Context, ref string, err error) error {
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	return errors.Join(err, d.cfg.Substrate.KillSandbox(cleanup, ref))
+}
+
+type refArgs struct {
+	Ref         string   `json:"ref"`
+	Argv        []string `json:"argv"`
+	AgentExecID string   `json:"agent_exec_id"`
+	CfgJSON     []byte   `json:"cfg_json"`
+}
+
+func (d *Dispatcher) refCall(ctx context.Context, method string, args json.RawMessage) (any, error) {
+	var a refArgs
 	if err := runnerwire.Unmarshal(args, &a); err != nil {
 		return nil, err
 	}
@@ -155,6 +186,38 @@ func (d *Dispatcher) refCall(ctx context.Context, method string, args json.RawMe
 	if err != nil {
 		return nil, err
 	}
+	changing := changesRef(method)
+	if changing {
+		if err := d.cfg.BeforeRefCall(ctx, method, ref); err != nil {
+			return nil, err
+		}
+	}
+	result, err := d.dispatchRef(ctx, method, ref, a)
+	if err != nil || !changing {
+		return result, err
+	}
+	execID := ""
+	if exec, ok := result.(runnerwire.ExecResult); ok {
+		execID = exec.ExecID
+	}
+	persist, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if err := d.cfg.AfterRefCall(persist, method, ref, execID); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func changesRef(method string) bool {
+	switch method {
+	case runnerwire.MethodExec, runnerwire.MethodStop, runnerwire.MethodKill, runnerwire.MethodEnd, runnerwire.MethodStopProxy, runnerwire.MethodStart, runnerwire.MethodReplaceProxy:
+		return true
+	default:
+		return false
+	}
+}
+
+func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refArgs) (any, error) {
 	sub := d.cfg.Substrate
 	switch method {
 	case runnerwire.MethodExec:

@@ -29,11 +29,15 @@ type RunnerHooks struct {
 	Pending func(context.Context, *Peer, []PendingAction) error
 	State   func(context.Context) ([]RunState, error)
 	// Replay sends the durable spool, completing before READY is sent.
-	Replay  func(context.Context, *Peer) error
-	Lease   func(context.Context, Lease) error
-	Revoked func(context.Context) error
-	Offline func(context.Context)
-	Online  func(*Peer, bool)
+	Replay func(context.Context, *Peer) error
+	// BeforeReady establishes local execution admission before the org can
+	// send work. On resume it runs before the peer read loop starts, so it
+	// must not wait for replies or emit byte streams.
+	BeforeReady func(context.Context, *Peer, bool) error
+	Lease       func(context.Context, Lease) error
+	Revoked     func(context.Context) error
+	Offline     func(context.Context)
+	Online      func(*Peer, bool)
 	// StreamOffline releases per-connection PTY/exec resources, not sandboxes.
 	StreamOffline func(*Peer)
 }
@@ -66,7 +70,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		return nil, ErrAuth
 	}
 	h := cfg.Hooks
-	if h.Call == nil || h.Open == nil || h.Clock == nil || h.Pending == nil || h.State == nil || h.Replay == nil ||
+	if h.Call == nil || h.Open == nil || h.Clock == nil || h.Pending == nil || h.State == nil || h.Replay == nil || h.BeforeReady == nil ||
 		h.Lease == nil || h.Revoked == nil || h.Offline == nil {
 		return nil, errors.New("runner execution and durable offline handlers must be configured before serving")
 	}
@@ -150,22 +154,29 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 	defer cancel()
 	pending := make(chan []PendingAction, 1)
 	var ready atomic.Bool
-	ready.Store(ok.Resumed)
+	started := false
 	var peer *Peer
 	c.configure(ctx, &cfg, &ready, pending, func() *Peer { return peer })
 	peer = NewPeer(conn, cfg)
 	c.peer = peer
 	defer func() {
 		peer.Close()
-		c.ended, c.ready = time.Now(), ready.Load()
+		c.ended, c.ready = time.Now(), started && ready.Load()
 		if c.cfg.Hooks.StreamOffline != nil {
 			c.cfg.Hooks.StreamOffline(peer)
 		}
 		c.cfg.Hooks.Offline(ctx)
 	}()
+	if ok.Resumed {
+		if err := c.cfg.Hooks.BeforeReady(ctx, peer, true); err != nil {
+			return err
+		}
+		ready.Store(true)
+	}
 	if err := peer.Start(ctx, ok.LastSeq); err != nil {
 		return err
 	}
+	started = true
 	if !ok.Resumed {
 		if err := c.fresh(ctx, peer, pending, &ready); err != nil {
 			return err
@@ -256,6 +267,9 @@ func (c *Client) fresh(ctx context.Context, peer *Peer, pending <-chan []Pending
 		return err
 	}
 	if err := c.cfg.Hooks.Replay(ctx, peer); err != nil {
+		return err
+	}
+	if err := c.cfg.Hooks.BeforeReady(ctx, peer, false); err != nil {
 		return err
 	}
 	ready.Store(true)
