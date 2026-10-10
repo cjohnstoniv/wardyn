@@ -70,7 +70,7 @@ func (m *Manager) load() error {
 		return errors.New("runner lifecycle identity mismatch")
 	}
 	for id, r := range m.state.Runs {
-		if id == uuid.Nil || id != r.RunID || r.Lease.RunID != id {
+		if id == uuid.Nil || id != r.RunID || r.Lease.RunID != id || r.Ref != m.expectedRef(id) {
 			return errors.New("runner lifecycle run mismatch")
 		}
 	}

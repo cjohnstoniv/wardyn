@@ -17,26 +17,31 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/google/uuid"
+	"golang.org/x/sys/unix"
 )
 
 // Manager contains only local containment and evidence state. It cannot mint
 // credentials or grant authority, and never chooses a run's terminal state.
 type Manager struct {
-	replayMu  sync.Mutex
-	mu        sync.Mutex
-	runnerID  uuid.UUID
-	dir       string
-	root      *os.Root
-	sub       substrate.Substrate
-	stopper   runner.ProxyStopper
-	clock     *Clock
-	now       func() time.Time
-	since     func(time.Time) time.Duration
-	online    bool
-	peer      *runnerwire.Peer
-	state     localState
-	deadlines map[uuid.UUID]deadline
-	pending   map[uuid.UUID]runnerwire.Lease
+	actionMu    sync.Mutex
+	lock        *os.File
+	closed      bool
+	replayMu    sync.Mutex
+	mu          sync.Mutex
+	runnerID    uuid.UUID
+	dir         string
+	root        *os.Root
+	sub         substrate.Substrate
+	expectedRef func(uuid.UUID) string
+	stopper     runner.ProxyStopper
+	clock       *Clock
+	now         func() time.Time
+	since       func(time.Time) time.Duration
+	online      bool
+	peer        *runnerwire.Peer
+	state       localState
+	deadlines   map[uuid.UUID]deadline
+	pending     map[uuid.UUID]runnerwire.Lease
 }
 
 type deadline struct {
@@ -48,8 +53,8 @@ type deadline struct {
 // New recovers local state. Run must start before connecting: a restart cannot
 // reconstruct a monotonic deadline, so existing proxies are contained until
 // an authenticated fresh lease establishes one.
-func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate) (*Manager, error) {
-	if runnerID == uuid.Nil || sub == nil || substrate.IsRemote(sub) {
+func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedRef func(uuid.UUID) string) (*Manager, error) {
+	if runnerID == uuid.Nil || sub == nil || substrate.IsRemote(sub) || expectedRef == nil {
 		return nil, errors.New("offline manager requires a registered runner and local substrate")
 	}
 	stopper, ok := sub.(runner.ProxyStopper)
@@ -71,8 +76,26 @@ func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate) (*Manager
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{runnerID: runnerID, dir: stateDir, root: root, sub: sub, stopper: stopper, clock: NewClock(nil), now: time.Now, since: time.Since, deadlines: map[uuid.UUID]deadline{}, pending: map[uuid.UUID]runnerwire.Lease{}}
+	lock, err := root.OpenFile("daemon.lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		root.Close()
+		return nil, err
+	}
+	st, err = lock.Stat()
+	link, linkErr := root.Lstat("daemon.lock")
+	if err != nil || linkErr != nil || !st.Mode().IsRegular() || st.Mode().Perm() != 0600 || link.Mode()&os.ModeSymlink != 0 || !os.SameFile(st, link) {
+		lock.Close()
+		root.Close()
+		return nil, errors.New("unsafe runner lifecycle lock")
+	}
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		lock.Close()
+		root.Close()
+		return nil, errors.New("runner lifecycle directory is already active")
+	}
+	m := &Manager{lock: lock, runnerID: runnerID, dir: stateDir, root: root, sub: sub, expectedRef: expectedRef, stopper: stopper, clock: NewClock(nil), now: time.Now, since: time.Since, deadlines: map[uuid.UUID]deadline{}, pending: map[uuid.UUID]runnerwire.Lease{}}
 	if err := m.load(); err != nil {
+		lock.Close()
 		root.Close()
 		return nil, err
 	}
@@ -80,7 +103,15 @@ func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate) (*Manager
 }
 
 // Close releases local state handles after Run and the connection loop stop.
-func (m *Manager) Close() error { return m.root.Close() }
+func (m *Manager) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return nil
+	}
+	m.closed = true
+	return errors.Join(m.root.Close(), m.lock.Close())
+}
 
 // Clock anchors a newly authenticated connection without extending deadlines
 // already running on the local monotonic clock.
@@ -96,6 +127,15 @@ func (m *Manager) Clock(h runnerwire.Hello, received time.Time) error {
 // BeforeReady enables admission only after pending actions and fresh replay.
 // It does not write to peer; resumed peers have not started their read loop.
 func (m *Manager) BeforeReady(ctx context.Context, peer *runnerwire.Peer, _ bool) error {
+	m.mu.Lock()
+	revoked := m.state.Revoked
+	m.mu.Unlock()
+	if revoked {
+		return runnerwire.ErrRevoked
+	}
+	if err := m.CheckLapses(ctx); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -191,9 +231,14 @@ func (m *Manager) BeforeCreate(ctx context.Context, spec runner.SandboxSpec) err
 	if !ok || m.expired(spec.RunID) {
 		return errors.New("runner create requires a live initial lease")
 	}
-	m.state.Runs[spec.RunID] = localRun{RunID: spec.RunID, Lease: l}
+	ref := m.expectedRef(spec.RunID)
+	if ref == "" {
+		return errors.New("runner create requires a recoverable substrate reference")
+	}
+	m.state.Runs[spec.RunID] = localRun{RunID: spec.RunID, Ref: ref, Lease: l}
 	if err := m.save(); err != nil {
-		delete(m.state.Runs, spec.RunID)
+		// A failed directory sync may follow a successful rename. Retain the
+		// intent even on error so an ambiguous durable write cannot allow retry.
 		return err
 	}
 	delete(m.pending, spec.RunID)

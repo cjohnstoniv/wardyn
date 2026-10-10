@@ -38,12 +38,14 @@ const (
 
 // Request is one normalized outbound attempt observed at the proxy.
 type Request struct {
-	RunID  uuid.UUID
-	Host   string // lowercased hostname, no port
-	Port   int
-	Method string // HTTP method, or "CONNECT" for tunneled TLS
-	Path   string // empty for CONNECT (hostname-only visibility)
-	Time   time.Time
+	// AuditReservation is proxy-local admission state, never a wire authority.
+	AuditReservation uuid.UUID `json:"-"`
+	RunID            uuid.UUID
+	Host             string // lowercased hostname, no port
+	Port             int
+	Method           string // HTTP method, or "CONNECT" for tunneled TLS
+	Path             string // empty for CONNECT (hostname-only visibility)
+	Time             time.Time
 }
 
 // DecisionLog is the structured record streamed to the control plane for

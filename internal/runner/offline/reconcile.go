@@ -39,6 +39,8 @@ func (m *Manager) Pending(ctx context.Context, peer *runnerwire.Peer, actions []
 	return nil
 }
 func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runnerwire.ActionResult, error) {
+	m.actionMu.Lock()
+	defer m.actionMu.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.state.Revoked {
@@ -48,7 +50,7 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 		if old.Action != a {
 			return runnerwire.ActionResult{}, errors.New("pending action identity changed")
 		}
-		return old.Result, nil
+		return old.Result, m.save()
 	}
 	if a.ID == uuid.Nil {
 		return runnerwire.ActionResult{}, errors.New("pending action has no identity")
@@ -58,6 +60,7 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	if !ok || !belongs || local == "" || r.Ref != local {
 		return runnerwire.ActionResult{}, errors.New("pending action does not match a local run")
 	}
+	m.mu.Unlock()
 	var err error
 	switch a.Kind {
 	case types.RunnerActionKill:
@@ -67,15 +70,19 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	case types.RunnerActionEnd:
 		end, ok := m.sub.(runner.SandboxEnder)
 		if !ok {
+			m.mu.Lock()
 			return runnerwire.ActionResult{}, runner.ErrEndUnsupported
 		}
 		err = end.EndSandbox(ctx, local)
 	default:
+		m.mu.Lock()
 		return runnerwire.ActionResult{}, errors.New("unknown pending action")
 	}
+	m.mu.Lock()
 	if err != nil {
 		return runnerwire.ActionResult{}, err
 	}
+	r = m.state.Runs[a.RunID]
 	at := m.now().UTC()
 	r.ProxyStoppedAt = &at
 	m.state.Runs[a.RunID] = r
@@ -158,7 +165,15 @@ func (m *Manager) State(ctx context.Context) ([]runnerwire.RunState, error) {
 				row.AgentState = string(agent.State)
 				row.ExitCode = agent.ExitCode
 				if agent.ExitCode != nil && r.Exit == nil {
-					if err := m.AgentExited(ctx, id, r.Ref, *agent.ExitCode); err != nil {
+					m.mu.Lock()
+					current := m.state.Runs[id]
+					if current.ExecID == r.ExecID && current.Ref == r.Ref && current.Exit == nil {
+						current.Exit = &runnerwire.AgentExit{Ref: placement.RunnerRefPrefix(m.runnerID.String()) + r.Ref, Code: *agent.ExitCode, ObservedAt: m.now().UTC()}
+						m.state.Runs[id] = current
+						err = m.save()
+					}
+					m.mu.Unlock()
+					if err != nil {
 						return nil, err
 					}
 				}

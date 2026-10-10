@@ -195,6 +195,15 @@ func (s *Spool) writeManifest(m manifest) error { return s.writeJSON("state.json
 // Append commits before returning. Callers must refuse the egress attempt if
 // this returns any error; storage failure is never permission to go audit-dark.
 func (s *Spool) Append(ctx context.Context, decision egress.DecisionLog) error {
+	return s.append(ctx, decision, false)
+}
+
+// AppendAdmitted finishes a request whose proxy already reserved capacity.
+// Overflow refuses new requests, never discards this previously admitted tail.
+func (s *Spool) AppendAdmitted(ctx context.Context, decision egress.DecisionLog) error {
+	return s.append(ctx, decision, true)
+}
+func (s *Spool) append(ctx context.Context, decision egress.DecisionLog, admitted bool) error {
 	return s.locked(ctx, func() error {
 		m, err := s.readManifest()
 		if err != nil {
@@ -209,7 +218,7 @@ func (s *Spool) Append(ctx context.Context, decision egress.DecisionLog) error {
 		if err != nil {
 			return err
 		}
-		if m.Last-m.Ack.Seq >= MaxRecords || m.Bytes+int64(len(b)) > MaxBytes || len(b) > MaxRecordBytes || m.Drops > m.Reported {
+		if m.Last-m.Ack.Seq >= MaxRecords || m.Bytes+int64(len(b)) > MaxBytes || len(b) > MaxRecordBytes || (!admitted && m.Drops > m.Reported) {
 			if m.Drops == ^uint64(0) {
 				return errors.New("spool overflow counter exhausted")
 			}
@@ -257,5 +266,20 @@ func (s *Spool) CanRecord(ctx context.Context) error {
 			return ErrFull
 		}
 		return nil
+	})
+}
+
+// Refuse durably counts one egress admission refused because capacity is full.
+func (s *Spool) Refuse(ctx context.Context) error {
+	return s.locked(ctx, func() error {
+		m, err := s.readManifest()
+		if err != nil {
+			return err
+		}
+		if m.Drops == ^uint64(0) {
+			return errors.New("spool overflow counter exhausted")
+		}
+		m.Drops++
+		return s.writeManifest(m)
 	})
 }

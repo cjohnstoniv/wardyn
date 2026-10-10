@@ -228,8 +228,6 @@ func runnerDecisionEvent(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UU
 	if d.Decision == egress.Deny {
 		outcome = "denied"
 	}
-	if d.Decision == egress.Pending {
-		outcome = "pending"
-	}
+
 	return types.AuditEvent{ID: uuid.New(), Time: at, RunID: &runID, ActorType: types.ActorAgent, Actor: "runner:" + runnerID.String(), Action: "egress." + string(d.Decision), Target: d.Request.Host, Outcome: outcome, Data: b}, nil
 }

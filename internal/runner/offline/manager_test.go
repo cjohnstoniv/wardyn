@@ -54,7 +54,7 @@ func (s *localSub) AgentStatus(context.Context, string, string) (runner.Status, 
 func managerFixture(t *testing.T) (*Manager, *localSub, *time.Duration, time.Time) {
 	t.Helper()
 	sub := &localSub{status: runner.Status{State: types.RunRunning}, agent: runner.Status{State: types.RunRunning}}
-	m, err := New(t.TempDir(), uuid.New(), sub)
+	m, err := New(t.TempDir(), uuid.New(), sub, uuid.UUID.String)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,14 @@ func TestCreateRequiresInitialLeaseAndRejectsAmbiguousRetry(t *testing.T) {
 func TestRestartContainsUnknownDeadlineAndRetainsState(t *testing.T) {
 	m, sub, _, org := managerFixture(t)
 	id := createLocal(t, m, org)
-	restarted, err := New(m.dir, m.runnerID, sub)
+	if duplicate, err := New(m.dir, m.runnerID, sub, uuid.UUID.String); err == nil {
+		duplicate.Close()
+		t.Fatal("two daemons own lifecycle state")
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,5 +219,75 @@ func TestAgentExitUsesPersistedExecAndPendingActionsAreStable(t *testing.T) {
 	a.Kind = types.RunnerActionEnd
 	if _, err := m.apply(ctx, a); err == nil {
 		t.Fatal("action identity substitution accepted")
+	}
+}
+
+func TestAmbiguousCreateIntentStillContainsAfterRestart(t *testing.T) {
+	m, sub, _, org := managerFixture(t)
+	id := uuid.New()
+	ctx := context.Background()
+	if err := m.Lease(ctx, runnerwire.Lease{RunID: id, TokenRenewedAt: org, EndsAt: org.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.BeforeCreate(ctx, runner.SandboxSpec{RunID: id}); err != nil {
+		t.Fatal(err)
+	}
+	// Provisioning may create the proxy then return an error: Created never runs.
+	if m.state.Runs[id].Ref != id.String() {
+		t.Fatal("intent cannot find partial resources")
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	sub.stopErr = errors.New("daemon unavailable")
+	if err := restarted.BeforeReady(ctx, &runnerwire.Peer{}, false); err == nil {
+		t.Fatal("READY bypassed failed startup containment")
+	}
+	if restarted.online {
+		t.Fatal("admitted after failed containment")
+	}
+	sub.stopErr = nil
+	if err := restarted.BeforeReady(ctx, &runnerwire.Peer{}, false); err != nil {
+		t.Fatal(err)
+	}
+	if sub.stops != 2 || sub.kills != 0 {
+		t.Fatalf("partial resources not contained: %+v", sub)
+	}
+	if err := restarted.BeforeCreate(ctx, runner.SandboxSpec{RunID: id}); err == nil {
+		t.Fatal("ambiguous create retried")
+	}
+}
+func TestExecLessSentinelAndLateReviveContainment(t *testing.T) {
+	m, sub, elapsed, org := managerFixture(t)
+	id := createLocal(t, m, org)
+	ctx := context.Background()
+	if err := m.AfterRefCall(ctx, runnerwire.MethodExec, id.String(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if m.state.Runs[id].ExecID != runner.MainProcessExecID {
+		t.Fatal("exec-less agent looks never launched")
+	}
+	if err := m.BeforeRefCall(ctx, runnerwire.MethodReplaceProxy, id.String()); err != nil {
+		t.Fatal(err)
+	}
+	*elapsed = identity.RunTokenLapseAfter
+	if err := m.AfterRefCall(ctx, runnerwire.MethodReplaceProxy, id.String(), ""); !errors.Is(err, runner.ErrRunnerOffline) {
+		t.Fatalf("late revive accepted: %v", err)
+	}
+	if sub.stops != 1 {
+		t.Fatal("late revive was not contained")
+	}
+	for _, method := range []string{runnerwire.MethodKill, runnerwire.MethodStop, runnerwire.MethodStopProxy, runnerwire.MethodEnd} {
+		if err := m.BeforeRefCall(ctx, method, "missing"); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.AfterRefCall(ctx, method, "missing", ""); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

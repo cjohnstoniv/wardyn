@@ -32,6 +32,9 @@ func (m *Manager) BeforeRefCall(ctx context.Context, method, ref string) error {
 	}
 	id, _, ok := m.findRef(ref)
 	if !ok {
+		if isContainmentMethod(method) {
+			return nil
+		}
 		return errors.New("runner reference has no durable binding")
 	}
 	switch method {
@@ -50,17 +53,20 @@ func (m *Manager) AfterRefCall(ctx context.Context, method, ref, execID string) 
 	id, r, ok := m.findRef(ref)
 	var err error
 	if !ok {
+		if isContainmentMethod(method) {
+			m.mu.Unlock()
+			return nil
+		}
 		err = errors.New("runner reference has no durable binding")
 	} else {
 		switch method {
 		case runnerwire.MethodExec:
 			if execID == "" {
-				err = errors.New("runner execution has no liveness handle")
-			} else {
-				r.ExecID = execID
-				r.Exit = nil
-				r.ExitAcked = false
+				execID = runner.MainProcessExecID
 			}
+			r.ExecID = execID
+			r.Exit = nil
+			r.ExitAcked = false
 		case runnerwire.MethodReplaceProxy:
 			r.ProxyStoppedAt = nil
 		case runnerwire.MethodStopProxy, runnerwire.MethodStop, runnerwire.MethodKill, runnerwire.MethodEnd:
@@ -72,6 +78,9 @@ func (m *Manager) AfterRefCall(ctx context.Context, method, ref, execID string) 
 			err = m.save()
 		}
 	}
+	if err == nil && (method == runnerwire.MethodStart || method == runnerwire.MethodReplaceProxy || method == runnerwire.MethodExec) && (!m.online || m.state.Revoked || m.expired(id)) {
+		err = runner.ErrRunnerOffline
+	}
 	m.mu.Unlock()
 	if err == nil {
 		return nil
@@ -79,4 +88,12 @@ func (m *Manager) AfterRefCall(ctx context.Context, method, ref, execID string) 
 	safety, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	return errors.Join(err, m.stopper.StopProxy(safety, ref))
+}
+
+func isContainmentMethod(method string) bool {
+	switch method {
+	case runnerwire.MethodStop, runnerwire.MethodKill, runnerwire.MethodEnd, runnerwire.MethodStopProxy:
+		return true
+	}
+	return false
 }
