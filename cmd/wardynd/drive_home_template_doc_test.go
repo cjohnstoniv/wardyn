@@ -12,11 +12,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestManagedHomeTemplateDocMatchesTheValidator pins docs/OPERATIONS.md's
+// TestManagedHomeTemplateDocMatchesTheValidator pins docs/operations/user-drives.md's
 // managed-backend home-template rule to the function that enforces it.
 //
 // The rule: a managed backend refuses every non-hash template, not only
-// email_local, so OPERATIONS.md must not tell operators to "use `hash` (the
+// email_local, so user-drives.md must not tell operators to "use `hash` (the
 // default) or `sub`" — an admin following that sentence gets a 400 from a page
 // that told them to send it, and the sentence reads as an ordinary
 // recommendation rather than a stale one.
@@ -31,9 +31,9 @@ func TestManagedHomeTemplateDocMatchesTheValidator(t *testing.T) {
 	}
 
 	root := repoRoot(t)
-	b, err := os.ReadFile(filepath.Join(root, "docs", "OPERATIONS.md"))
+	b, err := os.ReadFile(filepath.Join(root, "docs", "operations", "user-drives.md"))
 	if err != nil {
-		t.Fatalf("read docs/OPERATIONS.md: %v", err)
+		t.Fatalf("read docs/operations/user-drives.md: %v", err)
 	}
 	// Scoped to the PARAGRAPH that states the rule — located by the refusal's
 	// own wording rather than by a line number (which every edit above it
@@ -55,12 +55,12 @@ func TestManagedHomeTemplateDocMatchesTheValidator(t *testing.T) {
 		}
 	}
 	if window == "" {
-		t.Fatalf("docs/OPERATIONS.md no longer quotes %q — the managed-backend home-template rule is the one an admin hits as a 400, and it has to be stated where drives are documented", anchor)
+		t.Fatalf("docs/operations/user-drives.md no longer quotes %q — the managed-backend home-template rule is the one an admin hits as a 400, and it has to be stated where drives are documented", anchor)
 	}
 
 	for _, tmpl := range accepted {
 		if !strings.Contains(window, "`"+string(tmpl)+"`") {
-			t.Errorf("docs/OPERATIONS.md's managed-backend paragraph never names %q, the only home template a managed backend ACCEPTS — the remedy the 400 gives is the one thing this passage has to carry", tmpl)
+			t.Errorf("docs/operations/user-drives.md's managed-backend paragraph never names %q, the only home template a managed backend ACCEPTS — the remedy the 400 gives is the one thing this passage has to carry", tmpl)
 		}
 	}
 	// The failure mode is a REFUSED template recommended as a remedy: "use
@@ -74,7 +74,7 @@ func TestManagedHomeTemplateDocMatchesTheValidator(t *testing.T) {
 			"or `" + string(tmpl) + "` instead",
 		} {
 			if strings.Contains(window, phrase) {
-				t.Errorf("docs/OPERATIONS.md recommends %q for a managed backend (%q), but types.ValidateUserDrive REFUSES it with a 400 — an admin following that sentence gets an error from the page that told them to send it", tmpl, phrase)
+				t.Errorf("docs/operations/user-drives.md recommends %q for a managed backend (%q), but types.ValidateUserDrive REFUSES it with a 400 — an admin following that sentence gets an error from the page that told them to send it", tmpl, phrase)
 			}
 		}
 	}
@@ -128,7 +128,7 @@ func managedTemplateVerdicts(t *testing.T) (accepted, refused []types.HomeTempla
 }
 
 // TestManagedDriveLabelDocSaysTheRuleWidened pins the OTHER managed-drive
-// passage in docs/OPERATIONS.md — the `docker_volume` restore recipe's
+// passage in docs/operations/user-drives.md — the `docker_volume` restore recipe's
 // `wardyn.subject` explanation — to the same widened rule.
 //
 // That passage justifies the `wardyn.subject` label with "one drive whose home
@@ -148,9 +148,9 @@ func TestManagedDriveLabelDocSaysTheRuleWidened(t *testing.T) {
 	}
 
 	root := repoRoot(t)
-	b, err := os.ReadFile(filepath.Join(root, "docs", "OPERATIONS.md"))
+	b, err := os.ReadFile(filepath.Join(root, "docs", "operations", "user-drives.md"))
 	if err != nil {
-		t.Fatalf("read docs/OPERATIONS.md: %v", err)
+		t.Fatalf("read docs/operations/user-drives.md: %v", err)
 	}
 	doc := string(b)
 
@@ -158,17 +158,17 @@ func TestManagedDriveLabelDocSaysTheRuleWidened(t *testing.T) {
 	// paragraphs (which legitimately recommend `sub`) stay out of the window.
 	start := strings.Index(doc, "`wardyn.subject`")
 	if start < 0 {
-		t.Fatal("docs/OPERATIONS.md no longer explains the `wardyn.subject` label — re-anchor this guard")
+		t.Fatal("docs/operations/user-drives.md no longer explains the `wardyn.subject` label — re-anchor this guard")
 	}
 	end := strings.Index(doc[start:], "**`host_path`")
 	if end < 0 {
-		t.Fatal("docs/OPERATIONS.md's docker_volume section is no longer followed by the host_path one — re-anchor this guard")
+		t.Fatal("docs/operations/user-drives.md's docker_volume section is no longer followed by the host_path one — re-anchor this guard")
 	}
 	window := strings.Join(strings.Fields(doc[start:start+end]), " ")
 
 	for _, want := range []string{"ManagedBackendRejectsTemplate", "`sub`"} {
 		if !strings.Contains(window, want) {
-			t.Errorf("docs/OPERATIONS.md's `wardyn.subject` passage never mentions %s — it explains a home-template collision that a managed drive can no longer be configured into, without saying so", want)
+			t.Errorf("docs/operations/user-drives.md's `wardyn.subject` passage never mentions %s — it explains a home-template collision that a managed drive can no longer be configured into, without saying so", want)
 		}
 	}
 }

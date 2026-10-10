@@ -11,14 +11,26 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
-// operationsDoc is the operator manual's text, normalized for prose assertions:
-// markdown hard-wraps sentences, so a claim that reads as one line to a human is
-// two or three lines to strings.Contains.
+// operationsDoc is the operator manual's admin-only tier table, normalized for
+// prose assertions: markdown hard-wraps sentences, so a claim that reads as one
+// line to a human is two or three lines to strings.Contains. Since #1519 that
+// table lives on docs/operations/admin-only-writes.md.
 func operationsDoc(t *testing.T) string {
 	t.Helper()
-	b, err := os.ReadFile("../../docs/OPERATIONS.md")
+	b, err := os.ReadFile("../../docs/operations/admin-only-writes.md")
 	if err != nil {
-		t.Fatalf("read docs/OPERATIONS.md: %v", err)
+		t.Fatalf("read docs/operations/admin-only-writes.md: %v", err)
+	}
+	return string(b)
+}
+
+// roleDerivationDoc reads the page that carries how a session derives its role,
+// which since the multi-user split is the access page rather than the tier table.
+func roleDerivationDoc(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("../../docs/operations/who-gets-in.md")
+	if err != nil {
+		t.Fatalf("read docs/operations/who-gets-in.md: %v", err)
 	}
 	return string(b)
 }
@@ -32,7 +44,7 @@ var docTierGate = map[routeClass]string{
 	classSecurity: "⛔ admin or `security_admin`",
 }
 
-// docTierRow pairs a route the OPERATIONS.md tier table names with the exact
+// docTierRow pairs a route the tier table names with the exact
 // text it is named by. The route key is looked up in routeMatrix — the
 // authoritative classification the chi.Walk test enforces against the live
 // router — so a route that MOVES between operatorOnly and securityOps fails
@@ -221,8 +233,8 @@ var docTierUndocumented = map[string]string{
 	"PUT /api/v1/governance/egress-baseline": "0.9 B-P1: as the GET above",
 }
 
-// TestOperationsTierTableMatchesRouteMatrix pins docs/OPERATIONS.md's "What
-// admin-only still means" table — the section the doc's own intro sends a
+// TestOperationsTierTableMatchesRouteMatrix pins the "What admin-only still
+// means" table — the section the doc's own intro sends a
 // reader to for "who can change what" — to the router's real classification.
 //
 // Through 0.6 every gated route was operatorOnly and the table could say "admin
@@ -238,7 +250,7 @@ func TestOperationsTierTableMatchesRouteMatrix(t *testing.T) {
 	for _, dr := range docTierRows {
 		rc, ok := routeMatrix[dr.route]
 		if !ok {
-			t.Errorf("OPERATIONS.md's tier table names %q, which the route matrix does not classify", dr.route)
+			t.Errorf("the tier table names %q, which the route matrix does not classify", dr.route)
 			continue
 		}
 		want, ok := docTierGate[rc.class]
@@ -261,7 +273,7 @@ func TestOperationsTierTableMatchesRouteMatrix(t *testing.T) {
 		// are not prefixes of each other, so this still fails on a wrong tier —
 		// it only tolerates the document's habit of explaining itself in place.
 		if !strings.HasPrefix(got[0], want) {
-			t.Errorf("%s is %s in the router, but OPERATIONS.md's tier table gates %s as %q, want it to lead with %q",
+			t.Errorf("%s is %s in the router, but the tier table gates %s as %q, want it to lead with %q",
 				dr.route, rc.class, dr.token, got[0], want)
 		}
 	}
@@ -283,7 +295,7 @@ func TestOperationsTierTableMatchesRouteMatrix(t *testing.T) {
 		if covered[route] || docTierUndocumented[route] != "" {
 			continue
 		}
-		t.Errorf("%s is gated (%s) and the OPERATIONS.md tier table does not cover it. An operator reads that "+
+		t.Errorf("%s is gated (%s) and the tier table does not cover it. An operator reads that "+
 			"table to decide what to delegate, so a gated surface missing from it is a delegation boundary "+
 			"nobody can see. Name it in docTierRows with the token that covers it, or add it to "+
 			"docTierUndocumented with the reason and file the row for the docs pass", route, rc.class)
@@ -306,12 +318,12 @@ func TestOperationsTierTableMatchesRouteMatrix(t *testing.T) {
 type tierRow struct{ surface, gate string }
 
 // tierTableRows returns the body rows of the "What admin-only still means"
-// markdown table.
+// markdown table on docs/operations/admin-only-writes.md.
 func tierTableRows(t *testing.T, doc string) []tierRow {
 	t.Helper()
 	i := strings.Index(doc, "**What admin-only still means**")
 	if i < 0 {
-		t.Fatal(`docs/OPERATIONS.md has no "What admin-only still means" section`)
+		t.Fatal(`docs/operations/admin-only-writes.md has no "What admin-only still means" section`)
 	}
 	var rows []tierRow
 	started := false
@@ -347,7 +359,7 @@ func tierTableRows(t *testing.T, doc string) []tierRow {
 // stayed literally true-sounding after the third role landed, which is why no
 // test caught them.
 func TestOperationsDocDescribesThreeRoleAuthz(t *testing.T) {
-	doc := unwrapped(operationsDoc(t))
+	doc := unwrapped(roleDerivationDoc(t))
 
 	// deriveRole can return three roles, so the manual cannot describe two.
 	for _, role := range []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleUser} {
@@ -355,7 +367,7 @@ func TestOperationsDocDescribesThreeRoleAuthz(t *testing.T) {
 			t.Fatalf("%q is no longer a role — revisit this guard, not the doc", role)
 		}
 		if !strings.Contains(doc, role) {
-			t.Errorf("OPERATIONS.md never names the derivable role %q", role)
+			t.Errorf("docs/operations/who-gets-in.md never names the derivable role %q", role)
 		}
 	}
 	for _, stale := range []struct{ claim, why string }{
@@ -369,12 +381,12 @@ func TestOperationsDocDescribesThreeRoleAuthz(t *testing.T) {
 			"the four /permissions routes are mounted on securityOps (mountPermissionRoutes)"},
 	} {
 		if strings.Contains(doc, unwrapped(stale.claim)) {
-			t.Errorf("OPERATIONS.md still claims %q — %s", stale.claim, stale.why)
+			t.Errorf("docs/operations/who-gets-in.md still claims %q — %s", stale.claim, stale.why)
 		}
 	}
 	// And it must say what the fold actually is, not merely stop being wrong.
 	if !strings.Contains(doc, "`user` < `security_admin` < `admin`") {
-		t.Error(`OPERATIONS.md's "Deriving the role" never states roleRank's order (user < security_admin < admin)`)
+		t.Error(`docs/operations/who-gets-in.md's "Deriving the role" never states roleRank's order (user < security_admin < admin)`)
 	}
 }
 

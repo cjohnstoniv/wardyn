@@ -156,8 +156,10 @@ func TestUpstreamGuardResidualIsDocumented(t *testing.T) {
 	// docs/OPERATIONS.md is the operator-facing half of the same claim: the
 	// upstream-secret disclosure and the bypass x internal_hosts matrix both
 	// rested on "the guard is skipped / never runs" and both are now wrong.
-	ops := readDoc(t, "docs/OPERATIONS.md")
-	mustSay(t, ops, "docs/OPERATIONS.md",
+	// The upstream-secret half of the claim moved to the ownership page with the
+	// rest of the secret-ownership prose; the matrix half stayed in OPERATIONS.md.
+	ops := readDoc(t, "docs/OPERATIONS.md") + readDoc(t, "docs/operations/ownership-and-offboarding.md")
+	mustSay(t, ops, "docs/OPERATIONS.md and docs/operations/ownership-and-offboarding.md",
 		"under a configured upstream the sidecar hands the corp proxy a HOSTNAME rather than a pinned address for every host it proxies",
 		"would put a member in control of which proxy resolves and dials every one of them",
 		"**It changes which hop dials; the guard binds both columns.**",
@@ -171,7 +173,7 @@ func TestUpstreamGuardResidualIsDocumented(t *testing.T) {
 		"`internal_hosts` is the only field that lifts the guard — the bypass never",
 		"lifting the guard is necessary, never sufficient, because the dial still has to",
 	)
-	mustNotSay(t, ops, "docs/OPERATIONS.md",
+	mustNotSay(t, ops, "docs/OPERATIONS.md and docs/operations/ownership-and-offboarding.md",
 		"skips the SSRF guard for every host it proxies",
 		"the guard never even runs",
 		"corp proxy takes the dial, cannot reach an internal address",
@@ -185,7 +187,7 @@ func TestUpstreamGuardResidualIsDocumented(t *testing.T) {
 		// timeout for the case the matrix immediately below says is refused.
 		"every one of them times out",
 	)
-	mustSay(t, ops, "docs/OPERATIONS.md",
+	mustSay(t, ops, "docs/OPERATIONS.md and docs/operations/ownership-and-offboarding.md",
 		"the sidecar resolves the name for its own private/reserved-IP guard before it does",
 		"a name that resolves here is refused",
 	)

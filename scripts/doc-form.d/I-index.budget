@@ -6,7 +6,11 @@
 # README.md 2253 adds 26: 17 (the lead bullet links docs/CREDENTIALS.md) and 9 (the architecture bullet says the proxy adds most credentials, with a link).
 README.md=2253 share=35
 # docs/README.md 597 adds 20: the index row for docs/CREDENTIALS.md.
-docs/README.md=597 share=35
+# 0.9 F-1519 (#1519): docs/README.md 720 adds 123 over 597 — eleven new index rows for the multi-user
+# split (the admin-only tier table, capabilities, the two-human gate, per-user API tokens, user drives
+# and their reclaim, offboarding a person, the provider-policy door, the authz.denied reason table and
+# org components), each naming the task page it sends the reader to.
+docs/README.md=720 share=35
 # docs/TRY-IT.md 3209 adds 8: the demo/default difference names idle auto-stop.
 # docs/TRY-IT.md 3243 adds 34: the branch-confinement warning names what the token broker reads and when it confines.
 # docs/TRY-IT.md 3254 adds 11: the default policy's model access goes through a model provider, not an authored grant.

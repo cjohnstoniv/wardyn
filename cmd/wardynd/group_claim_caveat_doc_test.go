@@ -21,7 +21,7 @@ var shrinkTheClaimRE = regexp.MustCompile(`(?i)ApplicationGroup|groups assigned 
 // caveat must appear. One markdown paragraph is well inside this.
 const caveatWindow = 1600
 
-// reKeyProcedureRE opens docs/OPERATIONS.md's re-key-before-you-change
+// reKeyProcedureRE opens docs/operations/capabilities.md's re-key-before-you-change
 // procedure: a bolded lead-in bullet, capturing its indent so the block ends at
 // the next sibling bullet and not at the sub-list nested inside it.
 var reKeyProcedureRE = regexp.MustCompile(`(?m)^([ \t]*)-[ \t]+\*\*[^*]*re-key[^*]*\*\*`)
@@ -95,7 +95,7 @@ func TestGroupClaimWorkaroundKeepsItsCaveat(t *testing.T) {
 // algorithm, and a guard that reads source prose can only ever be satisfied by
 // leaving the source alone.
 func TestGroupClaimOverageWarningAndProcedure(t *testing.T) {
-	ops := readDoc(t, "docs/OPERATIONS.md")
+	ops := readDoc(t, "docs/operations/capabilities.md")
 
 	// The WARNING, read around the option's own value so an unrelated paragraph
 	// about groups cannot satisfy it: a claim the IdP filtered is COMPLETE by its
@@ -104,7 +104,7 @@ func TestGroupClaimOverageWarningAndProcedure(t *testing.T) {
 		around := strings.ToLower(windowAt(ops, loc[0], caveatWindow))
 		return strings.Contains(around, "filter") && strings.Contains(around, "complete")
 	}) {
-		t.Error("docs/OPERATIONS.md no longer says a claim the IdP FILTERED is COMPLETE by its account — that " +
+		t.Error("docs/operations/capabilities.md no longer says a claim the IdP FILTERED is COMPLETE by its account — that " +
 			"silence is what the nested-membership caveat and the re-key procedure exist for")
 	}
 
@@ -122,7 +122,7 @@ func TestGroupClaimOverageWarningAndProcedure(t *testing.T) {
 		"post /governance/preview",
 	} {
 		if !strings.Contains(proc, want) {
-			t.Errorf("docs/OPERATIONS.md's re-key procedure no longer names %q — this is the burden "+
+			t.Errorf("docs/operations/capabilities.md's re-key procedure no longer names %q — this is the burden "+
 				"threatmodel/THREAT-MODEL.md §5 shifts to the operator", want)
 		}
 	}
@@ -136,19 +136,19 @@ func TestGroupClaimOverageWarningAndProcedure(t *testing.T) {
 		}
 	}
 	t.Error("threatmodel/THREAT-MODEL.md §5 has no residual that publishes the filtered-claim ceiling AND " +
-		"links docs/OPERATIONS.md for the procedure")
+		"links docs/operations.md for the procedure")
 }
 
-// overageProcedure returns docs/OPERATIONS.md's re-key-before-you-change
+// overageProcedure returns docs/operations/capabilities.md's re-key-before-you-change
 // procedure: the bolded lead-in bullet and everything indented under it, up to
 // the next sibling bullet. A bolded lead-in is this document's sub-heading, so
 // matching one keeps the guard on the block rather than on the prose.
 func overageProcedure(t *testing.T) string {
 	t.Helper()
-	doc := readRepo(t, "docs/OPERATIONS.md")
+	doc := readRepo(t, "docs/operations/capabilities.md")
 	m := reKeyProcedureRE.FindStringSubmatch(doc)
 	if m == nil {
-		t.Fatal("docs/OPERATIONS.md no longer leads the re-key procedure with a bolded bullet — re-read the overage remedy")
+		t.Fatal("docs/operations/capabilities.md no longer leads the re-key procedure with a bolded bullet — re-read the overage remedy")
 	}
 	rest := doc[strings.Index(doc, m[0])+len(m[0]):]
 	block := m[0] + rest

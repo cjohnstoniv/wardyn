@@ -100,11 +100,14 @@ func TestAgentThreatModelNamesTheRunAgeCap(t *testing.T) {
 
 // TestNoDowngradePathIsDocumented pins the two rollback paragraphs to the boot refusal in internal/db.
 func TestNoDowngradePathIsDocumented(t *testing.T) {
-	ops := readRepo(t, "docs/OPERATIONS.md")
-	wantAll(t, "docs/OPERATIONS.md", ops,
-		"There is no downgrade: a 0.8.5 binary refuses",
+	// The composed-profile half moved with the roles section; the migrator half
+	// stayed with the upgrade runbook.
+	ops := readRepo(t, "docs/operations/three-roles.md")
+	wantAll(t, "docs/operations/three-roles.md", ops,
+		"There is no downgrade: a 0.8.5 binary refuses")
+	wantAll(t, "docs/OPERATIONS.md", readRepo(t, "docs/OPERATIONS.md"),
 		"refuses to boot, naming the newest one")
-	wantNone(t, "docs/OPERATIONS.md", ops,
+	wantNone(t, "docs/operations/three-roles.md", ops,
 		"before a downgrade convert every composed profile to standalone",
 		"**it boots anyway**",
 		"nothing there refuses a schema newer than the binary")
@@ -120,8 +123,8 @@ func TestNoDowngradePathIsDocumented(t *testing.T) {
 
 // TestKeyDomainAssignmentsAreListedAsFourEyesCovered pins every page that lists the covered set.
 func TestKeyDomainAssignmentsAreListedAsFourEyesCovered(t *testing.T) {
-	ops := readRepo(t, "docs/OPERATIONS.md")
-	wantAll(t, "docs/OPERATIONS.md what-is-held table", ops, "| Key-domain assignment set, delete | always | security admin or super admin |")
+	ops := readRepo(t, "docs/operations/governance-writes.md")
+	wantAll(t, "docs/operations/governance-writes.md what-is-held table", ops, "| Key-domain assignment set, delete | always | security admin or super admin |")
 	env := readRepo(t, "docs/ENV.md")
 	wantAll(t, "docs/ENV.md WARDYN_GOVERNANCE_SECOND_HUMAN row",
 		regexp.MustCompile("(?m)^\\| `WARDYN_GOVERNANCE_SECOND_HUMAN` \\|.*$").FindString(env), "key-domain assignment")

@@ -110,7 +110,7 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 
 	// (4) The operator document names the tier and the remedy, with the receipt
 	// that tells an operator the revoke actually named somebody.
-	ops := readDoc(t, "docs/OPERATIONS.md")
+	ops := readDoc(t, "docs/operations/api-tokens.md")
 	for _, want := range []string{
 		"Both halves are stamps re-checked at login",
 		"re-stamps the role, the group snapshot, and the",
@@ -124,7 +124,7 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 		"count is the receipt",
 	} {
 		if !strings.Contains(ops, strings.Join(strings.Fields(want), " ")) {
-			t.Errorf("docs/OPERATIONS.md's API-token section is missing %q", want)
+			t.Errorf("docs/operations/api-tokens.md's API-token section is missing %q", want)
 		}
 	}
 

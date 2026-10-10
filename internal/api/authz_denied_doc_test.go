@@ -18,7 +18,7 @@ import (
 // publish it.
 //
 // docs/AUDIT-ACTIONS.md marks authz.denied "stable (documented, closed `reason`
-// enum)" and docs/OPERATIONS.md's table declares itself the source of record,
+// enum)" and the denials page's table declares itself the source of record,
 // whose reason field "is the whole vocabulary" — a promise SIEM rules are
 // written against. The registry is walked rather than the emit sites scanned:
 // refuse will not emit a reason the registry lacks, and TestNoAdHocAuthz holds
@@ -46,12 +46,12 @@ func TestAuthzDeniedReasonsAreDocumented(t *testing.T) {
 	for _, reason := range documentedAuthzDeniedReasons(t) {
 		documented[reason] = true
 		if !registered[reason] {
-			t.Errorf("docs/OPERATIONS.md's reason table documents %q, which is not a registered reason", reason)
+			t.Errorf("docs/operations/denials.md's reason table documents %q, which is not a registered reason", reason)
 		}
 	}
 	for reason := range audited {
 		if !documented[reason] {
-			t.Errorf("docs/OPERATIONS.md's reason table omits the audited reason %q — "+
+			t.Errorf("docs/operations/denials.md's reason table omits the audited reason %q — "+
 				"that table calls itself the source of record for a CLOSED enum", reason)
 		}
 	}
@@ -68,14 +68,25 @@ func TestAuthzDeniedReasonsAreDocumented(t *testing.T) {
 	}
 }
 
-// documentedAuthzDeniedReasons returns the `reason` column of OPERATIONS.md's
-// "Every denial that isn't a 404" table (body rows only).
+// denialDoc reads the page that owns the authz.denied reason table.
+func denialDoc(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("../../docs/operations/denials.md")
+	if err != nil {
+		t.Fatalf("read docs/operations/denials.md: %v", err)
+	}
+	return string(b)
+}
+
+// documentedAuthzDeniedReasons returns the `reason` column of the
+// "Every denial that isn't a 404" table (body rows only). Since #1519 that
+// section lives on docs/operations/denials.md.
 func documentedAuthzDeniedReasons(t *testing.T) []string {
 	t.Helper()
-	doc := operationsDoc(t)
-	i := strings.Index(doc, "### Every denial that isn't a 404")
+	doc := denialDoc(t)
+	i := strings.Index(doc, "## Every denial that isn't a 404")
 	if i < 0 {
-		t.Fatal(`docs/OPERATIONS.md has no "Every denial that isn't a 404" section`)
+		t.Fatal(`docs/operations/denials.md has no "Every denial that isn't a 404" section`)
 	}
 	key := regexp.MustCompile("^\\| `([a-z0-9_]+)` \\|")
 	var out []string
