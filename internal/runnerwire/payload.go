@@ -126,10 +126,13 @@ type Lease struct {
 
 // PendingAction is one entry of the PENDING payload, oldest first.
 type PendingAction struct {
-	ID    uuid.UUID              `json:"id"`
-	Kind  types.RunnerActionKind `json:"kind"`
-	RunID uuid.UUID              `json:"run_id"`
-	Ref   string                 `json:"ref"`
+	Retirement *types.RunnerRetirement      `json:"retirement,omitempty"`
+	Quarantine *types.RunnerQuarantine      `json:"quarantine,omitempty"`
+	Recovery   *types.RunnerMutationFailure `json:"recovery,omitempty"`
+	ID         uuid.UUID                    `json:"id"`
+	Kind       types.RunnerActionKind       `json:"kind"`
+	RunID      uuid.UUID                    `json:"run_id"`
+	Ref        string                       `json:"ref"`
 }
 
 // ActionResult is the `action_result` event's data.
@@ -141,15 +144,20 @@ type ActionResult struct {
 
 // RunState is one run's entry in the STATE payload; all runner_asserted.
 type RunState struct {
-	Execution      *ExecutionResult `json:"execution,omitempty"`
-	RunID          uuid.UUID        `json:"run_id"`
-	SandboxPresent bool             `json:"sandbox_present"`
-	AgentState     string           `json:"agent_state,omitempty"`
-	ExitCode       *int             `json:"exit_code,omitempty"`
-	ProxyStoppedAt *time.Time       `json:"proxy_stopped_at,omitempty"`
-	SpoolDepth     int              `json:"spool_depth"`
-	SpoolDrops     int              `json:"spool_drops"`
-	ResidentGrants []string         `json:"resident_grants,omitempty"`
+	SpoolReceipt    *types.RunnerSpoolReceipt    `json:"spool_receipt,omitempty"`
+	Retirement      *types.RunnerRetirement      `json:"retirement,omitempty"`
+	Containment     *types.RunnerMutationFailure `json:"containment,omitempty"`
+	ContainmentOnly bool                         `json:"containment_only,omitempty"`
+	MutationFailure *types.RunnerMutationFailure `json:"mutation_failure,omitempty"`
+	Execution       *ExecutionResult             `json:"execution,omitempty"`
+	RunID           uuid.UUID                    `json:"run_id"`
+	SandboxPresent  bool                         `json:"sandbox_present"`
+	AgentState      string                       `json:"agent_state,omitempty"`
+	ExitCode        *int                         `json:"exit_code,omitempty"`
+	ProxyStoppedAt  *time.Time                   `json:"proxy_stopped_at,omitempty"`
+	SpoolDepth      int                          `json:"spool_depth"`
+	SpoolDrops      int                          `json:"spool_drops"`
+	ResidentGrants  []string                     `json:"resident_grants,omitempty"`
 }
 
 // Byte-stream kinds carried by OPEN.

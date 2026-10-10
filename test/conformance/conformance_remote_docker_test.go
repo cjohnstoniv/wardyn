@@ -138,11 +138,12 @@ func remoteDockerRunner(t *testing.T, local substrate.Substrate, realWire bool) 
 		t.Fatal(err)
 	}
 	dispatch, err := runneragent.New(runneragent.Config{RunnerID: row.ID.String(), Substrate: local,
-		BeforeCreate:  func(context.Context, runner.SandboxSpec) error { return nil },
-		Created:       func(context.Context, runner.SandboxSpec, string) error { return nil },
-		CreateFailed:  func(context.Context, runner.SandboxSpec) error { return nil },
-		BeforeRefCall: func(context.Context, string, string, uuid.UUID) error { return nil },
-		AfterRefCall:  func(context.Context, string, string, string, uuid.UUID) error { return nil },
+		BeforeCreate:     func(context.Context, runner.SandboxSpec) error { return nil },
+		Created:          func(context.Context, runner.SandboxSpec, string) error { return nil },
+		CreateFailed:     func(context.Context, runner.SandboxSpec) error { return nil },
+		BeforeRefCall:    func(context.Context, string, string, uuid.UUID) error { return nil },
+		MutationFinished: func(context.Context, string, string, uuid.UUID, uuid.UUID, error) error { return nil },
+		AfterRefCall:     func(context.Context, string, string, string, uuid.UUID) error { return nil },
 		ExecutionResult: func(context.Context, string, uuid.UUID) (runnerwire.ExecutionResult, error) {
 			return runnerwire.ExecutionResult{}, runnerwire.Refuse("execution recovery requires lifecycle adapter")
 		},

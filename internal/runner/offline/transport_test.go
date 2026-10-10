@@ -46,7 +46,7 @@ func connectWireManager(t *testing.T, dir string, sub substrate.Substrate, ref f
 		t.Fatal(err)
 	}
 	row := types.Runner{ID: uuid.New(), PublicKey: pub, State: types.RunnerClaimed, Owner: "runner-owner"}
-	m, err := New(dir, row.ID, sub, ref)
+	m, err := New(dir, row.ID, sub, ref, noOutput)
 	if err != nil {
 		t.Fatal(err)
 	}
