@@ -118,6 +118,7 @@ func TestDispatcherRefGuardAndDurableExecIdentity(t *testing.T) {
 			}
 			return nil
 		},
+		MutationFinished: func(context.Context, string, string, uuid.UUID, uuid.UUID, error) error { return nil },
 		AfterRefCall: func(persist context.Context, method, ref, execID string, gotGeneration uuid.UUID) error {
 			if persist.Err() != nil || ctx.Err() == nil || method != runnerwire.MethodExec || ref != sb.Ref || execID == "" || gotGeneration != generation {
 				t.Fatal("lost successful exec identity after wire cancellation")

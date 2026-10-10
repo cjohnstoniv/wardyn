@@ -33,6 +33,7 @@ type Manager struct {
 	root          *os.Root
 	sub           substrate.Substrate
 	expectedRef   func(uuid.UUID) string
+	outputSettled func(context.Context, uuid.UUID, string) (int64, bool, error)
 	stopper       runner.ProxyStopper
 	clock         *Clock
 	now           func() time.Time
@@ -43,6 +44,8 @@ type Manager struct {
 	activitySeen  map[uuid.UUID]uuid.UUID
 	peer          *runnerwire.Peer
 	state         localState
+	dirty         bool
+	inflight      map[mutationKey]int
 	deadlines     map[uuid.UUID]deadline
 	pending       map[uuid.UUID]runnerwire.Lease
 }
@@ -56,8 +59,8 @@ type deadline struct {
 // New recovers local state. Run must start before connecting: a restart cannot
 // reconstruct a monotonic deadline, so existing proxies are contained until
 // an authenticated fresh lease establishes one.
-func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedRef func(uuid.UUID) string) (*Manager, error) {
-	if runnerID == uuid.Nil || sub == nil || substrate.IsRemote(sub) || expectedRef == nil {
+func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedRef func(uuid.UUID) string, outputSettled func(context.Context, uuid.UUID, string) (int64, bool, error)) (*Manager, error) {
+	if runnerID == uuid.Nil || sub == nil || substrate.IsRemote(sub) || expectedRef == nil || outputSettled == nil {
 		return nil, errors.New("offline manager requires a registered runner and local substrate")
 	}
 	stopper, ok := sub.(runner.ProxyStopper)
@@ -96,7 +99,7 @@ func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedR
 		root.Close()
 		return nil, errors.New("runner lifecycle directory is already active")
 	}
-	m := &Manager{lock: lock, runnerID: runnerID, dir: stateDir, root: root, sub: sub, expectedRef: expectedRef, stopper: stopper, clock: NewClock(nil), now: time.Now, since: time.Since, deadlines: map[uuid.UUID]deadline{}, pending: map[uuid.UUID]runnerwire.Lease{}}
+	m := &Manager{lock: lock, runnerID: runnerID, dir: stateDir, root: root, sub: sub, expectedRef: expectedRef, outputSettled: outputSettled, stopper: stopper, clock: NewClock(nil), now: time.Now, since: time.Since, deadlines: map[uuid.UUID]deadline{}, pending: map[uuid.UUID]runnerwire.Lease{}}
 	if err := m.load(); err != nil {
 		lock.Close()
 		root.Close()
@@ -150,6 +153,9 @@ func (m *Manager) BeforeReady(ctx context.Context, peer *runnerwire.Peer, _ bool
 	if m.state.Revoked {
 		return runnerwire.ErrRevoked
 	}
+	if err := m.ensureDurable(); err != nil {
+		return err
+	}
 	if peer == nil {
 		return errors.New("offline admission requires an authenticated peer")
 	}
@@ -201,6 +207,9 @@ func (m *Manager) Lease(ctx context.Context, l runnerwire.Lease) error {
 	if l.RunID == uuid.Nil {
 		return errors.New("runner lease lacks run identity")
 	}
+	if r := m.state.Runs[l.RunID]; r.ContainmentOnly || r.Quarantine != nil || r.Containment != nil || (!r.LeaseAfter.IsZero() && !l.TokenRenewedAt.After(r.LeaseAfter)) {
+		return errors.New("containment-only identity cannot receive a lease")
+	}
 	tokenLeft, err := m.clock.TokenRemaining(l.TokenRenewedAt)
 	if err != nil {
 		return err
@@ -249,6 +258,9 @@ func (m *Manager) BeforeCreate(ctx context.Context, spec runner.SandboxSpec) err
 	if !m.online || m.state.Revoked {
 		return runner.ErrRunnerOffline
 	}
+	if err := m.ensureDurable(); err != nil {
+		return err
+	}
 	if spec.RunID == uuid.Nil {
 		return errors.New("runner create has no run id")
 	}
@@ -270,6 +282,7 @@ func (m *Manager) BeforeCreate(ctx context.Context, spec runner.SandboxSpec) err
 		return err
 	}
 	delete(m.pending, spec.RunID)
+	m.beginMutation(runnerwire.MethodCreateSandbox, ref, uuid.Nil)
 	return nil
 }
 
@@ -282,7 +295,7 @@ func (m *Manager) Created(ctx context.Context, spec runner.SandboxSpec, localRef
 		return err
 	}
 	r, ok := m.state.Runs[spec.RunID]
-	if !ok || localRef == "" || r.FailedCreation || (r.Ref != "" && r.Ref != localRef) {
+	if !ok || localRef == "" || r.FailedCreation || r.ContainmentOnly || r.Quarantine != nil || r.Containment != nil || (r.Ref != "" && r.Ref != localRef) {
 		return errors.New("runner creation has no matching durable intent")
 	}
 	r.Ref = localRef
@@ -310,9 +323,9 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 	for _, id := range ids {
 		m.mu.Lock()
 		r := m.state.Runs[id]
-		expired := m.state.Revoked || r.FailedCreation || m.expired(id)
+		expired := m.state.Revoked || r.FailedCreation || (r.Containment != nil && !r.Containment.Contained) || (r.Quarantine != nil && r.ProxyStoppedAt == nil) || (r.MutationFailure != nil && !r.MutationFailure.Contained) || m.expired(id)
 		m.mu.Unlock()
-		if r.Ref == "" || !expired {
+		if r.Retired || r.Ref == "" || !expired {
 			continue
 		}
 		if err := m.stopper.StopProxy(ctx, r.Ref); err != nil {
@@ -320,14 +333,26 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 			continue
 		}
 		m.mu.Lock()
-		r = m.state.Runs[id]
-		if r.ProxyStoppedAt == nil {
+		current := m.state.Runs[id]
+		if !sameContainmentTarget(r, current) {
+			m.mu.Unlock()
+			errs = append(errs, fmt.Errorf("contain run %s: mutation changed during containment", id))
+			continue
+		}
+		r = current
+		if r.ProxyStoppedAt == nil || (r.MutationFailure != nil && !r.MutationFailure.Contained) {
+			before := r
 			at := m.now().UTC()
 			r.ProxyStoppedAt = &at
+			if r.MutationFailure != nil {
+				confirmed := *r.MutationFailure
+				confirmed.Contained = true
+				r.MutationFailure = &confirmed
+			}
 			m.state.Runs[id] = r
 			if err := m.save(); err != nil {
-				r.ProxyStoppedAt = nil
-				m.state.Runs[id] = r
+				// Confirmation is not durable; retain the obligation independently of lease.
+				m.state.Runs[id] = before
 				errs = append(errs, err)
 			}
 		}
