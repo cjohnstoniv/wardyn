@@ -369,6 +369,12 @@ export async function asJson<T>(res: Response): Promise<T> {
   return body as T;
 }
 
+// A route that answers 2xx with no body (a DELETE's 204): a refusal throws the same HttpError asJson
+// does, reason included, so the console can match on it instead of on the text.
+export async function asNoContent(res: Response): Promise<void> {
+  if (!res.ok) await asJson<never>(res);
+}
+
 // The delete routes answer 204 and read no body, so a held delete's 202 would pass for success. This is
 // asJson's 202 rule for them.
 export async function throwIfPending(res: Response): Promise<void> {

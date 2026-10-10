@@ -40,6 +40,16 @@ var docTierGate = map[routeClass]string{
 var docTierRows = []struct{ route, token string }{
 	// operatorOnly (SUPER)
 	{"POST /api/v1/runners/tokens", "`POST /runners/tokens`"},
+	// Runner pools (0.9): the writes are SUPER, the use policy is the security tier's.
+	{"POST /api/v1/runner-pools", "the `/runner-pools` writes"},
+	{"PUT /api/v1/runner-pools/{id}", "the `/runner-pools` writes"},
+	{"DELETE /api/v1/runner-pools/{id}", "the `/runner-pools` writes"},
+	{"PUT /api/v1/runner-pools/{id}/executors/{executor}", "the `/runner-pools` writes"},
+	{"DELETE /api/v1/runner-pools/{id}/executors/{executor}", "the `/runner-pools` writes"},
+	{"PUT /api/v1/runner-pool-defaults", "the `/runner-pools` writes"},
+	{"GET /api/v1/runner-pools/{id}/use-policy", "the `/runner-pools/{id}/use-policy` routes"},
+	{"PUT /api/v1/runner-pools/{id}/use-policy", "the `/runner-pools/{id}/use-policy` routes"},
+	{"DELETE /api/v1/runner-pools/{id}/use-policy", "the `/runner-pools/{id}/use-policy` routes"},
 	{"PUT /api/v1/site-config", "`PUT /site-config`"},
 	// R1's four operator-topology reads: re-tiered to admin this wave and
 	// filed as docTierUndocumented until the docs pass landed the row naming

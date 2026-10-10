@@ -44,6 +44,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- Runner pool contract: the run-create, preflight and policy-preview requests accept `runner_pool_id`, which the
+  server refuses with `request_field_unavailable` until runner pools are managed (never ignored). Preflight and the
+  preview return `runner_pools` (empty until then). The pool routes (`/runner-pools`, `/runner-pool-defaults`,
+  `/me/runner-pools`, `/me/runner-pool-defaults`) are reserved behind their admin, security and member tiers and
+  answer `501 runner_pools_unavailable`. `wardyn run --pool` and `wardyn runner pool list|default get|set|clear` are
+  added.
 - `wardyn sync <run> <directory>` pushes a local directory over the audited SSH sync subsystem.
   `--pull` opts into receiving files; pulls refuse symlinks, unsafe names and executable modes,
   keep local edits on conflict and never delete files. `--watch` repeats the sync.
