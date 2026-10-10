@@ -99,7 +99,7 @@ func (s *Server) evictStaleWriter(runID uuid.UUID, newcomer, stale *attachHolder
 	if newcomer.via != nil {
 		ctx = audit.WithDelegation(ctx, *newcomer.via)
 	}
-	s.recordTakeover(ctx, runID, newcomer.actorType, newcomer.principal, prev, "stale_writer")
+	s.recordTakeover(ctx, runID, newcomer.sandboxRef, newcomer.actorType, newcomer.principal, prev, "stale_writer")
 	prev.displace(attachTakeoverReason(newcomer.principal))
 	if promote != nil {
 		go promote()

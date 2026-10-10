@@ -69,10 +69,12 @@ const wsCloseReasonMax = 123
 // says which one it is right now, and "who has this terminal" is answered by
 // the registry's writer slot, never by the object's type.
 type attachHolder struct {
-	principal string
-	actorType types.ActorType
-	since     time.Time
-	source    string // attachSourceWeb | attachSourceSSH
+	// Immutable reference captured after the run entry check, for delayed audit rows.
+	sandboxRef string
+	principal  string
+	actorType  types.ActorType
+	since      time.Time
+	source     string // attachSourceWeb | attachSourceSSH
 	// onInput, when set, is told before a writer's keystrokes reach the PTY:
 	// a person typing is presence, and a paused run is thawed first
 	// (run_pause.go). An observer's input is dropped, so it never counts.
@@ -483,7 +485,7 @@ func (s *Server) announceAttachPromotion(runID uuid.UUID, promoted *attachHolder
 		if promoted.via != nil {
 			ctx = audit.WithDelegation(ctx, *promoted.via)
 		}
-		s.recordAudit(ctx, s.auditEvent(&runID, promoted.actorType, promoted.principal, "session.promote",
+		s.recordStreamAudit(ctx, promoted.sandboxRef, s.auditEvent(&runID, promoted.actorType, promoted.principal, "session.promote",
 			runID.String(), "success", mustJSON(map[string]any{
 				"principal":       promoted.principal,
 				"source":          promoted.source,
@@ -622,7 +624,7 @@ func (s *Server) handleAttachHolder(w http.ResponseWriter, r *http.Request) {
 // otherwise (the stale-writer probe's "stale_writer"). Callers write it after
 // the eviction decided and before displace(), so the row is never lost to the
 // teardown it describes.
-func (s *Server) recordTakeover(ctx context.Context, runID uuid.UUID, actorType types.ActorType, principal string, prev *attachHolder, reason string) {
+func (s *Server) recordTakeover(ctx context.Context, runID uuid.UUID, sandboxRef string, actorType types.ActorType, principal string, prev *attachHolder, reason string) {
 	data := map[string]any{
 		"previous_holder": prev.principal,
 		"previous_source": prev.source,
@@ -631,7 +633,7 @@ func (s *Server) recordTakeover(ctx context.Context, runID uuid.UUID, actorType 
 	if reason != "" {
 		data["reason"] = reason
 	}
-	s.recordAudit(ctx, s.auditEvent(&runID, actorType, principal, "session.takeover",
+	s.recordStreamAudit(ctx, sandboxRef, s.auditEvent(&runID, actorType, principal, "session.takeover",
 		runID.String(), "success", mustJSON(data)))
 }
 
@@ -660,7 +662,8 @@ func (s *Server) handleAttachTakeover(w http.ResponseWriter, r *http.Request) {
 	// attach lane, stamped `member` on its SSH keys — is refused here too,
 	// through the same byte-identical 404. A super admin who is not the owner
 	// gets the 403 naming why (#1476), unless the run has no personal owner.
-	if _, ok := s.getRunForEntry(w, r, id); !ok {
+	run, ok := s.getRunForEntry(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -689,7 +692,7 @@ func (s *Server) handleAttachTakeover(w http.ResponseWriter, r *http.Request) {
 	if auditCtx == nil {
 		auditCtx = context.Background()
 	}
-	s.recordTakeover(auditCtx, id, actorType, principal, prev, "")
+	s.recordTakeover(auditCtx, id, run.SandboxRef, actorType, principal, prev, "")
 
 	prev.displace(attachTakeoverReason(principal))
 	promoted := promote != nil

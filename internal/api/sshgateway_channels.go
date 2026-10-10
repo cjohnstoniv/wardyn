@@ -548,13 +548,14 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	// winner's tmux window.
 	var holder *attachHolder
 	holder = &attachHolder{
-		principal: principal,
-		actorType: types.ActorHuman,
-		since:     s.cfg.Now().UTC(),
-		source:    attachSourceSSH,
-		onInput:   func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") },
-		cols:      cols,
-		rows:      rows,
+		sandboxRef: run.SandboxRef,
+		principal:  principal,
+		actorType:  types.ActorHuman,
+		since:      s.cfg.Now().UTC(),
+		source:     attachSourceSSH,
+		onInput:    func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") },
+		cols:       cols,
+		rows:       rows,
 		// Promotion: this channel just became the writer without reconnecting.
 		// Its exec is still the observer's, so a writer exec is opened at its own
 		// size first (the RESIZE is the act), and the line is a courtesy after

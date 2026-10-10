@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -84,10 +85,29 @@ func (s *Substrate) HandleOpen(st *runnerwire.Stream, o runnerwire.Open) error {
 	return nil
 }
 
-func (s *Substrate) outputACK(id uuid.UUID, offset int64) error {
-	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
-	defer cancel()
-	return s.call(ctx, runnerwire.MethodOutputAck, runnerwire.OutputAckArgs{RunID: id, Offset: offset}, nil)
+func (s *Substrate) outputACK(ctx context.Context, id uuid.UUID, offset int64) error {
+	delay := 50 * time.Millisecond
+	for {
+		attempt, cancel := context.WithTimeout(ctx, callTimeout)
+		err := s.call(attempt, runnerwire.MethodOutputAck, runnerwire.OutputAckArgs{RunID: id, Offset: offset}, nil)
+		cancel()
+		if err == nil || ctx.Err() != nil {
+			return err
+		}
+		// Only transport ambiguity is retryable. A runner refusal or disk error
+		// must finish the recording with failure, never spin on a stopped buffer.
+		if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, runner.ErrRunnerOffline) {
+			return err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		delay = min(2*delay, time.Second)
+	}
 }
 
 func (s *Substrate) receiveOutput(id uuid.UUID, sink *outputSink, st *runnerwire.Stream, offset int64) {
@@ -100,16 +120,19 @@ func (s *Substrate) receiveOutput(id uuid.UUID, sink *outputSink, st *runnerwire
 		accepted, writeErr := sink.accept(offset, data[:n])
 		offset += int64(n)
 		// Even a short write has accepted its prefix; only those bytes are ACKed.
-		ackErr := s.outputACK(id, accepted)
+		ackErr := s.outputACK(st.Context(), id, accepted)
 		if writeErr != nil {
 			sink.finish(writeErr)
 			_ = st.Close()
 			return
 		}
 		if ackErr != nil {
+			if st.Context().Err() == nil {
+				sink.finish(ackErr)
+			}
 			_ = st.Close()
 			return
-		} // retain writer and offset for reconnect
+		} // transport loss retains writer and offset for reconnect
 		if errors.Is(readErr, io.EOF) {
 			sink.finish(nil)
 			s.mu.Lock()
