@@ -48,9 +48,10 @@ func TestLocalRuntimeRequiresLeaseAndPersistsCreation(t *testing.T) {
 		Lookup: func(context.Context, uuid.UUID) (types.Runner, error) { return row, nil },
 		Admit: func(context.Context, types.Runner) (remote.Admission, error) {
 			return remote.Admission{Substrate: remoteSub, Link: link,
-				Pending: func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
-				State:   func(context.Context, []runnerwire.RunState) error { return nil },
-				Event:   func(context.Context, runnerwire.Event) error { return nil },
+				Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
+				BeginInventory: func(context.Context, string) error { return nil },
+				StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil },
+				Event:          func(context.Context, runnerwire.Event) error { return nil },
 			}, nil
 		},
 	})
@@ -96,10 +97,6 @@ func TestLocalRuntimeRequiresLeaseAndPersistsCreation(t *testing.T) {
 	if _, err := remoteSub.CreateSandbox(ctx, spec); err == nil {
 		t.Fatal("production lifecycle hooks permitted ambiguous create retry")
 	}
-	state, err := runtime.hooks.State(ctx)
-	if err != nil || len(state) != 1 || state[0].RunID != run || !state[0].SandboxPresent {
-		t.Fatalf("actual durable lifecycle state missing: %#v %v", state, err)
-	}
 	cancel()
 	// Both services stop before the lifecycle lock is released for restart.
 	<-done
@@ -113,5 +110,14 @@ func TestLocalRuntimeRequiresLeaseAndPersistsCreation(t *testing.T) {
 	defer restarted.close()
 	if !sub.Called("stop_proxy", ref(run)) {
 		t.Fatal("daemon restart did not contain the durably bound proxy before connecting")
+	}
+	// The inventory is emitted only while execution admission is closed.
+	var state []runnerwire.RunState
+	err = restarted.hooks.StatePages(context.Background(), func(page runnerwire.StatePage) error {
+		state = append(state, page.Runs...)
+		return nil
+	})
+	if err != nil || len(state) != 1 || state[0].RunID != run || !state[0].SandboxPresent {
+		t.Fatalf("actual durable lifecycle state missing: %#v %v", state, err)
 	}
 }
