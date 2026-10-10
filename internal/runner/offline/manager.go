@@ -23,26 +23,28 @@ import (
 // Manager contains only local containment and evidence state. It cannot mint
 // credentials or grant authority, and never chooses a run's terminal state.
 type Manager struct {
-	actionMu    sync.Mutex
-	lock        *os.File
-	closed      bool
-	replayMu    sync.Mutex
-	mu          sync.Mutex
-	runnerID    uuid.UUID
-	dir         string
-	root        *os.Root
-	sub         substrate.Substrate
-	expectedRef func(uuid.UUID) string
-	stopper     runner.ProxyStopper
-	clock       *Clock
-	now         func() time.Time
-	since       func(time.Time) time.Duration
-	online      bool
-	replayReady bool
-	peer        *runnerwire.Peer
-	state       localState
-	deadlines   map[uuid.UUID]deadline
-	pending     map[uuid.UUID]runnerwire.Lease
+	actionMu      sync.Mutex
+	lock          *os.File
+	closed        bool
+	replayMu      sync.Mutex
+	mu            sync.Mutex
+	runnerID      uuid.UUID
+	dir           string
+	root          *os.Root
+	sub           substrate.Substrate
+	expectedRef   func(uuid.UUID) string
+	stopper       runner.ProxyStopper
+	clock         *Clock
+	now           func() time.Time
+	since         func(time.Time) time.Duration
+	online        bool
+	replayReady   bool
+	activityEpoch uuid.UUID
+	activitySeen  map[uuid.UUID]uuid.UUID
+	peer          *runnerwire.Peer
+	state         localState
+	deadlines     map[uuid.UUID]deadline
+	pending       map[uuid.UUID]runnerwire.Lease
 }
 
 type deadline struct {
@@ -121,6 +123,8 @@ func (m *Manager) Clock(h runnerwire.Hello, received time.Time) error {
 	defer m.mu.Unlock()
 	m.online = false
 	m.replayReady = false
+	m.activityEpoch = uuid.Nil
+	m.publishActivity()
 	m.peer = nil
 	m.clearPending()
 	return m.clock.Hello(h, received)
@@ -151,6 +155,8 @@ func (m *Manager) BeforeReady(ctx context.Context, peer *runnerwire.Peer, _ bool
 	}
 	m.online = true
 	m.replayReady = false
+	m.activityEpoch = uuid.Nil
+	m.publishActivity()
 	m.peer = peer
 	return nil
 }
@@ -162,6 +168,9 @@ func (m *Manager) Online(peer *runnerwire.Peer) {
 	defer m.mu.Unlock()
 	if m.online && m.peer == peer && peer != nil && !m.state.Revoked {
 		m.replayReady = true
+		m.activityEpoch = uuid.New()
+		m.activitySeen = map[uuid.UUID]uuid.UUID{}
+		m.publishActivity()
 	}
 }
 
@@ -171,6 +180,8 @@ func (m *Manager) Offline(context.Context) {
 	m.mu.Lock()
 	m.online = false
 	m.replayReady = false
+	m.activityEpoch = uuid.Nil
+	m.publishActivity()
 	m.peer = nil
 	m.clearPending()
 	m.mu.Unlock()
@@ -276,6 +287,7 @@ func (m *Manager) Created(ctx context.Context, spec runner.SandboxSpec, localRef
 	}
 	r.Ref = localRef
 	m.state.Runs[spec.RunID] = r
+	m.publishActivity()
 	return m.save()
 }
 
@@ -329,6 +341,9 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 func (m *Manager) Run(ctx context.Context) error {
 	replayCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	activityStopped := make(chan struct{})
+	go func() { defer close(activityStopped); m.activityLoop(replayCtx) }()
+	defer func() { cancel(); <-activityStopped }()
 	stopped := make(chan struct{})
 	go func() { defer close(stopped); m.replayLoop(replayCtx) }()
 	defer func() { cancel(); <-stopped }()
@@ -380,6 +395,8 @@ func (m *Manager) Revoked(ctx context.Context) error {
 	m.mu.Lock()
 	m.online = false
 	m.replayReady = false
+	m.activityEpoch = uuid.Nil
+	m.publishActivity()
 	m.peer = nil
 	m.state.Revoked = true
 	err := m.save()

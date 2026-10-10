@@ -31,7 +31,8 @@ import (
 type decisionSink struct {
 	writerLock   *os.File
 	local        *runnerspool.Spool
-	reservations map[uuid.UUID]struct{}
+	reservations map[uuid.UUID]uuid.UUID
+	activityDir  string
 	localErr     error
 	endpoint     string
 	token        *tokenSource
