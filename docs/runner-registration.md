@@ -27,3 +27,22 @@ Migration `0142_runner_registration` adds hashed single-use registration tokens 
 
 > [!IMPORTANT]
 > The dedicated audited administration operation and HTTPS enablement validation remain an integration prerequisite. No supported enablement operation ships in this registration slice.
+
+## Serving
+
+Build `wardyn-runnerd` with the `docker` tag, then connect the registered identity:
+
+```sh
+wardyn-runnerd serve --org https://wardyn.example \
+  --proxy-image ghcr.io/cjohnstoniv/wardyn-proxy:<matching-version> \
+  --internal-network wardyn-internal
+```
+
+| Setting | Behaviour |
+|---|---|
+| `--state-dir` | Uses the registration directory; defaults to the user's private runner configuration directory. |
+| `--proxy-image` / `WARDYN_PROXY_IMAGE` | Required; use the proxy image built with this daemon version. |
+| `--internal-network` / `WARDYN_INTERNAL_NETWORK` | Existing local Docker bridge for proxy sidecars; defaults to `wardyn-internal`. |
+| `--recording-store` / `WARDYN_RECORDING_STORE` | Organisation recording mode: `pg` or `fs` enables capture; `off` disables capture. Default `pg`; no local database is created. |
+
+Identity and organisation binding are checked before connecting. Private lifecycle and output state survive reconnects. After restart, existing proxies are contained before new work is admitted. Revocation stops reconnects while local containment continues until the daemon exits.

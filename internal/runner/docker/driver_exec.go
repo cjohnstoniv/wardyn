@@ -511,13 +511,7 @@ func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) 
 	return statusFromInspect(res.Container), nil
 }
 
-// mainProcessExecID is the sentinel internal/api/runs_dispatch.go persists
-// for an EXEC-LESS launch (krun runtime: Exec returns "" with a nil error
-// since the workload runs as the container's own main process, not a
-// separate exec — see runAsMainProcess). Duplicated here rather than
-// imported: internal/api sits above this concrete substrate and must stay
-// target-agnostic. MUST match the literal in runs_dispatch.go.
-const mainProcessExecID = "main-process"
+const mainProcessExecID = runner.MainProcessExecID
 
 // AgentStatus reports the agent's liveness in a restart-safe way. For an
 // exec-based ref (agentExecID != "" and not the mainProcessExecID sentinel)

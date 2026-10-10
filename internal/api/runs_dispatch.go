@@ -756,26 +756,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 // wiring and the human sees the shell regardless). Keyed off the wardyn-byoi/
 // image tag so convention/devcontainer runs are unaffected. Extracted verbatim
 // from dispatchRun.
-//
-// mainProcessExecID is the agent_exec_id persisted when Runner.Exec succeeds
-// with an EMPTY id ("", nil) — an EXEC-LESS substrate (krun runtime; see
-// runtimeSupportsExec in the docker driver, which krun-vs-kata backs on
-// EITHER a CC2 or CC3 confinement class depending on the host/operator
-// pin, so this can never be inferred from run.ConfinementClass): the
-// workload runs as the container's own main process, so container Status is
-// already authoritative and there is no separate exec to track.
-//
-// The sentinel exists because reconcile.go's watcher-sweep strand guard also
-// reads a bare "" as "never exec'd, no agent will ever run" — one
-// crash-recovery signal cannot do both jobs, or it finalizes FAILED and tears
-// down a healthy exec-less run the moment its watcher lease goes stale. ""
-// now means ONLY "SetRunAgentExecID was never called" (genuinely stranded);
-// this constant means "called, deliberately empty". The docker driver's
-// AgentStatus (internal/runner/docker/driver.go) maps the sentinel back onto
-// container Status exactly like "" always has — duplicated there (same
-// literal) rather than imported, because internal/api sits above the
-// concrete runner substrate and must stay target-agnostic.
-const mainProcessExecID = "main-process"
+const mainProcessExecID = runner.MainProcessExecID
 
 // onAgentStarted, when non-nil, runs once the agent's Exec has succeeded: on an
 // exec-less runner that is the moment its container — and the managed files

@@ -35,6 +35,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
@@ -97,6 +98,9 @@ type Config struct {
 	// failed durable write is masked, logged loudly, and spooled to the local
 	// append-only fallback for EVERY writer — the API layer no longer spools itself.
 	Audit audit.Recorder
+	// RunnerAuditPrepare applies the serving audit mask/seal policy before the
+	// spool receipt and audit row commit in one database transaction.
+	RunnerAuditPrepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)
 	// AuditSpool is the SAME durable fallback spool the recorder chain appends to on
 	// a failed store write (see cmd/wardynd buildAuditChain). When set together with
 	// AuditDrainRecorder, New starts a background loop that replays spooled events
@@ -130,6 +134,9 @@ type Config struct {
 	// RunnerOrgURL is the public organisation URL bound into runner identities.
 	// Empty disables runner registration and streams; never infer it from Host.
 	RunnerOrgURL string
+	// RunnerHub supplies durable runner admission and lifecycle callbacks.
+	// The server always supplies OrgURL and Lookup from its own configuration.
+	RunnerHub remote.HubConfig
 	// AdminToken gates the public API (constant-time bearer compare). Empty
 	// disables the public API entirely (fail closed) except /healthz.
 	AdminToken string
@@ -658,8 +665,9 @@ type Config struct {
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.
 type Server struct {
-	cfg    Config
-	router chi.Router
+	runnerStreams runnerStreamState
+	cfg           Config
+	router        chi.Router
 	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is
 	// ready to use.
 	metrics metrics

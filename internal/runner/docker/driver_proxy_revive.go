@@ -118,6 +118,11 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 	if d.cfg.ProxyBinaryHostPath != "" {
 		host.Binds = []string{d.cfg.ProxyBinaryHostPath + ":/usr/local/bin/wardyn-proxy:ro"}
 	}
+	var err error
+	cfgJSON, err = d.runnerSpoolConfig(ctx, runID, cfgJSON, cfg, host)
+	if err != nil {
+		return "", err
+	}
 	var netCfg *network.NetworkingConfig
 	if ip.IsValid() {
 		netCfg = &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{

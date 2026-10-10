@@ -46,6 +46,11 @@ type Options struct {
 	// it set, a teardown issued while offline returns runner.ErrPendingOnRunner
 	// (queued, not failed); without it, runner.ErrRunnerOffline.
 	Queue func(ctx context.Context, kind types.RunnerActionKind, ref string) error
+	// ExecutionGeneration verifies the immutable generation bound to this exact
+	// dispatch context against its persisted operation. It must never select
+	// the latest lease/row or allocate a new generation on an ambiguous retry.
+	// Authenticated Hub admission requires this hook for Exec/Start dispatch.
+	ExecutionGeneration func(ctx context.Context, method, ref string) (uuid.UUID, error)
 	// OnEvent receives every runner event except `caps` (kept here) and
 	// `waiting` (delivered to the create that owns it).
 	OnEvent func(runnerwire.Event)
@@ -61,10 +66,11 @@ type Substrate struct {
 	t    Transport
 	opts Options
 
-	mu       sync.Mutex
-	caps     *runnerwire.Caps
-	outputs  map[uuid.UUID]*outputSink
-	resident map[uuid.UUID]leafHashes // SHA-256 of what DeliverResident delivered; never the value
+	mu                         sync.Mutex
+	caps                       *runnerwire.Caps
+	outputs                    map[uuid.UUID]*outputSink
+	resident                   map[uuid.UUID]leafHashes // SHA-256 of what DeliverResident delivered; never the value
+	requireExecutionGeneration bool
 }
 
 // New builds the substrate of runnerID over t.
@@ -219,8 +225,12 @@ func (s *Substrate) Exec(ctx context.Context, ref string, argv []string) (string
 	if err := s.own(ref); err != nil {
 		return "", err
 	}
+	generation, err := s.executionGeneration(ctx, runnerwire.MethodExec, ref)
+	if err != nil {
+		return "", err
+	}
 	var res runnerwire.ExecResult
-	if err := s.call(ctx, runnerwire.MethodExec, runnerwire.ExecArgs{Ref: ref, Argv: argv}, &res); err != nil {
+	if err := s.call(ctx, runnerwire.MethodExec, runnerwire.ExecArgs{Ref: ref, Argv: argv, ExecutionGeneration: generation}, &res); err != nil {
 		return "", err
 	}
 	return res.ExecID, nil
@@ -281,7 +291,14 @@ func (s *Substrate) StopProxy(ctx context.Context, ref string) error {
 }
 
 func (s *Substrate) StartSandbox(ctx context.Context, ref string) error {
-	return s.refCall(ctx, runnerwire.MethodStart, ref, nil)
+	if err := s.own(ref); err != nil {
+		return err
+	}
+	generation, err := s.executionGeneration(ctx, runnerwire.MethodStart, ref)
+	if err != nil {
+		return err
+	}
+	return s.call(ctx, runnerwire.MethodStart, runnerwire.RefArgs{Ref: ref, ExecutionGeneration: generation}, nil)
 }
 
 func (s *Substrate) CanReplaceProxy(ctx context.Context, ref string) error {

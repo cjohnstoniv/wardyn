@@ -383,6 +383,10 @@ type maskingRecorder struct {
 var _ audit.Recorder = maskingRecorder{}
 
 func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
+	return m.inner.Record(ctx, m.prepare(ev))
+}
+
+func (m maskingRecorder) prepare(ev types.AuditEvent) types.AuditEvent {
 	// Capped at the top of the chain as well as at the INSERT (B6-F1): this
 	// recorder is outermost, so capping here is what bounds the SPOOL and the
 	// SIEM SINKS too — store.InsertAuditEvent's own cap only protects the
@@ -434,7 +438,7 @@ func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 			}
 		}
 	}
-	return m.inner.Record(ctx, ev)
+	return ev
 }
 
 // Spooling recorder
