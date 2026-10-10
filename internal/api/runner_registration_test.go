@@ -8,7 +8,9 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -259,5 +261,44 @@ func TestRunnerRegistrationCannotReactivateRevokedKey(t *testing.T) {
 	w := do(t, srv, http.MethodPost, "/api/v1/runners/register", "", string(body))
 	if w.Code != 409 || len(f.rows) != 1 || f.rows[oldID].State != types.RunnerRevoked {
 		t.Fatalf("revoked key reactivated:%d %s", w.Code, w.Body.String())
+	}
+}
+
+type runnerRegistrationBody struct {
+	io.Reader
+	advance func()
+}
+
+func (b runnerRegistrationBody) Read(p []byte) (int, error) {
+	b.advance()
+	return b.Reader.Read(p)
+}
+
+func TestRunnerRegistrationChecksExpiryAfterReadingBody(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	start := time.Now().UTC()
+	now := start
+	srv.cfg.Now = func() time.Time { return now }
+	raw := newBearer("wdr_")
+	f.tokens[raw] = types.RunnerRegistrationToken{ID: uuid.New(), Owner: "alice", CreatedAt: start, ExpiresAt: start.Add(time.Hour), OrgURLSHA256: federation.OrgURLSHA256(srv.cfg.RunnerOrgURL)}
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/runners/register", nil)
+	req.Body = io.NopCloser(runnerRegistrationBody{Reader: strings.NewReader(string(body)), advance: func() { now = start.Add(2 * time.Hour) }})
+	w := httptest.NewRecorder()
+	srv.handleRunnerRegister(w, req)
+	if w.Code != 401 || len(f.rows) != 0 || f.tokens[raw].ConsumedAt != nil {
+		t.Fatalf("expired while reading body:%d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRunnerTokenCannotNameReservedMechanismAsOwner(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	w := do(t, srv, http.MethodPost, "/api/v1/runners/tokens", adminToken, `{"owner":"admin-token"}`)
+	if w.Code != 422 || len(f.tokens) != 0 {
+		t.Fatalf("reserved owner accepted:%d %s", w.Code, w.Body.String())
 	}
 }

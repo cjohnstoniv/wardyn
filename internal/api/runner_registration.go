@@ -41,7 +41,7 @@ func (s *Server) runnerRegistrationStore(w http.ResponseWriter) (store.RunnerReg
 
 func (s *Server) runnerPersonalOwner(w http.ResponseWriter, r *http.Request) (string, bool) {
 	owner := oidcHumanFromContext(r.Context())
-	if owner == "" || neverOperator(r.Context()) || s.isReservedPrincipal(owner) {
+	if owner == "" || neverOperator(r.Context()) {
 		writeErrorReason(w, http.StatusForbidden, string(placement.ReasonRunnerClaimMismatch), "sign in as the runner's owner; administrative and delegated credentials cannot claim for a person")
 		return "", false
 	}

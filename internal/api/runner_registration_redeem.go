@@ -39,7 +39,7 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	orgHash := federation.OrgURLSHA256(s.cfg.RunnerOrgURL)
-	token, valid, err := rs.ConsumeRunnerRegistrationToken(r.Context(), req.Token, orgHash, now)
+	token, valid, err := rs.ConsumeRunnerRegistrationToken(r.Context(), req.Token, orgHash, s.cfg.Now().UTC())
 	if err != nil {
 		writeServerError(w, r, "consume runner registration token", err)
 		return
