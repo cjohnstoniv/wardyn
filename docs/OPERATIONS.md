@@ -5833,30 +5833,26 @@ env.WARDYN_OIDC_ISSUER for SSO — [...]
 > **So a default the new
 > version CHANGED silently keeps its old value.**
 
-- `--reuse-values` layers the
-  previous release's coalesced values *over* the new chart's `values.yaml` — it
-  does not replace it.
-- So a block the new version merely ADDED is not missing from
-  the map the templates read: it arrives with the new chart's defaults, and no
-  nil-dereference follows from its being new.
-- (A `helm template` of a faithfully
-  reconstructed `0.6.6` values map against the `0.7` chart renders byte-identical
-  objects to the same map against `0.6.6`, because `trustedCA` and `userDrives`
-  are purely additive.)
-- What `--reuse-values` really costs you is the other direction.
-- Every key the
-  previous release's map *does* carry wins — including the keys it carries only
-  because they were that chart's defaults, never because you chose them.
-- So the
-  day a Wardyn release CHANGES a default (rather than adding one), a
-  `--reuse-values` upgrade silently keeps the old value, with nothing at render
-  time to say so:
-  - A hardened NetworkPolicy port list, a probe path, a security
-    context.
-- That has not bitten anyone yet — every `values.yaml` change from `0.5`
-  through `0.7` is additive, which is exactly why the reused-map render above is
-  byte-identical.
-- And it is a property of the changes so far, not a promise.
+- `--reuse-values` hands the templates the PREVIOUS release's coalesced values
+  in place of the new chart's `values.yaml`, then layers your `-f`/`--set` over
+  them.
+- So a block the new version merely ADDED is **absent, not defaulted**.
+  - The old release never carried the key, so the template reads `nil`, and
+    what keeps that render alive is the `| default dict` guard.
+  - Measured on `0.8.6`: an install upgraded with `--reuse-values` and no
+    `runner.sandbox` of its own renders no `WARDYN_SANDBOX_DEFAULT_*` env.
+  - wardynd then keeps its compiled-in `2000m`/`4096Mi` — the size the chart
+    installs before `0.8.6`, arriving under a new version's name.
+  - Carry the block in `your-values.yaml`, or take `--reset-then-reuse-values`
+    below, and check the sandbox sizes after any `--reuse-values` upgrade that
+    crossed a release which added one.
+- The other direction costs too: every key the previous map *does* carry wins,
+  including keys it carried only because they were that chart's defaults, never
+  because you chose them.
+  - So the day a release CHANGES a default rather than adding one, a
+    `--reuse-values` upgrade keeps the old value, with nothing at render time
+    to say so.
+  - A hardened NetworkPolicy port list, a probe path, a security context.
 - Use
   `--reset-then-reuse-values` instead (Helm ≥ 3.14: starts from the NEW chart's
   defaults and layers only your explicit overrides on top), or better, pass `-f
