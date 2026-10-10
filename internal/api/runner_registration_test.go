@@ -28,20 +28,29 @@ import (
 type runnerRegistrationFake struct {
 	*authzStore
 	store.RunnerStore
-	lock   sync.Mutex
-	tokens map[string]types.RunnerRegistrationToken
-	rows   map[uuid.UUID]types.Runner
+	configErr error
+	lock      sync.Mutex
+	tokens    map[string]types.RunnerRegistrationToken
+	rows      map[uuid.UUID]types.Runner
 }
 
 func newRunnerRegistrationServer(t *testing.T) (*Server, *runnerRegistrationFake, *harness) {
 	t.Helper()
 	f := &runnerRegistrationFake{authzStore: newAuthzStore(), tokens: map[string]types.RunnerRegistrationToken{}, rows: map[uuid.UUID]types.Runner{}}
+	f.siteCfg.Runners = &types.RunnerSettings{Enabled: true}
 	h := newHarness(t)
 	cfg := baseTestConfig(h, f)
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.Secrets = getErrStore{getErr: secretstore.ErrNotFound}
 	cfg.RunnerOrgURL = "https://org.example.com"
 	return New(cfg), f, h
+}
+
+func (f *runnerRegistrationFake) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
+	if f.configErr != nil {
+		return types.SiteConfig{}, f.configErr
+	}
+	return f.authzStore.GetSiteConfig(ctx)
 }
 
 func (f *runnerRegistrationFake) MintRunnerRegistrationToken(_ context.Context, raw string, token types.RunnerRegistrationToken) (types.RunnerRegistrationToken, error) {

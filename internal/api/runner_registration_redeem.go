@@ -19,10 +19,13 @@ import (
 )
 
 func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRunnersEnabled(w, r) {
+		return
+	}
 	now := s.cfg.Now().UTC()
 	if !s.enrolLimiter.allow(peerKey(r.RemoteAddr), now) {
 		w.Header().Set("Retry-After", "10")
-		writeErrorReason(w, http.StatusTooManyRequests, "runner_registration_rate_limited", "too many registration attempts; retry later")
+		writeErrorReason(w, http.StatusTooManyRequests, reasonRunnerRegistrationRateLimited, "too many registration attempts; retry later")
 		return
 	}
 	rs, ok := s.runnerRegistrationStore(w)
@@ -35,7 +38,7 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if len(req.PublicKey) != ed25519.PublicKeySize || req.Name == "" || len(req.Name) > 200 || !controlCharFree(req.Name) {
-		writeErrorReason(w, http.StatusUnprocessableEntity, "runner_registration_invalid", "registration requires an Ed25519 public key and a name of at most 200 bytes without control characters")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerRegistrationInvalid, "registration requires an Ed25519 public key and a name of at most 200 bytes without control characters")
 		return
 	}
 	orgHash := federation.OrgURLSHA256(s.cfg.RunnerOrgURL)
@@ -52,7 +55,7 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 	registered, err := rs.CreateRunner(r.Context(), types.Runner{ID: uuid.New(), Owner: token.Owner,
 		Name: req.Name, PublicKey: req.PublicKey, KeyFingerprint: runnerwire.Fingerprint(req.PublicKey), OrgURLSHA256: orgHash})
 	if errors.Is(err, store.ErrConflict) {
-		writeErrorReason(w, http.StatusConflict, "runner_key_already_registered", "this key was already registered; generate a new identity and registration token")
+		writeErrorReason(w, http.StatusConflict, reasonRunnerKeyAlreadyRegistered, "this key was already registered; generate a new identity and registration token")
 		return
 	}
 	if err != nil {

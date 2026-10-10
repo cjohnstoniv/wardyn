@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 )
 
 // adoEntraFailureEnumValues is ADOEntraFailure's own closed enum
@@ -24,6 +25,13 @@ import (
 // cannot hide behind that exception.
 var adoEntraFailureEnumValues = []string{
 	"not_captured", "dead_credential", "consent_required", "interaction_required", "unavailable",
+}
+
+// placementWireReasons lists the shared enum members published by HTTP handlers.
+// Keep their values in placement; adding another HTTP refusal must also document it.
+var placementWireReasons = []placement.Reason{
+	placement.ReasonRunnerTokenInvalid,
+	placement.ReasonRunnerClaimMismatch,
 }
 
 // documentedDuplicateReasonValues lists wire values TWO OR MORE reasons.go
@@ -141,13 +149,19 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 	authzReasons := authzWireReasons(t)
 
 	// docReasons must equal goReasons ∪ authzReasons ∪ the ADO enum exception,
-	// exactly — three sources of wire-visible reasons, one required doc table.
+	// exactly, plus published placement enum members — one required doc table.
 	want := map[string]bool{}
 	for k := range goReasons {
 		want[k] = true
 	}
 	for k := range authzReasons {
 		want[k] = true
+	}
+	for _, reason := range placementWireReasons {
+		if !reason.Valid() {
+			t.Fatalf("published placement reason %q is outside its registry", reason)
+		}
+		want[string(reason)] = true
 	}
 	for _, v := range adoEntraFailureEnumValues {
 		want[v] = true
@@ -167,10 +181,10 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 	sort.Strings(missingFromDocs)
 	sort.Strings(missingFromGo)
 	if len(missingFromDocs) > 0 {
-		t.Errorf("wire reason(s) (reasons.go/reasons_routes.go or authz's registry) with no docs/sdk.md row: %v", missingFromDocs)
+		t.Errorf("wire reason(s) (API, authz, or published placement registry) with no docs/sdk.md row: %v", missingFromDocs)
 	}
 	if len(missingFromGo) > 0 {
-		t.Errorf("docs/sdk.md values with no source (not reasons.go, not authz.Reasons(), and not the ADOEntraFailure exception): %v", missingFromGo)
+		t.Errorf("docs/sdk.md values with no source (not reasons.go, not authz.Reasons(), published placement reasons, or the ADOEntraFailure exception): %v", missingFromGo)
 	}
 }
 

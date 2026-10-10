@@ -14,6 +14,9 @@ import (
 )
 
 func (s *Server) handleRunnerClaim(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRunnersEnabled(w, r) {
+		return
+	}
 	owner, ok := s.runnerPersonalOwner(w, r)
 	if !ok {
 		return

@@ -15,3 +15,15 @@ Registration never overwrites an existing identity. If registration fails after 
 The API doors are `POST /api/v1/me/runners/tokens`, operator-only `POST /api/v1/runners/tokens`, anonymous token redemption at `POST /api/v1/runners/register`, and owner-only `POST /api/v1/me/runners/{id}/claim`. Registration responses carry a runner id, fingerprint, state and organisation binding, never a human identity. Inventory and revocation use the separate runners management surface.
 
 Migration `0139_runner_registration` adds hashed single-use registration tokens and organisation URL bindings to the existing runners table. It does not change run placement records.
+
+## Runner enablement
+
+| Stored configuration | Admission |
+|---|---|
+| `runners` absent or `runners.enabled` false | Refused before registration, mint, or claim effects. |
+| Site configuration unreadable | Refused; retry after configuration recovers. |
+| `runners.enabled` true | Identity and route authorization checks still apply. |
+| Generic `PUT /site-config` | Retains stored runner settings; cannot enable or disable runners. |
+
+> [!IMPORTANT]
+> The dedicated audited administration operation and HTTPS enablement validation remain an integration prerequisite. No supported enablement operation ships in this registration slice.

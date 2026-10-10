@@ -29,12 +29,12 @@ func (s *Server) mountRunnerRegistrationRoutes(r chi.Router) {
 
 func (s *Server) runnerRegistrationStore(w http.ResponseWriter) (store.RunnerRegistrationStore, bool) {
 	if err := federation.CheckOrgURL(s.cfg.RunnerOrgURL); err != nil {
-		writeErrorReason(w, http.StatusServiceUnavailable, "runner_registration_unavailable", "configure WARDYN_RUNNER_ORG_URL with this organisation's public HTTPS URL to enable runner registration")
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunnerRegistrationUnavailable, "configure WARDYN_RUNNER_ORG_URL with this organisation's public HTTPS URL to enable runner registration")
 		return nil, false
 	}
 	rs, ok := s.cfg.Store.(store.RunnerRegistrationStore)
 	if !ok {
-		writeErrorReason(w, http.StatusNotImplemented, "runner_registration_unavailable", "runner registration is unavailable")
+		writeErrorReason(w, http.StatusNotImplemented, reasonRunnerRegistrationUnavailable, "runner registration is unavailable")
 	}
 	return rs, ok
 }
@@ -49,6 +49,9 @@ func (s *Server) runnerPersonalOwner(w http.ResponseWriter, r *http.Request) (st
 }
 
 func (s *Server) handleRunnerTokenSelf(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRunnersEnabled(w, r) {
+		return
+	}
 	owner, ok := s.runnerPersonalOwner(w, r)
 	if !ok {
 		return
@@ -61,13 +64,16 @@ func (s *Server) handleRunnerTokenSelf(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRunnerTokenAdmin(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRunnersEnabled(w, r) {
+		return
+	}
 	var req types.RunnerTokenRequest
 	if !decodeStrict(w, r, &req) {
 		return
 	}
 	owner := strings.TrimSpace(req.Owner)
 	if owner == "" || len(owner) > 512 || !controlCharFree(owner) || s.isReservedPrincipal(owner) {
-		writeErrorReason(w, http.StatusUnprocessableEntity, "runner_owner_invalid", "owner must name a person's principal")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerOwnerInvalid, "owner must name a person's principal")
 		return
 	}
 	s.mintRunnerToken(w, r, owner, 72*time.Hour)

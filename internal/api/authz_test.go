@@ -845,9 +845,10 @@ func (fakeAuthzSessionRevocations) RevokeAll(context.Context) error         { re
 // authzMatrixSiteConfig is the roster the matrix walks under: ONE enabled
 // row for claude-code.
 func authzMatrixSiteConfig() types.SiteConfig {
-	return types.SiteConfig{AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{{
-		ID: "claude-code",
-	}}}}
+	return types.SiteConfig{
+		Runners: &types.RunnerSettings{Enabled: true}, AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{{
+			ID: "claude-code",
+		}}}}
 }
 
 // shape, when given, adjusts the config before New — the deployment-shape knobs
