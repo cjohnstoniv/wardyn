@@ -199,6 +199,11 @@ func TestWorker_TwoWorkersDeliver100RowsExactlyOnce(t *testing.T) {
 			approvals = append(approvals, h.raise(t, runID, `{"host":"`+uuid.NewString()+`.example"}`, "").ID)
 		}
 	}
+	// Claims use the database clock; the fixture's RequestedAt uses the app clock.
+	// Make the whole batch due before testing concurrent claiming and delivery.
+	if _, err := h.pool.Exec(context.Background(), `UPDATE approval_notifications SET next_attempt_at = now() - interval '1 second'`); err != nil {
+		t.Fatal(err)
+	}
 	var wg sync.WaitGroup
 	for range 2 {
 		w := h.worker(nil, nil)
