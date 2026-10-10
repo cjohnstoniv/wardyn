@@ -60,6 +60,7 @@ func (r Record) ValidHash() bool { return r.SpoolID != uuid.Nil && r.Hash == r.d
 func (r Record) Position() ackcursor.Pos { return ackcursor.Pos{Seq: r.Seq, Hash: r.Hash} }
 
 type manifest struct {
+	Sealed   bool          `json:"sealed,omitempty"`
 	RunID    uuid.UUID     `json:"run_id"`
 	SpoolID  uuid.UUID     `json:"spool_id"`
 	Last     int64         `json:"last"`
@@ -184,6 +185,9 @@ func (s *Spool) readManifest() (manifest, error) {
 	if (m.Ack.Seq == 0 && m.Ack.Hash != "") || (m.Ack.Seq > 0 && len(m.Ack.Hash) != 64) {
 		return m, errors.New("invalid spool acknowledgement")
 	}
+	if m.Sealed && (m.Last != m.Ack.Seq || m.Drops != m.Reported || m.Overflow != nil) {
+		return manifest{}, errors.New("sealed spool has unsettled evidence")
+	}
 	if r := m.Overflow; r != nil && (r.Seq != 0 || !r.ValidHash() || r.SpoolID != m.SpoolID || r.Decision.Request.RunID != s.runID || r.Count == 0 || r.Count > m.Drops-m.Reported || r.DropEnd != m.Reported+r.Count || r.Decision.Decision != egress.Deny || r.Decision.RuleSource != "builtin:spool-full") {
 		return m, errors.New("invalid spool overflow record")
 	}
@@ -208,6 +212,9 @@ func (s *Spool) append(ctx context.Context, decision egress.DecisionLog, admitte
 		m, err := s.readManifest()
 		if err != nil {
 			return err
+		}
+		if m.Sealed {
+			return ErrSealed
 		}
 		if decision.Request.RunID != s.runID {
 			return errors.New("decision belongs to another run")
@@ -262,6 +269,9 @@ func (s *Spool) CanRecord(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if m.Sealed {
+			return ErrSealed
+		}
 		if m.Last-m.Ack.Seq >= MaxRecords || m.Bytes >= MaxBytes || m.Drops > m.Reported {
 			return ErrFull
 		}
@@ -275,6 +285,9 @@ func (s *Spool) Refuse(ctx context.Context) error {
 		m, err := s.readManifest()
 		if err != nil {
 			return err
+		}
+		if m.Sealed {
+			return ErrSealed
 		}
 		if m.Drops == ^uint64(0) {
 			return errors.New("spool overflow counter exhausted")
