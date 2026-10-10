@@ -85,6 +85,10 @@ func (s *Server) applyRunnerExit(ctx context.Context, st store.PG, row store.Run
 			terminal = types.RunFailed
 		}
 		s.metrics.runTerminal(terminal)
+		s.runEvents.moved(row.RunID, types.RunRunning, terminal)
+		if terminal == types.RunFailed {
+			s.noteModelAccessFromRecording(ctx, row.RunID)
+		}
 	}
 	return st.RetryRunnerExitTail(ctx, row.RunnerID, row.RunID, row.Exit.Generation, func(ctx context.Context, run types.AgentRun, exit runnerwire.AgentExit) error {
 		if s.cfg.Runner == nil {
