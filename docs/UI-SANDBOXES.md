@@ -448,7 +448,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
     able to use the app within 30 seconds.
   - `WARDYN_UI_SANDBOX_SESSION_TTL` is the
     hard ceiling behind both.
-- A session opened through a [portal](OPERATIONS.md#delegated-run-management-portals)
+- A session opened through a [portal](operations/api-tokens.md#delegated-run-management-portals)
   is bound to that portal's grant as well: redemption and every re-check ask
   whether the portal is still registered and the grant unexpired.
 - The cookie's

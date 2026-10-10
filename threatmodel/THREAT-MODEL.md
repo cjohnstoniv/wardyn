@@ -1884,7 +1884,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - **STILL OPEN AT 0.8 — a stated ceiling, not a gap awaiting a fix.**
       - The remedy is procedural and the burden is the operator's.
       - Re-key group-subject grants and group-tier assignments onto a directly-assigned group or onto the user BEFORE changing the claim configuration, then verify against a real login's `session_groups` (`GET /me/capabilities`) rather than against the IdP's UI.
-      - [`docs/OPERATIONS.md`](../docs/OPERATIONS.md), "A third cause of a partial snapshot", carries the procedure.
+      - [`docs/operations/capabilities.md`](../docs/operations/capabilities.md#re-key-before-changing-the-claim), "A third cause of a partial snapshot", carries the procedure.
       - User-subject rows are the only shape a claim-configuration change cannot silently break.
       - Closing this needs a signal the IdP does not send; the nearest approximation is warning when a group-subject row stops matching anyone, which is not built.
 

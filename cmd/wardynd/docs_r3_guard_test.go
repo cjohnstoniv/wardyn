@@ -160,7 +160,7 @@ func TestDesktopDocSecretTierMatchesTheRouter(t *testing.T) {
 // TestAuthzDeniedGovernanceProfileRowNamesEveryTarget closes the level
 // the reason-set guard cannot see.
 //
-// docs/OPERATIONS.md's denial table declares itself the source of record for
+// docs/operations/denials.md's denial table declares itself the source of record for
 // authz.denied's reason vocabulary, and internal/api's own guard pins the set
 // of REASONS. Nothing pinned the CAUSES inside a row: the governance_profile
 // row enumerated four, and 0.7 added a fifth emitter — the user-drive door —
@@ -172,10 +172,10 @@ func TestAuthzDeniedGovernanceProfileRowNamesEveryTarget(t *testing.T) {
 	if len(targets) < 5 {
 		t.Fatalf("found %d authz.Deny targets for governance_profile (%v) — the matcher needs updating, it is checking almost nothing", len(targets), targets)
 	}
-	row := opsTableRow(t, readDoc(t, "docs/OPERATIONS.md"), "governance_profile")
+	row := opsTableRow(t, readDoc(t, "docs/operations/denials.md"), "governance_profile")
 	for _, target := range targets {
 		if !strings.Contains(row, "`"+target+"`") {
-			t.Errorf("docs/OPERATIONS.md's `governance_profile` row does not name the target %q, so a denial with that target has no documented cause in the section that calls itself the source of record", target)
+			t.Errorf("docs/operations/denials.md's `governance_profile` row does not name the target %q, so a denial with that target has no documented cause in the section that calls itself the source of record", target)
 		}
 	}
 }
@@ -217,7 +217,7 @@ func opsTableRow(t *testing.T, doc, key string) string {
 	t.Helper()
 	start := strings.Index(doc, "| `"+key+"` | ")
 	if start < 0 {
-		t.Fatalf("no table row keyed `%s` in docs/OPERATIONS.md — the guard's anchor moved", key)
+		t.Fatalf("no table row keyed `%s` in docs/operations/denials.md — the guard's anchor moved", key)
 	}
 	rest := doc[start+1:]
 	if end := strings.Index(rest, " | ⛔ "); end >= 0 {
@@ -246,12 +246,12 @@ func TestManagedObjectNameRationaleMatchesTheNamingFunction(t *testing.T) {
 			t.Fatalf("%s mints %q, which no longer carries the home — re-derive the runbook's collision argument", backend, shape)
 		}
 	}
-	doc := readDoc(t, "docs/OPERATIONS.md")
-	mustNotSay(t, doc, "docs/OPERATIONS.md",
+	doc := readDoc(t, "docs/operations/user-drives.md")
+	mustNotSay(t, doc, "docs/operations/user-drives.md",
 		"a volume name carries only the *home*",
 		"names a managed object after the home and nothing else",
 	)
-	mustSay(t, doc, "docs/OPERATIONS.md",
+	mustSay(t, doc, "docs/operations/user-drives.md",
 		"a volume name carries the drive and the *home*",
 		"names a managed object after the drive and the home",
 	)
@@ -408,10 +408,10 @@ const (
 // The existing caveat guard pins that the caveat is PRESENT; nothing pinned
 // where it came from, which is why the wrong URL survived a round.
 func TestGroupClaimCaveatCitesThePageThatCarriesIt(t *testing.T) {
-	doc := readDoc(t, "docs/OPERATIONS.md")
+	doc := readDoc(t, "docs/operations/capabilities.md")
 	i := strings.Index(doc, nestedMembershipRule)
 	if i < 0 {
-		t.Fatalf("docs/OPERATIONS.md no longer quotes the nested-membership rule — the caveat guard owns its presence, but this guard is now asserting nothing")
+		t.Fatalf("docs/operations/capabilities.md no longer quotes the nested-membership rule — the caveat guard owns its presence, but this guard is now asserting nothing")
 	}
 	window := doc[i:min(i+600, len(doc))]
 	if !strings.Contains(window, entraGroupClaimsPage) {

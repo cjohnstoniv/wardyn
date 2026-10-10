@@ -177,7 +177,7 @@ Two modes place a Git credential inside the sandbox:
 
 - Only an organisation's component can carry one, and only as a header ([`internal/types/component.go#validateComponentDelivery`](../internal/types/component.go)).
 - An organisation's component is restricted from its creation: a person may attach it only once an allow row names its id, unless an administrator lifts that restriction ([`internal/api/capabilities.go#capComponent`](../internal/api/capabilities.go)).
-- The attach check is [`internal/api/components_authz.go#Server.componentAttachRefusal`](../internal/api/components_authz.go); see [Capabilities](OPERATIONS.md#capabilities-what-one-member-or-one-group-may-do).
+- The attach check is [`internal/api/components_authz.go#Server.componentAttachRefusal`](../internal/api/components_authz.go); see [Capabilities](operations/capabilities.md#capabilities-what-one-member-or-one-group-may-do).
 - The secret's name is withheld from members at these doors:
   - the component view shows hosts and delivery modes, not secret names ([`internal/api/components_project.go#orgComponentView`](../internal/api/components_project.go));
   - a refusal relayed into the sandbox does not name it ([`internal/api/injection.go#sinkSharedSecretRefused`](../internal/api/injection.go));

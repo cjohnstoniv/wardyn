@@ -10,13 +10,13 @@ sandboxes inside the ceiling your admin set. There is nothing to install.
 - There is no admin token; that credential belongs to your operator, not to you.
 - Your role is derived at login and stamped into your session.
 - If you land on "no Wardyn role assigned," your admin has not mapped you yet — see
-  [OPERATIONS.md § Multi-user: who can change what](OPERATIONS.md#multi-user-who-can-change-what).
+  [who-gets-in.md § Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what).
 - `GET /me` is the ground truth for your own role and your workspace root.
 
 ## What you can and cannot do
 
 - The full matrix lives in
-  [OPERATIONS.md § Multi-user: who can change what](OPERATIONS.md#multi-user-who-can-change-what);
+  [who-gets-in.md § Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what);
   this page does not restate it.
 - `GET /me/capabilities` tells you which capability grants you personally hold.
 - Your admin can see this page's world for themselves without a second login —
@@ -45,7 +45,7 @@ sandboxes inside the ceiling your admin set. There is nothing to install.
 - A run whose shape exceeds what your resolved level permits is refused
   `governance_profile`, the same refusal a denied `task_mode` or interactive flag
   already gives you — see
-  [OPERATIONS.md § Every denial that isn't a 404](OPERATIONS.md#every-denial-that-isnt-a-404).
+  [denials.md § Every denial that isn't a 404](operations/denials.md#every-denial-that-isnt-a-404).
 - A non-interactive claude-code run at `L1` is not refused for lacking
   supervision; it launches with its tool approvals derived to `hold` and the
   create response carries a warning saying so.
@@ -95,7 +95,7 @@ Three things worth naming here, because they read as bugs otherwise:
 - Writability is a second, separate gate.
 - Offboarding — handing a workspace back to your admin — is an admin action
   (`POST /workspaces/{id}/reassign`); see
-  [OPERATIONS.md § Multi-user: who can change what](OPERATIONS.md#multi-user-who-can-change-what).
+  [who-gets-in.md § Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what).
 
 ## Your drive
 
@@ -268,7 +268,7 @@ resolves your drive the same way, in a dry run too:
 - A `header` secret is added by the egress proxy and never placed in the sandbox. An `env` or `file` secret is readable by any code that runs there ([CREDENTIALS.md](CREDENTIALS.md)).
 - Your admin may turn off `env` and `file` delivery, or limit a run that carries a component you defined to a lower autonomy level.
 - A component that names an IP address, a host that serves a model, or a host that already carries a credential on the run is refused.
-- Details for admins: [OPERATIONS.md](OPERATIONS.md#custom-components).
+- Details for admins: [custom-components.md](operations/custom-components.md).
 
 ## Where your runs' audit lives
 

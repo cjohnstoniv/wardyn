@@ -1,0 +1,56 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. The multi-user split (#1519) moved the
+# People, governance, capabilities and API-token material out of docs/OPERATIONS.md into twelve task
+# pages under docs/operations/; each is budgeted at its measured size, and OPERATIONS.md's budget is
+# reduced to its size after the move. Page budgets include introductions and split banners;
+# merged route rows stay with their table.
+#
+# docs/operations/who-gets-in.md=1453 is the "Multi-user: who can change what" preamble, "Who decides
+# who gets in: chart vs console vs IdP" and "Wins a collision: chart / env", less the "What admin-only
+# still means" block (below) and the page lead.
+# docs/operations/admin-only-writes.md=2948 is "**What admin-only still means**" through the ratchet
+# paragraph — the `| Surface | Gate |` tier table operations_tier_doc_test.go reads cell by cell.
+# docs/operations/three-roles.md=4012 is "Three roles, and who sets the walls", "When everyone is an
+# admin, and what a refused person is told" and "UI apps with more than one user: use host mode".
+# docs/operations/provider-policy.md=1278 is "Who writes the provider policy: console vs CLI/MDM" and
+# its "Clearing a block" sub-block.
+# docs/operations/ownership-and-offboarding.md=2370 is the ownership-scoping half of the old section:
+# run/workspace/secret ownership, drive offboarding, the credential erase and the ordered offboarding.
+# docs/operations/governance-writes.md=2726 is the second-human switches, the four-eyes rules and the
+# four-eyes walkthrough.
+# docs/operations/member-runs.md=1044 is the credential and egress decision scopes, the member policy
+# clamp and the first-run prompts.
+# docs/operations/user-drives.md=4804 is "Reclaiming a departed person's storage", "User drives on
+# Docker" and their sub-blocks.
+# docs/operations/capabilities.md=3861 is "Capabilities: what one member, or one group, may do" and its
+# four kind sub-blocks.
+# docs/operations/custom-components.md=1184 is "Custom components".
+# docs/operations/api-tokens.md=3991 is "Per-user API tokens", "Tokens for a person who never signs in"
+# and "Delegated run management (portals)".
+# docs/operations/denials.md=4636 is "Every denial that isn't a 404" — the `| reason |` table
+# authz_denied_doc_test.go and docs_r3_guard_test.go read.
+docs/operations/who-gets-in.md=1453 share=35
+docs/operations/admin-only-writes.md=2994 share=35
+docs/operations/three-roles.md=4012 share=35
+docs/operations/provider-policy.md=1278 share=35
+docs/operations/ownership-and-offboarding.md=2370 share=35
+docs/operations/governance-writes.md=2726 share=35
+docs/operations/member-runs.md=1044 share=35
+docs/operations/user-drives.md=4804 share=35
+docs/operations/capabilities.md=3861 share=35
+docs/operations/custom-components.md=1184 share=35
+docs/operations/api-tokens.md=3991 share=35
+docs/operations/denials.md=4677 share=35
+# Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
+# Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
+# Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.
+# Round 1: docs/operations/provider-policy.md measured 1278 after the split banner and heading cleanup.
+# Round 1: docs/operations/ownership-and-offboarding.md measured 2370 after the split banner and heading cleanup.
+# Round 1: docs/operations/governance-writes.md measured 2726 after the split banner and heading cleanup.
+# Round 1: docs/operations/member-runs.md measured 1044 after the split banner and heading cleanup.
+# Round 1: docs/operations/user-drives.md measured 4804 after the split banner and heading cleanup.
+# Round 1: docs/operations/capabilities.md measured 3861 after the split banner and heading cleanup.
+# Round 1: docs/operations/custom-components.md measured 1184 after the split banner and heading cleanup.
+# Round 1: docs/operations/api-tokens.md measured 3991 after the split banner and heading cleanup.
+# Round 1: docs/operations/denials.md measured 4636 after the split banner and heading cleanup.
+# Round 1 merge: docs/operations/admin-only-writes.md 2869 -> 2948 (+79), two runner-pool route rows moved verbatim.
+# Batch merge of F-1519: admin-only-writes.md 2994 (+46, the template-group-admins route row from C-templates); denials.md 4677 (+41, the placement_component_self_defined reason row from H7).

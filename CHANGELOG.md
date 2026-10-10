@@ -91,6 +91,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- Docs: the operator manual's multi-user material (people, governance, capabilities, API tokens and related tasks) is
+  split into task pages under `docs/operations/`, each linked from `docs/README.md`; every old heading in
+  `docs/OPERATIONS.md` keeps a stub that links to its new home.
 - HA followers check the sweeper and rotator lifetime locks with a read-only `pg_locks` query on the pool before
   opening a dedicated session, instead of dialling a new session every 15 and 30 seconds.
 - CI and the nightly log in to Docker Hub (read-only) when the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository

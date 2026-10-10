@@ -123,7 +123,8 @@ func TestHeadingSlugMatchesGitHub(t *testing.T) {
 func TestAuditActionsDocAnchorsResolve(t *testing.T) {
 	for _, c := range []struct{ doc, anchor string }{
 		{"docs/SSH.md", "bounds"},
-		{"docs/OPERATIONS.md", "every-denial-that-isnt-a-404"},
+		{"docs/operations/denials.md", "every-denial-that-isnt-a-404"},
+		{"docs/operations/who-gets-in.md", "multi-user-who-can-change-what"},
 		{"docs/ENV.md", "wardynd-control-plane"},
 	} {
 		bodies, _, _, err := citedSymbolBodies(c.doc, []byte(readRepo(t, c.doc)))
