@@ -7,9 +7,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 )
 
@@ -26,10 +29,14 @@ import (
 // is incremented rather than blocking the request path. Every record is also
 // mirrored to stdout as a JSON line for local observability.
 type decisionSink struct {
-	endpoint string
-	token    *tokenSource
-	client   *http.Client
-	out      io.Writer
+	writerLock   *os.File
+	local        *runnerspool.Spool
+	reservations map[uuid.UUID]struct{}
+	localErr     error
+	endpoint     string
+	token        *tokenSource
+	client       *http.Client
+	out          io.Writer
 
 	ch      chan egress.DecisionLog
 	dropped atomic.Uint64
@@ -62,6 +69,10 @@ func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int,
 // always mirrored to stdout synchronously (cheap, non-blocking enough).
 func (s *decisionSink) emit(log egress.DecisionLog) {
 	s.mirror(log)
+	if s.local != nil {
+		s.emitLocal(log)
+		return
+	}
 	// Runs UNDER s.mu, mutually exclusive with close() (which also holds s.mu
 	// while closing the channel) — otherwise a send past the closed-check
 	// could race close() and panic on a closed channel. Never blocks (buffered
@@ -223,6 +234,11 @@ func (s *decisionSink) close(ctx context.Context) error {
 		return nil
 	}
 	s.closed = true
+	if s.local != nil {
+		err := errors.Join(s.local.Close(), s.writerLock.Close())
+		s.mu.Unlock()
+		return err
+	}
 	close(s.ch)
 	s.mu.Unlock()
 

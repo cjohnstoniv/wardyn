@@ -10,6 +10,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- Migration `0138_run_placement` records `agent_runs.placement`, `placement_filled`, `runner_id` and
+  `evidence_source`. Existing rows retain empty placement and evidence, false `placement_filled` and a
+  NULL runner; deleting a runner clears its reference while preserving the run. This records placement
+  data without enabling local execution or choosing placement for unresolved runs (#116).
 - Migration `0139_runner_delivery` adds the `runners` and `runner_pending_actions` tables, the
   `credential_delivery_policy` document and `credential_grants.delivery`, for 0.9 client mode and
   credential delivery; grant the app role `SELECT, INSERT, UPDATE, DELETE` on the two new tables. Nothing

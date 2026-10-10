@@ -135,6 +135,20 @@ const (
 	reasonWorkspaceSeedSourceTargetInvalid = "workspace_seed_source_target_invalid" // a stored source's target fails the authored-target deny-list
 	reasonWorkspaceSeedNoBaseImage         = "workspace_seed_no_base_image"         // an exec run named a workspace with no base image and no --agent/--image
 	reasonWorkspaceSeedPolicyConflict      = "workspace_seed_policy_conflict"       // the seeded sources collide with the policy's own mount/repo targets
+	// The 0.9 New Run request contract (run_contract.go): fields the console's
+	// panels send beyond today's. The workspace refusals' sentences are
+	// workspace_refusals.go's, with a TypeScript twin.
+	reasonPlacementInvalid        = "placement_invalid"          // placement is neither remote nor local, or runner_id has no local placement
+	reasonWorkspaceTargetInvalid  = "workspace_target_invalid"   // a workspace selection's target is not an absolute, cleaned path under /home/agent
+	reasonWorkspaceTargetOverlap  = "workspace_target_overlap"   // two different workspaces' targets are equal or nested (a drive's included)
+	reasonWorkspacePinConflict    = "workspace_pin_conflict"     // the attached workspaces pin two different model providers
+	reasonImageConflict           = "image_conflict"             // the attached workspaces use two different base images: a refusal about the run's image, not a workspace field
+	reasonAllowedImageInvalid     = "allowed_image_invalid"      // allowed_image is malformed, or is combined with image or devcontainer_repo
+	reasonWorkspaceADOOrgConflict = "workspace_ado_org_conflict" // the attached workspaces use two Azure DevOps organisations
+	reasonResourcesInvalid        = "resources_invalid"          // resources carries a negative or absurd CPU or memory value
+	reasonOverrideInvalid         = "override_invalid"           // an overrides entry is malformed
+	reasonOverrideRefused         = "override_refused"           // an override the narrowing table never allows from a request
+	reasonRequestFieldUnavailable = "request_field_unavailable"  // a field that changes the run's posture, which this server cannot honour yet: refused, never dropped
 	// validateImageBuildRequest (#656 M1: split from reasonInvalidImageBuildRequest,
 	// one cause was the caller's own request shape, the other a deployment
 	// capability neither request field can fix).

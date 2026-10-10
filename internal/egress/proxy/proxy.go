@@ -555,6 +555,12 @@ func newProxy(opts Options) *Proxy {
 // route. This makes the run token unreachable by anything the sandbox can
 // route through the forward proxy.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var release func()
+	r, release = p.admitSpoolHTTP(w, r)
+	if r == nil {
+		return
+	}
+	defer release()
 	if r.Method == http.MethodConnect {
 		p.handleConnect(w, r)
 		return
@@ -592,12 +598,13 @@ func splitHostPort(hostport string, defaultPort int) (host string, port int) {
 // ("ip:port") when allowed.
 func (p *Proxy) evaluate(ctx context.Context, host string, port int, method string, path string) (egress.Decision, string, *egress.DecisionLog) {
 	req := egress.Request{
-		RunID:  p.runID,
-		Host:   host,
-		Port:   port,
-		Method: strings.ToUpper(method),
-		Path:   path,
-		Time:   p.now(),
+		AuditReservation: spoolTicket(ctx),
+		RunID:            p.runID,
+		Host:             host,
+		Port:             port,
+		Method:           strings.ToUpper(method),
+		Path:             path,
+		Time:             p.now(),
 	}
 
 	// 0. Unconditional literal-IP guard, before policy and before first-use

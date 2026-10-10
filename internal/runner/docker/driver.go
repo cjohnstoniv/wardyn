@@ -24,6 +24,9 @@ import (
 
 // Config configures the Docker driver.
 type Config struct {
+	// RunnerStateDir enables a private per-run audit spool mounted only into
+	// the proxy. Set only by the registered runner daemon's local composition.
+	RunnerStateDir string
 	// ProxyImage is the OCI image for the wardyn-proxy sidecar. For v0 it may
 	// be a minimal image with the locally-built wardyn-proxy binary
 	// bind-mounted in via ProxyBinaryHostPath.

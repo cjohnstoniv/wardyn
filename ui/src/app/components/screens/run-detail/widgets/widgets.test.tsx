@@ -255,6 +255,7 @@ describe("IdentityWidget", () => {
     state: "RUNNING",
     spiffe_id: "spiffe://x",
     runner_target: "docker",
+    placement: "",
   };
 
   it("carries the full task and the description when the run has them", () => {

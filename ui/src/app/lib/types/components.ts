@@ -17,6 +17,8 @@
 //                        POST /runs/preflight and POST /runs/policy-preview)
 
 import type { AutonomyLevel } from "../api/governance";
+import type { AgentFact, LocalDeliveryMode, RepoAccessFact, TokenScopeFact } from "./new-run-contract";
+import type { PushRulesSpec } from "./policy";
 import type { SetupItem } from "./runs";
 
 /** How one component secret reaches the run. */
@@ -64,13 +66,23 @@ export interface Component {
   updated_at: string;
 }
 
-/** Attaches one component to a run (`components[]` of create, preflight and preview): a stored one by `id`, or a run-only `inline` definition. */
+/** Attaches one component to a run (`components[]` of create, preflight and preview): a stored one by `id`, a run-only `inline` definition, or a built-in Git provider (`builtin`, OD-4). */
 export interface ComponentRef {
   id?: string;
   inline?: ComponentDefinition;
   // Labels an inline one.
   name?: string;
+  // A built-in Git provider: API and git-over-HTTPS to the listed repositories without a workspace.
+  builtin?: ComponentBuiltin;
+  // The GitHub owner or the Azure DevOps organisation. Required with `builtin`.
+  org?: string;
+  // owner/name (GitHub, at least one) or project/repository (Azure DevOps; none reaches every repository the person can reach in `org`).
+  repos?: string[];
+  // Empty reads as read.
+  access?: "read" | "write";
 }
+
+export type ComponentBuiltin = "github" | "azure_devops";
 
 /** Body of POST /me/components, PUT /me/components/{id} and PUT /components/{id}. */
 export interface ComponentRequest {
@@ -121,9 +133,11 @@ export interface MyComponents {
 export interface ComponentSecretFact {
   delivery: ComponentDeliveryMode;
   shared: boolean;
+  // How an organisation-held secret would reach the person's runner (OD-12). Absent for the person's own and until the placement lane decides.
+  local_delivery?: LocalDeliveryMode;
 }
 
-export type ComponentFactKind = "custom" | "git_provider";
+export type ComponentFactKind = "custom" | "git_provider" | "agent" | "git_pat";
 export type ComponentFactReason = "org" | "self" | "inline" | "workspace";
 export type ComponentFactStatus = "ready" | "needs_input" | "unavailable" | "unknown";
 // types.GitLane's four, then the two a clone can take with no run credential.
@@ -154,4 +168,18 @@ export interface ComponentFact {
   vault_floor?: boolean;
   tls_intercept?: boolean;
   high_risk?: boolean;
+  // The agent component's own facts (kind "agent").
+  agent?: AgentFact;
+  // A git_provider's additions: the run's resolved capability set on the lane
+  // and the most the person's row allows, the push rules in force for this
+  // provider and organisation, the Azure DevOps token mode and its scopes with
+  // what each covers (#1880), per-repository access, and the GitHub App
+  // install link (sent to operators only).
+  capabilities?: string[];
+  capability_ceiling?: string[];
+  push_rules?: PushRulesSpec;
+  token_mode?: "bearer" | "minted_pat" | "own_pat";
+  token_scopes?: TokenScopeFact[];
+  repo_access?: RepoAccessFact[];
+  install_url?: string;
 }
