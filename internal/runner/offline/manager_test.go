@@ -291,3 +291,36 @@ func TestExecLessSentinelAndLateReviveContainment(t *testing.T) {
 		}
 	}
 }
+
+func TestFailedCreateContainsImmediatelyAndRetriesWhileLeaseLive(t *testing.T) {
+	m, sub, _, org := managerFixture(t)
+	ctx := context.Background()
+	id := uuid.New()
+	spec := runner.SandboxSpec{RunID: id}
+	if err := m.Lease(ctx, runnerwire.Lease{RunID: id, TokenRenewedAt: org, EndsAt: org.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.BeforeCreate(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	sub.stopErr = errors.New("partial daemon failure")
+	if err := m.CreateFailed(ctx, spec); err == nil {
+		t.Fatal("failed containment hidden")
+	}
+	if sub.stops != 1 || sub.kills != 0 {
+		t.Fatal("ambiguous failure not contained immediately")
+	}
+	sub.stopErr = nil
+	if err := m.CheckLapses(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if sub.stops != 2 || sub.kills != 0 {
+		t.Fatal("failed intent was not retried")
+	}
+	if err := m.Created(ctx, spec, id.String()); err == nil {
+		t.Fatal("failed intent became live")
+	}
+	if err := m.BeforeRefCall(ctx, runnerwire.MethodReplaceProxy, id.String()); !errors.Is(err, runner.ErrRunnerOffline) {
+		t.Fatalf("failed intent revived: %v", err)
+	}
+}
