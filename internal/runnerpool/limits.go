@@ -208,11 +208,15 @@ func CheckBarrier(p types.RunnerPool, barrier types.ConfinementClass) *Refusal {
 	return &Refusal{Reason: ReasonBarrierNotAllowed, Name: p.Name, Barrier: barrier, Allowed: p.Limits.Barriers}
 }
 
-// CheckCapacity refuses a launch into a pool already running its cap. running is
-// the pool's non-terminal runs counted in the same transaction that inserts the
-// new run, under the pool's row lock; a count read outside it lets two launches
-// both pass.
-func CheckCapacity(p types.RunnerPool, running int) *Refusal {
+// AtCapacity reports that the pool is already running its cap, so a new run
+// waits for a slot: it is a queue decision, not a refusal of the launch. The
+// returned Refusal only carries the reason a queued run records
+// (runner_pool_at_capacity) and the sentence that says it is waiting; a caller
+// that cannot queue is the one place it answers as a refusal. The queue itself
+// is not here. running is the pool's non-terminal runs counted in the same
+// transaction that inserts the new run, under the pool's row lock; a count read
+// outside it lets two launches both pass.
+func AtCapacity(p types.RunnerPool, running int) *Refusal {
 	if p.Limits == nil || p.Limits.MaxConcurrentRuns == nil || running < *p.Limits.MaxConcurrentRuns {
 		return nil
 	}
@@ -222,14 +226,13 @@ func CheckCapacity(p types.RunnerPool, running int) *Refusal {
 // GovernanceSource is the person's governance ceiling's side of Effective:
 // CPU, memory, how long a run may live and how many a person may run at once.
 //
-// size is the CPU and memory a governed request may reach, as the caller
-// computes it for the member cap: max(what an untouched run already gets, the
-// ceiling's size), where the ceiling's size is composer.CeilingResources (the
-// ceiling policy's own size, an unset field at the deployment's default, each
-// lowered, never raised, to the profile's maximum). The profile's MaxCPUMillis
-// and MaxMemoryMiB are folded into it and are not read again here, so a maximum
-// above the deployment's default does not lift the cap above it.
-// A zero field is unrestricted and leaves the bound nil; so does a zero limit.
+// CPU and memory are the member cap (#1949): the most a governed request may
+// ask for is max(untouched, size), where untouched is what the run already gets
+// (the resolved policy's size, an unset field at the deployment's default) and
+// size is the ceiling policy's own size. A profile's maximum counts as the
+// ceiling's size: with no ceiling size set, the maximum IS the size (a maximum
+// above the deployment's default raises the cap to it); with both set, the lower
+// of the two. A zero field in all three leaves the bound nil (unrestricted).
 //
 // The lifetime is a lease: a finite end may be at most MaxEndAheadSec ahead of
 // now, whether or not No end is also on offer (AllowNoEnd with
@@ -239,7 +242,7 @@ func CheckCapacity(p types.RunnerPool, running int) *Refusal {
 // unbounded. The default is the profile's default end, else its maximum, as a
 // new run's end is today. Governance has no idle-stop ceiling (PauseIdleAfterSec
 // pauses, it does not stop), so IdleSec is never set.
-func GovernanceSource(l types.GovernanceLimits, size types.ResourceLimits) SourceLimits {
+func GovernanceSource(l types.GovernanceLimits, ceiling, untouched types.ResourceLimits) SourceLimits {
 	out := SourceLimits{Source: types.LimitSourceGovernance}
 	positive := func(n int) *int {
 		if n > 0 {
@@ -247,7 +250,8 @@ func GovernanceSource(l types.GovernanceLimits, size types.ResourceLimits) Sourc
 		}
 		return nil
 	}
-	out.CPUMillis.Max, out.MemoryMiB.Max = positive(size.CPUMillis), positive(size.MemoryMiB)
+	out.CPUMillis.Max = memberCap(ceiling.CPUMillis, l.MaxCPUMillis, untouched.CPUMillis)
+	out.MemoryMiB.Max = memberCap(ceiling.MemoryMiB, l.MaxMemoryMiB, untouched.MemoryMiB)
 	noEnd := l.AllowNoEnd && l.UserChangesLimits
 	out.NoEnd = &noEnd
 	switch {
@@ -261,6 +265,23 @@ func GovernanceSource(l types.GovernanceLimits, size types.ResourceLimits) Sourc
 	out.LifetimeSec.Default = positive(cmp.Or(l.DefaultEndSec, l.MaxEndAheadSec))
 	out.ConcurrentRuns = positive(l.MaxConcurrentRuns)
 	return out
+}
+
+// memberCap is one field of the member cap: max(untouched, size), where the
+// profile's maximum is the size when the ceiling sets none and lowers it when it
+// does. Nil when nothing sets the field.
+func memberCap(ceiling, profileMax, untouched int) *int {
+	size := ceiling
+	switch {
+	case size < 1:
+		size = profileMax
+	case profileMax > 0:
+		size = min(size, profileMax)
+	}
+	if size = max(size, untouched); size > 0 {
+		return Int(size)
+	}
+	return nil
 }
 
 // RunnerCapacity is what one runner advertises for a single run.

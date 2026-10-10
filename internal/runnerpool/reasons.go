@@ -32,7 +32,8 @@ const (
 	ReasonMemberMismatch     Reason = "runner_pool_member_mismatch"
 	ReasonPoolsUnavailable   Reason = "runner_pools_unavailable"
 	// The pool's own limits refuse a request that names a pool: a run type or a
-	// barrier the pool does not allow, and a pool already running its cap.
+	// barrier the pool does not allow. AtCapacity is the reason a run queued behind
+	// the pool's concurrent-run cap carries; it refuses only where queueing is impossible.
 	ReasonRunTypeNotAllowed Reason = "runner_pool_run_type_not_allowed"
 	ReasonBarrierNotAllowed Reason = "runner_pool_barrier_not_allowed"
 	ReasonAtCapacity        Reason = "runner_pool_at_capacity"
@@ -145,8 +146,9 @@ func BarrierNotAllowedMsg(name string, asked types.ConfinementClass, allowed []t
 	return fmt.Sprintf("%s doesn't allow the %s barrier. It allows %s.", name, types.BarrierLabel(asked), list)
 }
 
+// AtCapacityMsg is what a queued run says: it is waiting, not refused.
 func AtCapacityMsg(name string, max int) string {
-	return fmt.Sprintf("%s is already running its limit of %d. Try again when one finishes.", name, max)
+	return fmt.Sprintf("%s is running its limit of %d. This run starts when one finishes.", name, max)
 }
 
 func UnavailableServerMsg() string { return "This server does not manage runner pools yet." }

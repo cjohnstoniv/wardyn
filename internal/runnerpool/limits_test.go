@@ -10,8 +10,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/composer"
-	"github.com/cjohnstoniv/wardyn/internal/runner/sizing"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -301,42 +299,43 @@ func TestCheckBarrier(t *testing.T) {
 	}
 }
 
-func TestCheckCapacity(t *testing.T) {
+func TestAtCapacity(t *testing.T) {
 	l := appServerPool()
 	p := testPool(&l)
-	if CheckCapacity(p, 1_000_000) != nil {
-		t.Fatal("no cap, no refusal")
+	if AtCapacity(p, 1_000_000) != nil {
+		t.Fatal("no cap, no queueing")
 	}
 	n := 3
 	l.MaxConcurrentRuns = &n
 	for running, refused := range map[int]bool{0: false, 2: false, 3: true, 4: true} {
-		ref := CheckCapacity(p, running)
+		ref := AtCapacity(p, running)
 		if (ref != nil) != refused {
 			t.Errorf("%d running against a cap of 3: %+v", running, ref)
 		}
-		if ref != nil && (ref.Reason != ReasonAtCapacity || ref.Message() != "App servers is already running its limit of 3. Try again when one finishes.") {
-			t.Errorf("refusal = %+v", ref)
+		if ref != nil && (ref.Reason != ReasonAtCapacity || ref.Message() != "App servers is running its limit of 3. This run starts when one finishes.") {
+			t.Errorf("queue decision = %+v", ref)
 		}
 	}
-	if CheckCapacity(testPool(nil), 99) != nil {
+	if AtCapacity(testPool(nil), 99) != nil {
 		t.Fatal("a pool with no limits has no cap")
 	}
 }
 
 func TestGovernanceSource(t *testing.T) {
 	var zero types.GovernanceLimits
-	if s := GovernanceSource(zero, types.ResourceLimits{}); s.Source != types.LimitSourceGovernance || s.CPUMillis != (Bound{}) || s.ConcurrentRuns != nil {
+	if s := GovernanceSource(zero, types.ResourceLimits{}, types.ResourceLimits{}); s.Source != types.LimitSourceGovernance || s.CPUMillis != (Bound{}) || s.ConcurrentRuns != nil {
 		t.Fatalf("an unrestricted profile sets no size or count bound: %+v", s)
 	}
 	capped := types.GovernanceLimits{MaxCPUMillis: 4000, MaxMemoryMiB: 8192, MaxConcurrentRuns: 3}
 	capped.MaxEndAheadSec, capped.DefaultEndSec = 7200, 3600
 	size := types.ResourceLimits{CPUMillis: 4000, MemoryMiB: 8192}
-	s := GovernanceSource(capped, size)
+	none := types.ResourceLimits{}
+	s := GovernanceSource(capped, size, none)
 	if *s.CPUMillis.Max != 4000 || *s.MemoryMiB.Max != 8192 || *s.LifetimeSec.Max != 7200 || *s.LifetimeSec.Default != 3600 || *s.ConcurrentRuns != 3 {
 		t.Fatalf("source = %+v", s)
 	}
 	capped.DefaultEndSec = 0
-	if s = GovernanceSource(capped, size); *s.LifetimeSec.Default != 7200 {
+	if s = GovernanceSource(capped, size, none); *s.LifetimeSec.Default != 7200 {
 		t.Fatal("with no default end, a new run's end is the maximum")
 	}
 	if s.IdleSec != (Bound{}) {
@@ -344,11 +343,11 @@ func TestGovernanceSource(t *testing.T) {
 	}
 	// offering No end does not lift a finite maximum; the allowance without the gate is no offer
 	capped.AllowNoEnd, capped.UserChangesLimits = true, true
-	if s = GovernanceSource(capped, size); s.LifetimeSec.Max == nil || *s.LifetimeSec.Max != 7200 || !*s.NoEnd {
+	if s = GovernanceSource(capped, size, none); s.LifetimeSec.Max == nil || *s.LifetimeSec.Max != 7200 || !*s.NoEnd {
 		t.Fatalf("a finite maximum survives an offer of No end: %+v", s.LifetimeSec)
 	}
 	capped.UserChangesLimits = false
-	if s = GovernanceSource(capped, size); *s.NoEnd {
+	if s = GovernanceSource(capped, size, none); *s.NoEnd {
 		t.Fatal("No end without the change-limits gate is not an offer")
 	}
 }
@@ -390,15 +389,15 @@ func TestEffectiveOwnerScenarios(t *testing.T) {
 	// An indefinite pool needs unlimited lifetime in the person's governance too.
 	var open types.GovernanceLimits
 	open.AllowNoEnd, open.UserChangesLimits = true, true
-	if e := mustEffective(t, bg, poolSrc(bg), GovernanceSource(open, types.ResourceLimits{})); !e.Lifetime.Cap.Unlimited || !e.NoEndAllowed {
+	if e := mustEffective(t, bg, poolSrc(bg), GovernanceSource(open, types.ResourceLimits{}, types.ResourceLimits{})); !e.Lifetime.Cap.Unlimited || !e.NoEndAllowed {
 		t.Fatalf("unlimited pool + governance that offers No end = %+v, no end %v", e.Lifetime, e.NoEndAllowed)
 	}
-	if e := mustEffective(t, bg, poolSrc(bg), GovernanceSource(types.GovernanceLimits{}, types.ResourceLimits{})); e.NoEndAllowed || e.Lifetime.Cap.Unlimited {
+	if e := mustEffective(t, bg, poolSrc(bg), GovernanceSource(types.GovernanceLimits{}, types.ResourceLimits{}, types.ResourceLimits{})); e.NoEndAllowed || e.Lifetime.Cap.Unlimited {
 		t.Fatalf("unlimited pool + governance that does not offer No end must not give it: %+v, no end %v", e.Lifetime, e.NoEndAllowed)
 	}
 	bounded := types.GovernanceLimits{}
 	bounded.MaxEndAheadSec = 43200
-	e := mustEffective(t, bg, poolSrc(bg), GovernanceSource(bounded, types.ResourceLimits{}))
+	e := mustEffective(t, bg, poolSrc(bg), GovernanceSource(bounded, types.ResourceLimits{}, types.ResourceLimits{}))
 	if e.Lifetime.Cap.Unlimited || e.Lifetime.Cap.Value != 43200 || e.Lifetime.CapSource != types.LimitSourceGovernance {
 		t.Fatalf("a pool never widens governance: %+v", e.Lifetime)
 	}
@@ -406,14 +405,14 @@ func TestEffectiveOwnerScenarios(t *testing.T) {
 		t.Fatalf("an unlimited pool's no-end default is cut to governance's end: %+v", e.Lifetime)
 	}
 	// ...and to the deployment's maximum age.
-	e = mustEffective(t, bg, poolSrc(bg), GovernanceSource(open, types.ResourceLimits{}),
+	e = mustEffective(t, bg, poolSrc(bg), GovernanceSource(open, types.ResourceLimits{}, types.ResourceLimits{}),
 		SourceLimits{Source: types.LimitSourceDeployment, LifetimeSec: Bound{Max: Int(604800)}})
 	if e.Lifetime.Cap.Value != 604800 || e.Lifetime.CapSource != types.LimitSourceDeployment {
 		t.Fatalf("the deployment's cap binds an unlimited pool: %+v", e.Lifetime)
 	}
 
 	// Governance's smaller CPU wins over the pool's; the pool's smaller memory wins over governance's.
-	gov := GovernanceSource(types.GovernanceLimits{MaxCPUMillis: 4000, MaxMemoryMiB: 32768}, types.ResourceLimits{CPUMillis: 4000, MemoryMiB: 32768})
+	gov := GovernanceSource(types.GovernanceLimits{MaxCPUMillis: 4000, MaxMemoryMiB: 32768}, types.ResourceLimits{}, types.ResourceLimits{})
 	e = mustEffective(t, bg, poolSrc(bg), gov)
 	if e.CPUMillis.Cap.Value != 4000 || e.CPUMillis.CapSource != types.LimitSourceGovernance ||
 		e.MemoryMiB.Cap.Value != 16384 || e.MemoryMiB.CapSource != types.LimitSourcePool {
@@ -436,42 +435,42 @@ func TestEffectiveOwnerScenarios(t *testing.T) {
 	}
 
 	// An Interactive run: the pool's idle stop, never governance's pause.
-	e = mustEffective(t, ia, poolSrc(ia), GovernanceSource(types.GovernanceLimits{RunLimits: types.RunLimits{PauseIdleAfterSec: 60}}, types.ResourceLimits{}))
+	e = mustEffective(t, ia, poolSrc(ia), GovernanceSource(types.GovernanceLimits{RunLimits: types.RunLimits{PauseIdleAfterSec: 60}}, types.ResourceLimits{}, types.ResourceLimits{}))
 	if e.Idle == nil || e.Idle.Cap.Value != 7200 || e.Idle.Default.Value != 1800 || e.Idle.CapSource != types.LimitSourcePool {
 		t.Fatalf("idle = %+v", e.Idle)
 	}
 }
 
-// TestEffectiveProfileMaximumAboveTheDeploymentDefaultDoesNotRaiseTheCap pins the
-// #1949 cap rule through the real clamp: a profile's CPU or memory maximum only
-// lowers the size a governed run may reach, so a maximum set above the
-// deployment's default (and no ceiling size of its own) leaves the cap at the
-// default. The ceiling size is read from composer.Clamp, the authority for it.
-func TestEffectiveProfileMaximumAboveTheDeploymentDefaultDoesNotRaiseTheCap(t *testing.T) {
-	sizing.SetDefaultLimits(2000, 4096)
-	t.Cleanup(func() { sizing.SetDefaultLimits(0, 0) })
+// TestEffectiveMemberCapIsTheProfileMaximumWhenTheCeilingSetsNoSize pins the
+// #1949 member cap: a profile's CPU or memory maximum counts as the policy
+// ceiling's size. With no ceiling size set, the maximum IS the size, so a maximum
+// above the deployment's default (2000 CPU, 4096 MiB here) raises the cap to it;
+// with both set, the lower of the two; and the cap never falls below what an
+// untouched run already gets.
+func TestEffectiveMemberCapIsTheProfileMaximumWhenTheCeilingSetsNoSize(t *testing.T) {
+	untouched := types.ResourceLimits{CPUMillis: 2000, MemoryMiB: 4096}
 	deployment := SourceLimits{Source: types.LimitSourceDeployment,
 		CPUMillis: Bound{Max: Int(types.RunnerPoolCPUMillisMax), Default: Int(2000)},
 		MemoryMiB: Bound{Max: Int(types.RunnerPoolMemoryMiBMax), Default: Int(4096)}}
 	cases := []struct {
 		name             string
-		ceiling          *types.ResourceLimits
+		ceiling          types.ResourceLimits
 		maxCPU, maxMem   int
 		wantCPU, wantMem int
 	}{
-		{"only a maximum above the default", nil, 8000, 16384, 2000, 4096},
-		{"a maximum below the default lowers it", nil, 1000, 2048, 1000, 2048},
-		{"the ceiling's own size above the default stands", &types.ResourceLimits{CPUMillis: 6000, MemoryMiB: 12288}, 8000, 16384, 6000, 12288},
-		{"the maximum lowers a larger ceiling", &types.ResourceLimits{CPUMillis: 6000, MemoryMiB: 12288}, 3000, 8192, 3000, 8192},
+		{"only a maximum above the default", types.ResourceLimits{}, 8000, 16384, 8000, 16384},
+		{"a ceiling below the maximum", types.ResourceLimits{CPUMillis: 6000, MemoryMiB: 12288}, 8000, 16384, 6000, 12288},
+		{"a maximum below the ceiling", types.ResourceLimits{CPUMillis: 6000, MemoryMiB: 12288}, 3000, 8192, 3000, 8192},
+		{"a ceiling and no maximum", types.ResourceLimits{CPUMillis: 6000, MemoryMiB: 12288}, 0, 0, 6000, 12288},
+		{"neither: the untouched size", types.ResourceLimits{}, 0, 0, 2000, 4096},
+		{"a maximum under the untouched size never cuts below it", types.ResourceLimits{}, 1000, 2048, 2000, 4096},
 	}
 	for _, c := range cases {
 		limits := types.GovernanceLimits{MaxCPUMillis: c.maxCPU, MaxMemoryMiB: c.maxMem}
-		clamped, _ := composer.Clamp(types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: types.RunnerPoolCPUMillisMax, MemoryMiB: types.RunnerPoolMemoryMiBMax}},
-			types.RunPolicySpec{Resources: c.ceiling}, limits)
-		e := mustEffective(t, bg, GovernanceSource(limits, *clamped.Resources), deployment)
-		if e.CPUMillis.Cap.Value != c.wantCPU ||
-			e.MemoryMiB.Cap.Value != c.wantMem || e.CPUMillis.CapSource != types.LimitSourceGovernance || e.MemoryMiB.CapSource != types.LimitSourceGovernance {
-			t.Errorf("%s: cap cpu %+v memory %+v, want %d and %d", c.name, e.CPUMillis, e.MemoryMiB, c.wantCPU, c.wantMem)
+		e := mustEffective(t, bg, GovernanceSource(limits, c.ceiling, untouched), deployment)
+		if e.CPUMillis.Cap.Value != c.wantCPU || e.MemoryMiB.Cap.Value != c.wantMem ||
+			e.CPUMillis.CapSource != types.LimitSourceGovernance || e.MemoryMiB.CapSource != types.LimitSourceGovernance {
+			t.Errorf("%s: cap cpu %+v memory %+v, want %d and %d from governance", c.name, e.CPUMillis, e.MemoryMiB, c.wantCPU, c.wantMem)
 		}
 	}
 }
@@ -499,7 +498,7 @@ func TestGovernanceLifetimeAgreesWithEndChange(t *testing.T) {
 		{"a maximum survives the offer", 604800, true, true, 604800, true},
 		{"a maximum survives an allowance without the gate", 604800, true, false, 604800, false},
 	} {
-		g := GovernanceSource(types.GovernanceLimits{RunLimits: types.RunLimits{MaxEndAheadSec: c.max, AllowNoEnd: c.allow, UserChangesLimits: c.gate}}, types.ResourceLimits{})
+		g := GovernanceSource(types.GovernanceLimits{RunLimits: types.RunLimits{MaxEndAheadSec: c.max, AllowNoEnd: c.allow, UserChangesLimits: c.gate}}, types.ResourceLimits{}, types.ResourceLimits{})
 		if (c.wantMax == 0) != (g.LifetimeSec.Max == nil) || (g.LifetimeSec.Max != nil && *g.LifetimeSec.Max != c.wantMax) {
 			t.Errorf("%s: lifetime maximum = %v, want %d", c.name, g.LifetimeSec.Max, c.wantMax)
 		}

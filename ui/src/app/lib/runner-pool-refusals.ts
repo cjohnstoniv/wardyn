@@ -64,7 +64,7 @@ export const RUNNER_POOL_REFUSAL = {
     const list = labels.length > 1 ? `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}` : labels.join("");
     return `${name} doesn't allow the ${BARRIER_LABEL[asked]} barrier. It allows ${list}.`;
   },
-  AT_CAPACITY: (name: string, max: number) => `${name} is already running its limit of ${max}. Try again when one finishes.`,
+  AT_CAPACITY: (name: string, max: number) => `${name} is running its limit of ${max}. This run starts when one finishes.`,
 } as const;
 
 /** The reason each sentence belongs to; the console matches on these, never on the text. */

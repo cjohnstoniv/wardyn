@@ -14,5 +14,5 @@
   { "key": "UNAVAILABLE_SERVER", "args": [], "text": "This server does not manage runner pools yet." },
   { "key": "RUN_TYPE_NOT_ALLOWED", "args": ["Build farm", "interactive"], "text": "Build farm doesn't take interactive environments. Choose another pool or run type." },
   { "key": "BARRIER_NOT_ALLOWED", "args": ["Team laptops", "CC3", "CC1", "CC2"], "text": "Team laptops doesn't allow the Vault barrier. It allows Fence and Wall." },
-  { "key": "AT_CAPACITY", "args": ["Build farm", "4"], "text": "Build farm is already running its limit of 4. Try again when one finishes." }
+  { "key": "AT_CAPACITY", "args": ["Build farm", "4"], "text": "Build farm is running its limit of 4. This run starts when one finishes." }
 ]
