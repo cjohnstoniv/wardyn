@@ -238,6 +238,7 @@ Three more the tier inherits rather than introduces:
 
 - This is the first phase of hybrid (issue #103): the laptop keeps its full `wardynd` in member mode and gains exactly two things — a device credential and an upward audit forwarder.
 - It does not change where runs execute; that is the per-run placement work planned for 0.9 ([docs/design/hybrid-0.8.md](design/hybrid-0.8.md)).
+- A member-mode laptop cannot set `WARDYN_SSO_ONLY` (member mode needs the admin token as a process credential, see [`validateSSOOnlyPosture`](../cmd/wardynd/boot_posture.go)); it can still enrol into an SSO-only org, since [`handleDeviceEnrol`](../internal/api/devices_auth.go) does not check that posture. A client-mode runner has no console and works with an SSO-only org as is.
 
 **Enrolling.**
 

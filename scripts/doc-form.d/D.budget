@@ -5,4 +5,5 @@
 # 7189 adds 5: the launcher sequence as numbered steps ("In order, it:", "The port is", less the joiners).
 # 7206 adds 17: person erasure named beside retention as a way recordings go.
 # docs/DESKTOP.md 7312 adds 106: the Tiers table (local-only, client-mode runner, org) and the one-line deprecation notes for WARDYN_ORG_URL.
-docs/DESKTOP.md=7312 share=35
+# 7359 adds 47: the member-mode SSO-only bullet under "Enrolling into an org control plane" (#475).
+docs/DESKTOP.md=7359 share=35
