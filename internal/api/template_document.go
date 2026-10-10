@@ -302,12 +302,16 @@ func (d *templateDecoder) checkDependencies(doc client.TemplateDocument) {
 
 // checkAvailable refuses a valid field this server cannot honour yet. Each case
 // mirrors a case of unappliedFieldsRefusal (TestTemplateUnavailableMirrorsRunRefusal
-// holds the two together). Fields whose lane has not landed are refused by the
-// decoder through the registry's Pending flag instead.
+// holds the two together), so a field the run refuses stays refused in a
+// template even if its registry Pending flag is cleared early. Fields whose lane
+// has not landed are refused earlier, by the decoder, through the flag.
 func (d *templateDecoder) checkAvailable(req createRunRequest) {
 	refuse := func(path string) { d.add(path, reasonTemplateFieldUnavailable, templateFieldUnavailableMsg(path)) }
 	if req.Placement == client.PlacementLocal {
 		refuse("intent.placement")
+	}
+	if req.RunnerPoolID != "" {
+		refuse("intent.runner_pool_id")
 	}
 	if req.AllowedImage != "" {
 		refuse("intent.allowed_image")

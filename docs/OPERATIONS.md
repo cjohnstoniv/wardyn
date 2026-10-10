@@ -1742,6 +1742,8 @@ A signed-in human who matches nothing in a valid map, with no default role set, 
 | `POST /admin/identities/{id}/unbind` — clearing the principal an identity row is bound to, so the person's next sign-in binds it afresh: the remedy after an Entra app re-registration (see "After replacing the app registration"). It decides who a sign-in becomes, so it is not the security tier's. Refused (`409`) for a deactivated or purged identity | ⛔ admin only |
 | `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the model-provider rows below | ⛔ admin only |
 | `POST /runners/tokens` — creates a single-use registration token bound to the named owner; the runner remains unclaimed until that owner verifies its fingerprint in their personal session | ⛔ admin only |
+| the `/runner-pools` writes — pools, their executors and `PUT /runner-pool-defaults`, the organisation's default pools. A person adds only their own claimed runner to a pool, and no route adds another person's. Answers `501` until pool storage lands | ⛔ admin only |
+| the `/runner-pools/{id}/use-policy` routes — narrowing who may use one Remote Provided pool. Without a policy, everyone who may launch remote runs may. Answers `501` until pool storage lands; a write is then held under `WARDYN_GOVERNANCE_SECOND_HUMAN` | ⛔ admin or `security_admin` |
 | the `/admin/template-group-admins` routes — letting one person publish run templates to one group. The grant reaches that group's templates and nothing else, and it holds only while the person is a verified member of the group. Answers `501` until the template store lands | ⛔ admin only |
 | `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
@@ -5601,6 +5603,9 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0127` (`0127_deprovision_jobs`) adds `people.deactivated_at` (`0090`'s table), beside its new `deprovision_jobs` table.
 - `0130` (`0130_audit_chain_head_from_meta`) is a later `CREATE OR REPLACE` of `0047`'s chain function, which
   links each new row to the recorded head.
+- `0139` (`0139_runner_delivery`) adds `credential_grants.delivery` (`0001`'s table), beside its new `runners` table.
+- `0141` (`0141_run_placement`) adds the placement columns on `agent_runs` (`placement`, `placement_filled`, `runner_id`,
+  `evidence_source`).
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -5834,30 +5839,26 @@ env.WARDYN_OIDC_ISSUER for SSO — [...]
 > **So a default the new
 > version CHANGED silently keeps its old value.**
 
-- `--reuse-values` layers the
-  previous release's coalesced values *over* the new chart's `values.yaml` — it
-  does not replace it.
-- So a block the new version merely ADDED is not missing from
-  the map the templates read: it arrives with the new chart's defaults, and no
-  nil-dereference follows from its being new.
-- (A `helm template` of a faithfully
-  reconstructed `0.6.6` values map against the `0.7` chart renders byte-identical
-  objects to the same map against `0.6.6`, because `trustedCA` and `userDrives`
-  are purely additive.)
-- What `--reuse-values` really costs you is the other direction.
-- Every key the
-  previous release's map *does* carry wins — including the keys it carries only
-  because they were that chart's defaults, never because you chose them.
-- So the
-  day a Wardyn release CHANGES a default (rather than adding one), a
-  `--reuse-values` upgrade silently keeps the old value, with nothing at render
-  time to say so:
-  - A hardened NetworkPolicy port list, a probe path, a security
-    context.
-- That has not bitten anyone yet — every `values.yaml` change from `0.5`
-  through `0.7` is additive, which is exactly why the reused-map render above is
-  byte-identical.
-- And it is a property of the changes so far, not a promise.
+- `--reuse-values` hands the templates the PREVIOUS release's coalesced values
+  in place of the new chart's `values.yaml`, then layers your `-f`/`--set` over
+  them.
+- So a block the new version merely ADDED is **absent, not defaulted**.
+  - The old release never carried the key, so the template reads `nil`, and
+    what keeps that render alive is the `| default dict` guard.
+  - Measured on `0.8.6`: an install upgraded with `--reuse-values` and no
+    `runner.sandbox` of its own renders no `WARDYN_SANDBOX_DEFAULT_*` env.
+  - wardynd then keeps its compiled-in `2000m`/`4096Mi` — the size the chart
+    installs before `0.8.6`, arriving under a new version's name.
+  - Carry the block in `your-values.yaml`, or take `--reset-then-reuse-values`
+    below, and check the sandbox sizes after any `--reuse-values` upgrade that
+    crossed a release which added one.
+- The other direction costs too: every key the previous map *does* carry wins,
+  including keys it carried only because they were that chart's defaults, never
+  because you chose them.
+  - So the day a release CHANGES a default rather than adding one, a
+    `--reuse-values` upgrade keeps the old value, with nothing at render time
+    to say so.
+  - A hardened NetworkPolicy port list, a probe path, a security context.
 - Use
   `--reset-then-reuse-values` instead (Helm ≥ 3.14: starts from the NEW chart's
   defaults and layers only your explicit overrides on top), or better, pass `-f

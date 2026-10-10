@@ -439,6 +439,7 @@ func TestTemplateDecoderRefusals(t *testing.T) {
 		{"title is entered at launch", `{` + head + `,"intent":{"title":"nightly"}}`, "intent.title", reasonTemplateFieldExcluded},
 		{"description is entered at launch", `{` + head + `,"intent":{"description":"d"}}`, "intent.description", reasonTemplateFieldExcluded},
 		{"pending: pool", `{` + head + `,"intent":{"runner_pool_id":"6f1c2a52-5b1e-4d45-9d6b-0c4f1b2a7e10"}}`, "intent.runner_pool_id", reasonTemplateFieldUnavailable},
+		{"pending: a malformed pool id is still not a way around", `{` + head + `,"intent":{"runner_pool_id":"x"}}`, "intent.runner_pool_id", reasonTemplateFieldUnavailable},
 		{"pending: run mode", `{` + head + `,"intent":{"experience":"interactive"}}`, "intent.experience", reasonTemplateFieldUnavailable},
 		{"pending: included tools", `{` + head + `,"intent":{"included_tools":[]}}`, "intent.included_tools", reasonTemplateFieldUnavailable},
 		{"pending: startup", `{` + head + `,"intent":{"startup":"x"}}`, "intent.startup", reasonTemplateFieldUnavailable},
@@ -621,6 +622,7 @@ func TestTemplateUnavailableMirrorsRunRefusal(t *testing.T) {
 	for name, body := range map[string]string{
 		"local placement":  `{"placement":"local"}`,
 		"allowed image":    `{"allowed_image":"img"}`,
+		"runner pool":      `{"runner_pool_id":"6f1c2a52-5b1e-4d45-9d6b-0c4f1b2a7e10"}`,
 		"overrides":        `{"overrides":{"agent":{"add_hosts":["a.example.com"]}}}`,
 		"built-in":         `{"components":[{"builtin":"github","org":"acme","repos":["acme/api"]}]}`,
 		"remote placement": `{"placement":"remote"}`,

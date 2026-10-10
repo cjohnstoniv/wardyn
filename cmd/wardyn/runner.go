@@ -13,7 +13,7 @@ import (
 )
 
 func runnerCmd(client clientFn) *cobra.Command {
-	cmd := &cobra.Command{Use: "runner", Short: "Register and claim your runner"}
+	cmd := &cobra.Command{Use: "runner", Short: "Register and claim your runner, and set your runner pool defaults"}
 	var stateDir, owner string
 	claim := &cobra.Command{Use: "claim", Short: "Claim the runner whose fingerprint is stored on this host", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if stateDir == "" {
@@ -50,6 +50,6 @@ func runnerCmd(client clientFn) *cobra.Command {
 		return nil
 	}}
 	mint.Flags().StringVar(&owner, "owner", "", "person's principal (operator only); omit for yourself")
-	cmd.AddCommand(claim, mint)
+	cmd.AddCommand(claim, mint, runnerPoolCmd(client))
 	return subcommandGroup(cmd)
 }

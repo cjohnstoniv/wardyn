@@ -136,7 +136,7 @@ const (
 )
 
 // templateRequestRules classifies every CreateRunRequest field, plus the working
-// names of the carriers the run-mode, pool and repositories lanes have yet to add.
+// names of the carriers the run-mode and repositories lanes have yet to add.
 var templateRequestRules = []TemplateFieldRule{
 	carriedField("agent", templateTabToolsImage, partTools, templateOmitOptional, templateEmptySame,
 		"No agent is chosen. A background agent task needs one; a command or an interactive environment does not. A task is never turned into a shell command.").
@@ -203,7 +203,7 @@ var templateRequestRules = []TemplateFieldRule{
 	excludedField("preset_version", templateExcludeOrigin,
 		"A preset's version only means something beside its preset."),
 	carriedField("runner_pool_id", templateTabRunner, partRunner, templateOmitBaseline, templateEmptySame,
-		"The pool follows the organisation's default and the person's own default when the template is used.").
+		"The pool resolves from the person's own default, then the organisation's, when the template is used. A default that is unavailable or refused never falls through to another pool: the person chooses. A named pool narrows where the run may go and grants nothing, and the launcher's pool-use policy is checked at use.").
 		pending("C-pools"),
 	// Working names of carriers whose lanes have not landed: nothing accepts
 	// them, and the lane that adds one renames its row to the wire name.

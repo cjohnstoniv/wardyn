@@ -44,6 +44,8 @@ export interface RunnerDraft {
   /** "Runs on". Absent until chosen: there is no default between two eligible placements (OD-8). */
   placement?: PlacementValue;
   runnerId?: string;
+  /** The pool the run starts on. Absent is untouched: today's placement, and once pools are managed the person's, then the organisation's, default. */
+  poolId?: string;
   /** The ref of an image the organisation allows (preview `allowed_images`), sent as `allowed_image`. Absent keeps the resolved image. */
   imageRef?: string;
   /** CPU in CPUs (tenths) and memory in whole MiB, as the fields show them. */
@@ -157,6 +159,7 @@ export function resourcesWire(cpus?: number, memoryMiB?: number): RequestedResou
 export interface RunContractWire {
   placement?: PlacementValue;
   runner_id?: string;
+  runner_pool_id?: string;
   allowed_image?: string;
   resources?: RequestedResources;
   overrides?: RunOverrides;
@@ -169,6 +172,7 @@ export function buildRunContractWire(draft: RunContractDraft | undefined, active
   if (runner.placement) wire.placement = runner.placement;
   // A runner is named only for a run on a runner; the server refuses runner_id otherwise.
   if (runner.placement === "local" && runner.runnerId) wire.runner_id = runner.runnerId;
+  if (runner.poolId) wire.runner_pool_id = runner.poolId;
   if (runner.imageRef) wire.allowed_image = runner.imageRef;
   const resources = resourcesWire(runner.cpus, runner.memoryMiB);
   if (resources) wire.resources = resources;

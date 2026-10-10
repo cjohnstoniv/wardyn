@@ -56,4 +56,10 @@ describe("components client — routes and verbs", () => {
     fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: "no" }), { status: 404, headers: { "content-type": "application/json" } }));
     await expect(components.deleteMine(ID)).rejects.toMatchObject({ status: 404 });
   });
+
+  it("a refused delete keeps the refusal's reason", async () => {
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: "no", reason: "component_in_use" }), { status: 409, headers: { "content-type": "application/json" } }));
+    await expect(components.deleteMine(ID)).rejects.toMatchObject({ status: 409, reason: "component_in_use" });
+    await expect(components.remove(ID)).rejects.toMatchObject({ status: 409, reason: "component_in_use" });
+  });
 });

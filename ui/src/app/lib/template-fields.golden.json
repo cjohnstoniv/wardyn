@@ -584,7 +584,7 @@
       "part": "runner",
       "omitted": "baseline",
       "empty": "same_as_omitted",
-      "meaning": "The pool follows the organisation's default and the person's own default when the template is used.",
+      "meaning": "The pool resolves from the person's own default, then the organisation's, when the template is used. A default that is unavailable or refused never falls through to another pool: the person chooses. A named pool narrows where the run may go and grants nothing, and the launcher's pool-use policy is checked at use.",
       "section": "run_wide",
       "pending": "C-pools"
     },
