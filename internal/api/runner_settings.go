@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
@@ -74,7 +75,8 @@ func (s *Server) handlePutRunnerSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if before && !*req.Enabled && s.cfg.RunnersDisabled != nil {
-		s.cfg.RunnersDisabled(r.Context())
+		// The switch is already stored and audited off: a client hanging up now must not stop the hook.
+		s.cfg.RunnersDisabled(context.WithoutCancel(r.Context()))
 	}
 	writeJSON(w, http.StatusOK, types.RunnerSettings{Enabled: *req.Enabled})
 }
