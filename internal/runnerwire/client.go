@@ -271,24 +271,32 @@ func (c *Client) fresh(ctx context.Context, peer *Peer, pending <-chan []Pending
 	return nil
 }
 
-// sendInventory refuses to reach READY unless the hook emitted a valid Final.
+// sendInventory refuses to reach READY unless the hook emitted a valid Final
+// and no page was refused, even if the hook discarded that refusal.
 func (c *Client) sendInventory(ctx context.Context, peer *Peer) error {
 	var cursor StateInventory
+	var refused error
 	err := c.cfg.Hooks.StatePages(ctx, func(page StatePage) error {
+		if refused != nil {
+			return refused
+		}
 		next, err := cursor.Next(page)
-		if err != nil {
-			return err
+		if err == nil {
+			var payload []byte
+			if payload, err = Marshal(page); err == nil {
+				err = peer.Send(ctx, Frame{Type: TypeState, Payload: payload})
+			}
 		}
-		payload, err := Marshal(page)
 		if err != nil {
-			return err
-		}
-		if err := peer.Send(ctx, Frame{Type: TypeState, Payload: payload}); err != nil {
+			refused = err
 			return err
 		}
 		cursor = next
 		return nil
 	})
+	if err == nil {
+		err = refused
+	}
 	if err == nil && !cursor.Complete {
 		err = fmt.Errorf("%w: STATE inventory ended without Final", ErrBadFrame)
 	}
