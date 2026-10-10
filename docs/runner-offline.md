@@ -19,3 +19,16 @@ and terminal teardown share the existing per-run operation lock. An incomplete
 accepted tail blocks the next generation; a completed old receipt is a no-op.
 The org binds the expected execution handle from its correlated command result
 or explicit reconciliation, never from the first exit event.
+
+Exit delivery first commits an immutable pending receipt. This ACK does not bind
+the reported execution handle or finish the run. The org independently recovers
+the generation's durable command result, then a background worker commits the
+matching terminal transition and audit. Pending receipts and incomplete cleanup
+block another generation. The worker retries shared terminal effects after
+restart; checked stream callbacks never wait for same-peer teardown RPCs.
+
+Live activity uses a separate, bounded per-run marker under the proxy-only state
+mount. Admission captures a fresh connection epoch; reconnect invalidates it.
+Only a new admitted decision from the current epoch may send an unbuffered
+activity signal. Historical spool replay and retained old markers cannot renew
+the idle clock, mint credentials, or revive a run.
