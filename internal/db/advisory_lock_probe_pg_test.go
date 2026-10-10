@@ -11,11 +11,50 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestAdvisoryLockHeld_BigintKeyAcrossSessions(t *testing.T) {
+	holder, observer := poolOfOne(t), poolOfOne(t)
+	ctx := context.Background()
+	for _, key := range []int64{dedicatedTestLockKey, -1, -4294967295} {
+		t.Run(fmt.Sprintf("%d", key), func(t *testing.T) {
+			_, release, ok, err := TryAdvisoryLockDedicated(ctx, holder, key)
+			if err != nil || !ok {
+				t.Fatalf("hold bigint key: %v, %v", ok, err)
+			}
+			defer release()
+			if held, err := AdvisoryLockHeld(ctx, observer, key); err != nil || !held {
+				t.Fatalf("cross-session probe = %v, %v; want held", held, err)
+			}
+			if held, err := AdvisoryLockHeld(ctx, observer, key^1); err != nil || held {
+				t.Fatalf("neighbor key probe = %v, %v; want free", held, err)
+			}
+		})
+	}
+}
+
+func TestAdvisoryLockHeld_ObservesOwnSessionWithoutTakingLock(t *testing.T) {
+	pool := poolOfOne(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `SELECT pg_advisory_lock($1)`, dedicatedTestLockKey); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `SELECT pg_advisory_unlock_all()`) })
+	if held, err := AdvisoryLockHeld(ctx, pool, dedicatedTestLockKey); err != nil || !held {
+		t.Fatalf("own-session probe = %v, %v; want held", held, err)
+	}
+	if _, err := pool.Exec(ctx, `SELECT pg_advisory_unlock($1)`, dedicatedTestLockKey); err != nil {
+		t.Fatal(err)
+	}
+	if held, err := AdvisoryLockHeld(ctx, pool, dedicatedTestLockKey); err != nil || held {
+		t.Fatalf("probe after one unlock = %v, %v; want free", held, err)
+	}
+}
 
 // serverSessions is the cumulative count of sessions this database has
 // established, so a follower's connection CHURN is measurable. The PG suite runs

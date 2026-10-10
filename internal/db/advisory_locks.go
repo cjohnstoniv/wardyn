@@ -187,30 +187,21 @@ func TryAdvisoryLockConn(ctx context.Context, pool *pgxpool.Pool, key int64) (co
 	}, true, nil
 }
 
-// AdvisoryLockHeld reports whether key is held by another session RIGHT NOW,
-// probing on a connection borrowed from the pool and released before it
-// returns.
-//
-// A follower whose lock is held for the process lifetime
-// (TryAdvisoryLockDedicated) would otherwise dial a dedicated session on every
-// retry — one every sweeperLeaderRetry for the sweeper leader, one every
-// groundtruthRotatorLockBackoff for the ground-truth rotator — and close it
-// again the moment the try came back false. The probe answers "is anyone else
-// holding this?" from the pool, so only a replica that can win pays for a
-// session of its own.
-//
-// NOT a fence, and deliberately so: the probe takes and drops the lock, so
-// another replica can win that gap. The dedicated try is still what decides the
-// holder, and a follower that loses the race backs off exactly as before.
+// AdvisoryLockHeld reports whether any session holds key, without acquiring it.
+// A pooled read lets lifetime-lock followers avoid dialing a dedicated session
+// on every retry. This snapshot is not a fence: the dedicated try still decides
+// the holder, and callers fall through to that try when the read fails.
 func AdvisoryLockHeld(ctx context.Context, pool *pgxpool.Pool, key int64) (bool, error) {
-	release, ok, err := TryAdvisoryLock(ctx, pool, key)
+	var held bool
+	// PostgreSQL stores bigint keys as two unsigned OIDs; objsubid separates
+	// them from the two-int advisory-lock namespace.
+	err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks
+		WHERE locktype = 'advisory' AND granted AND classid = $1 AND objid = $2 AND objsubid = 1)`,
+		uint32(uint64(key)>>32), uint32(key)).Scan(&held)
 	if err != nil {
 		return false, fmt.Errorf("db: probe advisory lock: %w", err)
 	}
-	if ok {
-		release()
-	}
-	return !ok, nil
+	return held, nil
 }
 
 // dedicatedLockReleaseWait bounds a dedicated lock's release: the unlock and
