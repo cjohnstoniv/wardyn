@@ -4,4 +4,5 @@
 # 7184 adds 107: the restart and masking contract (47+5, then 11 and 12 for the values minted after dispatch at the two places that say it) and the SSH fingerprint remediation (30, then 2 for the antecedent fix).
 # 7189 adds 5: the launcher sequence as numbered steps ("In order, it:", "The port is", less the joiners).
 # 7206 adds 17: person erasure named beside retention as a way recordings go.
-docs/DESKTOP.md=7206 share=35
+# docs/DESKTOP.md 7312 adds 106: the Tiers table (local-only, client-mode runner, org) and the one-line deprecation notes for WARDYN_ORG_URL.
+docs/DESKTOP.md=7312 share=35

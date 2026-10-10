@@ -44,6 +44,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- `GET /api/v1/setup/status` gains `tier` (`local-only`, `runner`, `org`); `wardyn setup status` prints it, the
+  console account menu names it and the top bar shows a chip on local-only installs.
 - Run template contract: reusable run setups published per person, organisation or group. A template is read strictly
   (unknown fields, secrets, run state, owner fields, titles and descriptions are refused) through one validator for
   text and structs, and its partial policy is laid onto the source policy rather than replacing it. Adds the
@@ -89,6 +91,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- `WARDYN_ORG_URL` (org enrolment of a full daemon) logs a deprecation warning at boot; enrolment is removed in 1.0.
+  Use a client-mode runner. DESKTOP.md gains a tier table and the managed-laptops page is rewritten for client-mode
+  runners.
 - Own-runner (local) eligibility classifies the complete dispatch plan: own credentials are separated from operator,
   brokered and platform-minted material, every unclassified or unknown field refuses, own stored grants are persisted
   owner-only after the owner's namespace is proven, and a self-defined component on a local run needs

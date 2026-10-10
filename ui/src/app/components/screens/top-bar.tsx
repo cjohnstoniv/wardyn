@@ -15,6 +15,7 @@ import { WardynWordmark } from "../wardyn/logo";
 import { BrandSlot } from "../wardyn/branding-context";
 import { Chip } from "../wardyn/primitives";
 import { NO_BARRIER } from "../wardyn/copy";
+import { TIER } from "../wardyn/copy";
 import { useTheme } from "../wardyn/theme-provider";
 import { useGuardedNavClick } from "../../lib/use-unsaved-guard";
 import { Button } from "../ui/button";
@@ -53,6 +54,7 @@ export function TopBar({
   attentionCount,
   onNewRun,
   noBarrier,
+  tier,
 }: {
   onSignOut: () => void;
   meta: ShellMeta;
@@ -62,6 +64,8 @@ export function TopBar({
   /** #214 — see AppShell's own doc. Renders only in the User view, beside
    *  New run itself (which the Admin view never offers either). */
   noBarrier?: boolean;
+  /** SetupStatus.tier; absent until setup status lands (nothing is guessed). */
+  tier?: keyof typeof TIER.LABEL;
 }) {
   // What the header calls "you": the IdP's display name, else the session
   // email, else the principal itself (an admin token or local mode has
@@ -100,6 +104,12 @@ export function TopBar({
           preselectType={meta.userViewPreselectType}
           userTypes={meta.userViewTypes}
         />
+      )}
+
+      {tier === "local-only" && (
+        <Chip tone="neutral" className="hidden sm:inline-flex" srLabel={TIER.LABEL["local-only"]}>
+          {TIER.CHIP}
+        </Chip>
       )}
 
       {/* Shown ONLY when non-default. A default install is always
@@ -227,6 +237,11 @@ export function TopBar({
                       ? "local mode — no login on this install"
                       : ""}
               </div>
+              {tier && TIER.LABEL[tier] && (
+                <div className="text-meta text-muted-foreground">
+                  {TIER.MENU_PREFIX}: {TIER.LABEL[tier]}
+                </div>
+              )}
             </DropdownMenuLabel>
             {/* Slimmed to identity and Sign out (packet M-A): Getting started,
                 Setup, Settings and Your account live in the sidebar, the view

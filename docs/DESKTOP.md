@@ -6,6 +6,16 @@
 - Sibling shapes, for contrast: [the compose stack](../deploy/compose/README.md) (one host, demo/single-tenant) and [the Helm chart](../deploy/helm/wardyn/README.md) (a cluster, multi-user, SSO + RBAC, no shared docker socket).
 - This tier sits below both.
 
+## Tiers
+
+| Tier | What runs on the laptop | Governed by | Named in the console and `wardyn setup status` as |
+| --- | --- | --- | --- |
+| Local only | A full `wardynd` with no org | The person at the keyboard | Local only — not governed by an organisation |
+| Client-mode runner | `wardyn-runnerd`, no control plane; the owner claims it ([guide](operations/hybrid-laptops.md)) | The org | Runner for an organisation |
+| Org | The control plane itself, on a cluster or compose host | The org | Organisation |
+
+- Org enrolment of a full daemon (`WARDYN_ORG_URL`) is deprecated in 0.9 and removed in 1.0; use a client-mode runner. Design: [docs/design/0.9/PLAN.md](design/0.9/PLAN.md).
+
 ## Topology
 
 ![On an enrolled laptop, everyday work takes the normal path while each sandbox leaves only through its egress proxy, nothing connects in, and the proxy adds keys to outbound requests.](img/wardyn-laptop.webp)
@@ -220,6 +230,7 @@ Three more the tier inherits rather than introduces:
 ### `WARDYN_ORG_URL`
 
 - **optional.**
+- **Deprecated in 0.9 (removed in 1.0): boot logs a warning. Use a client-mode runner ([guide](operations/hybrid-laptops.md)).**
 - Set it to enrol this laptop into a remote org control plane — see [Enrolling into an org control plane](#enrolling-into-an-org-control-plane) below.
 - Unset (the default) is m′ with no hybrid posture at all: the laptop still keeps its own runs and its own audit table, forwarding nothing upward.
 
