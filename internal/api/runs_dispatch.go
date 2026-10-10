@@ -147,6 +147,9 @@ type dispatchParams struct {
 //
 //nolint:funlen // Deliberate: one linear provision → CAS → compensate sequence whose phase ORDER is the security contract (see above). Each phase already lives in its own helper; splitting the sequence would hide the ordering behind a call graph and make it unauditable in one scope. Low branching — passes gocyclo/gocognit, just long.
 func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling, p dispatchParams) {
+	if s.unsupportedLocalDispatch(ctx, run) {
+		return
+	}
 	// Fail closed on a ceiling nobody resolved. The compiler already forces a
 	// lane to pass SOMETHING; this refuses the one thing it could pass without
 	// deciding — the zero value — so "a new dispatch lane forgot the ceiling"
@@ -458,7 +461,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// p.ExtraEnv and the model provider arm's auth vars) so its refusal to overwrite
 	// an already-set variable covers every platform-authored key, not just the
 	// ones written above it. See resolveEnvSecretGrants.
-	s.applyComponentConfigEnv(ctx, run, p.Components.Config, sandboxEnv)
+	orgConfigKeys := s.applyComponentConfigEnv(ctx, run, p.Components.Config, sandboxEnv)
 	secretEnvKeys := s.resolveEnvSecretGrants(ctx, run, policy, sandboxEnv)
 
 	// Split the composed environment into its non-secret and credential-bearing
@@ -642,6 +645,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	spec.OnWaiting = s.runEvents.onWaiting(run.ID, onWaiting)
 	// The file_secret files join the spec last, so the manifest completes over their values.
 	if !s.completeMaskManifestWithFileSecrets(ctx, run, policy, &spec) {
+		return
+	}
+	if !s.classifyLocalDispatch(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, adoRun) {
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)

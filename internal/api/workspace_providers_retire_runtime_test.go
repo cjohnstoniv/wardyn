@@ -50,7 +50,7 @@ func persistOne(t *testing.T, srv *Server, g types.GrantSpec) (grantWiring, bool
 	t.Helper()
 	return srv.persistRunGrants(context.Background(), httptest.NewRecorder(),
 		httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), uuid.New(), time.Now().UTC(),
-		types.RunPolicySpec{EligibleGrants: []types.GrantSpec{g}})
+		types.RunPolicySpec{EligibleGrants: []types.GrantSpec{g}}, types.PlacementRemote)
 }
 
 // TestADOGitGrantsReadOnlyTheOwnersRowAndDropSSH (#1429 review F3): a git_pat

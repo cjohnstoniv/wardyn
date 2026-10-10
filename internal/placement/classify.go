@@ -106,7 +106,8 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "GitGrants", Variant: "GitHub App installation token", Class: ClassBrokered, Rule: RuleViaOrgRefuse, Delivery: ClassGitHubToken, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "PATGrants", Variant: "per_user stored PAT", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "PATGrants", Variant: "shared CredentialSource", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassGitPATBroker, Reason: ReasonPlacementCredential},
-	{Struct: StructProxyConfig, Field: "BrokeredPATGrantIDs", Variant: "follows PATGrants", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassGitPATBroker, Reason: ReasonPlacementCredential},
+	{Struct: StructProxyConfig, Field: "BrokeredPATGrantIDs", Variant: "follows per_user PATGrants", Class: ClassOwn, Rule: RuleAllow},
+	{Struct: StructProxyConfig, Field: "BrokeredPATGrantIDs", Variant: "follows shared PATGrants", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassGitPATBroker, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "ADOGrant", Variant: "minted PAT from a captured Entra sign-in", Class: ClassBrokered, Rule: RuleViaOrgRefuse, Delivery: ClassADOMintedPAT, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "ADOGrant", Variant: "own_pat token mode", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "AzureGates", Variant: "Azure Foundry, the person's own Entra sign-in", Class: ClassOwn, Rule: RuleAllow},
@@ -118,6 +119,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "LLMUpstreams", Class: ClassOperator, Rule: RuleNotSent, Variant: "org network"},
 	{Struct: StructProxyConfig, Field: "MITMHosts", Class: ClassOperator, Rule: RuleStrip, Variant: "only hosts of own and runner_resident injections and every via_org destination; operator-only hosts dropped"},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "EligibleGrants", Class: ClassOperator, Rule: RuleStrip, Variant: "grants not delivered own or runner_resident dropped; a via_org grant keeps only its grant_id and host"},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "LLMInspection.WorkspaceSecretValues", Class: ClassOperator, Rule: RuleStrip, Variant: "resolved inspection corpus never sent to a runner"},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "LLMInspection.WorkspaceSecretNames", Class: ClassOperator, Rule: RuleStrip, Variant: "resolved values stripped; the org-side via_org scan may still use them"},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "AllowedDomains", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "DeniedDomains", Class: ClassExempt, Rule: RuleExempt},
@@ -144,6 +146,15 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "LLMUnavailableDetail", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Unattended", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Attribution", Class: ClassExempt, Rule: RuleExempt},
+
+	// Grant eligibility is classified even when approval has withheld its dispatch value.
+	{Struct: StructGrantKind, Field: "api_key", Variant: "own namespace", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
+	{Struct: StructGrantKind, Field: "api_key", Variant: "operator/shared", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassAPIKey, Reason: ReasonPlacementCredential},
+	{Struct: StructGrantKind, Field: "env_secret", Variant: "own namespace", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
+	{Struct: StructGrantKind, Field: "env_secret", Variant: "operator/shared", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassEnvSecret, Reason: ReasonPlacementCredential},
+	{Struct: StructGrantKind, Field: "file_secret", Variant: "own namespace", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
+	{Struct: StructGrantKind, Field: "file_secret", Variant: "operator/shared", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassFileSecret, Reason: ReasonPlacementCredential},
+	{Struct: StructGrantKind, Field: "github_token", Class: ClassBrokered, Rule: RuleViaOrgRefuse, Delivery: ClassGitHubToken, Reason: ReasonPlacementCredential},
 
 	// Grant kinds with no SandboxSpec field.
 	{Struct: StructGrantKind, Field: "ssh_key", Variant: "own key", Class: ClassOwn, Rule: RuleAllow},
@@ -172,6 +183,7 @@ func Unclassified() []string {
 		unclassifiedIn(StructSandboxSpec, reflect.TypeFor[runner.SandboxSpec]()),
 		unclassifiedIn(StructProxyConfig, reflect.TypeFor[runner.ProxyConfig]()),
 		unclassifiedPaths(StructProxyConfig, "Policy", reflect.TypeFor[types.RunPolicySpec]()),
+		NestedUnclassified(),
 	)
 }
 

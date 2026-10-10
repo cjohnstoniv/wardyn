@@ -51,7 +51,7 @@ func TestUnclassifiedCatchesANewPolicyField(t *testing.T) {
 }
 
 func TestTableRowsAreWellFormed(t *testing.T) {
-	grantKinds := map[string]bool{"ssh_key": true, "git_pat": true, "cloud_sts": true}
+	grantKinds := map[string]bool{"ssh_key": true, "git_pat": true, "cloud_sts": true, "api_key": true, "env_secret": true, "file_secret": true, "github_token": true}
 	types := map[string]reflect.Type{
 		StructSandboxSpec: reflect.TypeFor[runner.SandboxSpec](),
 		StructProxyConfig: reflect.TypeFor[runner.ProxyConfig](),
