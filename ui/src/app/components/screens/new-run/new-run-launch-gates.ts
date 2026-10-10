@@ -42,6 +42,31 @@ export const ISSUE_TARGET = {
   POLICY_READ: "nr-policy-read-title",
   BARRIER: "nr-barrier",
   TOOL_RULES: "policy-tool-rules-run",
+  // 0.9 retune (M-NR-1/2, copy-amendments §4). The panels that own them land in
+  // A-L6…A-L10; the ids are fixed here so an issue can name a control before it
+  // exists. Tool rules move to the agent section as AGENT_TOOL_RULES.
+  /** The Runs on radiogroup. */
+  PLACEMENT: "nr-placement",
+  /** The runner Select, shown once My runner is chosen. */
+  RUNNER: "nr-runner",
+  CPU: "nr-cpu",
+  MEMORY: "nr-memory",
+  AGENT_TOOL_RULES: "nr-agent-tool-rules",
+  AGENT_ADD_HOST: "nr-agent-add-host",
+  AGENT_ADD_SECRET: "nr-agent-add-secret",
+  /** Azure DevOps capabilities, in the run's one Azure DevOps section. */
+  GIT_ADO_ACCESS: "nr-git-ado-access",
+} as const;
+
+/** The ids that depend on a position or a section: the nth attached workspace
+ *  (n ≥ 2 for its picker, the primary keeps ISSUE_TARGET.WORKSPACE), its target
+ *  path, an entry of an Access section, and a Git section's own push rules
+ *  (keyed by provider and organisation, as the overrides are). */
+export const issueTarget = {
+  workspace: (n: number) => `nr-workspace-${n}`,
+  workspaceTarget: (n: number) => `nr-workspace-target-${n}`,
+  accessEntry: (section: string, n: number) => `nr-access-entry-${section}-${n}`,
+  gitPushRules: (providerOrgKey: string) => `nr-git-push-rules-${providerOrgKey.replace("/", "-")}`,
 } as const;
 
 /** The line above Launch that names the first issue; a control whose issue it

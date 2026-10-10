@@ -11,6 +11,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // preflightResponse is the POST /api/v1/runs/preflight body: the deterministic
@@ -76,6 +77,15 @@ type preflightResponse struct {
 	// credential verdicts only this door reads. Absent for a run with no
 	// repository on a Git provider and no component.
 	Components []componentFact `json:"components,omitempty"`
+	// Resources and LocalPlacement are the policy preview's, with the same
+	// meaning: always an array, empty until the lane that fills them lands.
+	Resources      []client.PlacementResources `json:"resources"`
+	LocalPlacement []client.LocalPlacementFact `json:"local_placement"`
+	// Image is the image the run would start from and its source, absent until
+	// the image lane resolves it; AllowedImages are the organisation's allowed
+	// choices, an array that is empty until that lane fills it.
+	Image         *client.ImageFact     `json:"image,omitempty"`
+	AllowedImages []client.AllowedImage `json:"allowed_images"`
 }
 
 // preflightBurst and preflightLimiterMaxPeople size the per-person preflight
@@ -323,6 +333,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		RiskAssessment:           riskItems,
 		OverallRisk:              overallRisk,
 		Warnings:                 warnings,
+		Resources:                []client.PlacementResources{},
+		LocalPlacement:           []client.LocalPlacementFact{},
+		AllowedImages:            []client.AllowedImage{},
 	}
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred

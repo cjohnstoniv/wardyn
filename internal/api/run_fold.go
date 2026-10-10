@@ -77,6 +77,8 @@ type runFoldStep struct {
 // entry here plus its name in TestPreflightMirrorsLaunchGates' pinned list.
 //
 // The ORDER is security-relevant and is the contract; do not sort it:
+//   - The request contract first: it reads only the request, so a malformed or
+//     not-yet-honoured field answers before any store read or credential lookup.
 //   - Policy first: the member clamp and grant narrowing run before anything
 //     is granted, and every later step reads the clamped spec.
 //   - Workspace seed after policy, the drive after the seed: seeding can set
@@ -93,6 +95,7 @@ type runFoldStep struct {
 //   - Host capacity, the run cap and the quota fit last, so a refusal leaves
 //     no identity and no run row.
 var runFoldSteps = []runFoldStep{
+	{(*Server).stepRunContract, foldAll},
 	{(*Server).stepPolicy, foldAll},
 	{(*Server).stepSeedWorkspace, foldAll},
 	{(*Server).stepDrive, foldAll},

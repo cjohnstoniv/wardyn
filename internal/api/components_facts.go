@@ -9,7 +9,9 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // componentFact is one row of a dry run door's `components`: something the run
@@ -64,6 +66,18 @@ type componentFact struct {
 	TLSIntercept bool `json:"tls_intercept,omitempty"`
 	// HighRisk: Review grades one of its secrets high.
 	HighRisk bool `json:"high_risk,omitempty"`
+
+	// Agent is the agent component's own facts (kind agent) and the rest are a
+	// git_provider's additions (see client.ComponentFact). The New Run contract
+	// declares them; the facts lane fills them, so a door sends none yet.
+	Agent             *client.AgentFact       `json:"agent,omitempty"`
+	Capabilities      []string                `json:"capabilities,omitempty"`
+	CapabilityCeiling []string                `json:"capability_ceiling,omitempty"`
+	PushRules         *types.PushRulesSpec    `json:"push_rules,omitempty"`
+	TokenMode         types.ADOTokenMode      `json:"token_mode,omitempty"`
+	TokenScopes       []client.TokenScopeFact `json:"token_scopes,omitempty"`
+	RepoAccess        []client.RepoAccessFact `json:"repo_access,omitempty"`
+	InstallURL        string                  `json:"install_url,omitempty"`
 }
 
 // componentSecretFact is one secret of a component: how it reaches the run,
@@ -71,6 +85,10 @@ type componentFact struct {
 type componentSecretFact struct {
 	Delivery string `json:"delivery"` // header | env | file
 	Shared   bool   `json:"shared"`
+	// LocalDelivery is how an organisation-held secret would reach the person's
+	// runner (OD-12): via_org, runner_resident or refuse. Absent for the
+	// person's own secret and until the placement lane decides.
+	LocalDelivery placement.Mode `json:"local_delivery,omitempty"`
 }
 
 // What a fact's status says.

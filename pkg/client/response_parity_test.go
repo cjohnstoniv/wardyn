@@ -113,6 +113,8 @@ func TestResponseDTOs_MatchTheServersWireTags(t *testing.T) {
 		{"RunPolicySource", "internal/api/run_policy_view.go", "runPolicySource", client.RunPolicySource{}},
 		{"RunPolicyChange", "internal/api/run_policy_view.go", "runPolicyChange", client.RunPolicyChange{}},
 		{"StoredPolicyNow", "internal/api/run_policy_view.go", "storedPolicyNow", client.StoredPolicyNow{}},
+		{"ComponentFact", "internal/api/components_facts.go", "componentFact", client.ComponentFact{}},
+		{"ComponentSecretFact", "internal/api/components_facts.go", "componentSecretFact", client.ComponentSecretFact{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			want := serverJSONTags(t, tc.file, tc.server)

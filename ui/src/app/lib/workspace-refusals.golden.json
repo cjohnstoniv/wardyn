@@ -1,0 +1,8 @@
+[
+  { "key": "TARGET_SHAPE", "args": ["work"], "text": "work must be an absolute path under /home/agent, such as /home/agent/work." },
+  { "key": "OVERLAP_EQUAL", "args": ["/home/agent/work", "payments"], "text": "/home/agent/work is also where payments mounts. Give one of them another path." },
+  { "key": "OVERLAP_NESTED", "args": ["/home/agent/work/api", "payments", "/home/agent/work"], "text": "/home/agent/work/api is inside /home/agent/work, where payments mounts. Two mounts can't nest." },
+  { "key": "PIN_CONFLICT", "args": ["payments", "Anthropic API", "docs", "Bedrock"], "text": "payments uses Anthropic API and docs uses Bedrock. A run uses one model provider, so remove one of them." },
+  { "key": "IMAGE_CONFLICT", "args": ["payments", "docs"], "text": "payments and docs use different base images. A run uses one image, so remove one of them." },
+  { "key": "ADO_ORG_CONFLICT", "args": ["payments", "acme", "docs", "globex"], "text": "payments uses Azure DevOps organisation acme and docs uses globex. A run signs in to one Azure DevOps organisation, so remove one of them." }
+]

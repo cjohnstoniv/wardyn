@@ -122,3 +122,53 @@ describe("buildRunInput — components", () => {
     expect(body.components).toEqual(ref);
   });
 });
+
+describe("buildRunInput — the 0.9 contract fields", () => {
+  it("forwards an explicit empty ADO edit only while active and keeps it for reactivation", () => {
+    const state = {
+      ...initialWizardState("CC1"),
+      title: "test",
+      task: "test",
+      contract: { runner: {}, access: { overrides: { azureDevOps: { capabilities: [] }, gitPAT: [], pushRules: [] } } },
+    };
+    const sections = { agent: false, azureDevOps: true, gitPATHosts: [], pushKeys: [] };
+    const activeInput = buildRunInput({ ...defaultInput(state), activeSections: sections })!;
+    expect(runWireBody(activeInput).overrides).toEqual({ azure_devops: { capabilities: [] } });
+    const inactiveInput = buildRunInput({ ...defaultInput(state), activeSections: { ...sections, azureDevOps: false } })!;
+    expect(runWireBody(inactiveInput).overrides).toBeUndefined();
+    expect(state.contract.access.overrides.azureDevOps).toEqual({ capabilities: [] });
+    const restoredInput = buildRunInput({ ...defaultInput(state), activeSections: sections })!;
+    expect(runWireBody(restoredInput).overrides).toEqual({ azure_devops: { capabilities: [] } });
+    const untouched = { ...state, contract: { ...state.contract, access: { overrides: { gitPAT: [], pushRules: [] } } } };
+    expect(runWireBody(buildRunInput({ ...defaultInput(untouched), activeSections: sections })!).overrides).toBeUndefined();
+  });
+
+  const defaultInput = (state = initialWizardState("CC2")) => input({ policyMode: "default", state, merged: null });
+
+  it("sends none of them for an untouched form", () => {
+    const body = buildRunInput(defaultInput());
+    for (const key of ["placement", "runner_id", "resources", "overrides"]) expect(body).not.toHaveProperty(key);
+  });
+
+  it("sends the person's choices, and the overrides of active sections only", () => {
+    const state = initialWizardState("CC2", {
+      contract: {
+        runner: { placement: "local", runnerId: "runner-1", cpus: 2 },
+        access: {
+          overrides: {
+            gitPAT: [],
+            pushRules: [{ provider: "github", org: "acme", deny_paths: ["infra/"] }],
+            azureDevOps: { capabilities: ["code_read"] },
+          },
+        },
+      },
+    });
+    const inactive = runWireBody(buildRunInput(defaultInput(state))!);
+    expect(inactive).toMatchObject({ placement: "local", runner_id: "runner-1", resources: { cpu_millis: 2000 } });
+    expect(inactive).not.toHaveProperty("overrides");
+    const active = runWireBody(
+      buildRunInput({ ...defaultInput(state), activeSections: { agent: false, azureDevOps: false, gitPATHosts: [], pushKeys: ["github/acme"] } })!,
+    );
+    expect(active.overrides).toEqual({ push_rules: [{ provider: "github", org: "acme", deny_paths: ["infra/"] }] });
+  });
+});
