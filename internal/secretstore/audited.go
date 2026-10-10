@@ -30,6 +30,7 @@ const (
 	PurposeDispatch     Purpose = "dispatch"
 	PurposeManagedToken Purpose = "managed-token"
 	PurposeMigrate      Purpose = "migrate"
+	PurposeRehearse     Purpose = "rehearse"
 	PurposeSSORefresh   Purpose = "sso-refresh"
 	PurposeADORefresh   Purpose = "ado-refresh"
 	PurposeStatus       Purpose = "status"
