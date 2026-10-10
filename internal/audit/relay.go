@@ -29,6 +29,9 @@ func StampRelay(ctx context.Context, data json.RawMessage) json.RawMessage {
 			fields = map[string]json.RawMessage{"data": data}
 		}
 	}
+	if fields == nil {
+		fields = map[string]json.RawMessage{}
+	}
 	fields["relay"], _ = json.Marshal("runner:" + id.String())
 	out, _ := json.Marshal(fields)
 	return out

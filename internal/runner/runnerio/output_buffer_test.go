@@ -35,6 +35,10 @@ func TestOutputBufferRestartAndAcknowledgedRange(t *testing.T) {
 	if err := b.ack(73); err != nil {
 		t.Fatal(err)
 	}
+	beforeEOF, err := newOutputBuffer(b.dir)
+	if err != nil || beforeEOF.state.Ack != 73 {
+		t.Fatalf("ACK was not durable before EOF: state=%+v err=%v", beforeEOF, err)
+	}
 	b.EndDrain(nil)
 	recovered, err := newOutputBuffer(b.dir)
 	if err != nil {
@@ -203,5 +207,46 @@ func TestOutputBufferMissingStatePreservesExistingData(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(b.dir, partName(0)))
 	if err != nil || string(data) != "committed" {
 		t.Fatal("destroyed existing output")
+	}
+}
+
+func TestOutputBufferFailedAckCannotBecomeSuccessOnRetry(t *testing.T) {
+	b := outputFixture(t)
+	if _, err := b.Write([]byte("retained")); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(b.dir, "state.json")
+	backup := filepath.Join(t.TempDir(), "state.json")
+	if err := os.Rename(state, backup); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(state, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := b.ack(4); err == nil {
+			t.Fatalf("failed persistence reported ACK success on attempt%d", i)
+		}
+	}
+	if _, err := b.Write([]byte("x")); err == nil {
+		t.Fatal("output continued after persistence failure")
+	}
+	if err := os.Remove(state); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(backup, state); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := newOutputBuffer(b.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.state.Ack != 0 {
+		t.Fatalf("restored uncommitted ACK=%d", recovered.state.Ack)
+	}
+	var data [8]byte
+	n, err := recovered.read(t.Context(), 0, data[:])
+	if err != nil || string(data[:n]) != "retained" {
+		t.Fatalf("committed bytes=%q err=%v", data[:n], err)
 	}
 }
