@@ -5,6 +5,7 @@ package store_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"sync"
 	"testing"
@@ -72,12 +73,12 @@ func TestPG_AppClockDecisionPreservesTimeAcrossRowLock(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal(ctx.Err())
 			}
+			var updateStarted sql.NullTime
 			for {
-				var waiting bool
-				if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))`, lockerPID).Scan(&waiting); err != nil {
+				if err := pool.QueryRow(ctx, `SELECT min(query_start) FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))`, lockerPID).Scan(&updateStarted); err != nil {
 					t.Fatal(err)
 				}
-				if waiting {
+				if updateStarted.Valid {
 					break
 				}
 				select {
@@ -86,10 +87,10 @@ func TestPG_AppClockDecisionPreservesTimeAcrossRowLock(t *testing.T) {
 				case <-time.After(time.Millisecond):
 				}
 			}
-			var cutoff time.Time
-			if err := pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&cutoff); err != nil {
-				t.Fatal(err)
-			}
+			// Use the UPDATE's own admission clock, frozen before its row wait.
+			// A fresh wall-clock sample while blocked can step backward and cannot
+			// establish that the eventual timestamp moved forward during the wait.
+			cutoff := updateStarted.Time
 			if err := locker.Commit(ctx); err != nil {
 				t.Fatal(err)
 			}

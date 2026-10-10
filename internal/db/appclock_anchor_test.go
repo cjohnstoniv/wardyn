@@ -5,9 +5,10 @@ package db
 import (
 	"context"
 	"errors"
-	"github.com/jackc/pgx/v5"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type clockRowFunc func(...any) error
@@ -27,7 +28,7 @@ func TestAppClockAnchorResponseDelayCannotAdvanceAdmission(t *testing.T) {
 	scanned := false
 	q := clockQueryFunc(func(context.Context, string, ...any) pgx.Row {
 		return clockRowFunc(func(values ...any) error {
-			// The database answered at150ms; receipt occurs50ms later on the fast app clock.
+			// The database answered at 150ms; receipt occurs 50ms later on the fast app clock.
 			*values[0].(*time.Time) = base.Add(150 * time.Millisecond)
 			appAt = issued.Add(200 * time.Millisecond)
 			scanned = true
