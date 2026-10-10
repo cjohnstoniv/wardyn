@@ -251,6 +251,10 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	owner := s.secretOwnerFromRequest(r)
+	r, ok := s.beginRequestWrite(w, r, owner)
+	if !ok {
+		return
+	}
 	if !s.writableSecretName(w, name, owner) {
 		return
 	}
@@ -283,8 +287,8 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 	if !s.admitSecretCount(w, r, owner, name) {
 		return
 	}
-	if err := s.putOwned(r.Context(), owner, func() error {
-		return s.cfg.Secrets.For(owner).Put(r.Context(), name, []byte(body.Value))
+	if err := s.putOwned(r.Context(), owner, func(ctx context.Context) error {
+		return s.cfg.Secrets.For(owner).Put(ctx, name, []byte(body.Value))
 	}); err != nil {
 		if errors.Is(err, secretstore.ErrRowNotWritten) {
 			// Rule 18: the value reached the external store but its row did not,

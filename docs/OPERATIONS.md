@@ -1206,6 +1206,16 @@ erases one person's retained records by explicit scope, in one audited act
   rest.
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
 
+- **A credential write that began before the erase never lands behind it.**
+  - The `credentials` scope advances the person's erase generation before it lists anything, then deletes.
+  - Every write of a stored credential reads that generation when it begins and is refused if it has moved: `409` `credential_erased_during_write`, nothing saved.
+  - A write that begins after the erase lands, so reconnecting works at once.
+  - The check is in Postgres, so it holds across wardynd replicas and in store mode (the value is not sent to Vault or Key Vault first).
+  - The `credential.erase` row's `write_fence` is `generation`, or `locks_only` for a store that keeps no generation: then only the in-process locks hold back a writer.
+  - Migration `0195_secret_owner_generations` adds one counter per person; an owner with no row is generation 0, so every existing credential keeps working.
+  - The counter holds a number and a time, never a credential, and refuses nothing later.
+  - An older wardynd running beside this one does not check it: finish the upgrade before an erase.
+
 - The `recordings` scope fences each run present in the person's run list, including its bare cast, attach sessions
   and upload parts.
 - An upload still streaming when erasure completes cannot recreate one: its final save answers `410`

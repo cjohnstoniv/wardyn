@@ -132,6 +132,13 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 // (ado_own_pat.go, which takes only adoOwnPATWriteMu), and the AWS capture
 // (ssotoken.go), which a held AWS lock serialises. A run that already holds a
 // credential in memory keeps it; the erase does not reach into a running run.
+//
+// The locks are in-process. What holds back a writer in another process is the
+// owner's erase generation, which EraseOwner advances before it lists anything:
+// every writer routes through putOwned, which fences its Put to the generation
+// read when the write began (beginCredentialWrite), so one that began before
+// the erase is refused with secretstore.ErrGenerationChanged and one that
+// begins after it lands. The audit row's write_fence says which held.
 func (s *Server) eraseLocked(ctx context.Context, owner, rowID string, rep *secretstore.EraseReport) error {
 	ctx, unlock, err := s.lockAWSSSOOwner(ctx, owner)
 	if err != nil {

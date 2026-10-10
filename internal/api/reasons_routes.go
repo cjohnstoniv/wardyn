@@ -731,6 +731,10 @@ const (
 	reasonCredentialEraseSignInConfigUnreadable = "credential_erase_signin_config_unreadable"
 )
 
+// A write of a stored credential that began before an erase of its owner (writeServerError):
+// 409, nothing saved, a new attempt lands.
+const reasonCredentialErasedDuringWrite = "credential_erased_during_write"
+
 // POST /people/{principal}/erasure (person_erasure.go).
 const (
 	// scopes is not a non-empty list of known scope names.

@@ -82,13 +82,24 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport) *erasure.
 	return &erasure.Orchestrator{Steps: steps}
 }
 
+// The two answers credential.erase gives for what held back a writer that began before it:
+// the owner's erase generation, which refuses it in any process, or the in-process locks alone,
+// for a store that keeps no generation.
+const (
+	writeFenceGeneration = "generation"
+	writeFenceLocksOnly  = "locks_only"
+)
+
 // credentialEraseData is what a credentials erase reports: the credential.erase
 // row's fields and the route's response. crypto_erased are the rows under the
 // person's destroyed principal key; deleted are the rest (v1 rows, rows
 // written with principal keys off, external pointers), which are gone only to
 // the backup horizon.
 func credentialEraseData(rep secretstore.EraseReport) map[string]any {
-	data := map[string]any{"count": rep.Count, "crypto_erased": rep.CryptoErased, "deleted": rep.Count - rep.CryptoErased}
+	data := map[string]any{"count": rep.Count, "crypto_erased": rep.CryptoErased, "deleted": rep.Count - rep.CryptoErased, "write_fence": writeFenceLocksOnly}
+	if rep.Fenced {
+		data["write_fence"] = writeFenceGeneration
+	}
 	if rep.Store != "" {
 		data["store"], data["purged"] = rep.Store, rep.Purged
 		if !rep.Purged && rep.RecoverableDays > 0 {

@@ -205,7 +205,9 @@ func (s *Server) probeSecretWrite(ctx context.Context, scope awsSSOScope) error 
 		}
 		st = st.For(scope.owner)
 	}
-	if err := st.Put(ctx, writeProbeSecretName, []byte("probe")); err != nil {
+	if err := s.putOwned(ctx, scope.rowOwner(), func(ctx context.Context) error {
+		return st.Put(ctx, writeProbeSecretName, []byte("probe"))
+	}); err != nil {
 		return err
 	}
 	if err := st.Delete(ctx, writeProbeSecretName); err != nil {
@@ -228,7 +230,8 @@ const awsSSOPersistBudget = 30 * time.Second
 // the secret store keeps row revisions, the Put lands only while the row is
 // still the one rev names (read, under the lock, before the refresh token in it
 // was redeemed), and a row that changed since is left as it is
-// (secretstore.ErrRevisionChanged, never retried).
+// (secretstore.ErrRevisionChanged, never retried). The same holds for an erase
+// of the owner since that read (secretstore.ErrGenerationChanged).
 func (s *Server) persistRenewedAWSSSOBlob(ctx context.Context, scope awsSSOScope, next awsSSOBlob, rev string, guarded bool) (attempts int, err error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), awsSSOPersistBudget)
 	defer cancel()
@@ -237,7 +240,7 @@ func (s *Server) persistRenewedAWSSSOBlob(ctx context.Context, scope awsSSOScope
 	}
 	for attempts = 1; ; attempts++ {
 		err = s.storeAWSSSOBlob(ctx, scope, next)
-		if err == nil || errors.Is(err, secretstore.ErrRevisionChanged) || attempts == awsSSOPersistAttempts {
+		if err == nil || secretstore.Superseded(err) || attempts == awsSSOPersistAttempts {
 			return attempts, err
 		}
 		select {
@@ -588,7 +591,12 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 	// from it would write a credential back that an admin erased (#1478). So it
 	// renews nothing, spends nothing at AWS, and writes nothing. A token with at
 	// least the serve floor left is served from memory; otherwise the run is refused.
-	rev, guarded, rerr := s.awsSSORevision(ctx, scope)
+	ctx, rerr := s.beginCredentialWrite(ctx, scope.rowOwner())
+	var rev string
+	var guarded bool
+	if rerr == nil {
+		rev, guarded, rerr = s.awsSSORevision(ctx, scope)
+	}
 	var cur awsSSOBlob
 	var found bool
 	if rerr == nil {
@@ -712,7 +720,7 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 	}
 	outcome := "success"
 	persistAttempts, perr := s.persistRenewedAWSSSOBlob(ctx, scope, next, rev, guarded)
-	superseded := errors.Is(perr, secretstore.ErrRevisionChanged)
+	superseded := secretstore.Superseded(perr)
 	if superseded {
 		// The row is no longer the one this renewal read: a newer pair (or an
 		// erase) landed while the lock was lost. It is left as it is. The pair
