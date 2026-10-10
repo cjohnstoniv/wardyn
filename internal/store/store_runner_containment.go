@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
@@ -17,6 +18,8 @@ import (
 // RunnerContainmentProof contains org-persisted action bindings, not values
 // selected by a runner's action_result or inferred from the latest run. H3
 // stores LostAt/Generation with the queued action and supplies them unchanged.
+// Nil Generation explicitly means no execution had been issued; the committing
+// transaction must still find no execution row, never infer a latest generation.
 type RunnerContainmentProof struct {
 	RunnerContainment
 	ActionID   uuid.UUID
@@ -28,7 +31,7 @@ type RunnerContainmentProof struct {
 // duplicate CAS must skip this hook. H3 owns pending clearance and commits only
 // if this hook succeeds. No lifecycle or credential state is restored here.
 func (s PG) RecordRunnerContainmentTx(ctx context.Context, tx pgx.Tx, proof RunnerContainmentProof, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) error {
-	if prepare == nil || proof.ActionID == uuid.Nil || proof.Generation == uuid.Nil || proof.LostAt.IsZero() || proof.ObservedAt.IsZero() || proof.Ref == "" {
+	if prepare == nil || proof.ActionID == uuid.Nil || proof.LostAt.IsZero() || proof.ObservedAt.IsZero() || proof.Ref == "" {
 		return ErrRunnerExecutionRefused
 	}
 	var isolation string
@@ -49,10 +52,10 @@ func (s PG) RecordRunnerContainmentTx(ctx context.Context, tx pgx.Tx, proof Runn
 		return ErrRunnerExecutionRefused
 	}
 	current, err := readRunnerExecution(ctx, tx, proof.RunID)
-	if err != nil {
+	if err != nil && !(errors.Is(err, pgx.ErrNoRows) && proof.Generation == uuid.Nil) {
 		return err
 	}
-	if current.Generation != proof.Generation || current.RunnerID != proof.RunnerID {
+	if err == nil && (current.Generation != proof.Generation || current.RunnerID != proof.RunnerID) {
 		return ErrRunnerExecutionRefused
 	}
 	action, err := scanAction(tx.QueryRow(ctx, `SELECT `+actionCols+` FROM runner_pending_actions WHERE id=$1 FOR UPDATE`, proof.ActionID))

@@ -117,6 +117,11 @@ func TestPG_RunnerLossClaimRechecksAuthority(t *testing.T) {
 }
 
 func TestPG_RunnerLateContainmentAtomicProof(t *testing.T) {
+	t.Run("issued-execution", func(t *testing.T) { runnerLateContainmentProof(t, true) })
+	t.Run("before-first-execution", func(t *testing.T) { runnerLateContainmentProof(t, false) })
+}
+
+func runnerLateContainmentProof(t *testing.T, issued bool) {
 	pool, st, rn, run, _ := spoolPGFixture(t)
 	ctx := t.Context()
 	gen := uuid.New()
@@ -124,8 +129,12 @@ func TestPG_RunnerLateContainmentAtomicProof(t *testing.T) {
 	if err := st.SetSandboxRef(ctx, run.ID, ref); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.BeginRunnerExecution(ctx, rn.ID, run.ID, uuid.Nil, gen, runnerwire.MethodExec); err != nil {
-		t.Fatal(err)
+	if issued {
+		if _, err := st.BeginRunnerExecution(ctx, rn.ID, run.ID, uuid.Nil, gen, runnerwire.MethodExec); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		gen = uuid.Nil
 	}
 	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at=now(),lost_reason='outage' WHERE id=$1`, run.ID); err != nil {
 		t.Fatal(err)
@@ -158,7 +167,7 @@ func TestPG_RunnerLateContainmentAtomicProof(t *testing.T) {
 		}
 		return true, tx.Commit(ctx)
 	}
-	for _, scenario := range []string{"old-lost-mark", "old-generation", "wrong-action", "seal-failure"} {
+	for _, scenario := range []string{"old-lost-mark", "old-generation", "wrong-action", "seal-failure", "revoked"} {
 		t.Run(scenario, func(t *testing.T) {
 			p := proof
 			prepare := prepareSpoolTest
@@ -169,6 +178,16 @@ func TestPG_RunnerLateContainmentAtomicProof(t *testing.T) {
 				p.Generation = uuid.New()
 			case "wrong-action":
 				p.ActionID = uuid.New()
+			case "revoked":
+				if _, err := pool.Exec(ctx, `UPDATE runners SET state='revoked',revoked_at=now() WHERE id=$1`, rn.ID); err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					if _, err := pool.Exec(ctx, `UPDATE runners SET state='claimed',revoked_at=NULL WHERE id=$1`, rn.ID); err != nil {
+						t.Fatal(err)
+					}
+				}()
+
 			case "seal-failure":
 				prepare = func(context.Context, types.AuditEvent) (types.AuditEvent, error) {
 					return types.AuditEvent{}, errors.New("seal unavailable")
