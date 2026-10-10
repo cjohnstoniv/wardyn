@@ -49,14 +49,14 @@ var _ RunnerStore = PG{}
 var ErrRunnerClaimMismatch = errors.New("store: runner claim does not match the owner or key fingerprint")
 
 const runnerCols = `id, owner, name, public_key, key_fingerprint, state, version, created_at, claimed_at,
-	last_seen_at, revoked_at, posture, posture_reported_at, posture_source`
+	last_seen_at, revoked_at, posture, posture_reported_at, posture_source, org_url_sha256`
 
 func scanRunner(row pgx.Row) (types.Runner, error) {
 	var r types.Runner
 	var state string
 	var posture []byte
 	err := row.Scan(&r.ID, &r.Owner, &r.Name, &r.PublicKey, &r.KeyFingerprint, &state, &r.Version, &r.CreatedAt,
-		&r.ClaimedAt, &r.LastSeenAt, &r.RevokedAt, &posture, &r.PostureReportedAt, &r.PostureSource)
+		&r.ClaimedAt, &r.LastSeenAt, &r.RevokedAt, &posture, &r.PostureReportedAt, &r.PostureSource, &r.OrgURLSHA256)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Runner{}, ErrNotFound
 	}
@@ -74,10 +74,10 @@ func scanRunner(row pgx.Row) (types.Runner, error) {
 // registration starts unclaimed. ErrConflict on a key fingerprint already registered.
 func (s PG) CreateRunner(ctx context.Context, r types.Runner) (types.Runner, error) {
 	const q = `
-		INSERT INTO runners (id, owner, name, public_key, key_fingerprint, version)
-		VALUES ($1,$2,$3,$4,$5,$6)
+		INSERT INTO runners (id, owner, name, public_key, key_fingerprint, version, org_url_sha256)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
 		RETURNING ` + runnerCols
-	out, err := scanRunner(s.Pool.QueryRow(ctx, q, r.ID, r.Owner, r.Name, r.PublicKey, r.KeyFingerprint, r.Version))
+	out, err := scanRunner(s.Pool.QueryRow(ctx, q, r.ID, r.Owner, r.Name, r.PublicKey, r.KeyFingerprint, r.Version, r.OrgURLSHA256))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return types.Runner{}, ErrConflict
@@ -105,7 +105,7 @@ func (s PG) ListRunnersByOwner(ctx context.Context, owner string) ([]types.Runne
 func (s PG) ClaimRunner(ctx context.Context, id uuid.UUID, owner, fingerprint string, now time.Time) (types.Runner, error) {
 	const q = `
 		UPDATE runners SET state = 'claimed', claimed_at = $4
-		WHERE id = $1 AND state = 'unclaimed' AND owner = $2 AND key_fingerprint = $3
+		WHERE id = $1 AND state = 'unclaimed' AND owner = $2 AND key_fingerprint = $3 AND created_at > $4::timestamptz - interval '24 hours'
 		RETURNING ` + runnerCols
 	out, err := scanRunner(s.Pool.QueryRow(ctx, q, id, owner, fingerprint, now))
 	if !errors.Is(err, ErrNotFound) {
