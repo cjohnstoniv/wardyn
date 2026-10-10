@@ -81,6 +81,11 @@ type preflightResponse struct {
 	// meaning: always an array, empty until the lane that fills them lands.
 	Resources      []client.PlacementResources `json:"resources"`
 	LocalPlacement []client.LocalPlacementFact `json:"local_placement"`
+	// Image is the image the run would start from and its source, absent until
+	// the image lane resolves it; AllowedImages are the organisation's allowed
+	// choices, an array that is empty until that lane fills it.
+	Image         *client.ImageFact     `json:"image,omitempty"`
+	AllowedImages []client.AllowedImage `json:"allowed_images"`
 }
 
 // preflightBurst and preflightLimiterMaxPeople size the per-person preflight
@@ -330,6 +335,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		Warnings:                 warnings,
 		Resources:                []client.PlacementResources{},
 		LocalPlacement:           []client.LocalPlacementFact{},
+		AllowedImages:            []client.AllowedImage{},
 	}
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred

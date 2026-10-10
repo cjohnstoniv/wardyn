@@ -4,7 +4,7 @@
  */
 
 import type { ComponentFact } from "./components";
-import type { LocalPlacementFact, PlacementResources } from "./new-run-contract";
+import type { AllowedImage, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
 import type { RunPolicySpec } from "./policy";
 
 export type PolicyPreviewPending =
@@ -46,4 +46,8 @@ export interface PolicyPreviewResult {
   // person's runner; the server always sends both arrays, empty until their lanes fill them (optional here so an older server still types).
   resources?: PlacementResources[];
   local_placement?: LocalPlacementFact[];
+  // The image the run would start from and its source (absent until the image
+  // lane resolves it), and the images the organisation lets the person choose.
+  image?: ImageFact;
+  allowed_images?: AllowedImage[];
 }

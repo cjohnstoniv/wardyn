@@ -140,6 +140,12 @@ type CreateRunRequest struct {
 	// stored component by id or carries a run-only definition inline. Nil and
 	// empty are the same and attach nothing, byte for byte today.
 	Components []ComponentRef `json:"components,omitempty"`
+	// AllowedImage chooses one of the images the organisation allows (the
+	// preflight and preview `allowed_images`), by ref, instead of the resolved
+	// default. Mutually exclusive with Image and DevcontainerRepo. Accepted and
+	// validated; a server that cannot apply it yet refuses it with
+	// request_field_unavailable, never ignores it.
+	AllowedImage string `json:"allowed_image,omitempty"`
 	// Placement is where the run's sandbox lives: "remote", the organisation's
 	// own executor (the default), or "local", a runner the person registered.
 	// Empty is "remote" until a single placement is eligible; "local" is
@@ -284,6 +290,11 @@ type PreflightResult struct {
 	// LocalPlacement says per host, workspace source and component whether the
 	// person's runner can honour it. Empty until the placement lane fills it.
 	LocalPlacement []LocalPlacementFact `json:"local_placement"`
+	// Image is the image the run would start from and where it comes from;
+	// absent until the image lane resolves it. AllowedImages are the images the
+	// organisation lets the person choose; empty until that lane fills it.
+	Image         *ImageFact     `json:"image,omitempty"`
+	AllowedImages []AllowedImage `json:"allowed_images"`
 }
 
 // Preflight DRY-RUNs a create-run request: the server resolves the policy

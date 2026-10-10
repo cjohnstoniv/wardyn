@@ -5,7 +5,7 @@
 
 // M-NR-3: the Policy panel as the review (/m-nr/policy/…). Each frame is a
 // resolved preview plus the provenance rows the chips are drawn from.
-import { adoComponent, agentComponent, emptySpec, preview, RESOURCES_ORG, type FixtureProvenance, type NewRunFixture } from "./base";
+import { adoComponent, agentComponent, emptySpec, preview, RESOURCES_ORG, type FixtureProvenance, type FixtureBody } from "./base";
 
 const row = (field: string, value: string, source: FixtureProvenance["source"], effect: FixtureProvenance["effect"] = "added"): FixtureProvenance => ({ field, value, source, effect });
 const sourcePolicy = { kind: "policy" as const, name: "Team default" };
@@ -26,7 +26,7 @@ const standard: FixtureProvenance[] = [
   row("denied_domains", "corp.internal", ceiling),
 ];
 
-export const POLICY_FIXTURES: NewRunFixture[] = [
+export const POLICY_FIXTURES: FixtureBody[] = [
   { route: "policy/review-default", note: "Default mode: the resolved policy with a chip per entry.", preview: { ...resolved, source: { kind: "default" } }, provenance: standard },
   { route: "policy/review-saved", note: "Saved mode.", preview: resolved, provenance: standard },
   { route: "policy/review-custom", note: "Custom mode: the raw editor is the advanced path.", preview: { ...resolved, source: { kind: "inline" } }, provenance: standard },

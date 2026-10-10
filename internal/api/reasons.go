@@ -142,7 +142,8 @@ const (
 	reasonWorkspaceTargetInvalid  = "workspace_target_invalid"   // a workspace selection's target is not an absolute, cleaned path under /home/agent
 	reasonWorkspaceTargetOverlap  = "workspace_target_overlap"   // two different workspaces' targets are equal or nested (a drive's included)
 	reasonWorkspacePinConflict    = "workspace_pin_conflict"     // the attached workspaces pin two different model providers
-	reasonWorkspaceImageConflict  = "workspace_image_conflict"   // the attached workspaces use two different base images
+	reasonImageConflict           = "image_conflict"             // the attached workspaces use two different base images: a refusal about the run's image, not a workspace field
+	reasonAllowedImageInvalid     = "allowed_image_invalid"      // allowed_image is malformed, or is combined with image or devcontainer_repo
 	reasonWorkspaceADOOrgConflict = "workspace_ado_org_conflict" // the attached workspaces use two Azure DevOps organisations
 	reasonResourcesInvalid        = "resources_invalid"          // resources carries a negative or absurd CPU or memory value
 	reasonOverrideInvalid         = "override_invalid"           // an overrides entry is malformed

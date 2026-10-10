@@ -8,6 +8,7 @@ import {
   buildOverrides,
   buildRunContractWire,
   emptyRunContractDraft,
+  emptyOverrideDraft,
   inactiveOverrides,
   NO_ACTIVE_SECTIONS,
   overrideItems,
@@ -15,6 +16,8 @@ import {
   resourcesWire,
   type ActiveSections,
   type OverrideDraft,
+  type RunContractDraft,
+  type RunnerDraft,
 } from "./run-contract-draft";
 
 const everything: ActiveSections = { agent: true, azureDevOps: true, gitPATHosts: ["git.example.com"], pushKeys: ["github/acme", "azure_devops/globex"] };
@@ -57,20 +60,39 @@ describe("run contract draft", () => {
   });
 
   it("sends nothing for an empty edit", () => {
-    expect(buildOverrides({ agent: { add_hosts: [] }, azureDevOps: { capabilities: [] }, gitPAT: [], pushRules: [] }, everything)).toBeUndefined();
+    expect(buildOverrides({ agent: { add_hosts: [] }, gitPAT: [], pushRules: [] }, everything)).toBeUndefined();
+  });
+
+  it("preserves explicit empty ADO edits for refusal while leaving untouched ADO unsent", () => {
+    const untouched = emptyOverrideDraft();
+    expect(buildOverrides(untouched, everything)).toBeUndefined();
+    expect(inactiveOverrides(untouched, NO_ACTIVE_SECTIONS).azureDevOps).toBeUndefined();
+
+    const explicitEmpty: OverrideDraft = { ...untouched, azureDevOps: { capabilities: [] } };
+    expect(buildOverrides(explicitEmpty, everything)).toEqual({ azure_devops: { capabilities: [] } });
+    expect(inactiveOverrides(explicitEmpty, everything).azureDevOps).toBeUndefined();
+    expect(buildOverrides(explicitEmpty, NO_ACTIVE_SECTIONS)).toBeUndefined();
+    const kept = inactiveOverrides(explicitEmpty, NO_ACTIVE_SECTIONS);
+    expect(kept.azureDevOps).toEqual({ capabilities: [] });
+    expect(buildOverrides(kept, everything)).toEqual({ azure_devops: { capabilities: [] } });
+    expect(explicitEmpty.azureDevOps).toEqual({ capabilities: [] });
+    expect(buildRunContractWire({ ...emptyRunContractDraft(), access: { overrides: explicitEmpty } }, everything))
+      .toEqual({ overrides: { azure_devops: { capabilities: [] } } });
   });
 
   it("sends only what the person chose", () => {
     expect(buildRunContractWire(undefined, everything)).toEqual({});
     expect(buildRunContractWire(emptyRunContractDraft(), everything)).toEqual({});
-    expect(buildRunContractWire({ ...emptyRunContractDraft(), placement: "remote", runnerId: "r1", cpus: 4, memoryMiB: 8192 }, NO_ACTIVE_SECTIONS)).toEqual({
+    const runner = (r: RunnerDraft): RunContractDraft => ({ ...emptyRunContractDraft(), runner: r });
+    expect(buildRunContractWire(runner({ placement: "remote", runnerId: "r1", cpus: 4, memoryMiB: 8192 }), NO_ACTIVE_SECTIONS)).toEqual({
       placement: "remote",
       resources: { cpu_millis: 4000, memory_mib: 8192 },
     });
-    expect(buildRunContractWire({ ...emptyRunContractDraft(), placement: "local", runnerId: "r1" }, NO_ACTIVE_SECTIONS)).toEqual({
+    expect(buildRunContractWire(runner({ placement: "local", runnerId: "r1" }), NO_ACTIVE_SECTIONS)).toEqual({
       placement: "local",
       runner_id: "r1",
     });
+    expect(buildRunContractWire(runner({ imageRef: "ghcr.io/acme/dev:1" }), NO_ACTIVE_SECTIONS)).toEqual({ allowed_image: "ghcr.io/acme/dev:1" });
   });
 
   it("converts tenths of a CPU and whole MiB, and leaves an invalid field out", () => {
@@ -78,6 +100,13 @@ describe("run contract draft", () => {
     expect(resourcesWire(1.3)).toEqual({ cpu_millis: 1300 });
     expect(resourcesWire(0, 1.5)).toBeUndefined();
     expect(resourcesWire(Number.NaN, -1)).toBeUndefined();
+    for (const [cpus, millis] of [[0.1, 100], [0.7, 700], [1.2, 1200], [2.3, 2300], [0.1 + 0.2, 300]]) {
+      expect(resourcesWire(cpus), `${cpus} CPUs`).toEqual({ cpu_millis: millis });
+    }
+    for (const cpus of [0.25, 0.15, 0.01, 0.299999999, Number.POSITIVE_INFINITY, -0.1, 0]) {
+      expect(resourcesWire(cpus), `${cpus} CPUs`).toBeUndefined();
+      expect(resourcesWire(cpus, 512)).toEqual({ memory_mib: 512 });
+    }
   });
 
   it("lists edits in the narrowing table's terms, as the server does", () => {

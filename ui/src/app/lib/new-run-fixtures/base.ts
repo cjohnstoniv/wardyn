@@ -12,6 +12,7 @@ import type { ActiveSections, RunContractDraft } from "../run-contract-draft";
 import type { ComponentFact } from "../types/components";
 import type {
   AgentFact,
+  AllowedImage,
   PlacementResources,
   PlacementRunner,
 } from "../types/new-run-contract";
@@ -62,7 +63,12 @@ export interface FixtureRefusal {
   text: string;
 }
 
+/** The tabs, in order (DECISIONS "New Run tabs restructured"). */
+export type FixtureTab = "info" | "workspaces" | "runner" | "access" | "policy";
+
 export interface NewRunFixture {
+  /** The tab the frame belongs to. The packet's `run/…` routes are the Runner tab (Info is Title and Description only). */
+  tab: FixtureTab;
   /** The packet's route, relative to /m-nr/, e.g. "run/p1-no-runner". */
   route: string;
   note: string;
@@ -82,6 +88,11 @@ export interface NewRunFixture {
   refusal?: FixtureRefusal;
 }
 
+/** A fixture as its file writes it: the tab is the file's. */
+export type FixtureBody = Omit<NewRunFixture, "tab">;
+
+export const inTab = (tab: FixtureTab, list: readonly FixtureBody[]): NewRunFixture[] => list.map((f) => ({ ...f, tab }));
+
 export const emptySpec = (over: Partial<RunPolicySpec> = {}): RunPolicySpec => ({
   allowed_domains: ["api.anthropic.com"],
   first_use_approval: "deny_with_review",
@@ -100,12 +111,20 @@ export function preview(over: Partial<PolicyPreviewResult> = {}): PolicyPreviewR
     repository_access: [],
     resources: [],
     local_placement: [],
+    image: { ref: "ghcr.io/wardyn/agent-claude-code:0.9", source: { kind: "agent" } },
+    allowed_images: [],
     ...over,
   };
 }
 
+/** The images the organisation allows a person to choose. */
+export const ALLOWED_IMAGES: AllowedImage[] = [
+  { ref: "ghcr.io/acme/dev:1", name: "Acme dev image" },
+  { ref: "ghcr.io/acme/dev-gpu:1", name: "Acme GPU image" },
+];
+
 export function preflight(over: Partial<PreflightResult> = {}): PreflightResult {
-  return { setup_items: [], enforced_confinement_class: "CC2", resources: [], local_placement: [], ...over };
+  return { setup_items: [], enforced_confinement_class: "CC2", resources: [], local_placement: [], allowed_images: [], ...over };
 }
 
 export const RUNNER_ONLINE: PlacementRunner = { id: "11111111-1111-4111-8111-111111111111", name: "ada-laptop", state: "online" };
@@ -195,7 +214,7 @@ export const sources = (...pairs: [string, FixtureProvenance["source"]["kind"], 
   pairs.map(([value, kind, name]) => ({ field: "allowed_domains", value, source: { kind, ...(name ? { name } : {}) }, effect: "added" as const }));
 
 /** The form's contract draft with nothing chosen. */
-export const noContract = (): RunContractDraft => ({ overrides: { gitPAT: [], pushRules: [] } });
+export const noContract = (): RunContractDraft => ({ runner: {}, access: { overrides: { gitPAT: [], pushRules: [] } } });
 
 /** A component the person defined (a run on a runner needs the ceiling term that allows it). */
 export const selfDefined = (name: string, over: Partial<ComponentFact> = {}): ComponentFact =>

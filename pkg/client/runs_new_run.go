@@ -9,7 +9,7 @@ import (
 )
 
 // The 0.9 New Run wire contract: the request fields and the dry-run facts the
-// console's four panels (Run, Workspaces, Access, Policy) are built on. The
+// console's five tabs (Info, Workspaces, Runner, Access, Policy) are built on. The
 // shapes are final; the server fills them lane by lane and refuses, never
 // drops, a field that changes a run's posture before its lane has landed.
 
@@ -345,4 +345,35 @@ type ComponentFact struct {
 	TokenScopes       []TokenScopeFact     `json:"token_scopes,omitempty"`
 	RepoAccess        []RepoAccessFact     `json:"repo_access,omitempty"`
 	InstallURL        string               `json:"install_url,omitempty"`
+}
+
+// The kinds of source a run's resolved image comes from.
+const (
+	ImageSourceAgent      = "agent"       // the agent's own convention image
+	ImageSourceWorkspace  = "workspace"   // a workspace's base image; Name is the workspace
+	ImageSourceBuild      = "build"       // the person's own build (a custom image or devcontainer)
+	ImageSourceOrgAllowed = "org_allowed" // one of the images the organisation allows, chosen by the person
+)
+
+// ImageSource says where the resolved image comes from, so the Runner tab can
+// say "from {source}". Name is the workspace, the build or the allowed entry;
+// it is empty for the agent.
+type ImageSource struct {
+	Kind string `json:"kind"`
+	Name string `json:"name,omitempty"`
+}
+
+// ImageFact is the image the run would start from, as the door resolved it. A
+// door that has not resolved one sends none.
+type ImageFact struct {
+	Ref    string      `json:"ref"`
+	Source ImageSource `json:"source"`
+}
+
+// AllowedImage is one image the organisation lets a person choose for a run
+// (CreateRunRequest.AllowedImage). The list is empty until the image lane
+// fills it.
+type AllowedImage struct {
+	Ref  string `json:"ref"`
+	Name string `json:"name,omitempty"`
 }

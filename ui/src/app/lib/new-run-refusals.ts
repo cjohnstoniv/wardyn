@@ -19,7 +19,9 @@ export const NEW_RUN_REASON = {
   WORKSPACE_TARGET_INVALID: "workspace_target_invalid",
   WORKSPACE_TARGET_OVERLAP: "workspace_target_overlap",
   WORKSPACE_PIN_CONFLICT: "workspace_pin_conflict",
-  WORKSPACE_IMAGE_CONFLICT: "workspace_image_conflict",
+  /** About the run's one image, shown in the Runner tab's Image section, not on a workspace. */
+  IMAGE_CONFLICT: "image_conflict",
+  ALLOWED_IMAGE_INVALID: "allowed_image_invalid",
   WORKSPACE_ADO_ORG_CONFLICT: "workspace_ado_org_conflict",
   RESOURCES_INVALID: "resources_invalid",
   OVERRIDE_INVALID: "override_invalid",
@@ -81,7 +83,7 @@ export const WORKSPACE_REFUSAL_REASON = {
   OVERLAP_EQUAL: NEW_RUN_REASON.WORKSPACE_TARGET_OVERLAP,
   OVERLAP_NESTED: NEW_RUN_REASON.WORKSPACE_TARGET_OVERLAP,
   PIN_CONFLICT: NEW_RUN_REASON.WORKSPACE_PIN_CONFLICT,
-  IMAGE_CONFLICT: NEW_RUN_REASON.WORKSPACE_IMAGE_CONFLICT,
+  IMAGE_CONFLICT: NEW_RUN_REASON.IMAGE_CONFLICT,
   ADO_ORG_CONFLICT: NEW_RUN_REASON.WORKSPACE_ADO_ORG_CONFLICT,
 } as const;
 

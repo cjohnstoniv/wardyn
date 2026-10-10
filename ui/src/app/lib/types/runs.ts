@@ -10,7 +10,7 @@
 import type { AutonomyLevel, AutonomyResolution, RunLimits } from "../api/governance";
 import type { PolicyRef } from "../api/health";
 import type { ComponentFact } from "./components";
-import type { LocalPlacementFact, PlacementResources } from "./new-run-contract";
+import type { AllowedImage, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
 import type { RunPolicySpec } from "./policy";
 import type { SCMAccess } from "./setup";
 
@@ -758,6 +758,10 @@ export interface PreflightResult {
   // Whether each host, workspace source and component can run on the person's
   // runner; empty until the placement lane fills it.
   local_placement?: LocalPlacementFact[];
+  // The image the run would start from and its source (absent until the image
+  // lane resolves it), and the images the organisation lets the person choose.
+  image?: ImageFact;
+  allowed_images?: AllowedImage[];
 }
 
 // Where a run's MODEL credential lands (internal/api.modelCredentialResidency).

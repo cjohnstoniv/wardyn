@@ -4,13 +4,14 @@
  */
 
 // M-NR-1: the Run panel's frames (/m-nr/run/…).
-import { NEW_RUN_REASON } from "../new-run-refusals";
-import { agentComponent, noContract, preflight, preview, RESOURCES_ORG, resourcesFor, RUNNER_OFFLINE, RUNNER_ONLINE, RUNNER_SECOND, RUNNER_UNCLAIMED, selfDefined, type NewRunFixture } from "./base";
+import { NEW_RUN_REASON, WORKSPACE_REFUSAL } from "../new-run-refusals";
+import type { RunnerDraft } from "../run-contract-draft";
+import { ALLOWED_IMAGES, agentComponent, noContract, preflight, preview, RESOURCES_ORG, resourcesFor, RUNNER_OFFLINE, RUNNER_ONLINE, RUNNER_SECOND, RUNNER_UNCLAIMED, selfDefined, type FixtureBody } from "./base";
 
 const both = [RESOURCES_ORG, resourcesFor(RUNNER_ONLINE)];
-const draft = (over: Partial<NonNullable<NewRunFixture["contract"]>> = {}) => ({ ...noContract(), ...over });
+const draft = (runner: RunnerDraft) => ({ ...noContract(), runner });
 
-export const RUN_FIXTURES: NewRunFixture[] = [
+export const RUN_FIXTURES: FixtureBody[] = [
   { route: "run/p1-no-runner", note: "P1: no runner registered; My runner disabled with a link to My runner.", runners: [], preview: preview({ resources: [RESOURCES_ORG] }) },
   { route: "run/p1b-unclaimed", note: "P1b: a registered runner whose owner has not completed the claim.", runners: [RUNNER_UNCLAIMED], preview: preview({ resources: [RESOURCES_ORG] }) },
   { route: "run/p2-offline", note: "P2: the runner is offline; disabled with 'last seen'.", runners: [RUNNER_OFFLINE], preview: preview({ resources: [RESOURCES_ORG] }) },
@@ -104,5 +105,37 @@ export const RUN_FIXTURES: NewRunFixture[] = [
     note: "A field the server cannot honour yet is refused with request_field_unavailable, never dropped.",
     preview: preview({ resources: [RESOURCES_ORG] }),
     refusal: { status: 422, reason: NEW_RUN_REASON.REQUEST_FIELD_UNAVAILABLE, text: "overrides: this server does not apply per-run overrides yet, so the run was not created." },
+  },
+  // The Runner tab's Image section: the resolved image, its source, and what Change offers.
+  { route: "runner/image-agent", note: "The agent's own image; Change lists the organisation's allowed images.", preview: preview({ resources: [RESOURCES_ORG], allowed_images: ALLOWED_IMAGES }) },
+  {
+    route: "runner/image-workspace",
+    note: "The primary workspace's base image: 'from payments'.",
+    preview: preview({ resources: [RESOURCES_ORG], image: { ref: "ghcr.io/acme/dev:1", source: { kind: "workspace", name: "payments" } }, allowed_images: ALLOWED_IMAGES }),
+  },
+  {
+    route: "runner/image-build",
+    note: "The person's own build (the existing BYOI path).",
+    preview: preview({ resources: [RESOURCES_ORG], image: { ref: "ghcr.io/ada/scratch:latest", source: { kind: "build", name: "your build" } }, allowed_images: ALLOWED_IMAGES }),
+  },
+  {
+    route: "runner/image-org-allowed",
+    note: "An image the person chose from the organisation's allowed list; sent as allowed_image.",
+    contract: draft({ imageRef: ALLOWED_IMAGES[0].ref }),
+    preview: preview({ resources: [RESOURCES_ORG], image: { ref: ALLOWED_IMAGES[0].ref, source: { kind: "org_allowed", name: ALLOWED_IMAGES[0].name } }, allowed_images: ALLOWED_IMAGES }),
+  },
+  { route: "runner/image-none-allowed", note: "The organisation allows no other image: Change is absent, Build an image remains.", preview: preview({ resources: [RESOURCES_ORG] }) },
+  {
+    route: "runner/image-conflict",
+    note: "Two workspaces use different base images: the refusal is attributed to the image and shown here; remove one workspace.",
+    preview: preview({ resources: [RESOURCES_ORG], allowed_images: ALLOWED_IMAGES }),
+    refusal: { status: 422, reason: NEW_RUN_REASON.IMAGE_CONFLICT, text: WORKSPACE_REFUSAL.IMAGE_CONFLICT("payments", "docs") },
+  },
+  {
+    route: "runner/image-unavailable",
+    note: "A server that cannot apply an image choice yet refuses allowed_image (request_field_unavailable).",
+    contract: draft({ imageRef: ALLOWED_IMAGES[0].ref }),
+    preview: preview({ resources: [RESOURCES_ORG], allowed_images: ALLOWED_IMAGES }),
+    refusal: { status: 422, reason: NEW_RUN_REASON.REQUEST_FIELD_UNAVAILABLE, text: "allowed_image: this server does not apply an image choice yet, so the run was not created." },
   },
 ];

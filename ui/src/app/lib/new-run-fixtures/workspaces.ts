@@ -6,14 +6,14 @@
 // M-NR-1: the Workspaces panel's frames (/m-nr/workspaces/…). The refusal
 // sentences are the server's, in the console's bytes (new-run-refusals.ts).
 import { NEW_RUN_REASON, WORKSPACE_REFUSAL } from "../new-run-refusals";
-import { adoComponent, githubComponent, preview, RESOURCES_ORG, type FixtureWorkspace, type NewRunFixture } from "./base";
+import { adoComponent, githubComponent, preview, RESOURCES_ORG, type FixtureBody, type FixtureWorkspace } from "./base";
 
 const payments: FixtureWorkspace = { id: "ws-payments", name: "payments", target: "/home/agent/work" };
 const docs: FixtureWorkspace = { id: "ws-docs", name: "docs", target: "/home/agent/docs" };
 const base = { preview: preview({ resources: [RESOURCES_ORG] }) };
 const refusal = (reason: string, text: string) => ({ status: 422, reason, text });
 
-export const WORKSPACE_FIXTURES: NewRunFixture[] = [
+export const WORKSPACE_FIXTURES: FixtureBody[] = [
   { route: "workspaces/one", note: "One entry: primary, no Make primary, Remove present.", workspaces: [payments], ...base },
   { route: "workspaces/scratch", note: "Ephemeral scratch primary: the picker and Attach another only.", workspaces: [{ id: "scratch", name: "Ephemeral scratch — no repo", scratch: true }], ...base },
   { route: "workspaces/two", note: "Two entries; the second has Make primary and Remove.", workspaces: [payments, docs], ...base },
@@ -75,9 +75,9 @@ export const WORKSPACE_FIXTURES: NewRunFixture[] = [
   },
   {
     route: "workspaces/image",
-    note: "Two workspaces use different base images.",
+    note: "Two workspaces use different base images. The refusal is about the image, so it is shown in the Runner tab's Image section, not here (see runner/image-conflict).",
     workspaces: [{ ...payments, baseImage: "ghcr.io/acme/dev:1" }, { ...docs, baseImage: "ghcr.io/acme/dev:2" }],
-    refusal: refusal(NEW_RUN_REASON.WORKSPACE_IMAGE_CONFLICT, WORKSPACE_REFUSAL.IMAGE_CONFLICT("payments", "docs")),
+    refusal: refusal(NEW_RUN_REASON.IMAGE_CONFLICT, WORKSPACE_REFUSAL.IMAGE_CONFLICT("payments", "docs")),
     ...base,
   },
   {

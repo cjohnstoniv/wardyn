@@ -20,6 +20,7 @@ import {
   RUNNER_ONLINE,
   sources,
   type FixtureProvenance,
+  type FixtureBody,
   type NewRunFixture,
 } from "./base";
 
@@ -27,9 +28,9 @@ const preferred = { preview: preview({ components: [agentComponent()], resources
 const withComponents = (components: ComponentFact[], over: Partial<NewRunFixture["preview"]> = {}) =>
   preview({ components: [agentComponent(), ...components], resources: [RESOURCES_ORG], ...over });
 const active = (over: Partial<ActiveSections> = {}): ActiveSections => ({ agent: true, azureDevOps: false, gitPATHosts: [], pushKeys: [], ...over });
-const contract = (overrides: RunContractDraft["overrides"], over: Partial<RunContractDraft> = {}): RunContractDraft => ({ ...noContract(), ...over, overrides });
+const contract = (overrides: RunContractDraft["access"]["overrides"]): RunContractDraft => ({ ...noContract(), access: { overrides } });
 const none = { gitPAT: [], pushRules: [] };
-const rProvider = (route: string, note: string, fact: Parameters<typeof agentComponent>[1], pending: NewRunFixture["preview"]["pending"] = []): NewRunFixture => ({
+const rProvider = (route: string, note: string, fact: Parameters<typeof agentComponent>[1], pending: NewRunFixture["preview"]["pending"] = []): FixtureBody => ({
   route,
   note,
   preview: withComponents([], { components: [agentComponent({}, fact)], pending }),
@@ -51,7 +52,7 @@ const patFact = (over: Partial<ComponentFact> = {}): ComponentFact => ({
 const hostSources: FixtureProvenance[] = sources(["api.anthropic.com", "model_provider"], ["pastebin.com", "person"], ["api.example.com", "component", "Internal API"]);
 const clampedHost: FixtureProvenance = { field: "allowed_domains", value: "pastebin.com", source: { kind: "person" }, effect: "clamped" };
 
-export const ACCESS_FIXTURES: NewRunFixture[] = [
+export const ACCESS_FIXTURES: FixtureBody[] = [
   { route: "access/agent", note: "The agent section: provider, hosts, secret, managed settings, telemetry.", ...preferred },
   rProvider("access/agent-r1", "R1: a single eligible provider; a static line, no picker.", {}),
   rProvider("access/agent-r2", "R2: a default and others.", {}),

@@ -34,6 +34,11 @@ type policyPreviewResponse struct {
 	// array, empty until the lane that fills them lands.
 	Resources      []client.PlacementResources `json:"resources"`
 	LocalPlacement []client.LocalPlacementFact `json:"local_placement"`
+	// Image is the image the run would start from and its source, absent until
+	// the image lane resolves it; AllowedImages are the organisation's allowed
+	// choices, an array that is empty until that lane fills it.
+	Image         *client.ImageFact     `json:"image,omitempty"`
+	AllowedImages []client.AllowedImage `json:"allowed_images"`
 }
 
 type policyPreviewPending string
@@ -81,7 +86,7 @@ func policyPreviewFacts(req createRunRequest, spec types.RunPolicySpec, source p
 		Warnings: previewSafeWarnings(warnings), Pending: previewPending(req, choice),
 		RepositoryAccess: previewRepositoryAccess(req, out, site),
 		Components:       componentFacts(req, spec, site, comps, nil),
-		Resources:        []client.PlacementResources{}, LocalPlacement: []client.LocalPlacementFact{},
+		Resources:        []client.PlacementResources{}, LocalPlacement: []client.LocalPlacementFact{}, AllowedImages: []client.AllowedImage{},
 	}
 }
 

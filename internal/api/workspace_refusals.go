@@ -28,7 +28,8 @@ func workspacePinConflictMsg(a, pinA, b, pinB string) string {
 	return fmt.Sprintf("%s uses %s and %s uses %s. A run uses one model provider, so remove one of them.", a, pinA, b, pinB)
 }
 
-func workspaceImageConflictMsg(a, b string) string {
+// imageConflictMsg belongs to Runner's Image section even though it names workspaces.
+func imageConflictMsg(a, b string) string {
 	return fmt.Sprintf("%s and %s use different base images. A run uses one image, so remove one of them.", a, b)
 }
 

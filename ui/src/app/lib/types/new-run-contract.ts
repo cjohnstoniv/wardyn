@@ -170,3 +170,23 @@ export interface PlacementRunner {
   /** RFC 3339; set when `state` is offline. */
   last_seen?: string;
 }
+
+export type ImageSourceKind = "agent" | "workspace" | "build" | "org_allowed";
+
+/** Where the resolved image comes from: the Runner tab's Image section says "from {source}". Name is empty for the agent. */
+export interface ImageSource {
+  kind: ImageSourceKind;
+  name?: string;
+}
+
+/** The image the run would start from. Absent until the image lane resolves it. */
+export interface ImageFact {
+  ref: string;
+  source: ImageSource;
+}
+
+/** One image the organisation lets a person choose for a run (`allowed_image` on the request). */
+export interface AllowedImage {
+  ref: string;
+  name?: string;
+}

@@ -43,6 +43,8 @@ func TestRunContractRefusals(t *testing.T) {
 		{"runner id not a uuid", `,"placement":"local","runner_id":"x"`, reasonPlacementInvalid, "", 400},
 		{"local is unavailable", `,"placement":"local"`, string(placement.ReasonPlacementUnavailable), "", 422},
 		{"remote is today's behaviour", `,"placement":"remote"`, "", "", 200},
+		{"allowed image is not dropped", `,"allowed_image":"ghcr.io/acme/dev:1"`, reasonRequestFieldUnavailable, "", 422},
+		{"allowed image with spaces", `,"allowed_image":"a b"`, reasonAllowedImageInvalid, "", 400},
 		{"negative cpu", `,"resources":{"cpu_millis":-1}`, reasonResourcesInvalid, "", 400},
 		{"absurd memory", `,"resources":{"memory_mib":999999999}`, reasonResourcesInvalid, "", 400},
 		{"resources accepted", `,"resources":{"cpu_millis":4000,"memory_mib":8192}`, "", "", 200},
@@ -210,7 +212,7 @@ func TestPreviewAndPreflightCarryTheNewFacts(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 			t.Fatal(err)
 		}
-		for _, field := range []string{"resources", "local_placement"} {
+		for _, field := range []string{"resources", "local_placement", "allowed_images"} {
 			if string(body[field]) != "[]" {
 				t.Errorf("%s %s = %s, want []", door.name, field, body[field])
 			}
@@ -239,7 +241,7 @@ func TestWorkspaceRefusalSentencesMatchGolden(t *testing.T) {
 		"OVERLAP_EQUAL":    func(g []string) string { return workspaceOverlapEqualMsg(a(g, 0), a(g, 1)) },
 		"OVERLAP_NESTED":   func(g []string) string { return workspaceOverlapNestedMsg(a(g, 0), a(g, 1), a(g, 2)) },
 		"PIN_CONFLICT":     func(g []string) string { return workspacePinConflictMsg(a(g, 0), a(g, 1), a(g, 2), a(g, 3)) },
-		"IMAGE_CONFLICT":   func(g []string) string { return workspaceImageConflictMsg(a(g, 0), a(g, 1)) },
+		"IMAGE_CONFLICT":   func(g []string) string { return imageConflictMsg(a(g, 0), a(g, 1)) },
 		"ADO_ORG_CONFLICT": func(g []string) string { return workspaceADOOrgConflictMsg(a(g, 0), a(g, 1), a(g, 2), a(g, 3)) },
 	}
 	if len(golden) != len(got) {
@@ -265,11 +267,26 @@ func TestRunContractReasonsAreTheTypeScriptOnes(t *testing.T) {
 	}
 	for _, reason := range []string{
 		reasonPlacementInvalid, reasonWorkspaceTargetInvalid, reasonWorkspaceTargetOverlap, reasonWorkspacePinConflict,
-		reasonWorkspaceImageConflict, reasonWorkspaceADOOrgConflict, reasonResourcesInvalid, reasonOverrideInvalid,
+		reasonImageConflict, reasonWorkspaceADOOrgConflict, reasonResourcesInvalid, reasonOverrideInvalid,
+		reasonAllowedImageInvalid,
 		reasonOverrideRefused, reasonRequestFieldUnavailable, string(placement.ReasonPlacementUnavailable),
 	} {
 		if !strings.Contains(string(raw), `"`+reason+`"`) {
 			t.Errorf("new-run-refusals.ts does not carry the reason %q", reason)
+		}
+	}
+}
+
+// TestAllowedImageIsNeverBesideABuiltImage pins the exclusivity at the contract
+// step itself (the doors refuse image earlier when no builder is wired).
+func TestAllowedImageIsNeverBesideABuiltImage(t *testing.T) {
+	for _, req := range []createRunRequest{
+		{AllowedImage: "ghcr.io/acme/dev:1", Image: "ghcr.io/acme/other:1"},
+		{AllowedImage: "ghcr.io/acme/dev:1", DevcontainerRepo: "acme/dev"},
+	} {
+		refusal := (&Server{}).runContractRefusal(req)
+		if refusal == nil || refusal.body.Reason != reasonAllowedImageInvalid {
+			t.Errorf("got %+v, want %s", refusal, reasonAllowedImageInvalid)
 		}
 	}
 }

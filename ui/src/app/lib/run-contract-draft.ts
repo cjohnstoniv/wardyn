@@ -27,28 +27,48 @@ import type {
 /** The edits the person made, grouped by the component that owns them. */
 export interface OverrideDraft {
   agent?: AgentOverrides;
+  /** Absent is untouched; an explicit empty set must reach the server's refusal. */
   azureDevOps?: ADOOverrides;
   gitPAT: GitPATOverride[];
   pushRules: PushRuleOverride[];
 }
 
 /**
- * The draft of the contract fields. Every field is the person's own choice:
- * absent means untouched, and an untouched field is never sent, so the server's
- * own default stays in charge.
+ * The Runner tab's draft: where the run lives, which image, how large. Every
+ * field is the person's own choice: absent means untouched, and an untouched
+ * field is never sent, so the server's own default stays in charge. Lifetime
+ * (auto-stop) and Barrier sit on this tab too but are existing WizardState
+ * fields (`lifecycle`, `autoStopMinutes`, `confinementClass`).
  */
-export interface RunContractDraft {
+export interface RunnerDraft {
   /** "Runs on". Absent until chosen: there is no default between two eligible placements (OD-8). */
   placement?: PlacementValue;
   runnerId?: string;
+  /** The ref of an image the organisation allows (preview `allowed_images`), sent as `allowed_image`. Absent keeps the resolved image. */
+  imageRef?: string;
   /** CPU in CPUs (tenths) and memory in whole MiB, as the fields show them. */
   cpus?: number;
   memoryMiB?: number;
+}
+
+/** The Access tab's draft: the person's per-component edits. */
+export interface AccessDraft {
   overrides: OverrideDraft;
 }
 
+/**
+ * The draft of the contract fields, grouped by the tab that owns them (Info →
+ * Workspaces → Runner → Access → Policy; new-run-tabs.ts assigns every other
+ * form field). Info, Workspaces (the drive attach lives there) and Policy add
+ * nothing to the contract.
+ */
+export interface RunContractDraft {
+  runner: RunnerDraft;
+  access: AccessDraft;
+}
+
 export const emptyOverrideDraft = (): OverrideDraft => ({ gitPAT: [], pushRules: [] });
-export const emptyRunContractDraft = (): RunContractDraft => ({ overrides: emptyOverrideDraft() });
+export const emptyRunContractDraft = (): RunContractDraft => ({ runner: {}, access: { overrides: emptyOverrideDraft() } });
 
 /** The sections that are on the page now; the console derives them from the dry-run facts and the attached workspaces. */
 export interface ActiveSections {
@@ -72,7 +92,7 @@ const hasAgentEdit = (a: AgentOverrides): boolean =>
 export function buildOverrides(draft: OverrideDraft, active: ActiveSections): RunOverrides | undefined {
   const out: RunOverrides = {};
   if (active.agent && draft.agent && hasAgentEdit(draft.agent)) out.agent = draft.agent;
-  if (active.azureDevOps && draft.azureDevOps && draft.azureDevOps.capabilities.length > 0) out.azure_devops = draft.azureDevOps;
+  if (active.azureDevOps && draft.azureDevOps) out.azure_devops = draft.azureDevOps;
   const pat = draft.gitPAT.filter((g) => active.gitPATHosts.some((h) => h.toLowerCase() === g.host.toLowerCase()));
   if (pat.length) out.git_pat = pat;
   const push = draft.pushRules.filter((p) => active.pushKeys.includes(pushRuleKey(p)));
@@ -85,7 +105,7 @@ export function inactiveOverrides(draft: OverrideDraft, active: ActiveSections):
   const sent = buildOverrides(draft, active) ?? {};
   return {
     agent: sent.agent ? undefined : draft.agent && hasAgentEdit(draft.agent) ? draft.agent : undefined,
-    azureDevOps: sent.azure_devops ? undefined : draft.azureDevOps?.capabilities.length ? draft.azureDevOps : undefined,
+    azureDevOps: sent.azure_devops ? undefined : draft.azureDevOps,
     gitPAT: draft.gitPAT.filter((g) => !sent.git_pat?.includes(g)),
     pushRules: draft.pushRules.filter((p) => !sent.push_rules?.includes(p)),
   };
@@ -123,7 +143,12 @@ export function overrideItems(o: RunOverrides): OverrideItem[] {
 /** CPUs in tenths and whole MiB to the wire's milli-CPU and MiB; undefined for an untouched or invalid field. */
 export function resourcesWire(cpus?: number, memoryMiB?: number): RequestedResources | undefined {
   const out: RequestedResources = {};
-  if (cpus !== undefined && Number.isFinite(cpus) && cpus > 0) out.cpu_millis = Math.round(cpus * 10) * 100;
+  const tenths = cpus === undefined ? Number.NaN : cpus * 10;
+  const rounded = Math.round(tenths);
+  // Decimal increments can acquire binary noise, but finer choices must not be rounded into another request.
+  if (Number.isFinite(tenths) && rounded > 0 && Math.abs(tenths - rounded) <= Number.EPSILON * Math.max(1, Math.abs(tenths))) {
+    out.cpu_millis = rounded * 100;
+  }
   if (memoryMiB !== undefined && Number.isInteger(memoryMiB) && memoryMiB > 0) out.memory_mib = memoryMiB;
   return out.cpu_millis || out.memory_mib ? out : undefined;
 }
@@ -132,19 +157,22 @@ export function resourcesWire(cpus?: number, memoryMiB?: number): RequestedResou
 export interface RunContractWire {
   placement?: PlacementValue;
   runner_id?: string;
+  allowed_image?: string;
   resources?: RequestedResources;
   overrides?: RunOverrides;
 }
 
 export function buildRunContractWire(draft: RunContractDraft | undefined, active: ActiveSections): RunContractWire {
   if (!draft) return {};
+  const { runner } = draft;
   const wire: RunContractWire = {};
-  if (draft.placement) wire.placement = draft.placement;
+  if (runner.placement) wire.placement = runner.placement;
   // A runner is named only for a run on a runner; the server refuses runner_id otherwise.
-  if (draft.placement === "local" && draft.runnerId) wire.runner_id = draft.runnerId;
-  const resources = resourcesWire(draft.cpus, draft.memoryMiB);
+  if (runner.placement === "local" && runner.runnerId) wire.runner_id = runner.runnerId;
+  if (runner.imageRef) wire.allowed_image = runner.imageRef;
+  const resources = resourcesWire(runner.cpus, runner.memoryMiB);
   if (resources) wire.resources = resources;
-  const overrides = buildOverrides(draft.overrides, active);
+  const overrides = buildOverrides(draft.access.overrides, active);
   if (overrides) wire.overrides = overrides;
   return wire;
 }

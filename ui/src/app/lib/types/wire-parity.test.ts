@@ -410,6 +410,9 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["ManagedSettingsFact", "ManagedSettingsFact"],
     ["TelemetryFact", "TelemetryFact"],
     ["AgentFact", "AgentFact"],
+    ["ImageSource", "ImageSource"],
+    ["ImageFact", "ImageFact"],
+    ["AllowedImage", "AllowedImage"],
   ])("pkg/client %s: full parity with the TS %s mirror", (goName, tsName) => {
     const goTags = goJSONTags(readFileSync(join(root, "pkg/client/runs_new_run.go"), "utf8"), goName);
     expect(goTags.length).toBeGreaterThanOrEqual(1);
@@ -429,6 +432,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     const clientGo = readFileSync(join(root, "pkg/client/runs_new_run.go"), "utf8");
     expect(union("PlacementValue")).toEqual(new Set([...placementGo.matchAll(/\b(?:Remote|Local)\s+Placement = "([a-z_]+)"/g)].map((m) => m[1])));
     expect(union("LocalDeliveryMode")).toEqual(new Set([...deliveryGo.matchAll(/\bMode\w+\s+Mode = "([a-z_]+)"/g)].map((m) => m[1])));
+    expect(union("ImageSourceKind")).toEqual(new Set([...clientGo.matchAll(/\bImageSource\w+\s*=\s*"([a-z_]+)"/g)].map((m) => m[1])));
     expect(union("LocalPlacementKind")).toEqual(new Set([...clientGo.matchAll(/\bLocalPlacement(?:Host|Source|Component)\s*=\s*"([a-z_]+)"/g)].map((m) => m[1])));
   });
 

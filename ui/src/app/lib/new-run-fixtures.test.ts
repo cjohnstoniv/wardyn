@@ -15,6 +15,8 @@ const PACKET_ROUTES = [
   ..."one scratch two make-primary remove attach attach-none equal nested drive drive-toggled-last fixed-secondary fixed-both clone-collision pin image ado-org optional read-only-forced".split(" ").map((r) => `workspaces/${r}`),
   ...[..."123456789"].map((n) => `access/agent-r${n}`),
   ..."agent agent-locked-l2 agent-no-doc codex git-github git-github-app-missing git-ado-minted git-ado-own-pat git-other-forge git-push-rules custom-needs-input custom-refused source-policy empty add add-local add-empty add-builtin-swap manual-github manual-ado manual-ado-every-repo local-chips git-two-sections git-inactive git-inactive-push-moves git-ado-two-orgs agent-add-host agent-add-secret agent-host-clamped narrow".split(" ").map((r) => `access/${r}`),
+  ..."image-agent image-workspace image-build image-org-allowed image-none-allowed image-conflict".split(" ").map((r) => `runner/${r}`),
+  "info/title-description",
   ..."review-default review-saved review-custom only-changed only-changed-empty clamped removed narrowed changed-scalar multi-source redacted stale invalid editing templates".split(" ").map((r) => `policy/${r}`),
 ];
 
@@ -29,6 +31,7 @@ describe("New Run fixtures", () => {
   it("answers the way the server does: arrays, known reasons, sentences the server would send", () => {
     for (const f of NEW_RUN_FIXTURES) {
       expect(f.preview.resources ?? [], f.route).toBeInstanceOf(Array);
+      expect(f.preview.allowed_images, f.route).toBeInstanceOf(Array);
       for (const row of f.preview.local_placement ?? []) {
         if (!row.local_placeable) expect(PLACEMENT_REASONS, f.route).toContain(row.reason);
       }
@@ -39,9 +42,23 @@ describe("New Run fixtures", () => {
     }
   });
 
+  it("carries each image source and sends a changed image by its allowed ref", () => {
+    for (const kind of ["agent", "workspace", "build", "org_allowed"] as const) {
+      const f = newRunFixture(`runner/image-${kind.replace("_", "-")}`);
+      expect(f.preview.image?.source.kind).toBe(kind);
+      expect(f.preview.image?.ref).toBeTruthy();
+      if (kind !== "agent") expect(f.preview.image?.source.name).toBeTruthy();
+    }
+    const f = newRunFixture("runner/image-org-allowed");
+    expect(f.preview.allowed_images?.map((image) => image.ref)).toContain(f.preview.image?.ref);
+    expect(buildRunContractWire(f.contract, { agent: false, azureDevOps: false, gitPATHosts: [], pushKeys: [] }))
+      .toEqual({ allowed_image: f.preview.image?.ref });
+    expect(newRunFixture("workspaces/image").tab).toBe("runner");
+  });
+
   it("only drafts overrides the narrowing table lets a request carry", () => {
     for (const f of NEW_RUN_FIXTURES) {
-      for (const item of overrideItems(f.contract?.overrides ? { ...(f.contract.overrides.agent ? { agent: f.contract.overrides.agent } : {}), push_rules: f.contract.overrides.pushRules } : {})) {
+      for (const item of overrideItems(f.contract?.access.overrides ? { ...(f.contract.access.overrides.agent ? { agent: f.contract.access.overrides.agent } : {}), push_rules: f.contract.access.overrides.pushRules } : {})) {
         const row = OVERRIDE_NARROWING.find((r) => r.kind === item.kind && r.op === item.op);
         expect(row?.rule, `${f.route}: ${item.kind} ${item.op}`).not.toBe("refused");
       }
@@ -50,8 +67,8 @@ describe("New Run fixtures", () => {
 
   it("files push-rule overrides by provider and organisation, and sends only the active sections'", () => {
     for (const f of NEW_RUN_FIXTURES) {
-      for (const p of f.contract?.overrides.pushRules ?? []) expect(p.org, f.route).not.toBe("");
-      const keys = (f.contract?.overrides.pushRules ?? []).map(pushRuleKey);
+      for (const p of f.contract?.access.overrides.pushRules ?? []) expect(p.org, f.route).not.toBe("");
+      const keys = (f.contract?.access.overrides.pushRules ?? []).map(pushRuleKey);
       expect(new Set(keys).size, f.route).toBe(keys.length);
     }
     const sent = (route: string) => buildRunContractWire(newRunFixture(route).contract, newRunFixture(route).active ?? { agent: false, azureDevOps: false, gitPATHosts: [], pushKeys: [] });

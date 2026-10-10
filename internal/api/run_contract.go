@@ -21,8 +21,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// The New Run request contract (0.9): placement, resources, workspace targets,
-// overrides and built-in components. stepRunContract runs first at every door
+// The New Run request contract (0.9): placement, resources, image choice,
+// workspace targets, overrides and built-in components. stepRunContract runs first at every door
 // and does two things with each field, in order:
 //
 //  1. validates its shape, with its final refusal reason, so a malformed value
@@ -38,6 +38,7 @@ import (
 //
 //	overrides                     -> A-L3
 //	built-in components           -> A-L14
+//	allowed_image, image facts     -> the image lane (A-L4/A-L6)
 //	placement local               -> the placement lane (#117)
 //	resources clamp, targets      -> A-L5, A-L4 (accepted, applied nowhere yet)
 const (
@@ -54,7 +55,7 @@ const (
 // guard reads gates as `s.<Gate>(…)` calls.
 func (s *Server) runContractRefusal(req createRunRequest) *runRefusal {
 	for _, check := range []func(createRunRequest) *runRefusal{
-		placementShapeRefusal, resourcesRefusal, workspaceTargetsRefusal, runOverridesRefusal, builtinComponentsRefusal,
+		placementShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, runOverridesRefusal, builtinComponentsRefusal,
 	} {
 		if refusal := check(req); refusal != nil {
 			return refusal
@@ -66,6 +67,22 @@ func (s *Server) runContractRefusal(req createRunRequest) *runRefusal {
 func placementShapeRefusal(req createRunRequest) *runRefusal {
 	if err := req.PlacementRequest().Validate(); err != nil {
 		return runError(http.StatusBadRequest, reasonPlacementInvalid, err.Error())
+	}
+	return nil
+}
+
+// allowedImageRefusal checks allowed_image's shape: a bare image ref, and never
+// beside a request-built image (image, devcontainer_repo). Whether the ref is
+// one the organisation allows is the image lane's.
+func allowedImageRefusal(req createRunRequest) *runRefusal {
+	ref := req.AllowedImage
+	switch {
+	case ref == "":
+		return nil
+	case len(ref) > maxRunOverrideValueLen || strings.ContainsAny(ref, " \t\r\n") || !controlCharFree(ref):
+		return runError(http.StatusBadRequest, reasonAllowedImageInvalid, "allowed_image: give one image ref from the images your organisation allows")
+	case req.Image != "" || req.DevcontainerRepo != "":
+		return runError(http.StatusBadRequest, reasonAllowedImageInvalid, "allowed_image cannot be combined with image or devcontainer_repo")
 	}
 	return nil
 }
@@ -357,6 +374,9 @@ func unappliedFieldsRefusal(req createRunRequest) *runRefusal {
 	case req.Placement == placement.Local:
 		return runError(placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable),
 			"Your own runner is not available: this server cannot place a run on a runner yet.")
+	case req.AllowedImage != "":
+		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
+			"allowed_image: this server does not apply an image choice yet, so the run was not created.")
 	case req.Overrides != nil && len(req.Overrides.Items()) > 0:
 		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
 			"overrides: this server does not apply per-run overrides yet, so the run was not created.")
