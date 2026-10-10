@@ -367,6 +367,10 @@ export interface SetupStatus {
   // unlike `checks`: every signed-in person reads it, not just an admin.
   // Optional: absent on an older daemon that predates the field.
   credential_storage?: "local" | "key_service" | "key_service_key_vault" | "vault" | "key_vault";
+  /** Who governs this install (PLAN §10.3): local-only, runner or org. Optional for
+   *  the same fixture-compat reason as `llm_ready`; absent reads as unknown, never
+   *  as local-only. */
+  tier?: "local-only" | "runner" | "org";
   has_runs: boolean;
   platform: { os: string; wsl: boolean; kvm?: boolean };
   // Masked host-proxy detection (see HostProxyDetection). Optional for the same
