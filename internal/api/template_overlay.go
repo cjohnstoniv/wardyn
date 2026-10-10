@@ -25,6 +25,8 @@ import (
 // a key that is absent keeps the source's value. A nested object (llm_inspection,
 // resources) replaces the source's whole object. An overlay that names no key is
 // refused: it says nothing, and an empty block must not read as "the defaults".
+// A null is refused too, since it would clear the source's value and no document
+// the decoder accepts holds one.
 func templatePolicyOverlay(source types.RunPolicySpec, overlay json.RawMessage) (types.RunPolicySpec, error) {
 	var present map[string]json.RawMessage
 	if err := json.Unmarshal(overlay, &present); err != nil {
@@ -44,6 +46,9 @@ func templatePolicyOverlay(source types.RunPolicySpec, overlay json.RawMessage) 
 	for key, value := range present {
 		if _, ok := templateRule(templatePolicyRules, key); !ok {
 			return types.RunPolicySpec{}, fmt.Errorf("%s is not a policy field", key)
+		}
+		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return types.RunPolicySpec{}, fmt.Errorf("%s is null: leave it out to keep the source's value", key)
 		}
 		merged[key] = value
 	}

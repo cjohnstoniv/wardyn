@@ -79,17 +79,17 @@ func TestTemplateStructDoorHoldsWhatTheBytesDoorHolds(t *testing.T) {
 }
 
 // TestTemplateStructValidatorsAreReachableOnlyThroughTheDoor keeps the second
-// door shut: the struct-level validators and the decoder are called only from
-// validateTemplateBytes, the one validator both doors share.
+// door shut: the struct-level validators and the decoder are named only inside
+// validateTemplateBytes (and that function only inside the two doors). Every
+// identifier of every non-test file is checked, package-level declarations
+// included, so a function value (`var loose = validateTemplateContentDecoded`,
+// `scope := validateTemplateScopeDecoded`) is a second door as much as a call.
 func TestTemplateStructValidatorsAreReachableOnlyThroughTheDoor(t *testing.T) {
-	guarded := map[string]string{
-		"validateTemplateContentDecoded": "validateTemplateBytes",
-		"validateTemplateScopeDecoded":   "validateTemplateBytes",
-		"decodeTemplateDocument":         "validateTemplateBytes",
-		"validateTemplateBytes":          "",
-	}
-	allowedCallers := map[string][]string{
-		"validateTemplateBytes": {"validateTemplateImport", "validateTemplateDocument"},
+	allowedIn := map[string][]string{
+		"validateTemplateContentDecoded": {"validateTemplateBytes"},
+		"validateTemplateScopeDecoded":   {"validateTemplateBytes"},
+		"decodeTemplateDocument":         {"validateTemplateBytes"},
+		"validateTemplateBytes":          {"validateTemplateImport", "validateTemplateDocument"},
 	}
 	files, err := filepath.Glob("*.go")
 	if err != nil {
@@ -106,37 +106,34 @@ func TestTemplateStructValidatorsAreReachableOnlyThroughTheDoor(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, decl := range f.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
+			enclosing := ""
+			fn, isFunc := decl.(*ast.FuncDecl)
+			if isFunc {
+				enclosing = fn.Name.Name
 			}
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
+			ast.Inspect(decl, func(n ast.Node) bool {
+				id, ok := n.(*ast.Ident)
 				if !ok {
 					return true
 				}
-				id, ok := call.Fun.(*ast.Ident)
-				if !ok {
-					return true
-				}
-				want, isGuarded := guarded[id.Name]
-				if !isGuarded {
+				allowed, guarded := allowedIn[id.Name]
+				if !guarded || (isFunc && id == fn.Name) {
 					return true
 				}
 				seen++
-				allowed := []string{want}
-				if want == "" {
-					allowed = allowedCallers[id.Name]
-				}
-				if !slices.Contains(allowed, fn.Name.Name) {
-					t.Errorf("%s calls %s: only %v may (the single save door)", fn.Name.Name, id.Name, allowed)
+				if !slices.Contains(allowed, enclosing) {
+					where := enclosing
+					if where == "" {
+						where = "a package-level declaration"
+					}
+					t.Errorf("%s: %s names %s; only %v may (the single save door)", file, where, id.Name, allowed)
 				}
 				return true
 			})
 		}
 	}
 	if seen < 5 {
-		t.Fatalf("saw only %d guarded calls; the scan is broken", seen)
+		t.Fatalf("saw only %d guarded names; the scan is broken", seen)
 	}
 }
 
@@ -174,7 +171,10 @@ func TestTemplatePolicyOverlayKeepsAbsentKeysAndAppliesPresentOnes(t *testing.T)
 
 func TestTemplatePolicyOverlayRefusesWhatSaysNothingOrIsNotAPolicy(t *testing.T) {
 	source := types.RunPolicySpec{AllowedDomains: []string{"a.example.com"}}
-	for name, overlay := range map[string]string{"empty": `{}`, "not an object": `[]`, "unknown key": `{"allowed_domian":[]}`, "wrong type": `{"allowed_domains":"x"}`} {
+	for name, overlay := range map[string]string{
+		"empty": `{}`, "not an object": `[]`, "unknown key": `{"allowed_domian":[]}`, "wrong type": `{"allowed_domains":"x"}`,
+		"null list would clear the source": `{"denied_domains":null}`, "null object": `{"llm_inspection":null}`, "null scalar": `{"auto_stop_after_sec":null}`,
+	} {
 		if _, err := templatePolicyOverlay(source, json.RawMessage(overlay)); err == nil {
 			t.Errorf("%s was accepted", name)
 		}

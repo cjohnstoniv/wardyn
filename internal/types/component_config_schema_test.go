@@ -123,6 +123,9 @@ func TestComponentConfigSchemaBounds(t *testing.T) {
 	}
 }
 
+// noSecrets is a scanner that finds nothing, for tests of the other rules.
+func noSecrets(string) bool { return false }
+
 func values(pairs ...string) ComponentConfigValues {
 	v := ComponentConfigValues{}
 	for i := 0; i < len(pairs); i += 2 {
@@ -141,7 +144,7 @@ func issuePaths(issues []ConfigIssue) string {
 
 func TestComponentConfigValues(t *testing.T) {
 	s := mustSchema(t, goodSchema)
-	if issues := ValidateComponentConfigValues(s, values("key", `"my-key"`), nil); len(issues) != 0 {
+	if issues := ValidateComponentConfigValues(s, values("key", `"my-key"`), noSecrets); len(issues) != 0 {
 		t.Fatalf("defaults and one secret choice: %s", issuePaths(issues))
 	}
 	tests := []struct {
@@ -163,12 +166,12 @@ func TestComponentConfigValues(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := issuePaths(ValidateComponentConfigValues(s, tc.v, nil)); !strings.Contains(got, tc.want) {
+			if got := issuePaths(ValidateComponentConfigValues(s, tc.v, noSecrets)); !strings.Contains(got, tc.want) {
 				t.Fatalf("issues %q do not mention %q", got, tc.want)
 			}
 		})
 	}
-	if issues := ValidateComponentConfigValues(s, values("key", `"k"`, "mode", `"managed"`), nil); len(issues) != 0 {
+	if issues := ValidateComponentConfigValues(s, values("key", `"k"`, "mode", `"managed"`), noSecrets); len(issues) != 0 {
 		t.Errorf("restating the managed value: %s", issuePaths(issues))
 	}
 }
@@ -177,13 +180,13 @@ func TestComponentConfigVisibilityGatesRequiredNotValidation(t *testing.T) {
 	s := mustSchema(t, `{"schema_version":1,"fields":[
 	  {"id":"adv","kind":"boolean","label":"Advanced","bind":{"target":"config","key":"ADV"}},
 	  {"id":"level","kind":"integer","label":"Level","required":true,"visible_when":{"field":"adv","equals":true},"bind":{"target":"config","key":"LEVEL"}}]}`)
-	if issues := ValidateComponentConfigValues(s, values(), nil); len(issues) != 0 {
+	if issues := ValidateComponentConfigValues(s, values(), noSecrets); len(issues) != 0 {
 		t.Errorf("a hidden required field asked for a value: %s", issuePaths(issues))
 	}
-	if issues := ValidateComponentConfigValues(s, values("adv", `true`), nil); len(issues) != 1 {
+	if issues := ValidateComponentConfigValues(s, values("adv", `true`), noSecrets); len(issues) != 1 {
 		t.Errorf("a visible required field was not asked for: %s", issuePaths(issues))
 	}
-	if issues := ValidateComponentConfigValues(s, values("level", `"x"`), nil); len(issues) == 0 {
+	if issues := ValidateComponentConfigValues(s, values("level", `"x"`), noSecrets); len(issues) == 0 {
 		t.Error("hiding a field removed it from validation")
 	}
 }
@@ -218,5 +221,13 @@ func TestConfigValuesRefuseCredentialShapedStrings(t *testing.T) {
 	}
 	if issues := ValidateComponentConfigValues(s, values("key", `"my-stored-secret"`), looks); len(issues) != 0 {
 		t.Errorf("a plain name was refused: %s", issuePaths(issues))
+	}
+}
+
+func TestConfigValuesRefuseANilScanner(t *testing.T) {
+	s := mustSchema(t, goodSchema)
+	issues := ValidateComponentConfigValues(s, values("key", `"my-key"`), nil)
+	if len(issues) != 1 || !strings.Contains(issues[0].Message, "without a secret scanner") {
+		t.Errorf("a nil scanner skipped the scan: %s", issuePaths(issues))
 	}
 }

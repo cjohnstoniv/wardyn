@@ -504,10 +504,14 @@ func configListProblem(f ConfigField, v any) string {
 // valid schema. Each supplied value is typed and bounded whether or not its
 // field is visible. A required field is asked for only while visible and
 // without a default; a managed (read-only) field accepts only its default.
-// looksSecret, when set, refuses a string that is credential-shaped (a secret
-// reference is a stored secret's name, never its value); this package cannot
-// import the scanner, so the caller passes it.
+// looksSecret refuses a string that is credential-shaped (a secret reference is
+// a stored secret's name, never its value); this package cannot import the
+// scanner, so the caller passes it, and a nil scanner is itself refused so no
+// caller can opt out of the scan.
 func ValidateComponentConfigValues(s ComponentConfigSchema, values ComponentConfigValues, looksSecret func(string) bool) []ConfigIssue {
+	if looksSecret == nil {
+		return []ConfigIssue{{"values", "cannot be checked without a secret scanner"}}
+	}
 	var issues []ConfigIssue
 	byID := make(map[string]ConfigField, len(s.Fields))
 	for _, f := range s.Fields {
@@ -521,7 +525,7 @@ func ValidateComponentConfigValues(s ComponentConfigSchema, values ComponentConf
 		}
 		if msg := checkConfigValue(f, values[id]); msg != "" {
 			issues = append(issues, ConfigIssue{"values." + id, msg})
-		} else if looksSecret != nil && configValueLooksSecret(f, values[id], looksSecret) {
+		} else if configValueLooksSecret(f, values[id], looksSecret) {
 			issues = append(issues, ConfigIssue{"values." + id, "looks like a secret value: a template and a component keep the stored secret's name, never its value"})
 		} else if f.ReadOnly && !jsonEqual(values[id], f.Default) {
 			issues = append(issues, ConfigIssue{"values." + id, "is managed and cannot be changed"})
