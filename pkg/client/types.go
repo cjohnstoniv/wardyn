@@ -21,6 +21,7 @@ package client
 // internal/types remains the single source of truth; these add no new types.
 
 import (
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -76,6 +77,29 @@ type (
 	// require_review_paths hold the push for an admin's decision for up to
 	// hold_seconds.
 	PushRulesSpec = types.PushRulesSpec
+
+	// ToolRule is one tool name and what to do with it, carried in
+	// RunPolicySpec.ToolRules and AgentOverrides.ToolRules; ToolEffect is its
+	// allow, hold or deny.
+	ToolRule   = types.ToolRule
+	ToolEffect = types.ToolEffect
+
+	// ADOTokenMode is how a run presents itself to Azure DevOps, carried in
+	// ComponentFact.TokenMode.
+	ADOTokenMode = types.ADOTokenMode
+
+	// ComponentKind names what a ComponentFact describes. The override
+	// narrowing table's OverrideKind, OverrideOp and OverrideRule are the
+	// vocabulary RunOverrides.Items answers in.
+	ComponentKind = types.ComponentKind
+	OverrideKind  = types.OverrideKind
+	OverrideOp    = types.OverrideOp
+
+	// PlacementMode is how an organisation-held credential reaches a local
+	// run (own, via_org, runner_resident or refuse); PlacementReason is the
+	// machine-readable reason a placement is refused.
+	PlacementMode   = placement.Mode
+	PlacementReason = placement.Reason
 
 	// PushContentScope is a push_content approval's requested_scope: the
 	// held push's repository, refs, credential, matched paths and commits.

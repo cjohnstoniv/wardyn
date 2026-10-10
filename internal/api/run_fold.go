@@ -78,7 +78,9 @@ type runFoldStep struct {
 // entry here plus its name in TestPreflightMirrorsLaunchGates' pinned list.
 //
 // The ORDER is security-relevant and is the contract; do not sort it:
-//   - The egress baseline is read first and once; the floor, the autonomy
+//   - The request contract first: it reads only the request, so a malformed or
+//     not-yet-honoured field answers before any store read or credential lookup.
+//   - The egress baseline is read once after request validation; the floor, the autonomy
 //     posture and the door's grading read that one value.
 //   - Policy first: the member clamp and grant narrowing run before anything
 //     is granted, and every later step reads the clamped spec.
@@ -96,6 +98,7 @@ type runFoldStep struct {
 //   - Host capacity, the run cap and the quota fit last, so a refusal leaves
 //     no identity and no run row.
 var runFoldSteps = []runFoldStep{
+	{(*Server).stepRunContract, foldAll},
 	{(*Server).stepBaseline, foldAll},
 	{(*Server).stepPolicy, foldAll},
 	{(*Server).stepSeedWorkspace, foldAll},

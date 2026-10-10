@@ -36,6 +36,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- New Run request contracts cover per-component overrides, workspace targets, placement, resources
+  and allowed-image choices across create, preflight and preview. Fields whose behavior is not yet
+  available are explicitly refused when they change the run’s posture.
 - Super admins can unbind an Entra identity after app re-registration with
   `POST /api/v1/admin/identities/{id}/unbind`. It refuses while the old principal has live tokens, SSH keys
   or runs, cuts its sessions and records `identity.unbind` (#1818).

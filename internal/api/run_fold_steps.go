@@ -19,6 +19,13 @@ import (
 // (*Server) method call: the guard compares those by name, so a bare function's
 // check, skipped at one door, is invisible to it.
 
+// stepRunContract validates the New Run request fields (placement, resources,
+// workspace targets, overrides, built-in components) and refuses, by name, any
+// that changes the run's posture and that no lane applies yet (run_contract.go).
+func (s *Server) stepRunContract(f *runFold, rec *foldRecorder) bool {
+	return !s.runContractRefusal(*f.req).write(s, f.w, f.r)
+}
+
 // stepPolicy resolves the run policy through the one chokepoint: inline_policy,
 // policy_id or the default, member-clamped. Its clamp and capability warnings
 // reach every door, because a member whose host, grant or repo was narrowed

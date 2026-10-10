@@ -140,6 +140,30 @@ type CreateRunRequest struct {
 	// stored component by id or carries a run-only definition inline. Nil and
 	// empty are the same and attach nothing, byte for byte today.
 	Components []ComponentRef `json:"components,omitempty"`
+	// AllowedImage chooses one of the images the organisation allows (the
+	// preflight and preview `allowed_images`), by ref, instead of the resolved
+	// default. Mutually exclusive with Image and DevcontainerRepo. Accepted and
+	// validated; a server that cannot apply it yet refuses it with
+	// request_field_unavailable, never ignores it.
+	AllowedImage string `json:"allowed_image,omitempty"`
+	// Placement is where the run's sandbox lives: "remote", the organisation's
+	// own executor (the default), or "local", a runner the person registered.
+	// Empty is "remote" until a single placement is eligible; "local" is
+	// refused with placement_unavailable until the runner lane is enabled.
+	Placement Placement `json:"placement,omitempty"`
+	// RunnerID names the runner for Placement "local"; with more than one
+	// runner online and none named the server answers 422 runner_ambiguous.
+	RunnerID string `json:"runner_id,omitempty"`
+	// Resources is the CPU and memory this run asks for, clamped by the server
+	// to the caps of the placement it lands on. Absent leaves the source
+	// policy's own resources or the platform default in effect, and a request
+	// value beats the policy's. Accepted and validated; the clamp is applied by
+	// the placement-aware resources lane.
+	Resources *RunResources `json:"resources,omitempty"`
+	// Overrides are the person's per-component edits on the New Run cards
+	// (OD-1), applied inside the resolve fold before the ceiling clamp. See
+	// RunOverrides.
+	Overrides *RunOverrides `json:"overrides,omitempty"`
 	// Preset launches the named launch preset (see Preset): the server
 	// expands it into the equivalent explicit request and runs the unchanged
 	// create path under the caller's own ceiling. Alongside it only Title,
@@ -192,6 +216,19 @@ type WorkspaceSelection struct {
 	// never widen it — see the fold in internal/api/runs_create.go). Nil
 	// leaves the contract's own resolved default in effect.
 	ReadOnly *bool `json:"read_only,omitempty"`
+	// Target is where this workspace appears inside the sandbox. It must be an
+	// absolute, cleaned path strictly under /home/agent with no ".." element.
+	// Equal or nested targets across different workspaces (a user drive's
+	// included) are refused with 422 workspace_target_overlap; nesting inside
+	// one workspace's own sources stays allowed. Empty keeps the workspace's own
+	// source targets.
+	//
+	// The PRIMARY workspace is Workspaces[0]: the run is listed under it, and
+	// once the multi-workspace lane lands its model-provider pin and base image
+	// are the ones every attached workspace must agree with. The order of the
+	// list is therefore meaningful. Accepted and validated here; applied by the
+	// multi-workspace lane.
+	Target string `json:"target,omitempty"`
 }
 
 // CreateRunResult is the decoded POST /api/v1/runs 201 reply. AgentRun is
@@ -243,6 +280,23 @@ type PreflightResult struct {
 	// CreateRunResult.Warnings at launch, so a preview and the real thing say
 	// the same words about the same drop.
 	Warnings []string `json:"warnings,omitempty"`
+	// Components is what the run is given access to: its agent, the Git
+	// providers its repositories live on and its attached components. Absent
+	// for a run with none of them.
+	Components []ComponentFact `json:"components,omitempty"`
+	// Provenance explains which source contributed each resolved policy entry.
+	Provenance []ProvenanceEntry `json:"provenance"`
+	// Resources is what each placement offers this run, keyed by placement and
+	// runner. Empty until the resources lane fills it.
+	Resources []PlacementResources `json:"resources"`
+	// LocalPlacement says per host, workspace source and component whether the
+	// person's runner can honour it. Empty until the placement lane fills it.
+	LocalPlacement []LocalPlacementFact `json:"local_placement"`
+	// Image is the image the run would start from and where it comes from;
+	// absent until the image lane resolves it. AllowedImages are the images the
+	// organisation lets the person choose; empty until that lane fills it.
+	Image         *ImageFact     `json:"image,omitempty"`
+	AllowedImages []AllowedImage `json:"allowed_images"`
 }
 
 // Preflight DRY-RUNs a create-run request: the server resolves the policy

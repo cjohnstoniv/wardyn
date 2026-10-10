@@ -27,6 +27,7 @@ import type {
   RunResources,
 } from "../types";
 import type { ComponentRef } from "../types/components";
+import type { PlacementValue, RequestedResources, RunOverrides } from "../types/new-run-contract";
 import {
   asJson,
   ccRank,
@@ -80,7 +81,7 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   inline_policy?: RunPolicySpec;
   // Per-run half of the requirements contract: which optional requirements
   // this run enables, plus any read-only narrowing, per attached workspace.
-  workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean }[];
+  workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean; target?: string }[];
   // Primary-workspace id for a selection that resolves to no mount/repo (a
   // pure-ephemeral / migrated-0029 workspace) — routes its base_image through
   // the server's seedRequestWorkspace, which the mount-less spec can't.
@@ -99,6 +100,16 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   // The components this run carries (CreateRunRequest.Components, #1914): a
   // stored one by id or a run-only inline definition. Absent is none.
   components?: ComponentRef[];
+  // The 0.9 New Run contract (pkg/client.CreateRunRequest): where the run lives
+  // ("Runs on" in the console), its size, and the person's per-component edits.
+  // Each is absent unless the person chose it; the console never sends a value
+  // for a field whose section is inactive (see lib/run-overrides.ts).
+  placement?: PlacementValue;
+  runner_id?: string;
+  // One of the preview's allowed_images, by ref (pkg/client.CreateRunRequest.AllowedImage).
+  allowed_image?: string;
+  resources?: RequestedResources;
+  overrides?: RunOverrides;
 };
 
 // The ONE projection from wizard input to the POST /runs wire body. createRun
@@ -158,6 +169,11 @@ export function runWireBody(input: RunWireInput): Record<string, unknown> {
   if (input.drive) body.drive = input.drive;
   if (input.model_provider) body.model_provider = input.model_provider;
   if (input.components?.length) body.components = input.components;
+  if (input.placement) body.placement = input.placement;
+  if (input.runner_id) body.runner_id = input.runner_id;
+  if (input.allowed_image) body.allowed_image = input.allowed_image;
+  if (input.resources && (input.resources.cpu_millis || input.resources.memory_mib)) body.resources = input.resources;
+  if (input.overrides) body.overrides = input.overrides;
   return body;
 }
 

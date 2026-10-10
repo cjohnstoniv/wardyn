@@ -47,6 +47,15 @@ func sameProvenance(t *testing.T, preview, preflight *httptest.ResponseRecorder)
 	if !reflect.DeepEqual(a, b) {
 		t.Fatalf("preview and preflight disagree:\npreview   %+v\npreflight %+v", a, b)
 	}
+	var sdk client.PreflightResult
+	if err := json.Unmarshal(preflight.Body.Bytes(), &sdk); err != nil {
+		t.Fatalf("SDK preflight decode: %v", err)
+	}
+	wantWire, _ := json.Marshal(b)
+	gotWire, _ := json.Marshal(sdk.Provenance)
+	if string(gotWire) != string(wantWire) {
+		t.Fatalf("SDK lost preflight provenance: got %s, want %s", gotWire, wantWire)
+	}
 	return a
 }
 

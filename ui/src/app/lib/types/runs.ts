@@ -11,6 +11,7 @@ import type { AutonomyLevel, AutonomyResolution, RunLimits } from "../api/govern
 import type { PolicyRef } from "../api/health";
 import type { ComponentFact } from "./components";
 import type { ProvenanceEntry } from "./policy-preview";
+import type { AllowedImage, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
 import type { RunPolicySpec } from "./policy";
 import type { SCMAccess } from "./setup";
 
@@ -755,6 +756,17 @@ export interface PreflightResult {
   // Why each entry of the resolved spec is there; the policy preview returns the same rows
   // for the same request. Absent on an older server.
   provenance?: ProvenanceEntry[];
+  // What each placement offers this run, keyed by placement and runner; empty
+  // until the resources lane fills it (internal/api's preflightResponse.Resources;
+  // optional here so an older server still types, the server always sends the array).
+  resources?: PlacementResources[];
+  // Whether each host, workspace source and component can run on the person's
+  // runner; empty until the placement lane fills it.
+  local_placement?: LocalPlacementFact[];
+  // The image the run would start from and its source (absent until the image
+  // lane resolves it), and the images the organisation lets the person choose.
+  image?: ImageFact;
+  allowed_images?: AllowedImage[];
 }
 
 // Where a run's MODEL credential lands (internal/api.modelCredentialResidency).

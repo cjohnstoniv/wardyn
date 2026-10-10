@@ -122,6 +122,7 @@ const policyPreviewGateExceptionsMax = 11
 // runs at. A lane adding a gate adds its step here in the same commit; a step
 // deleted, reordered or moved off a door reds here.
 var wantRunFoldSteps = []pinnedStep{
+	{"stepRunContract", foldCreate | foldPreflight | foldPreview},
 	{"stepBaseline", foldCreate | foldPreflight | foldPreview},
 	{"stepPolicy", foldCreate | foldPreflight | foldPreview},
 	{"stepSeedWorkspace", foldCreate | foldPreflight | foldPreview},

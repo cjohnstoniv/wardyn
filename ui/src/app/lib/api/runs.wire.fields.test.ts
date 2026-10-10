@@ -83,14 +83,24 @@ const fullInput: WireInput & { workspaces: NonNullable<WireInput["workspaces"]> 
   interactive_start: "agent" as const,
   seed_auto_tools: true,
   tool_approvals: "hold" as const,
-  workspaces: [{ workspace_id: "ws-1", enabled_optional: ["egress:api.stripe.com"], read_only: true }],
+  workspaces: [{ workspace_id: "ws-1", enabled_optional: ["egress:api.stripe.com"], read_only: true, target: "/home/agent/work" }],
   workspace_id: "22222222-2222-2222-2222-222222222222",
   integration_id: "anthropic_api_key",
   // The member's drive request (D5): forwarded verbatim by runWireBody — a
   // path never rides here, only {enabled, read_only}.
   drive: { enabled: true, read_only: false },
-  // The components this run carries (#1914): a stored one by id, a run-only inline one.
-  components: [{ id: "33333333-3333-4333-8333-333333333333" }, { inline: { hosts: ["api.example"] }, name: "Tool" }],
+  // The components this run carries (#1914): a stored one by id, a run-only inline one, a built-in Git provider.
+  components: [
+    { id: "33333333-3333-4333-8333-333333333333" },
+    { inline: { hosts: ["api.example"] }, name: "Tool" },
+    { builtin: "github", org: "acme", repos: ["acme/api"], access: "read" },
+  ],
+  // The 0.9 New Run contract: where the run lives, its size, the person's edits.
+  placement: "local",
+  runner_id: "44444444-4444-4444-8444-444444444444",
+  allowed_image: "ghcr.io/acme/dev:1",
+  resources: { cpu_millis: 4000, memory_mib: 8192 },
+  overrides: { azure_devops: { capabilities: ["code_read"] } },
 };
 
 // The wire keys runWireBody is expected to emit for fullInput, and the exact
@@ -118,6 +128,11 @@ const expectedWire: Record<string, unknown> = {
   // path never rides here, only {enabled, read_only}.
   drive: { enabled: true, read_only: false },
   components: fullInput.components,
+  placement: "local",
+  runner_id: "44444444-4444-4444-8444-444444444444",
+  allowed_image: "ghcr.io/acme/dev:1",
+  resources: { cpu_millis: 4000, memory_mib: 8192 },
+  overrides: { azure_devops: { capabilities: ["code_read"] } },
 };
 
 // Go DTO JSON tags the console NEVER sends (CLI-only — cmd/wardyn/commands.go:96-103).
@@ -322,7 +337,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
   const root = repoRoot();
   // CreateRunRequest and WorkspaceSelection live in runs_create.go; read the
   // package's two DTO files together so a later move within pkg/client is not a false red.
-  const clientGo = ["client.go", "runs_create.go"].map((f) => readFileSync(join(root, "pkg/client", f), "utf8")).join("\n");
+  const clientGo = ["client.go", "runs_create.go", "runs_new_run.go"].map((f) => readFileSync(join(root, "pkg/client", f), "utf8")).join("\n");
   const typesGo = readFileSync(join(root, "internal/types/types.go"), "utf8");
   const runsTs = readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8");
   const runCreateTs = readFileSync(join(root, "ui/src/app/lib/types/run-create.ts"), "utf8");
@@ -411,7 +426,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     const typesGoSrc = readFileSync(join(root, "pkg/client/types.go"), "utf8");
     expect(typesGoSrc).toMatch(/ComponentRef\s*=\s*types\.ComponentRef/);
     const refGo = goJSONTags(readFileSync(join(root, "internal/types/component.go"), "utf8"), "ComponentRef");
-    expect(refGo.sort()).toEqual(["id", "inline", "name"]);
+    expect(refGo.sort()).toEqual(["access", "builtin", "id", "inline", "name", "org", "repos"]);
     const componentsTs = readFileSync(join(root, "ui/src/app/lib/types/components.ts"), "utf8");
     expect(tsInterfaceKeys(componentsTs, "ComponentRef").sort()).toEqual(refGo);
   });
