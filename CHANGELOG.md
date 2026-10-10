@@ -101,6 +101,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- Docs: `docs/AZURE-DEVOPS.md` explains what an Azure DevOps run gets on a laptop runner: only the person's own
+  stored PAT, while `minted_pat` and `bearer` runs placed on a laptop are refused (`placement_credential`).
+  `docs/DESKTOP.md` explains why a member-mode laptop still enrols into an SSO-only organisation (#475).
+- `scripts/kind-run-output-walk.sh` gains a recording-on mode (`WARDYN_KIND_WALK_RECORDING=pg`) that proves a
+  Kubernetes task's printed line reaches `/output` from the recording, marked `source: recording`, with a registered
+  secret masked (#1831).
 - Docs: the operator manual's multi-user material (people, governance, capabilities, API tokens and related tasks) is
   split into task pages under `docs/operations/`, each linked from `docs/README.md`; every old heading in
   `docs/OPERATIONS.md` keeps a stub that links to its new home.
