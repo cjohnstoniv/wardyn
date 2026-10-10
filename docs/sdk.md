@@ -743,6 +743,10 @@ applied until a different approver approves it. The SDK never reads that body as
     (a `Deferred` entry with `Base` set), and so, in turn, are its own children and their
     assignments.
   - Prune does not run after a pending write.
+- `PlanGovernance(ctx, doc, prune)` returns the creates, updates and deletes `ApplyGovernance` would
+  make, as a `GovernancePlan`, and writes nothing: one `GET /api/v1/governance`, no write request.
+  Its matching rules are `ApplyGovernance`'s. A plan is a snapshot: the server can change before an
+  apply runs.
 - `ListGovernanceChanges(ctx, state)`, `GetGovernanceChange`, `ApproveGovernanceChange` and
   `RejectGovernanceChange(ctx, id, reason)` read and decide the stored changes
   (`/api/v1/governance/changes`).

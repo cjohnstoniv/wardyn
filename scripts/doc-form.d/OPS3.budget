@@ -33,7 +33,8 @@ docs/operations/admin-only-writes.md=2994 share=35
 docs/operations/three-roles.md=4012 share=35
 docs/operations/provider-policy.md=1278 share=35
 docs/operations/ownership-and-offboarding.md=2370 share=35
-docs/operations/governance-writes.md=2726 share=35
+# 0.9 F-1515: governance-writes.md 2754 adds 28 over 2726 for the `governance plan` bullet and example.
+docs/operations/governance-writes.md=2754 share=35
 docs/operations/member-runs.md=1044 share=35
 docs/operations/user-drives.md=4804 share=35
 docs/operations/capabilities.md=3861 share=35
