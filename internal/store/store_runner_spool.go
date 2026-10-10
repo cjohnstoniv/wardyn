@@ -53,16 +53,19 @@ func (s PG) IngestRunnerDecision(ctx context.Context, runnerID uuid.UUID, row ru
 	if duplicate {
 		return false, tx.Commit(ctx)
 	}
-	ev, err := runnerDecisionEvent(ctx, tx, runnerID, run.ID, row)
+	events, err := runnerDecisionEvents(ctx, tx, runnerID, run.ID, row)
 	if err != nil {
 		return false, err
 	}
-	ev, err = prepare(ctx, ev)
-	if err != nil {
-		return false, err
-	}
-	if err := InsertAuditEventTx(ctx, tx, &ev); err != nil {
-		return false, err
+	for i, ev := range events {
+		ev, err = prepare(ctx, ev)
+		if err != nil {
+			return false, err
+		}
+		if err := InsertAuditEventTx(ctx, tx, &ev); err != nil {
+			return false, err
+		}
+		events[i] = ev
 	}
 	hashes, err := json.Marshal(cursor.hashes)
 	if err != nil {
@@ -75,7 +78,9 @@ func (s PG) IngestRunnerDecision(ctx context.Context, runnerID uuid.UUID, row ru
 		return false, err
 	}
 	if s.SIEM != nil {
-		_ = s.SIEM.Emit(context.WithoutCancel(ctx), ev)
+		for _, ev := range events {
+			_ = s.SIEM.Emit(context.WithoutCancel(ctx), ev)
+		}
 	}
 	return true, nil
 }
@@ -195,10 +200,10 @@ func (c *spoolReceipt) accept(r runnerspool.Record) (bool, error) {
 	return false, nil
 }
 
-func runnerDecisionEvent(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUID, r runnerspool.Record) (types.AuditEvent, error) {
+func runnerDecisionEvents(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUID, r runnerspool.Record) ([]types.AuditEvent, error) {
 	var at time.Time
 	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&at); err != nil {
-		return types.AuditEvent{}, err
+		return nil, err
 	}
 	d := r.Decision
 	data := map[string]any{"host": d.Request.Host, "port": d.Request.Port, "method": d.Request.Method, "path": d.Request.Path, "rule_source": d.RuleSource, "approval_id": d.ApprovalID, "observed_at": d.Request.Time, "spooled": true, "evidence_source": types.RunEvidenceRunnerAsserted, "spool_id": r.SpoolID, "spool_seq": r.Seq, "spool_hash": r.Hash}
@@ -217,17 +222,44 @@ func runnerDecisionEvent(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UU
 	if d.UpstreamFault != "" {
 		data["upstream_fault"] = d.UpstreamFault
 	}
-	if d.Scan != nil {
-		data["scan"] = d.Scan
-	}
 	b, err := json.Marshal(data)
 	if err != nil {
-		return types.AuditEvent{}, err
+		return nil, err
 	}
 	outcome := "success"
 	if d.Decision == egress.Deny {
 		outcome = "denied"
 	}
 
-	return types.AuditEvent{ID: uuid.New(), Time: at, RunID: &runID, ActorType: types.ActorAgent, Actor: "runner:" + runnerID.String(), Action: "egress." + string(d.Decision), Target: d.Request.Host, Outcome: outcome, Data: b}, nil
+	base := types.AuditEvent{Time: at, RunID: &runID, ActorType: types.ActorAgent, Actor: "runner:" + runnerID.String(), Target: d.Request.Host}
+	var events []types.AuditEvent
+	if d.Scan == nil || d.Scan.Action != "bypass" {
+		ev := base
+		ev.ID = uuid.New()
+		ev.Action = "egress." + string(d.Decision)
+		ev.Outcome = outcome
+		ev.Data = b
+		events = append(events, ev)
+	}
+	if d.Scan != nil {
+		action, result, fields := egress.ScanAudit(d.Scan, d.Request.Host)
+		var scan map[string]any
+		if err := json.Unmarshal(fields, &scan); err != nil {
+			return nil, err
+		}
+		for _, key := range []string{"observed_at", "spooled", "evidence_source", "spool_id", "spool_seq", "spool_hash"} {
+			scan[key] = data[key]
+		}
+		fields, err := json.Marshal(scan)
+		if err != nil {
+			return nil, err
+		}
+		ev := base
+		ev.ID = uuid.New()
+		ev.Action = action
+		ev.Outcome = result
+		ev.Data = fields
+		events = append(events, ev)
+	}
+	return events, nil
 }

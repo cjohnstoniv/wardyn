@@ -5,6 +5,8 @@ package store_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -219,5 +221,101 @@ func TestPG_RunnerSpoolReceiptSurvivesMissingAuditBody(t *testing.T) {
 	}
 	if c, _ := spoolCounts(t, pool, run.ID); c != 0 {
 		t.Fatal("run erasure retained cursor")
+	}
+}
+
+func rehashSpoolRow(t *testing.T, row runnerspool.Record) runnerspool.Record {
+	t.Helper()
+	row.Hash = ""
+	b, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256(b)
+	row.Hash = hex.EncodeToString(hash[:])
+	return row
+}
+func TestPG_RunnerSpoolIdentityCursorAndOverflowCollisions(t *testing.T) {
+	pool, st, rn, run, row := spoolPGFixture(t)
+	ctx := context.Background()
+	if _, err := st.IngestRunnerDecision(ctx, rn.ID, row, prepareSpoolTest); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*runnerspool.Record){
+		func(r *runnerspool.Record) { r.Decision.Request.Host = "substituted.test" },
+		func(r *runnerspool.Record) { r.SpoolID = uuid.New() },
+		func(r *runnerspool.Record) { r.Seq = 3 },
+	} {
+		changed := row
+		mutate(&changed)
+		changed = rehashSpoolRow(t, changed)
+		if _, err := st.IngestRunnerDecision(ctx, rn.ID, changed, prepareSpoolTest); !errors.Is(err, store.ErrRunnerSpoolRefused) {
+			t.Fatalf("collision accepted: %+v %v", changed, err)
+		}
+	}
+	overflow := row
+	overflow.Seq = 0
+	overflow.Count = 3
+	overflow.DropEnd = 3
+	overflow.Decision.Decision = egress.Deny
+	overflow.Decision.RuleSource = "builtin:spool-full"
+	overflow = rehashSpoolRow(t, overflow)
+	for i := 0; i < 2; i++ {
+		ok, err := st.IngestRunnerDecision(ctx, rn.ID, overflow, prepareSpoolTest)
+		if err != nil || ok != (i == 0) {
+			t.Fatalf("overflow dedup: %v %v", ok, err)
+		}
+	}
+	changed := overflow
+	changed.Count = 2
+	changed = rehashSpoolRow(t, changed)
+	if _, err := st.IngestRunnerDecision(ctx, rn.ID, changed, prepareSpoolTest); !errors.Is(err, store.ErrRunnerSpoolRefused) {
+		t.Fatalf("overflow collision accepted: %v", err)
+	}
+	row.Seq = 2
+	row = rehashSpoolRow(t, row)
+	if ok, err := st.IngestRunnerDecision(ctx, rn.ID, row, prepareSpoolTest); err != nil || !ok {
+		t.Fatalf("sequential record refused: %v %v", ok, err)
+	}
+	if c, a := spoolCounts(t, pool, run.ID); c != 1 || a != 3 {
+		t.Fatalf("failed records changed receipt/history: %d %d", c, a)
+	}
+}
+func TestPG_RunnerSpoolScanPairCommitsAtomically(t *testing.T) {
+	pool, st, rn, run, row := spoolPGFixture(t)
+	ctx := context.Background()
+	row.Decision.Scan = &egress.ScanSummary{Action: "alert", Channel: "model", FindingsTotal: 101}
+	row = rehashSpoolRow(t, row)
+	calls := 0
+	if _, err := st.IngestRunnerDecision(ctx, rn.ID, row, func(_ context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
+		calls++
+		if calls == 2 {
+			return ev, errors.New("second row sealing failed")
+		}
+		return ev, nil
+	}); err == nil {
+		t.Fatal("partial scan pair accepted")
+	}
+	if c, a := spoolCounts(t, pool, run.ID); c != 0 || a != 0 {
+		t.Fatalf("partial scan committed: %d %d", c, a)
+	}
+	if _, err := st.IngestRunnerDecision(ctx, rn.ID, row, prepareSpoolTest); err != nil {
+		t.Fatal(err)
+	}
+	if c, a := spoolCounts(t, pool, run.ID); c != 1 || a != 2 {
+		t.Fatalf("scan pair missing: %d %d", c, a)
+	}
+	row.Seq = 2
+	row.Decision.Scan.Action = "bypass"
+	row = rehashSpoolRow(t, row)
+	if _, err := st.IngestRunnerDecision(ctx, rn.ID, row, prepareSpoolTest); err != nil {
+		t.Fatal(err)
+	}
+	var bypass, allows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FILTER(WHERE action='llm.scan.bypass'),count(*) FILTER(WHERE action='egress.allow') FROM audit_events WHERE run_id=$1`, run.ID).Scan(&bypass, &allows); err != nil {
+		t.Fatal(err)
+	}
+	if bypass != 1 || allows != 1 {
+		t.Fatalf("bypass fabricated egress: %d %d", bypass, allows)
 	}
 }

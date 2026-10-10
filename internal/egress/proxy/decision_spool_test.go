@@ -5,7 +5,9 @@ package proxy
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
 
@@ -111,5 +114,96 @@ func TestLocalSpoolSingleWriterAndSecretMask(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].Decision.Request.Path == "/"+secret {
 		t.Fatalf("secret retained: %+v", rows)
+	}
+}
+
+func TestLocalSpoolOverflowStopsActualUpstreamAndDrains(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	id := uuid.New()
+	dir := filepath.Join(t.TempDir(), "spool")
+	sink, err := newLocalDecisionSink(dir, id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.close(context.Background())
+	arrived := make(chan bool, 64)
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		arrived <- true
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	p := newProxy(Options{RunID: id, Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"allowed.test"}}), Sink: sink, Resolver: publicResolver{}, Dial: redirectDial(upstreamAddr(upstream))})
+	var wg sync.WaitGroup
+	for range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w := httptest.NewRecorder()
+			p.ServeHTTP(w, httptest.NewRequest("GET", "http://allowed.test/path", nil).WithContext(ctx))
+			if w.Code == 503 {
+				arrived <- false
+			} else if w.Code != 200 {
+				t.Errorf("unexpected status %d: %s", w.Code, w.Body.String())
+				arrived <- false
+			}
+		}()
+	}
+	forwards := 0
+	for range 64 {
+		select {
+		case allowed := <-arrived:
+			if allowed {
+				forwards++
+			}
+		case <-ctx.Done():
+			close(release)
+			wg.Wait()
+			t.Fatal("requests did not reach upstream or fail closed")
+		}
+	}
+	close(release)
+	wg.Wait()
+	if forwards == 0 || forwards > runnerspool.MaxBytes/runnerspool.MaxRecordBytes {
+		t.Fatalf("forwarded beyond reserved capacity: %d", forwards)
+	}
+	depth, _, drops, err := sink.local.Stats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if depth != forwards || drops != uint64(64-forwards) {
+		t.Fatalf("network/audit mismatch: forward%d records%d drops%d", forwards, depth, drops)
+	}
+	records := 0
+	if err := sink.local.Replay(ctx, func(_ context.Context, r runnerspool.Record) error {
+		if records == 0 && r.Decision.RuleSource != "builtin:spool-full" {
+			t.Fatal("overflow was not first")
+		}
+		records++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, httptest.NewRequest("GET", "http://allowed.test/drained", nil).WithContext(ctx))
+	if w.Code != 200 {
+		t.Fatalf("drained status%d", w.Code)
+	}
+	// A corrupt durable manifest must refuse before any upstream request.
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte("corrupt"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	p.ServeHTTP(w, httptest.NewRequest("GET", "http://allowed.test/corrupt", nil).WithContext(ctx))
+	if w.Code != 503 {
+		t.Fatalf("corrupt storage forwarded: %d", w.Code)
+	}
+	if len(arrived) != 1 {
+		t.Fatalf("corrupt storage reached upstream: arrivals%d", len(arrived))
 	}
 }
