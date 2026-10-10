@@ -133,3 +133,10 @@ func (s *decisionSink) emitLocal(log egress.DecisionLog) {
 		s.localErr = err
 	}
 }
+
+func configuredDecisionSink(cfg *Config, token *tokenSource, client *http.Client, out io.Writer) (*decisionSink, error) {
+	if cfg.DecisionSpoolDir != "" {
+		return newLocalDecisionSink(cfg.DecisionSpoolDir, cfg.RunID, out)
+	}
+	return newDecisionSink(cfg.ControlPlaneURL, token, cfg.DecisionBufferSize, client, out), nil
+}
