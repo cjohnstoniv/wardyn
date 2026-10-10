@@ -5,6 +5,9 @@ package remote
 
 import (
 	"context"
+	"errors"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,6 +26,32 @@ func (h *Hub) Revoke(ctx context.Context, id uuid.UUID) error {
 // or an administrative session reset. It does not revoke the registered key.
 func (h *Hub) Goaway(ctx context.Context, id uuid.UUID) error {
 	return h.endWithControl(ctx, id, runnerwire.TypeGoaway, "fresh_session_required")
+}
+
+// GoawayAll sends every session Goaway, as after runners are switched off.
+func (h *Hub) GoawayAll(ctx context.Context) error {
+	h.mu.Lock()
+	ids := slices.Collect(maps.Keys(h.sessions))
+	h.mu.Unlock()
+	errs := make([]error, 0, len(ids))
+	for _, id := range ids {
+		errs = append(errs, h.Goaway(ctx, id))
+	}
+	return errors.Join(errs...)
+}
+
+// Online reports whether id's current session reached its own READY and its
+// peer is still up. A session in transition holds its slot and reads offline
+// rather than making the caller wait for it.
+func (h *Hub) Online(id uuid.UUID) bool {
+	h.mu.Lock()
+	s := h.sessions[id]
+	h.mu.Unlock()
+	if s == nil || !s.mu.TryLock() {
+		return false
+	}
+	defer s.mu.Unlock()
+	return s.peer != nil && s.peer.Online() && s.readyFor(s.id)
 }
 
 func (h *Hub) endWithControl(ctx context.Context, id uuid.UUID, kind runnerwire.Type, reason string) error {

@@ -31,7 +31,7 @@ type RunnerStore interface {
 	ClaimRunner(ctx context.Context, id uuid.UUID, owner, fingerprint string, now time.Time) (types.Runner, error)
 	TouchRunner(ctx context.Context, id uuid.UUID, version string, now time.Time) error
 	RecordRunnerPosture(ctx context.Context, id uuid.UUID, p types.RunnerPosture, now time.Time) (changed bool, err error)
-	RevokeRunner(ctx context.Context, id uuid.UUID, now time.Time) (types.Runner, error)
+	RevokeRunner(ctx context.Context, id uuid.UUID, now time.Time, by, reason string) (RunnerRevocation, error)
 	ExpireUnclaimedRunners(ctx context.Context, createdBefore time.Time) (int, error)
 
 	QueueRunnerAction(ctx context.Context, a types.RunnerPendingAction) (action types.RunnerPendingAction, queued bool, err error)
@@ -50,14 +50,15 @@ var _ RunnerStore = PG{}
 var ErrRunnerClaimMismatch = errors.New("store: runner claim does not match the owner or key fingerprint")
 
 const runnerCols = `id, owner, name, public_key, key_fingerprint, state, version, created_at, claimed_at,
-	last_seen_at, revoked_at, posture, posture_reported_at, posture_source, org_url_sha256`
+	last_seen_at, revoked_at, posture, posture_reported_at, posture_source, org_url_sha256, revoked_by, revoke_reason`
 
 func scanRunner(row pgx.Row) (types.Runner, error) {
 	var r types.Runner
 	var state string
 	var posture []byte
 	err := row.Scan(&r.ID, &r.Owner, &r.Name, &r.PublicKey, &r.KeyFingerprint, &state, &r.Version, &r.CreatedAt,
-		&r.ClaimedAt, &r.LastSeenAt, &r.RevokedAt, &posture, &r.PostureReportedAt, &r.PostureSource, &r.OrgURLSHA256)
+		&r.ClaimedAt, &r.LastSeenAt, &r.RevokedAt, &posture, &r.PostureReportedAt, &r.PostureSource, &r.OrgURLSHA256,
+		&r.RevokedBy, &r.RevokeReason)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Runner{}, ErrNotFound
 	}
@@ -154,25 +155,56 @@ func (s PG) RecordRunnerPosture(ctx context.Context, id uuid.UUID, p types.Runne
 	return changed, nil
 }
 
-// RevokeRunner marks the runner revoked and drops its open pending actions in the same transaction (a
-// revoked runner cannot authenticate to apply them). Already revoked or unknown is ErrNotFound, so a
-// second call writes no second revoke row.
-func (s PG) RevokeRunner(ctx context.Context, id uuid.UUID, now time.Time) (types.Runner, error) {
+// RunnerRevocation is what one committed revoke did: the revoked runner and
+// the runs it ended KILLED (RN-Q29), each with the state it was killed from.
+type RunnerRevocation struct {
+	Runner types.Runner
+	Killed []RunnerKilledRun
+}
+
+// RunnerKilledRun is one run a runner revocation ended KILLED.
+type RunnerKilledRun struct {
+	ID   uuid.UUID
+	From types.RunState
+}
+
+// RevokeRunner revokes a runner in one transaction: the runner row with who
+// revoked it and why, every non-terminal run bound to it ended KILLED (the
+// runs CountActiveRunsByRunner counts), and every unsettled pending action of
+// it settled 'revoked'. Rows are kept as evidence. The fence lifts only
+// because the run is terminal in the same commit, never before. Already
+// revoked or unknown is ErrNotFound, so a second call ends nothing. Lock order
+// is runner, then runs by id, then actions, as everywhere else.
+func (s PG) RevokeRunner(ctx context.Context, id uuid.UUID, now time.Time, by, reason string) (RunnerRevocation, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return types.Runner{}, fmt.Errorf("store: begin revoke runner: %w", err)
+		return RunnerRevocation{}, fmt.Errorf("store: begin revoke runner: %w", err)
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
-	const q = `UPDATE runners SET state = 'revoked', revoked_at = $2 WHERE id = $1 AND state <> 'revoked' RETURNING ` + runnerCols
-	out, err := scanRunner(tx.QueryRow(ctx, q, id, now))
-	if err != nil {
-		return types.Runner{}, err
+	const q = `UPDATE runners SET state = 'revoked', revoked_at = $2, revoked_by = $3, revoke_reason = $4
+		WHERE id = $1 AND state <> 'revoked' RETURNING ` + runnerCols
+	out := RunnerRevocation{}
+	if out.Runner, err = scanRunner(tx.QueryRow(ctx, q, id, now, by, reason)); err != nil {
+		return RunnerRevocation{}, err
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM runner_pending_actions WHERE runner_id = $1 AND applied_at IS NULL`, id); err != nil {
-		return types.Runner{}, fmt.Errorf("store: drop revoked runner's pending actions: %w", err)
+	out.Killed, err = collect(ctx, tx, "kill", "revoked runner's runs", `WITH live AS (
+			SELECT id, state FROM agent_runs WHERE runner_id = $1 AND state = ANY($3) ORDER BY id FOR UPDATE)
+		UPDATE agent_runs a SET state = $2, updated_at = now(), ended_at = now() FROM live
+		WHERE a.id = live.id RETURNING a.id, live.state`, []any{id, string(types.RunKilled), nonTerminalStateStrings()},
+		func(row pgx.Row) (RunnerKilledRun, error) {
+			var k RunnerKilledRun
+			err := row.Scan(&k.ID, &k.From)
+			return k, err
+		})
+	if err != nil {
+		return RunnerRevocation{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runner_pending_actions SET settled_at = clock_timestamp(), settlement = 'revoked'
+		WHERE runner_id = $1 AND binding_version = 1 AND settled_at IS NULL AND (applied_at IS NULL OR outcome = 'deferred')`, id); err != nil {
+		return RunnerRevocation{}, fmt.Errorf("store: settle revoked runner's pending actions: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return types.Runner{}, fmt.Errorf("store: commit revoke runner: %w", err)
+		return RunnerRevocation{}, fmt.Errorf("store: commit revoke runner: %w", err)
 	}
 	return out, nil
 }

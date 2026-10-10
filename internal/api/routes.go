@@ -277,6 +277,7 @@ func (s *Server) routes() chi.Router {
 			// Tamper-evidence sweep over the audit hash chain (migration 0047),
 			// plus the sandbox sweep — one on each tier, hence two routers.
 			s.adminRoutes(operatorOnly, securityOps)
+			s.mountRunnerRevokeRoutes(r, securityOps) // runner_revoke.go: the security tier, or the runner's own owner
 			r.Get("/me", s.handleMe)
 			// #1197: the shell's two nav badges in one small object, replacing
 			// the two 1000-row reads App.tsx used to poll. classMember, scoped to

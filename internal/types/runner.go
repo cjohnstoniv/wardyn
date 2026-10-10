@@ -55,7 +55,14 @@ type Runner struct {
 	// PostureReportedAt is nil until the runner reports; PostureSource is then runner_asserted.
 	PostureReportedAt *time.Time `json:"posture_reported_at,omitempty"`
 	PostureSource     string     `json:"posture_source,omitempty"`
+	// RevokedBy is the principal that revoked the runner; RevokeReason is "" or
+	// RunnerRevokeNotMine. Both are empty until it is revoked.
+	RevokedBy    string `json:"-"`
+	RevokeReason string `json:"-"`
 }
+
+// RunnerRevokeNotMine marks an owner's revoke of a runner they did not register.
+const RunnerRevokeNotMine = "not_mine"
 
 // RunnerActionKind is a pending action's verb.
 type RunnerActionKind string

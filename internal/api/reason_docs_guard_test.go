@@ -32,6 +32,7 @@ var adoEntraFailureEnumValues = []string{
 var placementWireReasons = []placement.Reason{
 	placement.ReasonRunnerTokenInvalid,
 	placement.ReasonRunnerClaimMismatch,
+	placement.ReasonRunnerNotFound,
 }
 
 // documentedDuplicateReasonValues lists wire values TWO OR MORE reasons.go

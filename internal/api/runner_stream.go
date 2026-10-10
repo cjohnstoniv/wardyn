@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"sync"
 
@@ -24,6 +25,7 @@ type runnerStreamState struct {
 	limiter principalLimiter
 	subsMu  sync.Mutex
 	subs    map[uuid.UUID]runnerEndpoint
+	offline runnerOfflineSweeps
 }
 
 // This route has its own proof-of-possession handshake. Human sessions and
@@ -77,14 +79,45 @@ func (s *Server) RevokeRunnerSession(ctx context.Context, id uuid.UUID) error {
 	return s.runnerHub(st).Revoke(ctx, id)
 }
 
-// runnerHub builds the one Hub lazily. Without an injected Admit it admits
-// through the durable org composition (admitRunner).
+// RunnerOnline reports whether this process holds the runner's live session,
+// admitted to READY.
+func (s *Server) RunnerOnline(id uuid.UUID) bool {
+	st, ok := s.cfg.Store.(store.RunnerStore)
+	return ok && s.runnerHub(st).Online(id)
+}
+
+// RunnersDisabled ends every runner session this process holds once runners
+// are switched off. Each reconnect then meets the stream route's switch check,
+// and a create already admitted meets the one on every dispatch.
+func (s *Server) RunnersDisabled(ctx context.Context) {
+	st, ok := s.cfg.Store.(store.RunnerStore)
+	if !ok {
+		return
+	}
+	if err := s.runnerHub(st).GoawayAll(ctx); err != nil {
+		slog.WarnContext(ctx, "wardynd: ending runner sessions after runners were switched off", slog.Any("err", err))
+	}
+}
+
+// runnerHub builds the one Hub lazily. Callbacks not injected are the durable
+// org composition: admitRunner and the asynchronous offline sweep.
 func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 	s.runnerStreams.once.Do(func() {
 		cfg := s.cfg.RunnerHub
 		cfg.OrgURL, cfg.Lookup = s.cfg.RunnerOrgURL, st.GetRunner
 		if cfg.Admit == nil {
 			cfg.Admit = s.admitRunner
+		}
+		// The Hub reports Disconnected only for a session it reported Connected,
+		// and calls it under the runner's session slot, even inside a fresh
+		// admission: the sweep must never run there. Connected does no database
+		// work, so nothing on the admission path can wait behind a sweep.
+		if cfg.Connected == nil && cfg.Disconnected == nil {
+			cfg.Connected = func(context.Context, uuid.UUID) error { return nil }
+			cfg.Disconnected = func(_ context.Context, id uuid.UUID) error {
+				s.runnerStreams.offline.schedule(s.cfg.BaseCtx, id, s.OfflineFromRunner)
+				return nil
+			}
 		}
 		s.runnerStreams.hub = remote.NewHub(s.cfg.BaseCtx, cfg)
 	})
