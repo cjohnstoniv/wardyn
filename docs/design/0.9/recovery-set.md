@@ -314,7 +314,7 @@ A test named "fails when X is removed" is a mutation proof: REPORT.md shows it f
   - After a run, no advisory lock with the probe key exists on live; the test fails when T3 reverts to a session lock.
   - A stubbed probe whose hold is unconfirmed refuses, exit `3`.
   - The T3 test reaches live as `localhost` and the target as `127.0.0.1`, and refuses. A scratch database on the live server passes.
-  - A write through the target pool fails as read-only. A chain break yields `fail` with `broken_seq`.
+  - A write through the target backend fails as read-only. A chain break yields `fail` with `broken_seq`.
 - **F-1514e**
   - The right key passes; a wrong age key fails naming the class.
   - Target row counts and audit head are unchanged after a run. A fake external store records zero reads.
