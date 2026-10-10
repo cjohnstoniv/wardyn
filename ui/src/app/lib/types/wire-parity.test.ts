@@ -468,6 +468,75 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(union("LocalPlacementKind")).toEqual(new Set([...clientGo.matchAll(/\bLocalPlacement(?:Host|Source|Component)\s*=\s*"([a-z_]+)"/g)].map((m) => m[1])));
   });
 
+  // The run-template contract (pkg/client/templates.go, internal/types): the import
+  // document, the catalogue shapes and the component configuration schema.
+  it.each([
+    ["pkg/client/templates.go", "TemplateDocument"],
+    ["pkg/client/templates.go", "TemplateSetupNeed"],
+    ["pkg/client/templates.go", "TemplateRef"],
+    ["pkg/client/templates.go", "Template"],
+    ["pkg/client/templates.go", "TemplateSummary"],
+    ["pkg/client/templates.go", "TemplateList"],
+    ["pkg/client/templates.go", "TemplateSaveRequest"],
+    ["pkg/client/templates.go", "TemplateImportRequest"],
+    ["pkg/client/templates.go", "TemplateDiagnostic"],
+    ["pkg/client/templates.go", "TemplateImportResult"],
+    ["internal/types/template.go", "TemplateGroupAdmin"],
+    ["internal/types/component_config_schema.go", "ComponentConfigSchema"],
+    ["internal/types/component_config_schema.go", "ConfigGroup"],
+    ["internal/types/component_config_schema.go", "ConfigField"],
+    ["internal/types/component_config_schema.go", "ConfigOption"],
+    ["internal/types/component_config_schema.go", "ConfigCondition"],
+    ["internal/types/component_config_schema.go", "ConfigBinding"],
+    ["internal/types/component_config_schema.go", "ConfigIssue"],
+  ])("%s %s: full parity with the TS mirror in templates.ts", (goFile, name) => {
+    const goTags = goJSONTags(readFileSync(join(root, goFile), "utf8"), name);
+    expect(goTags.length).toBeGreaterThanOrEqual(1);
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/templates.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(ts, name))).toEqual(new Set(goTags));
+  });
+
+  it("the template contract's closed value sets match Go", () => {
+    const ts = stripComments(readFileSync(join(root, "ui/src/app/lib/types/templates.ts"), "utf8"));
+    const union = (name: string) => {
+      const m = new RegExp(`export type ${name} =([^;]+);`).exec(ts);
+      if (!m) throw new Error(`type ${name} not found`);
+      return new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]));
+    };
+    const client = readFileSync(join(root, "pkg/client/templates.go"), "utf8");
+    const schema = readFileSync(join(root, "internal/types/component_config_schema.go"), "utf8");
+    const template = readFileSync(join(root, "internal/types/template.go"), "utf8");
+    const consts = (src: string, re: RegExp) => new Set([...src.matchAll(re)].map((m) => m[1]));
+    expect(union("TemplateScope")).toEqual(consts(template, /\bTemplateScope\w+\s+TemplateScope = "([a-z_]+)"/g));
+    expect(union("TemplateCoverage")).toEqual(consts(client, /\bTemplateCoverage\w+\s+TemplateCoverage = "([a-z_]+)"/g));
+    expect(union("TemplateFormat")).toEqual(consts(client, /\bTemplateFormat\w+\s+TemplateFormat = "([a-z_]+)"/g));
+    expect(union("TemplatePart")).toEqual(consts(client, /\bTemplatePart\w+\s+TemplatePart = "([a-z_]+)"/g));
+    expect(union("ConfigFieldKind")).toEqual(consts(schema, /\bConfigKind\w+\s+ConfigFieldKind = "([a-z_]+)"/g));
+    expect(union("ConfigBindTarget")).toEqual(consts(schema, /\bConfigBind\w+\s+ConfigBindTarget = "([a-z_]+)"/g));
+    expect(client).toContain(`TemplateDocumentVersion = "wardyn/v1"`);
+    expect(client).toContain(`TemplateDocumentKind    = "RunTemplate"`);
+  });
+
+  it("the component configuration schema bounds match Go", () => {
+    const schema = readFileSync(join(root, "internal/types/component_config_schema.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/templates.ts"), "utf8");
+    const go = (name: string) => Number(new RegExp(`\\b${name}\\s*=\\s*(\\d+)`).exec(schema)?.[1]);
+    expect(go("MaxConfigSchemaFields")).toBe(64);
+    for (const [goName, tsName] of [
+      ["MaxConfigSchemaFields", "maxFields"],
+      ["MaxConfigSchemaGroups", "maxGroups"],
+      ["MaxConfigOptions", "maxOptions"],
+      ["MaxConfigListItems", "maxListItems"],
+      ["MaxConfigLabelRunes", "maxLabelRunes"],
+      ["MaxConfigDescriptionRunes", "maxDescriptionRunes"],
+      ["MaxConfigOptionValueRunes", "maxOptionValueRunes"],
+    ]) {
+      expect(Number(new RegExp(`${tsName}:\\s*(\\d+)`).exec(ts)?.[1]), tsName).toBe(go(goName));
+    }
+    expect(Number(/maxBytes:\s*(\d+) \* 1024/.exec(ts)?.[1]) * 1024).toBe(64 << 10);
+    expect(schema).toMatch(/MaxConfigSchemaBytes\s*= 64 << 10/);
+  });
+
   it("run placement and evidence include the legacy empty value and match Go", () => {
     const ts = stripComments(readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8"));
     const go = readFileSync(join(root, "internal/types/placement.go"), "utf8");

@@ -30,6 +30,8 @@
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives
 //   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
+//   - templates (/api/v1/templates):     ListTemplates, GetTemplate, SaveTemplate, ImportTemplate — typed stubs
+//     until the template store lands: each returns ErrTemplatesUnavailable
 //   - governance (/api/v1/governance):   GetGovernance, ApplyGovernance, ApplyGovernanceResult
 //   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
 //     ApproveGovernanceChange, RejectGovernanceChange

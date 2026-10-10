@@ -421,3 +421,26 @@ const (
 	reasonGitPATNarrowingUnsupportedHost = "git_pat_narrowing_unsupported_host" // the host is served by a lane that ignores the narrowing axes
 	reasonGitPATAPIForgeDisabled         = "git_pat_api_forge_disabled"         // api: true on a forge whose API door is off on this deployment
 )
+
+// Run templates (template_document.go, template_refusals.go): the refusals of
+// a template document and of the scopes it is published to. The sentences are
+// template_refusals.go's, with a TypeScript twin; the console matches on the
+// reason, never on the text.
+const (
+	reasonTemplateDocumentInvalid    = "template_document_invalid"     // the text is not one well-formed, bounded template document
+	reasonTemplateVersionUnsupported = "template_version_unsupported"  // api_version or kind is not one this server reads
+	reasonTemplateFieldUnknown       = "template_field_unknown"        // a key the template schema does not have
+	reasonTemplateFieldInvalid       = "template_field_invalid"        // a value of the wrong shape, null, or a redacted placeholder
+	reasonTemplateFieldExcluded      = "template_field_excluded"       // a field that is launch-only or retired and never part of a template
+	reasonTemplateSecretRefused      = "template_secret_refused"       // a secret value or credential material, which a template never holds
+	reasonTemplateRunStateRefused    = "template_run_state_refused"    // state of one run: identity, session, claim, admission or a resolved result
+	reasonTemplateMetadataInContent  = "template_metadata_in_content"  // owner, scope, group or revision, which the server assigns, written in the document
+	reasonTemplateFieldUnavailable   = "template_field_unavailable"    // a valid field this server cannot honour yet: refused, never dropped
+	reasonTemplateDependencyMissing  = "template_dependency_missing"   // a field whose dependency is neither included nor listed under needs_setup
+	reasonTemplateCoverageInvalid    = "template_coverage_invalid"     // coverage does not fit the content: an empty intent, or a full template that needs setup
+	reasonTemplateSharedFieldRefused = "template_shared_field_refused" // a field that names one person's own thing, in an organisation or group template
+	reasonTemplateScopeForbidden     = "template_scope_forbidden"      // the caller lacks the authority to write to that scope
+	reasonTemplateGroupUnverified    = "template_group_unverified"     // the caller's group membership cannot be verified from this sign-in
+	reasonTemplateNotFound           = "template_not_found"            // no such template, or the caller may not see it
+	reasonTemplateRevisionConflict   = "template_revision_conflict"    // the template changed since the revision the caller read
+)

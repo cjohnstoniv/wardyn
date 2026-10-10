@@ -32,3 +32,4 @@ export * from "./types/people";
 export * from "./types/policy-preview";
 export * from "./types/components";
 export * from "./types/new-run-contract";
+export * from "./types/templates";
