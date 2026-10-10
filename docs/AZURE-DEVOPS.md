@@ -347,11 +347,11 @@ That has two consequences worth knowing before you hit them:
 
 | `token_mode` | What the run gets on a laptop | Why |
 |---|---|---|
-| `own_pat` | The person's own PAT, only when it is stored in their own namespace ([`internal/api/run_placement_intents.go#Server.localADOOrigin`](../internal/api/run_placement_intents.go)) | It is their credential |
-| `minted_pat`, `bearer` | `via_org`: the token stays in the organisation and the laptop's Azure DevOps traffic goes through it. Otherwise the run is refused | The organisation mints or holds the token |
+| `own_pat` | The person's own PAT, only when the Azure DevOps row is theirs and the PAT is stored in their own namespace; otherwise refused ([`internal/api/run_placement_intents.go#Server.localADOOrigin`](../internal/api/run_placement_intents.go)) | It is their credential |
+| `minted_pat`, `bearer` | Refused today (`placement_credential`) | The organisation mints or holds the token |
 
-- The token is never handed to the laptop. A resident copy would skip the Azure DevOps REST gate and the capability hold, so `ado_minted_pat` is barred from `runner_resident` (`TestDeliveryClassesMatchDesign` in [`internal/placement/placement_test.go`](../internal/placement/placement_test.go)).
-- Until this build carries the `via_org` relay, a `minted_pat` or `bearer` run placed on a laptop is refused `placement_credential` ([`internal/placement/eligibility.go#classifyCredential`](../internal/placement/eligibility.go)).
+- `TestDeliveryClassesMatchDesign` in [`internal/placement/placement_test.go`](../internal/placement/placement_test.go) pins that `ado_minted_pat` has no `runner_resident` mode.
+- The refusal is `classifyCredential` ([`internal/placement/eligibility.go`](../internal/placement/eligibility.go)).
 - Where each thing lives is in [Managed laptops: client-mode runners](operations/hybrid-laptops.md#where-each-thing-lives). The delivery rules are in [Credential delivery (OD-12)](design/0.9/PLAN.md#7-credential-delivery-od-12).
 
 ## Check organisation settings
