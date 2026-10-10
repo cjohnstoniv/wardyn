@@ -23,14 +23,13 @@ jobs:
     timeout-minutes: 45
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -73,14 +72,13 @@ jobs:
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -130,14 +128,13 @@ jobs:
       RUNSC_RELEASE: "20260601"
       RUNSC_SHA512: ea985c4a505a37c50726b35fa5d48fdb8058dce36833d7710d49be035e08623b425869f91deb9133c1c5b35a33a77aed5ddcbc6926801a2dc49ddb0805aed7dc
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -212,14 +209,13 @@ jobs:
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -257,14 +253,13 @@ jobs:
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Docker available
         run: docker --version
@@ -285,14 +280,13 @@ jobs:
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Docker available
         run: docker --version
@@ -341,14 +335,13 @@ jobs:
     timeout-minutes: 45
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -402,14 +395,13 @@ jobs:
     timeout-minutes: 45
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -489,14 +481,13 @@ jobs:
           --health-interval 10s --health-timeout 5s --health-retries 5
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -551,14 +542,13 @@ jobs:
     timeout-minutes: 20
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Docker available
         run: docker --version
@@ -589,14 +579,13 @@ jobs:
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Docker available
         run: docker --version
@@ -641,14 +630,13 @@ jobs:
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -709,7 +697,6 @@ jobs:
       attestations: write
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
@@ -767,7 +754,7 @@ jobs:
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build both platforms (pushed to staging on a dispatch, discarded otherwise)
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
@@ -820,7 +807,6 @@ jobs:
       attestations: write
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
@@ -843,7 +829,7 @@ jobs:
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Resolve the staged agent-base digest
         id: base
         run: |
@@ -927,14 +913,13 @@ jobs:
     timeout-minutes: 60
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
@@ -1089,14 +1074,13 @@ jobs:
       WARDYN_QUICKSTART_HTTP_PORT: "8580"
       WARDYN_QUICKSTART_SSH_PORT: "2522"
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
@@ -1167,14 +1151,13 @@ jobs:
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
@@ -1238,14 +1221,13 @@ jobs:
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -1310,14 +1292,13 @@ jobs:
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -1392,14 +1373,13 @@ jobs:
       packages: read
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
@@ -1453,14 +1433,13 @@ jobs:
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -1500,14 +1479,13 @@ jobs:
     timeout-minutes: 20
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -1594,14 +1572,13 @@ jobs:
           --health-interval 10s --health-timeout 5s --health-retries 5
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
@@ -1630,14 +1607,13 @@ jobs:
     timeout-minutes: 15
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false # the probe runs a third-party CLI; keep the token out of .git/config

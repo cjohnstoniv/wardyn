@@ -112,7 +112,6 @@ jobs:
     timeout-minutes: 20
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       # The commit CI passed on, not the branch tip: under workflow_run,
       # github.sha is main's tip at the time this run started.
@@ -130,7 +129,7 @@ jobs:
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       # Tags: always a short-sha; "latest" added on main; the bare semver
       # (v-prefix stripped, matching Chart.yaml's appVersion) added on a
       # vX.Y.Z tag. Hand-rolled in a few lines rather than pulling in
