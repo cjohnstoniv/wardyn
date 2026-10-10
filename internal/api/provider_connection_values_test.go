@@ -4,8 +4,9 @@
 package api
 
 import (
-	"github.com/cjohnstoniv/wardyn/internal/types"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 func TestProviderCause_UnusableStoredValuesAllowReconnect(t *testing.T) {

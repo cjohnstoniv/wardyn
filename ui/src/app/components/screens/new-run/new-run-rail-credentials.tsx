@@ -10,15 +10,15 @@
 // #542 took that file past the 1000-line gate. Like the rail, it takes props
 // and renders; it owns no screen state.
 
-import { modelConnectionCause } from "../../../lib/model-connection-cause";
-import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import * as React from "react";
 import type { ModelCredential, SetupModelProvider, SetupProviderAccess } from "../../../lib/types";
+import { modelConnectionCause } from "../../../lib/model-connection-cause";
 import { Button } from "../../ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { RAIL_CREDENTIAL, RAIL_PROVIDER } from "../../wardyn/copy";
 import { CONNECTIONS } from "../../wardyn/copy/door";
+import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import {
   accessStateFor,
   providerConnected,

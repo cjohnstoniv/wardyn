@@ -8,6 +8,7 @@
 // two (issue #636's own "Check": "the settings specs split per view").
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
 const getSetupStatusMock = vi.fn();
@@ -37,6 +38,7 @@ vi.mock("./harness-login-pane", () => ({
 import { YourAccountScreen } from "./your-account-screen";
 import { MODEL_PROVIDERS, baseStatus, providerStatus } from "../../../lib/test-fixtures";
 import { WithDoor } from "../../../../test/door-harness";
+import { CONNECTIONS } from "../../wardyn/copy/door";
 import { YOUR_ACCOUNT } from "../../wardyn/copy/console-view";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { expandCard, startsWith } from "../../../lib/test-dom";
@@ -176,4 +178,26 @@ describe("YourAccountScreen — Your model connections", () => {
     expect(await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 })).toBeInTheDocument();
     expect(screen.queryByTestId("model-connections-card")).toBeNull();
   });
+});
+
+
+it("model re-check refreshes the shared snapshot once and keeps the recovery dialog current", async () => {
+  const status = providerStatus([{ provider: MODEL_PROVIDERS.gateway }]);
+  status.provider_access![0].cause = "store_unreadable";
+  const refresh = vi.fn();
+  const { rerender } = render(<WithDoor status={status} path="/account" operator={false} onRefresh={refresh}>
+    <YourAccountScreen />
+  </WithDoor>);
+  await screen.findByTestId("model-connections-card");
+  await expandCard(CONNECTIONS.TITLE);
+  await userEvent.click(screen.getByRole("button", { name: CONNECTIONS.RECHECK }));
+  expect(refresh).toHaveBeenCalledOnce();
+  expect(getSetupStatusMock).toHaveBeenCalledOnce();
+  const recovered = { ...status, provider_access: [{ ...status.provider_access![0], cause: "destination_changed" }] };
+  rerender(<WithDoor status={recovered} path="/account" operator={false} onRefresh={refresh}>
+    <YourAccountScreen />
+  </WithDoor>);
+  await userEvent.click(screen.getByRole("button", { name: CONNECTIONS.REVIEW_RECONNECT }));
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).getByText(CONNECTIONS.DESTINATION_CHANGED(MODEL_PROVIDERS.gateway.host))).toBeInTheDocument();
 });

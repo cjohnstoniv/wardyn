@@ -12,9 +12,9 @@
 // EAGER graph (its own file header explains why it avoids copy imports), and
 // this page is reached only through the lazy Settings/Account chunk.
 //
-import { modelConnectionCause } from "./model-connection-cause";
 import { absoluteTime, relativeTime, shortDate } from "./format";
 import { harnessDisplayNames } from "./model-access";
+import { modelConnectionCause } from "./model-connection-cause";
 import type { SetupModelProvider, SetupProviderAccess, SetupStatus } from "./types";
 import { AGENTS } from "./workspace-providers-copy";
 import { CONNECTIONS } from "../components/wardyn/copy/door";

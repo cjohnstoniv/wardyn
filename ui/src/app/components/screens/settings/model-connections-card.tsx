@@ -129,7 +129,7 @@ export function ModelConnectionsCard({ status, onChanged }: { status: SetupStatu
                 row={row}
                 copy={copy}
                 onOpen={(providerId) => {
-                  if (row.access.state === "not_configured" && row.access.cause === "store_unreadable") { void door.refresh(); onChanged(); }
+                  if (row.access.state === "not_configured" && row.access.cause === "store_unreadable") { onChanged(); }
                   else door.openDoor({ for: { provider: providerId }, onClosed: onChanged });
                 }}
               />

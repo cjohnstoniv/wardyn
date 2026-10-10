@@ -28,7 +28,7 @@ it("transient read failure says could not check and offers re-check", () => {
 
 it("confirmed absence offers a first connection with explicit destination", () => {
   const access = { provider: provider.id, state: "not_configured", cause: "never_connected" };
-  expect(connectionRowCopy(null, { provider, access }).line).toBe(CONNECTIONS.NEVER_CONNECTED(provider.host));
+  expect(connectionRowCopy(null, { provider, access }).line).toBe(CONNECTIONS.NEVER_CONNECTED(provider.host, provider.name || provider.id));
   expect(connectionRowCopy(null, { provider, access }).button).toBe(CONNECTIONS.ADD_TOKEN);
 });
 

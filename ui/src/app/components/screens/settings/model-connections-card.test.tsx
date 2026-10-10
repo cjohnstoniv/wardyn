@@ -133,11 +133,15 @@ it("a store read failure re-checks without opening a replacement dialog", async 
   const s = providerStatus([{ provider: MODEL_PROVIDERS.gateway, state: "not_configured" }]);
   s.provider_access![0].cause = "store_unreadable";
   const changed = vi.fn();
-  renderCard(s, changed);
+  const refreshed = vi.fn();
+  render(<WithDoor status={s} path="/account" operator={false} onRefresh={refreshed}>
+    <ModelConnectionsCard status={s} onChanged={changed} />
+  </WithDoor>);
   await expandCard(CONNECTIONS.TITLE);
   expect(screen.getByText(CONNECTIONS.STORE_UNREADABLE)).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: CONNECTIONS.RECHECK }));
   expect(changed).toHaveBeenCalledOnce();
+  expect(refreshed).not.toHaveBeenCalled();
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 

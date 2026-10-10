@@ -10,7 +10,7 @@ export function modelConnectionCause(provider: SetupModelProvider, access?: Setu
   if (access?.state !== "not_configured") return undefined;
   const host = access.new_destination || provider.host;
   switch (access.cause) {
-    case "never_connected": return { line: CONNECTIONS.NEVER_CONNECTED(host) };
+    case "never_connected": return { line: CONNECTIONS.NEVER_CONNECTED(host, provider.name || provider.id) };
     case "destination_changed": return { line: CONNECTIONS.DESTINATION_CHANGED(host), button: CONNECTIONS.REVIEW_RECONNECT };
     case "kind_changed": return { line: CONNECTIONS.KIND_CHANGED(host), button: CONNECTIONS.REVIEW_RECONNECT };
     case "store_unreadable": return { line: CONNECTIONS.STORE_UNREADABLE, button: CONNECTIONS.RECHECK };

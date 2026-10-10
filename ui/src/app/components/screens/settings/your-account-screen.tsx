@@ -25,6 +25,7 @@ import { setup as setupApi } from "../../../lib/api/setup";
 import type { SetupStatus } from "../../../lib/types";
 import { PageHeader } from "../../wardyn/page-header";
 import { YOUR_ACCOUNT } from "../../wardyn/copy/console-view";
+import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { ModelConnectionsCard } from "./model-connections-card";
 import { useConsoleMode } from "../../wardyn/console-view";
 import { AdoConnectionCard } from "./ado-connection";
@@ -34,6 +35,7 @@ import { ErrorState, TableSkeleton } from "../../wardyn/states";
 
 export function YourAccountScreen() {
   const adminView = useConsoleMode() === "admin";
+  const { status: modelStatus, refresh: refreshModels } = useShellSetupStatus();
   const [state, setState] = React.useState<"loading" | "error" | "ready">("loading");
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
 
@@ -58,7 +60,7 @@ export function YourAccountScreen() {
           {/* #541 (§5.4, packet MP-D): every person's own model-provider
               credentials, User view only — an admin reaches it by switching
               to Member view. Renders nothing with no provider block. */}
-          {!adminView && <ModelConnectionsCard status={status} onChanged={load} />}
+          {!adminView && <ModelConnectionsCard status={modelStatus ?? status} onChanged={refreshModels} />}
           {/* #386, Q9: a personal connection. Renders nothing with no Azure
               DevOps row configured. */}
           <AdoConnectionCard status={status} onChanged={load} />

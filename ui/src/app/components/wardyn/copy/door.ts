@@ -25,7 +25,7 @@ export const CONNECTIONS = {
   COULD_NOT_CHECK: "Could not check",
   RECHECK: "Re-check",
   REVIEW_RECONNECT: "Review and reconnect",
-  NEVER_CONNECTED: (host: string) => `No connection is stored for this provider. Destination: ${host}.`,
+  NEVER_CONNECTED: (host: string, name: string) => `No connection is stored for ${name}. Destination: ${host}.`,
   DESTINATION_CHANGED: (host: string) =>
     `Your connection was removed because an admin changed this provider’s destination. Review ${host}, then connect again.`,
   KIND_CHANGED: (host: string) =>

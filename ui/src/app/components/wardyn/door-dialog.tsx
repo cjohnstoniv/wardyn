@@ -14,7 +14,6 @@
 //    (/model-providers/{id}/sign-in), framed as packet E draws it.
 //  · key — a typed key or token for a provider (/model-providers/{id}/credential).
 
-import { modelConnectionCause } from "../../lib/model-connection-cause";
 import * as React from "react";
 import { Loader2, Lock, TriangleAlert } from "lucide-react";
 
@@ -25,6 +24,7 @@ import type { HarnessLoginPaneHandle } from "../screens/settings/harness-login-p
 import { modelProviderCredentials } from "../../lib/api/model-provider-credentials";
 import { getErrorMessage } from "../../lib/format";
 import type { DoorTarget } from "../../lib/model-access";
+import { modelConnectionCause } from "../../lib/model-connection-cause";
 import type { SetupModelProvider, SetupStatus } from "../../lib/types";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
 import { CLAUDE_DOOR, CONNECTIONS, CRED_NOTICE, DOOR, KEY_DOOR, REMOVE_CONFIRM, WRITE_ONLY } from "./copy/door";

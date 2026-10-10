@@ -34,9 +34,9 @@
 // Run: cd ui && pnpm vitest run src/app/lib/types/wire-parity.test.ts
 
 import { describe, it, expect } from "vitest";
-import { CONNECTIONS } from "../../components/wardyn/copy/door";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { CONNECTIONS } from "../../components/wardyn/copy/door";
 
 function repoRoot(): string {
   let dir = resolve(process.cwd());

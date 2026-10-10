@@ -161,7 +161,7 @@ describe("provider strip connection causes", () => {
     const status = providerStatus([{ provider: gateway, defaultFor: ["claude-code"] }]);
     Object.assign(status.provider_access![0], { cause, new_destination: "new.example" });
     strip(status);
-    const line = cause === "never_connected" ? CONNECTIONS.NEVER_CONNECTED("new.example")
+    const line = cause === "never_connected" ? CONNECTIONS.NEVER_CONNECTED("new.example", gateway.name || gateway.id)
       : cause === "destination_changed" ? CONNECTIONS.DESTINATION_CHANGED("new.example") : CONNECTIONS.KIND_CHANGED("new.example");
     expect(screen.getByText(line)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: cause === "never_connected" ? CONNECTIONS.ADD_TOKEN : CONNECTIONS.REVIEW_RECONNECT })).toBeInTheDocument();

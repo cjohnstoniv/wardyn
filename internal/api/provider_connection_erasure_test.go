@@ -5,12 +5,13 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
+	"testing"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/erasure"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"net/http"
-	"testing"
 )
 
 func TestProviderCausePG_PersonErasureRemovesHistory(t *testing.T) {
