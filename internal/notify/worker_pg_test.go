@@ -138,9 +138,15 @@ func (h *harness) run(t *testing.T) uuid.UUID {
 // raise creates one approval through the store, so its outbox row comes from the real enqueue path.
 func (h *harness) raise(t *testing.T, runID uuid.UUID, scope, reason string) types.ApprovalRequest {
 	t.Helper()
+	// The outbox schedules from RequestedAt and claims against the database
+	// clock. Keep immediate-delivery fixtures in that same clock domain.
+	var requestedAt time.Time
+	if err := h.pool.QueryRow(context.Background(), `SELECT clock_timestamp()`).Scan(&requestedAt); err != nil {
+		t.Fatalf("read approval clock: %v", err)
+	}
 	a, err := store.NewPG(h.pool).CreateApproval(context.Background(), types.ApprovalRequest{
 		ID: uuid.New(), RunID: runID, Kind: types.ApprovalEgressDomain, RequestedScope: json.RawMessage(scope),
-		State: types.ApprovalPending, RequestedAt: time.Now().UTC(), Reason: reason,
+		State: types.ApprovalPending, RequestedAt: requestedAt, Reason: reason,
 	})
 	if err != nil {
 		t.Fatalf("raise: %v", err)
