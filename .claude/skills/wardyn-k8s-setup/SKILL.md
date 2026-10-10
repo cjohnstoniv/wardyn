@@ -60,13 +60,9 @@ setting to the doc that owns it — don't restate a default from memory.
    `deploy/kind/conformance-kind-config.yaml`): kind's bundled `kindnet` CNI
    does **not** enforce `NetworkPolicy`, so start kind with
    `networking.disableDefaultCNI: true` and install a real CNI yourself —
-   Calico is what CI pins (any enforcing CNI works the same way on a real
-   cluster):
-   ```sh
-   kind create cluster --config deploy/kind/conformance-kind-config.yaml
-   kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
-   kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
-   ```
+   Follow the CNI installation and rollout commands in the
+   [`conformance-k8s` job](../../../.github/workflows/ci.yml), which owns the
+   pinned version and timeout. Any enforcing CNI works on a real cluster.
    **The opt-out and its cost**: `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1`
    (helm: `env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL`) lets wardynd boot anyway
    on a CNI that doesn't enforce policy — logged loudly at construction, and
@@ -137,10 +133,12 @@ setting to the doc that owns it — don't restate a default from memory.
      (CSV shape, case-insensitive ASCII matching, `admin` wins over `user`,
      `security_admin` reachable only through the map, deny-by-default
      fallthrough, boot-time validation): [docs/OPERATIONS.md, "Who decides
-     who gets in](../../../docs/OPERATIONS.md#who-decides-who-gets-in-chart-vs-console-vs-idp)
+     who gets in"](../../../docs/OPERATIONS.md#who-decides-who-gets-in-chart-vs-console-vs-idp)
      and [docs/ENV.md](../../../docs/ENV.md#wardyn_oidc_role_map); a minimal
      values snippet lives in [the chart
      README](../../../deploy/helm/wardyn/README.md#multi-user-adminmember-rbac).
+   - **Legacy operator allowlist**: existing `WARDYN_OIDC_OPERATOR_EMAILS`
+     entries still work; see [docs/ENV.md](../../../docs/ENV.md#wardyn_oidc_operator_emails).
    - **The `email_verified` trap**: Entra ID tokens typically **omit
      `email_verified` entirely**. `WARDYN_OIDC_EMAIL_DOMAINS` (domain-
      restricted login) fails closed on that — it denies **every** login
@@ -219,7 +217,7 @@ setting to the doc that owns it — don't restate a default from memory.
 | Setup check `k8s_egress_containment` reads **Not enforcing** | The boot-time canary proved this cluster's CNI does not enforce `NetworkPolicy`, and the operator accepted that via `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` — every sandbox has unconfined egress. | Unset `env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` and install a NetworkPolicy-enforcing CNI (step 1) to restore real confinement. |
 | Runner never reaches `RUNNING` / pods stuck `Pending` | Often `k8s.runtimeClasses.CC2`/`.CC3` names a RuntimeClass that doesn't exist in the cluster yet, or the namespace lacks the Pod Security Standard level the substrate's pods need. | Confirm `kubectl get runtimeclass` lists the name you pinned; confirm the runs namespace isn't blocking the substrate's restricted `securityContext` (PSS `restricted` is what CI's own conformance namespace uses — [chart README, Kubernetes runner substrate](../../../deploy/helm/wardyn/README.md#kubernetes-runner-substrate-k8senabled)). |
 | wardynd crash-loops at boot with `unknown -runner "k8s" (want "none" or a registered substrate; the docker substrate requires a wardynd built with -tags docker)` | Misleading pre-fix headline (W27-S1-3) — ignore the `-tags docker` framing, it never applies here. The `k8s` substrate IS registered; its CONSTRUCTOR refused to start, most often the boot-time egress canary (`k8s: refusing to boot: ...`) or, on a non-chart install, a missing `k8s.proxyImage` (the chart refuses to render without one). | Read past the headline to the wrapped `-runner "k8s" failed to start: ...` cause; check the canary verdict (`k8s_egress_containment` rows above) and, on a non-chart install, confirm `k8s.proxyImage` is set. |
-| SSH connection refused | Either the gateway was never turned on (`WARDYN_SSH_LISTEN` unset — nothing generates a host key until it's on; `ssh.enabled` defaults off, [chart README, Values](../../../deploy/helm/wardyn/README.md#values)), or a client is dialing the wrong port/Service. | Set `ssh.enabled=true` plus `ssh.advertiseHost`; confirm `/healthz`'s `ssh.enabled` reads `true`; if SSH is split onto its own Service (LoadBalancer, etc. — see the chart README), confirm that Service's `targetPort` is `ssh`, matching the Deployment's named containerPort. |
+| SSH connection refused | Either the gateway was never turned on (`WARDYN_SSH_LISTEN` unset — nothing generates a host key until it's on; see [chart README, Values](../../../deploy/helm/wardyn/README.md#values)), or a client is dialing the wrong port/Service. | Set `ssh.enabled=true` plus `ssh.advertiseHost`; confirm `/healthz`'s `ssh.enabled` reads `true`; if SSH is split onto its own Service (LoadBalancer, etc. — see the chart README), confirm that Service's `targetPort` is `ssh`, matching the Deployment's named containerPort. |
 | Role mapping added on the People step, but the user's access didn't change | Role derivation runs once, at login, and is stamped into the session cookie — a console row change is never applied to an already-signed-in session. | Tell the person to sign out and back in. Their next login re-derives the role against the now-current merged map. |
-| Sign-in redirects with **"your sign-in is too old to verify this change"** while adding/removing a People-step mapping | The acting admin's own session snapshot (`groups`) is nil (a pre-0.6 cookie) or was truncated at the 2048-byte cap, so the server can't re-derive whether THEY currently hold admin from it — refused rather than risk a false lockout claim either way. | Sign out and back in to refresh the snapshot, then retry the write. |
-| `POST /access/mappings` refused: **"Email mappings are disabled on this install"** | The value contains `@` and `env.WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` is unset (`false` is the chart default) — the console steers Entra deployments to an App Role or `groups` key by default. | Map an App Role or `groups` value instead (preferred), or set `env.WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS=true` if this deployment genuinely has no usable claim besides email. |
+| Sign-in redirects with **"your sign-in is too old to verify this change"** while adding/removing a People-step mapping | The acting admin's own session snapshot (`groups`) is nil (a pre-0.6 cookie) or was truncated at the [cookie byte cap](../../../docs/OPERATIONS.md#who-decides-who-gets-in-chart-vs-console-vs-idp), so the server can't re-derive whether THEY currently hold admin from it — refused rather than risk a false lockout claim either way. | Sign out and back in to refresh the snapshot, then retry the write. |
+| `POST /access/mappings` refused: **"Email mappings are disabled on this install"** | The value contains `@` and `env.WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` is unset (see [docs/ENV.md](../../../docs/ENV.md#wardyn_oidc_allow_email_mappings)) — the console steers Entra deployments to an App Role or `groups` key by default. | Map an App Role or `groups` value instead (preferred), or set `env.WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS=true` if this deployment genuinely has no usable claim besides email. |
