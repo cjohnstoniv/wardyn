@@ -31,7 +31,7 @@ func (m *Manager) quarantineRun(ctx context.Context, a runnerwire.PendingAction,
 	// A terminal deferred receipt allows STATE/Replay for other runs while an
 	// old admitted call finishes. H3 must issue a fresh action after convergence.
 	if !m.mutationsDrained(a.RunID) {
-		return m.quarantineReceipt(a, "deferred")
+		return m.actionReceipt(a, "deferred")
 	}
 	m.mu.Unlock()
 	err := m.stopper.StopProxy(ctx, r.Ref)
@@ -41,15 +41,15 @@ func (m *Manager) quarantineRun(ctx context.Context, a runnerwire.PendingAction,
 	}
 	current := m.state.Runs[a.RunID]
 	if current.Ref != r.Ref || current.Generation != r.Generation || !m.mutationsDrained(a.RunID) {
-		return m.quarantineReceipt(a, "deferred")
+		return m.actionReceipt(a, "deferred")
 	}
 	at := m.now().UTC()
 	current.ProxyStoppedAt = &at
 	m.state.Runs[a.RunID] = current
-	return m.quarantineReceipt(a, "success")
+	return m.actionReceipt(a, "success")
 }
 
-func (m *Manager) quarantineReceipt(a runnerwire.PendingAction, outcome string) (runnerwire.ActionResult, error) {
+func (m *Manager) actionReceipt(a runnerwire.PendingAction, outcome string) (runnerwire.ActionResult, error) {
 	result := runnerwire.ActionResult{ID: a.ID, Outcome: outcome, ObservedAt: m.now().UTC()}
 	m.state.Actions[a.ID] = appliedAction{Action: a, Result: result}
 	return result, m.save()

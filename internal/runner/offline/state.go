@@ -17,6 +17,8 @@ import (
 )
 
 type localRun struct {
+	Retirement      *types.RunnerRetirement      `json:"retirement,omitempty"`
+	Retired         bool                         `json:"retired,omitempty"`
 	Containment     *types.RunnerMutationFailure `json:"containment,omitempty"`
 	LeaseAfter      time.Time                    `json:"lease_after,omitempty"`
 	Quarantine      *types.RunnerQuarantine      `json:"quarantine,omitempty"`
@@ -82,7 +84,10 @@ func (m *Manager) load() error {
 		if id == uuid.Nil || id != r.RunID || r.Lease.RunID != id || r.Ref != m.expectedRef(id) {
 			return errors.New("runner lifecycle run mismatch")
 		}
-		if r.Generation != uuid.Nil && r.Executions[r.Generation] != "" && r.ExecID == "" {
+		if err := validateRetirementState(r); err != nil {
+			return err
+		}
+		if r.Retirement == nil && r.Generation != uuid.Nil && r.Executions[r.Generation] != "" && r.ExecID == "" {
 			// A previous daemon may have executed before losing its durable result.
 			// Fresh leases cannot authorize more work or discharge this uncertainty.
 			if r.MutationFailure == nil {
