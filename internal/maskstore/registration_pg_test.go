@@ -115,3 +115,49 @@ func TestPG_MaskErasureRegistrationRefusesMissingCacheValue(t *testing.T) {
 		t.Fatalf("unchanged write restored %d swept values", n)
 	}
 }
+
+// A full reload applies a snapshot fetched earlier; a value this replica
+// committed after that snapshot must stay masked, and a value the table really
+// lost must go.
+func TestPG_FullReloadKeepsAValueCommittedAfterItsSnapshot(t *testing.T) {
+	pool, keys := erasurePG(t)
+	reg := secretmask.NewRegistry()
+	st := New(pool, keys, reg)
+	ctx := t.Context()
+	runID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_runs (id, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target)
+		VALUES ($1, 'sub', 'claude-code', 'a/b', 'CC2', 'RUNNING', 'spiffe://x/' || $2, 'docker')`, runID, runID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO run_mask_manifest (run_id, owner) VALUES ($1, 'alice')`, runID); err != nil {
+		t.Fatal(err)
+	}
+	const old, newer = "committed-before-the-snapshot", "committed-after-the-snapshot"
+	if err := reg.Add(runID, []byte(old)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Fresh(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	// The snapshot is taken after the first value's row was pruned.
+	if _, err := pool.Exec(ctx, `DELETE FROM mask_values WHERE run_id = $1`, runID); err != nil {
+		t.Fatal(err)
+	}
+	top, _, rows, err := st.fetch(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Add(runID, []byte(newer)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.apply(ctx, rows, top, true); err != nil {
+		t.Fatal(err)
+	}
+	masked := func(v string) bool { return !bytes.Contains(reg.Masker(runID).Mask([]byte(v)), []byte(v)) }
+	if !masked(newer) {
+		t.Fatal("a value committed after the snapshot was dropped by the full reload")
+	}
+	if masked(old) {
+		t.Fatal("a value the snapshot no longer holds is still masked after a full reload")
+	}
+}

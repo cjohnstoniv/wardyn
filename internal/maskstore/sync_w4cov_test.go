@@ -77,7 +77,7 @@ func TestW4CovApplyOpensAnUnknownRowIntoTheRegistry(t *testing.T) {
 	globalRow := f.sealedRow(t, w4CovRowB, bucketGlobal, "cred", nil, "global-secret-value", 6)
 	globalRow.until = &until
 
-	if err := f.s.apply(context.Background(), []row{runRow, globalRow}, false); err != nil {
+	if err := f.s.apply(context.Background(), []row{runRow, globalRow}, 100, false); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	snap := f.snapshot()
@@ -108,7 +108,7 @@ func TestW4CovApplyKeepsARetiredGlobalMaskedButNotCurrent(t *testing.T) {
 	r := f.sealedRow(t, w4CovRowB, bucketGlobal, "cred", nil, "retired-secret-value", 3)
 	retired := w4CovT0
 	r.retiredAt = &retired
-	if err := f.s.apply(context.Background(), []row{r}, false); err != nil {
+	if err := f.s.apply(context.Background(), []row{r}, 100, false); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if !w4CovContains(f.snapshot(), "retired-secret-value") {
@@ -133,7 +133,7 @@ func TestW4CovApplyUpdatesAKnownRowWithoutOpeningIt(t *testing.T) {
 	// No sealed blob and no version: opening it would skip the row, so an
 	// update that still lands proves the known ref was used.
 	update := row{id: w4CovRowB, bucket: bucketGlobal, owner: w4CovOwner, name: "cred", until: &until, gen: 9}
-	if err := f.s.apply(context.Background(), []row{update}, false); err != nil {
+	if err := f.s.apply(context.Background(), []row{update}, 100, false); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	rf := f.ref(w4CovRowB)
@@ -183,7 +183,7 @@ func TestW4CovApplyTombstoneOfAKnownRow(t *testing.T) {
 			}
 
 			tomb := row{id: w4CovRowC, bucket: rf.bucket, tombstone: true, retiredAt: c.retiredAt, gen: 12}
-			if err := f.s.apply(context.Background(), []row{tomb}, false); err != nil {
+			if err := f.s.apply(context.Background(), []row{tomb}, 100, false); err != nil {
 				t.Fatalf("apply: %v", err)
 			}
 			if f.ref(w4CovRowC) != nil {
@@ -203,7 +203,7 @@ func TestW4CovApplyTombstoneOfAKnownRow(t *testing.T) {
 func TestW4CovApplyTombstoneOfAnUnknownRowIsANoOp(t *testing.T) {
 	f := w4CovNewFixture(t)
 	tomb := row{id: w4CovRowC, bucket: bucketGlobal, tombstone: true, gen: 3}
-	if err := f.s.apply(context.Background(), []row{tomb}, false); err != nil {
+	if err := f.s.apply(context.Background(), []row{tomb}, 100, false); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if len(f.keys.lookups) != 0 || len(f.snapshot()) != 0 || f.ref(w4CovRowC) != nil {
@@ -243,7 +243,7 @@ func TestW4CovApplySkipsWhatCanNeverOpen(t *testing.T) {
 			f := w4CovNewFixture(t)
 			r := f.sealedRow(t, w4CovRowA, c.bucket, "cred", &run, "unopenable-secret-value", 4)
 			c.mutate(f, &r)
-			if err := f.s.apply(context.Background(), []row{r}, false); err != nil {
+			if err := f.s.apply(context.Background(), []row{r}, 100, false); err != nil {
 				t.Fatalf("an unopenable row must be skipped, not fail the read: %v", err)
 			}
 			if f.ref(w4CovRowA) != nil || len(f.snapshot()) != 0 {
@@ -260,7 +260,7 @@ func TestW4CovApplyAbortsOnATransientKeyFailureAndAppliesNothingAfter(t *testing
 	first := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
 	second := f.sealedRow(t, w4CovRowB, bucketGlobal, "cred", nil, "second-secret-value", 2)
 
-	err := f.s.apply(context.Background(), []row{first, second}, true)
+	err := f.s.apply(context.Background(), []row{first, second}, 100, true)
 	if !errors.Is(err, injected) {
 		t.Fatalf("apply = %v, want the injected key error wrapped", err)
 	}
@@ -280,7 +280,7 @@ func TestW4CovApplyAbortsWhenTheKeyServiceRefusesThisProcess(t *testing.T) {
 	f.keys.errs[w4CovOwner] = injected
 	live := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
 
-	err := f.s.apply(context.Background(), []row{live}, true)
+	err := f.s.apply(context.Background(), []row{live}, 100, true)
 	if !errors.Is(err, injected) {
 		t.Fatalf("apply = %v, want the injected key error wrapped", err)
 	}
@@ -297,7 +297,7 @@ func TestW4CovApplyAbortsWhenTheKeyServiceDoesNotHoldTheKey(t *testing.T) {
 	f.keys.errs[w4CovOwner] = injected
 	live := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
 
-	err := f.s.apply(context.Background(), []row{live}, true)
+	err := f.s.apply(context.Background(), []row{live}, 100, true)
 	if !errors.Is(err, injected) {
 		t.Fatalf("apply = %v, want the injected key error wrapped", err)
 	}
@@ -315,7 +315,7 @@ func TestW4CovApplyAbortsWhenTheKeyServiceRefusesTheWrap(t *testing.T) {
 	f.keys.errs[w4CovOwner] = injected
 	live := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
 
-	err := f.s.apply(context.Background(), []row{live}, true)
+	err := f.s.apply(context.Background(), []row{live}, 100, true)
 	if !errors.Is(err, injected) {
 		t.Fatalf("apply = %v, want the injected key error wrapped", err)
 	}
@@ -333,7 +333,7 @@ func TestW4CovApplyAbortsOnAnUnclassifiedKeyServiceAnswer(t *testing.T) {
 	f.keys.errs[w4CovOwner] = injected
 	live := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
 
-	err := f.s.apply(context.Background(), []row{live}, true)
+	err := f.s.apply(context.Background(), []row{live}, 100, true)
 	if !errors.Is(err, injected) {
 		t.Fatalf("apply = %v, want the injected key error wrapped", err)
 	}
@@ -350,7 +350,7 @@ func TestW4CovApplySkipsARowWhoseKeyDoesNotUnwrap(t *testing.T) {
 	f.keys.errs[w4CovOwner] = fmt.Errorf("subjectkey: generation 1 does not unwrap: local KEK: %w", kek.ErrCorrupt)
 	bad := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
 	bad.retiredAt = &w4CovRetired
-	if err := f.s.apply(context.Background(), []row{bad}, true); err != nil {
+	if err := f.s.apply(context.Background(), []row{bad}, 100, true); err != nil {
 		t.Fatalf("a permanent key failure must not abort the read: %v", err)
 	}
 	if f.ref(w4CovRowA) != nil || len(f.snapshot()) != 0 {
@@ -367,7 +367,7 @@ func TestW4CovFullApplyDropsWhatTheTableNoLongerHas(t *testing.T) {
 			f.s.note(&ref{id: w4CovRowC, gen: 1, bucket: bucketGlobal, owner: w4CovOwner, name: "cred", value: stale, current: true})
 			live := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "live-secret-value", 2)
 
-			if err := f.s.apply(context.Background(), []row{live}, full); err != nil {
+			if err := f.s.apply(context.Background(), []row{live}, 100, full); err != nil {
 				t.Fatalf("apply: %v", err)
 			}
 			if !w4CovContains(f.snapshot(), "live-secret-value") {
