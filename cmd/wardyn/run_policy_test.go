@@ -103,6 +103,8 @@ func TestRunPolicy_HeaderLines(t *testing.T) {
 	view.Redacted = true
 	view.Changes = append(view.Changes, sdk.RunPolicyChange{
 		Cause: "limits", Field: "allowed_domains", Removed: []string{"pastebin.com"}, Detail: []string{"Removed pastebin.com."},
+	}, sdk.RunPolicyChange{
+		Cause: "component", Field: "allowed_domains", Added: []string{"api.stripe.com"},
 	})
 	t.Run("the owner", func(t *testing.T) {
 		out, err := execRunPolicy(t, policyViewServer(t, view, "alice", "alice"), view.RunID.String())
@@ -114,6 +116,7 @@ func TestRunPolicy_HeaderLines(t *testing.T) {
 			`# Started from the saved policy "ci".`,
 			"# Changed when the run started\n",
 			"# Added for the workspace: registry.npmjs.org\n",
+			"# Added for an attached component: api.stripe.com\n",
 			"# Limited by the walled governance profile: corp.example\n",
 			"# Blocked when the run was restarted on " + restartedOn + ": paste.example\n",
 			"# Narrowed to fit your limits: pastebin.com\n",

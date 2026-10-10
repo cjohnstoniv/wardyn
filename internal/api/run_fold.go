@@ -26,11 +26,6 @@ const (
 	foldAll       = foldCreate | foldPreflight | foldPreview
 )
 
-// foldRecorder is the per-layer provenance hook: every step receives one, and
-// it records nothing yet. A-L1b fills it with what each step contributed to the
-// resolved spec, so the three doors can report provenance from the one fold.
-type foldRecorder struct{}
-
 // runFold is one request's trip through runFoldSteps: the inputs the door's
 // prologue decided, and what each step resolved for the steps after it and for
 // the door's own edge (create's persistence and audit, Review's grading, the
@@ -68,6 +63,7 @@ type runFold struct {
 	bedrockGrade      bedrockCredGrade
 	adoNarrowed       string
 	fitWarnings       []string
+	prov              []provenanceRow
 }
 
 // runFoldStep is one gate or fold of the shared sequence. run writes its own
@@ -134,5 +130,6 @@ func (s *Server) foldRunRequest(w http.ResponseWriter, r *http.Request, mode fol
 			return runFold{}, false
 		}
 	}
+	f.prov = rec.result()
 	return f, true
 }

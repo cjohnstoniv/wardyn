@@ -34,6 +34,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- Policy preview and preflight return per-entry provenance: the source that added, clamped or narrowed
+  each resolved policy value. Saved-policy values removed by a ceiling remain hidden.
+
 - **Operator-declared egress baseline.** `PUT /governance/egress-baseline` (security admin or admin; held
   for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`) sets exact `baseline_hosts` and which
   `internal_hosts` entries are baseline. Both extend the built-in public set that the egress grade and the
@@ -53,6 +56,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `member` entries and removed `WARDYN_MEMBER_*` variables before the upgrade (#623).
 
 ### Changed
+
+- Run detail and `wardyn run policy` identify organisation-component egress as
+  "Added for an attached component"; direct GitHub clone hosts are attributed to source control.
 
 - `PUT /site-config` carries the egress baseline and the `internal_hosts` baseline marks forward and refuses a
   change to either (400 `site_config_egress_via_own_route`); an unchanged round trip, or one from an older

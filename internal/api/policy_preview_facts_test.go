@@ -50,8 +50,18 @@ func TestPolicyPreviewSafeWarnings(t *testing.T) {
 	w := doSSO(t, h.srv, http.MethodPost, policyPreviewPath, ssoSession(t, "member", "m@example.com", oidc.RoleUser),
 		`{"agent":"claude-code","inline_policy":{"min_confinement_class":"CC1","allowed_domains":["PRIVATE-HOST"],"workspace_mounts":[{"source":"/PRIVATE-PATH","target":"/home/agent/x"}],"eligible_grants":[{"kind":"git_pat","scope":{"host":"PRIVATE-HOST","secret_name":"PRIVATE-SECRET"}}]}}`)
 	result := previewResult(t, w)
-	if len(result.Warnings) == 0 || strings.Contains(w.Body.String(), "PRIVATE-") {
+	// Provenance may name what the caller typed and the ceiling removed (the host);
+	// no other part of the body may, and neither may a secret or a host path anywhere.
+	provenance := result.Provenance
+	result.Provenance = nil
+	if len(result.Warnings) == 0 || strings.Contains(string(mustJSON(result)), "PRIVATE-") ||
+		strings.Contains(w.Body.String(), "PRIVATE-SECRET") || strings.Contains(w.Body.String(), "PRIVATE-PATH") {
 		t.Fatalf("post-clamp warnings leaked: %s", w.Body.String())
+	}
+	for _, row := range provenance {
+		if strings.Contains(row.Value, "PRIVATE-") && (row.Effect != provEffectClamped || row.Source.Name != "custom") {
+			t.Fatalf("provenance row names a private value it did not clamp from the caller's own policy: %+v", row)
+		}
 	}
 }
 

@@ -362,6 +362,30 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsValues)).toEqual(new Set(goValues));
   });
 
+  // Provenance rows (A-S1): the same rows ride the preview and Review.
+  it.each([
+    ["provenanceRow", "ProvenanceEntry"],
+    ["provSource", "ProvenanceSource"],
+  ])("%s mirrors %s", (goName, tsName) => {
+    const go = readFileSync(join(root, "internal/api/run_fold_provenance.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/policy-preview.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goJSONTags(go, goName)));
+  });
+
+  it("provenance source kinds and effects are the Go closed sets", () => {
+    const go = readFileSync(join(root, "internal/api/run_fold_provenance.go"), "utf8");
+    const ts = stripComments(readFileSync(join(root, "ui/src/app/lib/types/policy-preview.ts"), "utf8"));
+    const consts = (prefix: string) =>
+      new Set([...go.matchAll(new RegExp(`\\b${prefix}\\w+\\s+(?:provEffect\\s+)?=\\s*"([a-z_]+)"`, "g"))].map((m) => m[1]));
+    const union = (body: string) => new Set([...body.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]));
+    const kind = /kind: ([^;]+);/.exec(tsInterfaceBody(ts, "ProvenanceSource"))![1];
+    const effect = /effect: ([^;]+);/.exec(tsInterfaceBody(ts, "ProvenanceEntry"))![1];
+    expect(consts("provKind").size).toBe(6);
+    expect(consts("provEffect").size).toBe(4);
+    expect(union(kind)).toEqual(consts("provKind"));
+    expect(union(effect)).toEqual(consts("provEffect"));
+  });
+
   // Components (#1914). The stored shapes and their SDK/server twins, then the
   // facts both dry-run doors return. ComponentSaved embeds Component in Go, so
   // it is pinned separately below, as ModelProvidersRead is.

@@ -62,6 +62,7 @@ export const CHANGE_HEADING = {
   limitsOther: (person: string) => `Narrowed to fit the limits set for ${person}`, // S-14b
   workspace: "Added for the workspace", // S-15
   source_control: "Added so the run can reach its code", // S-16
+  component: "Added for an attached component",
   git_broker: "Routed through Wardyn's GitHub connection", // S-17
   model_access: "Added so the agent can reach its model", // S-18
   mirror: "Switched to your organization's package mirror", // S-19

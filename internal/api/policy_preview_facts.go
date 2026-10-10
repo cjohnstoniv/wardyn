@@ -28,6 +28,8 @@ type policyPreviewResponse struct {
 	// Components is what the draft is given access to (componentFacts): absent
 	// for a draft with no repository on a Git provider and no component.
 	Components []componentFact `json:"components,omitempty"`
+	// Provenance says why each entry of the spec is there (runFold.prov); never null.
+	Provenance []provenanceRow `json:"provenance"`
 }
 
 type policyPreviewPending string
@@ -75,6 +77,7 @@ func policyPreviewFacts(req createRunRequest, spec types.RunPolicySpec, source p
 		Warnings: previewSafeWarnings(warnings), Pending: previewPending(req, choice),
 		RepositoryAccess: previewRepositoryAccess(req, out, site),
 		Components:       componentFacts(req, spec, site, comps, nil, baseline),
+		Provenance:       []provenanceRow{},
 	}
 }
 

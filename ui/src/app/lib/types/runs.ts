@@ -10,6 +10,7 @@
 import type { AutonomyLevel, AutonomyResolution, RunLimits } from "../api/governance";
 import type { PolicyRef } from "../api/health";
 import type { ComponentFact } from "./components";
+import type { ProvenanceEntry } from "./policy-preview";
 import type { RunPolicySpec } from "./policy";
 import type { SCMAccess } from "./setup";
 
@@ -403,6 +404,7 @@ export interface RunPolicySource {
 export type RunPolicyCause =
   | "workspace"
   | "source_control"
+  | "component"
   | "mirror"
   | "model_access"
   | "git_broker"
@@ -750,6 +752,9 @@ export interface PreflightResult {
   // The preview's rows plus the credential verdicts only this door reads.
   // Absent for a run with no repository on a Git provider and no component.
   components?: ComponentFact[];
+  // Why each entry of the resolved spec is there; the policy preview returns the same rows
+  // for the same request. Absent on an older server.
+  provenance?: ProvenanceEntry[];
 }
 
 // Where a run's MODEL credential lands (internal/api.modelCredentialResidency).
