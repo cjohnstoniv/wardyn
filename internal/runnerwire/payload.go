@@ -180,6 +180,7 @@ const (
 	ResetRefused    uint32 = 3
 	ResetInternal   uint32 = 4
 	ResetNoSuchPeer uint32 = 5
+	ResetCapacity   uint32 = 6
 )
 
 // Fixed-width payloads: WINDOW (u32 increment), RESET (u32 code), ACK (u64

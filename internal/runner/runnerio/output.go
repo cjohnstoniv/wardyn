@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -21,11 +22,26 @@ func (s *Server) sendOutput(peer *runnerwire.Peer, id uuid.UUID, b *outputBuffer
 	offset := b.state.Ack
 	b.mu.Unlock()
 	go func() {
-		st, err := peer.Open(ctx, runnerwire.Open{Kind: runnerwire.KindOutput, Target: id.String(), Offset: offset})
-		if err != nil {
-			return
+		delay := 50 * time.Millisecond
+		for {
+			st, err := peer.Open(ctx, runnerwire.Open{Kind: runnerwire.KindOutput, Target: id.String(), Offset: offset})
+			if err == nil {
+				s.copyOutput(ctx, st, b, offset)
+				return
+			}
+			var reset *runnerwire.ResetError
+			if !errors.As(err, &reset) || reset.Code != runnerwire.ResetCapacity {
+				return
+			}
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			delay = min(2*delay, time.Second)
 		}
-		s.copyOutput(ctx, st, b, offset)
 	}()
 }
 
@@ -75,7 +91,10 @@ func (s *Server) outputAck(raw json.RawMessage) error {
 	if b == nil {
 		return runner.ErrOutputUnrecoverable
 	}
-	return b.ack(args.Offset)
+	if err := b.ack(args.Offset); err != nil {
+		return runnerwire.Refuse("output acknowledgment failed: %v", err)
+	}
+	return nil
 }
 
 func (s *Server) recoverOutput(ctx context.Context, peer *runnerwire.Peer, id uint32, raw json.RawMessage) (any, error) {

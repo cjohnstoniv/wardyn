@@ -51,6 +51,10 @@ func (p *Peer) newStream(id uint32, kind string) *Stream {
 func (s *Stream) ID() uint32   { return s.id }
 func (s *Stream) Kind() string { return s.kind }
 
+// Context ends on reset or connection loss. Graceful half-closes leave it live
+// so a consumer can acknowledge its final buffered bytes.
+func (s *Stream) Context() context.Context { return s.ctx }
+
 // Done closes after a reset or both half-closes. A graceful close leaves any
 // buffered bytes readable; Done alone does not mean the reader has drained them.
 func (s *Stream) Done() <-chan struct{} { return s.done }

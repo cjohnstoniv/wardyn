@@ -473,11 +473,16 @@ func (p *Peer) onOpen(f Frame) error {
 		p.mu.Unlock()
 		return fmt.Errorf("%w: stream %d already open", ErrBadFrame, f.Stream)
 	}
-	// A stream parked for a call that is not in flight would never be claimed,
-	// and the connection holds only MaxStreams: refuse both.
-	if (o.Call != 0 && p.calls[o.Call] == nil) || len(p.streams)+len(p.parked) >= MaxStreams {
+	// A missing call is a permanent refusal; capacity can clear while this
+	// authenticated connection remains live, so output may retry it.
+	if o.Call != 0 && p.calls[o.Call] == nil {
 		p.mu.Unlock()
 		go p.send(p.ctx, Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetRefused)}) //nolint:errcheck // a failed RESET is the link going down
+		return nil
+	}
+	if len(p.streams)+len(p.parked) >= MaxStreams {
+		p.mu.Unlock()
+		go p.send(p.ctx, Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetCapacity)}) //nolint:errcheck // a failed RESET is the link going down
 		return nil
 	}
 	s := p.newStream(f.Stream, o.Kind)

@@ -182,8 +182,8 @@ func TestMaxStreamsRefusesTheNextOpen(t *testing.T) {
 		r.write(t, Frame{Type: TypeOpen, Stream: uint32(2*i + 1), Payload: open})
 	}
 	rst := r.readType(t, TypeReset)
-	if code, _ := DecodeReset(rst.Payload); rst.Stream != uint32(2*MaxStreams+1) || code != ResetRefused {
-		t.Fatalf("RESET = stream %d code %d, want stream %d refused", rst.Stream, code, 2*MaxStreams+1)
+	if code, _ := DecodeReset(rst.Payload); rst.Stream != uint32(2*MaxStreams+1) || code != ResetCapacity {
+		t.Fatalf("RESET = stream %d code %d, want stream %d capacity", rst.Stream, code, 2*MaxStreams+1)
 	}
 	r.p.mu.Lock()
 	n := len(r.p.streams) + len(r.p.parked)

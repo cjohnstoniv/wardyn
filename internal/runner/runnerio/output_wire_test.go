@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -32,6 +33,26 @@ func (c *outputCapture) BeginDrain()        {}
 func (c *outputCapture) EndDrain(err error) { c.once.Do(func() { c.err = err; close(c.done) }) }
 
 func TestOutputLostAcknowledgmentReplaysWithoutDuplicateBytes(t *testing.T) {
+	for _, mode := range []string{"reconnect", "live", "capacity", "permanent"} {
+		t.Run(mode, func(t *testing.T) { testOutputReplay(t, mode) })
+	}
+}
+
+type capacityOutputHandler struct {
+	sub      *remote.Substrate
+	attempts atomic.Int32
+}
+
+func (h *capacityOutputHandler) HandleEvent(ev runnerwire.Event) { h.sub.HandleEvent(ev) }
+func (h *capacityOutputHandler) HandleOpen(st *runnerwire.Stream, o runnerwire.Open) error {
+	if h.attempts.Add(1) == 1 {
+		_ = st.Reset(runnerwire.ResetCapacity)
+		return errors.New("injected stream capacity refusal")
+	}
+	return h.sub.HandleOpen(st, o)
+}
+
+func testOutputReplay(t *testing.T, mode string) {
 	fake := runnertest.NewFake()
 	server, err := New(fake, "laptop", t.TempDir())
 	if err != nil {
@@ -39,18 +60,29 @@ func TestOutputLostAcknowledgmentReplaysWithoutDuplicateBytes(t *testing.T) {
 	}
 	link := &remote.Link{}
 	sub := remote.New("laptop", link, remote.Options{})
+	capacity := &capacityOutputHandler{sub: sub}
+	if mode == "capacity" {
+		link.SetHandler(capacity)
+	}
 	caps, _ := json.Marshal(runnerwire.Caps{Support: fake.Support})
 	sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: caps})
 	var failed atomic.Bool
+	var ackCalls atomic.Int32
 	lost := make(chan struct{}, 1)
 	connect := func() *runnerwire.Peer {
 		org, run := runnerwire.Loopback()
 		op := link.Attach(t.Context(), org)
 		var rp *runnerwire.Peer
 		rp = runnerwire.NewPeer(run, runnerwire.PeerConfig{OnCall: func(ctx context.Context, id uint32, method string, raw json.RawMessage) (any, error) {
-			if method == runnerwire.MethodOutputAck && !failed.Swap(true) {
-				lost <- struct{}{}
-				return nil, runner.ErrRunnerOffline
+			if method == runnerwire.MethodOutputAck {
+				ackCalls.Add(1)
+				if mode == "permanent" {
+					return nil, runnerwire.Refuse("output disk is stopped")
+				}
+				if !failed.Swap(true) {
+					lost <- struct{}{}
+					return nil, runner.ErrRunnerOffline
+				}
 			}
 			if method != runnerwire.MethodCreateSandbox {
 				return server.Call(ctx, rp, id, method, raw)
@@ -90,18 +122,34 @@ func TestOutputLostAcknowledgmentReplaysWithoutDuplicateBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-lost:
-	case <-ctx.Done():
-		t.Fatal("output was never accepted before ACK loss")
+	if mode != "permanent" {
+		select {
+		case <-lost:
+		case <-ctx.Done():
+			t.Fatal("output was never accepted before ACK loss")
+		}
 	}
-	first.Close()
-	server.Offline(first)
-	connect()
+	if mode == "reconnect" {
+		first.Close()
+		server.Offline(first)
+		connect()
+	}
 	select {
 	case <-capture.done:
 	case <-ctx.Done():
 		t.Fatal("reconnected output never completed")
+	}
+	if mode == "permanent" {
+		if capture.err == nil || ackCalls.Load() != 1 {
+			t.Fatalf("permanent ACK failure err=%v attempts=%d", capture.err, ackCalls.Load())
+		}
+		return
+	}
+	if mode != "reconnect" && !first.Online() {
+		t.Fatal("output retry disconnected a live peer")
+	}
+	if mode == "capacity" && capacity.attempts.Load() != 2 {
+		t.Fatalf("open attempts=%d", capacity.attempts.Load())
 	}
 	if capture.err != nil {
 		t.Fatal(capture.err)
