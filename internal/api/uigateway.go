@@ -382,7 +382,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	sess := uiSession{
 		Run: runID, App: declared.Name, Port: declared.Port,
 		Principal: ta.principal, Role: ta.role, Email: ta.email,
-		Expires: expires.Unix(), IssuedAt: now.Unix(), AuthorizedAt: ta.authorizedAt.Unix(), Via: ta.via,
+		Expires: expires.Unix(), IssuedAt: now.Unix(), AuthorizedAt: ta.authorizedAt.Unix(), RevSeq: ta.revSeq, Via: ta.via,
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     uiCookieName,

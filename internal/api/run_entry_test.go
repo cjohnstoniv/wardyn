@@ -164,7 +164,7 @@ func TestEntry_PortalOfASuperAdminCannotMintForAnotherRun(t *testing.T) {
 func TestEntry_AttachTicketConsume(t *testing.T) {
 	srv, run, rec, _ := entryServer(t, false)
 	attach := func(srv *Server, run types.AgentRun, principal, role string) (int, string) {
-		tok, err := mintAttachTicket(context.Background(), srv.cfg.Store, run.ID, types.ActorHuman, principal, role, time.Now())
+		tok, err := mintAttachTicket(context.Background(), srv.cfg.Store, run.ID, types.ActorHuman, principal, role, oidc.Issue{At: time.Now()})
 		if err != nil {
 			t.Fatal(err)
 		}

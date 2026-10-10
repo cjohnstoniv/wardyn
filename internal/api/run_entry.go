@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -100,7 +101,7 @@ func (s *Server) redeemAttachTicket(ctx context.Context, tok string, runID uuid.
 		return ticketActor{}, verdictInvalid, nil
 	}
 	if s.cfg.SessionRevocations != nil {
-		revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(ctx, ta.principal, ta.email, ta.authorizedAt)
+		revoked, err := oidc.IsRevoked(ctx, s.cfg.SessionRevocations, ta.principal, ta.email, oidc.Issue{At: ta.authorizedAt, Seq: ta.revSeq})
 		if err != nil {
 			slog.ErrorContext(ctx, "wardynd: attach ticket revocation lookup failed", "run_id", runID, "err", err)
 			return ta, verdictRevocationUnavailable, nil

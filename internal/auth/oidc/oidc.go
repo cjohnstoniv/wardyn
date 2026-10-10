@@ -187,6 +187,11 @@ type Session struct {
 	// A suspension raises the epoch, so a cookie minted before it is refused at its next request, and
 	// stays refused after a reactivation. omitempty: a cookie without it is epoch 0.
 	AuthorityEpoch int64 `json:"ae,omitempty"`
+	// RevocationSeq is the revocation sequence read just before the sign-in's identity was admitted
+	// (RevocationOrder). A revocation cut with a greater sequence ends this session, whatever the
+	// clock says. omitempty: a cookie without it was issued by a replica that predates it and is
+	// compared on IssuedAt, as before.
+	RevocationSeq int64 `json:"rseq,omitempty"`
 	// Groups is the LOGIN-TIME SNAPSHOT of the human's group identity (normalized union of the ID
 	// token's "roles"/"groups" claims), against which a `group`-subject grant matches. Nothing
 	// refreshes it — a group added at the IdP reaches Wardyn on the next login. NO omitempty,
@@ -504,7 +509,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 				}
 				// A revoked session must stop working on its VERY NEXT request, not linger until Expiry.
 				if a.cfg.Revocations != nil {
-					status, rerr := CheckSession(r.Context(), a.cfg.Revocations, sess.Sub, sess.Email, sess.IssuedAt, sess.AuthorityEpoch)
+					status, rerr := CheckSession(r.Context(), a.cfg.Revocations, sess.Sub, sess.Email, Issue{At: sess.IssuedAt, Seq: sess.RevocationSeq}, sess.AuthorityEpoch)
 					if rerr != nil {
 						// Fail CLOSED: a store error must never look like "not revoked" on a security gate.
 						next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), "session_revocation_unavailable")))

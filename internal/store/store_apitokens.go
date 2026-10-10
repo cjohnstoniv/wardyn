@@ -45,10 +45,10 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 	// Freeze the admission timestamp on the DB clock inside the guard. Later
 	// pool/row waits cannot move a mint admitted before a revoke past its cutoff.
 	const q = `
-		INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, expires_at, minted_by, identity_stamped_at)
+		INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, expires_at, minted_by, identity_stamped_at, rev_seq)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
 		        CASE WHEN $11::bigint IS NULL THEN NULL ELSE $10::timestamptz + $11::bigint * interval '1 microsecond' END,
-		        NULLIF($12, ''), now())
+		        NULLIF($12, ''), now(), $13)
 		RETURNING ` + apiTokenCols
 	var out types.APIToken
 	err = s.guarded(ctx, func(qr queryRower) (e error) {
@@ -70,7 +70,7 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 			lifetime = &us
 		}
 		out, e = scanAPIToken(qr.QueryRow(ctx, q,
-			t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), createdAt, lifetime, t.MintedBy))
+			t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), createdAt, lifetime, t.MintedBy, t.RevSeq))
 		return e
 	})
 	if err != nil {
@@ -237,13 +237,13 @@ const apiTokenLive = `revoked_at IS NULL AND (expires_at IS NULL OR expires_at >
 // The INSERT list stays spelled out separately: it names token_sha256 (never
 // read back) and omits last_used_at/revoked_at (never inserted) — deriving
 // one list from the other would hide that difference.
-const apiTokenCols = `id, principal, email, role, user_type, groups, groups_truncated, name, created_at, last_used_at, revoked_at, expires_at, COALESCE(minted_by, ''), identity_stamped_at`
+const apiTokenCols = `id, principal, email, role, user_type, groups, groups_truncated, name, created_at, last_used_at, revoked_at, expires_at, COALESCE(minted_by, ''), identity_stamped_at, rev_seq`
 
 func scanAPIToken(row pgx.Row) (types.APIToken, error) {
 	var t types.APIToken
 	var groups []byte
 	err := row.Scan(&t.ID, &t.Principal, &t.Email, &t.Role, &t.UserType, &groups, &t.GroupsTruncated, &t.Name,
-		&t.CreatedAt, &t.LastUsedAt, &t.RevokedAt, &t.ExpiresAt, &t.MintedBy, &t.IdentityStampedAt)
+		&t.CreatedAt, &t.LastUsedAt, &t.RevokedAt, &t.ExpiresAt, &t.MintedBy, &t.IdentityStampedAt, &t.RevSeq)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.APIToken{}, ErrNotFound
 	}

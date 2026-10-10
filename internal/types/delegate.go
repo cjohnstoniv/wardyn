@@ -44,6 +44,9 @@ type DelegatedToken struct {
 	GroupsTruncated bool      `json:"groups_truncated"`
 	CreatedAt       time.Time `json:"created_at"`
 	ExpiresAt       time.Time `json:"expires_at"`
+	// RevSeq is the revocation sequence read when the token was minted; 0 for a token minted before it
+	// existed, which a revocation cutoff orders on CreatedAt. Never on the wire.
+	RevSeq int64 `json:"-"`
 }
 
 // DelegationVia names the portal and the delegated token an act was performed

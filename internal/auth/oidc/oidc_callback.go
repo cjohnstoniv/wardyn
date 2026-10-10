@@ -275,6 +275,10 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	sess, denied := a.admit(r, idToken.Subject, cc, reserved, onDenied)
 	var epoch int64
 	if denied == "" {
+		// Before the identity is issued: a cut made from here on, an unbind included, ends this session.
+		sess.RevocationSeq, denied = a.issueRevocationSeq(r)
+	}
+	if denied == "" {
 		epoch, denied = a.issueIdentity(r, a.loginFacts(sess, cc), onDenied)
 	}
 	if denied != "" {

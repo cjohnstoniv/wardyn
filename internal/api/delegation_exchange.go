@@ -108,6 +108,15 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		deny(http.StatusBadRequest, "invalid_grant", "", denied)
 		return
 	}
+	// The token's revocation sequence is read before the person's cutoff is checked, so a cut that lands
+	// after the check still ends the token.
+	issue, err := s.mintIssue(r.Context(), sess.Sub, authorizedAt)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "api: revocation order lookup failed; token exchange refused", "error", err)
+		s.metrics.authStoreErrorInc()
+		writeOAuthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "session revocation lookup failed")
+		return
+	}
 	if s.cfg.SessionRevocations != nil {
 		revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), sess.Sub, sess.Email, sess.IssuedAt)
 		if err != nil {
@@ -134,7 +143,7 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	t, err := ds.MintDelegatedToken(r.Context(), types.DelegatedToken{
 		ID: uuid.New(), DelegateID: d.ID, Principal: sess.Sub, Email: sess.Email, UserType: sess.UserType,
 		Groups: sess.Groups, GroupsTruncated: sess.GroupsTruncated,
-		CreatedAt: authorizedAt, ExpiresAt: authorizedAt.Add(delegatedTokenTTL),
+		CreatedAt: authorizedAt, ExpiresAt: authorizedAt.Add(delegatedTokenTTL), RevSeq: issue.Seq,
 	}, raw, authorizedAt)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "api: mint delegated token failed", "error", err)

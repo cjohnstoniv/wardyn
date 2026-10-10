@@ -116,6 +116,9 @@ type uiSession struct {
 	// the verified identity's, for a revoke that names it.
 	AuthorizedAt int64  `json:"t"`
 	Email        string `json:"m,omitempty"`
+	// RevSeq is the revocation sequence the entry ticket recorded: a cut with a greater one ends this
+	// session whatever the clock says. Absent, the session is ordered on AuthorizedAt.
+	RevSeq int64 `json:"q,omitempty"`
 	// Via is the portal the entry ticket was minted through (#1142), nil
 	// otherwise. The relay audits on the daemon's context, so the session
 	// carries it onto every row it writes after the entry (#1234).
@@ -296,8 +299,8 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 	// The cutoff is compared against the ticket's authority time, never the
 	// redemption time, and both identities ride the cookie, so a revoke that
 	// names the email reaches an open relay session as it does the console's.
-	revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(ctx, sess.Principal, sess.Email,
-		time.Unix(sess.AuthorizedAt, 0).UTC())
+	revoked, err := oidc.IsRevoked(ctx, s.cfg.SessionRevocations, sess.Principal, sess.Email,
+		oidc.Issue{At: time.Unix(sess.AuthorizedAt, 0).UTC(), Seq: sess.RevSeq})
 	if err != nil {
 		// Fail CLOSED. A revocation lookup that cannot answer is the one case
 		// where continuing would serve the credential the admin just cancelled,

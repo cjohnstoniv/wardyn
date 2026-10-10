@@ -45,6 +45,29 @@ func AuthorityEpochFromContext(ctx context.Context) (int64, bool) {
 	return e, ok
 }
 
+type revocationSeqCtxKey struct{}
+
+type revocationStamp struct {
+	sub string
+	seq int64
+}
+
+// WithRevocationSeq carries the revocation sequence the credential admitting this request recorded at issue,
+// with the principal it was issued to.
+func WithRevocationSeq(ctx context.Context, sub string, seq int64) context.Context {
+	return context.WithValue(ctx, revocationSeqCtxKey{}, revocationStamp{sub: sub, seq: seq})
+}
+
+// RevocationSeqFor is that sequence when the admitting credential was issued to sub, and 0 otherwise: a
+// credential's sequence says nothing about another person's cuts, and 0 means "compare on time".
+func RevocationSeqFor(ctx context.Context, sub string) int64 {
+	st, _ := ctx.Value(revocationSeqCtxKey{}).(revocationStamp)
+	if st.sub == "" || st.sub != sub {
+		return 0
+	}
+	return st.seq
+}
+
 // SessionRejectedFromContext returns why Middleware rejected a presented
 // session cookie: "invalid_session", "expired_session", "revoked_session",
 // "identity_deactivated" (the identity was deactivated, or a suspension passed
@@ -202,6 +225,7 @@ func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	ctx = context.WithValue(ctx, groupsCtxKey{}, sess.Groups)
 	ctx = context.WithValue(ctx, groupsTruncatedCtxKey{}, sess.GroupsTruncated)
 	ctx = WithAuthorityEpoch(ctx, sess.AuthorityEpoch)
+	ctx = WithRevocationSeq(ctx, sess.Sub, sess.RevocationSeq)
 	// THE MEMBER-MODE CLAMP — the only place it's applied. This is the sole
 	// read of sess.Role in the product, so clamping here clamps everything
 	// downstream by construction. DOWNWARD ONLY: sess.Role is never

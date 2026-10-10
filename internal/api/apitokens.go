@@ -160,7 +160,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		if s.cfg.SessionRevocations != nil {
 			// The same read asks whether the owner's identity is deactivated (a token has no epoch of
 			// its own: a suspension revokes the tokens it can see, and the mint guard refuses the rest).
-			status, rerr := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, t.Principal, t.Email, t.CreatedAt, -1)
+			status, rerr := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, t.Principal, t.Email, oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
 			if rerr != nil {
 				slog.ErrorContext(r.Context(), "api: session-revocation lookup failed; this api token could not be authenticated",
 					"error", rerr, "path", r.URL.Path)
@@ -204,7 +204,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		}
 		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, t.Role, t.UserType, t.Groups,
 			t.GroupsTruncated == nil || *t.GroupsTruncated)
-		next.ServeHTTP(w, r.WithContext(withAPITokenID(ctx, t.ID)))
+		next.ServeHTTP(w, r.WithContext(withAPITokenID(oidc.WithRevocationSeq(ctx, t.Principal, t.RevSeq), t.ID)))
 	})
 }
 
@@ -404,8 +404,13 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	//
 	// An unanswerable check fails closed with the same 500 the store errors
 	// below give — never as "not revoked".
+	issue, ierr := s.mintIssue(ctx, sub, authorizedAt)
+	if ierr != nil {
+		writeServerError(w, r, "create api token", ierr)
+		return
+	}
 	if s.cfg.SessionRevocations != nil {
-		revoked, rerr := s.cfg.SessionRevocations.IsSessionRevoked(ctx, sub, oidcEmailFromContext(ctx), authorizedAt)
+		revoked, rerr := oidc.IsRevoked(ctx, s.cfg.SessionRevocations, sub, oidcEmailFromContext(ctx), admittedIssue(ctx, sub, authorizedAt))
 		if rerr != nil {
 			writeServerError(w, r, "create api token", rerr)
 			return
@@ -430,6 +435,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		Name:            name,
 		CreatedAt:       authorizedAt,
 		ExpiresAt:       expiresAt,
+		RevSeq:          issue.Seq,
 	})
 	if !ok {
 		return

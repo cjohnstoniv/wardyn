@@ -81,6 +81,12 @@ const GovernanceTargetLockClass int32 = 0x57474754 // ASCII "WGGT"
 // domains) sees every assignment written before it, including another group's.
 const KeyDomainAssignmentLockClass int32 = 0x574B4441 // ASCII "WKDA"
 
+// RevocationOrderLockClass is the classid of the two-argument advisory lock (second key 0) that orders
+// a credential's issue against a revocation cut. A cut holds it exclusively, from before its sequence
+// value is drawn until it commits; an issuer takes it shared while it reads the sequence, so the value
+// read never sits below a cut that commits afterwards.
+const RevocationOrderLockClass int32 = 0x57525351 // ASCII "WRSQ"
+
 // LoginSupersedeLockWait is the TOTAL budget one caller spends trying to take
 // a keyed lock before being REFUSED (retry) rather than let through unlocked;
 // only ErrAdvisoryLockNoCapacity proceeds unlocked. Matches

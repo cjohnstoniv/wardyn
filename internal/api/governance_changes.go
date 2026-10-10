@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -207,11 +206,11 @@ func (s *Server) recheckApprover(ctx context.Context, r *http.Request, q store.Q
 // A database-backed revocation check must share the decision's connection.
 func (s *Server) approverSessionStatus(ctx context.Context, q store.Querier, t types.APIToken) (oidc.SessionStatus, error) {
 	if rev, ok := s.cfg.SessionRevocations.(interface {
-		SessionStatusQ(context.Context, store.Querier, string, string, time.Time, int64) (oidc.SessionStatus, error)
+		SessionStatusQ(context.Context, store.Querier, string, string, oidc.Issue, int64) (oidc.SessionStatus, error)
 	}); ok {
-		return rev.SessionStatusQ(ctx, q, t.Principal, t.Email, t.CreatedAt, -1)
+		return rev.SessionStatusQ(ctx, q, t.Principal, t.Email, oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
 	}
-	return oidc.CheckSession(ctx, s.cfg.SessionRevocations, t.Principal, t.Email, t.CreatedAt, -1)
+	return oidc.CheckSession(ctx, s.cfg.SessionRevocations, t.Principal, t.Email, oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
 }
 
 // denyApprover is the refusal a caller whose tier does not pass the kind's approver predicate gets.

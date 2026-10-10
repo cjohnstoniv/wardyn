@@ -294,7 +294,7 @@ func newUIHarness(t *testing.T, backend http.Handler) *uiHarness {
 // does, for the given principal and role.
 func (h *uiHarness) ticket(runID uuid.UUID, principal, role string) string {
 	h.t.Helper()
-	tok, err := mintAttachTicket(context.Background(), h.store, runID, types.ActorHuman, principal, role, time.Now())
+	tok, err := mintAttachTicket(context.Background(), h.store, runID, types.ActorHuman, principal, role, oidc.Issue{At: time.Now()})
 	if err != nil {
 		h.t.Fatalf("mint ticket: %v", err)
 	}

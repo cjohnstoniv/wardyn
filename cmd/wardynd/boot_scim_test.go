@@ -138,7 +138,7 @@ func TestPGSessionStatusReadsTheIdentityRows(t *testing.T) {
 
 	status := func(epoch int64) oidc.SessionStatus {
 		t.Helper()
-		got, err := rev.SessionStatus(ctx, sub, "", issued, epoch)
+		got, err := rev.SessionStatus(ctx, sub, "", oidc.Issue{At: issued}, epoch)
 		if err != nil {
 			t.Fatalf("SessionStatus: %v", err)
 		}
@@ -169,7 +169,7 @@ func TestPGSessionStatusReadsTheIdentityRows(t *testing.T) {
 	if err := rev.RevokeSub(ctx, sub); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := rev.SessionStatus(ctx, sub, "", time.Now().UTC().Add(-time.Hour), 1); got != oidc.SessionRevoked {
+	if got, _ := rev.SessionStatus(ctx, sub, "", oidc.Issue{At: time.Now().UTC().Add(-time.Hour)}, 1); got != oidc.SessionRevoked {
 		t.Errorf("a cutoff = %v, want SessionRevoked", got)
 	}
 }

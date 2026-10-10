@@ -441,6 +441,9 @@ type SSHPublicKey struct {
 	RoleCheckedAt *time.Time `json:"role_checked_at,omitempty"`
 	Capped        bool       `json:"capped"`
 	CreatedAt     time.Time  `json:"created_at"`
+	// RevSeq is the revocation sequence read when the key was registered; 0 for a key registered
+	// before it existed, which a revocation cutoff orders on CreatedAt. Never on the wire.
+	RevSeq int64 `json:"-"`
 }
 
 // APIToken is a per-user, long-lived bearer credential a human mints for scripts/CI, replacing
@@ -471,6 +474,9 @@ type APIToken struct {
 	// IdentityStampedAt is when Role and Groups were last stamped: at mint, then at each sign-in of
 	// the owner. Nil reads as stale under WARDYN_ROLE_STAMP_TTL. Never on the wire.
 	IdentityStampedAt *time.Time `json:"-"`
+	// RevSeq is the revocation sequence read when the token was minted; 0 for a token minted before it
+	// existed, which a revocation cutoff orders on CreatedAt. Never on the wire.
+	RevSeq int64 `json:"-"`
 }
 
 // Person is an identity an admin created or confirmed before its first sign-in, keyed by the

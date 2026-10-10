@@ -65,7 +65,7 @@ func TestAttachTicket(t *testing.T) {
 	other := uuid.New()
 	now := time.Unix(1_700_000_000, 0)
 
-	tok, err := mintAttachTicket(ctx, st, run, types.ActorHuman, "alice", oidc.RoleAdmin, now)
+	tok, err := mintAttachTicket(ctx, st, run, types.ActorHuman, "alice", oidc.RoleAdmin, oidc.Issue{At: now})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestAttachTicket(t *testing.T) {
 	}
 
 	// Fresh ticket: redeems once, carries attribution + role, then is gone.
-	tok2, _ := mintAttachTicket(ctx, st, run, types.ActorHuman, "bob", oidc.RoleUser, now)
+	tok2, _ := mintAttachTicket(ctx, st, run, types.ActorHuman, "bob", oidc.RoleUser, oidc.Issue{At: now})
 	ta, ok, err := consumeAttachTicket(ctx, st, tok2, run, now)
 	if err != nil || !ok {
 		t.Fatalf("valid ticket did not redeem: ok=%v err=%v", ok, err)
@@ -98,7 +98,7 @@ func TestAttachTicket(t *testing.T) {
 	}
 
 	// Expiry: a ticket presented after its TTL is rejected.
-	tok3, _ := mintAttachTicket(ctx, st, run, types.ActorHuman, "carol", oidc.RoleAdmin, now)
+	tok3, _ := mintAttachTicket(ctx, st, run, types.ActorHuman, "carol", oidc.RoleAdmin, oidc.Issue{At: now})
 	if _, ok, _ := consumeAttachTicket(ctx, st, tok3, run, now.Add(attachTicketTTL+time.Second)); ok {
 		t.Fatal("expired ticket redeemed")
 	}
@@ -155,7 +155,7 @@ func TestAttachWS_TicketRoleAuthorization(t *testing.T) {
 
 	mint := func(principal, role string) string {
 		t.Helper()
-		tok, err := mintAttachTicket(context.Background(), ast, ownedRun, types.ActorHuman, principal, role, time.Now())
+		tok, err := mintAttachTicket(context.Background(), ast, ownedRun, types.ActorHuman, principal, role, oidc.Issue{At: time.Now()})
 		if err != nil {
 			t.Fatalf("mint(%s, %s): %v", principal, role, err)
 		}
@@ -225,7 +225,7 @@ func TestAttachWS_TicketDenialsAreAudited(t *testing.T) {
 	}
 
 	// (2) a ticket that resolves but does not authorize this run.
-	tok, err := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "mallory", oidc.RoleUser, time.Now())
+	tok, err := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "mallory", oidc.RoleUser, oidc.Issue{At: time.Now()})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestAttach_RefusesAKeptRun(t *testing.T) {
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), refused) {
 		t.Errorf("ticket mint: code=%d body=%q, want 409 %q", w.Code, w.Body.String(), refused)
 	}
-	tok, err := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "alice", oidc.RoleUser, time.Now())
+	tok, err := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "alice", oidc.RoleUser, oidc.Issue{At: time.Now()})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestAttachWS_TicketMintedBeforeCutoffIsRefused(t *testing.T) {
 	ast.mu.Unlock()
 
 	issued := time.Now()
-	tok, err := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "alice", oidc.RoleUser, issued)
+	tok, err := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "alice", oidc.RoleUser, oidc.Issue{At: issued})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestAttachWS_TicketAuthority(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		tok, err := mintAttachTicket(audit.WithDelegation(context.Background(), via), ast, run, types.ActorHuman, principal, oidc.RoleUser, now)
+		tok, err := mintAttachTicket(audit.WithDelegation(context.Background(), via), ast, run, types.ActorHuman, principal, oidc.RoleUser, oidc.Issue{At: now})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -347,7 +347,7 @@ func TestAttachWS_TicketAuthority(t *testing.T) {
 	for _, tc := range []setup{
 		{name: "an email-named revoke after the mint",
 			ticket: func(t *testing.T, ast *authzStore, rev *cutoffRevocations, run uuid.UUID) string {
-				tok, err := mintAttachTicket(withOIDCEmail(context.Background(), "alice@corp.example"), ast, run, types.ActorHuman, "alice", oidc.RoleUser, now)
+				tok, err := mintAttachTicket(withOIDCEmail(context.Background(), "alice@corp.example"), ast, run, types.ActorHuman, "alice", oidc.RoleUser, oidc.Issue{At: now})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -357,7 +357,7 @@ func TestAttachWS_TicketAuthority(t *testing.T) {
 			}, want: http.StatusForbidden, reason: "revoked"},
 		{name: "an unreadable revocation store",
 			ticket: func(t *testing.T, ast *authzStore, rev *cutoffRevocations, run uuid.UUID) string {
-				tok, _ := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "alice", oidc.RoleUser, now)
+				tok, _ := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "alice", oidc.RoleUser, oidc.Issue{At: now})
 				rev.err = errors.New("store unreachable")
 				return tok
 			}, want: http.StatusServiceUnavailable, reason: "revocation_unavailable"},
@@ -383,7 +383,7 @@ func TestAttachWS_TicketAuthority(t *testing.T) {
 			}, want: http.StatusUpgradeRequired},
 		{name: "a ticket with no email and no revoke is admitted",
 			ticket: func(t *testing.T, ast *authzStore, rev *cutoffRevocations, run uuid.UUID) string {
-				tok, _ := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "alice", oidc.RoleUser, now)
+				tok, _ := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "alice", oidc.RoleUser, oidc.Issue{At: now})
 				return tok
 			}, want: http.StatusUpgradeRequired},
 	} {

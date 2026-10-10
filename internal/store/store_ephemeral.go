@@ -50,6 +50,9 @@ type AttachTicket struct {
 	// AuthorizedAt is a row written before the column existed: never exempt.
 	AuthorizedAt time.Time
 	Email        string
+	// RevSeq is the revocation sequence the minting credential recorded (ReadRevocationSeq); 0 is a
+	// row from before it existed, ordered on AuthorizedAt.
+	RevSeq int64
 }
 
 // MintAttachTicket records one outstanding ticket, expiring at expiresAt, and
@@ -67,10 +70,10 @@ func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, 
 	}
 	_, err := s.Pool.Exec(ctx, `
 		WITH swept AS (DELETE FROM attach_tickets WHERE expires_at <= $7)
-		INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at, via_delegate, via_grant, authorized_at, email)
-		VALUES ($1, $2, $3, $4, $5, $6, $8, $9, $10, $11)`,
+		INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at, via_delegate, via_grant, authorized_at, email, rev_seq)
+		VALUES ($1, $2, $3, $4, $5, $6, $8, $9, $10, $11, $12)`,
 		hashToken(token), t.RunID, string(t.ActorType), t.Principal, t.Role, expiresAt, now, viaDelegate, viaGrant,
-		t.AuthorizedAt, t.Email,
+		t.AuthorizedAt, t.Email, t.RevSeq,
 	)
 	if err != nil {
 		return fmt.Errorf("store: mint attach ticket: %w", err)
@@ -95,9 +98,9 @@ func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time
 	err := s.Pool.QueryRow(ctx, `
 		DELETE FROM attach_tickets
 		WHERE token_sha256 = $1 AND expires_at > $2
-		RETURNING run_id, actor_type, principal, role, via_delegate, via_grant, authorized_at, email`,
+		RETURNING run_id, actor_type, principal, role, via_delegate, via_grant, authorized_at, email, rev_seq`,
 		hashToken(token), now,
-	).Scan(&t.RunID, &actorType, &t.Principal, &t.Role, &viaDelegate, &viaGrant, &authorizedAt, &email)
+	).Scan(&t.RunID, &actorType, &t.Principal, &t.Role, &viaDelegate, &viaGrant, &authorizedAt, &email, &t.RevSeq)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AttachTicket{}, false, nil
 	}
