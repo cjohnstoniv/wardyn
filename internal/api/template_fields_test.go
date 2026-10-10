@@ -440,11 +440,9 @@ func TestTemplateDecoderRefusals(t *testing.T) {
 		{"description is entered at launch", `{` + head + `,"intent":{"description":"d"}}`, "intent.description", reasonTemplateFieldExcluded},
 		{"pending: pool", `{` + head + `,"intent":{"runner_pool_id":"6f1c2a52-5b1e-4d45-9d6b-0c4f1b2a7e10"}}`, "intent.runner_pool_id", reasonTemplateFieldUnavailable},
 		{"pending: a malformed pool id is still not a way around", `{` + head + `,"intent":{"runner_pool_id":"x"}}`, "intent.runner_pool_id", reasonTemplateFieldUnavailable},
-		{"pending: run mode", `{` + head + `,"intent":{"experience":"interactive"}}`, "intent.experience", reasonTemplateFieldUnavailable},
-		{"pending: included tools", `{` + head + `,"intent":{"included_tools":[]}}`, "intent.included_tools", reasonTemplateFieldUnavailable},
-		{"pending: startup", `{` + head + `,"intent":{"startup":"x"}}`, "intent.startup", reasonTemplateFieldUnavailable},
-		{"pending: starting folder", `{` + head + `,"intent":{"starting_folder":"/home/agent/work"}}`, "intent.starting_folder", reasonTemplateFieldUnavailable},
-		{"pending: no repositories or drives", `{` + head + `,"intent":{"no_repositories_or_drives":true}}`, "intent.no_repositories_or_drives", reasonTemplateFieldUnavailable},
+		{"run mode: a malformed startup", `{` + head + `,"intent":{"startup":"x"}}`, "intent.startup", reasonTemplateFieldInvalid},
+		{"run mode: the working name is not a field", `{` + head + `,"intent":{"included_tools":[]}}`, "intent.included_tools", reasonTemplateFieldUnknown},
+		{"run mode: the working name is not a field (folder)", `{` + head + `,"intent":{"starting_folder":"/home/agent/work"}}`, "intent.starting_folder", reasonTemplateFieldUnknown},
 		{"pending: unkeyed push rules", `{` + head + `,"intent":{"inline_policy":{"push_rules":{"deny_paths":["a/"]}}}}`, "intent.inline_policy.push_rules", reasonTemplateFieldUnavailable},
 		{"empty inline policy", `{` + head + `,"intent":{"inline_policy":{}}}`, "intent.inline_policy", reasonTemplateFieldInvalid},
 		{"policy reference beside an inline policy", `{` + head + `,"intent":{"policy_id":"6f1c2a52-5b1e-4d45-9d6b-0c4f1b2a7e10","inline_policy":{"allowed_domains":[]}}}`, "intent.inline_policy", reasonInlinePolicyXOR},
@@ -751,5 +749,28 @@ func TestTemplateCarriedFieldsNeverReadAsRunStateOrSecrets(t *testing.T) {
 		for _, name := range strings.Fields(names) {
 			check(typeName, name)
 		}
+	}
+}
+
+// TestTemplateRunModeIsHeldToTheRunsOwnRules sends a template through the one
+// door: what the run refuses (a field it cannot honour yet, carriers that
+// contradict the older fields) is refused in a template, with the run's reason.
+func TestTemplateRunModeIsHeldToTheRunsOwnRules(t *testing.T) {
+	const head = `"api_version":"wardyn/v1","kind":"RunTemplate","coverage":"partial"`
+	cases := []struct{ name, body, path, reason string }{
+		{"run mode: two included tools are not available yet", `{` + head + `,"intent":{"tools":[{"id":"claude-code","kind":"harness"},{"id":"codex-cli","kind":"harness"}]}}`, "intent.tools", reasonTemplateFieldUnavailable},
+		{"run mode: per-tool rules are not available yet", `{` + head + `,"intent":{"tools":[{"id":"claude-code","kind":"harness","default_effect":"hold"}]}}`, "intent.tools[0]", reasonTemplateFieldUnavailable},
+		{"run mode: a component tool is not available yet", `{` + head + `,"intent":{"tools":[{"id":"x","kind":"component","component":{"inline":{"hosts":["a.example.com"]}}}]}}`, "intent.tools[0]", reasonTemplateFieldUnavailable},
+		{"run mode: a folder inside an attachment is not available yet", `{` + head + `,"intent":{"start_folder":{"kind":"attachment","attachment":"drive","subpath":"src"}}}`, "intent.start_folder", reasonTemplateFieldUnavailable},
+		{"run mode: the older fields do not ride beside it", `{` + head + `,"intent":{"experience":"interactive","agent":"claude-code"}}`, "intent", reasonRunModeConflict},
+		{"run mode: no repositories beside a repository", `{` + head + `,"intent":{"no_repositories_or_drives":true,"repo":"acme/api"}}`, "intent", reasonRunModeConflict},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			diags := validateTemplateImport([]byte(tc.body), client.TemplateFormatJSON).Diagnostics
+			if !slices.ContainsFunc(diags, func(d client.TemplateDiagnostic) bool { return d.Path == tc.path && d.Reason == tc.reason }) {
+				t.Fatalf("diagnostics = %+v, want %s at %q", diags, tc.reason, tc.path)
+			}
+		})
 	}
 }

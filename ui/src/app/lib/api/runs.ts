@@ -27,7 +27,16 @@ import type {
   RunResources,
 } from "../types";
 import type { ComponentRef } from "../types/components";
-import type { PlacementValue, RequestedResources, RunOverrides } from "../types/new-run-contract";
+import type {
+  Experience,
+  IncludedTool,
+  PlacementValue,
+  RequestedResources,
+  RunOverrides,
+  RunStartup,
+  RunWorkload,
+  StartFolder,
+} from "../types/new-run-contract";
 import {
   asJson,
   ccRank,
@@ -114,6 +123,16 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   allowed_image?: string;
   resources?: RequestedResources;
   overrides?: RunOverrides;
+  // The run-mode contract (pkg/client/runs_mode.go). A request with an experience
+  // is a new client's: runWireBody then omits the older agent, task, interactive,
+  // task_mode, interactive_start, seed_auto_tools, tool_approvals and
+  // model_provider, which the carriers replace and the server refuses beside them.
+  experience?: Experience;
+  workload?: RunWorkload;
+  tools?: IncludedTool[];
+  startup?: RunStartup;
+  start_folder?: StartFolder;
+  no_repositories_or_drives?: boolean;
 };
 
 // The ONE projection from wizard input to the POST /runs wire body. createRun
@@ -121,11 +140,13 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
 // (They used to be two hand-built whitelists; preflight's lagged by five fields.)
 /** The shared request projection for create, preflight and policy preview. */
 export function runWireBody(input: RunWireInput): Record<string, unknown> {
-  const body: Record<string, unknown> = {
-    agent: input.agent,
-    repo: input.repo,
-    task: input.task,
-  };
+  // The run-mode carriers replace the older mode fields; a request never mixes the two.
+  const newClient = Boolean(input.experience);
+  const body: Record<string, unknown> = { repo: input.repo };
+  if (!newClient) {
+    body.agent = input.agent;
+    body.task = input.task;
+  }
   if (input.policy_id) body.policy_id = input.policy_id;
   // A run may request an equal-or-STRONGER tier than its policy floor, never a
   // weaker one (the server 422s "confinement_class X is weaker than the policy
@@ -136,25 +157,25 @@ export function runWireBody(input: RunWireInput): Record<string, unknown> {
   const floor = input.inline_policy?.min_confinement_class;
   if (cc && floor && ccRank(cc) < ccRank(floor)) cc = floor;
   if (cc) body.confinement_class = cc;
-  if (input.interactive) body.interactive = true;
+  if (input.interactive && !newClient) body.interactive = true;
   if (input.inline_policy) body.inline_policy = input.inline_policy;
   // BYOI + governed-command pass-through — previously dropped on the floor here.
   if (input.image) body.image = input.image;
-  if ("task_mode" in input && input.task_mode) body.task_mode = input.task_mode;
+  if ("task_mode" in input && input.task_mode && !newClient) body.task_mode = input.task_mode;
   // The run's name/note and the interactive start choice — same lesson as the
   // two above: this whitelist is hand-built, so an unlisted field is discarded
   // between the form and the wire with no error anywhere. The title the
   // operator typed would simply never exist.
   if ("title" in input && input.title) body.title = input.title;
   if ("description" in input && input.description) body.description = input.description;
-  if ("interactive_start" in input && input.interactive_start) {
+  if ("interactive_start" in input && input.interactive_start && !newClient) {
     body.interactive_start = input.interactive_start;
   }
   // The boot-seed opt-in and the autonomous tool-approval posture — same
   // hand-built-whitelist trap as everything else on this list: an unlisted
   // field is silently discarded between the form and the wire.
-  if ("seed_auto_tools" in input && input.seed_auto_tools) body.seed_auto_tools = true;
-  if ("tool_approvals" in input && input.tool_approvals) body.tool_approvals = input.tool_approvals;
+  if ("seed_auto_tools" in input && input.seed_auto_tools && !newClient) body.seed_auto_tools = true;
+  if ("tool_approvals" in input && input.tool_approvals && !newClient) body.tool_approvals = input.tool_approvals;
   // Composition-model pass-through. This whitelist has dropped a wizard field
   // on the floor once before (image/task_mode, above) — a selection the
   // operator made, silently discarded between the form and the wire. These
@@ -171,7 +192,7 @@ export function runWireBody(input: RunWireInput): Record<string, unknown> {
   // whether the member asked for it. A whitelist that re-decided would be the
   // second answer to that question.
   if (input.drive) body.drive = input.drive;
-  if (input.model_provider) body.model_provider = input.model_provider;
+  if (input.model_provider && !newClient) body.model_provider = input.model_provider;
   if (input.components?.length) body.components = input.components;
   if (input.placement) body.placement = input.placement;
   if (input.runner_id) body.runner_id = input.runner_id;
@@ -179,6 +200,12 @@ export function runWireBody(input: RunWireInput): Record<string, unknown> {
   if (input.allowed_image) body.allowed_image = input.allowed_image;
   if (input.resources && (input.resources.cpu_millis || input.resources.memory_mib)) body.resources = input.resources;
   if (input.overrides) body.overrides = input.overrides;
+  if (input.experience) body.experience = input.experience;
+  if (input.workload) body.workload = input.workload;
+  if (input.tools?.length) body.tools = input.tools;
+  if (input.startup) body.startup = input.startup;
+  if (input.start_folder) body.start_folder = input.start_folder;
+  if (input.no_repositories_or_drives) body.no_repositories_or_drives = true;
   return body;
 }
 

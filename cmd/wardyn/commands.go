@@ -107,6 +107,7 @@ func runCmd(client clientFn) *cobra.Command {
 	var devcontainerRepo, devcontainerRef, modelProvider string
 	var interactive, wait, createJSON, dryRun bool
 	var timeout time.Duration
+	var mode runModeFlags
 	cmd := &cobra.Command{
 		Use:     "run",
 		Aliases: []string{"runs"},
@@ -143,6 +144,13 @@ func runCmd(client clientFn) *cobra.Command {
 			}
 			if err := setOptionalID("--workspace", workspaceID, &body.WorkspaceID); err != nil {
 				return err
+			}
+			// The run-mode flags replace the older ones above and are never inferred.
+			if err := applyRunModeFlags(&body, mode); err != nil {
+				return err
+			}
+			if wait && body.Experience == sdk.ExperienceInteractive {
+				return fmt.Errorf("--wait and --experience interactive are mutually exclusive (an interactive run never finishes on its own)")
 			}
 			// --pool names the runner pool the run starts on; unset keeps today's
 			// unpooled placement until the server manages pools.
@@ -197,7 +205,7 @@ func runCmd(client clientFn) *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "  spiffe id: %s\n", run.SPIFFEID)
 				// The image is resolved after the 201 (the build runs server-side),
 				// so it is read back later with `wardyn run get`, never printed here.
-				if interactive {
+				if interactive || body.Experience == sdk.ExperienceInteractive {
 					fmt.Fprintf(cmd.OutOrStdout(), "  interactive: sandbox is idle; attach with `wardyn run attach %s`\n", run.ID)
 				}
 			}
@@ -229,6 +237,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&devcontainerRef, "devcontainer-ref", "", "git ref (branch/tag/sha) to build for --devcontainer-repo")
 	cmd.Flags().StringVar(&modelProvider, "model-provider", "", "model provider id to run on (optional; unset uses the workspace's pinned provider, else the agent's default, else the one provider serving the agent — see GET /model-providers)")
 	cmd.Flags().StringVar(&taskMode, "task-mode", "", "how the sandbox executes --task: harness (default; runs the agent) or exec (runs the task as a plain shell command — no agent, and the operator's model access is not auto-injected; an explicit policy grant or a workspace's declared secret still applies)")
+	mode.bind(cmd.Flags())
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "resolve and check the run without launching it: prints the setup checklist and the confinement class that would be enforced")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the run reaches a terminal state and exit with the run's outcome (COMPLETED=0, FAILED=agent exit code, KILLED/STOPPED=2, timeout=124)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long (with --wait; exit 124). Bounds the requests too, and does not stop the run: it keeps running, and holds its sandbox and credentials until it ends (kill it with 'wardyn run kill'). Must be positive")

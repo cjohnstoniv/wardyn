@@ -8,6 +8,7 @@
 import { INFO_FIXTURE } from "./info";
 import { ACCESS_FIXTURES } from "./access";
 import { inTab, type NewRunFixture } from "./base";
+import { MODE_FIXTURES } from "./mode";
 import { POLICY_FIXTURES } from "./policy";
 import { POOL_FIXTURES } from "./pools";
 import { RUN_FIXTURES } from "./run";
@@ -20,6 +21,7 @@ export const NEW_RUN_FIXTURES: readonly NewRunFixture[] = [
   ...inTab("info", [INFO_FIXTURE]),
   ...inTab("workspaces", WORKSPACE_FIXTURES.filter((f) => f.refusal?.reason !== NEW_RUN_REASON.IMAGE_CONFLICT)),
   ...inTab("runner", [...RUN_FIXTURES, ...POOL_FIXTURES, ...WORKSPACE_FIXTURES.filter((f) => f.refusal?.reason === NEW_RUN_REASON.IMAGE_CONFLICT)]),
+  ...MODE_FIXTURES,
   ...inTab("access", ACCESS_FIXTURES),
   ...inTab("policy", POLICY_FIXTURES),
 ];

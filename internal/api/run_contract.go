@@ -38,6 +38,7 @@ import (
 // deletes its case in unappliedFieldsRefusal and adds its own step to
 // runFoldSteps:
 //
+//	run-mode carriers (run_mode.go) -> A-L3, A-L9, A-L14, A-L4, A-L7, D-112-113
 //	overrides                     -> A-L3
 //	built-in components           -> A-L14
 //	allowed_image, image facts     -> the image lane (A-L4/A-L6)
@@ -70,6 +71,7 @@ func (s *Server) runContractRefusal(req createRunRequest) *runRefusal {
 // template document is held to the same list when it is imported.
 var runContractShapeChecks = []func(createRunRequest) *runRefusal{
 	placementShapeRefusal, runnerPoolShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, runOverridesRefusal, builtinComponentsRefusal,
+	runModeShapeRefusal,
 }
 
 func placementShapeRefusal(req createRunRequest) *runRefusal {
@@ -391,6 +393,9 @@ func builtinComponentsRefusal(req createRunRequest) *runRefusal {
 // unappliedFieldsRefusal is the stub half: every field above that changes the
 // run's posture and that no lane applies yet. Each is refused by name.
 func unappliedFieldsRefusal(req createRunRequest) *runRefusal {
+	if refusal := runModeUnavailableRefusal(req); refusal != nil {
+		return refusal
+	}
 	switch {
 	case req.RunnerPoolID != "":
 		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,

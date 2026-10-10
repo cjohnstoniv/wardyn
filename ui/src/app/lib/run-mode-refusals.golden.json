@@ -1,0 +1,11 @@
+[
+  { "key": "RUN_MODE_REQUIRED", "args": [], "text": "Choose what you're starting: a background task or an interactive environment." },
+  { "key": "RUN_WORKLOAD_REQUIRED", "args": [], "text": "A background task needs something to run. Choose an agent task or a command." },
+  { "key": "RUN_MODE_CONFLICT", "args": ["agent", "Name the harness in workload.agent or in tools."], "text": "agent cannot be sent with the run-mode fields. Name the harness in workload.agent or in tools." },
+  { "key": "STARTUP_TOOL_UNKNOWN", "args": ["codex-cli"], "text": "The startup names codex-cli, which this run does not include. Include it as a tool or choose another startup." },
+  { "key": "START_FOLDER_ATTACHMENT", "args": ["payments"], "text": "payments is not attached to this run, so it cannot hold the starting folder." },
+  { "key": "START_FOLDER_SHAPE", "args": ["../etc"], "text": "../etc is not a folder inside the attachment. Use a relative path with no \"..\"." },
+  { "key": "NO_REPOSITORIES_CONFLICT", "args": [], "text": "You chose no repositories or drives, but something is attached. Remove it or remove the choice." },
+  { "key": "FIELD_UNAVAILABLE", "args": ["tools: more than one included tool"], "text": "tools: more than one included tool is not available on this server yet, so the run was not created." },
+  { "key": "BACKGROUND_ONLY", "args": ["terminal"], "text": "This run is a background task, so it has no terminal. Its logs, audit trail and status stay available." }
+]

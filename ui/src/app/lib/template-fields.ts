@@ -53,7 +53,7 @@ export interface TemplateFieldRule {
   why?: string;
 }
 
-/** Every CreateRunRequest field, plus the working names of carriers whose lanes have not landed (rows with `pending`). */
+/** Every CreateRunRequest field; a row with `pending` is a carrier whose lane has not landed (runner_pool_id). */
 export const TEMPLATE_REQUEST_FIELDS = golden.request as readonly TemplateFieldRule[];
 
 /** Every RunPolicySpec field, written `inline_policy.<name>` in a template. */

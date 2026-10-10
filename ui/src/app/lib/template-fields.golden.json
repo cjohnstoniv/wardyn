@@ -55,6 +55,14 @@
       "requires_approval",
       "owner_only"
     ],
+    "IncludedTool": [
+      "id",
+      "kind",
+      "model_provider",
+      "component",
+      "tool_rules",
+      "default_effect"
+    ],
     "LLMInspectionSpec": [
       "mode",
       "workspace_secret_names",
@@ -102,11 +110,27 @@
       "cpu_millis",
       "memory_mib"
     ],
+    "RunStartup": [
+      "kind",
+      "tool",
+      "command"
+    ],
+    "RunWorkload": [
+      "kind",
+      "agent",
+      "task",
+      "command"
+    ],
     "SecretOverride": [
       "secret_name",
       "host",
       "header",
       "format"
+    ],
+    "StartFolder": [
+      "kind",
+      "attachment",
+      "subpath"
     ],
     "ToolRule": [
       "tool",
@@ -594,20 +618,28 @@
       "part": "runner",
       "omitted": "unset_required",
       "empty": "same_as_omitted",
-      "meaning": "No mode is assumed: Background task or Interactive environment is chosen.",
-      "section": "run_wide",
-      "pending": "A-L6/A-L8"
+      "meaning": "No mode is assumed: Background task or Interactive environment is chosen, and never inferred.",
+      "section": "run_wide"
     },
     {
-      "name": "included_tools",
+      "name": "workload",
+      "tab": "tools_image",
+      "part": "tools_image",
+      "omitted": "unset_required",
+      "empty": "same_as_omitted",
+      "meaning": "A background task needs an agent task or a command, and none is chosen. An interactive environment has no workload.",
+      "sensitive": true,
+      "section": "run_wide"
+    },
+    {
+      "name": "tools",
       "tab": "tools_image",
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "value",
-      "meaning": "No harness is included. An interactive environment may include several, and including none is valid.",
+      "meaning": "No tool is included. An interactive environment may include several, and including none is valid. Each harness has its own model provider, tool rules and default effect, and nothing is shared between tools.",
       "section": "harness",
-      "keyed_by": "harness",
-      "pending": "A-L9"
+      "keyed_by": "harness"
     },
     {
       "name": "startup",
@@ -615,19 +647,18 @@
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
-      "meaning": "Nothing starts automatically unless chosen: one included harness, one command, or none.",
-      "section": "run_wide",
-      "pending": "A-L9"
+      "meaning": "Nothing starts automatically unless chosen: one included harness, one command, or none. A removed startup tool is never replaced by another.",
+      "sensitive": true,
+      "section": "run_wide"
     },
     {
-      "name": "starting_folder",
+      "name": "start_folder",
       "tab": "repositories_drives",
       "part": "repositories",
       "omitted": "baseline",
       "empty": "same_as_omitted",
-      "meaning": "The first attached repository, or the sandbox's default working directory when none is attached.",
-      "section": "run_wide",
-      "pending": "A-L7/D112113"
+      "meaning": "The first attached repository, or the sandbox's default working directory when none is attached. A run has exactly one starting folder.",
+      "section": "run_wide"
     },
     {
       "name": "no_repositories_or_drives",
@@ -636,8 +667,7 @@
       "omitted": "unset_required",
       "empty": "same_as_omitted",
       "meaning": "The tab stays incomplete until something is attached or the person explicitly chooses no repositories or drives. Choosing none warns that nothing in the sandbox is kept unless it is pushed or copied out.",
-      "section": "run_wide",
-      "pending": "D112113"
+      "section": "run_wide"
     }
   ]
 }

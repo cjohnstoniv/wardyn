@@ -221,6 +221,21 @@ type Config struct {
 	// older proxy image refuses this key at start (strict decode), so the proxy
 	// image is upgraded before wardynd.
 	Attribution *policyref.Ref `json:"attribution,omitempty"`
+	// PushRuleSets are the push content rules per SCM entry (provider and
+	// organisation): the git route applies the set of the entry that owns the
+	// remote, and a remote whose entry has no set has no content rules. While a
+	// config carries none, Policy.PushRules keeps applying to every remote (the
+	// older-client mapping); the dispatch plan fans that block out to one set per
+	// entry it brings, so a run is on one regime or the other. Control-plane
+	// authored; nothing sets it until the git route reads it.
+	PushRuleSets []types.PushRuleSet `json:"push_rule_sets,omitempty"`
+	// HarnessToolRules are the tool rules per included harness. The approval
+	// route evaluates the set of the harness that raised the call
+	// (types.ToolEffectForHarness) and never another's; a harness with no entry
+	// is held for a human. While a config carries none, Policy.ToolRules applies
+	// to the run's one agent (the older-client mapping). Control-plane authored;
+	// nothing sets it until the approval route reads it.
+	HarnessToolRules []types.HarnessToolRules `json:"harness_tool_rules,omitempty"`
 }
 
 const (
@@ -287,6 +302,12 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	}
 	if err := validPATGrants(c.PATGrants); err != nil {
 		return nil, err
+	}
+	if err := types.ValidatePushRuleSets(c.PushRuleSets); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if err := types.ValidateHarnessToolRules(c.HarnessToolRules); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
 	}
 	if err := c.applyDefaultsAndValidate(); err != nil {
 		return nil, err

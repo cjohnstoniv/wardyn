@@ -5607,6 +5607,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0139` (`0139_runner_delivery`) adds `credential_grants.delivery` (`0001`'s table), beside its new `runners` table.
 - `0141` (`0141_run_placement`) adds the placement columns on `agent_runs` (`placement`, `placement_filled`, `runner_id`,
   `evidence_source`).
+- `0193` (`0193_run_experience`) adds `agent_runs.experience` (`0141`'s table), the run mode a new client chose at launch.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

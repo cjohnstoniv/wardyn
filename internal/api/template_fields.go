@@ -205,23 +205,24 @@ var templateRequestRules = []TemplateFieldRule{
 	carriedField("runner_pool_id", templateTabRunner, partRunner, templateOmitBaseline, templateEmptySame,
 		"The pool resolves from the person's own default, then the organisation's, when the template is used. A default that is unavailable or refused never falls through to another pool: the person chooses. A named pool narrows where the run may go and grants nothing, and the launcher's pool-use policy is checked at use.").
 		pending("C-pools"),
-	// Working names of carriers whose lanes have not landed: nothing accepts
-	// them, and the lane that adds one renames its row to the wire name.
+	// The run-mode carriers (run_mode.go): what a person is starting. A new client
+	// sends them in place of interactive, agent, task, task_mode and
+	// interactive_start, which stay only as the older-client mapping. What the run
+	// cannot honour yet (more than one tool, per-tool rules, a folder inside an
+	// attachment) is refused by runModeUnavailable at the run and in a template.
 	carriedField("experience", templateTabRunner, partRunner, templateOmitRequired, templateEmptySame,
-		"No mode is assumed: Background task or Interactive environment is chosen.").
-		pending("A-L6/A-L8"),
-	carriedField("included_tools", templateTabToolsImage, partTools, templateOmitOptional, templateEmptyValue,
-		"No harness is included. An interactive environment may include several, and including none is valid.").
-		in(templateSectionHarness, "harness").pending("A-L9"),
+		"No mode is assumed: Background task or Interactive environment is chosen, and never inferred."),
+	carriedField("workload", templateTabToolsImage, partTools, templateOmitRequired, templateEmptySame,
+		"A background task needs an agent task or a command, and none is chosen. An interactive environment has no workload.").sensitive(),
+	carriedField("tools", templateTabToolsImage, partTools, templateOmitOptional, templateEmptyValue,
+		"No tool is included. An interactive environment may include several, and including none is valid. Each harness has its own model provider, tool rules and default effect, and nothing is shared between tools.").
+		in(templateSectionHarness, "harness"),
 	carriedField("startup", templateTabToolsImage, partTools, templateOmitOptional, templateEmptySame,
-		"Nothing starts automatically unless chosen: one included harness, one command, or none.").
-		pending("A-L9"),
-	carriedField("starting_folder", templateTabRepoDrives, partRepos, templateOmitBaseline, templateEmptySame,
-		"The first attached repository, or the sandbox's default working directory when none is attached.").
-		pending("A-L7/D112113"),
+		"Nothing starts automatically unless chosen: one included harness, one command, or none. A removed startup tool is never replaced by another.").sensitive(),
+	carriedField("start_folder", templateTabRepoDrives, partRepos, templateOmitBaseline, templateEmptySame,
+		"The first attached repository, or the sandbox's default working directory when none is attached. A run has exactly one starting folder."),
 	carriedField("no_repositories_or_drives", templateTabRepoDrives, partRepos, templateOmitRequired, templateEmptySame,
-		"The tab stays incomplete until something is attached or the person explicitly chooses no repositories or drives. Choosing none warns that nothing in the sandbox is kept unless it is pushed or copied out.").
-		pending("D112113"),
+		"The tab stays incomplete until something is attached or the person explicitly chooses no repositories or drives. Choosing none warns that nothing in the sandbox is kept unless it is pushed or copied out."),
 }
 
 // templatePolicyRules classifies every RunPolicySpec field, spoken of as
@@ -287,6 +288,7 @@ var templateNestedCarried = map[string]string{
 	"DriveSelection":      "enabled read_only",
 	"GitPATOverride":      "host repos access api",
 	"GrantSpec":           "kind scope ttl_seconds requires_approval owner_only",
+	"IncludedTool":        "id kind model_provider component tool_rules default_effect",
 	"LLMInspectionSpec": "mode workspace_secret_names detect_secrets detect_secret_patterns detect_entropy detect_pii detector_sidecar_url " +
 		"classified_markers scan_attachments inspect_forward_egress max_scan_bytes on_scanner_error require_inspectable_llm intercept_tls block_min_severity",
 	"PushRuleOverride":   "provider org deny_paths require_review_paths",
@@ -294,6 +296,9 @@ var templateNestedCarried = map[string]string{
 	"ResourceLimits":     "cpu_millis memory_mib pids_limit disk_mib",
 	"RunOverrides":       "agent azure_devops git_pat push_rules",
 	"RunResources":       "cpu_millis memory_mib",
+	"RunStartup":         "kind tool command",
+	"RunWorkload":        "kind agent task command",
+	"StartFolder":        "kind attachment subpath",
 	"SecretOverride":     "secret_name host header format",
 	"ToolRule":           "tool effect",
 	"UIApp":              "name port path",

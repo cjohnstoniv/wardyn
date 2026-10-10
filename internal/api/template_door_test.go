@@ -210,8 +210,8 @@ func TestTemplateDependencyEdges(t *testing.T) {
 	}
 	want := []string{
 		"devcontainer_ref>devcontainer_repo", "model_provider>agent", "tool_approvals>agent", "seed_auto_tools>agent",
-		"inline_policy.tool_rules>agent", "interactive_start>interactive", "task_mode>interactive", "inline_policy.ui_apps>interactive",
-		"runner_id>placement", "runner_id>runner_pool_id",
+		"inline_policy.tool_rules>agent", "workload>experience", "startup>experience", "interactive_start>interactive", "task_mode>interactive",
+		"inline_policy.ui_apps>interactive", "runner_id>placement", "runner_id>runner_pool_id",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("dependency edges = %v, want %v", got, want)
@@ -287,6 +287,10 @@ func TestTemplateFullCoverage(t *testing.T) {
 		gaps         bool
 	}{
 		{"agent only", `{"agent":"claude-code"}`, true},
+		{"experience background without a workload", `{"experience":"background","no_repositories_or_drives":true}`, true},
+		{"experience background with a workload", `{"experience":"background","workload":{"kind":"command","command":"make"},"no_repositories_or_drives":true}`, false},
+		{"experience interactive needs no workload", `{"experience":"interactive","no_repositories_or_drives":true}`, false},
+		{"experience interactive attaches nothing and says nothing", `{"experience":"interactive"}`, true},
 		{"no mode chosen", `{"agent":"claude-code","drive":{"enabled":true}}`, true},
 		{"only the mode is missing", `{"task_mode":"exec","image":"img","drive":{"enabled":true}}`, true},
 		{"background without a task kind", `{"interactive":false,"agent":"claude-code","drive":{"enabled":true}}`, true},
@@ -365,9 +369,17 @@ func TestTemplateRegistryFollowsTheOwnersAccessAndModeRulings(t *testing.T) {
 			t.Errorf("%s omission = %s, want %s", name, r.Omitted, omitted)
 		}
 	}
-	for _, name := range []string{"experience", "included_tools", "startup", "starting_folder", "no_repositories_or_drives", "runner_pool_id"} {
-		if r, ok := templateRule(templateRequestRules, name); !ok || r.Pending == "" {
-			t.Errorf("%s must be a pending carrier", name)
+	if r, ok := templateRule(templateRequestRules, "runner_pool_id"); !ok || r.Pending == "" {
+		t.Error("runner_pool_id must be a pending carrier")
+	}
+	for _, name := range []string{"experience", "workload", "tools", "startup", "start_folder", "no_repositories_or_drives"} {
+		if r, ok := templateRule(templateRequestRules, name); !ok || r.Pending != "" {
+			t.Errorf("%s is a real run carrier now: its row must exist and carry no pending flag", name)
+		}
+	}
+	for _, name := range []string{"included_tools", "starting_folder"} {
+		if _, ok := templateRule(templateRequestRules, name); ok {
+			t.Errorf("%s was a working name: the wire name replaced it", name)
 		}
 	}
 	for _, name := range []string{"title", "description"} {

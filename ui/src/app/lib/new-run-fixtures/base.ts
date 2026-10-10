@@ -55,7 +55,7 @@ export interface FixtureRefusal {
 }
 
 /** The tabs, in order (DECISIONS "New Run tabs restructured"). */
-export type FixtureTab = "info" | "workspaces" | "runner" | "access" | "policy";
+export type FixtureTab = "info" | "workspaces" | "runner" | "tools_image" | "repositories_drives" | "access" | "policy";
 
 export interface NewRunFixture {
   /** The tab the frame belongs to. The packet's `run/…` routes are the Runner tab (Info is Title and Description only). */
@@ -205,7 +205,7 @@ export const sources = (...pairs: [string, FixtureProvenance["source"]["kind"], 
   pairs.map(([value, kind, name]) => ({ field: "allowed_domains", value, source: { kind, ...(name ? { name } : {}) }, effect: "added" as const }));
 
 /** The form's contract draft with nothing chosen. */
-export const noContract = (): RunContractDraft => ({ runner: {}, access: { overrides: { gitPAT: [], pushRules: [] } } });
+export const noContract = (): RunContractDraft => ({ runner: {}, access: { overrides: { gitPAT: [], pushRules: [] } }, mode: { tools: [] } });
 
 /** A component the person defined (a run on a runner needs the ceiling term that allows it). */
 export const selfDefined = (name: string, over: Partial<ComponentFact> = {}): ComponentFact =>

@@ -17,12 +17,18 @@ import { hostOverrideKind, type OverrideKind, type OverrideOp } from "./override
 import type {
   ADOOverrides,
   AgentOverrides,
+  Experience,
   GitPATOverride,
+  IncludedTool,
   PlacementValue,
   PushRuleOverride,
   RequestedResources,
   RunOverrides,
+  RunStartup,
+  RunWorkload,
+  StartFolder,
 } from "./types/new-run-contract";
+import { RUN_MODE_REFUSAL, RUN_MODE_REASON } from "./run-mode-refusals";
 
 /** The edits the person made, grouped by the component that owns them. */
 export interface OverrideDraft {
@@ -59,6 +65,28 @@ export interface AccessDraft {
 }
 
 /**
+ * The run-mode draft (pkg/client/runs_mode.go): what the person is starting.
+ * Experience belongs to Runner, the workload, tools and startup to Tools & Image,
+ * the starting folder and the explicit "no repositories or drives" to
+ * Repositories & Drives; the controller (A-L8) holds them as one group so a mode
+ * switch revalidates the rest together. Nothing is inferred: a fresh draft has no
+ * experience, and a draft without one sends none of these fields.
+ */
+export interface RunModeDraft {
+  experience?: Experience;
+  /** Background: an agent task or a command. Kept across a mode switch, sent only under Background. */
+  workload?: RunWorkload;
+  /** Included tools. Including is not starting: `startup` is separate. */
+  tools: IncludedTool[];
+  /** Interactive: what starts on its own. Absent is none. Kept across a mode switch, sent only under Interactive. */
+  startup?: RunStartup;
+  /** The one starting folder. Absent is the baseline: the first attached repository, else the image default. */
+  startFolder?: StartFolder;
+  /** The explicit choice to attach nothing. */
+  noRepositoriesOrDrives?: boolean;
+}
+
+/**
  * The draft of the contract fields, grouped by the tab that owns them (Info →
  * Workspaces → Runner → Access → Policy; new-run-tabs.ts assigns every other
  * form field). Info, Workspaces (the drive attach lives there) and Policy add
@@ -67,10 +95,13 @@ export interface AccessDraft {
 export interface RunContractDraft {
   runner: RunnerDraft;
   access: AccessDraft;
+  /** Absent is untouched: nothing of the run mode is sent. */
+  mode?: RunModeDraft;
 }
 
 export const emptyOverrideDraft = (): OverrideDraft => ({ gitPAT: [], pushRules: [] });
-export const emptyRunContractDraft = (): RunContractDraft => ({ runner: {}, access: { overrides: emptyOverrideDraft() } });
+export const emptyRunModeDraft = (): RunModeDraft => ({ tools: [] });
+export const emptyRunContractDraft = (): RunContractDraft => ({ runner: {}, access: { overrides: emptyOverrideDraft() }, mode: emptyRunModeDraft() });
 
 /** The sections that are on the page now; the console derives them from the dry-run facts and the attached workspaces. */
 export interface ActiveSections {
@@ -84,8 +115,8 @@ export interface ActiveSections {
 
 export const NO_ACTIVE_SECTIONS: ActiveSections = { agent: false, azureDevOps: false, gitPATHosts: [], pushKeys: [] };
 
-/** The key a push-rule override is filed under: provider and organisation. */
-export const pushRuleKey = (p: Pick<PushRuleOverride, "provider" | "org">): string => `${p.provider}/${p.org}`;
+/** The key a push-rule override is filed under: provider and organisation, the organisation in lower case (Go: types.PushRuleKey). */
+export const pushRuleKey = (p: Pick<PushRuleOverride, "provider" | "org">): string => `${p.provider}/${p.org.toLowerCase()}`;
 
 const hasAgentEdit = (a: AgentOverrides): boolean =>
   Object.values(a).some((v) => Array.isArray(v) && v.length > 0);
@@ -155,8 +186,72 @@ export function resourcesWire(cpus?: number, memoryMiB?: number): RequestedResou
   return out.cpu_millis || out.memory_mib ? out : undefined;
 }
 
+/** The run-mode carriers of the request body: all of them, or none while no experience is chosen. */
+export interface RunModeWire {
+  experience?: Experience;
+  workload?: RunWorkload;
+  tools?: IncludedTool[];
+  startup?: RunStartup;
+  start_folder?: StartFolder;
+  no_repositories_or_drives?: true;
+}
+
+/**
+ * The run-mode fields to send. Without an experience none are sent, because the
+ * server never infers a mode and refuses a carrier without one; the launch gate
+ * holds Launch until the person chooses. Under Background the harness the agent
+ * task runs is the one included tool and there is no startup; under Interactive
+ * there is no workload. What the draft holds for the other mode is kept, not sent.
+ */
+export function buildRunModeWire(mode: RunModeDraft | undefined): RunModeWire {
+  if (!mode?.experience) return {};
+  const out: RunModeWire = { experience: mode.experience };
+  if (mode.experience === "background") {
+    if (mode.workload) out.workload = mode.workload;
+    const agent = mode.workload?.kind === "agent_task" ? mode.workload.agent : undefined;
+    const tools = mode.tools.filter((t) => t.id === agent);
+    if (tools.length) out.tools = tools;
+  } else {
+    if (mode.tools.length) out.tools = mode.tools;
+    if (mode.startup) out.startup = mode.startup;
+  }
+  if (mode.startFolder) out.start_folder = mode.startFolder;
+  if (mode.noRepositoriesOrDrives) out.no_repositories_or_drives = true;
+  return out;
+}
+
+/** What the draft keeps for the mode it is not in, so a panel can say it is not used ("Not used by a background task."). */
+export function inactiveRunMode(mode: RunModeDraft): Pick<RunModeDraft, "workload" | "startup"> {
+  if (mode.experience === "background") return { startup: mode.startup };
+  if (mode.experience === "interactive") return { workload: mode.workload };
+  return {};
+}
+
+/** Removing the startup harness clears the startup visibly, and never substitutes another. */
+export function withoutTool(mode: RunModeDraft, id: string): { mode: RunModeDraft; clearedStartup: boolean } {
+  const clearedStartup = mode.startup?.kind === "harness" && mode.startup.tool === id;
+  return { mode: { ...mode, tools: mode.tools.filter((t) => t.id !== id), startup: clearedStartup ? undefined : mode.startup }, clearedStartup };
+}
+
+/** What blocks the run-mode choices from launching, as the server's own sentence and reason; null when none does. */
+export function runModeBlocker(mode: RunModeDraft | undefined): { reason: string; text: string } | null {
+  if (!mode?.experience) return { reason: RUN_MODE_REASON.REQUIRED, text: RUN_MODE_REFUSAL.RUN_MODE_REQUIRED() };
+  if (mode.experience === "background" && !mode.workload) return { reason: RUN_MODE_REASON.REQUIRED, text: RUN_MODE_REFUSAL.RUN_WORKLOAD_REQUIRED() };
+  const s = mode.experience === "interactive" ? mode.startup : undefined;
+  if (s?.kind === "harness" && !mode.tools.some((t) => t.id === s.tool && t.kind === "harness")) {
+    return { reason: RUN_MODE_REASON.CONFLICT, text: RUN_MODE_REFUSAL.STARTUP_TOOL_UNKNOWN(s.tool ?? "") };
+  }
+  return null;
+}
+
+/** The documented mapping from an older client's input (Go: CreateRunRequest.EffectiveExperience). */
+export function effectiveExperience(input: { experience?: Experience; interactive?: boolean; task?: string }): Experience {
+  if (input.experience) return input.experience;
+  return input.interactive || !input.task?.trim() ? "interactive" : "background";
+}
+
 /** The contract fields of the request body, each present only when the person chose it. */
-export interface RunContractWire {
+export interface RunContractWire extends RunModeWire {
   placement?: PlacementValue;
   runner_id?: string;
   runner_pool_id?: string;
@@ -178,5 +273,5 @@ export function buildRunContractWire(draft: RunContractDraft | undefined, active
   if (resources) wire.resources = resources;
   const overrides = buildOverrides(draft.access.overrides, active);
   if (overrides) wire.overrides = overrides;
-  return wire;
+  return { ...wire, ...buildRunModeWire(draft.mode) };
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 func TestIsKnownNonVaultRuntime(t *testing.T) {
@@ -244,6 +245,42 @@ func TestBuildProxyConfig_Attribution(t *testing.T) {
 	pc.Attribution = nil
 	if b, _ = BuildProxyConfig(uuid.New(), pc, ProxyListenPort); strings.Contains(string(b), "attribution") {
 		t.Errorf("a run with none names the key: %s", b)
+	}
+}
+
+// TestBuildProxyConfig_CarriesTheRunModeDispatchPlan: the per-entry push rule
+// sets and the per-harness tool rules reach the sidecar through its strict
+// decoder, and a run that carries none leaves no key behind (an older proxy
+// image refuses an unknown key).
+func TestBuildProxyConfig_CarriesTheRunModeDispatchPlan(t *testing.T) {
+	pc := ProxyConfig{
+		RunToken: "tok", ControlPlaneURL: "http://127.0.0.1:1",
+		PushRuleSets:     []types.PushRuleSet{{Provider: "github", Org: "acme", Rules: types.PushRulesSpec{DenyPaths: []string{"infra/"}}}},
+		HarnessToolRules: []types.HarnessToolRules{{Harness: "claude-code", Default: types.ToolHold, Rules: []types.ToolRule{{Tool: "Read", Effect: types.ToolAllow}}}},
+	}
+	b, err := BuildProxyConfig(uuid.New(), pc, ProxyListenPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := proxy.LoadConfigBytes(b)
+	if err != nil {
+		t.Fatalf("the sidecar refused the config: %v", err)
+	}
+	if got, ok := types.PushRulesForEntry(cfg.PushRuleSets, "github", "ACME"); !ok || got.DenyPaths[0] != "infra/" {
+		t.Errorf("push rules did not arrive: %+v", cfg.PushRuleSets)
+	}
+	if eff, ok := types.ToolEffectForHarness(cfg.HarnessToolRules, "claude-code", "Read"); !ok || eff != types.ToolAllow {
+		t.Errorf("tool rules did not arrive: %+v", cfg.HarnessToolRules)
+	}
+	pc.PushRuleSets, pc.HarnessToolRules = nil, nil
+	if b, _ = BuildProxyConfig(uuid.New(), pc, ProxyListenPort); strings.Contains(string(b), "push_rule_sets") || strings.Contains(string(b), "harness_tool_rules") {
+		t.Errorf("a run with none names the keys: %s", b)
+	}
+	// A malformed carrier fails the sidecar's start, never a quiet partial rule set.
+	pc.PushRuleSets = []types.PushRuleSet{{Provider: "github", Org: "a"}, {Provider: "github", Org: "A"}}
+	b, _ = BuildProxyConfig(uuid.New(), pc, ProxyListenPort)
+	if _, err := proxy.LoadConfigBytes(b); err == nil {
+		t.Error("two sets for one entry were accepted")
 	}
 }
 

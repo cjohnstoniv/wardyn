@@ -200,6 +200,8 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		LLMUnavailableDetail: pc.LLMUnavailableDetail,
 		Unattended:           pc.Unattended,
 		Attribution:          pc.Attribution,
+		PushRuleSets:         pc.PushRuleSets,
+		HarnessToolRules:     pc.HarnessToolRules,
 	}
 	return json.Marshal(cfg)
 }

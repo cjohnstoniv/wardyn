@@ -20,7 +20,7 @@ import (
 // exempts a newly added child: both the table and this closed schema must cover it.
 var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.Config](): strings.Fields("RunID ControlPlaneURL ControlPlaneCAPEM RunToken Policy Injection Listen DecisionBufferSize MITMCACertPEM MITMCAKeyPEM MITMHosts GitGrants PATGrants " +
-		"BrokeredPATGrantIDs ADOGrant AzureGates MITMLLM UpstreamProxyURL UpstreamProxyNoProxy TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail Unattended Attribution"),
+		"BrokeredPATGrantIDs ADOGrant AzureGates MITMLLM UpstreamProxyURL UpstreamProxyNoProxy TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail Unattended Attribution PushRuleSets HarnessToolRules"),
 	reflect.TypeFor[proxy.InjectionConfig]():   strings.Fields("InjectionRule GrantID"),
 	reflect.TypeFor[LocalPlan]():               strings.Fields("Spec Origins CredentialIntents OrgConfigKeys VerifiedLocalPaths UpstreamProxySecretRef TrustedOutput SelfDefinedComponents LocalSelfDefinedComponents Delivery"),
 	reflect.TypeFor[CredentialOrigin]():        strings.Fields("Class Delivery GrantKind Stored OwnNamespace OwnerOnly"),
@@ -46,10 +46,12 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.ResourceLimits]():    strings.Fields("CPUMillis MemoryMiB PidsLimit DiskMiB"),
 	reflect.TypeFor[types.RunPolicySpec](): strings.Fields("AllowedDomains DeniedDomains AllowAllEgress FirstUseApproval FirstUseHoldSeconds MaxHolds AllowedMethods MinConfinementClass EligibleGrants AutoStopAfterSec " +
 		"WorkspaceMounts WorkspaceRepos LLMInspection UIApps Resources ToolRules GitPushAnyBranch PushRules AzureDevOpsCapabilities GitHubCapabilities"),
-	reflect.TypeFor[types.ToolRule]():       strings.Fields("Tool Effect"),
-	reflect.TypeFor[types.UIApp]():          strings.Fields("Name Port Path"),
-	reflect.TypeFor[types.WorkspaceMount](): strings.Fields("Source Target ReadOnly"),
-	reflect.TypeFor[types.WorkspaceRepo]():  strings.Fields("Repo Target Ref"),
+	reflect.TypeFor[types.ToolRule]():         strings.Fields("Tool Effect"),
+	reflect.TypeFor[types.PushRuleSet]():      strings.Fields("Provider Org Rules"),
+	reflect.TypeFor[types.HarnessToolRules](): strings.Fields("Harness Default Rules"),
+	reflect.TypeFor[types.UIApp]():            strings.Fields("Name Port Path"),
+	reflect.TypeFor[types.WorkspaceMount]():   strings.Fields("Source Target ReadOnly"),
+	reflect.TypeFor[types.WorkspaceRepo]():    strings.Fields("Repo Target Ref"),
 }
 
 // NestedUnclassified checks types even when the current value is nil or empty.

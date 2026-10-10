@@ -13,6 +13,7 @@
 
 import type { PlacementReason } from "../new-run-refusals";
 import type { ToolRule } from "./policy";
+import type { ComponentRef } from "./components";
 
 export type PlacementValue = "remote" | "local";
 
@@ -190,3 +191,59 @@ export interface AllowedImage {
   ref: string;
   name?: string;
 }
+
+// The run-mode contract (pkg/client/runs_mode.go): what a person is starting. A
+// new client sends `experience` with these carriers in place of agent, task,
+// task_mode, interactive and interactive_start; the server refuses a request that
+// mixes the two (run_mode_conflict) and never infers an unset mode.
+
+/** The canonical run mode (Go: types.RunExperience), stored on the run as `AgentRun.experience`. */
+export type Experience = "background" | "interactive";
+
+export type WorkloadKind = "agent_task" | "command";
+
+/** What a Background run executes: an agent task (agent and task) or a command (command). */
+export interface RunWorkload {
+  kind: WorkloadKind;
+  agent?: string;
+  task?: string;
+  command?: string;
+}
+
+export type IncludedToolKind = "harness" | "component";
+
+/**
+ * One included tool instance. Including a tool neither starts it nor grants it a
+ * credential: each carries its own provider or configuration and its own tool
+ * rules, so independent tools never share one selection. `id` is the key
+ * `startup.tool`, the approval broker and the per-harness rules use.
+ */
+export interface IncludedTool {
+  id: string;
+  kind: IncludedToolKind;
+  model_provider?: string;
+  component?: ComponentRef;
+  tool_rules?: ToolRule[];
+  default_effect?: "allow" | "hold" | "deny";
+}
+
+export type StartupKind = "none" | "harness" | "command";
+
+/** What an Interactive run starts on its own: one choice, never two competing launches. */
+export interface RunStartup {
+  kind: StartupKind;
+  tool?: string;
+  command?: string;
+}
+
+export type StartFolderKind = "image_default" | "attachment";
+
+/** The run's exactly-one starting folder; `attachment` is a workspace id or `drive`. */
+export interface StartFolder {
+  kind: StartFolderKind;
+  attachment?: string;
+  subpath?: string;
+}
+
+/** The attachment name of the person's drive in `StartFolder.attachment`. */
+export const START_FOLDER_DRIVE = "drive";

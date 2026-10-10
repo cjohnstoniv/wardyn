@@ -8,7 +8,8 @@
 # 0.9 C-pools: docs/sdk.md 12481 adds 18 over 12463 for the two published runner pool reasons.
 # 0.9 H7: docs/sdk.md 12503 adds 22 over 12481 for the `placement_component_self_defined` reason row.
 # docs/sdk.md 12713 measured after merging H7.
-docs/sdk.md=12713 share=21
+# 0.9 C-mode: docs/sdk.md 12794 adds 81 over 12713 for the run-mode reasons in three rows (run_mode_required/invalid, start_folder_invalid, run_mode_conflict, run_background_only).
+docs/sdk.md=12794 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

@@ -135,9 +135,11 @@ type PushRuleOverride struct {
 	RequireReviewPaths []string `json:"require_review_paths,omitempty"`
 }
 
-// PushRuleKey is the provider and organisation a push-rule override is keyed
-// by. Two overrides with one key are refused as duplicates.
-func (p PushRuleOverride) PushRuleKey() string { return p.Provider + "/" + p.Org }
+// PushRuleKey is the SCM entry a push-rule override is keyed by: provider and
+// organisation, the organisation in lower case (types.PushRuleKey). Two
+// overrides with one key are refused as duplicates, so "Acme" and "acme" cannot
+// both claim one entry.
+func (p PushRuleOverride) PushRuleKey() string { return types.PushRuleKey(p.Provider, p.Org) }
 
 // OverrideItem is one edit of a RunOverrides, in the narrowing table's terms.
 // Subject names what is edited, for a sentence the caller can act on.

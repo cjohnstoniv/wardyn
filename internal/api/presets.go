@@ -259,7 +259,12 @@ func (s *Server) decodeRunRequest(w http.ResponseWriter, r *http.Request, req *c
 	if !decodeStrict(w, r, req) {
 		return false
 	}
-	return s.expandRunPreset(w, r, req)
+	if !s.expandRunPreset(w, r, req) {
+		return false
+	}
+	// After the preset, which can bring its own request: a new client's carriers
+	// are refused or projected onto the legacy fields here, before any gate reads them.
+	return !applyRunMode(req).write(s, w, r)
 }
 
 // expandRunPreset replaces a preset launch with the stored request, keeping

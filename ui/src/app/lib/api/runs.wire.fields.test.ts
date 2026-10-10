@@ -36,7 +36,7 @@ import { previewRunPolicy } from "./policy-preview";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { runs } from "./runs";
+import { runs, runWireBody } from "./runs";
 import type { RunPolicySpec } from "../types";
 
 // The body type createRun/preflightRun accept (RunWireInput is not exported).
@@ -136,6 +136,30 @@ const expectedWire: Record<string, unknown> = {
   resources: { cpu_millis: 4000, memory_mib: 8192 },
   overrides: { azure_devops: { capabilities: ["code_read"] } },
 };
+
+// A new client's request: the run-mode carriers replace the older mode fields,
+// so this body is the second half of "every CreateRunRequest tag is forwarded".
+const fullModeInput: WireInput = {
+  repo: "acme/payments",
+  experience: "interactive",
+  tools: [{ id: "claude-code", kind: "harness", model_provider: "bedrock-team" }],
+  startup: { kind: "harness", tool: "claude-code" },
+  start_folder: { kind: "attachment", attachment: "drive", subpath: "src" },
+  workload: { kind: "agent_task", agent: "claude-code", task: "t" },
+  no_repositories_or_drives: true,
+  // What the older mode fields would say: a new client's request must not carry them.
+  agent: "claude-code",
+  task: "legacy",
+  interactive: true,
+  task_mode: "exec",
+  interactive_start: "agent",
+  seed_auto_tools: true,
+  tool_approvals: "hold",
+  model_provider: "bedrock-team",
+};
+
+// The older mode fields the carriers replace (Go: runModeLegacyField).
+const REPLACED_BY_RUN_MODE = ["agent", "task", "interactive", "task_mode", "interactive_start", "seed_auto_tools", "tool_approvals", "model_provider"];
 
 // Go DTO JSON tags the console NEVER sends (CLI-only — cmd/wardyn/commands.go:96-103).
 // If the whitelist starts forwarding one of these, or the Go DTO drops one,
@@ -339,7 +363,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
   const root = repoRoot();
   // CreateRunRequest and WorkspaceSelection live in runs_create.go; read the
   // package's two DTO files together so a later move within pkg/client is not a false red.
-  const clientGo = ["client.go", "runs_create.go", "runs_new_run.go"].map((f) => readFileSync(join(root, "pkg/client", f), "utf8")).join("\n");
+  const clientGo = ["client.go", "runs_create.go", "runs_new_run.go", "runs_mode.go"].map((f) => readFileSync(join(root, "pkg/client", f), "utf8")).join("\n");
   const typesGo = readFileSync(join(root, "internal/types/types.go"), "utf8");
   const runsTs = readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8");
   const runCreateTs = readFileSync(join(root, "ui/src/app/lib/types/run-create.ts"), "utf8");
@@ -347,8 +371,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
   it("every CreateRunRequest json tag is forwarded by runWireBody or on the UI-never-sends list", async () => {
     const goTags = goJSONTags(clientGo, "CreateRunRequest");
     expect(goTags.length).toBeGreaterThanOrEqual(17); // stale-regex guard (Go test does the same)
-    await runs.createRun(fullInput);
-    const wireKeys = new Set(Object.keys(sentBody()));
+    const wireKeys = new Set([...Object.keys(runWireBody(fullInput)), ...Object.keys(runWireBody(fullModeInput))]);
     const missing = goTags.filter((t) => !wireKeys.has(t) && !UI_NEVER_SENDS.has(t));
     expect(
       missing,
@@ -363,9 +386,28 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
 
   it("every key runWireBody emits is a CreateRunRequest json tag (a stray key is a strict-decode 400)", async () => {
     const goTags = new Set(goJSONTags(clientGo, "CreateRunRequest"));
-    await runs.createRun(fullInput);
-    const stray = Object.keys(sentBody()).filter((k) => !goTags.has(k));
+    const stray = [...Object.keys(runWireBody(fullInput)), ...Object.keys(runWireBody(fullModeInput))].filter((k) => !goTags.has(k));
     expect(stray, "keys the server will reject with 400 'unknown field' (helpers.go:393)").toEqual([]);
+  });
+
+  it("a new client's request carries the run-mode carriers and none of the older mode fields", async () => {
+    for (const door of ["createRun", "preflightRun"] as const) {
+      fetchMock.mockClear();
+      await runs[door](fullModeInput);
+      const body = sentBody();
+      for (const key of ["experience", "tools", "startup", "start_folder", "workload", "no_repositories_or_drives", "repo"]) {
+        expect(body, `${key} on ${door}`).toHaveProperty(key);
+      }
+      for (const key of REPLACED_BY_RUN_MODE) expect(body, `${key} on ${door}`).not.toHaveProperty(key);
+    }
+  });
+
+  it("an older client's request carries none of the run-mode carriers", () => {
+    const body = runWireBody(fullInput);
+    for (const key of ["experience", "tools", "startup", "start_folder", "workload", "no_repositories_or_drives"]) {
+      expect(body).not.toHaveProperty(key);
+    }
+    for (const key of REPLACED_BY_RUN_MODE.filter((k) => k !== "model_provider")) expect(body).toHaveProperty(key);
   });
 
   it("WorkspaceSelection: the TS wire entry's keys are exactly Go's json tags", () => {
