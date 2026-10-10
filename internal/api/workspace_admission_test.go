@@ -616,7 +616,7 @@ func TestProviderLaneVetoAtTheThreeGrantArms(t *testing.T) {
 			st.siteConfig = tc.sc
 			runID := uuid.New()
 			gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), runID, time.Now().UTC(),
-				types.RunPolicySpec{EligibleGrants: []types.GrantSpec{tc.grant}})
+				types.RunPolicySpec{EligibleGrants: []types.GrantSpec{tc.grant}}, types.PlacementRemote)
 			if !ok {
 				t.Fatal("persistRunGrants failed")
 			}
@@ -663,7 +663,7 @@ func TestProviderLaneVetoPermitsWhatTheRowPermits(t *testing.T) {
 			srv, st, _ := govEscapeFixture(t, &capStore{})
 			st.siteConfig = tc.sc
 			gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), uuid.New(), time.Now().UTC(),
-				types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT, Scope: scope}}})
+				types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT, Scope: scope}}}, types.PlacementRemote)
 			if !ok {
 				t.Fatal("persistRunGrants failed")
 			}
@@ -757,7 +757,7 @@ func TestLaneVetoAsksTheROWThatAdmitted(t *testing.T) {
 					WorkspaceRepos: []types.WorkspaceRepo{{Repo: admitOnRow}},
 					EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT,
 						Scope: mustJSON(map[string]any{"host": "github.com", "secret_name": "gh-pat"})}},
-				})
+				}, types.PlacementRemote)
 			if !ok {
 				t.Fatal("persistRunGrants failed")
 			}
@@ -779,7 +779,7 @@ func TestLaneVetoAsksTheROWThatAdmitted(t *testing.T) {
 				WorkspaceRepos: []types.WorkspaceRepo{{Repo: admitOnRow}},
 				EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT,
 					Scope: mustJSON(map[string]any{"host": "github.com", "secret_name": "gh-pat"})}},
-			})
+			}, types.PlacementRemote)
 		if !ok {
 			t.Fatal("persistRunGrants failed")
 		}
@@ -817,7 +817,7 @@ func TestLaneVetoAsksTheROWThatAdmitted(t *testing.T) {
 		st.siteConfig = sc
 		gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), uuid.New(), time.Now().UTC(),
 			types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT,
-				Scope: mustJSON(map[string]any{"host": "github.com", "secret_name": "gh-pat"})}}})
+				Scope: mustJSON(map[string]any{"host": "github.com", "secret_name": "gh-pat"})}}}, types.PlacementRemote)
 		if !ok {
 			t.Fatal("persistRunGrants failed")
 		}

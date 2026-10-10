@@ -306,3 +306,11 @@ func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
 	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.r.Context(), f.spec, f.ceiling))
 	return !refused
 }
+
+// stepLocalEligibility is before confinement/provider liveness: create may
+// renew a one-use AWS credential there. No local refusal may reach that phase.
+// The admitted plan supplies specific refusals; final unsupported-local stays
+// before mint/persistence until the resolver and runner route are implemented.
+func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
+	return !s.localPlacementRefusal(f.r, *f.req, f.spec, f.ceiling, f.comps, f.driveMount, f.wsRefs).write(s, f.w, f.r)
+}

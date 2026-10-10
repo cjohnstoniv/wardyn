@@ -17,7 +17,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
-	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -393,9 +392,6 @@ func builtinComponentsRefusal(req createRunRequest) *runRefusal {
 // run's posture and that no lane applies yet. Each is refused by name.
 func unappliedFieldsRefusal(req createRunRequest) *runRefusal {
 	switch {
-	case req.Placement == placement.Local:
-		return runError(placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable),
-			"Your own runner is not available: this server cannot place a run on a runner yet.")
 	case req.RunnerPoolID != "":
 		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
 			"runner_pool_id: this server does not manage runner pools yet, so the run was not created.")

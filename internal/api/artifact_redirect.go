@@ -311,10 +311,10 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 			"secret_name": tok.secretName,
 			"require_tls": !redirectIsCleartext(r.To),
 		})
-		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
+		if _, gerr := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 			ID: grantID, RunID: run.ID, CreatedAt: s.cfg.Now().UTC(),
 			Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600},
-		}); gerr != nil {
+		}, true); gerr != nil {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
 				run.ID.String(), "failure", mustJSON(map[string]any{
 					"ecosystem": r.Ecosystem, "host": host, "error": gerr.Error(),

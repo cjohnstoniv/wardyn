@@ -69,23 +69,24 @@ type PushRulesOverlay struct {
 // embedded RunLimits fields sit flat on the wire, as they do on the limits
 // object itself.
 type LimitsOverlay struct {
-	DenyTaskModeExec    *bool           `json:"deny_task_mode_exec,omitempty"`
-	DenyInteractive     *bool           `json:"deny_interactive,omitempty"`
-	DenyUIApps          *bool           `json:"deny_ui_apps,omitempty"`
-	MaxConcurrentRuns   *int            `json:"max_concurrent_runs,omitempty"`
-	DenyUserDrive       *bool           `json:"deny_user_drive,omitempty"`
-	MaxCPUMillis        *int            `json:"max_cpu_millis,omitempty"`
-	MaxMemoryMiB        *int            `json:"max_memory_mib,omitempty"`
-	MaxEphemeralDiskMiB *int            `json:"max_ephemeral_disk_mib,omitempty"`
-	MaxDriveSizeMiB     *int            `json:"max_drive_size_mib,omitempty"`
-	AutonomyRubric      *AutonomyRubric `json:"autonomy_rubric,omitempty"`
-	MaxEndAheadSec      *int            `json:"max_end_ahead_sec,omitempty"`
-	DefaultEndSec       *int            `json:"default_end_sec,omitempty"`
-	AllowNoEnd          *bool           `json:"allow_no_end,omitempty"`
-	MaxWaitSec          *int            `json:"max_wait_sec,omitempty"`
-	DefaultWaitSec      *int            `json:"default_wait_sec,omitempty"`
-	UserChangesLimits   *bool           `json:"user_changes_limits,omitempty"`
-	PauseIdleAfterSec   *int            `json:"pause_idle_after_sec,omitempty"`
+	LocalSelfDefinedComponents *bool           `json:"local_self_defined_components,omitempty"`
+	DenyTaskModeExec           *bool           `json:"deny_task_mode_exec,omitempty"`
+	DenyInteractive            *bool           `json:"deny_interactive,omitempty"`
+	DenyUIApps                 *bool           `json:"deny_ui_apps,omitempty"`
+	MaxConcurrentRuns          *int            `json:"max_concurrent_runs,omitempty"`
+	DenyUserDrive              *bool           `json:"deny_user_drive,omitempty"`
+	MaxCPUMillis               *int            `json:"max_cpu_millis,omitempty"`
+	MaxMemoryMiB               *int            `json:"max_memory_mib,omitempty"`
+	MaxEphemeralDiskMiB        *int            `json:"max_ephemeral_disk_mib,omitempty"`
+	MaxDriveSizeMiB            *int            `json:"max_drive_size_mib,omitempty"`
+	AutonomyRubric             *AutonomyRubric `json:"autonomy_rubric,omitempty"`
+	MaxEndAheadSec             *int            `json:"max_end_ahead_sec,omitempty"`
+	DefaultEndSec              *int            `json:"default_end_sec,omitempty"`
+	AllowNoEnd                 *bool           `json:"allow_no_end,omitempty"`
+	MaxWaitSec                 *int            `json:"max_wait_sec,omitempty"`
+	DefaultWaitSec             *int            `json:"default_wait_sec,omitempty"`
+	UserChangesLimits          *bool           `json:"user_changes_limits,omitempty"`
+	PauseIdleAfterSec          *int            `json:"pause_idle_after_sec,omitempty"`
 }
 
 // DecodeCeilingOverlay strictly decodes a stored or submitted overlay.

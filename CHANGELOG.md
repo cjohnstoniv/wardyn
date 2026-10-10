@@ -89,6 +89,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- Own-runner (local) eligibility classifies the complete dispatch plan: own credentials are separated from operator,
+  brokered and platform-minted material, every unclassified or unknown field refuses, own stored grants are persisted
+  owner-only after the owner's namespace is proven, and a self-defined component on a local run needs
+  `local_self_defined_components` (default deny). Own-runner execution itself stays unavailable
+  (`placement_unavailable`) until routing and delivery land.
 - Run detail and `wardyn run policy` identify organisation-component egress as
   "Added for an attached component"; direct GitHub clone hosts are attributed to source control.
 

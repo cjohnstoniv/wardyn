@@ -288,10 +288,10 @@ func (s *Server) authorOAuthSentinelGrant(ctx context.Context, run types.AgentRu
 	}
 	raw, _ := json.Marshal(scope)
 	grantID := uuid.New()
-	if _, err := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
+	if _, err := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 		Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: raw, TTLSeconds: 3600},
-	}); err != nil {
+	}, false); err != nil {
 		// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
 		// KILLED state is preserved rather than clobbered back to FAILED.
 		// The hint is member-visible: a fixed sentence, never the store's text.

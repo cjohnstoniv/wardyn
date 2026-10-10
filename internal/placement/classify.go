@@ -41,6 +41,17 @@ const (
 	RuleNotConfigured Rule = "not_configured" // refused, and not a configurable class
 )
 
+// Rules and Classes are closed sets: a row naming anything else is refused by
+// TestTableRowsAreWellFormed, and at runtime an unknown rule is a gated rule
+// with no gate, which refuses; it is never an allow.
+var (
+	allRules   = []Rule{RuleAllow, RuleDelivery, RuleViaOrgRefuse, RuleRefuse, RuleBound, RuleNotSent, RuleStrip, RuleExempt, RuleOwnerOnlyOwn, RuleNotConfigured}
+	allClasses = []Class{ClassOwn, ClassOperator, ClassBrokered, ClassPlatform, ClassExempt, ClassComposite}
+)
+
+func (r Rule) known() bool  { return slices.Contains(allRules, r) }
+func (c Class) known() bool { return slices.Contains(allClasses, c) }
+
 // The structs the table covers.
 const (
 	StructSandboxSpec = "SandboxSpec"
@@ -67,12 +78,12 @@ type Entry struct {
 // it; a field not named here fails TestDispatchPlanFieldsClassified.
 var Table = []Entry{
 	// runner.SandboxSpec
-	{Struct: StructSandboxSpec, Field: "SecretEnv", Variant: "env_secret grant, OwnerOnly", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
+	{Struct: StructSandboxSpec, Field: "SecretEnv", Variant: "env_secret grant, OwnerOnly", Class: ClassOwn, Rule: RuleOwnerOnlyOwn, Delivery: ClassEnvSecret},
 	{Struct: StructSandboxSpec, Field: "SecretEnv", Variant: "env_secret grant, not OwnerOnly", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassEnvSecret, Reason: ReasonPlacementCredential},
-	{Struct: StructSandboxSpec, Field: "SecretEnv", Variant: "Bedrock role credentials, the person's own bedrock_sso", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
+	{Struct: StructSandboxSpec, Field: "SecretEnv", Variant: "Bedrock role credentials, the person's own bedrock_sso: they sign in-process, so own is still runner_resident or refuse", Class: ClassOwn, Rule: RuleDelivery, Delivery: ClassBedrockRoleCreds, Reason: ReasonPlacementCredential},
 	{Struct: StructSandboxSpec, Field: "SecretEnv", Variant: "Bedrock role credentials, otherwise", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassBedrockRoleCreds, Reason: ReasonPlacementCredential},
 	{Struct: StructSandboxSpec, Field: "ManagedFiles", Variant: "managed settings", Class: ClassPlatform, Rule: RuleAllow},
-	{Struct: StructSandboxSpec, Field: "ManagedFiles", Variant: "AgentOwned file_secret, OwnerOnly", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
+	{Struct: StructSandboxSpec, Field: "ManagedFiles", Variant: "AgentOwned file_secret, OwnerOnly", Class: ClassOwn, Rule: RuleOwnerOnlyOwn, Delivery: ClassFileSecret},
 	{Struct: StructSandboxSpec, Field: "ManagedFiles", Variant: "AgentOwned file_secret, not OwnerOnly", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassFileSecret, Reason: ReasonPlacementCredential},
 	{Struct: StructSandboxSpec, Field: "Mounts", Variant: "operator-authored, including host-mode ~/.aws", Class: ClassOperator, Rule: RuleRefuse, Reason: ReasonPlacementCapability},
 	{Struct: StructSandboxSpec, Field: "Mounts", Variant: "MemberAuthored local_dir", Class: ClassOwn, Rule: RuleBound, Reason: ReasonPlacementLocalPath},
@@ -102,11 +113,11 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "the person's model-provider key or own Claude sign-in", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "captured AWS SSO, credential_source per_user", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "captured AWS SSO shared", Class: ClassBrokered, Rule: RuleDelivery, Delivery: ClassAWSSSOBearer, Reason: ReasonPlacementCredential},
-	{Struct: StructProxyConfig, Field: "Injection", Variant: "Bedrock bearer", Class: ClassBrokered, Rule: RuleDelivery, Delivery: ClassBedrockBearer, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "GitGrants", Variant: "GitHub App installation token", Class: ClassBrokered, Rule: RuleViaOrgRefuse, Delivery: ClassGitHubToken, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "PATGrants", Variant: "per_user stored PAT", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "PATGrants", Variant: "shared CredentialSource", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassGitPATBroker, Reason: ReasonPlacementCredential},
-	{Struct: StructProxyConfig, Field: "BrokeredPATGrantIDs", Variant: "follows PATGrants", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassGitPATBroker, Reason: ReasonPlacementCredential},
+	{Struct: StructProxyConfig, Field: "BrokeredPATGrantIDs", Variant: "follows per_user PATGrants", Class: ClassOwn, Rule: RuleAllow},
+	{Struct: StructProxyConfig, Field: "BrokeredPATGrantIDs", Variant: "follows shared PATGrants", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassGitPATBroker, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "ADOGrant", Variant: "minted PAT from a captured Entra sign-in", Class: ClassBrokered, Rule: RuleViaOrgRefuse, Delivery: ClassADOMintedPAT, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "ADOGrant", Variant: "own_pat token mode", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "AzureGates", Variant: "Azure Foundry, the person's own Entra sign-in", Class: ClassOwn, Rule: RuleAllow},
@@ -118,6 +129,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "LLMUpstreams", Class: ClassOperator, Rule: RuleNotSent, Variant: "org network"},
 	{Struct: StructProxyConfig, Field: "MITMHosts", Class: ClassOperator, Rule: RuleStrip, Variant: "only hosts of own and runner_resident injections and every via_org destination; operator-only hosts dropped"},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "EligibleGrants", Class: ClassOperator, Rule: RuleStrip, Variant: "grants not delivered own or runner_resident dropped; a via_org grant keeps only its grant_id and host"},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "LLMInspection.WorkspaceSecretValues", Class: ClassOperator, Rule: RuleStrip, Variant: "resolved inspection corpus never sent to a runner"},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "LLMInspection.WorkspaceSecretNames", Class: ClassOperator, Rule: RuleStrip, Variant: "resolved values stripped; the org-side via_org scan may still use them"},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "AllowedDomains", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "DeniedDomains", Class: ClassExempt, Rule: RuleExempt},
@@ -144,6 +156,15 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "LLMUnavailableDetail", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Unattended", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Attribution", Class: ClassExempt, Rule: RuleExempt},
+
+	// Grant eligibility is classified even when approval has withheld its dispatch value.
+	{Struct: StructGrantKind, Field: "api_key", Variant: "own namespace", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
+	{Struct: StructGrantKind, Field: "api_key", Variant: "operator/shared", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassAPIKey, Reason: ReasonPlacementCredential},
+	{Struct: StructGrantKind, Field: "env_secret", Variant: "own namespace", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
+	{Struct: StructGrantKind, Field: "env_secret", Variant: "operator/shared", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassEnvSecret, Reason: ReasonPlacementCredential},
+	{Struct: StructGrantKind, Field: "file_secret", Variant: "own namespace", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
+	{Struct: StructGrantKind, Field: "file_secret", Variant: "operator/shared", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassFileSecret, Reason: ReasonPlacementCredential},
+	{Struct: StructGrantKind, Field: "github_token", Class: ClassBrokered, Rule: RuleViaOrgRefuse, Delivery: ClassGitHubToken, Reason: ReasonPlacementCredential},
 
 	// Grant kinds with no SandboxSpec field.
 	{Struct: StructGrantKind, Field: "ssh_key", Variant: "own key", Class: ClassOwn, Rule: RuleAllow},
@@ -172,12 +193,17 @@ func Unclassified() []string {
 		unclassifiedIn(StructSandboxSpec, reflect.TypeFor[runner.SandboxSpec]()),
 		unclassifiedIn(StructProxyConfig, reflect.TypeFor[runner.ProxyConfig]()),
 		unclassifiedPaths(StructProxyConfig, "Policy", reflect.TypeFor[types.RunPolicySpec]()),
+		NestedUnclassified(),
 	)
 }
 
 // unclassifiedPaths lists the exported fields of t, the type of struct.field,
 // that no row names by Path (a row for "A.B" names A). One level: a field of a
-// field is its row's to describe.
+// field is its row's to describe. Residual, by design: a child of a nested
+// carrier (Policy.LLMInspection, Resources, ...) inherits that row's rule once
+// it is listed in the nested manifest (nestedFields), so a manifest addition
+// under Policy is a classification decision for review, not a mechanical
+// edit. The closed-schema walk still refuses an unlisted child.
 func unclassifiedPaths(structName, field string, t reflect.Type) []string {
 	var out []string
 	for i := range t.NumField() {
