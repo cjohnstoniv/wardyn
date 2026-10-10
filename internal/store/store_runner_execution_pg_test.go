@@ -163,3 +163,71 @@ func TestPG_RunnerExitOwnershipStateAndReceiptIntegrity(t *testing.T) {
 		})
 	}
 }
+
+func TestPG_RunnerExitStagesBeforeBindingWithoutLifecycleEffects(t *testing.T) {
+	pool, st, rn, run, _ := spoolPGFixture(t)
+	ctx := context.Background()
+	gen := uuid.New()
+	ref := "runner:" + rn.ID.String() + "/agent"
+	if err := st.SetSandboxRef(ctx, run.ID, ref); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.BeginRunnerExecution(ctx, rn.ID, run.ID, uuid.Nil, gen, runnerwire.MethodExec); err != nil {
+		t.Fatal(err)
+	}
+	exit := runnerwire.AgentExit{Generation: gen, ExecID: "exec-early", Ref: ref, Code: 0, ObservedAt: time.Now()}
+	if err := st.StageRunnerExit(ctx, rn.ID, run.ID, exit); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StageRunnerExit(ctx, rn.ID, run.ID, exit); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetRun(ctx, run.ID)
+	if err != nil || got.State != types.RunRunning {
+		t.Fatal("stage changed lifecycle", err)
+	}
+	var auditCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE run_id=$1`, run.ID).Scan(&auditCount); err != nil || auditCount != 0 {
+		t.Fatal("stage authored audit", err)
+	}
+	if rows, err := st.ListRunnerExitWork(ctx, uuid.Nil); err != nil || len(rows) != 0 {
+		t.Fatal("unbound exit ready for finalization", err)
+	}
+	if _, err := st.BeginRunnerExecution(ctx, rn.ID, run.ID, gen, uuid.New(), runnerwire.MethodExec); !errors.Is(err, store.ErrRunnerExecutionRefused) {
+		t.Fatal("pending candidate allowed new incarnation", err)
+	}
+	if err := st.BindRunnerExecution(ctx, rn.ID, run.ID, gen, "exec-early"); err != nil {
+		t.Fatal(err)
+	}
+	if rows, err := st.ListRunnerExitWork(ctx, uuid.Nil); err != nil || len(rows) != 1 {
+		t.Fatalf("bound candidate lost: %d %v", len(rows), err)
+	}
+	if accepted, err := st.AcceptRunnerExit(ctx, rn.ID, run.ID, exit, prepareSpoolTest); err != nil || !accepted {
+		t.Fatalf("bound candidate not accepted %v %v", accepted, err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	tailDone := make(chan error, 1)
+	go func() {
+		tailDone <- st.RetryRunnerExitTail(ctx, rn.ID, run.ID, gen, func(context.Context, types.AgentRun, runnerwire.AgentExit) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	staged := make(chan error, 1)
+	go func() { staged <- st.StageRunnerExit(ctx, rn.ID, run.ID, exit) }()
+	select {
+	case err := <-staged:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("read-loop stage blocked behind tail operation lock")
+	}
+	close(release)
+	if err := <-tailDone; err != nil {
+		t.Fatal(err)
+	}
+}

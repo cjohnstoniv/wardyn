@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS runner_execution_exits (
     runner_id UUID NOT NULL REFERENCES runners(id) ON DELETE CASCADE,
     payload JSONB NOT NULL,
     payload_hash TEXT NOT NULL,
-    accepted_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    received_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    accepted_at TIMESTAMPTZ,
     tail_complete BOOLEAN NOT NULL DEFAULT false,
     PRIMARY KEY (run_id, generation)
 );
