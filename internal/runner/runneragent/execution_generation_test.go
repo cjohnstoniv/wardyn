@@ -53,6 +53,7 @@ func TestDispatcherCarriesExplicitExecutionGeneration(t *testing.T) {
 						}
 						return nil
 					},
+					MutationFinished: func(context.Context, string, string, uuid.UUID, uuid.UUID, error) error { return nil },
 					AfterRefCall: func(_ context.Context, m, ref, execID string, value uuid.UUID) error {
 						after++
 						if m != method || ref != sb.Ref || value != generation || (method == runnerwire.MethodExec && execID == "") {

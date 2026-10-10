@@ -44,6 +44,7 @@ type Manager struct {
 	peer          *runnerwire.Peer
 	state         localState
 	dirty         bool
+	inflight      map[mutationKey]int
 	deadlines     map[uuid.UUID]deadline
 	pending       map[uuid.UUID]runnerwire.Lease
 }
@@ -280,6 +281,7 @@ func (m *Manager) BeforeCreate(ctx context.Context, spec runner.SandboxSpec) err
 		return err
 	}
 	delete(m.pending, spec.RunID)
+	m.beginMutation(runnerwire.MethodCreateSandbox, ref, uuid.Nil)
 	return nil
 }
 

@@ -55,8 +55,9 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 		RunnerID: identity.RunnerID.String(), Substrate: sub,
 		BeforeCreate: manager.BeforeCreate, Created: manager.Created, CreateFailed: manager.CreateFailed,
 		BeforeRefCall: manager.BeforeRefCall, AfterRefCall: manager.AfterRefCall,
-		ExecutionResult: manager.ExecutionResult,
-		Streams:         streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
+		MutationFinished: manager.MutationFinished,
+		ExecutionResult:  manager.ExecutionResult,
+		Streams:          streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
 	})
 	if err != nil {
 		return runnerRuntime{}, err

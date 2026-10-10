@@ -10,7 +10,6 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
-	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
 
@@ -39,6 +38,7 @@ func (m *Manager) BeforeRefCall(ctx context.Context, method, ref string, generat
 	id, r, ok := m.findRef(ref)
 	if !ok {
 		if isContainmentMethod(method) {
+			m.beginMutation(method, ref, generation)
 			return nil
 		}
 		return errors.New("runner reference has no durable binding")
@@ -68,8 +68,11 @@ func (m *Manager) BeforeRefCall(ctx context.Context, method, ref string, generat
 		r.Exit = nil
 		r.ExitAcked = false
 		m.state.Runs[id] = r
-		return m.save()
+		if err := m.save(); err != nil {
+			return err
+		}
 	}
+	m.beginMutation(method, ref, generation)
 	return nil
 }
 
@@ -118,7 +121,7 @@ func (m *Manager) AfterRefCall(ctx context.Context, method, ref, execID string, 
 	}
 	if err != nil && ok {
 		current := m.state.Runs[id]
-		current.MutationFailure = &types.RunnerMutationFailure{ID: uuid.New(), Generation: current.Generation, Operation: method}
+		current.MutationFailure = mutationFailure(current, method)
 		m.state.Runs[id] = current
 		err = errors.Join(err, m.save())
 	}

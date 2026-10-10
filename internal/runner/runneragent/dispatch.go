@@ -42,6 +42,10 @@ type Config struct {
 	// The exec id is populated for MethodExec, empty otherwise. Persistence
 	// failures must contain the proxy before returning their error.
 	AfterRefCall func(context.Context, string, string, string, uuid.UUID) error
+	// MutationFinished runs after every admitted mutation, including substrate
+	// failures, output rollback and detached persistence. Create supplies run ID;
+	// ref calls supply the checked local ref and explicit execution generation.
+	MutationFinished func(context.Context, string, string, uuid.UUID, uuid.UUID, error) error
 	// ExecutionResult recovers a durable intent/handle without executing it again.
 	ExecutionResult func(context.Context, string, uuid.UUID) (runnerwire.ExecutionResult, error)
 	// Streams serves attach/exec/resize/wait/output, with ref validation of its own.
@@ -57,7 +61,7 @@ type Dispatcher struct{ cfg Config }
 
 func New(cfg Config) (*Dispatcher, error) {
 	id, err := uuid.Parse(cfg.RunnerID)
-	if err != nil || id.String() != cfg.RunnerID || cfg.Substrate == nil || cfg.BeforeCreate == nil || cfg.Created == nil || cfg.CreateFailed == nil || cfg.BeforeRefCall == nil || cfg.AfterRefCall == nil || cfg.ExecutionResult == nil {
+	if err != nil || id.String() != cfg.RunnerID || cfg.Substrate == nil || cfg.BeforeCreate == nil || cfg.Created == nil || cfg.CreateFailed == nil || cfg.BeforeRefCall == nil || cfg.AfterRefCall == nil || cfg.MutationFinished == nil || cfg.ExecutionResult == nil {
 		return nil, errors.New("runner dispatcher requires a registered id, local substrate and durable lifecycle handlers")
 	}
 	if substrate.IsRemote(cfg.Substrate) {
@@ -128,6 +132,7 @@ func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint3
 	if err := d.cfg.BeforeCreate(ctx, a.Spec); err != nil {
 		return nil, err
 	}
+	defer func() { err = d.finishMutation(ctx, runnerwire.MethodCreateSandbox, "", a.Spec.RunID, uuid.Nil, err) }()
 	defer func() {
 		if err != nil {
 			contain, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -193,7 +198,7 @@ type refArgs struct {
 	CfgJSON     []byte   `json:"cfg_json"`
 }
 
-func (d *Dispatcher) refCall(ctx context.Context, method string, args json.RawMessage) (any, error) {
+func (d *Dispatcher) refCall(ctx context.Context, method string, args json.RawMessage) (result any, err error) {
 	var a refArgs
 	if err := runnerwire.Unmarshal(args, &a); err != nil {
 		return nil, err
@@ -211,8 +216,9 @@ func (d *Dispatcher) refCall(ctx context.Context, method string, args json.RawMe
 		if err := d.cfg.BeforeRefCall(ctx, method, ref, generation); err != nil {
 			return nil, err
 		}
+		defer func() { err = d.finishMutation(ctx, method, ref, uuid.Nil, generation, err) }()
 	}
-	result, err := d.dispatchRef(ctx, method, ref, a)
+	result, err = d.dispatchRef(ctx, method, ref, a)
 	if err != nil || !changing {
 		return result, err
 	}
