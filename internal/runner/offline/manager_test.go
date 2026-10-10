@@ -64,7 +64,7 @@ func managerFixture(t *testing.T) (*Manager, *localSub, *time.Duration, time.Tim
 	m.now = func() time.Time { return base.Add(elapsed) }
 	m.since = func(at time.Time) time.Duration { return base.Add(elapsed).Sub(at) }
 	m.clock = NewClock(m.since)
-	org := time.Date(2040, 1, 1, 0, 0, 0, 0, time.UTC)
+	org := base.Add(14 * 24 * time.Hour).UTC()
 	if err := m.Clock(runnerwire.Hello{ServerTime: org}, base); err != nil {
 		t.Fatal(err)
 	}
