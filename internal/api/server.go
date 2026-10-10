@@ -125,6 +125,11 @@ type Config struct {
 	// Fanout's DropsByName). Nil omits the metric — a deployment with no SIEM
 	// sinks configured has nothing to report.
 	AuditSinkDrops func() map[string]int64
+	// AuditDelivery, when set, reports each acknowledged-delivery destination's
+	// checkpoint and the head it lags behind for the wardyn_audit_delivery_*
+	// metrics (cmd/wardynd wires it to the store only when the webhook sink is
+	// configured with delivery "acknowledged"). Nil omits the series.
+	AuditDelivery func(ctx context.Context) ([]store.AuditDeliveryStatus, error)
 	// Runner launches sandboxes. Nil => headless API-only mode.
 	Runner runner.Runner
 	// RunnerOrgURL is the public organisation URL bound into runner identities.

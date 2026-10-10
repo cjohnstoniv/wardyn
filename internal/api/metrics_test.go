@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -121,6 +123,57 @@ func TestMetricsSinkDrops(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("/metrics body missing %q:\n%s", want, body)
 		}
+	}
+}
+
+// TestMetricsAuditDelivery covers the acknowledged-delivery series (#1513):
+// a nil AuditDelivery (the mode off) emits nothing, and a destination's
+// checkpoint status becomes lag, age, last-ack, halted and resets series.
+func TestMetricsAuditDelivery(t *testing.T) {
+	h := newHarness(t)
+
+	srv := New(baseTestConfig(h, nil))
+	w := do(t, srv, http.MethodGet, "/metrics", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("/metrics = %d, want 200", w.Code)
+	}
+	if body := w.Body.String(); strings.Contains(body, "wardyn_audit_delivery_") {
+		t.Errorf("/metrics carries delivery series with the mode off:\n%s", body)
+	}
+
+	oldest := time.Now().Add(-90 * time.Second)
+	cfg := baseTestConfig(h, nil)
+	cfg.AuditDelivery = func(context.Context) ([]store.AuditDeliveryStatus, error) {
+		return []store.AuditDeliveryStatus{{
+			Destination: "webhook", HeadSeq: 10, AckedSeq: 7, Resets: 2, Halted: true,
+			OldestUndelivered: &oldest,
+		}}, nil
+	}
+	w = do(t, New(cfg), http.MethodGet, "/metrics", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("/metrics = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		"# TYPE wardyn_audit_delivery_lag gauge",
+		"# TYPE wardyn_audit_delivery_resets_total counter",
+		`wardyn_audit_delivery_lag{destination="webhook"} 3`,
+		`wardyn_audit_delivery_halted{destination="webhook"} 1`,
+		`wardyn_audit_delivery_resets_total{destination="webhook"} 2`,
+		`wardyn_audit_delivery_last_ack_timestamp_seconds{destination="webhook"} 0`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/metrics body missing %q:\n%s", want, body)
+		}
+	}
+	var age float64
+	for _, line := range strings.Split(body, "\n") {
+		if v, ok := strings.CutPrefix(line, `wardyn_audit_delivery_oldest_undelivered_age_seconds{destination="webhook"} `); ok {
+			age, _ = strconv.ParseFloat(v, 64)
+		}
+	}
+	if age < 90 {
+		t.Errorf("oldest undelivered age = %v, want at least 90", age)
 	}
 }
 

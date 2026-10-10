@@ -11,6 +11,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -543,6 +544,7 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 	}
 	s.writePartitionsAhead(ctx, w)
 	s.writeSinkDrops(w)
+	s.writeAuditDelivery(ctx, w)
 	writeApprovalNotify(w)
 	s.writeSubstrateGauges(ctx, w)
 	// The eBPF sensor's cumulative counts, moved off the anonymous
@@ -585,6 +587,55 @@ func (s *Server) writeSinkDrops(w io.Writer) {
 		"# TYPE wardyn_audit_sink_drops_total counter\n")
 	for _, name := range names {
 		fmt.Fprintf(w, "wardyn_audit_sink_drops_total{sink=%q} %d\n", name, drops[name])
+	}
+}
+
+// writeAuditDelivery emits the acknowledged-delivery series (#1513) per
+// destination, from the checkpoint table, so any replica reports them. Omitted
+// when acknowledged delivery is not configured (AuditDelivery nil) or the
+// read fails (wardyn_store_up beside it already says the store is down).
+func (s *Server) writeAuditDelivery(ctx context.Context, w io.Writer) {
+	if s.cfg.AuditDelivery == nil {
+		return
+	}
+	sts, err := s.cfg.AuditDelivery(ctx)
+	if err != nil || len(sts) == 0 {
+		return
+	}
+	for _, m := range []struct {
+		name, typ, help string
+		val             func(store.AuditDeliveryStatus) float64
+	}{
+		{"wardyn_audit_delivery_lag", "gauge", "Audit rows recorded but not yet acknowledged by the collector (head seq minus acknowledged seq), by destination.",
+			func(d store.AuditDeliveryStatus) float64 { return float64(max(d.HeadSeq-d.AckedSeq, 0)) }},
+		{"wardyn_audit_delivery_oldest_undelivered_age_seconds", "gauge", "Age of the oldest audit row the collector has not acknowledged, 0 when caught up, by destination.",
+			func(d store.AuditDeliveryStatus) float64 {
+				if d.OldestUndelivered == nil {
+					return 0
+				}
+				return time.Since(*d.OldestUndelivered).Seconds()
+			}},
+		{"wardyn_audit_delivery_last_ack_timestamp_seconds", "gauge", "Unix time of the collector's last acceptance, 0 if it never accepted, by destination.",
+			func(d store.AuditDeliveryStatus) float64 {
+				if d.AckedAt == nil {
+					return 0
+				}
+				return float64(d.AckedAt.Unix())
+			}},
+		{"wardyn_audit_delivery_halted", "gauge", "1 when the collector refused a batch definitively and delivery is halted until wardynd restarts, by destination.",
+			func(d store.AuditDeliveryStatus) float64 {
+				if d.Halted {
+					return 1
+				}
+				return 0
+			}},
+		{"wardyn_audit_delivery_resets_total", "counter", "Times retention or a table reset removed the row at the checkpoint and delivery resent from the oldest retained row, by destination.",
+			func(d store.AuditDeliveryStatus) float64 { return float64(d.Resets) }},
+	} {
+		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n", m.name, m.help, m.name, m.typ)
+		for _, d := range sts {
+			fmt.Fprintf(w, "%s{destination=%q} %s\n", m.name, d.Destination, strconv.FormatFloat(m.val(d), 'f', -1, 64))
+		}
 	}
 }
 
