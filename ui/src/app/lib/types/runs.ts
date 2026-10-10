@@ -53,7 +53,7 @@ export const CC_ORDER: ConfinementClass[] = ["CC1", "CC2", "CC3"];
 export type RunPlacement = "" | "local" | "remote";
 
 // Who can attest a run's evidence (Go internal/types.RunEvidenceSource); "" is a
-// pre-0.9 record only.
+// legacy or unresolved record.
 export type RunEvidenceSource = "" | "substrate" | "runner_asserted";
 
 export type RunState =
@@ -105,7 +105,7 @@ export interface AgentRun {
   runner_id?: string;
   // Who can attest this run's evidence: "substrate" (the organisation's own) or
   // "runner_asserted" (a runner said so, nobody can verify). Empty only for a
-  // pre-0.9 record, hence optional here.
+  // legacy or unresolved record, hence optional here.
   evidence_source?: RunEvidenceSource;
   sandbox_ref?: string;
   // interactive runs come up idle (no agent task) so a human attaches and drives
