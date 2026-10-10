@@ -18,7 +18,7 @@
  */
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { findRunningFixture, stubInteractiveRun } from "./attach-stub";
-import { termText } from "./terminal-text";
+import { termText, waitForShell } from "./terminal-text";
 import { FLOW_HIGH_WATERMARK } from "../src/app/components/attach-terminal-flow";
 
 const MAIN_THREAD_BUDGET_MS = 200;
@@ -46,6 +46,7 @@ test("50 MB of output keeps the page responsive and ends on the right screen", a
   const screen = page.locator(".xterm-screen").first();
   await expect(screen).toBeVisible();
   const read = async () => (await termText(screen).catch(() => "")) as string;
+  await waitForShell(page, screen);
 
   // Record the deepest write backlog xterm reaches (bytes written, not yet parsed:
   // the quantity the flow control watches), so the pause assertion below only

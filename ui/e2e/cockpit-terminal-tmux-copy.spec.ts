@@ -16,7 +16,7 @@ import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { findRunningFixture, stubInteractiveRun } from "./attach-stub";
 import { clickCell, dragCells, rowOf, settledGrid } from "./terminal-grid";
-import { termText } from "./terminal-text";
+import { termText, waitForShell } from "./terminal-text";
 
 async function open(page: Page) {
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -30,21 +30,7 @@ async function open(page: Page) {
   await expect(screen).toBeVisible();
   const read = async () => (await termText(screen).catch(() => "")) as string;
   await screen.click();
-  // Typing is retried: a fresh attach can be admitted read-only for a moment.
-  await expect
-    .poll(
-      async () => {
-        if (!(await read()).includes("ready-sentinel")) {
-          await screen.click();
-          await page.keyboard.type("printf 'ready-%s\\n' sentinel");
-          await page.keyboard.press("Enter");
-        }
-        await page.waitForTimeout(500);
-        return (await read()).includes("ready-sentinel");
-      },
-      { timeout: 30_000 },
-    )
-    .toBe(true);
+  await waitForShell(page, screen);
   return { screen, read };
 }
 const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
