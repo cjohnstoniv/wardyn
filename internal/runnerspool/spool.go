@@ -192,8 +192,8 @@ func (s *Spool) readManifest() (manifest, error) {
 
 func (s *Spool) writeManifest(m manifest) error { return s.writeJSON("state.json", m) }
 
-// Append commits before returning. Callers must refuse the egress attempt if
-// this returns any error; storage failure is never permission to go audit-dark.
+// Append commits before returning. An unreserved producer must refuse on any
+// error; the proxy separately reserves capacity before forwarding requests.
 func (s *Spool) Append(ctx context.Context, decision egress.DecisionLog) error {
 	return s.append(ctx, decision, false)
 }
@@ -254,8 +254,8 @@ func (s *Spool) Stats(ctx context.Context) (depth int, bytes int64, drops uint64
 	return
 }
 
-// CanRecord is a conservative admission check. Append remains authoritative
-// under concurrent requests and must happen before their egress side effect.
+// CanRecord checks durable overflow state. Concurrent producers must also
+// reserve capacity; checking alone cannot guarantee space for a later append.
 func (s *Spool) CanRecord(ctx context.Context) error {
 	return s.locked(ctx, func() error {
 		m, err := s.readManifest()
