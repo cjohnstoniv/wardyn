@@ -423,6 +423,7 @@ func run() error {
 		TrustedCAPEM:        trustedCAPEM,
 		DemoVideoBaseURL:    knobs.demoVideoBaseURL,
 		RunnerTarget:        runnerTarget,
+		RunnerOrgURL:        *f.runnerOrgURL,
 		UIDir:               *f.uiDir,
 		ControlPlaneURL:     *f.controlURL,
 		ControlPlaneCAPEM:   feats.hop.caCertPEM(),
