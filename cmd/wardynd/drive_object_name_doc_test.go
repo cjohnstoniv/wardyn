@@ -70,17 +70,7 @@ func mintedShapes(t *testing.T) map[types.DriveBackend]string {
 	return out
 }
 
-// idSchemeShapes is mintedShapes' twin for object_scheme "id" (#163): the
-// fixed-width shape every drive registered from migration 0067 onward mints,
-// derived from types.DriveObjectID exactly as mintedShapes derives the slug
-// shape from types.DriveSlug.
-//
-// A SEPARATE function rather than a scheme parameter threaded through
-// mintedShapes, because TestDriveSubstrateSectionsUseTheirOwnShape needs ONE
-// canonical shape per backend — the dimension a docker_volume/k8s_pvc pair
-// diverging would show up on — and that check has nothing to do with which
-// scheme a row is on; mixing both dimensions into one map would force it to
-// pick a scheme for a question that is not about schemes.
+// The fixed ID lets assertions follow DriveObjectID rather than duplicate its format.
 func idSchemeShapes(t *testing.T) map[types.DriveBackend]string {
 	t.Helper()
 	idHex := types.DriveObjectID(idSchemeSentinel)
@@ -198,22 +188,18 @@ func TestDocumentedDriveObjectNamesMatchTheFunction(t *testing.T) {
 	}
 }
 
-// TestDriveSubstrateSectionsUseTheirOwnShape catches the cross-substrate mixup
-// the check above cannot: while two backends mint DIFFERENT names, every name
-// is individually valid, so a Docker paragraph carrying the Kubernetes shape
-// passes a repo-wide validity check and still sends an operator to a volume that
-// does not exist. Scoped to the two substrate sections because that is the only
-// place the document commits to one backend.
+// TestDriveSubstrateSectionsUseTheirOwnShape pins both live naming schemes to
+// each substrate, even when the substrates currently share a shape.
 func TestDriveSubstrateSectionsUseTheirOwnShape(t *testing.T) {
-	shapes := mintedShapes(t)
-	docker, k8s := shapes[types.DriveBackendDockerVolume], shapes[types.DriveBackendK8sPVC]
-	if docker == k8s {
-		t.Skipf("both minted backends name objects %q — nothing to disagree about", docker)
-	}
-	for _, sec := range []struct{ heading, want, doc string }{
-		{"## User drives on Docker", docker, "docs/operations/user-drives.md"},
-		{"### User drives on Kubernetes", k8s, "docs/OPERATIONS.md"},
+	slugShapes, idShapes := mintedShapes(t), idSchemeShapes(t)
+	for _, sec := range []struct {
+		heading, doc string
+		backend      types.DriveBackend
+	}{
+		{"## User drives on Docker", "docs/operations/user-drives.md", types.DriveBackendDockerVolume},
+		{"### User drives on Kubernetes", "docs/OPERATIONS.md", types.DriveBackendK8sPVC},
 	} {
+		want := []string{slugShapes[sec.backend], idShapes[sec.backend]}
 		b, err := os.ReadFile(filepath.Join(repoRoot(t), sec.doc))
 		if err != nil {
 			t.Fatalf("read %s: %v", sec.doc, err)
@@ -223,11 +209,15 @@ func TestDriveSubstrateSectionsUseTheirOwnShape(t *testing.T) {
 			t.Errorf("%s has no %q section — it is where the reclaim commands live", sec.doc, sec.heading)
 			continue
 		}
-		for _, tok := range driveNameToken.FindAllString(body, -1) {
-			if strings.HasSuffix(tok, "*") || tok == sec.want {
+		names := driveNameToken.FindAllString(body, -1)
+		if len(names) == 0 {
+			t.Errorf("%s %q has no drive object names", sec.doc, sec.heading)
+		}
+		for _, tok := range names {
+			if strings.HasSuffix(tok, "*") || slices.Contains(want, tok) {
 				continue
 			}
-			t.Errorf("%s %q documents %q; that substrate's objects are named %q", sec.doc, sec.heading, tok, sec.want)
+			t.Errorf("%s %q documents %q; that substrate's objects are named %v", sec.doc, sec.heading, tok, want)
 		}
 	}
 }

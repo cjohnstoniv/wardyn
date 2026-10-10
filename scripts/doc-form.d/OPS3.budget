@@ -1,8 +1,8 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. The multi-user split (#1519) moved the
 # People, governance, capabilities and API-token material out of docs/OPERATIONS.md into twelve task
 # pages under docs/operations/; each is budgeted at its measured size, and OPERATIONS.md's budget is
-# reduced to its size after the move. Text moved verbatim, so a page's count is what left the shared
-# file less its stub lines.
+# reduced to its size after the move. Page budgets include introductions and split banners;
+# merged route rows stay with their table.
 #
 # docs/operations/who-gets-in.md=1453 is the "Multi-user: who can change what" preamble, "Who decides
 # who gets in: chart vs console vs IdP" and "Wins a collision: chart / env", less the "What admin-only
