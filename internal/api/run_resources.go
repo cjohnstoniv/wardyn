@@ -278,7 +278,7 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 		// row per tick (the success path) would flood the trail. A failure is
 		// the rare, interesting case an operator would want in the log.
 		at, principal := actorFromRequest(r)
-		s.recordAudit(r.Context(), s.auditEvent(&id, at, principal, "run.resources.fail", id.String(), "failure",
+		s.recordStreamAudit(r.Context(), run.SandboxRef, s.auditEvent(&id, at, principal, "run.resources.fail", id.String(), "failure",
 			mustJSON(map[string]any{"error": err.Error()})))
 		if errors.Is(err, runner.ErrExecStreamUnsupported) {
 			// The human sentence AND the sentinel: the UI shows the first, an

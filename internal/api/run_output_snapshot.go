@@ -80,7 +80,7 @@ func (s *Server) snapshotRunPane(ctx context.Context, st store.RunOutputStore, r
 		slog.WarnContext(ctx, "wardynd: no pane snapshot was kept for a stopped run",
 			slog.String("run_id", run.ID.String()), slog.String("reason", reason))
 	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", paneSnapshotAction,
+	s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", paneSnapshotAction,
 		run.ID.String(), outcome, mustJSON(data)))
 }
 

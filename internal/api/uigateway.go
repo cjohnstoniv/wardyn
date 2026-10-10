@@ -764,6 +764,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	if de := s.uiSessionStillAuthorized(ctx, sess, run); de != nil {
 		return nil, uiFail(ctx, de.status, de.reason, de.msg)
 	}
+	sess.SandboxRef = run.SandboxRef
 	s.markUIReasserted(sess, s.cfg.Now())
 	// A paused run is thawed before the execs below (run_pause.go).
 	if err := s.thawForExec(ctx, run, types.ActorHuman, sess.Principal, "presence"); err != nil {
