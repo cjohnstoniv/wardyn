@@ -15,8 +15,13 @@ ALTER TABLE runner_pending_actions
     ADD COLUMN IF NOT EXISTS execution_generation UUID,
     ADD COLUMN IF NOT EXISTS containment_lost_at  TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS proof                JSONB,
-    ADD COLUMN IF NOT EXISTS queue_seq            BIGINT GENERATED ALWAYS AS IDENTITY;
+    ADD COLUMN IF NOT EXISTS queue_seq            BIGINT GENERATED ALWAYS AS IDENTITY,
+    ADD COLUMN IF NOT EXISTS settled_at           TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS settlement           TEXT NOT NULL DEFAULT '';
 
+-- settled_at/settlement end an obligation without rewriting its receipt. The
+-- only settlement so far is 'revoked': the run ended KILLED in the same
+-- transaction that revoked its runner.
 -- proof is the closed disposition metadata of the kinds that need one: the
 -- mutation failure marker (recover_*), the quarantine or the retirement receipt.
 ALTER TABLE runner_pending_actions
@@ -33,16 +38,25 @@ ALTER TABLE runner_pending_actions
                 = (proof IS NOT NULL AND jsonb_typeof(proof) = 'object')
             AND ((applied_at IS NULL AND outcome = '' AND observed_at IS NULL)
                 OR (applied_at IS NOT NULL AND outcome IN ('success', 'deferred') AND observed_at IS NOT NULL)))
+    ),
+    DROP CONSTRAINT IF EXISTS runner_pending_actions_settlement,
+    ADD CONSTRAINT runner_pending_actions_settlement CHECK (
+        settlement IN ('', 'revoked') AND (settled_at IS NULL) = (settlement = '')
+        AND (settlement = '' OR binding_version = 1)
     );
 
--- The fence reads open and deferred rows: a deferred receipt is final for its
--- action but leaves the obligation unresolved.
+-- The fence reads open and deferred rows nothing has settled: a deferred
+-- receipt is final for its action but leaves the obligation unresolved.
+DROP INDEX IF EXISTS runner_pending_actions_one_open;
+CREATE UNIQUE INDEX IF NOT EXISTS runner_pending_actions_one_open_unsettled
+    ON runner_pending_actions (run_id, kind) WHERE applied_at IS NULL AND settled_at IS NULL;
 CREATE INDEX IF NOT EXISTS runner_pending_actions_runner_page
-    ON runner_pending_actions (runner_id, queue_seq) WHERE applied_at IS NULL AND binding_version = 1;
+    ON runner_pending_actions (runner_id, queue_seq) WHERE applied_at IS NULL AND settled_at IS NULL AND binding_version = 1;
 CREATE INDEX IF NOT EXISTS runner_pending_actions_run_unsettled
-    ON runner_pending_actions (run_id) WHERE applied_at IS NULL OR outcome = 'deferred';
+    ON runner_pending_actions (run_id) WHERE (applied_at IS NULL OR outcome = 'deferred') AND settled_at IS NULL;
 
--- The binding columns never change after insert, and a receipt is written once.
+-- The binding columns never change after insert; a receipt and a settlement
+-- are each written once.
 -- The store is the only writer; this refuses any other UPDATE at the database.
 CREATE OR REPLACE FUNCTION runner_pending_actions_immutable() RETURNS trigger AS $$
 BEGIN
@@ -51,8 +65,10 @@ BEGIN
         IS DISTINCT FROM (OLD.id, OLD.runner_id, OLD.run_id, OLD.kind, OLD.ref, OLD.queued_at, OLD.binding_version,
             OLD.owner, OLD.execution_generation, OLD.containment_lost_at, OLD.proof::text, OLD.queue_seq)
         OR (OLD.applied_at IS NOT NULL AND (NEW.applied_at, NEW.outcome, NEW.observed_at)
-            IS DISTINCT FROM (OLD.applied_at, OLD.outcome, OLD.observed_at)) THEN
-        RAISE EXCEPTION 'runner_pending_actions: binding and receipt columns are immutable';
+            IS DISTINCT FROM (OLD.applied_at, OLD.outcome, OLD.observed_at))
+        OR (OLD.settled_at IS NOT NULL AND (NEW.settled_at, NEW.settlement)
+            IS DISTINCT FROM (OLD.settled_at, OLD.settlement)) THEN
+        RAISE EXCEPTION 'runner_pending_actions: binding, receipt and settlement columns are immutable';
     END IF;
     RETURN NEW;
 END;

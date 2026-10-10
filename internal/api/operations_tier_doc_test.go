@@ -197,6 +197,7 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/admin/devices/{id}", "`GET /admin/devices` and `DELETE /admin/devices/{id}`"},
 	{"GET /api/v1/admin/devices/enrolment-tokens", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
 	{"DELETE /api/v1/admin/devices/enrolment-tokens/{id}", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
+	{"DELETE /api/v1/runners/{id}", "`DELETE /runners/{id}`"},
 	// #1142's portal registry.
 	{"POST /api/v1/admin/delegates", "`POST /admin/delegates`"},
 	{"GET /api/v1/admin/delegates", "`GET /admin/delegates` and `DELETE /admin/delegates/{id}`"},

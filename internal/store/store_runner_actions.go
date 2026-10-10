@@ -30,8 +30,9 @@ const actionCols = `id, runner_id, run_id, kind, ref, queued_at, applied_at, out
 	binding_version, owner, execution_generation, containment_lost_at, proof`
 
 // runnerActionUnsettledSQL is the run fence: an open action, or a deferred
-// receipt whose obligation nothing has settled yet. $1 is the run.
-const runnerActionUnsettledSQL = `SELECT EXISTS (SELECT 1 FROM runner_pending_actions WHERE run_id = $1 AND (applied_at IS NULL OR outcome = 'deferred'))`
+// receipt, whose obligation nothing has settled. $1 is the run.
+const runnerActionUnsettledSQL = `SELECT EXISTS (SELECT 1 FROM runner_pending_actions
+	WHERE run_id = $1 AND (applied_at IS NULL OR outcome = 'deferred') AND settled_at IS NULL)`
 
 func scanAction(row pgx.Row) (types.RunnerPendingAction, error) {
 	var a types.RunnerPendingAction
@@ -150,8 +151,9 @@ func beginRunnerActionTx(ctx context.Context, s PG) (pgx.Tx, error) {
 // runner's owner, the run's exact ref and the expected execution generation
 // (uuid.Nil asserts none was issued), and for stop_proxy the exact kept outage
 // loss in LostAt. Any mismatch is ErrRunnerActionRefused and writes nothing.
-// A replayed action ID, or an open action of the same kind for the run, is
-// returned with queued=false only when every binding matches; otherwise
+// A replayed action ID, an open action of the same kind for the run, or a
+// deferred stop_proxy for the same loss is returned with queued=false only
+// when every binding matches; otherwise
 // ErrConflict. A runner that is not claimed, or a run that is gone, is
 // ErrNotFound: the runner row is locked FOR SHARE, so a queue meeting a revoke
 // waits for it and then refuses. Recovery, quarantine and retirement need
@@ -226,8 +228,12 @@ func queueRunnerActionTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAc
 		return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
 	}
 	a.Owner, a.Bound = owner, true
+	// A deferred stop_proxy still carries its loss's obligation: a fresh one
+	// would be a second, unchained issuer for the same loss, so it is returned.
 	existing, err := scanAction(tx.QueryRow(ctx, `SELECT `+actionCols+` FROM runner_pending_actions
-		WHERE id = $1 OR (run_id = $2 AND kind = $3 AND applied_at IS NULL) ORDER BY id = $1 DESC LIMIT 1 FOR UPDATE`, a.ID, a.RunID, string(a.Kind)))
+		WHERE id = $1 OR (run_id = $2 AND kind = $3 AND settled_at IS NULL
+			AND (applied_at IS NULL OR (outcome = 'deferred' AND containment_lost_at = $4)))
+		ORDER BY id = $1 DESC, applied_at IS NULL DESC LIMIT 1 FOR UPDATE`, a.ID, a.RunID, string(a.Kind), a.LostAt))
 	if err == nil {
 		if !sameRunnerAction(existing, a) {
 			return types.RunnerPendingAction{}, false, ErrConflict
@@ -256,7 +262,7 @@ func queueRunnerActionTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAc
 // binding is never delivered; it keeps fencing its run instead.
 func (s PG) ListPendingRunnerActions(ctx context.Context, runnerID uuid.UUID) ([]types.RunnerPendingAction, bool, error) {
 	const q = `SELECT ` + actionCols + ` FROM runner_pending_actions
-		WHERE runner_id = $1 AND applied_at IS NULL AND binding_version = 1 ORDER BY queue_seq LIMIT $2`
+		WHERE runner_id = $1 AND applied_at IS NULL AND settled_at IS NULL AND binding_version = 1 ORDER BY queue_seq LIMIT $2`
 	page, err := collect(ctx, s.Pool, "list", "runner pending actions", q, []any{runnerID, runnerActionPageLimit + 1}, scanAction)
 	if err != nil || len(page) <= runnerActionPageLimit {
 		return page, false, err

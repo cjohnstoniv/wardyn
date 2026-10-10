@@ -4,11 +4,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -16,11 +18,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -76,6 +80,8 @@ func newAdmissionFixture(t *testing.T) *admissionFixture {
 	cfg.Audit = &syncAudit{}
 	cfg.RunnerOrgURL = admissionOrgURL
 	cfg.RunnerAuditPrepare = func(_ context.Context, ev types.AuditEvent) (types.AuditEvent, error) { return ev, nil }
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.Secrets = getErrStore{getErr: secretstore.ErrNotFound}
 	return &admissionFixture{ctx: ctx, pool: pool, st: st, srv: New(cfg), rn: rn, key: key, run: run, gen: gen}
 }
 
@@ -86,7 +92,7 @@ func (f *admissionFixture) liveRow() runnerwire.RunState {
 
 // session drives one fresh connection of a real runnerwire.Client into the
 // production Hub over loopback. It applies every PENDING action as a success,
-// calls during after the PENDING results, then sends rows as one Final page.
+// calls during after the PENDING results, then sends rows as ordered pages.
 type session struct {
 	done    chan struct{}
 	err     error
@@ -127,7 +133,19 @@ func (f *admissionFixture) connect(t *testing.T, during func(), rows ...runnerwi
 			return nil
 		},
 		StatePages: func(_ context.Context, send func(runnerwire.StatePage) error) error {
-			return send(runnerwire.StatePage{InventoryID: uuid.New(), Runs: rows, Final: true})
+			runs := slices.Clone(rows)
+			slices.SortFunc(runs, func(a, b runnerwire.RunState) int { return bytes.Compare(a.RunID[:], b.RunID[:]) })
+			id, after := uuid.New(), uuid.Nil
+			for {
+				n := min(len(runs), runnerwire.StatePageRows)
+				if err := send(runnerwire.StatePage{InventoryID: id, After: after, Runs: runs[:n], Final: n == len(runs)}); err != nil {
+					return err
+				}
+				if n == len(runs) {
+					return nil
+				}
+				after, runs = runs[n-1].RunID, runs[n:]
+			}
 		},
 		Replay:      func(context.Context, *runnerwire.Peer) error { return nil },
 		BeforeReady: func(context.Context, *runnerwire.Peer, bool) error { return nil },
@@ -278,8 +296,9 @@ func TestRunnerAdmissionPG_ImmutableColumnsRefuseUpdate(t *testing.T) {
 
 type registryRunner struct {
 	*fakeRunner
-	mu    sync.Mutex
-	added []string
+	mu      sync.Mutex
+	added   []string
+	removed []string
 }
 
 func (r *registryRunner) Add(s substrate.Substrate) {
@@ -288,7 +307,11 @@ func (r *registryRunner) Add(s substrate.Substrate) {
 	r.added = append(r.added, s.Name())
 }
 
-func (r *registryRunner) Remove(substrate.Substrate) {}
+func (r *registryRunner) Remove(s substrate.Substrate) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.removed = append(r.removed, s.Name())
+}
 
 func TestRunnerAdmissionPG_BootRegistersClaimedRunnersOnly(t *testing.T) {
 	f := newAdmissionFixture(t)

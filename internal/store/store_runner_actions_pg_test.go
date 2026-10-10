@@ -454,6 +454,19 @@ func TestPG_RunnerActions_StopProxyResultEdges(t *testing.T) {
 		t.Fatalf("a no-execution binding settled over an issued execution: %v", err)
 	}
 
+	// The first receipt rechecks the run's ref, not only its generation.
+	moved := f.run(t)
+	mk := f.mustQueue(t, f.action(moved, types.RunnerActionKill, uuid.Nil))
+	if _, err := f.pool.Exec(ctx, `UPDATE agent_runs SET sandbox_ref=$2 WHERE id=$1`, moved.ID, "runner:"+f.rn.ID.String()+"/elsewhere"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, moved.ID, mk.ID, types.RunnerActionSuccess, time.Now(), prepareSpoolTest); !errors.Is(err, store.ErrRunnerActionRefused) {
+		t.Fatalf("a receipt for a run whose ref changed = %v, want ErrRunnerActionRefused", err)
+	}
+	if n := f.count(t, `SELECT count(*) FROM runner_pending_actions WHERE id=$1 AND applied_at IS NULL`, mk.ID); n != 1 {
+		t.Fatal("a refused receipt changed the action")
+	}
+
 	// A run killed after its loss has its own teardown record: the exact receipt settles, with no late audit.
 	killed := f.lose(t, f.run(t))
 	k := f.mustQueue(t, f.action(killed, types.RunnerActionStopProxy, uuid.Nil))
@@ -497,38 +510,100 @@ func TestPG_RunnerActions_PendingIsABoundedOldestFirstPage(t *testing.T) {
 	}
 }
 
-func TestPG_RunnerActions_RevokeDropsOpenActionsAndRefusesLateQueues(t *testing.T) {
+func TestPG_RunnerActions_RevokeKillsRunsAndSettlesActionsInOneCommit(t *testing.T) {
 	f := newActionFixture(t)
 	ctx := t.Context()
-	run := f.run(t)
-	f.mustQueue(t, f.action(run, types.RunnerActionKill, uuid.Nil))
-	now := time.Now().UTC()
-	got, err := f.st.RevokeRunner(ctx, f.rn.ID, now)
-	if err != nil || got.State != types.RunnerRevoked || got.RevokedAt == nil {
-		t.Fatalf("revoke = %+v, %v", got, err)
+	open := f.run(t)
+	kill := f.mustQueue(t, f.action(open, types.RunnerActionKill, uuid.Nil))
+	deferred := f.run(t)
+	end := f.mustQueue(t, f.action(deferred, types.RunnerActionEnd, uuid.Nil))
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, deferred.ID, end.ID, types.RunnerActionDeferred, time.Now(), prepareSpoolTest); err != nil {
+		t.Fatal(err)
+	}
+	done := f.run(t)
+	if _, err := f.pool.Exec(ctx, `UPDATE agent_runs SET state='COMPLETED' WHERE id=$1`, done.ID); err != nil {
+		t.Fatal(err)
+	}
+	other := claimed(t, f.st, ctx, f.rn.Owner)
+	untouched := f.localRun(t, other, other.Owner)
+
+	// A revoke that cannot commit leaves runner, runs and actions as they were.
+	tx, err := f.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck // released below; a no-op then
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM agent_runs WHERE id=$1 FOR UPDATE`, open.ID); err != nil {
+		t.Fatal(err)
+	}
+	short, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	if _, err := f.st.RevokeRunner(short, f.rn.ID, time.Now(), "security-admin", ""); err == nil {
+		t.Fatal("a revoke blocked on a run row committed")
+	}
+	cancel()
+	_ = tx.Rollback(ctx)
+	if got, _ := f.st.GetRunner(ctx, f.rn.ID); got.State != types.RunnerClaimed {
+		t.Fatal("a failed revoke changed the runner")
+	}
+	if has, _ := f.st.RunHasPendingRunnerAction(ctx, open.ID); !has {
+		t.Fatal("a failed revoke lifted the fence")
+	}
+
+	rev, err := f.st.RevokeRunner(ctx, f.rn.ID, time.Now().UTC(), f.rn.Owner, types.RunnerRevokeNotMine)
+	if err != nil || rev.Runner.State != types.RunnerRevoked || rev.Runner.RevokedAt == nil || len(rev.Killed) != 2 {
+		t.Fatalf("revoke = %+v, %v; want 2 runs killed", rev, err)
+	}
+	if got, _ := f.st.GetRunner(ctx, f.rn.ID); got.RevokedBy != f.rn.Owner || got.RevokeReason != types.RunnerRevokeNotMine {
+		t.Fatalf("revoked by %q for %q, want the owner's not_mine", got.RevokedBy, got.RevokeReason)
+	}
+	for _, k := range rev.Killed {
+		if k.From != types.RunRunning {
+			t.Fatalf("killed run %s reported from %q, want RUNNING", k.ID, k.From)
+		}
+	}
+	for _, run := range []types.AgentRun{open, deferred} {
+		got, _ := f.st.GetRun(ctx, run.ID)
+		if got.State != types.RunKilled || got.EndedAt == nil {
+			t.Fatalf("run %s on the revoked runner is %s, want KILLED", run.ID, got.State)
+		}
+		if has, _ := f.st.RunHasPendingRunnerAction(ctx, run.ID); has {
+			t.Fatal("a killed run on a revoked runner is still fenced")
+		}
+	}
+	if got, _ := f.st.GetRun(ctx, done.ID); got.State != types.RunCompleted {
+		t.Fatal("revocation rewrote a terminal run")
+	}
+	if got, _ := f.st.GetRun(ctx, untouched.ID); got.State != types.RunRunning {
+		t.Fatal("revocation killed another runner's run")
+	}
+	if n := f.count(t, `SELECT count(*) FROM runner_pending_actions WHERE id = ANY($1) AND settlement='revoked' AND settled_at IS NOT NULL`, []uuid.UUID{kill.ID, end.ID}); n != 2 {
+		t.Fatalf("%d of 2 actions settled 'revoked' (rows must be kept)", n)
+	}
+	if n := f.count(t, `SELECT count(*) FROM runner_pending_actions WHERE id=$1 AND outcome='deferred'`, end.ID); n != 1 {
+		t.Fatal("settlement rewrote the deferred receipt")
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE runner_pending_actions SET settlement='' , settled_at=NULL WHERE id=$1`, kill.ID); err == nil {
+		t.Fatal("a settlement was cleared")
 	}
 	if acts, _, err := f.st.ListPendingRunnerActions(ctx, f.rn.ID); err != nil || len(acts) != 0 {
-		t.Fatalf("a revoked runner kept %d pending actions (%v)", len(acts), err)
+		t.Fatalf("a revoked runner still has %d deliverable actions (%v)", len(acts), err)
 	}
-	if _, err := f.st.RevokeRunner(ctx, f.rn.ID, now); !errors.Is(err, store.ErrNotFound) {
+	if _, err := f.st.RevokeRunner(ctx, f.rn.ID, time.Now(), "security-admin", ""); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a second revoke = %v, want ErrNotFound", err)
 	}
-	if _, _, err := f.st.QueueRunnerAction(ctx, f.action(run, types.RunnerActionEnd, uuid.Nil)); !errors.Is(err, store.ErrNotFound) {
+	if _, _, err := f.st.QueueRunnerAction(ctx, f.action(open, types.RunnerActionEnd, uuid.Nil)); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("queueing for a revoked runner = %v, want ErrNotFound", err)
 	}
-	if has, _ := f.st.RunHasPendingRunnerAction(ctx, run.ID); has {
-		t.Fatal("a revoked runner's late action fences the run")
-	}
 	unclaimed, _ := f.st.CreateRunner(ctx, newRunner(f.rn.Owner))
-	a := f.action(run, types.RunnerActionKill, uuid.Nil)
+	a := f.action(untouched, types.RunnerActionKill, uuid.Nil)
 	a.RunnerID, a.Ref = unclaimed.ID, "runner:"+unclaimed.ID.String()+"/x"
 	if _, _, err := f.st.QueueRunnerAction(ctx, a); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("queueing for an unclaimed runner = %v, want ErrNotFound", err)
 	}
 }
 
-// A queue racing a revoke either commits first and is dropped by it, or waits
-// on the runner row and then refuses: no open row survives on a revoked runner.
+// A queue racing a revoke either commits first and is settled by it, or waits
+// on the runner row and then refuses: no unsettled row survives on a revoked runner.
 func TestPG_RunnerActions_QueueAndRevokeSerialize(t *testing.T) {
 	f := newActionFixture(t)
 	ctx := t.Context()
@@ -540,13 +615,13 @@ func TestPG_RunnerActions_QueueAndRevokeSerialize(t *testing.T) {
 		var qerr, rerr error
 		wg.Add(2)
 		go func() { defer wg.Done(); _, _, qerr = f.st.QueueRunnerAction(ctx, a) }()
-		go func() { defer wg.Done(); _, rerr = f.st.RevokeRunner(ctx, rn.ID, time.Now()) }()
+		go func() { defer wg.Done(); _, rerr = f.st.RevokeRunner(ctx, rn.ID, time.Now(), "security-admin", "") }()
 		wg.Wait()
 		if rerr != nil || (qerr != nil && !errors.Is(qerr, store.ErrNotFound)) {
 			t.Fatalf("revoke=%v queue=%v", rerr, qerr)
 		}
-		if n := f.count(t, `SELECT count(*) FROM runner_pending_actions WHERE runner_id=$1 AND applied_at IS NULL`, rn.ID); n != 0 {
-			t.Fatalf("%d open actions survived revocation", n)
+		if n := f.count(t, `SELECT count(*) FROM runner_pending_actions WHERE runner_id=$1 AND applied_at IS NULL AND settled_at IS NULL`, rn.ID); n != 0 {
+			t.Fatalf("%d unsettled open actions survived revocation", n)
 		}
 	}
 }
@@ -596,5 +671,35 @@ func TestPG_RunnerActions_CascadeWithRun(t *testing.T) {
 	}
 	if acts, _, _ := f.st.ListPendingRunnerActions(ctx, f.rn.ID); len(acts) != 0 {
 		t.Fatalf("%d actions outlived their run", len(acts))
+	}
+}
+
+// A deferred stop_proxy keeps carrying its loss's obligation: neither a later
+// queue nor a reconnect page that still sees the proxy up issues a second one.
+func TestPG_RunnerActions_DeferredStopProxyIsNeverReissued(t *testing.T) {
+	f := newActionFixture(t)
+	ctx := t.Context()
+	run := f.run(t)
+	gen := f.issue(t, run)
+	run = f.lose(t, run)
+	first := f.mustQueue(t, f.action(run, types.RunnerActionStopProxy, gen))
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, first.ID, types.RunnerActionDeferred, time.Now(), prepareSpoolTest); err != nil {
+		t.Fatal(err)
+	}
+	again, queued, err := f.st.QueueRunnerAction(ctx, f.action(run, types.RunnerActionStopProxy, gen))
+	if err != nil || queued || again.ID != first.ID {
+		t.Fatalf("a fresh stop_proxy for the deferred loss: queued=%v id=%s err=%v", queued, again.ID, err)
+	}
+	row := runnerwire.RunState{RunID: run.ID, SandboxPresent: true, Execution: &runnerwire.ExecutionResult{Generation: gen, Operation: runnerwire.MethodExec, Attempted: true}}
+	for range 3 {
+		if res, err := finalPage(t, f.st, f.rn.ID, row); err != nil || !res.NeedsReconciliation {
+			t.Fatalf("a page with the proxy still up: %+v %v", res, err)
+		}
+	}
+	if n := f.count(t, `SELECT count(*) FROM runner_pending_actions WHERE run_id=$1 AND kind='stop_proxy'`, run.ID); n != 1 {
+		t.Fatalf("%d stop_proxy rows for one loss, want the one deferred", n)
+	}
+	if has, _ := f.st.RunHasPendingRunnerAction(ctx, run.ID); !has {
+		t.Fatal("the deferred obligation stopped fencing")
 	}
 }

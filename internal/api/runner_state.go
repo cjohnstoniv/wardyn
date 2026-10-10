@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -75,4 +77,41 @@ func (s *Server) OfflineFromRunner(ctx context.Context, runnerID uuid.UUID) erro
 			return ctx.Err()
 		}
 	}
+}
+
+// runnerOfflineSweeps runs OfflineFromRunner off the Hub's session slot: at
+// most one sweep per runner at a time, and every signal that arrives during a
+// sweep coalesces into exactly one more. The periodic lapse sweeps remain the
+// backstop for a sweep that fails.
+type runnerOfflineSweeps struct {
+	mu    sync.Mutex
+	again map[uuid.UUID]bool
+}
+
+func (q *runnerOfflineSweeps) schedule(ctx context.Context, id uuid.UUID, sweep func(context.Context, uuid.UUID) error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if _, running := q.again[id]; running {
+		q.again[id] = true
+		return
+	}
+	if q.again == nil {
+		q.again = map[uuid.UUID]bool{}
+	}
+	q.again[id] = false
+	go func() {
+		for {
+			if err := sweep(ctx, id); err != nil && ctx.Err() == nil {
+				slog.WarnContext(ctx, "wardynd: runner offline sweep failed", slog.String("runner_id", id.String()), slog.Any("err", err))
+			}
+			q.mu.Lock()
+			if !q.again[id] {
+				delete(q.again, id)
+				q.mu.Unlock()
+				return
+			}
+			q.again[id] = false
+			q.mu.Unlock()
+		}
+	}()
 }
