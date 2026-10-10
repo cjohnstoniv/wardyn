@@ -103,7 +103,9 @@ func syncAbort(ctx context.Context, err error) bool {
 	var pe *fs.PathError
 	var le *os.LinkError
 	switch {
-	case errors.As(err, &se), errors.As(err, &pe), errors.As(err, &le):
+	case errors.As(err, &se):
+		return se.FxCode() == sftp.ErrSSHFxNoConnection || se.FxCode() == sftp.ErrSSHFxConnectionLost
+	case errors.As(err, &pe), errors.As(err, &le):
 		return false
 	case errors.Is(err, fs.ErrNotExist), errors.Is(err, fs.ErrPermission), errors.Is(err, fs.ErrExist):
 		return false
@@ -163,7 +165,7 @@ func (sy *syncer) pass(ctx context.Context) (*syncReport, error) {
 		switch {
 		case syncCollides(collide, rel):
 			rep.refuse(rel, "case collision")
-		case remote.blocked[rel]:
+		case syncCollides(remote.blocked, rel):
 		default:
 			if err := sy.decide(ctx, rel, local, remote.files, rep, &pulled); err != nil {
 				return nil, err
