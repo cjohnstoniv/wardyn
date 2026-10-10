@@ -902,3 +902,9 @@ const (
 	reasonComponentNameConflict = "component_name_conflict" // another component of this owner already has the name (or, for an org id, the id)
 	reasonComponentNotFound     = "component_not_found"     // no such component of this owner's; another person's and an absent id answer alike
 )
+
+// Runner route admission fails closed on absent or unreadable configuration.
+const (
+	reasonRunnersDisabled          = "runners_disabled"
+	reasonRunnersConfigUnavailable = "runners_config_unavailable"
+)
