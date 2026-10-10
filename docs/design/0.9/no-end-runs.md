@@ -1,6 +1,6 @@
 # 0.9 "No end" runs: choosing a run's end at launch (#1319)
 
-Status: **Draft r2 for owner options, then the mock round, then build.** It designs the create-time end for #1319 against the pool-limits contract.
+Status: **Draft r3 for owner options, then the mock round, then build.** It designs the create-time end for #1319 against the pool-limits contract.
 Background and Interactive behaviour follow the 2026-10-10 owner rulings on run types and pool limits; nothing here reopens them.
 Every open product call is in [Owner options](#14-owner-options), each with a recommendation; the rest of the doc holds under either answer, or says which answer it assumes.
 
@@ -72,7 +72,7 @@ The end is decided in the shared fold, so Review, the policy preview and the lau
 | Request | Result | Status and reason |
 |---|---|---|
 | Neither field, finite default | `created_at` plus `Lifetime.Default` | `201` |
-| Neither field, default unlimited | Background: no end. Interactive: per [O7](#o7-no-end-as-a-default) | `201` |
+| Neither field, default unlimited | Per [O7](#o7-no-end-as-a-default), answered per run type: no end, or the pool's finite default | `201` |
 | `ends_after_sec` within the finite cap, at or after a finite default | That end | `201` |
 | `ends_after_sec` past the finite cap | Cut to the cap, never refused (the #1949 rule for CPU and memory) | `201` with a warning naming the source |
 | `ends_after_sec` before a finite default | Per [O4](#o4-the-gate-at-create) | `201`, or `403 run_limits_gate_denied` |
@@ -119,7 +119,7 @@ No end is offered only when the pool and the deployment leave the lifetime unlim
 
 | Pool lifetime | Governance (captured) | `WARDYN_RUN_MAX_AGE` | No end offered | Longest finite end |
 |---|---|---|---|---|
-| Unlimited, or no pool | No lifetime limit (max and default 0) | Off | It is the default | None |
+| Unlimited, or no pool | No lifetime limit (max and default 0) | Off | It is the default with no pool, or under O7-A | None |
 | Unlimited, or no pool | Max 7 days, No end allowed, gate held | Off | Yes | 7 days |
 | Unlimited | Max 7 days, No end not allowed | Off | No: "your admin's limit" | 7 days |
 | 30 days | No end allowed, gate held | Off | No: the pool's name | 30 days |
@@ -200,7 +200,8 @@ The D-1319 build lane owns the run-end persistence in its own migration (lead ru
 | `lifetime_cap_at` | New `agent_runs` column, `TIMESTAMPTZ NULL`, only under [O1](#o1-the-lifetime-clock)-A | The absolute latest end from the pool and deployment, captured at create | NULL: no absolute cap, today's behaviour |
 | End reason | The existing `agent_runs.status_detail`, read as `status_reason`. No `end_reason` column | See below | Empty, as today |
 
-- The KILLED transition writes `status_detail` as `lifetime: max_lifetime_reached` in the same store write as the state.
+- A new compare-and-set store variant writes the KILLED state and `status_detail` (`lifetime: max_lifetime_reached`) together. Today's `UpdateRunStateIf` carries no detail, and `SetRunStatusDetail` is a separate write.
+- The `status_detail` header comments ("what the substrate says") gain a line: lifetime end reasons now share the field.
 - `projectStatusDetail` gains a KILLED branch: it keeps a detail whose token is a valid `types.RunEndReason`, sets `status_reason` to it, and blanks anything else.
 - Why it fits: `status_detail` already keeps a terminal reason for a postmortem, and `status_reason` is already the token the console maps to a sentence.
 - The column add is metadata-only and joins `scanRun` and every place the run columns are listed.
@@ -229,7 +230,7 @@ The D-1319 build lane owns the run-end persistence in its own migration (lead ru
 | Mutation proofs | Drop the pool term, drop the deployment term, drop the gate, drop the `allow_no_end` check, pass `no_end` through when the default is finite: each fails a named test |
 | Shared helpers | The same finite ask gives the same latest end at create and at `PATCH` |
 | Postgres | Create captures `ends_at` and `lifetime_cap_at`; `scanRun` round-trip; legacy NULL rows; KILLED writes `status_detail` with the state |
-| Lease sweep | Background at its end and at the cap: per O2, KILLED with `status_reason`; Interactive at its end: kept; at the cap: per O3 |
+| Lease sweep | Background at its end and at the cap: per O2, KILLED with `status_reason`; Interactive at its end: kept; at the cap: per O3. Under O6-A, a tightened pool moves `ends_at` and a No end run gains an end |
 | Reaper and Kubernetes (O9-A) | The reaper skips a run carrying `lifetime_cap_at`; a run pod's deadline follows the run's own cap |
 | Projection | KILLED keeps only a valid end-reason token; any other stale detail is blanked |
 | Extension | `latest_end` is the earlier of the two bounds; `latest_end_source` names it; the stored cap binds after the pool loosens |
@@ -245,11 +246,11 @@ The D-1319 build lane owns the run-end persistence in its own migration (lead ru
 | C-pool-limits (required change, routed by the lead) | `GovernanceSource` disagrees with `planEnd` twice. It reads `max_end_ahead_sec` 0 as unlimited even without `allow_no_end`, and it drops a positive max whenever No end is allowed |
 | C-pool-limits (the fix asked) | Keep governance's max as the finite cap, and expose No end permission separately (`no_end_allowed`) using `planEnd`'s rule. Preview and launch then agree |
 | C-pool-limits | `RunEndReason` is persisted by D-1319 through `status_detail`; its "stored on the run" comment should say so. O2-A adds `end_reached`, widening the enum and its TS pin |
-| C-pool-limits (under O7-B) | Validation: an Interactive lifetime that is unlimited must still carry a finite default |
+| C-pool-limits (under O7-B) | Validation: an unlimited lifetime must still carry a finite default, for each run type O7-B covers |
 | D-116, D-117 | The run's pool id on `agent_runs`, for O6 and `latest_end_source` |
 | C-mode | The run type is resolved before the end. The policy idle reaper (`auto_stop_after_sec`) still stops Background tasks; one lane must make it skip them |
 | A-L5 | Field names for the lifetime entry beside `resources[]` in the preview |
-| Kubernetes runner | Under O9-A, D-1319's build sets each run pod's `activeDeadlineSeconds` from the run's own cap |
+| Kubernetes runner | Under O9-A, D-1319's build sets each run pod's `activeDeadlineSeconds` from the run's own cap. `activeDeadline` and the quota-scope fit (`runPods`, `podDemand.terminating`) then become per run: a run with no cap carries no deadline and is `NotTerminating`-scoped |
 | Docs lane | AUDIT-ACTIONS rows, `run-lifetime.md`, `ENV.md` note on `WARDYN_RUN_MAX_AGE` as a lifetime source |
 
 ## 14. Owner options
@@ -320,26 +321,27 @@ The D-1319 build lane owns the run-end persistence in its own migration (lead ru
 
 | Option | Behaviour | Trade-off |
 |---|---|---|
-| A1. Tighten, cap as computed | `lifetime_cap_at` becomes `created_at` + the new max | Exact; a run past the new cap is KILLED the moment the admin saves |
-| A2. Tighten, with notice | As A1, but never earlier than now + 1 hour, with the ending-soon warning | Admin intent applies within an hour; work gets a warning first |
+| A1. Tighten, cap as computed | `lifetime_cap_at` becomes `created_at` + the new max. `ends_at` becomes the earlier of itself and the new cap; a No end run gains that end | Exact; a run past the new cap is KILLED the moment the admin saves |
+| A2. Tighten, with notice | As A1, cap and `ends_at` both, but never earlier than now + 1 hour, with the ending-soon warning | Admin intent applies within an hour; work gets a warning first. The hour is a proposed number, not a ruling |
 | B. New runs only | A run keeps the pool limits it launched under | Predictable for the person; an admin must kill runs to apply a lower limit |
 
-- Loosening never widens a live run in any option. A and B both need the run's pool id ([§13](#13-coordination-notes)).
+- Under A1 and A2 the moved end is audited as `run.end.set` with `reason: limits_tightened` and `source: pool`, as profile tightening is today.
+- Loosening never widens a live run in any option. A1 and A2 need the run's pool id ([§13](#13-coordination-notes)); B needs it only for `latest_end_source: pool`.
 
 **Recommendation:** A2.
 
 ### O7. No end as a default
 
-**What it's for:** the pool contract allows an unlimited lifetime with no default, so an untouched run would have no end.
+**What it's for:** the pool contract allows an unlimited lifetime with no default, so an untouched run would have no end. The answer may differ per run type.
 
 | Option | Behaviour | Trade-off |
 |---|---|---|
 | A. Allowed | An untouched run gets No end when no source names a default | Fits "app server" pools; a forgotten run never ends |
-| B. Explicit only | A pool with an unlimited lifetime must carry a finite default; No end must be picked | Safer default; needs the C-pool-limits validation change; app-server launches need one more click |
+| B. Explicit only | For the run type chosen, a pool with an unlimited lifetime must carry a finite default; No end must be picked | Safer default; needs the C-pool-limits validation change; app-server launches need one more click |
 
 - Neither option changes a deployment without pools: a profile with no lifetime keeps today's no end on the defaults.
 
-**Recommendation:** B for Interactive, A for Background, since a task ends on exit anyway.
+**Recommendation:** per run type: B for Interactive, A for Background, since a task ends on exit anyway.
 
 ### O8. Visibility of No end runs
 
@@ -357,6 +359,8 @@ The D-1319 build lane owns the run-end persistence in its own migration (lead ru
 
 **What it's for:** `WARDYN_RUN_MAX_AGE` stops runs today through the reaper, with no end shown. The pool contract also counts it as a lifetime source.
 
+O9-A needs O1-A: without `lifetime_cap_at` the reaper has nothing to skip on. Under O1-B, O9-A reduces to capping `ends_at`, and the race in O9-B remains.
+
 | Option | Behaviour | Trade-off |
 |---|---|---|
 | A. A lifetime source | The cap feeds `lifetime_cap_at`, so the end is shown. Runs carrying the cap end by the lease sweep. The reaper skips them; each Kubernetes pod's deadline follows the run's cap | One end, one outcome per run type. Changes the reaper and the pod deadline; the reaper still covers older runs |
@@ -371,6 +375,6 @@ The D-1319 build lane owns the run-end persistence in its own migration (lead ru
 | Option | Behaviour | Trade-off |
 |---|---|---|
 | A. Pools bind super admins | A super admin skips governance only; the pool and the deployment still bound their runs | A pool's limit holds for everyone on it; `limits_exempt` changes meaning |
-| B. Today's exemption | A super admin is bounded by the deployment alone, pool or not | No change to the exemption; a super admin can hold a capped pool's slot indefinitely |
+| B. Today's exemption | A super admin is bounded by the deployment alone, pool or not | No change to the exemption; with no deployment cap, a super admin can hold a capped pool's slot indefinitely |
 
 **Recommendation:** A.
