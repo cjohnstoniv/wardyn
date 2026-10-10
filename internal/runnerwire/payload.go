@@ -144,6 +144,7 @@ type ActionResult struct {
 
 // RunState is one run's entry in the STATE payload; all runner_asserted.
 type RunState struct {
+	SpoolReceipt    *types.RunnerSpoolReceipt    `json:"spool_receipt,omitempty"`
 	Retirement      *types.RunnerRetirement      `json:"retirement,omitempty"`
 	Containment     *types.RunnerMutationFailure `json:"containment,omitempty"`
 	ContainmentOnly bool                         `json:"containment_only,omitempty"`

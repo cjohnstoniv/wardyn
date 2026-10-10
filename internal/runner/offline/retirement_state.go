@@ -18,7 +18,7 @@ func validateRetirementState(r localRun) error {
 		}
 		return nil
 	}
-	if p.ID == uuid.Nil || p.Spool.SpoolID == uuid.Nil || p.OutputEnd < 0 || p.Generation != r.Generation || p.ExecID != r.ExecID || p.ExitHash != exitDigest(r.Exit) || r.Quarantine != nil {
+	if p.ID == uuid.Nil || p.Spool.SpoolID == uuid.Nil || p.OutputEnd < 0 || p.Generation != r.Generation || p.ExecID != r.ExecID || p.ExitHash != exitDigest(r.Exit) || (r.Retired && r.Quarantine != nil) {
 		return errors.New("retirement settlement identity mismatch")
 	}
 	if r.Containment == nil || r.Containment.ID == uuid.Nil || r.Containment.Generation != r.Generation || r.Containment.Operation != string(types.RunnerActionKill) || !r.Containment.Contained || r.ProxyStoppedAt == nil {

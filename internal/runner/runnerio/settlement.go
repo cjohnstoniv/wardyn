@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/google/uuid"
 )
 
@@ -23,7 +24,7 @@ func (s *Server) OutputSettled(ctx context.Context, id uuid.UUID, ref string) (i
 	b := s.outputs[id]
 	s.mu.Unlock()
 	if b == nil {
-		return 0, true, nil
+		return 0, false, runner.ErrOutputUnrecoverable
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
