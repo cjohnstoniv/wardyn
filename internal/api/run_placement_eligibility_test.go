@@ -109,3 +109,31 @@ func TestLocalStoredGrantPersistenceForcesOwnerOnlyAndRefusesFallback(t *testing
 		t.Fatal("missing own namespace wrote a partial grant set")
 	}
 }
+
+func TestLocalPlacementOrdinaryScanTaskDoesNotBecomeTrustedOutput(t *testing.T) {
+	f := newComponentFixture(t)
+	for _, door := range componentDoors {
+		body := componentBody()
+		body["task"] = "source scan"
+		body["placement"] = "local"
+		w := f.ask(t, door, body)
+		if w.Code != 422 || errorReason(w) != string(placement.ReasonPlacementUnavailable) {
+			t.Fatalf("ordinary task became trusted output: %d %s", w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestLocalP3ComponentNameIsResponseOnly(t *testing.T) {
+	f := newComponentFixture(t)
+	body := componentBody(map[string]any{"name": "Private Personal Tool", "inline": map[string]any{"hosts": []string{"mine.example"}}})
+	body["placement"] = "local"
+	w := f.ask(t, componentDoors[0], body)
+	if w.Code != 403 || !strings.Contains(w.Body.String(), "Private Personal Tool") {
+		t.Fatalf("P3 response=%d %s", w.Code, w.Body.String())
+	}
+	for _, ev := range f.rec.snapshot() {
+		if strings.Contains(string(ev.Data), "Private Personal Tool") {
+			t.Fatalf("personal component name reached append-only %s", ev.Action)
+		}
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"reflect"
 	"strconv"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
@@ -19,7 +20,7 @@ import (
 // Missing origins (including an unrecognised late author) fail closed. The
 // entry refusal remains until routing and credential authoring are ready.
 func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling,
-	sc types.SiteConfig, spec *runner.SandboxSpec, orgConfigKeys []string, llm llmTransport, ado adoEntraRun,
+	sc types.SiteConfig, spec *runner.SandboxSpec, orgConfigKeys []string, llm llmTransport, ado adoEntraRun, trustedOutput bool,
 ) bool {
 	if run.Placement != types.PlacementLocal {
 		return true
@@ -29,6 +30,7 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "local dispatch provenance could not be read")
 		return false
 	}
+	p.TrustedOutput = p.TrustedOutput || trustedOutput
 	stripped, ref := placement.LocalEligibility(p)
 	if ref != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch", run.ID.String(), "failure", mustJSON(map[string]any{"reason": ref.Reason, "field": ref.Field})))
@@ -48,6 +50,9 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling, sc types.SiteConfig,
 	spec runner.SandboxSpec, orgConfigKeys []string, llm llmTransport, ado adoEntraRun,
 ) (placement.LocalPlan, error) {
+	if fields := localDispatchUnclassified(); len(fields) != 0 {
+		return placement.LocalPlan{}, fmt.Errorf("%s: unclassified dispatch metadata", fields[0])
+	}
 	rows, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
 	if err != nil {
 		return placement.LocalPlan{}, err
@@ -101,7 +106,7 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, ceil
 			continue
 		}
 		rule, e := injectionRuleFromScope(row.Spec.Scope)
-		if e != nil || rule.Host != in.Rule.Host || rule.SecretName != in.Rule.SecretName || rule.Header != in.Rule.Header || rule.Format != in.Rule.Format {
+		if e != nil || !reflect.DeepEqual(rule, in.Rule) {
 			continue
 		}
 		origin, ref := s.localGrantOrigin(ctx, owner, row.Spec)

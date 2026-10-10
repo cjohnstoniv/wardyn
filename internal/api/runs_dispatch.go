@@ -28,6 +28,7 @@ import (
 // wrong credential family onto every host. Named fields make each call site
 // self-documenting; the zero value is the "none" case per field.
 type dispatchParams struct {
+	TrustedOutput      bool                 // server-authored probe provenance; never a public request field
 	RunToken           string               // proxy-verifiable run token (never a usable in-sandbox secret)
 	Image              string               // resolved sandbox OCI image (convention or built devcontainer)
 	Policy             types.RunPolicySpec  // egress/resource policy (dispatchRun mutates a local copy)
@@ -647,7 +648,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.completeMaskManifestWithFileSecrets(ctx, run, policy, &spec) {
 		return
 	}
-	if !s.classifyLocalDispatch(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, adoRun) {
+	if !s.classifyLocalDispatch(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, adoRun, p.TrustedOutput) {
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)

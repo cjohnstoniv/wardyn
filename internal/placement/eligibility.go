@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -211,7 +212,7 @@ func stripOperatorConfig(p LocalPlan) runner.SandboxSpec {
 	// Every interception entry needs an own admitted injection; an org-only
 	// interception entry must not silently retain authority after credentials strip.
 	s.ProxyConfig.MITMHosts = slices.DeleteFunc(slices.Clone(s.ProxyConfig.MITMHosts), func(host string) bool {
-		return !slices.ContainsFunc(s.ProxyConfig.Injection, func(in runner.InjectionGrant) bool { return host == in.Rule.Host || host == in.Rule.Host+":443" })
+		return !slices.ContainsFunc(s.ProxyConfig.Injection, func(in runner.InjectionGrant) bool { return hostrules.HostOf(host) == in.Rule.Host })
 	})
 	return s
 }

@@ -4,19 +4,28 @@
 package placement
 
 import (
+	"reflect"
+	"slices"
+	"strings"
+
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"reflect"
-	"slices"
-	"strings"
 )
 
 // nestedFields pins every inspected dispatch carrier. A parent exemption never
 // exempts a newly added child: both the table and this closed schema must cover it.
 var nestedFields = map[reflect.Type][]string{
+	reflect.TypeFor[proxy.Config]():            strings.Fields("RunID ControlPlaneURL ControlPlaneCAPEM RunToken Policy Injection Listen DecisionBufferSize MITMCACertPEM MITMCAKeyPEM MITMHosts GitGrants PATGrants BrokeredPATGrantIDs ADOGrant AzureGates MITMLLM UpstreamProxyURL UpstreamProxyNoProxy TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail Unattended Attribution"),
+	reflect.TypeFor[proxy.InjectionConfig]():   strings.Fields("InjectionRule GrantID"),
+	reflect.TypeFor[LocalPlan]():               strings.Fields("Spec Origins CredentialIntents OrgConfigKeys VerifiedLocalPaths UpstreamProxySecretRef TrustedOutput SelfDefinedComponents LocalSelfDefinedComponents Delivery"),
+	reflect.TypeFor[CredentialOrigin]():        strings.Fields("Class Delivery GrantKind Stored OwnNamespace OwnerOnly"),
+	reflect.TypeFor[CredentialIntent]():        strings.Fields("Field Origin"),
+	reflect.TypeFor[DeliveryPolicy]():          strings.Fields("Classes"),
+	reflect.TypeFor[ClassPolicy]():             strings.Fields("Mode RequirePosture"),
+	reflect.TypeFor[PostureRequirement]():      strings.Fields("MDMManaged DiskEncrypted OSMin"),
 	reflect.TypeFor[egress.InjectionRule]():    strings.Fields("Host Header SecretName Format RequireTLS PinPath PinQuery PinRoutes"),
 	reflect.TypeFor[egress.PinRoute]():         strings.Fields("Method Path"),
 	reflect.TypeFor[policyref.Ref]():           strings.Fields("Source Name Owner Email RequestURL RequestText"),
@@ -42,10 +51,29 @@ var nestedFields = map[reflect.Type][]string{
 
 // NestedUnclassified checks types even when the current value is nil or empty.
 func NestedUnclassified() []string {
-	return nestedUnclassified(reflect.TypeFor[runner.SandboxSpec](), StructSandboxSpec, 0)
+	return slices.Concat(
+		nestedUnclassified(reflect.TypeFor[runner.SandboxSpec](), StructSandboxSpec, 0),
+		nestedUnclassified(reflect.TypeFor[proxy.Config](), "StoredProxyConfig", 0),
+		nestedUnclassified(reflect.TypeFor[CredentialOrigin](), "CredentialOrigin", 0),
+		nestedUnclassified(reflect.TypeFor[CredentialIntent](), "CredentialIntent", 0),
+		nestedUnclassified(reflect.TypeFor[DeliveryPolicy](), "DeliveryPolicy", 0),
+		nestedUnclassified(reflect.TypeFor[LocalPlan](), "LocalPlan", 0),
+	)
+}
+
+// SchemaUnclassified shares the closed schema with private control-plane
+// dispatch metadata. The additional entries are explicitly reviewed field
+// manifests; nil marks an opaque scalar such as time.Time, never a parent
+// exemption for future fields.
+func SchemaUnclassified(t reflect.Type, path string, additional map[reflect.Type][]string) []string {
+	return schemaUnclassified(t, path, 0, additional)
 }
 
 func nestedUnclassified(t reflect.Type, path string, depth int) []string {
+	return schemaUnclassified(t, path, depth, nil)
+}
+
+func schemaUnclassified(t reflect.Type, path string, depth int, additional map[reflect.Type][]string) []string {
 	if depth > 32 {
 		return []string{path}
 	}
@@ -57,13 +85,19 @@ func nestedUnclassified(t reflect.Type, path string, depth int) []string {
 	}
 	var out []string
 	fields, known := nestedFields[t]
+	if explicit, ok := additional[t]; ok {
+		fields, known = explicit, true
+		if explicit == nil {
+			return nil
+		}
+	}
 	root := t == reflect.TypeFor[runner.SandboxSpec]() || t == reflect.TypeFor[runner.ProxyConfig]()
 	if !root && !known {
 		return []string{path}
 	}
 	for i := range t.NumField() {
 		f := t.Field(i)
-		if !f.IsExported() {
+		if !f.IsExported() && additional == nil {
 			continue
 		}
 		child := path + "." + f.Name
@@ -71,7 +105,7 @@ func nestedUnclassified(t reflect.Type, path string, depth int) []string {
 			out = append(out, child)
 			continue
 		}
-		out = append(out, nestedUnclassified(f.Type, child, depth+1)...)
+		out = append(out, schemaUnclassified(f.Type, child, depth+1, additional)...)
 	}
 	return out
 }

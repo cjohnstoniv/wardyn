@@ -22,6 +22,9 @@ func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest,
 	if req.Placement != placement.Local {
 		return nil
 	}
+	if fields := localDispatchUnclassified(); len(fields) != 0 {
+		return runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), fields[0]+": unclassified dispatch metadata")
+	}
 	var sc types.SiteConfig
 	if s.cfg.Store != nil {
 		var err error
@@ -38,7 +41,11 @@ func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest,
 	}
 	for _, c := range comps.attached {
 		if c.snapshot.SelfDefined {
-			p.SelfDefinedComponents = append(p.SelfDefinedComponents, c.snapshot.Name)
+			name := c.snapshot.Name
+			if name == "" {
+				name = "components[" + strconv.Itoa(len(p.SelfDefinedComponents)) + "]"
+			}
+			p.SelfDefinedComponents = append(p.SelfDefinedComponents, name)
 		}
 	}
 	for i, g := range spec.EligibleGrants {
@@ -68,7 +75,7 @@ func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest,
 
 func localTrustedOutputRequest(req createRunRequest) bool {
 	switch req.Task {
-	case harnessLoginTask, "workspace record", "workspace verify", "source scan", "workspace scan":
+	case harnessLoginTask, "workspace record", "workspace verify":
 		return true
 	default:
 		return false
@@ -87,6 +94,12 @@ func (s *Server) localGrantOrigin(ctx context.Context, owner string, g types.Gra
 	case types.GrantCloudSTS:
 		origin.Class, origin.Delivery = placement.ClassBrokered, placement.ClassCloudSTS
 		return origin, nil
+	}
+	if captured, handled, err := s.localCapturedGrantOrigin(ctx, owner, g); handled {
+		if err != nil {
+			return origin, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), "eligible_grants: captured credential provenance cannot be resolved")
+		}
+		return captured, nil
 	}
 	_, name, knownHosts, covered, err := storedSecretGrantPairing(g)
 	if err != nil || !covered {
@@ -122,8 +135,10 @@ func (s *Server) localGrantOrigin(ctx context.Context, owner string, g types.Gra
 
 func (s *Server) localEligibilityRefusal(r *http.Request, ceiling governanceCeiling, ref *placement.Refusal) *runRefusal {
 	if ref.Reason == placement.ReasonPlacementComponentSelfDefine {
-		d := authz.Deny(authz.ReasonPlacementComponentSelfDefined, "runs.placement", ref.Error()).WithPolicy(s.ceilingPolicy(r.Context(), ceiling))
-		return runDenied(d)
+		d := authz.Deny(authz.ReasonPlacementComponentSelfDefined, "runs.placement", "local_self_defined_components is not permitted by the profile").WithPolicy(s.ceilingPolicy(r.Context(), ceiling))
+		f := runError(ref.Reason.Status(), string(ref.Reason), ref.Error())
+		f.decision = &d
+		return f
 	}
 	return runError(ref.Reason.Status(), string(ref.Reason), ref.Error())
 }
