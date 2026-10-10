@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"log/slog"
 	"time"
 
@@ -43,7 +44,7 @@ import (
 // renewGiveUpAfter, which mirrors the embedded provider's 1 h tokenTTL); the
 // five minutes cover the stamp landing a moment after the mint and a small
 // clock difference between the database and the minting replica.
-const runTokenLapseAfter = time.Hour + 5*time.Minute
+const runTokenLapseAfter = identity.RunTokenLapseAfter
 
 // sweepLapsedRunTokens is the boot and sweep check: every RUNNING run whose
 // token lapsed is marked lost (outage) with its proxy stopped, or torn down.
