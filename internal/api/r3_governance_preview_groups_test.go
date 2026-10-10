@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // POST /governance/preview answers ONE question — "which profile would bind a
@@ -20,7 +20,7 @@ import (
 // it — while enforcement refused the same claim outright, dropped it from the
 // snapshot and stamped the snapshot truncated.
 //
-// The assertion is AGREEMENT with oidc.CanonicalGroupSubject itself, not a
+// The assertion is AGREEMENT with types.CanonicalGroupSubject itself, not a
 // hand-listed expectation: a second normalizer that happens to agree today is
 // the thing that drifted.
 func TestGovernancePreviewGroupNormalizationMatchesEnforcement(t *testing.T) {
@@ -42,7 +42,7 @@ func TestGovernancePreviewGroupNormalizationMatchesEnforcement(t *testing.T) {
 	// EVERY claim the snapshot can carry survives, canonicalized exactly as a
 	// login would carry it; every claim it cannot is absent.
 	for _, c := range claims {
-		canon, ok := oidc.CanonicalGroupSubject(c)
+		canon, ok := types.CanonicalGroupSubject(c)
 		if ok {
 			if !slices.Contains(got, canon) {
 				t.Errorf("claim %+q canonicalizes to %q for a login, but the preview dropped it — the preview "+
@@ -52,7 +52,7 @@ func TestGovernancePreviewGroupNormalizationMatchesEnforcement(t *testing.T) {
 		}
 		// The load-bearing half: a claim enforcement refuses must not appear in
 		// the preview's input AT ALL, folded or otherwise.
-		folded, _ := oidc.CanonicalGroupSubject("kubernetes-admins")
+		folded, _ := types.CanonicalGroupSubject("kubernetes-admins")
 		for _, g := range got {
 			if g == folded && (c == "\u212Aubernetes-admins") {
 				t.Errorf("claim %+q folded onto the operator-authored group %q — the preview reports the profile "+

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	writoidc "github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 func TestSessionGroupsNormalizes(t *testing.T) {
@@ -37,7 +38,7 @@ func TestSessionGroupsNormalizes(t *testing.T) {
 
 // TestSessionGroupsDropsUnmatchableClaims: a grant subject is an
 // operator-typed ASCII string, and Unicode case folding lets a crafted claim
-// fold ONTO one (the same escalation ASCIIOnly guards in deriveRole). A claim
+// fold ONTO one (the same escalation types.ASCIIOnlySubject guards in deriveRole). A claim
 // that could never be written down as a grant subject is dropped rather than
 // carried into the cookie where it can only ever surprise someone.
 func TestSessionGroupsDropsUnmatchableClaims(t *testing.T) {
@@ -66,7 +67,7 @@ func TestSessionGroupsDropsUnmatchableClaims(t *testing.T) {
 // governance profile bound to it.
 //
 // Counterfactual (run it): move the printable-ASCII check back after
-// strings.ToLower in CanonicalGroupSubject and this test fails with the crafted
+// strings.ToLower in types.CanonicalGroupSubject and this test fails with the crafted
 // names present in the snapshot, while TestSessionGroupsDropsUnmatchableClaims
 // above stays green byte for byte. The same pin exists for the deriveRole path
 // in TestRoleMapPrecedence_ChartOverConsoleOverClaims' KELVIN SIGN case.
@@ -166,12 +167,12 @@ func TestFilteredGroupClaimReadsComplete(t *testing.T) {
 	}
 }
 
-// TestCanonicalGroupSubjectIsTheSnapshotRule pins the shared exported helper
-// internal/api's three group-subject write boundaries call. It is exported for
-// exactly one reason: a subject those boundaries accept but this function
+// TestCanonicalGroupSubjectIsTheSnapshotRule pins the shared rule
+// types.CanonicalGroupSubject, which internal/api's three group-subject write
+// boundaries call as well as sessionGroups below. It is the ONE home for
+// exactly one reason: a subject those boundaries accept but this snapshot
 // refuses is a row matched by exact equality against a snapshot that can never
-// contain it — a DENY that protects nothing. One implementation, so the write
-// surface and the match surface cannot drift.
+// contain it — a DENY that protects nothing.
 func TestCanonicalGroupSubjectIsTheSnapshotRule(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -189,7 +190,7 @@ func TestCanonicalGroupSubjectIsTheSnapshotRule(t *testing.T) {
 		{"eng\u0085nel", ""},
 	}
 	for _, tc := range cases {
-		got, ok := writoidc.CanonicalGroupSubject(tc.in)
+		got, ok := types.CanonicalGroupSubject(tc.in)
 		if (tc.want == "") == ok {
 			t.Errorf("CanonicalGroupSubject(%+q) ok = %v, want %v", tc.in, ok, tc.want != "")
 			continue

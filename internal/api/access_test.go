@@ -632,7 +632,7 @@ func TestAccess_InvalidShapeRejected(t *testing.T) {
 		{"whitespace-only value", `{"value":"   ","role":"user","acknowledge_access_change":true}`},
 		{"invalid role", `{"value":"eng-team","role":"superadmin","acknowledge_access_change":true}`},
 		{"non-ASCII value", `{"value":"café","role":"user","acknowledge_access_change":true}`},
-		// canonicalRoleMapValue's ASCII guard is oidc.ASCIIOnly, the SAME
+		// canonicalRoleMapValue's ASCII guard is types.ASCIIOnlySubject, the SAME
 		// function the login path applies to claim values — these two arms pin
 		// the ones that distinguish a real ASCII test from a lazy one.
 		// U+017F (LATIN SMALL LETTER LONG S) survives ToLower unchanged and
