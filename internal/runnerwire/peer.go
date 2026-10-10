@@ -41,7 +41,7 @@ type PeerConfig struct {
 	// refuses it. It must not block.
 	OnOpen func(s *Stream, o Open) error
 	// OnControl receives the session-level frames the peer does not act on
-	// itself: PENDING, STATE, READY, LEASE, GOAWAY and REVOKED.
+	// itself: PENDING, STATE, READY, LEASE, GOAWAY, REVOKED and CURRENT_ACTIVITY.
 	OnControl func(Frame)
 	// Checked handlers replace their unchecked counterpart when set. A failed
 	// durable ingest must not advance the received/ACK cursor.
