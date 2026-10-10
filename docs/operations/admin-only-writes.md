@@ -2,7 +2,7 @@
 
 The writes with the widest blast radius, and which role each one is gated on.
 The delegation boundary an admin reads before handing a tier to somebody else: one table,
-read by the route matrix in `internal/api/authz_test.go`.
+read by the route matrix in [`internal/api/authz_test.go`](../../internal/api/authz_test.go).
 
 ## What admin-only still means
 
