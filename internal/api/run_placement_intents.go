@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -40,12 +41,7 @@ func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, s
 			continue
 		}
 		laneHosts = append(laneHosts, adoEntraEgressEntries(a.org)...)
-		origin := placement.CredentialOrigin{Class: placement.ClassBrokered, Delivery: placement.ClassADOMintedPAT}
-		if a.tokenMode == types.ADOTokenModeOwnPAT {
-			own := owner != "" && adoEntraValidRowID(a.rowID) && s.ownsSecretMemoized(r.Context(), owner, adoOwnPATSecretName(a.rowID))
-			origin = placement.CredentialOrigin{Class: placement.ClassOwn, Stored: true, OwnNamespace: own, OwnerOnly: own}
-		}
-		out = append(out, placement.CredentialIntent{Field: "ProxyConfig.ADOGrant[" + a.rowID + "]", Origin: origin})
+		out = append(out, placement.CredentialIntent{Field: "ProxyConfig.ADOGrant[" + a.rowID + "]", Origin: s.localADOOrigin(r.Context(), owner, a)})
 	}
 	out = append(out, s.localRedirectIntents(r, spec, sc, laneHosts)...)
 	return out, nil
@@ -94,4 +90,15 @@ func (s *Server) localRedirectIntents(r *http.Request, spec types.RunPolicySpec,
 		out = append(out, placement.CredentialIntent{Field: "ProxyConfig.Injection[egress_redirect:" + strconv.Itoa(i) + "]", Origin: placement.CredentialOrigin{Class: placement.ClassOperator, Stored: true, Delivery: placement.ClassAPIKey}})
 	}
 	return out
+}
+
+// localADOOrigin is the one origin of an Azure DevOps lane, at admission and at
+// dispatch: own only for the owner's own PAT proven in their namespace; every
+// other token mode is minted by the organisation.
+func (s *Server) localADOOrigin(ctx context.Context, owner string, a adoEntraRun) placement.CredentialOrigin {
+	if a.tokenMode != types.ADOTokenModeOwnPAT || owner == "" || a.owner != owner || !adoEntraValidRowID(a.rowID) {
+		return placement.CredentialOrigin{Class: placement.ClassBrokered, Delivery: placement.ClassADOMintedPAT}
+	}
+	own := s.ownsSecretMemoized(ctx, owner, adoOwnPATSecretName(a.rowID))
+	return placement.CredentialOrigin{Class: placement.ClassOwn, Stored: true, OwnNamespace: own, OwnerOnly: own}
 }

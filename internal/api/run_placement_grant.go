@@ -18,7 +18,7 @@ import (
 // Operator provenance is explicit: a colliding personal secret name cannot
 // turn an operator redirect into an own credential. Remote writes are unchanged.
 func (s *Server) createDispatchGrant(ctx context.Context, run types.AgentRun, g types.CredentialGrant, operatorHeld bool) (types.CredentialGrant, error) {
-	if run.Placement == "" || run.Placement == types.PlacementRemote {
+	if remotePlacement(run.Placement) {
 		return s.cfg.Store.CreateGrant(ctx, g)
 	}
 	if run.Placement != types.PlacementLocal || g.RunID != run.ID {

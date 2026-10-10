@@ -68,7 +68,7 @@ type grantWiring struct {
 // line an operator is already reading.
 // Extracted verbatim from handleCreateRun.
 func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, runID uuid.UUID, now time.Time, spec types.RunPolicySpec, runPlacement types.Placement) (grantWiring, bool) {
-	if runPlacement != "" && runPlacement != types.PlacementRemote && runPlacement != types.PlacementLocal {
+	if !remotePlacement(runPlacement) && runPlacement != types.PlacementLocal {
 		writeErrorReason(w, placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable), "unclassified stored run placement")
 		return grantWiring{}, false
 	}

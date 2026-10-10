@@ -69,16 +69,23 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.WorkspaceProviders](): strings.Fields("Git Storage GitPatBrokerEnabled"),
 }
 
+// localDispatchOpaque names the non-data interface values of the private
+// metadata, as "Type.Field", each with why it carries no credential.
+var localDispatchOpaque = map[string]string{
+	"bedrockAuth.maskErr": "an error value, never delivered",
+	"Integration.Config":  "non-secret, kind-validated integration configuration; credentials are the Secrets roles",
+}
+
 func localDispatchUnclassified() []string {
 	return slices.Concat(
-		placement.SchemaUnclassified(reflect.TypeFor[providerGrantSnapshot](), "providerGrantSnapshot", localDispatchFields),
-		placement.SchemaUnclassified(reflect.TypeFor[azureGrantSnapshot](), "azureGrantSnapshot", localDispatchFields),
-		placement.SchemaUnclassified(reflect.TypeFor[awsSSOScopeSnapshot](), "awsSSOScopeSnapshot", localDispatchFields),
-		placement.SchemaUnclassified(reflect.TypeFor[adoEntraScopeSnapshot](), "adoEntraScopeSnapshot", localDispatchFields),
-		placement.SchemaUnclassified(reflect.TypeFor[dispatchParams](), "dispatchParams", localDispatchFields),
-		placement.SchemaUnclassified(reflect.TypeFor[dispatchCeiling](), "dispatchCeiling", localDispatchFields),
-		placement.SchemaUnclassified(reflect.TypeFor[llmTransport](), "llmTransport", localDispatchFields),
-		placement.SchemaUnclassified(reflect.TypeFor[adoEntraRun](), "adoEntraRun", localDispatchFields),
-		placement.SchemaUnclassified(reflect.TypeFor[types.SiteConfig](), "SiteConfig", localDispatchFields),
+		placement.SchemaUnclassified(reflect.TypeFor[providerGrantSnapshot](), "providerGrantSnapshot", localDispatchFields, localDispatchOpaque),
+		placement.SchemaUnclassified(reflect.TypeFor[azureGrantSnapshot](), "azureGrantSnapshot", localDispatchFields, localDispatchOpaque),
+		placement.SchemaUnclassified(reflect.TypeFor[awsSSOScopeSnapshot](), "awsSSOScopeSnapshot", localDispatchFields, localDispatchOpaque),
+		placement.SchemaUnclassified(reflect.TypeFor[adoEntraScopeSnapshot](), "adoEntraScopeSnapshot", localDispatchFields, localDispatchOpaque),
+		placement.SchemaUnclassified(reflect.TypeFor[dispatchParams](), "dispatchParams", localDispatchFields, localDispatchOpaque),
+		placement.SchemaUnclassified(reflect.TypeFor[dispatchCeiling](), "dispatchCeiling", localDispatchFields, localDispatchOpaque),
+		placement.SchemaUnclassified(reflect.TypeFor[llmTransport](), "llmTransport", localDispatchFields, localDispatchOpaque),
+		placement.SchemaUnclassified(reflect.TypeFor[adoEntraRun](), "adoEntraRun", localDispatchFields, localDispatchOpaque),
+		placement.SchemaUnclassified(reflect.TypeFor[types.SiteConfig](), "SiteConfig", localDispatchFields, localDispatchOpaque),
 	)
 }

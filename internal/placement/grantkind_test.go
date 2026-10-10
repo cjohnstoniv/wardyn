@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -34,39 +35,66 @@ var grantKindFixture = map[types.GrantKind]struct {
 	types.GrantCloudSTS:    {ClassCloudSTS, false},
 }
 
-// declaredGrantKinds reads every GrantKind constant from the types source, so
-// the fixture cannot silently lag a constant someone adds.
+// declaredGrantKinds reads every GrantKind constant of every non-test file of
+// the types package, so a constant added elsewhere, or declared as
+// GrantKind("x"), cannot lag the fixture. A value that is not a literal fails.
 func declaredGrantKinds(t *testing.T) []types.GrantKind {
 	t.Helper()
-	f, err := parser.ParseFile(token.NewFileSet(), "../types/types.go", nil, 0)
-	if err != nil {
-		t.Fatal(err)
+	files, err := filepath.Glob("../types/*.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no types sources: %v", err)
 	}
 	var kinds []types.GrantKind
-	for _, d := range f.Decls {
-		gd, ok := d.(*ast.GenDecl)
-		if !ok || gd.Tok != token.CONST {
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		for _, sp := range gd.Specs {
-			vs := sp.(*ast.ValueSpec)
-			if id, ok := vs.Type.(*ast.Ident); !ok || id.Name != "GrantKind" {
+		f, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range f.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
 				continue
 			}
-			for _, v := range vs.Values {
-				lit, ok := v.(*ast.BasicLit)
-				if !ok {
-					t.Fatalf("GrantKind constant %v is not a string literal", vs.Names)
+			for _, sp := range gd.Specs {
+				vs := sp.(*ast.ValueSpec)
+				for i, v := range vs.Values {
+					if k, ok := grantKindLiteral(t, vs, i, v); ok {
+						kinds = append(kinds, k)
+					}
 				}
-				s, err := strconv.Unquote(lit.Value)
-				if err != nil {
-					t.Fatal(err)
-				}
-				kinds = append(kinds, types.GrantKind(s))
 			}
 		}
 	}
 	return kinds
+}
+
+// grantKindLiteral recognises "X GrantKind = \"lit\"" and "X = GrantKind(\"lit\")".
+func grantKindLiteral(t *testing.T, vs *ast.ValueSpec, i int, v ast.Expr) (types.GrantKind, bool) {
+	t.Helper()
+	typed := false
+	if id, ok := vs.Type.(*ast.Ident); ok && id.Name == "GrantKind" {
+		typed = true
+	}
+	if call, ok := v.(*ast.CallExpr); ok {
+		if fn, ok := call.Fun.(*ast.Ident); ok && fn.Name == "GrantKind" && len(call.Args) == 1 {
+			typed, v = true, call.Args[0]
+		}
+	}
+	if !typed {
+		return "", false
+	}
+	lit, ok := v.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		t.Fatalf("GrantKind constant %v is not a string literal: classify it by hand", vs.Names[i])
+	}
+	s, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return types.GrantKind(s), true
 }
 
 func TestEveryGrantKindIsClassifiedAndFixtured(t *testing.T) {
@@ -192,12 +220,43 @@ func TestLocalEligibilityMountsAndDriveStayBoundToTheRunner(t *testing.T) {
 func TestSchemaFlagsAnUnlistedChildOfAKnownCarrier(t *testing.T) {
 	type carrier struct{ Known, Fresh string }
 	known := map[reflect.Type][]string{reflect.TypeFor[carrier](): {"Known"}}
-	got := SchemaUnclassified(reflect.TypeFor[carrier](), "carrier", known)
+	got := SchemaUnclassified(reflect.TypeFor[carrier](), "carrier", known, nil)
 	if !slices.Equal(got, []string{"carrier.Fresh"}) {
 		t.Fatalf("unlisted child: %v", got)
 	}
 	known[reflect.TypeFor[carrier]()] = []string{"Known", "Fresh"}
-	if got := SchemaUnclassified(reflect.TypeFor[carrier](), "carrier", known); len(got) != 0 {
+	if got := SchemaUnclassified(reflect.TypeFor[carrier](), "carrier", known, nil); len(got) != 0 {
 		t.Fatalf("fully listed carrier flagged: %v", got)
+	}
+}
+
+func TestGrantKindLiteralReaderSeesBothConstForms(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "x.go", "package x\nconst (\n\tA GrantKind = \"a\"\n\tB = GrantKind(\"b\")\n\tC = \"not a kind\"\n)\n", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []types.GrantKind
+	for _, sp := range f.Decls[0].(*ast.GenDecl).Specs {
+		vs := sp.(*ast.ValueSpec)
+		if k, ok := grantKindLiteral(t, vs, 0, vs.Values[0]); ok {
+			got = append(got, k)
+		}
+	}
+	if !slices.Equal(got, []types.GrantKind{"a", "b"}) {
+		t.Fatalf("got %v", got)
+	}
+}
+
+// Resident Bedrock role credentials sign in-process: even the person's own
+// bedrock_sso is runner_resident or refuse (design 6.3, 7.2), never allowed.
+func TestLocalEligibilityOwnBedrockRoleCredentialsAreDeliveryOrRefuse(t *testing.T) {
+	path := "SandboxSpec.SecretEnv[ROLE_SIGNING_KEY]"
+	own := CredentialOrigin{Class: ClassOwn, Delivery: ClassBedrockRoleCreds, Stored: true, OwnNamespace: true, OwnerOnly: true}
+	for _, mode := range []Mode{ModeRefuse, ModeRunnerResident} {
+		p := LocalPlan{Spec: runner.SandboxSpec{SecretEnv: map[string]string{"ROLE_SIGNING_KEY": "v"}}, Origins: map[string]CredentialOrigin{path: own},
+			Delivery: DeliveryPolicy{Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: mode}}}}
+		if _, r := LocalEligibility(p); r == nil || r.Field != path || r.Reason != ReasonPlacementCredential || !strings.Contains(r.Detail, ClassBedrockRoleCreds) {
+			t.Fatalf("mode %s: %v", mode, r)
+		}
 	}
 }

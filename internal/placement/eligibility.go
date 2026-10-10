@@ -5,12 +5,9 @@ package placement
 
 import (
 	"fmt"
-	"maps"
-	"slices"
 	"strconv"
 	"strings"
 
-	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -85,59 +82,25 @@ func LocalEligibility(p LocalPlan) (runner.SandboxSpec, *Refusal) {
 		}
 	}
 	for _, path := range CredentialPaths(p.Spec) {
-		if r := classifyCredential(path, p.Origins[path], p.Delivery); r != nil {
+		if r := classifyCredential(Entries, path, p.Origins[path], p.Delivery); r != nil {
 			return runner.SandboxSpec{}, r
 		}
 	}
 	for _, intent := range p.CredentialIntents {
-		if r := classifyCredential(intent.Field, intent.Origin, p.Delivery); r != nil {
+		if r := classifyCredential(Entries, intent.Field, intent.Origin, p.Delivery); r != nil {
 			return runner.SandboxSpec{}, r
 		}
 	}
-	if r := localMountRefusal(p); r != nil {
+	out, r := enforceTable(Entries, p)
+	if r != nil {
 		return runner.SandboxSpec{}, r
 	}
-	return stripOperatorConfig(p), nil
+	return out, nil
 }
 
-// CredentialPaths enumerates actual values and grant eligibility, including
-// approval-gated grants absent from Injection. Sorted keys make refusals stable.
-func CredentialPaths(s runner.SandboxSpec) []string {
-	var out []string
-	for _, k := range slices.Sorted(maps.Keys(s.SecretEnv)) {
-		out = append(out, "SandboxSpec.SecretEnv["+k+"]")
-	}
-	for i, f := range s.ManagedFiles {
-		if f.AgentOwned {
-			out = append(out, indexed("SandboxSpec.ManagedFiles", i))
-		}
-	}
-	for i := range s.ProxyConfig.Injection {
-		out = append(out, indexed("ProxyConfig.Injection", i))
-	}
-	for _, k := range slices.Sorted(maps.Keys(s.ProxyConfig.GitGrants)) {
-		out = append(out, "ProxyConfig.GitGrants["+k+"]")
-	}
-	for _, k := range slices.Sorted(maps.Keys(s.ProxyConfig.PATGrants)) {
-		out = append(out, "ProxyConfig.PATGrants["+k+"]")
-	}
-	for i := range s.ProxyConfig.BrokeredPATGrantIDs {
-		out = append(out, indexed("ProxyConfig.BrokeredPATGrantIDs", i))
-	}
-	if s.ProxyConfig.ADOGrant != nil {
-		out = append(out, "ProxyConfig.ADOGrant")
-	}
-	for i := range s.ProxyConfig.AzureGates {
-		out = append(out, indexed("ProxyConfig.AzureGates", i))
-	}
-	for i := range s.ProxyConfig.Policy.EligibleGrants {
-		out = append(out, indexed("ProxyConfig.Policy.EligibleGrants", i))
-	}
-	return out
-}
 func indexed(path string, i int) string { return path + "[" + strconv.Itoa(i) + "]" }
 
-func classifyCredential(path string, origin CredentialOrigin, delivery DeliveryPolicy) *Refusal {
+func classifyCredential(entries entrySource, path string, origin CredentialOrigin, delivery DeliveryPolicy) *Refusal {
 	if origin.Class == "" {
 		return refuse(ReasonPlacementCredential, path, "credential provenance is unknown")
 	}
@@ -151,7 +114,7 @@ func classifyCredential(path string, origin CredentialOrigin, delivery DeliveryP
 	if field == "Policy.EligibleGrants" {
 		st, field = StructGrantKind, string(origin.GrantKind)
 	}
-	rows := Entries(st, field)
+	rows := entries(st, field)
 	for _, row := range rows {
 		if row.Class != origin.Class || (row.Delivery != "" && row.Delivery != origin.Delivery) {
 			continue
@@ -174,45 +137,4 @@ func classifyCredential(path string, origin CredentialOrigin, delivery DeliveryP
 		}
 	}
 	return refuse(ReasonPlacementCredential, path, "credential variant has no permitted local rule")
-}
-
-func localMountRefusal(p LocalPlan) *Refusal {
-	for i, m := range p.Spec.Mounts {
-		path := indexed("SandboxSpec.Mounts", i)
-		if !m.MemberAuthored {
-			return refuse(ReasonPlacementCapability, path, "operator host mounts cannot be sent to a local runner")
-		}
-		if !p.VerifiedLocalPaths[path] {
-			return refuse(ReasonPlacementLocalPath, path, "local path is not bound to this runner's allowed roots")
-		}
-	}
-	if d := p.Spec.Drive; d != nil {
-		if d.Backend != types.DriveBackendHostPath {
-			return refuse(ReasonPlacementCapability, "SandboxSpec.Drive", "organisation storage cannot be sent to a local runner")
-		}
-		if !p.VerifiedLocalPaths["SandboxSpec.Drive"] {
-			return refuse(ReasonPlacementLocalPath, "SandboxSpec.Drive", "drive path is not bound to this runner's allowed roots")
-		}
-	}
-	return nil
-}
-
-func stripOperatorConfig(p LocalPlan) runner.SandboxSpec {
-	s := p.Spec
-	s.Env = maps.Clone(s.Env)
-	for _, key := range p.OrgConfigKeys {
-		delete(s.Env, key)
-	}
-	s.ProxyConfig.Policy = s.ProxyConfig.Policy.Clone()
-	if li := s.ProxyConfig.Policy.LLMInspection; li != nil {
-		li.WorkspaceSecretNames, li.WorkspaceSecretValues = nil, nil
-	}
-	s.ProxyConfig.UpstreamProxyURL, s.ProxyConfig.TrustedCAPEM = "", ""
-	s.ProxyConfig.InternalHosts, s.ProxyConfig.UpstreamProxyNoProxy, s.ProxyConfig.LLMUpstreams = nil, nil, nil
-	// Every interception entry needs an own admitted injection; an org-only
-	// interception entry must not silently retain authority after credentials strip.
-	s.ProxyConfig.MITMHosts = slices.DeleteFunc(slices.Clone(s.ProxyConfig.MITMHosts), func(host string) bool {
-		return !slices.ContainsFunc(s.ProxyConfig.Injection, func(in runner.InjectionGrant) bool { return hostrules.HostOf(host) == in.Rule.Host })
-	})
-	return s
 }

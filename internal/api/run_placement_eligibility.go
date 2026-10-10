@@ -15,6 +15,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// localPlacementRefusal is the create-time answer for a local request: the
+// admitted plan's own refusal, else the final unsupported-local refusal. That
+// final refusal is deliberate even when the admitted inputs classify as own:
+// late dispatch can add provider/capture/redirect credentials and files that
+// the actual-spec classifier must inspect before H3/D117 enable execution.
 func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest,
 	spec types.RunPolicySpec, ceiling governanceCeiling, comps runComponents,
 	drive *types.DriveMount, workspaces []types.Workspace,
@@ -22,15 +27,35 @@ func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest,
 	if req.Placement != placement.Local {
 		return nil
 	}
+	p, refusal := s.localAdmittedPlan(r, req, spec, ceiling, comps, drive, workspaces)
+	if refusal != nil {
+		return refusal
+	}
+	if _, ref := placement.LocalEligibility(p); ref != nil {
+		return s.localEligibilityRefusal(r, ceiling, ref)
+	}
+	return runError(placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable),
+		"Your own runner is not available: this server cannot place a run on a runner yet.")
+}
+
+// localAdmittedPlan builds the plan a local candidate is judged on from the
+// admitted create-time inputs: the policy, components, drive, mounts and the
+// provider/ADO/redirect intents, with each grant's provenance resolved against
+// the owner's own namespace. It selects nothing and refuses nothing about
+// routing; D-117 adds per-candidate verified paths and capabilities to it.
+func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
+	spec types.RunPolicySpec, ceiling governanceCeiling, comps runComponents,
+	drive *types.DriveMount, workspaces []types.Workspace,
+) (placement.LocalPlan, *runRefusal) {
 	if fields := localDispatchUnclassified(); len(fields) != 0 {
-		return runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), fields[0]+": unclassified dispatch metadata")
+		return placement.LocalPlan{}, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), fields[0]+": unclassified dispatch metadata")
 	}
 	var sc types.SiteConfig
 	if s.cfg.Store != nil {
 		var err error
 		sc, err = s.cfg.Store.GetSiteConfig(r.Context())
 		if err != nil {
-			return runServerError("read placement dispatch configuration", err)
+			return placement.LocalPlan{}, runServerError("read placement dispatch configuration", err)
 		}
 	}
 	p := placement.LocalPlan{
@@ -51,7 +76,7 @@ func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest,
 	for i, g := range spec.EligibleGrants {
 		origin, ref := s.localGrantOrigin(r.Context(), localRequestOwner(r), g)
 		if ref != nil {
-			return ref
+			return placement.LocalPlan{}, ref
 		}
 		p.Origins["ProxyConfig.Policy.EligibleGrants["+strconv.Itoa(i)+"]"] = origin
 		if origin.Class == placement.ClassOwn && origin.Stored {
@@ -60,17 +85,10 @@ func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest,
 	}
 	intents, refusal := s.localCredentialIntents(r, req, spec, workspaces, sc)
 	if refusal != nil {
-		return refusal
+		return placement.LocalPlan{}, refusal
 	}
 	p.CredentialIntents = intents
-	if _, ref := placement.LocalEligibility(p); ref != nil {
-		return s.localEligibilityRefusal(r, ceiling, ref)
-	}
-	// This is deliberately a refusal even when admitted inputs classify as own.
-	// Late dispatch can add provider/capture/redirect credentials and files. H7's
-	// actual-spec classifier must inspect those before H3/D117 enable execution.
-	return runError(placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable),
-		"Your own runner is not available: this server cannot place a run on a runner yet.")
+	return p, nil
 }
 
 func localTrustedOutputRequest(req createRunRequest) bool {

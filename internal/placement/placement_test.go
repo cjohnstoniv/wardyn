@@ -116,7 +116,9 @@ func TestEveryClassHasARowOrIsNotSent(t *testing.T) {
 	}
 	// Classes reached only through a field-less mint route or a class that is not a dispatched field of its own.
 	for _, c := range DeliveryClasses() {
-		if !used[c] && c != ClassOAuthSubscription {
+		// A Bedrock bearer provider's key classifies through the provider-key
+		// paths (own or operator by namespace), so no field row names it.
+		if !used[c] && c != ClassOAuthSubscription && c != ClassBedrockBearer {
 			t.Errorf("delivery class %q is named by no classification row", c)
 		}
 	}

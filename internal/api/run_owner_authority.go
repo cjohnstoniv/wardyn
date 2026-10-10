@@ -506,7 +506,7 @@ func (s *Server) refreshDeploymentConfig(ctx context.Context, run types.AgentRun
 	if err != nil {
 		return fmt.Errorf("read site config: %w", err)
 	}
-	if run.Placement != "" && run.Placement != types.PlacementRemote {
+	if !remotePlacement(run.Placement) {
 		return s.refreshLocalDeploymentConfig(ctx, run, sc, cfg)
 	}
 	cfg.UpstreamProxyURL = s.resolveRunUpstreamProxy(ctx, run.ID, sc, nil)
@@ -528,7 +528,7 @@ func (s *Server) refreshDeploymentConfig(ctx context.Context, run types.AgentRun
 // must not refuse over a credential the strip removes. A refusal is audited as
 // run.revive denied; a check that cannot be answered refuses too.
 func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg *proxy.Config, actorType types.ActorType, actor string) *reviveError {
-	if run.Placement != "" && run.Placement != types.PlacementRemote {
+	if !remotePlacement(run.Placement) {
 		err := s.refreshDeploymentConfig(ctx, run, cfg)
 		var denied *placement.Refusal
 		if errors.As(err, &denied) {

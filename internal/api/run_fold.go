@@ -92,6 +92,9 @@ type runFoldStep struct {
 //     hosts they add (invariant 5), and components see what admins already
 //     credentialed. The dry doors widen workspace egress before the
 //     requirements fold; create widens after the mint (unionRunEgress).
+//   - Local eligibility straight after components, before anything can renew
+//     or mint: the admitted plan's refusals and the unsupported-local refusal
+//     answer before the confinement floor and the provider's liveness step.
 //   - Confinement, then the model provider, then autonomy: the autonomy grade
 //     reads the enforced class and the chosen model credential.
 //   - Azure DevOps standing and PAT narrowing read autonomy's site snapshot.

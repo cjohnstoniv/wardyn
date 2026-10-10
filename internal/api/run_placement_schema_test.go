@@ -23,7 +23,7 @@ func TestLocalDispatchMetadataClosedWorld(t *testing.T) {
 	type parent struct{ captures []child }
 	_, _ = child{}.secret, parent{}.captures
 	schema := map[reflect.Type][]string{reflect.TypeFor[parent](): {"captures"}, reflect.TypeFor[child](): {}}
-	if got := placement.SchemaUnclassified(reflect.TypeFor[parent](), "plan", schema); !slices.Equal(got, []string{"plan.captures.secret"}) {
+	if got := placement.SchemaUnclassified(reflect.TypeFor[parent](), "plan", schema, nil); !slices.Equal(got, []string{"plan.captures.secret"}) {
 		t.Fatalf("empty private child escaped schema: %v", got)
 	}
 }

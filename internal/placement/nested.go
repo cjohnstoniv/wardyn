@@ -4,6 +4,7 @@
 package placement
 
 import (
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -67,47 +68,76 @@ func NestedUnclassified() []string {
 // dispatch metadata. The additional entries are explicitly reviewed field
 // manifests; nil marks an opaque scalar such as time.Time, never a parent
 // exemption for future fields.
-func SchemaUnclassified(t reflect.Type, path string, additional map[reflect.Type][]string) []string {
-	return schemaUnclassified(t, path, 0, additional)
+func SchemaUnclassified(t reflect.Type, path string, additional map[reflect.Type][]string, opaque map[string]string) []string {
+	return schemaUnclassified(t, path, 0, additional, mergeOpaque(opaque))
 }
 
 func nestedUnclassified(t reflect.Type, path string, depth int) []string {
-	return schemaUnclassified(t, path, depth, nil)
+	return schemaUnclassified(t, path, depth, nil, opaqueFields)
 }
 
-func schemaUnclassified(t reflect.Type, path string, depth int, additional map[reflect.Type][]string) []string {
+func schemaUnclassified(t reflect.Type, path string, depth int, additional map[reflect.Type][]string, opaque map[string]string) []string {
 	if depth > 32 {
 		return []string{path}
 	}
+	var out []string
 	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Array || t.Kind() == reflect.Map {
+		if t.Kind() == reflect.Map {
+			out = append(out, schemaUnclassified(t.Key(), path+"[key]", depth+1, additional, opaque)...)
+		}
 		t = t.Elem()
 	}
-	if t.Kind() != reflect.Struct {
-		return nil
+	// A value of unknown dynamic type cannot be walked; opaqueFields names the
+	// few fields that are not data, checked where the field is declared.
+	if t.Kind() == reflect.Interface || t.Kind() == reflect.Func {
+		return append(out, path)
 	}
-	var out []string
+	if t.Kind() != reflect.Struct {
+		return out
+	}
 	fields, known := nestedFields[t]
 	if explicit, ok := additional[t]; ok {
 		fields, known = explicit, true
 		if explicit == nil {
-			return nil
+			return out
 		}
 	}
-	root := t == reflect.TypeFor[runner.SandboxSpec]() || t == reflect.TypeFor[runner.ProxyConfig]()
+	root := tableRoots[t]
 	if !root && !known {
-		return []string{path}
+		return append(out, path)
 	}
 	for i := range t.NumField() {
 		f := t.Field(i)
-		if !f.IsExported() && additional == nil {
+		// An unexported embedded struct still promotes its exported fields to JSON.
+		if !f.IsExported() && !f.Anonymous && additional == nil {
 			continue
 		}
 		child := path + "." + f.Name
-		if !root && !slices.Contains(fields, f.Name) {
+		if _, ok := opaque[t.Name()+"."+f.Name]; ok {
+			continue
+		}
+		if !slices.Contains(fields, f.Name) && (!root || (!f.IsExported() && f.Anonymous)) {
 			out = append(out, child)
 			continue
 		}
-		out = append(out, schemaUnclassified(f.Type, child, depth+1, additional)...)
+		out = append(out, schemaUnclassified(f.Type, child, depth+1, additional, opaque)...)
 	}
 	return out
+}
+
+// tableRoots are the structs whose fields the table classifies one by one; a
+// child of anything else must also be listed in a manifest.
+var tableRoots = map[reflect.Type]bool{reflect.TypeFor[runner.SandboxSpec](): true, reflect.TypeFor[runner.ProxyConfig](): true}
+
+// opaqueFields names the interface and func fields that are not data, as
+// "Type.Field", with why. Nothing else of such a kind passes.
+var opaqueFields = map[string]string{
+	"SandboxSpec.OnWaiting":  "a callback, tagged json:\"-\"; waiting events replace it",
+	"SandboxSpec.ExecOutput": "a writer, tagged json:\"-\"; the output stream replaces it",
+}
+
+func mergeOpaque(extra map[string]string) map[string]string {
+	all := maps.Clone(opaqueFields)
+	maps.Copy(all, extra)
+	return all
 }

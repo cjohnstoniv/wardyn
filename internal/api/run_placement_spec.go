@@ -22,8 +22,12 @@ import (
 func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling,
 	sc types.SiteConfig, spec *runner.SandboxSpec, orgConfigKeys []string, llm llmTransport, ado adoEntraRun, trustedOutput bool,
 ) bool {
-	if run.Placement != types.PlacementLocal {
+	if remotePlacement(run.Placement) {
 		return true
+	}
+	if run.Placement != types.PlacementLocal {
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "This run was not launched: its placement is not one this server can classify")
+		return false
 	}
 	p, err := s.localResolvedPlan(ctx, run, ceiling.localSelfDefinedComponents, sc, *spec, orgConfigKeys, llm, ado)
 	if err != nil {
@@ -163,12 +167,7 @@ func (s *Server) localProxyGrantOrigins(ctx context.Context, owner string, byID 
 func (s *Server) localIdentityOrigins(ctx context.Context, owner string, ado adoEntraRun, llm llmTransport, p *placement.LocalPlan) {
 	spec := p.Spec
 	if spec.ProxyConfig.ADOGrant != nil {
-		origin := placement.CredentialOrigin{Class: placement.ClassBrokered, Delivery: placement.ClassADOMintedPAT}
-		if ado.tokenMode == types.ADOTokenModeOwnPAT && ado.owner == owner && adoEntraValidRowID(ado.rowID) {
-			own := s.ownsSecretMemoized(ctx, owner, adoOwnPATSecretName(ado.rowID))
-			origin = placement.CredentialOrigin{Class: placement.ClassOwn, Stored: true, OwnNamespace: own, OwnerOnly: own}
-		}
-		p.Origins["ProxyConfig.ADOGrant"] = origin
+		p.Origins["ProxyConfig.ADOGrant"] = s.localADOOrigin(ctx, owner, ado)
 	}
 	if llm.azure != nil && llm.azure.owner == owner {
 		own := s.ownsSecretMemoized(ctx, owner, providerSecretName(llm.azure.provider.UID, providerEntraPart))
@@ -212,7 +211,7 @@ func (s *Server) localResidentOrigins(ctx context.Context, owner string, rows []
 	own := s.ownsSecretMemoized(ctx, owner, providerSecretName(llm.provider.provider.UID, providerSSOPart))
 	for _, key := range llm.secretEnvKeys {
 		if _, exists := p.Spec.SecretEnv[key]; exists {
-			p.Origins["SandboxSpec.SecretEnv["+key+"]"] = placement.CredentialOrigin{Class: placement.ClassOwn, Stored: true, OwnNamespace: own, OwnerOnly: own}
+			p.Origins["SandboxSpec.SecretEnv["+key+"]"] = placement.CredentialOrigin{Class: placement.ClassOwn, Delivery: placement.ClassBedrockRoleCreds, Stored: true, OwnNamespace: own, OwnerOnly: own}
 		}
 	}
 }

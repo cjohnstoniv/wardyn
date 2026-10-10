@@ -67,12 +67,12 @@ type Entry struct {
 // it; a field not named here fails TestDispatchPlanFieldsClassified.
 var Table = []Entry{
 	// runner.SandboxSpec
-	{Struct: StructSandboxSpec, Field: "SecretEnv", Variant: "env_secret grant, OwnerOnly", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
+	{Struct: StructSandboxSpec, Field: "SecretEnv", Variant: "env_secret grant, OwnerOnly", Class: ClassOwn, Rule: RuleOwnerOnlyOwn, Delivery: ClassEnvSecret},
 	{Struct: StructSandboxSpec, Field: "SecretEnv", Variant: "env_secret grant, not OwnerOnly", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassEnvSecret, Reason: ReasonPlacementCredential},
-	{Struct: StructSandboxSpec, Field: "SecretEnv", Variant: "Bedrock role credentials, the person's own bedrock_sso", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
+	{Struct: StructSandboxSpec, Field: "SecretEnv", Variant: "Bedrock role credentials, the person's own bedrock_sso: they sign in-process, so own is still runner_resident or refuse", Class: ClassOwn, Rule: RuleDelivery, Delivery: ClassBedrockRoleCreds, Reason: ReasonPlacementCredential},
 	{Struct: StructSandboxSpec, Field: "SecretEnv", Variant: "Bedrock role credentials, otherwise", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassBedrockRoleCreds, Reason: ReasonPlacementCredential},
 	{Struct: StructSandboxSpec, Field: "ManagedFiles", Variant: "managed settings", Class: ClassPlatform, Rule: RuleAllow},
-	{Struct: StructSandboxSpec, Field: "ManagedFiles", Variant: "AgentOwned file_secret, OwnerOnly", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
+	{Struct: StructSandboxSpec, Field: "ManagedFiles", Variant: "AgentOwned file_secret, OwnerOnly", Class: ClassOwn, Rule: RuleOwnerOnlyOwn, Delivery: ClassFileSecret},
 	{Struct: StructSandboxSpec, Field: "ManagedFiles", Variant: "AgentOwned file_secret, not OwnerOnly", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassFileSecret, Reason: ReasonPlacementCredential},
 	{Struct: StructSandboxSpec, Field: "Mounts", Variant: "operator-authored, including host-mode ~/.aws", Class: ClassOperator, Rule: RuleRefuse, Reason: ReasonPlacementCapability},
 	{Struct: StructSandboxSpec, Field: "Mounts", Variant: "MemberAuthored local_dir", Class: ClassOwn, Rule: RuleBound, Reason: ReasonPlacementLocalPath},
@@ -102,7 +102,6 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "the person's model-provider key or own Claude sign-in", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "captured AWS SSO, credential_source per_user", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "captured AWS SSO shared", Class: ClassBrokered, Rule: RuleDelivery, Delivery: ClassAWSSSOBearer, Reason: ReasonPlacementCredential},
-	{Struct: StructProxyConfig, Field: "Injection", Variant: "Bedrock bearer", Class: ClassBrokered, Rule: RuleDelivery, Delivery: ClassBedrockBearer, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "GitGrants", Variant: "GitHub App installation token", Class: ClassBrokered, Rule: RuleViaOrgRefuse, Delivery: ClassGitHubToken, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "PATGrants", Variant: "per_user stored PAT", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "PATGrants", Variant: "shared CredentialSource", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassGitPATBroker, Reason: ReasonPlacementCredential},
