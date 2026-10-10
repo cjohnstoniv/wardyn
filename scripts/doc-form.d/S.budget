@@ -9,7 +9,8 @@
 # 0.9 H7: docs/sdk.md 12503 adds 22 over 12481 for the `placement_component_self_defined` reason row.
 # docs/sdk.md 12713 measured after merging H7.
 # G-1423: docs/sdk.md 12728 adds 15 over 12713 for the delegated-token read of the output route.
-docs/sdk.md=12728 share=21
+# G-1423 r1: docs/sdk.md 12738 adds 10 over 12728 for the portal's 409 answer on GET /runs/{id}/output.
+docs/sdk.md=12738 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

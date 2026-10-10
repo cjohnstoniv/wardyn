@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +23,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -240,16 +242,20 @@ func TestDelegation_AllowListRouteWalk(t *testing.T) {
 type delegatedOutputStore struct {
 	*memRunOutputs
 	store.DelegateStore
+	store.RunsByCreatorPager
 }
 
-func newDelegatedOutputServer(t *testing.T, person string) (*Server, *authzStore, *memRunOutputs, string, types.DelegationVia) {
+func newDelegatedOutputServer(t *testing.T, person string, shape ...func(*Config)) (*Server, *authzStore, *memRunOutputs, string, types.DelegationVia) {
 	t.Helper()
 	var mem *memRunOutputs
 	var ast *authzStore
 	srv, ast, _, _ := newAuthzMatrixServer(t, func(c *Config) {
 		ast = c.Store.(*authzStore)
 		mem = newMemRunOutputs(c.Store)
-		c.Store = delegatedOutputStore{memRunOutputs: mem, DelegateStore: ast.fakeDelegateStore}
+		c.Store = delegatedOutputStore{memRunOutputs: mem, DelegateStore: ast.fakeDelegateStore, RunsByCreatorPager: ast}
+		for _, f := range shape {
+			f(c)
+		}
 	})
 	tok, via := seedDelegation(t, ast.fakeDelegateStore, person)
 	return srv, ast, mem, tok, via
@@ -625,5 +631,95 @@ func TestDelegation_SecretAndSSHKeyWritesRefuseInTheHandler(t *testing.T) {
 				t.Fatalf("rows = %+v, want one authz.denied row naming the portal", rows)
 			}
 		})
+	}
+}
+
+// A portal's delegated token never reads what is recovered from the recording
+// (#1423): the line a failed run's hint quotes from it is withheld on every
+// route that serves the run, and the person's own session still reads it.
+func TestDelegation_FailureHintQuoteIsNotServedToAPortal(t *testing.T) {
+	const person = "sub-person"
+	const quote = "QUOTED-FROM-THE-RECORDING"
+	srv, ast, mem, tok, _ := newDelegatedOutputServer(t, person)
+	id := seedOutputRun(ast, mem, person, "stdout", "x\n")
+	ast.mu.Lock()
+	run := ast.runs[id]
+	run.State = types.RunFailed
+	run.FailureHint = fmt.Sprintf(modelAccessHintFormat, quote)
+	ast.runs[id] = run
+	ast.mu.Unlock()
+	own := ssoSession(t, person, "person@corp.example", oidc.RoleUser)
+	for _, path := range []string{"/api/v1/runs/" + id.String(), "/api/v1/runs"} {
+		w := do(t, srv, http.MethodGet, path, tok, "")
+		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), quote) || !strings.Contains(w.Body.String(), "model-access problem") {
+			t.Errorf("delegated GET %s: %d %s, want 200 with the unquoted hint", path, w.Code, w.Body)
+		}
+		w = doSSO(t, srv, http.MethodGet, path, own, "")
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), quote) {
+			t.Errorf("the person's own GET %s: %d %s, want 200 with the quote", path, w.Code, w.Body)
+		}
+	}
+}
+
+// A delegated read never runs the recording repair and is never told a
+// recording was erased: it answers as a run with no such row does, while the
+// person's own session triggers the repair and hears the erasure.
+func TestDelegation_RunOutputNeverRepairsOrReportsErasure(t *testing.T) {
+	const person = "sub-person"
+	fs, err := recording.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	spy := &outputRecordingStore{Store: fs}
+	srv, ast, mem, tok, _ := newDelegatedOutputServer(t, person, func(c *Config) {
+		rr := newRecoveringRunner()
+		rr.execOutputUncaptured = true
+		c.Runner, c.RecordingStore = rr, spy
+	})
+	own := ssoSession(t, person, "person@corp.example", oidc.RoleUser)
+
+	missing := seedOutputRun(ast, mem, person, "stdout", "")
+	delete(mem.rows, missing)
+	path := "/api/v1/runs/" + missing.String() + "/output"
+	w := do(t, srv, http.MethodGet, path, tok, "")
+	if w.Code != http.StatusConflict || errorReason(w) != reasonRunOutputNotCaptured || spy.opens.Load() != 0 {
+		t.Fatalf("delegated read of a run with no row: %d %s after %d recording opens, want 409 %s and none", w.Code, w.Body, spy.opens.Load(), reasonRunOutputNotCaptured)
+	}
+	for _, ev := range srv.cfg.Audit.(*recRecorder).snapshot() {
+		if ev.Action == "run.output.finalize" {
+			t.Fatalf("a delegated read wrote %+v", ev)
+		}
+	}
+	doSSO(t, srv, http.MethodGet, path, own, "")
+	if spy.opens.Load() == 0 {
+		t.Fatal("the person's own read did not reach the recording repair, so the delegated zero above proves nothing")
+	}
+
+	erased := seedOutputRun(ast, mem, person, recordingOutputSource, "gone")
+	mem.recording[erased] = memRecordingOutput{erased: true}
+	path = "/api/v1/runs/" + erased.String() + "/output"
+	if w := do(t, srv, http.MethodGet, path, tok, ""); w.Code != http.StatusConflict || errorReason(w) == reasonRecordingErased {
+		t.Fatalf("delegated read after a recording erasure: %d %s, want the 409 a run with no row gives", w.Code, w.Body)
+	}
+	if w := doSSO(t, srv, http.MethodGet, path, own, ""); w.Code != http.StatusGone || errorReason(w) != reasonRecordingErased {
+		t.Fatalf("the person's own read after a recording erasure: %d %s, want 410 %s", w.Code, w.Body, reasonRecordingErased)
+	}
+}
+
+// A portal reading an interactive run whose pane snapshot is withheld is not
+// told the owner-only recording-off sentences, which are false for it.
+func TestDelegation_RunOutputInteractiveSentenceIsNeutralForAPortal(t *testing.T) {
+	const person = "sub-person"
+	srv, ast, mem, tok, _ := newDelegatedOutputServer(t, person, func(c *Config) { c.RecordingStore = nil })
+	id := seedOutputRun(ast, mem, person, paneSnapshotSource, "snapshot\n")
+	path := "/api/v1/runs/" + id.String() + "/output"
+	const neutral = "an interactive run keeps no output here: its terminal is the recording's to keep"
+	if w := do(t, srv, http.MethodGet, path, tok, ""); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), neutral) {
+		t.Fatalf("delegated read: %d %s, want 409 with %q", w.Code, w.Body, neutral)
+	}
+	delete(mem.rows, id)
+	own := ssoSession(t, person, "person@corp.example", oidc.RoleUser)
+	if w := doSSO(t, srv, http.MethodGet, path, own, ""); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "Nothing was kept") {
+		t.Fatalf("the person's own read: %d %s, want the owner's recording-off sentence", w.Code, w.Body)
 	}
 }

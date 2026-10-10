@@ -253,8 +253,8 @@ fmt.Println(out.Output, out.Truncated, out.Complete, out.Source)
   asciicast output.
   The latter two retain the recording's owner-or-operator privacy
   gate, even after recording is disabled.
-  A portal's delegated token reads `stdout` output only; the other two sources
-  answer it `delegation_scope`.
+  A portal's delegated token reads `stdout` output only; for the other two
+  it gets the 409 a run with no such row gives, audited `delegation_scope`.
 - `incomplete` says bytes may be missing
   and is always true for recording recovery.
 - `capture_gap` says capture or recovery

@@ -428,7 +428,8 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 
 // refuseNoRunOutput is handleRunOutput's last answer: nothing was served, and
 // the cases say why, in the order its doc comment lists. reader is
-// recordingReader's verdict, the only caller told of a recording erasure.
+// recordingReader's verdict for a caller that is not a portal's delegated token,
+// the only caller told of a recording erasure.
 func (s *Server) refuseNoRunOutput(w http.ResponseWriter, r *http.Request, run types.AgentRun, row store.RunOutput, found, reader bool) {
 	uncaptured, captureKnown := s.execOutputCapture(r.Context())
 	switch {
@@ -440,7 +441,7 @@ func (s *Server) refuseNoRunOutput(w http.ResponseWriter, r *http.Request, run t
 		// stdout this process or another replica still holds was served above.
 		writeErrorReason(w, http.StatusGone, reasonRecordingErased, "recordings for this run have been erased")
 	case run.Interactive:
-		writeErrorReason(w, http.StatusConflict, reasonRunOutputInteractive, s.interactiveNothingKept(r, run))
+		writeErrorReason(w, http.StatusConflict, reasonRunOutputInteractive, s.interactiveNothingKept(run, reader))
 	case uncaptured:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotCaptured,
 			"Output isn't captured for Kubernetes runs yet. The run's recording has it.")
@@ -457,16 +458,16 @@ func (s *Server) refuseNoRunOutput(w http.ResponseWriter, r *http.Request, run t
 
 // interactiveNothingKept is the 409 sentence for an interactive run with no
 // output to serve. Only a reader who may see a pane snapshot (the owner or an
-// operator) reaches it with no row, so only they are told nothing was kept.
-// Anyone else gets the recording sentence whether or not a snapshot exists, so
-// the row's existence is not revealed. With recording off (Config.RecordingStore
-// nil, which /healthz reports as components.recording) no sentence points at a
-// recording, and only a run that ended other than STOPPED (a kill, a failure or
-// a reconcile) is said not to have ended through a Wardyn stop: a STOPPED run
-// whose snapshot was not taken, or a run still open, is told only that nothing
-// is kept.
-func (s *Server) interactiveNothingKept(r *http.Request, run types.AgentRun) string {
-	if s.cfg.RecordingStore != nil || !s.recordingReader(r, run) {
+// operator, never a portal's delegated token) reaches it with no row, so only
+// they are told nothing was kept. Anyone else gets the recording sentence
+// whether or not a snapshot exists, so the row's existence is not revealed.
+// With recording off (Config.RecordingStore nil, which /healthz reports as
+// components.recording) no sentence points at a recording, and only a run that
+// ended other than STOPPED (a kill, a failure or a reconcile) is said not to
+// have ended through a Wardyn stop: a STOPPED run whose snapshot was not
+// taken, or a run still open, is told only that nothing is kept.
+func (s *Server) interactiveNothingKept(run types.AgentRun, reader bool) string {
+	if s.cfg.RecordingStore != nil || !reader {
 		return "an interactive run keeps no output here: its terminal is the recording's to keep"
 	}
 	switch run.State {

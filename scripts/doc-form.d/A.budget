@@ -7,7 +7,8 @@
 # docs/AUDIT-ACTIONS.md 39761 adds 106 over 39655 (0.9 G-sec-2, #1818): 104 (the `identity.unbind` row), 2 (the `unbind` verb in the Grammar list).
 # docs/AUDIT-ACTIONS.md 39770: Measured after combining baseline, SSH, claim and the reviewed unbind row/verb.
 # docs/AUDIT-ACTIONS.md 39782 adds 12 (SSH sync client): explicit sandbox-relative byte directions on both transfer rows.
-docs/AUDIT-ACTIONS.md=39938 share=8
+# G-1423 r1: docs/AUDIT-ACTIONS.md 39957 adds 19 over 39938 for the audit-only delegation_scope source.
+docs/AUDIT-ACTIONS.md=39957 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # Runner registration and owner claims add 99 measured audit-reference words; combined total39881.
 # Runner relay metadata adds 56 measured audit-reference words; combined total39937.
