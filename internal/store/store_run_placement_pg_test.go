@@ -14,10 +14,11 @@ package store_test
 
 import (
 	"context"
-	"strings"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -46,23 +47,41 @@ func TestPG_RunPlacement_RoundTripsEveryColumn(t *testing.T) {
 	r.PlacementFilled = true
 	r.RunnerID = &runnerID
 	r.EvidenceSource = types.RunEvidenceRunnerAsserted
-	persistRun(t, ctx, pool, r)
+	pg := store.NewPG(pool)
+	created, err := pg.CreateRun(ctx, r)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id=$1`, r.ID) })
+	assertRunPlacement(t, created, r)
 
-	got, err := store.NewPG(pool).GetRun(ctx, r.ID)
+	got, err := pg.GetRun(ctx, r.ID)
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
-	if got.Placement != types.PlacementLocal {
-		t.Errorf("placement = %q, want %q", got.Placement, types.PlacementLocal)
+	assertRunPlacement(t, got, r)
+	if changed, err := pg.UpdateRunStateIf(ctx, r.ID, types.RunStarting, types.RunRunning); err != nil || !changed {
+		t.Fatalf("state transition: changed=%v err=%v", changed, err)
 	}
-	if !got.PlacementFilled {
-		t.Error("placement_filled = false, want true (a resolved placement, not a requested one)")
+	runs, err := pg.ListRuns(ctx)
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
 	}
-	if got.RunnerID == nil || *got.RunnerID != runnerID {
-		t.Errorf("runner_id = %v, want %s", got.RunnerID, runnerID)
+	for _, got := range runs {
+		if got.ID == r.ID {
+			assertRunPlacement(t, got, r)
+			return
+		}
 	}
-	if got.EvidenceSource != types.RunEvidenceRunnerAsserted {
-		t.Errorf("evidence_source = %q, want %q", got.EvidenceSource, types.RunEvidenceRunnerAsserted)
+	t.Fatal("created run missing from list")
+}
+
+func assertRunPlacement(t *testing.T, got, want types.AgentRun) {
+	t.Helper()
+	if got.Placement != want.Placement || got.PlacementFilled != want.PlacementFilled ||
+		got.EvidenceSource != want.EvidenceSource || got.RunnerID == nil || *got.RunnerID != *want.RunnerID {
+		t.Errorf("placement fields = %q/%v/%v/%q, want %q/%v/%v/%q", got.Placement, got.PlacementFilled,
+			got.RunnerID, got.EvidenceSource, want.Placement, want.PlacementFilled, want.RunnerID, want.EvidenceSource)
 	}
 }
 
@@ -73,12 +92,18 @@ func TestPG_RunPlacement_LegacyRowReadsEmpty(t *testing.T) {
 	ctx := context.Background()
 
 	r := newRun(types.RunPending)
-	// Nothing set: what a create path that has not resolved a placement writes.
-	got, err := store.NewPG(pool).CreateRun(ctx, r)
+	// Omit all four columns, as a writer predating the migration would.
+	_, err := pool.Exec(ctx, `INSERT INTO agent_runs
+		(id, created_at, created_by, agent, repo, task, confinement_class, state, spiffe_id, runner_target)
+		VALUES ($1, now(), 'legacy@example.com', 'claude-code', 'acme/r', 't', 'CC1', 'PENDING', 'spiffe://x', 'docker')`, r.ID)
 	if err != nil {
-		t.Fatalf("create run: %v", err)
+		t.Fatalf("insert legacy-shaped row: %v", err)
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id=$1`, r.ID) })
+	got, err := store.NewPG(pool).GetRun(ctx, r.ID)
+	if err != nil {
+		t.Fatalf("get legacy row: %v", err)
+	}
 	if got.Placement != "" || got.PlacementFilled || got.RunnerID != nil || got.EvidenceSource != "" {
 		t.Fatalf("an unresolved placement came back as %+v, want all four zero", got)
 	}
@@ -138,21 +163,25 @@ func TestPG_RunPlacement_ClosedValuesAndRunnerForeignKey(t *testing.T) {
 	} {
 		r := newRun(types.RunPending)
 		r.ID = uuid.New()
-		if _, err := pool.Exec(ctx,
+		_, err := pool.Exec(ctx,
 			`INSERT INTO agent_runs (id, created_at, created_by, agent, repo, task, confinement_class, state, spiffe_id, runner_target, `+bad.column+`)
 			 VALUES ($1, now(), 'x', 'claude-code', 'acme/r', 't', 'CC1', 'PENDING', 'spiffe://x', 'docker', $2)`,
-			r.ID, bad.value); err == nil {
-			t.Errorf("%s = %q was accepted; the CHECK is not closed", bad.column, bad.value)
-		}
+			r.ID, bad.value)
+		assertPlacementConstraint(t, err, "23514", "agent_runs_"+bad.column+"_check")
 	}
 
 	r := newRun(types.RunPending)
 	unknown := uuid.New()
 	r.RunnerID = &unknown
-	if _, err := store.NewPG(pool).CreateRun(ctx, r); err == nil {
-		t.Error("a run naming a runner that does not exist was stored; the foreign key is missing")
-	} else if !strings.Contains(err.Error(), "runners") {
-		t.Errorf("err = %v, want a runners foreign-key violation", err)
+	_, err := store.NewPG(pool).CreateRun(ctx, r)
+	assertPlacementConstraint(t, err, "23503", "agent_runs_runner_id_fkey")
+}
+
+func assertPlacementConstraint(t *testing.T, err error, code, constraint string) {
+	t.Helper()
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != code || pgErr.ConstraintName != constraint {
+		t.Errorf("err = %v, want SQLSTATE %s from %s", err, code, constraint)
 	}
 }
 

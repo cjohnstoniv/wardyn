@@ -24,7 +24,7 @@
 -- confinement class ('requested' or 'defaulted') and lives on the audit row.
 -- This says who can ATTEST the run's evidence: the organisation's own substrate,
 -- or a runner that said so and nobody can verify ('runner_asserted'). Empty only
--- for a pre-0.9 record.
+-- for a legacy record or one whose placement nothing has recorded yet.
 --
 -- Split-role installs grant the app role no extra privilege here: these are
 -- columns on a table it already writes.

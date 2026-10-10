@@ -129,7 +129,7 @@ type AgentRun struct {
 	// for every run from before 0.9; omitted on the wire when NULL, never "".
 	RunnerID *uuid.UUID `json:"runner_id,omitempty"`
 	// EvidenceSource says who can attest this run's evidence (OD-8): substrate or
-	// runner_asserted, empty only for a record from before 0.9. Not
+	// runner_asserted, empty for a legacy or unresolved record. Not
 	// `confinement_source`, which says who CHOSE the class.
 	EvidenceSource RunEvidenceSource `json:"evidence_source,omitempty"`
 	SandboxRef     string            `json:"sandbox_ref,omitempty"`
