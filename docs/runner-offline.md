@@ -11,3 +11,11 @@ Replay uses the runner's proof-of-possession stream, including after a run token
 Migration `0141_runner_spool_cursors` adds metadata-only receipts with run and runner erasure cascades. Audit retention does not remove receipts, and runner erasure does not erase audit history. A changed spool identity, sequence gap or conflicting record hash is refused.
 
 Historical replay for a killed run records audit history only. It cannot revive the run, renew credentials, update the activity clock or grant authority. Audit events use the organisation arrival time; the runner's timestamp appears as `observed_at` with `spooled: true` and `evidence_source: runner_asserted`.
+
+Org execution identity is stored separately in `runner_executions`; immutable
+`runner_execution_exits` receipts bind each accepted exit to its generation.
+Migration `0142_runner_executions.sql` adds these tables. Generation issuance
+and terminal teardown share the existing per-run operation lock. An incomplete
+accepted tail blocks the next generation; a completed old receipt is a no-op.
+The org binds the expected execution handle from its correlated command result
+or explicit reconciliation, never from the first exit event.
