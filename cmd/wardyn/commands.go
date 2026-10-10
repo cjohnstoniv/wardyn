@@ -103,7 +103,7 @@ func normalizeConfinement(s string) string {
 // `wardyn runs list` keeps working.
 func runCmd(client clientFn) *cobra.Command {
 	var repo, agent, task, policyID, confinement, policyFile, image, taskMode, workspaceID string
-	var title, description string
+	var title, description, poolID string
 	var devcontainerRepo, devcontainerRef, modelProvider string
 	var interactive, wait, createJSON, dryRun bool
 	var timeout time.Duration
@@ -143,6 +143,15 @@ func runCmd(client clientFn) *cobra.Command {
 			}
 			if err := setOptionalID("--workspace", workspaceID, &body.WorkspaceID); err != nil {
 				return err
+			}
+			// --pool names the runner pool the run starts on; unset inherits your
+			// own default, then the organisation's.
+			pool, err := poolIDFlag("--pool", poolID)
+			if err != nil {
+				return err
+			}
+			if pool != nil {
+				body.RunnerPoolID = pool.String()
 			}
 			// --policy-file supplies a JSON RunPolicySpec applied inline. It is
 			// mutually exclusive with --policy; the server enforces that XOR — we
@@ -210,6 +219,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&title, "title", "", "short name for this run; runs sharing a title are grouped in the console (optional here, required in the console)")
 	cmd.Flags().StringVar(&description, "description", "", "optional free-text note: why this run exists")
 	cmd.Flags().StringVar(&policyID, "policy", "", "policy id (optional; uses the default policy if unset)")
+	cmd.Flags().StringVar(&poolID, "pool", "", "runner pool id to start the run on (optional; unset uses your own default pool, then the organisation's — see 'wardyn runner pool list')")
 	cmd.Flags().StringVar(&workspaceID, "workspace", "", "onboarded workspace id to launch against (optional; seeds its source, egress, image and bound model creds — composes with --policy/--policy-file)")
 	cmd.Flags().StringVar(&policyFile, "policy-file", "", "path to a JSON or YAML RunPolicySpec applied inline (optional; mutually exclusive with --policy, enforced server-side)")
 	cmd.Flags().StringVar(&confinement, "confinement", "", "confinement class (CC1|CC2|CC3, or fence|wall|vault; optional — unset defaults to the strongest class the runner advertises at or above the policy minimum, never the bare minimum itself)")
