@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -357,7 +358,9 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	}
 	// The recording gate covers stored bytes, recovery facts and source reads,
 	// including when the configured recording backend has since been disabled.
-	reader := s.recordingReader(r, run)
+	_, delegated := audit.DelegationFrom(r.Context())
+	// A portal reads command output only: the recording, and what is derived from it, stay the person's own (#1423).
+	reader := s.recordingReader(r, run) && !delegated
 	if reader {
 		row, found, err = s.repairRecordingOutput(r.Context(), run, row, found)
 		if errors.Is(err, store.ErrRunOutputErased) {
@@ -371,7 +374,11 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if found && (row.Source == paneSnapshotSource || row.Source == recordingOutputSource) && !reader {
-		s.recordRefusal(r.Context(), r, authz.Deny(authz.ReasonNotOwner, id.String(), "").OnRun(id))
+		denial := authz.Deny(authz.ReasonNotOwner, id.String(), "")
+		if delegated {
+			denial = authz.Deny(authz.ReasonDelegationScope, id.String(), "")
+		}
+		s.recordRefusal(r.Context(), r, denial.OnRun(id))
 		found = false
 	}
 	// A final row was masked before it was stored, so it needs no manifest here:

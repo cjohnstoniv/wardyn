@@ -234,6 +234,100 @@ func TestDelegation_AllowListRouteWalk(t *testing.T) {
 	}
 }
 
+// delegatedOutputStore keeps memRunOutputs' rows while still offering the
+// portal capability: memRunOutputs embeds only store.Store, so on its own it
+// would hide store.DelegateStore from the delegated lane.
+type delegatedOutputStore struct {
+	*memRunOutputs
+	store.DelegateStore
+}
+
+func newDelegatedOutputServer(t *testing.T, person string) (*Server, *authzStore, *memRunOutputs, string, types.DelegationVia) {
+	t.Helper()
+	var mem *memRunOutputs
+	var ast *authzStore
+	srv, ast, _, _ := newAuthzMatrixServer(t, func(c *Config) {
+		ast = c.Store.(*authzStore)
+		mem = newMemRunOutputs(c.Store)
+		c.Store = delegatedOutputStore{memRunOutputs: mem, DelegateStore: ast.fakeDelegateStore}
+	})
+	tok, via := seedDelegation(t, ast.fakeDelegateStore, person)
+	return srv, ast, mem, tok, via
+}
+
+func seedOutputRun(ast *authzStore, mem *memRunOutputs, owner, source, output string) uuid.UUID {
+	id := uuid.New()
+	now := time.Now()
+	ast.mu.Lock()
+	ast.runs[id] = types.AgentRun{ID: id, CreatedBy: owner, State: types.RunCompleted, Agent: "claude-code", Interactive: source == paneSnapshotSource}
+	ast.mu.Unlock()
+	mem.rows[id] = store.RunOutput{RunID: id, Output: []byte(output), Source: source, CapturedAt: &now}
+	return id
+}
+
+// A portal's delegated token reads the command output of its person's run on
+// the same predicate as the other run routes: someone else's run is the same
+// 404 GET /runs/{id} gives, and a served read writes no refusal row.
+func TestDelegation_RunOutputReadsTheOwnersTail(t *testing.T) {
+	const person = "sub-person"
+	srv, ast, mem, tok, _ := newDelegatedOutputServer(t, person)
+	own := seedOutputRun(ast, mem, person, "stdout", "hello\n")
+	foreign := seedOutputRun(ast, mem, "sub-someone-else", "stdout", "not yours\n")
+
+	w := do(t, srv, http.MethodGet, "/api/v1/runs/"+own.String()+"/output", tok, "")
+	var body runOutputResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != http.StatusOK || body.Output != "hello\n" || body.Source != "stdout" {
+		t.Fatalf("own run: %d %s, want 200 with output %q from stdout", w.Code, w.Body, "hello\n")
+	}
+	if reasons := auditReasons(t, srv, "authz.denied"); len(reasons) != 0 {
+		t.Fatalf("a served read wrote refusal rows: %v", reasons)
+	}
+
+	got := do(t, srv, http.MethodGet, "/api/v1/runs/"+foreign.String()+"/output", tok, "")
+	want := do(t, srv, http.MethodGet, "/api/v1/runs/"+foreign.String(), tok, "")
+	if got.Code != http.StatusNotFound || got.Code != want.Code || strings.Contains(got.Body.String(), "not yours") {
+		t.Fatalf("foreign run: %d %s, want the %d GET /runs/{id} gives and none of its output", got.Code, got.Body, want.Code)
+	}
+}
+
+// Option A of #1423: a portal reads command output only. A row recovered from
+// the recording, or an interactive run's pane snapshot, stays the person's own:
+// the delegated read is refused with delegation_scope naming the portal, and the
+// person's own session reads the same row.
+func TestDelegation_RunOutputRecordingDerived(t *testing.T) {
+	const person = "sub-person"
+	// With the row withheld the read falls through to the run's own answer: an
+	// exec run kept nothing a portal may read, an interactive run's terminal is the recording's.
+	for source, wantReason := range map[string]string{recordingOutputSource: reasonRunOutputNotKept, paneSnapshotSource: reasonRunOutputInteractive} {
+		t.Run(source, func(t *testing.T) {
+			srv, ast, mem, tok, via := newDelegatedOutputServer(t, person)
+			id := seedOutputRun(ast, mem, person, source, "from the recording\n")
+			path := "/api/v1/runs/" + id.String() + "/output"
+
+			w := do(t, srv, http.MethodGet, path, tok, "")
+			if w.Code != http.StatusConflict || errorReason(w) != wantReason || strings.Contains(w.Body.String(), "from the recording") {
+				t.Fatalf("delegated read: %d %s, want 409 %s and none of the row", w.Code, w.Body, wantReason)
+			}
+			rec := srv.cfg.Audit.(*recRecorder)
+			var rows []types.AuditEvent
+			for _, ev := range rec.snapshot() {
+				if ev.Action == authz.AuditAction {
+					rows = append(rows, ev)
+				}
+			}
+			if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"reason":"delegation_scope"`) ||
+				!strings.Contains(string(rows[0].Data), `"delegate":"`+via.Delegate.String()+`"`) {
+				t.Fatalf("refusal rows = %+v, want one delegation_scope row naming the portal", rows)
+			}
+
+			own := doSSO(t, srv, http.MethodGet, path, ssoSession(t, person, "person@corp.example", oidc.RoleUser), "")
+			if own.Code != http.StatusOK || !strings.Contains(own.Body.String(), `"source":"`+source+`"`) {
+				t.Fatalf("the person's own read: %d %s, want 200 with source %s", own.Code, own.Body, source)
+			}
+		})
+	}
+}
+
 // TestDelegation_NeverOperator pins isOperator and isSecurityOperator's own
 // refusal of a delegated context, independent of the role clamp and of the
 // allow-list: an admin person, a security admin, and a context whose human is
