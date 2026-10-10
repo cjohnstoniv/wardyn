@@ -577,7 +577,16 @@ jobs:
     outputs:
       flaky_1: ${{ steps.flaky.outputs.flaky_1 }}
       flaky_2: ${{ steps.flaky.outputs.flaky_2 }}
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
+      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: env.DOCKERHUB_USERNAME != ''
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -765,7 +774,16 @@ jobs:
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
+      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: env.DOCKERHUB_USERNAME != ''
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         if: needs.changes.outputs.backend != 'false'
@@ -1003,7 +1021,16 @@ jobs:
     # would kill the suite mid-verdict instead of letting go test report which case ran
     # long. The extra 10m is the image builds and the kind/Calico bring-up in front of it.
     timeout-minutes: 35
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
+      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: env.DOCKERHUB_USERNAME != ''
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -1140,7 +1167,16 @@ jobs:
     # in front of a suite whose own `go test -timeout` is 20m, plus the ~6m
     # key-service leg.
     timeout-minutes: 55
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
+      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: env.DOCKERHUB_USERNAME != ''
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -1235,7 +1271,16 @@ jobs:
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
+      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: env.DOCKERHUB_USERNAME != ''
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -1336,7 +1381,16 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
+      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: env.DOCKERHUB_USERNAME != ''
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -1472,10 +1526,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       TRIVY_IMAGE: wardynd
       TRIVY_DOCKERFILE: deploy/compose/Dockerfile.wardynd
       TRIVY_BUILD_ARGS: ''
     steps: &trivy_steps
+      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: env.DOCKERHUB_USERNAME != ''
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build the image locally (scan target — never pushed)
         run: |
@@ -1557,6 +1619,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       TRIVY_IMAGE: wardynd-fips
       TRIVY_DOCKERFILE: deploy/compose/Dockerfile.wardynd
       TRIVY_BUILD_ARGS: --build-arg GOFIPS140=v1.0.0-c2097c7c
@@ -1568,6 +1632,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       TRIVY_IMAGE: wardyn-proxy
       TRIVY_DOCKERFILE: deploy/compose/Dockerfile.proxy
       TRIVY_BUILD_ARGS: ''
@@ -1579,6 +1645,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       TRIVY_IMAGE: agent-base
       TRIVY_DOCKERFILE: deploy/images/base/Dockerfile
       TRIVY_BUILD_ARGS: ''
@@ -1590,6 +1658,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       TRIVY_IMAGE: agent-codex-cli
       TRIVY_DOCKERFILE: deploy/images/codex-cli/Dockerfile
       TRIVY_BUILD_ARGS: ''
@@ -1601,6 +1671,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       TRIVY_IMAGE: agent-aws-sso
       TRIVY_DOCKERFILE: deploy/images/aws-sso/Dockerfile
       TRIVY_BUILD_ARGS: ''
@@ -1612,6 +1684,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       TRIVY_IMAGE: agent-vscode
       TRIVY_DOCKERFILE: deploy/images/vscode/Dockerfile
       TRIVY_BUILD_ARGS: ''
@@ -1623,6 +1697,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       TRIVY_IMAGE: agent-novnc
       TRIVY_DOCKERFILE: deploy/images/novnc/Dockerfile
       TRIVY_BUILD_ARGS: ''
