@@ -37,7 +37,7 @@ func (h *Hub) endWithControl(ctx context.Context, id uuid.UUID, kind runnerwire.
 	if s.peer == nil {
 		return nil
 	}
-	s.ready.Store(false)
+	s.readyID.Store(nil)
 	s.link.suspend(s.peer)
 	defer s.peer.Close()
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
