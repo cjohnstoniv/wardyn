@@ -208,6 +208,8 @@ func TestProviderCause_OldClientIgnoresOptionalFields(t *testing.T) {
 
 type unreadableHistory struct{ secretstore.Store }
 
+func (s unreadableHistory) DeleteProviderChanges(context.Context) error { return nil }
+
 func (s unreadableHistory) For(owner string) secretstore.Store {
 	return unreadableHistory{s.Store.For(owner)}
 }

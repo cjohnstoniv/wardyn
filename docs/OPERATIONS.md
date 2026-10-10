@@ -1196,7 +1196,7 @@ erases one person's retained records by explicit scope, in one audited act
 | `run_tasks` | the task text of the runs the person created |
 | `components` | the components the person saved, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
-| `credentials` | the person's stored credentials and the key they sit under (the same erase as `DELETE /people/{principal}/credentials`, which erases credentials only and nothing else) |
+| `credentials` | the person's stored credentials, their encryption key and provider connection-change records (also erased by `DELETE /people/{principal}/credentials`) |
 
 - The scopes run in the order above whatever order the body lists them: the person's live consumers are fenced first,
   the data they could still reach next, the keys last.

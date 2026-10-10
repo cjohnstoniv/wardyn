@@ -341,3 +341,11 @@ func (a *audited) ProviderChange(ctx context.Context, uid string) (ProviderChang
 	}
 	return m.ProviderChange(ctx, uid)
 }
+
+// DeleteProviderChanges erases this owner's history when the store retains it.
+func (a *audited) DeleteProviderChanges(ctx context.Context) error {
+	if history, ok := a.inner.(ProviderChangeStore); ok {
+		return history.DeleteProviderChanges(ctx)
+	}
+	return nil
+}

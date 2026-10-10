@@ -18,9 +18,10 @@ type ProviderChange struct {
 	NewDestination string    `json:"new_destination"`
 }
 
-// ProviderChangeStore reads history from this view's own namespace only.
+// ProviderChangeStore reads and erases history in this view's own namespace only.
 type ProviderChangeStore interface {
 	ProviderChange(context.Context, string) (ProviderChange, bool, error)
+	DeleteProviderChanges(context.Context) error
 }
 
 // ProviderInvalidation describes a purge; an empty successor UID means deletion.

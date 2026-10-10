@@ -29,6 +29,14 @@ func (s *Store) ProviderChange(ctx context.Context, uid string) (secretstore.Pro
 	return c, true, nil
 }
 
+// DeleteProviderChanges removes all connection history for this owner.
+func (s *Store) DeleteProviderChanges(ctx context.Context) error {
+	if _, err := s.pool.Exec(ctx, `DELETE FROM provider_connection_changes WHERE owner=$1`, s.owner); err != nil {
+		return fmt.Errorf("pg secretstore: erase provider history: %w", err)
+	}
+	return nil
+}
+
 func recordProviderChanges(ctx context.Context, tx pgx.Tx) error {
 	for _, invalidation := range secretstore.ProviderInvalidationsFrom(ctx) {
 		c := invalidation.Change
