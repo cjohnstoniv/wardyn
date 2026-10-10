@@ -31,6 +31,12 @@ func TestStreamURLBinding(t *testing.T) {
 	if _, err := StreamURL("https://example.com", "not-a-runner"); err == nil {
 		t.Fatal("accepted malformed runner id")
 	}
+	for _, path := range []string{"/org%2Ftenant", "/org%2F", "/org%20tenant"} {
+		got, err := StreamURL("https://example.com"+path+"/", id)
+		if err != nil || got != "wss://example.com"+path+"/api/v1/runners/"+id+"/stream" {
+			t.Fatalf("org path binding changed: %q %v", got, err)
+		}
+	}
 }
 
 func TestWebSocketFramesAndLimits(t *testing.T) {

@@ -65,8 +65,10 @@ func StreamURL(orgURL, runnerID string) (string, error) {
 	default:
 		return "", fmt.Errorf("runnerwire: the organisation URL requires HTTPS")
 	}
-	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/runners/" + runnerID + "/stream"
-	u.RawPath = ""
+	// The binding hashes the escaped path. Keep encoded separators intact so
+	// signing for one org prefix cannot dial a different decoded prefix.
+	u.RawPath = strings.TrimRight(u.EscapedPath(), "/") + "/api/v1/runners/" + runnerID + "/stream"
+	u.Path, _ = url.PathUnescape(u.RawPath)
 	return u.String(), nil
 }
 
