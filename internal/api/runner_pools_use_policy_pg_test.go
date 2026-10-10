@@ -21,7 +21,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-func usePolicyPath(pool uuid.UUID) string { return "/api/v1/runner-pools/" + pool.String() + "/use-policy" }
+func usePolicyPath(pool uuid.UUID) string {
+	return "/api/v1/runner-pools/" + pool.String() + "/use-policy"
+}
 
 // ssoSessionWith is a member session carrying a group snapshot, which ssoSession leaves absent.
 func ssoSessionWith(t *testing.T, sub, userType string, groups ...string) *http.Cookie {

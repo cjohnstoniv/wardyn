@@ -40,18 +40,20 @@ CREATE INDEX IF NOT EXISTS runner_pool_members_by_runner_idx ON runner_pool_memb
 
 -- A narrowing use policy on one remote_provided pool: with none, everyone who may
 -- launch remote runs may use the pool; with one, only the listed subjects. The
--- writer refuses an empty list, so a row never reads as "nobody".
+-- writers refuse an empty list. Only a leaver purge can leave one empty, and an
+-- empty list permits nobody: the row is never deleted, because that would open
+-- the pool to everyone.
 CREATE TABLE IF NOT EXISTS runner_pool_use_policies (
     pool_id    UUID PRIMARY KEY REFERENCES runner_pools (id),
-    subjects   JSONB NOT NULL CHECK (jsonb_typeof(subjects) = 'array' AND jsonb_array_length(subjects) > 0),
+    subjects   JSONB NOT NULL CHECK (jsonb_typeof(subjects) = 'array'),
     revision   BIGINT NOT NULL CHECK (revision >= 1),
     updated_by TEXT NOT NULL DEFAULT '',
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- The organisation's defaults: one row. A default names a pool; it does not pin
--- one, so a pool that is deleted or switched off later is refused at use, never
--- replaced.
+-- one, so a pool that is switched off later is refused at use, never replaced.
+-- Deleting a pool clears the slots that name it.
 CREATE TABLE IF NOT EXISTS runner_pool_org_defaults (
     singleton         BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
     preferred_hosting TEXT NOT NULL DEFAULT '' CHECK (preferred_hosting IN ('', 'remote_provided', 'self_hosted')),

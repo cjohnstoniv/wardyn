@@ -29,14 +29,14 @@ type RunnerPoolStore interface {
 	GetRunnerPool(ctx context.Context, id uuid.UUID) (types.RunnerPool, error)
 	CreateRunnerPool(ctx context.Context, p types.RunnerPool, by string) (types.RunnerPool, error)
 	UpdateRunnerPool(ctx context.Context, id uuid.UUID, revision int64, name *string, state *types.RunnerPoolState) (types.RunnerPool, error)
-	DeleteRunnerPool(ctx context.Context, id uuid.UUID) (types.RunnerPool, error)
+	DeleteRunnerPool(ctx context.Context, id uuid.UUID) (RunnerPoolDeletion, error)
 
-	AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (types.RunnerPoolMember, bool, error)
-	RemoveRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (bool, error)
-	AddOwnRunnerToPool(ctx context.Context, id, runnerID uuid.UUID, owner, orgURLSHA256 string) (types.RunnerPoolMember, bool, error)
-	RemoveOwnRunnerFromPool(ctx context.Context, id, runnerID uuid.UUID, owner string) (bool, error)
+	AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (m types.RunnerPoolMember, added bool, revision int64, err error)
+	RemoveRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (removed bool, revision int64, err error)
+	AddOwnRunnerToPool(ctx context.Context, id, runnerID uuid.UUID, owner, orgURLSHA256 string) (m types.RunnerPoolMember, added bool, revision int64, err error)
+	RemoveOwnRunnerFromPool(ctx context.Context, id, runnerID uuid.UUID, owner string) (removed bool, revision int64, err error)
 
-	PutRunnerPoolUsePolicy(ctx context.Context, id uuid.UUID, subjects []types.RunnerPoolSubject, by string) (types.RunnerPoolUsePolicy, error)
+	PutRunnerPoolUsePolicy(ctx context.Context, id uuid.UUID, revision *int64, subjects []types.RunnerPoolSubject, by string) (types.RunnerPoolUsePolicy, error)
 	DeleteRunnerPoolUsePolicy(ctx context.Context, id uuid.UUID) error
 
 	GetRunnerPoolOrgDefaults(ctx context.Context) (types.RunnerPoolDefaults, error)
@@ -51,6 +51,9 @@ var (
 	ErrRunnerPoolStale = errors.New("store: runner pool revision is stale")
 	// ErrRunnerPoolLimit: the catalogue is at RunnerPoolsMax.
 	ErrRunnerPoolLimit = errors.New("store: too many runner pools")
+	// ErrRunnerPoolHasPolicy: a pool with a use policy is not deleted, because the delete would clear
+	// the policy outside the second-human hold; clear the policy first.
+	ErrRunnerPoolHasPolicy = errors.New("store: the runner pool still has a use policy")
 )
 
 // RunnerPoolsMax bounds the live catalogue, so every catalogue read is bounded.
@@ -64,6 +67,17 @@ type RunnerPoolCatalogueRow struct {
 	Policy      *types.RunnerPoolUsePolicy
 	ExecutorIDs []string
 	OwnRunners  int
+}
+
+// RunnerPoolDeletion is what a delete removed, for its audit row: the pool as it was, the executors and
+// the count of runners it held, and the organisation defaults before and after when the delete cleared
+// a slot that named it.
+type RunnerPoolDeletion struct {
+	Pool              types.RunnerPool
+	ExecutorIDs       []string
+	RunnerCount       int
+	OrgDefaultsBefore *types.RunnerPoolDefaults
+	OrgDefaultsAfter  *types.RunnerPoolDefaults
 }
 
 const runnerPoolCols = `id, name, hosting_type, state, revision, created_at, updated_at`
@@ -216,24 +230,36 @@ func stateText(s *types.RunnerPoolState) *string {
 	return &v
 }
 
-// DeleteRunnerPool tombstones a live pool and drops its members and use policy: ErrNotFound for an
-// unknown or already deleted one. The row stays, so a run bound to it keeps its history.
-func (s PG) DeleteRunnerPool(ctx context.Context, id uuid.UUID) (types.RunnerPool, error) {
-	var out types.RunnerPool
+// DeleteRunnerPool tombstones a live pool, drops its members, and clears the organisation default slots
+// that name it, all in one transaction: ErrNotFound for an unknown or already deleted one,
+// ErrRunnerPoolHasPolicy while it has a use policy. The row stays, so a run bound to it keeps its history.
+func (s PG) DeleteRunnerPool(ctx context.Context, id uuid.UUID) (RunnerPoolDeletion, error) {
+	var out RunnerPoolDeletion
 	err := s.inTx(ctx, func(q Querier) error {
 		if _, err := livePoolForUpdate(ctx, q, id); err != nil {
 			return err
 		}
-		for _, stmt := range []string{
-			`DELETE FROM runner_pool_members WHERE pool_id = $1`,
-			`DELETE FROM runner_pool_use_policies WHERE pool_id = $1`,
-		} {
-			if _, err := q.Exec(ctx, stmt, id); err != nil {
-				return err
-			}
+		var policies int
+		if err := q.QueryRow(ctx, `SELECT count(*) FROM runner_pool_use_policies WHERE pool_id = $1`, id).Scan(&policies); err != nil {
+			return err
+		}
+		if policies > 0 {
+			return ErrRunnerPoolHasPolicy
+		}
+		if err := q.QueryRow(ctx, `
+			SELECT COALESCE(array_agg(executor_id ORDER BY executor_id) FILTER (WHERE executor_id IS NOT NULL), '{}'),
+			       count(runner_id)
+			FROM runner_pool_members WHERE pool_id = $1`, id).Scan(&out.ExecutorIDs, &out.RunnerCount); err != nil {
+			return err
+		}
+		if _, err := q.Exec(ctx, `DELETE FROM runner_pool_members WHERE pool_id = $1`, id); err != nil {
+			return err
+		}
+		if err := clearOrgDefaultSlotsQ(ctx, q, id, &out); err != nil {
+			return err
 		}
 		var err error
-		out, err = scanRunnerPool(q.QueryRow(ctx, `
+		out.Pool, err = scanRunnerPool(q.QueryRow(ctx, `
 			UPDATE runner_pools SET state = 'deleted', revision = revision + 1, updated_at = now()
 			WHERE id = $1 RETURNING `+runnerPoolCols, id))
 		return err
@@ -241,30 +267,73 @@ func (s PG) DeleteRunnerPool(ctx context.Context, id uuid.UUID) (types.RunnerPoo
 	return out, err
 }
 
+// clearOrgDefaultSlotsQ nulls the organisation default slots that name pool id and records the
+// defaults before and after on out; it records nothing when no slot named it.
+func clearOrgDefaultSlotsQ(ctx context.Context, q Querier, id uuid.UUID, out *RunnerPoolDeletion) error {
+	var before types.RunnerPoolDefaults
+	var hosting string
+	err := q.QueryRow(ctx, `SELECT preferred_hosting, remote_provided, self_hosted FROM runner_pool_org_defaults FOR UPDATE`).
+		Scan(&hosting, &before.RemoteProvided, &before.SelfHosted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	before.PreferredHosting = types.RunnerPoolHosting(hosting)
+	after := before
+	if after.RemoteProvided != nil && *after.RemoteProvided == id {
+		after.RemoteProvided = nil
+	}
+	if after.SelfHosted != nil && *after.SelfHosted == id {
+		after.SelfHosted = nil
+	}
+	if after == before {
+		return nil
+	}
+	if _, err := q.Exec(ctx, `UPDATE runner_pool_org_defaults SET remote_provided = $1, self_hosted = $2, updated_by = 'system', updated_at = now()`,
+		after.RemoteProvided, after.SelfHosted); err != nil {
+		return err
+	}
+	out.OrgDefaultsBefore, out.OrgDefaultsAfter = &before, &after
+	return nil
+}
+
 // AddRunnerPoolExecutor adds a configured executor to a live remote_provided pool; added is false when
-// it was already a member (no revision change). ErrNotFound: no such live pool of that hosting type.
-func (s PG) AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (types.RunnerPoolMember, bool, error) {
+// it was already a member (no revision change). revision is the pool's revision after the call, read
+// under the pool lock. ErrNotFound: no such live pool of that hosting type.
+func (s PG) AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (types.RunnerPoolMember, bool, int64, error) {
 	var m types.RunnerPoolMember
 	var added bool
+	var rev int64
 	err := s.inTx(ctx, func(q Querier) error {
-		p, err := livePoolForUpdate(ctx, q, id)
-		if err != nil || p.HostingType != types.RunnerPoolRemoteProvided {
-			return errOrNotFound(err)
-		}
-		tag, err := q.Exec(ctx, `INSERT INTO runner_pool_members (pool_id, executor_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, id, executor)
-		if err != nil {
-			return err
-		}
-		added = tag.RowsAffected() == 1
-		if added {
-			if _, err := bumpRunnerPoolQ(ctx, q, id); err != nil {
-				return err
-			}
-		}
-		return q.QueryRow(ctx, `SELECT pool_id, executor_id, added_at FROM runner_pool_members WHERE pool_id = $1 AND executor_id = $2`, id, executor).
-			Scan(&m.PoolID, &m.ExecutorID, &m.AddedAt)
+		var err error
+		m, added, rev, err = AddRunnerPoolExecutorQ(ctx, q, id, executor)
+		return err
 	})
-	return m, added, err
+	return m, added, rev, err
+}
+
+// AddRunnerPoolExecutorQ is AddRunnerPoolExecutor's statement on q (a pgx.Tx), which a held change
+// applies through inside the decision transaction.
+func AddRunnerPoolExecutorQ(ctx context.Context, q Querier, id uuid.UUID, executor string) (m types.RunnerPoolMember, added bool, rev int64, err error) {
+	p, err := livePoolForUpdate(ctx, q, id)
+	if err != nil || p.HostingType != types.RunnerPoolRemoteProvided {
+		return m, false, 0, errOrNotFound(err)
+	}
+	tag, err := q.Exec(ctx, `INSERT INTO runner_pool_members (pool_id, executor_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, id, executor)
+	if err != nil {
+		return m, false, 0, err
+	}
+	rev = p.Revision
+	if added = tag.RowsAffected() == 1; added {
+		if rev, err = bumpRunnerPoolQ(ctx, q, id); err != nil {
+			return m, false, 0, err
+		}
+	}
+	err = q.QueryRow(ctx, `SELECT pool_id, executor_id, added_at FROM runner_pool_members WHERE pool_id = $1 AND executor_id = $2`, id, executor).
+		Scan(&m.PoolID, &m.ExecutorID, &m.AddedAt)
+	return m, added, rev, err
 }
 
 // errOrNotFound is err, or ErrNotFound when err is nil: a pool of the wrong hosting type is not there.
@@ -276,31 +345,46 @@ func errOrNotFound(err error) error {
 }
 
 // RemoveRunnerPoolExecutor removes an executor member; removed is false when it was not one.
-func (s PG) RemoveRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (bool, error) {
-	var removed bool
-	err := s.inTx(ctx, func(q Querier) error {
-		if _, err := livePoolForUpdate(ctx, q, id); err != nil {
-			return err
-		}
-		tag, err := q.Exec(ctx, `DELETE FROM runner_pool_members WHERE pool_id = $1 AND executor_id = $2`, id, executor)
+func (s PG) RemoveRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (bool, int64, error) {
+	return s.removeMember(ctx, id, `DELETE FROM runner_pool_members WHERE pool_id = $1 AND executor_id = $2`, executor)
+}
+
+// RemoveOwnRunnerFromPool removes owner's own runner (in any state, so a revoked one can be tidied
+// away) from a pool; removed is false when it was not a member or not owner's.
+func (s PG) RemoveOwnRunnerFromPool(ctx context.Context, id, runnerID uuid.UUID, owner string) (bool, int64, error) {
+	return s.removeMember(ctx, id, `
+		DELETE FROM runner_pool_members m USING runners r
+		WHERE m.pool_id = $1 AND m.runner_id = $2 AND r.id = m.runner_id AND r.owner = $3`, runnerID, owner)
+}
+
+// removeMember runs one member DELETE under the pool lock and raises the revision when it removed a row.
+func (s PG) removeMember(ctx context.Context, id uuid.UUID, stmt string, args ...any) (removed bool, rev int64, err error) {
+	err = s.inTx(ctx, func(q Querier) error {
+		p, err := livePoolForUpdate(ctx, q, id)
 		if err != nil {
 			return err
 		}
+		tag, err := q.Exec(ctx, stmt, append([]any{id}, args...)...)
+		if err != nil {
+			return err
+		}
+		rev = p.Revision
 		if removed = tag.RowsAffected() == 1; removed {
-			_, err = bumpRunnerPoolQ(ctx, q, id)
+			rev, err = bumpRunnerPoolQ(ctx, q, id)
 		}
 		return err
 	})
-	return removed, err
+	return removed, rev, err
 }
 
 // AddOwnRunnerToPool adds a runner to a live self_hosted pool only when owner owns it, it is claimed
 // and bound to this organisation's URL, all decided in the insert itself so a revocation or a transfer
 // cannot slip between a check and the write. ErrNotFound covers every other case alike: an unknown
 // pool or runner, a pool of the other hosting type, and a runner that is not the owner's.
-func (s PG) AddOwnRunnerToPool(ctx context.Context, id, runnerID uuid.UUID, owner, orgURLSHA256 string) (types.RunnerPoolMember, bool, error) {
+func (s PG) AddOwnRunnerToPool(ctx context.Context, id, runnerID uuid.UUID, owner, orgURLSHA256 string) (types.RunnerPoolMember, bool, int64, error) {
 	var m types.RunnerPoolMember
 	var added bool
+	var rev int64
 	err := s.inTx(ctx, func(q Querier) error {
 		p, err := livePoolForUpdate(ctx, q, id)
 		if err != nil || p.HostingType != types.RunnerPoolSelfHosted {
@@ -311,8 +395,9 @@ func (s PG) AddOwnRunnerToPool(ctx context.Context, id, runnerID uuid.UUID, owne
 		if err != nil {
 			return err
 		}
+		rev = p.Revision
 		if added = tag.RowsAffected() == 1; added {
-			if _, err := bumpRunnerPoolQ(ctx, q, id); err != nil {
+			if rev, err = bumpRunnerPoolQ(ctx, q, id); err != nil {
 				return err
 			}
 		}
@@ -325,29 +410,16 @@ func (s PG) AddOwnRunnerToPool(ctx context.Context, id, runnerID uuid.UUID, owne
 		}
 		return err
 	})
-	return m, added, err
+	return m, added, rev, err
 }
 
-// RemoveOwnRunnerFromPool removes owner's own runner (in any state, so a revoked one can be tidied
-// away) from a pool; removed is false when it was not a member or not owner's.
-func (s PG) RemoveOwnRunnerFromPool(ctx context.Context, id, runnerID uuid.UUID, owner string) (bool, error) {
-	var removed bool
-	err := s.inTx(ctx, func(q Querier) error {
-		if _, err := livePoolForUpdate(ctx, q, id); err != nil {
-			return err
-		}
-		tag, err := q.Exec(ctx, `
-			DELETE FROM runner_pool_members m USING runners r
-			WHERE m.pool_id = $1 AND m.runner_id = $2 AND r.id = m.runner_id AND r.owner = $3`, id, runnerID, owner)
-		if err != nil {
-			return err
-		}
-		if removed = tag.RowsAffected() == 1; removed {
-			_, err = bumpRunnerPoolQ(ctx, q, id)
-		}
-		return err
-	})
-	return removed, err
+// RunnerPoolExecutorIDsQ lists a pool's executor members, sorted, never nil.
+func RunnerPoolExecutorIDsQ(ctx context.Context, q Querier, id uuid.UUID) ([]string, error) {
+	return collect(ctx, q, "list", "runner pool executors", `SELECT executor_id FROM runner_pool_members WHERE pool_id = $1 AND executor_id IS NOT NULL ORDER BY executor_id`,
+		[]any{id}, func(r pgx.Row) (string, error) {
+			var v string
+			return v, r.Scan(&v)
+		})
 }
 
 // GetRunnerPoolUsePolicyQ reads one pool's use policy on q, ErrNotFound when it has none.
@@ -365,16 +437,17 @@ func GetRunnerPoolUsePolicyQ(ctx context.Context, q Querier, id uuid.UUID) (type
 	return pol, json.Unmarshal(subjects, &pol.Subjects)
 }
 
-// PutRunnerPoolUsePolicy sets a live remote_provided pool's use policy and raises the pool's revision.
+// PutRunnerPoolUsePolicy sets a live remote_provided pool's use policy and raises the pool's revision;
+// a non-nil revision must be the pool's, checked under the pool lock (ErrRunnerPoolStale).
 // It takes the governance target lock an approval of a held change takes too.
-func (s PG) PutRunnerPoolUsePolicy(ctx context.Context, id uuid.UUID, subjects []types.RunnerPoolSubject, by string) (types.RunnerPoolUsePolicy, error) {
+func (s PG) PutRunnerPoolUsePolicy(ctx context.Context, id uuid.UUID, revision *int64, subjects []types.RunnerPoolSubject, by string) (types.RunnerPoolUsePolicy, error) {
 	var out types.RunnerPoolUsePolicy
 	err := s.inTx(ctx, func(q Querier) error {
 		if err := LockGovernanceTarget(ctx, q, types.GovernanceTargetRunnerPoolUsePolicy, id.String()); err != nil {
 			return err
 		}
 		var err error
-		out, err = PutRunnerPoolUsePolicyQ(ctx, q, id, subjects, by)
+		out, err = PutRunnerPoolUsePolicyQ(ctx, q, id, revision, subjects, by)
 		return err
 	})
 	return out, err
@@ -382,10 +455,13 @@ func (s PG) PutRunnerPoolUsePolicy(ctx context.Context, id uuid.UUID, subjects [
 
 // PutRunnerPoolUsePolicyQ is PutRunnerPoolUsePolicy's statement on q (a pgx.Tx, the pool row locked
 // here). ErrNotFound: no such live remote_provided pool.
-func PutRunnerPoolUsePolicyQ(ctx context.Context, q Querier, id uuid.UUID, subjects []types.RunnerPoolSubject, by string) (types.RunnerPoolUsePolicy, error) {
+func PutRunnerPoolUsePolicyQ(ctx context.Context, q Querier, id uuid.UUID, revision *int64, subjects []types.RunnerPoolSubject, by string) (types.RunnerPoolUsePolicy, error) {
 	p, err := livePoolForUpdate(ctx, q, id)
 	if err != nil || p.HostingType != types.RunnerPoolRemoteProvided {
 		return types.RunnerPoolUsePolicy{}, errOrNotFound(err)
+	}
+	if revision != nil && *revision != p.Revision {
+		return types.RunnerPoolUsePolicy{}, ErrRunnerPoolStale
 	}
 	raw, err := json.Marshal(subjects)
 	if err != nil {
@@ -458,9 +534,10 @@ func (s PG) PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefa
 // BootstrapRunnerPools is the one-time upgrade step: when this deployment has configured executors and
 // no pool has ever existed (a deleted one still counts, so an administrator's deletion sticks), it
 // creates one remote_provided pool named name holding exactly those executors and makes it the
-// organisation's remote default, so existing runs keep the placement they have today. It grants
-// nothing a person lacked (no use policy, and no self-hosted pool is ever made). With no executors or
-// a catalogue that has existed it does nothing. Returns the pool it created, nil otherwise.
+// organisation's remote default, so existing runs keep the placement they have today. It gives nobody
+// an executor they lacked (no use policy, and no self-hosted pool is ever made); it is still a
+// placement change, since a run may then land on any member that advertises its class. With no
+// executors or a catalogue that has existed it does nothing. Returns the pool it created, nil otherwise.
 func (s PG) BootstrapRunnerPools(ctx context.Context, executors []string, name string) (*types.RunnerPool, error) {
 	if len(executors) == 0 {
 		return nil, nil

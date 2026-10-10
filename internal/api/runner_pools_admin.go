@@ -127,19 +127,30 @@ func (s *Server) handleDeleteRunnerPool(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	p, err := ps.DeleteRunnerPool(r.Context(), cur.ID)
-	if errors.Is(err, store.ErrNotFound) {
+	d, err := ps.DeleteRunnerPool(r.Context(), cur.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
 		writePoolNotFound(w)
 		return
-	}
-	if err != nil {
+	case errors.Is(err, store.ErrRunnerPoolHasPolicy):
+		writeErrorReason(w, http.StatusConflict, string(runnerpool.ReasonInvalid), "clear the use policy first: deleting a pool would clear it without a second human")
+		return
+	case err != nil:
 		writeServerError(w, r, "delete runner pool", err)
 		return
 	}
-	s.auditPool(r, auditPoolDelete, p.ID.String(), map[string]any{"name": p.Name, "hosting_type": p.HostingType, "revision": p.Revision})
+	s.auditPool(r, auditPoolDelete, d.Pool.ID.String(), map[string]any{
+		"name": d.Pool.Name, "hosting_type": d.Pool.HostingType, "revision": d.Pool.Revision,
+		"executor_ids": nonNilStrings(d.ExecutorIDs), "runner_count": d.RunnerCount})
+	if d.OrgDefaultsBefore != nil {
+		s.auditPool(r, auditPoolDefaultSet, "organisation", map[string]any{"before": d.OrgDefaultsBefore, "after": d.OrgDefaultsAfter, "cause": "pool_deleted"})
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleAddRunnerPoolExecutor attaches a configured executor. Attaching an executor to a pool puts it in
+// front of that pool's audience, so when another live pool already holds it under a use policy the
+// attach is a widening of that policy and is held for a second human, as the policy itself is.
 func (s *Server) handleAddRunnerPoolExecutor(w http.ResponseWriter, r *http.Request) {
 	ps, ok := s.runnerPoolStore(w)
 	if !ok {
@@ -163,7 +174,22 @@ func (s *Server) handleAddRunnerPoolExecutor(w http.ResponseWriter, r *http.Requ
 			"executor "+executor+" is not configured on this server; a remote-provided pool holds configured executors only")
 		return
 	}
-	m, added, err := ps.AddRunnerPoolExecutor(r.Context(), pool.ID, executor)
+	rows, ok := s.poolCatalogue(w, r, ps, false)
+	if !ok {
+		return
+	}
+	mode := govDirect
+	if executorUnderOtherPolicy(rows, pool.ID, executor) {
+		if mode, ok = s.governanceWriteMode(w, r); !ok {
+			return
+		}
+		if mode == govQueue {
+			row, _ := catalogueRow(rows, pool.ID)
+			s.holdExecutorAttach(w, r, row, executor)
+			return
+		}
+	}
+	m, added, rev, err := ps.AddRunnerPoolExecutor(r.Context(), pool.ID, executor)
 	if errors.Is(err, store.ErrNotFound) {
 		writePoolNotFound(w)
 		return
@@ -173,10 +199,19 @@ func (s *Server) handleAddRunnerPoolExecutor(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if added {
-		s.auditPool(r, auditPoolExecutorAdd, pool.ID.String(), map[string]any{
-			"executor_id": executor, "hosting_type": pool.HostingType, "revision": poolRevision(r, ps, pool.ID)})
+		s.auditPool(r, auditPoolExecutorAdd, pool.ID.String(), map[string]any{"executor_id": executor, "hosting_type": pool.HostingType, "revision": rev})
+		if mode == govBypass {
+			s.recordGovernanceBypass(r, govKindRunnerPoolUsePolicy, pool.ID.String(), "success", nil)
+		}
 	}
 	writeJSON(w, http.StatusOK, m)
+}
+
+// executorUnderOtherPolicy reports whether a live pool other than poolID holds executor under a use policy.
+func executorUnderOtherPolicy(rows []store.RunnerPoolCatalogueRow, poolID uuid.UUID, executor string) bool {
+	return slices.ContainsFunc(rows, func(row store.RunnerPoolCatalogueRow) bool {
+		return row.Pool.ID != poolID && row.Policy != nil && slices.Contains(row.ExecutorIDs, executor)
+	})
 }
 
 // handleRemoveRunnerPoolExecutor needs no configured check: an executor that is no longer configured
@@ -191,7 +226,7 @@ func (s *Server) handleRemoveRunnerPoolExecutor(w http.ResponseWriter, r *http.R
 		return
 	}
 	executor := chi.URLParam(r, "executor")
-	removed, err := ps.RemoveRunnerPoolExecutor(r.Context(), pool.ID, executor)
+	removed, rev, err := ps.RemoveRunnerPoolExecutor(r.Context(), pool.ID, executor)
 	if errors.Is(err, store.ErrNotFound) {
 		writePoolNotFound(w)
 		return
@@ -201,8 +236,7 @@ func (s *Server) handleRemoveRunnerPoolExecutor(w http.ResponseWriter, r *http.R
 		return
 	}
 	if removed {
-		s.auditPool(r, auditPoolExecutorRemove, pool.ID.String(), map[string]any{
-			"executor_id": executor, "hosting_type": pool.HostingType, "revision": poolRevision(r, ps, pool.ID)})
+		s.auditPool(r, auditPoolExecutorRemove, pool.ID.String(), map[string]any{"executor_id": executor, "hosting_type": pool.HostingType, "revision": rev})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

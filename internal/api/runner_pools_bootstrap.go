@@ -34,9 +34,11 @@ func (s *Server) configuredExecutors() []string {
 // BootstrapRunnerPools is the one-time upgrade step, run at boot before anything is served: a
 // deployment that already runs remote work through its configured executors gets one Remote Provided
 // pool holding them, as the organisation's remote default, so what people could do before they still
-// can. It widens nothing (no use policy is created, and nobody gains a launch right) and never makes
-// a Self-Hosted pool or touches a runner. It runs once per database: a catalogue that has ever held a
-// pool, an administrator's deleted one included, is left as it is.
+// can. It gives nobody an executor or a launch right they lacked (no use policy is created) and never
+// makes a Self-Hosted pool or touches a runner; it is a placement change all the same, because a run
+// may then land on any member that advertises its class, not the first substrate that does. It runs
+// once per database: a catalogue that has ever held a pool, an administrator's deleted one included,
+// is left as it is.
 func (s *Server) BootstrapRunnerPools(ctx context.Context) error {
 	ps, ok := s.cfg.Store.(store.RunnerPoolStore)
 	if !ok {

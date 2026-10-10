@@ -112,9 +112,11 @@ func (c callerSubjects) permits(row store.RunnerPoolCatalogueRow) bool {
 	return slices.ContainsFunc(row.Policy.Subjects, c.matchesPoolSubject)
 }
 
-// poolCatalogue is the pools the caller may use, or every live pool for managers: the pool names a
-// pool-use policy or the catalogue is administered over. A pool the caller may not use is absent, so it
-// is indistinguishable from one that does not exist. ok=false: the answer is written.
+// poolCatalogue is the pools the caller may use. With forUse false a manager (security admin or admin)
+// gets every live pool instead, because they administer the catalogue and write use policies over it:
+// that view is for display and management only and is never a statement of what the caller may use, so
+// anything that admits, defaults or offers a choice passes forUse true. A pool the caller may not use is
+// absent, so it is indistinguishable from one that does not exist. ok=false: the answer is written.
 func (s *Server) poolCatalogue(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore, forUse bool) ([]store.RunnerPoolCatalogueRow, bool) {
 	ctx := r.Context()
 	rows, err := ps.ListRunnerPoolCatalogue(ctx, oidcHumanFromContext(ctx))
@@ -187,9 +189,18 @@ func (s *Server) handleListRunnerPools(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	subj, err := s.callerSubjects(r.Context())
+	if err != nil {
+		writeCeilingError(w, r, err)
+		return
+	}
 	out := client.RunnerPoolList{Pools: make([]client.RunnerPoolChoice, 0, len(rows))}
 	for _, row := range rows {
 		availability, reason := s.poolAvailability(row)
+		if !subj.permits(row) {
+			// Listed for a manager only: they may manage it, not use it.
+			availability, reason = client.RunnerPoolUnavailable, runnerpool.ReasonNotFound
+		}
 		out.Pools = append(out.Pools, client.RunnerPoolChoice{
 			ID: row.Pool.ID, Name: row.Pool.Name, HostingType: row.Pool.HostingType, Availability: availability, Reason: reason,
 		})
@@ -205,15 +216,6 @@ func (s *Server) handleGetRunnerPool(w http.ResponseWriter, r *http.Request) {
 	if row, ok := s.poolFromPath(w, r, ps, false); ok {
 		writeJSON(w, http.StatusOK, row.Pool)
 	}
-}
-
-// poolRevision is the pool's revision after a change, for the audit row; 0 when it cannot be read.
-func poolRevision(r *http.Request, ps store.RunnerPoolStore, id uuid.UUID) int64 {
-	p, err := ps.GetRunnerPool(r.Context(), id)
-	if err != nil {
-		return 0
-	}
-	return p.Revision
 }
 
 func (s *Server) auditPool(r *http.Request, action, target string, data map[string]any) {

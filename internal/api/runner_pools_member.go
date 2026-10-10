@@ -48,7 +48,7 @@ func (s *Server) handleAddMyRunnerToPool(w http.ResponseWriter, r *http.Request)
 		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonMemberMismatch, Name: pool.Name, Hosting: pool.HostingType})
 		return
 	}
-	m, added, err := ps.AddOwnRunnerToPool(r.Context(), pool.ID, runnerID, owner, federation.OrgURLSHA256(s.cfg.RunnerOrgURL))
+	m, added, rev, err := ps.AddOwnRunnerToPool(r.Context(), pool.ID, runnerID, owner, federation.OrgURLSHA256(s.cfg.RunnerOrgURL))
 	if errors.Is(err, store.ErrNotFound) {
 		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonMemberMismatch, Name: pool.Name, Runner: chi.URLParam(r, "runner")})
 		return
@@ -60,8 +60,7 @@ func (s *Server) handleAddMyRunnerToPool(w http.ResponseWriter, r *http.Request)
 	status := http.StatusOK
 	if added {
 		status = http.StatusCreated
-		s.auditPool(r, auditPoolRunnerAdd, pool.ID.String(), map[string]any{
-			"runner_id": runnerID, "hosting_type": pool.HostingType, "revision": poolRevision(r, ps, pool.ID)})
+		s.auditPool(r, auditPoolRunnerAdd, pool.ID.String(), map[string]any{"runner_id": runnerID, "hosting_type": pool.HostingType, "revision": rev})
 	}
 	writeJSON(w, status, m)
 }
@@ -83,7 +82,7 @@ func (s *Server) handleRemoveMyRunnerFromPool(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	removed, err := ps.RemoveOwnRunnerFromPool(r.Context(), row.Pool.ID, runnerID, owner)
+	removed, rev, err := ps.RemoveOwnRunnerFromPool(r.Context(), row.Pool.ID, runnerID, owner)
 	if errors.Is(err, store.ErrNotFound) {
 		writePoolNotFound(w)
 		return
@@ -93,8 +92,7 @@ func (s *Server) handleRemoveMyRunnerFromPool(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if removed {
-		s.auditPool(r, auditPoolRunnerRemove, row.Pool.ID.String(), map[string]any{
-			"runner_id": runnerID, "hosting_type": row.Pool.HostingType, "revision": poolRevision(r, ps, row.Pool.ID)})
+		s.auditPool(r, auditPoolRunnerRemove, row.Pool.ID.String(), map[string]any{"runner_id": runnerID, "hosting_type": row.Pool.HostingType, "revision": rev})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -114,10 +112,11 @@ func (s *Server) myDefaultsStore(w http.ResponseWriter) (store.RunnerPoolStore, 
 	return ps, prefs, ok
 }
 
-// handleGetMyRunnerPoolDefaults reads the signed-in person's own document, as stored: an unset field
-// inherits the organisation's. A read that fails is an error, never an empty document.
+// handleGetMyRunnerPoolDefaults reads the signed-in person's own document: an unset field inherits the
+// organisation's, and a default naming a pool the person may no longer use reads as unset (the resolver
+// reads the stored value and refuses it). A read that fails is an error, never an empty document.
 func (s *Server) handleGetMyRunnerPoolDefaults(w http.ResponseWriter, r *http.Request) {
-	_, prefs, ok := s.myDefaultsStore(w)
+	ps, prefs, ok := s.myDefaultsStore(w)
 	if !ok {
 		return
 	}
@@ -136,7 +135,11 @@ func (s *Server) handleGetMyRunnerPoolDefaults(w http.ResponseWriter, r *http.Re
 		writeServerError(w, r, "read runner pool defaults", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, d)
+	rows, ok := s.poolCatalogue(w, r, ps, true)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, defaultsView(d, rows))
 }
 
 // handlePutMyRunnerPoolDefaults replaces the signed-in person's defaults. Each pool is revalidated

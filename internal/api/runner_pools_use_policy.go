@@ -4,8 +4,10 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -19,8 +21,10 @@ import (
 // runs may; with one, only the listed people, groups and roles. Written by a security admin or an
 // admin (securityOps), and held for a second human under WARDYN_GOVERNANCE_SECOND_HUMAN. Both a set
 // and a clear are held, with no narrowing exemption: a clear widens, and nothing proves a replacement
-// only narrows. A held change applies in the decision transaction and goes stale when the policy it
-// reviewed has moved.
+// only narrows. Attaching an executor that another live pool holds under a policy is held too (it puts
+// that executor in front of a wider audience), and a pool with a policy is not deleted until the
+// policy is cleared. A held change applies in the decision transaction and goes stale when the policy
+// or the pool's executors it reviewed have moved.
 
 const govKindRunnerPoolUsePolicy = types.GovernanceTargetRunnerPoolUsePolicy
 
@@ -31,10 +35,18 @@ type runnerPoolUsePolicyRequest struct {
 	Subjects []types.RunnerPoolSubject `json:"subjects"`
 }
 
+// runnerPoolHeldChange is a held change's payload: a use policy set (Subjects), a clear (nothing) or an
+// executor attach (Executor).
+type runnerPoolHeldChange struct {
+	Subjects []types.RunnerPoolSubject `json:"subjects,omitempty"`
+	Executor string                    `json:"executor,omitempty"`
+}
+
 // runnerPoolUsePolicyState is the target of a change as it stands, hashed by proposal and approval
-// alike: the subjects only, so a member adding their own runner elsewhere cannot make a change stale.
-func runnerPoolUsePolicyState(subjects []types.RunnerPoolSubject) any {
-	return map[string]any{"subjects": subjects}
+// alike: the subjects and the executors, so a change goes stale when who may use the pool or what it
+// holds moved, and a member adding their own runner elsewhere cannot make one stale.
+func runnerPoolUsePolicyState(subjects []types.RunnerPoolSubject, executors []string) any {
+	return map[string]any{"subjects": subjects, "executor_ids": nonNilStrings(executors)}
 }
 
 // canonicalPoolSubjects folds each subject to the form the caller's identities are matched in, and
@@ -75,10 +87,14 @@ func (s *Server) handleGetRunnerPoolUsePolicy(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	pol := types.RunnerPoolUsePolicy{PoolID: row.Pool.ID, Subjects: []types.RunnerPoolSubject{}, Revision: row.Pool.Revision}
+	// A pool with no policy reads with no subjects and no updated_at. A stored policy always has an
+	// updated_at; one whose people all left reads with no subjects too and permits nobody. Revision is
+	// the pool's current revision, the one a PUT names.
+	pol := types.RunnerPoolUsePolicy{PoolID: row.Pool.ID, Subjects: []types.RunnerPoolSubject{}}
 	if row.Policy != nil {
 		pol = *row.Policy
 	}
+	pol.Revision = row.Pool.Revision
 	writeJSON(w, http.StatusOK, pol)
 }
 
@@ -111,11 +127,7 @@ func (s *Server) handlePutRunnerPoolUsePolicy(w http.ResponseWriter, r *http.Req
 		writePoolInvalid(w, err.Error())
 		return
 	}
-	if req.Revision != nil && *req.Revision != row.Pool.Revision {
-		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: row.Pool.Name})
-		return
-	}
-	s.writeUsePolicy(w, r, mode, ps, row, subjects)
+	s.writeUsePolicy(w, r, mode, ps, row, req.Revision, subjects)
 }
 
 func (s *Server) handleDeleteRunnerPoolUsePolicy(w http.ResponseWriter, r *http.Request) {
@@ -135,13 +147,13 @@ func (s *Server) handleDeleteRunnerPoolUsePolicy(w http.ResponseWriter, r *http.
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	s.writeUsePolicy(w, r, mode, ps, row, nil)
+	s.writeUsePolicy(w, r, mode, ps, row, nil, nil)
 }
 
 // writeUsePolicy carries out a set (subjects non-nil) or a clear (nil) the way a covered write is: held
 // for a second human, or applied at once with the audit row (and, for the admin token, the
 // break-glass row).
-func (s *Server) writeUsePolicy(w http.ResponseWriter, r *http.Request, mode govWriteMode, ps store.RunnerPoolStore, row store.RunnerPoolCatalogueRow, subjects []types.RunnerPoolSubject) {
+func (s *Server) writeUsePolicy(w http.ResponseWriter, r *http.Request, mode govWriteMode, ps store.RunnerPoolStore, row store.RunnerPoolCatalogueRow, revision *int64, subjects []types.RunnerPoolSubject) {
 	before := []types.RunnerPoolSubject{}
 	if row.Policy != nil {
 		before = row.Policy.Subjects
@@ -156,11 +168,14 @@ func (s *Server) writeUsePolicy(w http.ResponseWriter, r *http.Request, mode gov
 		if after == nil {
 			after = []types.RunnerPoolSubject{}
 		}
+		if revision != nil && *revision != row.Pool.Revision {
+			writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: row.Pool.Name})
+			return
+		}
+		beforeState, afterState := runnerPoolUsePolicyState(before, row.ExecutorIDs), runnerPoolUsePolicyState(after, row.ExecutorIDs)
 		s.proposeGovernanceChange(w, r, govProposal{
-			kind: govKindRunnerPoolUsePolicy, op: op, key: poolID.String(), payload: runnerPoolUsePolicyRequest{Subjects: subjects},
-			before: runnerPoolUsePolicyState(before), after: runnerPoolUsePolicyState(after),
-			changed:   changedPaths(runnerPoolUsePolicyState(before), runnerPoolUsePolicyState(after)),
-			baseState: runnerPoolUsePolicyState(policySubjects(row.Policy)),
+			kind: govKindRunnerPoolUsePolicy, op: op, key: poolID.String(), payload: runnerPoolHeldChange{Subjects: subjects},
+			before: beforeState, after: afterState, changed: changedPaths(beforeState, afterState), baseState: beforeState,
 		})
 		return
 	}
@@ -173,10 +188,14 @@ func (s *Server) writeUsePolicy(w http.ResponseWriter, r *http.Request, mode gov
 		action = auditPoolUsePolicyClear
 		err = ps.DeleteRunnerPoolUsePolicy(r.Context(), poolID)
 	} else {
-		result, err = ps.PutRunnerPoolUsePolicy(r.Context(), poolID, subjects, principalFromRequest(r))
+		result, err = ps.PutRunnerPoolUsePolicy(r.Context(), poolID, revision, subjects, principalFromRequest(r))
 	}
 	if errors.Is(err, store.ErrNotFound) {
 		writePoolNotFound(w)
+		return
+	}
+	if errors.Is(err, store.ErrRunnerPoolStale) {
+		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: row.Pool.Name})
 		return
 	}
 	if err != nil {
@@ -194,14 +213,6 @@ func (s *Server) writeUsePolicy(w http.ResponseWriter, r *http.Request, mode gov
 	writeJSON(w, http.StatusOK, result)
 }
 
-// policySubjects is a policy's subjects, empty for none: the shape both hashes of a change read.
-func policySubjects(p *types.RunnerPoolUsePolicy) []types.RunnerPoolSubject {
-	if p == nil {
-		return []types.RunnerPoolSubject{}
-	}
-	return p.Subjects
-}
-
 func usePolicyAuditData(before, after []types.RunnerPoolSubject) map[string]any {
 	if after == nil {
 		after = []types.RunnerPoolSubject{}
@@ -209,40 +220,65 @@ func usePolicyAuditData(before, after []types.RunnerPoolSubject) map[string]any 
 	return map[string]any{"before": before, "after": after}
 }
 
-// applyRunnerPoolUsePolicyChange applies a held set or clear inside the decision transaction: the
-// target lock, then the pool row, the policy read as it now stands and compared with what the
-// proposal reviewed, and the pool re-checked as a live remote-provided one.
+// holdExecutorAttach stores an executor attach as a pending change on the pool, under the same kind
+// and the same state hash as its use policy.
+func (s *Server) holdExecutorAttach(w http.ResponseWriter, r *http.Request, row store.RunnerPoolCatalogueRow, executor string) {
+	subjects := []types.RunnerPoolSubject{}
+	if row.Policy != nil {
+		subjects = row.Policy.Subjects
+	}
+	before := runnerPoolUsePolicyState(subjects, row.ExecutorIDs)
+	after := runnerPoolUsePolicyState(subjects, append(slices.Clone(row.ExecutorIDs), executor))
+	s.proposeGovernanceChange(w, r, govProposal{
+		kind: govKindRunnerPoolUsePolicy, op: opExecutorAttach, key: row.Pool.ID.String(), payload: runnerPoolHeldChange{Executor: executor},
+		before: before, after: after, changed: changedPaths(before, after), baseState: before,
+	})
+}
+
+// opExecutorAttach is the op of an executor attach: migration 0126 closes the set of ops, so it is a
+// "set" and the payload (Executor, no Subjects) tells it from a policy set.
+const opExecutorAttach = "set"
+
+// applyRunnerPoolUsePolicyChange applies a held use policy set or clear, or executor attach, inside the
+// decision transaction: the target lock, then the pool's policy and executors read as they now stand
+// and compared with what the proposal reviewed, and the write through the pool row lock.
 func applyRunnerPoolUsePolicyChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	ctx := r.Context()
 	poolID, err := uuid.Parse(ch.TargetKey)
 	if err != nil {
 		return govApplied{}, err
 	}
-	var held runnerPoolUsePolicyRequest
+	var held runnerPoolHeldChange
 	if err := decodeHeldPayload(ch.Payload, &held); err != nil {
 		return govApplied{}, err
 	}
 	if err := store.LockGovernanceTarget(ctx, q, govKindRunnerPoolUsePolicy, poolID.String()); err != nil {
 		return govApplied{}, err
 	}
-	var before []types.RunnerPoolSubject
+	before := []types.RunnerPoolSubject{}
 	switch pol, err := store.GetRunnerPoolUsePolicyQ(ctx, q, poolID); {
 	case errors.Is(err, store.ErrNotFound):
-		before = []types.RunnerPoolSubject{}
 	case err != nil:
 		return govApplied{}, err
 	default:
 		before = pol.Subjects
 	}
-	if computeETag(runnerPoolUsePolicyState(before)) != ch.BaseHash {
+	executors, err := store.RunnerPoolExecutorIDsQ(ctx, q, poolID)
+	if err != nil {
+		return govApplied{}, err
+	}
+	if computeETag(runnerPoolUsePolicyState(before, executors)) != ch.BaseHash {
 		return govApplied{}, store.ErrGovernanceChangeStale
+	}
+	if held.Executor != "" {
+		return s.applyExecutorAttach(ctx, q, poolID, held.Executor)
 	}
 	action := auditPoolUsePolicySet
 	if ch.Op == "delete" {
 		action = auditPoolUsePolicyClear
 		err = store.DeleteRunnerPoolUsePolicyQ(ctx, q, poolID)
 	} else if err = (types.RunnerPoolUsePolicy{Subjects: held.Subjects}).Validate(types.RunnerPoolRemoteProvided); err == nil {
-		_, err = store.PutRunnerPoolUsePolicyQ(ctx, q, poolID, held.Subjects, principalFromRequest(r))
+		_, err = store.PutRunnerPoolUsePolicyQ(ctx, q, poolID, nil, held.Subjects, principalFromRequest(r))
 	}
 	if errors.Is(err, store.ErrNotFound) {
 		return govApplied{}, store.ErrGovernanceChangeStale
@@ -251,4 +287,19 @@ func applyRunnerPoolUsePolicyChange(s *Server, r *http.Request, q store.Querier,
 		return govApplied{}, err
 	}
 	return govApplied{action: action, target: poolID.String(), data: usePolicyAuditData(before, held.Subjects)}, nil
+}
+
+func (s *Server) applyExecutorAttach(ctx context.Context, q store.Querier, poolID uuid.UUID, executor string) (govApplied, error) {
+	if !slices.Contains(s.configuredExecutors(), executor) {
+		return govApplied{}, writeRefusal(http.StatusUnprocessableEntity, string(runnerpool.ReasonMemberMismatch), "executor %s is not configured on this server", executor)
+	}
+	_, _, rev, err := store.AddRunnerPoolExecutorQ(ctx, q, poolID, executor)
+	if errors.Is(err, store.ErrNotFound) {
+		return govApplied{}, store.ErrGovernanceChangeStale
+	}
+	if err != nil {
+		return govApplied{}, err
+	}
+	return govApplied{action: auditPoolExecutorAdd, target: poolID.String(), data: map[string]any{
+		"executor_id": executor, "hosting_type": types.RunnerPoolRemoteProvided, "revision": rev}}, nil
 }
