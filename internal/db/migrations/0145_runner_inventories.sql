@@ -3,7 +3,7 @@
 
 -- A fresh authenticated session replaces the previous incomplete inventory.
 -- Candidate rows stay in PostgreSQL, not an unbounded Hub allocation.
-CREATE TABLE runner_inventories (
+CREATE TABLE IF NOT EXISTS runner_inventories (
     runner_id UUID PRIMARY KEY REFERENCES runners(id) ON DELETE CASCADE,
     session_id UUID NOT NULL,
     owner TEXT NOT NULL,
@@ -14,7 +14,7 @@ CREATE TABLE runner_inventories (
     created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 
-CREATE TABLE runner_inventory_candidates (
+CREATE TABLE IF NOT EXISTS runner_inventory_candidates (
     runner_id UUID NOT NULL REFERENCES runner_inventories(runner_id) ON DELETE CASCADE,
     run_id UUID NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
     run_version TEXT NOT NULL,
@@ -26,7 +26,7 @@ CREATE TABLE runner_inventory_candidates (
 
 -- Each assertion and its reconciliation requirement commit with page progress.
 -- These are observations, never execution or evidence-retirement authority.
-CREATE TABLE runner_inventory_observations (
+CREATE TABLE IF NOT EXISTS runner_inventory_observations (
     runner_id UUID NOT NULL REFERENCES runner_inventories(runner_id) ON DELETE CASCADE,
     run_id UUID NOT NULL,
     assertion JSONB NOT NULL,
