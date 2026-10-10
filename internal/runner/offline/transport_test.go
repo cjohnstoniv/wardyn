@@ -105,7 +105,7 @@ func connectWireManager(t *testing.T, dir string, sub substrate.Substrate, ref f
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	t.Cleanup(func() { _ = f.peer.Close() })
+	t.Cleanup(func() { f.peer.Close() })
 	for {
 		var reply bool
 		if err := f.link.Call(ctx, "probe", nil, &reply); err == nil && reply {
@@ -137,7 +137,7 @@ func (f *wireManager) initialLease(t *testing.T, id uuid.UUID) {
 }
 func (f *wireManager) drop(t *testing.T) {
 	t.Helper()
-	_ = f.peer.Close()
+	f.peer.Close()
 	select {
 	case <-f.done:
 	case <-f.ctx.Done():
