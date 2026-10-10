@@ -9,6 +9,15 @@ import (
 	"github.com/google/uuid"
 )
 
+// RunnerUnclaimedTTL is the claim window after anonymous registration.
+const RunnerUnclaimedTTL = 24 * time.Hour
+
+// ClaimExpired also rejects an invalid zero creation time. Claimed identities
+// do not expire under this rule; revocation is a separate terminal state.
+func (r Runner) ClaimExpired(now time.Time) bool {
+	return r.State == RunnerUnclaimed && !r.CreatedAt.Add(RunnerUnclaimedTTL).After(now)
+}
+
 // RunnerRegistrationToken is a single-use invitation for one owner's runner.
 // The raw token is returned only at mint; stored rows carry its hash.
 type RunnerRegistrationToken struct {

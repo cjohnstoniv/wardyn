@@ -38,6 +38,8 @@ type (
 		SessionID    string        `json:"session_id"`
 		Resumed      bool          `json:"resumed"`
 		PingInterval time.Duration `json:"ping_interval"`
+		// LastSeq is the org's received cursor; the runner replays after it.
+		LastSeq uint64 `json:"last_seq"`
 	}
 	// Reason is the payload of REVOKED and GOAWAY.
 	Reason struct {
