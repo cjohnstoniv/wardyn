@@ -95,12 +95,14 @@ const defaultUISessionTTL = 8 * time.Hour
 // Principal/Role/AuthorizedAt are what make it re-checkable rather than final:
 // see uiSessionStillAuthorized.
 type uiSession struct {
-	Run       uuid.UUID `json:"r"`
-	App       string    `json:"a"`
-	Port      int       `json:"p"`
-	Principal string    `json:"s"`
-	Role      string    `json:"o"`
-	Expires   int64     `json:"e"`
+	// Set only from the authorized run at dial time; never read from the cookie.
+	SandboxRef string    `json:"-"`
+	Run        uuid.UUID `json:"r"`
+	App        string    `json:"a"`
+	Port       int       `json:"p"`
+	Principal  string    `json:"s"`
+	Role       string    `json:"o"`
+	Expires    int64     `json:"e"`
 	// IssuedAt is when the ticket was redeemed, in Unix seconds. It is the
 	// staleness bound the TTL knob re-applies to an already-minted cookie, and
 	// keys the re-assert debounce. Absent (a pre-0.7.4 cookie) is refused, not
@@ -126,7 +128,7 @@ func (s *Server) auditUISession(sess uiSession, action, target, outcome string, 
 	if sess.Via != nil {
 		data["via"] = sess.Via
 	}
-	s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, action, target, outcome, data)
+	s.recordStreamAudit(s.cfg.BaseCtx, sess.SandboxRef, s.auditEvent(&sess.Run, types.ActorHuman, sess.Principal, action, target, outcome, mustJSON(data)))
 }
 
 type uiSessionCtxKey struct{}

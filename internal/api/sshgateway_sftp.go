@@ -45,7 +45,7 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 	}
 	sess, reason, err := s.execSFTPServer(ctx, run)
 	if err != nil {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp.transfer",
+		s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp.transfer",
 			runID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
 		sendChannelError(channel, reason)
 		return
@@ -55,6 +55,6 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 	// comment above (same shape, same connection-teardown race, same fix).
 	// "bytes" keeps its pre-0.9 meaning (sandbox to client); bytes_in/bytes_out
 	// are the explicit pair.
-	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp.transfer",
+	s.recordStreamAudit(s.cfg.BaseCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp.transfer",
 		runID.String(), "success", mustJSON(map[string]any{"bytes": bytesOut, "bytes_in": bytesIn, "bytes_out": bytesOut})))
 }

@@ -93,6 +93,30 @@ func (s *Server) handle(ctx context.Context, id uint32, method string, args json
 		return s.resize(args)
 	case runnerwire.MethodExecWait:
 		return s.execWait(args)
+	case runnerwire.MethodExecClose:
+		a, err := decode[runnerwire.ExecWaitArgs](args)
+		if err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		e := s.execs[a.Stream]
+		delete(s.execs, a.Stream)
+		s.mu.Unlock()
+		if e != nil {
+			return nil, e.Close()
+		}
+		return nil, nil
+	case runnerwire.MethodOutputAck:
+		// This fixture has no persistent output spool. Production runnerio tests
+		// exercise cursor persistence, reconnect and byte-range validation.
+		a, err := decode[runnerwire.OutputAckArgs](args)
+		if err != nil {
+			return nil, err
+		}
+		if a.RunID == uuid.Nil || a.Offset < 0 {
+			return nil, runnerwire.Refuse("invalid output acknowledgment")
+		}
+		return nil, nil
 	case runnerwire.MethodSweep:
 		return s.sweep(ctx, args)
 	case runnerwire.MethodDeliverResident:
