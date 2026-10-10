@@ -187,22 +187,25 @@ func (m *Manager) Lease(ctx context.Context, l runnerwire.Lease) error {
 	if !m.online || m.state.Revoked {
 		return runner.ErrRunnerOffline
 	}
-	if l.RunID == uuid.Nil || l.EndsAt.IsZero() {
-		return errors.New("runner lease lacks run or end time")
+	if l.RunID == uuid.Nil {
+		return errors.New("runner lease lacks run identity")
 	}
 	tokenLeft, err := m.clock.TokenRemaining(l.TokenRenewedAt)
 	if err != nil {
 		return err
 	}
-	endsLeft, err := m.clock.Remaining(l.EndsAt)
-	if err != nil {
-		return err
+	var endsLeft time.Duration
+	if !l.EndsAt.IsZero() {
+		endsLeft, err = m.clock.Remaining(l.EndsAt)
+		if err != nil {
+			return err
+		}
 	}
 	if _, known := m.state.Runs[l.RunID]; !known {
 		if _, exists := m.pending[l.RunID]; !exists && len(m.pending) >= 1024 {
 			return errors.New("runner initial lease capacity reached")
 		}
-		if tokenLeft <= 0 || endsLeft <= 0 {
+		if tokenLeft <= 0 || (!l.EndsAt.IsZero() && endsLeft <= 0) {
 			return errors.New("runner initial lease is expired")
 		}
 		m.pending[l.RunID] = l
@@ -213,7 +216,7 @@ func (m *Manager) Lease(ctx context.Context, l runnerwire.Lease) error {
 		d.tokenAt = old.tokenAt
 		d.tokenLeft = old.tokenLeft - m.since(old.receipt)
 	}
-	if exists && l.EndsAt.Equal(old.endsAt) {
+	if exists && !l.EndsAt.IsZero() && l.EndsAt.Equal(old.endsAt) {
 		d.endsLeft = old.endsLeft - m.since(old.receipt)
 	}
 	m.deadlines[l.RunID] = d
@@ -282,7 +285,7 @@ func (m *Manager) expired(id uuid.UUID) bool {
 		return true
 	}
 	elapsed := m.since(d.receipt)
-	return elapsed < 0 || elapsed >= d.tokenLeft || elapsed >= d.endsLeft
+	return elapsed < 0 || elapsed >= d.tokenLeft || (!d.endsAt.IsZero() && elapsed >= d.endsLeft)
 }
 
 // CheckLapses stops only proxies, never the agent or its files. It is also a
