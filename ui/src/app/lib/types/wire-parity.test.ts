@@ -389,6 +389,49 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
   });
 
+  // The 0.9 New Run contract (pkg/client/runs_new_run.go): the request fields and
+  // the dry-run facts, each pinned to its TS mirror in types/new-run-contract.ts.
+  it.each([
+    ["RunResources", "RequestedResources"],
+    ["ResourceAmounts", "ResourceAmounts"],
+    ["PlacementResources", "PlacementResources"],
+    ["RunOverrides", "RunOverrides"],
+    ["AgentOverrides", "AgentOverrides"],
+    ["SecretOverride", "SecretOverride"],
+    ["ADOOverrides", "ADOOverrides"],
+    ["GitPATOverride", "GitPATOverride"],
+    ["PushRuleOverride", "PushRuleOverride"],
+    ["LocalPlacementFact", "LocalPlacementFact"],
+    ["TokenScopeFact", "TokenScopeFact"],
+    ["RepoAccessFact", "RepoAccessFact"],
+    ["AgentModelProviderFact", "AgentModelProviderFact"],
+    ["AgentHostFact", "AgentHostFact"],
+    ["AgentSecretFact", "AgentSecretFact"],
+    ["ManagedSettingsFact", "ManagedSettingsFact"],
+    ["TelemetryFact", "TelemetryFact"],
+    ["AgentFact", "AgentFact"],
+  ])("pkg/client %s: full parity with the TS %s mirror", (goName, tsName) => {
+    const goTags = goJSONTags(readFileSync(join(root, "pkg/client/runs_new_run.go"), "utf8"), goName);
+    expect(goTags.length).toBeGreaterThanOrEqual(1);
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/new-run-contract.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
+  });
+
+  it("the New Run contract's closed value sets match Go", () => {
+    const ts = stripComments(readFileSync(join(root, "ui/src/app/lib/types/new-run-contract.ts"), "utf8"));
+    const union = (name: string) => {
+      const m = new RegExp(`export type ${name} =([^;]+);`).exec(ts);
+      if (!m) throw new Error(`type ${name} not found`);
+      return new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]));
+    };
+    const placementGo = readFileSync(join(root, "internal/placement/placement.go"), "utf8");
+    const deliveryGo = readFileSync(join(root, "internal/placement/delivery.go"), "utf8");
+    const clientGo = readFileSync(join(root, "pkg/client/runs_new_run.go"), "utf8");
+    expect(union("PlacementValue")).toEqual(new Set([...placementGo.matchAll(/\b(?:Remote|Local)\s+Placement = "([a-z_]+)"/g)].map((m) => m[1])));
+    expect(union("LocalDeliveryMode")).toEqual(new Set([...deliveryGo.matchAll(/\bMode\w+\s+Mode = "([a-z_]+)"/g)].map((m) => m[1])));
+    expect(union("LocalPlacementKind")).toEqual(new Set([...clientGo.matchAll(/\bLocalPlacement(?:Host|Source|Component)\s*=\s*"([a-z_]+)"/g)].map((m) => m[1])));
+  });
+
   it("ComponentSaved (POST/PUT /me/components, PUT /components/{id}): Component plus requirements", () => {
     const go = readFileSync(join(root, "pkg/client/components.go"), "utf8");
     expect(go).toMatch(/type ComponentSaved struct \{\n\tComponent\n/);
@@ -431,7 +474,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
       new Set([...consts(providerGo, '\\bGitLane\\w+\\s+GitLane = "([a-z_]+)"'), ...consts(factsGo, '\\bgitLane\\w+\\s*=\\s*"([a-z_]+)"')]),
     );
     expect(union("ComponentFactKind")).toEqual(
-      new Set([...typeGo.matchAll(/Component(?:Custom|GitProvider)\s+ComponentKind = "([a-z_]+)"/g)].map((m) => m[1])),
+      new Set([...typeGo.matchAll(/Component(?:Custom|GitProvider|Agent|GitPAT)\s+ComponentKind = "([a-z_]+)"/g)].map((m) => m[1])),
     );
   });
 

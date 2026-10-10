@@ -29,6 +29,8 @@ import type {
   WorkspaceSelection,
 } from "../../../lib/types";
 import type { ComponentRef } from "../../../lib/types/components";
+import type { RunContractDraft } from "../../../lib/run-contract-draft";
+import type { PlacementValue, RequestedResources, RunOverrides } from "../../../lib/types/new-run-contract";
 import { templateProviders } from "../../wardyn/policy-template-providers";
 // review U-01: the ONE place both clone doors (run header, Runs-list kebab)
 // turn a run's audit trail into a prefill or a refusal — see cloneFromAudit
@@ -183,6 +185,11 @@ export interface WizardState {
   // stored one by id or a run-only inline definition. The Access rows read what
   // the server makes of them; empty sends nothing, byte for byte as before.
   components: ComponentRef[];
+  // The 0.9 contract fields the Run and Access panels edit: "Runs on", CPU and
+  // memory, and the per-component overrides. Optional until A-L8's controller
+  // creates it; buildRunInput sends only what the person chose and only the
+  // overrides of sections that are on the page (lib/run-contract-draft.ts).
+  contract?: RunContractDraft;
 
   // --- Step 3: egress ---
   allowedDomains: string[]; // selected preset + custom domains
@@ -568,6 +575,11 @@ export type CreateRunInputWithComposition = CreateRunInput & {
   model_provider?: string;
   // The components this run carries — pkg/client.CreateRunRequest.Components 1:1.
   components?: ComponentRef[];
+  // pkg/client.CreateRunRequest.Placement / RunnerID / Resources / Overrides 1:1.
+  placement?: PlacementValue;
+  runner_id?: string;
+  resources?: RequestedResources;
+  overrides?: RunOverrides;
 };
 
 // buildSpec (the state -> canonical wire-contract composer) and

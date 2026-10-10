@@ -1,0 +1,92 @@
+[
+  {
+    "kind": "agent_host",
+    "op": "add",
+    "direction": "widen",
+    "rule": "ceiling_clamped"
+  },
+  {
+    "kind": "agent_host",
+    "op": "remove",
+    "direction": "tighten",
+    "rule": "allowed"
+  },
+  {
+    "kind": "agent_host_wildcard",
+    "op": "add",
+    "direction": "widen",
+    "rule": "refused"
+  },
+  {
+    "kind": "agent_secret",
+    "op": "add",
+    "direction": "widen",
+    "rule": "ceiling_clamped"
+  },
+  {
+    "kind": "agent_secret",
+    "op": "remove",
+    "direction": "tighten",
+    "rule": "allowed"
+  },
+  {
+    "kind": "tool_rule_restrict",
+    "op": "add",
+    "direction": "tighten",
+    "rule": "allowed"
+  },
+  {
+    "kind": "tool_rule_allow",
+    "op": "add",
+    "direction": "widen",
+    "rule": "refused"
+  },
+  {
+    "kind": "ado_capability",
+    "op": "narrow",
+    "direction": "tighten",
+    "rule": "allowed"
+  },
+  {
+    "kind": "ado_capability",
+    "op": "add",
+    "direction": "widen",
+    "rule": "refused"
+  },
+  {
+    "kind": "git_pat_scope",
+    "op": "narrow",
+    "direction": "tighten",
+    "rule": "allowed"
+  },
+  {
+    "kind": "git_pat_scope",
+    "op": "add",
+    "direction": "widen",
+    "rule": "refused"
+  },
+  {
+    "kind": "push_rule_deny",
+    "op": "add",
+    "direction": "tighten",
+    "rule": "allowed"
+  },
+  {
+    "kind": "push_rule_deny",
+    "op": "remove",
+    "direction": "widen",
+    "rule": "refused"
+  },
+  {
+    "kind": "push_rule_review",
+    "op": "add",
+    "direction": "tighten",
+    "rule": "allowed"
+  },
+  {
+    "kind": "push_rule_review",
+    "op": "remove",
+    "direction": "widen",
+    "rule": "refused"
+  }
+]

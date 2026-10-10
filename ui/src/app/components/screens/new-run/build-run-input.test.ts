@@ -122,3 +122,34 @@ describe("buildRunInput — components", () => {
     expect(body.components).toEqual(ref);
   });
 });
+
+describe("buildRunInput — the 0.9 contract fields", () => {
+  const defaultInput = (state = initialWizardState("CC2")) => input({ policyMode: "default", state, merged: null });
+
+  it("sends none of them for an untouched form", () => {
+    const body = buildRunInput(defaultInput());
+    for (const key of ["placement", "runner_id", "resources", "overrides"]) expect(body).not.toHaveProperty(key);
+  });
+
+  it("sends the person's choices, and the overrides of active sections only", () => {
+    const state = initialWizardState("CC2", {
+      contract: {
+        placement: "local",
+        runnerId: "runner-1",
+        cpus: 2,
+        overrides: {
+          gitPAT: [],
+          pushRules: [{ provider: "github", org: "acme", deny_paths: ["infra/"] }],
+          azureDevOps: { capabilities: ["code_read"] },
+        },
+      },
+    });
+    const inactive = runWireBody(buildRunInput(defaultInput(state))!);
+    expect(inactive).toMatchObject({ placement: "local", runner_id: "runner-1", resources: { cpu_millis: 2000 } });
+    expect(inactive).not.toHaveProperty("overrides");
+    const active = runWireBody(
+      buildRunInput({ ...defaultInput(state), activeSections: { agent: false, azureDevOps: false, gitPATHosts: [], pushKeys: ["github/acme"] } })!,
+    );
+    expect(active.overrides).toEqual({ push_rules: [{ provider: "github", org: "acme", deny_paths: ["infra/"] }] });
+  });
+});
