@@ -16,6 +16,7 @@ import (
 )
 
 type localRun struct {
+	FailedCreation bool                  `json:"failed_creation,omitempty"`
 	ExecID         string                `json:"exec_id,omitempty"`
 	RunID          uuid.UUID             `json:"run_id"`
 	Ref            string                `json:"ref"`

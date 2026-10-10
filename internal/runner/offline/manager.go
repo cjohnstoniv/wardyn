@@ -254,7 +254,7 @@ func (m *Manager) Created(ctx context.Context, spec runner.SandboxSpec, localRef
 		return err
 	}
 	r, ok := m.state.Runs[spec.RunID]
-	if !ok || localRef == "" || (r.Ref != "" && r.Ref != localRef) {
+	if !ok || localRef == "" || r.FailedCreation || (r.Ref != "" && r.Ref != localRef) {
 		return errors.New("runner creation has no matching durable intent")
 	}
 	r.Ref = localRef
@@ -281,7 +281,7 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 	for _, id := range ids {
 		m.mu.Lock()
 		r := m.state.Runs[id]
-		expired := m.state.Revoked || m.expired(id)
+		expired := m.state.Revoked || r.FailedCreation || m.expired(id)
 		m.mu.Unlock()
 		if r.Ref == "" || !expired {
 			continue
