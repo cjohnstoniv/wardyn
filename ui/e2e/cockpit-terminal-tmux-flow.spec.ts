@@ -78,13 +78,12 @@ test("50 MB of output keeps the page responsive and ends on the right screen", a
   await page.keyboard.press("Enter");
   await expect.poll(read, { timeout: 20_000 }).toContain("flow-ready");
 
-  // While it streams, none of the work the stream drives holds the main thread
-  // past the budget: the socket handler, xterm's parse slices (timers) and its
-  // drawing (animation frames), and style and layout. Long-animation-frame
-  // entries report every one, so nothing is sampled. A timer round trip measured
-  // the runner instead: the throttle spins the renderer, and a starved GPU
-  // process stalls each commit. React renders here follow the page's polls, not
-  // the output, so they are not counted.
+  // While it streams, no page script holds the main thread past the budget, and
+  // neither do style and layout. Long-animation-frame entries report every one,
+  // so nothing is sampled. Every page script counts except React's scheduler
+  // (MessagePort.onmessage), whose renders follow the page's polls, not the
+  // output. A timer round trip measured the runner instead: the throttle spins
+  // the renderer, and a starved GPU process stalls each commit.
   await page.evaluate(() => {
     type Frame = PerformanceEntry & {
       styleAndLayoutStart: number;
@@ -94,14 +93,12 @@ test("50 MB of output keeps the page responsive and ends on the right screen", a
     const note = (what: string, ms: number) => {
       if (ms > worst.ms) worst = { what, ms };
     };
-    // Every way terminal output reaches the page: use-attach-session.ts's socket handler, xterm's parse
-    // timers and its draw frames. If the output path ever moves to another invoker (a Worker, a
-    // MessagePort, idle callbacks), add it here, or this check passes on no data.
-    const stream = ["DOMWebSocket.onmessage", "TimerHandler:setTimeout", "FrameRequestCallback"];
+    // Only React's scheduler is excluded, so a new output path cannot pass on no data.
+    const notStream = ["MessagePort.onmessage"];
     const scan = (frames: PerformanceEntryList) => {
       for (const f of frames as Frame[]) {
         // The page's scripts: the harness's own evaluations have no source.
-        for (const s of f.scripts) if (s.sourceURL && stream.includes(s.invoker)) note(s.invoker, s.duration);
+        for (const s of f.scripts) if (s.sourceURL && !notStream.includes(s.invoker)) note(s.invoker, s.duration);
         if (f.styleAndLayoutStart) note("style and layout", f.startTime + f.duration - f.styleAndLayoutStart);
       }
     };
