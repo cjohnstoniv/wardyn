@@ -322,6 +322,9 @@ func (b *outputBuffer) appendPart(data []byte) (int, error) {
 func (b *outputBuffer) ack(offset int64) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.stopped != nil {
+		return b.stopped
+	}
 	if offset < 0 || offset > b.state.End {
 		return errOutputOffset
 	}
