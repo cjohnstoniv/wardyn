@@ -38,6 +38,19 @@ func (c *lostEvent) WriteFrame(ctx context.Context, f runnerwire.Frame) error {
 	return c.Conn.WriteFrame(ctx, f)
 }
 
+func emptyInventory(_ context.Context, send func(runnerwire.StatePage) error) error {
+	return send(runnerwire.StatePage{InventoryID: uuid.New(), Final: true})
+}
+
+func emptyStatePage(t *testing.T) []byte {
+	t.Helper()
+	payload, err := runnerwire.Marshal(runnerwire.StatePage{InventoryID: uuid.New(), Final: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
 func sessionHooks(online chan<- *runnerwire.Peer, resumed chan<- bool) runnerwire.RunnerHooks {
 	return runnerwire.RunnerHooks{
 		Call: func(_ context.Context, _ *runnerwire.Peer, _ uint32, _ string, _ json.RawMessage) (any, error) {
@@ -46,7 +59,7 @@ func sessionHooks(online chan<- *runnerwire.Peer, resumed chan<- bool) runnerwir
 		Open:        func(*runnerwire.Peer, *runnerwire.Stream, runnerwire.Open) error { return runnerwire.ErrNotReady },
 		Clock:       func(runnerwire.Hello, time.Time) error { return nil },
 		Pending:     func(context.Context, *runnerwire.Peer, []runnerwire.PendingAction) error { return nil },
-		State:       func(context.Context) ([]runnerwire.RunState, error) { return nil, nil },
+		StatePages:  emptyInventory,
 		Replay:      func(context.Context, *runnerwire.Peer) error { return nil },
 		BeforeReady: func(context.Context, *runnerwire.Peer, bool) error { return nil },
 		Lease:       func(context.Context, runnerwire.Lease) error { return nil },
@@ -76,13 +89,14 @@ func testHubResume(t *testing.T, realWire bool) {
 	row := types.Runner{ID: uuid.New(), PublicKey: pub, OrgURLSHA256: federation.OrgURLSHA256("https://org.example"), State: types.RunnerClaimed}
 	link := &Link{}
 	sub := New(row.ID.String(), link, Options{})
-	var states, events atomic.Int32
+	var begins, states, events atomic.Int32
 	config := HubConfig{OrgURL: "https://org.example", Lookup: func(context.Context, uuid.UUID) (types.Runner, error) { return row, nil },
 		Admit: func(context.Context, types.Runner) (Admission, error) {
 			return Admission{Substrate: sub, Link: link,
-				Pending: func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
-				State:   func(context.Context, []runnerwire.RunState) error { states.Add(1); return nil },
-				Event:   func(context.Context, runnerwire.Event) error { events.Add(1); return nil },
+				Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
+				BeginInventory: func(context.Context, string) error { begins.Add(1); return nil },
+				StatePage:      func(context.Context, string, runnerwire.StatePage) error { states.Add(1); return nil },
+				Event:          func(context.Context, runnerwire.Event) error { events.Add(1); return nil },
 			}, nil
 		},
 	}
@@ -157,8 +171,8 @@ func testHubResume(t *testing.T, realWire bool) {
 		case <-time.After(time.Millisecond):
 		}
 	}
-	if states.Load() != 1 {
-		t.Fatalf("full admission repeated: %d STATEs", states.Load())
+	if begins.Load() != 1 || states.Load() != 1 {
+		t.Fatalf("resume repeated full admission: %d inventories, %d STATE pages", begins.Load(), states.Load())
 	}
 	if err := link.Call(ctx, "probe", nil, &reply); err != nil {
 		t.Fatal(err)
