@@ -4,15 +4,51 @@
 package proxy
 
 import (
+	"bufio"
 	"io"
 	"net"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+type closeWriteRecorder struct {
+	net.Conn
+	halfClosed atomic.Bool
+}
+
+func (c *closeWriteRecorder) CloseWrite() error {
+	c.halfClosed.Store(true)
+	return nil
+}
+
+func TestConnectTunnelBufferedClientHalfClose(t *testing.T) {
+	client, clientPeer := net.Pipe()
+	upstream, upstreamPeer := net.Pipe()
+	defer clientPeer.Close()
+	defer upstreamPeer.Close()
+	recorder := &closeWriteRecorder{Conn: client}
+	p := &Proxy{}
+	wrapped := p.countActivity(&readerConn{Conn: recorder, r: bufio.NewReader(recorder)})
+	done := make(chan struct{})
+	go func() {
+		_, _ = tunnel(wrapped, upstream)
+		close(done)
+	}()
+	_ = upstreamPeer.Close()
+	select {
+	case <-done:
+		if !recorder.halfClosed.Load() {
+			t.Fatal("tunnel half-close did not reach the buffered client connection")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("tunnel did not finish after upstream EOF")
+	}
+}
 
 // startRecordingUpstream stands in for the opaque TLS origin a CONNECT tunnel
 // carries, and reports the first flight it is handed. It records rather than
