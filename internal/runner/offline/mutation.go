@@ -53,10 +53,7 @@ func (m *Manager) MutationFinished(ctx context.Context, method, ref string, runI
 	}
 	defer func() {
 		m.mu.Lock()
-		m.inflight[key]--
-		if m.inflight[key] == 0 {
-			delete(m.inflight, key)
-		}
+		m.finishMutation(key)
 		m.mu.Unlock()
 	}()
 	var err error
@@ -94,4 +91,11 @@ func (m *Manager) mutationsDrained(id uuid.UUID) bool {
 		}
 	}
 	return true
+}
+
+func (m *Manager) finishMutation(key mutationKey) {
+	m.inflight[key]--
+	if m.inflight[key] == 0 {
+		delete(m.inflight, key)
+	}
 }

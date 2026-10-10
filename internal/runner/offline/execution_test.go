@@ -39,7 +39,7 @@ func TestExecutionIntentSurvivesAmbiguousRetryAndRestart(t *testing.T) {
 	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := New(dir, rn, sub, uuid.UUID.String)
+	restarted, err := New(dir, rn, sub, uuid.UUID.String, noOutput)
 	if err != nil {
 		t.Fatal(err)
 	}

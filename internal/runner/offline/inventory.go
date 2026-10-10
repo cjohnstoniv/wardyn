@@ -58,7 +58,7 @@ func (m *Manager) inventoryIDs() []uuid.UUID {
 	ids := m.runIDs()
 	visible := ids[:0]
 	for _, id := range ids {
-		if m.state.Runs[id].Quarantine == nil {
+		if m.state.Runs[id].Quarantine == nil && !m.state.Runs[id].Retired {
 			visible = append(visible, id)
 		}
 	}

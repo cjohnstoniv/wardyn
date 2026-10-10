@@ -24,6 +24,9 @@ func samePendingAction(a, b runnerwire.PendingAction) bool {
 	if a.ID != b.ID || a.Kind != b.Kind || a.RunID != b.RunID || a.Ref != b.Ref {
 		return false
 	}
+	if (a.Retirement == nil) != (b.Retirement == nil) || (a.Retirement != nil && *a.Retirement != *b.Retirement) {
+		return false
+	}
 	if (a.Quarantine == nil) != (b.Quarantine == nil) || (a.Quarantine != nil && *a.Quarantine != *b.Quarantine) {
 		return false
 	}

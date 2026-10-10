@@ -66,7 +66,7 @@ func TestQuarantinePreservesEvidenceAndOtherInventory(t *testing.T) {
 	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String)
+	reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
 	if err != nil {
 		t.Fatal(err)
 	}

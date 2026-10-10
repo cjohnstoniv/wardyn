@@ -38,7 +38,11 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 }
 
 func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string) (_ runnerRuntime, retErr error) {
-	manager, err := offline.New(stateDir, identity.RunnerID, sub, ref)
+	streams, err := runnerio.New(sub, identity.RunnerID.String(), stateDir)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
+	manager, err := offline.New(stateDir, identity.RunnerID, sub, ref, streams.OutputSettled)
 	if err != nil {
 		return runnerRuntime{}, err
 	}
@@ -47,10 +51,6 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 			retErr = errors.Join(retErr, manager.Close())
 		}
 	}()
-	streams, err := runnerio.New(sub, identity.RunnerID.String(), stateDir)
-	if err != nil {
-		return runnerRuntime{}, err
-	}
 	dispatcher, err := runneragent.New(runneragent.Config{
 		RunnerID: identity.RunnerID.String(), Substrate: sub,
 		BeforeCreate: manager.BeforeCreate, Created: manager.Created, CreateFailed: manager.CreateFailed,

@@ -17,6 +17,8 @@ import (
 )
 
 type localRun struct {
+	Retirement      *types.RunnerRetirement      `json:"retirement,omitempty"`
+	Retired         bool                         `json:"retired,omitempty"`
 	Containment     *types.RunnerMutationFailure `json:"containment,omitempty"`
 	LeaseAfter      time.Time                    `json:"lease_after,omitempty"`
 	Quarantine      *types.RunnerQuarantine      `json:"quarantine,omitempty"`

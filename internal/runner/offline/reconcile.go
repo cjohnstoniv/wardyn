@@ -73,6 +73,12 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	if !ok || !belongs || local == "" || r.Ref != local {
 		return runnerwire.ActionResult{}, errors.New("pending action does not match a local run")
 	}
+	if a.Kind == types.RunnerActionRetire {
+		return m.retireRun(ctx, a, r)
+	}
+	if a.Retirement != nil || r.Retired {
+		return runnerwire.ActionResult{}, errors.New("unexpected retirement proof or retired identity")
+	}
 	if a.Kind == types.RunnerActionQuarantine {
 		return m.quarantineRun(ctx, a, r)
 	}
@@ -147,6 +153,9 @@ func (m *Manager) AgentExited(ctx context.Context, id uuid.UUID, localRef string
 	if !ok || r.Ref != localRef || r.Generation == uuid.Nil || r.ExecID == "" {
 		return errors.New("agent exit has no matching local run")
 	}
+	if r.Retirement != nil {
+		return errors.New("agent exit observer started after retirement settlement")
+	}
 	if r.Exit != nil {
 		if r.Exit.Code != code {
 			return errors.New("agent exit code changed")
@@ -171,60 +180,6 @@ func (m *Manager) State(ctx context.Context) ([]runnerwire.RunState, error) {
 	return m.stateRows(ctx, ids)
 }
 
-func (m *Manager) stateRows(ctx context.Context, ids []uuid.UUID) ([]runnerwire.RunState, error) {
-	out := make([]runnerwire.RunState, 0, len(ids))
-	for _, id := range ids {
-		m.mu.Lock()
-		if err := m.ensureDurable(); err != nil {
-			m.mu.Unlock()
-			return nil, err
-		}
-		r := m.state.Runs[id]
-		row := runnerwire.RunState{RunID: id, Containment: r.Containment, ContainmentOnly: r.ContainmentOnly, MutationFailure: r.MutationFailure, ProxyStoppedAt: r.ProxyStoppedAt, Execution: durableExecutionResult(r)}
-		m.mu.Unlock()
-		if r.Ref != "" {
-			st, err := m.sub.Status(ctx, r.Ref)
-			if err != nil {
-				return nil, err
-			}
-			row.SandboxPresent = st.State != types.RunStopped || st.ExitCode != nil
-			if r.ExecID != "" && r.Generation != uuid.Nil {
-				agent, err := m.sub.AgentStatus(ctx, r.Ref, r.ExecID)
-				if err != nil {
-					return nil, err
-				}
-				row.AgentState = string(agent.State)
-				row.ExitCode = agent.ExitCode
-				if agent.ExitCode != nil && r.Exit == nil {
-					m.mu.Lock()
-					current := m.state.Runs[id]
-					if current.Generation == r.Generation && current.ExecID == r.ExecID && current.Ref == r.Ref && current.Exit == nil {
-						current.Exit = &runnerwire.AgentExit{Generation: r.Generation, ExecID: r.ExecID, Ref: placement.RunnerRefPrefix(m.runnerID.String()) + r.Ref, Code: *agent.ExitCode, ObservedAt: m.now().UTC()}
-						m.state.Runs[id] = current
-						err = m.save()
-					}
-					m.mu.Unlock()
-					if err != nil {
-						return nil, err
-					}
-				}
-			}
-		}
-		spool, err := runnerspool.Open(filepath.Join(m.dir, "spools", id.String()), id)
-		if err != nil {
-			return nil, err
-		}
-		depth, _, drops, err := spool.Stats(ctx)
-		closeErr := spool.Close()
-		if err := errors.Join(err, closeErr); err != nil {
-			return nil, err
-		}
-		row.SpoolDepth = depth
-		row.SpoolDrops = int(min(drops, uint64(^uint(0)>>1)))
-		out = append(out, row)
-	}
-	return out, nil
-}
 func (m *Manager) runIDs() []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(m.state.Runs))
 	for id := range m.state.Runs {
@@ -248,7 +203,7 @@ func (m *Manager) Replay(ctx context.Context, peer *runnerwire.Peer) error {
 	}
 	for _, id := range ids {
 		m.mu.Lock()
-		quarantined := m.state.Runs[id].Quarantine != nil
+		quarantined := m.state.Runs[id].Quarantine != nil || m.state.Runs[id].Retired
 		m.mu.Unlock()
 		if quarantined {
 			continue
