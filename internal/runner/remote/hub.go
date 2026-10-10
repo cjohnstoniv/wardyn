@@ -19,14 +19,17 @@ import (
 )
 
 // Admission is supplied by the org's durable routing/reconciliation layer.
-// Every callback is required: missing pending-action or durable-ingest logic
-// must not silently admit a runner. Substrate and Link must be the same pair.
+// Pending, State and Event are required: missing durable reconciliation must
+// not silently admit a runner. Substrate and Link must be the same pair.
 type Admission struct {
 	Substrate *Substrate
 	Link      *Link
 	Pending   func(context.Context) ([]runnerwire.PendingAction, error)
 	State     func(context.Context, []runnerwire.RunState) error
 	Event     func(context.Context, runnerwire.Event) error
+	// Activity checks current run ownership/lifecycle in its database transaction.
+	// Nil refuses live activity; historical EVENT ingestion never calls it.
+	Activity func(context.Context, uuid.UUID) error
 }
 
 // HubConfig binds proof of possession to stored identity and org admission.
@@ -217,6 +220,7 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 	}
 	var peer *runnerwire.Peer
 	configureAdmission(ctx, &cfg, resumed, pending, a, s, func() *runnerwire.Peer { return peer })
+	h.configureActivity(ctx, &cfg, row, a, s, func() *runnerwire.Peer { return peer })
 	peer = a.Link.AttachSession(conn, cfg)
 	s.peer, s.link, s.ended = peer, a.Link, time.Time{}
 	last := uint64(0)
