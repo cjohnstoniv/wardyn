@@ -471,6 +471,9 @@ jobs:
     services:
       postgres:
         image: postgres:17
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
         env:
           POSTGRES_PASSWORD: wardyn
           POSTGRES_DB: wardyn
@@ -1562,6 +1565,9 @@ jobs:
     services:
       postgres:
         image: postgres:17
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
         env:
           POSTGRES_PASSWORD: wardyn
           POSTGRES_DB: wardyn
