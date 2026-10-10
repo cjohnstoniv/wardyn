@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -43,13 +44,25 @@ func TestSiteConfigCannotChangeRunnerEnablement(t *testing.T) {
 	for _, stored := range []*types.RunnerSettings{nil, {}, {Enabled: true}} {
 		for _, body := range []string{`{}`, `{"runners":null}`, `{"runners":{"enabled":false}}`, `{"runners":{"enabled":true}}`} {
 			fake := &fakeSiteConfigStore{cfg: types.SiteConfig{Runners: stored}}
-			srv, _ := newSiteConfigHarness(t, fake)
+			srv, audit := newSiteConfigHarness(t, fake)
 			w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+			named := strings.Contains(body, `"enabled":true`) != (stored != nil && stored.Enabled) && strings.Contains(body, `"enabled"`)
+			if named {
+				if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), reasonSiteConfigRunnersViaOwnRoute) || fake.putSeen != nil {
+					t.Fatalf("stored=%+v body=%s: a changed runners.enabled was not refused: %d %s", stored, body, w.Code, w.Body.String())
+				}
+				continue
+			}
 			if w.Code != http.StatusOK {
 				t.Fatalf("PUT status=%d body=%s", w.Code, w.Body.String())
 			}
 			if fake.putSeen == nil || !reflect.DeepEqual(fake.putSeen.Runners, stored) {
-				t.Fatal("generic PUT changed runner enablement")
+				t.Fatalf("stored=%+v body=%s: generic PUT changed runner enablement", stored, body)
+			}
+			for _, ev := range audit.snapshot() {
+				if ev.Action == "runners.enabled.set" {
+					t.Fatal("generic PUT wrote the switch's audit row")
+				}
 			}
 		}
 	}

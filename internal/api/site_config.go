@@ -729,8 +729,14 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// Carry forward, or a round-trip PUT by any client erases the install's
 	// onboarding state — the exact footgun already solved once for Integrations.
 	cfg.OnboardingCompletedAt = existing.OnboardingCompletedAt
-	// Runner enablement needs the dedicated audited HTTPS-validated operation.
-	// A generic document update must neither enable nor disable it.
+	// Runner enablement needs the dedicated audited HTTPS-validated operation, so a document that
+	// names a different value is refused rather than quietly ignored; an echo of the stored one,
+	// or no mention at all, carries it forward.
+	if cfg.Runners != nil && cfg.Runners.Enabled != runnersEnabled(existing) {
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigRunnersViaOwnRoute,
+			"runners.enabled is a super-admin switch: change it with PUT /runners/settings, not PUT /site-config")
+		return
+	}
 	cfg.Runners = existing.Runners
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
 	// The egress baseline lowers grades, so it has a stricter writer than this door: the egress block

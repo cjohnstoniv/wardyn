@@ -32,6 +32,7 @@ type runnerRegistrationFake struct {
 	lock      sync.Mutex
 	tokens    map[string]types.RunnerRegistrationToken
 	rows      map[uuid.UUID]types.Runner
+	runs      map[uuid.UUID]int
 }
 
 func newRunnerRegistrationServer(t *testing.T) (*Server, *runnerRegistrationFake, *harness) {

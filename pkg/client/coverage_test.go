@@ -53,6 +53,9 @@ var (
 	_ client.RunSignIn
 	_ client.RunPolicyView
 	_ []client.Device
+	_ []client.RunnerView
+	_ client.RunnerSettings
+	_ []client.RunnerRegistrationToken
 	_ client.DeviceEnrolmentToken
 	_ client.DrivesDocument
 	_ client.UserDrive
@@ -115,7 +118,7 @@ func routeFamilies() map[string][]string {
 		"ssh-keys":     {"ListSSHKeys", "ListSSHKeysPage", "AddSSHKey", "DeleteSSHKey"},
 		"people":       {"ListPeople", "ErasePerson"},
 		"components":   {"MyComponents", "SaveMyComponent", "UpdateMyComponent", "DeleteMyComponent", "ListComponents", "PutComponent", "DeleteComponent"},
-		"runners":      {"MintRunnerToken", "RegisterRunner", "ClaimRunner"},
+		"runners":      {"MintRunnerToken", "RegisterRunner", "ClaimRunner", "ListRunners", "GetRunner", "ListMyRunners", "ListRunnerTokens", "RevokeRunnerToken", "GetRunnerSettings", "SetRunnersEnabled"},
 		"runner-pools": {"ListRunnerPools", "GetRunnerPool", "CreateRunnerPool", "UpdateRunnerPool", "DeleteRunnerPool", "AddMyRunnerToPool", "RemoveMyRunnerFromPool", "GetOrgRunnerPoolDefaults", "SetOrgRunnerPoolDefaults", "GetMyRunnerPoolDefaults", "SetMyRunnerPoolDefaults", "ClearMyRunnerPoolDefaults"},
 		"devices":      {"MintDeviceEnrolmentToken", "ListDeviceEnrolmentTokens", "RevokeDeviceEnrolmentToken", "ListDevices", "RevokeDevice"},
 	}

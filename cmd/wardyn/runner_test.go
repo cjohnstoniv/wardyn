@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
@@ -48,5 +49,48 @@ func TestRunnerClaimUsesLocalFingerprintAndOrgBinding(t *testing.T) {
 	}
 	if err := execCmd(t, "runner", "claim", "--state-dir", state, "--url", "https://other.example.com", "--token", "personal-token"); err == nil {
 		t.Fatal("sent local fingerprint to another organisation")
+	}
+}
+
+func TestRunnerListAndTokensCommands(t *testing.T) {
+	id := uuid.New()
+	seen := time.Date(2026, 10, 10, 9, 0, 0, 0, time.UTC)
+	views := []types.RunnerView{{ID: id, Owner: "alice@example.com", Name: "laptop-7", State: types.RunnerClaimed, Online: true, LastSeenAt: &seen, RunsActive: 2, KeyFingerprint: "abcd1234"}}
+	srv := newCmdServer(t, http.StatusOK, views)
+
+	out, err := execCmdCapture(t, "runner", "list", "--all", "--state", "revoked", "--url", srv.URL, "--token", "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req := srv.last(); req.path != "/api/v1/runners" || req.query != "state=revoked" {
+		t.Fatalf("--all request %s?%s", req.path, req.query)
+	}
+	for _, want := range []string{"alice@example.com", "laptop-7", "online", "abcd1234"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("admin list lacks %q:\n%s", want, out)
+		}
+	}
+
+	out, err = execCmdCapture(t, "runner", "list", "--url", srv.URL, "--token", "t")
+	if err != nil || srv.last().path != "/api/v1/me/runners" || strings.Contains(out, "OWNER") {
+		t.Fatalf("own list: %v path %s\n%s", err, srv.last().path, out)
+	}
+	if _, err := execCmdCapture(t, "runner", "list", "--state", "revoked", "--url", srv.URL, "--token", "t"); err == nil {
+		t.Fatal("--state without --all was accepted")
+	}
+
+	tokens := []types.RunnerRegistrationToken{{ID: id, Owner: "dan@example.com", MintedBy: "admin", CreatedAt: seen, ExpiresAt: seen.Add(72 * time.Hour)}}
+	tsrv := newCmdServer(t, http.StatusOK, tokens)
+	out, err = execCmdCapture(t, "runner", "tokens", "list", "--url", tsrv.URL, "--token", "t")
+	if err != nil || tsrv.last().path != "/api/v1/runners/tokens" || !strings.Contains(out, "dan@example.com") {
+		t.Fatalf("tokens list: %v\n%s", err, out)
+	}
+	rsrv := newCmdServer(t, http.StatusNoContent, nil)
+	out, err = execCmdCapture(t, "runner", "tokens", "revoke", id.String(), "--url", rsrv.URL, "--token", "t")
+	if req := rsrv.last(); err != nil || req.method != http.MethodDelete || req.path != "/api/v1/runners/tokens/"+id.String() || !strings.Contains(out, id.String()) {
+		t.Fatalf("tokens revoke: %v %+v\n%s", err, req, out)
+	}
+	if _, err := execCmdCapture(t, "runner", "tokens", "revoke", "not-a-uuid", "--url", rsrv.URL, "--token", "t"); err == nil {
+		t.Fatal("a malformed token id was sent")
 	}
 }

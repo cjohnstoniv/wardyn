@@ -42,6 +42,9 @@ type Runner struct {
 	Owner        string    `json:"owner"`
 	Name         string    `json:"name"`
 	OrgURLSHA256 string    `json:"-"`
+	// MintedBy is who minted the registration token this runner redeemed; empty for a runner
+	// registered before it was recorded.
+	MintedBy string `json:"-"`
 	// PublicKey is the runner's Ed25519 key. The private half never leaves the runner.
 	PublicKey      []byte        `json:"-"`
 	KeyFingerprint string        `json:"key_fingerprint"`

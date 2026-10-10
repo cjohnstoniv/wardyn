@@ -130,6 +130,9 @@ type Config struct {
 	// RunnerOrgURL is the public organisation URL bound into runner identities.
 	// Empty disables runner registration and streams; never infer it from Host.
 	RunnerOrgURL string
+	// RunnerOnline reports whether a claimed runner holds a live authenticated session with this
+	// process. Nil reads every runner as offline: online is never shown without that evidence.
+	RunnerOnline func(id uuid.UUID) bool
 	// AdminToken gates the public API (constant-time bearer compare). Empty
 	// disables the public API entirely (fail closed) except /healthz.
 	AdminToken string

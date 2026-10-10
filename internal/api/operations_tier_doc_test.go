@@ -40,6 +40,8 @@ var docTierGate = map[routeClass]string{
 var docTierRows = []struct{ route, token string }{
 	// operatorOnly (SUPER)
 	{"POST /api/v1/runners/tokens", "`POST /runners/tokens`"},
+	// Runners management (0.9): the switch write is SUPER, the reads and the token revoke the security tier's.
+	{"PUT /api/v1/runners/settings", "`PUT /runners/settings`"},
 	// Runner pools (0.9): the writes are SUPER, the use policy is the security tier's.
 	{"POST /api/v1/runner-pools", "the `/runner-pools` writes"},
 	{"PUT /api/v1/runner-pools/{id}", "the `/runner-pools` writes"},
@@ -211,6 +213,11 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/admin/devices/{id}", "`GET /admin/devices` and `DELETE /admin/devices/{id}`"},
 	{"GET /api/v1/admin/devices/enrolment-tokens", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
 	{"DELETE /api/v1/admin/devices/enrolment-tokens/{id}", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
+	{"GET /api/v1/runners", "`GET /runners` and `GET /runners/{id}`"},
+	{"GET /api/v1/runners/{id}", "`GET /runners` and `GET /runners/{id}`"},
+	{"GET /api/v1/runners/tokens", "`GET /runners/tokens` and `DELETE /runners/tokens/{id}`"},
+	{"DELETE /api/v1/runners/tokens/{id}", "`GET /runners/tokens` and `DELETE /runners/tokens/{id}`"},
+	{"GET /api/v1/runners/settings", "`GET /runners/settings`"},
 	// #1142's portal registry.
 	{"POST /api/v1/admin/delegates", "`POST /admin/delegates`"},
 	{"GET /api/v1/admin/delegates", "`GET /admin/delegates` and `DELETE /admin/delegates/{id}`"},
