@@ -38,6 +38,7 @@ type Manager struct {
 	now         func() time.Time
 	since       func(time.Time) time.Duration
 	online      bool
+	replayReady bool
 	peer        *runnerwire.Peer
 	state       localState
 	deadlines   map[uuid.UUID]deadline
@@ -119,6 +120,7 @@ func (m *Manager) Clock(h runnerwire.Hello, received time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.online = false
+	m.replayReady = false
 	m.peer = nil
 	m.clearPending()
 	return m.clock.Hello(h, received)
@@ -148,8 +150,19 @@ func (m *Manager) BeforeReady(ctx context.Context, peer *runnerwire.Peer, _ bool
 		return errors.New("offline admission requires an authenticated peer")
 	}
 	m.online = true
+	m.replayReady = false
 	m.peer = peer
 	return nil
+}
+
+// Online permits new audit frames only after transport resume has replayed its
+// old frames and started the peer. BeforeReady independently admits incoming RPCs.
+func (m *Manager) Online(peer *runnerwire.Peer) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.online && m.peer == peer && peer != nil && !m.state.Revoked {
+		m.replayReady = true
+	}
 }
 
 // Offline preserves agents and files. Run independently owns the safety timer;
@@ -157,6 +170,7 @@ func (m *Manager) BeforeReady(ctx context.Context, peer *runnerwire.Peer, _ bool
 func (m *Manager) Offline(context.Context) {
 	m.mu.Lock()
 	m.online = false
+	m.replayReady = false
 	m.peer = nil
 	m.clearPending()
 	m.mu.Unlock()
@@ -341,9 +355,9 @@ func (m *Manager) replayLoop(ctx context.Context) {
 			slog.WarnContext(ctx, "runner lifecycle observation will retry", "error", err)
 		}
 		m.mu.Lock()
-		peer, online := m.peer, m.online
+		peer, ready := m.peer, m.online && m.replayReady
 		m.mu.Unlock()
-		if online && peer != nil {
+		if ready && peer != nil {
 			if err := m.Replay(observe, peer); err != nil {
 				slog.WarnContext(ctx, "runner audit replay will retry", "error", err)
 			}
@@ -362,6 +376,7 @@ func (m *Manager) replayLoop(ctx context.Context) {
 func (m *Manager) Revoked(ctx context.Context) error {
 	m.mu.Lock()
 	m.online = false
+	m.replayReady = false
 	m.peer = nil
 	m.state.Revoked = true
 	err := m.save()

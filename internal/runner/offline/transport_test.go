@@ -84,7 +84,7 @@ func connectWireManager(t *testing.T, dir string, sub substrate.Substrate, ref f
 			return m.Clock(h, received)
 		},
 		Pending: m.Pending, State: m.State, Replay: m.Replay, BeforeReady: m.BeforeReady, Lease: m.Lease, Revoked: m.Revoked, Offline: m.Offline,
-		Online: func(p *runnerwire.Peer, _ bool) { online <- p },
+		Online: func(p *runnerwire.Peer, _ bool) { m.Online(p); online <- p },
 	}
 	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: orgURL, RunnerID: row.ID.String(), PrivateKey: key, Hooks: hooks, Dial: func(ctx context.Context) (runnerwire.Conn, error) {
 		if realWire {
