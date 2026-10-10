@@ -121,7 +121,7 @@ The carrier is the existing capability kind `capFeature`, with one new value in 
 - Default off: migration 0196 writes a `capability_restrictions` row for (`feature`, `service_attach`). A restricted value admits only an allow naming it, so a `*` allow grants nobody.
 - Admins turn it on per person, group or user type with an ordinary grant: `POST /permissions/grants`, kind `feature`, value `service_attach`.
 - That write is security tier, audited `capability.grant.create`, and held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`. A user-type deny blocks it as for any value.
-- Opening it to every sponsor is a deliberate `PUT /permissions/availability/feature/service_attach` back to Everyone, audited `capability.availability.write`.
+- That restriction is what "always needs the explicit grant" means; opening it to every sponsor is a deliberate `PUT /permissions/availability/feature/service_attach` back to Everyone, audited `capability.availability.write`.
 - Same rules for everyone: the batch is asked with its operator step off, so a super admin sponsor needs the grant too. A super admin without it has normal admin access, recorded as admin: read and kill, no entry.
 
 How an entry is checked:

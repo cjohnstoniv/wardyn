@@ -1,4 +1,5 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. #1508 design, measured at authoring.
 # 3889 -> 4085: the owner amended D11. Review r1 split the service-identity mechanism onto its own page by seam: 4085 -> 3202 here, 1583 there.
-docs/design/0.9/invitations-service-identities.md=3202 share=35
-docs/design/0.9/service-identities.md=1583 share=35
+# Review r2 nits: +2 here (names the second dual-form test), +10 there (ties the restriction to the explicit-grant rule).
+docs/design/0.9/invitations-service-identities.md=3204 share=35
+docs/design/0.9/service-identities.md=1593 share=35

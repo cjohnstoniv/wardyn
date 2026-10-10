@@ -276,7 +276,7 @@ Every slice: each named test fails with its fix reverted and passes restored; th
 | C1 | 0196 applies on a seeded 0195 database and `TestMigration0196_TokensAndRunsUnchanged` passes; a seeded `service:` principal aborts it |
 | C1 | The widened `actor_type` check accepts `service`; the report gives the lock mode it takes and its time on `12` seeded partitions of `100k` rows |
 | C1 | The three C1 tests of [§8](#8-acceptance-to-tests) pass, each with a revert mutation; the mint-site pin names exactly two mint-core callers and no `MintedBy` write |
-| C2 | `TestServiceIdentity_RunsUnderItsOwnPrincipal` and the C2 negatives pass, the first two under both actor forms; `TestAuthzMatrix` covers every new route |
+| C2 | `TestServiceIdentity_RunsUnderItsOwnPrincipal` and the C2 negatives pass, with it and `TestServiceIdentity_NeverOperatorNeverSecondHuman` run under both actor forms; `TestAuthzMatrix` covers every new route |
 | C2 | The report lists every comparison against `types.ActorSystem` or `types.ActorHuman` with its verdict for `service` |
 | C4 | The seven C4 tests pass, each with a revert mutation; with no grant row a sponsor's ticket mint answers `404`, a super admin sponsor's too |
 | C4 | `ownsRunOrSponsorOrAdmin` gates exactly the five read and kill routes; every `mayEnterRun` call site is listed; an attach row names the sponsor as `human` actor with `service_identity` |
