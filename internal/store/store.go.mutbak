@@ -215,7 +215,7 @@ func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 		r.AgentExecID, r.Title, r.Description, r.WorkspaceIDs, string(r.AutonomyLevel),
 		r.EndsAt, r.WaitBudgetSec, limitsJSON, r.GovernanceProfileID, r.ModelProviderID, r.UserType,
 		r.Preset, r.PresetVersion, r.OperatorOwned, r.CreatedVia, r.DiskMiB,
-		string(r.Placement), r.PlacementFilled, r.RunnerID, string(r.EvidenceSource), "",
+		string(r.Placement), r.PlacementFilled, r.RunnerID, string(r.EvidenceSource), string(r.Experience),
 	}, nil
 }
 

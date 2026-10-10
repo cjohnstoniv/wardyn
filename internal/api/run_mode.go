@@ -13,7 +13,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
-	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -351,40 +350,27 @@ func runModeUnavailable(req createRunRequest) (path, what string) {
 }
 
 // startFolderAttachmentKnown reports whether the attachment is one the request
-// carries, and the mount target it names when it names one.
-func startFolderAttachmentKnown(req createRunRequest, attachment string) (known bool, target string) {
+// carries: a workspace by id, or the person's drive.
+func startFolderAttachmentKnown(req createRunRequest, attachment string) bool {
 	if attachment == client.StartFolderDrive {
-		return req.Drive != nil && req.Drive.Enabled, runner.DriveTarget
+		return req.Drive != nil && req.Drive.Enabled
 	}
 	if req.WorkspaceID != nil && req.WorkspaceID.String() == attachment {
-		return true, ""
+		return true
 	}
-	for _, sel := range req.Workspaces {
-		if sel.WorkspaceID == attachment {
-			return true, sel.Target
-		}
-	}
-	return false, ""
+	return slices.ContainsFunc(req.Workspaces, func(sel client.WorkspaceSelection) bool { return sel.WorkspaceID == attachment })
 }
 
-// startFolderRefusal holds a start folder to the attachments of this run and to
-// the mount it names: the resolved folder must stay inside the admitted sandbox
-// filesystem under the same rule an authored mount target meets.
+// startFolderRefusal holds a start folder to the attachments of this run. The
+// subpath is already cleaned and has no ".." element (startFolderShapeRefusal),
+// so the resolved folder stays inside the mount, and the mount's own target is
+// the one workspaceTargetsRefusal validated.
 func startFolderRefusal(req createRunRequest) *runRefusal {
 	f := req.StartFolder
-	if f == nil || f.Kind != client.StartFolderAttachment {
+	if f == nil || f.Kind != client.StartFolderAttachment || startFolderAttachmentKnown(req, f.Attachment) {
 		return nil
 	}
-	known, target := startFolderAttachmentKnown(req, f.Attachment)
-	if !known {
-		return runError(http.StatusBadRequest, reasonStartFolderInvalid, startFolderAttachmentMsg(f.Attachment))
-	}
-	if target != "" && f.Attachment != client.StartFolderDrive {
-		if err := workspaceTargetShape(path.Join(target, f.Subpath)); err != nil {
-			return runError(http.StatusBadRequest, reasonStartFolderInvalid, startFolderShapeMsg(f.Subpath))
-		}
-	}
-	return nil
+	return runError(http.StatusBadRequest, reasonStartFolderInvalid, startFolderAttachmentMsg(f.Attachment))
 }
 
 // runModeRequiredRefusal is what only the run door knows: a new client's mode and

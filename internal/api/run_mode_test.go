@@ -93,7 +93,8 @@ func TestRunModeRefusals(t *testing.T) {
 		{"a start folder cannot leave its mount", `"experience":"interactive","tools":[` + claudeTool + `],"drive":{"enabled":true},"start_folder":{"kind":"attachment","attachment":"drive","subpath":"../etc"}`, reasonStartFolderInvalid, startFolderShapeMsg("../etc"), 400},
 		{"a start folder is relative", `"experience":"interactive","tools":[` + claudeTool + `],"drive":{"enabled":true},"start_folder":{"kind":"attachment","attachment":"drive","subpath":"/etc"}`, reasonStartFolderInvalid, "", 400},
 		{"a start folder inside an attachment is not dropped", `"experience":"interactive","tools":[` + claudeTool + `],"drive":{"enabled":true},"start_folder":{"kind":"attachment","attachment":"drive","subpath":"src"}`, reasonRequestFieldUnavailable, "", 422},
-		{"a start folder resolves under the mount's target", `"experience":"interactive","tools":[` + claudeTool + `],"workspaces":[{"workspace_id":"` + wsID + `","target":"/home/agent/work"}],"start_folder":{"kind":"attachment","attachment":"` + wsID + `","subpath":"a/../../../etc"}`, reasonStartFolderInvalid, "", 400},
+		{"a subpath cannot step out through its mount's target", `"experience":"interactive","tools":[` + claudeTool + `],"workspaces":[{"workspace_id":"` + wsID + `","target":"/home/agent/work"}],"start_folder":{"kind":"attachment","attachment":"` + wsID + `","subpath":"a/../../../etc"}`, reasonStartFolderInvalid, "", 400},
+		{"an unavailable carrier answers before the older gates read the projection", `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],"startup":{"kind":"command","command":"harness login"},` + noRepos, reasonRequestFieldUnavailable, "", 422},
 		{"a start folder kind is closed", `"experience":"interactive","tools":[` + claudeTool + `],"start_folder":{"kind":"home"},` + noRepos, reasonStartFolderInvalid, "", 400},
 	} {
 		for _, door := range contractDoors {
