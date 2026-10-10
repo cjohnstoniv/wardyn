@@ -29,27 +29,21 @@ func exitDigest(exit *runnerwire.AgentExit) string {
 // retireRun runs under actionMu and mu. Kill is already irreversible and
 // confirmed; the authenticated org separately attests terminal-tail settlement.
 func (m *Manager) retireRun(ctx context.Context, a runnerwire.PendingAction, r localRun) (runnerwire.ActionResult, error) {
+	if err := retirementProof(a, r); err != nil {
+		return runnerwire.ActionResult{}, err
+	}
 	p := a.Retirement
-	if p == nil || p.ID == uuid.Nil || a.Recovery != nil || a.Quarantine != nil || r.Quarantine != nil || r.Retired {
-		return runnerwire.ActionResult{}, errors.New("retirement requires exact nonquarantined settlement")
-	}
-	if p.Generation != r.Generation || p.ExecID != r.ExecID || p.ExitHash != exitDigest(r.Exit) || (r.Generation == uuid.Nil && len(r.Executions) != 0) || p.OutputEnd < 0 || p.Spool.SpoolID == uuid.Nil {
-		return runnerwire.ActionResult{}, errors.New("retirement evidence identity changed")
-	}
-	if r.Containment == nil || r.Containment.Operation != string(types.RunnerActionKill) || !r.Containment.Contained || r.ProxyStoppedAt == nil {
-		return runnerwire.ActionResult{}, errors.New("retirement requires settled terminal containment")
-	}
 	// A fresh action may carry a newer evidence watermark after deferred replay.
 	// Its execution/exit identity remains fixed by the comparisons above.
 	if !m.mutationsDrained(a.RunID) || (r.Exit != nil && !r.ExitAcked) || (r.MutationFailure != nil && !r.MutationFailure.Contained) {
-		return m.quarantineReceipt(a, "deferred")
+		return m.actionReceipt(a, "deferred")
 	}
 	end, settled, err := m.outputSettled(ctx, a.RunID, r.Ref)
 	if err != nil {
 		return runnerwire.ActionResult{}, err
 	}
 	if !settled || end != p.OutputEnd {
-		return m.quarantineReceipt(a, "deferred")
+		return m.actionReceipt(a, "deferred")
 	}
 	proof := *p
 	a.Retirement = &proof
@@ -68,11 +62,25 @@ func (m *Manager) retireRun(ctx context.Context, a runnerwire.PendingAction, r l
 		return runnerwire.ActionResult{}, err
 	}
 	if !sealed {
-		return m.quarantineReceipt(a, "deferred")
+		return m.actionReceipt(a, "deferred")
 	}
 	r.Retired = true
 	m.state.Runs[a.RunID] = r
 	// Retained run, execution and action tombstones prevent ID reuse. Nothing is
 	// deleted and neither an exit ACK nor this operation advances evidence ACKs.
-	return m.quarantineReceipt(a, "success")
+	return m.actionReceipt(a, "success")
+}
+
+func retirementProof(a runnerwire.PendingAction, r localRun) error {
+	p := a.Retirement
+	if p == nil || p.ID == uuid.Nil || a.Recovery != nil || a.Quarantine != nil || r.Quarantine != nil || r.Retired {
+		return errors.New("retirement requires exact nonquarantined settlement")
+	}
+	if p.Generation != r.Generation || p.ExecID != r.ExecID || p.ExitHash != exitDigest(r.Exit) || (r.Generation == uuid.Nil && len(r.Executions) != 0) || p.OutputEnd < 0 || p.Spool.SpoolID == uuid.Nil {
+		return errors.New("retirement evidence identity changed")
+	}
+	if r.Containment == nil || r.Containment.ID == uuid.Nil || r.Containment.Generation != r.Generation || r.Containment.Operation != string(types.RunnerActionKill) || !r.Containment.Contained || r.ProxyStoppedAt == nil {
+		return errors.New("retirement requires settled terminal containment")
+	}
+	return nil
 }

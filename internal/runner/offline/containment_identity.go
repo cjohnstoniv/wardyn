@@ -12,7 +12,7 @@ import (
 )
 
 func missingIdentityAction(a runnerwire.PendingAction) bool {
-	return a.RunID != uuid.Nil && a.Recovery == nil && a.Quarantine == nil &&
+	return a.RunID != uuid.Nil && a.Recovery == nil && a.Quarantine == nil && a.Retirement == nil &&
 		(a.Kind == types.RunnerActionKill || a.Kind == types.RunnerActionStopProxy)
 }
 

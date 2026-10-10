@@ -148,3 +148,31 @@ func TestRetirementRecoversSealedSpoolBeforeLocalReceipt(t *testing.T) {
 		t.Fatalf("crash receipt: %+v %v", got, err)
 	}
 }
+
+func TestRetirementStateRefusesLostOrAlteredSettlement(t *testing.T) {
+	for _, change := range []func(*localRun){
+		func(r *localRun) { r.Retired = true; r.Retirement = nil },
+		func(r *localRun) { p := *r.Retirement; p.Generation = uuid.New(); r.Retirement = &p },
+		func(r *localRun) { p := *r.Containment; p.Contained = false; r.Containment = &p },
+		func(r *localRun) { r.Quarantine = &types.RunnerQuarantine{ID: uuid.New()} },
+	} {
+		m, sub, id, _, a := retirementFixture(t)
+		if _, err := m.apply(t.Context(), a); err != nil {
+			t.Fatal(err)
+		}
+		r := m.state.Runs[id]
+		change(&r)
+		m.state.Runs[id] = r
+		if err := m.save(); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.Close(); err != nil {
+			t.Fatal(err)
+		}
+		reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+		if err == nil {
+			reopened.Close()
+			t.Fatal("invalid retirement settlement survived restart")
+		}
+	}
+}
