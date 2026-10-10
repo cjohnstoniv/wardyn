@@ -16,12 +16,14 @@ func (m *Manager) beginContainment(a runnerwire.PendingAction, r localRun) error
 	default:
 		return errors.New("unknown pending containment action")
 	}
-	if r.Containment == nil || (a.Kind == types.RunnerActionKill && r.Containment.Operation != string(types.RunnerActionKill)) {
+	if r.Containment == nil || containmentRank(a.Kind) > containmentRank(types.RunnerActionKind(r.Containment.Operation)) {
 		r.Containment = &types.RunnerMutationFailure{ID: a.ID, Generation: r.Generation, Operation: string(a.Kind)}
 	}
-	marker := *r.Containment
-	marker.Contained = false
-	r.Containment = &marker
+	if r.Containment.Operation == string(a.Kind) {
+		marker := *r.Containment
+		marker.Contained = false
+		r.Containment = &marker
+	}
 	if r.Lease.TokenRenewedAt.After(r.LeaseAfter) {
 		r.LeaseAfter = r.Lease.TokenRenewedAt
 	}
@@ -30,6 +32,19 @@ func (m *Manager) beginContainment(a runnerwire.PendingAction, r localRun) error
 	delete(m.deadlines, a.RunID)
 	delete(m.pending, a.RunID)
 	return m.save()
+}
+
+func containmentRank(kind types.RunnerActionKind) int {
+	switch kind {
+	case types.RunnerActionKill:
+		return 3
+	case types.RunnerActionEnd:
+		return 2
+	case types.RunnerActionStopProxy:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // recoverContainment does not issue authority. H3 must authorize this exact

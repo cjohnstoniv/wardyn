@@ -120,7 +120,7 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	at := m.now().UTC()
 	r.ProxyStoppedAt = &at
 	outcome := "deferred"
-	if m.mutationsDrained(a.RunID) && r.Containment.Operation == string(a.Kind) {
+	if m.mutationsDrained(a.RunID) && (r.Containment.Contained || r.Containment.Operation == string(a.Kind)) {
 		outcome = "success"
 		marker := *r.Containment
 		marker.Contained = true

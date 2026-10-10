@@ -4,6 +4,7 @@
 package offline
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -138,5 +139,49 @@ func TestRenewableContainmentRequiresExactRecoveryAndFreshLease(t *testing.T) {
 	}
 	if err := reopened.BeforeRefCall(t.Context(), runnerwire.MethodReplaceProxy, id.String(), uuid.Nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+type endingSub struct{ *localSub }
+
+func (s endingSub) EndSandbox(ctx context.Context, ref string) error { return s.KillSandbox(ctx, ref) }
+
+func TestContainmentSupersessionIsMonotone(t *testing.T) {
+	for _, pair := range [][2]types.RunnerActionKind{
+		{types.RunnerActionStopProxy, types.RunnerActionEnd},
+		{types.RunnerActionEnd, types.RunnerActionStopProxy},
+		{types.RunnerActionKill, types.RunnerActionStopProxy},
+		{types.RunnerActionKill, types.RunnerActionEnd},
+	} {
+		t.Run(string(pair[0])+"-"+string(pair[1]), func(t *testing.T) {
+			m, sub, _, org := managerFixture(t)
+			m.sub = endingSub{sub}
+			id := createLocal(t, m, org)
+			if err := m.MutationFinished(t.Context(), runnerwire.MethodCreateSandbox, "", id, uuid.Nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			first := pendingContainment(m, id, pair[0])
+			if result, err := m.apply(t.Context(), first); err != nil || result.Outcome != "success" {
+				t.Fatalf("first: %+v %v", result, err)
+			}
+			original := *m.state.Runs[id].Containment
+			second := pendingContainment(m, id, pair[1])
+			if result, err := m.apply(t.Context(), second); err != nil || result.Outcome != "success" {
+				t.Fatalf("second permanently deferred: %+v %v", result, err)
+			}
+			marker := m.state.Runs[id].Containment
+			if containmentRank(pair[1]) > containmentRank(pair[0]) {
+				if marker.ID != second.ID || marker.Operation != string(pair[1]) {
+					t.Fatal("stronger action did not replace exact marker")
+				}
+				recover := pendingContainment(m, id, types.RunnerActionRecoverContainment)
+				recover.Recovery = &original
+				if _, err := m.apply(t.Context(), recover); err == nil {
+					t.Fatal("superseded recovery marker accepted")
+				}
+			} else if *marker != original {
+				t.Fatal("weaker action downgraded stronger containment")
+			}
+		})
 	}
 }
