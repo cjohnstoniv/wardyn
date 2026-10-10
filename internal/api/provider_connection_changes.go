@@ -11,7 +11,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-const providerAccessRecheck = "Could not check your connection. Wait a moment, then re-check."
+const providerAccessRecheck = "Could not check your connection. Your credential may still be stored. Wait a moment, then re-check."
 
 func (s *Server) providerInvalidations(before, after *types.ModelProviders) []secretstore.ProviderInvalidation {
 	var out []secretstore.ProviderInvalidation

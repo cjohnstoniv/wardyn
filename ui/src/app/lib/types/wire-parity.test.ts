@@ -34,6 +34,7 @@
 // Run: cd ui && pnpm vitest run src/app/lib/types/wire-parity.test.ts
 
 import { describe, it, expect } from "vitest";
+import { CONNECTIONS } from "../../components/wardyn/copy/door";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
@@ -582,4 +583,13 @@ describe("SetupProviderAccess cause fields", () => {
       expect(tsInterfaceBody(ts, "SetupProviderAccess")).toContain(`${key}?:`);
     }
   });
+});
+
+
+it("connection re-check sentence matches the server", () => {
+  const src = readFileSync(join(repoRoot(), "internal/api/provider_connection_changes.go"), "utf8");
+  const sentence = src.match(/const providerAccessRecheck = ("[^"\n]*")/);
+  expect(sentence).not.toBeNull();
+  expect(JSON.parse(sentence![1])).toBe(CONNECTIONS.STORE_UNREADABLE);
+  expect(CONNECTIONS.STORE_UNREADABLE).toContain("Your credential may still be stored");
 });
