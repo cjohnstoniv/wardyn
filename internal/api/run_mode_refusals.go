@@ -53,3 +53,9 @@ func runModeUnavailableMsg(path string) string {
 func runBackgroundOnlyMsg(door string) string {
 	return fmt.Sprintf("This run is a background task, so it has no %s. Its logs, audit trail and status stay available.", door)
 }
+
+// idleStopBackgroundMsg: a background task ends when its command or agent exits,
+// so a stop-when-idle setting has nothing to apply to.
+func idleStopBackgroundMsg() string {
+	return "A background task ends when its work exits, so it has no idle stop. Remove it, or choose an interactive environment."
+}

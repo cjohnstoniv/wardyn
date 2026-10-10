@@ -5,6 +5,7 @@ package types
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -25,6 +26,20 @@ const (
 // Valid reports whether e is one of the two modes. The empty value is not a mode.
 func (e RunExperience) Valid() bool {
 	return e == ExperienceBackground || e == ExperienceInteractive
+}
+
+// RunExperiences is every run type, in the order the console lists them.
+var RunExperiences = []RunExperience{ExperienceBackground, ExperienceInteractive}
+
+// ExperienceAllowed is the one predicate a pool's run-type limit calls: whether a
+// run of type e may start where allowed lists the run types the place permits
+// (Background only, Interactive only, or both). It fails closed: an empty list
+// permits nothing and an unset or unknown type is never allowed, so a caller
+// that has not resolved the run's type cannot slip through. Resolve an older
+// client's type with CreateRunRequest.EffectiveExperience (pkg/client), and a
+// stored run's with AgentRun.Experience.
+func ExperienceAllowed(allowed []RunExperience, e RunExperience) bool {
+	return e.Valid() && slices.Contains(allowed, e)
 }
 
 // BackgroundOnly is the one predicate every interactive door of a run calls

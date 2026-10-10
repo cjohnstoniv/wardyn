@@ -50,6 +50,9 @@ func TestRunModeRefusals(t *testing.T) {
 		{"an agent task needs a task", `"experience":"background","workload":{"kind":"agent_task","agent":"claude-code","task":" "},` + noRepos, reasonRunModeInvalid, "", 400},
 		{"a command carries no agent", `"experience":"background","workload":{"kind":"command","command":"make","agent":"claude-code"},` + noRepos, reasonRunModeInvalid, "", 400},
 		{"background has no startup", `"experience":"background",` + agentTask + `,"startup":{"kind":"none"},` + noRepos, reasonRunModeConflict, "", 422},
+		{"background has no idle stop", `"experience":"background",` + agentTask + `,"inline_policy":{"auto_stop_after_sec":600},` + noRepos, reasonRunModeConflict, idleStopBackgroundMsg(), 422},
+		{"nor an idle stop of never", `"experience":"background",` + agentTask + `,"inline_policy":{"auto_stop_after_sec":-1},` + noRepos, reasonRunModeConflict, idleStopBackgroundMsg(), 422},
+		{"an interactive environment keeps its idle stop", interactiveOK + `,"inline_policy":{"auto_stop_after_sec":600,"allowed_domains":["a.example.com"],"first_use_approval":"always_deny","min_confinement_class":"CC2"}`, "", "", 200},
 		{"background has no web gateway", `"experience":"background",` + agentTask + `,"inline_policy":{"ui_apps":[{"name":"ide","port":8080}]},` + noRepos, reasonRunModeConflict, "", 422},
 		{"background runs only the harness it names", `"experience":"background",` + agentTask + `,"tools":[` + codexTool + `],` + noRepos, reasonRunModeConflict, "", 422},
 		{"background command includes no tool", `"experience":"background","workload":{"kind":"command","command":"make"},"tools":[` + claudeTool + `],` + noRepos, reasonRunModeConflict, "", 422},
@@ -327,6 +330,7 @@ func TestRunModeRefusalSentencesMatchGolden(t *testing.T) {
 		"NO_REPOSITORIES_CONFLICT": func([]string) string { return noRepositoriesConflictMsg() },
 		"FIELD_UNAVAILABLE":        func(a []string) string { return runModeUnavailableMsg(a[0]) },
 		"BACKGROUND_ONLY":          func(a []string) string { return runBackgroundOnlyMsg(a[0]) },
+		"IDLE_STOP_BACKGROUND":     func([]string) string { return idleStopBackgroundMsg() },
 	}
 	if len(golden) != len(got) {
 		t.Fatalf("golden has %d sentences, the server has %d", len(golden), len(got))

@@ -303,6 +303,8 @@ func experienceConflictRefusal(req createRunRequest) *runRefusal {
 		switch {
 		case req.Startup != nil:
 			return runModeConflict("startup", "A background task starts its workload; startup is for an interactive environment.")
+		case req.InlinePolicy != nil && req.InlinePolicy.AutoStopAfterSec != 0:
+			return runError(http.StatusUnprocessableEntity, reasonRunModeConflict, idleStopBackgroundMsg())
 		case req.InlinePolicy != nil && len(req.InlinePolicy.UIApps) > 0:
 			return runModeConflict("inline_policy.ui_apps", "A background task has no web application gateway.")
 		case w != nil && w.Kind == client.WorkloadCommand && len(req.Tools) > 0:

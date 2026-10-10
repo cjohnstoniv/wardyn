@@ -106,3 +106,30 @@ func TestDispatchCarrierValidators(t *testing.T) {
 		t.Error("the duplicate names its entry")
 	}
 }
+
+// TestExperienceAllowedIsThePoolRunTypeLimit pins the predicate a pool's
+// allowed-run-types limit calls: both types, one type, and failing closed.
+func TestExperienceAllowedIsThePoolRunTypeLimit(t *testing.T) {
+	both := RunExperiences
+	for _, tc := range []struct {
+		name    string
+		allowed []RunExperience
+		e       RunExperience
+		want    bool
+	}{
+		{"both allow background", both, ExperienceBackground, true},
+		{"both allow interactive", both, ExperienceInteractive, true},
+		{"background only refuses interactive", []RunExperience{ExperienceBackground}, ExperienceInteractive, false},
+		{"background only allows background", []RunExperience{ExperienceBackground}, ExperienceBackground, true},
+		{"interactive only refuses background", []RunExperience{ExperienceInteractive}, ExperienceBackground, false},
+		{"an empty list permits nothing", nil, ExperienceBackground, false},
+		{"an unset type is never allowed", both, "", false},
+		{"an unknown type is never allowed", both, "batch", false},
+		{"an unset type is not allowed even if the list names it", []RunExperience{""}, "", false},
+		{"an unknown entry allows nothing it does not name", []RunExperience{"batch"}, ExperienceBackground, false},
+	} {
+		if got := ExperienceAllowed(tc.allowed, tc.e); got != tc.want {
+			t.Errorf("%s: = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

@@ -7,5 +7,6 @@
   { "key": "START_FOLDER_SHAPE", "args": ["../etc"], "text": "../etc is not a folder inside the attachment. Use a relative path with no \"..\"." },
   { "key": "NO_REPOSITORIES_CONFLICT", "args": [], "text": "You chose no repositories or drives, but something is attached. Remove it or remove the choice." },
   { "key": "FIELD_UNAVAILABLE", "args": ["tools: more than one included tool"], "text": "tools: more than one included tool is not available on this server yet, so the run was not created." },
-  { "key": "BACKGROUND_ONLY", "args": ["terminal"], "text": "This run is a background task, so it has no terminal. Its logs, audit trail and status stay available." }
+  { "key": "BACKGROUND_ONLY", "args": ["terminal"], "text": "This run is a background task, so it has no terminal. Its logs, audit trail and status stay available." },
+  { "key": "IDLE_STOP_BACKGROUND", "args": [], "text": "A background task ends when its work exits, so it has no idle stop. Remove it, or choose an interactive environment." }
 ]
