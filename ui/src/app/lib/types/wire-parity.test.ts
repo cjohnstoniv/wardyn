@@ -652,6 +652,13 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(tsInterfaceBody(govTs, "AutonomyResolution")).toMatch(/bound_by\?: AutonomyBoundKey\[\];/);
   });
 
+  it("GovernanceLimits.deny_placements is the Go field, typed by the closed placement set", () => {
+    const goGov = readFileSync(join(root, "internal/types/governance.go"), "utf8");
+    expect(goGov).toMatch(/DenyPlacements\s+\[\]Placement\s+`json:"deny_placements,omitempty"`/);
+    const govTs = readFileSync(join(root, "ui/src/app/lib/api/governance.ts"), "utf8");
+    expect(tsInterfaceBody(govTs, "GovernanceLimits")).toMatch(/deny_placements\?: PlacementValue\[\];/);
+  });
+
   it("SetupItemResidency names every residency the setup checklist emits", () => {
     const goRaw = readFileSync(join(root, "internal/api/compose_setup.go"), "utf8");
     const tsRuns = readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8");

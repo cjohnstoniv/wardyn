@@ -144,3 +144,16 @@ func startInternalListener(hop *hopTLS, f *bootFlags, handler http.Handler, errC
 	}()
 	return srv
 }
+
+// startRelayListener serves runners' relay streams (api.Server.ServeRelay) with
+// this listener's TLS, so a local run's proxy ends its TLS here just as a
+// cluster run's does at the internal listener, and the runner between them
+// carries ciphertext only. nil hop: no internal TLS listener, so every relay
+// stream is refused.
+func startRelayListener(hop *hopTLS, srv *api.Server) *http.Server {
+	if hop == nil {
+		return nil
+	}
+	slog.Info("wardynd: serving runner relay streams with the internal listener's TLS")
+	return srv.ServeRelay(hop.server)
+}

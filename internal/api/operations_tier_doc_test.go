@@ -69,6 +69,9 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/admin/template-group-admins", "the `/admin/template-group-admins` routes"},
 	{"PUT /api/v1/admin/template-group-admins", "the `/admin/template-group-admins` routes"},
 	{"DELETE /api/v1/admin/template-group-admins", "the `/admin/template-group-admins` routes"},
+	{"GET /api/v1/shared-secrets", "the `/shared-secrets` routes"},
+	{"PUT /api/v1/shared-secrets/{name}", "the `/shared-secrets` routes"},
+	{"DELETE /api/v1/shared-secrets/{name}", "the `/shared-secrets` routes"},
 	{"PUT /api/v1/site-config", "`PUT /site-config`"},
 	// R1's four operator-topology reads: re-tiered to admin this wave and
 	// filed as docTierUndocumented until the docs pass landed the row naming
@@ -254,6 +257,11 @@ var docTierRows = []struct{ route, token string }{
 var docTierUndocumented = map[string]string{
 	"GET /api/v1/governance/egress-baseline": "0.9 B-P1: the tier-table row and the Egress baseline section are the docs pass's (the OPERATIONS.md prose budget is its to move)",
 	"PUT /api/v1/governance/egress-baseline": "0.9 B-P1: as the GET above",
+	// 0.9 #1508: the invitation tier rows are the docs lane's (the OPERATIONS.md prose budget is its to move).
+	"POST /api/v1/people/{principal}/invitations": "0.9 F-1508: the tier-table row is the docs pass's",
+	"GET /api/v1/people/{principal}/invitations":  "0.9 F-1508: as the POST above",
+	"GET /api/v1/invitations":                     "0.9 F-1508: as the POST above",
+	"DELETE /api/v1/invitations/{id}":             "0.9 F-1508: as the POST above",
 }
 
 // TestOperationsTierTableMatchesRouteMatrix pins the "What admin-only still

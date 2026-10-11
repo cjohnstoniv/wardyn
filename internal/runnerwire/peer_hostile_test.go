@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -367,4 +368,105 @@ func TestBothClosedUndrainedStreamReleasesHeldBytes(t *testing.T) {
 	if h := p.org.held.Load(); h != 0 {
 		t.Fatalf("held = %d after a late Read, want 0", h)
 	}
+}
+
+// Characterization: a PING is answered by a PONG echoing its payload, and DATA
+// for a stream this side does not hold comes back as connection credit. An
+// unchanged peer relies on both.
+func TestPingEchoAndDroppedDataCredit(t *testing.T) {
+	r := newRaw(t, PeerConfig{Org: true})
+	ping := EncodePing(time.Unix(0, 42))
+	r.write(t, Frame{Type: TypePing, Payload: ping})
+	if f := r.readType(t, TypePong); !bytes.Equal(f.Payload, ping) {
+		t.Fatalf("PONG payload %x, want the PING's %x", f.Payload, ping)
+	}
+	r.write(t, Frame{Type: TypeData, Stream: 7, Payload: []byte("abc")})
+	f := r.readType(t, TypeWindow)
+	if n, _ := DecodeWindow(f.Payload); f.Stream != 0 || n != 3 {
+		t.Fatalf("WINDOW stream %d +%d, want connection +3", f.Stream, n)
+	}
+}
+
+// R2-0103: while this side's write is stalled, a flood of PINGs and of DATA for
+// unknown streams must not leave a goroutine per frame waiting to write.
+func TestRepliesToAFloodDoNotPileUpWhileWritesStall(t *testing.T) {
+	handled := make(chan struct{}, 1)
+	r := newRaw(t, PeerConfig{Org: true, OnOpen: func(*Stream, Open) error { handled <- struct{}{}; return nil }})
+	for range 64 { // fill the loopback; the raw end never reads
+		if err := r.p.Send(ctxT(t), Frame{Type: TypeGoaway}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := runtime.NumGoroutine()
+	const flood = 500
+	for i := range flood {
+		r.write(t, Frame{Type: TypePing, Payload: EncodePing(time.Unix(0, int64(i+1)))})
+		r.write(t, Frame{Type: TypeData, Stream: 7, Payload: []byte{1}})
+	}
+	open, _ := json.Marshal(Open{Kind: KindRelay})
+	r.write(t, Frame{Type: TypeOpen, Stream: 1, Payload: open})
+	select {
+	case <-handled: // the read loop has handled every frame before the OPEN
+	case <-time.After(3 * time.Second):
+		t.Fatal("the read loop did not reach the OPEN")
+	}
+	if grown := runtime.NumGoroutine() - base; grown > flood/10 {
+		t.Fatalf("%d goroutines wait to answer %d PINGs and %d DATA frames", grown, flood, flood)
+	}
+}
+
+// Characterization: on a healthy link an OPEN is answered: RESET refused for a
+// call not in flight, RESET capacity past MaxStreams, OPEN_OK when accepted.
+func TestOpenAnswersReachTheOpener(t *testing.T) {
+	r := newRaw(t, PeerConfig{Org: true, OnOpen: func(*Stream, Open) error { return nil }})
+	relay, _ := json.Marshal(Open{Kind: KindRelay})
+	r.write(t, Frame{Type: TypeOpen, Stream: 1, Payload: relay})
+	if f := r.readType(t, TypeOpenOK); f.Stream != 1 {
+		t.Fatalf("OPEN_OK for stream %d, want 1", f.Stream)
+	}
+	orphan, _ := json.Marshal(Open{Kind: KindPTY, Call: 999999})
+	r.write(t, Frame{Type: TypeOpen, Stream: 3, Payload: orphan})
+	if rst := r.readType(t, TypeReset); rst.Stream != 3 {
+		t.Fatalf("RESET for stream %d, want 3", rst.Stream)
+	} else if code, _ := DecodeReset(rst.Payload); code != ResetRefused {
+		t.Fatalf("RESET code %d, want refused", code)
+	}
+}
+
+// R2-0112: while this side's write is stalled, a flood of OPENs it refuses, or
+// accepts and the peer then resets, must not leave a goroutine per frame
+// waiting to write the answer.
+func TestOpenAnswersDoNotPileUpWhileWritesStall(t *testing.T) {
+	handled := make(chan struct{}, 1)
+	r := newRaw(t, PeerConfig{Org: true, OnOpen: func(_ *Stream, o Open) error {
+		if o.Kind == KindPTY {
+			handled <- struct{}{}
+		}
+		return nil
+	}})
+	for range 64 { // fill the loopback; the raw end never reads
+		if err := r.p.Send(ctxT(t), Frame{Type: TypeGoaway}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := runtime.NumGoroutine()
+	orphan, _ := json.Marshal(Open{Kind: KindRelay, Call: 999999})
+	relay, _ := json.Marshal(Open{Kind: KindRelay})
+	const flood = 500
+	for range flood {
+		if r.raw.WriteFrame(ctxT(t), Frame{Type: TypeOpen, Stream: 1, Payload: orphan}) != nil ||
+			r.raw.WriteFrame(ctxT(t), Frame{Type: TypeOpen, Stream: 3, Payload: relay}) != nil ||
+			r.raw.WriteFrame(ctxT(t), Frame{Type: TypeReset, Stream: 3, Payload: EncodeReset(ResetCancelled)}) != nil {
+			break // the session ended
+		}
+	}
+	pty, _ := json.Marshal(Open{Kind: KindPTY})
+	_ = r.raw.WriteFrame(ctxT(t), Frame{Type: TypeOpen, Stream: 5, Payload: pty})
+	select {
+	case <-handled: // the read loop has handled every frame before this OPEN
+	case <-r.p.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("the read loop neither reached the last OPEN nor ended the session")
+	}
+	waitFor(t, 3*time.Second, "answer goroutines to settle", func() bool { return runtime.NumGoroutine()-base <= flood/10 })
 }

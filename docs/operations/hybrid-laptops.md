@@ -3,6 +3,7 @@
 # Managed laptops: client-mode runners
 
 - In 0.9 a laptop joins an org as a **client-mode runner**: it runs `wardyn-runnerd`, not a control plane, and the person who owns it claims it.
+- Install it as a per-user service with [`deploy/runner/install.sh`](../../deploy/runner/install.sh): see [Run as a service](../runner-registration.md#run-as-a-service).
 - Design: [docs/design/0.9/PLAN.md](../design/0.9/PLAN.md). Org enrolment of a full daemon (`WARDYN_ORG_URL`) still works in 0.9, logs a deprecation warning at boot, and is removed in 1.0; see [Legacy org enrolment](#legacy-org-enrolment-deprecated).
 
 > [!NOTE]
@@ -42,6 +43,9 @@
 | Revoked by the owner or a security operator | The org marks that runner's runs lost and runs the kill cascade; the runner stops every governed proxy |
 
 "Offline" and "ungoverned" are never the same thing: an offline runner is still governed and runs nothing new.
+
+> [!NOTE]
+> Behind a shared ingress, unauthenticated runner connections from one address share one pre-auth rate-limit bucket, so put per-client rate limits on the ingress in front of `/api/v1/runners/{id}/stream`.
 
 ## Legacy org enrolment (deprecated)
 

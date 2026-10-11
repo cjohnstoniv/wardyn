@@ -171,6 +171,7 @@ func pgHarnessWithRunner(t *testing.T, r runner.Runner) (*Server, *pgxpool.Pool)
 		},
 		ControlPlaneURL: "http://wardynd:8080",
 	})
+	seedRunPool(t, pool)
 	return srv, pool
 }
 

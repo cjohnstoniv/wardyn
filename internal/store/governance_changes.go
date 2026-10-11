@@ -315,12 +315,14 @@ func (s PG) DryRunGovernance(ctx context.Context, fn func(q Querier) error) erro
 }
 
 // EraseGovernanceChangePersonalFields clears the proposer and decider (their emails too, and the
-// reason a decider typed) of every change whose recorded principal is one of names or whose recorded
-// email matches one of them (case folded), and returns how many rows it touched. A pending change whose proposer is erased leaves
+// reason a decider typed) of every change whose recorded principal is one of principals or whose
+// recorded email is one of emails (case folded), and returns how many rows it touched. A principal is
+// never matched against the email column: that column holds the claim the proposer signed in with,
+// which can spell another person's principal. A pending change whose proposer is erased leaves
 // pending in the same statement (to expired), so a change with no recorded proposer can never be
 // approved. Idempotent: a row already cleared matches nothing.
-func (s PG) EraseGovernanceChangePersonalFields(ctx context.Context, names []string) (int, error) {
-	if len(names) == 0 {
+func (s PG) EraseGovernanceChangePersonalFields(ctx context.Context, principals, emails []string) (int, error) {
+	if len(principals)+len(emails) == 0 {
 		return 0, nil
 	}
 	tag, err := s.Pool.Exec(ctx, `
@@ -336,7 +338,7 @@ func (s PG) EraseGovernanceChangePersonalFields(ctx context.Context, names []str
 			reason            = CASE WHEN decided_by = ANY($1) OR lower(decided_by_email) = ANY($2) THEN '' ELSE reason END
 		WHERE proposed_by = ANY($1) OR lower(proposed_by_email) = ANY($2)
 		   OR decided_by = ANY($1) OR lower(decided_by_email) = ANY($2)`,
-		names, lowerAll(names))
+		principals, lowerAll(emails))
 	if err != nil {
 		return 0, fmt.Errorf("store: erase governance change personal fields: %w", err)
 	}

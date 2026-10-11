@@ -10,13 +10,13 @@ An operator can mint for a named person with `wardyn runner token --owner <princ
 
 The default state directory is `wardyn/runner` beneath the operating system's user configuration directory. Pass the same `--state-dir` to registration, serving and claim when overriding it. The key and identity metadata are regular files with mode `0600` in a private directory. Loading refuses an unsafe key file, a changed fingerprint or a different organisation URL.
 
-Registration never overwrites an existing identity. If registration fails after key creation, obtain a fresh token and use a new private state directory. A revoked runner must register a new key and complete a new owner claim; reusing its old key does not reactivate it. A security admin revokes a runner with `DELETE /api/v1/runners/{id}`; its owner can revoke their own with `DELETE /api/v1/me/runners/{id}`, adding `?reason=not_mine` for a runner someone else registered with a token made for them. Revocation ends every run on the runner KILLED in the same transaction, then closes its live session; migration `0151_runner_revoked_by` records who revoked it and why. Delete the single-use token file after registration.
+Registration never overwrites an existing identity. If registration fails after key creation, use a new private state directory. The error carries the server's reason; obtain a fresh token only when the server refused the token or had already used it. A revoked runner must register a new key and complete a new owner claim; reusing its old key does not reactivate it. A security admin revokes a runner with `DELETE /api/v1/runners/{id}`; its owner can revoke their own with `DELETE /api/v1/me/runners/{id}`, adding `?reason=not_mine` for a runner someone else registered with a token made for them. Revocation ends every run on the runner KILLED in the same transaction, then closes its live session, within one 15-second ping interval when another server replica holds it; migration `0151_runner_revoked_by` records who revoked it and why. Delete the single-use token file after registration.
 
 The API doors are `POST /api/v1/me/runners/tokens`, operator-only `POST /api/v1/runners/tokens`, anonymous token redemption at `POST /api/v1/runners/register`, and owner-only `POST /api/v1/me/runners/{id}/claim`. Registration responses carry a runner id, fingerprint, state and organisation binding, never a human identity. Inventory and revocation use the separate runners management surface.
 
 Migration `0142_runner_registration` adds hashed single-use registration tokens and organisation URL bindings to the existing runners table. It does not change run placement records.
 
-Migration `0152_runner_pools` adds the runner pool catalogue: pools, their members, remote-provided use policies and the organisation defaults. It records no run binding, and a pool never claims or transfers a runner.
+Migration `0152_runner_pools` adds the runner pool catalogue: pools, their members, remote-provided use policies and the organisation defaults. It records no run binding, and a pool never claims or transfers a runner. Migration `0158_runner_pool_limits` adds the pool's `limits`: an administrator sets them with `limits` on create and replaces the whole block with `limits` on update (an omitted field, such as `max_concurrent_runs`, is removed); a pool with none adds no bound of its own. A run is admitted by its pool's run types and barriers, and the pool's lifetime bounds its end; CPU, memory, idle stop and the concurrent-run cap are stored and audited but not yet applied to runs.
 
 ## Runner enablement
 
@@ -64,3 +64,30 @@ wardyn-runnerd serve --org https://wardyn.example \
 | `--recording-store` / `WARDYN_RECORDING_STORE` | Organisation recording mode: `pg` or `fs` enables capture; `off` disables capture. Default `pg`; no local database is created. |
 
 Identity and organisation binding are checked before connecting. Private lifecycle and output state survive reconnects. After restart, existing proxies are contained before new work is admitted. Revocation stops reconnects while local containment continues until the daemon exits.
+
+## Run as a service
+
+`deploy/runner/install.sh` installs `wardyn-runnerd` for one person, as that person, and keeps `wardyn-runnerd serve` running. The service is per user, not a root service: the runner identity sits in the person's own configuration directory, where `wardyn runner claim` looks for it. A root-run install for managed fleets needs a signed `.pkg`, which 0.9 does not ship.
+
+1. Download `wardyn-runnerd-<os>-<arch>` and `wardyn-runner-units.tar.gz` from the release, and verify them against the signed `SHA256SUMS` as described in [Verify the release assets](VERIFY.md#5-verify-the-release-assets), running `sha256sum -c --ignore-missing SHA256SUMS` since you hold two files.
+2. Run `tar -xzf wardyn-runner-units.tar.gz`, which unpacks to `runner/`, then pass the binary with `--binary ./wardyn-runnerd-<os>-<arch>`. It needs no exec bit.
+3. Save the registration token in a private file and run `./runner/install.sh --org https://wardyn.example.com --binary ./wardyn-runnerd-<os>-<arch> --token-file ./registration-token` as yourself.
+4. Run `wardyn runner claim`, as in [Register a runner](#register-a-runner).
+
+The installer does these steps in order and stops at the first refusal:
+
+- It refuses to run as root, and requires `docker info` to succeed for the person.
+- It copies the binary to `~/.local/share/wardyn/bin` on Linux or `~/Library/Application Support/wardyn/bin` on macOS.
+- It sets the proxy image to `ghcr.io/cjohnstoniv/wardyn-proxy:<version>` for a release binary. A development build refuses unless `--proxy-image` is given.
+- It creates the `wardyn-internal` bridge, or the one named by `--internal-network`, when it is missing.
+- It registers the runner with `--token-file` when no identity exists, and never registers an existing identity again.
+- It installs and starts the service.
+
+| System | Service | Settings | Logs |
+|---|---|---|---|
+| Linux | systemd user unit `wardyn-runnerd.service` | `~/.config/wardyn/runnerd.env`, mode `0600` | `journalctl --user -u wardyn-runnerd` |
+| macOS | LaunchAgent `com.wardyn.runnerd`, from login | the agent's `EnvironmentVariables` | `~/Library/Logs/wardyn/runnerd.log` |
+
+Both restart `serve` after a crash. On Linux the unit runs while you are logged in; run `loginctl enable-linger $USER` to keep it running after logout and from boot. The installer prints that command and never runs it. A `DOCKER_HOST` set when you run the installer is carried into the service.
+
+`./install.sh --uninstall` stops the service and removes the unit or agent, the settings file and the installed binary. It keeps `runner.json` and `runner.key`. Revoke the runner itself in *My runner*.

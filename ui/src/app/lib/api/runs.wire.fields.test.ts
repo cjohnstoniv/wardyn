@@ -169,6 +169,10 @@ const REPLACED_BY_RUN_MODE = ["agent", "task", "interactive", "task_mode", "inte
 // moves it into runWireBody. preset/preset_version are the launcher API's
 // (#1143); the console sends the explicit spec and has no preset UI.
 const UI_NEVER_SENDS = new Set([
+  // The create-time end (#1319): the console's Ends picker is a later slice; the
+  // CLI and API send these today.
+  "ends_after_sec",
+  "no_end",
   "devcontainer_repo",
   "devcontainer_ref",
   "model_provider",

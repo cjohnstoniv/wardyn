@@ -46,8 +46,8 @@ func TestRunContractRefusals(t *testing.T) {
 		{"remote is today's behaviour", `,"placement":"remote"`, "", "", 200},
 		{"pool id not a uuid", `,"runner_pool_id":"build-farm"`, string(runnerpool.ReasonInvalid), runnerpool.InvalidMsg(), 400},
 		{"pool id nil uuid", `,"runner_pool_id":"00000000-0000-0000-0000-000000000000"`, string(runnerpool.ReasonInvalid), runnerpool.InvalidMsg(), 400},
-		{"pool id is not dropped", `,"runner_pool_id":"` + ws1 + `"`, reasonRequestFieldUnavailable, "", 422},
-		{"pool id beside remote is not dropped", `,"placement":"remote","runner_pool_id":"` + ws2 + `"`, reasonRequestFieldUnavailable, "", 422},
+		{"pool id on a server with no pool storage is not dropped", `,"runner_pool_id":"` + ws1 + `"`, string(runnerpool.ReasonPoolsUnavailable), runnerpool.UnavailableServerMsg(), 501},
+		{"pool id beside remote on a server with no pool storage", `,"placement":"remote","runner_pool_id":"` + ws2 + `"`, string(runnerpool.ReasonPoolsUnavailable), runnerpool.UnavailableServerMsg(), 501},
 		{"allowed image is not dropped", `,"allowed_image":"ghcr.io/acme/dev:1"`, reasonRequestFieldUnavailable, "", 422},
 		{"allowed image with spaces", `,"allowed_image":"a b"`, reasonAllowedImageInvalid, "", 400},
 		{"negative cpu", `,"resources":{"cpu_millis":-1}`, reasonResourcesInvalid, "", 400},
@@ -305,16 +305,15 @@ func TestAllowedImageIsNeverBesideABuiltImage(t *testing.T) {
 	}
 }
 
-// TestRunnerPoolIDIsRefusedNotDropped pins the stub at the contract step itself:
-// a pool the server cannot honour is never silently ignored, and a request that
-// names none is untouched.
-func TestRunnerPoolIDIsRefusedNotDropped(t *testing.T) {
+// TestRunnerPoolIDPassesTheContractStep: the contract step checks a pool id's shape only. Whether the
+// pool exists and is the caller's to use is stepPlacement's, so a named pool is neither refused here as
+// unapplied nor dropped (TestPlacement_StoreWithoutPoolsKeepsUnpooledBehaviour).
+func TestRunnerPoolIDPassesTheContractStep(t *testing.T) {
 	s := &Server{}
-	if refusal := s.runContractRefusal(createRunRequest{}); refusal != nil {
-		t.Fatalf("a request with no pool is refused: %+v", refusal)
+	if refusal := s.runContractRefusal(createRunRequest{RunnerPoolID: "5b2f1c1e-7a4e-4a39-9f6e-0a8f4c1d2b3c"}); refusal != nil {
+		t.Fatalf("a well-formed pool id is refused by the contract step: %+v", refusal)
 	}
-	refusal := s.runContractRefusal(createRunRequest{RunnerPoolID: "5b2f1c1e-7a4e-4a39-9f6e-0a8f4c1d2b3c"})
-	if refusal == nil || refusal.body.Reason != reasonRequestFieldUnavailable || refusal.status != http.StatusUnprocessableEntity {
-		t.Fatalf("a named pool was not refused as unavailable: %+v", refusal)
+	if refusal := s.runContractRefusal(createRunRequest{RunnerPoolID: "nope"}); refusal == nil || refusal.body.Reason != string(runnerpool.ReasonInvalid) {
+		t.Fatalf("a malformed pool id: %+v", refusal)
 	}
 }

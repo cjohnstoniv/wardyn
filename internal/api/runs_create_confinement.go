@@ -5,11 +5,15 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -111,8 +115,8 @@ func appendCredentialConfinementAdvisory(warnings []string, spec types.RunPolicy
 }
 
 // resolveEnforcedConfinement resolves the run's confinement class and gates it
-// against what the runner and identity provider can actually deliver (invariant
-// 5, fail closed). The request value wins when set (never WEAKER than the
+// against what the placement the run gets and the identity provider can
+// actually deliver (invariant 5, fail closed). The request value wins when set (never WEAKER than the
 // policy minimum); an unspecified request defaults to the STRONGEST class the
 // runner advertises at or above the policy minimum (strongestAdvertisedAtOrAbove).
 // The deterministic BLAST-RADIUS floor then raises powerful-credential
@@ -121,47 +125,67 @@ func appendCredentialConfinementAdvisory(warnings []string, spec types.RunPolicy
 // CC2, so a rank check would pass a CC2 demand and fail later with a raw docker
 // error). Writes the HTTP error itself and returns ok=false on any refusal.
 // Extracted verbatim from handleCreateRun.
-func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.ResponseWriter, spec types.RunPolicySpec, reqCC types.ConfinementClass, baseline composer.Baseline) (types.ConfinementClass, bool) {
+//
+// offered, when not nil, is the set the DEFAULT class is chosen from instead of the deployment's union:
+// a pooled run is placed on one of its pool's eligible candidates, so its default barrier is the
+// strongest one of those, and create, Review and the preview agree on it. The membership check below
+// still reads the capabilities of the placement and runner the request names.
+func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.ResponseWriter, p types.Placement, runnerID uuid.UUID, spec types.RunPolicySpec, reqCC types.ConfinementClass, baseline composer.Baseline, offered []types.ConfinementClass) (types.ConfinementClass, bool) {
 	// Capabilities are read BEFORE the pure math now, not after: the default
 	// branch needs the advertised set to pick the strongest class rather than
-	// just the policy minimum. Still one read, still fail-closed on a Capabilities
-	// error — only its place in the function moved.
+	// just the policy minimum. Still one read, still fail-closed on any error:
+	// an unreadable answer or a runner that is offline refuses, since an absent
+	// answer is never "nothing is required".
+	//
+	// ponytail: headless API-only mode (-runner none, the default) wires no
+	// executor and still creates PENDING runs, so for the remote placement there
+	// is nothing to read and no membership to check. Refusing there instead
+	// (placementCapabilities already answers errNoRemoteExecutor) is a product
+	// call: the hermetic UI e2e backend creates runs in that mode.
+	headless := p == types.PlacementRemote && s.cfg.Runner == nil
 	var caps runner.Capabilities
-	if s.cfg.Runner != nil {
-		var cerr error
-		caps, cerr = s.cfg.Runner.Capabilities(ctx)
-		if cerr != nil {
-			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunnerCapabilitiesUnavailable, loggedMsg(ctx, "runner capabilities unavailable", cerr))
+	if !headless {
+		pc, err := s.placementCapabilities(ctx, p, runnerID)
+		if err != nil {
+			var ref *placement.Refusal
+			if errors.As(err, &ref) {
+				writeErrorReason(w, ref.Reason.Status(), string(ref.Reason), ref.Error())
+				return "", false
+			}
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunnerCapabilitiesUnavailable, loggedMsg(ctx, "runner capabilities unavailable", err))
 			return "", false
 		}
+		caps = pc.Capabilities
 	}
 
-	enforced, err := enforcedConfinement(spec, reqCC, caps.ConfinementClasses, baseline)
+	defaultFrom := caps.ConfinementClasses
+	if offered != nil {
+		defaultFrom = offered
+	}
+	enforced, err := enforcedConfinement(spec, reqCC, defaultFrom, baseline)
 	if err != nil {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return "", false
 	}
 
 	// Confinement gating: refuse to schedule a run whose confinement class the
-	// runner cannot structurally enforce (invariant 5, fail closed).
-	if s.cfg.Runner != nil {
-		// Membership, not rank: CC2 (gVisor/runsc) and CC3 (Kata/krun) resolve to
-		// INDEPENDENT runtimes, so a host can advertise a non-contiguous set (e.g. a
-		// Kata-only host advertises [CC1, CC3], no CC2). A rank check —
-		// confinementGE(best, enforced) — would let a CC2 demand pass on that host
-		// because CC3 outranks CC2, then fail at sandbox create with a raw docker
-		// error. Require the exact enforced class to be advertised. enforced=="" means
-		// no class is required (policy floor unset, no request) ⇒ any runner passes.
-		// Also the fail-closed net for a floor (explicit or defaulted) the runner
-		// cannot enforce at all — strongestAdvertisedAtOrAbove falls back to the
-		// floor unchanged when nothing advertised meets it, so THIS check is what
-		// still 422s that case exactly as it did before the default rule existed.
-		if enforced != "" && !slices.Contains(caps.ConfinementClasses, enforced) {
-			writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassUnsupported, fmt.Sprintf(
-				"runner %q cannot enforce confinement_class %s (available: %s)",
-				caps.Driver, enforced, classesOrNone(caps.ConfinementClasses)))
-			return "", false
-		}
+	// placement cannot structurally enforce (invariant 5, fail closed).
+	// Membership, not rank: CC2 (gVisor/runsc) and CC3 (Kata/krun) resolve to
+	// INDEPENDENT runtimes, so a host can advertise a non-contiguous set (e.g. a
+	// Kata-only host advertises [CC1, CC3], no CC2). A rank check —
+	// confinementGE(best, enforced) — would let a CC2 demand pass on that host
+	// because CC3 outranks CC2, then fail at sandbox create with a raw docker
+	// error. Require the exact enforced class to be advertised. enforced=="" means
+	// no class is required (policy floor unset, no request) ⇒ any runner passes.
+	// Also the fail-closed net for a floor (explicit or defaulted) the runner
+	// cannot enforce at all — strongestAdvertisedAtOrAbove falls back to the
+	// floor unchanged when nothing advertised meets it, so THIS check is what
+	// still 422s that case exactly as it did before the default rule existed.
+	if !headless && enforced != "" && !slices.Contains(caps.ConfinementClasses, enforced) {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassUnsupported, fmt.Sprintf(
+			"runner %q cannot enforce confinement_class %s (available: %s)",
+			caps.Driver, enforced, classesOrNone(caps.ConfinementClasses)))
+		return "", false
 	}
 
 	// Reject cloud_sts grants up front: the embedded provider hard-requires

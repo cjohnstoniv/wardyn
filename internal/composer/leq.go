@@ -272,6 +272,9 @@ func leqLimits(a, b types.GovernanceLimits) bool {
 			return false
 		}
 	}
+	if slices.ContainsFunc(b.DenyPlacements, func(p types.Placement) bool { return !slices.Contains(a.DenyPlacements, p) }) {
+		return false // a placement denial the base keeps must stay
+	}
 	for _, p := range [][2]int{
 		{a.MaxConcurrentRuns, b.MaxConcurrentRuns}, {a.MaxCPUMillis, b.MaxCPUMillis},
 		{a.MaxMemoryMiB, b.MaxMemoryMiB}, {a.MaxEphemeralDiskMiB, b.MaxEphemeralDiskMiB},

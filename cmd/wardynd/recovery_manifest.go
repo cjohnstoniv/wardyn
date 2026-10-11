@@ -113,8 +113,9 @@ func recoveryManifestMode(f *bootFlags, verify bool) error {
 // createRecoveryManifest writes <set>/manifest.json once, mode 0600. It never overwrites an existing manifest.
 func createRecoveryManifest(ctx context.Context, in manifestSources) error {
 	dsn, set, spoolBase := in.DSN, in.Set, in.SpoolBase
-	if spoolBase == "." || spoolBase == "" {
-		return errors.New("refusing to write the manifest: WARDYN_AUDIT_SPOOL names no spool file")
+	// An empty WARDYN_AUDIT_SPOOL disables the spool: the manifest records none, and verify pairs none.
+	if spoolBase == "." {
+		spoolBase = ""
 	}
 	root, err := os.OpenRoot(set)
 	if err != nil {
@@ -239,8 +240,8 @@ func readRecoveryManifest(dir string) (recoveryManifest, error) {
 	if m.Manifest != recoveryManifestVersion {
 		return m, refusedTo("verify the set", "%s is manifest version %d; this binary reads version %d", recoveryManifestFile, m.Manifest, recoveryManifestVersion)
 	}
-	if b := m.AuditSpool.Basename; b == "" || b == "." || b != filepath.Base(b) {
-		return m, refusedTo("verify the set", "%s names no spool file: audit_spool.basename must be a plain file name", recoveryManifestFile)
+	if b := m.AuditSpool.Basename; b != "" && (b == "." || b != filepath.Base(b)) {
+		return m, refusedTo("verify the set", "%s names no spool file: audit_spool.basename must be a plain file name, or empty when the spool is disabled", recoveryManifestFile)
 	}
 	return m, nil
 }
@@ -285,9 +286,13 @@ func recoverySourceOf(dsn string) (recoverySource, error) {
 }
 
 // stageSpoolFiles hashes audit/<base>, its .consumed and its .quarantine in the set. An absent file is
-// recorded as absent; one that is not a regular file, or that resolves outside the set, is an error.
+// recorded as absent; one that is not a regular file, or that resolves outside the set, is an error. An
+// empty base is a disabled spool: nothing is staged.
 func stageSpoolFiles(root *os.Root, base string) (recoverySpool, error) {
 	out := recoverySpool{Basename: base}
+	if base == "" {
+		return out, nil
+	}
 	var err error
 	if out.Spool, err = hashStagedFile(root, "audit/"+base); err != nil {
 		return out, err
