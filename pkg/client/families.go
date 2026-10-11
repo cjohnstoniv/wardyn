@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -231,6 +233,10 @@ type SiteConfigPutResult struct {
 	// because the console has no branding record yet. Apply again after saving
 	// the Branding card.
 	BrandingLogoPending bool `json:"branding_logo_pending,omitempty"`
+	// EgressBaselineIgnored is set by the SDK, not the server: the document named an egress baseline
+	// (egress.baseline_hosts, or a baseline mark on an internal host) that differs from the stored
+	// one, and PutSiteConfigResult did not send it. Only PUT /governance/egress-baseline writes it.
+	EgressBaselineIgnored bool `json:"-"`
 	// ModelProviderWarnings are advisories on the model_providers block, such as an azure_foundry
 	// endpoint that resolves to a private address no internal_hosts entry covers.
 	ModelProviderWarnings []string `json:"model_provider_warnings,omitempty"`
@@ -238,11 +244,45 @@ type SiteConfigPutResult struct {
 
 // PutSiteConfigResult is PutSiteConfig with every advisory signal, including
 // the ones added after its signature was fixed. PUT /api/v1/site-config.
+//
+// The egress baseline is stripped the way Integrations is: egress and the baseline mark on each
+// internal_hosts entry are sent as nothing, and the server carries the stored ones forward. It
+// refuses a body that changes the baseline (only PUT /governance/egress-baseline may), so a
+// document captured before a reset, or before the security tier moved the baseline, would
+// otherwise be refused whole. The server's refusal stays for every other caller;
+// EgressBaselineIgnored reports a baseline in cfg that the stored one does not match.
 func (c *Client) PutSiteConfigResult(ctx context.Context, cfg types.SiteConfig) (SiteConfigPutResult, error) {
+	sent := cfg
 	cfg.Integrations = nil
+	cfg.Egress = nil
+	cfg.InternalHosts = slices.Clone(cfg.InternalHosts)
+	for i := range cfg.InternalHosts {
+		cfg.InternalHosts[i].Baseline = false
+	}
 	var resp SiteConfigPutResult
 	err := c.do(ctx, http.MethodPut, "/api/v1/site-config", cfg, &resp)
+	if err == nil {
+		resp.EgressBaselineIgnored = !slices.Equal(baselineOf(sent), baselineOf(resp.SiteConfig))
+	}
 	return resp, err
+}
+
+// baselineOf is the sorted egress baseline a site config declares: its baseline hosts, then its
+// baseline-marked internal host suffixes, lowercased and tagged so the two lists cannot be confused.
+func baselineOf(sc types.SiteConfig) []string {
+	var out []string
+	if sc.Egress != nil {
+		for _, h := range sc.Egress.BaselineHosts {
+			out = append(out, "host:"+strings.ToLower(h))
+		}
+	}
+	for _, h := range sc.InternalHosts {
+		if h.Baseline {
+			out = append(out, "suffix:"+strings.ToLower(h.HostSuffix))
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // GetModelProviders returns the org's model-provider records with, per provider id, how many people
