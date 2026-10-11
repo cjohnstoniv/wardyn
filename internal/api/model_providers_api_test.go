@@ -49,7 +49,7 @@ func TestModelProvidersGetConnectedPeople(t *testing.T) {
 	read := func(want map[string]int) string {
 		t.Helper()
 		w := do(t, srv, http.MethodGet, "/api/v1/model-providers", adminToken, "")
-		var body modelProvidersRead
+		var body types.ModelProvidersRead
 		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &body) != nil || len(body.Providers) != 3 {
 			t.Fatalf("GET = %d; body=%s", w.Code, w.Body.String())
 		}

@@ -429,7 +429,7 @@ func (p *Proxy) forwardToControlPlane(ctx context.Context, method, path string, 
 // reqOf builds the egress.Request every handler-side emitter records.
 // Paired with decisionLog (policy.go), which wraps it into a DecisionLog.
 func (p *Proxy) reqOf(r *http.Request, host string, port int) egress.Request {
-	return egress.Request{
+	return egress.Request{AuditReservation: spoolTicket(r.Context()),
 		RunID:  p.runID,
 		Host:   host,
 		Port:   port,

@@ -16,7 +16,7 @@ import (
 // key and role, and a Key Vault credential pair beside them to compare against.
 func domainTestFlags() (vaultFlags, azureFlags) {
 	v := vaultFlags{
-		addr: strp(""), auth: strp("kubernetes"), role: strp("wardyn-cred"), rolePlatform: strp("wardyn-platform"),
+		awsKMSKey: new(string), kek: strp(""), addr: strp(""), auth: strp("kubernetes"), role: strp("wardyn-cred"), rolePlatform: strp("wardyn-platform"),
 		transitMount: strp("transit"), transitKey: strp("cred-key"), transitKeyPlatform: strp("platform-key"), keyDomainsFile: strp(""),
 	}
 	az := azureFlags{
@@ -145,5 +145,43 @@ func TestBuildKeyDomains_BootRefusals(t *testing.T) {
 	v, az := domainTestFlags()
 	if got, err := buildKeyDomains(t.Context(), v, az, ""); err != nil || got != nil {
 		t.Fatalf("no file = (%v, %v); want no domains", got, err)
+	}
+}
+
+// AWS KMS key domains are not supported yet: WARDYN_KEK=awskms with a file that
+// declares any domain refuses boot before any key service is called, and says so.
+func TestBuildKeyDomains_AWSKMSRefusesDomains(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "d.json")
+	if err := os.WriteFile(file, []byte(`{"a": {"transit": {"key": "a-key"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v, az := domainTestFlags()
+	v.keyDomainsFile, v.kek = strp(file), strp("awskms")
+	_, err := buildKeyDomains(t.Context(), v, az, "")
+	if err == nil || !strings.Contains(err.Error(), "refusing to start") || !strings.Contains(err.Error(), "AWS KMS key domains are not supported yet") {
+		t.Fatalf("buildKeyDomains with WARDYN_KEK=awskms and a domain = %v; want the not-supported-yet refusal", err)
+	}
+	// An empty file declares none: nothing to refuse.
+	if err := os.WriteFile(file, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := buildKeyDomains(t.Context(), v, az, ""); err != nil || got != nil {
+		t.Fatalf("WARDYN_KEK=awskms with no domains = (%v, %v); want none", got, err)
+	}
+}
+
+// A named AWS KMS key refuses key domains whatever WARDYN_KEK says: with
+// WARDYN_KEK=local the key is read-only (the way back via -rewrap), and a
+// Transit or Key Vault domain beside it would be a second key service.
+func TestBuildKeyDomains_AWSKMSKeyRefusesDomainsUnderLocal(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "d.json")
+	if err := os.WriteFile(file, []byte(`{"a": {"transit": {"key": "a-key"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v, az := domainTestFlags()
+	v.keyDomainsFile, v.kek, v.awsKMSKey = strp(file), strp("local"), strp(testAWSKey)
+	_, err := buildKeyDomains(t.Context(), v, az, "")
+	if err == nil || !strings.Contains(err.Error(), "AWS KMS key domains are not supported yet") {
+		t.Fatalf("buildKeyDomains with WARDYN_KEK=local, an AWS KMS key and a domain = %v; want the not-supported-yet refusal", err)
 	}
 }

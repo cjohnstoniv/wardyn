@@ -183,12 +183,15 @@ type (
 	// SiteConfig.ModelProviders; the types below are its parts. Aliased so a
 	// caller can author the block through PutSiteConfig. Configuration only:
 	// no credential lives on a record.
-	ModelProviders    = types.ModelProviders
-	ModelProvider     = types.ModelProvider
-	ModelProviderKind = types.ModelProviderKind
-	ProviderAuth      = types.ProviderAuth
-	BedrockSettings   = types.BedrockSettings
-	ProviderHarness   = types.ProviderHarness
+	ModelProviders = types.ModelProviders
+	// ModelProvidersRead is GetModelProviders' answer: the block plus how many people
+	// hold a credential of their own per provider. Counts only, never a credential.
+	ModelProvidersRead = types.ModelProvidersRead
+	ModelProvider      = types.ModelProvider
+	ModelProviderKind  = types.ModelProviderKind
+	ProviderAuth       = types.ProviderAuth
+	BedrockSettings    = types.BedrockSettings
+	ProviderHarness    = types.ProviderHarness
 
 	// UserDrive is one admin-registered drive (migration 0054's user_drives
 	// row), embedded in UserDriveListItem. Written via DriveRequest.

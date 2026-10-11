@@ -3,4 +3,5 @@ docs/operations/integrations.md=2609 share=30
 docs/operations/launch-presets.md=390 share=35
 docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 597 adds 48: the page now leads with the client-mode claim flow and offline table; legacy enrolment is condensed under it.
-docs/operations/hybrid-laptops.md=597 share=35
+# 622 adds 25: the Azure DevOps bullet below "Where each thing lives" (#475).
+docs/operations/hybrid-laptops.md=622 share=35

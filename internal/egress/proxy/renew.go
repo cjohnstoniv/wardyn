@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"io"
 	"log/slog"
 	"net/http"
@@ -55,7 +56,7 @@ const (
 	renewTimeout     = 10 * time.Second // bounds one renew request
 	// renewGiveUpAfter mirrors the identity provider's tokenTTL (1h), spelled here rather than imported
 	// since this sidecar never parses the JWT; past it the token being renewed is dead regardless of cause.
-	renewGiveUpAfter = time.Hour
+	renewGiveUpAfter = identity.RunTokenTTL
 )
 
 // renewStatusError is renewToken's typed refusal, carrying the control plane's status so the loop can

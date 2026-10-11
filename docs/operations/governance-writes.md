@@ -170,6 +170,12 @@ wardyn governance changes reject <change-id> --reason "widens egress past the re
 ```
 
 - `governance set` exits 0 on a pending result and skips `--prune` until every write is decided, so run it again afterwards.
+- `wardyn governance plan` previews the same apply without writing anything. Its `deletes:` list names every item a prune would remove, so read it before you run `set --prune`:
+
+```
+wardyn governance plan governance.json --prune   # plan: N create, N update, N delete; then the deletes
+wardyn governance set governance.json --prune    # the same apply, once the plan is what you expect
+```
 - Running the SAME document again before then is safe: a target whose held change is that very write is reported as pending, with the held change named, and the rest of the file is applied.
 - A document edited since is refused at that target (`409` `governance_change_pending`, naming the held change) until the held change is decided; nothing of the edit is stored.
 - The console does the same on the Governance screen's Changes tab, with the diff in a drawer; Approve is disabled on your own proposal.

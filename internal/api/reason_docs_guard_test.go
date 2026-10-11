@@ -33,13 +33,19 @@ var adoEntraFailureEnumValues = []string{
 var placementWireReasons = []placement.Reason{
 	placement.ReasonRunnerTokenInvalid,
 	placement.ReasonRunnerClaimMismatch,
+	placement.ReasonRunnerNotFound,
 }
 
 // runnerPoolWireReasons lists the runner pool reasons published by HTTP handlers
-// today. Keep their values in runnerpool; the other pool reasons join this list
-// when the pool lane sends them, and must be documented in the same change.
+// today. Keep their values in runnerpool; the two left out (required, default
+// unavailable) join this list when the run-create fold sends them, and must be documented in the same change.
 var runnerPoolWireReasons = []runnerpool.Reason{
 	runnerpool.ReasonInvalid,
+	runnerpool.ReasonNotFound,
+	runnerpool.ReasonUnavailable,
+	runnerpool.ReasonStale,
+	runnerpool.ReasonNoEligibleMember,
+	runnerpool.ReasonMemberMismatch,
 	runnerpool.ReasonPoolsUnavailable,
 }
 

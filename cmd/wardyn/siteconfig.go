@@ -134,6 +134,11 @@ func siteConfigSetCmd(client clientFn) *cobra.Command {
 			if n := len(cfg.Integrations); n > 0 {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %d integration(s) in this file were not applied — integrations are managed through their own endpoints (`/api/v1/integrations`, or Settings), never this document; the stored ones are left as they are\n", n)
 			}
+			// runners.enabled has its own audited super-admin route; PutSiteConfig strips it,
+			// so a file naming it is not applied. Say so once.
+			if cfg.Runners != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: runners.enabled in this file was not applied — turn runners on or off with `PUT /api/v1/runners/settings` (Admin → Runners); the stored value is left as it is\n")
+			}
 			// F285: a field this file's version predates (upstream_proxy_no_proxy,
 			// internal_hosts, workspace_providers, agent_providers all landed after
 			// 0.6.6) is left as the server already has it, not cleared — the same
@@ -171,6 +176,11 @@ func siteConfigSetCmd(client clientFn) *cobra.Command {
 			}
 			// #1215: a valid branding.logo_path with no branding record to hold it
 			// succeeded but attached nothing; say what makes it land.
+			// The egress baseline is a governance write: the SDK sends the document without it and the
+			// server keeps its own, so a baseline in this file that differs from the stored one did not land.
+			if res.EgressBaselineIgnored {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: the egress baseline in this file was not applied — it is a governance write; set it with PUT /api/v1/governance/egress-baseline, and the stored one is left as it is\n")
+			}
 			if res.BrandingLogoPending {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: branding.logo_path was not attached — the console has no branding yet; save the Branding card (Admin view, Settings), then apply this file again\n")
 			}

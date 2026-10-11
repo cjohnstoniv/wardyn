@@ -38,6 +38,8 @@ type (
 		SessionID    string        `json:"session_id"`
 		Resumed      bool          `json:"resumed"`
 		PingInterval time.Duration `json:"ping_interval"`
+		// LastSeq is the org's received cursor; the runner replays after it.
+		LastSeq uint64 `json:"last_seq"`
 	}
 	// Reason is the payload of REVOKED and GOAWAY.
 	Reason struct {
@@ -106,24 +108,31 @@ type Waiting struct {
 
 // AgentExit is the durable `agent_exit` event's data.
 type AgentExit struct {
+	Generation uuid.UUID `json:"generation"`
+	ExecID     string    `json:"exec_id"`
 	Ref        string    `json:"ref"`
 	Code       int       `json:"code"`
 	ObservedAt time.Time `json:"observed_at"`
 }
 
 // Lease is the LEASE payload, sent after each renew or extend.
+// Zero EndsAt means authenticated no-end policy; token lapse is always finite.
 type Lease struct {
-	RunID          uuid.UUID `json:"run_id"`
-	TokenRenewedAt time.Time `json:"token_renewed_at"`
-	EndsAt         time.Time `json:"ends_at"`
+	ExecutionGeneration uuid.UUID `json:"execution_generation"`
+	RunID               uuid.UUID `json:"run_id"`
+	TokenRenewedAt      time.Time `json:"token_renewed_at"`
+	EndsAt              time.Time `json:"ends_at"`
 }
 
 // PendingAction is one entry of the PENDING payload, oldest first.
 type PendingAction struct {
-	ID    uuid.UUID              `json:"id"`
-	Kind  types.RunnerActionKind `json:"kind"`
-	RunID uuid.UUID              `json:"run_id"`
-	Ref   string                 `json:"ref"`
+	Retirement *types.RunnerRetirement      `json:"retirement,omitempty"`
+	Quarantine *types.RunnerQuarantine      `json:"quarantine,omitempty"`
+	Recovery   *types.RunnerMutationFailure `json:"recovery,omitempty"`
+	ID         uuid.UUID                    `json:"id"`
+	Kind       types.RunnerActionKind       `json:"kind"`
+	RunID      uuid.UUID                    `json:"run_id"`
+	Ref        string                       `json:"ref"`
 }
 
 // ActionResult is the `action_result` event's data.
@@ -135,14 +144,20 @@ type ActionResult struct {
 
 // RunState is one run's entry in the STATE payload; all runner_asserted.
 type RunState struct {
-	RunID          uuid.UUID  `json:"run_id"`
-	SandboxPresent bool       `json:"sandbox_present"`
-	AgentState     string     `json:"agent_state,omitempty"`
-	ExitCode       *int       `json:"exit_code,omitempty"`
-	ProxyStoppedAt *time.Time `json:"proxy_stopped_at,omitempty"`
-	SpoolDepth     int        `json:"spool_depth"`
-	SpoolDrops     int        `json:"spool_drops"`
-	ResidentGrants []string   `json:"resident_grants,omitempty"`
+	SpoolReceipt    *types.RunnerSpoolReceipt    `json:"spool_receipt,omitempty"`
+	Retirement      *types.RunnerRetirement      `json:"retirement,omitempty"`
+	Containment     *types.RunnerMutationFailure `json:"containment,omitempty"`
+	ContainmentOnly bool                         `json:"containment_only,omitempty"`
+	MutationFailure *types.RunnerMutationFailure `json:"mutation_failure,omitempty"`
+	Execution       *ExecutionResult             `json:"execution,omitempty"`
+	RunID           uuid.UUID                    `json:"run_id"`
+	SandboxPresent  bool                         `json:"sandbox_present"`
+	AgentState      string                       `json:"agent_state,omitempty"`
+	ExitCode        *int                         `json:"exit_code,omitempty"`
+	ProxyStoppedAt  *time.Time                   `json:"proxy_stopped_at,omitempty"`
+	SpoolDepth      int                          `json:"spool_depth"`
+	SpoolDrops      int                          `json:"spool_drops"`
+	ResidentGrants  []string                     `json:"resident_grants,omitempty"`
 }
 
 // Byte-stream kinds carried by OPEN.
