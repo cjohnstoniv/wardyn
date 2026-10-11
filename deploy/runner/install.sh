@@ -109,13 +109,21 @@ fi
 [ -n "$ORG" ] || { usage >&2; die "--org is required"; }
 
 if [ -z "$BINARY" ]; then
-  if [ -x "$SELF_DIR/wardyn-runnerd" ]; then
+  if [ -f "$SELF_DIR/wardyn-runnerd" ]; then
     BINARY="$SELF_DIR/wardyn-runnerd"
   else
     BINARY="$(command -v wardyn-runnerd || true)"
   fi
 fi
-[ -n "$BINARY" ] && [ -x "$BINARY" ] || die "wardyn-runnerd not found: pass --binary <path>"
+[ -n "$BINARY" ] && [ -e "$BINARY" ] || die "wardyn-runnerd not found: pass --binary <path>"
+[ -f "$BINARY" ] && [ -r "$BINARY" ] || die "wardyn-runnerd is not a readable file: $BINARY"
+# A release download has no exec bit. Work from a private 0755 copy, so the
+# version check can run it and the install copies a runnable file.
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+cp "$BINARY" "$STAGE/wardyn-runnerd"
+chmod 0755 "$STAGE/wardyn-runnerd"
+BINARY="$STAGE/wardyn-runnerd"
 
 # Validate everything that can refuse before the first side effect.
 HAVE_IDENTITY=0
@@ -126,9 +134,9 @@ fi
 [ -z "$TOKEN_FILE" ] || [ -f "$TOKEN_FILE" ] || die "token file not found: $TOKEN_FILE"
 
 if [ -z "$PROXY_IMAGE" ]; then
-  # cobra prints "wardyn-runnerd version <v>"; a dev build's <v> carries +<commit>.
+  # cobra prints "wardyn-runnerd version <v>"; a dev build's <v> carries +<commit>; a release candidate is X.Y.Z-rc.N.
   version="$("$BINARY" --version | awk '{print $NF}')"
-  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] \
     || die "this wardyn-runnerd is a development build ($version): pass --proxy-image <ref>"
   PROXY_IMAGE="ghcr.io/cjohnstoniv/wardyn-proxy:$version"
 fi
