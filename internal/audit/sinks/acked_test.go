@@ -751,3 +751,44 @@ func TestAcked_RejectsNonPositiveWaits(t *testing.T) {
 		}
 	}
 }
+
+// A benign gap leaves the cursor's memory at zero while the durable checkpoint
+// stays at 3. If the next delivery fails and retention then drops the rows after
+// the checkpoint, the loop must re-read the checkpoint and report the loss, not
+// resend from zero and hide it.
+func TestAcked_BenignGapThenOutageStillReportsALaterLoss(t *testing.T) {
+	t.Parallel()
+
+	all := ackedRows(7)
+	st := &fakeDeliveryStore{haveRow: true, acked: 3, hash: "h3"}
+	st.setRows(all[3:5]) // seqs 4,5: only accepted rows 1..3 are gone
+	col := &lineCollector{failStatus: http.StatusServiceUnavailable, failFirst: 1}
+	srv := col.server(t)
+	rec := &fakeRecorder{}
+
+	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, rec)
+	if err != nil {
+		t.Fatalf("NewAckedWebhook: %v", err)
+	}
+	ctx := context.Background()
+	if _, stop := a.step(ctx); stop {
+		t.Fatal("step stopped on a 503")
+	}
+	if n := rec.count(); n != 0 {
+		t.Fatalf("recorder holds %d events after the benign gap, want none", n)
+	}
+
+	st.setRows(all[5:]) // retention dropped the unacknowledged 4,5; 6,7 arrived
+	if _, stop := a.step(ctx); stop {
+		t.Fatal("step stopped on a healthy collector")
+	}
+	if n := rec.count(); n != 1 {
+		t.Errorf("recorder holds %d events, want one audit.delivery.reset for the lost rows", n)
+	}
+	if _, _, _, _, resets := st.state(); resets != 1 {
+		t.Errorf("resets = %d, want 1", resets)
+	}
+	if acked, _, _, _, _ := st.state(); acked != 7 {
+		t.Errorf("checkpoint = %d, want 7", acked)
+	}
+}

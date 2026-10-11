@@ -63,6 +63,11 @@ type AckedWebhook struct {
 	// the checkpoint, so ackedStore.Set(zero) keeps the durable position (and
 	// the resets counter) as it is: the next accepted batch moves it anyway.
 	benignReset bool
+	// benignPending is true from a skipped durable reset until the next accepted
+	// batch: the cursor's memory is at zero while the durable checkpoint is
+	// still p, so a failed delivery must re-read p and re-run the gap check,
+	// not keep resending from zero over rows retention may drop meanwhile.
+	benignPending bool
 	// stale is true while the durable last_error/halted may disagree with the
 	// loop: after a load (a previous run may have left a halt or an error) and
 	// after any recorded error. The first accepted batch clears it.
@@ -151,8 +156,15 @@ func (a *AckedWebhook) step(ctx context.Context) (time.Duration, bool) {
 		a.backoff = 0
 	}
 	more, err := a.cursor.Step(ctx)
+	if err != nil && a.benignPending {
+		a.benignPending = false
+		if a.cursor.Load(ctx) != nil {
+			a.loaded = false
+		}
+	}
 	switch {
 	case err == nil:
+		a.benignPending = false
 		if a.stale {
 			a.recordError(ctx, "", false)
 		}
@@ -328,7 +340,7 @@ func (s ackedStore) Get(ctx context.Context) (ackcursor.Pos, error) {
 
 func (s ackedStore) Set(ctx context.Context, p ackcursor.Pos) error {
 	if s.a.benignReset && p == (ackcursor.Pos{}) {
-		s.a.benignReset = false
+		s.a.benignReset, s.a.benignPending = false, true
 		return nil
 	}
 	return s.st.SetAuditDeliveryCursor(ctx, AckedDestination, p.Seq, p.Hash)
