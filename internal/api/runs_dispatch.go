@@ -28,6 +28,7 @@ import (
 // wrong credential family onto every host. Named fields make each call site
 // self-documenting; the zero value is the "none" case per field.
 type dispatchParams struct {
+	TrustedOutput      bool                 // server-authored probe provenance; never a public request field
 	RunToken           string               // proxy-verifiable run token (never a usable in-sandbox secret)
 	Image              string               // resolved sandbox OCI image (convention or built devcontainer)
 	Policy             types.RunPolicySpec  // egress/resource policy (dispatchRun mutates a local copy)
@@ -147,21 +148,7 @@ type dispatchParams struct {
 //
 //nolint:funlen // Deliberate: one linear provision → CAS → compensate sequence whose phase ORDER is the security contract (see above). Each phase already lives in its own helper; splitting the sequence would hide the ordering behind a call graph and make it unauditable in one scope. Low branching — passes gocyclo/gocognit, just long.
 func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling, p dispatchParams) {
-	// Fail closed on a ceiling nobody resolved. The compiler already forces a
-	// lane to pass SOMETHING; this refuses the one thing it could pass without
-	// deciding — the zero value — so "a new dispatch lane forgot the ceiling"
-	// surfaces as a failed run with an audit row rather than as a sandbox that
-	// quietly ran with no profile enforcement and no run.ceiling.reassert to
-	// show for it. Unreachable from any lane in tree (a compile-time enumeration
-	// of the construction sites is TestDispatchCeilingIsRequiredAtEveryLane).
-	if !ceiling.resolved {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch",
-			run.ID.String(), "failure", mustJSON(map[string]any{
-				"note": "dispatch was handed an unresolved governance ceiling (the dispatchCeiling zero value); " +
-					"refusing to launch rather than running with no profile enforcement",
-			})))
-		s.failAndRevoke(context.WithoutCancel(ctx), run.ID, types.RunPending,
-			"This run was not launched: its dispatch lane did not resolve the acting principal's governance ceiling")
+	if !s.dispatchAdmitted(ctx, run, ceiling) {
 		return
 	}
 	// Only the values a phase below REBINDS get a local alias; everything else is
@@ -187,14 +174,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// boot and execute despite the 202 kill. So if the claim does not apply, the run
 	// is no longer PENDING (killed/stopped) — abort without dispatching. Every
 	// dispatch caller passes a freshly-created PENDING run.
-	claimed, cerr := s.casRunState(ctx, run.ID, types.RunPending, types.RunStarting)
-	if cerr != nil || !claimed {
-		data := map[string]any{"note": "run left PENDING by a concurrent kill/stop before dispatch; dispatch aborted"}
-		if cerr != nil {
-			data["error"] = cerr.Error()
-		}
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch",
-			run.ID.String(), "failure", mustJSON(data)))
+	if !s.claimDispatch(ctx, run) {
 		return
 	}
 
@@ -458,7 +438,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// p.ExtraEnv and the model provider arm's auth vars) so its refusal to overwrite
 	// an already-set variable covers every platform-authored key, not just the
 	// ones written above it. See resolveEnvSecretGrants.
-	s.applyComponentConfigEnv(ctx, run, p.Components.Config, sandboxEnv)
+	orgConfigKeys := s.applyComponentConfigEnv(ctx, run, p.Components.Config, sandboxEnv)
 	secretEnvKeys := s.resolveEnvSecretGrants(ctx, run, policy, sandboxEnv)
 
 	// Split the composed environment into its non-secret and credential-bearing
@@ -642,6 +622,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	spec.OnWaiting = s.runEvents.onWaiting(run.ID, onWaiting)
 	// The file_secret files join the spec last, so the manifest completes over their values.
 	if !s.completeMaskManifestWithFileSecrets(ctx, run, policy, &spec) {
+		return
+	}
+	if !s.classifyLocalDispatch(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, adoRun, p.TrustedOutput) {
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
@@ -951,4 +934,46 @@ func patBrokerGrants(pat map[string]string, on bool) map[string]proxy.PATGrant {
 		out[strings.ToLower(strings.TrimSpace(host))] = proxy.PATGrant{GrantID: gid}
 	}
 	return out
+}
+
+// dispatchAdmitted refuses, before anything is claimed or written, a run no
+// lane may dispatch yet (a non-remote placement) and a ceiling nobody resolved.
+func (s *Server) dispatchAdmitted(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling) bool {
+	if s.unsupportedLocalDispatch(ctx, run) {
+		return false
+	}
+	// Fail closed on a ceiling nobody resolved. The compiler already forces a
+	// lane to pass SOMETHING; this refuses the one thing it could pass without
+	// deciding — the zero value — so "a new dispatch lane forgot the ceiling"
+	// surfaces as a failed run with an audit row rather than as a sandbox that
+	// quietly ran with no profile enforcement and no run.ceiling.reassert to
+	// show for it. Unreachable from any lane in tree (a compile-time enumeration
+	// of the construction sites is TestDispatchCeilingIsRequiredAtEveryLane).
+	if ceiling.resolved {
+		return true
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch",
+		run.ID.String(), "failure", mustJSON(map[string]any{
+			"note": "dispatch was handed an unresolved governance ceiling (the dispatchCeiling zero value); " +
+				"refusing to launch rather than running with no profile enforcement",
+		})))
+	s.failAndRevoke(context.WithoutCancel(ctx), run.ID, types.RunPending,
+		"This run was not launched: its dispatch lane did not resolve the acting principal's governance ceiling")
+	return false
+}
+
+// claimDispatch claims PENDING->STARTING conditionally; see the KILL-RACE GUARD
+// note at its call site in dispatchRun.
+func (s *Server) claimDispatch(ctx context.Context, run types.AgentRun) bool {
+	claimed, cerr := s.casRunState(ctx, run.ID, types.RunPending, types.RunStarting)
+	if cerr == nil && claimed {
+		return true
+	}
+	data := map[string]any{"note": "run left PENDING by a concurrent kill/stop before dispatch; dispatch aborted"}
+	if cerr != nil {
+		data["error"] = cerr.Error()
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch",
+		run.ID.String(), "failure", mustJSON(data)))
+	return false
 }

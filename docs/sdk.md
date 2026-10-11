@@ -253,6 +253,8 @@ fmt.Println(out.Output, out.Truncated, out.Complete, out.Source)
   asciicast output.
   The latter two retain the recording's owner-or-operator privacy
   gate, even after recording is disabled.
+  A portal's delegated token reads `stdout` output only; for the other two
+  it gets the 409 a run with no such row gives, audited `delegation_scope`.
 - `incomplete` says bytes may be missing
   and is always true for recording recovery.
 - `capture_gap` says capture or recovery
@@ -346,7 +348,7 @@ A successful response contains `spec` (authorized, clamped, workspace-folded and
 
 ## Custom components
 
-A run can carry components that add destinations and secrets ([POLICIES.md](POLICIES.md#custom-components) defines them; [OPERATIONS.md](OPERATIONS.md#custom-components) is the admin side). The client wraps both stores of them.
+A run can carry components that add destinations and secrets ([POLICIES.md](POLICIES.md#custom-components) defines them; [custom-components.md](operations/custom-components.md) is the admin side). The client wraps both stores of them.
 
 | Method | Route | Who |
 |---|---|---|
@@ -457,6 +459,12 @@ silent gap:
 | `runner_registration_rate_limited` | Too many registration attempts; retry later. |
 | `runner_registration_invalid` / `runner_owner_invalid` | Registration fields or token owner are invalid. |
 | `runner_key_already_registered` | This key is already registered; generate a new identity. |
+| `runner_not_found` / `runner_token_not_found` | No such runner or unused token for this caller; another person's runner answers as an absent id. |
+| `runner_filter_invalid` | `state` is not `active`, `revoked` or `all`. |
+| `runner_session_required` | `/me/runners` needs the person's own session; administrative and delegated credentials own no runner. |
+| `runners_enabled_required` | `PUT /runners/settings` needs `enabled`: true or false. |
+| `runners_org_url_invalid` | Runners cannot be turned on until the organisation and control-plane URLs are HTTPS. |
+| `site_config_runners_via_own_route` | Change `runners.enabled` with `PUT /runners/settings`. |
 | `runner_token_invalid` | Registration token is unknown, expired, consumed, or bound to another org. |
 | `runner_claim_mismatch` | The personal owner, fingerprint, org binding, claim state, or expiry does not match. |
 | `missing_scope_snapshot` | The grant names the credential sentinel but carries no dispatch-time snapshot (a hand-authored grant). Azure DevOps, AWS SSO; and every grant naming `bedrock-api-key`, which is no longer a model credential. |
@@ -668,6 +676,7 @@ The rest reach the wire only through
 | `delegation_scope` | A portal's delegated token asked for a route outside its own delegation allow-list (#1142). |
 | `event_stream_cap` | The caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (#1407); close one and retry. Answered `422` and not audited, like `run_quota`. |
 | `component_autonomy` | The organisation's autonomy cap on runs that use the caller's own custom components closes the door, with or without a governance profile; the body's `policy` names the deployment. |
+| `placement_component_self_defined` | A run on your own runner carries a component you defined while your limits omit `local_self_defined_components` (default deny); `403`, target `runs.placement`. |
 | `governance_profile` | The caller's resolved governance profile itself closes the door (distinct from `groups_snapshot_stale`, which is the profile being unresolvable at all). |
 | `mask_state_unavailable` | The server cannot prove a run's masking corpus complete, so a door that relays or persists the run's output (recording upload, live attach, SSH shell, live output read) refuses with `503` instead of passing bytes through. A run dispatched before 0.8.6 stays refused after a server restart until it ends; any other run clears when the server can read its manifest again. Since the shared masking registry an injection or capture route also answers it when a value could not be committed to the registry: the value is not handed out. |
 | `governance_overlay_unsatisfiable` | The caller's governance profile, or the run's own, is composed and nothing satisfies it together with the profile or deployment default it builds on, so the launch and every live door refuse (`403`) rather than widen. The sentence names the person's own profile and never a base. |

@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -66,7 +67,18 @@ type grantWiring struct {
 // parameter beside the writer: it is what names the method and path in the log
 // line an operator is already reading.
 // Extracted verbatim from handleCreateRun.
-func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, runID uuid.UUID, now time.Time, spec types.RunPolicySpec) (grantWiring, bool) {
+func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, runID uuid.UUID, now time.Time, spec types.RunPolicySpec, runPlacement types.Placement) (grantWiring, bool) {
+	if !remotePlacement(runPlacement) && runPlacement != types.PlacementLocal {
+		writeErrorReason(w, placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable), "unclassified stored run placement")
+		return grantWiring{}, false
+	}
+	if runPlacement == types.PlacementLocal {
+		var refusal *runRefusal
+		spec, refusal = s.ownLocalGrantSpecs(r, spec)
+		if refusal.write(s, w, r) {
+			return grantWiring{}, false
+		}
+	}
 	gw := grantWiring{
 		gitPATGrants: map[string]string{},
 		sshGrants:    map[string]string{},

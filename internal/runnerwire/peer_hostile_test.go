@@ -87,7 +87,9 @@ func TestDuplicateReplyClosesTheSessionNotTheReadLoop(t *testing.T) {
 	call := r.readType(t, TypeCall)
 	r.write(t, replyFrame(call.Stream, 1))
 	r.write(t, replyFrame(call.Stream, 2))
-	r.write(t, replyFrame(call.Stream, 3))
+	// The duplicate may already have closed the session, so this write can
+	// race the close; the assertion is closedWith below, not the write.
+	_ = r.raw.WriteFrame(ctxT(t), replyFrame(call.Stream, 3))
 	if err := <-errc; err != nil {
 		t.Fatalf("the first REPLY should complete the call: %v", err)
 	}

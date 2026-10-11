@@ -39,9 +39,12 @@ import (
 //
 // A CLOSED struct with `omitempty` on every field, not a map: small,
 // complete, validated by the Go type itself, no DB CHECK needed. Every zero
-// value means "unrestricted", so an omitted limits object behaves exactly
+// value means "unrestricted" except LocalSelfDefinedComponents (default deny), so an omitted limits object behaves exactly
 // as before this struct existed.
 type GovernanceLimits struct {
+	// LocalSelfDefinedComponents permits a local run to carry a component its launcher defined.
+	// Omitted or false refuses it; runner-reported confinement is not platform attestation.
+	LocalSelfDefinedComponents bool `json:"local_self_defined_components,omitempty"`
 	// DenyTaskModeExec refuses task_mode=exec for a member under this profile.
 	DenyTaskModeExec bool `json:"deny_task_mode_exec,omitempty"`
 	// DenyInteractive refuses an interactive run under this profile.

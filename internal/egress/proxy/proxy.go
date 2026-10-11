@@ -898,7 +898,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		p.emitDialledAllow(*log, host)
 	}
 
-	clientConn, _, err := hj.Hijack()
+	clientConn, brw, err := hj.Hijack()
 	if err != nil {
 		_ = upstream.Close()
 		return
@@ -908,8 +908,14 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		_ = clientConn.Close()
 		return
 	}
+	// Read the client leg through the hijack's OWN buffered reader: a client that
+	// writes its CONNECT and the first bytes of the tunnel in one write (a TLS
+	// ClientHello behind the CONNECT headers) has those bytes already in that
+	// buffer, and reading clientConn directly drops them — the origin would
+	// never see the client's opening flight. Same readerConn the MITM lane uses
+	// for the same reason.
 	watch := newTunnelWatch(upstream)
-	first, err := tunnel(p.countActivity(clientConn), watch)
+	first, err := tunnel(p.countActivity(&readerConn{Conn: clientConn, r: brw.Reader}), watch)
 	p.tunnelEnded(log, host, watch, first, err)
 }
 

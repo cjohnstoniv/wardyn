@@ -567,3 +567,13 @@ describe("the Run panel's provider door returns focus", () => {
     expect(screen.getByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toHaveFocus();
   });
 });
+
+it("the launch rail names the provider with no stored connection", () => {
+  const status = providerStatus([{ provider: gateway }]);
+  status.provider_access![0].cause = "never_connected";
+  renderProvider({
+    status, rail: true,
+    modelProvider: { candidates: [gateway], access: status.provider_access, selectedId: gateway.id, onChange: () => {}, changeNote: null, harnessLabel: "Claude Code" },
+  });
+  expect(within(screen.getByRole("complementary")).getByText(`No connection is stored for ${gateway.name}. Destination: ${gateway.host}.`)).toBeInTheDocument();
+});
