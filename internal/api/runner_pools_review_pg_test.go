@@ -8,11 +8,10 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -482,34 +481,145 @@ func TestPG_RunnerPoolConcurrentDirectExecutorWritesTakeTheGovernanceTargetLock(
 	}
 }
 
-// Limits are not stored yet, so a body carrying them is refused rather than accepted and dropped, on
-// create and on update alike, whatever the block holds.
-func TestPG_RunnerPoolCreateAndUpdateRefuseLimits(t *testing.T) {
+const poolLimitsJSON = `{"background":{"cpu_millis":{"default":500,"cap":2000},"memory_mib":{"default":512,"cap":4096},"lifetime":{"default_sec":3600,"max_sec":86400}},` +
+	`"interactive":{"cpu_millis":{"default":1000,"cap":4000},"memory_mib":{"default":1024,"cap":8192},"lifetime":{"default_sec":1800,"max_sec":28800},"idle":{"default_sec":600,"max_sec":3600}},` +
+	`"barriers":["CC1","CC2"],"max_concurrent_runs":3}`
+
+// poolLimitsWithoutCap is the same block with the concurrency cap removed.
+const poolLimitsWithoutCap = `{"background":{"cpu_millis":{"default":500,"cap":2000},"memory_mib":{"default":512,"cap":4096},"lifetime":{"default_sec":3600,"max_sec":86400}},"barriers":["CC1"]}`
+
+func (e *poolEnv) storedLimits(pool uuid.UUID) *types.RunnerPoolLimits {
+	e.t.Helper()
+	p, err := e.pg.GetRunnerPool(context.Background(), pool)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return p.Limits
+}
+
+func (e *poolEnv) limitedPool(name string) types.RunnerPool {
+	e.t.Helper()
+	w := e.admin(http.MethodPost, "/api/v1/runner-pools", fmt.Sprintf(`{"name":%q,"hosting_type":"remote_provided","limits":%s}`, name, poolLimitsJSON))
+	if w.Code != http.StatusCreated {
+		e.t.Fatalf("create limited pool = %d %s", w.Code, w.Body)
+	}
+	return decodeJSON[types.RunnerPool](e.t, w)
+}
+
+// Limits are stored on create and replaced whole on update; an update without them leaves the block,
+// and a block a pool cannot keep is a 400 that moves nothing.
+func TestPG_RunnerPoolCreateAndUpdateStoreLimits(t *testing.T) {
 	e := newPoolEnv(t, false)
-	limits := `"limits":{"background":{"cpu_millis":{"default":1,"cap":2},"memory_mib":{"default":1,"cap":2},"lifetime":{"default_sec":1,"max_sec":2}},"barriers":["CC1"]}`
-	var parsed struct {
-		Limits types.RunnerPoolLimits `json:"limits"`
+	created := e.limitedPool("Limited")
+	if created.Limits == nil || created.Limits.MaxConcurrentRuns == nil || *created.Limits.MaxConcurrentRuns != 3 || created.Revision != 1 {
+		t.Fatalf("created pool = %+v", created)
 	}
-	if err := json.Unmarshal([]byte("{"+limits+"}"), &parsed); err != nil || parsed.Limits.Validate() != nil {
-		t.Fatalf("the test's limits block must be valid: %v %v", err, parsed.Limits.Validate())
+	if got := e.storedLimits(created.ID); !reflect.DeepEqual(got, created.Limits) {
+		t.Errorf("stored limits = %+v, want %+v", got, created.Limits)
 	}
-	const wantMsg = "pool limits are not supported yet"
-	refused := func(what string, w *httptest.ResponseRecorder) {
-		t.Helper()
-		if w.Code != http.StatusBadRequest || wireReason(t, w) != string(runnerpool.ReasonInvalid) || !strings.Contains(w.Body.String(), wantMsg) {
-			t.Errorf("%s with limits = %d %s, want 400 runner_pool_invalid %q", what, w.Code, w.Body, wantMsg)
+	if w := e.admin(http.MethodGet, poolPath(created.ID), ""); w.Code != http.StatusOK || !reflect.DeepEqual(decodeJSON[types.RunnerPool](t, w).Limits, created.Limits) {
+		t.Errorf("GET pool = %d %s, want the limits back", w.Code, w.Body)
+	}
+
+	w := e.admin(http.MethodPut, poolPath(created.ID), fmt.Sprintf(`{"revision":1,"limits":%s}`, poolLimitsWithoutCap))
+	got := decodeJSON[types.RunnerPool](t, w)
+	if w.Code != http.StatusOK || got.Revision != 2 || got.Limits == nil || got.Limits.MaxConcurrentRuns != nil || got.Limits.Interactive != nil {
+		t.Fatalf("replace = %d %s, want revision 2 and the block replaced whole", w.Code, w.Body)
+	}
+	replaced := e.storedLimits(created.ID)
+	if w := e.admin(http.MethodPut, poolPath(created.ID), `{"revision":2,"name":"Renamed"}`); w.Code != http.StatusOK || !reflect.DeepEqual(e.storedLimits(created.ID), replaced) {
+		t.Errorf("an update without limits = %d %s, and left %+v", w.Code, w.Body, e.storedLimits(created.ID))
+	}
+
+	rev := e.revision(created.ID)
+	for name, bad := range map[string]string{
+		"no run type":        `{"barriers":["CC1"]}`,
+		"unknown barrier":    `{"background":{"cpu_millis":{"default":1,"cap":2},"memory_mib":{"default":1,"cap":2},"lifetime":{"default_sec":1,"max_sec":2}},"barriers":["CC9"]}`,
+		"default above cap":  `{"background":{"cpu_millis":{"default":3,"cap":2},"memory_mib":{"default":1,"cap":2},"lifetime":{"default_sec":1,"max_sec":2}},"barriers":["CC1"]}`,
+		"interactive no end": `{"interactive":{"cpu_millis":{"default":1,"cap":2},"memory_mib":{"default":1,"cap":2},"lifetime":{"default_sec":0,"unlimited":true},"idle":{"default_sec":1,"max_sec":2}},"barriers":["CC1"]}`,
+	} {
+		upd := e.admin(http.MethodPut, poolPath(created.ID), fmt.Sprintf(`{"revision":%d,"limits":%s}`, rev, bad))
+		if upd.Code != http.StatusBadRequest || wireReason(t, upd) != string(runnerpool.ReasonInvalid) {
+			t.Errorf("update with %s = %d %s, want 400 runner_pool_invalid", name, upd.Code, upd.Body)
+		}
+		cre := e.admin(http.MethodPost, "/api/v1/runner-pools", fmt.Sprintf(`{"name":"Bad","hosting_type":"remote_provided","limits":%s}`, bad))
+		if cre.Code != http.StatusBadRequest || wireReason(t, cre) != string(runnerpool.ReasonInvalid) {
+			t.Errorf("create with %s = %d %s, want 400 runner_pool_invalid", name, cre.Code, cre.Body)
 		}
 	}
-	refused("create", e.admin(http.MethodPost, "/api/v1/runner-pools", `{"name":"Limited","hosting_type":"remote_provided",`+limits+`}`))
-	if n := e.count(`SELECT count(*) FROM runner_pools`); n != 0 {
-		t.Errorf("a refused create stored %d pools", n)
-	}
-	pool := e.createPool("Plain", types.RunnerPoolRemoteProvided)
-	rev := e.revision(pool.ID)
-	refused("update", e.admin(http.MethodPut, poolPath(pool.ID), fmt.Sprintf(`{"revision":%d,"name":"Renamed",%s}`, rev, limits)))
-	refused("limits-only update", e.admin(http.MethodPut, poolPath(pool.ID), fmt.Sprintf(`{"revision":%d,%s}`, rev, limits)))
-	if e.revision(pool.ID) != rev {
+	if e.revision(created.ID) != rev || !reflect.DeepEqual(e.storedLimits(created.ID), replaced) {
 		t.Errorf("a refused update moved the pool")
+	}
+	if n := e.count(`SELECT count(*) FROM runner_pools`); n != 1 {
+		t.Errorf("a refused create stored a pool: %d pools", n)
+	}
+}
+
+// Re-sending the stored block alone is a no-op: no revision, no audit row.
+func TestPG_RunnerPoolIdenticalLimitsAreANoOp(t *testing.T) {
+	e := newPoolEnv(t, false)
+	pool := e.limitedPool("Limited")
+	if w := e.admin(http.MethodPut, poolPath(pool.ID), fmt.Sprintf(`{"revision":1,"limits":%s}`, poolLimitsJSON)); w.Code != http.StatusOK || decodeJSON[types.RunnerPool](t, w).Revision != 1 {
+		t.Errorf("identical limits = %d %s, want 200 at revision 1", w.Code, w.Body)
+	}
+	if e.revision(pool.ID) != 1 || len(e.audits(auditPoolUpdate)) != 0 {
+		t.Errorf("an identical block moved the pool: revision %d, %d update rows", e.revision(pool.ID), len(e.audits(auditPoolUpdate)))
+	}
+}
+
+// A limits change is audited with the block before and after; a rename carries neither, and a create
+// carries the stored block.
+func TestPG_RunnerPoolLimitsChangeIsAuditedBeforeAndAfter(t *testing.T) {
+	e := newPoolEnv(t, false)
+	pool := e.limitedPool("Limited")
+	if d := auditData(t, e.audits(auditPoolCreate)[0]); d["limits"] == nil {
+		t.Errorf("create audit data = %v, want the stored limits", d)
+	}
+	if w := e.admin(http.MethodPut, poolPath(pool.ID), fmt.Sprintf(`{"revision":1,"limits":%s}`, poolLimitsWithoutCap)); w.Code != http.StatusOK {
+		t.Fatalf("limits update = %d %s", w.Code, w.Body)
+	}
+	if w := e.admin(http.MethodPut, poolPath(pool.ID), `{"revision":2,"name":"Renamed"}`); w.Code != http.StatusOK {
+		t.Fatalf("rename = %d %s", w.Code, w.Body)
+	}
+	rows := e.audits(auditPoolUpdate)
+	if len(rows) != 2 {
+		t.Fatalf("%d update rows, want 2", len(rows))
+	}
+	var withLimits, rename map[string]any
+	for _, r := range rows {
+		if d := auditData(t, r); d["name"] == "Renamed" {
+			rename = d
+		} else {
+			withLimits = d
+		}
+	}
+	before, _ := withLimits["limits_before"].(map[string]any)
+	after, _ := withLimits["limits"].(map[string]any)
+	if before["max_concurrent_runs"] != float64(3) || after == nil || after["max_concurrent_runs"] != nil {
+		t.Errorf("limits update audit = %v, want limits_before with the cap and limits without", withLimits)
+	}
+	if _, ok := rename["limits"]; ok {
+		t.Errorf("a rename carries limits: %v", rename)
+	}
+	if _, ok := rename["limits_before"]; ok {
+		t.Errorf("a rename carries limits_before: %v", rename)
+	}
+}
+
+// A limits update at an old revision is runner_pool_stale and the block stays.
+func TestPG_RunnerPoolStaleRevisionRefusesALimitsChange(t *testing.T) {
+	e := newPoolEnv(t, false)
+	pool := e.limitedPool("Limited")
+	if w := e.admin(http.MethodPut, poolPath(pool.ID), `{"revision":1,"name":"Renamed"}`); w.Code != http.StatusOK {
+		t.Fatalf("rename = %d %s", w.Code, w.Body)
+	}
+	before := e.storedLimits(pool.ID)
+	w := e.admin(http.MethodPut, poolPath(pool.ID), fmt.Sprintf(`{"revision":1,"limits":%s}`, poolLimitsWithoutCap))
+	if w.Code != http.StatusConflict || wireReason(t, w) != string(runnerpool.ReasonStale) {
+		t.Errorf("stale limits update = %d %s, want 409 runner_pool_stale", w.Code, w.Body)
+	}
+	if !reflect.DeepEqual(e.storedLimits(pool.ID), before) || e.revision(pool.ID) != 2 {
+		t.Errorf("a stale limits update changed the pool")
 	}
 }
 

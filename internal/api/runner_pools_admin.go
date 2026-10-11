@@ -6,6 +6,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"reflect"
 	"slices"
 
 	"github.com/go-chi/chi/v5"
@@ -57,11 +58,12 @@ func (s *Server) handleCreateRunnerPool(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if req.Limits != nil {
-		// Not stored yet: refused rather than accepted and dropped.
-		writePoolInvalid(w, "pool limits are not supported yet")
-		return
+		if err := req.Limits.Validate(); err != nil {
+			writePoolInvalid(w, err.Error())
+			return
+		}
 	}
-	p, err := ps.CreateRunnerPool(r.Context(), types.RunnerPool{ID: uuid.New(), Name: req.Name, HostingType: req.HostingType}, principalFromRequest(r))
+	p, err := ps.CreateRunnerPool(r.Context(), types.RunnerPool{ID: uuid.New(), Name: req.Name, HostingType: req.HostingType, Limits: req.Limits}, principalFromRequest(r))
 	switch {
 	case errors.Is(err, store.ErrConflict):
 		writePoolInvalid(w, "a pool with that name already exists")
@@ -73,7 +75,11 @@ func (s *Server) handleCreateRunnerPool(w http.ResponseWriter, r *http.Request) 
 		writeServerError(w, r, "create runner pool", err)
 		return
 	}
-	s.auditPool(r, auditPoolCreate, p.ID.String(), map[string]any{"name": p.Name, "hosting_type": p.HostingType, "revision": p.Revision})
+	data := map[string]any{"name": p.Name, "hosting_type": p.HostingType, "revision": p.Revision}
+	if p.Limits != nil {
+		data["limits"] = p.Limits
+	}
+	s.auditPool(r, auditPoolCreate, p.ID.String(), data)
 	writeJSON(w, http.StatusCreated, p)
 }
 
@@ -90,11 +96,6 @@ func (s *Server) handleUpdateRunnerPool(w http.ResponseWriter, r *http.Request) 
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	if req.Limits != nil {
-		// Not stored yet: refused rather than accepted and dropped, as on create.
-		writePoolInvalid(w, "pool limits are not supported yet")
-		return
-	}
 	if err := req.Validate(); err != nil {
 		writePoolInvalid(w, err.Error())
 		return
@@ -104,7 +105,7 @@ func (s *Server) handleUpdateRunnerPool(w http.ResponseWriter, r *http.Request) 
 		st := types.RunnerPoolState(*req.State)
 		state = &st
 	}
-	p, err := ps.UpdateRunnerPool(r.Context(), cur.ID, req.Revision, req.Name, state)
+	p, err := ps.UpdateRunnerPool(r.Context(), cur.ID, req.Revision, req.Name, state, req.Limits)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writePoolNotFound(w)
@@ -120,10 +121,14 @@ func (s *Server) handleUpdateRunnerPool(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if p.Revision != cur.Revision {
-		s.auditPool(r, auditPoolUpdate, p.ID.String(), map[string]any{
+		data := map[string]any{
 			"hosting_type": p.HostingType, "name_before": cur.Name, "name": p.Name,
 			"state_before": cur.State, "state": p.State, "revision": p.Revision,
-		})
+		}
+		if !reflect.DeepEqual(cur.Limits, p.Limits) {
+			data["limits_before"], data["limits"] = cur.Limits, p.Limits
+		}
+		s.auditPool(r, auditPoolUpdate, p.ID.String(), data)
 	}
 	writeJSON(w, http.StatusOK, p)
 }
