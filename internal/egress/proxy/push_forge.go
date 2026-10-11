@@ -21,8 +21,10 @@ package proxy
 // repository itself. Comparing against whatever parent the pack names would
 // let a fork's commit vouch for its own content at a denied path. So a base
 // counts only when the forge reports it inside the CURRENT history of a
-// branch this push updates or of the default branch (contains) — the forge
-// resolves those names, so nothing the pack asserts is taken on trust. A
+// branch this push updates or of the default branch (contains). An updated
+// branch counts only at the tip the forge reports, and only when that tip
+// is the old value the push states (updatedTip): neither the branch name
+// nor the old value the push asserts is taken on trust. A
 // merge passes an entry matching ANY counted parent: demanding all would
 // refuse merging the default branch in after it changed a denied path, and
 // closes nothing a single-parent commit on the same base couldn't already.
