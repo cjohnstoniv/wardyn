@@ -137,18 +137,25 @@ type StartFolder struct {
 // StartFolderDrive names the person's drive as a start folder attachment.
 const StartFolderDrive = "drive"
 
-// UsesRunMode reports whether the request carries any of the run-mode contract's
-// fields, which makes it a new client's: its mode must then be explicit.
+// RunModeContractV09 is the one value of CreateRunRequest.ModeContract.
+const RunModeContractV09 = "0.9"
+
+// UsesRunMode reports whether the request is a new client's: it carries the
+// contract marker or any of the run-mode contract's fields, so its mode must be
+// explicit. The marker is what lets the server refuse "nothing chosen" instead of
+// reading a client that sent no carrier as an older one.
 func (r CreateRunRequest) UsesRunMode() bool {
-	return r.Experience != "" || r.Workload != nil || len(r.Tools) > 0 || r.Startup != nil || r.StartFolder != nil || r.NoRepositoriesOrDrives
+	return r.ModeContract != "" || r.Experience != "" || r.Workload != nil || len(r.Tools) > 0 || r.Startup != nil || r.StartFolder != nil || r.NoRepositoriesOrDrives
 }
 
 // EffectiveExperience is the documented compatibility mapping from an older
 // client's fields: a request is Interactive when it says so or has no task (the
 // server coerces such a request to idle and attachable), and Background
 // otherwise. A request that carries `experience` is its own answer. The mapping
-// is for reading old requests; the server stores an experience only for a
-// request that carried one, so an older client's run keeps every door's behaviour.
+// is for reading old requests (display, documentation); the server stores an
+// experience only for a request that carried one, so an older client's run keeps
+// every door's behaviour. Never use it to admit a run: admission reads the
+// stored value (types.ExperienceAllowed).
 func (r CreateRunRequest) EffectiveExperience() Experience {
 	switch {
 	case r.Experience != "":

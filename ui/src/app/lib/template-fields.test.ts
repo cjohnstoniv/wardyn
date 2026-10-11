@@ -80,6 +80,7 @@ describe("template field registry", () => {
     expect(TEMPLATE_REQUEST_FIELDS.filter((r) => r.excluded).map((r) => r.name).sort()).toEqual([
       "description",
       "integration_id",
+      "mode_contract",
       "preset",
       "preset_version",
       "title",

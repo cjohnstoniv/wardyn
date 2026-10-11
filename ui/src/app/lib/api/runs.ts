@@ -123,10 +123,14 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   allowed_image?: string;
   resources?: RequestedResources;
   overrides?: RunOverrides;
-  // The run-mode contract (pkg/client/runs_mode.go). A request with an experience
-  // is a new client's: runWireBody then omits the older agent, task, interactive,
+  // The run-mode contract (pkg/client/runs_mode.go). A request with the marker or
+  // an experience is a new client's: runWireBody then omits the older agent, task, interactive,
   // task_mode, interactive_start, seed_auto_tools, tool_approvals and
   // model_provider, which the carriers replace and the server refuses beside them.
+  // The contract marker (pkg/client.RunModeContractV09): the New Run wizard always
+  // sends it, so a request whose mode is unset is refused by the server and never
+  // read as an older client's.
+  mode_contract?: "0.9";
   experience?: Experience;
   workload?: RunWorkload;
   tools?: IncludedTool[];
@@ -141,7 +145,7 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
 /** The shared request projection for create, preflight and policy preview. */
 export function runWireBody(input: RunWireInput): Record<string, unknown> {
   // The run-mode carriers replace the older mode fields; a request never mixes the two.
-  const newClient = Boolean(input.experience);
+  const newClient = Boolean(input.mode_contract || input.experience);
   const body: Record<string, unknown> = { repo: input.repo };
   if (!newClient) {
     body.agent = input.agent;
@@ -200,6 +204,7 @@ export function runWireBody(input: RunWireInput): Record<string, unknown> {
   if (input.allowed_image) body.allowed_image = input.allowed_image;
   if (input.resources && (input.resources.cpu_millis || input.resources.memory_mib)) body.resources = input.resources;
   if (input.overrides) body.overrides = input.overrides;
+  if (input.mode_contract) body.mode_contract = input.mode_contract;
   if (input.experience) body.experience = input.experience;
   if (input.workload) body.workload = input.workload;
   if (input.tools?.length) body.tools = input.tools;

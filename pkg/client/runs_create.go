@@ -171,6 +171,13 @@ type CreateRunRequest struct {
 	// (OD-1), applied inside the resolve fold before the ceiling clamp. See
 	// RunOverrides.
 	Overrides *RunOverrides `json:"overrides,omitempty"`
+	// ModeContract marks a request as a 0.9 client's, whatever else it carries:
+	// it is RunModeContractV09 and nothing else. The server then holds the
+	// request to the run-mode contract, so an unset Experience is refused
+	// (run_mode_required) and never read as an older client's. The console's New
+	// Run wizard always sends it; an older client, and the CLI's older flags,
+	// send none and keep the older mapping.
+	ModeContract string `json:"mode_contract,omitempty"`
 	// Experience is the canonical run mode, "background" or "interactive". A new
 	// client sends it with the carriers below, which replace the legacy agent,
 	// task, task_mode, interactive, interactive_start, seed_auto_tools,

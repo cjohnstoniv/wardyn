@@ -141,6 +141,7 @@ const expectedWire: Record<string, unknown> = {
 // so this body is the second half of "every CreateRunRequest tag is forwarded".
 const fullModeInput: WireInput = {
   repo: "acme/payments",
+  mode_contract: "0.9",
   experience: "interactive",
   tools: [{ id: "claude-code", kind: "harness", model_provider: "bedrock-team" }],
   startup: { kind: "harness", tool: "claude-code" },
@@ -400,6 +401,17 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       }
       for (const key of REPLACED_BY_RUN_MODE) expect(body, `${key} on ${door}`).not.toHaveProperty(key);
     }
+  });
+
+  it("the contract marker makes a request a new client's even with no experience: the older mode fields are not sent", () => {
+    const body = runWireBody({ repo: "acme/payments", mode_contract: "0.9", agent: "claude-code", task: "t", interactive: true, task_mode: "exec", model_provider: "bedrock-team" });
+    expect(body).toHaveProperty("mode_contract", "0.9");
+    expect(body).not.toHaveProperty("experience");
+    for (const key of REPLACED_BY_RUN_MODE) expect(body, key).not.toHaveProperty(key);
+    // Without the marker the same input is the older client's, which the server reads as before.
+    const older = runWireBody({ repo: "acme/payments", agent: "claude-code", task: "t" });
+    expect(older).not.toHaveProperty("mode_contract");
+    expect(older).toHaveProperty("agent", "claude-code");
   });
 
   it("an older client's request carries none of the run-mode carriers", () => {

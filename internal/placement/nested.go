@@ -47,7 +47,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.RunPolicySpec](): strings.Fields("AllowedDomains DeniedDomains AllowAllEgress FirstUseApproval FirstUseHoldSeconds MaxHolds AllowedMethods MinConfinementClass EligibleGrants AutoStopAfterSec " +
 		"WorkspaceMounts WorkspaceRepos LLMInspection UIApps Resources ToolRules GitPushAnyBranch PushRules AzureDevOpsCapabilities GitHubCapabilities"),
 	reflect.TypeFor[types.ToolRule]():         strings.Fields("Tool Effect"),
-	reflect.TypeFor[types.PushRuleSet]():      strings.Fields("Provider Org Rules"),
+	reflect.TypeFor[types.PushRuleSet]():      strings.Fields("Provider Host Org Rules"),
 	reflect.TypeFor[types.HarnessToolRules](): strings.Fields("Harness Default Rules"),
 	reflect.TypeFor[types.UIApp]():            strings.Fields("Name Port Path"),
 	reflect.TypeFor[types.WorkspaceMount]():   strings.Fields("Source Target ReadOnly"),

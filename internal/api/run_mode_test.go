@@ -13,8 +13,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -42,6 +44,10 @@ func TestRunModeRefusals(t *testing.T) {
 		{"a new client's mode is never inferred", `"workload":{"kind":"command","command":"make"}`, reasonRunModeRequired, runModeRequiredMsg(), 400},
 		{"start folder alone is a new client's too", `"start_folder":{"kind":"image_default"}`, reasonRunModeRequired, runModeRequiredMsg(), 400},
 		{"no repositories alone is a new client's too", noRepos, reasonRunModeRequired, runModeRequiredMsg(), 400},
+		{"the contract marker alone is a new client's", `"mode_contract":"0.9"`, reasonRunModeRequired, runModeRequiredMsg(), 400},
+		{"the marker with only older fields is not an older client's", `"mode_contract":"0.9","agent":"claude-code","task":"t"`, reasonRunModeRequired, runModeRequiredMsg(), 400},
+		{"the marker is closed", `"mode_contract":"1.0"`, reasonRunModeInvalid, "", 400},
+		{"the marker beside a chosen mode is honoured", `"mode_contract":"0.9",` + bgAgentTask, "", "", 200},
 		{"experience unknown", `"experience":"batch"`, reasonRunModeInvalid, "", 400},
 		{"background needs a workload", `"experience":"background",` + noRepos, reasonRunModeRequired, runWorkloadRequiredMsg(), 400},
 		{"background agent task is honoured", bgAgentTask, "", "", 200},
@@ -58,6 +64,7 @@ func TestRunModeRefusals(t *testing.T) {
 		{"background command includes no tool", `"experience":"background","workload":{"kind":"command","command":"make"},"tools":[` + claudeTool + `],` + noRepos, reasonRunModeConflict, "", 422},
 		{"interactive has no workload", `"experience":"interactive",` + agentTask + `,"tools":[` + claudeTool + `],` + noRepos, reasonRunModeConflict, "", 422},
 
+		{"a legacy model provider does not ride beside the carriers", `"experience":"background",` + agentTask + `,"model_provider":"bedrock-team",` + noRepos, reasonRunModeConflict, runModeConflictMsg("model_provider", "Use tools[].model_provider."), 422},
 		{"older fields do not ride beside the carriers", `"experience":"interactive","tools":[` + claudeTool + `],"agent":"claude-code",` + noRepos, reasonRunModeConflict,
 			runModeConflictMsg("agent", "Name the harness in workload.agent or in tools."), 422},
 		{"the older interactive flag does not either", `"experience":"interactive","tools":[` + claudeTool + `],"interactive":true,` + noRepos, reasonRunModeConflict, "", 422},
@@ -78,6 +85,9 @@ func TestRunModeRefusals(t *testing.T) {
 		{"an interactive environment with no tool waits for its lane", `"experience":"interactive",` + noRepos, reasonRequestFieldUnavailable, "", 422},
 		{"two tools are not dropped", `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],` + noRepos, reasonRequestFieldUnavailable, "", 422},
 		{"per-tool rules are not dropped", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"hold"}]}],` + noRepos, reasonRequestFieldUnavailable, "", 422},
+		{"a tool rule that allows widens the policy", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"allow"}]}],` + noRepos, reasonOverrideRefused, toolAllowRefusedMsg(0), 422},
+		{"a default that allows widens the policy", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"allow"}],` + noRepos, reasonOverrideRefused, toolAllowRefusedMsg(0), 422},
+		{"a tool rule that holds is not available yet", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"hold"}]}],` + noRepos, reasonRequestFieldUnavailable, "", 422},
 		{"a per-tool default is not dropped", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"deny"}],` + noRepos, reasonRequestFieldUnavailable, "", 422},
 		{"a component tool is not dropped", `"experience":"interactive","tools":[{"id":"lint","kind":"component","component":{"inline":{"hosts":["a.example.com"]}}}],` + noRepos, reasonRequestFieldUnavailable, "", 422},
 		{"a tool id is one token", `"experience":"interactive","tools":[{"id":"a b","kind":"harness"}],` + noRepos, reasonRunModeInvalid, "", 400},
@@ -141,6 +151,11 @@ func TestRunModeProjection(t *testing.T) {
 		{"interactive, nothing starts",
 			createRunRequest{Experience: client.ExperienceInteractive, Tools: []client.IncludedTool{{ID: "codex-cli", Kind: client.IncludedToolHarness}}, NoRepositoriesOrDrives: true},
 			createRunRequest{Interactive: true, Agent: "codex-cli"}},
+		{"interactive, startup none starts nothing",
+			createRunRequest{Experience: client.ExperienceInteractive, NoRepositoriesOrDrives: true,
+				Tools:   []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness}},
+				Startup: &client.RunStartup{Kind: client.StartupNone}},
+			createRunRequest{Interactive: true, Agent: "claude-code"}},
 		{"interactive, the harness starts",
 			createRunRequest{Experience: client.ExperienceInteractive, NoRepositoriesOrDrives: true,
 				Tools:   []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness, ModelProvider: provider}},
@@ -217,6 +232,150 @@ func TestRunModeIsStoredOnlyWhenChosen(t *testing.T) {
 	}
 }
 
+// TestAdmissionAndTheDoorsReadOneValue pins the invariant a pool's run-type
+// limit relies on: the experience admission sees is the one stored on the run and
+// read by every door. A request in the older shape stores none, so a Background-only
+// place refuses it; it is never admitted as a background run that the doors then
+// leave attachable.
+func TestAdmissionAndTheDoorsReadOneValue(t *testing.T) {
+	backgroundOnlyPool := []types.RunExperience{types.ExperienceBackground}
+	for _, tc := range []struct {
+		name         string
+		req          createRunRequest
+		wantAdmitted bool
+	}{
+		{"an older client's task run", createRunRequest{Agent: "claude-code", Task: "fix the build"}, false},
+		{"an older client's command run", createRunRequest{Agent: "codex-cli", Task: "make", TaskMode: "exec"}, false},
+		{"a new client's background run", createRunRequest{Experience: client.ExperienceBackground, Workload: &client.RunWorkload{Kind: client.WorkloadCommand, Command: "make"}, NoRepositoriesOrDrives: true}, true},
+		{"a new client's interactive run", createRunRequest{Experience: client.ExperienceInteractive, Tools: []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness}}, NoRepositoriesOrDrives: true}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := tc.req
+			if refusal := applyRunMode(&req); refusal != nil {
+				t.Fatalf("refused: %+v", refusal.body)
+			}
+			stored := types.AgentRun{Experience: req.Experience}
+			if got := types.ExperienceAllowed(backgroundOnlyPool, stored.Experience); got != tc.wantAdmitted {
+				t.Errorf("a Background-only place admitted = %v, want %v", got, tc.wantAdmitted)
+			}
+			if admitted := types.ExperienceAllowed(backgroundOnlyPool, stored.Experience); admitted != stored.BackgroundOnly() {
+				t.Errorf("admitted as background = %v but the doors read BackgroundOnly = %v", admitted, stored.BackgroundOnly())
+			}
+			if types.ExperienceAllowed(types.RunExperiences, "") {
+				t.Error("an unset experience satisfied a limit that lists both run types")
+			}
+		})
+	}
+}
+
+// TestBackgroundIdleStopIsBoundWhateverTheSource: a resolved policy's idle stop
+// is zeroed for a background run (with a note), left alone for everything else,
+// and the idle sweep never takes a background run as a candidate.
+func TestBackgroundIdleStopIsBoundWhateverTheSource(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		exp      client.Experience
+		in, want int
+		noted    bool
+	}{
+		{"background, a policy's idle stop", client.ExperienceBackground, 1800, 0, true},
+		{"background, an explicit never", client.ExperienceBackground, -1, 0, true},
+		{"background, none", client.ExperienceBackground, 0, 0, false},
+		{"interactive keeps it", client.ExperienceInteractive, 1800, 1800, false},
+		{"an older client keeps it", "", 1800, 1800, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := types.RunPolicySpec{AutoStopAfterSec: tc.in}
+			notes := boundBackgroundIdleStop(createRunRequest{Experience: tc.exp}, &spec)
+			if spec.AutoStopAfterSec != tc.want || (len(notes) > 0) != tc.noted {
+				t.Errorf("idle stop = %d notes %v, want %d noted=%v", spec.AutoStopAfterSec, notes, tc.want, tc.noted)
+			}
+		})
+	}
+	old := time.Now().Add(-time.Hour)
+	for _, tc := range []struct {
+		run  types.AgentRun
+		want bool
+	}{
+		{types.AgentRun{AutoStopAfterSec: 60, UpdatedAt: old}, true},
+		{types.AgentRun{AutoStopAfterSec: 60, UpdatedAt: old, Experience: types.ExperienceInteractive}, true},
+		{types.AgentRun{AutoStopAfterSec: 60, UpdatedAt: old, Experience: types.ExperienceBackground}, false},
+	} {
+		if got := autoStopCandidate(tc.run, time.Now()); got != tc.want {
+			t.Errorf("%+v: candidate = %v, want %v", tc.run, got, tc.want)
+		}
+	}
+}
+
+// TestNoRepositoriesIsHeldToTheResolvedPolicy: the explicit choice of nothing
+// attached is refused when the policy the run resolves to mounts or clones
+// something, whichever source brought it.
+func TestNoRepositoriesIsHeldToTheResolvedPolicy(t *testing.T) {
+	mount := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: "/data", Target: "/work"}}}
+	repo := types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: "acme/widgets", Target: "/work"}}}
+	for _, tc := range []struct {
+		name string
+		req  createRunRequest
+		spec types.RunPolicySpec
+		want bool
+	}{
+		{"nothing resolved", createRunRequest{NoRepositoriesOrDrives: true}, types.RunPolicySpec{}, false},
+		{"a resolved mount", createRunRequest{NoRepositoriesOrDrives: true}, mount, true},
+		{"a resolved clone", createRunRequest{NoRepositoriesOrDrives: true}, repo, true},
+		{"no explicit choice", createRunRequest{}, mount, false},
+	} {
+		refusal := noRepositoriesResolvedRefusal(tc.req, tc.spec)
+		if (refusal != nil) != tc.want || (refusal != nil && (refusal.body.Reason != reasonRunModeConflict || refusal.body.Error != noRepositoriesConflictMsg())) {
+			t.Errorf("%s: refusal = %+v, want refused=%v with the shared sentence", tc.name, refusal, tc.want)
+		}
+	}
+}
+
+// TestHarnessRulesStayRefusedUntilTheHarnessIsBound pins the dependency
+// types.HarnessToolRules documents: the harness id that keys a tool-rule lookup
+// has no trusted source until the proxy binds it, so a second included tool, a
+// per-tool rule and a per-tool default are all refused out loud. Lifting any of
+// the three before A-L3 lands the binding lets one tool borrow a sibling's allow.
+func TestHarnessRulesStayRefusedUntilTheHarnessIsBound(t *testing.T) {
+	claude := client.IncludedTool{ID: "claude-code", Kind: client.IncludedToolHarness}
+	codex := client.IncludedTool{ID: "codex-cli", Kind: client.IncludedToolHarness}
+	held := claude
+	held.DefaultEffect = types.ToolHold
+	ruled := claude
+	ruled.ToolRules = []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}
+	for name, req := range map[string]createRunRequest{
+		"a second included tool":   {Tools: []client.IncludedTool{claude, codex}},
+		"a per-tool default":       {Tools: []client.IncludedTool{held}},
+		"a per-tool rule":          {Tools: []client.IncludedTool{ruled}},
+		"a rule on the second one": {Tools: []client.IncludedTool{claude, ruled}},
+	} {
+		if refusal := runModeUnavailableRefusal(req); refusal == nil || refusal.body.Reason != reasonRequestFieldUnavailable {
+			t.Errorf("%s: refusal = %+v, want %s", name, refusal, reasonRequestFieldUnavailable)
+		}
+	}
+	if refusal := runModeUnavailableRefusal(createRunRequest{Tools: []client.IncludedTool{claude}}); refusal != nil {
+		t.Errorf("one plain harness is available: %+v", refusal)
+	}
+}
+
+// TestNoRepositoriesIsRefusedAtEveryDoorWhenThePolicyMountsSomething drives the
+// resolve step itself: a deployment default that mounts a directory meets the
+// explicit choice of nothing attached with the shared refusal, at create,
+// preflight and preview, and the older client's launch under that default is
+// unchanged.
+func TestNoRepositoriesIsRefusedAtEveryDoorWhenThePolicyMountsSomething(t *testing.T) {
+	for _, door := range contractDoors {
+		t.Run(door.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.srv.cfg.DefaultPolicy.WorkspaceMounts = []types.WorkspaceMount{{Source: "/data", Target: "/home/agent/work"}}
+			w := do(t, h.srv, http.MethodPost, door.path, adminToken, modeBody(interactiveOK))
+			if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonRunModeConflict || !strings.Contains(w.Body.String(), noRepositoriesConflictMsg()) {
+				t.Fatalf("got %d %s, want 422 %s", w.Code, w.Body.String(), reasonRunModeConflict)
+			}
+		})
+	}
+}
+
 func TestBackgroundOnlyRefusal(t *testing.T) {
 	bg := types.AgentRun{Experience: types.ExperienceBackground}
 	refusal := backgroundOnlyRefusal(bg, "terminal")
@@ -262,10 +421,23 @@ func backgroundDoorBodies(t *testing.T) map[string]*ast.BlockStmt {
 	return out
 }
 
+// callsBackgroundPredicate reports whether body CALLS the predicate (a bare
+// mention such as `_ = backgroundOnlyRefusal` does not count).
 func callsBackgroundPredicate(body *ast.BlockStmt) bool {
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
-		if id, ok := n.(*ast.Ident); ok && (id.Name == "backgroundOnlyRefusal" || id.Name == "refuseBackgroundOnly") {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return !found
+		}
+		name := ""
+		switch fn := call.Fun.(type) {
+		case *ast.Ident:
+			name = fn.Name
+		case *ast.SelectorExpr:
+			name = fn.Sel.Name
+		}
+		if name == "backgroundOnlyRefusal" || name == "refuseBackgroundOnly" {
 			found = true
 		}
 		return !found
@@ -273,10 +445,25 @@ func callsBackgroundPredicate(body *ast.BlockStmt) bool {
 	return found
 }
 
+// doorEnforced is the table's Enforced column recomputed from the code: every
+// listed symbol must call the predicate, and a door with no symbol is never enforced.
+func doorEnforced(door backgroundDoor, bodies map[string]*ast.BlockStmt) bool {
+	if len(door.Symbols) == 0 {
+		return false
+	}
+	for _, sym := range door.Symbols {
+		if body, ok := bodies[sym]; !ok || !callsBackgroundPredicate(body) {
+			return false
+		}
+	}
+	return true
+}
+
 // TestBackgroundDoorsAreHonest holds the door table to the code: every symbol an
-// owner is told to edit exists, and Enforced is true exactly when one of the
+// owner is told to edit exists, and Enforced is true exactly when EVERY one of the
 // door's functions asks the predicate. The day a lane wires its door, this fails
-// until the table says so; a door cannot be listed as denied when it is not.
+// until the table says so; a door cannot be listed as denied when it is not, nor
+// when only some of its entry points are wired.
 func TestBackgroundDoorsAreHonest(t *testing.T) {
 	bodies := backgroundDoorBodies(t)
 	seen := map[string]bool{}
@@ -285,22 +472,130 @@ func TestBackgroundDoorsAreHonest(t *testing.T) {
 			t.Errorf("door %+v needs one name and an owner", door)
 		}
 		seen[door.Door] = true
-		enforced := false
 		for _, sym := range door.Symbols {
-			body, ok := bodies[sym]
-			if !ok {
+			if _, ok := bodies[sym]; !ok {
 				t.Errorf("%s: %s is not declared (renamed or removed: update backgroundDoors)", door.Door, sym)
-				continue
 			}
-			enforced = enforced || callsBackgroundPredicate(body)
 		}
-		if enforced != door.Enforced {
-			t.Errorf("%s: Enforced = %v but the door's code %s the predicate", door.Door, door.Enforced, map[bool]string{true: "asks", false: "does not ask"}[enforced])
+		if enforced := doorEnforced(door, bodies); enforced != door.Enforced {
+			t.Errorf("%s: Enforced = %v but the door's code %s the predicate in every listed function", door.Door, door.Enforced, map[bool]string{true: "asks", false: "does not ask"}[enforced])
 		}
 	}
-	for _, want := range []string{"terminal", "interactive exec", "SSH access", "web application gateway", "desktop", "interactive session"} {
+	for _, want := range []string{"terminal", "interactive exec", "SSH access", "web application gateway", "desktop"} {
 		if !seen[want] {
 			t.Errorf("the door table lost %q", want)
+		}
+	}
+	for _, door := range backgroundDoors {
+		for _, sym := range door.Symbols {
+			if sym == "handleReviveRun" || sym == "reviveRunProxy" {
+				t.Errorf("%s lists %s: revive is lifecycle recovery, not an interactive door", door.Door, sym)
+			}
+		}
+	}
+}
+
+// TestDoorEnforcedNeedsEverySymbol pins the check TestBackgroundDoorsAreHonest
+// makes: one wired function of several, a bare mention and an empty door are not
+// enforcement.
+func TestDoorEnforcedNeedsEverySymbol(t *testing.T) {
+	parse := func(src string) *ast.BlockStmt {
+		f, err := parser.ParseFile(token.NewFileSet(), "x.go", "package p\n"+src, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f.Decls[0].(*ast.FuncDecl).Body
+	}
+	asks := parse(`func asks() { _ = backgroundOnlyRefusal(run, "x") }`)
+	method := parse(`func method() { if s.refuseBackgroundOnly(w, r, run, "x") { return } }`)
+	silent := parse(`func silent() {}`)
+	mention := parse(`func mention() { _ = backgroundOnlyRefusal }`)
+	for _, tc := range []struct {
+		name    string
+		symbols []string
+		want    bool
+	}{
+		{"every symbol asks", []string{"asks", "method"}, true},
+		{"one of two asks", []string{"asks", "silent"}, false},
+		{"a bare mention is not a call", []string{"mention"}, false},
+		{"no symbols is never enforced", nil, false},
+		{"an undeclared symbol is not enforced", []string{"asks", "gone"}, false},
+	} {
+		got := doorEnforced(backgroundDoor{Symbols: tc.symbols}, map[string]*ast.BlockStmt{"asks": asks, "method": method, "silent": silent, "mention": mention})
+		if got != tc.want {
+			t.Errorf("%s: enforced = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// runRoutes lists every "METHOD /runs/{id}..." route the package registers, found
+// by reading its own source.
+func runRoutes(t *testing.T) map[string]bool {
+	t.Helper()
+	fset := token.NewFileSet()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]bool{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, e.Name(), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) < 2 {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			lit, isLit := call.Args[0].(*ast.BasicLit)
+			if !ok || !isLit || lit.Kind != token.STRING {
+				return true
+			}
+			path, err := strconv.Unquote(lit.Value)
+			if err != nil || !strings.HasPrefix(path, "/runs/{id}") {
+				return true
+			}
+			out[strings.ToUpper(sel.Sel.Name)+" "+path] = true
+			return true
+		})
+	}
+	return out
+}
+
+// TestRunRoutesAreClassified is the completeness guard: every /runs/{id} route
+// the server registers is either a background door's route or a passive one, so
+// a new route that could open a shell, a web app or a desktop cannot be added
+// without deciding which. Stale entries fail too.
+func TestRunRoutesAreClassified(t *testing.T) {
+	registered := runRoutes(t)
+	if len(registered) < 20 {
+		t.Fatalf("found %d run routes; the route scan is broken", len(registered))
+	}
+	classified := map[string]string{}
+	for route, why := range passiveRunRoutes {
+		classified[route] = "passive: " + why
+	}
+	for _, door := range backgroundDoors {
+		for _, route := range door.Routes {
+			if prior, dup := classified[route]; dup {
+				t.Errorf("%s is listed twice (%s, and door %s)", route, prior, door.Door)
+			}
+			classified[route] = "door: " + door.Door
+		}
+	}
+	for route := range registered {
+		if classified[route] == "" {
+			t.Errorf("%s is registered but neither a door's route nor in passiveRunRoutes (run_mode_doors.go): decide whether it opens an interactive surface", route)
+		}
+	}
+	for route := range classified {
+		if !registered[route] {
+			t.Errorf("%s is classified but no longer registered", route)
 		}
 	}
 }

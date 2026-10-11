@@ -34,7 +34,8 @@ import (
 //     unset choices are refused and never inferred, what this server cannot honour
 //     yet is refused with request_field_unavailable (never dropped), and what it
 //     can honour is projected once onto the legacy fields, so one engine decides
-//     the run. A request that carries none of the fields is untouched.
+//     the run. A request that carries none of the fields, and not the contract
+//     marker (mode_contract), is an older client's and is untouched.
 //
 // What each lane lifts, by the path runModeUnavailable names:
 //
@@ -61,14 +62,52 @@ func runModeConflict(field, instead string) *runRefusal {
 
 // runModeCarriersUsed reports whether the request carries the mode carriers that
 // replace the legacy fields. start_folder and no_repositories_or_drives belong to
-// the repositories tab and sit beside either style.
+// the repositories tab, and they too are a new client's: UsesRunMode (and so
+// runModeRequiredRefusal) refuses either without an experience.
 func runModeCarriersUsed(req createRunRequest) bool {
 	return req.Experience != "" || req.Workload != nil || len(req.Tools) > 0 || req.Startup != nil
+}
+
+// runModeFieldSet names the first run-mode field a request carries, or "".
+func runModeFieldSet(req createRunRequest) string {
+	switch {
+	case req.ModeContract != "":
+		return "mode_contract"
+	case req.Experience != "":
+		return "experience"
+	case req.Workload != nil:
+		return "workload"
+	case len(req.Tools) > 0:
+		return "tools"
+	case req.Startup != nil:
+		return "startup"
+	case req.StartFolder != nil:
+		return "start_folder"
+	case req.NoRepositoriesOrDrives:
+		return "no_repositories_or_drives"
+	}
+	return ""
+}
+
+// presetRunModeRefusal refuses a preset that carries a run-mode field, at write
+// and again at launch. A preset is the older shape (launch fields plus a stored
+// request); run templates carry the new choices, so a preset that names them is
+// refused out loud instead of being stored and then failing at every launch.
+func presetRunModeRefusal(req createRunRequest) *runRefusal {
+	field := runModeFieldSet(req)
+	if field == "" {
+		return nil
+	}
+	return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
+		fmt.Sprintf("request.%s cannot be stored in a preset: a preset carries the older run fields until run templates replace it.", field))
 }
 
 // runModeShapeRefusal checks each carrier that is present. It is idempotent
 // under projection: it never reads a legacy field.
 func runModeShapeRefusal(req createRunRequest) *runRefusal {
+	if req.ModeContract != "" && req.ModeContract != client.RunModeContractV09 {
+		return runModeInvalid("mode_contract: %q is not a run-mode contract version this server reads (%s)", req.ModeContract, client.RunModeContractV09)
+	}
 	if req.Experience != "" && !req.Experience.Valid() {
 		return runModeInvalid("experience: %q is not one of background, interactive", req.Experience)
 	}
@@ -164,6 +203,13 @@ func toolRulesShapeRefusal(i int, t client.IncludedTool) *runRefusal {
 	}
 	if slices.ContainsFunc(t.ToolRules, func(r types.ToolRule) bool { return r.Tool == "*" }) {
 		return runModeInvalid("tools[%d].tool_rules: the default is default_effect, not a rule named *", i)
+	}
+	// A request's rules sit on top of the policy's and the ceiling's and may only
+	// narrow them, as the overrides do (the narrowing table's tool_rule_allow row):
+	// an allow here could displace an administrator's hold or deny.
+	if row, _ := types.OverrideRuleFor(types.OverrideToolRuleAllow, types.OverrideAdd); row.Rule == types.OverrideRefused &&
+		(t.DefaultEffect == types.ToolAllow || slices.ContainsFunc(t.ToolRules, func(r types.ToolRule) bool { return r.Effect == types.ToolAllow })) {
+		return runError(http.StatusUnprocessableEntity, reasonOverrideRefused, toolAllowRefusedMsg(i))
 	}
 	return nil
 }

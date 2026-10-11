@@ -28,26 +28,33 @@ func TestBackgroundOnlyReadsTheStoredExperience(t *testing.T) {
 	}
 }
 
-func TestPushRulesAreKeyedByProviderAndFoldedOrganisation(t *testing.T) {
+func TestPushRulesAreKeyedByProviderHostAndCanonicalOrganisation(t *testing.T) {
 	sets := []PushRuleSet{
 		{Provider: "github", Org: "Acme", Rules: PushRulesSpec{DenyPaths: []string{"infra/"}}},
 		{Provider: "azure_devops", Org: "acme", Rules: PushRulesSpec{RequireReviewPaths: []string{"ci/"}}},
+		{Provider: "github", Host: "ghes.corp.example", Org: "acme", Rules: PushRulesSpec{DenyPaths: []string{"secrets/"}}},
 	}
-	if got, ok := PushRulesForEntry(sets, "github", "acme"); !ok || got.DenyPaths[0] != "infra/" {
-		t.Errorf("github/acme = %+v %v", got, ok)
-	}
-	if got, ok := PushRulesForEntry(sets, "azure_devops", "ACME"); !ok || got.RequireReviewPaths[0] != "ci/" {
-		t.Errorf("azure_devops/ACME = %+v %v", got, ok)
+	for _, tc := range []struct {
+		name, provider, remote string
+		deny, review           string
+	}{
+		{"github.com/acme", "github", "https://github.com/ACME/x.git", "infra/", ""},
+		{"azure devops acme", "azure_devops", "https://dev.azure.com/Acme/p/_git/r", "", "ci/"},
+		{"a server's acme is its own entry", "github", "https://ghes.corp.example/acme/x", "secrets/", ""},
+	} {
+		got, ok, err := PushRulesForRemote(sets, tc.provider, tc.remote)
+		if err != nil || !ok || (tc.deny != "" && got.DenyPaths[0] != tc.deny) || (tc.review != "" && got.RequireReviewPaths[0] != tc.review) {
+			t.Errorf("%s = %+v %v %v", tc.name, got, ok, err)
+		}
 	}
 	// An entry with no set has no rules: it never borrows another entry's.
-	if _, ok := PushRulesForEntry(sets, "github", "other"); ok {
-		t.Error("another organisation borrowed a set")
+	for _, remote := range []string{"https://github.com/other/x", "https://ghes.other.example/acme/x"} {
+		if _, ok, err := PushRulesForRemote(sets, "github", remote); ok || err != nil {
+			t.Errorf("%s borrowed a set (found %v, err %v)", remote, ok, err)
+		}
 	}
-	if _, ok := PushRulesForEntry(sets, "azure_devops", "other"); ok {
+	if _, ok, _ := PushRulesForRemote(sets, "azure_devops", "https://dev.azure.com/other/p/_git/r"); ok {
 		t.Error("another organisation of the other provider borrowed a set")
-	}
-	if PushRuleKey("github", "Acme") != "github/acme" {
-		t.Error("the key folds the organisation")
 	}
 }
 
@@ -83,7 +90,12 @@ func TestDispatchCarrierValidators(t *testing.T) {
 	for name, err := range map[string]error{
 		"unknown provider":    ValidatePushRuleSets([]PushRuleSet{{Provider: "gitlab", Org: "a"}}),
 		"no organisation":     ValidatePushRuleSets([]PushRuleSet{{Provider: "github", Org: " "}}),
-		"one entry, two sets": ValidatePushRuleSets([]PushRuleSet{{Provider: "github", Org: "Acme"}, {Provider: "github", Org: "acme"}}),
+		"trailing space":      ValidatePushRuleSets([]PushRuleSet{{Provider: "github", Org: "acme "}}),
+		"trailing dot":        ValidatePushRuleSets([]PushRuleSet{{Provider: "github", Org: "acme."}}),
+		"zero-width":          ValidatePushRuleSets([]PushRuleSet{{Provider: "github", Org: "acme\u200b"}}),
+		"non-ASCII":           ValidatePushRuleSets([]PushRuleSet{{Provider: "github", Org: "\u0130cme"}}),
+		"a host with a port":  ValidatePushRuleSets([]PushRuleSet{{Provider: "github", Host: "ghes.example:8443", Org: "acme"}}),
+		"one entry, two sets": ValidatePushRuleSets([]PushRuleSet{{Provider: "github", Org: "Acme"}, {Provider: "github", Host: "GitHub.com", Org: "acme"}}),
 		"bad pattern":         ValidatePushRuleSets([]PushRuleSet{{Provider: "github", Org: "a", Rules: PushRulesSpec{DenyPaths: []string{"a//b"}}}}),
 		"no harness":          ValidateHarnessToolRules([]HarnessToolRules{{}}),
 		"harness twice":       ValidateHarnessToolRules([]HarnessToolRules{{Harness: "a"}, {Harness: "a"}}),
@@ -102,7 +114,7 @@ func TestDispatchCarrierValidators(t *testing.T) {
 	if err := ValidateHarnessToolRules([]HarnessToolRules{{Harness: "a", Default: ToolHold, Rules: []ToolRule{{Tool: "Bash", Effect: ToolDeny}}}, {Harness: "b"}}); err != nil {
 		t.Errorf("valid sets: %v", err)
 	}
-	if !strings.Contains(ValidatePushRuleSets([]PushRuleSet{{Provider: "github", Org: "a"}, {Provider: "github", Org: "A"}}).Error(), "github/a") {
+	if !strings.Contains(ValidatePushRuleSets([]PushRuleSet{{Provider: "github", Org: "a"}, {Provider: "github", Org: "A"}}).Error(), "github.com/a") {
 		t.Error("the duplicate names its entry")
 	}
 }

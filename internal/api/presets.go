@@ -154,6 +154,9 @@ func (s *Server) validatePresetRequest(w http.ResponseWriter, r *http.Request, n
 			"request.%s is set per launch, so a preset cannot carry it", bad[0]))
 		return false
 	}
+	if presetRunModeRefusal(req.Request).write(s, w, r) {
+		return false
+	}
 	if msg := agentRequirementError(req.Request); msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonPresetRequestInvalid, "request: "+msg)
 		return false
@@ -302,6 +305,9 @@ func (s *Server) expandRunPreset(w http.ResponseWriter, r *http.Request, req *cr
 	v, err := presetView(p)
 	if err != nil {
 		writeServerError(w, r, "decode preset", err)
+		return false
+	}
+	if presetRunModeRefusal(v.Request).write(s, w, r) {
 		return false
 	}
 	title, task := req.Title, req.Task

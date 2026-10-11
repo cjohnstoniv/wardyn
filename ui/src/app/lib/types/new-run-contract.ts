@@ -72,9 +72,11 @@ export interface GitPATOverride {
   api?: boolean;
 }
 
-/** Adds push content rules for one provider and organisation. Monotone: never removes one. */
+/** Adds push content rules for one provider host and organisation. Monotone: never removes one. */
 export interface PushRuleOverride {
   provider: "github" | "azure_devops";
+  /** A GitHub Enterprise Server or Azure DevOps Server host; absent is the provider's public host. */
+  host?: string;
   org: string;
   deny_paths?: string[];
   require_review_paths?: string[];

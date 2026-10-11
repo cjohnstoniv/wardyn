@@ -27,9 +27,18 @@ import (
 // compatibility choice made in exactly one place, BackgroundOnly.
 //
 // Each door is implemented by its owning lane; backgroundDoors is the list, with
-// the symbols an owner edits. Enforced says whether a door calls the predicate
-// yet, and TestBackgroundDoorsAreHonest holds that column to the code, so the
-// table cannot claim a denial that is not there.
+// the symbols an owner edits and the /runs/{id} routes that lead to it. Enforced
+// says whether the door asks the predicate yet, and TestBackgroundDoorsAreHonest
+// holds that column to the code: a door is Enforced only when EVERY listed symbol
+// calls backgroundOnlyRefusal or refuseBackgroundOnly, so a half-wired door cannot
+// claim a denial that is not there. TestRunRoutesAreClassified fails when a new
+// /runs/{id} route is registered that is neither a door's route nor listed in
+// passiveRunRoutes, so a new interactive route cannot slip in unlisted.
+//
+// Revive is not a door. It gives a lost run a new proxy and restarts a rebooted
+// run's agent, which is lifecycle recovery, and a background task keeps its
+// authorised lifecycle controls. A revived Background run still refuses every
+// door below, because the stored experience survives the revive.
 
 // backgroundDoor is one way a person or tool enters a running sandbox.
 type backgroundDoor struct {
@@ -39,7 +48,10 @@ type backgroundDoor struct {
 	Owner string
 	// Symbols are the functions the owner edits. A door with no surface yet has none.
 	Symbols []string
-	// Enforced is true once the door asks backgroundOnlyRefusal.
+	// Routes are the /runs/{id} routes that open this door, as "METHOD /path".
+	// SSH and the UI gateway are not under /runs/{id}; their Symbols are the guard.
+	Routes []string
+	// Enforced is true once every symbol asks backgroundOnlyRefusal.
 	Enforced bool
 }
 
@@ -48,12 +60,36 @@ type backgroundDoor struct {
 // gateway, so a direct API or CLI call needs no door of its own: denying here
 // denies there.
 var backgroundDoors = []backgroundDoor{
-	{Door: "terminal", Owner: "H4 (attach relay), H5", Symbols: []string{"handleAttachTicket", "handleAttachWS", "handleAttachTakeover"}},
+	{Door: "terminal", Owner: "H4 (attach relay), H5", Symbols: []string{"handleAttachTicket", "handleAttachWS", "handleAttachTakeover"},
+		Routes: []string{"POST /runs/{id}/attach-ticket", "POST /runs/{id}/attach/ticket", "GET /runs/{id}/attach", "POST /runs/{id}/attach/takeover"}},
 	{Door: "interactive exec", Owner: "H4", Symbols: []string{"establishExec"}},
 	{Door: "SSH access", Owner: "SSH gateway owner", Symbols: []string{"sshAuth", "handleSSHSessionChannel", "handleSSHDirectTCPIP"}},
 	{Door: "web application gateway", Owner: "UI gateway owner", Symbols: []string{"handleUIEnter", "handleUIRelay", "handleUIBind"}},
 	{Door: "desktop", Owner: "D-117 (no desktop surface exists yet; its first owner adds the symbols here)"},
-	{Door: "interactive session", Owner: "H3 (restored and reconnected sessions)", Symbols: []string{"handleReviveRun", "reviveRunProxy"}},
+}
+
+// passiveRunRoutes are the /runs/{id} routes that are not interactive doors: they
+// read, or change the run's lifecycle, and stay available to a background run.
+var passiveRunRoutes = map[string]string{
+	"GET /runs/{id}":                     "read the run",
+	"GET /runs/{id}/ado-tokens":          "read",
+	"GET /runs/{id}/attach-holder":       "read who holds the terminal; opens nothing",
+	"GET /runs/{id}/attach/holder":       "read who holds the terminal; opens nothing",
+	"GET /runs/{id}/events":              "read",
+	"GET /runs/{id}/files":               "read",
+	"GET /runs/{id}/grants":              "read",
+	"GET /runs/{id}/output":              "logs and output stay available",
+	"GET /runs/{id}/policy":              "read",
+	"GET /runs/{id}/resources":           "read",
+	"GET /runs/{id}/sign-in":             "read",
+	"MOUNT /runs/{id}/recording":         "replay of a finished recording",
+	"PATCH /runs/{id}":                   "lifecycle: end and wait",
+	"PATCH /runs/{id}/title":             "lifecycle: title",
+	"POST /runs/{id}/kill":               "lifecycle: kill",
+	"POST /runs/{id}/profile":            "synthesise a profile from audit",
+	"POST /runs/{id}/profile/synthesize": "synthesise a profile from audit",
+	"POST /runs/{id}/resume":             "lifecycle: resume a paused run",
+	"POST /runs/{id}/revive":             "lifecycle recovery; the revived run keeps its stored experience, so every door above still refuses it",
 }
 
 // backgroundOnlyRefusal is the one call every interactive door makes: nil when

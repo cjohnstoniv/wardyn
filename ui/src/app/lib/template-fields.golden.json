@@ -82,6 +82,7 @@
     ],
     "PushRuleOverride": [
       "provider",
+      "host",
       "org",
       "deny_paths",
       "require_review_paths"
@@ -596,6 +597,11 @@
       "name": "preset",
       "excluded": "origin",
       "why": "A preset is a launch shortcut. A template records its own origin, and the setup it holds is carried field by field."
+    },
+    {
+      "name": "mode_contract",
+      "excluded": "origin",
+      "why": "The contract marker belongs to the request a client sends, not to the setup a template holds."
     },
     {
       "name": "preset_version",

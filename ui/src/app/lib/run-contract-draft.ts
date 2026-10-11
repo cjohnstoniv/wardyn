@@ -109,14 +109,35 @@ export interface ActiveSections {
   azureDevOps: boolean;
   /** The forge hosts of the git_pat sections on the page. */
   gitPATHosts: readonly string[];
-  /** The `provider/org` keys of the Git sections on the page (PushRuleOverride keys). */
+  /** The `host/org` keys of the Git sections on the page (pushRuleKey). */
   pushKeys: readonly string[];
 }
 
 export const NO_ACTIVE_SECTIONS: ActiveSections = { agent: false, azureDevOps: false, gitPATHosts: [], pushKeys: [] };
 
-/** The key a push-rule override is filed under: provider and organisation, the organisation in lower case (Go: types.PushRuleKey). */
-export const pushRuleKey = (p: Pick<PushRuleOverride, "provider" | "org">): string => `${p.provider}/${p.org.toLowerCase()}`;
+/**
+ * The key a push-rule override is filed under: the provider host and the
+ * organisation, both canonical, or "" when they name no entry (Go:
+ * types.PushRuleKey; push-rule-key.golden.json holds both to one table of cases).
+ * The organisation is NFKC-normalised and ASCII-lowercased, and anything with
+ * white space, a control or zero-width character, a trailing dot or a non-ASCII
+ * character after normalisation names no entry.
+ */
+export function pushRuleKey(p: Pick<PushRuleOverride, "provider" | "org"> & { host?: string }): string {
+  if (p.provider !== "github" && p.provider !== "azure_devops") return "";
+  const org = p.org.normalize("NFKC");
+  if (org === "" || org.length > 100 || org.endsWith(".") || /[^\x21-\x7e]/.test(org)) return "";
+  const lower = org.toLowerCase();
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(lower)) return "";
+  const host = canonicalPushHost(p.provider, p.host ?? "");
+  return host === "" ? "" : `${host}/${lower}`;
+}
+
+function canonicalPushHost(provider: "github" | "azure_devops", host: string): string {
+  if (host === "") return provider === "github" ? "github.com" : "dev.azure.com";
+  const h = host.normalize("NFKC").toLowerCase().replace(/^ssh\./, "");
+  return h.length <= 253 && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/.test(h) ? h : "";
+}
 
 const hasAgentEdit = (a: AgentOverrides): boolean =>
   Object.values(a).some((v) => Array.isArray(v) && v.length > 0);
@@ -208,9 +229,10 @@ export function buildRunModeWire(mode: RunModeDraft | undefined): RunModeWire {
   const out: RunModeWire = { experience: mode.experience };
   if (mode.experience === "background") {
     if (mode.workload) out.workload = mode.workload;
-    const agent = mode.workload?.kind === "agent_task" ? mode.workload.agent : undefined;
-    const tools = mode.tools.filter((t) => t.id === agent);
-    if (tools.length) out.tools = tools;
+    // Every included tool is sent, never filtered: a tool a background run does not
+    // use is the person's to remove (runModeBlocker holds Launch on it), and the
+    // server refuses it by name, so nothing the draft holds is dropped unseen.
+    if (mode.tools.length) out.tools = mode.tools;
   } else {
     if (mode.tools.length) out.tools = mode.tools;
     if (mode.startup) out.startup = mode.startup;
@@ -221,10 +243,19 @@ export function buildRunModeWire(mode: RunModeDraft | undefined): RunModeWire {
 }
 
 /** What the draft keeps for the mode it is not in, so a panel can say it is not used ("Not used by a background task."). */
-export function inactiveRunMode(mode: RunModeDraft): Pick<RunModeDraft, "workload" | "startup"> {
-  if (mode.experience === "background") return { startup: mode.startup };
+export function inactiveRunMode(mode: RunModeDraft): Partial<Pick<RunModeDraft, "workload" | "startup" | "tools">> {
+  if (mode.experience === "background") {
+    const extra = unusedBackgroundTools(mode);
+    return extra.length ? { startup: mode.startup, tools: extra } : { startup: mode.startup };
+  }
   if (mode.experience === "interactive") return { workload: mode.workload };
   return {};
+}
+
+/** The included tools a background run does not use: all of them for a command, all but the task's harness for an agent task. */
+export function unusedBackgroundTools(mode: RunModeDraft): IncludedTool[] {
+  const agent = mode.workload?.kind === "agent_task" ? mode.workload.agent : undefined;
+  return mode.tools.filter((t) => t.id !== agent);
 }
 
 /** Removing the startup harness clears the startup visibly, and never substitutes another. */
@@ -237,6 +268,10 @@ export function withoutTool(mode: RunModeDraft, id: string): { mode: RunModeDraf
 export function runModeBlocker(mode: RunModeDraft | undefined): { reason: string; text: string } | null {
   if (!mode?.experience) return { reason: RUN_MODE_REASON.REQUIRED, text: RUN_MODE_REFUSAL.RUN_MODE_REQUIRED() };
   if (mode.experience === "background" && !mode.workload) return { reason: RUN_MODE_REASON.REQUIRED, text: RUN_MODE_REFUSAL.RUN_WORKLOAD_REQUIRED() };
+  if (mode.experience === "background" && unusedBackgroundTools(mode).length) {
+    const instead = mode.workload?.kind === "command" ? "A command runs no harness." : "A background agent task includes only the harness it runs, which is workload.agent.";
+    return { reason: RUN_MODE_REASON.CONFLICT, text: RUN_MODE_REFUSAL.RUN_MODE_CONFLICT("tools", instead) };
+  }
   const s = mode.experience === "interactive" ? mode.startup : undefined;
   if (s?.kind === "harness" && !mode.tools.some((t) => t.id === s.tool && t.kind === "harness")) {
     return { reason: RUN_MODE_REASON.CONFLICT, text: RUN_MODE_REFUSAL.STARTUP_TOOL_UNKNOWN(s.tool ?? "") };

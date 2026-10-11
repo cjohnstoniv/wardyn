@@ -266,7 +266,7 @@ func TestBuildProxyConfig_CarriesTheRunModeDispatchPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the sidecar refused the config: %v", err)
 	}
-	if got, ok := types.PushRulesForEntry(cfg.PushRuleSets, "github", "ACME"); !ok || got.DenyPaths[0] != "infra/" {
+	if got, ok, err := types.PushRulesForRemote(cfg.PushRuleSets, "github", "https://github.com/ACME/x.git"); err != nil || !ok || got.DenyPaths[0] != "infra/" {
 		t.Errorf("push rules did not arrive: %+v", cfg.PushRuleSets)
 	}
 	if eff, ok := types.ToolEffectForHarness(cfg.HarnessToolRules, "claude-code", "Read"); !ok || eff != types.ToolAllow {

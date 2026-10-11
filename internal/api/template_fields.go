@@ -200,6 +200,8 @@ var templateRequestRules = []TemplateFieldRule{
 		in(templateSectionComp, "component"),
 	excludedField("preset", templateExcludeOrigin,
 		"A preset is a launch shortcut. A template records its own origin, and the setup it holds is carried field by field."),
+	excludedField("mode_contract", templateExcludeOrigin,
+		"The contract marker belongs to the request a client sends, not to the setup a template holds."),
 	excludedField("preset_version", templateExcludeOrigin,
 		"A preset's version only means something beside its preset."),
 	carriedField("runner_pool_id", templateTabRunner, partRunner, templateOmitBaseline, templateEmptySame,
@@ -291,7 +293,7 @@ var templateNestedCarried = map[string]string{
 	"IncludedTool":        "id kind model_provider component tool_rules default_effect",
 	"LLMInspectionSpec": "mode workspace_secret_names detect_secrets detect_secret_patterns detect_entropy detect_pii detector_sidecar_url " +
 		"classified_markers scan_attachments inspect_forward_egress max_scan_bytes on_scanner_error require_inspectable_llm intercept_tls block_min_severity",
-	"PushRuleOverride":   "provider org deny_paths require_review_paths",
+	"PushRuleOverride":   "provider host org deny_paths require_review_paths",
 	"PushRulesSpec":      "deny_paths max_inspect_pack_mib require_review_paths hold_seconds deny_new_executables max_file_size_mib",
 	"ResourceLimits":     "cpu_millis memory_mib pids_limit disk_mib",
 	"RunOverrides":       "agent azure_devops git_pat push_rules",

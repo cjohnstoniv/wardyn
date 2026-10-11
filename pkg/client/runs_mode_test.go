@@ -81,7 +81,29 @@ func TestRunModeWireShape(t *testing.T) {
 			t.Errorf("an older client's body carries %s: %s", key, raw)
 		}
 	}
-	if k := (PushRuleOverride{Provider: "github", Org: "Acme"}).PushRuleKey(); k != "github/acme" {
-		t.Errorf("push key = %q", k)
+	for _, tc := range []struct {
+		override PushRuleOverride
+		want     string
+	}{
+		{PushRuleOverride{Provider: "github", Org: "Acme"}, "github.com/acme"},
+		{PushRuleOverride{Provider: "github", Host: "ghes.corp.example", Org: "Acme"}, "ghes.corp.example/acme"},
+		{PushRuleOverride{Provider: "azure_devops", Org: "Contoso"}, "dev.azure.com/contoso"},
+		{PushRuleOverride{Provider: "github", Org: "acme "}, ""},
+		{PushRuleOverride{Provider: "github", Org: "acme\u200b"}, ""},
+	} {
+		if k := tc.override.PushRuleKey(); k != tc.want {
+			t.Errorf("%+v: push key = %q, want %q", tc.override, k, tc.want)
+		}
+	}
+}
+
+// TestTheContractMarkerMakesARequestANewClients: the marker alone, with no
+// carrier, is what lets the server refuse "nothing chosen".
+func TestTheContractMarkerMakesARequestANewClients(t *testing.T) {
+	if (CreateRunRequest{Agent: "claude-code", Task: "t"}).UsesRunMode() {
+		t.Error("an older client's request reads as a new client's")
+	}
+	if !(CreateRunRequest{ModeContract: RunModeContractV09, Agent: "claude-code", Task: "t"}).UsesRunMode() {
+		t.Error("the marker did not make the request a new client's")
 	}
 }

@@ -47,6 +47,11 @@ func applyRunModeFlags(body *sdk.CreateRunRequest, f runModeFlags) error {
 	if !f.used() {
 		return nil
 	}
+	// Any run-mode flag makes this a 0.9 request, marked so the server refuses an
+	// unset mode instead of reading it as an older client's. Without one of these
+	// flags the request stays the older-client shape, which is the explicit path
+	// for --agent, --task, --interactive and --task-mode on their own.
+	body.ModeContract = sdk.RunModeContractV09
 	if f.noRepos {
 		body.NoRepositoriesOrDrives = true
 	}

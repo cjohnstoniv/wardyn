@@ -59,3 +59,9 @@ func runBackgroundOnlyMsg(door string) string {
 func idleStopBackgroundMsg() string {
 	return "A background task ends when its work exits, so it has no idle stop. Remove it, or choose an interactive environment."
 }
+
+// toolAllowRefusedMsg: a request's tool rules and default may only narrow what
+// the policy decided.
+func toolAllowRefusedMsg(i int) string {
+	return fmt.Sprintf("tools[%d]: a request can hold or deny a tool but cannot let the agent use one without asking, because that would widen what the policy decided.", i)
+}

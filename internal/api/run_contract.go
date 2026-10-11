@@ -355,10 +355,9 @@ func pushRuleOverridesShape(rules []client.PushRuleOverride) *runRefusal {
 	}
 	for i, p := range rules {
 		switch {
-		case p.Provider != string(types.GitProviderGitHub) && p.Provider != string(types.GitProviderAzureDevOps):
-			return overrideInvalid("push_rules[%d].provider: %q is not one of github, azure_devops", i, p.Provider)
-		case !overrideText(p.Org):
-			return overrideInvalid("push_rules[%d].org: name the organisation these rules belong to", i)
+		case p.PushRuleKey() == "":
+			_, err := types.PushRuleKey(p.Provider, p.Host, p.Org)
+			return overrideInvalid("push_rules[%d]: %v", i, err)
 		case slices.ContainsFunc(rules[:i], func(o client.PushRuleOverride) bool { return o.PushRuleKey() == p.PushRuleKey() }):
 			return overrideInvalid("push_rules[%d]: %s already has rules in this request", i, p.PushRuleKey())
 		case len(p.DenyPaths)+len(p.RequireReviewPaths) == 0:

@@ -6,7 +6,6 @@ package types
 import (
 	"fmt"
 	"slices"
-	"strings"
 )
 
 // RunExperience is the canonical run mode a person chose when the run was
@@ -33,11 +32,19 @@ var RunExperiences = []RunExperience{ExperienceBackground, ExperienceInteractive
 
 // ExperienceAllowed is the one predicate a pool's run-type limit calls: whether a
 // run of type e may start where allowed lists the run types the place permits
-// (Background only, Interactive only, or both). It fails closed: an empty list
-// permits nothing and an unset or unknown type is never allowed, so a caller
-// that has not resolved the run's type cannot slip through. Resolve an older
-// client's type with CreateRunRequest.EffectiveExperience (pkg/client), and a
-// stored run's with AgentRun.Experience.
+// (Background only, Interactive only, or both).
+//
+// e is the STORED experience: the value the run row will carry and every
+// interactive door reads (AgentRun.Experience, or CreateRunRequest.Experience
+// exactly as it will be stored). Admission and the doors must see one value, so
+// a request with no experience (an older client's shape) is stored as "" and
+// never satisfies a limit that lists run types, however its legacy fields read.
+// Never pass CreateRunRequest.EffectiveExperience: it infers a type the run will
+// not be stored with. A place with no run-type limit does not call this, so an
+// older client keeps today's behaviour there.
+//
+// It fails closed: an empty list permits nothing and an unset or unknown type is
+// never allowed.
 func ExperienceAllowed(allowed []RunExperience, e RunExperience) bool {
 	return e.Valid() && slices.Contains(allowed, e)
 }
@@ -52,46 +59,74 @@ func ExperienceAllowed(allowed []RunExperience, e RunExperience) bool {
 // client always carries an experience, so its Background runs answer true.
 func (r AgentRun) BackgroundOnly() bool { return r.Experience == ExperienceBackground }
 
-// PushRuleKey is the identity of an SCM entry for push rules: the provider and
-// the organisation, the organisation folded to lower case because GitHub owners
-// and Azure DevOps organisations are case-insensitive. Rules are carried per
-// entry, so two spellings of one organisation must meet one key.
-func PushRuleKey(provider, org string) string {
-	return provider + "/" + strings.ToLower(org)
-}
-
-// PushRuleSet is the push content rules of one SCM entry (provider and
+// PushRuleSet is the push content rules of one SCM entry (provider host and
 // organisation), wherever the entry came from: a repository or workspace, a
 // tool or a component. It is the dispatch-plan carrier the proxy's git route
 // reads: the set of the entry that owns the remote applies, and a remote whose
-// entry has no set has no content rules. The run-wide RunPolicySpec.PushRules
-// remains only as the older-client mapping, which the dispatch plan fans out to
-// one set per entry the run brings.
+// entry has no set has no content rules. Host empty is the provider's public
+// host (github.com, dev.azure.com); a GitHub Enterprise Server or Azure DevOps
+// Server names its own. The run-wide RunPolicySpec.PushRules remains only as
+// the older-client mapping, which the dispatch plan fans out to one set per entry
+// the run brings.
+//
+// The sets are the product AFTER the ceiling: the dispatch plan lays the
+// policy's and the governance ceiling's rules into each entry's set first, and a
+// request's rules (RunOverrides.PushRules) may only ADD a deny or a
+// require-review path to them, never remove or relax one. A person's rules
+// therefore cannot displace an administrator's.
 type PushRuleSet struct {
 	Provider string        `json:"provider"`
+	Host     string        `json:"host,omitempty"`
 	Org      string        `json:"org"`
 	Rules    PushRulesSpec `json:"rules"`
 }
 
-// Key is the entry this set belongs to.
-func (s PushRuleSet) Key() string { return PushRuleKey(s.Provider, s.Org) }
+// Key is the entry this set belongs to, "" when the set does not name one
+// (ValidatePushRuleSets refuses such a set).
+func (s PushRuleSet) Key() string {
+	key, _ := PushRuleKey(s.Provider, s.Host, s.Org)
+	return key
+}
 
-// PushRulesForEntry finds the set of one SCM entry. Not found means the entry
-// has no content rules; it never falls back to another entry's.
-func PushRulesForEntry(sets []PushRuleSet, provider, org string) (PushRulesSpec, bool) {
-	key := PushRuleKey(provider, org)
+// PushRulesForRemote is the git route's lookup: the set of the entry that owns
+// remote. found false means the entry has no content rules; it never falls back
+// to another entry's. A remote whose entry cannot be derived is an error, and the
+// caller refuses the push rather than treating it as having no rules.
+func PushRulesForRemote(sets []PushRuleSet, provider, remote string) (spec PushRulesSpec, found bool, err error) {
+	host, org, err := PushRuleEntryOfRemote(provider, remote)
+	if err != nil {
+		return PushRulesSpec{}, false, err
+	}
+	key, err := PushRuleKey(provider, host, org)
+	if err != nil {
+		return PushRulesSpec{}, false, err
+	}
 	for _, s := range sets {
 		if s.Key() == key {
-			return s.Rules, true
+			return s.Rules, true, nil
 		}
 	}
-	return PushRulesSpec{}, false
+	return PushRulesSpec{}, false, nil
 }
 
 // HarnessToolRules is the tool rules of one included harness and its own
 // default effect (the "*" rule). The approval broker's lookup key is Harness:
 // the id of the included tool that raised the request, which for a harness is
 // its agent name.
+//
+// The harness id MUST come from an identity the proxy binds itself, never from
+// the body of the approval request: every process in the sandbox can post to the
+// proxy's local approvals route, so a harness read from the body lets one tool
+// borrow a sibling's allow. The binding is a per-included-tool local credential
+// minted at dispatch and injected only into that harness's own hook
+// configuration; A-L3 lands it. Until it does, the run door keeps refusing more
+// than one included tool and any per-tool rule or default effect
+// (runModeUnavailable), so no run has a second harness to confuse.
+//
+// Like PushRuleSet, the sets are the product after the ceiling: policy and
+// ceiling rules are laid into each harness's set first, and a request's per-tool
+// rules may only narrow them (hold or deny; a rule that allows is refused), so
+// an administrator's deny survives a person's allow.
 type HarnessToolRules struct {
 	Harness string `json:"harness"`
 	// Default is the effect for a tool no rule names. Empty means the harness
@@ -128,10 +163,9 @@ func ValidatePushRuleSets(sets []PushRuleSet) error {
 	seen := map[string]bool{}
 	for i, s := range sets {
 		switch {
-		case s.Provider != string(GitProviderGitHub) && s.Provider != string(GitProviderAzureDevOps):
-			return fmt.Errorf("push_rule_sets[%d]: provider %q is not one of github, azure_devops", i, s.Provider)
-		case strings.TrimSpace(s.Org) == "":
-			return fmt.Errorf("push_rule_sets[%d]: org is required", i)
+		case s.Key() == "":
+			_, err := PushRuleKey(s.Provider, s.Host, s.Org)
+			return fmt.Errorf("push_rule_sets[%d]: %w", i, err)
 		case seen[s.Key()]:
 			return fmt.Errorf("push_rule_sets[%d]: %s has two sets; rules are carried once per entry", i, s.Key())
 		}

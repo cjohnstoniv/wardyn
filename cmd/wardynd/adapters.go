@@ -499,6 +499,9 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	// the reaper's subtraction is finally two readings of ONE clock — wardynd's
 	// own was the skew that stopped actively-attached runs (B8-F2).
 	//
+	// A background task has no idle stop: its auto_stop_after_sec reads as 0 here
+	// whatever the row carries, so the reaper only ever ends it for its max age.
+	//
 	// A KEPT run (lost_at set: its lease ended it) is not idle, it is stopped;
 	// the ended-run grace decides when its files go, not auto_stop_after_sec.
 	// The one exception is a run kept after an outage whose agent still runs
@@ -508,7 +511,9 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	// there are no rows to measure, so there is nothing for it to be wrong about,
 	// and a second round trip to fetch a clock nobody would use is not worth it.
 	const q = `
-		SELECT id, created_at, updated_at, auto_stop_after_sec, lost_at IS NOT NULL, now()
+		SELECT id, created_at, updated_at,
+		       CASE WHEN experience = 'background' THEN 0 ELSE auto_stop_after_sec END,
+		       lost_at IS NOT NULL, now()
 		FROM agent_runs
 		WHERE state = $1 AND ` + store.HoldsSandboxSQL
 	rows, err := l.pool.Query(ctx, q, string(types.RunRunning))

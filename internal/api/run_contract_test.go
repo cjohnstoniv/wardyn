@@ -199,7 +199,7 @@ func TestPushRuleOverridesAreKeyedByProviderAndOrg(t *testing.T) {
 			t.Errorf("%s: got %+v, want %s", tc.name, refusal, tc.want)
 		}
 	}
-	if k := rule("github", "acme").PushRuleKey(); k != "github/acme" {
+	if k := rule("github", "acme").PushRuleKey(); k != "github.com/acme" {
 		t.Errorf("key = %q", k)
 	}
 }
