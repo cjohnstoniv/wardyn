@@ -64,9 +64,9 @@ type PrincipalDirectoryStore interface {
 	// case-folded, then, for a name with an @ only, an email (case-folded) that a
 	// sign-in, an API token or a pre-created person carries. A principal, a people
 	// row an admin created included, therefore always wins over an email claim that
-	// spells it. The one exception is a typed entra:<tenant>:<object> name: when it
-	// matches exactly, the tenant and object id match under any issuer is added to
-	// the answer, so a person who signed in under another issuer is ambiguous. More than one is ambiguous; none is a name nobody is recorded under.
+	// spells it. The one exception is a typed entra:<tenant>:<object> name that matches
+	// only a people row no sign-in follows and no principal carries: the tenant and object id match
+	// under any issuer is added to the answer, so a person who signed in under another issuer is ambiguous. More than one is ambiguous; none is a name nobody is recorded under.
 	PrincipalsNamed(ctx context.Context, name string) ([]string, error)
 }
 
@@ -98,9 +98,11 @@ func (s PG) PrincipalsNamed(ctx context.Context, name string) ([]string, error) 
 		  UNION SELECT principal FROM api_tokens WHERE principal = $1
 		  UNION SELECT owned_by FROM workspaces WHERE owned_by = $1`, []any{name}},
 	}
-	// A typed entra:<tenant>:<object> is the same person under any issuer, so its sign-ins are read with
-	// the exact principal's answer: a people row under one issuer and a sign-in under another name two
-	// principals, and that is ambiguous, not the people row alone with the sign-in's data left behind.
+	// A typed entra:<tenant>:<object> that is only a people row (no sign-in, token or workspace carries
+	// it as a principal, and no sign-in of its issuer replaces it) has an empty namespace, so a sign-in of
+	// the same tenant and object id under another issuer is read with it: two principals, which is ambiguous,
+	// not the people row alone with the sign-in's data left behind. A name that is itself a principal
+	// is returned alone, whatever another issuer's sign-in holds.
 	var entra *tier
 	if rest, ok := strings.CutPrefix(name, "entra:"); ok {
 		if tid, oid, ok := strings.Cut(rest, ":"); ok && tid != "" && oid != "" {
@@ -137,12 +139,20 @@ func (s PG) PrincipalsNamed(ctx context.Context, name string) ([]string, error) 
 		if err != nil {
 			return nil, err
 		}
-		if len(found) > 0 && i == 0 && entra != nil {
-			more, err := named(*entra)
-			if err != nil {
-				return nil, err
+		if i == 0 && entra != nil && len(found) == 1 && found[0] == name {
+			var bound bool
+			if err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM principal_identities WHERE principal = $1)
+			  OR EXISTS (SELECT 1 FROM api_tokens WHERE principal = $1)
+			  OR EXISTS (SELECT 1 FROM workspaces WHERE owned_by = $1)`, name).Scan(&bound); err != nil {
+				return nil, fmt.Errorf("store: resolve a name to principals: %w", err)
 			}
-			found = slices.Compact(slices.Sorted(slices.Values(append(found, more...))))
+			if !bound {
+				more, err := named(*entra)
+				if err != nil {
+					return nil, err
+				}
+				found = slices.Compact(slices.Sorted(slices.Values(append(found, more...))))
+			}
 		}
 		if len(found) > 0 {
 			return found, nil
