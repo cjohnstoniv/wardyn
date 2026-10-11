@@ -114,7 +114,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_VAULT_TRANSIT_MOUNT` | string | `transit` | mount of Vault's Transit engine (flag `-vault-transit-mount`) |
 | `WARDYN_VAULT_TRANSIT_KEY` | string | (unset) | the Transit key (type `aes256-gcm96`) that wraps data keys (flag `-vault-transit-key`); required with `WARDYN_KEK=transit`. [Details](#wardyn_vault_transit_key) |
 | `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` | string | (unset) | a second Transit key (type `aes256-gcm96`, same `WARDYN_VAULT_TRANSIT_MOUNT`) that wraps wardynd's own signing, session and SSH host keys (flag `-vault-transit-key-platform`, chart `secretStore.vault.transitKeyPlatform`). Empty = one key for both. [Details](#wardyn_vault_transit_key_platform) |
-| `WARDYN_AWS_KMS_KEY` | string | (unset) | the full ARN of the symmetric AWS KMS key that wraps data keys (flag `-aws-kms-key`). Required with `WARDYN_KEK=awskms`; an alias or a bare key id refuses boot. [Details](#wardyn_aws_kms_key) |
+| `WARDYN_AWS_KMS_KEY` | string | (unset) | the full ARN of the symmetric AWS KMS key that wraps data keys (flag `-aws-kms-key`, chart `kek.awskms.key`). Required with `WARDYN_KEK=awskms`; an alias or a bare key id refuses boot. [Details](#wardyn_aws_kms_key) |
 | `WARDYN_AZURE_KEK_KEY` | string | (unset) | the versionless id of the Key Vault RSA 3072 or 4096 key that wraps data keys (flag `-azure-kek-key`, chart `kek.azurekv.key`). Required with `WARDYN_KEK=azurekv`. [Details](#wardyn_azure_kek_key) |
 | `WARDYN_AZURE_KEK_SIGNING_KEY` | string | (unset) | the versionless id of the EC P-256 key that signs every wrap it makes (flag `-azure-kek-signing-key`, chart `kek.azurekv.signingKey`). Required whenever `WARDYN_AZURE_KEK_KEY` is set. [Details](#wardyn_azure_kek_signing_key) |
 | `WARDYN_AZURE_KEK_KEY_PLATFORM` | string | (unset) | a second Key Vault RSA 3072 or 4096 key that wraps wardynd's own signing, session and SSH host keys (flag `-azure-kek-key-platform`, chart `kek.azurekv.keyPlatform`); empty = one key pair for both. [Details](#wardyn_azure_kek_key_platform) |
@@ -454,7 +454,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_AWS_KMS_KEY`
 
-- The full ARN, `arn:<partition>:kms:<region>:<account>:key/<id>`, of the symmetric AWS KMS key that wraps data keys (flag `-aws-kms-key`); the region is the ARN's. Wardyn calls `Encrypt` and `Decrypt` on it, so the identity needs `kms:Encrypt` and `kms:Decrypt` on that key only.
+- The full ARN, `arn:<partition>:kms:<region>:<account>:key/<id>`, of the symmetric AWS KMS key that wraps data keys (flag `-aws-kms-key`, chart `kek.awskms.key`); the region is the ARN's. Wardyn calls `Encrypt` and `Decrypt` on it, so the identity needs `kms:Encrypt` and `kms:Decrypt` on that key only.
 - Required with `WARDYN_KEK=awskms`; set with `WARDYN_KEK=local`, it only reads the rows sealed under it, which is how `wardynd -rewrap` moves them back to the local key.
 - An alias, a bare key id or a non-KMS ARN refuses boot: an alias can be re-pointed to another key.
 - Not together with `WARDYN_VAULT_TRANSIT_KEY*` or `WARDYN_AZURE_KEK_KEY*`, or with a platform key or `WARDYN_KEY_DOMAINS_FILE` domains: AWS KMS has neither yet.
@@ -2224,6 +2224,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
   - `WARDYN_TEST_VAULT_TOKEN_FILE` (the live Vault/OpenBao case, [`internal/secretstore/vaultkv/live_test.go`](../internal/secretstore/vaultkv/live_test.go): the server's address and a file holding a token that can mount and write policies),
   - `WARDYN_TEST_VAULT_K8S_JWT_FILE` (the same file's Kubernetes-auth case: a projected service-account token with audience `vault`),
   - `WARDYN_TEST_AZURE_KV` (the live Key Vault case, [`internal/secretstore/azurekv/live_test.go`](../internal/secretstore/azurekv/live_test.go): the vault's URL; the identity comes from the Key Vault settings above),
+  - `WARDYN_TEST_AWS_KMS_KEY` (the live AWS KMS case, [`internal/secretstore/awskms/live_test.go`](../internal/secretstore/awskms/live_test.go): the key's full ARN; the identity comes from the AWS SDK's default credential chain),
   - `WARDYN_TEST_FIPS_CHILD` (set by `secretstoretest.UnderFIPSOnly` on the child it re-runs a test in under `GODEBUG=fips140=only`),
   - `WARDYN_TEST_POOL_GUARD` (set to `1` in a test binary, every pool `db.Connect` opens exits the binary when one goroutine asks the pool for a connection while it holds another; ignored outside a test binary),
   - `WARDYN_TEST_DOCKER`, `WARDYN_TEST_CACHE_REPO`, `WARDYN_TEST_TOOLS_DIR`, `WARDYN_ENVBUILD_TEST_FLOAT`, `WARDYN_ENVBUILD_TEST_INT`, `WARDYN_FAKE_MARKER`, `WARDYN_NEGCTL`,
