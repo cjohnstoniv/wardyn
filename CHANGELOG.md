@@ -68,6 +68,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- Under `WARDYN_AUDIT_SEAL=full` the `target` column of `person.attach`, `person.token.create`,
+  `delegation.exchange`, `session.revoke`, `secret.list` and `auth.signin_unserialized` rows is stored as the
+  person's subject, like the actor, when that person has an identity row, and a typed `subject:` string in an actor
+  or target is refused; `GET /audit?target=` matches both forms (#1828). A person named in `data` (`sub`, `target`,
+  `secret_owner`), and the target of `person.create`, stay clear.
 - Personal and shared secrets are named by route. `PUT`/`DELETE /me/secrets/{name}` (and `GET /me/secrets`) store
   your own secret whatever your role or view; `PUT`/`DELETE /shared-secrets/{name}` (and `GET`) store a shared
   service secret, admin only. Neither accepts `?owner=`. `wardyn secret set|delete` take `--personal` or `--shared`,
@@ -262,6 +267,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- A held runner pool executor attach or detach is listed to, read by and decided by a super admin only, the tier it
+  was written on; a security admin no longer sees or approves it.
+- An open sign-in or key door stays in place when a background status refresh briefly cannot read the secret store.
 - Review and policy preview report the managed-settings fact that launch delivers when governance holds tool
   approvals.
 - Workspace target overlap checks stay fast for long attachment lists.
