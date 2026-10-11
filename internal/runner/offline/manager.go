@@ -34,6 +34,7 @@ type Manager struct {
 	sub           substrate.Substrate
 	expectedRef   func(uuid.UUID) string
 	outputSettled func(context.Context, uuid.UUID, string) (int64, bool, error)
+	releaseOutput func(uuid.UUID, string) error
 	stopper       runner.ProxyStopper
 	clock         *Clock
 	now           func() time.Time

@@ -47,6 +47,7 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 		return runnerRuntime{}, err
 	}
 	streams.HoldSandboxes(manager.HoldsSandbox)
+	manager.ReleaseSettledOutput(streams.ReleaseOutput)
 	defer func() {
 		if retErr != nil {
 			retErr = errors.Join(retErr, manager.Close())
