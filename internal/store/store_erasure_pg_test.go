@@ -170,6 +170,32 @@ func TestPG_PersonErasure_PrincipalsNamedFollowsTheSignIn(t *testing.T) {
 	}
 }
 
+// A people row keyed by subject (no issuer, tenant or object id) is not the sign-in of whoever else has
+// none of those either: only an object-id row follows a sign-in.
+func TestPG_PersonErasure_PrincipalsNamedKeepsASubjectKeyedPerson(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	if _, _, err := st.CreatePerson(ctx, types.Person{Principal: "sub-keyed-person", Email: "subkeyed@corp.example", CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	// An identity row with no issuer, tenant or object id is not one a sign-in writes; it is what a
+	// join on those three columns alone would take for the subject-keyed person's own.
+	if _, err := pool.Exec(ctx, `INSERT INTO principal_identities (principal, issuer, email_lower) VALUES ('someone-else', '', 'else@corp.example')`); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string][]string{
+		"sub-keyed-person":      {"sub-keyed-person"},
+		"subkeyed@corp.example": {"sub-keyed-person"},
+		"someone-else":          {"someone-else"},
+	} {
+		got, err := st.PrincipalsNamed(ctx, name)
+		if err != nil || !slices.Equal(got, want) {
+			t.Errorf("PrincipalsNamed(%q) = %v, %v, want %v", name, got, err, want)
+		}
+	}
+}
+
 // An erasure destroys the keys of every name the directory holds for the
 // person, so a row sealed under a name learned only later is shredded too.
 func TestPG_PersonErasure_PrincipalAliases(t *testing.T) {

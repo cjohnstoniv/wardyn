@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -160,12 +161,63 @@ func (s *Server) eraseLocked(ctx context.Context, owner, rowID string, rep *secr
 		// generation when a replica first reads it. A renewal in flight writes its copy under
 		// the AWS lock, so retiring before the locks would let it land after the retire.
 		// Replicas that cached them keep masking them through grace.
-		if err := s.cfg.MaskRegistry.RetireOwnerGlobals(ctx, owner, s.cfg.Now()); err != nil {
+		namespaces, err := s.personNamespaces(ctx, owner)
+		if err != nil {
 			return err
 		}
-		*rep, err = secretstore.EraseOwner(ctx, s.cfg.Secrets, owner)
-		return err
+		for _, ns := range namespaces {
+			if err := s.cfg.MaskRegistry.RetireOwnerGlobals(ctx, ns, s.cfg.Now()); err != nil {
+				return err
+			}
+			one, err := secretstore.EraseOwner(ctx, s.cfg.Secrets, ns)
+			*rep = mergeEraseReports(*rep, one, ns == namespaces[0])
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	})
+}
+
+// personNamespaces are the credential namespaces one person can hold: owner, and the
+// entra:<tenant>:<object> form the identity directory knows them by. A person an admin created by
+// object id and who then signed in under a pairwise subject has their credentials under the subject
+// now, but an install upgraded from 0.8.9 can still hold some under the object-id form, which the
+// subject alone does not reach. Both are erased, each through the fenced EraseOwner. Only the entra
+// form is a namespace: the other aliases are emails, which never name one.
+func (s *Server) personNamespaces(ctx context.Context, owner string) ([]string, error) {
+	namespaces := []string{owner}
+	pe, err := s.personErasureStore()
+	if err != nil || owner == "" {
+		return namespaces, nil
+	}
+	aliases, err := pe.PrincipalAliases(ctx, owner)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range aliases {
+		if strings.HasPrefix(a, entraPrincipalPrefix) && !slices.Contains(namespaces, a) && !s.isReservedPrincipal(a) {
+			namespaces = append(namespaces, a)
+		}
+	}
+	return namespaces, nil
+}
+
+// mergeEraseReports adds one namespace's report to the total so far. Fenced holds only if every
+// namespace was fenced.
+func mergeEraseReports(total, one secretstore.EraseReport, first bool) secretstore.EraseReport {
+	if first {
+		return one
+	}
+	total.Count += one.Count
+	total.CryptoErased += one.CryptoErased
+	total.Fenced = total.Fenced && one.Fenced
+	if one.Store != "" {
+		total.Store = one.Store
+		total.Purged = total.Purged && one.Purged
+		total.RecoverableDays = max(total.RecoverableDays, one.RecoverableDays)
+	}
+	return total
 }
 
 // expiredSweeper is the store that can delete the rows whose expiry has

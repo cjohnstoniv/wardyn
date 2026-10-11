@@ -8,6 +8,7 @@ package api
 // the caller is the caller. Guarded by WARDYN_TEST_PG.
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -157,5 +158,45 @@ func TestPG_ErasePersonCredentials_AnObjectIDPersonWhoSignedInIsTheirSubject(t *
 		if got := namesOf(t, sec, subject); len(got) != 0 {
 			t.Fatalf("erase by %q reported success and left %v under the subject", typed, got)
 		}
+	}
+}
+
+// The same person can hold credentials in two namespaces: the subject they sign in under, and the
+// entra:<tenant>:<object> one an install upgraded from 0.8.9 may still hold. An erase by any name
+// reaches both, and reports both in its count.
+func TestPG_ErasePersonCredentials_ErasesEveryNamespaceOfThePerson(t *testing.T) {
+	_, srv, pg, sec := identityRig(t)
+	oid := uuid.NewString()
+	entra := "entra:" + identTenant + ":" + oid
+	subject := "pairwise-" + oid
+	if _, _, err := pg.CreatePerson(t.Context(), types.Person{Principal: entra, Email: "kit-two@corp.example", Issuer: identIssuer, TenantID: identTenant, ObjectID: oid, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	seedIdentity(t, pg, subject, oid, "kit-two@corp.example")
+	other := "other-" + oid
+	if err := sec.For(other).Put(t.Context(), "anthropic-api-key", []byte("another-persons-credential")); err != nil {
+		t.Fatal(err)
+	}
+	sa := ssoSession(t, "sec-1", "sec@corp.example", oidc.RoleSecurityAdmin)
+	for _, typed := range []string{entra, "kit-two@corp.example", subject} {
+		for _, owner := range []string{entra, subject} {
+			if err := sec.For(owner).Put(t.Context(), "anthropic-api-key", []byte("kit-credential-00000000")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		w := doSSO(t, srv, http.MethodDelete, "/api/v1/people/"+typed+"/credentials", sa, "")
+		var body struct{ Count int }
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		if w.Code != http.StatusOK || body.Count != 2 {
+			t.Fatalf("erase by %q = %d %s, want 200 with count 2", typed, w.Code, w.Body)
+		}
+		for _, owner := range []string{entra, subject} {
+			if got := namesOf(t, sec, owner); len(got) != 0 {
+				t.Fatalf("erase by %q reported success and left %v under %q", typed, got, owner)
+			}
+		}
+	}
+	if got := namesOf(t, sec, other); len(got) != 1 {
+		t.Fatalf("another person's namespace holds %v", got)
 	}
 }
