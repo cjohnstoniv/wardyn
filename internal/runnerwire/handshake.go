@@ -123,12 +123,21 @@ func authenticateOrg(ctx context.Context, conn Conn, runnerID, orgURL string, ke
 	case TypeRevoked:
 		return AuthOK{}, ErrRevoked
 	case TypeGoaway:
-		return AuthOK{}, ErrGoaway
+		return AuthOK{}, goaway(f.Payload)
 	case TypeAuthOK:
 		return checkAuthOK(f.Payload, resume)
 	default:
 		return AuthOK{}, fmt.Errorf("%w: expected AUTH_OK", ErrBadFrame)
 	}
+}
+
+// goaway returns ErrGoaway carrying the org's stated reason, when it gave one.
+func goaway(payload []byte) error {
+	var r Reason
+	if Unmarshal(payload, &r) != nil || r.Reason == "" {
+		return ErrGoaway
+	}
+	return fmt.Errorf("%w: %s", ErrGoaway, r.Reason)
 }
 
 func checkAuthOK(payload []byte, resume *Resume) (AuthOK, error) {
