@@ -10,12 +10,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
-- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
-  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `runners`,
-  `runner_pending_actions`, `provider_connection_changes` and `runner_inventories`, and `SELECT, INSERT, UPDATE` on
-  `credential_delivery_policy`, `runner_registration_tokens`, `audit_delivery_cursors`, `runner_spool_cursors`,
-  `runner_executions`, `runner_execution_exits`, `runner_inventory_candidates`, `runner_inventory_observations` and
-  `secret_owner_generations`. Without the `provider_connection_changes` grant every secret write fails once
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `runners`,
+  `runner_pending_actions`, `provider_connection_changes`, `runner_inventories`, `runner_pool_members` and
+  `runner_pool_use_policies`, and `SELECT, INSERT, UPDATE` on `credential_delivery_policy`,
+  `runner_registration_tokens`, `audit_delivery_cursors`, `runner_spool_cursors`, `runner_executions`,
+  `runner_execution_exits`, `runner_inventory_candidates`, `runner_inventory_observations`, `runner_pools`,
+  `runner_pool_org_defaults` and `secret_owner_generations`. Without the `runner_pools` grants wardynd refuses to
+  start at the runner pool bootstrap. Without the `provider_connection_changes` grant every secret write fails once
   migration 0143's trigger on `secrets` is in place.
 - Credential erase fence (migration 0156): an older wardynd running beside the new one does not check a person's
   erase generation; finish the upgrade before erasing anyone.
