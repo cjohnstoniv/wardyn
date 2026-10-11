@@ -46,6 +46,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- Runners management API: `GET /runners` (active, revoked or all, with each runner's live online state and the runs on
+  it), `GET /runners/{id}`, and the caller-scoped `GET /me/runners`, which shows a person only their own runners and
+  abbreviates an unclaimed runner's fingerprint. Security admins can list and revoke unused registration tokens (never
+  a token value); minting stays admin only. `runners.enabled` changes only through `PUT /runners/settings` (admin,
+  audited `runners.enabled.set`, refused until the organisation URL is HTTPS); `PUT /site-config` now refuses a
+  changed value. Unclaimed runners lapse and are swept after 24 hours. CLI: `wardyn runner list`, `wardyn runner
+  tokens list|revoke`. Migration `0144_runner_minted_by` records who minted each runner's registration token (#1965).
+- `wardyn run --placement remote|local` and `--runner <id>` choose where a run's sandbox lives. Both are passed to the
+  server unchanged, so its placement refusals reach the CLI as they are. `--pool` is accepted and refused at run create
+  until runner-pool selection lands (#109).
 - Model connections say why they became unavailable: never connected, removed because an admin changed the provider's
   address or kind (with the new destination host to review before reconnecting), or the credential store could not be
   read ("could not check"; the credential may still be there). The record is owner-scoped and holds no secret; it is
@@ -98,6 +108,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- A portal's delegated token can read the output tail of its person's runs (`GET /runs/{id}/output`) and nothing
+  recovered from a recording: for output recovered from a recording and an interactive run's last screen it gets the
+  same 409 a run with no such row gives (the refusal is audited `delegation_scope`), and a failed run's failure hint
+  is served without its quote from the recording. (#1423)
+- Docs: `docs/AZURE-DEVOPS.md` explains what an Azure DevOps run gets on a laptop runner: only the person's own
+  stored PAT, while `minted_pat` and `bearer` runs placed on a laptop are refused (`placement_credential`).
+  `docs/DESKTOP.md` explains why a member-mode laptop still enrols into an SSO-only organisation (#475).
+- `scripts/kind-run-output-walk.sh` gains a recording-on mode (`WARDYN_KIND_WALK_RECORDING=pg`) that proves a
+  Kubernetes task's printed line reaches `/output` from the recording, marked `source: recording`, with a registered
+  secret masked (#1831).
 - Docs: the operator manual's multi-user material (people, governance, capabilities, API tokens and related tasks) is
   split into task pages under `docs/operations/`, each linked from `docs/README.md`; every old heading in
   `docs/OPERATIONS.md` keeps a stub that links to its new home.
