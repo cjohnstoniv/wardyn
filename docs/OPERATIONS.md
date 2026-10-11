@@ -3710,6 +3710,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0154` (`0154_run_agent_stopped_at`) adds `agent_runs.agent_stopped_at` (`0001`'s table), the time an outage-kept run's agent was stopped.
 - `0155` (`0155_runner_asserted_subjects`) adds asserted-run columns to `runner_pending_actions` (`0139`'s table) and replaces its
   immutability trigger function.
+- `0156` (`0156_workspace_image_build`) adds `workspaces.image_build` (`0008`'s table), the image build record.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
