@@ -82,3 +82,25 @@ func TestPG_BootstrapLetsALaunchNameNoPool(t *testing.T) {
 	}
 	e.bootDoors("no pool or placement named", runBody(""))
 }
+
+// DR-0035: defaults an administrator saved with no preferred hosting type before any pool existed keep
+// it blank through the first bootstrap, which still names its pool as the remote default and audits the
+// defaults as stored.
+func TestPG_BootstrapKeepsABlankPreferenceSavedBeforeAnyPool(t *testing.T) {
+	ctx := context.Background()
+	blank := newPoolEnv(t, false)
+	if w := blank.admin(http.MethodPut, "/api/v1/runner-pool-defaults", `{}`); w.Code != http.StatusOK {
+		t.Fatalf("administrator blank defaults = %d %s", w.Code, w.Body)
+	}
+	if err := blank.srv.BootstrapRunnerPools(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := blank.pg.GetRunnerPoolOrgDefaults(ctx)
+	if got.PreferredHosting != "" || got.RemoteProvided == nil {
+		t.Errorf("bootstrap over an administrator's blank preference = %+v, want it blank and the remote default set", got)
+	}
+	sets := blank.audits(auditPoolDefaultSet)
+	if after, _ := auditData(t, sets[len(sets)-1])["after"].(map[string]any); after["preferred_hosting"] != nil || after["remote_provided"] != got.RemoteProvided.String() {
+		t.Errorf("bootstrap default.set after = %v, want the stored defaults %+v", after, got)
+	}
+}
