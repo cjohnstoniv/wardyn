@@ -164,7 +164,7 @@ func (s *Server) ServeRelay(tlsCfg *tls.Config) *http.Server {
 	l.start()
 	srv := &http.Server{
 		Handler:        s.relayRoutes(s.router),
-		TLSConfig:      tlsCfg,
+		TLSConfig:      tlsCfg.Clone(),
 		ConnContext:    relayConnContext,
 		MaxHeaderBytes: 1 << 20,
 	}
