@@ -169,7 +169,9 @@ func emailValues(in []scim.Email) []string {
 
 // scimMatch finds the identity a SCIM user stands for: the row holding its object id, then the row
 // of the person set up as entra:<tenant>:<oid>, then, as a removal-only link, the one row with no
-// object id seen under one of its names. More than one such row links nothing.
+// object id seen under one of its names. More than one such row links nothing, and neither does a
+// name that store.PrincipalsNamed says is a principal other than the row's own (a person an admin
+// created under the address another person claimed at sign-in, say).
 func (s *Server) scimMatch(ctx context.Context, st scimStore, oid string, names []string) (store.PrincipalIdentity, bool, error) {
 	cfg := s.cfg.SCIM
 	ident, err := st.GetIdentityByObject(ctx, cfg.Issuer, cfg.Tenant, oid)
@@ -202,7 +204,17 @@ func (s *Server) scimMatch(ctx context.Context, st scimStore, oid string, names 
 		if err != nil {
 			return store.PrincipalIdentity{}, false, err
 		}
+		if len(rows) == 0 {
+			continue
+		}
+		named, err := st.PrincipalsNamed(ctx, name)
+		if err != nil {
+			return store.PrincipalIdentity{}, false, err
+		}
 		for _, row := range rows {
+			if slices.ContainsFunc(named, func(p string) bool { return p != row.Principal }) {
+				continue
+			}
 			if !slices.ContainsFunc(linked, func(l store.PrincipalIdentity) bool { return l.ID == row.ID }) {
 				linked = append(linked, row)
 			}
