@@ -260,6 +260,24 @@ func (o RunOverrides) Items() []OverrideItem {
 	return out
 }
 
+// Pruned is o with every block that holds no edit dropped, so a record of what
+// took effect carries no empty shell.
+func (o RunOverrides) Pruned() RunOverrides {
+	if a := o.Agent; a != nil && len(a.AddHosts)+len(a.RemoveHosts)+len(a.AddSecrets)+len(a.RemoveSecrets)+len(a.ToolRules) == 0 {
+		o.Agent = nil
+	}
+	if h := o.Hosts; h != nil && len(h.AddAllowed)+len(h.AddDenied)+len(h.RemoveAllowed)+len(h.RemoveDenied) == 0 {
+		o.Hosts = nil
+	}
+	if e := o.Egress; e != nil && e.FirstUseApproval == "" && e.AllowAllEgress == nil {
+		o.Egress = nil
+	}
+	return o
+}
+
+// Empty reports whether a recorded diff holds no edit and no clamped edit.
+func (d RunOverridesDiff) Empty() bool { return len(d.Pruned().Items()) == 0 && len(d.Clamped) == 0 }
+
 // The kinds a LocalPlacementFact is about.
 const (
 	LocalPlacementHost      = "host"

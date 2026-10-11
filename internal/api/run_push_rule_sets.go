@@ -25,15 +25,14 @@ import (
 // The entry of a remote is derived from the remote itself, with the base path of
 // the Azure DevOps Server provider row that claims its host (an unrecorded
 // prefix makes the remote an error, never every collection under one entry).
-func (s *Server) pushRuleSetsFor(spec types.RunPolicySpec, req *createRunRequest, sc types.SiteConfig) ([]types.PushRuleSet, error) {
+func (s *Server) pushRuleSetsFor(spec types.RunPolicySpec, req *createRunRequest, sc types.SiteConfig) (sets []types.PushRuleSet, applied []client.PushRuleOverride, err error) {
 	var adds []client.PushRuleOverride
 	if req != nil && req.Overrides != nil {
 		adds = req.Overrides.PushRules
 	}
 	if !spec.PushRules.IsSet() && len(adds) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
-	var sets []types.PushRuleSet
 	for _, repo := range pushRuleRemotes(spec, req) {
 		cloneURL := repoCloneURL(repo)
 		if cloneURL == "" {
@@ -42,11 +41,11 @@ func (s *Server) pushRuleSetsFor(spec types.RunPolicySpec, req *createRunRequest
 		provider, basePath := pushRuleProvider(sc, cloneURL)
 		host, org, err := types.PushRuleEntryOfServerRemote(provider, cloneURL, basePath)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", repo, err)
+			return nil, nil, fmt.Errorf("%s: %w", repo, err)
 		}
 		key, err := types.PushRuleKey(provider, host, org)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", repo, err)
+			return nil, nil, fmt.Errorf("%s: %w", repo, err)
 		}
 		if slices.ContainsFunc(sets, func(o types.PushRuleSet) bool { return o.Key() == key }) {
 			continue
@@ -58,9 +57,17 @@ func (s *Server) pushRuleSetsFor(spec types.RunPolicySpec, req *createRunRequest
 			rules.RequireReviewPaths = slices.Clone(rules.RequireReviewPaths)
 		}
 		for _, add := range adds {
-			if add.PushRuleKey() == key {
-				rules.DenyPaths = appendMissing(rules.DenyPaths, add.DenyPaths)
-				rules.RequireReviewPaths = appendMissing(rules.RequireReviewPaths, add.RequireReviewPaths)
+			if add.PushRuleKey() != key {
+				continue
+			}
+			// Only the paths the set did not already hold took effect.
+			took := client.PushRuleOverride{Provider: add.Provider, Host: add.Host, Org: add.Org,
+				DenyPaths:          slices.DeleteFunc(slices.Clone(add.DenyPaths), func(p string) bool { return slices.Contains(rules.DenyPaths, p) }),
+				RequireReviewPaths: slices.DeleteFunc(slices.Clone(add.RequireReviewPaths), func(p string) bool { return slices.Contains(rules.RequireReviewPaths, p) })}
+			rules.DenyPaths = appendMissing(rules.DenyPaths, add.DenyPaths)
+			rules.RequireReviewPaths = appendMissing(rules.RequireReviewPaths, add.RequireReviewPaths)
+			if len(took.DenyPaths)+len(took.RequireReviewPaths) > 0 {
+				applied = append(applied, took)
 			}
 		}
 		if rules.IsSet() {
@@ -68,9 +75,9 @@ func (s *Server) pushRuleSetsFor(spec types.RunPolicySpec, req *createRunRequest
 		}
 	}
 	if err := types.ValidatePushRuleSets(sets); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return sets, nil
+	return sets, applied, nil
 }
 
 // pushRuleRemotes are the repositories a run brings: the request's own and every
@@ -132,5 +139,20 @@ func pushReviewRules(policy types.RunPolicySpec, sets []types.PushRuleSet) bool 
 	if len(sets) == 0 {
 		return policy.PushRules != nil && len(policy.PushRules.RequireReviewPaths) > 0
 	}
+	if policy.PushRules != nil && len(policy.PushRules.RequireReviewPaths) > 0 {
+		return true // an entry with no set is held to the base, which can hold a push
+	}
 	return slices.ContainsFunc(sets, func(s types.PushRuleSet) bool { return len(s.Rules.RequireReviewPaths) > 0 })
+}
+
+// pushRuleBase is the run's push rules as the ceiling left them, for the proxy to
+// hold an entry with no set to (an App or a PAT reaches more than the entries the
+// run brought). Carried only beside sets: without them the policy's own block is
+// the run-wide regime.
+func pushRuleBase(policy types.RunPolicySpec, sets []types.PushRuleSet) *types.PushRulesSpec {
+	if len(sets) == 0 || !policy.PushRules.IsSet() {
+		return nil
+	}
+	base := *policy.PushRules
+	return &base
 }

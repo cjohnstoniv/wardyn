@@ -128,6 +128,13 @@ policy.workspace_repos
 policy.workspace_repos.ref
 policy.workspace_repos.repo
 policy.workspace_repos.target
+push_rule_base
+push_rule_base.deny_new_executables
+push_rule_base.deny_paths
+push_rule_base.hold_seconds
+push_rule_base.max_file_size_mib
+push_rule_base.max_inspect_pack_mib
+push_rule_base.require_review_paths
 push_rule_sets
 push_rule_sets.base_path
 push_rule_sets.host

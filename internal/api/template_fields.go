@@ -119,8 +119,6 @@ func (r TemplateFieldRule) in(section, keyedBy string) TemplateFieldRule {
 	return r
 }
 
-func (r TemplateFieldRule) pending(lane string) TemplateFieldRule { r.Pending = lane; return r }
-
 func (r TemplateFieldRule) sensitive() TemplateFieldRule  { r.Sensitive = true; return r }
 func (r TemplateFieldRule) personOnly() TemplateFieldRule { r.PersonOnly = true; return r }
 

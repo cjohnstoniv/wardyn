@@ -688,23 +688,25 @@ const ruleSourceGitPushEntry = "brokered:git:push-entry-underivable"
 // rulesForRemote is the content rules of the SCM entry that owns the remote at
 // host and path. With no PushRuleSets the run is on the older run-wide regime
 // and the policy's block applies to every remote. Otherwise the set of the
-// entry applies (nil when the entry has none), found by the remote's own
-// address and the base path recorded for its host, never from the request body.
-// A remote whose entry cannot be derived returns the refusal sentence.
+// entry applies, found by the remote's own address and the base path recorded
+// for its host, never from the request body. An entry the run reaches but has no
+// set for gets the run's base rules (pushBase: the policy's block as the ceiling
+// left it), never "no rules": a set only ever adds to that base. A remote whose
+// entry cannot be derived returns the refusal sentence.
 func (p *Proxy) rulesForRemote(host, path string) (*pushRuleSet, string) {
 	if len(p.pushSets) == 0 {
 		return p.policy.contentRules(), ""
 	}
 	set, ok := p.pushSetsForHost(host)
 	if !ok {
-		return nil, ""
+		return p.pushBase, ""
 	}
 	spec, found, err := types.PushRulesForServerRemote(p.pushSets, set.Provider, "https://"+host+"/"+strings.TrimPrefix(path, "/"), set.BasePath)
 	if err != nil {
 		return nil, "wardyn: cannot tell which source-control entry this push belongs to, so its push rules cannot be applied: " + err.Error()
 	}
 	if !found {
-		return nil, ""
+		return p.pushBase, ""
 	}
 	return compilePushRules(&spec), ""
 }
@@ -729,7 +731,7 @@ func (p *Proxy) rulesForADOGrant(host, org string) (*pushRuleSet, string) {
 			return compilePushRules(&spec), ""
 		}
 	}
-	return nil, ""
+	return p.pushBase, ""
 }
 
 // pushSetsForHost finds the set whose entry is on host, for its provider and
@@ -747,5 +749,5 @@ func (p *Proxy) pushSetsForHost(host string) (types.PushRuleSet, bool) {
 // anyPushRules reports whether this run has content rules anywhere, which is
 // what decides whether a receive-pack advertisement is rewritten.
 func (p *Proxy) anyPushRules() bool {
-	return p.policy.PushRulesSet() || len(p.pushSets) > 0
+	return p.policy.PushRulesSet() || len(p.pushSets) > 0 || p.pushBase != nil
 }

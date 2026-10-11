@@ -67,23 +67,29 @@ func raiseTool(t *testing.T, p *Proxy, tool, bearer, extraBody string) *httptest
 	return rec
 }
 
-// A harness the rules do not list, a call with no credential and a call with one
-// the proxy never issued are all held for a human; none borrows another
-// harness's allow.
+// A harness the rules do not list is held for a human; it never borrows another
+// harness's allow. A call that names no harness is decided by the strictest of all
+// the sets, so it is never freer than the harness that is most restricted.
 func TestToolRules_UnlistedHarnessHeldNeverInherits(t *testing.T) {
 	p, cpCalls := perHarnessProxy(t)
 	if rec := raiseTool(t, p, "Read", claudeCred, ""); rec.Code != http.StatusOK || *cpCalls != 0 || !strings.Contains(rec.Body.String(), "APPROVED") {
 		t.Fatalf("the listed harness's own allow: %d %s (cp %d), want APPROVED with no raise", rec.Code, rec.Body.String(), *cpCalls)
 	}
-	for name, bearer := range map[string]string{
-		"a credentialed harness with no entry": "gemini-credential-plaintext",
-		"no credential":                        "",
-		"a credential nobody issued":           "guessed",
-	} {
+	// A credentialed harness with no entry: held, though claude-code allows Read.
+	before := *cpCalls
+	if rec := raiseTool(t, p, "Read", "gemini-credential-plaintext", ""); rec.Code != http.StatusCreated || *cpCalls != before+1 || strings.Contains(rec.Body.String(), "APPROVED") {
+		t.Errorf("a harness with no entry: %d %s, want a held approval", rec.Code, rec.Body.String())
+	}
+	// No credential, or one nobody issued: the strictest set decides. Read is
+	// allowed by claude-code and denied by codex-cli, so it is denied; Other has
+	// no rule anywhere, so it is held.
+	for name, bearer := range map[string]string{"no credential": "", "a credential nobody issued": "guessed"} {
 		before := *cpCalls
-		rec := raiseTool(t, p, "Read", bearer, "")
-		if rec.Code != http.StatusCreated || *cpCalls != before+1 || strings.Contains(rec.Body.String(), "APPROVED") {
-			t.Errorf("%s: %d %s (cp %d->%d), want a held approval", name, rec.Code, rec.Body.String(), before, *cpCalls)
+		if rec := raiseTool(t, p, "Read", bearer, ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "DENIED") || *cpCalls != before {
+			t.Errorf("%s, Read: %d %s (cp %d->%d), want the strictest set's DENIED with no raise", name, rec.Code, rec.Body.String(), before, *cpCalls)
+		}
+		if rec := raiseTool(t, p, "Other", bearer, ""); rec.Code != http.StatusCreated || *cpCalls != before+1 {
+			t.Errorf("%s, Other: %d %s, want a held approval", name, rec.Code, rec.Body.String())
 		}
 	}
 }
@@ -97,10 +103,10 @@ func TestToolRules_HarnessFromTheProxyIssuedCredential(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "DENIED") || *cpCalls != 0 {
 		t.Fatalf("codex claiming claude-code: %d %s (cp %d), want its own DENIED", rec.Code, rec.Body.String(), *cpCalls)
 	}
-	// No credential, a body claiming claude-code: held, not allowed.
+	// No credential, a body claiming claude-code: the claim buys nothing, the strictest set (deny) answers.
 	rec = raiseTool(t, p, "Read", "", `,"harness":"claude-code"`)
-	if rec.Code != http.StatusCreated || *cpCalls != 1 {
-		t.Fatalf("an uncredentialed claim: %d %s (cp %d), want held", rec.Code, rec.Body.String(), *cpCalls)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "DENIED") || *cpCalls != 0 {
+		t.Fatalf("an uncredentialed claim: %d %s (cp %d), want the strictest set's DENIED", rec.Code, rec.Body.String(), *cpCalls)
 	}
 	// The same body field inside the payload.
 	req := mustLocalReq(t, http.MethodPost, routeApprovalsCreate,

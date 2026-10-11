@@ -233,6 +233,11 @@ type Config struct {
 	// can never take the wrong block first. Control-plane authored; nothing sets
 	// it until the git route reads it.
 	PushRuleSets []types.PushRuleSet `json:"push_rule_sets,omitempty"`
+	// PushRuleBase is the run's push rules as the ceiling left them: what an
+	// entry with no set of its own is held to (a PAT or an App reaches more than
+	// the entries the run brought). A set only ever adds to it. Carried beside
+	// PushRuleSets and never beside Policy.PushRules.
+	PushRuleBase *types.PushRulesSpec `json:"push_rule_base,omitempty"`
 	// HarnessToolRules are the tool rules per included harness, also the product
 	// after the ceiling, and likewise exclusive of Policy.ToolRules. The approval
 	// route evaluates the set of the harness that raised the call
@@ -313,6 +318,9 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	}
 	if err := validPATGrants(c.PATGrants); err != nil {
 		return nil, err
+	}
+	if c.PushRuleBase != nil && (len(c.PushRuleSets) == 0 || c.Policy.PushRules != nil) {
+		return nil, fmt.Errorf("config: push_rule_base is carried with push_rule_sets and never with policy.push_rules")
 	}
 	if len(c.PushRuleSets) > 0 && c.Policy.PushRules != nil {
 		return nil, fmt.Errorf("config: push_rule_sets and policy.push_rules are both set; rules are carried one way or the other")
