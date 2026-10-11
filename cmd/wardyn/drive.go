@@ -100,11 +100,14 @@ func driveSetCmd(client clientFn) *cobra.Command {
 			if err := decodeOneJSONStrict(bytes.NewReader(raw), &doc); err != nil {
 				return fmt.Errorf("parse drives document JSON: %w", err)
 			}
-			out, err := client().ApplyDrives(cmd.Context(), doc)
+			res, err := client().ApplyDrivesResult(cmd.Context(), doc)
 			if err != nil {
+				if len(res.Steps) > 0 {
+					printApplySteps(cmd.ErrOrStderr(), res.Steps)
+				}
 				return err
 			}
-			return emitJSON(cmd.OutOrStdout(), out)
+			return emitJSON(cmd.OutOrStdout(), res.Document)
 		},
 	}
 }
