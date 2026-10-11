@@ -747,6 +747,10 @@ applied until a different approver approves it. The SDK never reads that body as
   make, as a `GovernancePlan`, and writes nothing: one `GET /api/v1/governance`, no write request.
   Its matching rules are `ApplyGovernance`'s. A plan is a snapshot: the server can change before an
   apply runs.
+- `GovernanceApplyResult.Steps` lists the writes an apply issued, in order, each `applied`, `pending`
+  or `failed`. On a failed write `ApplyGovernanceResult` returns the steps so far with the error.
+- `ApplyDrivesResult` is `ApplyDrives` with the same steps, as `DrivesApplyResult.Steps`; `ApplyDrives`
+  keeps its signature. Applies are sequential and not atomic: a failed write leaves the earlier ones in place.
 - `ListGovernanceChanges(ctx, state)`, `GetGovernanceChange`, `ApproveGovernanceChange` and
   `RejectGovernanceChange(ctx, id, reason)` read and decide the stored changes
   (`/api/v1/governance/changes`).

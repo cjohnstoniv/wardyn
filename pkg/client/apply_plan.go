@@ -19,6 +19,20 @@ type ApplyStep struct {
 	Error       string                `json:"error,omitempty"`   // with outcome "failed"
 }
 
+// withOutcome records how the write this step describes went: failed when it
+// errored, pending when the server held it for approval, applied otherwise.
+func (s ApplyStep) withOutcome(pending bool, err error) ApplyStep {
+	switch {
+	case err != nil:
+		s.Outcome, s.Error = "failed", err.Error()
+	case pending:
+		s.Outcome = "pending"
+	default:
+		s.Outcome = "applied"
+	}
+	return s
+}
+
 // GovernancePlan is PlanGovernance's answer. Steps is never null.
 type GovernancePlan struct {
 	Steps       []ApplyStep `json:"steps"`

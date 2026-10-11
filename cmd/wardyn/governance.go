@@ -178,6 +178,9 @@ func governanceSetCmd(client clientFn) *cobra.Command {
 			}
 			res, err := client().ApplyGovernanceResult(cmd.Context(), doc, prune)
 			if err != nil {
+				if len(res.Steps) > 0 {
+					printApplySteps(cmd.ErrOrStderr(), res.Steps)
+				}
 				return err
 			}
 			printGovernancePending(cmd.ErrOrStderr(), res)

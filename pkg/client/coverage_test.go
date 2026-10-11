@@ -103,7 +103,7 @@ func routeFamilies() map[string][]string {
 		"audit":        {"AuditEvents", "AuditEventsPage", "RecentAuditEvents", "ExportAuditPartition", "AuditRetention", "DropAuditPartition"},
 		"secrets":      {"ListSecrets", "ListSecretsPage", "ListSecretsScoped", "ListSecretsScopedPage", "SetSecret", "DeleteSecret"},
 		"site-config":  {"GetSiteConfig", "PutSiteConfig", "PutSiteConfigResult"},
-		"drives":       {"GetDrives", "ApplyDrives"},
+		"drives":       {"GetDrives", "ApplyDrives", "ApplyDrivesResult"},
 		"templates":    {"ListTemplates", "GetTemplate", "SaveTemplate", "DeleteTemplate", "CopyTemplate", "ImportTemplate", "ListTemplateGroupAdmins", "GrantTemplateGroupAdmin", "RevokeTemplateGroupAdmin"},
 		"presets":      {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
 		"governance":   {"GetGovernance", "PlanGovernance", "ApplyGovernance", "ApplyGovernanceResult"},

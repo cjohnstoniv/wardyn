@@ -618,7 +618,24 @@ func (c *Client) GetDrives(ctx context.Context) (DrivesDocument, error) {
 	}
 }
 
-// ApplyDrives upserts every drive and grant doc names, over the existing
+// DrivesApplyResult is ApplyDrivesResult's answer.
+type DrivesApplyResult struct {
+	Document DrivesDocument `json:"document"`
+	// Steps are the writes issued, in order, with their outcome.
+	Steps []ApplyStep `json:"steps,omitempty"`
+}
+
+// ApplyDrives is ApplyDrivesResult's document, with the same error on a failed
+// write (and no document).
+func (c *Client) ApplyDrives(ctx context.Context, doc DrivesDocument) (DrivesDocument, error) {
+	res, err := c.ApplyDrivesResult(ctx, doc)
+	if err != nil {
+		return DrivesDocument{}, err
+	}
+	return res.Document, nil
+}
+
+// ApplyDrivesResult upserts every drive and grant doc names, over the existing
 // POST /drives, PUT /drives/{id} and POST /drives/grants routes — there is no
 // bulk-write route, and none is added. A drive is routed by the id doc
 // carries: one already issued by GetDrives (non-nil) is REPLACED in place
@@ -636,7 +653,10 @@ func (c *Client) GetDrives(ctx context.Context) (DrivesDocument, error) {
 // what was actually persisted. On success, the returned document is a fresh
 // GetDrives — the authoritative post-write state, including the derived
 // fields (grant counts, deployment facts) a write response cannot carry.
-func (c *Client) ApplyDrives(ctx context.Context, doc DrivesDocument) (DrivesDocument, error) {
+// On a failed write the result holds the steps so far, the failed one included,
+// alongside the error; ApplyDrives is this without the steps.
+func (c *Client) ApplyDrivesResult(ctx context.Context, doc DrivesDocument) (DrivesApplyResult, error) {
+	var res DrivesApplyResult
 	for i, d := range doc.Drives {
 		req := DriveRequest{
 			Name: d.Name, Backend: d.Backend, HostRoot: d.HostRoot,
@@ -645,13 +665,20 @@ func (c *Client) ApplyDrives(ctx context.Context, doc DrivesDocument) (DrivesDoc
 		}
 		var saved UserDrive
 		var err error
+		step := ApplyStep{Kind: "drive", Op: "create", Name: d.Name}
 		if d.ID == uuid.Nil {
 			err = c.do(ctx, http.MethodPost, "/api/v1/drives", req, &saved)
 		} else {
 			err = c.do(ctx, http.MethodPut, "/api/v1/drives/"+d.ID.String(), req, &saved)
+			id := d.ID
+			step.Op, step.ID = "update", &id
 		}
 		if err != nil {
-			return DrivesDocument{}, fmt.Errorf("apply drive %q: %w", d.Name, err)
+			err = fmt.Errorf("apply drive %q: %w", d.Name, err)
+		}
+		res.Steps = append(res.Steps, step.withOutcome(false, err))
+		if err != nil {
+			return res, err
 		}
 		doc.Drives[i].UserDrive = saved
 	}
@@ -671,10 +698,19 @@ func (c *Client) ApplyDrives(ctx context.Context, doc DrivesDocument) (DrivesDoc
 			Enabled:      &g.Enabled,
 		}
 		var saved UserDriveGrant
-		if err := c.do(ctx, http.MethodPost, "/api/v1/drives/grants", req, &saved); err != nil {
-			return DrivesDocument{}, fmt.Errorf("apply drive grant (%s %q on drive %s): %w", g.SubjectType, g.Subject, g.DriveID, err)
+		err := c.do(ctx, http.MethodPost, "/api/v1/drives/grants", req, &saved)
+		if err != nil {
+			err = fmt.Errorf("apply drive grant (%s %q on drive %s): %w", g.SubjectType, g.Subject, g.DriveID, err)
+		}
+		driveID := g.DriveID
+		step := ApplyStep{Kind: "drive_grant", Op: "upsert", SubjectType: g.SubjectType, Subject: g.Subject, ID: &driveID}
+		res.Steps = append(res.Steps, step.withOutcome(false, err))
+		if err != nil {
+			return res, err
 		}
 		doc.Grants[i] = saved
 	}
-	return c.GetDrives(ctx)
+	var err error
+	res.Document, err = c.GetDrives(ctx)
+	return res, err
 }
