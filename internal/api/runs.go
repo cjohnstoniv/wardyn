@@ -214,6 +214,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:        now,
 		UpdatedAt:        now,
 		CreatedBy:        createdBy,
+		HumanAuthor:      requestSponsor(ctx, createdBy),
 		Agent:            req.Agent,
 		Repo:             req.Repo,
 		Task:             req.Task,
