@@ -223,6 +223,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - `wardyn-runnerd` ships as a release binary for Linux and macOS (amd64, arm64) with a per-user service: a systemd
   user unit or a LaunchAgent, installed by `deploy/runner/install.sh`, which registers the runner with a single-use
   token and keeps it running; the owner then claims it with `wardyn runner claim` (#1968).
+- Governance profiles can deny runs on self-hosted or remote-provided runners (`deny_placements`); a run's barrier
+  and capabilities are now checked against the runner it actually lands on, and an offline runner is refused rather
+  than guessed. Create, preflight, policy preview and source scans refuse a denied placement with 403
+  `placement_denied`.
 
 ### Changed
 

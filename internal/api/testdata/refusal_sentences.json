@@ -231,6 +231,11 @@
   },
   {
     "reason": "governance_profile",
+    "target": "\"runs.placement\"",
+    "sentence": "placementDeniedMsg(p, ceiling.Profile.Name)"
+  },
+  {
+    "reason": "governance_profile",
     "target": "\"runs.seed_auto_tools\"",
     "sentence": "fmt.Sprintf(\"`seed_auto_tools` is not allowed by your governance profile %q: its tool rules hold or deny, and the pre-attach seed runs before any human is at the pane. Launch without it.\", name)"
   },
