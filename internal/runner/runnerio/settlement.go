@@ -34,5 +34,11 @@ func (s *Server) OutputSettled(ctx context.Context, id uuid.UUID, ref string) (i
 	if b.stopped != nil {
 		return 0, false, b.stopped
 	}
-	return b.state.End, b.state.Complete && !b.interrupted && b.state.Failure == "" && b.state.Ack == b.state.End, nil
+	return b.state.End, b.settled(), nil
+}
+
+// settled reports a completed, failure-free producer whose every byte the org
+// acknowledged. The caller holds b.mu.
+func (b *outputBuffer) settled() bool {
+	return b.stopped == nil && b.state.Complete && !b.interrupted && b.state.Failure == "" && b.state.Ack == b.state.End
 }

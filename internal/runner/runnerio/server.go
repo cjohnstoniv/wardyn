@@ -67,6 +67,12 @@ func New(sub substrate.Substrate, runnerID, stateDir string) (*Server, error) {
 		return nil, err
 	}
 	for _, f := range files {
+		if strings.HasPrefix(f.Name(), releasedPrefix) {
+			if err := os.RemoveAll(filepath.Join(dir, f.Name())); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		id, err := uuid.Parse(f.Name())
 		if err != nil || id == uuid.Nil || f.Name() != id.String() {
 			return nil, errors.New("runnerio: unknown output directory")
@@ -131,7 +137,12 @@ func (s *Server) Online(peer *runnerwire.Peer) {
 		s.Offline(old)
 	}
 	for id, b := range outputs {
-		s.sendOutput(peer, id, b)
+		b.mu.Lock()
+		delivered := b.state.Complete && b.state.Ack == b.state.End
+		b.mu.Unlock()
+		if !delivered {
+			s.sendOutput(peer, id, b)
+		}
 	}
 }
 
@@ -248,4 +259,37 @@ func (s *Server) ForgetOutput(id uuid.UUID) error {
 	b.stopped = io.ErrClosedPipe
 	b.notify()
 	return os.RemoveAll(b.dir)
+}
+
+// releasedPrefix hides a released run's output while it is deleted, so an
+// interrupted delete never leaves a partial run directory for New to refuse.
+const releasedPrefix = ".released-"
+
+// ReleaseOutput deletes a run's retained output once OutputSettled holds for
+// ref. Releasing output that is already gone succeeds.
+func (s *Server) ReleaseOutput(id uuid.UUID, ref string) error {
+	s.mu.Lock()
+	b := s.outputs[id]
+	if b == nil {
+		s.mu.Unlock()
+		return nil
+	}
+	b.mu.Lock()
+	if b.state.Ref != ref || !b.settled() {
+		b.mu.Unlock()
+		s.mu.Unlock()
+		return errors.New("runnerio: only settled output can be released")
+	}
+	tomb := filepath.Join(s.dir, releasedPrefix+id.String())
+	if err := os.Rename(b.dir, tomb); err != nil {
+		b.mu.Unlock()
+		s.mu.Unlock()
+		return err
+	}
+	delete(s.outputs, id)
+	b.stopped = io.ErrClosedPipe
+	b.notify()
+	b.mu.Unlock()
+	s.mu.Unlock()
+	return os.RemoveAll(tomb)
 }
