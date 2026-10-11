@@ -410,6 +410,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Revoking or switching off runners no longer hangs on such a session.
 - On a registered runner, a BYOI run's output no longer ends at its image selftest. The run's output is the task's
   own, and the selftest's output goes to the runner's log.
+- SCIM deprovisioning never links a sign-in through an email that names another person, and refuses
+  (`owner_ambiguous`, shown on the SCIM status card) when a leaver's emails name two different people, until an
+  admin resolves it.
 
 
 ## [0.8.9] — 2026-10-09

@@ -27,7 +27,9 @@
 # docs/AUDIT-ACTIONS.md 41631 measured after H10-pools-b merge.
 # docs/AUDIT-ACTIONS.md 41147 adds 2 over 41145 (0.9 F-588 M1): awskms in the two secret.rewrap key-service lists.
 # docs/AUDIT-ACTIONS.md 41633 measured after F-588 M1 merge.
-docs/AUDIT-ACTIONS.md=41633 share=8
+# docs/AUDIT-ACTIONS.md 41191 measured after F-1511-scim (person.deprovision refusal outcomes).
+# docs/AUDIT-ACTIONS.md 41679 measured after F-1511-scim merge.
+docs/AUDIT-ACTIONS.md=41679 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

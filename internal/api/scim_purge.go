@@ -91,7 +91,7 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 	if err != nil {
 		return err
 	}
-	forms, err := s.leaverForms(ctx, st, ident)
+	forms, err := s.deprovisionForms(ctx, st, ident, store.JobKindPurge)
 	if err != nil {
 		return err
 	}
