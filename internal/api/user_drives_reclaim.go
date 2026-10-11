@@ -45,6 +45,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -80,6 +81,12 @@ func (s *Server) mountUserDriveFamily(operatorOnly, securityOps chi.Router) {
 type userDriveReclaimRequest struct {
 	SubjectType types.CapabilitySubjectType `json:"subject_type"`
 	Subject     string                      `json:"subject"`
+	// HomeSubject is the person's sign-in subject, for an allocation keyed by
+	// another of their claims (an email). A run derives the hash home and the
+	// object's subject label from the sign-in subject, so Subject alone cannot
+	// name that object; Subject still finds the allocation and any pinned
+	// directory name on it. Empty means Subject is the sign-in subject.
+	HomeSubject string `json:"home_subject,omitempty"`
 }
 
 // userDriveReclaimResponse is what the caller gets back: the same seven facts
@@ -151,6 +158,16 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 		writeErrorReason(w, http.StatusBadRequest, reasonUserDriveReclaimInvalid, "invalid reclaim request: "+err.Error())
 		return
 	}
+	// The sign-in subject the home derives from, held to the same subject rule.
+	homeSubject := g.Subject
+	if strings.TrimSpace(req.HomeSubject) != "" {
+		h := types.UserDriveGrant{SubjectType: types.CapabilitySubjectUser, Subject: req.HomeSubject, DriveID: id}
+		if err := types.ValidateUserDriveGrant(&h); err != nil {
+			writeErrorReason(w, http.StatusBadRequest, reasonUserDriveReclaimInvalid, "invalid reclaim request: home_subject: "+err.Error())
+			return
+		}
+		homeSubject = h.Subject
+	}
 	if g.SubjectType != types.CapabilitySubjectUser {
 		// A group or `all` allocation gives EVERY person it matches their own
 		// home and their own object — that is the whole point of a per-user
@@ -174,7 +191,7 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 		writeErrorReason(w, code, reasonUserDriveNotReclaimable, msg)
 		return
 	}
-	object, code, reason, msg := s.driveReclaimObject(r.Context(), d, g)
+	object, code, reason, msg := s.driveReclaimObject(r.Context(), d, g, homeSubject)
 	if msg != "" {
 		writeErrorReason(w, code, reason, msg)
 		return
@@ -198,7 +215,7 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 		DriveName:    d.Name,
 		StorageClass: d.StorageClass,
 		HomeName:     driveHomeOf(object, d),
-		SubjectHash:  types.DriveSubjectHash(g.Subject),
+		SubjectHash:  types.DriveSubjectHash(homeSubject),
 		Target:       runner.DriveTarget,
 	})
 	if err != nil {
@@ -276,7 +293,10 @@ func driveReclaimableHere(d types.UserDrive, runnerTarget string) (int, string) 
 // Two distinct causes (#656 slice 2 review round: they used to share
 // user_drive_reclaim_failed) — a store read failure, and the home name
 // itself failing to resolve.
-func (s *Server) driveReclaimObject(ctx context.Context, d types.UserDrive, g types.UserDriveGrant) (object string, code int, reason, msg string) {
+//
+// homeSubject is the sign-in subject the run derived the home from; the
+// allocation is still found by g's own (subject_type, subject) key.
+func (s *Server) driveReclaimObject(ctx context.Context, d types.UserDrive, g types.UserDriveGrant, homeSubject string) (object string, code int, reason, msg string) {
 	grants, err := s.cfg.Store.ListUserDriveGrants(ctx)
 	if err != nil {
 		return "", http.StatusInternalServerError, reasonUserDriveReclaimFailed, loggedMsg(ctx, "list user drive allocations", err)
@@ -288,7 +308,7 @@ func (s *Server) driveReclaimObject(ctx context.Context, d types.UserDrive, g ty
 			break
 		}
 	}
-	home, err := types.DriveHomeName(d, g.Subject, override)
+	home, err := types.DriveHomeName(d, homeSubject, override)
 	if err != nil {
 		return "", http.StatusBadRequest, reasonUserDriveReclaimNoDirectoryName, "this allocation resolves to no directory name, so there is no object to reclaim: " + err.Error()
 	}

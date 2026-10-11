@@ -23,8 +23,9 @@ There are two supported ways, and both stay supported: the substrate command by 
 wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes
 ```
 
+- Email-keyed allocation: pass the email as `subject`, the sign-in subject as `home_subject` (`--home-subject`).
 - It answers `deleted` (this call destroyed the storage) or `already_absent` (nothing answered to the name).
-- **There is no console button**: a destructive confirmation is a screen, and this one has no approved mock, so the API and the CLI are the whole surface in 0.8.
+- **There is no console button**: the API and the CLI are the whole surface.
 
 **Do it in this order.**
 

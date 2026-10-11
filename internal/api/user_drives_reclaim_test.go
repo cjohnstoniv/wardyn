@@ -446,3 +446,67 @@ func TestReclaimUserDriveHasNoConsoleButton(t *testing.T) {
 			"(docs/design/CONSOLE-RULES.md's mock-first rule). Get the mock approved first", offenders)
 	}
 }
+
+// TestReclaimUserDriveKeysOnTheSubjectItIsGiven pins today's derivation for an
+// allocation keyed by the sign-in subject: with no home_subject, the hash home
+// and the object's subject label both come from `subject`.
+func TestReclaimUserDriveKeysOnTheSubjectItIsGiven(t *testing.T) {
+	for _, withGrant := range []bool{true, false} {
+		d := reclaimDrive(nil)
+		var g *types.UserDriveGrant
+		if withGrant {
+			g = grantFixture(d.ID, func(g *types.UserDriveGrant) { g.Subject = reclaimSubject })
+		}
+		rn := &reclaimRunner{outcome: runner.DriveReclaimDeleted}
+		srv, _, _ := reclaimServer(t, d, g, rn)
+		if w := reclaimCall(t, srv, d.ID, `{"subject_type":"user","subject":"`+reclaimSubject+`"}`); w.Code != http.StatusOK {
+			t.Fatalf("allocation present=%v: reclaim = %d, want 200: %s", withGrant, w.Code, w.Body.String())
+		}
+		home, err := types.DriveHomeName(d, reclaimSubject, "")
+		if err != nil {
+			t.Fatalf("derive home: %v", err)
+		}
+		if len(rn.calls) != 1 || rn.calls[0].ObjectName != types.DriveObjectName(d, home) ||
+			rn.calls[0].SubjectHash != types.DriveSubjectHash(reclaimSubject) {
+			t.Errorf("allocation present=%v: substrate asked for %+v, want the object and label of %q", withGrant, rn.calls, reclaimSubject)
+		}
+	}
+}
+
+// TestReclaimUserDriveDerivesFromTheHomeSubject: an allocation keyed by an
+// email resolves at run time to the hash of the person's SIGN-IN subject, with
+// that subject's label. home_subject carries it, so the reclaim names the same
+// object the run mounted; `subject` still finds the allocation and any pinned
+// directory name on it.
+func TestReclaimUserDriveDerivesFromTheHomeSubject(t *testing.T) {
+	const email, sub = "alice@corp.example", "sub-alice"
+	for _, pinned := range []string{"", "alice-pinned"} {
+		d := reclaimDrive(nil)
+		g := grantFixture(d.ID, func(g *types.UserDriveGrant) { g.Subject, g.HomeOverride = email, pinned })
+		rn := &reclaimRunner{outcome: runner.DriveReclaimDeleted}
+		srv, _, _ := reclaimServer(t, d, g, rn)
+		w := reclaimCall(t, srv, d.ID, `{"subject_type":"user","subject":"Alice@Corp.Example","home_subject":"Sub-Alice"}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("pinned=%q: reclaim = %d, want 200: %s", pinned, w.Code, w.Body.String())
+		}
+		home, err := types.DriveHomeName(d, sub, pinned)
+		if err != nil {
+			t.Fatalf("derive home: %v", err)
+		}
+		if emailHome, _ := types.DriveHomeName(d, email, pinned); pinned == "" && emailHome == home {
+			t.Fatal("the email and sign-in homes are identical, so this case proves nothing")
+		}
+		if len(rn.calls) != 1 || rn.calls[0].ObjectName != types.DriveObjectName(d, home) ||
+			rn.calls[0].SubjectHash != types.DriveSubjectHash(sub) {
+			t.Errorf("pinned=%q: substrate asked for %+v, want object %q labelled for the sign-in subject",
+				pinned, rn.calls, types.DriveObjectName(d, home))
+		}
+	}
+	// A home_subject the allocation key rules refuse is a 400, before any storage call.
+	d := reclaimDrive(nil)
+	rn := &reclaimRunner{outcome: runner.DriveReclaimDeleted}
+	srv, _, _ := reclaimServer(t, d, nil, rn)
+	if w := reclaimCall(t, srv, d.ID, `{"subject_type":"user","subject":"`+email+`","home_subject":"bad\u0007sub"}`); w.Code != http.StatusBadRequest || len(rn.calls) != 0 {
+		t.Errorf("unusable home_subject = %d with %d storage calls, want 400 and none: %s", w.Code, len(rn.calls), w.Body.String())
+	}
+}
