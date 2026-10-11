@@ -8,9 +8,11 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -480,24 +482,79 @@ func TestPG_RunnerPoolConcurrentDirectExecutorWritesTakeTheGovernanceTargetLock(
 	}
 }
 
-// Limits are not stored yet, so a body carrying them is refused rather than accepted and dropped.
+// Limits are not stored yet, so a body carrying them is refused rather than accepted and dropped, on
+// create and on update alike, whatever the block holds.
 func TestPG_RunnerPoolCreateAndUpdateRefuseLimits(t *testing.T) {
 	e := newPoolEnv(t, false)
-	limits := `"limits":{"background":{},"barriers":["fence"]}`
-	w := e.admin(http.MethodPost, "/api/v1/runner-pools", `{"name":"Limited","hosting_type":"remote_provided",`+limits+`}`)
-	if w.Code != http.StatusBadRequest || wireReason(t, w) != string(runnerpool.ReasonInvalid) {
-		t.Errorf("create with limits = %d %s, want 400 runner_pool_invalid", w.Code, w.Body)
+	limits := `"limits":{"background":{"cpu_millis":{"default":1,"cap":2},"memory_mib":{"default":1,"cap":2},"lifetime":{"default_sec":1,"max_sec":2}},"barriers":["CC1"]}`
+	var parsed struct {
+		Limits types.RunnerPoolLimits `json:"limits"`
 	}
+	if err := json.Unmarshal([]byte("{"+limits+"}"), &parsed); err != nil || parsed.Limits.Validate() != nil {
+		t.Fatalf("the test's limits block must be valid: %v %v", err, parsed.Limits.Validate())
+	}
+	const wantMsg = "pool limits are not supported yet"
+	refused := func(what string, w *httptest.ResponseRecorder) {
+		t.Helper()
+		if w.Code != http.StatusBadRequest || wireReason(t, w) != string(runnerpool.ReasonInvalid) || !strings.Contains(w.Body.String(), wantMsg) {
+			t.Errorf("%s with limits = %d %s, want 400 runner_pool_invalid %q", what, w.Code, w.Body, wantMsg)
+		}
+	}
+	refused("create", e.admin(http.MethodPost, "/api/v1/runner-pools", `{"name":"Limited","hosting_type":"remote_provided",`+limits+`}`))
 	if n := e.count(`SELECT count(*) FROM runner_pools`); n != 0 {
 		t.Errorf("a refused create stored %d pools", n)
 	}
 	pool := e.createPool("Plain", types.RunnerPoolRemoteProvided)
 	rev := e.revision(pool.ID)
-	body := fmt.Sprintf(`{"revision":%d,"name":"Renamed",%s}`, rev, limits)
-	if w := e.admin(http.MethodPut, poolPath(pool.ID), body); w.Code != http.StatusBadRequest {
-		t.Errorf("update with limits = %d %s, want 400", w.Code, w.Body)
-	}
+	refused("update", e.admin(http.MethodPut, poolPath(pool.ID), fmt.Sprintf(`{"revision":%d,"name":"Renamed",%s}`, rev, limits)))
+	refused("limits-only update", e.admin(http.MethodPut, poolPath(pool.ID), fmt.Sprintf(`{"revision":%d,%s}`, rev, limits)))
 	if e.revision(pool.ID) != rev {
 		t.Errorf("a refused update moved the pool")
+	}
+}
+
+// A detach that read "no policy" and then waits on the target lock while the pool's first use policy is
+// approved must not remove the narrowed executor unheld: the store re-checks under the locks, and the
+// handler decides again on the catalogue as it now stands, which holds the detach.
+func TestPG_RunnerPoolConcurrentDetachRacingFirstPolicyApprovalIsHeld(t *testing.T) {
+	e := newPoolEnv(t, true)
+	a := e.createPool("A", types.RunnerPoolRemoteProvided)
+	if w := e.call(e.super, http.MethodPut, poolPath(a.ID)+"/executors/fake", ""); w.Code != http.StatusOK {
+		t.Fatalf("attach = %d %s", w.Code, w.Body)
+	}
+	held := e.pending(e.call(e.alice, http.MethodPut, usePolicyPath(a.ID), `{"subjects":[{"subject_type":"user","subject":"sub-named"}]}`))
+	ctx := context.Background()
+	tx, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	// Stall the approval after it takes the target lock: it waits on the pool row.
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM runner_pools WHERE id = $1 FOR UPDATE`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	appr := make(chan *httptest.ResponseRecorder, 1)
+	go func() { appr <- e.call(e.bob, http.MethodPost, approvePath(held.ID), "") }()
+	time.Sleep(700 * time.Millisecond)
+	// The detach reads the catalogue (no policy yet), then waits on the target lock.
+	det := make(chan *httptest.ResponseRecorder, 1)
+	go func() { det <- e.call(e.super, http.MethodDelete, poolPath(a.ID)+"/executors/fake", "") }()
+	time.Sleep(700 * time.Millisecond)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	wa, ok1 := within(appr, 20*time.Second)
+	wd, ok2 := within(det, 20*time.Second)
+	if !ok1 || !ok2 {
+		t.Fatal("the approval or the detach did not finish")
+	}
+	if wa.Code != http.StatusOK {
+		t.Fatalf("approve = %d %s", wa.Code, wa.Body)
+	}
+	if wd.Code != http.StatusAccepted {
+		t.Errorf("detach racing the first policy approval = %d %s, want 202 held", wd.Code, wd.Body)
+	}
+	if n := e.members(a.ID); n != 1 {
+		t.Errorf("members(A) = %d after the raced detach, want 1: the executor must stay until a second human approves", n)
 	}
 }

@@ -32,7 +32,7 @@ type RunnerPoolStore interface {
 	DeleteRunnerPool(ctx context.Context, id uuid.UUID) (RunnerPoolDeletion, error)
 
 	AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (m types.RunnerPoolMember, added bool, revision int64, err error)
-	RemoveRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (removed bool, revision int64, err error)
+	RemoveRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string, refuseGoverned bool) (removed bool, revision int64, err error)
 	AddOwnRunnerToPool(ctx context.Context, id, runnerID uuid.UUID, owner, orgURLSHA256 string) (m types.RunnerPoolMember, added bool, revision int64, err error)
 	RemoveOwnRunnerFromPool(ctx context.Context, id, runnerID uuid.UUID, owner string) (removed bool, revision int64, err error)
 
@@ -49,6 +49,8 @@ var _ RunnerPoolStore = PG{}
 var (
 	// ErrRunnerPoolStale: the caller's revision is not the pool's.
 	ErrRunnerPoolStale = errors.New("store: runner pool revision is stale")
+	// ErrRunnerPoolGoverned: a detach that was decided as direct met a use policy under the locks.
+	ErrRunnerPoolGoverned = errors.New("store: runner pool now has a use policy, so the detach must be held")
 	// ErrRunnerPoolLimit: the catalogue is at RunnerPoolsMax.
 	ErrRunnerPoolLimit = errors.New("store: too many runner pools")
 	// ErrRunnerPoolHasPolicy: a pool with a use policy is not deleted, because the delete would clear
@@ -348,11 +350,26 @@ func errOrNotFound(err error) error {
 	return ErrNotFound
 }
 
-// RemoveRunnerPoolExecutor removes an executor member; removed is false when it was not one.
-func (s PG) RemoveRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (removed bool, rev int64, err error) {
+// RemoveRunnerPoolExecutor removes an executor member; removed is false when it was not one. The caller
+// decided on a catalogue read taken before the locks whether the detach is held; refuseGoverned says it
+// decided "not held", and ErrRunnerPoolGoverned answers a use policy that was approved in between.
+func (s PG) RemoveRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string, refuseGoverned bool) (removed bool, rev int64, err error) {
 	err = s.inTx(ctx, func(q Querier) error {
 		if err := LockGovernanceTarget(ctx, q, types.GovernanceTargetRunnerPoolUsePolicy, id.String()); err != nil {
 			return err
+		}
+		if refuseGoverned {
+			if err := LockLivePoolQ(ctx, q, id); err != nil {
+				return err
+			}
+			var governed bool
+			if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_pool_use_policies WHERE pool_id = $1)
+				AND EXISTS (SELECT 1 FROM runner_pool_members WHERE pool_id = $1 AND executor_id = $2)`, id, executor).Scan(&governed); err != nil {
+				return err
+			}
+			if governed {
+				return ErrRunnerPoolGoverned
+			}
 		}
 		removed, rev, err = RemoveRunnerPoolExecutorQ(ctx, q, id, executor)
 		return err

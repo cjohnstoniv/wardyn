@@ -90,6 +90,11 @@ func (s *Server) handleUpdateRunnerPool(w http.ResponseWriter, r *http.Request) 
 	if !decodeStrict(w, r, &req) {
 		return
 	}
+	if req.Limits != nil {
+		// Not stored yet: refused rather than accepted and dropped, as on create.
+		writePoolInvalid(w, "pool limits are not supported yet")
+		return
+	}
 	if err := req.Validate(); err != nil {
 		writePoolInvalid(w, err.Error())
 		return
@@ -233,21 +238,23 @@ func (s *Server) handleRemoveRunnerPoolExecutor(w http.ResponseWriter, r *http.R
 		return
 	}
 	executor := chi.URLParam(r, "executor")
-	rows, ok := s.poolCatalogue(w, r, ps, false)
-	if !ok {
+	mode, governed, done := s.detachGovernance(w, r, ps, pool.ID, executor)
+	if done {
 		return
 	}
-	mode := govDirect
-	if row, found := catalogueRow(rows, pool.ID); found && row.Policy != nil && slices.Contains(row.ExecutorIDs, executor) {
-		if mode, ok = s.governanceWriteMode(w, r); !ok {
+	removed, rev, err := ps.RemoveRunnerPoolExecutor(r.Context(), pool.ID, executor, !governed)
+	if errors.Is(err, store.ErrRunnerPoolGoverned) {
+		// A use policy was approved between the catalogue read and the locks: decide again on the
+		// catalogue as it now stands, which holds the detach for a second human.
+		if mode, governed, done = s.detachGovernance(w, r, ps, pool.ID, executor); done {
 			return
 		}
-		if mode == govQueue {
-			s.holdExecutorChange(w, r, row, executor, true)
+		removed, rev, err = ps.RemoveRunnerPoolExecutor(r.Context(), pool.ID, executor, !governed)
+		if errors.Is(err, store.ErrRunnerPoolGoverned) {
+			writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: pool.Name})
 			return
 		}
 	}
-	removed, rev, err := ps.RemoveRunnerPoolExecutor(r.Context(), pool.ID, executor)
 	if errors.Is(err, store.ErrNotFound) {
 		writePoolNotFound(w)
 		return
@@ -263,6 +270,28 @@ func (s *Server) handleRemoveRunnerPoolExecutor(w http.ResponseWriter, r *http.R
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// detachGovernance decides how a detach of executor from the pool is written, on the catalogue as it
+// stands. governed: the pool has a use policy and holds the executor, so the write mode was asked for.
+// done: the answer is already written (the detach was held, or the mode refused).
+func (s *Server) detachGovernance(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore, poolID uuid.UUID, executor string) (mode govWriteMode, governed, done bool) {
+	rows, ok := s.poolCatalogue(w, r, ps, false)
+	if !ok {
+		return govDirect, false, true
+	}
+	row, found := catalogueRow(rows, poolID)
+	if !found || row.Policy == nil || !slices.Contains(row.ExecutorIDs, executor) {
+		return govDirect, false, false
+	}
+	if mode, ok = s.governanceWriteMode(w, r); !ok {
+		return mode, true, true
+	}
+	if mode == govQueue {
+		s.holdExecutorChange(w, r, row, executor, true)
+		return mode, true, true
+	}
+	return mode, true, false
 }
 
 // checkDefaultPools revalidates the pools a defaults document names, as each write of a default does:
