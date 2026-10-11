@@ -47,6 +47,10 @@ type RunnerView struct {
 	ClaimedAt      *time.Time `json:"claimed_at,omitempty"`
 	LastSeenAt     *time.Time `json:"last_seen_at,omitempty"`
 	RevokedAt      *time.Time `json:"revoked_at,omitempty"`
+	// RevokedBy names who revoked the runner; RevokeReason is "" or RunnerRevokeNotMine. Both are
+	// absent until it is revoked.
+	RevokedBy    string `json:"revoked_by,omitempty"`
+	RevokeReason string `json:"revoke_reason,omitempty"`
 	// Posture is absent until the runner has reported; PostureSource is then runner_asserted.
 	Posture           *RunnerPosture `json:"posture,omitempty"`
 	PostureReportedAt *time.Time     `json:"posture_reported_at,omitempty"`

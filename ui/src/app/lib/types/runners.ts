@@ -40,6 +40,9 @@ export interface RunnerView {
   claimed_at?: string;
   last_seen_at?: string;
   revoked_at?: string;
+  revoked_by?: string;
+  /** `"not_mine"` when the owner revoked it as not theirs. */
+  revoke_reason?: string;
   posture?: RunnerPosture;
   posture_reported_at?: string;
   posture_source?: string;

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
@@ -109,12 +110,26 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 			cfg.Admit = s.admitRunner
 		}
 		// The Hub reports Disconnected only for a session it reported Connected,
-		// and calls it under the runner's session slot, even inside a fresh
-		// admission: the sweep must never run there. Connected does no database
-		// work, so nothing on the admission path can wait behind a sweep.
+		// and calls both under the runner's session slot, Disconnected even inside
+		// a fresh admission. Each writes its audit row there, so a new session's
+		// runner.connect never precedes the last one's runner.disconnect. Both read
+		// the runner row and write the audit row on that slot; the offline sweep
+		// is only scheduled there and never runs on it.
 		if cfg.Connected == nil && cfg.Disconnected == nil {
-			cfg.Connected = func(context.Context, uuid.UUID) error { return nil }
-			cfg.Disconnected = func(_ context.Context, id uuid.UUID) error {
+			cfg.Connected = func(ctx context.Context, id uuid.UUID) error {
+				rn, err := st.GetRunner(ctx, id)
+				if err != nil {
+					return err
+				}
+				s.RecordRunnerConnected(ctx, id, rn.Version, false)
+				return nil
+			}
+			cfg.Disconnected = func(ctx context.Context, id uuid.UUID) error {
+				var lastSeen *time.Time
+				if rn, err := st.GetRunner(ctx, id); err == nil {
+					lastSeen = rn.LastSeenAt
+				}
+				s.RecordRunnerDisconnected(ctx, id, lastSeen)
 				s.runnerStreams.offline.schedule(s.cfg.BaseCtx, id, s.OfflineFromRunner)
 				return nil
 			}
