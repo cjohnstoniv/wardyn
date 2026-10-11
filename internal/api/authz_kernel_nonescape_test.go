@@ -65,8 +65,8 @@ var kernelDoors = map[string][]string{
 	// inline policy's hosts.
 	"componentHostsBounded": {"capEgressHost"},
 	// Minting a personal credential.
-	"handleAddSSHKey":      {"capFeature"},
-	"handleCreateAPIToken": {"capFeature"},
+	"handleAddSSHKey": {"capFeature"},
+	"mintGuards":      {"capFeature"}, // both mint doors: POST /me/tokens and an invitation claim
 	// The key and sign-in doors, answered as an unknown provider (D-6).
 	"denyProviderAsMissing": {"capModelProvider"},
 	// A workspace read hides a pin to a provider the reader may not use.
