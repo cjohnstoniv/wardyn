@@ -414,3 +414,59 @@ func TestRepliesToAFloodDoNotPileUpWhileWritesStall(t *testing.T) {
 		t.Fatalf("%d goroutines wait to answer %d PINGs and %d DATA frames", grown, flood, flood)
 	}
 }
+
+// Characterization: on a healthy link an OPEN is answered: RESET refused for a
+// call not in flight, RESET capacity past MaxStreams, OPEN_OK when accepted.
+func TestOpenAnswersReachTheOpener(t *testing.T) {
+	r := newRaw(t, PeerConfig{Org: true, OnOpen: func(*Stream, Open) error { return nil }})
+	relay, _ := json.Marshal(Open{Kind: KindRelay})
+	r.write(t, Frame{Type: TypeOpen, Stream: 1, Payload: relay})
+	if f := r.readType(t, TypeOpenOK); f.Stream != 1 {
+		t.Fatalf("OPEN_OK for stream %d, want 1", f.Stream)
+	}
+	orphan, _ := json.Marshal(Open{Kind: KindPTY, Call: 999999})
+	r.write(t, Frame{Type: TypeOpen, Stream: 3, Payload: orphan})
+	if rst := r.readType(t, TypeReset); rst.Stream != 3 {
+		t.Fatalf("RESET for stream %d, want 3", rst.Stream)
+	} else if code, _ := DecodeReset(rst.Payload); code != ResetRefused {
+		t.Fatalf("RESET code %d, want refused", code)
+	}
+}
+
+// R2-0112: while this side's write is stalled, a flood of OPENs it refuses, or
+// accepts and the peer then resets, must not leave a goroutine per frame
+// waiting to write the answer.
+func TestOpenAnswersDoNotPileUpWhileWritesStall(t *testing.T) {
+	handled := make(chan struct{}, 1)
+	r := newRaw(t, PeerConfig{Org: true, OnOpen: func(_ *Stream, o Open) error {
+		if o.Kind == KindPTY {
+			handled <- struct{}{}
+		}
+		return nil
+	}})
+	for range 64 { // fill the loopback; the raw end never reads
+		if err := r.p.Send(ctxT(t), Frame{Type: TypeGoaway}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := runtime.NumGoroutine()
+	orphan, _ := json.Marshal(Open{Kind: KindRelay, Call: 999999})
+	relay, _ := json.Marshal(Open{Kind: KindRelay})
+	const flood = 500
+	for range flood {
+		if r.raw.WriteFrame(ctxT(t), Frame{Type: TypeOpen, Stream: 1, Payload: orphan}) != nil ||
+			r.raw.WriteFrame(ctxT(t), Frame{Type: TypeOpen, Stream: 3, Payload: relay}) != nil ||
+			r.raw.WriteFrame(ctxT(t), Frame{Type: TypeReset, Stream: 3, Payload: EncodeReset(ResetCancelled)}) != nil {
+			break // the session ended
+		}
+	}
+	pty, _ := json.Marshal(Open{Kind: KindPTY})
+	_ = r.raw.WriteFrame(ctxT(t), Frame{Type: TypeOpen, Stream: 5, Payload: pty})
+	select {
+	case <-handled: // the read loop has handled every frame before this OPEN
+	case <-r.p.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("the read loop neither reached the last OPEN nor ended the session")
+	}
+	waitFor(t, 3*time.Second, "answer goroutines to settle", func() bool { return runtime.NumGoroutine()-base <= flood/10 })
+}
