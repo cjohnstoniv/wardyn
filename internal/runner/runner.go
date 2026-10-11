@@ -163,13 +163,15 @@ type ProxyConfig struct {
 	// UpstreamProxyNoProxy: hosts/CIDRs whose dials skip the corporate
 	// upstream proxy — still faces the private-IP guard and the run's policy.
 	UpstreamProxyNoProxy []string
-	LLMUpstreams         map[string]string        // public vendor host -> operator model gateway base URL
-	LLMChannelHosts      map[string]string        // model host -> vendor schema it is inspected as; never a gateway (proxy.Config.LLMChannelHosts)
-	LLMUnavailableDetail string                   // reason for the brokered-LLM 404 when no credential backs it
-	Unattended           bool                     // a run nobody is driving: a held push is refused instead
-	Attribution          *policyref.Ref           // the policy named in a policy-decided refusal; nil when none
-	PushRuleSets         []types.PushRuleSet      // push content rules per SCM entry (provider+org); proxy.Config.PushRuleSets
-	HarnessToolRules     []types.HarnessToolRules // tool rules per included harness; proxy.Config.HarnessToolRules
+	LLMUpstreams         map[string]string         // public vendor host -> operator model gateway base URL
+	LLMChannelHosts      map[string]string         // model host -> vendor schema it is inspected as; never a gateway (proxy.Config.LLMChannelHosts)
+	LLMUnavailableDetail string                    // reason for the brokered-LLM 404 when no credential backs it
+	Unattended           bool                      // a run nobody is driving: a held push is refused instead
+	Attribution          *policyref.Ref            // the policy named in a policy-decided refusal; nil when none
+	PushRuleSets         []types.PushRuleSet       // push content rules per SCM entry (provider+org); proxy.Config.PushRuleSets
+	PushRuleBase         *types.PushRulesSpec      // the run's push rules after the ceiling, for an entry with no set; proxy.Config.PushRuleBase
+	HarnessToolRules     []types.HarnessToolRules  // tool rules per included harness; proxy.Config.HarnessToolRules
+	HarnessCredentials   []types.HarnessCredential // SHA-256 of each harness's approval credential; proxy.Config.HarnessCredentials (never the plaintext)
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).

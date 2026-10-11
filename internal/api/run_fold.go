@@ -65,6 +65,7 @@ type runFold struct {
 	fitWarnings       []string
 	end               createEnd
 	prov              []provenanceRow
+	pushSets          []types.PushRuleSet
 	// place is where the run goes (stepPlacement): the resolved pool and the fully eligible targets.
 	place runPlacement
 }
@@ -117,6 +118,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepSeedWorkspace, foldAll},
 	{(*Server).stepDrive, foldAll},
 	{(*Server).stepWorkspaces, foldAll},
+	{(*Server).stepPushRuleSets, foldAll},
 	{(*Server).stepPreviewEgress, foldPreflight | foldPreview},
 	{(*Server).stepRequirements, foldAll},
 	{(*Server).stepGitHubEgress, foldAll},
