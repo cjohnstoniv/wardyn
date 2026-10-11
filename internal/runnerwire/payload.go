@@ -151,13 +151,18 @@ type RunState struct {
 	MutationFailure *types.RunnerMutationFailure `json:"mutation_failure,omitempty"`
 	Execution       *ExecutionResult             `json:"execution,omitempty"`
 	RunID           uuid.UUID                    `json:"run_id"`
-	SandboxPresent  bool                         `json:"sandbox_present"`
-	AgentState      string                       `json:"agent_state,omitempty"`
-	ExitCode        *int                         `json:"exit_code,omitempty"`
-	ProxyStoppedAt  *time.Time                   `json:"proxy_stopped_at,omitempty"`
-	SpoolDepth      int                          `json:"spool_depth"`
-	SpoolDrops      int                          `json:"spool_drops"`
-	ResidentGrants  []string                     `json:"resident_grants,omitempty"`
+	// Ref and Generation are the runner's own identity for the run, asserted
+	// evidence only. The org uses them solely to contain a run it has no row
+	// for; they never bind or authorize anything for a known run.
+	Ref            string     `json:"ref,omitempty"`
+	Generation     uuid.UUID  `json:"generation"`
+	SandboxPresent bool       `json:"sandbox_present"`
+	AgentState     string     `json:"agent_state,omitempty"`
+	ExitCode       *int       `json:"exit_code,omitempty"`
+	ProxyStoppedAt *time.Time `json:"proxy_stopped_at,omitempty"`
+	SpoolDepth     int        `json:"spool_depth"`
+	SpoolDrops     int        `json:"spool_drops"`
+	ResidentGrants []string   `json:"resident_grants,omitempty"`
 }
 
 // Byte-stream kinds carried by OPEN.

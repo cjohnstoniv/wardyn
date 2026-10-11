@@ -88,6 +88,8 @@ func backgroundFlags(body *sdk.CreateRunRequest, f runModeFlags) error {
 	switch {
 	case f.command != "" && (body.Agent != "" || body.Task != ""):
 		return errors.New("--command runs no agent: drop --agent and --task, or use an agent task instead")
+	case body.ModelProvider != "" && body.Agent == "":
+		return errors.New("--model-provider goes with --agent: a --command run, or an agent task without --agent, has no tool to carry it")
 	case f.command != "":
 		body.Workload = &sdk.RunWorkload{Kind: sdk.WorkloadCommand, Command: f.command}
 	default:
@@ -104,6 +106,9 @@ func backgroundFlags(body *sdk.CreateRunRequest, f runModeFlags) error {
 func interactiveFlags(body *sdk.CreateRunRequest, f runModeFlags) error {
 	if f.command != "" || body.Task != "" {
 		return errors.New("--command and --task are for a background run: start a command in an interactive run with --startup command:COMMAND")
+	}
+	if body.ModelProvider != "" && body.Agent == "" {
+		return errors.New("--model-provider goes with --agent: with --tool write ID=MODEL_PROVIDER")
 	}
 	tools := f.tools
 	if body.Agent != "" {

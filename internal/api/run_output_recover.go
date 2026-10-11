@@ -183,7 +183,7 @@ func (s *Server) resumeRunOutput(ctx context.Context, runID uuid.UUID, ref strin
 		return
 	}
 	s.goBackground(func() {
-		err := rec.RecoverOutput(ctx, ref, tw)
+		err := rec.RecoverOutput(runner.WithOutputRun(ctx, runID), ref, tw)
 		s.noteRecoveryEnd(runID, tw.t, err)
 		tw.EndDrain(recoveryDrainErr(err))
 	})
