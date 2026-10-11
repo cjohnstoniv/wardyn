@@ -3,6 +3,7 @@
 # Managed laptops: client-mode runners
 
 - In 0.9 a laptop joins an org as a **client-mode runner**: it runs `wardyn-runnerd`, not a control plane, and the person who owns it claims it.
+- Install it as a per-user service with [`deploy/runner/install.sh`](../../deploy/runner/install.sh): see [Run as a service](../runner-registration.md#run-as-a-service).
 - Design: [docs/design/0.9/PLAN.md](../design/0.9/PLAN.md). Org enrolment of a full daemon (`WARDYN_ORG_URL`) still works in 0.9, logs a deprecation warning at boot, and is removed in 1.0; see [Legacy org enrolment](#legacy-org-enrolment-deprecated).
 
 > [!NOTE]

@@ -2,7 +2,7 @@
 # ROADMAP.md 5846 included +42: the v0.8.9 Shipped row, which every release commit adds
 # ROADMAP.md 5870 adds 24: the 0.9 hybrid rows describe client-mode runners, mark 0.8 enrolment superseded, and drop signed policy snapshots (PLAN §10.1).
 # RELEASING.md 5407 measured after merging G-chores-a.
-RELEASING.md=5407 share=35 # +31: the two Docker Hub Actions secrets, one line each.
+RELEASING.md=5414 share=35 # +31: the two Docker Hub Actions secrets, one line each. +7: the runner-units job and the runner release assets (#1968).
 # ROADMAP.md 5870 measured after merging G-chores-a.
 ROADMAP.md=5870 share=35 # +42: the v0.8.9 Shipped row, which every release commit adds
 docs/DEMO-SCRIPT.md=6867 share=35
