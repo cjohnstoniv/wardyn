@@ -50,6 +50,9 @@ type HubConfig struct {
 	// session emits neither; Disconnected waits for the resume window.
 	Connected    func(context.Context, uuid.UUID) error
 	Disconnected func(context.Context, uuid.UUID) error
+	// Verified runs once the runner proves possession of its stored key,
+	// before any further lookup or admission. An error refuses the connection.
+	Verified func(context.Context, uuid.UUID) error
 }
 
 type hubSession struct {
@@ -103,6 +106,11 @@ func (h *Hub) Serve(ctx context.Context, conn runnerwire.Conn, id uuid.UUID) err
 	auth, err := runnerwire.AuthenticateRunner(ctx, conn, row, h.cfg.OrgURL)
 	if err != nil {
 		return err
+	}
+	if h.cfg.Verified != nil {
+		if err := h.cfg.Verified(ctx, id); err != nil {
+			return err
+		}
 	}
 	current, err := h.cfg.Lookup(ctx, id)
 	if err != nil || current.ID != id || string(current.PublicKey) != string(row.PublicKey) || current.OrgURLSHA256 != row.OrgURLSHA256 {
