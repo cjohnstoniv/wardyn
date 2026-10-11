@@ -370,7 +370,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	launch := createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
 		wsRefs: wsRefs, driveMount: f.driveMount, ephemeralDirs: f.ephemeralDirs,
-		runToken: id.Token, created: created, comps: comps, overridden: f.source.OverridesDiff != nil, pushSets: f.pushSets,
+		runToken: id.Token, created: created, comps: comps, overridden: f.source.OverridesDiff != nil, pushSets: f.pushSets, harnessRules: harnessToolRulesFor(spec, req.Tools),
 	}
 	launchCtx := context.WithoutCancel(ctx)
 	s.goBackground(func() { s.finishCreateRunLaunch(launchCtx, launch) })

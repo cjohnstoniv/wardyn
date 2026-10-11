@@ -53,6 +53,8 @@ type createRunLaunch struct {
 	overridden bool
 	// pushSets are the run's push rules per SCM entry (pushRuleSetsFor).
 	pushSets []types.PushRuleSet
+	// harnessRules are the run's tool rules per included harness (harnessToolRulesFor).
+	harnessRules []types.HarnessToolRules
 }
 
 // DRAFT (M2 canon pending) — the run's failure_hint when the detached launch
@@ -131,6 +133,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			Components:       l.comps.dispatch(),
 			PolicyOverridden: l.overridden,
 			PushRuleSets:     l.pushSets,
+			HarnessToolRules: l.harnessRules,
 		})
 	}
 }

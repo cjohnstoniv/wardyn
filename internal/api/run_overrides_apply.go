@@ -27,6 +27,11 @@ type overrideEdits struct {
 	// even where the policy they started from is not clamped as a whole.
 	addedHosts  []string
 	addedGrants []types.GrantSpec
+	// The run-wide scalars the person changed and what the policy held before, so a
+	// value the ceiling refuses can be put back where the policy had it.
+	setFirstUse, setAllowAll bool
+	prevFirstUse             types.FirstUseMode
+	prevAllowAll             bool
 }
 
 func (e *overrideEdits) add(field, value string, effect provEffect) {
@@ -100,6 +105,9 @@ func (s *Server) applyRunOverrides(ctx context.Context, r *http.Request, spec ty
 	if h := o.Hosts; h != nil {
 		applyRunHostOverrides(&spec, *h, e)
 	}
+	if eg := o.Egress; eg != nil {
+		applyRunEgressOverrides(&spec, *eg, e)
+	}
 	if o.AzureDevOps != nil {
 		if refusal := applyADOOverride(&spec, *o.AzureDevOps, e); refusal != nil {
 			return spec, nil, refusal
@@ -149,6 +157,21 @@ func applyRunHostOverrides(spec *types.RunPolicySpec, h client.RunHostOverrides,
 			spec.DeniedDomains = append(spec.DeniedDomains, host)
 			e.add(fieldDenied, host, provEffectAdded)
 		}
+	}
+}
+
+// applyRunEgressOverrides sets the run-wide egress scalars. Each is a widening
+// the ceiling bounds, so it is recorded as the person's and left to the clamp.
+func applyRunEgressOverrides(spec *types.RunPolicySpec, eg client.RunEgressOverrides, e *overrideEdits) {
+	if eg.FirstUseApproval != "" && eg.FirstUseApproval != spec.FirstUseApproval {
+		e.setFirstUse, e.prevFirstUse = true, spec.FirstUseApproval
+		spec.FirstUseApproval = eg.FirstUseApproval
+		e.add("first_use_approval", string(eg.FirstUseApproval), provEffectAdded)
+	}
+	if eg.AllowAllEgress != nil && *eg.AllowAllEgress && !spec.AllowAllEgress {
+		e.setAllowAll, e.prevAllowAll = true, spec.AllowAllEgress
+		spec.AllowAllEgress = true
+		e.add("allow_all_egress", "true", provEffectAdded)
 	}
 }
 
@@ -290,15 +313,22 @@ func applyGitPATOverrides(spec *types.RunPolicySpec, overrides []client.GitPATOv
 // drops is dropped from the run. dryRun: the real run's clamp audits nothing
 // extra for a probe.
 func (s *Server) boundOverrideAdds(ctx context.Context, r *http.Request, spec types.RunPolicySpec, e *overrideEdits, ceiling governanceCeiling) (types.RunPolicySpec, []string, *runRefusal) {
-	if e == nil || len(e.addedHosts)+len(e.addedGrants) == 0 {
+	if e == nil || len(e.addedHosts)+len(e.addedGrants) == 0 && !e.setFirstUse && !e.setAllowAll {
 		return spec, nil, nil
 	}
-	probe := types.RunPolicySpec{AllowedDomains: slices.Clone(spec.AllowedDomains), EligibleGrants: slices.Clone(e.addedGrants)}
+	probe := types.RunPolicySpec{AllowedDomains: slices.Clone(spec.AllowedDomains), EligibleGrants: slices.Clone(e.addedGrants),
+		FirstUseApproval: spec.FirstUseApproval, AllowAllEgress: spec.AllowAllEgress}
 	bounded, warns, refusal := s.boundRunUserSpec(ctx, r, probe, ceiling, "invalid policy: ", true)
 	if refusal != nil {
 		return spec, nil, refusal
 	}
 	spec = spec.Clone()
+	if e.setAllowAll && !bounded.AllowAllEgress {
+		spec.AllowAllEgress = e.prevAllowAll
+	}
+	if e.setFirstUse && bounded.FirstUseApproval != spec.FirstUseApproval.Normalize() {
+		spec.FirstUseApproval = e.prevFirstUse
+	}
 	spec.AllowedDomains = slices.DeleteFunc(spec.AllowedDomains, func(d string) bool {
 		return slices.ContainsFunc(e.addedHosts, func(h string) bool { return hostEqual(h, d) }) &&
 			!slices.ContainsFunc(bounded.AllowedDomains, func(b string) bool { return hostEqual(b, d) })

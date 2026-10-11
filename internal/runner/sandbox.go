@@ -202,6 +202,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		Attribution:          pc.Attribution,
 		PushRuleSets:         pc.PushRuleSets,
 		HarnessToolRules:     pc.HarnessToolRules,
+		HarnessCredentials:   pc.HarnessCredentials,
 	}
 	return json.Marshal(cfg)
 }

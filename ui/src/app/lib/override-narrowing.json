@@ -106,5 +106,17 @@
     "op": "add",
     "direction": "tighten",
     "rule": "allowed"
+  },
+  {
+    "kind": "first_use_approval",
+    "op": "set",
+    "direction": "widen",
+    "rule": "ceiling_clamped"
+  },
+  {
+    "kind": "allow_all_egress",
+    "op": "set",
+    "direction": "widen",
+    "rule": "ceiling_clamped"
   }
 ]
