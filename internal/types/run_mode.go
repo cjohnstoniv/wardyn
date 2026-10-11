@@ -4,7 +4,10 @@
 package types
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"strings"
 )
 
 // RunExperience is the canonical run mode a person chose when the run was
@@ -173,6 +176,36 @@ func ValidatePushRuleSets(sets []PushRuleSet) error {
 				return fmt.Errorf("push_rule_sets[%d]: %w", i, err)
 			}
 		}
+	}
+	return nil
+}
+
+// HarnessCredential binds one included harness to the SHA-256 of the random
+// credential minted for it at dispatch. The proxy config carries only the digest;
+// the plaintext goes to that harness's own process (WARDYN_TOOLGATE_CREDENTIAL)
+// and nowhere else, so the approval route can name the harness from a value only
+// that harness was given, never from the request body.
+type HarnessCredential struct {
+	Harness string `json:"harness"`
+	// SHA256 is the lower-case hex digest of the credential.
+	SHA256 string `json:"sha256"`
+}
+
+// ValidateHarnessCredentials is the consumer's structural check: a harness and a
+// digest each once, and a digest that is 64 hex digits.
+func ValidateHarnessCredentials(creds []HarnessCredential) error {
+	harnesses, digests := map[string]bool{}, map[string]bool{}
+	for i, c := range creds {
+		d, err := hex.DecodeString(c.SHA256)
+		switch {
+		case c.Harness == "" || harnesses[c.Harness]:
+			return fmt.Errorf("harness_credentials[%d]: name each harness once", i)
+		case err != nil || len(d) != sha256.Size || c.SHA256 != strings.ToLower(c.SHA256):
+			return fmt.Errorf("harness_credentials[%d]: sha256 is not a lower-case SHA-256 hex digest", i)
+		case digests[c.SHA256]:
+			return fmt.Errorf("harness_credentials[%d]: two harnesses share one credential", i)
+		}
+		harnesses[c.Harness], digests[c.SHA256] = true, true
 	}
 	return nil
 }

@@ -90,3 +90,31 @@ func TestGitRoute_PushRulesForRemoteErrorRefuses(t *testing.T) {
 		t.Errorf("a host with no set: rules %v msg %q, want none", rules, msg)
 	}
 }
+
+// The row's base path decides how the remote is read: a host-only row reads the
+// collection from the remote, a collection-scoped row has it in the base path and
+// takes no further collection segment, and any other shape is refused.
+func TestGitRoute_ADOServerBasePathShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name, base, path string
+		want             int // 403 either way; the rule source tells which refusal
+		source           string
+	}{
+		{"host-only row", "", "coll/proj/_git/app", http.StatusForbidden, ruleSourceGitRules},
+		{"collection-scoped row", "/tfs/coll", "tfs/coll/proj/_git/app", http.StatusForbidden, ruleSourceGitRules},
+		{"collection-scoped row, a segment too many", "/tfs/coll", "tfs/coll/extra/proj/_git/app", http.StatusForbidden, ruleSourceGitPushEntry},
+		{"host-only row, a prefix too many", "", "tfs/coll/proj/_git/app", http.StatusForbidden, ruleSourceGitPushEntry},
+		{"no project before _git", "", "coll/_git/app", http.StatusForbidden, ruleSourceGitPushEntry},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, sink, up, push := adoServerLane(t, tc.base)
+			rec := push(tc.path)
+			if rec.Code != tc.want || !strings.Contains(sink.String(), `"rule_source":"`+tc.source+`"`) {
+				t.Fatalf("%d %q log %q, want a %s refusal", rec.Code, rec.Body.String(), sink.String(), tc.source)
+			}
+			if up.gitHits != 0 || up.mintCalls != 0 {
+				t.Errorf("a refused push minted %d and reached the forge %d times", up.mintCalls, up.gitHits)
+			}
+		})
+	}
+}

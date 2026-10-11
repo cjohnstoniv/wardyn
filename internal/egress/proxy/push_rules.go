@@ -699,7 +699,7 @@ func (p *Proxy) rulesForRemote(host, path string) (*pushRuleSet, string) {
 	if !ok {
 		return nil, ""
 	}
-	spec, found, err := types.PushRulesForRemoteAt(p.pushSets, set.Provider, "https://"+host+"/"+strings.TrimPrefix(path, "/"), set.BasePath)
+	spec, found, err := types.PushRulesForServerRemote(p.pushSets, set.Provider, "https://"+host+"/"+strings.TrimPrefix(path, "/"), set.BasePath)
 	if err != nil {
 		return nil, "wardyn: cannot tell which source-control entry this push belongs to, so its push rules cannot be applied: " + err.Error()
 	}

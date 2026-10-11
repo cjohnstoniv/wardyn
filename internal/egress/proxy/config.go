@@ -241,6 +241,12 @@ type Config struct {
 	// the caller, never from the request body (types.HarnessToolRules). Control-plane
 	// authored; nothing sets it until the approval route reads it.
 	HarnessToolRules []types.HarnessToolRules `json:"harness_tool_rules,omitempty"`
+	// HarnessCredentials are the SHA-256 digests of the per-harness credentials the
+	// approval route reads the caller's harness from (a Bearer token the harness's
+	// wardyn-toolgate sends). Digests only: the plaintext never enters this config,
+	// a log or an audit row. A call with no credential, or one that matches none, has
+	// no harness and is held for a human.
+	HarnessCredentials []types.HarnessCredential `json:"harness_credentials,omitempty"`
 }
 
 const (
@@ -318,6 +324,9 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	if err := types.ValidateHarnessToolRules(c.HarnessToolRules); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if err := types.ValidateHarnessCredentials(c.HarnessCredentials); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	if err := c.applyDefaultsAndValidate(); err != nil {

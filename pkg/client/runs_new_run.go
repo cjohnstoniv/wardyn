@@ -83,6 +83,19 @@ type RunOverrides struct {
 	// Hosts adds to the run-wide allowed and denied lists on top of the chosen
 	// base policy. The base's own hosts are read-only.
 	Hosts *RunHostOverrides `json:"hosts,omitempty"`
+	// Egress sets the run-wide egress scalars on top of the chosen base policy.
+	Egress *RunEgressOverrides `json:"egress,omitempty"`
+}
+
+// RunEgressOverrides are the run-wide egress choices a person makes beside the
+// base policy's own. Both are bounded by the ceiling like any host they add.
+type RunEgressOverrides struct {
+	// FirstUseApproval is how a destination no list names is handled:
+	// always_deny, deny_with_review or wait_for_review.
+	FirstUseApproval types.FirstUseMode `json:"first_use_approval,omitempty"`
+	// AllowAllEgress true requests every other public destination (the deny
+	// list still wins). False is not an edit: omit it.
+	AllowAllEgress *bool `json:"allow_all_egress,omitempty"`
 }
 
 // RunHostOverrides are the hosts a person adds to the run as a whole, beside the
@@ -234,6 +247,14 @@ func (o RunOverrides) Items() []OverrideItem {
 		}
 		for _, host := range h.AddDenied {
 			out = append(out, OverrideItem{types.OverrideRunHostDeny, types.OverrideAdd, host})
+		}
+	}
+	if e := o.Egress; e != nil {
+		if e.FirstUseApproval != "" {
+			out = append(out, OverrideItem{types.OverrideFirstUseApproval, types.OverrideSet, string(e.FirstUseApproval)})
+		}
+		if e.AllowAllEgress != nil {
+			out = append(out, OverrideItem{types.OverrideAllowAllEgress, types.OverrideSet, "allow_all_egress"})
 		}
 	}
 	return out

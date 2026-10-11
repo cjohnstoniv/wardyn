@@ -344,3 +344,53 @@ func TestRunHostOverrides_AddAllowedClampedAddDeniedAllowed(t *testing.T) {
 		}
 	}
 }
+
+// First-use handling and "request all other egress" on a stored base: a value past
+// the ceiling is clamped back to the base's, one within it is applied.
+func TestRunEgressOverrides_StoredBaseClampedPastTheCeilingAppliedWithin(t *testing.T) {
+	srv, st := ovMemberFixture(t)
+	st.capStore.govProfile, st.capStore.govHasGroupTier = nil, false // unassigned: the row is not clamped as a whole
+	id := uuid.New()
+	st.policies[id] = types.RunPolicy{ID: id, Name: "ops", Spec: types.RunPolicySpec{
+		MinConfinementClass: types.CC1, AllowedDomains: []string{"api.anthropic.com"}, FirstUseApproval: types.FirstUseAlwaysDeny}}
+	preview := func(ceiling types.RunPolicySpec, egress string) (types.RunPolicySpec, []provenanceRow) {
+		t.Helper()
+		srv.cfg.DefaultPolicy = ceiling
+		body := `{"agent":"claude-code","task":"t","policy_id":"` + id.String() + `","overrides":{"egress":` + egress + `}}`
+		w := doSSO(t, srv, http.MethodPost, previewDoor, ovCookie(t), body)
+		var pv policyPreviewResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &pv); err != nil || w.Code != http.StatusOK {
+			t.Fatalf("%d %v: %s", w.Code, err, w.Body.String())
+		}
+		return pv.Spec, pv.Provenance
+	}
+	person := provSource{Kind: provKindPerson}
+	both := `{"first_use_approval":"wait_for_review","allow_all_egress":true}`
+
+	narrow := govDeployment()
+	narrow.FirstUseApproval = types.FirstUseAlwaysDeny
+	spec, rows := preview(narrow, both)
+	if spec.AllowAllEgress || spec.FirstUseApproval != types.FirstUseAlwaysDeny {
+		t.Errorf("past the ceiling: allow_all_egress %v first_use %q, want both held back", spec.AllowAllEgress, spec.FirstUseApproval)
+	}
+	if !provHas(rows, "allow_all_egress", "true", person, provEffectClamped) || !provHas(rows, "first_use_approval", "wait_for_review", person, provEffectClamped) {
+		t.Errorf("clamped edits are not shown as clamped: %+v", rows)
+	}
+
+	wide := govDeployment()
+	wide.AllowAllEgress, wide.FirstUseApproval = true, types.FirstUseWaitForReview
+	spec, rows = preview(wide, both)
+	if !spec.AllowAllEgress || spec.FirstUseApproval != types.FirstUseWaitForReview {
+		t.Errorf("within the ceiling: allow_all_egress %v first_use %q, want both applied", spec.AllowAllEgress, spec.FirstUseApproval)
+	}
+	if !provHas(rows, "allow_all_egress", "true", person, provEffectAdded) || !provHas(rows, "first_use_approval", "wait_for_review", person, provEffectAdded) {
+		t.Errorf("applied edits are not the person's: %+v", rows)
+	}
+
+	for _, bad := range []string{`{"first_use_approval":"sometimes"}`, `{"allow_all_egress":false}`} {
+		w := doSSO(t, srv, http.MethodPost, previewDoor, ovCookie(t), `{"agent":"claude-code","task":"t","overrides":{"egress":`+bad+`}}`)
+		if w.Code != http.StatusBadRequest || errorReason(w) != reasonOverrideInvalid {
+			t.Errorf("%s = %d %s, want 400 %s", bad, w.Code, w.Body.String(), reasonOverrideInvalid)
+		}
+	}
+}

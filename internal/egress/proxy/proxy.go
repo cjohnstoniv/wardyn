@@ -214,9 +214,14 @@ type Proxy struct {
 	// attribution is Options.Attribution: the policy named in a policy-decided
 	// refusal, nil when there is none to name.
 	attribution *policyref.Ref
-	// pushSets are the push content rules per SCM entry (Options.PushRuleSets);
+	// pushSets are the push content rules per SCM entry (Config.PushRuleSets);
 	// empty means the run is on the older run-wide regime (policy.pushRules).
 	pushSets []types.PushRuleSet
+	// harnessRules and harnessCreds are Config.HarnessToolRules and
+	// Config.HarnessCredentials, the per-harness regime of the approval route
+	// (tool_rules.go); empty means the older run-wide policy.ToolRules.
+	harnessRules []types.HarnessToolRules
+	harnessCreds []types.HarnessCredential
 	// gatewayVendor is the REVERSE of llmUpstreams (gateway host -> vendor
 	// public host), feeding isLLMHost/channelForHost so gateway traffic is
 	// recognised as LLM traffic (coverage/classification only — the SSRF vet
@@ -327,8 +332,7 @@ type Options struct {
 	Unattended bool
 	// Attribution is Config.Attribution, already re-projected by LoadConfigBytes.
 	Attribution *policyref.Ref
-	// PushRuleSets is Config.PushRuleSets: the push content rules per SCM entry.
-	PushRuleSets []types.PushRuleSet
+
 	// Dial overrides the connection dialer (tests). Production leaves it nil
 	// and a net.Dialer is used.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -446,7 +450,6 @@ func newProxy(opts Options) *Proxy {
 		llmUnavailableDetail: opts.LLMUnavailableDetail,
 		pushHolds:            pushHolds{unattended: opts.Unattended},
 		attribution:          opts.Attribution,
-		pushSets:             opts.PushRuleSets,
 		gatewayVendor:        gatewayVendor,
 		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),
 		dial:                 dial,

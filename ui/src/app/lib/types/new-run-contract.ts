@@ -95,6 +95,17 @@ export interface RunHostOverrides {
 }
 
 /**
+ * Run-wide egress choices on top of the chosen base policy: how an unlisted
+ * destination is handled, and "request all other egress". Both widen and are
+ * clamped by the ceiling. `allow_all_egress` is only ever true; leave it out
+ * rather than send false.
+ */
+export interface RunEgressOverrides {
+  first_use_approval?: "always_deny" | "deny_with_review" | "wait_for_review";
+  allow_all_egress?: true;
+}
+
+/**
  * The person's per-component edits (OD-1). Whether an edit may be asked for is
  * decided by override-narrowing.ts, never by a panel.
  */
@@ -104,6 +115,7 @@ export interface RunOverrides {
   git_pat?: GitPATOverride[];
   push_rules?: PushRuleOverride[];
   hosts?: RunHostOverrides;
+  egress?: RunEgressOverrides;
 }
 
 export type LocalPlacementKind = "host" | "source" | "component";

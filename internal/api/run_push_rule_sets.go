@@ -40,7 +40,7 @@ func (s *Server) pushRuleSetsFor(spec types.RunPolicySpec, req *createRunRequest
 			continue // admission refuses an unreadable locator; nothing is pushed there
 		}
 		provider, basePath := pushRuleProvider(sc, cloneURL)
-		host, org, err := types.PushRuleEntryOfRemoteAt(provider, cloneURL, basePath)
+		host, org, err := types.PushRuleEntryOfServerRemote(provider, cloneURL, basePath)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", repo, err)
 		}

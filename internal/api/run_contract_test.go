@@ -146,11 +146,13 @@ func TestRunContractNarrowingTableDecidesTheServer(t *testing.T) {
 			types.OverrideNarrow: {GitPAT: []client.GitPATOverride{{Host: "git.example.com", Access: "read"}}},
 			types.OverrideAdd:    {GitPAT: []client.GitPATOverride{{Host: "git.example.com", Access: "write"}}},
 		},
-		types.OverrideRunHostAllow:    {types.OverrideAdd: {Hosts: &client.RunHostOverrides{AddAllowed: []string{"api.example.com"}}}},
-		types.OverrideRunHostWildcard: {types.OverrideAdd: {Hosts: &client.RunHostOverrides{AddAllowed: []string{"*.example.com"}}}},
-		types.OverrideRunHostDeny:     {types.OverrideAdd: {Hosts: &client.RunHostOverrides{AddDenied: []string{"*.example.com"}}}},
-		types.OverridePushDeny:        {types.OverrideAdd: {PushRules: []client.PushRuleOverride{{Provider: "github", Org: "acme", DenyPaths: []string{"infra/"}}}}},
-		types.OverridePushReview:      {types.OverrideAdd: {PushRules: []client.PushRuleOverride{{Provider: "github", Org: "acme", RequireReviewPaths: []string{"ci/"}}}}},
+		types.OverrideRunHostAllow:     {types.OverrideAdd: {Hosts: &client.RunHostOverrides{AddAllowed: []string{"api.example.com"}}}},
+		types.OverrideRunHostWildcard:  {types.OverrideAdd: {Hosts: &client.RunHostOverrides{AddAllowed: []string{"*.example.com"}}}},
+		types.OverrideRunHostDeny:      {types.OverrideAdd: {Hosts: &client.RunHostOverrides{AddDenied: []string{"*.example.com"}}}},
+		types.OverrideFirstUseApproval: {types.OverrideSet: {Egress: &client.RunEgressOverrides{FirstUseApproval: types.FirstUseWaitForReview}}},
+		types.OverrideAllowAllEgress:   {types.OverrideSet: {Egress: &client.RunEgressOverrides{AllowAllEgress: new(true)}}},
+		types.OverridePushDeny:         {types.OverrideAdd: {PushRules: []client.PushRuleOverride{{Provider: "github", Org: "acme", DenyPaths: []string{"infra/"}}}}},
+		types.OverridePushReview:       {types.OverrideAdd: {PushRules: []client.PushRuleOverride{{Provider: "github", Org: "acme", RequireReviewPaths: []string{"ci/"}}}}},
 	}
 	for _, row := range types.OverrideNarrowingTable() {
 		o, ok := sample[row.Kind][row.Op]

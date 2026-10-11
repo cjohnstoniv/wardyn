@@ -763,8 +763,6 @@ func TestTemplateCarriedFieldsNeverReadAsRunStateOrSecrets(t *testing.T) {
 func TestTemplateRunModeIsHeldToTheRunsOwnRules(t *testing.T) {
 	const head = `"api_version":"wardyn/v1","kind":"RunTemplate","coverage":"partial"`
 	cases := []struct{ name, body, path, reason string }{
-		{"run mode: two included tools are not available yet", `{` + head + `,"intent":{"tools":[{"id":"claude-code","kind":"harness"},{"id":"codex-cli","kind":"harness"}]}}`, "intent.tools", reasonTemplateFieldUnavailable},
-		{"run mode: per-tool rules are not available yet", `{` + head + `,"intent":{"tools":[{"id":"claude-code","kind":"harness","default_effect":"hold"}]}}`, "intent.tools[0]", reasonTemplateFieldUnavailable},
 		{"run mode: a component tool is not available yet", `{` + head + `,"intent":{"tools":[{"id":"x","kind":"component","component":{"inline":{"hosts":["a.example.com"]}}}]}}`, "intent.tools[0]", reasonTemplateFieldUnavailable},
 		{"run mode: a folder inside an attachment is not available yet", `{` + head + `,"intent":{"start_folder":{"kind":"attachment","attachment":"drive","subpath":"src"}}}`, "intent.start_folder", reasonTemplateFieldUnavailable},
 		{"run mode: the older fields do not ride beside it", `{` + head + `,"intent":{"experience":"interactive","agent":"claude-code"}}`, "intent", reasonRunModeConflict},

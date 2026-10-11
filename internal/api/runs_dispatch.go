@@ -117,6 +117,10 @@ type dispatchParams struct {
 	// (pushRuleSetsFor), the product after the ceiling. When set, the proxy
 	// carries them INSTEAD of the policy's run-wide push_rules.
 	PushRuleSets []types.PushRuleSet
+	// HarnessToolRules are the run's tool rules per included harness
+	// (harnessToolRulesFor). When set, the proxy carries them, and a credential
+	// per harness, INSTEAD of the policy's run-wide tool_rules.
+	HarnessToolRules []types.HarnessToolRules
 }
 
 // dispatchRun launches the sandbox via the runner and advances run state. On any
@@ -452,7 +456,14 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// Split the composed environment into its non-secret and credential-bearing
 	// halves — after EVERY writer above, so the "already set" guards each of them
 	// runs saw the whole map. See splitSecretEnv (it moves, never copies).
-	secretEnv := splitSecretEnv(sandboxEnv, append(secretEnvKeys, llm.secretEnvKeys...))
+	// Per-harness approval credentials: digests to the proxy config below, the
+	// started harness's plaintext to its own process as secret env, nowhere else.
+	harnessCreds, extraSecretKeys, merr := stampHarnessCredential(p.HarnessToolRules, run.Agent, sandboxEnv, llm.secretEnvKeys)
+	if merr != nil {
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's tool-approval credential could not be made")
+		return
+	}
+	secretEnv := splitSecretEnv(sandboxEnv, append(secretEnvKeys, extraSecretKeys...))
 
 	resources := resourceLimitsToRunner(policy.Resources)
 	resources.DiskMiBFilled = diskFilled
@@ -466,10 +477,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 
 	// The per-entry sets replace the run-wide block on the sidecar's config
 	// (the proxy refuses both together); the audited envelope below keeps it.
-	proxyPolicy := policy
-	if len(p.PushRuleSets) > 0 {
-		proxyPolicy.PushRules = nil
-	}
+	proxyPolicy := sidecarPolicy(policy, p)
 
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
@@ -563,8 +571,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// for review is refused instead (push_hold.go). Set only when the
 			// policy has review paths, the one thing it changes: an older
 			// proxy refuses the key, and must not refuse every task run.
-			Unattended:   !p.Interactive && pushReviewRules(policy, p.PushRuleSets),
-			PushRuleSets: p.PushRuleSets,
+			Unattended:         !p.Interactive && pushReviewRules(policy, p.PushRuleSets),
+			PushRuleSets:       p.PushRuleSets,
+			HarnessToolRules:   p.HarnessToolRules,
+			HarnessCredentials: harnessCreds,
 			// The policy a refusal names (runs_dispatch_attribution.go); nil when
 			// the run has no profile and the site sets no policy_help, because an
 			// older proxy refuses the key.

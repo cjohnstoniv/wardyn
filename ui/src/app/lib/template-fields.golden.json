@@ -101,6 +101,10 @@
       "pids_limit",
       "disk_mib"
     ],
+    "RunEgressOverrides": [
+      "first_use_approval",
+      "allow_all_egress"
+    ],
     "RunHostOverrides": [
       "add_allowed",
       "add_denied",
@@ -112,7 +116,8 @@
       "azure_devops",
       "git_pat",
       "push_rules",
-      "hosts"
+      "hosts",
+      "egress"
     ],
     "RunResources": [
       "cpu_millis",

@@ -25,6 +25,9 @@ control_plane_url
 decision_buffer_size
 decision_spool_dir
 git_grants
+harness_credentials
+harness_credentials.harness
+harness_credentials.sha256
 harness_tool_rules
 harness_tool_rules.default
 harness_tool_rules.harness
