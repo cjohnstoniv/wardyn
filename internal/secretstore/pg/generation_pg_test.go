@@ -230,7 +230,7 @@ func TestGeneration_EraseRacingWritersNeverResurrects(t *testing.T) {
 // erase's advance waits for it and EraseOwner's list then sees the row. Without
 // that lock the write could commit after the list and survive the erase.
 func TestGeneration_AdvanceWaitsForAWritePastItsCheck(t *testing.T) {
-	s, pool, _ := newPGStore(t)
+	s, _, _ := newPGStore(t)
 	owner := "gen-wait-" + uuid.NewString()
 	view := s.For(owner).(*Store)
 	// The counter row exists already: the lock under test is the share lock on
@@ -239,7 +239,7 @@ func TestGeneration_AdvanceWaitsForAWritePastItsCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tx, err := beginReadCommitted(t.Context(), pool)
+	tx, err := beginReadCommitted(t.Context(), holdPool(t))
 	if err != nil {
 		t.Fatal(err)
 	}
