@@ -563,6 +563,7 @@ start.
 | `invitation_list_param_invalid` | `GET /invitations`: `state` is not `pending`, `claimed`, `expired` or `revoked`. |
 | `invitation_not_found` / `invitation_not_pending` | `POST /me/invitations/{id}/claim`: someone else's or a missing id (one body); `invitation_not_pending` is the target's own, with `state`. `DELETE /invitations/{id}` answers `invitation_not_found` unless pending. |
 | `service_identity_name_invalid` / `service_identity_name_taken` / `service_identity_description_invalid` / `service_identity_user_type_unknown` / `service_identity_patch_empty` | `POST /service-identities` and `PATCH`: the name is not `^[a-z][a-z0-9-]{2,62}$` or a principal-keyed table already holds it (`409`), the description is over 200 characters, the user type does not exist, or the `PATCH` names nothing. |
+| `token_move_invalid` | `POST /tokens/{id}/move`: the token is revoked, expired or not minted by an admin for someone else, or `service_identity` is missing, unknown or retired. |
 | `service_identity_sponsor_invalid` | The sponsor is not exactly the principal of a bound, non-deactivated person; an email or `entra:` alias is refused. |
 | `service_identity_not_found` / `service_identity_inactive` | `/me/service-identities/{name}/tokens`: another person's or a missing name (one body); `service_identity_inactive` is the sponsor's own `409` on a suspended or retired identity. |
 | `needs_sso` | The service-identity routes in local mode, which has no person to sponsor one (`409`). |

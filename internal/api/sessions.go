@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -214,7 +215,35 @@ func (s *Server) revokePersonCredentials(ctx context.Context, principal string) 
 	}
 	res, err := s.revokeCredentials(ctx, principal)
 	res.Stamped = true
-	return res, err
+	n, serr := s.revokeSponsoredTokens(ctx, principal)
+	res.Tokens += n
+	return res, errors.Join(err, serr)
+}
+
+// revokeSponsoredTokens revokes every live token of each non-retired service identity principal sponsors
+// (#1508). Those tokens already stop at authentication once the session cutoff is stamped, because a service
+// token is honoured only while its sponsor's session is live; the sweep makes GET /tokens show them revoked.
+// A retired identity's tokens were revoked with it.
+func (s *Server) revokeSponsoredTokens(ctx context.Context, principal string) (int, error) {
+	ss, ok := s.cfg.Store.(store.ServiceIdentityStore)
+	if !ok {
+		return 0, nil
+	}
+	identities, err := ss.ListServiceIdentities(ctx, principal, store.Page{})
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	var errs []error
+	for _, si := range identities {
+		if si.RetiredAt != nil {
+			continue
+		}
+		revoked, err := s.revokeAPITokensFor(ctx, si.Principal())
+		n += revoked
+		errs = append(errs, err)
+	}
+	return n, errors.Join(errs...)
 }
 
 // revokeCredentials sweeps tokens and keys for principal ("" is everyone). Each
