@@ -410,6 +410,7 @@ func run() error {
 		AuditSpool:          auditSpool,
 		AuditDrainRecorder:  auditDrainRec,
 		AuditSinkDrops:      sinkDropsReporter(fan),
+		AuditDelivery:       auditDeliveryReporter(*f.auditSinks, st),
 		AuditCoalesceWindow: *f.auditCoalesceWindow,
 		Runner:              run,
 		AdminToken:          *f.adminToken,

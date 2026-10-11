@@ -10,6 +10,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- Migration `0145_audit_delivery_cursors` adds the `audit_delivery_cursors` table; nothing changes until a webhook
+  audit sink sets `"delivery": "acknowledged"`.
 - Migration `0143_provider_connection_changes` adds an empty, secret-free history table for why a model connection
   became unavailable. Removals from before the upgrade have no recorded cause.
 - For filtered OIDC group claims, check the new transitive-membership procedure in Operations:
@@ -46,6 +48,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- Opt-in acknowledged audit delivery for the webhook sink (`"delivery": "acknowledged"`): it reads the stored trail
+  from a durable per-destination checkpoint (starting at the current head on first enable), resumes after outages and
+  restarts, and is at-least-once with `id`, `seq` and `row_hash` for deduplication. A redirect or a terminal 4xx halts
+  delivery until wardynd restarts or another replica takes over. Retention past the checkpoint is never blocked: it
+  records a chained `audit.delivery.reset` event, counts it and resends from the oldest retained row. Adds the
+  `wardyn_audit_delivery_*` metrics (#1513).
 - AWS KMS can hold the key that wraps stored credentials (`WARDYN_KEK=awskms`): each data key is wrapped by KMS
   Encrypt bound to its row, the key never leaves AWS, and IRSA or EKS Pod Identity is the expected identity (#588). A
   long-lived access key still boots but raises an amber setup row. An AWS KMS platform key, key domains and store mode
@@ -112,6 +120,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- A webhook audit sink whose `flush_interval` or `retry_base_delay` is zero or negative is now refused at boot, in
+  best-effort mode too (#1513).
 - The `wardynd` maintenance modes that open the key service (`-rewrap`, `-rewrap-principal-keys`, `-rotate-age-key`,
   `-migrate-secrets`, `-reconcile`) now use `WARDYN_DAEMON_PROXY_URL` and `WARDYN_TRUSTED_CA_FILE` as a serving boot
   does, for Vault Transit and Azure Key Vault too; the AWS instance-metadata, ECS and EKS Pod Identity credential

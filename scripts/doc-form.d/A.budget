@@ -9,7 +9,9 @@
 # docs/AUDIT-ACTIONS.md 39782 adds 12 (SSH sync client): explicit sandbox-relative byte directions on both transfer rows.
 # G-1423 r1: docs/AUDIT-ACTIONS.md 39957 adds 19 over 39938 for the audit-only delegation_scope source.
 # docs/AUDIT-ACTIONS.md 40133 measured after G-1423 merge.
-docs/AUDIT-ACTIONS.md=40133 share=8
+# docs/AUDIT-ACTIONS.md=40006 adds 68 (0.9 F-1513): the audit.delivery.reset row (#1513).
+# docs/AUDIT-ACTIONS.md 40203 measured after F-1513 merge.
+docs/AUDIT-ACTIONS.md=40203 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

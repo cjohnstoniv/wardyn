@@ -238,6 +238,12 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 			slog.InfoContext(ctx, "wardynd: reconciled always-egress decisions onto workspaces", slog.Int("decisions", n))
 		}
 	})
+
+	// #1513: acknowledged SIEM delivery, off unless the webhook sink asks for it.
+	// f.auditSinks is nil only in the boot tests that build a bare bootFlags.
+	if f.auditSinks != nil {
+		startAuditDelivery(rootCtx, *f.auditSinks, st, maskedRec, leader)
+	}
 }
 
 // smallPoolWarnBelow is the pool the two tick locks need: the lifecycle reaper's
