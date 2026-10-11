@@ -130,7 +130,7 @@ type keyDomainRequest struct {
 const (
 	keyDomainOwnerUnresolvedMsg = "That email address doesn't match anyone this deployment knows, so nothing was changed. " +
 		"Use the person's subject, as the Audit log shows it."
-	keyDomainOwnerAmbiguousMsg = "That matches more than one person, so nothing was changed. Use the person's subject exactly."
+	keyDomainOwnerAmbiguousMsg = "That matches more than one person, so nothing was changed. Use the person's subject exactly, as the Audit log shows it."
 	maxKeyDomainSubjectLen     = 512
 )
 

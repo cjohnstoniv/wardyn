@@ -505,7 +505,7 @@ const secretOwnerUnresolvedMsg = "?owner= names an email address that no princip
 // deployment may legitimately hold two that differ only by case; guessing which
 // one an admin meant would write a credential into the wrong human's namespace,
 // which is worse than the miss this file already tracks via owner_known:false.
-const secretOwnerAmbiguousMsg = "?owner= matches more than one known principal; name the subject exactly"
+const secretOwnerAmbiguousMsg = "?owner= matches more than one known principal; name the subject exactly, as the Audit log shows it"
 
 // principalIdentity pairs a stored namespace key (the principal exactly as that
 // human's own writes stamp it) with the email their IdP sent alongside it.
