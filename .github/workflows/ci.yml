@@ -1168,7 +1168,11 @@ jobs:
       - name: Install, start, stop and uninstall the user unit
         env:
           WARDYN_TEST_SYSTEMD_USER: "1"
-        run: go test -tags docker -count=1 -v -run TestRunnerdUserUnitStartsAndStops ./cmd/wardyn-runnerd/
+        # A skip or a -run that matches nothing exits 0, so require the PASS line.
+        run: |
+          set -euo pipefail
+          go test -tags docker -count=1 -v -run '^TestRunnerdUserUnitStartsAndStops$' ./cmd/wardyn-runnerd/ | tee runner-units.log
+          grep -q -- '^--- PASS: TestRunnerdUserUnitStartsAndStops ' runner-units.log
 
   # Docker conformance against the live daemon (WARDYN_TEST_DOCKER=1). The
   # driver-agnostic honesty stub (`make test-conformance-stub` → the untagged

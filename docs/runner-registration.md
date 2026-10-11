@@ -69,9 +69,9 @@ Identity and organisation binding are checked before connecting. Private lifecyc
 
 `deploy/runner/install.sh` installs `wardyn-runnerd` for one person, as that person, and keeps `wardyn-runnerd serve` running. The service is per user, not a root service: the runner identity sits in the person's own configuration directory, where `wardyn runner claim` looks for it. A root-run install for managed fleets needs a signed `.pkg`, which 0.9 does not ship.
 
-1. Download `wardyn-runnerd-<os>-<arch>` and `wardyn-runner-units.tar.gz` from the release, and verify them against the signed `SHA256SUMS` as described in [Verify the release assets](VERIFY.md#5-verify-the-release-assets).
-2. Unpack the tarball and put the binary beside `install.sh`, or pass `--binary <path>`.
-3. Save the registration token in a private file and run `./install.sh --org https://wardyn.example.com --token-file ./registration-token` as yourself.
+1. Download `wardyn-runnerd-<os>-<arch>` and `wardyn-runner-units.tar.gz` from the release, and verify them against the signed `SHA256SUMS` as described in [Verify the release assets](VERIFY.md#5-verify-the-release-assets), running `sha256sum -c --ignore-missing SHA256SUMS` since you hold two files.
+2. Run `tar -xzf wardyn-runner-units.tar.gz`, which unpacks to `runner/`, then pass the binary with `--binary ./wardyn-runnerd-<os>-<arch>`. It needs no exec bit.
+3. Save the registration token in a private file and run `./runner/install.sh --org https://wardyn.example.com --binary ./wardyn-runnerd-<os>-<arch> --token-file ./registration-token` as yourself.
 4. Run `wardyn runner claim`, as in [Register a runner](#register-a-runner).
 
 The installer does these steps in order and stops at the first refusal:

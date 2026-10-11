@@ -116,6 +116,21 @@ for gone in "$RENDERED" "$H/.config/wardyn/runnerd.env" "$H/.local/share/wardyn/
 done
 [ -e "$H/.config/wardyn/runner/runner.json" ] || fail "uninstall removed the runner identity"
 
+# A release download has no exec bit: a readable --binary still installs, executable in place.
+cp "$WORK/wardyn-runnerd" "$WORK/wardyn-runnerd-linux-amd64"
+chmod 0644 "$WORK/wardyn-runnerd-linux-amd64"
+NX="$WORK/home-nonexec"
+STUB_STATE="$NX/.config/wardyn/runner" run_install nonexec --org https://wardyn.example --binary "$WORK/wardyn-runnerd-linux-amd64" --token-file "$WORK/token"
+[ "$RC" -eq 0 ] || fail "a non-executable --binary did not install (rc=$RC): $OUT"
+[ -x "$NX/.local/share/wardyn/bin/wardyn-runnerd" ] || fail "the installed binary is not executable"
+STUB_STATE=/dev/null run_install missing --org https://wardyn.example --binary "$WORK/absent" --token-file "$WORK/token"
+[ "$RC" -ne 0 ] && grep -q 'not found' <<<"$OUT" || fail "a missing --binary did not say not found (rc=$RC): $OUT"
+
+# A release candidate is a release: its proxy image tag is the candidate version.
+STUB_STATE="$WORK/home-rc/.config/wardyn/runner" STUB_VERSION=0.9.0-rc.1 run_install rc --org https://wardyn.example --binary "$WORK/wardyn-runnerd" --token-file "$WORK/token"
+[ "$RC" -eq 0 ] || fail "a release-candidate version was refused (rc=$RC): $OUT"
+grep -qx 'WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.9.0-rc.1' "$WORK/home-rc/.config/wardyn/runnerd.env" || fail "the candidate version is not the proxy image tag"
+
 # ---- macOS: LaunchAgent rendering ------------------------------------------
 stub uname 'echo Darwin'
 M="$WORK/home-mac"
