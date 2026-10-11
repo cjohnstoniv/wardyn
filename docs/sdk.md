@@ -472,6 +472,11 @@ start.
 | `runner_claim_mismatch` | The personal owner, fingerprint, org binding, claim state, or expiry does not match. |
 | `runner_not_found` | No such runner to revoke: absent, already revoked, or (on `/me`) another person's. |
 | `runner_revoke_reason_invalid` | An owner's revoke names a reason other than `not_mine`. |
+| `relay_route_refused` | A runner's relay serves only the closed list of internal routes a local run needs; this route, or a grant not delivered `own`, is not served through it. |
+| `relay_runner_mismatch` | A relayed request names a run that is not placed on the relaying runner. |
+| `relay_required` | A local run's token was used off its runner's relay; local runs reach the org only through it. |
+| `runner_action_pending` | The relaying runner has an action pending for this run; retry once the runner has acted. |
+| `delivery_via_org` / `delivery_runner_resident` | Through a relay, a grant delivered `via_org` is used at the org and a `runner_resident` one already lives on the runner, so neither is handed out. |
 | `missing_scope_snapshot` | The grant names the credential sentinel but carries no dispatch-time snapshot (a hand-authored grant). Azure DevOps, AWS SSO; and every grant naming `bedrock-api-key`, which is no longer a model credential. |
 | `owner_not_caller` | The grant's snapshot owner is not the run token's own subject. Azure DevOps. |
 | `roster_unreadable` | The site configuration could not be read; nothing is resolved from a failed read. Azure DevOps, AWS SSO. |
