@@ -322,7 +322,7 @@ func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
 // profile and an operator's runs stand outside governance, so for both the list
 // is absent and every placement is permitted.
 func (s *Server) stepPlacementDenied(f *runFold, rec *foldRecorder) bool {
-	return !s.placementDeniedRefusal(f.r, *f.req, f.ceiling).write(s, f.w, f.r)
+	return !s.placementDeniedRefusal(f.r.Context(), requestPlacement(*f.req), f.ceiling).write(s, f.w, f.r)
 }
 
 // stepLocalEligibility is before confinement/provider liveness: create may

@@ -365,3 +365,110 @@ func TestDenyPlacements_ProfileDenyingBothRefusedAtWrite(t *testing.T) {
 		}
 	}
 }
+
+// resolveEnforcedConfinement's no-executor carve-out is exactly one case: the
+// remote placement with nothing wired (headless -runner none). A local placement
+// never reads s.cfg.Runner, and a wired runner that cannot answer refuses.
+func TestResolveEnforcedConfinement_PlacementTable(t *testing.T) {
+	spec := types.RunPolicySpec{MinConfinementClass: types.CC1}
+	for _, tc := range []struct {
+		name       string
+		srv        *Server
+		placement  types.Placement
+		wantOK     bool
+		wantStatus int
+		wantReason string
+	}{
+		{"local placement, no runner wired: runner_offline", capsServer(nil), types.PlacementLocal, false, http.StatusUnprocessableEntity, "runner_offline"},
+		{"remote placement, wired runner cannot answer: 503", capsServer(&fakeRunner{capsErr: errors.New("daemon down")}), types.PlacementRemote, false, http.StatusServiceUnavailable, reasonRunnerCapabilitiesUnavailable},
+		{"remote placement, nothing wired: the headless carve-out", capsServer(nil), types.PlacementRemote, true, 0, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			_, ok := tc.srv.resolveEnforcedConfinement(context.Background(), w, tc.placement, uuid.Nil, spec, "", composer.Baseline{})
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v (%d %s), want %v", ok, w.Code, w.Body.String(), tc.wantOK)
+			}
+			if !tc.wantOK && (w.Code != tc.wantStatus || !strings.Contains(w.Body.String(), `"`+tc.wantReason+`"`)) {
+				t.Errorf("= %d %s, want %d %s", w.Code, w.Body.String(), tc.wantStatus, tc.wantReason)
+			}
+		})
+	}
+}
+
+// The operator exemption: a caller whose runs stand outside governance is not
+// denied a placement even when the ceiling it carries names a profile; with
+// GovernAdminRuns on, an SSO admin is governed like a member and is denied, while
+// the admin token (no person) stays break-glass.
+func TestDenyPlacements_OperatorExemption(t *testing.T) {
+	ceiling := governanceCeiling{
+		Profile: &ResolvedProfile{ID: uuid.New(), Name: "walled"},
+		Limits:  types.GovernanceLimits{DenyPlacements: []types.Placement{types.PlacementRemote}},
+	}
+	for _, tc := range []struct {
+		name       string
+		ctx        context.Context
+		govern     bool
+		wantDenied bool
+	}{
+		{"SSO admin, switch off: exempt even carrying a profile", governAdminSessionCtx(), false, false},
+		{"admin token, switch off: exempt", governAdminTokenCtx(t), false, false},
+		{"SSO admin, switch on: governed, denied", governAdminSessionCtx(), true, true},
+		{"admin token, switch on: no person, still exempt", context.Background(), true, false},
+		{"member: denied", govMemberCtx([]string{"eng"}, false), false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := New(Config{Audit: &recRecorder{}, GovernAdminRuns: tc.govern})
+			ref := s.placementDeniedRefusal(tc.ctx, types.PlacementRemote, ceiling)
+			if denied := ref != nil; denied != tc.wantDenied {
+				t.Fatalf("denied = %v, want %v", denied, tc.wantDenied)
+			}
+			if ref != nil && (ref.status != http.StatusForbidden || ref.body.Reason != "placement_denied") {
+				t.Errorf("refusal = %+v, want 403 placement_denied", ref)
+			}
+		})
+	}
+}
+
+// The source-scan door honours deny_placements through the same check the fold
+// uses, releases its fence, and answers 403 placement_denied with the audit row.
+func TestDenyPlacements_SourceScanDoor(t *testing.T) {
+	denying := govProfile("walled")
+	denying.Limits.DenyPlacements = []types.Placement{types.PlacementRemote}
+	launch := func(t *testing.T, cs *capStore) (*Server, *recRecorder, *fakeRunner, error) {
+		t.Helper()
+		srv, st, audit := govEscapeFixture(t, cs)
+		fr := &fakeRunner{}
+		srv.cfg.Runner = fr
+		srv.cfg.Store = &scanLaneStore{govEscapeStore: st}
+		src := types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: govWorkspaceRepo}
+		_, err := srv.launchSourceScanRun(govMemberCtx([]string{"eng"}, false), "bob@corp.example", src)
+		return srv, audit, fr, err
+	}
+
+	srv, audit, fr, err := launch(t, assignedStore(denying))
+	var denied *placementDeniedError
+	if !errors.As(err, &denied) {
+		t.Fatalf("launch error = %v, want a placement denial", err)
+	}
+	if fr.createCalls != 0 {
+		t.Errorf("a denied scan still created %d sandbox(es)", fr.createCalls)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sources/x/scan", nil).WithContext(govMemberCtx([]string{"eng"}, false))
+	w := httptest.NewRecorder()
+	if !srv.writeScanLaunchRefusal(w, req, err) || w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"placement_denied"`) ||
+		!strings.Contains(w.Body.String(), `walled`) {
+		t.Errorf("handler answer = %d %s, want 403 placement_denied naming walled", w.Code, w.Body.String())
+	}
+	if !recHasRefusal(audit, authz.ReasonGovernanceProfile, "runs.placement") {
+		t.Error("no authz.denied row for runs.placement")
+	}
+
+	// The control: the same member under a profile that denies the other
+	// placement launches the scan, so the refusal above is the denial.
+	allowing := govProfile("no-laptops")
+	allowing.Limits.DenyPlacements = []types.Placement{types.PlacementLocal}
+	if _, _, _, err := launch(t, assignedStore(allowing)); err != nil {
+		t.Errorf("scan under a local-only denial: %v", err)
+	}
+}
