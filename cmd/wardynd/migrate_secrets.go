@@ -28,6 +28,9 @@ import (
 // (-migrate-only, -rotate-age-key, -rewrap, -rewrap-principal-keys, -audit-split-legacy, -migrate-secrets, -reconcile), and reports whether
 // one ran.
 func maintenanceMode(f *bootFlags) (bool, error) {
+	if ran, err := recoveryMode(f); ran {
+		return true, err
+	}
 	if *f.rewrapRetirePlatformKey && !*f.rewrap {
 		return true, fmt.Errorf("refusing to run: -rewrap-retire-platform-key is a mode of -rewrap; run `wardynd -rewrap -rewrap-retire-platform-key`")
 	}
