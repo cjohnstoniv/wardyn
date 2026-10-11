@@ -568,7 +568,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 			if readOnly {
 				return
 			}
-			if err := s.establishExec(pumpCtx, runID, holder, run.SandboxRef); err != nil {
+			if err := s.establishExec(pumpCtx, run, holder); err != nil {
 				if errors.Is(err, errAttachCancelled) {
 					return // evicted or gone meanwhile: its channel is closing by other means
 				}
@@ -636,7 +636,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	maskFenced := s.endSSHOnMaskFence(pumpCtx, runID, channel, cancel)
 
 	var closeReason string
-	attachErr := s.establishExec(pumpCtx, runID, holder, run.SandboxRef)
+	attachErr := s.establishExec(pumpCtx, run, holder)
 	if attachErr != nil {
 		s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
 			runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "state": "attaching", "error": attachErr.Error()})))

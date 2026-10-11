@@ -203,6 +203,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   request is bound to the runner that carried it, only a closed list of internal routes is served, and only the
   person's own credentials can be read through it. Turning runners on now also needs `WARDYN_CONTROL_PLANE_URL` set
   to the internal TLS listener, since a runner's runs reach the organisation only through that relay.
+- A background task cannot be entered: its terminal, interactive exec, every SSH channel (shell, exec, sftp, `wardyn
+  sync`, port forwarding) and its web apps answer `409 run_background_only` (SSH refuses authentication), for every
+  caller including a super admin. Logs, output, audit and the lifecycle controls stay.
 
 ### Changed
 
