@@ -3726,6 +3726,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0157` (`0157_invitations_service_identities`) replaces the `actor_type` check on `audit_events` (`0001`'s table) so it
   admits `service`, beside its new `person_invitations`, `service_identities` and `api_token_moves` tables.
 - `0158` (`0158_runner_pool_limits`) adds `runner_pools.limits` (`0152`'s table), the pool's own limits.
+- `0159` (`0159_run_lifetime_cap`) adds `agent_runs.lifetime_cap_at` and `lifetime_cap_source` (`0001`'s table), the latest end the run's pool and `WARDYN_RUN_MAX_AGE` allow, counted from launch, and which of the two bound it; existing runs keep both empty.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

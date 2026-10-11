@@ -227,6 +227,10 @@ export interface AgentRun {
   // wait_budget_sec does not bound a run's start; see Start deadlines in
   // docs/OPERATIONS.md (#the-start-deadlines).
   ends_at?: string | null;
+  // The latest end the run's pool and the deployment allow, measured from launch
+  // (migration 0159, #1319). Absent when neither bounds the lifetime and for a
+  // run from before it; an extension never goes past it.
+  lifetime_cap_at?: string;
   wait_budget_sec?: number;
   run_limits?: RunLimits;
   governance_profile_id?: string;
@@ -313,6 +317,8 @@ export interface RunEndWaitResult {
   wait_budget_sec: number;
   capped: string[];
   latest_end?: string;
+  // Whose limit latest_end is, so the console can name it.
+  latest_end_source?: "pool" | "governance" | "deployment";
   max_wait_sec?: number;
   // True only when the end was capped by the limit the run captured at launch
   // while the launch profile's own limit has since been loosened (#1322).

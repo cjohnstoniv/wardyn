@@ -109,6 +109,14 @@ const (
 	reasonRunEndWaitChanged     = "run_end_wait_changed"       // the run changed while the PATCH was being decided
 )
 
+// POST /runs (run_end_create.go): the create-time end. The No end refusals reuse
+// run_end_no_end_not_allowed and run_limits_gate_denied above.
+const (
+	reasonRunEndConflictingFields = "run_end_conflicting_fields" // both ends_after_sec and no_end were set
+	reasonRunEndAfterTooSmall     = "run_end_after_too_small"    // ends_after_sec is below 1
+	reasonRunEndAfterTooLarge     = "run_end_after_too_large"    // ends_after_sec is past 2147483647
+)
+
 // notFoundIf's (helpers.go) own reasons: one per resource kind its ~27
 // call sites name (#656 slice 3). notFoundIf itself cannot tell one kind
 // from another, so each caller supplies its own; declared together here so
