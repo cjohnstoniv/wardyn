@@ -46,7 +46,7 @@ func connectWireManager(t *testing.T, dir string, sub substrate.Substrate, ref f
 		t.Fatal(err)
 	}
 	row := types.Runner{ID: uuid.New(), PublicKey: pub, State: types.RunnerClaimed, Owner: "runner-owner"}
-	m, err := New(dir, row.ID, sub, ref, noOutput)
+	m, err := New(dir, row.ID, sub, ref, noOutput, noErase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,8 +169,11 @@ func TestOfflineTransportDropUsesMonotonicLease(t *testing.T) {
 			if err := f.manager.Created(f.ctx, spec, id.String()); err != nil {
 				t.Fatal(err)
 			}
+			// A lease accepted before the drop authorizes nothing once offline.
+			other := uuid.New()
+			f.initialLease(t, other)
 			f.drop(t)
-			if err := f.manager.BeforeCreate(f.ctx, runner.SandboxSpec{RunID: uuid.New()}); err == nil {
+			if err := f.manager.BeforeCreate(f.ctx, runner.SandboxSpec{RunID: other}); err == nil {
 				t.Fatal("offline create admitted")
 			}
 			f.wallJump.Store(int64(-365 * 24 * time.Hour))

@@ -80,12 +80,11 @@ type Hub struct {
 	mu       sync.Mutex
 	sessions map[uuid.UUID]*hubSession
 	closed   bool
-	recheck  time.Duration // revokeRecheck; a test shortens it before the first Serve
 }
 
 // NewHub does not enable dispatch when Admit is absent.
 func NewHub(ctx context.Context, cfg HubConfig) *Hub {
-	h := &Hub{ctx: ctx, cfg: cfg, sessions: map[uuid.UUID]*hubSession{}, recheck: revokeRecheck}
+	h := &Hub{ctx: ctx, cfg: cfg, sessions: map[uuid.UUID]*hubSession{}}
 	context.AfterFunc(ctx, h.Close)
 	return h
 }
@@ -175,38 +174,36 @@ func (h *Hub) serveClaimed(ctx context.Context, conn runnerwire.Conn, row types.
 		}
 		return err
 	}
-	h.await(ctx, row.ID, peer)
+	recheck := time.NewTicker(storedRowRecheck)
+	defer recheck.Stop()
+	for live := true; live; {
+		select {
+		case <-peer.Done():
+			live = false
+		case <-ctx.Done():
+			peer.Close()
+			live = false
+		case <-h.ctx.Done():
+			peer.Close()
+			live = false
+		case <-recheck.C:
+			h.recheckRevoked(ctx, row.ID)
+		}
+	}
 	h.ended(row.ID, s, peer)
 	return peer.Err()
 }
 
-// revokeRecheck is how often a live session re-reads its stored runner row.
-// Revoke reaches only the replica holding the session; under WARDYN_HA the
-// revocation may commit on another one, and this re-read is how the holder
-// learns of it.
-const revokeRecheck = runnerwire.PingInterval
+// storedRowRecheck bounds how long a session outlives a revocation committed
+// through another replica, whose Revoke cannot reach this process's sessions.
+var storedRowRecheck = runnerwire.PingInterval
 
-// await holds the session until it ends, sending REVOKED once the stored row
-// says the runner was revoked, wherever that committed.
-func (h *Hub) await(ctx context.Context, id uuid.UUID, peer *runnerwire.Peer) {
-	recheck := time.NewTicker(h.recheck)
-	defer recheck.Stop()
-	for {
-		select {
-		case <-peer.Done():
-			return
-		case <-ctx.Done():
-			peer.Close()
-			return
-		case <-h.ctx.Done():
-			peer.Close()
-			return
-		case <-recheck.C:
-			// A failed read is not a revocation; the next tick reads again.
-			if row, err := h.cfg.Lookup(ctx, id); err == nil && (row.State == types.RunnerRevoked || row.RevokedAt != nil) {
-				_ = h.Revoke(ctx, id)
-			}
-		}
+// recheckRevoked ends the session with REVOKED once the stored row says so.
+// A failed lookup is retried at the next tick: the store already refuses a
+// revoked runner's writes, so this only bounds the session's lifetime.
+func (h *Hub) recheckRevoked(ctx context.Context, id uuid.UUID) {
+	if current, err := h.cfg.Lookup(ctx, id); err == nil && current.ID == id && current.State == types.RunnerRevoked {
+		_ = h.Revoke(ctx, id)
 	}
 }
 

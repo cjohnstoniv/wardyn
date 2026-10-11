@@ -16,7 +16,7 @@ import (
 func TestStateSpoolReceiptIsReadOnlyAcceptedPrefix(t *testing.T) {
 	m, _, _, org := managerFixture(t)
 	id := createLocal(t, m, org)
-	rows, err := m.State(t.Context())
+	rows, err := allState(t.Context(), m)
 	if err != nil || len(rows) != 1 || rows[0].SpoolReceipt == nil {
 		t.Fatalf("empty receipt: %+v %v", rows, err)
 	}
@@ -35,7 +35,7 @@ func TestStateSpoolReceiptIsReadOnlyAcceptedPrefix(t *testing.T) {
 	if err := spool.Refuse(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	rows, err = m.State(t.Context())
+	rows, err = allState(t.Context(), m)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestStateSpoolReceiptIsReadOnlyAcceptedPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, err = m.State(t.Context())
+	rows, err = allState(t.Context(), m)
 	if err != nil || *rows[0].SpoolReceipt != accepted {
 		t.Fatal("STATE receipt differs from durable accepted prefix")
 	}

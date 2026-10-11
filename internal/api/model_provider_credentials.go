@@ -210,6 +210,10 @@ func (s *Server) handlePutProviderCredential(w http.ResponseWriter, r *http.Requ
 	if owner == "" {
 		return
 	}
+	r, ok := s.beginRequestWrite(w, r, owner)
+	if !ok {
+		return
+	}
 	var body putSecretRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&body); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonModelProviderCredentialBodyInvalid, mpcBody)
@@ -235,8 +239,8 @@ func (s *Server) handlePutProviderCredential(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	if err := s.putOwned(r.Context(), owner, func() error {
-		return s.cfg.Secrets.For(owner).Put(r.Context(), providerSecretName(p.UID, providerKeyPart), []byte(value))
+	if err := s.putOwned(r.Context(), owner, func(ctx context.Context) error {
+		return s.cfg.Secrets.For(owner).Put(ctx, providerSecretName(p.UID, providerKeyPart), []byte(value))
 	}); err != nil {
 		if errors.Is(err, secretstore.ErrUnavailable) {
 			// loggedMsg keeps the daemon's own record of a sealed/unreachable

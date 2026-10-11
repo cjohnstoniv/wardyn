@@ -731,6 +731,14 @@ const (
 	reasonCredentialEraseSignInConfigUnreadable = "credential_erase_signin_config_unreadable"
 )
 
+// /me/secrets and /shared-secrets (secrets_explicit.go): the caller has no personal namespace to name
+// (the admin token, local mode, a device or a delegated portal), so 403.
+const reasonSecretPersonalNeedsPerson = "secret_personal_needs_person"
+
+// A write of a stored credential that began before an erase of its owner (writeServerError):
+// 409, nothing saved, a new attempt lands.
+const reasonCredentialErasedDuringWrite = "credential_erased_during_write"
+
 // POST /people/{principal}/erasure (person_erasure.go).
 const (
 	// scopes is not a non-empty list of known scope names.

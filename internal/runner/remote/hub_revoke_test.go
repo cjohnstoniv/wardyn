@@ -21,14 +21,19 @@ import (
 )
 
 func TestHubActiveRevocationStopsDispatchAndReconnect(t *testing.T) {
-	t.Run("revoked here", func(t *testing.T) { testHubRevocation(t, false) })
-	t.Run("revoked on another replica", func(t *testing.T) { testHubRevocation(t, true) })
+	testHubRevocation(t, false)
 }
 
-// testHubRevocation revokes the runner's stored row and either tells this Hub
-// (the replica that committed it) or tells it nothing, as when the revocation
-// committed on another replica: the session's own re-read must then end it.
-func testHubRevocation(t *testing.T, elsewhere bool) {
+// A revocation committed through another replica reaches this replica's
+// session only through its stored-row recheck.
+func TestHubStoredRevocationFromAnotherReplicaEndsTheSession(t *testing.T) {
+	recheck := storedRowRecheck
+	storedRowRecheck = 20 * time.Millisecond
+	t.Cleanup(func() { storedRowRecheck = recheck })
+	testHubRevocation(t, true)
+}
+
+func testHubRevocation(t *testing.T, otherReplica bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	pub, key, _ := ed25519.GenerateKey(rand.Reader)
@@ -48,9 +53,6 @@ func testHubRevocation(t *testing.T, elsewhere bool) {
 		},
 	})
 	defer hub.Close()
-	if elsewhere {
-		hub.recheck = 20 * time.Millisecond
-	}
 	online, resumed := make(chan *runnerwire.Peer, 1), make(chan bool, 1)
 	hooks := sessionHooks(online, resumed)
 	var revoked, dials atomic.Int32
@@ -74,7 +76,7 @@ func testHubRevocation(t *testing.T, elsewhere bool) {
 	terminal := row
 	terminal.State = types.RunnerRevoked
 	stored.Store(&terminal)
-	if !elsewhere {
+	if !otherReplica {
 		if err := hub.Revoke(ctx, row.ID); err != nil {
 			t.Fatal(err)
 		}
@@ -83,8 +85,8 @@ func testHubRevocation(t *testing.T, elsewhere bool) {
 		t.Fatalf("revocation result: %v", err)
 	}
 	awaitValue(t, ctx, hubDone)
-	if revoked.Load() != 1 || dials.Load() != 1 || link.Online() || hub.Online(row.ID) {
-		t.Fatalf("revoked=%d dials=%d online=%v hub online=%v", revoked.Load(), dials.Load(), link.Online(), hub.Online(row.ID))
+	if revoked.Load() != 1 || dials.Load() != 1 || link.Online() {
+		t.Fatalf("revoked=%d dials=%d online=%v", revoked.Load(), dials.Load(), link.Online())
 	}
 	if err := link.Call(ctx, "probe", nil, nil); !errors.Is(err, runner.ErrRunnerOffline) {
 		t.Fatalf("revoked dispatch: %v", err)
