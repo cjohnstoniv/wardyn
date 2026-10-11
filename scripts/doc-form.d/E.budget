@@ -1,5 +1,9 @@
 # Prose must not grow beyond the base count (29985) plus cell-expansion headings (190 headings, 198 words) and their one-sentence summaries (189 cells, 5178 words); the page measures 29899 without them. Itemised in lane-reports/docs/E-worker.md.
 # docs/ENV.md 35321 adds 46: 34 (WARDYN_ALLOW_USER_ENV_SECRET governs `file_secret` too, and a component's delivery is not governed by it), 10 (the `file_secret` residency sentence), 2 (summary row), and the deprecated switch name in the boot-read list becomes the current one (0 words).
 # docs/ENV.md 35393 adds 72 (0.9 SSH lane): the WARDYN_SSH_MAX_SESSIONS_PER_RUN row and details section (48), and one row each for the two SSH env-request names the sync subsystem reads, which the env-doc guard treats as reads (24).
-docs/ENV.md=35465 share=5
-# docs/ENV.md 35465 adds 72 (0.9 G-sec-rest): the WARDYN_KEK_REQUIRED details now say it governs new writes only and name the kek_local_rows row (#1977), and WARDYN_CODEX_BASE_URL says only the pinned codex is supported and OPENAI_* are inert and deprecated (#1979).
+# docs/ENV.md 35607 adds 214 (0.9 AWS KMS key service): the WARDYN_AWS_KMS_KEY row and details section, and the awskms value in the WARDYN_KEK, WARDYN_KEK_REQUIRED and one-key-service lines.
+# docs/ENV.md 35619 adds 12 (AWS KMS r1 fixes): the KMS client's proxy and CA line, and the link-local hosts the daemon proxy bypasses.
+# docs/ENV.md=35673 adds 280 (0.9 F-1513): the Acknowledged delivery subsection (acknowledged SIEM delivery, #1513), including the redirect halt, the re-enable backlog and the no-manual-grant sentences.
+# docs/ENV.md 35899 measured after F-1513 merge.
+# docs/ENV.md 35973 adds 74 (0.9 G-sec-rest): WARDYN_KEK_REQUIRED covers new writes only and names the kek_local_rows row (#1977), and only the pinned codex is supported (#1979).
+docs/ENV.md=35973 share=5

@@ -609,6 +609,18 @@ func TestSecretStoreChecks_KeyServiceAndLocalKey(t *testing.T) {
 	if got := credentialStorageMode("", "Key Vault myvault"); got != "key_service_key_vault" {
 		t.Fatalf("credentialStorageMode with a Key Vault key service = %q, want key_service_key_vault", got)
 	}
+	// AWS KMS: the unlock is a Decrypt in CloudTrail, and the storage mode stays the generic key service.
+	chks = secretStoreChecks("", "AWS KMS in us-east-1", true, true, false, false)
+	if len(chks) != 2 || chks[0].ID != "kek_service" || chks[0].Status != "ok" || chks[1].ID != "platform_split" ||
+		chks[0].Detail != "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in AWS KMS in us-east-1 and never leaves it. Wardyn holds no copy; each unlock is a Decrypt in AWS CloudTrail." {
+		t.Fatalf("AWS KMS key service rows = %+v", chks)
+	}
+	if strings.Contains(chks[1].Fix, "TRANSIT") || strings.Contains(chks[1].Fix, "AZURE") || !strings.Contains(chks[1].Fix, "AWS KMS has no separate platform key yet") {
+		t.Fatalf("AWS KMS platform_split fix = %q; want no Transit or Key Vault setting", chks[1].Fix)
+	}
+	if got := credentialStorageMode("", "AWS KMS in us-east-1"); got != "key_service" {
+		t.Fatalf("credentialStorageMode with an AWS KMS key service = %q, want key_service", got)
+	}
 	chks = secretStoreChecks("", "", true, true, true, false)
 	if len(chks) != 2 || chks[0].ID != "age_key" || chks[1].ID != "kek_local" || chks[1].Status != "warn" ||
 		chks[1].Detail != "Credentials are encrypted with a key this deployment holds. Anyone with both the database and that key can read them. Connect a key service to keep the two apart." {
@@ -1078,5 +1090,28 @@ func TestKeyCustodyRows(t *testing.T) {
 	}
 	if c := row(keyCustody{Changes: keydomain.Changes{Count: 1, Latest: now.Add(-time.Hour), LatestBy: "a"}}, "key_domain_changes"); !strings.Contains(c.Detail, "1 key-domain assignment change in") || !strings.Contains(c.Detail, "the latest today by a.") {
 		t.Errorf("1 change: %+v", c)
+	}
+}
+
+// kek_service_static_key is amber only while a key service is reached with a
+// long-lived access key; a role's credentials, no key service and store mode
+// never raise it.
+func TestStaticKeyServiceCheck(t *testing.T) {
+	chk, ok := staticKeyServiceCheck("AWS KMS in us-east-1", true)
+	if !ok || chk.ID != "kek_service_static_key" || chk.Label != "Credential key access" || chk.Status != "warn" ||
+		!strings.Contains(chk.Detail, "long-lived AWS access key") || !strings.Contains(chk.Fix, "IRSA or EKS Pod Identity") {
+		t.Fatalf("static key row = %+v, %v", chk, ok)
+	}
+	for name, c := range map[string]struct {
+		keyService string
+		static     bool
+	}{
+		"role credentials":   {"AWS KMS in us-east-1", false},
+		"no key service":     {"", true},
+		"neither of the two": {"", false},
+	} {
+		if chk, ok := staticKeyServiceCheck(c.keyService, c.static); ok {
+			t.Errorf("%s: static key row %+v, want none", name, chk)
+		}
 	}
 }

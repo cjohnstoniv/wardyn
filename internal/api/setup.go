@@ -335,6 +335,9 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	checks = append(checks, secretStoreChecks(s.cfg.SecretStoreExternal, s.cfg.SecretKeyService, s.cfg.AgeKeyDurable, s.cfg.OIDC != nil, s.cfg.PlatformKeySeparate, s.cfg.KEKRequired)...)
+	if chk, ok := staticKeyServiceCheck(s.cfg.SecretKeyService, s.cfg.SecretKeyServiceStaticKey); ok {
+		checks = append(checks, chk)
+	}
 	checks = append(checks, s.kekLocalRows(ctx)...)
 	checks = append(checks, s.keyCustodyRows(ctx)...)
 	checks = append(checks, hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))

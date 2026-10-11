@@ -293,6 +293,14 @@ func (s *Store) KeyService() string {
 	return ""
 }
 
+// KeyServiceStaticKey reports whether the key service that wraps every write
+// is reached with a long-lived credential (AWS KMS under an IAM user's access
+// key): metadata for the setup row, never a value.
+func (s *Store) KeyServiceStaticKey() bool {
+	d, ok := s.service.(interface{ StaticKey() bool })
+	return ok && s.serviceWrites && !s.writeExt && d.StaticKey()
+}
+
 // For returns a view scoped to owner — see secretstore.Store.For's doc
 // comment for the fallback/isolation contract. A shallow copy: owner is the
 // only field that differs, so every view over the same *pgxpool.Pool sees
@@ -637,7 +645,7 @@ type RewrapResult struct {
 	// the `secrets` rows and the principal keys are both at it.
 	PrincipalKeys int
 	// KeyService is the kek_id of the key service every write now uses
-	// (WARDYN_KEK=transit or azurekv), or "" when the local keys do.
+	// (WARDYN_KEK=transit, azurekv or awskms), or "" when the local keys do.
 	KeyService string
 	// KeyVersion is the key version every row under a versioned key service
 	// is now wrapped under, else "": retiring every other version at the
@@ -710,7 +718,7 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 	}
 	s.withKEK(d)
 	if s.kek == nil && !s.serviceWrites {
-		return res, errors.New("pg secretstore: rewrap needs a key to wrap under: WARDYN_AGE_KEY, or a WARDYN_KEK key service (transit or azurekv)")
+		return res, errors.New("pg secretstore: rewrap needs a key to wrap under: WARDYN_AGE_KEY, or a WARDYN_KEK key service (transit, azurekv or awskms)")
 	}
 	// A principal key naming a domain the file does not declare cannot be moved
 	// or read: refuse before anything changes.

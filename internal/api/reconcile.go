@@ -589,6 +589,8 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 	pass("lapsed run token sweep", s.sweepLapsedRunTokens(ctx))
 	// Azure DevOps personal access tokens, on their own slower clock.
 	pass("run personal access token sweep", s.sweepRunPATs(ctx))
+	// Unclaimed runners that outlived their 24h wait.
+	pass("lapsed unclaimed runner sweep", s.sweepLapsedRunners(ctx))
 	return first
 }
 

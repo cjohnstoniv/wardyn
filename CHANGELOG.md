@@ -10,6 +10,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- Migration `0145_audit_delivery_cursors` adds the `audit_delivery_cursors` table; nothing changes until a webhook
+  audit sink sets `"delivery": "acknowledged"`.
 - Migration `0143_provider_connection_changes` adds an empty, secret-free history table for why a model connection
   became unavailable. Removals from before the upgrade have no recorded cause.
 - For filtered OIDC group claims, check the new transitive-membership procedure in Operations:
@@ -46,6 +48,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- Opt-in acknowledged audit delivery for the webhook sink (`"delivery": "acknowledged"`): it reads the stored trail
+  from a durable per-destination checkpoint (starting at the current head on first enable), resumes after outages and
+  restarts, and is at-least-once with `id`, `seq` and `row_hash` for deduplication. A redirect or a terminal 4xx halts
+  delivery until wardynd restarts or another replica takes over. Retention past the checkpoint is never blocked: it
+  records a chained `audit.delivery.reset` event, counts it and resends from the oldest retained row. Adds the
+  `wardyn_audit_delivery_*` metrics (#1513).
+- AWS KMS can hold the key that wraps stored credentials (`WARDYN_KEK=awskms`): each data key is wrapped by KMS
+  Encrypt bound to its row, the key never leaves AWS, and IRSA or EKS Pod Identity is the expected identity (#588). A
+  long-lived access key still boots but raises an amber setup row. An AWS KMS platform key, key domains and store mode
+  are not supported yet, and boot refuses them together with `awskms`.
+- Runners management API: `GET /runners` (active, revoked or all, with each runner's live online state and the runs on
+  it), `GET /runners/{id}`, and the caller-scoped `GET /me/runners`, which shows a person only their own runners and
+  abbreviates an unclaimed runner's fingerprint. Security admins can list and revoke unused registration tokens (never
+  a token value); minting stays admin only. `runners.enabled` changes only through `PUT /runners/settings` (admin,
+  audited `runners.enabled.set`, refused until the organisation URL is HTTPS); `PUT /site-config` now refuses a
+  changed value. Unclaimed runners lapse and are swept after 24 hours. CLI: `wardyn runner list`, `wardyn runner
+  tokens list|revoke`. Migration `0144_runner_minted_by` records who minted each runner's registration token (#1965).
+- `wardyn run --placement remote|local` and `--runner <id>` choose where a run's sandbox lives. Both are passed to the
+  server unchanged, so its placement refusals reach the CLI as they are. `--pool` is accepted and refused at run create
+  until runner-pool selection lands (#109).
 - Model connections say why they became unavailable: never connected, removed because an admin changed the provider's
   address or kind (with the new destination host to review before reconnecting), or the credential store could not be
   read ("could not check"; the credential may still be there). The record is owner-scoped and holds no secret; it is
@@ -98,6 +120,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- A webhook audit sink whose `flush_interval` or `retry_base_delay` is zero or negative is now refused at boot, in
+  best-effort mode too (#1513).
+- The `wardynd` maintenance modes that open the key service (`-rewrap`, `-rewrap-principal-keys`, `-rotate-age-key`,
+  `-migrate-secrets`, `-reconcile`) now use `WARDYN_DAEMON_PROXY_URL` and `WARDYN_TRUSTED_CA_FILE` as a serving boot
+  does, for Vault Transit and Azure Key Vault too; the AWS instance-metadata, ECS and EKS Pod Identity credential
+  endpoints always bypass the daemon proxy (#588).
+- A portal's delegated token can read the output tail of its person's runs (`GET /runs/{id}/output`) and nothing
+  recovered from a recording: for output recovered from a recording and an interactive run's last screen it gets the
+  same 409 a run with no such row gives (the refusal is audited `delegation_scope`), and a failed run's failure hint
+  is served without its quote from the recording. (#1423)
+- Docs: `docs/AZURE-DEVOPS.md` explains what an Azure DevOps run gets on a laptop runner: only the person's own
+  stored PAT, while `minted_pat` and `bearer` runs placed on a laptop are refused (`placement_credential`).
+  `docs/DESKTOP.md` explains why a member-mode laptop still enrols into an SSO-only organisation (#475).
+- `scripts/kind-run-output-walk.sh` gains a recording-on mode (`WARDYN_KIND_WALK_RECORDING=pg`) that proves a
+  Kubernetes task's printed line reaches `/output` from the recording, marked `source: recording`, with a registered
+  secret masked (#1831).
 - Docs: the operator manual's multi-user material (people, governance, capabilities, API tokens and related tasks) is
   split into task pages under `docs/operations/`, each linked from `docs/README.md`; every old heading in
   `docs/OPERATIONS.md` keeps a stub that links to its new home.

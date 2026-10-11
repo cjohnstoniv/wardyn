@@ -46,7 +46,7 @@ func TestRefuseKEKRequired(t *testing.T) {
 				t.Fatalf("refuseKEKRequired = %v; want refusal %v", err, tc.refuse)
 			}
 			if err != nil {
-				for _, want := range []string{"refusing to start:", "WARDYN_KEK=transit|azurekv", "wardynd -rewrap", "new credential writes"} {
+				for _, want := range []string{"refusing to start:", "WARDYN_KEK=transit|azurekv|awskms", "wardynd -rewrap", "new credential writes"} {
 					if !strings.Contains(err.Error(), want) {
 						t.Fatalf("refusal %q lacks %q", err, want)
 					}

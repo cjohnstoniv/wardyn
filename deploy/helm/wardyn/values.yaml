@@ -345,7 +345,7 @@ kek:
   # true requires a key service for new credential writes: wardynd refuses to
   # start with provider local and no external store, a deployment that
   # mandates key custody. Rows the local key already wraps do not refuse a
-  # boot; set provider transit or azurekv, then `wardynd -rewrap` moves them.
+  # boot; set provider transit, azurekv or awskms, then `wardynd -rewrap` moves them.
   required: false
   # on seals each person's stored credentials under a key of that person's own
   # (enc_version 3), which erasing the person destroys. Boot keys and the
