@@ -130,6 +130,10 @@ func createRecoveryManifest(ctx context.Context, in manifestSources) error {
 		return err
 	}
 	defer s.close()
+	// The session's lock connection stays checked out while stageFiles takes a second one from the pool.
+	if n := s.pool.Config().MaxConns; n < 2 {
+		return refusedTo("write the manifest", "pool_max_conns is %d; the manifest needs at least 2 connections (the single-instance lock holds one). Raise pool_max_conns in the database URL", n)
+	}
 
 	snap, err := readRecoverySnapshot(ctx, s.conn)
 	if err != nil {
