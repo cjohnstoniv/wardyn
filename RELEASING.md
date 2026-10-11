@@ -444,6 +444,8 @@ crash or a usage limit resumes with the same command:
 
 ## Repo settings (GitHub-side)
 
+- `DOCKERHUB_USERNAME` — Actions secret: the account the image-pulling jobs' optional Docker Hub login uses.
+- `DOCKERHUB_TOKEN` — Actions secret: that account's token; with neither set a job skips the login and pulls anonymously.
 - **Branch protection on `main` is enabled.**
   - A push is gated on the CI merge-gate status checks and normally requires a pull request.
   - `enforce_admins` is **off**, so the maintainer cutting a release pushes the tag commit to `main` directly (step 5) while contributors go through PRs —

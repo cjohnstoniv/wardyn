@@ -51,7 +51,7 @@ func TestUnclassifiedCatchesANewPolicyField(t *testing.T) {
 }
 
 func TestTableRowsAreWellFormed(t *testing.T) {
-	grantKinds := map[string]bool{"ssh_key": true, "git_pat": true, "cloud_sts": true}
+	grantKinds := map[string]bool{"ssh_key": true, "git_pat": true, "cloud_sts": true, "api_key": true, "env_secret": true, "file_secret": true, "github_token": true}
 	types := map[string]reflect.Type{
 		StructSandboxSpec: reflect.TypeFor[runner.SandboxSpec](),
 		StructProxyConfig: reflect.TypeFor[runner.ProxyConfig](),
@@ -107,6 +107,12 @@ func TestTableRowsAreWellFormed(t *testing.T) {
 	}
 }
 
+func TestTableIsClosedAndUnambiguous(t *testing.T) {
+	if problems := tableProblems(Table); len(problems) != 0 {
+		t.Fatalf("ill-formed table: %v", problems)
+	}
+}
+
 func TestEveryClassHasARowOrIsNotSent(t *testing.T) {
 	used := map[string]bool{}
 	for _, e := range Table {
@@ -116,7 +122,9 @@ func TestEveryClassHasARowOrIsNotSent(t *testing.T) {
 	}
 	// Classes reached only through a field-less mint route or a class that is not a dispatched field of its own.
 	for _, c := range DeliveryClasses() {
-		if !used[c] && c != ClassOAuthSubscription {
+		// A Bedrock bearer provider's key classifies through the provider-key
+		// paths (own or operator by namespace), so no field row names it.
+		if !used[c] && c != ClassOAuthSubscription && c != ClassBedrockBearer {
 			t.Errorf("delivery class %q is named by no classification row", c)
 		}
 	}

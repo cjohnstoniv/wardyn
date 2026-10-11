@@ -89,6 +89,11 @@ type preflightResponse struct {
 	// choices, an array that is empty until that lane fills it.
 	Image         *client.ImageFact     `json:"image,omitempty"`
 	AllowedImages []client.AllowedImage `json:"allowed_images"`
+	// RunnerPool is the pool the request resolves to, absent until the pool lane
+	// resolves one; RunnerPools are the permitted choices, an array that is
+	// empty until that lane fills it.
+	RunnerPool  *client.ResolvedRunnerPool `json:"runner_pool,omitempty"`
+	RunnerPools []client.RunnerPoolChoice  `json:"runner_pools"`
 }
 
 // preflightBurst and preflightLimiterMaxPeople size the per-person preflight
@@ -341,6 +346,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		Resources:                []client.PlacementResources{},
 		LocalPlacement:           []client.LocalPlacementFact{},
 		AllowedImages:            []client.AllowedImage{},
+		RunnerPools:              []client.RunnerPoolChoice{},
 	}
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred

@@ -53,3 +53,5 @@ reason audit_retention_digest_mismatch
 reason governance_overlay_unsatisfiable
 reason capability_component
 reason component_autonomy
+
+reason placement_component_self_defined

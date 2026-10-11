@@ -512,10 +512,10 @@ func (s *Server) authorProviderKeyInjection(ctx context.Context, run types.Agent
 		"snapshot":    providerGrantSnapshot{OwnerSubject: lane.owner, ProviderUID: lane.provider.UID},
 	})
 	grantID := uuid.New()
-	if _, err := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
+	if _, err := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 		Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600},
-	}); err != nil {
+	}, false); err != nil {
 		s.refuseProviderDispatch(ctx, run, lane.provider.Kind, providerDenial{msg: "could not author the model provider credential injection: " + err.Error()}, nil)
 		return runner.InjectionGrant{}, false
 	}

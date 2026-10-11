@@ -223,10 +223,10 @@ func (s *Server) authorAzureInjection(ctx context.Context, run types.AgentRun, t
 		return refuse("grant_scope", "could not author the Azure credential injection")
 	}
 	grantID := uuid.New()
-	if _, err := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
+	if _, err := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 		Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: raw, TTLSeconds: azureGrantTTLSeconds},
-	}); err != nil {
+	}, false); err != nil {
 		return refuse("grant_write", "could not record the Azure credential grant: "+err.Error())
 	}
 	rule, err := injectionRuleFromScope(raw)

@@ -12,6 +12,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -39,7 +40,7 @@ const (
 // wire shape provider_access: [{provider, state, action, deadline}] the design
 // names: a provider id, one of modelaccess.go's five states, an
 // already-composed sentence, and (only when the state names one) a deadline
-// instant. No secret name, no start URL, no host. The one place a pinned
+// instant. No secret name or start URL. NewDestination is the already-disclosed host. The one place a pinned
 // account and role appear is the pin-mismatch action, which names both pairs
 // to the caller — members included — because they must pick the pinned pair
 // when they sign in again.
@@ -54,13 +55,16 @@ const (
 // AddedAt and LastUsedAt are the caller's own stored credential's metadata
 // (CS-6), absent when none is stored.
 type SetupProviderAccess struct {
-	Provider    string     `json:"provider"`
-	State       string     `json:"state"`
-	Action      string     `json:"action,omitempty"`
-	Deadline    string     `json:"deadline,omitempty"`
-	SourceRunID string     `json:"source_run_id,omitempty"`
-	AddedAt     *time.Time `json:"added_at,omitempty"`
-	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	Provider       string     `json:"provider"`
+	State          string     `json:"state"`
+	Action         string     `json:"action,omitempty"`
+	Deadline       string     `json:"deadline,omitempty"`
+	SourceRunID    string     `json:"source_run_id,omitempty"`
+	AddedAt        *time.Time `json:"added_at,omitempty"`
+	LastUsedAt     *time.Time `json:"last_used_at,omitempty"`
+	Cause          string     `json:"cause,omitempty"`
+	ChangedAt      *time.Time `json:"changed_at,omitempty"`
+	NewDestination string     `json:"new_destination,omitempty"`
 }
 
 // setupModelProviderState is handleSetupStatus's one call site for
@@ -123,6 +127,9 @@ func providerAccessCheck(p types.ModelProvider, a SetupProviderAccess, isDefault
 		chk.Status, chk.Detail, chk.Fix = "info", providerAccessMechanismDetail, bedrockMechanismFix
 	default:
 		chk.Status, chk.Detail = "warn", fmt.Sprintf(providerAccessMissingDetail, noun)
+		if a.Cause == "store_unreadable" {
+			chk.Detail = providerAccessRecheck
+		}
 		if !isDefault {
 			chk.Status = "info"
 		}
@@ -226,6 +233,7 @@ func (s *Server) providerAccessFor(ctx context.Context, p types.ModelProvider, o
 		// words): dispatch is what finds out a stored key no longer works.
 		s.gradeProviderKey(ctx, &row, p, owner)
 	}
+	s.missingProviderCause(ctx, &row, p, owner)
 	return row
 }
 
@@ -234,11 +242,11 @@ func (s *Server) providerAccessFor(ctx context.Context, p types.ModelProvider, o
 // copy), every other typed kind says "key".
 func (s *Server) gradeProviderKey(ctx context.Context, row *SetupProviderAccess, p types.ModelProvider, owner string) {
 	raw, found, err := s.ownSecret(ctx, owner, providerSecretName(p.UID, providerKeyPart))
-	// A store read failure grades exactly like "not configured": setup/status
-	// degrades conservatively on a read failure throughout this file (see
-	// onboardingComplete, hasRuns above) rather than turning one provider's
-	// blip into a 500 for every row on the page.
-	live := err == nil && found && len(raw) > 0
+	if err != nil {
+		unreadableProvider(row)
+		return
+	}
+	live := found && len(raw) > 0
 	addAction := providerAccessAddKeyAction
 	if p.Kind == types.ModelProviderCustomEndpoint {
 		addAction = providerAccessAddTokenAction
@@ -257,8 +265,12 @@ func (s *Server) gradeProviderKey(ctx context.Context, row *SetupProviderAccess,
 // on a setup-token).
 func (s *Server) gradeProviderSubscription(ctx context.Context, row *SetupProviderAccess, p types.ModelProvider, owner string) {
 	raw, found, err := s.ownSecret(ctx, owner, providerSecretName(p.UID, providerOAuthPart))
+	if err != nil {
+		unreadableProvider(row)
+		return
+	}
 	var blob managedCredBlob
-	if err == nil && found && json.Unmarshal(raw, &blob) == nil && blob.Token != "" {
+	if found && json.Unmarshal(raw, &blob) == nil && blob.Token != "" {
 		row.SourceRunID = blob.SourceRunID
 		if s.cfg.Now().UTC().Sub(blob.CapturedAt) > harnessTokenAging {
 			row.State = modelAccessExpiring
@@ -283,10 +295,10 @@ func (s *Server) gradeProviderSubscription(ctx context.Context, row *SetupProvid
 func (s *Server) gradeProviderBedrockSSO(ctx context.Context, row *SetupProviderAccess, p types.ModelProvider, owner string) {
 	scope := chosenProvider{provider: p, owner: owner}.awsScope()
 	blob, found, err := s.readAWSSSOBlob(ctx, scope)
-	if err != nil {
-		// Conservative on a read failure, same discipline as gradeProviderKey.
-		row.State = modelAccessNotConfigured
-		row.Action = modelAccessSignInAction
+	var syntax *json.SyntaxError
+	var shape *json.UnmarshalTypeError
+	if err != nil && !errors.As(err, &syntax) && !errors.As(err, &shape) {
+		unreadableProvider(row)
 		return
 	}
 	if found {

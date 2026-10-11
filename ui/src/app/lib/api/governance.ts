@@ -27,6 +27,8 @@ import { asJson, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wf
 // profile arrives with the keys absent — optional here for the same reason,
 // and `!!limits.deny_x` is how every read is written.
 export interface GovernanceLimits extends RunLimits {
+  // Default deny; runner-reported confinement does not grant platform attestation.
+  local_self_defined_components?: boolean;
   deny_task_mode_exec?: boolean;
   deny_interactive?: boolean;
   // types.GovernanceLimits.DenyUIApps (#1391). The editor has no row for it

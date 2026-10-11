@@ -106,6 +106,10 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   // for a field whose section is inactive (see lib/run-overrides.ts).
   placement?: PlacementValue;
   runner_id?: string;
+  // The pool the run starts on (pkg/client.CreateRunRequest.RunnerPoolID); absent
+  // keeps today's placement, and once pools are managed applies the person's
+  // own default, then the organisation's.
+  runner_pool_id?: string;
   // One of the preview's allowed_images, by ref (pkg/client.CreateRunRequest.AllowedImage).
   allowed_image?: string;
   resources?: RequestedResources;
@@ -171,6 +175,7 @@ export function runWireBody(input: RunWireInput): Record<string, unknown> {
   if (input.components?.length) body.components = input.components;
   if (input.placement) body.placement = input.placement;
   if (input.runner_id) body.runner_id = input.runner_id;
+  if (input.runner_pool_id) body.runner_pool_id = input.runner_pool_id;
   if (input.allowed_image) body.allowed_image = input.allowed_image;
   if (input.resources && (input.resources.cpu_millis || input.resources.memory_mib)) body.resources = input.resources;
   if (input.overrides) body.overrides = input.overrides;

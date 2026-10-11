@@ -107,6 +107,7 @@ func runCmd(client clientFn) *cobra.Command {
 	var devcontainerRepo, devcontainerRef, modelProvider string
 	var interactive, wait, createJSON, dryRun bool
 	var timeout time.Duration
+	var where runPlacementFlags
 	cmd := &cobra.Command{
 		Use:     "run",
 		Aliases: []string{"runs"},
@@ -142,6 +143,9 @@ func runCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if err := setOptionalID("--workspace", workspaceID, &body.WorkspaceID); err != nil {
+				return err
+			}
+			if err := where.apply(&body); err != nil {
 				return err
 			}
 			// --policy-file supplies a JSON RunPolicySpec applied inline. It is
@@ -210,6 +214,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&title, "title", "", "short name for this run; runs sharing a title are grouped in the console (optional here, required in the console)")
 	cmd.Flags().StringVar(&description, "description", "", "optional free-text note: why this run exists")
 	cmd.Flags().StringVar(&policyID, "policy", "", "policy id (optional; uses the default policy if unset)")
+	where.register(cmd)
 	cmd.Flags().StringVar(&workspaceID, "workspace", "", "onboarded workspace id to launch against (optional; seeds its source, egress, image and bound model creds — composes with --policy/--policy-file)")
 	cmd.Flags().StringVar(&policyFile, "policy-file", "", "path to a JSON or YAML RunPolicySpec applied inline (optional; mutually exclusive with --policy, enforced server-side)")
 	cmd.Flags().StringVar(&confinement, "confinement", "", "confinement class (CC1|CC2|CC3, or fence|wall|vault; optional — unset defaults to the strongest class the runner advertises at or above the policy minimum, never the bare minimum itself)")

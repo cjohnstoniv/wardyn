@@ -7,7 +7,7 @@
 // organisation's catalog under /components. Imported directly (import { components })
 // by the screens that use it, so no other route carries this module.
 import type { Component, ComponentRequest, ComponentSaved, MyComponents } from "../types";
-import { asJson, errText, HttpError, wfetch } from "./core";
+import { asJson, asNoContent, wfetch } from "./core";
 
 const json = (body: ComponentRequest): RequestInit => ({ body: JSON.stringify(body) });
 
@@ -30,8 +30,7 @@ export const components = {
 
   // DELETE /api/v1/me/components/{id} -> 204. Runs already launched with it keep their record.
   async deleteMine(id: string): Promise<void> {
-    const res = await wfetch(`/me/components/${encodeURIComponent(id)}`, { method: "DELETE" });
-    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    await asNoContent(await wfetch(`/me/components/${encodeURIComponent(id)}`, { method: "DELETE" }));
   },
 
   // GET /api/v1/components (admin): the organisation's components, whole.
@@ -47,7 +46,6 @@ export const components = {
 
   // DELETE /api/v1/components/{id} (admin) -> 204. Its restriction stays, so the id stays closed.
   async remove(id: string): Promise<void> {
-    const res = await wfetch(`/components/${encodeURIComponent(id)}`, { method: "DELETE" });
-    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    await asNoContent(await wfetch(`/components/${encodeURIComponent(id)}`, { method: "DELETE" }));
   },
 };

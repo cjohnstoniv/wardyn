@@ -154,6 +154,13 @@ type CreateRunRequest struct {
 	// RunnerID names the runner for Placement "local"; with more than one
 	// runner online and none named the server answers 422 runner_ambiguous.
 	RunnerID string `json:"runner_id,omitempty"`
+	// RunnerPoolID names the pool the run starts on (RunnerPoolChoice.ID).
+	// Choosing a pool grants no runner, credential or drive: it only narrows
+	// where the run may go. Empty keeps today's placement; once the server
+	// manages pools it applies the person's, then the organisation's, default.
+	// Accepted and validated; a server that cannot honour pools yet refuses it
+	// with request_field_unavailable, never ignores it.
+	RunnerPoolID string `json:"runner_pool_id,omitempty"`
 	// Resources is the CPU and memory this run asks for, clamped by the server
 	// to the caps of the placement it lands on. Absent leaves the source
 	// policy's own resources or the platform default in effect, and a request
@@ -297,6 +304,12 @@ type PreflightResult struct {
 	// organisation lets the person choose; empty until that lane fills it.
 	Image         *ImageFact     `json:"image,omitempty"`
 	AllowedImages []AllowedImage `json:"allowed_images"`
+	// RunnerPool is the pool the request resolves to and how it was chosen;
+	// absent until the pool lane resolves one. RunnerPools are the pools the
+	// person may choose, each with whether it is available; empty until that
+	// lane fills it. Neither is admission: a launch re-checks both.
+	RunnerPool  *ResolvedRunnerPool `json:"runner_pool,omitempty"`
+	RunnerPools []RunnerPoolChoice  `json:"runner_pools"`
 }
 
 // Preflight DRY-RUNs a create-run request: the server resolves the policy

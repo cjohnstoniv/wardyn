@@ -18,7 +18,7 @@ vi.mock("../screens/settings/harness-login-pane", () => ({
 
 import { providerStripLine } from "./model-access-banner";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
-import { BANNER } from "./copy/door";
+import { BANNER, CONNECTIONS } from "./copy/door";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { providerAttention } from "../../lib/model-access";
 import { aheadByHours } from "../../lib/test-clock";
@@ -140,5 +140,30 @@ describe("providerStripLine — the kind/state table", () => {
     expect(
       providerStripLine({ provider: bedrock, state: "expiring", deadline: "", action: "", defaultFor: [] }, ""),
     ).toBeNull();
+  });
+});
+
+
+describe("provider strip connection causes", () => {
+  it.each([bedrock, claude, gateway, anthropicKey])("store read failure for $kind offers only re-check", async (provider) => {
+    const status = providerStatus([{ provider, defaultFor: ["claude-code"] }]);
+    status.provider_access![0].cause = "store_unreadable";
+    const refresh = vi.fn();
+    render(<WithDoor status={status} path="/runs" operator={false} onRefresh={refresh} />);
+    expect(screen.getByText(CONNECTIONS.STORE_UNREADABLE)).toBeInTheDocument();
+    expect(screen.queryByText(/not signed in|no key is available/i)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: CONNECTIONS.RECHECK }));
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it.each(["never_connected", "destination_changed", "kind_changed"])("%s carries the cause through the attention row", (cause) => {
+    const status = providerStatus([{ provider: gateway, defaultFor: ["claude-code"] }]);
+    Object.assign(status.provider_access![0], { cause, new_destination: "new.example" });
+    strip(status);
+    const line = cause === "never_connected" ? CONNECTIONS.NEVER_CONNECTED("new.example", gateway.name || gateway.id)
+      : cause === "destination_changed" ? CONNECTIONS.DESTINATION_CHANGED("new.example") : CONNECTIONS.KIND_CHANGED("new.example");
+    expect(screen.getByText(line)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: cause === "never_connected" ? CONNECTIONS.ADD_TOKEN : CONNECTIONS.REVIEW_RECONNECT })).toBeInTheDocument();
   });
 });

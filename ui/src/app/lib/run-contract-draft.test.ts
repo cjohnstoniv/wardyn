@@ -95,6 +95,17 @@ describe("run contract draft", () => {
     expect(buildRunContractWire(runner({ imageRef: "ghcr.io/acme/dev:1" }), NO_ACTIVE_SECTIONS)).toEqual({ allowed_image: "ghcr.io/acme/dev:1" });
   });
 
+  it("sends the pool only when the person chose one, whatever the placement", () => {
+    const runner = (r: RunnerDraft): RunContractDraft => ({ ...emptyRunContractDraft(), runner: r });
+    expect(buildRunContractWire(runner({ placement: "remote" }), NO_ACTIVE_SECTIONS)).toEqual({ placement: "remote" });
+    expect(buildRunContractWire(runner({ poolId: "p1" }), NO_ACTIVE_SECTIONS)).toEqual({ runner_pool_id: "p1" });
+    expect(buildRunContractWire(runner({ placement: "local", runnerId: "r1", poolId: "p1" }), NO_ACTIVE_SECTIONS)).toEqual({
+      placement: "local",
+      runner_id: "r1",
+      runner_pool_id: "p1",
+    });
+  });
+
   it("converts tenths of a CPU and whole MiB, and leaves an invalid field out", () => {
     expect(resourcesWire(0.5, 512)).toEqual({ cpu_millis: 500, memory_mib: 512 });
     expect(resourcesWire(1.3)).toEqual({ cpu_millis: 1300 });

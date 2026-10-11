@@ -308,10 +308,10 @@ func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.Age
 		"snapshot":    providerGrantSnapshot{ProviderUID: c.provider.UID, OwnerSubject: c.owner},
 	})
 	beGrantID := uuid.New()
-	if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
+	if _, gerr := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 		ID: beGrantID, RunID: run.ID, CreatedAt: time.Now(),
 		Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: beScope, TTLSeconds: 3600},
-	}); gerr != nil {
+	}, false); gerr != nil {
 		// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
 		// KILLED state is preserved rather than clobbered back to FAILED.
 		// The hint is member-visible: a fixed sentence, never the store's text.

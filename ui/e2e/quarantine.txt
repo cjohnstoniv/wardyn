@@ -2,7 +2,8 @@
 #
 # Rule: a test that passes only after a Playwright retry fails the e2e gate.
 # A test listed here passes the gate with a warning instead, and is recorded in
-# test/reports/e2e/flaky.tsv. Every flake lands in that file, listed or not.
+# test/reports/e2e/flaky.tsv. Every flake lands in that file, listed or not; the
+# file is appended to across calls, never truncated (run-ui-e2e.sh).
 # Quarantine is a short, reviewed, tracked exception, never a fix:
 #   - every entry names an open issue and an owner;
 #   - every entry expires within 14 days of the day it is written;

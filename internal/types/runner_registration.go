@@ -9,9 +9,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// RunnerUnclaimedTTL is the claim window after anonymous registration.
-const RunnerUnclaimedTTL = 24 * time.Hour
-
 // ClaimExpired also rejects an invalid zero creation time. Claimed identities
 // do not expire under this rule; revocation is a separate terminal state.
 func (r Runner) ClaimExpired(now time.Time) bool {

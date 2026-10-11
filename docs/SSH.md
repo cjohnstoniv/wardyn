@@ -131,7 +131,7 @@ For incident response or offboarding:
      forward continues until it closes or the run is torn down.
 5. Erase the person's stored credentials with
    `DELETE /api/v1/people/{principal}/credentials` and follow the
-   [workspace and drive offboarding procedure](OPERATIONS.md#multi-user-who-can-change-what).
+   [workspace and drive offboarding procedure](operations/ownership-and-offboarding.md).
    - Disabling sign-in and deleting SSH keys do not erase stored model or forge
      credentials or reclaim workspace data.
 

@@ -100,7 +100,7 @@ func (c runComponents) dispatch() componentDispatch {
 // A key left out is audited, one row per component (run.component_config.drop):
 // the person asked for a variable and is not getting it. The row names the
 // keys of an organisation's component and only counts a person's.
-func (s *Server) applyComponentConfigEnv(ctx context.Context, run types.AgentRun, config []componentConfig, sandboxEnv map[string]string) {
+func (s *Server) applyComponentConfigEnv(ctx context.Context, run types.AgentRun, config []componentConfig, sandboxEnv map[string]string) (orgConfigKeys []string) {
 	for _, c := range config {
 		var dropped []string
 		for _, k := range slices.Sorted(maps.Keys(c.env)) {
@@ -109,6 +109,9 @@ func (s *Server) applyComponentConfigEnv(ctx context.Context, run types.AgentRun
 				continue
 			}
 			sandboxEnv[k] = c.env[k]
+			if !c.selfDefined {
+				orgConfigKeys = append(orgConfigKeys, k)
+			}
 		}
 		if len(dropped) == 0 {
 			continue
@@ -123,6 +126,7 @@ func (s *Server) applyComponentConfigEnv(ctx context.Context, run types.AgentRun
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.component_config.drop",
 			run.ID.String(), "success", mustJSON(data)))
 	}
+	return orgConfigKeys
 }
 
 // componentMITMHost is the bare host of an interception entry dispatch()

@@ -1,3 +1,9 @@
 deploy/helm/wardyn/README.md=11083 share=35
 deploy/kind/sso/README.md=557 share=35
-deploy/azure-entra-sso/README.md=3084 share=30
+# deploy/azure-entra-sso/README.md 3138 adds 54 over 3084, itemised by the diff:
+# 31 (the Postgres PVC 05-kind-deploy.sh now adopts, and that its FIRST run costs
+# the database's contents because the mount restarts the pod empty), 13 (05 sets no
+# Bedrock region or model — the false claim this replaces — and that the Bedrock model
+# provider is a console row the walk adds), 10 (05 keeps no state file: what is deployed
+# is read back off the cluster's image tag). The gate counts 54.
+deploy/azure-entra-sso/README.md=3138 share=30
