@@ -274,6 +274,12 @@ func splitRemote(remote string) (host, path string, err error) {
 		if perr != nil {
 			return "", "", fmt.Errorf("remote %q is not a URL", remote)
 		}
+		// git sends ssh:// and git:// paths literally, "?" and "#" included, so what
+		// url.Parse moves into the query or fragment (and a ".." after it) is part
+		// of the path git resolves.
+		if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+			return "", "", fmt.Errorf("remote %q has a query or fragment", remote)
+		}
 		raw, path = u.Hostname(), u.EscapedPath()
 	} else {
 		hostPart, p, ok := strings.Cut(remote, ":")

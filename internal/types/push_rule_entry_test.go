@@ -69,6 +69,14 @@ func TestPushRuleEntryOfRemote(t *testing.T) {
 		{"ado dot-dot", "azure_devops", "https://dev.azure.com/lax/../strict/_git/repo", "", "", true},
 		{"one leading and one trailing slash are the path's own", "github", "https://github.com/acme/repo/", "github.com", "acme", false},
 		{"scp-like absolute path", "github", "git@github.com:/acme/repo.git", "github.com", "acme", false},
+		// C-R3-1: git sends an ssh:// or git:// path literally, "?" and "#" included.
+		{"query hides a dot-dot (ssh)", "github", "ssh://git@github.com/lax?/../strict/repo.git", "", "", true},
+		{"fragment hides a dot-dot (ssh)", "github", "ssh://git@github.com/lax#/../strict/repo.git", "", "", true},
+		{"query hides a dot-dot (ssh with a port)", "github", "ssh://git@github.com:22/lax?/../strict/repo.git", "", "", true},
+		{"fragment hides a dot-dot (git)", "github", "git://github.com/lax#/../strict/repo.git", "", "", true},
+		{"query hides a dot-dot (ado ssh)", "azure_devops", "ssh://git@ssh.dev.azure.com/v3/lax?/../strict/p/r", "", "", true},
+		{"query on https", "github", "https://github.com/acme/repo?x=1", "", "", true},
+		{"empty query on https", "github", "https://github.com/acme/repo?", "", "", true},
 		// C-F1: v3 only on the SSH hosts; scp host is split at the first ':'; server collections.
 		{"v3 on the https host is an organisation named v3", "azure_devops", "https://dev.azure.com/v3/proj/_git/repo", "dev.azure.com", "v3", false},
 		{"v3 on the https legacy host is not folded", "azure_devops", "https://contoso.visualstudio.com/v3/proj/_git/repo", "dev.azure.com", "contoso", false},
@@ -77,6 +85,7 @@ func TestPushRuleEntryOfRemote(t *testing.T) {
 		{"colon later in an scp path", "github", "git@github.com:acme/re:po", "", "", true},
 		{"user with an at sign still splits at the first colon", "github", "u@x@github.com:acme/repo", "github.com", "acme", false},
 		{"server under a prefix without a base path", "azure_devops", "https://tfs.corp.example/tfs/DefaultCollection/proj/_git/repo", "", "", true},
+		{"server project-less collection without a base path", "azure_devops", "https://tfs.corp.example/Coll/_git/repo", "", "", true},
 		{"server without _git", "azure_devops", "https://tfs.corp.example/DefaultCollection/proj", "", "", true},
 		// C-F2: non-ASCII hosts are refused before folding.
 		{"dotted capital I host (url)", "github", "https://gİthub.com/acme/repo", "", "", true},
@@ -112,6 +121,9 @@ func TestPushRuleEntryOfRemote(t *testing.T) {
 		if (err != nil) != tc.err || org != tc.org || (!tc.err && host != "tfs.corp.example") {
 			t.Errorf("%s: = %q %q %v, want org %q error=%v", tc.name, host, org, err, tc.org, tc.err)
 		}
+	}
+	if _, _, err := PushRuleEntryOfRemoteAt("azure_devops", "ssh://tfs.corp/tfs/Coll/Proj/_git/r?/../../../Other/P/_git/r", "/tfs"); err == nil {
+		t.Error("a query hiding dot segments under a base path must be an error")
 	}
 	tfs := []PushRuleSet{{Provider: "azure_devops", Host: "tfs.corp.example", Org: "Coll", Rules: PushRulesSpec{DenyPaths: []string{"a/"}}}}
 	if _, found, err := PushRulesForRemoteAt(tfs, "azure_devops", "https://tfs.corp.example/tfs/Coll/p/_git/r", "/tfs"); err != nil || !found {
