@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -151,5 +152,43 @@ func TestReleaseOutputOnlyWhenSettled(t *testing.T) {
 	}
 	if _, err = os.Stat(left); !os.IsNotExist(err) {
 		t.Fatalf("interrupted release survived a restart: %v", err)
+	}
+}
+
+// Hidden files are not run output; a damaged run directory stops the start
+// with an error that names it and the way out.
+func TestNewNamesDamagedOutputAndIgnoresHiddenFiles(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "output")
+	if err := os.MkdirAll(out, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(out, ".DS_Store"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(runnertest.NewFake(), uuid.NewString(), dir); err != nil {
+		t.Fatalf("hidden file refused the start: %v", err)
+	}
+	id := uuid.New()
+	damaged := filepath.Join(out, id.String())
+	if err := os.MkdirAll(damaged, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(damaged, partName(0)), []byte("orphan"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := New(runnertest.NewFake(), uuid.NewString(), dir)
+	if err == nil || !strings.Contains(err.Error(), damaged) || !strings.Contains(err.Error(), "move") {
+		t.Fatalf("damaged output error=%v", err)
+	}
+	if err = os.RemoveAll(damaged); err != nil {
+		t.Fatal(err)
+	}
+	stray := filepath.Join(out, "notes")
+	if err = os.Mkdir(stray, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = New(runnertest.NewFake(), uuid.NewString(), dir); err == nil || !strings.Contains(err.Error(), stray) || !strings.Contains(err.Error(), "move") {
+		t.Fatalf("unknown entry error=%v", err)
 	}
 }
