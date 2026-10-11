@@ -82,13 +82,13 @@ func (a *auditSealSource) arm(s *audit.Sealer) {
 }
 
 // seals reports whether ev needs the Sealer: it has a personal field to seal,
-// or, under full, a human actor to store as a subject.
+// or, under full, a human actor or a person target to store as a subject.
 func (a *auditSealSource) seals(ev types.AuditEvent) bool {
 	switch a.mode {
 	case audit.SealFields:
 		return audit.SealsAction(ev.Action)
 	case audit.SealFull:
-		return audit.SealsAction(ev.Action) || (ev.ActorType == types.ActorHuman && ev.Actor != "")
+		return audit.SealsAction(ev.Action) || audit.SealsTarget(ev.Action) || (ev.ActorType == types.ActorHuman && ev.Actor != "")
 	}
 	return false
 }

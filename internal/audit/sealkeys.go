@@ -114,6 +114,13 @@ func PersonTargetActions() []string {
 	return out
 }
 
+// SealsTarget reports whether the target of a row of action is a person stored
+// as a subject under SealFull: a person-target action, and not one of
+// UnsealedActions.
+func SealsTarget(action string) bool {
+	return slices.Contains(personTargetActions, action) && !slices.Contains(UnsealedActions, action)
+}
+
 // SealedFields lists the fields a row of action seals; nil for an action that
 // seals none.
 func SealedFields(action string) []SealField {

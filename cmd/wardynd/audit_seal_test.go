@@ -94,6 +94,30 @@ func TestSealingRecorderUnderFullNeedsTheSealerForAnyHumanRow(t *testing.T) {
 	}
 }
 
+// A person-target row needs the Sealer under full whoever the actor is: the
+// portal's token exchange is a system row, and its target is the person.
+func TestSealingRecorderUnderFullNeedsTheSealerForAPersonTargetRow(t *testing.T) {
+	exchange := types.AuditEvent{ActorType: types.ActorSystem, Actor: "delegate:d1", Action: "delegation.exchange", Target: "alice"}
+	offList := types.AuditEvent{ActorType: types.ActorSystem, Actor: "wardynd", Action: "run.lost", Target: "alice"}
+	erasure := types.AuditEvent{ActorType: types.ActorSystem, Actor: "wardynd", Action: "person.erasure", Target: "alice"}
+
+	inner := &captureRecorder{}
+	full := sealingRecorder{inner: inner, src: newAuditSealSource(audit.SealFull)}
+	if err := full.Record(t.Context(), exchange); err == nil || len(inner.evs) != 0 {
+		t.Fatalf("a person-target row under full before the keys were armed: err %v, rows %d; want a refusal", err, len(inner.evs))
+	}
+	for _, ev := range []types.AuditEvent{offList, erasure} {
+		if err := full.Record(t.Context(), ev); err != nil {
+			t.Errorf("%s under full: %v; want it passed through", ev.Action, err)
+		}
+	}
+	inner = &captureRecorder{}
+	fields := sealingRecorder{inner: inner, src: newAuditSealSource(audit.SealFields)}
+	if err := fields.Record(t.Context(), exchange); err != nil || len(inner.evs) != 1 || inner.evs[0].Target != "alice" {
+		t.Fatalf("a person-target row under fields: %v, rows %v; want it unchanged", err, inner.evs)
+	}
+}
+
 type downKeys struct{}
 
 func (downKeys) Current(context.Context, string, string) (uuid.UUID, []byte, error) {
