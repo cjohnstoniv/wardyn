@@ -107,13 +107,13 @@ var guardExternalStores = []string{
 // guardCtxFromFirstArg are the api server's cross-replica lock helpers
 // (internal/api/locks.go): each returns, as its first result, the context it was
 // given with the lock's hold on it (cancelled if the lock is lost), and nothing
-// else. Like a context.With* call, its result is marked exactly when its first
+// else (beginCredentialWrite and beginAWSSSORenewal are the same shape: the context they were given plus an erase fence). Like a context.With* call, its result is marked exactly when its first
 // argument is, so a Get that receives it is classified by the argument. A new
 // helper of that shape is listed here; one that returns any other context is not.
 var guardCtxFromFirstArg = func() map[string]bool {
 	m := map[string]bool{}
 	for _, name := range []string{"lock", "tryLock", "lockRunOp", "tryLockRunOp", "lockAWSSSOOwner",
-		"tryLockAWSSSOOwner", "lockAWSSSORenewal", "lockADOSignIn", "lockADOSignInRedeem"} {
+		"tryLockAWSSSOOwner", "lockAWSSSORenewal", "lockADOSignIn", "lockADOSignInRedeem", "beginCredentialWrite", "beginAWSSSORenewal"} {
 		m["(*"+guardModPath+"/internal/api.Server)."+name] = true
 	}
 	return m

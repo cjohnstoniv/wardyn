@@ -86,8 +86,13 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityPrincipal, readers: []string{"handlePutSecret"},
 		pinnedBy: "TestPutSecret_OwnerParamIsRefused",
 	},
+	// The explicit routes (#1510) name their namespace themselves and refuse ?owner= outright.
+	"PUT /api/v1/me/secrets/{name}?owner": {
+		entity: entityPrincipal, readers: []string{"refuseExplicitOwnerParam"},
+		pinnedBy: "TestExplicitSecrets_NobodyWritesAnotherPersonsNamespace",
+	},
 	"DELETE /api/v1/secrets/{name}?owner": {
-		entity: entityPrincipal, readers: []string{"secretOwnerParam", "handleDeleteSecret"},
+		entity: entityPrincipal, readers: []string{"secretOwnerParam", "deleteSecretFrom"},
 		foreign: 403, pinnedBy: "TestListSecrets_AdminOwnerParam_Member403",
 	},
 	// The unused registration-token list is the security tier's: a member naming ?owner= (or

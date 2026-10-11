@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"io"
+
+	"github.com/google/uuid"
 )
 
 // OutputDrainer is the optional second half of SandboxSpec.ExecOutput's
@@ -62,4 +64,19 @@ var ErrOutputUnrecoverable = errors.New("runner: this run's output cannot be rec
 // not an error to discard: the bytes already written to w stand).
 type OutputRecoverer interface {
 	RecoverOutput(ctx context.Context, ref string, w io.Writer) error
+}
+
+type outputRunKey struct{}
+
+// WithOutputRun names the run a RecoverOutput resumes. A substrate whose output
+// waits for the org's acknowledgement (a registered runner) acknowledges what
+// w accepts only when it knows the run; without it, a recovery reads as before.
+func WithOutputRun(ctx context.Context, runID uuid.UUID) context.Context {
+	return context.WithValue(ctx, outputRunKey{}, runID)
+}
+
+// OutputRun returns the run WithOutputRun named.
+func OutputRun(ctx context.Context) (uuid.UUID, bool) {
+	id, ok := ctx.Value(outputRunKey{}).(uuid.UUID)
+	return id, ok && id != uuid.Nil
 }

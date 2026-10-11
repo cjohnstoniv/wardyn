@@ -660,7 +660,7 @@ func TestStoreMode_EraseAndSweepSayWhatTheVaultKept(t *testing.T) {
 	}
 
 	rep, err := secretstore.EraseOwner(ctx, s, "alice")
-	if err != nil || rep != (secretstore.EraseReport{Count: 1, Store: Name, Purged: false, RecoverableDays: 90}) {
+	if err != nil || rep != (secretstore.EraseReport{Count: 1, Store: Name, Purged: false, RecoverableDays: 90, Fenced: true}) {
 		t.Fatalf("EraseOwner(alice) = (%+v, %v), want 1 erased, soft-deleted for 90 days", rep, err)
 	}
 	gone, err := s.DeleteExpired(ctx)
