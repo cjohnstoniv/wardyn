@@ -381,7 +381,13 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 	sponsor := claims.Sponsor
 	if isServicePrincipal(claims.Sub) {
 		var serr error
-		if sponsor, serr = s.runSponsor(r.Context(), claims.Sub); serr != nil {
+		sponsor, serr = s.runSponsor(r.Context(), claims.Sub)
+		if errors.Is(serr, errServiceRetired) {
+			s.auditRenewDenied(r, claims, "service_identity_retired")
+			writeErrorReason(w, http.StatusForbidden, reasonServiceIdentityInactive, "the service identity that started this run is retired")
+			return
+		}
+		if serr != nil {
 			writeServerError(w, r, "renew run identity", serr)
 			return
 		}

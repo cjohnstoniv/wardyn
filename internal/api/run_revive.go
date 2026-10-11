@@ -939,6 +939,9 @@ func majorMinor(v string) (int, int, bool) {
 // row, so a sponsor change reaches the new token.
 func (s *Server) reviveMintIdentity(ctx context.Context, run types.AgentRun) (identity.RunIdentity, *reviveError) {
 	sponsor, err := s.runSponsor(ctx, run.CreatedBy)
+	if errors.Is(err, errServiceRetired) {
+		return identity.RunIdentity{}, reviveRefused(http.StatusConflict, reasonServiceIdentityInactive, "the service identity that started this run is retired")
+	}
 	if err != nil {
 		return identity.RunIdentity{}, reviveRefused(http.StatusInternalServerError, reasonReviveMintIdentityFailed, "read run sponsor: "+err.Error())
 	}

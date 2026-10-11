@@ -10,6 +10,7 @@ package api
 import (
 	"cmp"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"time"
@@ -128,7 +129,7 @@ func (s *Server) handleCreateServiceIdentity(w http.ResponseWriter, r *http.Requ
 	}
 	created, err := ss.CreateServiceIdentity(ctx, types.ServiceIdentity{
 		Name: req.Name, Description: req.Description, Sponsor: req.Sponsor, UserType: userType,
-		CreatedBy: principalFromRequest(r), CreatedAt: s.cfg.Now().UTC(),
+		CreatedBy: principalFromRequest(r),
 	})
 	switch {
 	case errors.Is(err, store.ErrServiceNameTaken):
@@ -255,7 +256,7 @@ func (s *Server) handleUpdateServiceIdentity(w http.ResponseWriter, r *http.Requ
 	ctx := r.Context()
 	changed, err := ss.UpdateServiceIdentity(ctx, chi.URLParam(r, "name"), store.ServiceIdentityChange{
 		Description: req.Description, Sponsor: req.Sponsor, Suspended: req.Suspended,
-		By: principalFromRequest(r), Now: s.cfg.Now().UTC(),
+		By: principalFromRequest(r),
 	})
 	switch {
 	case notFoundIf(w, err, "service identity", reasonServiceIdentityNotFound):
@@ -291,34 +292,38 @@ func (s *Server) handleRetireServiceIdentity(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	ctx := r.Context()
-	retired, err := ss.RetireServiceIdentity(ctx, chi.URLParam(r, "name"), principalFromRequest(r), s.cfg.Now().UTC())
+	ctx, name := r.Context(), chi.URLParam(r, "name")
+	retired, err := ss.RetireServiceIdentity(ctx, name, principalFromRequest(r))
+	actorType, actor := actorTypeFromRequest(r), principalFromRequest(r)
 	switch {
 	case notFoundIf(w, err, "service identity", reasonServiceIdentityNotFound):
 		return
 	case errors.Is(err, store.ErrServiceIdentityInactive):
-		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityInactive, "the service identity is already retired")
-		return
+		// Already retired: the retire row was written by the call that retired it, and only the erase is
+		// left to do. It is idempotent, so a retire whose erase failed is finished by calling DELETE again.
+		var gerr error
+		if retired.After, gerr = ss.GetServiceIdentity(ctx, name); gerr != nil {
+			writeServerError(w, r, "read service identity", gerr)
+			return
+		}
 	case err != nil:
 		writeServerError(w, r, "retire service identity", err)
 		return
+	default:
+		s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "service_identity.retire", retired.After.Principal(), "success",
+			mustJSON(map[string]any{"tokens_revoked": retired.TokensRevoked})))
 	}
-	actorType, actor := actorTypeFromRequest(r), principalFromRequest(r)
-	principal := retired.After.Principal()
-	s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "service_identity.retire", principal, "success",
-		mustJSON(map[string]any{"tokens_revoked": retired.TokensRevoked})))
 	// The identity's stored credentials go with it, beside the retire row. The retire is already durable,
-	// so a failure here is recorded and answered, and a second erase through the credentials route is not
-	// possible (the name is reserved): the failure row is the operator's cue to retry the store.
+	// so a failure here is recorded and answered 500, and the same DELETE run again erases them.
 	if s.cfg.Secrets != nil {
+		principal := retired.After.Principal()
 		var rep secretstore.EraseReport
 		_, eerr := s.eraseCredentialsScope(ctx, principal, &rep)
 		outcome := "success"
-		data := credentialEraseData(rep)
 		if eerr != nil {
 			outcome = "failure"
 		}
-		s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "credential.erase", principal, outcome, withSecretOwner(data, principal, true)))
+		s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "credential.erase", principal, outcome, withSecretOwner(credentialEraseData(rep), principal, true)))
 		if eerr != nil {
 			writeServerError(w, r, "erase the service identity's credentials", eerr)
 			return
@@ -386,7 +391,13 @@ func (s *Server) handleMintServiceToken(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	if s.apiTokenCapReached(w, r, si.Principal()) || !s.mintSessionLive(w, r, sub, authorizedAt) {
+	// A sponsor's session can only be checked against a revocation store; without one the token could
+	// never authenticate (serviceTokenAuth refuses it), so the mint is refused rather than handed out dead.
+	if s.cfg.SessionRevocations == nil {
+		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityInactive, "this deployment cannot check the sponsor's session, so a service token would never authenticate")
+		return
+	}
+	if !s.mintSessionLive(w, r, sub, authorizedAt) {
 		return
 	}
 	expires := authorizedAt.Add(lifetime)
@@ -395,8 +406,12 @@ func (s *Server) handleMintServiceToken(w http.ResponseWriter, r *http.Request) 
 		GroupsTruncated: new(bool), Name: name, CreatedAt: authorizedAt, ExpiresAt: &expires,
 	}
 	plaintext := newBearer(apiTokenPrefix)
-	created, err := ss.CreateServiceToken(guardOwner(r.Context(), sub), si.Name, sub, row, plaintext)
+	created, err := ss.CreateServiceToken(guardOwner(r.Context(), sub), si.Name, sub, apiTokenMaxPerPrincipal, row, plaintext)
 	switch {
+	case errors.Is(err, store.ErrServiceTokenCap):
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonAPITokenCapReached,
+			fmt.Sprintf("too many live API tokens (max %d) — revoke one first", apiTokenMaxPerPrincipal))
+		return
 	case errors.Is(err, store.ErrNotFound):
 		writeErrorReason(w, http.StatusNotFound, reasonServiceIdentityNotFound, serviceNotFoundMsg)
 		return
