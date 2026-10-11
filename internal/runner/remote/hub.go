@@ -239,6 +239,17 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 		_ = runnerwire.WriteControl(ctx, conn, runnerwire.TypeGoaway, runnerwire.Reason{Reason: "resume_gap"})
 		return nil, err
 	}
+	if resumed {
+		// Only a fresh session carries PENDING. An action queued while the
+		// link was down turns this resume into a fresh session that delivers it.
+		open, err := a.Pending(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if len(open) != 0 {
+			cfg, resumed = runnerwire.PeerConfig{}, false
+		}
+	}
 	var pending []runnerwire.PendingAction
 	if !resumed {
 		if pending, err = h.fresh(ctx, s, a, id); err != nil {
