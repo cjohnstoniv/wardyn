@@ -248,6 +248,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- SSO sign-in works when the public issuer is https and the internal issuer is plain http (mesh opt-out); IdP
+  token and key requests time out after 10s; a sign-in refused for no matching role is logged.
 - Record Mode no longer counts a network fault (`builtin:dial-failed`, `builtin:tunnel-failed`) as a policy denial,
   so a lost connection no longer fails a clean replay, raises an open-recording anomaly or adds an unreached host to
   the generated allowlist.
