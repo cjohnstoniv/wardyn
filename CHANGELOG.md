@@ -385,6 +385,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   verified runners behind one ingress no longer use up each other's connect rate limit, while unauthenticated
   connections from one address stay limited; wardyn-runnerd serve logs why connecting fails and when it is
   connected.
+- Runner links: a session whose writes stop moving now ends within the keepalive window even if the runner keeps
+  sending PONGs. PING replies, dropped-data credit and the answers to stream opens (refusals and accepts) no longer
+  start a goroutine per frame; answers to opens are capped and a peer that overruns the cap ends its session.
+  Revoking or switching off runners no longer hangs on such a session.
 
 
 ## [0.8.9] — 2026-10-09

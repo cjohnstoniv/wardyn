@@ -260,7 +260,8 @@ func (p *Peer) returnCredit(n int64) {
 		return
 	}
 	p.mu.Lock()
-	n, p.connPend = n+p.connPend, 0
+	p.owed += n + p.connPend
+	p.connPend = 0
 	p.mu.Unlock()
-	go p.send(p.ctx, Frame{Type: TypeWindow, Payload: EncodeWindow(uint32(n))}) //nolint:errcheck // a failed WINDOW is the link going down
+	p.wakeReplies()
 }
