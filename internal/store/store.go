@@ -182,22 +182,25 @@ func lockAndCountActiveRuns(ctx context.Context, q Querier, except uuid.UUID) (i
 }
 
 // HoldsSandboxSQL is TRUE when the agent_runs row's agent is still running: the run
-// is not kept, or it was kept after a control-plane outage and has not reached its
-// end, so only its proxy was stopped (api stopLostSandbox). A run kept after its
-// end or a reboot, or an outage-kept run past its end, has its agent stopped. It is
-// the one rule for a live run under WARDYN_MAX_CONCURRENT_RUNS, in the fleet
-// capacity view and under WARDYN_RUN_MAX_AGE.
-const HoldsSandboxSQL = `(lost_at IS NULL OR (lost_reason = '` + string(types.LostOutage) + `' AND (ends_at IS NULL OR ends_at > now())))`
+// is not kept, or it was kept after a control-plane outage, its agent was not
+// stopped (agent_stopped_at, written by MarkRunAgentStopped when the lease sweep
+// stops an outage run's agent past its end) and it has not reached its end, so only
+// its proxy was stopped (api stopLostSandbox). A run kept after its end or a reboot,
+// or an outage-kept run whose agent was stopped, has no agent, even if an extension
+// has since moved its end ahead. It is the one rule for a live run under
+// WARDYN_MAX_CONCURRENT_RUNS, in the fleet capacity view and under WARDYN_RUN_MAX_AGE.
+const HoldsSandboxSQL = `(lost_at IS NULL OR (lost_reason = '` + string(types.LostOutage) + `' AND agent_stopped_at IS NULL AND (ends_at IS NULL OR ends_at > now())))`
 
 const activeRunsCountSQL = `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND id <> $2 AND ` + HoldsSandboxSQL
 
 // CountNonTerminalRuns is the number of non-terminal run rows that hold a sandbox
-// (HoldsSandboxSQL), the quantity CreateRunUnderCap holds under the cap. It takes no
-// lock: a pre-flight read for a refusal that must come before an identity is minted,
-// never the authority.
-func (s PG) CountNonTerminalRuns(ctx context.Context) (int, error) {
+// (HoldsSandboxSQL), the quantity CreateRunUnderCap holds under the cap. except is a
+// run never counted (uuid.Nil for none): a revive counts the OTHER runs, as
+// markRunRevivedUnderCap does. It takes no lock: a pre-flight read for a refusal that
+// must come before an identity is minted, never the authority.
+func (s PG) CountNonTerminalRuns(ctx context.Context, except uuid.UUID) (int, error) {
 	var n int
-	if err := s.Pool.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames(), uuid.Nil).Scan(&n); err != nil {
+	if err := s.Pool.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames(), except).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count active runs: %w", err)
 	}
 	return n, nil

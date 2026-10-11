@@ -8,6 +8,8 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -31,7 +33,7 @@ type runCapCreator interface {
 // runCounter is the store's lock-free count of non-terminal runs, for the
 // deployment-cap refusal that precedes the identity mint (refuseRunCapFull).
 type runCounter interface {
-	CountNonTerminalRuns(ctx context.Context) (int, error)
+	CountNonTerminalRuns(ctx context.Context, except uuid.UUID) (int, error)
 }
 
 // refuseRunCapFull writes the 422 run_quota (or the count's 5xx) and reports
@@ -44,7 +46,7 @@ func (s *Server) refuseRunCapFull(w http.ResponseWriter, r *http.Request) bool {
 	if s.cfg.MaxConcurrentRuns <= 0 || !ok {
 		return false
 	}
-	n, err := c.CountNonTerminalRuns(r.Context())
+	n, err := c.CountNonTerminalRuns(r.Context(), uuid.Nil)
 	if err == nil && n < s.cfg.MaxConcurrentRuns {
 		return false
 	}

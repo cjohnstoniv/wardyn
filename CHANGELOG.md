@@ -60,6 +60,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   admin-token drop records its actor type; no data changes (#1978).
 - Migration `0153_run_experience` adds `agent_runs.experience`, the run mode a new client chose at launch; existing
   runs keep an empty value and their documented behaviour.
+- Migration `0154_run_agent_stopped_at` adds `agent_runs.agent_stopped_at`; existing runs keep it empty.
 
 ### Added
 
@@ -275,6 +276,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   this install's sweeper leader and ground-truth rotator: the lock check is scoped to the current database.
 - The best-effort webhook audit sink no longer follows a 301, 302 or 303 redirect, which turned its POST into a GET
   and counted a 2xx as delivered while the events were lost; 307 and 308 are still followed.
+- `WARDYN_MAX_CONCURRENT_RUNS` and the Fleet capacity view no longer count an outage-kept run whose agent was
+  already stopped at its end after that run is extended (#1825).
+- `LockHeld` no longer waits for a nested lock's whole budget: a busy lock connection reads as a lost lock after
+  about two watch intervals, so callers re-take it or refuse (#1828).
+- A pending rename of a governance profile now holds its new name like a create does, so a create and a rename (or
+  two renames) to one name cannot both be stored (#1828).
+- Recording a person's sign-in groups now takes the key-domain assignment lock, so a group assignment's ambiguity
+  count cannot race a sign-in (#1828).
+- A revive that would start an agent is refused at the concurrent-run cap before any identity is minted or image
+  pulled, and approval notifications carry the next later SLA tier still ahead (#1825).
+
 
 ## [0.8.9] — 2026-10-09
 
