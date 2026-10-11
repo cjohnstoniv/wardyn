@@ -8,9 +8,11 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -920,7 +922,7 @@ func TestKEKLocalRowsRow(t *testing.T) {
 
 	rows := rowsFor(adminCtx, base)
 	if len(rows) != 1 || rows[0].ID != "kek_local_rows" || rows[0].Status != "warn" || rows[0].Blocking ||
-		!strings.Contains(rows[0].Detail, "3 stored credential rows") || !strings.Contains(rows[0].Fix, "wardynd -rewrap") {
+		!strings.Contains(rows[0].Detail, "3 stored credential rows and principal keys") || !strings.Contains(rows[0].Fix, "wardynd -rewrap") {
 		t.Fatalf("three local rows: %+v", rows)
 	}
 	assertSetupCheckBlocking(t, rows[0])
@@ -972,6 +974,42 @@ func TestSetupStatus_ShowsKEKLocalRows(t *testing.T) {
 		}
 	}
 	t.Fatalf("no kek_local_rows row in %+v", st.Checks)
+}
+
+// A member's GET /setup/status carries no kek_local_rows row, and the count is never read for them;
+// an admin on the same server does get it.
+func TestSetupStatus_KEKLocalRowsAbsentForAMember(t *testing.T) {
+	var reads atomic.Int32
+	h := newHarness(t)
+	cfg := baseTestConfig(h, &integStore{govEscapeStore: newGovEscapeStore(&capStore{})})
+	cfg.Runner = &fakeRunner{}
+	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.KEKRequired, cfg.SecretKeyService = true, "Vault Transit at vault.example:8200"
+	cfg.SecretLocalRows = func(context.Context) (int, error) { reads.Add(1); return 4, nil }
+	srv := New(cfg)
+	has := func(role string) bool {
+		code, st := decodeSetupSSO(t, srv, ssoSession(t, "sub-"+role, role+"@corp.example", role))
+		if code != 200 {
+			t.Fatalf("%s GET /setup/status: code = %d, want 200", role, code)
+		}
+		for _, c := range st.Checks {
+			if c.ID == "kek_local_rows" {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(oidc.RoleAdmin) {
+		t.Fatal("an admin's status carries no kek_local_rows row; the fixture is not exercising the row")
+	}
+	reads.Store(0)
+	if has(oidc.RoleUser) {
+		t.Error("a member's status carries kek_local_rows")
+	}
+	if reads.Load() != 0 {
+		t.Errorf("the local-row count was read %d time(s) for a member", reads.Load())
+	}
 }
 
 // TestPlatformSplitRow is M5 S5's platform_split row under a key service: amber, naming the key

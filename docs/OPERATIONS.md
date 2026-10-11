@@ -1087,6 +1087,7 @@ curl -fsS -H "Authorization: Bearer $WARDYN_TOKEN" "$WARDYN_URL/api/v1/audit/cha
 - The route is on the security tier, and every refusal is a `409` with its own `reason` and an `authz.denied` row
   (below): `audit_retention_not_oldest`, `audit_retention_not_closed`, `audit_retention_inside_window` (also while
   retention is forever), `audit_retention_live_run`, `audit_retention_digest_mismatch`.
+- A caller whose actor name is `wardynd` (the retention sweeper's name) is refused `403` `audit_retention_actor_reserved`, audited the same way.
 - An unknown partition is `404` (`audit_partition_not_found`).
 - `GET /audit/retention` lists every partition with its row count, state (`closed`, `open` or `future`) and whether a
   drop would take it now; for one it would refuse, `refusal` is the reason it would refuse with.

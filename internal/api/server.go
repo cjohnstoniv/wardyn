@@ -462,7 +462,7 @@ type Config struct {
 	SecretKeyService string
 	// KEKRequired: WARDYN_KEK_REQUIRED; /setup/status shows kek_required_unmet while neither a key service nor an external store holds the credentials.
 	KEKRequired bool
-	// SecretLocalRows counts the stored rows still wrapped by the local key (nil: the store keeps no such count); with KEKRequired and a key service, /setup/status shows kek_local_rows while it is above zero.
+	// SecretLocalRows counts the stored credential rows and principal keys still wrapped by the local key (nil: the store keeps no such count); with KEKRequired and a key service, /setup/status shows kek_local_rows while it is above zero.
 	SecretLocalRows func(context.Context) (int, error)
 	// PlatformKeySeparate: the boot keys have a key of their own: WARDYN_PLATFORM_KEY_FILE in local mode only
 	// (under a key service the file counts for nothing), the platform key (and identity) of the key service

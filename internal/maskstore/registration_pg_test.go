@@ -5,6 +5,8 @@ package maskstore
 
 import (
 	"bytes"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -132,7 +134,7 @@ func TestPG_FullReloadKeepsAValueCommittedAfterItsSnapshot(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO run_mask_manifest (run_id, owner) VALUES ($1, 'alice')`, runID); err != nil {
 		t.Fatal(err)
 	}
-	const old, newer = "committed-before-the-snapshot", "committed-after-the-snapshot"
+	const old, newer = "committed-before-the-snapshot", `committed-"after"-the-snapshot`
 	if err := reg.Add(runID, []byte(old)); err != nil {
 		t.Fatal(err)
 	}
@@ -159,5 +161,14 @@ func TestPG_FullReloadKeepsAValueCommittedAfterItsSnapshot(t *testing.T) {
 	}
 	if masked(old) {
 		t.Fatal("a value the snapshot no longer holds is still masked after a full reload")
+	}
+	// The audit recorder masks an event's JSON data with this masker (the JSON-escaped variants of the
+	// run's corpus), so the value must stay out of a row whose data carries it escaped.
+	row, err := json.Marshal(map[string]string{"detail": "echoed " + newer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.JSONVariantMasker(runID).Mask(row); bytes.Contains(got, []byte(strings.ReplaceAll(newer, `"`, `\"`))) {
+		t.Fatalf("an audit row would carry a value committed after the snapshot: %s", got)
 	}
 }

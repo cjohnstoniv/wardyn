@@ -662,6 +662,7 @@ The rest reach the wire only through
 | `audit_retention_inside_window` | `POST /audit/retention/drop`: the partition ended less than the effective retention window ago, or retention is forever. Answered `409` and audited. |
 | `audit_retention_live_run` | `POST /audit/retention/drop`: the partition holds audit rows of a run that is still live. Answered `409` and audited. |
 | `audit_retention_digest_mismatch` | `POST /audit/retention/drop`: the digest supplied is not the one the database computes for the partition. Answered `409` and audited. |
+| `audit_retention_actor_reserved` | `POST /audit/retention/drop`: the caller's actor name is `wardynd`, which is reserved for the retention sweeper. Answered `403` and audited. |
 | `byoi_user` | A Bring-Your-Own-Identity principal reached a route BYOI does not extend to. |
 | `capability_egress_host` / `capability_feature` / `capability_secret` | The capability-grant gates outside the five launch-door kinds already covered above: an egress host, a feature flag, or a secret the caller's capability grants do not cover. |
 | `delegation_scope` | A portal's delegated token asked for a route outside its own delegation allow-list (#1142). |
