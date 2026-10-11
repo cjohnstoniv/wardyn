@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -19,12 +20,16 @@ import (
 
 type runnerExitTailProbe struct {
 	*fakeRunner
-	calls atomic.Int32
-	fail  atomic.Bool
+	calls   atomic.Int32
+	fail    atomic.Bool
+	pending atomic.Bool
 }
 
 func (r *runnerExitTailProbe) StopSandbox(context.Context, string) error {
 	r.calls.Add(1)
+	if r.pending.Load() {
+		return runner.ErrPendingOnRunner
+	}
 	if r.fail.Load() {
 		return errors.New("runner temporarily disconnected")
 	}
@@ -161,4 +166,37 @@ func TestRunnerExitPG_RevokedAfterStageCannotApply(t *testing.T) {
 	if err := srv.ExitFromRunner(ctx, rn.ID, event); err == nil {
 		t.Fatal("revoked runner duplicate ACKed")
 	}
+}
+
+// A teardown queued on the offline runner is handed to its pending-action
+// queue: the tail audits it once and completes instead of failing every sweep.
+func TestRunnerExitPG_TeardownQueuedOnOfflineRunnerAuditsOnce(t *testing.T) {
+	pool, cfg, rn, run, exit, probe := runnerExitAPIFixture(t)
+	ctx := t.Context()
+	st := cfg.Store.(store.PG)
+	srv := New(cfg)
+	event := runnerwire.Event{Kind: runnerwire.EventAgentExit, RunID: &run.ID, Data: mustJSON(exit)}
+	if err := srv.ExitFromRunner(ctx, rn.ID, event); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.BindRunnerExecution(ctx, rn.ID, run.ID, exit.Generation, exit.ExecID); err != nil {
+		t.Fatal(err)
+	}
+	probe.pending.Store(true)
+	for range 3 {
+		if err := srv.SweepRunnerExits(ctx); err != nil {
+			t.Fatalf("queued teardown failed the sweep: %v", err)
+		}
+	}
+	assertRunnerExitPhase(t, pool, run.ID, true, true, 1)
+	if n := len(cfg.Audit.(*syncAudit).eventsFor(run.ID, "run.complete")); n != 1 || !cfg.Audit.(*syncAudit).has(run.ID, "run.complete", "failure") {
+		t.Fatalf("queued teardown audited %d times, want once", n)
+	}
+	if probe.calls.Load() != 1 {
+		t.Fatalf("queued teardown retried %d times", probe.calls.Load())
+	}
+	if got, _ := st.GetRun(ctx, run.ID); got.State != types.RunCompleted || got.SandboxRef == "" {
+		t.Fatal("queued teardown cleared the sandbox ref as if confirmed")
+	}
+	srv.WaitBackground()
 }
