@@ -360,12 +360,18 @@ func (p *Peer) handleStream(f Frame) error {
 			}
 		}
 	case TypeData:
-		if s := p.stream(f.Stream); s != nil {
-			if err := s.deliver(f.Payload); errors.Is(err, ErrBadFrame) {
-				return err
-			} else if err != nil {
-				_ = s.Reset(ResetInternal)
-			}
+		s := p.stream(f.Stream)
+		if s == nil {
+			// Sent before the peer saw this stream end: dropped, so the
+			// bytes are the sender's again.
+			p.returnCredit(int64(len(f.Payload)))
+			return nil
+		}
+		if err := s.deliver(f.Payload); errors.Is(err, ErrBadFrame) {
+			return err
+		} else if err != nil {
+			p.returnCredit(int64(len(f.Payload))) // refused, not held
+			_ = s.Reset(ResetInternal)
 		}
 	case TypeWindow:
 		n, err := DecodeWindow(f.Payload)
