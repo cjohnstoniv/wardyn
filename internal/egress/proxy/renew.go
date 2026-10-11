@@ -162,7 +162,7 @@ func runTokenRenewerTuned(ctx context.Context, ts *tokenSource, base string, cli
 // permanent refusal from a blip.
 func renewToken(ctx context.Context, base, token string, client *http.Client) (string, time.Time, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		strings.TrimRight(base, "/")+"/api/v1/internal/token/renew", nil)
+		controlPlaneEndpoint(base, "/api/v1/internal/token/renew"), nil)
 	if err != nil {
 		return "", time.Time{}, err
 	}
