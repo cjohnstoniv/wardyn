@@ -286,7 +286,7 @@ func TestPG_RunnerPoolsRefuseMixedAndWrongHostingMembers(t *testing.T) {
 	}
 	// An unclaimed or revoked runner of the owner is no member either.
 	revoked := e.claimedRunner(e.personP)
-	if _, err := e.pg.RevokeRunner(context.Background(), revoked, time.Now()); err != nil {
+	if _, err := e.pg.RevokeRunner(context.Background(), revoked, time.Now(), "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if w := e.call(e.person, http.MethodPut, addRunnerPath(self.ID, revoked), ""); w.Code != http.StatusUnprocessableEntity {
@@ -347,7 +347,7 @@ func TestPG_RunnerPoolsRevokeIsIndependentOfMembership(t *testing.T) {
 	if got := e.listed(e.other)[pool.ID]; got.Availability != client.RunnerPoolUnavailable || got.Reason != runnerpool.ReasonNoEligibleMember {
 		t.Errorf("another person's view of the pool reads %+v, want unavailable runner_pool_no_eligible_member", got)
 	}
-	if _, err := e.pg.RevokeRunner(context.Background(), mine, time.Now()); err != nil {
+	if _, err := e.pg.RevokeRunner(context.Background(), mine, time.Now(), "", ""); err != nil {
 		t.Fatalf("revoking a pool member: %v", err)
 	}
 	if got := e.listed(e.person)[pool.ID]; got.Availability != client.RunnerPoolUnavailable {
@@ -362,7 +362,7 @@ func TestPG_RunnerPoolsRevokeIsIndependentOfMembership(t *testing.T) {
 	if w := e.admin(http.MethodDelete, "/api/v1/runner-pools/"+pool.ID.String(), ""); w.Code != http.StatusNoContent {
 		t.Fatalf("delete pool = %d %s", w.Code, w.Body)
 	}
-	if _, err := e.pg.RevokeRunner(context.Background(), other, time.Now()); err != nil {
+	if _, err := e.pg.RevokeRunner(context.Background(), other, time.Now(), "", ""); err != nil {
 		t.Errorf("revoking a runner of a deleted pool: %v", err)
 	}
 	if e.members(pool.ID) != 0 || e.call(e.person, http.MethodGet, "/api/v1/runner-pools/"+pool.ID.String(), "").Code != http.StatusNotFound {

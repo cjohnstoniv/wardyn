@@ -34,5 +34,6 @@
 # 0.9 runner registration: +27 words for the guarded admin token route tier row.
 # Combined runner registration, baseline and identity changes: measured docs/OPERATIONS.md 85164 prose words.
 # docs/OPERATIONS.md 51946 measured after H3 merge.
-docs/OPERATIONS.md=51946
+# docs/OPERATIONS.md 51975: +29 names migrations 0150 and 0151 in the migrator/app-role rationale (test-claims-match-code).
+docs/OPERATIONS.md=51975
 # Round 1 merge: docs/OPERATIONS.md 51657 -> 51673 (+16 measured): +23 for migrator rationale naming 0139/0141, -7 for the upstream reuse-values correction; the +79 runner-pool words live in admin-only-writes.md.
