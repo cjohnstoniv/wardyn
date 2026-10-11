@@ -5,6 +5,12 @@
 # docs/sdk.md 12324: Measured after combining baseline reasons and four identity-unbind reasons.
 # docs/sdk.md 12203 adds 372 over 11831 (12273 with the four New Run request-contract reason rows, +70): 7 (the export comment no longer says ready for PolicyRequest.Spec), 116 (Reusing the spec), 15 (the preview names `components`), 225 (the Custom components section), 19 (the CLI mirrors all but `origin` and `action`); the diff tool sums 382, the gate 372 (link text).
 # docs/sdk.md 12388: measured combined New Run contract reasons, baseline and identity-unbind additions.
+# Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
+# Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
+# Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.
+
+# Combined runner transport and batch SDK text measures12462; paragraph-share cap retained.
+# Runner revoke adds 24 measured words for runner_not_found and runner_revoke_reason_invalid.
 # 0.9 C-pools: docs/sdk.md 12481 adds 18 over 12463 for the two published runner pool reasons.
 # 0.9 H7: docs/sdk.md 12503 adds 22 over 12481 for the `placement_component_self_defined` reason row.
 # docs/sdk.md 12713 measured after merging H7.
@@ -15,10 +21,13 @@
 # G-1423 r1: docs/sdk.md 12738 adds 10 over 12728 for the portal's 409 answer on GET /runs/{id}/output.
 # docs/sdk.md 12808 measured after G-1423 merge.
 # docs/sdk.md 12828 adds 20 (0.9 G-sec-rest r1): the audit_retention_actor_reserved reason row.
-docs/sdk.md=12828 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.
+# docs/sdk.md 12851 measured after H3 merge.
+docs/sdk.md=12851 share=21
 # Run templates add 187 measured words for sixteen template refusal reasons in four table rows: docs/sdk.md 12650.
 # Run templates add 23 more measured words for templates_unavailable and the launch-time exclusion: docs/sdk.md 12673.
 # Run templates: docs/sdk.md 12691 adds 210 over 12481 for the template refusal reasons (five rows) after merging the runner pool reasons.
+# docs/sdk.md 12831 measured after H3 integration.
+docs/sdk.md=12831 share=21

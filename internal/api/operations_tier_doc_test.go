@@ -226,6 +226,7 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/admin/devices/{id}", "`GET /admin/devices` and `DELETE /admin/devices/{id}`"},
 	{"GET /api/v1/admin/devices/enrolment-tokens", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
 	{"DELETE /api/v1/admin/devices/enrolment-tokens/{id}", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
+	{"DELETE /api/v1/runners/{id}", "`DELETE /runners/{id}`"},
 	{"GET /api/v1/runners", "`GET /runners` and `GET /runners/{id}`"},
 	{"GET /api/v1/runners/{id}", "`GET /runners` and `GET /runners/{id}`"},
 	{"GET /api/v1/runners/tokens", "`GET /runners/tokens` and `DELETE /runners/tokens/{id}`"},

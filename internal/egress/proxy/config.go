@@ -59,6 +59,8 @@ type Config struct {
 	Listen string `json:"listen,omitempty"`
 	// DecisionBufferSize caps the async decision-log buffer (default 1024).
 	DecisionBufferSize int `json:"decision_buffer_size,omitempty"`
+	// DecisionSpoolDir is the runner-owned proxy-only volume, absent on org substrates.
+	DecisionSpoolDir string `json:"decision_spool_dir,omitempty"`
 	// MITMCACertPEM / MITMCAKeyPEM are the OPTIONAL TLS-MITM certificate authority
 	// (PEM). When both are set AND content inspection is enabled, the proxy
 	// TLS-terminates opaque CONNECT tunnels to known LLM hosts (Anthropic/OpenAI)

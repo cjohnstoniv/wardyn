@@ -205,6 +205,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// no-op without a mask registry, and there is nothing to configure.
 	go goSafe("secret.sweeper", func() { runSecretSweeper(rootCtx, srv, runSecretSweepInterval, ticks) })
 	startRunOutputSweeper(rootCtx, leader, srv, runOutputSweepInterval, ticks)
+	go goSafe("runner.exit.sweeper", func() { srv.RunRunnerExitSweeper(rootCtx) })
 	startSCIMPurgeSweeper(rootCtx, f, leader, srv, scimPurgeSweepInterval)
 	leaderGo(rootCtx, leader, "credential.sweeper", func(ctx context.Context) { runCredentialSweeper(ctx, srv, credentialSweepInterval, ticks) })
 
@@ -213,6 +214,9 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// — the envbuild orphan-build sweep needs only an ImageBuilder, which a
 	// `-runner none -envbuild` headless-API deployment still configures. Gating
 	// this call on run left that deployment's build containers never swept.
+	if rerr := srv.RegisterRunnerSubstrates(rootCtx); rerr != nil {
+		slog.WarnContext(rootCtx, "wardynd: runner substrate registration", slog.Any("err", rerr))
+	}
 	if rerr := srv.ReconcileOnBoot(rootCtx); rerr != nil {
 		slog.WarnContext(rootCtx, "wardynd: boot reconciliation", slog.Any("err", rerr))
 	}

@@ -448,13 +448,12 @@ start.
     refusal (its two Hidden-effect reasons are never themselves a wire value — see
     the authz section below).
 
-`TestReasonDocsMatchReasonsGo` checks both sources
-against this whole table, so a value missing here is a red build, not a
-silent gap:
+`TestReasonDocsMatchReasonsGo` requires this table to match both sources:
 
 | Reason | Meaning |
 |---|---|
 | `runners_disabled` / `runners_config_unavailable` | Runner routes require enabled, readable site configuration. |
+| `runner_stream_unavailable` / `runner_stream_rate_limited` | Runner stream URL/store unavailable, or peer connection rate exceeded. |
 | `runner_registration_unavailable` | Runner registration requires a configured public org URL and registration store. |
 | `runner_registration_rate_limited` | Too many registration attempts; retry later. |
 | `runner_registration_invalid` / `runner_owner_invalid` | Registration fields or token owner are invalid. |
@@ -467,6 +466,8 @@ silent gap:
 | `site_config_runners_via_own_route` | Change `runners.enabled` with `PUT /runners/settings`. |
 | `runner_token_invalid` | Registration token is unknown, expired, consumed, or bound to another org. |
 | `runner_claim_mismatch` | The personal owner, fingerprint, org binding, claim state, or expiry does not match. |
+| `runner_not_found` | No such runner to revoke: absent, already revoked, or (on `/me`) another person's. |
+| `runner_revoke_reason_invalid` | An owner's revoke names a reason other than `not_mine`. |
 | `missing_scope_snapshot` | The grant names the credential sentinel but carries no dispatch-time snapshot (a hand-authored grant). Azure DevOps, AWS SSO; and every grant naming `bedrock-api-key`, which is no longer a model credential. |
 | `owner_not_caller` | The grant's snapshot owner is not the run token's own subject. Azure DevOps. |
 | `roster_unreadable` | The site configuration could not be read; nothing is resolved from a failed read. Azure DevOps, AWS SSO. |

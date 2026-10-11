@@ -927,4 +927,8 @@ const (
 const (
 	reasonRunnersDisabled          = "runners_disabled"
 	reasonRunnersConfigUnavailable = "runners_config_unavailable"
+	reasonRunnerStreamUnavailable  = "runner_stream_unavailable"
+	reasonRunnerStreamRateLimited  = "runner_stream_rate_limited"
+	// reasonRunnerRevokeReasonInvalid: an owner's revoke names a reason other than not_mine.
+	reasonRunnerRevokeReasonInvalid = "runner_revoke_reason_invalid"
 )

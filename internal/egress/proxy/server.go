@@ -123,7 +123,10 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		client = &c
 	}
 
-	sink := newDecisionSink(cfg.ControlPlaneURL, ts, cfg.DecisionBufferSize, client, stdout)
+	sink, err := configuredDecisionSink(cfg, ts, client, stdout)
+	if err != nil {
+		return nil, err
+	}
 
 	inj, err := buildInjector(ctx, cfg.ControlPlaneURL, ts, pol, cfg.Injection, client)
 	if err != nil {

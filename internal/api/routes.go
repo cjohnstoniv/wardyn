@@ -277,6 +277,7 @@ func (s *Server) routes() chi.Router {
 			// Tamper-evidence sweep over the audit hash chain (migration 0047),
 			// plus the sandbox sweep — one on each tier, hence two routers.
 			s.adminRoutes(operatorOnly, securityOps)
+			s.mountRunnerRevokeRoutes(r, securityOps)             // runner_revoke.go: the security tier, or the runner's own owner
 			s.mountRunnerPoolRoutes(r, operatorOnly, securityOps) // runner_pools.go: 501 until the pool storage lands
 			s.mountRunnerInventoryRoutes(r, operatorOnly, securityOps)
 			s.mountTemplateRoutes(r, operatorOnly) // template_routes.go: 501 until the template store lands
@@ -652,6 +653,7 @@ func (s *Server) routes() chi.Router {
 		// device routes, each in its own group — see mountDeviceRoutes.
 		s.mountDeviceRoutes(r)
 		s.mountRunnerRegistrationRoutes(r)
+		s.mountRunnerStreamRoutes(r)
 		s.mountDelegationRoutes(r) // a portal acting for a person (delegation*.go, #1142)
 		s.mountBrandingRoutes(r)   // console branding: anonymous reads, SUPER writes (branding.go)
 	})
