@@ -132,8 +132,17 @@ type AgentRun struct {
 	// runner_asserted, empty for a legacy or unresolved record. Not
 	// `confinement_source`, which says who CHOSE the class.
 	EvidenceSource RunEvidenceSource `json:"evidence_source,omitempty"`
-	SandboxRef     string            `json:"sandbox_ref,omitempty"`
-	Image          string            `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
+	// RunnerPoolID is the runner pool the run was admitted into, and the next three fields say how
+	// (all written once at create). A pool is a label for a choice and never admission: the run
+	// goes to the exact target recorded in RunnerID (a self-hosted pool) or RunnerPoolExecutor (a
+	// remote-provided one), whatever the pool or anyone's defaults say later. Nil for a run from
+	// before pools and for a server-originated run that names none; RunnerPoolSelection is then empty.
+	RunnerPoolID        *uuid.UUID          `json:"runner_pool_id,omitempty"`
+	RunnerPoolRevision  int64               `json:"runner_pool_revision,omitempty"`
+	RunnerPoolSelection RunnerPoolSelection `json:"runner_pool_selection,omitempty"`
+	RunnerPoolExecutor  string              `json:"runner_pool_executor,omitempty"`
+	SandboxRef          string              `json:"sandbox_ref,omitempty"`
+	Image               string              `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.
 	Interactive bool `json:"interactive"`
 	// Experience is the canonical run mode chosen at launch (0.9 New Run), frozen at create and never re-derived. Empty for a run from an older client or before 0.9;
@@ -155,8 +164,11 @@ type AgentRun struct {
 	StatusReason string `json:"status_reason,omitempty"` // reason token parsed out of StatusDetail, derived at read, never stored
 	// AutonomyLevel freezes the level resolved at create, not the profile/posture that produced it (that's on the audit row).
 	AutonomyLevel AutonomyLevel `json:"autonomy_level,omitempty"`
-	EndsAt        *time.Time    `json:"ends_at"`                   // run's lease end, captured once at create from RunLimits, never re-resolved
-	WaitBudgetSec int           `json:"wait_budget_sec,omitempty"` // how long an approval this run raises stays open; 0 = deployment default alone applies
+	EndsAt        *time.Time    `json:"ends_at"` // run's lease end, captured once at create from RunLimits, never re-resolved
+	// LifetimeCapAt is the latest end the pool and the deployment allow, measured from launch (created_at plus the lowest of their maximums); absent when neither bounds the lifetime or for a run from before this column. LifetimeCapSource names which one bound it (pool or deployment) and stays off the wire.
+	LifetimeCapAt     *time.Time  `json:"lifetime_cap_at,omitempty"`
+	LifetimeCapSource LimitSource `json:"-"`
+	WaitBudgetSec     int         `json:"wait_budget_sec,omitempty"` // how long an approval this run raises stays open; 0 = deployment default alone applies
 	// RunLimits are the owner's profile limits as they stood at create; later clamps use these captured bounds, never the profile's current ones.
 	RunLimits           RunLimits  `json:"run_limits"`
 	GovernanceProfileID *uuid.UUID `json:"governance_profile_id,omitempty"`

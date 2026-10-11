@@ -50,7 +50,7 @@ func TestMissingOutputRetirementDefersWithoutStrandingPending(t *testing.T) {
 	if first.ID != action.ID || first.Outcome != "deferred" || second.ID != quarantine.ID || second.Outcome != "success" {
 		t.Fatalf("pending outcomes: %+v %+v", first, second)
 	}
-	rows, err := m.State(ctx)
+	rows, err := allState(ctx, m)
 	if err != nil || len(rows) != 1 || rows[0].RunID != other {
 		t.Fatalf("unrelated STATE stranded: %+v %v", rows, err)
 	}

@@ -67,3 +67,43 @@ func TestOutputSettlementRefusesMissingProducerHistory(t *testing.T) {
 		t.Fatal("settlement invented output history")
 	}
 }
+
+// Erasing an org-erased run's output deletes its directory, stops its
+// producer and survives a restart; it is idempotent.
+func TestEraseOutputDeletesRetainedOutput(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(runnertest.NewFake(), uuid.NewString(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.New()
+	out, err := s.Output(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.BindOutput(id, "sandbox"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := out.Write([]byte("transcript")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EraseOutput(id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := out.Write([]byte("late")); err == nil {
+		t.Fatal("erased producer still writes")
+	}
+	if _, _, err := s.OutputSettled(t.Context(), id, "sandbox"); !errors.Is(err, runner.ErrOutputUnrecoverable) {
+		t.Fatalf("erased output settlement = %v", err)
+	}
+	if err := s.EraseOutput(id); err != nil {
+		t.Fatalf("second erase = %v", err)
+	}
+	restarted, err := New(runnertest.NewFake(), uuid.NewString(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarted.outputs[id] != nil {
+		t.Fatal("erased output came back after restart")
+	}
+}

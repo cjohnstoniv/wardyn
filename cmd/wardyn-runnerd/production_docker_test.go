@@ -10,12 +10,14 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
@@ -35,7 +37,7 @@ func TestLocalRuntimeRequiresLeaseAndPersistsCreation(t *testing.T) {
 	stateDir := t.TempDir()
 	sub := runnertest.NewFake()
 	ref := func(id uuid.UUID) string { return "fake-" + id.String() }
-	runtime, err := localRunnerRuntime(ctx, identity, stateDir, sub, ref)
+	runtime, err := localRunnerRuntime(ctx, identity, stateDir, sub, ref, newLocalRelay(ctx, netip.Addr{}, nil, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,11 +93,25 @@ func TestLocalRuntimeRequiresLeaseAndPersistsCreation(t *testing.T) {
 	if err := link.Send(ctx, runnerwire.Frame{Type: runnerwire.TypeLease, Payload: lease}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := remoteSub.CreateSandbox(ctx, spec); err != nil {
+	created, err := remoteSub.CreateSandbox(ctx, spec)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := remoteSub.CreateSandbox(ctx, spec); err == nil {
 		t.Fatal("production lifecycle hooks permitted ambiguous create retry")
+	}
+	exec, err := remoteSub.ExecStream(ctx, created.Ref, runner.ExecSpec{Argv: []string{"cat"}})
+	if err != nil {
+		t.Fatalf("exec into the created sandbox: %v", err)
+	}
+	_ = exec.Close()
+	unheld, err := sub.CreateSandbox(ctx, runner.SandboxSpec{RunID: uuid.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec, err := remoteSub.ExecStream(ctx, placement.RunnerRefPrefix(row.ID.String())+unheld.Ref, runner.ExecSpec{Argv: []string{"cat"}}); err == nil {
+		_ = exec.Close()
+		t.Fatal("exec reached a sandbox the runner did not create")
 	}
 	cancel()
 	// Both services stop before the lifecycle lock is released for restart.
@@ -103,7 +119,7 @@ func TestLocalRuntimeRequiresLeaseAndPersistsCreation(t *testing.T) {
 	if err := runtime.close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := localRunnerRuntime(context.Background(), identity, stateDir, sub, ref)
+	restarted, err := localRunnerRuntime(context.Background(), identity, stateDir, sub, ref, newLocalRelay(context.Background(), netip.Addr{}, nil, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,5 +135,29 @@ func TestLocalRuntimeRequiresLeaseAndPersistsCreation(t *testing.T) {
 	})
 	if err != nil || len(state) != 1 || state[0].RunID != run || !state[0].SandboxPresent {
 		t.Fatalf("actual durable lifecycle state missing: %#v %v", state, err)
+	}
+}
+
+// TestRelay_RunnerNeverOpensTowardTheOrg: a relay is opened by the runner,
+// outbound, and never accepted the other way. The production hooks refuse
+// every stream the org opens, a relay included, so the org cannot make a
+// runner dial anything.
+func TestRelay_RunnerNeverOpensTowardTheOrg(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := localRunnerRuntime(ctx, runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key}, t.TempDir(), runnertest.NewFake(),
+		func(id uuid.UUID) string { return "fake-" + id.String() }, newLocalRelay(ctx, netip.Addr{}, nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.close()
+	for _, kind := range []string{runnerwire.KindRelay, runnerwire.KindPTY, runnerwire.KindExec, runnerwire.KindOutput} {
+		if err := runtime.hooks.Open(nil, nil, runnerwire.Open{Kind: kind}); err == nil {
+			t.Errorf("the runner accepted an org-opened %s stream", kind)
+		}
 	}
 }

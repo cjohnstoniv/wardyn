@@ -86,8 +86,13 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityPrincipal, readers: []string{"handlePutSecret"},
 		pinnedBy: "TestPutSecret_OwnerParamIsRefused",
 	},
+	// The explicit routes (#1510) name their namespace themselves and refuse ?owner= outright.
+	"PUT /api/v1/me/secrets/{name}?owner": {
+		entity: entityPrincipal, readers: []string{"refuseExplicitOwnerParam"},
+		pinnedBy: "TestExplicitSecrets_NobodyWritesAnotherPersonsNamespace",
+	},
 	"DELETE /api/v1/secrets/{name}?owner": {
-		entity: entityPrincipal, readers: []string{"secretOwnerParam", "handleDeleteSecret"},
+		entity: entityPrincipal, readers: []string{"secretOwnerParam", "deleteSecretFrom"},
 		foreign: 403, pinnedBy: "TestListSecrets_AdminOwnerParam_Member403",
 	},
 	// The unused registration-token list is the security tier's: a member naming ?owner= (or
@@ -138,6 +143,7 @@ var queryParamNotAnID = map[string]string{
 	"reason":                    "DELETE /me/runners/{id}: the label of the caller's revoke of their own runner (only not_mine is accepted); it names no entity",
 	"action_prefix":             "audit action filter; narrows an already-scoped feed",
 	"actor":                     "audit principal filter; ANDed inside auditScope, so a member's own-run feed only narrows",
+	"target":                    "audit principal filter on the target column; ANDed inside auditScope, so a member's own-run feed only narrows",
 	"actor_type":                "audit filter; narrows an already-scoped feed",
 	"outcome":                   "audit filter; narrows an already-scoped feed",
 	"origin":                    "audit filter, enum device|organisation (parseAuditFilter 400s anything else); narrows an already-scoped feed",
@@ -178,6 +184,7 @@ var queryParamNotAnID = map[string]string{
 	"status":         "run list state filter (active|ended|failed|killed|needs), a closed enum; narrows an already-scoped listing",
 	"ended_within":   "run list end-time window filter, a closed enum; narrows an already-scoped listing, never widens it",
 	"include_killed": "run list visibility flag (killedVisibleFor's 24h default); narrows/widens within an already-scoped listing",
+	"no_end":         "run list filter for live runs with no end; narrows an already-scoped listing, never widens it",
 	"workspace":      "run list exact-match filter (COALESCE(NULLIF(repo,''), workspace_path)); narrows an already-scoped listing, never widens it",
 	"subject_type":   "Explain grid (security tier route): the grant subject kind asked about",
 	"subject":        "Explain grid (security tier route): the grant subject asked about, over the table that tier already reads whole",

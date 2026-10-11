@@ -195,8 +195,8 @@ test-race: cover-check ## Alias: race coverage now rides along inside the test-r
 # convert_pg_test.go's TestPG_ConvertV0_IsSingleWriter converts in a goroutine.
 test-race-pg: ## Race-detector pass over the Postgres-gated concurrency proofs (needs WARDYN_TEST_PG)
 	@echo "Running the Postgres-gated concurrency proofs under the race detector (requires WARDYN_TEST_PG)..."
-	go test -race -p 1 -count=1 -run 'TestPG_' ./internal/maskstore/... ./internal/secretmask/... ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
-	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)|TestPG_CreateWait_|TestPG_MaskErasure|TestRecordingOutputPG_' ./internal/api/...
+	go test -race -p 1 -count=1 -run 'TestPG_|TestGeneration_' ./internal/maskstore/... ./internal/secretmask/... ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
+	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)|TestPG_WriteBegunBeforeAnErase|TestPG_CreateWait_|TestPG_MaskErasure|TestRecordingOutputPG_' ./internal/api/...
 	go test -race -p 1 -count=1 -run 'TestPG_AuditPartition_.*Contiguous' ./internal/db/...
 	go test -race -p 1 -count=1 -run 'TestPG_RevocationBeforeCookiePoolWaitDoesNotLoseCutoff' ./cmd/wardynd/...
 
@@ -231,7 +231,8 @@ test-report: ## Go unit suite with per-suite JSON + coverage artifacts, under th
 # test-pg-shard matrix runs this target once per shard with a package subset.
 PG_REPORT ?= pg
 PG_PKGS ?= ./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... \
-	./internal/api/... ./test/apie2e/... ./internal/recording/... ./cmd/wardynd/...
+	./internal/api/... ./test/apie2e/... ./internal/recording/... ./cmd/wardynd/... ./internal/notify/... \
+	./internal/livebus/...
 test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # -p 1: every package in this suite shares ONE database (the WARDYN_TEST_PG
 # DSN), and singleton state — site_config above all — is mutated by tests in
@@ -622,6 +623,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-compose-ns-registry-port.sh
 	./scripts/test-dco.sh
 	./scripts/test-desktop-profile.sh
+	./scripts/test-runner-units.sh
 	./scripts/test-doc-form.sh
 	./scripts/test-doc-links.sh
 	./scripts/test-e2e-harness.sh
@@ -1017,6 +1019,15 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "name: WARDYN_AZURE_KV_URL" && { echo "the Key Vault KEK rendered the store's WARDYN_AZURE_KV_URL"; exit 1; } || true
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.provider=azurekv --set secretStore.azure.tenantId=t --set secretStore.azure.clientId=c 2>&1 | grep -q "kek.provider=azurekv needs kek.azurekv.key and kek.azurekv.signingKey" || { echo "chart no longer refuses kek.provider=azurekv with no keys"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.azurekv.key=https://kv1.vault.azure.net/keys/k --set kek.azurekv.signingKey=https://kv1.vault.azure.net/keys/s --set secretStore.azure.tenantId=t --set secretStore.azure.clientId=c --set kek.transit.key=wardyn --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=r --set secrets.allowEphemeralAgeKey=true 2>&1 | grep -q "both name a key service; configure one" || { echo "chart no longer refuses a Key Vault KEK beside a Transit key"; exit 1; }
+	@# AWS KMS KEK (#588): WARDYN_KEK=awskms and the key render with no age key, also beside vaultkv store mode; a missing key, a second key service or key domains is a render refusal.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.provider=awskms --set kek.awskms.key=arn:aws:kms:us-east-1:111122223333:key/00000000-0000-0000-0000-000000000000) || { echo "kek.provider=awskms with an external DSN and no age key no longer renders"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_KEK$$" | grep -q 'value: "awskms"' || { echo "kek.provider=awskms did not render WARDYN_KEK"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_AWS_KMS_KEY" | grep -q 'key/00000000-0000-0000-0000-000000000000' || { echo "kek.awskms.key did not render WARDYN_AWS_KMS_KEY"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_AGE_KEY" && { echo "kek.provider=awskms rendered WARDYN_AGE_KEY although none was wired"; exit 1; } || true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=wardyn --set kek.provider=awskms --set kek.awskms.key=arn:aws:kms:us-east-1:111122223333:key/00000000-0000-0000-0000-000000000000 >/dev/null || { echo "vaultkv store mode with an AWS KMS key service and no age key no longer renders"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.provider=awskms 2>&1 | grep -q "kek.provider=awskms needs kek.awskms.key" || { echo "chart no longer refuses kek.provider=awskms with no key"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.awskms.key=arn:aws:kms:us-east-1:111122223333:key/00000000-0000-0000-0000-000000000000 --set kek.transit.key=wardyn --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=r --set secrets.allowEphemeralAgeKey=true 2>&1 | grep -q "kek.awskms.key and kek.transit.key or kek.azurekv.key both name a key service" || { echo "chart no longer refuses an AWS KMS key beside a Transit key"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set kek.provider=awskms --set kek.awskms.key=arn:aws:kms:us-east-1:111122223333:key/00000000-0000-0000-0000-000000000000 --set kek.domains.acme.transit.key=acme-keys --set kek.domains.acme.transit.role=wardyn-acme 2>&1 | grep -q "AWS KMS key domains are not supported yet" || { echo "chart no longer refuses key domains beside AWS KMS"; exit 1; }
 	@# Key Vault platform split (#1559): the second key pair and identity render, and an equal pair, a half-set pair or a missing client id is a render refusal.
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.provider=azurekv --set kek.azurekv.key=https://kv1.vault.azure.net/keys/wardyn-kek --set kek.azurekv.signingKey=https://kv1.vault.azure.net/keys/wardyn-kek-sig --set secretStore.azure.tenantId=t --set secretStore.azure.clientId=client-1 --set kek.azurekv.keyPlatform=https://kv1.vault.azure.net/keys/wardyn-boot --set kek.azurekv.signingKeyPlatform=https://kv1.vault.azure.net/keys/wardyn-boot-sig --set secretStore.azure.clientIdPlatform=client-2) || { echo "the Key Vault platform split no longer renders"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_AZURE_KEK_KEY_PLATFORM" | grep -q 'wardyn-boot' || { echo "kek.azurekv.keyPlatform did not render WARDYN_AZURE_KEK_KEY_PLATFORM"; exit 1; }; \

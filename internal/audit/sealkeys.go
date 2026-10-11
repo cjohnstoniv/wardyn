@@ -86,6 +86,45 @@ var SealLeafNames = []string{"task", "prompt", "message", "reason", "comment", "
 // clear. Pinned against sealFields by a test.
 var UnsealedActions = []string{"person.erasure", "credential.erase", "principal_key.destroyed"}
 
+// personTargetActions is the closed list of actions whose `target` column is a
+// person's principal, so SealFull stores it as SubjectActorPrefix and the
+// person's subject id, as it does a human actor. It only ever grows: a row sealed
+// under an entry must stay readable after the entry would be removed. Each entry
+// was read off its emit site, and an action whose target is sometimes a person
+// and sometimes something else is NOT listed:
+//   - ssh_key.delete (a key's fingerprint, or the principal an admin cleared),
+//   - key_domain.assignment.set and .delete ("user:<principal>", "group:<name>", "all").
+//
+// Also absent:
+//   - person.create, whose person is made before their first sign-in and so has
+//     no identity row to take a subject from; a person.token.create for such a
+//     person stays clear too,
+//   - UnsealedActions (the record of an erasure names the person in the clear),
+//   - every row whose target is an id (person.deprovision's and scim.user.write's
+//     identity-row id, token.create's token id).
+var personTargetActions = []string{
+	"person.attach",            // peopleKeying.Attached and attachIgnored: the attached person's principal
+	"person.token.create",      // handleMintPersonAPIToken: the principal in the path
+	"delegation.exchange",      // handleTokenExchange: the verified subject of the person the portal acts for
+	"session.revoke",           // handleRevokeSessions: the supplied sub ("*" names no person and is kept)
+	"secret.list",              // handleListSecrets: the namespace owner an admin enumerated
+	"auth.signin_unserialized", // lockLoginSupersede (harnesscred_supersede.go): the signing-in person, the login run's creator
+}
+
+// PersonTargetActions is personTargetActions, sorted.
+func PersonTargetActions() []string {
+	out := slices.Clone(personTargetActions)
+	slices.Sort(out)
+	return out
+}
+
+// SealsTarget reports whether the target of a row of action is a person stored
+// as a subject under SealFull: a person-target action, and not one of
+// UnsealedActions.
+func SealsTarget(action string) bool {
+	return slices.Contains(personTargetActions, action) && !slices.Contains(UnsealedActions, action)
+}
+
 // SealedFields lists the fields a row of action seals; nil for an action that
 // seals none.
 func SealedFields(action string) []SealField {

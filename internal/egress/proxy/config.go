@@ -504,3 +504,10 @@ type PATGrant struct {
 	Forge    string    `json:"forge,omitempty"`
 	API      bool      `json:"api,omitempty"`
 }
+
+// controlPlaneEndpoint joins the control-plane base URL and an internal API
+// path. ControlPlaneURL may end in '/', which boot validation accepts; the
+// internal listener does not clean paths, so "//api/..." would match no route.
+func controlPlaneEndpoint(base, path string) string {
+	return strings.TrimRight(base, "/") + path
+}

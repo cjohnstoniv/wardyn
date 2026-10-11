@@ -63,8 +63,11 @@ type runFold struct {
 	bedrockGrade      bedrockCredGrade
 	adoNarrowed       string
 	fitWarnings       []string
+	end               createEnd
 	prov              []provenanceRow
 	pushSets          []types.PushRuleSet
+	// place is where the run goes (stepPlacement): the resolved pool and the fully eligible targets.
+	place runPlacement
 }
 
 // runFoldStep is one gate or fold of the shared sequence. run writes its own
@@ -93,12 +96,19 @@ type runFoldStep struct {
 //     hosts they add (invariant 5), and components see what admins already
 //     credentialed. The dry doors widen workspace egress before the
 //     requirements fold; create widens after the mint (unionRunEgress).
-//   - Local eligibility straight after components, before anything can renew
+//   - A placement the caller's profile denies is refused first of the placement
+//     steps, so no later step spends work on a run that cannot be placed.
+//   - Placement straight after that: the pool resolves (a missing or stale default
+//     refuses, never falls back), its candidates meet the policy floor and the request's size
+//     one by one, and the fully eligible set waits for create to pick a target by run id.
+//   - Local eligibility straight after placement, before anything can renew
 //     or mint: the admitted plan's refusals and the unsupported-local refusal
 //     answer before the confinement floor and the provider's liveness step.
 //   - Confinement, then the model provider, then autonomy: the autonomy grade
 //     reads the enforced class and the chosen model credential.
 //   - Azure DevOps standing and PAT narrowing read autonomy's site snapshot.
+//   - The run's end reads only the governance ceiling and the deployment, so it sits
+//     with the gates that need no other step's result and refuses before capacity.
 //   - Host capacity, the run cap and the quota fit last, so a refusal leaves
 //     no identity and no run row.
 var runFoldSteps = []runFoldStep{
@@ -113,12 +123,16 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepRequirements, foldAll},
 	{(*Server).stepGitHubEgress, foldAll},
 	{(*Server).stepComponents, foldAll},
+	{(*Server).stepPlacementDenied, foldAll},
+	{(*Server).stepPlacement, foldAll},
 	{(*Server).stepLocalEligibility, foldAll},
 	{(*Server).stepConfinement, foldAll},
+	{(*Server).stepPlacementCapability, foldAll},
 	{(*Server).stepModelProvider, foldAll},
 	{(*Server).stepAutonomy, foldAll},
 	{(*Server).stepADOStanding, foldAll},
 	{(*Server).stepPATNarrowing, foldPreflight | foldPreview},
+	{(*Server).stepRunEnd, foldAll},
 	{(*Server).stepHostCapacity, foldCreate | foldPreflight},
 	{(*Server).stepRunCap, foldCreate | foldPreflight},
 	{(*Server).stepRunFit, foldCreate | foldPreflight},

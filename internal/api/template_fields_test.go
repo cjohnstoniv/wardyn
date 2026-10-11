@@ -438,8 +438,6 @@ func TestTemplateDecoderRefusals(t *testing.T) {
 		{"redacted placeholder", `{` + head + `,"intent":{"inline_policy":{"workspace_mounts":[{"source":"<redacted>","target":"/home/agent/x"}]}}}`, "intent.inline_policy.workspace_mounts[0].source", reasonTemplateFieldInvalid},
 		{"title is entered at launch", `{` + head + `,"intent":{"title":"nightly"}}`, "intent.title", reasonTemplateFieldExcluded},
 		{"description is entered at launch", `{` + head + `,"intent":{"description":"d"}}`, "intent.description", reasonTemplateFieldExcluded},
-		{"pending: pool", `{` + head + `,"intent":{"runner_pool_id":"6f1c2a52-5b1e-4d45-9d6b-0c4f1b2a7e10"}}`, "intent.runner_pool_id", reasonTemplateFieldUnavailable},
-		{"pending: a malformed pool id is still not a way around", `{` + head + `,"intent":{"runner_pool_id":"x"}}`, "intent.runner_pool_id", reasonTemplateFieldUnavailable},
 		{"run mode: a malformed startup", `{` + head + `,"intent":{"startup":"x"}}`, "intent.startup", reasonTemplateFieldInvalid},
 		{"run mode: the working name is not a field", `{` + head + `,"intent":{"included_tools":[]}}`, "intent.included_tools", reasonTemplateFieldUnknown},
 		{"run mode: the working name is not a field (folder)", `{` + head + `,"intent":{"starting_folder":"/home/agent/work"}}`, "intent.starting_folder", reasonTemplateFieldUnknown},

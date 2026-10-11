@@ -7,13 +7,74 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// requestPlacement is the placement a request names; an empty one is the
+// organisation's own executor today (remotePlacement), until D-117's resolver
+// fills it from the eligible set.
+func requestPlacement(req createRunRequest) types.Placement {
+	if remotePlacement(req.Placement) {
+		return types.PlacementRemote
+	}
+	return req.Placement
+}
+
+// requestRunnerID is the runner a request names, or the zero UUID when it names
+// none or names one that is not a UUID (which no registered runner can match).
+func requestRunnerID(req createRunRequest) uuid.UUID {
+	id, _ := uuid.Parse(req.RunnerID)
+	return id
+}
+
+// deniedPlacements is the placement list the caller's governance profile
+// denies: absent (nil) for a member with no assigned profile, and for a caller
+// whose runs stand outside governance. A deny list, so absent means permitted.
+func (s *Server) deniedPlacements(ctx context.Context, ceiling governanceCeiling) []types.Placement {
+	if ceiling.Profile == nil || s.runUngoverned(ctx) {
+		return nil
+	}
+	return ceiling.Limits.DenyPlacements
+}
+
+// placementDeniedRefusal is the deny_placements door: 403 placement_denied
+// naming the profile, with the authz.denied row a governance door writes. The
+// ONE check: the fold step and every launcher that creates a run for the acting
+// member (source scan) ask it with the placement they put the run on.
+func (s *Server) placementDeniedRefusal(ctx context.Context, p types.Placement, ceiling governanceCeiling) *runRefusal {
+	if !slices.Contains(s.deniedPlacements(ctx, ceiling), p) {
+		return nil
+	}
+	d := authz.Deny(authz.ReasonGovernanceProfile, "runs.placement", placementDeniedMsg(p, ceiling.Profile.Name)).WithPolicy(s.ceilingPolicy(ctx, ceiling))
+	f := runError(placement.ReasonPlacementDenied.Status(), string(placement.ReasonPlacementDenied), d.Sentence)
+	f.decision = &d
+	return f
+}
+
+// placementDeniedError carries the refusal out of a launcher that has no
+// request to answer, so its handler writes the same 403 and audit row the doors do.
+type placementDeniedError struct{ refusal *runRefusal }
+
+func (e *placementDeniedError) Error() string { return e.refusal.body.Error }
+
+// placementDeniedMsg is the door's member sentence (MEMBER.DENIED_PLACEMENT_*), composed
+// once so the 403 body and the audit row carry the same bytes.
+func placementDeniedMsg(p types.Placement, profile string) string {
+	if p == types.PlacementLocal {
+		return fmt.Sprintf("placement local is not allowed by your governance profile %q — launch with placement remote, or leave placement empty", profile)
+	}
+	return fmt.Sprintf("placement remote is not allowed by your governance profile %q — launch on your own runner with placement local", profile)
+}
 
 // localPlacementRefusal is the create-time answer for a local request: the
 // admitted plan's own refusal, else the final unsupported-local refusal. That
@@ -89,6 +150,39 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 	}
 	p.CredentialIntents = intents
 	return p, nil
+}
+
+// boundLocalPath is a local path and the runner it was registered for.
+type boundLocalPath struct {
+	Runner uuid.UUID
+	Path   string
+}
+
+// verifiedLocalPaths is the plan's VerifiedLocalPaths: a path is verified only
+// when its stored runner binding is the candidate runner and the path lies
+// inside one of that runner's allowed roots. bound is keyed by the plan path
+// ("SandboxSpec.Mounts[0]", "SandboxSpec.Drive"). Nothing produces a binding on
+// batch yet (local_dir sources and host_path drives carry no runner column), so
+// every local mount still refuses placement_local_path until one does.
+func verifiedLocalPaths(candidate uuid.UUID, roots []string, bound map[string]boundLocalPath) map[string]bool {
+	out := map[string]bool{}
+	for key, b := range bound {
+		if candidate != uuid.Nil && b.Runner == candidate && withinAnyRoot(b.Path, roots) {
+			out[key] = true
+		}
+	}
+	return out
+}
+
+// withinAnyRoot reports whether path, cleaned, is a root or below one. Both must
+// be absolute: a relative path is never inside anything. Symlinks are the
+// runner's own device-side check at bind.
+func withinAnyRoot(path string, roots []string) bool {
+	path = filepath.Clean(path)
+	return filepath.IsAbs(path) && slices.ContainsFunc(roots, func(root string) bool {
+		root = filepath.Clean(root)
+		return filepath.IsAbs(root) && (path == root || strings.HasPrefix(path, strings.TrimSuffix(root, "/")+"/"))
+	})
 }
 
 func localTrustedOutputRequest(req createRunRequest) bool {

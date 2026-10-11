@@ -354,7 +354,7 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob aw
 	if at := blob.lastUsable(); !at.IsZero() {
 		ctx = secretstore.WithExpiry(ctx, at)
 	}
-	err = s.putOwned(ctx, owner, func() error { return st.Put(ctx, scope.ssoSecret(), raw) })
+	err = s.putOwned(ctx, owner, func(ctx context.Context) error { return st.Put(ctx, scope.ssoSecret(), raw) })
 	s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", owner, scope.ssoSecret())
 	return err
 }
@@ -489,6 +489,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	if cerr != nil {
 		return types.AgentRun{}, harnessLoginDispatch{}, cerr
 	}
+	// Exempt from deny_placements on purpose: Wardyn-authored, no workspace content, and the only way to authenticate a harness.
 	// Strongest advertised at or above the floor: a ~1yr credential deserves the
 	// best available isolation, so the capture must never run weaker than the
 	// admin floor demands. ceilingFloorClass is the same admin floor

@@ -155,7 +155,7 @@ func (s *Stream) CloseWrite() error {
 		owed = s.releaseHeldLocked()
 	}
 	s.mu.Unlock()
-	s.returnCredit(owed)
+	s.p.returnCredit(owed)
 	err := s.p.send(s.p.ctx, Frame{Type: TypeClose, Stream: s.id})
 	if both {
 		s.p.forget(s.id)
@@ -189,7 +189,7 @@ func (s *Stream) abort(code uint32) bool {
 	s.buf = nil
 	s.cond.Broadcast()
 	s.mu.Unlock()
-	s.returnCredit(owed)
+	s.p.returnCredit(owed)
 	s.send.Close()
 	s.cancel()
 	s.finish()
@@ -204,7 +204,7 @@ func (s *Stream) deliver(b []byte) error {
 	s.mu.Lock()
 	if s.reset != nil {
 		s.mu.Unlock()
-		s.returnCredit(int64(len(b))) // discarded, so it is the sender's again
+		s.p.returnCredit(int64(len(b))) // discarded, so it is the sender's again
 		return nil
 	}
 	defer s.mu.Unlock()
@@ -231,7 +231,7 @@ func (s *Stream) remoteClose() (both bool) {
 		s.finish()
 	}
 	s.mu.Unlock()
-	s.returnCredit(owed)
+	s.p.returnCredit(owed)
 	return both
 }
 
@@ -251,16 +251,17 @@ func (s *Stream) releaseHeldLocked() int64 {
 	return owed
 }
 
-// returnCredit gives n bytes of an ended stream back to the sender's connection
-// window, with whatever grant is holding in connPend, so nothing a finished
-// stream received stays withheld. It does not block: the read loop calls it.
-func (s *Stream) returnCredit(n int64) {
+// returnCredit gives n bytes no stream will read back to the sender's
+// connection window, with whatever grant is holding in connPend, so nothing a
+// finished stream received stays withheld. It does not block: the read loop
+// calls it.
+func (p *Peer) returnCredit(n int64) {
 	if n <= 0 {
 		return
 	}
-	p := s.p
 	p.mu.Lock()
-	n, p.connPend = n+p.connPend, 0
+	p.owed += n + p.connPend
+	p.connPend = 0
 	p.mu.Unlock()
-	go p.send(p.ctx, Frame{Type: TypeWindow, Payload: EncodeWindow(uint32(n))}) //nolint:errcheck // a failed WINDOW is the link going down
+	p.wakeReplies()
 }

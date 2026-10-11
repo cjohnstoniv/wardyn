@@ -50,6 +50,9 @@ type HubConfig struct {
 	// session emits neither; Disconnected waits for the resume window.
 	Connected    func(context.Context, uuid.UUID) error
 	Disconnected func(context.Context, uuid.UUID) error
+	// Verified runs once the runner proves possession of its stored key,
+	// before any further lookup or admission. An error refuses the connection.
+	Verified func(context.Context, uuid.UUID) error
 }
 
 type hubSession struct {
@@ -103,6 +106,11 @@ func (h *Hub) Serve(ctx context.Context, conn runnerwire.Conn, id uuid.UUID) err
 	auth, err := runnerwire.AuthenticateRunner(ctx, conn, row, h.cfg.OrgURL)
 	if err != nil {
 		return err
+	}
+	if h.cfg.Verified != nil {
+		if err := h.cfg.Verified(ctx, id); err != nil {
+			return err
+		}
 	}
 	current, err := h.cfg.Lookup(ctx, id)
 	if err != nil || current.ID != id || string(current.PublicKey) != string(row.PublicKey) || current.OrgURLSHA256 != row.OrgURLSHA256 {
@@ -174,15 +182,37 @@ func (h *Hub) serveClaimed(ctx context.Context, conn runnerwire.Conn, row types.
 		}
 		return err
 	}
-	select {
-	case <-peer.Done():
-	case <-ctx.Done():
-		peer.Close()
-	case <-h.ctx.Done():
-		peer.Close()
+	recheck := time.NewTicker(storedRowRecheck)
+	defer recheck.Stop()
+	for live := true; live; {
+		select {
+		case <-peer.Done():
+			live = false
+		case <-ctx.Done():
+			peer.Close()
+			live = false
+		case <-h.ctx.Done():
+			peer.Close()
+			live = false
+		case <-recheck.C:
+			h.recheckRevoked(ctx, row.ID)
+		}
 	}
 	h.ended(row.ID, s, peer)
 	return peer.Err()
+}
+
+// storedRowRecheck bounds how long a session outlives a revocation committed
+// through another replica, whose Revoke cannot reach this process's sessions.
+var storedRowRecheck = runnerwire.PingInterval
+
+// recheckRevoked ends the session with REVOKED once the stored row says so.
+// A failed lookup is retried at the next tick: the store already refuses a
+// revoked runner's writes, so this only bounds the session's lifetime.
+func (h *Hub) recheckRevoked(ctx context.Context, id uuid.UUID) {
+	if current, err := h.cfg.Lookup(ctx, id); err == nil && current.ID == id && current.State == types.RunnerRevoked {
+		_ = h.Revoke(ctx, id)
+	}
 }
 
 func (h *Hub) dropEmpty(id uuid.UUID, s *hubSession) {
@@ -216,6 +246,17 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 	if err != nil {
 		_ = runnerwire.WriteControl(ctx, conn, runnerwire.TypeGoaway, runnerwire.Reason{Reason: "resume_gap"})
 		return nil, err
+	}
+	if resumed {
+		// Only a fresh session carries PENDING. An action queued while the
+		// link was down turns this resume into a fresh session that delivers it.
+		open, err := a.Pending(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if len(open) != 0 {
+			cfg, resumed = runnerwire.PeerConfig{}, false
+		}
 	}
 	var pending []runnerwire.PendingAction
 	if !resumed {

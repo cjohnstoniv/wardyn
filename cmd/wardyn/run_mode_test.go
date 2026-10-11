@@ -50,6 +50,9 @@ func TestApplyRunModeFlags(t *testing.T) {
 		{"a background run has no startup", sdk.CreateRunRequest{}, runModeFlags{experience: "background", startup: "none"}, sdk.CreateRunRequest{}, "interactive"},
 		{"an interactive run starts a command with --startup", sdk.CreateRunRequest{}, runModeFlags{experience: "interactive", command: "make"}, sdk.CreateRunRequest{}, "--startup"},
 		{"agent and tool are one choice", sdk.CreateRunRequest{Agent: "a"}, runModeFlags{experience: "interactive", tools: []string{"b"}}, sdk.CreateRunRequest{}, "one or the other"},
+		{"an interactive provider goes with --agent or in --tool", sdk.CreateRunRequest{ModelProvider: "bedrock-team"}, runModeFlags{experience: "interactive", tools: []string{"claude-code"}}, sdk.CreateRunRequest{}, "ID=MODEL_PROVIDER"},
+		{"a background command has no model provider", sdk.CreateRunRequest{ModelProvider: "bedrock-team"}, runModeFlags{experience: "background", command: "make"}, sdk.CreateRunRequest{}, "--model-provider"},
+		{"a background task names its provider with its agent", sdk.CreateRunRequest{Task: "fix", ModelProvider: "bedrock-team"}, runModeFlags{experience: "background"}, sdk.CreateRunRequest{}, "--model-provider"},
 		{"a startup kind is closed", sdk.CreateRunRequest{}, runModeFlags{experience: "interactive", startup: "both:x"}, sdk.CreateRunRequest{}, "not none"},
 		{"a start folder needs an attachment", sdk.CreateRunRequest{}, runModeFlags{startFolder: ":src"}, sdk.CreateRunRequest{}, "ATTACHMENT"},
 	} {

@@ -16,7 +16,24 @@
 # docs/AUDIT-ACTIONS.md 40495 measured after F-1514 merge.
 # docs/AUDIT-ACTIONS.md 40502 measured after H3 merge.
 # docs/AUDIT-ACTIONS.md 40943 measured after A-L3 (overrides_diff on run.create policy_source).
-docs/AUDIT-ACTIONS.md=40943 share=8
+# docs/AUDIT-ACTIONS.md 40918 measured after H10-pools merge.
+# H6 erased-row quarantine adds 40 measured audit-reference words: the runner.inventory.hold row (asserted-subject cap); combined total 40958.
+# docs/AUDIT-ACTIONS.md 41145 measured after F-1511-1510 merge.
+# 0.9 G-seal-target (#1828): docs/AUDIT-ACTIONS.md 41243 adds 285 over 40958 for the "target, under WARDYN_AUDIT_SEAL=full" paragraph of Sealed fields: the closed list, the actions left clear, the SIEM note and the refused typed subject.
+# docs/AUDIT-ACTIONS.md 41430 measured after G-seal-target merge.
+# 0.9 H5 (#1959): docs/AUDIT-ACTIONS.md 41534 adds 104 for the "Relayed internal calls" paragraph (data.relay and the relay refusal reasons).
+# docs/AUDIT-ACTIONS.md 40996 adds 78 over 40918 (0.9 F-1508 C1): the three invitation rows, `invitation` on `token.create` and `reason` on `token.revoke`.
+# docs/AUDIT-ACTIONS.md 41612 measured after F-1508 C1 merge.
+# docs/AUDIT-ACTIONS.md 40937 adds 19 over 40918 (0.9 H10-pools-b): the limits and limits_before data columns of the pool create and update rows.
+# docs/AUDIT-ACTIONS.md 41631 measured after H10-pools-b merge.
+# docs/AUDIT-ACTIONS.md 41147 adds 2 over 41145 (0.9 F-588 M1): awskms in the two secret.rewrap key-service lists.
+# docs/AUDIT-ACTIONS.md 41633 measured after F-588 M1 merge.
+# docs/AUDIT-ACTIONS.md 41191 measured after F-1511-scim (person.deprovision refusal outcomes).
+# docs/AUDIT-ACTIONS.md 41679 measured after F-1511-scim merge.
+# docs/AUDIT-ACTIONS.md 41646 adds 13 (0.9 R2-audit-2): a device-forwarded row's target and sealed fields read as sent.
+# docs/AUDIT-ACTIONS.md 41692 measured after R2-audit-2 merge.
+# docs/AUDIT-ACTIONS.md 41717 measured after the A-L3 merge.
+docs/AUDIT-ACTIONS.md=41717 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
@@ -34,3 +51,6 @@ docs/AUDIT-ACTIONS.md=40943 share=8
 # Runner pools add 247 measured audit-reference words: eleven rows (pool, executor, own-runner, use-policy and default actions); combined total 40184.
 # Runner pool review round 1 adds 131 measured audit-reference words: the held executor attach, the pool delete's dropped members and cleared default, and change_id and proposed_by on the held rows; combined total 40315.
 # Runner pool review round 2 adds 38 measured audit-reference words: the held executor detach on the detach row; combined total 40353.
+# docs/AUDIT-ACTIONS.md 40019 adds 81 (0.9 F-1511-1510): the `scope` field and the explicit-route citations on secret.write and secret.delete, and `write_fence` on credential.erase.
+# docs/AUDIT-ACTIONS.md 40094 adds 75 (0.9 F-1511-1510 r1): reserved_principal on person.erasure and credential.erase, the identity-directory resolution and the self check's name set.
+# docs/AUDIT-ACTIONS.md 40126 adds 32 (0.9 F-1511-1510 r4): credential.erase erases the subject and the entra form.

@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -42,21 +43,23 @@ func (s *erasureTestStore) BlankRunTasks(_ context.Context, by string) (int, err
 	return len(s.runs[by]), nil
 }
 
-func (s *erasureTestStore) PrincipalForName(_ context.Context, name string) (string, error) {
-	return name, nil
-}
-
 func (s *erasureTestStore) PrincipalAliases(context.Context, string) ([]string, error) {
 	return nil, nil
 }
 
-func (s *erasureTestStore) EraseGovernanceChangePersonalFields(context.Context, []string) (int, error) {
+func (s *erasureTestStore) PrincipalEntraNames(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
+func (s *erasureTestStore) EraseGovernanceChangePersonalFields(context.Context, []string, []string) (int, error) {
 	return 0, nil
 }
 
 func (s *erasureTestStore) SubjectKeyDestroyedSince(context.Context, string, string, time.Time) (bool, error) {
 	return false, nil
 }
+
+var _ store.PersonErasureStore = (*erasureTestStore)(nil)
 
 func erasureRig(t *testing.T) (*harness, *Server, *erasureTestStore, secretstore.Store) {
 	t.Helper()

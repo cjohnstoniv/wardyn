@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -96,8 +97,26 @@ func (s *Server) applyRunnerExit(ctx context.Context, st store.PG, row store.Run
 		}
 		data := map[string]any{"exit_code": exit.Code, "state": run.State, "generation": exit.Generation}
 		err := s.finalizeRunEffects(ctx, run.ID, exit.Ref, "run.complete", data, false, false)
-		return errors.Join(err, s.runnerSettlementComplete(ctx, run.ID))
+		return errors.Join(withoutQueuedTeardown(err), s.runnerSettlementComplete(ctx, run.ID))
 	})
+}
+
+// withoutQueuedTeardown drops runner.ErrPendingOnRunner from finalizeRunEffects'
+// joined errors. That teardown was queued for the offline runner and audited
+// once by finalizeRunEffects; the runner's pending action owns it, so it does
+// not keep the exit tail open. Every other error still retries the tail.
+func withoutQueuedTeardown(err error) error {
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		return err
+	}
+	var rest []error
+	for _, e := range joined.Unwrap() {
+		if !errors.Is(e, runner.ErrPendingOnRunner) {
+			rest = append(rest, e)
+		}
+	}
+	return errors.Join(rest...)
 }
 
 func (s *Server) runnerSettlementComplete(ctx context.Context, id uuid.UUID) error {

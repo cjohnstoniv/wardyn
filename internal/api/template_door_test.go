@@ -369,8 +369,8 @@ func TestTemplateRegistryFollowsTheOwnersAccessAndModeRulings(t *testing.T) {
 			t.Errorf("%s omission = %s, want %s", name, r.Omitted, omitted)
 		}
 	}
-	if r, ok := templateRule(templateRequestRules, "runner_pool_id"); !ok || r.Pending == "" {
-		t.Error("runner_pool_id must be a pending carrier")
+	if r, ok := templateRule(templateRequestRules, "runner_pool_id"); !ok || r.Pending != "" {
+		t.Error("runner_pool_id is a landed carrier: the run resolves it")
 	}
 	for _, name := range []string{"experience", "workload", "tools", "startup", "start_folder", "no_repositories_or_drives"} {
 		if r, ok := templateRule(templateRequestRules, name); !ok || r.Pending != "" {

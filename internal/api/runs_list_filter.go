@@ -28,7 +28,7 @@ import (
 // name statically and cannot see one read through a loop variable.
 func hasRunsListFilterParams(q url.Values) bool {
 	return q.Has("view") || q.Has("owner") || q.Has("status") ||
-		q.Has("ended_within") || q.Has("include_killed") || q.Has("workspace") || q.Has("q")
+		q.Has("ended_within") || q.Has("include_killed") || q.Has("no_end") || q.Has("workspace") || q.Has("q")
 }
 
 // maxRunsListQueryLen bounds ?q=: it is parameterised (store_runs_filtered.go
@@ -160,6 +160,16 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 		return parsedRunsListParams{}, false
 	}
 
+	noEnd := false
+	switch q.Get("no_end") {
+	case "", "0":
+	case "1":
+		noEnd = true
+	default:
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidNoEndParam, "invalid no_end")
+		return parsedRunsListParams{}, false
+	}
+
 	searchQuery := q.Get("q")
 	if len(searchQuery) > maxRunsListQueryLen {
 		writeErrorReason(w, http.StatusBadRequest, reasonRunsSearchQueryTooLong, "q is too long")
@@ -173,6 +183,7 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 			Statuses:      statuses,
 			EndedWithin:   endedWithin,
 			IncludeKilled: includeKilled,
+			NoEnd:         noEnd,
 			Workspace:     q.Get("workspace"),
 			Query:         searchQuery,
 		},

@@ -178,12 +178,25 @@ var governanceChangeKinds = map[string]govKind{
 	govKindRunnerPoolUsePolicy: {approver: securityApprover, apply: applyRunnerPoolUsePolicyChange},
 }
 
-// canSeeGovernanceKind reports whether the caller may list or read changes of kind: the approver
-// predicate, so a kind that only a super admin may write is never shown to a security admin. A kind
-// this binary does not know (a row from a newer one) is shown to nobody: it cannot be decided here.
-func (s *Server) canSeeGovernanceKind(r *http.Request, kind string) bool {
-	k, ok := governanceChangeKinds[kind]
-	return ok && k.approver.allowed(s, r)
+// forChange is the kind as it decides one held change. A runner pool executor attach or detach is held
+// under the use-policy kind but written on the operatorOnly tier, so only a super admin decides it; a
+// payload that does not decode is given the stricter tier.
+func (k govKind) forChange(ch types.GovernanceChange) govKind {
+	if ch.TargetKind == govKindRunnerPoolUsePolicy {
+		var held runnerPoolHeldChange
+		if decodeHeldPayload(ch.Payload, &held) != nil || held.Executor != "" {
+			k.approver = operatorApprover
+		}
+	}
+	return k
+}
+
+// canSeeGovernanceChange reports whether the caller may list or read a change: the approver predicate,
+// so a change that only a super admin may decide is never shown to a security admin. A kind this
+// binary does not know (a row from a newer one) is shown to nobody: it cannot be decided here.
+func (s *Server) canSeeGovernanceChange(r *http.Request, ch types.GovernanceChange) bool {
+	k, ok := governanceChangeKinds[ch.TargetKind]
+	return ok && k.forChange(ch).approver.allowed(s, r)
 }
 
 // govProposal is a covered write to hold.

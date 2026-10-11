@@ -218,7 +218,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Entry authorization (#1476): the owner rule, on both lanes.
-	if s.refuseAttachEntry(w, r, run) {
+	if s.refuseAttachEntry(w, r, run) || s.refuseBackgroundOnly(w, r, run, "terminal") {
 		return
 	}
 
