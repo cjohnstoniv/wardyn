@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"slices"
@@ -18,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -506,12 +508,14 @@ const secretOwnerAmbiguousMsg = "?owner= matches more than one known principal; 
 // human's own writes stamp it) with the email their IdP sent alongside it.
 type principalIdentity struct{ principal, email string }
 
-// knownPrincipals is the identity directory ?owner= resolves against.
+// knownPrincipals is the first directory ?owner= resolves against;
+// resolveSecretOwner asks the store's identity directory (PrincipalDirectoryStore)
+// after it, for a person who holds neither a token nor a workspace.
 //
-// api_tokens is the ONLY place this codebase holds a (principal, email)
-// PAIRING, and it is already the directory revokeAPITokensFor matches a named
-// principal through — using the same rows here is what keeps the two
-// admin-facing "name a human" surfaces from disagreeing about who was named.
+// api_tokens pairs a principal with an email, and it is already the directory
+// revokeAPITokensFor matches a named principal through — using the same rows
+// here is what keeps the two admin-facing "name a human" surfaces from
+// disagreeing about who was named.
 // workspaces.owned_by adds the principals an operator has already acted for,
 // subject-form only.
 //
@@ -559,7 +563,11 @@ func (s *Server) knownPrincipals(ctx context.Context) []principalIdentity {
 //  3. The same two answers against the known EMAILS, which is the dual-identity
 //     rule capabilitySubjects and revokeAPITokensFor already apply, brought to
 //     the one admin surface that lacked it.
-//  4. Neither, and it is email-shaped ⇒ REFUSED. An "@" value that pairs to no
+//  4. Neither list holds it: the store's identity directory is asked (every
+//     person who ever signed in or was created by an admin, the emails they
+//     signed in with, and their entra:<tenant>:<object> form). One principal
+//     ⇒ that principal; several ⇒ REFUSED as ambiguous.
+//  5. Still nothing, and it is email-shaped ⇒ REFUSED. An "@" value that pairs to no
 //     principal cannot be a subject this deployment issues, so writing it could
 //     only name a namespace the owner never uses. A bare value is taken
 //     verbatim: the directory is api tokens and workspace owners only, and a
@@ -572,7 +580,27 @@ func (s *Server) knownPrincipals(ctx context.Context) []principalIdentity {
 // owner_known:false and the log can tell the two apart afterwards. The STATUS
 // is unchanged: refusing here would break the affordance.
 func (s *Server) resolveSecretOwner(ctx context.Context, v string) (owner string, known bool, refusal string) {
-	return resolvePrincipal(s.knownPrincipals(ctx), v)
+	owner, known, refusal = resolvePrincipal(s.knownPrincipals(ctx), v)
+	if known || refusal == secretOwnerAmbiguousMsg {
+		return owner, known, refusal
+	}
+	// Neither list knows the value. The identity directory knows everyone who
+	// ever signed in, and every person an admin created, whether or not they
+	// hold a token or a workspace.
+	dir, ok := s.cfg.Store.(store.PrincipalDirectoryStore)
+	if !ok {
+		return owner, known, refusal
+	}
+	found, err := dir.PrincipalsNamed(ctx, v)
+	switch {
+	case err != nil:
+		slog.WarnContext(ctx, "wardyn: resolve a person in the identity directory", slog.Any("err", err))
+	case len(found) == 1:
+		return found[0], true, ""
+	case len(found) > 1:
+		return "", false, secretOwnerAmbiguousMsg
+	}
+	return owner, known, refusal
 }
 
 func resolvePrincipal(directory []principalIdentity, v string) (owner string, known bool, refusal string) {

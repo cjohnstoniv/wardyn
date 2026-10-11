@@ -95,6 +95,47 @@ func TestPG_PersonErasure_PrincipalForName(t *testing.T) {
 	}
 }
 
+// The identity directory names who a typed value is, for a person with no token
+// or workspace: an exact principal, the entra form, an email in any case (from a
+// sign-in alias or a pre-created person); two people sharing an email are both
+// returned, and a stranger is none.
+func TestPG_PersonErasure_PrincipalsNamed(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	oid := uuid.NewString()
+	for _, in := range []store.LoginIdentity{
+		{Principal: "pairwise-sub", Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, Email: "Pat@Corp.Example"},
+		{Principal: "a@b.example", Issuer: "https://dex.example"},
+		{Principal: "sub-a", Issuer: "https://dex.example", Email: "shared@corp.example"},
+		{Principal: "sub-b", Issuer: "https://dex2.example", Email: "shared@corp.example"},
+	} {
+		if _, err := st.UpsertLoginIdentity(ctx, in, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := st.CreatePerson(ctx, types.Person{Principal: "precreated", Email: "Kit@Corp.Example", CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string][]string{
+		"pairwise-sub":                       {"pairwise-sub"},
+		"a@b.example":                        {"a@b.example"}, // an email-shaped subject is its own principal
+		"entra:" + idTenant + ":" + oid:      {"pairwise-sub"},
+		"PAT@corp.example":                   {"pairwise-sub"},
+		"kit@corp.example":                   {"precreated"},
+		"precreated":                         {"precreated"},
+		"shared@corp.example":                {"sub-a", "sub-b"},
+		"nobody@corp.example":                nil,
+		"entra:" + idTenant + ":no-such-oid": nil,
+		"":                                   nil,
+	} {
+		got, err := st.PrincipalsNamed(ctx, name)
+		if err != nil || !slices.Equal(got, want) {
+			t.Errorf("PrincipalsNamed(%q) = %v, %v, want %v", name, got, err, want)
+		}
+	}
+}
+
 // An erasure destroys the keys of every name the directory holds for the
 // person, so a row sealed under a name learned only later is shredded too.
 func TestPG_PersonErasure_PrincipalAliases(t *testing.T) {

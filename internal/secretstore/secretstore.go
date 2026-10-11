@@ -289,7 +289,10 @@ var ErrOperatorNamespace = errors.New("secretstore: the operator namespace is no
 // A store that keeps an erase generation (Generational) has it advanced before
 // anything is listed: a fenced write (BeginWrite) that began earlier is
 // refused, and one already past its check has landed by the time the advance
-// returns, so the list sees it. That holds across processes. The re-list is the
+// returns, so the list sees it. It is advanced again once the rows are
+// deleted, because a writer that began between the first advance and a delete
+// read a value the erase is about to remove, and its Put would otherwise write
+// it back under a generation that still matches. That holds across processes. The re-list is the
 // backstop for an unfenced writer, and for a store with no generation the
 // caller's locks (internal/api, handleErasePersonCredentials) are all that
 // serialise the writers in this process; Fenced says which of the two held.
@@ -328,6 +331,16 @@ func EraseOwner(ctx context.Context, st Store, owner string) (EraseReport, error
 			rep.Store = dr.Store
 			rep.Purged = rep.Purged && dr.Purged
 			rep.RecoverableDays = max(rep.RecoverableDays, dr.RecoverableDays)
+		}
+	}
+	if g, ok := view.(Generational); ok && rep.Fenced && len(errs) == 0 {
+		// A writer may have begun after the first advance and read a
+		// credential the loop above then deleted; its Put would write it back
+		// with a generation that still matches. The second advance refuses
+		// that Put, and waits for one already past its check, so the re-list
+		// below sees it.
+		if _, err := g.AdvanceGeneration(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("fence writes to %q after the delete: %w", owner, err))
 		}
 	}
 	if len(errs) == 0 {

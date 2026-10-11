@@ -61,11 +61,17 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 		writeErrorReason(w, http.StatusBadRequest, reasonCredentialErasePrincipalRequired, "name the person whose credentials to erase")
 		return
 	}
+	if s.refuseReservedErasure(w, r, "credential.erase", raw) {
+		return
+	}
 	owner, known, refusal := s.resolveSecretOwner(r.Context(), raw)
 	if refusal != "" {
 		reason := ownerRefusalReason(refusal)
 		s.auditOwnerRefusal(r, "credential.erase", raw, reason)
 		writeErrorReason(w, http.StatusUnprocessableEntity, reason, eraseRefusalMsg(refusal))
+		return
+	}
+	if s.refuseReservedErasure(w, r, "credential.erase", owner) {
 		return
 	}
 	// One code path erases credentials: the orchestrator's credentials scope

@@ -48,6 +48,63 @@ type PersonErasureStore interface {
 
 var _ PersonErasureStore = PG{}
 
+// PrincipalDirectoryStore answers who a name an admin typed is, from the
+// identity directory (principal_identities and its aliases, and the people an
+// admin pre-created): the people the People page lists, whether or not they
+// ever minted an API token or created a workspace. Optional like
+// PersonErasureStore.
+type PrincipalDirectoryStore interface {
+	// PrincipalsNamed returns the distinct principals name stands for. The
+	// first of these that matches decides: the exact principal, the
+	// entra:<tenant>:<object> form, then an email (case-folded) the person
+	// signed in with or was created under. More than one is ambiguous; none is
+	// a name the directory does not know.
+	PrincipalsNamed(ctx context.Context, name string) ([]string, error)
+}
+
+var _ PrincipalDirectoryStore = PG{}
+
+func (s PG) PrincipalsNamed(ctx context.Context, name string) ([]string, error) {
+	if name == "" {
+		return nil, nil
+	}
+	type tier struct {
+		query string
+		args  []any
+	}
+	tiers := []tier{
+		{`SELECT principal FROM principal_identities WHERE principal = $1
+		  UNION SELECT principal FROM people WHERE principal = $1`, []any{name}},
+	}
+	if rest, ok := strings.CutPrefix(name, "entra:"); ok {
+		if tid, oid, ok := strings.Cut(rest, ":"); ok && tid != "" && oid != "" {
+			tiers = append(tiers, tier{`SELECT principal FROM principal_identities WHERE tenant_id = $1 AND object_id = $2 AND principal IS NOT NULL
+			   UNION SELECT principal FROM people WHERE tenant_id = $1 AND object_id = $2`, []any{tid, oid}})
+		}
+	}
+	if strings.Contains(name, "@") {
+		tiers = append(tiers, tier{`SELECT i.principal FROM principal_identity_aliases a
+		     JOIN principal_identities i ON i.id = a.identity_id
+		    WHERE a.kind = 'email' AND a.value_lower = lower($1) AND i.principal IS NOT NULL
+		   UNION SELECT principal FROM principal_identities WHERE email_lower = lower($1) AND principal IS NOT NULL
+		   UNION SELECT principal FROM people WHERE email <> '' AND lower(email) = lower($1)`, []any{name}})
+	}
+	for _, t := range tiers {
+		rows, err := s.Pool.Query(ctx, t.query+` ORDER BY 1`, t.args...)
+		if err != nil {
+			return nil, fmt.Errorf("store: resolve a name to principals: %w", err)
+		}
+		found, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return nil, fmt.Errorf("store: resolve a name to principals: %w", err)
+		}
+		if len(found) > 0 {
+			return found, nil
+		}
+	}
+	return nil, nil
+}
+
 func (s PG) RunIDsCreatedBy(ctx context.Context, createdBy string) ([]uuid.UUID, error) {
 	rows, err := s.Pool.Query(ctx, `SELECT id FROM agent_runs WHERE created_by = $1 ORDER BY created_at, id`, createdBy)
 	if err != nil {

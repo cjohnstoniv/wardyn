@@ -71,7 +71,7 @@ func (s *Server) refuseExplicitOwnerParam(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handlePutMySecret(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	if s.refuseExplicitOwnerParam(w, r, "secret.write", name) {
+	if s.refuseDelegated(w, r) || s.refuseExplicitOwnerParam(w, r, "secret.write", name) {
 		return
 	}
 	if owner, ok := s.personalSecretOwner(w, r); ok {
@@ -81,7 +81,7 @@ func (s *Server) handlePutMySecret(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteMySecret(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	if s.refuseExplicitOwnerParam(w, r, "secret.delete", name) {
+	if s.refuseDelegated(w, r) || s.refuseExplicitOwnerParam(w, r, "secret.delete", name) {
 		return
 	}
 	if owner, ok := s.personalSecretOwner(w, r); ok {

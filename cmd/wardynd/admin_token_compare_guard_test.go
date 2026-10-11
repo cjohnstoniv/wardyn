@@ -53,6 +53,7 @@ var adminTokenCompareAllowed = map[string]string{
 	"internal/api/delegation.go|if t.Principal == \"\" || s.isReservedPrincipal(t.Principal) {":                                                               "refuses a delegated token whose principal is reserved",
 	"internal/api/delegation_exchange.go|sess, denied := s.cfg.OIDC.VerifySubjectToken(r, subjectToken, d.IdPClientID, s.isReservedPrincipal)":                "hands the refusal predicate to the portal token exchange",
 	"internal/api/modelaccess.go|func AdminTokenPrincipal() string { return adminTokenPrincipal }":                                                            "the accessor itself",
+	"internal/api/person_erasure.go|if !s.isReservedPrincipal(name) {":                                                                                        "refuses erasing a reserved name, which is no person",
 	"internal/api/people.go|case s.isReservedPrincipal(req.Principal):":                                                                                       "refuses recording a person under a reserved subject",
 	"internal/api/reserved_principal.go|func (s *Server) isReservedPrincipal(p string) bool {":                                                                "the reserved set's own declaration",
 	"internal/api/reserved_principal.go|if !s.isReservedPrincipal(p) {":                                                                                       "refuseReservedPrincipal answers 401 for a reserved principal",

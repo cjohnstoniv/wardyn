@@ -26,8 +26,10 @@
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
 //     ExportAuditPartition, AuditRetention, DropAuditPartition
 //   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, ListSecretsScoped,
-//     ListSecretsScopedPage, SetSecret, DeleteSecret, SetMySecret, DeleteMySecret
-//   - shared-secrets (/api/v1/shared-secrets): SetSharedSecret, DeleteSharedSecret
+//     ListSecretsScopedPage, SetSecret, DeleteSecret, ListMySecrets, ListMySecretsPage,
+//     SetMySecret, DeleteMySecret
+//   - shared-secrets (/api/v1/shared-secrets): ListSharedSecrets, ListSharedSecretsPage,
+//     SetSharedSecret, DeleteSharedSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives
 //   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
@@ -455,6 +457,44 @@ func (c *Client) SetSecret(ctx context.Context, name, value string) error {
 func (c *Client) DeleteSecret(ctx context.Context, name string) error {
 	path := "/api/v1/secrets/" + url.PathEscape(name)
 	return c.do(ctx, http.MethodDelete, path, nil, nil)
+}
+
+// ListMySecretsPage lists the names in the caller's OWN namespace, whatever their role (never
+// values; reserved platform keys excluded): GET /api/v1/me/secrets, which responds {"names":[...]}.
+// truncated=true means a further page exists. It needs a signed-in person (403
+// secret_personal_needs_person for the admin token).
+func (c *Client) ListMySecretsPage(ctx context.Context, opts ...ListOpts) (names []string, truncated bool, err error) {
+	return c.listNamespacePage(ctx, "/api/v1/me/secrets", opts)
+}
+
+// ListMySecrets is ListMySecretsPage without the truncation signal.
+func (c *Client) ListMySecrets(ctx context.Context, opts ...ListOpts) ([]string, error) {
+	names, _, err := c.ListMySecretsPage(ctx, opts...)
+	return names, err
+}
+
+// ListSharedSecretsPage lists the names of the shared service secrets (never values; reserved
+// platform keys excluded): GET /api/v1/shared-secrets, which responds {"names":[...]}. Operator tier
+// only (403 otherwise). truncated=true means a further page exists.
+func (c *Client) ListSharedSecretsPage(ctx context.Context, opts ...ListOpts) (names []string, truncated bool, err error) {
+	return c.listNamespacePage(ctx, "/api/v1/shared-secrets", opts)
+}
+
+// ListSharedSecrets is ListSharedSecretsPage without the truncation signal.
+func (c *Client) ListSharedSecrets(ctx context.Context, opts ...ListOpts) ([]string, error) {
+	names, _, err := c.ListSharedSecretsPage(ctx, opts...)
+	return names, err
+}
+
+func (c *Client) listNamespacePage(ctx context.Context, path string, opts []ListOpts) (names []string, truncated bool, err error) {
+	var out struct {
+		Names []string `json:"names"`
+	}
+	var hdr http.Header
+	if err = c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &out, &hdr); err != nil {
+		return nil, false, err
+	}
+	return out.Names, hdr.Get("X-Wardyn-Truncated") == "true", nil
 }
 
 // SetMySecret stores the caller's OWN secret, whatever their role: PUT /api/v1/me/secrets/{name}.

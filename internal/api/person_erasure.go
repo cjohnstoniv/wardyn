@@ -239,9 +239,61 @@ func erasureSelfTarget(actorType types.ActorType, principal, email, owner, raw s
 	return email != "" && (strings.EqualFold(email, owner) || strings.EqualFold(email, raw))
 }
 
+// erasureTargetsCaller is erasureSelfTarget over the names the erasure's own
+// steps act on. The audit step resolves the typed name through the identity
+// directory (PrincipalForName, then PrincipalAliases), so a name the credential
+// directory leaves as typed, an entra:<tenant>:<object> alias of the caller's
+// pairwise subject for one, still reaches the caller's records. The caller is
+// the target when any name of the target's matches any name of the caller's,
+// compared case-folded (a refusal that is too wide is the safe side). An error
+// reading the directory is returned: the erasure does not go ahead unchecked.
+func (s *Server) erasureTargetsCaller(ctx context.Context, actorType types.ActorType, principal, email, owner, raw string) (bool, error) {
+	if actorType == types.ActorSystem {
+		return false, nil
+	}
+	if erasureSelfTarget(actorType, principal, email, owner, raw) {
+		return true, nil
+	}
+	pe, err := s.personErasureStore()
+	if err != nil {
+		return false, nil // no identity directory: the names above are all there are
+	}
+	namesOf := func(typed ...string) ([]string, error) {
+		var out []string
+		for _, n := range typed {
+			if n == "" {
+				continue
+			}
+			p, err := pe.PrincipalForName(ctx, n)
+			if err != nil {
+				return nil, err
+			}
+			aliases, err := pe.PrincipalAliases(ctx, p)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, n, p)
+			out = append(out, aliases...)
+		}
+		return out, nil
+	}
+	target, err := namesOf(owner, raw)
+	if err != nil {
+		return false, err
+	}
+	caller, err := namesOf(principal, email)
+	if err != nil {
+		return false, err
+	}
+	return slices.ContainsFunc(target, func(t string) bool {
+		return t != "" && slices.ContainsFunc(caller, func(c string) bool { return strings.EqualFold(t, c) })
+	}), nil
+}
+
 // handleErasePerson is POST /people/{principal}/erasure on the security tier.
 // The body names the scopes (a non-empty list of known names). The principal
-// resolves as the credential erase resolves it, the operator namespace is
+// resolves as the credential erase resolves it, the operator namespace and the
+// reserved names that are no person (admin-token, local:, device:, a portal) are
 // refused for every scope before anything runs, and nobody erases themself
 // except their own credentials (the admin token, which is no person, may).
 // The person.erasure row names the person in the clear, lists the scopes and
@@ -268,6 +320,9 @@ func (s *Server) handleErasePerson(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonErasureOperatorNamespace, "that names the operator namespace, which is not a person's; nothing was erased")
 		return
 	}
+	if s.refuseReservedErasure(w, r, "person.erasure", raw) {
+		return
+	}
 	owner, known, refusal := s.resolveSecretOwner(r.Context(), raw)
 	if refusal != "" {
 		reason := ownerRefusalReason(refusal)
@@ -275,12 +330,22 @@ func (s *Server) handleErasePerson(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reason, eraseRefusalMsg(refusal))
 		return
 	}
-	if erasureSelfTarget(actorType, principal, oidcEmailFromContext(r.Context()), owner, raw) &&
-		slices.ContainsFunc(scopes, func(sc erasure.Scope) bool { return sc != erasure.Credentials }) {
-		record(owner, "failure", map[string]any{"reason": reasonErasureSelfRefused, "scopes": scopeNames(scopes)})
-		writeErrorReason(w, http.StatusForbidden, reasonErasureSelfRefused,
-			"you cannot erase your own records, except your credentials; ask another security admin. Nothing was erased")
+	if s.refuseReservedErasure(w, r, "person.erasure", owner) {
 		return
+	}
+	if slices.ContainsFunc(scopes, func(sc erasure.Scope) bool { return sc != erasure.Credentials }) {
+		self, err := s.erasureTargetsCaller(r.Context(), actorType, principal, oidcEmailFromContext(r.Context()), owner, raw)
+		if err != nil {
+			record(owner, "failure", map[string]any{"reason": "identity_directory_unreadable", "scopes": scopeNames(scopes)})
+			writeServerError(w, r, "check who an erasure names", err)
+			return
+		}
+		if self {
+			record(owner, "failure", map[string]any{"reason": reasonErasureSelfRefused, "scopes": scopeNames(scopes)})
+			writeErrorReason(w, http.StatusForbidden, reasonErasureSelfRefused,
+				"you cannot erase your own records, except your credentials; ask another security admin. Nothing was erased")
+			return
+		}
 	}
 
 	rep, err := s.erasureOrchestrator(nil).Orchestrate(r.Context(), owner, scopes)
@@ -323,6 +388,22 @@ func (s *Server) handleErasePerson(w http.ResponseWriter, r *http.Request) {
 	}
 	record(owner, "success", data)
 	writeJSON(w, http.StatusOK, map[string]any{"person": owner, "scopes": data["scopes"], "outcome": outcomes, "detail": detail})
+}
+
+// refuseReservedErasure answers 422 reserved_principal, and audits the refusal
+// under action, when name is a reserved identity (isReservedPrincipal): the
+// admin token, the local operator, a device or a portal is no person, and the
+// runs, outputs and recordings stamped with it belong to the deployment's
+// automation, not to someone who can ask to be forgotten. It reports whether it
+// answered.
+func (s *Server) refuseReservedErasure(w http.ResponseWriter, r *http.Request, action, name string) bool {
+	if !s.isReservedPrincipal(name) {
+		return false
+	}
+	s.auditOwnerRefusal(r, action, name, reasonReservedPrincipal)
+	writeErrorReason(w, http.StatusUnprocessableEntity, reasonReservedPrincipal,
+		"that names an identity that is not a person (the admin token, a local operator, a device or a portal); nothing was erased")
+	return true
 }
 
 func scopeNames(ss []erasure.Scope) []string {

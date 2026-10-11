@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // secretCmd manages named secrets in the control plane's store. Values are
@@ -61,13 +64,23 @@ func secretCmd(client clientFn) *cobra.Command {
 	set.Flags().BoolVar(&personal, "personal", false, "store it in your own namespace, whatever your role")
 	set.Flags().BoolVar(&shared, "shared", false, "store it as a shared service secret (operator tier)")
 
-	var asJSON bool
+	var asJSON, listPersonal, listShared bool
 	list := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List secret names (never values)",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if listPersonal || listShared {
+				if listPersonal && listShared {
+					return fmt.Errorf("--personal and --shared are exclusive")
+				}
+				list := client().ListSharedSecrets
+				if listPersonal {
+					list = client().ListMySecrets
+				}
+				return printNamespaceNames(cmd, list, asJSON)
+			}
 			names, mine, err := client().ListSecretsScoped(cmd.Context())
 			if err != nil {
 				return err
@@ -83,7 +96,9 @@ func secretCmd(client clientFn) *cobra.Command {
 			return nil
 		},
 	}
-	list.Flags().BoolVar(&asJSON, "json", false, "emit {\"names\":[...],\"mine\":[...]} (the server's shape)")
+	list.Flags().BoolVar(&asJSON, "json", false, "emit {\"names\":[...],\"mine\":[...]} (the server's shape; {\"names\":[...]} with --personal or --shared)")
+	list.Flags().BoolVar(&listPersonal, "personal", false, "list only the names in your own namespace, whatever your role")
+	list.Flags().BoolVar(&listShared, "shared", false, "list only the shared service secrets (operator tier)")
 
 	var delPersonal, delShared bool
 	del := &cobra.Command{
@@ -168,6 +183,21 @@ func printSecretScopes(w io.Writer, names, mine []string) {
 		}
 		fmt.Fprintf(w, "%s\t(%s)\n", n, scopes)
 	}
+}
+
+// printNamespaceNames is `secret list --personal` or `--shared`: one namespace, named by its own route.
+func printNamespaceNames(cmd *cobra.Command, list func(context.Context, ...sdk.ListOpts) ([]string, error), asJSON bool) error {
+	names, err := list(cmd.Context())
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return emitJSON(cmd.OutOrStdout(), map[string]any{"names": names})
+	}
+	for _, n := range names {
+		fmt.Fprintln(cmd.OutOrStdout(), n)
+	}
+	return nil
 }
 
 func isTerminal(f *os.File) bool {

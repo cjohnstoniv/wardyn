@@ -263,3 +263,35 @@ func TestSecretSetAndDeleteChooseTheirRoute(t *testing.T) {
 		t.Error("--personal with --shared was accepted")
 	}
 }
+
+// #1510: `secret list --personal` and `--shared` read their own route; neither flag keeps the scoped one.
+func TestSecretListChoosesItsRoute(t *testing.T) {
+	for _, c := range []struct {
+		path string
+		args []string
+		want string
+	}{
+		{"/api/v1/secrets", []string{"secret", "list"}, "a-key\t(operator)\n"},
+		{"/api/v1/me/secrets", []string{"secret", "list", "--personal"}, "a-key\n"},
+		{"/api/v1/shared-secrets", []string{"secret", "list", "--shared"}, "a-key\n"},
+	} {
+		var gotPath string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			_, _ = w.Write([]byte(`{"names":["a-key"]}`))
+		}))
+		out, err := operatorCommand(t, srv.URL, "", c.args...)
+		srv.Close()
+		if err != nil {
+			t.Fatalf("%v: %v", c.args, err)
+		}
+		if gotPath != c.path || out != c.want {
+			t.Errorf("%v hit %s printing %q, want %s printing %q", c.args, gotPath, out, c.path, c.want)
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("request sent") }))
+	defer srv.Close()
+	if _, err := operatorCommand(t, srv.URL, "", "secret", "list", "--personal", "--shared"); err == nil {
+		t.Error("--personal with --shared was accepted")
+	}
+}

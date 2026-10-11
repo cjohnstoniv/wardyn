@@ -12,11 +12,19 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const explicitValue = `{"value":"explicit-route-secret-value"}`
@@ -233,5 +241,31 @@ func TestExplicitSecrets_ListsAreScopedAndRoleIndependent(t *testing.T) {
 	}
 	if got := read("/api/v1/shared-secrets"); !slices.Equal(got, []string{"shared-one"}) {
 		t.Errorf("/shared-secrets = %v", got)
+	}
+}
+
+// A delegated caller (a portal acting for someone) is refused as delegated on the personal routes,
+// before ?owner= is looked at: the owner_param refusal must not mask the delegation one.
+func TestExplicitSecrets_DelegationIsRefusedBeforeTheOwnerParam(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{}, owned: map[string]map[string][]byte{}}
+	h, srv := secretsRBACServer(t, sec)
+	router := chi.NewRouter()
+	router.Put("/me/secrets/{name}", srv.handlePutMySecret)
+	router.Delete("/me/secrets/{name}", srv.handleDeleteMySecret)
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		r := httptest.NewRequest(method, "/me/secrets/x?owner=bob", strings.NewReader(explicitValue))
+		r = r.WithContext(audit.WithDelegation(r.Context(), types.DelegationVia{Delegate: uuid.New(), Grant: uuid.New()}))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), string(authz.ReasonDelegationScope)) {
+			t.Errorf("%s with ?owner= as a delegate = %d %s, want 403 %s", method, w.Code, w.Body, authz.ReasonDelegationScope)
+		}
+	}
+	for _, ev := range h.audit.events {
+		if ev.Action == "secret.write" || ev.Action == "secret.delete" {
+			if strings.Contains(string(ev.Data), "owner_param") {
+				t.Errorf("a delegated request was audited as an owner_param refusal: %s", ev.Data)
+			}
+		}
 	}
 }
