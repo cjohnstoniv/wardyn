@@ -354,7 +354,7 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob aw
 	if at := blob.lastUsable(); !at.IsZero() {
 		ctx = secretstore.WithExpiry(ctx, at)
 	}
-	err = s.putOwned(ctx, owner, func() error { return st.Put(ctx, scope.ssoSecret(), raw) })
+	err = s.putOwned(ctx, owner, func(ctx context.Context) error { return st.Put(ctx, scope.ssoSecret(), raw) })
 	s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", owner, scope.ssoSecret())
 	return err
 }

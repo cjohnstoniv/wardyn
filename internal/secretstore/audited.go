@@ -211,6 +211,24 @@ func (a *audited) Revision(ctx context.Context, name string) (string, error) {
 	return r.Revision(ctx, name)
 }
 
+// Generation and AdvanceGeneration forward the wrapped store's erase generation
+// (Generational), or answer ErrNoGeneration. Not audited: neither reads a value.
+func (a *audited) Generation(ctx context.Context) (int64, error) {
+	g, ok := a.inner.(Generational)
+	if !ok {
+		return 0, ErrNoGeneration
+	}
+	return g.Generation(ctx)
+}
+
+func (a *audited) AdvanceGeneration(ctx context.Context) (int64, error) {
+	g, ok := a.inner.(Generational)
+	if !ok {
+		return 0, ErrNoGeneration
+	}
+	return g.AdvanceGeneration(ctx)
+}
+
 // Holders is not audited: it reads which namespaces hold a row, never a value.
 func (a *audited) Holders(ctx context.Context, names []string) (map[string][]string, error) {
 	return a.inner.Holders(ctx, names)

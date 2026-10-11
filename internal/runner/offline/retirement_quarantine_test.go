@@ -52,7 +52,7 @@ func TestPendingRetirementQuarantineSurvivesRestartWithoutClearingFence(t *testi
 			if err := m.Close(); err != nil {
 				t.Fatal(err)
 			}
-			reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+			reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 			if err != nil {
 				t.Fatalf("quarantine poisoned runner restart: %v", err)
 			}
@@ -61,7 +61,7 @@ func TestPendingRetirementQuarantineSurvivesRestartWithoutClearingFence(t *testi
 			if retained.Retirement == nil || *retained.Retirement != *before.Retirement || retained.Quarantine == nil || retained.Retired || *retained.Containment != *before.Containment {
 				t.Fatal("quarantine cleared settlement/producer fence or falsely retired")
 			}
-			if rows, err := reopened.State(t.Context()); err != nil || len(rows) != 1 || rows[0].RunID != other {
+			if rows, err := allState(t.Context(), reopened); err != nil || len(rows) != 1 || rows[0].RunID != other {
 				t.Fatalf("other run stranded: %+v %v", rows, err)
 			}
 			if err := reopened.Replay(t.Context(), nil); err != nil {

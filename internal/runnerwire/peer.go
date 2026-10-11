@@ -89,7 +89,7 @@ type Peer struct {
 	err       error
 	done      chan struct{}
 	stopped   chan struct{}
-	lastPong  atomic.Int64
+	lastPong  atomic.Pointer[time.Time]
 	ackWake   chan struct{}
 }
 
@@ -325,7 +325,8 @@ func (p *Peer) handleFrame(f Frame) error {
 		if _, err := DecodePing(f.Payload); err != nil {
 			return err
 		}
-		p.lastPong.Store(time.Now().UnixNano())
+		now := time.Now()
+		p.lastPong.Store(&now)
 	default:
 		if p.cfg.OnControlChecked != nil {
 			return p.cfg.OnControlChecked(f)

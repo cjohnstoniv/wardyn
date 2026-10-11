@@ -30,7 +30,15 @@ func (s *Server) sendOutput(peer *runnerwire.Peer, id uuid.UUID, b *outputBuffer
 				return
 			}
 			var reset *runnerwire.ResetError
-			if !errors.As(err, &reset) || reset.Code != runnerwire.ResetCapacity {
+			if !errors.As(err, &reset) {
+				return
+			}
+			if reset.Code == runnerwire.ResetRefused {
+				// The org holds no sink for this run (it restarted): nothing will
+				// ACK until it recovers the run, so the agent must not wait for it.
+				b.unacknowledged()
+			}
+			if reset.Code != runnerwire.ResetCapacity {
 				return
 			}
 			timer := time.NewTimer(delay)
