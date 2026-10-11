@@ -985,18 +985,3 @@ func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
 	// audit writer, not just this one. So there is no API-layer-only spool here.
 	_ = s.cfg.Audit.Record(ctx, ev)
 }
-
-// auditEvent is a small constructor used across handlers.
-func (s *Server) auditEvent(runID *uuid.UUID, actorType types.ActorType, actor, action, target, outcome string, data []byte) types.AuditEvent {
-	return types.AuditEvent{
-		ID:        uuid.New(),
-		Time:      s.cfg.Now().UTC(),
-		RunID:     runID,
-		ActorType: actorType,
-		Actor:     actor,
-		Action:    action,
-		Target:    target,
-		Outcome:   outcome,
-		Data:      data,
-	}
-}
