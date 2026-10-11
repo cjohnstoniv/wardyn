@@ -56,6 +56,11 @@ func (s *Server) handleCreateRunnerPool(w http.ResponseWriter, r *http.Request) 
 		writePoolInvalid(w, "hosting_type is remote_provided or self_hosted")
 		return
 	}
+	if req.Limits != nil {
+		// Not stored yet: refused rather than accepted and dropped.
+		writePoolInvalid(w, "pool limits are not supported yet")
+		return
+	}
 	p, err := ps.CreateRunnerPool(r.Context(), types.RunnerPool{ID: uuid.New(), Name: req.Name, HostingType: req.HostingType}, principalFromRequest(r))
 	switch {
 	case errors.Is(err, store.ErrConflict):

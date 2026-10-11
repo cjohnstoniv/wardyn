@@ -479,3 +479,25 @@ func TestPG_RunnerPoolConcurrentDirectExecutorWritesTakeTheGovernanceTargetLock(
 		}
 	}
 }
+
+// Limits are not stored yet, so a body carrying them is refused rather than accepted and dropped.
+func TestPG_RunnerPoolCreateAndUpdateRefuseLimits(t *testing.T) {
+	e := newPoolEnv(t, false)
+	limits := `"limits":{"background":{},"barriers":["fence"]}`
+	w := e.admin(http.MethodPost, "/api/v1/runner-pools", `{"name":"Limited","hosting_type":"remote_provided",`+limits+`}`)
+	if w.Code != http.StatusBadRequest || wireReason(t, w) != string(runnerpool.ReasonInvalid) {
+		t.Errorf("create with limits = %d %s, want 400 runner_pool_invalid", w.Code, w.Body)
+	}
+	if n := e.count(`SELECT count(*) FROM runner_pools`); n != 0 {
+		t.Errorf("a refused create stored %d pools", n)
+	}
+	pool := e.createPool("Plain", types.RunnerPoolRemoteProvided)
+	rev := e.revision(pool.ID)
+	body := fmt.Sprintf(`{"revision":%d,"name":"Renamed",%s}`, rev, limits)
+	if w := e.admin(http.MethodPut, poolPath(pool.ID), body); w.Code != http.StatusBadRequest {
+		t.Errorf("update with limits = %d %s, want 400", w.Code, w.Body)
+	}
+	if e.revision(pool.ID) != rev {
+		t.Errorf("a refused update moved the pool")
+	}
+}
