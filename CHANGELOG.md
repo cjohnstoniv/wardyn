@@ -24,6 +24,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `evidence_source`. Existing rows retain empty placement and evidence, false `placement_filled` and a
   NULL runner; deleting a runner clears its reference while preserving the run. This records placement
   data without enabling local execution or choosing placement for unresolved runs (#116).
+- Migrations `0146_runner_spool_cursors`, `0147_runner_executions` and `0148_runner_inventories` add the
+  `runner_spool_cursors`, `runner_executions`, `runner_execution_exits`, `runner_inventories`,
+  `runner_inventory_candidates` and `runner_inventory_observations` tables for 0.9 client mode; grant the app
+  role `SELECT, INSERT, UPDATE, DELETE` on the six new tables. `0149_runner_action_binding` and
+  `0150_runner_revoked_by` change existing tables only and need no new grant.
 - Migration `0139_runner_delivery` adds the `runners` and `runner_pending_actions` tables, the
   `credential_delivery_policy` document and `credential_grants.delivery`, for 0.9 client mode and
   credential delivery; grant the app role `SELECT, INSERT, UPDATE, DELETE` on the two new tables. Nothing
