@@ -784,6 +784,18 @@ These are emitted by background sweepers, not request handlers — `ActorType` i
 - The `audit.retention.partition_dropped` row and its anchor, which the database writes, carry the dropping operator's subject too; a drop is refused (`503` `audit_retention_drop_failed`) while the subject cannot be had.
 - `subject:` is a reserved principal prefix whatever the mode is: a session cookie, a `wdn_` token or a `/people/{principal}` path carrying it is refused with `reserved_principal`.
 
+**The target, under `WARDYN_AUDIT_SEAL=full`.**
+
+- `full` also stores the `target` of a row whose target is a person's principal as `subject:<uuid>`, by the same rule as the `actor`.
+- The list is closed and only ever grows ([`internal/audit/sealkeys.go`](../internal/audit/sealkeys.go)): `person.create`, `person.attach`, `person.token.create`, `delegation.exchange`, `session.revoke` and `secret.list`.
+- A reader shows the person while no key of theirs was destroyed after the row was written, and `[erased]` after.
+- `?target=<person>` on `GET /audit` and `GET /audit/export` matches both the person's name (rows written before `full` was on) and their subject.
+- A person with no identity row keeps their name in `target`, as in `actor`; so does a `session.revoke` row for `*` (everyone).
+- Left in the clear because their target is not always a person: `ssh_key.delete` (a key fingerprint, or the principal an admin cleared) and `key_domain.assignment.set` and `key_domain.assignment.delete` (`user:<principal>`, `group:<name>` or `all`).
+- Left in the clear because it records an erasure: `person.erasure`, `credential.erase` and `principal_key.destroyed`.
+- Left in the clear because the target is an id, not a person: `person.deprovision`, `scim.user.write`, `scim.user.deactivate`, `scim.group.member_remove`, `identity.unbind` and `token.create`.
+- Only the `target` column is sealed: a person named inside `data` stays as the [sealed-field list](#sealed-fields) leaves it.
+
 > [!WARNING]
 > **Out of reach.** Rows written before sealing was turned on, or before 0.8.6, are plaintext and stay so.
 > Erasure is complete for backups only when the backup expires or the wrapping key version is retired.

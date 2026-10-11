@@ -673,7 +673,7 @@ The rest reach the wire only through
 | Reason | Meaning |
 |---|---|
 | `admin_surface` / `security_admin_surface` | The tier gates every admin/security-admin-only route runs through (`isOperator`/`isSecurityOperator`): the caller's stamped role is below the route's own floor. Both answer the byte-identical sentence "requires admin role" — the reason is what tells the two tiers apart. |
-| `audit_export_partition_filter` | `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `actor_type`, `outcome` or `origin`): a partition export always covers the whole partition. Answered `400` and not audited. |
+| `audit_export_partition_filter` | `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `target`, `actor_type`, `outcome` or `origin`): a partition export always covers the whole partition. Answered `400` and not audited. |
 | `audit_retention_not_oldest` | `POST /audit/retention/drop` named a partition that is not the oldest retained one. Answered `409` and audited (`authz.denied`, target `audit.retention`, `partition` in the row). |
 | `audit_retention_not_closed` | `POST /audit/retention/drop`: the oldest partition can still receive rows. Answered `409` and audited. |
 | `audit_retention_inside_window` | `POST /audit/retention/drop`: the partition ended less than the effective retention window ago, or retention is forever. Answered `409` and audited. |
@@ -940,7 +940,7 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
 Beyond `run_id`, the audit query accepts server-side predicates:
 
 - `since`/`until` (RFC 3339), `action` (exact), `action_prefix` (e.g. `egress.`),
-  `actor` (exact),
+  `actor` and `target` (exact; under `WARDYN_AUDIT_SEAL=full` each also matches the subject a sealed row stores for that person),
 - `actor_type` (`human|agent|system`), `outcome`
   (`success|denied|failure`),
 - and `origin` (`device|organisation`: the rows an
