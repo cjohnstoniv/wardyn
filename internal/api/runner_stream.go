@@ -100,6 +100,17 @@ func (s *Server) RunnersDisabled(ctx context.Context) {
 	}
 }
 
+// defaultRunnerHooks wires the runners routes' online read and switch-off hook
+// to this process's Hub unless the caller injected its own.
+func (s *Server) defaultRunnerHooks() {
+	if s.cfg.RunnerOnline == nil {
+		s.cfg.RunnerOnline = s.RunnerOnline
+	}
+	if s.cfg.RunnersDisabled == nil {
+		s.cfg.RunnersDisabled = s.RunnersDisabled
+	}
+}
+
 // runnerHub builds the one Hub lazily. Callbacks not injected are the durable
 // org composition: admitRunner and the asynchronous offline sweep.
 func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {

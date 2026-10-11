@@ -915,12 +915,7 @@ func New(cfg Config) *Server {
 		},
 	}
 	s.scimState = newSCIMState()
-	if s.cfg.RunnerOnline == nil {
-		s.cfg.RunnerOnline = s.RunnerOnline
-	}
-	if s.cfg.RunnersDisabled == nil {
-		s.cfg.RunnersDisabled = s.RunnersDisabled
-	}
+	s.defaultRunnerHooks()
 	if cfg.PreflightRatePerMin > 0 {
 		s.preflightLimiter = &principalLimiter{rate: float64(cfg.PreflightRatePerMin) / 60, burst: preflightBurst, max: preflightLimiterMaxPeople}
 	}
