@@ -140,6 +140,7 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepAutonomy", foldCreate | foldPreflight | foldPreview},
 	{"stepADOStanding", foldCreate | foldPreflight | foldPreview},
 	{"stepPATNarrowing", foldPreflight | foldPreview},
+	{"stepRunEnd", foldCreate | foldPreflight | foldPreview},
 	{"stepHostCapacity", foldCreate | foldPreflight},
 	{"stepRunCap", foldCreate | foldPreflight},
 	{"stepRunFit", foldCreate | foldPreflight},

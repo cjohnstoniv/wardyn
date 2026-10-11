@@ -71,6 +71,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   actor. It refuses to run while any principal-keyed table already holds a name starting `service:`, naming the
   first such table; rename or remove those rows first. Widening the audit actor check briefly locks `audit_events`
   and its partitions.
+- Migration `0159_run_lifetime_cap` adds `agent_runs.lifetime_cap_at` and `lifetime_cap_source`; existing runs keep
+  them empty.
 
 ### Added
 
@@ -227,6 +229,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and capabilities are now checked against the runner it actually lands on, and an offline runner is refused rather
   than guessed. Create, preflight, policy preview and source scans refuse a denied placement with 403
   `placement_denied`.
+- New Run can set a run's end at launch (`ends_after_sec`, `wardyn run --ends-in`), or No end where every limit
+  allows it (`no_end`, `--no-end`). An end past a limit is cut to it and the response names the limit. An untouched
+  Interactive run now ends after 24 hours when no pool, profile or deployment names a lifetime. `GET /runs?no_end=1`
+  lists live runs with no end.
 
 ### Changed
 
@@ -287,6 +293,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - A recording uploaded for a run on a self-hosted runner is audited `evidence_source: runner_asserted`: a local
   run's recording is self-reported (threat model residuals #50-#52). Masking continuity across restarts (#1512) is
   pinned by tests for a run with no secrets and for kill and revoke without a masking corpus.
+- `WARDYN_RUN_MAX_AGE` is now every new run's lifetime cap, not only a reaper stop. A run launched from New Run or
+  `POST /runs` that no profile or pool gives an end now ends at creation plus the max age (Interactive at the
+  earlier of 24 hours and the max age). `no_end` at launch is refused naming the deployment, and `PATCH /runs/{id}`
+  can no longer set No end or extend past the cap, a super admin included (a super admin still skips the profile's
+  limits). Until the lease sweep honours the cap, the lease sweep keeps the run at the same moment the reaper stops
+  it.
 
 ### Removed
 

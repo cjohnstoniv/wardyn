@@ -203,6 +203,24 @@ func DeploymentSource(defaults types.ResourceLimits, maxAgeSec, concurrentRuns i
 	return out, nil
 }
 
+// InteractiveDefaultLifetimeSec is the end an untouched Interactive run gets when
+// no source (pool, governance, deployment) names a lifetime default: 24 hours
+// (owner ruling, #1319). An Interactive run never defaults to No end; that is an
+// explicit choice. Idle stop still ends an abandoned run sooner.
+const InteractiveDefaultLifetimeSec = 24 * 60 * 60
+
+// WithInteractiveLifetimeDefault adds the Interactive fallback to the deployment
+// source for runType. It rides the deployment's default slot, which Effective
+// reads only when nothing more specific names a default and never above a cap,
+// so a pool's or a profile's own default and every maximum win over it, and it
+// changes no source's No end permission. Any other run type is returned as given.
+func WithInteractiveLifetimeDefault(deployment SourceLimits, runType types.RunnerPoolRunType) SourceLimits {
+	if runType == types.RunnerPoolRunInteractive && deployment.LifetimeSec.Default == nil {
+		deployment.LifetimeSec.Default = Int(InteractiveDefaultLifetimeSec)
+	}
+	return deployment
+}
+
 // PoolSource is the pool's side of Effective for one run type. A pool with no
 // limits adds no bound. A run type the pool does not serve is a refusal, so a
 // pool never answers limits for a run it would not take.
