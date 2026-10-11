@@ -15,4 +15,7 @@
 # docs/ENV.md 36185 measured after D-1319 S1 merge.
 # docs/ENV.md 36115 adds 25 (0.9 F-588 M2): chart kek.awskms.key on the WARDYN_AWS_KMS_KEY row and section, and the WARDYN_TEST_AWS_KMS_KEY list entry.
 # docs/ENV.md 36287 measured after D-1319 S2 (lifetime kill).
-docs/ENV.md=36287 share=5
+# docs/ENV.md 36210 measured after F-588 M2 merge.
+# docs/ENV.md 36241 adds 31 (0.9 A-L3): the WARDYN_TOOLGATE_CREDENTIAL row.
+# docs/ENV.md 36318 measured after merge.
+docs/ENV.md=36318 share=5
