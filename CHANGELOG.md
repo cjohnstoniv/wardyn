@@ -80,8 +80,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `delegation.exchange`, `session.revoke`, `secret.list` and `auth.signin_unserialized` rows is stored as the
   person's subject, like the actor, when that person has an identity row, and a typed `subject:` string in an actor
   or target is refused on rows this organisation writes; a row a device forwards is shown as the device sent it and
-  never resolved to a person. `GET /audit?target=` matches both forms (#1828). A person named in `data` (`sub`,
-  `target`, `secret_owner`), and the target of `person.create`, stay clear.
+  never resolved to a person. `GET /audit?target=<person>` matches both forms on rows this organisation writes and
+  does not list a device-forwarded row that merely names the person's subject; a filter on the raw target string
+  still finds it (#1828). A person named in `data` (`sub`, `target`, `secret_owner`), and the target of
+  `person.create`, stay clear.
 - Personal and shared secrets are named by route. `PUT`/`DELETE /me/secrets/{name}` (and `GET /me/secrets`) store
   your own secret whatever your role or view; `PUT`/`DELETE /shared-secrets/{name}` (and `GET`) store a shared
   service secret, admin only. Neither accepts `?owner=`. `wardyn secret set|delete` take `--personal` or `--shared`,
