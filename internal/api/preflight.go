@@ -105,13 +105,13 @@ const (
 )
 
 // refusePreflightRate answers 429 when this person is over the preflight rate, true when it has
-// answered. A person only; the admin token is one shared actor name, so limiting it would pool
-// every CI job into one bucket.
+// answered. A person or a service identity; the admin token is one shared actor name, so limiting it would
+// pool every CI job into one bucket.
 func (s *Server) refusePreflightRate(w http.ResponseWriter, r *http.Request) bool {
 	if s.preflightLimiter == nil {
 		return false
 	}
-	if t, who := actorFromRequest(r); t != types.ActorHuman || s.preflightLimiter.allow(who, s.cfg.Now()) {
+	if who, limited := rateLimitedActor(r); !limited || s.preflightLimiter.allow(who, s.cfg.Now()) {
 		return false
 	}
 	writeErrorReason(w, http.StatusTooManyRequests, reasonPreflightRateLimited, "too many preflight checks; slow down")
@@ -348,6 +348,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		AllowedImages:            []client.AllowedImage{},
 		RunnerPools:              []client.RunnerPoolChoice{},
 	}
+	resp.RunnerPool, resp.RunnerPools = f.place.facts()
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred
 	}

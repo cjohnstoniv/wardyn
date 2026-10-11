@@ -205,8 +205,7 @@ var templateRequestRules = []TemplateFieldRule{
 	excludedField("preset_version", templateExcludeOrigin,
 		"A preset's version only means something beside its preset."),
 	carriedField("runner_pool_id", templateTabRunner, partRunner, templateOmitBaseline, templateEmptySame,
-		"The pool resolves from the person's own default, then the organisation's, when the template is used. A default that is unavailable or refused never falls through to another pool: the person chooses. A named pool narrows where the run may go and grants nothing, and the launcher's pool-use policy is checked at use.").
-		pending("C-pools"),
+		"The pool resolves from the person's own default, then the organisation's, when the template is used. A default that is unavailable or refused never falls through to another pool: the person chooses. A named pool narrows where the run may go and grants nothing, and the launcher's pool-use policy is checked at use."),
 	carriedField("ends_after_sec", templateTabRunner, partRunner, templateOmitBaseline, templateEmptySame,
 		"The run takes the default end when the template is used, and that default can change. An end is a length of time from launch, checked again then, never a permission."),
 	carriedField("no_end", templateTabRunner, partRunner, templateOmitBaseline, templateEmptySame,

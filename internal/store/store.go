@@ -86,10 +86,27 @@ func (s PG) Ping(ctx context.Context) error {
 // column, in order (TestCreateRunBindsEveryInsertColumn).
 var createRunSQL = `
 		INSERT INTO agent_runs (` + runInsertCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46)
 		RETURNING ` + runCols
 
-// CreateRun inserts a new run and returns the persisted row.
+// runnerPoolFence is the value of the runner_pool_id column in createRunSQL: the pool read through its
+// own row, locked FOR SHARE, only when it is still active at the revision the run was admitted against.
+// A pool that moved or was switched off since yields NULL, which agent_runs_runner_pool_binding refuses
+// against the run's selection (runInsertErr). One statement, so no pool change can slip between the
+// admission and the row. $43 and $44 are the pool id and revision columns' own placeholders.
+const runnerPoolFence = `(SELECT id FROM runner_pools WHERE id = $43 AND revision = $44 AND state = 'active' FOR SHARE)`
+
+// runInsertErr names a pool-fence failure (ErrRunnerPoolStale, store_runner_pools.go); any other error passes through unchanged.
+func runInsertErr(err error) error {
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) && pe.Code == "23514" && pe.ConstraintName == "agent_runs_runner_pool_binding" {
+		return ErrRunnerPoolStale
+	}
+	return err
+}
+
+// CreateRun inserts a new run and returns the persisted row. A run bound to a runner pool is inserted
+// only while that pool is still active at the recorded revision, else ErrRunnerPoolStale.
 func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, error) {
 	args, err := s.createRunArgs(r)
 	if err != nil {
@@ -109,7 +126,7 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 		out, e = scanRun(q.QueryRow(ctx, createRunSQL, args...))
 		return e
 	})
-	return out, err
+	return out, runInsertErr(err)
 }
 
 // ErrRunCapReached is CreateRunUnderCap's refusal: the deployment already holds
@@ -157,7 +174,7 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 	}
 	created, err := scanRun(tx.QueryRow(ctx, createRunSQL, args...))
 	if err != nil {
-		return types.AgentRun{}, err
+		return types.AgentRun{}, runInsertErr(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return types.AgentRun{}, err
@@ -219,7 +236,7 @@ func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 		r.EndsAt, r.WaitBudgetSec, limitsJSON, r.GovernanceProfileID, r.ModelProviderID, r.UserType,
 		r.Preset, r.PresetVersion, r.OperatorOwned, r.CreatedVia, r.DiskMiB,
 		string(r.Placement), r.PlacementFilled, r.RunnerID, string(r.EvidenceSource), string(r.Experience),
-		r.LifetimeCapAt, string(r.LifetimeCapSource),
+		r.LifetimeCapAt, string(r.LifetimeCapSource), r.RunnerPoolID, r.RunnerPoolRevision, string(r.RunnerPoolSelection), r.RunnerPoolExecutor,
 	}, nil
 }
 
@@ -464,7 +481,7 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 // The read list is the write list plus the columns only a scoped UPDATE writes,
 // so a column appended to runInsertCols reaches both lists at once.
 const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, autonomy_level, ` +
-	`ends_at, wait_budget_sec, run_limits, governance_profile_id, model_provider_id, user_type, preset, preset_version, operator_owned, created_via, disk_mib, placement, placement_filled, runner_id, evidence_source, experience, lifetime_cap_at, lifetime_cap_source`
+	`ends_at, wait_budget_sec, run_limits, governance_profile_id, model_provider_id, user_type, preset, preset_version, operator_owned, created_via, disk_mib, placement, placement_filled, runner_id, evidence_source, experience, lifetime_cap_at, lifetime_cap_source, runner_pool_id, runner_pool_revision, runner_pool_selection, runner_pool_executor`
 const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at`
 
 // scanRun is the ONE reader for runCols. A new column is appended to
@@ -472,7 +489,7 @@ const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_re
 // that can't silently transpose two same-typed columns past the compiler.
 func scanRun(row pgx.Row) (types.AgentRun, error) {
 	var r types.AgentRun
-	var cc, state, autonomyLevel, lostReason, pausedReason, placement, evidenceSource, experience, capSource string
+	var cc, state, autonomyLevel, lostReason, pausedReason, placement, evidenceSource, experience, capSource, poolSelection string
 	var limitsRaw []byte
 	var containmentErr *string
 	err := row.Scan(
@@ -483,6 +500,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.EndsAt, &r.WaitBudgetSec, &limitsRaw, &r.GovernanceProfileID, &r.ModelProviderID, &r.UserType,
 		&r.Preset, &r.PresetVersion, &r.OperatorOwned, &r.CreatedVia, &r.DiskMiB,
 		&placement, &r.PlacementFilled, &r.RunnerID, &evidenceSource, &experience, &r.LifetimeCapAt, &capSource,
+		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor,
 		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason, &containmentErr, &r.ContainmentErrorAt, &r.EndedAt,
 		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt,
 	)
@@ -501,6 +519,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	r.EvidenceSource = types.RunEvidenceSource(evidenceSource)
 	r.Experience = types.RunExperience(experience)
 	r.LifetimeCapSource = types.LimitSource(capSource)
+	r.RunnerPoolSelection = types.RunnerPoolSelection(poolSelection)
 	if containmentErr != nil {
 		r.ContainmentError = *containmentErr
 	}

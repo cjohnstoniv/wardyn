@@ -133,6 +133,7 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepGitHubEgress", foldCreate | foldPreflight | foldPreview},
 	{"stepComponents", foldCreate | foldPreflight | foldPreview},
 	{"stepPlacementDenied", foldCreate | foldPreflight | foldPreview},
+	{"stepPlacement", foldCreate | foldPreflight | foldPreview},
 	{"stepLocalEligibility", foldCreate | foldPreflight | foldPreview},
 	{"stepConfinement", foldCreate | foldPreflight | foldPreview},
 	{"stepPlacementCapability", foldCreate | foldPreflight | foldPreview},

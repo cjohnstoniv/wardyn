@@ -10,12 +10,14 @@ package pg
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -41,7 +43,7 @@ func purgeOf(oldUID, newUID string) context.Context {
 // erase starts. The erase's advance waits for the purge, so its later history
 // delete removes the row the purge wrote.
 func TestPG_EraseWaitsForAProviderPurgeAndRemovesTheHistoryItWrote(t *testing.T) {
-	s, pool, _ := newPGStore(t)
+	s, _, _ := newPGStore(t)
 	owner := "gen-prov-" + uuid.NewString()
 	oldUID := uuid.NewString()
 	if err := s.For(owner).Put(t.Context(), types.ModelProviderSecretPrefix+oldUID+"-key", []byte("provider-key-0000")); err != nil {
@@ -52,7 +54,7 @@ func TestPG_EraseWaitsForAProviderPurgeAndRemovesTheHistoryItWrote(t *testing.T)
 	if _, err := s.For(owner).(*Store).AdvanceGeneration(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	tx, err := beginReadCommitted(t.Context(), pool)
+	tx, err := beginReadCommitted(t.Context(), holdPool(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +83,7 @@ func TestPG_EraseWaitsForAProviderPurgeAndRemovesTheHistoryItWrote(t *testing.T)
 // The history delete takes the owner's counter row exclusively, so it waits for
 // a purge that is still writing and removes what the purge wrote.
 func TestPG_DeleteProviderChangesWaitsForAPurgeHoldingTheOwner(t *testing.T) {
-	s, pool, _ := newPGStore(t)
+	s, _, _ := newPGStore(t)
 	owner := "gen-prov-del-" + uuid.NewString()
 	oldUID := uuid.NewString()
 	if err := s.For(owner).Put(t.Context(), types.ModelProviderSecretPrefix+oldUID+"-key", []byte("provider-key-0000")); err != nil {
@@ -92,7 +94,7 @@ func TestPG_DeleteProviderChangesWaitsForAPurgeHoldingTheOwner(t *testing.T) {
 	if _, err := s.For(owner).(*Store).AdvanceGeneration(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	tx, err := beginReadCommitted(t.Context(), pool)
+	tx, err := beginReadCommitted(t.Context(), holdPool(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,15 +140,26 @@ func putProviderKey(t *testing.T, s *Store, owner, uid string) {
 	}
 }
 
+// holdPool is a pool of its own for a test that keeps a transaction open while the store, on its pool,
+// works on the same goroutine: the nested acquire guard refuses that on one pool (WARDYN_TEST_POOL_GUARD).
+func holdPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	holder, err := pgxpool.New(t.Context(), os.Getenv("WARDYN_TEST_PG"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(holder.Close)
+	return holder
+}
+
 // holdCounter takes owner's counter row exclusively, as an erase does, until the returned release runs.
-func holdCounter(t *testing.T, s *Store, pool interface {
-	Begin(context.Context) (pgx.Tx, error)
-}, owner string) (tx pgx.Tx, release func()) {
+// The hold lives on its own pool.
+func holdCounter(t *testing.T, s *Store, owner string) (tx pgx.Tx, release func()) {
 	t.Helper()
 	if _, err := s.For(owner).(*Store).AdvanceGeneration(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	tx, err := pool.Begin(t.Context())
+	tx, err := holdPool(t).Begin(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,13 +174,13 @@ func holdCounter(t *testing.T, s *Store, pool interface {
 // for that owner, so an erase of them that finishes before the purge commits cannot
 // miss a row.
 func TestPG_OwnerAddedBetweenLockAndInsertSurvivesNoErase(t *testing.T) {
-	s, pool, _ := newPGStore(t)
+	s, _, _ := newPGStore(t)
 	a, b := "gen-gap-a-"+uuid.NewString(), "gen-gap-b-"+uuid.NewString()
 	oldUID := uuid.NewString()
 	putProviderKey(t, s, a, oldUID)
-	third, release := holdCounter(t, s, pool, a)
+	third, release := holdCounter(t, s, a)
 	defer release()
-	tx, err := beginReadCommitted(t.Context(), pool)
+	tx, err := beginReadCommitted(t.Context(), holdPool(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,9 +225,9 @@ func TestPG_RemovalThenEditPurgeAndHistoryEraseDoNotDeadlock(t *testing.T) {
 		VALUES ($1, $2, 'older', 'destination_changed', now(), 'https://old.example.test')`, x, "prov-"+removedUID); err != nil {
 		t.Fatal(err)
 	}
-	erase, release := holdCounter(t, s, pool, x)
+	erase, release := holdCounter(t, s, x)
 	defer release()
-	tx, err := beginReadCommitted(t.Context(), pool)
+	tx, err := beginReadCommitted(t.Context(), holdPool(t))
 	if err != nil {
 		t.Fatal(err)
 	}
