@@ -22,6 +22,7 @@ type cutLedger struct {
 	cuts       map[string]int64
 	cutErr     error
 	revokedSub int
+	cutCalls   int
 }
 
 func (l *cutLedger) RevocationSeq(context.Context) (int64, error) { return l.seq, nil }
@@ -35,6 +36,7 @@ func (l *cutLedger) CutSessions(_ context.Context, sub string) error {
 	if l.cutErr != nil {
 		return l.cutErr
 	}
+	l.cutCalls++
 	l.seq++
 	if l.cuts == nil {
 		l.cuts = map[string]int64{}
@@ -64,6 +66,21 @@ func signedInCookie(t *testing.T, env *idpEnv, auth *writoidc.Authenticator) *ht
 	return nil
 }
 
+// signOut sends the sign-out request the route gets: through Middleware, which is what establishes the
+// session the cut is allowed to name.
+func signOut(auth *writoidc.Authenticator, cookie *http.Cookie, bearer string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	if cookie != nil {
+		r.AddCookie(cookie)
+	}
+	if bearer != "" {
+		r.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	w := httptest.NewRecorder()
+	auth.Middleware(http.HandlerFunc(auth.LogoutHandler)).ServeHTTP(w, r)
+	return w
+}
+
 func replay(auth *writoidc.Authenticator, c *http.Cookie) (live bool, reason string) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.AddCookie(c)
@@ -85,10 +102,7 @@ func TestSignOutRefusesAReplayOfTheCookie(t *testing.T) {
 		t.Fatalf("a fresh session was refused: %q", reason)
 	}
 
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
-	r.AddCookie(cookie)
-	w := httptest.NewRecorder()
-	auth.LogoutHandler(w, r)
+	w := signOut(auth, cookie, "")
 	if w.Code != http.StatusFound {
 		t.Fatalf("sign-out status = %d, want %d", w.Code, http.StatusFound)
 	}
@@ -113,10 +127,7 @@ func TestSignOutThatCannotCutSaysSo(t *testing.T) {
 	cookie := signedInCookie(t, env, auth)
 
 	rev.cutErr = errors.New("pg down")
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
-	r.AddCookie(cookie)
-	w := httptest.NewRecorder()
-	auth.LogoutHandler(w, r)
+	w := signOut(auth, cookie, "")
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("sign-out with a failing cut = %d, want %d", w.Code, http.StatusServiceUnavailable)
 	}
@@ -129,9 +140,83 @@ func TestSignOutThatCannotCutSaysSo(t *testing.T) {
 	}
 
 	rev.cutErr = nil
-	w = httptest.NewRecorder()
-	auth.LogoutHandler(w, httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil))
+	w = signOut(auth, nil, "")
 	if w.Code != http.StatusFound || len(rev.cuts) != 0 {
 		t.Errorf("sign-out with no cookie = %d with cuts %v; want a redirect and no cut", w.Code, rev.cuts)
+	}
+}
+
+// A cookie that only verifies cuts nobody. An expired, a revoked and a role-stale copy still carry a valid
+// signature, and a request that also presents a bearer credential skips the rejected-cookie answer, so
+// someone holding any token and a stale copy of another person's cookie must not end that person's sessions.
+// Each is cleared and redirected like any sign-out.
+func TestSignOutWithACookieThatIsNotLiveWritesNoCut(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		bearer string
+		stale  func(t *testing.T, auth *writoidc.Authenticator, rev *cutLedger) *http.Cookie
+	}{
+		{"expired", "", func(t *testing.T, auth *writoidc.Authenticator, _ *cutLedger) *http.Cookie {
+			return forgedCookie(t, auth, time.Now().Add(-time.Minute), time.Now().Add(-time.Hour))
+		}},
+		{"expired, with a bearer token", "someone-elses-token", func(t *testing.T, auth *writoidc.Authenticator, _ *cutLedger) *http.Cookie {
+			return forgedCookie(t, auth, time.Now().Add(-time.Minute), time.Now().Add(-time.Hour))
+		}},
+		{"revoked", "", func(t *testing.T, auth *writoidc.Authenticator, rev *cutLedger) *http.Cookie {
+			cookie := forgedCookie(t, auth, time.Now().Add(time.Hour), time.Now())
+			rev.seq, rev.cuts = 5, map[string]int64{"victim": 6}
+			return cookie
+		}},
+		{"revoked, with a bearer token", "someone-elses-token", func(t *testing.T, auth *writoidc.Authenticator, rev *cutLedger) *http.Cookie {
+			cookie := forgedCookie(t, auth, time.Now().Add(time.Hour), time.Now())
+			rev.seq, rev.cuts = 5, map[string]int64{"victim": 6}
+			return cookie
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			env := newIdPEnv(t)
+			rev := &cutLedger{seq: 5}
+			auth := env.newRoleMappingAuth(t, nil, "", nil, nil, func(cfg *writoidc.Config) { cfg.Revocations = rev })
+			cookie := c.stale(t, auth, rev)
+			before := rev.cutCalls
+			w := signOut(auth, cookie, c.bearer)
+			if w.Code != http.StatusFound {
+				t.Errorf("sign-out status = %d, want %d", w.Code, http.StatusFound)
+			}
+			if rev.cutCalls != before {
+				t.Errorf("a cookie that is not a live session wrote %d cut(s) for its sub", rev.cutCalls-before)
+			}
+			if rev.revokedSub != 0 {
+				t.Errorf("RevokeSub was called %d times", rev.revokedSub)
+			}
+		})
+	}
+}
+
+// forgedCookie is a validly signed cookie for the sub "victim", as a copy kept past its life would be.
+func forgedCookie(t *testing.T, auth *writoidc.Authenticator, expiry, issuedAt time.Time) *http.Cookie {
+	t.Helper()
+	cookie, err := writoidc.EncodeSessionForTest(auth, writoidc.Session{
+		Sub: "victim", Email: "victim@corp.example", Role: writoidc.RoleUser, UserType: "standard",
+		Expiry: expiry, IssuedAt: issuedAt, RevocationSeq: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cookie
+}
+
+// With no revocation store configured a live session signs out to the redirect, with no cut to write and
+// nothing to dereference.
+func TestSignOutWithoutARevocationStoreRedirects(t *testing.T) {
+	env := newIdPEnv(t)
+	auth := env.newAuth(t, nil)
+	cookie := forgedCookie(t, auth, time.Now().Add(time.Hour), time.Now())
+	if live, reason := replay(auth, cookie); !live {
+		t.Fatalf("test premise: the session is not live: %q", reason)
+	}
+	w := signOut(auth, cookie, "")
+	if w.Code != http.StatusFound {
+		t.Errorf("sign-out status = %d, want %d", w.Code, http.StatusFound)
 	}
 }

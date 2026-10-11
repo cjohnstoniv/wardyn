@@ -930,7 +930,17 @@ const (
 //     local/token mode.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.OIDC != nil {
-		s.cfg.OIDC.LogoutHandler(w, r) // clears the HttpOnly session cookie
+		// Clears the HttpOnly session cookie and, for a live session, cuts the person's browser sessions;
+		// the cut is audited like the session-only cut an admin makes (handleRevokeSessions).
+		sub, err := s.cfg.OIDC.SignOut(w, r)
+		if sub != "" {
+			outcome, data := "success", map[string]any{"scope": "sub", "sub": sub, "tokens_revoked": 0, "ssh_keys_deleted": 0, "sessions_only": true}
+			if err != nil {
+				outcome, data["error"] = "failure", err.Error()
+			}
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+				"session.revoke", sub, outcome, mustJSON(data)))
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

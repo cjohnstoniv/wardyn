@@ -485,21 +485,36 @@ func (a *Authenticator) startLogin(w http.ResponseWriter, r *http.Request, widen
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
-// LogoutHandler clears the Wardyn session cookie, cuts the signer's browser sessions server-side so a copy
-// of the cookie stops working too, and redirects to the console root. The cut is the one sign-out
-// everywhere writes (CutSessions): it ends every browser session of the person, not only this one, and
-// leaves their API tokens and SSH keys alone. A cut that cannot be written answers 503, with the cookie
-// already cleared, so the caller does not read an unconfirmed sign-out as a confirmed one.
+// LogoutHandler is SignOut for a route that has no use for its outcome.
 func (a *Authenticator) LogoutHandler(w http.ResponseWriter, r *http.Request) {
+	a.SignOut(w, r)
+}
+
+// SignOut clears the Wardyn session cookie, cuts the signer's browser sessions server-side so a copy of the
+// cookie stops working too, and redirects to the console root. It returns the sub it cut or tried to cut
+// ("" when it cut nobody) and the cut's error.
+//
+// The cut is the one sign-out everywhere writes (CutSessions): it ends every browser session of the person,
+// not only this one, and leaves their API tokens and SSH keys alone. It is written only for a request that
+// Middleware accepted as that same live session (PrincipalFromContext names the cookie's sub): a cookie that
+// merely verifies is not enough, since an expired, revoked or role-stale copy still carries a valid
+// signature, and a request that also presents a bearer credential skips the rejected-cookie answer. Such a
+// cookie is cleared and redirected like any other, and cuts nobody.
+//
+// A cut that cannot be written answers 503, with the cookie already cleared, so the caller does not read an
+// unconfirmed sign-out as a confirmed one.
+func (a *Authenticator) SignOut(w http.ResponseWriter, r *http.Request) (cutSub string, err error) {
 	a.clearSessionCookie(w)
-	if sess, err := a.decodeSession(r); err == nil && a.cfg.Revocations != nil {
-		if cerr := CutSessions(r.Context(), a.cfg.Revocations, sess.Sub); cerr != nil {
-			slog.Error("oidc: sign-out could not cut the session server-side", "error", cerr)
+	if sess, derr := a.decodeSession(r); derr == nil && a.cfg.Revocations != nil && PrincipalFromContext(r.Context()) == sess.Sub {
+		if err = CutSessions(r.Context(), a.cfg.Revocations, sess.Sub); err != nil {
+			slog.Error("oidc: sign-out could not cut the session server-side", "error", err)
 			http.Error(w, "sign-out could not be confirmed on the server", http.StatusServiceUnavailable)
-			return
+			return sess.Sub, err
 		}
+		cutSub = sess.Sub
 	}
 	http.Redirect(w, r, a.cfg.BasePath+"/", http.StatusFound)
+	return cutSub, nil
 }
 
 // Middleware sets HumanPrincipal on the context for a valid session cookie, or falls through to

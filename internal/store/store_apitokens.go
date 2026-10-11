@@ -133,7 +133,7 @@ func (s PG) ListAPITokensByPrincipal(ctx context.Context, principal string) ([]t
 
 // APITokensByIdentityLister is the indexed read behind a per-person revocation: the tokens one name
 // owns under either form. An absent implementation falls back to ListAPITokensByPrincipal plus a scan of
-// ListAPITokens, which reads the same rows.
+// ListAPITokens (see ListAPITokensByIdentity for the one place the two differ).
 type APITokensByIdentityLister interface {
 	ListAPITokensByIdentity(ctx context.Context, name string) ([]types.APIToken, error)
 }
@@ -143,7 +143,9 @@ var _ APITokensByIdentityLister = PG{}
 // ListAPITokensByIdentity returns the tokens whose principal is name or whose email equals it ignoring
 // case (the match IsSessionRevoked's email arm makes), revoked rows included. The principal matches come
 // first, newest first, then the rows only the email names. It reads api_tokens_principal_idx and
-// api_tokens_lower_email_idx (migration 0194), not the whole table. name must not be empty: "" is
+// api_tokens_lower_email_idx (migration 0194), not the whole table. The email arm follows the session-cut
+// rule (lower(sub) = lower($2)), so for non-ASCII case pairs PG lower() can differ from the scan fallback's
+// strings.EqualFold. name must not be empty: "" is
 // the revoke-all arm, which lists everything.
 func (s PG) ListAPITokensByIdentity(ctx context.Context, name string) ([]types.APIToken, error) {
 	const q = `

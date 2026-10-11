@@ -289,7 +289,8 @@ func (s *Server) revokeAPITokensMatching(ctx context.Context, principal string, 
 	case principal == "":
 		toks, err = s.cfg.Store.ListAPITokens(ctx)
 	case indexed:
-		// Both identities in one indexed read; the scan below returns the same rows.
+		// Both identities in one indexed read, matching email as the session cut does (PG lower()); the scan
+		// below returns the same rows except for non-ASCII case pairs, where strings.EqualFold can differ.
 		toks, err = lister.ListAPITokensByIdentity(ctx, principal)
 	default:
 		toks, err = s.listAPITokensByIdentityScan(ctx, principal)
