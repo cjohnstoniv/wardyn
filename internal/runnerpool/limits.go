@@ -61,8 +61,10 @@ var sourceRank = map[types.LimitSource]int{
 // is always there to bound it: Effective refuses to compute without exactly one,
 // and without more than one pool source, because a dropped source would silently
 // widen every field. An untouched run gets the
-// lowest default any source names, never above the cap; with none it gets the
-// cap, which is today's rule for a run's end. Each answer names the source that
+// lowest default any source names, never above the cap. The deployment's
+// default is its fallback sandbox size: it counts only when no other source
+// names a default, so it never lowers a pool's own. With no default at all a
+// run gets the cap, which is today's rule for a run's end. Each answer names the source that
 // bound it, for the preview and for explaining a reduction. A source with a
 // non-positive bound, an unknown source or an unknown run type is an error:
 // the caller refuses, it never guesses.
@@ -156,7 +158,9 @@ func foldField(ordered []SourceLimits, pick func(SourceLimits) Bound) (types.Eff
 		if b.Max != nil && (capV == nil || *b.Max < *capV) {
 			capV, out.CapSource = b.Max, s.Source
 		}
-		if b.Default != nil && (defV == nil || *b.Default < *defV) {
+		// The deployment sorts last, so its fallback default is read only
+		// when nothing more specific named one.
+		if b.Default != nil && (defV == nil || (s.Source != types.LimitSourceDeployment && *b.Default < *defV)) {
 			defV, defSource = b.Default, s.Source
 		}
 	}
