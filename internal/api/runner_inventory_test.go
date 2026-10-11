@@ -606,3 +606,18 @@ func TestMeRunnersNameTheMinterByEmailWhenSomeoneElseMinted(t *testing.T) {
 		t.Fatal("the admin view needs no minter email")
 	}
 }
+
+// A revoked runner's view names who revoked it and why.
+func TestRunnerViewNamesWhoRevokedAndWhy(t *testing.T) {
+	srv, _, _ := newRunnerRegistrationServer(t)
+	row := types.Runner{ID: uuid.New(), State: types.RunnerRevoked, RevokedBy: "alice", RevokeReason: types.RunnerRevokeNotMine}
+	for _, admin := range []bool{true, false} {
+		b, err := json.Marshal(srv.runnerView(row, 0, admin))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), `"revoked_by":"alice"`) || !strings.Contains(string(b), `"revoke_reason":"not_mine"`) {
+			t.Fatalf("admin=%v view = %s, want revoked_by and revoke_reason", admin, b)
+		}
+	}
+}

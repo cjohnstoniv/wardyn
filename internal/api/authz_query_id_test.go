@@ -135,6 +135,7 @@ var queryParamNotAnID = map[string]string{
 	"since":                     "audit time filter; narrows an already-scoped feed",
 	"until":                     "audit time filter; narrows an already-scoped feed",
 	"action":                    "audit action filter; narrows an already-scoped feed",
+	"reason":                    "DELETE /me/runners/{id}: the label of the caller's revoke of their own runner (only not_mine is accepted); it names no entity",
 	"action_prefix":             "audit action filter; narrows an already-scoped feed",
 	"actor":                     "audit principal filter; ANDed inside auditScope, so a member's own-run feed only narrows",
 	"actor_type":                "audit filter; narrows an already-scoped feed",

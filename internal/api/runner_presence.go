@@ -14,8 +14,8 @@ import (
 )
 
 // RecordRunnerConnected writes runner.connect for a runner's authenticated session. resumed is true
-// for a session that resumed an earlier one; the runner hub calls it for the first authenticated
-// session after the runner was offline, so the hub's wiring decides whether a resume writes a row.
+// for a session that resumed an earlier one; the runner hub calls it for each new session and never
+// for a resumed one, so its rows carry resumed false.
 func (s *Server) RecordRunnerConnected(ctx context.Context, id uuid.UUID, version string, resumed bool) {
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "runner:"+id.String(),
 		placement.ActionRunnerConnect, id.String(), "success", mustJSON(map[string]any{"version": version, "resumed": resumed})))

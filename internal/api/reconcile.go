@@ -778,6 +778,9 @@ func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to type
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 		return
 	}
+	if cur.Placement == types.PlacementLocal && cur.RunnerID != nil {
+		return
+	}
 	if isTerminalRunState(cur.State) {
 		return // already finalized (e.g. a concurrent kill won)
 	}

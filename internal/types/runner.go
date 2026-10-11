@@ -58,30 +58,74 @@ type Runner struct {
 	// PostureReportedAt is nil until the runner reports; PostureSource is then runner_asserted.
 	PostureReportedAt *time.Time `json:"posture_reported_at,omitempty"`
 	PostureSource     string     `json:"posture_source,omitempty"`
+	// RevokedBy is the principal that revoked the runner; RevokeReason is "" or
+	// RunnerRevokeNotMine. Both are empty until it is revoked.
+	RevokedBy    string `json:"-"`
+	RevokeReason string `json:"-"`
 }
+
+// RunnerRevokeNotMine marks an owner's revoke of a runner they did not register.
+const RunnerRevokeNotMine = "not_mine"
 
 // RunnerActionKind is a pending action's verb.
 type RunnerActionKind string
 
 const (
-	RunnerActionKill      RunnerActionKind = "kill"
-	RunnerActionEnd       RunnerActionKind = "end"
-	RunnerActionStopProxy RunnerActionKind = "stop_proxy"
+	RunnerActionRetire             RunnerActionKind = "retire_run"
+	RunnerActionKill               RunnerActionKind = "kill"
+	RunnerActionEnd                RunnerActionKind = "end"
+	RunnerActionStopProxy          RunnerActionKind = "stop_proxy"
+	RunnerActionRecoverMutation    RunnerActionKind = "recover_mutation"
+	RunnerActionQuarantine         RunnerActionKind = "quarantine_run"
+	RunnerActionRecoverContainment RunnerActionKind = "recover_containment"
 )
 
-// RunnerPendingAction is an action queued for a runner that is offline, applied
-// first when it reconnects.
-type RunnerPendingAction struct {
-	ID         uuid.UUID        `json:"id"`
-	RunnerID   uuid.UUID        `json:"runner_id"`
-	RunID      uuid.UUID        `json:"run_id"`
-	Kind       RunnerActionKind `json:"kind"`
-	Ref        string           `json:"ref"`
-	QueuedAt   time.Time        `json:"queued_at"`
-	AppliedAt  *time.Time       `json:"applied_at,omitempty"`
-	Outcome    string           `json:"outcome,omitempty"`
-	ObservedAt *time.Time       `json:"observed_at,omitempty"`
+// RunnerQuarantine identifies an org-authorized isolation disposition, not an
+// evidence acknowledgement or permission to reconstruct missing run authority.
+type RunnerQuarantine struct {
+	ID         uuid.UUID `json:"id"`
+	Generation uuid.UUID `json:"generation"`
 }
+
+// RunnerMutationFailure is an immutable failure identity. Contained becomes true
+// only after proxy containment and lifecycle persistence both succeed.
+type RunnerMutationFailure struct {
+	ID         uuid.UUID `json:"id"`
+	Generation uuid.UUID `json:"generation"`
+	Operation  string    `json:"operation"`
+	Contained  bool      `json:"contained"`
+}
+
+// RunnerPendingAction is applied before readiness when a runner reconnects.
+type RunnerPendingAction struct {
+	Retirement *RunnerRetirement      `json:"retirement,omitempty"`
+	Quarantine *RunnerQuarantine      `json:"quarantine,omitempty"`
+	Recovery   *RunnerMutationFailure `json:"recovery,omitempty"`
+	ID         uuid.UUID              `json:"id"`
+	RunnerID   uuid.UUID              `json:"runner_id"`
+	RunID      uuid.UUID              `json:"run_id"`
+	Kind       RunnerActionKind       `json:"kind"`
+	Ref        string                 `json:"ref"`
+	QueuedAt   time.Time              `json:"queued_at"`
+	AppliedAt  *time.Time             `json:"applied_at,omitempty"`
+	Outcome    string                 `json:"outcome,omitempty"`
+	ObservedAt *time.Time             `json:"observed_at,omitempty"`
+	// Bound, Owner, Generation and LostAt are the org identity persisted when
+	// the action was queued. A row that is not Bound predates that binding and
+	// grants nothing. On a Bound row a nil Generation means no execution had
+	// been issued; LostAt is set for stop_proxy only.
+	Bound      bool       `json:"-"`
+	Owner      string     `json:"-"`
+	Generation uuid.UUID  `json:"-"`
+	LostAt     *time.Time `json:"-"`
+}
+
+// Runner action outcomes an action_result may carry. A deferred receipt is
+// final for its action ID but does not settle the obligation it carried.
+const (
+	RunnerActionSuccess  = "success"
+	RunnerActionDeferred = "deferred"
+)
 
 // CredentialDeliveryPolicyDoc is the stored local_credential_delivery document.
 // Policy is the JSON of placement.DeliveryPolicy, validated by the writer; the

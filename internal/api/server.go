@@ -35,6 +35,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
@@ -97,6 +98,9 @@ type Config struct {
 	// failed durable write is masked, logged loudly, and spooled to the local
 	// append-only fallback for EVERY writer — the API layer no longer spools itself.
 	Audit audit.Recorder
+	// RunnerAuditPrepare applies the serving audit mask/seal policy before the
+	// spool receipt and audit row commit in one database transaction.
+	RunnerAuditPrepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)
 	// AuditSpool is the SAME durable fallback spool the recorder chain appends to on
 	// a failed store write (see cmd/wardynd buildAuditChain). When set together with
 	// AuditDrainRecorder, New starts a background loop that replays spooled events
@@ -135,16 +139,18 @@ type Config struct {
 	// RunnerOrgURL is the public organisation URL bound into runner identities.
 	// Empty disables runner registration and streams; never infer it from Host.
 	RunnerOrgURL string
+	// RunnerHub supplies durable runner admission and lifecycle callbacks.
+	// The server always supplies OrgURL and Lookup from its own configuration.
+	RunnerHub remote.HubConfig
 	// RunnerOnline reports whether a claimed runner holds a live authenticated session with this
-	// process. Nil reads every runner as offline: online is never shown without that evidence.
+	// process. Nil defaults to Server.RunnerOnline, the runner hub's own view.
 	//
 	// ponytail: process-local. Under WARDYN_HA a replica that does not hold a runner's session
 	// answers offline for a runner attached to another; the upgrade is a shared presence read.
 	RunnerOnline func(id uuid.UUID) bool
 	// RunnersDisabled runs after runners are switched off (a true→false change), once the write and
-	// its audit row are done and the site-config lock is released. The runner hub ends every runner
-	// session here; nil does nothing, so until it is wired, off stops new registrations, claims and
-	// connections and live sessions end when their runner reconnects.
+	// its audit row are done and the site-config lock is released. Nil defaults to
+	// Server.RunnersDisabled, which ends every runner session this process holds.
 	RunnersDisabled func(ctx context.Context)
 	// AdminToken gates the public API (constant-time bearer compare). Empty
 	// disables the public API entirely (fail closed) except /healthz.
@@ -678,8 +684,9 @@ type Config struct {
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.
 type Server struct {
-	cfg    Config
-	router chi.Router
+	runnerStreams runnerStreamState
+	cfg           Config
+	router        chi.Router
 	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is
 	// ready to use.
 	metrics metrics
@@ -910,6 +917,7 @@ func New(cfg Config) *Server {
 		},
 	}
 	s.scimState = newSCIMState()
+	s.defaultRunnerHooks()
 	if cfg.PreflightRatePerMin > 0 {
 		s.preflightLimiter = &principalLimiter{rate: float64(cfg.PreflightRatePerMin) / 60, burst: preflightBurst, max: preflightLimiterMaxPeople}
 	}

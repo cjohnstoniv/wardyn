@@ -22,6 +22,7 @@ brokered_pat_grant_ids
 control_plane_ca_pem
 control_plane_url
 decision_buffer_size
+decision_spool_dir
 git_grants
 injection
 injection.format

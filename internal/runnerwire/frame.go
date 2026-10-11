@@ -40,6 +40,7 @@ const (
 	TypeAck
 	TypePing
 	TypePong
+	TypeCurrentActivity
 	typeEnd
 )
 
@@ -90,27 +91,28 @@ type typeSpec struct {
 }
 
 var specs = [typeEnd]typeSpec{
-	TypeHello:   {"HELLO", false, streamZero, dirOrgToRunner},
-	TypeAuth:    {"AUTH", false, streamZero, dirRunnerToOrg},
-	TypeAuthOK:  {"AUTH_OK", false, streamZero, dirOrgToRunner},
-	TypeRevoked: {"REVOKED", false, streamZero, dirOrgToRunner},
-	TypeGoaway:  {"GOAWAY", false, streamZero, dirOrgToRunner},
-	TypePending: {"PENDING", true, streamZero, dirOrgToRunner},
-	TypeState:   {"STATE", true, streamZero, dirRunnerToOrg},
-	TypeReady:   {"READY", true, streamZero, dirRunnerToOrg},
-	TypeCall:    {"CALL", true, streamNonZero, dirEither},
-	TypeReply:   {"REPLY", true, streamNonZero, dirEither},
-	TypeEvent:   {"EVENT", true, streamZero, dirRunnerToOrg},
-	TypeLease:   {"LEASE", true, streamZero, dirOrgToRunner},
-	TypeOpen:    {"OPEN", false, streamNonZero, dirEither},
-	TypeOpenOK:  {"OPEN_OK", false, streamNonZero, dirEither},
-	TypeData:    {"DATA", false, streamNonZero, dirEither},
-	TypeWindow:  {"WINDOW", false, streamAny, dirEither},
-	TypeClose:   {"CLOSE", false, streamNonZero, dirEither},
-	TypeReset:   {"RESET", false, streamNonZero, dirEither},
-	TypeAck:     {"ACK", false, streamZero, dirEither},
-	TypePing:    {"PING", false, streamZero, dirEither},
-	TypePong:    {"PONG", false, streamZero, dirEither},
+	TypeHello:           {"HELLO", false, streamZero, dirOrgToRunner},
+	TypeAuth:            {"AUTH", false, streamZero, dirRunnerToOrg},
+	TypeAuthOK:          {"AUTH_OK", false, streamZero, dirOrgToRunner},
+	TypeRevoked:         {"REVOKED", false, streamZero, dirOrgToRunner},
+	TypeGoaway:          {"GOAWAY", false, streamZero, dirOrgToRunner},
+	TypePending:         {"PENDING", true, streamZero, dirOrgToRunner},
+	TypeState:           {"STATE", true, streamZero, dirRunnerToOrg},
+	TypeReady:           {"READY", true, streamZero, dirRunnerToOrg},
+	TypeCall:            {"CALL", true, streamNonZero, dirEither},
+	TypeReply:           {"REPLY", true, streamNonZero, dirEither},
+	TypeEvent:           {"EVENT", true, streamZero, dirRunnerToOrg},
+	TypeLease:           {"LEASE", true, streamZero, dirOrgToRunner},
+	TypeOpen:            {"OPEN", false, streamNonZero, dirEither},
+	TypeOpenOK:          {"OPEN_OK", false, streamNonZero, dirEither},
+	TypeData:            {"DATA", false, streamNonZero, dirEither},
+	TypeWindow:          {"WINDOW", false, streamAny, dirEither},
+	TypeClose:           {"CLOSE", false, streamNonZero, dirEither},
+	TypeReset:           {"RESET", false, streamNonZero, dirEither},
+	TypeAck:             {"ACK", false, streamZero, dirEither},
+	TypePing:            {"PING", false, streamZero, dirEither},
+	TypePong:            {"PONG", false, streamZero, dirEither},
+	TypeCurrentActivity: {"CURRENT_ACTIVITY", false, streamZero, dirRunnerToOrg},
 }
 
 func (t Type) valid() bool { return t > 0 && t < typeEnd }

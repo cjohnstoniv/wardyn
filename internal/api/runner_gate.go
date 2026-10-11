@@ -3,21 +3,41 @@
 
 package api
 
-import "net/http"
+import (
+	"context"
+	"errors"
+	"net/http"
+)
+
+var (
+	errRunnersConfigUnavailable = errors.New("runner configuration is unavailable")
+	errRunnersDisabled          = errors.New("runners are disabled for this organisation")
+)
+
+// runnersEnabled reads the stored switch on every call, so a stored disable
+// takes effect without a restart.
+func (s *Server) runnersEnabled(ctx context.Context) error {
+	if s.cfg.Store == nil {
+		return errRunnersConfigUnavailable
+	}
+	cfg, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return errRunnersConfigUnavailable
+	}
+	if cfg.Runners == nil || !cfg.Runners.Enabled {
+		return errRunnersDisabled
+	}
+	return nil
+}
 
 // Read on each admission so a stored disable takes effect without a restart.
 func (s *Server) requireRunnersEnabled(w http.ResponseWriter, r *http.Request) bool {
-	if s.cfg.Store == nil {
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunnersConfigUnavailable, "runner configuration is unavailable; retry later")
+	switch err := s.runnersEnabled(r.Context()); {
+	case errors.Is(err, errRunnersDisabled):
+		writeErrorReason(w, http.StatusForbidden, reasonRunnersDisabled, err.Error())
 		return false
-	}
-	cfg, err := s.cfg.Store.GetSiteConfig(r.Context())
-	if err != nil {
+	case err != nil:
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunnersConfigUnavailable, "runner configuration is unavailable; retry later")
-		return false
-	}
-	if cfg.Runners == nil || !cfg.Runners.Enabled {
-		writeErrorReason(w, http.StatusForbidden, reasonRunnersDisabled, "runners are disabled for this organisation")
 		return false
 	}
 	return true

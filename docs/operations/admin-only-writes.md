@@ -50,6 +50,7 @@ read by the route matrix in [`internal/api/authz_test.go`](../../internal/api/au
 | `PUT /runners/settings` — turning runners on or off for the organisation (`runners.enabled.set`); refused until the organisation URL is HTTPS | ⛔ admin only |
 | `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
+| `DELETE /runners/{id}` — revoking any person's runner: every run on it ends KILLED and its session closes. It only removes reach; a person revokes their own with `DELETE /me/runners/{id}` | ⛔ admin or `security_admin` |
 | `POST /admin/delegates` — registering a portal that may act for the people in one group ([Delegated run management](api-tokens.md#delegated-run-management-portals)): it creates a credential | ⛔ admin only |
 | `GET /admin/delegates` and `DELETE /admin/delegates/{id}` — the registered-portal inventory and revoking one portal: the device pair's shape, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/credentials` — erasing every credential one person has stored (offboarding, 0.8): it only removes reach and returns a count, never a value | ⛔ admin or `security_admin` |

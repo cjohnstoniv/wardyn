@@ -33,6 +33,7 @@ var adoEntraFailureEnumValues = []string{
 var placementWireReasons = []placement.Reason{
 	placement.ReasonRunnerTokenInvalid,
 	placement.ReasonRunnerClaimMismatch,
+	placement.ReasonRunnerNotFound,
 }
 
 // runnerPoolWireReasons lists the runner pool reasons published by HTTP handlers
