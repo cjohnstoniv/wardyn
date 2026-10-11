@@ -89,9 +89,10 @@ func (s *Stream) Read(b []byte) (int, error) {
 	}
 	n := copy(b, s.buf)
 	s.buf = s.buf[n:]
-	grant := int64(0)
+	consumed, grant := int64(0), int64(0)
 	if !s.heldReleased { // once released, these bytes were already returned to the sender
 		s.p.held.Add(-int64(n))
+		consumed = int64(n)
 		s.unacked += int64(n)
 		if s.unacked >= StreamWindow/4 {
 			grant, s.unacked = s.unacked, 0
@@ -100,6 +101,9 @@ func (s *Stream) Read(b []byte) (int, error) {
 	s.mu.Unlock()
 	if grant > 0 {
 		s.p.grant(s, grant)
+	}
+	if consumed > 0 {
+		s.p.consumed(consumed)
 	}
 	return n, nil
 }
@@ -155,7 +159,9 @@ func (s *Stream) CloseWrite() error {
 		owed = s.releaseHeldLocked()
 	}
 	s.mu.Unlock()
-	s.p.returnCredit(owed)
+	if both {
+		s.p.returnCredit(owed)
+	}
 	err := s.p.send(s.p.ctx, Frame{Type: TypeClose, Stream: s.id})
 	if both {
 		s.p.forget(s.id)
@@ -231,37 +237,39 @@ func (s *Stream) remoteClose() (both bool) {
 		s.finish()
 	}
 	s.mu.Unlock()
-	s.p.returnCredit(owed)
+	if both {
+		s.p.returnCredit(owed)
+	}
 	return both
 }
 
 // releaseHeldLocked stops counting the unread buffer against the connection,
 // once. A stream that is closed on both ends leaves the peer's table, so a
 // holder that never drains it must not keep its bytes in Peer.held. It returns
-// the connection credit the sender is owed for the stream: bytes read and not
-// yet granted, and bytes never read.
+// the connection credit the sender is still owed for the stream: the bytes
+// never read. Read already counted every byte it consumed in connPend.
 func (s *Stream) releaseHeldLocked() int64 {
 	if s.heldReleased {
 		return 0
 	}
 	s.heldReleased = true
 	s.p.held.Add(-int64(len(s.buf)))
-	owed := s.unacked + int64(len(s.buf))
+	owed := int64(len(s.buf))
 	s.unacked = 0
 	return owed
 }
 
 // returnCredit gives n bytes no stream will read back to the sender's
-// connection window, with whatever grant is holding in connPend, so nothing a
+// connection window, with whatever is pending in connPend, so nothing a
 // finished stream received stays withheld. It does not block: the read loop
 // calls it.
 func (p *Peer) returnCredit(n int64) {
-	if n <= 0 {
-		return
-	}
 	p.mu.Lock()
-	p.owed += n + p.connPend
+	n += p.connPend
 	p.connPend = 0
+	p.owed += n
 	p.mu.Unlock()
-	p.wakeReplies()
+	if n > 0 {
+		p.wakeReplies()
+	}
 }
