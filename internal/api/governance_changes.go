@@ -69,7 +69,7 @@ func (s *Server) handleListGovernanceChanges(w http.ResponseWriter, r *http.Requ
 	}
 	out := make([]types.GovernanceChange, 0, len(all))
 	for _, ch := range all {
-		if s.canSeeGovernanceKind(r, ch.TargetKind) {
+		if s.canSeeGovernanceChange(r, ch) {
 			out = append(out, ch)
 		}
 	}
@@ -84,7 +84,7 @@ func (s *Server) handleGetGovernanceChange(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	ch, err := s.cfg.Store.GetGovernanceChange(r.Context(), id)
-	if err == nil && !s.canSeeGovernanceKind(r, ch.TargetKind) {
+	if err == nil && !s.canSeeGovernanceChange(r, ch) {
 		err = store.ErrNotFound
 	}
 	if notFoundIf(w, err, "governance change", reasonGovernanceChangeNotFound) {
@@ -254,6 +254,7 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 		writeServerError(w, r, "decide governance change", errors.New("unknown target kind "+head.TargetKind))
 		return
 	}
+	kind = kind.forChange(head)
 	if !bypass && !kind.approver.allowed(s, r) {
 		s.denyApprover(kind).write(w, r)
 		return
