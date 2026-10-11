@@ -49,6 +49,11 @@ func (s PG) StageRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exit
 	if current.RunnerID != runnerID || current.Generation != exit.Generation || run.SandboxRef != exit.Ref {
 		return ErrRunnerExecutionRefused
 	}
+	// The org already settled this run (terminal, or ended at its lease): the
+	// exit is acknowledged without a receipt, so it can make no transition.
+	if run.State.IsTerminal() || (run.State == types.RunRunning && run.LostAt != nil && run.LostReason == types.LostEnded) {
+		return tx.Commit(ctx)
+	}
 	if run.State != types.RunRunning || (run.LostAt != nil && (run.Interactive || run.LostReason != types.LostOutage)) {
 		return ErrRunnerExecutionRefused
 	}
