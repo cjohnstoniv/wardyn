@@ -72,7 +72,7 @@ It amends the lane brief where the code disagrees with it ([§1.2](#12-amendment
 
 - One line per entry, sorted bytewise by path: `path \t type \t perm \t size \t sha256`, newline-terminated.
 - `type` is `f`, `d` or `l`. A symlink's `sha256` is over its target string; it is never followed.
-- `perm` is the octal permission bits. Owner, group and times are left out, because a restore onto another host changes them.
+- `perm` is the four-digit octal mode: the permission bits, with setuid, setgid and sticky in the leading digit. Owner, group and times are left out, because a restore onto another host changes them.
 - The digest is `sha256` over the joined lines. Any other file type (socket, device, FIFO) fails the digest by name.
 - Reads go through `os.Root` on the item's directory, so no entry resolves outside it.
 

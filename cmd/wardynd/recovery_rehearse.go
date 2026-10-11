@@ -10,7 +10,6 @@ import (
 	"io"
 	"maps"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -184,7 +183,12 @@ func rehearseRun(ctx context.Context, f *bootFlags, set rehearseSet, targetDSN s
 		return err
 	}
 	defer sess.close()
-	if err := sess.pair(ctx, set); err != nil {
+	root, err := os.OpenRoot(set.Dir)
+	if err != nil {
+		return fmt.Errorf("open the set: %w", err)
+	}
+	defer root.Close()
+	if err := sess.pair(ctx, set, root); err != nil {
 		return err
 	}
 	store, id, err := rehearseKeyStore(ctx, f)
@@ -217,7 +221,7 @@ func rehearseRun(ctx context.Context, f *bootFlags, set rehearseSet, targetDSN s
 		return err
 	}
 	rep.add(keyUseCheck(set, use))
-	files, err := sess.fileChecks(ctx, set)
+	files, err := sess.fileChecks(ctx, set, root)
 	if err != nil {
 		return err
 	}
@@ -257,7 +261,7 @@ func auditChecks(checks []rehearseCheck) []rehearseCheck {
 
 // pair is pairing: the target's newest audit row must be the one the manifest recorded, and each
 // staged spool file must be its manifest entry. A mismatch refuses, naming "audit head" or the file.
-func (s *rehearseSession) pair(ctx context.Context, set rehearseSet) error {
+func (s *rehearseSession) pair(ctx context.Context, set rehearseSet, root *os.Root) error {
 	var seq int64
 	var hash string
 	err := s.conn().QueryRow(ctx, `SELECT COALESCE(max(seq), 0), COALESCE((SELECT row_hash FROM audit_events ORDER BY seq DESC LIMIT 1), '') FROM audit_events`).Scan(&seq, &hash)
@@ -267,9 +271,9 @@ func (s *rehearseSession) pair(ctx context.Context, set rehearseSet) error {
 	if seq != set.HeadSeq || hash != set.HeadHash {
 		return refusedTo(rehearseVerb, "audit head: the database is at seq %d and the manifest records seq %d (or a different row): they are not one snapshot", seq, set.HeadSeq)
 	}
-	got, err := stageSpoolFiles(filepath.Join(set.Dir, "audit"), set.Spool.Basename)
+	got, err := stageSpoolFiles(root, set.Spool.Basename)
 	if err != nil {
-		return err
+		return refusedTo(rehearseVerb, "%v", err)
 	}
 	return pairSpool(rehearseVerb, set.Spool, got)
 }

@@ -26,7 +26,7 @@ func recoveryRehearseMode(f *bootFlags) error {
 		return errors.New("-recovery-rehearse needs " + rehearseDSNEnv + " set to the scratch database the dump was loaded into")
 	}
 	dir := filepath.Clean(*f.recoverySet)
-	m, err := readRecoveryManifest(filepath.Join(dir, recoveryManifestFile))
+	m, err := readRecoveryManifest(dir)
 	if err != nil {
 		return err
 	}

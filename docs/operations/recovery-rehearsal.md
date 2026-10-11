@@ -28,7 +28,7 @@ Design: [recovery-set.md](../design/0.9/recovery-set.md).
 | `manifest.json` | Written by the manifest verb, mode `0600`, never overwritten | |
 
 - Keys are never in the set. The manifest holds the age recipient (public), the `WARDYN_KEK` mode and a row count per key class.
-- The manifest names a drive by id, home and object name, and no person.
+- The manifest names a drive by id, home and object name, with no subject field. A managed home is a hash, but a `host_path` home built from the `sub` or `email_local` template is the person's claim, so such a manifest names people.
 - Where each item lives per deployment: [Recovery set by deployment](../OPERATIONS.md#recovery-set-by-deployment).
 
 ## Take a set
@@ -64,8 +64,8 @@ On Compose and the managed desktop, run the verbs with `docker compose run --rm 
 | Exit | Verdict | Meaning |
 |---|---|---|
 | `0` | `pass` | Every check passed and every manifest item was in the set |
-| `1` | | The run could not start: bad flags, unreadable manifest, an unreachable database |
-| `3` | `refused` | A target, pairing or version refusal; nothing was decrypted |
+| `1` | | The run could not start or finish: bad flags, an unreadable set or manifest, an unreachable scratch database, or a read or connection that failed, which can happen after the begin row |
+| `3` | `refused` | A target, pairing or version refusal, an unknown manifest version, an unreachable live database, or a begin row that could not be written; nothing was decrypted |
 | `4` | `fail` | At least one check failed |
 | `5` | `incomplete` | Every check that ran passed, and some drive or recordings tree was not in the set |
 
@@ -85,8 +85,8 @@ On Compose and the managed desktop, run the verbs with `docker compose run --rm 
 
 ## Kubernetes: the rehearsal pod
 
-The chart renders nothing for this. You write a pod that mounts the restored set and, for drives, the restored claims under the set layout.
-The pod reads the scratch database from a Secret you own, and carries the deployment's key settings from the Secret that holds them.
+The chart renders nothing for this. You write a pod that mounts the restored set.
+The pod reads the scratch database from a Secret you own, and carries the deployment's key settings from the Secret that holds them. The rehearsal reads the set only, so copy each restored drive claim's contents into `drives/<drive id>/<home>/` of the set first, for example with a Job that mounts both.
 
 ```yaml
 apiVersion: v1
@@ -97,7 +97,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: rehearse
-      image: wardyn/wardynd:0.9.0
+      image: ghcr.io/cjohnstoniv/wardynd:0.9.0
       args: ["-recovery-rehearse", "-recovery-set", "/set"]
       envFrom:
         - secretRef: {name: wardyn-keys}
@@ -111,7 +111,7 @@ spec:
       persistentVolumeClaim: {claimName: restored-recovery-set, readOnly: true}
 ```
 
-- The pod also needs `WARDYN_PG_DSN` for the live database, which the pairing step reads.
+- The pod also needs `WARDYN_PG_DSN` for the live database: the target checks probe it, and the two audit rows are written to it.
 - Delete the pod and the scratch database when the report is saved.
 
 ## What a pass proves
@@ -120,10 +120,11 @@ spec:
 |---|---|---|
 | Pairing | The restored database is at the manifest's audit head and the spool files are the recorded bytes | That nothing was written between the dump and the manifest; that case refuses, naming `audit head` |
 | Audit chain | Every audit row's hash chain verifies | |
-| Key use | The keys in this process open every stored row: credentials, principal keys, pre-envelope rows | Values held in an external store, which are counted `external` and never read |
+| Key use | The keys in this process open every stored row: credentials, principal keys, pre-envelope rows. Unwrapping through a Vault Transit or Azure Key Vault key is the code path in use, but this release's tests do not exercise it | Values held in an external store, which are counted `external` and never read |
 | Recordings | Each cast parses, and under `fs` the tree equals the manifest's | That a recording is the one a person remembers |
-| Drives | Each staged drive object equals the manifest's digest | Homes that were never staged: the manifest records the homes in the set, and a drive with none |
+| Drives | Each staged drive object equals the manifest's digest, and no drive object is in the set that the manifest does not list | Homes that were never staged: the manifest records the homes in the set, and a drive with none |
 
+- The verdict does not look for rows in the target that the manifest does not describe, except later audit rows (pairing) and extra stored secrets (counted per key class). The manifest is the only reference ([residual](../design/0.9/recovery-set.md#10-residuals-and-threat-model-delta) (a)).
 - A restored set from before an erasure brings the erased data back while the wrapping key lives.
 - The manifest is plain JSON and not signed: it detects a mismatched pair, and anyone who can rewrite the stored set can rewrite it.
 - The rehearsal opens every stored value in memory, as an operator holding the keys and the dump already can offline. The begin row `recovery.rehearse.begin` records that it did.

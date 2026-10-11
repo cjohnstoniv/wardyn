@@ -152,3 +152,37 @@ func TestTreeDigest_MatchesTheDocumentedLineFormat(t *testing.T) {
 		t.Errorf("digest = %+v; want %+v", got, want)
 	}
 }
+
+func TestTreeDigest_ChangesWithSetuidSetgidAndSticky(t *testing.T) {
+	for name, bit := range map[string]os.FileMode{"setuid": os.ModeSetuid, "setgid": os.ModeSetgid, "sticky": os.ModeSticky} {
+		dir := t.TempDir()
+		write(t, filepath.Join(dir, "f"), "x", 0o755)
+		base := digest(t, dir)
+		if err := os.Chmod(filepath.Join(dir, "f"), 0o755|bit); err != nil {
+			t.Fatal(err)
+		}
+		if digest(t, dir) == base {
+			t.Errorf("%s left the digest unchanged", name)
+		}
+	}
+}
+
+func TestTreeDigestIn_RefusesAPathThatLeavesTheRoot(t *testing.T) {
+	outside := t.TempDir()
+	write(t, filepath.Join(outside, "f"), "x", 0o644)
+	set := t.TempDir()
+	if err := os.Mkdir(filepath.Join(set, "drives"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(set, "drives", "id")); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if _, err := TreeDigestIn(root, "drives/id"); err == nil {
+		t.Error("a symlink out of the set was read")
+	}
+}

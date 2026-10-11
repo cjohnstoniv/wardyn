@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sys/unix"
 
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -115,8 +116,12 @@ func createRecoveryManifest(ctx context.Context, in manifestSources) error {
 	if spoolBase == "." || spoolBase == "" {
 		return errors.New("refusing to write the manifest: WARDYN_AUDIT_SPOOL names no spool file")
 	}
-	path := filepath.Join(set, recoveryManifestFile)
-	if _, err := os.Stat(path); err == nil {
+	root, err := os.OpenRoot(set)
+	if err != nil {
+		return fmt.Errorf("open the set: %w", err)
+	}
+	defer root.Close()
+	if _, err := root.Lstat(recoveryManifestFile); err == nil {
 		return refusedTo("write the manifest", "%s already exists and is never overwritten", recoveryManifestFile)
 	}
 	s, err := acquireQuiet(ctx, dsn, 30*time.Second, "write the manifest")
@@ -133,17 +138,17 @@ func createRecoveryManifest(ctx context.Context, in manifestSources) error {
 	if err != nil {
 		return err
 	}
-	spool, err := stageSpoolFiles(filepath.Join(set, "audit"), spoolBase)
+	spool, err := stageSpoolFiles(root, spoolBase)
 	if err != nil {
-		return err
+		return refusedTo("write the manifest", "%v", err)
 	}
 	keys, err := recoveryKeysOf(ctx, s.conn, in)
 	if err != nil {
 		return err
 	}
-	recordings, drives, err := stageFiles(ctx, s.pool, set, in.RecordingStore)
+	recordings, drives, err := stageFiles(ctx, s.pool, root, in.RecordingStore)
 	if err != nil {
-		return err
+		return refusedTo("write the manifest", "%v", err)
 	}
 	m := recoveryManifest{
 		Manifest: recoveryManifestVersion, SetID: uuid.NewString(), CreatedAt: time.Now().UTC().Format(time.RFC3339),
@@ -153,7 +158,7 @@ func createRecoveryManifest(ctx context.Context, in manifestSources) error {
 	if err != nil {
 		return fmt.Errorf("encode manifest: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := root.OpenFile(recoveryManifestFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("write %s: %w", recoveryManifestFile, err)
 	}
@@ -168,10 +173,15 @@ func createRecoveryManifest(ctx context.Context, in manifestSources) error {
 // staged spool file hashes to its manifest entry. A refusal names what differs: "audit head" for the database,
 // the file's name for a sidecar.
 func verifyRecoveryManifest(ctx context.Context, dsn, set string) error {
-	m, err := readRecoveryManifest(filepath.Join(set, recoveryManifestFile))
+	m, err := readRecoveryManifest(set)
 	if err != nil {
 		return err
 	}
+	root, err := os.OpenRoot(set)
+	if err != nil {
+		return fmt.Errorf("open the set: %w", err)
+	}
+	defer root.Close()
 	s, err := acquireQuiet(ctx, dsn, 30*time.Second, "verify the set")
 	if err != nil {
 		return err
@@ -186,9 +196,9 @@ func verifyRecoveryManifest(ctx context.Context, dsn, set string) error {
 		return refusedTo("verify the set", "the database's audit head (seq %d, row_hash %q, schema migration %q) is not the manifest's (seq %d, row_hash %q, schema migration %q); the dump and the set are not one pair",
 			snap.AuditHeadSeq, snap.AuditHeadHash, snap.SchemaMigration, m.Snapshot.AuditHeadSeq, m.Snapshot.AuditHeadHash, m.Snapshot.SchemaMigration)
 	}
-	got, err := stageSpoolFiles(filepath.Join(set, "audit"), m.AuditSpool.Basename)
+	got, err := stageSpoolFiles(root, m.AuditSpool.Basename)
 	if err != nil {
-		return err
+		return refusedTo("verify the set", "%v", err)
 	}
 	return pairSpool("verify the set", m.AuditSpool, got)
 }
@@ -211,10 +221,15 @@ func pairSpool(verb string, want, got recoverySpool) error {
 	return nil
 }
 
-// readRecoveryManifest reads and checks the manifest's version.
-func readRecoveryManifest(path string) (recoveryManifest, error) {
+// readRecoveryManifest reads and checks the manifest of the set at dir, through the set's own root.
+func readRecoveryManifest(dir string) (recoveryManifest, error) {
 	var m recoveryManifest
-	body, err := os.ReadFile(path)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return m, fmt.Errorf("open the set: %w", err)
+	}
+	defer root.Close()
+	body, err := root.ReadFile(recoveryManifestFile)
 	if err != nil {
 		return m, fmt.Errorf("read %s: %w", recoveryManifestFile, err)
 	}
@@ -269,35 +284,42 @@ func recoverySourceOf(dsn string) (recoverySource, error) {
 	return recoverySource{Host: cfg.Host, Port: int(cfg.Port), Database: cfg.Database}, nil
 }
 
-// stageSpoolFiles hashes <dir>/<base>, its .consumed and its .quarantine. An absent file is recorded as absent.
-func stageSpoolFiles(dir, base string) (recoverySpool, error) {
+// stageSpoolFiles hashes audit/<base>, its .consumed and its .quarantine in the set. An absent file is
+// recorded as absent; one that is not a regular file, or that resolves outside the set, is an error.
+func stageSpoolFiles(root *os.Root, base string) (recoverySpool, error) {
 	out := recoverySpool{Basename: base}
 	var err error
-	if out.Spool, err = hashStagedFile(filepath.Join(dir, base)); err != nil {
+	if out.Spool, err = hashStagedFile(root, "audit/"+base); err != nil {
 		return out, err
 	}
-	if out.Consumed, err = hashStagedFile(filepath.Join(dir, base+".consumed")); err != nil {
+	if out.Consumed, err = hashStagedFile(root, "audit/"+base+".consumed"); err != nil {
 		return out, err
 	}
-	if out.Quarantine, err = hashStagedFile(filepath.Join(dir, base+".quarantine")); err != nil {
+	if out.Quarantine, err = hashStagedFile(root, "audit/"+base+".quarantine"); err != nil {
 		return out, err
 	}
 	return out, nil
 }
 
-func hashStagedFile(path string) (recoveryFile, error) {
-	f, err := os.Open(path)
+// hashStagedFile hashes rel inside root. It opens nothing but a regular file: the open is non-blocking,
+// so a FIFO is refused by name and never waited on.
+func hashStagedFile(root *os.Root, rel string) (recoveryFile, error) {
+	name := filepath.Base(rel)
+	f, err := root.OpenFile(rel, os.O_RDONLY|unix.O_NONBLOCK, 0)
 	if errors.Is(err, fs.ErrNotExist) {
 		return recoveryFile{}, nil
 	}
 	if err != nil {
-		return recoveryFile{}, fmt.Errorf("open staged file %s: %w", filepath.Base(path), err)
+		return recoveryFile{}, fmt.Errorf("open staged file %s: %w", name, err)
 	}
 	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return recoveryFile{}, fmt.Errorf("staged file %s is not a regular file", name)
+	}
 	h := sha256.New()
 	n, err := io.Copy(h, f)
 	if err != nil {
-		return recoveryFile{}, fmt.Errorf("read staged file %s: %w", filepath.Base(path), err)
+		return recoveryFile{}, fmt.Errorf("read staged file %s: %w", name, err)
 	}
 	return recoveryFile{Present: true, Size: n, SHA256: hex.EncodeToString(h.Sum(nil))}, nil
 }
