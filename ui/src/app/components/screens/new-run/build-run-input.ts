@@ -4,7 +4,8 @@
  */
 
 import type { RunPolicySpec, SetupModelProvider, Workspace } from "../../../lib/types";
-import { buildRunContractWire, NO_ACTIVE_SECTIONS, type ActiveSections } from "../../../lib/run-contract-draft";
+import { buildRunContractWire, NO_ACTIVE_SECTIONS, type ActiveSections, type RunContractWire } from "../../../lib/run-contract-draft";
+import { LEGACY_RUN_MODE_FIELDS, mapRunMode } from "../../../lib/run-mode-map";
 import type { PolicyMode } from "../../wardyn/policy-panel";
 import { referenceLaneDropsWorkspace } from "./new-run-launch-gates";
 import { buildSpec, mergeRunSelections } from "./wizard-spec";
@@ -23,6 +24,19 @@ export interface RunInputParams {
   activeSections?: ActiveSections;
 }
 
+/**
+ * The wizard's run shape as the 0.9 contract's carriers, with the older fields they replace
+ * removed. A shape the contract cannot say, or a draft that already chose its experience, keeps
+ * the older fields untouched.
+ */
+function withRunMode(run: CreateRunInputWithComposition & RunContractWire): CreateRunInputWithComposition & RunContractWire {
+  const carriers = run.experience ? null : mapRunMode(run);
+  if (!carriers) return run;
+  const rest = { ...run };
+  for (const field of LEGACY_RUN_MODE_FIELDS) delete rest[field];
+  return { ...rest, ...carriers };
+}
+
 /** Returns no request when the active policy mode cannot represent the selections. */
 export function buildRunInput({
   state, workspaces, modelProviders, policyMode, ccTouched, merged, activeSections = NO_ACTIVE_SECTIONS,
@@ -34,9 +48,8 @@ export function buildRunInput({
   const sized = ccTouched ? built : { ...built, confinement_class: undefined };
   // Same body on all three doors; none when the run carries none.
   const withComponents = state.components.length ? { ...sized, components: state.components } : sized;
-  // No mode_contract marker: the console has no experience control yet, and the marker makes
-  // the server refuse an unset experience (run_mode_required). Lane A-L8 re-adds it together with that control.
-  const run = { ...withComponents, ...buildRunContractWire(state.contract, activeSections) };
+  const contract = buildRunContractWire(state.contract, activeSections);
+  const run = withRunMode({ ...withComponents, ...contract });
   // A saved ID may survive a mode switch; only the active mode chooses the policy.
   if (policyMode === "custom") return merged ? { ...run, inline_policy: merged.spec } : null;
 
