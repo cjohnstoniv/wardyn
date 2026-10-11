@@ -514,6 +514,8 @@ start.
 | `placement_invalid` / `resources_invalid` / `workspace_target_invalid` / `override_invalid` / `allowed_image_invalid` / `runner_pool_invalid` | `400`: a malformed `placement`, `resources`, workspace `target`, `overrides` entry, `allowed_image` or `runner_pool_id`. |
 | `workspace_target_overlap` / `workspace_pin_conflict` / `image_conflict` / `workspace_ado_org_conflict` | `422`: the attached workspaces cannot share one run. |
 | `placement_unavailable` / `placement_credential` / `placement_capability` / `placement_local_path` / `placement_trusted_output` | `422`: a `placement: "local"` run this server cannot place on your own runner yet, or one carrying a credential, mount, storage, path or trusted-output operation a runner cannot take. |
+| `placement_denied` | `403`: your governance profile's `deny_placements` refuses the run's placement, at create, preflight, policy preview and source scans; audited `authz.denied` (target `runs.placement`). |
+| `runner_offline` | `422`: a `placement: "local"` run whose runner is offline or has not reported its capabilities yet. |
 | `override_refused` | `422`: an override that would widen the run, which the narrowing table never allows. |
 | `request_field_unavailable` | `422`: a field this server cannot honour yet. It is refused, never dropped. |
 | `run_mode_required` / `run_mode_invalid` / `start_folder_invalid` | `400`: a new client's mode (or a background task's workload) is unset, and is never inferred (`mode_contract: "0.9"` marks a request as a new client's even when it carries no other run-mode field); a run-mode carrier is malformed; a `start_folder` is malformed, names an attachment the run lacks, or leaves its mount. |

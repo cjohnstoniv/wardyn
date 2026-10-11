@@ -182,7 +182,7 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 	floor := confinementFloorSpec(f.spec, f.comps)
 	if f.mode == foldCreate {
 		var ok bool
-		f.enforced, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, floor, f.reqCC, f.baseline)
+		f.enforced, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, requestPlacement(*f.req), requestRunnerID(*f.req), floor, f.reqCC, f.baseline)
 		return ok
 	}
 	var advertised []types.ConfinementClass
@@ -193,7 +193,7 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 			return false
 		}
 		f.reqCC = reqCC
-		advertised = s.advertisedConfinement(f.r.Context())
+		advertised = s.advertisedConfinement(f.r.Context(), *f.req)
 	}
 	enforced, err := enforcedConfinement(floor, f.reqCC, advertised, f.baseline)
 	if err != nil {
@@ -202,6 +202,15 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 	}
 	f.enforced = enforced
 	return true
+}
+
+// stepPlacementCapability refuses a request whose own shape demands an optional
+// runner interface the placement it gets does not implement (design 3.4), so
+// the demand is never silently dropped. A runner that cannot answer is refused
+// runner_offline. The remote placement is the deployment's own executor and is
+// not asked.
+func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
+	return !s.placementCapabilityRefusal(f.r.Context(), *f.req, f.ceiling).write(s, f.w, f.r)
 }
 
 // stepModelProvider makes the model-provider choice and refuses one whose
@@ -305,6 +314,15 @@ func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
 	var refused bool
 	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.r.Context(), f.spec, f.ceiling))
 	return !refused
+}
+
+// stepPlacementDenied is the deny_placements door: a request whose placement the
+// caller's governance profile denies is refused 403 placement_denied, naming
+// the profile, before any local-eligibility work. An unassigned member has no
+// profile and an operator's runs stand outside governance, so for both the list
+// is absent and every placement is permitted.
+func (s *Server) stepPlacementDenied(f *runFold, rec *foldRecorder) bool {
+	return !s.placementDeniedRefusal(f.r.Context(), requestPlacement(*f.req), f.ceiling).write(s, f.w, f.r)
 }
 
 // stepLocalEligibility is before confinement/provider liveness: create may
