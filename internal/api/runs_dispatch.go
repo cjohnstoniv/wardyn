@@ -467,6 +467,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 
 	resources := resourceLimitsToRunner(policy.Resources)
 	resources.DiskMiBFilled = diskFilled
+	if run.LifetimeCapAt != nil {
+		// The run pods' deadline follows this run's own cap, not a driver-wide one.
+		resources.LifetimeCap = max(run.LifetimeCapAt.Sub(s.cfg.Now()), time.Second)
+	}
 	// The git_pat allowlist AFTER the ceiling re-assertion narrowed p.GitPATGrants,
 	// with each narrowed grant's scope read from its stored row — and, with every
 	// credential now authored, the one-credential-per-host re-check.

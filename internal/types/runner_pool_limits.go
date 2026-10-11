@@ -285,20 +285,28 @@ type EffectiveRunLimits struct {
 }
 
 // RunEndReason says why the platform ended a run. It is the audit row's `reason`
-// and the run detail's sentence; how a run carries it is the lifetime lane's.
+// and the run detail's sentence, and it rides the run's status_detail as
+// "lifetime: <reason>" when the run is KILLED at its end or its maximum.
 type RunEndReason string
 
 // RunEndMaxLifetimeReached: the run reached its effective maximum lifetime and
 // was KILLED.
 const RunEndMaxLifetimeReached RunEndReason = "max_lifetime_reached"
 
+// RunEndEndReached: a Background task reached its own end time, which came
+// before its maximum lifetime, and was KILLED.
+const RunEndEndReached RunEndReason = "end_reached"
+
 // Valid reports whether r is a defined end reason.
-func (r RunEndReason) Valid() bool { return r == RunEndMaxLifetimeReached }
+func (r RunEndReason) Valid() bool { return r == RunEndMaxLifetimeReached || r == RunEndEndReached }
 
 // Sentence is what the run's detail page and the audit view say.
 func (r RunEndReason) Sentence() string {
-	if r == RunEndMaxLifetimeReached {
+	switch r {
+	case RunEndMaxLifetimeReached:
 		return "This run reached its maximum lifetime and was ended."
+	case RunEndEndReached:
+		return "This run reached its end time and was ended."
 	}
 	return ""
 }

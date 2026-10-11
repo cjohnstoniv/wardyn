@@ -228,7 +228,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_DIRECTORY_CLIENT_SECRET` 🔒 | string | (unset = reuses `WARDYN_OIDC_CLIENT_SECRET`) | Client secret of that dedicated app registration (flag `-directory-client-secret`); `WARDYN_DIRECTORY_PROVIDER=entra` is refused at boot when neither this nor `WARDYN_OIDC_CLIENT_SECRET` is set. [Details](#wardyn_directory_client_secret) |
 | `WARDYN_APPROVAL_EXPIRY_AFTER` | duration | `24h` | PENDING approvals older than this expire (flag `-approval-expiry-after`) |
 | `WARDYN_ENDED_RUN_GRACE` | duration | `168h` (7 days) | How long a run whose end has passed keeps its files; past the grace it is torn down, and `0` tears a run down at its end (flag `-ended-run-grace`). [Details](#wardyn_ended_run_grace) |
-| `WARDYN_RUN_MAX_AGE` | duration | (unset: off) | Absolute cap on a run's age since creation, separate from idleness (no flag); it is every new run's lifetime cap and the lifecycle reaper stops a RUNNING run older than this. [Details](#wardyn_run_max_age) |
+| `WARDYN_RUN_MAX_AGE` | duration | (unset: off) | Absolute cap on a run's age since creation (no flag). It is every new run's lifetime cap; a run still live at it is killed. The reaper stops only older runs with no cap. [Details](#wardyn_run_max_age) |
 | `WARDYN_APPROVAL_EXPIRY_INTERVAL` | duration | `10m` | Sweep interval for stale approvals; 0 disables, which removes the only thing that bounds a PENDING request with no run-scoped wait/end (flag `-approval-expiry-interval`). [Details](#wardyn_approval_expiry_interval) |
 | `WARDYN_AUTOSTOP_INTERVAL` | duration | `1m` | lifecycle reaper scan interval; 0 disables (flag `-autostop-interval`) |
 | `WARDYN_AUDIT_COALESCE_WINDOW` | duration | `5m` | Fold identical consecutive `auth.fail` audit rows into the first row plus one new summary row; `0` disables the folding (flag `-audit-coalesce-window`). [Details](#wardyn_audit_coalesce_window) |
@@ -1188,14 +1188,16 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_RUN_MAX_AGE`
 
 - Absolute cap on a run's age since creation, separate from idleness (no flag; `0`, unset or negative is off).
-- The lifecycle reaper stops a RUNNING run older than this, even one that is busy, has `auto_stop_after_sec` of `0` or has a request open
-- Or is kept after a control-plane outage with its agent still running (before its end), and writes a `run.max_age.expire` audit row
-- A run kept with its agent already stopped (after its end, a reboot, or an outage past its end) is left to its files grace
+- A run that carries a `lifetime_cap_at` is ended by the lease sweep at its cap: KILLED with the reason `max_lifetime_reached` (Background or Interactive), audited `run.kill` by `system`/`wardynd`.
+- A Background task whose end comes before the cap is KILLED `end_reached` at its end. An Interactive run is kept at an earlier end, as always.
+- The lifecycle reaper still stops a RUNNING run older than this that carries no cap (a run from before 0.9), busy or not, and writes a `run.max_age.expire` audit row.
+- A run kept after a control-plane outage with its agent still running (before its end) is covered the same way.
+- A run kept with its agent already stopped (after its end, a reboot, or an outage past its end) is left to its files grace.
 - It is not `ends_at`, which a person may extend, but it bounds it: every new run records `lifetime_cap_at` (its creation plus this age).
 - A run launched from New Run or `POST /runs` that no source gives an end gets that cap as its end, and `no_end` at launch is refused with `403` naming this deployment.
 - `PATCH /runs/{id}` cannot extend past the cap or set No end, a super admin included.
-- Until the lease sweep honours the cap, a run reaching it is kept by the lease sweep and stopped by the reaper at the same moment.
-- On the `k8s` substrate it also sets `activeDeadlineSeconds` on the proxy pod and the agent pod to this value plus 10 minutes
+- The cap is captured when the run is created, so lowering `WARDYN_RUN_MAX_AGE` later does not reach a run that already carries one; only runs launched afterwards, and older runs with no cap, follow the new value.
+- On the `k8s` substrate each run's proxy pod and agent pod get `activeDeadlineSeconds` of that run's own remaining lifetime plus 10 minutes; a run with no cap has none.
 - So a run whose control plane is gone still fails both pods (releasing their resource requests) without wardynd
 - The next reconciler sweep then deletes the run's Secret and NetworkPolicies.
 - Both run pods are also created with the agent owned by the proxy pod, so deleting the proxy pod removes the agent.

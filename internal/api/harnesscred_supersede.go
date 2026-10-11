@@ -228,7 +228,7 @@ func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, a
 				// bound, same as claimKillTransition's above.
 				tailCtx, tailCancel := context.WithTimeout(detached, killCascadeTimeout)
 				defer tailCancel()
-				killData := s.killTeardownTail(tailCtx, run, types.ActorSystem, "wardynd", extra)
+				killData := s.killTeardownTail(tailCtx, run, types.ActorSystem, "wardynd", extra, false)
 				if len(killData) > 0 {
 					// The state is KILLED and the row already carries the failing step;
 					// the new sign-in PROCEEDS — the upload belt is what makes that safe.

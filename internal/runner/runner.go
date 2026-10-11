@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -199,6 +200,11 @@ type Resources struct {
 	// than policy-authored: the desktop tier fails closed only for a
 	// POLICY-AUTHORED value; a FILLED default degrades to uncapped instead.
 	DiskMiBFilled bool
+	// LifetimeCap is how much longer the run may live, counted from the sandbox
+	// create: the run's own lifetime cap (lifetime_cap_at) less now. Zero means the
+	// run has no cap. Only the k8s substrate reads it, as the run pods'
+	// activeDeadlineSeconds and the quota scope that deadline selects.
+	LifetimeCap time.Duration
 }
 
 // AttachOptions configures an interactive attach; zero Cols/Rows let the driver pick a sane default (e.g. 80x24).

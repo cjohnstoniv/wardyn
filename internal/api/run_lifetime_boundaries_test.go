@@ -135,3 +135,26 @@ func TestPatchRunLimitsUsesCapturedBounds(t *testing.T) {
 		t.Fatalf("extend within the captured 2-day max = %d %+v; want 200 at 36h", code, out)
 	}
 }
+
+// TestRunLimits_MaxAgeCapsTheDefaultEnd (N2): on the path that decides no end of
+// its own, a profile's default end past the deployment's maximum age is the cap:
+// the run never shows an end it will not reach. An end before the cap is kept.
+func TestRunLimits_MaxAgeCapsTheDefaultEnd(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	s := &Server{}
+	s.cfg.RunMaxAge = 14 * 24 * time.Hour
+	for _, tc := range []struct {
+		name string
+		sec  int
+		want time.Duration
+	}{
+		{"default end past the cap", 30 * 86400, 14 * 24 * time.Hour},
+		{"default end before the cap", 86400, 24 * time.Hour},
+	} {
+		run := &types.AgentRun{CreatedAt: now}
+		s.captureRunLimits(run, governanceCeiling{Limits: types.GovernanceLimits{RunLimits: types.RunLimits{DefaultEndSec: tc.sec}}}, nil)
+		if run.LifetimeCapAt == nil || run.EndsAt == nil || !run.EndsAt.Equal(now.Add(tc.want)) {
+			t.Errorf("%s: ends %v cap %v; want the end %v after creation", tc.name, run.EndsAt, run.LifetimeCapAt, tc.want)
+		}
+	}
+}
