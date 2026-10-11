@@ -81,7 +81,7 @@ func TestPG_ABackgroundRunHasNoIdleStopFromAnySource(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &pol); err != nil || pol.ID == "" {
 		t.Fatalf("policy id: %v %s", err, w.Body.String())
 	}
-	const bg = `"experience":"background","workload":{"kind":"command","command":"make"},"no_repositories_or_drives":true`
+	const bg = `"experience":"background","workload":{"kind":"agent_task","agent":"claude-code","task":"fix the build"},"tools":[{"id":"claude-code","kind":"harness"}],"no_repositories_or_drives":true`
 	const inter = `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness"}],"no_repositories_or_drives":true`
 	for _, tc := range []struct {
 		name, body string
