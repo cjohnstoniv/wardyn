@@ -33,8 +33,8 @@ type runnerStreamState struct {
 
 // This route has its own proof-of-possession handshake. Human sessions and
 // admin bearer tokens never authorize a runner or replace its AUTH signature.
-// The address limiter spends a token only on a connection that ends without
-// the runner proving its key: behind a proxy every runner shares one address.
+// The address limiter charges every connection before any read and refunds a
+// runner that proves its key: behind a proxy every runner shares one address.
 // Each verified runner's reconnects are limited by its own id.
 func (s *Server) mountRunnerStreamRoutes(r chi.Router) {
 	s.runnerStreams.limiter = principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers}
@@ -42,23 +42,17 @@ func (s *Server) mountRunnerStreamRoutes(r chi.Router) {
 	r.Get("/runners/{id}/stream", s.handleRunnerStream)
 }
 
-// runnerVerifiedKey carries the request's flag that Verified sets.
-type runnerVerifiedKey struct{}
+// runnerPeerKey carries the request's address key, which Verified refunds.
+type runnerPeerKey struct{}
 
 var errRunnerStreamRateLimited = errors.New("runner stream connection rate exceeded")
 
 func (s *Server) handleRunnerStream(w http.ResponseWriter, r *http.Request) {
 	peer := peerKey(r.RemoteAddr)
-	if !s.runnerStreams.limiter.ready(peer, s.cfg.Now()) {
+	if !s.runnerStreams.limiter.allow(peer, s.cfg.Now()) {
 		writeErrorReason(w, http.StatusTooManyRequests, reasonRunnerStreamRateLimited, errRunnerStreamRateLimited.Error())
 		return
 	}
-	verified := false
-	defer func() {
-		if !verified {
-			s.runnerStreams.limiter.allow(peer, s.cfg.Now())
-		}
-	}()
 	if !s.requireRunnersEnabled(w, r) {
 		return
 	}
@@ -83,7 +77,7 @@ func (s *Server) handleRunnerStream(w http.ResponseWriter, r *http.Request) {
 	}
 	// Serve owns the connection, always closes it, and cannot Attach a Link
 	// until nonce, stored key, route id and the admitted Substrate all agree.
-	_ = hub.Serve(context.WithValue(r.Context(), runnerVerifiedKey{}, &verified), runnerwire.NewWebSocket(conn), id)
+	_ = hub.Serve(context.WithValue(r.Context(), runnerPeerKey{}, peer), runnerwire.NewWebSocket(conn), id)
 }
 
 // RevokeRunnerSession notifies an already connected runner after the caller
@@ -136,11 +130,11 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 		cfg := s.cfg.RunnerHub
 		cfg.OrgURL, cfg.Lookup = s.cfg.RunnerOrgURL, st.GetRunner
 		cfg.Verified = func(ctx context.Context, id uuid.UUID) error {
-			if v, ok := ctx.Value(runnerVerifiedKey{}).(*bool); ok {
-				*v = true
-			}
 			if !s.runnerStreams.runners.allow(id.String(), s.cfg.Now()) {
 				return errRunnerStreamRateLimited
+			}
+			if peer, ok := ctx.Value(runnerPeerKey{}).(string); ok {
+				s.runnerStreams.limiter.refund(peer, s.cfg.Now())
 			}
 			return nil
 		}

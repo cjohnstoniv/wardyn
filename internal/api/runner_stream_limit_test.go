@@ -155,3 +155,33 @@ func TestRunnerStreamAddressLimitPrecedesSiteConfigRead(t *testing.T) {
 		t.Fatalf("refused connection: status %d, site-config reads %d -> %d", status, reads, h.configReads.Load())
 	}
 }
+
+// Connections held open without AUTH never finish their handler, so the address
+// bucket must be charged when each one arrives, not when it ends.
+func TestRunnerStreamBoundsUnauthenticatedConnectionsHeldOpenFromOneAddress(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	h := newStreamLimitHarness(t, ctx, 1)
+	for id := range h.keys {
+		for i := range int(enrolBurst) + 5 {
+			conn, resp, err := websocket.Dial(ctx, h.url+"/api/v1/runners/"+id.String()+"/stream", nil)
+			if err == nil {
+				defer conn.CloseNow()
+			}
+			status := 0
+			if resp != nil {
+				status = resp.StatusCode
+			}
+			past := i >= int(enrolBurst)
+			if past && status != http.StatusTooManyRequests {
+				t.Fatalf("held connection %d past the burst: status %d; want 429", i, status)
+			}
+			if !past && err != nil {
+				t.Fatalf("held connection %d within the burst: %v", i, err)
+			}
+		}
+	}
+	if reads := h.configReads.Load(); reads > int32(enrolBurst) {
+		t.Fatalf("site-config reads %d, want at most %d", reads, int(enrolBurst))
+	}
+}
