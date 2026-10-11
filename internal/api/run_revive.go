@@ -210,6 +210,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr := s.reviveOwnerRecheck(ctx, run, cfg, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
+	if rerr := s.reviveCapPrecheck(ctx, run, rebooted); rerr != nil {
+		return reviveResult{}, rerr
+	}
 	retiring := cfg.RunToken
 	id, err := s.cfg.Identity.MintRunIdentity(ctx, run.ID, runIdentitySubject(ctx, run.CreatedBy), run.CreatedBy, internalAudience, run.OperatorOwned)
 	if err != nil {
@@ -336,6 +339,25 @@ func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run 
 	}
 	if !claimed {
 		return reviveRefused(http.StatusConflict, reasonReviveRunChanged, "the run changed while it was being revived (it ended, was lost or was revived); try again")
+	}
+	return nil
+}
+
+// reviveCapPrecheck refuses, before an identity is minted or the proxy image pulled, a revive that
+// would start an agent while the deployment is at its cap. Lock-free and advisory: claimRevive's
+// count under the cap lock stays the authority on a race. run is never counted, since an
+// outage-kept run whose agent stopped can still read as holding a slot itself.
+func (s *Server) reviveCapPrecheck(ctx context.Context, run types.AgentRun, startsAgent bool) *reviveError {
+	c, ok := s.cfg.Store.(runCounter)
+	if !startsAgent || s.cfg.MaxConcurrentRuns <= 0 || !ok {
+		return nil
+	}
+	n, err := c.CountNonTerminalRuns(ctx, run.ID)
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, "count active runs: "+err.Error())
+	}
+	if n >= s.cfg.MaxConcurrentRuns {
+		return reviveRefused(http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)
 	}
 	return nil
 }

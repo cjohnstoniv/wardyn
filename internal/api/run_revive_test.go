@@ -119,6 +119,14 @@ func (s *reviveStore) ListGovernanceProfiles(context.Context) ([]types.Governanc
 	return s.profiles, nil
 }
 
+// CountNonTerminalRuns: the deployment's one other run fills the cap when capFull.
+func (s *reviveStore) CountNonTerminalRuns(_ context.Context, _ uuid.UUID) (int, error) {
+	if s.capFull {
+		return 1, nil
+	}
+	return 0, nil
+}
+
 // reviveRunner is lostRunner that can replace a proxy; replaced is every
 // config it was handed.
 type reviveRunner struct {
