@@ -80,7 +80,8 @@ type PeopleDirectoryPage struct {
 
 // peopleDirectoryRows is the identity side (one row per principal, over every issuer it has
 // signed in on) full-joined to the people table, so a pre-created person who never signed in and
-// a sub-keyed user with no people row both appear. A person is deactivated when every identity
+// a sub-keyed user with no people row both appear. A service: principal is no person (#1508) and is
+// never listed, whichever table holds it. A person is deactivated when every identity
 // row of theirs is or when their people row is (a suspension over SCIM before the first sign-in).
 const peopleDirectoryRows = `
 WITH ident AS (
@@ -108,7 +109,8 @@ SELECT dir.principal, dir.email, dir.entra, dir.pre_created, dir.first_sign_in_a
        COALESCE(g.groups, '[]'::jsonb), COALESCE(g.truncated, false), g.principal IS NOT NULL
   FROM dir
   LEFT JOIN key_domain_login_groups g ON g.principal = dir.principal
- WHERE ($1 = '' OR starts_with(dir.principal, $1) OR starts_with(lower(dir.email), lower($1)))
+ WHERE NOT starts_with(lower(dir.principal), 'service:')
+   AND ($1 = '' OR starts_with(dir.principal, $1) OR starts_with(lower(dir.email), lower($1)))
    AND ($2 = '' OR ($2 = 'active' AND dir.deactivated_at IS NULL) OR ($2 = 'deactivated' AND dir.deactivated_at IS NOT NULL))
    AND ($3 = '' OR dir.principal COLLATE "C" > $3 COLLATE "C")
  ORDER BY dir.principal COLLATE "C"
