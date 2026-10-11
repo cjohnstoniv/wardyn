@@ -280,6 +280,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   under it is refused (`403 audit_retention_actor_reserved`) and audited (#1978).
 - The Codex image supports only its pinned Codex. `OPENAI_BASE_URL` and `OPENAI_API_KEY` are still set but unused by
   Codex and deprecated; a later release removes them (#1979).
+- A recording uploaded for a run on a self-hosted runner is audited `evidence_source: runner_asserted`: a local
+  run's recording is self-reported (threat model residuals #50-#52). Masking continuity across restarts (#1512) is
+  pinned by tests for a run with no secrets and for kill and revoke without a masking corpus.
 
 ### Removed
 
