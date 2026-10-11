@@ -10,6 +10,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on the six
+  tables 0.9 adds, `runners`, `runner_pending_actions`, `credential_delivery_policy`, `runner_registration_tokens`,
+  `provider_connection_changes` and `audit_delivery_cursors`. Without the `provider_connection_changes` grant every
+  secret write fails once migration 0143's trigger on `secrets` is in place.
 - Migration `0145_audit_delivery_cursors` adds the `audit_delivery_cursors` table; nothing changes until a webhook
   audit sink sets `"delivery": "acknowledged"`.
 - Migration `0143_provider_connection_changes` adds an empty, secret-free history table for why a model connection
@@ -26,8 +31,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   data without enabling local execution or choosing placement for unresolved runs (#116).
 - Migration `0139_runner_delivery` adds the `runners` and `runner_pending_actions` tables, the
   `credential_delivery_policy` document and `credential_grants.delivery`, for 0.9 client mode and
-  credential delivery; grant the app role `SELECT, INSERT, UPDATE, DELETE` on the two new tables. Nothing
-  changes until runners are enabled.
+  credential delivery (split-role grants: see the first item above). Nothing changes until runners are
+  enabled.
 - Migration `0138_audit_ensure_partitions_high_water` drops and recreates `audit_ensure_partitions`
   (the migrator's role must own the schema, as for 0111/0123); forward-only, rollback is the
   pre-upgrade `pg_dump`. Its EXECUTE grant is re-derived from `audit_append`'s: every role that can
