@@ -121,7 +121,12 @@ func appendCredentialConfinementAdvisory(warnings []string, spec types.RunPolicy
 // CC2, so a rank check would pass a CC2 demand and fail later with a raw docker
 // error). Writes the HTTP error itself and returns ok=false on any refusal.
 // Extracted verbatim from handleCreateRun.
-func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.ResponseWriter, spec types.RunPolicySpec, reqCC types.ConfinementClass, baseline composer.Baseline) (types.ConfinementClass, bool) {
+//
+// offered, when not nil, is the set the DEFAULT class is chosen from instead of the deployment's union:
+// a pooled run is placed on one of its pool's eligible candidates, so its default barrier is the
+// strongest one of those, and create, Review and the preview agree on it. The membership check below
+// still reads the deployment's capabilities.
+func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.ResponseWriter, spec types.RunPolicySpec, reqCC types.ConfinementClass, baseline composer.Baseline, offered []types.ConfinementClass) (types.ConfinementClass, bool) {
 	// Capabilities are read BEFORE the pure math now, not after: the default
 	// branch needs the advertised set to pick the strongest class rather than
 	// just the policy minimum. Still one read, still fail-closed on a Capabilities
@@ -136,7 +141,11 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 		}
 	}
 
-	enforced, err := enforcedConfinement(spec, reqCC, caps.ConfinementClasses, baseline)
+	defaultFrom := caps.ConfinementClasses
+	if offered != nil {
+		defaultFrom = offered
+	}
+	enforced, err := enforcedConfinement(spec, reqCC, defaultFrom, baseline)
 	if err != nil {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return "", false

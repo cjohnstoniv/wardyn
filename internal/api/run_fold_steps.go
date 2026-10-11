@@ -182,8 +182,8 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 	floor := confinementFloorSpec(f.spec, f.comps)
 	if f.mode == foldCreate {
 		var ok bool
-		f.enforced, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, floor, f.reqCC, f.baseline)
-		return ok
+		f.enforced, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, floor, f.reqCC, f.baseline, f.place.offeredClasses())
+		return ok && !f.place.barrierRefusal(f.enforced).write(s, f.w, f.r)
 	}
 	var advertised []types.ConfinementClass
 	if f.mode == foldPreflight {
@@ -194,6 +194,9 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 		}
 		f.reqCC = reqCC
 		advertised = s.advertisedConfinement(f.r.Context())
+		if offered := f.place.offeredClasses(); offered != nil {
+			advertised = offered
+		}
 	}
 	enforced, err := enforcedConfinement(floor, f.reqCC, advertised, f.baseline)
 	if err != nil {
@@ -201,7 +204,7 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 		return false
 	}
 	f.enforced = enforced
-	return true
+	return !f.place.barrierRefusal(enforced).write(s, f.w, f.r)
 }
 
 // stepModelProvider makes the model-provider choice and refuses one whose
