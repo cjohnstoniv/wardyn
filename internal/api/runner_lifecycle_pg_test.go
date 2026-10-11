@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -115,7 +116,11 @@ func TestRunnerAdmissionPG_SlowOfflineSweepDoesNotBlockReconnect(t *testing.T) {
 		_ = tx.Rollback(f.ctx)
 		t.Fatalf("the reconnect waited on the offline sweep: %v", second.result())
 	}
-	if got, _ := f.st.GetRun(f.ctx, f.run.ID); got.LostAt != nil {
+	var lostAt *time.Time
+	if err := tx.QueryRow(f.ctx, `SELECT lost_at FROM agent_runs WHERE id=$1`, f.run.ID).Scan(&lostAt); err != nil {
+		t.Fatal(err)
+	}
+	if lostAt != nil {
 		t.Fatal("the sweep ran past the held run row")
 	}
 	if err := tx.Rollback(f.ctx); err != nil {
@@ -176,8 +181,14 @@ func TestRunnerAdmissionPG_RevokeKillsRunsThenClosesTheSession(t *testing.T) {
 	if !f.waitReady(s) {
 		t.Fatalf("session never reached READY: %v", s.result())
 	}
-	// A revoke that cannot commit restores the route.
-	tx, err := f.pool.Begin(f.ctx)
+	// A revoke that cannot commit restores the route. The hold is on a pool of its own: the revoke
+	// asks f.pool for a connection on this goroutine (WARDYN_TEST_POOL_GUARD).
+	holder, err := pgxpool.New(f.ctx, f.pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	tx, err := holder.Begin(f.ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

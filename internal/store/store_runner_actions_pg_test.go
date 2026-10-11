@@ -527,8 +527,14 @@ func TestPG_RunnerActions_RevokeKillsRunsAndSettlesActionsInOneCommit(t *testing
 	other := claimed(t, f.st, ctx, f.rn.Owner)
 	untouched := f.localRun(t, other, other.Owner)
 
-	// A revoke that cannot commit leaves runner, runs and actions as they were.
-	tx, err := f.pool.Begin(ctx)
+	// A revoke that cannot commit leaves runner, runs and actions as they were. The hold is on a pool
+	// of its own: the revoke asks f.pool for a connection on this goroutine (WARDYN_TEST_POOL_GUARD).
+	holder, err := pgxpool.New(ctx, f.pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	tx, err := holder.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
