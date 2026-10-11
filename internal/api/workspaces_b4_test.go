@@ -95,11 +95,11 @@ func (s *b4BuildStore) GetSiteConfig(context.Context) (types.SiteConfig, error) 
 	return types.SiteConfig{}, nil
 }
 
-func (s *b4BuildStore) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, ref, hash string) (types.Workspace, error) {
+func (s *b4BuildStore) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, _, ref, hash string, _ *types.ImageBuild) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ws.ImageRef, s.ws.BuiltProfileHash = ref, hash
-	return s.ws, nil
+	return true, nil
 }
 
 func (s *b4BuildStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {

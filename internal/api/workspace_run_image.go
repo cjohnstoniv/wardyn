@@ -212,15 +212,9 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 			buildAudit("failure", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "error": berr.Error()})
 			return "", false
 		}
-		s.removeStaleImage(ctx, primary.ImageRef, built)
-		if s.cfg.Store != nil {
-			if _, uerr := s.cfg.Store.SetWorkspaceBuiltImage(ctx, primary.ID, built, byoiHash); uerr != nil {
-				// Non-fatal: the image built and is usable now; caching just missed.
-				buildAudit("success", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "image": built, "cache_warn": uerr.Error()})
-				return built, true
-			}
-		}
-		buildAudit("success", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "image": built})
+		extra := map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "image": built}
+		s.commitBuiltImage(ctx, primary, built, byoiHash, extra)
+		buildAudit("success", extra)
 		return built, true
 	}
 
@@ -262,14 +256,9 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 			// same name, so primary.ImageRef == built here and removeStaleImage
 			// is a no-op (its ref==next guard); removing "the old ref" by this
 			// name would in fact delete the image the retag just moved it to.
-			s.removeStaleImage(ctx, primary.ImageRef, built)
-			if s.cfg.Store != nil {
-				if _, uerr := s.cfg.Store.SetWorkspaceBuiltImage(ctx, primary.ID, built, repoHash); uerr != nil {
-					buildAudit("success", map[string]any{"source": "repo-devcontainer", "image": built, "cache_warn": uerr.Error()})
-					return built, true
-				}
-			}
-			buildAudit("success", map[string]any{"source": "repo-devcontainer", "image": built})
+			extra := map[string]any{"source": "repo-devcontainer", "image": built}
+			s.commitBuiltImage(ctx, primary, built, repoHash, extra)
+			buildAudit("success", extra)
 			return built, true
 		} else {
 			buildAudit("failure", map[string]any{"source": "repo-devcontainer", "error": err.Error()})
@@ -302,18 +291,32 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 		buildAudit("failure", map[string]any{"source": "generated-devcontainer", "error": berr.Error()})
 		return "", false
 	}
-	s.removeStaleImage(ctx, primary.ImageRef, built)
-	// Cache the built image on the workspace for reuse by later runs — a SCOPED
-	// write: the previous full-row UpdateWorkspace here replayed a stale
-	// pre-launch snapshot over every concurrently-persisted async column
-	// (active_run_id, record_results, verify state).
-	if _, uerr := s.cfg.Store.SetWorkspaceBuiltImage(ctx, primary.ID, built, hash); uerr != nil {
-		// Non-fatal: the image built and is usable now; caching just missed.
-		buildAudit("success", map[string]any{"source": "generated-devcontainer", "image": built, "cache_warn": uerr.Error()})
-		return built, true
-	}
-	buildAudit("success", map[string]any{"source": "generated-devcontainer", "image": built})
+	extra := map[string]any{"source": "generated-devcontainer", "image": built}
+	s.commitBuiltImage(ctx, primary, built, hash, extra)
+	buildAudit("success", extra)
 	return built, true
+}
+
+// commitBuiltImage caches the built image on the workspace for reuse by later
+// runs — a SCOPED compare-and-swap write on the ref this build observed (the
+// previous full-row UpdateWorkspace replayed a stale pre-launch snapshot over
+// every concurrently-persisted async column). The old tag is reclaimed only
+// after an applied swap. A write error or a lost swap is non-fatal: the image
+// built and is usable now, so the cause rides the audit row as cache_warn.
+func (s *Server) commitBuiltImage(ctx context.Context, primary types.Workspace, built, hash string, extra map[string]any) {
+	if s.cfg.Store == nil {
+		s.removeStaleImage(ctx, primary.ImageRef, built)
+		return
+	}
+	applied, err := s.cfg.Store.SetWorkspaceBuiltImage(ctx, primary.ID, primary.ImageRef, built, hash, nil)
+	switch {
+	case err != nil:
+		extra["cache_warn"] = err.Error()
+	case !applied:
+		extra["cache_warn"] = "superseded"
+	default:
+		s.removeStaleImage(ctx, primary.ImageRef, built)
+	}
 }
 
 // repoOwnDevcontainerURL returns the clone URL resolveWorkspaceImage builds

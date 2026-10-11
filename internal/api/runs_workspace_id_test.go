@@ -241,9 +241,9 @@ type resolveImageStoreFake struct {
 	builtHash string
 }
 
-func (s *resolveImageStoreFake) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, _, hash string) (types.Workspace, error) {
+func (s *resolveImageStoreFake) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, _, _, hash string, _ *types.ImageBuild) (bool, error) {
 	s.builtHash = hash
-	return types.Workspace{}, nil
+	return true, nil
 }
 
 // capturedBuild is one BuildFromDevcontainerFiles call capturingImageBuilder
