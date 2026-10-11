@@ -25,7 +25,7 @@ var localDispatchFields = map[reflect.Type][]string{
 
 	reflect.TypeFor[time.Time]():             nil, // opaque timestamp, not credential authority
 	reflect.TypeFor[adoEntraGrade]():         strings.Fields("graded rowID org tokenMode"),
-	reflect.TypeFor[adoEntraRun]():           strings.Fields("rowID org owner tenantID clientID tokenMode credentialSource caps capsFromPolicy ceiling patHours serverHost"),
+	reflect.TypeFor[adoEntraRun]():           strings.Fields("rowID org owner tenantID clientID tokenMode credentialSource caps capsFromPolicy ceiling patHours serverHost residentOptIn"),
 	reflect.TypeFor[adoStandingBound]():      strings.Fields("operator governance"),
 	reflect.TypeFor[bedrockAuth]():           strings.Fields("env egressHosts ready bearer runtimeHost runtimePort region model ssoInject ssoAccountID ssoRoleName ssoRegion ssoProxyInject maskErr"),
 	reflect.TypeFor[bedrockCredGrade]():      strings.Fields("graded host"),
@@ -40,7 +40,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[toolchainNeeds]():        strings.Fields("goTools jvmTools"),
 	reflect.TypeFor[userMountPosture]():      strings.Fields("Roots Sources"),
 	reflect.TypeFor[policyref.Contact]():     strings.Fields("Owner Email RequestURL RequestText"),
-	reflect.TypeFor[types.ADOEntraConfig]():  strings.Fields("TenantID ClientID CapabilityCeiling DefaultProfile TokenMode PATMaxHours PATMaxDays RESTAPI"),
+	reflect.TypeFor[types.ADOEntraConfig]():  strings.Fields("TenantID ClientID CapabilityCeiling DefaultProfile TokenMode PATMaxHours PATMaxDays RESTAPI RunnerResident RunnerResidentSandbox"),
 	reflect.TypeFor[types.AgentProvider]():   strings.Fields("ID Disabled DefaultProvider"),
 	reflect.TypeFor[types.AgentProviders]():  strings.Fields("Agents"),
 	//lint:ignore SA1019 the legacy override type is still a SiteConfig field, so its manifest is required

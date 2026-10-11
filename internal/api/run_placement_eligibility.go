@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -83,7 +84,7 @@ func placementDeniedMsg(p types.Placement, profile string) string {
 // the actual-spec classifier must inspect before H3/D117 enable execution.
 func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest,
 	spec types.RunPolicySpec, ceiling governanceCeiling, comps runComponents,
-	drive *types.DriveMount, workspaces []types.Workspace,
+	drive *types.DriveMount, workspaces []types.Workspace, baseline composer.Baseline,
 ) *runRefusal {
 	if req.Placement != placement.Local {
 		return nil
@@ -92,6 +93,7 @@ func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest,
 	if refusal != nil {
 		return refusal
 	}
+	p.ConfinementFloor = composer.RequiredConfinementFloor(spec, baseline)
 	if _, ref := placement.LocalEligibility(p); ref != nil {
 		return s.localEligibilityRefusal(r, ceiling, ref)
 	}
