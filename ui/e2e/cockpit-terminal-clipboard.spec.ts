@@ -72,9 +72,9 @@ test("a mouse-tracking pane that answers a drag with different text is blocked, 
     });
   });
   await expect.poll(async () => await termText(screen)).toContain("alpha beta gamma");
-  const grid = await settledGrid(page, screen);
+  await settledGrid(page, screen);
   const row = await rowOf(screen, /alpha beta gamma/);
-  await dragCells(page, screen, grid, [0, row], [4, row]);
+  await dragCells(page, screen, [0, row], [4, row]);
   await expect(page.getByTestId("terminal-copy-notice")).toHaveText(/Copy blocked. The terminal sent different text than you selected/);
   await expect(page.getByTestId("terminal-copy-offer")).toHaveCount(0);
   expect(await writes(page)).toEqual([]);
@@ -90,9 +90,9 @@ test("the tmux bytes for a dragged selection become an offer; Copy writes the fu
     });
   });
   await expect.poll(async () => await termText(screen)).toContain("alpha beta gamma");
-  const grid = await settledGrid(page, screen);
+  await settledGrid(page, screen);
   const row = await rowOf(screen, /alpha beta gamma/);
-  await dragCells(page, screen, grid, [0, row], [4, row]);
+  await dragCells(page, screen, [0, row], [4, row]);
   const offer = page.getByTestId("terminal-copy-offer");
   await expect(offer).toBeVisible();
   await expect(page.getByTestId("terminal-copy-offer-text")).toHaveText("alpha");
@@ -127,9 +127,9 @@ test("an observer socket gets no offer", async ({ page }) => {
     setTimeout(() => ws.send(Buffer.from(tmuxCopy("alpha"))), 300);
   });
   await expect.poll(async () => await termText(screen)).toContain("alpha beta gamma");
-  const grid = await settledGrid(page, screen);
+  await settledGrid(page, screen);
   const row = await rowOf(screen, /alpha beta gamma/);
-  await dragCells(page, screen, grid, [0, row], [4, row]);
+  await dragCells(page, screen, [0, row], [4, row]);
   await page.waitForTimeout(500);
   await expect(page.getByTestId("terminal-copy-offer")).toHaveCount(0);
   expect(await writes(page)).toEqual([]);
