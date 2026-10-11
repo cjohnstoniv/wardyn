@@ -189,7 +189,7 @@ func (s *Server) relayRoutes(next http.Handler) http.Handler {
 		}
 		if !relayed || !relayedInternalRoutes[r.Method+" "+s.router.Find(chi.NewRouteContext(), r.Method, path)] {
 			reason := placement.ReasonRelayRouteRefused
-			d := authz.Deny(authz.Reason(reason), r.URL.Path, "").With("runner_id", runner.String())
+			d := authz.Deny(authz.Reason(placement.ReasonRelayRouteRefused), r.URL.Path, "").With("runner_id", runner.String())
 			ev := s.refusalEvent(r.Context(), types.ActorSystem, placement.RunnerSubstrateName(runner.String()), r.Method, d)
 			ev.SourceIP = r.RemoteAddr
 			s.recordAudit(r.Context(), ev)
