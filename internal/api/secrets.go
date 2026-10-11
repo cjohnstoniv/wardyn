@@ -522,6 +522,9 @@ type principalIdentity struct{ principal, email string }
 // workspaces.owned_by adds the principals an operator has already acted for,
 // subject-form only.
 //
+// A service identity (service:<name>, #1508) is no person: its tokens and anything it owns never enter
+// the directory, so no name resolves onto one and no email pairs with one.
+//
 // DELIBERATELY NOT capability-grant or governance-assignment subjects: those are
 // matched at read time against a caller's sub AND email (capabilitySubjects), so
 // a `user` row may hold either form with nothing to pair it to — admitting one
@@ -536,13 +539,13 @@ func (s *Server) knownPrincipals(ctx context.Context) ([]principalIdentity, erro
 	var out []principalIdentity
 	toks, tokErr := s.cfg.Store.ListAPITokens(ctx)
 	for _, t := range toks {
-		if t.Principal != "" {
+		if t.Principal != "" && !isServicePrincipal(t.Principal) {
 			out = append(out, principalIdentity{principal: t.Principal, email: t.Email})
 		}
 	}
 	wss, wsErr := s.cfg.Store.ListWorkspaces(ctx)
 	for _, ws := range wss {
-		if ws.OwnedBy != "" {
+		if ws.OwnedBy != "" && !isServicePrincipal(ws.OwnedBy) {
 			out = append(out, principalIdentity{principal: ws.OwnedBy})
 		}
 	}

@@ -91,14 +91,8 @@ func TestRunContractRefusals(t *testing.T) {
 		{"push key twice", `,"overrides":{"push_rules":[{"provider":"github","org":"acme","deny_paths":["a/"]},{"provider":"github","org":"acme","deny_paths":["b/"]}]}`, reasonOverrideInvalid, "", 400},
 		{"push bad pattern", `,"overrides":{"push_rules":[{"provider":"github","org":"acme","deny_paths":["a//b"]}]}`, reasonOverrideInvalid, "", 400},
 
-		// Allowed by the table and not yet applied: refused, never dropped.
-		{"narrowing is not dropped", `,"overrides":{"azure_devops":{"capabilities":["code_read"]}}`, reasonRequestFieldUnavailable, "", 422},
-		{"host add is not dropped", `,"overrides":{"agent":{"add_hosts":["api.example.com"]}}`, reasonRequestFieldUnavailable, "", 422},
-		{"host removal is not dropped", `,"overrides":{"agent":{"remove_hosts":["api.example.com"]}}`, reasonRequestFieldUnavailable, "", 422},
-		{"secret add is not dropped", `,"overrides":{"agent":{"add_secrets":[{"secret_name":"my-key","host":"api.example.com"}]}}`, reasonRequestFieldUnavailable, "", 422},
-		{"tool hold is not dropped", `,"overrides":{"agent":{"tool_rules":[{"tool":"Bash","effect":"hold"}]}}`, reasonRequestFieldUnavailable, "", 422},
-		{"pat narrowing is not dropped", `,"overrides":{"git_pat":[{"host":"git.example.com","access":"read"}]}`, reasonRequestFieldUnavailable, "", 422},
-		{"push rules are not dropped", `,"overrides":{"push_rules":[{"provider":"github","org":"acme","deny_paths":["infra/"]},{"provider":"github","org":"other","require_review_paths":["ci/"]}]}`, reasonRequestFieldUnavailable, "", 422},
+		// Allowed by the table and applied: they pass the contract (the fold applies them).
+		{"push rules are applied", `,"overrides":{"push_rules":[{"provider":"github","org":"acme","deny_paths":["infra/"]},{"provider":"github","org":"other","require_review_paths":["ci/"]}]}`, "", "", 200},
 
 		{"builtin is not dropped", `,"components":[{"builtin":"github","org":"acme","repos":["acme/api"]}]`, reasonRequestFieldUnavailable, "", 422},
 		{"builtin github needs repos", `,"components":[{"builtin":"github","org":"acme"}]`, reasonComponentRefInvalid, "", 400},
@@ -131,7 +125,7 @@ func TestRunContractRefusals(t *testing.T) {
 
 // TestRunContractNarrowingTableDecidesTheServer pins that every table row is
 // what the server answers: a refused row is override_refused, an allowed or
-// clamped one passes the table (and meets the not-yet-applied stub).
+// clamped one passes the table (the fold applies them).
 func TestRunContractNarrowingTableDecidesTheServer(t *testing.T) {
 	sample := map[types.OverrideKind]map[types.OverrideOp]client.RunOverrides{
 		types.OverrideAgentHost: {
@@ -152,21 +146,26 @@ func TestRunContractNarrowingTableDecidesTheServer(t *testing.T) {
 			types.OverrideNarrow: {GitPAT: []client.GitPATOverride{{Host: "git.example.com", Access: "read"}}},
 			types.OverrideAdd:    {GitPAT: []client.GitPATOverride{{Host: "git.example.com", Access: "write"}}},
 		},
-		types.OverridePushDeny:   {types.OverrideAdd: {PushRules: []client.PushRuleOverride{{Provider: "github", Org: "acme", DenyPaths: []string{"infra/"}}}}},
-		types.OverridePushReview: {types.OverrideAdd: {PushRules: []client.PushRuleOverride{{Provider: "github", Org: "acme", RequireReviewPaths: []string{"ci/"}}}}},
+		types.OverrideRunHostAllow:     {types.OverrideAdd: {Hosts: &client.RunHostOverrides{AddAllowed: []string{"api.example.com"}}}},
+		types.OverrideRunHostWildcard:  {types.OverrideAdd: {Hosts: &client.RunHostOverrides{AddAllowed: []string{"*.example.com"}}}},
+		types.OverrideRunHostDeny:      {types.OverrideAdd: {Hosts: &client.RunHostOverrides{AddDenied: []string{"*.example.com"}}}},
+		types.OverrideFirstUseApproval: {types.OverrideSet: {Egress: &client.RunEgressOverrides{FirstUseApproval: types.FirstUseWaitForReview}}},
+		types.OverrideAllowAllEgress:   {types.OverrideSet: {Egress: &client.RunEgressOverrides{AllowAllEgress: new(true)}}},
+		types.OverridePushDeny:         {types.OverrideAdd: {PushRules: []client.PushRuleOverride{{Provider: "github", Org: "acme", DenyPaths: []string{"infra/"}}}}},
+		types.OverridePushReview:       {types.OverrideAdd: {PushRules: []client.PushRuleOverride{{Provider: "github", Org: "acme", RequireReviewPaths: []string{"ci/"}}}}},
 	}
 	for _, row := range types.OverrideNarrowingTable() {
 		o, ok := sample[row.Kind][row.Op]
 		if !ok {
 			continue // an operation with no wire spelling: a removal of a push rule cannot be asked for
 		}
-		want := reasonRequestFieldUnavailable
+		want := ""
 		if row.Rule == types.OverrideRefused {
 			want = reasonOverrideRefused
 		}
 		refusal := (&Server{}).runContractRefusal(createRunRequest{Overrides: &o})
-		if refusal == nil || refusal.body.Reason != want {
-			t.Errorf("%s %s (%s): got %+v, want reason %s", row.Kind, row.Op, row.Rule, refusal, want)
+		if got := refusalReason(refusal); got != want {
+			t.Errorf("%s %s (%s): got %+v, want reason %q", row.Kind, row.Op, row.Rule, refusal, want)
 		}
 	}
 	for kind, ops := range sample {
@@ -176,6 +175,13 @@ func TestRunContractNarrowingTableDecidesTheServer(t *testing.T) {
 			}
 		}
 	}
+}
+
+func refusalReason(r *runRefusal) string {
+	if r == nil {
+		return ""
+	}
+	return r.body.Reason
 }
 
 // TestPushRuleOverridesAreKeyedByProviderAndOrg pins the key: provider and
@@ -189,13 +195,13 @@ func TestPushRuleOverridesAreKeyedByProviderAndOrg(t *testing.T) {
 		rules []client.PushRuleOverride
 		want  string // reason of the answer
 	}{
-		{"one provider, two organisations", []client.PushRuleOverride{rule("github", "acme"), rule("github", "other")}, reasonRequestFieldUnavailable},
-		{"one organisation, two providers", []client.PushRuleOverride{rule("github", "acme"), rule("azure_devops", "acme")}, reasonRequestFieldUnavailable},
+		{"one provider, two organisations", []client.PushRuleOverride{rule("github", "acme"), rule("github", "other")}, ""},
+		{"one organisation, two providers", []client.PushRuleOverride{rule("github", "acme"), rule("azure_devops", "acme")}, ""},
 		{"one key twice", []client.PushRuleOverride{rule("github", "acme"), rule("github", "acme")}, reasonOverrideInvalid},
 		{"no organisation", []client.PushRuleOverride{rule("github", "")}, reasonOverrideInvalid},
 	} {
 		refusal := (&Server{}).runContractRefusal(createRunRequest{Overrides: &client.RunOverrides{PushRules: tc.rules}})
-		if refusal == nil || refusal.body.Reason != tc.want {
+		if refusalReason(refusal) != tc.want {
 			t.Errorf("%s: got %+v, want %s", tc.name, refusal, tc.want)
 		}
 	}
