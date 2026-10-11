@@ -14,13 +14,20 @@
 | Concern | Org | Laptop |
 | --- | --- | --- |
 | Scheduling, placement, the ceiling | Yes, the only scheduler | Nothing decides locally |
-| Credentials | Held in the org; the laptop can use a `via_org` credential for a run's life | Only what the person's own keystore already holds |
+| Credentials | Held in the org; the laptop can use a `via_org` credential for a run's life | The person's own; and a `runner_resident` value, held in the OS keystore for one run |
 | Audit | The org is the only writer; every local run is an org run record | The runner carries bytes and spools rows while offline |
 | Control plane, Postgres, OIDC client, `age.key` | Yes | None of them |
 | Sandbox, proxy sidecar, local Docker | No | Yes, driven through `wardyn-runnerd` |
 | The runner's private key | Never seen | `runner.key`, `0600`, never leaves the host |
 
 - Azure DevOps: connected at the org; on a local run only the person's own PAT is used directly, see [Azure DevOps on a laptop runner](../AZURE-DEVOPS.md#on-a-laptop-runner-local-placement).
+
+## Resident credentials and posture
+
+- An admin can set a credential class to `runner_resident` with a `require_posture` (`mdm_managed`, `disk_encrypted`, `os_min`).
+- The runner reports its posture when it connects and again when it changes. A root-owned `/etc/wardyn/posture.json` from your MDM wins over the runner's own probe.
+- The value is held in the Secret Service keystore for the run and erased at run end. A runner with no keystore refuses the run (`runner_keystore_unavailable`); a macOS runner has none yet.
+- Posture is self-reported, and a run with a CC3 floor never takes a resident credential.
 
 ## Claiming a runner
 

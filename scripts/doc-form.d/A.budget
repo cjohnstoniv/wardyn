@@ -33,7 +33,8 @@
 # docs/AUDIT-ACTIONS.md 41692 measured after R2-audit-2 merge.
 # docs/AUDIT-ACTIONS.md 41757 adds 124 over 41633 (0.9 F-1508 C2): the four service_identity rows, `service_scope` in the authz.denied vocabulary and the two auth.fail reasons.
 # docs/AUDIT-ACTIONS.md 41816 measured after train 5 merge.
-docs/AUDIT-ACTIONS.md=41816 share=8
+# docs/AUDIT-ACTIONS.md 41816 adds 74 (0.9 H13): the runner.posture.record and runner.resident.erase rows.
+docs/AUDIT-ACTIONS.md=41890 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
