@@ -106,8 +106,8 @@ type runFoldStep struct {
 //   - Confinement, then the model provider, then autonomy: the autonomy grade
 //     reads the enforced class and the chosen model credential.
 //   - Azure DevOps standing and PAT narrowing read autonomy's site snapshot.
-//   - The run's end reads only the governance ceiling and the deployment, so it sits
-//     with the gates that need no other step's result and refuses before capacity.
+//   - The run's end reads the resolved pool, the governance ceiling and the deployment,
+//     so it sits after placement and refuses before capacity.
 //   - Host capacity, the run cap and the quota fit last, so a refusal leaves
 //     no identity and no run row.
 var runFoldSteps = []runFoldStep{
