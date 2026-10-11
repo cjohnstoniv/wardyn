@@ -20,7 +20,9 @@
 // run's age since creation. It is its own predicate: not ends_at (which a
 // person may extend), not the idle compare-and-set, and it applies to a run
 // whose policy never idle-reaps. It stops a run even with a request open,
-// because bounding a hung run is its whole purpose.
+// because bounding a hung run is its whole purpose. A run that carries a
+// lifetime cap (RunSummary.HasLifetimeCap) is not stopped here: the lease
+// sweep KILLS it at that cap, which already includes this age.
 //
 // AutoStopAfterSec (policy auto_stop_after_sec): >0 idle timeout in seconds;
 // 0 DISABLED/never reaped (default, matches docs/POLICIES.md); <0 also never
@@ -66,6 +68,11 @@ type RunSummary struct {
 	// Kept is a run kept after a control-plane outage whose agent still runs: the
 	// max age still ends it, and idle reaping does not apply (its lost mark governs it).
 	Kept bool
+	// HasLifetimeCap is a run that carries agent_runs.lifetime_cap_at: the lease
+	// sweep ends it at its cap (and the deployment's maximum age is one of the
+	// limits that cap is measured from), so the max-age stop skips it. A run
+	// from before that column keeps this reaper's max-age stop.
+	HasLifetimeCap bool
 }
 
 // Store is the narrow persistence interface the Reaper requires; the real
@@ -240,7 +247,7 @@ func (r *Reaper) reap(ctx context.Context) error {
 
 	var stopErrs []error
 	for _, run := range runs {
-		if r.maxAge > 0 && now.Sub(run.CreatedAt) >= r.maxAge {
+		if r.maxAge > 0 && !run.HasLifetimeCap && now.Sub(run.CreatedAt) >= r.maxAge {
 			if err := r.stopMaxAge(ctx, run, now); err != nil {
 				stopErrs = append(stopErrs, err)
 			}

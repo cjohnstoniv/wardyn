@@ -86,6 +86,11 @@ func (s *Server) captureRunLimits(run *types.AgentRun, ceiling governanceCeiling
 			run.LifetimeCapAt, run.LifetimeCapSource = &capAt, types.LimitSourceDeployment
 		}
 	}
+	// A run never shows an end it will not reach: a profile's default end past
+	// the cap is the cap (the record path above; a create already cut its ask).
+	if run.EndsAt != nil && run.LifetimeCapAt != nil && run.EndsAt.After(*run.LifetimeCapAt) {
+		run.EndsAt = run.LifetimeCapAt
+	}
 	run.WaitBudgetSec = runWaitSec(l, s.cfg.ApprovalExpiryAfter)
 }
 

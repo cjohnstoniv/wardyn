@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -34,8 +35,8 @@ type runFitVerdict struct {
 // reserved, so a concurrent run can still take the room (the quota's own admission then refuses
 // the pod, and the run fails to start); and the node-size advisory compares requests to node
 // size, never to free capacity, because other namespaces' pods are invisible to this role.
-func (s *Server) refuseRunFit(w http.ResponseWriter, r *http.Request, spec types.RunPolicySpec) (warnings []string, refused bool) {
-	v := s.runFit(r.Context(), spec)
+func (s *Server) refuseRunFit(w http.ResponseWriter, r *http.Request, spec types.RunPolicySpec, lifetimeCap time.Duration) (warnings []string, refused bool) {
+	v := s.runFit(r.Context(), spec, lifetimeCap)
 	if v.refusal != "" {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonNamespaceQuotaExceeded, v.refusal)
 		return nil, true
@@ -58,13 +59,17 @@ func (s *Server) runFitSpec(ctx context.Context, spec types.RunPolicySpec, ceili
 
 // runFit asks the substrate whether a run of the spec's size fits. A deployment whose runner has no
 // fit to check (docker, or no runner) has nothing to say. A check that errors is reported as an
-// unreadable quota: the quota is enforced when the run starts either way.
-func (s *Server) runFit(ctx context.Context, spec types.RunPolicySpec) runFitVerdict {
+// unreadable quota: the quota is enforced when the run starts either way. lifetimeCap is the run's
+// own cap (zero for none): a run with a cap carries a pod deadline, which selects the Terminating
+// quota scope, so the fit answers for the scope the pods will land in.
+func (s *Server) runFit(ctx context.Context, spec types.RunPolicySpec, lifetimeCap time.Duration) runFitVerdict {
 	fc, ok := s.cfg.Runner.(runner.FitChecker)
 	if !ok {
 		return runFitVerdict{}
 	}
-	fit, err := fc.CheckFit(ctx, resourceLimitsToRunner(spec.Resources))
+	res := resourceLimitsToRunner(spec.Resources)
+	res.LifetimeCap = lifetimeCap
+	fit, err := fc.CheckFit(ctx, res)
 	if errors.Is(err, runner.ErrFitUnsupported) {
 		return runFitVerdict{}
 	}

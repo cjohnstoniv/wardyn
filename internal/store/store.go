@@ -412,8 +412,27 @@ func (s PG) SetRunFailureHint(ctx context.Context, id uuid.UUID, hint string) er
 		`UPDATE agent_runs SET failure_hint=$1, updated_at=now() WHERE id=$2`, hint, id)
 }
 
+// UpdateRunStateAndDetailIf is UpdateRunStateIf that also writes status_detail,
+// in the one statement: a run KILLED at its end or its maximum lifetime carries
+// "lifetime: <reason>" from the instant it is KILLED, never a KILLED row a
+// second write has yet to explain. The same compare on fromState, so a
+// concurrent kill or completion that already moved the run is not clobbered.
+func (s PG) UpdateRunStateAndDetailIf(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, detail string) (bool, error) {
+	tag, err := s.Pool.Exec(ctx,
+		`UPDATE agent_runs SET state=$1, status_detail=$5, updated_at=now(), ended_at=CASE WHEN $4 THEN now() ELSE ended_at END
+		 WHERE id=$2 AND state=$3`,
+		string(toState), id, string(fromState), toState.IsTerminal(), detail,
+	)
+	if err != nil {
+		return false, fmt.Errorf("store: conditional update run state and detail: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // SetRunStatusDetail scoped-writes ONLY status_detail — what the substrate says
-// a STARTING run is waiting on, or the control plane's own `image: Building`
+// a STARTING run is waiting on, and a lifetime end reason on a KILLED run
+// (written with the state by UpdateRunStateAndDetailIf, not here), or the
+// control plane's own `image: Building`
 // line on a PENDING run. Fed by runner.SandboxSpec.OnWaiting, once per
 // CHANGE of reason. Deliberately does NOT bump updated_at: that column is also
 // what the idle reaper and the killed-run tail-upload grace measure by, and a
