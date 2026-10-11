@@ -358,6 +358,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `dco` | 60 | 0.1 | 0.1 | 10 |
 | `main-red` | – | pending | pending | 10 |
 | `notify-flaky` | – | pending | pending | 10 |
+| `runner-units` | – | pending | pending | 15 |
 | `multi-arch build (agent-claude-code)`, nightly | 60 | 3.5 | 3.8 | 45 |
 | `multi-arch build (wardynd)`, nightly | 60 | 3.1 | 3.5 | 45 |
 | `multi-arch build (agent-aws-sso)`, nightly | 60 | 2.9 | 4.0 | 45 |
