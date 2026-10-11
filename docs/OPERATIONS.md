@@ -492,6 +492,10 @@ commands are the ones in "Back them up" and "Restore them", and in
 | **Managed desktop** | The `postgres_data` volume of the Compose project `wardyn-desktop` (the `compose` helper in [`deploy/desktop/wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh)). Stop the converge job first (`wardyn.timer` on Linux, the launchd job on macOS), or it restarts the stack under you. | **Not in the set, deliberately.** `age.key` stays on the device ([DESKTOP.md](DESKTOP.md#why-agekey-never-rides-in-an-mdm-payload)), so a desktop restore recovers runs, audit and drives, but not stored secrets. If you set `WARDYN_PLATFORM_KEY_FILE`, keep that file. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. | One Docker volume per person, as on Compose (a drive volume per person). | `/data/audit/audit-spool.jsonl`, `.consumed` and `.quarantine`, on the project's `audit` volume. |
 | **Helm** | The Postgres you operate (`postgres.dsn`); the chart renders none. Use that Postgres's own backup. | The Secret holding the `age-key` entry (`secrets.ageKeyFromSecret=true`), `secrets.ageKey`, or an operator-owned Secret named by `secrets.ageKeySecretRef`, or the key wired through `env`/`extraEnv`; the `WARDYN_PLATFORM_KEY_FILE` file if set; or the external key service for Vault Transit or Azure Key Vault. `secrets.allowEphemeralAgeKey=true` makes a backup unrecoverable. | The PVC, with `persistence.enabled=true` (store `fs`). With `persistence.enabled=false` the store is `off`; `env.WARDYN_RECORDING_STORE=pg` puts them in the dump. | One PVC per drive: a snapshot per claim ("User drives on Kubernetes"). | `<persistence.mountPath>/audit-spool.jsonl`, `.consumed` and `.quarantine` on the PVC. With the default `persistence.enabled=false` they sit on a `/tmp` emptyDir, so the precondition is: enable persistence, or drain and copy them before scaling to zero. |
 
+**Inventory.** `wardynd -recovery-inventory`, run with the daemon's environment, prints each item above as JSON with its location for the deployment it sees (Compose, the managed desktop or Helm, from the runner and `WARDYN_MANAGED_DIR`). It opens no database connection and reads no key; only setting names appear, never values ([design](design/0.9/recovery-set.md#12-slices)).
+
+**Manifest and rehearsal.** `-recovery-manifest` ties the dump to the spool, recordings and drive bytes, `-recovery-verify` refuses a mismatched pair, and `-recovery-rehearse` proves the set on a scratch database: [Recovery set and restore rehearsal](operations/recovery-rehearsal.md).
+
 **Rules for every row.**
 
 - **Custody.** Keep the keys apart from the data, in a secret manager, never in
@@ -515,7 +519,7 @@ commands are the ones in "Back them up" and "Restore them", and in
 > **What is not proven.**
 
 - The commands in the day-2 section were exercised once against a throwaway kind cluster.
-- No shipped tool rehearses a restore (that is issue #1514), so none of the above has been validated end to end.
+- Only `wardynd -recovery-rehearse` rehearses a restore, and only for the set you run it on, so none of the above is validated end to end until you do ([Recovery set and restore rehearsal](operations/recovery-rehearsal.md)).
 - Loading a dump into a scratch database proves the SQL loads, and nothing more: a row count does not show that the
   key works, and it does not show that the drive bytes are intact.
 

@@ -175,9 +175,10 @@ var envDocShellOnly = map[string]bool{
 	// directory, and the loopback port it publishes.
 	"WARDYN_VERSION": true, "WARDYN_HOME": true, "WARDYN_PORT": true,
 	// The desktop tier's MDM-managed directory: docker-compose.yaml bind-mounts
-	// it read-only at /etc/wardyn and wardyn-desktop.sh exports it. Go never
-	// reads the var — it reads the POLICY FILE at the path inside that mount
-	// (WARDYN_DEFAULT_POLICY), which is a separate, Go-read var.
+	// it read-only at /etc/wardyn and wardyn-desktop.sh exports it. Go reads it
+	// only to tell the deployment for -recovery-inventory (recovery_inventory.go);
+	// it reads the POLICY FILE at the path inside that mount (WARDYN_DEFAULT_POLICY)
+	// as a separate var.
 	"WARDYN_MANAGED_DIR": true,
 	// The desktop-tier installer's own image override — read only by
 	// deploy/desktop/install.sh (`-gen-age-key`), never by Go. Documented in

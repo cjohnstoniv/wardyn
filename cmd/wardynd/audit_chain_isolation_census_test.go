@@ -108,6 +108,14 @@ var declaredNonAuditTx = map[string]string{
 		"That is not taken on trust: the set is DISCOVERED by content (db.triggerMigrationFiles), so " +
 		"assertReplaySetIsPureDDL below re-derives it and checks, and a future migration that redefines the chain " +
 		"trigger AND carries DML reddens this test instead of joining the replay silently",
+	"cmd/wardynd/recovery_target.go:holdLiveLock": "the rehearsal's T3 probe: takes pg_advisory_xact_lock on a random key " +
+		"and reads pg_locks, then rolls back. It carries no INSERT, UPDATE or DELETE on any table, audit_events " +
+		"included, so it writes no chain-linked row and its isolation level decides nothing. The rehearsal's two " +
+		"audit rows go through the recorder chain, whose transactions pin READ COMMITTED and are classified by the census",
+	"cmd/wardynd/recovery_target.go:rehearseSession.readTx": "a READ ONLY transaction on the rehearsal's target backend " +
+		"(the audit chain sweep, the pairing read and the key checks). Postgres refuses any write in it, " +
+		"audit_events included, so there is no head for it to chain onto stale; the backend is also " +
+		"default_transaction_read_only",
 }
 
 // auditChainTriggerName is the trigger whose migrations replayTriggerMigrations

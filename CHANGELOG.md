@@ -124,6 +124,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the pinned CLI.
 - `wardyn setup status --pre-upgrade [--role-map CSV] [--default-role ROLE]` lists leftover
   `member` entries and removed `WARDYN_MEMBER_*` variables before the upgrade (#623).
+- `wardynd -recovery-manifest`, `-recovery-verify` and `-recovery-rehearse` (#1514). The manifest ties a database
+  snapshot to the audit spool and its sidecars, the key configuration (fingerprints and row counts only), recordings
+  and drive bytes; verify refuses a mismatched pair. The rehearsal runs read-only on a scratch database named by
+  `WARDYN_REHEARSE_PG_DSN`, refuses the live database, reads the set only inside its own directory, and proves
+  pairing, the audit chain, that the configured keys open every stored row (Vault Transit and Azure Key Vault unwrap
+  are not exercised by this release's tests), recordings and drive digests. It writes `recovery.rehearse.begin` and
+  `recovery.rehearse` audit rows and exits 0 (pass), 3 (refused), 4 (fail) or 5 (incomplete). See
+  docs/operations/recovery-rehearsal.md.
 
 ### Changed
 

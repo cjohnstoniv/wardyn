@@ -452,6 +452,7 @@ func (s *Store) open(ctx context.Context, e envelope) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pg secretstore: %s refused — its data key does not unwrap for this row (moved, forged, corrupted, or its key version retired): %w", ref, err)
 	}
+	defer clear(dek)
 	plain, err := kek.Open(dek, e.ct, secretAAD(e.ownedBy, e.name))
 	if err != nil {
 		return nil, fmt.Errorf("pg secretstore: %s refused — its value fails the integrity check for this row (moved, forged or corrupted): %w", ref, err)
