@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -188,5 +189,49 @@ func TestSecurityAdminCannotWidenDriveWritability(t *testing.T) {
 	st.grants[n2.ID] = *n2
 	if w := driveGrantAs(t, srv, sec, `{"subject_type":"user","subject":"sub-ro","drive_id":"`+ro.ID.String()+`"}`); w.Code != http.StatusOK {
 		t.Errorf("read-only override dropped on a read-only drive = %d, want 200: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestSecurityAdminDrivePreviewOmitsTheHostPath: a host_path object name is a
+// path under the drive's host_root, which the security tier is not shown
+// (GET /drives stays super-only for that reason). The home name and every other
+// field stay; a super admin's answer and a Wardyn-named object are unchanged.
+func TestSecurityAdminDrivePreviewOmitsTheHostPath(t *testing.T) {
+	preview := func(t *testing.T, srv *Server, ctx context.Context) userDrivePreviewResponse {
+		t.Helper()
+		body, _ := json.Marshal(governancePreviewRequest{UserSubjects: []string{"sub-abc", "alice@corp.example"}, Groups: []string{"eng"}})
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/drives/preview", strings.NewReader(string(body))).WithContext(ctx)
+		w := httptest.NewRecorder()
+		srv.handlePreviewUserDrive(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("preview = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		var got userDrivePreviewResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return got
+	}
+	share := driveFixture(func(d *types.UserDrive) {
+		d.Backend, d.HomeTemplate = types.DriveBackendHostPath, types.HomeTemplateEmailLocal
+	})
+	st := &driveStore{drive: share, grant: grantFixture(share.ID, nil), tier: types.CapabilitySubjectUser}
+	srv := drivePreviewShareServer(t, st, "alice")
+
+	sec := preview(t, srv, driveSecurityAdminCtx())
+	if sec.ObjectName != "" {
+		t.Errorf("security admin object_name = %q, want it omitted for a host_path drive", sec.ObjectName)
+	}
+	if sec.HomeName != "alice" || sec.DriveName != share.Name {
+		t.Errorf("security admin home/drive = %q/%q, want alice/%q", sec.HomeName, sec.DriveName, share.Name)
+	}
+	if sup := preview(t, srv, driveSuperAdminCtx()); sup.ObjectName != types.DriveObjectName(*share, "alice") {
+		t.Errorf("super admin object_name = %q, want the host path", sup.ObjectName)
+	}
+
+	managed := driveFixture(nil)
+	mst := &driveStore{drive: managed, grant: grantFixture(managed.ID, nil), tier: types.CapabilitySubjectUser}
+	if got := preview(t, driveServerOn(mst, "docker"), driveSecurityAdminCtx()); got.ObjectName == "" || got.ObjectName != types.DriveObjectName(*managed, got.HomeName) {
+		t.Errorf("security admin managed object_name = %q, want the volume name", got.ObjectName)
 	}
 }
