@@ -712,6 +712,7 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	r.Delete("/me/tokens/{id}", s.handleRevokeAPIToken)
 	securityOps.Get("/tokens", s.handleListAllAPITokens)
 	securityOps.Delete("/tokens/{id}", s.handleAdminRevokeAPIToken)
+	securityOps.Post("/tokens/{id}/move", s.handleMoveAPIToken)
 	securityOps.With(s.refuseSubjectPrincipalParam).Delete("/people/{principal}/ssh-keys", s.handleAdminDeleteSSHKeys)
 	s.mountPeopleRoutes(securityOps)
 	s.mountInvitationRoutes(r, securityOps)

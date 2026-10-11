@@ -78,3 +78,13 @@ describe("override narrowing table", () => {
     expect(hostOverrideKind("api.example.com")).toBe("agent_host");
   });
 });
+
+describe("run-wide egress scalars", () => {
+  it("are widening rows the ceiling clamps, never plainly allowed or refused", () => {
+    for (const kind of ["first_use_approval", "allow_all_egress"] as const) {
+      expect(overrideRule(kind, "set")).toMatchObject({ direction: "widen", rule: "ceiling_clamped" });
+      expect(overrideOffered(kind, "set")).toBe(true);
+      expect(overrideMayBeClamped(kind, "set")).toBe(true);
+    }
+  });
+});
