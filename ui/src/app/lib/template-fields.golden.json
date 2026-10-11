@@ -619,6 +619,26 @@
       "pending": "C-pools"
     },
     {
+      "name": "ends_after_sec",
+      "tab": "runner",
+      "part": "runner",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "The run takes the default end when the template is used, and that default can change. An end is a length of time from launch, checked again then, never a permission.",
+      "section": "run_wide",
+      "pending": "D-1319"
+    },
+    {
+      "name": "no_end",
+      "tab": "runner",
+      "part": "runner",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "The run takes the default end when the template is used. Asking for no end is checked again at launch against the pool, the deployment and the person's own limits, and is never a permission.",
+      "section": "run_wide",
+      "pending": "D-1319"
+    },
+    {
       "name": "experience",
       "tab": "runner",
       "part": "runner",

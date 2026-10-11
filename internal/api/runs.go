@@ -235,7 +235,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		OperatorOwned:   operatorOwned,
 		CreatedVia:      createdVia(ctx),
 	}
-	s.captureRunLimits(&run, ceiling)
+	s.captureRunLimits(&run, ceiling, &f.end)
 	created, err := s.createRun(ctx, run)
 	if err != nil {
 		s.cfg.Identity.RevokeRun(context.WithoutCancel(ctx), runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
@@ -288,6 +288,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// repoSourceWarnings.
 	warnings = append(warnings, s.repoSourceWarnings(ctx, runID, spec, req)...)
 	warnings = append(warnings, f.fitWarnings...)
+	warnings = append(warnings, f.end.warnings(run)...)
 
 	// The requirements fold that ran ABOVE the confinement floor, audited now
 	// that the run id exists. See recordCreateFolds.
@@ -325,6 +326,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	createData := createRunAuditData(req, f.policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
 	createData["policy_source"] = f.source
+	createData["end"] = f.end.audit(run)
 	comps.stampRunCreate(createData)
 	s.markGovernanceExempt(ctx, createData)
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
