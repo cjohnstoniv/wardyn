@@ -153,22 +153,52 @@ func requestSponsor(ctx context.Context, creator string) string {
 	return creator
 }
 
+// errServiceRetired is runSponsor's refusal for a run of a retired service identity: it stops renewing and
+// cannot be revived, as the identity's tokens and credentials are gone.
+var errServiceRetired = errors.New("the service identity is retired")
+
 // runSponsor is the sponsor a re-minted run identity for creator carries, read from the service identity's
-// row so a sponsor change reaches it; creator itself for a person.
+// row so a sponsor change reaches it; creator itself for a person. A retired service has none: errServiceRetired.
 func (s *Server) runSponsor(ctx context.Context, creator string) (string, error) {
 	name, isService := strings.CutPrefix(creator, types.ServicePrincipalPrefix)
 	if !isService {
 		return creator, nil
 	}
-	ss, ok := s.cfg.Store.(store.ServiceIdentityStore)
-	if !ok {
-		return "", errors.New("service identities require the Postgres store backend")
-	}
-	si, err := ss.GetServiceIdentity(ctx, name)
+	si, err := s.serviceRecord(ctx, name)
 	if err != nil {
 		return "", err
 	}
+	if si.RetiredAt != nil {
+		return "", errServiceRetired
+	}
 	return si.Sponsor, nil
+}
+
+func (s *Server) serviceRecord(ctx context.Context, name string) (types.ServiceIdentity, error) {
+	ss, ok := s.cfg.Store.(store.ServiceIdentityStore)
+	if !ok {
+		return types.ServiceIdentity{}, errors.New("service identities require the Postgres store backend")
+	}
+	return ss.GetServiceIdentity(ctx, name)
+}
+
+// runAuthoredBy reports whether principal is the author of run for the second-human rule: its creator, or,
+// for a service identity's run, the person sponsoring that service (retired or not), so a sponsor cannot
+// launch through the service and approve as the second human. A service whose sponsor cannot be read is an
+// error, which the callers treat as a refusal.
+func (s *Server) runAuthoredBy(ctx context.Context, run types.AgentRun, principal string) (bool, error) {
+	if run.CreatedBy == "" {
+		return false, nil
+	}
+	if run.CreatedBy == principal {
+		return true, nil
+	}
+	name, isService := strings.CutPrefix(run.CreatedBy, types.ServicePrincipalPrefix)
+	if !isService {
+		return false, nil
+	}
+	si, err := s.serviceRecord(ctx, name)
+	return err == nil && si.Sponsor == principal, err
 }
 
 // rateLimitedActor reports who a per-person limiter counts the request against, and whether it counts it
@@ -190,8 +220,8 @@ func (s *Server) serviceEndedSince(r *http.Request, name, sponsor string, opened
 	if !ok {
 		return true
 	}
-	si, err := ss.GetServiceIdentity(r.Context(), name)
-	if err != nil || !si.Usable() || si.Sponsor != sponsor || si.SponsorSince.After(openedAt) {
+	// The store compares openedAt on the database clock sponsor_since is written on.
+	if still, err := ss.ServiceStillSponsored(r.Context(), name, sponsor, openedAt); err != nil || !still {
 		return true
 	}
 	if s.cfg.SessionRevocations == nil {
