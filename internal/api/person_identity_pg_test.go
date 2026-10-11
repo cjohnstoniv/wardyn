@@ -230,6 +230,28 @@ func crossNameRig(t *testing.T) (srv *Server, pg store.PG, sec secretstore.Store
 	return srv, pg, sec, attacker, []string{victimEntra, victimSubject, victimEarly}
 }
 
+// Erasing a person an admin created under an email-shaped subject never reaches whoever signed in
+// claiming that email: the name resolves to the created person, not to the alias holder.
+func TestPG_EraseAuditSealKeys_ACreatedPersonsErasureNeverReachesTheAliasHolder(t *testing.T) {
+	srv, pg, _, attacker, victims := crossNameRig(t)
+	early := victims[2]
+	for _, owner := range []string{attacker, early} {
+		if _, _, err := srv.cfg.SubjectKeys.Current(t.Context(), owner, subjectkey.PurposeAuditSeal); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := time.Now().UTC().Add(-time.Minute)
+	sa := ssoSession(t, "sec-1", "sec@corp.example", oidc.RoleSecurityAdmin)
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/people/"+early+"/erasure", sa, erasureBody("audit_personal_fields")); w.Code != http.StatusOK {
+		t.Fatalf("erasure = %d %s, want 200", w.Code, w.Body)
+	}
+	for owner, want := range map[string]bool{early: true, attacker: false} {
+		if got, err := pg.SubjectKeyDestroyedSince(t.Context(), owner, subjectkey.PurposeAuditSeal, before); err != nil || got != want {
+			t.Errorf("erasing %q: %q audit-seal key destroyed = %v (%v), want %v", early, owner, got, err, want)
+		}
+	}
+}
+
 // Erasing a person whose email alias spells another person's name never reaches that person's credential
 // namespace, on either erase route: the namespaces come from the person's own tenant and object ids.
 func TestPG_EraseCredentials_AnEmailAliasNeverNamesAnotherPersonsNamespace(t *testing.T) {

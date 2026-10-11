@@ -64,7 +64,8 @@ func TestPG_PersonErasure_BlanksOnlyThatPersonsRunTasks(t *testing.T) {
 }
 
 // The names an audit row carries resolve to the one principal every erasure
-// destroys by; a name that resolves to none, or to two, is kept as it is.
+// destroys by; a name that resolves to none, or to two, is kept as it is. A
+// person an admin created is that name's owner, whoever signs in claiming it.
 func TestPG_PersonErasure_PrincipalForName(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)
@@ -75,12 +76,17 @@ func TestPG_PersonErasure_PrincipalForName(t *testing.T) {
 		{Principal: "entra:" + idTenant + ":" + oid, Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, Email: "Pat@Corp.Example"},
 		{Principal: "sub-a", Issuer: "https://dex.example", Email: "shared@corp.example"},
 		{Principal: "sub-b", Issuer: "https://dex2.example", Email: "shared@corp.example"},
+		{Principal: "sub-c", Issuer: "https://dex.example", Email: "early@corp.example"},
 	} {
 		if _, err := st.UpsertLoginIdentity(ctx, in, now); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if _, _, err := st.CreatePerson(ctx, types.Person{Principal: "early@corp.example", CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
 	for name, want := range map[string]string{
+		"early@corp.example":            "early@corp.example",            // a created person, not whoever claims the email
 		"entra:" + idTenant + ":" + oid: "entra:" + idTenant + ":" + oid, // already the principal
 		"PAT@corp.example":              "entra:" + idTenant + ":" + oid, // an email alias, any case
 		"sub-a":                         "sub-a",

@@ -28,8 +28,9 @@ type PersonErasureStore interface {
 	BlankRunTasks(ctx context.Context, createdBy string) (int, error)
 	// PrincipalForName maps a name an event carries (a principal, an
 	// entra:<tenant>:<object> form, an email the person signed in with) to the
-	// person's principal. A name that resolves to none, or to more than one, is
-	// returned as it is.
+	// person's principal through the same directory as PrincipalsNamed, people an
+	// admin created included. A name that resolves to none, or to more than one,
+	// is returned as it is.
 	PrincipalForName(ctx context.Context, name string) (string, error)
 	// PrincipalAliases lists the names the identity directory knows principal
 	// by: the emails it signed in with (lowercased) and its entra:<tenant>:<object>
@@ -144,42 +145,11 @@ func (s PG) BlankRunTasks(ctx context.Context, createdBy string) (int, error) {
 }
 
 func (s PG) PrincipalForName(ctx context.Context, name string) (string, error) {
-	if name == "" {
-		return name, nil
+	found, err := s.PrincipalsNamed(ctx, name)
+	if err != nil || len(found) != 1 {
+		return name, err
 	}
-	one := func(q string, args ...any) (string, bool, error) {
-		rows, err := s.Pool.Query(ctx, q, args...)
-		if err != nil {
-			return "", false, fmt.Errorf("store: resolve a principal: %w", err)
-		}
-		found, err := pgx.CollectRows(rows, pgx.RowTo[string])
-		if err != nil {
-			return "", false, fmt.Errorf("store: resolve a principal: %w", err)
-		}
-		if len(found) != 1 {
-			return "", false, nil
-		}
-		return found[0], true, nil
-	}
-	if p, ok, err := one(`SELECT DISTINCT principal FROM principal_identities WHERE principal = $1`, name); err != nil || ok {
-		return p, err
-	}
-	if rest, ok := strings.CutPrefix(name, "entra:"); ok {
-		if tid, oid, ok := strings.Cut(rest, ":"); ok && tid != "" && oid != "" {
-			if p, ok, err := one(`SELECT DISTINCT principal FROM principal_identities
-				WHERE tenant_id = $1 AND object_id = $2 AND principal IS NOT NULL`, tid, oid); err != nil || ok {
-				return p, err
-			}
-		}
-	}
-	if strings.Contains(name, "@") {
-		if p, ok, err := one(`SELECT DISTINCT i.principal FROM principal_identity_aliases a
-			JOIN principal_identities i ON i.id = a.identity_id
-			WHERE a.kind = 'email' AND a.value_lower = lower($1) AND i.principal IS NOT NULL`, name); err != nil || ok {
-			return p, err
-		}
-	}
-	return name, nil
+	return found[0], nil
 }
 
 func (s PG) PrincipalAliases(ctx context.Context, principal string) ([]string, error) {
