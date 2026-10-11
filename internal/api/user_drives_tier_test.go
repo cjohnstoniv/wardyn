@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -233,5 +234,44 @@ func TestSecurityAdminDrivePreviewOmitsTheHostPath(t *testing.T) {
 	mst := &driveStore{drive: managed, grant: grantFixture(managed.ID, nil), tier: types.CapabilitySubjectUser}
 	if got := preview(t, driveServerOn(mst, "docker"), driveSecurityAdminCtx()); got.ObjectName == "" || got.ObjectName != types.DriveObjectName(*managed, got.HomeName) {
 		t.Errorf("security admin managed object_name = %q, want the volume name", got.ObjectName)
+	}
+}
+
+// changedTierStore answers every tier-judged write with the store's
+// "changed meanwhile" sentinel.
+type changedTierStore struct{ *driveCRUDStore }
+
+func (changedTierStore) UpsertUserDriveGrantWithinTier(context.Context, types.UserDriveGrant, bool) (types.UserDriveGrant, error) {
+	return types.UserDriveGrant{}, store.ErrUserDriveGrantChanged
+}
+
+// TestSecurityAdminAllocationIsJudgedByTheStore: the security tier's write goes
+// through the store's tier-judged write. A store without one refuses it rather
+// than write unjudged, a write that lost a race is a 409, and a super admin's
+// write is the ordinary upsert either way.
+func TestSecurityAdminAllocationIsJudgedByTheStore(t *testing.T) {
+	st := newDriveCRUDStore()
+	srv, _ := driveAdminServer(st, nil)
+	d := *driveFixture(func(d *types.UserDrive) { d.Writable = true })
+	st.drives[d.ID] = d
+	body := func(subject string) string {
+		return `{"subject_type":"user","subject":"` + subject + `","drive_id":"` + d.ID.String() + `"}`
+	}
+
+	srv.cfg.Store = struct{ store.Store }{st}
+	if w := driveGrantAs(t, srv, driveSecurityAdminCtx(), body("sub-h")); w.Code != http.StatusInternalServerError {
+		t.Errorf("no tier writer = %d, want 500: %s", w.Code, w.Body.String())
+	}
+	if _, ok := driveGrantOf(st, "sub-h"); ok {
+		t.Error("an allocation was written with no tier writer to judge it")
+	}
+	if w := driveGrantAs(t, srv, driveSuperAdminCtx(), body("sub-i")); w.Code != http.StatusCreated {
+		t.Errorf("super admin with no tier writer = %d, want 201: %s", w.Code, w.Body.String())
+	}
+
+	srv.cfg.Store = changedTierStore{st}
+	w := driveGrantAs(t, srv, driveSecurityAdminCtx(), body("sub-j"))
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "re-send") {
+		t.Errorf("changed meanwhile = %d, want 409 asking for a re-send: %s", w.Code, w.Body.String())
 	}
 }

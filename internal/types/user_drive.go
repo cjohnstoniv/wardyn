@@ -561,3 +561,21 @@ func ShareBackendRejectsTemplate(backend DriveBackend, tmpl HomeTemplate) bool {
 	// claim).
 	return !DriveObjectNamedByWardyn(backend) && tmpl == HomeTemplateHash
 }
+
+// DriveGrantWidens names the field a write of g would widen past the security-admin tier, judged
+// against drive d and the subject's current allocation prev (nil: none), or "". That tier
+// allocates a drive with its own posture or narrower. Only a super admin newly states a
+// home_override, which names where on the storage the files live and is compared only with other
+// typed names, never with a derived home, or widens writability: true, or dropping a read-only
+// override on a writable drive. An unchanged re-send on the same drive is not new.
+func DriveGrantWidens(d UserDrive, prev *UserDriveGrant, g UserDriveGrant) string {
+	same := prev != nil && prev.DriveID == g.DriveID
+	switch {
+	case g.HomeOverride != "" && !(same && prev.HomeOverride == g.HomeOverride):
+		return "home_override"
+	case g.WritableOverride != nil && *g.WritableOverride && !(same && prev.WritableOverride != nil && *prev.WritableOverride),
+		g.WritableOverride == nil && d.Writable && prev != nil && prev.WritableOverride != nil && !*prev.WritableOverride:
+		return "writable_override"
+	}
+	return ""
+}

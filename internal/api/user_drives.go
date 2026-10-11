@@ -858,12 +858,12 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
-	if !s.isOperator(r.Context()) && !s.driveGrantWithinSecurityTier(w, r, g) {
-		return
-	}
 	g.ID = uuid.New()
 	g.CreatedBy = principalFromRequest(r)
-	saved, err := s.cfg.Store.UpsertUserDriveGrant(r.Context(), g, homeOverrideStated)
+	saved, done, err := s.upsertUserDriveGrantAs(w, r, g, homeOverrideStated)
+	if done {
+		return
+	}
 	// ErrNotFound here is the FK refusing an unknown drive_id — a 404 naming the
 	// drive, not a 500, and not a silent no-op.
 	if notFoundIf(w, err, "user drive", reasonUserDriveNotFound) {
@@ -909,43 +909,34 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, status, saved)
 }
 
-// driveGrantWithinSecurityTier: a security admin allocates a drive with its own posture or narrower.
-// Only a super admin newly states a home_override (it names where on the storage the files live,
-// and the store compares it only with other typed names, never with a derived home) or widens
-// writability (true, or dropping read-only on a writable drive). An unchanged re-send on the same
-// drive passes. False means the refusal is written.
-func (s *Server) driveGrantWithinSecurityTier(w http.ResponseWriter, r *http.Request, g types.UserDriveGrant) bool {
-	d, err := s.cfg.Store.GetUserDrive(r.Context(), g.DriveID)
-	if notFoundIf(w, err, "user drive", reasonUserDriveNotFound) {
-		return false
+// upsertUserDriveGrantAs writes g. A super admin's write is UpsertUserDriveGrant. Anyone else
+// allocates a drive with its own posture or narrower (types.DriveGrantWidens), judged inside the
+// store's write transaction so a concurrent edit cannot land between the judgement and the write.
+// done means the response is written.
+func (s *Server) upsertUserDriveGrantAs(w http.ResponseWriter, r *http.Request, g types.UserDriveGrant, stated bool) (saved types.UserDriveGrant, done bool, err error) {
+	if s.isOperator(r.Context()) {
+		saved, err = s.cfg.Store.UpsertUserDriveGrant(r.Context(), g, stated)
+		return saved, false, err
 	}
-	widens := g.WritableOverride != nil && *g.WritableOverride
-	var grants []types.UserDriveGrant
-	if err == nil && (g.HomeOverride != "" || widens || g.WritableOverride == nil && d.Writable) {
-		grants, err = s.cfg.Store.ListUserDriveGrants(r.Context())
+	tw, ok := s.cfg.Store.(store.UserDriveGrantTierWriter)
+	if !ok {
+		writeServerError(w, r, "upsert user drive grant", errors.New("the store cannot judge an allocation write"))
+		return saved, true, nil
 	}
-	if err != nil {
-		writeServerError(w, r, "read user drive allocation", err)
-		return false
-	}
-	var prev types.UserDriveGrant
-	for _, existing := range grants {
-		if existing.SubjectType == g.SubjectType && existing.Subject == g.Subject {
-			prev = existing
-		}
-	}
-	same, field := prev.DriveID == g.DriveID, ""
+	saved, err = tw.UpsertUserDriveGrantWithinTier(r.Context(), g, stated)
+	var widens *store.UserDriveGrantWidensError
 	switch {
-	case g.HomeOverride != "" && !(same && prev.HomeOverride == g.HomeOverride):
-		field = "home_override"
-	case widens && !(same && prev.WritableOverride != nil && *prev.WritableOverride),
-		g.WritableOverride == nil && d.Writable && prev.WritableOverride != nil && !*prev.WritableOverride:
-		field = "writable_override"
-	default:
-		return true
+	case errors.As(err, &widens):
+		field := widens.Field
+		s.refuse(w, r, authz.Deny(authz.ReasonAdminSurface, "drive.grant."+field, field+": only a super admin may "+
+			"set an allocation's directory name or make it more writable than its drive; allocate with the drive's own posture or read-only"))
+		return saved, true, nil
+	case errors.Is(err, store.ErrUserDriveGrantChanged):
+		writeErrorReason(w, http.StatusConflict, reasonUserDriveGrantConflict,
+			"this subject's allocation changed while yours was being written; read it again and re-send")
+		return saved, true, nil
 	}
-	return !s.refuse(w, r, authz.Deny(authz.ReasonAdminSurface, "drive.grant."+field, field+": only a super admin may "+
-		"set an allocation's directory name or make it more writable than its drive; allocate with the drive's own posture or read-only"))
+	return saved, false, err
 }
 
 // handleDeleteUserDriveGrant removes one allocation by id (204), 404 when

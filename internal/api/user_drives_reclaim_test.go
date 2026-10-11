@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -508,5 +509,84 @@ func TestReclaimUserDriveDerivesFromTheHomeSubject(t *testing.T) {
 	srv, _, _ := reclaimServer(t, d, nil, rn)
 	if w := reclaimCall(t, srv, d.ID, `{"subject_type":"user","subject":"`+email+`","home_subject":"bad\u0007sub"}`); w.Code != http.StatusBadRequest || len(rn.calls) != 0 {
 		t.Errorf("unusable home_subject = %d with %d storage calls, want 400 and none: %s", w.Code, len(rn.calls), w.Body.String())
+	}
+}
+
+// TestReclaimUserDriveChecksAFoundKeyAgainstTheDirectory: with no home_subject,
+// an allocation found under key A derives the home from A only when the principal
+// directory names exactly one principal for A and that principal folds to A.
+// Otherwise the operator must pass home_subject. A key nobody is recorded under,
+// or no allocation at all, keeps the derivation from the key, and an unreadable or
+// absent directory refuses.
+func TestReclaimUserDriveChecksAFoundKeyAgainstTheDirectory(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		key        string // the allocation's stored subject; "" means no allocation
+		subject    string // the request's subject
+		principals []string
+		lookupErr  error
+		want       int
+		wantLookup bool
+	}{
+		{"a sign-in subject with an @ that is its own principal", "alice@idp.example", "alice@idp.example", []string{"alice@idp.example"}, nil, http.StatusOK, true},
+		{"a principal that differs only in ASCII case", "sub-alice", "sub-alice", []string{"Sub-Alice"}, nil, http.StatusOK, true},
+		{"an alias of another principal", "alice@corp.example", "alice@corp.example", []string{"sub-alice"}, nil, http.StatusBadRequest, true},
+		{"a key that names several principals", "alice@corp.example", "alice@corp.example", []string{"sub-a", "sub-b"}, nil, http.StatusBadRequest, true},
+		{"a key nobody is recorded under", "sub-ghost", "sub-ghost", nil, nil, http.StatusOK, true},
+		{"no allocation: the key is not looked up", "", "alice@corp.example", []string{"sub-alice"}, nil, http.StatusOK, false},
+		{"an unreadable directory", "sub-alice", "sub-alice", nil, errors.New("directory down"), http.StatusInternalServerError, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := reclaimDrive(nil)
+			var g *types.UserDriveGrant
+			if tc.key != "" {
+				g = grantFixture(d.ID, func(g *types.UserDriveGrant) { g.Subject = tc.key })
+			}
+			rn := &reclaimRunner{outcome: runner.DriveReclaimDeleted}
+			srv, st, _ := reclaimServer(t, d, g, rn)
+			st.principals = map[string][]string{tc.subject: tc.principals}
+			st.principalsErr = tc.lookupErr
+			w := reclaimCall(t, srv, d.ID, `{"subject_type":"user","subject":"`+tc.subject+`"}`)
+			if w.Code != tc.want {
+				t.Fatalf("reclaim = %d, want %d: %s", w.Code, tc.want, w.Body.String())
+			}
+			if looked := len(st.lookups) > 0; looked != tc.wantLookup {
+				t.Errorf("directory consulted = %v, want %v", looked, tc.wantLookup)
+			}
+			if tc.want != http.StatusOK {
+				if len(rn.calls) != 0 {
+					t.Errorf("storage was called on a refusal: %+v", rn.calls)
+				}
+				if tc.want == http.StatusBadRequest && !strings.Contains(w.Body.String(), "home_subject") {
+					t.Errorf("400 body = %s, want it to name home_subject", w.Body.String())
+				}
+				return
+			}
+			home, err := types.DriveHomeName(d, tc.subject, "")
+			if err != nil {
+				t.Fatalf("derive home: %v", err)
+			}
+			if len(rn.calls) != 1 || rn.calls[0].ObjectName != types.DriveObjectName(d, home) ||
+				rn.calls[0].SubjectHash != types.DriveSubjectHash(tc.subject) {
+				t.Errorf("substrate asked for %+v, want the object and label of %q", rn.calls, tc.subject)
+			}
+		})
+	}
+
+	// An explicit home_subject is the operator's assertion: no lookup.
+	d := reclaimDrive(nil)
+	g := grantFixture(d.ID, func(g *types.UserDriveGrant) { g.Subject = "alice@corp.example" })
+	rn := &reclaimRunner{outcome: runner.DriveReclaimDeleted}
+	srv, st, _ := reclaimServer(t, d, g, rn)
+	st.principals = map[string][]string{"alice@corp.example": {"sub-a", "sub-b"}}
+	if w := reclaimCall(t, srv, d.ID, `{"subject_type":"user","subject":"alice@corp.example","home_subject":"sub-alice"}`); w.Code != http.StatusOK || len(st.lookups) != 0 {
+		t.Errorf("explicit home_subject = %d with lookups %v, want 200 and none: %s", w.Code, st.lookups, w.Body.String())
+	}
+
+	// A store with no principal directory refuses a found key rather than guess.
+	srv.cfg.Store = struct{ store.Store }{st}
+	rn.calls = nil
+	if w := reclaimCall(t, srv, d.ID, `{"subject_type":"user","subject":"alice@corp.example"}`); w.Code != http.StatusInternalServerError || len(rn.calls) != 0 {
+		t.Errorf("no directory = %d with %d storage calls, want 500 and none: %s", w.Code, len(rn.calls), w.Body.String())
 	}
 }

@@ -23,7 +23,8 @@ There are two supported ways, and both stay supported: the substrate command by 
 wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes
 ```
 
-- Email-keyed allocation: pass the email as `subject`, the sign-in subject as `home_subject` (`--home-subject`).
+- An allocation keyed by an email or other alias needs the sign-in subject as `home_subject` (`--home-subject`); without it the reclaim is refused.
+  A key no sign-in is recorded under is used as-is, unverified.
 - It answers `deleted` (this call destroyed the storage) or `already_absent` (nothing answered to the name).
 - **There is no console button**: the API and the CLI are the whole surface.
 
@@ -38,8 +39,8 @@ wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes
 
 | Refusal | What it means |
 | --- | --- |
-| `403` | Not a super-admin. Same tier as the rest of `/drives`, for a sharper reason: this one is irreversible |
-| `400` | The `subject_type` is `group` or `all`. Those give **every** person they match their own object, so they name no single thing to destroy — reclaim the people one at a time |
+| `403` | Not a super-admin |
+| `400` | The `subject_type` is `group` or `all`, which name no single object: reclaim people one at a time. Or an alias key with no `home_subject` |
 | `422` | The drive is a share (`host_path`, `k8s_pvc_static`). Wardyn did not create that object and never deletes it; reclaiming it is a change on the share itself. There is no recursive delete in this product, at any privilege, for any backend |
 | `409` | A run still holds the object, a reclaim is already in flight, or the object is not this drive's; see [below](#409-refusal) |
 | `501` | This deployment's runner cannot reclaim at all — use the substrate command |

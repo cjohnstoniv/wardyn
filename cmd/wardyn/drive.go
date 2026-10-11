@@ -155,10 +155,10 @@ allocation gone, a home directory an admin pinned (home_override) can no longer
 be recovered from the database and the name this command derives is the drive
 template's.
 
---subject is the key the allocation is stored under. When that is an email,
-also pass --home-subject with the person's sign-in subject: a run derives the
-storage name from the sign-in subject, so the email alone names a different
-object.
+--subject is the key the allocation is stored under. When that is an email or
+another alias, also pass --home-subject with the person's sign-in subject: a run
+derives the storage name from the sign-in subject, so the alias alone names a
+different object, and an allocation keyed by an alias is refused without it.
 
 Super-admin only. Refused with a 409 while a run still holds the object, or
 while the object answering to that name is not this drive's. Every attempt —

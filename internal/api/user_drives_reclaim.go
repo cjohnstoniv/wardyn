@@ -52,6 +52,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -159,7 +160,7 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// The sign-in subject the home derives from, held to the same subject rule.
-	homeSubject := g.Subject
+	homeSubject := ""
 	if strings.TrimSpace(req.HomeSubject) != "" {
 		h := types.UserDriveGrant{SubjectType: types.CapabilitySubjectUser, Subject: req.HomeSubject, DriveID: id}
 		if err := types.ValidateUserDriveGrant(&h); err != nil {
@@ -191,7 +192,7 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 		writeErrorReason(w, code, reasonUserDriveNotReclaimable, msg)
 		return
 	}
-	object, code, reason, msg := s.driveReclaimObject(r.Context(), d, g, homeSubject)
+	object, homeSubject, code, reason, msg := s.driveReclaimObject(r.Context(), d, g, homeSubject)
 	if msg != "" {
 		writeErrorReason(w, code, reason, msg)
 		return
@@ -294,25 +295,60 @@ func driveReclaimableHere(d types.UserDrive, runnerTarget string) (int, string) 
 // user_drive_reclaim_failed) — a store read failure, and the home name
 // itself failing to resolve.
 //
-// homeSubject is the sign-in subject the run derived the home from; the
-// allocation is still found by g's own (subject_type, subject) key.
-func (s *Server) driveReclaimObject(ctx context.Context, d types.UserDrive, g types.UserDriveGrant, homeSubject string) (object string, code int, reason, msg string) {
+// homeSubject is the operator's home_subject: the sign-in subject the run derived
+// the home and the object's label from. The allocation is still found by g's own
+// (subject_type, subject) key. Without it the key stands in for the sign-in
+// subject, which an allocation found under it must bear out
+// (driveReclaimKeyIsSignIn); the subject actually used is returned.
+func (s *Server) driveReclaimObject(ctx context.Context, d types.UserDrive, g types.UserDriveGrant, homeSubject string) (object, used string, code int, reason, msg string) {
 	grants, err := s.cfg.Store.ListUserDriveGrants(ctx)
 	if err != nil {
-		return "", http.StatusInternalServerError, reasonUserDriveReclaimFailed, loggedMsg(ctx, "list user drive allocations", err)
+		return "", "", http.StatusInternalServerError, reasonUserDriveReclaimFailed, loggedMsg(ctx, "list user drive allocations", err)
 	}
-	override := ""
+	override, found := "", false
 	for _, existing := range grants {
 		if existing.DriveID == d.ID && existing.SubjectType == g.SubjectType && existing.Subject == g.Subject {
-			override = existing.HomeOverride
+			override, found = existing.HomeOverride, true
 			break
+		}
+	}
+	if homeSubject == "" {
+		homeSubject = g.Subject
+		if found {
+			if code, reason, msg := s.driveReclaimKeyIsSignIn(ctx, g.Subject); msg != "" {
+				return "", "", code, reason, msg
+			}
 		}
 	}
 	home, err := types.DriveHomeName(d, homeSubject, override)
 	if err != nil {
-		return "", http.StatusBadRequest, reasonUserDriveReclaimNoDirectoryName, "this allocation resolves to no directory name, so there is no object to reclaim: " + err.Error()
+		return "", "", http.StatusBadRequest, reasonUserDriveReclaimNoDirectoryName, "this allocation resolves to no directory name, so there is no object to reclaim: " + err.Error()
 	}
-	return types.DriveObjectName(d, home), 0, "", ""
+	return types.DriveObjectName(d, home), homeSubject, 0, "", ""
+}
+
+// driveReclaimKeyIsSignIn answers whether allocation key a can stand for the
+// sign-in subject a run derives the home from. The principal directory must name
+// exactly one principal for it, and that principal, folded as an allocation
+// subject is folded, must be a itself: an alias such as an email, or a key that
+// names several people, needs home_subject. A key nobody is recorded under keeps
+// the legacy derivation from the key itself, which is not verified linkage. An
+// unreadable or absent directory refuses, so it never reads as "nobody".
+func (s *Server) driveReclaimKeyIsSignIn(ctx context.Context, a string) (code int, reason, msg string) {
+	dir, ok := s.cfg.Store.(store.PrincipalDirectoryStore)
+	if !ok {
+		return http.StatusInternalServerError, reasonUserDriveReclaimFailed,
+			"this deployment cannot tell whether the allocation's subject is a sign-in subject; pass home_subject (--home-subject)"
+	}
+	principals, err := dir.PrincipalsNamed(ctx, a)
+	if err != nil {
+		return http.StatusInternalServerError, reasonUserDriveReclaimFailed, loggedMsg(ctx, "resolve the allocation's subject", err)
+	}
+	if len(principals) == 0 || len(principals) == 1 && types.CanonicalUserSubject(principals[0]) == a {
+		return 0, "", ""
+	}
+	return http.StatusBadRequest, reasonUserDriveReclaimInvalid, "invalid reclaim request: the allocation's subject is not " +
+		"the person's sign-in subject, which names their storage; pass the sign-in subject as home_subject (--home-subject)"
 }
 
 // driveHomeOf recovers the home segment from an object name for the mount the

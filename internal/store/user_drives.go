@@ -302,10 +302,73 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 // returned, read as ErrConflict); stating it IS the confirmation, no ?confirm= to invent. The zero
 // value is safe — a caller that forgets the argument gets a refusal, not a silent clear.
 func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error) {
+	return s.upsertUserDriveGrantOn(ctx, s.Pool, g, homeOverrideStated, false)
+}
+
+// ErrUserDriveGrantChanged is UpsertUserDriveGrantWithinTier's answer when an allocation for the
+// subject appeared while the write was judged against there being none.
+var ErrUserDriveGrantChanged = errors.New("store: the allocation changed while it was being written")
+
+// UserDriveGrantWidensError is UpsertUserDriveGrantWithinTier's refusal: Field is what the write
+// would widen (types.DriveGrantWidens). Nothing was written.
+type UserDriveGrantWidensError struct{ Field string }
+
+func (e *UserDriveGrantWidensError) Error() string {
+	return "store: the allocation write widens " + e.Field
+}
+
+// UserDriveGrantTierWriter is the allocation write for a caller whose authority stops at the
+// drive's own posture. Optional like PersonStore; a caller without it must refuse the write.
+type UserDriveGrantTierWriter interface {
+	UpsertUserDriveGrantWithinTier(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error)
+}
+
+var _ UserDriveGrantTierWriter = PG{}
+
+// UpsertUserDriveGrantWithinTier is UpsertUserDriveGrant judged by types.DriveGrantWidens in the
+// write's own transaction: the drive is read FOR SHARE and the subject's row FOR UPDATE, so a
+// concurrent edit of either lands wholly before the judgement or waits for the write. A subject
+// with no row is written only while it still has none (ErrUserDriveGrantChanged otherwise).
+// READ COMMITTED is pinned for UpsertUserDrive's reason. ErrNotFound for an unknown drive.
+func (s PG) UpsertUserDriveGrantWithinTier(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return types.UserDriveGrant{}, fmt.Errorf("store: begin user drive grant write: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
+	d, err := scanUserDrive(tx.QueryRow(ctx, `SELECT `+userDriveCols+` FROM user_drives WHERE id = $1 FOR SHARE`, g.DriveID))
+	if err != nil {
+		return types.UserDriveGrant{}, err
+	}
+	var prev *types.UserDriveGrant
+	row, err := scanUserDriveGrant(tx.QueryRow(ctx, `SELECT `+userDriveGrantCols+` FROM user_drive_grants
+		WHERE subject_type = $1 AND subject = $2 FOR UPDATE`, g.SubjectType, g.Subject))
+	switch {
+	case err == nil:
+		prev = &row
+	case !errors.Is(err, ErrNotFound):
+		return types.UserDriveGrant{}, err
+	}
+	if field := types.DriveGrantWidens(d, prev, g); field != "" {
+		return types.UserDriveGrant{}, &UserDriveGrantWidensError{Field: field}
+	}
+	out, err := s.upsertUserDriveGrantOn(ctx, tx, g, homeOverrideStated, prev == nil)
+	if err != nil {
+		return types.UserDriveGrant{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.UserDriveGrant{}, fmt.Errorf("store: commit user drive grant write: %w", err)
+	}
+	return out, nil
+}
+
+// upsertUserDriveGrantOn is UpsertUserDriveGrant's statement. mustBeNew refuses to update a row
+// (ErrUserDriveGrantChanged): the caller judged the write against the subject having none.
+func (s PG) upsertUserDriveGrantOn(ctx context.Context, q driveQuerier, g types.UserDriveGrant, homeOverrideStated, mustBeNew bool) (types.UserDriveGrant, error) {
 	if g.ID == uuid.Nil {
 		g.ID = uuid.New()
 	}
-	const q = `
+	const stmt = `
 		INSERT INTO user_drive_grants (id, subject_type, subject, drive_id, priority,
 			size_mib_override, writable_override, home_override, enabled, created_by)
 		SELECT $1::uuid,$2::text,$3::text,$4::uuid,$5::int,$6::int,$7::boolean,$8::text,$9::boolean,$10::text
@@ -325,12 +388,12 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, ho
 			    size_mib_override = EXCLUDED.size_mib_override,
 			    writable_override = EXCLUDED.writable_override,
 			    home_override = EXCLUDED.home_override, enabled = EXCLUDED.enabled
-			WHERE $11::boolean OR user_drive_grants.home_override = ''
+			WHERE ($11::boolean OR user_drive_grants.home_override = '') AND NOT $12::boolean
 		RETURNING ` + userDriveGrantCols
-	out, err := scanUserDriveGrant(s.Pool.QueryRow(ctx, q,
+	out, err := scanUserDriveGrant(q.QueryRow(ctx, stmt,
 		g.ID, g.SubjectType, g.Subject, g.DriveID, g.Priority,
 		g.SizeMiBOverride, g.WritableOverride, g.HomeOverride, g.Enabled, g.CreatedBy,
-		homeOverrideStated))
+		homeOverrideStated, mustBeNew))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
@@ -347,6 +410,9 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, ho
 		// CONFLICT). The two are mutually exclusive by construction — the INSERT guard needs a
 		// non-empty home_override, the UPDATE guard is disabled by a stated one — so
 		// homeOverrideStated alone tells them apart without a second read.
+		if errors.Is(err, ErrNotFound) && mustBeNew && g.HomeOverride == "" {
+			return types.UserDriveGrant{}, ErrUserDriveGrantChanged
+		}
 		if errors.Is(err, ErrNotFound) {
 			return types.UserDriveGrant{}, ErrConflict
 		}

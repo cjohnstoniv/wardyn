@@ -75,6 +75,17 @@ type driveCRUDStore struct {
 	// other way to express it against an in-memory double: the two happen in one
 	// goroutine, and a real concurrent writer would only make the test flaky.
 	grantsAppear func()
+	// principals is what PrincipalsNamed answers per name (nil: nobody is
+	// recorded under it), principalsErr fails that read, and lookups records
+	// every name asked.
+	principals    map[string][]string
+	principalsErr error
+	lookups       []string
+}
+
+func (s *driveCRUDStore) PrincipalsNamed(_ context.Context, name string) ([]string, error) {
+	s.lookups = append(s.lookups, name)
+	return s.principals[name], s.principalsErr
 }
 
 func newDriveCRUDStore() *driveCRUDStore {
@@ -201,6 +212,25 @@ func (s *driveCRUDStore) UpsertUserDriveGrant(_ context.Context, g types.UserDri
 	}
 	s.grants[g.ID] = g
 	return g, nil
+}
+
+// UpsertUserDriveGrantWithinTier mirrors the store's tier-judged write: types.DriveGrantWidens
+// against the drive and the subject's row, then the ordinary upsert.
+func (s *driveCRUDStore) UpsertUserDriveGrantWithinTier(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error) {
+	d, ok := s.drives[g.DriveID]
+	if !ok {
+		return types.UserDriveGrant{}, store.ErrNotFound
+	}
+	var prev *types.UserDriveGrant
+	for _, existing := range s.grants {
+		if existing.SubjectType == g.SubjectType && existing.Subject == g.Subject {
+			prev = &existing
+		}
+	}
+	if field := types.DriveGrantWidens(d, prev, g); field != "" {
+		return types.UserDriveGrant{}, &store.UserDriveGrantWidensError{Field: field}
+	}
+	return s.UpsertUserDriveGrant(ctx, g, homeOverrideStated)
 }
 
 func (s *driveCRUDStore) DeleteUserDriveGrant(_ context.Context, id uuid.UUID) (types.UserDriveGrant, error) {
