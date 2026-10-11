@@ -53,6 +53,10 @@ type outputBuffer struct {
 	// OPEN, or no ACK came within outputAckWait. A full buffer then drops its
 	// oldest part instead of parking the agent. The next ACK clears it.
 	lossy bool
+	// drains counts copies begun and not ended; output completes when the
+	// last one ends, with the first error any of them ended with.
+	drains   int
+	drainErr error
 }
 
 func newOutputBuffer(dir string) (*outputBuffer, error) {
@@ -419,16 +423,30 @@ func (b *outputBuffer) unacknowledged() {
 	b.notify()
 }
 
-func (b *outputBuffer) BeginDrain() {}
+func (b *outputBuffer) BeginDrain() {
+	b.mu.Lock()
+	b.drains++
+	b.mu.Unlock()
+}
+
 func (b *outputBuffer) EndDrain(err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.state.Complete {
 		return
 	}
+	if b.drainErr == nil {
+		b.drainErr = err
+	}
+	if b.drains > 0 {
+		b.drains--
+	}
+	if b.drains > 0 {
+		return
+	}
 	b.state.Complete = true
-	if err != nil {
-		b.state.Failure = err.Error()
+	if b.drainErr != nil {
+		b.state.Failure = b.drainErr.Error()
 	}
 	if err := b.save(); err != nil {
 		b.stopped = err
