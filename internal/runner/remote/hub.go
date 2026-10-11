@@ -174,15 +174,37 @@ func (h *Hub) serveClaimed(ctx context.Context, conn runnerwire.Conn, row types.
 		}
 		return err
 	}
-	select {
-	case <-peer.Done():
-	case <-ctx.Done():
-		peer.Close()
-	case <-h.ctx.Done():
-		peer.Close()
+	recheck := time.NewTicker(storedRowRecheck)
+	defer recheck.Stop()
+	for live := true; live; {
+		select {
+		case <-peer.Done():
+			live = false
+		case <-ctx.Done():
+			peer.Close()
+			live = false
+		case <-h.ctx.Done():
+			peer.Close()
+			live = false
+		case <-recheck.C:
+			h.recheckRevoked(ctx, row.ID)
+		}
 	}
 	h.ended(row.ID, s, peer)
 	return peer.Err()
+}
+
+// storedRowRecheck bounds how long a session outlives a revocation committed
+// through another replica, whose Revoke cannot reach this process's sessions.
+var storedRowRecheck = runnerwire.PingInterval
+
+// recheckRevoked ends the session with REVOKED once the stored row says so.
+// A failed lookup is retried at the next tick: the store already refuses a
+// revoked runner's writes, so this only bounds the session's lifetime.
+func (h *Hub) recheckRevoked(ctx context.Context, id uuid.UUID) {
+	if current, err := h.cfg.Lookup(ctx, id); err == nil && current.ID == id && current.State == types.RunnerRevoked {
+		_ = h.Revoke(ctx, id)
+	}
 }
 
 func (h *Hub) dropEmpty(id uuid.UUID, s *hubSession) {
