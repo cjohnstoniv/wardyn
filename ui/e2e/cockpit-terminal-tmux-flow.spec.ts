@@ -23,6 +23,7 @@ import { termText } from "./terminal-text";
 import { FLOW_HIGH_WATERMARK } from "../src/app/components/attach-terminal-flow";
 
 const MAIN_THREAD_BUDGET_MS = 200;
+const ECHO_BUDGET_MS = 200;
 
 // Types `echo <marker>-42`, presses Enter and returns the ms from that Enter to the frame after xterm
 // parsed the answer, timed in the page so the harness's own round trips are not counted.
@@ -187,6 +188,7 @@ test("50 MB of output keeps the page responsive and ends on the right screen", a
   // (flow-echo-42) differs from what the typed line shows, so only it counts.
   await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
   const echoMs = await timeEcho(page, "flow-echo");
+  expect(echoMs, "input-to-echo ms").toBeLessThan(ECHO_BUDGET_MS);
   test.info().annotations.push({ type: "input-to-echo", description: `${Math.round(echoMs)} ms` });
   test.info().annotations.push({ type: "input-to-echo baseline", description: `${Math.round(baselineMs)} ms` });
 });
