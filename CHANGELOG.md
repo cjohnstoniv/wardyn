@@ -50,9 +50,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   it), `GET /runners/{id}`, and the caller-scoped `GET /me/runners`, which shows a person only their own runners and
   abbreviates an unclaimed runner's fingerprint. Security admins can list and revoke unused registration tokens (never
   a token value); minting stays admin only. `runners.enabled` changes only through `PUT /runners/settings` (admin,
-  audited `runners.enabled.set`, refused until the organisation URL is HTTPS); `PUT /site-config` now refuses a
-  changed value. Unclaimed runners lapse and are swept after 24 hours. CLI: `wardyn runner list`, `wardyn runner
-  tokens list|revoke`. Migration `0144_runner_minted_by` records who minted each runner's registration token (#1965).
+  audited `runners.enabled.set`, refused until the organisation URL is HTTPS); turning runners off ends the live
+  runner sessions the serving replica holds. `PUT /site-config` now refuses a changed value. Unclaimed runners lapse
+  and are swept after 24 hours. CLI: `wardyn runner list`, `wardyn runner tokens list|revoke`. Migration
+  `0144_runner_minted_by` records who minted each runner's registration token (#1965).
+- Runners can be revoked by an admin or security admin (`DELETE /runners/{id}`) or by their owner
+  (`DELETE /me/runners/{id}`, optionally `?reason=not_mine`). Every unfinished run on a revoked runner ends KILLED
+  in the same transaction and its credentials are revoked, and a live session on the replica that holds it is
+  closed. Who revoked it and why are audited (`runner.revoke`) and shown on the runner views as `revoked_by` and
+  `revoke_reason` (migration `0149_runner_revoked_by`). While runners are off, every new sandbox on a runner is
+  refused before it reaches the runner.
+- Runner pending actions bind the owner, run reference, execution generation and contained loss they were queued
+  for; a result is accepted only from the queuing runner, as `success` or `deferred`, and a deferred result keeps
+  the run fenced (migration `0148_runner_action_binding`).
+- A reconnecting runner's pending actions, state report pages and action results are recorded before it is marked
+  ready, and teardowns issued while a runner is offline are queued for it (migration `0147_runner_inventories`).
 - `wardyn run --placement remote|local` and `--runner <id>` choose where a run's sandbox lives. Both are passed to the
   server unchanged, so its placement refusals reach the CLI as they are. `--pool` is accepted and refused at run create
   until runner-pool selection lands (#109).
