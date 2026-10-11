@@ -35,7 +35,7 @@
 # docs/OPERATIONS.md 52004: +14 names migration 0154 in the migrator/app-role rationale (G-sec-1825 merge).
 # docs/OPERATIONS.md 52019: +15 names migration 0155 in the migrator/app-role rationale (H6 merge).
 # docs/OPERATIONS.md 52274 measured after F-1511-1510 merge.
-# 0.9 D-117: +8 names migration 0159 (agent_runs pool binding) in the migrator/app-role rationale.
+# 0.9 D-117: +8 names migration 0160 (agent_runs pool binding) in the migrator/app-role rationale.
 # docs/OPERATIONS.md 52296 adds 22 (0.9 F-1508 C1 merge): migration 0157 in the migrator/app-role rationale.
 # docs/OPERATIONS.md 52014 adds 10 over 52004 (0.9 H10-pools-b): the 0158 migration line (runner_pools.limits; 0155 before the merge renumber).
 # docs/OPERATIONS.md 52306 measured after H10-pools-b merge.

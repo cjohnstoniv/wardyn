@@ -3726,7 +3726,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0157` (`0157_invitations_service_identities`) replaces the `actor_type` check on `audit_events` (`0001`'s table) so it
   admits `service`, beside its new `person_invitations`, `service_identities` and `api_token_moves` tables.
 - `0158` (`0158_runner_pool_limits`) adds `runner_pools.limits` (`0152`'s table), the pool's own limits.
-- `0159` (`0159_run_pool_binding`) adds the pool binding to `agent_runs`.
+- `0160` (`0160_run_pool_binding`) adds the pool binding to `agent_runs`.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
