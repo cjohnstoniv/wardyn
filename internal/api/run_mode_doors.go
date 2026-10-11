@@ -62,9 +62,14 @@ type backgroundDoor struct {
 var backgroundDoors = []backgroundDoor{
 	{Door: "terminal", Owner: "H4 (attach relay), H5", Symbols: []string{"handleAttachTicket", "handleAttachWS", "handleAttachTakeover"},
 		Routes: []string{"POST /runs/{id}/attach-ticket", "POST /runs/{id}/attach/ticket", "GET /runs/{id}/attach", "POST /runs/{id}/attach/takeover"}, Enforced: true},
-	{Door: "interactive exec", Owner: "H4", Symbols: []string{"establishExec"}},
-	{Door: "SSH access", Owner: "SSH gateway owner", Symbols: []string{"sshAuth", "handleSSHSessionChannel", "handleSSHDirectTCPIP"}},
-	{Door: "web application gateway", Owner: "UI gateway owner", Symbols: []string{"handleUIEnter", "handleUIRelay", "handleUIBind"}},
+	{Door: "interactive exec", Owner: "C-mode-doors", Symbols: []string{"establishExec"}, Enforced: true},
+	// sshFreshRun, not the channel handlers: those take a run id and hold no run,
+	// while sshFreshRun is the one fresh read every channel bridge (shell, exec,
+	// sftp, wardyn-sync, direct-tcpip) makes before it execs.
+	{Door: "SSH access", Owner: "C-mode-doors", Symbols: []string{"sshAuth", "sshFreshRun"}, Enforced: true},
+	// handleUIEnter only parses and delegates to uiEnterCommon, and handleUIBind
+	// sets a binding cookie without reading any run, so neither can ask honestly.
+	{Door: "web application gateway", Owner: "C-mode-doors", Symbols: []string{"uiEnterCommon", "uiSessionStillAuthorized"}, Enforced: true},
 	{Door: "desktop", Owner: "D-117 (no desktop surface exists yet; its first owner adds the symbols here)"},
 }
 
