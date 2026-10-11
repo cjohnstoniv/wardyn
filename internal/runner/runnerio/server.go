@@ -43,6 +43,7 @@ type Server struct {
 	execs         map[streamKey]*execution
 	execSlots     chan struct{}
 	outputs       map[uuid.UUID]*outputBuffer
+	holds         func(localRef string) bool
 }
 
 // New opens private output storage beneath the runner's state directory.
@@ -88,6 +89,25 @@ func New(sub substrate.Substrate, runnerID, stateDir string) (*Server, error) {
 		s.outputs[id] = b
 	}
 	return s, nil
+}
+
+// HoldSandboxes sets the runner's record of the sandboxes it created and still
+// holds. Attach and exec reach no other ref; without it they reach none.
+func (s *Server) HoldSandboxes(holds func(localRef string) bool) {
+	s.mu.Lock()
+	s.holds = holds
+	s.mu.Unlock()
+}
+
+// held refuses a local ref the runner did not create or no longer holds.
+func (s *Server) held(ref string) error {
+	s.mu.Lock()
+	holds := s.holds
+	s.mu.Unlock()
+	if holds == nil || !holds(ref) {
+		return runnerwire.Refuse("ref is not a sandbox this runner holds")
+	}
+	return nil
 }
 
 func (s *Server) local(ref string) (string, error) {
