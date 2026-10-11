@@ -312,6 +312,9 @@ type bootFlags struct {
 	// rewrapPrincipalKeys is `wardynd -rewrap-principal-keys` (rewrap_principal_keys.go):
 	// no env pair, like -rewrap.
 	rewrapPrincipalKeys *bool
+	// recoveryInventory is `wardynd -recovery-inventory` (recovery_inventory.go): no env pair,
+	// like the modes above.
+	recoveryInventory *bool
 	// vault configures the Vault KV v2 external store, azure the Azure Key
 	// Vault one (secret_store.go).
 	vault vaultFlags
@@ -586,6 +589,7 @@ func parseBootFlags() *bootFlags {
 		rewrapPrincipalKeys: flag.Bool("rewrap-principal-keys", false, "maintenance mode, safe while a daemon serves: move every person's stored credential from the credential key into an envelope under that person's own principal key (enc_version 3), "+
 			"one row at a time, then exit; idempotent and resumable, and values are never decrypted. Boot keys, the operator namespace and external-store pointers are untouched. "+
 			"Separate from -rewrap, which rotates the root key. See docs/operations/secrets-and-keys.md (default false)"),
+		recoveryInventory:       flag.Bool("recovery-inventory", false, "maintenance mode: print the recovery set's items as JSON, each with where it lives for this deployment, then exit. Opens no connection and reads no key (docs/design/0.9/recovery-set.md; default false)"),
 		vault:                   registerVaultFlags(),
 		hostCapacity:            registerHostCapacityFlags(),
 		preflightRatePerMin:     flagIntEnv("preflight-rate-per-min", "WARDYN_PREFLIGHT_RATE_PER_MIN", 20, "POST /runs/preflight calls one person may make per minute (burst 5); 0 turns the limit off. The admin token is exempt"),
