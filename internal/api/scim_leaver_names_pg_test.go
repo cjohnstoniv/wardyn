@@ -221,3 +221,35 @@ func TestPG_SCIMLeaver_AnAddressThatIsAPrincipalNeverLinksAClaimantsSignIn(t *te
 		t.Error("the claimant's identity was deactivated or purged")
 	}
 }
+
+// A SCIM user one of whose names is a created person's principal links to no sign-in row through any of
+// its other names, in either order: the claimant who signed in under the other address is never
+// deprovisioned in the leaver's place, and the created person is reached through the leaver's forms.
+func TestPG_SCIMLeaver_AnyNameThatIsAPrincipalStopsTheLinkThroughEveryOtherName(t *testing.T) {
+	const alias = "early.alias@corp.example"
+	for name, names := range map[string][2]string{
+		"the principal as userName": {earlyName, alias},
+		"the principal as email":    {alias, earlyName},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newSCIMEnv(t)
+			if _, _, err := e.st.CreatePerson(context.Background(), types.Person{Principal: earlyName, CreatedBy: "admin"}); err != nil {
+				t.Fatal(err)
+			}
+			personRun := e.seedRun(earlyName, types.RunRunning)
+			row := e.seedSignIn(claimerSub, alias)
+			id := e.postUserID(e.a, leaverOID, names[0], names[1])
+			if ident := e.identity(id); ident.ID == row.ID || ident.Principal != "" {
+				t.Fatalf("the SCIM user linked to %q's sign-in row", ident.Principal)
+			}
+
+			e.removeLeaver(t, id, http.StatusOK, http.StatusNoContent)
+			if got := e.identity(row.ID.String()); got.DeactivatedAt != nil || got.PurgedAt != nil {
+				t.Error("the claimant's identity was deactivated or purged in the leaver's place")
+			}
+			if st := e.runState(personRun); st != types.RunKilled {
+				t.Errorf("the created person's run is %s, want KILLED", st)
+			}
+		})
+	}
+}
