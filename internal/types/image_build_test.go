@@ -12,7 +12,7 @@ import (
 func TestImageBuild_SHA256IsStable(t *testing.T) {
 	rec := ImageBuild{
 		Schema: ImageBuildSchema, Lane: ImageBuildLaneGenerated, CacheKey: "k", BuildID: "b",
-		Reason: ImageBuildReasonCacheMiss, BuiltAt: time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC),
+		Reason: ImageBuildReasonCacheMiss, BuiltAt: time.Now().UTC().Truncate(time.Second),
 		WardynVersion: "0.9.0", Resolved: true,
 		Inputs: ImageBuildInputs{
 			Base:       ImageBuildRef{Ref: "base:ubuntu", Digest: "sha256:aa"},
