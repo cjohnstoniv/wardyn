@@ -178,7 +178,7 @@ A fresh build resolves and records. A rebuild from a record reuses the record's 
 
 ### 6.2 Generator pins
 
-- `GenerateDevcontainer(p, pins Pins)` takes the pins; the zero `Pins` produces the Slice 1a golden fixture byte for byte.
+- `GenerateDevcontainer(p, pins Pins)` takes the pins; the zero `Pins` produces the Slice 1a golden fixture plus the pin-file write of [§6.3](#63-installer-observation), nothing else; `EmitEnvAsCode` output stays byte-identical (ruling Q8).
 - `Pins` carries the base digest, a digest per feature ref, and a version and checksum per installer.
 - A pinned base is written as `FROM ref@digest`; a pinned feature uses the key form Slice 0 proved.
 - A pinned installer replaces the `/stable` fetch with a fixed `ver` and a fixed `sum`. A mismatch prints `pinned claude-code <ver>: checksum mismatch` and fails the RUN.
@@ -234,6 +234,7 @@ A fresh build resolves and records. A rebuild from a record reuses the record's 
 - The cache-bust line is `RUN : wardyn-refresh <build-id>`, placed before the installer RUN. kaniko chains layer keys, so every later layer misses.
 - `ImageBuilder` methods gain an options value carrying `Refresh`, so `FinalizeBase` can force the pull.
 - A run-launch build that loses the swap serves its own run and audits `cache_warn: superseded`.
+- Owner ruling 2026-10-11: no shared build cache. The per-build cache tag is kept; the non-fatal kaniko cache error on every build is documented; a Limitations paragraph follows in slice B7. Nothing here enables a shared cache, and the cache-bust line and the installer-replay residual stay as written until that paragraph lands.
 
 ## 8. Offline and mirrors
 
@@ -274,7 +275,7 @@ A fresh build resolves and records. A rebuild from a record reuses the record's 
 | Rollback to 0.8.x | The older binary never reads the column. Its rebuilds tag `<key12>` or `:devcontainer`, which no 0.9 record names, so the record reads unrecorded after a return |
 
 - Nothing is backfilled; a guessed record is worse than none.
-- `cacheKeySalt` is not bumped, and generated output with zero pins is byte-identical; both are pinned by golden tests written before any generator edit.
+- `cacheKeySalt` is not bumped, and generated output with zero pins is the Slice 1a golden fixture plus the pin-file write of [§6.3](#63-installer-observation), nothing else; `EmitEnvAsCode` output stays byte-identical (ruling Q8). Both are pinned by golden tests written before any generator edit.
 
 ## 11. Residuals and threat-model delta
 
@@ -317,12 +318,14 @@ Every Go change runs the full tree (`go test ./...`): the audit doc guards live 
 The standalone brief holds the exact commands. Checks:
 
 - **(a)** `DistributionInspect` returns a digest for the base (an index digest) and for `ghcr.io/devcontainers/features/go:1`, an OCI artifact whose config media type the daemon may reject.
-- **(b)** envbuilder builds `FROM ref@digest` and a `features` key pinned by digest.
+- **(b)** envbuilder builds `FROM ref@digest` and a `features` key pinned by digest. The proof is the negative control: a feature pinned to an all-zero digest fails the build with `MANIFEST_UNKNOWN`, which proves the digest is fetched (envbuilder 1.3.0 does not log feature fetches).
 - **(c)** `ContainerCreate` plus `CopyFromContainer` works on an image with `ENTRYPOINT []` and `CMD []`, given a placeholder command and network `none`.
 - **(d)** Whether kaniko replays the installer layer across builds, and that the cache-bust line stops it.
 
 > [!IMPORTANT]
 > If (a) or (b) fails for features, ruling Q9 makes every workspace with a detected language not reproducible, and the promise covers only language-less workspaces. Escalate to the owner before Slice 1a starts; do not ship that state under the 0.9 promise.
+
+Slice 0 passed (a)–(d) on 2026-10-11 after harness corrections; both feature key forms work, and the generator writes `ref:tag@digest`.
 
 A failure of (c) or (d) amends [§6.3](#63-installer-observation) or [§7](#7-refresh-slice-3) first.
 
