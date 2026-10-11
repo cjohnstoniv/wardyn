@@ -325,6 +325,17 @@ const (
 	reasonInvitationNotPending       = "invitation_not_pending"        // the invitation was claimed, revoked or expired
 	reasonInvitationListParamInvalid = "invitation_list_param_invalid" // GET /invitations: state is not one the endpoint accepts
 
+	// /api/v1/service-identities and /api/v1/me/service-identities (#1508).
+	reasonServiceIdentityNameInvalid        = "service_identity_name_invalid"        // the name does not match ^[a-z][a-z0-9-]{2,62}$
+	reasonServiceIdentityNameTaken          = "service_identity_name_taken"          // a service identity or a principal-keyed table already holds the name
+	reasonServiceIdentitySponsorInvalid     = "service_identity_sponsor_invalid"     // the sponsor is not exactly a bound, non-deactivated person's principal
+	reasonServiceIdentityNotFound           = "service_identity_not_found"           // no service identity by that name that this caller may act on
+	reasonServiceIdentityInactive           = "service_identity_inactive"            // the service identity is suspended or retired, or its sponsor's session is not live
+	reasonServiceIdentityDescriptionInvalid = "service_identity_description_invalid" // the description exceeds 200 characters or has a control character
+	reasonServiceIdentityUserTypeUnknown    = "service_identity_user_type_unknown"   // the user type does not exist on this deployment
+	reasonServiceIdentityPatchEmpty         = "service_identity_patch_empty"         // PATCH named none of description, sponsor or suspended
+	reasonNeedsSSO                          = "needs_sso"                            // service identities need SSO: local mode has no sponsor to bind
+
 	// /api/v1/access (role-mapping admin).
 	reasonSSONotConfigured             = "sso_not_configured"               // the route needs OIDC, and this deployment has none configured
 	reasonAccessRoleMapValueInvalid    = "access_role_map_value_invalid"    // ?value= (or the body's value) does not canonicalize

@@ -20,6 +20,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -214,9 +215,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		return reviveResult{}, rerr
 	}
 	retiring := cfg.RunToken
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, run.ID, runIdentitySubject(ctx, run.CreatedBy), run.CreatedBy, internalAudience, run.OperatorOwned)
-	if err != nil {
-		return reviveResult{}, reviveRefused(http.StatusInternalServerError, reasonReviveMintIdentityFailed, "mint run identity: "+err.Error())
+	id, rerr := s.reviveMintIdentity(ctx, run)
+	if rerr != nil {
+		return reviveResult{}, rerr
 	}
 	cfg.RunToken = id.Token
 	cfgJSON, err := json.Marshal(cfg)
@@ -932,4 +933,18 @@ func majorMinor(v string) (int, int, bool) {
 	m, err1 := strconv.Atoi(parts[0])
 	n, err2 := strconv.Atoi(parts[1])
 	return m, n, err1 == nil && err2 == nil
+}
+
+// reviveMintIdentity mints the revived run's new identity. A service run's sponsor is read from the identity's
+// row, so a sponsor change reaches the new token.
+func (s *Server) reviveMintIdentity(ctx context.Context, run types.AgentRun) (identity.RunIdentity, *reviveError) {
+	sponsor, err := s.runSponsor(ctx, run.CreatedBy)
+	if err != nil {
+		return identity.RunIdentity{}, reviveRefused(http.StatusInternalServerError, reasonReviveMintIdentityFailed, "read run sponsor: "+err.Error())
+	}
+	id, err := s.cfg.Identity.MintRunIdentity(ctx, run.ID, runIdentitySubject(ctx, run.CreatedBy), sponsor, internalAudience, run.OperatorOwned)
+	if err != nil {
+		return identity.RunIdentity{}, reviveRefused(http.StatusInternalServerError, reasonReviveMintIdentityFailed, "mint run identity: "+err.Error())
+	}
+	return id, nil
 }

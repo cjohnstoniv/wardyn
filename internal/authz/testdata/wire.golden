@@ -56,3 +56,4 @@ reason capability_component
 reason component_autonomy
 
 reason placement_component_self_defined
+reason service_scope

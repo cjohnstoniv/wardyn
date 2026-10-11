@@ -262,6 +262,12 @@ var docTierUndocumented = map[string]string{
 	"GET /api/v1/people/{principal}/invitations":  "0.9 F-1508: as the POST above",
 	"GET /api/v1/invitations":                     "0.9 F-1508: as the POST above",
 	"DELETE /api/v1/invitations/{id}":             "0.9 F-1508: as the POST above",
+	// 0.9 #1508 service identities: the same docs-pass ownership.
+	"POST /api/v1/service-identities":          "0.9 F-1508: the tier-table row is the docs pass's",
+	"GET /api/v1/service-identities":           "0.9 F-1508: as the POST above",
+	"GET /api/v1/service-identities/{name}":    "0.9 F-1508: as the POST above",
+	"PATCH /api/v1/service-identities/{name}":  "0.9 F-1508: as the POST above",
+	"DELETE /api/v1/service-identities/{name}": "0.9 F-1508: as the POST above",
 }
 
 // TestOperationsTierTableMatchesRouteMatrix pins the "What admin-only still
