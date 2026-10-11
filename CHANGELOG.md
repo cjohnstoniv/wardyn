@@ -10,13 +10,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
-- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
-  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `runners`,
-  `runner_pending_actions`, `provider_connection_changes` and `runner_inventories`, and `SELECT, INSERT, UPDATE` on
-  `credential_delivery_policy`, `runner_registration_tokens`, `audit_delivery_cursors`, `runner_spool_cursors`,
-  `runner_executions`, `runner_execution_exits`, `runner_inventory_candidates`, `runner_inventory_observations` and
-  `secret_owner_generations`. Without the `provider_connection_changes` grant every secret write fails once
-  migration 0143's trigger on `secrets` is in place.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `runners`,
+  `runner_pending_actions`, `provider_connection_changes`, `runner_inventories`, `runner_pool_members` and
+  `runner_pool_use_policies`, and `SELECT, INSERT, UPDATE` on `credential_delivery_policy`,
+  `runner_registration_tokens`, `audit_delivery_cursors`, `runner_spool_cursors`, `runner_executions`,
+  `runner_execution_exits`, `runner_inventory_candidates`, `runner_inventory_observations`, `runner_pools`,
+  `runner_pool_org_defaults`, `secret_owner_generations`, `person_invitations`, `service_identities` and
+  `api_token_moves`. Without the `runner_pools` grants wardynd refuses to start at the runner pool bootstrap.
+  Without the `provider_connection_changes` grant every secret write fails once migration 0143's trigger on
+  `secrets` is in place.
 - Credential erase fence (migration 0156): an older wardynd running beside the new one does not check a person's
   erase generation; finish the upgrade before erasing anyone.
 - Migration `0145_audit_delivery_cursors` adds the `audit_delivery_cursors` table; nothing changes until a webhook
@@ -63,9 +66,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Migration `0153_run_experience` adds `agent_runs.experience`, the run mode a new client chose at launch; existing
   runs keep an empty value and their documented behaviour.
 - Migration `0154_run_agent_stopped_at` adds `agent_runs.agent_stopped_at`; existing runs keep it empty.
+- Migration `0157_invitations_service_identities` adds the `person_invitations`, `service_identities` and
+  `api_token_moves` tables (split-role grants: see the first item above) and lets the audit log record a `service`
+  actor. It refuses to run while any principal-keyed table already holds a name starting `service:`, naming the
+  first such table; rename or remove those rows first. Widening the audit actor check briefly locks `audit_events`
+  and its partitions.
 
 ### Added
 
+- Under `WARDYN_AUDIT_SEAL=full` the `target` column of `person.attach`, `person.token.create`,
+  `delegation.exchange`, `session.revoke`, `secret.list` and `auth.signin_unserialized` rows is stored as the
+  person's subject, like the actor, when that person has an identity row, and a typed `subject:` string in an actor
+  or target is refused; `GET /audit?target=` matches both forms (#1828). A person named in `data` (`sub`, `target`,
+  `secret_owner`), and the target of `person.create`, stay clear.
 - Personal and shared secrets are named by route. `PUT`/`DELETE /me/secrets/{name}` (and `GET /me/secrets`) store
   your own secret whatever your role or view; `PUT`/`DELETE /shared-secrets/{name}` (and `GET`) store a shared
   service secret, admin only. Neither accepts `?owner=`. `wardyn secret set|delete` take `--personal` or `--shared`,
@@ -191,6 +204,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (#1515).
 - `client.GetModelProviders` (admin) reads the provider records and connected-people counts; it returns no
   credential value (#1515).
+- A self-hosted runner relays its runs' calls to the organisation's internal listener as opaque TLS: the runner
+  binds only its Docker host-gateway address and forwards the TLS bytes without terminating them, each relayed
+  request is bound to the runner that carried it, only a closed list of internal routes is served, and only the
+  person's own credentials can be read through it. Turning runners on now also needs `WARDYN_CONTROL_PLANE_URL` set
+  to the internal TLS listener, since a runner's runs reach the organisation only through that relay.
+- A background task cannot be entered: its terminal, interactive exec, every SSH channel (shell, exec, sftp, `wardyn
+  sync`, port forwarding) and its web apps answer `409 run_background_only` (SSH refuses authentication), for every
+  caller including a super admin. Logs, output, audit and the lifecycle controls stay.
+- An admin or security admin can invite a person by their identity-provider subject (`POST
+  /people/{principal}/invitations`); only that person, signed in, can claim the invitation, and the API token it
+  mints is shown once, to them alone. Invitations can be listed and revoked before they are claimed, and each one
+  expires.
+- Runner pools carry limits per run type: CPU and memory (default and cap), lifetime (default, maximum or
+  unlimited), an idle stop for interactive environments only, allowed barriers and a concurrent-run cap; an
+  administrator sets them on create and replaces them on update (migration 0158). The effective limit is the
+  strictest of the pool, the person's governance, the deployment and, for self-hosted pools, the runner's capacity.
+- `wardyn-runnerd` ships as a release binary for Linux and macOS (amd64, arm64) with a per-user service: a systemd
+  user unit or a LaunchAgent, installed by `deploy/runner/install.sh`, which registers the runner with a single-use
+  token and keeps it running; the owner then claims it with `wardyn runner claim` (#1968).
 
 ### Changed
 
@@ -260,6 +292,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- A held runner pool executor attach or detach is listed to, read by and decided by a super admin only, the tier it
+  was written on; a security admin no longer sees or approves it.
+- An open sign-in or key door stays in place when a background status refresh briefly cannot read the secret store.
 - Review and policy preview report the managed-settings fact that launch delivers when governance holds tool
   approvals.
 - Workspace target overlap checks stay fast for long attachment lists.

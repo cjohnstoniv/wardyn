@@ -99,6 +99,7 @@ type session struct {
 	cancel  context.CancelFunc
 	mu      sync.Mutex
 	applied []uuid.UUID
+	peer    *runnerwire.Peer // the runner's side of the session, once online
 }
 
 func (f *admissionFixture) connect(t *testing.T, during func(), rows ...runnerwire.RunState) *session {
@@ -152,6 +153,11 @@ func (f *admissionFixture) connect(t *testing.T, during func(), rows ...runnerwi
 		Lease:       func(context.Context, runnerwire.Lease) error { return nil },
 		Revoked:     func(context.Context) error { return nil },
 		Offline:     func(context.Context) {},
+		Online: func(p *runnerwire.Peer, _ bool) {
+			s.mu.Lock()
+			s.peer = p
+			s.mu.Unlock()
+		},
 	}
 	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: admissionOrgURL, RunnerID: f.rn.ID.String(), PrivateKey: f.key, Hooks: hooks,
 		Dial: func(context.Context) (runnerwire.Conn, error) {

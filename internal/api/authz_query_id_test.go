@@ -143,6 +143,7 @@ var queryParamNotAnID = map[string]string{
 	"reason":                    "DELETE /me/runners/{id}: the label of the caller's revoke of their own runner (only not_mine is accepted); it names no entity",
 	"action_prefix":             "audit action filter; narrows an already-scoped feed",
 	"actor":                     "audit principal filter; ANDed inside auditScope, so a member's own-run feed only narrows",
+	"target":                    "audit principal filter on the target column; ANDed inside auditScope, so a member's own-run feed only narrows",
 	"actor_type":                "audit filter; narrows an already-scoped feed",
 	"outcome":                   "audit filter; narrows an already-scoped feed",
 	"origin":                    "audit filter, enum device|organisation (parseAuditFilter 400s anything else); narrows an already-scoped feed",

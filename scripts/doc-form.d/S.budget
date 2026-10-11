@@ -17,7 +17,13 @@
 # docs/sdk.md 13322 measured after F-1511-1510 merge.
 # docs/sdk.md 13360 measured after R2-api-1 merge.
 # 0.9 D-117: +20 for the placement_required, placement_denied and runner_offline row.
-docs/sdk.md=13380 share=21
+# 0.9 G-seal-target (#1828): docs/sdk.md 13235 adds 17 over 13218 for `target` beside `actor` in the audit predicate list and in the partition-filter refusal.
+# docs/sdk.md 13377 measured after G-seal-target merge.
+# docs/sdk.md 13288 adds 70 over 13218 (0.9 F-1508 C1): the invitation reason rows.
+# docs/sdk.md 13447 measured after F-1508 C1 merge.
+# 0.9 H5: docs/sdk.md 13556 adds 109 over 13447 for the six relay and delivery reasons internal_relay.go now publishes.
+# docs/sdk.md 13576 measured after D-117 r1 merge.
+docs/sdk.md=13576 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

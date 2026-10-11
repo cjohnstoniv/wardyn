@@ -912,9 +912,9 @@ func (s *Server) internalAuth(next http.Handler) http.Handler {
 			writeErrorReason(w, http.StatusUnauthorized, reasonInvalidRunToken, "invalid run token")
 			return
 		}
-		// Claims first, then LIVENESS — see refuseTerminalRun.
+		// Claims first, then LIVENESS (refuseTerminalRun), then the relay binding on the run that read.
 		r = r.WithContext(contextWithClaims(r.Context(), claims))
-		if !s.refuseTerminalRun(w, r, claims) {
+		if run, ok := s.refuseTerminalRun(w, r, claims); !ok || s.refuseRelayBinding(w, r, claims, run) {
 			return
 		}
 		next.ServeHTTP(w, r)

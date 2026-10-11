@@ -231,7 +231,8 @@ test-report: ## Go unit suite with per-suite JSON + coverage artifacts, under th
 # test-pg-shard matrix runs this target once per shard with a package subset.
 PG_REPORT ?= pg
 PG_PKGS ?= ./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... \
-	./internal/api/... ./test/apie2e/... ./internal/recording/... ./cmd/wardynd/...
+	./internal/api/... ./test/apie2e/... ./internal/recording/... ./cmd/wardynd/... ./internal/notify/... \
+	./internal/livebus/...
 test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # -p 1: every package in this suite shares ONE database (the WARDYN_TEST_PG
 # DSN), and singleton state — site_config above all — is mutated by tests in
@@ -622,6 +623,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-compose-ns-registry-port.sh
 	./scripts/test-dco.sh
 	./scripts/test-desktop-profile.sh
+	./scripts/test-runner-units.sh
 	./scripts/test-doc-form.sh
 	./scripts/test-doc-links.sh
 	./scripts/test-e2e-harness.sh

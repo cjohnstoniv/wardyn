@@ -663,7 +663,7 @@ func (s *Server) handleAttachTakeover(w http.ResponseWriter, r *http.Request) {
 	// through the same byte-identical 404. A super admin who is not the owner
 	// gets the 403 naming why (#1476), unless the run has no personal owner.
 	run, ok := s.getRunForEntry(w, r, id)
-	if !ok {
+	if !ok || s.refuseBackgroundOnly(w, r, run, "terminal") {
 		return
 	}
 

@@ -38,7 +38,10 @@ ALTER TABLE agent_runs
     ADD COLUMN IF NOT EXISTS runner_pool_executor  TEXT NOT NULL DEFAULT '';
 
 ALTER TABLE agent_runs DROP CONSTRAINT IF EXISTS agent_runs_runner_pool_binding;
+-- NOT VALID then VALIDATE: the constraint is enforced for new rows at once, and the scan of existing
+-- rows runs under a lock that does not block writes to agent_runs.
 ALTER TABLE agent_runs
-    ADD CONSTRAINT agent_runs_runner_pool_binding CHECK ((runner_pool_id IS NULL) = (runner_pool_selection = ''));
+    ADD CONSTRAINT agent_runs_runner_pool_binding CHECK ((runner_pool_id IS NULL) = (runner_pool_selection = '')) NOT VALID;
+ALTER TABLE agent_runs VALIDATE CONSTRAINT agent_runs_runner_pool_binding;
 
 CREATE INDEX IF NOT EXISTS agent_runs_runner_pool_idx ON agent_runs (runner_pool_id) WHERE runner_pool_id IS NOT NULL;

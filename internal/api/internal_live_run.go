@@ -62,7 +62,8 @@ var internalSelfGatedRoutes = []string{"/internal/token/renew"}
 
 // refuseTerminalRun is internalAuth's liveness half: the run whose token
 // authenticated this call must still be non-terminal. It writes its own refusal
-// and returns false once it has.
+// and returns false once it has; otherwise it returns the run it read (nil when
+// it read none), which the relay binding reuses rather than reading again.
 //
 // Why it lives in the middleware and not in the handlers. Exactly one
 // /internal/* door re-checked run state — handleInternalTokenRenew — and its own
@@ -99,9 +100,9 @@ var internalSelfGatedRoutes = []string{"/internal/token/renew"}
 // this audience, unexpired and unrevoked". It cannot answer "is the run behind
 // it still running", and a run that went terminal while its revocation write
 // failed is exactly the case where those two answers differ.
-func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claims *identity.Claims) bool {
+func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claims *identity.Claims) (*types.AgentRun, bool) {
 	if s.cfg.Store == nil || pathHasAny(r.URL.Path, internalSelfGatedRoutes) {
-		return true
+		return nil, true
 	}
 	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
 	if err != nil {
@@ -112,7 +113,7 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 			// a path a 404 would have to keep silent about.
 			s.auditInternalDenied(r, claims, authz.ReasonRunNotFound, "", "")
 			writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunNotFound), "run not found")
-			return false
+			return nil, false
 		}
 		// The error goes to the LOG, never to the caller. This runs on every
 		// /internal/* door, so the caller is the in-sandbox proxy — and raw pgx
@@ -124,21 +125,21 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 		slog.ErrorContext(r.Context(), "api: read run for the /internal liveness gate",
 			slog.String("method", r.Method), slog.String("path", r.URL.Path), slog.Any("err", err))
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalLivenessReadFailed, "read run failed; retry")
-		return false
+		return nil, false
 	}
 	now := s.cfg.Now().UTC()
 	// Terminal first: a kept run keeps its lost mark when it is later killed or
 	// torn down, and a terminal run is refused as terminal whatever it was.
 	if isTerminalRunState(run.State) {
 		if internalUploadWithinGrace(r.URL.Path, run, now) {
-			return true
+			return &run, true
 		}
 		s.auditInternalDenied(r, claims, authz.ReasonRunTerminal, "run_state", string(run.State))
 		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run is terminal")
-		return false
+		return nil, false
 	}
 	if !runIsKept(run) {
-		return true
+		return &run, true
 	}
 	// A kept run (ended by its lease, or lost to a reboot or an outage) is
 	// still RUNNING, but its proxy is stopped on purpose and only a revive
@@ -149,11 +150,11 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 	// their grace, counted from the mark: the agent stops before its proxy,
 	// and its last cast races both.
 	if pathHasAny(r.URL.Path, terminalGraceRoutes) && uploadGraceOpen(*run.LostAt, now) {
-		return true
+		return &run, true
 	}
 	s.auditInternalDenied(r, claims, authz.ReasonRunKept, "lost_reason", string(run.LostReason))
 	writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunKept), "run is lost")
-	return false
+	return nil, false
 }
 
 // internalUploadWithinGrace reports whether this is one of the tail-upload doors

@@ -51,6 +51,11 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonMintGrantIDRequired, "grant_id is required")
 		return
 	}
+	// Before the single-lane check and MintForGrant: a relayed mint of a grant
+	// not delivered `own` opens no transaction and consumes no minted_jti.
+	if s.refuseRelayedDelivery(w, r, claims, body.GrantID) {
+		return
+	}
 
 	// Single-lane, at mint time. A run that also holds a github_token grant may
 	// not mint an ssh_key OR a git_pat for the brokered forge (see
