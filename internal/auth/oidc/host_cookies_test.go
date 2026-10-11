@@ -117,7 +117,7 @@ func TestHostCookies_SignInRoundTrip(t *testing.T) {
 			auth.LogoutHandler(out, httptest.NewRequest(http.MethodPost, base+"/api/v1/auth/logout", nil))
 			clears := out.Result().Cookies()
 			assertHostCookies(t, "logout", clears)
-			if len(clears) != 1 || clears[0].Name != "__Host-wardyn_session" || clears[0].MaxAge >= 0 {
+			if sess := cookieMap(clears)["__Host-wardyn_session"]; sess == nil || sess.MaxAge >= 0 || len(cookiesNamed(clears, "__Host-wardyn_session")) != 1 {
 				t.Fatalf("logout set %+v, want one expired __Host-wardyn_session at Path=/", clears)
 			}
 		})

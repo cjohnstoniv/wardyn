@@ -512,8 +512,14 @@ func (a *Authenticator) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 //
 // A cut that cannot be written answers 503, with the cookie already cleared, so the caller does not read an
 // unconfirmed sign-out as a confirmed one.
+//
+// The sign-in state, nonce, PKCE and widened-login cookies are cleared too, so a login this browser started
+// before signing out (a popup still at the identity provider) fails its callback's state check afterwards.
 func (a *Authenticator) SignOut(w http.ResponseWriter, r *http.Request) (cutSub string, err error) {
 	a.clearSessionCookie(w)
+	for _, name := range []string{stateCookieName, nonceCookieName, pkceCookieName, widenedCookieName} {
+		a.clearCookie(w, name)
+	}
 	if sess, derr := a.decodeSession(r); derr == nil && a.cfg.Revocations != nil && PrincipalFromContext(r.Context()) == sess.Sub {
 		if err = CutSessions(r.Context(), a.cfg.Revocations, sess.Sub); err != nil {
 			slog.Error("oidc: sign-out could not cut the session server-side", "error", err)
