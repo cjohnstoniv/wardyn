@@ -52,6 +52,12 @@ const (
 	// ErasedValue is what a reader shows for a field whose subject key was
 	// destroyed.
 	ErasedValue = "[erased]"
+
+	// DeviceActorPrefix begins the actor of a row an enrolled device forwarded
+	// (store.FederatedActor) and of this organisation's rows about a device. A
+	// subject id or sealed field on a forwarded row was written under the
+	// device's own keys, so Unseal leaves its target and data as stored.
+	DeviceActorPrefix = "device:"
 )
 
 // ErrKeyErased is what a SealKeys returns, wrapped, for a key that was
@@ -465,6 +471,8 @@ func (s *Sealer) memoKey(ctx context.Context, m *keyMemo, handle uuid.UUID) ([]b
 // key store is down) fails the whole read, so a reader never mistakes
 // ciphertext for the record. A string that does not open under its own
 // additional data is left as it is: it is not a seal Wardyn wrote for this row.
+// A device row (DeviceActorPrefix) keeps its target and data as stored: a
+// subject id or sealed field on it was written under the device's own keys.
 func (s *Sealer) Unseal(ctx context.Context, evs []types.AuditEvent) ([]types.AuditEvent, error) {
 	var memo *keyMemo
 	defer func() {
@@ -476,6 +484,7 @@ func (s *Sealer) Unseal(ctx context.Context, evs []types.AuditEvent) ([]types.Au
 	for i := range evs {
 		ev := evs[i]
 		changed := false
+		device := strings.HasPrefix(ev.Actor, DeviceActorPrefix)
 		if s.Subjects != nil && strings.HasPrefix(ev.Actor, SubjectActorPrefix) {
 			if memo == nil {
 				memo = newKeyMemo()
@@ -486,7 +495,7 @@ func (s *Sealer) Unseal(ctx context.Context, evs []types.AuditEvent) ([]types.Au
 			}
 			ev.Actor, changed = actor, true
 		}
-		if s.Subjects != nil && strings.HasPrefix(ev.Target, SubjectActorPrefix) && slices.Contains(personTargetActions, ev.Action) {
+		if !device && s.Subjects != nil && strings.HasPrefix(ev.Target, SubjectActorPrefix) && slices.Contains(personTargetActions, ev.Action) {
 			if memo == nil {
 				memo = newKeyMemo()
 			}
@@ -496,7 +505,7 @@ func (s *Sealer) Unseal(ctx context.Context, evs []types.AuditEvent) ([]types.Au
 			}
 			ev.Target, changed = target, true
 		}
-		if fields := sealFields[ev.Action]; len(fields) > 0 && bytes.Contains(ev.Data, []byte(`"`+sealedPrefix)) {
+		if fields := sealFields[ev.Action]; !device && len(fields) > 0 && bytes.Contains(ev.Data, []byte(`"`+sealedPrefix)) {
 			if memo == nil {
 				memo = newKeyMemo()
 			}
