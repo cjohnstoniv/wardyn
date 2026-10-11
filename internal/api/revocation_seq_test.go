@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -103,5 +105,60 @@ func TestRunEvents_StreamIsOrderedByTheAdmittingCredentialsSequence(t *testing.T
 	}
 	if _, timed := rev.asked(); timed != 1 {
 		t.Fatalf("a credential with no sequence was checked by time %d times, want 1", timed)
+	}
+}
+
+// cuttingRevocations is an ordered double whose time check commits a cut first: the revocation a request
+// races in the instant between its admission and its late re-check.
+type cuttingRevocations struct {
+	fakeAuthzSessionRevocations
+	mu  sync.Mutex
+	cur int64
+}
+
+func (c *cuttingRevocations) RevocationSeq(context.Context) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cur, nil
+}
+func (c *cuttingRevocations) IsSessionRevoked(context.Context, string, string, time.Time) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cur++
+	return false, nil
+}
+func (*cuttingRevocations) IsSessionRevokedSeq(context.Context, string, string, int64) (bool, error) {
+	return false, nil
+}
+
+var _ oidc.RevocationOrder = (*cuttingRevocations)(nil)
+
+// The attach ticket records its revocation sequence before the late re-check, so a cut that commits
+// between the two sits above the ticket's sequence and ends it.
+func TestAttachTicket_RecordsItsSequenceBeforeTheLateRevocationCheck(t *testing.T) {
+	ast := newAuthzStore()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, ast)
+	rev := &cuttingRevocations{cur: 10}
+	cfg.SessionRevocations = rev
+	srv := New(cfg)
+	run := uuid.New()
+	ast.runs[run] = types.AgentRun{ID: run, CreatedBy: "alice", OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-1"}
+
+	w := do(t, srv, http.MethodPost, "/api/v1/runs/"+run.String()+"/attach-ticket", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	ast.mu.Lock()
+	defer ast.mu.Unlock()
+	if len(ast.tickets) != 1 {
+		t.Fatalf("%d tickets minted, want 1", len(ast.tickets))
+	}
+	rev.mu.Lock()
+	defer rev.mu.Unlock()
+	for _, tk := range ast.tickets {
+		if tk.RevSeq == 0 || tk.RevSeq >= rev.cur {
+			t.Fatalf("ticket sequence %d, sequence after the late check %d: a cut that committed during the request does not end the ticket", tk.RevSeq, rev.cur)
+		}
 	}
 }

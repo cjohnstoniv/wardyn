@@ -205,6 +205,14 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	if s.isOperator(r.Context()) {
 		role = oidc.RoleAdmin
 	}
+	// The ticket's sequence is read before the late re-check, so a cut that commits between the two draws
+	// a sequence above the one recorded and ends the ticket (the order handleCreateAPIToken and
+	// handleAddSSHKey keep).
+	issue, err := s.mintIssue(r.Context(), principal, authorizedAt)
+	if err != nil {
+		writeServerError(w, r, "mint attach ticket", err)
+		return
+	}
 	// A revoke that landed while this request was in flight must not leave a
 	// ticket behind: the same late re-check as handleCreateAPIToken, and the same
 	// fail-closed answer when it cannot be made.
@@ -218,11 +226,6 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 			writeErrorReason(w, http.StatusForbidden, reasonAttachTicketNotYourRun, "this session is no longer authorized")
 			return
 		}
-	}
-	issue, err := s.mintIssue(r.Context(), principal, authorizedAt)
-	if err != nil {
-		writeServerError(w, r, "mint attach ticket", err)
-		return
 	}
 	tok, err := mintAttachTicket(r.Context(), s.cfg.Store, id, at, principal, role, issue)
 	if err != nil {

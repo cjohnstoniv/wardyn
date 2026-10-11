@@ -112,3 +112,43 @@ func TestIsRevokedOrdersBySequenceOnlyWhenBothSidesHaveOne(t *testing.T) {
 		t.Errorf("IssueSeq on an unordered store = %d, %v; want 0", seq, err)
 	}
 }
+
+// orderLoggingGate is a gate and an ordered store that note, in one shared log, when the sign-in reads the
+// revocation sequence and when it issues the identity.
+type orderLoggingGate struct {
+	fakeGate
+	log *[]string
+}
+
+func (g *orderLoggingGate) Issue(ctx context.Context, f writoidc.LoginFacts) (int64, error) {
+	*g.log = append(*g.log, "issue identity")
+	return g.fakeGate.Issue(ctx, f)
+}
+
+type orderLoggingRevocations struct {
+	orderedRevocations
+	log *[]string
+}
+
+func (o *orderLoggingRevocations) RevocationSeq(ctx context.Context) (int64, error) {
+	*o.log = append(*o.log, "read sequence")
+	return o.orderedRevocations.RevocationSeq(ctx)
+}
+
+// The sign-in reads the revocation sequence before it issues the identity: an unbind that commits after
+// the read draws a greater sequence and ends the cookie, which an unbind between the two reads would not.
+func TestSignInReadsTheRevocationSequenceBeforeItIssuesTheIdentity(t *testing.T) {
+	var log []string
+	rev := &orderLoggingRevocations{orderedRevocations: orderedRevocations{seq: 9}, log: &log}
+	gate := &orderLoggingGate{log: &log}
+	env := newIdPEnv(t)
+	auth := env.newRoleMappingAuth(t, nil, "", nil, nil, func(cfg *writoidc.Config) { cfg.Revocations = rev; cfg.Identities = gate })
+	env.buildIDToken(t, "pairwise-1", "pat@corp.example", roleCallbackNonce, time.Now().Add(time.Hour))
+	w, _ := doCallbackVia(t, auth, auth.CallbackHandler)
+	if !sessionIssuedBy(w) {
+		t.Fatalf("sign-in refused: %q", w.Result().Header.Get("Location"))
+	}
+	if len(log) != 2 || log[0] != "read sequence" || log[1] != "issue identity" {
+		t.Fatalf("sign-in steps in order %q; want the sequence read, then the identity issued", log)
+	}
+}

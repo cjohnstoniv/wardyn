@@ -122,7 +122,8 @@ func (r *pgSessionRevocations) SessionStatusQ(ctx context.Context, q store.Queri
 func (r *pgSessionRevocations) sessionStatus(ctx context.Context, querier store.Querier, sub, email string, issue oidc.Issue, identity bool, epoch int64, cuts bool) (oidc.SessionStatus, error) {
 	// A credential that recorded a revocation sequence is ended by a cut that drew a greater one, and by
 	// nothing else: the two clocks are not compared, since a step of either between the issue and the cut
-	// would reorder them. A credential without one is a legacy credential and keeps the time comparison below.
+	// would reorder them. A credential without one (a session cookie, attach ticket or delegated token from
+	// before the sequence existed, or anything a replica that predates it wrote) keeps the time comparison below.
 	//
 	// Either clock's revocation wins. The database clock is returned with the
 	// cutoff; app age is sampled after Scan so pool/server/response waits cannot

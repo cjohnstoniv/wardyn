@@ -78,3 +78,157 @@ func TestMigrate_RevocationOrderBackfill(t *testing.T) {
 		t.Fatalf("trigger seqs: insert %d, update %d, sequence %d; want each draw greater than the last", first, second, last)
 	}
 }
+
+// TestMigrate_RevocationOrderLeavesTheSequenceCalled (0194): on a sequence never drawn from, the first
+// value a credential records and the first value a cut draws must differ. A fresh sequence reports
+// last_value 1 with is_called false, so the first nextval would return the value an issuer already read.
+func TestMigrate_RevocationOrderLeavesTheSequenceCalled(t *testing.T) {
+	pool := pgPoolIsolated(t)
+	ctx := context.Background()
+	exec := func(sql string) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, sql); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec(`DROP TRIGGER oidc_session_revocations_stamp ON oidc_session_revocations`)
+	exec(`DROP TRIGGER oidc_session_cuts_stamp ON oidc_session_cuts`)
+	exec(`DELETE FROM oidc_session_revocations`)
+	exec(`DELETE FROM oidc_session_cuts`)
+	exec(`ALTER SEQUENCE oidc_revocation_seq RESTART WITH 1`)
+	sql, err := migrationFS.ReadFile("migrations/0194_revocation_order.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec(string(sql))
+
+	var last int64
+	var called bool
+	if err := pool.QueryRow(ctx, `SELECT last_value, is_called FROM oidc_revocation_seq`).Scan(&last, &called); err != nil {
+		t.Fatal(err)
+	}
+	if !called || last < 1 {
+		t.Fatalf("sequence after the migration: last_value %d, is_called %v; want a called sequence, so the value an issuer reads is not the one the next cut draws", last, called)
+	}
+	exec(`INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ('first', now())`)
+	var cut int64
+	if err := pool.QueryRow(ctx, `SELECT seq FROM oidc_session_revocations WHERE sub = 'first'`).Scan(&cut); err != nil {
+		t.Fatal(err)
+	}
+	if cut <= last {
+		t.Fatalf("the first cut drew %d, not above the %d a credential issued at migration time records", cut, last)
+	}
+}
+
+// TestMigrate_RevocationOrderFreezesLegacyTokensAndKeys (0194): an API token or SSH key that exists
+// at the migration, and can outlive any session, is given its place among the cuts once: the seq of
+// the latest cut that predates it, so a cut made after it ends it and a cut made before does not. The
+// stored order does not move when a clock does.
+func TestMigrate_RevocationOrderFreezesLegacyTokensAndKeys(t *testing.T) {
+	pool := pgPoolIsolated(t)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec(`DROP TRIGGER oidc_session_revocations_stamp ON oidc_session_revocations`)
+	exec(`DROP TRIGGER oidc_session_cuts_stamp ON oidc_session_cuts`)
+	exec(`ALTER SEQUENCE oidc_revocation_seq RESTART WITH 1`)
+	// alice was cut 2h ago; the global cut, 30m ago, ends everything created before it.
+	exec(`INSERT INTO oidc_session_revocations (sub, revoked_at, seq) VALUES
+		('alice', now() - interval '2 hours', 0), ('', now() - interval '30 minutes', 0)`)
+	type cred struct{ name, principal, email, created string }
+	creds := []cred{
+		{"before-alice-cut", "alice", "", "3 hours"}, // older than both cuts
+		{"between-cuts", "alice", "", "1 hour"},      // after alice's cut, before the global one
+		{"after-both", "alice", "", "10 minutes"},    // after both
+		{"by-email", "someone", "alice", "3 hours"},  // matched by email, older than alice's cut
+		{"unrelated-before-global", "bob", "", "1 hour"},
+		{"unrelated-after-global", "bob", "", "10 minutes"},
+	}
+	for _, c := range creds {
+		exec(`INSERT INTO api_tokens (id, principal, email, name, token_sha256, created_at)
+			VALUES (gen_random_uuid(), $1, $2, $3, $3, now() - $4::interval)`, c.principal, c.email, c.name, c.created)
+		exec(`INSERT INTO ssh_public_keys (fingerprint, principal, name, public_key, created_at)
+			VALUES ($2, $1, $2, 'k', now() - $3::interval)`, c.principal, c.name, c.created)
+	}
+	sql, err := migrationFS.ReadFile("migrations/0194_revocation_order.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec(string(sql))
+
+	// revokedBy reports whether a cut that matches the credential drew a greater seq than the one it
+	// holds, which is how sessionStatus orders a credential that recorded one. match is the cut's
+	// predicate for the table: a token also reads the cuts naming its email, a key does not.
+	revokedBy := func(table, name, match string) bool {
+		t.Helper()
+		var rev, cut int64
+		q := `SELECT rev_seq, COALESCE((SELECT max(r.seq) FROM oidc_session_revocations r
+			WHERE r.sub = t.principal OR r.sub = ''` + match + `), 0) FROM ` + table + ` t WHERE t.name = $1`
+		if err := pool.QueryRow(ctx, q, name).Scan(&rev, &cut); err != nil {
+			t.Fatal(err)
+		}
+		if rev < 1 {
+			t.Fatalf("%s %s kept rev_seq %d: still compared on time", table, name, rev)
+		}
+		return cut > rev
+	}
+	want := map[string]bool{
+		"before-alice-cut": true, "between-cuts": true, "after-both": false, "by-email": true,
+		"unrelated-before-global": true, "unrelated-after-global": false,
+	}
+	check := func(label string) {
+		t.Helper()
+		for name, revoked := range want {
+			if got := revokedBy("api_tokens", name, ` OR lower(r.sub) = lower(t.email)`); got != revoked {
+				t.Errorf("%s: api token %s revoked = %v, want %v", label, name, got, revoked)
+			}
+			if got := revokedBy("ssh_public_keys", name, ""); got != revoked {
+				t.Errorf("%s: ssh key %s revoked = %v, want %v", label, name, got, revoked)
+			}
+		}
+	}
+	check("after the migration")
+	// A clock that steps now moves every created_at; the stored order does not move with it.
+	exec(`UPDATE api_tokens SET created_at = created_at - interval '5 hours'`)
+	exec(`UPDATE ssh_public_keys SET created_at = created_at + interval '5 hours'`)
+	check("after a clock step")
+}
+
+// TestMigrate_RevocationOrderTokenBeforeTheOldestCut (0194): a token or key created before the oldest cut
+// has no earlier cut to take a seq from. It takes the value reserved below every cut, so the oldest cut,
+// which draws the first seq the migration hands out, still ends it.
+func TestMigrate_RevocationOrderTokenBeforeTheOldestCut(t *testing.T) {
+	pool := pgPoolIsolated(t)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec(`DROP TRIGGER oidc_session_revocations_stamp ON oidc_session_revocations`)
+	exec(`DROP TRIGGER oidc_session_cuts_stamp ON oidc_session_cuts`)
+	exec(`ALTER SEQUENCE oidc_revocation_seq RESTART WITH 1`)
+	exec(`INSERT INTO oidc_session_revocations (sub, revoked_at, seq) VALUES ('dave', now() - interval '4 hours', 0)`)
+	exec(`INSERT INTO api_tokens (id, principal, name, token_sha256, created_at) VALUES (gen_random_uuid(), 'dave', 't', 't', now() - interval '5 hours')`)
+	exec(`INSERT INTO ssh_public_keys (fingerprint, principal, name, public_key, created_at) VALUES ('k', 'dave', 'k', 'k', now() - interval '5 hours')`)
+	sql, err := migrationFS.ReadFile("migrations/0194_revocation_order.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec(string(sql))
+	for _, table := range []string{"api_tokens", "ssh_public_keys"} {
+		var rev, cut int64
+		if err := pool.QueryRow(ctx, `SELECT (SELECT rev_seq FROM `+table+` WHERE principal = 'dave'),
+			(SELECT seq FROM oidc_session_revocations WHERE sub = 'dave')`).Scan(&rev, &cut); err != nil {
+			t.Fatal(err)
+		}
+		if rev < 1 || cut <= rev {
+			t.Errorf("%s created before the oldest cut: rev_seq %d, the cut's seq %d; want the cut to end it", table, rev, cut)
+		}
+	}
+}

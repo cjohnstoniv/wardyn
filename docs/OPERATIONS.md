@@ -424,6 +424,13 @@ docker compose -f deploy/compose/docker-compose.yaml up -d postgres
 #    it and leaving a partial database with no error.
 docker exec -i wardyn-postgres psql -U wardyn -v ON_ERROR_STOP=1 wardyn < wardyn-<date>.sql
 
+# 3b. A restore rewinds the sequence that orders revocations against sessions. Advance it
+#     before anything signs in (a point-in-time restore needs this; or rotate the session
+#     HMAC key instead, which ends every signed-in session). A dump from a release that predates
+#     the sequence has none: skip this step.
+docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c \
+  "SELECT setval('oidc_revocation_seq', (SELECT last_value FROM oidc_revocation_seq) + 1000000)"
+
 # 4. Recordings — `fs` store only; the default `pg` store already came back
 #    in step 3.
 docker run --rm -v wardyn-recordings:/to -v "$PWD":/from alpine \

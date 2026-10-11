@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- Session, API token and SSH key revocation is now ordered by a database sequence instead of by comparing
+  clock times; the upgrade adds that sequence and records the order of the API tokens and SSH keys that already
+  exist. Sessions signed in before the upgrade keep the time comparison until they expire. During a rolling
+  upgrade a revocation written by a replica that has not been upgraded is not ordered against a sign-in that is
+  in flight, and tokens or keys it creates keep the time comparison: revoke again once the rollout finishes, or
+  upgrade one replica at a time.
 - Migration `0143_provider_connection_changes` adds an empty, secret-free history table for why a model connection
   became unavailable. Removals from before the upgrade have no recorded cause.
 - For filtered OIDC group claims, check the new transitive-membership procedure in Operations:

@@ -23,6 +23,21 @@ import (
 // revoked_at this much earlier than the issue time of a credential issued before it.
 const stepped = 800 * time.Millisecond
 
+// isolatedRevocationPool is a migrated database of this test's own, for a test that watches the sequence.
+func isolatedRevocationPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	ctx := context.Background()
+	pool, err := db.Connect(ctx, emptyDatabase(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	return pool
+}
+
 func seqSub(t *testing.T, pool *pgxpool.Pool, prefix string) string {
 	t.Helper()
 	sub := prefix + uuid.NewString()
@@ -137,7 +152,8 @@ func TestPG_RevokeBeatsATokenAndAKeyIssuedBeforeABackwardClockStep(t *testing.T)
 }
 
 // cutWaitsForAnIssuerReading runs cut while another connection holds the revocation-order lock shared, as an
-// issuer reading the sequence does: the cut must wait for it, and complete once it is released.
+// issuer reading the sequence does: the cut must wait for it, without having drawn its seq, and complete
+// once it is released.
 func cutWaitsForAnIssuerReading(t *testing.T, pool *pgxpool.Pool, cut func() error) {
 	t.Helper()
 	ctx := context.Background()
@@ -149,12 +165,25 @@ func cutWaitsForAnIssuerReading(t *testing.T, pool *pgxpool.Pool, cut func() err
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared($1, 0)`, db.RevocationOrderLockClass); err != nil {
 		t.Fatal(err)
 	}
+	lastValue := func() int64 {
+		var n int64
+		if err := pool.QueryRow(ctx, `SELECT last_value FROM oidc_revocation_seq`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := lastValue()
 	done := make(chan error, 1)
 	go func() { done <- cut() }()
 	select {
 	case err := <-done:
 		t.Fatalf("a cut completed (%v) while an issuer held the revocation-order lock: it does not take it", err)
 	case <-time.After(250 * time.Millisecond):
+	}
+	// The cut draws its seq only once it holds the lock: a draw made before it would sit below a value an
+	// issuer reads next, which the lock exists to prevent. pool must be a database nothing else draws from.
+	if now := lastValue(); now != before {
+		t.Fatalf("the sequence moved from %d to %d while the cut waited for the lock: it drew its seq before taking it", before, now)
 	}
 	if err := tx.Rollback(ctx); err != nil {
 		t.Fatal(err)
@@ -172,7 +201,7 @@ func cutWaitsForAnIssuerReading(t *testing.T, pool *pgxpool.Pool, cut func() err
 // Unbind, suspension, revoke-all and sign-out-everywhere each end a credential issued before them, with the
 // credential's issue time read later than the cut's (the clock stepped back), and none ends one issued after.
 func TestPG_EveryCutEndsAnEarlierCredentialByItsSequence(t *testing.T) {
-	pool := revocationPool(t)
+	pool := isolatedRevocationPool(t) // cutWaitsForAnIssuerReading watches the sequence, which no other test may draw from
 	ctx := context.Background()
 	rev := &pgSessionRevocations{pool: pool}
 	st := store.NewPG(pool)
@@ -261,8 +290,8 @@ func TestPG_EveryCutEndsAnEarlierCredentialByItsSequence(t *testing.T) {
 	})
 }
 
-// A credential without a sequence (a cookie, token or key issued before it existed, or by a replica that
-// predates it) is ordered on time as before: a later cut ends it and an earlier one does not.
+// A credential without a sequence (a cookie issued before it existed, or one a replica that predates it
+// issued) is ordered on time as before: a later cut ends it and an earlier one does not.
 func TestPG_LegacyCredentialWithoutASequenceIsStillEndedByALaterCut(t *testing.T) {
 	pool := revocationPool(t)
 	ctx := context.Background()
