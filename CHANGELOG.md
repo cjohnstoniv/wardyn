@@ -255,7 +255,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `0155_runner_asserted_subjects` alters `runner_pending_actions` only.
 - A runner link survives a cancelled request instead of dropping every stream, and a link whose writes stall now
   fails by keepalive; connection credit is no longer lost for data that arrives after a stream ends; a trailing
-  slash on `WARDYN_CONTROL_PLANE_URL` no longer breaks the proxy's internal calls.
+  slash on `WARDYN_CONTROL_PLANE_URL` no longer breaks the proxy's internal calls; the runner link's keepalive is no
+  longer affected by wall-clock steps.
 - SSO sign-in works when the public issuer is https and the internal issuer is plain http (mesh opt-out); IdP
   token and key requests time out after 10s; a sign-in refused for no matching role is logged.
 - Record Mode no longer counts a network fault (`builtin:dial-failed`, `builtin:tunnel-failed`) as a policy denial,
