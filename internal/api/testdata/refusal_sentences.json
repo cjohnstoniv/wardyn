@@ -70,6 +70,11 @@
     "sentence": "\"only the oldest audit partition can be dropped\""
   },
   {
+    "reason": "authz.Reason(placement.ReasonRelayRouteRefused)",
+    "target": "r.URL.Path",
+    "sentence": "(audit only)"
+  },
+  {
     "reason": "byoi_user",
     "target": "\"runs.image\"",
     "sentence": "\"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image\""
