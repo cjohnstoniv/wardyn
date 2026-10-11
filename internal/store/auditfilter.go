@@ -83,7 +83,7 @@ func (f AuditFilter) Matches(ev types.AuditEvent) bool {
 		return false
 	case f.Actor != "" && ev.Actor != f.Actor && (f.ActorAlt == "" || ev.Actor != f.ActorAlt):
 		return false
-	case f.Target != "" && ev.Target != f.Target && (f.TargetAlt == "" || ev.Target != f.TargetAlt):
+	case f.Target != "" && ev.Target != f.Target && (f.TargetAlt == "" || ev.Target != f.TargetAlt || FederatedDeviceID(ev) != nil):
 		return false
 	case f.ActorType != "" && ev.ActorType != f.ActorType:
 		return false
@@ -192,7 +192,9 @@ func (f AuditFilter) where(args []any) ([]string, []any) {
 	if f.Target != "" {
 		if f.TargetAlt != "" {
 			args = append(args, f.Target, f.TargetAlt)
-			clauses = append(clauses, fmt.Sprintf("target IN ($%d, $%d)", len(args)-1, len(args)))
+			// TargetAlt (the sealed subject form) names the organisation's own rows
+			// only: a forwarded row keeps its claimed target verbatim.
+			clauses = append(clauses, fmt.Sprintf("(target = $%d OR (target = $%d AND NOT %s))", len(args)-1, len(args), federatedRowSQL))
 		} else {
 			add("target = $%d", f.Target)
 		}

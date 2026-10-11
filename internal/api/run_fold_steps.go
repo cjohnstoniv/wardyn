@@ -183,8 +183,8 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 	floor := confinementFloorSpec(f.spec, f.comps)
 	if f.mode == foldCreate {
 		var ok bool
-		f.enforced, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, requestPlacement(*f.req), requestRunnerID(*f.req), floor, f.reqCC, f.baseline)
-		return ok
+		f.enforced, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, requestPlacement(*f.req), requestRunnerID(*f.req), floor, f.reqCC, f.baseline, f.place.offeredClasses())
+		return ok && !f.place.barrierRefusal(f.enforced).write(s, f.w, f.r)
 	}
 	var advertised []types.ConfinementClass
 	if f.mode == foldPreflight {
@@ -196,13 +196,18 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 		f.reqCC = reqCC
 		advertised = s.advertisedConfinement(f.r.Context(), *f.req)
 	}
+	// A pooled run's default class comes from its candidates at every door, the preview included, so the
+	// three doors promise one barrier.
+	if offered := f.place.offeredClasses(); offered != nil {
+		advertised = offered
+	}
 	enforced, err := enforcedConfinement(floor, f.reqCC, advertised, f.baseline)
 	if err != nil {
 		writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return false
 	}
 	f.enforced = enforced
-	return true
+	return !f.place.barrierRefusal(enforced).write(s, f.w, f.r)
 }
 
 // stepPlacementCapability refuses a request whose own shape demands an optional
@@ -340,5 +345,25 @@ func (s *Server) stepPlacementDenied(f *runFold, rec *foldRecorder) bool {
 // The admitted plan supplies specific refusals; final unsupported-local stays
 // before mint/persistence until the resolver and runner route are implemented.
 func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
-	return !s.localPlacementRefusal(f.r, *f.req, f.spec, f.ceiling, f.comps, f.driveMount, f.wsRefs).write(s, f.w, f.r)
+	// A self-hosted pool decides the placement when the request left it out.
+	req := *f.req
+	if f.place.pooled {
+		req.Placement = f.place.placement
+	}
+	return !s.localPlacementRefusal(f.r, req, f.spec, f.ceiling, f.comps, f.driveMount, f.wsRefs).write(s, f.w, f.r)
+}
+
+// stepPlacement runs after the components and before the local-eligibility step: the confinement
+// floor it reads is the policy's and the components', and the plan it gates is the one that step judges.
+func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
+	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true}
+	if f.mode == foldPreflight { // preflight parses the class inside stepConfinement, after this step
+		in.reqCC, in.reqCCOK = parseConfinementClass(f.req.ConfinementClass)
+	}
+	plan, refusal := s.resolvePlacement(f.r.Context(), in)
+	if refusal.write(s, f.w, f.r) {
+		return false
+	}
+	f.place = plan
+	return true
 }

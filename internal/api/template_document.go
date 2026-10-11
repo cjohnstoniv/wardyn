@@ -309,9 +309,6 @@ func (d *templateDecoder) checkAvailable(req createRunRequest) {
 	if req.Placement == client.PlacementLocal {
 		refuse("intent.placement")
 	}
-	if req.RunnerPoolID != "" {
-		refuse("intent.runner_pool_id")
-	}
 	if path, what := runModeUnavailable(req); what != "" {
 		refuse("intent." + path)
 	}

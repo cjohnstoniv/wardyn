@@ -73,14 +73,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and its partitions.
 - Migration `0159_run_lifetime_cap` adds `agent_runs.lifetime_cap_at` and `lifetime_cap_source`; existing runs keep
   them empty.
+- Config keys that hold a secret word (for example `CLIENT_SECRET`, `SECRET_FILE`, `*_IMAGE_PULL_SECRET`) are now
+  refused in templates and component config; move such values to a secret reference.
 
 ### Added
 
 - Under `WARDYN_AUDIT_SEAL=full` the `target` column of `person.attach`, `person.token.create`,
   `delegation.exchange`, `session.revoke`, `secret.list` and `auth.signin_unserialized` rows is stored as the
   person's subject, like the actor, when that person has an identity row, and a typed `subject:` string in an actor
-  or target is refused; `GET /audit?target=` matches both forms (#1828). A person named in `data` (`sub`, `target`,
-  `secret_owner`), and the target of `person.create`, stay clear.
+  or target is refused on rows this organisation writes; a row a device forwards is shown as the device sent it and
+  never resolved to a person. `GET /audit?target=<person>` matches both forms on rows this organisation writes and
+  does not list a device-forwarded row that merely names the person's subject; a filter on the raw target string
+  still finds it (#1828). A person named in `data` (`sub`, `target`, `secret_owner`), and the target of
+  `person.create`, stay clear.
 - Personal and shared secrets are named by route. `PUT`/`DELETE /me/secrets/{name}` (and `GET /me/secrets`) store
   your own secret whatever your role or view; `PUT`/`DELETE /shared-secrets/{name}` (and `GET`) store a shared
   service secret, admin only. Neither accepts `?owner=`. `wardyn secret set|delete` take `--personal` or `--shared`,
@@ -100,7 +105,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - AWS KMS can hold the key that wraps stored credentials (`WARDYN_KEK=awskms`): each data key is wrapped by KMS
   Encrypt bound to its row, the key never leaves AWS, and IRSA or EKS Pod Identity is the expected identity (#588). A
   long-lived access key still boots but raises an amber setup row. An AWS KMS platform key, key domains and store mode
-  are not supported yet, and boot refuses them together with `awskms`.
+  are not supported yet, and boot refuses them together with `awskms`. The Helm chart takes `kek.provider=awskms`
+  and `kek.awskms.key` and, like the other key services, needs no age key.
 - Runners management API: `GET /runners` (active, revoked or all, with each runner's live online state and the runs on
   it), `GET /runners/{id}`, and the caller-scoped `GET /me/runners`, which shows a person only their own runners and
   abbreviates an unclaimed runner's fingerprint. Security admins can list and revoke unused registration tokens (never
@@ -136,9 +142,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `template_*` reasons, a declarative configuration schema for custom components, `wardyn template` and SDK methods.
   The `/templates` and `/admin/template-group-admins` routes answer `501 templates_unavailable` until the template
   store lands.
-- Runner pool contract: the run-create, preflight and policy-preview requests accept `runner_pool_id`, which the
-  server refuses with `request_field_unavailable` until the pool resolver lands (never ignored). Preflight and the
-  preview return `runner_pools`. `wardyn run --pool` and `wardyn runner pool list|default get|set|clear` are added.
+- Runner pool contract: the run-create, preflight and policy-preview requests accept `runner_pool_id`. Preflight and
+  the preview return `runner_pools`. `wardyn run --pool` and `wardyn runner pool list|default get|set|clear` are
+  added.
+- A run now lands in a runner pool: the request's pool, or the person's or the organisation's default; a missing or
+  stale default is refused, never guessed, and self-hosted pools only ever run on the launching person's own
+  runners. A run is created on, and every retry stays on, the target it was admitted against. Migration
+  `0160_run_pool_binding` adds the pool binding to `agent_runs`; existing runs keep none. A request with no run type
+  (`wardyn run` without `--experience`, or an older client) is refused `runner_pool_run_type_not_allowed` by any
+  pool that has limits.
 - `wardyn sync <run> <directory>` pushes a local directory over the audited SSH sync subsystem.
   `--pull` opts into receiving files; pulls refuse symlinks, unsafe names and executable modes,
   keep local edits on conflict and never delete files. `--watch` repeats the sync.
@@ -220,8 +232,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   expires.
 - Runner pools carry limits per run type: CPU and memory (default and cap), lifetime (default, maximum or
   unlimited), an idle stop for interactive environments only, allowed barriers and a concurrent-run cap; an
-  administrator sets them on create and replaces them on update (migration 0158). Limits are validated, stored
-  and audited; they are not yet applied to runs.
+  administrator sets them on create and replaces them on update (migration 0158). A run is admitted by its pool's
+  run types and barriers, and the pool's lifetime bounds its end; CPU, memory, idle stop and the concurrent-run cap
+  are stored and audited but not yet applied to runs.
 - `wardyn-runnerd` ships as a release binary for Linux and macOS (amd64, arm64) with a per-user service: a systemd
   user unit or a LaunchAgent, installed by `deploy/runner/install.sh`, which registers the runner with a single-use
   token and keeps it running; the owner then claims it with `wardyn runner claim` (#1968).
@@ -299,6 +312,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   can no longer set No end or extend past the cap, a super admin included (a super admin still skips the profile's
   limits). Until the lease sweep honours the cap, the lease sweep keeps the run at the same moment the reaper stops
   it.
+- Template and component-schema config keys such as `CLIENT_SECRET`, `JWT_SECRET` and `*_PASSPHRASE` are now
+  refused as secret-named (`SECRET_NAME`/`SECRET_REF` stay plain).
+- Naming a person by a typed `entra:<tenant>:<object>` (erasure, secret owner) is now refused as ambiguous when that
+  tenant and object id also signed in under another issuer, instead of resolving to one principal and leaving the
+  other's data.
 
 ### Removed
 
@@ -413,6 +431,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - SCIM deprovisioning never links a sign-in through an email that names another person, and refuses
   (`owner_ambiguous`, shown on the SCIM status card) when a leaver's emails name two different people, until an
   admin resolves it.
+- `wardynd -recovery-manifest` now refuses at `pool_max_conns` below 2 and names the setting, instead of hanging.
+- `wardyn sync` and sftp now say when the runner is offline or the sandbox is gone, instead of blaming the sandbox
+  image for a missing sftp-server.
 
 
 ## [0.8.9] — 2026-10-09

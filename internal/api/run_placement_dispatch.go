@@ -5,7 +5,10 @@ package api
 
 import (
 	"context"
+	"fmt"
+
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -24,4 +27,27 @@ func (s *Server) unsupportedLocalDispatch(ctx context.Context, run types.AgentRu
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch", run.ID.String(), "failure", mustJSON(map[string]any{"reason": placement.ReasonPlacementUnavailable})))
 	s.failAndRevoke(context.WithoutCancel(ctx), run.ID, types.RunPending, "Your own runner is not available: this server cannot place a run on a runner yet.")
 	return true
+}
+
+// createSandboxAtTarget creates the run's sandbox on the exact target it was admitted against, the one
+// persisted on its row, and nowhere else. A pool is only the label the run was admitted under: the pool's
+// members, a revoked runner and anyone's defaults can change after admission, and none of that reroutes a
+// run, a retry or a revive. A pooled run whose row names no target fails; it is never handed to the
+// first substrate that can enforce its class.
+func (s *Server) createSandboxAtTarget(ctx context.Context, run types.AgentRun, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	switch {
+	case run.RunnerID != nil:
+		spec.RunnerID = run.RunnerID.String()
+	case run.RunnerPoolID != nil:
+		if run.RunnerPoolExecutor == "" {
+			return runner.Sandbox{}, fmt.Errorf("%w: the run's pool binding names no executor", runner.ErrExecutorUnavailable)
+		}
+		if exact, ok := s.cfg.Runner.(runner.ExactExecutor); ok {
+			return exact.CreateSandboxOn(ctx, run.RunnerPoolExecutor, spec)
+		}
+		if s.cfg.Runner.Name() != run.RunnerPoolExecutor {
+			return runner.Sandbox{}, fmt.Errorf("%w: %q is not an executor of this deployment", runner.ErrExecutorUnavailable, run.RunnerPoolExecutor)
+		}
+	}
+	return s.cfg.Runner.CreateSandbox(ctx, spec)
 }

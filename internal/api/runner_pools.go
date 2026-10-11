@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"slices"
 
@@ -118,21 +119,25 @@ func (c callerSubjects) permits(row store.RunnerPoolCatalogueRow) bool {
 // anything that admits, defaults or offers a choice passes forUse true. A pool the caller may not use is
 // absent, so it is indistinguishable from one that does not exist. ok=false: the answer is written.
 func (s *Server) poolCatalogue(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore, forUse bool) ([]store.RunnerPoolCatalogueRow, bool) {
-	ctx := r.Context()
+	rows, refusal := s.permittedPools(r.Context(), ps, forUse)
+	return rows, !refusal.write(s, w, r)
+}
+
+// permittedPools is poolCatalogue's read, answering with a refusal instead of writing it, for the
+// run fold: the same catalogue, the same narrowing, so a launch sees exactly the pools the list shows.
+func (s *Server) permittedPools(ctx context.Context, ps store.RunnerPoolStore, forUse bool) ([]store.RunnerPoolCatalogueRow, *runRefusal) {
 	rows, err := ps.ListRunnerPoolCatalogue(ctx, oidcHumanFromContext(ctx))
 	if err != nil {
-		writeServerError(w, r, "list runner pools", err)
-		return nil, false
+		return nil, runServerError("list runner pools", err)
 	}
 	if !forUse && s.isSecurityOperator(ctx) {
-		return rows, true
+		return rows, nil
 	}
 	subj, err := s.callerSubjects(ctx)
 	if err != nil {
-		writeCeilingError(w, r, err)
-		return nil, false
+		return nil, ceilingRunRefusal(err)
 	}
-	return slices.DeleteFunc(rows, func(row store.RunnerPoolCatalogueRow) bool { return !subj.permits(row) }), true
+	return slices.DeleteFunc(rows, func(row store.RunnerPoolCatalogueRow) bool { return !subj.permits(row) }), nil
 }
 
 // catalogueRow finds one pool in rows.
