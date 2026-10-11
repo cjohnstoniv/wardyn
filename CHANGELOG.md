@@ -10,13 +10,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
-- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
-  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `runners`,
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
+  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `runners`,
   `runner_pending_actions`, `provider_connection_changes` and `runner_inventories`, and `SELECT, INSERT, UPDATE` on
   `credential_delivery_policy`, `runner_registration_tokens`, `audit_delivery_cursors`, `runner_spool_cursors`,
-  `runner_executions`, `runner_execution_exits`, `runner_inventory_candidates` and `runner_inventory_observations`.
-  Without the `provider_connection_changes` grant every secret write fails once migration 0143's trigger on
-  `secrets` is in place.
+  `runner_executions`, `runner_execution_exits`, `runner_inventory_candidates`, `runner_inventory_observations` and
+  `secret_owner_generations`. Without the `provider_connection_changes` grant every secret write fails once
+  migration 0143's trigger on `secrets` is in place.
+- Credential erase fence (migration 0156): an older wardynd running beside the new one does not check a person's
+  erase generation; finish the upgrade before erasing anyone.
 - Migration `0145_audit_delivery_cursors` adds the `audit_delivery_cursors` table; nothing changes until a webhook
   audit sink sets `"delivery": "acknowledged"`.
 - Migration `0143_provider_connection_changes` adds an empty, secret-free history table for why a model connection
@@ -64,6 +66,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- Personal and shared secrets are named by route. `PUT`/`DELETE /me/secrets/{name}` (and `GET /me/secrets`) store
+  your own secret whatever your role or view; `PUT`/`DELETE /shared-secrets/{name}` (and `GET`) store a shared
+  service secret, admin only. Neither accepts `?owner=`. `wardyn secret set|delete` take `--personal` or `--shared`,
+  and the SDK adds `SetMySecret`, `DeleteMySecret`, `SetSharedSecret` and `DeleteSharedSecret`. `PUT`/`DELETE
+  /secrets/{name}` is unchanged and nothing moves between namespaces. The new routes' audit rows carry `scope`
+  (`personal` or `shared`) (#1510).
+- An erase of a person's credentials advances a per-person erase generation (migration 0156) before it deletes
+  anything, and every stored-credential write is fenced to the generation it began under. A write that began before
+  the erase is refused with `409` `credential_erased_during_write`, across processes and in store mode; a reconnect
+  afterwards works. `credential.erase` reports `write_fence` (`generation` or `locks_only`) (#1511).
 - Opt-in acknowledged audit delivery for the webhook sink (`"delivery": "acknowledged"`): it reads the stored trail
   from a durable per-destination checkpoint (starting at the current head on first enable), resumes after outages and
   restarts, and is at-least-once with `id`, `seq` and `row_hash` for deduplication. A redirect or a terminal 4xx halts
@@ -248,6 +260,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- Security: every route that erases or deletes a person's records by name resolves the name one way: `POST
+  /people/{principal}/erasure` (every scope), `DELETE /people/{principal}/credentials`, `DELETE
+  /people/{principal}/ssh-keys` and the SSH arm of `POST /sessions/revoke`, `DELETE /secrets/{name}?owner=` and `GET
+  /secrets?owner=`, and a key domain's user subject. Any recorded principal, exact or in another case, wins over an
+  email: a sign-in, a person an admin created (including one not yet signed in), an API token's owner or a workspace
+  owner. An email is matched only for a name with an `@`, against every email Wardyn holds at once, and one two
+  people carry is refused (`422 owner_ambiguous`). Before, a person who signed in claiming another person's subject
+  or email and minted an API token could make an erasure of that person reach their own records (audit-seal key,
+  governance fields) and leave the victim's. An unreadable directory now refuses (`500`, `reason`
+  `identity_directory_unreadable` on the erase routes' failure rows) instead of falling back.
+- `audit_personal_fields` clears a governance change by its recorded email only for an email the directory names as
+  the erased person alone; a principal is never matched against a recorded email. The audit sealer keys a row by the
+  same answer, and a bare `?owner=` value is no longer matched against API-token emails.
 - Registered runners: a live run's output keeps flowing after a wardynd restart; attach and exec reach only
   sandboxes the runner created; a damaged output directory is named in the start error; a retired run's settled
   output is released.

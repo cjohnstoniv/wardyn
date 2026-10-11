@@ -173,7 +173,11 @@ func (s *Server) decodeKeyDomainChange(w http.ResponseWriter, r *http.Request, d
 		if raw == "" || len(raw) > maxKeyDomainSubjectLen || !controlCharFree(raw) {
 			return bad("Name the person, by subject or email.")
 		}
-		owner, _, refusal := s.resolveSecretOwner(r.Context(), raw)
+		owner, _, refusal, err := s.resolveSecretOwner(r.Context(), raw)
+		if err != nil {
+			writeServerError(w, r, "resolve the key domain's person", err)
+			return c, false
+		}
 		switch refusal {
 		case "":
 			c.Subject = owner
