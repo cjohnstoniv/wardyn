@@ -921,7 +921,7 @@ Pattern: a refusal asserts "no sandbox exists and nothing was minted", not just 
 |---|---|
 | Developer-rooted host | Anything a local run uses is developer-readable; agent-side controls bind the agent only |
 | Runner credential | Theft reaches the owner's own locally placeable runs until revoked; replaces #51's shape |
-| Relay | Opaque TLS; `runner_id` binding; the local listener is reachable by any process on the laptop, which still needs a run token |
+| Relay | Opaque TLS to a passive observer on the laptop; `runner_id` binding; the local listener is reachable by any process on the laptop, which still needs a run token. Not opaque to a hostile `wardyn-runnerd`: it writes its own runs' proxy config (run token, CA pin), so it can terminate their hop, which reaches only those runs' own-delivery grants |
 | Self-reported evidence | Decisions, recordings, `ExecOutput`, exit codes, capabilities, posture; #50–#52 re-scoped |
 | Runner-asserted CC3 | A developer can advertise a class the host does not enforce; the record says so; it never satisfies the floor for a `runner_resident` credential |
 | OD-8 classification | Closed switch at three chokepoints (create, dispatch, revive); `own` material is readable by its owner by design |

@@ -366,6 +366,7 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 
 	errCh := make(chan error, 2)
 	internalSrv := startInternalListener(hop, f, srv.InternalHandler(), errCh)
+	relaySrv := startRelayListener(hop, srv)
 	go func() {
 		switch {
 		case posture.tlsEnabled:
@@ -425,6 +426,9 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), api.HTTPShutdownTimeout)
 	defer shutCancel()
+	if relaySrv != nil {
+		_ = relaySrv.Shutdown(shutCtx)
+	}
 	// fan.Close() is the deferred drain above — reached from here and from the
 	// serve-error return alike.
 	return runShutdownSequence(shutCtx, internalSrv, httpSrv, srv, orgFederation)

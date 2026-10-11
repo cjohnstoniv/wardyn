@@ -20,7 +20,8 @@
 # docs/AUDIT-ACTIONS.md 41145 measured after F-1511-1510 merge.
 # 0.9 G-seal-target (#1828): docs/AUDIT-ACTIONS.md 41243 adds 285 over 40958 for the "target, under WARDYN_AUDIT_SEAL=full" paragraph of Sealed fields: the closed list, the actions left clear, the SIEM note and the refused typed subject.
 # docs/AUDIT-ACTIONS.md 41430 measured after G-seal-target merge.
-docs/AUDIT-ACTIONS.md=41430 share=8
+# 0.9 H5 (#1959): docs/AUDIT-ACTIONS.md 41534 adds 104 for the "Relayed internal calls" paragraph (data.relay and the relay refusal reasons).
+docs/AUDIT-ACTIONS.md=41534 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
