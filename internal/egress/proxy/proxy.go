@@ -105,6 +105,9 @@ type Proxy struct {
 	gitGrants map[string]uuid.UUID
 	// viaOrgRoutes are the destinations forwarded to the organisation (via_org.go).
 	viaOrgRoutes []ViaOrgRoute
+	// maskKey files the secrets this proxy learns in procRegistry: uuid.Nil in a
+	// sidecar, a ViaOrgEngine's own key at the organisation (procMaskFor).
+	maskKey uuid.UUID
 	// patGrants is the per-run git_pat broker allowlist: lowercased host -> the
 	// grant to mint from. Empty/nil == no host brokered (the route always 403s),
 	// which is also what a deployment with the lane switched off looks like.

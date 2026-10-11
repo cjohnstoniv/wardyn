@@ -352,7 +352,7 @@ func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser f
 	// usernames, and masking the wrong rendering (the mint's, rather than what
 	// actually goes on the wire) would leave the real one in cleartext.
 	// Residual: only verbatim bytes of those renderings are caught.
-	registerBasicAuthCredential(wireUser(user), tok)
+	registerBasicAuthCredential(p.maskKey, wireUser(user), tok)
 	e.token, e.username, e.expiresAt = tok, user, expMs
 	return tok, user, nil
 }

@@ -190,7 +190,7 @@ func (f lookupFunc) LookupIP(host string) ([]net.IP, error) { return f(host) }
 // run's via_org rules. It starts no token renewer or activity reporter: every
 // forwarded request carries the run's live token, which the client presents.
 func NewViaOrgEngine(ctx context.Context, cfg *Config, opts ViaOrgEngineOptions) (*ViaOrgEngine, error) {
-	h := serverHooks{dial: opts.Dial, engine: true}
+	h := serverHooks{dial: opts.Dial, engine: true, maskKey: uuid.New()}
 	if opts.LookupIP != nil {
 		h.res = lookupFunc(opts.LookupIP)
 	}
@@ -216,7 +216,8 @@ func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, hos
 		p.httpError(w, "via_org destination refused", errViaOrgCleartext, http.StatusForbidden)
 		return
 	}
-	switch decision, _, log := p.evaluate(r.Context(), host, 443, http.MethodConnect, ""); decision {
+	decision, _, log := p.evaluate(r.Context(), host, 443, http.MethodConnect, "")
+	switch decision {
 	case egress.Deny:
 		if log != nil {
 			p.sink.emit(*log)
@@ -230,6 +231,11 @@ func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, hos
 		setEgressRefusalHeaders(w, egressRefusalPending, host)
 		writeApprovalPending(w, log)
 		return
+	}
+	// The allow row, as handleConnect writes it before a terminated tunnel: it
+	// carries the approval that released the destination.
+	if log != nil {
+		p.sink.emit(*log)
 	}
 	p.serveMITMRequest(w, r, host, 443)
 }

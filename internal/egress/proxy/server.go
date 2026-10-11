@@ -39,6 +39,8 @@ type Server struct {
 	// read in Shutdown. Nil when no renewer was started.
 	renewStop    context.CancelFunc
 	renewStopped chan struct{}
+	// maskKey is a ViaOrgEngine's own procRegistry key, evicted at Shutdown; uuid.Nil for a sidecar.
+	maskKey uuid.UUID
 }
 
 // NewServer wires a Proxy from a validated Config and dependencies. It mints
@@ -50,9 +52,10 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 // serverHooks are what a ViaOrgEngine changes about a Server: no token renewer
 // (engine), and for tests a dialer and resolver in place of the network.
 type serverHooks struct {
-	dial   func(ctx context.Context, network, addr string) (net.Conn, error)
-	res    resolver
-	engine bool
+	dial    func(ctx context.Context, network, addr string) (net.Conn, error)
+	res     resolver
+	engine  bool
+	maskKey uuid.UUID // where this server's secrets are filed (procMaskFor)
 }
 
 // start finishes a Server: a sidecar starts its token renewer; a ViaOrgEngine
@@ -65,6 +68,7 @@ func (h serverHooks) start(out *Server, p *Proxy, ts *tokenSource, cfg *Config, 
 	if h.res != nil {
 		p.res = h.res
 	}
+	p.maskKey, out.maskKey = h.maskKey, h.maskKey
 	if h.engine {
 		p.localClient = client
 		return
@@ -157,7 +161,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		return nil, err
 	}
 
-	inj, err := buildInjector(ctx, cfg.ControlPlaneURL, ts, pol, cfg.Injection, client)
+	inj, err := buildInjectorFor(ctx, hooks.maskKey, cfg.ControlPlaneURL, ts, pol, cfg.Injection, client)
 	if err != nil {
 		_ = sink.close(context.Background())
 		return nil, fmt.Errorf("build injector: %w", err)
@@ -173,9 +177,9 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	var scanner *contentscan.Engine
 	if spec := cfg.Policy.LLMInspection; spec != nil {
 		for _, v := range spec.WorkspaceSecretValues {
-			procMask([]byte(v))
+			procMaskFor(hooks.maskKey, []byte(v))
 		}
-		eng, eerr := contentscan.NewEngine(*spec, procRegistry.Snapshot(uuid.Nil))
+		eng, eerr := contentscan.NewEngine(*spec, procRegistry.Snapshot(hooks.maskKey))
 		if eerr != nil {
 			_ = sink.close(context.Background())
 			return nil, fmt.Errorf("build content scanner: %w", eerr)
@@ -215,7 +219,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	}
 	if up != nil {
 		for _, v := range up.maskValues() {
-			procMask(v)
+			procMaskFor(hooks.maskKey, v)
 		}
 		slog.InfoContext(ctx, "wardyn-proxy: chaining egress through upstream proxy (private-IP guard relaxed for this hop; control-plane bypasses it)",
 			slog.String("upstream_addr", up.addr))
@@ -349,6 +353,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// a repeat count that never hit the eviction path is still recorded.
 	s.proxy.flushPrivateIPMemo()
 	sinkErr := s.sink.close(ctx)
+	// An engine's own secrets leave with it, after its last row is masked; a
+	// sidecar's (uuid.Nil) are the process's and are never evicted.
+	if s.maskKey != uuid.Nil {
+		procRegistry.Evict(s.maskKey)
+	}
 	if httpErr != nil {
 		return httpErr
 	}

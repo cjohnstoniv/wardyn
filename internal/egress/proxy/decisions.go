@@ -209,9 +209,13 @@ func (s *decisionSink) post(log egress.DecisionLog) error {
 // after startup are visible immediately. Package-level, not a method, so
 // tests can exercise it standalone.
 func maskDecisionBytes(b []byte) []byte {
-	// uuid.Nil yields only global secrets: no per-run entries exist in the
-	// proxy process, all proxy-side secrets are global.
-	snap := procRegistry.Snapshot(uuid.Nil)
+	// Every key: uuid.Nil is a sidecar's (the whole process), and each
+	// ViaOrgEngine embedded in wardynd files its own until it closes. Masking
+	// with all of them only ever masks more.
+	var snap [][]byte
+	for _, key := range procRegistry.RunIDs() {
+		snap = append(snap, procRegistry.Snapshot(key)...)
+	}
 	if len(snap) == 0 {
 		return b
 	}

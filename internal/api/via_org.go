@@ -29,13 +29,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // viaOrgMethods are the methods the via_org route serves: the sandbox request's own method is kept.
 var viaOrgMethods = []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions}
 
-const viaOrgRoutePattern = "/internal/via-org/{grantID}/*"
+const (
+	viaOrgRoutePattern = "/internal/via-org/{grantID}/*"
+	// viaOrgDoor is the route's own prefix; what follows its grant id is the sandbox's.
+	viaOrgDoor = "/internal/via-org/"
+)
 
 func (s *Server) mountViaOrgRoute(r chi.Router) {
 	for _, m := range viaOrgMethods {
@@ -56,6 +61,9 @@ func (s *Server) handleViaOrg(w http.ResponseWriter, r *http.Request) {
 	claims, err := claimsFromContext(r)
 	if err != nil {
 		writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunToken, "missing run claims")
+		return
+	}
+	if s.refuseViaOrgEndedRun(w, r, claims) {
 		return
 	}
 	runnerID, relayed := relayRunner(r.Context())
@@ -103,6 +111,30 @@ func (s *Server) handleViaOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	engine.ServeInjected(cw, out, dest.host)
+}
+
+// refuseViaOrgEndedRun is this route's own liveness check, beside internalAuth's: the request path
+// after the grant id is the sandbox's, so the route never relies on a gate that reads the path. A
+// terminal or kept run is refused as refuseTerminalRun refuses it, with no grace.
+func (s *Server) refuseViaOrgEndedRun(w http.ResponseWriter, r *http.Request, claims *identity.Claims) bool {
+	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		s.auditInternalDenied(r, claims, authz.ReasonRunNotFound, "", "")
+		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunNotFound), "run not found")
+	case err != nil:
+		slog.ErrorContext(r.Context(), "api: read run for via_org", slog.String("run_id", claims.RunID.String()), slog.Any("err", err))
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalLivenessReadFailed, "read run failed; retry")
+	case isTerminalRunState(run.State):
+		s.auditInternalDenied(r, claims, authz.ReasonRunTerminal, "run_state", string(run.State))
+		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run is terminal")
+	case runIsKept(run):
+		s.auditInternalDenied(r, claims, authz.ReasonRunKept, "lost_reason", string(run.LostReason))
+		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunKept), "run is lost")
+	default:
+		return false
+	}
+	return true
 }
 
 // viaOrgGrant reads the run's grant and its destination: the grant must be this run's and recorded
@@ -207,7 +239,7 @@ func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UU
 	if err != nil {
 		return nil, nil, err
 	}
-	if run.isClosed() { // ended while it was built: endViaOrgRun will not see it
+	if run.isClosed() { // ended while it was built: releaseViaOrgRun will not see it
 		_ = engine.Close(ctx)
 		return nil, nil, errors.New("via_org: the run's egress closed")
 	}
