@@ -44,6 +44,35 @@ type Server struct {
 // NewServer wires a Proxy from a validated Config and dependencies. It mints
 // injection credentials once (fail-closed on error) before returning.
 func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.Writer) (*Server, error) {
+	return newServer(ctx, cfg, client, stdout, serverHooks{})
+}
+
+// serverHooks are what a ViaOrgEngine changes about a Server: no token renewer
+// (engine), and for tests a dialer and resolver in place of the network.
+type serverHooks struct {
+	dial   func(ctx context.Context, network, addr string) (net.Conn, error)
+	res    resolver
+	engine bool
+}
+
+// start finishes a Server: a sidecar starts its token renewer; a ViaOrgEngine
+// starts none, and its brokered mints and approval polls ride the caller's
+// client too: it is the organisation, and never dials itself.
+func (h serverHooks) start(out *Server, p *Proxy, ts *tokenSource, cfg *Config, client *http.Client) {
+	if h.dial != nil {
+		p.dial = h.dial // every transport dials through p.dial at call time
+	}
+	if h.res != nil {
+		p.res = h.res
+	}
+	if h.engine {
+		p.localClient = client
+		return
+	}
+	startRunTokenRenewer(out, p, ts, cfg, client)
+}
+
+func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.Writer, hooks serverHooks) (*Server, error) {
 	pol := CompilePolicy(cfg.Policy)
 	// Beside the compile, not inside it: CompilePolicy is a pure function with
 	// several callers, and this is a once-per-boot report about the policy
@@ -244,6 +273,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		LocalSubnets:         localSubnets,
 		ControlPlaneIPs:      cpIPs,
 		ExclusionUnknown:     exclusionUnknown,
+		ViaOrgRoutes:         cfg.ViaOrgRoutes,
 	})
 	if ca != nil && len(cfg.MITMHosts) > 0 {
 		slog.InfoContext(ctx, "wardyn-proxy: TLS-MITM also enabled for operator-configured corp artifact host(s) (token injection)",
@@ -269,7 +299,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// Start the run-token renewer, which keeps this sidecar's short-TTL token
 	// fresh for the life of the run and, alongside it, the activity reporter
 	// for the pause presence clock.
-	startRunTokenRenewer(out, p, ts, cfg, client)
+	hooks.start(out, p, ts, cfg, client)
 	return out, nil
 }
 

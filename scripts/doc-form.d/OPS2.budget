@@ -5,4 +5,5 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 597 adds 48: the page now leads with the client-mode claim flow and offline table; legacy enrolment is condensed under it.
 # 622 adds 25: the Azure DevOps bullet below "Where each thing lives" (#475).
 # 635 adds 13: the one-line link to the runner service install (#1968).
-docs/operations/hybrid-laptops.md=635 share=35
+# 673 adds 38: the via_org row of "Where each thing lives" (#1964).
+docs/operations/hybrid-laptops.md=673 share=35

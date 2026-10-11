@@ -170,6 +170,7 @@ type ProxyConfig struct {
 	Attribution          *policyref.Ref           // the policy named in a policy-decided refusal; nil when none
 	PushRuleSets         []types.PushRuleSet      // push content rules per SCM entry (provider+org); proxy.Config.PushRuleSets
 	HarnessToolRules     []types.HarnessToolRules // tool rules per included harness; proxy.Config.HarnessToolRules
+	ViaOrgRoutes         []proxy.ViaOrgRoute      // a runner's via_org destinations; set only by placement's local copy
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).

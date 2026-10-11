@@ -74,6 +74,9 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, self
 		UpstreamProxySecretRef: sc.UpstreamProxySecretRef, LocalSelfDefinedComponents: selfDefinedAllowed,
 		TrustedOutput: localTrustedOutputRun(run), SelfDefinedComponents: selfDefinedSnapshotNames(comps),
 	}
+	if p.Delivery, err = s.storedDeliveryPolicy(ctx); err != nil {
+		return placement.LocalPlan{}, err
+	}
 	owner := runIdentitySubject(ctx, run.CreatedBy)
 	byID := map[uuid.UUID]types.CredentialGrant{}
 	for _, g := range rows {
@@ -155,6 +158,11 @@ func (s *Server) localProxyGrantOrigins(ctx context.Context, owner string, byID 
 		}
 		if scope, e := types.DecodeGitPATScope(row.Spec.Scope); e == nil && hostEqual(scope.Host, host) {
 			stamp("ProxyConfig.PATGrants["+host+"]", row)
+		}
+	}
+	for repo, id := range spec.ProxyConfig.GitGrants {
+		if row, found := byID[id]; found && row.Spec.Kind == types.GrantGitHubToken {
+			stamp("ProxyConfig.GitGrants["+repo+"]", row)
 		}
 	}
 	for i, id := range spec.ProxyConfig.BrokeredPATGrantIDs {
