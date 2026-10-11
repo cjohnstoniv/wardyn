@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -91,6 +92,13 @@ type Peer struct {
 	stopped   chan struct{}
 	lastPong  atomic.Pointer[time.Time]
 	ackWake   chan struct{}
+	// writing is when the write in progress began, nil between writes.
+	writing atomic.Pointer[time.Time]
+	// pongDue (the latest PING payload) and owed (dropped connection credit)
+	// wait under mu for the one worker that answers them.
+	pongDue   []byte
+	owed      int64
+	replyWake chan struct{}
 }
 
 // NewPeer builds a peer; Run drives it.
@@ -106,7 +114,7 @@ func NewPeer(conn Conn, cfg PeerConfig) *Peer {
 		calls: map[uint32]*pendingCall{}, inCalls: map[uint32]context.CancelFunc{},
 		streams: map[uint32]*Stream{}, parked: map[uint32]*Stream{}, byCall: map[uint32][]uint32{},
 		done: make(chan struct{}), stopped: make(chan struct{}),
-		ackWake: make(chan struct{}, 1),
+		ackWake: make(chan struct{}, 1), replyWake: make(chan struct{}, 1),
 	}
 	if cfg.NextID != 0 {
 		p.ids.next = cfg.NextID
@@ -219,7 +227,7 @@ func (p *Peer) sendFrame(ctx context.Context, f Frame) (uint64, error) {
 	// The caller's ctx bounds only the wait for replay room. The frame is
 	// written under the link's ctx: a write whose ctx ends closes the shared
 	// connection, so a caller giving up would take every stream and call down.
-	if err := p.conn.WriteFrame(p.ctx, f); err != nil {
+	if err := p.write(p.ctx, f); err != nil {
 		// A cancelled write can have sent any prefix of the frame. Resume is
 		// required before another sequence is safe to send on this link.
 		p.fail(err)
@@ -228,10 +236,20 @@ func (p *Peer) sendFrame(ctx context.Context, f Frame) (uint64, error) {
 	return f.Seq, nil
 }
 
+// write puts one frame on the socket; the caller holds the write lock. The
+// start time lets keepalive fail a link whose write has stopped moving.
+func (p *Peer) write(ctx context.Context, f Frame) error {
+	start := time.Now()
+	p.writing.Store(&start)
+	defer p.writing.Store(nil)
+	return p.conn.WriteFrame(ctx, f)
+}
+
 // Run reads frames until the link ends and returns the reason.
 func (p *Peer) Run(ctx context.Context) error {
 	defer close(p.stopped)
 	go p.sendAcks()
+	go p.sendReplies()
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -320,7 +338,10 @@ func (p *Peer) handleFrame(f Frame) error {
 		if _, err := DecodePing(f.Payload); err != nil {
 			return err
 		}
-		go p.send(p.ctx, Frame{Type: TypePong, Payload: f.Payload}) //nolint:errcheck // keepalive; a failed pong is the link going down
+		p.mu.Lock()
+		p.pongDue = f.Payload
+		p.mu.Unlock()
+		p.wakeReplies()
 	case TypePong:
 		if _, err := DecodePing(f.Payload); err != nil {
 			return err
@@ -452,6 +473,36 @@ func (p *Peer) onReset(id, code uint32) {
 	}
 	if s != nil {
 		s.abort(code)
+	}
+}
+
+func (p *Peer) wakeReplies() {
+	select {
+	case p.replyWake <- struct{}{}:
+	default:
+	}
+}
+
+// One worker answers PINGs and returns dropped credit, each coalesced (the
+// latest PING, the sum of credit), so a peer that sends faster than this side
+// can write cannot create a goroutine per frame.
+func (p *Peer) sendReplies() {
+	for {
+		select {
+		case <-p.replyWake:
+		case <-p.done:
+			return
+		}
+		p.mu.Lock()
+		pong, owed := p.pongDue, p.owed
+		p.pongDue, p.owed = nil, 0
+		p.mu.Unlock()
+		if pong != nil && p.send(p.ctx, Frame{Type: TypePong, Payload: pong}) != nil {
+			return
+		}
+		if owed > 0 && p.send(p.ctx, Frame{Type: TypeWindow, Payload: EncodeWindow(uint32(min(owed, math.MaxUint32)))}) != nil {
+			return
+		}
 	}
 }
 
