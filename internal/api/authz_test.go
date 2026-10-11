@@ -434,6 +434,11 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/people":                    {class: classSecurity},
 	"POST /api/v1/people/{principal}/tokens": {class: classSecurity},
 	"GET /api/v1/people/{principal}/tokens":  {class: classSecurity},
+	// 0.9 invitations (#1508): the admin half is the security tier, the claim the signed-in person's.
+	"POST /api/v1/people/{principal}/invitations": {class: classSecurity},
+	"GET /api/v1/people/{principal}/invitations":  {class: classSecurity},
+	"GET /api/v1/invitations":                     {class: classSecurity},
+	"DELETE /api/v1/invitations/{id}":             {class: classSecurity},
 	// 0.8.6: the person erasure (ar-l1.4). Security tier, like the credential erase
 	// it generalises: it removes reach and returns no record's content.
 	"POST /api/v1/people/{principal}/erasure": {class: classSecurity},
@@ -623,6 +628,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/me/tokens":         {class: classMember},
 	"POST /api/v1/me/tokens":        {class: classMember},
 	"DELETE /api/v1/me/tokens/{id}": {class: classMember},
+	// The claim answers 404 to anyone but its target, so the matrix's member probe sees a non-block.
+	"GET /api/v1/me/invitations":             {class: classMember},
+	"POST /api/v1/me/invitations/{id}/claim": {class: classMember},
 	// /me/capabilities is the member-safe twin of GET /permissions above: it
 	// answers only for the caller's OWN subjects (ListCapabilityGrantsFor), so
 	// it sits on r like every other /me/* read, not operatorOnly.
@@ -1640,8 +1648,9 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// write on the SUPER tier (= 64 SUPER).
 	// 0.9 runner revoke, DELETE /runners/{id}, is the security tier's (= 68 SEC).
 	// #1510's 3 /shared-secrets routes are SUPER (= 67 SUPER).
-	if sec != 68 || super != 67 {
-		t.Errorf("tier split = %d security / %d admin, want 68 / 67 (the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes)", sec, super)
+	// 0.9 invitations add the security tier's create, two lists and revoke (= 72 SEC).
+	if sec != 72 || super != 67 {
+		t.Errorf("tier split = %d security / %d admin, want 72 / 67 (the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes)", sec, super)
 	}
 }
 

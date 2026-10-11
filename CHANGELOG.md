@@ -16,9 +16,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `runner_pool_use_policies`, and `SELECT, INSERT, UPDATE` on `credential_delivery_policy`,
   `runner_registration_tokens`, `audit_delivery_cursors`, `runner_spool_cursors`, `runner_executions`,
   `runner_execution_exits`, `runner_inventory_candidates`, `runner_inventory_observations`, `runner_pools`,
-  `runner_pool_org_defaults` and `secret_owner_generations`. Without the `runner_pools` grants wardynd refuses to
-  start at the runner pool bootstrap. Without the `provider_connection_changes` grant every secret write fails once
-  migration 0143's trigger on `secrets` is in place.
+  `runner_pool_org_defaults`, `secret_owner_generations`, `person_invitations`, `service_identities` and
+  `api_token_moves`. Without the `runner_pools` grants wardynd refuses to start at the runner pool bootstrap.
+  Without the `provider_connection_changes` grant every secret write fails once migration 0143's trigger on
+  `secrets` is in place.
 - Credential erase fence (migration 0156): an older wardynd running beside the new one does not check a person's
   erase generation; finish the upgrade before erasing anyone.
 - Migration `0145_audit_delivery_cursors` adds the `audit_delivery_cursors` table; nothing changes until a webhook
@@ -65,6 +66,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Migration `0153_run_experience` adds `agent_runs.experience`, the run mode a new client chose at launch; existing
   runs keep an empty value and their documented behaviour.
 - Migration `0154_run_agent_stopped_at` adds `agent_runs.agent_stopped_at`; existing runs keep it empty.
+- Migration `0157_invitations_service_identities` adds the `person_invitations`, `service_identities` and
+  `api_token_moves` tables (split-role grants: see the first item above) and lets the audit log record a `service`
+  actor. It refuses to run while any principal-keyed table already holds a name starting `service:`, naming the
+  first such table; rename or remove those rows first. Widening the audit actor check briefly locks `audit_events`
+  and its partitions.
 
 ### Added
 
@@ -206,6 +212,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - A background task cannot be entered: its terminal, interactive exec, every SSH channel (shell, exec, sftp, `wardyn
   sync`, port forwarding) and its web apps answer `409 run_background_only` (SSH refuses authentication), for every
   caller including a super admin. Logs, output, audit and the lifecycle controls stay.
+- An admin or security admin can invite a person by their identity-provider subject (`POST
+  /people/{principal}/invitations`); only that person, signed in, can claim the invitation, and the API token it
+  mints is shown once, to them alone. Invitations can be listed and revoked before they are claimed, and each one
+  expires.
 
 ### Changed
 
