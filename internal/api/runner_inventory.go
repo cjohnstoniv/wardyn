@@ -61,6 +61,7 @@ func (s *Server) runnerView(row types.Runner, runs int, admin bool) types.Runner
 		Online:         row.State == types.RunnerClaimed && s.runnerOnline(row.ID),
 		KeyFingerprint: row.KeyFingerprint, Version: row.Version, CreatedAt: row.CreatedAt,
 		ClaimedAt: row.ClaimedAt, LastSeenAt: row.LastSeenAt, RevokedAt: row.RevokedAt,
+		RevokedBy: row.RevokedBy, RevokeReason: row.RevokeReason,
 		PostureSource: row.PostureSource, RunsActive: runs,
 	}
 	if admin {

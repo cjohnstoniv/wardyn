@@ -138,15 +138,14 @@ type Config struct {
 	// The server always supplies OrgURL and Lookup from its own configuration.
 	RunnerHub remote.HubConfig
 	// RunnerOnline reports whether a claimed runner holds a live authenticated session with this
-	// process. Nil reads every runner as offline: online is never shown without that evidence.
+	// process. Nil defaults to Server.RunnerOnline, the runner hub's own view.
 	//
 	// ponytail: process-local. Under WARDYN_HA a replica that does not hold a runner's session
 	// answers offline for a runner attached to another; the upgrade is a shared presence read.
 	RunnerOnline func(id uuid.UUID) bool
 	// RunnersDisabled runs after runners are switched off (a true→false change), once the write and
-	// its audit row are done and the site-config lock is released. The runner hub ends every runner
-	// session here; nil does nothing, so until it is wired, off stops new registrations, claims and
-	// connections and live sessions end when their runner reconnects.
+	// its audit row are done and the site-config lock is released. Nil defaults to
+	// Server.RunnersDisabled, which ends every runner session this process holds.
 	RunnersDisabled func(ctx context.Context)
 	// AdminToken gates the public API (constant-time bearer compare). Empty
 	// disables the public API entirely (fail closed) except /healthz.
@@ -909,6 +908,12 @@ func New(cfg Config) *Server {
 		},
 	}
 	s.scimState = newSCIMState()
+	if s.cfg.RunnerOnline == nil {
+		s.cfg.RunnerOnline = s.RunnerOnline
+	}
+	if s.cfg.RunnersDisabled == nil {
+		s.cfg.RunnersDisabled = s.RunnersDisabled
+	}
 	if cfg.PreflightRatePerMin > 0 {
 		s.preflightLimiter = &principalLimiter{rate: float64(cfg.PreflightRatePerMin) / 60, burst: preflightBurst, max: preflightLimiterMaxPeople}
 	}

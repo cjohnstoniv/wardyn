@@ -25,7 +25,7 @@ Migration `0142_runner_registration` adds hashed single-use registration tokens 
 | `runners.enabled` true | Identity and route authorization checks still apply. |
 | Generic `PUT /site-config` | Retains stored runner settings; cannot enable or disable runners. |
 
-An administrator turns runners on at **Admin → Runners**, or with `PUT /api/v1/runners/settings {"enabled": true}`; only a super admin can, and each change is audited as `runners.enabled.set`. Turning on is refused until `WARDYN_RUNNER_ORG_URL` (and the control-plane URL) is HTTPS; `http` is accepted only for localhost. Turning off is never refused. Off stops new registrations, claims and stream connections; a runner that is already connected stays connected until it reconnects. Ending sessions on the switch (`Config.RunnersDisabled`) and re-reading it at run placement belong to the runner hub's wiring and are not in place yet. `PUT /site-config` names `runners` only to echo the stored value: a different one is refused with `site_config_runners_via_own_route`.
+An administrator turns runners on at **Admin → Runners**, or with `PUT /api/v1/runners/settings {"enabled": true}`; only a super admin can, and each change is audited as `runners.enabled.set`. Turning on is refused until `WARDYN_RUNNER_ORG_URL` (and the control-plane URL) is HTTPS; `http` is accepted only for localhost. Turning off is never refused. Off stops new registrations, claims and stream connections and ends every live runner session; every sandbox create on a runner re-reads the switch first. `PUT /site-config` names `runners` only to echo the stored value: a different one is refused with `site_config_runners_via_own_route`.
 
 ## Runner inventory and unused tokens
 
