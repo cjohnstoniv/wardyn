@@ -89,13 +89,13 @@ func (s *Stream) Read(b []byte) (int, error) {
 	}
 	n := copy(b, s.buf)
 	s.buf = s.buf[n:]
-	if !s.heldReleased {
-		s.p.held.Add(-int64(n))
-	}
-	s.unacked += int64(n)
 	grant := int64(0)
-	if s.unacked >= StreamWindow/4 {
-		grant, s.unacked = s.unacked, 0
+	if !s.heldReleased { // once released, these bytes were already returned to the sender
+		s.p.held.Add(-int64(n))
+		s.unacked += int64(n)
+		if s.unacked >= StreamWindow/4 {
+			grant, s.unacked = s.unacked, 0
+		}
 	}
 	s.mu.Unlock()
 	if grant > 0 {
@@ -122,7 +122,9 @@ func (s *Stream) Write(b []byte) (int, error) {
 		if err != nil {
 			return written, s.writeErr(err)
 		}
-		if err := s.p.send(s.ctx, Frame{Type: TypeData, Stream: s.id, Payload: b[written : written+n]}); err != nil {
+		// The frame is written under the link's ctx, not the stream's: a reset
+		// that cancels a write in progress would close the shared connection.
+		if err := s.p.send(s.p.ctx, Frame{Type: TypeData, Stream: s.id, Payload: b[written : written+n]}); err != nil {
 			return written, err
 		}
 		written += n
@@ -148,11 +150,13 @@ func (s *Stream) CloseWrite() error {
 	}
 	s.localClosed = true
 	both := s.remoteClosed
+	var owed int64
 	if both {
-		s.releaseHeldLocked()
+		owed = s.releaseHeldLocked()
 	}
 	s.mu.Unlock()
-	err := s.p.send(s.ctx, Frame{Type: TypeClose, Stream: s.id})
+	s.returnCredit(owed)
+	err := s.p.send(s.p.ctx, Frame{Type: TypeClose, Stream: s.id})
 	if both {
 		s.p.forget(s.id)
 		s.finish()
@@ -181,10 +185,11 @@ func (s *Stream) abort(code uint32) bool {
 		return false
 	}
 	s.reset = &ResetError{Code: code}
-	s.releaseHeldLocked()
+	owed := s.releaseHeldLocked()
 	s.buf = nil
 	s.cond.Broadcast()
 	s.mu.Unlock()
+	s.returnCredit(owed)
 	s.send.Close()
 	s.cancel()
 	s.finish()
@@ -197,10 +202,12 @@ var errStreamOverflow = errors.New("runnerwire: stream window exceeded")
 
 func (s *Stream) deliver(b []byte) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.reset != nil {
+		s.mu.Unlock()
+		s.returnCredit(int64(len(b))) // discarded, so it is the sender's again
 		return nil
 	}
+	defer s.mu.Unlock()
 	if int64(len(s.buf)+len(b)) > StreamWindow {
 		return errStreamOverflow
 	}
@@ -215,22 +222,45 @@ func (s *Stream) deliver(b []byte) error {
 
 func (s *Stream) remoteClose() (both bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.remoteClosed = true
 	s.cond.Broadcast()
-	if s.localClosed {
-		s.releaseHeldLocked()
+	both = s.localClosed
+	var owed int64
+	if both {
+		owed = s.releaseHeldLocked()
 		s.finish()
 	}
-	return s.localClosed
+	s.mu.Unlock()
+	s.returnCredit(owed)
+	return both
 }
 
 // releaseHeldLocked stops counting the unread buffer against the connection,
 // once. A stream that is closed on both ends leaves the peer's table, so a
-// holder that never drains it must not keep its bytes in Peer.held.
-func (s *Stream) releaseHeldLocked() {
-	if !s.heldReleased {
-		s.heldReleased = true
-		s.p.held.Add(-int64(len(s.buf)))
+// holder that never drains it must not keep its bytes in Peer.held. It returns
+// the connection credit the sender is owed for the stream: bytes read and not
+// yet granted, and bytes never read.
+func (s *Stream) releaseHeldLocked() int64 {
+	if s.heldReleased {
+		return 0
 	}
+	s.heldReleased = true
+	s.p.held.Add(-int64(len(s.buf)))
+	owed := s.unacked + int64(len(s.buf))
+	s.unacked = 0
+	return owed
+}
+
+// returnCredit gives n bytes of an ended stream back to the sender's connection
+// window, with whatever grant is holding in connPend, so nothing a finished
+// stream received stays withheld. It does not block: the read loop calls it.
+func (s *Stream) returnCredit(n int64) {
+	if n <= 0 {
+		return
+	}
+	p := s.p
+	p.mu.Lock()
+	n, p.connPend = n+p.connPend, 0
+	p.mu.Unlock()
+	go p.send(p.ctx, Frame{Type: TypeWindow, Payload: EncodeWindow(uint32(n))}) //nolint:errcheck // a failed WINDOW is the link going down
 }
