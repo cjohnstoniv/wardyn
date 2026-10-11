@@ -21,7 +21,7 @@ func TestExecutionResultRequiresExactDurableIntent(t *testing.T) {
 	if err != nil || !result.Attempted || result.ExecID != "" || result.Generation != gen || result.Operation != runnerwire.MethodExec {
 		t.Fatalf("ambiguous result %+v %v", result, err)
 	}
-	rows, err := m.State(ctx)
+	rows, err := allState(ctx, m)
 	if err != nil || len(rows) != 1 || rows[0].Execution == nil || *rows[0].Execution != result {
 		t.Fatalf("ambiguous STATE differs from query: %+v %v", rows, err)
 	}
@@ -40,7 +40,7 @@ func TestExecutionResultRequiresExactDurableIntent(t *testing.T) {
 	if err != nil || result.ExecID != "exec-1" {
 		t.Fatalf("bound result %+v %v", result, err)
 	}
-	rows, err = m.State(ctx)
+	rows, err = allState(ctx, m)
 	if err != nil || len(rows) != 1 || rows[0].Execution == nil || *rows[0].Execution != result {
 		t.Fatalf("bound STATE differs from query: %+v %v", rows, err)
 	}
@@ -60,7 +60,7 @@ func TestStateConcurrentExecutionIntents(t *testing.T) {
 	go func() {
 		close(started)
 		for ctx.Err() == nil {
-			rows, err := m.State(ctx)
+			rows, err := allState(ctx, m)
 			if ctx.Err() != nil {
 				break
 			}

@@ -1211,6 +1211,19 @@ erases one person's retained records by explicit scope, in one audited act
   rest.
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
 
+- **A credential write that began before the erase never lands behind it.**
+  - The `credentials` scope advances the person's erase generation before it lists anything and again after the deletes, so a write that began between the two is refused as well.
+  - Every write of a stored credential reads that generation when it begins and is refused if it has moved: `409` `credential_erased_during_write`, nothing saved.
+  - A write that begins after the erase lands, so reconnecting works at once.
+  - The check is in Postgres, so it holds across wardynd replicas and in store mode (the value is not sent to Vault or Key Vault first).
+  - The `credential.erase` row's `write_fence` is `generation`, or `locks_only` for a store that keeps no generation: then only the in-process locks hold back a writer.
+  - Migration `0156_secret_owner_generations` adds one counter per person; an owner with no row is generation 0, so every existing credential keeps working.
+  - The counter holds a number and a time, never a credential, and refuses nothing later.
+  - After a person is erased, `secret_owner_generations` still holds their subject id, the counter and the time of its last change; Wardyn never deletes that row.
+  - It stays on purpose: deleting it would reset the counter to 0, and a write that began before the erase could land again.
+  - Provider connection-change records are removed by the same erase, and a provider purge that was writing them when the erase began finishes first, so none comes back.
+  - An older wardynd running beside this one does not check it: finish the upgrade before an erase.
+
 - The `recordings` scope fences each run present in the person's run list, including its bare cast, attach sessions
   and upload parts.
 - An upload still streaming when erasure completes cannot recreate one: its final save answers `410`
@@ -3708,7 +3721,9 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0151` (`0151_runner_revoked_by`) adds `runners.revoked_by` and `runners.revoke_reason` (`0139`'s table).
 - `0153` (`0153_run_experience`) adds `agent_runs.experience` (`0141`'s table), the run mode a new client chose at launch.
 - `0154` (`0154_run_agent_stopped_at`) adds `agent_runs.agent_stopped_at` (`0001`'s table), the time an outage-kept run's agent was stopped.
-- `0155` adds the pool binding columns to `agent_runs`.
+- `0155` (`0155_runner_asserted_subjects`) adds asserted-run columns to `runner_pending_actions` (`0139`'s table) and replaces its
+  immutability trigger function.
+- `0157` (`0157_run_pool_binding`) adds the pool binding to `agent_runs`.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

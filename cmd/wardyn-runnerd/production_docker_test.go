@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
@@ -91,11 +92,25 @@ func TestLocalRuntimeRequiresLeaseAndPersistsCreation(t *testing.T) {
 	if err := link.Send(ctx, runnerwire.Frame{Type: runnerwire.TypeLease, Payload: lease}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := remoteSub.CreateSandbox(ctx, spec); err != nil {
+	created, err := remoteSub.CreateSandbox(ctx, spec)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := remoteSub.CreateSandbox(ctx, spec); err == nil {
 		t.Fatal("production lifecycle hooks permitted ambiguous create retry")
+	}
+	exec, err := remoteSub.ExecStream(ctx, created.Ref, runner.ExecSpec{Argv: []string{"cat"}})
+	if err != nil {
+		t.Fatalf("exec into the created sandbox: %v", err)
+	}
+	_ = exec.Close()
+	unheld, err := sub.CreateSandbox(ctx, runner.SandboxSpec{RunID: uuid.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec, err := remoteSub.ExecStream(ctx, placement.RunnerRefPrefix(row.ID.String())+unheld.Ref, runner.ExecSpec{Argv: []string{"cat"}}); err == nil {
+		_ = exec.Close()
+		t.Fatal("exec reached a sandbox the runner did not create")
 	}
 	cancel()
 	// Both services stop before the lifecycle lock is released for restart.

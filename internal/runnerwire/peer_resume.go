@@ -6,6 +6,7 @@ package runnerwire
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 )
 
@@ -60,25 +61,41 @@ func (p *Peer) ResumeConfig(ctx context.Context) (PeerConfig, error) {
 }
 
 func (p *Peer) keepalive(every time.Duration) {
-	p.lastPong.Store(time.Now().UnixNano())
+	start := time.Now()
+	p.lastPong.Store(&start)
 	tick := time.NewTicker(every)
 	defer tick.Stop()
+	// The PING is sent off the ticker, one at a time: a write stalled on the
+	// socket must not stop the missed-PONG check, which is what fails the link
+	// and so closes the socket under the stalled write.
+	var pinging atomic.Bool
 	for {
 		select {
 		case now := <-tick.C:
-			if now.Sub(time.Unix(0, p.lastPong.Load())) >= MissedPings*every {
+			if p.pongOverdue(now, every) {
 				p.fail(fmt.Errorf("%w: keepalive timeout", ErrLinkDown))
 				return
 			}
-			ctx, cancel := context.WithTimeout(p.ctx, every)
-			err := p.Send(ctx, Frame{Type: TypePing, Payload: EncodePing(now)})
-			cancel()
-			if err != nil {
-				p.fail(err)
-				return
+			if !pinging.CompareAndSwap(false, true) {
+				continue
 			}
+			go func() {
+				defer pinging.Store(false)
+				ctx, cancel := context.WithTimeout(p.ctx, every)
+				defer cancel()
+				if err := p.Send(ctx, Frame{Type: TypePing, Payload: EncodePing(now)}); err != nil {
+					p.fail(err)
+				}
+			}()
 		case <-p.done:
 			return
 		}
 	}
+}
+
+// pongOverdue reports whether MissedPings intervals have passed since the last
+// PONG. Both times keep their monotonic reading, so a wall-clock step neither
+// fails a healthy link nor delays failing a silent one.
+func (p *Peer) pongOverdue(now time.Time, every time.Duration) bool {
+	return now.Sub(*p.lastPong.Load()) >= MissedPings*every
 }

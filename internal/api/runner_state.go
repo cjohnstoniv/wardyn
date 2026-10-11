@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -26,6 +27,9 @@ func (s *Server) StatePageFromRunner(ctx context.Context, runnerID uuid.UUID, se
 		return store.ErrRunnerExecutionRefused
 	}
 	result, err := st.IntakeRunnerStatePage(ctx, runnerID, sessionID, page)
+	if err == nil && result.AssertedCapHeld {
+		s.RecordRunnerInventoryHold(ctx, runnerID)
+	}
 	if err != nil || !result.Complete {
 		return err
 	}
@@ -40,6 +44,30 @@ func (s *Server) StatePageFromRunner(ctx context.Context, runnerID uuid.UUID, se
 		return store.ErrRunnerReconciliationRequired
 	}
 	return nil
+}
+
+// RecordRunnerInventoryHold writes runner.inventory.hold: a page reported a
+// run the org has no row for, past the runner's cap of asserted subjects, so
+// nothing was queued for it and the runner stays not-ready until an operator
+// acts. Its owner and admins see the runner's audit; other runners continue.
+func (s *Server) RecordRunnerInventoryHold(ctx context.Context, id uuid.UUID) {
+	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "runner:"+id.String(),
+		placement.ActionRunnerInventoryHold, id.String(), "denied", mustJSON(map[string]any{"reason": "asserted_cap", "cap": types.RunnerAssertedSubjectCap})))
+}
+
+// purgeAssertedRunnerSubjects deletes the org rows of asserted subjects whose
+// quarantine succeeded more than types.RunnerAssertedEvidenceTTL ago, on the
+// orphan sweep's cadence.
+func (s *Server) purgeAssertedRunnerSubjects(ctx context.Context) error {
+	st, ok := s.cfg.Store.(store.PG)
+	if !ok {
+		return nil
+	}
+	n, err := st.PurgeAssertedRunnerSubjects(ctx)
+	if n > 0 {
+		slog.InfoContext(ctx, "wardynd: purged asserted runner subjects", slog.Int64("rows", n))
+	}
+	return err
 }
 
 type runnerLossClaim struct {
