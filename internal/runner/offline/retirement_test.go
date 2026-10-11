@@ -70,7 +70,7 @@ func TestRetirementRequiresExactDrainedEvidenceAndRetainsTombstones(t *testing.T
 	if !m.state.Runs[id].Retired || m.state.Runs[id].Ref != id.String() || len(m.state.Actions) != 3 {
 		t.Fatal("retirement pruned identity or receipts")
 	}
-	if rows, err := m.State(t.Context()); err != nil || len(rows) != 0 {
+	if rows, err := allState(t.Context(), m); err != nil || len(rows) != 0 {
 		t.Fatal("retired history remains live inventory")
 	}
 	if err := m.BeforeCreate(t.Context(), runner.SandboxSpec{RunID: id}); err == nil {
@@ -141,7 +141,7 @@ func TestRetirementRecoversSealedSpoolBeforeLocalReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if rows, err := reopened.State(t.Context()); err != nil || len(rows) != 1 || rows[0].SandboxPresent {
+	if rows, err := allState(t.Context(), reopened); err != nil || len(rows) != 1 || rows[0].SandboxPresent {
 		t.Fatal("sealed retirement restarted evidence producers")
 	}
 	if got, err := reopened.apply(t.Context(), a); err != nil || got.Outcome != "success" {
