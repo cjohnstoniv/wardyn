@@ -61,7 +61,7 @@ type backgroundDoor struct {
 // denies there.
 var backgroundDoors = []backgroundDoor{
 	{Door: "terminal", Owner: "H4 (attach relay), H5", Symbols: []string{"handleAttachTicket", "handleAttachWS", "handleAttachTakeover"},
-		Routes: []string{"POST /runs/{id}/attach-ticket", "POST /runs/{id}/attach/ticket", "GET /runs/{id}/attach", "POST /runs/{id}/attach/takeover"}},
+		Routes: []string{"POST /runs/{id}/attach-ticket", "POST /runs/{id}/attach/ticket", "GET /runs/{id}/attach", "POST /runs/{id}/attach/takeover"}, Enforced: true},
 	{Door: "interactive exec", Owner: "H4", Symbols: []string{"establishExec"}},
 	{Door: "SSH access", Owner: "SSH gateway owner", Symbols: []string{"sshAuth", "handleSSHSessionChannel", "handleSSHDirectTCPIP"}},
 	{Door: "web application gateway", Owner: "UI gateway owner", Symbols: []string{"handleUIEnter", "handleUIRelay", "handleUIBind"}},

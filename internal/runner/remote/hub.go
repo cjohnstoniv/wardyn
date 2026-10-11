@@ -174,15 +174,39 @@ func (h *Hub) serveClaimed(ctx context.Context, conn runnerwire.Conn, row types.
 		}
 		return err
 	}
-	select {
-	case <-peer.Done():
-	case <-ctx.Done():
-		peer.Close()
-	case <-h.ctx.Done():
-		peer.Close()
-	}
+	h.await(ctx, row.ID, peer)
 	h.ended(row.ID, s, peer)
 	return peer.Err()
+}
+
+// revokeRecheck is how often a live session re-reads its stored runner row.
+// Revoke reaches only the replica holding the session; under WARDYN_HA the
+// revocation may commit on another one, and this re-read is how the holder
+// learns of it.
+var revokeRecheck = runnerwire.PingInterval
+
+// await holds the session until it ends, sending REVOKED once the stored row
+// says the runner was revoked, wherever that committed.
+func (h *Hub) await(ctx context.Context, id uuid.UUID, peer *runnerwire.Peer) {
+	recheck := time.NewTicker(revokeRecheck)
+	defer recheck.Stop()
+	for {
+		select {
+		case <-peer.Done():
+			return
+		case <-ctx.Done():
+			peer.Close()
+			return
+		case <-h.ctx.Done():
+			peer.Close()
+			return
+		case <-recheck.C:
+			// A failed read is not a revocation; the next tick reads again.
+			if row, err := h.cfg.Lookup(ctx, id); err == nil && (row.State == types.RunnerRevoked || row.RevokedAt != nil) {
+				_ = h.Revoke(ctx, id)
+			}
+		}
+	}
 }
 
 func (h *Hub) dropEmpty(id uuid.UUID, s *hubSession) {
