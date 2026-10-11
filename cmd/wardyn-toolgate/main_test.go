@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -366,5 +367,40 @@ func TestSummarizeCapsAndFallsBack(t *testing.T) {
 	long := strings.Repeat("x", maxCmdBytes+100)
 	if s := summarize("Bash", json.RawMessage(`{"command":"`+long+`"}`)); len(s) > maxCmdBytes+20 || !strings.HasSuffix(s, "…[truncated]") {
 		t.Fatalf("cap not applied: len=%d", len(s))
+	}
+}
+
+// The gate sends the credential dispatch gave its harness as a Bearer token on
+// the approval request (the proxy names the harness from it, never from the
+// body), and sends none when it was given none.
+func TestGateSendsItsHarnessCredential(t *testing.T) {
+	for name, cred := range map[string]string{"with a credential": "harness-credential", "without": ""} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("WARDYN_TOOLGATE_CREDENTIAL", cred)
+			var auth, body string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost {
+					auth = r.Header.Get("Authorization")
+					b, _ := io.ReadAll(r.Body)
+					body = string(b)
+					_ = json.NewEncoder(w).Encode(map[string]string{"state": "APPROVED"})
+				}
+			}))
+			defer srv.Close()
+			g := &gate{base: srv.URL, poll: time.Millisecond, deadline: time.Second, client: directClient()}
+			if pr, _ := g.decide(json.RawMessage(`{"arguments":{"tool_name":"Bash","input":{"command":"ls"}}}`)).(map[string]any); pr == nil {
+				t.Fatal("no result")
+			}
+			want := ""
+			if cred != "" {
+				want = "Bearer " + cred
+			}
+			if auth != want {
+				t.Errorf("Authorization = %q, want %q", auth, want)
+			}
+			if strings.Contains(body, "harness") || (cred != "" && strings.Contains(body, cred)) {
+				t.Errorf("the credential or a harness claim is in the body: %s", body)
+			}
+		})
 	}
 }
