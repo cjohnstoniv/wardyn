@@ -297,6 +297,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   count cannot race a sign-in (#1828).
 - A revive that would start an agent is refused at the concurrent-run cap before any identity is minted or image
   pulled, and approval notifications carry the next later SLA tier still ahead (#1825).
+
+
+## [0.8.9] — 2026-10-09
+
+### Before you upgrade
+
 - Migration `0133_recording_erasures` adds durable per-run recording fences. Take a database dump before
   upgrading; rollback requires restoring that dump. Filesystem deployments must retain the recording
   root's `.erased` directory and `*.lock` files alongside the recordings.
