@@ -22,7 +22,7 @@ import (
 // calls to a nil interface. The api layer type-asserts and runs no lease sweep
 // when a store lacks it; production is always PG.
 type RunLeaser interface {
-	// ListLeasedRuns returns every RUNNING run that has an end or is kept.
+	// ListLeasedRuns returns every RUNNING run that has an end, a lifetime cap or is kept.
 	ListLeasedRuns(ctx context.Context) ([]types.AgentRun, error)
 	// MarkRunEnded marks run id kept-and-ended at now, only while still
 	// RUNNING, not already kept, and its end is at or before now; clears a
@@ -92,7 +92,7 @@ var _ RunLeaser = PG{}
 // terminal run has nothing left to end.
 func (s PG) ListLeasedRuns(ctx context.Context) ([]types.AgentRun, error) {
 	q := `SELECT ` + runCols + ` FROM agent_runs
-		WHERE state = $1 AND (ends_at IS NOT NULL OR lost_at IS NOT NULL)`
+		WHERE state = $1 AND (ends_at IS NOT NULL OR lost_at IS NOT NULL OR lifetime_cap_at IS NOT NULL)`
 	return collect(ctx, s.Pool, "list", "leased runs", q, []any{string(types.RunRunning)}, scanRun)
 }
 

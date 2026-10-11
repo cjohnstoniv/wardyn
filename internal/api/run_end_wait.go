@@ -115,11 +115,7 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 	case present["wait_budget_sec"] && req.WaitBudgetSec == nil:
 		writeErrorReason(w, http.StatusBadRequest, reasonRunWaitBudgetNotANumber, "wait_budget_sec must be a number of seconds")
 		return
-	case isTerminalRunState(run.State):
-		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitAlreadyFinished, "run has already finished (state="+string(run.State)+")")
-		return
-	case run.LostReason == types.LostEnded && !s.endedFilesKept(run, s.cfg.Now()):
-		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitFilesGone, "run has ended and its files are no longer kept; its end cannot be moved")
+	case s.endWaitRunRefusal(w, run):
 		return
 	}
 	leaser, ok := s.cfg.Store.(store.RunLeaser)
@@ -175,6 +171,24 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 			})))
 	}
 	writeJSON(w, http.StatusOK, p.resp)
+}
+
+// endWaitRunRefusal answers a PATCH on a run whose state no longer lets its end
+// or wait move, and reports whether it did: a finished run; a run at or past
+// its lifetime cap, which the lease sweep is ending; a run kept by its end whose
+// files are gone.
+func (s *Server) endWaitRunRefusal(w http.ResponseWriter, run types.AgentRun) bool {
+	switch {
+	case isTerminalRunState(run.State):
+		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitAlreadyFinished, "run has already finished (state="+string(run.State)+")")
+	case run.LifetimeCapAt != nil && !s.cfg.Now().Before(*run.LifetimeCapAt):
+		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitAlreadyFinished, "run has reached its maximum lifetime and is ending; its end cannot be moved")
+	case run.LostReason == types.LostEnded && !s.endedFilesKept(run, s.cfg.Now()):
+		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitFilesGone, "run has ended and its files are no longer kept; its end cannot be moved")
+	default:
+		return false
+	}
+	return true
 }
 
 // endSetAudit is the run.end.set success row's data.

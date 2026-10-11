@@ -150,7 +150,7 @@ type AgentRun struct {
 	AutoStopAfterSec int    `json:"auto_stop_after_sec,omitempty"`
 	AgentExecID      string `json:"agent_exec_id,omitempty"` // docker exec id, so the crash reconciler can check agent liveness across a wardynd restart
 	FailureHint      string `json:"failure_hint,omitempty"`  // operator-facing reason a run FAILED before the agent started; display-only
-	// StatusDetail is what the substrate says this run awaits while STARTING; blanked on leaving STARTING except a TERMINAL failure reason (kept for postmortem).
+	// StatusDetail is what the substrate says this run awaits while STARTING, and a lifetime end reason ("lifetime: end_reached", "lifetime: max_lifetime_reached") on a run KILLED at its end or its maximum; blanked on leaving STARTING except a TERMINAL failure reason or a lifetime end reason (kept for postmortem).
 	StatusDetail string `json:"status_detail,omitempty"`
 	StatusReason string `json:"status_reason,omitempty"` // reason token parsed out of StatusDetail, derived at read, never stored
 	// AutonomyLevel freezes the level resolved at create, not the profile/posture that produced it (that's on the audit row).
