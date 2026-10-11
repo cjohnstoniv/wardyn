@@ -112,6 +112,13 @@ func TestPG_PoolLifetimeBoundsTheRunEnd(t *testing.T) {
 		}
 	}
 
+	// An ask past the pool's maximum is cut, never refused: the dry doors admit it.
+	overAsk := endBody("background", `"runner_pool_id":"`+pool.ID.String()+`"`+fmt.Sprintf(`,"ends_after_sec":%d`, 7*secDay))
+	for _, door := range placementDoors[1:] {
+		if w := e.admin(http.MethodPost, door, overAsk); w.Code != http.StatusOK {
+			t.Errorf("an over-ask at %s = %d %q, want 200", door, w.Code, wireReason(t, w))
+		}
+	}
 	run, warnings := e.createOn(pool, fmt.Sprintf(`,"ends_after_sec":%d`, 7*secDay))
 	if !atOffset(run, run.EndsAt, 2*time.Hour) || !atOffset(run, run.LifetimeCapAt, 2*time.Hour) || run.LifetimeCapSource != types.LimitSourcePool {
 		t.Errorf("ends %v, cap %v (%q), created %v; want both at two hours from the pool", run.EndsAt, run.LifetimeCapAt, run.LifetimeCapSource, run.CreatedAt)
@@ -130,4 +137,76 @@ func TestPG_PoolLifetimeBoundsTheRunEnd(t *testing.T) {
 	if code, _, raw := e.patchEnd(run, "null"); code != http.StatusForbidden {
 		t.Errorf("PATCH to No end = %d %s, want 403", code, raw)
 	}
+}
+
+// Governance tighter than the pool binds a member's end at every door, while the pool's maximum is
+// still the run's lifetime cap: a seven-day ask under a 30-minute lease and a two-hour pool ends at 30
+// minutes, says so in the 201, and is capped at two hours from the pool.
+func TestPG_PoolEndUnderTighterGovernance(t *testing.T) {
+	e := newPlacementEnv(t)
+	pool := e.lifetimePool("Two hours", `{"default_sec":3600,"max_sec":7200}`)
+	profile, err := e.pg.UpsertGovernanceProfile(context.Background(), types.GovernanceProfile{
+		Name: "half hour", CreatedBy: "seed", Ceiling: govTestPolicy,
+		Limits: types.GovernanceLimits{RunLimits: types.RunLimits{MaxEndAheadSec: 1800, AllowNoEnd: true, UserChangesLimits: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.seedAssignment(profile, e.personP)
+
+	body := endBody("background", `"runner_pool_id":"`+pool.ID.String()+`"`+fmt.Sprintf(`,"ends_after_sec":%d`, 7*secDay))
+	for _, door := range placementDoors[1:] {
+		if w := e.call(e.person, http.MethodPost, door, body); w.Code != http.StatusOK {
+			t.Errorf("%s = %d %q, want 200", door, w.Code, wireReason(t, w))
+		}
+	}
+	w := e.call(e.person, http.MethodPost, "/api/v1/runs", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d %s", w.Code, w.Body)
+	}
+	var resp struct {
+		types.AgentRun
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	run, err := e.pg.GetRun(context.Background(), resp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !atOffset(run, run.EndsAt, 30*time.Minute) || !atOffset(run, run.LifetimeCapAt, 2*time.Hour) || run.LifetimeCapSource != types.LimitSourcePool {
+		t.Errorf("ends %v, cap %v (%q); want 30 minutes from governance and a two-hour cap from the pool", run.EndsAt, run.LifetimeCapAt, run.LifetimeCapSource)
+	}
+	if !slices.ContainsFunc(resp.Warnings, func(w string) bool { return strings.Contains(w, "your admin") }) {
+		t.Errorf("warnings %q do not name governance as the limit that cut the end", resp.Warnings)
+	}
+}
+
+// The end PATCH is held to the cap the run captured at create, whatever happens to the pool after: a
+// pool whose lifetime is raised, and then deleted, leaves the run's two-hour cap where it was.
+func TestPG_EndPatchKeepsTheCapturedPoolCap(t *testing.T) {
+	e := newPlacementEnv(t)
+	pool := e.lifetimePool("Two hours", `{"default_sec":3600,"max_sec":7200}`)
+	run, _ := e.createOn(pool, "")
+	far := `"` + run.CreatedAt.Add(30*24*time.Hour).UTC().Format(time.RFC3339) + `"`
+	heldToCap := func(when string) {
+		t.Helper()
+		code, resp, raw := e.patchEnd(run, far)
+		if code != http.StatusOK || !atOffset(run, resp.EndsAt, 2*time.Hour) || !slices.Contains(resp.Capped, "ends_at") || resp.LatestEndSource != types.LimitSourcePool {
+			t.Errorf("%s: PATCH = %d %s; want 200 capped at the two-hour cap captured at create", when, code, raw)
+		}
+	}
+
+	raised := `{"background":{"cpu_millis":{"default":500,"cap":4000},"memory_mib":{"default":512,"cap":8192},` +
+		`"lifetime":{"default_sec":3600,"max_sec":2592000}},"barriers":["CC1","CC2","CC3"]}`
+	if w := e.admin(http.MethodPut, poolPath(pool.ID), fmt.Sprintf(`{"revision":%d,"limits":%s}`, e.revision(pool.ID), raised)); w.Code != http.StatusOK {
+		t.Fatalf("raise the pool's lifetime = %d %s", w.Code, w.Body)
+	}
+	heldToCap("after the pool's lifetime was raised")
+
+	if w := e.admin(http.MethodDelete, poolPath(pool.ID), ""); w.Code != http.StatusNoContent {
+		t.Fatalf("delete pool = %d %s", w.Code, w.Body)
+	}
+	heldToCap("after the pool was deleted")
 }
