@@ -756,7 +756,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A key that cannot be had when a row is written never loses the row or writes it in the clear.
 - It waits in the audit spool under the `wardyn-audit-pending-key` platform key, and the spool drain re-seals it.
 - `full` is `fields` and also stores a human `actor` as `subject:<uuid>` (the id of the person's oldest identity row).
-- It stores the `target` of a person row (`person.create` and the [closed list](AUDIT-ACTIONS.md#sealed-fields)) the same way.
+- It stores the `target` of a person row ([closed list](AUDIT-ACTIONS.md#sealed-fields)) the same way, except where the person has no identity row: `person.create` and a token for a person not yet signed in keep the target clear.
 - So after erasure the person's rows no longer name them.
 - **SIEM rules keyed on `actor` see subject ids, not names, from the moment it is turned on**.
 - And a person with no identity row (one who never signed in) keeps their name in `actor`.

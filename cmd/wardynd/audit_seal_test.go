@@ -111,6 +111,14 @@ func TestSealingRecorderUnderFullNeedsTheSealerForAPersonTargetRow(t *testing.T)
 			t.Errorf("%s under full: %v; want it passed through", ev.Action, err)
 		}
 	}
+	// A caller-typed subject target is never passed through, in any mode: a reader would render it as the person.
+	forged := types.AuditEvent{ActorType: types.ActorHuman, Actor: "admin", Action: "person.token.create", Target: audit.SubjectActorPrefix + uuid.NewString()}
+	for _, mode := range []audit.SealMode{audit.SealOff, audit.SealFields, audit.SealFull} {
+		sunk := &captureRecorder{}
+		if err := (sealingRecorder{inner: sunk, src: newAuditSealSource(mode)}).Record(t.Context(), forged); err == nil || len(sunk.evs) != 0 {
+			t.Errorf("mode %s: a typed subject target was recorded (err %v, rows %d)", mode, err, len(sunk.evs))
+		}
+	}
 	inner = &captureRecorder{}
 	fields := sealingRecorder{inner: inner, src: newAuditSealSource(audit.SealFields)}
 	if err := fields.Record(t.Context(), exchange); err != nil || len(inner.evs) != 1 || inner.evs[0].Target != "alice" {

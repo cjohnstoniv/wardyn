@@ -209,6 +209,9 @@ func rewrite(obj json.RawMessage, path []string, fn func(json.RawMessage) (json.
 // the spool, never to the store. No path writes a personal field in the clear;
 // when even the pending key is missing, Seal fails.
 func (s *Sealer) Seal(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, bool, error) {
+	if s.Subjects != nil && ForgedSubject(ev) {
+		return ev, false, fmt.Errorf("audit seal: %s carries a %s string in its actor or target; only Seal writes one", ev.Action, SubjectActorPrefix)
+	}
 	out, pending, err := s.sealFields(ctx, ev)
 	if err != nil {
 		return out, pending, err

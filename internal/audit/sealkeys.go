@@ -95,16 +95,20 @@ var UnsealedActions = []string{"person.erasure", "credential.erase", "principal_
 //   - ssh_key.delete (a key's fingerprint, or the principal an admin cleared),
 //   - key_domain.assignment.set and .delete ("user:<principal>", "group:<name>", "all").
 //
-// Also absent: UnsealedActions (the record of an erasure names the person in the
-// clear), and every row whose target is an id (person.deprovision's and
-// scim.user.write's identity-row id, token.create's token id).
+// Also absent:
+//   - person.create, whose person is made before their first sign-in and so has
+//     no identity row to take a subject from; a person.token.create for such a
+//     person stays clear too,
+//   - UnsealedActions (the record of an erasure names the person in the clear),
+//   - every row whose target is an id (person.deprovision's and scim.user.write's
+//     identity-row id, token.create's token id).
 var personTargetActions = []string{
-	"person.create",       // handleCreatePerson: the created person's principal
-	"person.attach",       // peopleKeying.Attached and attachIgnored: the attached person's principal
-	"person.token.create", // handleMintPersonAPIToken: the principal in the path
-	"delegation.exchange", // handleTokenExchange: the verified subject of the person the portal acts for
-	"session.revoke",      // handleRevokeSessions: the supplied sub ("*" names no person and is kept)
-	"secret.list",         // handleListSecrets: the namespace owner an admin enumerated
+	"person.attach",            // peopleKeying.Attached and attachIgnored: the attached person's principal
+	"person.token.create",      // handleMintPersonAPIToken: the principal in the path
+	"delegation.exchange",      // handleTokenExchange: the verified subject of the person the portal acts for
+	"session.revoke",           // handleRevokeSessions: the supplied sub ("*" names no person and is kept)
+	"secret.list",              // handleListSecrets: the namespace owner an admin enumerated
+	"auth.signin_unserialized", // lockLoginSupersede (harnesscred_supersede.go): the signing-in person, the login run's creator
 }
 
 // PersonTargetActions is personTargetActions, sorted.

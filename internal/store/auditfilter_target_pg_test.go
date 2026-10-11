@@ -37,7 +37,7 @@ func TestPG_AuditFilter_TargetMatchesBothForms(t *testing.T) {
 	for _, label := range []string{"before", "other", "after", "otherSubject", "none"} {
 		ev := types.AuditEvent{
 			ID: uuid.New(), Time: base.Add(time.Duration(i) * time.Minute), ActorType: types.ActorHuman, Actor: "admin",
-			Action: "person.create", Target: seed[label], Outcome: "success",
+			Action: "person.token.create", Target: seed[label], Outcome: "success",
 		}
 		if err := store.InsertAuditEvent(ctx, pool, &ev); err != nil {
 			t.Fatalf("seed %s: %v", label, err)
@@ -57,7 +57,7 @@ func TestPG_AuditFilter_TargetMatchesBothForms(t *testing.T) {
 		"both forms":             {store.AuditFilter{Target: "alice@corp.example", TargetAlt: subject}, []string{"after", "before"}},
 		"the name alone":         {store.AuditFilter{Target: "alice@corp.example"}, []string{"before"}},
 		"a person with no alias": {store.AuditFilter{Target: "bob@corp.example"}, []string{"other"}},
-		"no target filter":       {store.AuditFilter{Action: "person.create"}, []string{"none", "otherSubject", "after", "other", "before"}},
+		"no target filter":       {store.AuditFilter{Action: "person.token.create"}, []string{"none", "otherSubject", "after", "other", "before"}},
 	} {
 		var want []string
 		for _, l := range tc.want {

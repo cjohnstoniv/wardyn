@@ -31,6 +31,16 @@ func (s *Sealer) sealsActor(ev types.AuditEvent) bool {
 		!strings.HasPrefix(ev.Actor, SubjectActorPrefix) && !slices.Contains(UnsealedActions, ev.Action)
 }
 
+// ForgedSubject reports whether ev carries a subject string no Seal wrote: a
+// human actor, or the target of a person-target action, that already begins with
+// SubjectActorPrefix. Unseal renders such a string as the person it names, so a
+// caller who typed one (a path segment, a request body) could read an erased
+// person's rows back; Seal refuses the row instead.
+func ForgedSubject(ev types.AuditEvent) bool {
+	return (ev.ActorType == types.ActorHuman && strings.HasPrefix(ev.Actor, SubjectActorPrefix)) ||
+		(SealsTarget(ev.Action) && strings.HasPrefix(ev.Target, SubjectActorPrefix))
+}
+
 // sealsTarget reports whether ev's target is stored as a subject: an action
 // whose target is a person's principal (personTargetActions), named, not
 // already a subject, and not an action whose row must stay readable after the

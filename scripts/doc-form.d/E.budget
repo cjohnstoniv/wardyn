@@ -8,5 +8,5 @@
 # docs/ENV.md 35973 adds 74 (0.9 G-sec-rest): WARDYN_KEK_REQUIRED covers new writes only and names the kek_local_rows row (#1977), and only the pinned codex is supported (#1979).
 # docs/ENV.md 35435 adds 42 over 35393 (0.9 F-1514): the WARDYN_REHEARSE_PG_DSN row, which the env-doc guard requires for the rehearsal's scratch database.
 # docs/ENV.md 36015 measured after F-1514 merge.
-# 0.9 G-seal-target (#1828): docs/ENV.md 36037 adds 22 over 36015 for the target sentence in the WARDYN_AUDIT_SEAL table cell and its details bullet.
-docs/ENV.md=36037 share=5
+# 0.9 G-seal-target (#1828): docs/ENV.md 36057 adds 42 over 36015 for the target sentence in the WARDYN_AUDIT_SEAL table cell and its details bullet.
+docs/ENV.md=36057 share=5
