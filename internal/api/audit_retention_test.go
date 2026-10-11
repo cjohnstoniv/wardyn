@@ -281,7 +281,7 @@ func TestDropAuditPartition_RefusesTheSweeperName(t *testing.T) {
 		req.Host, req.RemoteAddr = "127.0.0.1:8080", "127.0.0.1:54321"
 		req.Header.Set("X-Wardyn-Principal", principal)
 		w := httptest.NewRecorder()
-		New(cfg).Handler().ServeHTTP(w, req)
+		panicFails(t, New(cfg).Handler()).ServeHTTP(w, req)
 		return w, fake, h.audit
 	}
 
