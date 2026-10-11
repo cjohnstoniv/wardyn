@@ -389,6 +389,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   sending PONGs. PING replies, dropped-data credit and the answers to stream opens (refusals and accepts) no longer
   start a goroutine per frame; answers to opens are capped and a peer that overruns the cap ends its session.
   Revoking or switching off runners no longer hangs on such a session.
+- On a registered runner, a BYOI run's output no longer ends at its image selftest. The run's output is the task's
+  own, and the selftest's output goes to the runner's log.
 
 
 ## [0.8.9] — 2026-10-09

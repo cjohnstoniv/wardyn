@@ -12,6 +12,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -57,7 +58,12 @@ type Config struct {
 	Resident func(context.Context, string, json.RawMessage) (any, error)
 }
 
-type Dispatcher struct{ cfg Config }
+type Dispatcher struct {
+	cfg Config
+	// selftests holds the local refs of BYOI sandboxes whose selftest has not
+	// run yet (awaitSelftest).
+	selftests sync.Map
+}
 
 func New(cfg Config) (*Dispatcher, error) {
 	id, err := uuid.Parse(cfg.RunnerID)
@@ -172,6 +178,7 @@ func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint3
 		if err := d.cfg.BindOutput(a.Spec.RunID, sandbox.Ref); err != nil {
 			return nil, d.rollbackCreate(ctx, a, sandbox.Ref, err)
 		}
+		d.awaitSelftest(sandbox.Ref, a.Spec.Image)
 	}
 	sandbox.Ref = placement.RunnerRefPrefix(d.cfg.RunnerID) + sandbox.Ref
 	return runnerwire.CreateSandboxResult{Sandbox: sandbox}, nil
@@ -262,6 +269,9 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 	sub := d.cfg.Substrate
 	switch method {
 	case runnerwire.MethodExec:
+		if id, ok, err := d.execSelftest(ctx, ref, a.Argv); ok {
+			return runnerwire.ExecResult{ExecID: id}, err
+		}
 		id, err := sub.Exec(ctx, ref, a.Argv)
 		return runnerwire.ExecResult{ExecID: id}, err
 	case runnerwire.MethodWait:
