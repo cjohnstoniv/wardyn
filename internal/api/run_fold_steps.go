@@ -6,6 +6,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -351,7 +352,7 @@ func (s *Server) stepRunCap(f *runFold, rec *foldRecorder) bool {
 // authority on a race.
 func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
 	var refused bool
-	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.r.Context(), f.spec, f.ceiling))
+	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.r.Context(), f.spec, f.ceiling), time.Duration(f.end.capSec)*time.Second)
 	return !refused
 }
 
