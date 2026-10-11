@@ -22,6 +22,11 @@ const (
 	OverrideGitPATScope       OverrideKind = "git_pat_scope"       // repos, access or api of a git_pat grant
 	OverridePushDeny          OverrideKind = "push_rule_deny"      // a push deny path of one provider and organisation
 	OverridePushReview        OverrideKind = "push_rule_review"    // a push require-review path of one provider and organisation
+	OverrideRunHostAllow      OverrideKind = "run_host_allow"      // a host the person adds to the run's allowed list, on top of the base policy
+	OverrideRunHostWildcard   OverrideKind = "run_host_wildcard"   // the same, spelled with a wildcard
+	OverrideRunHostDeny       OverrideKind = "run_host_deny"       // a host the person adds to the run's denied list, on top of the base policy
+	OverrideFirstUseApproval  OverrideKind = "first_use_approval"  // how an unlisted destination is handled, chosen on top of the base policy
+	OverrideAllowAllEgress    OverrideKind = "allow_all_egress"    // request all other egress, on top of the base policy
 )
 
 // OverrideOp is what the person does to the entry.
@@ -33,6 +38,8 @@ const (
 	// OverrideNarrow reduces a value the source resolved: a smaller capability
 	// set, a subset of repositories, write to read.
 	OverrideNarrow OverrideOp = "narrow"
+	// OverrideSet chooses a run-wide scalar the source also holds.
+	OverrideSet OverrideOp = "set"
 )
 
 // OverrideDirection says whether the operation gives the run less reach or more.
@@ -91,6 +98,18 @@ var overrideNarrowing = []OverrideNarrowing{
 	{OverridePushDeny, OverrideRemove, OverrideWiden, OverrideRefused},
 	{OverridePushReview, OverrideAdd, OverrideTighten, OverrideAllowed},
 	{OverridePushReview, OverrideRemove, OverrideWiden, OverrideRefused},
+	// Run-wide hosts on top of a base policy. The base's own hosts are read-only:
+	// a person adds to either list and never edits or removes what the base says,
+	// which is why there is no remove row (a removal is refused by name, not asked
+	// of this table).
+	{OverrideRunHostAllow, OverrideAdd, OverrideWiden, OverrideClamped},
+	{OverrideRunHostWildcard, OverrideAdd, OverrideWiden, OverrideRefused},
+	{OverrideRunHostDeny, OverrideAdd, OverrideTighten, OverrideAllowed},
+	// Run-wide scalars. Both can reach further than the base, so both go through
+	// the ceiling: a value past it is clamped back, not refused. A stricter value
+	// is just as acceptable and the clamp leaves it alone.
+	{OverrideFirstUseApproval, OverrideSet, OverrideWiden, OverrideClamped},
+	{OverrideAllowAllEgress, OverrideSet, OverrideWiden, OverrideClamped},
 }
 
 // OverrideNarrowingTable returns the table, in its fixed order.
