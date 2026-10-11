@@ -248,6 +248,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- `wardyn run --experience` refuses `--model-provider` where no `--agent` would carry it, instead of dropping it.
 - The AWS KMS key service boots when `AWS_CA_BUNDLE` (or a shared-config `ca_bundle`) is set; corporate-CA installs
   no longer fail at startup.
 - A runner reporting a run the organisation has no row for (erased, or restored over) no longer blocks its other
