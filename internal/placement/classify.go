@@ -62,7 +62,9 @@ const (
 )
 
 // Entry is one row of the classification table. Delivery names the OD-12 class
-// key a refusal or mode applies to, when one does.
+// key a refusal or mode applies to, when one does. ViaOrg marks a delivery row
+// whose variant has the via_org shape (design §7.3): the organisation's egress
+// can serve it, so the class's configured via_org mode admits it.
 type Entry struct {
 	Struct   string
 	Field    string
@@ -72,6 +74,7 @@ type Entry struct {
 	Rule     Rule
 	Delivery string
 	Reason   Reason // set when the rule refuses
+	ViaOrg   bool
 }
 
 // Table is the one classification table. Create, dispatch and revive all read
@@ -109,11 +112,11 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "MITMCACertPEM", Class: ClassPlatform, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "MITMCAKeyPEM", Class: ClassPlatform, Rule: RuleAllow, Variant: "per run; gains MITM of one's own sandbox only"},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "stored api_key, own namespace", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
-	{Struct: StructProxyConfig, Field: "Injection", Variant: "operator namespace or shared component", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassAPIKey, Reason: ReasonPlacementCredential},
+	{Struct: StructProxyConfig, Field: "Injection", Variant: "operator namespace or shared component; via_org replaces it with a ViaOrgRoutes entry", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassAPIKey, Reason: ReasonPlacementCredential, ViaOrg: true},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "the person's model-provider key or own Claude sign-in", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "captured AWS SSO, credential_source per_user", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "captured AWS SSO shared", Class: ClassBrokered, Rule: RuleDelivery, Delivery: ClassAWSSSOBearer, Reason: ReasonPlacementCredential},
-	{Struct: StructProxyConfig, Field: "GitGrants", Variant: "GitHub App installation token", Class: ClassBrokered, Rule: RuleViaOrgRefuse, Delivery: ClassGitHubToken, Reason: ReasonPlacementCredential},
+	{Struct: StructProxyConfig, Field: "GitGrants", Variant: "GitHub App installation token; via_org keeps the repo allowlist and routes /wardyn/gh/ to the organisation", Class: ClassBrokered, Rule: RuleViaOrgRefuse, Delivery: ClassGitHubToken, Reason: ReasonPlacementCredential, ViaOrg: true},
 	{Struct: StructProxyConfig, Field: "PATGrants", Variant: "per_user stored PAT", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "PATGrants", Variant: "shared CredentialSource", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassGitPATBroker, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "BrokeredPATGrantIDs", Variant: "follows per_user PATGrants", Class: ClassOwn, Rule: RuleAllow},
@@ -158,15 +161,16 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "Attribution", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "PushRuleSets", Class: ClassExempt, Rule: RuleExempt, Variant: "push content rules per SCM entry; policy content, no credential"},
 	{Struct: StructProxyConfig, Field: "HarnessToolRules", Class: ClassExempt, Rule: RuleExempt, Variant: "tool rules per included harness; policy content, no credential"},
+	{Struct: StructProxyConfig, Field: "ViaOrgRoutes", Class: ClassExempt, Rule: RuleExempt, Variant: "grant id and destination host of each via_org grant; no credential, and the organisation re-checks both"},
 
 	// Grant eligibility is classified even when approval has withheld its dispatch value.
 	{Struct: StructGrantKind, Field: "api_key", Variant: "own namespace", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
-	{Struct: StructGrantKind, Field: "api_key", Variant: "operator/shared", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassAPIKey, Reason: ReasonPlacementCredential},
+	{Struct: StructGrantKind, Field: "api_key", Variant: "operator/shared", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassAPIKey, Reason: ReasonPlacementCredential, ViaOrg: true},
 	{Struct: StructGrantKind, Field: "env_secret", Variant: "own namespace", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
 	{Struct: StructGrantKind, Field: "env_secret", Variant: "operator/shared", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassEnvSecret, Reason: ReasonPlacementCredential},
 	{Struct: StructGrantKind, Field: "file_secret", Variant: "own namespace", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
 	{Struct: StructGrantKind, Field: "file_secret", Variant: "operator/shared", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassFileSecret, Reason: ReasonPlacementCredential},
-	{Struct: StructGrantKind, Field: "github_token", Class: ClassBrokered, Rule: RuleViaOrgRefuse, Delivery: ClassGitHubToken, Reason: ReasonPlacementCredential},
+	{Struct: StructGrantKind, Field: "github_token", Class: ClassBrokered, Rule: RuleViaOrgRefuse, Delivery: ClassGitHubToken, Reason: ReasonPlacementCredential, ViaOrg: true},
 
 	// Grant kinds with no SandboxSpec field.
 	{Struct: StructGrantKind, Field: "ssh_key", Variant: "own key", Class: ClassOwn, Rule: RuleAllow},

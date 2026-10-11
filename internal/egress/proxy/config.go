@@ -241,6 +241,10 @@ type Config struct {
 	// the caller, never from the request body (types.HarnessToolRules). Control-plane
 	// authored; nothing sets it until the approval route reads it.
 	HarnessToolRules []types.HarnessToolRules `json:"harness_tool_rules,omitempty"`
+	// ViaOrgRoutes are the destinations of this run's via_org grants (design 0.9 §7.3), on a runner's
+	// proxy only: a request for one is forwarded to the organisation, which injects the credential.
+	// Each names its grant and destination host, never the rule or a secret name.
+	ViaOrgRoutes []ViaOrgRoute `json:"via_org_routes,omitempty"`
 }
 
 const (
@@ -307,6 +311,11 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	}
 	if err := validPATGrants(c.PATGrants); err != nil {
 		return nil, err
+	}
+	for _, r := range c.ViaOrgRoutes {
+		if r.GrantID == uuid.Nil || r.Host == "" {
+			return nil, fmt.Errorf("config: via_org_routes entry needs a grant_id and a host")
+		}
 	}
 	if len(c.PushRuleSets) > 0 && c.Policy.PushRules != nil {
 		return nil, fmt.Errorf("config: push_rule_sets and policy.push_rules are both set; rules are carried one way or the other")
