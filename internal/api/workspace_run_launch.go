@@ -143,7 +143,7 @@ func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task st
 	// runIdentitySubject's, so a LocalMode X-Wardyn-Principal header cannot point
 	// a server-launched step/probe/login run at another principal's stored rows.
 	operatorOwned := operatorOwnedRequest(ctx)
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, actor), actor, internalAudience, operatorOwned)
+	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, actor), requestSponsor(ctx, actor), internalAudience, operatorOwned)
 	if err != nil {
 		return types.AgentRun{}, "", fmt.Errorf("mint run identity: %w", err)
 	}

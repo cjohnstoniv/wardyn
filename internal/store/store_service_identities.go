@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -22,6 +23,9 @@ var ErrServiceNameTaken = errors.New("store: that service identity name is alrea
 // ErrServiceSponsorInvalid is the refusal of a sponsor that is not exactly the principal of a bound,
 // non-deactivated identity.
 var ErrServiceSponsorInvalid = errors.New("store: the sponsor is not a bound, active identity")
+
+// ErrServiceTokenCap is CreateServiceToken's refusal when the identity already holds the most live tokens.
+var ErrServiceTokenCap = errors.New("store: the service identity holds the maximum number of live tokens")
 
 // ErrServiceIdentityInactive is the refusal of a write to a service identity that is retired, or, for a
 // token mint, suspended or sponsored by someone else than the minter.
@@ -41,10 +45,16 @@ type ServiceIdentityStore interface {
 	// (retired) and ErrServiceSponsorInvalid are the refusals.
 	UpdateServiceIdentity(ctx context.Context, name string, ch ServiceIdentityChange) (ServiceIdentityChanged, error)
 	// RetireServiceIdentity retires a non-retired identity and revokes its live tokens in one transaction.
-	RetireServiceIdentity(ctx context.Context, name, by string, now time.Time) (ServiceIdentityChanged, error)
-	// CreateServiceToken inserts t, a token of service:<name>, only while the identity is active and its
-	// sponsor is still sponsor: ErrNotFound for no such identity, ErrServiceIdentityInactive otherwise.
-	CreateServiceToken(ctx context.Context, name, sponsor string, t types.APIToken, raw string) (types.APIToken, error)
+	RetireServiceIdentity(ctx context.Context, name, by string) (ServiceIdentityChanged, error)
+	// CreateServiceToken inserts t, a token of service:<name>, only while the identity is active, its
+	// sponsor is still sponsor and it holds fewer than maxLive live tokens, counted in the same
+	// transaction under a row lock that serialises concurrent mints: ErrNotFound for no such identity,
+	// ErrServiceIdentityInactive, or ErrServiceTokenCap.
+	CreateServiceToken(ctx context.Context, name, sponsor string, maxLive int, t types.APIToken, raw string) (types.APIToken, error)
+	// ServiceStillSponsored reports whether name is usable, still sponsored by sponsor, and not re-sponsored
+	// since openedAt, an application-clock instant that is translated to the database clock sponsor_since
+	// is written on.
+	ServiceStillSponsored(ctx context.Context, name, sponsor string, openedAt time.Time) (bool, error)
 }
 
 var _ ServiceIdentityStore = PG{}
@@ -55,7 +65,6 @@ type ServiceIdentityChange struct {
 	Sponsor     *string
 	Suspended   *bool
 	By          string
-	Now         time.Time
 }
 
 // ServiceIdentityChanged is what a committed change did.
@@ -137,8 +146,8 @@ func (s PG) CreateServiceIdentity(ctx context.Context, si types.ServiceIdentity)
 	}
 	out, err := scanServiceIdentity(tx.QueryRow(ctx, `
 		INSERT INTO service_identities (name, description, sponsor, sponsor_since, user_type, created_by, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $4) RETURNING `+serviceIdentityCols,
-		si.Name, si.Description, si.Sponsor, si.CreatedAt, si.UserType, si.CreatedBy))
+		VALUES ($1, $2, $3, clock_timestamp(), $4, $5, clock_timestamp()) RETURNING `+serviceIdentityCols,
+		si.Name, si.Description, si.Sponsor, si.UserType, si.CreatedBy))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return types.ServiceIdentity{}, ErrServiceNameTaken
@@ -173,10 +182,11 @@ func lockServiceIdentity(ctx context.Context, tx pgx.Tx, name string) (types.Ser
 	return si, nil
 }
 
-// revokeServiceTokens revokes every live token of service:<name> at now, returning how many.
-func revokeServiceTokens(ctx context.Context, tx pgx.Tx, name string, now time.Time) (int, error) {
-	tag, err := tx.Exec(ctx, `UPDATE api_tokens SET revoked_at = $2 WHERE principal = $1 AND revoked_at IS NULL`,
-		types.ServicePrincipalPrefix+name, now)
+// revokeServiceTokens revokes every live token of service:<name>, returning how many. Every stamp here
+// is on the database clock, the clock a token's created_at is translated onto.
+func revokeServiceTokens(ctx context.Context, tx pgx.Tx, name string) (int, error) {
+	tag, err := tx.Exec(ctx, `UPDATE api_tokens SET revoked_at = clock_timestamp() WHERE principal = $1 AND revoked_at IS NULL`,
+		types.ServicePrincipalPrefix+name)
 	if err != nil {
 		return 0, fmt.Errorf("store: revoke service tokens: %w", err)
 	}
@@ -207,16 +217,16 @@ func (s PG) UpdateServiceIdentity(ctx context.Context, name string, ch ServiceId
 		}
 		// The cutoff is set in the same transaction as the revoke, so a mint whose row commits after the
 		// revoke's snapshot still carries a created_at at or before it and never authenticates.
-		if _, err = tx.Exec(ctx, `UPDATE service_identities SET sponsor = $2, sponsor_since = $3 WHERE name = $1`, name, *ch.Sponsor, ch.Now); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE service_identities SET sponsor = $2, sponsor_since = clock_timestamp() WHERE name = $1`, name, *ch.Sponsor); err != nil {
 			return ServiceIdentityChanged{}, fmt.Errorf("store: update service identity: %w", err)
 		}
-		if out.TokensRevoked, err = revokeServiceTokens(ctx, tx, name, ch.Now); err != nil {
+		if out.TokensRevoked, err = revokeServiceTokens(ctx, tx, name); err != nil {
 			return ServiceIdentityChanged{}, err
 		}
 	}
 	switch {
 	case ch.Suspended != nil && *ch.Suspended && before.SuspendedAt == nil:
-		_, err = tx.Exec(ctx, `UPDATE service_identities SET suspended_at = $2, suspended_by = $3 WHERE name = $1`, name, ch.Now, ch.By)
+		_, err = tx.Exec(ctx, `UPDATE service_identities SET suspended_at = clock_timestamp(), suspended_by = $2 WHERE name = $1`, name, ch.By)
 	case ch.Suspended != nil && !*ch.Suspended && before.SuspendedAt != nil:
 		_, err = tx.Exec(ctx, `UPDATE service_identities SET suspended_at = NULL, suspended_by = NULL WHERE name = $1`, name)
 	}
@@ -232,7 +242,7 @@ func (s PG) UpdateServiceIdentity(ctx context.Context, name string, ch ServiceId
 	return out, nil
 }
 
-func (s PG) RetireServiceIdentity(ctx context.Context, name, by string, now time.Time) (ServiceIdentityChanged, error) {
+func (s PG) RetireServiceIdentity(ctx context.Context, name, by string) (ServiceIdentityChanged, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return ServiceIdentityChanged{}, fmt.Errorf("store: retire service identity: %w", err)
@@ -243,11 +253,11 @@ func (s PG) RetireServiceIdentity(ctx context.Context, name, by string, now time
 		return ServiceIdentityChanged{}, err
 	}
 	after, err := scanServiceIdentity(tx.QueryRow(ctx, `
-		UPDATE service_identities SET retired_at = $2, retired_by = $3 WHERE name = $1 RETURNING `+serviceIdentityCols, name, now, by))
+		UPDATE service_identities SET retired_at = clock_timestamp(), retired_by = $2 WHERE name = $1 RETURNING `+serviceIdentityCols, name, by))
 	if err != nil {
 		return ServiceIdentityChanged{}, err
 	}
-	revoked, err := revokeServiceTokens(ctx, tx, name, now)
+	revoked, err := revokeServiceTokens(ctx, tx, name)
 	if err != nil {
 		return ServiceIdentityChanged{}, err
 	}
@@ -257,19 +267,28 @@ func (s PG) RetireServiceIdentity(ctx context.Context, name, by string, now time
 	return ServiceIdentityChanged{Before: before, After: after, TokensRevoked: revoked}, nil
 }
 
-func (s PG) CreateServiceToken(ctx context.Context, name, sponsor string, t types.APIToken, raw string) (types.APIToken, error) {
+func (s PG) CreateServiceToken(ctx context.Context, name, sponsor string, maxLive int, t types.APIToken, raw string) (types.APIToken, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return types.APIToken{}, fmt.Errorf("store: create service token: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	// FOR SHARE: a sponsor change, suspend or retire waits for this insert and then revokes the row.
-	si, err := scanServiceIdentity(tx.QueryRow(ctx, `SELECT `+serviceIdentityCols+` FROM service_identities WHERE name = $1 FOR SHARE`, name))
+	// FOR UPDATE: two mints, and a sponsor change or retire, queue on the row. A change waits for the
+	// insert and then revokes the token; a mint after a change re-reads the new sponsor and refuses; and
+	// the live count below is exact for the mint that holds the lock.
+	si, err := scanServiceIdentity(tx.QueryRow(ctx, `SELECT `+serviceIdentityCols+` FROM service_identities WHERE name = $1 FOR UPDATE`, name))
 	if err != nil {
 		return types.APIToken{}, err
 	}
 	if !si.Usable() || si.Sponsor != sponsor {
 		return types.APIToken{}, ErrServiceIdentityInactive
+	}
+	var live int
+	if err = tx.QueryRow(ctx, `SELECT count(*) FROM api_tokens WHERE principal = $1 AND `+apiTokenLive, types.ServicePrincipalPrefix+name).Scan(&live); err != nil {
+		return types.APIToken{}, fmt.Errorf("store: count service tokens: %w", err)
+	}
+	if live >= maxLive {
+		return types.APIToken{}, ErrServiceTokenCap
 	}
 	out, err := s.insertAPIToken(ctx, tx, t, raw)
 	if err != nil {
@@ -279,4 +298,16 @@ func (s PG) CreateServiceToken(ctx context.Context, name, sponsor string, t type
 		return types.APIToken{}, fmt.Errorf("store: commit service token: %w", err)
 	}
 	return out, nil
+}
+
+func (s PG) ServiceStillSponsored(ctx context.Context, name, sponsor string, openedAt time.Time) (bool, error) {
+	anchor, err := db.CaptureAppClock(ctx, s.Pool, s.now)
+	if err != nil {
+		return false, err
+	}
+	si, err := s.GetServiceIdentity(ctx, name)
+	if err != nil {
+		return false, err
+	}
+	return si.Usable() && si.Sponsor == sponsor && !si.SponsorSince.After(anchor.Translate(openedAt)), nil
 }
