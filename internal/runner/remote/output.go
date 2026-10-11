@@ -81,7 +81,7 @@ func (s *Substrate) HandleOpen(st *runnerwire.Stream, o runnerwire.Open) error {
 	if sink == nil {
 		return ErrUnsupportedStream
 	}
-	go s.receiveOutput(id, sink, st, o.Offset)
+	go func() { _ = s.receiveOutput(id, sink, st, o.Offset) }()
 	return nil
 }
 
@@ -110,7 +110,8 @@ func (s *Substrate) outputACK(ctx context.Context, id uuid.UUID, offset int64) e
 	}
 }
 
-func (s *Substrate) receiveOutput(id uuid.UUID, sink *outputSink, st *runnerwire.Stream, offset int64) {
+// receiveOutput returns nil at EOF and otherwise the error that ended it.
+func (s *Substrate) receiveOutput(id uuid.UUID, sink *outputSink, st *runnerwire.Stream, offset int64) error {
 	// Output has no stdin. Half-close it so an EOF can release both wire ends
 	// without RESET, which would discard bytes still waiting in a reader.
 	_ = st.CloseWrite()
@@ -124,14 +125,14 @@ func (s *Substrate) receiveOutput(id uuid.UUID, sink *outputSink, st *runnerwire
 		if writeErr != nil {
 			sink.finish(writeErr)
 			_ = st.Close()
-			return
+			return writeErr
 		}
 		if ackErr != nil {
 			if st.Context().Err() == nil {
 				sink.finish(ackErr)
 			}
 			_ = st.Close()
-			return
+			return ackErr
 		} // transport loss retains writer and offset for reconnect
 		if errors.Is(readErr, io.EOF) {
 			sink.finish(nil)
@@ -140,10 +141,10 @@ func (s *Substrate) receiveOutput(id uuid.UUID, sink *outputSink, st *runnerwire
 				delete(s.outputs, id)
 			}
 			s.mu.Unlock()
-			return
+			return nil
 		}
 		if readErr != nil {
-			return
+			return readErr
 		} // transport loss preserves accepted offset and drain
 	}
 }

@@ -250,3 +250,38 @@ func TestOutputBufferFailedAckCannotBecomeSuccessOnRetry(t *testing.T) {
 		t.Fatalf("committed bytes=%q err=%v", data[:n], err)
 	}
 }
+
+func TestOutputBufferUnacknowledgedWriteIsBounded(t *testing.T) {
+	synctest.Test(t, outputUnacknowledgedWriteIsBounded)
+}
+
+// No ACK within outputAckWait drops the oldest part instead of parking the
+// agent; the dropped prefix reads as unrecoverable and the state still loads.
+func outputUnacknowledgedWriteIsBounded(t *testing.T) {
+	b := outputFixture(t)
+	t.Cleanup(func() { b.mu.Lock(); b.stopped = io.ErrClosedPipe; b.notify(); b.mu.Unlock() })
+	if _, err := b.Write(bytes.Repeat([]byte("x"), outputLimit)); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := b.Write([]byte("last")); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * outputAckWait):
+		t.Fatal("write with no ACK parked past the bound")
+	}
+	scratch := make([]byte, outputChunk)
+	if _, err := b.read(t.Context(), 0, scratch); !errors.Is(err, runner.ErrOutputUnrecoverable) {
+		t.Fatalf("dropped prefix=%v", err)
+	}
+	if n, err := b.read(t.Context(), outputLimit, scratch); err != nil || string(scratch[:n]) != "last" {
+		t.Fatalf("tail=%q,%v", scratch[:n], err)
+	}
+	b.EndDrain(nil)
+	if _, err := newOutputBuffer(b.dir); err != nil {
+		t.Fatalf("state after a dropped part: %v", err)
+	}
+}
