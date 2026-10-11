@@ -96,6 +96,7 @@ func TestMintedTokenDispositions(t *testing.T) {
 
 	needs, awaiting, replaced := e.minted(t), e.minted(t), e.minted(t)
 	linked, moved, revoked, withdrawn := e.minted(t), e.minted(t), e.minted(t), e.minted(t)
+	both, adminFirst := e.minted(t), e.minted(t)
 
 	e.invitationReplacing(t, awaiting.ID)
 	claimInv := e.invitationReplacing(t, replaced.ID)
@@ -113,15 +114,29 @@ func TestMintedTokenDispositions(t *testing.T) {
 	}
 	e.revokeAsAdmin(t, moved.ID)
 	e.revokeAsAdmin(t, revoked.ID)
+	// A token with a pending invitation AND a move row reads linked: the move is the admin's explicit choice.
+	e.invitationReplacing(t, both.ID)
+	if w := e.move(t, e.sec, both.ID, `{"service_identity":"`+svcName+`"}`); w.Code != http.StatusOK {
+		t.Fatalf("move %s: %d %s", both.ID, w.Code, w.Body.String())
+	}
+	// An admin revokes the token after the invitation named it; the owner's later claim retires nothing, so the
+	// token reads revoked, not replaced_by_owner.
+	adminInv := e.invitationReplacing(t, adminFirst.ID)
+	e.revokeAsAdmin(t, adminFirst.ID)
+	if w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/me/invitations/"+adminInv.ID.String()+"/claim", e.pat, `{}`); w.Code != http.StatusCreated {
+		t.Fatalf("claim after the admin revoke: %d %s", w.Code, w.Body.String())
+	}
 
 	want := map[uuid.UUID]types.TokenDisposition{
-		needs.ID:     types.TokenNeedsDecision,
-		awaiting.ID:  types.TokenAwaitingOwner,
-		replaced.ID:  types.TokenReplacedByOwner,
-		linked.ID:    types.TokenLinkedToService,
-		moved.ID:     types.TokenMovedToService,
-		revoked.ID:   types.TokenRevoked,
-		withdrawn.ID: types.TokenNeedsDecision,
+		needs.ID:      types.TokenNeedsDecision,
+		awaiting.ID:   types.TokenAwaitingOwner,
+		replaced.ID:   types.TokenReplacedByOwner,
+		linked.ID:     types.TokenLinkedToService,
+		moved.ID:      types.TokenMovedToService,
+		revoked.ID:    types.TokenRevoked,
+		withdrawn.ID:  types.TokenNeedsDecision,
+		both.ID:       types.TokenLinkedToService,
+		adminFirst.ID: types.TokenRevoked,
 	}
 	live := e.inventory(t, false)
 	all := e.inventory(t, true)
@@ -342,5 +357,21 @@ func TestKnownPrincipals_ExcludesServicePrincipals(t *testing.T) {
 	}
 	if !person {
 		t.Errorf("knownPrincipals lost the person's own token: %+v", dir)
+	}
+}
+
+// TestRevokePersonCredentials_SweepsSponsoredTokensByEmail: naming the sponsor by email reaches their service
+// tokens too, under the subject the key resolver finds, so GET /tokens shows them revoked.
+func TestRevokePersonCredentials_SweepsSponsoredTokensByEmail(t *testing.T) {
+	e := newMoveEnv(t)
+	e.mustCreate(t, svcName, svcSponsor)
+	tok := e.mustMint(t, e.sponsor, svcName)
+	w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/sessions/revoke", e.sec, `{"sub":"`+svcSponsor+`@corp.example"}`)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("revoke by email: %d %s", w.Code, w.Body.String())
+	}
+	rows, err := e.st.ListAPITokensByPrincipal(context.Background(), svcPrin)
+	if err != nil || len(rows) != 1 || rows[0].ID != tok.ID || rows[0].RevokedAt == nil {
+		t.Errorf("the sponsored token after an email-form revoke = %+v (%v), want revoked", rows, err)
 	}
 }
