@@ -62,9 +62,14 @@ func (r AgentRun) BackgroundOnly() bool { return r.Experience == ExperienceBackg
 // require-review path to them, never remove or relax one. A person's rules
 // therefore cannot displace an administrator's.
 type PushRuleSet struct {
-	Provider string        `json:"provider"`
-	Host     string        `json:"host,omitempty"`
-	Org      string        `json:"org"`
+	Provider string `json:"provider"`
+	Host     string `json:"host,omitempty"`
+	Org      string `json:"org"`
+	// BasePath is the path prefix of an Azure DevOps Server provider row (for
+	// example "/tfs"), recorded from the row at dispatch. The git route derives
+	// a remote's collection with it: without it a remote under a prefix is
+	// ambiguous and its push is refused. Empty for every other entry.
+	BasePath string        `json:"base_path,omitempty"`
 	Rules    PushRulesSpec `json:"rules"`
 }
 

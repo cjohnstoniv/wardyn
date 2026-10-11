@@ -22,6 +22,9 @@ const (
 	OverrideGitPATScope       OverrideKind = "git_pat_scope"       // repos, access or api of a git_pat grant
 	OverridePushDeny          OverrideKind = "push_rule_deny"      // a push deny path of one provider and organisation
 	OverridePushReview        OverrideKind = "push_rule_review"    // a push require-review path of one provider and organisation
+	OverrideRunHostAllow      OverrideKind = "run_host_allow"      // a host the person adds to the run's allowed list, on top of the base policy
+	OverrideRunHostWildcard   OverrideKind = "run_host_wildcard"   // the same, spelled with a wildcard
+	OverrideRunHostDeny       OverrideKind = "run_host_deny"       // a host the person adds to the run's denied list, on top of the base policy
 )
 
 // OverrideOp is what the person does to the entry.
@@ -91,6 +94,13 @@ var overrideNarrowing = []OverrideNarrowing{
 	{OverridePushDeny, OverrideRemove, OverrideWiden, OverrideRefused},
 	{OverridePushReview, OverrideAdd, OverrideTighten, OverrideAllowed},
 	{OverridePushReview, OverrideRemove, OverrideWiden, OverrideRefused},
+	// Run-wide hosts on top of a base policy. The base's own hosts are read-only:
+	// a person adds to either list and never edits or removes what the base says,
+	// which is why there is no remove row (a removal is refused by name, not asked
+	// of this table).
+	{OverrideRunHostAllow, OverrideAdd, OverrideWiden, OverrideClamped},
+	{OverrideRunHostWildcard, OverrideAdd, OverrideWiden, OverrideRefused},
+	{OverrideRunHostDeny, OverrideAdd, OverrideTighten, OverrideAllowed},
 }
 
 // OverrideNarrowingTable returns the table, in its fixed order.

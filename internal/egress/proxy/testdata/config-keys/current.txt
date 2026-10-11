@@ -9,6 +9,7 @@ ado_grants.organization
 attribution
 attribution.email
 attribution.name
+attribution.overridden
 attribution.owner
 attribution.request_text
 attribution.request_url
@@ -125,6 +126,7 @@ policy.workspace_repos.ref
 policy.workspace_repos.repo
 policy.workspace_repos.target
 push_rule_sets
+push_rule_sets.base_path
 push_rule_sets.host
 push_rule_sets.org
 push_rule_sets.provider

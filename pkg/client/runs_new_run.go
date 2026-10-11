@@ -80,6 +80,24 @@ type RunOverrides struct {
 	// each Git section edits its own set and the proxy's git route applies the
 	// set matching the repository's provider and organisation.
 	PushRules []PushRuleOverride `json:"push_rules,omitempty"`
+	// Hosts adds to the run-wide allowed and denied lists on top of the chosen
+	// base policy. The base's own hosts are read-only.
+	Hosts *RunHostOverrides `json:"hosts,omitempty"`
+}
+
+// RunHostOverrides are the hosts a person adds to the run as a whole, beside the
+// chosen base policy's own (the agent component's hosts are AgentOverrides').
+type RunHostOverrides struct {
+	// AddAllowed are destinations to reach. Bare DNS names only; the ceiling
+	// still bounds them, and the preview shows the ones it dropped.
+	AddAllowed []string `json:"add_allowed,omitempty"`
+	// AddDenied are destinations to refuse. A host or a wildcard; a deny wins
+	// over every allow, so it only takes reach away.
+	AddDenied []string `json:"add_denied,omitempty"`
+	// RemoveAllowed and RemoveDenied would drop a host of the base policy. They
+	// are always refused (override_refused): the base is read-only on a run.
+	RemoveAllowed []string `json:"remove_allowed,omitempty"`
+	RemoveDenied  []string `json:"remove_denied,omitempty"`
 }
 
 // AgentOverrides are the edits on the agent component.
@@ -204,6 +222,18 @@ func (o RunOverrides) Items() []OverrideItem {
 		}
 		for _, path := range p.RequireReviewPaths {
 			out = append(out, OverrideItem{types.OverridePushReview, types.OverrideAdd, p.PushRuleKey() + " " + path})
+		}
+	}
+	if h := o.Hosts; h != nil {
+		for _, host := range h.AddAllowed {
+			kind := types.OverrideRunHostAllow
+			if types.IsWildcardHost(host) {
+				kind = types.OverrideRunHostWildcard
+			}
+			out = append(out, OverrideItem{kind, types.OverrideAdd, host})
+		}
+		for _, host := range h.AddDenied {
+			out = append(out, OverrideItem{types.OverrideRunHostDeny, types.OverrideAdd, host})
 		}
 	}
 	return out

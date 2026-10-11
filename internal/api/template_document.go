@@ -318,9 +318,6 @@ func (d *templateDecoder) checkAvailable(req createRunRequest) {
 	if req.AllowedImage != "" {
 		refuse("intent.allowed_image")
 	}
-	if req.Overrides != nil && len(req.Overrides.Items()) > 0 {
-		refuse("intent.overrides")
-	}
 	for i, ref := range req.Components {
 		if ref.Builtin != "" {
 			refuse(fmt.Sprintf("intent.components[%d]", i))

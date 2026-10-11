@@ -443,7 +443,6 @@ func TestTemplateDecoderRefusals(t *testing.T) {
 		{"run mode: a malformed startup", `{` + head + `,"intent":{"startup":"x"}}`, "intent.startup", reasonTemplateFieldInvalid},
 		{"run mode: the working name is not a field", `{` + head + `,"intent":{"included_tools":[]}}`, "intent.included_tools", reasonTemplateFieldUnknown},
 		{"run mode: the working name is not a field (folder)", `{` + head + `,"intent":{"starting_folder":"/home/agent/work"}}`, "intent.starting_folder", reasonTemplateFieldUnknown},
-		{"pending: unkeyed push rules", `{` + head + `,"intent":{"inline_policy":{"push_rules":{"deny_paths":["a/"]}}}}`, "intent.inline_policy.push_rules", reasonTemplateFieldUnavailable},
 		{"empty inline policy", `{` + head + `,"intent":{"inline_policy":{}}}`, "intent.inline_policy", reasonTemplateFieldInvalid},
 		{"policy reference beside an inline policy", `{` + head + `,"intent":{"policy_id":"6f1c2a52-5b1e-4d45-9d6b-0c4f1b2a7e10","inline_policy":{"allowed_domains":[]}}}`, "intent.inline_policy", reasonInlinePolicyXOR},
 		{"secret-formatted config key", `{` + head + `,"intent":{"components":[{"inline":{"hosts":["a.example.com"],"config":{"` + canaryAWSKey + `":"x"}}}]}}`, "intent.components[0].inline.config.<key>", reasonTemplateSecretRefused},
@@ -585,7 +584,6 @@ func TestTemplateImportValidation(t *testing.T) {
 		{"shape check shared with the run", `{` + head + `"coverage":"partial","intent":{"workspaces":[{"workspace_id":"w","target":"work"}]}}`, reasonWorkspaceTargetInvalid + "@intent"},
 		{"unavailable: local placement", `{` + head + `"coverage":"partial","intent":{"placement":"local"}}`, reasonTemplateFieldUnavailable + "@intent.placement"},
 		{"unavailable: allowed image", `{` + head + `"coverage":"partial","intent":{"allowed_image":"img"}}`, reasonTemplateFieldUnavailable + "@intent.allowed_image"},
-		{"unavailable: overrides", `{` + head + `"coverage":"partial","intent":{"overrides":{"agent":{"add_hosts":["a.example.com"]}}}}`, reasonTemplateFieldUnavailable + "@intent.overrides"},
 		{"unavailable: built-in component", `{` + head + `"coverage":"partial","intent":{"components":[{"builtin":"github","org":"acme","repos":["acme/api"]}]}}`, reasonTemplateFieldUnavailable + "@intent.components[0]"},
 		{"plain setting named like a secret is a plain setting", ``, ""},
 	}

@@ -39,13 +39,13 @@ func (s *Server) stepPolicy(f *runFold, rec *foldRecorder) bool {
 		if refusal.write(s, f.w, f.r) {
 			return false
 		}
-		recordPolicyFold(rec, f.source.Spec, f.spec, policyProvSource(f.source), f.source.Kind == policyKindInline)
+		recordPolicySource(rec, f.source, f.spec)
 		return true
 	}
 	var ok bool
 	f.spec, f.policyID, f.policyWarns, f.source, ok = s.resolveRunPolicy(ctx, f.w, f.r, f.req, f.mode == foldPreflight)
 	if ok {
-		recordPolicyFold(rec, f.source.Spec, f.spec, policyProvSource(f.source), f.source.Kind == policyKindInline)
+		recordPolicySource(rec, f.source, f.spec)
 	}
 	return ok
 }
@@ -93,6 +93,19 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	for _, ws := range f.wsRefs {
 		recordWorkspaceSources(rec, f.spec, ws)
 	}
+	return true
+}
+
+// stepPushRuleSets builds the run's push rules per source-control entry from the
+// resolved spec, at every door, so a remote whose entry cannot be keyed refuses
+// at Review and the preview as it does at create.
+func (s *Server) stepPushRuleSets(f *runFold, rec *foldRecorder) bool {
+	sets, err := s.pushRuleSetsFor(f.spec, f.req, f.scmSite)
+	if err != nil {
+		runError(http.StatusUnprocessableEntity, reasonInlinePolicyInvalid, "invalid push rules: "+err.Error()).write(s, f.w, f.r)
+		return false
+	}
+	f.pushSets = sets
 	return true
 }
 
