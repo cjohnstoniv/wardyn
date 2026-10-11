@@ -154,6 +154,13 @@ const (
 	// capability neither request field can fix).
 	reasonImageDevcontainerExclusive = "image_devcontainer_exclusive" // image and devcontainer_repo were both set
 	reasonImageBuilderUnavailable    = "image_builder_unavailable"    // a custom image was requested but this control plane has no image builder wired
+	// The 0.9 run-mode contract (run_mode.go): what a person is starting. The
+	// sentences are run_mode_refusals.go's, with a TypeScript twin.
+	reasonRunModeRequired    = "run_mode_required"    // a new client's mode or background workload is unset, and is never inferred
+	reasonRunModeInvalid     = "run_mode_invalid"     // a run-mode carrier is malformed
+	reasonRunModeConflict    = "run_mode_conflict"    // run-mode carriers contradict each other, or an older field that replaced them
+	reasonStartFolderInvalid = "start_folder_invalid" // start_folder is malformed, names an attachment the run lacks, or escapes its mount
+	reasonRunBackgroundOnly  = "run_background_only"  // a background run has no interactive door: attach, exec, SSH, UI gateway, desktop
 	// validateWorkspaceSources / authorizeSpecWorkspaceSources (#656 M1: split
 	// from reasonWorkspaceSourcesInvalid/reasonWorkspaceSourcesUnauthorized —
 	// except the not-onboarded arm, which STAYS one shared reason across both

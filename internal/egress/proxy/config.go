@@ -223,6 +223,24 @@ type Config struct {
 	// older proxy image refuses this key at start (strict decode), so the proxy
 	// image is upgraded before wardynd.
 	Attribution *policyref.Ref `json:"attribution,omitempty"`
+	// PushRuleSets are the push content rules per SCM entry (provider host and
+	// organisation): the git route applies the set of the entry that owns the
+	// remote (types.PushRulesForRemote), and a remote whose entry has no set has
+	// no content rules. They are the product after the ceiling, so a config that
+	// carries them carries NO Policy.PushRules: the dispatch plan fans the
+	// policy's block out to one set per entry it brings, and LoadConfigBytes
+	// refuses both together, so a run is on one regime or the other and a reader
+	// can never take the wrong block first. Control-plane authored; nothing sets
+	// it until the git route reads it.
+	PushRuleSets []types.PushRuleSet `json:"push_rule_sets,omitempty"`
+	// HarnessToolRules are the tool rules per included harness, also the product
+	// after the ceiling, and likewise exclusive of Policy.ToolRules. The approval
+	// route evaluates the set of the harness that raised the call
+	// (types.ToolEffectForHarness) and never another's; a harness with no entry
+	// is held for a human. The harness id comes from the proxy's own binding of
+	// the caller, never from the request body (types.HarnessToolRules). Control-plane
+	// authored; nothing sets it until the approval route reads it.
+	HarnessToolRules []types.HarnessToolRules `json:"harness_tool_rules,omitempty"`
 }
 
 const (
@@ -289,6 +307,18 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	}
 	if err := validPATGrants(c.PATGrants); err != nil {
 		return nil, err
+	}
+	if len(c.PushRuleSets) > 0 && c.Policy.PushRules != nil {
+		return nil, fmt.Errorf("config: push_rule_sets and policy.push_rules are both set; rules are carried one way or the other")
+	}
+	if len(c.HarnessToolRules) > 0 && len(c.Policy.ToolRules) > 0 {
+		return nil, fmt.Errorf("config: harness_tool_rules and policy.tool_rules are both set; rules are carried one way or the other")
+	}
+	if err := types.ValidatePushRuleSets(c.PushRuleSets); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if err := types.ValidateHarnessToolRules(c.HarnessToolRules); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
 	}
 	if err := c.applyDefaultsAndValidate(); err != nil {
 		return nil, err
