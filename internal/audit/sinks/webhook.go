@@ -121,10 +121,24 @@ func NewWebhookSink(cfg WebhookConfig) (*WebhookSink, error) {
 		interval:  interval,
 		baseDelay: base,
 		queue:     make(chan types.AuditEvent, cfg.BufferSize),
-		client:    &http.Client{Timeout: timeout},
+		client:    &http.Client{Timeout: timeout, CheckRedirect: keepPOST},
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
 	}, nil
+}
+
+// keepPOST stops a redirect that would turn the POST into a bodyless GET
+// (301, 302, 303): the collector never saw the batch, so its 3xx must count as
+// a failed delivery, not the redirect target's 2xx. A 307 or 308 keeps the
+// method and body and is still followed, within net/http's usual ten hops.
+func keepPOST(req *http.Request, via []*http.Request) error {
+	if req.Method != via[0].Method {
+		return http.ErrUseLastResponse
+	}
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	return nil
 }
 
 // validate checks cfg and returns the parsed durations its delivery loop
