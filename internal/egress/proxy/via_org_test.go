@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -74,7 +75,8 @@ func (u *orgUpstream) seen() (int, http.Header, string) {
 type fakeOrg struct {
 	mu                               sync.Mutex
 	injections, mints, raised, polls int
-	gated                            bool // the GitHub grant needs an approval nobody gives
+	gated                            bool   // the GitHub grant needs an approval nobody gives
+	value                            string // the injected header value; viaOrgSecret when empty
 	decisions                        strings.Builder
 }
 
@@ -86,7 +88,11 @@ func (f *fakeOrg) RoundTrip(req *http.Request) (*http.Response, error) {
 	switch {
 	case strings.HasPrefix(p, "/api/v1/internal/injection/"):
 		f.injections++
-		_ = json.NewEncoder(rec).Encode(types.ResolvedInjection{Host: viaOrgHost, Header: "Authorization", Value: viaOrgSecret, JTI: uuid.NewString()})
+		v := f.value
+		if v == "" {
+			v = viaOrgSecret
+		}
+		_ = json.NewEncoder(rec).Encode(types.ResolvedInjection{Host: viaOrgHost, Header: "Authorization", Value: v, JTI: uuid.NewString()})
 	case p == "/api/v1/internal/credentials/mint" && f.gated:
 		f.mints++
 		rec.WriteHeader(http.StatusConflict)
@@ -122,9 +128,14 @@ type viaOrgFixture struct {
 // octocat/hello-world, every dial landing on the test upstream; mutate edits the config first.
 func newViaOrgFixture(t *testing.T, lookup func(string) ([]net.IP, error), mutate func(*Config)) *viaOrgFixture {
 	t.Helper()
-	up, org := newOrgUpstream(t), &fakeOrg{}
+	return newViaOrgFixtureWith(t, &fakeOrg{}, lookup, mutate)
+}
+
+func newViaOrgFixtureWith(t *testing.T, org *fakeOrg, lookup func(string) ([]net.IP, error), mutate func(*Config)) *viaOrgFixture {
+	t.Helper()
+	up := newOrgUpstream(t)
 	cfg := &Config{
-		RunID: uuid.New(), ControlPlaneURL: "https://wardynd.test", RunToken: "RUNTOK",
+		RunID: uuid.New(), ControlPlaneURL: "https://wardynd.test", RunToken: "RUNTOK", DecisionBufferSize: defaultBufferSize,
 		Policy: types.RunPolicySpec{AllowedDomains: []string{viaOrgHost, githubHost}},
 		Injection: []InjectionConfig{{GrantID: uuid.New(),
 			InjectionRule: egress.InjectionRule{Host: viaOrgHost, Header: "Authorization", SecretName: "corp-secret"}}},
@@ -187,15 +198,17 @@ func TestViaOrg_ReRunsTheProxyChecks(t *testing.T) {
 		if hits, h, _ := f.up.seen(); hits != 1 || h.Get("Authorization") != viaOrgSecret {
 			t.Fatalf("upstream hits=%d auth=%q, want the org credential", hits, h.Get("Authorization"))
 		}
-		if d := f.decisions(t); !strings.Contains(d, `"decision":"allow"`) {
-			t.Errorf("no org-side allow row: %s", d)
+		// The destination's own allow row (handleConnect's, ahead of a terminated tunnel) is written
+		// at the org: it is the row an approval's attribution rides.
+		if d := f.decisions(t); !strings.Contains(d, `"decision":"allow"`) || !strings.Contains(d, `"rule_source":"policy:allowed"`) {
+			t.Errorf("no org-side destination allow row: %s", d)
 		}
 	})
 	t.Run("deny list", func(t *testing.T) {
 		// A grant destination the run's policy denies: no engine serves it, so nothing is dialed.
 		up := newOrgUpstream(t)
 		cfg := &Config{RunID: uuid.New(), ControlPlaneURL: "https://wardynd.test", RunToken: "RUNTOK",
-			Policy: types.RunPolicySpec{AllowedDomains: []string{viaOrgHost}, DeniedDomains: []string{viaOrgHost}},
+			Policy:    types.RunPolicySpec{AllowedDomains: []string{viaOrgHost}, DeniedDomains: []string{viaOrgHost}},
 			Injection: []InjectionConfig{{GrantID: uuid.New(), InjectionRule: egress.InjectionRule{Host: viaOrgHost, Header: "Authorization"}}},
 			MITMHosts: []string{viaOrgHost}, TrustedCAPEM: string(up.caPEM)}
 		if _, err := NewViaOrgEngine(context.Background(), cfg, ViaOrgEngineOptions{Client: &http.Client{Transport: &fakeOrg{}},
@@ -502,4 +515,58 @@ func viaOrgMITMConn(t *testing.T, proxyURL, host string, caPEM []byte) *tls.Conn
 		t.Fatal(err)
 	}
 	return tc
+}
+
+// TestViaOrg_EnginesDoNotShareASecretCorpus: each engine scans and masks with its own run's values.
+// Engine A (run 1) resolves its credential and closes; engine B (run 2), inspecting forwarded bodies,
+// must not refuse run 1's value as a secret of its own, and still refuses its own.
+func TestViaOrg_EnginesDoNotShareASecretCorpus(t *testing.T) {
+	procMask([]byte("SIDECAR-SHARED-ENTRY-0b3d")) // the shared registry: no engine may clear it
+	holds := func(key uuid.UUID, v string) bool {
+		return slices.ContainsFunc(procRegistry.Snapshot(key), func(b []byte) bool { return strings.Contains(string(b), v) })
+	}
+	a := newViaOrgFixtureWith(t, &fakeOrg{value: "Bearer RUN-ONE-ONLY-7d41c9"}, nil, nil)
+	aKey := a.engine.srv.maskKey
+	if aKey == uuid.Nil || !holds(aKey, "RUN-ONE-ONLY-7d41c9") || holds(uuid.Nil, "RUN-ONE-ONLY-7d41c9") {
+		t.Fatalf("engine A's credential is not filed under its own key %s", aKey)
+	}
+	if err := a.engine.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if holds(aKey, "RUN-ONE-ONLY-7d41c9") || !holds(uuid.Nil, "SIDECAR-SHARED-ENTRY-0b3d") {
+		t.Fatal("closing engine A kept its values or cleared the shared registry")
+	}
+	inspect := func(c *Config) {
+		c.Policy.LLMInspection = &types.LLMInspectionSpec{Mode: "block", DetectSecrets: true, InspectForwardEgress: true}
+	}
+	b := newViaOrgFixtureWith(t, &fakeOrg{value: "Bearer RUN-TWO-ONLY-5e20aa"}, nil, inspect)
+	send := func(body string) int {
+		r := httptest.NewRequest(http.MethodPost, "/v1/x", strings.NewReader(body))
+		r.Host = viaOrgHost
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		b.engine.ServeInjected(w, r, viaOrgHost)
+		return w.Code
+	}
+	if code := send(`{"note":"RUN-TWO-ONLY-5e20aa"}`); code != http.StatusForbidden {
+		t.Fatalf("engine B forwarded its own credential in a body: %d (the scan is not on)", code)
+	}
+	if code := send(`{"note":"RUN-ONE-ONLY-7d41c9"}`); code != http.StatusOK {
+		t.Fatalf("engine B refused run 1's value: %d — its corpus carries another run's secrets", code)
+	}
+	if holds(b.engine.srv.maskKey, "RUN-ONE-ONLY") {
+		t.Fatal("engine B's corpus holds run 1's value")
+	}
+	// Close and rebuild run 2's engine: the old key is released, the new engine has its own.
+	bKey := b.engine.srv.maskKey
+	if err := b.engine.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	c := newViaOrgFixtureWith(t, &fakeOrg{value: "Bearer RUN-TWO-ONLY-5e20aa"}, nil, inspect)
+	if holds(bKey, "RUN-TWO-ONLY") || c.engine.srv.maskKey == bKey || !holds(c.engine.srv.maskKey, "RUN-TWO-ONLY-5e20aa") {
+		t.Fatal("the rebuilt engine did not start from its own corpus")
+	}
+	if !holds(uuid.Nil, "SIDECAR-SHARED-ENTRY-0b3d") {
+		t.Fatal("an engine close cleared the shared registry")
+	}
 }

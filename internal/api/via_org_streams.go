@@ -6,9 +6,11 @@ package api
 // Per-run bounds of the via_org egress (design 0.9 §7.3): 16 concurrent streams, 8 GiB in total and
 // a 10 minute idle timeout, constants and not knobs. Every open stream of a run ends when the run
 // ends or is kept (its lease lapsed), or its runner goes offline; the run's engine is released then.
+// The byte total is the run's: it outlives those releases and is dropped only when the run ends.
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -20,6 +22,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 const (
@@ -40,6 +43,10 @@ var (
 type viaOrgState struct {
 	mu   sync.Mutex
 	runs map[uuid.UUID]*viaOrgRun
+	// spent is each run's via_org byte total: a ledger apart from the run's state, engine and
+	// streams, kept through every release and dropped only when the run ends. It is this
+	// process's: a wardynd restart, or a request served by another replica, starts from zero.
+	spent map[uuid.UUID]*atomic.Int64
 	// dial and lookupIP replace the network for tests; nil in production.
 	dial     func(ctx context.Context, network, addr string) (net.Conn, error)
 	lookupIP func(host string) ([]net.IP, error)
@@ -59,7 +66,7 @@ type viaOrgRun struct {
 	streams   map[*viaOrgStream]struct{}
 	closed    bool
 	idleSince time.Time
-	bytes     atomic.Int64
+	bytes     *atomic.Int64 // the run's entry in viaOrgState.spent
 
 	// The bounds, read once when the run's state starts.
 	byteCap      int64
@@ -99,7 +106,15 @@ func (s *Server) viaOrgRunFor(runID, runner uuid.UUID) (*viaOrgRun, bool) {
 	if s.viaOrg.runs == nil {
 		s.viaOrg.runs = map[uuid.UUID]*viaOrgRun{}
 	}
-	run := &viaOrgRun{id: runID, runner: runner, done: make(chan struct{}), streams: map[*viaOrgStream]struct{}{}, idleSince: time.Now(),
+	if s.viaOrg.spent == nil {
+		s.viaOrg.spent = map[uuid.UUID]*atomic.Int64{}
+	}
+	spent, ok := s.viaOrg.spent[runID]
+	if !ok {
+		spent = new(atomic.Int64)
+		s.viaOrg.spent[runID] = spent
+	}
+	run := &viaOrgRun{id: runID, runner: runner, bytes: spent, done: make(chan struct{}), streams: map[*viaOrgStream]struct{}{}, idleSince: time.Now(),
 		byteCap: viaOrgByteCap, idle: viaOrgIdle, period: viaOrgWatchEvery}
 	s.viaOrg.runs[runID] = run
 	go s.watchViaOrgRun(run)
@@ -151,8 +166,10 @@ func (st *viaOrgStream) moved(n int) bool {
 	return true
 }
 
-// watchViaOrgRun ends the run's streams and engine once the run is no longer live on its runner,
-// and ends a stream idle past the timeout. A run with no stream for the idle timeout is released too.
+// watchViaOrgRun keeps the run's state until the run ends. A stream idle past the timeout is ended;
+// while the run is away (kept, or its runner offline) every stream is ended and the engine released,
+// and so is an engine idle with no stream; the run's byte total is kept through all of these. The
+// state, and with it the total, is dropped only when the run ends (design §7.3: the bounds are per run).
 func (s *Server) watchViaOrgRun(run *viaOrgRun) {
 	t := time.NewTicker(run.period)
 	defer t.Stop()
@@ -161,17 +178,23 @@ func (s *Server) watchViaOrgRun(run *viaOrgRun) {
 		case <-run.done:
 			return
 		case <-s.cfg.BaseCtx.Done():
-			s.endViaOrgRun(run)
+			s.releaseViaOrgRun(run, true, false)
 			return
 		case <-t.C:
 		}
-		if !s.viaOrgRunLive(run) {
-			s.endViaOrgRun(run)
+		switch s.viaOrgRunState(run) {
+		case viaOrgRunEnded:
+			s.releaseViaOrgRun(run, true, true)
 			return
-		}
-		if run.closeIdle(time.Now()) {
-			s.endViaOrgRun(run)
+		case viaOrgRunMoved:
+			s.releaseViaOrgRun(run, true, false)
 			return
+		case viaOrgRunAway:
+			s.releaseViaOrgRun(run, false, false)
+		default:
+			if run.closeIdle(time.Now()) {
+				s.releaseViaOrgRun(run, false, false)
+			}
 		}
 	}
 }
@@ -189,33 +212,53 @@ func (run *viaOrgRun) closeIdle(now time.Time) bool {
 	return len(run.streams) == 0 && now.Sub(run.idleSince) > run.idle
 }
 
-// viaOrgRunLive reports whether the run is still running, not kept, and placed on the runner whose
-// relay opened its state, with that runner online.
-func (s *Server) viaOrgRunLive(run *viaOrgRun) bool {
+type viaOrgRunStatus int
+
+const (
+	viaOrgRunLive  viaOrgRunStatus = iota
+	viaOrgRunAway                  // kept, its runner offline, or the run unreadable: nothing may stream
+	viaOrgRunMoved                 // placed on another runner: this runner's state is dropped
+	viaOrgRunEnded                 // terminal or gone: the state and the run's byte total are dropped
+)
+
+// viaOrgRunState reads where the run stands for its via_org egress.
+func (s *Server) viaOrgRunState(run *viaOrgRun) viaOrgRunStatus {
 	got, err := s.cfg.Store.GetRun(s.cfg.BaseCtx, run.id)
-	if err != nil {
-		return false
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return viaOrgRunEnded
+	case err != nil:
+		return viaOrgRunAway
+	case isTerminalRunState(got.State):
+		return viaOrgRunEnded
+	case got.RunnerID == nil || *got.RunnerID != run.runner:
+		return viaOrgRunMoved
+	case runIsKept(got) || (s.cfg.RunnerOnline != nil && !s.cfg.RunnerOnline(run.runner)):
+		return viaOrgRunAway
 	}
-	if isTerminalRunState(got.State) || runIsKept(got) || got.RunnerID == nil || *got.RunnerID != run.runner {
-		return false
-	}
-	return s.cfg.RunnerOnline == nil || s.cfg.RunnerOnline(run.runner)
+	return viaOrgRunLive
 }
 
-// endViaOrgRun cancels every open stream of the run and releases its engine.
-func (s *Server) endViaOrgRun(run *viaOrgRun) {
-	s.viaOrg.mu.Lock()
-	if s.viaOrg.runs[run.id] == run {
-		delete(s.viaOrg.runs, run.id)
-	}
-	s.viaOrg.mu.Unlock()
+// releaseViaOrgRun cancels every open stream of the run and releases its engine. final also drops
+// the run's state; retire, only for a run that has ended, drops its byte total too.
+func (s *Server) releaseViaOrgRun(run *viaOrgRun, final, retire bool) {
 	run.smu.Lock()
 	if run.closed {
 		run.smu.Unlock()
 		return
 	}
-	run.closed = true
-	close(run.done)
+	if final {
+		run.closed = true
+		close(run.done)
+		s.viaOrg.mu.Lock()
+		if s.viaOrg.runs[run.id] == run {
+			delete(s.viaOrg.runs, run.id)
+		}
+		if retire {
+			delete(s.viaOrg.spent, run.id)
+		}
+		s.viaOrg.mu.Unlock()
+	}
 	for st := range run.streams {
 		st.cancel()
 	}
@@ -233,7 +276,8 @@ func (s *Server) endViaOrgRun(run *viaOrgRun) {
 	}
 }
 
-// endViaOrgRunner ends every via_org run of a runner that went offline.
+// endViaOrgRunner ends every open via_org stream of a runner that went offline; each run keeps its
+// state and byte total for when the runner is back.
 func (s *Server) endViaOrgRunner(runner uuid.UUID) {
 	s.viaOrg.mu.Lock()
 	var runs []*viaOrgRun
@@ -244,7 +288,7 @@ func (s *Server) endViaOrgRunner(runner uuid.UUID) {
 	}
 	s.viaOrg.mu.Unlock()
 	for _, run := range runs {
-		s.endViaOrgRun(run)
+		s.releaseViaOrgRun(run, false, false)
 	}
 }
 

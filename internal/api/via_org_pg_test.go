@@ -33,12 +33,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -187,7 +189,12 @@ func newViaOrgAPIFixture(t *testing.T) *viaOrgAPIFixture {
 // forward sends what a runner's proxy sends for one sandbox request, relayed by runner.
 func (f *viaOrgAPIFixture) forward(t *testing.T, runner, runID, grant uuid.UUID, rest, authority string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, proxy.ViaOrgPathPrefix+grant.String()+rest, strings.NewReader(`{"q":1}`))
+	return f.forwardBody(t, runner, runID, grant, rest, authority, `{"q":1}`)
+}
+
+func (f *viaOrgAPIFixture) forwardBody(t *testing.T, runner, runID, grant uuid.UUID, rest, authority, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, proxy.ViaOrgPathPrefix+grant.String()+rest, strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+runToken(t, f.srv, runID))
 	req.Header.Set(proxy.ViaOrgAuthorityHeader, authority)
 	req.Header.Set(proxy.ViaOrgAuthorizationHeader, "Bearer sandbox-own")
@@ -337,6 +344,26 @@ func TestViaOrg_PerRunCaps(t *testing.T) {
 		t.Fatalf("past the byte total = %d %s, want 429", w.Code, w.Body)
 	}
 
+	// The total is the run's: an idle release and a runner reconnect keep it spent.
+	setViaOrgSeams(t, 150*time.Millisecond, 20*time.Millisecond, 8)
+	k := newViaOrgAPIFixture(t)
+	exhausted := func(stage string) {
+		t.Helper()
+		if w := k.forward(t, k.rn.ID, k.run.ID, k.grant, "/v1/x", viaOrgAPIHost); w.Code != http.StatusTooManyRequests || reasonOf(t, w) != "via_org_cap_exceeded" {
+			t.Fatalf("%s = %d %s, want 429 via_org_cap_exceeded", stage, w.Code, w.Body)
+		}
+	}
+	k.forward(t, k.rn.ID, k.run.ID, k.grant, "/v1/x", viaOrgAPIHost)
+	exhausted("past the total")
+	waitFor(t, "the idle release", func() bool { return viaOrgEngineReleased(k.srv, k.run.ID) })
+	exhausted("after the idle release")
+	k.srv.RecordRunnerDisconnected(context.Background(), k.rn.ID, nil)
+	waitFor(t, "the disconnect release", func() bool { return viaOrgEngineReleased(k.srv, k.run.ID) })
+	exhausted("after the runner reconnects")
+	if hits, _, _ := k.up.seen(); hits != 1 {
+		t.Fatalf("the spent run reached the destination %d times, want 1", hits)
+	}
+
 	// Idle: a stream that moves nothing is closed.
 	setViaOrgSeams(t, 150*time.Millisecond, 20*time.Millisecond, viaOrgMaxBytes)
 	h := newViaOrgAPIFixture(t)
@@ -474,4 +501,86 @@ func auditDataOf(ev types.AuditEvent) map[string]any {
 	d := map[string]any{}
 	_ = json.Unmarshal(ev.Data, &d)
 	return d
+}
+
+// viaOrgEngineReleased reports whether the run holds no engine (or no state at all).
+func viaOrgEngineReleased(s *Server, runID uuid.UUID) bool {
+	s.viaOrg.mu.Lock()
+	run, ok := s.viaOrg.runs[runID]
+	s.viaOrg.mu.Unlock()
+	if !ok {
+		return true
+	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	return run.engine == nil
+}
+
+// A sandbox path is never a door of this server: a terminal run's via_org request is refused whatever
+// path follows the grant id, by internalAuth and by the route itself, and nothing is dialed.
+func TestViaOrg_TerminalRunRefusedWhateverThePath(t *testing.T) {
+	f := newViaOrgAPIFixture(t)
+	R := f.rn.ID
+	if ok, err := f.st.UpdateRunStateIf(context.Background(), f.run.ID, f.run.State, types.RunKilled); err != nil || !ok {
+		t.Fatalf("end the run: %v %v", ok, err)
+	}
+	for _, rest := range []string{"/internal/token/renew", "/api/v1/internal/token/renew", "/internal/recordings/x", "/v1/x"} {
+		if w := f.forward(t, R, f.run.ID, f.grant, rest, viaOrgAPIHost); w.Code != http.StatusForbidden || reasonOf(t, w) != "run_terminal" {
+			t.Errorf("%s on a killed run = %d %s, want 403 run_terminal", rest, w.Code, w.Body)
+		}
+	}
+	// The route's own check, without internalAuth in front of it.
+	rt := chi.NewRouter()
+	rt.Route("/api/v1", func(r chi.Router) { f.srv.mountViaOrgRoute(r) })
+	req := httptest.NewRequest(http.MethodPost, proxy.ViaOrgPathPrefix+f.grant.String()+"/v1/x", strings.NewReader(`{}`))
+	req.Header.Set(proxy.ViaOrgAuthorityHeader, viaOrgAPIHost)
+	req = req.WithContext(contextWithClaims(relayConnContext(req.Context(), relayedConn{runner: R}), &identity.Claims{RunID: f.run.ID}))
+	w := httptest.NewRecorder()
+	rt.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden || reasonOf(t, w) != "run_terminal" {
+		t.Errorf("the route served a killed run past internalAuth: %d %s", w.Code, w.Body)
+	}
+	if hits, _, _ := f.up.seen(); hits != 0 {
+		t.Fatalf("a killed run's request reached the destination %d times", hits)
+	}
+}
+
+// The terminal-run gate reads the door, never the sandbox's path after a via_org grant id.
+func TestInternalGateMatchesTheDoorNotTheSandboxPath(t *testing.T) {
+	via := proxy.ViaOrgPathPrefix + uuid.NewString()
+	for _, tc := range []struct {
+		path     string
+		segments []string
+		want     bool
+	}{
+		{"/api/v1/internal/token/renew", internalSelfGatedRoutes, true},
+		{"/api/v1/internal/recordings/" + uuid.NewString(), terminalGraceRoutes, true},
+		{via + "/internal/token/renew", internalSelfGatedRoutes, false},
+		{via + "/internal/recordings/x", terminalGraceRoutes, false},
+		{via + "/x/internal/sso-token/y", terminalGraceRoutes, false},
+	} {
+		if got := pathHasAny(tc.path, tc.segments); got != tc.want {
+			t.Errorf("pathHasAny(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+// The org engine inspects via_org traffic with the run's dispatch-time workspace-secret corpus, which
+// the run's sealed org-side config keeps (the laptop copy never carries it).
+func TestViaOrg_OrgInspectsWithTheDeclaredCorpus(t *testing.T) {
+	f := newViaOrgAPIFixture(t)
+	storeViaOrgConfig(t, f.srv, f.run.ID, []proxy.ViaOrgRoute{{GrantID: f.grant, Host: viaOrgAPIHost}}, func(c *proxy.Config) {
+		c.Policy.LLMInspection = &types.LLMInspectionSpec{Mode: "block", DetectSecrets: true, InspectForwardEgress: true,
+			WorkspaceSecretNames: []string{"ws-deploy-key"}, WorkspaceSecretValues: []string{"WS-DECLARED-VALUE-31c7"}}
+	})
+	R := f.rn.ID
+	if w := f.forwardBody(t, R, f.run.ID, f.grant, "/v1/x", viaOrgAPIHost, `{"note":"WS-DECLARED-VALUE-31c7"}`); w.Code != http.StatusForbidden {
+		t.Fatalf("a declared workspace secret crossed the org egress: %d %s", w.Code, w.Body)
+	}
+	if hits, _, _ := f.up.seen(); hits != 0 {
+		t.Fatalf("the refused body reached the destination %d times", hits)
+	}
+	if w := f.forwardBody(t, R, f.run.ID, f.grant, "/v1/x", viaOrgAPIHost, `{"note":"nothing secret"}`); w.Code != http.StatusOK {
+		t.Fatalf("an ordinary body = %d %s", w.Code, w.Body)
+	}
 }

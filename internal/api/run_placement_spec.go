@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
@@ -35,6 +36,7 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 		return false
 	}
 	p.TrustedOutput = p.TrustedOutput || trustedOutput
+	corpus := inspectionCorpusOf(spec.ProxyConfig.Policy) // before the laptop copy drops it
 	stripped, ref := placement.LocalEligibility(p)
 	if ref != nil {
 		// A personal component name stays out of the append-only record and the failure hint.
@@ -49,7 +51,11 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 	*spec = stripped
 	// keepRunProxyConfig ran before file-secret completion. Replace its local
 	// copy with the classified config; a failed write cannot launch a proxy.
-	if err := s.keepRunProxyConfig(ctx, run.ID, spec.ProxyConfig); err != nil {
+	// The sealed row is the organisation's: it also keeps the dispatch-time
+	// inspection corpus the laptop copy drops, for the run's via_org engine
+	// (via_org.go). Every path that rebuilds a laptop config from the row
+	// re-classifies it (refreshLocalDeploymentConfig), which drops it again.
+	if err := s.keepRunProxyConfig(ctx, run.ID, withInspectionCorpus(spec.ProxyConfig, corpus)); err != nil {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "local proxy config could not be stored")
 		return false
 	}
@@ -228,4 +234,26 @@ func localTrustedOutputRun(run types.AgentRun) bool {
 	// Persisted trusted links are authoring provenance, not a task string a
 	// member can use to manufacture evidence. Capture/login remains explicit.
 	return run.WorkspaceID != nil || run.SourceID != nil || localTrustedOutputRequest(createRunRequest{Task: run.Task})
+}
+
+// inspectionCorpus is a run's dispatch-time workspace-secret corpus: the names its policy
+// declared and the values dispatch resolved for them.
+type inspectionCorpus struct{ names, values []string }
+
+func inspectionCorpusOf(pol types.RunPolicySpec) inspectionCorpus {
+	if li := pol.LLMInspection; li != nil {
+		return inspectionCorpus{slices.Clone(li.WorkspaceSecretNames), slices.Clone(li.WorkspaceSecretValues)}
+	}
+	return inspectionCorpus{}
+}
+
+// withInspectionCorpus is pc with c restored on a copy of its inspection settings: the org-only
+// form of a laptop copy.
+func withInspectionCorpus(pc runner.ProxyConfig, c inspectionCorpus) runner.ProxyConfig {
+	if pc.Policy.LLMInspection == nil || len(c.names)+len(c.values) == 0 {
+		return pc
+	}
+	pc.Policy = pc.Policy.Clone()
+	pc.Policy.LLMInspection.WorkspaceSecretNames, pc.Policy.LLMInspection.WorkspaceSecretValues = c.names, c.values
+	return pc
 }
