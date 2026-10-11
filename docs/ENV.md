@@ -106,13 +106,14 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_VAULT_KV_MOUNT` | string | `wardyn` | the KV v2 mount (flag `-vault-kv-mount`) |
 | `WARDYN_VAULT_KV_PREFIX` | string | `wardyn`; the chart sets the release namespace | this install's path prefix under the mount (flag `-vault-kv-prefix`). Values live at `<prefix>/platform/<name>` (Wardyn's boot keys), `<prefix>/operator/<name>` and `<prefix>/people/<owner in base32hex>/<name>` |
 | `WARDYN_VAULT_KV_MAX_VERSIONS` | int | `1` | `max_versions` set on each secret the store creates (flag `-vault-kv-max-versions`); 1 means a replaced value does not linger |
-| `WARDYN_KEK` | string | `local` | the key that wraps each stored credential's data key in Postgres (flag `-kek`): `local`, `transit` or `azurekv`; anything else refuses boot. [Details](#wardyn_kek) |
+| `WARDYN_KEK` | string | `local` | the key that wraps each stored credential's data key in Postgres (flag `-kek`): `local`, `transit`, `azurekv` or `awskms`; anything else refuses boot. [Details](#wardyn_kek) |
 | `WARDYN_KEK_REQUIRED` | bool | `false` | refuse to start while the local key wraps credentials (flag `-kek-required`, chart `kek.required`): wardynd exits unless a key service or an external store holds them. [Details](#wardyn_kek_required) |
 | `WARDYN_PRINCIPAL_KEYS` | string | `off` | `on` seals each person's stored credentials under a key of that person's own (envelope `enc_version=3`, flag `-principal-keys`, chart `kek.principalKeys`); `off` keeps the credential key. Enabling it is one-way across a downgrade below 0.8.6. [Details](#wardyn_principal_keys) |
 | `WARDYN_KEY_DOMAINS_FILE` | string (path) | (unset) | the file that declares key domains (flag `-key-domains-file`, chart `kek.domains`): a JSON object from domain name to a Transit or Azure Key Vault key. Domains come from this file alone. [Details](#wardyn_key_domains_file) |
 | `WARDYN_VAULT_TRANSIT_MOUNT` | string | `transit` | mount of Vault's Transit engine (flag `-vault-transit-mount`) |
 | `WARDYN_VAULT_TRANSIT_KEY` | string | (unset) | the Transit key (type `aes256-gcm96`) that wraps data keys (flag `-vault-transit-key`); required with `WARDYN_KEK=transit`. [Details](#wardyn_vault_transit_key) |
 | `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` | string | (unset) | a second Transit key (type `aes256-gcm96`, same `WARDYN_VAULT_TRANSIT_MOUNT`) that wraps wardynd's own signing, session and SSH host keys (flag `-vault-transit-key-platform`, chart `secretStore.vault.transitKeyPlatform`). Empty = one key for both. [Details](#wardyn_vault_transit_key_platform) |
+| `WARDYN_AWS_KMS_KEY` | string | (unset) | the full ARN of the symmetric AWS KMS key that wraps data keys (flag `-aws-kms-key`). Required with `WARDYN_KEK=awskms`; an alias or a bare key id refuses boot. [Details](#wardyn_aws_kms_key) |
 | `WARDYN_AZURE_KEK_KEY` | string | (unset) | the versionless id of the Key Vault RSA 3072 or 4096 key that wraps data keys (flag `-azure-kek-key`, chart `kek.azurekv.key`). Required with `WARDYN_KEK=azurekv`. [Details](#wardyn_azure_kek_key) |
 | `WARDYN_AZURE_KEK_SIGNING_KEY` | string | (unset) | the versionless id of the EC P-256 key that signs every wrap it makes (flag `-azure-kek-signing-key`, chart `kek.azurekv.signingKey`). Required whenever `WARDYN_AZURE_KEK_KEY` is set. [Details](#wardyn_azure_kek_signing_key) |
 | `WARDYN_AZURE_KEK_KEY_PLATFORM` | string | (unset) | a second Key Vault RSA 3072 or 4096 key that wraps wardynd's own signing, session and SSH host keys (flag `-azure-kek-key-platform`, chart `kek.azurekv.keyPlatform`); empty = one key pair for both. [Details](#wardyn_azure_kek_key_platform) |
@@ -278,7 +279,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_METRICS_LISTEN` | string | (unset) | dedicated metrics listener address (flag `-metrics-listen`); empty means off. Set, it serves `GET /metrics` in plain HTTP with no credential, and boot refuses an address shared with another listener (`validateMetricsListenConfig`, [`cmd/wardynd/boot_metrics.go`](../cmd/wardynd/boot_metrics.go)). [Details](#wardyn_metrics_listen) |
 | `WARDYN_TRUSTED_CA_FILE` | string (path) | (unset) | path to a PEM bundle of additional trusted roots, additive to the system roots (flag `-trusted-ca-file`; `loadTrustedCA`, [`cmd/wardynd/trusted_ca.go`](../cmd/wardynd/trusted_ca.go)); a missing file or one with no parseable certificate refuses boot. [Details](#wardyn_trusted_ca_file) |
 | `WARDYN_DAEMON_PROXY_URL` | string (URL) | (unset = direct) | the forward proxy wardynd's own outbound HTTP calls traverse (flag `-daemon-proxy-url`; `installDaemonProxy`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a malformed value refuses boot. [Details](#wardyn_daemon_proxy_url) |
-| `WARDYN_DAEMON_NO_PROXY` | string (CSV) | (unset) | destinations `WARDYN_DAEMON_PROXY_URL` must not be used for, in `NO_PROXY` spelling (flag `-daemon-no-proxy`; `x/net/http/httpproxy` semantics). Wardynd appends three hosts itself: `KUBERNETES_SERVICE_HOST`, any `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` host, and any `WARDYN_OIDC_INTERNAL_ISSUER` host. Ignored when the proxy URL is unset |
+| `WARDYN_DAEMON_NO_PROXY` | string (CSV) | (unset) | destinations `WARDYN_DAEMON_PROXY_URL` must not be used for, in `NO_PROXY` spelling (flag `-daemon-no-proxy`; `x/net/http/httpproxy` semantics). Wardynd appends `KUBERNETES_SERVICE_HOST`, any `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` or `WARDYN_OIDC_INTERNAL_ISSUER` host, and the AWS link-local credential endpoints. Ignored when the proxy URL is unset |
 | `WARDYN_DAEMON_PROXY_SECRET` | string (path) | (unset) | path to a file holding one forward-proxy URL that MAY embed `user:pass@` (flag `-daemon-proxy-secret-file`; `installDaemonProxySecret`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a group- or world-writable file refuses boot. [Details](#wardyn_daemon_proxy_secret) |
 | `WARDYN_DEMO_VIDEO_BASE_URL` | string (URL) | (unset) | operator-run mirror base URL re-pointing the Getting Started demo episodes (flag `-demo-video-base-url`; `ValidateDemoVideoBaseURL`, [`internal/api/llm_gateway.go`](../internal/api/llm_gateway.go)) for an air-gapped deployment; unset downloads from GitHub directly. [Details](#wardyn_demo_video_base_url) |
 
@@ -387,16 +388,17 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The key that wraps each stored credential's data key in Postgres (flag `-kek`): `local` (derived from `WARDYN_AGE_KEY`).
 - `transit`, the Vault Transit key `WARDYN_VAULT_TRANSIT_KEY` names, over the same Vault client (`WARDYN_VAULT_ADDR`, its auth and TLS) as the `vaultkv` store.
 - Or `azurekv`, the two Azure Key Vault keys `WARDYN_AZURE_KEK_KEY` and `WARDYN_AZURE_KEK_SIGNING_KEY` name, as the identity `WARDYN_AZURE_AUTH` and its settings name (no `WARDYN_AZURE_KV_URL` needed).
+- Or `awskms`, the AWS KMS key `WARDYN_AWS_KMS_KEY` names, as the identity the AWS SDK's default credential chain finds (IRSA or EKS Pod Identity on EKS).
 - With a key service, no age key is needed or generated once no row is sealed under it (boot refuses by name until `wardynd -rewrap` reports none left).
 - wardynd proves the key at boot, and refuses to start if a probe does not round-trip or if it unwraps under another row (a Transit key type that does not bind `associated_data`).
 - Reads follow each row's `kek_id`, so a row sealed under the local key or the key service stays readable while both are configured.
-- One key service at a time: naming both Transit and Key Vault keys refuses boot.
+- One key service at a time: naming two of the Transit, Key Vault and AWS KMS keys refuses boot.
 - Anything else refuses boot.
 - See [OPERATIONS § Key service: Vault Transit](operations/secrets-and-keys.md#key-service-vault-transit) and [Azure Key Vault](operations/secrets-and-keys.md#key-service-azure-key-vault).
 
 ### `WARDYN_KEK_REQUIRED`
 
-- Refuse to start while the local key wraps credentials (flag `-kek-required`, chart `kek.required`): wardynd exits unless a key service (`WARDYN_KEK=transit` or `azurekv`) or an external store holds them, whether or not `WARDYN_AGE_KEY` is set.
+- Refuse to start while the local key wraps credentials (flag `-kek-required`, chart `kek.required`): wardynd exits unless a key service (`WARDYN_KEK=transit`, `azurekv` or `awskms`) or an external store holds them, whether or not `WARDYN_AGE_KEY` is set.
 - `wardynd -rewrap` still runs, and `/setup/status` shows `kek_required_unmet`.
 
 ### `WARDYN_PRINCIPAL_KEYS`
@@ -445,6 +447,17 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - `wardynd -rewrap -rewrap-retire-platform-key` moves them back off it, onto the credential key (or the local key with `WARDYN_KEK=local`), after which it is unset.
 - Its row `kek_id` is `transit:<mount>/<key>`.
 - See [operations/secrets-and-keys.md](operations/secrets-and-keys.md) → "Two Vault roles".
+
+### `WARDYN_AWS_KMS_KEY`
+
+- The full ARN, `arn:<partition>:kms:<region>:<account>:key/<id>`, of the symmetric AWS KMS key that wraps data keys (flag `-aws-kms-key`); the region is the ARN's. Wardyn calls `Encrypt` and `Decrypt` on it, so the identity needs `kms:Encrypt` and `kms:Decrypt` on that key only.
+- Required with `WARDYN_KEK=awskms`; set with `WARDYN_KEK=local`, it only reads the rows sealed under it, which is how `wardynd -rewrap` moves them back to the local key.
+- An alias, a bare key id or a non-KMS ARN refuses boot: an alias can be re-pointed to another key.
+- Not together with `WARDYN_VAULT_TRANSIT_KEY*` or `WARDYN_AZURE_KEK_KEY*`, or with a platform key or `WARDYN_KEY_DOMAINS_FILE` domains: AWS KMS has neither yet.
+- Reached through `WARDYN_DAEMON_PROXY_URL` and `WARDYN_TRUSTED_CA_FILE`, in the `wardynd -rewrap` modes too.
+- Reached with the AWS SDK's default credential chain; a long-lived access key boots but raises the amber `kek_service_static_key` row.
+- Each wrap is bound to its row by a hash in the encryption context, so CloudTrail shows no owner or credential name.
+- Its row `kek_id` is `awskms:<key ARN>`.
 
 ### `WARDYN_AZURE_KEK_KEY`
 

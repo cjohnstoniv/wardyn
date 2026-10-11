@@ -46,6 +46,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- AWS KMS can hold the key that wraps stored credentials (`WARDYN_KEK=awskms`): each data key is wrapped by KMS
+  Encrypt bound to its row, the key never leaves AWS, and IRSA or EKS Pod Identity is the expected identity (#588). A
+  long-lived access key still boots but raises an amber setup row. An AWS KMS platform key, key domains and store mode
+  are not supported yet, and boot refuses them together with `awskms`.
 - Runners management API: `GET /runners` (active, revoked or all, with each runner's live online state and the runs on
   it), `GET /runners/{id}`, and the caller-scoped `GET /me/runners`, which shows a person only their own runners and
   abbreviates an unclaimed runner's fingerprint. Security admins can list and revoke unused registration tokens (never
@@ -108,6 +112,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- The `wardynd` maintenance modes that open the key service (`-rewrap`, `-rewrap-principal-keys`, `-rotate-age-key`,
+  `-migrate-secrets`, `-reconcile`) now use `WARDYN_DAEMON_PROXY_URL` and `WARDYN_TRUSTED_CA_FILE` as a serving boot
+  does, for Vault Transit and Azure Key Vault too; the AWS instance-metadata, ECS and EKS Pod Identity credential
+  endpoints always bypass the daemon proxy (#588).
 - A portal's delegated token can read the output tail of its person's runs (`GET /runs/{id}/output`) and nothing
   recovered from a recording: for output recovered from a recording and an interactive run's last screen it gets the
   same 409 a run with no such row gives (the refusal is audited `delegation_scope`), and a failed run's failure hint
