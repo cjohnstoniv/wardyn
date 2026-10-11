@@ -8,6 +8,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -79,6 +80,11 @@ type Config struct {
 	// DriveProbeImage is the OCI image ProbeDrive runs its short-lived
 	// readability check in. Empty uses defaultDriveProbeImage (busybox-class).
 	DriveProbeImage string
+	// ControlPlaneRelay, set only by wardyn-runnerd, makes sure the runner's
+	// local relay listens for a run's control-plane URL. When set, the PROXY's
+	// hosts map that URL's hostname to host-gateway, where the relay listens,
+	// and an IP-literal URL (which no hosts entry can remap) refuses the create.
+	ControlPlaneRelay func(controlPlaneURL *url.URL) error
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent

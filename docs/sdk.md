@@ -472,6 +472,11 @@ start.
 | `runner_claim_mismatch` | The personal owner, fingerprint, org binding, claim state, or expiry does not match. |
 | `runner_not_found` | No such runner to revoke: absent, already revoked, or (on `/me`) another person's. |
 | `runner_revoke_reason_invalid` | An owner's revoke names a reason other than `not_mine`. |
+| `relay_route_refused` | A runner's relay serves only the closed list of internal routes a local run needs; this route, or a grant not delivered `own`, is not served through it. |
+| `relay_runner_mismatch` | A relayed request names a run that is not placed on the relaying runner. |
+| `relay_required` | A local run's token was used off its runner's relay; local runs reach the org only through it. |
+| `runner_action_pending` | The relaying runner has an action pending for this run; retry once the runner has acted. |
+| `delivery_via_org` / `delivery_runner_resident` | Through a relay, a grant delivered `via_org` is used at the org and a `runner_resident` one already lives on the runner, so neither is handed out. |
 | `missing_scope_snapshot` | The grant names the credential sentinel but carries no dispatch-time snapshot (a hand-authored grant). Azure DevOps, AWS SSO; and every grant naming `bedrock-api-key`, which is no longer a model credential. |
 | `owner_not_caller` | The grant's snapshot owner is not the run token's own subject. Azure DevOps. |
 | `roster_unreadable` | The site configuration could not be read; nothing is resolved from a failed read. Azure DevOps, AWS SSO. |
@@ -555,6 +560,9 @@ start.
 | `mint_no_human` | `POST /people/{principal}/tokens`'s OWN "needs a signed-in human" sentence — NOT shared with `api_token_no_human` below: same shape, different door, different wording, so a different reason. It answers before `person_token_mint_removed`. |
 | `api_token_from_api_token` | Shared, byte-identical, between `POST /people/{principal}/tokens` and `POST /api/v1/tokens` (self-service): an API token may not mint another. |
 | `token_lookup_unavailable` | The API-token and delegated-token authentication middlewares' shared shape: the revocation store could not be read to authenticate the bearer. |
+| `invitation_target_invalid` / `invitation_target_unknown` / `invitation_replaces_invalid` / `invitation_ttl_invalid` / `invitation_cap_reached` | `POST /people/{principal}/invitations`: the target is reserved or unknown, `replaces_token_id` is not their admin-minted token, a lifetime is out of range, or ten are pending. |
+| `invitation_list_param_invalid` | `GET /invitations`: `state` is not `pending`, `claimed`, `expired` or `revoked`. |
+| `invitation_not_found` / `invitation_not_pending` | `POST /me/invitations/{id}/claim`: someone else's or a missing id (one body); `invitation_not_pending` is the target's own, with `state`. `DELETE /invitations/{id}` answers `invitation_not_found` unless pending. |
 | `api_token_no_human` / `api_token_from_delegated_token` / `api_token_member_mode_mint` / `api_token_name_invalid` / `api_token_ttl_invalid` / `api_token_cap_reached` | `POST /api/v1/tokens` (self-service mint) and `DELETE`. |
 | `owner_ambiguous` / `owner_unresolved` | The shared owner/principal resolver shape: more than one known principal matches a name, or none does. `secrets.go`'s admin `?owner=` resolution (`ownerRefusalReason`) and `sshkeys_admin.go`'s `resolveSSHKeyOwner` (also reached from `POST /sessions/revoke`'s SSH-key cutoff) both answer from this one vocabulary rather than each inventing its own. |
 | `sessions_revoke_param_invalid` | `POST /sessions/revoke`: the body must set exactly one of `sub`/`all`, and `sessions_only` (browser sessions end; API tokens and SSH keys keep working) goes with `sub`, not `all`. |
@@ -677,7 +685,7 @@ The rest reach the wire only through
 | Reason | Meaning |
 |---|---|
 | `admin_surface` / `security_admin_surface` | The tier gates every admin/security-admin-only route runs through (`isOperator`/`isSecurityOperator`): the caller's stamped role is below the route's own floor. Both answer the byte-identical sentence "requires admin role" — the reason is what tells the two tiers apart. |
-| `audit_export_partition_filter` | `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `actor_type`, `outcome` or `origin`): a partition export always covers the whole partition. Answered `400` and not audited. |
+| `audit_export_partition_filter` | `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `target`, `actor_type`, `outcome` or `origin`): a partition export always covers the whole partition. Answered `400` and not audited. |
 | `audit_retention_not_oldest` | `POST /audit/retention/drop` named a partition that is not the oldest retained one. Answered `409` and audited (`authz.denied`, target `audit.retention`, `partition` in the row). |
 | `audit_retention_not_closed` | `POST /audit/retention/drop`: the oldest partition can still receive rows. Answered `409` and audited. |
 | `audit_retention_inside_window` | `POST /audit/retention/drop`: the partition ended less than the effective retention window ago, or retention is forever. Answered `409` and audited. |
@@ -944,7 +952,7 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
 Beyond `run_id`, the audit query accepts server-side predicates:
 
 - `since`/`until` (RFC 3339), `action` (exact), `action_prefix` (e.g. `egress.`),
-  `actor` (exact),
+  `actor` and `target` (exact; under `WARDYN_AUDIT_SEAL=full` each also matches the subject a sealed row stores for that person),
 - `actor_type` (`human|agent|system`), `outcome`
   (`success|denied|failure`),
 - and `origin` (`device|organisation`: the rows an

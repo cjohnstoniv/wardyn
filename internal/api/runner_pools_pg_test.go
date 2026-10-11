@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -31,10 +32,12 @@ const poolTestOrgURL = "https://org.example.com"
 // off, and three people: alice (security admin), super (admin) and two members.
 type poolEnv struct {
 	*govEnv
-	person  *http.Cookie
-	other   *http.Cookie
-	personP string
-	otherP  string
+	// superTwo is a second super admin: an executor attach or detach is decided on the super-admin tier.
+	superTwo *http.Cookie
+	person   *http.Cookie
+	other    *http.Cookie
+	personP  string
+	otherP   string
 }
 
 func newPoolEnv(t *testing.T, secondHuman bool) *poolEnv {
@@ -45,8 +48,9 @@ func newPoolEnv(t *testing.T, secondHuman bool) *poolEnv {
 	}
 	g := newGovEnvOn(t, throwawayBarePGPool(t), mutate)
 	return &poolEnv{
-		govEnv: g,
-		person: ssoSession(t, "sub-person", "person@corp.example", "user"), personP: "sub-person",
+		govEnv:   g,
+		superTwo: ssoSession(t, poolSubSuperTwo, "super-two@corp.example", oidc.RoleAdmin),
+		person:   ssoSession(t, "sub-person", "person@corp.example", "user"), personP: "sub-person",
 		other: ssoSession(t, "sub-other", "other@corp.example", "user"), otherP: "sub-other",
 	}
 }

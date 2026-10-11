@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"reflect"
 	"slices"
 	"strings"
@@ -58,6 +59,10 @@ type Options struct {
 	// OnEvent receives every runner event except `caps` (kept here) and
 	// `waiting` (delivered to the create that owns it).
 	OnEvent func(runnerwire.Event)
+	// Relay takes a runner-opened relay stream as a net.Conn, tagged with the
+	// session's authenticated runner id. It runs on the peer read loop, so it
+	// must not block; an error refuses the stream. Nil refuses every relay.
+	Relay func(runnerID string, conn net.Conn) error
 }
 
 // callTimeout bounds the calls an io-shaped method (Resize, ExecSession.Wait)

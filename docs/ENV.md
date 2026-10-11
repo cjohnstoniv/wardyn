@@ -170,7 +170,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_AUDIT_SINKS` 🔒 | string (JSON) | (unset) | audit sink config file/webhook/syslog (flag `-audit-sinks`). A webhook `bearer_token` requires an `https://` url — boot fails rather than replay the SIEM credential in cleartext on every POST. Schema: [Audit sinks](#audit-sinks-wardyn_audit_sinks) below |
 | `WARDYN_APPROVAL_NOTIFY` 🔒 | string (JSON) | (unset) | approval notification config (flag `-approval-notify`): channels that are told when an approval is waiting. Unset or empty means off. Any bad value refuses boot, naming the channel `id` and the rule. [Details](#wardyn_approval_notify) |
 | `WARDYN_AUDIT_SPOOL` | string | `./data/audit-spool.jsonl` | append-only JSONL fallback for failed audit writes (flag `-audit-spool`); a sibling `<path>.quarantine` appears if the store permanently refuses a spooled line |
-| `WARDYN_AUDIT_SEAL` | string | `off` | `off`, `fields` or `full` (flag `-audit-seal`). With `fields`, personal fields reach every audit sink only as ciphertext; with `full`, reads show the person while their key exists and `[erased]` after. [Details](#wardyn_audit_seal) |
+| `WARDYN_AUDIT_SEAL` | string | `off` | `off`, `fields` or `full` (flag `-audit-seal`). With `fields`, personal fields reach every audit sink only as ciphertext; with `full`, a person in `actor` or `target` is a subject, shown while their key exists and `[erased]` after. [Details](#wardyn_audit_seal) |
 | `WARDYN_AUDIT_SOURCE` | string | (unset) | optional static string stamped as an extra top-level `"source"` field on every event a configured sink serializes, never written to Postgres (flag `-audit-source`). [Details](#wardyn_audit_source) |
 | `WARDYN_AGE_KEY` 🔒 | string | (unset) | age X25519 identity (flag `-age-key`). **Unset is not a safe default** (store mode is the exception): it mints a throwaway identity each boot, so boot 2 cannot decrypt what the first boot encrypted and fails closed (`loadOrCreateSecret`, [`cmd/wardynd/boot_keys.go`](../cmd/wardynd/boot_keys.go)). [Details](#wardyn_age_key) |
 | `WARDYN_PLATFORM_KEY_FILE` 🔒 | path | (unset) | local mode only (flag `-platform-key-file`): a file holding a SECOND age identity from which alone wardynd derives the key that wraps its own signing, session, UI-session and SSH host keys. Refused without `WARDYN_AGE_KEY`. [Details](#wardyn_platform_key_file) |
@@ -350,7 +350,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Secret store seam (flag `-secret-store`): `pg` seals each credential in Postgres under a local key (`WARDYN_AGE_KEY`).
 - `vaultkv` is **store mode**: each value lives in the organisation's Vault KV v2 (OpenBao is a supported endpoint), the Postgres row is a pointer to it, and wardynd does no at-rest cryptography on that row.
 - `azurekv` is store mode in the organisation's Azure Key Vault.
-- Store mode still needs `WARDYN_AGE_KEY` or a key service (`WARDYN_KEK=transit` or `azurekv`).
+- Store mode still needs `WARDYN_AGE_KEY` or a key service (`WARDYN_KEK=transit`, `azurekv` or `awskms`).
 - The per-person keys that seal run masking copies are wrapped under it, and a serving wardynd refuses to start with neither (the maintenance modes still run).
 - Reads follow each row, so either setting reads the other's rows while both are configured; move rows with `wardynd -migrate-secrets -to=vaultkv|azurekv|local`.
 - One external store is configured at a time.
@@ -396,7 +396,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Reads follow each row's `kek_id`, so a row sealed under the local key or the key service stays readable while both are configured.
 - One key service at a time: naming two of the Transit, Key Vault and AWS KMS keys refuses boot.
 - Anything else refuses boot.
-- See [OPERATIONS § Key service: Vault Transit](operations/secrets-and-keys.md#key-service-vault-transit) and [Azure Key Vault](operations/secrets-and-keys.md#key-service-azure-key-vault).
+- See [OPERATIONS § Key service: Vault Transit](operations/secrets-and-keys.md#key-service-vault-transit), [Azure Key Vault](operations/secrets-and-keys.md#key-service-azure-key-vault) and [AWS KMS](operations/secrets-and-keys.md#key-service-aws-kms).
 
 ### `WARDYN_KEK_REQUIRED`
 
@@ -459,6 +459,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - An alias, a bare key id or a non-KMS ARN refuses boot: an alias can be re-pointed to another key.
 - Not together with `WARDYN_VAULT_TRANSIT_KEY*` or `WARDYN_AZURE_KEK_KEY*`, or with a platform key or `WARDYN_KEY_DOMAINS_FILE` domains: AWS KMS has neither yet.
 - Reached through `WARDYN_DAEMON_PROXY_URL` and `WARDYN_TRUSTED_CA_FILE`, in the `wardynd -rewrap` modes too.
+- `AWS_CA_BUNDLE` (or a profile's `ca_bundle`) is honoured too: with `WARDYN_TRUSTED_CA_FILE` unset it replaces the system roots (AWS CLI semantics), and with both set it is added to them.
 - Reached with the AWS SDK's default credential chain; a long-lived access key boots but raises the amber `kek_service_static_key` row.
 - Each wrap is bound to its row by a hash in the encryption context, so CloudTrail shows no owner or credential name.
 - Its row `kek_id` is `awskms:<key ARN>`.
@@ -756,10 +757,11 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A key that cannot be had when a row is written never loses the row or writes it in the clear.
 - It waits in the audit spool under the `wardyn-audit-pending-key` platform key, and the spool drain re-seals it.
 - `full` is `fields` and also stores a human `actor` as `subject:<uuid>` (the id of the person's oldest identity row).
+- It stores the `target` of a person row ([closed list](AUDIT-ACTIONS.md#sealed-fields)) the same way, except where the person has no identity row: `person.create` and a token for a person not yet signed in keep the target clear.
 - So after erasure the person's rows no longer name them.
 - **SIEM rules keyed on `actor` see subject ids, not names, from the moment it is turned on**.
 - And a person with no identity row (one who never signed in) keeps their name in `actor`.
-- Reads and the readable export show the person while their key exists and `[erased]` after; `?actor=<person>` finds both forms.
+- Reads and the readable export show the person while their key exists and `[erased]` after; `?actor=<person>` and `?target=<person>` find both forms.
 - Like `fields`, it applies to rows written after it is turned on.
 - A principal starting `subject:` is refused as a person everywhere (`reserved_principal`) whatever this is set to.
 
@@ -781,7 +783,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - **Store mode** (`WARDYN_SECRET_STORE=vaultkv` or `azurekv`) is the exception: there no key is generated when it is unset.
 - Unset is the goal only with a key service: without one, store mode needs it to wrap the per-person keys that seal run masking copies, and serving refuses to start without it.
 - With a key service it is needed only while local rows remain (boot refuses by name until `wardynd -migrate-secrets -to=vaultkv` (or `-to=azurekv`) reports none left).
-- So is a key service, **`WARDYN_KEK=transit` or `azurekv`**, whose key wraps every new row.
+- So is a key service, **`WARDYN_KEK=transit`, `azurekv` or `awskms`**, whose key wraps every new row.
 - Unset is the goal there too, and once `wardynd -rewrap` reports no row left under the age key it must be unset.
 - Wardynd refuses to start while it is set with no stored row sealed under it, since it could then only let whoever also holds the database forge Wardyn's boot keys.
 
@@ -792,7 +794,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Unset, both derive from `WARDYN_AGE_KEY` and `/setup/status` shows `platform_split`.
 - Refused without `WARDYN_AGE_KEY`, when it holds the same key, or a published one.
 - Setting it on an install that already holds boot keys needs `wardynd -rewrap -rewrap-adopt-boot-keys` once (boot refuses by name until then; the flag says you have never moved them before).
-- With `WARDYN_KEK=transit` or `azurekv` the boot keys are wrapped by the key service like every other row, and the file only reads the ones a plain `wardynd -rewrap` has not moved yet.
+- With `WARDYN_KEK=transit`, `azurekv` or `awskms` the boot keys are wrapped by the key service like every other row, and the file only reads the ones a plain `wardynd -rewrap` has not moved yet.
 - A boot key still under the age key's platform KEK moves only with `-rewrap-adopt-boot-keys`, and is refused as mixed once another boot key is under the key service or the file key.
 - Each read refuses a group- or world-writable file, or one wardynd's own non-root uid owns that others can read — the `_FILE` rule (`cliutil.ReadSecretFile`).
 - See [OPERATIONS § Separating the platform keys](operations/secrets-and-keys.md#separating-the-platform-keys).

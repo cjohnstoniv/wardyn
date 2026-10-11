@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -112,10 +113,14 @@ var _ ActorTranslator = (*Sealer)(nil)
 const (
 	// PendingActorKey is the data key that holds a human actor waiting under the
 	// pending key, and PendingActor the placeholder the actor column carries
-	// meanwhile, so the spool never holds the name.
-	PendingActorKey = "pending_actor"
-	PendingActor    = SubjectActorPrefix + "pending"
-	actorPath       = "actor"
+	// meanwhile, so the spool never holds the name. PendingTargetKey and
+	// PendingTarget are their twins for a person-target action's target column.
+	PendingActorKey  = "pending_actor"
+	PendingActor     = SubjectActorPrefix + "pending"
+	PendingTargetKey = "pending_target"
+	PendingTarget    = SubjectActorPrefix + "pending"
+	actorPath        = "actor"
+	targetPath       = "target"
 )
 
 // Sealer seals the personal fields of audit rows under their subjects' keys.
@@ -204,12 +209,28 @@ func rewrite(obj json.RawMessage, path []string, fn func(json.RawMessage) (json.
 // the spool, never to the store. No path writes a personal field in the clear;
 // when even the pending key is missing, Seal fails.
 func (s *Sealer) Seal(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, bool, error) {
+	if s.Subjects != nil && ForgedSubject(ev) {
+		return ev, false, fmt.Errorf("audit seal: %s carries a %s string in its actor or target; only Seal writes one", ev.Action, SubjectActorPrefix)
+	}
 	out, pending, err := s.sealFields(ctx, ev)
-	if err != nil || !s.sealsActor(out) {
+	if err != nil {
 		return out, pending, err
 	}
-	out, actorPending, err := s.sealActor(ctx, out)
-	return out, pending || actorPending, err
+	if s.sealsActor(out) {
+		var p bool
+		if out, p, err = s.sealActor(ctx, out); err != nil {
+			return out, pending, err
+		}
+		pending = pending || p
+	}
+	if s.sealsTarget(out) {
+		var p bool
+		if out, p, err = s.sealTarget(ctx, out); err != nil {
+			return out, pending, err
+		}
+		pending = pending || p
+	}
+	return out, pending, nil
 }
 
 func (s *Sealer) sealFields(ctx context.Context, ev types.AuditEvent) (out types.AuditEvent, pending bool, err error) {
@@ -459,11 +480,21 @@ func (s *Sealer) Unseal(ctx context.Context, evs []types.AuditEvent) ([]types.Au
 			if memo == nil {
 				memo = newKeyMemo()
 			}
-			actor, err := s.renderActor(ctx, memo, ev)
+			actor, err := s.renderSubject(ctx, memo, ev.Actor, ev.Time)
 			if err != nil {
 				return nil, fmt.Errorf("audit unseal: %w", err)
 			}
 			ev.Actor, changed = actor, true
+		}
+		if s.Subjects != nil && strings.HasPrefix(ev.Target, SubjectActorPrefix) && slices.Contains(personTargetActions, ev.Action) {
+			if memo == nil {
+				memo = newKeyMemo()
+			}
+			target, err := s.renderSubject(ctx, memo, ev.Target, ev.Time)
+			if err != nil {
+				return nil, fmt.Errorf("audit unseal: %w", err)
+			}
+			ev.Target, changed = target, true
 		}
 		if fields := sealFields[ev.Action]; len(fields) > 0 && bytes.Contains(ev.Data, []byte(`"`+sealedPrefix)) {
 			if memo == nil {
@@ -577,7 +608,10 @@ func (s *Sealer) Reseal(ctx context.Context, ev types.AuditEvent) (types.AuditEv
 		return ev, err
 	}
 	ev.Data = data
-	return s.resealActor(ctx, ev, pk)
+	if ev, err = s.resealActor(ctx, ev, pk); err != nil {
+		return ev, err
+	}
+	return s.resealTarget(ctx, ev, pk)
 }
 
 // subjectKeyUnlessGone is subjectKey, except ErrKeyErased when the subject's
