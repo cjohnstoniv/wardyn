@@ -182,6 +182,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- `wardyn site-config set` restores a document captured with `get` whatever the stored egress baseline (after a
+  reset, or after the security tier moved it): the baseline stays as stored and `set` warns only when the file
+  asserted a different one. The SDK's `PutSiteConfig` still sends the baseline and gets the server's refusal;
+  `PutSiteConfigResult` is the restore path (#1515).
 - A webhook audit sink whose `flush_interval` or `retry_base_delay` is zero or negative is now refused at boot, in
   best-effort mode too (#1513).
 - The `wardynd` maintenance modes that open the key service (`-rewrap`, `-rewrap-principal-keys`, `-rotate-age-key`,
@@ -293,16 +297,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   count cannot race a sign-in (#1828).
 - A revive that would start an agent is refused at the concurrent-run cap before any identity is minted or image
   pulled, and approval notifications carry the next later SLA tier still ahead (#1825).
-- `wardyn site-config set` of a document captured with `get` is no longer refused when the stored egress baseline
-  differs (after a reset, or after the security tier moved it): the baseline is left as stored and `set` warns only
-  when the file asserted a different one. The SDK's `PutSiteConfig` still sends the baseline and gets the server's
-  refusal; `PutSiteConfigResult` is the restore path.
-
-
-## [0.8.9] — 2026-10-09
-
-### Before you upgrade
-
 - Migration `0133_recording_erasures` adds durable per-run recording fences. Take a database dump before
   upgrading; rollback requires restoring that dump. Filesystem deployments must retain the recording
   root's `.erased` directory and `*.lock` files alongside the recordings.
