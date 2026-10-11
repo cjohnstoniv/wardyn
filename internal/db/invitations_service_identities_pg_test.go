@@ -29,10 +29,11 @@ func TestMigration0157_TokensAndRunsUnchanged(t *testing.T) {
 		pgExec(t, pool, `INSERT INTO agent_runs (id, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target)
 			VALUES ($1, $2, 'claude-code', 'repo', 'CC1', 'STOPPED', 'spiffe://x', 'docker')`, uuid.New(), by)
 	}
+	// The pool binding columns (0160) are added later in the same Migrate; they are not what 0157 may change.
 	snapshot := func(table string) string {
 		t.Helper()
 		var parts []string
-		rows, err := pool.Query(ctx, `SELECT row_to_json(x)::text FROM `+table+` x ORDER BY id`)
+		rows, err := pool.Query(ctx, `SELECT (to_jsonb(x) - 'runner_pool_id' - 'runner_pool_revision' - 'runner_pool_selection' - 'runner_pool_executor')::text FROM `+table+` x ORDER BY id`)
 		if err != nil {
 			t.Fatalf("snapshot %s: %v", table, err)
 		}
