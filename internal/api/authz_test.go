@@ -1969,8 +1969,8 @@ func (s *authzStore) ClaimWorkspaceActiveRun(context.Context, uuid.UUID, uuid.UU
 func (s *authzStore) ClearWorkspaceActiveRun(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
 	return false, nil
 }
-func (s *authzStore) SetWorkspaceBuiltImage(context.Context, uuid.UUID, string, string) (types.Workspace, error) {
-	return types.Workspace{}, store.ErrNotFound
+func (s *authzStore) SetWorkspaceBuiltImage(context.Context, uuid.UUID, string, string, string, *types.ImageBuild) (bool, error) {
+	return false, store.ErrNotFound
 }
 func (s *authzStore) SetWorkspaceImportState(context.Context, uuid.UUID, types.WorkspaceStatus, *uuid.UUID, *uuid.UUID) (types.Workspace, bool, error) {
 	return types.Workspace{}, false, store.ErrNotFound

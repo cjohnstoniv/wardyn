@@ -53,8 +53,8 @@ func (s *buildEventStore) SetRunStatusDetail(_ context.Context, _ uuid.UUID, det
 	return nil
 }
 func (s *buildEventStore) SetRunImage(context.Context, uuid.UUID, string) error { return nil }
-func (s *buildEventStore) SetWorkspaceBuiltImage(context.Context, uuid.UUID, string, string) (types.Workspace, error) {
-	return types.Workspace{}, nil
+func (s *buildEventStore) SetWorkspaceBuiltImage(context.Context, uuid.UUID, string, string, string, *types.ImageBuild) (bool, error) {
+	return true, nil
 }
 
 // buildEventBuilder records which builder method ran into the same log.

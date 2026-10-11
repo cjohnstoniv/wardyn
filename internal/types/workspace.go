@@ -186,6 +186,8 @@ type Workspace struct {
 	// BuiltProfileHash is the profile hash ImageRef was built from, the
 	// build-once/reuse-many cache key (rebuild only when it changes).
 	BuiltProfileHash string `json:"built_profile_hash,omitempty"`
+	// ImageBuild records what built ImageRef; written only by SetWorkspaceBuiltImage.
+	ImageBuild *ImageBuild `json:"-"`
 	// ApprovedEgress is the operator-owned list of egress hosts explicitly
 	// promoted, unioned into a run's allowlist. Never written by a scan;
 	// cleared when the composition changes.
