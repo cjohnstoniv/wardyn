@@ -109,6 +109,14 @@ type dispatchParams struct {
 	// Components is the dispatch half of the run's components, from the gate's
 	// decision at create (runs_dispatch_components.go). Zero for every other lane.
 	Components componentDispatch
+	// PolicyOverridden marks a run whose person edited the New Run cards: the
+	// proxy's refusal then names the policy as changed for this run
+	// (policyref.Ref.Overridden).
+	PolicyOverridden bool
+	// PushRuleSets are the push content rules per SCM entry the run brings
+	// (pushRuleSetsFor), the product after the ceiling. When set, the proxy
+	// carries them INSTEAD of the policy's run-wide push_rules.
+	PushRuleSets []types.PushRuleSet
 }
 
 // dispatchRun launches the sandbox via the runner and advances run state. On any
@@ -456,6 +464,13 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 
+	// The per-entry sets replace the run-wide block on the sidecar's config
+	// (the proxy refuses both together); the audited envelope below keeps it.
+	proxyPolicy := policy
+	if len(p.PushRuleSets) > 0 {
+		proxyPolicy.PushRules = nil
+	}
+
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
 		Image:            p.Image,
@@ -485,7 +500,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			ControlPlaneCAPEM: s.cfg.ControlPlaneCAPEM,
 			// The proxy sidecar enforces THIS run's egress policy; a proxy
 			// without a policy fails closed (no egress at all).
-			Policy:    policy,
+			Policy:    proxyPolicy,
 			Injection: injections,
 			// Per-run TLS-MITM CA (empty unless intercept_tls): private key to the
 			// proxy only; the sandbox trusts the public cert via the agent env.
@@ -548,11 +563,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// for review is refused instead (push_hold.go). Set only when the
 			// policy has review paths, the one thing it changes: an older
 			// proxy refuses the key, and must not refuse every task run.
-			Unattended: !p.Interactive && policy.PushRules != nil && len(policy.PushRules.RequireReviewPaths) > 0,
+			Unattended:   !p.Interactive && pushReviewRules(policy, p.PushRuleSets),
+			PushRuleSets: p.PushRuleSets,
 			// The policy a refusal names (runs_dispatch_attribution.go); nil when
 			// the run has no profile and the site sets no policy_help, because an
 			// older proxy refuses the key.
-			Attribution: s.runAttribution(ctx, run, siteCfg),
+			Attribution: s.runAttribution(ctx, run, siteCfg, p.PolicyOverridden),
 		},
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/

@@ -101,11 +101,18 @@
       "pids_limit",
       "disk_mib"
     ],
+    "RunHostOverrides": [
+      "add_allowed",
+      "add_denied",
+      "remove_allowed",
+      "remove_denied"
+    ],
     "RunOverrides": [
       "agent",
       "azure_devops",
       "git_pat",
-      "push_rules"
+      "push_rules",
+      "hosts"
     ],
     "RunResources": [
       "cpu_millis",
@@ -328,10 +335,9 @@
       "part": "access_rules",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
-      "meaning": "Push rules exist only inside an SCM entry, one set per provider and organisation. This run-wide block is not accepted until the keyed carrier lands.",
+      "meaning": "Push rules exist only inside an SCM entry, one set per provider and organisation (overrides.push_rules).",
       "section": "scm_entry",
-      "keyed_by": "provider+org",
-      "pending": "A-L3/A-L10"
+      "keyed_by": "provider+org"
     },
     {
       "name": "azure_devops_capabilities",

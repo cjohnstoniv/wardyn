@@ -20,7 +20,10 @@ export type OverrideKind =
   | "ado_capability"
   | "git_pat_scope"
   | "push_rule_deny"
-  | "push_rule_review";
+  | "push_rule_review"
+  | "run_host_allow"
+  | "run_host_wildcard"
+  | "run_host_deny";
 
 export type OverrideOp = "add" | "remove" | "narrow";
 export type OverrideDirection = "tighten" | "widen";

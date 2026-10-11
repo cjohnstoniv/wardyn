@@ -30,7 +30,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[PostureRequirement]():      strings.Fields("MDMManaged DiskEncrypted OSMin"),
 	reflect.TypeFor[egress.InjectionRule]():    strings.Fields("Host Header SecretName Format RequireTLS PinPath PinQuery PinRoutes"),
 	reflect.TypeFor[egress.PinRoute]():         strings.Fields("Method Path"),
-	reflect.TypeFor[policyref.Ref]():           strings.Fields("Source Name Owner Email RequestURL RequestText"),
+	reflect.TypeFor[policyref.Ref]():           strings.Fields("Source Name Owner Email RequestURL RequestText Overridden"),
 	reflect.TypeFor[proxy.ADOGrantConfig]():    strings.Fields("Organization Capabilities Hosts"),
 	reflect.TypeFor[proxy.AzureGateConfig]():   strings.Fields("Host Route Models BodyCap"),
 	reflect.TypeFor[proxy.PATGrant]():          strings.Fields("GrantID Username Repos Access Forge API"),
@@ -47,7 +47,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.RunPolicySpec](): strings.Fields("AllowedDomains DeniedDomains AllowAllEgress FirstUseApproval FirstUseHoldSeconds MaxHolds AllowedMethods MinConfinementClass EligibleGrants AutoStopAfterSec " +
 		"WorkspaceMounts WorkspaceRepos LLMInspection UIApps Resources ToolRules GitPushAnyBranch PushRules AzureDevOpsCapabilities GitHubCapabilities"),
 	reflect.TypeFor[types.ToolRule]():         strings.Fields("Tool Effect"),
-	reflect.TypeFor[types.PushRuleSet]():      strings.Fields("Provider Host Org Rules"),
+	reflect.TypeFor[types.PushRuleSet]():      strings.Fields("Provider Host Org BasePath Rules"),
 	reflect.TypeFor[types.HarnessToolRules](): strings.Fields("Harness Default Rules"),
 	reflect.TypeFor[types.UIApp]():            strings.Fields("Name Port Path"),
 	reflect.TypeFor[types.WorkspaceMount]():   strings.Fields("Source Target ReadOnly"),

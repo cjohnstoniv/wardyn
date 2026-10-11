@@ -64,6 +64,7 @@ type runFold struct {
 	adoNarrowed       string
 	fitWarnings       []string
 	prov              []provenanceRow
+	pushSets          []types.PushRuleSet
 }
 
 // runFoldStep is one gate or fold of the shared sequence. run writes its own
@@ -107,6 +108,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepSeedWorkspace, foldAll},
 	{(*Server).stepDrive, foldAll},
 	{(*Server).stepWorkspaces, foldAll},
+	{(*Server).stepPushRuleSets, foldAll},
 	{(*Server).stepPreviewEgress, foldPreflight | foldPreview},
 	{(*Server).stepRequirements, foldAll},
 	{(*Server).stepGitHubEgress, foldAll},
