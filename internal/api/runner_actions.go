@@ -90,21 +90,35 @@ func (s *Server) RegisterRunnerSubstrates(ctx context.Context) error {
 // admitRunner is the production HubConfig.Admit: the durable inventory, queue,
 // result and activity callbacks bound to the authenticated stored runner.
 func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admission, error) {
-	st, ok := s.cfg.Store.(store.PG)
-	if !ok || s.cfg.RunnerAuditPrepare == nil {
+	if _, ok := s.cfg.Store.(store.PG); !ok || s.cfg.RunnerAuditPrepare == nil {
 		return remote.Admission{}, errors.New("runner admission requires the Postgres store and the runner audit policy")
 	}
 	id := rn.ID
 	ep := s.runnerEndpoint(id)
 	return remote.Admission{Substrate: ep.sub, Link: ep.link,
 		Pending:        func(ctx context.Context) ([]runnerwire.PendingAction, error) { return s.PendingFromRunner(ctx, id) },
-		BeginInventory: func(ctx context.Context, session string) error { return st.BeginRunnerInventory(ctx, id, session) },
+		BeginInventory: func(ctx context.Context, session string) error { return s.BeginInventoryFromRunner(ctx, id, session) },
 		StatePage: func(ctx context.Context, session string, page runnerwire.StatePage) error {
 			return s.StatePageFromRunner(ctx, id, session, page)
 		},
 		Event:    func(ctx context.Context, ev runnerwire.Event) error { return s.EventFromRunner(ctx, id, ev) },
 		Activity: func(ctx context.Context, runID uuid.UUID) error { return s.ActivityFromRunner(ctx, id, runID) },
 	}, nil
+}
+
+// BeginInventoryFromRunner is Admission.BeginInventory, off the read loop:
+// when the previous session completed its inventory, an asserted subject's
+// deferred action continues in one successor, then the new inventory begins.
+// The successor is in this session's PENDING.
+func (s *Server) BeginInventoryFromRunner(ctx context.Context, runnerID uuid.UUID, sessionID string) error {
+	st, ok := s.cfg.Store.(store.PG)
+	if !ok {
+		return store.ErrRunnerExecutionRefused
+	}
+	if _, err := st.ReissueDeferredAssertedRunnerActions(ctx, runnerID, sessionID); err != nil {
+		return err
+	}
+	return st.BeginRunnerInventory(ctx, runnerID, sessionID)
 }
 
 // EventFromRunner is Admission.Event: the checked dispatcher of one runner's

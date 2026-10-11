@@ -523,7 +523,7 @@ var bootResolveQuery = url.Values{"phase": {"boot"}}
 // the boot phase, the Azure DevOps capability hold's per-(host, capability) ask (ado_hold.go) or a
 // stale_jti; nil is the plain resolve.
 func resolveInjectionQuery(ctx context.Context, base, token string, grantID uuid.UUID, query url.Values, client *http.Client) (types.ResolvedInjection, error) {
-	target := base + "/api/v1/internal/injection/" + grantID.String()
+	target := controlPlaneEndpoint(base, "/api/v1/internal/injection/"+grantID.String())
 	if len(query) > 0 {
 		target += "?" + query.Encode()
 	}

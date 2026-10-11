@@ -396,7 +396,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Reads follow each row's `kek_id`, so a row sealed under the local key or the key service stays readable while both are configured.
 - One key service at a time: naming two of the Transit, Key Vault and AWS KMS keys refuses boot.
 - Anything else refuses boot.
-- See [OPERATIONS § Key service: Vault Transit](operations/secrets-and-keys.md#key-service-vault-transit) [Azure Key Vault](operations/secrets-and-keys.md#key-service-azure-key-vault) and [AWS KMS](operations/secrets-and-keys.md#key-service-aws-kms).
+- See [OPERATIONS § Key service: Vault Transit](operations/secrets-and-keys.md#key-service-vault-transit), [Azure Key Vault](operations/secrets-and-keys.md#key-service-azure-key-vault) and [AWS KMS](operations/secrets-and-keys.md#key-service-aws-kms).
 
 ### `WARDYN_KEK_REQUIRED`
 

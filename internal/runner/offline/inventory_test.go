@@ -4,12 +4,27 @@
 package offline
 
 import (
+	"context"
 	"errors"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
+
+// allState is the aggregate inventory these tests inspect; production pages it.
+func allState(ctx context.Context, m *Manager) ([]runnerwire.RunState, error) {
+	m.mu.Lock()
+	if err := m.ensureDurable(); err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
+	ids := m.inventoryIDs()
+	m.mu.Unlock()
+	return m.stateRows(ctx, ids)
+}
 
 func TestStatePagesExceedsLifetimeRowLimitWithoutAggregation(t *testing.T) {
 	m, _, _, _ := managerFixture(t)
@@ -91,5 +106,41 @@ func TestStatePagesRequireClosedAdmissionAndDurableSnapshot(t *testing.T) {
 	restore()
 	if err := m.StatePages(t.Context(), send); err != nil || calls != 1 {
 		t.Fatalf("empty final: calls=%d %v", calls, err)
+	}
+}
+
+// The periodic pass must not grow with retained history: settled or exec-less
+// runs are left to the paged STATE inventory, and only a live execution whose
+// exit is not yet recorded touches the substrate.
+func TestPeriodicObservationSkipsRetainedRunsAndCapturesLiveExit(t *testing.T) {
+	m, sub, _, _ := managerFixture(t)
+	code := 3
+	sub.agent = runner.Status{State: types.RunStopped, ExitCode: &code}
+	live := uuid.New()
+	m.mu.Lock()
+	for i := range 1001 {
+		id := uuid.New()
+		r := localRun{RunID: id, Ref: id.String(), Lease: runnerwire.Lease{RunID: id}}
+		if i%2 == 0 {
+			r.Generation, r.ExecID = uuid.New(), "exec"
+			r.Exit = &runnerwire.AgentExit{Generation: r.Generation, ExecID: r.ExecID, Code: 0}
+		}
+		m.state.Runs[id] = r
+	}
+	m.state.Runs[live] = localRun{RunID: live, Ref: live.String(), Generation: uuid.New(), ExecID: "exec", Lease: runnerwire.Lease{RunID: live}}
+	if err := m.save(); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Unlock()
+	if err := m.observeExits(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	exit := m.state.Runs[live].Exit
+	m.mu.Unlock()
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	if sub.statuses != 1 || exit == nil || exit.Code != code {
+		t.Fatalf("periodic pass queried %d sandboxes, live exit %+v", sub.statuses, exit)
 	}
 }

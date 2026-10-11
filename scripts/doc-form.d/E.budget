@@ -8,5 +8,5 @@
 # docs/ENV.md 35973 adds 74 (0.9 G-sec-rest): WARDYN_KEK_REQUIRED covers new writes only and names the kek_local_rows row (#1977), and only the pinned codex is supported (#1979).
 # docs/ENV.md 35435 adds 42 over 35393 (0.9 F-1514): the WARDYN_REHEARSE_PG_DSN row, which the env-doc guard requires for the rehearsal's scratch database.
 # docs/ENV.md 36015 measured after F-1514 merge.
-docs/ENV.md=36046
+docs/ENV.md=36046 share=5
 # docs/ENV.md 36046 adds 31 (0.9 F-588 M1): awskms in the store-mode and key-service lines, the AWS KMS link, and the AWS_CA_BUNDLE bullet.
