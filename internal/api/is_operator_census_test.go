@@ -54,6 +54,11 @@ var isOperatorCensus = map[string]int{
 	"apitokens.go:roleSnapshotDrops": 2,
 	// List and read only; the launch check is presetLaunchOpenTo.
 	"presets.go:presetOpenTo": 1,
+	// Drive storage layout on the security-tier drive routes: the directory
+	// name, writability past the drive's posture, and the host path stay the
+	// super admin's.
+	"user_drives.go:handleUpsertUserDriveGrant":     1,
+	"user_drives_preview.go:handlePreviewUserDrive": 1,
 	// The predicate itself.
 	"govern_admin.go:runUngoverned": 1,
 }
