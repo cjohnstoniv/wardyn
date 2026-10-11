@@ -13,7 +13,7 @@
 // up stays in the sibling file.
 import * as React from "react";
 import { describe, it, expect, vi, beforeEach, type MockInstance } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // lastAttachOutput captures the onOutput callback the pane hands AttachTerminal
@@ -155,9 +155,10 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
       }));
     render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
 
-    const starting = await screen.findByTestId("login-sandbox-starting");
-    expect(starting).toHaveTextContent(SIGNIN_PROGRESS.STEP_DOWNLOAD_ACTIVE);
-    expect(starting).toHaveTextContent(SIGNIN_PROGRESS.DOWNLOAD_HINT);
+    await waitFor(() =>
+      expect(screen.getByTestId("login-sandbox-starting")).toHaveTextContent(SIGNIN_PROGRESS.STEP_DOWNLOAD_ACTIVE),
+    );
+    expect(screen.getByTestId("login-sandbox-starting")).toHaveTextContent(SIGNIN_PROGRESS.DOWNLOAD_HINT);
 
     const alertBox = await screen.findByRole("alert", {}, { timeout: 5000 });
     expect(alertBox).toHaveTextContent("docker: pull ghcr.io/example/agent-aws-sso:0.8.0: manifest unknown");

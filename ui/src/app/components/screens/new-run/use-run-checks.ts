@@ -86,7 +86,7 @@ export function useRunChecks(params: Params) {
   reads.current = checks;
   const flights = React.useRef({ preflight: emptyFlight(), preview: emptyFlight() });
   const mounted = React.useRef(false);
-  const timer = React.useRef<ReturnType<typeof setTimeout>>();
+  const timer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const timerAt = React.useRef(Infinity);
   const dispatcher = React.useRef<(manual?: boolean) => Promise<void>>(async () => {});
   const { identity, body, selectionKey, externalRevision, sourceRefreshPending, autoCheck, doorOpen, adoDoorOpen } = params;

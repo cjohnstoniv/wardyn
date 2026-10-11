@@ -177,9 +177,8 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `@solid-primitives/refs` | 1.1.3 | MIT |
 | `@solid-primitives/transition-group` | 1.1.2 | MIT |
 | `@solid-primitives/utils` | 6.4.0 | MIT |
-| `@types/prop-types` | 15.7.15 | MIT |
-| `@types/react` | 18.3.12 | MIT |
-| `@types/react-dom` | 18.3.1 | MIT |
+| `@types/react` | 19.3.0 | MIT |
+| `@types/react-dom` | 19.3.0 | MIT |
 | `@xterm/addon-clipboard` | 0.2.0 | MIT |
 | `@xterm/addon-fit` | 0.11.0 | MIT |
 | `@xterm/addon-unicode11` | 0.9.0 | MIT |
@@ -203,8 +202,8 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `lucide-react` | 1.52.0 | ISC |
 | `object-assign` | 4.1.1 | MIT |
 | `prop-types` | 15.8.1 | MIT |
-| `react` | 18.3.1 | MIT |
-| `react-dom` | 18.3.1 | MIT |
+| `react` | 19.3.0 | MIT |
+| `react-dom` | 19.3.0 | MIT |
 | `react-draggable` | 4.7.2 | MIT |
 | `react-grid-layout` | 2.3.0 | MIT |
 | `react-is` | 16.13.1 | MIT |
@@ -215,7 +214,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `react-router-dom` | 7.18.4 | MIT |
 | `react-style-singleton` | 2.2.3 | MIT |
 | `resize-observer-polyfill` | 1.5.1 | MIT |
-| `scheduler` | 0.23.2 | MIT |
+| `scheduler` | 0.28.0 | MIT |
 | `seroval` | 1.6.8 | MIT |
 | `seroval-plugins` | 1.6.8 | MIT |
 | `set-cookie-parser` | 2.7.2 | MIT |
@@ -283,16 +282,15 @@ canonical text for that licence is in `licenses/texts/common/`.
 | `@radix-ui/react-use-size` | 1.1.5 | MIT | https://radix-ui.com/primitives |
 | `@radix-ui/react-visually-hidden` | 1.2.12 | MIT | https://radix-ui.com/primitives |
 | `@radix-ui/rect` | 1.1.3 | MIT | https://radix-ui.com/primitives |
-| `@types/prop-types` | 15.7.15 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/prop-types |
-| `@types/react` | 18.3.12 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react |
-| `@types/react-dom` | 18.3.1 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react-dom |
+| `@types/react` | 19.3.0 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react |
+| `@types/react-dom` | 19.3.0 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react-dom |
 | `@xterm/xterm` | 6.0.0 | MIT | https://github.com/xtermjs/xterm.js#readme |
 | `prop-types` | 15.8.1 | MIT | https://facebook.github.io/react/ |
-| `react` | 18.3.1 | MIT | https://reactjs.org/ |
-| `react-dom` | 18.3.1 | MIT | https://reactjs.org/ |
+| `react` | 19.3.0 | MIT | https://react.dev/ |
+| `react-dom` | 19.3.0 | MIT | https://react.dev/ |
 | `react-is` | 16.13.1 | MIT | https://reactjs.org/ |
 | `react-remove-scroll-bar` | 2.3.8 | MIT | Anton Korzunov |
-| `scheduler` | 0.23.2 | MIT | https://reactjs.org/ |
+| `scheduler` | 0.28.0 | MIT | https://react.dev/ |
 
 ## In-tree components derived from third-party projects
 

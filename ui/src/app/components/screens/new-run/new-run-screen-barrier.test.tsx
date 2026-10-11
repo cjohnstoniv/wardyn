@@ -721,6 +721,6 @@ describe("NewRunScreen — #1238 tier picker states", () => {
     rerender(ui(true));
     goToPanel("Policy");
     expect(await screen.findByRole("radio", { name: "Wall" })).toHaveAttribute("aria-checked", "true");
-    expect(screen.queryByText("Vault")).toBeNull();
+    await waitFor(() => expect(screen.queryByText("Vault")).toBeNull());
   });
 });
