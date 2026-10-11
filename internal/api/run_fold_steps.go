@@ -276,8 +276,12 @@ func (s *Server) stepAutonomy(f *runFold, rec *foldRecorder) bool {
 // governance and the deployment (run_end_create.go); a refusal is the same at
 // every door and leaves no row.
 func (s *Server) stepRunEnd(f *runFold, rec *foldRecorder) bool {
+	var pool *types.RunnerPool
+	if f.place.pooled {
+		pool = &f.place.row
+	}
 	var refusal *runRefusal
-	f.end, refusal = s.resolveCreateEnd(f.r, *f.req, f.ceiling)
+	f.end, refusal = s.resolveCreateEnd(f.r, *f.req, f.ceiling, pool)
 	return !refusal.write(s, f.w, f.r)
 }
 
