@@ -355,10 +355,10 @@ func (b *outputBuffer) ack(offset int64) error {
 	if offset < 0 || offset > b.state.End {
 		return errOutputOffset
 	}
+	b.lossy = false
 	if offset <= b.state.Ack {
 		return nil
 	}
-	b.lossy = false
 	b.state.Ack = offset
 	if err := b.save(); err != nil {
 		b.stopped = err
