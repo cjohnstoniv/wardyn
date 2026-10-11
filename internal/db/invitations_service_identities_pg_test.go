@@ -29,11 +29,19 @@ func TestMigration0157_TokensAndRunsUnchanged(t *testing.T) {
 		pgExec(t, pool, `INSERT INTO agent_runs (id, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target)
 			VALUES ($1, $2, 'claude-code', 'repo', 'CC1', 'STOPPED', 'spiffe://x', 'docker')`, uuid.New(), by)
 	}
-	// The pool binding columns (0160) are added later in the same Migrate; they are not what 0157 may change.
-	snapshot := func(table string) string {
+	// Later migrations in the same Migrate add columns (0159, 0160); they are not what 0157 may
+	// change, so each row is compared on the columns the table had before the migration.
+	columns := func(table string) []string {
+		t.Helper()
+		return pgScalar[[]string](t, pool, `SELECT array_agg(column_name::text ORDER BY column_name) FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name = '`+table+`'`)
+	}
+	tokenCols, runCols := columns("api_tokens"), columns("agent_runs")
+	snapshot := func(table string, cols []string) string {
 		t.Helper()
 		var parts []string
-		rows, err := pool.Query(ctx, `SELECT (to_jsonb(x) - 'runner_pool_id' - 'runner_pool_revision' - 'runner_pool_selection' - 'runner_pool_executor')::text FROM `+table+` x ORDER BY id`)
+		rows, err := pool.Query(ctx, `SELECT (SELECT jsonb_object_agg(k, v) FROM jsonb_each(to_jsonb(x)) AS e(k, v) WHERE k = ANY($1))::text
+			FROM `+table+` x ORDER BY id`, cols)
 		if err != nil {
 			t.Fatalf("snapshot %s: %v", table, err)
 		}
@@ -47,7 +55,7 @@ func TestMigration0157_TokensAndRunsUnchanged(t *testing.T) {
 		}
 		return strings.Join(parts, "\n")
 	}
-	tokensBefore, runsBefore := snapshot("api_tokens"), snapshot("agent_runs")
+	tokensBefore, runsBefore := snapshot("api_tokens", tokenCols), snapshot("agent_runs", runCols)
 	if tokensBefore == "" || runsBefore == "" {
 		t.Fatalf("fixture seeded nothing in %s", schema)
 	}
@@ -55,10 +63,10 @@ func TestMigration0157_TokensAndRunsUnchanged(t *testing.T) {
 	if err := Migrate(ctx, pool); err != nil {
 		t.Fatalf("Migrate applying 0157 over a seeded 0156 database: %v", err)
 	}
-	if got := snapshot("api_tokens"); got != tokensBefore {
+	if got := snapshot("api_tokens", tokenCols); got != tokensBefore {
 		t.Errorf("api_tokens changed:\nbefore %s\nafter  %s", tokensBefore, got)
 	}
-	if got := snapshot("agent_runs"); got != runsBefore {
+	if got := snapshot("agent_runs", runCols); got != runsBefore {
 		t.Errorf("agent_runs changed:\nbefore %s\nafter  %s", runsBefore, got)
 	}
 	for _, table := range []string{"person_invitations", "service_identities", "api_token_moves"} {
