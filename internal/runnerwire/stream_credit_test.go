@@ -227,11 +227,10 @@ func TestStreamCreditReturnedForDataOnAResetStream(t *testing.T) {
 	}
 }
 
-// R2-0014, the part this lane cannot fix: DATA the peer sent before it saw this
-// side's RESET reaches a stream already gone from the table, and
-// Peer.handleStream (peer.go) drops it without returning its credit.
+// R2-0014: DATA the peer sent before it saw this side's RESET reaches a stream
+// already gone from the table; it is dropped and its bytes go back to the
+// sender's connection window.
 func TestStreamCreditReturnedForDataInFlightPastALocalReset(t *testing.T) {
-	t.Skip("BLOCKED-ON-H3: Peer.handleStream drops DATA for an unknown stream without crediting the connection (peer.go:303-310)")
 	opened := make(chan *Stream, 1)
 	r := newRaw(t, PeerConfig{Org: true, OnOpen: func(s *Stream, o Open) error { opened <- s; return nil }})
 	open, _ := json.Marshal(Open{Kind: KindRelay})
@@ -245,6 +244,28 @@ func TestStreamCreditReturnedForDataInFlightPastALocalReset(t *testing.T) {
 	r.write(t, Frame{Type: TypeData, Stream: 1, Payload: bytes.Repeat([]byte{1}, 1000)})
 	if got := connWindowWithin(t, r, 1000, 2*time.Second); got != 1000 {
 		t.Fatalf("connection WINDOW returned %d bytes, want 1000", got)
+	}
+}
+
+// A DATA frame refused for overflowing its stream's window is not held, so its
+// bytes go back to the sender's connection window along with the buffer the
+// reset discards.
+func TestStreamCreditReturnedForDataRefusedPastTheStreamWindow(t *testing.T) {
+	r := newRaw(t, PeerConfig{Org: true, OnOpen: func(*Stream, Open) error { return nil }})
+	open, _ := json.Marshal(Open{Kind: KindRelay})
+	r.write(t, Frame{Type: TypeOpen, Stream: 1, Payload: open})
+	r.readType(t, TypeOpenOK)
+	chunk := bytes.Repeat([]byte{1}, MaxDataFrame)
+	for range StreamWindow / MaxDataFrame {
+		r.write(t, Frame{Type: TypeData, Stream: 1, Payload: chunk})
+	}
+	r.write(t, Frame{Type: TypeData, Stream: 1, Payload: bytes.Repeat([]byte{1}, 1000)})
+	want := int64(StreamWindow + 1000)
+	if got := connWindowWithin(t, r, want, 2*time.Second); got != want {
+		t.Fatalf("connection WINDOW returned %d bytes, want %d", got, want)
+	}
+	if !r.p.Online() {
+		t.Fatal("one stream's overflow closed the connection")
 	}
 }
 

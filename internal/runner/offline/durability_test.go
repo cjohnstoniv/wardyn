@@ -46,7 +46,7 @@ func TestDurableReadsRefuseUnsavedExecution(t *testing.T) {
 	if result, err := m.ExecutionResult(ctx, id.String(), gen); err == nil {
 		t.Fatalf("unsaved result exposed: %+v", result)
 	}
-	if rows, err := m.State(ctx); err == nil {
+	if rows, err := allState(ctx, m); err == nil {
 		t.Fatalf("unsaved STATE exposed: %+v", rows)
 	}
 	if err := m.BeforeRefCall(ctx, runnerwire.MethodReplaceProxy, id.String(), uuid.Nil); err == nil {
@@ -82,7 +82,7 @@ func TestAmbiguousExecutionRestartContainsDespiteFreshLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	restore()
-	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestExitRetryFlushesBeforeSuccessAndReplay(t *testing.T) {
 			call := func() error { return m.AgentExited(ctx, id, id.String(), code) }
 			if observe {
 				sub.agent = runner.Status{State: types.RunFailed, ExitCode: &code}
-				call = func() error { _, err := m.State(ctx); return err }
+				call = func() error { _, err := allState(ctx, m); return err }
 			}
 			if err := call(); err == nil {
 				t.Fatal("fixture did not fail exit save")
@@ -148,7 +148,7 @@ func TestExitRetryFlushesBeforeSuccessAndReplay(t *testing.T) {
 			if err := m.Close(); err != nil {
 				t.Fatal(err)
 			}
-			restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+			restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 			if err != nil {
 				t.Fatal(err)
 			}

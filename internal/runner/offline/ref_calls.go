@@ -22,6 +22,15 @@ func (m *Manager) findRef(ref string) (uuid.UUID, localRun, bool) {
 	return uuid.Nil, localRun{}, false
 }
 
+// HoldsSandbox reports whether localRef is a sandbox this runner created and
+// has not retired.
+func (m *Manager) HoldsSandbox(localRef string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, r, ok := m.findRef(localRef)
+	return ok && !r.Retired
+}
+
 // BeforeRefCall refuses any start, revive or agent execution without the
 // authenticated connection's live lease. Containment never needs permission.
 func (m *Manager) BeforeRefCall(ctx context.Context, method, ref string, generation uuid.UUID) error {
