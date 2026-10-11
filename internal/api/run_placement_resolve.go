@@ -29,8 +29,10 @@ import (
 // runPlacement is stepPlacement's answer. The zero value is an unpooled run: a store that cannot hold
 // pools keeps today's behaviour, and a server-originated launcher never reaches the fold at all.
 type runPlacement struct {
-	pooled    bool
-	pool      types.ResolvedRunnerPool
+	pooled bool
+	pool   types.ResolvedRunnerPool
+	// row is the catalogue row the pool resolved to; its limits are what admission holds the run to.
+	row       types.RunnerPool
 	placement types.Placement
 	// filled: the pool, not the request, decided the placement.
 	filled bool
@@ -87,17 +89,32 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 		return runPlacement{}, poolRefusal(ref)
 	}
 	row, _ := catalogueRow(rows, pool.ID)
+	// The pool's own limits admit by the run's STORED run type. A request that names none (an older
+	// client) never satisfies a pool that sets limits, and is refused here at every door.
+	if _, ref := runnerpool.PoolSource(row.Pool, types.RunnerPoolRunType(f.req.Experience)); ref != nil {
+		return runPlacement{}, poolRefusal(ref)
+	}
 	targets, refusal := s.poolTargets(ctx, f.req, ps, row)
 	if refusal != nil {
 		return runPlacement{}, refusal
 	}
-	eligible, reason := eligibleTargets(targets, s.placementDemand(ctx, f))
+	demand := s.placementDemand(ctx, f)
+	eligible, reason := eligibleTargets(targets, demand)
+	// A pin names one of the caller's own candidates (pinRefusal has refused every other id), so when that
+	// candidate fails the demand the answer is ITS reason, not "no such runner" because another is fine.
+	if pin := f.req.RunnerID; pin != "" {
+		if i := slices.IndexFunc(targets, func(t poolTarget) bool { return t.id == pin }); i >= 0 {
+			if why := demand.refusal(targets[i]); why != "" {
+				return runPlacement{}, targetRefusal(why, row.Pool.Name, pool.HostingType)
+			}
+		}
+	}
 	offers := map[types.Placement]placementOffer{pool.HostingType.Placement(): offerOf(eligible, reason)}
 	decision := placementFor(f.req.PlacementRequest(), offers, nil)
 	if decision.Refusal != "" {
 		return runPlacement{}, targetRefusal(decision.Refusal, row.Pool.Name, pool.HostingType)
 	}
-	return runPlacement{pooled: true, pool: pool, placement: decision.Placement, filled: decision.Filled,
+	return runPlacement{pooled: true, pool: pool, row: row.Pool, placement: decision.Placement, filled: decision.Filled,
 		eligible: pickTargets(eligible, decision.Targets), choices: s.poolChoices(rows)}, nil
 }
 
@@ -245,6 +262,37 @@ func (p runPlacement) bind(runID uuid.UUID, enforced types.ConfinementClass) (po
 		return poolBinding{}, targetRefusal(placement.ReasonPlacementCapability, p.pool.Name, p.pool.HostingType)
 	}
 	return poolBinding{runnerID: able[i].runnerID, executor: able[i].executor}, nil
+}
+
+// barrierRefusal holds the barrier the run ended up at to the pool's allowed barriers. The class is
+// known only after the confinement step, so that step asks.
+func (p runPlacement) barrierRefusal(enforced types.ConfinementClass) *runRefusal {
+	if !p.pooled || enforced == "" {
+		return nil
+	}
+	if ref := runnerpool.CheckBarrier(p.row, enforced); ref != nil {
+		return poolRefusal(ref)
+	}
+	return nil
+}
+
+// offeredClasses is the barriers the run's eligible candidates enforce, strongest last, nil for an
+// unpooled run. The default class of a pooled run is chosen from it, so the class a door promises is
+// one a candidate the run can be bound to enforces.
+func (p runPlacement) offeredClasses() []types.ConfinementClass {
+	if !p.pooled {
+		return nil
+	}
+	out := []types.ConfinementClass{}
+	for _, t := range p.eligible {
+		for _, c := range t.facts.Classes {
+			if !slices.Contains(out, c) {
+				out = append(out, c)
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b types.ConfinementClass) int { return cmp.Compare(a.Rank(), b.Rank()) })
+	return out
 }
 
 // apply stamps the placement, the evidence source and the pool binding on the run row, once, before

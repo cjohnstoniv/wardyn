@@ -186,8 +186,7 @@ func TestPG_PoolReasonsAreTheSameAtEveryDoor(t *testing.T) {
 	}
 	empty := e.createPool("Empty remote", types.RunnerPoolRemoteProvided)
 	laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
-	handled := map[runnerpool.Reason]bool{runnerpool.ReasonStale: true, runnerpool.ReasonPoolsUnavailable: true,
-		runnerpool.ReasonRunTypeNotAllowed: true, runnerpool.ReasonBarrierNotAllowed: true}
+	handled := map[runnerpool.Reason]bool{runnerpool.ReasonStale: true, runnerpool.ReasonPoolsUnavailable: true}
 
 	check := func(name string, c *http.Cookie, extra string, status int, reason runnerpool.Reason) {
 		t.Helper()
@@ -204,6 +203,20 @@ func TestPG_PoolReasonsAreTheSameAtEveryDoor(t *testing.T) {
 	check("a pin that is not the caller's", e.person, `"placement":"local","runner_id":"`+uuid.NewString()+`","runner_pool_id":"`+laptops.ID.String()+`"`, http.StatusUnprocessableEntity, runnerpool.ReasonMemberMismatch)
 	soon := e.createPool("Soon off", types.RunnerPoolRemoteProvided)
 	e.addExecutors(soon.ID, "alpha")
+	limited := e.limitedPool("Background only", types.CC1, types.CC2)
+	const background = `"title":"t","experience":"background","workload":{"kind":"agent_task","agent":"claude-code","task":"fix the build"},"tools":[{"id":"claude-code","kind":"harness"}],"no_repositories_or_drives":true`
+	const interactive = `"title":"t","experience":"interactive","tools":[{"id":"claude-code","kind":"harness"}],"no_repositories_or_drives":true`
+	pinned := `"runner_pool_id":"` + limited.ID.String() + `"`
+	checkBody := func(name, body string, status int, reason runnerpool.Reason) {
+		t.Helper()
+		handled[reason] = true
+		sameEverywhere(t, name, e.answers(e.person, body), status, string(reason))
+	}
+	checkBody("an interactive run in a Background-only pool", `{`+interactive+`,`+pinned+`}`, http.StatusUnprocessableEntity, runnerpool.ReasonRunTypeNotAllowed)
+	checkBody("a barrier the pool does not allow", `{`+background+`,"confinement_class":"CC3",`+pinned+`}`, http.StatusUnprocessableEntity, runnerpool.ReasonBarrierNotAllowed)
+	// D-1319 carry: a request that names no experience (an older client) is never read as Background by a
+	// pool that sets limits; it is refused at every door, and the same request in a pool with no limits is fine.
+	checkBody("an older-shape request in a pool with limits", runBody(pinned), http.StatusUnprocessableEntity, runnerpool.ReasonRunTypeNotAllowed)
 	e.orgDefaults(fmt.Sprintf(`{"preferred_hosting":"remote_provided","remote_provided":%q}`, soon.ID))
 	if w := e.admin(http.MethodPut, "/api/v1/runner-pools/"+soon.ID.String(), fmt.Sprintf(`{"revision":%d,"state":"disabled"}`, e.revision(soon.ID))); w.Code != http.StatusOK {
 		t.Fatalf("disable = %d %s", w.Code, w.Body)
@@ -220,6 +233,23 @@ func TestPG_PoolReasonsAreTheSameAtEveryDoor(t *testing.T) {
 			t.Errorf("reason %s is covered at no door", r)
 		}
 	}
+}
+
+// limitedPool is a remote pool that holds the executors, takes Background runs only and allows the given
+// barriers.
+func (e *placementEnv) limitedPool(name string, barriers ...types.ConfinementClass) types.RunnerPool {
+	e.t.Helper()
+	p := e.createPool(name, types.RunnerPoolRemoteProvided)
+	e.addExecutors(p.ID, "alpha", "beta")
+	limits := types.RunnerPoolLimits{
+		Background: &types.RunnerPoolBackgroundLimits{CPUMillis: types.RunnerPoolAmount{Default: 1000, Cap: 2000}, MemoryMiB: types.RunnerPoolAmount{Default: 1024, Cap: 2048}, Lifetime: types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}},
+		Barriers:   barriers,
+	}
+	out, err := e.pg.UpdateRunnerPool(context.Background(), p.ID, e.revision(p.ID), nil, nil, &limits)
+	if err != nil {
+		e.t.Fatalf("set pool limits: %v", err)
+	}
+	return out
 }
 
 // DONE WHEN 2: a stale or deleted default refuses and never falls back to the next default, to another
@@ -542,5 +572,75 @@ func TestPG_UnknownExecutorFactsRefuseNeverRouteElsewhere(t *testing.T) {
 	w := e.call(e.person, http.MethodPost, "/api/v1/runs", runBody(`"runner_pool_id":"`+pool.ID.String()+`"`))
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("no executor can report: %d %s", w.Code, w.Body)
+	}
+}
+
+// B1: a run that names no class takes its default barrier from the pool's own eligible candidates, at
+// create, Review and the preview alike, and launches on a candidate that enforces it. Executor alpha
+// enforces CC1-CC3 and beta CC1-CC2; a pool of beta only must never promise or choose CC3.
+func TestPG_DefaultClassComesFromThePoolsCandidatesAtEveryDoor(t *testing.T) {
+	e := newPlacementEnv(t)
+	betaOnly := e.createPool("Beta only", types.RunnerPoolRemoteProvided)
+	e.addExecutors(betaOnly.ID, "beta")
+	both := e.createPool("Both", types.RunnerPoolRemoteProvided)
+	e.addExecutors(both.ID, "alpha", "beta")
+	e.runner.execFacts["beta"] = runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1, types.CC2}}
+
+	for _, tc := range []struct {
+		name     string
+		pool     uuid.UUID
+		want     types.ConfinementClass
+		executor string
+	}{
+		{"a pool without the deployment's strongest barrier", betaOnly.ID, types.CC2, "beta"},
+		{"a pool that has it", both.ID, types.CC3, "alpha"},
+	} {
+		body := runBody(`"runner_pool_id":"` + tc.pool.String() + `"`)
+		pre := e.call(e.person, http.MethodPost, "/api/v1/runs/preflight", body)
+		prev := e.call(e.person, http.MethodPost, "/api/v1/runs/policy-preview", body)
+		if pre.Code != http.StatusOK || prev.Code != http.StatusOK {
+			t.Fatalf("%s: preflight %d %s, preview %d %s", tc.name, pre.Code, pre.Body, prev.Code, prev.Body)
+		}
+		var promised struct {
+			Enforced types.ConfinementClass `json:"enforced_confinement_class"`
+		}
+		_ = json.Unmarshal(pre.Body.Bytes(), &promised)
+		w := e.call(e.person, http.MethodPost, "/api/v1/runs", body)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("%s: create = %d %s (the doors disagree)", tc.name, w.Code, w.Body)
+		}
+		var created types.AgentRun
+		_ = json.Unmarshal(w.Body.Bytes(), &created)
+		stored, err := e.pg.GetRun(context.Background(), created.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if promised.Enforced != tc.want || stored.ConfinementClass != tc.want || stored.RunnerPoolExecutor != tc.executor {
+			t.Errorf("%s: preflight promised %q, create enforced %q on %q; want %q on %q", tc.name, promised.Enforced, stored.ConfinementClass, stored.RunnerPoolExecutor, tc.want, tc.executor)
+		}
+	}
+}
+
+// N1: pinning one of your own runners that is offline answers runner_offline at every door, even when
+// another of your runners in the pool is online; a foreign or unknown pin keeps the identical mismatch body.
+func TestPG_OwnOfflinePinAnswersRunnerOffline(t *testing.T) {
+	e := newPlacementEnv(t)
+	pool := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	asleep := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
+	awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
+	theirs := e.laptop(e.otherP, 4000, 8192, types.CC1, types.CC2)
+	e.addToPool(e.person, pool.ID, asleep)
+	e.addToPool(e.person, pool.ID, awake)
+	e.addToPool(e.other, pool.ID, theirs)
+	e.online[asleep] = false
+	pin := func(id uuid.UUID) string {
+		return runBody(`"placement":"local","runner_id":"` + id.String() + `","runner_pool_id":"` + pool.ID.String() + `"`)
+	}
+	sameEverywhere(t, "an offline pin of their own", e.answers(e.person, pin(asleep)), http.StatusUnprocessableEntity, string(placement.ReasonRunnerOffline))
+	foreign := sameEverywhere(t, "a foreign pin", e.answers(e.person, pin(theirs)), http.StatusUnprocessableEntity, string(runnerpool.ReasonMemberMismatch))
+	unknownID := uuid.New()
+	unknown := sameEverywhere(t, "an unknown pin", e.answers(e.person, pin(unknownID)), http.StatusUnprocessableEntity, string(runnerpool.ReasonMemberMismatch))
+	if strings.ReplaceAll(foreign, theirs.String(), "X") != strings.ReplaceAll(unknown, unknownID.String(), "X") {
+		t.Errorf("a foreign pin answered %s, an unknown one %s", foreign, unknown)
 	}
 }
