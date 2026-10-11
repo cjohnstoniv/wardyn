@@ -30,4 +30,3 @@ docs/sdk.md=12851 share=21
 # Run templates add 23 more measured words for templates_unavailable and the launch-time exclusion: docs/sdk.md 12673.
 # Run templates: docs/sdk.md 12691 adds 210 over 12481 for the template refusal reasons (five rows) after merging the runner pool reasons.
 # docs/sdk.md 12831 measured after H3 integration.
-docs/sdk.md=12831 share=21

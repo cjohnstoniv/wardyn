@@ -36,4 +36,3 @@
 # docs/OPERATIONS.md 51946 measured after H3 merge.
 docs/OPERATIONS.md=51946
 # Round 1 merge: docs/OPERATIONS.md 51657 -> 51673 (+16 measured): +23 for migrator rationale naming 0139/0141, -7 for the upstream reuse-values correction; the +79 runner-pool words live in admin-only-writes.md.
-docs/OPERATIONS.md=51819
