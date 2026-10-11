@@ -20,7 +20,7 @@ import (
 // exempts a newly added child: both the table and this closed schema must cover it.
 var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.Config](): strings.Fields("RunID ControlPlaneURL ControlPlaneCAPEM RunToken Policy Injection Listen DecisionBufferSize MITMCACertPEM MITMCAKeyPEM MITMHosts GitGrants PATGrants " +
-		"BrokeredPATGrantIDs ADOGrant AzureGates MITMLLM UpstreamProxyURL UpstreamProxyNoProxy TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail Unattended Attribution DecisionSpoolDir PushRuleSets HarnessToolRules HarnessCredentials"),
+		"BrokeredPATGrantIDs ADOGrant AzureGates MITMLLM UpstreamProxyURL UpstreamProxyNoProxy TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail Unattended Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials"),
 	reflect.TypeFor[proxy.InjectionConfig]():   strings.Fields("InjectionRule GrantID"),
 	reflect.TypeFor[LocalPlan]():               strings.Fields("Spec Origins CredentialIntents OrgConfigKeys VerifiedLocalPaths UpstreamProxySecretRef TrustedOutput SelfDefinedComponents LocalSelfDefinedComponents Delivery"),
 	reflect.TypeFor[CredentialOrigin]():        strings.Fields("Class Delivery GrantKind Stored OwnNamespace OwnerOnly"),

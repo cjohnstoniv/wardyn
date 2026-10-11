@@ -199,6 +199,60 @@ func TestOverrides_ADONarrowsToASubsetOnly(t *testing.T) {
 	}
 }
 
+// A source that names no set grants nothing here (the row's default profile
+// applies at dispatch), so any capability an override names is an addition and is
+// refused, not accepted as a narrowing.
+func TestOverrides_ADOEmptySourceRefusesAdditions(t *testing.T) {
+	spec := types.RunPolicySpec{}
+	e := &overrideEdits{}
+	refusal := applyADOOverride(&spec, client.ADOOverrides{Capabilities: []string{"code_read"}}, e)
+	if refusal == nil || refusal.body.Reason != reasonOverrideRefused {
+		t.Fatalf("a capability beside an empty source = %+v, want %s", refusal, reasonOverrideRefused)
+	}
+	if len(spec.AzureDevOpsCapabilities) != 0 || len(e.rows) != 0 || e.applied.AzureDevOps != nil {
+		t.Errorf("a refused addition changed the spec or the record: %v %v %+v", spec.AzureDevOpsCapabilities, e.rows, e.applied)
+	}
+	// Naming the whole source is a no-op, not an edit.
+	spec = types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{adoscope.CapCodeRead}}
+	e = &overrideEdits{}
+	if refusal := applyADOOverride(&spec, client.ADOOverrides{Capabilities: []string{"code_read"}}, e); refusal != nil || e.applied.AzureDevOps != nil {
+		t.Errorf("keeping everything: refusal %v applied %+v, want no edit", refusal, e.applied)
+	}
+}
+
+// overrides_diff records the edits that took effect and nothing else: an edit that
+// changed nothing (a host already allowed, a removal of what is not there, a hold
+// beneath a standing deny, a git_pat narrowing to what it already is) is left out,
+// and a request whose every edit changed nothing records no diff at all.
+func TestOverrides_DiffRecordsOnlyEditsThatTookEffect(t *testing.T) {
+	spec := types.RunPolicySpec{
+		AllowedDomains: []string{"a.example"},
+		ToolRules:      []types.ToolRule{{Tool: "*", Effect: types.ToolDeny}},
+		EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT, Scope: mustJSON(types.GitPATScope{Host: "git.example.com", SecretName: "pat", Access: types.PATAccessRead})}},
+	}
+	e := &overrideEdits{}
+	applyHostOverrides(&spec, client.AgentOverrides{AddHosts: []string{"A.example", "b.example"}, RemoveHosts: []string{"gone.example"}}, e)
+	if refusal := (&Server{}).applySecretOverrides(t.Context(), nil, &spec, client.AgentOverrides{RemoveSecrets: []string{"absent"}}, e); refusal != nil {
+		t.Fatal(refusal.body)
+	}
+	applyToolRuleOverrides(&spec, []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}, e)
+	if refusal := applyGitPATOverrides(&spec, []client.GitPATOverride{{Host: "git.example.com", Access: "read"}}, e); refusal != nil {
+		t.Fatal(refusal.body)
+	}
+	if !slices.Equal(e.applied.Agent.AddHosts, []string{"b.example"}) || e.applied.Agent.RemoveHosts != nil || e.applied.Agent.RemoveSecrets != nil ||
+		e.applied.Agent.ToolRules != nil || e.applied.GitPAT != nil {
+		t.Errorf("applied = %+v, want only b.example", e.applied.Agent)
+	}
+	// All no-ops: no diff.
+	e = &overrideEdits{}
+	applyToolRuleOverrides(&spec, []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}, e)
+	src := policySourceRecord{}
+	e.finish(&src, spec)
+	if src.OverridesDiff != nil {
+		t.Errorf("a request of no-ops recorded a diff: %+v", src.OverridesDiff)
+	}
+}
+
 // The apply step narrows and never widens: removed hosts and secrets go, a tool
 // rule keeps the stricter effect, a PAT keeps a subset of its repositories.
 func TestOverrides_ApplyNarrowsNeverWidens(t *testing.T) {
@@ -261,7 +315,7 @@ func TestOverrides_PolicySourceRecordsTheDiffAndAttribution(t *testing.T) {
 		t.Fatalf("run.create has no overrides_diff (%v): %s", err, create.Data)
 	}
 	diff := row.Source.OverridesDiff
-	if !slices.Equal(diff.Agent.AddHosts, []string{ovHostInside, ovHostOutside}) || len(diff.Agent.AddSecrets) != 1 ||
+	if !slices.Equal(diff.Agent.AddHosts, []string{ovHostInside}) || len(diff.Agent.AddSecrets) != 1 ||
 		diff.Agent.AddSecrets[0].SecretName != "my-key" || !slices.Contains(diff.Clamped, fieldAllowed+" "+ovHostOutside) {
 		t.Errorf("diff = %+v", diff)
 	}

@@ -100,12 +100,20 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 // resolved spec, at every door, so a remote whose entry cannot be keyed refuses
 // at Review and the preview as it does at create.
 func (s *Server) stepPushRuleSets(f *runFold, rec *foldRecorder) bool {
-	sets, err := s.pushRuleSetsFor(f.spec, f.req, f.scmSite)
+	// The site config is read here: f.scmSite is the autonomy step's snapshot and
+	// is not there yet, and an Azure DevOps Server row's base path comes from it.
+	site, err := s.scmLaneSiteConfig(f.r.Context(), f.spec, f.req.Repo)
+	if err != nil {
+		writeServerError(f.w, f.r, "get site config", err)
+		return false
+	}
+	sets, applied, err := s.pushRuleSetsFor(f.spec, f.req, site)
 	if err != nil {
 		runError(http.StatusUnprocessableEntity, reasonInlinePolicyInvalid, "invalid push rules: "+err.Error()).write(s, f.w, f.r)
 		return false
 	}
 	f.pushSets = sets
+	f.source.recordPushRules(applied)
 	return true
 }
 

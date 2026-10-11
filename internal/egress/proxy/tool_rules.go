@@ -45,13 +45,38 @@ func (p *Proxy) decideByToolRules(w http.ResponseWriter, r *http.Request, tool s
 
 // toolEffect is what the run's rules say about one call. Under per-harness rules
 // the harness is the one the caller's credential names (harnessOf) and only that
-// harness's rules apply: a call that names no harness, or one with no entry,
-// has no rule and is held for a human, never answered by another harness's rules.
+// harness's rules apply: a harness with no entry has no rule and is held for a
+// human, never answered by another harness's rules. A call that names no harness
+// is decided by the strictest of all the sets (strictestToolEffect).
 func (p *Proxy) toolEffect(r *http.Request, tool string) (types.ToolEffect, bool) {
 	if len(p.harnessRules) == 0 {
 		return p.policy.ToolEffectFor(tool)
 	}
-	return types.ToolEffectForHarness(p.harnessRules, p.harnessOf(r), tool)
+	harness := p.harnessOf(r)
+	if harness == "" {
+		return p.strictestToolEffect(tool)
+	}
+	return types.ToolEffectForHarness(p.harnessRules, harness, tool)
+}
+
+// strictestToolEffect is the answer for a call that names no harness (no
+// credential, or one the proxy never issued): the strictest of every harness's
+// set, so a deny any harness carries is a deny here and the call is never freer
+// than the run-wide regime made it. A set with no opinion on the tool counts as a
+// hold, which is what its own call would get.
+func (p *Proxy) strictestToolEffect(tool string) (types.ToolEffect, bool) {
+	rank := map[types.ToolEffect]int{types.ToolAllow: 0, types.ToolHold: 1, types.ToolDeny: 2}
+	strictest := types.ToolAllow
+	for _, set := range p.harnessRules {
+		eff, ok := types.ToolEffectForHarness(p.harnessRules, set.Harness, tool)
+		if !ok {
+			eff = types.ToolHold
+		}
+		if rank[eff] > rank[strictest] {
+			strictest = eff
+		}
+	}
+	return strictest, len(p.harnessRules) > 0
 }
 
 // harnessOf names the harness that raised a call from the Bearer credential its

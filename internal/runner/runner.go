@@ -169,6 +169,7 @@ type ProxyConfig struct {
 	Unattended           bool                      // a run nobody is driving: a held push is refused instead
 	Attribution          *policyref.Ref            // the policy named in a policy-decided refusal; nil when none
 	PushRuleSets         []types.PushRuleSet       // push content rules per SCM entry (provider+org); proxy.Config.PushRuleSets
+	PushRuleBase         *types.PushRulesSpec      // the run's push rules after the ceiling, for an entry with no set; proxy.Config.PushRuleBase
 	HarnessToolRules     []types.HarnessToolRules  // tool rules per included harness; proxy.Config.HarnessToolRules
 	HarnessCredentials   []types.HarnessCredential // SHA-256 of each harness's approval credential; proxy.Config.HarnessCredentials (never the plaintext)
 }

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -20,9 +21,12 @@ import (
 // until the clamp has had its say (recordPolicySource downgrades the ones the
 // resolved spec lacks to `clamped`); folded is the spec the clamp then read.
 type overrideEdits struct {
-	diff   *client.RunOverridesDiff
-	rows   []provenanceRow
-	folded types.RunPolicySpec
+	// applied is the edits that took effect, as the request spelled them: a
+	// no-op (a hold on a tool the policy already denies, a removal of what is not
+	// there) is not in it, and finish moves what the ceiling dropped to Clamped.
+	applied client.RunOverrides
+	rows    []provenanceRow
+	folded  types.RunPolicySpec
 	// The entries the person added, which the ceiling must be able to bound
 	// even where the policy they started from is not clamped as a whole.
 	addedHosts  []string
@@ -32,6 +36,28 @@ type overrideEdits struct {
 	setFirstUse, setAllowAll bool
 	prevFirstUse             types.FirstUseMode
 	prevAllowAll             bool
+}
+
+// agent is the applied agent block, made on first use.
+func (e *overrideEdits) agent() *client.AgentOverrides {
+	if e.applied.Agent == nil {
+		e.applied.Agent = &client.AgentOverrides{}
+	}
+	return e.applied.Agent
+}
+
+func (e *overrideEdits) hosts() *client.RunHostOverrides {
+	if e.applied.Hosts == nil {
+		e.applied.Hosts = &client.RunHostOverrides{}
+	}
+	return e.applied.Hosts
+}
+
+func (e *overrideEdits) egress() *client.RunEgressOverrides {
+	if e.applied.Egress == nil {
+		e.applied.Egress = &client.RunEgressOverrides{}
+	}
+	return e.applied.Egress
 }
 
 func (e *overrideEdits) add(field, value string, effect provEffect) {
@@ -61,20 +87,59 @@ func (e *overrideEdits) settle(rec *foldRecorder, resolved types.RunPolicySpec) 
 }
 
 // finish stamps the diff on the run's policy source once the clamp and the
-// grant pipeline have run, moving the added edits they dropped to Clamped.
+// grant pipeline have run. Only edits that took effect are in it: what the
+// ceiling or the member grant pipeline dropped moves to Clamped, and a request
+// whose every edit was a no-op records no diff.
 func (e *overrideEdits) finish(src *policySourceRecord, resolved types.RunPolicySpec) {
 	if e == nil {
 		return
 	}
 	now := specEntries(resolved)
-	diff := *e.diff
+	diff := client.RunOverridesDiff{RunOverrides: e.applied}
 	for _, row := range e.rows {
 		if row.Effect == provEffectAdded && !slices.Contains(now, specEntry{row.Field, row.Value}) {
 			diff.Clamped = append(diff.Clamped, row.Field+" "+row.Value)
+			diff.RunOverrides = withoutClamped(diff.RunOverrides, row)
 		}
 	}
-	src.OverridesDiff = &diff
 	src.edits = e
+	if diff.Empty() {
+		src.OverridesDiff = nil
+		return
+	}
+	src.OverridesDiff = &diff
+}
+
+// withoutClamped removes the edit a clamped row stands for from the applied block.
+func withoutClamped(o client.RunOverrides, row provenanceRow) client.RunOverrides {
+	if a := o.Agent; a != nil {
+		c := *a
+		switch row.Field {
+		case fieldAllowed:
+			c.AddHosts = slices.DeleteFunc(slices.Clone(c.AddHosts), func(h string) bool { return hostEqual(h, row.Value) })
+		case fieldGrants:
+			c.AddSecrets = slices.DeleteFunc(slices.Clone(c.AddSecrets), func(sec client.SecretOverride) bool {
+				return "api_key:"+strings.ToLower(sec.Host) == row.Value
+			})
+		}
+		o.Agent = &c
+	}
+	if h := o.Hosts; h != nil && row.Field == fieldAllowed {
+		c := *h
+		c.AddAllowed = slices.DeleteFunc(slices.Clone(c.AddAllowed), func(v string) bool { return hostEqual(v, row.Value) })
+		o.Hosts = &c
+	}
+	if eg := o.Egress; eg != nil {
+		c := *eg
+		switch row.Field {
+		case "first_use_approval":
+			c.FirstUseApproval = ""
+		case "allow_all_egress":
+			c.AllowAllEgress = nil
+		}
+		o.Egress = &c
+	}
+	return o.Pruned()
 }
 
 // applyRunOverrides applies the New Run card edits to the policy the run starts
@@ -94,7 +159,7 @@ func (s *Server) applyRunOverrides(ctx context.Context, r *http.Request, spec ty
 		return spec, nil, refusal
 	}
 	spec = spec.Clone()
-	e := &overrideEdits{diff: &client.RunOverridesDiff{RunOverrides: *o}}
+	e := &overrideEdits{}
 	if a := o.Agent; a != nil {
 		applyHostOverrides(&spec, *a, e)
 		if refusal := s.applySecretOverrides(ctx, r, &spec, *a, e); refusal != nil {
@@ -126,6 +191,7 @@ func applyHostOverrides(spec *types.RunPolicySpec, a client.AgentOverrides, e *o
 		if !slices.ContainsFunc(spec.AllowedDomains, func(d string) bool { return hostEqual(d, h) }) {
 			spec.AllowedDomains = append(spec.AllowedDomains, h)
 			e.addedHosts = append(e.addedHosts, h)
+			e.agent().AddHosts = append(e.agent().AddHosts, h)
 			e.add(fieldAllowed, h, provEffectAdded)
 		}
 	}
@@ -133,6 +199,7 @@ func applyHostOverrides(spec *types.RunPolicySpec, a client.AgentOverrides, e *o
 		n := len(spec.AllowedDomains)
 		spec.AllowedDomains = slices.DeleteFunc(spec.AllowedDomains, func(d string) bool { return hostEqual(d, h) })
 		if len(spec.AllowedDomains) != n {
+			e.agent().RemoveHosts = append(e.agent().RemoveHosts, h)
 			e.add(fieldAllowed, strings.ToLower(h), provEffectRemoved)
 		}
 	}
@@ -148,6 +215,7 @@ func applyRunHostOverrides(spec *types.RunPolicySpec, h client.RunHostOverrides,
 		if !slices.ContainsFunc(spec.AllowedDomains, func(d string) bool { return hostEqual(d, host) }) {
 			spec.AllowedDomains = append(spec.AllowedDomains, host)
 			e.addedHosts = append(e.addedHosts, host)
+			e.hosts().AddAllowed = append(e.hosts().AddAllowed, host)
 			e.add(fieldAllowed, host, provEffectAdded)
 		}
 	}
@@ -155,6 +223,7 @@ func applyRunHostOverrides(spec *types.RunPolicySpec, h client.RunHostOverrides,
 		host = strings.ToLower(host)
 		if !slices.ContainsFunc(spec.DeniedDomains, func(d string) bool { return hostEqual(d, host) }) {
 			spec.DeniedDomains = append(spec.DeniedDomains, host)
+			e.hosts().AddDenied = append(e.hosts().AddDenied, host)
 			e.add(fieldDenied, host, provEffectAdded)
 		}
 	}
@@ -166,11 +235,13 @@ func applyRunEgressOverrides(spec *types.RunPolicySpec, eg client.RunEgressOverr
 	if eg.FirstUseApproval != "" && eg.FirstUseApproval != spec.FirstUseApproval {
 		e.setFirstUse, e.prevFirstUse = true, spec.FirstUseApproval
 		spec.FirstUseApproval = eg.FirstUseApproval
+		e.egress().FirstUseApproval = eg.FirstUseApproval
 		e.add("first_use_approval", string(eg.FirstUseApproval), provEffectAdded)
 	}
 	if eg.AllowAllEgress != nil && *eg.AllowAllEgress && !spec.AllowAllEgress {
 		e.setAllowAll, e.prevAllowAll = true, spec.AllowAllEgress
 		spec.AllowAllEgress = true
+		e.egress().AllowAllEgress = eg.AllowAllEgress
 		e.add("allow_all_egress", "true", provEffectAdded)
 	}
 }
@@ -196,36 +267,43 @@ func (s *Server) applySecretOverrides(ctx context.Context, r *http.Request, spec
 		g := types.GrantSpec{Kind: types.GrantAPIKey, Scope: mustJSON(scope), TTLSeconds: 3600, OwnerOnly: true}
 		spec.EligibleGrants = append(spec.EligibleGrants, g)
 		e.addedGrants = append(e.addedGrants, g)
+		e.agent().AddSecrets = append(e.agent().AddSecrets, sec)
 		e.add(fieldGrants, grantKey(g), provEffectAdded)
 	}
 	for _, name := range a.RemoveSecrets {
+		removed := false
 		spec.EligibleGrants = slices.DeleteFunc(spec.EligibleGrants, func(g types.GrantSpec) bool {
 			_, ref, _, covered, err := storedSecretGrantPairing(g)
 			if !covered || err != nil || ref != name {
 				return false
 			}
 			e.add(fieldGrants, grantKey(g), provEffectRemoved)
+			removed = true
 			return true
 		})
+		if removed {
+			e.agent().RemoveSecrets = append(e.agent().RemoveSecrets, name)
+		}
 	}
 	return nil
 }
 
-// applyToolRuleOverrides adds hold and deny rules (the table refuses allow). A
-// tool the policy already rules on keeps the stricter of the two effects, so an
-// added rule can never loosen what is there.
+// applyToolRuleOverrides adds hold and deny rules (the table refuses allow). Each
+// is compared with the tool's EFFECTIVE effect (its exact rule, else the "*"
+// default, as the proxy and composer.Clamp look a tool up) and applies only when
+// stricter, so an added rule can never loosen what is there: a hold on a tool the
+// policy's "*" denies is dropped, not turned into an exact-name hold that would
+// shadow the deny.
 func applyToolRuleOverrides(spec *types.RunPolicySpec, rules []types.ToolRule, e *overrideEdits) {
-	strict := map[types.ToolEffect]int{types.ToolAllow: 0, types.ToolHold: 1, types.ToolDeny: 2}
 	for _, nr := range rules {
-		i := slices.IndexFunc(spec.ToolRules, func(r types.ToolRule) bool { return r.Tool == nr.Tool })
-		switch {
-		case i < 0:
-			spec.ToolRules = append(spec.ToolRules, nr)
-		case strict[nr.Effect] > strict[spec.ToolRules[i].Effect]:
-			e.add(fieldToolRules, nr.Tool+":"+string(spec.ToolRules[i].Effect), provEffectRemoved)
-			spec.ToolRules[i].Effect = nr.Effect
-		default:
+		next, replaced, applied := narrowToolRule(spec.ToolRules, nr)
+		if !applied {
 			continue
+		}
+		spec.ToolRules = next
+		e.agent().ToolRules = append(e.agent().ToolRules, nr)
+		if replaced != "" {
+			e.add(fieldToolRules, nr.Tool+":"+string(replaced), provEffectRemoved)
 		}
 		e.add(fieldToolRules, nr.Tool+":"+string(nr.Effect), provEffectAdded)
 	}
@@ -240,22 +318,34 @@ func applyADOOverride(spec *types.RunPolicySpec, o client.ADOOverrides, e *overr
 	if len(o.Capabilities) == 0 {
 		return overrideInvalid("azure_devops.capabilities: keeping no capability is not something this run can express; name at least one capability to keep")
 	}
+	if len(spec.AzureDevOpsCapabilities) == 0 {
+		// The policy names no set (the provider row's default profile applies at
+		// dispatch), so there is nothing here to narrow to a subset of: any
+		// capability named would be an addition, and additions are refused.
+		return runError(http.StatusUnprocessableEntity, reasonOverrideRefused,
+			"An override cannot add azure_devops.capabilities: this run's source names none, so it would give the run more reach than its source grants.")
+	}
 	var keep []adoscope.Capability
 	for _, name := range o.Capabilities {
 		c := adoscope.Capability(name)
 		if !c.Grantable() {
 			return overrideInvalid("azure_devops.capabilities: %q is not a capability a run can hold", name)
 		}
-		if len(spec.AzureDevOpsCapabilities) > 0 && !slices.Contains(spec.AzureDevOpsCapabilities, c) {
+		if !slices.Contains(spec.AzureDevOpsCapabilities, c) {
 			return runError(http.StatusUnprocessableEntity, reasonOverrideRefused, fmt.Sprintf(
 				"An override cannot add azure_devops.capabilities %s: it would give this run more reach than its source grants.", name))
 		}
 		keep = append(keep, c)
 	}
+	narrowed := false
 	for _, c := range spec.AzureDevOpsCapabilities {
 		if !slices.Contains(keep, c) {
+			narrowed = true
 			e.add(fieldADOCaps, string(c), provEffectNarrowed)
 		}
+	}
+	if narrowed {
+		e.applied.AzureDevOps = &o
 	}
 	spec.AzureDevOpsCapabilities = keep
 	return nil
@@ -267,7 +357,7 @@ func applyADOOverride(spec *types.RunPolicySpec, o client.ADOOverrides, e *overr
 // of the host is narrowed alike, because the proxy holds one scope per host.
 func applyGitPATOverrides(spec *types.RunPolicySpec, overrides []client.GitPATOverride, e *overrideEdits) *runRefusal {
 	for i, o := range overrides {
-		matched := false
+		matched, changed := false, false
 		for gi, g := range spec.EligibleGrants {
 			if g.Kind != types.GrantGitPAT {
 				continue
@@ -277,6 +367,7 @@ func applyGitPATOverrides(spec *types.RunPolicySpec, overrides []client.GitPATOv
 				continue
 			}
 			matched = true
+			before := mustJSON(sc) // the normalized scope, so a no-op edit compares equal
 			if o.Repos != nil {
 				if sc.Repos != nil {
 					for _, repo := range *o.Repos {
@@ -294,11 +385,17 @@ func applyGitPATOverrides(spec *types.RunPolicySpec, overrides []client.GitPATOv
 			if o.API != nil && !*o.API {
 				sc.API = false
 			}
-			spec.EligibleGrants[gi].Scope = mustJSON(sc)
-			e.add(fieldGrants, grantKey(spec.EligibleGrants[gi]), provEffectNarrowed)
+			if narrowed := mustJSON(sc); !bytes.Equal(narrowed, before) {
+				spec.EligibleGrants[gi].Scope = narrowed
+				e.add(fieldGrants, grantKey(spec.EligibleGrants[gi]), provEffectNarrowed)
+				changed = true
+			}
 		}
 		if !matched {
 			return overrideInvalid("git_pat[%d]: this run's policy has no git_pat grant for %s", i, o.Host)
+		}
+		if changed {
+			e.applied.GitPAT = append(e.applied.GitPAT, o)
 		}
 	}
 	return nil
@@ -338,4 +435,20 @@ func (s *Server) boundOverrideAdds(ctx context.Context, r *http.Request, spec ty
 		return slices.ContainsFunc(e.addedGrants, same) && !slices.ContainsFunc(bounded.EligibleGrants, same)
 	})
 	return spec, warns, nil
+}
+
+// recordPushRules adds the push-rule edits that took effect (pushRuleSetsFor) to
+// the diff, making it when they are the run's only edits. Nothing applied leaves
+// the diff as the policy step left it, and a request whose every edit was a no-op
+// ends with none.
+func (src *policySourceRecord) recordPushRules(applied []client.PushRuleOverride) {
+	if len(applied) == 0 {
+		return
+	}
+	diff := client.RunOverridesDiff{}
+	if src.OverridesDiff != nil {
+		diff = *src.OverridesDiff
+	}
+	diff.PushRules = applied
+	src.OverridesDiff = &diff
 }

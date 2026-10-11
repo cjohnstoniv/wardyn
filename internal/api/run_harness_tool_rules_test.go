@@ -27,7 +27,7 @@ func TestHarnessToolRules_ProductAfterTheCeiling(t *testing.T) {
 		{ID: "codex-cli", Kind: client.IncludedToolHarness},
 		{ID: "mcp", Kind: client.IncludedToolComponent},
 	}
-	got := harnessToolRulesFor(spec, tools)
+	_, got := applyHarnessToolRules(spec, tools)
 	if len(got) != 2 {
 		t.Fatalf("sets = %+v, want one per harness and none for a component", got)
 	}
@@ -46,8 +46,12 @@ func TestHarnessToolRules_ProductAfterTheCeiling(t *testing.T) {
 	if eff, _ := types.ToolEffectForHarness(got, "codex-cli", "Bash"); eff != types.ToolDeny {
 		t.Errorf("codex-cli Bash = %q, want the policy's deny", eff)
 	}
-	if harnessToolRulesFor(types.RunPolicySpec{}, tools[1:2]) != nil || harnessToolRulesFor(spec, nil) != nil {
-		t.Error("a run with no rule anywhere, or no harness tool, left the older regime")
+	plain := []client.IncludedTool{{ID: "a", Kind: client.IncludedToolHarness}, {ID: "b", Kind: client.IncludedToolHarness}}
+	if _, none := applyHarnessToolRules(types.RunPolicySpec{}, plain); none != nil {
+		t.Error("a run with no rule anywhere left the older regime")
+	}
+	if _, none := applyHarnessToolRules(spec, nil); none != nil {
+		t.Error("a run with no harness tool left the older regime")
 	}
 }
 
@@ -108,5 +112,63 @@ func TestHarnessToolRules_DispatchCarriesDigestsNeverThePlaintext(t *testing.T) 
 		RunToken: "run-token", Image: "img", HarnessToolRules: sets})
 	if _, ok := fr2.lastSpec.SecretEnv[toolgateCredentialEnv]; ok || len(fr2.lastSpec.ProxyConfig.HarnessCredentials) != 2 {
 		t.Errorf("a harness the run does not start was handed a credential: %v", fr2.lastSpec.SecretEnv)
+	}
+}
+
+// A named rule is compared with the tool's EFFECTIVE effect, the exact rule else
+// "*": a person's or a tool's hold on a tool the policy's "*" denies must not
+// shadow the deny, run-wide (overrides) or per harness.
+func TestHarnessToolRules_NamedHoldNeverShadowsAWildcardDeny(t *testing.T) {
+	// Per harness: the policy (met with the ceiling) denies everything.
+	spec := types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "*", Effect: types.ToolDeny}}}
+	tools := []client.IncludedTool{
+		{ID: "claude-code", Kind: client.IncludedToolHarness, ToolRules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}},
+		{ID: "codex-cli", Kind: client.IncludedToolHarness},
+	}
+	_, sets := applyHarnessToolRules(spec, tools)
+	for _, h := range []string{"claude-code", "codex-cli"} {
+		if eff, _ := types.ToolEffectForHarness(sets, h, "Bash"); eff != types.ToolDeny {
+			t.Errorf("%s Bash = %q after a hold on it, want the policy's deny (sets %+v)", h, eff, sets)
+		}
+	}
+	// Run-wide, through the overrides.
+	run := types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "*", Effect: types.ToolDeny}}}
+	e := &overrideEdits{}
+	applyToolRuleOverrides(&run, []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}, e)
+	if eff := effectiveToolEffect(run.ToolRules, "Bash"); eff != types.ToolDeny {
+		t.Errorf("Bash = %q after an override hold, want deny (rules %+v)", eff, run.ToolRules)
+	}
+	if len(e.rows) != 0 || e.applied.Agent != nil {
+		t.Errorf("a no-op hold was recorded: rows %+v applied %+v", e.rows, e.applied)
+	}
+	// A hold beneath an exact allow still tightens it, and a deny beats a hold.
+	run = types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolAllow}, {Tool: "*", Effect: types.ToolHold}}}
+	applyToolRuleOverrides(&run, []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}, {Tool: "Web", Effect: types.ToolDeny}}, &overrideEdits{})
+	if effectiveToolEffect(run.ToolRules, "Bash") != types.ToolHold || effectiveToolEffect(run.ToolRules, "Web") != types.ToolDeny {
+		t.Errorf("rules = %+v", run.ToolRules)
+	}
+}
+
+// With one harness the run keeps the run-wide regime: the tool's rules and default
+// narrow spec.ToolRules and nothing per-harness is carried; the per-harness sets
+// start at two harnesses.
+func TestHarnessToolRules_OneHarnessKeepsTheRunWideRegime(t *testing.T) {
+	spec := types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "Read", Effect: types.ToolAllow}}}
+	one := []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness,
+		ToolRules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}, DefaultEffect: types.ToolHold}}
+	out, sets := applyHarnessToolRules(spec, one)
+	if sets != nil {
+		t.Fatalf("one harness carried per-harness sets: %+v", sets)
+	}
+	if effectiveToolEffect(out.ToolRules, "Bash") != types.ToolHold || effectiveToolEffect(out.ToolRules, "Other") != types.ToolHold ||
+		effectiveToolEffect(out.ToolRules, "Read") != types.ToolAllow {
+		t.Errorf("run-wide rules = %+v, want the tool's hold and default beside the policy's allow", out.ToolRules)
+	}
+	if len(spec.ToolRules) != 1 {
+		t.Error("the caller's spec was edited in place")
+	}
+	two := append(one, client.IncludedTool{ID: "codex-cli", Kind: client.IncludedToolHarness})
+	if _, sets := applyHarnessToolRules(spec, two); len(sets) != 2 {
+		t.Errorf("two harnesses carried %d sets, want 2", len(sets))
 	}
 }

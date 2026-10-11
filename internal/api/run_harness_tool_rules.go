@@ -18,54 +18,101 @@ import (
 // approval credential to its own wardyn-toolgate.
 const toolgateCredentialEnv = "WARDYN_TOOLGATE_CREDENTIAL"
 
-// harnessToolRulesFor is the run's tool rules per included harness, each the
-// product after the ceiling: the resolved spec's rules (the policy's, met with the
-// ceiling's by composer.Clamp) are laid into every harness's set first, and the
-// tool's own rules and default effect may only narrow them, the stricter effect
-// winning (the shape check has already refused an allow). A run with no harness
-// tool, or with no rule anywhere, has none and stays on the older run-wide path.
-func harnessToolRulesFor(spec types.RunPolicySpec, tools []client.IncludedTool) []types.HarnessToolRules {
+// applyHarnessToolRules lays the included harness tools' own rules onto the
+// resolved spec (whose tool_rules already are the policy's met with the
+// ceiling's by composer.Clamp). With one harness the run keeps the run-wide
+// regime, exactly as before per-tool rules existed: the tool's rules and default
+// effect are narrowed into spec.ToolRules and nothing per-harness is carried.
+// With two or more, each harness gets a set of its own and the proxy tells them
+// apart by credential. Either way a rule is compared with the tool's effective
+// effect and applies only when stricter, so nothing a person writes loosens the
+// policy's or the ceiling's.
+func applyHarnessToolRules(spec types.RunPolicySpec, tools []client.IncludedTool) (types.RunPolicySpec, []types.HarnessToolRules) {
 	var harnesses []client.IncludedTool
 	for _, t := range tools {
 		if t.Kind == client.IncludedToolHarness {
 			harnesses = append(harnesses, t)
 		}
 	}
-	if len(harnesses) == 0 || len(spec.ToolRules) == 0 && !slices.ContainsFunc(harnesses, func(t client.IncludedTool) bool {
+	switch {
+	case len(harnesses) == 0:
+		return spec, nil
+	case len(harnesses) == 1:
+		t := harnesses[0]
+		if len(t.ToolRules) == 0 && t.DefaultEffect == "" {
+			return spec, nil
+		}
+		spec = spec.Clone()
+		for _, r := range t.ToolRules {
+			spec.ToolRules, _, _ = narrowToolRule(spec.ToolRules, r)
+		}
+		if t.DefaultEffect != "" {
+			spec.ToolRules, _, _ = narrowToolRule(spec.ToolRules, types.ToolRule{Tool: "*", Effect: t.DefaultEffect})
+		}
+		return spec, nil
+	}
+	if len(spec.ToolRules) == 0 && !slices.ContainsFunc(harnesses, func(t client.IncludedTool) bool {
 		return len(t.ToolRules) > 0 || t.DefaultEffect != ""
 	}) {
-		return nil
+		return spec, nil
 	}
 	var out []types.HarnessToolRules
 	for _, t := range harnesses {
 		set := types.HarnessToolRules{Harness: t.ID}
-		for _, r := range spec.ToolRules {
+		rules := slices.Clone(spec.ToolRules)
+		for _, r := range t.ToolRules {
+			rules, _, _ = narrowToolRule(rules, r)
+		}
+		if t.DefaultEffect != "" {
+			rules, _, _ = narrowToolRule(rules, types.ToolRule{Tool: "*", Effect: t.DefaultEffect})
+		}
+		for _, r := range rules {
 			if r.Tool == "*" {
-				set.Default = stricterEffect(set.Default, r.Effect)
+				set.Default = r.Effect
 				continue
 			}
 			set.Rules = append(set.Rules, r)
 		}
-		set.Default = stricterEffect(set.Default, t.DefaultEffect)
-		for _, r := range t.ToolRules {
-			if i := slices.IndexFunc(set.Rules, func(o types.ToolRule) bool { return o.Tool == r.Tool }); i >= 0 {
-				set.Rules[i].Effect = stricterEffect(set.Rules[i].Effect, r.Effect)
-			} else {
-				set.Rules = append(set.Rules, r)
-			}
-		}
 		out = append(out, set)
 	}
-	return out
+	return spec, out
 }
 
-// stricterEffect orders allow < hold < deny; an empty effect is no opinion.
-func stricterEffect(a, b types.ToolEffect) types.ToolEffect {
-	rank := map[types.ToolEffect]int{"": 0, types.ToolAllow: 1, types.ToolHold: 2, types.ToolDeny: 3}
-	if rank[b] > rank[a] {
-		return b
+// narrowToolRule adds nr to rules when it is stricter than the tool's effective
+// effect there (its exact rule, else "*"): it replaces the exact rule, or is
+// appended. replaced is the exact rule's old effect ("" if none); applied says
+// whether anything changed.
+func narrowToolRule(rules []types.ToolRule, nr types.ToolRule) (out []types.ToolRule, replaced types.ToolEffect, applied bool) {
+	if effectRank(nr.Effect) <= effectRank(effectiveToolEffect(rules, nr.Tool)) {
+		return rules, "", false
 	}
-	return a
+	out = slices.Clone(rules)
+	if i := slices.IndexFunc(out, func(r types.ToolRule) bool { return r.Tool == nr.Tool }); i >= 0 {
+		replaced, out[i].Effect = out[i].Effect, nr.Effect
+		return out, replaced, true
+	}
+	return append(out, nr), "", true
+}
+
+// effectRank orders no opinion < allow < hold < deny.
+func effectRank(e types.ToolEffect) int {
+	return map[types.ToolEffect]int{"": 0, types.ToolAllow: 1, types.ToolHold: 2, types.ToolDeny: 3}[e]
+}
+
+// effectiveToolEffect is what a rule list says about a tool: its exact rule,
+// else the "*" default, else nothing. The lookup order of proxy.Policy.ToolEffectFor
+// and composer.ceilingToolEffect.
+func effectiveToolEffect(rules []types.ToolRule, tool string) types.ToolEffect {
+	var def types.ToolEffect
+	for _, r := range rules {
+		if r.Tool == tool {
+			return r.Effect
+		}
+		if r.Tool == "*" {
+			def = r.Effect
+		}
+	}
+	return def
 }
 
 // mintHarnessCredentials makes one random credential per harness that has rules.

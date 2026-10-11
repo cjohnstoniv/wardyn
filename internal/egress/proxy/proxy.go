@@ -217,6 +217,8 @@ type Proxy struct {
 	// pushSets are the push content rules per SCM entry (Config.PushRuleSets);
 	// empty means the run is on the older run-wide regime (policy.pushRules).
 	pushSets []types.PushRuleSet
+	// pushBase is Config.PushRuleBase compiled: the rules of an entry with no set.
+	pushBase *pushRuleSet
 	// harnessRules and harnessCreds are Config.HarnessToolRules and
 	// Config.HarnessCredentials, the per-harness regime of the approval route
 	// (tool_rules.go); empty means the older run-wide policy.ToolRules.

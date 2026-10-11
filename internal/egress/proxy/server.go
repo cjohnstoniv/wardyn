@@ -245,7 +245,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ControlPlaneIPs:      cpIPs,
 		ExclusionUnknown:     exclusionUnknown,
 	})
-	p.pushSets, p.harnessRules, p.harnessCreds = cfg.PushRuleSets, cfg.HarnessToolRules, cfg.HarnessCredentials
+	p.pushSets, p.pushBase, p.harnessRules, p.harnessCreds = cfg.PushRuleSets, compilePushRules(cfg.PushRuleBase), cfg.HarnessToolRules, cfg.HarnessCredentials
 	if ca != nil && len(cfg.MITMHosts) > 0 {
 		slog.InfoContext(ctx, "wardyn-proxy: TLS-MITM also enabled for operator-configured corp artifact host(s) (token injection)",
 			slog.Int("host_count", len(cfg.MITMHosts)))
