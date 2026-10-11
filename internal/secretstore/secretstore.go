@@ -330,5 +330,10 @@ func EraseOwner(ctx context.Context, st Store, owner string) (EraseReport, error
 			rep.CryptoErased = underKey
 		}
 	}
+	if history, ok := view.(ProviderChangeStore); ok && len(errs) == 0 {
+		if err := history.DeleteProviderChanges(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("erase provider history of %q: %w", owner, err))
+		}
+	}
 	return rep, errors.Join(errs...)
 }

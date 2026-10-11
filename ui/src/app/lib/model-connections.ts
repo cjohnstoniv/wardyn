@@ -12,18 +12,9 @@
 // EAGER graph (its own file header explains why it avoids copy imports), and
 // this page is reached only through the lazy Settings/Account chunk.
 //
-// NOT wired here, on purpose:
-//  - C9b ("removed by an address change") — SetupProviderAccess carries only
-//    `not_configured`, the one state a credential grades to whether it was
-//    never stored, was deleted by an address change, or could not be read;
-//    there is no field distinguishing them. So the console says only that none
-//    is available (#1489), and C9b's canon sentence is left unwired rather
-//    than invented.
-//  - C11 (the admin-token caller) — that principal never mounts the Member
-//    view at all (model-access-context.tsx's own comment), so this page never
-//    sees it.
 import { absoluteTime, relativeTime, shortDate } from "./format";
 import { harnessDisplayNames } from "./model-access";
+import { modelConnectionCause } from "./model-connection-cause";
 import type { SetupModelProvider, SetupProviderAccess, SetupStatus } from "./types";
 import { AGENTS } from "./workspace-providers-copy";
 import { CONNECTIONS } from "../components/wardyn/copy/door";
@@ -135,7 +126,13 @@ function connectionMeta(access: SetupProviderAccess): Pick<ConnectionRowCopy, "m
  *  kind- or state-specific, so it is computed once here rather than repeated
  *  at every one of connectionRowCopyByKind's return points. */
 export function connectionRowCopy(status: SetupStatus | null | undefined, row: ConnectionRow): ConnectionRowCopy {
-  return { ...connectionRowCopyByKind(status, row), ...connectionMeta(row.access) };
+  const copy = { ...connectionRowCopyByKind(status, row), ...connectionMeta(row.access) };
+  const cause = modelConnectionCause(row.provider, row.access);
+  if (!cause) return copy;
+  return {
+    ...copy, line: cause.line, button: cause.button ?? copy.button,
+    chip: row.access.cause === "store_unreadable" ? { label: CONNECTIONS.COULD_NOT_CHECK, tone: "neutral" } : copy.chip,
+  };
 }
 
 function connectionRowCopyByKind(

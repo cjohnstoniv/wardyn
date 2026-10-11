@@ -1,0 +1,15 @@
+[
+  { "key": "INVALID", "args": [], "text": "runner_pool_id must be the id of a pool from your pool list." },
+  { "key": "REQUIRED", "args": ["Self-Hosted"], "text": "Choose a Self-Hosted pool. No default pool applies to this run." },
+  { "key": "REQUIRED_ANY", "args": [], "text": "Choose a runner pool. No default pool applies to this run." },
+  { "key": "NOT_FOUND", "args": [], "text": "That pool isn't available to you. Choose one from the list." },
+  { "key": "UNAVAILABLE", "args": ["Build farm"], "text": "Build farm is switched off right now. Choose another pool." },
+  { "key": "DEFAULT_UNAVAILABLE_PERSONAL", "args": [], "text": "Your default pool is no longer available. Choose a pool to continue." },
+  { "key": "DEFAULT_UNAVAILABLE_ORG", "args": [], "text": "Your organisation's default pool is no longer available. Choose a pool to continue." },
+  { "key": "STALE", "args": ["Build farm"], "text": "Build farm changed while this run was being set up. Review it and try again." },
+  { "key": "NO_ELIGIBLE_MEMBER", "args": ["Build farm"], "text": "No runner in Build farm can run this right now." },
+  { "key": "NO_OWN_RUNNER", "args": ["Team laptops"], "text": "None of your own runners in Team laptops can run this right now." },
+  { "key": "MEMBER_MISMATCH", "args": ["desk-1", "Team laptops"], "text": "desk-1 is not one of your runners in Team laptops." },
+  { "key": "HOSTING_MISMATCH", "args": ["Team laptops", "Self-Hosted"], "text": "Team laptops is a Self-Hosted pool, so it can't be used with this runner choice." },
+  { "key": "UNAVAILABLE_SERVER", "args": [], "text": "This server does not manage runner pools yet." }
+]

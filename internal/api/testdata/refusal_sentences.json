@@ -166,6 +166,11 @@
   },
   {
     "reason": "delegation_scope",
+    "target": "id.String()",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "delegation_scope",
     "target": "r.URL.Path",
     "sentence": "delegationRefusal"
   },
@@ -323,6 +328,11 @@
     "reason": "not_owner",
     "target": "ws.ID.String()",
     "sentence": "\"workspace not found\""
+  },
+  {
+    "reason": "placement_component_self_defined",
+    "target": "\"runs.placement\"",
+    "sentence": "\"local_self_defined_components is not permitted by the profile\""
   },
   {
     "reason": "reason",

@@ -253,6 +253,8 @@ fmt.Println(out.Output, out.Truncated, out.Complete, out.Source)
   asciicast output.
   The latter two retain the recording's owner-or-operator privacy
   gate, even after recording is disabled.
+  A portal's delegated token reads `stdout` output only; for the other two
+  it gets the 409 a run with no such row gives, audited `delegation_scope`.
 - `incomplete` says bytes may be missing
   and is always true for recording recovery.
 - `capture_gap` says capture or recovery
@@ -346,7 +348,7 @@ A successful response contains `spec` (authorized, clamped, workspace-folded and
 
 ## Custom components
 
-A run can carry components that add destinations and secrets ([POLICIES.md](POLICIES.md#custom-components) defines them; [OPERATIONS.md](OPERATIONS.md#custom-components) is the admin side). The client wraps both stores of them.
+A run can carry components that add destinations and secrets ([POLICIES.md](POLICIES.md#custom-components) defines them; [custom-components.md](operations/custom-components.md) is the admin side). The client wraps both stores of them.
 
 | Method | Route | Who |
 |---|---|---|
@@ -456,6 +458,12 @@ start.
 | `runner_registration_rate_limited` | Too many registration attempts; retry later. |
 | `runner_registration_invalid` / `runner_owner_invalid` | Registration fields or token owner are invalid. |
 | `runner_key_already_registered` | This key is already registered; generate a new identity. |
+| `runner_not_found` / `runner_token_not_found` | No such runner or unused token for this caller; another person's runner answers as an absent id. |
+| `runner_filter_invalid` | `state` is not `active`, `revoked` or `all`. |
+| `runner_session_required` | `/me/runners` needs the person's own session; administrative and delegated credentials own no runner. |
+| `runners_enabled_required` | `PUT /runners/settings` needs `enabled`: true or false. |
+| `runners_org_url_invalid` | Runners cannot be turned on until the organisation and control-plane URLs are HTTPS. |
+| `site_config_runners_via_own_route` | Change `runners.enabled` with `PUT /runners/settings`. |
 | `runner_token_invalid` | Registration token is unknown, expired, consumed, or bound to another org. |
 | `runner_claim_mismatch` | The personal owner, fingerprint, org binding, claim state, or expiry does not match. |
 | `runner_not_found` | No such runner to revoke: absent, already revoked, or (on `/me`) another person's. |
@@ -494,10 +502,16 @@ start.
 | `egress_second_human_local_mode` | `WARDYN_EGRESS_SECOND_HUMAN` (or `WARDYN_CAPABILITY_SECOND_HUMAN`) cannot be enforced in local mode (nobody is authenticated to prove a second human decided). |
 | `invalid_push_scope` / `invalid_push_path_list` / `push_content_unattended` / `push_path_list_count_unavailable` / `push_path_list_cap_reached` / `push_not_held` / `push_path_lists_require_postgres` | The internal sidecar's push-content raise route (`POST /api/v1/internal/approvals`, `kind: push_content`) and `GET /approvals/{id}/paths`: a malformed raise, an unattended run's push refused rather than held, a per-run path-list cap, or a route that needs a Postgres-backed capability this backend lacks (`push_path_lists_require_postgres` also covers the raise route's own store-type-assertion arm, the identical cause one status apart). |
 | `workspace_seed_store_unavailable` / `workspace_seed_unreadable` / `workspace_seed_source_target_invalid` / `workspace_seed_no_base_image` / `workspace_seed_policy_conflict` | `POST /runs`' `workspace_id` resolution (`seedRequestWorkspace`): no store configured, the workspace could not be read, a stored source's target fails the authored-target deny-list, an exec run named a workspace with no base image and no `--agent`/`--image`, or the seeded sources conflict with the policy's own mounts/repos. |
-| `placement_invalid` / `resources_invalid` / `workspace_target_invalid` / `override_invalid` / `allowed_image_invalid` | `400`: a malformed `placement`, `resources`, workspace `target`, `overrides` entry or `allowed_image`. |
+| `placement_invalid` / `resources_invalid` / `workspace_target_invalid` / `override_invalid` / `allowed_image_invalid` / `runner_pool_invalid` | `400`: a malformed `placement`, `resources`, workspace `target`, `overrides` entry, `allowed_image` or `runner_pool_id`. |
 | `workspace_target_overlap` / `workspace_pin_conflict` / `image_conflict` / `workspace_ado_org_conflict` | `422`: the attached workspaces cannot share one run. |
 | `override_refused` | `422`: an override that would widen the run, which the narrowing table never allows. |
 | `request_field_unavailable` | `422`: a field this server cannot honour yet. It is refused, never dropped. |
+| `template_document_invalid` / `template_field_invalid` / `template_field_unknown` / `template_version_unsupported` | `400`, `422` for the version: a template document that is not one bounded document, a value of the wrong shape (null and redaction placeholders included), a key the schema lacks, or an `api_version` or `kind` this server does not read. |
+| `template_secret_refused` / `template_run_state_refused` / `template_metadata_in_content` / `template_field_excluded` | `400`: a template never holds a secret value, state of one run (identity, session, claim, admission), an owner, scope, group or revision, or a launch-only (title, description) or retired field. The path is in the diagnostic. |
+| `template_field_unavailable` / `template_dependency_missing` / `template_coverage_invalid` / `template_shared_field_refused` | `422`: a field this server cannot honour yet (refused, never dropped), a field whose dependency is neither included nor listed under `needs_setup`, a coverage that does not fit the content, or a field that names one person's own thing in an organisation or group template. |
+| `template_scope_forbidden` / `template_group_unverified` / `template_not_found` / `template_revision_conflict` | `403`, `403`, `404`, `409`: publishing to a scope the caller does not administer, group membership that cannot be verified from this sign-in, no such template or not visible to the caller, or an update against a revision that has moved. |
+| `templates_unavailable` | `501`: the template store is not available on this server yet. Every `/templates` route and the `/admin/template-group-admins` routes answer it. |
+| `runner_pools_unavailable` | `501`: this server does not manage runner pools yet; every `/runner-pools` route answers it. |
 | `image_devcontainer_exclusive` / `image_builder_unavailable` | `POST /runs`' image/devcontainer build validation: `image` and `devcontainer_repo` were both set (the caller's own request shape), or a custom image was requested but this control plane has no image builder wired (a deployment capability neither field can fix) — two different causes, two reasons. |
 | `workspace_sources_store_unavailable` / `workspace_sources_list_unavailable` / `workspace_source_not_onboarded` / `workspace_source_mount_not_allowed` | `POST /runs`' resolved-spec workspace-source checks (`validateWorkspaceSources`, `authorizeSpecWorkspaceSources`): no store, the workspace list could not be read, the member-safe mount gate refuses an onboarded source, or — `workspace_source_not_onboarded` — the source is not onboarded at all. That last one is DELIBERATELY the same reason regardless of which of the two functions answers it or whether the source is a mount or a repo: the message is already byte-identical across all four sites for the cross-member existence-oracle reason `authorizeSpecWorkspaceSources`' own doc comment explains (another member's onboarded source must read exactly like one nobody onboarded), and a distinguishable reason would reopen it on the wire even with the sentence unchanged. |
 | `runner_capabilities_unavailable` / `confinement_class_conflict` / `confinement_class_unsupported` / `run_grants_require_spire` | `POST /runs`' confinement-class resolution and the SPIRE-only-grants check (invariant 5). |
@@ -662,6 +676,7 @@ The rest reach the wire only through
 | `delegation_scope` | A portal's delegated token asked for a route outside its own delegation allow-list (#1142). |
 | `event_stream_cap` | The caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (#1407); close one and retry. Answered `422` and not audited, like `run_quota`. |
 | `component_autonomy` | The organisation's autonomy cap on runs that use the caller's own custom components closes the door, with or without a governance profile; the body's `policy` names the deployment. |
+| `placement_component_self_defined` | A run on your own runner carries a component you defined while your limits omit `local_self_defined_components` (default deny); `403`, target `runs.placement`. |
 | `governance_profile` | The caller's resolved governance profile itself closes the door (distinct from `groups_snapshot_stale`, which is the profile being unresolvable at all). |
 | `mask_state_unavailable` | The server cannot prove a run's masking corpus complete, so a door that relays or persists the run's output (recording upload, live attach, SSH shell, live output read) refuses with `503` instead of passing bytes through. A run dispatched before 0.8.6 stays refused after a server restart until it ends; any other run clears when the server can read its manifest again. Since the shared masking registry an injection or capture route also answers it when a value could not be committed to the registry: the value is not handed out. |
 | `governance_overlay_unsatisfiable` | The caller's governance profile, or the run's own, is composed and nothing satisfies it together with the profile or deployment default it builds on, so the launch and every live door refuse (`403`) rather than widen. The sentence names the person's own profile and never a base. |

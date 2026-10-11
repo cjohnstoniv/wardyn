@@ -41,6 +41,9 @@ type policyPreviewResponse struct {
 	// choices, an array that is empty until that lane fills it.
 	Image         *client.ImageFact     `json:"image,omitempty"`
 	AllowedImages []client.AllowedImage `json:"allowed_images"`
+	// RunnerPool and RunnerPools are the preflight's, with the same meaning.
+	RunnerPool  *client.ResolvedRunnerPool `json:"runner_pool,omitempty"`
+	RunnerPools []client.RunnerPoolChoice  `json:"runner_pools"`
 }
 
 type policyPreviewPending string
@@ -89,6 +92,7 @@ func policyPreviewFacts(req createRunRequest, spec types.RunPolicySpec, source p
 		RepositoryAccess: previewRepositoryAccess(req, out, site),
 		Provenance:       []provenanceRow{},
 		Resources:        []client.PlacementResources{}, LocalPlacement: []client.LocalPlacementFact{}, AllowedImages: []client.AllowedImage{},
+		RunnerPools: []client.RunnerPoolChoice{},
 	}
 }
 

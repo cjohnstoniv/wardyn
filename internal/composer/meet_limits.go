@@ -15,6 +15,10 @@ import (
 // field.
 func (m *meeter) meetLimits(o types.LimitsOverlay) {
 	l := &m.out.Limits
+	if o.LocalSelfDefinedComponents != nil {
+		m.widenIf("local_self_defined_components", *o.LocalSelfDefinedComponents && !l.LocalSelfDefinedComponents)
+		l.LocalSelfDefinedComponents = l.LocalSelfDefinedComponents && *o.LocalSelfDefinedComponents
+	}
 	// A denial is only ever added: one the overlay leaves off stays the base's.
 	for _, f := range []struct {
 		base *bool

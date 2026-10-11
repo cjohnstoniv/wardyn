@@ -261,6 +261,9 @@ func leqPush(a, b *types.PushRulesSpec) bool {
 }
 
 func leqLimits(a, b types.GovernanceLimits) bool {
+	if a.LocalSelfDefinedComponents && !b.LocalSelfDefinedComponents {
+		return false
+	}
 	for _, p := range [][2]bool{
 		{a.DenyTaskModeExec, b.DenyTaskModeExec}, {a.DenyInteractive, b.DenyInteractive},
 		{a.DenyUIApps, b.DenyUIApps}, {a.DenyUserDrive, b.DenyUserDrive},

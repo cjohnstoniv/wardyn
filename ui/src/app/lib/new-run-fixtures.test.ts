@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { NEW_RUN_FIXTURES, newRunFixture } from "./new-run-fixtures";
 import { NEW_RUN_REASON, PLACEMENT_REASONS, workspaceTargetOverlap, type PlacedTarget } from "./new-run-refusals";
+import { RUNNER_POOL_REASONS } from "./runner-pool-refusals";
 import { OVERRIDE_NARROWING } from "./override-narrowing";
 import { buildRunContractWire, overrideItems, pushRuleKey } from "./run-contract-draft";
 
@@ -36,10 +37,32 @@ describe("New Run fixtures", () => {
         if (!row.local_placeable) expect(PLACEMENT_REASONS, f.route).toContain(row.reason);
       }
       if (f.refusal) {
-        expect([...Object.values(NEW_RUN_REASON), ...PLACEMENT_REASONS], f.route).toContain(f.refusal.reason);
+        expect([...Object.values(NEW_RUN_REASON), ...PLACEMENT_REASONS, ...RUNNER_POOL_REASONS], f.route).toContain(f.refusal.reason);
         expect(f.refusal.status, f.route).toBeGreaterThanOrEqual(400);
       }
     }
+  });
+
+  it("draws every pool selector state, with only pools the person may use", () => {
+    const pools = NEW_RUN_FIXTURES.filter((f) => f.route.startsWith("runner/pool-"));
+    expect(pools.map((f) => f.route).sort()).toEqual(
+      ["runner/pool-default-unavailable", "runner/pool-personal-default", "runner/pool-required", "runner/pool-self-empty", "runner/pool-self-no-own-runner", "runner/pool-single"],
+    );
+    for (const f of pools) {
+      expect(f.preview.runner_pools, f.route).toBeInstanceOf(Array);
+      const resolved = f.preview.runner_pool;
+      if (resolved) {
+        const choice = f.preview.runner_pools?.find((c) => c.id === resolved.id);
+        expect(choice?.availability, f.route).toBe("available");
+        expect(f.contract?.runner.poolId, f.route).toBe(resolved.id);
+      }
+      // An unavailable pool says why, and an unresolved request carries no pool to send.
+      for (const c of f.preview.runner_pools ?? []) if (c.availability !== "available") expect(c.reason, f.route).toBeTruthy();
+      if (f.refusal) expect(f.preview.runner_pool, f.route).toBeUndefined();
+    }
+    expect(buildRunContractWire(newRunFixture("runner/pool-single").contract, { agent: false, azureDevOps: false, gitPATHosts: [], pushKeys: [] }))
+      .toEqual({ runner_pool_id: "a1111111-1111-4111-8111-111111111111" });
+    expect(newRunFixture("runner/pool-self-empty").preview.runner_pools).toEqual([]);
   });
 
   it("carries each image source and sends a changed image by its allowed ref", () => {

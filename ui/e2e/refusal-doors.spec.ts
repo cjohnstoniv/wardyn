@@ -205,25 +205,10 @@ test.describe("the failure block opens the run's own provider's door (state 2)",
       await expect(block.getByText(c.note)).toBeVisible();
       const button = block.getByRole("button", { name: c.aria });
       await expect(button).toHaveText(c.label);
-      // Wait for the failure block's own credential-refresh (its ONE-time
-      // mount effect, failure-block.tsx) to land before clicking (#1291): it
-      // re-renders this button's parent a second time, close on the first
-      // paint's heels, and a click that lands inside that window can miss.
-      // Playwright's own click() actionability polling (attached, visible,
-      // stable, receives events — re-checked immediately before dispatch)
-      // covers the remaining gap between the response landing and React
-      // committing the re-render it causes.
       await statusRefreshed;
-      // The failure block re-renders once more after the refresh lands; a click
-      // inside that window is lost, so click again until the door answers.
-      // Each pass clicks only while the dialog is still CLOSED: an open one is
-      // a modal that swallows the click and blocks the button, so re-clicking
-      // would throw inside the retry and the visibility check would never run.
       const dialog = page.getByRole("dialog", { name: c.dialog });
-      await expect(async () => {
-        if ((await dialog.count()) === 0) await button.click({ timeout: 2_000 });
-        await expect(dialog).toBeVisible({ timeout: 2_000 });
-      }).toPass({ timeout: 20_000 });
+      await button.click();
+      await expect(dialog).toBeVisible({ timeout: 20_000 });
       if (c.p.kind === "bedrock_sso" || c.p.kind === "anthropic_subscription") {
         await expect(dialog).toContainText(`For ${c.p.name}`);
       }
@@ -254,17 +239,8 @@ test.describe("no door for anyone but the owner, or in the Admin view (state 3)"
     const block = page.getByTestId("run-failure-block");
     await expect(block.getByText(MODEL_ACCESS_RUN_DOOR.NOT_OWNER("ann@acme.example"))).toBeVisible();
     await expect(block.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA })).toHaveCount(0);
-    // The SSO session flips its view on the server and then reloads, which a
-    // busy runner can take past the 5s default to finish; a click that lands
-    // before the block settles is lost, so click again until the view flips.
-    // Each pass clicks only while the button is STILL there: once the view has
-    // flipped it is gone, and a click against the reloading document would
-    // throw inside the retry and never reach the URL check again.
-    await expect(async () => {
-      const openInUser = block.getByRole("button", { name: CONSOLE_VIEW.OPEN_IN_USER });
-      if ((await openInUser.count()) > 0) await openInUser.click({ timeout: 2_000 });
-      await expect(page).toHaveURL(/^(?![^?]*\/admin\/)[^?]*\/runs\/[^/]+$/, { timeout: 6_000 });
-    }).toPass({ timeout: 30_000 });
+    await block.getByRole("button", { name: CONSOLE_VIEW.OPEN_IN_USER }).click();
+    await expect(page).toHaveURL(/^(?![^?]*\/admin\/)[^?]*\/runs\/[^/]+$/, { timeout: 30_000 });
     await expect(page.getByTestId("run-failure-block").getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA })).toBeVisible();
   });
 });
