@@ -307,6 +307,10 @@ func (s PG) AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor st
 	var added bool
 	var rev int64
 	err := s.inTx(ctx, func(q Querier) error {
+		// The target lock a held change is decided under, so a stale check cannot apply over this write.
+		if err := LockGovernanceTarget(ctx, q, types.GovernanceTargetRunnerPoolUsePolicy, id.String()); err != nil {
+			return err
+		}
 		var err error
 		m, added, rev, err = AddRunnerPoolExecutorQ(ctx, q, id, executor)
 		return err
@@ -345,8 +349,28 @@ func errOrNotFound(err error) error {
 }
 
 // RemoveRunnerPoolExecutor removes an executor member; removed is false when it was not one.
-func (s PG) RemoveRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (bool, int64, error) {
-	return s.removeMember(ctx, id, `DELETE FROM runner_pool_members WHERE pool_id = $1 AND executor_id = $2`, executor)
+func (s PG) RemoveRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (removed bool, rev int64, err error) {
+	err = s.inTx(ctx, func(q Querier) error {
+		if err := LockGovernanceTarget(ctx, q, types.GovernanceTargetRunnerPoolUsePolicy, id.String()); err != nil {
+			return err
+		}
+		removed, rev, err = RemoveRunnerPoolExecutorQ(ctx, q, id, executor)
+		return err
+	})
+	return removed, rev, err
+}
+
+// RemoveRunnerPoolExecutorQ is RemoveRunnerPoolExecutor's statement on q (a pgx.Tx), which a held
+// detach applies through inside the decision transaction.
+func RemoveRunnerPoolExecutorQ(ctx context.Context, q Querier, id uuid.UUID, executor string) (bool, int64, error) {
+	return removeMemberQ(ctx, q, id, `DELETE FROM runner_pool_members WHERE pool_id = $1 AND executor_id = $2`, executor)
+}
+
+// LockLivePoolQ takes the pool row lock of a live pool on q, ErrNotFound when there is none. A held
+// change takes it right after its target lock, so every member write waits for the decision.
+func LockLivePoolQ(ctx context.Context, q Querier, id uuid.UUID) error {
+	_, err := livePoolForUpdate(ctx, q, id)
+	return err
 }
 
 // RemoveOwnRunnerFromPool removes owner's own runner (in any state, so a revoked one can be tidied
@@ -360,20 +384,25 @@ func (s PG) RemoveOwnRunnerFromPool(ctx context.Context, id, runnerID uuid.UUID,
 // removeMember runs one member DELETE under the pool lock and raises the revision when it removed a row.
 func (s PG) removeMember(ctx context.Context, id uuid.UUID, stmt string, args ...any) (removed bool, rev int64, err error) {
 	err = s.inTx(ctx, func(q Querier) error {
-		p, err := livePoolForUpdate(ctx, q, id)
-		if err != nil {
-			return err
-		}
-		tag, err := q.Exec(ctx, stmt, append([]any{id}, args...)...)
-		if err != nil {
-			return err
-		}
-		rev = p.Revision
-		if removed = tag.RowsAffected() == 1; removed {
-			rev, err = bumpRunnerPoolQ(ctx, q, id)
-		}
+		removed, rev, err = removeMemberQ(ctx, q, id, stmt, args...)
 		return err
 	})
+	return removed, rev, err
+}
+
+func removeMemberQ(ctx context.Context, q Querier, id uuid.UUID, stmt string, args ...any) (removed bool, rev int64, err error) {
+	p, err := livePoolForUpdate(ctx, q, id)
+	if err != nil {
+		return false, 0, err
+	}
+	tag, err := q.Exec(ctx, stmt, append([]any{id}, args...)...)
+	if err != nil {
+		return false, 0, err
+	}
+	rev = p.Revision
+	if removed = tag.RowsAffected() == 1; removed {
+		rev, err = bumpRunnerPoolQ(ctx, q, id)
+	}
 	return removed, rev, err
 }
 

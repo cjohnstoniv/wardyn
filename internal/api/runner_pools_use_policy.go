@@ -35,11 +35,12 @@ type runnerPoolUsePolicyRequest struct {
 	Subjects []types.RunnerPoolSubject `json:"subjects"`
 }
 
-// runnerPoolHeldChange is a held change's payload: a use policy set (Subjects), a clear (nothing) or an
-// executor attach (Executor).
+// runnerPoolHeldChange is a held change's payload: a use policy set (Subjects), a clear (nothing), an
+// executor attach (Executor) or an executor detach (Executor and Detach).
 type runnerPoolHeldChange struct {
 	Subjects []types.RunnerPoolSubject `json:"subjects,omitempty"`
 	Executor string                    `json:"executor,omitempty"`
+	Detach   bool                      `json:"detach,omitempty"`
 }
 
 // runnerPoolUsePolicyState is the target of a change as it stands, hashed by proposal and approval
@@ -220,23 +221,27 @@ func usePolicyAuditData(before, after []types.RunnerPoolSubject) map[string]any 
 	return map[string]any{"before": before, "after": after}
 }
 
-// holdExecutorAttach stores an executor attach as a pending change on the pool, under the same kind
-// and the same state hash as its use policy.
-func (s *Server) holdExecutorAttach(w http.ResponseWriter, r *http.Request, row store.RunnerPoolCatalogueRow, executor string) {
+// holdExecutorChange stores an executor attach or detach as a pending change on the pool, under the
+// same kind and the same state hash as its use policy.
+func (s *Server) holdExecutorChange(w http.ResponseWriter, r *http.Request, row store.RunnerPoolCatalogueRow, executor string, detach bool) {
 	subjects := []types.RunnerPoolSubject{}
 	if row.Policy != nil {
 		subjects = row.Policy.Subjects
 	}
+	executors := append(slices.Clone(row.ExecutorIDs), executor)
+	if detach {
+		executors = slices.DeleteFunc(slices.Clone(row.ExecutorIDs), func(id string) bool { return id == executor })
+	}
 	before := runnerPoolUsePolicyState(subjects, row.ExecutorIDs)
-	after := runnerPoolUsePolicyState(subjects, append(slices.Clone(row.ExecutorIDs), executor))
+	after := runnerPoolUsePolicyState(subjects, executors)
 	s.proposeGovernanceChange(w, r, govProposal{
-		kind: govKindRunnerPoolUsePolicy, op: opExecutorAttach, key: row.Pool.ID.String(), payload: runnerPoolHeldChange{Executor: executor},
+		kind: govKindRunnerPoolUsePolicy, op: opExecutorAttach, key: row.Pool.ID.String(), payload: runnerPoolHeldChange{Executor: executor, Detach: detach},
 		before: before, after: after, changed: changedPaths(before, after), baseState: before,
 	})
 }
 
-// opExecutorAttach is the op of an executor attach: migration 0126 closes the set of ops, so it is a
-// "set" and the payload (Executor, no Subjects) tells it from a policy set.
+// opExecutorAttach is the op of an executor attach or detach: migration 0126 closes the set of ops, so
+// it is a "set" and the payload (Executor, no Subjects) tells it from a policy set.
 const opExecutorAttach = "set"
 
 // applyRunnerPoolUsePolicyChange applies a held use policy set or clear, or executor attach, inside the
@@ -255,6 +260,13 @@ func applyRunnerPoolUsePolicyChange(s *Server, r *http.Request, q store.Querier,
 	if err := store.LockGovernanceTarget(ctx, q, govKindRunnerPoolUsePolicy, poolID.String()); err != nil {
 		return govApplied{}, err
 	}
+	// The pool row next, before anything is read: every member and policy write takes it, so none can
+	// commit between the stale check and the apply.
+	if err := store.LockLivePoolQ(ctx, q, poolID); errors.Is(err, store.ErrNotFound) {
+		return govApplied{}, store.ErrGovernanceChangeStale
+	} else if err != nil {
+		return govApplied{}, err
+	}
 	before := []types.RunnerPoolSubject{}
 	switch pol, err := store.GetRunnerPoolUsePolicyQ(ctx, q, poolID); {
 	case errors.Is(err, store.ErrNotFound):
@@ -271,6 +283,9 @@ func applyRunnerPoolUsePolicyChange(s *Server, r *http.Request, q store.Querier,
 		return govApplied{}, store.ErrGovernanceChangeStale
 	}
 	if held.Executor != "" {
+		if held.Detach {
+			return applyExecutorDetach(ctx, q, poolID, held.Executor)
+		}
 		return s.applyExecutorAttach(ctx, q, poolID, held.Executor)
 	}
 	action := auditPoolUsePolicySet
@@ -301,5 +316,17 @@ func (s *Server) applyExecutorAttach(ctx context.Context, q store.Querier, poolI
 		return govApplied{}, err
 	}
 	return govApplied{action: auditPoolExecutorAdd, target: poolID.String(), data: map[string]any{
+		"executor_id": executor, "hosting_type": types.RunnerPoolRemoteProvided, "revision": rev}}, nil
+}
+
+func applyExecutorDetach(ctx context.Context, q store.Querier, poolID uuid.UUID, executor string) (govApplied, error) {
+	_, rev, err := store.RemoveRunnerPoolExecutorQ(ctx, q, poolID, executor)
+	if errors.Is(err, store.ErrNotFound) {
+		return govApplied{}, store.ErrGovernanceChangeStale
+	}
+	if err != nil {
+		return govApplied{}, err
+	}
+	return govApplied{action: auditPoolExecutorRemove, target: poolID.String(), data: map[string]any{
 		"executor_id": executor, "hosting_type": types.RunnerPoolRemoteProvided, "revision": rev}}, nil
 }

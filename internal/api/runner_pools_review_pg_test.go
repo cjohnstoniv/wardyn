@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -350,5 +352,130 @@ func TestPG_RunnerPoolsConcurrentBootstrapMakesOnePool(t *testing.T) {
 	}
 	if n := len(e.audits(auditPoolCreate)); n != 1 {
 		t.Errorf("%d create audit rows", n)
+	}
+}
+
+// Detaching a narrowed executor is held like attaching it: otherwise one administrator detaches it, so
+// that no policy pool holds it any more, and attaches it to an open pool.
+func TestPG_RunnerPoolDetachFromAPolicyPoolIsHeld(t *testing.T) {
+	e := newPoolEnv(t, true)
+	a, b := e.createPool("A", types.RunnerPoolRemoteProvided), e.createPool("B", types.RunnerPoolRemoteProvided)
+	if w := e.call(e.super, http.MethodPut, poolPath(a.ID)+"/executors/fake", ""); w.Code != http.StatusOK {
+		t.Fatalf("attach = %d", w.Code)
+	}
+	e.approve(e.pending(e.call(e.alice, http.MethodPut, usePolicyPath(a.ID), `{"subjects":[{"subject_type":"user","subject":"sub-named"}]}`)).ID)
+
+	held := e.pending(e.call(e.super, http.MethodDelete, poolPath(a.ID)+"/executors/fake", ""))
+	if held.TargetKind != govKindRunnerPoolUsePolicy || held.TargetKey != a.ID.String() || held.Op != opExecutorAttach {
+		t.Errorf("held = %+v", held)
+	}
+	if n := e.members(a.ID); n != 1 {
+		t.Fatalf("a held detach removed the member (%d left)", n)
+	}
+	// With the detach pending, the executor is still narrowed: attaching it elsewhere is held too.
+	e.pending(e.call(e.super, http.MethodPut, poolPath(b.ID)+"/executors/fake", ""))
+	if n := e.members(b.ID); n != 0 {
+		t.Fatalf("an attach to an open pool stored %d members while the executor is narrowed", n)
+	}
+	if got := e.listed(e.person)[b.ID]; got.Availability == client.RunnerPoolAvailable {
+		t.Errorf("an unnamed person is offered the narrowed executor through %+v", got)
+	}
+	e.approve(held.ID)
+	if n := e.members(a.ID); n != 0 {
+		t.Fatalf("the approved detach left %d members", n)
+	}
+	if rows := e.audits(auditPoolExecutorRemove); len(rows) != 1 || rows[0].Actor != govSubBob {
+		t.Errorf("detach audit rows = %+v, want one by the approver", rows)
+	}
+	// The admin token detaches directly and leaves its break-glass row.
+	e.call(e.super, http.MethodPut, poolPath(a.ID)+"/executors/fake", "")
+	before := len(e.audits("governance.change.bypass"))
+	if w := e.admin(http.MethodDelete, poolPath(a.ID)+"/executors/fake", ""); w.Code != http.StatusNoContent || e.members(a.ID) != 0 {
+		t.Fatalf("admin token detach = %d", w.Code)
+	}
+	if n := len(e.audits("governance.change.bypass")); n != before+1 {
+		t.Errorf("%d bypass rows, want %d", n, before+1)
+	}
+}
+
+// within reports whether done closes inside d.
+func within(done <-chan *httptest.ResponseRecorder, d time.Duration) (*httptest.ResponseRecorder, bool) {
+	select {
+	case w := <-done:
+		return w, true
+	case <-time.After(d):
+		return nil, false
+	}
+}
+
+// A decision is made under the pool row lock, taken before the executors are read: a member write that
+// commits while the approval waits is seen by its stale check, so the approval cannot apply over it.
+func TestPG_RunnerPoolConcurrentApprovalReadsTheExecutorsUnderThePoolLock(t *testing.T) {
+	e := newPoolEnv(t, true)
+	pool := e.createPool("Provided", types.RunnerPoolRemoteProvided)
+	e.admin(http.MethodPut, poolPath(pool.ID)+"/executors/fake", "")
+	held := e.pending(e.call(e.alice, http.MethodPut, usePolicyPath(pool.ID), `{"subjects":[{"subject_type":"user","subject":"sub-named"}]}`))
+	ctx := context.Background()
+	tx, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM runner_pools WHERE id = $1 FOR UPDATE`, pool.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- e.call(e.bob, http.MethodPost, approvePath(held.ID), "") }()
+	time.Sleep(700 * time.Millisecond)
+	if _, err := tx.Exec(ctx, `DELETE FROM runner_pool_members WHERE pool_id = $1`, pool.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w, ok := within(done, 20*time.Second)
+	if !ok {
+		t.Fatal("the approval never finished")
+	}
+	if w.Code == http.StatusOK {
+		t.Errorf("approval applied over an executor set that moved: %d %s", w.Code, w.Body)
+	}
+	if n := e.count(`SELECT count(*) FROM runner_pool_use_policies`); n != 0 {
+		t.Errorf("a stale approval stored a policy")
+	}
+}
+
+// Direct executor writes queue behind a decision on the same target.
+func TestPG_RunnerPoolConcurrentDirectExecutorWritesTakeTheGovernanceTargetLock(t *testing.T) {
+	e := newPoolEnv(t, false)
+	pool := e.createPool("Provided", types.RunnerPoolRemoteProvided)
+	ctx := context.Background()
+	for name, do := range map[string]func() *httptest.ResponseRecorder{
+		"attach": func() *httptest.ResponseRecorder {
+			return e.admin(http.MethodPut, poolPath(pool.ID)+"/executors/fake", "")
+		},
+		"detach": func() *httptest.ResponseRecorder {
+			return e.admin(http.MethodDelete, poolPath(pool.ID)+"/executors/fake", "")
+		},
+	} {
+		tx, err := e.pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.LockGovernanceTarget(ctx, tx, govKindRunnerPoolUsePolicy, pool.ID.String()); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() { done <- do() }()
+		if _, ok := within(done, 700*time.Millisecond); ok {
+			_ = tx.Rollback(ctx)
+			t.Fatalf("%s did not wait for the decision holding the target lock", name)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if w, ok := within(done, 20*time.Second); !ok || w.Code >= 300 {
+			t.Errorf("%s after the lock was released = %v", name, w)
+		}
 	}
 }

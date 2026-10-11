@@ -185,7 +185,7 @@ func (s *Server) handleAddRunnerPoolExecutor(w http.ResponseWriter, r *http.Requ
 		}
 		if mode == govQueue {
 			row, _ := catalogueRow(rows, pool.ID)
-			s.holdExecutorAttach(w, r, row, executor)
+			s.holdExecutorChange(w, r, row, executor, false)
 			return
 		}
 	}
@@ -215,7 +215,9 @@ func executorUnderOtherPolicy(rows []store.RunnerPoolCatalogueRow, poolID uuid.U
 }
 
 // handleRemoveRunnerPoolExecutor needs no configured check: an executor that is no longer configured
-// must still be removable.
+// must still be removable. Detaching an executor from a pool that carries a use policy is held for a
+// second human like an attach: otherwise one administrator could detach it, so that no policy pool holds
+// it any more, and attach it to an open pool.
 func (s *Server) handleRemoveRunnerPoolExecutor(w http.ResponseWriter, r *http.Request) {
 	ps, ok := s.runnerPoolStore(w)
 	if !ok {
@@ -226,6 +228,20 @@ func (s *Server) handleRemoveRunnerPoolExecutor(w http.ResponseWriter, r *http.R
 		return
 	}
 	executor := chi.URLParam(r, "executor")
+	rows, ok := s.poolCatalogue(w, r, ps, false)
+	if !ok {
+		return
+	}
+	mode := govDirect
+	if row, found := catalogueRow(rows, pool.ID); found && row.Policy != nil && slices.Contains(row.ExecutorIDs, executor) {
+		if mode, ok = s.governanceWriteMode(w, r); !ok {
+			return
+		}
+		if mode == govQueue {
+			s.holdExecutorChange(w, r, row, executor, true)
+			return
+		}
+	}
 	removed, rev, err := ps.RemoveRunnerPoolExecutor(r.Context(), pool.ID, executor)
 	if errors.Is(err, store.ErrNotFound) {
 		writePoolNotFound(w)
@@ -237,6 +253,9 @@ func (s *Server) handleRemoveRunnerPoolExecutor(w http.ResponseWriter, r *http.R
 	}
 	if removed {
 		s.auditPool(r, auditPoolExecutorRemove, pool.ID.String(), map[string]any{"executor_id": executor, "hosting_type": pool.HostingType, "revision": rev})
+		if mode == govBypass {
+			s.recordGovernanceBypass(r, govKindRunnerPoolUsePolicy, pool.ID.String(), "success", nil)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
