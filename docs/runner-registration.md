@@ -16,7 +16,7 @@ The API doors are `POST /api/v1/me/runners/tokens`, operator-only `POST /api/v1/
 
 Migration `0142_runner_registration` adds hashed single-use registration tokens and organisation URL bindings to the existing runners table. It does not change run placement records.
 
-Migration `0152_runner_pools` adds the runner pool catalogue: pools, their members, remote-provided use policies and the organisation defaults. It records no run binding, and a pool never claims or transfers a runner. Migration `0158_runner_pool_limits` adds the pool's `limits`: an administrator sets them with `limits` on create and replaces the whole block with `limits` on update (an omitted field, such as `max_concurrent_runs`, is removed); a pool with none adds no bound of its own.
+Migration `0152_runner_pools` adds the runner pool catalogue: pools, their members, remote-provided use policies and the organisation defaults. It records no run binding, and a pool never claims or transfers a runner. Migration `0158_runner_pool_limits` adds the pool's `limits`: an administrator sets them with `limits` on create and replaces the whole block with `limits` on update (an omitted field, such as `max_concurrent_runs`, is removed); a pool with none adds no bound of its own. Limits are validated, stored and audited; they are not yet applied to runs.
 
 ## Runner enablement
 

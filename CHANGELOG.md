@@ -189,7 +189,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `runner_pool_use_policy`). Deleting a pool that has a use policy is refused until the policy is cleared; attaching
   or detaching an executor that a pool holds under a use policy is held for a second human; a leaver's identity is
   removed from every use policy (an emptied policy permits nobody); deleting a pool clears the organisation default
-  that named it. Pool `limits` are refused on create and update until limits are stored. Audit actions
+  that named it. Audit actions
   `runner_pool.*`, `person.runner_pool_default.set|delete`.
 - New Run run mode: a request chooses `experience` (background or interactive), with its workload, included tools,
   one startup choice, one starting folder and an explicit "no repositories or drives". The CLI's run-mode flags
@@ -220,8 +220,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   expires.
 - Runner pools carry limits per run type: CPU and memory (default and cap), lifetime (default, maximum or
   unlimited), an idle stop for interactive environments only, allowed barriers and a concurrent-run cap; an
-  administrator sets them on create and replaces them on update (migration 0158). The effective limit is the
-  strictest of the pool, the person's governance, the deployment and, for self-hosted pools, the runner's capacity.
+  administrator sets them on create and replaces them on update (migration 0158). Limits are validated, stored
+  and audited; they are not yet applied to runs.
 - `wardyn-runnerd` ships as a release binary for Linux and macOS (amd64, arm64) with a per-user service: a systemd
   user unit or a LaunchAgent, installed by `deploy/runner/install.sh`, which registers the runner with a single-use
   token and keeps it running; the owner then claims it with `wardyn runner claim` (#1968).
