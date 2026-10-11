@@ -248,6 +248,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- The AWS KMS key service boots when `AWS_CA_BUNDLE` (or a shared-config `ca_bundle`) is set; corporate-CA installs
+  no longer fail at startup.
 - A runner reporting a run the organisation has no row for (erased, or restored over) no longer blocks its other
   runs: that run is contained by a kill and an asserted quarantine. Past 100 such runs the runner is held not-ready
   and `runner.inventory.hold` is audited. The runner deletes their local evidence 90 days after the quarantine or at
