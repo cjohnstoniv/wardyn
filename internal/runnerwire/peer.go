@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,6 +25,11 @@ const (
 // MaxStreams bounds the byte streams a connection holds open, parked ones
 // included: an OPEN past it is refused. A constant, not a knob.
 const MaxStreams = 256
+
+// maxStreamReplies bounds the RESET and OPEN_OK answers to OPENs that wait
+// for the writer. A peer that opens faster than this side can answer fills it,
+// and the session ends.
+const maxStreamReplies = 2 * MaxStreams
 
 // CallHandler serves one incoming CALL. A ctx cancelled by the caller's RESET
 // means the caller stopped waiting. The result is marshalled into the REPLY; an
@@ -91,6 +97,14 @@ type Peer struct {
 	stopped   chan struct{}
 	lastPong  atomic.Pointer[time.Time]
 	ackWake   chan struct{}
+	// writing is when the write in progress began, nil between writes.
+	writing atomic.Pointer[time.Time]
+	// pongDue (the latest PING payload) and owed (dropped connection credit)
+	// wait under mu for the one worker that answers them.
+	pongDue   []byte
+	owed      int64
+	answers   []Frame // under mu: RESET and OPEN_OK for OPENs, in order
+	replyWake chan struct{}
 }
 
 // NewPeer builds a peer; Run drives it.
@@ -106,7 +120,7 @@ func NewPeer(conn Conn, cfg PeerConfig) *Peer {
 		calls: map[uint32]*pendingCall{}, inCalls: map[uint32]context.CancelFunc{},
 		streams: map[uint32]*Stream{}, parked: map[uint32]*Stream{}, byCall: map[uint32][]uint32{},
 		done: make(chan struct{}), stopped: make(chan struct{}),
-		ackWake: make(chan struct{}, 1),
+		ackWake: make(chan struct{}, 1), replyWake: make(chan struct{}, 1),
 	}
 	if cfg.NextID != 0 {
 		p.ids.next = cfg.NextID
@@ -219,7 +233,7 @@ func (p *Peer) sendFrame(ctx context.Context, f Frame) (uint64, error) {
 	// The caller's ctx bounds only the wait for replay room. The frame is
 	// written under the link's ctx: a write whose ctx ends closes the shared
 	// connection, so a caller giving up would take every stream and call down.
-	if err := p.conn.WriteFrame(p.ctx, f); err != nil {
+	if err := p.write(p.ctx, f); err != nil {
 		// A cancelled write can have sent any prefix of the frame. Resume is
 		// required before another sequence is safe to send on this link.
 		p.fail(err)
@@ -228,10 +242,20 @@ func (p *Peer) sendFrame(ctx context.Context, f Frame) (uint64, error) {
 	return f.Seq, nil
 }
 
+// write puts one frame on the socket; the caller holds the write lock. The
+// start time lets keepalive fail a link whose write has stopped moving.
+func (p *Peer) write(ctx context.Context, f Frame) error {
+	start := time.Now()
+	p.writing.Store(&start)
+	defer p.writing.Store(nil)
+	return p.conn.WriteFrame(ctx, f)
+}
+
 // Run reads frames until the link ends and returns the reason.
 func (p *Peer) Run(ctx context.Context) error {
 	defer close(p.stopped)
 	go p.sendAcks()
+	go p.sendReplies()
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -320,7 +344,10 @@ func (p *Peer) handleFrame(f Frame) error {
 		if _, err := DecodePing(f.Payload); err != nil {
 			return err
 		}
-		go p.send(p.ctx, Frame{Type: TypePong, Payload: f.Payload}) //nolint:errcheck // keepalive; a failed pong is the link going down
+		p.mu.Lock()
+		p.pongDue = f.Payload
+		p.mu.Unlock()
+		p.wakeReplies()
 	case TypePong:
 		if _, err := DecodePing(f.Payload); err != nil {
 			return err
@@ -455,6 +482,41 @@ func (p *Peer) onReset(id, code uint32) {
 	}
 }
 
+func (p *Peer) wakeReplies() {
+	select {
+	case p.replyWake <- struct{}{}:
+	default:
+	}
+}
+
+// One worker answers OPENs (queued, bounded), PINGs and dropped credit (each
+// coalesced: the latest PING, the sum of credit), so a peer that sends faster
+// than this side can write cannot create a goroutine per frame.
+func (p *Peer) sendReplies() {
+	for {
+		select {
+		case <-p.replyWake:
+		case <-p.done:
+			return
+		}
+		p.mu.Lock()
+		answers, pong, owed := p.answers, p.pongDue, p.owed
+		p.answers, p.pongDue, p.owed = nil, nil, 0
+		p.mu.Unlock()
+		for _, f := range answers {
+			if p.send(p.ctx, f) != nil {
+				return
+			}
+		}
+		if pong != nil && p.send(p.ctx, Frame{Type: TypePong, Payload: pong}) != nil {
+			return
+		}
+		if owed > 0 && p.send(p.ctx, Frame{Type: TypeWindow, Payload: EncodeWindow(uint32(min(owed, math.MaxUint32)))}) != nil {
+			return
+		}
+	}
+}
+
 // grant returns consumed bytes to the sender as WINDOW frames: the stream's and the connection's.
 func (p *Peer) grant(s *Stream, n int64) {
 	_ = p.send(p.ctx, Frame{Type: TypeWindow, Stream: s.id, Payload: EncodeWindow(uint32(n))})
@@ -552,13 +614,11 @@ func (p *Peer) onOpen(f Frame) error {
 	// authenticated connection remains live, so output may retry it.
 	if o.Call != 0 && p.calls[o.Call] == nil {
 		p.mu.Unlock()
-		go p.send(p.ctx, Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetRefused)}) //nolint:errcheck // a failed RESET is the link going down
-		return nil
+		return p.answer(Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetRefused)})
 	}
 	if len(p.streams)+len(p.parked) >= MaxStreams {
 		p.mu.Unlock()
-		go p.send(p.ctx, Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetCapacity)}) //nolint:errcheck // a failed RESET is the link going down
-		return nil
+		return p.answer(Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetCapacity)})
 	}
 	s := p.newStream(f.Stream, o.Kind)
 	if o.Call != 0 {
@@ -578,6 +638,19 @@ func (p *Peer) onOpen(f Frame) error {
 			return nil
 		}
 	}
-	go p.send(p.ctx, Frame{Type: TypeOpenOK, Stream: f.Stream}) //nolint:errcheck // a failed OPEN_OK is the link going down
+	return p.answer(Frame{Type: TypeOpenOK, Stream: f.Stream})
+}
+
+// answer queues a reply to an OPEN for the reply worker. The read loop must
+// not wait on a write: two peers that both did could stop each other reading.
+func (p *Peer) answer(f Frame) error {
+	p.mu.Lock()
+	if len(p.answers) >= maxStreamReplies {
+		p.mu.Unlock()
+		return fmt.Errorf("%w: %d OPENs await an answer", ErrBadFrame, maxStreamReplies)
+	}
+	p.answers = append(p.answers, f)
+	p.mu.Unlock()
+	p.wakeReplies()
 	return nil
 }
