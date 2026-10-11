@@ -11,9 +11,8 @@ export type GovernanceChangeState = "pending" | "applied" | "rejected" | "expire
 export interface GovernanceChange {
   id: string;
   // governance_profile, governance_assignment, capability_grant, capability_enforcement,
-  // capability_availability, user_type_priority, role_mapping, key_domain_assignment, egress_baseline
-  // (and later kinds): kept a string so a
-  // kind this console predates still lists, under its raw name.
+  // capability_availability, user_type_priority, role_mapping, key_domain_assignment, egress_baseline,
+  // runner_pool_use_policy (and later kinds): kept a string so a kind this console predates still lists, under its raw name.
   target_kind: string;
   // create, update, delete, upsert, replace or set.
   op: string;
