@@ -349,7 +349,7 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 	if f.place.pooled {
 		req.Placement = f.place.placement
 	}
-	return !s.localPlacementRefusal(f.r, req, f.spec, f.ceiling, f.comps, f.driveMount, f.wsRefs).write(s, f.w, f.r)
+	return !s.localPlacementRefusal(f.r, req, f.spec, f.ceiling, f.comps, f.driveMount, f.wsRefs, f.baseline).write(s, f.w, f.r)
 }
 
 // stepPlacement runs after the components and before the local-eligibility step: the confinement
