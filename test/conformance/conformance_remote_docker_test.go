@@ -64,6 +64,16 @@ func TestConformanceDockerThroughRemote(t *testing.T) {
 			})
 		})
 	}
+	t.Run("PlacementRouting", func(t *testing.T) {
+		local, err := docker.New(docker.Config{ProxyImage: "busybox:latest", ProxyCmd: []string{"sleep", "infinity"},
+			InternalNetwork: remoteConformanceNetwork(t)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A registered runner whose link never came up: its create answers ErrRunnerOffline.
+		down := remote.New(uuid.NewString(), &remote.Link{}, remote.Options{})
+		conformance.RunPlacementRouting(t, local, conformance.RoutingOptions{Image: "busybox:latest", Timeout: 3 * time.Minute, Offline: down})
+	})
 }
 
 func remoteConformanceNetwork(t *testing.T) string {
