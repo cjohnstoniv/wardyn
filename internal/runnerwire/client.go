@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"sync/atomic"
@@ -83,6 +84,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 // 60s. Revocation is terminal and erases through the durable offline handler.
 func (c *Client) Run(ctx context.Context) error {
 	attempt := 0
+	var failures connectLog
 	for ctx.Err() == nil {
 		started := time.Now()
 		err := c.Connect(ctx)
@@ -94,8 +96,13 @@ func (c *Client) Run(ctx context.Context) error {
 		}
 		if c.ready && c.ended.After(started) {
 			attempt = 0
+			failures = connectLog{}
 		}
-		timer := time.NewTimer(reconnectDelay(attempt))
+		delay := reconnectDelay(attempt)
+		if ctx.Err() == nil {
+			failures.failed(ctx, err, delay)
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -107,6 +114,19 @@ func (c *Client) Run(ctx context.Context) error {
 		}
 	}
 	return ctx.Err()
+}
+
+// connectLog warns when the reason a connection failed differs from the last
+// one, so a runner that keeps retrying says why it is offline without
+// repeating itself. A session that reaches READY starts a new log.
+type connectLog struct{ last string }
+
+func (l *connectLog) failed(ctx context.Context, err error, retry time.Duration) {
+	if err == nil || err.Error() == l.last {
+		return
+	}
+	l.last = err.Error()
+	slog.WarnContext(ctx, "runner connection to the organisation failed", slog.Any("err", err), slog.Duration("retry_in", retry))
 }
 
 func reconnectDelay(attempt int) time.Duration {
@@ -184,6 +204,7 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 			return err
 		}
 	}
+	slog.InfoContext(ctx, "runner connected to the organisation", slog.Bool("resumed", ok.Resumed))
 	if c.cfg.Hooks.Online != nil {
 		c.cfg.Hooks.Online(peer, ok.Resumed)
 	}
@@ -232,7 +253,7 @@ func (c *Client) configure(ctx context.Context, cfg *PeerConfig, ready *atomic.B
 		case TypeRevoked:
 			return ErrRevoked
 		case TypeGoaway:
-			return ErrGoaway
+			return goaway(f.Payload)
 		default:
 			return fmt.Errorf("%w: unexpected %s", ErrBadFrame, f.Type)
 		}

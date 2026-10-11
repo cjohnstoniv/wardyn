@@ -26,13 +26,15 @@ func (p *Peer) Start(ctx context.Context, lastSeq uint64) error {
 		return err
 	}
 	go func() { _ = p.Run(ctx) }()
+	// Keepalive runs before the replay, so a replay write that stops moving
+	// fails the link like any other.
+	go p.keepalive(PingInterval)
 	for _, f := range frames {
-		if err := p.conn.WriteFrame(ctx, f); err != nil {
+		if err := p.write(ctx, f); err != nil {
 			p.fail(err)
 			return err
 		}
 	}
-	go p.keepalive(PingInterval)
 	return nil
 }
 
@@ -76,6 +78,10 @@ func (p *Peer) keepalive(every time.Duration) {
 				p.fail(fmt.Errorf("%w: keepalive timeout", ErrLinkDown))
 				return
 			}
+			if p.writeStalled(now, every) {
+				p.fail(fmt.Errorf("%w: keepalive: write stalled", ErrLinkDown))
+				return
+			}
 			if !pinging.CompareAndSwap(false, true) {
 				continue
 			}
@@ -98,4 +104,12 @@ func (p *Peer) keepalive(every time.Duration) {
 // fails a healthy link nor delays failing a silent one.
 func (p *Peer) pongOverdue(now time.Time, every time.Duration) bool {
 	return now.Sub(*p.lastPong.Load()) >= MissedPings*every
+}
+
+// writeStalled reports whether one write has been in progress for MissedPings
+// intervals. A PONG says only that the peer sends, not that it reads, so a
+// stalled write is timed on the write itself.
+func (p *Peer) writeStalled(now time.Time, every time.Duration) bool {
+	w := p.writing.Load()
+	return w != nil && now.Sub(*w) >= MissedPings*every
 }

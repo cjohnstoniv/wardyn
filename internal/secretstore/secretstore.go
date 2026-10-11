@@ -257,6 +257,11 @@ type EraseReport struct {
 	// of Count (v1 rows, rows written with principal keys off, external pointer
 	// rows) were only deleted, which holds to the backup horizon.
 	CryptoErased int
+	// Fenced says the erase advanced the owner's erase generation first, so a
+	// write that began earlier is refused wherever it runs. False means the
+	// store keeps none (Generational) and the caller's locks alone held back a
+	// writer in this process.
+	Fenced bool
 }
 
 // CredentialKeyDestroyer is a store that seals credentials under per-person
@@ -281,17 +286,31 @@ var ErrOperatorNamespace = errors.New("secretstore: the operator namespace is no
 // failure is returned, and a namespace not empty afterwards (a write racing
 // the erase) is an error naming how many remain.
 //
-// The re-list is a backstop, not the coordination: it cannot see a write that
-// lands after it. The caller (internal/api, handleErasePersonCredentials) holds
-// the locks that serialise the writers of a stored credential across the
-// delete and this re-list, so a refresh or stamp already in flight cannot
-// write back behind a success.
+// A store that keeps an erase generation (Generational) has it advanced before
+// anything is listed: a fenced write (BeginWrite) that began earlier is
+// refused, and one already past its check has landed by the time the advance
+// returns, so the list sees it. It is advanced again once the rows are
+// deleted, because a writer that began between the first advance and a delete
+// read a value the erase is about to remove, and its Put would otherwise write
+// it back under a generation that still matches. That holds across processes. The re-list is the
+// backstop for an unfenced writer, and for a store with no generation the
+// caller's locks (internal/api, handleErasePersonCredentials) are all that
+// serialise the writers in this process; Fenced says which of the two held.
 func EraseOwner(ctx context.Context, st Store, owner string) (EraseReport, error) {
 	rep := EraseReport{Purged: true}
 	if owner == "" {
 		return rep, ErrOperatorNamespace
 	}
 	view := st.For(owner)
+	if g, ok := view.(Generational); ok {
+		_, err := g.AdvanceGeneration(ctx)
+		switch {
+		case err == nil:
+			rep.Fenced = true
+		case !errors.Is(err, ErrNoGeneration):
+			return rep, fmt.Errorf("fence writes to %q: %w", owner, err)
+		}
+	}
 	names, err := view.List(ctx)
 	if err != nil {
 		return rep, fmt.Errorf("list %q: %w", owner, err)
@@ -312,6 +331,16 @@ func EraseOwner(ctx context.Context, st Store, owner string) (EraseReport, error
 			rep.Store = dr.Store
 			rep.Purged = rep.Purged && dr.Purged
 			rep.RecoverableDays = max(rep.RecoverableDays, dr.RecoverableDays)
+		}
+	}
+	if g, ok := view.(Generational); ok && rep.Fenced && len(errs) == 0 {
+		// A writer may have begun after the first advance and read a
+		// credential the loop above then deleted; its Put would write it back
+		// with a generation that still matches. The second advance refuses
+		// that Put, and waits for one already past its check, so the re-list
+		// below sees it.
+		if _, err := g.AdvanceGeneration(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("fence writes to %q after the delete: %w", owner, err))
 		}
 	}
 	if len(errs) == 0 {

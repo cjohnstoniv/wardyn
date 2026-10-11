@@ -17,7 +17,7 @@ import (
 // sign-in binds it to the new `sub`; the row keeps its authority epoch, its deactivation columns and
 // its SCIM linkage. What the old principal owns (runs, tokens, keys, credentials) stays under it.
 // It also cuts the released sub's sessions, and is refused while that principal still holds an API token, SSH
-// key or active run: once the row is bound to the new sub the leaver flow no longer reaches the old one, so
+// key or active run, sponsors a service identity or is the target of a pending invitation: once the row is bound to the new sub the leaver flow no longer reaches the old one, so
 // the admin revokes those first. Only a row keyed by tenant and object id can be re-bound: any other is
 // found by its principal alone and would be orphaned. A deactivated or purged identity is refused:
 // unbinding is not a way back in for a leaver.
@@ -64,7 +64,8 @@ func (s *Server) handleUnbindIdentity(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.As(err, &inUse):
 		writeErrorReason(w, http.StatusConflict, reasonIdentityPrincipalInUse, fmt.Sprintf(
-			"the principal still holds %d API token(s), %d SSH key(s) and %d active run(s); revoke or end them first, because after the unbind nothing sweeps them", inUse.APITokens, inUse.SSHKeys, inUse.ActiveRuns))
+			"the principal still holds %d API token(s), %d SSH key(s) and %d active run(s), sponsors %d service identity(ies) and is the target of %d pending invitation(s); revoke, end, retire or hand over them first, because after the unbind nothing sweeps them",
+			inUse.APITokens, inUse.SSHKeys, inUse.ActiveRuns, inUse.Sponsored, inUse.PendingInvitations))
 		return
 	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrIdentityRebound):
 		writeErrorReason(w, http.StatusConflict, reasonIdentityNotBound, "the identity changed while it was being unbound; read it again")

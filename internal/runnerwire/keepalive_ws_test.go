@@ -4,6 +4,8 @@
 package runnerwire
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 	"unsafe"
@@ -106,4 +108,72 @@ func stepWall(t *testing.T, at time.Time, d time.Duration) time.Time {
 		t.Fatal("cannot build a wall-stepped time on this Go runtime")
 	}
 	return s
+}
+
+// R2-0103: a peer that stops reading but keeps sending PONGs must not keep a
+// link with a stalled write online. The raw end never reads, so once the
+// loopback's buffer is full the next write blocks, as on an undrained socket.
+func TestKeepaliveFailsAStalledWriteDespiteUnsolicitedPongs(t *testing.T) {
+	const every = 50 * time.Millisecond
+	r := newRaw(t, PeerConfig{Org: true})
+	sent := make(chan error, 1)
+	go func() {
+		for {
+			if err := r.p.Send(context.Background(), Frame{Type: TypeGoaway}); err != nil {
+				sent <- err
+				return
+			}
+		}
+	}()
+	go r.p.keepalive(every)
+	forgePongsUntilDown(t, r, every, 2*(MissedPings+2)*every)
+	if err := <-sent; err == nil {
+		t.Fatal("the stalled sender reported success on a failed link")
+	}
+}
+
+// R2-0103: keepalive covers the resume replay, which Start writes under the
+// write lock before any other frame.
+func TestKeepaliveCoversAStalledResumeReplay(t *testing.T) {
+	const every = 50 * time.Millisecond
+	replay := NewReplayBuffer()
+	for range 2 * 64 { // more frames than the loopback buffers
+		if err := replay.Reserve(ctxT(t), 2); err != nil {
+			t.Fatal(err)
+		}
+		replay.Assign(Frame{Type: TypePending, Payload: []byte("{}")})
+	}
+	pc, rc := Loopback()
+	r := &rawPeer{p: NewPeer(pc, PeerConfig{Org: true, Replay: replay}), raw: rc}
+	t.Cleanup(r.p.Close)
+	started := make(chan error, 1)
+	go func() { started <- r.p.Start(context.Background(), 0) }()
+	waitFor(t, 3*time.Second, "keepalive to start during the replay", func() bool { return r.p.lastPong.Load() != nil })
+	go r.p.keepalive(every)
+	forgePongsUntilDown(t, r, every, 2*(MissedPings+2)*every)
+	if err := <-started; err == nil {
+		t.Fatal("Start reported a stalled replay as written")
+	}
+}
+
+// forgePongsUntilDown sends PONGs that answer no PING until the peer's link
+// fails, which it must within limit, as a link down.
+func forgePongsUntilDown(t *testing.T, r *rawPeer, every, limit time.Duration) {
+	t.Helper()
+	tick := time.NewTicker(every / 2)
+	defer tick.Stop()
+	deadline := time.After(limit)
+	for {
+		select {
+		case <-tick.C:
+			_ = r.raw.WriteFrame(ctxT(t), Frame{Type: TypePong, Payload: EncodePing(time.Unix(0, 1))})
+		case <-r.p.Done():
+			if err := r.p.Err(); !errors.Is(err, ErrLinkDown) {
+				t.Fatalf("link failed with %v, want link down", err)
+			}
+			return
+		case <-deadline:
+			t.Fatalf("unsolicited PONGs kept a stalled link online past %s", limit)
+		}
+	}
 }

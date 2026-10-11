@@ -101,7 +101,7 @@ func TestPatchRunLimitsUsesCapturedBounds(t *testing.T) {
 	}}
 	run := &types.AgentRun{CreatedAt: now}
 	s := &Server{}
-	s.captureRunLimits(run, ceiling)
+	s.captureRunLimits(run, ceiling, nil)
 
 	wantEnd := now.Add(86400 * time.Second)
 	if run.RunLimits != ceiling.Limits.RunLimits {

@@ -20,7 +20,7 @@ func (s *Server) refusePolicyPreviewRate(w http.ResponseWriter, r *http.Request)
 	if s.policyPreviewLimiter == nil {
 		return false
 	}
-	if t, who := actorFromRequest(r); t != types.ActorHuman || s.policyPreviewLimiter.allow(who, s.cfg.Now()) {
+	if who, limited := rateLimitedActor(r); !limited || s.policyPreviewLimiter.allow(who, s.cfg.Now()) {
 		return false
 	}
 	w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(60/float64(s.cfg.PolicyPreviewRatePerMin))))))
@@ -45,12 +45,16 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	if refusal.write(s, w, r) {
 		return
 	}
+	// The derivation create applies last, so the managed-settings fact describes
+	// the tool_approvals value launch dispatches with.
+	req.ToolApprovals = effectiveToolApprovals(req, ceiling)
 	f, ok := s.foldRunRequest(w, r, foldPreview, &req, ceiling, reqCC)
 	if !ok {
 		return
 	}
 	response := policyPreviewFacts(req, f.spec, f.source, f.policyWarns, f.scmSite, f.mpChoice)
 	response.Provenance = f.prov
+	response.RunnerPool, response.RunnerPools = f.place.facts()
 	response.Components = componentFacts(componentFactInputs{
 		req: f.req, spec: f.spec, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
 		ceiling: f.ceiling, mpChoice: f.mpChoice,

@@ -5,13 +5,16 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -187,13 +190,19 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	createdByType, createdBy := actorFromRequest(r)
 	runID := uuid.New()
+	// The run's one target is chosen from its own id, before an identity exists to leak on a refusal.
+	placed := types.AgentRun{ID: runID}
+	if f.place.apply(&placed, enforced).write(s, w, r) {
+		return
+	}
 	// Subject vs attribution: createdBy is the ATTRIBUTION — the run row's
 	// CreatedBy, the sponsor claim, every audit actor — and in LocalMode it may be
 	// the DEV-ONLY X-Wardyn-Principal header. The SUBJECT is what selects the
 	// secret namespace at mint/inject time, so it comes from runIdentitySubject,
 	// which no request header can move.
 	operatorOwned := operatorOwnedRequest(ctx)
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, createdBy), createdBy, internalAudience, operatorOwned)
+	// The sponsor claim is the accountable person: createdBy for a person, the sponsor for a service identity.
+	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, createdBy), requestSponsor(ctx, createdBy), internalAudience, operatorOwned)
 	if err != nil {
 		writeServerError(w, r, "mint run identity", err)
 		return
@@ -234,11 +243,19 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		PresetVersion:   req.PresetVersion,
 		OperatorOwned:   operatorOwned,
 		CreatedVia:      createdVia(ctx),
+		// The pool binding is the run's own admission record: dispatch routes to exactly this target.
+		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID, EvidenceSource: placed.EvidenceSource,
+		RunnerPoolID: placed.RunnerPoolID, RunnerPoolRevision: placed.RunnerPoolRevision,
+		RunnerPoolSelection: placed.RunnerPoolSelection, RunnerPoolExecutor: placed.RunnerPoolExecutor,
 	}
-	s.captureRunLimits(&run, ceiling)
+	s.captureRunLimits(&run, ceiling, &f.end)
 	created, err := s.createRun(ctx, run)
 	if err != nil {
 		s.cfg.Identity.RevokeRun(context.WithoutCancel(ctx), runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
+		if errors.Is(err, store.ErrRunnerPoolStale) {
+			writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: f.place.pool.Name})
+			return
+		}
 		writeServerError(w, r, "create run", err)
 		return
 	}
@@ -288,6 +305,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// repoSourceWarnings.
 	warnings = append(warnings, s.repoSourceWarnings(ctx, runID, spec, req)...)
 	warnings = append(warnings, f.fitWarnings...)
+	warnings = append(warnings, f.end.warnings(run)...)
 
 	// The requirements fold that ran ABOVE the confinement floor, audited now
 	// that the run id exists. See recordCreateFolds.
@@ -325,7 +343,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	createData := createRunAuditData(req, f.policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
 	createData["policy_source"] = f.source
+	createData["end"] = f.end.audit(run)
 	comps.stampRunCreate(createData)
+	maps.Copy(createData, f.place.auditFields(created))
 	s.markGovernanceExempt(ctx, createData)
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createData))))

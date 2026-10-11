@@ -34,7 +34,13 @@ func (c *countingExt) Get(ctx context.Context, owner, name, ref string) ([]byte,
 // readOnlyConn is a connection whose every statement is read-only, as the rehearsal's target backend is.
 func readOnlyConn(t *testing.T, pool *pgxpool.Pool) *pgxpool.Conn {
 	t.Helper()
-	conn, err := pool.Acquire(t.Context())
+	// The connection comes from a pool of its own: the test goes on to read through pool while it is held.
+	holder, err := pgxpool.New(t.Context(), pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(holder.Close)
+	conn, err := holder.Acquire(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

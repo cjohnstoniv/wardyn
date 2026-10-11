@@ -43,8 +43,6 @@ import (
 //	built-in components           -> A-L14
 //	allowed_image, image facts     -> the image lane (A-L4/A-L6)
 //	placement local               -> the placement lane (#117)
-//	runner_pool_id                -> the runner pool lane: resolve through runnerpool.Resolve and
-//	                                 admit the exact target; an omitted pool stays accepted until then
 //	resources clamp, targets      -> A-L5, A-L4 (accepted, applied nowhere yet)
 const (
 	maxRunOverrideEntries  = 64
@@ -71,7 +69,7 @@ func (s *Server) runContractRefusal(req createRunRequest) *runRefusal {
 // template document is held to the same list when it is imported.
 var runContractShapeChecks = []func(createRunRequest) *runRefusal{
 	placementShapeRefusal, runnerPoolShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, runOverridesRefusal, builtinComponentsRefusal,
-	runModeShapeRefusal,
+	runModeShapeRefusal, runEndShapeRefusal,
 }
 
 func placementShapeRefusal(req createRunRequest) *runRefusal {
@@ -138,14 +136,53 @@ func pathWithin(inner, outer string) bool {
 	return inner == outer || strings.HasPrefix(inner, outer+"/")
 }
 
+// placedMount is one validated selection target; seq is its position among them.
+type placedMount struct {
+	id, target string
+	seq        int
+}
+
+// firstMounts keeps the earliest mount added and the earliest one whose id
+// differs from it, which is enough to answer "earliest mount not owned by id".
+type firstMounts struct{ first, other *placedMount }
+
+func (f *firstMounts) add(m *placedMount) {
+	switch {
+	case f.first == nil:
+		f.first = m
+	case f.other == nil && m.id != f.first.id:
+		f.other = m
+	}
+}
+
+func (f *firstMounts) notOwnedBy(id string) *placedMount {
+	if f.first != nil && f.first.id != id {
+		return f.first
+	}
+	return f.other
+}
+
+// mountNode is one path element of the targets placed so far: exact holds the
+// mounts at this path, tree those at or below it.
+type mountNode struct {
+	children    map[string]*mountNode
+	exact, tree firstMounts
+}
+
 // workspaceTargetsRefusal validates each selection's target and refuses equal or
 // nested targets across different workspaces (OD-3), a drive's included. Only the
 // targets the request names are compared: the multi-workspace lane widens the
 // check to every resolved default.
+//
+// Each target is compared with the earlier ones through a tree of path elements,
+// so the cost follows the size of the list rather than its square (the list is
+// bounded only by the request body). The refusal is the one a pairwise scan in
+// request order gives: the first selection that overlaps an earlier mount of
+// another workspace, naming the earliest such mount.
 func workspaceTargetsRefusal(req createRunRequest) *runRefusal {
-	type placed struct{ id, target string }
-	var seen []placed
+	root := &mountNode{}
 	drive := req.Drive != nil && req.Drive.Enabled
+	seq := 0
 	for i, sel := range req.Workspaces {
 		t := sel.Target
 		if t == "" {
@@ -157,12 +194,42 @@ func workspaceTargetsRefusal(req createRunRequest) *runRefusal {
 		if err := workspaceTargetShape(t); err != nil {
 			return runError(http.StatusBadRequest, reasonWorkspaceTargetInvalid, fmt.Sprintf("workspaces[%d].target: %v", i, err))
 		}
-		for _, p := range seen {
-			if p.id != sel.WorkspaceID && (pathWithin(t, p.target) || pathWithin(p.target, t)) {
-				return overlapRefusal(t, sel.WorkspaceID, p.id, p.target)
+		// t is absolute and cleaned, so its elements are the ones after the leading "/".
+		elems := strings.Split(t[1:], "/")
+		var earliest *placedMount
+		consider := func(m *placedMount) {
+			if m != nil && (earliest == nil || m.seq < earliest.seq) {
+				earliest = m
 			}
 		}
-		seen = append(seen, placed{sel.WorkspaceID, t})
+		node := root
+		for _, e := range elems {
+			consider(node.exact.notOwnedBy(sel.WorkspaceID)) // an enclosing mount
+			if node = node.children[e]; node == nil {
+				break
+			}
+		}
+		if node != nil {
+			consider(node.tree.notOwnedBy(sel.WorkspaceID)) // an equal or enclosed mount
+		}
+		if earliest != nil {
+			return overlapRefusal(t, sel.WorkspaceID, earliest.id, earliest.target)
+		}
+		m := &placedMount{id: sel.WorkspaceID, target: t, seq: seq}
+		seq++
+		node = root
+		for _, e := range elems {
+			if node.children == nil {
+				node.children = map[string]*mountNode{}
+			}
+			if node.children[e] == nil {
+				node.children[e] = &mountNode{}
+			}
+			node.tree.add(m)
+			node = node.children[e]
+		}
+		node.tree.add(m)
+		node.exact.add(m)
 	}
 	return nil
 }
@@ -396,9 +463,6 @@ func unappliedFieldsRefusal(req createRunRequest) *runRefusal {
 		return refusal
 	}
 	switch {
-	case req.RunnerPoolID != "":
-		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
-			"runner_pool_id: this server does not manage runner pools yet, so the run was not created.")
 	case req.AllowedImage != "":
 		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
 			"allowed_image: this server does not apply an image choice yet, so the run was not created.")
