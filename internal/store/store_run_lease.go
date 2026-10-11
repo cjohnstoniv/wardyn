@@ -146,6 +146,40 @@ func (s PG) SetRunEndAndWait(ctx context.Context, id uuid.UUID, fromLimits types
 	return tag.RowsAffected() > 0, nil
 }
 
+// KillRunAtLifetimeIf moves a RUNNING run to KILLED and writes its status_detail in
+// the one statement, but only while the reason still holds on the row as it stands
+// at now: the lease sweep decides from a row it listed earlier, and a person may
+// have moved the end, or another replica kept the run at its end, since. The
+// conditions are the reason's own, as MarkRunEnded's are for the keep:
+//   - "end_reached": a Background run whose end is at or before now and before its
+//     lifetime cap (an end at the cap is the maximum);
+//   - "max_lifetime_reached": the lifetime cap is at or before now, and the run is
+//     not a Background run whose end came first (that run is end_reached).
+//
+// Both refuse a run its own end already kept (lost_reason 'ended'): a kept run
+// keeps its files grace. False with a nil error is a no-op for the caller: no kill,
+// no audit row. detail is what status_detail becomes ("lifetime: <reason>").
+func (s PG) KillRunAtLifetimeIf(ctx context.Context, id uuid.UUID, reason types.RunEndReason, detail string, now time.Time) (bool, error) {
+	var cond string
+	switch reason {
+	case types.RunEndEndReached:
+		cond = `experience = 'background' AND ends_at <= $3 AND (lifetime_cap_at IS NULL OR ends_at < lifetime_cap_at)`
+	case types.RunEndMaxLifetimeReached:
+		cond = `lifetime_cap_at <= $3 AND NOT (experience = 'background' AND COALESCE(ends_at < lifetime_cap_at, false))`
+	default:
+		return false, fmt.Errorf("store: kill run at lifetime: unknown reason %q", reason)
+	}
+	tag, err := s.Pool.Exec(ctx,
+		`UPDATE agent_runs SET state='KILLED', status_detail=$2, updated_at=now(), ended_at=now()
+		 WHERE id=$1 AND state='RUNNING' AND NOT (lost_at IS NOT NULL AND lost_reason = 'ended') AND `+cond,
+		id, detail, now,
+	)
+	if err != nil {
+		return false, fmt.Errorf("store: kill run at lifetime: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // StopKeptRunIf — see RunLeaser.
 func (s PG) StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `

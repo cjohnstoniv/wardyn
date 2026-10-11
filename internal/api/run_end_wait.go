@@ -182,7 +182,7 @@ func (s *Server) endWaitRunRefusal(w http.ResponseWriter, run types.AgentRun) bo
 	case isTerminalRunState(run.State):
 		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitAlreadyFinished, "run has already finished (state="+string(run.State)+")")
 	case run.LifetimeCapAt != nil && !s.cfg.Now().Before(*run.LifetimeCapAt):
-		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitAlreadyFinished, "run has reached its maximum lifetime and is ending; its end cannot be moved")
+		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitMaxLifetime, "run has reached its maximum lifetime and is being ended; its end and wait cannot be changed")
 	case run.LostReason == types.LostEnded && !s.endedFilesKept(run, s.cfg.Now()):
 		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitFilesGone, "run has ended and its files are no longer kept; its end cannot be moved")
 	default:

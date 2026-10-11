@@ -152,8 +152,8 @@ func (f *lifetimeFixture) requireKilledAtLifetime(t *testing.T, run types.AgentR
 		t.Fatalf("run.kill rows = %+v, want one success by system/wardynd", kills)
 	}
 	data := leaseAuditData(t, kills[0])
-	if data["reason"] != string(reason) || data["source"] != string(types.LimitSourceDeployment) {
-		t.Errorf("run.kill data = %v, want reason %q and the cap's source", data, reason)
+	if data["reason"] != string(reason) || data["source"] != "this deployment" {
+		t.Errorf("run.kill data = %v, want reason %q and the cap's source label", data, reason)
 	}
 	if _, ok := data["ends_at"]; !ok {
 		t.Errorf("run.kill data = %v, want ends_at", data)
@@ -334,5 +334,85 @@ func TestDispatch_PodDeadlineFollowsTheRunsOwnCap(t *testing.T) {
 		case maxAge > 0 && (got <= maxAge-time.Hour || got > maxAge):
 			t.Errorf("a run capped at %v was created with lifetime %v, want what is left of it", maxAge, got)
 		}
+	}
+}
+
+// TestLease_AStaleSnapshotNeverKillsARunWhoseEndMoved: the sweep lists a run, then a
+// person moves its end (or another replica keeps it at its end) before the sweep
+// reaches it. The kill's own UPDATE re-checks the reason, so the run stays RUNNING
+// with no kill, no teardown and no audit row.
+func TestLease_AStaleSnapshotNeverKillsARunWhoseEndMoved(t *testing.T) {
+	for name, move := range map[string]string{
+		"the end moves to the future": `UPDATE agent_runs SET ends_at = now() + interval '1 hour' WHERE id=$1`,
+		"another replica kept it":     `UPDATE agent_runs SET lost_at = now(), lost_reason = 'ended' WHERE id=$1`,
+		"the cap moved out":           `UPDATE agent_runs SET lifetime_cap_at = now() + interval '1 day' WHERE id=$1`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newLifetimeFixture(t)
+			f.now = time.Now().UTC()
+			listed := f.run(t, types.ExperienceBackground, dur(-time.Minute), dur(24*time.Hour))
+			if name == "the cap moved out" {
+				listed = f.run(t, types.ExperienceInteractive, nil, dur(-time.Minute))
+			}
+			if _, err := f.st.Pool.Exec(context.Background(), move, listed.ID); err != nil {
+				t.Fatal(err)
+			}
+			f.srv.leaseRun(context.Background(), f.st, listed)
+			got := f.get(t, listed.ID)
+			if got.State != types.RunRunning || got.StatusDetail != "" {
+				t.Fatalf("state=%s detail=%q; want the run left RUNNING", got.State, got.StatusDetail)
+			}
+			if f.rn.killCount() != 0 || f.idp.count() != 0 || len(f.audit.eventsFor(listed.ID, "run.kill")) != 0 {
+				t.Errorf("kills=%d revokes=%d kill rows=%d; want no kill, no teardown, no audit row",
+					f.rn.killCount(), f.idp.count(), len(f.audit.eventsFor(listed.ID, "run.kill")))
+			}
+		})
+	}
+}
+
+// TestLease_ABackgroundRunKeptAfterAnOutageIsKilledAtItsEnd (N8): a Background run
+// kept by an outage is killed end_reached at its end like any Background run; an
+// Interactive run kept by an outage is not killed at its end.
+func TestLease_ABackgroundRunKeptAfterAnOutageIsKilledAtItsEnd(t *testing.T) {
+	f := newLifetimeFixture(t)
+	bg := f.run(t, types.ExperienceBackground, dur(-time.Minute), dur(time.Hour))
+	inter := f.run(t, types.ExperienceInteractive, dur(-time.Minute), dur(time.Hour))
+	for _, id := range []uuid.UUID{bg.ID, inter.ID} {
+		if _, err := f.st.Pool.Exec(context.Background(), `UPDATE agent_runs SET lost_at=$2, lost_reason='outage' WHERE id=$1`, id, f.now.Add(-time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.sweep(t)
+	got := f.get(t, bg.ID)
+	if got.State != types.RunKilled || got.StatusDetail != "lifetime: end_reached" {
+		t.Errorf("Background outage-kept run: state=%s detail=%q; want KILLED end_reached", got.State, got.StatusDetail)
+	}
+	if got := f.get(t, inter.ID); got.State == types.RunKilled {
+		t.Errorf("Interactive outage-kept run was killed at its end")
+	}
+}
+
+// TestKill_APersonsKillReadsAQueuedSandboxKillAsAFailure (N1): only the lifetime
+// kill treats a pending kill on an offline runner as clean. A person's kill audits
+// run.kill as a failure carrying runner_error, so they retry it.
+func TestKill_APersonsKillReadsAQueuedSandboxKillAsAFailure(t *testing.T) {
+	f := newAdmissionFixture(t)
+	audit := &syncAudit{}
+	f.srv.cfg.Audit = audit
+	f.srv.cfg.Runner = &routedKillRunner{fakeRunner: &fakeRunner{}, sub: f.srv.runnerEndpoint(f.rn.ID).sub}
+	run, err := f.st.GetRun(f.ctx, f.run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied, killData, err := f.srv.killRunCascade(f.ctx, run, types.ActorHuman, "person@example.com", nil)
+	if err != nil || !applied {
+		t.Fatalf("killRunCascade = %v, %v", applied, err)
+	}
+	if killData["runner_error"] == nil {
+		t.Errorf("kill data = %v; want runner_error for a queued kill", killData)
+	}
+	kills := audit.eventsFor(f.run.ID, "run.kill")
+	if len(kills) != 1 || kills[0].Outcome != "failure" {
+		t.Fatalf("run.kill rows = %+v, want one failure", kills)
 	}
 }
