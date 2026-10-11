@@ -28,7 +28,7 @@ const uiRoot = path.resolve(__dirname, "../..");
 
 // The entry chunk sat at 1,331 kB (a single un-split chunk) before the split
 // and lands ~640 kB with React 19 (its react-dom is ~65 kB larger than 18's);
-// 660 kB keeps a few kB of headroom so ordinary maintenance doesn't trip it,
+// 660 kB keeps about 20 kB of headroom so ordinary maintenance doesn't trip it,
 // while any lazy route leaking into the eager graph still blows straight
 // through it (the terminal-stack assertion below is the primary split guard).
 const ENTRY_BUDGET_BYTES = 660 * 1024;
