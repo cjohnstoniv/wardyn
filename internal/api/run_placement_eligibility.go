@@ -48,17 +48,24 @@ func (s *Server) deniedPlacements(ctx context.Context, ceiling governanceCeiling
 }
 
 // placementDeniedRefusal is the deny_placements door: 403 placement_denied
-// naming the profile, with the authz.denied row a governance door writes.
-func (s *Server) placementDeniedRefusal(r *http.Request, req createRunRequest, ceiling governanceCeiling) *runRefusal {
-	p := requestPlacement(req)
-	if !slices.Contains(s.deniedPlacements(r.Context(), ceiling), p) {
+// naming the profile, with the authz.denied row a governance door writes. The
+// ONE check: the fold step and every launcher that creates a run for the acting
+// member (source scan) ask it with the placement they put the run on.
+func (s *Server) placementDeniedRefusal(ctx context.Context, p types.Placement, ceiling governanceCeiling) *runRefusal {
+	if !slices.Contains(s.deniedPlacements(ctx, ceiling), p) {
 		return nil
 	}
-	d := authz.Deny(authz.ReasonGovernanceProfile, "runs.placement", placementDeniedMsg(p, ceiling.Profile.Name)).WithPolicy(s.ceilingPolicy(r.Context(), ceiling))
+	d := authz.Deny(authz.ReasonGovernanceProfile, "runs.placement", placementDeniedMsg(p, ceiling.Profile.Name)).WithPolicy(s.ceilingPolicy(ctx, ceiling))
 	f := runError(placement.ReasonPlacementDenied.Status(), string(placement.ReasonPlacementDenied), d.Sentence)
 	f.decision = &d
 	return f
 }
+
+// placementDeniedError carries the refusal out of a launcher that has no
+// request to answer, so its handler writes the same 403 and audit row the doors do.
+type placementDeniedError struct{ refusal *runRefusal }
+
+func (e *placementDeniedError) Error() string { return e.refusal.body.Error }
 
 // placementDeniedMsg is the door's member sentence (MEMBER.DENIED_PLACEMENT_*), composed
 // once so the 403 body and the audit row carry the same bytes.
