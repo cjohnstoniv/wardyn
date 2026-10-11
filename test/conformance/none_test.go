@@ -29,6 +29,8 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
+	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/test/conformance"
 	"github.com/google/uuid"
@@ -505,4 +507,48 @@ func assertNegativeControlFails(t *testing.T, child, wantFailMsg string) {
 	if !errors.As(err, &exitErr) {
 		t.Fatalf("negative-control subprocess %q did not run cleanly: %v\noutput:\n%s", child, err, out)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Placement routing on the stub substrate.
+// ---------------------------------------------------------------------------
+
+// stubSubstrate is an honest substrate advertising CC1 only, so the routing
+// logic runs with no daemon.
+type stubSubstrate struct{}
+
+func (stubSubstrate) Name() string { return "stub" }
+func (stubSubstrate) Classes(context.Context) (substrate.ClassSupport, error) {
+	return substrate.ClassSupport{
+		Classes:  []types.ConfinementClass{types.CC1},
+		Resolved: map[types.ConfinementClass]string{types.CC1: "stub/cc1"},
+	}, nil
+}
+func (stubSubstrate) CreateSandbox(_ context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	return runner.Sandbox{Ref: "stub-" + spec.RunID.String(), Driver: "stub", EnforcedClass: types.CC1}, nil
+}
+func (stubSubstrate) Exec(context.Context, string, []string) (string, error) {
+	return "", errNoneNotImplemented
+}
+func (stubSubstrate) Wait(context.Context, string) (int, error) { return 0, errNoneNotImplemented }
+func (stubSubstrate) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
+	return nil, errNoneNotImplemented
+}
+func (stubSubstrate) ExecStream(context.Context, string, runner.ExecSpec) (*runner.ExecSession, error) {
+	return nil, runner.ErrExecStreamUnsupported
+}
+func (stubSubstrate) Status(context.Context, string) (runner.Status, error) {
+	return runner.Status{}, errNoneNotImplemented
+}
+func (stubSubstrate) AgentStatus(context.Context, string, string) (runner.Status, error) {
+	return runner.Status{}, errNoneNotImplemented
+}
+func (stubSubstrate) StopSandbox(context.Context, string) error { return nil }
+func (stubSubstrate) KillSandbox(context.Context, string) error { return nil }
+
+func TestPlacementRoutingStub(t *testing.T) {
+	// A registered runner whose link never came up: the real remote substrate
+	// answers ErrRunnerOffline.
+	down := remote.New(uuid.NewString(), &remote.Link{}, remote.Options{})
+	conformance.RunPlacementRouting(t, stubSubstrate{}, conformance.RoutingOptions{Image: "stub", Timeout: 5 * time.Second, Offline: down})
 }
