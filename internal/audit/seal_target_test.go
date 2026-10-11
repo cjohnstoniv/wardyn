@@ -27,7 +27,7 @@ func personTargetEvent(action, target string) types.AuditEvent {
 
 func TestSeal_FullStoresAPersonTargetAsItsSubject(t *testing.T) {
 	s, mk, dir := newFullSealer(t, "alice")
-	sealed, pending, err := s.Seal(t.Context(), personTargetEvent("person.create", "alice"))
+	sealed, pending, err := s.Seal(t.Context(), personTargetEvent("person.token.create", "alice"))
 	if err != nil || pending {
 		t.Fatalf("Seal = pending %v, %v", pending, err)
 	}
@@ -43,15 +43,15 @@ func TestSeal_FullStoresAPersonTargetAsItsSubject(t *testing.T) {
 
 	// fields keeps the name, as does a target of an action off the list.
 	s.SealActor = false
-	if got, _, err := s.Seal(t.Context(), personTargetEvent("person.create", "alice")); err != nil || got.Target != "alice" {
+	if got, _, err := s.Seal(t.Context(), personTargetEvent("person.token.create", "alice")); err != nil || got.Target != "alice" {
 		t.Errorf("mode fields: target %q, %v; want the name", got.Target, err)
 	}
 	s.SealActor = true
 	for name, ev := range map[string]types.AuditEvent{
-		"an action off the list":    personTargetEvent("token.create", "alice"),
-		"a person with no identity": personTargetEvent("person.create", "nobody"),
-		"already a subject":         personTargetEvent("person.create", SubjectActorPrefix+uuid.NewString()),
-		"no target":                 personTargetEvent("person.create", ""),
+		"an action off the list":                              personTargetEvent("token.create", "alice"),
+		"person.create, whose person has no identity row yet": personTargetEvent("person.create", "alice"),
+		"a person with no identity":                           personTargetEvent("person.token.create", "nobody"),
+		"no target":                                           personTargetEvent("person.token.create", ""),
 	} {
 		if got, _, err := s.Seal(t.Context(), ev); err != nil || got.Target != ev.Target {
 			t.Errorf("%s: target %q -> %q, %v; want it unchanged", name, ev.Target, got.Target, err)
@@ -81,7 +81,7 @@ func TestSeal_TargetOfAnUnsealedActionStaysClear(t *testing.T) {
 
 func TestUnseal_RendersATargetSubjectAndErasedAfterKeyDestroyed(t *testing.T) {
 	s, mk, dir := newFullSealer(t, "alice")
-	before, _, _ := s.Seal(t.Context(), personTargetEvent("person.create", "alice"))
+	before, _, _ := s.Seal(t.Context(), personTargetEvent("person.token.create", "alice"))
 	back, err := s.Unseal(t.Context(), []types.AuditEvent{before})
 	if err != nil || back[0].Target != "alice" {
 		t.Fatalf("read target = %q, %v; want alice", back[0].Target, err)
@@ -91,7 +91,7 @@ func TestUnseal_RendersATargetSubjectAndErasedAfterKeyDestroyed(t *testing.T) {
 	}
 	mk.destroy("alice")
 	dir.destroyed["alice"] = before.Time.Add(time.Minute)
-	after := personTargetEvent("person.create", "alice")
+	after := personTargetEvent("person.token.create", "alice")
 	after.Time = before.Time.Add(2 * time.Minute)
 	after, _, _ = s.Seal(t.Context(), after)
 	back, err = s.Unseal(t.Context(), []types.AuditEvent{before, after})
@@ -105,7 +105,7 @@ func TestUnseal_RendersATargetSubjectAndErasedAfterKeyDestroyed(t *testing.T) {
 		t.Errorf("a target written after the person returned reads %q, want alice", back[1].Target)
 	}
 	// An id no identity row carries, and a subject-looking target off the list, read as stored.
-	unknown := personTargetEvent("person.create", SubjectActorPrefix+uuid.NewString())
+	unknown := personTargetEvent("person.token.create", SubjectActorPrefix+uuid.NewString())
 	offList := personTargetEvent("token.create", SubjectActorPrefix+dir.ids["alice"])
 	back, err = s.Unseal(t.Context(), []types.AuditEvent{unknown, offList})
 	if err != nil || back[0].Target != unknown.Target || back[1].Target != offList.Target {
@@ -116,7 +116,7 @@ func TestUnseal_RendersATargetSubjectAndErasedAfterKeyDestroyed(t *testing.T) {
 func TestReseal_PendingTargetOpensAsItsSubject(t *testing.T) {
 	s, mk, dir := newFullSealer(t, "alice")
 	mk.down = true
-	sealed, pending, err := s.Seal(t.Context(), personTargetEvent("person.create", "alice"))
+	sealed, pending, err := s.Seal(t.Context(), personTargetEvent("person.token.create", "alice"))
 	if err != nil || !pending {
 		t.Fatalf("Seal = pending %v, %v; want a pending row", pending, err)
 	}
@@ -190,5 +190,61 @@ func TestPersonTargetActionsAreDocumented(t *testing.T) {
 		if !strings.Contains(section, "`"+a+"`") {
 			t.Errorf("%s is a person-target action the Sealed fields section does not name", a)
 		}
+	}
+}
+
+// A subject string in an actor or target that Seal did not write is refused: Unseal
+// renders any such string as the person it names, so storing one would let a caller
+// who typed it read an erased person back. Pinned through Unseal, not just Seal.
+func TestSeal_RefusesACallerTypedSubjectTarget(t *testing.T) {
+	s, mk, dir := newFullSealer(t, "alice")
+	typed := SubjectActorPrefix + dir.ids["alice"]
+	// alice is erased; her rows read erased, and a row written now would be after the key's destruction.
+	mk.destroy("alice")
+	dir.destroyed["alice"] = time.Now().Add(-time.Hour)
+	for _, action := range PersonTargetActions() {
+		ev := personTargetEvent(action, typed)
+		sealed, _, err := s.Seal(t.Context(), ev)
+		if err == nil {
+			back, uerr := s.Unseal(t.Context(), []types.AuditEvent{sealed})
+			t.Fatalf("%s: Seal stored a caller-typed subject target %q; a read shows %q, %v", action, sealed.Target, back[0].Target, uerr)
+		}
+	}
+	// The same string on an action off the list is not rendered by Unseal, so it is not refused.
+	if _, _, err := s.Seal(t.Context(), personTargetEvent("token.create", typed)); err != nil {
+		t.Errorf("an off-list target %q was refused: %v", typed, err)
+	}
+}
+
+func TestSeal_RefusesACallerTypedSubjectActor(t *testing.T) {
+	s, mk, dir := newFullSealer(t, "alice")
+	typed := SubjectActorPrefix + dir.ids["alice"]
+	mk.destroy("alice")
+	dir.destroyed["alice"] = time.Now().Add(-time.Hour)
+	for _, action := range []string{"run.kill", "person.token.create", "person.erasure"} {
+		ev := humanEvent(typed, action)
+		sealed, _, err := s.Seal(t.Context(), ev)
+		if err == nil {
+			back, uerr := s.Unseal(t.Context(), []types.AuditEvent{sealed})
+			t.Fatalf("%s: Seal stored a caller-typed subject actor %q; a read shows %q, %v", action, sealed.Actor, back[0].Actor, uerr)
+		}
+	}
+	// Not a human actor: nothing a person typed.
+	sys := humanEvent(typed, "run.kill")
+	sys.ActorType = types.ActorSystem
+	if _, _, err := s.Seal(t.Context(), sys); err != nil {
+		t.Errorf("a system actor %q was refused: %v", typed, err)
+	}
+}
+
+// The list is reviewed: auth.signin_unserialized targets the signing-in person, who has an identity
+// row; person.create targets a person made before any sign-in, who has none, so it stays clear.
+func TestPersonTargetActionsKeepTheReviewedMembers(t *testing.T) {
+	got := PersonTargetActions()
+	if !slices.Contains(got, "auth.signin_unserialized") {
+		t.Errorf("auth.signin_unserialized is missing from %v", got)
+	}
+	if slices.Contains(got, "person.create") {
+		t.Errorf("person.create is listed in %v, but its person has no identity row to take a subject from", got)
 	}
 }
