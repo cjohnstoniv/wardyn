@@ -446,9 +446,9 @@ func parseAuditFilter(w http.ResponseWriter, r *http.Request) (store.AuditFilter
 		*p.dst = t
 	}
 	switch f.ActorType {
-	case "", types.ActorHuman, types.ActorAgent, types.ActorSystem:
+	case "", types.ActorHuman, types.ActorAgent, types.ActorSystem, types.ActorService:
 	default:
-		writeErrorReason(w, http.StatusBadRequest, reasonAuditInvalidActorType, "invalid actor_type (want human, agent, or system)")
+		writeErrorReason(w, http.StatusBadRequest, reasonAuditInvalidActorType, "invalid actor_type (want human, agent, system, or service)")
 		return store.AuditFilter{}, false
 	}
 	switch f.Origin {

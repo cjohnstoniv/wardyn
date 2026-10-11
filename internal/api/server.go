@@ -978,6 +978,7 @@ func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
 	}
 	ev.Data = audit.StampRelay(ctx, ev.Data)
 	ev.Data = audit.StampDelegation(ctx, ev.Data) // delegation is recorded as delegation (#1142)
+	ev.Data = audit.StampSponsor(ctx, ev.Data)    // a service identity's row names its sponsor (#1508)
 	// Invariant 6, C1: the audit log is the system of record. A failed durable
 	// write is handled by the shared recorder chain (spoolingRecorder below
 	// maskingRecorder in cmd/wardynd), which masks, logs loudly, and spools the

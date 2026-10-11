@@ -400,6 +400,11 @@
     "sentence": "\"requires admin role\" (registry)"
   },
   {
+    "reason": "service_scope",
+    "target": "r.URL.Path",
+    "sentence": "serviceScopeRefusal"
+  },
+  {
     "reason": "src.reason",
     "target": "\"runs.agent\"",
     "sentence": "fmt.Sprintf(\"%s is not supported under %s at this run's posture: it permits autonomy level %s (bound by %s), which routes an \" + \"unattended run's tool calls to a Wardyn approval, and this agent has no external tool-approval contract. Launch a different agent, or launch interactively.\", autonomyAgentLabel(req.Agent), src.phrase, level, bound)"
