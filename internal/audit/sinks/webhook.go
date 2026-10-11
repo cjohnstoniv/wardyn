@@ -6,6 +6,7 @@ package sinks
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -165,6 +166,12 @@ func (c WebhookConfig) validate() (interval, base, timeout time.Duration, err er
 	timeout, err = time.ParseDuration(c.Timeout)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("sinks.webhook: invalid timeout %q: %w", c.Timeout, err)
+	}
+	if interval <= 0 {
+		return 0, 0, 0, fmt.Errorf("sinks.webhook: flush_interval %q must be positive (zero would poll in a tight loop)", c.FlushInterval)
+	}
+	if base <= 0 {
+		return 0, 0, 0, fmt.Errorf("sinks.webhook: retry_base_delay %q must be positive (zero would retry a failing collector without pause)", c.RetryBaseDelay)
 	}
 	if timeout <= 0 {
 		return 0, 0, 0, fmt.Errorf("sinks.webhook: timeout %q must be positive (zero would never time out a wedged collector)", c.Timeout)
@@ -329,11 +336,13 @@ func (w *WebhookSink) post(ctx context.Context, body []byte) error {
 // path while the acknowledged loop can read the status off the error.
 //
 // The bearer token and any URL userinfo are sent on the wire and never in an
-// error, so a caller recording the failure cannot leak either.
+// error, and net/http's own *url.Error (which embeds the whole URL, query
+// included) is unwrapped to its cause, so a caller recording the failure cannot
+// leak the token, the password or a query secret.
 func postNDJSON(ctx context.Context, client *http.Client, cfg WebhookConfig, body []byte) (int, time.Duration, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(body))
 	if err != nil {
-		return 0, 0, fmt.Errorf("build request: %w", err)
+		return 0, 0, fmt.Errorf("build request: %w", withoutURL(err))
 	}
 	req.Header.Set("Content-Type", "application/x-ndjson")
 	if cfg.BearerToken != "" {
@@ -341,7 +350,7 @@ func postNDJSON(ctx context.Context, client *http.Client, cfg WebhookConfig, bod
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, 0, fmt.Errorf("http post: %w", err)
+		return 0, 0, fmt.Errorf("http post: %w", withoutURL(err))
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -349,6 +358,16 @@ func postNDJSON(ctx context.Context, client *http.Client, cfg WebhookConfig, bod
 			fmt.Errorf("http post: unexpected status %d", resp.StatusCode)
 	}
 	return resp.StatusCode, 0, nil
+}
+
+// withoutURL returns the cause inside a *url.Error, which net/http fills with
+// the full request URL; any other error is returned as is.
+func withoutURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err
+	}
+	return err
 }
 
 // parseRetryAfter reads a collector's Retry-After in seconds, the only form

@@ -28,12 +28,12 @@ func startAuditDelivery(ctx context.Context, sinksJSON string, st store.PG, rec 
 	if cfg == nil {
 		return
 	}
-	a, err := sinks.NewAckedWebhook(*cfg, st, rec)
+	run, err := sinks.AckedTerms(*cfg, st, rec)
 	if err != nil {
 		slog.Error("wardynd: acknowledged audit delivery not started", slog.Any("err", err))
 		return
 	}
-	leaderGo(ctx, leader, "audit.delivery", a.Run)
+	leaderGo(ctx, leader, "audit.delivery", run)
 }
 
 // auditDeliveryReporter adapts the store's checkpoint status to the

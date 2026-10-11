@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -169,6 +170,7 @@ type lineCollector struct {
 	requests   int
 	failStatus int
 	failFirst  int
+	retryAfter string
 	tls        bool
 }
 
@@ -186,6 +188,9 @@ func (c *lineCollector) server(t *testing.T) *httptest.Server {
 		n, fail := c.requests, c.failStatus
 		c.mu.Unlock()
 		if fail != 0 && n <= c.failFirst {
+			if c.retryAfter != "" {
+				w.Header().Set("Retry-After", c.retryAfter)
+			}
 			w.WriteHeader(fail)
 			return
 		}
@@ -440,7 +445,7 @@ func TestAcked_GapRecordsAResetEvent(t *testing.T) {
 	t.Parallel()
 
 	st := &fakeDeliveryStore{haveRow: true, acked: 2, hash: "h2"}
-	rows := ackedRows(5)[2:] // seqs 3,4,5: retention dropped the rows at 1 and 2
+	rows := ackedRows(5)[3:] // seqs 4,5: retention dropped 1..3, so seq 3 was never delivered
 	st.setRows(rows)
 	col := &lineCollector{}
 	srv := col.server(t)
@@ -485,6 +490,264 @@ func TestAcked_GapRecordsAResetEvent(t *testing.T) {
 	for i, l := range got {
 		if l.ID != rows[i].ID {
 			t.Errorf("resend line %d = seq %d, want seq %d", i, l.Seq, rows[i].Seq)
+		}
+	}
+}
+
+// Retention that removed only rows the collector had already accepted (the
+// checkpoint row is gone, the next retained row is the very next seq) costs
+// nothing: no reset event, no resets bump, and the resend starts at the first
+// unacknowledged row.
+func TestAcked_GapOfOnlyAcknowledgedRowsIsNotReported(t *testing.T) {
+	t.Parallel()
+
+	st := &fakeDeliveryStore{haveRow: true, acked: 2, hash: "h2"}
+	rows := ackedRows(5)[2:] // seqs 3,4,5: only rows at or before the checkpoint are gone
+	st.setRows(rows)
+	col := &lineCollector{}
+	srv := col.server(t)
+	rec := &fakeRecorder{}
+
+	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, rec)
+	if err != nil {
+		t.Fatalf("NewAckedWebhook: %v", err)
+	}
+	if _, stop := a.step(context.Background()); stop {
+		t.Fatal("step stopped; a harmless gap is not a refusal")
+	}
+
+	if n := rec.count(); n != 0 {
+		t.Errorf("recorder holds %d events, want none for a gap that lost nothing", n)
+	}
+	acked, _, _, _, resets := st.state()
+	if resets != 0 {
+		t.Errorf("resets = %d, want 0", resets)
+	}
+	if acked != rows[2].Seq {
+		t.Errorf("checkpoint = %d, want %d after delivering the retained rows", acked, rows[2].Seq)
+	}
+	got := col.snapshot()
+	if len(got) != len(rows) || got[0].Seq != rows[0].Seq {
+		t.Errorf("collector holds %+v, want the three retained rows from seq %d", got, rows[0].Seq)
+	}
+}
+
+// A redirect is never followed: net/http would replay the POST as a bodyless
+// GET and the final 200 would acknowledge rows the collector never received.
+// The 3xx halts the loop and the checkpoint stays put.
+func TestAcked_RedirectIsNotFollowedAndHaltsWithoutAdvancing(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var methods []string
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		methods = append(methods, r.Method)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(final.Close)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, final.URL+"/final", http.StatusMovedPermanently)
+	}))
+	t.Cleanup(srv.Close)
+
+	st := &fakeDeliveryStore{haveRow: true}
+	st.setRows(ackedRows(3))
+	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL + "/ingest", RetryBaseDelay: "1ms"}, st, &fakeRecorder{})
+	if err != nil {
+		t.Fatalf("NewAckedWebhook: %v", err)
+	}
+	if _, stop := a.step(context.Background()); !stop {
+		t.Fatal("step did not stop on a 301; a redirect must halt the loop")
+	}
+
+	acked, _, lastErr, halted, _ := st.state()
+	if acked != 0 {
+		t.Errorf("checkpoint = %d after a redirect, want 0: the collector received nothing", acked)
+	}
+	if !halted || !strings.Contains(lastErr, "301") || !strings.Contains(lastErr, "redirect") {
+		t.Errorf("halted = %v last_error = %q, want a halt that names the 301 redirect", halted, lastErr)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(methods) != 0 {
+		t.Errorf("the redirect target was contacted with %v, want it never followed", methods)
+	}
+}
+
+// A halt or an error left in the durable row by a previous run clears on the
+// first accepted batch after a restart, so the gauge and last_error describe
+// the loop that is running now.
+func TestAcked_RestartClearsAStoredHaltAndError(t *testing.T) {
+	t.Parallel()
+
+	st := &fakeDeliveryStore{haveRow: true, acked: 1, hash: "h1", halted: true, lastErr: "collector answered HTTP 401"}
+	st.setRows(ackedRows(3))
+	col := &lineCollector{}
+	srv := col.server(t)
+
+	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, &fakeRecorder{})
+	if err != nil {
+		t.Fatalf("NewAckedWebhook: %v", err)
+	}
+	if _, stop := a.step(context.Background()); stop {
+		t.Fatal("step stopped on a healthy collector")
+	}
+	acked, _, lastErr, halted, _ := st.state()
+	if acked != 3 {
+		t.Fatalf("checkpoint = %d, want 3: the restart delivered the backlog", acked)
+	}
+	if halted || lastErr != "" {
+		t.Errorf("after a healthy delivery halted = %v last_error = %q, want both clear", halted, lastErr)
+	}
+}
+
+// The stored error and the log carry the collector's cause, never the URL: a
+// query token (many collectors authenticate with ?token=) must not reach
+// audit_delivery_cursors or the log.
+func TestAcked_TransportErrorDoesNotLeakTheURL(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	srv := httptest.NewServer(http.NotFoundHandler())
+	url := srv.URL + "/hec?token=SECRETQ"
+	srv.Close() // nothing listens: the POST fails in the transport
+
+	st := &fakeDeliveryStore{haveRow: true}
+	st.setRows(ackedRows(2))
+	a, err := NewAckedWebhook(WebhookConfig{URL: url, RetryBaseDelay: "1ms"}, st, &fakeRecorder{})
+	if err != nil {
+		t.Fatalf("NewAckedWebhook: %v", err)
+	}
+	if _, stop := a.step(context.Background()); stop {
+		t.Fatal("step stopped; an unreachable collector is retried")
+	}
+	_, _, lastErr, _, _ := st.state()
+	if !strings.Contains(lastErr, "collector unreachable") {
+		t.Errorf("last_error = %q, want it to say the collector is unreachable", lastErr)
+	}
+	for name, text := range map[string]string{"last_error": lastErr, "log": logs.String()} {
+		for _, secret := range []string{"SECRETQ", "token=", "/hec"} {
+			if strings.Contains(text, secret) {
+				t.Errorf("%s = %q leaks %q", name, text, secret)
+			}
+		}
+	}
+}
+
+// Every leader term builds its own loop: a replica that led, lost the lease
+// and leads again must reload the checkpoint another replica advanced, not
+// resend from its stale in-memory position and write the durable one backward.
+func TestAcked_EachLeaderTermReloadsTheCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	st := &fakeDeliveryStore{haveRow: true}
+	st.setRows(ackedRows(3))
+	col := &lineCollector{}
+	srv := col.server(t)
+	run, err := AckedTerms(WebhookConfig{URL: srv.URL, FlushInterval: "5ms", RetryBaseDelay: "1ms", BatchSize: 3}, st, &fakeRecorder{})
+	if err != nil {
+		t.Fatalf("AckedTerms: %v", err)
+	}
+
+	term := func(until func() bool) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		done := make(chan struct{})
+		go func() { run(ctx); close(done) }()
+		for until != nil && !until() && ctx.Err() == nil {
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(100 * time.Millisecond) // let a stale loop, if any, act
+		cancel()
+		<-done
+	}
+	term(func() bool { a, _, _, _, _ := st.state(); return a == 3 })
+	if a, _, _, _, _ := st.state(); a != 3 {
+		t.Fatalf("first term left the checkpoint at %d, want 3", a)
+	}
+
+	// Another replica led meanwhile and delivered up to 10.
+	rows := ackedRows(10)
+	st.setRows(rows)
+	st.mu.Lock()
+	st.acked, st.hash = 10, rows[9].RowHash
+	st.mu.Unlock()
+	before := len(col.snapshot())
+
+	term(nil)
+	if a, _, _, _, _ := st.state(); a != 10 {
+		t.Errorf("checkpoint = %d after the second term, want 10: it must not move backward", a)
+	}
+	if n := len(col.snapshot()); n != before {
+		t.Errorf("second term resent %d lines, want none", n-before)
+	}
+}
+
+// 408 and 429 ask to be retried, so they back off and keep going; a Retry-After
+// in seconds lengthens the wait up to the cap; every other 4xx halts.
+func TestAcked_RetryClassificationAndRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name       string
+		status     int
+		retryAfter string
+		wantStop   bool
+		wantWait   time.Duration
+	}{
+		{"408 retries", http.StatusRequestTimeout, "", false, time.Millisecond},
+		{"429 retries", http.StatusTooManyRequests, "", false, time.Millisecond},
+		{"503 retries", http.StatusServiceUnavailable, "", false, time.Millisecond},
+		{"429 honours Retry-After", http.StatusTooManyRequests, "30", false, 30 * time.Second},
+		{"Retry-After is capped", http.StatusServiceUnavailable, "99999", false, deliveryMaxBackoff},
+		{"HTTP-date Retry-After is ignored", http.StatusServiceUnavailable, "Wed, 21 Oct 2026 07:28:00 GMT", false, time.Millisecond},
+		{"400 halts", http.StatusBadRequest, "", true, 0},
+		{"404 halts", http.StatusNotFound, "", true, 0},
+		{"422 halts", http.StatusUnprocessableEntity, "", true, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			col := &lineCollector{failStatus: tc.status, failFirst: 10, retryAfter: tc.retryAfter}
+			srv := col.server(t)
+			st := &fakeDeliveryStore{haveRow: true}
+			st.setRows(ackedRows(2))
+			a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, &fakeRecorder{})
+			if err != nil {
+				t.Fatalf("NewAckedWebhook: %v", err)
+			}
+			wait, stop := a.step(context.Background())
+			if stop != tc.wantStop {
+				t.Fatalf("stop = %v, want %v", stop, tc.wantStop)
+			}
+			if !tc.wantStop && wait != tc.wantWait {
+				t.Errorf("wait = %v, want %v", wait, tc.wantWait)
+			}
+			if acked, _, _, _, _ := st.state(); acked != 0 {
+				t.Errorf("checkpoint = %d after a refused batch, want 0", acked)
+			}
+		})
+	}
+}
+
+// A non-positive flush_interval or retry_base_delay would spin the loop (poll
+// Postgres, or hammer a failing collector, with no pause) and is refused.
+func TestAcked_RejectsNonPositiveWaits(t *testing.T) {
+	t.Parallel()
+
+	for _, v := range []string{"0s", "-5s"} {
+		for name, cfg := range map[string]WebhookConfig{
+			"flush_interval":   {URL: "http://siem.internal/in", FlushInterval: v},
+			"retry_base_delay": {URL: "http://siem.internal/in", RetryBaseDelay: v},
+		} {
+			if _, err := NewAckedWebhook(cfg, &fakeDeliveryStore{}, &fakeRecorder{}); err == nil {
+				t.Errorf("NewAckedWebhook(%s %q) = nil error, want a refusal", name, v)
+			} else if !strings.Contains(err.Error(), name) {
+				t.Errorf("NewAckedWebhook(%s %q) = %v, want it to name %s", name, v, err, name)
+			}
 		}
 	}
 }

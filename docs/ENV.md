@@ -1673,11 +1673,11 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The checkpoint advances only on an HTTP 2xx, which means accepted, not durable. Delivery is at-least-once: collectors deduplicate on `id`, or on `seq` + `row_hash`.
 - Each NDJSON line is the stored event (`id`, ..., `prev_hash`, `row_hash`, `seq`), plus `source` when `WARDYN_AUDIT_SOURCE` is set.
 - `buffer_size` and `max_retries` do not apply. A 408, a 429, a 5xx or a network error retries with backoff from `retry_base_delay`, doubling to 5 minutes and honouring `Retry-After` in seconds.
-- Any other 4xx halts delivery until wardynd restarts (`wardyn_audit_delivery_halted`).
+- A redirect (never followed) or any other 4xx halts delivery until wardynd restarts (`wardyn_audit_delivery_halted`).
 - When retention removes rows past the checkpoint, retention is not blocked. Delivery records an `audit.delivery.reset` event, counts it in `wardyn_audit_delivery_resets_total` and resends from the oldest retained row.
 - At that ceiling you can lengthen retention, restore the collector before the drop, or accept the reported gap.
-- Turning the mode off keeps the checkpoint; re-enabling resumes from it, with duplicates. To start fresh at the current head, run `DELETE FROM audit_delivery_cursors WHERE destination = 'webhook'`.
-- The checkpoint table comes from migration `0144_audit_delivery_cursors`; split-role installs grant the app role `SELECT`, `INSERT` and `UPDATE` on `audit_delivery_cursors`.
+- Turning the mode off keeps the checkpoint; re-enabling resends everything since it (or resets, if retention passed it). To start fresh at the current head, run `DELETE FROM audit_delivery_cursors WHERE destination = 'webhook'`.
+- The checkpoint table comes from migration `0144_audit_delivery_cursors`; the app role needs no manual grant.
 - Under several replicas only the sweeper leader delivers; every replica reports the metrics ([Monitoring](operations/monitoring.md)).
 
 #### SIEM recipes (`webhook`)

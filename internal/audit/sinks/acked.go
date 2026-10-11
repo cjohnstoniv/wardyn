@@ -59,6 +59,14 @@ type AckedWebhook struct {
 	cursor  *ackcursor.Cursor[types.FederatedAuditEvent]
 	loaded  bool
 	backoff time.Duration
+	// benignReset is set by reset when retention removed only rows at or before
+	// the checkpoint, so ackedStore.Set(zero) keeps the durable position (and
+	// the resets counter) as it is: the next accepted batch moves it anyway.
+	benignReset bool
+	// stale is true while the durable last_error/halted may disagree with the
+	// loop: after a load (a previous run may have left a halt or an error) and
+	// after any recorded error. The first accepted batch clears it.
+	stale bool
 }
 
 // NewAckedWebhook validates cfg and wires the cursor over st. BatchSize is
@@ -70,11 +78,17 @@ func NewAckedWebhook(cfg WebhookConfig, st DeliveryStore, rec audit.Recorder) (*
 		return nil, err
 	}
 	a := &AckedWebhook{
-		cfg: cfg, client: &http.Client{Timeout: timeout},
+		// A redirect is never followed: net/http would turn the POST into a
+		// bodyless GET, and the collector's 200 for that GET would advance the
+		// checkpoint over rows it never received.
+		cfg: cfg, client: &http.Client{
+			Timeout:       timeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 		interval: interval, base: base, st: st, rec: rec,
 	}
 	a.cursor = &ackcursor.Cursor[types.FederatedAuditEvent]{
-		Source: ackedSource{st}, Sink: ackedSink{a}, Store: ackedStore{st}, Batch: cfg.BatchSize,
+		Source: ackedSource{st}, Sink: ackedSink{a}, Store: ackedStore{st, a}, Batch: cfg.BatchSize,
 		Key: func(e types.FederatedAuditEvent) ackcursor.Pos { return ackcursor.Pos{Seq: e.Seq, Hash: e.RowHash} },
 		// Wired here so EVERY path that steps the cursor reports the gap; Run
 		// rebinds it to its own ctx, which scopes the recording to the loop's
@@ -84,9 +98,28 @@ func NewAckedWebhook(cfg WebhookConfig, st DeliveryStore, rec audit.Recorder) (*
 	return a, nil
 }
 
+// AckedTerms validates cfg and returns the function to run on the sweeper
+// leader: it builds a fresh AckedWebhook per call, so every leader term loads
+// the durable checkpoint instead of resuming a stale in-memory one that
+// another replica has since moved past.
+func AckedTerms(cfg WebhookConfig, st DeliveryStore, rec audit.Recorder) (func(context.Context), error) {
+	if _, err := NewAckedWebhook(cfg, st, rec); err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context) {
+		a, err := NewAckedWebhook(cfg, st, rec)
+		if err != nil {
+			slog.Error("sinks.acked: acknowledged audit delivery not started", "error", err)
+			return
+		}
+		a.Run(ctx)
+	}, nil
+}
+
 // Run delivers until ctx ends or the collector refuses definitively (a
-// terminal 4xx halts until wardynd restarts). It must be called at most once
-// per AckedWebhook; under several replicas it runs on the leader only.
+// terminal 4xx or an unfollowed redirect halts until wardynd restarts). It
+// must be called at most once per AckedWebhook; AckedTerms gives each leader
+// term its own.
 func (a *AckedWebhook) Run(ctx context.Context) {
 	// Rebind the reset hook to this Run's ctx so the recording is scoped to
 	// the loop's lifetime, as federation.Forwarder.Run does.
@@ -120,7 +153,7 @@ func (a *AckedWebhook) step(ctx context.Context) (time.Duration, bool) {
 	more, err := a.cursor.Step(ctx)
 	switch {
 	case err == nil:
-		if a.backoff > 0 {
+		if a.stale {
 			a.recordError(ctx, "", false)
 		}
 		a.backoff = 0
@@ -146,7 +179,7 @@ func (a *AckedWebhook) load(ctx context.Context) error {
 	if err := a.cursor.Load(ctx); err != nil {
 		return err
 	}
-	a.loaded = true
+	a.loaded, a.stale = true, true
 	return nil
 }
 
@@ -181,18 +214,33 @@ func (a *AckedWebhook) halt(ctx context.Context, err error) {
 // Step anyway, so this only logs.
 func (a *AckedWebhook) recordError(ctx context.Context, msg string, halted bool) {
 	if err := a.st.SetAuditDeliveryError(ctx, AckedDestination, msg, halted); err != nil {
+		a.stale = true
 		slog.Warn("sinks.acked: recording the delivery state failed",
 			"destination", AckedDestination, "error", err)
+		return
 	}
+	a.stale = msg != "" || halted
 }
 
 // reset runs when the row at the checkpoint is gone or changed: retention
 // moved past the checkpoint, or the table was reset. The gap is reported at
 // ERROR and recorded as an audit event, so the collector itself learns of it;
-// ackcursor.Cursor.Step has already cleared the position, so the next batch
-// is resent from the oldest retained row. The resets counter is bumped by the
-// store's Set of the zero position (store.SetAuditDeliveryCursor).
+// ackcursor.Cursor.Step then clears the position, so the next batch is resent
+// from the oldest retained row. The resets counter is bumped by the store's
+// Set of the zero position (store.SetAuditDeliveryCursor).
+//
+// A gap that cost nothing is not reported: when the checkpoint row is gone but
+// the next retained row is the very next seq, retention removed only rows the
+// collector had already accepted, and the resend starts at the first
+// unacknowledged row anyway.
 func (a *AckedWebhook) reset(ctx context.Context, p ackcursor.Pos) {
+	if rows, err := a.st.ListAuditEventsAfterSeq(ctx, p.Seq-1, 1); err == nil &&
+		len(rows) == 1 && rows[0].Seq == p.Seq+1 {
+		a.benignReset = true
+		slog.Info("sinks.acked: retention removed the audit row at the delivery checkpoint; nothing unacknowledged was lost",
+			"destination", AckedDestination, "acked_seq", p.Seq)
+		return
+	}
 	slog.Error("sinks.acked: the audit row at the delivery checkpoint is gone or changed; resending from the oldest retained row",
 		"destination", AckedDestination, "acked_seq", p.Seq, "acked_row_hash", p.Hash)
 	data, err := json.Marshal(map[string]any{"destination": AckedDestination, "acked_seq": p.Seq})
@@ -220,15 +268,16 @@ type deliveryError struct {
 func (e *deliveryError) Error() string { return e.err.Error() }
 func (e *deliveryError) Unwrap() error { return e.err }
 
-// terminal reports whether err is a definitive refusal: a 4xx the collector
-// will answer the same way on every retry, except 408 and 429, which ask to
-// be retried. The same rule federation.Forwarder.refused applies.
+// terminal reports whether err is a definitive refusal: a 3xx (the client does
+// not follow redirects, and the configured URL will redirect again) or a 4xx
+// the collector will answer the same way on every retry, except 408 and 429,
+// which ask to be retried. federation.Forwarder.refused applies the 4xx rule.
 func terminal(err error) bool {
 	var de *deliveryError
 	if !errors.As(err, &de) {
 		return false
 	}
-	return de.status >= 400 && de.status < 500 &&
+	return de.status >= 300 && de.status < 500 &&
 		de.status != http.StatusRequestTimeout && de.status != http.StatusTooManyRequests
 }
 
@@ -242,12 +291,15 @@ func retryAfterOf(err error) time.Duration {
 }
 
 // errorText renders err for the checkpoint row and the log. The bearer token
-// and any URL password never appear: neither is in the error, and the URL
-// itself is not echoed.
+// and the URL (password, path, query) never appear: postNDJSON strips the URL
+// net/http embeds in its errors, and a status renders as its number alone.
 func errorText(err error) string {
 	var de *deliveryError
 	if !errors.As(err, &de) {
 		return err.Error()
+	}
+	if de.status >= 300 && de.status < 400 {
+		return fmt.Sprintf("collector answered HTTP %d, a redirect; set url to the collector's final address", de.status)
 	}
 	if de.status > 0 {
 		return fmt.Sprintf("collector answered HTTP %d", de.status)
@@ -264,7 +316,10 @@ func (s ackedSource) After(ctx context.Context, seq int64, limit int) ([]types.F
 
 // ackedStore adapts DeliveryStore to ackcursor.Store, always on the one
 // webhook destination.
-type ackedStore struct{ st DeliveryStore }
+type ackedStore struct {
+	st DeliveryStore
+	a  *AckedWebhook
+}
 
 func (s ackedStore) Get(ctx context.Context) (ackcursor.Pos, error) {
 	seq, hash, err := s.st.GetAuditDeliveryCursor(ctx, AckedDestination)
@@ -272,6 +327,10 @@ func (s ackedStore) Get(ctx context.Context) (ackcursor.Pos, error) {
 }
 
 func (s ackedStore) Set(ctx context.Context, p ackcursor.Pos) error {
+	if s.a.benignReset && p == (ackcursor.Pos{}) {
+		s.a.benignReset = false
+		return nil
+	}
 	return s.st.SetAuditDeliveryCursor(ctx, AckedDestination, p.Seq, p.Hash)
 }
 
