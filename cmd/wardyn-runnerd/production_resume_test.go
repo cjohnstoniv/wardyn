@@ -66,21 +66,22 @@ func (c *resumeObservedConn) WriteFrame(ctx context.Context, f runnerwire.Frame)
 }
 
 type resumeRuntimeFixture struct {
-	ctx       context.Context
-	runtime   runnerRuntime
-	client    *runnerwire.Client
-	sub       *resumeObservedSubstrate
-	remote    *remote.Substrate
-	link      *remote.Link
-	runnerID  uuid.UUID
-	stateDir  string
-	peers     chan *runnerwire.Peer
-	conns     chan *resumeObservedConn
-	connected chan error
-	hubDone   chan error
-	entered   chan struct{}
-	release   chan struct{}
-	frames    chan runnerwire.Frame
+	ctx        context.Context
+	runtime    runnerRuntime
+	client     *runnerwire.Client
+	sub        *resumeObservedSubstrate
+	remote     *remote.Substrate
+	link       *remote.Link
+	runnerID   uuid.UUID
+	generation uuid.UUID
+	stateDir   string
+	peers      chan *runnerwire.Peer
+	conns      chan *resumeObservedConn
+	connected  chan error
+	hubDone    chan error
+	entered    chan struct{}
+	release    chan struct{}
+	frames     chan runnerwire.Frame
 }
 
 func newResumeRuntimeFixture(t *testing.T) *resumeRuntimeFixture {
@@ -103,7 +104,8 @@ func newResumeRuntimeFixture(t *testing.T) *resumeRuntimeFixture {
 	t.Cleanup(func() { _ = f.runtime.close() })
 	const orgURL = "https://org.example"
 	row := types.Runner{ID: f.runnerID, PublicKey: pub, State: types.RunnerClaimed, OrgURLSHA256: federation.OrgURLSHA256(orgURL)}
-	f.remote = remote.New(row.ID.String(), f.link, remote.Options{})
+	f.generation = uuid.New()
+	f.remote = remote.New(row.ID.String(), f.link, remote.Options{ExecutionGeneration: func(context.Context, string, string) (uuid.UUID, error) { return f.generation, nil }})
 	hub := remote.NewHub(ctx, remote.HubConfig{OrgURL: orgURL,
 		Lookup: func(context.Context, uuid.UUID) (types.Runner, error) { return row, nil },
 		Admit: func(context.Context, types.Runner) (remote.Admission, error) {
@@ -175,11 +177,17 @@ func TestLocalRuntimeResumeReplaysRetainedFramesBeforeNewSpool(t *testing.T) {
 		}
 	}
 	run := uuid.New()
-	lease, _ := runnerwire.Marshal(runnerwire.Lease{RunID: run, TokenRenewedAt: time.Now(), EndsAt: time.Now().Add(time.Hour)})
+	lease, _ := runnerwire.Marshal(runnerwire.Lease{RunID: run, ExecutionGeneration: f.generation, TokenRenewedAt: time.Now(), EndsAt: time.Now().Add(time.Hour)})
 	if err := f.link.Send(f.ctx, runnerwire.Frame{Type: runnerwire.TypeLease, Payload: lease}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.remote.CreateSandbox(f.ctx, runner.SandboxSpec{RunID: run, RunnerID: f.runnerID.String(), ConfinementClass: types.CC1}); err != nil {
+	sandbox, err := f.remote.CreateSandbox(f.ctx, runner.SandboxSpec{RunID: run, RunnerID: f.runnerID.String(), ConfinementClass: types.CC1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A live execution keeps the run in the periodic lifecycle pass, whose
+	// substrate observation is this test's background-iteration signal.
+	if _, err := f.remote.Exec(f.ctx, sandbox.Ref, []string{"agent"}); err != nil {
 		t.Fatal(err)
 	}
 	conn := resumeAwait(t, f.ctx, f.conns)

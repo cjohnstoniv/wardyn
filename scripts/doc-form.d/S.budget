@@ -14,7 +14,8 @@
 # 0.9 F-1515 R2-0001: docs/sdk.md 12876 adds 18 over 12858 for the site-config baseline strip.
 # 0.9 F-1515 r1: docs/sdk.md 12908 adds 32 over 12876 for PutSiteConfig keeping the refusal and the lift-the-mark note.
 # docs/sdk.md 13218 measured after F-1515 merge.
-docs/sdk.md=13218 share=21
+# docs/sdk.md 13322 measured after F-1511-1510 merge.
+docs/sdk.md=13322 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.
@@ -44,3 +45,4 @@ docs/sdk.md=13218 share=21
 # Run templates: docs/sdk.md 12691 adds 210 over 12481 for the template refusal reasons (five rows) after merging the runner pool reasons.
 # docs/sdk.md 12831 measured after H3 integration.
 # Runner pools add 70 measured words for the five pool reasons the routes send: docs/sdk.md 12761.
+# docs/sdk.md 12817 adds 21 (0.9 F-1511-1510 r1): reserved_principal on the two erase routes.

@@ -98,15 +98,20 @@ func NewKEK(ctx context.Context, cfg Config) (*KEK, error) {
 		return nil, err
 	}
 	timeout := cmp.Or(cfg.Timeout, defaultTimeout)
-	// The transport starts from a clone of http.DefaultTransport, which carries
-	// WARDYN_DAEMON_PROXY_URL once the caller has installed it (serving boot
-	// and each maintenance mode do); the trusted CA is added here, so it does
-	// not depend on that order.
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	if tr.TLSClientConfig, err = tlsConfig(tr.TLSClientConfig, cfg.CACertFile); err != nil {
-		return nil, fmt.Errorf("AWS KMS: %w", err)
+	// The client is the SDK's own buildable client, not a plain *http.Client:
+	// the SDK adds an AWS_CA_BUNDLE (or shared-config ca_bundle) to it, and
+	// refuses to boot when handed any other client type. The proxy comes from
+	// http.DefaultTransport, which carries WARDYN_DAEMON_PROXY_URL once the
+	// caller has installed it (serving boot and each maintenance mode do); the
+	// trusted CA is added here, so it does not depend on that order.
+	var tlsErr error
+	hc := awshttp.NewBuildableClient().WithTransportOptions(func(tr *http.Transport) {
+		tr.Proxy = http.DefaultTransport.(*http.Transport).Proxy
+		tr.TLSClientConfig, tlsErr = tlsConfig(tr.TLSClientConfig, cfg.CACertFile)
+	})
+	if tlsErr != nil {
+		return nil, fmt.Errorf("AWS KMS: %w", tlsErr)
 	}
-	hc := &http.Client{Transport: tr}
 	sdkCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(a.Region), config.WithHTTPClient(hc))
 	if err != nil {
 		return nil, fmt.Errorf("AWS KMS: load the AWS configuration: %w", err)

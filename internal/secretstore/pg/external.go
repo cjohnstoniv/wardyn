@@ -90,6 +90,11 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 	if err := lockRow(ctx, tx, s.owner, name); err != nil {
 		return fmt.Errorf("pg secretstore: put %s: %w", ref, err)
 	}
+	if gen, fenced := s.generationFence(ctx); fenced {
+		if err := s.checkGeneration(ctx, tx, gen); err != nil {
+			return err
+		}
+	}
 	if rev, guarded := secretstore.IfRevisionFrom(ctx); guarded {
 		if err := s.checkRevision(ctx, tx, name, rev); err != nil {
 			return err

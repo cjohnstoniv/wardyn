@@ -158,7 +158,7 @@ func (s *Server) handleCreatePerson(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "list people", err)
 		return
 	}
-	directory := s.knownPrincipals(ctx)
+	directory, _ := s.knownPrincipals(ctx) // a list it cannot read adds no one, as before
 	for _, p := range people {
 		directory = append(directory, principalIdentity{principal: p.Principal, email: p.Email})
 	}
