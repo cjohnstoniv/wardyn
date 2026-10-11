@@ -152,6 +152,8 @@ For incident response or offboarding:
 
 ## 2. Connect
 
+- A background task has no SSH access: authentication and every channel answer with the background-task refusal.
+
 - The run detail page's "Attach from your terminal" card shows the exact
   command for a run you own while it is RUNNING:
 
