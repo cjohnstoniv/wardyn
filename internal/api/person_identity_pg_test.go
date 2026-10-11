@@ -219,9 +219,15 @@ func crossNameRig(t *testing.T) (srv *Server, pg store.PG, sec secretstore.Store
 	seedIdentity(t, pg, victimSubject, signedOid, "signed@corp.example")
 	attOid := uuid.NewString()
 	attacker = "pairwise-" + attOid
+	// A person an admin created by an email-shaped subject, not yet signed in: only people knows them.
+	victimEarly := "early@corp.example"
+	if _, _, err := pg.CreatePerson(t.Context(), types.Person{Principal: victimEarly, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
 	seedIdentity(t, pg, attacker, attOid, victimEntra)
 	seedIdentity(t, pg, attacker, attOid, victimSubject)
-	return srv, pg, sec, attacker, []string{victimEntra, victimSubject}
+	seedIdentity(t, pg, attacker, attOid, victimEarly)
+	return srv, pg, sec, attacker, []string{victimEntra, victimSubject, victimEarly}
 }
 
 // Erasing a person whose email alias spells another person's name never reaches that person's credential

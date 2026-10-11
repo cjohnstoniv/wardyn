@@ -183,10 +183,10 @@ func (s *Server) eraseRunOutputsOf(ctx context.Context, person string) (any, err
 // person's sealed audit fields are under, and clears the person from the governance changes they
 // proposed or decided (migration 0126). The fields are sealed under the person's principal; a name the
 // directory did not yet know when a row was written is under its own key, so the principal the
-// asked-for name resolves to, its entra:<tenant>:<object> forms, and each alias the directory resolves
-// to that principal and no one else are destroyed too (a destroy that finds no live key writes
-// nothing). An alias is claim text the person sent and can spell another person's name, so one that
-// resolves elsewhere is skipped. The same names match a governance change's recorded principal or email.
+// asked-for name resolves to, its entra:<tenant>:<object> forms, and each alias the directory —
+// people an admin created included — names as that principal and no one else are destroyed too (a
+// destroy that finds no live key writes nothing). An alias is claim text the person sent and can
+// spell another person's name, so one that names anyone else is skipped. The same names match a governance change's recorded principal or email.
 func (s *Server) eraseAuditSealKeys(ctx context.Context, person string) (any, error) {
 	names := []string{person}
 	pe, peErr := s.personErasureStore()
@@ -208,15 +208,16 @@ func (s *Server) eraseAuditSealKeys(ctx context.Context, person string) (any, er
 				names = append(names, n)
 			}
 		}
+		dir, _ := s.cfg.Store.(store.PrincipalDirectoryStore)
 		for _, a := range aliases {
-			if slices.Contains(names, a) {
+			if dir == nil || slices.Contains(names, a) {
 				continue
 			}
-			p, err := pe.PrincipalForName(ctx, a)
+			owners, err := dir.PrincipalsNamed(ctx, a)
 			if err != nil {
 				return nil, err
 			}
-			if p == principal {
+			if len(owners) == 1 && owners[0] == principal {
 				names = append(names, a)
 			}
 		}
