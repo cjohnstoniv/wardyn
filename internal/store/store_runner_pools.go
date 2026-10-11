@@ -638,10 +638,10 @@ func (s PG) PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefa
 // no pool has ever existed (a deleted one still counts, so an administrator's deletion sticks), it
 // creates one remote_provided pool named name holding exactly those executors and makes it the
 // organisation's remote default and its preferred hosting type, so existing runs keep the placement
-// they have today and a launch that names no pool or placement still resolves. A preferred hosting type
-// the organisation already set is kept. It gives nobody an executor they lacked (no use policy, and no
-// self-hosted pool is ever made); it is still a placement change, since a run may then land on any
-// member that advertises its class. With no executors or a catalogue that has existed it does nothing.
+// they have today and a launch that names no pool or placement still resolves. Defaults the
+// organisation saved before any pool existed keep their preferred hosting type, a blank one included.
+// It gives nobody an executor they lacked (no use policy, and no self-hosted pool is ever made); it is
+// still a placement change, since a run may then land on any member that advertises its class. With no executors or a catalogue that has existed it does nothing.
 // Returns the pool it created and the organisation defaults it left, both nil when it did nothing.
 func (s PG) BootstrapRunnerPools(ctx context.Context, executors []string, name string) (*types.RunnerPool, *types.RunnerPoolDefaults, error) {
 	if len(executors) == 0 {
@@ -668,10 +668,7 @@ func (s PG) BootstrapRunnerPools(ctx context.Context, executors []string, name s
 		}
 		d, err := scanOrgDefaults(q.QueryRow(ctx, `
 			INSERT INTO runner_pool_org_defaults (preferred_hosting, remote_provided, updated_by) VALUES ('remote_provided', $1, 'system')
-			ON CONFLICT (singleton) DO UPDATE SET remote_provided = EXCLUDED.remote_provided,
-			       preferred_hosting = CASE WHEN runner_pool_org_defaults.preferred_hosting = '' THEN EXCLUDED.preferred_hosting
-			                                ELSE runner_pool_org_defaults.preferred_hosting END,
-			       updated_by = 'system', updated_at = now()
+			ON CONFLICT (singleton) DO UPDATE SET remote_provided = EXCLUDED.remote_provided, updated_by = 'system', updated_at = now()
 			RETURNING preferred_hosting, remote_provided, self_hosted`, p.ID))
 		if err != nil {
 			return err
