@@ -36,6 +36,15 @@ import (
 // Skips cleanly when WARDYN_TEST_PG is unset.
 func throwawayPGPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
+	pool := throwawayBarePGPool(t)
+	seedRunPool(t, pool)
+	return pool
+}
+
+// throwawayBarePGPool is throwawayPGPool with an empty runner pool catalogue, for the tests of the
+// catalogue itself and of its upgrade bootstrap.
+func throwawayBarePGPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
 	dsn := os.Getenv("WARDYN_TEST_PG")
 	if dsn == "" {
 		t.Skip("WARDYN_TEST_PG not set; skipping Postgres-backed test")
