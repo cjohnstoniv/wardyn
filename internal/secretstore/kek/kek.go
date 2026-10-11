@@ -8,8 +8,9 @@
 // bound to the row's owner and name. Each provider implements KEK; the row
 // records the provider's ID as kek_id, and a read picks the KEK by that id.
 // `local` lives here, one key per purpose (NewLocalPurpose); Vault Transit
-// (package vaultkv) wraps through the service's own encrypt/decrypt, and Azure
-// Key Vault (package azurekv) through wrapkey/unwrapkey under a signature.
+// (package vaultkv) wraps through the service's own encrypt/decrypt, Azure
+// Key Vault (package azurekv) through wrapkey/unwrapkey under a signature, and
+// AWS KMS (package awskms) through Encrypt/Decrypt bound by an encryption context.
 // WARDYN_KEK selects the one every write uses.
 package kek
 
@@ -98,12 +99,13 @@ func Behind(k KEK, wrapped []byte, latest string) (bool, error) {
 const (
 	TransitIDPrefix  = "transit:"
 	AzureKeyIDPrefix = "azurekv-key:"
+	AWSKMSIDPrefix   = "awskms:"
 )
 
 // IsServiceID reports whether id names a key service's KEK (Transit, Key
-// Vault). A kek_id that is neither local nor a known service's is not one.
+// Vault, AWS KMS). A kek_id that is neither local nor a known service's is not one.
 func IsServiceID(id string) bool {
-	return strings.HasPrefix(id, TransitIDPrefix) || strings.HasPrefix(id, AzureKeyIDPrefix)
+	return strings.HasPrefix(id, TransitIDPrefix) || strings.HasPrefix(id, AzureKeyIDPrefix) || strings.HasPrefix(id, AWSKMSIDPrefix)
 }
 
 // The bind keys: KMS encryption context / Transit associated data a

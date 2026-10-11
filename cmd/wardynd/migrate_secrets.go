@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -44,7 +45,7 @@ func maintenanceMode(f *bootFlags) (bool, error) {
 		if strings.TrimSpace(*f.rotateAgeKey) != "" || *f.rewrap || *f.migrateSecrets || *f.reconcile || *f.auditSplitLegacy {
 			return true, fmt.Errorf("refusing to run: -rewrap-principal-keys is a mode of its own; run it without -rotate-age-key, -rewrap, -migrate-secrets, -reconcile or -audit-split-legacy")
 		}
-		return true, rewrapPrincipalKeysMode(f)
+		return true, withBootTransport(f, rewrapPrincipalKeysMode)
 	}
 	if *f.auditSplitLegacy {
 		if strings.TrimSpace(*f.rotateAgeKey) != "" || *f.rewrap || *f.migrateSecrets || *f.reconcile {
@@ -53,15 +54,31 @@ func maintenanceMode(f *bootFlags) (bool, error) {
 		return true, auditSplitLegacyMode(f)
 	}
 	if p := strings.TrimSpace(*f.rotateAgeKey); p != "" {
-		return true, rotateAgeKeyMode(f, p)
+		return true, withBootTransport(f, func(f *bootFlags) error { return rotateAgeKeyMode(f, p) })
 	}
 	if *f.rewrap {
-		return true, rewrapMode(f)
+		return true, withBootTransport(f, rewrapMode)
 	}
 	if *f.migrateSecrets || *f.reconcile {
-		return true, secretStoreMaintenance(f)
+		return true, withBootTransport(f, secretStoreMaintenance)
 	}
 	return false, nil
+}
+
+// withBootTransport runs a maintenance mode that opens the secret store
+// clients after installing the trusted CA and WARDYN_DAEMON_PROXY_URL on the
+// shared transport, as a serving boot does before it builds the same clients:
+// without it the AWS KMS client, which starts from that transport, would reach
+// KMS behind neither the proxy nor the corporate CA.
+func withBootTransport(f *bootFlags, mode func(*bootFlags) error) error {
+	_, pool, _, err := loadTrustedCA(*f.trustedCAFile)
+	if err != nil {
+		return err
+	}
+	if err := installBootTransport(http.DefaultTransport, pool, f); err != nil {
+		return err
+	}
+	return mode(f)
 }
 
 // secretStoreMaintenance runs `wardynd -migrate-secrets -to=<target>` or

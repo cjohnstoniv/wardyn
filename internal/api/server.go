@@ -129,6 +129,11 @@ type Config struct {
 	// Fanout's DropsByName). Nil omits the metric — a deployment with no SIEM
 	// sinks configured has nothing to report.
 	AuditSinkDrops func() map[string]int64
+	// AuditDelivery, when set, reports each acknowledged-delivery destination's
+	// checkpoint and the head it lags behind for the wardyn_audit_delivery_*
+	// metrics (cmd/wardynd wires it to the store only when the webhook sink is
+	// configured with delivery "acknowledged"). Nil omits the series.
+	AuditDelivery func(ctx context.Context) ([]store.AuditDeliveryStatus, error)
 	// Runner launches sandboxes. Nil => headless API-only mode.
 	Runner runner.Runner
 	// RunnerOrgURL is the public organisation URL bound into runner identities.
@@ -477,6 +482,8 @@ type Config struct {
 	SecretStoreExternal string
 	// SecretKeyService: the key service wrapping every stored data key ("Vault Transit at host"), or "" for the local key; set, /setup/status shows kek_service.
 	SecretKeyService string
+	// SecretKeyServiceStaticKey: the key service is reached with a long-lived credential (an AWS IAM user's access key); /setup/status shows kek_service_static_key.
+	SecretKeyServiceStaticKey bool
 	// KEKRequired: WARDYN_KEK_REQUIRED; /setup/status shows kek_required_unmet while neither a key service nor an external store holds the credentials.
 	KEKRequired bool
 	// PlatformKeySeparate: the boot keys have a key of their own: WARDYN_PLATFORM_KEY_FILE in local mode only

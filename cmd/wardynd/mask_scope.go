@@ -117,7 +117,7 @@ func buildMaskManifests(ctx context.Context, pool *pgxpool.Pool, secrets secrets
 		return nil, nil, errors.New("refusing to start: the secret store has no per-subject keys, which the run masking manifests are sealed under")
 	}
 	if err := principalKeyRootOf(secrets); err != nil {
-		return nil, nil, fmt.Errorf("refusing to start: the per-subject keys the run masking manifests are sealed under have no key to wrap under: %w. Set WARDYN_AGE_KEY (wardynd -gen-age-key) or a WARDYN_KEK key service (transit or azurekv); an external secret store alone does not wrap them", err)
+		return nil, nil, fmt.Errorf("refusing to start: the per-subject keys the run masking manifests are sealed under have no key to wrap under: %w. Set WARDYN_AGE_KEY (wardynd -gen-age-key) or a WARDYN_KEK key service (transit, azurekv or awskms); an external secret store alone does not wrap them", err)
 	}
 	m := maskmanifest.New(pool, keys, reg)
 	scope.arm(m.Held)
