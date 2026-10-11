@@ -258,6 +258,15 @@ func (s *Server) stepAutonomy(f *runFold, rec *foldRecorder) bool {
 	return ok
 }
 
+// stepRunEnd decides the run's end and its lifetime cap against the pool,
+// governance and the deployment (run_end_create.go); a refusal is the same at
+// every door and leaves no row.
+func (s *Server) stepRunEnd(f *runFold, rec *foldRecorder) bool {
+	var refusal *runRefusal
+	f.end, refusal = s.resolveCreateEnd(f.r, *f.req, f.ceiling)
+	return !refusal.write(s, f.w, f.r)
+}
+
 // stepADOStanding bounds a member's Azure DevOps list (#1384); the narrowing is
 // said out loud at every door. A list that leaves nothing standing is
 // dispatch's refusal at create, which the dry doors answer before the click.

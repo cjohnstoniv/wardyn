@@ -178,6 +178,7 @@ var queryParamNotAnID = map[string]string{
 	"status":         "run list state filter (active|ended|failed|killed|needs), a closed enum; narrows an already-scoped listing",
 	"ended_within":   "run list end-time window filter, a closed enum; narrows an already-scoped listing, never widens it",
 	"include_killed": "run list visibility flag (killedVisibleFor's 24h default); narrows/widens within an already-scoped listing",
+	"no_end":         "run list filter for live runs with no end; narrows an already-scoped listing, never widens it",
 	"workspace":      "run list exact-match filter (COALESCE(NULLIF(repo,''), workspace_path)); narrows an already-scoped listing, never widens it",
 	"subject_type":   "Explain grid (security tier route): the grant subject kind asked about",
 	"subject":        "Explain grid (security tier route): the grant subject asked about, over the table that tier already reads whole",
