@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -157,5 +158,58 @@ func TestCurrentActivityControlCannotBeHistoricalEvent(t *testing.T) {
 	payload, _ := runnerwire.Marshal(runnerwire.CurrentActivity{RunID: uuid.New()})
 	if err := cfg.OnControlChecked(runnerwire.Frame{Type: runnerwire.TypeCurrentActivity, Payload: payload}); err != nil || calls != 1 {
 		t.Fatalf("valid control calls=%d err=%v", calls, err)
+	}
+}
+
+// A CURRENT_ACTIVITY the org refuses (the run already left RUNNING) or cannot
+// record (a store error) is dropped; the runner's session stays online.
+func TestCurrentActivityRefusalKeepsPeerOnline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	h, s, row, _ := activityFixture(t)
+	results := []error{store.ErrRunnerExecutionRefused, errors.New("store unavailable"), nil}
+	called := make(chan int, len(results))
+	calls := 0
+	a := Admission{Activity: func(context.Context, uuid.UUID) error {
+		err := results[calls]
+		calls++
+		called <- calls
+		return err
+	}}
+	var org *runnerwire.Peer
+	cfg := runnerwire.PeerConfig{OnControlChecked: func(runnerwire.Frame) error { return nil }}
+	h.configureActivity(ctx, &cfg, row, a, s, func() *runnerwire.Peer { return org })
+	orgConn, runnerConn := runnerwire.Loopback()
+	t.Cleanup(func() { _ = runnerConn.Close() })
+	s.mu.Lock()
+	org = s.link.AttachSession(orgConn, cfg)
+	s.peer = org
+	s.mu.Unlock()
+	if err := s.link.Ready(org); err != nil {
+		t.Fatal(err)
+	}
+	local := runnerwire.NewPeer(runnerConn, runnerwire.PeerConfig{})
+	go org.Run(ctx)   //nolint:errcheck // ends with the test context
+	go local.Run(ctx) //nolint:errcheck // ends with the test context
+	for want := range len(results) {
+		if err := local.CurrentActivity(ctx, uuid.New()); err != nil {
+			t.Fatalf("session down before activity %d: send %v, org %v", want+1, err, org.Err())
+		}
+		select {
+		case got := <-called:
+			if got != want+1 {
+				t.Fatalf("activity call %d, want %d", got, want+1)
+			}
+		case <-org.Done():
+			t.Fatalf("dropped activity failed the session: %v", org.Err())
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+	if !org.Online() {
+		t.Fatalf("session went down: %v", org.Err())
+	}
+	if err := h.currentActivity(ctx, row, a, &hubSession{id: "old", link: s.link}, org, uuid.New()); !errors.Is(err, runnerwire.ErrNotReady) {
+		t.Fatalf("stale session activity not refused: %v", err)
 	}
 }

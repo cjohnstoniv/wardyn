@@ -74,6 +74,7 @@ var meetRules = map[string]meetRule{
 	"deny_ui_apps":                          {"false", "OR"},
 	"max_concurrent_runs":                   {"0 unlimited", "smaller positive"},
 	"deny_user_drive":                       {"false", "OR"},
+	"deny_placements":                       {"none; every placement permitted", "union"},
 	"max_cpu_millis":                        {"0 unlimited", "smaller positive"},
 	"max_memory_mib":                        {"0 unlimited", "smaller positive"},
 	"max_ephemeral_disk_mib":                {"0 unlimited", "smaller positive"},

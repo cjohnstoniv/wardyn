@@ -86,6 +86,10 @@ func TestConformanceDocker(t *testing.T) {
 		UserDrives:     drives,
 		ExecState:      dockerExecState,
 	})
+
+	t.Run("PlacementRouting", func(t *testing.T) {
+		conformance.RunPlacementRouting(t, sub, conformance.RoutingOptions{Image: "busybox:latest", Timeout: 3 * time.Minute})
+	})
 }
 
 // dockerExecState is the daemon's own record of an exec, for the Wait

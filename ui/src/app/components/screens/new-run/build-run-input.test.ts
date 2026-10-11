@@ -174,12 +174,10 @@ describe("buildRunInput — the 0.9 contract fields", () => {
 });
 
 describe("buildRunInput — the 0.9 contract marker", () => {
-  it("is always sent, so an unset mode reaches the server as a refusal and never as an older client's request", () => {
+  it("is absent until lane A-L8 re-adds it with the experience control, so the console stays an older client", () => {
     const body = buildRunInput(input({ policyMode: "default", merged: null }));
-    expect(body?.mode_contract).toBe("0.9");
+    expect(body).not.toHaveProperty("mode_contract");
     expect(body).not.toHaveProperty("experience");
-    const wire = runWireBody(body!);
-    expect(wire).toHaveProperty("mode_contract", "0.9");
-    for (const key of ["agent", "task", "interactive", "task_mode", "interactive_start", "model_provider"]) expect(wire, key).not.toHaveProperty(key);
+    expect(runWireBody(body!)).not.toHaveProperty("mode_contract");
   });
 });

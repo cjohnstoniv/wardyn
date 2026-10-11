@@ -204,6 +204,7 @@ const (
 	reasonStatusNeedsRequiresView   = "status_needs_requires_view"   // status=needs requires view=user or view=admin
 	reasonInvalidEndedWithinParam   = "invalid_ended_within_param"   // ?ended_within= is not one of the closed durations
 	reasonInvalidIncludeKilledParam = "invalid_include_killed_param" // ?include_killed= is not "", "0", or "1"
+	reasonInvalidNoEndParam         = "invalid_no_end_param"         // ?no_end= is not "", "0", or "1"
 	reasonRunsSearchQueryTooLong    = "runs_search_query_too_long"   // ?q= exceeds the maximum search length
 	reasonInvalidLimitParam         = "invalid_limit_param"          // ?limit= does not parse as a non-negative integer
 	reasonInvalidOffsetParam        = "invalid_offset_param"         // ?offset= does not parse as a non-negative integer
@@ -314,6 +315,27 @@ const (
 	reasonAPITokenTTLInvalid         = "api_token_ttl_invalid"          // ttl_seconds is negative or implausibly large
 	reasonAPITokenCapReached         = "api_token_cap_reached"          // the principal already holds the maximum number of live tokens
 	reasonSessionsRevokeParamInvalid = "sessions_revoke_param_invalid"  // the body must set exactly one of sub/all
+
+	// /api/v1/invitations and /api/v1/me/invitations (#1508).
+	reasonInvitationTargetInvalid    = "invitation_target_invalid"     // the principal is not a subject, or is reserved, or is a service: principal
+	reasonInvitationTargetUnknown    = "invitation_target_unknown"     // no person row and no bound identity has that principal
+	reasonInvitationReplacesInvalid  = "invitation_replaces_invalid"   // replaces_token_id is not a live admin-minted token of the target
+	reasonInvitationTTLInvalid       = "invitation_ttl_invalid"        // expires_in_seconds is outside 1 s to 14 d, or token_ttl_seconds is negative
+	reasonInvitationCapReached       = "invitation_cap_reached"        // the target already has the maximum pending invitations
+	reasonInvitationNotFound         = "invitation_not_found"          // no invitation by that id that this caller may act on
+	reasonInvitationNotPending       = "invitation_not_pending"        // the invitation was claimed, revoked or expired
+	reasonInvitationListParamInvalid = "invitation_list_param_invalid" // GET /invitations: state is not one the endpoint accepts
+
+	// /api/v1/service-identities and /api/v1/me/service-identities (#1508).
+	reasonServiceIdentityNameInvalid        = "service_identity_name_invalid"        // the name does not match ^[a-z][a-z0-9-]{2,62}$
+	reasonServiceIdentityNameTaken          = "service_identity_name_taken"          // a service identity or a principal-keyed table already holds the name
+	reasonServiceIdentitySponsorInvalid     = "service_identity_sponsor_invalid"     // the sponsor is not exactly a bound, non-deactivated person's principal
+	reasonServiceIdentityNotFound           = "service_identity_not_found"           // no service identity by that name that this caller may act on
+	reasonServiceIdentityInactive           = "service_identity_inactive"            // the service identity is suspended or retired, or its sponsor's session is not live
+	reasonServiceIdentityDescriptionInvalid = "service_identity_description_invalid" // the description exceeds 200 characters or has a control character
+	reasonServiceIdentityUserTypeUnknown    = "service_identity_user_type_unknown"   // the user type does not exist on this deployment
+	reasonServiceIdentityPatchEmpty         = "service_identity_patch_empty"         // PATCH named none of description, sponsor or suspended
+	reasonNeedsSSO                          = "needs_sso"                            // service identities need SSO: local mode has no sponsor to bind
 
 	// /api/v1/access (role-mapping admin).
 	reasonSSONotConfigured             = "sso_not_configured"               // the route needs OIDC, and this deployment has none configured

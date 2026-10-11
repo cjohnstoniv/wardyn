@@ -383,6 +383,12 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 					return
 				}
 			}
+			// The attribution override never names a mechanism principal (the admin token, a device, a portal,
+			// a service identity, a person's audit subject): it is dropped and the configured seat answers.
+			// "local:" names stay: they are the seat's own family, and the dev override's documented use.
+			if h := localPrincipalOverride(r); h != "" && s.isReservedPrincipal(h) && !strings.HasPrefix(strings.ToLower(h), "local:") {
+				r.Header.Del("X-Wardyn-Principal")
+			}
 			next.ServeHTTP(w, r.WithContext(withLocalPrincipal(r.Context(), op)))
 		})
 	}
@@ -912,9 +918,9 @@ func (s *Server) internalAuth(next http.Handler) http.Handler {
 			writeErrorReason(w, http.StatusUnauthorized, reasonInvalidRunToken, "invalid run token")
 			return
 		}
-		// Claims first, then LIVENESS — see refuseTerminalRun.
+		// Claims first, then LIVENESS (refuseTerminalRun), then the relay binding on the run that read.
 		r = r.WithContext(contextWithClaims(r.Context(), claims))
-		if !s.refuseTerminalRun(w, r, claims) {
+		if run, ok := s.refuseTerminalRun(w, r, claims); !ok || s.refuseRelayBinding(w, r, claims, run) {
 			return
 		}
 		next.ServeHTTP(w, r)

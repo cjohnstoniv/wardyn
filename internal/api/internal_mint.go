@@ -51,6 +51,11 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonMintGrantIDRequired, "grant_id is required")
 		return
 	}
+	// Before the single-lane check and MintForGrant: a relayed mint of a grant
+	// not delivered `own` opens no transaction and consumes no minted_jti.
+	if s.refuseRelayedDelivery(w, r, claims, body.GrantID) {
+		return
+	}
 
 	// Single-lane, at mint time. A run that also holds a github_token grant may
 	// not mint an ssh_key OR a git_pat for the brokered forge (see
@@ -372,7 +377,22 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, claims.Sponsor, internalAudience, claims.OperatorOwned)
+	// A service run renews under its identity's current sponsor, not the one its first token named.
+	sponsor := claims.Sponsor
+	if isServicePrincipal(claims.Sub) {
+		var serr error
+		sponsor, serr = s.runSponsor(r.Context(), claims.Sub)
+		if errors.Is(serr, errServiceRetired) {
+			s.auditRenewDenied(r, claims, "service_identity_retired")
+			writeErrorReason(w, http.StatusForbidden, reasonServiceIdentityInactive, "the service identity that started this run is retired")
+			return
+		}
+		if serr != nil {
+			writeServerError(w, r, "renew run identity", serr)
+			return
+		}
+	}
+	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, sponsor, internalAudience, claims.OperatorOwned)
 	if err != nil {
 		writeServerError(w, r, "renew run identity", err)
 		return

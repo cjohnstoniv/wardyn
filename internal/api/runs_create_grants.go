@@ -108,11 +108,18 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 				g.OwnerOnly = true
 			}
 		}
+		// A local run's grants are all its owner's own (ownLocalGrantSpecs); the
+		// relay serves an injection or mint only for a grant recorded so.
+		delivery := types.GrantDeliveryNone
+		if runPlacement == types.PlacementLocal {
+			delivery = types.GrantDeliveryOwn
+		}
 		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
 			ID:        grantID,
 			RunID:     runID,
 			CreatedAt: now,
 			Spec:      g,
+			Delivery:  delivery,
 		}); gerr != nil {
 			// A grant write failure is fatal: the run would be ungovernable.
 			writeServerError(w, r, "create grant", gerr)

@@ -26,7 +26,10 @@
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
 //     ExportAuditPartition, AuditRetention, DropAuditPartition
 //   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, ListSecretsScoped,
-//     ListSecretsScopedPage, SetSecret, DeleteSecret
+//     ListSecretsScopedPage, SetSecret, DeleteSecret, ListMySecrets, ListMySecretsPage,
+//     SetMySecret, DeleteMySecret
+//   - shared-secrets (/api/v1/shared-secrets): ListSharedSecrets, ListSharedSecretsPage,
+//     SetSharedSecret, DeleteSharedSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult
 //   - model-providers (/api/v1/model-providers): GetModelProviders — the read only (admin); the PUT and the per-provider
 //     sign-in and credential doors are NOT wrapped
@@ -68,6 +71,8 @@
 //     Security tier, and read by the console's Settings card rather than by tooling
 //   - /api/v1/permissions    — capability grants and per-kind enforcement (0.7)
 //   - /api/v1/access         — directory search and group->role mappings (0.7)
+//   - /api/v1/service-identities — an admin's service identities (0.9); /api/v1/me/service-identities is the sponsor's token mint, also unwrapped
+//   - /api/v1/invitations    — an admin's invitations to a person to mint their own token (0.9); /api/v1/me/invitations is the claim, also unwrapped
 //   - /api/v1/tokens         — admin-tier API tokens (0.7); /api/v1/me/tokens is the
 //     self-service half, also unwrapped
 //   - /api/v1/people         — the writes: creating a person, erasing their stored credentials (0.8, offboarding)
@@ -457,6 +462,67 @@ func (c *Client) SetSecret(ctx context.Context, name, value string) error {
 func (c *Client) DeleteSecret(ctx context.Context, name string) error {
 	path := "/api/v1/secrets/" + url.PathEscape(name)
 	return c.do(ctx, http.MethodDelete, path, nil, nil)
+}
+
+// ListMySecretsPage lists the names in the caller's OWN namespace, whatever their role (never
+// values; reserved platform keys excluded): GET /api/v1/me/secrets, which responds {"names":[...]}.
+// truncated=true means a further page exists. It needs a signed-in person (403
+// secret_personal_needs_person for the admin token).
+func (c *Client) ListMySecretsPage(ctx context.Context, opts ...ListOpts) (names []string, truncated bool, err error) {
+	return c.listNamespacePage(ctx, "/api/v1/me/secrets", opts)
+}
+
+// ListMySecrets is ListMySecretsPage without the truncation signal.
+func (c *Client) ListMySecrets(ctx context.Context, opts ...ListOpts) ([]string, error) {
+	names, _, err := c.ListMySecretsPage(ctx, opts...)
+	return names, err
+}
+
+// ListSharedSecretsPage lists the names of the shared service secrets (never values; reserved
+// platform keys excluded): GET /api/v1/shared-secrets, which responds {"names":[...]}. Operator tier
+// only (403 otherwise). truncated=true means a further page exists.
+func (c *Client) ListSharedSecretsPage(ctx context.Context, opts ...ListOpts) (names []string, truncated bool, err error) {
+	return c.listNamespacePage(ctx, "/api/v1/shared-secrets", opts)
+}
+
+// ListSharedSecrets is ListSharedSecretsPage without the truncation signal.
+func (c *Client) ListSharedSecrets(ctx context.Context, opts ...ListOpts) ([]string, error) {
+	names, _, err := c.ListSharedSecretsPage(ctx, opts...)
+	return names, err
+}
+
+func (c *Client) listNamespacePage(ctx context.Context, path string, opts []ListOpts) (names []string, truncated bool, err error) {
+	var out struct {
+		Names []string `json:"names"`
+	}
+	var hdr http.Header
+	if err = c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &out, &hdr); err != nil {
+		return nil, false, err
+	}
+	return out.Names, hdr.Get("X-Wardyn-Truncated") == "true", nil
+}
+
+// SetMySecret stores the caller's OWN secret, whatever their role: PUT /api/v1/me/secrets/{name}.
+// Unlike SetSecret, where an admin's write lands in the shared namespace, this never does. It needs a
+// signed-in person (403 secret_personal_needs_person for the admin token).
+func (c *Client) SetMySecret(ctx context.Context, name, value string) error {
+	return c.do(ctx, http.MethodPut, "/api/v1/me/secrets/"+url.PathEscape(name), map[string]string{"value": value}, nil)
+}
+
+// DeleteMySecret removes the caller's own secret. DELETE /api/v1/me/secrets/{name}.
+func (c *Client) DeleteMySecret(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/me/secrets/"+url.PathEscape(name), nil, nil)
+}
+
+// SetSharedSecret stores a shared service secret in the operator namespace every person's run may
+// fall back to: PUT /api/v1/shared-secrets/{name}. Operator tier only (403 otherwise).
+func (c *Client) SetSharedSecret(ctx context.Context, name, value string) error {
+	return c.do(ctx, http.MethodPut, "/api/v1/shared-secrets/"+url.PathEscape(name), map[string]string{"value": value}, nil)
+}
+
+// DeleteSharedSecret removes a shared service secret. DELETE /api/v1/shared-secrets/{name}.
+func (c *Client) DeleteSharedSecret(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/shared-secrets/"+url.PathEscape(name), nil, nil)
 }
 
 // maxErrBody caps an ERROR response body for diagnostic display so a hostile or

@@ -628,7 +628,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
-	sb, err := s.cfg.Runner.CreateSandbox(createCtx, spec)
+	sb, err := s.createSandboxAtTarget(createCtx, run, spec)
 	endStartWait()
 	stopCreateLease()
 	if err != nil {

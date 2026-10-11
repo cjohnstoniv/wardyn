@@ -34,10 +34,9 @@ export function buildRunInput({
   const sized = ccTouched ? built : { ...built, confinement_class: undefined };
   // Same body on all three doors; none when the run carries none.
   const withComponents = state.components.length ? { ...sized, components: state.components } : sized;
-  // The wizard is a 0.9 client whatever the person has chosen so far: the marker
-  // makes the server refuse an unset mode (run_mode_required) instead of reading
-  // the request as an older client's and inferring one.
-  const run = { ...withComponents, mode_contract: "0.9" as const, ...buildRunContractWire(state.contract, activeSections) };
+  // No mode_contract marker: the console has no experience control yet, and the marker makes
+  // the server refuse an unset experience (run_mode_required). Lane A-L8 re-adds it together with that control.
+  const run = { ...withComponents, ...buildRunContractWire(state.contract, activeSections) };
   // A saved ID may survive a mode switch; only the active mode chooses the policy.
   if (policyMode === "custom") return merged ? { ...run, inline_policy: merged.spec } : null;
 

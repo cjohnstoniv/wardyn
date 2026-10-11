@@ -14,6 +14,24 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 |---|---|---|
 | `filippo.io/age` | BSD-3-Clause | https://github.com/FiloSottile/age/blob/v1.3.2/LICENSE |
 | `filippo.io/hpke` | BSD-3-Clause | https://github.com/FiloSottile/hpke/blob/v0.4.0/LICENSE |
+| `github.com/aws/aws-sdk-go-v2` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/v1.47.3/LICENSE.txt |
+| `github.com/aws/aws-sdk-go-v2/config` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/config/v1.33.9/config/LICENSE.txt |
+| `github.com/aws/aws-sdk-go-v2/credentials` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/credentials/v1.20.9/credentials/LICENSE.txt |
+| `github.com/aws/aws-sdk-go-v2/feature/ec2/imds` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/feature/ec2/imds/v1.20.3/feature/ec2/imds/LICENSE.txt |
+| `github.com/aws/aws-sdk-go-v2/internal/configsources` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/internal/configsources/v1.5.6/internal/configsources/LICENSE.txt |
+| `github.com/aws/aws-sdk-go-v2/internal/endpoints/v2` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/internal/endpoints/v2.8.6/internal/endpoints/v2/LICENSE.txt |
+| `github.com/aws/aws-sdk-go-v2/internal/sync/singleflight` | BSD-3-Clause | https://github.com/aws/aws-sdk-go-v2/blob/v1.47.3/internal/sync/singleflight/LICENSE |
+| `github.com/aws/aws-sdk-go-v2/internal/v4a` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/internal/v4a/v1.5.6/internal/v4a/LICENSE.txt |
+| `github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/service/internal/accept-encoding/v1.13.21/service/internal/accept-encoding/LICENSE.txt |
+| `github.com/aws/aws-sdk-go-v2/service/internal/presigned-url` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/service/internal/presigned-url/v1.14.6/service/internal/presigned-url/LICENSE.txt |
+| `github.com/aws/aws-sdk-go-v2/service/kms` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/service/kms/v1.61.4/service/kms/LICENSE.txt |
+| `github.com/aws/aws-sdk-go-v2/service/signin` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/service/signin/v1.10.4/service/signin/LICENSE.txt |
+| `github.com/aws/aws-sdk-go-v2/service/sso` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/service/sso/v1.38.4/service/sso/LICENSE.txt |
+| `github.com/aws/aws-sdk-go-v2/service/ssooidc` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/service/ssooidc/v1.43.4/service/ssooidc/LICENSE.txt |
+| `github.com/aws/aws-sdk-go-v2/service/sts` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/service/sts/v1.51.4/service/sts/LICENSE.txt |
+| `github.com/aws/smithy-go` | Apache-2.0 | https://github.com/aws/smithy-go/blob/v1.28.5/LICENSE |
+| `github.com/aws/smithy-go/internal/sync/singleflight` | BSD-3-Clause | https://github.com/aws/smithy-go/blob/v1.28.5/internal/sync/singleflight/LICENSE |
+| `github.com/aws/smithy-go/transport/http/protocol/internal/json/internal/stdlib` | BSD-3-Clause | https://github.com/aws/smithy-go/blob/v1.28.5/transport/http/protocol/internal/json/internal/stdlib/LICENSE |
 | `github.com/bradleyfalzon/ghinstallation/v2` | Apache-2.0 | https://github.com/bradleyfalzon/ghinstallation/blob/v2.19.0/LICENSE |
 | `github.com/cespare/xxhash/v2` | MIT | https://github.com/cespare/xxhash/blob/v2.3.0/LICENSE.txt |
 | `github.com/coder/websocket` | ISC | https://github.com/coder/websocket/blob/v1.8.15/LICENSE.txt |
@@ -83,7 +101,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `golang.org/x/crypto` | BSD-3-Clause | https://cs.opensource.google/go/x/crypto/+/v0.57.0:LICENSE |
 | `golang.org/x/net` | BSD-3-Clause | https://cs.opensource.google/go/x/net/+/v0.60.0:LICENSE |
 | `golang.org/x/oauth2` | BSD-3-Clause | https://cs.opensource.google/go/x/oauth2/+/v0.37.0:LICENSE |
-| `golang.org/x/sync/semaphore` | BSD-3-Clause | https://cs.opensource.google/go/x/sync/+/v0.23.0:LICENSE |
+| `golang.org/x/sync` | BSD-3-Clause | https://cs.opensource.google/go/x/sync/+/v0.23.0:LICENSE |
 | `golang.org/x/sys` | BSD-3-Clause | https://cs.opensource.google/go/x/sys/+/v0.48.0:LICENSE |
 | `golang.org/x/term` | BSD-3-Clause | https://cs.opensource.google/go/x/term/+/v0.46.0:LICENSE |
 | `golang.org/x/text` | BSD-3-Clause | https://cs.opensource.google/go/x/text/+/v0.42.0:LICENSE |

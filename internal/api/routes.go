@@ -462,7 +462,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/workspaces/{id}/env-as-code", s.handleGetEnvAsCode)
 			operatorOnly.Post("/workspaces/{id}/env-as-code/write", s.handleWriteEnvAsCode)
 
-			s.mountSecretRoutes(r, securityOps)
+			s.mountSecretRoutes(r, operatorOnly, securityOps)
 			s.mountComponentRoutes(r, operatorOnly) // components_routes.go: saved components, the caller's and the organisation's
 
 			// Site config: the operator-wide, admin-authored baseline every run
@@ -714,6 +714,8 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	securityOps.Delete("/tokens/{id}", s.handleAdminRevokeAPIToken)
 	securityOps.With(s.refuseSubjectPrincipalParam).Delete("/people/{principal}/ssh-keys", s.handleAdminDeleteSSHKeys)
 	s.mountPeopleRoutes(securityOps)
+	s.mountInvitationRoutes(r, securityOps)
+	s.mountServiceIdentityRoutes(r, securityOps)
 	s.mountSCIMStatusRoute(securityOps)
 	// Run-detail widget layout: per-user, per-preset, server-synced so a
 	// layout survives a new machine (localStorage would not). Scoped to
@@ -758,13 +760,14 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 // it only removes reach, and returns no credential material; so is the
 // inventory of who holds one for which model provider, its offboarding
 // companion (design K5-A), which returns metadata only.
-func (s *Server) mountSecretRoutes(r, securityOps chi.Router) {
+func (s *Server) mountSecretRoutes(r, operatorOnly, securityOps chi.Router) {
 	if s.cfg.Secrets == nil {
 		return
 	}
 	r.Put("/secrets/{name}", s.handlePutSecret)
 	r.Delete("/secrets/{name}", s.handleDeleteSecret)
 	r.Get("/secrets", s.handleListSecrets)
+	s.mountExplicitSecretRoutes(r, operatorOnly)
 	securityOps.With(s.refuseSubjectPrincipalParam).Delete("/people/{principal}/credentials", s.handleErasePersonCredentials)
 	securityOps.Get("/model-providers/credentials", s.handleCredentialInventory)
 }

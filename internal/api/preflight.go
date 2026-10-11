@@ -105,32 +105,29 @@ const (
 )
 
 // refusePreflightRate answers 429 when this person is over the preflight rate, true when it has
-// answered. A person only; the admin token is one shared actor name, so limiting it would pool
-// every CI job into one bucket.
+// answered. A person or a service identity; the admin token is one shared actor name, so limiting it would
+// pool every CI job into one bucket.
 func (s *Server) refusePreflightRate(w http.ResponseWriter, r *http.Request) bool {
 	if s.preflightLimiter == nil {
 		return false
 	}
-	if t, who := actorFromRequest(r); t != types.ActorHuman || s.preflightLimiter.allow(who, s.cfg.Now()) {
+	if who, limited := rateLimitedActor(r); !limited || s.preflightLimiter.allow(who, s.cfg.Now()) {
 		return false
 	}
 	writeErrorReason(w, http.StatusTooManyRequests, reasonPreflightRateLimited, "too many preflight checks; slow down")
 	return true
 }
 
-// advertisedConfinement is the classes the runner advertises, for Review's
-// default-class math, best-effort: no runner, or one that cannot answer, is
-// nil — the default then stays at the policy minimum and Review never refuses
-// on it (handlePreflightRun).
-func (s *Server) advertisedConfinement(ctx context.Context) []types.ConfinementClass {
-	if s.cfg.Runner == nil {
-		return nil
-	}
-	caps, err := s.cfg.Runner.Capabilities(ctx)
+// advertisedConfinement is the classes the request's placement advertises, for
+// Review's default-class math, best-effort: no executor, or one that cannot
+// answer (a runner that is offline included), is nil — the default then stays
+// at the policy minimum and Review never refuses on it (handlePreflightRun).
+func (s *Server) advertisedConfinement(ctx context.Context, req createRunRequest) []types.ConfinementClass {
+	pc, err := s.requestCapabilities(ctx, req)
 	if err != nil {
 		return nil
 	}
-	return caps.ConfinementClasses
+	return pc.ConfinementClasses
 }
 
 // handlePreflightRun is a DRY-RUN of handleCreateRun's resolution + gating: it
@@ -257,6 +254,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonIntegrationIDRetired, mpRunNoIntegration)
 		return
 	}
+	// Last, as in decodeAndValidateCreateRun: the same derivation create applies,
+	// so the facts below describe the tool_approvals value launch dispatches with.
+	req.ToolApprovals = effectiveToolApprovals(req, ceiling)
 
 	// Every launch gate from policy resolution to the quota fit, through the
 	// SAME fold launch runs (runFoldSteps) — called, not re-implemented, so a
@@ -348,6 +348,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		AllowedImages:            []client.AllowedImage{},
 		RunnerPools:              []client.RunnerPoolChoice{},
 	}
+	resp.RunnerPool, resp.RunnerPools = f.place.facts()
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred
 	}

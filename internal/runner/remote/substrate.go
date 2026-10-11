@@ -13,7 +13,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -57,6 +59,10 @@ type Options struct {
 	// OnEvent receives every runner event except `caps` (kept here) and
 	// `waiting` (delivered to the create that owns it).
 	OnEvent func(runnerwire.Event)
+	// Relay takes a runner-opened relay stream as a net.Conn, tagged with the
+	// session's authenticated runner id. It runs on the peer read loop, so it
+	// must not block; an error refuses the stream. Nil refuses every relay.
+	Relay func(runnerID string, conn net.Conn) error
 }
 
 // callTimeout bounds the calls an io-shaped method (Resize, ExecSession.Wait)
@@ -108,6 +114,16 @@ func (s *Substrate) Caps() (runnerwire.Caps, bool) {
 		return runnerwire.Caps{}, false
 	}
 	return *s.caps, true
+}
+
+// Advertised is the runner's last advertised classes and per-run capacity, false while it is offline
+// or has advertised nothing, so a caller never reads the unknown as zero.
+func (s *Substrate) Advertised() (runner.TargetFacts, bool) {
+	c, ok := s.Caps()
+	if !ok || !s.t.Online() {
+		return runner.TargetFacts{}, false
+	}
+	return runner.TargetFacts{Classes: slices.Clone(c.Support.Classes), CapacityAdvertised: true, CPUMillisMax: c.CPUMillisMax, MemoryMiBMax: c.MemoryMiBMax}, true
 }
 
 // HandleEvent keeps the `caps` event and passes the rest to Options.OnEvent.

@@ -65,9 +65,13 @@ func (s *outputSink) finish(err error) {
 	s.end(err)
 }
 
-// HandleOpen resumes at a raw byte offset. Duplicate prefixes are discarded;
-// a forward gap is an error. ACK follows successful writer acceptance.
+// HandleOpen serves the two streams a runner opens: a relay (handleRelay) and
+// an output copy, which resumes at a raw byte offset. Duplicate prefixes are
+// discarded; a forward gap is an error. ACK follows successful writer acceptance.
 func (s *Substrate) HandleOpen(st *runnerwire.Stream, o runnerwire.Open) error {
+	if o.Kind == runnerwire.KindRelay {
+		return s.handleRelay(st, o)
+	}
 	if o.Kind != runnerwire.KindOutput || o.Offset < 0 {
 		return ErrUnsupportedStream
 	}

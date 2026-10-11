@@ -356,9 +356,17 @@ resolves your drive the same way, in a dry run too:
 - Such a grant reads your
   row and nothing else: with no row of your own the launch is refused and says
   which secret to store.
-- Store it under the same name via `PUT /secrets/<name>`,
-  signed in as yourself, and launch again (an admin's own writes land in the
-  operator namespace, so an admin stores theirs from the user view).
+- Store it under the same name via `PUT /me/secrets/<name>`
+  (`wardyn secret set <name> --personal`), signed in as yourself, and launch again.
+  - That route writes your own row whatever your role or view; it never writes the operator's.
+  - `GET /me/secrets` lists your own names, and `DELETE /me/secrets/<name>` removes one.
+  - The admin token and local mode are no person, so they get `403` `secret_personal_needs_person`.
+- A shared service credential is stored the same explicit way, by the operator tier only:
+  `PUT /shared-secrets/<name>` (`wardyn secret set <name> --shared`).
+  - Its audit row says `scope` `shared`; your own writes say `personal`.
+- The older `PUT /secrets/<name>` keeps working unchanged and still follows your role
+  (an admin's write lands in the operator namespace); new automation should name the route it means.
+- Nothing is moved between namespaces for you: an existing secret stays where it was written.
 - A stored policy an admin writes may name a secret nobody has
   stored yet — each person's run checks their own.
 - Ask your admin to mark

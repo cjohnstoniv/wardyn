@@ -488,9 +488,9 @@ commands are the ones in "Back them up" and "Restore them", and in
 
 | Deployment | Database | Age identity and keys | Recordings (file store only) | Drives | Audit spool, `.consumed`, `.quarantine` |
 |---|---|---|---|---|---|
-| **Compose** | The `postgres_data` volume; the dump comes from the `${WARDYN_NS:-wardyn}-postgres` container. | `WARDYN_AGE_KEY` in `deploy/compose/.env`, plus the file `WARDYN_PLATFORM_KEY_FILE` names if you set it. With `WARDYN_KEK=transit` or `azurekv`, the key lives in the external key service (Vault or Azure Key Vault), which you back up separately. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. The default `pg` store is already in the dump. | One Docker volume per person, labelled `wardyn.managed=true`. A `host_path` drive is a share you already back up. | The `audit` volume, `<project>_audit`, mounted at `/data/audit`: `audit-spool.jsonl`, `.consumed` and `.quarantine` (`WARDYN_AUDIT_SPOOL` on the `wardynd` service in [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)). |
+| **Compose** | The `postgres_data` volume; the dump comes from the `${WARDYN_NS:-wardyn}-postgres` container. | `WARDYN_AGE_KEY` in `deploy/compose/.env`, plus the file `WARDYN_PLATFORM_KEY_FILE` names if you set it. With `WARDYN_KEK=transit`, `azurekv` or `awskms`, the key lives in the external key service (Vault, Azure Key Vault or AWS KMS), which you back up separately. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. The default `pg` store is already in the dump. | One Docker volume per person, labelled `wardyn.managed=true`. A `host_path` drive is a share you already back up. | The `audit` volume, `<project>_audit`, mounted at `/data/audit`: `audit-spool.jsonl`, `.consumed` and `.quarantine` (`WARDYN_AUDIT_SPOOL` on the `wardynd` service in [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)). |
 | **Managed desktop** | The `postgres_data` volume of the Compose project `wardyn-desktop` (the `compose` helper in [`deploy/desktop/wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh)). Stop the converge job first (`wardyn.timer` on Linux, the launchd job on macOS), or it restarts the stack under you. | **Not in the set, deliberately.** `age.key` stays on the device ([DESKTOP.md](DESKTOP.md#why-agekey-never-rides-in-an-mdm-payload)), so a desktop restore recovers runs, audit and drives, but not stored secrets. If you set `WARDYN_PLATFORM_KEY_FILE`, keep that file. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. | One Docker volume per person, as on Compose (a drive volume per person). | `/data/audit/audit-spool.jsonl`, `.consumed` and `.quarantine`, on the project's `audit` volume. |
-| **Helm** | The Postgres you operate (`postgres.dsn`); the chart renders none. Use that Postgres's own backup. | The Secret holding the `age-key` entry (`secrets.ageKeyFromSecret=true`), `secrets.ageKey`, or an operator-owned Secret named by `secrets.ageKeySecretRef`, or the key wired through `env`/`extraEnv`; the `WARDYN_PLATFORM_KEY_FILE` file if set; or the external key service for Vault Transit or Azure Key Vault. `secrets.allowEphemeralAgeKey=true` makes a backup unrecoverable. | The PVC, with `persistence.enabled=true` (store `fs`). With `persistence.enabled=false` the store is `off`; `env.WARDYN_RECORDING_STORE=pg` puts them in the dump. | One PVC per drive: a snapshot per claim ("User drives on Kubernetes"). | `<persistence.mountPath>/audit-spool.jsonl`, `.consumed` and `.quarantine` on the PVC. With the default `persistence.enabled=false` they sit on a `/tmp` emptyDir, so the precondition is: enable persistence, or drain and copy them before scaling to zero. |
+| **Helm** | The Postgres you operate (`postgres.dsn`); the chart renders none. Use that Postgres's own backup. | The Secret holding the `age-key` entry (`secrets.ageKeyFromSecret=true`), `secrets.ageKey`, or an operator-owned Secret named by `secrets.ageKeySecretRef`, or the key wired through `env`/`extraEnv`; the `WARDYN_PLATFORM_KEY_FILE` file if set; or the external key service for Vault Transit, Azure Key Vault or AWS KMS. `secrets.allowEphemeralAgeKey=true` makes a backup unrecoverable. | The PVC, with `persistence.enabled=true` (store `fs`). With `persistence.enabled=false` the store is `off`; `env.WARDYN_RECORDING_STORE=pg` puts them in the dump. | One PVC per drive: a snapshot per claim ("User drives on Kubernetes"). | `<persistence.mountPath>/audit-spool.jsonl`, `.consumed` and `.quarantine` on the PVC. With the default `persistence.enabled=false` they sit on a `/tmp` emptyDir, so the precondition is: enable persistence, or drain and copy them before scaling to zero. |
 
 **Inventory.** `wardynd -recovery-inventory`, run with the daemon's environment, prints each item above as JSON with its location for the deployment it sees (Compose, the managed desktop or Helm, from the runner and `WARDYN_MANAGED_DIR`). It opens no database connection and reads no key; only setting names appear, never values ([design](design/0.9/recovery-set.md#12-slices)).
 
@@ -1211,6 +1211,19 @@ erases one person's retained records by explicit scope, in one audited act
   rest.
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
 
+- **A credential write that began before the erase never lands behind it.**
+  - The `credentials` scope advances the person's erase generation before it lists anything and again after the deletes, so a write that began between the two is refused as well.
+  - Every write of a stored credential reads that generation when it begins and is refused if it has moved: `409` `credential_erased_during_write`, nothing saved.
+  - A write that begins after the erase lands, so reconnecting works at once.
+  - The check is in Postgres, so it holds across wardynd replicas and in store mode (the value is not sent to Vault or Key Vault first).
+  - The `credential.erase` row's `write_fence` is `generation`, or `locks_only` for a store that keeps no generation: then only the in-process locks hold back a writer.
+  - Migration `0156_secret_owner_generations` adds one counter per person; an owner with no row is generation 0, so every existing credential keeps working.
+  - The counter holds a number and a time, never a credential, and refuses nothing later.
+  - After a person is erased, `secret_owner_generations` still holds their subject id, the counter and the time of its last change; Wardyn never deletes that row.
+  - It stays on purpose: deleting it would reset the counter to 0, and a write that began before the erase could land again.
+  - Provider connection-change records are removed by the same erase, and a provider purge that was writing them when the erase began finishes first, so none comes back.
+  - An older wardynd running beside this one does not check it: finish the upgrade before an erase.
+
 - The `recordings` scope fences each run present in the person's run list, including its bare cast, attach sessions
   and upload parts.
 - An upload still streaming when erasure completes cannot recreate one: its final save answers `410`
@@ -1332,6 +1345,8 @@ erases one person's retained records by explicit scope, in one audited act
 4. Map Entra's `objectId` to SCIM `externalId`.
    - Wardyn matches a leaver by that object id first, then by the `entra:<tenant id>:<object id>` person, and uses an
      email only to widen a removal; without `externalId` a suspension can miss the person.
+   - If any of its names is another principal (a person created under that address, say), nothing links, and when
+     its emails name two different people, the suspension refuses until an admin resolves it.
    - `userName` and `emails` may change (renames are accepted as a projection update and the old values are kept as
      removal aliases); `externalId` may not change on a bound identity.
 5. Check a test user: suspend them from the provisioning job, then confirm a `scim.user.deactivate` row and a
@@ -1413,8 +1428,14 @@ lose access now, do not wait for it:
     - only where the owning principal is one of the leaver's own forms,
     - never another principal's that merely carries the same address.
   - Deactivation never follows an email.
-  - A person no sign-in has bound is known only by their emails, so for them every alias is cut and every principal an
-    alias resolves to is swept as theirs.
+  - Each alias is resolved the way an erasure resolves a name, so a recorded principal wins over any email claim.
+    - For a bound person, an alias that names only other principals (a person created under that address, say) is
+      never one of their forms: nothing is cut, swept, killed or deleted under it.
+    - A person no sign-in has bound is known only by their emails, so for them every alias is cut and the one principal
+      each alias names is swept as theirs. A cutoff under such an alias also ends a session or token whose email claim
+      spells it.
+    - An alias that names more than one principal, or a directory that cannot be read, stops a suspension or purge
+      before it touches anything: the request answers 5xx and a `person.deprovision` row says why.
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
   again.
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
@@ -3710,7 +3731,12 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0154` (`0154_run_agent_stopped_at`) adds `agent_runs.agent_stopped_at` (`0001`'s table), the time an outage-kept run's agent was stopped.
 - `0155` (`0155_runner_asserted_subjects`) adds asserted-run columns to `runner_pending_actions` (`0139`'s table) and replaces its
   immutability trigger function.
-- `0156` (`0156_workspace_image_build`) adds `workspaces.image_build` (`0008`'s table), the image build record.
+- `0157` (`0157_invitations_service_identities`) replaces the `actor_type` check on `audit_events` (`0001`'s table) so it
+  admits `service`, beside its new `person_invitations`, `service_identities` and `api_token_moves` tables.
+- `0158` (`0158_runner_pool_limits`) adds `runner_pools.limits` (`0152`'s table), the pool's own limits.
+- `0159` (`0159_run_lifetime_cap`) adds `agent_runs.lifetime_cap_at` and `lifetime_cap_source` (`0001`'s table), the latest end the run's pool and `WARDYN_RUN_MAX_AGE` allow, counted from launch, and which of the two bound it; existing runs keep both empty.
+- `0160` (`0160_run_pool_binding`) adds the pool binding to `agent_runs`.
+- `0161` (`0161_workspace_image_build`) adds `workspaces.image_build` (`0008`'s table), the image build record.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

@@ -358,6 +358,9 @@ func TestLeqIsFalseForEveryWidening(t *testing.T) {
 		{name: "a lifted interactive denial", wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyInteractive = false }},
 		{name: "a lifted exec denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyTaskModeExec = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyTaskModeExec = false }},
 		{name: "a lifted drive denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUserDrive = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUserDrive = false }},
+		{name: "a lifted placement denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) {
+			l.DenyPlacements = []types.Placement{types.PlacementLocal}
+		}, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyPlacements = nil }},
 		{name: "a lifted ui-app denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUIApps = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUIApps = false }},
 		{name: "a raised concurrent-run cap", wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.MaxConcurrentRuns = 40 }},
 		{name: "an unbounded concurrent-run cap", wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.MaxConcurrentRuns = 0 }},
@@ -459,6 +462,9 @@ func TestLeqIsTrueForNarrowings(t *testing.T) {
 		}},
 		{"a smaller run cap", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.MaxConcurrentRuns = 1 }},
 		{"a new denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUserDrive = true }},
+		{"a new placement denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) {
+			l.DenyPlacements = []types.Placement{types.PlacementLocal}
+		}},
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {

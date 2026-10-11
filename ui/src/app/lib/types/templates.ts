@@ -41,7 +41,7 @@ export type TemplatePart =
  * false, 0, "" or [] is a choice. Never default an absent key to a value, and
  * never drop a present one. The names are the request fields and `inline_policy`
  * (template-fields.golden.json lists them, with what omitting each means). A
- * pool is the request's own `runner_pool_id`, pending until the pools lane lands.
+ * pool is the request's own `runner_pool_id`.
  */
 export type TemplateIntent = Record<string, unknown>;
 
