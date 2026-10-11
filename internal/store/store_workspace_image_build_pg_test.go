@@ -32,7 +32,7 @@ func imageBuildWorkspace(t *testing.T, pg store.PG, imageRef string) types.Works
 func sampleImageBuild() *types.ImageBuild {
 	return &types.ImageBuild{
 		Schema: types.ImageBuildSchema, Lane: types.ImageBuildLaneGenerated, CacheKey: "key", BuildID: "build-1",
-		Reason: types.ImageBuildReasonCacheMiss, BuiltAt: time.Date(2026, 10, 11, 12, 30, 0, 123000000, time.UTC),
+		Reason: types.ImageBuildReasonCacheMiss, BuiltAt: time.Now().UTC().Truncate(time.Millisecond),
 		WardynVersion: "0.9.0", Resolved: true,
 		Inputs: types.ImageBuildInputs{
 			Base:       types.ImageBuildRef{Ref: "base:ubuntu", Digest: "sha256:aa"},
