@@ -137,9 +137,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `template_*` reasons, a declarative configuration schema for custom components, `wardyn template` and SDK methods.
   The `/templates` and `/admin/template-group-admins` routes answer `501 templates_unavailable` until the template
   store lands.
-- Runner pool contract: the run-create, preflight and policy-preview requests accept `runner_pool_id`, which the
-  server refuses with `request_field_unavailable` until the pool resolver lands (never ignored). Preflight and the
-  preview return `runner_pools`. `wardyn run --pool` and `wardyn runner pool list|default get|set|clear` are added.
+- Runner pool contract: the run-create, preflight and policy-preview requests accept `runner_pool_id`. Preflight and
+  the preview return `runner_pools`. `wardyn run --pool` and `wardyn runner pool list|default get|set|clear` are
+  added.
+- A run now lands in a runner pool: the request's pool, or the person's or the organisation's default; a missing or
+  stale default is refused, never guessed, and self-hosted pools only ever run on the launching person's own
+  runners. A run is created on, and every retry stays on, the target it was admitted against. Migration
+  `0160_run_pool_binding` adds the pool binding to `agent_runs`; existing runs keep none. A request with no run type
+  (`wardyn run` without `--experience`, or an older client) is refused `runner_pool_run_type_not_allowed` by any
+  pool that has limits.
 - `wardyn sync <run> <directory>` pushes a local directory over the audited SSH sync subsystem.
   `--pull` opts into receiving files; pulls refuse symlinks, unsafe names and executable modes,
   keep local edits on conflict and never delete files. `--watch` repeats the sync.

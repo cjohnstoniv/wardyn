@@ -43,12 +43,10 @@ type poolEnv struct {
 func newPoolEnv(t *testing.T, secondHuman bool) *poolEnv {
 	t.Helper()
 	mutate := func(c *Config) { c.Runner = &fakeRunner{}; c.RunnerOrgURL = poolTestOrgURL }
-	var g *govEnv
 	if secondHuman {
-		g = newGovEnv(t, mutate)
-	} else {
-		g = newGovEnvOn(t, throwawayPGPool(t), mutate)
+		t.Setenv(envGovernanceSecondHuman, "true")
 	}
+	g := newGovEnvOn(t, throwawayBarePGPool(t), mutate)
 	return &poolEnv{
 		govEnv:   g,
 		superTwo: ssoSession(t, poolSubSuperTwo, "super-two@corp.example", oidc.RoleAdmin),
@@ -406,8 +404,8 @@ func TestPG_RunnerPoolsLegacyBootstrapIsOneRemoteProvidedPoolOnce(t *testing.T) 
 	if e.count(`SELECT count(*) FROM runner_pool_members WHERE executor_id = 'fake'`) != 1 {
 		t.Errorf("the pool does not hold the configured executor")
 	}
-	if n := e.count(`SELECT count(*) FROM information_schema.columns WHERE table_name = 'agent_runs' AND column_name LIKE '%pool%'`); n != 0 || e.count(`SELECT count(*) FROM agent_runs`) != run {
-		t.Errorf("bootstrap touched runs: %d pool columns, %d runs (was %d)", n, e.count(`SELECT count(*) FROM agent_runs`), run)
+	if n := e.count(`SELECT count(*) FROM agent_runs WHERE runner_pool_id IS NOT NULL OR runner_pool_selection <> ''`); n != 0 || e.count(`SELECT count(*) FROM agent_runs`) != run {
+		t.Errorf("bootstrap bound %d runs to a pool, %d runs (was %d)", n, e.count(`SELECT count(*) FROM agent_runs`), run)
 	}
 	if len(e.audits(auditPoolCreate)) != 1 || len(e.audits(auditPoolDefaultSet)) != 1 {
 		t.Errorf("bootstrap audit rows: %d create, %d default", len(e.audits(auditPoolCreate)), len(e.audits(auditPoolDefaultSet)))
@@ -453,7 +451,7 @@ func TestPG_RunnerPoolsBootstrapLeavesExistingPoolsAndNeedsExecutors(t *testing.
 
 func newPoolEnvWith(t *testing.T, mutate func(*Config)) *poolEnv {
 	t.Helper()
-	return &poolEnv{govEnv: newGovEnvOn(t, throwawayPGPool(t), mutate)}
+	return &poolEnv{govEnv: newGovEnvOn(t, throwawayBarePGPool(t), mutate)}
 }
 
 // Defaults: revalidated on write for id, hosting type of the slot and state; a person's own record

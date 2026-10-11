@@ -348,6 +348,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		AllowedImages:            []client.AllowedImage{},
 		RunnerPools:              []client.RunnerPoolChoice{},
 	}
+	resp.RunnerPool, resp.RunnerPools = f.place.facts()
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred
 	}

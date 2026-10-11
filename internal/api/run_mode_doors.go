@@ -70,7 +70,7 @@ var backgroundDoors = []backgroundDoor{
 	// handleUIEnter only parses and delegates to uiEnterCommon, and handleUIBind
 	// sets a binding cookie without reading any run, so neither can ask honestly.
 	{Door: "web application gateway", Owner: "C-mode-doors", Symbols: []string{"uiEnterCommon", "uiSessionStillAuthorized"}, Enforced: true},
-	{Door: "desktop", Owner: "D-117 (no desktop surface exists yet; its first owner adds the symbols here)"},
+	{Door: "desktop", Owner: "C-mode-doors (no desktop surface exists yet; its first owner adds the symbols here)"},
 }
 
 // passiveRunRoutes are the /runs/{id} routes that are not interactive doors: they
