@@ -425,9 +425,8 @@ docker compose -f deploy/compose/docker-compose.yaml up -d postgres
 docker exec -i wardyn-postgres psql -U wardyn -v ON_ERROR_STOP=1 wardyn < wardyn-<date>.sql
 
 # 3b. A restore rewinds the sequence that orders revocations against sessions. Advance it
-#     before anything signs in (a point-in-time restore needs this; or rotate the session
-#     HMAC key instead, which ends every signed-in session). A dump from a release that predates
-#     the sequence has none: skip this step.
+#     before anything signs in (a point-in-time restore needs this). A dump from a release
+#     that predates the sequence has none: run `wardynd -migrate-only` first, then this step.
 docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c \
   "SELECT setval('oidc_revocation_seq', (SELECT last_value FROM oidc_revocation_seq) + 1000000)"
 

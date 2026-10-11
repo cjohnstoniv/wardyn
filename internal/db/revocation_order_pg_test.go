@@ -154,6 +154,12 @@ func TestMigrate_RevocationOrderFreezesLegacyTokensAndKeys(t *testing.T) {
 		exec(`INSERT INTO ssh_public_keys (fingerprint, principal, name, public_key, created_at)
 			VALUES ($2, $1, $2, 'k', now() - $3::interval)`, c.principal, c.name, c.created)
 	}
+	// carol's token and key were created at the very instant of the global cut: the time check refuses at
+	// equality, so the order must end them too.
+	exec(`INSERT INTO api_tokens (id, principal, email, name, token_sha256, created_at)
+		SELECT gen_random_uuid(), 'carol', '', 'at-global-cut', 'at-global-cut', revoked_at FROM oidc_session_revocations WHERE sub = ''`)
+	exec(`INSERT INTO ssh_public_keys (fingerprint, principal, name, public_key, created_at)
+		SELECT 'at-global-cut', 'carol', 'at-global-cut', 'k', revoked_at FROM oidc_session_revocations WHERE sub = ''`)
 	sql, err := migrationFS.ReadFile("migrations/0194_revocation_order.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -178,7 +184,7 @@ func TestMigrate_RevocationOrderFreezesLegacyTokensAndKeys(t *testing.T) {
 	}
 	want := map[string]bool{
 		"before-alice-cut": true, "between-cuts": true, "after-both": false, "by-email": true,
-		"unrelated-before-global": true, "unrelated-after-global": false,
+		"unrelated-before-global": true, "unrelated-after-global": false, "at-global-cut": true,
 	}
 	check := func(label string) {
 		t.Helper()
