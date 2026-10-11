@@ -80,11 +80,12 @@ type Hub struct {
 	mu       sync.Mutex
 	sessions map[uuid.UUID]*hubSession
 	closed   bool
+	recheck  time.Duration // revokeRecheck; a test shortens it before the first Serve
 }
 
 // NewHub does not enable dispatch when Admit is absent.
 func NewHub(ctx context.Context, cfg HubConfig) *Hub {
-	h := &Hub{ctx: ctx, cfg: cfg, sessions: map[uuid.UUID]*hubSession{}}
+	h := &Hub{ctx: ctx, cfg: cfg, sessions: map[uuid.UUID]*hubSession{}, recheck: revokeRecheck}
 	context.AfterFunc(ctx, h.Close)
 	return h
 }
@@ -183,12 +184,12 @@ func (h *Hub) serveClaimed(ctx context.Context, conn runnerwire.Conn, row types.
 // Revoke reaches only the replica holding the session; under WARDYN_HA the
 // revocation may commit on another one, and this re-read is how the holder
 // learns of it.
-var revokeRecheck = runnerwire.PingInterval
+const revokeRecheck = runnerwire.PingInterval
 
 // await holds the session until it ends, sending REVOKED once the stored row
 // says the runner was revoked, wherever that committed.
 func (h *Hub) await(ctx context.Context, id uuid.UUID, peer *runnerwire.Peer) {
-	recheck := time.NewTicker(revokeRecheck)
+	recheck := time.NewTicker(h.recheck)
 	defer recheck.Stop()
 	for {
 		select {
