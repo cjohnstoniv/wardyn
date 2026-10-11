@@ -216,7 +216,10 @@ func (p *Peer) sendFrame(ctx context.Context, f Frame) (uint64, error) {
 	if f.Type.Sequenced() {
 		f = p.replay.Assign(f)
 	}
-	if err := p.conn.WriteFrame(ctx, f); err != nil {
+	// The caller's ctx bounds only the wait for replay room. The frame is
+	// written under the link's ctx: a write whose ctx ends closes the shared
+	// connection, so a caller giving up would take every stream and call down.
+	if err := p.conn.WriteFrame(p.ctx, f); err != nil {
 		// A cancelled write can have sent any prefix of the frame. Resume is
 		// required before another sequence is safe to send on this link.
 		p.fail(err)
@@ -357,12 +360,18 @@ func (p *Peer) handleStream(f Frame) error {
 			}
 		}
 	case TypeData:
-		if s := p.stream(f.Stream); s != nil {
-			if err := s.deliver(f.Payload); errors.Is(err, ErrBadFrame) {
-				return err
-			} else if err != nil {
-				_ = s.Reset(ResetInternal)
-			}
+		s := p.stream(f.Stream)
+		if s == nil {
+			// Sent before the peer saw this stream end: dropped, so the
+			// bytes are the sender's again.
+			p.returnCredit(int64(len(f.Payload)))
+			return nil
+		}
+		if err := s.deliver(f.Payload); errors.Is(err, ErrBadFrame) {
+			return err
+		} else if err != nil {
+			p.returnCredit(int64(len(f.Payload))) // refused, not held
+			_ = s.Reset(ResetInternal)
 		}
 	case TypeWindow:
 		n, err := DecodeWindow(f.Payload)
