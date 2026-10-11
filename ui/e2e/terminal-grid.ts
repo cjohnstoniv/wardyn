@@ -64,9 +64,9 @@ export async function rowOf(screen: Locator, re: RegExp): Promise<number> {
 
 export async function dragCells(page: Page, screen: Locator, from: [number, number], to: [number, number]) {
   const grid = await settledGrid(page, screen);
+  const before = await layout(page, screen);
   const a = await cellPoint(screen, grid, from[0], from[1]);
   const b = await cellPoint(screen, grid, to[0], to[1]);
-  const before = await layout(page, screen);
   await page.mouse.move(a.x, a.y);
   await page.mouse.down();
   await page.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2, { steps: 3 });
