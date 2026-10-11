@@ -24,7 +24,7 @@ import (
 var ErrRunnerSpoolRefused = errors.New("runner audit replay refused")
 
 // IngestRunnerDecision atomically appends audit history and advances its replay
-// receipt. Killed-run acceptance is audit only: this transaction never touches
+// receipt. Terminal-run acceptance is audit only: this transaction never touches
 // lifecycle, idle clocks, credentials, grants, approvals or token renewal.
 func (s PG) IngestRunnerDecision(ctx context.Context, runnerID uuid.UUID, row runnerspool.Record, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (bool, error) {
 	if runnerID == uuid.Nil || prepare == nil || !validRunnerDecision(row) {
@@ -123,7 +123,7 @@ func runnerSpoolRun(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUID) (
 	if run.RunnerID == nil || *run.RunnerID != runnerID || run.Placement != types.PlacementLocal || run.CreatedBy != owner {
 		return run, ErrRunnerSpoolRefused
 	}
-	if run.State != types.RunRunning && run.State != types.RunKilled {
+	if run.State != types.RunRunning && !run.State.IsTerminal() {
 		return run, ErrRunnerSpoolRefused
 	}
 	return run, nil

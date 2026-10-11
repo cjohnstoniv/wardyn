@@ -21,6 +21,9 @@ func (s PG) TouchRunnerActivity(ctx context.Context, runnerID, runID uuid.UUID) 
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // committed tx is already closed
+	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout='2s'`); err != nil {
+		return err
+	}
 	run, err := runnerExecutionRun(ctx, tx, runnerID, runID)
 	if err != nil {
 		return err
