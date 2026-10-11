@@ -33,6 +33,7 @@ const (
 	GovernanceTargetKeyDomainAssignment    = "key_domain_assignment"
 	GovernanceTargetEgressBaseline         = "egress_baseline"
 	GovernanceTargetRunnerPoolUsePolicy    = "runner_pool_use_policy"
+	GovernanceTargetServiceIdentity        = "service_identity"
 )
 
 // GovernanceChange is one governance write held for a second human (migration 0126). Payload is the

@@ -127,22 +127,20 @@ func (s *Server) handleCreateServiceIdentity(w http.ResponseWriter, r *http.Requ
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonServiceIdentityUserTypeUnknown, "user_type: no such user type")
 		return
 	}
-	created, err := ss.CreateServiceIdentity(ctx, types.ServiceIdentity{
+	si := types.ServiceIdentity{
 		Name: req.Name, Description: req.Description, Sponsor: req.Sponsor, UserType: userType,
 		CreatedBy: principalFromRequest(r),
-	})
-	switch {
-	case errors.Is(err, store.ErrServiceNameTaken):
-		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityNameTaken, "that name is already used by a service identity or a principal")
+	}
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
 		return
-	case errors.Is(err, store.ErrServiceSponsorInvalid):
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonServiceIdentitySponsorInvalid, serviceSponsorMsg)
+	}
+	if mode == govQueue {
+		s.holdServiceIdentityCreate(w, r, si)
 		return
-	case errors.Is(err, store.ErrServiceUserTypeUnknown):
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonServiceIdentityUserTypeUnknown, "user_type: no such user type")
-		return
-	case err != nil:
-		writeServerError(w, r, "create service identity", err)
+	}
+	created, err := ss.CreateServiceIdentity(ctx, si)
+	if writeServiceCreateError(w, r, err) {
 		return
 	}
 	// The identity is committed: its row is written even when the sponsor's session cannot be read.
@@ -150,11 +148,32 @@ func (s *Server) handleCreateServiceIdentity(w http.ResponseWriter, r *http.Requ
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"service_identity.create", created.Principal(), "success",
 		mustJSON(map[string]any{"sponsor": created.Sponsor, "user_type": created.UserType})))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindServiceIdentity, created.Principal(), "success", nil)
+	}
 	if stateErr != nil {
 		writeServerError(w, r, "read the sponsor's session", stateErr)
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+// writeServiceCreateError answers a CreateServiceIdentity error (a held create's dry run included) and
+// reports whether it wrote one.
+func writeServiceCreateError(w http.ResponseWriter, r *http.Request, err error) bool {
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, store.ErrServiceNameTaken):
+		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityNameTaken, "that name is already used by a service identity or a principal")
+	case errors.Is(err, store.ErrServiceSponsorInvalid):
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonServiceIdentitySponsorInvalid, serviceSponsorMsg)
+	case errors.Is(err, store.ErrServiceUserTypeUnknown):
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonServiceIdentityUserTypeUnknown, "user_type: no such user type")
+	default:
+		writeServerError(w, r, "create service identity", err)
+	}
+	return true
 }
 
 const serviceSponsorMsg = "sponsor: exactly the principal of a signed-in person, as the identity provider names them; an email or an entra: alias is refused"
@@ -258,22 +277,38 @@ func (s *Server) handleUpdateServiceIdentity(w http.ResponseWriter, r *http.Requ
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonServiceIdentitySponsorInvalid, serviceSponsorMsg)
 		return
 	}
-	ctx := r.Context()
-	changed, err := ss.UpdateServiceIdentity(ctx, chi.URLParam(r, "name"), store.ServiceIdentityChange{
+	ctx, name := r.Context(), chi.URLParam(r, "name")
+	mode := govDirect
+	if req.Sponsor != nil && envEnabled(envGovernanceSecondHuman) {
+		// A PATCH that changes the sponsor is a governance write, held whole. One that names the current
+		// sponsor changes nothing there, so its sponsor is dropped and the rest applies directly: a
+		// direct write never moves the sponsor while the switch is on.
+		cur, err := ss.GetServiceIdentity(ctx, name)
+		if notFoundIf(w, err, "service identity", reasonServiceIdentityNotFound) {
+			return
+		}
+		if err != nil {
+			writeServerError(w, r, "read service identity", err)
+			return
+		}
+		if cur.Sponsor == *req.Sponsor {
+			req.Sponsor = nil
+		} else {
+			var ok bool
+			if mode, ok = s.governanceWriteMode(w, r); !ok {
+				return
+			}
+			if mode == govQueue {
+				s.holdServiceIdentityUpdate(w, r, cur, req)
+				return
+			}
+		}
+	}
+	changed, err := ss.UpdateServiceIdentity(ctx, name, store.ServiceIdentityChange{
 		Description: req.Description, Sponsor: req.Sponsor, Suspended: req.Suspended,
 		By: principalFromRequest(r),
 	})
-	switch {
-	case notFoundIf(w, err, "service identity", reasonServiceIdentityNotFound):
-		return
-	case errors.Is(err, store.ErrServiceIdentityInactive):
-		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityInactive, "the service identity is retired")
-		return
-	case errors.Is(err, store.ErrServiceSponsorInvalid):
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonServiceIdentitySponsorInvalid, serviceSponsorMsg)
-		return
-	case err != nil:
-		writeServerError(w, r, "update service identity", err)
+	if writeServiceUpdateError(w, r, err) {
 		return
 	}
 	// The change is committed: its row is written even when the sponsor's session cannot be read, with the
@@ -282,20 +317,48 @@ func (s *Server) handleUpdateServiceIdentity(w http.ResponseWriter, r *http.Requ
 	if stateErr != nil {
 		changed.After.State = changed.After.BaseState()
 	}
-	data := map[string]any{"state": changed.After.State, "tokens_revoked": changed.TokensRevoked}
+	data := serviceUpdateAuditData(changed)
+	data["state"] = changed.After.State
+	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"service_identity.update", changed.After.Principal(), "success", mustJSON(data)))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindServiceIdentity, changed.After.Principal(), "success", nil)
+	}
+	if stateErr != nil {
+		writeServerError(w, r, "read the sponsor's session", stateErr)
+		return
+	}
+	writeJSON(w, http.StatusOK, changed.After)
+}
+
+// serviceUpdateAuditData is service_identity.update's data without the state: the tokens revoked, and
+// what changed.
+func serviceUpdateAuditData(changed store.ServiceIdentityChanged) map[string]any {
+	data := map[string]any{"tokens_revoked": changed.TokensRevoked}
 	if changed.After.Sponsor != changed.Before.Sponsor {
 		data["sponsor_from"], data["sponsor_to"] = changed.Before.Sponsor, changed.After.Sponsor
 	}
 	if changed.After.Description != changed.Before.Description {
 		data["description_changed"] = true
 	}
-	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"service_identity.update", changed.After.Principal(), "success", mustJSON(data)))
-	if stateErr != nil {
-		writeServerError(w, r, "read the sponsor's session", stateErr)
-		return
+	return data
+}
+
+// writeServiceUpdateError answers an UpdateServiceIdentity error (a held change's dry run included) and
+// reports whether it wrote one.
+func writeServiceUpdateError(w http.ResponseWriter, r *http.Request, err error) bool {
+	switch {
+	case err == nil:
+		return false
+	case notFoundIf(w, err, "service identity", reasonServiceIdentityNotFound):
+	case errors.Is(err, store.ErrServiceIdentityInactive):
+		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityInactive, "the service identity is retired")
+	case errors.Is(err, store.ErrServiceSponsorInvalid):
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonServiceIdentitySponsorInvalid, serviceSponsorMsg)
+	default:
+		writeServerError(w, r, "update service identity", err)
 	}
-	writeJSON(w, http.StatusOK, changed.After)
+	return true
 }
 
 func (s *Server) handleRetireServiceIdentity(w http.ResponseWriter, r *http.Request) {
