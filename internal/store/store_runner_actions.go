@@ -26,8 +26,8 @@ var ErrRunnerActionRefused = errors.New("runner pending action refused")
 // set, so each fresh session reads the next oldest page.
 const runnerActionPageLimit = 100
 
-const actionCols = `id, runner_id, run_id, kind, ref, queued_at, applied_at, outcome, observed_at,
-	binding_version, owner, execution_generation, containment_lost_at, proof`
+const actionCols = `id, runner_id, COALESCE(run_id, asserted_run_id), kind, ref, queued_at, applied_at, outcome, observed_at,
+	binding_version, owner, execution_generation, containment_lost_at, proof, subject = 'asserted', COALESCE(obligation_id, id)`
 
 // runnerActionUnsettledSQL is the run fence: an open action, or a deferred
 // receipt, whose obligation nothing has settled. $1 is the run.
@@ -41,7 +41,7 @@ func scanAction(row pgx.Row) (types.RunnerPendingAction, error) {
 	var generation *uuid.UUID
 	var proof []byte
 	err := row.Scan(&a.ID, &a.RunnerID, &a.RunID, &kind, &a.Ref, &a.QueuedAt, &a.AppliedAt, &a.Outcome, &a.ObservedAt,
-		&version, &a.Owner, &generation, &a.LostAt, &proof)
+		&version, &a.Owner, &generation, &a.LostAt, &proof, &a.Asserted, &a.ObligationID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.RunnerPendingAction{}, ErrNotFound
 	}
@@ -90,7 +90,7 @@ func equalPtr[T comparable](a, b *T) bool {
 // sameRunnerAction compares every immutable binding except the action ID.
 func sameRunnerAction(a, b types.RunnerPendingAction) bool {
 	lost := (a.LostAt == nil) == (b.LostAt == nil) && (a.LostAt == nil || a.LostAt.Equal(*b.LostAt))
-	return a.Bound && b.Bound && a.RunnerID == b.RunnerID && a.RunID == b.RunID && a.Kind == b.Kind &&
+	return a.Bound && b.Bound && a.Asserted == b.Asserted && a.RunnerID == b.RunnerID && a.RunID == b.RunID && a.Kind == b.Kind &&
 		a.Ref == b.Ref && a.Owner == b.Owner && a.Generation == b.Generation && lost &&
 		equalPtr(a.Recovery, b.Recovery) && equalPtr(a.Quarantine, b.Quarantine) && equalPtr(a.Retirement, b.Retirement)
 }
@@ -301,6 +301,15 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 		return types.RunnerPendingAction{}, false, err
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	// The subject is immutable, so reading it before any lock is safe; an
+	// asserted subject has no run row to lock.
+	var asserted bool
+	if err := tx.QueryRow(ctx, `SELECT subject = 'asserted' FROM runner_pending_actions WHERE id = $1`, actionID).Scan(&asserted); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return types.RunnerPendingAction{}, false, err
+	}
+	if asserted {
+		return recordAssertedActionResultTx(ctx, tx, runnerID, runID, actionID, outcome, observedAt)
+	}
 	owner, run, generation, err := lockRunnerActionRun(ctx, tx, runnerID, runID)
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
@@ -309,7 +318,7 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
-	if !a.Bound || a.RunnerID != runnerID || a.RunID != runID || a.Owner != owner {
+	if !a.Bound || a.Asserted || a.RunnerID != runnerID || a.RunID != runID || a.Owner != owner {
 		return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
 	}
 	if a.AppliedAt != nil {

@@ -248,6 +248,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- A runner reporting a run the organisation has no row for (erased, or restored over) no longer blocks its other
+  runs: that run is contained by a kill and an asserted quarantine. Past 100 such runs the runner is held not-ready
+  and `runner.inventory.hold` is audited. The runner deletes their local evidence 90 days after the quarantine or at
+  revocation; the organisation deletes their action rows 90 days after the quarantine succeeded. Migration
+  `0155_runner_asserted_subjects` alters `runner_pending_actions` only.
 - A runner link survives a cancelled request instead of dropping every stream, and a link whose writes stall now
   fails by keepalive; connection credit is no longer lost for data that arrives after a stream ends; a trailing
   slash on `WARDYN_CONTROL_PLANE_URL` no longer breaks the proxy's internal calls.

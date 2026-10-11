@@ -6,8 +6,12 @@ package offline
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
 
@@ -22,6 +26,10 @@ func (m *Manager) quarantineRun(ctx context.Context, a runnerwire.PendingAction,
 	}
 	proof := *a.Quarantine
 	a.Quarantine = &proof
+	if r.Quarantine == nil {
+		at := m.now().UTC()
+		r.QuarantinedAt = &at
+	}
 	r.Quarantine = &proof
 	m.state.Runs[a.RunID] = r
 	m.state.Actions[a.ID] = appliedAction{Action: a}
@@ -53,4 +61,44 @@ func (m *Manager) actionReceipt(a runnerwire.PendingAction, outcome string) (run
 	result := runnerwire.ActionResult{ID: a.ID, Outcome: outcome, ObservedAt: m.now().UTC()}
 	m.state.Actions[a.ID] = appliedAction{Action: a, Result: result}
 	return result, m.save()
+}
+
+// eraseAssertedEvidence deletes the spool, output and exit of an org-erased
+// (asserted) run once its quarantine is contained and either the runner is
+// revoked or types.RunnerAssertedEvidenceTTL has passed since the quarantine.
+// The compact identity, quarantine and attempted generations stay behind as
+// tombstones, so the run can never be recreated or executed.
+func (m *Manager) eraseAssertedEvidence() error {
+	m.mu.Lock()
+	if err := m.ensureDurable(); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	now := m.now()
+	var due []uuid.UUID
+	for id, r := range m.state.Runs {
+		if r.Quarantine != nil && r.Quarantine.Asserted && !r.EvidenceErased && r.ProxyStoppedAt != nil && r.QuarantinedAt != nil &&
+			(m.state.Revoked || now.Sub(*r.QuarantinedAt) >= types.RunnerAssertedEvidenceTTL) {
+			due = append(due, id)
+		}
+	}
+	m.mu.Unlock()
+	var errs []error
+	for _, id := range due {
+		if err := errors.Join(os.RemoveAll(filepath.Join(m.dir, "spools", id.String())), m.eraseOutput(id)); err != nil {
+			errs = append(errs, fmt.Errorf("erase run %s evidence: %w", id, err))
+			continue
+		}
+		m.mu.Lock()
+		before := m.state.Runs[id]
+		r := before
+		r.Exit, r.EvidenceErased = nil, true
+		m.state.Runs[id] = r
+		if err := m.save(); err != nil {
+			m.state.Runs[id] = before
+			errs = append(errs, err)
+		}
+		m.mu.Unlock()
+	}
+	return errors.Join(errs...)
 }

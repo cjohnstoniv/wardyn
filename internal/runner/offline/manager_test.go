@@ -22,6 +22,7 @@ type localSub struct {
 	substrate.Substrate
 	mu           sync.Mutex
 	stops, kills int
+	statuses     int
 	stopErr      error
 	status       runner.Status
 	agent        runner.Status
@@ -43,6 +44,7 @@ func (s *localSub) KillSandbox(context.Context, string) error {
 func (s *localSub) Status(context.Context, string) (runner.Status, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.statuses++
 	return s.status, nil
 }
 func (s *localSub) AgentStatus(context.Context, string, string) (runner.Status, error) {
@@ -54,7 +56,7 @@ func (s *localSub) AgentStatus(context.Context, string, string) (runner.Status, 
 func managerFixture(t *testing.T) (*Manager, *localSub, *time.Duration, time.Time) {
 	t.Helper()
 	sub := &localSub{status: runner.Status{State: types.RunRunning}, agent: runner.Status{State: types.RunRunning}}
-	m, err := New(t.TempDir(), uuid.New(), sub, uuid.UUID.String, noOutput)
+	m, err := New(t.TempDir(), uuid.New(), sub, uuid.UUID.String, noOutput, noErase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +121,7 @@ func TestOfflineKeepsAgentUntilMonotonicProxyLapse(t *testing.T) {
 	if sub.stops != 1 || sub.kills != 0 {
 		t.Fatalf("lapse containment: stops=%d kills=%d", sub.stops, sub.kills)
 	}
-	rows, err := m.State(ctx)
+	rows, err := allState(ctx, m)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,14 +154,14 @@ func TestCreateRequiresInitialLeaseAndRejectsAmbiguousRetry(t *testing.T) {
 func TestRestartContainsUnknownDeadlineAndRetainsState(t *testing.T) {
 	m, sub, _, org := managerFixture(t)
 	id := createLocal(t, m, org)
-	if duplicate, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput); err == nil {
+	if duplicate, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase); err == nil {
 		duplicate.Close()
 		t.Fatal("two daemons own lifecycle state")
 	}
 	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +201,7 @@ func TestAgentExitUsesPersistedExecAndPendingActionsAreStable(t *testing.T) {
 	}
 	code := 7
 	sub.agent = runner.Status{State: types.RunStopped, ExitCode: &code}
-	if _, err := m.State(ctx); err != nil {
+	if _, err := allState(ctx, m); err != nil {
 		t.Fatal(err)
 	}
 	if got := m.state.Runs[id].Exit; got == nil || got.Code != 7 {
@@ -240,7 +242,7 @@ func TestAmbiguousCreateIntentStillContainsAfterRestart(t *testing.T) {
 	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +318,7 @@ func TestFailedCreateContainsImmediatelyAndRetriesWhileLeaseLive(t *testing.T) {
 	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,3 +358,5 @@ func TestFailedCreateContainsImmediatelyAndRetriesWhileLeaseLive(t *testing.T) {
 
 // noOutput models fixtures with no output producer; production supplies runnerio.
 func noOutput(context.Context, uuid.UUID, string) (int64, bool, error) { return 0, true, nil }
+
+func noErase(uuid.UUID) error { return nil }

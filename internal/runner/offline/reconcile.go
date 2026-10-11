@@ -156,19 +156,6 @@ func (m *Manager) AgentExited(ctx context.Context, id uuid.UUID, localRef string
 	return m.save()
 }
 
-// State queries the real substrate: a persisted Created ref may have been
-// rolled back by a subsequent output-binding failure.
-func (m *Manager) State(ctx context.Context) ([]runnerwire.RunState, error) {
-	m.mu.Lock()
-	if err := m.ensureDurable(); err != nil {
-		m.mu.Unlock()
-		return nil, err
-	}
-	ids := m.inventoryIDs()
-	m.mu.Unlock()
-	return m.stateRows(ctx, ids)
-}
-
 func (m *Manager) runIDs() []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(m.state.Runs))
 	for id := range m.state.Runs {

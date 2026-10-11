@@ -6,6 +6,8 @@ package runnerio
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/google/uuid"
@@ -35,4 +37,27 @@ func (s *Server) OutputSettled(ctx context.Context, id uuid.UUID, ref string) (i
 		return 0, false, b.stopped
 	}
 	return b.state.End, b.state.Complete && !b.interrupted && b.state.Failure == "" && b.state.Ack == b.state.End, nil
+}
+
+// errOutputErased stops readers and writers of an output deleted under the
+// retention ceiling for an org-erased run.
+var errOutputErased = errors.New("runnerio: output erased")
+
+// EraseOutput deletes a run's retained output, for an org-erased run whose
+// quarantined evidence reached its retention ceiling. It is idempotent.
+func (s *Server) EraseOutput(id uuid.UUID) error {
+	if id == uuid.Nil {
+		return errors.New("runnerio: missing output run id")
+	}
+	s.mu.Lock()
+	b := s.outputs[id]
+	delete(s.outputs, id)
+	s.mu.Unlock()
+	if b != nil {
+		b.mu.Lock()
+		b.stopped = errOutputErased
+		b.notify()
+		b.mu.Unlock()
+	}
+	return os.RemoveAll(filepath.Join(s.dir, id.String()))
 }

@@ -44,7 +44,7 @@ func TestRetirementWaitsForObserverThroughDurableExit(t *testing.T) {
 	held := heldExitSub{sub, make(chan struct{}), make(chan struct{})}
 	m.sub = held
 	done := make(chan error, 1)
-	go func() { _, err := m.State(t.Context()); done <- err }()
+	go func() { _, err := allState(t.Context(), m); done <- err }()
 	<-held.entered
 	result, err := m.apply(t.Context(), a)
 	if err != nil || result.Outcome != "deferred" {
