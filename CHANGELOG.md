@@ -224,6 +224,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (`authz.denied`, `mask_state_unavailable`, target `exec.relay`) and a pending output row is kept so the sweeper
   records a capture gap with its reason. A run that failed while starting, before any output was opened, no longer
   writes a spurious `no_tail` capture gap (#1976).
+- On a PostgreSQL server shared with another Wardyn install, a lock held in the other database no longer silences
+  this install's sweeper leader and ground-truth rotator: the lock check is scoped to the current database.
+- The best-effort webhook audit sink no longer follows a 301, 302 or 303 redirect, which turned its POST into a GET
+  and counted a 2xx as delivered while the events were lost; 307 and 308 are still followed.
 
 ## [0.8.9] — 2026-10-09
 
