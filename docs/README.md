@@ -26,9 +26,18 @@
 | Run the blessed compose stack (no-login local mode, TLS) | [../deploy/compose/README.md](../deploy/compose/README.md) |
 | Deploy to a Kubernetes cluster (Helm chart, quickstart, k8s runner substrate) | [../deploy/helm/wardyn/README.md](../deploy/helm/wardyn/README.md) |
 | Run a local daemon on each developer's managed laptop (MDM envelope, and its ceiling) | [DESKTOP.md](DESKTOP.md) + [../deploy/desktop/](../deploy/desktop/) |
-| Set up SSO (Entra ID / OIDC) and admin/member RBAC on a cluster install | [OPERATIONS.md](OPERATIONS.md#multi-user-who-can-change-what) + the `wardyn-k8s-setup` Claude Code skill |
+| Set up SSO (Entra ID / OIDC) and admin/member RBAC on a cluster install | [operations/who-gets-in.md](operations/who-gets-in.md) + the `wardyn-k8s-setup` Claude Code skill |
 | Give each person their own Azure DevOps access | [AZURE-DEVOPS.md](AZURE-DEVOPS.md) |
-| Cap what one person or group may do — governance profiles, the security-admin tier, capability grants | [OPERATIONS.md](OPERATIONS.md#three-roles-and-who-sets-the-walls) |
+| See which writes are admin-only and which sit on the security-admin tier | [operations/admin-only-writes.md](operations/admin-only-writes.md) |
+| Cap what one person or group may do — governance profiles, the security-admin tier, capability grants | [operations/three-roles.md](operations/three-roles.md) + [operations/capabilities.md](operations/capabilities.md) |
+| Narrow what a member's own run may reach — egress, secrets, images, agents, features | [operations/member-runs.md](operations/member-runs.md) + [operations/capabilities.md](operations/capabilities.md) |
+| Turn a governance write into a two-human decision, and work the approval queue | [operations/governance-writes.md](operations/governance-writes.md) |
+| Stop sharing the admin token — a token per person, and tokens for someone who never signs in | [operations/api-tokens.md](operations/api-tokens.md) |
+| Give each person persistent storage, and reclaim it when they leave | [operations/user-drives.md](operations/user-drives.md) |
+| Offboard a person: sessions, tokens, keys, runs, credentials, workspaces, drives | [operations/ownership-and-offboarding.md](operations/ownership-and-offboarding.md) |
+| Write the organisation's provider policy — console, CLI or MDM | [operations/provider-policy.md](operations/provider-policy.md) |
+| Look up why a member was refused (`authz.denied` reasons and their targets) | [operations/denials.md](operations/denials.md) |
+| Configure an org component, and what a launch leaves behind | [operations/custom-components.md](operations/custom-components.md) |
 | Runnable sample workspaces, one per governance control | [../examples/](../examples/) |
 | See which exported functions have no test (`make test-gaps`) | [TEST-GAPS.md](TEST-GAPS.md) |
 | Run the live tests against real Entra/ADO/Bedrock | [LIVE-TESTS.md](LIVE-TESTS.md) |

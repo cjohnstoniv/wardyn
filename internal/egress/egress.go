@@ -255,6 +255,35 @@ func ValidHeaderName(name string) bool {
 	return true
 }
 
+// Non-policy DENY rule_sources: rows where policy ALLOWED the destination and
+// the NETWORK then lost it. The host was never refused, so every consumer that
+// asks "did policy refuse this?" must exclude them — the deny counter
+// (isPolicyDeny), observed-egress promotion candidates
+// (handleObservedEgress) and Record Mode's deny/anomaly accounting all read
+// this one predicate rather than each keeping its own copy of the list.
+//
+// Deliberately ABSENT, because each is a refusal of something rather than a
+// network fault, and each exclusion has to be re-derived if it is added here:
+// builtin:resolve-failed (a name that did not resolve), the gateway-vet guard
+// refusal, builtin:upstream-protocol-mismatch (a round trip that GOT an
+// answer), credential:reauth-timeout and the dropped-decisions summary.
+const (
+	// RuleSourceDialFailed marks a request policy ALLOWED and the dial that
+	// followed losing the connection.
+	RuleSourceDialFailed = "builtin:dial-failed"
+	// RuleSourceTunnelFailed marks a CONNECT tunnel acknowledged and then
+	// broken before it carried an answer; the dial succeeded, so the allow row
+	// stands and this deny follows it.
+	RuleSourceTunnelFailed = "builtin:tunnel-failed"
+)
+
+// IsNetworkFault reports whether rule_source marks a network fault — a
+// destination policy ALLOWED and the network lost the connection — rather than
+// a refusal. Callers that count or report policy denials exclude these.
+func IsNetworkFault(ruleSource string) bool {
+	return ruleSource == RuleSourceDialFailed || ruleSource == RuleSourceTunnelFailed
+}
+
 // maxHeaderNameLen bounds an authored header name. No real field name comes
 // close; the cap exists so a pathological value cannot ride into logs, audit
 // details and proxy config.

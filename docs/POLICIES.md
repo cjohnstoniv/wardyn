@@ -755,7 +755,7 @@ What the check does and does not settle:
 - A component is a named set of destinations and secrets that a run carries beside its policy. It is not a `RunPolicySpec` field.
 - At launch Wardyn expands each component into policy primitives: its hosts join `allowed_domains`, and each secret becomes an `eligible_grants` entry ([`internal/api/components_run.go#componentGrant`](../internal/api/components_run.go)).
 - The run's resolved policy therefore shows the expansion, not the component.
-- Admins set who may use components in [OPERATIONS.md](OPERATIONS.md#custom-components); the clients are in [sdk.md](sdk.md#custom-components).
+- Admins set who may use components in [custom-components.md](operations/custom-components.md); the clients are in [sdk.md](sdk.md#custom-components).
 
 | Kind | Who writes it | Where it lives |
 |---|---|---|
@@ -823,7 +823,7 @@ What the check does and does not settle:
 - **No policy field can widen it**: this is not an egress rule, an `allowed_domains` entry or a grant, so there is no field to add and nothing a ceiling narrows.
 - A `workspace_provider` capability grant does not widen it either — that kind bounds which provider row a MEMBER's work may come from, a second and narrower question; admission binds operators too.
 - Read the refusal as "the org does not clone from there", never as "your policy is wrong".
-- A deployment with no provider rows admits what it admitted in 0.7.1; see [OPERATIONS.md](OPERATIONS.md#multi-user-who-can-change-what) for who writes the rows and [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) residual #40 for what the match rule actually bounds.
+- A deployment with no provider rows admits what it admitted in 0.7.1; see [provider-policy.md](operations/provider-policy.md) for who writes the rows and [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) residual #40 for what the match rule actually bounds.
 
 ## `ui_apps[]` — `UIApp`
 
@@ -854,7 +854,7 @@ What the check does and does not settle:
 - A caller's own `"tool_approvals": "auto"` can still be overridden:
   - since 0.8, a non-interactive run resolved to autonomy level `L1` under a governance profile's rubric has it derived down to `hold` regardless of what was requested,
   - and the 201 carries a warning saying so (an agent with no tool-approval lane is refused instead)
-  - See [OPERATIONS.md § Three roles, and who sets the walls](OPERATIONS.md#three-roles-and-who-sets-the-walls) for the rubric that decides it.
+  - See [three-roles.md § Three roles, and who sets the walls](operations/three-roles.md#three-roles-and-who-sets-the-walls) for the rubric that decides it.
 - The level never rewrites `tool_rules`, but it decides whether they take effect.
 - Under `auto` the tool gate is not wired and the rules are never consulted, so the `L1` switch to `hold` is what brings a run's `tool_rules` into force.
 

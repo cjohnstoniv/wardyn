@@ -5,7 +5,6 @@ package types
 
 import (
 	"fmt"
-	"slices"
 )
 
 // RunExperience is the canonical run mode a person chose when the run was
@@ -27,27 +26,15 @@ func (e RunExperience) Valid() bool {
 	return e == ExperienceBackground || e == ExperienceInteractive
 }
 
-// RunExperiences is every run type, in the order the console lists them.
-var RunExperiences = []RunExperience{ExperienceBackground, ExperienceInteractive}
-
-// ExperienceAllowed is the one predicate a pool's run-type limit calls: whether a
-// run of type e may start where allowed lists the run types the place permits
-// (Background only, Interactive only, or both).
-//
-// e is the STORED experience: the value the run row will carry and every
-// interactive door reads (AgentRun.Experience, or CreateRunRequest.Experience
-// exactly as it will be stored). Admission and the doors must see one value, so
-// a request with no experience (an older client's shape) is stored as "" and
-// never satisfies a limit that lists run types, however its legacy fields read.
-// Never pass CreateRunRequest.EffectiveExperience: it infers a type the run will
-// not be stored with. A place with no run-type limit does not call this, so an
-// older client keeps today's behaviour there.
-//
-// It fails closed: an empty list permits nothing and an unset or unknown type is
-// never allowed.
-func ExperienceAllowed(allowed []RunExperience, e RunExperience) bool {
-	return e.Valid() && slices.Contains(allowed, e)
-}
+// A pool's run-type limit is RunnerPoolLimits.AllowsRunType, and it is called with
+// the run's STORED experience, the value every interactive door reads
+// (AgentRun.Experience, or CreateRunRequest.Experience exactly as it will be
+// stored). Admission and the doors must see one value, so a request with no
+// experience (an older client's shape) is stored as "" and never satisfies a
+// limit that lists run types, however its legacy fields read. Never pass
+// CreateRunRequest.EffectiveExperience: it infers a type the run will not be
+// stored with. A place with no run-type limit does not call it, so an older
+// client keeps today's behaviour there.
 
 // BackgroundOnly is the one predicate every interactive door of a run calls
 // (attach, interactive exec, SSH, the UI gateway, a desktop session, a restored

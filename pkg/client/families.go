@@ -213,6 +213,11 @@ func (c *Client) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 // ever stored (PLATFORM-API-5). Stripped here, once, so no caller has to
 // remember to (mirrors ui/src/app/lib/api/health.ts's identical fix on the
 // TS side).
+//
+// Runners is stripped the same way: runners.enabled has its own audited super-admin
+// route (SetRunnersEnabled), and the server refuses a document that names a value
+// other than the stored one, which a captured baseline applied after a reset, or a
+// managed file re-applied on every boot, would otherwise be.
 func (c *Client) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (
 	out types.SiteConfig, danglingSecretRefs []string, onboardingMarkIgnored bool, err error,
 ) {
@@ -240,6 +245,7 @@ type SiteConfigPutResult struct {
 // the ones added after its signature was fixed. PUT /api/v1/site-config.
 func (c *Client) PutSiteConfigResult(ctx context.Context, cfg types.SiteConfig) (SiteConfigPutResult, error) {
 	cfg.Integrations = nil
+	cfg.Runners = nil
 	var resp SiteConfigPutResult
 	err := c.do(ctx, http.MethodPut, "/api/v1/site-config", cfg, &resp)
 	return resp, err

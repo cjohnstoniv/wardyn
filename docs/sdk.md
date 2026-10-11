@@ -253,6 +253,8 @@ fmt.Println(out.Output, out.Truncated, out.Complete, out.Source)
   asciicast output.
   The latter two retain the recording's owner-or-operator privacy
   gate, even after recording is disabled.
+  A portal's delegated token reads `stdout` output only; for the other two
+  it gets the 409 a run with no such row gives, audited `delegation_scope`.
 - `incomplete` says bytes may be missing
   and is always true for recording recovery.
 - `capture_gap` says capture or recovery
@@ -346,7 +348,7 @@ A successful response contains `spec` (authorized, clamped, workspace-folded and
 
 ## Custom components
 
-A run can carry components that add destinations and secrets ([POLICIES.md](POLICIES.md#custom-components) defines them; [OPERATIONS.md](OPERATIONS.md#custom-components) is the admin side). The client wraps both stores of them.
+A run can carry components that add destinations and secrets ([POLICIES.md](POLICIES.md#custom-components) defines them; [custom-components.md](operations/custom-components.md) is the admin side). The client wraps both stores of them.
 
 | Method | Route | Who |
 |---|---|---|
@@ -457,6 +459,12 @@ silent gap:
 | `runner_registration_rate_limited` | Too many registration attempts; retry later. |
 | `runner_registration_invalid` / `runner_owner_invalid` | Registration fields or token owner are invalid. |
 | `runner_key_already_registered` | This key is already registered; generate a new identity. |
+| `runner_not_found` / `runner_token_not_found` | No such runner or unused token for this caller; another person's runner answers as an absent id. |
+| `runner_filter_invalid` | `state` is not `active`, `revoked` or `all`. |
+| `runner_session_required` | `/me/runners` needs the person's own session; administrative and delegated credentials own no runner. |
+| `runners_enabled_required` | `PUT /runners/settings` needs `enabled`: true or false. |
+| `runners_org_url_invalid` | Runners cannot be turned on until the organisation and control-plane URLs are HTTPS. |
+| `site_config_runners_via_own_route` | Change `runners.enabled` with `PUT /runners/settings`. |
 | `runner_token_invalid` | Registration token is unknown, expired, consumed, or bound to another org. |
 | `runner_claim_mismatch` | The personal owner, fingerprint, org binding, claim state, or expiry does not match. |
 | `missing_scope_snapshot` | The grant names the credential sentinel but carries no dispatch-time snapshot (a hand-authored grant). Azure DevOps, AWS SSO; and every grant naming `bedrock-api-key`, which is no longer a model credential. |

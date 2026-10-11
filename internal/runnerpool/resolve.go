@@ -32,6 +32,11 @@ type Refusal struct {
 	// runner's name, or the id as the caller sent it. A runner that is not the
 	// caller's is never named, it is answered like an unknown one.
 	Runner string
+	// RunType, Barrier and Allowed carry what the pool-limit reasons name: the run
+	// type or barrier asked for and the barriers the pool allows.
+	RunType types.RunnerPoolRunType
+	Barrier types.ConfinementClass
+	Allowed []types.ConfinementClass
 }
 
 func (r *Refusal) Error() string { return r.Message() }
@@ -64,6 +69,10 @@ func (r *Refusal) Message() string {
 		return NoEligibleMemberMsg(r.Name)
 	case ReasonPoolsUnavailable:
 		return UnavailableServerMsg()
+	case ReasonRunTypeNotAllowed:
+		return RunTypeNotAllowedMsg(r.Name, r.RunType)
+	case ReasonBarrierNotAllowed:
+		return BarrierNotAllowedMsg(r.Name, r.Barrier, r.Allowed)
 	}
 	return InvalidMsg()
 }

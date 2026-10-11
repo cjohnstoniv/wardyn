@@ -90,7 +90,15 @@ type setupCheckLite struct {
 }
 type setupStatusLite struct {
 	Ready  bool             `json:"ready"`
+	Tier   string           `json:"tier"`
 	Checks []setupCheckLite `json:"checks"`
+}
+
+// tierLabels are the PLAN §10.3 tier ids' words, the same ones the console's account menu shows.
+var tierLabels = map[string]string{
+	"local-only": "local only — not governed by an organisation",
+	"runner":     "client-mode runner for an organisation",
+	"org":        "organisation",
 }
 
 func fetchSetupStatus(ctx context.Context, c *sdk.Client) (setupStatusLite, error) {
@@ -138,6 +146,9 @@ func setupStatusCmd(client clientFn) *cobra.Command {
 				ready = "ready"
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Wardyn setup: %s\n", ready)
+			if label := tierLabels[st.Tier]; label != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "Tier: %s\n", label)
+			}
 			for _, ck := range st.Checks {
 				fmt.Fprintf(cmd.OutOrStdout(), "  [%-4s] %s: %s\n", ck.Status, ck.Label, ck.Detail)
 				if ck.Fix != "" {

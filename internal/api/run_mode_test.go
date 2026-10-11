@@ -238,7 +238,7 @@ func TestRunModeIsStoredOnlyWhenChosen(t *testing.T) {
 // place refuses it; it is never admitted as a background run that the doors then
 // leave attachable.
 func TestAdmissionAndTheDoorsReadOneValue(t *testing.T) {
-	backgroundOnlyPool := []types.RunExperience{types.ExperienceBackground}
+	backgroundOnlyPool := types.RunnerPoolLimits{Background: &types.RunnerPoolBackgroundLimits{}}
 	for _, tc := range []struct {
 		name         string
 		req          createRunRequest
@@ -255,13 +255,14 @@ func TestAdmissionAndTheDoorsReadOneValue(t *testing.T) {
 				t.Fatalf("refused: %+v", refusal.body)
 			}
 			stored := types.AgentRun{Experience: req.Experience}
-			if got := types.ExperienceAllowed(backgroundOnlyPool, stored.Experience); got != tc.wantAdmitted {
+			if got := backgroundOnlyPool.AllowsRunType(types.RunnerPoolRunType(stored.Experience)); got != tc.wantAdmitted {
 				t.Errorf("a Background-only place admitted = %v, want %v", got, tc.wantAdmitted)
 			}
-			if admitted := types.ExperienceAllowed(backgroundOnlyPool, stored.Experience); admitted != stored.BackgroundOnly() {
+			if admitted := backgroundOnlyPool.AllowsRunType(types.RunnerPoolRunType(stored.Experience)); admitted != stored.BackgroundOnly() {
 				t.Errorf("admitted as background = %v but the doors read BackgroundOnly = %v", admitted, stored.BackgroundOnly())
 			}
-			if types.ExperienceAllowed(types.RunExperiences, "") {
+			bothTypes := types.RunnerPoolLimits{Background: &types.RunnerPoolBackgroundLimits{}, Interactive: &types.RunnerPoolInteractiveLimits{}}
+			if req.Experience == "" && bothTypes.AllowsRunType(types.RunnerPoolRunType(stored.Experience)) {
 				t.Error("an unset experience satisfied a limit that lists both run types")
 			}
 		})

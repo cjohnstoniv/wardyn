@@ -10,6 +10,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- Migration `0143_provider_connection_changes` adds an empty, secret-free history table for why a model connection
+  became unavailable. Removals from before the upgrade have no recorded cause.
 - For filtered OIDC group claims, check the new transitive-membership procedure in Operations:
   Wardyn cannot detect groups omitted by the identity provider. Re-key affected grants and
   governance assignments to groups actually present in the claim (#1518).
@@ -44,6 +46,23 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- Runners management API: `GET /runners` (active, revoked or all, with each runner's live online state and the runs on
+  it), `GET /runners/{id}`, and the caller-scoped `GET /me/runners`, which shows a person only their own runners and
+  abbreviates an unclaimed runner's fingerprint. Security admins can list and revoke unused registration tokens (never
+  a token value); minting stays admin only. `runners.enabled` changes only through `PUT /runners/settings` (admin,
+  audited `runners.enabled.set`, refused until the organisation URL is HTTPS); `PUT /site-config` now refuses a
+  changed value. Unclaimed runners lapse and are swept after 24 hours. CLI: `wardyn runner list`, `wardyn runner
+  tokens list|revoke`. Migration `0144_runner_minted_by` records who minted each runner's registration token (#1965).
+- `wardyn run --placement remote|local` and `--runner <id>` choose where a run's sandbox lives. Both are passed to the
+  server unchanged, so its placement refusals reach the CLI as they are. `--pool` is accepted and refused at run create
+  until runner-pool selection lands (#109).
+- Model connections say why they became unavailable: never connected, removed because an admin changed the provider's
+  address or kind (with the new destination host to review before reconnecting), or the credential store could not be
+  read ("could not check"; the credential may still be there). The record is owner-scoped and holds no secret; it is
+  cleared on reconnect, removed with the provider or by person erasure, and a provider recreated with a new identity
+  inherits no history. Older clients keep the neutral wording.
+- `GET /api/v1/setup/status` gains `tier` (`local-only`, `runner`, `org`); `wardyn setup status` prints it, the
+  console account menu names it and the top bar shows a chip on local-only installs.
 - Run template contract: reusable run setups published per person, organisation or group. A template is read strictly
   (unknown fields, secrets, run state, owner fields, titles and descriptions are refused) through one validator for
   text and structs, and its partial policy is laid onto the source policy rather than replacing it. Adds the
@@ -89,6 +108,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- A portal's delegated token can read the output tail of its person's runs (`GET /runs/{id}/output`) and nothing
+  recovered from a recording: for output recovered from a recording and an interactive run's last screen it gets the
+  same 409 a run with no such row gives (the refusal is audited `delegation_scope`), and a failed run's failure hint
+  is served without its quote from the recording. (#1423)
+- Docs: `docs/AZURE-DEVOPS.md` explains what an Azure DevOps run gets on a laptop runner: only the person's own
+  stored PAT, while `minted_pat` and `bearer` runs placed on a laptop are refused (`placement_credential`).
+  `docs/DESKTOP.md` explains why a member-mode laptop still enrols into an SSO-only organisation (#475).
+- `scripts/kind-run-output-walk.sh` gains a recording-on mode (`WARDYN_KIND_WALK_RECORDING=pg`) that proves a
+  Kubernetes task's printed line reaches `/output` from the recording, marked `source: recording`, with a registered
+  secret masked (#1831).
+- Docs: the operator manual's multi-user material (people, governance, capabilities, API tokens and related tasks) is
+  split into task pages under `docs/operations/`, each linked from `docs/README.md`; every old heading in
+  `docs/OPERATIONS.md` keeps a stub that links to its new home.
+- HA followers check the sweeper and rotator lifetime locks with a read-only `pg_locks` query on the pool before
+  opening a dedicated session, instead of dialling a new session every 15 and 30 seconds.
+- CI and the nightly log in to Docker Hub (read-only) when the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository
+  secrets are set, including the PostgreSQL service containers; without them, pulls stay anonymous.
+- `WARDYN_ORG_URL` (org enrolment of a full daemon) logs a deprecation warning at boot; enrolment is removed in 1.0.
+  Use a client-mode runner. DESKTOP.md gains a tier table and the managed-laptops page is rewritten for client-mode
+  runners.
 - Own-runner (local) eligibility classifies the complete dispatch plan: own credentials are separated from operator,
   brokered and platform-minted material, every unclassified or unknown field refuses, own stored grants are persisted
   owner-only after the owner's namespace is proven, and a self-defined component on a local run needs
@@ -116,6 +155,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- Record Mode no longer counts a network fault (`builtin:dial-failed`, `builtin:tunnel-failed`) as a policy denial,
+  so a lost connection no longer fails a clean replay, raises an open-recording anomaly or adds an unreached host to
+  the generated allowlist.
+- The egress proxy forwards bytes a client pipelined behind its CONNECT headers to the tunnel instead of dropping
+  them; every policy check still runs before the tunnel opens.
+- The exec-inspect read that decides whether an agent exited addresses the configured Docker daemon instead of a
+  placeholder host, and refuses an unparsable daemon address.
 - UI e2e: a later step in the same job no longer empties `flaky.tsv`, so a shard's flaky tests reach the flaky-test
   notifier; `make test-e2e-ui` starts each local run with an empty file.
 - The audit screen describes `run.policy.resolve` and `run.upstream_proxy.resolve` in words instead of raw action names.

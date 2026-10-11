@@ -119,28 +119,29 @@ func TestDispatchCarrierValidators(t *testing.T) {
 	}
 }
 
-// TestExperienceAllowedIsThePoolRunTypeLimit pins the predicate a pool's
-// allowed-run-types limit calls: both types, one type, and failing closed.
-func TestExperienceAllowedIsThePoolRunTypeLimit(t *testing.T) {
-	both := RunExperiences
+// TestPoolRunTypeLimitReadsTheStoredExperience pins how a pool's run-type limit
+// meets the stored experience: both types, one type, and failing closed for a
+// run an older client launched (stored with none).
+func TestPoolRunTypeLimitReadsTheStoredExperience(t *testing.T) {
+	both := RunnerPoolLimits{Background: &RunnerPoolBackgroundLimits{}, Interactive: &RunnerPoolInteractiveLimits{}}
+	backgroundOnly := RunnerPoolLimits{Background: &RunnerPoolBackgroundLimits{}}
+	interactiveOnly := RunnerPoolLimits{Interactive: &RunnerPoolInteractiveLimits{}}
 	for _, tc := range []struct {
-		name    string
-		allowed []RunExperience
-		e       RunExperience
-		want    bool
+		name   string
+		limits RunnerPoolLimits
+		stored RunExperience
+		want   bool
 	}{
 		{"both allow background", both, ExperienceBackground, true},
 		{"both allow interactive", both, ExperienceInteractive, true},
-		{"background only refuses interactive", []RunExperience{ExperienceBackground}, ExperienceInteractive, false},
-		{"background only allows background", []RunExperience{ExperienceBackground}, ExperienceBackground, true},
-		{"interactive only refuses background", []RunExperience{ExperienceInteractive}, ExperienceBackground, false},
-		{"an empty list permits nothing", nil, ExperienceBackground, false},
-		{"an unset type is never allowed", both, "", false},
+		{"background only refuses interactive", backgroundOnly, ExperienceInteractive, false},
+		{"background only allows background", backgroundOnly, ExperienceBackground, true},
+		{"interactive only refuses background", interactiveOnly, ExperienceBackground, false},
+		{"a run stored with none is never allowed", both, "", false},
+		{"nor background only", backgroundOnly, "", false},
 		{"an unknown type is never allowed", both, "batch", false},
-		{"an unset type is not allowed even if the list names it", []RunExperience{""}, "", false},
-		{"an unknown entry allows nothing it does not name", []RunExperience{"batch"}, ExperienceBackground, false},
 	} {
-		if got := ExperienceAllowed(tc.allowed, tc.e); got != tc.want {
+		if got := tc.limits.AllowsRunType(RunnerPoolRunType(tc.stored)); got != tc.want {
 			t.Errorf("%s: = %v, want %v", tc.name, got, tc.want)
 		}
 	}

@@ -50,7 +50,8 @@ func TestPG_CreateRunStoresTheChosenExperienceOnly(t *testing.T) {
 			}
 			// Admission and the doors read one value: a Background-only place admits a run exactly when the
 			// doors treat it as background-only, so an older client's run (stored with none) is not admitted.
-			if admitted := types.ExperienceAllowed([]types.RunExperience{types.ExperienceBackground}, stored.Experience); admitted != tc.backgroundOnly {
+			backgroundOnlyPool := types.RunnerPoolLimits{Background: &types.RunnerPoolBackgroundLimits{}}
+			if admitted := backgroundOnlyPool.AllowsRunType(types.RunnerPoolRunType(stored.Experience)); admitted != tc.backgroundOnly {
 				t.Errorf("a Background-only place admitted = %v, but the run's BackgroundOnly = %v", admitted, tc.backgroundOnly)
 			}
 			for _, run := range []types.AgentRun{created, stored} {

@@ -166,6 +166,11 @@
   },
   {
     "reason": "delegation_scope",
+    "target": "id.String()",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "delegation_scope",
     "target": "r.URL.Path",
     "sentence": "delegationRefusal"
   },

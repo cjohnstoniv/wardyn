@@ -155,7 +155,7 @@ func (r CreateRunRequest) UsesRunMode() bool {
 // is for reading old requests (display, documentation); the server stores an
 // experience only for a request that carried one, so an older client's run keeps
 // every door's behaviour. Never use it to admit a run: admission reads the
-// stored value (types.ExperienceAllowed).
+// stored value (types.RunnerPoolLimits.AllowsRunType).
 func (r CreateRunRequest) EffectiveExperience() Experience {
 	switch {
 	case r.Experience != "":

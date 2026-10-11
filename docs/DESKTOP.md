@@ -6,6 +6,16 @@
 - Sibling shapes, for contrast: [the compose stack](../deploy/compose/README.md) (one host, demo/single-tenant) and [the Helm chart](../deploy/helm/wardyn/README.md) (a cluster, multi-user, SSO + RBAC, no shared docker socket).
 - This tier sits below both.
 
+## Tiers
+
+| Tier | What runs on the laptop | Governed by | Named in the console and `wardyn setup status` as |
+| --- | --- | --- | --- |
+| Local only | A full `wardynd` with no org | The person at the keyboard | Local only — not governed by an organisation |
+| Client-mode runner | `wardyn-runnerd`, no control plane; the owner claims it ([guide](operations/hybrid-laptops.md)) | The org | Runner for an organisation |
+| Org | The control plane itself, on a cluster or compose host | The org | Organisation |
+
+- Org enrolment of a full daemon (`WARDYN_ORG_URL`) is deprecated in 0.9 and removed in 1.0; use a client-mode runner. Design: [docs/design/0.9/PLAN.md](design/0.9/PLAN.md).
+
 ## Topology
 
 ![On an enrolled laptop, everyday work takes the normal path while each sandbox leaves only through its egress proxy, nothing connects in, and the proxy adds keys to outbound requests.](img/wardyn-laptop.webp)
@@ -193,7 +203,7 @@ Three more the tier inherits rather than introduces:
 - A run resolves its own owner's row and falls back to the operator's, never to another member's.
 - The model-credential names — `anthropic-api-key`, `openai-api-key`, `bedrock-api-key` and the three AWS SigV4 names (`aws-access-key-id`, `aws-secret-access-key`, `aws-session-token`) — are refused for everyone, the operator included, with a `403 secret_name_reserved` that names Settings → Model providers.
 - A member's model credential lives on a model provider, connected by that person for themselves (`PUT /api/v1/model-providers/{id}/credential`), never in a secret they name.
-- See [OPERATIONS.md § Multi-user](OPERATIONS.md#multi-user-who-can-change-what).
+- See [who-gets-in.md § Multi-user](operations/who-gets-in.md#multi-user-who-can-change-what).
 
 **Mounting their own project directory.**
 
@@ -220,6 +230,7 @@ Three more the tier inherits rather than introduces:
 ### `WARDYN_ORG_URL`
 
 - **optional.**
+- **Deprecated in 0.9 (removed in 1.0): boot logs a warning. Use a client-mode runner ([guide](operations/hybrid-laptops.md)).**
 - Set it to enrol this laptop into a remote org control plane — see [Enrolling into an org control plane](#enrolling-into-an-org-control-plane) below.
 - Unset (the default) is m′ with no hybrid posture at all: the laptop still keeps its own runs and its own audit table, forwarding nothing upward.
 
@@ -227,6 +238,7 @@ Three more the tier inherits rather than introduces:
 
 - This is the first phase of hybrid (issue #103): the laptop keeps its full `wardynd` in member mode and gains exactly two things — a device credential and an upward audit forwarder.
 - It does not change where runs execute; that is the per-run placement work planned for 0.9 ([docs/design/hybrid-0.8.md](design/hybrid-0.8.md)).
+- A member-mode laptop cannot set `WARDYN_SSO_ONLY`: member mode needs the admin token as a process credential (`validateSSOOnlyPosture`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)). It can still enrol into an SSO-only org: `handleDeviceEnrol` ([`internal/api/devices_auth.go`](../internal/api/devices_auth.go)) redeems a single-use admin-minted token, and the `wdd_` bearer reaches only `/api/v1/devices/{id}/*`, never the console. A client-mode runner registers with a single-use `wdr_` token, not a console sign-in.
 
 **Enrolling.**
 

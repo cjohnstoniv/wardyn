@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -468,8 +469,10 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			// Policy allowed these hosts and the network lost the connection:
-			// promoting one into an allow-list would fix nothing.
-			if rs := auditRuleSource(ev); rs == ruleSourceDialFailed || rs == ruleSourceTunnelFailed {
+			// promoting one into an allow-list would fix nothing. The same
+			// predicate the deny counter reads (egress.IsNetworkFault), so a
+			// network fault is never a denial to one consumer and one to another.
+			if egress.IsNetworkFault(auditRuleSource(ev)) {
 				continue
 			}
 			denied[host] = struct{}{}

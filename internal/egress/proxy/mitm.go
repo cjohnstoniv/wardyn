@@ -278,6 +278,15 @@ type readerConn struct {
 
 func (c *readerConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
+// CloseWrite keeps tunnel's half-close reaching the wrapped connection. The
+// embedded net.Conn does not carry it, and a hijacked socket does have it.
+func (c *readerConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
 // spokeConn notes whether the client has sent a byte. Handshake reads on one goroutine, and
 // mitmConnect reads it on that goroutine afterwards, so the flag needs no lock.
 type spokeConn struct {
