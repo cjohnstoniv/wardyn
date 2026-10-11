@@ -216,6 +216,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   /people/{principal}/invitations`); only that person, signed in, can claim the invitation, and the API token it
   mints is shown once, to them alone. Invitations can be listed and revoked before they are claimed, and each one
   expires.
+- Runner pools carry limits per run type: CPU and memory (default and cap), lifetime (default, maximum or
+  unlimited), an idle stop for interactive environments only, allowed barriers and a concurrent-run cap; an
+  administrator sets them on create and replaces them on update (migration 0158). The effective limit is the
+  strictest of the pool, the person's governance, the deployment and, for self-hosted pools, the runner's capacity.
 
 ### Changed
 
