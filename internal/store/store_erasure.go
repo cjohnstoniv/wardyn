@@ -35,7 +35,12 @@ type PersonErasureStore interface {
 	// by: the emails it signed in with (lowercased) and its entra:<tenant>:<object>
 	// form. A row sealed under a name the directory did not yet know is under
 	// that name's own key, so an erasure destroys these too.
+	// Its email values are the claim text a sign-in sent, never checked for an @, so they can
+	// spell another person's principal or entra form: match on them, never destroy by them.
 	PrincipalAliases(ctx context.Context, principal string) ([]string, error)
+	// PrincipalEntraNames lists the entra:<tenant>:<object> forms of principal's own sign-in
+	// rows, built from their tenant and object ids and never from an alias value.
+	PrincipalEntraNames(ctx context.Context, principal string) ([]string, error)
 	// EraseGovernanceChangePersonalFields clears the proposer and decider (and the decider's reason) of
 	// every governance change recorded under one of names (a principal, or an email matched
 	// case-folded) and moves a pending change whose proposer is one of them to expired. It returns the
@@ -190,6 +195,20 @@ func (s PG) PrincipalAliases(ctx context.Context, principal string) ([]string, e
 	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
 		return nil, fmt.Errorf("store: list a principal's aliases: %w", err)
+	}
+	return names, nil
+}
+
+func (s PG) PrincipalEntraNames(ctx context.Context, principal string) ([]string, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT DISTINCT 'entra:' || tenant_id || ':' || object_id FROM principal_identities
+		 WHERE principal = $1 AND object_id <> '' ORDER BY 1`, principal)
+	if err != nil {
+		return nil, fmt.Errorf("store: list a principal's entra names: %w", err)
+	}
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("store: list a principal's entra names: %w", err)
 	}
 	return names, nil
 }

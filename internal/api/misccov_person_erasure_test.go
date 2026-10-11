@@ -105,6 +105,10 @@ func (s *miscCovPersonStore) PrincipalAliases(_ context.Context, principal strin
 	return s.aliases[principal], s.aliasErr
 }
 
+func (s *miscCovPersonStore) PrincipalEntraNames(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
 func (s *miscCovPersonStore) EraseGovernanceChangePersonalFields(_ context.Context, names []string) (int, error) {
 	s.note("governance:" + strings.Join(names, ","))
 	return s.govN, s.govErr

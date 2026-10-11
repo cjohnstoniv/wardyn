@@ -233,3 +233,11 @@ func TestErasePersonCredentials_SaysWhenNoGenerationFencedIt(t *testing.T) {
 		t.Fatalf("credential.erase write_fence = %q, want %q", got, writeFenceLocksOnly)
 	}
 }
+
+// A person's erase is fenced only when every namespace's was.
+func TestMergeEraseReports_FencedOnlyWhenEveryNamespaceWas(t *testing.T) {
+	first := mergeEraseReports(secretstore.EraseReport{}, secretstore.EraseReport{Count: 1, Fenced: true}, true)
+	if got := mergeEraseReports(first, secretstore.EraseReport{Count: 1}, false); got.Fenced || got.Count != 2 {
+		t.Errorf("merged = %+v, want count 2 and not fenced", got)
+	}
+}

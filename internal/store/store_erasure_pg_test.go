@@ -223,6 +223,30 @@ func TestPG_PersonErasure_PrincipalAliases(t *testing.T) {
 	}
 }
 
+// The entra names come from the person's own tenant and object ids, never from an email claim that
+// spells another person's entra:<tenant>:<object> form.
+func TestPG_PersonErasure_PrincipalEntraNamesIgnoreAliasValues(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	oid := uuid.NewString()
+	principal := "pairwise-" + oid
+	crafted := "entra:" + idTenant + ":" + uuid.NewString()
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: principal, Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, Email: crafted}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if aliases, err := st.PrincipalAliases(ctx, principal); err != nil || !slices.Contains(aliases, crafted) {
+		t.Fatalf("PrincipalAliases = %v, %v, want the crafted email among them", aliases, err)
+	}
+	got, err := st.PrincipalEntraNames(ctx, principal)
+	if want := []string{"entra:" + idTenant + ":" + oid}; err != nil || !slices.Equal(got, want) {
+		t.Errorf("PrincipalEntraNames = %v, %v, want %v", got, err, want)
+	}
+	if got, err := st.PrincipalEntraNames(ctx, "nobody"); err != nil || len(got) != 0 {
+		t.Errorf("PrincipalEntraNames(nobody) = %v, %v, want none", got, err)
+	}
+}
+
 func TestPG_PersonErasure_SubjectKeyDestroyedSince(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)

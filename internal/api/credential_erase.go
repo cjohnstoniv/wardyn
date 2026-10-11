@@ -183,20 +183,21 @@ func (s *Server) eraseLocked(ctx context.Context, owner, rowID string, rep *secr
 // entra:<tenant>:<object> form the identity directory knows them by. A person an admin created by
 // object id and who then signed in under a pairwise subject has their credentials under the subject
 // now, but an install upgraded from 0.8.9 can still hold some under the object-id form, which the
-// subject alone does not reach. Both are erased, each through the fenced EraseOwner. Only the entra
-// form is a namespace: the other aliases are emails, which never name one.
+// subject alone does not reach. Both are erased, each through the fenced EraseOwner. The entra form
+// comes from the person's own tenant and object ids, never from an alias: an email claim is the
+// person's own text and can spell another person's entra:<tenant>:<object> namespace.
 func (s *Server) personNamespaces(ctx context.Context, owner string) ([]string, error) {
 	namespaces := []string{owner}
 	pe, err := s.personErasureStore()
 	if err != nil || owner == "" {
 		return namespaces, nil
 	}
-	aliases, err := pe.PrincipalAliases(ctx, owner)
+	entra, err := pe.PrincipalEntraNames(ctx, owner)
 	if err != nil {
 		return nil, err
 	}
-	for _, a := range aliases {
-		if strings.HasPrefix(a, entraPrincipalPrefix) && !slices.Contains(namespaces, a) && !s.isReservedPrincipal(a) {
+	for _, a := range entra {
+		if !slices.Contains(namespaces, a) && !s.isReservedPrincipal(a) {
 			namespaces = append(namespaces, a)
 		}
 	}
