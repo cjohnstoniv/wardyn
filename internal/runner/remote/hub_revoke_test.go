@@ -29,11 +29,6 @@ func TestHubActiveRevocationStopsDispatchAndReconnect(t *testing.T) {
 // (the replica that committed it) or tells it nothing, as when the revocation
 // committed on another replica: the session's own re-read must then end it.
 func testHubRevocation(t *testing.T, elsewhere bool) {
-	if elsewhere {
-		old := revokeRecheck
-		revokeRecheck = 20 * time.Millisecond
-		t.Cleanup(func() { revokeRecheck = old })
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	pub, key, _ := ed25519.GenerateKey(rand.Reader)
@@ -53,6 +48,9 @@ func testHubRevocation(t *testing.T, elsewhere bool) {
 		},
 	})
 	defer hub.Close()
+	if elsewhere {
+		hub.recheck = 20 * time.Millisecond
+	}
 	online, resumed := make(chan *runnerwire.Peer, 1), make(chan bool, 1)
 	hooks := sessionHooks(online, resumed)
 	var revoked, dials atomic.Int32
