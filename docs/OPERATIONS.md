@@ -1345,7 +1345,7 @@ erases one person's retained records by explicit scope, in one audited act
 4. Map Entra's `objectId` to SCIM `externalId`.
    - Wardyn matches a leaver by that object id first, then by the `entra:<tenant id>:<object id>` person, and uses an
      email only to widen a removal; without `externalId` a suspension can miss the person.
-   - An email that names another principal (a person created under that address, say) never links a sign-in.
+   - If any of its names is another principal (a person created under that address, say), nothing links.
    - `userName` and `emails` may change (renames are accepted as a projection update and the old values are kept as
      removal aliases); `externalId` may not change on a bound identity.
 5. Check a test user: suspend them from the provisioning job, then confirm a `scim.user.deactivate` row and a
