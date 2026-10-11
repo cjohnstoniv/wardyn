@@ -17,17 +17,26 @@ import (
 )
 
 // recoveryMode dispatches the recovery-set verbs (docs/design/0.9/recovery-set.md §1.1), beside
-// maintenanceMode. -recovery-inventory is a maintenance mode of its own: it refuses to run with any other
-// maintenance mode and has no env pair.
+// maintenanceMode. Each verb is a maintenance mode of its own: it refuses to run with another verb or with
+// any other maintenance mode, and has no env pair.
 func recoveryMode(f *bootFlags) (bool, error) {
-	if !*f.recoveryInventory {
+	verbs := 0
+	for _, on := range []bool{*f.recoveryInventory, *f.recoveryManifest, *f.recoveryVerify} {
+		if on {
+			verbs++
+		}
+	}
+	if verbs == 0 {
 		return false, nil
 	}
-	if strings.TrimSpace(*f.rotateAgeKey) != "" || *f.rewrap || *f.rewrapPrincipalKeys ||
+	if verbs > 1 || strings.TrimSpace(*f.rotateAgeKey) != "" || *f.rewrap || *f.rewrapPrincipalKeys ||
 		*f.migrateSecrets || *f.reconcile || *f.auditSplitLegacy || *f.migrateOnly {
-		return true, fmt.Errorf("refusing to run: -recovery-inventory runs alone, with no other maintenance mode")
+		return true, fmt.Errorf("refusing to run: each recovery verb (-recovery-inventory, -recovery-manifest, -recovery-verify) runs alone, with no other maintenance mode")
 	}
-	return true, writeRecoveryInventory(os.Stdout, f, os.Getenv("WARDYN_MANAGED_DIR"))
+	if *f.recoveryInventory {
+		return true, writeRecoveryInventory(os.Stdout, f, os.Getenv("WARDYN_MANAGED_DIR"))
+	}
+	return true, recoveryManifestMode(f, *f.recoveryVerify)
 }
 
 // The deployments the inventory describes. A deployment is inferred from the resolved runner and the
