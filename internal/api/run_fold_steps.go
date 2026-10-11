@@ -194,9 +194,11 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 		}
 		f.reqCC = reqCC
 		advertised = s.advertisedConfinement(f.r.Context())
-		if offered := f.place.offeredClasses(); offered != nil {
-			advertised = offered
-		}
+	}
+	// A pooled run's default class comes from its candidates at every door, the preview included, so the
+	// three doors promise one barrier.
+	if offered := f.place.offeredClasses(); offered != nil {
+		advertised = offered
 	}
 	enforced, err := enforcedConfinement(floor, f.reqCC, advertised, f.baseline)
 	if err != nil {
