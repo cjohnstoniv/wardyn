@@ -129,6 +129,11 @@ type Config struct {
 	// Fanout's DropsByName). Nil omits the metric — a deployment with no SIEM
 	// sinks configured has nothing to report.
 	AuditSinkDrops func() map[string]int64
+	// AuditDelivery, when set, reports each acknowledged-delivery destination's
+	// checkpoint and the head it lags behind for the wardyn_audit_delivery_*
+	// metrics (cmd/wardynd wires it to the store only when the webhook sink is
+	// configured with delivery "acknowledged"). Nil omits the series.
+	AuditDelivery func(ctx context.Context) ([]store.AuditDeliveryStatus, error)
 	// Runner launches sandboxes. Nil => headless API-only mode.
 	Runner runner.Runner
 	// RunnerOrgURL is the public organisation URL bound into runner identities.
@@ -137,6 +142,16 @@ type Config struct {
 	// RunnerHub supplies durable runner admission and lifecycle callbacks.
 	// The server always supplies OrgURL and Lookup from its own configuration.
 	RunnerHub remote.HubConfig
+	// RunnerOnline reports whether a claimed runner holds a live authenticated session with this
+	// process. Nil defaults to Server.RunnerOnline, the runner hub's own view.
+	//
+	// ponytail: process-local. Under WARDYN_HA a replica that does not hold a runner's session
+	// answers offline for a runner attached to another; the upgrade is a shared presence read.
+	RunnerOnline func(id uuid.UUID) bool
+	// RunnersDisabled runs after runners are switched off (a true→false change), once the write and
+	// its audit row are done and the site-config lock is released. Nil defaults to
+	// Server.RunnersDisabled, which ends every runner session this process holds.
+	RunnersDisabled func(ctx context.Context)
 	// AdminToken gates the public API (constant-time bearer compare). Empty
 	// disables the public API entirely (fail closed) except /healthz.
 	AdminToken string
@@ -467,8 +482,12 @@ type Config struct {
 	SecretStoreExternal string
 	// SecretKeyService: the key service wrapping every stored data key ("Vault Transit at host"), or "" for the local key; set, /setup/status shows kek_service.
 	SecretKeyService string
+	// SecretKeyServiceStaticKey: the key service is reached with a long-lived credential (an AWS IAM user's access key); /setup/status shows kek_service_static_key.
+	SecretKeyServiceStaticKey bool
 	// KEKRequired: WARDYN_KEK_REQUIRED; /setup/status shows kek_required_unmet while neither a key service nor an external store holds the credentials.
 	KEKRequired bool
+	// SecretLocalRows counts the stored credential rows and principal keys still wrapped by the local key (nil: the store keeps no such count); with KEKRequired and a key service, /setup/status shows kek_local_rows while it is above zero.
+	SecretLocalRows func(context.Context) (int, error)
 	// PlatformKeySeparate: the boot keys have a key of their own: WARDYN_PLATFORM_KEY_FILE in local mode only
 	// (under a key service the file counts for nothing), the platform key (and identity) of the key service
 	// otherwise. False shows platform_split as a warning (§2.13 c).
@@ -742,6 +761,9 @@ type Server struct {
 	sshSessionsMu   sync.Mutex
 	sshSessions     map[uuid.UUID]int
 	sshSyncSessions map[uuid.UUID]int
+	// sshSyncOpen is the directory and open time of each live wardyn-sync
+	// channel, for GET /runs/{id}'s sync.open. Guarded by sshSessionsMu.
+	sshSyncOpen map[uuid.UUID][]*runSyncOpen
 	// builds tracks per-workspace image builds (the wizard's Build step).
 	// Zero value is ready to use.
 	builds buildTracker
@@ -895,6 +917,7 @@ func New(cfg Config) *Server {
 		},
 	}
 	s.scimState = newSCIMState()
+	s.defaultRunnerHooks()
 	if cfg.PreflightRatePerMin > 0 {
 		s.preflightLimiter = &principalLimiter{rate: float64(cfg.PreflightRatePerMin) / 60, burst: preflightBurst, max: preflightLimiterMaxPeople}
 	}
@@ -961,19 +984,4 @@ func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
 	// event to the durable local fallback so it is never silently lost — for every
 	// audit writer, not just this one. So there is no API-layer-only spool here.
 	_ = s.cfg.Audit.Record(ctx, ev)
-}
-
-// auditEvent is a small constructor used across handlers.
-func (s *Server) auditEvent(runID *uuid.UUID, actorType types.ActorType, actor, action, target, outcome string, data []byte) types.AuditEvent {
-	return types.AuditEvent{
-		ID:        uuid.New(),
-		Time:      s.cfg.Now().UTC(),
-		RunID:     runID,
-		ActorType: actorType,
-		Actor:     actor,
-		Action:    action,
-		Target:    target,
-		Outcome:   outcome,
-		Data:      data,
-	}
 }

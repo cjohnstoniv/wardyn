@@ -36,7 +36,7 @@ import { previewRunPolicy } from "./policy-preview";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { runs } from "./runs";
+import { runs, runWireBody } from "./runs";
 import type { RunPolicySpec } from "../types";
 
 // The body type createRun/preflightRun accept (RunWireInput is not exported).
@@ -98,6 +98,7 @@ const fullInput: WireInput & { workspaces: NonNullable<WireInput["workspaces"]> 
   // The 0.9 New Run contract: where the run lives, its size, the person's edits.
   placement: "local",
   runner_id: "44444444-4444-4444-8444-444444444444",
+  runner_pool_id: "55555555-5555-4555-8555-555555555555",
   allowed_image: "ghcr.io/acme/dev:1",
   resources: { cpu_millis: 4000, memory_mib: 8192 },
   overrides: { azure_devops: { capabilities: ["code_read"] } },
@@ -130,10 +131,36 @@ const expectedWire: Record<string, unknown> = {
   components: fullInput.components,
   placement: "local",
   runner_id: "44444444-4444-4444-8444-444444444444",
+  runner_pool_id: "55555555-5555-4555-8555-555555555555",
   allowed_image: "ghcr.io/acme/dev:1",
   resources: { cpu_millis: 4000, memory_mib: 8192 },
   overrides: { azure_devops: { capabilities: ["code_read"] } },
 };
+
+// A new client's request: the run-mode carriers replace the older mode fields,
+// so this body is the second half of "every CreateRunRequest tag is forwarded".
+const fullModeInput: WireInput = {
+  repo: "acme/payments",
+  mode_contract: "0.9",
+  experience: "interactive",
+  tools: [{ id: "claude-code", kind: "harness", model_provider: "bedrock-team" }],
+  startup: { kind: "harness", tool: "claude-code" },
+  start_folder: { kind: "attachment", attachment: "drive", subpath: "src" },
+  workload: { kind: "agent_task", agent: "claude-code", task: "t" },
+  no_repositories_or_drives: true,
+  // What the older mode fields would say: a new client's request must not carry them.
+  agent: "claude-code",
+  task: "legacy",
+  interactive: true,
+  task_mode: "exec",
+  interactive_start: "agent",
+  seed_auto_tools: true,
+  tool_approvals: "hold",
+  model_provider: "bedrock-team",
+};
+
+// The older mode fields the carriers replace (Go: runModeLegacyField).
+const REPLACED_BY_RUN_MODE = ["agent", "task", "interactive", "task_mode", "interactive_start", "seed_auto_tools", "tool_approvals", "model_provider"];
 
 // Go DTO JSON tags the console NEVER sends (CLI-only — cmd/wardyn/commands.go:96-103).
 // If the whitelist starts forwarding one of these, or the Go DTO drops one,
@@ -337,7 +364,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
   const root = repoRoot();
   // CreateRunRequest and WorkspaceSelection live in runs_create.go; read the
   // package's two DTO files together so a later move within pkg/client is not a false red.
-  const clientGo = ["client.go", "runs_create.go", "runs_new_run.go"].map((f) => readFileSync(join(root, "pkg/client", f), "utf8")).join("\n");
+  const clientGo = ["client.go", "runs_create.go", "runs_new_run.go", "runs_mode.go"].map((f) => readFileSync(join(root, "pkg/client", f), "utf8")).join("\n");
   const typesGo = readFileSync(join(root, "internal/types/types.go"), "utf8");
   const runsTs = readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8");
   const runCreateTs = readFileSync(join(root, "ui/src/app/lib/types/run-create.ts"), "utf8");
@@ -345,8 +372,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
   it("every CreateRunRequest json tag is forwarded by runWireBody or on the UI-never-sends list", async () => {
     const goTags = goJSONTags(clientGo, "CreateRunRequest");
     expect(goTags.length).toBeGreaterThanOrEqual(17); // stale-regex guard (Go test does the same)
-    await runs.createRun(fullInput);
-    const wireKeys = new Set(Object.keys(sentBody()));
+    const wireKeys = new Set([...Object.keys(runWireBody(fullInput)), ...Object.keys(runWireBody(fullModeInput))]);
     const missing = goTags.filter((t) => !wireKeys.has(t) && !UI_NEVER_SENDS.has(t));
     expect(
       missing,
@@ -361,9 +387,39 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
 
   it("every key runWireBody emits is a CreateRunRequest json tag (a stray key is a strict-decode 400)", async () => {
     const goTags = new Set(goJSONTags(clientGo, "CreateRunRequest"));
-    await runs.createRun(fullInput);
-    const stray = Object.keys(sentBody()).filter((k) => !goTags.has(k));
+    const stray = [...Object.keys(runWireBody(fullInput)), ...Object.keys(runWireBody(fullModeInput))].filter((k) => !goTags.has(k));
     expect(stray, "keys the server will reject with 400 'unknown field' (helpers.go:393)").toEqual([]);
+  });
+
+  it("a new client's request carries the run-mode carriers and none of the older mode fields", async () => {
+    for (const door of ["createRun", "preflightRun"] as const) {
+      fetchMock.mockClear();
+      await runs[door](fullModeInput);
+      const body = sentBody();
+      for (const key of ["experience", "tools", "startup", "start_folder", "workload", "no_repositories_or_drives", "repo"]) {
+        expect(body, `${key} on ${door}`).toHaveProperty(key);
+      }
+      for (const key of REPLACED_BY_RUN_MODE) expect(body, `${key} on ${door}`).not.toHaveProperty(key);
+    }
+  });
+
+  it("the contract marker makes a request a new client's even with no experience: the older mode fields are not sent", () => {
+    const body = runWireBody({ repo: "acme/payments", mode_contract: "0.9", agent: "claude-code", task: "t", interactive: true, task_mode: "exec", model_provider: "bedrock-team" });
+    expect(body).toHaveProperty("mode_contract", "0.9");
+    expect(body).not.toHaveProperty("experience");
+    for (const key of REPLACED_BY_RUN_MODE) expect(body, key).not.toHaveProperty(key);
+    // Without the marker the same input is the older client's, which the server reads as before.
+    const older = runWireBody({ repo: "acme/payments", agent: "claude-code", task: "t" });
+    expect(older).not.toHaveProperty("mode_contract");
+    expect(older).toHaveProperty("agent", "claude-code");
+  });
+
+  it("an older client's request carries none of the run-mode carriers", () => {
+    const body = runWireBody(fullInput);
+    for (const key of ["experience", "tools", "startup", "start_folder", "workload", "no_repositories_or_drives"]) {
+      expect(body).not.toHaveProperty(key);
+    }
+    for (const key of REPLACED_BY_RUN_MODE.filter((k) => k !== "model_provider")) expect(body).toHaveProperty(key);
   });
 
   it("WorkspaceSelection: the TS wire entry's keys are exactly Go's json tags", () => {
@@ -393,7 +449,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     expect(omitted).toEqual([]);
   });
 
-  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the ended run's kept_until and the run's policy over AgentRun — " +
+  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the ended run's kept_until, the run's policy and its open sync sessions over AgentRun — " +
     "the fields only GET /runs/{id} sends (handleGetRun's anonymous wrapper struct, runs_policy.go)", () => {
     const runDetailOwnKeys = tsInterfaceKeys(runsTs, "RunDetail");
     expect(runDetailOwnKeys).toEqual([
@@ -404,7 +460,14 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       "created_via_name",
       "kept_until",
       "policy",
+      "sync",
     ]);
+  });
+
+  it("RunSync and RunSyncOpen's keys are exactly runSyncView's and runSyncOpen's json tags (GET /runs/{id} sync.open, sshgateway_sync.go)", () => {
+    const syncGo = readFileSync(join(root, "internal/api/sshgateway_sync.go"), "utf8");
+    expect(tsInterfaceKeys(runsTs, "RunSync").sort()).toEqual(goJSONTags(syncGo, "runSyncView").sort());
+    expect(tsInterfaceKeys(runsTs, "RunSyncOpen").sort()).toEqual(goJSONTags(syncGo, "runSyncOpen").sort());
   });
 
   it("RunEndWaitResult's keys are exactly runEndWaitResponse's json tags (PATCH /runs/{id}, run_end_wait.go)", () => {

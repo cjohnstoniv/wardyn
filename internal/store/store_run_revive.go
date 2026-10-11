@@ -108,10 +108,13 @@ func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types
 	return claimed && err == nil, err
 }
 
+// markRunRevived clears agent_stopped_at with the lost mark whatever the revive
+// starts: a live run holds its slot by lost_at alone, and a stale stop mark must
+// not make a later outage-kept run look agentless.
 func markRunRevived(ctx context.Context, q Querier, id uuid.UUID, from types.LostReason, ended *EndedKept) (bool, error) {
 	lostAt, keptAfter, now := endedArgs(ended)
 	tag, err := q.Exec(ctx, `
-		UPDATE agent_runs SET lost_at=NULL, lost_reason='', containment_error=NULL, containment_error_at=NULL,
+		UPDATE agent_runs SET lost_at=NULL, lost_reason='', containment_error=NULL, containment_error_at=NULL, agent_stopped_at=NULL,
 			paused_at=CASE WHEN $3=$8 THEN NULL ELSE paused_at END,
 			paused_reason=CASE WHEN $3=$8 THEN '' ELSE paused_reason END,
 			token_renewed_at=now(), watcher_heartbeat=now(), updated_at=now()

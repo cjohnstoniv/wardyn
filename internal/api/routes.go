@@ -277,6 +277,10 @@ func (s *Server) routes() chi.Router {
 			// Tamper-evidence sweep over the audit hash chain (migration 0047),
 			// plus the sandbox sweep — one on each tier, hence two routers.
 			s.adminRoutes(operatorOnly, securityOps)
+			s.mountRunnerRevokeRoutes(r, securityOps)             // runner_revoke.go: the security tier, or the runner's own owner
+			s.mountRunnerPoolRoutes(r, operatorOnly, securityOps) // runner_pools.go: 501 until the pool storage lands
+			s.mountRunnerInventoryRoutes(r, operatorOnly, securityOps)
+			s.mountTemplateRoutes(r, operatorOnly) // template_routes.go: 501 until the template store lands
 			r.Get("/me", s.handleMe)
 			// #1197: the shell's two nav badges in one small object, replacing
 			// the two 1000-row reads App.tsx used to poll. classMember, scoped to
@@ -793,6 +797,8 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	// Explain (K4) reads this same table at a NAMED subject rather than the
 	// caller's own: still securityOps, never wider.
 	securityOps.Get("/permissions/explain", s.handleExplainCapabilities)
+	securityOps.Get("/governance/egress-baseline", s.handleGetEgressBaseline)
+	securityOps.Put("/governance/egress-baseline", s.handlePutEgressBaseline)
 }
 
 // adminRoutes registers the two admin-gated maintenance routes — one per tier,
@@ -855,6 +861,9 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// listing reads the whole fleet.
 	operatorOnly.Get("/admin/runs/proxy-window", s.handleAdminProxyWindow)
 	operatorOnly.Post("/admin/runs/restart", s.handleAdminRestartRuns)
+	// Entra app re-registration remedy (identity_unbind.go). SUPER: it re-opens a
+	// person's identity row to a different sign-in principal.
+	operatorOnly.Post("/admin/identities/{id}/unbind", s.handleUnbindIdentity)
 }
 
 // mountInternalRoutes is the internal sidecar surface: every route here is

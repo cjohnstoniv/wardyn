@@ -1,8 +1,37 @@
 # Prose must not grow beyond the base count (11806) plus cell-expansion summaries: R0030 (the `changes` cell of the run-policy view table) leaves a 25-word summary in the cell and moves in full to the "#### `changes`" subsection (heading counts 0, summary 25 words).
 # docs/sdk.md 12203 adds 372 over 11831: 7 (the export comment no longer says ready for PolicyRequest.Spec), 116 (Reusing the spec), 15 (the preview names `components`), 225 (the Custom components section), 19 (the CLI mirrors all but `origin` and `action`); the diff tool sums 382, the gate 372 (link text).
+# docs/sdk.md 12242 adds 39 over 12203 for the egress baseline: three wire reasons and the covered write.
+# 0.9 G-sec-2: docs/sdk.md 12285 adds 82 over 12203 for four `/admin/identities/{id}/unbind` reasons (#1818): identity_not_found ~14, identity_not_bound ~25, identity_not_rebindable ~20, identity_principal_in_use ~23.
+# docs/sdk.md 12324: Measured after combining baseline reasons and four identity-unbind reasons.
+# docs/sdk.md 12203 adds 372 over 11831 (12273 with the four New Run request-contract reason rows, +70): 7 (the export comment no longer says ready for PolicyRequest.Spec), 116 (Reusing the spec), 15 (the preview names `components`), 225 (the Custom components section), 19 (the CLI mirrors all but `origin` and `action`); the diff tool sums 382, the gate 372 (link text).
+# docs/sdk.md 12388: measured combined New Run contract reasons, baseline and identity-unbind additions.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
-# docs/sdk.md 12203 adds 372 over 11831 (12273 with the four New Run request-contract reason rows, +70): 7 (the export comment no longer says ready for PolicyRequest.Spec), 116 (Reusing the spec), 15 (the preview names `components`), 225 (the Custom components section), 19 (the CLI mirrors all but `origin` and `action`); the diff tool sums 382, the gate 372 (link text).
-# Combined request-contract and runner refusal rows: 12273 + 75 measured words.
-# Combined runner transport, registration and request-contract text measures 12341 after shared setup wording was tightened.
-docs/sdk.md=12341 share=21
+# Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.
+
+# Combined runner transport and batch SDK text measures12462; paragraph-share cap retained.
+# Runner revoke adds 24 measured words for runner_not_found and runner_revoke_reason_invalid.
+# 0.9 C-pools: docs/sdk.md 12481 adds 18 over 12463 for the two published runner pool reasons.
+# 0.9 H7: docs/sdk.md 12503 adds 22 over 12481 for the `placement_component_self_defined` reason row.
+# docs/sdk.md 12713 measured after merging H7.
+# 0.9 H10 r1: docs/sdk.md 12761 adds 8 over 12753 for runners_enabled_required.
+# 0.9 H10: docs/sdk.md 12753 adds 62 over 12691 for the five runners-management reasons.
+# docs/sdk.md 12783 measured after merging H10 into batch.
+# G-1423: docs/sdk.md 12728 adds 15 over 12713 for the delegated-token read of the output route.
+# G-1423 r1: docs/sdk.md 12738 adds 10 over 12728 for the portal's 409 answer on GET /runs/{id}/output.
+# docs/sdk.md 12808 measured after G-1423 merge.
+# docs/sdk.md 12828 adds 20 (0.9 G-sec-rest r1): the audit_retention_actor_reserved reason row.
+# Runner pools (H10) add 70 words on top of the batch; combined total 12878.
+# docs/sdk.md 12921 measured after H10-pools merge.
+# 0.9 C-mode: docs/sdk.md 12910 adds 102 over 12808 for the run-mode reasons in three rows (run_mode_required/invalid with the contract marker, start_folder_invalid, run_mode_conflict, run_background_only).
+# docs/sdk.md 13023 measured after C-mode merge.
+docs/sdk.md=13023 share=21
+# Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
+# Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
+# Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.
+# docs/sdk.md 12851 measured after H3 merge.
+# Run templates add 187 measured words for sixteen template refusal reasons in four table rows: docs/sdk.md 12650.
+# Run templates add 23 more measured words for templates_unavailable and the launch-time exclusion: docs/sdk.md 12673.
+# Run templates: docs/sdk.md 12691 adds 210 over 12481 for the template refusal reasons (five rows) after merging the runner pool reasons.
+# docs/sdk.md 12831 measured after H3 integration.
+# Runner pools add 70 measured words for the five pool reasons the routes send: docs/sdk.md 12761.

@@ -199,6 +199,13 @@ func (s PG) VerifyAuditChain(ctx context.Context) (AuditChainStatus, error) {
 	return verifyAuditChain(ctx, tx)
 }
 
+// VerifyAuditChainTx is VerifyAuditChain on a transaction the caller owns, for a caller that has one
+// connection and no pool to give it (wardynd -recovery-rehearse). The caller begins it repeatable-read
+// and read-only.
+func VerifyAuditChainTx(ctx context.Context, tx pgx.Tx) (AuditChainStatus, error) {
+	return verifyAuditChain(ctx, tx)
+}
+
 // verifyAuditChain is VerifyAuditChain's sweep on a transaction the caller owns, so the legacy split
 // (SplitLegacyAudit) can prove the chain verifies, row for row, before and after it, inside the
 // transaction that makes the change.

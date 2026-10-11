@@ -35,6 +35,7 @@ export const ACCESS_ROWS = {
     self: "One you saved.",
     inline: "Added for this run only.",
     workspace: "Needed for the repositories in this run's workspace.",
+    agent: "For the agent you chose.",
   },
 
   /** A row whose status is `unavailable`: nothing the person can supply would make it ready. */

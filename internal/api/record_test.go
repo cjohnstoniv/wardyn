@@ -78,13 +78,14 @@ type recordStore struct {
 	// of applying `add` — the seam for a store error on the widening after
 	// the promotion marker CAS already committed.
 	mergeErr error
+	site     types.SiteConfig
 }
 
 // GetSiteConfig backs the agent roster's launch-path read (agent_providers.go).
 // The zero value is legacy open mode — no roster, nothing refused — which is the
 // state every case in this file means.
 func (s *recordStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
-	return types.SiteConfig{}, nil
+	return s.site, nil
 }
 
 // LatestAuditEventByAction backs ebpfGroundtruthCaveat's heartbeat lookup.

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -209,6 +210,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr := s.reviveOwnerRecheck(ctx, run, cfg, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
+	if rerr := s.reviveCapPrecheck(ctx, run, rebooted); rerr != nil {
+		return reviveResult{}, rerr
+	}
 	retiring := cfg.RunToken
 	id, err := s.cfg.Identity.MintRunIdentity(ctx, run.ID, runIdentitySubject(ctx, run.CreatedBy), run.CreatedBy, internalAudience, run.OperatorOwned)
 	if err != nil {
@@ -339,6 +343,25 @@ func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run 
 	return nil
 }
 
+// reviveCapPrecheck refuses, before an identity is minted or the proxy image pulled, a revive that
+// would start an agent while the deployment is at its cap. Lock-free and advisory: claimRevive's
+// count under the cap lock stays the authority on a race. run is never counted, since an
+// outage-kept run whose agent stopped can still read as holding a slot itself.
+func (s *Server) reviveCapPrecheck(ctx context.Context, run types.AgentRun, startsAgent bool) *reviveError {
+	c, ok := s.cfg.Store.(runCounter)
+	if !startsAgent || s.cfg.MaxConcurrentRuns <= 0 || !ok {
+		return nil
+	}
+	n, err := c.CountNonTerminalRuns(ctx, run.ID)
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, "count active runs: "+err.Error())
+	}
+	if n >= s.cfg.MaxConcurrentRuns {
+		return reviveRefused(http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)
+	}
+	return nil
+}
+
 // reviveFailedAfterClaim is the end of a revive whose proxy replace or agent
 // start failed after the claim: the run is put back to lost, and the answer says
 // "lost" only when that was persisted. When the lost mark could not be written
@@ -389,7 +412,29 @@ func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver,
 	// A config rendered under 0.8.5 has no brokered_pat_grant_ids, so the set is
 	// recomputed rather than trusted, whatever the stored value says.
 	cfg.BrokeredPATGrantIDs = brokeredPATGrantIDs(grants, !s.cfg.DisableGitPATBroker)
+	// Likewise the narrowing: a run dispatched under 0.8.5 stored its allowlist without repos, access,
+	// forge or api, and its grant row may carry them (0.8.5 ignored them). The revived proxy gets what
+	// dispatch would give it. A grant whose row is gone has no scope to apply and revives as stored.
+	if err := rescopeRevivedPATGrants(cfg.PATGrants, grants); err != nil {
+		return nil, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad,
+			"a git_pat grant's scope could not be read, so what it is narrowed to is unknown: "+err.Error())
+	}
 	return cfg, nil
+}
+
+// rescopeRevivedPATGrants is scopePATGrants over the allowlist entries whose grant row still exists.
+func rescopeRevivedPATGrants(allow map[string]proxy.PATGrant, rows []types.CredentialGrant) error {
+	withRow := map[string]proxy.PATGrant{}
+	for host, g := range allow {
+		if slices.ContainsFunc(rows, func(r types.CredentialGrant) bool { return r.ID == g.GrantID && r.Spec.Kind == types.GrantGitPAT }) {
+			withRow[host] = g
+		}
+	}
+	if err := scopePATGrants(withRow, rows); err != nil {
+		return err
+	}
+	maps.Copy(allow, withRow)
+	return nil
 }
 
 // revivePATNarrowing asks dispatch's narrowing refusals (patNarrowingRefusal)

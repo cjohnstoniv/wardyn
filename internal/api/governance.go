@@ -156,7 +156,7 @@ type governanceAssignmentRequest struct {
 // validateGovernanceAssignment normalizes a in place and validates it, applying
 // the SAME field hygiene validateCapabilityGrant applies to a capability grant
 // subject — trim, length, no control characters, and for a GROUP subject the
-// shared oidc.CanonicalGroupSubject the login-time snapshot itself uses —
+// shared types.CanonicalGroupSubject the login-time snapshot itself uses —
 // because these two tables are written against the identical subject vocabulary
 // and are resolved through the identical capabilitySubjects call. A subject
 // normalized one way here and another way there is a row that silently never
@@ -181,14 +181,14 @@ func validateGovernanceAssignment(a *types.GovernanceAssignment) error {
 		return fmt.Errorf("subject: required for subject_type %q", a.SubjectType)
 	}
 	if a.SubjectType == types.CapabilitySubjectGroup {
-		// The group half of that hygiene is oidc.CanonicalGroupSubject, not a
+		// The group half of that hygiene is types.CanonicalGroupSubject, not a
 		// lowercase — see validateCapabilityGrant. A group-tier assignment is
 		// the sharper case of the two: HasGroupTierAssignments counts the dead
 		// row as "a group tier exists", so a subject no snapshot can carry both
 		// fails to wall the member it names AND refuses every caller with an
 		// unanswerable snapshot on account of an assignment that could never
 		// have applied to them.
-		subject, ok := oidc.CanonicalGroupSubject(a.Subject)
+		subject, ok := types.CanonicalGroupSubject(a.Subject)
 		if !ok {
 			return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
 		}
@@ -200,12 +200,12 @@ func validateGovernanceAssignment(a *types.GovernanceAssignment) error {
 			return fmt.Errorf("subject: %q is not a user type id", a.Subject)
 		}
 	} else {
-		// The USER half is canonicalUserSubject for the same guard-before-fold
+		// The USER half is types.CanonicalUserSubject for the same guard-before-fold
 		// reason (capabilities.go): a bare ToLower folds U+212A onto ASCII 'k'
 		// and U+0130 onto 'i', so a crafted spelling of a real human's address
 		// was stored as THAT human's subject — an assignment binding someone
 		// else's ceiling to them.
-		a.Subject = canonicalUserSubject(a.Subject)
+		a.Subject = types.CanonicalUserSubject(a.Subject)
 	}
 	if len(a.Subject) > maxCapabilityGrantFieldLen || !controlCharFree(a.Subject) {
 		return fmt.Errorf("subject: invalid")
@@ -428,16 +428,16 @@ func (s *Server) handlePreviewGovernanceProfile(w http.ResponseWriter, r *http.R
 // a UNICODE fold, so U+212A becomes ASCII 'k' and U+0130 becomes 'i', and a
 // preview claim typed in either spelling would answer for a DIFFERENT human's
 // row than the run resolves. Both halves therefore ask the match surface's own
-// canonicalizer — users through canonicalUserSubject (capabilities.go, the same
-// function capabilitySubjects and the two write boundaries use), groups through
-// normalizeGovernancePreviewGroups below (oidc.CanonicalGroupSubject).
+// canonicalizer — users through types.CanonicalUserSubject (the same function
+// capabilitySubjects and the two write boundaries use), groups through
+// normalizeGovernancePreviewGroups below (types.CanonicalGroupSubject).
 func normalizeGovernancePreviewClaims(in []string, field string) ([]string, string) {
 	if len(in) > maxGovernancePreviewClaims {
 		return nil, fmt.Sprintf("%s: at most %d claims", field, maxGovernancePreviewClaims)
 	}
 	out := make([]string, 0, len(in))
 	for _, v := range in {
-		if c := canonicalUserSubject(v); c != "" && !slices.Contains(out, c) {
+		if c := types.CanonicalUserSubject(v); c != "" && !slices.Contains(out, c) {
 			out = append(out, c)
 		}
 	}
@@ -474,7 +474,7 @@ func normalizeGovernancePreviewGroups(in []string) ([]string, string) {
 	}
 	out := make([]string, 0, len(in))
 	for _, v := range in {
-		c, ok := oidc.CanonicalGroupSubject(v)
+		c, ok := types.CanonicalGroupSubject(v)
 		if !ok {
 			continue // no login snapshot can carry it; enforcement drops it too
 		}

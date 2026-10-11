@@ -227,6 +227,7 @@ function headingFor(c: RunPolicyChange, ownRun: boolean, person: string): { key:
       break;
     case "workspace":
     case "source_control":
+    case "component":
     case "git_broker":
     case "model_access":
     case "mirror":

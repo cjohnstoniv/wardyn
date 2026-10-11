@@ -172,7 +172,11 @@ kubectl --context kind-wardyn-entra -n wardyn logs \
 ## Keeping the cluster on main
 
 - After Steps 3 and 4 have run once, `05-kind-deploy.sh <ref>` redeploys one commit:
-  - it builds every image from `git archive` of that ref under a per-commit tag, loads them, and makes one `helm upgrade --reuse-values` with the Entra overlay plus the Bedrock region and model.
+  - it builds every image from `git archive` of that ref under a per-commit tag, loads them, and makes one `helm upgrade --reuse-values` with the Entra overlay.
+- It gives Postgres a `postgres-data` PVC, so a node restart no longer empties the walk:
+  - **First run costs the database's contents** (the mount restarts the pod empty). Run it before the walk; a later deploy changes nothing.
+- It sets no Bedrock region or model: that is a console row added during [the walk](#the-walk), and a redeploy leaves it alone.
+- It keeps no state file of its own: what is deployed is read back off the cluster's image tag.
 - It does not re-run `quickstart.sh`, whose own upgrade carries no overlay.
 - `06-kind-follow-main.sh` runs it for the newest `main` commit whose CI passed and that descends from the commit the cluster is running (read off its `c-<sha>` image tag), one run at a time;
   - and does nothing when that commit is already deployed — run it on a schedule.

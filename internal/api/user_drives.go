@@ -45,7 +45,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -810,7 +809,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	// widening, not an inert row, and it is why the guard has to precede the
 	// fold rather than follow it (which is what CanonicalGroupSubject does).
 	if g.SubjectType == types.CapabilitySubjectGroup {
-		subject, ok := oidc.CanonicalGroupSubject(req.Subject)
+		subject, ok := types.CanonicalGroupSubject(req.Subject)
 		if !ok {
 			writeErrorReason(w, http.StatusBadRequest, reasonUserDriveGrantInvalid, "invalid allocation: subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
 			return

@@ -55,6 +55,7 @@ import (
 //     (nil profile, no store read), which is the same provable no-op an
 //     exemption would have been, without a door that can be claimed by mistake.
 type dispatchCeiling struct {
+	localSelfDefinedComponents bool
 	// resolved records that this value came from a constructor. Never set it by
 	// hand; the zero value must stay the "nobody decided" state.
 	resolved bool
@@ -130,7 +131,8 @@ func ceilingForDispatch(c governanceCeiling, ado adoEntraGrade, bedrock bedrockC
 	}
 	return dispatchCeiling{
 		resolved: true, deny: c.Spec.DeniedDomains, profile: c.Profile.Name,
-		maxEphemeralDiskMiB: c.Limits.MaxEphemeralDiskMiB, maxCPUMillis: c.Limits.MaxCPUMillis,
+		localSelfDefinedComponents: c.Limits.LocalSelfDefinedComponents,
+		maxEphemeralDiskMiB:        c.Limits.MaxEphemeralDiskMiB, maxCPUMillis: c.Limits.MaxCPUMillis,
 		maxMemoryMiB: c.Limits.MaxMemoryMiB, adoEntra: ado, bedrock: bedrock, adoStanding: standing,
 		agentGuardrailLocks: c.Limits.AutonomyRubric != nil && c.Limits.AutonomyRubric.AgentGuardrailLocks,
 	}

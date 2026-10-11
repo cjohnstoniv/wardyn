@@ -20,6 +20,7 @@ import { baseMeDrive } from "../../lib/test-fixtures";
 import { registerUnsaved } from "../../lib/unsaved-registry";
 import { UnsavedGuardProvider } from "../../lib/use-unsaved-guard";
 import { UNSAVED } from "../../lib/unsaved-copy";
+import { TIER } from "../wardyn/copy/tier";
 
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
 // the ONLY navigation. These pins fail if the drawer stops opening, drops nav
@@ -76,7 +77,7 @@ function renderMobileNav(role: Role = "admin", memberMode = false) {
 // dirty (every existing assertion below is unaffected), and what the
 // account-menu guard test just past this function needs to see the real
 // confirm dialog instead of the context's no-provider fallback.
-function renderTopBar(role: Role) {
+function renderTopBar(role: Role, tier?: "local-only" | "runner" | "org") {
   return render(
     <MemoryRouter>
       <UnsavedGuardProvider>
@@ -116,6 +117,7 @@ function renderTopBar(role: Role) {
             pendingApprovals={0}
             attentionCount={0}
             onNewRun={() => {}}
+            tier={tier}
           />
         </ThemeProvider>
       </UnsavedGuardProvider>
@@ -197,6 +199,32 @@ describe("TopBar — the header states no posture", () => {
     expect(
       within(header).queryByText(/^(Fence|Wall|Vault|No barrier)$/),
     ).not.toBeInTheDocument();
+  });
+});
+
+// RN-Q26: the account menu always names the tier; the top bar chip is local-only's alone.
+describe("TopBar — the tier", () => {
+  it("shows the chip and names the tier in the account menu when local-only", async () => {
+    renderTopBar("admin", "local-only");
+    const header = screen.getByRole("banner");
+    expect(within(header).getByText(TIER.CHIP)).toBeInTheDocument();
+    await userEvent.setup().click(screen.getAllByRole("button").at(-1)!);
+    expect(await screen.findByText(/Tier: Local only — not governed by an organisation/)).toBeInTheDocument();
+  });
+
+  it.each([
+    ["org", "Organisation"],
+    ["runner", "Runner for an organisation"],
+  ] as const)("%s: no chip, named in the menu", async (tier, label) => {
+    renderTopBar("admin", tier);
+    expect(within(screen.getByRole("banner")).queryByText(TIER.CHIP)).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getAllByRole("button").at(-1)!);
+    expect(await screen.findByText(`Tier: ${label}`)).toBeInTheDocument();
+  });
+
+  it("names nothing before setup status lands", () => {
+    renderTopBar("admin");
+    expect(screen.queryByText(TIER.CHIP)).not.toBeInTheDocument();
   });
 });
 

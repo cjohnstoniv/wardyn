@@ -3,7 +3,8 @@
 # ARCHITECTURE.md 5278 adds 11: recordings named as optional and kept in their own store, not in the audit log.
 # ARCHITECTURE.md 5309 adds 31: invariant 6 names the successful broker mint, whose audit row rides the mint transaction.
 # ARCHITECTURE.md 5359 adds 50: 18 (invariant 1 links docs/CREDENTIALS.md) and 32 (invariant 6: the application cannot erase an audit row; the one removal is the partition drop).
-ARCHITECTURE.md=5359 share=35
+# ARCHITECTURE.md 5360 adds 1: the 0.9 kernel note names client-mode runners in place of the remote decision API.
+ARCHITECTURE.md=5360 share=35
 SECURITY.md=999 share=35
 PROVENANCE.md=798 share=35
 docs/DATA-FLOW.md=1200 share=35

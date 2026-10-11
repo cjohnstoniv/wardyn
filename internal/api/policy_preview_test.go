@@ -32,7 +32,7 @@ func previewResult(t *testing.T, w *httptest.ResponseRecorder) policyPreviewResp
 	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if !result.Provisional || result.Pending == nil || result.Warnings == nil || result.RepositoryAccess == nil {
+	if !result.Provisional || result.Pending == nil || result.Warnings == nil || result.RepositoryAccess == nil || result.Provenance == nil {
 		t.Fatalf("missing provisional/array contract: %s", w.Body.String())
 	}
 	return result
@@ -198,7 +198,7 @@ func (s previewQuotaSpy) CountActiveRunsBy(context.Context, string) (int, error)
 	s.t.Fatal("preview counted member runs")
 	return 0, nil
 }
-func (s previewQuotaSpy) CountNonTerminalRuns(context.Context) (int, error) {
+func (s previewQuotaSpy) CountNonTerminalRuns(context.Context, uuid.UUID) (int, error) {
 	s.t.Fatal("preview counted deployment runs")
 	return 0, nil
 }

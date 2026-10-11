@@ -87,7 +87,17 @@ test.describe("signed out mid-page: sign in again in place (#483)", () => {
     await signInInDialog(page);
     // A fresh document: the marker set on the old one is gone.
     await expect
-      .poll(() => page.evaluate(() => (window as unknown as { beforeReauth?: boolean }).beforeReauth ?? false))
+      .poll(() =>
+        page
+          .evaluate(() => (window as unknown as { beforeReauth?: boolean }).beforeReauth ?? false)
+          // The reload destroys the old context mid-evaluate: that IS the answer,
+          // and this poll expects false, so a blanket catch would satisfy it with
+          // any error at all. Swallow only that one and let the rest out.
+          .catch((e: unknown) => {
+            if (e instanceof Error && /Execution context was destroyed/.test(e.message)) return false;
+            throw e;
+          }),
+      )
       .toBe(false);
     await expect(page).toHaveURL(/\/providers$/);
     await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
@@ -216,8 +226,12 @@ test.describe("the renewal strip over New run", () => {
     // One fixed expiry: a moving one would read as a renewal on the next /me.
     const expiresAt = inMinutes(2);
     await page.route("**/api/v1/me", async (route) => {
-      const response = await route.fetch();
-      await route.fulfill({ response, json: { ...(await response.json()), session_expires_at: expiresAt } });
+      try {
+        const response = await route.fetch();
+        await route.fulfill({ response, json: { ...(await response.json()), session_expires_at: expiresAt } });
+      } catch {
+        // The page went away while the real answer was in flight.
+      }
     });
     await gotoConsole(page);
     await page.getByRole("button", { name: "New run" }).click();

@@ -42,9 +42,10 @@ func TestHubRevokedWhileAdmissionWaitsNeverAttaches(t *testing.T) {
 			return Admission{}, ctx.Err()
 		}
 		return Admission{Substrate: sub, Link: link,
-			Pending: func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
-			State:   func(context.Context, []runnerwire.RunState) error { return nil },
-			Event:   func(context.Context, runnerwire.Event) error { return nil },
+			Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
+			BeginInventory: func(context.Context, string) error { return nil },
+			StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil },
+			Event:          func(context.Context, runnerwire.Event) error { return nil },
 		}, nil
 	}})
 	defer hub.Close()
@@ -89,9 +90,10 @@ func TestHubWrongKeyRunnerAndReplayedNonceNeverAttach(t *testing.T) {
 		Admit: func(context.Context, types.Runner) (Admission, error) {
 			admits.Add(1)
 			return Admission{Substrate: sub, Link: link,
-				Pending: func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
-				State:   func(context.Context, []runnerwire.RunState) error { return nil },
-				Event:   func(context.Context, runnerwire.Event) error { return nil },
+				Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
+				BeginInventory: func(context.Context, string) error { return nil },
+				StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil },
+				Event:          func(context.Context, runnerwire.Event) error { return nil },
 			}, nil
 		},
 	})
@@ -144,18 +146,18 @@ func TestHubWrongKeyRunnerAndReplayedNonceNeverAttach(t *testing.T) {
 func TestHubPendingActionsPrecedeStateAndReady(t *testing.T) {
 	action := runnerwire.PendingAction{ID: uuid.New()}
 	var cfg runnerwire.PeerConfig
-	a := Admission{State: func(context.Context, []runnerwire.RunState) error { return nil }, Event: func(context.Context, runnerwire.Event) error { return nil }}
-	configureAdmission(context.Background(), &cfg, false, []runnerwire.PendingAction{action}, a, &hubSession{}, func() *runnerwire.Peer { return nil })
+	a := Admission{BeginInventory: func(context.Context, string) error { return nil }, StatePage: func(context.Context, string, runnerwire.StatePage) error { return nil }, Event: func(context.Context, runnerwire.Event) error { return nil }}
+	configureAdmission(context.Background(), &cfg, false, []runnerwire.PendingAction{action}, a, &hubSession{}, uuid.NewString(), func() *runnerwire.Peer { return nil })
 	if err := cfg.OnControlChecked(runnerwire.Frame{Type: runnerwire.TypeReady}); !errors.Is(err, runnerwire.ErrBadFrame) {
 		t.Fatalf("READY before pending/state: %v", err)
 	}
-	state := runnerwire.Frame{Type: runnerwire.TypeState, Payload: []byte("[]")}
+	state := runnerwire.Frame{Type: runnerwire.TypeState, Payload: emptyStatePage(t)}
 	if err := cfg.OnControlChecked(state); !errors.Is(err, runnerwire.ErrBadFrame) {
 		t.Fatalf("STATE before pending result: %v", err)
 	}
 	refused := errors.New("durable event acceptance failed")
 	a.Event = func(context.Context, runnerwire.Event) error { return refused }
-	configureAdmission(context.Background(), &cfg, false, []runnerwire.PendingAction{action}, a, &hubSession{}, func() *runnerwire.Peer { return nil })
+	configureAdmission(context.Background(), &cfg, false, []runnerwire.PendingAction{action}, a, &hubSession{}, uuid.NewString(), func() *runnerwire.Peer { return nil })
 	data, _ := runnerwire.Marshal(runnerwire.ActionResult{ID: action.ID, Outcome: "applied"})
 	if err := cfg.OnEventChecked(runnerwire.Event{Kind: runnerwire.EventActionResult, Data: data}); !errors.Is(err, refused) {
 		t.Fatal(err)

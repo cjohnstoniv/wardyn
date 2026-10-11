@@ -152,7 +152,7 @@ func TestGrade_GitPATAndSSHKeyAreHigh_ButNeverFloorConfinement(t *testing.T) {
 	// RequiredConfinementFloor is enforced fail-closed at compose AND run.create,
 	// and an unconditional floor here would block every SCM clone on KVM-less
 	// hosts (see the note on grantIsWriteCapable).
-	if floor := RequiredConfinementFloor(spec); floor != "" {
+	if floor := RequiredConfinementFloor(spec, Baseline{}); floor != "" {
 		t.Fatalf("git_pat/ssh_key must not floor confinement, got %q", floor)
 	}
 }
@@ -267,7 +267,7 @@ func TestRequiredConfinementFloor(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := RequiredConfinementFloor(types.RunPolicySpec{EligibleGrants: tt.grants})
+			got := RequiredConfinementFloor(types.RunPolicySpec{EligibleGrants: tt.grants}, Baseline{})
 			if got != tt.want {
 				t.Errorf("RequiredConfinementFloor = %q, want %q", got, tt.want)
 			}

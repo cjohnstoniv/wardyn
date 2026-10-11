@@ -216,6 +216,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		SPIFFEID:         id.SPIFFEID,
 		RunnerTarget:     s.cfg.RunnerTarget,
 		Interactive:      req.Interactive,
+		Experience:       req.Experience,
 		WorkspacePath:    workspacePath,
 		WorkspaceIDs:     workspaceIDsOf(wsRefs), // referencedWorkspaces above, same spec as WorkspacePath
 		AutoStopAfterSec: spec.AutoStopAfterSec,
@@ -295,7 +296,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Persist the eligibility records + derive the non-secret sandbox wiring
 	// (github/git_pat/ssh grant ids, api_key proxy injections, SCM egress) —
 	// see persistRunGrants. A grant write failure has already answered 500.
-	gw, ok := s.persistRunGrants(ctx, w, r, runID, now, spec)
+	gw, ok := s.persistRunGrants(ctx, w, r, runID, now, spec, run.Placement)
 	if !ok {
 		abort(createRunGrantAbortHint)
 		return

@@ -45,6 +45,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
@@ -377,6 +378,11 @@ func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Reque
 		CapturedAt:   now.UTC(),
 		Source:       adoEntraSourceSignIn,
 	}
+	// The resume of a run a resolved request held takes the run's lock, which must precede this sign-in
+	// lock (db.LockOrder): it runs after the lock is released, the deferred calls running last-in first.
+	var resolved []uuid.UUID
+	parent := ctx
+	defer func() { s.approvalsClosed(parent, resolved) }()
 	ctx, unlock, err := s.lockADOSignIn(ctx, subject, ec.rowUID)
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: could not take the Azure sign-in lock", slog.String("row", ec.rowUID), slog.Any("err", err))
@@ -403,7 +409,7 @@ func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Reque
 		"audience": stamp.Audience, "scopes": granted,
 		"expires_at": blob.ExpiresAt.Format(time.RFC3339),
 	})
-	s.resolvePendingAzureReauth(ctx, subject, ec.rowUID)
+	resolved = s.resolvePendingAzureReauth(ctx, subject, ec.rowUID)
 	http.Redirect(w, r, s.cfg.BasePath+ec.donePath, http.StatusFound)
 }
 

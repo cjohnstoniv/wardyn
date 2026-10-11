@@ -359,8 +359,9 @@ func (s *reauthPauseStore) ResolveReauthApproval(context.Context, uuid.UUID, typ
 	return types.ApprovalRequest{}, nil
 }
 
-// TestRunPause_AWSReauthResolveResumesAPausedRun: the AWS sign-in resolving a
-// paused run's re-auth request thaws it, through resolveReauth's own call.
+// TestRunPause_AWSReauthResolveResumesAPausedRun: the AWS reconcile-on-read
+// resolving a paused run's re-auth request thaws it, through resolveReauth's own
+// call. The capture door's resume is TestRunPause_AWSCaptureResumesAPausedRun.
 func TestRunPause_AWSReauthResolveResumesAPausedRun(t *testing.T) {
 	f := newPauseFixture(t, time.Hour)
 	paused := time.Now().UTC()

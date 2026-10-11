@@ -477,7 +477,8 @@ func (s *Server) applyProviderEnv(ctx context.Context, run types.AgentRun, lane 
 		// codex 0.149.1 reads neither OPENAI_* variable: its base URL comes
 		// from config.toml and its key from CODEX_API_KEY (task mode) or
 		// auth.json (interactive), both of which the image's prep writes
-		// from these two. The OPENAI_* pair stays for an older codex.
+		// from these two. The OPENAI_* pair is unused by codex and deprecated: only the
+		// pinned codex is supported.
 		sandboxEnv[envCodexBaseURL] = codexBaseURL(proxyURL, lane.key.upstream)
 		sandboxEnv[envCodexAPIKey] = "wardyn-proxy-injected"
 		sandboxEnv[envOpenAIBaseURL] = proxyURL + "/wardyn/llm/openai"
@@ -512,10 +513,10 @@ func (s *Server) authorProviderKeyInjection(ctx context.Context, run types.Agent
 		"snapshot":    providerGrantSnapshot{OwnerSubject: lane.owner, ProviderUID: lane.provider.UID},
 	})
 	grantID := uuid.New()
-	if _, err := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
+	if _, err := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 		Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600},
-	}); err != nil {
+	}, false); err != nil {
 		s.refuseProviderDispatch(ctx, run, lane.provider.Kind, providerDenial{msg: "could not author the model provider credential injection: " + err.Error()}, nil)
 		return runner.InjectionGrant{}, false
 	}

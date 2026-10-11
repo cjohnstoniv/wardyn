@@ -122,6 +122,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -138,12 +139,20 @@ except urllib.error.HTTPError as error:
 port = os.environ["WARDYN_E2E_ADDR"].rsplit(":", 1)[1]
 token_file = Path("../.e2e-bin", "token-" + port)
 assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
+spec = next(arg for arg in sys.argv if arg.endswith(".spec.ts"))
 Path(os.environ["E2E_TEST_EVENTS"], f"client-{os.getpid()}.json").write_text(json.dumps({
     "token_hash": hashlib.sha256(token.encode()).hexdigest(),
-    "db": os.environ["WARDYN_E2E_PG_DBNAME"], "url": url,
+    "db": os.environ["WARDYN_E2E_PG_DBNAME"], "url": url, "spec": spec,
 }))
+# E2E_TEST_FLAKY=<spec basename>[,<spec basename>...] marks those specs' single
+# test flaky, the shape a pass-only-on-retry produces.
+if Path(spec).name in os.environ.get("E2E_TEST_FLAKY", "").split(","):
+    stats, suites = {"expected": 0, "unexpected": 0, "flaky": 1, "skipped": 0}, [
+        {"title": "", "specs": [{"title": "flaky on a retry", "tests": [{"status": "flaky"}]}]}]
+else:
+    stats, suites = {"expected": 1, "unexpected": 0, "flaky": 0, "skipped": 0}, []
 Path(os.environ["PLAYWRIGHT_JSON_OUTPUT_NAME"]).write_text(json.dumps({
-    "stats": {"expected": 1, "unexpected": 0, "flaky": 0, "skipped": 0}, "suites": [],
+    "stats": stats, "suites": suites,
 }))
 time.sleep(0.5)
 PY
@@ -238,6 +247,44 @@ done
 rm ui/e2e/cockpit-terminal-tmux-probe.spec.ts
 log "explicit non-tmux selections and shards preserve host overrides"
 
+# The specs one run actually executed, sorted. The shard split is pinned by
+# these sets, not by the log line the script prints about it.
+ran_specs() {
+  python3 - "${E2E_TEST_EVENTS}" <<'PY'
+import json, pathlib, sys
+print(" ".join(sorted(json.loads(p.read_text())["spec"] for p in pathlib.Path(sys.argv[1]).glob("client-*.json"))))
+PY
+}
+
+# WARDYN_E2E_SHARD=i/n keeps every n-th spec of the byte-sorted list, so a spec
+# runs in exactly one shard whatever the runner's locale — a spec that ran in
+# both, or in neither, is a coverage hole no later job sees.
+for shard in 1/2 2/2 1/3; do
+  rm -f "${E2E_TEST_EVENTS}"/*
+  env WARDYN_E2E_SHARD="${shard}" ./scripts/run-ui-e2e.sh > "${tmp}/shard.log" 2>&1 \
+    || { cat "${tmp}/shard.log"; die "shard ${shard} failed"; }
+  case "${shard}" in
+    1/2) want="e2e/five.spec.ts e2e/one.spec.ts e2e/three.spec.ts" ;;
+    2/2) want="e2e/four.spec.ts e2e/six.spec.ts e2e/two.spec.ts" ;;
+    *) want="e2e/five.spec.ts e2e/six.spec.ts" ;;
+  esac
+  [[ "$(ran_specs)" == "${want}" ]] || die "shard ${shard} ran [$(ran_specs)], want [${want}]"
+  log "shard ${shard} runs its own specs and no other"
+done
+
+# A shard that holds no spec must refuse, not report a green run that ran
+# nothing — and must refuse before any build, database or backend work.
+for bad in 7/7 1 0/2 2/2x; do
+  rm -f "${E2E_TEST_EVENTS}"/*
+  if env WARDYN_E2E_SHARD="${bad}" ./scripts/run-ui-e2e.sh > "${tmp}/refused.log" 2>&1; then
+    die "wrapper accepted WARDYN_E2E_SHARD=${bad}"
+  fi
+  grep -qE 'holds no spec|must be i/n|needs 1 <= i <= n' "${tmp}/refused.log" \
+    || { cat "${tmp}/refused.log"; die "wrong WARDYN_E2E_SHARD=${bad} refusal"; }
+  [[ -z "$(find "${E2E_TEST_EVENTS}" -type f -print -quit)" ]] || die "WARDYN_E2E_SHARD=${bad} worked before refusing"
+done
+log "an empty, malformed or out-of-range shard refuses before any work"
+
 run_wrapper one two
 check_events 2 1 '' 127.0.0.1
 log "per-up rotation, private token handoff and effective default loopback binds"
@@ -278,4 +325,28 @@ log "port-only and localhost overrides stay loopback in the real-tmux lane"
 
 [[ "$(e2e_listen_addr '192.0.2.1:8088')" == '192.0.2.1:8088' ]] || die "explicit non-tmux host lost"
 e2e_require_loopback '[::1]:8088' 127.0.0.2:8089
+
+# One checkout runs this wrapper twice: ci.yml's ui-e2e job runs its shard and
+# then the governance four-eyes spec as a second call. The flake list is
+# APPENDED to, so the second call cannot truncate the shard's own flakes out of
+# the file notify-flaky reads (#1880).
+FLAKY_TSV=test/reports/e2e/flaky.tsv
+flaky_calls=0
+for flaky in one three; do
+  flaky_calls=$((flaky_calls + 1))
+  rm -f "${E2E_TEST_EVENTS}"/*
+  rc=0
+  env E2E_TEST_FLAKY="${flaky}.spec.ts" ./scripts/run-ui-e2e.sh one three > "${tmp}/flake.log" 2>&1 || rc=$?
+  [[ ${rc} -eq 1 ]] || { cat "${tmp}/flake.log"; die "a new flake must fail the gate, got rc=${rc}"; }
+  grep -q "^${flaky}.spec.ts"$'\t'"flaky on a retry"$'\t''new$' "${FLAKY_TSV}" \
+    || { cat "${FLAKY_TSV}"; die "call on ${flaky} left no classified flake"; }
+  [[ "$(wc -l < "${FLAKY_TSV}")" -eq "${flaky_calls}" ]] \
+    || { cat "${FLAKY_TSV}"; die "call on ${flaky} dropped an earlier call's flake"; }
+done
+# A run where nothing flaked leaves the earlier lists in place.
+rm -f "${E2E_TEST_EVENTS}"/*
+run_wrapper two four
+[[ "$(wc -l < "${FLAKY_TSV}")" -eq 2 ]] || { cat "${FLAKY_TSV}"; die "a clean call truncated the flake list"; }
+log "consecutive calls append to the flake list; a clean call leaves it alone"
+
 log "test-e2e-harness: PASS"

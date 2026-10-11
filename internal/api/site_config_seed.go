@@ -129,7 +129,7 @@ func sortedCopy(in []string) []string {
 func sortedInternalHosts(in []types.InternalHost) []string {
 	out := make([]string, len(in))
 	for i, h := range in {
-		out[i] = h.HostSuffix + " " + strings.Join(sortedCopy(h.CIDRs), ",")
+		out[i] = fmt.Sprintf("%s %s %t", h.HostSuffix, strings.Join(sortedCopy(h.CIDRs), ","), h.Baseline)
 	}
 	slices.Sort(out)
 	return out

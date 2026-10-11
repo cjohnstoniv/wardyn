@@ -351,7 +351,7 @@ path "transit/decrypt/wardyn" { capabilities = ["update"] }
    transit:transit/wardyn version 1; …`
 4. Unset `WARDYN_AGE_KEY` and restart. wardynd refuses to start until you do (and, the other way, refuses without it, naming `-rewrap`, while any row is still sealed under it).
 
-**Requiring it.** A deployment that mandates key custody sets `WARDYN_KEK_REQUIRED` (chart `kek.required`). wardynd then refuses to start while the local key wraps credentials, with or without `WARDYN_AGE_KEY`, and `wardynd -rewrap` still runs.
+**Requiring it.** A deployment that mandates key custody sets `WARDYN_KEK_REQUIRED` (chart `kek.required`). wardynd then refuses to start unless a key service (or an external store) is configured, with or without `WARDYN_AGE_KEY`, so new writes always use it. It does not move rows the local key already wraps and does not refuse to start while they remain: `/setup/status` shows `kek_local_rows` with their count until `wardynd -rewrap` has moved them. `wardynd -rewrap` still runs with the flag set.
 
 **Back:** set `WARDYN_KEK=local` and `WARDYN_AGE_KEY`, keep `WARDYN_VAULT_TRANSIT_KEY` so Transit still reads its rows, restart, and run `wardynd -rewrap` again.
 

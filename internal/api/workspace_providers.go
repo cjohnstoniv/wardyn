@@ -267,6 +267,9 @@ func validateWorkspaceProviders(p *types.WorkspaceProviders, refuseSSHPathScope 
 		if err := validateProviderEntra(i, row); err != nil {
 			return err
 		}
+		if err := validateGitHubAppInstallURL(i, row); err != nil {
+			return err
+		}
 	}
 	if err := validateOneEntraRow(p.Git); err != nil {
 		return err

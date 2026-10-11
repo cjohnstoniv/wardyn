@@ -36,7 +36,7 @@ func TestRunnerStatePG_OfflineUsesExistingHeadlessLossPath(t *testing.T) {
 	}
 	srv := New(cfg)
 	missing := []runnerwire.RunState{{RunID: run.ID, SandboxPresent: false}}
-	if _, err := srv.StateFromRunner(ctx, rn.ID, missing); !errors.Is(err, store.ErrRunnerReconciliationRequired) {
+	if err := finalStatePage(t, srv, rn.ID, missing...); !errors.Is(err, store.ErrRunnerReconciliationRequired) {
 		t.Fatalf("fresh missing sandbox admitted: %v", err)
 	}
 	if err := srv.OfflineFromRunner(ctx, rn.ID); err != nil {
@@ -59,10 +59,10 @@ func TestRunnerStatePG_OfflineUsesExistingHeadlessLossPath(t *testing.T) {
 	if err := srv.OfflineFromRunner(ctx, rn.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := srv.StateFromRunner(ctx, rn.ID, missing); err != nil {
+	if err := finalStatePage(t, srv, rn.ID, missing...); err != nil {
 		t.Fatalf("lapsed missing sandbox cannot converge: %v", err)
 	}
-	if _, err := srv.StateFromRunner(ctx, rn.ID, nil); err != nil {
+	if err := finalStatePage(t, srv, rn.ID); err != nil {
 		t.Fatalf("omitted kept sandbox cannot converge: %v", err)
 	}
 	if probe.stops.Load() != 1 {

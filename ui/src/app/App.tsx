@@ -631,6 +631,7 @@ export default function App() {
               // (undefined -> false) while setupStatus hasn't landed yet,
               // never a guess painted off no data.
               noBarrier={setupStatus ? !deriveReadiness(setupStatus).barrierReady : false}
+              tier={setupStatus?.tier}
               onSignOut={async () => {
                 // HIGH fix (sign-out): tell the server to clear the OIDC session
                 // BEFORE dropping local state. Clearing only the local admin token

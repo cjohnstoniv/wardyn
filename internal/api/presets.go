@@ -154,6 +154,9 @@ func (s *Server) validatePresetRequest(w http.ResponseWriter, r *http.Request, n
 			"request.%s is set per launch, so a preset cannot carry it", bad[0]))
 		return false
 	}
+	if presetRunModeRefusal(req.Request).write(s, w, r) {
+		return false
+	}
 	if msg := agentRequirementError(req.Request); msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonPresetRequestInvalid, "request: "+msg)
 		return false
@@ -259,7 +262,12 @@ func (s *Server) decodeRunRequest(w http.ResponseWriter, r *http.Request, req *c
 	if !decodeStrict(w, r, req) {
 		return false
 	}
-	return s.expandRunPreset(w, r, req)
+	if !s.expandRunPreset(w, r, req) {
+		return false
+	}
+	// After the preset, which can bring its own request: a new client's carriers
+	// are refused or projected onto the legacy fields here, before any gate reads them.
+	return !applyRunMode(req).write(s, w, r)
 }
 
 // expandRunPreset replaces a preset launch with the stored request, keeping
@@ -297,6 +305,9 @@ func (s *Server) expandRunPreset(w http.ResponseWriter, r *http.Request, req *cr
 	v, err := presetView(p)
 	if err != nil {
 		writeServerError(w, r, "decode preset", err)
+		return false
+	}
+	if presetRunModeRefusal(v.Request).write(s, w, r) {
 		return false
 	}
 	title, task := req.Title, req.Task

@@ -740,10 +740,10 @@ func (s *Server) createADOEntraGrants(ctx context.Context, run types.AgentRun,
 			return nil, s.refuseADOEntraGrant(ctx, run, "grant_scope", "could not author the Azure DevOps credential injection", merr)
 		}
 		grantID := uuid.New()
-		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
+		if _, gerr := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 			ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 			Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: adoEntraGrantTTLSeconds},
-		}); gerr != nil {
+		}, false); gerr != nil {
 			return nil, s.refuseADOEntraGrant(ctx, run, "grant_write", "could not record the Azure DevOps credential grant", gerr)
 		}
 		rule, derr := injectionRuleFromScope(scope)

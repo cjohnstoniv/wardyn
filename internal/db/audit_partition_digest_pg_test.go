@@ -100,7 +100,7 @@ func TestPG_AuditPartitionDigest_FoldsTheClosedPartition(t *testing.T) {
 func TestPG_AuditPartitionDigest_RefusesWhatIsNotAClosedPartition(t *testing.T) {
 	f := newUpgradeFixture(t, 2)
 	f.convert(t)
-	live := pgScalar[string](t, f.owner, `SELECT m->>'name' FROM audit_partition_meta, jsonb_array_elements(manifest) m ORDER BY m->>'lo' LIMIT 1`)
+	live := pgScalar[string](t, f.owner, `SELECT m->>'name' FROM audit_partition_meta, jsonb_array_elements(manifest) m WHERE m->>'name' <> 'audit_events_legacy' ORDER BY m->>'lo' LIMIT 1`)
 	for name, tc := range map[string]struct{ arg, wantErr string }{
 		"open":            {live, "still open"},
 		"not a partition": {"agent_runs", "is not a partition of audit_events"},

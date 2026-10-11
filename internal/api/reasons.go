@@ -154,6 +154,13 @@ const (
 	// capability neither request field can fix).
 	reasonImageDevcontainerExclusive = "image_devcontainer_exclusive" // image and devcontainer_repo were both set
 	reasonImageBuilderUnavailable    = "image_builder_unavailable"    // a custom image was requested but this control plane has no image builder wired
+	// The 0.9 run-mode contract (run_mode.go): what a person is starting. The
+	// sentences are run_mode_refusals.go's, with a TypeScript twin.
+	reasonRunModeRequired    = "run_mode_required"    // a new client's mode or background workload is unset, and is never inferred
+	reasonRunModeInvalid     = "run_mode_invalid"     // a run-mode carrier is malformed
+	reasonRunModeConflict    = "run_mode_conflict"    // run-mode carriers contradict each other, or an older field that replaced them
+	reasonStartFolderInvalid = "start_folder_invalid" // start_folder is malformed, names an attachment the run lacks, or escapes its mount
+	reasonRunBackgroundOnly  = "run_background_only"  // a background run has no interactive door: attach, exec, SSH, UI gateway, desktop
 	// validateWorkspaceSources / authorizeSpecWorkspaceSources (#656 M1: split
 	// from reasonWorkspaceSourcesInvalid/reasonWorkspaceSourcesUnauthorized —
 	// except the not-onboarded arm, which STAYS one shared reason across both
@@ -233,6 +240,12 @@ const (
 	reasonSiteConfigIntegrationsViaOwnRoute = "site_config_integrations_via_own_route" // integrations were named inline instead of through their own endpoints
 	reasonSiteConfigInvalid                 = "site_config_invalid"                    // the submitted config fails one of validateAgentProviders/validateSiteConfig/validateModelProviders/validateDefaultProviders/validateModelProviderImagePrereqs
 	reasonSiteConfigStale                   = "site_config_stale"                      // If-Match does not match the current site-config ETag
+	reasonSiteConfigEgressViaOwnRoute       = "site_config_egress_via_own_route"       // a changed egress block was named inline instead of through PUT /governance/egress-baseline
+	reasonSiteConfigRunnersViaOwnRoute      = "site_config_runners_via_own_route"      // a changed runners.enabled was named inline instead of through PUT /runners/settings
+
+	// GET/PUT /governance/egress-baseline.
+	reasonEgressBaselineInvalid = "egress_baseline_invalid" // a baseline host is not an exact hostname, or the set is too large
+	reasonEgressBaselineStale   = "egress_baseline_stale"   // If-Match does not match the current baseline ETag
 
 	// POST /site-config/probe-proxy and PUT/DELETE .../egress-redirects.
 	reasonSiteConfigProbeRequestInvalid = "site_config_probe_request_invalid" // the probe body did not decode
@@ -271,6 +284,10 @@ const (
 
 	// /api/v1/people.
 	reasonPeopleStoreUnavailable  = "people_store_unavailable"  // pre-created people require the Postgres store backend
+	reasonIdentityNotFound        = "identity_not_found"        // no identity row by that id
+	reasonIdentityNotBound        = "identity_not_bound"        // the identity row has no principal to clear, or another one by the time it was locked
+	reasonIdentityNotRebindable   = "identity_not_rebindable"   // the identity has no object id, so an unbind would orphan it
+	reasonIdentityPrincipalInUse  = "identity_principal_in_use" // the principal an unbind would release still holds an API token, SSH key or active run
 	reasonPersonPrincipalInvalid  = "person_principal_invalid"  // principal is not 1-255 printable characters
 	reasonPersonPrincipalReserved = "person_principal_reserved" // principal is reserved for a non-person identity
 	reasonPersonEmailInvalid      = "person_email_invalid"      // email fails validation
@@ -411,4 +428,28 @@ const (
 	reasonGitPATNarrowingSSHConflict     = "git_pat_narrowing_ssh_conflict"     // a same-forge ssh_key is a second push path the broker cannot see
 	reasonGitPATNarrowingUnsupportedHost = "git_pat_narrowing_unsupported_host" // the host is served by a lane that ignores the narrowing axes
 	reasonGitPATAPIForgeDisabled         = "git_pat_api_forge_disabled"         // api: true on a forge whose API door is off on this deployment
+)
+
+// Run templates (template_document.go, template_refusals.go): the refusals of
+// a template document and of the scopes it is published to. The sentences are
+// template_refusals.go's, with a TypeScript twin; the console matches on the
+// reason, never on the text.
+const (
+	reasonTemplateDocumentInvalid    = "template_document_invalid"     // the text is not one well-formed, bounded template document
+	reasonTemplateVersionUnsupported = "template_version_unsupported"  // api_version or kind is not one this server reads
+	reasonTemplateFieldUnknown       = "template_field_unknown"        // a key the template schema does not have
+	reasonTemplateFieldInvalid       = "template_field_invalid"        // a value of the wrong shape, null, or a redacted placeholder
+	reasonTemplateFieldExcluded      = "template_field_excluded"       // a field that is launch-only or retired and never part of a template
+	reasonTemplateSecretRefused      = "template_secret_refused"       // a secret value or credential material, which a template never holds
+	reasonTemplateRunStateRefused    = "template_run_state_refused"    // state of one run: identity, session, claim, admission or a resolved result
+	reasonTemplateMetadataInContent  = "template_metadata_in_content"  // owner, scope, group or revision, which the server assigns, written in the document
+	reasonTemplateFieldUnavailable   = "template_field_unavailable"    // a valid field this server cannot honour yet: refused, never dropped
+	reasonTemplateDependencyMissing  = "template_dependency_missing"   // a field whose dependency is neither included nor listed under needs_setup
+	reasonTemplateCoverageInvalid    = "template_coverage_invalid"     // coverage does not fit the content: an empty intent, or a full template that needs setup
+	reasonTemplateSharedFieldRefused = "template_shared_field_refused" // a field that names one person's own thing, in an organisation or group template
+	reasonTemplateScopeForbidden     = "template_scope_forbidden"      // the caller lacks the authority to write to that scope
+	reasonTemplateGroupUnverified    = "template_group_unverified"     // the caller's group membership cannot be verified from this sign-in
+	reasonTemplateNotFound           = "template_not_found"            // no such template, or the caller may not see it
+	reasonTemplateRevisionConflict   = "template_revision_conflict"    // the template changed since the revision the caller read
+	reasonTemplatesUnavailable       = "templates_unavailable"         // 501: the template store is not available on this server yet
 )

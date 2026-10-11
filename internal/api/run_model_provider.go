@@ -56,6 +56,9 @@ type runProviderChoice struct {
 	// renewAtLaunch: Review's dry check found the chosen AWS session expired
 	// but renewable, so launch will renew it (mpBRRenewAtLaunch).
 	renewAtLaunch bool
+	// loginHost is the nonsecret destination resolved from the already-read
+	// own AWS session. Preview does not read that session and leaves it empty.
+	loginHost string
 }
 
 // chooseModelProvider is the design's resolution order (multi-provider §2.4):
@@ -282,6 +285,9 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		}
 		// A dry check passes an expired AWS session only when it is renewable.
 		choice.renewAtLaunch = !refresh && choice.provider.Kind == types.ModelProviderBedrockSSO && blob.expired(s.cfg.Now())
+		if choice.provider.Kind == types.ModelProviderBedrockSSO {
+			choice.loginHost = ssoPortalHost(blob.Region, s.cfg.AWSSSOEndpointOverride)
+		}
 	}
 	_, needsModel := agentLLMProvider(req.Agent)
 	if !needsModel || !createDoorIsModelRun(req) {

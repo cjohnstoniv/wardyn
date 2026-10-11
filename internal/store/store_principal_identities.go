@@ -165,3 +165,77 @@ func (s PG) IdentitiesByPrincipal(ctx context.Context, principal string) ([]Prin
 	return collect(ctx, s.Pool, "list", "principal identities", `SELECT `+principalIdentityCols+`
 		FROM principal_identities WHERE principal = $1 ORDER BY created_at, id`, []any{principal}, scanPrincipalIdentity)
 }
+
+// ErrIdentityNotRebindable is UnbindIdentity's refusal of a row with no object id: such a row is found only by
+// its principal, so an unbound one is never reached again and the next sign-in would create a second row
+// without this one's epoch or SCIM linkage.
+var ErrIdentityNotRebindable = errors.New("store: identity has no object id and cannot be re-bound")
+
+// PrincipalInUseError is UnbindIdentity's refusal while the principal it would release still holds something
+// the leaver flow reaches only through the row's principal.
+type PrincipalInUseError struct{ APITokens, SSHKeys, ActiveRuns int }
+
+func (e *PrincipalInUseError) Error() string {
+	return fmt.Sprintf("store: the principal still holds %d API token(s), %d SSH key(s) and %d active run(s)", e.APITokens, e.SSHKeys, e.ActiveRuns)
+}
+
+// IdentityUnbinder is the optional store seam behind POST /admin/identities/{id}/unbind.
+type IdentityUnbinder interface {
+	GetIdentity(ctx context.Context, id uuid.UUID) (PrincipalIdentity, error)
+	// UnbindIdentity clears the principal of identity id, so the next sign-in binds the row afresh, and
+	// cuts the released principal's sessions as a suspension does. principal is the one the caller read the
+	// row bound to: a row bound to another by the time it is locked is ErrIdentityRebound. Refused, with
+	// nothing written: a deactivated or purged row (ErrIdentityDeactivated), a row with no principal
+	// (ErrConflict), a row with no object id (ErrIdentityNotRebindable), a principal that still holds an API
+	// token, SSH key or non-terminal run (*PrincipalInUseError), a missing row (ErrNotFound). Once the row is
+	// re-bound, deactivation and the kill sweep reach only the new principal, so the old one must hold
+	// nothing. The epoch, the deactivation columns and the SCIM linkage are untouched.
+	UnbindIdentity(ctx context.Context, id uuid.UUID, principal string) error
+}
+
+var _ IdentityUnbinder = PG{}
+
+func (s PG) UnbindIdentity(ctx context.Context, id uuid.UUID, principal string) error {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return fmt.Errorf("store: unbind identity: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	row, err := scanPrincipalIdentity(tx.QueryRow(ctx, `SELECT `+principalIdentityCols+` FROM principal_identities WHERE id = $1 FOR UPDATE`, id))
+	switch {
+	case err != nil:
+		return err
+	case row.DeactivatedAt != nil || row.PurgedAt != nil:
+		return ErrIdentityDeactivated
+	case row.Principal == "":
+		return fmt.Errorf("store: identity is not bound to a principal: %w", ErrConflict)
+	case row.Principal != principal:
+		return ErrIdentityRebound
+	case row.ObjectID == "":
+		return ErrIdentityNotRebindable
+	}
+	held := &PrincipalInUseError{}
+	if err = tx.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM api_tokens WHERE principal = $1 AND `+apiTokenLive+`),
+			(SELECT count(*) FROM ssh_public_keys WHERE principal = $1),
+			(SELECT count(*) FROM agent_runs WHERE created_by = $1 AND state = ANY($2))`,
+		principal, nonTerminalStateNames()).Scan(&held.APITokens, &held.SSHKeys, &held.ActiveRuns); err != nil {
+		return fmt.Errorf("store: count what the principal holds: %w", err)
+	}
+	if *held != (PrincipalInUseError{}) {
+		return held
+	}
+	if _, err = tx.Exec(ctx, `UPDATE principal_identities SET principal = NULL WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("store: unbind identity: %w", err)
+	}
+	// As a suspension does, so a cookie the released sub still holds dies with its binding.
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, clock_timestamp())
+		ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, principal); err != nil {
+		return fmt.Errorf("store: session cutoff: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("store: commit identity unbind: %w", err)
+	}
+	return nil
+}

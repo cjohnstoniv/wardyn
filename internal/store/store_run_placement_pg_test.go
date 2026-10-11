@@ -1,7 +1,7 @@
 // Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Postgres-backed tests for the run placement columns (migration 0138): what
+// Postgres-backed tests for the run placement columns (migration 0141): what
 // CreateRun persists, what GetRun reads back, what a pre-0.9 row defaults to,
 // and what the closed CHECKs and the runners foreign key reject. Guarded by
 // WARDYN_TEST_PG; skipped cleanly when unset.

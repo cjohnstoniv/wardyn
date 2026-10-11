@@ -10,8 +10,10 @@
 import type { AutonomyLevel, AutonomyResolution, RunLimits } from "../api/governance";
 import type { PolicyRef } from "../api/health";
 import type { ComponentFact } from "./components";
-import type { AllowedImage, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
+import type { ProvenanceEntry } from "./policy-preview";
+import type { AllowedImage, Experience, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
 import type { RunPolicySpec } from "./policy";
+import type { ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
 import type { SCMAccess } from "./setup";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
@@ -113,6 +115,12 @@ export interface AgentRun {
   // Optional so an older backend payload (or a test fixture) without the field
   // still type-checks and degrades to autonomous.
   interactive?: boolean;
+  // The canonical run mode chosen at launch (Go: AgentRun.Experience), the one
+  // value every interactive door reads: a "background" run has no terminal, SSH,
+  // interactive exec, web gateway or desktop. Absent for a run from an older
+  // client or before 0.9, which keeps every door's behaviour. Not `interactive`,
+  // which is the legacy execution flag.
+  experience?: Experience;
   // The host working-directory the run's workspace is bind-mounted from. Surfaced
   // on the runs board so a workspace-directory collision is visible at a glance.
   workspace_path?: string;
@@ -366,6 +374,19 @@ export interface AdminRestartResponse {
   results: AdminRestartResult[];
 }
 
+// sync (GET /runs/{id} only) lists the wardyn-sync sessions open now on the
+// replica that answers, from the gateway's live per-run sync budget; another
+// replica's sessions are not listed. dir is the directory the client requested,
+// not proof the sandbox started there. Ended sessions are the ssh.sync.transfer
+// rows.
+export interface RunSyncOpen {
+  dir: string;
+  opened_at: string;
+}
+export interface RunSync {
+  open: RunSyncOpen[];
+}
+
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that
 // endpoint sends (handleGetRun's anonymous wrapper struct, runs_policy.go) —
 // the READ-ONLY denormalization of the run's EFFECTIVE policy ui_apps. The run
@@ -408,6 +429,8 @@ export interface RunDetail extends AgentRun {
   // The policy the run was launched under and how to ask for a change to it
   // (GET /runs/{id}, internal/policyref.Ref). Absent when none applies.
   policy?: PolicyRef;
+  // Wardyn-sync sessions open now (GET /runs/{id} only); see RunSync.
+  sync?: RunSync;
 }
 
 // GET /api/v1/runs/{id}/policy — the policy a run actually got (the run page's
@@ -430,6 +453,7 @@ export interface RunPolicySource {
 export type RunPolicyCause =
   | "workspace"
   | "source_control"
+  | "component"
   | "mirror"
   | "model_access"
   | "git_broker"
@@ -777,6 +801,9 @@ export interface PreflightResult {
   // The preview's rows plus the credential verdicts only this door reads.
   // Absent for a run with no repository on a Git provider and no component.
   components?: ComponentFact[];
+  // Why each entry of the resolved spec is there; the policy preview returns the same rows
+  // for the same request. Absent on an older server.
+  provenance?: ProvenanceEntry[];
   // What each placement offers this run, keyed by placement and runner; empty
   // until the resources lane fills it (internal/api's preflightResponse.Resources;
   // optional here so an older server still types, the server always sends the array).
@@ -788,6 +815,11 @@ export interface PreflightResult {
   // lane resolves it), and the images the organisation lets the person choose.
   image?: ImageFact;
   allowed_images?: AllowedImage[];
+  // The pool the request resolves to and how it was chosen (absent until the
+  // pool lane resolves one), and the pools the person may choose, each with
+  // whether it is available; empty until that lane fills it.
+  runner_pool?: ResolvedRunnerPool;
+  runner_pools?: RunnerPoolChoice[];
 }
 
 // Where a run's MODEL credential lands (internal/api.modelCredentialResidency).

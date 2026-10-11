@@ -17,7 +17,7 @@ import (
 // two doors so a person hears it before the run, not as a FAILED badge:
 //
 //   - narrowed: the sentence for the 201's clamp_warnings when the bound kept
-//     some of a non-empty list and dropped the rest;
+//     some of a non-empty list and dropped the rest, and the capabilities it dropped;
 //   - none=true: nothing in the list may stand, which dispatch refuses with
 //     ado_capabilities_none_permitted. Review refuses with the same reason and
 //     sentence; launch still refuses at dispatch (the live provider row is
@@ -29,30 +29,31 @@ import (
 // or with no list, which is every run on most installs.
 func (s *Server) adoStandingAtDoor(r *http.Request, spec types.RunPolicySpec, scmSite types.SiteConfig,
 	ceiling governanceCeiling,
-) (narrowed string, none bool) {
+) (narrowed string, droppedCaps []adoscope.Capability, none bool) {
 	picked := spec.AzureDevOpsCapabilities
 	if len(picked) == 0 {
-		return "", false
+		return "", nil, false
 	}
 	lane, on := resolveADOEntraRun(scmSite, repoLocatorsOf(spec.WorkspaceRepos),
 		runIdentitySubject(r.Context(), principalFromRequest(r)))
 	if !on {
-		return "", false
+		return "", nil, false
 	}
 	bounded, permitted := lane.withPolicyCapabilities(picked, adoStandingFor(ceiling))
 	if !permitted {
-		return "", true
+		return "", nil, true
 	}
 	var dropped []string
 	for _, c := range picked {
 		if !slices.Contains(bounded.caps, c) {
 			dropped = append(dropped, "“"+adoscope.ShortLabel(c)+"”")
+			droppedCaps = append(droppedCaps, c)
 		}
 	}
 	if len(dropped) == 0 {
-		return "", false
+		return "", nil, false
 	}
-	return adoNotIncluded(dropped), false
+	return adoNotIncluded(dropped), droppedCaps, false
 }
 
 // adoNotIncluded is the approved canon sentence (#1384.1) for one or more

@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -13,15 +15,31 @@ import (
 	"github.com/google/uuid"
 )
 
-// StateFromRunner runs on H2's checked STATE path. H3 must persist returned
-// requests before returning reconciliation-required; next fresh PENDING applies
-// them before READY. This method performs no runner RPC, renewal or transition.
-func (s *Server) StateFromRunner(ctx context.Context, runnerID uuid.UUID, rows []runnerwire.RunState) ([]store.RunnerContainment, error) {
+// StatePageFromRunner is Admission.StatePage, on the peer read loop: one
+// short intake transaction, no runner call. It answers nil only after the page
+// committed. A Final page needing reconciliation refuses READY; any stop_proxy
+// it requires committed with its page. An open action left after this
+// session's PENDING page refuses READY too, so the next session carries it.
+func (s *Server) StatePageFromRunner(ctx context.Context, runnerID uuid.UUID, sessionID string, page runnerwire.StatePage) error {
 	st, ok := s.cfg.Store.(store.PG)
 	if !ok {
-		return nil, store.ErrRunnerExecutionRefused
+		return store.ErrRunnerExecutionRefused
 	}
-	return st.ReconcileRunnerState(ctx, runnerID, rows)
+	result, err := st.IntakeRunnerStatePage(ctx, runnerID, sessionID, page)
+	if err != nil || !result.Complete {
+		return err
+	}
+	if result.NeedsReconciliation {
+		return store.ErrRunnerReconciliationRequired
+	}
+	open, _, err := st.ListPendingRunnerActions(ctx, runnerID)
+	if err != nil {
+		return err
+	}
+	if len(open) > 0 {
+		return store.ErrRunnerReconciliationRequired
+	}
+	return nil
 }
 
 type runnerLossClaim struct {
@@ -59,4 +77,41 @@ func (s *Server) OfflineFromRunner(ctx context.Context, runnerID uuid.UUID) erro
 			return ctx.Err()
 		}
 	}
+}
+
+// runnerOfflineSweeps runs OfflineFromRunner off the Hub's session slot: at
+// most one sweep per runner at a time, and every signal that arrives during a
+// sweep coalesces into exactly one more. The periodic lapse sweeps remain the
+// backstop for a sweep that fails.
+type runnerOfflineSweeps struct {
+	mu    sync.Mutex
+	again map[uuid.UUID]bool
+}
+
+func (q *runnerOfflineSweeps) schedule(ctx context.Context, id uuid.UUID, sweep func(context.Context, uuid.UUID) error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if _, running := q.again[id]; running {
+		q.again[id] = true
+		return
+	}
+	if q.again == nil {
+		q.again = map[uuid.UUID]bool{}
+	}
+	q.again[id] = false
+	go func() {
+		for {
+			if err := sweep(ctx, id); err != nil && ctx.Err() == nil {
+				slog.WarnContext(ctx, "wardynd: runner offline sweep failed", slog.String("runner_id", id.String()), slog.Any("err", err))
+			}
+			q.mu.Lock()
+			if !q.again[id] {
+				delete(q.again, id)
+				q.mu.Unlock()
+				return
+			}
+			q.again[id] = false
+			q.mu.Unlock()
+		}
+	}()
 }

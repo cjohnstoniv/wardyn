@@ -107,8 +107,9 @@ func newResumeRuntimeFixture(t *testing.T) *resumeRuntimeFixture {
 		Lookup: func(context.Context, uuid.UUID) (types.Runner, error) { return row, nil },
 		Admit: func(context.Context, types.Runner) (remote.Admission, error) {
 			return remote.Admission{Substrate: f.remote, Link: f.link,
-				Pending: func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
-				State:   func(context.Context, []runnerwire.RunState) error { return nil }, Event: func(context.Context, runnerwire.Event) error { return nil }}, nil
+				Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
+				BeginInventory: func(context.Context, string) error { return nil },
+				StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil }, Event: func(context.Context, runnerwire.Event) error { return nil }}, nil
 		},
 	})
 	t.Cleanup(hub.Close)

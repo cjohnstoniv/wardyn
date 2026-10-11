@@ -12,10 +12,23 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 )
+
+// countLiveErr is the read of principal_keys failing. A missing table is definitive and has a
+// remedy, where unavailable would read as a Postgres outage: this runs from -rotate-age-key and
+// -rewrap, which do not migrate, against a database no serving boot of this release has reached yet.
+func countLiveErr(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
+		return errors.New("subjectkey: principal_keys does not exist: this database is not migrated to this release; " +
+			"run `wardynd -migrate-only` (or boot the server once) first")
+	}
+	return unavailable("count the live keys per domain", err)
+}
 
 // Verify is the key-domain boot check over the live generations (those not
 // destroyed, superseded ones included, because their rows are still read): none
@@ -30,14 +43,14 @@ import (
 func Verify(ctx context.Context, pool *pgxpool.Pool, declared []string, reach func(domain, kekID string) (kek.KEK, error)) error {
 	rows, err := pool.Query(ctx, `SELECT domain, kek_id, count(*) FROM principal_keys WHERE destroyed_at IS NULL GROUP BY domain, kek_id ORDER BY domain, kek_id`)
 	if err != nil {
-		return unavailable("count the live keys per domain", err)
+		return countLiveErr(err)
 	}
 	live, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
 		Domain, KEKID string
 		N             int
 	}])
 	if err != nil {
-		return unavailable("count the live keys per domain", err)
+		return countLiveErr(err)
 	}
 	undeclared := map[string]int{}
 	var unreachable []string

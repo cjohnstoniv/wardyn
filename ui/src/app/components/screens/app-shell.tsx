@@ -60,6 +60,7 @@ import { useMeta, type ShellMeta } from "./use-shell-meta";
 export type { ShellMeta } from "./use-shell-meta";
 import { useReauth } from "../../lib/reauth";
 import { TopBar } from "./top-bar";
+import type { SetupStatus } from "../../lib/types";
 import { SessionRenewButton, SessionRenewSlot } from "../wardyn/session-renew-button";
 import { ViewAccessProvider, type ConsoleView } from "../wardyn/console-view";
 import {
@@ -417,6 +418,7 @@ export function AppShell({
   unreachable,
   lastOkAt,
   noBarrier,
+  tier,
 }: {
   pendingApprovals: number;
   attentionCount: number;
@@ -435,6 +437,8 @@ export function AppShell({
   // than guess, where this is a deployment-wide fact that is always resolved
   // once setupStatus has landed. False/undefined renders nothing.
   noBarrier?: boolean;
+  // SetupStatus.tier, for the top bar's account menu and local-only chip.
+  tier?: SetupStatus["tier"];
 }) {
   const [meta, retryIdentity, adoptIdentity] = useMeta();
   const reauth = useReauth();
@@ -534,6 +538,7 @@ export function AppShell({
                 attentionCount={attentionCount}
                 onNewRun={() => navigate("/runs/new")}
                 noBarrier={!unreachable && !!noBarrier}
+                tier={tier}
               />
             )}
             {/* The no-credential preview's band, and its way out. FIRST of the

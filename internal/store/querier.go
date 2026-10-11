@@ -40,6 +40,17 @@ func (s PG) inTx(ctx context.Context, fn func(q Querier) error) error {
 	return tx.Commit(ctx)
 }
 
+// LockSiteConfig takes the transaction-scoped form of the lock the site-config
+// writers hold (db.SiteConfigLockClass, the class's single document lock), so a
+// held change applied inside the decision transaction cannot interleave with a
+// PUT /site-config read-modify-write. q must be a pgx.Tx.
+func LockSiteConfig(ctx context.Context, q Querier) error {
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, db.SiteConfigLockClass, int32(0)); err != nil {
+		return fmt.Errorf("store: lock the site config: %w", err)
+	}
+	return nil
+}
+
 // LockGovernanceTarget takes the transaction-scoped lock for one target of a governance change: the
 // direct write to it and the approval of a held change to it serialize on it. parts are the target's
 // natural key. q must be a pgx.Tx.

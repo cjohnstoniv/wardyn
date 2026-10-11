@@ -44,6 +44,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
@@ -162,6 +164,11 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 	}
 	// Under the same per-owner lock a redemption takes, so a login landing
 	// while a redemption is persisting its rotation cannot interleave with it.
+	// The resume of a run a resolved request held takes the run's lock, which must precede this sign-in
+	// lock (db.LockOrder): it runs after the lock is released, the deferred calls running last-in first.
+	var resolved []uuid.UUID
+	parent := ctx
+	defer func() { s.approvalsClosed(parent, resolved) }()
 	ctx, unlock, err := s.lockADOSignIn(ctx, subject, cfg.RowID)
 	if err == nil {
 		defer unlock()
@@ -194,7 +201,7 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 	})
 	s.auditADOPATConnect(ctx, subject, cfg, usable, adoEntraSourceLogin)
 	// After the capture row, never before: captured -> resolved -> retry.
-	s.resolvePendingADOReauth(ctx, subject, cfg.RowID)
+	resolved = s.resolvePendingADOReauth(ctx, subject, cfg.RowID)
 }
 
 // adoEntraForLogin resolves the row for a LOGIN-TIME decision and applies the

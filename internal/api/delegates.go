@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
-	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -62,7 +61,7 @@ type registerDelegateRequest struct {
 // and return its credential exactly once — the row keeps only its hash.
 //
 // The group is canonicalized the way a sign-in's group snapshot is
-// (oidc.CanonicalGroupSubject), so it matches the exact string a person's
+// (types.CanonicalGroupSubject), so it matches the exact string a person's
 // token produces. The portal's IdP client id may not be this deployment's own,
 // in any case or as its App ID URI: a subject token issued to Wardyn would then
 // pass the audience check for it.
@@ -89,7 +88,7 @@ func (s *Server) handleRegisterDelegate(w http.ResponseWriter, r *http.Request) 
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonDelegateClientIDIsPortal, "idp_client_id: must be the portal's own client, not this deployment's")
 		return
 	}
-	group, ok := oidc.CanonicalGroupSubject(req.Group)
+	group, ok := types.CanonicalGroupSubject(req.Group)
 	if !ok {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonDelegateGroupInvalid, "group: required, printable ASCII")
 		return

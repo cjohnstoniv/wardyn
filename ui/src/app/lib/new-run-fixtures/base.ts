@@ -16,21 +16,12 @@ import type {
   PlacementResources,
   PlacementRunner,
 } from "../types/new-run-contract";
-import type { PolicyPreviewResult } from "../types/policy-preview";
+import type { PolicyPreviewResult, ProvenanceEntry } from "../types/policy-preview";
 import type { RunPolicySpec } from "../types/policy";
 import type { PreflightResult } from "../types/runs";
 
-/**
- * One row of A-L1b's `provenance` (policy-preview / preflight): which source put
- * an entry in the resolved policy. Structurally the wire's ProvenanceEntry; swap
- * for that type when A-L1b merges.
- */
-export interface FixtureProvenance {
-  field: string;
-  value: string;
-  source: { kind: "policy" | "ceiling" | "workspace" | "component" | "model_provider" | "person"; id?: string; name?: string };
-  effect: "added" | "clamped" | "narrowed" | "removed";
-}
+/** The same provenance rows decoded from the policy-preview and preflight wire. */
+export type FixtureProvenance = ProvenanceEntry;
 
 /** One workspace as a Workspaces-panel frame holds it. */
 export interface FixtureWorkspace {
@@ -64,7 +55,7 @@ export interface FixtureRefusal {
 }
 
 /** The tabs, in order (DECISIONS "New Run tabs restructured"). */
-export type FixtureTab = "info" | "workspaces" | "runner" | "access" | "policy";
+export type FixtureTab = "info" | "workspaces" | "runner" | "tools_image" | "repositories_drives" | "access" | "policy";
 
 export interface NewRunFixture {
   /** The tab the frame belongs to. The packet's `run/…` routes are the Runner tab (Info is Title and Description only). */
@@ -214,7 +205,7 @@ export const sources = (...pairs: [string, FixtureProvenance["source"]["kind"], 
   pairs.map(([value, kind, name]) => ({ field: "allowed_domains", value, source: { kind, ...(name ? { name } : {}) }, effect: "added" as const }));
 
 /** The form's contract draft with nothing chosen. */
-export const noContract = (): RunContractDraft => ({ runner: {}, access: { overrides: { gitPAT: [], pushRules: [] } } });
+export const noContract = (): RunContractDraft => ({ runner: {}, access: { overrides: { gitPAT: [], pushRules: [] } }, mode: { tools: [] } });
 
 /** A component the person defined (a run on a runner needs the ceiling term that allows it). */
 export const selfDefined = (name: string, over: Partial<ComponentFact> = {}): ComponentFact =>

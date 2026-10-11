@@ -212,6 +212,17 @@ func (o *Orchestrator) Name() string {
 	return "orchestrator"
 }
 
+// Executors lists the names of the deployment's own substrates, sorted: the configured executors a
+// remote-provided runner pool may hold. A registered runner is never one.
+func (o *Orchestrator) Executors() []string {
+	var names []string
+	for _, s := range o.locals() {
+		names = append(names, s.Name())
+	}
+	slices.Sort(names)
+	return names
+}
+
 // ImagePresent implements runner.ImageChecker by
 // delegating to the first wired substrate that implements it — the docker
 // substrate does; a substrate with no local image cache (k8s) does not, and

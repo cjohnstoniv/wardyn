@@ -4,8 +4,10 @@
 package store_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -15,6 +17,18 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
+
+// finalPage begins a fresh inventory session and takes rows as its one Final page.
+func finalPage(t *testing.T, st store.PG, runnerID uuid.UUID, rows ...runnerwire.RunState) (store.RunnerInventoryResult, error) {
+	t.Helper()
+	session := uuid.NewString()
+	if err := st.BeginRunnerInventory(t.Context(), runnerID, session); err != nil {
+		return store.RunnerInventoryResult{}, err
+	}
+	rows = slices.Clone(rows)
+	slices.SortFunc(rows, func(a, b runnerwire.RunState) int { return bytes.Compare(a.RunID[:], b.RunID[:]) })
+	return st.IntakeRunnerStatePage(t.Context(), runnerID, session, runnerwire.StatePage{InventoryID: uuid.New(), Runs: rows, Final: true})
+}
 
 func TestPG_RunnerStateLapseAndContainment(t *testing.T) {
 	pool, st, rn, run, _ := spoolPGFixture(t)
@@ -27,21 +41,28 @@ func TestPG_RunnerStateLapseAndContainment(t *testing.T) {
 	if _, err := st.BeginRunnerExecution(ctx, rn.ID, run.ID, uuid.Nil, gen, runnerwire.MethodExec); err != nil {
 		t.Fatal(err)
 	}
+	stopProxies := func() int {
+		var n int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM runner_pending_actions WHERE run_id=$1 AND kind='stop_proxy'`, run.ID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
 	row := runnerwire.RunState{RunID: run.ID, SandboxPresent: true, Execution: &runnerwire.ExecutionResult{Generation: gen, Operation: runnerwire.MethodExec, Attempted: true}}
-	if _, err := st.ReconcileRunnerState(ctx, rn.ID, []runnerwire.RunState{row}); err != nil {
-		t.Fatal(err)
+	if res, err := finalPage(t, st, rn.ID, row); err != nil || res.NeedsReconciliation {
+		t.Fatalf("live reported run: %+v %v", res, err)
 	}
 	if changed, err := st.MarkRunnerRunLost(ctx, rn.ID, run.ID, ref, time.Now()); err != nil || changed {
 		t.Fatalf("fresh drop lost run: %v %v", changed, err)
 	}
-	if _, err := st.ReconcileRunnerState(ctx, rn.ID, nil); !errors.Is(err, store.ErrRunnerReconciliationRequired) {
-		t.Fatalf("omitted live run: %v", err)
+	if res, err := finalPage(t, st, rn.ID); err != nil || !res.NeedsReconciliation {
+		t.Fatalf("omitted live run: %+v %v", res, err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET token_renewed_at=now()-interval '2 hours' WHERE id=$1`, run.ID); err != nil {
 		t.Fatal(err)
 	}
-	if requests, err := st.ReconcileRunnerState(ctx, rn.ID, []runnerwire.RunState{row}); !errors.Is(err, store.ErrRunnerReconciliationRequired) || len(requests) != 0 {
-		t.Fatalf("lapsed state: %v %v", requests, err)
+	if res, err := finalPage(t, st, rn.ID, row); err != nil || !res.NeedsReconciliation || stopProxies() != 0 {
+		t.Fatalf("lapsed state: %+v %v stop_proxy=%d", res, err, stopProxies())
 	}
 	got, _ := st.GetRun(ctx, run.ID)
 	if got.LostAt != nil {
@@ -53,26 +74,31 @@ func TestPG_RunnerStateLapseAndContainment(t *testing.T) {
 	if changed, err := st.MarkRunnerRunLost(ctx, rn.ID, run.ID, ref, time.Now()); err != nil || !changed {
 		t.Fatalf("loss claim: %v %v", changed, err)
 	}
-	if _, err := st.ReconcileRunnerState(ctx, rn.ID, nil); err != nil {
-		t.Fatalf("omitted kept run trapped reconnect: %v", err)
+	if res, err := finalPage(t, st, rn.ID); err != nil || res.NeedsReconciliation {
+		t.Fatalf("omitted kept run trapped reconnect: %+v %v", res, err)
 	}
-	requests, err := st.ReconcileRunnerState(ctx, rn.ID, []runnerwire.RunState{row})
-	if !errors.Is(err, store.ErrRunnerReconciliationRequired) || len(requests) != 1 || requests[0].Generation != gen || requests[0].Ref != ref || requests[0].LostAt.IsZero() {
-		t.Fatalf("late containment: %v %v", requests, err)
+	if res, err := finalPage(t, st, rn.ID, row); err != nil || !res.NeedsReconciliation {
+		t.Fatalf("late containment: %+v %v", res, err)
+	}
+	page, _, err := st.ListPendingRunnerActions(ctx, rn.ID)
+	lost, _ := st.GetRun(ctx, run.ID)
+	if err != nil || len(page) != 1 || page[0].Kind != types.RunnerActionStopProxy || page[0].Generation != gen || page[0].Ref != ref ||
+		page[0].LostAt == nil || !page[0].LostAt.Equal(*lost.LostAt) {
+		t.Fatalf("late containment queued %+v, %v", page, err)
 	}
 	observed := time.Now()
 	row.ProxyStoppedAt = &observed
-	if _, err := st.ReconcileRunnerState(ctx, rn.ID, []runnerwire.RunState{row}); err != nil {
-		t.Fatal(err)
+	if res, err := finalPage(t, st, rn.ID, row); err != nil || res.NeedsReconciliation {
+		t.Fatalf("stopped proxy: %+v %v", res, err)
 	}
 	row.Execution.Generation = uuid.New()
-	if _, err := st.ReconcileRunnerState(ctx, rn.ID, []runnerwire.RunState{row}); !errors.Is(err, store.ErrRunnerExecutionRefused) {
+	if _, err := finalPage(t, st, rn.ID, row); !errors.Is(err, store.ErrRunnerExecutionRefused) {
 		t.Fatalf("stale generation: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE runners SET state='revoked',revoked_at=now() WHERE id=$1`, rn.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.ReconcileRunnerState(ctx, rn.ID, nil); !errors.Is(err, store.ErrRunnerExecutionRefused) {
+	if _, err := finalPage(t, st, rn.ID); !errors.Is(err, store.ErrRunnerExecutionRefused) {
 		t.Fatalf("revoked empty STATE: %v", err)
 	}
 }
@@ -143,7 +169,7 @@ func runnerLateContainmentProof(t *testing.T, issued bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, _, err := st.QueueRunnerAction(ctx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: rn.ID, RunID: run.ID, Kind: types.RunnerActionStopProxy, Ref: ref})
+	a, _, err := st.QueueRunnerAction(ctx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: rn.ID, RunID: run.ID, Kind: types.RunnerActionStopProxy, Ref: ref, Generation: gen, LostAt: got.LostAt})
 	if err != nil {
 		t.Fatal(err)
 	}

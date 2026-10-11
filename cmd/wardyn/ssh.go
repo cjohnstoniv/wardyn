@@ -4,9 +4,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"regexp"
@@ -77,6 +79,70 @@ outputs carry it. Connecting runs that command on this computer, so it needs
 	return cmd
 }
 
+// sshGateway is where the gateway is reached, as /healthz advertises it.
+type sshGateway struct {
+	host, port, fingerprint, proxy string
+}
+
+// resolveSSHGateway reads GET /healthz and returns the advertised gateway,
+// refusing a gateway that is off, advertises no address, or publishes a
+// ProxyCommand that breaks out of a quoted one-liner. Shared by `run ssh` and
+// `sync`, so both reach the gateway the same way.
+func resolveSSHGateway(ctx context.Context, c *sdk.Client) (sshGateway, error) {
+	raw, err := c.Healthz(ctx)
+	if err != nil {
+		return sshGateway{}, err
+	}
+	var health struct {
+		SSH *sshHealthz `json:"ssh"`
+	}
+	if err := json.Unmarshal(raw, &health); err != nil {
+		return sshGateway{}, fmt.Errorf("decode /healthz: %w", err)
+	}
+	if health.SSH == nil || !health.SSH.Enabled {
+		return sshGateway{}, errors.New("ssh: gateway is off on this deployment (an operator enables it by setting WARDYN_SSH_LISTEN and WARDYN_SSH_ADVERTISE where wardynd starts)")
+	}
+	host, port := splitHostPort(health.SSH.AdvertiseAddr)
+	// The gateway is up but publishes no reachable address (WARDYN_SSH_ADVERTISE
+	// unset — /healthz carries it verbatim). Without this check, the command
+	// would build "ssh <run>@ -p" and hand ssh(1) an empty hostname, so the
+	// operator would see ssh's own resolver error for a Wardyn misconfiguration.
+	if host == "" {
+		return sshGateway{}, errors.New("ssh: the gateway is enabled but advertises no address — set WARDYN_SSH_ADVERTISE (the externally-reachable host[:port], e.g. \"wardyn.example.com:2222\") where wardynd runs")
+	}
+	if err := checkGatewayAddr(host, port); err != nil {
+		return sshGateway{}, err
+	}
+	proxy := health.SSH.ProxyCommand
+	// The daemon refuses these at boot; a skewed or hostile one could still
+	// publish a value that breaks out of the quoted one-liner or the config line.
+	if err := cliutil.CheckSSHProxyCommand(proxy); err != nil {
+		return sshGateway{}, fmt.Errorf("ssh: this deployment advertises a ProxyCommand that %v, so it is not shown or run; ask your operator", err)
+	}
+	return sshGateway{host: host, port: port, fingerprint: health.SSH.HostKeyFingerprint, proxy: proxy}, nil
+}
+
+// checkGatewayAddr refuses an advertised address that is not a DNS name or IP
+// literal with a numeric port. The value is spliced into an ssh_config line, a
+// pasted shell line and a ProxyCommand's %h and %p, so anything else (a
+// newline, a $(...), a quote) would run or inject something.
+func checkGatewayAddr(host, port string) error {
+	if a, err := netip.ParseAddr(host); err != nil || a.Zone() != "" {
+		if len(host) > 253 || !gatewayDNSName.MatchString(host) {
+			return fmt.Errorf("ssh: the gateway advertises the host %q, which is not a DNS name or an IP address, so it is not used; ask your operator", host)
+		}
+	}
+	if port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 || strings.Trim(port, "0123456789") != "" {
+			return fmt.Errorf("ssh: the gateway advertises the port %q, which is not a number from 1 to 65535, so it is not used; ask your operator", port)
+		}
+	}
+	return nil
+}
+
+var gatewayDNSName = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
+
 // sshTarget is `wardyn run ssh --json`'s output: everything an external tool needs
 // to dial a sandbox over the gateway. Port is always populated (22 when the
 // advertised address names none) so a consumer never has to apply ssh's
@@ -112,34 +178,11 @@ func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, m sshModes) error {
 	if _, err := parseID("run", runID); err != nil {
 		return err
 	}
-	raw, err := c.Healthz(cmd.Context())
+	gw, err := resolveSSHGateway(cmd.Context(), c)
 	if err != nil {
 		return err
 	}
-	var health struct {
-		SSH *sshHealthz `json:"ssh"`
-	}
-	if err := json.Unmarshal(raw, &health); err != nil {
-		return fmt.Errorf("decode /healthz: %w", err)
-	}
-	if health.SSH == nil || !health.SSH.Enabled {
-		return errors.New("ssh: gateway is off on this deployment (an operator enables it by setting WARDYN_SSH_LISTEN and WARDYN_SSH_ADVERTISE where wardynd starts)")
-	}
-
-	host, port := splitHostPort(health.SSH.AdvertiseAddr)
-	// The gateway is up but publishes no reachable address (WARDYN_SSH_ADVERTISE
-	// unset — /healthz carries it verbatim). Without this check, the command
-	// would build "ssh <run>@ -p" and hand ssh(1) an empty hostname, so the
-	// operator would see ssh's own resolver error for a Wardyn misconfiguration.
-	if host == "" {
-		return errors.New("ssh: the gateway is enabled but advertises no address — set WARDYN_SSH_ADVERTISE (the externally-reachable host[:port], e.g. \"wardyn.example.com:2222\") where wardynd runs")
-	}
-	proxy := health.SSH.ProxyCommand
-	// The daemon refuses these at boot; a skewed or hostile one could still
-	// publish a value that breaks out of the quoted one-liner or the config line.
-	if err := cliutil.CheckSSHProxyCommand(proxy); err != nil {
-		return fmt.Errorf("ssh: this deployment advertises a ProxyCommand that %v, so it is not shown or run; ask your operator", err)
-	}
+	host, port, proxy := gw.host, gw.port, gw.proxy
 	target := fmt.Sprintf("%s@%s", runID, host)
 	args := []string{target}
 	printed := "ssh "
@@ -184,7 +227,7 @@ func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, m sshModes) error {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		return enc.Encode(sshTarget{
 			Host: host, Port: portNum, Username: runID,
-			HostKeyFingerprint: health.SSH.HostKeyFingerprint,
+			HostKeyFingerprint: gw.fingerprint,
 			ProxyCommand:       proxy,
 			Command:            printed,
 		})

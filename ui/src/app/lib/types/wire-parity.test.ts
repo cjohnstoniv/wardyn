@@ -36,6 +36,7 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { CONNECTIONS } from "../../components/wardyn/copy/door";
 
 function repoRoot(): string {
   let dir = resolve(process.cwd());
@@ -267,6 +268,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     // #1428: the Azure DevOps row's `entra` block, which now carries the token
     // lifetimes (pat_max_hours, pat_max_days) the console writes.
     ["ADOEntraConfig", "internal/types/workspace_provider.go", "ADOEntraConfig", "ui/src/app/lib/types/site.ts"],
+    ["GitProvider", "internal/types/workspace_provider.go", "GitProvider", "ui/src/app/lib/types/site.ts"],
     // #1428: the per-person token console's reads.
     ["adoOrgCheckResult", "internal/api/ado_pat_orgcheck.go", "ADOOrgCheck", "ui/src/app/lib/types/ado-pat.ts"],
     ["adoPATRefusal", "internal/api/ado_pat_refusal.go", "ADOPATRefusal", "ui/src/app/lib/types/ado-pat.ts"],
@@ -369,6 +371,30 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsValues)).toEqual(new Set(goValues));
   });
 
+  // Provenance rows (A-S1): the same rows ride the preview and Review.
+  it.each([
+    ["provenanceRow", "ProvenanceEntry"],
+    ["provSource", "ProvenanceSource"],
+  ])("%s mirrors %s", (goName, tsName) => {
+    const go = readFileSync(join(root, "internal/api/run_fold_provenance.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/policy-preview.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goJSONTags(go, goName)));
+  });
+
+  it("provenance source kinds and effects are the Go closed sets", () => {
+    const go = readFileSync(join(root, "internal/api/run_fold_provenance.go"), "utf8");
+    const ts = stripComments(readFileSync(join(root, "ui/src/app/lib/types/policy-preview.ts"), "utf8"));
+    const consts = (prefix: string) =>
+      new Set([...go.matchAll(new RegExp(`\\b${prefix}\\w+\\s+(?:provEffect\\s+)?=\\s*"([a-z_]+)"`, "g"))].map((m) => m[1]));
+    const union = (body: string) => new Set([...body.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]));
+    const kind = /kind: ([^;]+);/.exec(tsInterfaceBody(ts, "ProvenanceSource"))![1];
+    const effect = /effect: ([^;]+);/.exec(tsInterfaceBody(ts, "ProvenanceEntry"))![1];
+    expect(consts("provKind").size).toBe(6);
+    expect(consts("provEffect").size).toBe(4);
+    expect(union(kind)).toEqual(consts("provKind"));
+    expect(union(effect)).toEqual(consts("provEffect"));
+  });
+
   // Components (#1914). The stored shapes and their SDK/server twins, then the
   // facts both dry-run doors return. ComponentSaved embeds Component in Go, so
   // it is pinned separately below, as ModelProvidersRead is.
@@ -427,6 +453,37 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
   });
 
+  // The run-mode contract (pkg/client/runs_mode.go).
+  it.each([
+    ["RunWorkload", "RunWorkload"],
+    ["IncludedTool", "IncludedTool"],
+    ["RunStartup", "RunStartup"],
+    ["StartFolder", "StartFolder"],
+  ])("pkg/client %s: full parity with the TS %s mirror", (goName, tsName) => {
+    const goTags = goJSONTags(readFileSync(join(root, "pkg/client/runs_mode.go"), "utf8"), goName);
+    expect(goTags.length).toBeGreaterThanOrEqual(3);
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/new-run-contract.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
+  });
+
+  it("the run-mode contract's closed value sets match Go", () => {
+    const ts = stripComments(readFileSync(join(root, "ui/src/app/lib/types/new-run-contract.ts"), "utf8"));
+    const union = (name: string) => {
+      const m = new RegExp(`export type ${name} =([^;]+);`).exec(ts);
+      if (!m) throw new Error(`type ${name} not found`);
+      return new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]));
+    };
+    const modeGo = readFileSync(join(root, "pkg/client/runs_mode.go"), "utf8");
+    const runModeGo = readFileSync(join(root, "internal/types/run_mode.go"), "utf8");
+    const consts = (src: string, re: RegExp) => new Set([...src.matchAll(re)].map((m) => m[1]));
+    expect(union("Experience")).toEqual(consts(runModeGo, /\bExperience\w+\s+RunExperience = "([a-z_]+)"/g));
+    expect(union("WorkloadKind")).toEqual(consts(modeGo, /\bWorkload\w+\s+WorkloadKind = "([a-z_]+)"/g));
+    expect(union("IncludedToolKind")).toEqual(consts(modeGo, /\bIncludedTool\w+\s+IncludedToolKind = "([a-z_]+)"/g));
+    expect(union("StartupKind")).toEqual(consts(modeGo, /\bStartup\w+\s+StartupKind = "([a-z_]+)"/g));
+    expect(union("StartFolderKind")).toEqual(consts(modeGo, /\bStartFolder\w+\s+StartFolderKind = "([a-z_]+)"/g));
+    expect(modeGo).toContain(`StartFolderDrive = "drive"`);
+  });
+
   it("the New Run contract's closed value sets match Go", () => {
     const ts = stripComments(readFileSync(join(root, "ui/src/app/lib/types/new-run-contract.ts"), "utf8"));
     const union = (name: string) => {
@@ -441,6 +498,77 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(union("LocalDeliveryMode")).toEqual(new Set([...deliveryGo.matchAll(/\bMode\w+\s+Mode = "([a-z_]+)"/g)].map((m) => m[1])));
     expect(union("ImageSourceKind")).toEqual(new Set([...clientGo.matchAll(/\bImageSource\w+\s*=\s*"([a-z_]+)"/g)].map((m) => m[1])));
     expect(union("LocalPlacementKind")).toEqual(new Set([...clientGo.matchAll(/\bLocalPlacement(?:Host|Source|Component)\s*=\s*"([a-z_]+)"/g)].map((m) => m[1])));
+  });
+
+  // The run-template contract (pkg/client/templates.go, internal/types): the import
+  // document, the catalogue shapes and the component configuration schema.
+  it.each([
+    ["pkg/client/templates.go", "TemplateDocument"],
+    ["pkg/client/templates.go", "TemplateSetupNeed"],
+    ["pkg/client/templates.go", "TemplateRef"],
+    ["pkg/client/templates.go", "Template"],
+    ["pkg/client/templates.go", "TemplateSummary"],
+    ["pkg/client/templates.go", "TemplateList"],
+    ["pkg/client/templates.go", "TemplateSaveRequest"],
+    ["pkg/client/templates.go", "TemplateImportRequest"],
+    ["pkg/client/templates.go", "TemplateDiagnostic"],
+    ["pkg/client/templates.go", "TemplateImportResult"],
+    ["pkg/client/templates.go", "TemplateCopyRequest"],
+    ["pkg/client/templates.go", "TemplateGroupAdmins"],
+    ["internal/types/template.go", "TemplateGroupAdmin"],
+    ["internal/types/component_config_schema.go", "ComponentConfigSchema"],
+    ["internal/types/component_config_schema.go", "ConfigGroup"],
+    ["internal/types/component_config_schema.go", "ConfigField"],
+    ["internal/types/component_config_schema.go", "ConfigOption"],
+    ["internal/types/component_config_schema.go", "ConfigCondition"],
+    ["internal/types/component_config_schema.go", "ConfigBinding"],
+    ["internal/types/component_config_schema.go", "ConfigIssue"],
+  ])("%s %s: full parity with the TS mirror in templates.ts", (goFile, name) => {
+    const goTags = goJSONTags(readFileSync(join(root, goFile), "utf8"), name);
+    expect(goTags.length).toBeGreaterThanOrEqual(1);
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/templates.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(ts, name))).toEqual(new Set(goTags));
+  });
+
+  it("the template contract's closed value sets match Go", () => {
+    const ts = stripComments(readFileSync(join(root, "ui/src/app/lib/types/templates.ts"), "utf8"));
+    const union = (name: string) => {
+      const m = new RegExp(`export type ${name} =([^;]+);`).exec(ts);
+      if (!m) throw new Error(`type ${name} not found`);
+      return new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]));
+    };
+    const client = readFileSync(join(root, "pkg/client/templates.go"), "utf8");
+    const schema = readFileSync(join(root, "internal/types/component_config_schema.go"), "utf8");
+    const template = readFileSync(join(root, "internal/types/template.go"), "utf8");
+    const consts = (src: string, re: RegExp) => new Set([...src.matchAll(re)].map((m) => m[1]));
+    expect(union("TemplateScope")).toEqual(consts(template, /\bTemplateScope\w+\s+TemplateScope = "([a-z_]+)"/g));
+    expect(union("TemplateCoverage")).toEqual(consts(client, /\bTemplateCoverage\w+\s+TemplateCoverage = "([a-z_]+)"/g));
+    expect(union("TemplateFormat")).toEqual(consts(client, /\bTemplateFormat\w+\s+TemplateFormat = "([a-z_]+)"/g));
+    expect(union("TemplatePart")).toEqual(consts(client, /\bTemplatePart\w+\s+TemplatePart = "([a-z_]+)"/g));
+    expect(union("ConfigFieldKind")).toEqual(consts(schema, /\bConfigKind\w+\s+ConfigFieldKind = "([a-z_]+)"/g));
+    expect(union("ConfigBindTarget")).toEqual(consts(schema, /\bConfigBind\w+\s+ConfigBindTarget = "([a-z_]+)"/g));
+    expect(client).toContain(`TemplateDocumentVersion = "wardyn/v1"`);
+    expect(client).toContain(`TemplateDocumentKind    = "RunTemplate"`);
+  });
+
+  it("the component configuration schema bounds match Go", () => {
+    const schema = readFileSync(join(root, "internal/types/component_config_schema.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/templates.ts"), "utf8");
+    const go = (name: string) => Number(new RegExp(`\\b${name}\\s*=\\s*(\\d+)`).exec(schema)?.[1]);
+    expect(go("MaxConfigSchemaFields")).toBe(64);
+    for (const [goName, tsName] of [
+      ["MaxConfigSchemaFields", "maxFields"],
+      ["MaxConfigSchemaGroups", "maxGroups"],
+      ["MaxConfigOptions", "maxOptions"],
+      ["MaxConfigListItems", "maxListItems"],
+      ["MaxConfigLabelRunes", "maxLabelRunes"],
+      ["MaxConfigDescriptionRunes", "maxDescriptionRunes"],
+      ["MaxConfigOptionValueRunes", "maxOptionValueRunes"],
+    ]) {
+      expect(Number(new RegExp(`${tsName}:\\s*(\\d+)`).exec(ts)?.[1]), tsName).toBe(go(goName));
+    }
+    expect(Number(/maxBytes:\s*(\d+) \* 1024/.exec(ts)?.[1]) * 1024).toBe(64 << 10);
+    expect(schema).toMatch(/MaxConfigSchemaBytes\s*= 64 << 10/);
   });
 
   it("run placement and evidence include the legacy empty value and match Go", () => {
@@ -492,7 +620,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(union("ComponentFactStatus")).toEqual(consts(statusSrc!, '\\bcomponent\\w+\\s*=\\s*"([a-z_]+)"'));
     expect(union("ComponentFactStatus").size).toBeGreaterThanOrEqual(4);
     // org, self and inline are the gate's; "workspace" is the Git provider row's literal.
-    expect(union("ComponentFactReason")).toEqual(new Set([...consts(runGo, '\\bcomponentSource\\w+\\s*=\\s*"([a-z_]+)"'), "workspace"]));
+    expect(union("ComponentFactReason")).toEqual(new Set([...consts(runGo, '\\bcomponentSource\\w+\\s*=\\s*"([a-z_]+)"'), "workspace", "agent"]));
     expect(factsGo).toMatch(/Reason: "workspace"/);
     expect(union("ComponentFactLane")).toEqual(
       new Set([...consts(providerGo, '\\bGitLane\\w+\\s+GitLane = "([a-z_]+)"'), ...consts(factsGo, '\\bgitLane\\w+\\s*=\\s*"([a-z_]+)"')]),
@@ -543,4 +671,27 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(tsValues).toEqual(assigned);
   });
 
+});
+
+
+describe("SetupProviderAccess cause fields", () => {
+  it("keeps the Go and TypeScript optional wire fields in parity", () => {
+    const root = repoRoot();
+    const go = readFileSync(join(root, "internal/api/provider_access.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/setup.ts"), "utf8");
+    expect(tsInterfaceTopKeys(ts, "SetupProviderAccess").sort()).toEqual(goJSONTags(go, "SetupProviderAccess").sort());
+    for (const key of ["cause", "changed_at", "new_destination"]) {
+      expect(go).toContain(`json:"${key},omitempty"`);
+      expect(tsInterfaceBody(ts, "SetupProviderAccess")).toContain(`${key}?:`);
+    }
+  });
+});
+
+
+it("connection re-check sentence matches the server", () => {
+  const src = readFileSync(join(repoRoot(), "internal/api/provider_connection_changes.go"), "utf8");
+  const sentence = src.match(/const providerAccessRecheck = ("[^"\n]*")/);
+  expect(sentence).not.toBeNull();
+  expect(JSON.parse(sentence![1])).toBe(CONNECTIONS.STORE_UNREADABLE);
+  expect(CONNECTIONS.STORE_UNREADABLE).toContain("Your credential may still be stored");
 });

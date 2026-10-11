@@ -68,6 +68,7 @@ var meetRules = map[string]meetRule{
 	"github_capabilities":             {"the provider row's default profile", "intersection; a list under an empty base is a widening and stays empty; disjoint is unsatisfiable; empty overlay refused"},
 
 	// GovernanceLimits
+	"local_self_defined_components":         {"false; default deny", "AND"},
 	"deny_task_mode_exec":                   {"false", "OR"},
 	"deny_interactive":                      {"false", "OR"},
 	"deny_ui_apps":                          {"false", "OR"},

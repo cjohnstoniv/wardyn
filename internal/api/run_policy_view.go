@@ -334,7 +334,7 @@ type evidenceRow struct {
 // order restart denies were added in.
 func collectEvidence(events, revives []types.AuditEvent) auditEvidence {
 	ev := auditEvidence{
-		workspace: map[string]bool{}, sourceControl: map[string]bool{}, mirror: map[string]bool{}, model: map[string]bool{},
+		workspace: map[string]bool{}, sourceControl: map[string]bool{}, component: map[string]bool{}, mirror: map[string]bool{}, model: map[string]bool{},
 		confine: map[string]bool{}, profileDenied: map[string]bool{}, mirrorHosts: map[string]bool{},
 		restart: map[string]time.Time{},
 	}
@@ -356,8 +356,10 @@ func collectEvidence(events, revives []types.AuditEvent) auditEvidence {
 			switch row.Kind {
 			case "workspace", "workspace_clone":
 				add(ev.workspace, row.AddedDomains...)
-			case "site_config", "ssh", "git_pat":
+			case "site_config", "ssh", "git_pat", "github_direct":
 				add(ev.sourceControl, row.AddedDomains...)
+			case "component":
+				add(ev.component, row.AddedDomains...)
 			}
 		case "run.requirement.allow", "run.requirement.grant", "run.requirement.inject":
 			add(ev.workspace, row.AddedDomains...)
