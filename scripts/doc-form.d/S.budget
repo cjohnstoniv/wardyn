@@ -14,7 +14,8 @@
 # 0.9 F-1515 R2-0001: docs/sdk.md 12876 adds 18 over 12858 for the site-config baseline strip.
 # 0.9 F-1515 r1: docs/sdk.md 12908 adds 32 over 12876 for PutSiteConfig keeping the refusal and the lift-the-mark note.
 # docs/sdk.md 13218 measured after F-1515 merge.
-docs/sdk.md=13218 share=21
+# 0.9 G-seal-target (#1828): docs/sdk.md 13235 adds 17 over 13218 for `target` beside `actor` in the audit predicate list and in the partition-filter refusal.
+docs/sdk.md=13235 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

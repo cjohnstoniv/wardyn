@@ -170,7 +170,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_AUDIT_SINKS` 🔒 | string (JSON) | (unset) | audit sink config file/webhook/syslog (flag `-audit-sinks`). A webhook `bearer_token` requires an `https://` url — boot fails rather than replay the SIEM credential in cleartext on every POST. Schema: [Audit sinks](#audit-sinks-wardyn_audit_sinks) below |
 | `WARDYN_APPROVAL_NOTIFY` 🔒 | string (JSON) | (unset) | approval notification config (flag `-approval-notify`): channels that are told when an approval is waiting. Unset or empty means off. Any bad value refuses boot, naming the channel `id` and the rule. [Details](#wardyn_approval_notify) |
 | `WARDYN_AUDIT_SPOOL` | string | `./data/audit-spool.jsonl` | append-only JSONL fallback for failed audit writes (flag `-audit-spool`); a sibling `<path>.quarantine` appears if the store permanently refuses a spooled line |
-| `WARDYN_AUDIT_SEAL` | string | `off` | `off`, `fields` or `full` (flag `-audit-seal`). With `fields`, personal fields reach every audit sink only as ciphertext; with `full`, reads show the person while their key exists and `[erased]` after. [Details](#wardyn_audit_seal) |
+| `WARDYN_AUDIT_SEAL` | string | `off` | `off`, `fields` or `full` (flag `-audit-seal`). With `fields`, personal fields reach every audit sink only as ciphertext; with `full`, a person in `actor` or `target` is a subject, shown while their key exists and `[erased]` after. [Details](#wardyn_audit_seal) |
 | `WARDYN_AUDIT_SOURCE` | string | (unset) | optional static string stamped as an extra top-level `"source"` field on every event a configured sink serializes, never written to Postgres (flag `-audit-source`). [Details](#wardyn_audit_source) |
 | `WARDYN_AGE_KEY` 🔒 | string | (unset) | age X25519 identity (flag `-age-key`). **Unset is not a safe default** (store mode is the exception): it mints a throwaway identity each boot, so boot 2 cannot decrypt what the first boot encrypted and fails closed (`loadOrCreateSecret`, [`cmd/wardynd/boot_keys.go`](../cmd/wardynd/boot_keys.go)). [Details](#wardyn_age_key) |
 | `WARDYN_PLATFORM_KEY_FILE` 🔒 | path | (unset) | local mode only (flag `-platform-key-file`): a file holding a SECOND age identity from which alone wardynd derives the key that wraps its own signing, session, UI-session and SSH host keys. Refused without `WARDYN_AGE_KEY`. [Details](#wardyn_platform_key_file) |
@@ -756,10 +756,11 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A key that cannot be had when a row is written never loses the row or writes it in the clear.
 - It waits in the audit spool under the `wardyn-audit-pending-key` platform key, and the spool drain re-seals it.
 - `full` is `fields` and also stores a human `actor` as `subject:<uuid>` (the id of the person's oldest identity row).
+- It stores the `target` of a person row (`person.create` and the [closed list](AUDIT-ACTIONS.md#sealed-fields)) the same way.
 - So after erasure the person's rows no longer name them.
 - **SIEM rules keyed on `actor` see subject ids, not names, from the moment it is turned on**.
 - And a person with no identity row (one who never signed in) keeps their name in `actor`.
-- Reads and the readable export show the person while their key exists and `[erased]` after; `?actor=<person>` finds both forms.
+- Reads and the readable export show the person while their key exists and `[erased]` after; `?actor=<person>` and `?target=<person>` find both forms.
 - Like `fields`, it applies to rows written after it is turned on.
 - A principal starting `subject:` is refused as a person everywhere (`reserved_principal`) whatever this is set to.
 
