@@ -518,6 +518,17 @@ func (s *Server) markAWSSSOTokenSpent(ctx context.Context, fingerprint, owner st
 	}
 }
 
+// beginAWSSSORenewal fences the renewal's write to the owner's erase generation and reads the row's
+// revision under that fence, in that order, so an erase after either read refuses the Put.
+func (s *Server) beginAWSSSORenewal(ctx context.Context, scope awsSSOScope) (_ context.Context, rev string, guarded bool, err error) {
+	ctx, err = s.beginCredentialWrite(ctx, scope.rowOwner())
+	if err != nil {
+		return ctx, "", false, err
+	}
+	rev, guarded, err = s.awsSSORevision(ctx, scope)
+	return ctx, rev, guarded, err
+}
+
 // refreshAWSSSOBlob renews `blob` when it needs renewing and returns the blob
 // the caller should USE plus, on failure, the sentence the caller should refuse
 // with ("" means "use the returned blob").
@@ -591,16 +602,11 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 	// from it would write a credential back that an admin erased (#1478). So it
 	// renews nothing, spends nothing at AWS, and writes nothing. A token with at
 	// least the serve floor left is served from memory; otherwise the run is refused.
-	ctx, rerr := s.beginCredentialWrite(ctx, scope.rowOwner())
-	var rev string
-	var guarded bool
-	if rerr == nil {
-		rev, guarded, rerr = s.awsSSORevision(ctx, scope)
-	}
+	wctx, rev, guarded, rerr := s.beginAWSSSORenewal(ctx, scope)
 	var cur awsSSOBlob
 	var found bool
 	if rerr == nil {
-		cur, found, rerr = s.readAWSSSOBlob(ctx, scope)
+		cur, found, rerr = s.readAWSSSOBlob(wctx, scope)
 	}
 	if rerr != nil {
 		slog.WarnContext(ctx, "wardynd: could not re-read the captured AWS SSO credential under its lock; not renewing it", slog.Any("err", rerr))
@@ -719,7 +725,7 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 		data["registration_expires_at"] = next.RegistrationExpiresAt.UTC().Format(time.RFC3339)
 	}
 	outcome := "success"
-	persistAttempts, perr := s.persistRenewedAWSSSOBlob(ctx, scope, next, rev, guarded)
+	persistAttempts, perr := s.persistRenewedAWSSSOBlob(wctx, scope, next, rev, guarded)
 	superseded := secretstore.Superseded(perr)
 	if superseded {
 		// The row is no longer the one this renewal read: a newer pair (or an

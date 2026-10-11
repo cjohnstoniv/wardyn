@@ -22,6 +22,7 @@ func secretCmd(client clientFn) *cobra.Command {
 		Short: "Manage platform secrets (write-only; values are never readable back)",
 	}
 
+	var personal, shared bool
 	set := &cobra.Command{
 		Use:   "set <name>",
 		Short: "Store a secret (value read from stdin)",
@@ -41,13 +42,24 @@ func secretCmd(client clientFn) *cobra.Command {
 			if v == "" {
 				return fmt.Errorf("empty secret value")
 			}
-			if err := client().SetSecret(cmd.Context(), args[0], v); err != nil {
+			put := client().SetSecret
+			switch {
+			case personal && shared:
+				return fmt.Errorf("--personal and --shared are exclusive")
+			case personal:
+				put = client().SetMySecret
+			case shared:
+				put = client().SetSharedSecret
+			}
+			if err := put(cmd.Context(), args[0], v); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "secret %q stored\n", args[0])
 			return nil
 		},
 	}
+	set.Flags().BoolVar(&personal, "personal", false, "store it in your own namespace, whatever your role")
+	set.Flags().BoolVar(&shared, "shared", false, "store it as a shared service secret (operator tier)")
 
 	var asJSON bool
 	list := &cobra.Command{
@@ -73,19 +85,32 @@ func secretCmd(client clientFn) *cobra.Command {
 	}
 	list.Flags().BoolVar(&asJSON, "json", false, "emit {\"names\":[...],\"mine\":[...]} (the server's shape)")
 
+	var delPersonal, delShared bool
 	del := &cobra.Command{
 		Use:     "delete <name>",
 		Aliases: []string{"rm"},
 		Short:   "Delete a secret",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := client().DeleteSecret(cmd.Context(), args[0]); err != nil {
+			remove := client().DeleteSecret
+			switch {
+			case delPersonal && delShared:
+				return fmt.Errorf("--personal and --shared are exclusive")
+			case delPersonal:
+				remove = client().DeleteMySecret
+			case delShared:
+				remove = client().DeleteSharedSecret
+			}
+			if err := remove(cmd.Context(), args[0]); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "secret %q deleted\n", args[0])
 			return nil
 		},
 	}
+
+	del.Flags().BoolVar(&delPersonal, "personal", false, "delete from your own namespace, whatever your role")
+	del.Flags().BoolVar(&delShared, "shared", false, "delete a shared service secret (operator tier)")
 
 	cmd.AddCommand(set, list, del)
 	return subcommandGroup(cmd)

@@ -231,3 +231,35 @@ func TestOperatorSecretSetSucceedsOn2xx(t *testing.T) {
 		t.Fatalf("out=%q err=%v, want the success line", out, err)
 	}
 }
+
+// #1510: --personal and --shared pick the explicit route; neither flag keeps the legacy one.
+func TestSecretSetAndDeleteChooseTheirRoute(t *testing.T) {
+	for _, c := range []struct {
+		flag, method, path string
+		args               []string
+	}{
+		{"", http.MethodPut, "/api/v1/secrets/demo", []string{"secret", "set", "demo"}},
+		{"--personal", http.MethodPut, "/api/v1/me/secrets/demo", []string{"secret", "set", "demo", "--personal"}},
+		{"--shared", http.MethodPut, "/api/v1/shared-secrets/demo", []string{"secret", "set", "demo", "--shared"}},
+		{"--personal", http.MethodDelete, "/api/v1/me/secrets/demo", []string{"secret", "delete", "demo", "--personal"}},
+		{"--shared", http.MethodDelete, "/api/v1/shared-secrets/demo", []string{"secret", "delete", "demo", "--shared"}},
+	} {
+		var gotMethod, gotPath string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotMethod, gotPath = r.Method, r.URL.Path
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		if _, err := operatorCommand(t, srv.URL, "synthetic-secret\n", c.args...); err != nil {
+			t.Fatalf("%v: %v", c.args, err)
+		}
+		srv.Close()
+		if gotMethod != c.method || gotPath != c.path {
+			t.Errorf("%v hit %s %s, want %s %s", c.args, gotMethod, gotPath, c.method, c.path)
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("request sent") }))
+	defer srv.Close()
+	if _, err := operatorCommand(t, srv.URL, "x\n", "secret", "set", "demo", "--personal", "--shared"); err == nil {
+		t.Error("--personal with --shared was accepted")
+	}
+}

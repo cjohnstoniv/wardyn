@@ -250,7 +250,14 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusForbidden, reasonSecretOwnerParamRefused, secretPutOwnerRefusal)
 		return
 	}
-	owner := s.secretOwnerFromRequest(r)
+	s.putSecretFor(w, r, name, s.secretOwnerFromRequest(r), "")
+}
+
+// putSecretFor is the write every secret-storing route shares, into the namespace owner names
+// (the route decides it: handlePutSecret from the caller's role, the explicit personal and shared
+// routes from the route itself). scope is "" for the legacy route, whose audit row stays
+// byte-identical, and secretScopePersonal or secretScopeShared for the explicit ones.
+func (s *Server) putSecretFor(w http.ResponseWriter, r *http.Request, name, owner, scope string) {
 	r, ok := s.beginRequestWrite(w, r, owner)
 	if !ok {
 		return
@@ -294,13 +301,13 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 			// Rule 18: the value reached the external store but its row did not,
 			// so the store may already serve it behind this failure.
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-				"secret.write", name, "failure", withSecretOwner(map[string]any{"reason": "row"}, owner, true)))
+				"secret.write", name, "failure", withScope(withSecretOwner(map[string]any{"reason": "row"}, owner, true), scope)))
 		}
 		writeServerError(w, r, "store secret", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"secret.write", name, "success", secretOwnerAuditData(owner, true)))
+		"secret.write", name, "success", withScope(secretOwnerAuditData(owner, true), scope)))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -358,6 +365,11 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.deleteSecretFrom(w, r, name, owner, ownerKnown, "")
+}
+
+// deleteSecretFrom is the delete every secret-removing route shares; see putSecretFor for owner and scope.
+func (s *Server) deleteSecretFrom(w http.ResponseWriter, r *http.Request, name, owner string, ownerKnown bool, scope string) {
 	if !s.writableSecretName(w, name, owner) {
 		return
 	}
@@ -370,7 +382,7 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"secret.delete", name, "success", secretDeleteAuditData(owner, ownerKnown, *rep)))
+		"secret.delete", name, "success", withScope(secretDeleteAuditData(owner, ownerKnown, *rep), scope)))
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -26,7 +26,8 @@
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
 //     ExportAuditPartition, AuditRetention, DropAuditPartition
 //   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, ListSecretsScoped,
-//     ListSecretsScopedPage, SetSecret, DeleteSecret
+//     ListSecretsScopedPage, SetSecret, DeleteSecret, SetMySecret, DeleteMySecret
+//   - shared-secrets (/api/v1/shared-secrets): SetSharedSecret, DeleteSharedSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives
 //   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
@@ -454,6 +455,29 @@ func (c *Client) SetSecret(ctx context.Context, name, value string) error {
 func (c *Client) DeleteSecret(ctx context.Context, name string) error {
 	path := "/api/v1/secrets/" + url.PathEscape(name)
 	return c.do(ctx, http.MethodDelete, path, nil, nil)
+}
+
+// SetMySecret stores the caller's OWN secret, whatever their role: PUT /api/v1/me/secrets/{name}.
+// Unlike SetSecret, where an admin's write lands in the shared namespace, this never does. It needs a
+// signed-in person (403 secret_personal_needs_person for the admin token).
+func (c *Client) SetMySecret(ctx context.Context, name, value string) error {
+	return c.do(ctx, http.MethodPut, "/api/v1/me/secrets/"+url.PathEscape(name), map[string]string{"value": value}, nil)
+}
+
+// DeleteMySecret removes the caller's own secret. DELETE /api/v1/me/secrets/{name}.
+func (c *Client) DeleteMySecret(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/me/secrets/"+url.PathEscape(name), nil, nil)
+}
+
+// SetSharedSecret stores a shared service secret in the operator namespace every person's run may
+// fall back to: PUT /api/v1/shared-secrets/{name}. Operator tier only (403 otherwise).
+func (c *Client) SetSharedSecret(ctx context.Context, name, value string) error {
+	return c.do(ctx, http.MethodPut, "/api/v1/shared-secrets/"+url.PathEscape(name), map[string]string{"value": value}, nil)
+}
+
+// DeleteSharedSecret removes a shared service secret. DELETE /api/v1/shared-secrets/{name}.
+func (c *Client) DeleteSharedSecret(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/shared-secrets/"+url.PathEscape(name), nil, nil)
 }
 
 // maxErrBody caps an ERROR response body for diagnostic display so a hostile or

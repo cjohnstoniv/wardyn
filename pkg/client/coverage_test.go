@@ -101,7 +101,7 @@ func routeFamilies() map[string][]string {
 		"workspaces":   {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "ListWorkspacesPage", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask"},
 		"sources":      {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},
 		"audit":        {"AuditEvents", "AuditEventsPage", "RecentAuditEvents", "ExportAuditPartition", "AuditRetention", "DropAuditPartition"},
-		"secrets":      {"ListSecrets", "ListSecretsPage", "ListSecretsScoped", "ListSecretsScopedPage", "SetSecret", "DeleteSecret"},
+		"secrets":      {"ListSecrets", "ListSecretsPage", "ListSecretsScoped", "ListSecretsScopedPage", "SetSecret", "DeleteSecret", "SetMySecret", "DeleteMySecret", "SetSharedSecret", "DeleteSharedSecret"},
 		"site-config":  {"GetSiteConfig", "PutSiteConfig", "PutSiteConfigResult"},
 		"drives":       {"GetDrives", "ApplyDrives"},
 		"templates":    {"ListTemplates", "GetTemplate", "SaveTemplate", "DeleteTemplate", "CopyTemplate", "ImportTemplate", "ListTemplateGroupAdmins", "GrantTemplateGroupAdmin", "RevokeTemplateGroupAdmin"},

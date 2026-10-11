@@ -29,7 +29,7 @@
 # docs/operations/denials.md=4636 is "Every denial that isn't a 404" — the `| reason |` table
 # authz_denied_doc_test.go and docs_r3_guard_test.go read.
 docs/operations/who-gets-in.md=1453 share=35
-docs/operations/admin-only-writes.md=2994 share=35
+docs/operations/admin-only-writes.md=3060 share=35
 docs/operations/three-roles.md=4012 share=35
 docs/operations/provider-policy.md=1278 share=35
 docs/operations/ownership-and-offboarding.md=2370 share=35
