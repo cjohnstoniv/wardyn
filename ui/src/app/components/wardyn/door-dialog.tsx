@@ -339,8 +339,19 @@ export function DoorDialog({
   }, [focusSeq]);
 
   const currentAccess = access?.find((a) => a.provider === t?.provider.id);
-  const cause = t ? modelConnectionCause(t.provider, currentAccess) : undefined;
-  const unreadable = currentAccess?.state === "not_configured" && currentAccess.cause === "store_unreadable";
+  const rawUnreadable = currentAccess?.state === "not_configured" && currentAccess.cause === "store_unreadable";
+  // A door already showing its sign-in pane or key form keeps it: a later
+  // status refresh that reads the store as unreadable must not unmount the
+  // pane (its sign-in run would keep running, and a recovery would mount a
+  // second pane that starts another). Latched per open target.
+  const doorKey = target ? `${target.kind}:${target.provider.id}` : null;
+  const mountedKey = React.useRef<string | null>(null);
+  const latched = doorKey !== null && mountedKey.current === doorKey;
+  const unreadable = rawUnreadable && !latched;
+  React.useEffect(() => {
+    mountedKey.current = unreadable ? null : doorKey;
+  }, [doorKey, unreadable]);
+  const cause = t && !(rawUnreadable && latched) ? modelConnectionCause(t.provider, currentAccess) : undefined;
   const wasUnreadable = React.useRef(false);
   React.useEffect(() => {
     if (target && wasUnreadable.current && (currentAccess?.state === "live" || currentAccess?.state === "expiring")) onCancel();
