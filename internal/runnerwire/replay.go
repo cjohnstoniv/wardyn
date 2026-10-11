@@ -56,6 +56,15 @@ func (b *ReplayBuffer) Reserve(ctx context.Context, n int) error {
 	}
 }
 
+// unreserve returns room held by a sender whose connection ended before Assign.
+func (b *ReplayBuffer) unreserve(n int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.bytes -= n
+	close(b.changed)
+	b.changed = make(chan struct{})
+}
+
 // Assign stamps f, whose room Reserve already holds, with the next sequence
 // number and buffers it.
 func (b *ReplayBuffer) Assign(f Frame) Frame {

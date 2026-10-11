@@ -134,6 +134,11 @@ func siteConfigSetCmd(client clientFn) *cobra.Command {
 			if n := len(cfg.Integrations); n > 0 {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %d integration(s) in this file were not applied — integrations are managed through their own endpoints (`/api/v1/integrations`, or Settings), never this document; the stored ones are left as they are\n", n)
 			}
+			// runners.enabled has its own audited super-admin route; PutSiteConfig strips it,
+			// so a file naming it is not applied. Say so once.
+			if cfg.Runners != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: runners.enabled in this file was not applied — turn runners on or off with `PUT /api/v1/runners/settings` (Admin → Runners); the stored value is left as it is\n")
+			}
 			// F285: a field this file's version predates (upstream_proxy_no_proxy,
 			// internal_hosts, workspace_providers, agent_providers all landed after
 			// 0.6.6) is left as the server already has it, not cleared — the same

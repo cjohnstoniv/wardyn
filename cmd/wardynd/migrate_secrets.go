@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -28,6 +29,9 @@ import (
 // (-migrate-only, -rotate-age-key, -rewrap, -rewrap-principal-keys, -audit-split-legacy, -migrate-secrets, -reconcile), and reports whether
 // one ran.
 func maintenanceMode(f *bootFlags) (bool, error) {
+	if ran, err := recoveryMode(f); ran {
+		return true, err
+	}
 	if *f.rewrapRetirePlatformKey && !*f.rewrap {
 		return true, fmt.Errorf("refusing to run: -rewrap-retire-platform-key is a mode of -rewrap; run `wardynd -rewrap -rewrap-retire-platform-key`")
 	}
@@ -44,7 +48,7 @@ func maintenanceMode(f *bootFlags) (bool, error) {
 		if strings.TrimSpace(*f.rotateAgeKey) != "" || *f.rewrap || *f.migrateSecrets || *f.reconcile || *f.auditSplitLegacy {
 			return true, fmt.Errorf("refusing to run: -rewrap-principal-keys is a mode of its own; run it without -rotate-age-key, -rewrap, -migrate-secrets, -reconcile or -audit-split-legacy")
 		}
-		return true, rewrapPrincipalKeysMode(f)
+		return true, withBootTransport(f, rewrapPrincipalKeysMode)
 	}
 	if *f.auditSplitLegacy {
 		if strings.TrimSpace(*f.rotateAgeKey) != "" || *f.rewrap || *f.migrateSecrets || *f.reconcile {
@@ -53,15 +57,31 @@ func maintenanceMode(f *bootFlags) (bool, error) {
 		return true, auditSplitLegacyMode(f)
 	}
 	if p := strings.TrimSpace(*f.rotateAgeKey); p != "" {
-		return true, rotateAgeKeyMode(f, p)
+		return true, withBootTransport(f, func(f *bootFlags) error { return rotateAgeKeyMode(f, p) })
 	}
 	if *f.rewrap {
-		return true, rewrapMode(f)
+		return true, withBootTransport(f, rewrapMode)
 	}
 	if *f.migrateSecrets || *f.reconcile {
-		return true, secretStoreMaintenance(f)
+		return true, withBootTransport(f, secretStoreMaintenance)
 	}
 	return false, nil
+}
+
+// withBootTransport runs a maintenance mode that opens the secret store
+// clients after installing the trusted CA and WARDYN_DAEMON_PROXY_URL on the
+// shared transport, as a serving boot does before it builds the same clients:
+// without it the AWS KMS client, which starts from that transport, would reach
+// KMS behind neither the proxy nor the corporate CA.
+func withBootTransport(f *bootFlags, mode func(*bootFlags) error) error {
+	_, pool, _, err := loadTrustedCA(*f.trustedCAFile)
+	if err != nil {
+		return err
+	}
+	if err := installBootTransport(http.DefaultTransport, pool, f); err != nil {
+		return err
+	}
+	return mode(f)
 }
 
 // secretStoreMaintenance runs `wardynd -migrate-secrets -to=<target>` or
@@ -188,10 +208,23 @@ func reconcileMode(ctx context.Context, ps *secretstorepg.Store, rec audit.Recor
 const migrateActor = "wardyn/migrate-secrets"
 
 // emitMaintenanceAudit writes one audit row from a maintenance mode. Data
-// carries names, owners and counts, never a value.
+// carries names, owners and counts, never a value. A failed write is logged,
+// not returned; recordMaintenanceAudit is for the mode that must know.
 func emitMaintenanceAudit(ctx context.Context, rec audit.Recorder, actor, action, target, outcome string, data map[string]any) {
+	ev := maintenanceEvent(actor, action, target, outcome, data)
+	if err := rec.Record(ctx, ev); err != nil {
+		audit.LogWriteFailure(ctx, ev, err)
+	}
+}
+
+// recordMaintenanceAudit is emitMaintenanceAudit returning the recorder's error.
+func recordMaintenanceAudit(ctx context.Context, rec audit.Recorder, actor, action, target, outcome string, data map[string]any) error {
+	return rec.Record(ctx, maintenanceEvent(actor, action, target, outcome, data))
+}
+
+func maintenanceEvent(actor, action, target, outcome string, data map[string]any) types.AuditEvent {
 	raw, _ := json.Marshal(data)
-	ev := types.AuditEvent{
+	return types.AuditEvent{
 		ID:        uuid.New(),
 		Time:      time.Now().UTC(),
 		ActorType: types.ActorSystem,
@@ -200,8 +233,5 @@ func emitMaintenanceAudit(ctx context.Context, rec audit.Recorder, actor, action
 		Target:    target,
 		Outcome:   outcome,
 		Data:      json.RawMessage(raw),
-	}
-	if err := rec.Record(ctx, ev); err != nil {
-		audit.LogWriteFailure(ctx, ev, err)
 	}
 }

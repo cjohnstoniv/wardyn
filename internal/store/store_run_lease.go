@@ -59,6 +59,12 @@ type RunLeaser interface {
 	// for the call that cleared a recorded error, so resolution is audited
 	// once across replicas.
 	ClearRunContainmentError(ctx context.Context, id uuid.UUID) (bool, error)
+	// MarkRunAgentStopped records that the agent of id, a run kept after an
+	// outage (lostAt is its mark), was stopped, so it holds no sandbox whatever
+	// an extension later does to its end (HoldsSandboxSQL). A no-op unless the
+	// row is RUNNING and still carries that outage mark with no stop recorded;
+	// a revive clears it.
+	MarkRunAgentStopped(ctx context.Context, id uuid.UUID, lostAt time.Time) error
 }
 
 // EndedKept is the condition a write on a run kept by its OWN end (LostEnded)
@@ -170,6 +176,17 @@ func (s PG) SetRunContainmentError(ctx context.Context, id uuid.UUID, msg string
 		WHERE id=$1 AND state='RUNNING' AND lost_at IS NOT NULL`,
 		id, msg, now); err != nil {
 		return fmt.Errorf("store: set run containment error: %w", err)
+	}
+	return nil
+}
+
+// MarkRunAgentStopped — see RunLeaser.
+func (s PG) MarkRunAgentStopped(ctx context.Context, id uuid.UUID, lostAt time.Time) error {
+	if _, err := s.Pool.Exec(ctx, `
+		UPDATE agent_runs SET agent_stopped_at=now()
+		WHERE id=$1 AND state=$2 AND lost_at=$3 AND lost_reason=$4 AND agent_stopped_at IS NULL`,
+		id, string(types.RunRunning), lostAt, string(types.LostOutage)); err != nil {
+		return fmt.Errorf("store: mark run agent stopped: %w", err)
 	}
 	return nil
 }

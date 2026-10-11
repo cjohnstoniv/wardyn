@@ -167,8 +167,19 @@ describe("buildRunInput — the 0.9 contract fields", () => {
     expect(inactive).toMatchObject({ placement: "local", runner_id: "runner-1", resources: { cpu_millis: 2000 } });
     expect(inactive).not.toHaveProperty("overrides");
     const active = runWireBody(
-      buildRunInput({ ...defaultInput(state), activeSections: { agent: false, azureDevOps: false, gitPATHosts: [], pushKeys: ["github/acme"] } })!,
+      buildRunInput({ ...defaultInput(state), activeSections: { agent: false, azureDevOps: false, gitPATHosts: [], pushKeys: ["github.com/acme"] } })!,
     );
     expect(active.overrides).toEqual({ push_rules: [{ provider: "github", org: "acme", deny_paths: ["infra/"] }] });
+  });
+});
+
+describe("buildRunInput — the 0.9 contract marker", () => {
+  it("is always sent, so an unset mode reaches the server as a refusal and never as an older client's request", () => {
+    const body = buildRunInput(input({ policyMode: "default", merged: null }));
+    expect(body?.mode_contract).toBe("0.9");
+    expect(body).not.toHaveProperty("experience");
+    const wire = runWireBody(body!);
+    expect(wire).toHaveProperty("mode_contract", "0.9");
+    for (const key of ["agent", "task", "interactive", "task_mode", "interactive_start", "model_provider"]) expect(wire, key).not.toHaveProperty(key);
   });
 });

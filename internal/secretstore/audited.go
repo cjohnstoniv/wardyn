@@ -30,6 +30,7 @@ const (
 	PurposeDispatch     Purpose = "dispatch"
 	PurposeManagedToken Purpose = "managed-token"
 	PurposeMigrate      Purpose = "migrate"
+	PurposeRehearse     Purpose = "rehearse"
 	PurposeSSORefresh   Purpose = "sso-refresh"
 	PurposeADORefresh   Purpose = "ado-refresh"
 	PurposeStatus       Purpose = "status"
@@ -286,6 +287,15 @@ func (a *audited) KeyService() string {
 		return d.KeyService()
 	}
 	return ""
+}
+
+// KeyServiceStaticKey forwards whether the key service is reached with a
+// long-lived credential; false when the wrapped store does not say.
+func (a *audited) KeyServiceStaticKey() bool {
+	if d, ok := a.inner.(interface{ KeyServiceStaticKey() bool }); ok {
+		return d.KeyServiceStaticKey()
+	}
+	return false
 }
 
 func (a *audited) For(owner string) Store {

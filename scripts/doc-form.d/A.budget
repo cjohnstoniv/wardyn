@@ -7,7 +7,30 @@
 # docs/AUDIT-ACTIONS.md 39761 adds 106 over 39655 (0.9 G-sec-2, #1818): 104 (the `identity.unbind` row), 2 (the `unbind` verb in the Grammar list).
 # docs/AUDIT-ACTIONS.md 39770: Measured after combining baseline, SSH, claim and the reviewed unbind row/verb.
 # docs/AUDIT-ACTIONS.md 39782 adds 12 (SSH sync client): explicit sandbox-relative byte directions on both transfer rows.
-docs/AUDIT-ACTIONS.md=39938 share=8
+# G-1423 r1: docs/AUDIT-ACTIONS.md 39957 adds 19 over 39938 for the audit-only delegation_scope source.
+# docs/AUDIT-ACTIONS.md 40133 measured after G-1423 merge.
+# docs/AUDIT-ACTIONS.md=40006 adds 68 (0.9 F-1513): the audit.delivery.reset row (#1513).
+# docs/AUDIT-ACTIONS.md 40203 measured after F-1513 merge.
+# docs/AUDIT-ACTIONS.md 40237 adds 34 (0.9 G-sec-rest): the exec.relay and partition_dropped rows (#1976, #1978), and audit_retention_actor_reserved in the authz.denied reason list.
+# docs/AUDIT-ACTIONS.md 40391 measured after F-1514 de.
+# docs/AUDIT-ACTIONS.md 40495 measured after F-1514 merge.
+# docs/AUDIT-ACTIONS.md 40502 measured after H3 merge.
+# docs/AUDIT-ACTIONS.md 40918 measured after H10-pools merge.
+docs/AUDIT-ACTIONS.md=40918 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
+# 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
+# 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
+# docs/AUDIT-ACTIONS.md 40112 measured after merging H10 into batch.
+# docs/AUDIT-ACTIONS.md 40210 measured after merging F-1513 with H3 (the runner.revoke row and the wired connect, disconnect and switch rows).
 # Runner registration and owner claims add 99 measured audit-reference words; combined total39881.
 # Runner relay metadata adds 56 measured audit-reference words; combined total39937.
+# docs/AUDIT-ACTIONS.md 39950 adds 12 (0.9 G-sec-rest, #1976): the `exec.relay` target and the never-started run that writes no finalize row.
+# docs/AUDIT-ACTIONS.md 39969 adds 19 (0.9 G-sec-rest, #1978): the `partition_dropped` row names the admin-token drop as a `system` actor that is still attested.
+# docs/AUDIT-ACTIONS.md 40194 adds 256 over 39938 (0.9 F-1514e): the `recovery.rehearse.begin` and `recovery.rehearse` rows, including the interrupted-begin reading, and the `begin` and `rehearse` verbs in the Grammar list.
+
+# Combined runner transport and batch audit text measures39892; paragraph-share cap retained.
+# docs/AUDIT-ACTIONS.md 39949 adds 57 (0.9 runner revoke): the runner.revoke row and the runner_revoked sentence on run.kill.
+# Runner pools (H10) add 416 measured audit-reference words on top of the batch; combined total 40549.
+# Runner pools add 247 measured audit-reference words: eleven rows (pool, executor, own-runner, use-policy and default actions); combined total 40184.
+# Runner pool review round 1 adds 131 measured audit-reference words: the held executor attach, the pool delete's dropped members and cleared default, and change_id and proposed_by on the held rows; combined total 40315.
+# Runner pool review round 2 adds 38 measured audit-reference words: the held executor detach on the detach row; combined total 40353.

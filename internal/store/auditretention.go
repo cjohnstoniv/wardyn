@@ -62,9 +62,10 @@ type (
 // ensure and the leader sweeper's autodrop: a test fake or non-Postgres store has no partitions.
 type AuditRetention interface {
 	AuditRetentionStatus(ctx context.Context) (AuditRetentionStatus, error)
-	// DropAuditPartition calls audit_retention_drop. A refusal is *AuditRetentionRefused; a name that is
+	// DropAuditPartition calls audit_retention_drop; actorType is the type the chained event is recorded
+	// under (the sweeper's name is always the system actor). A refusal is *AuditRetentionRefused; a name that is
 	// not a partition of the audit log is ErrNotFound.
-	DropAuditPartition(ctx context.Context, partition, digest, actor string) (AuditRetentionDrop, error)
+	DropAuditPartition(ctx context.Context, partition, digest, actor string, actorType types.ActorType) (AuditRetentionDrop, error)
 	// AutodropAuditPartition drops the oldest partition if it is eligible, computing its digest in the
 	// database, as the system actor. ok is false (and nothing was dropped) when it is not.
 	AutodropAuditPartition(ctx context.Context) (drop AuditRetentionDrop, ok bool, err error)
@@ -93,13 +94,13 @@ func retentionAnnotate(err error, partition string) error {
 	return err
 }
 
-func (s PG) DropAuditPartition(ctx context.Context, partition, digest, actor string) (AuditRetentionDrop, error) {
+func (s PG) DropAuditPartition(ctx context.Context, partition, digest, actor string, actorType types.ActorType) (AuditRetentionDrop, error) {
 	var d AuditRetentionDrop
 	// The drop holds the chain lock only for its last steps (the digest scan is outside it, by design), so
 	// the row to send is the one it names, not whatever the mark reads afterwards.
 	err := s.withDBAuditRow(ctx, func(tx pgx.Tx) (int64, error) {
 		err := tx.QueryRow(ctx, `SELECT dropped_partition, dropped_rows, COALESCE(dropped_seq_lo, 0), COALESCE(dropped_seq_hi, 0), dropped_digest, dropped_event_seq
-			FROM audit_retention_drop($1, $2, $3)`, partition, digest, actor).
+			FROM audit_retention_drop($1, $2, $3, $4)`, partition, digest, actor, string(actorType)).
 			Scan(&d.Partition, &d.Rows, &d.SeqLo, &d.SeqHi, &d.Digest, &d.EventSeq)
 		return d.EventSeq, err
 	})
@@ -203,7 +204,7 @@ func (s PG) AutodropAuditPartition(ctx context.Context) (AuditRetentionDrop, boo
 	if err := s.Pool.QueryRow(ctx, `SELECT audit_partition_digest($1)`, name).Scan(&digest); err != nil {
 		return AuditRetentionDrop{}, false, fmt.Errorf("store: digest of audit partition %s: %w", name, err)
 	}
-	d, err := s.DropAuditPartition(ctx, name, digest, SystemAuditActor)
+	d, err := s.DropAuditPartition(ctx, name, digest, SystemAuditActor, types.ActorSystem)
 	var refused *AuditRetentionRefused
 	if errors.As(err, &refused) || errors.Is(err, ErrNotFound) {
 		// Eligible a moment ago, not now (a run started, another replica dropped it): nothing to do.

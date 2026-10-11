@@ -72,7 +72,7 @@ func (s *Store) pkWriter(domain string) (kek.KEK, error) {
 	case s.kek != nil:
 		return s.kek, nil
 	}
-	return nil, errors.New("pg secretstore: principal keys need a key to wrap under: WARDYN_AGE_KEY, or a WARDYN_KEK key service (transit or azurekv)")
+	return nil, errors.New("pg secretstore: principal keys need a key to wrap under: WARDYN_AGE_KEY, or a WARDYN_KEK key service (transit, azurekv or awskms)")
 }
 
 // pkReader is the KEK that opens a principal key wrapped under kekID in domain,
