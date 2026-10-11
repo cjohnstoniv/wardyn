@@ -245,8 +245,8 @@ export interface ModelProviders {
   providers?: ModelProvider[];
 }
 
-// GET /model-providers' body — Go's modelProvidersRead
-// (internal/api/model_providers_api.go): the stored block plus, per provider
+// GET /model-providers' body — Go's types.ModelProvidersRead
+// (internal/types/model_provider.go): the stored block plus, per provider
 // id, how many people hold a credential of their own for it (0 included;
 // absent with no providers). Read-only: never send it back on a PUT, whose
 // strict decode refuses it.

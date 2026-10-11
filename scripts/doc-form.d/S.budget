@@ -10,7 +10,8 @@
 # docs/sdk.md 12713 measured after merging H7.
 # 0.9 F-1515: docs/sdk.md 12755 adds 42 over 12713 for the PlanGovernance bullet.
 # 0.9 F-1515 session 2: docs/sdk.md 12810 adds 55 over 12755 for the apply steps and ApplyDrivesResult bullets.
-docs/sdk.md=12810 share=21
+# 0.9 F-1515 session 3: docs/sdk.md 12858 adds 48 over 12810 for the GetModelProviders section.
+docs/sdk.md=12858 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

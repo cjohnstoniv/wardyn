@@ -245,6 +245,16 @@ func (c *Client) PutSiteConfigResult(ctx context.Context, cfg types.SiteConfig) 
 	return resp, err
 }
 
+// GetModelProviders returns the org's model-provider records with, per provider id, how many people
+// hold a credential of their own for it. Admin only. Counts and configuration, never a credential
+// value; the writes and the per-provider sign-in and credential doors stay unwrapped (the console
+// owns them). GET /api/v1/model-providers.
+func (c *Client) GetModelProviders(ctx context.Context) (ModelProvidersRead, error) {
+	var out ModelProvidersRead
+	err := c.do(ctx, http.MethodGet, "/api/v1/model-providers", nil, &out)
+	return out, err
+}
+
 // SetupStatus returns the first-run setup checklist as raw JSON (the response is
 // a server-internal struct not exported through internal/types). GET
 // /api/v1/setup/status.

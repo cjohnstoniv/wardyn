@@ -368,6 +368,10 @@ A run can carry components that add destinations and secrets ([POLICIES.md](POLI
   - A fact never carries the name of a secret the organisation provides.
 - Create, preflight and preview refuse with the component reasons in [`Reason`](#reason-branch-on-this-never-on-errors-prose); a run is audited as `run.component.attach` and `run.component.refuse`.
 
+## Model providers
+
+`GetModelProviders` (`GET /api/v1/model-providers`, admin) answers a `ModelProvidersRead`: the provider records, and per provider id how many people hold a credential of their own for it. It returns configuration and counts, never a credential value. Changing providers, signing in and storing a credential stay in the console.
+
 ## Error handling
 
 Non-2xx responses are returned as `*client.APIError`:
