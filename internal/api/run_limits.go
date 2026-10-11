@@ -75,9 +75,16 @@ func (s *Server) captureRunLimits(run *types.AgentRun, ceiling governanceCeiling
 			capAt := run.CreatedAt.Add(time.Duration(end.capSec) * time.Second)
 			run.LifetimeCapAt, run.LifetimeCapSource = &capAt, end.capSource
 		}
-	} else if sec := cmp.Or(l.DefaultEndSec, l.MaxEndAheadSec); sec > 0 {
-		endsAt := run.CreatedAt.Add(time.Duration(sec) * time.Second)
-		run.EndsAt = &endsAt
+	} else {
+		if sec := cmp.Or(l.DefaultEndSec, l.MaxEndAheadSec); sec > 0 {
+			endsAt := run.CreatedAt.Add(time.Duration(sec) * time.Second)
+			run.EndsAt = &endsAt
+		}
+		// These runs have no pool: the deployment's maximum age is their only cap.
+		if s.cfg.RunMaxAge > 0 {
+			capAt := run.CreatedAt.Add(s.cfg.RunMaxAge)
+			run.LifetimeCapAt, run.LifetimeCapSource = &capAt, types.LimitSourceDeployment
+		}
 	}
 	run.WaitBudgetSec = runWaitSec(l, s.cfg.ApprovalExpiryAfter)
 }

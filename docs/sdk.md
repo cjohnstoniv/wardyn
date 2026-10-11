@@ -312,7 +312,7 @@ From a shell, `wardyn run sign-in <run-id>` prints the same answer.
 |---|---|
 | Neither | The effective default end. An untouched Interactive run with no default from the pool, the profile or the deployment ends after `24h`; a Background run in that case has no end |
 | `ends_after_sec` (1 to 2147483647) | That end. Past the lowest limit it is cut to it and the `201` carries a warning naming the limit |
-| `no_end` | No end, only where the pool and the deployment leave the lifetime unlimited and the profile has `allow_no_end` with `user_changes_limits`. Otherwise `403` |
+| `no_end` | No end, only where the pool and the deployment leave the lifetime unlimited and the profile has `allow_no_end` with `user_changes_limits`; otherwise `403`. When the default is already No end it is `201` without either |
 | Both | `400` `run_end_conflicting_fields` |
 
 - The run records `lifetime_cap_at`: the latest end its pool and the deployment (`WARDYN_RUN_MAX_AGE`) allow, counted from launch.
