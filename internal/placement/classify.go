@@ -156,6 +156,8 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "LLMUnavailableDetail", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Unattended", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Attribution", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "PushRuleSets", Class: ClassExempt, Rule: RuleExempt, Variant: "push content rules per SCM entry; policy content, no credential"},
+	{Struct: StructProxyConfig, Field: "HarnessToolRules", Class: ClassExempt, Rule: RuleExempt, Variant: "tool rules per included harness; policy content, no credential"},
 
 	// Grant eligibility is classified even when approval has withheld its dispatch value.
 	{Struct: StructGrantKind, Field: "api_key", Variant: "own namespace", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},

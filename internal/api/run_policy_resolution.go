@@ -129,6 +129,10 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		// preview at all without this. A no-op on launch (see the helper).
 		clampWarnings = append(clampWarnings, s.boundResources(ctx, r, &spec, ceiling, dryRun)...)
 		clampWarnings = append(clampWarnings, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
+		clampWarnings = append(clampWarnings, boundBackgroundIdleStop(*req, &spec)...)
+		if refusal := noRepositoriesResolvedRefusal(*req, spec); refusal != nil {
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
+		}
 		// Audit the use of an inline (non-stored) policy. The run id is not yet
 		// minted at this point, so this event carries a nil run id (like the
 		// secret.* admin events); the subsequent run.create event records
@@ -223,6 +227,10 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	// them. Both arms call the SAME helper (runs_dispatch_ceiling.go).
 	storedWarns = append(storedWarns, s.boundResources(ctx, r, &spec, ceiling, dryRun)...)
 	storedWarns = append(storedWarns, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
+	storedWarns = append(storedWarns, boundBackgroundIdleStop(*req, &spec)...)
+	if refusal := noRepositoriesResolvedRefusal(*req, spec); refusal != nil {
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
+	}
 	if refusal := patDuplicatesRunRefusal("invalid policy: ", spec); refusal != nil {
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 	}

@@ -21,7 +21,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-var auditConversion = []string{"0111_audit_partitioned.sql", "0112_audit_chain_partitioned.sql", "0119_audit_partition_digest.sql", "0123_audit_retention.sql"}
+var auditConversion = []string{"0111_audit_partitioned.sql", "0112_audit_chain_partitioned.sql", "0119_audit_partition_digest.sql", "0123_audit_retention.sql", "0146_audit_retention_drop_actor_type.sql"}
 
 const legacyManifestMigration = "0140_audit_legacy_manifest.sql"
 
@@ -210,7 +210,7 @@ func TestPG_AuditRetentionDrop_LegacyPartitionRemovesItsManifestEntry(t *testing
 		return nil
 	})
 	digest := scalar[string](t, pool, `SELECT audit_partition_digest('audit_events_legacy')`)
-	if _, err := store.NewPG(pool).DropAuditPartition(ctx, "audit_events_legacy", digest, "operator@example.com"); err != nil {
+	if _, err := store.NewPG(pool).DropAuditPartition(ctx, "audit_events_legacy", digest, "operator@example.com", types.ActorHuman); err != nil {
 		t.Fatalf("DropAuditPartition of the legacy partition: %v", err)
 	}
 	if n := legacyManifestEntries(t, pool); n != 0 {

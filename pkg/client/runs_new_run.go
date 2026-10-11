@@ -124,20 +124,31 @@ type GitPATOverride struct {
 	API    *bool     `json:"api,omitempty"`
 }
 
-// PushRuleOverride adds push content rules for one provider and organisation.
-// Monotone: it can add a deny or a require-review path, never remove one.
+// PushRuleOverride adds push content rules for one provider host and
+// organisation. Monotone: it can add a deny or a require-review path, never
+// remove one, and it is met with the policy's and the ceiling's rules before the
+// ceiling clamp (types.PushRuleSet).
 type PushRuleOverride struct {
 	// Provider is github or azure_devops.
 	Provider string `json:"provider"`
-	// Org is the GitHub owner or the Azure DevOps organisation.
+	// Host is the provider's host, for a GitHub Enterprise Server or an Azure
+	// DevOps Server. Empty is the provider's public host.
+	Host string `json:"host,omitempty"`
+	// Org is the GitHub owner or the Azure DevOps organisation, in the
+	// canonical spelling types.CanonicalPushOrg accepts.
 	Org                string   `json:"org"`
 	DenyPaths          []string `json:"deny_paths,omitempty"`
 	RequireReviewPaths []string `json:"require_review_paths,omitempty"`
 }
 
-// PushRuleKey is the provider and organisation a push-rule override is keyed
-// by. Two overrides with one key are refused as duplicates.
-func (p PushRuleOverride) PushRuleKey() string { return p.Provider + "/" + p.Org }
+// PushRuleKey is the SCM entry a push-rule override is keyed by: the provider
+// host and the canonical organisation (types.PushRuleKey), "" when it names no
+// entry. Two overrides with one key are refused as duplicates, so "Acme" and
+// "acme" cannot both claim one entry.
+func (p PushRuleOverride) PushRuleKey() string {
+	key, _ := types.PushRuleKey(p.Provider, p.Host, p.Org)
+	return key
+}
 
 // OverrideItem is one edit of a RunOverrides, in the narrowing table's terms.
 // Subject names what is edited, for a sentence the caller can act on.

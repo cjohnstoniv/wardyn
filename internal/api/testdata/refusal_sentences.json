@@ -40,6 +40,11 @@
     "sentence": "\"a partition export covers the whole partition; remove the other filter parameters\""
   },
   {
+    "reason": "audit_retention_actor_reserved",
+    "target": "\"audit.retention\"",
+    "sentence": "`the actor name \"wardynd\" is reserved for the retention sweeper`"
+  },
+  {
     "reason": "audit_retention_digest_mismatch",
     "target": "\"audit.retention\"",
     "sentence": "\"the digest does not match the partition's own; export it again and recompute it\""
@@ -163,6 +168,11 @@
     "reason": "capability_workspace",
     "target": "\"runs.workspace\"",
     "sentence": "\"you are not granted workspace \" + refused.wsID + \" — ask an admin for access, or launch without a workspace\""
+  },
+  {
+    "reason": "delegation_scope",
+    "target": "id.String()",
+    "sentence": "(audit only)"
   },
   {
     "reason": "delegation_scope",

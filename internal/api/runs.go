@@ -216,6 +216,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		SPIFFEID:         id.SPIFFEID,
 		RunnerTarget:     s.cfg.RunnerTarget,
 		Interactive:      req.Interactive,
+		Experience:       req.Experience,
 		WorkspacePath:    workspacePath,
 		WorkspaceIDs:     workspaceIDsOf(wsRefs), // referencedWorkspaces above, same spec as WorkspacePath
 		AutoStopAfterSec: spec.AutoStopAfterSec,

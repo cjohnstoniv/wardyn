@@ -145,3 +145,15 @@ func TestLocalDispatchP3RidesTheCeilingAndNamesNoPersonalComponent(t *testing.T)
 		t.Fatalf("failure hint %q", st.failureHint)
 	}
 }
+
+// The org never chooses a path on the laptop: a stored proxy config's
+// DecisionSpoolDir does not reach the laptop-bound spec; the runner sets its own.
+func TestLocalStoredSpecNeverCarriesTheDecisionSpoolDir(t *testing.T) {
+	b, err := json.Marshal(localStoredSpec(proxy.Config{RunID: uuid.New(), DecisionSpoolDir: "/org/chosen/spool"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "/org/chosen/spool") {
+		t.Fatalf("the laptop-bound spec carries the org's spool path: %s", b)
+	}
+}

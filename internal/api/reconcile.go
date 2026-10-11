@@ -589,6 +589,8 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 	pass("lapsed run token sweep", s.sweepLapsedRunTokens(ctx))
 	// Azure DevOps personal access tokens, on their own slower clock.
 	pass("run personal access token sweep", s.sweepRunPATs(ctx))
+	// Unclaimed runners that outlived their 24h wait.
+	pass("lapsed unclaimed runner sweep", s.sweepLapsedRunners(ctx))
 	return first
 }
 
@@ -774,6 +776,9 @@ func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to type
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: reconcile get run failed",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
+		return
+	}
+	if cur.Placement == types.PlacementLocal && cur.RunnerID != nil {
 		return
 	}
 	if isTerminalRunState(cur.State) {

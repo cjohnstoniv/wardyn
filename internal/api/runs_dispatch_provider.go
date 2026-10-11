@@ -477,7 +477,8 @@ func (s *Server) applyProviderEnv(ctx context.Context, run types.AgentRun, lane 
 		// codex 0.149.1 reads neither OPENAI_* variable: its base URL comes
 		// from config.toml and its key from CODEX_API_KEY (task mode) or
 		// auth.json (interactive), both of which the image's prep writes
-		// from these two. The OPENAI_* pair stays for an older codex.
+		// from these two. The OPENAI_* pair is unused by codex and deprecated: only the
+		// pinned codex is supported.
 		sandboxEnv[envCodexBaseURL] = codexBaseURL(proxyURL, lane.key.upstream)
 		sandboxEnv[envCodexAPIKey] = "wardyn-proxy-injected"
 		sandboxEnv[envOpenAIBaseURL] = proxyURL + "/wardyn/llm/openai"
