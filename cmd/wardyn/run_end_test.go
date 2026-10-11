@@ -64,13 +64,13 @@ func TestRunEndFlagsAreSentAsTheRequestFields(t *testing.T) {
 }
 
 func TestRunCreatePrintsTheAppliedEnd(t *testing.T) {
-	end := time.Date(2026, 10, 12, 18, 0, 0, 0, time.UTC)
+	end := time.Now().UTC().Add(6 * time.Hour).Truncate(time.Second)
 	for _, tc := range []struct {
 		name string
 		run  types.AgentRun
 		want string
 	}{
-		{"an end", types.AgentRun{ID: uuid.New(), State: types.RunPending, EndsAt: &end}, "  ends: 2026-10-12T18:00:00Z\n"},
+		{"an end", types.AgentRun{ID: uuid.New(), State: types.RunPending, EndsAt: &end}, "  ends: " + end.Format(time.RFC3339) + "\n"},
 		{"no end", types.AgentRun{ID: uuid.New(), State: types.RunPending}, "  ends: never (no end)\n"},
 	} {
 		srv := newCmdServer(t, http.StatusCreated, map[string]any{"id": tc.run.ID, "state": tc.run.State, "ends_at": tc.run.EndsAt})

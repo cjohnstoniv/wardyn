@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -289,5 +290,42 @@ func TestGovernanceSourceAgreesWithPlanEnd(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestStepRun_DeploymentMaxAgeCapsPatch: a server-launched run (newStepRun, the
+// door record, scan, harness login and probe runs take) has no pool, so the
+// deployment's maximum age is its only cap. It is stamped at create, and a PATCH
+// can neither give the run No end nor push it past that age, a super admin
+// included.
+func TestStepRun_DeploymentMaxAgeCapsPatch(t *testing.T) {
+	h := newHarness(t)
+	srv := New(baseTestConfig(h, &dispatchTestStore{}))
+	srv.cfg.RunMaxAge = 14 * 24 * time.Hour
+	limits := types.RunLimits{MaxEndAheadSec: secDay, AllowNoEnd: true, UserChangesLimits: true}
+	gov := stepRunGoverned(governanceCeiling{Limits: types.GovernanceLimits{RunLimits: limits}}, false, false)
+	run, _, err := srv.newStepRun(context.Background(), uuid.New(), "owner", "source scan", types.CC2, gov, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := run.CreatedAt.Add(14 * 24 * time.Hour); run.LifetimeCapAt == nil || !run.LifetimeCapAt.Equal(want) || run.LifetimeCapSource != types.LimitSourceDeployment {
+		t.Fatalf("lifetime_cap_at = %v (%q), want created_at + 14d from the deployment", run.LifetimeCapAt, run.LifetimeCapSource)
+	}
+
+	now := run.CreatedAt.Add(time.Hour)
+	end := now.Add(time.Hour)
+	run.EndsAt = &end
+	if p := planRunEndWait(run, runEndWaitRequest{}, map[string]bool{"ends_at": true}, false, now, 0); p.status != http.StatusForbidden || p.refusalReason != reasonRunEndNoEndNotAllowed {
+		t.Errorf("a member's No end = %d %q, want 403 %s", p.status, p.refusalReason, reasonRunEndNoEndNotAllowed)
+	}
+	far := now.Add(400 * 24 * time.Hour)
+	p := planRunEndWait(run, runEndWaitRequest{EndsAt: &far}, map[string]bool{"ends_at": true}, true, now, 0)
+	if p.refusal != "" || p.resp.EndsAt == nil || !p.resp.EndsAt.Equal(run.LifetimeCapAt.Truncate(time.Second)) || p.resp.LatestEndSource != types.LimitSourceDeployment {
+		t.Errorf("a super admin past max age = %+v, want the end at the cap %v, the deployment's", p.resp, run.LifetimeCapAt)
+	}
+
+	srv.cfg.RunMaxAge = 0
+	if r, _, err := srv.newStepRun(context.Background(), uuid.New(), "owner", "source scan", types.CC2, gov, nil); err != nil || r.LifetimeCapAt != nil || r.LifetimeCapSource != "" {
+		t.Errorf("with no max age: cap %v (%q), %v; want none", r.LifetimeCapAt, r.LifetimeCapSource, err)
 	}
 }
