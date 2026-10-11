@@ -204,6 +204,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   removed from every use policy (an emptied policy permits nobody); deleting a pool clears the organisation default
   that named it. Audit actions
   `runner_pool.*`, `person.runner_pool_default.set|delete`.
+- With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, creating a service identity (`POST /service-identities`) and a
+  `PATCH /service-identities/{name}` that changes its sponsor are held for a second security-tier human (governance
+  change kind `service_identity`). The PATCH is held whole. A description or suspend edit, unsuspend and retire
+  apply directly. An approval applies only while the name is free and the sponsor and type are valid, or while the
+  identity and its sponsor are as reviewed; otherwise `409 governance_change_stale`.
 - New Run run mode: a request chooses `experience` (background or interactive), with its workload, included tools,
   one startup choice, one starting folder and an explicit "no repositories or drives". The CLI's run-mode flags
   mark requests `mode_contract: "0.9"`, so an unset mode is refused instead of inferred; older requests, and the
