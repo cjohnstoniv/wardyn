@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -95,10 +96,15 @@ func (s PG) PrincipalsNamed(ctx context.Context, name string) ([]string, error) 
 		  UNION SELECT principal FROM api_tokens WHERE principal = $1
 		  UNION SELECT owned_by FROM workspaces WHERE owned_by = $1`, []any{name}},
 	}
+	// A typed entra:<tenant>:<object> is the same person under any issuer, so its sign-ins are read with
+	// the exact principal's answer: a people row under one issuer and a sign-in under another name two
+	// principals, and that is ambiguous, not the people row alone with the sign-in's data left behind.
+	var entra *tier
 	if rest, ok := strings.CutPrefix(name, "entra:"); ok {
 		if tid, oid, ok := strings.Cut(rest, ":"); ok && tid != "" && oid != "" {
-			tiers = append(tiers, tier{`SELECT principal FROM principal_identities WHERE tenant_id = $1 AND object_id = $2 AND principal IS NOT NULL
-			   UNION SELECT principal FROM people WHERE tenant_id = $1 AND object_id = $2`, []any{tid, oid}})
+			entra = &tier{`SELECT principal FROM principal_identities WHERE tenant_id = $1 AND object_id = $2 AND principal IS NOT NULL
+			   UNION SELECT principal FROM people WHERE tenant_id = $1 AND object_id = $2`, []any{tid, oid}}
+			tiers = append(tiers, *entra)
 		}
 	}
 	tiers = append(tiers, tier{`SELECT principal FROM principal_identities WHERE lower(principal) = lower($1)
@@ -113,7 +119,7 @@ func (s PG) PrincipalsNamed(ctx context.Context, name string) ([]string, error) 
 		   UNION SELECT principal FROM people WHERE email <> '' AND lower(email) = lower($1)
 		   UNION SELECT principal FROM api_tokens WHERE principal <> '' AND email <> '' AND lower(email) = lower($1)`, []any{name}})
 	}
-	for _, t := range tiers {
+	named := func(t tier) ([]string, error) {
 		rows, err := s.Pool.Query(ctx, signedInAs(t.query)+` ORDER BY 1`, t.args...)
 		if err != nil {
 			return nil, fmt.Errorf("store: resolve a name to principals: %w", err)
@@ -121,6 +127,20 @@ func (s PG) PrincipalsNamed(ctx context.Context, name string) ([]string, error) 
 		found, err := pgx.CollectRows(rows, pgx.RowTo[string])
 		if err != nil {
 			return nil, fmt.Errorf("store: resolve a name to principals: %w", err)
+		}
+		return found, nil
+	}
+	for i, t := range tiers {
+		found, err := named(t)
+		if err != nil {
+			return nil, err
+		}
+		if len(found) > 0 && i == 0 && entra != nil {
+			more, err := named(*entra)
+			if err != nil {
+				return nil, err
+			}
+			found = slices.Compact(slices.Sorted(slices.Values(append(found, more...))))
 		}
 		if len(found) > 0 {
 			return found, nil

@@ -244,6 +244,33 @@ func TestPG_PersonErasure_PrincipalsNamedFollowsTheSignIn(t *testing.T) {
 	}
 }
 
+// An admin-created person under one issuer and a sign-in under another with the same tenant and object id
+// are not linked (the sign-in's own link needs the same issuer), so the typed entra form must not resolve
+// to the empty people namespace alone: it names both, which an erase refuses as ambiguous.
+func TestPG_PersonErasure_PrincipalsNamedEntraFormIsAmbiguousAcrossIssuers(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	oid := uuid.NewString()
+	entra := "entra:" + idTenant + ":" + oid
+	if _, _, err := st.CreatePerson(ctx, types.Person{Principal: entra, Email: "kit@corp.example", Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "pairwise-kit", Issuer: "https://other-issuer.example", TenantID: idTenant, ObjectID: oid}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{entra, "pairwise-kit"}
+	if got, err := st.PrincipalsNamed(ctx, entra); err != nil || !slices.Equal(got, want) {
+		t.Errorf("PrincipalsNamed(%q) = %v, %v, want both %v", entra, got, err, want)
+	}
+	if got, err := st.PrincipalForName(ctx, entra); err != nil || got != entra {
+		t.Errorf("PrincipalForName(%q) = %q, %v, want the name kept as it is", entra, got, err)
+	}
+	if got, err := st.PrincipalsNamed(ctx, "pairwise-kit"); err != nil || !slices.Equal(got, []string{"pairwise-kit"}) {
+		t.Errorf("PrincipalsNamed(pairwise-kit) = %v, %v, want itself", got, err)
+	}
+}
+
 // A people row keyed by subject (no issuer, tenant or object id) is not the sign-in of whoever else has
 // none of those either: only an object-id row follows a sign-in.
 func TestPG_PersonErasure_PrincipalsNamedKeepsASubjectKeyedPerson(t *testing.T) {
