@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -58,7 +59,7 @@ func newRegisterCommand() *cobra.Command {
 		}}
 		registered, err := client.RegisterRunner(cmd.Context(), sdk.RunnerRegisterRequest{Token: token, PublicKey: key.Public().(ed25519.PublicKey), Name: name})
 		if err != nil {
-			return errors.New("runner registration failed; the local key was preserved. Obtain a fresh token and choose a new private state directory before retrying")
+			return registrationFailure(err)
 		}
 		fingerprint := runnerwire.Fingerprint(key.Public().(ed25519.PublicKey))
 		if registered.RunnerID == uuid.Nil || registered.State != types.RunnerUnclaimed || registered.Fingerprint != fingerprint || registered.OrgURLSHA256 != federation.OrgURLSHA256(org) {
@@ -94,4 +95,14 @@ func readRegistrationToken(path string) (string, error) {
 		return "", errors.New("registration token file must contain one wdr_ token")
 	}
 	return token, nil
+}
+
+// registrationFailure keeps the server's own refusal and advises a fresh token
+// only when the server refused this token or had already spent it.
+func registrationFailure(err error) error {
+	var refused *sdk.APIError
+	if errors.As(err, &refused) && (refused.Reason == string(placement.ReasonRunnerTokenInvalid) || refused.Status == http.StatusConflict) {
+		return fmt.Errorf("runner registration refused: %w. This token cannot be used again: obtain a fresh token and choose a new private state directory before retrying (the local key was preserved)", err)
+	}
+	return fmt.Errorf("runner registration failed: %w. The server did not refuse the token: retry with it and a new private state directory (the local key was preserved)", err)
 }

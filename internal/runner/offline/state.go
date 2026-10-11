@@ -22,6 +22,8 @@ type localRun struct {
 	Containment     *types.RunnerMutationFailure `json:"containment,omitempty"`
 	LeaseAfter      time.Time                    `json:"lease_after,omitempty"`
 	Quarantine      *types.RunnerQuarantine      `json:"quarantine,omitempty"`
+	QuarantinedAt   *time.Time                   `json:"quarantined_at,omitempty"`
+	EvidenceErased  bool                         `json:"evidence_erased,omitempty"`
 	ContainmentOnly bool                         `json:"containment_only,omitempty"`
 	Generation      uuid.UUID                    `json:"generation,omitempty"`
 	Executions      map[uuid.UUID]string         `json:"executions,omitempty"`

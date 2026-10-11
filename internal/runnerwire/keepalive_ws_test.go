@@ -6,6 +6,7 @@ package runnerwire
 import (
 	"testing"
 	"time"
+	"unsafe"
 )
 
 // A write stalled on the socket holds the write lock, so no PING (and no
@@ -61,10 +62,48 @@ func TestKeepaliveKeepsAHealthyLinkUp(t *testing.T) {
 	if !org.Online() || !run.Online() {
 		t.Fatalf("a healthy link went down: org %v, runner %v", org.Err(), run.Err())
 	}
-	if last := time.Unix(0, run.lastPong.Load()); !last.After(start.Add(10 * every)) {
+	if last := *run.lastPong.Load(); !last.After(start.Add(10 * every)) {
 		t.Fatalf("no recent PONG: last at %s after start", last.Sub(start))
 	}
 	if err := org.Call(ctxT(t), "echo", map[string]string{}, nil); err != nil {
 		t.Fatalf("a call on the kept-alive link = %v", err)
 	}
+}
+
+// A wall-clock step moves time.Now's wall reading but not its monotonic one.
+// The PONG age must follow the monotonic reading: a backward step must not
+// delay failing a silent link, and a forward step must not fail a healthy one.
+func TestKeepalivePongAgeIgnoresWallClockSteps(t *testing.T) {
+	const every = PingInterval
+	limit := MissedPings * every
+	pong := time.Now()
+	p := &Peer{}
+	p.lastPong.Store(&pong)
+	for _, c := range []struct {
+		name    string
+		now     time.Time
+		overdue bool
+	}{
+		{"PONGs stopped, wall stepped back 2s", stepWall(t, pong.Add(limit), -2*time.Second), true},
+		{"healthy link, wall stepped forward 60s", stepWall(t, pong.Add(every), 60*time.Second), false},
+		{"MissedPings intervals without a PONG", pong.Add(limit), true},
+		{"just under MissedPings intervals", pong.Add(limit - time.Nanosecond), false},
+	} {
+		if got := p.pongOverdue(c.now, every); got != c.overdue {
+			t.Errorf("%s: overdue = %v, want %v", c.name, got, c.overdue)
+		}
+	}
+}
+
+// stepWall returns at with its wall reading moved by d and its monotonic
+// reading unchanged, as a later time.Now reads after the wall clock steps.
+func stepWall(t *testing.T, at time.Time, d time.Duration) time.Time {
+	t.Helper()
+	s := at.Add(d)
+	// time.Time is {wall uint64; ext int64; loc}; ext holds the monotonic reading.
+	(*[2]int64)(unsafe.Pointer(&s))[1] = (*[2]int64)(unsafe.Pointer(&at))[1]
+	if s.Sub(at) != 0 || s.Round(0).Sub(at.Round(0)) != d {
+		t.Fatal("cannot build a wall-stepped time on this Go runtime")
+	}
+	return s
 }
