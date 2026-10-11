@@ -82,10 +82,24 @@ const (
 
 // RunnerQuarantine identifies an org-authorized isolation disposition, not an
 // evidence acknowledgement or permission to reconstruct missing run authority.
+// Asserted marks a quarantine of a run the org has no row for: Generation is
+// then the runner's own assertion, never compared to org executions, and the
+// runner deletes that run's local evidence after RunnerAssertedEvidenceTTL or
+// at revocation.
 type RunnerQuarantine struct {
 	ID         uuid.UUID `json:"id"`
 	Generation uuid.UUID `json:"generation"`
+	Asserted   bool      `json:"asserted,omitempty"`
 }
+
+// RunnerAssertedEvidenceTTL is how long quarantined evidence of an asserted
+// (org-erased) run is kept, on the runner and in the org's action rows, after
+// its quarantine succeeded.
+const RunnerAssertedEvidenceTTL = 90 * 24 * time.Hour
+
+// RunnerAssertedSubjectCap bounds the asserted subjects one runner can have,
+// settled or not. Past it the runner is held not-ready.
+const RunnerAssertedSubjectCap = 100
 
 // RunnerMutationFailure is an immutable failure identity. Contained becomes true
 // only after proxy containment and lifecycle persistence both succeed.
@@ -118,6 +132,11 @@ type RunnerPendingAction struct {
 	Owner      string     `json:"-"`
 	Generation uuid.UUID  `json:"-"`
 	LostAt     *time.Time `json:"-"`
+	// Asserted marks a subject with no org run row: RunID is then the
+	// runner's assertion, Owner is empty and Generation is nil.
+	Asserted bool `json:"-"`
+	// ObligationID is the chain a deferred action's successors continue.
+	ObligationID uuid.UUID `json:"-"`
 }
 
 // Runner action outcomes an action_result may carry. A deferred receipt is
