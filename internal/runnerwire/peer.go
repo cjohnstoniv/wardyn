@@ -26,6 +26,11 @@ const (
 // included: an OPEN past it is refused. A constant, not a knob.
 const MaxStreams = 256
 
+// maxStreamReplies bounds the RESET and OPEN_OK answers to OPENs that wait
+// for the writer. A peer that opens faster than this side can answer fills it,
+// and the session ends.
+const maxStreamReplies = 2 * MaxStreams
+
 // CallHandler serves one incoming CALL. A ctx cancelled by the caller's RESET
 // means the caller stopped waiting. The result is marshalled into the REPLY; an
 // error becomes the typed REPLY error through ErrorFor.
@@ -98,6 +103,7 @@ type Peer struct {
 	// wait under mu for the one worker that answers them.
 	pongDue   []byte
 	owed      int64
+	answers   []Frame // under mu: RESET and OPEN_OK for OPENs, in order
 	replyWake chan struct{}
 }
 
@@ -483,9 +489,9 @@ func (p *Peer) wakeReplies() {
 	}
 }
 
-// One worker answers PINGs and returns dropped credit, each coalesced (the
-// latest PING, the sum of credit), so a peer that sends faster than this side
-// can write cannot create a goroutine per frame.
+// One worker answers OPENs (queued, bounded), PINGs and dropped credit (each
+// coalesced: the latest PING, the sum of credit), so a peer that sends faster
+// than this side can write cannot create a goroutine per frame.
 func (p *Peer) sendReplies() {
 	for {
 		select {
@@ -494,9 +500,14 @@ func (p *Peer) sendReplies() {
 			return
 		}
 		p.mu.Lock()
-		pong, owed := p.pongDue, p.owed
-		p.pongDue, p.owed = nil, 0
+		answers, pong, owed := p.answers, p.pongDue, p.owed
+		p.answers, p.pongDue, p.owed = nil, nil, 0
 		p.mu.Unlock()
+		for _, f := range answers {
+			if p.send(p.ctx, f) != nil {
+				return
+			}
+		}
 		if pong != nil && p.send(p.ctx, Frame{Type: TypePong, Payload: pong}) != nil {
 			return
 		}
@@ -603,13 +614,11 @@ func (p *Peer) onOpen(f Frame) error {
 	// authenticated connection remains live, so output may retry it.
 	if o.Call != 0 && p.calls[o.Call] == nil {
 		p.mu.Unlock()
-		go p.send(p.ctx, Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetRefused)}) //nolint:errcheck // a failed RESET is the link going down
-		return nil
+		return p.answer(Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetRefused)})
 	}
 	if len(p.streams)+len(p.parked) >= MaxStreams {
 		p.mu.Unlock()
-		go p.send(p.ctx, Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetCapacity)}) //nolint:errcheck // a failed RESET is the link going down
-		return nil
+		return p.answer(Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetCapacity)})
 	}
 	s := p.newStream(f.Stream, o.Kind)
 	if o.Call != 0 {
@@ -629,6 +638,19 @@ func (p *Peer) onOpen(f Frame) error {
 			return nil
 		}
 	}
-	go p.send(p.ctx, Frame{Type: TypeOpenOK, Stream: f.Stream}) //nolint:errcheck // a failed OPEN_OK is the link going down
+	return p.answer(Frame{Type: TypeOpenOK, Stream: f.Stream})
+}
+
+// answer queues a reply to an OPEN for the reply worker. The read loop must
+// not wait on a write: two peers that both did could stop each other reading.
+func (p *Peer) answer(f Frame) error {
+	p.mu.Lock()
+	if len(p.answers) >= maxStreamReplies {
+		p.mu.Unlock()
+		return fmt.Errorf("%w: %d OPENs await an answer", ErrBadFrame, maxStreamReplies)
+	}
+	p.answers = append(p.answers, f)
+	p.mu.Unlock()
+	p.wakeReplies()
 	return nil
 }
