@@ -17,14 +17,16 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
 const outputLimit = 8 << 20
 const outputChunk = 64 << 10
 
 // outputAckWait bounds how long a full buffer waits for an ACK before it drops
-// its oldest part; it matches the org's 30s per-attempt ACK timeout.
-const outputAckWait = 30 * time.Second
+// its oldest part. It outlasts a link the session layer can still resume (its
+// resume window plus one maximal reconnect backoff), so such a blip loses nothing.
+const outputAckWait = runnerwire.ResumeWindow + runnerwire.BackoffMax
 
 var errOutputOffset = errors.New("runner output: offset exceeds accepted output")
 
