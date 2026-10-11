@@ -13,4 +13,6 @@
 # docs/ENV.md 36090 measured after F-588 M1 merge.
 # WARDYN_RUN_MAX_AGE is every new run's lifetime cap (#1319): +85 measured words.
 # docs/ENV.md 36185 measured after D-1319 S1 merge.
-docs/ENV.md=36185 share=5
+# docs/ENV.md 36115 adds 25 (0.9 F-588 M2): chart kek.awskms.key on the WARDYN_AWS_KMS_KEY row and section, and the WARDYN_TEST_AWS_KMS_KEY list entry.
+# docs/ENV.md 36210 measured after F-588 M2 merge.
+docs/ENV.md=36210 share=5
