@@ -24,6 +24,9 @@ var ErrServiceNameTaken = errors.New("store: that service identity name is alrea
 // non-deactivated identity.
 var ErrServiceSponsorInvalid = errors.New("store: the sponsor is not a bound, active identity")
 
+// ErrServiceUserTypeUnknown is CreateServiceIdentity's refusal for a user type with no user_types row.
+var ErrServiceUserTypeUnknown = errors.New("store: no such user type")
+
 // ErrServiceTokenCap is CreateServiceToken's refusal when the identity already holds the most live tokens.
 var ErrServiceTokenCap = errors.New("store: the service identity holds the maximum number of live tokens")
 
@@ -143,6 +146,18 @@ func (s PG) CreateServiceIdentity(ctx context.Context, si types.ServiceIdentity)
 		return types.ServiceIdentity{}, err
 	} else if !ok {
 		return types.ServiceIdentity{}, ErrServiceSponsorInvalid
+	}
+	// user_type has no foreign key: the lock orders this create against DeleteUserType, and the type is
+	// read after it.
+	var typeKnown bool
+	if _, err := tx.Exec(ctx, userTypeWriteLock, si.UserType); err != nil {
+		return types.ServiceIdentity{}, fmt.Errorf("store: create service identity: %w", err)
+	}
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM user_types WHERE id = $1)`, si.UserType).Scan(&typeKnown); err != nil {
+		return types.ServiceIdentity{}, fmt.Errorf("store: create service identity: %w", err)
+	}
+	if !typeKnown {
+		return types.ServiceIdentity{}, ErrServiceUserTypeUnknown
 	}
 	out, err := scanServiceIdentity(tx.QueryRow(ctx, `
 		INSERT INTO service_identities (name, description, sponsor, sponsor_since, user_type, created_by, created_at)

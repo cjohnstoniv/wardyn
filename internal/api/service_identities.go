@@ -138,6 +138,9 @@ func (s *Server) handleCreateServiceIdentity(w http.ResponseWriter, r *http.Requ
 	case errors.Is(err, store.ErrServiceSponsorInvalid):
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonServiceIdentitySponsorInvalid, serviceSponsorMsg)
 		return
+	case errors.Is(err, store.ErrServiceUserTypeUnknown):
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonServiceIdentityUserTypeUnknown, "user_type: no such user type")
+		return
 	case err != nil:
 		writeServerError(w, r, "create service identity", err)
 		return
