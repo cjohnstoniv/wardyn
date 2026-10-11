@@ -3703,6 +3703,9 @@ image digests in `wardyn.env`, not a re-run of anything
   `evidence_source`).
 - `0143` (`0143_provider_connection_changes`) adds a trigger on `secrets` (`0001`'s table), beside its new
   `provider_connection_changes` table.
+- `0150` (`0150_runner_action_binding`) adds binding columns to `runner_pending_actions` (`0139`'s table) and is a later
+  `CREATE OR REPLACE` of its immutability trigger function.
+- `0151` (`0151_runner_revoked_by`) adds `runners.revoked_by` and `runners.revoke_reason` (`0139`'s table).
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
