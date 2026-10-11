@@ -5,6 +5,7 @@ package placement
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -22,6 +23,9 @@ type CredentialOrigin struct {
 	Stored       bool
 	OwnNamespace bool
 	OwnerOnly    bool
+	// ResidentOptIn is an Azure DevOps connection's admin opt-in to
+	// runner_resident (types.ADOEntraConfig.RunnerResident); off by default.
+	ResidentOptIn bool
 }
 
 // CredentialIntent records a resolved credential-producing configuration before mint.
@@ -45,6 +49,12 @@ type LocalPlan struct {
 	SelfDefinedComponents      []string
 	LocalSelfDefinedComponents bool
 	Delivery                   DeliveryPolicy
+	// Posture is the candidate runner's stored, self-reported posture; nil when
+	// it never reported one.
+	Posture *types.RunnerPosture
+	// ConfinementFloor is the run's blast-radius floor
+	// (composer.RequiredConfinementFloor); "" when there is none.
+	ConfinementFloor types.ConfinementClass
 }
 
 // Refusal names the actual field that makes local execution ineligible.
@@ -82,12 +92,12 @@ func LocalEligibility(p LocalPlan) (runner.SandboxSpec, *Refusal) {
 		}
 	}
 	for _, path := range CredentialPaths(p.Spec) {
-		if r := classifyCredential(Entries, path, p.Origins[path], p.Delivery); r != nil {
+		if r := classifyCredential(Entries, path, p.Origins[path], p); r != nil {
 			return runner.SandboxSpec{}, r
 		}
 	}
 	for _, intent := range p.CredentialIntents {
-		if r := classifyCredential(Entries, intent.Field, intent.Origin, p.Delivery); r != nil {
+		if r := classifyCredential(Entries, intent.Field, intent.Origin, p); r != nil {
 			return runner.SandboxSpec{}, r
 		}
 	}
@@ -118,7 +128,7 @@ func matchingRows(rows []Entry, origin CredentialOrigin) []Entry {
 	return append(exact, general...)
 }
 
-func classifyCredential(entries entrySource, path string, origin CredentialOrigin, delivery DeliveryPolicy) *Refusal {
+func classifyCredential(entries entrySource, path string, origin CredentialOrigin, p LocalPlan) *Refusal {
 	if origin.Class == "" {
 		return refuse(ReasonPlacementCredential, path, "credential provenance is unknown")
 	}
@@ -146,11 +156,33 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 			}
 			return nil
 		case RuleDelivery, RuleViaOrgRefuse, RuleNotConfigured:
-			mode := delivery.For(row.Delivery).Mode
+			mode := p.Delivery.For(row.Delivery).Mode
+			if mode == ModeRunnerResident && row.Rule == RuleDelivery {
+				return residentRefusal(p, path, origin, row.Delivery)
+			}
 			return refuse(ReasonPlacementCredential, path, fmt.Sprintf("%s credential is unavailable on a local runner (delivery %s has no implemented authority)", row.Delivery, mode))
 		default:
 			return refuse(ReasonPlacementCredential, path, "credential row has a rule this server does not implement")
 		}
 	}
 	return refuse(ReasonPlacementCredential, path, "credential variant has no permitted local rule")
+}
+
+// residentRefusal is the runner_resident gate (OD-12, design §7.4, Q7): the
+// class may be resident, an Azure DevOps connection opted in, the run has no
+// blast-radius floor (a runner-asserted class never satisfies one for a value
+// the runner holds), and the runner's posture meets the class's requirement.
+func residentRefusal(p LocalPlan, path string, origin CredentialOrigin, class string) *Refusal {
+	switch {
+	case !slices.Contains(classModes[class], ModeRunnerResident):
+		return refuse(ReasonPlacementCredential, path, class+" credential is never runner_resident")
+	case class == ClassADOMintedPAT && !origin.ResidentOptIn:
+		return refuse(ReasonPlacementCredential, path, "the Azure DevOps connection has not opted in to runner_resident")
+	case p.ConfinementFloor != "":
+		return refuse(ReasonRunnerPostureUnmet, path, "confinement_class: a runner-asserted class never meets the "+string(p.ConfinementFloor)+" floor for a runner_resident credential")
+	}
+	if field := PostureUnmet(p.Delivery.For(class).RequirePosture, p.Posture); field != "" {
+		return refuse(ReasonRunnerPostureUnmet, path, field+": the runner's reported posture does not meet "+class+"'s requirement")
+	}
+	return nil
 }

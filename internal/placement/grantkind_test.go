@@ -142,11 +142,18 @@ func TestLocalEligibilityClassifiesEveryGrantKind(t *testing.T) {
 		for _, class := range []Class{ClassOperator, ClassBrokered, ClassPlatform} {
 			refuses("class "+string(class), grantPlan(kind, true, CredentialOrigin{Class: class, Delivery: want.delivery, GrantKind: kind, Stored: true, OwnNamespace: true, OwnerOnly: true}))
 		}
-		// An org-held class stays refused whatever delivery the org configures.
-		for _, mode := range []Mode{ModeViaOrg, ModeRunnerResident} {
-			p := grantPlan(kind, true, CredentialOrigin{Class: ClassOperator, Delivery: want.delivery, GrantKind: kind, Stored: true})
-			p.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{want.delivery: {Mode: mode}}}
-			refuses("operator delivery "+string(mode), p)
+		// An org-held class stays refused under via_org; runner_resident admits it
+		// only where its class may be resident.
+		p := grantPlan(kind, true, CredentialOrigin{Class: ClassOperator, Delivery: want.delivery, GrantKind: kind, Stored: true})
+		p.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{want.delivery: {Mode: ModeViaOrg}}}
+		refuses("operator delivery via_org", p)
+		p.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{want.delivery: {Mode: ModeRunnerResident}}}
+		if slices.Contains(AllowedModes(want.delivery), ModeRunnerResident) {
+			if _, r := LocalEligibility(p); r != nil {
+				t.Errorf("%s/operator delivery runner_resident: refusal=%v", kind, r)
+			}
+		} else {
+			refuses("operator delivery runner_resident", p)
 		}
 		refuses("unknown provenance", grantPlan(kind, true, CredentialOrigin{GrantKind: kind}))
 		refuses("origin of another kind", grantPlan(kind, true, CredentialOrigin{Class: ClassOwn, Delivery: want.delivery, GrantKind: "other", Stored: true, OwnNamespace: true, OwnerOnly: true}))
@@ -252,11 +259,13 @@ func TestGrantKindLiteralReaderSeesBothConstForms(t *testing.T) {
 func TestLocalEligibilityOwnBedrockRoleCredentialsAreDeliveryOrRefuse(t *testing.T) {
 	path := "SandboxSpec.SecretEnv[ROLE_SIGNING_KEY]"
 	own := CredentialOrigin{Class: ClassOwn, Delivery: ClassBedrockRoleCreds, Stored: true, OwnNamespace: true, OwnerOnly: true}
-	for _, mode := range []Mode{ModeRefuse, ModeRunnerResident} {
-		p := LocalPlan{Spec: runner.SandboxSpec{SecretEnv: map[string]string{"ROLE_SIGNING_KEY": "v"}}, Origins: map[string]CredentialOrigin{path: own},
-			Delivery: DeliveryPolicy{Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: mode}}}}
-		if _, r := LocalEligibility(p); r == nil || r.Field != path || r.Reason != ReasonPlacementCredential || !strings.Contains(r.Detail, ClassBedrockRoleCreds) {
-			t.Fatalf("mode %s: %v", mode, r)
-		}
+	p := LocalPlan{Spec: runner.SandboxSpec{SecretEnv: map[string]string{"ROLE_SIGNING_KEY": "v"}}, Origins: map[string]CredentialOrigin{path: own},
+		Delivery: DeliveryPolicy{Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: ModeRefuse}}}}
+	if _, r := LocalEligibility(p); r == nil || r.Field != path || r.Reason != ReasonPlacementCredential || !strings.Contains(r.Detail, ClassBedrockRoleCreds) {
+		t.Fatalf("mode refuse: %v", r)
+	}
+	p.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: ModeRunnerResident}}}
+	if _, r := LocalEligibility(p); r != nil {
+		t.Fatalf("mode runner_resident: %v", r)
 	}
 }

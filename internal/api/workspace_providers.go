@@ -873,7 +873,14 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 // narrowing or opening applied by MDM is unreviewable without them.
 func workspaceProviderAuditData(block types.WorkspaceProviders, refused int) map[string]any {
 	kinds, lanes, urls, disabled := []string{}, []string{}, []string{}, []string{}
+	resident, residentSandbox := []string{}, []string{}
 	for _, row := range block.Git {
+		if row.Entra != nil && row.Entra.RunnerResident {
+			resident = append(resident, row.ID)
+		}
+		if row.Entra != nil && row.Entra.RunnerResidentSandbox {
+			residentSandbox = append(residentSandbox, row.ID)
+		}
 		if !slices.Contains(kinds, string(row.Kind)) {
 			kinds = append(kinds, string(row.Kind))
 		}
@@ -894,6 +901,7 @@ func workspaceProviderAuditData(block types.WorkspaceProviders, refused int) map
 	return map[string]any{
 		"git_count": len(block.Git), "kinds": kinds, "base_urls": urls,
 		"lanes": lanes, "disabled": disabled,
+		"runner_resident": resident, "runner_resident_sandbox": residentSandbox,
 		"sources_no_longer_admitted": refused,
 	}
 }
