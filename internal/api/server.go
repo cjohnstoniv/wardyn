@@ -723,6 +723,10 @@ type Server struct {
 	// per-server shape as keepaliveEvery above: a test drives a dead-peer holder
 	// on a millisecond clock instead of the real 30s budget.
 	pingEvery time.Duration
+	// authorityEvery and authorityLookup override attachAuthorityInterval and attachAuthorityLookup for
+	// THIS server only (tests), the same shape as pingEvery.
+	authorityEvery  time.Duration
+	authorityLookup time.Duration
 	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed
 	// output pause for THIS server only (tests).
 	pauseLimit time.Duration

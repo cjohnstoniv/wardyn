@@ -65,6 +65,14 @@ const CONNECT_TIMEOUT_MS = 15_000;
 const TAKEN_OVER_CLOSE_CODE = 1008;
 const TAKEN_OVER_REASON_PREFIX = "taken over by ";
 
+// The authority contract (internal/api/attach_authority.go): an open socket
+// whose sign-in stopped authorizing it (signed out, revoked, expired, or a
+// check that could not be answered) is closed with 4401 and the reason
+// "session ended". Reconnecting would only fail the same check, so like a
+// take-over it is final: no retry.
+const AUTH_ENDED_CLOSE_CODE = 4401;
+const AUTH_ENDED_REASON = "session ended";
+
 // Helpers
 function buildWsUrl(runId: string, ticket?: string, cols?: number, rows?: number): string {
   const q = new URLSearchParams();
@@ -468,6 +476,12 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           setMode(null); // we hold nothing now; the header must not still say "driving"
           setConnState("closed");
           // #216 — was a writeln; the holder footer's displacedHint says this.
+          return;
+        }
+        if (ev.code === AUTH_ENDED_CLOSE_CODE || reason === AUTH_ENDED_REASON) {
+          setMode(null);
+          setConnState("closed");
+          term.writeln("\r\n\x1b[2m[session ended: sign in again to reconnect]\x1b[0m");
           return;
         }
         // Clean, intentional close (1000) => the run finished / we unmounted.

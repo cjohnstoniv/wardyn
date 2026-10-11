@@ -255,7 +255,7 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 // The cookie is valid for up to the session TTL, which is long enough for a
 // human to lose the run or be revoked outright inside one session. The console
 // session stops on its very next request when an admin revokes it, attach
-// re-checks per connect behind a 30s ticket, and SSH bounds a stale admin
+// re-checks while the terminal is open (attach_authority.go), and SSH bounds a stale admin
 // stamp with WARDYN_SSH_ROLE_TTL — the relay was the one lane where
 // "authorized at enter" meant "authorized until the cookie expires", while
 // holding an editor with an in-sandbox terminal.

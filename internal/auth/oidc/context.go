@@ -170,6 +170,15 @@ func ExpiryFromContext(ctx context.Context) time.Time {
 	return t
 }
 
+type issuedAtCtxKey struct{}
+
+// IssuedAtFromContext returns when the verified session was signed in (its role-stamp time), or the zero
+// time when absent.
+func IssuedAtFromContext(ctx context.Context) time.Time {
+	t, _ := ctx.Value(issuedAtCtxKey{}).(time.Time)
+	return t
+}
+
 // GroupsFromContext returns the login-time group snapshot — the subjects a
 // `group` capability grant matches.
 //
@@ -245,6 +254,7 @@ func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	// ANDed with the mode, not copied: a cookie hand-built with "mmnc" alone
 	// is inert. Identity (sess.Sub) is untouched by both.
 	ctx = context.WithValue(ctx, memberPreviewNoCredCtxKey{}, sess.MemberMode && sess.MemberModeNoCredential)
+	ctx = context.WithValue(ctx, issuedAtCtxKey{}, sess.IssuedAt)
 	return context.WithValue(ctx, expiryCtxKey{}, sess.Expiry)
 }
 
