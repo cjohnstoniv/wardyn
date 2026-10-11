@@ -97,13 +97,13 @@ func TestPG_RunnerErasedRunIsContainedWithoutRefusingThePage(t *testing.T) {
 	}
 	// Results are recorded without any run row; then the quarantined run
 	// leaves the inventory and the unrelated run converges.
+	if _, _, err := st.RecordRunnerActionResult(ctx, rn.ID, healthy.ID, actions[0].ID, types.RunnerActionSuccess, time.Now(), prepareSpoolTest); err == nil {
+		t.Fatal("asserted result accepted for another run")
+	}
 	for _, a := range actions {
 		if _, first, err := st.RecordRunnerActionResult(ctx, rn.ID, run.ID, a.ID, types.RunnerActionSuccess, time.Now(), prepareSpoolTest); err != nil || !first {
 			t.Fatalf("asserted %s result: %v %v", a.Kind, first, err)
 		}
-	}
-	if _, _, err := st.RecordRunnerActionResult(ctx, rn.ID, healthy.ID, actions[0].ID, types.RunnerActionSuccess, time.Now(), prepareSpoolTest); err == nil {
-		t.Fatal("asserted result accepted for another run")
 	}
 	if out := finalInventory(t, st, rn, uuid.NewString(), runnerwire.RunState{RunID: healthy.ID, SandboxPresent: true}); out.NeedsReconciliation || !out.Complete {
 		t.Fatalf("converged inventory = %+v", out)
