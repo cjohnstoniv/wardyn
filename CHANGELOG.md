@@ -11,10 +11,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 ### Before you upgrade
 
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
-  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on the six
-  tables 0.9 adds, `runners`, `runner_pending_actions`, `credential_delivery_policy`, `runner_registration_tokens`,
-  `provider_connection_changes` and `audit_delivery_cursors`. Without the `provider_connection_changes` grant every
-  secret write fails once migration 0143's trigger on `secrets` is in place.
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `runners`,
+  `runner_pending_actions` and `provider_connection_changes`, and `SELECT, INSERT, UPDATE` on
+  `credential_delivery_policy`, `runner_registration_tokens` and `audit_delivery_cursors`. Without the
+  `provider_connection_changes` grant every secret write fails once migration 0143's trigger on `secrets` is in place.
 - Migration `0145_audit_delivery_cursors` adds the `audit_delivery_cursors` table; nothing changes until a webhook
   audit sink sets `"delivery": "acknowledged"`.
 - Migration `0143_provider_connection_changes` adds an empty, secret-free history table for why a model connection
