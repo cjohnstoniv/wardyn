@@ -378,6 +378,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   count cannot race a sign-in (#1828).
 - A revive that would start an agent is refused at the concurrent-run cap before any identity is minted or image
   pulled, and approval notifications carry the next later SLA tier still ahead (#1825).
+- Registered runners: a late audit record or agent exit for a run that already ended no longer drops the runner's
+  session; a teardown queued for an offline runner is audited once instead of every sweep; runs finished on a runner
+  record their end time.
 
 
 ## [0.8.9] — 2026-10-09
