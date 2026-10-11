@@ -714,6 +714,7 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	securityOps.Delete("/tokens/{id}", s.handleAdminRevokeAPIToken)
 	securityOps.With(s.refuseSubjectPrincipalParam).Delete("/people/{principal}/ssh-keys", s.handleAdminDeleteSSHKeys)
 	s.mountPeopleRoutes(securityOps)
+	s.mountInvitationRoutes(r, securityOps)
 	s.mountSCIMStatusRoute(securityOps)
 	// Run-detail widget layout: per-user, per-preset, server-synced so a
 	// layout survives a new machine (localStorage would not). Scoped to
