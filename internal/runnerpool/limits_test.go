@@ -687,3 +687,55 @@ func TestPoolSourceTakesTheStoredRunType(t *testing.T) {
 		t.Errorf("an empty run type reads %q", got)
 	}
 }
+
+// TestEffectiveDeploymentDefaultIsTheFallback: the deployment's default sandbox
+// size is what an untouched run gets when nothing more specific names a
+// default. It does not lower a pool's own default, so a "big builds" pool whose
+// default is above the deployment's size keeps it.
+func TestEffectiveDeploymentDefaultIsTheFallback(t *testing.T) {
+	dep, err := DeploymentSource(types.ResourceLimits{CPUMillis: 2000, MemoryMiB: 4096}, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	big := types.RunnerPoolLimits{Background: &types.RunnerPoolBackgroundLimits{
+		CPUMillis: types.RunnerPoolAmount{Default: 8000, Cap: 16000},
+		MemoryMiB: types.RunnerPoolAmount{Default: 16384, Cap: 32768},
+		Lifetime:  types.RunnerPoolDuration{Unlimited: true},
+	}}
+	pool, refusal := PoolSource(testPool(&big), types.RunnerPoolRunBackground)
+	if refusal != nil {
+		t.Fatal(refusal)
+	}
+	e, err := Effective(types.RunnerPoolRunBackground, pool, dep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.CPUMillis.Default.Value != 8000 || e.CPUMillis.DefaultSource != types.LimitSourcePool ||
+		e.MemoryMiB.Default.Value != 16384 || e.MemoryMiB.DefaultSource != types.LimitSourcePool {
+		t.Errorf("a pool default above the deployment's size = cpu %+v from %q, memory %+v from %q; want the pool's 8000/16384",
+			e.CPUMillis.Default, e.CPUMillis.DefaultSource, e.MemoryMiB.Default, e.MemoryMiB.DefaultSource)
+	}
+
+	// Unchanged: a pool default below the deployment's size stands.
+	small := appServerPool()
+	small.Background.CPUMillis.Default, small.Background.MemoryMiB.Default = 500, 1024
+	pool, refusal = PoolSource(testPool(&small), types.RunnerPoolRunBackground)
+	if refusal != nil {
+		t.Fatal(refusal)
+	}
+	if e, err = Effective(types.RunnerPoolRunBackground, pool, dep); err != nil || e.CPUMillis.Default.Value != 500 || e.MemoryMiB.Default.Value != 1024 || e.CPUMillis.DefaultSource != types.LimitSourcePool {
+		t.Errorf("a pool default below the deployment's size = %+v / %+v, %v; want 500/1024 from the pool", e.CPUMillis, e.MemoryMiB, err)
+	}
+
+	// Unchanged: with no other source naming one, the deployment's size is the default.
+	if e, err = Effective(types.RunnerPoolRunBackground, dep); err != nil || e.CPUMillis.Default.Value != 2000 || e.CPUMillis.DefaultSource != types.LimitSourceDeployment || e.MemoryMiB.Default.Value != 4096 {
+		t.Errorf("deployment alone = %+v / %+v, %v; want its 2000/4096", e.CPUMillis, e.MemoryMiB, err)
+	}
+
+	// Unchanged: a pool default above a stricter cap is cut to that cap.
+	gov := SourceLimits{Source: types.LimitSourceGovernance, CPUMillis: Bound{Max: Int(6000)}}
+	pool, _ = PoolSource(testPool(&big), types.RunnerPoolRunBackground)
+	if e, err = Effective(types.RunnerPoolRunBackground, pool, gov, dep); err != nil || e.CPUMillis.Default.Value != 6000 || e.CPUMillis.DefaultSource != types.LimitSourceGovernance {
+		t.Errorf("a pool default past governance's cap = %+v from %q, %v; want 6000 from governance", e.CPUMillis.Default, e.CPUMillis.DefaultSource, err)
+	}
+}
