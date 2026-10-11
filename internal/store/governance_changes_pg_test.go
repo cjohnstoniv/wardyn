@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,15 +196,18 @@ func TestPG_GovernanceChange_EraseClearsPrincipalAndEmailMatches(t *testing.T) {
 	byEmail.ProposedBy, byEmail.ProposedByEmail = "another-principal", who+"@corp.example"
 	theirs := newChange(uuid.NewString())
 	theirs.ProposedBy, theirs.ProposedByEmail = "someone-else", "else@corp.example"
+	// Another person whose email claim spells the erased person's principal.
+	spelled := newChange(uuid.NewString())
+	spelled.ProposedBy, spelled.ProposedByEmail = "claimant", strings.ToUpper(who)
 	var ids []uuid.UUID
-	for _, c := range []types.GovernanceChange{mine, byEmail, theirs} {
+	for _, c := range []types.GovernanceChange{mine, byEmail, theirs, spelled} {
 		saved, _, err := st.ProposeGovernanceChange(ctx, c, time.Hour)
 		if err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, saved.ID)
 	}
-	n, err := st.EraseGovernanceChangePersonalFields(ctx, []string{who, who + "@corp.example"})
+	n, err := st.EraseGovernanceChangePersonalFields(ctx, []string{who}, []string{who + "@corp.example"})
 	if err != nil || n != 2 {
 		t.Fatalf("erase touched %d rows (%v), want the principal's and the email's", n, err)
 	}
@@ -218,13 +222,15 @@ func TestPG_GovernanceChange_EraseClearsPrincipalAndEmailMatches(t *testing.T) {
 			t.Errorf("an erased person's change = %q %q %q, want not pending and no personal fields", state, by, email)
 		}
 	}
-	if state, by, _ := read(ids[2]); state != types.GovernanceChangePending || by != "someone-else" {
-		t.Errorf("another person's change = %q %q, want it untouched", state, by)
+	for i, want := range map[int]string{2: "someone-else", 3: "claimant"} {
+		if state, by, _ := read(ids[i]); state != types.GovernanceChangePending || by != want {
+			t.Errorf("another person's change = %q %q, want it untouched", state, by)
+		}
 	}
-	if n, err := st.EraseGovernanceChangePersonalFields(ctx, []string{who}); err != nil || n != 0 {
+	if n, err := st.EraseGovernanceChangePersonalFields(ctx, []string{who}, nil); err != nil || n != 0 {
 		t.Errorf("a retry touched %d rows (%v), want 0", n, err)
 	}
-	if n, err := st.EraseGovernanceChangePersonalFields(ctx, nil); err != nil || n != 0 {
+	if n, err := st.EraseGovernanceChangePersonalFields(ctx, nil, nil); err != nil || n != 0 {
 		t.Errorf("an empty name list touched %d rows (%v)", n, err)
 	}
 }
@@ -246,7 +252,7 @@ func TestPG_GovernanceChange_EraseClearsTheDecidersReason(t *testing.T) {
 		return saved.ID
 	}
 	mine, theirs := reject(who, who+"@corp.example"), reject("someone-else", "else@corp.example")
-	if n, err := st.EraseGovernanceChangePersonalFields(ctx, []string{who}); err != nil || n != 1 {
+	if n, err := st.EraseGovernanceChangePersonalFields(ctx, []string{who}, nil); err != nil || n != 1 {
 		t.Fatalf("erase touched %d rows (%v), want the one the person decided", n, err)
 	}
 	reason := func(id uuid.UUID) (r string) {

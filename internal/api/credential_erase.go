@@ -52,7 +52,8 @@ func eraseRefusalMsg(refusal string) string {
 // handleErasePersonCredentials deletes every credential in one person's
 // namespace: DELETE /people/{principal}/credentials, on the security tier.
 // Removing reach is the tier's job, and it returns no credential material.
-// The principal resolves as ?owner= does on the secrets routes. It never
+// The principal resolves once, through resolveSecretOwner as ?owner= does on
+// the secrets routes, and the erase acts on that one principal. It never
 // answers success with a credential left behind, and it never erases the
 // operator namespace, which holds the platform keys.
 func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Request) {
@@ -65,7 +66,13 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 	if s.refuseReservedErasure(w, r, "credential.erase", raw) {
 		return
 	}
-	owner, known, refusal := s.resolveSecretOwner(r.Context(), raw)
+	owner, known, refusal, err := s.resolveSecretOwner(r.Context(), raw)
+	if err != nil {
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"credential.erase", raw, "failure", mustJSON(map[string]any{"reason": reasonIdentityDirectoryUnreadable})))
+		writeServerError(w, r, "resolve whose credentials to erase", err)
+		return
+	}
 	if refusal != "" {
 		reason := ownerRefusalReason(refusal)
 		s.auditOwnerRefusal(r, "credential.erase", raw, reason)

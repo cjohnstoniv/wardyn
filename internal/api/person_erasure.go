@@ -33,6 +33,10 @@ import (
 // sign-in's lock (credential_erase.go).
 var errSignInConfigUnreadable = errors.New("the Azure DevOps sign-in configuration could not be read")
 
+// reasonIdentityDirectoryUnreadable is the audit reason an erase records when it
+// could not read who a name is, so nothing was erased.
+const reasonIdentityDirectoryUnreadable = "identity_directory_unreadable"
+
 type erasePersonRequest struct {
 	Scopes []string `json:"scopes"`
 }
@@ -179,31 +183,30 @@ func (s *Server) eraseRunOutputsOf(ctx context.Context, person string) (any, err
 	return map[string]any{"runs": len(ids)}, nil
 }
 
-// eraseAuditSealKeys is the audit_personal_fields scope: it destroys, in every version, the key the
-// person's sealed audit fields are under, and clears the person from the governance changes they
-// proposed or decided (migration 0126). The fields are sealed under the person's principal; a name the
-// directory did not yet know when a row was written is under its own key, so the principal the
-// asked-for name resolves to, its entra:<tenant>:<object> forms, and each alias the directory —
-// people an admin created included — names as that principal and no one else are destroyed too (a
-// destroy that finds no live key writes nothing). An alias is claim text the person sent and can
-// spell another person's name, so one that names anyone else is skipped. The same names match a governance change's recorded principal or email.
+// eraseAuditSealKeys is the audit_personal_fields scope for person, the principal the route resolved
+// (resolveSecretOwner): it destroys, in every version, the key the person's sealed audit fields are
+// under, and clears the person from the governance changes they proposed or decided (migration 0126).
+// The fields are sealed under the person's principal; a name the directory did not yet know when a row
+// was written is under its own key, so the principal's entra:<tenant>:<object> forms, and each alias
+// the directory (PrincipalsNamed, people an admin created included) names as this principal and no
+// one else, are destroyed too (a destroy that finds no live key writes nothing). An alias is claim
+// text the person sent and can spell another person's name, so one that names anyone else is skipped.
+// A governance change matches on its recorded principal by those names, and on its recorded email by
+// the admitted aliases alone: an email claim can spell the principal, so the principal is never
+// matched against one.
 func (s *Server) eraseAuditSealKeys(ctx context.Context, person string) (any, error) {
-	names := []string{person}
+	names, emails := []string{person}, []string(nil)
 	pe, peErr := s.personErasureStore()
 	if peErr == nil {
-		principal, err := pe.PrincipalForName(ctx, person)
+		aliases, err := pe.PrincipalAliases(ctx, person)
 		if err != nil {
 			return nil, err
 		}
-		aliases, err := pe.PrincipalAliases(ctx, principal)
+		entra, err := pe.PrincipalEntraNames(ctx, person)
 		if err != nil {
 			return nil, err
 		}
-		entra, err := pe.PrincipalEntraNames(ctx, principal)
-		if err != nil {
-			return nil, err
-		}
-		for _, n := range append([]string{principal}, entra...) {
+		for _, n := range entra {
 			if !slices.Contains(names, n) {
 				names = append(names, n)
 			}
@@ -217,8 +220,8 @@ func (s *Server) eraseAuditSealKeys(ctx context.Context, person string) (any, er
 			if err != nil {
 				return nil, err
 			}
-			if len(owners) == 1 && owners[0] == principal {
-				names = append(names, a)
+			if len(owners) == 1 && owners[0] == person {
+				names, emails = append(names, a), append(emails, a)
 			}
 		}
 	}
@@ -234,7 +237,7 @@ func (s *Server) eraseAuditSealKeys(ctx context.Context, person string) (any, er
 	if peErr == nil {
 		// A pending change whose proposer is erased leaves pending in the same statement, so a change
 		// with no recorded proposer can never be approved.
-		n, err := pe.EraseGovernanceChangePersonalFields(ctx, names)
+		n, err := pe.EraseGovernanceChangePersonalFields(ctx, names, emails)
 		if err != nil {
 			return nil, err
 		}
@@ -258,11 +261,12 @@ func erasureSelfTarget(actorType types.ActorType, principal, email, owner, raw s
 }
 
 // erasureTargetsCaller is erasureSelfTarget over the names the erasure's own
-// steps act on. The audit step resolves the typed name through the identity
-// directory (PrincipalForName, then PrincipalAliases), so a name the credential
-// directory leaves as typed, an entra:<tenant>:<object> alias of the caller's
-// pairwise subject for one, still reaches the caller's records. The caller is
-// the target when any name of the target's matches any name of the caller's,
+// steps act on. The target is owner, the principal the route resolved
+// (resolveSecretOwner), with its aliases. The caller is their principal and
+// email, each resolved through the same answer, with that principal's aliases,
+// so an entra:<tenant>:<object> form or an email of the caller's, or another
+// identity of theirs their email names, still counts as the caller. The caller
+// is the target when any name of the target's matches any name of the caller's,
 // compared case-folded (a refusal that is too wide is the safe side). An error
 // reading the directory is returned: the erasure does not go ahead unchecked.
 func (s *Server) erasureTargetsCaller(ctx context.Context, actorType types.ActorType, principal, email, owner, raw string) (bool, error) {
@@ -276,32 +280,28 @@ func (s *Server) erasureTargetsCaller(ctx context.Context, actorType types.Actor
 	if err != nil {
 		return false, nil // no identity directory: the names above are all there are
 	}
-	namesOf := func(typed ...string) ([]string, error) {
-		var out []string
-		for _, n := range typed {
-			if n == "" {
-				continue
-			}
-			p, err := pe.PrincipalForName(ctx, n)
-			if err != nil {
-				return nil, err
-			}
-			aliases, err := pe.PrincipalAliases(ctx, p)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, n, p)
-			out = append(out, aliases...)
+	target, err := pe.PrincipalAliases(ctx, owner)
+	if err != nil {
+		return false, err
+	}
+	target = append(target, owner, raw)
+	var caller []string
+	for _, n := range []string{principal, email} {
+		if n == "" {
+			continue
 		}
-		return out, nil
-	}
-	target, err := namesOf(owner, raw)
-	if err != nil {
-		return false, err
-	}
-	caller, err := namesOf(principal, email)
-	if err != nil {
-		return false, err
+		p, _, refusal, err := s.resolveSecretOwner(ctx, n)
+		if err != nil {
+			return false, err
+		}
+		if refusal != "" {
+			p = n // ambiguous or unresolved: the name alone
+		}
+		aliases, err := pe.PrincipalAliases(ctx, p)
+		if err != nil {
+			return false, err
+		}
+		caller = append(append(caller, n, p), aliases...)
 	}
 	return slices.ContainsFunc(target, func(t string) bool {
 		return t != "" && slices.ContainsFunc(caller, func(c string) bool { return strings.EqualFold(t, c) })
@@ -310,7 +310,8 @@ func (s *Server) erasureTargetsCaller(ctx context.Context, actorType types.Actor
 
 // handleErasePerson is POST /people/{principal}/erasure on the security tier.
 // The body names the scopes (a non-empty list of known names). The principal
-// resolves as the credential erase resolves it, the operator namespace and the
+// resolves once, through resolveSecretOwner as the credential erase resolves it,
+// and every scope acts on that one principal; the operator namespace and the
 // reserved names that are no person (admin-token, local:, device:, a portal) are
 // refused for every scope before anything runs, and nobody erases themself
 // except their own credentials (the admin token, which is no person, may).
@@ -341,7 +342,12 @@ func (s *Server) handleErasePerson(w http.ResponseWriter, r *http.Request) {
 	if s.refuseReservedErasure(w, r, "person.erasure", raw) {
 		return
 	}
-	owner, known, refusal := s.resolveSecretOwner(r.Context(), raw)
+	owner, known, refusal, err := s.resolveSecretOwner(r.Context(), raw)
+	if err != nil {
+		record(raw, "failure", map[string]any{"reason": reasonIdentityDirectoryUnreadable, "scopes": scopeNames(scopes)})
+		writeServerError(w, r, "resolve whom an erasure names", err)
+		return
+	}
 	if refusal != "" {
 		reason := ownerRefusalReason(refusal)
 		s.auditOwnerRefusal(r, "person.erasure", raw, reason)
@@ -354,7 +360,7 @@ func (s *Server) handleErasePerson(w http.ResponseWriter, r *http.Request) {
 	if slices.ContainsFunc(scopes, func(sc erasure.Scope) bool { return sc != erasure.Credentials }) {
 		self, err := s.erasureTargetsCaller(r.Context(), actorType, principal, oidcEmailFromContext(r.Context()), owner, raw)
 		if err != nil {
-			record(owner, "failure", map[string]any{"reason": "identity_directory_unreadable", "scopes": scopeNames(scopes)})
+			record(owner, "failure", map[string]any{"reason": reasonIdentityDirectoryUnreadable, "scopes": scopeNames(scopes)})
 			writeServerError(w, r, "check who an erasure names", err)
 			return
 		}

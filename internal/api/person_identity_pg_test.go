@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,32 +205,47 @@ func TestPG_ErasePersonCredentials_ErasesEveryNamespaceOfThePerson(t *testing.T)
 	}
 }
 
-// crossNameRig seeds a victim known two ways (a people row created by object id, and a person signed in
-// under a pairwise subject) and an attacker whose email claims spell both victims' names. The login stores
-// an email claim lowercased and never checks it for an @, so these are aliases the directory holds.
+// crossNameRig seeds victims known every way a person is (a people row created by object id, a person
+// signed in under a pairwise subject, a person an admin created under an email-shaped subject, another
+// such person) and an attacker whose claims spell every victim's name: sign-in email claims (the login
+// stores one lowercased and never checks it for an @), the email an API token stamps from the sign-in
+// claim, and an email a SCIM push recorded. The attacker also claims the signed-in victim's own email,
+// which leaves that email shared.
 func crossNameRig(t *testing.T) (srv *Server, pg store.PG, sec secretstore.Store, attacker string, victims []string) {
 	t.Helper()
 	_, srv, pg, sec = identityRig(t)
+	ctx := t.Context()
 	victimOid := uuid.NewString()
 	victimEntra := "entra:" + identTenant + ":" + victimOid
-	if _, _, err := pg.CreatePerson(t.Context(), types.Person{Principal: victimEntra, Email: "victim@corp.example", Issuer: identIssuer, TenantID: identTenant, ObjectID: victimOid, CreatedBy: "admin"}); err != nil {
+	if _, _, err := pg.CreatePerson(ctx, types.Person{Principal: victimEntra, Email: "victim@corp.example", Issuer: identIssuer, TenantID: identTenant, ObjectID: victimOid, CreatedBy: "admin"}); err != nil {
 		t.Fatal(err)
 	}
 	signedOid := uuid.NewString()
 	victimSubject := "pairwise-" + signedOid
-	seedIdentity(t, pg, victimSubject, signedOid, "signed@corp.example")
+	seedIdentity(t, pg, victimSubject, signedOid, crossSharedEmail)
 	attOid := uuid.NewString()
 	attacker = "pairwise-" + attOid
-	// A person an admin created by an email-shaped subject, not yet signed in: only people knows them.
-	victimEarly := "early@corp.example"
-	if _, _, err := pg.CreatePerson(t.Context(), types.Person{Principal: victimEarly, CreatedBy: "admin"}); err != nil {
+	// People an admin created by an email-shaped subject, not yet signed in: only people knows them.
+	victimEarly, victimSCIM := "early@corp.example", "scim-victim@corp.example"
+	for _, p := range []string{victimEarly, victimSCIM} {
+		if _, _, err := pg.CreatePerson(ctx, types.Person{Principal: p, CreatedBy: "admin"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, claim := range []string{victimEntra, victimSubject, victimEarly, crossSharedEmail} {
+		seedIdentity(t, pg, attacker, attOid, claim)
+		if _, err := pg.CreateAPIToken(ctx, types.APIToken{ID: uuid.New(), Principal: attacker, Email: claim, Role: oidc.RoleUser, UserType: types.UserTypeStandard, Name: "t"}, uuid.NewString()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := pg.CreateScimIdentity(ctx, identIssuer, identTenant, attOid, store.IdentityUpdate{Emails: []string{victimSCIM}}, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	seedIdentity(t, pg, attacker, attOid, victimEntra)
-	seedIdentity(t, pg, attacker, attOid, victimSubject)
-	seedIdentity(t, pg, attacker, attOid, victimEarly)
-	return srv, pg, sec, attacker, []string{victimEntra, victimSubject, victimEarly}
+	return srv, pg, sec, attacker, []string{victimEntra, victimSubject, victimEarly, victimSCIM}
 }
+
+// crossSharedEmail is the signed-in victim's email, which the attacker also claims.
+const crossSharedEmail = "signed@corp.example"
 
 // Erasing a person an admin created under an email-shaped subject never reaches whoever signed in
 // claiming that email: the name resolves to the created person, not to the alias holder.
@@ -319,4 +336,200 @@ func TestPG_EraseAuditSealKeys_AnEmailAliasNeverReachesAnotherPersonsKey(t *test
 			t.Errorf("erasing %q destroyed another person's audit-seal key %q", attacker, v)
 		}
 	}
+}
+
+// crossRoute is one route that erases or deletes a person's records by a name an admin types, with the
+// record it removes: seed gives owner one, gone reports whether owner's is gone.
+type crossRoute struct {
+	name string
+	call func(t *testing.T, srv *Server, typed string) *httptest.ResponseRecorder
+	ok   int
+	seed func(t *testing.T, srv *Server, pg store.PG, sec secretstore.Store, owner string)
+	gone func(t *testing.T, srv *Server, pg store.PG, sec secretstore.Store, owner string, since time.Time) bool
+	// ownerFirst: the route takes a name that holds its records exactly before it resolves one, so only a
+	// name that holds none reaches the resolver.
+	ownerFirst bool
+}
+
+func crossRoutes() []crossRoute {
+	sa := func(t *testing.T) *http.Cookie {
+		return ssoSession(t, "sec-1", "sec@corp.example", oidc.RoleSecurityAdmin)
+	}
+	erasure := func(scope string) func(*testing.T, *Server, string) *httptest.ResponseRecorder {
+		return func(t *testing.T, srv *Server, typed string) *httptest.ResponseRecorder {
+			return doSSO(t, srv, http.MethodPost, "/api/v1/people/"+typed+"/erasure", sa(t), erasureBody(scope))
+		}
+	}
+	putCred := func(t *testing.T, _ *Server, _ store.PG, sec secretstore.Store, owner string) {
+		if err := sec.For(owner).Put(t.Context(), "anthropic-api-key", []byte("credential-of-"+owner)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	credGone := func(t *testing.T, _ *Server, _ store.PG, sec secretstore.Store, owner string, _ time.Time) bool {
+		return len(namesOf(t, sec, owner)) == 0
+	}
+	return []crossRoute{
+		{name: "DELETE credentials", ok: http.StatusOK, seed: putCred, gone: credGone,
+			call: func(t *testing.T, srv *Server, typed string) *httptest.ResponseRecorder {
+				return doSSO(t, srv, http.MethodDelete, "/api/v1/people/"+typed+"/credentials", sa(t), "")
+			}},
+		{name: "erasure credentials", ok: http.StatusOK, seed: putCred, gone: credGone, call: erasure("credentials")},
+		{name: "DELETE secret ?owner=", ok: http.StatusNoContent, seed: putCred, gone: credGone,
+			call: func(t *testing.T, srv *Server, typed string) *httptest.ResponseRecorder {
+				admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+				return doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/anthropic-api-key?owner="+url.QueryEscape(typed), admin, "")
+			}},
+		{name: "erasure audit_personal_fields", ok: http.StatusOK, call: erasure("audit_personal_fields"),
+			seed: func(t *testing.T, srv *Server, _ store.PG, _ secretstore.Store, owner string) {
+				if _, _, err := srv.cfg.SubjectKeys.Current(t.Context(), owner, subjectkey.PurposeAuditSeal); err != nil {
+					t.Fatal(err)
+				}
+			},
+			gone: func(t *testing.T, _ *Server, pg store.PG, _ secretstore.Store, owner string, since time.Time) bool {
+				g, err := pg.SubjectKeyDestroyedSince(t.Context(), owner, subjectkey.PurposeAuditSeal, since)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return g
+			}},
+		{name: "erasure run_tasks", ok: http.StatusOK, call: erasure("run_tasks"),
+			seed: func(t *testing.T, _ *Server, pg store.PG, _ secretstore.Store, owner string) {
+				now, id := time.Now().UTC(), uuid.New()
+				if _, err := pg.CreateRun(t.Context(), types.AgentRun{ID: id, CreatedAt: now, UpdatedAt: now, CreatedBy: owner, Agent: "claude-code",
+					Task: "task of " + owner, ConfinementClass: types.CC2, State: types.RunStopped, SPIFFEID: "spiffe://wardyn.test/agent-run/" + id.String(), RunnerTarget: "docker"}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			gone: func(t *testing.T, _ *Server, pg store.PG, _ secretstore.Store, owner string, _ time.Time) bool {
+				var n int
+				if err := pg.Pool.QueryRow(t.Context(), `SELECT count(*) FROM agent_runs WHERE created_by = $1 AND task <> ''`, owner).Scan(&n); err != nil {
+					t.Fatal(err)
+				}
+				return n == 0
+			}},
+		{name: "DELETE ssh-keys", ok: http.StatusOK, ownerFirst: true,
+			call: func(t *testing.T, srv *Server, typed string) *httptest.ResponseRecorder {
+				return doSSO(t, srv, http.MethodDelete, "/api/v1/people/"+typed+"/ssh-keys", sa(t), "")
+			},
+			seed: func(t *testing.T, _ *Server, pg store.PG, _ secretstore.Store, owner string) {
+				if _, err := pg.AddSSHKey(t.Context(), types.SSHPublicKey{Fingerprint: "SHA256:" + uuid.NewString(), Principal: owner, Name: "k",
+					PublicKey: "ssh-ed25519 AAAA " + owner, Role: oidc.RoleUser, CreatedAt: time.Now().UTC()}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			gone: func(t *testing.T, _ *Server, pg store.PG, _ secretstore.Store, owner string, _ time.Time) bool {
+				keys, err := pg.ListSSHKeysByPrincipal(t.Context(), owner)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return len(keys) == 0
+			}},
+	}
+}
+
+// Every route that erases or deletes by a typed name resolves it once, the same way: a victim's name,
+// however the attacker's claims spell it (a sign-in email, an API token's email, a SCIM email, in any
+// case), reaches the victim and never the attacker, and an email both claim is refused, not guessed.
+func TestPG_ErasureRoutes_AVictimsNameNeverReachesTheClaimant(t *testing.T) {
+	for _, rt := range crossRoutes() {
+		t.Run(rt.name, func(t *testing.T) {
+			srv, pg, sec, attacker, victims := crossNameRig(t)
+			victimEntra, victimSubject, victimEarly, victimSCIM := victims[0], victims[1], victims[2], victims[3]
+			for _, tc := range []struct{ typed, victim string }{
+				{victimEarly, victimEarly},
+				{strings.ToUpper(victimEarly), victimEarly},
+				{victimSubject, victimSubject},
+				{victimEntra, victimEntra},
+				{victimSCIM, victimSCIM},
+				{strings.ToUpper(victimSCIM), victimSCIM},
+				{crossSharedEmail, ""}, // the signed-in victim's and the attacker's: refused
+			} {
+				rt.seed(t, srv, pg, sec, attacker)
+				if tc.victim != "" && !rt.ownerFirst {
+					rt.seed(t, srv, pg, sec, tc.victim)
+				}
+				if tc.victim == "" {
+					rt.seed(t, srv, pg, sec, victimSubject)
+				}
+				claimed := crossClaimedChange(t, pg, attacker, tc.typed)
+				since := time.Now().UTC() // after an earlier name's erasure
+				w := rt.call(t, srv, tc.typed)
+				switch {
+				case tc.victim == "":
+					if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonOwnerAmbiguous {
+						t.Errorf("%s: an email two people claim = %d %s, want 422 %s", tc.typed, w.Code, w.Body, reasonOwnerAmbiguous)
+					}
+					if rt.gone(t, srv, pg, sec, victimSubject, since) {
+						t.Errorf("%s: a refused name reached %q", tc.typed, victimSubject)
+					}
+				case w.Code != rt.ok:
+					t.Errorf("%s = %d %s, want %d", tc.typed, w.Code, w.Body, rt.ok)
+				case !rt.ownerFirst && !rt.gone(t, srv, pg, sec, tc.victim, since):
+					t.Errorf("%s: the victim %q kept the record", tc.typed, tc.victim)
+				}
+				if rt.gone(t, srv, pg, sec, attacker, since) {
+					t.Errorf("%s: erasing the victim's name reached the attacker %q", tc.typed, attacker)
+				}
+				if by := crossChangeProposer(t, pg, claimed); by != attacker {
+					t.Errorf("%s: the attacker's governance change lost its proposer (now %q)", tc.typed, by)
+				}
+			}
+		})
+	}
+}
+
+// Erasing the attacker by their principal reaches the attacker alone on every route, whichever victims'
+// names their claims spell; a governance change the signed-in victim proposed under the email both claim
+// keeps its proposer.
+func TestPG_ErasureRoutes_TheClaimantsErasureNeverReachesAVictim(t *testing.T) {
+	for _, rt := range crossRoutes() {
+		t.Run(rt.name, func(t *testing.T) {
+			srv, pg, sec, attacker, victims := crossNameRig(t)
+			for _, owner := range append([]string{attacker}, victims...) {
+				rt.seed(t, srv, pg, sec, owner)
+			}
+			victimsChange := crossProposedChange(t, pg, victims[1], crossSharedEmail)
+			since := time.Now().UTC().Add(-time.Second)
+			if w := rt.call(t, srv, attacker); w.Code != rt.ok {
+				t.Fatalf("erasing %q = %d %s, want %d", attacker, w.Code, w.Body, rt.ok)
+			}
+			if !rt.gone(t, srv, pg, sec, attacker, since) {
+				t.Errorf("the attacker %q kept the record", attacker)
+			}
+			for _, v := range victims {
+				if rt.gone(t, srv, pg, sec, v, since) {
+					t.Errorf("erasing %q reached the victim %q", attacker, v)
+				}
+			}
+			if by := crossChangeProposer(t, pg, victimsChange); by != victims[1] {
+				t.Errorf("the victim's governance change lost its proposer (now %q)", by)
+			}
+		})
+	}
+}
+
+// crossClaimedChange is a pending governance change the attacker proposed while signed in with the
+// email claim claimed.
+func crossClaimedChange(t *testing.T, pg store.PG, attacker, claimed string) uuid.UUID {
+	t.Helper()
+	return crossProposedChange(t, pg, attacker, strings.ToLower(claimed))
+}
+
+func crossProposedChange(t *testing.T, pg store.PG, by, email string) uuid.UUID {
+	t.Helper()
+	ch := types.GovernanceChange{TargetKind: "governance_profile", Op: "update", TargetKey: uuid.NewString(),
+		Payload: json.RawMessage(`{"name":"p"}`), Diff: json.RawMessage(`{"changed":["name"]}`), ProposedBy: by, ProposedByEmail: email}
+	saved, _, err := pg.ProposeGovernanceChange(t.Context(), ch, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return saved.ID
+}
+
+func crossChangeProposer(t *testing.T, pg store.PG, id uuid.UUID) (by string) {
+	t.Helper()
+	if err := pg.Pool.QueryRow(t.Context(), `SELECT proposed_by FROM governance_changes WHERE id = $1`, id).Scan(&by); err != nil {
+		t.Fatal(err)
+	}
+	return by
 }

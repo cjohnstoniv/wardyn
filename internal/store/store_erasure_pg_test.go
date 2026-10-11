@@ -142,6 +142,74 @@ func TestPG_PersonErasure_PrincipalsNamed(t *testing.T) {
 	}
 }
 
+// Every place a principal is recorded answers, and a principal always wins over an email claim that
+// spells it: a person an admin created, an API token's or a workspace owner's principal, exact or
+// case-folded, beats a sign-in alias, a token's email or a SCIM email naming someone else; an email is
+// matched only for a name with an @; an email two people carry is both.
+func TestPG_PersonErasure_PrincipalsNamedPrefersAPrincipalToAnyEmailClaim(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if _, _, err := st.CreatePerson(ctx, types.Person{Principal: "early@corp.example", CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	oid := uuid.NewString()
+	for _, claim := range []string{"early@corp.example", "tok-only", "ws-only", "shared@corp.example"} {
+		if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "claimant", Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, Email: claim}, now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.CreateAPIToken(ctx, types.APIToken{ID: uuid.New(), Principal: "claimant", Email: claim, Role: "user", UserType: types.UserTypeStandard, Name: "t"}, uuid.NewString()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := st.CreateScimIdentity(ctx, idIssuer, idTenant, oid, store.IdentityUpdate{Emails: []string{"scim@corp.example"}}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "holder", Issuer: "https://dex.example", Email: "shared@corp.example"}, now); err != nil {
+		t.Fatal(err)
+	}
+	// Two subjects that differ only by case are legal: the exact one wins wherever it is recorded.
+	for _, p := range []string{"casetok", "casews"} {
+		if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: p, Issuer: "https://dex.example"}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for p, email := range map[string]string{"tok-only": "tok@corp.example", "CaseTok": ""} {
+		if _, err := st.CreateAPIToken(ctx, types.APIToken{ID: uuid.New(), Principal: p, Email: email, Role: "user", UserType: types.UserTypeStandard, Name: "t"}, uuid.NewString()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, owner := range []string{"ws-only", "CaseWs"} {
+		ws, err := st.CreateWorkspace(ctx, types.Workspace{ID: uuid.New(), Name: "ws-" + uuid.NewString(), OwnedBy: owner,
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/workspace"}}, Status: types.WorkspaceScanned, CreatedAt: now, UpdatedAt: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = st.DeleteWorkspace(context.Background(), ws.ID) })
+	}
+	for name, want := range map[string][]string{
+		"early@corp.example":  {"early@corp.example"}, // a created person, not the claimant
+		"EARLY@Corp.Example":  {"early@corp.example"}, // in any case
+		"tok-only":            {"tok-only"},           // a token's principal, which the claimant's email spells
+		"TOK-ONLY":            {"tok-only"},
+		"ws-only":             {"ws-only"},            // a workspace owner's principal
+		"tok@corp.example":    {"tok-only"},           // a token's email names its holder
+		"scim@corp.example":   {"claimant"},           // a SCIM email names its identity
+		"shared@corp.example": {"claimant", "holder"}, // two people carry it
+		"claimant":            {"claimant"},
+		"CaseTok":             {"CaseTok"}, // exact, from a token, over the case-folded "casetok"
+		"CaseWs":              {"CaseWs"},  // exact, from a workspace owner
+		"CASETOK":             {"CaseTok", "casetok"},
+	} {
+		got, err := st.PrincipalsNamed(ctx, name)
+		slices.Sort(got) // the database's collation orders case variants its own way
+		if err != nil || !slices.Equal(got, want) {
+			t.Errorf("PrincipalsNamed(%q) = %v, %v, want %v", name, got, err, want)
+		}
+	}
+}
+
 // A person an admin created by object id (people row entra:<tenant>:<object>) who signed in under a
 // pairwise subject is that subject, whether the admin types the entra form, the email or the subject:
 // the people row's own namespace is empty, so resolving to it would erase nothing and report success.

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"regexp"
 	"slices"
@@ -440,7 +439,11 @@ func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner
 		s.denyMemberOwnerParam(w, r)
 		return "", false, false
 	}
-	resolved, known, refusal := s.resolveSecretOwner(r.Context(), q)
+	resolved, known, refusal, err := s.resolveSecretOwner(r.Context(), q)
+	if err != nil {
+		writeServerError(w, r, "resolve ?owner=", err)
+		return "", false, false
+	}
 	if refusal != "" {
 		if r.Method == http.MethodDelete { // the name list is a read, and unaudited
 			s.auditOwnerRefusal(r, "secret.delete", chi.URLParam(r, "name"), ownerRefusalReason(refusal))
@@ -508,9 +511,9 @@ const secretOwnerAmbiguousMsg = "?owner= matches more than one known principal; 
 // human's own writes stamp it) with the email their IdP sent alongside it.
 type principalIdentity struct{ principal, email string }
 
-// knownPrincipals is the first directory ?owner= resolves against;
-// resolveSecretOwner asks the store's identity directory (PrincipalDirectoryStore)
-// after it, for a person who holds neither a token nor a workspace.
+// knownPrincipals is the directory a store without PrincipalDirectoryStore
+// resolves a person's name against (store.PG reads the same rows inside
+// PrincipalsNamed, beside the identity directory and the people an admin created).
 //
 // api_tokens pairs a principal with an email, and it is already the directory
 // revokeAPITokensFor matches a named principal through — using the same rows
@@ -523,86 +526,96 @@ type principalIdentity struct{ principal, email string }
 // matched at read time against a caller's sub AND email (capabilitySubjects), so
 // a `user` row may hold either form with nothing to pair it to — admitting one
 // would let an email become a namespace key again, which is the whole failure.
-func (s *Server) knownPrincipals(ctx context.Context) []principalIdentity {
+// It returns what it could read and the error of a list it could not: the
+// resolver refuses to act on a partial directory, which could make an ambiguous
+// name look unique.
+func (s *Server) knownPrincipals(ctx context.Context) ([]principalIdentity, error) {
 	if s.cfg.Store == nil {
-		return nil
+		return nil, nil
 	}
 	var out []principalIdentity
-	if toks, err := s.cfg.Store.ListAPITokens(ctx); err == nil {
-		for _, t := range toks {
-			if t.Principal != "" {
-				out = append(out, principalIdentity{principal: t.Principal, email: t.Email})
-			}
+	toks, tokErr := s.cfg.Store.ListAPITokens(ctx)
+	for _, t := range toks {
+		if t.Principal != "" {
+			out = append(out, principalIdentity{principal: t.Principal, email: t.Email})
 		}
 	}
-	if wss, err := s.cfg.Store.ListWorkspaces(ctx); err == nil {
-		for _, ws := range wss {
-			if ws.OwnedBy != "" {
-				out = append(out, principalIdentity{principal: ws.OwnedBy})
-			}
+	wss, wsErr := s.cfg.Store.ListWorkspaces(ctx)
+	for _, ws := range wss {
+		if ws.OwnedBy != "" {
+			out = append(out, principalIdentity{principal: ws.OwnedBy})
 		}
 	}
-	return out
+	if err := errors.Join(tokErr, wsErr); err != nil {
+		return out, fmt.Errorf("resolve a person: list api tokens and workspaces: %w", err)
+	}
+	return out, nil
 }
 
-// resolveSecretOwner maps an admin-supplied ?owner= value onto the namespace key
-// the named human's own writes land in. It returns an empty refusal when it
-// resolved, or the exact sentence to answer 422 with.
+// resolveSecretOwner is the one answer to "who is this name" for every route that
+// acts on a person an admin names: ?owner= on the secrets routes, the path of
+// POST /people/{principal}/erasure (every scope), DELETE /people/{principal}/credentials
+// and DELETE /people/{principal}/ssh-keys, and a key domain's user subject. It
+// maps the name onto the principal the person's records are kept under, and
+// returns an empty refusal when it resolved, or the exact sentence to answer 422
+// with. err is a directory that could not be read: nothing acts on a guess.
 //
-// Order, and the order is the design:
+// The answer is store.PrincipalsNamed's, and its order is the design:
 //
-//  1. An EXACT, case-sensitive match against a known principal wins outright. A
-//     subject is an opaque IdP string: when the admin typed one this deployment
-//     actually issues, there is nothing left to infer, and no case-fold below
-//     can second-guess it.
-//  2. Otherwise, every DISTINCT known principal the value folds onto. Exactly
-//     one ⇒ that principal — this is what makes ?owner=Alice reach alice's own
-//     namespace instead of minting a second one beside it. More than one ⇒
-//     REFUSED: two subjects differing only by case is legal, and picking the
-//     first listed would put a credential in the wrong human's namespace.
-//  3. The same two answers against the known EMAILS, which is the dual-identity
-//     rule capabilitySubjects and revokeAPITokensFor already apply, brought to
-//     the one admin surface that lacked it.
-//  4. Neither list holds it: the store's identity directory is asked (every
-//     person who ever signed in or was created by an admin, the emails they
-//     signed in with, and their entra:<tenant>:<object> form). One principal
-//     ⇒ that principal; several ⇒ REFUSED as ambiguous.
+//  1. An EXACT, case-sensitive principal wins outright: one a sign-in bound, a
+//     person an admin created (not yet signed in included), an API token's, a
+//     workspace owner's. A subject is an opaque IdP string; when the admin typed
+//     one, nothing below can second-guess it, so an email claim that spells a
+//     person's principal never turns the name into the claimant.
+//  2. The entra:<tenant>:<object> form, from the tenant and object ids a sign-in
+//     or an admin recorded, never from claim text.
+//  3. Every DISTINCT principal the value case-folds onto. Exactly one ⇒ that
+//     principal — this is what makes ?owner=Alice reach alice's own namespace
+//     instead of minting a second one beside it. More than one ⇒ REFUSED: two
+//     subjects differing only by case is legal.
+//  4. For a value with an @ only, the emails a sign-in, an API token or a
+//     pre-created person carries, all of them together (the dual-identity rule
+//     capabilitySubjects and revokeAPITokensFor apply). One principal ⇒ that
+//     principal; several ⇒ REFUSED as ambiguous, so a person whose email someone
+//     else also claims is named by subject, never resolved to the claimant. An
+//     email is claim text, so a value with no @ is never matched against one.
 //  5. Still nothing, and it is email-shaped ⇒ REFUSED. An "@" value that pairs to no
 //     principal cannot be a subject this deployment issues, so writing it could
 //     only name a namespace the owner never uses. A bare value is taken
-//     verbatim: the directory is api tokens and workspace owners only, and a
-//     person who holds neither still has a namespace an admin must be able to
-//     remove credentials from.
+//     verbatim: a person nobody recorded can still hold a namespace an admin must
+//     be able to remove credentials from.
 //
-// The second return says whether the value RESOLVED against the directory or was
-// taken verbatim in case 4. Verbatim is a deliberate affordance, but it is
-// indistinguishable, from the outside, from a typo. So the caller stamps
-// owner_known:false and the log can tell the two apart afterwards. The STATUS
-// is unchanged: refusing here would break the affordance.
-func (s *Server) resolveSecretOwner(ctx context.Context, v string) (owner string, known bool, refusal string) {
-	owner, known, refusal = resolvePrincipal(s.knownPrincipals(ctx), v)
-	if known || refusal == secretOwnerAmbiguousMsg {
-		return owner, known, refusal
-	}
-	// Neither list knows the value. The identity directory knows everyone who
-	// ever signed in, and every person an admin created, whether or not they
-	// hold a token or a workspace.
+// The second return says whether the value RESOLVED or was taken verbatim in
+// case 5. Verbatim is a deliberate affordance, but it is indistinguishable, from
+// the outside, from a typo. So the caller stamps owner_known:false and the log
+// can tell the two apart afterwards. The STATUS is unchanged: refusing here would
+// break the affordance.
+func (s *Server) resolveSecretOwner(ctx context.Context, v string) (owner string, known bool, refusal string, err error) {
 	dir, ok := s.cfg.Store.(store.PrincipalDirectoryStore)
 	if !ok {
-		return owner, known, refusal
+		var directory []principalIdentity
+		if directory, err = s.knownPrincipals(ctx); err != nil {
+			return "", false, "", err
+		}
+		owner, known, refusal = resolvePrincipal(directory, v)
+		return owner, known, refusal, nil
 	}
 	found, err := dir.PrincipalsNamed(ctx, v)
 	switch {
 	case err != nil:
-		slog.WarnContext(ctx, "wardyn: resolve a person in the identity directory", slog.Any("err", err))
+		return "", false, "", err
 	case len(found) == 1:
-		return found[0], true, ""
+		return found[0], true, "", nil
 	case len(found) > 1:
-		return "", false, secretOwnerAmbiguousMsg
+		return "", false, secretOwnerAmbiguousMsg, nil
+	case strings.Contains(v, "@"):
+		return "", false, secretOwnerUnresolvedMsg, nil
 	}
-	return owner, known, refusal
+	return v, false, "", nil
 }
 
+// resolvePrincipal is resolveSecretOwner's order over a directory read from a
+// store without PrincipalDirectoryStore.
 func resolvePrincipal(directory []principalIdentity, v string) (owner string, known bool, refusal string) {
 	for _, p := range directory {
 		if p.principal == v {
@@ -610,6 +623,9 @@ func resolvePrincipal(directory []principalIdentity, v string) (owner string, kn
 		}
 	}
 	for _, byEmail := range []bool{false, true} {
+		if byEmail && !strings.Contains(v, "@") {
+			break // an email is claim text: only an email-shaped value is matched against one
+		}
 		switch hits := foldedPrincipals(directory, v, byEmail); len(hits) {
 		case 1:
 			return hits[0], true, ""

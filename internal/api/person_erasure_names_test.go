@@ -9,7 +9,11 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // aliasingStore is the person-erasure store with an identity directory that
@@ -21,14 +25,16 @@ type aliasingStore struct {
 	err     error
 }
 
-func (s *aliasingStore) PrincipalForName(_ context.Context, name string) (string, error) {
+var _ store.PrincipalDirectoryStore = (*aliasingStore)(nil)
+
+func (s *aliasingStore) PrincipalsNamed(_ context.Context, name string) ([]string, error) {
 	if s.err != nil {
-		return "", s.err
+		return nil, s.err
 	}
 	if p, ok := s.forName[name]; ok {
-		return p, nil
+		return []string{p}, nil
 	}
-	return name, nil
+	return nil, nil
 }
 
 func (s *aliasingStore) PrincipalAliases(_ context.Context, principal string) ([]string, error) {
@@ -106,5 +112,49 @@ func TestErasePerson_RefusesReservedNonPersonPrincipals(t *testing.T) {
 	}
 	if denied != 4 {
 		t.Errorf("%d denied credential.erase rows, want one per refused name", denied)
+	}
+}
+
+// On a store with no identity directory the same order holds: an email is claim text, so a name with no
+// @ is never matched against one, and a claimant whose token email spells another person's subject is not
+// that person.
+func TestErasePersonCredentials_ATokenEmailNeverNamesABareSubject(t *testing.T) {
+	_, srv, st, sec := erasureRig(t)
+	st.toks = append(st.toks, types.APIToken{ID: uuid.New(), Principal: "claimant", Email: "victim-sub"})
+	for _, owner := range []string{"claimant", "victim-sub"} {
+		if err := sec.For(owner).Put(t.Context(), "anthropic-api-key", []byte("credential-of-"+owner)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sa := ssoSession(t, "sec-2", "sec2@corp.example", oidc.RoleSecurityAdmin)
+	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/people/victim-sub/credentials", sa, ""); w.Code != http.StatusOK {
+		t.Fatalf("erase = %d %s, want 200", w.Code, w.Body)
+	}
+	if got := namesOf(t, sec, "victim-sub"); len(got) != 0 {
+		t.Errorf("the named subject still holds %v", got)
+	}
+	if got := namesOf(t, sec, "claimant"); len(got) != 1 {
+		t.Errorf("erasing a subject reached the claimant whose token email spells it: %v left", got)
+	}
+}
+
+// tokensDownStore is the erasure store whose API token list cannot be read.
+type tokensDownStore struct{ *erasureTestStore }
+
+func (tokensDownStore) ListAPITokens(context.Context) ([]types.APIToken, error) {
+	return nil, errors.New("tokens down")
+}
+
+// A store with no identity directory resolves against its token and workspace lists; one it cannot read
+// stops the erase, because a partial list could make an ambiguous name look unique.
+func TestErasePersonCredentials_AnUnreadableListErasesNothing(t *testing.T) {
+	_, srv, st, sec := erasureRig(t)
+	srv.cfg.Store = tokensDownStore{st}
+	sa := ssoSession(t, "sec-2", "sec2@corp.example", oidc.RoleSecurityAdmin)
+	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/people/bob/credentials", sa, ""); w.Code != http.StatusInternalServerError {
+		t.Fatalf("erase with an unreadable token list = %d %s, want 500", w.Code, w.Body)
+	}
+	if got := namesOf(t, sec, "bob"); len(got) != 2 {
+		t.Fatalf("bob holds %v after a refused erase, want both credentials", got)
 	}
 }
