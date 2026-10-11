@@ -527,6 +527,7 @@ Set `WARDYN_AWS_KMS_KEY` to the key's full ARN, `arn:<partition>:kms:<region>:<a
 
 - A long-lived access key (`AKIA…`) boots, and raises the amber `kek_service_static_key` setup row.
 - Anyone who copies that key unlocks every credential from anywhere until it is revoked.
+- On Helm set `kek.provider=awskms` and `kek.awskms.key`, and give wardynd's service account its IAM role (`serviceAccount.annotations`, `eks.amazonaws.com/role-arn`) or an EKS Pod Identity association; no age key is needed.
 
 **Binding.** Each wrap's encryption context is `{"wardyn:aad-sha256": <hex>}`, a SHA-256 over the row's binding.
 
@@ -583,6 +584,7 @@ Set `WARDYN_AWS_KMS_KEY` to the key's full ARN, `arn:<partition>:kms:<region>:<a
 
 - IRSA and EKS Pod Identity with `serviceAccount.automount: false`.
 - The real KMS error codes, and FIPS endpoints.
+- `TestLive_AWSKMS` runs the key-service contract against a real key when `WARDYN_TEST_AWS_KMS_KEY` is set.
 
 ## Moving data keys: `wardynd -rewrap`
 

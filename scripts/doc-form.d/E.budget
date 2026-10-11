@@ -11,4 +11,5 @@
 # 0.9 G-seal-target (#1828): docs/ENV.md 36057 adds 42 over 36015 for the target sentence in the WARDYN_AUDIT_SEAL table cell and its details bullet.
 # docs/ENV.md 36046 adds 31 (0.9 F-588 M1): awskms in the store-mode and key-service lines, the AWS KMS link, and the AWS_CA_BUNDLE bullet.
 # docs/ENV.md 36090 measured after F-588 M1 merge.
-docs/ENV.md=36090 share=5
+# docs/ENV.md 36115 adds 25 (0.9 F-588 M2): chart kek.awskms.key on the WARDYN_AWS_KMS_KEY row and section, and the WARDYN_TEST_AWS_KMS_KEY list entry.
+docs/ENV.md=36115 share=5
