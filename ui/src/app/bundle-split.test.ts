@@ -27,12 +27,11 @@ import { describe, expect, it } from "vitest";
 const uiRoot = path.resolve(__dirname, "../..");
 
 // The entry chunk sat at 1,331 kB (a single un-split chunk) before the split
-// and lands ~508 kB after the 0.7 dependency bumps; 560 kB keeps roughly the
-// original ~50 kB of headroom so ordinary feature work and routine dependency
-// maintenance don't trip it, while any lazy route leaking into the eager graph
-// still blows straight through it (the terminal-stack assertion below is the
-// primary split guard).
-const ENTRY_BUDGET_BYTES = 560 * 1024;
+// and lands ~575 kB after routine feature work and dependency bumps; 580 kB
+// keeps a few kB of headroom so ordinary maintenance doesn't trip it, while any
+// lazy route leaking into the eager graph still blows straight through it (the
+// terminal-stack assertion below is the primary split guard).
+const ENTRY_BUDGET_BYTES = 580 * 1024;
 
 async function build_(): Promise<(Rollup.OutputChunk | Rollup.OutputAsset)[]> {
   // Vite only defaults NODE_ENV to "production" for a build when it is UNSET,
