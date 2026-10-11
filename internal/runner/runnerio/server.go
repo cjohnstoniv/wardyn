@@ -73,13 +73,17 @@ func New(sub substrate.Substrate, runnerID, stateDir string) (*Server, error) {
 			}
 			continue
 		}
+		if strings.HasPrefix(f.Name(), ".") {
+			continue // hidden files (.DS_Store) are not run output
+		}
+		path := filepath.Join(dir, f.Name())
 		id, err := uuid.Parse(f.Name())
 		if err != nil || id == uuid.Nil || f.Name() != id.String() {
-			return nil, errors.New("runnerio: unknown output directory")
+			return nil, fmt.Errorf("runnerio: %s is not a run's output; move it out of %s", path, dir)
 		}
-		b, err := newOutputBuffer(filepath.Join(dir, f.Name()))
+		b, err := newOutputBuffer(path)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("runnerio: output of run %s at %s: %w; to start without that run's retained output, move the directory out of %s", id, path, err, dir)
 		}
 		s.outputs[id] = b
 	}
