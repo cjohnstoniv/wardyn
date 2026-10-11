@@ -371,34 +371,44 @@ func outputRidesOutAResumableLinkBlip(t *testing.T) {
 	b.Close()
 }
 
-// Only an ACK that advances shows an acker is back; a stale one keeps the
-// buffer dropping instead of waiting.
-func TestOutputBufferStaleAckKeepsLossy(t *testing.T) {
+func TestOutputBufferReplayBelowAckParks(t *testing.T) {
+	synctest.Test(t, outputReplayBelowAckParks)
+}
+
+// After a refused OPEN the org recovers the run from offset 0 and ACKs each
+// replayed chunk, so its ACKs sit at or below the buffer's ACK until the
+// replay passes it. Those ACKs show a consumer is back: a full buffer then
+// waits for it instead of dropping output the replay has not reached.
+func outputReplayBelowAckParks(t *testing.T) {
 	b := outputFixture(t)
-	if _, err := b.Write([]byte("abcdef")); err != nil {
+	if _, err := b.Write(bytes.Repeat([]byte("x"), outputLimit)); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.ack(3); err != nil {
+	if err := b.ack(2 * outputChunk); err != nil {
 		t.Fatal(err)
 	}
 	b.unacknowledged()
-	for _, offset := range []int64{0, 3} {
-		if err := b.ack(offset); err != nil {
-			t.Fatal(err)
-		}
-		b.mu.Lock()
-		lossy := b.lossy
-		b.mu.Unlock()
-		if !lossy {
-			t.Fatalf("stale ACK at %d cleared lossy", offset)
-		}
-	}
-	if err := b.ack(4); err != nil {
+	if err := b.ack(2 * outputChunk); err != nil {
 		t.Fatal(err)
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.lossy {
-		t.Fatal("advancing ACK left the buffer lossy")
+	// The two acknowledged parts make room without dropping anything.
+	if _, err := b.Write(bytes.Repeat([]byte("y"), 2*outputChunk)); err != nil {
+		t.Fatal(err)
 	}
+	done := make(chan error, 1)
+	go func() { _, err := b.Write([]byte("last")); done <- err }()
+	synctest.Wait()
+	b.mu.Lock()
+	start, ack := b.start(), b.state.Ack
+	b.mu.Unlock()
+	if start != 2*outputChunk || ack != 2*outputChunk {
+		t.Fatalf("writer did not park during the replay: start=%d ack=%d", start, ack)
+	}
+	if err := b.ack(3 * outputChunk); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	b.Close()
 }
