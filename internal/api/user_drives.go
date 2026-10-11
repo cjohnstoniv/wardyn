@@ -45,6 +45,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -857,6 +858,9 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
+	if !s.isOperator(r.Context()) && !s.driveGrantWithinSecurityTier(w, r, g) {
+		return
+	}
 	g.ID = uuid.New()
 	g.CreatedBy = principalFromRequest(r)
 	saved, err := s.cfg.Store.UpsertUserDriveGrant(r.Context(), g, homeOverrideStated)
@@ -903,6 +907,45 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 			"enabled":           saved.Enabled,
 		})))
 	writeJSON(w, status, saved)
+}
+
+// driveGrantWithinSecurityTier: a security admin allocates a drive with its own posture or narrower.
+// Only a super admin newly states a home_override (it names where on the storage the files live,
+// and the store compares it only with other typed names, never with a derived home) or widens
+// writability (true, or dropping read-only on a writable drive). An unchanged re-send on the same
+// drive passes. False means the refusal is written.
+func (s *Server) driveGrantWithinSecurityTier(w http.ResponseWriter, r *http.Request, g types.UserDriveGrant) bool {
+	d, err := s.cfg.Store.GetUserDrive(r.Context(), g.DriveID)
+	if notFoundIf(w, err, "user drive", reasonUserDriveNotFound) {
+		return false
+	}
+	widens := g.WritableOverride != nil && *g.WritableOverride
+	var grants []types.UserDriveGrant
+	if err == nil && (g.HomeOverride != "" || widens || g.WritableOverride == nil && d.Writable) {
+		grants, err = s.cfg.Store.ListUserDriveGrants(r.Context())
+	}
+	if err != nil {
+		writeServerError(w, r, "read user drive allocation", err)
+		return false
+	}
+	var prev types.UserDriveGrant
+	for _, existing := range grants {
+		if existing.SubjectType == g.SubjectType && existing.Subject == g.Subject {
+			prev = existing
+		}
+	}
+	same, field := prev.DriveID == g.DriveID, ""
+	switch {
+	case g.HomeOverride != "" && !(same && prev.HomeOverride == g.HomeOverride):
+		field = "home_override"
+	case widens && !(same && prev.WritableOverride != nil && *prev.WritableOverride),
+		g.WritableOverride == nil && d.Writable && prev.WritableOverride != nil && !*prev.WritableOverride:
+		field = "writable_override"
+	default:
+		return true
+	}
+	return !s.refuse(w, r, authz.Deny(authz.ReasonAdminSurface, "drive.grant."+field, field+": only a super admin may "+
+		"set an allocation's directory name or make it more writable than its drive; allocate with the drive's own posture or read-only"))
 }
 
 // handleDeleteUserDriveGrant removes one allocation by id (204), 404 when
