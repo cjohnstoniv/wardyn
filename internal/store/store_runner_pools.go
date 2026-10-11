@@ -9,6 +9,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,7 +29,7 @@ type RunnerPoolStore interface {
 	ListRunnerPoolCatalogue(ctx context.Context, owner string) ([]RunnerPoolCatalogueRow, error)
 	GetRunnerPool(ctx context.Context, id uuid.UUID) (types.RunnerPool, error)
 	CreateRunnerPool(ctx context.Context, p types.RunnerPool, by string) (types.RunnerPool, error)
-	UpdateRunnerPool(ctx context.Context, id uuid.UUID, revision int64, name *string, state *types.RunnerPoolState) (types.RunnerPool, error)
+	UpdateRunnerPool(ctx context.Context, id uuid.UUID, revision int64, name *string, state *types.RunnerPoolState, limits *types.RunnerPoolLimits) (types.RunnerPool, error)
 	DeleteRunnerPool(ctx context.Context, id uuid.UUID) (RunnerPoolDeletion, error)
 
 	AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (m types.RunnerPoolMember, added bool, revision int64, err error)
@@ -82,12 +83,13 @@ type RunnerPoolDeletion struct {
 	OrgDefaultsAfter  *types.RunnerPoolDefaults
 }
 
-const runnerPoolCols = `id, name, hosting_type, state, revision, created_at, updated_at`
+const runnerPoolCols = `id, name, hosting_type, state, revision, limits, created_at, updated_at`
 
 func scanRunnerPool(row pgx.Row) (types.RunnerPool, error) {
 	var p types.RunnerPool
 	var hosting, state string
-	err := row.Scan(&p.ID, &p.Name, &hosting, &state, &p.Revision, &p.CreatedAt, &p.UpdatedAt)
+	var limits []byte
+	err := row.Scan(&p.ID, &p.Name, &hosting, &state, &p.Revision, &limits, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.RunnerPool{}, ErrNotFound
 	}
@@ -95,7 +97,30 @@ func scanRunnerPool(row pgx.Row) (types.RunnerPool, error) {
 		return types.RunnerPool{}, fmt.Errorf("store: scan runner pool: %w", err)
 	}
 	p.HostingType, p.State = types.RunnerPoolHosting(hosting), types.RunnerPoolState(state)
+	if p.Limits, err = unmarshalPoolLimits(limits); err != nil {
+		return types.RunnerPool{}, err
+	}
 	return p, nil
+}
+
+// unmarshalPoolLimits reads the limits column: NULL is nil, a pool that adds no bound of its own.
+func unmarshalPoolLimits(raw []byte) (*types.RunnerPoolLimits, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	var l types.RunnerPoolLimits
+	if err := json.Unmarshal(raw, &l); err != nil {
+		return nil, fmt.Errorf("store: unmarshal runner pool limits: %w", err)
+	}
+	return &l, nil
+}
+
+// marshalPoolLimits is the column value for limits: nil is NULL.
+func marshalPoolLimits(l *types.RunnerPoolLimits) ([]byte, error) {
+	if l == nil {
+		return nil, nil
+	}
+	return json.Marshal(l)
 }
 
 func isUniqueViolation(err error) bool {
@@ -131,7 +156,7 @@ func (s PG) GetRunnerPool(ctx context.Context, id uuid.UUID) (types.RunnerPool, 
 // the count of owner's own claimed runners it holds.
 func (s PG) ListRunnerPoolCatalogue(ctx context.Context, owner string) ([]RunnerPoolCatalogueRow, error) {
 	const q = `
-		SELECT p.id, p.name, p.hosting_type, p.state, p.revision, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.hosting_type, p.state, p.revision, p.limits, p.created_at, p.updated_at,
 		       u.subjects, u.revision, u.updated_by, u.updated_at,
 		       COALESCE((SELECT array_agg(m.executor_id ORDER BY m.executor_id) FROM runner_pool_members m
 		                 WHERE m.pool_id = p.id AND m.executor_id IS NOT NULL), '{}'),
@@ -142,15 +167,19 @@ func (s PG) ListRunnerPoolCatalogue(ctx context.Context, owner string) ([]Runner
 	return collect(ctx, s.Pool, "list", "runner pools", q, []any{owner, RunnerPoolsMax}, func(row pgx.Row) (RunnerPoolCatalogueRow, error) {
 		var r RunnerPoolCatalogueRow
 		var hosting, state string
-		var subjects []byte
+		var subjects, limits []byte
 		var polRev *int64
 		var polBy *string
 		var polAt *time.Time
-		if err := row.Scan(&r.Pool.ID, &r.Pool.Name, &hosting, &state, &r.Pool.Revision, &r.Pool.CreatedAt, &r.Pool.UpdatedAt,
+		if err := row.Scan(&r.Pool.ID, &r.Pool.Name, &hosting, &state, &r.Pool.Revision, &limits, &r.Pool.CreatedAt, &r.Pool.UpdatedAt,
 			&subjects, &polRev, &polBy, &polAt, &r.ExecutorIDs, &r.OwnRunners); err != nil {
 			return r, fmt.Errorf("store: scan runner pool catalogue: %w", err)
 		}
 		r.Pool.HostingType, r.Pool.State = types.RunnerPoolHosting(hosting), types.RunnerPoolState(state)
+		var err error
+		if r.Pool.Limits, err = unmarshalPoolLimits(limits); err != nil {
+			return r, err
+		}
 		if subjects != nil {
 			pol := types.RunnerPoolUsePolicy{PoolID: r.Pool.ID, Revision: *polRev, UpdatedBy: *polBy, UpdatedAt: *polAt}
 			if err := json.Unmarshal(subjects, &pol.Subjects); err != nil {
@@ -184,20 +213,24 @@ func (s PG) CreateRunnerPool(ctx context.Context, p types.RunnerPool, by string)
 }
 
 func insertRunnerPoolQ(ctx context.Context, q Querier, p types.RunnerPool, by string, out *types.RunnerPool) error {
-	var err error
+	limits, err := marshalPoolLimits(p.Limits)
+	if err != nil {
+		return err
+	}
 	*out, err = scanRunnerPool(q.QueryRow(ctx, `
-		INSERT INTO runner_pools (id, name, hosting_type, created_by) VALUES ($1,$2,$3,$4) RETURNING `+runnerPoolCols,
-		p.ID, p.Name, string(p.HostingType), by))
+		INSERT INTO runner_pools (id, name, hosting_type, created_by, limits) VALUES ($1,$2,$3,$4,$5) RETURNING `+runnerPoolCols,
+		p.ID, p.Name, string(p.HostingType), by, limits))
 	if isUniqueViolation(err) {
 		return ErrConflict
 	}
 	return err
 }
 
-// UpdateRunnerPool renames or switches a pool, only at the revision the caller read: ErrRunnerPoolStale
-// otherwise, ErrNotFound for an unknown or deleted pool, ErrConflict when the name is taken. A change
-// that moves nothing writes nothing and keeps the revision.
-func (s PG) UpdateRunnerPool(ctx context.Context, id uuid.UUID, revision int64, name *string, state *types.RunnerPoolState) (types.RunnerPool, error) {
+// UpdateRunnerPool renames, switches or re-limits a pool, only at the revision the caller read:
+// ErrRunnerPoolStale otherwise, ErrNotFound for an unknown or deleted pool, ErrConflict when the name is
+// taken. A non-nil limits replaces the stored block whole; nil leaves it. A change that moves nothing,
+// limits compared as canonical JSON, writes nothing and keeps the revision.
+func (s PG) UpdateRunnerPool(ctx context.Context, id uuid.UUID, revision int64, name *string, state *types.RunnerPoolState, limits *types.RunnerPoolLimits) (types.RunnerPool, error) {
 	var out types.RunnerPool
 	err := s.inTx(ctx, func(q Querier) error {
 		cur, err := livePoolForUpdate(ctx, q, id)
@@ -207,14 +240,23 @@ func (s PG) UpdateRunnerPool(ctx context.Context, id uuid.UUID, revision int64, 
 		if cur.Revision != revision {
 			return ErrRunnerPoolStale
 		}
-		if (name == nil || *name == cur.Name) && (state == nil || *state == cur.State) {
+		newLimits, err := marshalPoolLimits(limits)
+		if err != nil {
+			return err
+		}
+		oldLimits, err := marshalPoolLimits(cur.Limits)
+		if err != nil {
+			return err
+		}
+		if (name == nil || *name == cur.Name) && (state == nil || *state == cur.State) &&
+			(limits == nil || bytes.Equal(newLimits, oldLimits)) {
 			out = cur
 			return nil
 		}
 		out, err = scanRunnerPool(q.QueryRow(ctx, `
 			UPDATE runner_pools SET name = COALESCE($2, name), state = COALESCE($3, state),
-			       revision = revision + 1, updated_at = now()
-			WHERE id = $1 RETURNING `+runnerPoolCols, id, name, stateText(state)))
+			       limits = COALESCE($4, limits), revision = revision + 1, updated_at = now()
+			WHERE id = $1 RETURNING `+runnerPoolCols, id, name, stateText(state), newLimits))
 		if isUniqueViolation(err) {
 			return ErrConflict
 		}
