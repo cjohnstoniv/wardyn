@@ -517,9 +517,15 @@ func (p *Peer) sendReplies() {
 	}
 }
 
-// grant returns consumed bytes to the sender as WINDOW frames: the stream's and the connection's.
+// grant returns consumed bytes to the sender's stream window.
 func (p *Peer) grant(s *Stream, n int64) {
 	_ = p.send(p.ctx, Frame{Type: TypeWindow, Stream: s.id, Payload: EncodeWindow(uint32(n))})
+}
+
+// consumed returns bytes a stream's reader took to the sender's connection
+// window in ConnWindow/4 batches. It counts every read on every stream, so
+// however many streams are live, at most ConnWindow/4-1 read bytes are withheld.
+func (p *Peer) consumed(n int64) {
 	p.mu.Lock()
 	p.connPend += n
 	c := int64(0)
