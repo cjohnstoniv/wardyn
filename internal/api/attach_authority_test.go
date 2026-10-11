@@ -150,8 +150,7 @@ func newAuthorityRig(t *testing.T, roleStampTTL time.Duration) *authorityRig {
 	cfg.RoleStampTTL = roleStampTTL
 	cfg.Now = func() time.Time { return time.Now().Add(time.Duration(rig.offset.Load())) }
 	rig.srv = New(cfg)
-	rig.srv.authorityEvery = authorityTick
-	rig.srv.authorityLookup = 100 * time.Millisecond
+	rig.srv.authorityTest = attachAuthorityTimings{every: authorityTick, lookup: 100 * time.Millisecond}
 	rig.run = types.AgentRun{ID: uuid.New(), CreatedBy: holderOwner, OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-1"}
 	rig.ast.mu.Lock()
 	rig.ast.runs[rig.run.ID] = rig.run

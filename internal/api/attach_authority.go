@@ -32,16 +32,22 @@ const (
 
 var errAttachAuthorityEnded = errors.New("attach: the credential that opened this socket no longer authorizes it")
 
+// attachAuthorityTimings overrides attachAuthorityInterval and attachAuthorityLookup for one server
+// (tests only); zero means the constant.
+type attachAuthorityTimings struct {
+	every, lookup time.Duration
+}
+
 func (s *Server) attachAuthorityEvery() time.Duration {
-	if s.authorityEvery > 0 {
-		return s.authorityEvery
+	if s.authorityTest.every > 0 {
+		return s.authorityTest.every
 	}
 	return attachAuthorityInterval
 }
 
 func (s *Server) attachAuthorityLookupBound() time.Duration {
-	if s.authorityLookup > 0 {
-		return s.authorityLookup
+	if s.authorityTest.lookup > 0 {
+		return s.authorityTest.lookup
 	}
 	return attachAuthorityLookup
 }
