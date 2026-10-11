@@ -11,11 +11,13 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -67,6 +69,10 @@ func TestPG_Devices_ForwardedRowNeverReadsAsAnOrgPrincipal(t *testing.T) {
 	}
 	if dev[0].Actor != store.FederatedActor(d.ID, admin) || dev[0].DeviceID == nil || *dev[0].DeviceID != d.ID {
 		t.Fatalf("forwarded row reads as actor %q device_id %v, want %q and %s", dev[0].Actor, dev[0].DeviceID, store.FederatedActor(d.ID, admin), d.ID)
+	}
+	// Unseal reads a row under this prefix as stored, never resolving its subject ids or sealed fields.
+	if !strings.HasPrefix(dev[0].Actor, audit.DeviceActorPrefix) {
+		t.Fatalf("forwarded row's actor %q does not begin with audit.DeviceActorPrefix %q", dev[0].Actor, audit.DeviceActorPrefix)
 	}
 	orgRows := query(store.AuditFilter{Origin: store.AuditOriginOrganisation})
 	if len(orgRows) != 1 || orgRows[0].ID != org.ID || orgRows[0].DeviceID != nil {
