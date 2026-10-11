@@ -32,6 +32,9 @@ func buildKeyDomains(ctx context.Context, v vaultFlags, az azureFlags, trustedCA
 	if len(file) == 0 {
 		return nil, nil
 	}
+	if strings.TrimSpace(*v.kek) == kekAWS || strings.TrimSpace(*v.awsKMSKey) != "" {
+		return nil, fmt.Errorf("refusing to start: WARDYN_KEY_DOMAINS_FILE declares %d key domain(s), but AWS KMS key domains are not supported yet; with WARDYN_KEK=awskms or WARDYN_AWS_KMS_KEY set every principal key stays under the credential key, so remove the declared domains (docs/operations/secrets-and-keys.md)", len(file))
+	}
 	if err := checkKeyDomains(file, v, az); err != nil {
 		return nil, fmt.Errorf("refusing to start: %w", err)
 	}

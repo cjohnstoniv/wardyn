@@ -35,7 +35,7 @@ const rewrapActor = "wardyn/rewrap"
 // one transaction, and exit (secretstorepg.RewrapKeys). That is the local key
 // of the row's purpose (design §2.13 c) — the rows written before the purpose
 // split, and, once WARDYN_PLATFORM_KEY_FILE is set, the boot keys still under
-// the age key — or, with WARDYN_KEK=transit or azurekv, the key service's key
+// the age key — or, with WARDYN_KEK=transit, azurekv or awskms, the key service's key
 // at its latest version (design §2.3); with WARDYN_KEK=local and the key
 // service still named, the rows under it move back to the local key. No value is
 // decrypted. It takes the rekey lock, so it never runs beside a
@@ -56,8 +56,8 @@ func rewrapMode(f *bootFlags) error {
 		if id, err = age.ParseX25519Identity(ageKey); err != nil {
 			return fmt.Errorf("parse the age identity (WARDYN_AGE_KEY): %w", err)
 		}
-	case !slices.Contains([]string{kekTransit, kekAzure}, strings.TrimSpace(*f.vault.kek)):
-		return fmt.Errorf("refusing to rewrap: WARDYN_AGE_KEY (-age-key) is empty, so there is no local key to rewrap from, and WARDYN_KEK is not %q or %q", kekTransit, kekAzure)
+	case !slices.Contains([]string{kekTransit, kekAzure, kekAWS}, strings.TrimSpace(*f.vault.kek)):
+		return fmt.Errorf("refusing to rewrap: WARDYN_AGE_KEY (-age-key) is empty, so there is no local key to rewrap from, and WARDYN_KEK is not %q, %q or %q", kekTransit, kekAzure, kekAWS)
 	}
 	platform, err := readPlatformKey(*f.platformKeyFile, ageKey)
 	if err != nil {
