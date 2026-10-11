@@ -451,3 +451,18 @@ func parseAuditFilter(w http.ResponseWriter, r *http.Request) (store.AuditFilter
 	}
 	return f, true
 }
+
+// auditEvent is a small constructor used across handlers.
+func (s *Server) auditEvent(runID *uuid.UUID, actorType types.ActorType, actor, action, target, outcome string, data []byte) types.AuditEvent {
+	return types.AuditEvent{
+		ID:        uuid.New(),
+		Time:      s.cfg.Now().UTC(),
+		RunID:     runID,
+		ActorType: actorType,
+		Actor:     actor,
+		Action:    action,
+		Target:    target,
+		Outcome:   outcome,
+		Data:      data,
+	}
+}
