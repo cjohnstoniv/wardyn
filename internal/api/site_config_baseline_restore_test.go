@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -87,4 +88,44 @@ func TestSiteConfigCaptureRestoresThroughTheSDKWhateverTheStoredBaseline(t *test
 			t.Fatalf("ignored = %v, stored baseline = %v %v, want the stored baseline untouched", res.EgressBaselineIgnored, hosts, suffixes)
 		}
 	})
+
+	t.Run("PutSiteConfig still gets the refusal for a changed baseline", func(t *testing.T) {
+		c, fake, _ := stored(t, captured)
+		changed := captured
+		changed.Egress = &types.SiteEgress{BaselineHosts: []string{"evil.example"}}
+		_, _, _, err := c.PutSiteConfig(context.Background(), changed)
+		var apiErr *client.APIError
+		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadRequest || apiErr.Reason != reasonSiteConfigEgressViaOwnRoute {
+			t.Fatalf("PutSiteConfig of a changed baseline = %v, want 400 %s", err, reasonSiteConfigEgressViaOwnRoute)
+		}
+		if hosts, _ := baseline(fake); !slices.Equal(hosts, []string{"llm.corp.example"}) {
+			t.Fatalf("stored baseline hosts = %v, want them untouched", hosts)
+		}
+	})
+
+	// Only a baseline the file asserts and the install lacks is reported: a file silent about it (a
+	// pre-0.9 MDM file) and one that agrees up to case and a trailing dot are not.
+	for _, tc := range []struct {
+		name string
+		doc  types.SiteConfig
+		want bool
+	}{
+		{"a file with no egress block and no marks is quiet", types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.example"}}}, false},
+		{"an empty file is quiet", types.SiteConfig{}, false},
+		{"the same baseline up to case and a trailing dot is quiet", types.SiteConfig{Egress: &types.SiteEgress{BaselineHosts: []string{"LLM.corp.example."}}}, false},
+		{"a different egress block is reported", types.SiteConfig{Egress: &types.SiteEgress{BaselineHosts: []string{"other.corp.example"}}}, true},
+		{"an empty egress block is reported", types.SiteConfig{Egress: &types.SiteEgress{}}, true},
+		{"a mark the install lacks is reported", types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.example", Baseline: true}, {HostSuffix: "other.example", Baseline: true}}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _, _ := stored(t, captured)
+			res, err := c.PutSiteConfigResult(context.Background(), tc.doc)
+			if err != nil {
+				t.Fatalf("PutSiteConfigResult: %v", err)
+			}
+			if res.EgressBaselineIgnored != tc.want {
+				t.Fatalf("EgressBaselineIgnored = %v, want %v", res.EgressBaselineIgnored, tc.want)
+			}
+		})
+	}
 }

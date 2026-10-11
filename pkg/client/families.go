@@ -215,10 +215,16 @@ func (c *Client) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 // ever stored (PLATFORM-API-5). Stripped here, once, so no caller has to
 // remember to (mirrors ui/src/app/lib/api/health.ts's identical fix on the
 // TS side).
+//
+// The egress baseline is NOT stripped: a body that changes it is refused 400
+// site_config_egress_via_own_route, because only PUT /governance/egress-baseline may change it.
+// PutSiteConfigResult is the one that drops the baseline, for restoring a captured document.
 func (c *Client) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (
 	out types.SiteConfig, danglingSecretRefs []string, onboardingMarkIgnored bool, err error,
 ) {
-	res, err := c.PutSiteConfigResult(ctx, cfg)
+	cfg.Integrations = nil
+	var res SiteConfigPutResult
+	err = c.do(ctx, http.MethodPut, "/api/v1/site-config", cfg, &res)
 	return res.SiteConfig, res.DanglingSecretRefs, res.OnboardingCompletedAtIgnored, err
 }
 
@@ -235,7 +241,8 @@ type SiteConfigPutResult struct {
 	BrandingLogoPending bool `json:"branding_logo_pending,omitempty"`
 	// EgressBaselineIgnored is set by the SDK, not the server: the document named an egress baseline
 	// (egress.baseline_hosts, or a baseline mark on an internal host) that differs from the stored
-	// one, and PutSiteConfigResult did not send it. Only PUT /governance/egress-baseline writes it.
+	// one, and PutSiteConfigResult did not send it. A document that names no egress block is never
+	// reported (an older file is silent about the baseline). Only PUT /governance/egress-baseline writes it.
 	EgressBaselineIgnored bool `json:"-"`
 	// ModelProviderWarnings are advisories on the model_providers block, such as an azure_foundry
 	// endpoint that resolves to a private address no internal_hosts entry covers.
@@ -249,7 +256,7 @@ type SiteConfigPutResult struct {
 // internal_hosts entry are sent as nothing, and the server carries the stored ones forward. It
 // refuses a body that changes the baseline (only PUT /governance/egress-baseline may), so a
 // document captured before a reset, or before the security tier moved the baseline, would
-// otherwise be refused whole. The server's refusal stays for every other caller;
+// otherwise be refused whole. The server's refusal stays for PutSiteConfig and every other caller;
 // EgressBaselineIgnored reports a baseline in cfg that the stored one does not match.
 func (c *Client) PutSiteConfigResult(ctx context.Context, cfg types.SiteConfig) (SiteConfigPutResult, error) {
 	sent := cfg
@@ -262,24 +269,48 @@ func (c *Client) PutSiteConfigResult(ctx context.Context, cfg types.SiteConfig) 
 	var resp SiteConfigPutResult
 	err := c.do(ctx, http.MethodPut, "/api/v1/site-config", cfg, &resp)
 	if err == nil {
-		resp.EgressBaselineIgnored = !slices.Equal(baselineOf(sent), baselineOf(resp.SiteConfig))
+		resp.EgressBaselineIgnored = baselineAsserted(sent, resp.SiteConfig)
 	}
 	return resp, err
 }
 
-// baselineOf is the sorted egress baseline a site config declares: its baseline hosts, then its
-// baseline-marked internal host suffixes, lowercased and tagged so the two lists cannot be confused.
-func baselineOf(sc types.SiteConfig) []string {
-	var out []string
-	if sc.Egress != nil {
-		for _, h := range sc.Egress.BaselineHosts {
-			out = append(out, "host:"+strings.ToLower(h))
+// baselineAsserted reports whether sent asserts an egress baseline that stored does not hold: an egress
+// block whose hosts differ, or a baseline mark on a suffix stored has not marked. A document silent
+// about the baseline (no egress block, no marks), as a pre-0.9 file is, asserts nothing.
+func baselineAsserted(sent, stored types.SiteConfig) bool {
+	hosts := func(sc types.SiteConfig) []string {
+		if sc.Egress == nil {
+			return nil
+		}
+		return normalizedHosts(sc.Egress.BaselineHosts)
+	}
+	if sent.Egress != nil && !slices.Equal(hosts(sent), hosts(stored)) {
+		return true
+	}
+	marked := map[string]bool{}
+	for _, h := range stored.InternalHosts {
+		if h.Baseline {
+			marked[normalizedHost(h.HostSuffix)] = true
 		}
 	}
-	for _, h := range sc.InternalHosts {
-		if h.Baseline {
-			out = append(out, "suffix:"+strings.ToLower(h.HostSuffix))
+	for _, h := range sent.InternalHosts {
+		if h.Baseline && !marked[normalizedHost(h.HostSuffix)] {
+			return true
 		}
+	}
+	return false
+}
+
+// normalizedHost lowercases a host name and drops a trailing dot, as the server does before comparing.
+func normalizedHost(h string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), ".")
+}
+
+// normalizedHosts is the sorted, de-duplicated set of normalizedHost over list.
+func normalizedHosts(list []string) []string {
+	out := make([]string, len(list))
+	for i, h := range list {
+		out[i] = normalizedHost(h)
 	}
 	slices.Sort(out)
 	return slices.Compact(out)

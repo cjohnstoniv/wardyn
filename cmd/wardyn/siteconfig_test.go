@@ -381,6 +381,16 @@ func TestSiteConfigSet_WarnsTheEgressBaselineWasNotApplied(t *testing.T) {
 		t.Errorf("stderr = %q, want a warning that the file's egress baseline was not applied", stderr)
 	}
 
+	// A file silent about the baseline (a pre-0.9 MDM file) asserts nothing, so it is never reported.
+	var plain types.SiteConfig
+	_, quietPlain, err := runSiteConfigSet(t, applyServer(t, &plain).URL, `{"scm_hosts":["gitlab.corp"],"internal_hosts":[{"host_suffix":"corp.example"}]}`)
+	if err != nil {
+		t.Fatalf("apply of a file with no baseline: %v", err)
+	}
+	if strings.Contains(quietPlain, "egress baseline") {
+		t.Errorf("stderr = %q, want silence for a file that names no egress baseline", quietPlain)
+	}
+
 	holds := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(captured))
