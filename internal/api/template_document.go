@@ -33,6 +33,8 @@ var templateDependencies = []struct{ field, needs string }{
 	{"tool_approvals", "agent"},
 	{"seed_auto_tools", "agent"},
 	{"inline_policy.tool_rules", "agent"},
+	{"workload", "experience"},
+	{"startup", "experience"},
 	{"interactive_start", "interactive"},
 	{"task_mode", "interactive"},
 	{"inline_policy.ui_apps", "interactive"},
@@ -231,7 +233,7 @@ func validateTemplateContentDecoded(doc client.TemplateDocument) []client.Templa
 	}
 	d.checkCoverage(doc, req)
 	d.checkDependencies(doc)
-	for _, check := range runContractShapeChecks {
+	for _, check := range append([]func(createRunRequest) *runRefusal{runModeConflictRefusal}, runContractShapeChecks...) {
 		if refusal := check(req); refusal != nil {
 			d.add("intent", refusal.body.Reason, refusal.body.Error)
 		}
@@ -265,27 +267,24 @@ func (d *templateDecoder) checkCoverage(doc client.TemplateDocument, req createR
 // written per run and is not one of them. TestTemplateFullCoverage holds each.
 func templateFullGaps(doc client.TemplateDocument, req createRunRequest) []string {
 	var gaps []string
-	if !doc.Intent.Has("interactive") {
-		gaps = append(gaps, "a full template says whether the run is a background task or an interactive environment (interactive)")
-	} else if !req.Interactive {
+	switch {
+	case doc.Intent.Has("experience"):
+		if req.Experience == client.ExperienceBackground && !doc.Intent.Has("workload") {
+			gaps = append(gaps, "a full background template says whether it runs an agent task or a command (workload)")
+		}
+	case !doc.Intent.Has("interactive"):
+		gaps = append(gaps, "a full template says whether the run is a background task or an interactive environment (experience)")
+	case !req.Interactive:
 		if !doc.Intent.Has("task_mode") {
 			gaps = append(gaps, "a full background template says whether it runs an agent task or a command (task_mode)")
 		} else if req.TaskMode != "exec" && !doc.Intent.Has("agent") {
 			gaps = append(gaps, "a full agent-task template names its agent")
 		}
 	}
-	if !templateAttachesAnything(req) {
+	if !runAttachesAnything(req) && !req.NoRepositoriesOrDrives {
 		gaps = append(gaps, "a full template attaches a repository or drive, or says there are none (no_repositories_or_drives)")
 	}
 	return gaps
-}
-
-func templateAttachesAnything(req createRunRequest) bool {
-	if req.Repo != "" || req.WorkspaceID != nil || len(req.Workspaces) > 0 || (req.Drive != nil && req.Drive.Enabled) {
-		return true
-	}
-	p := req.InlinePolicy
-	return p != nil && (len(p.WorkspaceMounts) > 0 || len(p.WorkspaceRepos) > 0)
 }
 
 func (d *templateDecoder) checkDependencies(doc client.TemplateDocument) {
@@ -312,6 +311,9 @@ func (d *templateDecoder) checkAvailable(req createRunRequest) {
 	}
 	if req.RunnerPoolID != "" {
 		refuse("intent.runner_pool_id")
+	}
+	if path, what := runModeUnavailable(req); what != "" {
+		refuse("intent." + path)
 	}
 	if req.AllowedImage != "" {
 		refuse("intent.allowed_image")

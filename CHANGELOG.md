@@ -58,6 +58,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Repoint any dashboard or SIEM rule on `auth.member_mode` to `auth.user_view.set` (#623).
 - Migration `0146_audit_retention_drop_actor_type` replaces `audit_retention_drop` with a four-argument form so an
   admin-token drop records its actor type; no data changes (#1978).
+- Migration `0153_run_experience` adds `agent_runs.experience`, the run mode a new client chose at launch; existing
+  runs keep an empty value and their documented behaviour.
 
 ### Added
 
@@ -161,6 +163,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   removed from every use policy (an emptied policy permits nobody); deleting a pool clears the organisation default
   that named it. Pool `limits` are refused on create and update until limits are stored. Audit actions
   `runner_pool.*`, `person.runner_pool_default.set|delete`.
+- New Run run mode: a request chooses `experience` (background or interactive), with its workload, included tools,
+  one startup choice, one starting folder and an explicit "no repositories or drives". The console and the CLI's
+  run-mode flags mark requests `mode_contract: "0.9"`, so an unset mode is refused instead of inferred; older
+  requests keep their documented behaviour.
+- Push rules are carried per source-control entry (provider host and canonical organisation; a remote that cannot be
+  read exactly is refused) and tool rules per included harness; a request's rules can only narrow. A background task
+  has no idle stop from any source, and the idle reaper skips it. Presets refuse run-mode fields until run templates
+  replace them, and the proxy refuses rules carried two ways.
 
 ### Changed
 

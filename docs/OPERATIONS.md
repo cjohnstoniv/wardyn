@@ -3706,6 +3706,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0150` (`0150_runner_action_binding`) adds binding columns to `runner_pending_actions` (`0139`'s table) and is a later
   `CREATE OR REPLACE` of its immutability trigger function.
 - `0151` (`0151_runner_revoked_by`) adds `runners.revoked_by` and `runners.revoke_reason` (`0139`'s table).
+- `0153` (`0153_run_experience`) adds `agent_runs.experience` (`0141`'s table), the run mode a new client chose at launch.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
