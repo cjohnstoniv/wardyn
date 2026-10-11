@@ -285,3 +285,53 @@ func outputUnacknowledgedWriteIsBounded(t *testing.T) {
 		t.Fatalf("state after a dropped part: %v", err)
 	}
 }
+
+// Each copy into the buffer is one drain: output completes when the last one
+// ends, and keeps the first drain's error.
+func TestOutputBufferCompletesAfterLastDrain(t *testing.T) {
+	b := outputFixture(t)
+	first, second := runner.BeginOutputDrain(b), runner.BeginOutputDrain(b)
+	if _, err := b.Write([]byte("selftest\n")); err != nil {
+		t.Fatal(err)
+	}
+	first(errors.New("first copy failed"))
+	if _, err := b.Write([]byte("task\n")); err != nil {
+		t.Fatalf("write after the first drain ended: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	scratch := make([]byte, 64)
+	if _, err := b.read(ctx, int64(len("selftest\ntask\n")), scratch); !errors.Is(err, context.Canceled) {
+		t.Fatalf("output ended with a drain still open: %v", err)
+	}
+	second(nil)
+	n, err := b.read(t.Context(), 0, scratch)
+	if err != nil || string(scratch[:n]) != "selftest\ntask\n" {
+		t.Fatalf("read=%q,%v", scratch[:n], err)
+	}
+	if _, err = b.read(t.Context(), int64(n), scratch); err == nil || err.Error() != "first copy failed" {
+		t.Fatalf("end=%v, want the first drain's error", err)
+	}
+}
+
+// A single drain, or an end with no begin, completes the output as before.
+func TestOutputBufferSingleDrainCompletes(t *testing.T) {
+	for _, begin := range []bool{true, false} {
+		b := outputFixture(t)
+		end := b.EndDrain
+		if begin {
+			end = runner.BeginOutputDrain(b)
+		}
+		if _, err := b.Write([]byte("out")); err != nil {
+			t.Fatal(err)
+		}
+		end(nil)
+		scratch := make([]byte, 8)
+		if _, err := b.read(t.Context(), 3, scratch); !errors.Is(err, io.EOF) {
+			t.Fatalf("begin=%v end=%v", begin, err)
+		}
+		if _, err := b.Write([]byte("late")); !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("begin=%v late write=%v", begin, err)
+		}
+	}
+}
