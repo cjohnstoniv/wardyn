@@ -36,8 +36,8 @@ func (s *Sealer) sealsActor(ev types.AuditEvent) bool {
 // already a subject, and not an action whose row must stay readable after the
 // erasure it records.
 func (s *Sealer) sealsTarget(ev types.AuditEvent) bool {
-	return s.SealActor && s.Subjects != nil && slices.Contains(personTargetActions, ev.Action) && ev.Target != "" &&
-		!strings.HasPrefix(ev.Target, SubjectActorPrefix) && !slices.Contains(UnsealedActions, ev.Action)
+	return s.SealActor && s.Subjects != nil && SealsTarget(ev.Action) && ev.Target != "" &&
+		!strings.HasPrefix(ev.Target, SubjectActorPrefix)
 }
 
 // principalOf resolves a name an event carries (an email form, an entra:

@@ -791,6 +791,7 @@ These are emitted by background sweepers, not request handlers — `ActorType` i
 - A reader shows the person while no key of theirs was destroyed after the row was written, and `[erased]` after.
 - `?target=<person>` on `GET /audit` and `GET /audit/export` matches both the person's name (rows written before `full` was on) and their subject.
 - A person with no identity row keeps their name in `target`, as in `actor`; so does a `session.revoke` row for `*` (everyone).
+- **SIEM rules keyed on `target` for these actions see subject ids**; the sinks never see the name.
 - Left in the clear because their target is not always a person: `ssh_key.delete` (a key fingerprint, or the principal an admin cleared) and `key_domain.assignment.set` and `key_domain.assignment.delete` (`user:<principal>`, `group:<name>` or `all`).
 - Left in the clear because it records an erasure: `person.erasure`, `credential.erase` and `principal_key.destroyed`.
 - Left in the clear because the target is an id, not a person: `person.deprovision`, `scim.user.write`, `scim.user.deactivate`, `scim.group.member_remove`, `identity.unbind` and `token.create`.
