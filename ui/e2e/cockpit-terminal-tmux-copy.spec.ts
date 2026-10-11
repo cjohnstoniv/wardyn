@@ -16,7 +16,7 @@ import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { findRunningFixture, stubInteractiveRun } from "./attach-stub";
 import { clickCell, dragCells, rowOf, settledGrid } from "./terminal-grid";
-import { termText } from "./terminal-text";
+import { termText, waitForShell } from "./terminal-text";
 
 async function open(page: Page) {
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -30,21 +30,7 @@ async function open(page: Page) {
   await expect(screen).toBeVisible();
   const read = async () => (await termText(screen).catch(() => "")) as string;
   await screen.click();
-  // Typing is retried: a fresh attach can be admitted read-only for a moment.
-  await expect
-    .poll(
-      async () => {
-        if (!(await read()).includes("ready-sentinel")) {
-          await screen.click();
-          await page.keyboard.type("printf 'ready-%s\\n' sentinel");
-          await page.keyboard.press("Enter");
-        }
-        await page.waitForTimeout(500);
-        return (await read()).includes("ready-sentinel");
-      },
-      { timeout: 30_000 },
-    )
-    .toBe(true);
+  await waitForShell(page, screen);
   return { screen, read };
 }
 const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
@@ -54,13 +40,13 @@ test("a dragged line becomes an offer, and Copy writes exactly what was selected
   await page.keyboard.type("printf 'alpha beta gamma\\n'");
   await page.keyboard.press("Enter");
   await expect.poll(async () => (await read()).split("\n").some((l) => l.trim() === "alpha beta gamma")).toBe(true);
-  const grid = await settledGrid(page, screen);
+  await settledGrid(page, screen);
   const row = await rowOf(screen, /^alpha beta gamma\s*$/);
 
   // Nothing was copied by tmux's own copy path alone.
   expect(await clipboard(page)).toBe("");
   // Released on the blank cell after the text: tmux copies up to the cell before it.
-  await dragCells(page, screen, grid, [0, row], [16, row]);
+  await dragCells(page, screen, [0, row], [16, row]);
   const offer = page.getByTestId("terminal-copy-offer");
   await expect(offer).toBeVisible();
   await expect(page.getByTestId("terminal-copy-offer-text")).toHaveText("alpha beta gamma");
@@ -75,17 +61,17 @@ test("a double-click copies the word and a triple-click the line", async ({ page
   await page.keyboard.type("printf 'alpha beta gamma\\n'");
   await page.keyboard.press("Enter");
   await expect.poll(async () => (await read()).split("\n").some((l) => l.trim() === "alpha beta gamma")).toBe(true);
-  const grid = await settledGrid(page, screen);
+  await settledGrid(page, screen);
   const row = await rowOf(screen, /^alpha beta gamma\s*$/);
   const offer = page.getByTestId("terminal-copy-offer");
   const text = page.getByTestId("terminal-copy-offer-text");
 
-  await clickCell(page, screen, grid, [7, row], 2); // inside "beta"
+  await clickCell(page, screen, [7, row], 2); // inside "beta"
   await expect(text).toHaveText("beta");
   await offer.getByRole("button", { name: "Dismiss" }).click();
   await expect(offer).toHaveCount(0);
 
-  await clickCell(page, screen, grid, [7, row], 3);
+  await clickCell(page, screen, [7, row], 3);
   await expect(text).toHaveText("alpha beta gamma");
   await offer.getByRole("button", { name: "Copy" }).click();
   expect(await clipboard(page)).toBe("alpha beta gamma");

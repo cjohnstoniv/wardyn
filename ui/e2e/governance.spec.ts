@@ -74,8 +74,10 @@ import { SPEC_LABEL } from "./policy-source";
 //
 // Serial: one backend, one profiles table. The walk builds state the later
 // blocks read, and a mutating test must never run beside an assertion about
-// the same rows.
-test.describe.configure({ mode: "serial" });
+// the same rows. A retry re-runs the walk from its first test against the rows
+// the earlier attempt wrote, so a retry can only fail or misreport the first
+// test as flaky; a failure here must be read on the test that failed.
+test.describe.configure({ mode: "serial", retries: 0 });
 
 const NAME = "walled";
 const GROUP = "eng-contractors";
