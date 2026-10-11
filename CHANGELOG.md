@@ -248,9 +248,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- Registered runners: a live run's output keeps flowing after a wardynd restart; attach and exec reach only
+  sandboxes the runner created; a damaged output directory is named in the start error; a retired run's settled
+  output is released.
+- `wardyn run --experience` refuses `--model-provider` where no `--agent` would carry it, instead of dropping it.
+- The AWS KMS key service boots when `AWS_CA_BUNDLE` (or a shared-config `ca_bundle`) is set; corporate-CA installs
+  no longer fail at startup.
+- A runner reporting a run the organisation has no row for (erased, or restored over) no longer blocks its other
+  runs: that run is contained by a kill and an asserted quarantine. Past 100 such runs the runner is held not-ready
+  and `runner.inventory.hold` is audited. The runner deletes their local evidence 90 days after the quarantine or at
+  revocation; the organisation deletes their action rows 90 days after the quarantine succeeded. Migration
+  `0155_runner_asserted_subjects` alters `runner_pending_actions` only.
 - A runner link survives a cancelled request instead of dropping every stream, and a link whose writes stall now
   fails by keepalive; connection credit is no longer lost for data that arrives after a stream ends; a trailing
-  slash on `WARDYN_CONTROL_PLANE_URL` no longer breaks the proxy's internal calls.
+  slash on `WARDYN_CONTROL_PLANE_URL` no longer breaks the proxy's internal calls; the runner link's keepalive is no
+  longer affected by wall-clock steps.
 - SSO sign-in works when the public issuer is https and the internal issuer is plain http (mesh opt-out); IdP
   token and key requests time out after 10s; a sign-in refused for no matching role is logged.
 - Record Mode no longer counts a network fault (`builtin:dial-failed`, `builtin:tunnel-failed`) as a policy denial,
