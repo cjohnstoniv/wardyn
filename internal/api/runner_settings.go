@@ -42,12 +42,16 @@ func (s *Server) handleGetRunnerSettings(w http.ResponseWriter, r *http.Request)
 
 // runnersEnableRefusal is why runners cannot be turned on now, or "". The public organisation URL
 // that runner identities are bound to must be HTTPS (loopback http for development), and so must the
-// control-plane URL the relay carries bearers over.
+// control-plane URL the relay carries bearers over. An unset one is refused too: a runner's runs reach
+// the org only through the relay, and with no control-plane URL there is no internal listener to serve it.
 func (s *Server) runnersEnableRefusal() string {
 	if federation.CheckOrgURL(s.cfg.RunnerOrgURL) != nil {
 		return "set WARDYN_RUNNER_ORG_URL to this organisation's public HTTPS URL (http is accepted only for localhost)"
 	}
-	if s.cfg.ControlPlaneURL != "" && hoptls.CheckURL(s.cfg.ControlPlaneURL) != nil {
+	if s.cfg.ControlPlaneURL == "" {
+		return "set WARDYN_CONTROL_PLANE_URL to the internal TLS listener; a runner's runs reach it through the runner's relay"
+	}
+	if hoptls.CheckURL(s.cfg.ControlPlaneURL) != nil {
 		return "WARDYN_CONTROL_PLANE_URL is plain http:// to a non-loopback host; point it at the internal TLS listener"
 	}
 	return ""
