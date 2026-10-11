@@ -130,13 +130,34 @@ export function pushRuleKey(p: Pick<PushRuleOverride, "provider" | "org"> & { ho
   const lower = org.toLowerCase();
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(lower)) return "";
   const host = canonicalPushHost(p.provider, p.host ?? "");
-  return host === "" ? "" : `${host}/${lower}`;
+  if (host === null) return "";
+  // An {org}.visualstudio.com host names its own organisation; a different one contradicts it.
+  if (host.org !== "" && host.org !== lower) return "";
+  return `${host.host}/${lower}`;
 }
 
-function canonicalPushHost(provider: "github" | "azure_devops", host: string): string {
-  if (host === "") return provider === "github" ? "github.com" : "dev.azure.com";
-  const h = host.normalize("NFKC").toLowerCase().replace(/^ssh\./, "");
-  return h.length <= 253 && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/.test(h) ? h : "";
+/**
+ * The host's canonical spelling (Go: canonicalPushHostOrg). A host outside ASCII
+ * is refused before anything is lower-cased or normalised, ssh.github.com and
+ * ssh.dev.azure.com fold into the https host, and an Azure DevOps remote's legacy
+ * hosts fold into dev.azure.com (a subdomain host also names the organisation).
+ */
+function canonicalPushHost(provider: "github" | "azure_devops", host: string): { host: string; org: string } | null {
+  if (host === "") return { host: provider === "github" ? "github.com" : "dev.azure.com", org: "" };
+  if (/[^\x00-\x7f]/.test(host)) return null;
+  let h = host.toLowerCase();
+  if (h === "ssh.github.com") h = "github.com";
+  else if (h === "ssh.dev.azure.com") h = "dev.azure.com";
+  if (h.length > 253 || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/.test(h)) return null;
+  let org = "";
+  if (provider === "azure_devops") {
+    if (h === "vs-ssh.visualstudio.com") h = "dev.azure.com";
+    else if (h.endsWith(".visualstudio.com")) {
+      org = h.slice(0, -".visualstudio.com".length);
+      h = "dev.azure.com";
+    }
+  }
+  return { host: h, org };
 }
 
 const hasAgentEdit = (a: AgentOverrides): boolean =>

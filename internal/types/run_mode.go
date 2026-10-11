@@ -80,7 +80,13 @@ func (s PushRuleSet) Key() string {
 // to another entry's. A remote whose entry cannot be derived is an error, and the
 // caller refuses the push rather than treating it as having no rules.
 func PushRulesForRemote(sets []PushRuleSet, provider, remote string) (spec PushRulesSpec, found bool, err error) {
-	host, org, err := PushRuleEntryOfRemote(provider, remote)
+	return PushRulesForRemoteAt(sets, provider, remote, "")
+}
+
+// PushRulesForRemoteAt is PushRulesForRemote for a provider row whose Azure DevOps
+// Server lives under basePath (for example "/tfs").
+func PushRulesForRemoteAt(sets []PushRuleSet, provider, remote, basePath string) (spec PushRulesSpec, found bool, err error) {
+	host, org, err := PushRuleEntryOfRemoteAt(provider, remote, basePath)
 	if err != nil {
 		return PushRulesSpec{}, false, err
 	}

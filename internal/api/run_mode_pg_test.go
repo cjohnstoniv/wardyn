@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -72,8 +74,10 @@ func TestPG_CreateRunStoresTheChosenExperienceOnly(t *testing.T) {
 func TestPG_ABackgroundRunHasNoIdleStopFromAnySource(t *testing.T) {
 	srv, pool := pgHarness(t)
 	srv.cfg.DefaultPolicy.AutoStopAfterSec = 1800
+	// A policy name is unique in the database, so a reused database must not meet last run's.
+	polName := "idle-900-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	w := do(t, srv, http.MethodPost, "/api/v1/policies", adminToken,
-		`{"name":"idle-900","spec":{"allowed_domains":["api.anthropic.com"],"min_confinement_class":"CC2","auto_stop_after_sec":900}}`)
+		`{"name":"`+polName+`","spec":{"allowed_domains":["api.anthropic.com"],"min_confinement_class":"CC2","auto_stop_after_sec":900}}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create policy = %d %s", w.Code, w.Body.String())
 	}
