@@ -65,7 +65,7 @@ var backgroundDoors = []backgroundDoor{
 	{Door: "interactive exec", Owner: "H4", Symbols: []string{"establishExec"}},
 	{Door: "SSH access", Owner: "SSH gateway owner", Symbols: []string{"sshAuth", "handleSSHSessionChannel", "handleSSHDirectTCPIP"}},
 	{Door: "web application gateway", Owner: "UI gateway owner", Symbols: []string{"handleUIEnter", "handleUIRelay", "handleUIBind"}},
-	{Door: "desktop", Owner: "D-117 (no desktop surface exists yet; its first owner adds the symbols here)"},
+	{Door: "desktop", Owner: "C-mode-doors (no desktop surface exists yet; its first owner adds the symbols here)"},
 }
 
 // passiveRunRoutes are the /runs/{id} routes that are not interactive doors: they
