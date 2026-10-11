@@ -127,6 +127,18 @@ func (d *Driver) recordCmd(runID uuid.UUID, castDir string, argv []string) []str
 // When recording, the argv is wrapped by wardyn-rec (which execs asciinema or
 // falls back to a .log). Returns once the process is started, not finished.
 func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, error) {
+	return d.exec(ctx, ref, argv, nil)
+}
+
+// ExecTo is Exec with this one exec's output copied into out instead of the
+// sandbox's ExecOutput. out is closed when the copy ends, if it is an
+// io.Closer. An exec-less sandbox has no exec of its own, so its output stays
+// the main process's.
+func (d *Driver) ExecTo(ctx context.Context, ref string, argv []string, out io.Writer) (string, error) {
+	return d.exec(ctx, ref, argv, out)
+}
+
+func (d *Driver) exec(ctx context.Context, ref string, argv []string, out io.Writer) (string, error) {
 	if len(argv) == 0 {
 		return "", errors.New("docker: exec: empty argv")
 	}
@@ -184,7 +196,10 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 	resp := attachRes.HijackedResponse
 	// We do not block on the process; drain in the background so the PTY does
 	// not stall, teeing it into the run's output tail when it keeps one.
-	w := d.execOutput(ref)
+	w := out
+	if w == nil {
+		w = d.execOutput(ref)
+	}
 	endDrain := runner.BeginOutputDrain(w)
 	go func() {
 		defer resp.Close()
@@ -532,13 +547,7 @@ func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) 
 	return statusFromInspect(res.Container), nil
 }
 
-// mainProcessExecID is the sentinel internal/api/runs_dispatch.go persists
-// for an EXEC-LESS launch (krun runtime: Exec returns "" with a nil error
-// since the workload runs as the container's own main process, not a
-// separate exec — see runAsMainProcess). Duplicated here rather than
-// imported: internal/api sits above this concrete substrate and must stay
-// target-agnostic. MUST match the literal in runs_dispatch.go.
-const mainProcessExecID = "main-process"
+const mainProcessExecID = runner.MainProcessExecID
 
 // AgentStatus reports the agent's liveness in a restart-safe way. For an
 // exec-based ref (agentExecID != "" and not the mainProcessExecID sentinel)

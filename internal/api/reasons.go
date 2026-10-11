@@ -154,6 +154,13 @@ const (
 	// capability neither request field can fix).
 	reasonImageDevcontainerExclusive = "image_devcontainer_exclusive" // image and devcontainer_repo were both set
 	reasonImageBuilderUnavailable    = "image_builder_unavailable"    // a custom image was requested but this control plane has no image builder wired
+	// The 0.9 run-mode contract (run_mode.go): what a person is starting. The
+	// sentences are run_mode_refusals.go's, with a TypeScript twin.
+	reasonRunModeRequired    = "run_mode_required"    // a new client's mode or background workload is unset, and is never inferred
+	reasonRunModeInvalid     = "run_mode_invalid"     // a run-mode carrier is malformed
+	reasonRunModeConflict    = "run_mode_conflict"    // run-mode carriers contradict each other, or an older field that replaced them
+	reasonStartFolderInvalid = "start_folder_invalid" // start_folder is malformed, names an attachment the run lacks, or escapes its mount
+	reasonRunBackgroundOnly  = "run_background_only"  // a background run has no interactive door: attach, exec, SSH, UI gateway, desktop
 	// validateWorkspaceSources / authorizeSpecWorkspaceSources (#656 M1: split
 	// from reasonWorkspaceSourcesInvalid/reasonWorkspaceSourcesUnauthorized —
 	// except the not-onboarded arm, which STAYS one shared reason across both
@@ -197,6 +204,7 @@ const (
 	reasonStatusNeedsRequiresView   = "status_needs_requires_view"   // status=needs requires view=user or view=admin
 	reasonInvalidEndedWithinParam   = "invalid_ended_within_param"   // ?ended_within= is not one of the closed durations
 	reasonInvalidIncludeKilledParam = "invalid_include_killed_param" // ?include_killed= is not "", "0", or "1"
+	reasonInvalidNoEndParam         = "invalid_no_end_param"         // ?no_end= is not "", "0", or "1"
 	reasonRunsSearchQueryTooLong    = "runs_search_query_too_long"   // ?q= exceeds the maximum search length
 	reasonInvalidLimitParam         = "invalid_limit_param"          // ?limit= does not parse as a non-negative integer
 	reasonInvalidOffsetParam        = "invalid_offset_param"         // ?offset= does not parse as a non-negative integer
@@ -234,6 +242,7 @@ const (
 	reasonSiteConfigInvalid                 = "site_config_invalid"                    // the submitted config fails one of validateAgentProviders/validateSiteConfig/validateModelProviders/validateDefaultProviders/validateModelProviderImagePrereqs
 	reasonSiteConfigStale                   = "site_config_stale"                      // If-Match does not match the current site-config ETag
 	reasonSiteConfigEgressViaOwnRoute       = "site_config_egress_via_own_route"       // a changed egress block was named inline instead of through PUT /governance/egress-baseline
+	reasonSiteConfigRunnersViaOwnRoute      = "site_config_runners_via_own_route"      // a changed runners.enabled was named inline instead of through PUT /runners/settings
 
 	// GET/PUT /governance/egress-baseline.
 	reasonEgressBaselineInvalid = "egress_baseline_invalid" // a baseline host is not an exact hostname, or the set is too large
@@ -306,6 +315,27 @@ const (
 	reasonAPITokenTTLInvalid         = "api_token_ttl_invalid"          // ttl_seconds is negative or implausibly large
 	reasonAPITokenCapReached         = "api_token_cap_reached"          // the principal already holds the maximum number of live tokens
 	reasonSessionsRevokeParamInvalid = "sessions_revoke_param_invalid"  // the body must set exactly one of sub/all
+
+	// /api/v1/invitations and /api/v1/me/invitations (#1508).
+	reasonInvitationTargetInvalid    = "invitation_target_invalid"     // the principal is not a subject, or is reserved, or is a service: principal
+	reasonInvitationTargetUnknown    = "invitation_target_unknown"     // no person row and no bound identity has that principal
+	reasonInvitationReplacesInvalid  = "invitation_replaces_invalid"   // replaces_token_id is not a live admin-minted token of the target
+	reasonInvitationTTLInvalid       = "invitation_ttl_invalid"        // expires_in_seconds is outside 1 s to 14 d, or token_ttl_seconds is negative
+	reasonInvitationCapReached       = "invitation_cap_reached"        // the target already has the maximum pending invitations
+	reasonInvitationNotFound         = "invitation_not_found"          // no invitation by that id that this caller may act on
+	reasonInvitationNotPending       = "invitation_not_pending"        // the invitation was claimed, revoked or expired
+	reasonInvitationListParamInvalid = "invitation_list_param_invalid" // GET /invitations: state is not one the endpoint accepts
+
+	// /api/v1/service-identities and /api/v1/me/service-identities (#1508).
+	reasonServiceIdentityNameInvalid        = "service_identity_name_invalid"        // the name does not match ^[a-z][a-z0-9-]{2,62}$
+	reasonServiceIdentityNameTaken          = "service_identity_name_taken"          // a service identity or a principal-keyed table already holds the name
+	reasonServiceIdentitySponsorInvalid     = "service_identity_sponsor_invalid"     // the sponsor is not exactly a bound, non-deactivated person's principal
+	reasonServiceIdentityNotFound           = "service_identity_not_found"           // no service identity by that name that this caller may act on
+	reasonServiceIdentityInactive           = "service_identity_inactive"            // the service identity is suspended or retired, or its sponsor's session is not live
+	reasonServiceIdentityDescriptionInvalid = "service_identity_description_invalid" // the description exceeds 200 characters or has a control character
+	reasonServiceIdentityUserTypeUnknown    = "service_identity_user_type_unknown"   // the user type does not exist on this deployment
+	reasonServiceIdentityPatchEmpty         = "service_identity_patch_empty"         // PATCH named none of description, sponsor or suspended
+	reasonNeedsSSO                          = "needs_sso"                            // service identities need SSO: local mode has no sponsor to bind
 
 	// /api/v1/access (role-mapping admin).
 	reasonSSONotConfigured             = "sso_not_configured"               // the route needs OIDC, and this deployment has none configured

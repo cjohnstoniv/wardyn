@@ -22,6 +22,18 @@
     "runner",
     "scm_provider"
   ],
+  "with_aws_kms_static_key": [
+    "agent_image",
+    "claude_signin_image",
+    "env_builder",
+    "host_proxy",
+    "kek_service",
+    "kek_service_static_key",
+    "llm_provider",
+    "platform_split",
+    "runner",
+    "scm_provider"
+  ],
   "with_github_app_secrets": [
     "age_key",
     "agent_image",

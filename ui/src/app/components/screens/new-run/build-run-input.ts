@@ -26,7 +26,7 @@ export interface RunInputParams {
 /** Returns no request when the active policy mode cannot represent the selections. */
 export function buildRunInput({
   state, workspaces, modelProviders, policyMode, ccTouched, merged, activeSections = NO_ACTIVE_SECTIONS,
-}: RunInputParams): (CreateRunInputWithComposition & { inline_policy?: RunPolicySpec }) | null {
+}: RunInputParams): (CreateRunInputWithComposition & { inline_policy?: RunPolicySpec; mode_contract?: "0.9" }) | null {
   if (referenceLaneDropsWorkspace(policyMode, state.workspaces.length)) return null;
   if (policyMode === "saved" && !state.selectedPolicyId) return null;
 
@@ -34,6 +34,8 @@ export function buildRunInput({
   const sized = ccTouched ? built : { ...built, confinement_class: undefined };
   // Same body on all three doors; none when the run carries none.
   const withComponents = state.components.length ? { ...sized, components: state.components } : sized;
+  // No mode_contract marker: the console has no experience control yet, and the marker makes
+  // the server refuse an unset experience (run_mode_required). Lane A-L8 re-adds it together with that control.
   const run = { ...withComponents, ...buildRunContractWire(state.contract, activeSections) };
   // A saved ID may survive a mode switch; only the active mode chooses the policy.
   if (policyMode === "custom") return merged ? { ...run, inline_policy: merged.spec } : null;

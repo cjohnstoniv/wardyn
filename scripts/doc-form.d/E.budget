@@ -1,4 +1,18 @@
 # Prose must not grow beyond the base count (29985) plus cell-expansion headings (190 headings, 198 words) and their one-sentence summaries (189 cells, 5178 words); the page measures 29899 without them. Itemised in lane-reports/docs/E-worker.md.
 # docs/ENV.md 35321 adds 46: 34 (WARDYN_ALLOW_USER_ENV_SECRET governs `file_secret` too, and a component's delivery is not governed by it), 10 (the `file_secret` residency sentence), 2 (summary row), and the deprecated switch name in the boot-read list becomes the current one (0 words).
 # docs/ENV.md 35393 adds 72 (0.9 SSH lane): the WARDYN_SSH_MAX_SESSIONS_PER_RUN row and details section (48), and one row each for the two SSH env-request names the sync subsystem reads, which the env-doc guard treats as reads (24).
-docs/ENV.md=35393 share=5
+# docs/ENV.md 35607 adds 214 (0.9 AWS KMS key service): the WARDYN_AWS_KMS_KEY row and details section, and the awskms value in the WARDYN_KEK, WARDYN_KEK_REQUIRED and one-key-service lines.
+# docs/ENV.md 35619 adds 12 (AWS KMS r1 fixes): the KMS client's proxy and CA line, and the link-local hosts the daemon proxy bypasses.
+# docs/ENV.md=35673 adds 280 (0.9 F-1513): the Acknowledged delivery subsection (acknowledged SIEM delivery, #1513), including the redirect halt, the re-enable backlog and the no-manual-grant sentences.
+# docs/ENV.md 35899 measured after F-1513 merge.
+# docs/ENV.md 35973 adds 74 (0.9 G-sec-rest): WARDYN_KEK_REQUIRED covers new writes only and names the kek_local_rows row (#1977), and only the pinned codex is supported (#1979).
+# docs/ENV.md 35435 adds 42 over 35393 (0.9 F-1514): the WARDYN_REHEARSE_PG_DSN row, which the env-doc guard requires for the rehearsal's scratch database.
+# docs/ENV.md 36015 measured after F-1514 merge.
+# 0.9 G-seal-target (#1828): docs/ENV.md 36057 adds 42 over 36015 for the target sentence in the WARDYN_AUDIT_SEAL table cell and its details bullet.
+# docs/ENV.md 36046 adds 31 (0.9 F-588 M1): awskms in the store-mode and key-service lines, the AWS KMS link, and the AWS_CA_BUNDLE bullet.
+# docs/ENV.md 36090 measured after F-588 M1 merge.
+# WARDYN_RUN_MAX_AGE is every new run's lifetime cap (#1319): +85 measured words.
+# docs/ENV.md 36185 measured after D-1319 S1 merge.
+# docs/ENV.md 36115 adds 25 (0.9 F-588 M2): chart kek.awskms.key on the WARDYN_AWS_KMS_KEY row and section, and the WARDYN_TEST_AWS_KMS_KEY list entry.
+# docs/ENV.md 36210 measured after F-588 M2 merge.
+docs/ENV.md=36210 share=5

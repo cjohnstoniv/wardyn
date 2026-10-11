@@ -182,8 +182,8 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 	floor := confinementFloorSpec(f.spec, f.comps)
 	if f.mode == foldCreate {
 		var ok bool
-		f.enforced, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, floor, f.reqCC, f.baseline)
-		return ok
+		f.enforced, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, requestPlacement(*f.req), requestRunnerID(*f.req), floor, f.reqCC, f.baseline, f.place.offeredClasses())
+		return ok && !f.place.barrierRefusal(f.enforced).write(s, f.w, f.r)
 	}
 	var advertised []types.ConfinementClass
 	if f.mode == foldPreflight {
@@ -193,7 +193,12 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 			return false
 		}
 		f.reqCC = reqCC
-		advertised = s.advertisedConfinement(f.r.Context())
+		advertised = s.advertisedConfinement(f.r.Context(), *f.req)
+	}
+	// A pooled run's default class comes from its candidates at every door, the preview included, so the
+	// three doors promise one barrier.
+	if offered := f.place.offeredClasses(); offered != nil {
+		advertised = offered
 	}
 	enforced, err := enforcedConfinement(floor, f.reqCC, advertised, f.baseline)
 	if err != nil {
@@ -201,7 +206,16 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 		return false
 	}
 	f.enforced = enforced
-	return true
+	return !f.place.barrierRefusal(enforced).write(s, f.w, f.r)
+}
+
+// stepPlacementCapability refuses a request whose own shape demands an optional
+// runner interface the placement it gets does not implement (design 3.4), so
+// the demand is never silently dropped. A runner that cannot answer is refused
+// runner_offline. The remote placement is the deployment's own executor and is
+// not asked.
+func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
+	return !s.placementCapabilityRefusal(f.r.Context(), *f.req, f.ceiling).write(s, f.w, f.r)
 }
 
 // stepModelProvider makes the model-provider choice and refuses one whose
@@ -258,6 +272,15 @@ func (s *Server) stepAutonomy(f *runFold, rec *foldRecorder) bool {
 	return ok
 }
 
+// stepRunEnd decides the run's end and its lifetime cap against the pool,
+// governance and the deployment (run_end_create.go); a refusal is the same at
+// every door and leaves no row.
+func (s *Server) stepRunEnd(f *runFold, rec *foldRecorder) bool {
+	var refusal *runRefusal
+	f.end, refusal = s.resolveCreateEnd(f.r, *f.req, f.ceiling)
+	return !refusal.write(s, f.w, f.r)
+}
+
 // stepADOStanding bounds a member's Azure DevOps list (#1384); the narrowing is
 // said out loud at every door. A list that leaves nothing standing is
 // dispatch's refusal at create, which the dry doors answer before the click.
@@ -307,10 +330,39 @@ func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
 	return !refused
 }
 
+// stepPlacementDenied is the deny_placements door: a request whose placement the
+// caller's governance profile denies is refused 403 placement_denied, naming
+// the profile, before any local-eligibility work. An unassigned member has no
+// profile and an operator's runs stand outside governance, so for both the list
+// is absent and every placement is permitted.
+func (s *Server) stepPlacementDenied(f *runFold, rec *foldRecorder) bool {
+	return !s.placementDeniedRefusal(f.r.Context(), requestPlacement(*f.req), f.ceiling).write(s, f.w, f.r)
+}
+
 // stepLocalEligibility is before confinement/provider liveness: create may
 // renew a one-use AWS credential there. No local refusal may reach that phase.
 // The admitted plan supplies specific refusals; final unsupported-local stays
 // before mint/persistence until the resolver and runner route are implemented.
 func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
-	return !s.localPlacementRefusal(f.r, *f.req, f.spec, f.ceiling, f.comps, f.driveMount, f.wsRefs).write(s, f.w, f.r)
+	// A self-hosted pool decides the placement when the request left it out.
+	req := *f.req
+	if f.place.pooled {
+		req.Placement = f.place.placement
+	}
+	return !s.localPlacementRefusal(f.r, req, f.spec, f.ceiling, f.comps, f.driveMount, f.wsRefs).write(s, f.w, f.r)
+}
+
+// stepPlacement runs after the components and before the local-eligibility step: the confinement
+// floor it reads is the policy's and the components', and the plan it gates is the one that step judges.
+func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
+	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true}
+	if f.mode == foldPreflight { // preflight parses the class inside stepConfinement, after this step
+		in.reqCC, in.reqCCOK = parseConfinementClass(f.req.ConfinementClass)
+	}
+	plan, refusal := s.resolvePlacement(f.r.Context(), in)
+	if refusal.write(s, f.w, f.r) {
+		return false
+	}
+	f.place = plan
+	return true
 }

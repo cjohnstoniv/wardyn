@@ -20,6 +20,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -210,10 +211,13 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr := s.reviveOwnerRecheck(ctx, run, cfg, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
+	if rerr := s.reviveCapPrecheck(ctx, run, rebooted); rerr != nil {
+		return reviveResult{}, rerr
+	}
 	retiring := cfg.RunToken
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, run.ID, runIdentitySubject(ctx, run.CreatedBy), run.CreatedBy, internalAudience, run.OperatorOwned)
-	if err != nil {
-		return reviveResult{}, reviveRefused(http.StatusInternalServerError, reasonReviveMintIdentityFailed, "mint run identity: "+err.Error())
+	id, rerr := s.reviveMintIdentity(ctx, run)
+	if rerr != nil {
+		return reviveResult{}, rerr
 	}
 	cfg.RunToken = id.Token
 	cfgJSON, err := json.Marshal(cfg)
@@ -336,6 +340,25 @@ func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run 
 	}
 	if !claimed {
 		return reviveRefused(http.StatusConflict, reasonReviveRunChanged, "the run changed while it was being revived (it ended, was lost or was revived); try again")
+	}
+	return nil
+}
+
+// reviveCapPrecheck refuses, before an identity is minted or the proxy image pulled, a revive that
+// would start an agent while the deployment is at its cap. Lock-free and advisory: claimRevive's
+// count under the cap lock stays the authority on a race. run is never counted, since an
+// outage-kept run whose agent stopped can still read as holding a slot itself.
+func (s *Server) reviveCapPrecheck(ctx context.Context, run types.AgentRun, startsAgent bool) *reviveError {
+	c, ok := s.cfg.Store.(runCounter)
+	if !startsAgent || s.cfg.MaxConcurrentRuns <= 0 || !ok {
+		return nil
+	}
+	n, err := c.CountNonTerminalRuns(ctx, run.ID)
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, "count active runs: "+err.Error())
+	}
+	if n >= s.cfg.MaxConcurrentRuns {
+		return reviveRefused(http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)
 	}
 	return nil
 }
@@ -910,4 +933,21 @@ func majorMinor(v string) (int, int, bool) {
 	m, err1 := strconv.Atoi(parts[0])
 	n, err2 := strconv.Atoi(parts[1])
 	return m, n, err1 == nil && err2 == nil
+}
+
+// reviveMintIdentity mints the revived run's new identity. A service run's sponsor is read from the identity's
+// row, so a sponsor change reaches the new token.
+func (s *Server) reviveMintIdentity(ctx context.Context, run types.AgentRun) (identity.RunIdentity, *reviveError) {
+	sponsor, err := s.runSponsor(ctx, run.CreatedBy)
+	if errors.Is(err, errServiceRetired) {
+		return identity.RunIdentity{}, reviveRefused(http.StatusConflict, reasonServiceIdentityInactive, "the service identity that started this run is retired")
+	}
+	if err != nil {
+		return identity.RunIdentity{}, reviveRefused(http.StatusInternalServerError, reasonReviveMintIdentityFailed, "read run sponsor: "+err.Error())
+	}
+	id, err := s.cfg.Identity.MintRunIdentity(ctx, run.ID, runIdentitySubject(ctx, run.CreatedBy), sponsor, internalAudience, run.OperatorOwned)
+	if err != nil {
+		return identity.RunIdentity{}, reviveRefused(http.StatusInternalServerError, reasonReviveMintIdentityFailed, "mint run identity: "+err.Error())
+	}
+	return id, nil
 }

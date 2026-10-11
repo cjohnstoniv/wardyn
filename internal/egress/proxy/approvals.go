@@ -512,7 +512,7 @@ func (e *raiseRefusedError) Error() string {
 // a new row, or the PENDING one the control plane deduplicated it to.
 func (a *approvalClient) raiseBytes(ctx context.Context, body []byte) (uuid.UUID, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		a.base+"/api/v1/internal/approvals", bytes.NewReader(body))
+		controlPlaneEndpoint(a.base, "/api/v1/internal/approvals"), bytes.NewReader(body))
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -575,7 +575,7 @@ func (a *approvalClient) poll(ctx context.Context, id uuid.UUID) (decided bool, 
 // every caller reads as "still pending".
 func (a *approvalClient) fetch(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		a.base+"/api/v1/internal/approvals/"+id.String(), nil)
+		controlPlaneEndpoint(a.base, "/api/v1/internal/approvals/"+id.String()), nil)
 	if err != nil {
 		return types.ApprovalRequest{}, false
 	}

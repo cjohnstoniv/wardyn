@@ -43,6 +43,7 @@ type Server struct {
 	execs         map[streamKey]*execution
 	execSlots     chan struct{}
 	outputs       map[uuid.UUID]*outputBuffer
+	holds         func(localRef string) bool
 }
 
 // New opens private output storage beneath the runner's state directory.
@@ -67,17 +68,46 @@ func New(sub substrate.Substrate, runnerID, stateDir string) (*Server, error) {
 		return nil, err
 	}
 	for _, f := range files {
+		if strings.HasPrefix(f.Name(), releasedPrefix) {
+			if err := os.RemoveAll(filepath.Join(dir, f.Name())); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if strings.HasPrefix(f.Name(), ".") {
+			continue // hidden files (.DS_Store) are not run output
+		}
+		path := filepath.Join(dir, f.Name())
 		id, err := uuid.Parse(f.Name())
 		if err != nil || id == uuid.Nil || f.Name() != id.String() {
-			return nil, errors.New("runnerio: unknown output directory")
+			return nil, fmt.Errorf("runnerio: %s is not a run's output; move it out of %s", path, dir)
 		}
-		b, err := newOutputBuffer(filepath.Join(dir, f.Name()))
+		b, err := newOutputBuffer(path)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("runnerio: output of run %s at %s: %w; to start without that run's retained output, move the directory out of %s", id, path, err, dir)
 		}
 		s.outputs[id] = b
 	}
 	return s, nil
+}
+
+// HoldSandboxes sets the runner's record of the sandboxes it created and still
+// holds. Attach and exec reach no other ref; without it they reach none.
+func (s *Server) HoldSandboxes(holds func(localRef string) bool) {
+	s.mu.Lock()
+	s.holds = holds
+	s.mu.Unlock()
+}
+
+// held refuses a local ref the runner did not create or no longer holds.
+func (s *Server) held(ref string) error {
+	s.mu.Lock()
+	holds := s.holds
+	s.mu.Unlock()
+	if holds == nil || !holds(ref) {
+		return runnerwire.Refuse("ref is not a sandbox this runner holds")
+	}
+	return nil
 }
 
 func (s *Server) local(ref string) (string, error) {
@@ -131,7 +161,12 @@ func (s *Server) Online(peer *runnerwire.Peer) {
 		s.Offline(old)
 	}
 	for id, b := range outputs {
-		s.sendOutput(peer, id, b)
+		b.mu.Lock()
+		delivered := b.state.Complete && b.state.Ack == b.state.End
+		b.mu.Unlock()
+		if !delivered {
+			s.sendOutput(peer, id, b)
+		}
 	}
 }
 
@@ -248,4 +283,37 @@ func (s *Server) ForgetOutput(id uuid.UUID) error {
 	b.stopped = io.ErrClosedPipe
 	b.notify()
 	return os.RemoveAll(b.dir)
+}
+
+// releasedPrefix hides a released run's output while it is deleted, so an
+// interrupted delete never leaves a partial run directory for New to refuse.
+const releasedPrefix = ".released-"
+
+// ReleaseOutput deletes a run's retained output once OutputSettled holds for
+// ref. Releasing output that is already gone succeeds.
+func (s *Server) ReleaseOutput(id uuid.UUID, ref string) error {
+	s.mu.Lock()
+	b := s.outputs[id]
+	if b == nil {
+		s.mu.Unlock()
+		return nil
+	}
+	b.mu.Lock()
+	if b.state.Ref != ref || !b.settled() {
+		b.mu.Unlock()
+		s.mu.Unlock()
+		return errors.New("runnerio: only settled output can be released")
+	}
+	tomb := filepath.Join(s.dir, releasedPrefix+id.String())
+	if err := os.Rename(b.dir, tomb); err != nil {
+		b.mu.Unlock()
+		s.mu.Unlock()
+		return err
+	}
+	delete(s.outputs, id)
+	b.stopped = io.ErrClosedPipe
+	b.notify()
+	b.mu.Unlock()
+	s.mu.Unlock()
+	return os.RemoveAll(tomb)
 }

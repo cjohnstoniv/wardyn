@@ -253,6 +253,8 @@ fmt.Println(out.Output, out.Truncated, out.Complete, out.Source)
   asciicast output.
   The latter two retain the recording's owner-or-operator privacy
   gate, even after recording is disabled.
+  A portal's delegated token reads `stdout` output only; for the other two
+  it gets the 409 a run with no such row gives, audited `delegation_scope`.
 - `incomplete` says bytes may be missing
   and is always true for recording recovery.
 - `capture_gap` says capture or recovery
@@ -301,6 +303,22 @@ if err == nil && s.State == client.SignInWaiting {
 ```
 
 From a shell, `wardyn run sign-in <run-id>` prints the same answer.
+
+## Run end
+
+`POST /api/v1/runs` sets when the run ends with `ends_after_sec` or `no_end` on `CreateRunRequest`; `wardyn run` spells them `--ends-in` and `--no-end`.
+
+| Request | Result |
+|---|---|
+| Neither | The effective default end. An untouched Interactive run with no default from the pool, the profile or the deployment ends after `24h`; a Background run in that case has no end |
+| `ends_after_sec` (1 to 2147483647) | That end. Past the lowest limit it is cut to it and the `201` carries a warning naming the limit |
+| `no_end` | No end, only where the pool and the deployment leave the lifetime unlimited and the profile has `allow_no_end` with `user_changes_limits`; otherwise `403`. When the default is already No end it is `201` without either |
+| Both | `400` `run_end_conflicting_fields` |
+
+- The run records `lifetime_cap_at`: the latest end its pool and the deployment (`WARDYN_RUN_MAX_AGE`) allow, counted from launch.
+- `PATCH /runs/{id}` is bounded by the earlier of that time and now plus the profile's `max_end_ahead_sec`; its response names the limit in `latest_end_source` (`pool`, `governance` or `deployment`).
+- A super admin skips the profile's limits only; the pool and the deployment still bind.
+- `GET /runs?no_end=1` lists live runs with no end.
 
 ## Policy preview
 
@@ -367,6 +385,10 @@ A run can carry components that add destinations and secrets ([POLICIES.md](POLI
 - Preflight and the policy preview answer `components`: one fact per component with `status` (`ready`, `needs_input`, `unavailable` or `unknown`), its `requirements`, hosts and each secret's delivery and `shared` flag.
   - A fact never carries the name of a secret the organisation provides.
 - Create, preflight and preview refuse with the component reasons in [`Reason`](#reason-branch-on-this-never-on-errors-prose); a run is audited as `run.component.attach` and `run.component.refuse`.
+
+## Model providers
+
+`GetModelProviders` (`GET /api/v1/model-providers`, admin) answers a `ModelProvidersRead`: the provider records, and per provider id how many people hold a credential of their own for it. It returns configuration and counts, never a credential value. Changing providers, signing in and storing a credential stay in the console.
 
 ## Error handling
 
@@ -446,19 +468,31 @@ start.
     refusal (its two Hidden-effect reasons are never themselves a wire value — see
     the authz section below).
 
-`TestReasonDocsMatchReasonsGo` checks both sources
-against this whole table, so a value missing here is a red build, not a
-silent gap:
+`TestReasonDocsMatchReasonsGo` requires this table to match both sources:
 
 | Reason | Meaning |
 |---|---|
 | `runners_disabled` / `runners_config_unavailable` | Runner routes require enabled, readable site configuration. |
+| `runner_stream_unavailable` / `runner_stream_rate_limited` | Runner stream URL/store unavailable, or peer connection rate exceeded. |
 | `runner_registration_unavailable` | Runner registration requires a configured public org URL and registration store. |
 | `runner_registration_rate_limited` | Too many registration attempts; retry later. |
 | `runner_registration_invalid` / `runner_owner_invalid` | Registration fields or token owner are invalid. |
 | `runner_key_already_registered` | This key is already registered; generate a new identity. |
+| `runner_not_found` / `runner_token_not_found` | No such runner or unused token for this caller; another person's runner answers as an absent id. |
+| `runner_filter_invalid` | `state` is not `active`, `revoked` or `all`. |
+| `runner_session_required` | `/me/runners` needs the person's own session; administrative and delegated credentials own no runner. |
+| `runners_enabled_required` | `PUT /runners/settings` needs `enabled`: true or false. |
+| `runners_org_url_invalid` | Runners cannot be turned on until the organisation and control-plane URLs are HTTPS. |
+| `site_config_runners_via_own_route` | Change `runners.enabled` with `PUT /runners/settings`. |
 | `runner_token_invalid` | Registration token is unknown, expired, consumed, or bound to another org. |
 | `runner_claim_mismatch` | The personal owner, fingerprint, org binding, claim state, or expiry does not match. |
+| `runner_not_found` | No such runner to revoke: absent, already revoked, or (on `/me`) another person's. |
+| `runner_revoke_reason_invalid` | An owner's revoke names a reason other than `not_mine`. |
+| `relay_route_refused` | A runner's relay serves only the closed list of internal routes a local run needs; this route, or a grant not delivered `own`, is not served through it. |
+| `relay_runner_mismatch` | A relayed request names a run that is not placed on the relaying runner. |
+| `relay_required` | A local run's token was used off its runner's relay; local runs reach the org only through it. |
+| `runner_action_pending` | The relaying runner has an action pending for this run; retry once the runner has acted. |
+| `delivery_via_org` / `delivery_runner_resident` | Through a relay, a grant delivered `via_org` is used at the org and a `runner_resident` one already lives on the runner, so neither is handed out. |
 | `missing_scope_snapshot` | The grant names the credential sentinel but carries no dispatch-time snapshot (a hand-authored grant). Azure DevOps, AWS SSO; and every grant naming `bedrock-api-key`, which is no longer a model credential. |
 | `owner_not_caller` | The grant's snapshot owner is not the run token's own subject. Azure DevOps. |
 | `roster_unreadable` | The site configuration could not be read; nothing is resolved from a failed read. Azure DevOps, AWS SSO. |
@@ -484,7 +518,7 @@ silent gap:
 | `raise_failed` | The approval store itself errored while raising a capability, consent, sign-in or re-auth hold. Azure DevOps, AWS SSO. |
 | `preset_unknown` / `preset_field_not_per_launch` / `preset_version_changed` / `preset_version_without_preset` | A `POST /runs` naming a launch preset: no such preset (or not open to the caller's user type, `422`), a field other than `title`/`task` beside `preset` (`400`), a pinned `preset_version` that is no longer current (`409`), or `preset_version` without `preset` (`400`). See OPERATIONS.md's launch presets section. |
 | `not_captured` / `dead_credential` / `consent_required` / `interaction_required` / `unavailable` | `ADOEntraFailure`'s own closed enum ([`internal/api/ado_entra_store.go`](../internal/api/ado_entra_store.go)), carried through unchanged when the redemption classifies a renewal failure. Azure DevOps. |
-| `invalid_approval_state` / `invalid_run_id_param` / `invalid_view_param` / `invalid_owner_param` / `invalid_status_param` / `status_needs_exclusive` / `status_needs_requires_view` / `invalid_ended_within_param` / `invalid_include_killed_param` / `runs_search_query_too_long` / `invalid_limit_param` / `invalid_offset_param` | A `GET /approvals` or `GET /runs` query parameter is malformed or conflicts with another one. `invalid_view_param` is the same reason on both routes (the same shape); `invalid_limit_param`/`invalid_offset_param` are `parseListPage`'s, shared by every paginated list route in `internal/api` (`GET /audit`, `/policies`, `/secrets`, `/user-drives`, `/api-tokens`, `/permissions/grants`, `/setup/integrations`, `/ssh-keys`, `/runs/policy-history`, …). |
+| `invalid_approval_state` / `invalid_run_id_param` / `invalid_view_param` / `invalid_owner_param` / `invalid_status_param` / `status_needs_exclusive` / `status_needs_requires_view` / `invalid_ended_within_param` / `invalid_include_killed_param` / `invalid_no_end_param` / `runs_search_query_too_long` / `invalid_limit_param` / `invalid_offset_param` | A `GET /approvals` or `GET /runs` query parameter is malformed or conflicts with another one. `invalid_view_param` is the same reason on both routes (the same shape); `invalid_limit_param`/`invalid_offset_param` are `parseListPage`'s, shared by every paginated list route in `internal/api` (`GET /audit`, `/policies`, `/secrets`, `/user-drives`, `/api-tokens`, `/permissions/grants`, `/setup/integrations`, `/ssh-keys`, `/runs/policy-history`, …). |
 | `listing_unscoped_backend` | The store backend cannot scope this listing to the caller's own runs — the SAME missing capability on `GET /approvals`, `GET /runs` and `GET /runs/policy-history`. |
 | `approval_not_found` | The named approval does not exist, or the caller may not see it — `POST /approvals/{id}/{approve,deny}` and every other approval-lookup route, INCLUDING `GET /approvals/{id}/paths`: a foreign approval and a missing one answer byte-identically there, reason and body both, so the reason itself is not an existence oracle. |
 | `approval_run_ended` / `approval_already_decided` / `credential_reauth_not_decidable` / `decision_scope_invalid_for_kind` / `invalid_request_body` | `POST /approvals/{id}/{approve,deny}`'s pre-decision refusals: the run ended first, the approval was already decided, a credential-reauth approval takes a sign-in instead, `decision_scope` was sent on a kind that does not accept one, or the body did not decode. |
@@ -495,14 +529,22 @@ silent gap:
 | `workspace_seed_store_unavailable` / `workspace_seed_unreadable` / `workspace_seed_source_target_invalid` / `workspace_seed_no_base_image` / `workspace_seed_policy_conflict` | `POST /runs`' `workspace_id` resolution (`seedRequestWorkspace`): no store configured, the workspace could not be read, a stored source's target fails the authored-target deny-list, an exec run named a workspace with no base image and no `--agent`/`--image`, or the seeded sources conflict with the policy's own mounts/repos. |
 | `placement_invalid` / `resources_invalid` / `workspace_target_invalid` / `override_invalid` / `allowed_image_invalid` / `runner_pool_invalid` | `400`: a malformed `placement`, `resources`, workspace `target`, `overrides` entry, `allowed_image` or `runner_pool_id`. |
 | `workspace_target_overlap` / `workspace_pin_conflict` / `image_conflict` / `workspace_ado_org_conflict` | `422`: the attached workspaces cannot share one run. |
+| `placement_unavailable` / `placement_credential` / `placement_capability` / `placement_local_path` / `placement_trusted_output` | `422`: a `placement: "local"` run this server cannot place on your own runner yet, or one carrying a credential, mount, storage, path or trusted-output operation a runner cannot take. |
+| `placement_required` | `422`: no placement chosen. |
+| `placement_denied` | `403`: your governance profile's `deny_placements` refuses the run's placement, at create, preflight, policy preview and source scans; audited `authz.denied` (target `runs.placement`). |
+| `runner_offline` | `422`: a `placement: "local"` run whose runner is offline or has not reported its capabilities yet, or none of your runners is online. |
 | `override_refused` | `422`: an override that would widen the run, which the narrowing table never allows. |
 | `request_field_unavailable` | `422`: a field this server cannot honour yet. It is refused, never dropped. |
+| `run_mode_required` / `run_mode_invalid` / `start_folder_invalid` | `400`: a new client's mode (or a background task's workload) is unset, and is never inferred (`mode_contract: "0.9"` marks a request as a new client's even when it carries no other run-mode field); a run-mode carrier is malformed; a `start_folder` is malformed, names an attachment the run lacks, or leaves its mount. |
+| `run_mode_conflict` | `422`: run-mode carriers contradict each other, or an older field they replace (`agent`, `task`, `interactive`) rides beside them. |
+| `run_background_only` | `409`: an interactive door of a background task (terminal, exec, SSH, web gateway, desktop). Logs, audit, status and the lifecycle controls (kill, revive, extend) stay. |
 | `template_document_invalid` / `template_field_invalid` / `template_field_unknown` / `template_version_unsupported` | `400`, `422` for the version: a template document that is not one bounded document, a value of the wrong shape (null and redaction placeholders included), a key the schema lacks, or an `api_version` or `kind` this server does not read. |
 | `template_secret_refused` / `template_run_state_refused` / `template_metadata_in_content` / `template_field_excluded` | `400`: a template never holds a secret value, state of one run (identity, session, claim, admission), an owner, scope, group or revision, or a launch-only (title, description) or retired field. The path is in the diagnostic. |
 | `template_field_unavailable` / `template_dependency_missing` / `template_coverage_invalid` / `template_shared_field_refused` | `422`: a field this server cannot honour yet (refused, never dropped), a field whose dependency is neither included nor listed under `needs_setup`, a coverage that does not fit the content, or a field that names one person's own thing in an organisation or group template. |
 | `template_scope_forbidden` / `template_group_unverified` / `template_not_found` / `template_revision_conflict` | `403`, `403`, `404`, `409`: publishing to a scope the caller does not administer, group membership that cannot be verified from this sign-in, no such template or not visible to the caller, or an update against a revision that has moved. |
 | `templates_unavailable` | `501`: the template store is not available on this server yet. Every `/templates` route and the `/admin/template-group-admins` routes answer it. |
-| `runner_pools_unavailable` | `501`: this server does not manage runner pools yet; every `/runner-pools` route answers it. |
+| `runner_pools_unavailable` | `501`: this server's store has no runner pool storage; every pool route answers it. |
+| `runner_pool_not_found` / `runner_pool_stale` / `runner_pool_unavailable` / `runner_pool_member_mismatch` / `runner_pool_no_eligible_member` | The pool routes: `404` no such pool or one you may not use (the two read alike), `409` a stale revision, `422` a switched-off pool as a default, a member of the wrong kind or a runner that is not yours, or a use policy on a Self-Hosted pool. `no_eligible_member` is also the `reason` of an unavailable pool in `GET /runner-pools`. |
 | `image_devcontainer_exclusive` / `image_builder_unavailable` | `POST /runs`' image/devcontainer build validation: `image` and `devcontainer_repo` were both set (the caller's own request shape), or a custom image was requested but this control plane has no image builder wired (a deployment capability neither field can fix) — two different causes, two reasons. |
 | `workspace_sources_store_unavailable` / `workspace_sources_list_unavailable` / `workspace_source_not_onboarded` / `workspace_source_mount_not_allowed` | `POST /runs`' resolved-spec workspace-source checks (`validateWorkspaceSources`, `authorizeSpecWorkspaceSources`): no store, the workspace list could not be read, the member-safe mount gate refuses an onboarded source, or — `workspace_source_not_onboarded` — the source is not onboarded at all. That last one is DELIBERATELY the same reason regardless of which of the two functions answers it or whether the source is a mount or a repo: the message is already byte-identical across all four sites for the cross-member existence-oracle reason `authorizeSpecWorkspaceSources`' own doc comment explains (another member's onboarded source must read exactly like one nobody onboarded), and a distinguishable reason would reopen it on the wire even with the sentence unchanged. |
 | `runner_capabilities_unavailable` / `confinement_class_conflict` / `confinement_class_unsupported` / `run_grants_require_spire` | `POST /runs`' confinement-class resolution and the SPIRE-only-grants check (invariant 5). |
@@ -516,7 +558,7 @@ silent gap:
 | `workspace_delete_active_run` | `DELETE /workspaces/{id}`: the workspace is in use by a still-active run. |
 | `groups_snapshot_stale` | `PUT/POST /governance/*` and the user-drive resolver: the caller's group-membership snapshot is missing or was truncated at sign-in, so a group-keyed governance profile cannot be resolved. The SAME value as authz's own registered reason ([`internal/authz/registry.go`](../internal/authz/registry.go)) — a literal in `reasons.go` (the docs⟷reasons.go guard only reads literals), tied to authz's constant by a documented `TestNoAdHocAuthz` exception rather than a reference or a second copy invented for this package. |
 | `egress_baseline_invalid` / `egress_baseline_stale` | `PUT /governance/egress-baseline`: a host or suffix is invalid, or `If-Match` is stale. |
-| `site_config_request_invalid` / `site_config_artifact_override_invalid` / `site_config_integrations_via_own_route` / `site_config_invalid` / `site_config_stale` / `site_config_egress_via_own_route` | `PUT /site-config`: the body did not decode, a legacy artifact-override field fails validation, integrations were named inline instead of through their own endpoints, the submitted config fails one of the agent/model-provider/default-provider validators, `If-Match` is stale, or the body changes the egress baseline (the `egress` block or the baseline-marked `internal_hosts`), which only `PUT /governance/egress-baseline` writes. `site_config_stale` is shared by every `PUT` that checks `If-Match` against this same document's ETag: `PUT /agent-providers`, `PUT /model-providers` and `PUT /workspace-providers` all answer it too, one reason for one cause regardless of which sub-block the write targeted. |
+| `site_config_request_invalid` / `site_config_artifact_override_invalid` / `site_config_integrations_via_own_route` / `site_config_invalid` / `site_config_stale` / `site_config_egress_via_own_route` | `PUT /site-config`: the body did not decode, a legacy artifact-override field fails validation, integrations were named inline instead of through their own endpoints, the submitted config fails one of the agent/model-provider/default-provider validators, `If-Match` is stale, or the body changes the egress baseline (the `egress` block or the baseline-marked `internal_hosts`), which only `PUT /governance/egress-baseline` writes (`PutSiteConfigResult` sends neither, so a captured document restores, and `EgressBaselineIgnored` reports a baseline it did not apply; `PutSiteConfig` sends the document as given and gets this refusal; a restore is still refused when the security tier marked an internal host the older capture does not list: lift the mark first). `site_config_stale` is shared by every `PUT` that checks `If-Match` against this same document's ETag: `PUT /agent-providers`, `PUT /model-providers` and `PUT /workspace-providers` all answer it too, one reason for one cause regardless of which sub-block the write targeted. |
 | `site_config_probe_request_invalid` / `site_config_probe_url_invalid` / `egress_redirect_from_required` / `egress_redirect_not_found` | `POST /site-config/probe-proxy` and the egress-redirect edit routes. |
 | `governance_profile_request_invalid` / `governance_ceiling_invalid` / `governance_profile_name_conflict` / `governance_profile_in_use` / `governance_assignment_invalid` / `governance_preview_claims_invalid` | `PUT/POST /governance/profiles` and `/governance/assignments`, and the preview routes — `governance_preview_claims_invalid` is shared with the user-drive naming preview (`user_drives_preview.go`), which feeds the same `normalizeGovernancePreviewClaims` validator. `governance_profile_in_use` is a `409` when a profile is still assigned or still the base of another profile (the body names those profiles). A composed profile read by an SDK that predates composition shows `ceiling: {}` and `limits: {}` and ignores `effective`; a `PUT` from it omits the composition fields, which are kept, so it cannot flatten the profile. |
 | `governance_overlay_invalid` | `PUT/POST /governance/profiles` (400): a composed profile's `overlay` or `overlay_limits` does not decode, names something its base does not permit (a domain outside the base, a method the base excludes, `allow_all_egress` on a base without it, a looser bound, a grant the base does not hold), would mean "everything" by being empty (`allowed_methods: []`), names a base that does not exist, or sits beside a non-empty `ceiling` or `limits` (a composed profile states its policy only in the overlay). |
@@ -529,13 +571,20 @@ silent gap:
 | `governance_change_not_pending` | `POST /governance/changes/{id}/approve` or `/reject` (409): the change was already applied, rejected, expired or marked stale. A change past its expiry is moved to `expired` by the request that finds it. |
 | `governance_change_not_found` | `GET /governance/changes/{id}` and the approve and reject routes (404): no such change, or one of a kind the caller may not approve. |
 | `governance_change_state_invalid` | `GET /governance/changes?state=` (400): not one of `pending`, `applied`, `rejected`, `expired` or `stale`. |
-| `secret_name_invalid` / `secret_name_reserved` / `secret_owner_param_refused` / `secret_body_invalid` / `secret_value_too_short` / `secret_cap_reached` / `secret_not_found` | `PUT/DELETE /secrets/{name}`: the name fails the secret-name format or is reserved, `?owner=` was sent on a write, the body is malformed, the value is below the mask minimum, the owner already holds the maximum number of secrets, or (the admin-only `?owner=` delete arm) that owner holds no secret by that name. |
+| `secret_name_invalid` / `secret_name_reserved` / `secret_owner_param_refused` / `secret_body_invalid` / `secret_value_too_short` / `secret_cap_reached` / `secret_not_found` | `PUT/DELETE /secrets/{name}` (and `/me/secrets/{name}`, `/shared-secrets/{name}`): the name fails the secret-name format or is reserved, `?owner=` was sent on a write, the body is malformed, the value is below the mask minimum, the owner already holds the maximum number of secrets, or (the admin-only `?owner=` delete arm) that owner holds no secret by that name. |
 | `people_store_unavailable` / `person_principal_invalid` / `person_principal_reserved` / `person_email_invalid` / `person_collision` / `person_email_taken` | `POST /people` (operator/security-tier only). |
 | `people_list_param_invalid` | `GET /people` (security tier): `state` is not `active` or `deactivated`, or `cursor` is not one a previous page returned. A malformed `limit` answers `invalid_limit_param`, as every list does. |
 | `person_token_mint_removed` | `POST /people/{principal}/tokens` (securityOps, kept mounted): refused for every caller, 403, whether the person exists or not (#1477). No role creates a token that acts as another person; they sign in and create their own (`POST /me/tokens`). The two shared no-store guards below still answer first. |
 | `mint_no_human` | `POST /people/{principal}/tokens`'s OWN "needs a signed-in human" sentence — NOT shared with `api_token_no_human` below: same shape, different door, different wording, so a different reason. It answers before `person_token_mint_removed`. |
 | `api_token_from_api_token` | Shared, byte-identical, between `POST /people/{principal}/tokens` and `POST /api/v1/tokens` (self-service): an API token may not mint another. |
 | `token_lookup_unavailable` | The API-token and delegated-token authentication middlewares' shared shape: the revocation store could not be read to authenticate the bearer. |
+| `invitation_target_invalid` / `invitation_target_unknown` / `invitation_replaces_invalid` / `invitation_ttl_invalid` / `invitation_cap_reached` | `POST /people/{principal}/invitations`: the target is reserved or unknown, `replaces_token_id` is not their admin-minted token, a lifetime is out of range, or ten are pending. |
+| `invitation_list_param_invalid` | `GET /invitations`: `state` is not `pending`, `claimed`, `expired` or `revoked`. |
+| `invitation_not_found` / `invitation_not_pending` | `POST /me/invitations/{id}/claim`: someone else's or a missing id (one body); `invitation_not_pending` is the target's own, with `state`. `DELETE /invitations/{id}` answers `invitation_not_found` unless pending. |
+| `service_identity_name_invalid` / `service_identity_name_taken` / `service_identity_description_invalid` / `service_identity_user_type_unknown` / `service_identity_patch_empty` | `POST /service-identities` and `PATCH`: the name is not `^[a-z][a-z0-9-]{2,62}$` or a principal-keyed table already holds it (`409`), the description is over 200 characters, the user type does not exist, or the `PATCH` names nothing. |
+| `service_identity_sponsor_invalid` | The sponsor is not exactly the principal of a bound, non-deactivated person; an email or `entra:` alias is refused. |
+| `service_identity_not_found` / `service_identity_inactive` | `/me/service-identities/{name}/tokens`: another person's or a missing name (one body); `service_identity_inactive` is the sponsor's own `409` on a suspended or retired identity or with no revocation store, and the answer to a retired service's run renewing (`403`) or reviving (`409`). |
+| `needs_sso` | The service-identity routes in local mode, which has no person to sponsor one (`409`). |
 | `api_token_no_human` / `api_token_from_delegated_token` / `api_token_member_mode_mint` / `api_token_name_invalid` / `api_token_ttl_invalid` / `api_token_cap_reached` | `POST /api/v1/tokens` (self-service mint) and `DELETE`. |
 | `owner_ambiguous` / `owner_unresolved` | The shared owner/principal resolver shape: more than one known principal matches a name, or none does. `secrets.go`'s admin `?owner=` resolution (`ownerRefusalReason`) and `sshkeys_admin.go`'s `resolveSSHKeyOwner` (also reached from `POST /sessions/revoke`'s SSH-key cutoff) both answer from this one vocabulary rather than each inventing its own. |
 | `sessions_revoke_param_invalid` | `POST /sessions/revoke`: the body must set exactly one of `sub`/`all`, and `sessions_only` (browser sessions end; API tokens and SSH keys keep working) goes with `sub`, not `all`. |
@@ -571,6 +620,7 @@ sending `error` alone — completing the sweep this issue tracks:
 | `run_capacity_store_unavailable` | `GET /admin/runs/capacity`, `501`: the configured store cannot report fleet capacity. The Postgres store always can; only a test double or an alternative store lacks it. |
 | `profile_unreadable` / `profile_gone` / `capability_agent` / `capability_workspace` / `capability_model_provider` / `capability_policy` / `capability_workspace_provider` / `capability_component` / `capability_unknown` / `model_credential_erased` / `model_provider_disabled` / `model_provider_gone` / `component_gone` / `owner_unverifiable` | `ownerRefusal`'s own reason values (`run_owner_authority.go`): the shared re-check a revive and a run-end-extension both run over the owner's launch-door capabilities, governance profile, model provider and model credential. `model_provider_disabled` covers both an integration that supplies the run's credential and the run's own model provider being turned off; `model_provider_gone` is that provider deleted (or re-created under the same id); `component_gone` is an organisation's component the run was launched with, deleted since (409, for the owner and for an admin). The `capability_*` values name the SAME six capability kinds `capabilities.go` enumerates; `capability_unknown` is a defensive fallback outside that closed set. `owner_unverifiable` is `extendRefusal`'s own bucket for three arms that all answer "the owner's authority could not be confirmed right now". |
 | `run_end_wait_neither_field` / `run_wait_budget_not_a_number` / `run_end_wait_already_finished` / `run_end_wait_files_gone` / `run_end_wait_store_unavailable` / `run_limits_gate_denied` / `run_end_no_end_not_allowed` / `run_end_must_be_future` / `run_wait_budget_too_small` / `run_end_wait_changed` | `PATCH /runs/{id}`'s end-time and wait-budget door (`run_end_wait.go`). `run_limits_gate_denied` is shared across all four fields the `user_changes_limits` gate can block — the same gate regardless of which field triggered it. |
+| `run_end_conflicting_fields` / `run_end_after_too_small` / `run_end_after_too_large` | `POST /runs`' create-time end (`run_end_create.go`): `ends_after_sec` and `no_end` together, `ends_after_sec` below 1, or past 2147483647. A `no_end` the pool, the deployment or the person's governance does not allow answers `403` `run_end_no_end_not_allowed` or `run_limits_gate_denied`, the same reasons the end-time `PATCH` gives; an `ends_after_sec` past a limit is cut to it and the `201` warns, never refused. |
 | `workspace_not_found` / `user_drive_not_found` / `user_drive_allocation_not_found` / `ssh_key_not_found` / `preset_not_found` / `policy_not_found` / `capability_grant_not_found` / `run_not_found` / `governance_assignment_not_found` / `governance_profile_not_found` / `enrolment_token_not_found` / `device_not_found` / `delegate_not_found` / `api_token_not_found` / `role_mapping_not_found` | `notFoundIf`'s (`helpers.go`) per-resource-kind 404s, one for each of its ~27 call sites across the package. `run_not_found` is the same literal `auditRenewDenied` already wrote for a renewal on a run that no longer exists; `preset_not_found` is the admin preset-management route's own 404, distinct from `preset_unknown` (a run naming an unknown preset at launch); `governance_profile_not_found` is `governance.go`'s own by-id GET/PUT/DELETE, distinct from `profile_gone` above (a run's already-captured profile going missing later). |
 | `invalid_id_param` / `missing_run_claims` / `run_id_mismatch` / `workspace_store_unavailable` / `scan_upload_run_not_found` / `scan_upload_not_governed` / `scan_upload_wrong_task` / `workspace_requirements_invalid` / `workspace_approved_egress_invalid` / `workspace_approved_egress_dead_host` / `workspace_denied_egress_invalid` / `workspace_llm_cred_invalid` / `request_body_too_large` / `request_body_unreadable` | `helpers.go`'s own shared foundational refusals, reused by dozens of call sites across the package since the cause is identical regardless of which handler hit it: a `{param}` path segment that fails to parse as a UUID, the internal run token's claims failing to read, a scan upload's own 3-arm refusal (`scanresult.go`'s sole caller), `scopedWorkspaceWrite`'s 4 validators (one cause bucket per route; `workspace_approved_egress_dead_host` is its own reason because the remedy differs — use the already-routed door, not fix a malformed domain), and `readCappedBody`'s too-large/unreadable split. |
 | `ado_capability_unknown` | `PUT/POST /api/v1/policies`, `POST /runs`' `inline_policy`, and a launch preset's `inline_policy` (`/api/v1/admin/presets`): the spec's `azure_devops_capabilities` names something the Azure DevOps capability catalogue cannot grant. Its own reason rather than the door's `policy_request_invalid` / `inline_policy_invalid` bucket. |
@@ -623,12 +673,14 @@ sending `error` alone — completing the sweep this issue tracks:
 | `directory_search_query_too_short` / `directory_search_unknown_type` / `directory_search_rate_limited` / `directory_search_failed` | `GET /api/v1/directory/search` (`directory_search.go`). |
 | `base_image_write_invalid` / `base_image_in_use` / `base_image_not_found` | `/api/v1/base-images` (`base_images.go`). `base_image_write_invalid` is `validateBaseImageWrite`'s own bucket. |
 | `credential_erase_principal_required` / `credential_erase_operator_namespace` / `credential_erase_signin_config_unreadable` | `DELETE /people/{principal}/credentials` (`credential_erase.go`). `credential_erase_signin_config_unreadable` (503): the Azure DevOps sign-in configuration could not be read, so the erase could not take the sign-in's lock and erased nothing; try again. |
+| `secret_personal_needs_person` | `GET/PUT/DELETE /me/secrets` (`secrets_explicit.go`): the caller is no verified person (the admin token, local mode, a device, or a delegated portal), so it has no personal namespace; `403`, nothing stored. Use `PUT /shared-secrets/{name}` for a shared service secret. |
+| `credential_erased_during_write` | Any write of a person's stored credential (`PUT /secrets/{name}`, a model-provider key or sign-in, an Azure DevOps own-token paste): the person's credentials were erased after the write began, so `409` and nothing was saved. Retrying starts a new write, which lands. |
 | `erasure_scope_unknown` / `erasure_self_refused` / `erasure_operator_namespace` / `erasure_incomplete` | `POST /people/{principal}/erasure` (`person_erasure.go`, security tier). `erasure_scope_unknown` (400): `scopes` is not a non-empty list of `mask_copies`, `run_outputs`, `recordings`, `run_tasks`, `components`, `audit_personal_fields` and `credentials`; nothing was erased. `erasure_operator_namespace` (400): the principal names the operator namespace, which is no person's; nothing was erased. `erasure_self_refused` (403): the person named is the caller and a scope other than `credentials` was asked for; nothing was erased (the admin token, which is no person, is never refused). `erasure_incomplete` (500): a scope failed part way; the body's `done` and `remaining` name the scopes, and a retry with the same scopes finishes the rest. The principal also refuses `owner_unresolved` / `owner_ambiguous` (422) as the credential erase does. |
 | `explain_principal_invalid` | `GET /permissions/explain` (`capabilities_explain.go`). |
 | `credential_inventory_no_meta` | `GET /admin/credentials/inventory` (`credential_inventory.go`). |
 | `recording_store_unavailable` / `recording_too_large` / `recording_invalid_part` / `recording_erased` / `part_limit` | `PUT /internal/recordings/{runID}` and `.../parts/{part}` (`recording.go`). `recording_erased` is a durable per-run erasure fence (`410`), including an upload already streaming when the erase completed; authentication, masking and size refusals retain precedence. `recording_invalid_part` is `{part}` failing to parse as canonical decimal >= 2; `part_limit` is the ONE name for a part above the limit, both on the wire and in the refusal's own `recording.upload` audit row's nested `reason` detail field. |
 | `ado_decision_scope_invalid` / `ado_access_above_ceiling` | The Azure DevOps escalation's decision rule (`injection_ado_capability.go`). |
-| `reserved_principal` | The same value as `authFailedReservedPrincipal` (`oidc.DenialReservedPrincipal`): a reserved identity (the admin token, the local-mode operator, a device, a portal delegate, a person's audit subject `subject:<id>`) attempted to authenticate as a human principal — the SSO callback, a session cookie, a `wdn_` token, and a portal's token exchange all refuse it. |
+| `reserved_principal` | The same value as `authFailedReservedPrincipal` (`oidc.DenialReservedPrincipal`): a reserved identity (the admin token, the local-mode operator, a device, a portal delegate, a person's audit subject `subject:<id>`) attempted to authenticate as a human principal — the SSO callback, a session cookie, a `wdn_` token, and a portal's token exchange all refuse it. Also `422` on `POST /people/{principal}/erasure` and `DELETE /people/{principal}/credentials` when the principal names one: they erase a person, and these are none. |
 | `scan_facts_invalid` / `scan_upload_superseded` | `/internal/scan-results/{runID}` (`scanresult.go`). |
 | `policy_grade_spec_invalid` | `POST /policies/grade` (`policy_grade.go`): a dry-run grading preview, distinct from the real policy CRUD door (`policy_request_invalid`) even though both run the same spec validator. |
 | `synthesized_profile_invalid` | The AI Run Composer's profile synthesis (`profile.go`, `POST /runs/{id}/profile`): the synthesized policy spec fails validation after clamping to the operator ceiling. |
@@ -656,15 +708,17 @@ The rest reach the wire only through
 | Reason | Meaning |
 |---|---|
 | `admin_surface` / `security_admin_surface` | The tier gates every admin/security-admin-only route runs through (`isOperator`/`isSecurityOperator`): the caller's stamped role is below the route's own floor. Both answer the byte-identical sentence "requires admin role" — the reason is what tells the two tiers apart. |
-| `audit_export_partition_filter` | `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `actor_type`, `outcome` or `origin`): a partition export always covers the whole partition. Answered `400` and not audited. |
+| `audit_export_partition_filter` | `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `target`, `actor_type`, `outcome` or `origin`): a partition export always covers the whole partition. Answered `400` and not audited. |
 | `audit_retention_not_oldest` | `POST /audit/retention/drop` named a partition that is not the oldest retained one. Answered `409` and audited (`authz.denied`, target `audit.retention`, `partition` in the row). |
 | `audit_retention_not_closed` | `POST /audit/retention/drop`: the oldest partition can still receive rows. Answered `409` and audited. |
 | `audit_retention_inside_window` | `POST /audit/retention/drop`: the partition ended less than the effective retention window ago, or retention is forever. Answered `409` and audited. |
 | `audit_retention_live_run` | `POST /audit/retention/drop`: the partition holds audit rows of a run that is still live. Answered `409` and audited. |
 | `audit_retention_digest_mismatch` | `POST /audit/retention/drop`: the digest supplied is not the one the database computes for the partition. Answered `409` and audited. |
+| `audit_retention_actor_reserved` | `POST /audit/retention/drop`: the caller's actor name is `wardynd`, which is reserved for the retention sweeper. Answered `403` and audited. |
 | `byoi_user` | A Bring-Your-Own-Identity principal reached a route BYOI does not extend to. |
 | `capability_egress_host` / `capability_feature` / `capability_secret` | The capability-grant gates outside the five launch-door kinds already covered above: an egress host, a feature flag, or a secret the caller's capability grants do not cover. |
 | `delegation_scope` | A portal's delegated token asked for a route outside its own delegation allow-list (#1142). |
+| `service_scope` | A service identity's token asked for a route outside its fixed allow-list (#1508). |
 | `event_stream_cap` | The caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (#1407); close one and retry. Answered `422` and not audited, like `run_quota`. |
 | `component_autonomy` | The organisation's autonomy cap on runs that use the caller's own custom components closes the door, with or without a governance profile; the body's `policy` names the deployment. |
 | `placement_component_self_defined` | A run on your own runner carries a component you defined while your limits omit `local_self_defined_components` (default deny); `403`, target `runs.placement`. |
@@ -743,6 +797,14 @@ applied until a different approver approves it. The SDK never reads that body as
     (a `Deferred` entry with `Base` set), and so, in turn, are its own children and their
     assignments.
   - Prune does not run after a pending write.
+- `PlanGovernance(ctx, doc, prune)` returns the creates, updates and deletes `ApplyGovernance` would
+  make, as a `GovernancePlan`, and writes nothing: one `GET /api/v1/governance`, no write request.
+  Its matching rules are `ApplyGovernance`'s. A plan is a snapshot: the server can change before an
+  apply runs.
+- `GovernanceApplyResult.Steps` lists the writes an apply issued, in order, each `applied`, `pending`
+  or `failed`. On a failed write `ApplyGovernanceResult` returns the steps so far with the error.
+- `ApplyDrivesResult` is `ApplyDrives` with the same steps, as `DrivesApplyResult.Steps`; `ApplyDrives`
+  keeps its signature. Applies are sequential and not atomic: a failed write leaves the earlier ones in place.
 - `ListGovernanceChanges(ctx, state)`, `GetGovernanceChange`, `ApproveGovernanceChange` and
   `RejectGovernanceChange(ctx, id, reason)` read and decide the stored changes
   (`/api/v1/governance/changes`).
@@ -874,7 +936,8 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
   every caller, admin tokens included),
 - repeatable `status`
   (`active`/`ended`/`failed`/`killed`/`needs`), `ended_within` (`24h`/`7d`/`30d`/`all`),
-- `include_killed=1` (a KILLED run older than 24h is hidden by default), `workspace`
+- `include_killed=1` (a KILLED run older than 24h is hidden by default), `no_end=1`
+  (only live runs with no end), `workspace`
   (exact match on the run's repo/workspace-path label) and `q` (a case-insensitive
   substring search over title/task/repo/created_by).
 
@@ -914,7 +977,7 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
 Beyond `run_id`, the audit query accepts server-side predicates:
 
 - `since`/`until` (RFC 3339), `action` (exact), `action_prefix` (e.g. `egress.`),
-  `actor` (exact),
+  `actor` and `target` (exact; under `WARDYN_AUDIT_SEAL=full` each also matches the subject a sealed row stores for that person),
 - `actor_type` (`human|agent|system`), `outcome`
   (`success|denied|failure`),
 - and `origin` (`device|organisation`: the rows an

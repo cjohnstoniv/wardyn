@@ -59,6 +59,9 @@ const (
 	// ReasonDelegationScope: a portal's delegated token asked for a route
 	// outside the delegation allow-list (#1142).
 	ReasonDelegationScope Reason = "delegation_scope"
+	// ReasonServiceScope: a service identity's token asked for a route outside
+	// its fixed allow-list (#1508).
+	ReasonServiceScope Reason = "service_scope"
 	// ReasonEventStreamCap: the caller already holds the most concurrent run
 	// event streams one principal may (#1407). A limit, not a denial: not
 	// audited, like ReasonRunQuota.
@@ -98,6 +101,9 @@ const (
 	ReasonAuditRetentionInsideWindow   Reason = "audit_retention_inside_window"
 	ReasonAuditRetentionLiveRun        Reason = "audit_retention_live_run"
 	ReasonAuditRetentionDigestMismatch Reason = "audit_retention_digest_mismatch"
+	// ReasonAuditRetentionActorReserved: the drop's caller is named "wardynd", the name the database
+	// reads as the sweeper (a system, unattested drop), so no request may carry it.
+	ReasonAuditRetentionActorReserved Reason = "audit_retention_actor_reserved"
 	// ReasonComponentAutonomy: the organisation's autonomy cap on runs that
 	// carry a self-defined component (site config components.autonomy_cap)
 	// alone bound the run's level, and the request asks for more than it
@@ -155,6 +161,7 @@ var refusals = map[Reason]Refusal{
 	ReasonAdminView:                      {Effect: EffectConflict},
 	ReasonUserViewPreview:                {Effect: EffectConflict, Audit: true},
 	ReasonDelegationScope:                {Effect: EffectDeny, Audit: true},
+	ReasonServiceScope:                   {Effect: EffectDeny, Audit: true},
 	ReasonEventStreamCap:                 {Effect: EffectUnprocessable},
 	ReasonMaskStateUnavailable:           {Effect: EffectUnavailable, Audit: true},
 	ReasonRoleStampStale:                 {Effect: EffectUnauthenticated, Audit: true, Sentence: "this token's role is out of date: its owner must sign in again to refresh it"},
@@ -166,6 +173,7 @@ var refusals = map[Reason]Refusal{
 	ReasonAuditRetentionInsideWindow:     {Effect: EffectConflict, Audit: true},
 	ReasonAuditRetentionLiveRun:          {Effect: EffectConflict, Audit: true},
 	ReasonAuditRetentionDigestMismatch:   {Effect: EffectConflict, Audit: true},
+	ReasonAuditRetentionActorReserved:    {Effect: EffectDeny, Audit: true},
 	ReasonComponentAutonomy:              {Effect: EffectDeny, Audit: true},
 }
 

@@ -54,6 +54,7 @@ var leqRules = map[string]string{
 	"deny_ui_apps":                          "b implies a",
 	"max_concurrent_runs":                   "a is no looser bound than b",
 	"deny_user_drive":                       "b implies a",
+	"deny_placements":                       "every placement b denies is denied by a",
 	"max_cpu_millis":                        "a is no looser bound than b",
 	"max_memory_mib":                        "a is no looser bound than b",
 	"max_ephemeral_disk_mib":                "a is no looser bound than b",

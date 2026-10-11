@@ -78,9 +78,6 @@ func TestSCIMCovSuspensionReachesEveryFormAndWritesTheLedger(t *testing.T) {
 	if plan.IdentityID != l.id || !slices.Equal(plan.Principals, scimCovTargets[:2]) || !slices.Equal(plan.CutoffSubs, scimCovTargets) || plan.PurgeAfter != 0 {
 		t.Errorf("plan = %+v, want the bound forms deactivated and the cutoff cut under every form", plan)
 	}
-	if st.callCount("PrincipalsByEmail") != 0 {
-		t.Error("a bound identity resolved its emails to subs")
-	}
 	revoked, _ := e.rev.snapshot()
 	scimCovContainsAll(t, revoked, scimCovTargets, "sessions revoked")
 
@@ -599,5 +596,65 @@ func TestSCIMCovALedgerReadFailureStopsOnlyItsStep(t *testing.T) {
 				t.Errorf("after the retry: pending %v, deprovision rows %d", st.pendingSteps(l.id, store.JobKindSuspend), len(e.auditRows("person.deprovision")))
 			}
 		})
+	}
+}
+
+// An email that cannot be resolved (store.PrincipalsNamed fails) stops a suspension, and a purge whose
+// suspension is already done, before either touches anything, with a person.deprovision failure row.
+func TestSCIMCovAnUnresolvableEmailRefusesTheDeprovision(t *testing.T) {
+	for _, kind := range []string{store.JobKindSuspend, store.JobKindPurge} {
+		t.Run(kind, func(t *testing.T) {
+			st := newSCIMCovStore()
+			l := scimCovSeedLeaver(st)
+			e := newSCIMCovEnv(t, st)
+			run := e.srv.suspendIdentity
+			if kind == store.JobKindPurge {
+				if err := e.srv.suspendIdentity(context.Background(), st, l.id, scimSlotPrimary); err != nil {
+					t.Fatal(err)
+				}
+				// The purge's own suspension passes; its forms read fails.
+				st.failAfter("PrincipalsNamed", errSCIMCovBoom, st.callCount("PrincipalsNamed"))
+				run = e.srv.finishPurge
+			} else {
+				st.failNext("PrincipalsNamed", errSCIMCovBoom, -1)
+			}
+			if err := run(context.Background(), st, l.id, scimSlotPrimary); !errors.Is(err, errSCIMCovBoom) {
+				t.Fatalf("err = %v, want the store's error", err)
+			}
+			if kind == store.JobKindSuspend && (len(st.plans) != 0 || st.tokenRevoked(l.tokSub)) {
+				t.Errorf("the suspension acted: %d plans, token revoked %t", len(st.plans), st.tokenRevoked(l.tokSub))
+			}
+			if kind == store.JobKindPurge && st.callCount("DeleteUserSubjectRows") != 0 {
+				t.Error("the purge deleted rows")
+			}
+			var refusals []types.AuditEvent
+			for _, ev := range e.auditRows("person.deprovision") {
+				if ev.Outcome != "success" {
+					refusals = append(refusals, ev)
+				}
+			}
+			if len(refusals) != 1 || refusals[0].Outcome != "failure" || e.auditData(refusals[0])["reason"] != reasonIdentityDirectoryUnreadable ||
+				e.auditData(refusals[0])["kind"] != kind {
+				t.Errorf("refusal rows = %+v, want one failure %s of kind %s", refusals, reasonIdentityDirectoryUnreadable, kind)
+			}
+		})
+	}
+}
+
+// An email of an unbound identity that names more than one principal names nobody, and the person is
+// then known by no email: the forms are the object-id form alone, even beside an alias that names one
+// principal, so a group removal reaches none of them, and they carry the refusal.
+func TestSCIMCovAnAmbiguousEmailLeavesOnlyTheBoundForms(t *testing.T) {
+	st := newSCIMCovStore()
+	ident := st.addIdentity(store.PrincipalIdentity{
+		Issuer: scimCovIssuer, TenantID: scimCovTenant, ObjectID: scimCovOID, EmailLower: "pat@corp.example",
+	}, "pat.alias@corp.example")
+	st.emailSubs["pat@corp.example"] = []string{"sub-one", "sub-two"}
+	st.emailSubs["pat.alias@corp.example"] = []string{"sub-pat"}
+	e := newSCIMCovEnv(t, st)
+
+	forms, err := e.srv.leaverForms(context.Background(), st, ident)
+	if err != nil || forms.refusal != reasonOwnerAmbiguous || !slices.Equal(forms.targets, []string{scimCovObjectForm}) {
+		t.Errorf("forms = %+v (%v), want only the object-id form and an %s refusal", forms, err, reasonOwnerAmbiguous)
 	}
 }

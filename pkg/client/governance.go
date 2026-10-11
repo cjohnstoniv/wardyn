@@ -169,6 +169,32 @@ func governanceAssignmentKey(subjectType CapabilitySubjectType, subject string) 
 	return string(subjectType) + "\x00" + subject
 }
 
+// governanceProfileChangedFields returns the JSON names of the fields that
+// writing p over existing would change, in a fixed order. Empty means the
+// write changes nothing observable.
+func governanceProfileChangedFields(existing, p GovernanceProfile) []string {
+	var fields []string
+	if !reflect.DeepEqual(existing.Ceiling, p.Ceiling) {
+		fields = append(fields, "ceiling")
+	}
+	if !reflect.DeepEqual(existing.Limits, p.Limits) {
+		fields = append(fields, "limits")
+	}
+	if p.Contact != nil && !reflect.DeepEqual(existing.Contact, p.Contact) {
+		fields = append(fields, "contact")
+	}
+	if !reflect.DeepEqual(existing.BaseProfileID, p.BaseProfileID) {
+		fields = append(fields, "base_profile_id")
+	}
+	if !reflect.DeepEqual(existing.Overlay, p.Overlay) {
+		fields = append(fields, "overlay")
+	}
+	if !reflect.DeepEqual(existing.OverlayLimits, p.OverlayLimits) {
+		fields = append(fields, "overlay_limits")
+	}
+	return fields
+}
+
 // governanceProfileUnchanged reports whether writing p over existing would
 // change nothing observable — the check ApplyGovernance runs before every
 // profile write so a `get | apply` round trip on an unchanged install issues
@@ -176,11 +202,35 @@ func governanceAssignmentKey(subjectType CapabilitySubjectType, subject string) 
 // profile's content on every apply (#1108's stated no-op contract; stricter
 // than ApplyDrives, which always re-PUTs/re-POSTs).
 func governanceProfileUnchanged(existing, p GovernanceProfile) bool {
-	return reflect.DeepEqual(existing.Ceiling, p.Ceiling) && reflect.DeepEqual(existing.Limits, p.Limits) &&
-		(p.Contact == nil || reflect.DeepEqual(existing.Contact, p.Contact)) &&
-		reflect.DeepEqual(existing.BaseProfileID, p.BaseProfileID) &&
-		reflect.DeepEqual(existing.Overlay, p.Overlay) &&
-		reflect.DeepEqual(existing.OverlayLimits, p.OverlayLimits)
+	return len(governanceProfileChangedFields(existing, p)) == 0
+}
+
+// governanceProfileStep is the step a profile write makes: an update of the
+// stored profile replacing, or a create when there is none.
+func governanceProfileStep(name string, replacing *GovernanceProfile) ApplyStep {
+	if replacing == nil {
+		return ApplyStep{Kind: "profile", Op: "create", Name: name}
+	}
+	return ApplyStep{Kind: "profile", Op: "update", Name: name, ID: &replacing.ID}
+}
+
+// governanceAssignmentStep is the step an assignment upsert makes. name is the
+// profile's name, or "" when the apply does not know it; the id stands in then.
+func governanceAssignmentStep(a GovernanceAssignment, name string) ApplyStep {
+	profile := name
+	if profile == "" {
+		profile = a.ProfileID.String()
+	}
+	return ApplyStep{Kind: "assignment", Op: "upsert", SubjectType: a.SubjectType, Subject: a.Subject, Profile: profile}
+}
+
+// governanceAssignmentErr names the assignment a failed upsert was writing; nil
+// stays nil.
+func governanceAssignmentErr(a GovernanceAssignment, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("apply governance assignment (%s %q): %w", a.SubjectType, a.Subject, err)
 }
 
 // governanceWriteOrder returns the indexes of profiles with every base before the profiles composed
@@ -324,6 +374,9 @@ type GovernanceApplyResult struct {
 	// PruneSkipped is true when prune was requested and did not run to
 	// completion because a write was pending.
 	PruneSkipped bool `json:"prune_skipped,omitempty"`
+	// Steps are the writes issued, in order, with their outcome. Unchanged
+	// items are omitted.
+	Steps []ApplyStep `json:"steps,omitempty"`
 }
 
 // ApplyGovernanceResult is ApplyGovernance with the pending-approval outcome
@@ -396,9 +449,11 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 			if ok {
 				replacing = &existing
 			}
+			step := governanceProfileStep(p.Name, replacing)
 			got, pending, werr := c.writeGovernanceProfile(ctx, p, replacing)
+			res.Steps = append(res.Steps, step.withOutcome(pending != nil, werr))
 			if werr != nil {
-				return GovernanceApplyResult{}, werr
+				return res, werr
 			}
 			if pending != nil {
 				res.Pending = append(res.Pending, *pending)
@@ -439,8 +494,11 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 		}
 		var saved GovernanceAssignment
 		pending, err := c.doPending(ctx, http.MethodPost, "/api/v1/governance/assignments", req, &saved)
+		err = governanceAssignmentErr(a, err)
+		step := governanceAssignmentStep(a, name)
+		res.Steps = append(res.Steps, step.withOutcome(pending != nil, err))
 		if err != nil {
-			return GovernanceApplyResult{}, fmt.Errorf("apply governance assignment (%s %q): %w", a.SubjectType, a.Subject, err)
+			return res, err
 		}
 		if pending != nil {
 			res.Pending = append(res.Pending, *pending)
@@ -456,7 +514,7 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 		if !res.PruneSkipped {
 			res.PruneSkipped, err = c.pruneGovernance(ctx, current, doc, &res)
 			if err != nil {
-				return GovernanceApplyResult{}, err
+				return res, err
 			}
 		}
 	}
@@ -499,7 +557,13 @@ func (c *Client) pruneGovernance(ctx context.Context, current, doc GovernanceDoc
 		}
 		pending, err := c.doPending(ctx, http.MethodDelete, "/api/v1/governance/assignments/"+a.ID.String(), nil, nil)
 		if err != nil {
-			return false, fmt.Errorf("prune governance assignment (%s %q): %w", a.SubjectType, a.Subject, err)
+			err = fmt.Errorf("prune governance assignment (%s %q): %w", a.SubjectType, a.Subject, err)
+		}
+		id := a.ID
+		step := ApplyStep{Kind: "assignment", Op: "delete", SubjectType: a.SubjectType, Subject: a.Subject, ID: &id}
+		res.Steps = append(res.Steps, step.withOutcome(pending != nil, err))
+		if err != nil {
+			return false, err
 		}
 		if pending != nil {
 			res.Pending = append(res.Pending, *pending)
@@ -516,7 +580,13 @@ func (c *Client) pruneGovernance(ctx context.Context, current, doc GovernanceDoc
 		}
 		pending, err := c.doPending(ctx, http.MethodDelete, "/api/v1/governance/profiles/"+p.ID.String(), nil, nil)
 		if err != nil {
-			return false, fmt.Errorf("prune governance profile %q: %w", p.Name, err)
+			err = fmt.Errorf("prune governance profile %q: %w", p.Name, err)
+		}
+		id := p.ID
+		step := ApplyStep{Kind: "profile", Op: "delete", Name: p.Name, ID: &id}
+		res.Steps = append(res.Steps, step.withOutcome(pending != nil, err))
+		if err != nil {
+			return false, err
 		}
 		if pending != nil {
 			res.Pending = append(res.Pending, *pending)

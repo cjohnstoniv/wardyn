@@ -11,9 +11,9 @@ import type { AutonomyLevel, AutonomyResolution, RunLimits } from "../api/govern
 import type { PolicyRef } from "../api/health";
 import type { ComponentFact } from "./components";
 import type { ProvenanceEntry } from "./policy-preview";
-import type { AllowedImage, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
+import type { AllowedImage, Experience, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
 import type { RunPolicySpec } from "./policy";
-import type { ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
+import type { ResolvedRunnerPool, RunnerPoolChoice, RunnerPoolSelection } from "./runner-pools";
 import type { SCMAccess } from "./setup";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
@@ -109,12 +109,27 @@ export interface AgentRun {
   // "runner_asserted" (a runner said so, nobody can verify). Empty only for a
   // legacy or unresolved record, hence optional here.
   evidence_source?: RunEvidenceSource;
+  // The runner pool the run was admitted into, and how it was chosen (Go:
+  // AgentRun.RunnerPool*), written once at create. A pool is a label, never
+  // admission: the run goes to the exact target in runner_id (self-hosted) or
+  // runner_pool_executor (remote-provided). All absent for a run from before
+  // pools and for a server-originated run that names none.
+  runner_pool_id?: string;
+  runner_pool_revision?: number;
+  runner_pool_selection?: RunnerPoolSelection;
+  runner_pool_executor?: string;
   sandbox_ref?: string;
   // interactive runs come up idle (no agent task) so a human attaches and drives
   // them via the WS PTY; the runs board badges these as "awaiting attach".
   // Optional so an older backend payload (or a test fixture) without the field
   // still type-checks and degrades to autonomous.
   interactive?: boolean;
+  // The canonical run mode chosen at launch (Go: AgentRun.Experience), the one
+  // value every interactive door reads: a "background" run has no terminal, SSH,
+  // interactive exec, web gateway or desktop. Absent for a run from an older
+  // client or before 0.9, which keeps every door's behaviour. Not `interactive`,
+  // which is the legacy execution flag.
+  experience?: Experience;
   // The host working-directory the run's workspace is bind-mounted from. Surfaced
   // on the runs board so a workspace-directory collision is visible at a glance.
   workspace_path?: string;
@@ -221,6 +236,10 @@ export interface AgentRun {
   // wait_budget_sec does not bound a run's start; see Start deadlines in
   // docs/OPERATIONS.md (#the-start-deadlines).
   ends_at?: string | null;
+  // The latest end the run's pool and the deployment allow, measured from launch
+  // (migration 0159, #1319). Absent when neither bounds the lifetime and for a
+  // run from before it; an extension never goes past it.
+  lifetime_cap_at?: string;
   wait_budget_sec?: number;
   run_limits?: RunLimits;
   governance_profile_id?: string;
@@ -307,6 +326,8 @@ export interface RunEndWaitResult {
   wait_budget_sec: number;
   capped: string[];
   latest_end?: string;
+  // Whose limit latest_end is, so the console can name it.
+  latest_end_source?: "pool" | "governance" | "deployment";
   max_wait_sec?: number;
   // True only when the end was capped by the limit the run captured at launch
   // while the launch profile's own limit has since been loosened (#1322).

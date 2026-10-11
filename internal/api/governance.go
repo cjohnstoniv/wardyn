@@ -102,6 +102,10 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, governanceResponse{Profiles: profiles, Assignments: assignments})
 }
 
+// governanceRefusedAllPlacements is the frozen sentence (GOVERNANCE.REFUSED_ALL_PLACEMENTS) the
+// profile writer answers 400 with when deny_placements lists both placements.
+const governanceRefusedAllPlacements = "deny_placements: a profile can't deny every placement — the people it binds could run nothing"
+
 // governanceLimitsRefusal is the negative-value boundary on GovernanceLimits, or
 // "" when every number is writable. It is the profile's half of
 // validateStorageProviders and borrows that function's sentence
@@ -132,6 +136,14 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 	}
 	if l.MaxDriveSizeMiB < 0 {
 		return fmt.Sprintf(providers400Negative, "limits.max_drive_size_mib", l.MaxDriveSizeMiB)
+	}
+	for _, p := range l.DenyPlacements {
+		if !p.Valid() {
+			return fmt.Sprintf("limits.deny_placements: %q is not a placement — use remote or local", p)
+		}
+	}
+	if types.DeniesEveryPlacement(l.DenyPlacements) {
+		return governanceRefusedAllPlacements
 	}
 	if l.AutonomyRubric != nil {
 		if err := l.AutonomyRubric.Validate(); err != nil {

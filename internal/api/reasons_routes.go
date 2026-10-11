@@ -109,6 +109,14 @@ const (
 	reasonRunEndWaitChanged     = "run_end_wait_changed"       // the run changed while the PATCH was being decided
 )
 
+// POST /runs (run_end_create.go): the create-time end. The No end refusals reuse
+// run_end_no_end_not_allowed and run_limits_gate_denied above.
+const (
+	reasonRunEndConflictingFields = "run_end_conflicting_fields" // both ends_after_sec and no_end were set
+	reasonRunEndAfterTooSmall     = "run_end_after_too_small"    // ends_after_sec is below 1
+	reasonRunEndAfterTooLarge     = "run_end_after_too_large"    // ends_after_sec is past 2147483647
+)
+
 // notFoundIf's (helpers.go) own reasons: one per resource kind its ~27
 // call sites name (#656 slice 3). notFoundIf itself cannot tell one kind
 // from another, so each caller supplies its own; declared together here so
@@ -731,6 +739,14 @@ const (
 	reasonCredentialEraseSignInConfigUnreadable = "credential_erase_signin_config_unreadable"
 )
 
+// /me/secrets and /shared-secrets (secrets_explicit.go): the caller has no personal namespace to name
+// (the admin token, local mode, a device or a delegated portal), so 403.
+const reasonSecretPersonalNeedsPerson = "secret_personal_needs_person"
+
+// A write of a stored credential that began before an erase of its owner (writeServerError):
+// 409, nothing saved, a new attempt lands.
+const reasonCredentialErasedDuringWrite = "credential_erased_during_write"
+
 // POST /people/{principal}/erasure (person_erasure.go).
 const (
 	// scopes is not a non-empty list of known scope names.
@@ -913,8 +929,22 @@ const (
 	reasonRunnerKeyAlreadyRegistered    = "runner_key_already_registered"
 )
 
+// The runners management routes (runner_inventory.go).
+const (
+	reasonRunnerNotFound         = "runner_not_found"
+	reasonRunnerTokenNotFound    = "runner_token_not_found"
+	reasonRunnerFilterInvalid    = "runner_filter_invalid"
+	reasonRunnerSessionRequired  = "runner_session_required"
+	reasonRunnersOrgURLInvalid   = "runners_org_url_invalid"
+	reasonRunnersEnabledRequired = "runners_enabled_required"
+)
+
 // Runner route admission fails closed on absent or unreadable configuration.
 const (
 	reasonRunnersDisabled          = "runners_disabled"
 	reasonRunnersConfigUnavailable = "runners_config_unavailable"
+	reasonRunnerStreamUnavailable  = "runner_stream_unavailable"
+	reasonRunnerStreamRateLimited  = "runner_stream_rate_limited"
+	// reasonRunnerRevokeReasonInvalid: an owner's revoke names a reason other than not_mine.
+	reasonRunnerRevokeReasonInvalid = "runner_revoke_reason_invalid"
 )

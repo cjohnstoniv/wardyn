@@ -171,6 +171,52 @@ type CreateRunRequest struct {
 	// (OD-1), applied inside the resolve fold before the ceiling clamp. See
 	// RunOverrides.
 	Overrides *RunOverrides `json:"overrides,omitempty"`
+	// ModeContract marks a request as a 0.9 client's, whatever else it carries:
+	// it is RunModeContractV09 and nothing else. The server then holds the
+	// request to the run-mode contract, so an unset Experience is refused
+	// (run_mode_required) and never read as an older client's. The console's New
+	// Run wizard always sends it; an older client, and the CLI's older flags,
+	// send none and keep the older mapping.
+	ModeContract string `json:"mode_contract,omitempty"`
+	// Experience is the canonical run mode, "background" or "interactive". A new
+	// client sends it with the carriers below, which replace the legacy agent,
+	// task, task_mode, interactive, interactive_start, seed_auto_tools,
+	// tool_approvals and model_provider (sending both is run_mode_conflict). It
+	// is required once any carrier is used; the server never infers it. It is
+	// stored on the run, and every interactive door of a background run refuses.
+	// A request with none of these fields is an older client's and is read as
+	// before.
+	Experience Experience `json:"experience,omitempty"`
+	// Workload is what a background run executes: an agent task or a command.
+	Workload *RunWorkload `json:"workload,omitempty"`
+	// Tools are the included tool instances, each with its own provider or
+	// configuration and its own tool rules. Distinct from Startup. A server that
+	// cannot honour a shape yet (more than one tool, per-tool rules, a component
+	// tool, an interactive run with none) refuses it with
+	// request_field_unavailable, never ignores it.
+	Tools []IncludedTool `json:"tools,omitempty"`
+	// Startup is what an interactive run starts on its own: none, one included
+	// harness or one command.
+	Startup *RunStartup `json:"startup,omitempty"`
+	// StartFolder is the run's one working directory. Accepted and validated; a
+	// server that cannot apply an attachment folder yet refuses it with
+	// request_field_unavailable.
+	StartFolder *StartFolder `json:"start_folder,omitempty"`
+	// NoRepositoriesOrDrives is the explicit choice to attach nothing. It cannot
+	// be combined with any repository, workspace or drive. Nothing in the
+	// sandbox is kept when the run ends unless it is pushed or copied out.
+	NoRepositoriesOrDrives bool `json:"no_repositories_or_drives,omitempty"`
+	// EndsAfterSec ends the run this many seconds after it is created, 1 to
+	// 2147483647 (below 1 is a 400, run_end_after_too_small). An end past what the pool, the deployment and the person's
+	// governance allow is cut to it, and the 201 says so; it is never refused. A
+	// run with neither this nor NoEnd gets the effective default end. Setting both
+	// is a 400 (run_end_conflicting_fields).
+	EndsAfterSec *int `json:"ends_after_sec,omitempty"`
+	// NoEnd asks for a run with no end. It is allowed only where the pool and the
+	// deployment leave the lifetime unlimited and the person's governance permits
+	// No end (allow_no_end with user_changes_limits); otherwise 403
+	// run_end_no_end_not_allowed or run_limits_gate_denied.
+	NoEnd bool `json:"no_end,omitempty"`
 	// Preset launches the named launch preset (see Preset): the server
 	// expands it into the equivalent explicit request and runs the unchanged
 	// create path under the caller's own ceiling. Alongside it only Title,

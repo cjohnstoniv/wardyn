@@ -279,6 +279,10 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 	if owner == "" {
 		return
 	}
+	r, ok := s.beginRequestWrite(w, r, owner)
+	if !ok {
+		return
+	}
 	var body providerSignInCapture
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonProviderSignInCaptureBodyInvalid, mpsCaptureBody)
@@ -332,7 +336,7 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 		writeErrorReason(w, authz.EffectUnavailable.Status(), string(authz.ReasonMaskStateUnavailable), maskStateSentence)
 		return
 	}
-	if err := s.putOwned(r.Context(), owner, func() error { return s.cfg.Secrets.For(owner).Put(r.Context(), name, raw) }); err != nil {
+	if err := s.putOwned(r.Context(), owner, func(ctx context.Context) error { return s.cfg.Secrets.For(owner).Put(ctx, name, raw) }); err != nil {
 		writeServerError(w, r, "store model provider sign-in", err)
 		return
 	}

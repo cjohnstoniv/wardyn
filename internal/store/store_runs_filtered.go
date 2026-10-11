@@ -34,6 +34,9 @@ type RunFilter struct {
 	EndedWithin time.Duration
 	// IncludeKilled disables killedVisibleFor's default hide.
 	IncludeKilled bool
+	// NoEnd keeps only live runs with no end (ends_at NULL): the ones nothing will
+	// stop but a person, an idle stop or a kill (#1319).
+	NoEnd bool
 	// Workspace exact-matches COALESCE(NULLIF(repo,''), workspace_path).
 	Workspace string
 	// Query ILIKE-searches title/task/repo/created_by. Raw — the store
@@ -112,6 +115,9 @@ func baseWhere(f RunFilter, nonTerminal string, args *[]any) string {
 		if len(arms) > 0 {
 			clauses = append(clauses, "("+strings.Join(arms, " OR ")+")")
 		}
+	}
+	if f.NoEnd {
+		clauses = append(clauses, "(ends_at IS NULL AND "+fmt.Sprintf(runLiveSQL, nonTerminal)+")")
 	}
 	if f.Workspace != "" {
 		clauses = append(clauses, "COALESCE(NULLIF(repo,''), workspace_path) = "+bindArg(args, f.Workspace))

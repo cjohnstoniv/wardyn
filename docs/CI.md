@@ -358,6 +358,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `dco` | 60 | 0.1 | 0.1 | 10 |
 | `main-red` | – | pending | pending | 10 |
 | `notify-flaky` | – | pending | pending | 10 |
+| `runner-units` | – | pending | pending | 15 |
 | `multi-arch build (agent-claude-code)`, nightly | 60 | 3.5 | 3.8 | 45 |
 | `multi-arch build (wardynd)`, nightly | 60 | 3.1 | 3.5 | 45 |
 | `multi-arch build (agent-aws-sso)`, nightly | 60 | 2.9 | 4.0 | 45 |
@@ -552,6 +553,7 @@ wardyn audit <id> --json
 ```
 
 - `--dry-run` posts the same body to `POST /api/v1/runs/preflight`, a dry-run of launch resolution that mints nothing and prints the `setup_items` blockers plus the confinement class that would be enforced.
+- `--placement remote|local` chooses where the run's sandbox lives, and `--runner <id>` names the runner for a local run when more than one of yours is online. Unset, the server fills the placement only when exactly one is eligible. The CLI passes both through; the server refuses with a reason such as `placement_required`, `placement_unavailable` or `runner_offline`.
 - `ci-run.sh` calls the same endpoint before launching.
 
 **Provisioning the CI principal, once, against this deployment:**

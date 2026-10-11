@@ -339,6 +339,11 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketRunMismatch, "attach ticket does not authorize this run")
 		return
 	}
+	// After the ownership check (a foreign caller learns nothing), before any cookie.
+	if rf := backgroundOnlyRefusal(run, "web application gateway"); rf != nil {
+		s.uiRefuseBackground(w, r, rf, runID, app, ta)
+		return
+	}
 	// superAdmin is true past this point only on the admin's own run or an
 	// operator-owned one, so the governance exemption below cannot reach a
 	// person's run.

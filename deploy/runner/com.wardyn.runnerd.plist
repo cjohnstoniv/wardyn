@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Copyright 2026 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  com.wardyn.runnerd — launchd LaunchAgent that keeps `wardyn-runnerd serve`
+  running as the person who owns the runner, from login on.
+
+  A LaunchAgent in the person's own gui domain, not a LaunchDaemon like
+  deploy/desktop/com.wardyn.daemon.plist: the runner identity lives in the
+  person's own configuration directory, where the owner's `wardyn runner claim`
+  looks for it, and the runner is bound to that one person.
+
+  The __WARDYN_*__ and __DOCKER_HOST__ tokens are placeholders — install.sh
+  renders this file to ~/Library/LaunchAgents with them replaced (and drops the
+  DOCKER_HOST key when it is empty). Committed as-is it is still valid,
+  parseable plist XML — see scripts/test-runner-units.sh.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.wardyn.runnerd</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__WARDYN_RUNNERD__</string>
+    <string>serve</string>
+    <string>--org</string>
+    <string>__WARDYN_ORG_URL__</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>WARDYN_PROXY_IMAGE</key>
+    <string>__WARDYN_PROXY_IMAGE__</string>
+    <key>WARDYN_INTERNAL_NETWORK</key>
+    <string>__WARDYN_INTERNAL_NETWORK__</string>
+    <key>DOCKER_HOST</key>
+    <string>__DOCKER_HOST__</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>__WARDYN_LOG__</string>
+  <key>StandardErrorPath</key>
+  <string>__WARDYN_LOG__</string>
+</dict>
+</plist>

@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -153,5 +155,109 @@ func TestPG_AuditSeal_FullActorWaitsInTheSpoolThenTheDrainStoresTheSubject(t *te
 	}
 	if got := rg.actorsRead(rg.a, ""); !slices.Equal(got, []string{"erin"}) {
 		t.Errorf("read actors = %v, want erin", got)
+	}
+}
+
+// targetsStored is every audit row's stored target of one action, oldest first.
+func (rg *sealRig) targetsStored(action string) []string {
+	rg.t.Helper()
+	rows, err := rg.pool.Query(rg.t.Context(), `SELECT target FROM audit_events WHERE action = $1 ORDER BY seq`, action)
+	if err != nil {
+		rg.t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			rg.t.Fatal(err)
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// targetsRead is the target of every row of action a reader sees through h, narrowed by ?target= when not "".
+func (rg *sealRig) targetsRead(h http.Handler, action, target string) []string {
+	rg.t.Helper()
+	path := "/api/v1/audit?action=" + action
+	if target != "" {
+		path += "&target=" + target
+	}
+	w := rg.call(h, http.MethodGet, path, "")
+	if w.Code != http.StatusOK {
+		rg.t.Fatalf("audit read = %d %s", w.Code, w.Body)
+	}
+	var evs []types.AuditEvent
+	if err := json.Unmarshal(w.Body.Bytes(), &evs); err != nil {
+		rg.t.Fatal(err)
+	}
+	var out []string
+	for _, ev := range evs {
+		out = append(out, ev.Target)
+	}
+	return out
+}
+
+// A person named as the target of a person-target row is stored as their subject
+// through the real recorder chain, read back as themself, and reads erased once
+// they are erased; a person who never signed in keeps the name, and a subject
+// string typed by a caller is refused.
+func TestPG_AuditSeal_FullStoresAPersonTargetAsASubjectAndErasureShredsIt(t *testing.T) {
+	rg := newSealRigMode(t, audit.SealFull)
+	ctx := t.Context()
+	id, err := rg.pg.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "alice", Issuer: "https://idp.test", Email: "alice@corp.test"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := audit.SubjectActorPrefix + id.ID.String()
+	record := func(actorType types.ActorType, actor, action, target string) error {
+		return rg.rec.Record(ctx, types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), ActorType: actorType, Actor: actor,
+			Action: action, Target: target, Outcome: "success", Data: []byte(`{}`)})
+	}
+	for _, c := range []struct {
+		typ           types.ActorType
+		actor, action string
+	}{
+		{types.ActorHuman, "admin", "person.token.create"},
+		{types.ActorSystem, "delegate:d1", "delegation.exchange"},
+	} {
+		if err := record(c.typ, c.actor, c.action, "alice"); err != nil {
+			t.Fatalf("record %s: %v", c.action, err)
+		}
+		if err := record(c.typ, c.actor, c.action, "newcomer"); err != nil { // no identity row yet
+			t.Fatalf("record %s for a person who never signed in: %v", c.action, err)
+		}
+		if got := rg.targetsStored(c.action); !slices.Equal(got, []string{subject, "newcomer"}) {
+			t.Fatalf("%s stored targets = %v, want alice as her subject and newcomer as she was", c.action, got)
+		}
+		if err := record(c.typ, c.actor, c.action, subject); err == nil {
+			t.Errorf("%s: a caller-typed subject target was recorded", c.action)
+		}
+		for name, h := range map[string]http.Handler{"A": rg.a, "B": rg.b} {
+			if got := rg.targetsRead(h, c.action, "alice"); !slices.Equal(got, []string{"alice"}) {
+				t.Errorf("wardynd %s ?target=alice on %s reads %v, want alice's one row", name, c.action, got)
+			}
+		}
+	}
+	if sink := readFileOrEmpty(rg.sinkPath); strings.Contains(sink, `"target":"alice"`) {
+		t.Errorf("the sink carries alice's name as a target:\n%s", sink)
+	}
+
+	if w := rg.call(rg.a, http.MethodPost, "/api/v1/people/alice/erasure", `{"scopes":["audit_personal_fields"]}`); w.Code != http.StatusOK {
+		t.Fatalf("erasure = %d %s", w.Code, w.Body)
+	}
+	for _, action := range []string{"person.token.create", "delegation.exchange"} {
+		for name, h := range map[string]http.Handler{"A": rg.a, "B": rg.b} {
+			if got := rg.targetsRead(h, action, ""); !slices.Equal(got, []string{audit.ErasedValue, "newcomer"}) && !slices.Equal(got, []string{"newcomer", audit.ErasedValue}) {
+				t.Errorf("wardynd %s reads %s targets %v after the erasure, want alice erased and newcomer kept", name, action, got)
+			}
+		}
+		if got := rg.targetsStored(action); got[0] != subject {
+			t.Errorf("%s stored target after the erasure = %q, want it unchanged", action, got[0])
+		}
+	}
+	if st, err := rg.pg.VerifyAuditChain(ctx); err != nil || !st.OK {
+		t.Fatalf("chain after the shred = %+v, %v", st, err)
 	}
 }

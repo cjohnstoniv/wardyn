@@ -167,8 +167,17 @@ describe("buildRunInput — the 0.9 contract fields", () => {
     expect(inactive).toMatchObject({ placement: "local", runner_id: "runner-1", resources: { cpu_millis: 2000 } });
     expect(inactive).not.toHaveProperty("overrides");
     const active = runWireBody(
-      buildRunInput({ ...defaultInput(state), activeSections: { agent: false, azureDevOps: false, gitPATHosts: [], pushKeys: ["github/acme"] } })!,
+      buildRunInput({ ...defaultInput(state), activeSections: { agent: false, azureDevOps: false, gitPATHosts: [], pushKeys: ["github.com/acme"] } })!,
     );
     expect(active.overrides).toEqual({ push_rules: [{ provider: "github", org: "acme", deny_paths: ["infra/"] }] });
+  });
+});
+
+describe("buildRunInput — the 0.9 contract marker", () => {
+  it("is absent until lane A-L8 re-adds it with the experience control, so the console stays an older client", () => {
+    const body = buildRunInput(input({ policyMode: "default", merged: null }));
+    expect(body).not.toHaveProperty("mode_contract");
+    expect(body).not.toHaveProperty("experience");
+    expect(runWireBody(body!)).not.toHaveProperty("mode_contract");
   });
 });

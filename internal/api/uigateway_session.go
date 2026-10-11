@@ -293,6 +293,10 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 		return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
 			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 	}
+	if backgroundOnlyRefusal(run, "web application gateway") != nil {
+		return s.uiDenyReassert(sess, reasonRunBackgroundOnly,
+			http.StatusConflict, runBackgroundOnlyMsg("web application gateway"))
+	}
 	if s.cfg.SessionRevocations == nil {
 		return nil
 	}
@@ -314,6 +318,14 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 	}
 	return nil
+}
+
+// uiRefuseBackground answers uiEnterCommon's refusal of a background task, for
+// any caller (a super admin included): audited, no cookie, no redirect.
+func (s *Server) uiRefuseBackground(w http.ResponseWriter, r *http.Request, rf *runRefusal, runID uuid.UUID, app string, ta ticketActor) {
+	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
+		ta.withVia(map[string]any{"reason": reasonRunBackgroundOnly}))
+	rf.write(s, w, r)
 }
 
 // uiDenyReassert audits the refusal and returns it. One place, so an arm cannot

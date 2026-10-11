@@ -184,6 +184,9 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, r, authz.Deny(authz.ReasonAttachTicketForeignRun, run.ID.String(), "run not found").OnRun(run.ID).AsIf(authz.Reason(reasonRunNotFound)))
 		return
 	}
+	if s.refuseBackgroundOnly(w, r, run, "terminal") {
+		return
+	}
 	// Same fail-closed gate as the WS itself: a ticket for a non-attachable run
 	// is useless, so refuse to mint one (clean 409 now beats a WS error later).
 	if run.State != types.RunRunning {

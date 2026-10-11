@@ -80,6 +80,7 @@ describe("template field registry", () => {
     expect(TEMPLATE_REQUEST_FIELDS.filter((r) => r.excluded).map((r) => r.name).sort()).toEqual([
       "description",
       "integration_id",
+      "mode_contract",
       "preset",
       "preset_version",
       "title",
@@ -90,15 +91,22 @@ describe("template field registry", () => {
     expect(TEMPLATE_NESTED_CARRIED.LLMInspectionSpec).not.toContain("workspace_secret_values");
   });
 
-  it("keeps push rules in the SCM entry, tool rules per harness, and the pending carriers unaccepted", () => {
+  it("keeps push rules in the SCM entry, tool rules per harness, and no landed carrier pending", () => {
     expect(templateFieldRule("inline_policy.push_rules")).toMatchObject({ section: "scm_entry", keyed_by: "provider+org" });
     expect(templateFieldRule("inline_policy.tool_rules")).toMatchObject({ section: "harness", keyed_by: "harness" });
     expect(templateFieldRule("model_provider")?.section).toBe("harness");
     expect(templateFieldRule("interactive")?.omitted).toBe("unset_required");
     expect(templateFieldRule("agent")?.omitted).toBe("unset_optional");
-    for (const name of ["runner_pool_id", "experience", "included_tools", "startup", "starting_folder", "no_repositories_or_drives"]) {
-      expect(templateFieldRule(name)?.pending, name).toBeTruthy();
+    expect(templateFieldRule("runner_pool_id")?.pending).toBeFalsy();
+    // The run-mode carriers are real request fields now: no working names, no pending flag.
+    for (const name of ["experience", "workload", "tools", "startup", "start_folder", "no_repositories_or_drives"]) {
+      expect(templateFieldRule(name), name).toBeDefined();
+      expect(templateFieldRule(name)?.pending, name).toBeFalsy();
     }
+    expect(templateFieldRule("tools")).toMatchObject({ section: "harness", keyed_by: "harness" });
+    expect(templateFieldRule("experience")?.omitted).toBe("unset_required");
+    expect(templateFieldRule("workload")?.sensitive).toBe(true);
+    for (const name of ["included_tools", "starting_folder"]) expect(templateFieldRule(name), name).toBeUndefined();
     expect(templateFieldRule("pool_id")).toBeUndefined();
     for (const r of [...TEMPLATE_REQUEST_FIELDS, ...TEMPLATE_POLICY_FIELDS]) {
       expect(r.tab as string, r.name).not.toBe("info");

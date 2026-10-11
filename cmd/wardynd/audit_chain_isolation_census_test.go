@@ -71,9 +71,10 @@ func (s txSite) pinned() bool {
 // audit_events" from the same source the claim is about would let both move
 // together and prove nothing.
 var auditWriterPins = map[string]string{
-	"internal/store/store.go:InsertAuditEvent":           "the control plane's audit writer: pool.BeginTx(pgx.ReadCommitted), then the chain lock, then the INSERT",
-	"internal/broker/pgx.go:PgxStore.BeginReadCommitted": "the broker's mint transaction: broker.mint opens it through the TxBeginner interface's ONLY opener, BeginReadCommitted (R3 HANDOFF-1), whose first statement is SET TRANSACTION ISOLATION LEVEL READ COMMITTED with a fail-closed rollback; insertAuditEventTx chains the mint's audit row inside it. The interface carries no bare Begin any more, so every caller of the seam is pinned by construction",
-	"internal/db/db.go:beginReadCommitted":               "the boot chain canary, which INSERTs a synthetic audit row and rolls it back",
+	"internal/store/store_runner_exit.go:PG.AcceptRunnerExit": "runner exit transition, durable receipt and chained audit commit atomically at READ COMMITTED",
+	"internal/store/store.go:InsertAuditEvent":                "the control plane's audit writer: pool.BeginTx(pgx.ReadCommitted), then the chain lock, then the INSERT",
+	"internal/broker/pgx.go:PgxStore.BeginReadCommitted":      "the broker's mint transaction: broker.mint opens it through the TxBeginner interface's ONLY opener, BeginReadCommitted (R3 HANDOFF-1), whose first statement is SET TRANSACTION ISOLATION LEVEL READ COMMITTED with a fail-closed rollback; insertAuditEventTx chains the mint's audit row inside it. The interface carries no bare Begin any more, so every caller of the seam is pinned by construction",
+	"internal/db/db.go:beginReadCommitted":                    "the boot chain canary, which INSERTs a synthetic audit row and rolls it back",
 }
 
 // declaredNonAuditTx are the transactions that do NOT write audit_events, each
@@ -108,6 +109,14 @@ var declaredNonAuditTx = map[string]string{
 		"That is not taken on trust: the set is DISCOVERED by content (db.triggerMigrationFiles), so " +
 		"assertReplaySetIsPureDDL below re-derives it and checks, and a future migration that redefines the chain " +
 		"trigger AND carries DML reddens this test instead of joining the replay silently",
+	"cmd/wardynd/recovery_target.go:holdLiveLock": "the rehearsal's T3 probe: takes pg_advisory_xact_lock on a random key " +
+		"and reads pg_locks, then rolls back. It carries no INSERT, UPDATE or DELETE on any table, audit_events " +
+		"included, so it writes no chain-linked row and its isolation level decides nothing. The rehearsal's two " +
+		"audit rows go through the recorder chain, whose transactions pin READ COMMITTED and are classified by the census",
+	"cmd/wardynd/recovery_target.go:rehearseSession.readTx": "a READ ONLY transaction on the rehearsal's target backend " +
+		"(the audit chain sweep, the pairing read and the key checks). Postgres refuses any write in it, " +
+		"audit_events included, so there is no head for it to chain onto stale; the backend is also " +
+		"default_transaction_read_only",
 }
 
 // auditChainTriggerName is the trigger whose migrations replayTriggerMigrations

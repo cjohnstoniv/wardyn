@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -43,7 +44,7 @@ import (
 // renewGiveUpAfter, which mirrors the embedded provider's 1 h tokenTTL); the
 // five minutes cover the stamp landing a moment after the mint and a small
 // clock difference between the database and the minting replica.
-const runTokenLapseAfter = time.Hour + 5*time.Minute
+const runTokenLapseAfter = identity.RunTokenLapseAfter
 
 // sweepLapsedRunTokens is the boot and sweep check: every RUNNING run whose
 // token lapsed is marked lost (outage) with its proxy stopped, or torn down.
@@ -157,7 +158,9 @@ func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store
 	s.revokeRunBroker(ctx, run.ID)
 	s.leaseEnded.Store(run.ID, struct{}{})
 	data, outcome := map[string]any{"reason": string(reason)}, "success"
-	if err := s.stopLostSandbox(ctx, run, now); err != nil {
+	if err := s.stopLostSandbox(ctx, run, now); errors.Is(err, runner.ErrPendingOnRunner) {
+		data["containment"] = "pending_runner"
+	} else if err != nil {
 		data["lost_error"] = err.Error()
 		if errors.Is(err, runner.ErrEndUnsupported) {
 			data["kept"] = false
@@ -179,10 +182,10 @@ func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store
 	return loseApplied
 }
 
-// lostRunKeepable: an interactive RUNNING run with a sandbox, not already
-// kept, whose lease or ended-run grace is still live.
+// lostRunKeepable preserves local headless agents as well as interactive
+// sandboxes. Runner lifecycle evidence finalizes a kept headless agent later.
 func (s *Server) lostRunKeepable(run types.AgentRun, now time.Time) bool {
-	if run.State != types.RunRunning || !run.Interactive || run.SandboxRef == "" || runIsKept(run) {
+	if run.State != types.RunRunning || (!run.Interactive && run.Placement != types.PlacementLocal) || run.SandboxRef == "" || runIsKept(run) {
 		return false
 	}
 	return run.EndsAt == nil || now.Before(run.EndsAt.Add(s.cfg.EndedRunGrace))
@@ -220,7 +223,9 @@ func (s *Server) endedKept(run types.AgentRun, now time.Time) *store.EndedKept {
 
 // stopLostSandbox stops a lost run's proxy. An outage run inside its lease
 // keeps its agent running; any other lost run (a reboot, or an outage past
-// its end) has its agent stopped as at the end.
+// its end) has its agent stopped as at the end. An outage run's stopped agent
+// is recorded (store.RunLeaser.MarkRunAgentStopped), so extending the run
+// later does not make it hold a slot again.
 func (s *Server) stopLostSandbox(ctx context.Context, run types.AgentRun, now time.Time) error {
 	if run.LostReason == types.LostOutage && (run.EndsAt == nil || now.Before(*run.EndsAt)) {
 		stopper, ok := s.cfg.Runner.(runner.ProxyStopper)
@@ -229,5 +234,14 @@ func (s *Server) stopLostSandbox(ctx context.Context, run types.AgentRun, now ti
 		}
 		return stopper.StopProxy(ctx, run.SandboxRef)
 	}
-	return s.endSandbox(ctx, run)
+	err := s.endSandbox(ctx, run)
+	if leaser, ok := s.cfg.Store.(store.RunLeaser); ok && err == nil && run.LostReason == types.LostOutage && run.LostAt != nil {
+		// A failed write only leaves the run counted; the lease sweep re-asserts
+		// this stop every pass and retries it.
+		if merr := leaser.MarkRunAgentStopped(ctx, run.ID, *run.LostAt); merr != nil {
+			slog.WarnContext(ctx, "wardynd: recording a kept run's stopped agent failed",
+				slog.String("run_id", run.ID.String()), slog.Any("err", merr))
+		}
+	}
+	return err
 }

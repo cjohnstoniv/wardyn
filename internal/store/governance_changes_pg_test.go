@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,15 +196,18 @@ func TestPG_GovernanceChange_EraseClearsPrincipalAndEmailMatches(t *testing.T) {
 	byEmail.ProposedBy, byEmail.ProposedByEmail = "another-principal", who+"@corp.example"
 	theirs := newChange(uuid.NewString())
 	theirs.ProposedBy, theirs.ProposedByEmail = "someone-else", "else@corp.example"
+	// Another person whose email claim spells the erased person's principal.
+	spelled := newChange(uuid.NewString())
+	spelled.ProposedBy, spelled.ProposedByEmail = "claimant", strings.ToUpper(who)
 	var ids []uuid.UUID
-	for _, c := range []types.GovernanceChange{mine, byEmail, theirs} {
+	for _, c := range []types.GovernanceChange{mine, byEmail, theirs, spelled} {
 		saved, _, err := st.ProposeGovernanceChange(ctx, c, time.Hour)
 		if err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, saved.ID)
 	}
-	n, err := st.EraseGovernanceChangePersonalFields(ctx, []string{who, who + "@corp.example"})
+	n, err := st.EraseGovernanceChangePersonalFields(ctx, []string{who}, []string{who + "@corp.example"})
 	if err != nil || n != 2 {
 		t.Fatalf("erase touched %d rows (%v), want the principal's and the email's", n, err)
 	}
@@ -218,13 +222,15 @@ func TestPG_GovernanceChange_EraseClearsPrincipalAndEmailMatches(t *testing.T) {
 			t.Errorf("an erased person's change = %q %q %q, want not pending and no personal fields", state, by, email)
 		}
 	}
-	if state, by, _ := read(ids[2]); state != types.GovernanceChangePending || by != "someone-else" {
-		t.Errorf("another person's change = %q %q, want it untouched", state, by)
+	for i, want := range map[int]string{2: "someone-else", 3: "claimant"} {
+		if state, by, _ := read(ids[i]); state != types.GovernanceChangePending || by != want {
+			t.Errorf("another person's change = %q %q, want it untouched", state, by)
+		}
 	}
-	if n, err := st.EraseGovernanceChangePersonalFields(ctx, []string{who}); err != nil || n != 0 {
+	if n, err := st.EraseGovernanceChangePersonalFields(ctx, []string{who}, nil); err != nil || n != 0 {
 		t.Errorf("a retry touched %d rows (%v), want 0", n, err)
 	}
-	if n, err := st.EraseGovernanceChangePersonalFields(ctx, nil); err != nil || n != 0 {
+	if n, err := st.EraseGovernanceChangePersonalFields(ctx, nil, nil); err != nil || n != 0 {
 		t.Errorf("an empty name list touched %d rows (%v)", n, err)
 	}
 }
@@ -246,7 +252,7 @@ func TestPG_GovernanceChange_EraseClearsTheDecidersReason(t *testing.T) {
 		return saved.ID
 	}
 	mine, theirs := reject(who, who+"@corp.example"), reject("someone-else", "else@corp.example")
-	if n, err := st.EraseGovernanceChangePersonalFields(ctx, []string{who}); err != nil || n != 1 {
+	if n, err := st.EraseGovernanceChangePersonalFields(ctx, []string{who}, nil); err != nil || n != 1 {
 		t.Fatalf("erase touched %d rows (%v), want the one the person decided", n, err)
 	}
 	reason := func(id uuid.UUID) (r string) {
@@ -261,4 +267,101 @@ func TestPG_GovernanceChange_EraseClearsTheDecidersReason(t *testing.T) {
 	if r := reason(theirs); r != "typed by the decider" {
 		t.Errorf("another decider's reason = %q, want it untouched", r)
 	}
+}
+
+func nameChange(op, key, name string) types.GovernanceChange {
+	ch := newChange(key)
+	ch.Op = op
+	ch.Payload = json.RawMessage(`{"name":"` + name + `"}`)
+	return ch
+}
+
+// A rename holds the name it takes exactly as a create does, in either order; a same-name update, an
+// update of a profile that is gone and a lapsed holder hold nothing.
+func TestProposeGovernanceChange_ARenameHoldsItsNewName(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	newProfile := func(t *testing.T, name string) uuid.UUID {
+		id := uuid.New()
+		if _, err := pool.Exec(ctx, `INSERT INTO governance_profiles (id, name, ceiling, limits, created_by) VALUES ($1,$2,'{}','{}','t')`, id, name); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { pool.Exec(ctx, `DELETE FROM governance_profiles WHERE id = $1`, id) }) //nolint:errcheck // best-effort
+		return id
+	}
+	refused := func(t *testing.T, err error, want uuid.UUID) {
+		t.Helper()
+		var pending *store.ErrGovernanceChangePending
+		if !errors.As(err, &pending) || pending.ID != want {
+			t.Fatalf("proposal = %v, want *ErrGovernanceChangePending naming %s", err, want)
+		}
+	}
+	suffix := uuid.NewString()
+
+	t.Run("a pending create refuses a rename to its name", func(t *testing.T) {
+		name := "x-" + suffix
+		p := newProfile(t, "orig-a-"+suffix)
+		create, _, err := st.ProposeGovernanceChange(ctx, nameChange("create", uuid.NewString(), name), time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = st.ProposeGovernanceChange(ctx, nameChange("update", p.String(), name), time.Hour)
+		refused(t, err, create.ID)
+	})
+	t.Run("a pending rename refuses a create of its name", func(t *testing.T) {
+		name := "y-" + suffix
+		p := newProfile(t, "orig-b-"+suffix)
+		rename, _, err := st.ProposeGovernanceChange(ctx, nameChange("update", p.String(), name), time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = st.ProposeGovernanceChange(ctx, nameChange("create", uuid.NewString(), name), time.Hour)
+		refused(t, err, rename.ID)
+	})
+	t.Run("a pending rename refuses another rename to its name", func(t *testing.T) {
+		name := "z-" + suffix
+		p, q := newProfile(t, "orig-c-"+suffix), newProfile(t, "orig-d-"+suffix)
+		first, _, err := st.ProposeGovernanceChange(ctx, nameChange("update", p.String(), name), time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = st.ProposeGovernanceChange(ctx, nameChange("update", q.String(), name), time.Hour)
+		refused(t, err, first.ID)
+	})
+	t.Run("a same-name update holds no name", func(t *testing.T) {
+		name := "keep-" + suffix
+		p := newProfile(t, name)
+		if _, _, err := st.ProposeGovernanceChange(ctx, nameChange("update", p.String(), name), time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := st.ProposeGovernanceChange(ctx, nameChange("create", uuid.NewString(), name), time.Hour); err != nil {
+			t.Fatalf("a create of a name a same-name update only keeps: %v", err)
+		}
+	})
+	t.Run("a same-name update is not refused by a pending claim on its name", func(t *testing.T) {
+		name := "kept-" + suffix
+		p := newProfile(t, name)
+		if _, _, err := st.ProposeGovernanceChange(ctx, nameChange("create", uuid.NewString(), name), time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := st.ProposeGovernanceChange(ctx, nameChange("update", p.String(), name), time.Hour); err != nil {
+			t.Fatalf("an update that keeps its name was refused by a pending create of that name: %v", err)
+		}
+	})
+	t.Run("a lapsed rename is expired and no longer holds its name", func(t *testing.T) {
+		name := "lapsed-" + suffix
+		p := newProfile(t, "orig-e-"+suffix)
+		rename, _, err := st.ProposeGovernanceChange(ctx, nameChange("update", p.String(), name), time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE governance_changes SET expires_at = now() - interval '1 second' WHERE id = $1`, rename.ID); err != nil {
+			t.Fatal(err)
+		}
+		_, expired, err := st.ProposeGovernanceChange(ctx, nameChange("create", uuid.NewString(), name), time.Hour)
+		if err != nil || len(expired) != 1 || expired[0].ID != rename.ID {
+			t.Fatalf("create over a lapsed rename = expired %v, %v; want the rename expired", expired, err)
+		}
+	})
 }
