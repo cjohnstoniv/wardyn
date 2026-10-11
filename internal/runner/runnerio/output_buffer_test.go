@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
 func outputFixture(t *testing.T) *outputBuffer {
@@ -334,4 +335,38 @@ func TestOutputBufferSingleDrainCompletes(t *testing.T) {
 			t.Fatalf("begin=%v late write=%v", begin, err)
 		}
 	}
+}
+
+func TestOutputBufferRidesOutAResumableLinkBlip(t *testing.T) {
+	synctest.Test(t, outputRidesOutAResumableLinkBlip)
+}
+
+// A full buffer whose ACKs stop for as long as the session layer resumes a
+// link keeps waiting, and loses nothing once ACKs return.
+func outputRidesOutAResumableLinkBlip(t *testing.T) {
+	b := outputFixture(t)
+	if _, err := b.Write(bytes.Repeat([]byte("x"), outputLimit)); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := b.Write([]byte("last")); done <- err }()
+	time.Sleep(runnerwire.ResumeWindow + runnerwire.BackoffMax - time.Second)
+	select {
+	case err := <-done:
+		t.Fatalf("write gave up inside the resume window: %v", err)
+	default:
+	}
+	if err := b.ack(outputChunk); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	b.mu.Lock()
+	start, ack := b.start(), b.state.Ack
+	b.mu.Unlock()
+	if start != outputChunk || ack != outputChunk {
+		t.Fatalf("unacknowledged output dropped: start=%d ack=%d", start, ack)
+	}
+	b.Close()
 }
