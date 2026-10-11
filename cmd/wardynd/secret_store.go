@@ -335,14 +335,26 @@ func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519
 }
 
 // refuseKEKRequired refuses a serving boot when WARDYN_KEK_REQUIRED is set and
-// neither a key service wraps the credentials nor an external store holds them,
-// so the local key (set or ephemeral) would. It sits in the serving path, not in
-// newSecretStore, so `wardynd -rewrap`, the remedy, still runs.
+// neither a key service wraps new credential writes nor an external store holds
+// them, so the local key (set or ephemeral) would. It checks configuration
+// only: rows already wrapped by the local key do not refuse a boot (an operator
+// mid-migration must be able to start wardynd and run `-rewrap`; /setup/status
+// warns with their count). It sits in the serving path, not in newSecretStore,
+// so `wardynd -rewrap`, the remedy, still runs.
 func refuseKEKRequired(required bool, s secretstore.Store) error {
 	if !required || keyService(s) != "" || storesExternally(s) != "" {
 		return nil
 	}
-	return fmt.Errorf("refusing to start: WARDYN_KEK_REQUIRED is set but credentials are wrapped by the local key — set WARDYN_KEK=transit|azurekv|awskms and run `wardynd -rewrap` to move them onto it")
+	return fmt.Errorf("refusing to start: WARDYN_KEK_REQUIRED is set but no key service wraps new credential writes — set WARDYN_KEK=transit|azurekv|awskms, then run `wardynd -rewrap` to move the rows the local key still wraps")
+}
+
+// localRowsCounter is the store's count of rows still wrapped by the local key,
+// or nil for a store that keeps none.
+func localRowsCounter(s secretstore.Store) func(context.Context) (int, error) {
+	if ps, ok := s.(*secretstorepg.Store); ok {
+		return ps.LocalRows
+	}
+	return nil
 }
 
 // refuseIdleAgeKey refuses boot when a key service wraps every write
@@ -406,7 +418,7 @@ func registerVaultFlags() vaultFlags {
 		maxVersions:        flagIntEnv("vault-kv-max-versions", "WARDYN_VAULT_KV_MAX_VERSIONS", 1, "max_versions set on each secret the vaultkv store creates (1: a replaced value does not linger)"),
 		timeout:            flagDuration("secret-store-timeout", "WARDYN_SECRET_STORE_TIMEOUT", 5*time.Second, "timeout of each call to an external secret store"),
 		kek:                flagEnv("kek", "WARDYN_KEK", kekLocal, `key that wraps each stored secret's data key: "local" (derived from WARDYN_AGE_KEY), "transit" (the Vault Transit key WARDYN_VAULT_TRANSIT_KEY names, over the WARDYN_VAULT_* client) or "azurekv" (the Key Vault keys WARDYN_AZURE_KEK_KEY and WARDYN_AZURE_KEK_SIGNING_KEY name, as the WARDYN_AZURE_* identity) or "awskms" (the AWS KMS key WARDYN_AWS_KMS_KEY names, as the AWS SDK's default credential chain)`),
-		kekRequired:        flagBool("kek-required", "WARDYN_KEK_REQUIRED", false, "refuse to start while credentials are wrapped by the local key: a key service (WARDYN_KEK=transit|azurekv|awskms) or an external store must hold them. `wardynd -rewrap` still runs"),
+		kekRequired:        flagBool("kek-required", "WARDYN_KEK_REQUIRED", false, "require a key service (WARDYN_KEK=transit|azurekv|awskms) or an external store for new credential writes, and refuse to start without one. Rows already wrapped by the local key do not refuse a boot; `wardynd -rewrap` moves them"),
 		principalKeys:      flagEnv("principal-keys", "WARDYN_PRINCIPAL_KEYS", "off", `"on" seals each person's stored credentials under a key of that person's own (envelope enc_version 3), which an erase destroys; "off" (default) keeps writing them under the credential key. Boot keys and the operator namespace never move, and store mode is unaffected. Turning it off still reads every row, but enabling it is one-way across a downgrade below 0.8.6; wardynd -rewrap-principal-keys moves existing rows. See docs/operations/secrets-and-keys.md`),
 		keyDomainsFile:     flagEnv("key-domains-file", "WARDYN_KEY_DOMAINS_FILE", "", `path of a JSON file declaring key domains: an object from domain name ("a-z0-9-", never "default") to {"transit": {"key", "role"}} or {"azurekv": {"key", "signingKey", "clientId"}}. A domain's Transit key or Key Vault pair wraps the principal keys of the people assigned to it (PUT /api/v1/key-domains/assignments/{subject_type}/{subject}); each is proven at boot. Empty (default) declares none, and every principal key is under the credential key. See docs/operations/secrets-and-keys.md`),
 		transitMount:       flagEnv("vault-transit-mount", "WARDYN_VAULT_TRANSIT_MOUNT", "transit", "mount path of Vault's Transit engine"),

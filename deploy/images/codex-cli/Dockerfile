@@ -21,7 +21,8 @@
 #   `wardyn-proxy-injected`; agent-run's prepare_codex_config writes the first
 #   into config.toml as `openai_base_url` and logs the sentinel in for the
 #   interactive tool, so the sandbox holds only the sentinel. OPENAI_BASE_URL
-#   and OPENAI_API_KEY are still set, for an operator image with an older codex.
+#   and OPENAI_API_KEY are still set, unused by codex and deprecated (removal in a later
+#   release); only the pinned codex is supported.
 #   This image sets none of them: with no route configured codex has none to
 #   reach, which is the correct default.
 

@@ -4,11 +4,15 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -754,7 +758,7 @@ var setupCheckBlockingStatus = map[string]string{
 var setupCheckNeverBlocks = map[string]bool{
 	"env_builder": true, "k8s_egress_containment": true, "age_key": true, "store_external": true, "platform_split": true,
 	"key_domains": true, "principal_keys": true, "key_domain_changes": true,
-	"kek_service": true, "kek_local": true,
+	"kek_service": true, "kek_local": true, "kek_local_rows": true,
 	"site_config": true, "site_config_seed": true, "internal_hosts": true, "tls_cookie_posture": true, "approval_notify": true,
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
 	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true, "audit_partitions": true,
@@ -913,6 +917,110 @@ func TestSecretStoreChecks_KEKRequiredUnmet(t *testing.T) {
 		if has(rows) != nil {
 			t.Fatalf("unexpected kek_required_unmet in %+v", rows)
 		}
+	}
+}
+
+// kek_local_rows warns, with the count, while a key service wraps new writes
+// and rows the local key still wraps remain; it never blocks and is absent at
+// zero, for a member, without the flag, without a key service, and in store mode.
+func TestKEKLocalRowsRow(t *testing.T) {
+	const svc = "Vault Transit at vault.example:8200"
+	counter := func(n int) func(context.Context) (int, error) {
+		return func(context.Context) (int, error) { return n, nil }
+	}
+	adminCtx := t.Context()
+	rowsFor := func(ctx context.Context, cfg Config) []SetupCheck { return (&Server{cfg: cfg}).kekLocalRows(ctx) }
+	base := Config{KEKRequired: true, SecretKeyService: svc, SecretLocalRows: counter(3)}
+
+	rows := rowsFor(adminCtx, base)
+	if len(rows) != 1 || rows[0].ID != "kek_local_rows" || rows[0].Status != "warn" || rows[0].Blocking ||
+		!strings.Contains(rows[0].Detail, "3 stored credential rows and principal keys") || !strings.Contains(rows[0].Fix, "wardynd -rewrap") {
+		t.Fatalf("three local rows: %+v", rows)
+	}
+	assertSetupCheckBlocking(t, rows[0])
+
+	member := withOIDCRole(withOIDCHuman(adminCtx, "sub-member"), "member")
+	if rows := rowsFor(member, base); rows != nil {
+		t.Fatalf("a member's call read the count: %+v", rows)
+	}
+
+	zero := base
+	zero.SecretLocalRows = counter(0)
+	if rows := rowsFor(adminCtx, zero); rows != nil {
+		t.Fatalf("zero local rows: %+v, want no row", rows)
+	}
+	for name, mutate := range map[string]func(*Config){
+		"flag unset":     func(c *Config) { c.KEKRequired = false },
+		"no key service": func(c *Config) { c.SecretKeyService = "" },
+		"store mode":     func(c *Config) { c.SecretStoreExternal = "Vault at vault.example:8200" },
+		"no count":       func(c *Config) { c.SecretLocalRows = nil },
+		"count fails": func(c *Config) {
+			c.SecretLocalRows = func(context.Context) (int, error) { return 0, errors.New("down") }
+		},
+	} {
+		c := base
+		mutate(&c)
+		if rows := rowsFor(adminCtx, c); rows != nil {
+			t.Errorf("%s: %+v, want no row", name, rows)
+		}
+	}
+}
+
+// GET /setup/status carries the kek_local_rows row, with the count from the configured reader.
+func TestSetupStatus_ShowsKEKLocalRows(t *testing.T) {
+	srv := New(Config{
+		BaseCtx: testBaseCtx(t), AdminToken: adminToken,
+		KEKRequired: true, SecretKeyService: "Vault Transit at vault.example:8200",
+		SecretLocalRows: func(context.Context) (int, error) { return 4, nil },
+	})
+	code, st := decodeSetup(t, srv, adminToken)
+	if code != 200 {
+		t.Fatalf("GET /setup/status: code = %d, want 200", code)
+	}
+	for _, c := range st.Checks {
+		if c.ID == "kek_local_rows" {
+			if c.Status != "warn" || !strings.Contains(c.Detail, "4 stored credential rows") {
+				t.Fatalf("kek_local_rows = %+v", c)
+			}
+			return
+		}
+	}
+	t.Fatalf("no kek_local_rows row in %+v", st.Checks)
+}
+
+// A member's GET /setup/status carries no kek_local_rows row, and the count is never read for them;
+// an admin on the same server does get it.
+func TestSetupStatus_KEKLocalRowsAbsentForAMember(t *testing.T) {
+	var reads atomic.Int32
+	h := newHarness(t)
+	cfg := baseTestConfig(h, &integStore{govEscapeStore: newGovEscapeStore(&capStore{})})
+	cfg.Runner = &fakeRunner{}
+	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.KEKRequired, cfg.SecretKeyService = true, "Vault Transit at vault.example:8200"
+	cfg.SecretLocalRows = func(context.Context) (int, error) { reads.Add(1); return 4, nil }
+	srv := New(cfg)
+	has := func(role string) bool {
+		code, st := decodeSetupSSO(t, srv, ssoSession(t, "sub-"+role, role+"@corp.example", role))
+		if code != 200 {
+			t.Fatalf("%s GET /setup/status: code = %d, want 200", role, code)
+		}
+		for _, c := range st.Checks {
+			if c.ID == "kek_local_rows" {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(oidc.RoleAdmin) {
+		t.Fatal("an admin's status carries no kek_local_rows row; the fixture is not exercising the row")
+	}
+	reads.Store(0)
+	if has(oidc.RoleUser) {
+		t.Error("a member's status carries kek_local_rows")
+	}
+	if reads.Load() != 0 {
+		t.Errorf("the local-row count was read %d time(s) for a member", reads.Load())
 	}
 }
 

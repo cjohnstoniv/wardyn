@@ -107,7 +107,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_VAULT_KV_PREFIX` | string | `wardyn`; the chart sets the release namespace | this install's path prefix under the mount (flag `-vault-kv-prefix`). Values live at `<prefix>/platform/<name>` (Wardyn's boot keys), `<prefix>/operator/<name>` and `<prefix>/people/<owner in base32hex>/<name>` |
 | `WARDYN_VAULT_KV_MAX_VERSIONS` | int | `1` | `max_versions` set on each secret the store creates (flag `-vault-kv-max-versions`); 1 means a replaced value does not linger |
 | `WARDYN_KEK` | string | `local` | the key that wraps each stored credential's data key in Postgres (flag `-kek`): `local`, `transit`, `azurekv` or `awskms`; anything else refuses boot. [Details](#wardyn_kek) |
-| `WARDYN_KEK_REQUIRED` | bool | `false` | refuse to start while the local key wraps credentials (flag `-kek-required`, chart `kek.required`): wardynd exits unless a key service or an external store holds them. [Details](#wardyn_kek_required) |
+| `WARDYN_KEK_REQUIRED` | bool | `false` | require a key service for new credential writes (flag `-kek-required`, chart `kek.required`): wardynd exits unless a key service or an external store is configured. [Details](#wardyn_kek_required) |
 | `WARDYN_PRINCIPAL_KEYS` | string | `off` | `on` seals each person's stored credentials under a key of that person's own (envelope `enc_version=3`, flag `-principal-keys`, chart `kek.principalKeys`); `off` keeps the credential key. Enabling it is one-way across a downgrade below 0.8.6. [Details](#wardyn_principal_keys) |
 | `WARDYN_KEY_DOMAINS_FILE` | string (path) | (unset) | the file that declares key domains (flag `-key-domains-file`, chart `kek.domains`): a JSON object from domain name to a Transit or Azure Key Vault key. Domains come from this file alone. [Details](#wardyn_key_domains_file) |
 | `WARDYN_VAULT_TRANSIT_MOUNT` | string | `transit` | mount of Vault's Transit engine (flag `-vault-transit-mount`) |
@@ -398,8 +398,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_KEK_REQUIRED`
 
-- Refuse to start while the local key wraps credentials (flag `-kek-required`, chart `kek.required`): wardynd exits unless a key service (`WARDYN_KEK=transit`, `azurekv` or `awskms`) or an external store holds them, whether or not `WARDYN_AGE_KEY` is set.
-- `wardynd -rewrap` still runs, and `/setup/status` shows `kek_required_unmet`.
+- Require a key service for new credential writes (flag `-kek-required`, chart `kek.required`): wardynd exits unless a key service (`WARDYN_KEK=transit`, `azurekv` or `awskms`) or an external store is configured, whether or not `WARDYN_AGE_KEY` is set.
+- It checks configuration only. Rows already wrapped by the local key are not moved and do not stop wardynd starting; `wardynd -rewrap` moves them.
+- `/setup/status` shows `kek_required_unmet` while no key service is configured, and `kek_local_rows` (a warning with the row count) while a key service is configured and local-key rows remain.
+- `wardynd -rewrap` still runs with the flag set.
 
 ### `WARDYN_PRINCIPAL_KEYS`
 
@@ -1948,7 +1950,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The brokered `<proxy>/wardyn/llm/openai` route plus the path the final upstream needs
 - (`/v1` for the public OpenAI host or a gateway whose base URL has an empty path, nothing extra when the gateway carries its own prefix; `codexBaseURL`, [`internal/api/runs_dispatch_provider.go`](../internal/api/runs_dispatch_provider.go)).
 - Set by dispatch for every non-subscription codex run, next to `CODEX_API_KEY=wardyn-proxy-injected`, the inert sentinel.
-- codex 0.149.1 reads neither `OPENAI_BASE_URL` nor `OPENAI_API_KEY` (still set, for an older codex in an operator image)
+- Only the pinned codex (0.149.1) is supported. It reads neither `OPENAI_BASE_URL` nor `OPENAI_API_KEY`; dispatch still sets both, unused by codex, and they are deprecated and will be removed in a later release. An older codex in an operator image is not supported.
 - So the codex image's `prepare_codex_config` ([`deploy/images/codex-cli/agent-run`](../deploy/images/codex-cli/agent-run)) writes this into `config.toml` as a top-level `openai_base_url` and runs `codex login --with-api-key` with the sentinel for the interactive tool.
 - Each is written only when its variable is non-empty.
 - The proxy replaces the sentinel on the wire; no real key is in the sandbox.

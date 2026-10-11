@@ -98,6 +98,9 @@ const (
 	ReasonAuditRetentionInsideWindow   Reason = "audit_retention_inside_window"
 	ReasonAuditRetentionLiveRun        Reason = "audit_retention_live_run"
 	ReasonAuditRetentionDigestMismatch Reason = "audit_retention_digest_mismatch"
+	// ReasonAuditRetentionActorReserved: the drop's caller is named "wardynd", the name the database
+	// reads as the sweeper (a system, unattested drop), so no request may carry it.
+	ReasonAuditRetentionActorReserved Reason = "audit_retention_actor_reserved"
 	// ReasonComponentAutonomy: the organisation's autonomy cap on runs that
 	// carry a self-defined component (site config components.autonomy_cap)
 	// alone bound the run's level, and the request asks for more than it
@@ -166,6 +169,7 @@ var refusals = map[Reason]Refusal{
 	ReasonAuditRetentionInsideWindow:     {Effect: EffectConflict, Audit: true},
 	ReasonAuditRetentionLiveRun:          {Effect: EffectConflict, Audit: true},
 	ReasonAuditRetentionDigestMismatch:   {Effect: EffectConflict, Audit: true},
+	ReasonAuditRetentionActorReserved:    {Effect: EffectDeny, Audit: true},
 	ReasonComponentAutonomy:              {Effect: EffectDeny, Audit: true},
 }
 

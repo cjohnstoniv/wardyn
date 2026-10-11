@@ -392,7 +392,7 @@ func secretStoreChecks(external, keyService string, durable, multiUser, platform
 	if kekRequired {
 		checks = append(checks, SetupCheck{
 			ID: "kek_required_unmet", Label: "Credential key custody", Status: "fail",
-			Detail: "This deployment requires a key service, but credentials are wrapped by the local key. This reports the posture; wardynd refuses to start in it.",
+			Detail: "This deployment requires a key service, but new credential writes are wrapped by the local key. This reports the posture; wardynd refuses to start in it.",
 			Fix:    "Set WARDYN_KEK=transit, azurekv or awskms, then run `wardynd -rewrap`.",
 		})
 	}

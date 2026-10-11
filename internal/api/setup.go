@@ -338,6 +338,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	if chk, ok := staticKeyServiceCheck(s.cfg.SecretKeyService, s.cfg.SecretKeyServiceStaticKey); ok {
 		checks = append(checks, chk)
 	}
+	checks = append(checks, s.kekLocalRows(ctx)...)
 	checks = append(checks, s.keyCustodyRows(ctx)...)
 	checks = append(checks, hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
 

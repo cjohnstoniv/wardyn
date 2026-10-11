@@ -5,4 +5,5 @@
 # docs/ENV.md 35619 adds 12 (AWS KMS r1 fixes): the KMS client's proxy and CA line, and the link-local hosts the daemon proxy bypasses.
 # docs/ENV.md=35673 adds 280 (0.9 F-1513): the Acknowledged delivery subsection (acknowledged SIEM delivery, #1513), including the redirect halt, the re-enable backlog and the no-manual-grant sentences.
 # docs/ENV.md 35899 measured after F-1513 merge.
-docs/ENV.md=35899 share=5
+# docs/ENV.md 35973 adds 74 (0.9 G-sec-rest): WARDYN_KEK_REQUIRED covers new writes only and names the kek_local_rows row (#1977), and only the pinned codex is supported (#1979).
+docs/ENV.md=35973 share=5

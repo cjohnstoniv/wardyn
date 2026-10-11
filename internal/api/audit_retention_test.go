@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ type retentionFake struct {
 	aheadErr  error
 
 	dropPartition, dropDigest, dropActor string
+	dropActorType                        types.ActorType
 	drops                                int
 }
 
@@ -34,9 +36,9 @@ func (f *retentionFake) AuditRetentionStatus(context.Context) (types.AuditRetent
 	return f.status, f.statusErr
 }
 
-func (f *retentionFake) DropAuditPartition(_ context.Context, partition, digest, actor string) (types.AuditRetentionDrop, error) {
+func (f *retentionFake) DropAuditPartition(_ context.Context, partition, digest, actor string, actorType types.ActorType) (types.AuditRetentionDrop, error) {
 	f.drops++
-	f.dropPartition, f.dropDigest, f.dropActor = partition, digest, actor
+	f.dropPartition, f.dropDigest, f.dropActor, f.dropActorType = partition, digest, actor, actorType
 	if f.dropErr != nil {
 		return types.AuditRetentionDrop{}, f.dropErr
 	}
@@ -141,6 +143,20 @@ func TestAuditRetention_DropAndItsRefusals(t *testing.T) {
 		if fake.dropPartition != "audit_events_legacy" || fake.dropDigest != "abc" || fake.dropActor != "sub-sec" {
 			t.Errorf("the store saw %q %q as %q, want the partition, the digest and the caller", fake.dropPartition, fake.dropDigest, fake.dropActor)
 		}
+		if fake.dropActorType != types.ActorHuman {
+			t.Errorf("the store saw actor type %q for a person, want human", fake.dropActorType)
+		}
+	})
+
+	t.Run("a drop with the shared admin token is not a human", func(t *testing.T) {
+		fake := &retentionFake{}
+		srv, _ := retentionServer(t, fake)
+		if w := do(t, srv, http.MethodPost, "/api/v1/audit/retention/drop", adminToken, body); w.Code != http.StatusOK {
+			t.Fatalf("drop: %d %s", w.Code, w.Body.String())
+		}
+		if fake.dropActorType != types.ActorSystem {
+			t.Errorf("the store saw actor type %q for the admin token, want system", fake.dropActorType)
+		}
 	})
 
 	for reason, wantReason := range map[string]string{
@@ -236,6 +252,55 @@ func TestDropAuditPartition_FullSealStoresSubjectActor(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "audit_retention_drop_failed") || fake.drops != 0 {
 		t.Errorf("a sealer that cannot answer: %d %s, %d drop(s); want 503 audit_retention_drop_failed and no drop", w.Code, w.Body.String(), fake.drops)
 	}
+}
+
+// The database reads the actor name 'wardynd' as the retention sweeper, so the door refuses a caller
+// with that name: local mode takes it from X-Wardyn-Principal, and an OIDC subject is whatever the
+// provider issued. Either way nothing reaches the store and the refusal is on the record.
+func TestDropAuditPartition_RefusesTheSweeperName(t *testing.T) {
+	body := `{"partition":"audit_events_legacy","digest":"abc"}`
+	assertRefused := func(t *testing.T, w *httptest.ResponseRecorder, fake *retentionFake, rec *recRecorder) {
+		t.Helper()
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "audit_retention_actor_reserved") || fake.drops != 0 {
+			t.Fatalf("%d %s, %d drop(s); want 403 audit_retention_actor_reserved and no drop", w.Code, w.Body.String(), fake.drops)
+		}
+		for _, ev := range rec.snapshot() {
+			if ev.Action == "authz.denied" && strings.Contains(string(ev.Data), "audit_retention_actor_reserved") {
+				return
+			}
+		}
+		t.Errorf("no authz.denied row naming audit_retention_actor_reserved (have %+v)", rec.snapshot())
+	}
+	localDrop := func(t *testing.T, principal string) (*httptest.ResponseRecorder, *retentionFake, *recRecorder) {
+		t.Helper()
+		fake := &retentionFake{}
+		h := newHarness(t)
+		cfg := baseTestConfig(h, fake)
+		cfg.LocalMode = true
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/audit/retention/drop", strings.NewReader(body))
+		req.Host, req.RemoteAddr = "127.0.0.1:8080", "127.0.0.1:54321"
+		req.Header.Set("X-Wardyn-Principal", principal)
+		w := httptest.NewRecorder()
+		panicFails(t, New(cfg).Handler()).ServeHTTP(w, req)
+		return w, fake, h.audit
+	}
+
+	t.Run("local mode names it in X-Wardyn-Principal", func(t *testing.T) {
+		w, fake, rec := localDrop(t, "wardynd")
+		assertRefused(t, w, fake, rec)
+	})
+	t.Run("local mode with another name still drops", func(t *testing.T) {
+		w, fake, _ := localDrop(t, "alice")
+		if w.Code != http.StatusOK || fake.dropActor != "alice" {
+			t.Errorf("%d %s, store saw %q; want 200 as alice", w.Code, w.Body.String(), fake.dropActor)
+		}
+	})
+	t.Run("an OIDC subject named wardynd", func(t *testing.T) {
+		fake := &retentionFake{}
+		srv, rec := retentionServer(t, fake)
+		sec := ssoSession(t, "wardynd", "sec@corp.example", oidc.RoleSecurityAdmin)
+		assertRefused(t, doSSO(t, srv, http.MethodPost, "/api/v1/audit/retention/drop", sec, body), fake, rec)
+	})
 }
 
 // /setup/status warns when the partition runway is short, and says nothing while it is healthy.

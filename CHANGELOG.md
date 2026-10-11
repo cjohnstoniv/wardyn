@@ -45,6 +45,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Serve your OIDC issuers over `https://`. An in-cluster internal issuer behind a service mesh may
   set `WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=mesh` (#1970).
 - Repoint any dashboard or SIEM rule on `auth.member_mode` to `auth.user_view.set` (#623).
+- Migration `0146_audit_retention_drop_actor_type` replaces `audit_retention_drop` with a four-argument form so an
+  admin-token drop records its actor type; no data changes (#1978).
 
 ### Added
 
@@ -161,6 +163,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   console has a TLS posture, now refuses boot; it was a warning. `WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=mesh`
   opts the internal issuer out with a boot warning; the public issuer has no opt-out. Loopback and
   the Compose demo are unaffected (#1970).
+- `WARDYN_KEK_REQUIRED` now states what it guarantees: new credential writes need a key service (`transit`,
+  `azurekv` or `awskms`) or an external store, and boot is refused without one. Rows the local key already wraps do
+  not stop a boot; `/setup/status` shows `kek_local_rows` with their count until `wardynd -rewrap` moves them
+  (#1977).
+- Dropping an audit partition with the shared admin token is recorded as a `system` actor (still attested) instead
+  of a person; the sweeper's autodrop is unchanged. The name `wardynd` is reserved for the sweeper: a drop requested
+  under it is refused (`403 audit_retention_actor_reserved`) and audited (#1978).
+- The Codex image supports only its pinned Codex. `OPENAI_BASE_URL` and `OPENAI_API_KEY` are still set but unused by
+  Codex and deprecated; a later release removes them (#1979).
 
 ### Removed
 
@@ -202,6 +213,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `?state=deactivated` finds them (#1824).
 - A person's drawer says when their token list could not be read, with Retry, instead of showing
   an empty list (#1815).
+- A full reload of the shared masking registry no longer drops a secret this replica committed after the reload's
+  snapshot, so that value stays masked (#1975).
+- When the exec output relay is refused because a run's masking corpus cannot be proven whole, the denial is audited
+  (`authz.denied`, `mask_state_unavailable`, target `exec.relay`) and a pending output row is kept so the sweeper
+  records a capture gap with its reason. A run that failed while starting, before any output was opened, no longer
+  writes a spurious `no_tail` capture gap (#1976).
 
 ## [0.8.9] — 2026-10-09
 

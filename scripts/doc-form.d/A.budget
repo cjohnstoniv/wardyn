@@ -11,10 +11,13 @@
 # docs/AUDIT-ACTIONS.md 40133 measured after G-1423 merge.
 # docs/AUDIT-ACTIONS.md=40006 adds 68 (0.9 F-1513): the audit.delivery.reset row (#1513).
 # docs/AUDIT-ACTIONS.md 40203 measured after F-1513 merge.
-docs/AUDIT-ACTIONS.md=40203 share=8
+# docs/AUDIT-ACTIONS.md 40237 adds 34 (0.9 G-sec-rest): the exec.relay and partition_dropped rows (#1976, #1978), and audit_retention_actor_reserved in the authz.denied reason list.
+docs/AUDIT-ACTIONS.md=40237 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
 # docs/AUDIT-ACTIONS.md 40112 measured after merging H10 into batch.
 # Runner registration and owner claims add 99 measured audit-reference words; combined total39881.
 # Runner relay metadata adds 56 measured audit-reference words; combined total39937.
+# docs/AUDIT-ACTIONS.md 39950 adds 12 (0.9 G-sec-rest, #1976): the `exec.relay` target and the never-started run that writes no finalize row.
+# docs/AUDIT-ACTIONS.md 39969 adds 19 (0.9 G-sec-rest, #1978): the `partition_dropped` row names the admin-token drop as a `system` actor that is still attested.
