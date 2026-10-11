@@ -216,6 +216,46 @@ func TestPG_MarkRunRevived_CountedRunTakesNoExtraSlot(t *testing.T) {
 	}
 }
 
+// TestPG_MarkRunAgentStopped_PinsTheLostMark pins that the stop is recorded against the outage
+// mark it was decided under: a mark carrying a stale lost_at (the run was revived and lost again
+// since) records nothing, and the current one does.
+func TestPG_MarkRunAgentStopped_PinsTheLostMark(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	run, err := pg.CreateRunUnderCap(ctx, newRun(types.RunRunning), 1)
+	if err != nil {
+		t.Fatalf("create the run: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at = now(), lost_reason = $2 WHERE id = $1`, run.ID, string(types.LostOutage)); err != nil {
+		t.Fatalf("keep the run after an outage: %v", err)
+	}
+	cur, err := pg.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := func() bool {
+		t.Helper()
+		var set bool
+		if err := pool.QueryRow(ctx, `SELECT agent_stopped_at IS NOT NULL FROM agent_runs WHERE id = $1`, run.ID).Scan(&set); err != nil {
+			t.Fatal(err)
+		}
+		return set
+	}
+	if err := pg.MarkRunAgentStopped(ctx, run.ID, cur.LostAt.Add(-time.Second)); err != nil {
+		t.Fatalf("mark under a stale lost_at: %v", err)
+	}
+	if stopped() {
+		t.Fatal("a mark carrying a stale lost_at recorded the agent as stopped")
+	}
+	if err := pg.MarkRunAgentStopped(ctx, run.ID, *cur.LostAt); err != nil {
+		t.Fatalf("mark under the current lost_at: %v", err)
+	}
+	if !stopped() {
+		t.Fatal("the mark under the current lost_at recorded nothing")
+	}
+}
+
 // TestPG_MarkRunRevived_ExtendedOutageRunTakesASlot pins that a revive starting an agent takes a
 // slot: an outage-kept run past its end (its agent stopped by the lease sweep, which records
 // the stop) frees its slot, a replacement takes it, and the owner then moves the end later; the

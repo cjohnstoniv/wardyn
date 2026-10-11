@@ -188,6 +188,25 @@ func TestReviveRun_AtTheCapRefusesBeforeMintOrPull(t *testing.T) {
 	}
 }
 
+// TestReviveRun_PrecheckDoesNotCountTheRunItself: an outage-kept run whose agent stopped can still
+// read as holding a slot, and the cap precheck must not count it against its own revive: with the
+// cap otherwise free the revive starts the agent instead of refusing 422.
+func TestReviveRun_PrecheckDoesNotCountTheRunItself(t *testing.T) {
+	f := newReviveFixture(t)
+	sr := &startingRunner{reviveRunner: f.rr}
+	f.srv.cfg.Runner = sr
+	f.rr.status = types.RunStopped
+	f.srv.cfg.MaxConcurrentRuns = 1
+	f.rs.selfCounted = true
+
+	if code, body := f.reviveAs(t, false); code != http.StatusOK {
+		t.Fatalf("revive with only the run itself counted = %d %s, want 200", code, body)
+	}
+	if len(sr.starts()) != 1 {
+		t.Fatalf("agent starts = %v, want the stopped agent started once", sr.starts())
+	}
+}
+
 // runCapAPIStore adds the deployment-cap store methods to runWarnStore: active is
 // what the lock-free count reports, and an insert at the cap answers
 // ErrRunCapReached the way store.PG does when a racing create took the last slot.

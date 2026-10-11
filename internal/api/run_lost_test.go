@@ -297,6 +297,34 @@ func TestLostRun_KeptUntilItsEndAndGrace(t *testing.T) {
 	}
 }
 
+// TestLostRun_AFailedEndRecordsNoStoppedAgent: an outage run past its end has
+// its stop recorded only once the agent really stopped. A transient end error
+// leaves the run counted (its agent may still be running); the pass that lands
+// the end records it.
+func TestLostRun_AFailedEndRecordsNoStoppedAgent(t *testing.T) {
+	f := newLostFixture(t)
+	end := f.now.Add(time.Hour)
+	f.st.run.EndsAt = &end
+	f.ls.lapsed = true
+	f.sweepTokens(t)
+
+	f.now = end.Add(time.Minute)
+	f.rn.endErr = errors.New("docker: stop agent: context deadline exceeded")
+	f.sweep(t)
+	if f.rn.endCount() != 1 {
+		t.Fatalf("EndSandbox %d; want the end attempted once", f.rn.endCount())
+	}
+	if f.st.agentStopped {
+		t.Fatal("the end failed, yet the agent's stop was recorded: extending the run would uncount a live agent")
+	}
+
+	f.rn.endErr = nil
+	f.sweep(t)
+	if !f.st.agentStopped {
+		t.Error("the end landed on the retry, yet the agent's stop was not recorded")
+	}
+}
+
 // renewStampStore is renewStore plus the token stamp.
 type renewStampStore struct {
 	*renewStore

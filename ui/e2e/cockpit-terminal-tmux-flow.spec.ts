@@ -182,13 +182,13 @@ test("50 MB of output keeps the page responsive and ends on the right screen", a
   }
   await expect.poll(() => frames.resume).toBe(frames.pause);
 
-  // Input echo once the stream is over, recorded beside its own baseline (a measure, not a gate): from the Enter
+  // Input echo once the stream is over, recorded beside its own baseline, then held to ECHO_BUDGET_MS: from the Enter
   // keydown to the frame after xterm parsed the shell's answer, timed in the page
   // so the harness's own round trips to it are not counted. The answer
   // (flow-echo-42) differs from what the typed line shows, so only it counts.
   await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
   const echoMs = await timeEcho(page, "flow-echo");
-  expect(echoMs, "input-to-echo ms").toBeLessThan(ECHO_BUDGET_MS);
   test.info().annotations.push({ type: "input-to-echo", description: `${Math.round(echoMs)} ms` });
   test.info().annotations.push({ type: "input-to-echo baseline", description: `${Math.round(baselineMs)} ms` });
+  expect(echoMs, "input-to-echo ms").toBeLessThan(ECHO_BUDGET_MS);
 });

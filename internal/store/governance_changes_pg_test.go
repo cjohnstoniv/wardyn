@@ -333,6 +333,16 @@ func TestProposeGovernanceChange_ARenameHoldsItsNewName(t *testing.T) {
 			t.Fatalf("a create of a name a same-name update only keeps: %v", err)
 		}
 	})
+	t.Run("a same-name update is not refused by a pending claim on its name", func(t *testing.T) {
+		name := "kept-" + suffix
+		p := newProfile(t, name)
+		if _, _, err := st.ProposeGovernanceChange(ctx, nameChange("create", uuid.NewString(), name), time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := st.ProposeGovernanceChange(ctx, nameChange("update", p.String(), name), time.Hour); err != nil {
+			t.Fatalf("an update that keeps its name was refused by a pending create of that name: %v", err)
+		}
+	})
 	t.Run("a lapsed rename is expired and no longer holds its name", func(t *testing.T) {
 		name := "lapsed-" + suffix
 		p := newProfile(t, "orig-e-"+suffix)
