@@ -370,3 +370,35 @@ func outputRidesOutAResumableLinkBlip(t *testing.T) {
 	}
 	b.Close()
 }
+
+// Only an ACK that advances shows an acker is back; a stale one keeps the
+// buffer dropping instead of waiting.
+func TestOutputBufferStaleAckKeepsLossy(t *testing.T) {
+	b := outputFixture(t)
+	if _, err := b.Write([]byte("abcdef")); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.ack(3); err != nil {
+		t.Fatal(err)
+	}
+	b.unacknowledged()
+	for _, offset := range []int64{0, 3} {
+		if err := b.ack(offset); err != nil {
+			t.Fatal(err)
+		}
+		b.mu.Lock()
+		lossy := b.lossy
+		b.mu.Unlock()
+		if !lossy {
+			t.Fatalf("stale ACK at %d cleared lossy", offset)
+		}
+	}
+	if err := b.ack(4); err != nil {
+		t.Fatal(err)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.lossy {
+		t.Fatal("advancing ACK left the buffer lossy")
+	}
+}
