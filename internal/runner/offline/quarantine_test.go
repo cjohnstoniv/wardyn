@@ -4,6 +4,7 @@
 package offline
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -66,7 +67,7 @@ func TestQuarantinePreservesEvidenceAndOtherInventory(t *testing.T) {
 	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+	reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,5 +121,122 @@ func TestQuarantineDefersUntilLateMutationFinishes(t *testing.T) {
 	wrong.Quarantine = &proof
 	if _, err := m.apply(t.Context(), wrong); err == nil {
 		t.Fatal("wrong-generation quarantine accepted")
+	}
+}
+
+// An org-erased (asserted) run's quarantined evidence is retained, then the
+// runner deletes its spool, output and exit RunnerAssertedEvidenceTTL after
+// the quarantine, or at once at revocation. An ordinary quarantine's
+// evidence is never deleted by age, and the compact identity stays behind.
+func TestAssertedQuarantineEvidenceErasedAfterRetentionOrRevocation(t *testing.T) {
+	m, _, elapsed, org := managerFixture(t)
+	var erased []uuid.UUID
+	m.eraseOutput = func(id uuid.UUID) error { erased = append(erased, id); return nil }
+	ids := []uuid.UUID{createLocal(t, m, org), createLocal(t, m, org), createLocal(t, m, org)}
+	quarantine := func(id uuid.UUID, asserted bool) {
+		t.Helper()
+		if err := m.MutationFinished(t.Context(), runnerwire.MethodCreateSandbox, "", id, uuid.Nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		spool, err := runnerspool.Open(filepath.Join(m.dir, "spools", id.String()), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := spool.Append(t.Context(), egress.DecisionLog{Request: egress.Request{RunID: id, Host: "example.test", Time: time.Now()}, Decision: egress.Allow}); err != nil {
+			t.Fatal(err)
+		}
+		if err := spool.Close(); err != nil {
+			t.Fatal(err)
+		}
+		m.mu.Lock()
+		r := m.state.Runs[id]
+		r.Exit = &runnerwire.AgentExit{ExecID: "exec", Code: 1}
+		m.state.Runs[id] = r
+		m.mu.Unlock()
+		a := quarantineAction(m, id)
+		a.Quarantine.Asserted = asserted
+		if result, err := m.apply(t.Context(), a); err != nil || result.Outcome != "success" {
+			t.Fatalf("quarantine: %+v %v", result, err)
+		}
+	}
+	kept := func(id uuid.UUID) bool {
+		_, err := os.Stat(filepath.Join(m.dir, "spools", id.String()))
+		return err == nil && m.state.Runs[id].Exit != nil && !m.state.Runs[id].EvidenceErased
+	}
+	asserted, ordinary, revoked := ids[0], ids[1], ids[2]
+	quarantine(asserted, true)
+	quarantine(ordinary, false)
+	*elapsed = types.RunnerAssertedEvidenceTTL - time.Hour
+	if err := m.eraseAssertedEvidence(); err != nil || !kept(asserted) || len(erased) != 0 {
+		t.Fatalf("evidence erased before the retention ceiling: %v %v", erased, err)
+	}
+	*elapsed = types.RunnerAssertedEvidenceTTL + time.Hour
+	if err := m.eraseAssertedEvidence(); err != nil || kept(asserted) || len(erased) != 1 || erased[0] != asserted {
+		t.Fatalf("asserted evidence after the ceiling: erased=%v err=%v", erased, err)
+	}
+	if !kept(ordinary) {
+		t.Fatal("an ordinary quarantine's evidence was erased by age")
+	}
+	if r := m.state.Runs[asserted]; r.Quarantine == nil || r.Ref == "" {
+		t.Fatal("erasure dropped the run's compact identity")
+	}
+	quarantine(revoked, true)
+	if err := m.Revoked(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if kept(revoked) || !kept(ordinary) {
+		t.Fatal("revocation did not erase only the asserted run's evidence")
+	}
+}
+
+// STATE carries the runner's own ref and generation: the org contains a run it
+// has no row for against exactly these.
+func TestStateRowsCarryRunnerRefAndGeneration(t *testing.T) {
+	m, _, _, org := managerFixture(t)
+	id := createLocal(t, m, org)
+	gen := uuid.New()
+	m.mu.Lock()
+	r := m.state.Runs[id]
+	r.Generation = gen
+	m.state.Runs[id] = r
+	m.mu.Unlock()
+	rows, err := allState(t.Context(), m)
+	if err != nil || len(rows) != 1 || rows[0].Ref != placement.RunnerRefPrefix(m.runnerID.String())+id.String() || rows[0].Generation != gen {
+		t.Fatalf("STATE identity: %+v %v", rows, err)
+	}
+}
+
+// The org builds an asserted subject's kill and quarantine from nothing but
+// the STATE row; the runner must accept exactly those and then drop the run
+// from its inventory, so the org's other runs reach READY.
+func TestAssertedContainmentBuiltFromStateRowApplies(t *testing.T) {
+	m, sub, _, org := managerFixture(t)
+	id := createLocal(t, m, org)
+	if err := m.MutationFinished(t.Context(), runnerwire.MethodCreateSandbox, "", id, uuid.Nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	r := m.state.Runs[id]
+	r.Generation = uuid.New()
+	m.state.Runs[id] = r
+	m.mu.Unlock()
+	rows, err := allState(t.Context(), m)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("STATE: %+v %v", rows, err)
+	}
+	row := rows[0]
+	kill := runnerwire.PendingAction{ID: uuid.New(), RunID: row.RunID, Ref: row.Ref, Kind: types.RunnerActionKill}
+	quarantine := runnerwire.PendingAction{ID: uuid.New(), RunID: row.RunID, Ref: row.Ref, Kind: types.RunnerActionQuarantine,
+		Quarantine: &types.RunnerQuarantine{ID: uuid.New(), Generation: row.Generation, Asserted: true}}
+	for _, a := range []runnerwire.PendingAction{kill, quarantine} {
+		if result, err := m.apply(t.Context(), a); err != nil || result.Outcome != "success" {
+			t.Fatalf("%s: %+v %v", a.Kind, result, err)
+		}
+	}
+	if sub.kills != 1 || m.state.Runs[id].Quarantine == nil || !m.state.Runs[id].Quarantine.Asserted {
+		t.Fatalf("asserted containment not applied: kills=%d %+v", sub.kills, m.state.Runs[id].Quarantine)
+	}
+	if rows, err := allState(t.Context(), m); err != nil || len(rows) != 0 {
+		t.Fatalf("quarantined run still in STATE: %+v %v", rows, err)
 	}
 }

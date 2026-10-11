@@ -56,7 +56,7 @@ func (s *localSub) AgentStatus(context.Context, string, string) (runner.Status, 
 func managerFixture(t *testing.T) (*Manager, *localSub, *time.Duration, time.Time) {
 	t.Helper()
 	sub := &localSub{status: runner.Status{State: types.RunRunning}, agent: runner.Status{State: types.RunRunning}}
-	m, err := New(t.TempDir(), uuid.New(), sub, uuid.UUID.String, noOutput)
+	m, err := New(t.TempDir(), uuid.New(), sub, uuid.UUID.String, noOutput, noErase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,14 +154,14 @@ func TestCreateRequiresInitialLeaseAndRejectsAmbiguousRetry(t *testing.T) {
 func TestRestartContainsUnknownDeadlineAndRetainsState(t *testing.T) {
 	m, sub, _, org := managerFixture(t)
 	id := createLocal(t, m, org)
-	if duplicate, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput); err == nil {
+	if duplicate, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase); err == nil {
 		duplicate.Close()
 		t.Fatal("two daemons own lifecycle state")
 	}
 	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestAmbiguousCreateIntentStillContainsAfterRestart(t *testing.T) {
 	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestFailedCreateContainsImmediatelyAndRetriesWhileLeaseLive(t *testing.T) {
 	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,3 +358,5 @@ func TestFailedCreateContainsImmediatelyAndRetriesWhileLeaseLive(t *testing.T) {
 
 // noOutput models fixtures with no output producer; production supplies runnerio.
 func noOutput(context.Context, uuid.UUID, string) (int64, bool, error) { return 0, true, nil }
+
+func noErase(uuid.UUID) error { return nil }
