@@ -2395,6 +2395,8 @@ hiding them would repeat the failure mode we are designed to avoid.
       - There is no per-person GitHub lane. The App lane's bounds are those of the `github_token` grant (§5.1a).
       - Branch confinement and push content rules see `git push` through the broker; they do not inspect a REST call to the forge.
 
+65. **Behind a shared ingress, unauthenticated runner connections from one address share one pre-auth rate-limit bucket (`handleRunnerStream` in [`internal/api/runner_stream.go`](../internal/api/runner_stream.go)), so put per-client rate limits on the ingress in front of the runner endpoint (0.9).**
+
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
 - Residual #46 above named what the proxy injects; this narrows WHICH requests it injects onto.

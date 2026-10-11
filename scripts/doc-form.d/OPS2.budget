@@ -5,4 +5,6 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 597 adds 48: the page now leads with the client-mode claim flow and offline table; legacy enrolment is condensed under it.
 # 622 adds 25: the Azure DevOps bullet below "Where each thing lives" (#475).
 # 635 adds 13: the one-line link to the runner service install (#1968).
-docs/operations/hybrid-laptops.md=635 share=35
+# 649 adds 27: the note under "Offline and revocation" on rate limits at a shared ingress.
+# docs/operations/hybrid-laptops.md 662 measured after R2-runner-2 merge.
+docs/operations/hybrid-laptops.md=662 share=35

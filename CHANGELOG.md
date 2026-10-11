@@ -381,6 +381,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Registered runners: a late audit record or agent exit for a run that already ended no longer drops the runner's
   session; a teardown queued for an offline runner is audited once instead of every sweep; runs finished on a runner
   record their end time.
+- Registered runners: a kill or stop queued while a runner was briefly offline now reaches it when it reconnects;
+  verified runners behind one ingress no longer use up each other's connect rate limit, while unauthenticated
+  connections from one address stay limited; wardyn-runnerd serve logs why connecting fails and when it is
+  connected.
 
 
 ## [0.8.9] — 2026-10-09

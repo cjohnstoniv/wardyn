@@ -13,4 +13,6 @@
 # the proxy's own registry (28); residual 2 (22); residual 20 (37); the section 4 table cell (5) and
 # capability-kind count (3); section 8 the registry wording (2).
 # threatmodel/THREAT-MODEL.md 52270 after F-1511-1510 (erase fence + who a name is).
-threatmodel/THREAT-MODEL.md=52270
+# 52063 adds 31 (residual 65: the runner endpoint's shared pre-auth bucket behind an ingress).
+# threatmodel/THREAT-MODEL.md 52303 measured after R2-runner-2 merge.
+threatmodel/THREAT-MODEL.md=52303
