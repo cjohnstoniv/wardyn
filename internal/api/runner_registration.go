@@ -39,13 +39,19 @@ func (s *Server) runnerRegistrationStore(w http.ResponseWriter) (store.RunnerReg
 	return rs, ok
 }
 
-func (s *Server) runnerPersonalOwner(w http.ResponseWriter, r *http.Request) (string, bool) {
+// runnerSessionOwner is the signed-in person a runner door acts for: never an administrative or
+// delegated credential, which owns no runner. The refusal's reason and sentence are the caller's.
+func (s *Server) runnerSessionOwner(w http.ResponseWriter, r *http.Request, reason, msg string) (string, bool) {
 	owner := oidcHumanFromContext(r.Context())
 	if owner == "" || neverOperator(r.Context()) {
-		writeErrorReason(w, http.StatusForbidden, string(placement.ReasonRunnerClaimMismatch), "sign in as the runner's owner; administrative and delegated credentials cannot claim for a person")
+		writeErrorReason(w, http.StatusForbidden, reason, msg)
 		return "", false
 	}
 	return owner, true
+}
+
+func (s *Server) runnerPersonalOwner(w http.ResponseWriter, r *http.Request) (string, bool) {
+	return s.runnerSessionOwner(w, r, string(placement.ReasonRunnerClaimMismatch), "sign in as the runner's owner; administrative and delegated credentials cannot claim for a person")
 }
 
 func (s *Server) handleRunnerTokenSelf(w http.ResponseWriter, r *http.Request) {

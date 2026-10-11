@@ -33,9 +33,10 @@ type Handler interface {
 // Link is the Transport over runnerwire.Conns. Attach starts a session on a
 // connection whose handshake has already run; a later Attach replaces it.
 type Link struct {
-	mu   sync.Mutex
-	peer *runnerwire.Peer
-	h    Handler
+	mu    sync.Mutex
+	peer  *runnerwire.Peer
+	h     Handler
+	ready bool
 }
 
 var _ Transport = (*Link)(nil)
@@ -58,6 +59,7 @@ func (l *Link) Attach(ctx context.Context, conn runnerwire.Conn) *runnerwire.Pee
 	}
 	p := runnerwire.NewPeer(conn, cfg)
 	l.peer = p
+	l.ready = true
 	l.mu.Unlock()
 	if old != nil {
 		old.Close()
@@ -73,13 +75,14 @@ func (l *Link) current() *runnerwire.Peer {
 }
 
 func (l *Link) Online() bool {
-	p := l.current()
-	return p != nil && p.Online()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.ready && l.peer != nil && l.peer.Online()
 }
 
 func (l *Link) Call(ctx context.Context, method string, args, result any, opts ...runnerwire.CallOption) error {
 	p := l.current()
-	if p == nil {
+	if p == nil || !l.Online() {
 		return errOffline
 	}
 	return p.Call(ctx, method, args, result, opts...)

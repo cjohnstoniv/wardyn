@@ -38,6 +38,10 @@ type reviveStore struct {
 	// capFull is store.PG's deployment cap already full: the claim of a revive
 	// that starts an agent, which would take a slot, answers ErrRunCapReached.
 	capFull bool
+	// selfCounted is the run itself still reading as holding a slot (a kept
+	// outage run whose agent stopped can); CountNonTerminalRuns counts it
+	// unless except names it.
+	selfCounted bool
 }
 
 var _ store.RunProxyConfigs = (*reviveStore)(nil)
@@ -117,6 +121,19 @@ func (s *reviveStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun,
 
 func (s *reviveStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
 	return s.profiles, nil
+}
+
+// CountNonTerminalRuns: the deployment's one other run fills the cap when capFull;
+// the run itself counts when selfCounted, unless except names it.
+func (s *reviveStore) CountNonTerminalRuns(_ context.Context, except uuid.UUID) (int, error) {
+	n := 0
+	if s.capFull {
+		n++
+	}
+	if s.selfCounted && except != s.run.ID {
+		n++
+	}
+	return n, nil
 }
 
 // reviveRunner is lostRunner that can replace a proxy; replaced is every

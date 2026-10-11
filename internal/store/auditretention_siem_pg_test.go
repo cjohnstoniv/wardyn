@@ -85,14 +85,14 @@ func TestPG_RetentionRowsReachTheSIEM(t *testing.T) {
 
 	// A refused drop writes no row either.
 	c.window(t, 30)
-	if _, err := pg.DropAuditPartition(ctx, retMid, "not-the-digest", "ops@example.com"); err == nil {
+	if _, err := pg.DropAuditPartition(ctx, retMid, "not-the-digest", "ops@example.com", types.ActorHuman); err == nil {
 		t.Fatal("a drop with a wrong digest was accepted")
 	}
 	if got := sink.take(); len(got) != 0 {
 		t.Fatalf("a refused drop sent %+v to the sink", got)
 	}
 
-	d, err := pg.DropAuditPartition(ctx, "audit_events_legacy", c.digest(t, "audit_events_legacy"), "ops@example.com")
+	d, err := pg.DropAuditPartition(ctx, "audit_events_legacy", c.digest(t, "audit_events_legacy"), "ops@example.com", types.ActorHuman)
 	if err != nil {
 		t.Fatalf("drop: %v", err)
 	}

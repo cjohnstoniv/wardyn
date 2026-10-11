@@ -128,6 +128,12 @@ func TestSetupCheckIds_Golden(t *testing.T) {
 			}},
 		})),
 
+		// An AWS KMS key service reached with a long-lived access key adds the
+		// kek_service_static_key row; no other fixture has a key service.
+		"with_aws_kms_static_key": setupCheckIds(t, New(Config{
+			AdminToken: adminToken, SecretKeyService: "AWS KMS in us-east-1", SecretKeyServiceStaticKey: true,
+		})),
+
 		// OIDC configured (a zero-value Authenticator — the rbac_test.go idiom;
 		// Middleware/decodeSession never touch its unset provider/verifier), the
 		// role map left unset, and an https redirect with WARDYN_TLS_TERMINATED

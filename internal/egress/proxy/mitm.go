@@ -409,6 +409,16 @@ func rearmBodyDeadline(w http.ResponseWriter) {
 // port is the REAL CONNECT port — the dial below must use it, not assume 443, or the operator's
 // credential reaches whatever answers at the wrong port.
 func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host string, port int) {
+	var release func()
+	r, release = p.admitSpoolHTTP(w, r)
+	if r == nil {
+		return
+	}
+	defer release()
+	p.serveAdmittedMITMRequest(w, r, host, port)
+}
+
+func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request, host string, port int) {
 	// allowed_methods applies to inner requests too, not just the opening CONNECT: the sandbox
 	// chooses each one, so the method restriction must be re-applied per request. The APPROVAL half
 	// stays per-CONNECT (docs/POLICIES.md "'One connection' is the honest word") since re-approving

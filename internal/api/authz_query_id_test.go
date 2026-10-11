@@ -90,6 +90,12 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityPrincipal, readers: []string{"secretOwnerParam", "handleDeleteSecret"},
 		foreign: 403, pinnedBy: "TestListSecrets_AdminOwnerParam_Member403",
 	},
+	// The unused registration-token list is the security tier's: a member naming ?owner= (or
+	// anything) on it gets a constant 403 before the filter is read.
+	"GET /api/v1/runners/tokens?owner": {
+		entity: entityPrincipal, readers: []string{"handleListRunnerTokens"},
+		foreign: 403, pinnedBy: "TestRunnerTokensSecurityAdminRevokesButCannotMint",
+	},
 	// Internal (run token): the named approval is looked up among the CALLING
 	// run's approvals only, so another run's id is a mismatch, never a spend.
 	"GET /api/v1/internal/injection/{grantID}?approval": {
@@ -129,6 +135,7 @@ var queryParamNotAnID = map[string]string{
 	"since":                     "audit time filter; narrows an already-scoped feed",
 	"until":                     "audit time filter; narrows an already-scoped feed",
 	"action":                    "audit action filter; narrows an already-scoped feed",
+	"reason":                    "DELETE /me/runners/{id}: the label of the caller's revoke of their own runner (only not_mine is accepted); it names no entity",
 	"action_prefix":             "audit action filter; narrows an already-scoped feed",
 	"actor":                     "audit principal filter; ANDed inside auditScope, so a member's own-run feed only narrows",
 	"actor_type":                "audit filter; narrows an already-scoped feed",

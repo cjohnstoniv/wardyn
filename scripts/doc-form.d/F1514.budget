@@ -1,0 +1,3 @@
+# Prose-word budgets (scripts/doc-form.sh): the recovery rehearsal page (0.9 F-1514g).
+# 1182 adds 167 over 1015 (F-1514 r1): exact exit-code wording, the Helm example corrections, the host_path home caveat, the Transit/Key Vault qualifier and the extra-rows line.
+docs/operations/recovery-rehearsal.md=1182 share=20

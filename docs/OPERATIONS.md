@@ -492,6 +492,10 @@ commands are the ones in "Back them up" and "Restore them", and in
 | **Managed desktop** | The `postgres_data` volume of the Compose project `wardyn-desktop` (the `compose` helper in [`deploy/desktop/wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh)). Stop the converge job first (`wardyn.timer` on Linux, the launchd job on macOS), or it restarts the stack under you. | **Not in the set, deliberately.** `age.key` stays on the device ([DESKTOP.md](DESKTOP.md#why-agekey-never-rides-in-an-mdm-payload)), so a desktop restore recovers runs, audit and drives, but not stored secrets. If you set `WARDYN_PLATFORM_KEY_FILE`, keep that file. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. | One Docker volume per person, as on Compose (a drive volume per person). | `/data/audit/audit-spool.jsonl`, `.consumed` and `.quarantine`, on the project's `audit` volume. |
 | **Helm** | The Postgres you operate (`postgres.dsn`); the chart renders none. Use that Postgres's own backup. | The Secret holding the `age-key` entry (`secrets.ageKeyFromSecret=true`), `secrets.ageKey`, or an operator-owned Secret named by `secrets.ageKeySecretRef`, or the key wired through `env`/`extraEnv`; the `WARDYN_PLATFORM_KEY_FILE` file if set; or the external key service for Vault Transit or Azure Key Vault. `secrets.allowEphemeralAgeKey=true` makes a backup unrecoverable. | The PVC, with `persistence.enabled=true` (store `fs`). With `persistence.enabled=false` the store is `off`; `env.WARDYN_RECORDING_STORE=pg` puts them in the dump. | One PVC per drive: a snapshot per claim ("User drives on Kubernetes"). | `<persistence.mountPath>/audit-spool.jsonl`, `.consumed` and `.quarantine` on the PVC. With the default `persistence.enabled=false` they sit on a `/tmp` emptyDir, so the precondition is: enable persistence, or drain and copy them before scaling to zero. |
 
+**Inventory.** `wardynd -recovery-inventory`, run with the daemon's environment, prints each item above as JSON with its location for the deployment it sees (Compose, the managed desktop or Helm, from the runner and `WARDYN_MANAGED_DIR`). It opens no database connection and reads no key; only setting names appear, never values ([design](design/0.9/recovery-set.md#12-slices)).
+
+**Manifest and rehearsal.** `-recovery-manifest` ties the dump to the spool, recordings and drive bytes, `-recovery-verify` refuses a mismatched pair, and `-recovery-rehearse` proves the set on a scratch database: [Recovery set and restore rehearsal](operations/recovery-rehearsal.md).
+
 **Rules for every row.**
 
 - **Custody.** Keep the keys apart from the data, in a secret manager, never in
@@ -515,7 +519,7 @@ commands are the ones in "Back them up" and "Restore them", and in
 > **What is not proven.**
 
 - The commands in the day-2 section were exercised once against a throwaway kind cluster.
-- No shipped tool rehearses a restore (that is issue #1514), so none of the above has been validated end to end.
+- Only `wardynd -recovery-rehearse` rehearses a restore, and only for the set you run it on, so none of the above is validated end to end until you do ([Recovery set and restore rehearsal](operations/recovery-rehearsal.md)).
 - Loading a dump into a scratch database proves the SQL loads, and nothing more: a row count does not show that the
   key works, and it does not show that the drive bytes are intact.
 
@@ -1052,7 +1056,7 @@ Set the same value on every replica. `GET /audit/retention` (`wardyn audit reten
 pending policy.
 
 - **What a drop checks.**
-  - `audit_retention_drop(partition, digest, actor)` removes a partition only if it is the oldest retained one,
+  - `audit_retention_drop(partition, digest, actor, actor_type)` removes a partition only if it is the oldest retained,
     - is closed (nothing can be appended to it any more),
     - is past the effective window,
     - and holds no row of a run that is still live (a `PENDING`, `STARTING`, `RUNNING` or
@@ -1087,6 +1091,7 @@ curl -fsS -H "Authorization: Bearer $WARDYN_TOKEN" "$WARDYN_URL/api/v1/audit/cha
 - The route is on the security tier, and every refusal is a `409` with its own `reason` and an `authz.denied` row
   (below): `audit_retention_not_oldest`, `audit_retention_not_closed`, `audit_retention_inside_window` (also while
   retention is forever), `audit_retention_live_run`, `audit_retention_digest_mismatch`.
+- A caller whose actor name is `wardynd` (the retention sweeper's name) is refused `403` `audit_retention_actor_reserved`, audited the same way.
 - An unknown partition is `404` (`audit_partition_not_found`).
 - `GET /audit/retention` lists every partition with its row count, state (`closed`, `open` or `future`) and whether a
   drop would take it now; for one it would refuse, `refusal` is the reason it would refuse with.
@@ -3696,6 +3701,13 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0139` (`0139_runner_delivery`) adds `credential_grants.delivery` (`0001`'s table), beside its new `runners` table.
 - `0141` (`0141_run_placement`) adds the placement columns on `agent_runs` (`placement`, `placement_filled`, `runner_id`,
   `evidence_source`).
+- `0143` (`0143_provider_connection_changes`) adds a trigger on `secrets` (`0001`'s table), beside its new
+  `provider_connection_changes` table.
+- `0150` (`0150_runner_action_binding`) adds binding columns to `runner_pending_actions` (`0139`'s table) and is a later
+  `CREATE OR REPLACE` of its immutability trigger function.
+- `0151` (`0151_runner_revoked_by`) adds `runners.revoked_by` and `runners.revoke_reason` (`0139`'s table).
+- `0153` (`0153_run_experience`) adds `agent_runs.experience` (`0141`'s table), the run mode a new client chose at launch.
+- `0154` (`0154_run_agent_stopped_at`) adds `agent_runs.agent_stopped_at` (`0001`'s table), the time an outage-kept run's agent was stopped.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -3780,7 +3792,7 @@ GRANT EXECUTE ON FUNCTION
   audit_append(uuid, timestamptz, uuid, text, text, text, text, text, text, jsonb),
   audit_ensure_partitions(integer),
   audit_partition_digest(text),
-  audit_retention_drop(text, text, text),
+  audit_retention_drop(text, text, text, text),
   audit_retention_set_policy(integer),
   audit_retention_partitions(text, boolean),
   audit_retention_window() TO wardyn_app;

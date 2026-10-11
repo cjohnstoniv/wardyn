@@ -188,16 +188,15 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 
-  // GET /model-providers' body (#970): the stored block (types.ModelProviders,
+  // GET /model-providers' body (#970): the stored block (ModelProviders,
   // embedded) plus connected_people, mirrored as ModelProvidersRead extending
   // ModelProviders.
-  it("modelProvidersRead (GET /model-providers): full parity with the TS ModelProvidersRead mirror", () => {
+  it("ModelProvidersRead (GET /model-providers): full parity with the TS ModelProvidersRead mirror", () => {
     const siteTs = readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8");
-    const readGo = readFileSync(join(root, "internal/api/model_providers_api.go"), "utf8");
     const blockGo = readFileSync(join(root, "internal/types/model_provider.go"), "utf8");
-    expect(readGo).toMatch(/type modelProvidersRead struct \{\n\ttypes\.ModelProviders\n/);
+    expect(blockGo).toMatch(/type ModelProvidersRead struct \{\n\tModelProviders\n/);
     expect(siteTs).toMatch(/export interface ModelProvidersRead extends ModelProviders \{/);
-    expect(new Set(tsInterfaceTopKeys(siteTs, "ModelProvidersRead"))).toEqual(new Set(goJSONTags(readGo, "modelProvidersRead")));
+    expect(new Set(tsInterfaceTopKeys(siteTs, "ModelProvidersRead"))).toEqual(new Set(goJSONTags(blockGo, "ModelProvidersRead")));
     expect(new Set(tsInterfaceTopKeys(siteTs, "ModelProviders"))).toEqual(new Set(goJSONTags(blockGo, "ModelProviders")));
   });
 
@@ -451,6 +450,37 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(goTags.length).toBeGreaterThanOrEqual(1);
     const ts = readFileSync(join(root, "ui/src/app/lib/types/new-run-contract.ts"), "utf8");
     expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
+  });
+
+  // The run-mode contract (pkg/client/runs_mode.go).
+  it.each([
+    ["RunWorkload", "RunWorkload"],
+    ["IncludedTool", "IncludedTool"],
+    ["RunStartup", "RunStartup"],
+    ["StartFolder", "StartFolder"],
+  ])("pkg/client %s: full parity with the TS %s mirror", (goName, tsName) => {
+    const goTags = goJSONTags(readFileSync(join(root, "pkg/client/runs_mode.go"), "utf8"), goName);
+    expect(goTags.length).toBeGreaterThanOrEqual(3);
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/new-run-contract.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
+  });
+
+  it("the run-mode contract's closed value sets match Go", () => {
+    const ts = stripComments(readFileSync(join(root, "ui/src/app/lib/types/new-run-contract.ts"), "utf8"));
+    const union = (name: string) => {
+      const m = new RegExp(`export type ${name} =([^;]+);`).exec(ts);
+      if (!m) throw new Error(`type ${name} not found`);
+      return new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]));
+    };
+    const modeGo = readFileSync(join(root, "pkg/client/runs_mode.go"), "utf8");
+    const runModeGo = readFileSync(join(root, "internal/types/run_mode.go"), "utf8");
+    const consts = (src: string, re: RegExp) => new Set([...src.matchAll(re)].map((m) => m[1]));
+    expect(union("Experience")).toEqual(consts(runModeGo, /\bExperience\w+\s+RunExperience = "([a-z_]+)"/g));
+    expect(union("WorkloadKind")).toEqual(consts(modeGo, /\bWorkload\w+\s+WorkloadKind = "([a-z_]+)"/g));
+    expect(union("IncludedToolKind")).toEqual(consts(modeGo, /\bIncludedTool\w+\s+IncludedToolKind = "([a-z_]+)"/g));
+    expect(union("StartupKind")).toEqual(consts(modeGo, /\bStartup\w+\s+StartupKind = "([a-z_]+)"/g));
+    expect(union("StartFolderKind")).toEqual(consts(modeGo, /\bStartFolder\w+\s+StartFolderKind = "([a-z_]+)"/g));
+    expect(modeGo).toContain(`StartFolderDrive = "drive"`);
   });
 
   it("the New Run contract's closed value sets match Go", () => {
