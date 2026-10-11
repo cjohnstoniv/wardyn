@@ -79,7 +79,7 @@ func TestMutationRecoveryExactProofAndLostAckRestart(t *testing.T) {
 			if err := m.Close(); err != nil {
 				t.Fatal(err)
 			}
-			restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+			restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 			if err != nil {
 				t.Fatal(err)
 			}

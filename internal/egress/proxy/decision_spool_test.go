@@ -207,3 +207,37 @@ func TestLocalSpoolOverflowStopsActualUpstreamAndDrains(t *testing.T) {
 		t.Fatalf("corrupt storage reached upstream: arrivals%d", len(arrived))
 	}
 }
+
+// On a runner the proxy-only spool replaces the run-token decisions POST: a
+// configured spool directory must never select the control-plane sink.
+func TestConfiguredSpoolNeverPostsDecisionsWithTheRunToken(t *testing.T) {
+	ctx := context.Background()
+	var posts sync.Map
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts.Store(r.URL.Path, r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer cp.Close()
+	id := uuid.New()
+	cfg := &Config{RunID: id, ControlPlaneURL: cp.URL, DecisionSpoolDir: filepath.Join(t.TempDir(), "spool"), DecisionBufferSize: 4}
+	s, err := configuredDecisionSink(cfg, newTokenSource("run-tok"), cp.Client(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.local == nil {
+		s.close(ctx)
+		t.Fatal("a configured runner spool selected the run-token decisions sink")
+	}
+	s.emit(egress.DecisionLog{Request: egress.Request{RunID: id, Host: "example.test", Time: time.Now()}, Decision: egress.Allow, RuleSource: "policy:allowed"})
+	rows, err := s.local.After(ctx, 0, 2)
+	if cerr := s.close(ctx); cerr != nil {
+		t.Fatal(cerr)
+	}
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("decision not spooled: %d rows %v", len(rows), err)
+	}
+	posts.Range(func(path, auth any) bool {
+		t.Fatalf("decision posted to %v with %v", path, auth)
+		return false
+	})
+}

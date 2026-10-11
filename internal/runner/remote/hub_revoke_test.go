@@ -21,6 +21,19 @@ import (
 )
 
 func TestHubActiveRevocationStopsDispatchAndReconnect(t *testing.T) {
+	testHubRevocation(t, false)
+}
+
+// A revocation committed through another replica reaches this replica's
+// session only through its stored-row recheck.
+func TestHubStoredRevocationFromAnotherReplicaEndsTheSession(t *testing.T) {
+	recheck := storedRowRecheck
+	storedRowRecheck = 20 * time.Millisecond
+	t.Cleanup(func() { storedRowRecheck = recheck })
+	testHubRevocation(t, true)
+}
+
+func testHubRevocation(t *testing.T, otherReplica bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	pub, key, _ := ed25519.GenerateKey(rand.Reader)
@@ -63,8 +76,10 @@ func TestHubActiveRevocationStopsDispatchAndReconnect(t *testing.T) {
 	terminal := row
 	terminal.State = types.RunnerRevoked
 	stored.Store(&terminal)
-	if err := hub.Revoke(ctx, row.ID); err != nil {
-		t.Fatal(err)
+	if !otherReplica {
+		if err := hub.Revoke(ctx, row.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := awaitValue(t, ctx, done); !errors.Is(err, runnerwire.ErrRevoked) {
 		t.Fatalf("revocation result: %v", err)

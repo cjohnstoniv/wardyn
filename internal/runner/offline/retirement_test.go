@@ -70,7 +70,7 @@ func TestRetirementRequiresExactDrainedEvidenceAndRetainsTombstones(t *testing.T
 	if !m.state.Runs[id].Retired || m.state.Runs[id].Ref != id.String() || len(m.state.Actions) != 3 {
 		t.Fatal("retirement pruned identity or receipts")
 	}
-	if rows, err := m.State(t.Context()); err != nil || len(rows) != 0 {
+	if rows, err := allState(t.Context(), m); err != nil || len(rows) != 0 {
 		t.Fatal("retired history remains live inventory")
 	}
 	if err := m.BeforeCreate(t.Context(), runner.SandboxSpec{RunID: id}); err == nil {
@@ -79,7 +79,7 @@ func TestRetirementRequiresExactDrainedEvidenceAndRetainsTombstones(t *testing.T
 	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+	reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,8 +116,11 @@ func TestRetirementDefersLiveOutputAndRejectsWrongSettlement(t *testing.T) {
 	if m.state.Runs[id].Retirement != nil {
 		t.Fatal("unsettled producer suppressed observations")
 	}
-	if _, err := New(t.TempDir(), uuid.New(), m.sub, uuid.UUID.String, nil); err == nil {
+	if _, err := New(t.TempDir(), uuid.New(), m.sub, uuid.UUID.String, nil, noErase); err == nil {
 		t.Fatal("missing producer settlement callback admitted")
+	}
+	if _, err := New(t.TempDir(), uuid.New(), m.sub, uuid.UUID.String, noOutput, nil); err == nil {
+		t.Fatal("missing output erasure callback admitted")
 	}
 }
 
@@ -136,12 +139,12 @@ func TestRetirementRecoversSealedSpoolBeforeLocalReceipt(t *testing.T) {
 	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+	reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if rows, err := reopened.State(t.Context()); err != nil || len(rows) != 1 || rows[0].SandboxPresent {
+	if rows, err := allState(t.Context(), reopened); err != nil || len(rows) != 1 || rows[0].SandboxPresent {
 		t.Fatal("sealed retirement restarted evidence producers")
 	}
 	if got, err := reopened.apply(t.Context(), a); err != nil || got.Outcome != "success" {
@@ -169,7 +172,7 @@ func TestRetirementStateRefusesLostOrAlteredSettlement(t *testing.T) {
 		if err := m.Close(); err != nil {
 			t.Fatal(err)
 		}
-		reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+		reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 		if err == nil {
 			reopened.Close()
 			t.Fatal("invalid retirement settlement survived restart")

@@ -364,6 +364,18 @@ func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) 
 	if err != nil {
 		return err
 	}
+	if id, ok := runner.OutputRun(ctx); ok {
+		s.mu.Lock()
+		if s.outputs[id] == nil {
+			// A live run adopted after a restart: ACK what w accepts, as
+			// receiveOutput does, and let the runner's next OPEN resume into w.
+			sink := &outputSink{writer: w}
+			s.outputs[id] = sink
+			s.mu.Unlock()
+			return s.receiveOutput(id, sink, st, 0)
+		}
+		s.mu.Unlock()
+	}
 	defer st.Close()
 	_ = st.CloseWrite()
 	_, err = io.Copy(w, st)

@@ -573,6 +573,7 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 		// one ContainerList per grace period, free next to what it reclaims.
 		pass("orphaned sandbox sweep", s.sweepOrphanedSandboxes(ctx))
 		pass("terminal run proxy config purge", s.purgeTerminalRunProxyConfigs(ctx))
+		pass("asserted runner subject purge", s.purgeAssertedRunnerSubjects(ctx))
 	}
 	pass("run watcher sweep", s.sweepRunWatchers(ctx))
 	// A tightened profile reaches its live runs on this cadence,

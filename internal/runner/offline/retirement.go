@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"path/filepath"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -70,9 +71,29 @@ func (m *Manager) retireRun(ctx context.Context, a runnerwire.PendingAction, r l
 	}
 	r.Retired = true
 	m.state.Runs[a.RunID] = r
-	// Retained run, execution and action tombstones prevent ID reuse. Nothing is
-	// deleted and neither an exit ACK nor this operation advances evidence ACKs.
-	return m.actionReceipt(a, "success")
+	// Retained run, execution and action tombstones prevent ID reuse, and
+	// neither an exit ACK nor this operation advances evidence ACKs. Retirement
+	// deletes one thing: the run's settled output, released only after the
+	// retirement is durable. Erasing evidence a run asserted is a separate path.
+	result, err := m.actionReceipt(a, "success")
+	if err != nil || m.releaseOutput == nil {
+		return result, err
+	}
+	// The run is retired either way; output a release refuses or fails to
+	// delete stays on disk, as it did before release existed.
+	if err := m.releaseOutput(a.RunID, r.Ref); err != nil {
+		slog.WarnContext(ctx, "runner kept a retired run's output", "run_id", a.RunID, "error", err)
+	}
+	return result, nil
+}
+
+// ReleaseSettledOutput sets the hook that deletes a retired run's output. The
+// hook must refuse output that is not settled (complete and fully
+// acknowledged). Without it, retirement keeps all output.
+func (m *Manager) ReleaseSettledOutput(release func(runID uuid.UUID, ref string) error) {
+	m.mu.Lock()
+	m.releaseOutput = release
+	m.mu.Unlock()
 }
 
 func retirementProof(a runnerwire.PendingAction, r localRun) error {

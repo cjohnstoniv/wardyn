@@ -69,6 +69,9 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/admin/template-group-admins", "the `/admin/template-group-admins` routes"},
 	{"PUT /api/v1/admin/template-group-admins", "the `/admin/template-group-admins` routes"},
 	{"DELETE /api/v1/admin/template-group-admins", "the `/admin/template-group-admins` routes"},
+	{"GET /api/v1/shared-secrets", "the `/shared-secrets` routes"},
+	{"PUT /api/v1/shared-secrets/{name}", "the `/shared-secrets` routes"},
+	{"DELETE /api/v1/shared-secrets/{name}", "the `/shared-secrets` routes"},
 	{"PUT /api/v1/site-config", "`PUT /site-config`"},
 	// R1's four operator-topology reads: re-tiered to admin this wave and
 	// filed as docTierUndocumented until the docs pass landed the row naming

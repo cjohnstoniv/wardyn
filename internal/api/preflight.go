@@ -257,6 +257,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonIntegrationIDRetired, mpRunNoIntegration)
 		return
 	}
+	// Last, as in decodeAndValidateCreateRun: the same derivation create applies,
+	// so the facts below describe the tool_approvals value launch dispatches with.
+	req.ToolApprovals = effectiveToolApprovals(req, ceiling)
 
 	// Every launch gate from policy resolution to the quota fit, through the
 	// SAME fold launch runs (runFoldSteps) — called, not re-implemented, so a
