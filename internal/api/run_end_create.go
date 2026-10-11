@@ -196,7 +196,7 @@ func (s *Server) resolveCreateEnd(r *http.Request, req createRunRequest, ceiling
 		pool:      pool,
 		governed:  !s.runUngoverned(r.Context()),
 		gov:       ceiling.Limits.RunLimits,
-		maxAgeSec: int(s.cfg.RunMaxAge / time.Second),
+		maxAgeSec: max(0, int(s.cfg.RunMaxAge/time.Second)), // a negative WARDYN_RUN_MAX_AGE is off, as 0 is
 		noEnd:     req.NoEnd,
 	}
 	if req.EndsAfterSec != nil {
