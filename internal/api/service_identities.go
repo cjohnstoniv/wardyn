@@ -145,13 +145,15 @@ func (s *Server) handleCreateServiceIdentity(w http.ResponseWriter, r *http.Requ
 		writeServerError(w, r, "create service identity", err)
 		return
 	}
-	if err := s.withServiceState(r, &created); err != nil {
-		writeServerError(w, r, "read the sponsor's session", err)
-		return
-	}
+	// The identity is committed: its row is written even when the sponsor's session cannot be read.
+	stateErr := s.withServiceState(r, &created)
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"service_identity.create", created.Principal(), "success",
 		mustJSON(map[string]any{"sponsor": created.Sponsor, "user_type": created.UserType})))
+	if stateErr != nil {
+		writeServerError(w, r, "read the sponsor's session", stateErr)
+		return
+	}
 	writeJSON(w, http.StatusCreated, created)
 }
 
@@ -274,9 +276,11 @@ func (s *Server) handleUpdateServiceIdentity(w http.ResponseWriter, r *http.Requ
 		writeServerError(w, r, "update service identity", err)
 		return
 	}
-	if err := s.withServiceState(r, &changed.After); err != nil {
-		writeServerError(w, r, "read the sponsor's session", err)
-		return
+	// The change is committed: its row is written even when the sponsor's session cannot be read, with the
+	// state the identity's own row gives.
+	stateErr := s.withServiceState(r, &changed.After)
+	if stateErr != nil {
+		changed.After.State = changed.After.BaseState()
 	}
 	data := map[string]any{"state": changed.After.State, "tokens_revoked": changed.TokensRevoked}
 	if changed.After.Sponsor != changed.Before.Sponsor {
@@ -287,6 +291,10 @@ func (s *Server) handleUpdateServiceIdentity(w http.ResponseWriter, r *http.Requ
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"service_identity.update", changed.After.Principal(), "success", mustJSON(data)))
+	if stateErr != nil {
+		writeServerError(w, r, "read the sponsor's session", stateErr)
+		return
+	}
 	writeJSON(w, http.StatusOK, changed.After)
 }
 
