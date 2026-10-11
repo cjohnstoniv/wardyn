@@ -102,6 +102,16 @@ func (s *Server) handleUploadRecordingPart(w http.ResponseWriter, r *http.Reques
 	s.saveRecording(w, r, part)
 }
 
+// labelRecordingEvidence marks a recording.upload row as self-reported when the
+// run's evidence comes from a self-hosted runner: the cast was produced on a
+// developer-administered host. A substrate run's row is left as it was.
+func labelRecordingEvidence(run types.AgentRun, fields map[string]any) map[string]any {
+	if run.EvidenceSource == types.RunEvidenceRunnerAsserted {
+		fields["evidence_source"] = types.RunEvidenceRunnerAsserted
+	}
+	return fields
+}
+
 func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int) {
 	// Cross-run guard: the caller must hold the run's OWN token — prevent a
 	// token from run A uploading a recording under run B.
@@ -120,10 +130,18 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	if s.refuseUncoveredAgent(w, r, claims, "recordings.upload") {
 		return
 	}
+	var run types.AgentRun
+	if s.cfg.Store != nil {
+		var err error
+		if run, err = s.cfg.Store.GetRun(r.Context(), claims.RunID); err != nil {
+			writeServerError(w, r, "load run", err)
+			return
+		}
+	}
 	if part > types.RecordingMaxParts {
 		runID := claims.RunID
 		s.recordAudit(r.Context(), s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID, "recording.upload",
-			runID.String(), "failure", mustJSON(map[string]any{"part": part, "reason": reasonRecordingPartLimit})))
+			runID.String(), "failure", mustJSON(labelRecordingEvidence(run, map[string]any{"part": part, "reason": reasonRecordingPartLimit}))))
 		writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonRecordingPartLimit, "recording exceeds its part limit")
 		return
 	}
@@ -171,6 +189,7 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 			fields["reason"] = reasonRecordingErased
 		}
 	}
+	labelRecordingEvidence(run, fields)
 	var data []byte
 	if len(fields) > 0 {
 		data = mustJSON(fields)
