@@ -2845,8 +2845,13 @@ has four-eyes.**
    - `PUT /workspaces/{id}/approved-egress` and `/denied-egress`, and record-egress promotion;
    - `/policies`, `/site-config` and `/integrations`;
    - the approval `always` scope;
-   - user-type create and delete (a new type takes effect only through a covered role-mapping write,
-     and a type a mapping references cannot be deleted);
+   - user-type create and delete. A new type reaches a person through a covered role-mapping write,
+     and a service identity, which carries any existing type directly, through its create: with the
+     switch on, a service identity's create and any change of its sponsor are held for a second
+     security-tier human as governance change kind `service_identity`, applied only against the
+     reviewed state. A type that a mapping or a service identity that is not retired references
+     cannot be deleted. A service identity's description, suspend, unsuspend and retire stay
+     single-human;
    - the SCIM purge, which deletes the departed person's user-subject governance assignments and
      capability grants directly, without a pending change: the identity provider is the single
      authority for that write.
