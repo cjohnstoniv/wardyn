@@ -107,11 +107,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   The `/templates` and `/admin/template-group-admins` routes answer `501 templates_unavailable` until the template
   store lands.
 - Runner pool contract: the run-create, preflight and policy-preview requests accept `runner_pool_id`, which the
-  server refuses with `request_field_unavailable` until runner pools are managed (never ignored). Preflight and the
-  preview return `runner_pools` (empty until then). The pool routes (`/runner-pools`, `/runner-pool-defaults`,
-  `/me/runner-pools`, `/me/runner-pool-defaults`) are reserved behind their admin, security and member tiers and
-  answer `501 runner_pools_unavailable`. `wardyn run --pool` and `wardyn runner pool list|default get|set|clear` are
-  added.
+  server refuses with `request_field_unavailable` until the pool resolver lands (never ignored). Preflight and the
+  preview return `runner_pools`. `wardyn run --pool` and `wardyn runner pool list|default get|set|clear` are added.
 - `wardyn sync <run> <directory>` pushes a local directory over the audited SSH sync subsystem.
   `--pull` opts into receiving files; pulls refuse symlinks, unsafe names and executable modes,
   keep local edits on conflict and never delete files. `--watch` repeats the sync.
@@ -150,6 +147,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   are not exercised by this release's tests), recordings and drive digests. It writes `recovery.rehearse.begin` and
   `recovery.rehearse` audit rows and exits 0 (pass), 3 (refused), 4 (fail) or 5 (incomplete). See
   docs/operations/recovery-rehearsal.md.
+- Runner pool catalogue (migration `0152_runner_pools`). Admins create, rename, switch off and delete pools
+  (`/runner-pools`), add configured executors to Remote Provided pools, and set the organisation default (`/runner-
+  pool-defaults`). A person adds only their own claimed runner to a Self-Hosted pool (`/me/runner-
+  pools/{id}/runners/{runner}`) and sets their own defaults (`/me/runner-pool-defaults`). `GET /runner-pools` lists
+  only the pools the caller may use, with availability and reason; a pool the caller may not use is a 404 like an
+  unknown one. On the first boot after the upgrade, a deployment with configured executors gets one Remote Provided
+  pool holding them as the organisation's remote default; it grants nobody a new executor or launch right.
+- Pool-use policy: `PUT|DELETE /runner-pools/{id}/use-policy` (security admin or admin) narrows who may use a Remote
+  Provided pool, held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN` (governance change kind
+  `runner_pool_use_policy`). Deleting a pool that has a use policy is refused until the policy is cleared; attaching
+  or detaching an executor that a pool holds under a use policy is held for a second human; a leaver's identity is
+  removed from every use policy (an emptied policy permits nobody); deleting a pool clears the organisation default
+  that named it. Pool `limits` are refused on create and update until limits are stored. Audit actions
+  `runner_pool.*`, `person.runner_pool_default.set|delete`.
 
 ### Changed
 
