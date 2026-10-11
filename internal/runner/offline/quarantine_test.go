@@ -59,7 +59,7 @@ func TestQuarantinePreservesEvidenceAndOtherInventory(t *testing.T) {
 		t.Fatal("quarantine acknowledged or deleted historical evidence")
 	}
 	other := createLocal(t, m, org)
-	rows, err := m.State(t.Context())
+	rows, err := allState(t.Context(), m)
 	if err != nil || len(rows) != 1 || rows[0].RunID != other {
 		t.Fatalf("unrelated inventory stranded: %+v %v", rows, err)
 	}

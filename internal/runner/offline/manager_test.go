@@ -22,6 +22,7 @@ type localSub struct {
 	substrate.Substrate
 	mu           sync.Mutex
 	stops, kills int
+	statuses     int
 	stopErr      error
 	status       runner.Status
 	agent        runner.Status
@@ -43,6 +44,7 @@ func (s *localSub) KillSandbox(context.Context, string) error {
 func (s *localSub) Status(context.Context, string) (runner.Status, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.statuses++
 	return s.status, nil
 }
 func (s *localSub) AgentStatus(context.Context, string, string) (runner.Status, error) {
@@ -119,7 +121,7 @@ func TestOfflineKeepsAgentUntilMonotonicProxyLapse(t *testing.T) {
 	if sub.stops != 1 || sub.kills != 0 {
 		t.Fatalf("lapse containment: stops=%d kills=%d", sub.stops, sub.kills)
 	}
-	rows, err := m.State(ctx)
+	rows, err := allState(ctx, m)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +201,7 @@ func TestAgentExitUsesPersistedExecAndPendingActionsAreStable(t *testing.T) {
 	}
 	code := 7
 	sub.agent = runner.Status{State: types.RunStopped, ExitCode: &code}
-	if _, err := m.State(ctx); err != nil {
+	if _, err := allState(ctx, m); err != nil {
 		t.Fatal(err)
 	}
 	if got := m.state.Runs[id].Exit; got == nil || got.Code != 7 {

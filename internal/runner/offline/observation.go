@@ -29,6 +29,32 @@ func (m *Manager) stateRows(ctx context.Context, ids []uuid.UUID) ([]runnerwire.
 	return out, nil
 }
 
+// observeExits is the periodic lifecycle pass. It observes only runs whose
+// current execution can still yield an unrecorded exit, so its cost follows
+// live executions, not every retained run. One failing run does not stop the
+// pass for the others.
+func (m *Manager) observeExits(ctx context.Context) error {
+	m.mu.Lock()
+	if err := m.ensureDurable(); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	var ids []uuid.UUID
+	for _, id := range m.inventoryIDs() {
+		if r := m.state.Runs[id]; r.Retirement == nil && r.Ref != "" && r.ExecID != "" && r.Generation != uuid.Nil && r.Exit == nil {
+			ids = append(ids, id)
+		}
+	}
+	m.mu.Unlock()
+	var errs []error
+	for _, id := range ids {
+		if _, err := m.observeRun(ctx, id); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // The observer owns its drain slot through exit persistence, not just substrate
 // IO. Retirement cannot seal history while a captured exit is still unpublished.
 func (m *Manager) observeRun(ctx context.Context, id uuid.UUID) (*runnerwire.RunState, error) {

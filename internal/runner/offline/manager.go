@@ -393,8 +393,7 @@ func (m *Manager) replayLoop(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		observe, cancel := context.WithTimeout(ctx, 30*time.Second)
-		_, err := m.State(observe)
-		if err != nil {
+		if err := m.observeExits(observe); err != nil {
 			slog.WarnContext(ctx, "runner lifecycle observation will retry", "error", err)
 		}
 		m.mu.Lock()
