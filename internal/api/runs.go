@@ -193,7 +193,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// secret namespace at mint/inject time, so it comes from runIdentitySubject,
 	// which no request header can move.
 	operatorOwned := operatorOwnedRequest(ctx)
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, createdBy), createdBy, internalAudience, operatorOwned)
+	// The sponsor claim is the accountable person: createdBy for a person, the sponsor for a service identity.
+	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, createdBy), requestSponsor(ctx, createdBy), internalAudience, operatorOwned)
 	if err != nil {
 		writeServerError(w, r, "mint run identity", err)
 		return

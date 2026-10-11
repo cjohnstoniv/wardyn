@@ -672,6 +672,11 @@ func runIdentitySubject(ctx context.Context, actor string) string {
 // IdP sub spelled like the admin token is still a person. Run creation records
 // it (AgentRun.OperatorOwned, identity.Claims.OperatorOwned).
 func operatorOwnedRequest(ctx context.Context) bool {
+	// Keyed on the service marker, never on the actor type: under D8's fallback form a service reads as
+	// the system actor, and every service run would otherwise be operator-owned.
+	if _, _, isService := serviceIdentityFromContext(ctx); isService {
+		return false
+	}
 	if localPrincipalFromContext(ctx) != "" {
 		return true
 	}
@@ -770,6 +775,10 @@ func actorFromContext(ctx context.Context, localOverride string) (types.ActorTyp
 	// attribution for a WS handshake that cannot carry a credential itself.
 	if ta, ok := ticketActorFromContext(ctx); ok {
 		return ta.actorType, ta.principal
+	}
+	// A service identity is its own actor, ahead of the human arm its published identity would match.
+	if name, _, ok := serviceIdentityFromContext(ctx); ok {
+		return serviceActorType, types.ServicePrincipalPrefix + name
 	}
 	if op := localPrincipalFromContext(ctx); op != "" {
 		if localOverride != "" {

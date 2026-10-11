@@ -59,6 +59,9 @@ const (
 	// ReasonDelegationScope: a portal's delegated token asked for a route
 	// outside the delegation allow-list (#1142).
 	ReasonDelegationScope Reason = "delegation_scope"
+	// ReasonServiceScope: a service identity's token asked for a route outside
+	// its fixed allow-list (#1508).
+	ReasonServiceScope Reason = "service_scope"
 	// ReasonEventStreamCap: the caller already holds the most concurrent run
 	// event streams one principal may (#1407). A limit, not a denial: not
 	// audited, like ReasonRunQuota.
@@ -158,6 +161,7 @@ var refusals = map[Reason]Refusal{
 	ReasonAdminView:                      {Effect: EffectConflict},
 	ReasonUserViewPreview:                {Effect: EffectConflict, Audit: true},
 	ReasonDelegationScope:                {Effect: EffectDeny, Audit: true},
+	ReasonServiceScope:                   {Effect: EffectDeny, Audit: true},
 	ReasonEventStreamCap:                 {Effect: EffectUnprocessable},
 	ReasonMaskStateUnavailable:           {Effect: EffectUnavailable, Audit: true},
 	ReasonRoleStampStale:                 {Effect: EffectUnauthenticated, Audit: true, Sentence: "this token's role is out of date: its owner must sign in again to refresh it"},

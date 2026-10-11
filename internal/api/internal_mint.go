@@ -377,7 +377,16 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, claims.Sponsor, internalAudience, claims.OperatorOwned)
+	// A service run renews under its identity's current sponsor, not the one its first token named.
+	sponsor := claims.Sponsor
+	if isServicePrincipal(claims.Sub) {
+		var serr error
+		if sponsor, serr = s.runSponsor(r.Context(), claims.Sub); serr != nil {
+			writeServerError(w, r, "renew run identity", serr)
+			return
+		}
+	}
+	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, sponsor, internalAudience, claims.OperatorOwned)
 	if err != nil {
 		writeServerError(w, r, "renew run identity", err)
 		return

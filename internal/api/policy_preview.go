@@ -20,7 +20,7 @@ func (s *Server) refusePolicyPreviewRate(w http.ResponseWriter, r *http.Request)
 	if s.policyPreviewLimiter == nil {
 		return false
 	}
-	if t, who := actorFromRequest(r); t != types.ActorHuman || s.policyPreviewLimiter.allow(who, s.cfg.Now()) {
+	if who, limited := rateLimitedActor(r); !limited || s.policyPreviewLimiter.allow(who, s.cfg.Now()) {
 		return false
 	}
 	w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(60/float64(s.cfg.PolicyPreviewRatePerMin))))))
