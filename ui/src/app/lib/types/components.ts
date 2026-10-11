@@ -138,7 +138,7 @@ export interface ComponentSecretFact {
 }
 
 export type ComponentFactKind = "custom" | "git_provider" | "agent" | "git_pat";
-export type ComponentFactReason = "org" | "self" | "inline" | "workspace";
+export type ComponentFactReason = "org" | "self" | "inline" | "workspace" | "agent";
 export type ComponentFactStatus = "ready" | "needs_input" | "unavailable" | "unknown";
 // types.GitLane's four, then the two a clone can take with no run credential.
 export type ComponentFactLane = "app" | "pat" | "ssh" | "entra" | "direct" | "none";

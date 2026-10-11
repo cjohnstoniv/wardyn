@@ -689,7 +689,7 @@ func TestDocsOpsRunAuditRowsCiteEveryEmitFile(t *testing.T) {
 //     PLUGGABILITY.md's governance due-diligence sentence must not list it
 //     among them. Kata is an OpenInfra Foundation project and appears in the
 //     CNCF directory at no maturity level.
-//   - OPERATIONS.md's quotation about nested group membership is from Entra's
+//   - The capability page's quotation about nested group membership is from Entra's
 //     "Configure group claims for applications", not "Configure optional
 //     claims" — that page's only nested-group sentence points the other way.
 //
@@ -705,17 +705,18 @@ func TestDocsOpsExternalAttributionsAreRight(t *testing.T) {
 		t.Errorf("docs/PLUGGABILITY.md lists Kata inside the CNCF parenthetical (%q); Kata Containers is an OpenInfra Foundation project and is not a CNCF project at any maturity level", cncf[1])
 	}
 
-	ops := readOpsDoc(t, "docs", "OPERATIONS.md")
+	// The quote lives in the capability-grants page since the multi-user split.
+	ops := readOpsDoc(t, "docs", "operations", "capabilities.md")
 	i := strings.Index(ops, "nested groups are not included")
 	if i < 0 {
-		t.Fatal("docs/OPERATIONS.md no longer quotes Entra's nested-group sentence — re-anchor this guard")
+		t.Fatal("docs/operations/capabilities.md no longer quotes Entra's nested-group sentence — re-anchor this guard")
 	}
 	window := ops[i:min(i+500, len(ops))]
 	if strings.Contains(window, "identity-platform/optional-claims") {
-		t.Error(`docs/OPERATIONS.md cites the quoted nested-group sentence to Entra's "Configure optional claims", which does not contain it — the sentence is on "Configure group claims for applications" (how-to-connect-fed-group-claims)`)
+		t.Error(`docs/operations/capabilities.md cites the quoted nested-group sentence to Entra's "Configure optional claims", which does not contain it — the sentence is on "Configure group claims for applications" (how-to-connect-fed-group-claims)`)
 	}
 	if !strings.Contains(window, "how-to-connect-fed-group-claims") {
-		t.Error("docs/OPERATIONS.md's nested-group quotation is not cited to the page that carries it (how-to-connect-fed-group-claims)")
+		t.Error("docs/operations/capabilities.md's nested-group quotation is not cited to the page that carries it (how-to-connect-fed-group-claims)")
 	}
 }
 

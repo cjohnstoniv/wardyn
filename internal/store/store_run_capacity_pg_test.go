@@ -242,7 +242,7 @@ func TestPG_RunCapacityAggregate_KeptAgents(t *testing.T) {
 	if got.AgeBuckets[0].Count != 1 {
 		t.Errorf("age buckets = %+v, want the one live agent under 1h", got.AgeBuckets)
 	}
-	if n, err := pg.CountNonTerminalRuns(ctx); err != nil || n != 1 {
+	if n, err := pg.CountNonTerminalRuns(ctx, uuid.Nil); err != nil || n != 1 {
 		t.Errorf("CountNonTerminalRuns = %d, %v; want 1, the same live agent", n, err)
 	}
 }

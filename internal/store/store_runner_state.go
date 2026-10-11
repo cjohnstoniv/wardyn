@@ -16,7 +16,7 @@ import (
 )
 
 // ErrRunnerReconciliationRequired refuses READY without issuing an RPC from
-// the checked STATE handler. H3 persists returned containment actions first.
+// the checked STATE handler; page intake commits any containment action first.
 var ErrRunnerReconciliationRequired = errors.New("runner lifecycle reconciliation required")
 
 // RunnerContainment identifies the exact kept incarnation requiring H3's
@@ -27,59 +27,10 @@ type RunnerContainment struct {
 	LostAt                      time.Time
 }
 
-const runnerStateLimit = 1000
-
-// ReconcileRunnerState validates runner assertions against org authority. It
-// does not renew credentials, bind handles, clear lost marks or finalize runs.
-// Transactions are short; no run-operation lock or remote RPC is taken here.
-func (s PG) ReconcileRunnerState(ctx context.Context, runnerID uuid.UUID, rows []runnerwire.RunState) ([]RunnerContainment, error) {
-	if len(rows) > runnerStateLimit {
-		return nil, ErrRunnerExecutionRefused
-	}
-	seen := make(map[uuid.UUID]bool, len(rows))
-	var requests []RunnerContainment
-	needsLoss := false
-	for _, row := range rows {
-		if row.RunID == uuid.Nil || seen[row.RunID] || row.SpoolDepth < 0 || row.SpoolDrops < 0 {
-			return nil, ErrRunnerExecutionRefused
-		}
-		seen[row.RunID] = true
-		request, lapsed, err := s.reconcileRunnerStateRow(ctx, runnerID, row)
-		if err != nil {
-			return nil, err
-		}
-		needsLoss = needsLoss || lapsed
-		if request != nil {
-			requests = append(requests, *request)
-		}
-	}
-	// An omitted not-kept live run cannot silently become ready. Kept runs
-	// remain fenced by lifecycle and H3 pending actions, not STATE completeness. The bounded query also
-	// validates identity for an empty STATE, rather than trusting its caller.
-	ids, err := s.runnerStateIDs(ctx, runnerID)
-	if err != nil {
-		return nil, err
-	}
-	for _, id := range ids {
-		if !seen[id] {
-			needsLoss = true
-		}
-	}
-	if needsLoss || len(requests) > 0 {
-		return requests, ErrRunnerReconciliationRequired
-	}
-	return nil, nil
-}
-
-func (s PG) reconcileRunnerStateRow(ctx context.Context, runnerID uuid.UUID, row runnerwire.RunState) (*RunnerContainment, bool, error) {
-	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
-	if err != nil {
-		return nil, false, err
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // committed tx is already closed
-	if _, err = tx.Exec(ctx, `SET LOCAL lock_timeout = '2s'`); err != nil {
-		return nil, false, err
-	}
+// reconcileRunnerStateRowTx validates one runner assertion against org
+// authority. It does not renew credentials, bind handles, clear lost marks or
+// finalize runs, and takes no run-operation lock or remote RPC.
+func (s PG) reconcileRunnerStateRowTx(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID, row runnerwire.RunState) (*RunnerContainment, bool, error) {
 	run, err := runnerExecutionRun(ctx, tx, runnerID, row.RunID)
 	if err != nil {
 		return nil, false, err
@@ -102,34 +53,7 @@ func (s PG) reconcileRunnerStateRow(ctx context.Context, runnerID uuid.UUID, row
 	// A timestamp is an assertion, never an ACK: H3's exact action reconciliation
 	// alone clears pending_runner. Live missing sandboxes also require recovery.
 	needsLoss := run.State == types.RunRunning && run.LostAt == nil && (lapsed || !row.SandboxPresent)
-	return request, needsLoss, tx.Commit(ctx)
-}
-
-func (s PG) runnerStateIDs(ctx context.Context, runnerID uuid.UUID) ([]uuid.UUID, error) {
-	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // committed tx is already closed
-	var valid bool
-	if err = tx.QueryRow(ctx, `SELECT state='claimed' AND revoked_at IS NULL AND owner<>'' FROM runners WHERE id=$1 FOR SHARE`, runnerID).Scan(&valid); err != nil {
-		return nil, err
-	}
-	if !valid {
-		return nil, ErrRunnerExecutionRefused
-	}
-	rows, err := tx.Query(ctx, `SELECT a.id FROM agent_runs a JOIN runners r ON r.id=a.runner_id WHERE r.id=$1 AND a.created_by=r.owner AND a.placement='local' AND a.state='RUNNING' AND a.lost_at IS NULL AND a.sandbox_ref<>'' ORDER BY a.id LIMIT 1001`, runnerID)
-	if err != nil {
-		return nil, err
-	}
-	ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
-	if err != nil {
-		return nil, err
-	}
-	if len(ids) > runnerStateLimit {
-		return nil, ErrRunnerExecutionRefused
-	}
-	return ids, tx.Commit(ctx)
+	return request, needsLoss, nil
 }
 
 // ListRunnerLapsedRuns is a bounded page for the offline callback. The loss

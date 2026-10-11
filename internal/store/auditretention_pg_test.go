@@ -46,6 +46,7 @@ func newRetChain(t *testing.T) *retChain {
 	c := &retChain{partChain: newPartChain(t), run: uuid.New()}
 	requireTriggerBypass(t, c.pool)
 	execMigrationFile(t, c.pool, "0123_audit_retention.sql")
+	execMigrationFile(t, c.pool, "0146_audit_retention_drop_actor_type.sql")
 	ctx := context.Background()
 	c.exec(t, `INSERT INTO agent_runs (id, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target)
 		VALUES ($1, 'ret@example.com', 'claude-code', 'o/r', 'CC1', 'RUNNING', 'spiffe://t/r', 'docker')`, c.run)
@@ -104,7 +105,7 @@ func (c *retChain) digest(t *testing.T, name string) string {
 }
 
 func (c *retChain) drop(name, digest, actor string) (store.AuditRetentionDrop, error) {
-	return store.NewPG(c.pool).DropAuditPartition(context.Background(), name, digest, actor)
+	return store.NewPG(c.pool).DropAuditPartition(context.Background(), name, digest, actor, types.ActorHuman)
 }
 
 func (c *retChain) hasPartition(t *testing.T, name string) bool {

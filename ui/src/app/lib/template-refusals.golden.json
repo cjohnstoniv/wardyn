@@ -1,0 +1,132 @@
+[
+  {
+    "key": "DOCUMENT_INVALID",
+    "args": [
+      "it has the key \"agent\" twice"
+    ],
+    "text": "This is not a template document: it has the key \"agent\" twice."
+  },
+  {
+    "key": "VERSION_UNSUPPORTED",
+    "args": [
+      "wardyn/v2 RunTemplate"
+    ],
+    "text": "wardyn/v2 RunTemplate is not a template format this server reads. Use api_version wardyn/v1 and kind RunTemplate."
+  },
+  {
+    "key": "FIELD_UNKNOWN",
+    "args": [
+      "intent.agnet"
+    ],
+    "text": "intent.agnet is not a template field. Remove it, or check the spelling."
+  },
+  {
+    "key": "FIELD_INVALID",
+    "args": [
+      "intent.interactive",
+      "must be true or false"
+    ],
+    "text": "intent.interactive must be true or false."
+  },
+  {
+    "key": "FIELD_EXCLUDED",
+    "args": [
+      "intent.preset"
+    ],
+    "text": "intent.preset is never part of a template: it belongs to one launch, or it is retired."
+  },
+  {
+    "key": "SECRET_REFUSED",
+    "args": [
+      "intent.task"
+    ],
+    "text": "intent.task holds what looks like a secret. A template keeps references to secrets, never their values."
+  },
+  {
+    "key": "RUN_STATE_REFUSED",
+    "args": [
+      "intent.run_id"
+    ],
+    "text": "intent.run_id is state of one run. A template holds reusable choices, not a run's history or authority."
+  },
+  {
+    "key": "METADATA_IN_CONTENT",
+    "args": [
+      "group_id"
+    ],
+    "text": "group_id is set by the server from who saves the template. Remove it from the document."
+  },
+  {
+    "key": "FIELD_UNAVAILABLE",
+    "args": [
+      "intent.overrides"
+    ],
+    "text": "intent.overrides cannot be used in a template on this server yet. Remove it for now: nothing was dropped."
+  },
+  {
+    "key": "DEPENDENCY_MISSING",
+    "args": [
+      "intent.model_provider",
+      "agent"
+    ],
+    "text": "intent.model_provider needs agent. Include it, or list it under needs_setup."
+  },
+  {
+    "key": "COVERAGE_INVALID",
+    "args": [
+      "the intent specifies no field"
+    ],
+    "text": "The template's coverage does not fit its content: the intent specifies no field."
+  },
+  {
+    "key": "SHARED_FIELD_REFUSED",
+    "args": [
+      "intent.runner_id",
+      "group"
+    ],
+    "text": "intent.runner_id names something only one person has, so it cannot be in a group template."
+  },
+  {
+    "key": "SCOPE_FORBIDDEN_ORG",
+    "args": [
+      "org"
+    ],
+    "text": "Only an organisation administrator can publish templates for the organisation."
+  },
+  {
+    "key": "SCOPE_FORBIDDEN_GROUP",
+    "args": [
+      "group"
+    ],
+    "text": "Only an administrator of that group can publish templates to it."
+  },
+  {
+    "key": "SCOPE_FORBIDDEN_PERSON",
+    "args": [
+      "person"
+    ],
+    "text": "A personal template belongs to the person who owns it."
+  },
+  {
+    "key": "GROUP_UNVERIFIED",
+    "args": [],
+    "text": "Your group membership cannot be checked from this sign-in. Sign in again, then retry."
+  },
+  {
+    "key": "NOT_FOUND",
+    "args": [],
+    "text": "That template does not exist, or you cannot see it."
+  },
+  {
+    "key": "REVISION_CONFLICT",
+    "args": [
+      "4"
+    ],
+    "text": "This template changed to revision 4 since you opened it. Reload it, then apply your edit again."
+  },
+  {
+    "key": "TEMPLATES_UNAVAILABLE",
+    "args": [],
+    "text": "Templates are not available on this server yet."
+  }
+]

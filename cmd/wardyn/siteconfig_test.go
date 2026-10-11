@@ -360,3 +360,28 @@ func TestSiteConfigSet_RefusesNull(t *testing.T) {
 		})
 	}
 }
+
+// TestSiteConfigSet_RunnersAreNeverSentAndWarnOnce: runners.enabled has its own audited super-admin
+// route and the server refuses a document naming a different value, so a captured baseline (or a
+// managed file) that names it is stripped by the SDK, not sent, and the operator is told once.
+func TestSiteConfigSet_RunnersAreNeverSentAndWarnOnce(t *testing.T) {
+	var got types.SiteConfig
+	srv := applyServer(t, &got)
+
+	_, stderr, err := runSiteConfigSet(t, srv.URL, `{"runners":{"enabled":true},"upstream_proxy_url":"http://proxy.corp:3128"}`)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if got.Runners != nil {
+		t.Errorf("runners reached the server (%+v); PutSiteConfig must strip them", got.Runners)
+	}
+	if got.UpstreamProxyURL == "" {
+		t.Error("the rest of the document was not applied")
+	}
+	if n := strings.Count(stderr, "runners.enabled"); n != 1 || !strings.Contains(stderr, "/runners/settings") {
+		t.Errorf("stderr = %q, want exactly one warning naming PUT /runners/settings", stderr)
+	}
+	if _, stderr, err = runSiteConfigSet(t, srv.URL, `{"upstream_proxy_url":"http://proxy.corp:3128"}`); err != nil || strings.Contains(stderr, "runners.enabled") {
+		t.Errorf("a file that does not name runners must not warn: %v %q", err, stderr)
+	}
+}

@@ -293,6 +293,14 @@ func (s *Store) KeyService() string {
 	return ""
 }
 
+// KeyServiceStaticKey reports whether the key service that wraps every write
+// is reached with a long-lived credential (AWS KMS under an IAM user's access
+// key): metadata for the setup row, never a value.
+func (s *Store) KeyServiceStaticKey() bool {
+	d, ok := s.service.(interface{ StaticKey() bool })
+	return ok && s.serviceWrites && !s.writeExt && d.StaticKey()
+}
+
 // For returns a view scoped to owner — see secretstore.Store.For's doc
 // comment for the fallback/isolation contract. A shallow copy: owner is the
 // only field that differs, so every view over the same *pgxpool.Pool sees
@@ -444,6 +452,7 @@ func (s *Store) open(ctx context.Context, e envelope) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pg secretstore: %s refused — its data key does not unwrap for this row (moved, forged, corrupted, or its key version retired): %w", ref, err)
 	}
+	defer clear(dek)
 	plain, err := kek.Open(dek, e.ct, secretAAD(e.ownedBy, e.name))
 	if err != nil {
 		return nil, fmt.Errorf("pg secretstore: %s refused — its value fails the integrity check for this row (moved, forged or corrupted): %w", ref, err)
@@ -495,6 +504,9 @@ func (s *Store) DeleteEverywhere(ctx context.Context, names []string) (int, erro
 		return 0, fmt.Errorf("pg secretstore: delete everywhere: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if err := recordProviderChanges(ctx, tx); err != nil {
+		return 0, err
+	}
 	rows, err := tx.Query(ctx, `SELECT owned_by, name FROM secrets WHERE name = ANY($1) ORDER BY owned_by, name`, names)
 	if err != nil {
 		return 0, fmt.Errorf("pg secretstore: delete everywhere: %w", err)
@@ -634,7 +646,7 @@ type RewrapResult struct {
 	// the `secrets` rows and the principal keys are both at it.
 	PrincipalKeys int
 	// KeyService is the kek_id of the key service every write now uses
-	// (WARDYN_KEK=transit or azurekv), or "" when the local keys do.
+	// (WARDYN_KEK=transit, azurekv or awskms), or "" when the local keys do.
 	KeyService string
 	// KeyVersion is the key version every row under a versioned key service
 	// is now wrapped under, else "": retiring every other version at the
@@ -707,7 +719,7 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 	}
 	s.withKEK(d)
 	if s.kek == nil && !s.serviceWrites {
-		return res, errors.New("pg secretstore: rewrap needs a key to wrap under: WARDYN_AGE_KEY, or a WARDYN_KEK key service (transit or azurekv)")
+		return res, errors.New("pg secretstore: rewrap needs a key to wrap under: WARDYN_AGE_KEY, or a WARDYN_KEK key service (transit, azurekv or awskms)")
 	}
 	// A principal key naming a domain the file does not declare cannot be moved
 	// or read: refuse before anything changes.

@@ -37,6 +37,8 @@ import (
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // Config holds the OIDC client configuration. All fields except
@@ -551,7 +553,7 @@ func randomToken() string {
 // allowed domains (case-insensitive). Fail closed on empty/malformed addresses.
 //
 // SECURITY: the ASCII guard runs on the RAW domain, BEFORE the fold (same order emailInList,
-// deriveRole, ParseRoleMap and CanonicalGroupSubject use): strings.ToLower does Unicode case
+// deriveRole, ParseRoleMap and types.CanonicalGroupSubject use): strings.ToLower does Unicode case
 // MAPPING, not an ASCII fold (KELVIN SIGN U+212A maps to 'k'), so lowering first would let a domain "Korp.com" fold onto
 // operator's ASCII entry on an id_token the attacker's own tenant signed; refusing a non-ASCII
 // domain before the fold costs a real login nothing and closes the escalation.
@@ -562,7 +564,7 @@ func emailDomainAllowed(email string, allowed []string) bool {
 	}
 	raw := email[at+1:]
 	// Also makes "user@" (no domain) fail closed rather than match an empty allowlist entry.
-	if raw == "" || !printableASCII(raw) {
+	if raw == "" || !types.PrintableASCII(raw) {
 		return false
 	}
 	domain := strings.ToLower(raw)

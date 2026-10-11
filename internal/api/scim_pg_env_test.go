@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/scim"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	secretspg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
@@ -43,6 +44,7 @@ const scimEnvToken = "scim-env-token-0123456789abcdef0123456789abcd"
 type pgTestRevocations struct {
 	pool *pgxpool.Pool
 	st   store.PG
+	now  func() time.Time // consistently injected app clock in the clock regressions
 
 	mu          sync.Mutex
 	failRevoke  bool
@@ -57,14 +59,20 @@ func (r *pgTestRevocations) cutoffRevoked(ctx context.Context, sub, email string
 
 func (r *pgTestRevocations) cutoffRevokedQ(ctx context.Context, q store.Querier, sub, email string, issuedAt time.Time, cuts bool) (bool, error) {
 	var cutoff sql.NullTime
-	err := q.QueryRow(ctx, `SELECT MAX(revoked_at) FROM (
+	var databaseAt time.Time
+	err := q.QueryRow(ctx, `SELECT MAX(revoked_at), clock_timestamp() FROM (
 			SELECT sub, revoked_at FROM oidc_session_revocations
 			UNION ALL SELECT sub, cut_at FROM oidc_session_cuts WHERE $3::boolean) r
-		WHERE sub = $1 OR lower(sub) = lower($2) OR sub = ''`, sub, email, cuts).Scan(&cutoff)
+		WHERE sub = $1 OR lower(sub) = lower($2) OR sub = ''`, sub, email, cuts).Scan(&cutoff, &databaseAt)
 	if err != nil || !cutoff.Valid {
 		return false, err
 	}
-	return issuedAt.IsZero() || !issuedAt.After(cutoff.Time), nil
+	appNow := time.Now()
+	if r.now != nil {
+		appNow = r.now()
+	}
+	anchor := db.AppClockAnchor{DatabaseAt: databaseAt, AppAt: appNow}
+	return issuedAt.IsZero() || !issuedAt.After(cutoff.Time) || !anchor.Translate(issuedAt).After(cutoff.Time), nil
 }
 
 // IsSessionRevoked is the cutoff check. After it has computed its answer, a pending onLateCheck hook runs
@@ -454,9 +462,14 @@ func (e *scimEnv) runState(id uuid.UUID) types.RunState {
 // cookie is a session cookie for sub as the callback would have issued it: issued now, at epoch.
 func scimCookie(t *testing.T, sub, email string, epoch int64) *http.Cookie {
 	t.Helper()
+	return scimCookieAt(t, sub, email, epoch, time.Now().UTC())
+}
+
+func scimCookieAt(t *testing.T, sub, email string, epoch int64, issuedAt time.Time) *http.Cookie {
+	t.Helper()
 	payload, err := json.Marshal(oidc.Session{
 		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: oidc.RoleUser, UserType: types.UserTypeStandard,
-		Expiry: time.Now().UTC().Add(time.Hour), IssuedAt: time.Now().UTC(), AuthorityEpoch: epoch, Groups: []string{},
+		Expiry: time.Now().UTC().Add(time.Hour), IssuedAt: issuedAt, AuthorityEpoch: epoch, Groups: []string{},
 	})
 	if err != nil {
 		t.Fatal(err)

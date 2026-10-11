@@ -24,7 +24,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -165,7 +164,7 @@ func (s *Server) decodeKeyDomainChange(w http.ResponseWriter, r *http.Request, d
 			return bad(`For subject_type "all" the subject in the path is "all".`)
 		}
 	case keydomain.SubjectGroup:
-		g, ok := oidc.CanonicalGroupSubject(raw)
+		g, ok := types.CanonicalGroupSubject(raw)
 		if !ok || len(g) > maxKeyDomainSubjectLen || !controlCharFree(g) {
 			return bad("A group subject must be printable ASCII: it is matched against the group list of a person's last sign-in.")
 		}

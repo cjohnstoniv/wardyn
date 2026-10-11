@@ -39,6 +39,7 @@ describe("Policy tab copy (S-1..S-48)", () => {
     expect(CHANGE_HEADING.limitsOther("dana@acme.example")).toBe("Narrowed to fit the limits set for dana@acme.example");
     expect(CHANGE_HEADING.workspace).toBe("Added for the workspace");
     expect(CHANGE_HEADING.source_control).toBe("Added so the run can reach its code");
+    expect(CHANGE_HEADING.component).toBe("Added for an attached component");
     expect(CHANGE_HEADING.git_broker).toBe("Routed through Wardyn's GitHub connection");
     expect(CHANGE_HEADING.model_access).toBe("Added so the agent can reach its model");
     expect(CHANGE_HEADING.mirror).toBe("Switched to your organization's package mirror");

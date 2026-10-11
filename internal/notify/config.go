@@ -156,7 +156,20 @@ func (c *Config) validate() error {
 			return err
 		}
 	}
+	for i := range c.Channels {
+		if ch := &c.Channels[i]; ch.Type == TypeSMTP && len(ch.To) == 0 && !c.notifiesTargetVia(ch.ID) {
+			return fmt.Errorf("approval notify config: channel %q: smtp to is empty and no route tier notifies a target through it", ch.ID)
+		}
+	}
 	return nil
+}
+
+// notifiesTargetVia reports whether some route tier that lists channel id names a notify target, so the
+// channel has recipients even with no fixed `to`.
+func (c *Config) notifiesTargetVia(id string) bool {
+	return slices.ContainsFunc(c.Routes, func(r Route) bool {
+		return slices.ContainsFunc(r.Tiers, func(t Tier) bool { return len(t.Notify) > 0 && slices.Contains(t.Channels, id) })
+	})
 }
 
 func (c *Config) channel(id string) *Channel {

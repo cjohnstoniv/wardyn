@@ -42,7 +42,7 @@ func TestAutonomyPostureAxes(t *testing.T) {
 			{"allow-all outranks a review posture",
 				types.RunPolicySpec{AllowAllEgress: true, FirstUseApproval: types.FirstUseWaitForReview}, types.AutonomyEgressOpen},
 		} {
-			if got := AutonomyPostureOf(tc.spec, types.CC2).Egress; got != tc.want {
+			if got := AutonomyPostureOf(tc.spec, types.CC2, Baseline{}).Egress; got != tc.want {
 				t.Errorf("%s: egress = %q, want %q", tc.name, got, tc.want)
 			}
 		}
@@ -79,7 +79,7 @@ func TestAutonomyPostureAxes(t *testing.T) {
 			{"a powerful grant behind a baseline one still wins",
 				[]types.GrantSpec{apiKey("api.anthropic.com"), {Kind: types.GrantSSHKey}}, types.AutonomySecretsPowerful},
 		} {
-			got := AutonomyPostureOf(types.RunPolicySpec{EligibleGrants: tc.grants}, types.CC2).Secrets
+			got := AutonomyPostureOf(types.RunPolicySpec{EligibleGrants: tc.grants}, types.CC2, Baseline{}).Secrets
 			if got != tc.want {
 				t.Errorf("%s: secrets = %q, want %q", tc.name, got, tc.want)
 			}
@@ -96,7 +96,7 @@ func TestAutonomyPostureAxes(t *testing.T) {
 			// tier, so it selects the most restrictive cap rather than none.
 			{"", types.CC1},
 		} {
-			if got := AutonomyPostureOf(types.RunPolicySpec{}, tc.enforced).Confinement; got != tc.want {
+			if got := AutonomyPostureOf(types.RunPolicySpec{}, tc.enforced, Baseline{}).Confinement; got != tc.want {
 				t.Errorf("enforced %q: confinement = %q, want %q", tc.enforced, got, tc.want)
 			}
 		}

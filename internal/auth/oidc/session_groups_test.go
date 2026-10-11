@@ -19,6 +19,7 @@ import (
 	"time"
 
 	writoidc "github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 func TestSessionGroupsNormalizes(t *testing.T) {
@@ -37,7 +38,7 @@ func TestSessionGroupsNormalizes(t *testing.T) {
 
 // TestSessionGroupsDropsUnmatchableClaims: a grant subject is an
 // operator-typed ASCII string, and Unicode case folding lets a crafted claim
-// fold ONTO one (the same escalation ASCIIOnly guards in deriveRole). A claim
+// fold ONTO one (the same escalation types.ASCIIOnlySubject guards in deriveRole). A claim
 // that could never be written down as a grant subject is dropped rather than
 // carried into the cookie where it can only ever surprise someone.
 func TestSessionGroupsDropsUnmatchableClaims(t *testing.T) {
@@ -66,7 +67,7 @@ func TestSessionGroupsDropsUnmatchableClaims(t *testing.T) {
 // governance profile bound to it.
 //
 // Counterfactual (run it): move the printable-ASCII check back after
-// strings.ToLower in CanonicalGroupSubject and this test fails with the crafted
+// strings.ToLower in types.CanonicalGroupSubject and this test fails with the crafted
 // names present in the snapshot, while TestSessionGroupsDropsUnmatchableClaims
 // above stays green byte for byte. The same pin exists for the deriveRole path
 // in TestRoleMapPrecedence_ChartOverConsoleOverClaims' KELVIN SIGN case.
@@ -123,12 +124,55 @@ func TestSessionGroupsUnrepresentableClaimMarksSnapshotPartial(t *testing.T) {
 	}
 }
 
-// TestCanonicalGroupSubjectIsTheSnapshotRule pins the shared exported helper
-// internal/api's three group-subject write boundaries call. It is exported for
-// exactly one reason: a subject those boundaries accept but this function
+// TestFilteredGroupClaimReadsComplete pins the premise every group-claim
+// warning in the docs rests on, by behaviour: a claim the IdP was CONFIGURED to
+// narrow is indistinguishable from a complete one, so the snapshot carries it
+// whole and reports no drop.
+//
+// That is the hazard, not the contract. Entra's `groupMembershipClaims:
+// "ApplicationGroup"` sends the groups assigned to the application and says
+// nothing about the ones it left out, so a grant or assignment keyed on a group
+// the member reaches only transitively evaporates with no refusal and no audit
+// line. docs/OPERATIONS.md answers it with a procedure and THREAT-MODEL.md §5
+// publishes it as a residual; if this test ever fails, that silence is gone and
+// the remedy has to become a code path rather than a paragraph.
+//
+// Counterfactual: stamp the bit whenever `_claim_names` is absent — the
+// conservative "we cannot rule out filtering" reading, and the only change that
+// could ever make this loss visible — and the truncation assertion below fails.
+// It would refuse every ordinary login as well, which is why the residual stays
+// a stated ceiling rather than becoming a code path.
+func TestFilteredGroupClaimReadsComplete(t *testing.T) {
+	// What the narrowed claim sends: the application-assigned groups, already
+	// in the form sessionGroups keeps them.
+	filtered := []string{"wardyn-app-admins", "wardyn-app-engineers"}
+	got := writoidc.SessionGroupsForTest(nil, filtered)
+	if !slices.Equal(got, filtered) {
+		t.Fatalf("groups = %v, want %v — nothing was lost inside Wardyn; what the IdP dropped never reached the token", got, filtered)
+	}
+	if writoidc.SessionGroupsTruncatedForTest(nil, filtered, nil) {
+		t.Error("a claim the IdP FILTERED reported as partial; the token carries nothing that could say so, so " +
+			"OPERATIONS.md's re-key procedure and the §5 residual now understate what Wardyn cannot see")
+	}
+
+	// The one signal that does exist means the opposite thing: the claim is
+	// ABSENT, not narrowed, and the snapshot must not read complete-and-empty.
+	if !writoidc.SessionGroupsTruncatedForTest(nil, filtered, map[string]any{"groups": "src1"}) {
+		t.Error("an overage pointer did not stamp the bit; the withheld claim reads as an empty one and the walled group evaporates")
+	}
+	// And it is read precisely — a pointer that withholds nothing Wardyn derives
+	// identity from is not an overage.
+	if writoidc.SessionGroupsTruncatedForTest(nil, filtered, map[string]any{"email": "src1"}) {
+		t.Error("a _claim_names entry for `email` stamped the group bit; the overage marker is narrower than that")
+	}
+}
+
+// TestCanonicalGroupSubjectIsTheSnapshotRule pins the shared rule
+// types.CanonicalGroupSubject, which internal/api's three group-subject write
+// boundaries call as well as sessionGroups below. It is the ONE home for
+// exactly one reason: a subject those boundaries accept but this snapshot
 // refuses is a row matched by exact equality against a snapshot that can never
-// contain it — a DENY that protects nothing. One implementation, so the write
-// surface and the match surface cannot drift.
+// contain it — a DENY that protects nothing.
 func TestCanonicalGroupSubjectIsTheSnapshotRule(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -146,7 +190,7 @@ func TestCanonicalGroupSubjectIsTheSnapshotRule(t *testing.T) {
 		{"eng\u0085nel", ""},
 	}
 	for _, tc := range cases {
-		got, ok := writoidc.CanonicalGroupSubject(tc.in)
+		got, ok := types.CanonicalGroupSubject(tc.in)
 		if (tc.want == "") == ok {
 			t.Errorf("CanonicalGroupSubject(%+q) ok = %v, want %v", tc.in, ok, tc.want != "")
 			continue

@@ -10,14 +10,35 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
-- Migration `0138_run_placement` records `agent_runs.placement`, `placement_filled`, `runner_id` and
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `runners`,
+  `runner_pending_actions`, `provider_connection_changes` and `runner_inventories`, and `SELECT, INSERT, UPDATE` on
+  `credential_delivery_policy`, `runner_registration_tokens`, `audit_delivery_cursors`, `runner_spool_cursors`,
+  `runner_executions`, `runner_execution_exits`, `runner_inventory_candidates` and `runner_inventory_observations`.
+  Without the `provider_connection_changes` grant every secret write fails once migration 0143's trigger on
+  `secrets` is in place.
+- Migration `0145_audit_delivery_cursors` adds the `audit_delivery_cursors` table; nothing changes until a webhook
+  audit sink sets `"delivery": "acknowledged"`.
+- Migration `0143_provider_connection_changes` adds an empty, secret-free history table for why a model connection
+  became unavailable. Removals from before the upgrade have no recorded cause.
+- For filtered OIDC group claims, check the new transitive-membership procedure in Operations:
+  Wardyn cannot detect groups omitted by the identity provider. Re-key affected grants and
+  governance assignments to groups actually present in the claim (#1518).
+
+- Migration `0140_audit_legacy_manifest` records the expected legacy audit partition, so verify detects
+  its removal even when it held only hashless rows (#1809).
+- Migration `0141_run_placement` records `agent_runs.placement`, `placement_filled`, `runner_id` and
   `evidence_source`. Existing rows retain empty placement and evidence, false `placement_filled` and a
   NULL runner; deleting a runner clears its reference while preserving the run. This records placement
   data without enabling local execution or choosing placement for unresolved runs (#116).
+- Migrations `0147_runner_spool_cursors`, `0148_runner_executions` and `0149_runner_inventories` add the
+  `runner_spool_cursors`, `runner_executions`, `runner_execution_exits`, `runner_inventories`,
+  `runner_inventory_candidates` and `runner_inventory_observations` tables for 0.9 client mode (split-role grants:
+  see the first item above). `0150_runner_action_binding` and `0151_runner_revoked_by` change existing tables only.
 - Migration `0139_runner_delivery` adds the `runners` and `runner_pending_actions` tables, the
   `credential_delivery_policy` document and `credential_grants.delivery`, for 0.9 client mode and
-  credential delivery; grant the app role `SELECT, INSERT, UPDATE, DELETE` on the two new tables. Nothing
-  changes until runners are enabled.
+  credential delivery (split-role grants: see the first item above). Nothing changes until runners are
+  enabled.
 - Migration `0138_audit_ensure_partitions_high_water` drops and recreates `audit_ensure_partitions`
   (the migrator's role must own the schema, as for 0111/0123); forward-only, rollback is the
   pre-upgrade `pg_dump`. Its EXECUTE grant is re-derived from `audit_append`'s: every role that can
@@ -35,9 +56,80 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Serve your OIDC issuers over `https://`. An in-cluster internal issuer behind a service mesh may
   set `WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=mesh` (#1970).
 - Repoint any dashboard or SIEM rule on `auth.member_mode` to `auth.user_view.set` (#623).
+- Migration `0146_audit_retention_drop_actor_type` replaces `audit_retention_drop` with a four-argument form so an
+  admin-token drop records its actor type; no data changes (#1978).
+- Migration `0153_run_experience` adds `agent_runs.experience`, the run mode a new client chose at launch; existing
+  runs keep an empty value and their documented behaviour.
+- Migration `0154_run_agent_stopped_at` adds `agent_runs.agent_stopped_at`; existing runs keep it empty.
 
 ### Added
 
+- Opt-in acknowledged audit delivery for the webhook sink (`"delivery": "acknowledged"`): it reads the stored trail
+  from a durable per-destination checkpoint (starting at the current head on first enable), resumes after outages and
+  restarts, and is at-least-once with `id`, `seq` and `row_hash` for deduplication. A redirect or a terminal 4xx halts
+  delivery until wardynd restarts or another replica takes over. Retention past the checkpoint is never blocked: it
+  records a chained `audit.delivery.reset` event, counts it and resends from the oldest retained row. Adds the
+  `wardyn_audit_delivery_*` metrics (#1513).
+- AWS KMS can hold the key that wraps stored credentials (`WARDYN_KEK=awskms`): each data key is wrapped by KMS
+  Encrypt bound to its row, the key never leaves AWS, and IRSA or EKS Pod Identity is the expected identity (#588). A
+  long-lived access key still boots but raises an amber setup row. An AWS KMS platform key, key domains and store mode
+  are not supported yet, and boot refuses them together with `awskms`.
+- Runners management API: `GET /runners` (active, revoked or all, with each runner's live online state and the runs on
+  it), `GET /runners/{id}`, and the caller-scoped `GET /me/runners`, which shows a person only their own runners and
+  abbreviates an unclaimed runner's fingerprint. Security admins can list and revoke unused registration tokens (never
+  a token value); minting stays admin only. `runners.enabled` changes only through `PUT /runners/settings` (admin,
+  audited `runners.enabled.set`, refused until the organisation URL is HTTPS); turning runners off ends the live
+  runner sessions the serving replica holds. `PUT /site-config` now refuses a changed value. Unclaimed runners lapse
+  and are swept after 24 hours. CLI: `wardyn runner list`, `wardyn runner tokens list|revoke`. Migration
+  `0144_runner_minted_by` records who minted each runner's registration token (#1965).
+- Runners can be revoked by an admin or security admin (`DELETE /runners/{id}`) or by their owner
+  (`DELETE /me/runners/{id}`, optionally `?reason=not_mine`). Every unfinished run on a revoked runner ends KILLED
+  in the same transaction and its credentials are revoked, and a live session on the replica that holds it is
+  closed. Who revoked it and why are audited (`runner.revoke`) and shown on the runner views as `revoked_by` and
+  `revoke_reason` (migration `0151_runner_revoked_by`). While runners are off, every new sandbox on a runner is
+  refused before it reaches the runner.
+- Runner pending actions bind the owner, run reference, execution generation and contained loss they were queued
+  for; a result is accepted only from the queuing runner, as `success` or `deferred`, and a deferred result keeps
+  the run fenced (migration `0150_runner_action_binding`).
+- A reconnecting runner's pending actions, state report pages and action results are recorded before it is marked
+  ready, and teardowns issued while a runner is offline are queued for it (migration `0149_runner_inventories`).
+- `wardyn run --placement remote|local` and `--runner <id>` choose where a run's sandbox lives. Both are passed to the
+  server unchanged, so its placement refusals reach the CLI as they are. `--pool` is accepted and refused at run create
+  until runner-pool selection lands (#109).
+- Model connections say why they became unavailable: never connected, removed because an admin changed the provider's
+  address or kind (with the new destination host to review before reconnecting), or the credential store could not be
+  read ("could not check"; the credential may still be there). The record is owner-scoped and holds no secret; it is
+  cleared on reconnect, removed with the provider or by person erasure, and a provider recreated with a new identity
+  inherits no history. Older clients keep the neutral wording.
+- `GET /api/v1/setup/status` gains `tier` (`local-only`, `runner`, `org`); `wardyn setup status` prints it, the
+  console account menu names it and the top bar shows a chip on local-only installs.
+- Run template contract: reusable run setups published per person, organisation or group. A template is read strictly
+  (unknown fields, secrets, run state, owner fields, titles and descriptions are refused) through one validator for
+  text and structs, and its partial policy is laid onto the source policy rather than replacing it. Adds the
+  `template_*` reasons, a declarative configuration schema for custom components, `wardyn template` and SDK methods.
+  The `/templates` and `/admin/template-group-admins` routes answer `501 templates_unavailable` until the template
+  store lands.
+- Runner pool contract: the run-create, preflight and policy-preview requests accept `runner_pool_id`, which the
+  server refuses with `request_field_unavailable` until the pool resolver lands (never ignored). Preflight and the
+  preview return `runner_pools`. `wardyn run --pool` and `wardyn runner pool list|default get|set|clear` are added.
+- `wardyn sync <run> <directory>` pushes a local directory over the audited SSH sync subsystem.
+  `--pull` opts into receiving files; pulls refuse symlinks, unsafe names and executable modes,
+  keep local edits on conflict and never delete files. `--watch` repeats the sync.
+
+- New Run request contracts cover per-component overrides, workspace targets, placement, resources
+  and allowed-image choices across create, preflight and preview. Fields whose behavior is not yet
+  available are explicitly refused when they change the run’s posture.
+- Super admins can unbind an Entra identity after app re-registration with
+  `POST /api/v1/admin/identities/{id}/unbind`. It refuses while the old principal has live tokens, SSH keys
+  or runs, cuts its sessions and records `identity.unbind` (#1818).
+- Policy preview and preflight return per-entry provenance: the source that added, clamped or narrowed
+  each resolved policy value. Saved-policy values removed by a ceiling remain hidden.
+
+- **Operator-declared egress baseline.** `PUT /governance/egress-baseline` (security admin or admin; held
+  for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`) sets exact `baseline_hosts` and which
+  `internal_hosts` entries are baseline. Both extend the built-in public set that the egress grade and the
+  `api_key` CC3 floor key off, so an allowlist of only declared hosts no longer grades OPEN. Nothing is
+  declared by default, so no grade changes on upgrade. Audited as `governance.egress_baseline.write`.
 - **Sync over SSH.** A new `wardyn-sync` SSH subsystem runs the sandbox's own `sftp-server` in a validated
   start directory (`WARDYN_SYNC_DIR`, under `/home/agent/`), with its own cap of 2 channels per run, and is
   audited as `ssh.sync.transfer`. The start directory is a start point, not a boundary (#1952).
@@ -50,13 +142,89 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the pinned CLI.
 - `wardyn setup status --pre-upgrade [--role-map CSV] [--default-role ROLE]` lists leftover
   `member` entries and removed `WARDYN_MEMBER_*` variables before the upgrade (#623).
+- `wardynd -recovery-manifest`, `-recovery-verify` and `-recovery-rehearse` (#1514). The manifest ties a database
+  snapshot to the audit spool and its sidecars, the key configuration (fingerprints and row counts only), recordings
+  and drive bytes; verify refuses a mismatched pair. The rehearsal runs read-only on a scratch database named by
+  `WARDYN_REHEARSE_PG_DSN`, refuses the live database, reads the set only inside its own directory, and proves
+  pairing, the audit chain, that the configured keys open every stored row (Vault Transit and Azure Key Vault unwrap
+  are not exercised by this release's tests), recordings and drive digests. It writes `recovery.rehearse.begin` and
+  `recovery.rehearse` audit rows and exits 0 (pass), 3 (refused), 4 (fail) or 5 (incomplete). See
+  docs/operations/recovery-rehearsal.md.
+- Runner pool catalogue (migration `0152_runner_pools`). Admins create, rename, switch off and delete pools
+  (`/runner-pools`), add configured executors to Remote Provided pools, and set the organisation default (`/runner-
+  pool-defaults`). A person adds only their own claimed runner to a Self-Hosted pool (`/me/runner-
+  pools/{id}/runners/{runner}`) and sets their own defaults (`/me/runner-pool-defaults`). `GET /runner-pools` lists
+  only the pools the caller may use, with availability and reason; a pool the caller may not use is a 404 like an
+  unknown one. On the first boot after the upgrade, a deployment with configured executors gets one Remote Provided
+  pool holding them as the organisation's remote default; it grants nobody a new executor or launch right.
+- Pool-use policy: `PUT|DELETE /runner-pools/{id}/use-policy` (security admin or admin) narrows who may use a Remote
+  Provided pool, held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN` (governance change kind
+  `runner_pool_use_policy`). Deleting a pool that has a use policy is refused until the policy is cleared; attaching
+  or detaching an executor that a pool holds under a use policy is held for a second human; a leaver's identity is
+  removed from every use policy (an emptied policy permits nobody); deleting a pool clears the organisation default
+  that named it. Pool `limits` are refused on create and update until limits are stored. Audit actions
+  `runner_pool.*`, `person.runner_pool_default.set|delete`.
+- New Run run mode: a request chooses `experience` (background or interactive), with its workload, included tools,
+  one startup choice, one starting folder and an explicit "no repositories or drives". The console and the CLI's
+  run-mode flags mark requests `mode_contract: "0.9"`, so an unset mode is refused instead of inferred; older
+  requests keep their documented behaviour.
+- Push rules are carried per source-control entry (provider host and canonical organisation; a remote that cannot be
+  read exactly is refused) and tool rules per included harness; a request's rules can only narrow. A background task
+  has no idle stop from any source, and the idle reaper skips it. Presets refuse run-mode fields until run templates
+  replace them, and the proxy refuses rules carried two ways.
 
 ### Changed
 
+- A webhook audit sink whose `flush_interval` or `retry_base_delay` is zero or negative is now refused at boot, in
+  best-effort mode too (#1513).
+- The `wardynd` maintenance modes that open the key service (`-rewrap`, `-rewrap-principal-keys`, `-rotate-age-key`,
+  `-migrate-secrets`, `-reconcile`) now use `WARDYN_DAEMON_PROXY_URL` and `WARDYN_TRUSTED_CA_FILE` as a serving boot
+  does, for Vault Transit and Azure Key Vault too; the AWS instance-metadata, ECS and EKS Pod Identity credential
+  endpoints always bypass the daemon proxy (#588).
+- A portal's delegated token can read the output tail of its person's runs (`GET /runs/{id}/output`) and nothing
+  recovered from a recording: for output recovered from a recording and an interactive run's last screen it gets the
+  same 409 a run with no such row gives (the refusal is audited `delegation_scope`), and a failed run's failure hint
+  is served without its quote from the recording. (#1423)
+- Docs: `docs/AZURE-DEVOPS.md` explains what an Azure DevOps run gets on a laptop runner: only the person's own
+  stored PAT, while `minted_pat` and `bearer` runs placed on a laptop are refused (`placement_credential`).
+  `docs/DESKTOP.md` explains why a member-mode laptop still enrols into an SSO-only organisation (#475).
+- `scripts/kind-run-output-walk.sh` gains a recording-on mode (`WARDYN_KIND_WALK_RECORDING=pg`) that proves a
+  Kubernetes task's printed line reaches `/output` from the recording, marked `source: recording`, with a registered
+  secret masked (#1831).
+- Docs: the operator manual's multi-user material (people, governance, capabilities, API tokens and related tasks) is
+  split into task pages under `docs/operations/`, each linked from `docs/README.md`; every old heading in
+  `docs/OPERATIONS.md` keeps a stub that links to its new home.
+- HA followers check the sweeper and rotator lifetime locks with a read-only `pg_locks` query on the pool before
+  opening a dedicated session, instead of dialling a new session every 15 and 30 seconds.
+- CI and the nightly log in to Docker Hub (read-only) when the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository
+  secrets are set, including the PostgreSQL service containers; without them, pulls stay anonymous.
+- `WARDYN_ORG_URL` (org enrolment of a full daemon) logs a deprecation warning at boot; enrolment is removed in 1.0.
+  Use a client-mode runner. DESKTOP.md gains a tier table and the managed-laptops page is rewritten for client-mode
+  runners.
+- Own-runner (local) eligibility classifies the complete dispatch plan: own credentials are separated from operator,
+  brokered and platform-minted material, every unclassified or unknown field refuses, own stored grants are persisted
+  owner-only after the owner's namespace is proven, and a self-defined component on a local run needs
+  `local_self_defined_components` (default deny). Own-runner execution itself stays unavailable
+  (`placement_unavailable`) until routing and delivery land.
+- Run detail and `wardyn run policy` identify organisation-component egress as
+  "Added for an attached component"; direct GitHub clone hosts are attributed to source control.
+
+- `PUT /site-config` carries the egress baseline and the `internal_hosts` baseline marks forward and refuses a
+  change to either (400 `site_config_egress_via_own_route`); an unchanged round trip, or one from an older
+  client that omits the marks, is accepted.
 - A plain `http://` OIDC issuer (public or internal) on a host that is not loopback, while the
   console has a TLS posture, now refuses boot; it was a warning. `WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=mesh`
   opts the internal issuer out with a boot warning; the public issuer has no opt-out. Loopback and
   the Compose demo are unaffected (#1970).
+- `WARDYN_KEK_REQUIRED` now states what it guarantees: new credential writes need a key service (`transit`,
+  `azurekv` or `awskms`) or an external store, and boot is refused without one. Rows the local key already wraps do
+  not stop a boot; `/setup/status` shows `kek_local_rows` with their count until `wardynd -rewrap` moves them
+  (#1977).
+- Dropping an audit partition with the shared admin token is recorded as a `system` actor (still attested) instead
+  of a person; the sweeper's autodrop is unchanged. The name `wardynd` is reserved for the sweeper: a drop requested
+  under it is refused (`403 audit_retention_actor_reserved`) and audited (#1978).
+- The Codex image supports only its pinned Codex. `OPENAI_BASE_URL` and `OPENAI_API_KEY` are still set but unused by
+  Codex and deprecated; a later release removes them (#1979).
 
 ### Removed
 
@@ -69,6 +237,23 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- Record Mode no longer counts a network fault (`builtin:dial-failed`, `builtin:tunnel-failed`) as a policy denial,
+  so a lost connection no longer fails a clean replay, raises an open-recording anomaly or adds an unreached host to
+  the generated allowlist.
+- The egress proxy forwards bytes a client pipelined behind its CONNECT headers to the tunnel instead of dropping
+  them; every policy check still runs before the tunnel opens.
+- The exec-inspect read that decides whether an agent exited addresses the configured Docker daemon instead of a
+  placeholder host, and refuses an unparsable daemon address.
+- UI e2e: a later step in the same job no longer empties `flaky.tsv`, so a shard's flaky tests reach the flaky-test
+  notifier; `make test-e2e-ui` starts each local run with an empty file.
+- The audit screen describes `run.policy.resolve` and `run.upstream_proxy.resolve` in words instead of raw action names.
+- Docs: under `helm upgrade --reuse-values`, a chart block added in the new release does not render, so wardynd keeps
+  its built-in sandbox sizes; pass `-f values.yaml` to pick up new defaults.
+- Paused-run resumes hold the run lock; concurrent notification raises share the run
+  budget; revived runs reapply stored Git PAT restrictions (#1819, #1812, #1825).
+- SMTP channels without recipients or route targets refuse boot. Key rotation and rewrapping
+  report an unmigrated database, and legacy audit splitting works immediately after migration (#1825).
+- The runs search field preserves characters typed quickly and follows browser history changes.
 - Audit rows that waited under a pending subject key reach the SIEM sinks once the spool drain re-seals
   and stores them, so the sink chain has no gap (#1821).
 - `audit.retention.set`, `audit.retention.partition_dropped`, `principal_key.destroyed` and
@@ -81,6 +266,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `?state=deactivated` finds them (#1824).
 - A person's drawer says when their token list could not be read, with Retry, instead of showing
   an empty list (#1815).
+- A full reload of the shared masking registry no longer drops a secret this replica committed after the reload's
+  snapshot, so that value stays masked (#1975).
+- When the exec output relay is refused because a run's masking corpus cannot be proven whole, the denial is audited
+  (`authz.denied`, `mask_state_unavailable`, target `exec.relay`) and a pending output row is kept so the sweeper
+  records a capture gap with its reason. A run that failed while starting, before any output was opened, no longer
+  writes a spurious `no_tail` capture gap (#1976).
+- On a PostgreSQL server shared with another Wardyn install, a lock held in the other database no longer silences
+  this install's sweeper leader and ground-truth rotator: the lock check is scoped to the current database.
+- The best-effort webhook audit sink no longer follows a 301, 302 or 303 redirect, which turned its POST into a GET
+  and counted a 2xx as delivered while the events were lost; 307 and 308 are still followed.
+- `WARDYN_MAX_CONCURRENT_RUNS` and the Fleet capacity view no longer count an outage-kept run whose agent was
+  already stopped at its end after that run is extended (#1825).
+- `LockHeld` no longer waits for a nested lock's whole budget: a busy lock connection reads as a lost lock after
+  about two watch intervals, so callers re-take it or refuse (#1828).
+- A pending rename of a governance profile now holds its new name like a create does, so a create and a rename (or
+  two renames) to one name cannot both be stored (#1828).
+- Recording a person's sign-in groups now takes the key-domain assignment lock, so a group assignment's ambiguity
+  count cannot race a sign-in (#1828).
+- A revive that would start an agent is refused at the concurrent-run cap before any identity is minted or image
+  pulled, and approval notifications carry the next later SLA tier still ahead (#1825).
+
 
 ## [0.8.9] — 2026-10-09
 

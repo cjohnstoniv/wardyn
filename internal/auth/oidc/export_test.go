@@ -114,7 +114,7 @@ func MergeRoleMapsForTest(chart map[string]string, legacyAdminEmails []string, r
 
 // EmailDomainAllowedForTest exposes the WARDYN_OIDC_EMAIL_DOMAINS gate so the
 // fold-escalation ordering (guard the RAW domain, THEN lower) pins directly as
-// a table, the way emailInList's and CanonicalGroupSubject's twin guards
+// a table, the way emailInList's and types.CanonicalGroupSubject's twin guards
 // already do — without signing an id_token per case.
 func EmailDomainAllowedForTest(email string, allowed []string) bool {
 	return emailDomainAllowed(email, allowed)

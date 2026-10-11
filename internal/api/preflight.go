@@ -77,6 +77,9 @@ type preflightResponse struct {
 	// credential verdicts only this door reads. Absent for a run with no
 	// repository on a Git provider and no component.
 	Components []componentFact `json:"components,omitempty"`
+	// Provenance says why each entry of the resolved spec is there; the policy
+	// preview returns the same rows for the same request. Never null.
+	Provenance []provenanceRow `json:"provenance"`
 	// Resources and LocalPlacement are the policy preview's, with the same
 	// meaning: always an array, empty until the lane that fills them lands.
 	Resources      []client.PlacementResources `json:"resources"`
@@ -86,6 +89,11 @@ type preflightResponse struct {
 	// choices, an array that is empty until that lane fills it.
 	Image         *client.ImageFact     `json:"image,omitempty"`
 	AllowedImages []client.AllowedImage `json:"allowed_images"`
+	// RunnerPool is the pool the request resolves to, absent until the pool lane
+	// resolves one; RunnerPools are the permitted choices, an array that is
+	// empty until that lane fills it.
+	RunnerPool  *client.ResolvedRunnerPool `json:"runner_pool,omitempty"`
+	RunnerPools []client.RunnerPoolChoice  `json:"runner_pools"`
 }
 
 // preflightBurst and preflightLimiterMaxPeople size the per-person preflight
@@ -281,6 +289,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		ConfinementClass: string(enforced),
 		Interactive:      req.Interactive,
 		DevcontainerRepo: req.DevcontainerRepo,
+		Baseline:         f.baseline,
 	}
 
 	// Deterministic risk grade: the SAME composer.Grade/OverallLevel
@@ -333,9 +342,11 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		RiskAssessment:           riskItems,
 		OverallRisk:              overallRisk,
 		Warnings:                 warnings,
+		Provenance:               f.prov,
 		Resources:                []client.PlacementResources{},
 		LocalPlacement:           []client.LocalPlacementFact{},
 		AllowedImages:            []client.AllowedImage{},
+		RunnerPools:              []client.RunnerPoolChoice{},
 	}
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred
@@ -352,6 +363,10 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// and seedAndAdmitWorkspace each gate at launch.
 	runRepos := append([]string{req.Repo, req.DevcontainerRepo}, repoLocatorsOf(spec.WorkspaceRepos)...)
 	resp.GitCredential = s.gitCredentialFactForRepos(ctx, oidcHumanFromContext(ctx), runRepos)
-	resp.Components = componentFacts(req, spec, f.scmSite, f.comps, resp.GitCredential)
+	resp.Components = componentFacts(componentFactInputs{
+		req: f.req, spec: f.spec, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
+		ceiling: f.ceiling, mpChoice: f.mpChoice, autonomy: f.autonomy,
+		credentialChecked: true, autonomyResolved: true,
+	}, resp.GitCredential)
 	writeJSON(w, http.StatusOK, resp)
 }

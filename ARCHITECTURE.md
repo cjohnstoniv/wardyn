@@ -305,11 +305,11 @@ stateDiagram-v2
     `capAllowed`, `effectiveCeiling`, …) stand in for them,
   - and the guardrails
     above are written against those real names, not the design's target shape.
-- **0.9** adds the remote control-plane decision API (`POST /authz/decide`
-  etc.) and the signed policy snapshot for MDM-managed laptops;
-  - 0.8 carries only
-    the seams that shape needs (`Decision` is already wire-serializable;
-    `Principal.Origin` is zero until the org sets it).
+- **0.9** does not add a remote decision API or signed policy snapshots: a
+  laptop joins as a client-mode runner and the org remains the only decider
+  ([docs/design/0.9/PLAN.md](docs/design/0.9/PLAN.md));
+  - `Decision` stays wire-serializable, and
+    `Principal.Origin` is zero until the org sets it.
 
 ## Security invariants (every contributor and subagent MUST preserve these)
 

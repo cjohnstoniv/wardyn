@@ -248,30 +248,41 @@ func (s *Server) answerAzureRedeemFailure(w http.ResponseWriter, r *http.Request
 // (resolvePendingAzureReauth). The capture is the resolution; this writes it down, through the same
 // one-transaction seam the other lanes use.
 func (s *Server) reconcileAzureReauthOnRead(ctx context.Context, ap types.ApprovalRequest) types.ApprovalRequest {
+	fresh, closed := s.reconcileAzureReauth(ctx, ap)
+	if closed {
+		s.approvalClosed(ctx, ap.RunID)
+	}
+	return fresh
+}
+
+// reconcileAzureReauth is reconcileAzureReauthOnRead without the resume of the run the request held: closed
+// reports that this call resolved the request, so a caller holding the sign-in lock can resume once it has
+// released it.
+func (s *Server) reconcileAzureReauth(ctx context.Context, ap types.ApprovalRequest) (_ types.ApprovalRequest, closed bool) {
 	sc, ok := signInScopeFor(ap, azureApprovalLane)
 	if !ok || ap.State != types.ApprovalPending || s.cfg.Approvals == nil || s.cfg.Store == nil {
-		return ap
+		return ap, false
 	}
 	resolver, ok := s.cfg.Store.(reauthResolver)
 	if !ok {
-		return ap
+		return ap, false
 	}
 	site, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		return ap
+		return ap, false
 	}
 	facts, ok := azureFoundryRowFor(site, sc.ProviderID)
 	if !ok {
-		return ap
+		return ap, false
 	}
 	ec, err := azureFoundryCapture(sc.ProviderID, facts.audience)
 	if err != nil {
-		return ap
+		return ap, false
 	}
 	// Generation: only a sign-in captured AFTER the raise answers it, and only one no renewal has since found ended.
 	blob, found, err := s.readEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), sc.Owner, ec)
 	if err != nil || !found || !blob.CapturedAt.After(ap.RequestedAt) || blob.signInEnded() {
-		return ap
+		return ap, false
 	}
 	ev := s.auditEvent(&ap.RunID, types.ActorHuman, sc.Owner, "credential.reauth.resolve", ap.ID.String(), "success",
 		mustJSON(map[string]any{
@@ -280,32 +291,35 @@ func (s *Server) reconcileAzureReauthOnRead(ctx context.Context, ap types.Approv
 	if _, err := resolver.ResolveReauthApproval(ctx, ap.ID, types.ApprovalDecision{
 		State: types.ApprovalApproved, DecidedBy: sc.Owner, Reason: "signed in again",
 	}, ev); err != nil {
-		return ap
+		return ap, false
 	}
-	s.approvalClosed(ctx, ap.RunID)
 	if fresh, gerr := s.cfg.Approvals.Get(ctx, ap.ID); gerr == nil {
-		return fresh
+		return fresh, true
 	}
-	return ap
+	return ap, true
 }
 
 // resolvePendingAzureReauth resolves every PENDING Azure sign-in request this capture answers: the
 // eager path, called by the capture callback AFTER its own audit row (captured -> resolved -> retry).
 // Best-effort: a resolution that does not land here is written by reconcileAzureReauthOnRead on the
-// proxy's next poll, through the same checks.
-func (s *Server) resolvePendingAzureReauth(ctx context.Context, owner, providerUID string) {
+// proxy's next poll, through the same checks. It runs under the sign-in lock, so it returns the runs whose
+// requests it resolved for the caller to resume (approvalsClosed) once the lock is released.
+func (s *Server) resolvePendingAzureReauth(ctx context.Context, owner, providerUID string) (closed []uuid.UUID) {
 	if s.cfg.Approvals == nil {
-		return
+		return nil
 	}
 	rows, err := s.cfg.Approvals.List(ctx, types.ApprovalPending)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: could not list pending Azure sign-in requests after a capture; the next poll will resolve them",
 			slog.Any("err", err))
-		return
+		return nil
 	}
 	for _, ap := range rows {
 		if sc, ok := signInScopeFor(ap, azureApprovalLane); ok && sc.Owner == owner && sc.ProviderID == providerUID {
-			s.reconcileAzureReauthOnRead(ctx, ap)
+			if _, ok := s.reconcileAzureReauth(ctx, ap); ok {
+				closed = append(closed, ap.RunID)
+			}
 		}
 	}
+	return closed
 }

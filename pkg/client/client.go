@@ -30,6 +30,9 @@
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives
 //   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
+//   - templates (/api/v1/templates):     ListTemplates, GetTemplate, SaveTemplate, DeleteTemplate, CopyTemplate,
+//     ImportTemplate — and, on /api/v1/admin/template-group-admins, ListTemplateGroupAdmins, GrantTemplateGroupAdmin,
+//     RevokeTemplateGroupAdmin. The server answers 501 templates_unavailable until the template store lands
 //   - governance (/api/v1/governance):   GetGovernance, ApplyGovernance, ApplyGovernanceResult
 //   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
 //     ApproveGovernanceChange, RejectGovernanceChange
@@ -39,7 +42,13 @@
 //     /api/v1/me is NOT wrapped: see below.
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
-//   - runners (/api/v1/runners, /api/v1/me/runners): MintRunnerToken, RegisterRunner, ClaimRunner
+//   - runners (/api/v1/runners, /api/v1/me/runners): MintRunnerToken, RegisterRunner, ClaimRunner,
+//     ListRunners, ListRunnersPage, GetRunner, ListMyRunners, GetMyRunner, ListRunnerTokens,
+//     ListRunnerTokensPage, RevokeRunnerToken, GetRunnerSettings, SetRunnersEnabled
+//   - runner pools (/api/v1/runner-pools, /api/v1/runner-pool-defaults; /api/v1/me/runner-pools, /api/v1/me/runner-pool-defaults):
+//     ListRunnerPools, GetRunnerPool, CreateRunnerPool, UpdateRunnerPool, DeleteRunnerPool, AddMyRunnerToPool,
+//     RemoveMyRunnerFromPool, GetOrgRunnerPoolDefaults, SetOrgRunnerPoolDefaults, GetMyRunnerPoolDefaults,
+//     SetMyRunnerPoolDefaults, ClearMyRunnerPoolDefaults. The executor-membership and use-policy sub-routes are NOT wrapped (the console authors them)
 //   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDeviceEnrolmentTokens, RevokeDeviceEnrolmentToken, ListDevices, RevokeDevice
 //   - people (/api/v1/people):           ListPeople, and ErasePerson (a person's retained records, by scope, 0.8.6); the other writes below stay unwrapped
 //   - components (/api/v1/components):   ListComponents, PutComponent, DeleteComponent (the organisation's, admin) — and, on

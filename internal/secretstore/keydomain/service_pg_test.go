@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey/subjectkeytest"
@@ -202,5 +203,43 @@ func TestService_ListUsageDelete(t *testing.T) {
 	}
 	if _, found, _ := s.Delete(t.Context(), "group", "eng"); found {
 		t.Fatal("a second Delete found a row")
+	}
+}
+
+// Recording a login's groups serializes with every assignment write: a write that holds the lock
+// counted the people it would make ambiguous from the groups as they were.
+func TestRecordLoginGroups_WaitsForAnAssignmentWrite(t *testing.T) {
+	pool := subjectkeytest.ThrowawayDB(t)
+	s := keydomain.NewService(pool, []string{"a"})
+	ctx := t.Context()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // a no-op after Commit
+	if err := keydomain.LockAssignments(ctx, tx); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- s.RecordLoginGroups(ctx, "gina", []string{"eng"}, false) }()
+	select {
+	case err := <-done:
+		t.Fatalf("RecordLoginGroups returned (%v) while an assignment write held the lock", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RecordLoginGroups after the lock was released: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RecordLoginGroups did not return after the lock was released")
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM key_domain_login_groups WHERE principal = 'gina' AND groups = '["eng"]'::jsonb`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("the login's groups were not written: %d rows, %v", n, err)
 	}
 }

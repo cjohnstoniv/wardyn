@@ -19,7 +19,7 @@
  * own canon docs rather than editing these files.
  */
 
-import { expect, type Page, type APIRequestContext } from "@playwright/test";
+import { expect, type Locator, type Page, type APIRequestContext } from "@playwright/test";
 // From the CSS-free copy module, NEVER from harness-login-pane: that module
 // reaches xterm.css, which Playwright's Node loader cannot load ("No tests found").
 import { SELFRUN_MARKER, SIGNIN_PROGRESS } from "../../src/app/components/screens/settings/login-pane-copy";
@@ -391,11 +391,24 @@ export async function openModelConnections(page: Page): Promise<void> {
 }
 
 /**
+ * The connections card's own "Sign in to AWS" button. Scoped to the card: the
+ * shell banner and strip can offer the same door while the card settles, and
+ * the card claims it once expanded (openModelConnections).
+ */
+export function cardSignInAws(page: Page): Locator {
+  return page.getByTestId("model-connections-card").getByRole("button", { name: "Sign in to AWS", exact: true });
+}
+
+/** The Cancel of the sign-in pane that is open, never another dialog's. */
+export function paneCancel(page: Page): Locator {
+  return page.getByTestId("harness-login-pane").getByRole("button", { name: "Cancel", exact: true });
+}
+
+/**
  * Open the member's sign-in pane from Your account and wait for its terminal.
  *
- * The walk's provider is the member's one model connection, so Getting
- * Started renders one "Sign in to AWS" button for it; `.first()` keeps the
- * locator strict-mode safe should the shell strip offer the same door.
+ * The walk's provider is the member's one model connection, so the expanded
+ * connections card renders one "Sign in to AWS" button for it.
  *
  * The pane launches the login sandbox the moment it opens — the provider
  * carries the start URL, so there is nothing to ask first.
@@ -408,7 +421,7 @@ export async function openModelConnections(page: Page): Promise<void> {
  */
 export async function openLoginPane(page: Page): Promise<void> {
   await openModelConnections(page);
-  const cta = page.getByRole("button", { name: "Sign in to AWS" }).first();
+  const cta = cardSignInAws(page);
   await expect(cta).toBeVisible({ timeout: 60_000 });
   await cta.click();
   const opened: Page[] = [];

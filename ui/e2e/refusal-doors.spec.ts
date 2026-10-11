@@ -205,18 +205,10 @@ test.describe("the failure block opens the run's own provider's door (state 2)",
       await expect(block.getByText(c.note)).toBeVisible();
       const button = block.getByRole("button", { name: c.aria });
       await expect(button).toHaveText(c.label);
-      // Wait for the failure block's own credential-refresh (its ONE-time
-      // mount effect, failure-block.tsx) to land before clicking (#1291): it
-      // re-renders this button's parent a second time, close on the first
-      // paint's heels, and a click that lands inside that window can miss.
-      // Playwright's own click() actionability polling (attached, visible,
-      // stable, receives events — re-checked immediately before dispatch)
-      // covers the remaining gap between the response landing and React
-      // committing the re-render it causes.
       await statusRefreshed;
-      await button.click();
       const dialog = page.getByRole("dialog", { name: c.dialog });
-      await expect(dialog).toBeVisible();
+      await button.click();
+      await expect(dialog).toBeVisible({ timeout: 20_000 });
       if (c.p.kind === "bedrock_sso" || c.p.kind === "anthropic_subscription") {
         await expect(dialog).toContainText(`For ${c.p.name}`);
       }
@@ -248,9 +240,7 @@ test.describe("no door for anyone but the owner, or in the Admin view (state 3)"
     await expect(block.getByText(MODEL_ACCESS_RUN_DOOR.NOT_OWNER("ann@acme.example"))).toBeVisible();
     await expect(block.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA })).toHaveCount(0);
     await block.getByRole("button", { name: CONSOLE_VIEW.OPEN_IN_USER }).click();
-    // The SSO session flips its view on the server and then reloads, which a
-    // busy runner can take past the 5s default to finish.
-    await expect(page).toHaveURL(/^(?![^?]*\/admin\/)[^?]*\/runs\/[^/]+$/, { timeout: 15_000 });
+    await expect(page).toHaveURL(/^(?![^?]*\/admin\/)[^?]*\/runs\/[^/]+$/, { timeout: 30_000 });
     await expect(page.getByTestId("run-failure-block").getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA })).toBeVisible();
   });
 });

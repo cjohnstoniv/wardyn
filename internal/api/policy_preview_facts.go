@@ -27,8 +27,10 @@ type policyPreviewResponse struct {
 	Pending          []policyPreviewPending    `json:"pending"`
 	RepositoryAccess []policyPreviewRepository `json:"repository_access"`
 	// Components is what the draft is given access to (componentFacts): absent
-	// for a draft with no repository on a Git provider and no component.
+	// for an exec draft with no Git provider or attached component.
 	Components []componentFact `json:"components,omitempty"`
+	// Provenance says why each entry of the spec is there (runFold.prov); never null.
+	Provenance []provenanceRow `json:"provenance"`
 	// Resources is what each placement offers the draft and LocalPlacement
 	// whether each entry can run on the person's runner; both are always an
 	// array, empty until the lane that fills them lands.
@@ -39,6 +41,9 @@ type policyPreviewResponse struct {
 	// choices, an array that is empty until that lane fills it.
 	Image         *client.ImageFact     `json:"image,omitempty"`
 	AllowedImages []client.AllowedImage `json:"allowed_images"`
+	// RunnerPool and RunnerPools are the preflight's, with the same meaning.
+	RunnerPool  *client.ResolvedRunnerPool `json:"runner_pool,omitempty"`
+	RunnerPools []client.RunnerPoolChoice  `json:"runner_pools"`
 }
 
 type policyPreviewPending string
@@ -69,7 +74,7 @@ type policyPreviewRepository struct {
 }
 
 func policyPreviewFacts(req createRunRequest, spec types.RunPolicySpec, source policySourceRecord,
-	warnings []string, site types.SiteConfig, choice runProviderChoice, comps runComponents) policyPreviewResponse {
+	warnings []string, site types.SiteConfig, choice runProviderChoice) policyPreviewResponse {
 	out := redactSpecForRead(spec, false)
 	if out.LLMInspection != nil {
 		inspection := *out.LLMInspection
@@ -85,8 +90,9 @@ func policyPreviewFacts(req createRunRequest, spec types.RunPolicySpec, source p
 		Provisional: true, Redacted: redacted,
 		Warnings: previewSafeWarnings(warnings), Pending: previewPending(req, choice),
 		RepositoryAccess: previewRepositoryAccess(req, out, site),
-		Components:       componentFacts(req, spec, site, comps, nil),
+		Provenance:       []provenanceRow{},
 		Resources:        []client.PlacementResources{}, LocalPlacement: []client.LocalPlacementFact{}, AllowedImages: []client.AllowedImage{},
+		RunnerPools: []client.RunnerPoolChoice{},
 	}
 }
 

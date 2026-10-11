@@ -54,9 +54,13 @@ import (
 // org's autonomy cap reads it (componentAutonomyCap). Its zero value — every
 // run with no self-defined component, and every lane that runs no component
 // gate — caps nothing, so the gate below is what it was without it.
+//
+// baseline is the door's one egress-baseline read, the one the confinement floor
+// was graded on: a second read here could meet an approval landing between the
+// two and grade one run on two sets.
 func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req *createRunRequest,
 	spec types.RunPolicySpec, wsRefs []types.Workspace, enforced types.ConfinementClass,
-	ceiling governanceCeiling, modelCred modelCredentialFacts, comps runComponents,
+	ceiling governanceCeiling, modelCred modelCredentialFacts, comps runComponents, baseline composer.Baseline,
 ) (types.AutonomyResolution, []string, types.SiteConfig, adoEntraGrade, bedrockCredGrade, bool) {
 	// Read for EVERY run that declares a repo, bound or not, because launch
 	// dispatches from this snapshot whether or not a rubric graded it. Fail
@@ -97,7 +101,7 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 		runIdentitySubject(r.Context(), principalFromRequest(r)))
 	grade := adoEntraGradedAs(adoRun, adoOn)
 	bedrock := bedrockCredGradedAs(modelCred)
-	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite, grade, bedrock), enforced)
+	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite, grade, bedrock), enforced, baseline)
 	var level types.AutonomyLevel
 	var boundBy []string
 	if rubric {

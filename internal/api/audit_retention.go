@@ -49,6 +49,9 @@ func (s *Server) handleGetAuditRetention(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, st)
 }
 
+// sweeperActor is the actor name audit_retention_drop treats as the retention sweeper.
+const sweeperActor = "wardynd"
+
 // dropAuditPartitionRequest is POST /audit/retention/drop's body: the partition, and the digest of the
 // export the operator checked.
 type dropAuditPartitionRequest struct {
@@ -74,10 +77,17 @@ func (s *Server) handleDropAuditPartition(w http.ResponseWriter, r *http.Request
 		writeErrorReason(w, http.StatusBadRequest, reasonAuditRetentionBodyInvalid, `the body is {"partition": "<name>", "digest": "<64 hex>"}`)
 		return
 	}
+	// The database reads the actor name 'wardynd' as the sweeper (a system, unattested drop), so no
+	// request may carry it: local mode takes the name from X-Wardyn-Principal, and an OIDC subject is
+	// whatever the provider issued. The sweeper's own path (AutodropAuditPartition) does not come here.
+	actor := principalFromRequest(r)
+	if actor == sweeperActor {
+		s.refuse(w, r, authz.Deny(authz.ReasonAuditRetentionActorReserved, "audit.retention", `the actor name "wardynd" is reserved for the retention sweeper`))
+		return
+	}
 	// The drop's rows are written by the database, past the sealing recorder, so a human actor is stored
 	// as their subject here (WARDYN_AUDIT_SEAL=full); a subject is never 'wardynd', so the SQL's
 	// attested check still holds.
-	actor := principalFromRequest(r)
 	if s.cfg.AuditActorSubject != nil && actorTypeFromRequest(r) == types.ActorHuman {
 		var err error
 		if actor, err = s.cfg.AuditActorSubject(r.Context(), actor); err != nil {
@@ -86,7 +96,7 @@ func (s *Server) handleDropAuditPartition(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
-	d, err := rs.DropAuditPartition(r.Context(), body.Partition, strings.TrimSpace(body.Digest), actor)
+	d, err := rs.DropAuditPartition(r.Context(), body.Partition, strings.TrimSpace(body.Digest), actor, actorTypeFromRequest(r))
 	var refused *store.AuditRetentionRefused
 	switch {
 	case errors.Is(err, store.ErrNotFound):

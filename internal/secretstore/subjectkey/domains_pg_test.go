@@ -307,3 +307,19 @@ func TestVerify(t *testing.T) {
 		t.Fatalf("after destroying domain a's subjects, with a removed: %v", err)
 	}
 }
+
+// Verify on a database the release has not migrated says so, rather than reading as a Postgres
+// outage: -rotate-age-key and -rewrap run it without migrating.
+func TestVerify_UnmigratedDatabaseNamesTheRemedy(t *testing.T) {
+	pool := subjectkeytest.ThrowawayDB(t)
+	if _, err := pool.Exec(t.Context(), `DROP TABLE principal_keys CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	err := subjectkey.Verify(t.Context(), pool, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "migrate-only") {
+		t.Fatalf("Verify on an unmigrated database = %v, want an error naming -migrate-only", err)
+	}
+	if errors.Is(err, secretstore.ErrUnavailable) {
+		t.Errorf("Verify reported an outage for a missing table: %v", err)
+	}
+}

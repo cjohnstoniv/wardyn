@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -25,11 +26,6 @@ const (
 	foldAll       = foldCreate | foldPreflight | foldPreview
 )
 
-// foldRecorder is the per-layer provenance hook: every step receives one, and
-// it records nothing yet. A-L1b fills it with what each step contributed to the
-// resolved spec, so the three doors can report provenance from the one fold.
-type foldRecorder struct{}
-
 // runFold is one request's trip through runFoldSteps: the inputs the door's
 // prologue decided, and what each step resolved for the steps after it and for
 // the door's own edge (create's persistence and audit, Review's grading, the
@@ -41,6 +37,10 @@ type runFold struct {
 	req     *createRunRequest
 	ceiling governanceCeiling
 	reqCC   types.ConfinementClass
+	// baseline is the operator's egress baseline, read ONCE per request by stepBaseline: the
+	// confinement floor, the autonomy posture and the door's own grading and facts all read this
+	// value, so one request cannot grade on two sets.
+	baseline composer.Baseline
 
 	spec              types.RunPolicySpec
 	policyID          *uuid.UUID
@@ -63,6 +63,7 @@ type runFold struct {
 	bedrockGrade      bedrockCredGrade
 	adoNarrowed       string
 	fitWarnings       []string
+	prov              []provenanceRow
 }
 
 // runFoldStep is one gate or fold of the shared sequence. run writes its own
@@ -79,6 +80,8 @@ type runFoldStep struct {
 // The ORDER is security-relevant and is the contract; do not sort it:
 //   - The request contract first: it reads only the request, so a malformed or
 //     not-yet-honoured field answers before any store read or credential lookup.
+//   - The egress baseline is read once after request validation; the floor, the autonomy
+//     posture and the door's grading read that one value.
 //   - Policy first: the member clamp and grant narrowing run before anything
 //     is granted, and every later step reads the clamped spec.
 //   - Workspace seed after policy, the drive after the seed: seeding can set
@@ -89,6 +92,9 @@ type runFoldStep struct {
 //     hosts they add (invariant 5), and components see what admins already
 //     credentialed. The dry doors widen workspace egress before the
 //     requirements fold; create widens after the mint (unionRunEgress).
+//   - Local eligibility straight after components, before anything can renew
+//     or mint: the admitted plan's refusals and the unsupported-local refusal
+//     answer before the confinement floor and the provider's liveness step.
 //   - Confinement, then the model provider, then autonomy: the autonomy grade
 //     reads the enforced class and the chosen model credential.
 //   - Azure DevOps standing and PAT narrowing read autonomy's site snapshot.
@@ -96,6 +102,7 @@ type runFoldStep struct {
 //     no identity and no run row.
 var runFoldSteps = []runFoldStep{
 	{(*Server).stepRunContract, foldAll},
+	{(*Server).stepBaseline, foldAll},
 	{(*Server).stepPolicy, foldAll},
 	{(*Server).stepSeedWorkspace, foldAll},
 	{(*Server).stepDrive, foldAll},
@@ -104,6 +111,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepRequirements, foldAll},
 	{(*Server).stepGitHubEgress, foldAll},
 	{(*Server).stepComponents, foldAll},
+	{(*Server).stepLocalEligibility, foldAll},
 	{(*Server).stepConfinement, foldAll},
 	{(*Server).stepModelProvider, foldAll},
 	{(*Server).stepAutonomy, foldAll},
@@ -129,5 +137,6 @@ func (s *Server) foldRunRequest(w http.ResponseWriter, r *http.Request, mode fol
 			return runFold{}, false
 		}
 	}
+	f.prov = rec.result()
 	return f, true
 }

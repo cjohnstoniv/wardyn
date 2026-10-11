@@ -79,7 +79,7 @@ test("the Azure DevOps access section locks what the ceiling does not grant, and
   await capBox(dialog, "Edit branch policies").click();
   await expect(dialog.getByLabel(SPEC_LABEL)).toHaveValue(/azure_devops_capabilities:/);
 
-  const created = page.waitForResponse((r) => r.url().includes("/api/v1/policies") && r.request().method() === "POST");
+  const created = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/policies" && r.request().method() === "POST");
   await dialog.getByRole("button", { name: "Create policy" }).click();
   const res = await created;
   expect(res.status()).toBe(201);

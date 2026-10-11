@@ -23,7 +23,7 @@
 // workspace-providers-copy re-exports them for its existing callers. The one
 // copy decision this feature needs of that table — `expiring`'s action line,
 // re-composed on the reader's clock — lives THERE, beside its template.
-import type { SetupModelProvider, SetupStatus } from "./types";
+import type { SetupModelProvider, SetupProviderAccess, SetupStatus } from "./types";
 
 // U-10: the per_user "something actionable to do" states — the member's own
 // sign-in. Defined once so the Agents tab (admin), member Getting Started
@@ -46,7 +46,7 @@ export function harnessDisplayNames(status: SetupStatus | null | undefined, ids:
 }
 
 /** One provider the strip speaks for (design §5.5, packet MP-D). */
-export interface ProviderAttention {
+export interface ProviderAttention extends Pick<SetupProviderAccess, "cause" | "new_destination"> {
   provider: SetupModelProvider;
   /** provider_access's state: not_configured, expired_signin or expiring. */
   state: string;
@@ -77,7 +77,7 @@ export function providerAttention(status: SetupStatus | null | undefined): Provi
     const held = p.kind === "bedrock_sso" && (access.state === "expiring" || access.state === "expired_signin");
     const missing = defaultFor.length > 0 && MODEL_ACCESS_ACTIONABLE.has(access.state) && !(p.kind === "anthropic_subscription" && access.state === "expiring");
     if (held || missing)
-      out.push({ provider: p, state: access.state, deadline: access.deadline ?? "", action: access.action ?? "", defaultFor });
+      out.push({ ...access, provider: p, deadline: access.deadline ?? "", action: access.action ?? "", defaultFor });
   }
   return out;
 }

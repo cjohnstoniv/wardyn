@@ -63,3 +63,20 @@ func TestRunnerSpoolConfigUsesPrivateWriterIdentity(t *testing.T) {
 		t.Fatalf("config/identity: %s user%s", data, cfg.User)
 	}
 }
+
+// A spool path in the received config never survives: the runner writes its own.
+func TestRunnerSpoolConfigReplacesAReceivedSpoolDir(t *testing.T) {
+	f := newFakeDocker()
+	d := newWithClient(f, Config{RunnerStateDir: t.TempDir()})
+	data, err := d.runnerSpoolConfig(context.Background(), uuid.New(), []byte(`{"decision_spool_dir":"/org/chosen/spool"}`), &container.Config{}, &container.HostConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]string
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if fields["decision_spool_dir"] != runnerSpoolTarget {
+		t.Fatalf("decision_spool_dir = %q, want the runner's own %q", fields["decision_spool_dir"], runnerSpoolTarget)
+	}
+}

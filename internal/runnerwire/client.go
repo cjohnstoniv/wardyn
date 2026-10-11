@@ -27,7 +27,9 @@ type RunnerHooks struct {
 	// Pending applies actions oldest first and durably records each result.
 	// It sends action_result through peer only after recording that result.
 	Pending func(context.Context, *Peer, []PendingAction) error
-	State   func(context.Context) ([]RunState, error)
+	// StatePages emits one fresh inventory as bounded ordered pages through
+	// send, ending with Final. Each page is a separate STATE frame.
+	StatePages func(ctx context.Context, send func(StatePage) error) error
 	// Replay sends the durable spool, completing before READY is sent.
 	Replay func(context.Context, *Peer) error
 	// BeforeReady establishes local execution admission before the org can
@@ -70,7 +72,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		return nil, ErrAuth
 	}
 	h := cfg.Hooks
-	if h.Call == nil || h.Open == nil || h.Clock == nil || h.Pending == nil || h.State == nil || h.Replay == nil || h.BeforeReady == nil ||
+	if h.Call == nil || h.Open == nil || h.Clock == nil || h.Pending == nil || h.StatePages == nil || h.Replay == nil || h.BeforeReady == nil ||
 		h.Lease == nil || h.Revoked == nil || h.Offline == nil {
 		return nil, errors.New("runner execution and durable offline handlers must be configured before serving")
 	}
@@ -252,18 +254,7 @@ func (c *Client) fresh(ctx context.Context, peer *Peer, pending <-chan []Pending
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	runs, err := c.cfg.Hooks.State(ctx)
-	if err != nil {
-		return err
-	}
-	if runs == nil {
-		runs = []RunState{}
-	}
-	payload, err := Marshal(runs)
-	if err != nil {
-		return err
-	}
-	if err := peer.Send(ctx, Frame{Type: TypeState, Payload: payload}); err != nil {
+	if err := c.sendInventory(ctx, peer); err != nil {
 		return err
 	}
 	if err := c.cfg.Hooks.Replay(ctx, peer); err != nil {
@@ -278,4 +269,36 @@ func (c *Client) fresh(ctx context.Context, peer *Peer, pending <-chan []Pending
 		return err
 	}
 	return nil
+}
+
+// sendInventory refuses to reach READY unless the hook emitted a valid Final
+// and no page was refused, even if the hook discarded that refusal.
+func (c *Client) sendInventory(ctx context.Context, peer *Peer) error {
+	var cursor StateInventory
+	var refused error
+	err := c.cfg.Hooks.StatePages(ctx, func(page StatePage) error {
+		if refused != nil {
+			return refused
+		}
+		next, err := cursor.Next(page)
+		if err == nil {
+			var payload []byte
+			if payload, err = Marshal(page); err == nil {
+				err = peer.Send(ctx, Frame{Type: TypeState, Payload: payload})
+			}
+		}
+		if err != nil {
+			refused = err
+			return err
+		}
+		cursor = next
+		return nil
+	})
+	if err == nil {
+		err = refused
+	}
+	if err == nil && !cursor.Complete {
+		err = fmt.Errorf("%w: STATE inventory ended without Final", ErrBadFrame)
+	}
+	return err
 }

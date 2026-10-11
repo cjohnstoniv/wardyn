@@ -55,6 +55,13 @@ func (s PG) BeginRunnerExecution(ctx context.Context, runnerID, runID, previous,
 	if (run.State != types.RunStarting && run.State != types.RunRunning) || run.LostAt != nil {
 		return out, ErrRunnerExecutionRefused
 	}
+	var fenced bool
+	if err := tx.QueryRow(ctx, runnerActionUnsettledSQL, runID).Scan(&fenced); err != nil {
+		return out, err
+	}
+	if fenced {
+		return out, ErrRunnerExecutionRefused
+	}
 	current, err := readRunnerExecution(ctx, tx, runID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return out, err

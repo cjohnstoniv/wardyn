@@ -352,7 +352,7 @@ test.describe("admin session at /setup and /admin/setup (unmocked — D1: the UR
     await page.goto("/admin/setup");
     await expect(page.getByRole("heading", { name: "Pick your barrier" })).toBeVisible();
 
-    expect(requests.some((u) => new URL(u).pathname === "/api/v1/site-config")).toBe(true);
+    await expect.poll(() => requests.some((u) => new URL(u).pathname === "/api/v1/site-config")).toBe(true);
   });
 });
 

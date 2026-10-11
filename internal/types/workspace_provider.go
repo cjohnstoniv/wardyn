@@ -255,9 +255,13 @@ type GitProvider struct {
 	BaseURLs []string `json:"base_urls"`
 	// Lanes are the credential lanes usable for this provider; empty means
 	// every legacy lane (LegacyGitLanes) — the field narrows, never widens.
-	Lanes            []GitLane        `json:"lanes,omitempty"`
-	CredentialSource CredentialSource `json:"credential_source,omitempty"` // whose credential the lanes use; empty = CredentialSourceShared, CredentialSourcePerUser requires GitLaneEntra, or GitLanePAT on an Azure DevOps row (a Server row, which has no Entra sign-in)
-	Entra            *ADOEntraConfig  `json:"entra,omitempty"`             // present only on, and required by, a row whose Lanes name GitLaneEntra
+	Lanes []GitLane `json:"lanes,omitempty"`
+	// GitHubAppInstallURL is operator-configured, nonsecret installation
+	// metadata for this row's App lane. It grants no access and is disclosed
+	// by run facts only to operators, never ordinary members.
+	GitHubAppInstallURL string           `json:"github_app_install_url,omitempty"`
+	CredentialSource    CredentialSource `json:"credential_source,omitempty"` // whose credential the lanes use; empty = CredentialSourceShared, CredentialSourcePerUser requires GitLaneEntra, or GitLanePAT on an Azure DevOps row (a Server row, which has no Entra sign-in)
+	Entra               *ADOEntraConfig  `json:"entra,omitempty"`             // present only on, and required by, a row whose Lanes name GitLaneEntra
 }
 
 // StorageProviders is the file-system half of WorkspaceProviders; each nil sub-block is legacy behaviour for that half.

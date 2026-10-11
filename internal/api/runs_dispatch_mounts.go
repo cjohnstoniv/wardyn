@@ -281,9 +281,8 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 	// the approval queue shows only task-relevant egress. An operator who WANTS
 	// agent telemetry sets WARDYN_ALLOW_AGENT_TELEMETRY (1/true/yes/on) to omit
 	// these; default-unset keeps the suppression on.
-	if !envEnabled(envAllowAgentTelemetry) {
-		env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
-		env["DISABLE_TELEMETRY"] = "1"
+	for name, value := range agentTelemetryEnv() {
+		env[name] = value
 	}
 	// Toolchain-fidelity env — REQUIREMENTS-DRIVEN, never platform-wide: a
 	// workspace run gets exactly what its scans detected (needs), and only a

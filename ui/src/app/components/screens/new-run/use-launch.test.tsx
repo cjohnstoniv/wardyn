@@ -22,6 +22,7 @@ vi.mock("../../../lib/api/runs", async (importOriginal) => {
 import { getAuthGeneration } from "../../../lib/api/core";
 import { useLaunch } from "./use-launch";
 import { initialWizardState } from "./wizard-types";
+import { emptyRunContractDraft } from "../../../lib/run-contract-draft";
 import { HttpError } from "../../../lib/api/core";
 import * as coreModule from "../../../lib/api/core";
 import * as runsModule from "../../../lib/api/runs";
@@ -86,7 +87,13 @@ describe("useLaunch — automatic preflight", () => {
     return renderHook(
       (p: { task: string; auto: Auto; doorOpen: boolean }) =>
         useLaunch({
-          state: initialWizardState("CC1", { selectedPolicyId: "p1", task: p.task }),
+          // The task the person edits is the workload of the chosen mode: the wizard's request
+          // is the 0.9 shape, which does not carry the older top-level task.
+          state: initialWizardState("CC1", {
+            selectedPolicyId: "p1",
+            task: p.task,
+            contract: { ...emptyRunContractDraft(), mode: { experience: "background", tools: [], workload: { kind: "command", command: p.task } } },
+          }),
           workspaces: [],
           policyMode: "saved",
           ccTouched: false,

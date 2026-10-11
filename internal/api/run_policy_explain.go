@@ -22,6 +22,7 @@ import (
 const (
 	causeWorkspace     = "workspace"
 	causeSourceControl = "source_control"
+	causeComponent     = "component"
 	causeMirror        = "mirror"
 	causeModelAccess   = "model_access"
 	causeGitBroker     = "git_broker"
@@ -33,7 +34,7 @@ const (
 )
 
 var causeOrder = []string{
-	causeWorkspace, causeSourceControl, causeMirror, causeModelAccess, causeGitBroker,
+	causeWorkspace, causeSourceControl, causeComponent, causeMirror, causeModelAccess, causeGitBroker,
 	causeProfile, causeOrgDisk, causeRestart, causeLimits, causeLaunch,
 }
 
@@ -81,16 +82,16 @@ var (
 // its policy. Every set holds entries exactly as they were written into the
 // spec, so membership is an exact match.
 type auditEvidence struct {
-	workspace, sourceControl, mirror, model, confine, profileDenied map[string]bool
-	mirrorHosts                                                     map[string]bool // bare hosts of successful mirror rows
-	profile                                                         string
-	profileMaxDisk                                                  int
-	restart                                                         map[string]time.Time
-	restartHosts                                                    []string // restart denies in the order they were added
-	clamp                                                           []string
-	bounded                                                         bool // the member bound applied (policy_source.bounded)
-	diskFilled                                                      bool // disk_mib_filled: the size came from the org default
-	legacyGitBroker                                                 bool // no confine row exists and the run holds a github grant
+	workspace, sourceControl, component, mirror, model, confine, profileDenied map[string]bool
+	mirrorHosts                                                                map[string]bool // bare hosts of successful mirror rows
+	profile                                                                    string
+	profileMaxDisk                                                             int
+	restart                                                                    map[string]time.Time
+	restartHosts                                                               []string // restart denies in the order they were added
+	clamp                                                                      []string
+	bounded                                                                    bool // the member bound applied (policy_source.bounded)
+	diskFilled                                                                 bool // disk_mib_filled: the size came from the org default
+	legacyGitBroker                                                            bool // no confine row exists and the run holds a github grant
 }
 
 // explainRunPolicy attributes each difference between the policy a run started
@@ -186,7 +187,7 @@ func (x *explainer) evidenceBase(resolved types.RunPolicySpec) types.RunPolicySp
 		switch field {
 		case fieldAllowed:
 			ev := x.ev
-			return ev.workspace[entry] || ev.sourceControl[entry] || ev.mirror[entry] || x.mirrorTo[entry] || ev.model[entry]
+			return ev.workspace[entry] || ev.sourceControl[entry] || ev.component[entry] || ev.mirror[entry] || x.mirrorTo[entry] || ev.model[entry]
 		default:
 			_, restart := x.ev.restart[entry]
 			return x.ev.confine[entry] || x.ev.profileDenied[entry] || restart || x.legacyGit(entry)
@@ -256,6 +257,8 @@ func (x *explainer) evidenceCause(field, entry string, added bool) (cause, profi
 		return causeWorkspace, "", nil, true
 	case allowAdded && ev.sourceControl[entry]:
 		return causeSourceControl, "", nil, true
+	case allowAdded && ev.component[entry]:
+		return causeComponent, "", nil, true
 	case x.mirrored(field, entry, added):
 		return causeMirror, "", nil, true
 	case allowAdded && ev.model[entry]:

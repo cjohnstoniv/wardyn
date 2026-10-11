@@ -48,6 +48,7 @@ var leqRules = map[string]string{
 	"github_capabilities":             "b empty: only an empty a; else a non-empty subset of b",
 
 	// GovernanceLimits
+	"local_self_defined_components":         "a implies b",
 	"deny_task_mode_exec":                   "b implies a",
 	"deny_interactive":                      "b implies a",
 	"deny_ui_apps":                          "b implies a",

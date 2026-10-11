@@ -48,7 +48,11 @@ func (s *Server) handleGradePolicy(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonPolicyGradeSpecInvalid, "invalid policy spec: "+err.Error())
 		return
 	}
-	runInput := composer.RunInput{Interactive: req.Interactive}
+	baseline, ok := s.baselineOr500(w, r)
+	if !ok {
+		return
+	}
+	runInput := composer.RunInput{Interactive: req.Interactive, Baseline: baseline}
 	items := composer.Grade(runInput, req.Spec)
 	writeJSON(w, http.StatusOK, gradePolicyResponse{
 		RiskAssessment: items,

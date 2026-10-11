@@ -86,10 +86,10 @@ func explainPrincipal(subjectType types.CapabilitySubjectType, raw string) (stri
 	}
 	switch subjectType {
 	case types.CapabilitySubjectUser:
-		subject = canonicalUserSubject(subject)
+		subject = types.CanonicalUserSubject(subject)
 		c.users = []string{subject}
 	case types.CapabilitySubjectGroup:
-		g, ok := oidc.CanonicalGroupSubject(subject)
+		g, ok := types.CanonicalGroupSubject(subject)
 		if !ok {
 			return "", c, fmt.Errorf("subject: a group subject must be printable ASCII — it is matched against the login-time group snapshot, which carries printable ASCII only")
 		}

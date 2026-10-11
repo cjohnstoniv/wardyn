@@ -51,6 +51,9 @@ type Options struct {
 	// the latest lease/row or allocate a new generation on an ambiguous retry.
 	// Authenticated Hub admission requires this hook for Exec/Start dispatch.
 	ExecutionGeneration func(ctx context.Context, method, ref string) (uuid.UUID, error)
+	// Dispatch, when set, is read before every CreateSandbox CALL; an error
+	// refuses the create before anything reaches the runner.
+	Dispatch func(context.Context) error
 	// OnEvent receives every runner event except `caps` (kept here) and
 	// `waiting` (delivered to the create that owns it).
 	OnEvent func(runnerwire.Event)
@@ -156,6 +159,11 @@ func (s *Substrate) refCall(ctx context.Context, method, ref string, result any)
 // CreateSandbox sends the spec minus OnWaiting and ExecOutput. `waiting` events
 // call spec.NotifyWaiting on this goroutine, in order, before it returns.
 func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	if s.opts.Dispatch != nil {
+		if err := s.opts.Dispatch(ctx); err != nil {
+			return runner.Sandbox{}, err
+		}
+	}
 	if err := s.checkClass(ctx, spec.ConfinementClass); err != nil {
 		return runner.Sandbox{}, err
 	}

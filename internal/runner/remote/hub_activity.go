@@ -39,7 +39,7 @@ func (h *Hub) currentActivity(ctx context.Context, row types.Runner, a Admission
 	h.mu.Lock()
 	currentSession := !h.closed && h.sessions[row.ID] == session
 	h.mu.Unlock()
-	if !currentSession || !session.ready.Load() || session.peer != peer || peer == nil || !peer.Online() || a.Activity == nil {
+	if !currentSession || !session.readyFor(session.id) || session.peer != peer || peer == nil || !peer.Online() || a.Activity == nil {
 		return runnerwire.ErrNotReady
 	}
 	current, err := h.cfg.Lookup(ctx, row.ID)

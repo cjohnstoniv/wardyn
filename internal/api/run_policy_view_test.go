@@ -630,6 +630,9 @@ func TestExplainRunPolicy_OneCasePerCause(t *testing.T) {
 		{"source_control: egress.add", ptr(pvSpec(nil, nil)), pvSpec([]string{"github.example"}, nil),
 			evidenceOf(func(e *auditEvidence) { e.sourceControl["github.example"] = true }), types.SiteConfig{}, types.AgentRun{},
 			causeSourceControl, fieldAllowed, []string{"github.example"}, nil},
+		{"component: egress.add", ptr(pvSpec(nil, nil)), pvSpec([]string{"org-api.example"}, nil),
+			evidenceOf(func(e *auditEvidence) { e.component["org-api.example"] = true }), types.SiteConfig{}, types.AgentRun{},
+			causeComponent, fieldAllowed, []string{"org-api.example"}, nil},
 		{"mirror: the To host", ptr(pvSpec(nil, nil)), pvSpec([]string{"artifactory.corp:443"}, nil),
 			evidenceOf(func(e *auditEvidence) {
 				e.mirror["artifactory.corp:443"] = true

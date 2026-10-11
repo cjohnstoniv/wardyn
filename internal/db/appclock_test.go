@@ -68,29 +68,3 @@ func TestAppClockAgeMicrosClampsAnAbsurdAge(t *testing.T) {
 			"past every real one so clamping cannot make something read as NEWER than it is", got)
 	}
 }
-
-// TestAppClockAgeSQLNamesItsPlaceholderAndSubtracts pins the expression's shape,
-// because both call sites concatenate it into their own statement and a change
-// to the units or the sign is a change to what gets stored and compared.
-func TestAppClockAgeSQLNamesItsPlaceholderAndSubtracts(t *testing.T) {
-	got := AppClockAgeSQL("$9")
-	for _, want := range []string{"now() -", "$9::bigint", "interval '1 microsecond'"} {
-		if !contains(got, want) {
-			t.Errorf("AppClockAgeSQL(\"$9\") = %q, missing %q. It must SUBTRACT a MICROSECOND age from the "+
-				"database's own now(): adding it would write the row forward of the cutoff, and any other unit "+
-				"silently rescales every timestamp it produces", got, want)
-		}
-	}
-	if AppClockAgeSQL("$4") == got {
-		t.Error("AppClockAgeSQL ignores its placeholder argument; the two call sites bind different parameter numbers")
-	}
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
-}

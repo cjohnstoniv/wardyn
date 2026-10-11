@@ -199,14 +199,14 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 		// snapshot, and that snapshot is strictly narrower than "lowercase it":
 		// sessionGroups can only carry printable ASCII, checked BEFORE the fold.
 		// So the write surface asks the match surface itself — one function,
-		// oidc.CanonicalGroupSubject — rather than a second, looser spelling of
+		// types.CanonicalGroupSubject — rather than a second, looser spelling of
 		// the same rule. Without it a subject no session can ever produce is
 		// stored 201-Created and rendered on the Permissions screen as active
 		// while it matches nobody: a DENY that protects nothing (the failure
 		// the egress_host arm above added ValidDomainEntry to close, on the
 		// VALUE half of the identical record), and a group tier that
 		// HasGroupTierAssignments still counts as present.
-		subject, ok := oidc.CanonicalGroupSubject(g.Subject)
+		subject, ok := types.CanonicalGroupSubject(g.Subject)
 		if !ok {
 			return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
 		}
@@ -219,14 +219,14 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 			return fmt.Errorf("subject: %q is not a user type id", g.Subject)
 		}
 	} else {
-		// A USER subject gets canonicalUserSubject, not a bare ToLower. The
+		// A USER subject gets types.CanonicalUserSubject, not a bare ToLower. The
 		// fold is UNICODE: U+212A folds to ASCII 'k' and U+0130 to ASCII 'i',
 		// so a plain lowercase stored an admin's "Kim@Korp.com" (crafted K's)
 		// as "kim@korp.com" — binding a DENY, or a governance profile, to a
 		// real human the author never named, and to the exact string that
 		// human's own claims resolve to. Same function as the read side, so
 		// what a caller can BE is what this can store.
-		g.Subject = canonicalUserSubject(g.Subject)
+		g.Subject = types.CanonicalUserSubject(g.Subject)
 	}
 	if len(g.Subject) > maxCapabilityGrantFieldLen || !controlCharFree(g.Subject) {
 		return fmt.Errorf("subject: invalid")
@@ -271,8 +271,8 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 //     capSecret DENY would be byte-for-byte the same inert row the workspace
 //     arm exists to prevent, and folding can only ever make the grant match
 //     the row the author meant. The ASCII guard runs BEFORE the fold, the
-//     same order canonicalUserSubject and oidc.CanonicalGroupSubject use: a
-//     non-ASCII value can never name one of these rows, and folding first would
+//     same order types.CanonicalUserSubject and types.CanonicalGroupSubject
+//     use: a non-ASCII value can never name one of these rows, and folding first would
 //     let U+212A land on an ASCII name the author never typed.
 //
 //   - feature: LOWERCASED (ASCII guard first, as above), then held to the
@@ -320,7 +320,7 @@ func canonicalGrantValue(capability, value string) (string, error) {
 		return id.String(), nil
 	case capFeature:
 		lowered := strings.ToLower(v)
-		if !oidc.ASCIIOnly(v) || !slices.Contains(featureValues, lowered) {
+		if !types.ASCIIOnlySubject(v) || !slices.Contains(featureValues, lowered) {
 			return "", fmt.Errorf("value: %q is not a feature — a feature capability is one of %s, and the resolver compares it exactly, so any other value can never match anything", v, strings.Join(featureValues, ", "))
 		}
 		return lowered, nil
@@ -332,7 +332,7 @@ func canonicalGrantValue(capability, value string) (string, error) {
 		case capModelProvider:
 			grammar, what = modelProviderIDPattern, "model provider id"
 		}
-		if !oidc.ASCIIOnly(v) {
+		if !types.ASCIIOnlySubject(v) {
 			return "", fmt.Errorf("value: %q is not a %s — one is written in lowercase ASCII, so this value can never match a stored row", v, what)
 		}
 		lowered := strings.ToLower(v)

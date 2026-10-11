@@ -75,7 +75,7 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 		Open: func(*runnerwire.Peer, *runnerwire.Stream, runnerwire.Open) error {
 			return runnerwire.Refuse("unsupported runner stream")
 		},
-		Clock: manager.Clock, Pending: manager.Pending, State: manager.State,
+		Clock: manager.Clock, Pending: manager.Pending, StatePages: manager.StatePages,
 		BeforeReady: manager.BeforeReady, Lease: manager.Lease, Revoked: manager.Revoked, Offline: manager.Offline,
 		Replay: func(ctx context.Context, peer *runnerwire.Peer) error {
 			support, err := sub.Classes(ctx)

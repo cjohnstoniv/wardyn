@@ -32,9 +32,10 @@ func TestHubActiveRevocationStopsDispatchAndReconnect(t *testing.T) {
 	hub := NewHub(ctx, HubConfig{OrgURL: "https://org.example", Lookup: func(context.Context, uuid.UUID) (types.Runner, error) { return *stored.Load(), nil },
 		Admit: func(context.Context, types.Runner) (Admission, error) {
 			return Admission{Substrate: sub, Link: link,
-				Pending: func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
-				State:   func(context.Context, []runnerwire.RunState) error { return nil },
-				Event:   func(context.Context, runnerwire.Event) error { return nil },
+				Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
+				BeginInventory: func(context.Context, string) error { return nil },
+				StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil },
+				Event:          func(context.Context, runnerwire.Event) error { return nil },
 			}, nil
 		},
 	})

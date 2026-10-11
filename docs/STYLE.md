@@ -137,7 +137,7 @@ The citation guard ([`cmd/wardynd/citation_guard_test.go`](../cmd/wardynd/citati
 | Citation shape and resolution | [`cmd/wardynd/citation_guard_test.go`](../cmd/wardynd/citation_guard_test.go) | `test` | The threat model docs and [USERS.md](USERS.md) |
 
 - Each script's header comment defines its rule. [doc-form.d](../scripts/doc-form.d/README) holds the lists: asserted docs (`.list`), budgets (`.budget`), must-link docs (`.links`).
-- Ten `docs/operations/` pages named in the form script keep their older checks until a `.list` names them. No other doc fails the caps.
+- The `docs/operations/` pages named in the form script keep their older checks until a `.list` names them. No other doc fails the caps.
 - A doc that gains a visual joins `DOCS` in the same change; until then no gate checks its alt text or labels.
 - Dead links in [CHANGELOG.md](../CHANGELOG.md), [CHANGELOG-ARCHIVE.md](../CHANGELOG-ARCHIVE.md) and the third-party notices are counted, never failed. `docs/design/` is exempt from must-link.
 - A `:NNN` suffix after a `.go`, `.md`, `.ts` or `.sh` name is a line citation: it fails in a must-link doc and warns elsewhere.
@@ -147,15 +147,17 @@ The citation guard ([`cmd/wardynd/citation_guard_test.go`](../cmd/wardynd/citati
 
 Code, scripts and other docs quote these headings and strings. Changing one updates the quoting code in the same change.
 
-[OPERATIONS.md](OPERATIONS.md):
+[OPERATIONS.md](OPERATIONS.md) and the task pages it was split into under [`operations/`](operations/)
+(#1519). An old heading stays a stub in OPERATIONS.md carrying the same anchor text, so a quoted link
+resolves either way; the table names the page that now carries the text.
 
 | Heading | Quoted by |
 |---|---|
-| [Multi-user: who can change what](OPERATIONS.md#multi-user-who-can-change-what) | [`docs/README.md`](README.md), [`scripts/setup.sh`](../scripts/setup.sh), [`internal/api/runs_create_validate.go`](../internal/api/runs_create_validate.go) |
-| [Who decides who gets in: chart vs console vs IdP](OPERATIONS.md#who-decides-who-gets-in-chart-vs-console-vs-idp) | [the Kubernetes setup skill](../.claude/skills/wardyn-k8s-setup/SKILL.md), [`deploy/helm/wardyn/README.md`](../deploy/helm/wardyn/README.md) |
-| [Three roles, and who sets the walls](OPERATIONS.md#three-roles-and-who-sets-the-walls) | [`docs/README.md`](README.md) |
+| [Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what) | [`docs/README.md`](README.md), [`scripts/setup.sh`](../scripts/setup.sh), [`internal/api/runs_create_validate.go`](../internal/api/runs_create_validate.go) |
+| [Who decides who gets in: chart vs console vs IdP](operations/who-gets-in.md#who-decides-who-gets-in-chart-vs-console-vs-idp) | [the Kubernetes setup skill](../.claude/skills/wardyn-k8s-setup/SKILL.md), [`deploy/helm/wardyn/README.md`](../deploy/helm/wardyn/README.md) |
+| [Three roles, and who sets the walls](operations/three-roles.md#three-roles-and-who-sets-the-walls) | [`docs/README.md`](README.md) |
 | `**What admin-only still means**` and its 2-column table | [`internal/api/operations_tier_doc_test.go`](../internal/api/operations_tier_doc_test.go) |
-| [Every denial that isn't a 404](OPERATIONS.md#every-denial-that-isnt-a-404), with its rows keyed by `reason` | [`internal/api/authz_denied_doc_test.go`](../internal/api/authz_denied_doc_test.go) |
+| [Every denial that isn't a 404](operations/denials.md#every-denial-that-isnt-a-404), with its rows keyed by `reason` | [`internal/api/authz_denied_doc_test.go`](../internal/api/authz_denied_doc_test.go) |
 | [Second user, same host](OPERATIONS.md#second-user-same-host) | [`install.sh`](../install.sh), [`scripts/test-claims-match-code.sh`](../scripts/test-claims-match-code.sh) |
 | [Upgrading a one-line install](OPERATIONS.md#upgrading-a-one-line-install) | [`install.sh`](../install.sh), [`scripts/test-install-sh-trust.sh`](../scripts/test-install-sh-trust.sh) |
 | [Stopped-writer upgrade](OPERATIONS.md#stopped-writer-upgrade) | [`cmd/wardynd/boot_flags.go`](../cmd/wardynd/boot_flags.go), [`cmd/wardynd/migrate_only.go`](../cmd/wardynd/migrate_only.go) |
@@ -167,7 +169,7 @@ Code, scripts and other docs quote these headings and strings. Changing one upda
 | [Renamed in 0.8](OPERATIONS.md#renamed-in-08), with its `Go:` rows | [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) |
 | [Restore them](OPERATIONS.md#restore-them), [Recovery set by deployment](OPERATIONS.md#recovery-set-by-deployment) | [`cmd/wardynd/docs_ops_guard_test.go`](../cmd/wardynd/docs_ops_guard_test.go), [`cmd/wardynd/recovery_set_doc_test.go`](../cmd/wardynd/recovery_set_doc_test.go) |
 | [Splitting the migrator and app roles](OPERATIONS.md#splitting-the-migrator-and-app-roles-wardyn_pg_migrate_dsn) | [`cmd/wardynd/migrate_dsn_doc_test.go`](../cmd/wardynd/migrate_dsn_doc_test.go) |
-| [User drives on Docker](OPERATIONS.md#user-drives-on-docker), [User drives on Kubernetes](OPERATIONS.md#user-drives-on-kubernetes) | [`cmd/wardynd/drive_object_name_doc_test.go`](../cmd/wardynd/drive_object_name_doc_test.go) |
+| [User drives on Docker](operations/user-drives.md#user-drives-on-docker), [User drives on Kubernetes](OPERATIONS.md#user-drives-on-kubernetes) | [`cmd/wardynd/drive_object_name_doc_test.go`](../cmd/wardynd/drive_object_name_doc_test.go) |
 | [Testing AWS SSO without an AWS tenant](OPERATIONS.md#testing-aws-sso-without-an-aws-tenant) | [`CONTRIBUTING.md`](../CONTRIBUTING.md) |
 | [Upgrades](OPERATIONS.md#upgrades) | [`cmd/wardynd/docs_ops_guard_test.go`](../cmd/wardynd/docs_ops_guard_test.go) |
 

@@ -313,6 +313,11 @@ type bootFlags struct {
 	// rewrapPrincipalKeys is `wardynd -rewrap-principal-keys` (rewrap_principal_keys.go):
 	// no env pair, like -rewrap.
 	rewrapPrincipalKeys *bool
+	// recoveryInventory, recoveryManifest, recoveryVerify and recoveryRehearse are the recovery-set verbs
+	// (recovery_inventory.go, recovery_manifest.go), and recoverySet is the set directory they
+	// work on. No env pair, like the modes above.
+	recoveryInventory, recoveryManifest, recoveryVerify, recoveryRehearse *bool
+	recoverySet                                                           *string
 	// vault configures the Vault KV v2 external store, azure the Azure Key
 	// Vault one (secret_store.go).
 	vault vaultFlags
@@ -576,7 +581,8 @@ func parseBootFlags() *bootFlags {
 		auditSplitLegacy: flag.Bool("audit-split-legacy", false, "maintenance mode, every other wardynd must be stopped: split the one legacy audit partition that holds all pre-0.8.6 history into seq-contiguous monthly ranges that retention can drop one at a time, without changing a row hash, then exit without serving. "+
 			"Dump the database first. Refuses (exit 3) while the single-instance lock is held, any other client is connected, or the connected role is not the migrator; "+
 			"exit 1 when the split fails, and then nothing was changed. Connects with WARDYN_PG_MIGRATE_DSN when set, bounded by WARDYN_MIGRATE_TIMEOUT. See docs/OPERATIONS.md, \"Split the pre-0.8.6 audit history\" (default false)"),
-		rewrap: flag.Bool("rewrap", false, "maintenance mode: in one transaction, rewrap every stored secret's data key onto the key a write uses today (its purpose's local key, or the WARDYN_KEK=transit or azurekv key at its latest version), then exit; values are never decrypted. See docs/operations/secrets-and-keys.md (default false)"),
+		rewrap: flag.Bool("rewrap", false, "maintenance mode: in one transaction, rewrap every stored secret's data key onto the key a write uses today (its purpose's local key, or the WARDYN_KEK=transit, azurekv or awskms key, "+
+			"at its latest version where the key service has versions), then exit; values are never decrypted. See docs/operations/secrets-and-keys.md (default false)"),
 		rewrapRetirePlatformKey: flag.Bool("rewrap-retire-platform-key", false, "with -rewrap only: move the signing, session and SSH host keys off the "+
 			"WARDYN_VAULT_TRANSIT_KEY_PLATFORM or WARDYN_AZURE_KEK_KEY_PLATFORM key (it must be named, and is read only) onto the key a write uses today, the "+
 			"WARDYN_KEK key service's key or the local key, then exit. Afterwards unset that platform setting. "+
@@ -588,6 +594,11 @@ func parseBootFlags() *bootFlags {
 		rewrapPrincipalKeys: flag.Bool("rewrap-principal-keys", false, "maintenance mode, safe while a daemon serves: move every person's stored credential from the credential key into an envelope under that person's own principal key (enc_version 3), "+
 			"one row at a time, then exit; idempotent and resumable, and values are never decrypted. Boot keys, the operator namespace and external-store pointers are untouched. "+
 			"Separate from -rewrap, which rotates the root key. See docs/operations/secrets-and-keys.md (default false)"),
+		recoveryInventory:       flag.Bool("recovery-inventory", false, "maintenance mode: print the recovery set's items as JSON, each with where it lives for this deployment, then exit. Opens no connection and reads no key (docs/design/0.9/recovery-set.md; default false)"),
+		recoveryManifest:        flag.Bool("recovery-manifest", false, "maintenance mode, every other wardynd must be stopped: write manifest.json into -recovery-set, tying the database snapshot to the staged spool, then exit (default false)"),
+		recoveryVerify:          flag.Bool("recovery-verify", false, "maintenance mode, every other wardynd must be stopped: check that the database at WARDYN_PG_DSN and the staged spool in -recovery-set are the pair the manifest recorded, then exit (default false)"),
+		recoveryRehearse:        flag.Bool("recovery-rehearse", false, "maintenance mode: check a restored database (WARDYN_REHEARSE_PG_DSN) against the recovery set in -recovery-set, with the deployment's keys in the environment, then exit: 0 pass, 3 refused, 4 fail, 5 incomplete (default false)"),
+		recoverySet:             flag.String("recovery-set", "", "directory of the recovery set that -recovery-manifest writes and -recovery-verify reads"),
 		vault:                   registerVaultFlags(),
 		hostCapacity:            registerHostCapacityFlags(),
 		preflightRatePerMin:     flagIntEnv("preflight-rate-per-min", "WARDYN_PREFLIGHT_RATE_PER_MIN", 20, "POST /runs/preflight calls one person may make per minute (burst 5); 0 turns the limit off. The admin token is exempt"),
