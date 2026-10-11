@@ -92,6 +92,8 @@ type runFoldStep struct {
 //     hosts they add (invariant 5), and components see what admins already
 //     credentialed. The dry doors widen workspace egress before the
 //     requirements fold; create widens after the mint (unionRunEgress).
+//   - A placement the caller's profile denies is refused first of the placement
+//     steps, so no later step spends work on a run that cannot be placed.
 //   - Local eligibility straight after components, before anything can renew
 //     or mint: the admitted plan's refusals and the unsupported-local refusal
 //     answer before the confinement floor and the provider's liveness step.
@@ -111,8 +113,10 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepRequirements, foldAll},
 	{(*Server).stepGitHubEgress, foldAll},
 	{(*Server).stepComponents, foldAll},
+	{(*Server).stepPlacementDenied, foldAll},
 	{(*Server).stepLocalEligibility, foldAll},
 	{(*Server).stepConfinement, foldAll},
+	{(*Server).stepPlacementCapability, foldAll},
 	{(*Server).stepModelProvider, foldAll},
 	{(*Server).stepAutonomy, foldAll},
 	{(*Server).stepADOStanding, foldAll},
