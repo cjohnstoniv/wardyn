@@ -10,8 +10,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
-- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
-  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `runners`,
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `runners`,
   `runner_pending_actions`, `provider_connection_changes` and `runner_inventories`, and `SELECT, INSERT, UPDATE` on
   `credential_delivery_policy`, `runner_registration_tokens`, `audit_delivery_cursors`, `runner_spool_cursors`,
   `runner_executions`, `runner_execution_exits`, `runner_inventory_candidates` and `runner_inventory_observations`.

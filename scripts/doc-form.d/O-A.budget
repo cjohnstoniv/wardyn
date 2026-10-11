@@ -32,4 +32,3 @@ docs/OPERATIONS.md=51946
 # Run templates: docs/OPERATIONS.md 85305 adds 46 over 85259 for the /admin/template-group-admins tier row.
 # Round 1 merge: docs/OPERATIONS.md 51657 -> 51673 (+16 measured): +23 for migrator rationale naming 0139/0141, -7 for the upstream reuse-values correction; the +79 runner-pool words live in admin-only-writes.md.
 # docs/OPERATIONS.md 51673 measured after merging F-1519 (multi-user section split into docs/operations task pages).
-docs/OPERATIONS.md=51819
