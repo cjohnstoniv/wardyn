@@ -574,7 +574,7 @@ func TestSCIMCovPatchAnswers500WhenAStoreStepFails(t *testing.T) {
 	}{
 		{"the alias read", "IdentityAliasValues", scimCovPatch(scimCovReplace("userName", `"x"`)), false},
 		{"the update", "ApplyIdentityUpdate", scimCovPatch(scimCovReplace("userName", `"x"`)), false},
-		{"the forms a reactivation clears", "PrincipalsByEmail", scimCovPatch(scimCovReplace("active", "true")), true},
+		{"the forms a reactivation clears", "PrincipalsNamed", scimCovPatch(scimCovReplace("active", "true")), true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := newSCIMCovStore()

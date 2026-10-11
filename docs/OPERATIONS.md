@@ -1426,8 +1426,14 @@ lose access now, do not wait for it:
     - only where the owning principal is one of the leaver's own forms,
     - never another principal's that merely carries the same address.
   - Deactivation never follows an email.
-  - A person no sign-in has bound is known only by their emails, so for them every alias is cut and every principal an
-    alias resolves to is swept as theirs.
+  - Each alias is resolved the way an erasure resolves a name, so a recorded principal wins over any email claim.
+    - For a bound person, an alias that names only other principals (a person created under that address, say) is
+      never one of their forms: nothing is cut, swept, killed or deleted under it.
+    - A person no sign-in has bound is known only by their emails, so for them every alias is cut and the one principal
+      each alias names is swept as theirs. A cutoff under such an alias also ends a session or token whose email claim
+      spells it.
+    - An alias that names more than one principal, or a directory that cannot be read, stops a suspension or purge
+      before it touches anything: the request answers 5xx and a `person.deprovision` row says why.
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
   again.
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
