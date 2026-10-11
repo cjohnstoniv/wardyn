@@ -78,11 +78,11 @@ func TestPG_RunnerPoolUsePolicyCannotBeBypassedOnTheAdminTier(t *testing.T) {
 	if got := e.listed(e.person)[wide.ID]; got.Availability != client.RunnerPoolUnavailable {
 		t.Errorf("an unattached pool reads %+v", got)
 	}
-	e.approve(held.ID)
+	e.approveExecutor(held.ID)
 	if n := e.members(wide.ID); n != 1 {
 		t.Fatalf("the approved attach stored %d members", n)
 	}
-	if rows := e.audits(auditPoolExecutorAdd); len(rows) != 2 || rows[1].Actor != govSubBob {
+	if rows := e.audits(auditPoolExecutorAdd); len(rows) != 2 || rows[1].Actor != poolSubSuperTwo {
 		t.Errorf("attach audit rows = %+v, want the second by the approver", rows)
 	}
 
@@ -382,11 +382,11 @@ func TestPG_RunnerPoolDetachFromAPolicyPoolIsHeld(t *testing.T) {
 	if got := e.listed(e.person)[b.ID]; got.Availability == client.RunnerPoolAvailable {
 		t.Errorf("an unnamed person is offered the narrowed executor through %+v", got)
 	}
-	e.approve(held.ID)
+	e.approveExecutor(held.ID)
 	if n := e.members(a.ID); n != 0 {
 		t.Fatalf("the approved detach left %d members", n)
 	}
-	if rows := e.audits(auditPoolExecutorRemove); len(rows) != 1 || rows[0].Actor != govSubBob {
+	if rows := e.audits(auditPoolExecutorRemove); len(rows) != 1 || rows[0].Actor != poolSubSuperTwo {
 		t.Errorf("detach audit rows = %+v, want one by the approver", rows)
 	}
 	// The admin token detaches directly and leaves its break-glass row.
@@ -556,5 +556,29 @@ func TestPG_RunnerPoolConcurrentDetachRacingFirstPolicyApprovalIsHeld(t *testing
 	}
 	if n := e.members(a.ID); n != 1 {
 		t.Errorf("members(A) = %d after the raced detach, want 1: the executor must stay until a second human approves", n)
+	}
+}
+
+const poolSubSuperTwo = "sub-super-two"
+
+// approveExecutor approves a held executor attach or detach as a second super admin, after checking that a
+// security admin can neither see nor decide it: the executor routes are written on the super-admin tier.
+func (e *poolEnv) approveExecutor(id uuid.UUID) {
+	e.t.Helper()
+	for _, verb := range []string{"approve", "reject"} {
+		if w := e.call(e.bob, http.MethodPost, "/api/v1/governance/changes/"+id.String()+"/"+verb, `{"reason":"no"}`); w.Code != http.StatusForbidden {
+			e.t.Fatalf("security admin %s of a held executor change = %d %s, want 403", verb, w.Code, w.Body)
+		}
+	}
+	if w := e.call(e.bob, http.MethodGet, "/api/v1/governance/changes/"+id.String(), ""); w.Code != http.StatusNotFound {
+		e.t.Fatalf("security admin read of a held executor change = %d, want 404", w.Code)
+	}
+	for _, ch := range decodeJSON[[]types.GovernanceChange](e.t, e.call(e.bob, http.MethodGet, "/api/v1/governance/changes?state=pending", "")) {
+		if ch.ID == id {
+			e.t.Fatal("a held executor change is listed for a security admin")
+		}
+	}
+	if w := e.call(e.superTwo, http.MethodPost, "/api/v1/governance/changes/"+id.String()+"/approve", ""); w.Code != http.StatusOK {
+		e.t.Fatalf("second super admin approving %s = %d %s, want 200", id, w.Code, w.Body)
 	}
 }
