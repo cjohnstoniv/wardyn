@@ -198,6 +198,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (#1515).
 - `client.GetModelProviders` (admin) reads the provider records and connected-people counts; it returns no
   credential value (#1515).
+- A self-hosted runner relays its runs' calls to the organisation's internal listener as opaque TLS: the runner
+  binds only its Docker host-gateway address and forwards the TLS bytes without terminating them, each relayed
+  request is bound to the runner that carried it, only a closed list of internal routes is served, and only the
+  person's own credentials can be read through it. Turning runners on now also needs `WARDYN_CONTROL_PLANE_URL` set
+  to the internal TLS listener, since a runner's runs reach the organisation only through that relay.
 
 ### Changed
 

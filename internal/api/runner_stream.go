@@ -27,6 +27,7 @@ type runnerStreamState struct {
 	subsMu  sync.Mutex
 	subs    map[uuid.UUID]runnerEndpoint
 	offline runnerOfflineSweeps
+	relay   relayListener
 }
 
 // This route has its own proof-of-possession handshake. Human sessions and

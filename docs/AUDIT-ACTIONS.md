@@ -47,6 +47,16 @@ sandbox stream uses that runner. The tag comes from the authorized run's substra
 reference. Actor, outcome and `data.via` retain their existing meanings; connecting
 through a runner grants no additional authority. Local substrate rows omit the tag.
 
+**Relayed internal calls.** A local run's proxy reaches `/internal/*` through its
+runner's relay, and every row such a request writes carries `data.relay: "runner:<id>"`.
+A refusal on that path is an `authz.denied` row with `runner_id` and the request path:
+`relay_route_refused` (a route outside the relayed list, or a grant with no delivery),
+`relay_runner_mismatch` (the run is not a local run on the runner that carried it),
+`relay_required` (a local run's call that did not come through its runner),
+`delivery_via_org` and `delivery_runner_resident` (an injection or mint of a grant that
+is not the person's own), and `runner_action_pending` (`409`: the run has an unapplied
+pending runner action).
+
 ## Grammar
 
 - Every action is `<noun>[.<sub>].<verb>`: two or three dot-separated `snake_case` segments, the last an imperative verb from the list below — never a past tense (`capability.grant.create`, not `capability.grant.created`) and never a noun (`run.policy.resolve`, not `run.policy.effective`).
