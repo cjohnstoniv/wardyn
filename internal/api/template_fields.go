@@ -205,8 +205,7 @@ var templateRequestRules = []TemplateFieldRule{
 	excludedField("preset_version", templateExcludeOrigin,
 		"A preset's version only means something beside its preset."),
 	carriedField("runner_pool_id", templateTabRunner, partRunner, templateOmitBaseline, templateEmptySame,
-		"The pool resolves from the person's own default, then the organisation's, when the template is used. A default that is unavailable or refused never falls through to another pool: the person chooses. A named pool narrows where the run may go and grants nothing, and the launcher's pool-use policy is checked at use.").
-		pending("C-pools"),
+		"The pool resolves from the person's own default, then the organisation's, when the template is used. A default that is unavailable or refused never falls through to another pool: the person chooses. A named pool narrows where the run may go and grants nothing, and the launcher's pool-use policy is checked at use."),
 	// The run-mode carriers (run_mode.go): what a person is starting. A new client
 	// sends them in place of interactive, agent, task, task_mode and
 	// interactive_start, which stay only as the older-client mapping. What the run

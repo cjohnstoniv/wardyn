@@ -64,6 +64,8 @@ type runFold struct {
 	adoNarrowed       string
 	fitWarnings       []string
 	prov              []provenanceRow
+	// place is where the run goes (stepPlacement): the resolved pool and the fully eligible targets.
+	place runPlacement
 }
 
 // runFoldStep is one gate or fold of the shared sequence. run writes its own
@@ -92,7 +94,10 @@ type runFoldStep struct {
 //     hosts they add (invariant 5), and components see what admins already
 //     credentialed. The dry doors widen workspace egress before the
 //     requirements fold; create widens after the mint (unionRunEgress).
-//   - Local eligibility straight after components, before anything can renew
+//   - Placement straight after components: the pool resolves (a missing or stale default
+//     refuses, never falls back), its candidates meet the policy floor and the request's size
+//     one by one, and the fully eligible set waits for create to pick a target by run id.
+//   - Local eligibility straight after placement, before anything can renew
 //     or mint: the admitted plan's refusals and the unsupported-local refusal
 //     answer before the confinement floor and the provider's liveness step.
 //   - Confinement, then the model provider, then autonomy: the autonomy grade
@@ -111,6 +116,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepRequirements, foldAll},
 	{(*Server).stepGitHubEgress, foldAll},
 	{(*Server).stepComponents, foldAll},
+	{(*Server).stepPlacement, foldAll},
 	{(*Server).stepLocalEligibility, foldAll},
 	{(*Server).stepConfinement, foldAll},
 	{(*Server).stepModelProvider, foldAll},

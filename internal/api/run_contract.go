@@ -43,8 +43,6 @@ import (
 //	built-in components           -> A-L14
 //	allowed_image, image facts     -> the image lane (A-L4/A-L6)
 //	placement local               -> the placement lane (#117)
-//	runner_pool_id                -> the runner pool lane: resolve through runnerpool.Resolve and
-//	                                 admit the exact target; an omitted pool stays accepted until then
 //	resources clamp, targets      -> A-L5, A-L4 (accepted, applied nowhere yet)
 const (
 	maxRunOverrideEntries  = 64
@@ -396,9 +394,6 @@ func unappliedFieldsRefusal(req createRunRequest) *runRefusal {
 		return refusal
 	}
 	switch {
-	case req.RunnerPoolID != "":
-		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
-			"runner_pool_id: this server does not manage runner pools yet, so the run was not created.")
 	case req.AllowedImage != "":
 		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
 			"allowed_image: this server does not apply an image choice yet, so the run was not created.")

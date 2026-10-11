@@ -27,6 +27,9 @@ import (
 type RunnerPoolStore interface {
 	ListRunnerPoolCatalogue(ctx context.Context, owner string) ([]RunnerPoolCatalogueRow, error)
 	GetRunnerPool(ctx context.Context, id uuid.UUID) (types.RunnerPool, error)
+	// ListRunnerPoolMembers is every member of a pool, other people's runners included: only the
+	// admission fold reads it, and only through runnerpool.OwnRunnerCandidates.
+	ListRunnerPoolMembers(ctx context.Context, id uuid.UUID) ([]types.RunnerPoolMember, error)
 	CreateRunnerPool(ctx context.Context, p types.RunnerPool, by string) (types.RunnerPool, error)
 	UpdateRunnerPool(ctx context.Context, id uuid.UUID, revision int64, name *string, state *types.RunnerPoolState) (types.RunnerPool, error)
 	DeleteRunnerPool(ctx context.Context, id uuid.UUID) (RunnerPoolDeletion, error)
@@ -125,6 +128,18 @@ func bumpRunnerPoolQ(ctx context.Context, q Querier, id uuid.UUID) (int64, error
 
 func (s PG) GetRunnerPool(ctx context.Context, id uuid.UUID) (types.RunnerPool, error) {
 	return getRunnerPoolQ(ctx, s.Pool, id, false)
+}
+
+func (s PG) ListRunnerPoolMembers(ctx context.Context, id uuid.UUID) ([]types.RunnerPoolMember, error) {
+	return collect(ctx, s.Pool, "list", "runner pool members",
+		`SELECT pool_id, runner_id, COALESCE(executor_id, ''), added_at FROM runner_pool_members WHERE pool_id = $1 ORDER BY runner_id, executor_id`,
+		[]any{id}, func(row pgx.Row) (types.RunnerPoolMember, error) {
+			var m types.RunnerPoolMember
+			if err := row.Scan(&m.PoolID, &m.RunnerID, &m.ExecutorID, &m.AddedAt); err != nil {
+				return m, fmt.Errorf("store: scan runner pool member: %w", err)
+			}
+			return m, nil
+		})
 }
 
 // ListRunnerPoolCatalogue returns every live pool, by name, with its use policy, executor members and
