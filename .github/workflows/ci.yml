@@ -1352,7 +1352,7 @@ jobs:
             superuser: "1"
           - shard: store
             suite: pg-store
-            run: make test-report-pg PG_REPORT=pg-store PG_PKGS='./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... ./internal/recording/... ./cmd/wardynd/...'
+            run: make test-report-pg PG_REPORT=pg-store PG_PKGS='./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... ./internal/recording/... ./cmd/wardynd/... ./internal/notify/... ./internal/livebus/...'
             superuser: "1"
           # The `race` job above strips the DSN (Makefile: `WARDYN_TEST_PG= go test
           # -race ./...`), so the WARDYN_TEST_PG-gated tests are SKIPPED there — and
