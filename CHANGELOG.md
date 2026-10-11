@@ -172,6 +172,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   read exactly is refused) and tool rules per included harness; a request's rules can only narrow. A background task
   has no idle stop from any source, and the idle reaper skips it. Presets refuse run-mode fields until run templates
   replace them, and the proxy refuses rules carried two ways.
+- `wardyn governance plan [file] [--prune]` and `client.PlanGovernance` preview the creates, updates and deletes an
+  apply would make, without writing (#1515).
+- `GovernanceApplyResult.Steps` and `client.ApplyDrivesResult`: a failed `governance set` or `drive set` lists which
+  writes were applied (or held for a second human) before the failure; applies stay sequential and not atomic
+  (#1515).
+- `client.GetModelProviders` (admin) reads the provider records and connected-people counts; it returns no
+  credential value (#1515).
 
 ### Changed
 
@@ -286,6 +293,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   count cannot race a sign-in (#1828).
 - A revive that would start an agent is refused at the concurrent-run cap before any identity is minted or image
   pulled, and approval notifications carry the next later SLA tier still ahead (#1825).
+- `wardyn site-config set` of a document captured with `get` is no longer refused when the stored egress baseline
+  differs (after a reset, or after the security tier moved it): the baseline is left as stored and `set` warns only
+  when the file asserted a different one. The SDK's `PutSiteConfig` still sends the baseline and gets the server's
+  refusal; `PutSiteConfigResult` is the restore path.
 
 
 ## [0.8.9] — 2026-10-09

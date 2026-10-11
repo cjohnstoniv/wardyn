@@ -370,6 +370,10 @@ A run can carry components that add destinations and secrets ([POLICIES.md](POLI
   - A fact never carries the name of a secret the organisation provides.
 - Create, preflight and preview refuse with the component reasons in [`Reason`](#reason-branch-on-this-never-on-errors-prose); a run is audited as `run.component.attach` and `run.component.refuse`.
 
+## Model providers
+
+`GetModelProviders` (`GET /api/v1/model-providers`, admin) answers a `ModelProvidersRead`: the provider records, and per provider id how many people hold a credential of their own for it. It returns configuration and counts, never a credential value. Changing providers, signing in and storing a credential stay in the console.
+
 ## Error handling
 
 Non-2xx responses are returned as `*client.APIError`:
@@ -529,7 +533,7 @@ start.
 | `workspace_delete_active_run` | `DELETE /workspaces/{id}`: the workspace is in use by a still-active run. |
 | `groups_snapshot_stale` | `PUT/POST /governance/*` and the user-drive resolver: the caller's group-membership snapshot is missing or was truncated at sign-in, so a group-keyed governance profile cannot be resolved. The SAME value as authz's own registered reason ([`internal/authz/registry.go`](../internal/authz/registry.go)) — a literal in `reasons.go` (the docs⟷reasons.go guard only reads literals), tied to authz's constant by a documented `TestNoAdHocAuthz` exception rather than a reference or a second copy invented for this package. |
 | `egress_baseline_invalid` / `egress_baseline_stale` | `PUT /governance/egress-baseline`: a host or suffix is invalid, or `If-Match` is stale. |
-| `site_config_request_invalid` / `site_config_artifact_override_invalid` / `site_config_integrations_via_own_route` / `site_config_invalid` / `site_config_stale` / `site_config_egress_via_own_route` | `PUT /site-config`: the body did not decode, a legacy artifact-override field fails validation, integrations were named inline instead of through their own endpoints, the submitted config fails one of the agent/model-provider/default-provider validators, `If-Match` is stale, or the body changes the egress baseline (the `egress` block or the baseline-marked `internal_hosts`), which only `PUT /governance/egress-baseline` writes. `site_config_stale` is shared by every `PUT` that checks `If-Match` against this same document's ETag: `PUT /agent-providers`, `PUT /model-providers` and `PUT /workspace-providers` all answer it too, one reason for one cause regardless of which sub-block the write targeted. |
+| `site_config_request_invalid` / `site_config_artifact_override_invalid` / `site_config_integrations_via_own_route` / `site_config_invalid` / `site_config_stale` / `site_config_egress_via_own_route` | `PUT /site-config`: the body did not decode, a legacy artifact-override field fails validation, integrations were named inline instead of through their own endpoints, the submitted config fails one of the agent/model-provider/default-provider validators, `If-Match` is stale, or the body changes the egress baseline (the `egress` block or the baseline-marked `internal_hosts`), which only `PUT /governance/egress-baseline` writes (`PutSiteConfigResult` sends neither, so a captured document restores, and `EgressBaselineIgnored` reports a baseline it did not apply; `PutSiteConfig` sends the document as given and gets this refusal; a restore is still refused when the security tier marked an internal host the older capture does not list: lift the mark first). `site_config_stale` is shared by every `PUT` that checks `If-Match` against this same document's ETag: `PUT /agent-providers`, `PUT /model-providers` and `PUT /workspace-providers` all answer it too, one reason for one cause regardless of which sub-block the write targeted. |
 | `site_config_probe_request_invalid` / `site_config_probe_url_invalid` / `egress_redirect_from_required` / `egress_redirect_not_found` | `POST /site-config/probe-proxy` and the egress-redirect edit routes. |
 | `governance_profile_request_invalid` / `governance_ceiling_invalid` / `governance_profile_name_conflict` / `governance_profile_in_use` / `governance_assignment_invalid` / `governance_preview_claims_invalid` | `PUT/POST /governance/profiles` and `/governance/assignments`, and the preview routes — `governance_preview_claims_invalid` is shared with the user-drive naming preview (`user_drives_preview.go`), which feeds the same `normalizeGovernancePreviewClaims` validator. `governance_profile_in_use` is a `409` when a profile is still assigned or still the base of another profile (the body names those profiles). A composed profile read by an SDK that predates composition shows `ceiling: {}` and `limits: {}` and ignores `effective`; a `PUT` from it omits the composition fields, which are kept, so it cannot flatten the profile. |
 | `governance_overlay_invalid` | `PUT/POST /governance/profiles` (400): a composed profile's `overlay` or `overlay_limits` does not decode, names something its base does not permit (a domain outside the base, a method the base excludes, `allow_all_egress` on a base without it, a looser bound, a grant the base does not hold), would mean "everything" by being empty (`allowed_methods: []`), names a base that does not exist, or sits beside a non-empty `ceiling` or `limits` (a composed profile states its policy only in the overlay). |
@@ -757,6 +761,14 @@ applied until a different approver approves it. The SDK never reads that body as
     (a `Deferred` entry with `Base` set), and so, in turn, are its own children and their
     assignments.
   - Prune does not run after a pending write.
+- `PlanGovernance(ctx, doc, prune)` returns the creates, updates and deletes `ApplyGovernance` would
+  make, as a `GovernancePlan`, and writes nothing: one `GET /api/v1/governance`, no write request.
+  Its matching rules are `ApplyGovernance`'s. A plan is a snapshot: the server can change before an
+  apply runs.
+- `GovernanceApplyResult.Steps` lists the writes an apply issued, in order, each `applied`, `pending`
+  or `failed`. On a failed write `ApplyGovernanceResult` returns the steps so far with the error.
+- `ApplyDrivesResult` is `ApplyDrives` with the same steps, as `DrivesApplyResult.Steps`; `ApplyDrives`
+  keeps its signature. Applies are sequential and not atomic: a failed write leaves the earlier ones in place.
 - `ListGovernanceChanges(ctx, state)`, `GetGovernanceChange`, `ApproveGovernanceChange` and
   `RejectGovernanceChange(ctx, id, reason)` read and decide the stored changes
   (`/api/v1/governance/changes`).

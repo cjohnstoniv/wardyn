@@ -385,3 +385,47 @@ func TestSiteConfigSet_RunnersAreNeverSentAndWarnOnce(t *testing.T) {
 		t.Errorf("a file that does not name runners must not warn: %v %q", err, stderr)
 	}
 }
+
+// TestSiteConfigSet_WarnsTheEgressBaselineWasNotApplied: the SDK sends the document without the
+// egress baseline (PUT /site-config refuses a body that changes it), so a captured baseline the
+// server does not already hold does not land. `set` says so, and stays quiet when the server's own
+// baseline is the file's.
+func TestSiteConfigSet_WarnsTheEgressBaselineWasNotApplied(t *testing.T) {
+	const captured = `{"egress":{"baseline_hosts":["llm.corp.example"]},` +
+		`"internal_hosts":[{"host_suffix":"corp.example","baseline":true}]}`
+
+	var got types.SiteConfig
+	_, stderr, err := runSiteConfigSet(t, applyServer(t, &got).URL, captured)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if got.Egress != nil || got.InternalHosts[0].Baseline {
+		t.Errorf("wire body = %+v, want it without the egress baseline", got)
+	}
+	if !strings.Contains(stderr, "egress baseline in this file was not applied") {
+		t.Errorf("stderr = %q, want a warning that the file's egress baseline was not applied", stderr)
+	}
+
+	// A file silent about the baseline (a pre-0.9 MDM file) asserts nothing, so it is never reported.
+	var plain types.SiteConfig
+	_, quietPlain, err := runSiteConfigSet(t, applyServer(t, &plain).URL, `{"scm_hosts":["gitlab.corp"],"internal_hosts":[{"host_suffix":"corp.example"}]}`)
+	if err != nil {
+		t.Fatalf("apply of a file with no baseline: %v", err)
+	}
+	if strings.Contains(quietPlain, "egress baseline") {
+		t.Errorf("stderr = %q, want silence for a file that names no egress baseline", quietPlain)
+	}
+
+	holds := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(captured))
+	}))
+	t.Cleanup(holds.Close)
+	_, quiet, err := runSiteConfigSet(t, holds.URL, captured)
+	if err != nil {
+		t.Fatalf("apply against a server that holds the baseline: %v", err)
+	}
+	if strings.Contains(quiet, "egress baseline") {
+		t.Errorf("stderr = %q, want silence when the stored baseline is the file's", quiet)
+	}
+}
