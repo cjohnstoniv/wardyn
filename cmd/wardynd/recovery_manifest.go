@@ -14,12 +14,15 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"filippo.io/age"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
@@ -29,17 +32,39 @@ const recoveryManifestVersion = 1
 // recoveryManifestFile is the manifest's name inside the set directory.
 const recoveryManifestFile = "manifest.json"
 
-// recoveryManifest ties the database snapshot to the staged audit spool (recovery-set.md §2.2). It holds no
-// secret value, DSN user or password, and no subject. Keys and the recordings and drives entries are not in
-// this slice.
+// recoveryManifest ties the database snapshot to the staged audit spool and the key configuration
+// (recovery-set.md §2.2). It holds no secret value, DSN user or password, and no subject.
 type recoveryManifest struct {
-	Manifest       int              `json:"manifest"`
-	SetID          string           `json:"set_id"`
-	CreatedAt      string           `json:"created_at"`
-	WardyndVersion string           `json:"wardynd_version"`
-	Source         recoverySource   `json:"source"`
-	Snapshot       recoverySnapshot `json:"snapshot"`
-	AuditSpool     recoverySpool    `json:"audit_spool"`
+	Manifest       int                `json:"manifest"`
+	SetID          string             `json:"set_id"`
+	CreatedAt      string             `json:"created_at"`
+	WardyndVersion string             `json:"wardynd_version"`
+	Source         recoverySource     `json:"source"`
+	Snapshot       recoverySnapshot   `json:"snapshot"`
+	Keys           recoveryKeys       `json:"keys"`
+	AuditSpool     recoverySpool      `json:"audit_spool"`
+	Recordings     recoveryRecordings `json:"recordings"`
+	Drives         []recoveryDrive    `json:"drives"`
+}
+
+// recoveryKeys is the key configuration the set was taken under, as fingerprints and counts only
+// (recovery-set.md §4.1): the age recipient (public), the KEK mode as set, and the row count per key
+// class in the dump. All of it comes from configuration and the database; no key service is called.
+type recoveryKeys struct {
+	AgeRecipient string         `json:"age_recipient"`
+	KEKMode      string         `json:"kek_mode"`
+	Classes      map[string]int `json:"classes"`
+}
+
+// manifestSources is what -recovery-manifest reads from the resolved flags.
+type manifestSources struct {
+	DSN, Set, SpoolBase string
+	AgeKey, KEKMode     string
+	RecordingStore      string
+}
+
+func manifestSourcesOf(f *bootFlags, set string) manifestSources {
+	return manifestSources{DSN: *f.dsn, Set: set, SpoolBase: filepath.Base(*f.auditSpool), AgeKey: *f.ageKey, KEKMode: kekModeOf(f), RecordingStore: *f.recordingSel}
 }
 
 type recoverySource struct {
@@ -81,11 +106,12 @@ func recoveryManifestMode(f *bootFlags, verify bool) error {
 	if verify {
 		return verifyRecoveryManifest(context.Background(), *f.dsn, set)
 	}
-	return createRecoveryManifest(context.Background(), *f.dsn, set, filepath.Base(*f.auditSpool))
+	return createRecoveryManifest(context.Background(), manifestSourcesOf(f, set))
 }
 
 // createRecoveryManifest writes <set>/manifest.json once, mode 0600. It never overwrites an existing manifest.
-func createRecoveryManifest(ctx context.Context, dsn, set, spoolBase string) error {
+func createRecoveryManifest(ctx context.Context, in manifestSources) error {
+	dsn, set, spoolBase := in.DSN, in.Set, in.SpoolBase
 	if spoolBase == "." || spoolBase == "" {
 		return errors.New("refusing to write the manifest: WARDYN_AUDIT_SPOOL names no spool file")
 	}
@@ -111,9 +137,17 @@ func createRecoveryManifest(ctx context.Context, dsn, set, spoolBase string) err
 	if err != nil {
 		return err
 	}
+	keys, err := recoveryKeysOf(ctx, s.conn, in)
+	if err != nil {
+		return err
+	}
+	recordings, drives, err := stageFiles(ctx, s.pool, set, in.RecordingStore)
+	if err != nil {
+		return err
+	}
 	m := recoveryManifest{
 		Manifest: recoveryManifestVersion, SetID: uuid.NewString(), CreatedAt: time.Now().UTC().Format(time.RFC3339),
-		WardyndVersion: version.Version, Source: src, Snapshot: snap, AuditSpool: spool,
+		WardyndVersion: version.Version, Source: src, Snapshot: snap, Keys: keys, AuditSpool: spool, Recordings: recordings, Drives: drives,
 	}
 	body, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -156,16 +190,21 @@ func verifyRecoveryManifest(ctx context.Context, dsn, set string) error {
 	if err != nil {
 		return err
 	}
+	return pairSpool("verify the set", m.AuditSpool, got)
+}
+
+// pairSpool refuses unless each staged spool file is its manifest entry, naming the first that is not.
+func pairSpool(verb string, want, got recoverySpool) error {
 	for _, c := range []struct {
 		name      string
 		want, got recoveryFile
 	}{
-		{m.AuditSpool.Basename, m.AuditSpool.Spool, got.Spool},
-		{m.AuditSpool.Basename + ".consumed", m.AuditSpool.Consumed, got.Consumed},
-		{m.AuditSpool.Basename + ".quarantine", m.AuditSpool.Quarantine, got.Quarantine},
+		{want.Basename, want.Spool, got.Spool},
+		{want.Basename + ".consumed", want.Consumed, got.Consumed},
+		{want.Basename + ".quarantine", want.Quarantine, got.Quarantine},
 	} {
 		if c.want != c.got {
-			return refusedTo("verify the set", "%s does not match its manifest entry (present %t size %d, want present %t size %d)",
+			return refusedTo(verb, "%s does not match its manifest entry (present %t size %d, want present %t size %d)",
 				c.name, c.got.Present, c.got.Size, c.want.Present, c.want.Size)
 		}
 	}
@@ -185,6 +224,9 @@ func readRecoveryManifest(path string) (recoveryManifest, error) {
 	if m.Manifest != recoveryManifestVersion {
 		return m, refusedTo("verify the set", "%s is manifest version %d; this binary reads version %d", recoveryManifestFile, m.Manifest, recoveryManifestVersion)
 	}
+	if b := m.AuditSpool.Basename; b == "" || b == "." || b != filepath.Base(b) {
+		return m, refusedTo("verify the set", "%s names no spool file: audit_spool.basename must be a plain file name", recoveryManifestFile)
+	}
 	return m, nil
 }
 
@@ -200,6 +242,21 @@ func readRecoverySnapshot(ctx context.Context, conn *pgxpool.Conn) (recoverySnap
 		return snap, fmt.Errorf("read the schema migration: %w", err)
 	}
 	return snap, nil
+}
+
+// recoveryKeysOf reads the key fingerprints: the age recipient from the configured identity, the KEK mode as
+// set, and the dump's row count per key class. A key that does not parse is refused without echoing it.
+func recoveryKeysOf(ctx context.Context, conn *pgxpool.Conn, in manifestSources) (recoveryKeys, error) {
+	k := recoveryKeys{KEKMode: in.KEKMode, Classes: map[string]int{}}
+	if key := strings.TrimSpace(in.AgeKey); key != "" {
+		id, err := age.ParseX25519Identity(key)
+		if err != nil {
+			return k, errors.New("WARDYN_AGE_KEY does not parse as an age identity")
+		}
+		k.AgeRecipient = id.Recipient().String()
+	}
+	err := secretstorepg.ListRows(ctx, conn, func(c secretstorepg.CheckedRow) { k.Classes[keyClassOf(c)]++ })
+	return k, err
 }
 
 // recoverySourceOf is the DSN's host, port and database, which is all the manifest may name. A DSN that does

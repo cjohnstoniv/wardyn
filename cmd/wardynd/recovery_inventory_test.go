@@ -35,6 +35,7 @@ func recoveryFlagsFor(runner, dsn, spool, recording string) *bootFlags {
 		recoveryInventory:   b(true),
 		recoveryManifest:    b(false),
 		recoveryVerify:      b(false),
+		recoveryRehearse:    b(false),
 		recoverySet:         s(""),
 	}
 }

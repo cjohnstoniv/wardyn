@@ -85,7 +85,8 @@ func newRehearseRig(t *testing.T) *rehearseRig {
 	}
 	rg.set = rehearseSet{
 		ID: uuid.NewString(), Dir: t.TempDir(), Source: dsnIdentity{Host: "source.invalid", Port: 5432, Database: "wardyn"},
-		AgeRecipient: rg.id.Recipient().String(), KeyClasses: keyClasses(t, targetPool),
+		AgeRecipient: rg.id.Recipient().String(), KeyClasses: keyClasses(t, targetPool), Spool: recoverySpool{Basename: "spool.jsonl"},
+		Recordings: recoveryRecordings{Store: "pg"},
 	}
 	rg.set.Migration, err = db.NewestMigration()
 	if err != nil {
@@ -167,7 +168,10 @@ func seedLegacyRow(t *testing.T, pool *pgxpool.Pool, to *age.X25519Identity, nam
 }
 
 // flags resolves the deployment's boot flags the way main does: from the environment.
-func (rg *rehearseRig) flags(ageKey string) *bootFlags {
+func (rg *rehearseRig) flags(ageKey string) *bootFlags { return rg.flagsArgs(ageKey) }
+
+// flagsArgs is flags with command-line arguments.
+func (rg *rehearseRig) flagsArgs(ageKey string, args ...string) *bootFlags {
 	rg.t.Helper()
 	tokenFile := filepath.Join(rg.t.TempDir(), "token")
 	if err := os.WriteFile(tokenFile, []byte(canaryToken), 0o600); err != nil {
@@ -183,7 +187,7 @@ func (rg *rehearseRig) flags(ageKey string) *bootFlags {
 	}
 	resetFlags(rg.t)
 	oldArgs := os.Args
-	os.Args = []string{"wardynd-test"}
+	os.Args = append([]string{"wardynd-test"}, args...)
 	rg.t.Cleanup(func() { os.Args = oldArgs })
 	return parseBootFlags()
 }

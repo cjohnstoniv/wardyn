@@ -62,17 +62,9 @@ type CheckedRow struct {
 // nil when the deployment has none. The error is a failure to read the table; a row that does not
 // open is a CheckedRow, not an error.
 func (s *Store) CheckRows(ctx context.Context, q RowReader, legacy age.Identity, visit func(CheckedRow)) error {
-	rows, err := q.Query(ctx, `SELECT owned_by, name, enc_version, kek_id FROM secrets ORDER BY owned_by, name`)
+	list, err := listSecretRows(ctx, q)
 	if err != nil {
-		return fmt.Errorf("pg secretstore: list rows: %w", err)
-	}
-	list, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (CheckedRow, error) {
-		var c CheckedRow
-		err := r.Scan(&c.Owner, &c.Name, &c.EncVersion, &c.KekID)
-		return c, err
-	})
-	if err != nil {
-		return fmt.Errorf("pg secretstore: list rows: %w", err)
+		return err
 	}
 	reader := *s
 	reader.pool = nil
@@ -84,12 +76,50 @@ func (s *Store) CheckRows(ctx context.Context, q RowReader, legacy age.Identity,
 	return reader.checkPrincipalKeys(ctx, q, visit)
 }
 
-// checkPrincipalKeys unwraps every live principal key, so a key no credential row names (an audit-seal
-// key) is proved too.
-func (s *Store) checkPrincipalKeys(ctx context.Context, q RowReader, visit func(CheckedRow)) error {
+// ListRows reports every secrets row and every live principal key with its key class and no outcome,
+// opening nothing and reading no ciphertext: it is how a manifest counts rows per key class
+// (wardynd -recovery-manifest). A pointer row has Outcome RowExternal, as CheckRows reports it.
+func ListRows(ctx context.Context, q RowReader, visit func(CheckedRow)) error {
+	list, err := listSecretRows(ctx, q)
+	if err != nil {
+		return err
+	}
+	for _, c := range list {
+		if c.EncVersion == extVersion {
+			c.Outcome = RowExternal
+		}
+		visit(c)
+	}
+	keys, err := listPrincipalKeys(ctx, q)
+	if err != nil {
+		return err
+	}
+	for _, c := range keys {
+		visit(c)
+	}
+	return nil
+}
+
+func listSecretRows(ctx context.Context, q RowReader) ([]CheckedRow, error) {
+	rows, err := q.Query(ctx, `SELECT owned_by, name, enc_version, kek_id FROM secrets ORDER BY owned_by, name`)
+	if err != nil {
+		return nil, fmt.Errorf("pg secretstore: list rows: %w", err)
+	}
+	list, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (CheckedRow, error) {
+		var c CheckedRow
+		err := r.Scan(&c.Owner, &c.Name, &c.EncVersion, &c.KekID)
+		return c, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pg secretstore: list rows: %w", err)
+	}
+	return list, nil
+}
+
+func listPrincipalKeys(ctx context.Context, q RowReader) ([]CheckedRow, error) {
 	rows, err := q.Query(ctx, `SELECT owner, purpose, version, kek_id FROM principal_keys WHERE destroyed_at IS NULL ORDER BY owner, purpose, version`)
 	if err != nil {
-		return fmt.Errorf("pg secretstore: list principal keys: %w", err)
+		return nil, fmt.Errorf("pg secretstore: list principal keys: %w", err)
 	}
 	list, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (CheckedRow, error) {
 		c := CheckedRow{PrincipalKey: true}
@@ -97,7 +127,17 @@ func (s *Store) checkPrincipalKeys(ctx context.Context, q RowReader, visit func(
 		return c, err
 	})
 	if err != nil {
-		return fmt.Errorf("pg secretstore: list principal keys: %w", err)
+		return nil, fmt.Errorf("pg secretstore: list principal keys: %w", err)
+	}
+	return list, nil
+}
+
+// checkPrincipalKeys unwraps every live principal key, so a key no credential row names (an audit-seal
+// key) is proved too.
+func (s *Store) checkPrincipalKeys(ctx context.Context, q RowReader, visit func(CheckedRow)) error {
+	list, err := listPrincipalKeys(ctx, q)
+	if err != nil {
+		return err
 	}
 	for _, c := range list {
 		key, err := s.subjects.Key(ctx, c.Owner, c.Name, c.Generation)

@@ -494,6 +494,8 @@ commands are the ones in "Back them up" and "Restore them", and in
 
 **Inventory.** `wardynd -recovery-inventory`, run with the daemon's environment, prints each item above as JSON with its location for the deployment it sees (Compose, the managed desktop or Helm, from the runner and `WARDYN_MANAGED_DIR`). It opens no database connection and reads no key; only setting names appear, never values ([design](design/0.9/recovery-set.md#12-slices)).
 
+**Manifest and rehearsal.** `-recovery-manifest` ties the dump to the spool, recordings and drive bytes, `-recovery-verify` refuses a mismatched pair, and `-recovery-rehearse` proves the set on a scratch database: [Recovery set and restore rehearsal](operations/recovery-rehearsal.md).
+
 **Rules for every row.**
 
 - **Custody.** Keep the keys apart from the data, in a secret manager, never in
@@ -517,7 +519,7 @@ commands are the ones in "Back them up" and "Restore them", and in
 > **What is not proven.**
 
 - The commands in the day-2 section were exercised once against a throwaway kind cluster.
-- No shipped tool rehearses a restore (that is issue #1514), so none of the above has been validated end to end.
+- Only `wardynd -recovery-rehearse` rehearses a restore, and only for the set you run it on, so none of the above is validated end to end until you do ([Recovery set and restore rehearsal](operations/recovery-rehearsal.md)).
 - Loading a dump into a scratch database proves the SQL loads, and nothing more: a row count does not show that the
   key works, and it does not show that the drive bytes are intact.
 

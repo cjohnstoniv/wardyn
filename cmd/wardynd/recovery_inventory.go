@@ -21,7 +21,7 @@ import (
 // any other maintenance mode, and has no env pair.
 func recoveryMode(f *bootFlags) (bool, error) {
 	verbs := 0
-	for _, on := range []bool{*f.recoveryInventory, *f.recoveryManifest, *f.recoveryVerify} {
+	for _, on := range []bool{*f.recoveryInventory, *f.recoveryManifest, *f.recoveryVerify, *f.recoveryRehearse} {
 		if on {
 			verbs++
 		}
@@ -31,10 +31,13 @@ func recoveryMode(f *bootFlags) (bool, error) {
 	}
 	if verbs > 1 || strings.TrimSpace(*f.rotateAgeKey) != "" || *f.rewrap || *f.rewrapPrincipalKeys ||
 		*f.migrateSecrets || *f.reconcile || *f.auditSplitLegacy || *f.migrateOnly {
-		return true, fmt.Errorf("refusing to run: each recovery verb (-recovery-inventory, -recovery-manifest, -recovery-verify) runs alone, with no other maintenance mode")
+		return true, fmt.Errorf("refusing to run: each recovery verb (-recovery-inventory, -recovery-manifest, -recovery-verify, -recovery-rehearse) runs alone, with no other maintenance mode")
 	}
 	if *f.recoveryInventory {
 		return true, writeRecoveryInventory(os.Stdout, f, os.Getenv("WARDYN_MANAGED_DIR"))
+	}
+	if *f.recoveryRehearse {
+		return true, recoveryRehearseMode(f)
 	}
 	return true, recoveryManifestMode(f, *f.recoveryVerify)
 }

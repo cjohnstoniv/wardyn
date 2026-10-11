@@ -35,7 +35,7 @@ func recoveryFixture(t *testing.T) (dsn, set string) {
 	}
 	writeFixtureFile(t, filepath.Join(set, "audit", "audit-spool.jsonl"), "{\"id\":1}\n")
 	writeFixtureFile(t, filepath.Join(set, "audit", "audit-spool.jsonl.consumed"), "9\n")
-	if err := createRecoveryManifest(ctx, dsn, set, "audit-spool.jsonl"); err != nil {
+	if err := createRecoveryManifest(ctx, manifestSources{DSN: dsn, Set: set, SpoolBase: "audit-spool.jsonl", KEKMode: "local", RecordingStore: "pg"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	return dsn, set

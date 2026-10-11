@@ -10,6 +10,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -53,8 +54,15 @@ type rehearseSet struct {
 	Source    dsnIdentity
 	// AgeRecipient is the manifest's fingerprint of WARDYN_AGE_KEY, "" when the deployment has none.
 	AgeRecipient string
+	// KEKMode is the manifest's KEK mode, "" to skip the comparison.
+	KEKMode string
 	// KeyClasses is the row count per key class at manifest time.
 	KeyClasses map[string]int
+	// Spool is the manifest's audit spool entry, which the staged files in Dir must equal.
+	Spool recoverySpool
+	// Recordings and Drives are the manifest's staged-file entries, which the set's directories must equal.
+	Recordings recoveryRecordings
+	Drives     []recoveryDrive
 }
 
 type rehearseCheck struct {
@@ -196,7 +204,7 @@ func rehearseRun(ctx context.Context, f *bootFlags, set rehearseSet, targetDSN s
 	}
 	rep.add(rehearseCheck{Name: "pairing", Result: resultPass, Detail: "audit head matches the manifest"})
 
-	if c := checkFingerprint(set, id); c != nil {
+	if c := checkFingerprint(set, id, kekModeOf(f)); c != nil {
 		rep.Checks = append([]rehearseCheck{*c}, rep.Checks...)
 	}
 	chain, err := sess.chainSweep(ctx)
@@ -209,6 +217,11 @@ func rehearseRun(ctx context.Context, f *bootFlags, set rehearseSet, targetDSN s
 		return err
 	}
 	rep.add(keyUseCheck(set, use))
+	files, err := sess.fileChecks(ctx, set)
+	if err != nil {
+		return err
+	}
+	rep.Checks = append(rep.Checks, files...)
 
 	verdict, _ := rep.verdictOf()
 	rep.Verdict = verdict
@@ -242,8 +255,8 @@ func auditChecks(checks []rehearseCheck) []rehearseCheck {
 	return out
 }
 
-// pair is the audit-head half of pairing: the target's newest audit row must be the one the manifest
-// recorded. A mismatch refuses, naming "audit head".
+// pair is pairing: the target's newest audit row must be the one the manifest recorded, and each
+// staged spool file must be its manifest entry. A mismatch refuses, naming "audit head" or the file.
 func (s *rehearseSession) pair(ctx context.Context, set rehearseSet) error {
 	var seq int64
 	var hash string
@@ -254,7 +267,11 @@ func (s *rehearseSession) pair(ctx context.Context, set rehearseSet) error {
 	if seq != set.HeadSeq || hash != set.HeadHash {
 		return refusedTo(rehearseVerb, "audit head: the database is at seq %d and the manifest records seq %d (or a different row): they are not one snapshot", seq, set.HeadSeq)
 	}
-	return nil
+	got, err := stageSpoolFiles(filepath.Join(set.Dir, "audit"), set.Spool.Basename)
+	if err != nil {
+		return err
+	}
+	return pairSpool(rehearseVerb, set.Spool, got)
 }
 
 // chainSweep is VerifyAuditChain over the one target backend.
@@ -277,8 +294,12 @@ func (s *rehearseSession) chainSweep(ctx context.Context) (rehearseCheck, error)
 
 // checkFingerprint compares the age recipient the manifest recorded with the one in this process:
 // a different key is reported before any row is tried.
-func checkFingerprint(set rehearseSet, id *age.X25519Identity) *rehearseCheck {
-	if set.AgeRecipient == "" || id == nil || id.Recipient().String() == set.AgeRecipient {
+func checkFingerprint(set rehearseSet, id *age.X25519Identity, kekMode string) *rehearseCheck {
+	switch {
+	case set.KEKMode != "" && set.KEKMode != kekMode:
+		return &rehearseCheck{Name: "key fingerprint", Result: resultFail,
+			Detail: fmt.Sprintf("WARDYN_KEK is %q here and %q in the manifest: this is not the key configuration the set was taken under", kekMode, set.KEKMode)}
+	case set.AgeRecipient == "" || id == nil || id.Recipient().String() == set.AgeRecipient:
 		return nil
 	}
 	return &rehearseCheck{Name: "key fingerprint", Result: resultFail,

@@ -35,6 +35,7 @@ func rekeyFlags(dsn, storeSel, ageKey string) *bootFlags {
 		recoveryInventory:       new(bool),
 		recoveryManifest:        new(bool),
 		recoveryVerify:          new(bool),
+		recoveryRehearse:        new(bool),
 		recoverySet:             new(string),
 		vault:                   vaultFlags{kek: new(string), transitKey: new(string), transitKeyPlatform: new(string), keyDomainsFile: new(string)},
 		azure:                   azureFlags{kekKey: new(string), kekSigningKey: new(string), kekKeyPlatform: new(string), kekSigningKeyPlatform: new(string), clientIDPlatform: new(string)},
