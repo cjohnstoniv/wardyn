@@ -54,7 +54,8 @@ var _ PersonErasureStore = PG{}
 // ever minted an API token or created a workspace. Optional like
 // PersonErasureStore.
 type PrincipalDirectoryStore interface {
-	// PrincipalsNamed returns the distinct principals name stands for. The
+	// PrincipalsNamed returns the distinct principals name stands for, a person created by
+	// object id who has signed in under a pairwise subject counting as that subject. The
 	// first of these that matches decides: the exact principal, the
 	// entra:<tenant>:<object> form, then an email (case-folded) the person
 	// signed in with or was created under. More than one is ambiguous; none is
@@ -63,6 +64,18 @@ type PrincipalDirectoryStore interface {
 }
 
 var _ PrincipalDirectoryStore = PG{}
+
+// signedInAs wraps a query of principals so that a person an admin created by object id
+// (a people row entra:<tenant>:<object>) who then signed in under a pairwise subject is the subject,
+// the principal their credentials, runs and audit rows carry. The link is the one the sign-in itself
+// makes (samePersonKey): the same issuer, tenant and object id. The people row's own namespace is
+// empty, and erasing it would report success over a person's data left behind.
+func signedInAs(query string) string {
+	return `SELECT DISTINCT COALESCE(i.principal, h.principal) FROM (` + query + `) h(principal)
+	  LEFT JOIN people p ON p.principal = h.principal AND p.object_id <> ''
+	  LEFT JOIN principal_identities i ON i.issuer = p.issuer AND i.tenant_id = p.tenant_id
+	   AND i.object_id = p.object_id AND i.principal IS NOT NULL`
+}
 
 func (s PG) PrincipalsNamed(ctx context.Context, name string) ([]string, error) {
 	if name == "" {
@@ -90,7 +103,7 @@ func (s PG) PrincipalsNamed(ctx context.Context, name string) ([]string, error) 
 		   UNION SELECT principal FROM people WHERE email <> '' AND lower(email) = lower($1)`, []any{name}})
 	}
 	for _, t := range tiers {
-		rows, err := s.Pool.Query(ctx, t.query+` ORDER BY 1`, t.args...)
+		rows, err := s.Pool.Query(ctx, signedInAs(t.query)+` ORDER BY 1`, t.args...)
 		if err != nil {
 			return nil, fmt.Errorf("store: resolve a name to principals: %w", err)
 		}

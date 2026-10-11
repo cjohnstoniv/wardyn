@@ -136,6 +136,40 @@ func TestPG_PersonErasure_PrincipalsNamed(t *testing.T) {
 	}
 }
 
+// A person an admin created by object id (people row entra:<tenant>:<object>) who signed in under a
+// pairwise subject is that subject, whether the admin types the entra form, the email or the subject:
+// the people row's own namespace is empty, so resolving to it would erase nothing and report success.
+func TestPG_PersonErasure_PrincipalsNamedFollowsTheSignIn(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	oid, other := uuid.NewString(), uuid.NewString()
+	entra := "entra:" + idTenant + ":" + oid
+	for _, p := range []types.Person{
+		{Principal: entra, Email: "Kit@Corp.Example", Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, CreatedBy: "admin"},
+		{Principal: "entra:" + idTenant + ":" + other, Email: "never@corp.example", Issuer: idIssuer, TenantID: idTenant, ObjectID: other, CreatedBy: "admin"},
+	} {
+		if _, _, err := st.CreatePerson(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "pairwise-kit", Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, Email: "kit@corp.example"}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string][]string{
+		entra:                             {"pairwise-kit"},
+		"kit@corp.example":                {"pairwise-kit"},
+		"pairwise-kit":                    {"pairwise-kit"},
+		"entra:" + idTenant + ":" + other: {"entra:" + idTenant + ":" + other}, // never signed in: still the people row
+		"never@corp.example":              {"entra:" + idTenant + ":" + other},
+	} {
+		got, err := st.PrincipalsNamed(ctx, name)
+		if err != nil || !slices.Equal(got, want) {
+			t.Errorf("PrincipalsNamed(%q) = %v, %v, want %v", name, got, err, want)
+		}
+	}
+}
+
 // An erasure destroys the keys of every name the directory holds for the
 // person, so a row sealed under a name learned only later is shredded too.
 func TestPG_PersonErasure_PrincipalAliases(t *testing.T) {

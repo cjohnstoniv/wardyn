@@ -9,10 +9,13 @@ package pg
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -113,4 +116,191 @@ func TestPG_DeleteProviderChangesWaitsForAPurgeHoldingTheOwner(t *testing.T) {
 	if n := historyRows(t, s, owner); n != 0 {
 		t.Fatalf("%d history rows left after the delete that followed the purge", n)
 	}
+}
+
+func removalOf(oldUID string) secretstore.ProviderInvalidation {
+	return secretstore.ProviderInvalidation{OldUID: oldUID, Change: secretstore.ProviderChange{ProviderID: "prov-" + oldUID}}
+}
+
+func editOf(oldUID, newUID string) secretstore.ProviderInvalidation {
+	return secretstore.ProviderInvalidation{OldUID: oldUID, Change: secretstore.ProviderChange{
+		ProviderID: "prov-" + oldUID, ProviderUID: newUID, Reason: "destination_changed", ChangedAt: time.Now(), NewDestination: "https://new.example.test"}}
+}
+
+func purgeCtx(inv ...secretstore.ProviderInvalidation) context.Context {
+	return secretstore.WithProviderInvalidations(context.Background(), inv)
+}
+
+func putProviderKey(t *testing.T, s *Store, owner, uid string) {
+	t.Helper()
+	if err := s.For(owner).Put(t.Context(), types.ModelProviderSecretPrefix+uid+"-key", []byte("provider-key-0000")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// holdCounter takes owner's counter row exclusively, as an erase does, until the returned release runs.
+func holdCounter(t *testing.T, s *Store, pool interface {
+	Begin(context.Context) (pgx.Tx, error)
+}, owner string) (tx pgx.Tx, release func()) {
+	t.Helper()
+	if _, err := s.For(owner).(*Store).AdvanceGeneration(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(t.Context(), `SELECT 1 FROM secret_owner_generations WHERE owned_by=$1 FOR UPDATE`, owner); err != nil {
+		t.Fatal(err)
+	}
+	return tx, func() { _ = tx.Rollback(context.WithoutCancel(t.Context())) }
+}
+
+// A credential that commits after the purge chose its owners and before it wrote
+// their history belongs to an owner nothing has locked. The purge writes no history
+// for that owner, so an erase of them that finishes before the purge commits cannot
+// miss a row.
+func TestPG_OwnerAddedBetweenLockAndInsertSurvivesNoErase(t *testing.T) {
+	s, pool, _ := newPGStore(t)
+	a, b := "gen-gap-a-"+uuid.NewString(), "gen-gap-b-"+uuid.NewString()
+	oldUID := uuid.NewString()
+	putProviderKey(t, s, a, oldUID)
+	third, release := holdCounter(t, s, pool, a)
+	defer release()
+	tx, err := beginReadCommitted(t.Context(), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(t.Context())) }()
+	recorded := make(chan error, 1)
+	go func() { recorded <- recordProviderChanges(purgeCtx(editOf(oldUID, "uid-2")), tx) }()
+	select {
+	case err := <-recorded:
+		t.Fatalf("the purge did not wait for the owner's counter row: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	putProviderKey(t, s, b, oldUID) // commits while the purge waits
+	if err := third.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-recorded; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := secretstore.EraseOwner(t.Context(), s, b); err != nil {
+		t.Fatalf("erase of the owner added in the gap: %v", err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if n := historyRows(t, s, b); n != 0 {
+		t.Fatalf("%d history rows of an owner erased while the purge was open survived it", n)
+	}
+	if n := historyRows(t, s, a); n != 1 {
+		t.Fatalf("the locked owner has %d history rows, want 1", n)
+	}
+}
+
+// A purge that removes one provider and edits another locks every owner it will touch before it
+// writes or deletes any history. The erase takes an owner's counter row and then their history, so
+// meeting the purge's locks in that order is what keeps the two from deadlocking (40P01).
+func TestPG_RemovalThenEditPurgeAndHistoryEraseDoNotDeadlock(t *testing.T) {
+	s, pool, _ := newPGStore(t)
+	x := "gen-dead-" + uuid.NewString()
+	removedUID, editedUID := uuid.NewString(), uuid.NewString()
+	putProviderKey(t, s, x, editedUID)
+	if _, err := pool.Exec(t.Context(), `INSERT INTO provider_connection_changes (owner, provider_id, provider_uid, reason, changed_at, new_destination)
+		VALUES ($1, $2, 'older', 'destination_changed', now(), 'https://old.example.test')`, x, "prov-"+removedUID); err != nil {
+		t.Fatal(err)
+	}
+	erase, release := holdCounter(t, s, pool, x)
+	defer release()
+	tx, err := beginReadCommitted(t.Context(), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(t.Context())) }()
+	recorded := make(chan error, 1)
+	go func() {
+		recorded <- recordProviderChanges(purgeCtx(removalOf(removedUID), editOf(editedUID, "uid-2")), tx)
+	}()
+	select {
+	case err := <-recorded:
+		t.Fatalf("the purge did not wait for the owner's counter row: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	// The erase now deletes the owner's history. A purge that had already row-locked it would
+	// make this wait for a purge that waits for the erase.
+	if _, err := erase.Exec(t.Context(), `DELETE FROM provider_connection_changes WHERE owner=$1`, x); err != nil {
+		t.Fatalf("the history delete under the counter lock: %v", err)
+	}
+	if err := erase.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-recorded; err != nil {
+		t.Fatalf("the purge: %v", err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Several purges of two invalidations each and erases of the same owners, at once: none fails, and
+// none ends in a deadlock.
+func TestPG_ProviderPurgesAndErasesNeverDeadlock(t *testing.T) {
+	s, pool, _ := newPGStore(t)
+	run := uuid.NewString()
+	owners := []string{"gen-stress-a-" + run, "gen-stress-b-" + run, "gen-stress-c-" + run, "gen-stress-d-" + run}
+	uids := []string{uuid.NewString(), uuid.NewString(), uuid.NewString()}
+	seed := func() {
+		for _, o := range owners {
+			for _, u := range uids {
+				putProviderKey(t, s, o, u)
+			}
+		}
+	}
+	seed()
+	const rounds = 12
+	var wg sync.WaitGroup
+	for p := range 3 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range rounds {
+				tx, err := beginReadCommitted(context.Background(), pool)
+				if err != nil {
+					t.Errorf("purger %d: %v", p, err)
+					return
+				}
+				ctx := purgeCtx(editOf(uids[(p+i)%3], fmt.Sprintf("new-%d-%d", p, i)), removalOf(uids[(p+i+1)%3]))
+				err = recordProviderChanges(ctx, tx)
+				if err == nil {
+					err = tx.Commit(context.Background())
+				} else {
+					_ = tx.Rollback(context.Background())
+				}
+				if err != nil {
+					t.Errorf("purger %d round %d: %v", p, i, err)
+					return
+				}
+			}
+		}()
+	}
+	for e := range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range rounds {
+				for _, o := range owners[e*2 : e*2+2] {
+					if _, err := secretstore.EraseOwner(context.Background(), s, o); err != nil {
+						t.Errorf("eraser %d of %s: %v", e, o, err)
+						return
+					}
+					for _, u := range uids {
+						_ = s.For(o).Put(context.Background(), types.ModelProviderSecretPrefix+u+"-key", []byte("provider-key-0000"))
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
