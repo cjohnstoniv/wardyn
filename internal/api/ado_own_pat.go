@@ -208,6 +208,11 @@ func (s *Server) handlePutADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusForbidden, reasonADOSignInNoSession, adoSignInNoSessionRefusal)
 		return
 	}
+	r, ok := s.beginRequestWrite(w, r, subject)
+	if !ok {
+		return
+	}
+	ctx = r.Context()
 	var req adoOwnPATRequest
 	if !decodeStrict(w, r, &req) {
 		return
@@ -263,7 +268,9 @@ func (s *Server) handlePutADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 	blob := adoOwnPATBlob{Token: token, Org: org, ExpiresOn: expiresOn, StoredAt: now}
 	raw, _ := json.Marshal(blob)
 	adoOwnPATWriteMu.Lock()
-	err = s.putOwned(ctx, subject, func() error { return s.cfg.Secrets.For(subject).Put(ctx, adoOwnPATSecretName(row.ID), raw) })
+	err = s.putOwned(ctx, subject, func(ctx context.Context) error {
+		return s.cfg.Secrets.For(subject).Put(ctx, adoOwnPATSecretName(row.ID), raw)
+	})
 	adoOwnPATWriteMu.Unlock()
 	if err != nil {
 		s.auditRowNotWritten(ctx, err, types.ActorHuman, subject, subject, adoOwnPATSecretName(row.ID))
@@ -608,11 +615,13 @@ func (s *Server) auditADOOwnPAT(ctx context.Context, actor, action, rowID, outco
 // under it and only ever rewrites a record it just found, so it cannot create
 // one. It is the INNERMOST of the three locks the erase takes (AWS owner lock,
 // Entra redemption lock, this), and none of its holders takes either of the
-// others while holding it; keep that, or the erase can deadlock. The secret
-// store has no compare-and-set or tombstone, so a second replica can still
-// interleave: a stamp there can resurrect a token removed or erased here, or
-// leave one stale informational stamp the next paste clears. Closing that
-// needs a compare-and-set or a delete tombstone in the secret store (#1511).
+// others while holding it; keep that, or the erase can deadlock. The mutex is
+// in-process. What holds a second replica's writer back from resurrecting a
+// token an erase removed is the owner's erase generation: the paste and the
+// stamp begin a fenced write (beginCredentialWrite) before they read, so the
+// erase's advance refuses them wherever they run. A removal
+// (handleDeleteADOOwnPAT) is not an erase and is not fenced: a stamp on another
+// replica can still leave one stale informational stamp the next paste clears.
 var adoOwnPATWriteMu sync.Mutex
 
 // stampADOOwnPATRefused records, once, that Azure DevOps refused owner's own
@@ -630,6 +639,10 @@ var adoOwnPATWriteMu sync.Mutex
 // rejects is stamped. One that still authenticates, or a check that could not
 // complete, stamps nothing.
 func (s *Server) stampADOOwnPATRefused(ctx context.Context, claims *identity.Claims, sn adoEntraScopeSnapshot, blob adoOwnPATBlob, identityURL string) {
+	ctx, err := s.beginCredentialWrite(ctx, sn.OwnerSubject)
+	if err != nil {
+		return
+	}
 	if _, err := s.adoOwnPATOwner(ctx, identityURL, blob.Token); !errors.Is(err, errADOOwnPATRejected) {
 		return
 	}
@@ -642,7 +655,9 @@ func (s *Server) stampADOOwnPATRefused(ctx context.Context, claims *identity.Cla
 	}
 	cur.RefusedAt = &now
 	raw, _ := json.Marshal(cur)
-	if err := s.cfg.Secrets.For(sn.OwnerSubject).Put(ctx, adoOwnPATSecretName(sn.ProviderRowID), raw); err != nil {
+	if err := s.putOwned(ctx, sn.OwnerSubject, func(ctx context.Context) error {
+		return s.cfg.Secrets.For(sn.OwnerSubject).Put(ctx, adoOwnPATSecretName(sn.ProviderRowID), raw)
+	}); err != nil {
 		slog.WarnContext(ctx, "wardynd: could not record that Azure DevOps refused an own token", slog.String("row", sn.ProviderRowID), slog.Any("err", err))
 		return
 	}
