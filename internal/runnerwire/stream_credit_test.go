@@ -247,3 +247,41 @@ func TestStreamCreditReturnedForDataInFlightPastALocalReset(t *testing.T) {
 		t.Fatalf("connection WINDOW returned %d bytes, want 1000", got)
 	}
 }
+
+// TestStreamCreditDrainAfterBothClosedCreditsOnce: the output relay half-closes
+// its side first and drains the buffer only after both ends have closed, by
+// which point the unread bytes were already returned to the sender when the
+// stream ended. Reading them must not return that credit a second time.
+func TestStreamCreditDrainAfterBothClosedCreditsOnce(t *testing.T) {
+	const size = 100 << 10
+	accepted := make(chan *Stream, 1)
+	p := newPair(t, PeerConfig{}, PeerConfig{OnOpen: func(s *Stream, o Open) error { accepted <- s; return nil }})
+	s, err := p.org.Open(ctxT(t), Open{Kind: KindExec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := <-accepted
+	_ = s.CloseWrite()
+	if _, err := run.Write(make([]byte, size)); err != nil {
+		t.Fatal(err)
+	}
+	_ = run.CloseWrite()
+	select {
+	case <-s.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("the stream did not end after both sides closed")
+	}
+	if got := readAllWithin(t, s, "the drain after both closed"); len(got) != size {
+		t.Fatalf("drained %d bytes, want %d", len(got), size)
+	}
+	owed := func() int64 {
+		p.org.mu.Lock()
+		defer p.org.mu.Unlock()
+		return avail(p.run.connSend) + p.org.connPend
+	}
+	waitFor(t, 3*time.Second, "the sender's credit to come back", func() bool { return owed() >= ConnWindow })
+	time.Sleep(200 * time.Millisecond) // let any second return land
+	if got := owed(); got != ConnWindow {
+		t.Fatalf("sender window + withheld credit = %d, want %d: the drained bytes were credited twice", got, ConnWindow)
+	}
+}
