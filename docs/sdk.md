@@ -530,6 +530,7 @@ start.
 | `placement_invalid` / `resources_invalid` / `workspace_target_invalid` / `override_invalid` / `allowed_image_invalid` / `runner_pool_invalid` | `400`: a malformed `placement`, `resources`, workspace `target`, `overrides` entry, `allowed_image` or `runner_pool_id`. |
 | `workspace_target_overlap` / `workspace_pin_conflict` / `image_conflict` / `workspace_ado_org_conflict` | `422`: the attached workspaces cannot share one run. |
 | `placement_unavailable` / `placement_credential` / `placement_capability` / `placement_local_path` / `placement_trusted_output` | `422`: a `placement: "local"` run this server cannot place on your own runner yet, or one carrying a credential, mount, storage, path or trusted-output operation a runner cannot take. |
+| `runner_posture_unmet` | `422`: a `runner_resident` credential the runner's reported posture does not meet (the detail names the field), or a run with a CC3 floor, which a runner-asserted class never meets for a resident credential. |
 | `placement_required` | `422`: no placement chosen. |
 | `placement_denied` | `403`: your governance profile's `deny_placements` refuses the run's placement, at create, preflight, policy preview and source scans; audited `authz.denied` (target `runs.placement`). |
 | `runner_offline` | `422`: a `placement: "local"` run whose runner is offline or has not reported its capabilities yet, or none of your runners is online. |
