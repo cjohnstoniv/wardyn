@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -223,8 +224,9 @@ func TestPG_SCIMLeaver_AnAddressThatIsAPrincipalNeverLinksAClaimantsSignIn(t *te
 }
 
 // A SCIM user one of whose names is a created person's principal links to no sign-in row through any of
-// its other names, in either order: the claimant who signed in under the other address is never
-// deprovisioned in the leaver's place, and the created person is reached through the leaver's forms.
+// its other names, in either order. Unbound, the user's emails then name two different principals (the
+// created person and the claimant who signed in under the other address), so the suspension and the purge
+// refuse: neither is touched, the request answers 5xx and a denied person.deprovision says why.
 func TestPG_SCIMLeaver_AnyNameThatIsAPrincipalStopsTheLinkThroughEveryOtherName(t *testing.T) {
 	const alias = "early.alias@corp.example"
 	for name, names := range map[string][2]string{
@@ -238,17 +240,29 @@ func TestPG_SCIMLeaver_AnyNameThatIsAPrincipalStopsTheLinkThroughEveryOtherName(
 			}
 			personRun := e.seedRun(earlyName, types.RunRunning)
 			row := e.seedSignIn(claimerSub, alias)
+			claimant := e.seedBystander(claimerSub, alias)
 			id := e.postUserID(e.a, leaverOID, names[0], names[1])
 			if ident := e.identity(id); ident.ID == row.ID || ident.Principal != "" {
 				t.Fatalf("the SCIM user linked to %q's sign-in row", ident.Principal)
 			}
 
-			e.removeLeaver(t, id, http.StatusOK, http.StatusNoContent)
+			if w := e.patch(e.a, id, patchOf(`"False"`)); w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "deprovisioning is incomplete") {
+				t.Errorf("suspend = %d %s, want 500 deprovisioning is incomplete", w.Code, w.Body.String())
+			}
+			e.untouched(t, "suspend", claimant, false)
+			if w := e.del(e.b, id); w.Code != http.StatusInternalServerError {
+				t.Errorf("DELETE = %d %s, want 500", w.Code, w.Body.String())
+			}
+			e.untouched(t, "purge", claimant, true)
 			if got := e.identity(row.ID.String()); got.DeactivatedAt != nil || got.PurgedAt != nil {
 				t.Error("the claimant's identity was deactivated or purged in the leaver's place")
 			}
-			if st := e.runState(personRun); st != types.RunKilled {
-				t.Errorf("the created person's run is %s, want KILLED", st)
+			if st := e.runState(personRun); st != types.RunRunning {
+				t.Errorf("the created person's run is %s, want RUNNING", st)
+			}
+			rows := e.rows(e.a, "person.deprovision")
+			if len(rows) != 1 || rows[0].Outcome != "denied" || dataOf(t, rows[0])["reason"] != reasonOwnerAmbiguous {
+				t.Errorf("person.deprovision rows = %+v, want one denied %s", rows, reasonOwnerAmbiguous)
 			}
 		})
 	}

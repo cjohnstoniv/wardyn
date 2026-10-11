@@ -66,7 +66,7 @@ type leaverForms struct {
 	// the person's own are reached through bound and the identity deactivation.
 	shared []string
 	// refusal is set when the emails cannot be resolved (reasonIdentityDirectoryUnreadable, with the error)
-	// or when an email of a person no row binds names more than one principal (reasonOwnerAmbiguous): the
+	// or when the emails of a person no row binds name more than one principal (reasonOwnerAmbiguous): the
 	// forms then name nobody safely, targets are bound alone, and a suspension or a purge refuses.
 	refusal string
 }
@@ -101,7 +101,8 @@ func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.Prin
 	// Each email is resolved as erasure resolves a name (store.PrincipalsNamed), so a principal always wins
 	// over an email claim. A bound person's email that names only other principals (a person an admin
 	// created under that address, say) is never one of their forms. A person no row binds is known by their
-	// emails, so the one principal each names joins the forms; an email naming more than one names nobody.
+	// emails, so the one principal they name joins the forms; when the person's emails name more than one
+	// principal, together or one email alone, they name nobody.
 	var own, subs []string
 	for _, e := range nonEmptyForms(emails...) {
 		named, err := st.PrincipalsNamed(ctx, e)
@@ -119,6 +120,9 @@ func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.Prin
 		default:
 			own, subs = append(own, e), append(subs, named...)
 		}
+	}
+	if ident.Principal == "" && len(slices.DeleteFunc(nonEmptyForms(subs...), func(p string) bool { return slices.Contains(f.bound, p) })) > 1 {
+		f.refusal = reasonOwnerAmbiguous
 	}
 	if f.refusal != "" {
 		f.targets = f.bound
@@ -143,7 +147,7 @@ func (s *Server) deprovisionForms(ctx context.Context, st scimStore, ident store
 	}
 	outcome := "failure"
 	if err == nil {
-		outcome, err = "denied", fmt.Errorf("%w: an email of the person names more than one principal", errDeprovisionIncomplete)
+		outcome, err = "denied", fmt.Errorf("%w: the person's emails name more than one principal", errDeprovisionIncomplete)
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", ident.ID.String(), outcome,
 		mustJSON(map[string]any{"kind": kind, "reason": forms.refusal})))
