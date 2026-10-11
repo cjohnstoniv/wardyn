@@ -24,12 +24,39 @@ import type { CapabilityKind } from "./permissions-copy";
 import type { CapabilityGrant, MeCapabilities } from "./types";
 
 // egressEntryHost (internal/api/runs_dispatch_gitbroker.go): lowercase, drop a
-// ":port" suffix, drop a trailing dot.
+// ":port" suffix, drop a trailing dot. An entry with more than one ":" is an
+// IPv6 literal and is never cut at a colon (ipv6EntryHost).
 function egressEntryHost(entry: string): string {
   let h = entry.trim().toLowerCase();
+  if (h.split(":").length > 2) return ipv6EntryHost(h);
   const colon = h.indexOf(":");
   if (colon >= 0) h = h.slice(0, colon);
   return h.endsWith(".") ? h.slice(0, -1) : h;
+}
+
+// ipv6EntryHost mirrors the Go multi-colon branch: brackets around a bare
+// literal dropped, then domainmatch.Classify (trailing dots trimmed, a
+// "[addr]:port" split only for a port in 1..65535, a "*." wildcard kept as is)
+// and domainmatch.CanonHost (net.IP.String(): ::-compressed, a v4-mapped
+// address printed dotted, a spelling it cannot parse left verbatim).
+function ipv6EntryHost(entry: string): string {
+  let h = entry.startsWith("[") && entry.endsWith("]") ? entry.slice(1, -1) : entry;
+  h = h.replace(/\.+$/, "");
+  const hp = /^\[([^[\]]*)\]:([^:[\]]*)$/.exec(h);
+  if (hp && /^[+-]?\d+$/.test(hp[2]) && Number(hp[2]) >= 1 && Number(hp[2]) <= 65535) h = hp[1];
+  if (h.startsWith("*.")) return h;
+  if (h.endsWith(".")) h = h.slice(0, -1);
+  if (!/^[0-9a-f:.]+$/.test(h)) return h;
+  let addr: string;
+  try {
+    addr = new URL(`http://[${h}]/`).hostname.slice(1, -1);
+  } catch {
+    return h;
+  }
+  const v4 = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(addr);
+  if (!v4) return addr;
+  const [a, b] = [parseInt(v4[1], 16), parseInt(v4[2], 16)];
+  return [a >> 8, a & 255, b >> 8, b & 255].join(".");
 }
 
 // capValueMatches: "*" is the per-kind wildcard; egress_host additionally
