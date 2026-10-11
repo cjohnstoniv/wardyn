@@ -108,6 +108,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- A portal's delegated token can read the output tail of its person's runs (`GET /runs/{id}/output`) and nothing
+  recovered from a recording: for output recovered from a recording and an interactive run's last screen it gets the
+  same 409 a run with no such row gives (the refusal is audited `delegation_scope`), and a failed run's failure hint
+  is served without its quote from the recording. (#1423)
 - Docs: `docs/AZURE-DEVOPS.md` explains what an Azure DevOps run gets on a laptop runner: only the person's own
   stored PAT, while `minted_pat` and `bearer` runs placed on a laptop are refused (`placement_credential`).
   `docs/DESKTOP.md` explains why a member-mode laptop still enrols into an SSO-only organisation (#475).
