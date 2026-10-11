@@ -922,7 +922,8 @@ const (
 // which the POST never reached — 404 — leaving the HttpOnly OIDC cookie valid).
 //
 //   - OIDC session mode: delegate to the OIDC LogoutHandler, which clears the
-//     HttpOnly wardyn_session cookie (and redirects to "/").
+//     HttpOnly wardyn_session cookie, cuts the person's browser sessions
+//     server-side so a copy of the cookie stops working (and redirects to "/").
 //   - Admin-token / local mode (OIDC not configured): there is NO server-side
 //     session to kill — the client just drops its local bearer token. Return 204
 //     (no content). The nil-OIDC guard is REQUIRED so this never panics in

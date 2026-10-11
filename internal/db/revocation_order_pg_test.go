@@ -5,6 +5,7 @@ package db
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -235,6 +236,22 @@ func TestMigrate_RevocationOrderTokenBeforeTheOldestCut(t *testing.T) {
 		}
 		if rev < 1 || cut <= rev {
 			t.Errorf("%s created before the oldest cut: rev_seq %d, the cut's seq %d; want the cut to end it", table, rev, cut)
+		}
+	}
+}
+
+// TestMigrate_RevocationOrderIndexesTokensByLowerEmail (0194): the per-person token revocation matches a
+// name against principal and lower(email); both columns have an index, so it does not read the table.
+func TestMigrate_RevocationOrderIndexesTokensByLowerEmail(t *testing.T) {
+	pool := pgPoolIsolated(t)
+	for idx, col := range map[string]string{"api_tokens_principal_idx": "principal", "api_tokens_lower_email_idx": "lower(email)"} {
+		var def string
+		if err := pool.QueryRow(context.Background(),
+			`SELECT indexdef FROM pg_indexes WHERE tablename = 'api_tokens' AND indexname = $1`, idx).Scan(&def); err != nil {
+			t.Fatalf("index %s: %v", idx, err)
+		}
+		if !strings.Contains(def, "("+col+")") {
+			t.Errorf("index %s = %q, want it on %s", idx, def, col)
 		}
 	}
 }

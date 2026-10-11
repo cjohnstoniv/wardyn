@@ -19,6 +19,11 @@ ALTER TABLE ssh_public_keys ADD COLUMN IF NOT EXISTS rev_seq BIGINT NOT NULL DEF
 ALTER TABLE attach_tickets ADD COLUMN IF NOT EXISTS rev_seq BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE delegated_tokens ADD COLUMN IF NOT EXISTS rev_seq BIGINT NOT NULL DEFAULT 0;
 
+-- A per-person token revocation reads the tokens a name owns under either form (principal = $1 OR
+-- lower(email) = lower($1)); with api_tokens_principal_idx (0045) this index lets it avoid reading the
+-- whole table once per member of a group removal.
+CREATE INDEX IF NOT EXISTS api_tokens_lower_email_idx ON api_tokens (lower(email));
+
 -- Reserves 1: it sits below every cut seq given here, which is what a credential created before any
 -- cut records, and it leaves last_value a real position (at least 1), so a credential issued from here
 -- on never records 0 or a value a later cut also draws.
