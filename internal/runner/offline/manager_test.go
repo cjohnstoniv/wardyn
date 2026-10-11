@@ -360,3 +360,14 @@ func TestFailedCreateContainsImmediatelyAndRetriesWhileLeaseLive(t *testing.T) {
 func noOutput(context.Context, uuid.UUID, string) (int64, bool, error) { return 0, true, nil }
 
 func noErase(uuid.UUID) error { return nil }
+
+func TestHoldsSandboxOnlyForCreatedRuns(t *testing.T) {
+	m, _, _, org := managerFixture(t)
+	id := createLocal(t, m, org)
+	if !m.HoldsSandbox(id.String()) {
+		t.Fatal("created sandbox not held")
+	}
+	if m.HoldsSandbox(uuid.NewString()) || m.HoldsSandbox("") {
+		t.Fatal("unknown sandbox held")
+	}
+}

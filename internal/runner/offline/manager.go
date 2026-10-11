@@ -35,6 +35,7 @@ type Manager struct {
 	expectedRef   func(uuid.UUID) string
 	outputSettled func(context.Context, uuid.UUID, string) (int64, bool, error)
 	eraseOutput   func(uuid.UUID) error
+	releaseOutput func(uuid.UUID, string) error
 	stopper       runner.ProxyStopper
 	clock         *Clock
 	now           func() time.Time
