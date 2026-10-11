@@ -64,7 +64,9 @@ type PrincipalDirectoryStore interface {
 	// case-folded, then, for a name with an @ only, an email (case-folded) that a
 	// sign-in, an API token or a pre-created person carries. A principal, a people
 	// row an admin created included, therefore always wins over an email claim that
-	// spells it. More than one is ambiguous; none is a name nobody is recorded under.
+	// spells it. The one exception is a typed entra:<tenant>:<object> name: when it
+	// matches exactly, the tenant and object id match under any issuer is added to
+	// the answer, so a person who signed in under another issuer is ambiguous. More than one is ambiguous; none is a name nobody is recorded under.
 	PrincipalsNamed(ctx context.Context, name string) ([]string, error)
 }
 
