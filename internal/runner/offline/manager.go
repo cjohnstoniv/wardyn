@@ -34,6 +34,7 @@ type Manager struct {
 	sub           substrate.Substrate
 	expectedRef   func(uuid.UUID) string
 	outputSettled func(context.Context, uuid.UUID, string) (int64, bool, error)
+	eraseOutput   func(uuid.UUID) error
 	stopper       runner.ProxyStopper
 	clock         *Clock
 	now           func() time.Time
@@ -59,8 +60,10 @@ type deadline struct {
 // New recovers local state. Run must start before connecting: a restart cannot
 // reconstruct a monotonic deadline, so existing proxies are contained until
 // an authenticated fresh lease establishes one.
-func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedRef func(uuid.UUID) string, outputSettled func(context.Context, uuid.UUID, string) (int64, bool, error)) (*Manager, error) {
-	if runnerID == uuid.Nil || sub == nil || substrate.IsRemote(sub) || expectedRef == nil || outputSettled == nil {
+// eraseOutput deletes one run's retained output; the manager calls it only for
+// an org-erased (asserted) run's quarantined evidence at its retention ceiling.
+func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedRef func(uuid.UUID) string, outputSettled func(context.Context, uuid.UUID, string) (int64, bool, error), eraseOutput func(uuid.UUID) error) (*Manager, error) {
+	if runnerID == uuid.Nil || sub == nil || substrate.IsRemote(sub) || expectedRef == nil || outputSettled == nil || eraseOutput == nil {
 		return nil, errors.New("offline manager requires a registered runner and local substrate")
 	}
 	stopper, ok := sub.(runner.ProxyStopper)
@@ -99,7 +102,7 @@ func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedR
 		root.Close()
 		return nil, errors.New("runner lifecycle directory is already active")
 	}
-	m := &Manager{lock: lock, runnerID: runnerID, dir: stateDir, root: root, sub: sub, expectedRef: expectedRef, outputSettled: outputSettled, stopper: stopper, clock: NewClock(nil), now: time.Now, since: time.Since, deadlines: map[uuid.UUID]deadline{}, pending: map[uuid.UUID]runnerwire.Lease{}}
+	m := &Manager{lock: lock, runnerID: runnerID, dir: stateDir, root: root, sub: sub, expectedRef: expectedRef, outputSettled: outputSettled, eraseOutput: eraseOutput, stopper: stopper, clock: NewClock(nil), now: time.Now, since: time.Since, deadlines: map[uuid.UUID]deadline{}, pending: map[uuid.UUID]runnerwire.Lease{}}
 	if err := m.load(); err != nil {
 		lock.Close()
 		root.Close()
@@ -376,7 +379,7 @@ func (m *Manager) Run(ctx context.Context) error {
 	defer ticker.Stop()
 	for {
 		safety, done := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		err := m.CheckLapses(safety)
+		err := errors.Join(m.CheckLapses(safety), m.eraseAssertedEvidence())
 		done()
 		if err != nil {
 			slog.ErrorContext(ctx, "runner containment will retry", "error", err)
@@ -427,7 +430,7 @@ func (m *Manager) Revoked(ctx context.Context) error {
 	m.mu.Unlock()
 	safety, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	return errors.Join(err, m.CheckLapses(safety))
+	return errors.Join(err, m.CheckLapses(safety), m.eraseAssertedEvidence())
 }
 
 func (m *Manager) clearPending() {

@@ -42,7 +42,7 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 	if err != nil {
 		return runnerRuntime{}, err
 	}
-	manager, err := offline.New(stateDir, identity.RunnerID, sub, ref, streams.OutputSettled)
+	manager, err := offline.New(stateDir, identity.RunnerID, sub, ref, streams.OutputSettled, streams.EraseOutput)
 	if err != nil {
 		return runnerRuntime{}, err
 	}

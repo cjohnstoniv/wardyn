@@ -79,7 +79,7 @@ func TestRetirementRequiresExactDrainedEvidenceAndRetainsTombstones(t *testing.T
 	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+	reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,8 +116,11 @@ func TestRetirementDefersLiveOutputAndRejectsWrongSettlement(t *testing.T) {
 	if m.state.Runs[id].Retirement != nil {
 		t.Fatal("unsettled producer suppressed observations")
 	}
-	if _, err := New(t.TempDir(), uuid.New(), m.sub, uuid.UUID.String, nil); err == nil {
+	if _, err := New(t.TempDir(), uuid.New(), m.sub, uuid.UUID.String, nil, noErase); err == nil {
 		t.Fatal("missing producer settlement callback admitted")
+	}
+	if _, err := New(t.TempDir(), uuid.New(), m.sub, uuid.UUID.String, noOutput, nil); err == nil {
+		t.Fatal("missing output erasure callback admitted")
 	}
 }
 
@@ -136,7 +139,7 @@ func TestRetirementRecoversSealedSpoolBeforeLocalReceipt(t *testing.T) {
 	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+	reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +172,7 @@ func TestRetirementStateRefusesLostOrAlteredSettlement(t *testing.T) {
 		if err := m.Close(); err != nil {
 			t.Fatal(err)
 		}
-		reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+		reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 		if err == nil {
 			reopened.Close()
 			t.Fatal("invalid retirement settlement survived restart")

@@ -52,7 +52,7 @@ func TestPendingRetirementQuarantineSurvivesRestartWithoutClearingFence(t *testi
 			if err := m.Close(); err != nil {
 				t.Fatal(err)
 			}
-			reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput)
+			reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 			if err != nil {
 				t.Fatalf("quarantine poisoned runner restart: %v", err)
 			}
