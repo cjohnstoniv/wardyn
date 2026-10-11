@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -489,7 +490,7 @@ func TestServiceIdentity_SponsorChangeRevokesTokens(t *testing.T) {
 	if w := e.mintReq(t, e.sponsor, svcName, `{}`); w.Code != http.StatusNotFound {
 		t.Errorf("the previous sponsor's mint: %d, want 404", w.Code)
 	}
-	if _, err := e.st.CreateServiceToken(context.Background(), svcName, svcSponsor, types.APIToken{ID: uuid.New(), Principal: svcPrin, CreatedAt: time.Now().UTC()}, "wdn_x"); err == nil {
+	if _, err := e.st.CreateServiceToken(context.Background(), svcName, svcSponsor, apiTokenMaxPerPrincipal, types.APIToken{ID: uuid.New(), Principal: svcPrin, CreatedAt: time.Now().UTC()}, "wdn_x"); err == nil {
 		t.Error("a store-level mint under the previous sponsor succeeded")
 	}
 	second := e.mustMint(t, e.sponsor2, svcName)
@@ -617,8 +618,26 @@ func TestServiceIdentity_RetireErasesItsCredentials(t *testing.T) {
 	if err := own.Put(ctx, "model-key", []byte("sk-service")); err != nil {
 		t.Fatal(err)
 	}
-	if w := doSSO(t, e.h.srv, http.MethodDelete, "/api/v1/service-identities/"+svcName, e.sec, ""); w.Code != http.StatusOK {
-		t.Fatalf("retire: %d %s", w.Code, w.Body.String())
+	// The secret store fails during the retire: the identity is retired and its tokens revoked, the erase
+	// is answered 500 with a failure row, and the same DELETE run again finishes the erase.
+	fail := &atomic.Bool{}
+	fail.Store(true)
+	e.h.srv.cfg.Secrets = failingErase{Store: e.h.srv.cfg.Secrets, fail: fail}
+	del := func() *httptest.ResponseRecorder {
+		return doSSO(t, e.h.srv, http.MethodDelete, "/api/v1/service-identities/"+svcName, e.sec, "")
+	}
+	if w := del(); w.Code != http.StatusInternalServerError {
+		t.Fatalf("retire with a failing secret store: %d %s, want 500", w.Code, w.Body.String())
+	}
+	if names, _ := own.List(ctx); len(names) != 1 {
+		t.Fatalf("credentials after the failed erase = %v, want the one left", names)
+	}
+	if got := e.as(t, tok.Token, http.MethodGet, "/api/v1/me", "").Code; got != http.StatusUnauthorized {
+		t.Errorf("token after the failed erase: %d, want 401 (the retire itself is durable)", got)
+	}
+	fail.Store(false)
+	if w := del(); w.Code != http.StatusOK {
+		t.Fatalf("second DELETE on a retired identity: %d %s, want 200 with the erase finished", w.Code, w.Body.String())
 	}
 	if names, err := own.List(ctx); err != nil || len(names) != 0 {
 		t.Errorf("credentials left after the retire = %v (%v), want none", names, err)
@@ -627,8 +646,9 @@ func TestServiceIdentity_RetireErasesItsCredentials(t *testing.T) {
 		t.Errorf("token after the retire: %d, want 401", got)
 	}
 	retire, erase := e.auditRows("service_identity.retire"), e.auditRows("credential.erase")
-	if len(retire) != 1 || retire[0].Target != svcPrin || len(erase) != 1 || erase[0].Target != svcPrin || erase[0].Outcome != "success" {
-		t.Errorf("retire rows = %+v, erase rows = %+v, want one each naming %s", retire, erase, svcPrin)
+	if len(retire) != 1 || retire[0].Target != svcPrin || len(erase) != 2 ||
+		erase[0].Outcome != "failure" || erase[1].Outcome != "success" || erase[1].Target != svcPrin {
+		t.Errorf("retire rows = %+v, erase rows = %+v, want one retire and a failed then a successful erase naming %s", retire, erase, svcPrin)
 	}
 	if w := e.create(t, e.sec, svcName, svcSponsor); w.Code != http.StatusConflict || respReason(w) != "service_identity_name_taken" {
 		t.Errorf("re-creating a retired name: %d %s, want 409 service_identity_name_taken", w.Code, w.Body.String())
