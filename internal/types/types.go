@@ -95,6 +95,8 @@ const (
 	ActorHuman  ActorType = "human"
 	ActorAgent  ActorType = "agent"
 	ActorSystem ActorType = "system"
+	// ActorService is a service identity (#1508): actor "service:<name>", with its sponsor on every row.
+	ActorService ActorType = "service"
 )
 
 // AgentRun is one governed execution of a coding agent on behalf of a human, with its own identity

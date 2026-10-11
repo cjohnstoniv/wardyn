@@ -91,6 +91,9 @@ func (s *Server) recordRefusal(ctx context.Context, r *http.Request, d authz.Dec
 	}
 	method, _ := ctx.Value(requestMethodKey{}).(string)
 	actor, subject := types.ActorHuman, oidcHumanFromContext(ctx)
+	if _, _, isService := serviceIdentityFromContext(ctx); isService {
+		actor = serviceActorType // a service's published human is its own principal, not a person
+	}
 	if r != nil {
 		actor, subject, method = actorTypeFromRequest(r), principalFromRequest(r), r.Method
 	}
