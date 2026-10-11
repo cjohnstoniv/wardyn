@@ -190,9 +190,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   that named it. Pool `limits` are refused on create and update until limits are stored. Audit actions
   `runner_pool.*`, `person.runner_pool_default.set|delete`.
 - New Run run mode: a request chooses `experience` (background or interactive), with its workload, included tools,
-  one startup choice, one starting folder and an explicit "no repositories or drives". The console and the CLI's
-  run-mode flags mark requests `mode_contract: "0.9"`, so an unset mode is refused instead of inferred; older
-  requests keep their documented behaviour.
+  one startup choice, one starting folder and an explicit "no repositories or drives". The CLI's run-mode flags
+  mark requests `mode_contract: "0.9"`, so an unset mode is refused instead of inferred; older requests, and the
+  console until it can choose an experience, keep their documented behaviour.
 - Push rules are carried per source-control entry (provider host and canonical organisation; a remote that cannot be
   read exactly is refused) and tool rules per included harness; a request's rules can only narrow. A background task
   has no idle stop from any source, and the idle reaper skips it. Presets refuse run-mode fields until run templates
