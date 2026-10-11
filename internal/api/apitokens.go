@@ -299,16 +299,46 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
+	sub, ok := s.mintGuards(w, r)
+	if !ok {
+		return
+	}
+	name, ok := apiTokenName(w, req.Name)
+	if !ok {
+		return
+	}
+	lifetime, clampedFrom, ok := s.apiTokenLifetime(w, req.TTLSeconds)
+	if !ok {
+		return
+	}
+	row, ok := s.prepareMint(w, r, sub, authorizedAt, name, lifetime)
+	if !ok {
+		return
+	}
+	created, ok := s.insertAPIToken(w, r, row)
+	if !ok {
+		return
+	}
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"token.create", created.ID.String(), "success", mustJSON(mintAuditDetail(created, clampedFrom, nil))))
+	writeJSON(w, http.StatusCreated, created)
+}
+
+// mintGuards is the first half of the mint core that POST /me/tokens and an invitation's claim share:
+// the checks on WHO is asking, each refusal byte-identical across the two doors. It returns the
+// verified human the token would belong to. Every caller stamps authorizedAt before reading its body,
+// and asks for the lifetime, name and cap only after this passes.
+func (s *Server) mintGuards(w http.ResponseWriter, r *http.Request) (string, bool) {
 	ctx := r.Context()
 	sub := oidcHumanFromContext(ctx)
 	if sub == "" {
 		writeErrorReason(w, http.StatusForbidden, reasonAPITokenNoHuman, apiTokenNoHumanRefusal)
-		return
+		return "", false
 	}
 	if apiTokenIDFromContext(ctx) != uuid.Nil {
 		writeErrorReason(w, http.StatusForbidden, reasonAPITokenFromAPIToken,
 			"an API token cannot create another API token — sign in to the console to mint one")
-		return
+		return "", false
 	}
 	// The same refusal for a portal's delegated token (#1142): the allow-list
 	// already keeps it off this route, and this keeps a list edit from turning
@@ -316,7 +346,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	if _, delegated := audit.DelegationFrom(ctx); delegated {
 		writeErrorReason(w, http.StatusForbidden, reasonAPITokenFromDelegatedToken,
 			"a delegated token cannot create an API token — sign in to the console to mint one")
-		return
+		return "", false
 	}
 	// Member mode refuses, it does not clamp. store.RefreshAPITokenIdentity
 	// (fired by OnLogin) re-stamps EVERY token of a principal with their freshly
@@ -325,19 +355,22 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	// created it. See internal/api/membermode.go.
 	if oidc.MemberModeFromContext(ctx) {
 		writeErrorReason(w, http.StatusConflict, reasonAPITokenMemberModeMint, userViewMintRefusal)
-		return
+		return "", false
 	}
 	// May this person mint a token at all (capFeature).
 	if s.denyUserCapability(w, r, capFeature, featureAPIToken, "me.tokens", apiTokenFeatureRefusal) {
-		return
+		return "", false
 	}
-	name, ok := apiTokenName(w, req.Name)
-	if !ok {
-		return
-	}
-	lifetime, clampedFrom, ok := s.apiTokenLifetime(w, req.TTLSeconds)
-	if !ok || s.apiTokenCapReached(w, r, sub) {
-		return
+	return sub, true
+}
+
+// prepareMint is the second half of the mint core: the per-principal cap, the identity snapshot from
+// the caller's session, and the late session re-check, then the row to insert. MintedBy stays empty: the
+// owner minted it. The caller inserts the row, and nothing else may.
+func (s *Server) prepareMint(w http.ResponseWriter, r *http.Request, sub string, authorizedAt time.Time, name string, lifetime time.Duration) (types.APIToken, bool) {
+	ctx := r.Context()
+	if s.apiTokenCapReached(w, r, sub) {
+		return types.APIToken{}, false
 	}
 
 	// The identity SNAPSHOT. Role is the caller's REAL session role, copied
@@ -408,11 +441,11 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		revoked, rerr := s.cfg.SessionRevocations.IsSessionRevoked(ctx, sub, oidcEmailFromContext(ctx), authorizedAt)
 		if rerr != nil {
 			writeServerError(w, r, "create api token", rerr)
-			return
+			return types.APIToken{}, false
 		}
 		if revoked {
 			writeErrorReason(w, http.StatusForbidden, reasonAPITokenNoHuman, apiTokenNoHumanRefusal)
-			return
+			return types.APIToken{}, false
 		}
 	}
 	var expiresAt *time.Time
@@ -420,7 +453,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		t := authorizedAt.Add(lifetime)
 		expiresAt = &t
 	}
-	created, ok := s.insertAPIToken(w, r, types.APIToken{
+	return types.APIToken{
 		Principal:       sub,
 		Email:           oidcEmailFromContext(ctx),
 		Role:            role,
@@ -430,10 +463,11 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		Name:            name,
 		CreatedAt:       authorizedAt,
 		ExpiresAt:       expiresAt,
-	})
-	if !ok {
-		return
-	}
+	}, true
+}
+
+// mintAuditDetail is the data of a token.create row; an invitation's claim adds the invitation id.
+func mintAuditDetail(created types.APIToken, clampedFrom time.Duration, invitation *uuid.UUID) map[string]any {
 	detail := map[string]any{"name": created.Name, "role": created.Role, "user_type": created.UserType}
 	if created.ExpiresAt != nil {
 		detail["expires_at"] = created.ExpiresAt
@@ -441,9 +475,10 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	if clampedFrom > 0 {
 		detail["ttl_clamped_from_seconds"] = int64(clampedFrom / time.Second)
 	}
-	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"token.create", created.ID.String(), "success", mustJSON(detail)))
-	writeJSON(w, http.StatusCreated, created)
+	if invitation != nil {
+		detail["invitation"] = invitation.String()
+	}
+	return detail
 }
 
 // apiTokenName is the trimmed display name, or false after a 422.
