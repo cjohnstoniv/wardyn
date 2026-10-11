@@ -46,6 +46,7 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 	if err != nil {
 		return runnerRuntime{}, err
 	}
+	streams.HoldSandboxes(manager.HoldsSandbox)
 	defer func() {
 		if retErr != nil {
 			retErr = errors.Join(retErr, manager.Close())
