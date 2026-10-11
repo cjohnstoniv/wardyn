@@ -260,6 +260,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- Review and policy preview report the managed-settings fact that launch delivers when governance holds tool
+  approvals.
+- Workspace target overlap checks stay fast for long attachment lists.
+- `docs/sdk.md` documents the five local-placement refusal reasons.
 - Security: every route that erases or deletes a person's records by name resolves the name one way: `POST
   /people/{principal}/erasure` (every scope), `DELETE /people/{principal}/credentials`, `DELETE
   /people/{principal}/ssh-keys` and the SSH arm of `POST /sessions/revoke`, `DELETE /secrets/{name}?owner=` and `GET
