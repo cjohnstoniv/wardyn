@@ -100,7 +100,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - AWS KMS can hold the key that wraps stored credentials (`WARDYN_KEK=awskms`): each data key is wrapped by KMS
   Encrypt bound to its row, the key never leaves AWS, and IRSA or EKS Pod Identity is the expected identity (#588). A
   long-lived access key still boots but raises an amber setup row. An AWS KMS platform key, key domains and store mode
-  are not supported yet, and boot refuses them together with `awskms`.
+  are not supported yet, and boot refuses them together with `awskms`. The Helm chart takes `kek.provider=awskms`
+  and `kek.awskms.key` and, like the other key services, needs no age key.
 - Runners management API: `GET /runners` (active, revoked or all, with each runner's live online state and the runs on
   it), `GET /runners/{id}`, and the caller-scoped `GET /me/runners`, which shows a person only their own runners and
   abbreviates an unclaimed runner's fingerprint. Security admins can list and revoke unused registration tokens (never
