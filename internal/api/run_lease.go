@@ -159,7 +159,9 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 // Background task whose end time comes before its cap is KILLED end_reached at
 // that end (strictly before the cap; an end at the cap is the maximum). An
 // Interactive run, and a run launched by an older client (no stored
-// experience), is kept at its end exactly as before. Reason follows the run's
+// experience), is kept at its end exactly as before. A Background run kept after
+// an outage (lost_reason 'outage') is killed end_reached at its end like any
+// Background run; only a run its OWN end kept is left to its grace. Reason follows the run's
 // own end and cap, never the sweep's lateness, so a late sweep still says which
 // came first.
 func lifetimeEndDue(run types.AgentRun, now time.Time) (types.RunEndReason, bool) {
@@ -174,7 +176,7 @@ func lifetimeEndDue(run types.AgentRun, now time.Time) (types.RunEndReason, bool
 			return types.RunEndEndReached, true
 		}
 		return types.RunEndMaxLifetimeReached, true
-	case endedFirst && run.LostAt == nil && !now.Before(*run.EndsAt):
+	case endedFirst && !now.Before(*run.EndsAt):
 		return types.RunEndEndReached, true
 	}
 	return "", false
@@ -186,7 +188,7 @@ func lifetimeEndDue(run types.AgentRun, now time.Time) (types.RunEndReason, bool
 // states: the doubles that embed the store interfaces do not implement it. The
 // real PG store does; a store that does not never kills at a lifetime.
 type runStateDetailUpdater interface {
-	UpdateRunStateAndDetailIf(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, detail string) (bool, error)
+	KillRunAtLifetimeIf(ctx context.Context, id uuid.UUID, reason types.RunEndReason, detail string, now time.Time) (bool, error)
 }
 
 // lifetimeStatusDetail is the status_detail a run KILLED at its end or its
@@ -209,7 +211,7 @@ func (s *Server) killRunAtLifetime(ctx context.Context, run types.AgentRun, reas
 	// Once claimed, the teardown must finish whatever the sweep's own bound says.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
-	applied, err := updater.UpdateRunStateAndDetailIf(ctx, run.ID, types.RunRunning, types.RunKilled, lifetimeStatusDetail(reason))
+	applied, err := updater.KillRunAtLifetimeIf(ctx, run.ID, reason, lifetimeStatusDetail(reason), s.cfg.Now())
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: killing a run at its lifetime failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
@@ -223,7 +225,9 @@ func (s *Server) killRunAtLifetime(ctx context.Context, run types.AgentRun, reas
 	s.cancelRunApprovals(ctx, run.ID)
 	extra := map[string]any{"reason": string(reason), "ends_at": run.EndsAt, "lifetime_cap_at": run.LifetimeCapAt}
 	if run.LifetimeCapSource != "" {
-		extra["source"] = string(run.LifetimeCapSource)
+		// The same labels run.create writes (design §7); the stored source is a
+		// token, so a pool reads "your pool" until the run carries its pool's name.
+		extra["source"] = endSourceLabel(run.LifetimeCapSource, "")
 	}
 	s.killTeardownTail(ctx, run, types.ActorSystem, "wardynd", extra, true)
 }

@@ -231,7 +231,7 @@ func TestPatchEnd_SuperAdminBoundByTheCapturedCap(t *testing.T) {
 
 // TestPatchEnd_PastTheMaxLifetimeIsRefused (N3): once the run's lifetime cap has
 // passed, the lease sweep is ending it, and a PATCH of its end or wait is refused 409
-// and writes nothing; just before the cap it still works.
+// run_end_wait_max_lifetime (not "already finished": the run is still RUNNING) and writes nothing; just before the cap it still works.
 func TestPatchEnd_PastTheMaxLifetimeIsRefused(t *testing.T) {
 	f := newEndWaitFixture(t, types.RunLimits{MaxEndAheadSec: 30 * secDay, UserChangesLimits: true})
 	capAt := f.now.Add(-time.Second)
@@ -239,8 +239,8 @@ func TestPatchEnd_PastTheMaxLifetimeIsRefused(t *testing.T) {
 	before, _ := f.stored()
 	for _, body := range []string{endsAtBody(f.now.Add(time.Hour)), `{"wait_budget_sec":60}`} {
 		w := doSSO(t, f.srv, http.MethodPatch, "/api/v1/runs/"+f.st.run.ID.String(), ownerSession(t), body)
-		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), reasonRunEndWaitAlreadyFinished) {
-			t.Errorf("PATCH %s past the cap = %d %s; want 409 %s", body, w.Code, w.Body.String(), reasonRunEndWaitAlreadyFinished)
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), reasonRunEndWaitMaxLifetime) {
+			t.Errorf("PATCH %s past the cap = %d %s; want 409 %s", body, w.Code, w.Body.String(), reasonRunEndWaitMaxLifetime)
 		}
 	}
 	if after, _ := f.stored(); !after.Equal(*before) {
