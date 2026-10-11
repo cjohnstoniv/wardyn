@@ -248,6 +248,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- Registered runners: a live run's output keeps flowing after a wardynd restart; attach and exec reach only
+  sandboxes the runner created; a damaged output directory is named in the start error; a retired run's settled
+  output is released.
 - `wardyn run --experience` refuses `--model-provider` where no `--agent` would carry it, instead of dropping it.
 - The AWS KMS key service boots when `AWS_CA_BUNDLE` (or a shared-config `ca_bundle`) is set; corporate-CA installs
   no longer fail at startup.
