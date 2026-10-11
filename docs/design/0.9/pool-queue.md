@@ -63,7 +63,8 @@ A new non-terminal `RunState`, `QUEUED`, before `PENDING`; `PENDING` keeps "admi
 | Person cap (`CountActiveRunsBy`) | Per [Q2b](#q2b-do-waiting-runs-count-against-a-persons-run-limit) (recommended: yes) | "Runs you have going" |
 | Suspension sweep, audit-retention live check, `wardyn_runs_active{state}` | Yes | A queued run is live and cancellable |
 
-- A new `types.SlotHoldingRunStates` (non-terminal minus `QUEUED`) feeds the pool and deployment counts, the fleet view and the max-age reaper. A slot-holder also matches `HoldsSandboxSQL`, so a run kept after its end frees its slot.
+- A new `types.SlotHoldingRunStates` (non-terminal minus `QUEUED`) feeds the pool and deployment counts, the fleet view, the max-age reaper and the undispatched reaper. A slot-holder also matches `HoldsSandboxSQL`, so a run kept after its end frees its slot.
+- **A `run_queue` row exists exactly while its run is `QUEUED`.** Every exit from `QUEUED` deletes the row in the same transaction as the state CAS: promotion, kill, the suspension sweep, the timeout sweep and pool removal. `casRunState` routes `from = QUEUED` to one store call that does both. The flood count, position, `queue_depth` and the promoter scan read `run_queue`.
 - While `QUEUED`, `ends_at`, `lifetime_cap_at`, `governance_profile_id` and `run_limits` stay empty; start step 7 writes them. No reader may take a null `ends_at` on a `QUEUED` run as "No end".
 
 ## 5. Doors
@@ -76,7 +77,7 @@ A new non-terminal `RunState`, `QUEUED`, before `PENDING`; `PENDING` keeps "admi
 | Per-run door on a `QUEUED` run | Behaviour |
 |---|---|
 | `GET /runs/{id}`, runs list, run events | Shown with `queue` ([§13](#13-api-sdk-cli-and-ts)); title changes allowed |
-| `POST /runs/{id}/kill` | CAS `QUEUED`→`KILLED`, `202`. A kill that won from `QUEUED` skips the identity and broker revocations: nothing was minted |
+| `POST /runs/{id}/kill` | CAS `QUEUED`→`KILLED` and delete the `run_queue` row in one transaction, `202`. A kill that won from `QUEUED` skips the identity and broker revocations: nothing was minted |
 | `PATCH /runs/{id}` (end, wait budget) | `409 run_queued`: the end is set at the start |
 | Attach, exec, SSH, files, output, revive, pause, resume | The existing no-sandbox and not-running refusals; the console hides them |
 | `/internal` routes, broker, injection | No token exists; a state guard also refuses `QUEUED` |
@@ -89,7 +90,7 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
    - the provider step runs as preflight's: `renew=false`, status read only;
    - the fit step refuses only a run that can never fit (`Need > Hard` on an axis, a new verdict in `judgeFit`); `Need > Left` waits;
    - host capacity and the deployment cap are skipped; promotion applies them.
-2. Insert the run `QUEUED`, no SPIFFE ID, plus its `run_queue` row, in one transaction holding the pool row `FOR NO KEY UPDATE`. Write the component snapshot as today; no grants.
+2. Insert the run `QUEUED` with `spiffe_id = ''` ([§15](#15-migration)), plus its `run_queue` row, in one transaction holding the pool row `FOR NO KEY UPDATE`. Write the component snapshot as today; no grants.
 3. In that transaction, refuse `runner_pool_queue_full` at the per-person limit ([Q2a](#q2a-order-and-a-per-person-limit)). The person cap stays the fold's own check; under [Q2b](#q2b-do-waiting-runs-count-against-a-persons-run-limit)-A it counts waiting runs.
 4. After commit, run one promotion transaction for this pool, bounded at 2 s, re-read the run and answer `201`: `QUEUED` with the wait sentence in `warnings[]`, or `PENDING`.
 5. A promoted run's start runs detached (`context.WithoutCancel`), with `abortHalfBuiltRun` as its compensator, as the launch tail does today.
@@ -111,7 +112,7 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
 
 | Step | Re-check or action | On refusal |
 |---|---|---|
-| 1 | Owner active (identity guard, enqueue epoch); a portal's grant still active, its `via` published so every row carries it | `FAILED`, that reason |
+| 1 | Owner active (identity guard, enqueue epoch). A portal launch: the portal row is not revoked (`delegates.revoked_at IS NULL` for `authority.delegate_id`). The 10-minute delegated token's expiry is never read; `grant_id` only fills `via`, published so every row carries it | `FAILED identity_deactivated` or `FAILED queue_portal_revoked` |
 | 2 | Profile assignment re-resolved from the enqueue snapshot (`resolveAssignedProfile`); the same profile is rebuilt as it stands now | Different profile: `FAILED queue_profile_changed` |
 | 3 | Launch doors as the owner ([Q8](#q8-the-owners-authority-at-the-start)) | `FAILED`, `ownerCapabilityRefusal`'s reason |
 | 4 | Pool exists and is on; its use policy admits the owner; `PoolSource`, `CheckBarrier` pass | `FAILED`, the pool reason |
@@ -121,6 +122,7 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
 | 8 | Provider check with renewal, `MintRunIdentity`, SPIFFE ID, `persistRunGrants`, `unionRunEgress` | `FAILED`, the provider reason |
 | 9 | `run.queue.start` with the `jti`; `finishCreateRunLaunch` as today | Dispatch's own |
 
+- Step 1 needs a store read of one portal by id; today there are only `GetDelegateByRaw` and `ListDelegates`.
 - A refusal writes `queue: <token>` to `status_detail` and the sentence to `failure_hint`, audits `run.queue.start` `failure`, and kicks the promoter.
 - The start holds the watcher lease from promotion, heartbeating through the build, until dispatch takes its own hold. It runs under `creates.track`; after the mint it re-reads the state and revokes if a kill won.
 - **Who promotes**: any replica after a slot-freeing commit (a terminal CAS in `casRunState`, a run kept after its end, a cap raised), and the leader's `queue` sweep every 10 s. Correctness rests on the locks and CAS.
@@ -131,9 +133,9 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
 |---|---|
 | Order | FIFO per pool by `queued_at`, then `run_id` ([Q2a](#q2a-order-and-a-per-person-limit)) |
 | Head that cannot be placed | Skipped, keeps its place: a run waiting for its owner's laptop never blocks another person's |
-| Flood | 100 waiting runs per person per pool, and the person cap under [Q2b](#q2b-do-waiting-runs-count-against-a-persons-run-limit)-A |
+| Flood | 100 waiting runs per person per pool, counted in `run_queue`, and the person cap under [Q2b](#q2b-do-waiting-runs-count-against-a-persons-run-limit)-A |
 | Priority, revive | None ([Q3](#q3-priority)), super admins included; revive per [Q10](#q10-reviving-a-kept-run-in-a-full-pool) |
-| Position | Waiting runs ahead in the pool; a count, never whose |
+| Position | `run_queue` rows ahead in the pool; a count, never whose |
 
 ## 9. Max wait, ending a queued run, and the reasons
 
@@ -148,7 +150,8 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
 | `runner_pool_queue_full` | Refusal, create | `422` | Error body; no row, no audit row | New `RUNNER_POOL_REFUSAL.QUEUE_FULL`, golden-pinned |
 | `runner_pool_full` | Refusal, revive | `422` | Error body; revive refusal audit row | New `RUNNER_POOL_REFUSAL.FULL`, golden-pinned |
 | `queue_timeout` | End, `FAILED` | None (no request open); `GET` is `200` | `status_detail`, `failure_hint`, `run.queue.expire` | New `RUN_END_REASON_SENTENCE` entry |
-| `queue_profile_changed`, `queue_policy_changed` | End, `FAILED` | None | As above, `run.queue.start` failure | New `RUN_END_REASON_SENTENCE` entries |
+| `queue_profile_changed`, `queue_policy_changed`, `queue_portal_revoked` | End, `FAILED` | None | As above, `run.queue.start` failure | New `RUN_END_REASON_SENTENCE` entries |
+| `identity_deactivated` | End, `FAILED` (existing token) | None at the start; `403` where it is a refusal today | As above | Its existing sentence, also added to `RUN_END_REASON_SENTENCE` |
 | `runner_pool_removed` | End, `KILLED` | None | `status_detail`, `run.kill` (system) | New `RUN_END_REASON_SENTENCE` entry |
 | `run_queued` | Refusal, per-run door | `409` | Error body | Route reason map |
 
@@ -159,6 +162,7 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
 | `runner_pool_full` | "{pool} is running its limit of {n}, and others are waiting. Try again when one finishes." |
 | `queue_timeout` | "This run waited too long for a free slot and was not started." |
 | `queue_profile_changed` | "Your governance profile changed while this run waited. Start it again." |
+| `queue_portal_revoked` | "The portal that launched this run was removed while it waited." |
 | `queue_policy_changed` | "The policy this run used changed while it waited. Start it again to review it." |
 | `runner_pool_removed` | "The pool this run was waiting for was removed." |
 
@@ -173,7 +177,7 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
 | Run type, barrier, use policy, CPU, memory, lifetime tightened | Judged at the start; O6-A2 does not apply (no end yet) | CPU, memory: none. Lifetime: O6-A2 |
 | Self-hosted runner offline | Waits with `runner_pool_no_runner_free`; others pass it | #1319 and PLAN's pending kill |
 
-- `run_queue.pool_id` is `ON DELETE RESTRICT`: a delete that skips the cancellation fails instead of orphaning waiting runs.
+- `run_queue.pool_id` is `ON DELETE RESTRICT`. Pool removal cancels each waiting run, which deletes its row, then deletes the pool in the same transaction; a delete that skips the cancellation fails instead of orphaning waiting runs.
 
 ## 11. Restart and leader failover
 
@@ -184,7 +188,7 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
 | Leader lost mid-sweep | Every write is a CAS under the pool lock; the next leader re-scans |
 
 - **The stale-lease pass takes promoted runs only**: `PENDING`, no sandbox, `admitted_at IS NOT NULL`, heartbeat over 90 s old. Only promotion writes `admitted_at`, so a plain run in its build (heartbeat = insert time) is never touched.
-- `finalizeUndispatchedRuns` and the max-age reaper age runs from `COALESCE(admitted_at, created_at)`, so a long-waited run is not failed the moment it starts.
+- `finalizeUndispatchedRuns` iterates `SlotHoldingRunStates`, so it never sees a `QUEUED` run (no sandbox, heartbeat at insert, waiting past 60 min by design). It and the max-age reaper age runs from `COALESCE(admitted_at, created_at)`, so a long-waited run is not failed the moment it starts.
 - Lock order is pool row, then the deployment advisory lock, at enqueue, promotion and revive. `CreateRunUnderCap` takes only the advisory lock, so no cycle exists.
 
 ## 12. Background and Interactive
@@ -215,7 +219,7 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
 
 | Metric | Type | Labels |
 |---|---|---|
-| `wardyn_runner_pool_queue_depth`, `…_slots_used` | Gauges, 15 s snapshot, `max()` across replicas | `pool_id` |
+| `wardyn_runner_pool_queue_depth` (`run_queue` rows), `…_slots_used` | Gauges, 15 s snapshot, `max()` across replicas | `pool_id` |
 | `wardyn_runner_pool_queue_wait_seconds` | Histogram | `outcome`: started, timeout, cancelled, refused |
 
 ## 15. Migration
@@ -226,10 +230,12 @@ One migration; its number comes from the lead.
 |---|---|---|
 | `agent_runs_state_check` | Adds `'QUEUED'` | Unchanged |
 | `agent_runs.admitted_at` | `TIMESTAMPTZ NULL`, written by promotion only | NULL: never queued |
+| `agent_runs.spiffe_id` | Unchanged, `TEXT NOT NULL`: `''` while `QUEUED`, written at start step 8 | Unchanged |
 | `run_queue` | `run_id` PK FK `ON DELETE CASCADE`; `pool_id` FK `ON DELETE RESTRICT`; `owner`, `queued_at`, `deadline_at`, `policy_ref`, `authority` JSONB, `launch` JSONB | New |
 | Indexes | `(pool_id, queued_at, run_id)`, `(deadline_at)`, `(pool_id, owner)` | — |
 | `agent_runs_watcher_sweep_idx`, audit-retention live-run function | State lists gain `QUEUED`, matching `nonTerminalRunStates` | Rebuilt |
 
+- `spiffe_id`: `''` rather than `DROP NOT NULL`, so the column, `scanRun` and the wire type (`string`, no `omitempty`) stay as they are. Its readers: the store's insert and scan; `wardyn run`'s create output (`spiffe id:` line), which prints "assigned when the run starts" for `''`; the run-detail identity widget (`identity.tsx`), which shows the same; TS `AgentRun.spiffe_id`. The broker and identity read the SPIFFE ID from the token's claims, never the row.
 - `launch`: the decoded request and the fold's outputs (spec, workspace ids, drive reference, ephemeral dirs, class, provider). Ids, names and references, no secret values; it holds the operator-only drive host root, so members are never served it.
 - `policy_ref`: a stored policy's id and the SHA-256 of its `spec` (the table has no version); a preset's name and version. An inline or template policy is the request's own, so nothing can change under it.
 - `authority`: the enqueue session's sub, email, user type, groups (with the truncated flag), role, authority epoch, and a portal's `{delegate_id, grant_id}`. Personal data: gone with the row; the leaver purge deletes it.
@@ -278,12 +284,14 @@ One migration; its number comes from the lead.
 | FIFO and skip (PG) | Oldest placeable first; an unplaceable head keeps its place |
 | Fit split | Enqueue with `Need > Left` and full host capacity: `QUEUED`. `Need > Hard`: `422` |
 | Re-checks | Each §7 row refused in turn: `FAILED`, its reason; a reassigned profile: `queue_profile_changed`; portal launches' start rows carry `via` |
+| Portal start | A portal launch that waited 11 min starts; one whose portal was revoked while waiting is `FAILED queue_portal_revoked` |
+| Queue rows (PG) | Cancel and timeout leave no `run_queue` row; deleting a pool with waiting runs succeeds and leaves them `KILLED runner_pool_removed` |
 | Reapers | A queued run past 60 min survives `finalizeUndispatchedRuns`; a promoted run with a stale lease is failed; a plain `PENDING` run 5 min into its build with a 2-min-old heartbeat survives |
 | Timeout, kill | Past the deadline: `FAILED queue_timeout`. Cancel: `202`, `KILLED`, no `identity.revoke` row |
 | Counts, CLI | Deployment and pool counts exclude `QUEUED`; person count per Q2b. `--wait` sends `--timeout` minus 60 s; exit 1 on `queue_timeout` |
 | Browser | Full pool: "Waiting", cancel; a waiting run starts when one ends |
 
-Mutations, each failing a named test: mint before the queue decision; renew in `foldQueue`; refuse `Need > Left` at enqueue; apply host capacity at enqueue; count `QUEUED` as a slot; drop the pool row lock; drop the `QUEUED` CAS predicate; drop `admitted_at IS NOT NULL` from the stale-lease pass; pin the captured profile id instead of re-resolving; skip one §7 re-check; age the reaper from `created_at`; answer `runner_pool_at_capacity` as an HTTP refusal.
+Mutations, each failing a named test: mint before the queue decision; renew in `foldQueue`; refuse `Need > Left` at enqueue; apply host capacity at enqueue; count `QUEUED` as a slot; drop the pool row lock; drop the `QUEUED` CAS predicate; drop `admitted_at IS NOT NULL` from the stale-lease pass; pin the captured profile id instead of re-resolving; read the delegated token's expiry at the start; keep the `run_queue` row on kill (fails the flood-limit test: 100 cancelled runs still block a new launch); skip one §7 re-check; age the reaper from `created_at`; answer `runner_pool_at_capacity` as an HTTP refusal.
 
 ## 20. Coordination notes
 
