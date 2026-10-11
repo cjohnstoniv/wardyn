@@ -199,3 +199,25 @@ func TestPG_SCIMLeaver_AnUnboundLeaversAmbiguousAddressReachesNobody(t *testing.
 		}
 	}
 }
+
+// A SCIM user whose address is a created person's principal, when another person signed in claiming that
+// address: the address names the created person, so the SCIM user never links to the claimant's sign-in
+// row and stays unbound, and suspending and purging it never deprovisions the claimant.
+func TestPG_SCIMLeaver_AnAddressThatIsAPrincipalNeverLinksAClaimantsSignIn(t *testing.T) {
+	e := newSCIMEnv(t)
+	if _, _, err := e.st.CreatePerson(context.Background(), types.Person{Principal: earlyName, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	row := e.seedSignIn(claimerSub, earlyName)
+	claimant := e.seedBystander(claimerSub, earlyName)
+	claimant.claimsAddress = true
+	id := e.postUserID(e.a, leaverOID, earlyName, earlyName)
+	if ident := e.identity(id); ident.ID == row.ID || ident.Principal != "" {
+		t.Fatalf("the SCIM user linked to %q's sign-in row", ident.Principal)
+	}
+
+	e.removeLeaver(t, id, http.StatusOK, http.StatusNoContent, claimant)
+	if got := e.identity(row.ID.String()); got.DeactivatedAt != nil || got.PurgedAt != nil {
+		t.Error("the claimant's identity was deactivated or purged")
+	}
+}
