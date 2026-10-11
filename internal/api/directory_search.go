@@ -198,7 +198,13 @@ type tokenBucket struct {
 	tokens float64
 }
 
-func (l *principalLimiter) allow(key string, now time.Time) bool {
+func (l *principalLimiter) allow(key string, now time.Time) bool { return l.take(key, now, 1) }
+
+// ready reports whether key holds a token without spending one, so a caller
+// can charge only the requests that go on to fail.
+func (l *principalLimiter) ready(key string, now time.Time) bool { return l.take(key, now, 0) }
+
+func (l *principalLimiter) take(key string, now time.Time, cost float64) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	rate, burst := cmp.Or(l.rate, dirRatePerSec), cmp.Or(l.burst, dirBurst)
@@ -219,7 +225,7 @@ func (l *principalLimiter) allow(key string, now time.Time) bool {
 	if b.tokens < 1 {
 		return false
 	}
-	b.tokens--
+	b.tokens -= cost
 	return true
 }
 
