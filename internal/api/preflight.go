@@ -118,19 +118,16 @@ func (s *Server) refusePreflightRate(w http.ResponseWriter, r *http.Request) boo
 	return true
 }
 
-// advertisedConfinement is the classes the runner advertises, for Review's
-// default-class math, best-effort: no runner, or one that cannot answer, is
-// nil — the default then stays at the policy minimum and Review never refuses
-// on it (handlePreflightRun).
-func (s *Server) advertisedConfinement(ctx context.Context) []types.ConfinementClass {
-	if s.cfg.Runner == nil {
-		return nil
-	}
-	caps, err := s.cfg.Runner.Capabilities(ctx)
+// advertisedConfinement is the classes the request's placement advertises, for
+// Review's default-class math, best-effort: no executor, or one that cannot
+// answer (a runner that is offline included), is nil — the default then stays
+// at the policy minimum and Review never refuses on it (handlePreflightRun).
+func (s *Server) advertisedConfinement(ctx context.Context, req createRunRequest) []types.ConfinementClass {
+	pc, err := s.requestCapabilities(ctx, req)
 	if err != nil {
 		return nil
 	}
-	return caps.ConfinementClasses
+	return pc.ConfinementClasses
 }
 
 // handlePreflightRun is a DRY-RUN of handleCreateRun's resolution + gating: it
