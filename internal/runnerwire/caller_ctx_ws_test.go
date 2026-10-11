@@ -5,6 +5,7 @@ package runnerwire
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -103,11 +104,17 @@ func TestCallerCancelWhileWaitingKeepsTheConnection(t *testing.T) {
 		linkStillWorks(t, org, run, sock)
 	})
 	t.Run("Call waiting for the REPLY", func(t *testing.T) {
-		org, run, sock := newWSPair(t, PeerConfig{OnCall: echoHandler})
+		started := make(chan struct{}, 1)
+		org, run, sock := newWSPair(t, PeerConfig{OnCall: func(ctx context.Context, id uint32, m string, a json.RawMessage) (any, error) {
+			if m == "block" {
+				started <- struct{}{}
+			}
+			return echoHandler(ctx, id, m, a)
+		}})
 		ctx, cancel := context.WithCancel(context.Background())
 		errc := make(chan error, 1)
 		go func() { errc <- org.Call(ctx, "block", nil, nil) }()
-		time.Sleep(50 * time.Millisecond)
+		<-started // the CALL was written and is being served
 		cancel()
 		if err := <-errc; !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled Call = %v", err)
@@ -119,7 +126,7 @@ func TestCallerCancelWhileWaitingKeepsTheConnection(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		errc := make(chan error, 1)
 		go func() { errc <- run.EventAck(ctx, Event{Kind: EventWaiting}) }()
-		time.Sleep(50 * time.Millisecond)
+		waitFor(t, 3*time.Second, "the EVENT to arrive", func() bool { return org.LastReceivedSeq() >= 1 })
 		cancel()
 		if err := <-errc; !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled EventAck = %v", err)
