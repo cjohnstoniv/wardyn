@@ -644,3 +644,43 @@ func TestPG_OwnOfflinePinAnswersRunnerOffline(t *testing.T) {
 		t.Errorf("a foreign pin answered %s, an unknown one %s", foreign, unknown)
 	}
 }
+
+// R2-B1: a pool that sets limits allows only its own barriers, so the default class of a run that names
+// none is the strongest one that is both enforced by a candidate and allowed by the pool, and the three
+// doors reach the same one (or the same refusal).
+func TestPG_DefaultClassHonoursThePoolsAllowedBarriersAtEveryDoor(t *testing.T) {
+	e := newPlacementEnv(t)
+	const background = `"title":"t","experience":"background","workload":{"kind":"agent_task","agent":"claude-code","task":"fix the build"},"tools":[{"id":"claude-code","kind":"harness"}],"no_repositories_or_drives":true`
+	for _, tc := range []struct {
+		name     string
+		barriers []types.ConfinementClass
+		want     types.ConfinementClass // empty: every door refuses the same way
+	}{
+		{"no Vault", []types.ConfinementClass{types.CC1, types.CC2}, types.CC2},
+		{"Wall only", []types.ConfinementClass{types.CC2}, types.CC2},
+		{"Vault only", []types.ConfinementClass{types.CC3}, types.CC3},
+		{"nothing that meets the floor", []types.ConfinementClass{types.CC1}, ""},
+	} {
+		pool := e.limitedPool(tc.name, tc.barriers...)
+		body := `{` + background + `,"runner_pool_id":"` + pool.ID.String() + `"}`
+		got := e.answers(e.person, body)
+		if tc.want == "" {
+			sameEverywhere(t, tc.name, got, http.StatusUnprocessableEntity, string(runnerpool.ReasonBarrierNotAllowed))
+			continue
+		}
+		for door, w := range got {
+			if w.Code >= 300 {
+				t.Errorf("%s: %s = %d %s", tc.name, door, w.Code, w.Body)
+			}
+		}
+		var promised struct {
+			Enforced types.ConfinementClass `json:"enforced_confinement_class"`
+		}
+		_ = json.Unmarshal(got[placementDoors[1]].Body.Bytes(), &promised)
+		var created types.AgentRun
+		_ = json.Unmarshal(got[placementDoors[0]].Body.Bytes(), &created)
+		if stored, err := e.pg.GetRun(context.Background(), created.ID); err != nil || promised.Enforced != tc.want || stored.ConfinementClass != tc.want {
+			t.Errorf("%s: preflight promised %q, create enforced %q (%v), want %q", tc.name, promised.Enforced, stored.ConfinementClass, err, tc.want)
+		}
+	}
+}

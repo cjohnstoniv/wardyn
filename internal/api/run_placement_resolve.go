@@ -286,6 +286,11 @@ func (p runPlacement) offeredClasses() []types.ConfinementClass {
 	out := []types.ConfinementClass{}
 	for _, t := range p.eligible {
 		for _, c := range t.facts.Classes {
+			// A pool that sets limits allows only its own barriers: the default is the strongest class
+			// that is both enforced by a candidate and allowed by the pool.
+			if p.row.Limits != nil && !p.row.Limits.AllowsBarrier(c) {
+				continue
+			}
 			if !slices.Contains(out, c) {
 				out = append(out, c)
 			}
