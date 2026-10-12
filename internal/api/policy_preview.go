@@ -57,7 +57,7 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	response.RunnerPool, response.RunnerPools = f.place.facts()
 	response.Components = componentFacts(componentFactInputs{
 		req: f.req, spec: f.spec, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
-		ceiling: f.ceiling, mpChoice: f.mpChoice,
+		ceiling: f.ceiling, mpChoice: f.mpChoice, pushSets: f.pushSets,
 	}, nil)
 	// After the facts' own warnings, which previewSafeWarnings has already filtered.
 	if f.adoNarrowed != "" {
