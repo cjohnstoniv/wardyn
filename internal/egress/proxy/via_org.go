@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 
@@ -172,7 +173,10 @@ func copyStreamed(w http.ResponseWriter, resp *http.Response) {
 // a proxy built from the run's stored config, reduced to those grants' rules,
 // whose control-plane calls (decisions, approvals, injection, mint) ride the
 // caller's in-process client.
-type ViaOrgEngine struct{ srv *Server }
+type ViaOrgEngine struct {
+	srv    *Server
+	closed atomic.Bool
+}
 
 // ViaOrgEngineOptions are an engine's dependencies. Client is the in-process
 // control-plane client; Dial and LookupIP replace the network for tests only.
@@ -196,6 +200,10 @@ func NewViaOrgEngine(ctx context.Context, cfg *Config, opts ViaOrgEngineOptions)
 	}
 	srv, err := newServer(ctx, cfg, opts.Client, io.Discard, h)
 	if err != nil {
+		// No engine owns the key: whatever the build registered before it
+		// failed (a first grant's credential) leaves with it. newServer has
+		// already closed its sink.
+		procRegistry.Evict(h.maskKey)
 		return nil, err
 	}
 	return &ViaOrgEngine{srv: srv}, nil
@@ -211,6 +219,9 @@ var errViaOrgCleartext = errors.New("via_org: the organisation dials TLS only")
 // and Azure gates, inspection, the injection pins, the sandbox credential
 // strip, the vetted TLS dial and the decision rows).
 func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, host string) {
+	if e.refuseClosed(w) {
+		return
+	}
 	p := e.srv.proxy
 	if slices.ContainsFunc(slices.Collect(maps.Keys(p.mitmPlaintext)), func(k string) bool { return strings.HasPrefix(k, strings.ToLower(host)+"\x00") }) {
 		p.httpError(w, "via_org destination refused", errViaOrgCleartext, http.StatusForbidden)
@@ -244,6 +255,9 @@ func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, hos
 // allowlist, branch namespace and push-content rules, its approval hold and its
 // mint, exactly as a sandbox's own proxy serves it.
 func (e *ViaOrgEngine) ServeBroker(w http.ResponseWriter, r *http.Request) {
+	if e.refuseClosed(w) {
+		return
+	}
 	if !strings.HasPrefix(r.URL.Path, routeGitBroker) {
 		http.Error(w, "via_org: not a brokered route", http.StatusForbidden)
 		return
@@ -252,4 +266,22 @@ func (e *ViaOrgEngine) ServeBroker(w http.ResponseWriter, r *http.Request) {
 }
 
 // Close flushes the engine's decision rows and releases it.
-func (e *ViaOrgEngine) Close(ctx context.Context) error { return e.srv.Shutdown(ctx) }
+// Its key is evicted once the sink has posted every queued row (Server.Shutdown). The caller
+// closes it only after every request it admitted has returned.
+func (e *ViaOrgEngine) Close(ctx context.Context) error {
+	e.closed.Store(true)
+	return e.srv.Shutdown(ctx)
+}
+
+// Closed reports whether Close has been called.
+func (e *ViaOrgEngine) Closed() bool { return e.closed.Load() }
+
+// refuseClosed answers a request that reached a closed engine: never served, since its decision
+// sink and masking corpus are gone.
+func (e *ViaOrgEngine) refuseClosed(w http.ResponseWriter) bool {
+	if !e.closed.Load() {
+		return false
+	}
+	http.Error(w, "wardyn: the organisation's egress for this run was replaced; retry", http.StatusServiceUnavailable)
+	return true
+}

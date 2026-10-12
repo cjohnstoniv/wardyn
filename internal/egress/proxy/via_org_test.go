@@ -75,8 +75,10 @@ func (u *orgUpstream) seen() (int, http.Header, string) {
 type fakeOrg struct {
 	mu                               sync.Mutex
 	injections, mints, raised, polls int
-	gated                            bool   // the GitHub grant needs an approval nobody gives
-	value                            string // the injected header value; viaOrgSecret when empty
+	gated                            bool          // the GitHub grant needs an approval nobody gives
+	value                            string        // the injected header value; viaOrgSecret when empty
+	failGrant                        uuid.UUID     // this grant's injection resolve fails
+	block                            chan struct{} // decision posts wait on it
 	decisions                        strings.Builder
 }
 
@@ -86,6 +88,8 @@ func (f *fakeOrg) RoundTrip(req *http.Request) (*http.Response, error) {
 	defer f.mu.Unlock()
 	p := req.URL.Path
 	switch {
+	case strings.HasPrefix(p, "/api/v1/internal/injection/") && f.failGrant != uuid.Nil && strings.HasSuffix(p, f.failGrant.String()):
+		rec.WriteHeader(http.StatusInternalServerError)
 	case strings.HasPrefix(p, "/api/v1/internal/injection/"):
 		f.injections++
 		v := f.value
@@ -101,6 +105,9 @@ func (f *fakeOrg) RoundTrip(req *http.Request) (*http.Response, error) {
 		f.mints++
 		_, _ = io.WriteString(rec, `{"kind":"github_token","token":"gh-inst-token","jti":"j","expires_at":"`+time.Now().Add(time.Hour).UTC().Format(time.RFC3339)+`"}`)
 	case p == "/api/v1/internal/decisions":
+		if f.block != nil {
+			<-f.block
+		}
 		b, _ := io.ReadAll(req.Body)
 		f.decisions.Write(b)
 		rec.WriteHeader(http.StatusAccepted)
@@ -533,8 +540,9 @@ func TestViaOrg_EnginesDoNotShareASecretCorpus(t *testing.T) {
 	if err := a.engine.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if holds(aKey, "RUN-ONE-ONLY-7d41c9") || !holds(uuid.Nil, "SIDECAR-SHARED-ENTRY-0b3d") {
-		t.Fatal("closing engine A kept its values or cleared the shared registry")
+	eventually(t, "engine A's key is evicted", func() bool { return !holds(aKey, "RUN-ONE-ONLY-7d41c9") })
+	if !holds(uuid.Nil, "SIDECAR-SHARED-ENTRY-0b3d") {
+		t.Fatal("closing engine A cleared the shared registry")
 	}
 	inspect := func(c *Config) {
 		c.Policy.LLMInspection = &types.LLMInspectionSpec{Mode: "block", DetectSecrets: true, InspectForwardEgress: true}
@@ -563,10 +571,111 @@ func TestViaOrg_EnginesDoNotShareASecretCorpus(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := newViaOrgFixtureWith(t, &fakeOrg{value: "Bearer RUN-TWO-ONLY-5e20aa"}, nil, inspect)
-	if holds(bKey, "RUN-TWO-ONLY") || c.engine.srv.maskKey == bKey || !holds(c.engine.srv.maskKey, "RUN-TWO-ONLY-5e20aa") {
+	eventually(t, "engine B's key is evicted", func() bool { return !holds(bKey, "RUN-TWO-ONLY") })
+	if c.engine.srv.maskKey == bKey || !holds(c.engine.srv.maskKey, "RUN-TWO-ONLY-5e20aa") {
 		t.Fatal("the rebuilt engine did not start from its own corpus")
 	}
 	if !holds(uuid.Nil, "SIDECAR-SHARED-ENTRY-0b3d") {
 		t.Fatal("an engine close cleared the shared registry")
+	}
+}
+
+func eventually(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting: %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// heldAnywhere reports whether any registry key holds v.
+func heldAnywhere(v string) bool {
+	for _, key := range procRegistry.RunIDs() {
+		for _, b := range procRegistry.Snapshot(key) {
+			if strings.Contains(string(b), v) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// A build that fails after a first grant registered its credential leaves no key behind, however
+// often it is retried, and never touches another engine's key.
+func TestViaOrg_FailedBuildLeavesNoKey(t *testing.T) {
+	live := newViaOrgFixtureWith(t, &fakeOrg{value: "Bearer LIVE-ENGINE-VALUE-91af"}, nil, nil)
+	liveKey := live.engine.srv.maskKey
+	second := uuid.New()
+	build := func() error {
+		up := newOrgUpstream(t)
+		cfg := &Config{RunID: uuid.New(), ControlPlaneURL: "https://wardynd.test", RunToken: "RUNTOK", DecisionBufferSize: defaultBufferSize,
+			Policy: types.RunPolicySpec{AllowedDomains: []string{viaOrgHost, "second.example.com"}},
+			Injection: []InjectionConfig{
+				{GrantID: uuid.New(), InjectionRule: egress.InjectionRule{Host: viaOrgHost, Header: "Authorization"}},
+				{GrantID: second, InjectionRule: egress.InjectionRule{Host: "second.example.com", Header: "Authorization"}},
+			},
+			MITMHosts: []string{viaOrgHost, "second.example.com"}, TrustedCAPEM: string(up.caPEM)}
+		_, err := NewViaOrgEngine(context.Background(), cfg, ViaOrgEngineOptions{
+			Client: &http.Client{Transport: &fakeOrg{value: "Bearer FIRST-RULE-VALUE-2c5e", failGrant: second}},
+			Dial:   redirectDial(upstreamAddr(up.srv)), LookupIP: publicResolver{}.LookupIP,
+		})
+		return err
+	}
+	keys := len(procRegistry.RunIDs())
+	for i := range 5 {
+		if err := build(); err == nil {
+			t.Fatalf("build %d succeeded with a failing second grant", i)
+		}
+		if heldAnywhere("FIRST-RULE-VALUE-2c5e") {
+			t.Fatalf("build %d left the first grant's credential in the registry", i)
+		}
+	}
+	if n := len(procRegistry.RunIDs()); n != keys {
+		t.Fatalf("five failed builds changed the registry's keys from %d to %d", keys, n)
+	}
+	if !slices.ContainsFunc(procRegistry.Snapshot(liveKey), func(b []byte) bool { return strings.Contains(string(b), "LIVE-ENGINE-VALUE-91af") }) {
+		t.Fatal("a failed build evicted another engine's key")
+	}
+}
+
+// A close that gives up waiting for the sink keeps the engine's masking corpus until the sink has
+// posted every queued row: no queued row is posted without the key that masks it.
+func TestViaOrg_KeyOutlivesQueuedDecisionRows(t *testing.T) {
+	org := &fakeOrg{value: "Bearer QUEUED-ROWS-VALUE-6b0d"}
+	f := newViaOrgFixtureWith(t, org, nil, nil)
+	key := f.engine.srv.maskKey
+	org.block = make(chan struct{})
+	if w := f.inject(http.MethodGet, "/v1/x", nil); w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := f.engine.Close(ctx); err == nil {
+		t.Fatal("the close did not give up on its blocked sink")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if !slices.ContainsFunc(procRegistry.Snapshot(key), func(b []byte) bool { return strings.Contains(string(b), "QUEUED-ROWS-VALUE-6b0d") }) {
+		t.Fatal("the key was evicted while decision rows were still queued")
+	}
+	close(org.block)
+	eventually(t, "the key is evicted once the queue has posted", func() bool { return len(procRegistry.Snapshot(key)) == 0 })
+}
+
+// A closed engine serves nothing: its sink and masking corpus are gone.
+func TestViaOrg_ClosedEngineServesNothing(t *testing.T) {
+	f := newViaOrgFixture(t, nil, nil)
+	if err := f.engine.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.inject(http.MethodGet, "/v1/x", nil); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("a closed engine answered %d", w.Code)
+	}
+	w := httptest.NewRecorder()
+	f.engine.ServeBroker(w, mustLocalReq(t, http.MethodGet, "/wardyn/gh/octocat/hello-world.git/info/refs?service=git-upload-pack", nil))
+	if hits, _, _ := f.up.seen(); w.Code != http.StatusServiceUnavailable || hits != 0 || f.org.mints != 0 {
+		t.Fatalf("a closed engine's broker answered %d, dialed %d, minted %d", w.Code, hits, f.org.mints)
 	}
 }

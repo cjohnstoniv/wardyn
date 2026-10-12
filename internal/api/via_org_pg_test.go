@@ -584,3 +584,88 @@ func TestViaOrg_OrgInspectsWithTheDeclaredCorpus(t *testing.T) {
 		t.Fatalf("an ordinary body = %d %s", w.Code, w.Body)
 	}
 }
+
+// A request that took the run's engine just before a non-final release (idle, or the runner away)
+// is never served through the retired engine: it takes the live replacement, and the org-side
+// decision row of its traffic is written.
+func TestViaOrg_RetiredEngineIsNeverServed(t *testing.T) {
+	f := newViaOrgAPIFixture(t)
+	R := f.rn.ID
+	acquired, proceed := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	viaOrgAfterEngine = func() { once.Do(func() { close(acquired); <-proceed }) }
+	t.Cleanup(func() { viaOrgAfterEngine = nil })
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- f.forward(t, R, f.run.ID, f.grant, "/v1/x", viaOrgAPIHost) }()
+	<-acquired
+	f.srv.viaOrg.mu.Lock()
+	run := f.srv.viaOrg.runs[f.run.ID]
+	f.srv.viaOrg.mu.Unlock()
+	run.mu.Lock()
+	old := run.engine
+	run.mu.Unlock()
+	f.srv.releaseViaOrgRun(run, false, false)
+	waitFor(t, "the retired engine closes", func() bool { return old.engine.Closed() })
+	close(proceed)
+	w := <-done
+	if w.Code != http.StatusOK || w.Body.String() != "upstream-ok" {
+		t.Fatalf("a request that took a retired engine = %d %s, want the live replacement's answer", w.Code, w.Body)
+	}
+	run.mu.Lock()
+	cur := run.engine
+	run.mu.Unlock()
+	if cur == nil || cur == old {
+		t.Fatal("the request was not served by a live replacement engine")
+	}
+	if _, auth, _ := f.up.seen(); len(auth) != 1 || auth[0] != "Bearer "+viaOrgAPIValue {
+		t.Fatalf("upstream saw %v, want one request with the org credential", auth)
+	}
+	f.srv.endViaOrgRunner(R)
+	waitFor(t, "the request's org-side decision row", func() bool {
+		ev, ok := relayAudit(f.srv, f.run.ID, "egress.allow")
+		return ok && auditDataOf(ev)["relay"] == "runner:"+R.String()
+	})
+}
+
+// blockingWriter holds the first response write until released: a producer still in flight
+// whatever its context says.
+type blockingWriter struct {
+	*httptest.ResponseRecorder
+	writing chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingWriter) Write(p []byte) (int, error) {
+	b.once.Do(func() { close(b.writing); <-b.release })
+	return b.ResponseRecorder.Write(p)
+}
+
+// A retired engine closes only after every request admitted to it has returned: its decision sink
+// and masking corpus stay with its last producer.
+func TestViaOrg_RetiredEngineOutlivesItsProducers(t *testing.T) {
+	f := newViaOrgAPIFixture(t)
+	R := f.rn.ID
+	req := httptest.NewRequest(http.MethodPost, proxy.ViaOrgPathPrefix+f.grant.String()+"/v1/x", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer "+runToken(t, f.srv, f.run.ID))
+	req.Header.Set(proxy.ViaOrgAuthorityHeader, viaOrgAPIHost)
+	req = req.WithContext(relayConnContext(req.Context(), relayedConn{runner: R}))
+	bw := &blockingWriter{ResponseRecorder: httptest.NewRecorder(), writing: make(chan struct{}), release: make(chan struct{})}
+	done := make(chan struct{})
+	go func() { f.srv.relayRoutes(f.srv.InternalHandler()).ServeHTTP(bw, req); close(done) }()
+	<-bw.writing
+	f.srv.viaOrg.mu.Lock()
+	run := f.srv.viaOrg.runs[f.run.ID]
+	f.srv.viaOrg.mu.Unlock()
+	run.mu.Lock()
+	old := run.engine
+	run.mu.Unlock()
+	f.srv.releaseViaOrgRun(run, false, false)
+	time.Sleep(200 * time.Millisecond)
+	if old.engine.Closed() {
+		t.Fatal("the retired engine closed under a request still in flight")
+	}
+	close(bw.release)
+	<-done
+	waitFor(t, "the retired engine closes after its last producer", func() bool { return old.engine.Closed() })
+}

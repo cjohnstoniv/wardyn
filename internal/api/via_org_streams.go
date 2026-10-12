@@ -58,8 +58,8 @@ type viaOrgRun struct {
 	token      atomic.Pointer[string]
 	done       chan struct{}
 
-	mu     sync.Mutex // the engine build
-	engine *proxy.ViaOrgEngine
+	mu     sync.Mutex // the engine build and its generation; taken before smu, never after
+	engine *viaOrgGen
 	routes []proxy.ViaOrgRoute
 
 	smu       sync.Mutex
@@ -73,11 +73,20 @@ type viaOrgRun struct {
 	idle, period time.Duration
 }
 
+// viaOrgGen is one engine generation of a run. A stream is admitted only to the run's current
+// generation (open), and a retired generation's engine closes only once every stream admitted to
+// it has returned, so its decision sink and masking corpus outlive their last producer.
+type viaOrgGen struct {
+	engine *proxy.ViaOrgEngine
+	active sync.WaitGroup
+}
+
 // viaOrgStream is one forwarded request in flight.
 type viaOrgStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	run    *viaOrgRun
+	gen    *viaOrgGen
 	last   atomic.Int64 // unix nanoseconds of the last byte either way
 }
 
@@ -127,33 +136,41 @@ func (run *viaOrgRun) isClosed() bool {
 	return run.closed
 }
 
-// open admits one stream under the run's bounds, or names the bound it would cross.
-func (run *viaOrgRun) open(parent context.Context) (*viaOrgStream, string) {
+// open admits one stream to gen under the run's bounds, or names the bound it would cross. retired
+// is true when gen is no longer the run's generation: the caller takes the current one and asks again.
+func (run *viaOrgRun) open(parent context.Context, gen *viaOrgGen) (st *viaOrgStream, refused string, retired bool) {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	if run.engine != gen {
+		return nil, "", true
+	}
 	run.smu.Lock()
 	defer run.smu.Unlock()
 	switch {
 	case run.closed:
-		return nil, "the run's via_org egress is closed"
+		return nil, "the run's via_org egress is closed", false
 	case len(run.streams) >= viaOrgMaxStreams:
-		return nil, "the run already has 16 via_org streams open"
+		return nil, "the run already has 16 via_org streams open", false
 	case run.bytes.Load() >= run.byteCap:
-		return nil, "the run has moved its 8 GiB of via_org traffic"
+		return nil, "the run has moved its 8 GiB of via_org traffic", false
 	}
 	ctx, cancel := context.WithCancel(parent)
-	st := &viaOrgStream{ctx: ctx, cancel: cancel, run: run}
+	st = &viaOrgStream{ctx: ctx, cancel: cancel, run: run, gen: gen}
 	st.last.Store(time.Now().UnixNano())
 	run.streams[st] = struct{}{}
-	return st, ""
+	gen.active.Add(1)
+	return st, "", false
 }
 
 func (run *viaOrgRun) release(st *viaOrgStream) {
 	st.cancel()
 	run.smu.Lock()
-	defer run.smu.Unlock()
 	delete(run.streams, st)
 	if len(run.streams) == 0 {
 		run.idleSince = time.Now()
 	}
+	run.smu.Unlock()
+	st.gen.active.Done()
 }
 
 // moved counts n bytes of a stream; past the run's total the stream is ended.
@@ -242,6 +259,14 @@ func (s *Server) viaOrgRunState(run *viaOrgRun) viaOrgRunStatus {
 // releaseViaOrgRun cancels every open stream of the run and releases its engine. final also drops
 // the run's state; retire, only for a run that has ended, drops its byte total too.
 func (s *Server) releaseViaOrgRun(run *viaOrgRun, final, retire bool) {
+	// Retire the generation first: from here no stream can be admitted to it.
+	run.mu.Lock()
+	gen := run.engine
+	run.engine = nil
+	run.mu.Unlock()
+	if gen != nil {
+		go closeViaOrgGen(run.id, gen)
+	}
 	run.smu.Lock()
 	if run.closed {
 		run.smu.Unlock()
@@ -263,16 +288,17 @@ func (s *Server) releaseViaOrgRun(run *viaOrgRun, final, retire bool) {
 		st.cancel()
 	}
 	run.smu.Unlock()
-	run.mu.Lock()
-	engine := run.engine
-	run.engine = nil
-	run.mu.Unlock()
-	if engine != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := engine.Close(ctx); err != nil {
-			slog.Warn("api: close a via_org engine", slog.String("run_id", run.id.String()), slog.Any("err", err))
-		}
+}
+
+// closeViaOrgGen closes a retired generation's engine once every stream admitted to it has returned
+// (they were cancelled): its sink and masking corpus stay alive for their last producer, and the
+// engine keeps them until its sink has posted every queued row (proxy.Server.Shutdown).
+func closeViaOrgGen(runID uuid.UUID, gen *viaOrgGen) {
+	gen.active.Wait()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := gen.engine.Close(ctx); err != nil {
+		slog.Warn("api: close a via_org engine", slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
 }
 

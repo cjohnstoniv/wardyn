@@ -232,6 +232,9 @@ func (s *decisionSink) droppedCount() uint64 { return s.dropped.Load() }
 
 // close drains and stops the sink. It blocks until the worker exits or ctx
 // is done.
+// wait returns once the sink's worker has posted or dropped every queued row; only after close.
+func (s *decisionSink) wait() { s.wg.Wait() }
+
 func (s *decisionSink) close(ctx context.Context) error {
 	s.mu.Lock()
 	if s.closed {
