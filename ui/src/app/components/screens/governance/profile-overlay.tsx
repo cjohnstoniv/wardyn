@@ -161,6 +161,7 @@ export const LIMIT_FIELDS: Field[] = [
   // as the ceiling rows do. The autonomy rubric has its own section.
   ceilingField("deny_ui_apps", "true"),
   ceilingField("deny_placements", "list"),
+  ceilingField("local_self_defined_components", "true"),
   ceilingField("max_cpu_millis", "number"),
   ceilingField("max_memory_mib", "number"),
   ceilingField("max_end_ahead_sec", "number"),

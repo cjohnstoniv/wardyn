@@ -16,9 +16,6 @@ import { LIMIT_FIELDS } from "./profile-overlay";
 const EXEMPT: Record<string, string> = {
   // The rubric has its own section (profile-rubric.tsx), and seedOverlayLimits moves it explicitly.
   autonomy_rubric: "own Autonomy rubric section; seeded separately",
-  // Pre-existing gap, out of this lane's scope: no console control exists for it yet (default deny,
-  // so composing leaves it at the base's value). Delete this entry when a row lands.
-  local_self_defined_components: "no console control yet",
 };
 
 function repoRoot(): string {
