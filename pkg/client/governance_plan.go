@@ -60,10 +60,13 @@ func planGovernance(current, doc GovernanceDocument, prune bool) (GovernancePlan
 		q := p
 		if q.BaseProfileID != nil {
 			if baseName, ok := fileIDToName[*q.BaseProfileID]; ok {
+				// A base not on the server by name is created with a fresh id, which
+				// apply points this profile at; no id the server holds can equal it.
+				id := uuid.Nil
 				if base, ok := profileByName[baseName]; ok {
-					id := base.ID
-					q.BaseProfileID = &id
+					id = base.ID
 				}
+				q.BaseProfileID = &id
 			}
 		}
 		fields := governanceProfileChangedFields(existing, q)
