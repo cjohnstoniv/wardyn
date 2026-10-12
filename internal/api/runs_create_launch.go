@@ -141,6 +141,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			PolicyOverridden: l.overridden,
 			PushRuleSets:     l.pushSets,
 			HarnessToolRules: l.harnessRules,
+			Harnesses:        l.harnesses,
 		})
 	}
 }

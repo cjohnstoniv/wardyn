@@ -70,7 +70,7 @@ func TestHarnessToolRules_DispatchCarriesDigestsNeverThePlaintext(t *testing.T) 
 	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy:           types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}}},
-		HarnessToolRules: sets,
+		HarnessToolRules: sets, ToolApprovals: "hold",
 	})
 	spec := fr.lastSpec
 	cred := toolgateCredentialOf(t, spec)
@@ -109,7 +109,7 @@ func TestHarnessToolRules_DispatchCarriesDigestsNeverThePlaintext(t *testing.T) 
 	srv2, _, _, run2 := dispatchTeardownFixture(t, fr2, types.RunPending)
 	run2.Task, run2.Agent = "", "gemini-cli"
 	srv2.dispatchRun(context.Background(), run2, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
-		RunToken: "run-token", Image: "img", HarnessToolRules: sets})
+		RunToken: "run-token", Image: "img", HarnessToolRules: sets, ToolApprovals: "hold"})
 	if len(fr2.lastSpec.ManagedFiles) != 0 || len(fr2.lastSpec.ProxyConfig.HarnessCredentials) != 2 {
 		t.Errorf("a harness the run does not start was handed a credential: %+v", fr2.lastSpec.ManagedFiles)
 	}
