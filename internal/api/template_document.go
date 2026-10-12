@@ -393,7 +393,7 @@ func documentAvailabilityRefusal(req createRunRequest) []string {
 		paths = append(paths, "allowed_image")
 	}
 	for i, ref := range req.Components {
-		if ref.Builtin != "" {
+		if ref.Builtin == types.ComponentBuiltinAzureDevOps {
 			paths = append(paths, fmt.Sprintf("components[%d]", i))
 		}
 	}
