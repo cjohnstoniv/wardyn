@@ -86,3 +86,23 @@ func TestClampUsesMemberCap(t *testing.T) {
 		t.Errorf("CapResources 4000 under max 1000 = %+v changed=%v, want 2000 (the default, never below it)", out, changed)
 	}
 }
+
+// ClampMember reads the profile's AUTHORED size, not the deployment size the resolved ceiling
+// inherited, and leaves the CPU and memory warning to the run's placement step.
+func TestClampMemberReadsTheAuthoredSize(t *testing.T) {
+	t.Cleanup(func() { runner.SetDefaultLimits(0, 0) })
+	runner.SetDefaultLimits(2000, 4096)
+	inherited := types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 2000, MemoryMiB: 4096}}
+	ask := types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 8000}}
+	got, warns := ClampMember(ask, inherited, types.GovernanceLimits{MaxCPUMillis: 8000}, types.ResourceLimits{})
+	if got.Resources.CPUMillis != 8000 || hasWarn(warns, WarnResourcesCapped) {
+		t.Errorf("max 8000, no authored size: %+v warns=%v, want 8000 kept", got.Resources, warns)
+	}
+	got, warns = ClampMember(ask, inherited, types.GovernanceLimits{MaxCPUMillis: 4000}, types.ResourceLimits{})
+	if got.Resources.CPUMillis != 4000 || hasWarn(warns, WarnResourcesCapped) {
+		t.Errorf("max 4000: %+v warns=%v, want 4000 and no warning here", got.Resources, warns)
+	}
+	if got, warns = Clamp(ask, inherited, types.GovernanceLimits{MaxCPUMillis: 8000}); got.Resources.CPUMillis != 2000 || !hasWarn(warns, WarnResourcesCapped) {
+		t.Errorf("Clamp reads the ceiling's own size: %+v warns=%v, want 2000 and the warning", got.Resources, warns)
+	}
+}
