@@ -52,7 +52,7 @@ func TestPrintSyncReport_QuotesNamesWithNonPrintableCharacters(t *testing.T) {
 	rep := newSyncReport()
 	rep.Conflicts = []string{"c\x1b[2J\rfake"}
 	rep.refuse("r\nrefused (x): fake", "symlink")
-	rep.refuse("bidi‮exe", "symlink")
+	rep.refuse("bidi\u202eexe", "symlink")
 	var b bytes.Buffer
 	printSyncReport(&b, rep)
 	want := "pushed 0 file(s) (0 bytes), pulled 0 file(s) (0 bytes)\n" +
