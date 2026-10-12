@@ -53,7 +53,7 @@ func TestRunSizingParity(t *testing.T) {
 			t.Fatal(err)
 		}
 		runner.SetProxyLimits(tc.proxyCPU, 256)
-		z := runSizing(tc.kind, tc.res)
+		z := runSizing(tc.kind, tc.res, false)
 		if z.RunnerKind != tc.kind || z.AgentCPURequestMillis != tc.cpuReq || z.AgentMemoryRequestMiB != tc.memReq ||
 			z.AgentCPULimitMillis != tc.cpuLim || z.AgentMemoryLimitMiB != tc.memLim ||
 			z.ProxyCPUMillis == nil || *z.ProxyCPUMillis != tc.pxyCPU || z.ProxyMemoryMiB != 256 {
@@ -66,10 +66,27 @@ func TestRunSizingParity(t *testing.T) {
 func TestRecordRunSizingWriteFailureIsBestEffort(t *testing.T) {
 	st := &sizingStore{err: errors.New("db down")}
 	s := &Server{cfg: Config{Store: st, RunnerTarget: "docker"}}
-	s.recordRunSizing(context.Background(), uuid.New(), runner.Resources{})
+	s.recordRunSizing(context.Background(), uuid.New(), runner.Resources{}, false)
 	if st.n != 1 {
 		t.Errorf("SetRunSizing calls = %d, want 1", st.n)
 	}
 	s = &Server{cfg: Config{Store: struct{ store.Store }{}}}
-	s.recordRunSizing(context.Background(), uuid.New(), runner.Resources{})
+	s.recordRunSizing(context.Background(), uuid.New(), runner.Resources{}, false)
+}
+
+// A run with an Azure route gate records the 400 MiB proxy envelope the drivers apply, not the
+// 256 MiB default; any other run keeps the default, and a configured value above 400 wins.
+func TestRunSizingAzureProxyEnvelope(t *testing.T) {
+	t.Cleanup(func() { runner.SetProxyLimits(0, 0) })
+	runner.SetProxyLimits(500, 256)
+	if z := runSizing("docker", runner.Resources{}, true); z.ProxyMemoryMiB != runner.AzureProxyMemoryMiB {
+		t.Errorf("azure run proxy memory = %d, want %d", z.ProxyMemoryMiB, runner.AzureProxyMemoryMiB)
+	}
+	if z := runSizing("docker", runner.Resources{}, false); z.ProxyMemoryMiB != 256 {
+		t.Errorf("non-azure run proxy memory = %d, want 256", z.ProxyMemoryMiB)
+	}
+	runner.SetProxyLimits(500, 600)
+	if z := runSizing("k8s", runner.Resources{}, true); z.ProxyMemoryMiB != 600 {
+		t.Errorf("azure run with a configured 600 = %d, want 600", z.ProxyMemoryMiB)
+	}
 }
