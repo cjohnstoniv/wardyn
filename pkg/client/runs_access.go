@@ -95,7 +95,8 @@ type AccessUnlisted struct {
 
 // ToolPolicyFact is one included harness's tool policy: the lane its calls take
 // (gated, ungated, attended or unsupported), who enforces it (wardyn_gate,
-// harness_settings or none), its default, the policy's locked rules, the effects
+// harness_settings, mcp_broker — the broker, for a harness whose MCP tools are
+// its only rules — or none), its default, the policy's locked rules, the effects
 // a person may choose for a tool the policy does not name, whether rules may
 // name any tool or MCP tools only, and the MCP servers turned on for it.
 type ToolPolicyFact struct {

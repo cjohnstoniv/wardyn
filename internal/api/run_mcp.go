@@ -19,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // A run's remote MCP servers (an MCP component). The gate decides which of the
@@ -282,4 +283,39 @@ func narrowMCPBindings(cfg *proxy.Config, comps []types.RunComponent) {
 		b := &cfg.MCPBindings[i]
 		b.Servers = slices.DeleteFunc(b.Servers, func(k string) bool { return !slices.Contains(on[k], b.Harness) })
 	}
+}
+
+// What step 5 shows of the run's MCP servers.
+const (
+	accessKindMCP         = "mcp"        // an MCP component's access row
+	viaMCPBroker          = "mcp_broker" // its server's host: the broker route, never raw egress
+	toolEnforcerMCPBroker = "mcp_broker" // a harness whose rules only the broker enforces, on its MCP tools
+)
+
+// attachedMCP is the MCP binding of the attached component a fact describes,
+// and its server's host; nil when it carries no server.
+func attachedMCP(comps runComponents, factID string) (*client.AccessMCP, string) {
+	keys := mcpServerKeys(comps.attached)
+	for i, a := range comps.attached {
+		def := a.snapshot.Definition
+		if def.MCP == nil || componentProvSource(a, i).ID != factID {
+			continue
+		}
+		server, _ := types.MCPURLDestination(def.MCP.URL)
+		return &client.AccessMCP{ServerKey: keys[i], Transport: def.MCP.Transport,
+			Harnesses: slices.Concat([]string{}, a.snapshot.MCPHarnesses)}, server.Host
+	}
+	return nil, ""
+}
+
+// mcpServersFor is the server keys turned on for harness, in request order.
+func mcpServersFor(comps runComponents, harness string) []string {
+	out := []string{}
+	keys := mcpServerKeys(comps.attached)
+	for i, a := range comps.attached {
+		if keys[i] != "" && slices.Contains(a.snapshot.MCPHarnesses, harness) {
+			out = append(out, keys[i])
+		}
+	}
+	return out
 }
