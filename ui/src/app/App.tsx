@@ -105,6 +105,13 @@ const ComponentsScreen = React.lazy(() =>
     default: m.ComponentsScreen,
   })),
 );
+// Saved starting points (0.9): /templates in the User view, /admin/templates in the Admin view. The copy
+// modules it reads are lazy-only, so the screen is never imported by the entry chunk.
+const TemplatesScreen = React.lazy(() =>
+  import("./components/screens/templates/templates-screen").then((m) => ({
+    default: m.TemplatesScreen,
+  })),
+);
 const PermissionsScreen = React.lazy(() =>
   import("./components/screens/permissions").then((m) => ({
     default: m.PermissionsScreen,
@@ -718,6 +725,7 @@ export default function App() {
             <Route path="/admin/workspaces" element={suspend(<WorkspacesScreen />)} />
             <Route path="/admin/workspaces/:id" element={suspend(<WorkspaceDetailScreen />)} />
             <Route path="/admin/policies" element={suspend(<PoliciesScreen />)} />
+            <Route path="/admin/templates" element={suspend(<TemplatesScreen />)} />
             <Route path="/admin/governance" element={suspend(<GovernanceScreen />)} />
             <Route path="/admin/permissions" element={suspend(<PermissionsScreen />)} />
             <Route path="/admin/user-types" element={suspend(<UserTypesScreen />)} />
@@ -749,6 +757,7 @@ export default function App() {
                 </React.Suspense>
               }
             />
+            <Route path="/templates" element={suspend(<TemplatesScreen />)} />
             <Route
               path="/approvals"
               element={
