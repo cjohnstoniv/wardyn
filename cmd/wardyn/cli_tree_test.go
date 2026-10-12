@@ -65,6 +65,9 @@ func TestNewSpellingsAreReachable(t *testing.T) {
 		{[]string{"approval", "deny", "not-a-uuid"}, "invalid approval id"},
 		{[]string{"run", "logs", "not-a-uuid"}, "invalid run id"},
 		{[]string{"session", "revoke"}, "pass --sub"},
+		{[]string{"invitation", "revoke", "not-a-uuid"}, "invalid invitation id"},
+		{[]string{"token", "move", "not-a-uuid", "ci"}, "invalid token id"},
+		{[]string{"service-identity", "update", "ci"}, "name what to change"},
 	} {
 		err := execCmd(t, tc.args...)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {

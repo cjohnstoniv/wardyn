@@ -10,12 +10,11 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// moveTokenRequest is the body of POST /tokens/{id}/move.
-type moveTokenRequest struct {
-	ServiceIdentity string `json:"service_identity"`
-}
+// moveTokenRequest IS the SDK's body (dto_alias_test.go pins it).
+type moveTokenRequest = client.MoveTokenRequest
 
 // handleMoveAPIToken is POST /api/v1/tokens/{id}/move: an admin links a live admin-minted token to the
 // service identity that replaces it (#1508). securityOps (routes.go), the tier of the revoke it precedes.

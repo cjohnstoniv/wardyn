@@ -23,6 +23,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 const (
@@ -89,13 +90,8 @@ func (s *Server) withServiceState(r *http.Request, sis ...*types.ServiceIdentity
 	return nil
 }
 
-// serviceIdentityRequest is the POST /service-identities body.
-type serviceIdentityRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Sponsor     string `json:"sponsor"`
-	UserType    string `json:"user_type"`
-}
+// serviceIdentityRequest IS the SDK's body (dto_alias_test.go pins it).
+type serviceIdentityRequest = client.CreateServiceIdentityRequest
 
 func (s *Server) handleCreateServiceIdentity(w http.ResponseWriter, r *http.Request) {
 	ss, ok := s.serviceStoreOr409(w)
@@ -250,12 +246,8 @@ func (s *Server) handleGetServiceIdentity(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, si)
 }
 
-// updateServiceIdentityRequest is the PATCH body: the fields present change.
-type updateServiceIdentityRequest struct {
-	Description *string `json:"description"`
-	Sponsor     *string `json:"sponsor"`
-	Suspended   *bool   `json:"suspended"`
-}
+// updateServiceIdentityRequest IS the SDK's body (dto_alias_test.go pins it): the fields present change.
+type updateServiceIdentityRequest = client.UpdateServiceIdentityRequest
 
 func (s *Server) handleUpdateServiceIdentity(w http.ResponseWriter, r *http.Request) {
 	ss, ok := s.serviceStoreOr409(w)
@@ -434,11 +426,8 @@ func (s *Server) sponsoredIdentity(w http.ResponseWriter, r *http.Request, sub s
 	return ss, si, true
 }
 
-// serviceTokenRequest is the POST /me/service-identities/{name}/tokens body.
-type serviceTokenRequest struct {
-	Name       string `json:"name"`
-	TTLSeconds int64  `json:"ttl_seconds,omitempty"`
-}
+// serviceTokenRequest IS the SDK's body (dto_alias_test.go pins it).
+type serviceTokenRequest = client.MintServiceTokenRequest
 
 // handleMintServiceToken is POST /api/v1/me/service-identities/{name}/tokens: the sponsor, signed in,
 // mints a token of the service identity and gets the plaintext once (D4). It shares the self-mint's
