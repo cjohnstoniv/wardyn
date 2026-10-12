@@ -207,6 +207,7 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
           max_wait_sec: 3600,
           allow_no_end: false,
           user_changes_limits: false,
+          local_self_defined_components: false,
           autonomy_rubric: { egress_open: "L1" },
         },
       }),

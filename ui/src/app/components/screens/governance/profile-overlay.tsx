@@ -161,7 +161,7 @@ export const LIMIT_FIELDS: Field[] = [
   // as the ceiling rows do. The autonomy rubric has its own section.
   ceilingField("deny_ui_apps", "true"),
   ceilingField("deny_placements", "list"),
-  ceilingField("local_self_defined_components", "true"),
+  ceilingField("local_self_defined_components", "false"),
   ceilingField("max_cpu_millis", "number"),
   ceilingField("max_memory_mib", "number"),
   ceilingField("max_end_ahead_sec", "number"),
@@ -177,7 +177,7 @@ type Bag = Record<string, unknown>;
 
 // What a standalone profile's stored limits become when it is first composed: every limit that
 // binds anything, in the overlay's narrowing form. An off deny door, a 0 (unlimited) and an empty
-// rubric narrow nothing and are left out, as is an empty list. The two permissive-when-true flags (kind "false") bind
+// rubric narrow nothing and are left out, as is an empty list. The permissive-when-true flags (kind "false") bind
 // when they are off, and an off flag is omitted on the wire, so an absent or false value seeds
 // false; a true value narrows nothing and is left out.
 export function seedOverlayLimits(limits: GovernanceLimits): Bag {
