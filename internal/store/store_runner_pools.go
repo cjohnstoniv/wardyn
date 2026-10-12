@@ -84,6 +84,8 @@ type RunnerPoolDeletion struct {
 	RunnerCount       int
 	OrgDefaultsBefore *types.RunnerPoolDefaults
 	OrgDefaultsAfter  *types.RunnerPoolDefaults
+	// CancelledRuns are the runs that were waiting for the pool and were ended KILLED with it.
+	CancelledRuns []uuid.UUID
 }
 
 const runnerPoolCols = `id, name, hosting_type, state, revision, limits, created_at, updated_at`
@@ -289,8 +291,9 @@ func stateText(s *types.RunnerPoolState) *string {
 	return &v
 }
 
-// DeleteRunnerPool tombstones a live pool, drops its members, and clears the organisation default slots
-// that name it, all in one transaction: ErrNotFound for an unknown or already deleted one,
+// DeleteRunnerPool tombstones a live pool, ends the runs waiting for it (KILLED, runner_pool_removed,
+// their queue rows with them), drops its members, and clears the organisation default slots that name
+// it, all in one transaction: ErrNotFound for an unknown or already deleted one,
 // ErrRunnerPoolHasPolicy while it has a use policy. The row stays, so a run bound to it keeps its history.
 func (s PG) DeleteRunnerPool(ctx context.Context, id uuid.UUID) (RunnerPoolDeletion, error) {
 	var out RunnerPoolDeletion
@@ -311,13 +314,16 @@ func (s PG) DeleteRunnerPool(ctx context.Context, id uuid.UUID) (RunnerPoolDelet
 			FROM runner_pool_members WHERE pool_id = $1`, id).Scan(&out.ExecutorIDs, &out.RunnerCount); err != nil {
 			return err
 		}
+		var err error
+		if out.CancelledRuns, err = cancelPoolQueue(ctx, q, id, "queue: "+string(types.RunEndRunnerPoolRemoved), types.RunEndRunnerPoolRemoved.Sentence()); err != nil {
+			return err
+		}
 		if _, err := q.Exec(ctx, `DELETE FROM runner_pool_members WHERE pool_id = $1`, id); err != nil {
 			return err
 		}
 		if err := clearOrgDefaultSlotsQ(ctx, q, id, &out); err != nil {
 			return err
 		}
-		var err error
 		out.Pool, err = scanRunnerPool(q.QueryRow(ctx, `
 			UPDATE runner_pools SET state = 'deleted', revision = revision + 1, updated_at = now()
 			WHERE id = $1 RETURNING `+runnerPoolCols, id))

@@ -36,6 +36,11 @@ const (
 	// refusal: see Wait.
 	ReasonRunTypeNotAllowed Reason = "runner_pool_run_type_not_allowed"
 	ReasonBarrierNotAllowed Reason = "runner_pool_barrier_not_allowed"
+	// The pool queue's two refusals (a wait is never one: see Wait). QueueFull answers a create when the
+	// person already has the most runs waiting for the pool; Full answers a revive into a pool at its cap
+	// or with others waiting.
+	ReasonQueueFull Reason = "runner_pool_queue_full"
+	ReasonFull      Reason = "runner_pool_full"
 )
 
 var reasonStatus = map[Reason]int{
@@ -50,6 +55,8 @@ var reasonStatus = map[Reason]int{
 	ReasonPoolsUnavailable:   http.StatusNotImplemented,
 	ReasonRunTypeNotAllowed:  http.StatusUnprocessableEntity,
 	ReasonBarrierNotAllowed:  http.StatusUnprocessableEntity,
+	ReasonQueueFull:          http.StatusUnprocessableEntity,
+	ReasonFull:               http.StatusUnprocessableEntity,
 }
 
 // Status is the HTTP status the reason answers with; 0 for a reason outside the set.
@@ -149,3 +156,13 @@ func BarrierNotAllowedMsg(name string, asked types.ConfinementClass, allowed []t
 }
 
 func UnavailableServerMsg() string { return "This server does not manage runner pools yet." }
+
+// QueueFullMsg: the person already has n runs waiting for the pool.
+func QueueFullMsg(name string, n int) string {
+	return fmt.Sprintf("You already have %d runs waiting for %s. Cancel one or wait for one to start.", n, name)
+}
+
+// FullMsg: a revive finds the pool at its limit of n, or others waiting ahead of it.
+func FullMsg(name string, n int) string {
+	return fmt.Sprintf("%s is running its limit of %d, and others are waiting. Try again when one finishes.", name, n)
+}
