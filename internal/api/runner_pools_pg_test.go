@@ -462,7 +462,7 @@ func TestPG_RunnerPoolsBootstrapLeavesExistingPoolsAndNeedsExecutors(t *testing.
 		t.Errorf("a deployment with no executor recorded a bootstrap")
 	}
 	e := newPoolEnv(t, false)
-	e.createPool("Mine", types.RunnerPoolSelfHosted)
+	e.createPool("Ours", types.RunnerPoolRemoteProvided)
 	if err := e.srv.BootstrapRunnerPools(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -521,7 +521,11 @@ func TestPG_RunnerPoolsDefaultsAreRevalidatedAndPersonal(t *testing.T) {
 	if n := e.count(`SELECT count(*) FROM runner_pool_org_defaults`); n != 0 {
 		t.Errorf("a refused organisation default stored %d rows", n)
 	}
-	if w := put(nil, "/api/v1/runner-pool-defaults", fmt.Sprintf(`{"preferred_hosting":"self_hosted","remote_provided":%q}`, remote.ID)); w.Code != http.StatusOK {
+	// Nor a preference for Self-Hosted: the organisation's defaults are Remote Provided only.
+	if w := put(nil, "/api/v1/runner-pool-defaults", `{"preferred_hosting":"self_hosted"}`); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "no Self-Hosted default") {
+		t.Errorf("an organisation Self-Hosted preference = %d %s, want 400 refused by name", w.Code, w.Body)
+	}
+	if w := put(nil, "/api/v1/runner-pool-defaults", fmt.Sprintf(`{"preferred_hosting":"remote_provided","remote_provided":%q}`, remote.ID)); w.Code != http.StatusOK {
 		t.Fatalf("org defaults = %d %s", w.Code, w.Body)
 	}
 	if w := put(e.person, "/api/v1/me/runner-pool-defaults", good); w.Code != http.StatusOK {
