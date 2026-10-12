@@ -65,16 +65,17 @@ type leaverForms struct {
 	// cutoff or session cut keyed by one would reach that principal's credentials too, so none is written;
 	// the person's own are reached through bound and the identity deactivation.
 	shared []string
-	// notOwned is the leaver's entra:<tenant>:<object> form when deriveOwner does not prove it theirs. A
-	// suspension is the leaver's cutoff and still cuts it (it stays one of bound); a purge's destructive steps
+	// notOwned is the leaver's entra:<tenant>:<object> form when deriveOwner does not prove it theirs, or when
+	// another issuer's sign-in is bound to it and no row binds the leaver. A suspension is the leaver's cutoff
+	// and still cuts it (it stays one of bound), but schedules no purge of it; a purge's destructive steps
 	// leave it alone (destructive).
 	notOwned string
 	// notErased are the principals the form names besides the leaver (another issuer's sign-in with the same
 	// ids, or a person of their own), with the form itself: a purge lists them as not erased
 	// (notErasedDetail), and a suspension, which cut the form, lists them as also_named.
 	notErased []string
-	// unproved is the form when the directory names no one by it: a purge refuses rather than leave what may
-	// be under it unnamed.
+	// unproved is the form when the directory names no one by it, or when it is notOwned and no row binds the
+	// leaver: a purge refuses rather than leave what may be under it unnamed.
 	unproved string
 	// refusal is set when the emails cannot be resolved (reasonIdentityDirectoryUnreadable, with the error)
 	// or when the emails of a person no row binds name more than one principal (reasonOwnerAmbiguous): the
@@ -100,6 +101,30 @@ func (f leaverForms) owns(t types.APIToken) bool {
 	return slices.ContainsFunc(f.targets, func(form string) bool { return strings.EqualFold(form, t.Principal) })
 }
 
+// proveForm sets notOwned, notErased and unproved for c, the entra form of ident.
+func (f *leaverForms) proveForm(ctx context.Context, st scimStore, ident store.PrincipalIdentity, c string) error {
+	if ident.Principal == "" {
+		rows, err := st.IdentitiesByPrincipal(ctx, c)
+		if slices.ContainsFunc(rows, func(r store.PrincipalIdentity) bool { return r.Issuer != ident.Issuer }) {
+			f.notOwned, f.unproved = c, c
+		}
+		return err
+	}
+	if c == ident.Principal {
+		return nil
+	}
+	v, others, err := deriveOwner(ctx, st, ident.Principal, c)
+	switch {
+	case err != nil:
+		return err
+	case v == derivedOthers:
+		f.notOwned, f.notErased = c, nonEmptyForms(others...)
+	case v == derivedUnknown:
+		f.notOwned, f.unproved = c, c
+	}
+	return nil
+}
+
 func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.PrincipalIdentity) (leaverForms, error) {
 	var f leaverForms
 	f.bound = nonEmptyForms(ident.Principal)
@@ -111,20 +136,13 @@ func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.Prin
 		// The form SCIM names is always cut: a suspension fails toward cutting. A row bound to a principal
 		// proves the form as an erasure does (deriveOwner), since another issuer's sign-in can share the tenant
 		// and object id, and only a proved form is erased by a purge. A row no sign-in bound yet is known by its
-		// form alone.
+		// form alone, unless another issuer's sign-in is bound to the form: nothing then tells the leaver's
+		// form from that principal, and a purge refuses.
 		c := entraPrincipalPrefix + tenant + ":" + ident.ObjectID
 		f.bound = nonEmptyForms(append(f.bound, c)...)
-		if ident.Principal != "" && c != ident.Principal {
-			v, others, err := deriveOwner(ctx, st, ident.Principal, c)
-			switch {
-			case err != nil:
-				f.refusal = reasonIdentityDirectoryUnreadable
-				return f, err
-			case v == derivedOthers:
-				f.notOwned, f.notErased = c, nonEmptyForms(others...)
-			case v == derivedUnknown:
-				f.notOwned, f.unproved = c, c
-			}
+		if err := f.proveForm(ctx, st, ident, c); err != nil {
+			f.refusal = reasonIdentityDirectoryUnreadable
+			return f, err
 		}
 	}
 	aliases, err := st.IdentityAliasValues(ctx, ident.ID)
@@ -261,7 +279,8 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID)
 	}
 	if cutoff, ok := jobByKey(jobs, store.JobStepCutoff, ""); ident.DeactivatedAt == nil || !ok || !cutoff.Done {
 		// The pending steps commit with the deactivation, so a crash right after it leaves them for the sweeper.
-		plan := store.SuspendPlan{IdentityID: id, Principal: ident.Principal, Principals: forms.bound, CutoffSubs: forms.cutTargets(), PendingJobs: keys}
+		plan := store.SuspendPlan{IdentityID: id, Principal: ident.Principal, Principals: forms.bound, PurgePrincipals: forms.destructive().bound,
+			CutoffSubs: forms.cutTargets(), PendingJobs: keys}
 		if s.cfg.SCIM != nil {
 			plan.PurgeAfter = s.cfg.SCIM.PurgeAfter
 		}

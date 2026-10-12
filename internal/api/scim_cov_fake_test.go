@@ -474,7 +474,7 @@ func (s *scimCovStore) SuspendIdentity(_ context.Context, p store.SuspendPlan) (
 			i.DeactivatedAt = &t
 		}
 		i.AuthorityEpoch++
-		if i.PurgeAfter == nil && p.PurgeAfter > 0 {
+		if i.PurgeAfter == nil && p.PurgeAfter > 0 && (i.ID == p.IdentityID || slices.Contains(p.PurgePrincipals, i.Principal)) {
 			t := s.now.Add(p.PurgeAfter)
 			i.PurgeAfter = &t
 		}

@@ -493,7 +493,7 @@ func TestSCIMSuspendReachesEveryForm(t *testing.T) {
 		}},
 	} {
 		t.Run(shape.name, func(t *testing.T) {
-			e := newSCIMEnv(t)
+			e := newSCIMEnv(t, func(c *Config) { c.SCIM.PurgeAfter = time.Hour })
 			const email = "leaver@corp.example"
 			entraForm := entraPrincipalPrefix + e.tenant + ":" + oidLeaver
 			if shape.alsoNamed == "" {
@@ -586,6 +586,13 @@ func TestSCIMSuspendReachesEveryForm(t *testing.T) {
 			}
 			if got := fmt.Sprint(d["also_named"]); got != shape.alsoNamed {
 				t.Errorf("person.deprovision also_named = %s, want %s", got, shape.alsoNamed)
+			}
+			// The purge is scheduled for the leaver's own rows only: a row the form names that is not proved theirs
+			// is cut, never scheduled.
+			var scheduled int
+			if err := e.pool.QueryRow(t.Context(), `SELECT count(*) FROM principal_identities WHERE principal = $1 AND purge_after IS NOT NULL`,
+				entraForm).Scan(&scheduled); err != nil || scheduled != 0 {
+				t.Errorf("%d rows bound to %s are scheduled for purge (%v), want none", scheduled, entraForm, err)
 			}
 
 			// An identity provider that repeats the request costs nothing and writes nothing.

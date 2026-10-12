@@ -7,6 +7,7 @@ package api
 // identity directory proves the form is theirs alone. Guarded by WARDYN_TEST_PG.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -201,30 +202,78 @@ func TestPG_Erasure_AnAmbiguousEntraNameIsLeftAndListed(t *testing.T) {
 	}
 }
 
-// A SCIM leaver Y whose entra:<tenant>:<object> form is bound to another issuer's principal P: the purge
-// never reassigns P's workspace, deletes P's grant or erases P's credential, and its row names P as not
-// erased.
-func TestSCIMPurgeLeavesAnotherIssuersEntraPrincipal(t *testing.T) {
-	e := newSCIMEnv(t)
-	ctx := t.Context()
-	f := e.seedPurgeSubject(purgeSub, purgeEmail, purgeOID)
-	p, other := "entra:"+e.tenant+":"+purgeOID, "https://other-issuer.example/v2.0"
-	if _, err := e.st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: p, Issuer: other, TenantID: e.tenant, ObjectID: purgeOID}, time.Now().UTC()); err != nil {
-		t.Fatal(err)
+// otherIssuersPrincipal is P: another issuer's sign-in bound to the principal p, with a credential, a
+// workspace and a grant of its own.
+type otherIssuersPrincipal struct {
+	p, issuer string
+	ws        uuid.UUID
+}
+
+func (e *scimEnv) seedOtherIssuersPrincipal(p, oid string) otherIssuersPrincipal {
+	e.t.Helper()
+	ctx := context.Background()
+	o := otherIssuersPrincipal{p: p, issuer: "https://other-issuer.example/v2.0"}
+	if _, err := e.st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: p, Issuer: o.issuer, TenantID: e.tenant, ObjectID: oid}, time.Now().UTC()); err != nil {
+		e.t.Fatal(err)
 	}
 	if err := e.sec.For(p).Put(ctx, "api-key", []byte("p-secret")); err != nil {
-		t.Fatal(err)
+		e.t.Fatal(err)
 	}
 	ws, err := e.st.CreateWorkspace(ctx, types.Workspace{ID: uuid.New(), Name: "ws-p", OwnedBy: p, Status: types.WorkspaceScanned,
 		Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
 		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
 	if err != nil {
-		t.Fatal(err)
+		e.t.Fatal(err)
 	}
 	if _, err := e.st.UpsertCapabilityGrant(ctx, types.CapabilityGrant{SubjectType: types.CapabilitySubjectUser, Subject: p,
 		Capability: "egress_domain", Value: "evil.example", Effect: types.CapabilityDeny}); err != nil {
-		t.Fatal(err)
+		e.t.Fatal(err)
 	}
+	o.ws = ws.ID
+	return o
+}
+
+// kept checks P's credential, workspace and grant are all still there, and that P's identity is neither
+// scheduled for purge nor purged.
+func (e *scimEnv) kept(o otherIssuersPrincipal, oid, when string) {
+	e.t.Helper()
+	if n := e.credentialCount(o.p); n != 1 {
+		e.t.Errorf("%s: %q holds %d credentials, want its own kept", when, o.p, n)
+	}
+	if got, err := e.st.GetWorkspace(context.Background(), o.ws); err != nil || got.OwnedBy != o.p {
+		e.t.Errorf("%s: %q's workspace is owned by %q (%v), want it kept", when, o.p, got.OwnedBy, err)
+	}
+	if g, _ := e.userRows(o.p); g != 1 {
+		e.t.Errorf("%s: %q holds %d grants, want its own kept", when, o.p, g)
+	}
+	if id, err := e.st.GetIdentityByObject(context.Background(), o.issuer, e.tenant, oid); err != nil || id.PurgeAfter != nil || id.PurgedAt != nil {
+		e.t.Errorf("%s: %q's identity = %+v (%v), want it neither scheduled for purge nor purged", when, o.p, id, err)
+	}
+}
+
+// sweepPastThePurgeDelay runs the purge sweeper as if every scheduled purge were due and every pending
+// ledger row idle.
+func (e *scimEnv) sweepPastThePurgeDelay() error {
+	e.t.Helper()
+	ctx := context.Background()
+	if _, err := e.pool.Exec(ctx, `UPDATE principal_identities SET purge_after = now() - interval '1 minute' WHERE purge_after IS NOT NULL`); err != nil {
+		e.t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(ctx, `UPDATE deprovision_jobs SET updated_at = now() - interval '1 hour'`); err != nil {
+		e.t.Fatal(err)
+	}
+	return e.b.srv.SweepSCIMPurge(ctx)
+}
+
+// A SCIM leaver Y whose entra:<tenant>:<object> form is bound to another issuer's principal P: the purge
+// never reassigns P's workspace, deletes P's grant or erases P's credential, and its row names P as not
+// erased. The suspension deactivates P's binding but never schedules it for purge, so the sweeper, past
+// the purge delay, leaves P alone too.
+func TestSCIMPurgeLeavesAnotherIssuersEntraPrincipal(t *testing.T) {
+	e := newSCIMEnv(t, func(c *Config) { c.SCIM.PurgeAfter = time.Hour })
+	ctx := t.Context()
+	f := e.seedPurgeSubject(purgeSub, purgeEmail, purgeOID)
+	o := e.seedOtherIssuersPrincipal("entra:"+e.tenant+":"+purgeOID, purgeOID)
 
 	if w := e.del(e.a, f.id); w.Code != http.StatusNoContent {
 		t.Fatalf("DELETE = %d %s, want 204", w.Code, w.Body.String())
@@ -232,26 +281,83 @@ func TestSCIMPurgeLeavesAnotherIssuersEntraPrincipal(t *testing.T) {
 	if n := e.credentialCount(purgeSub); n != 0 {
 		t.Errorf("the leaver kept %d credentials", n)
 	}
-	if n := e.credentialCount(p); n != 1 {
-		t.Errorf("%q holds %d credentials, want its own kept", p, n)
-	}
-	if got, err := e.st.GetWorkspace(ctx, ws.ID); err != nil || got.OwnedBy != p {
-		t.Errorf("%q's workspace is owned by %q (%v), want it kept", p, got.OwnedBy, err)
-	}
-	if g, _ := e.userRows(p); g != 1 {
-		t.Errorf("%q holds %d grants, want its own kept", p, g)
-	}
+	e.kept(o, purgeOID, "after the purge")
 	// The suspension the purge begins with is the leaver's cutoff and cuts the form SCIM names, P's binding
 	// included (TestSCIMSuspendReachesEveryForm); only the destructive steps above are proved.
-	if id, err := e.st.GetIdentityByObject(ctx, other, e.tenant, purgeOID); err != nil || id.DeactivatedAt == nil {
-		t.Errorf("%q's identity = %+v (%v), want it deactivated by the suspension", p, id, err)
+	if id, err := e.st.GetIdentityByObject(ctx, o.issuer, e.tenant, purgeOID); err != nil || id.DeactivatedAt == nil {
+		t.Errorf("%q's identity = %+v (%v), want it deactivated by the suspension", o.p, id, err)
 	}
 	rows := e.purgeRows(e.a, e.b)
 	if len(rows) != 1 {
 		t.Fatalf("%d purge rows, want 1", len(rows))
 	}
-	if ne, _ := dataOf(t, rows[0])["not_erased"].(map[string]any); fmt.Sprint(ne["subjects"]) != "["+p+"]" {
-		t.Errorf("purge row not_erased = %v, want [%s]", ne, p)
+	if ne, _ := dataOf(t, rows[0])["not_erased"].(map[string]any); fmt.Sprint(ne["subjects"]) != "["+o.p+"]" {
+		t.Errorf("purge row not_erased = %v, want [%s]", ne, o.p)
+	}
+
+	if err := e.sweepPastThePurgeDelay(); err != nil {
+		t.Errorf("sweep: %v", err)
+	}
+	e.kept(o, purgeOID, "after the sweeper")
+}
+
+// A SCIM row no sign-in bound, whose entra:<tenant>:<object> form is another issuer's principal P: the
+// suspension cuts the form, and the purge refuses its destructive steps, so P's credential, workspace and
+// grant survive the DELETE and the sweeper.
+func TestSCIMPurgeOfAnUnboundRowLeavesAnotherIssuersPrincipalItsFormNames(t *testing.T) {
+	e := newSCIMEnv(t, func(c *Config) { c.SCIM.PurgeAfter = time.Hour })
+	o := e.seedOtherIssuersPrincipal("entra:"+e.tenant+":"+purgeOID, purgeOID)
+	id := e.postUserID(e.a, purgeOID, purgeEmail, purgeEmail)
+	if row := e.identity(id); row.Principal != "" || row.Issuer == o.issuer {
+		t.Fatalf("control: the SCIM row is %+v, want an unbound row of the SCIM issuer", row)
+	}
+
+	if w := e.del(e.a, id); w.Code != http.StatusInternalServerError {
+		t.Errorf("DELETE = %d %s, want 500 (the purge refuses)", w.Code, w.Body.String())
+	}
+	e.kept(o, purgeOID, "after the DELETE")
+	if row, err := e.st.GetIdentityByObject(t.Context(), o.issuer, e.tenant, purgeOID); err != nil || row.DeactivatedAt == nil {
+		t.Errorf("%q's identity = %+v (%v), want it deactivated by the suspension", o.p, row, err)
+	}
+	rows := e.purgeRows(e.a, e.b)
+	if len(rows) != 1 || rows[0].Outcome != "denied" || dataOf(t, rows[0])["unproved"] != o.p {
+		t.Fatalf("purge rows = %+v, want one denied row naming %s unproved", rows, o.p)
+	}
+
+	if err := e.sweepPastThePurgeDelay(); err == nil {
+		t.Error("the sweeper finished a purge that refuses")
+	}
+	e.kept(o, purgeOID, "after the sweeper")
+}
+
+// The purge's refusal of a form it cannot prove is held on the deprovision ledger, so /scim/status lists
+// it, and a sweep that finds it there again writes no second denied row.
+func TestSCIMPurgeRefusalIsOnTheLedgerOnce(t *testing.T) {
+	e := newSCIMEnv(t)
+	ctx := t.Context()
+	e.seedOtherIssuersPrincipal("entra:"+e.tenant+":"+purgeOID, purgeOID)
+	id := e.postUserID(e.a, purgeOID, purgeEmail, purgeEmail)
+	if w := e.del(e.a, id); w.Code != http.StatusInternalServerError {
+		t.Fatalf("DELETE = %d %s, want 500 (the purge refuses)", w.Code, w.Body.String())
+	}
+	failures := func(when string) {
+		t.Helper()
+		got, err := e.st.ListDeprovisionFailures(ctx, 10)
+		if err != nil || len(got) != 1 || got[0].IdentityID.String() != id || got[0].Kind != store.JobKindPurge ||
+			got[0].Step != store.JobStepAuditDeprovision || got[0].LastError == "" {
+			t.Errorf("%s: deprovision failures = %+v (%v), want the one refusal on the purge's audit step", when, got, err)
+		}
+	}
+	failures("after the DELETE")
+
+	for range 2 {
+		if err := e.sweepPastThePurgeDelay(); err == nil {
+			t.Error("the sweeper finished a purge that refuses")
+		}
+	}
+	failures("after two sweeps")
+	if rows := e.purgeRows(e.a, e.b); len(rows) != 1 || rows[0].Outcome != "denied" {
+		t.Errorf("%d purge rows (%+v), want the one denied row", len(rows), rows)
 	}
 }
 

@@ -96,9 +96,7 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 		return err
 	}
 	if forms.unproved != "" {
-		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", id.String(), "denied",
-			mustJSON(map[string]any{"kind": store.JobKindPurge, "reason": reasonOwnerAmbiguous, "unproved": forms.unproved})))
-		return fmt.Errorf("%w: the person's entra form %s names no one", errDeprovisionIncomplete, forms.unproved)
+		return s.refuseUnproved(ctx, st, id, forms.unproved)
 	}
 	forms = forms.destructive()
 	isEmail := func(t string) bool { return strings.Contains(t, "@") && !slices.Contains(forms.bound, t) }
@@ -139,6 +137,22 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 		return fmt.Errorf("%w: %w", errDeprovisionIncomplete, err)
 	}
 	return nil
+}
+
+// refuseUnproved stops a purge whose leaver's entra form c is not proved theirs. The refusal is held on the
+// ledger's audit step, where /scim/status lists it; a retry that finds it there writes no second denied row.
+func (s *Server) refuseUnproved(ctx context.Context, st scimStore, id uuid.UUID, c string) error {
+	refused := fmt.Errorf("%w: the person's entra form %s is not proved theirs", errDeprovisionIncomplete, c)
+	key := store.JobKey{Step: store.JobStepAuditDeprovision}
+	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindPurge)
+	if err != nil {
+		return err
+	}
+	if j, ok := jobByKey(jobs, key.Step, key.Target); !ok || j.LastError != refused.Error() {
+		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", id.String(), "denied",
+			mustJSON(map[string]any{"kind": store.JobKindPurge, "reason": reasonOwnerAmbiguous, "unproved": c})))
+	}
+	return errors.Join(refused, st.FailDeprovisionJob(ctx, id, store.JobKindPurge, key, refused))
 }
 
 // purgeStep runs fn unless the ledger already holds key done, and records the outcome.
