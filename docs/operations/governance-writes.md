@@ -150,6 +150,7 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong for your appro
 | User-type priority update | the priority changes | security admin or super admin |
 | Role mapping upsert, delete | always | **super admin only** |
 | Key-domain assignment set, delete | always | security admin or super admin |
+| Service identity create, and a PATCH that changes the sponsor | always (the PATCH whole) | security admin or super admin |
 
 Exempt, so applied directly:
 

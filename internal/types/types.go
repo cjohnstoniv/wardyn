@@ -202,9 +202,10 @@ type AgentRun struct {
 	DiskMiB              int           `json:"disk_mib,omitempty"`  // effective ephemeral disk cap MiB; 0 = no cap resolved
 	Attention            *RunAttention `json:"attention,omitempty"` // what this live run awaits and who can clear it; derived, only on view-opted-in read paths
 
-	// HumanAuthor is the person accountable for the run at create, written once: CreatedBy for a person's run, the
-	// service identity's sponsor at launch for a service identity's run, unchanged by a later sponsor change. Empty
-	// for a run from before it was recorded and for a server-originated run. Read by the second-human rules only.
+	// HumanAuthor is the principal accountable for the run at create, written once: the service identity's sponsor
+	// at launch for a service identity's run, unchanged by a later sponsor change, and CreatedBy for any other run. A
+	// record of accountability, not proof that a person was present. Empty for a run from before it was recorded.
+	// Read by the second-human rules only.
 	HumanAuthor string `json:"-"`
 }
 

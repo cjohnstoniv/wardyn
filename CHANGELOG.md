@@ -73,9 +73,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and its partitions.
 - Migration `0159_run_lifetime_cap` adds `agent_runs.lifetime_cap_at` and `lifetime_cap_source`; existing runs keep
   them empty.
-- Migration `0161_run_human_author` adds `agent_runs.human_author`, the person accountable for a run at create; it
-  stays the same when a service identity's sponsor changes. Existing runs keep it empty, and under a second-human
-  switch a service identity's run without it is refused for every decider.
+- Migration `0161_run_human_author` adds `agent_runs.human_author`, the principal accountable for a run at create (a
+  record of accountability, not proof that a person was present); it stays the same when a service identity's
+  sponsor changes. Existing runs keep it empty, and under a second-human switch a service identity's run without it
+  is refused for every decider: decide such a run's pending approvals with the admin token, or let the run time out
+  and launch it again.
 
 ### Added
 
