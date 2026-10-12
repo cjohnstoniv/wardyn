@@ -433,6 +433,7 @@ A template is a saved run setup, whole or partial, kept for yourself, published 
 - A shared template holds references (secret names, workspace and drive ids), never values, and its readers see those names.
 - `created_by` and `updated_by` are set only for someone who may write the template.
 - A group grant (`TemplateGroupAdmin`) names one group and one person, stored in canonical form; its optional `label` is the group's display name, shown beside its templates, and never authority.
+- The CLI covers these: `wardyn template list|show|save|import`, and for administrators `wardyn template group-admin list|grant|revoke` and `wardyn template from-preset <name> [--everyone]`. `from-preset` saves a launch preset to the organisation through `PresetDocument`, which refuses a preset limited to `user_types` unless `--everyone` is passed. A preset's `inline_policy` replaced your default policy, and in a template it is laid onto it.
 
 ## Run documents
 
@@ -443,6 +444,7 @@ A `wardyn/v1` document with `kind: Run` is a draft of one run. Its `intent` hold
 - A `kind` other than Run or RunTemplate is reported at path `kind` and a wrong `api_version` at `api_version`, both as `template_version_unsupported`. When the import request names the `kind` it expects and the document is the other valid kind, `kind` carries a sentence saying so, beside the document's other diagnostics.
 - `POST /api/v1/templates/import` (`Client.ImportTemplate`) takes `{format, source, kind?}`, where `format` is `json` or `yaml` and `kind` is `Run`, `RunTemplate` or empty for either. It answers `200` with the normalised `document` when nothing is wrong, and otherwise with `diagnostics`, each `{path, reason, message}`. It stores nothing, grants nothing and needs only a signed-in person.
 - The door holds a document to the same shape and availability checks as create, preflight and the policy preview, so a request they refuse is refused at the door with the same reason.
+- `wardyn run --file <doc>` (`-` reads stdin) has the door check a `Run` document, then creates the run from its `intent`. A document that sets `inline_policy` is refused until the request carries `policy_overlay`, because `inline_policy` would replace your default policy. Only `--title`, `--description`, `--wait`, `--timeout`, `--json` and `--dry-run` go with it. `wardyn template import --kind Run|RunTemplate` sets the kind the import expects.
 
 `shape` (`agent_task`, `environment` or `application`) names the New Run choice a request was set up from. It is optional and needs `experience`; a value outside the three is `400` `run_mode_invalid`. The server checks it against the run and otherwise does not use it; a request that does not fit is `422` `run_shape_conflict` at create, preflight, preview and the import door.
 

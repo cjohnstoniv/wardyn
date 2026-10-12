@@ -103,7 +103,7 @@ func normalizeConfinement(s string) string {
 // `wardyn runs list` keeps working.
 func runCmd(client clientFn) *cobra.Command {
 	var repo, agent, task, policyID, confinement, policyFile, image, taskMode, workspaceID string
-	var title, description string
+	var title, description, file string
 	var devcontainerRepo, devcontainerRef, modelProvider string
 	var interactive, wait, createJSON, dryRun bool
 	var timeout time.Duration
@@ -151,14 +151,22 @@ func runCmd(client clientFn) *cobra.Command {
 			if err := applyRunModeFlags(&body, mode); err != nil {
 				return err
 			}
-			if wait && body.Experience == sdk.ExperienceInteractive {
-				return fmt.Errorf("--wait and --experience interactive are mutually exclusive (an interactive run never finishes on its own)")
-			}
 			if err := where.apply(&body); err != nil {
 				return err
 			}
 			if err := ends.apply(&body); err != nil {
 				return err
+			}
+			// The document replaces everything the flags built; the checks above ran
+			// on flags it refuses to stand beside, so it is read after them.
+			if file != "" {
+				var err error
+				if body, err = runFileRequest(cmd, client(), file, title, description); err != nil {
+					return err
+				}
+			}
+			if wait && body.Experience == sdk.ExperienceInteractive {
+				return fmt.Errorf("--wait and --experience interactive are mutually exclusive (an interactive run never finishes on its own)")
 			}
 			// --policy-file supplies a JSON RunPolicySpec applied inline. It is
 			// mutually exclusive with --policy; the server enforces that XOR — we
@@ -221,6 +229,7 @@ func runCmd(client clientFn) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; only --title, --description, --wait, --timeout, --json and --dry-run go with it.. A document that sets inline_policy is refused for now: sent as inline_policy it would replace your default policy")
 	cmd.Flags().StringVar(&repo, "repo", "", "repository (org/name; optional — omit for an ephemeral scratch run)")
 	cmd.Flags().StringVar(&agent, "agent", "", "agent name (e.g. claude-code)")
 	cmd.Flags().StringVar(&task, "task", "", "human task description")
