@@ -303,11 +303,16 @@ func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) bu
 	// workspace is refused there (runs_create.go's wsRefs door), not booted
 	// as-is. Gate on the builder so a builder-less host instead falls through
 	// to the same honest report "custom" already gets below.
-	if b := ws.BaseImage; b != nil && b.Kind != "recommended" && b.Kind != "custom" && b.Image != "" && s.cfg.ImageBuilder != nil {
+	//
+	// Once the row names a cached wrap for this very base (the byoi key), the wrap
+	// exists and has a build record, so the row-derived `done` below answers
+	// instead: "no build involved" would be false, and the record would never show.
+	key, keyed := s.workspaceBuiltImageKey(ws)
+	wrapped := keyed && ws.ImageRef != "" && ws.BuiltProfileHash == key
+	if b := ws.BaseImage; b != nil && b.Kind != "recommended" && b.Kind != "custom" && b.Image != "" && s.cfg.ImageBuilder != nil && !wrapped {
 		return buildResponse{State: "nothing_to_build", Image: authoredImage(b.Image),
 			Detail: "this image boots as-is — no build involved"}
 	}
-	key, keyed := s.workspaceBuiltImageKey(ws)
 	st := s.builds.get(ws.ID)
 	switch {
 	case st.Building:
