@@ -320,6 +320,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   allows it (`no_end`, `--no-end`). An end past a limit is cut to it and the response names the limit. An untouched
   Interactive run now ends after 24 hours when no pool, profile or deployment names a lifetime. `GET /runs?no_end=1`
   lists live runs with no end.
+- A run's CPU and memory are bounded by the strictest of its pool, the person's governance profile, the deployment
+  and, on a person's own runner, the runner's advertised capacity. A larger ask is reduced to that limit, never
+  refused; an own runner smaller than the ask no longer refuses the run. `POST /runs/preflight` and the policy preview
+  return `limits` and `resources_applied` (requested, applied, capped, and the limit that bound it with its name); the
+  create response and the `run.create` audit row carry `resources_applied`.
+- A run can carry a built-in GitHub component, `components[]{builtin: "github", org, repos, access}`, without a
+  workspace. It reaches only the listed repositories, through Wardyn's git broker. Each repository must pass workspace
+  admission and the `workspace_provider` capability, and access must be within the caller's ceiling for a
+  `github_token` grant, which also sets approval and lifetime. Repository names are lowercased; a repository listed
+  twice is refused. Reviving or extending such a run re-checks the owner's `workspace_provider` permission over its
+  repositories. A built-in Azure DevOps component is still refused with `request_field_unavailable`. New refusal
+  reasons: `component_builtin_lane_off`, `component_builtin_access_above_ceiling`.
 
 ### Changed
 
@@ -417,6 +429,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Naming a person by a typed `entra:<tenant>:<object>` (erasure, secret owner) is now refused as ambiguous when that
   tenant and object id also signed in under another issuer, instead of resolving to one principal and leaving the
   other's data.
+- The request's `resources` field is now applied. A governance profile's CPU or memory maximum no longer cuts a run
+  below the member default (the deployment's own default size, lowered by the profile's own size), and dispatch
+  applies the same member cap as preflight (#1949). A run with no size from its request or policy gets the
+  deployment's own default size (the default policy's resources where set, else the platform default), operators' runs
+  included.
 
 ### Removed
 
@@ -426,6 +443,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The `WARDYN_MEMBER_MODE`, `WARDYN_MEMBER_WORKSPACE_ROOTS`, `WARDYN_MEMBER_WORKSPACE_ROOTS_MAP`,
   `WARDYN_MEMBER_WRITABLE_ROOTS`, `WARDYN_MEMBER_WRITABLE_DENY` and `WARDYN_ALLOW_MEMBER_ENV_SECRET`
   aliases. Boot refuses while one is set, naming its `WARDYN_USER_*` replacement (#623).
+- The always-empty `resources` array in preflight, the policy preview and the SDK (`PlacementResources`,
+  `ResourceAmounts`); read `resources_applied` instead.
 
 ### Fixed
 
