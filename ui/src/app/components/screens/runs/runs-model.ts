@@ -37,6 +37,7 @@ export interface RowPresentation {
 }
 
 const LIVE_STATES: ReadonlySet<RunState> = new Set([
+  "QUEUED",
   "PENDING",
   "STARTING",
   "RUNNING",

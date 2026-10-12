@@ -77,6 +77,16 @@ export type RunState =
   // neutral badge instead of crashing the console (see primitives.tsx).
   | (string & {});
 
+/** Go: types.RunQueue. `position` is how many runs wait ahead in the pool, never whose. */
+export interface RunQueue {
+  pool_id: string;
+  queued_at: string;
+  deadline_at: string;
+  position: number;
+  /** runner_pool_at_capacity or runner_pool_no_runner_free (RUN_WAIT_REASON). */
+  reason: string;
+}
+
 export interface AgentRun {
   id: string;
   created_at: string;
@@ -248,6 +258,8 @@ export interface AgentRun {
   lifetime_cap_at?: string;
   // When the run left the pool queue (migration 0162); absent for a run that never waited.
   admitted_at?: string;
+  // A waiting run's place in its pool's queue; present only while the run is QUEUED.
+  queue?: RunQueue;
   wait_budget_sec?: number;
   run_limits?: RunLimits;
   governance_profile_id?: string;
