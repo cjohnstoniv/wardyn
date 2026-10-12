@@ -388,3 +388,32 @@ func auditRowsOf(rec *recRecorder, action string) []types.AuditEvent {
 	}
 	return out
 }
+
+// adoBranchTarget reads only the path after the organisation or collection
+// from the repository URL; the base is the lane's. A Server row's base is its
+// own collection URL.
+func TestADOBranchTarget(t *testing.T) {
+	server := types.GitProvider{ID: "ado-srv-1", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://tfs.corp.example/tfs/Coll"},
+		Lanes: []types.GitLane{types.GitLanePAT}, CredentialSource: types.CredentialSourcePerUser}
+	sc := adoSite(ownPATTestRow(), server)
+	services := adoEntraRun{rowID: ownPATRowID, org: "contoso"}
+	srv := adoEntraRun{rowID: "ado-srv-1", org: "tfs/coll", serverHost: "tfs.corp.example"}
+	for _, tc := range []struct {
+		lane                adoEntraRun
+		repo                string
+		base, project, name string
+		ok                  bool
+	}{
+		{services, "https://dev.azure.com/contoso/proj/_git/app", adoOwnPATAPIBase + "/contoso", "proj", "app", true},
+		{services, "https://contoso@dev.azure.com/contoso/proj/_git/app", adoOwnPATAPIBase + "/contoso", "proj", "app", true},
+		{services, "https://contoso.visualstudio.com/DefaultCollection/proj/_git/app", adoOwnPATAPIBase + "/contoso", "proj", "app", true},
+		{services, "https://dev.azure.com/contoso/_git/app", adoOwnPATAPIBase + "/contoso", "app", "app", true},
+		{services, "https://dev.azure.com/contoso/proj/app", "", "", "", false},
+		{srv, "https://tfs.corp.example/tfs/Coll/proj/_git/app", "https://tfs.corp.example/tfs/Coll", "proj", "app", true},
+	} {
+		base, project, name, ok := adoBranchTarget(sc, tc.lane, tc.repo)
+		if base != tc.base || project != tc.project || name != tc.name || ok != tc.ok {
+			t.Errorf("%s = %q %q %q %v, want %q %q %q %v", tc.repo, base, project, name, ok, tc.base, tc.project, tc.name, tc.ok)
+		}
+	}
+}
