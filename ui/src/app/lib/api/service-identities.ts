@@ -23,6 +23,12 @@ export const serviceIdentities = {
     return unwrapList<Invitation>(await asJson<unknown>(await wfetch(withLimit("/me/invitations"), { method: "GET" })));
   },
 
+  // GET /api/v1/me/tokens -> the caller's own tokens (no plaintext). The claim card reads it for the name of
+  // the token an invitation replaces, which the invitation carries by id only.
+  async listMyTokens(): Promise<ApiToken[]> {
+    return unwrapList<ApiToken>(await asJson<unknown>(await wfetch(withLimit("/me/tokens"), { method: "GET" })));
+  },
+
   // POST /api/v1/me/invitations/{id}/claim -> 201 with the new token, `token` holding the plaintext.
   async claimInvitation(id: string, body: ClaimInvitationRequest): Promise<ApiToken> {
     return asJson<ApiToken>(

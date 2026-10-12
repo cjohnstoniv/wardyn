@@ -29,6 +29,12 @@ describe("serviceIdentities - request shape", () => {
     expect(sent()).toMatchObject({ url: "/api/v1/me/invitations?limit=1000", method: "GET" });
   });
 
+  it("listMyTokens GETs /me/tokens", async () => {
+    const sent = stub(json([{ id: "t1", name: "ci-old-key" }]));
+    expect(await serviceIdentities.listMyTokens()).toEqual([{ id: "t1", name: "ci-old-key" }]);
+    expect(sent()).toMatchObject({ url: "/api/v1/me/tokens?limit=1000", method: "GET" });
+  });
+
   it("claimInvitation POSTs the name and ttl, and returns the plaintext once", async () => {
     const sent = stub(json({ id: "t1", token: "wdy_secret", name: "ci" }, 201));
     const got = await serviceIdentities.claimInvitation("i/1", { name: "ci", ttl_seconds: 3600 });
