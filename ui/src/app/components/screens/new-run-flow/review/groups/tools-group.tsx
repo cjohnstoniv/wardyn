@@ -12,6 +12,7 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { IncludedTool } from "../../../../../lib/types/new-run-contract";
 import type { RunIntent } from "../../draft/run-intent";
 import { setCommand } from "../../lenses/run-lens";
+import { draftSource, serverSource } from "../provenance";
 import { ReviewGroup } from "../review-group";
 import { stepLocation, type GroupProps } from "./group-props";
 import { JumpButton } from "./jump-button";
@@ -23,7 +24,7 @@ const harnessesOf = (i: RunIntent): IncludedTool[] => (i.tools ?? []).filter((t)
 const startsAutomatically = (i: RunIntent, id: string, all: IncludedTool[]) =>
   !!i.workload?.task?.trim() && id === (i.workload.agent ?? all[0]?.id);
 
-export function ToolsGroup({ draft, pre, docRows, go, dispatch }: GroupProps) {
+export function ToolsGroup({ draft, pre, preview, docRows, go, dispatch }: GroupProps) {
   const { intent } = draft;
   const harnesses = harnessesOf(intent);
   const interactive = intent.experience === "interactive";
@@ -50,7 +51,10 @@ export function ToolsGroup({ draft, pre, docRows, go, dispatch }: GroupProps) {
       label={NR_REVIEW.GROUP_TOOLS}
       value={value}
       detail={detail}
-      provenance={command ? NR_REVIEW.PROV_ADDED : NR_REVIEW.PROV_MODEL_PROVIDER}
+      provenance={
+        (command ? undefined : serverSource({ draft, pre, preview }, { kind: "model_provider" })) ??
+        draftSource(draft, command ? ["workload.command"] : ["tools", "startup", "workload.task"], NR_REVIEW.PROV_ADDED)
+      }
       docRows={docRows}
       editor={(close) => command ? (
         <>

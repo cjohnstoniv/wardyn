@@ -34,6 +34,7 @@ import { ToolsGroup } from "./groups/tools-group";
 import { WhereGroup } from "./groups/where-group";
 import { WorkGroup } from "./groups/work-group";
 import { Notices } from "./notices";
+import { changedFromOrigin } from "./provenance";
 import { RawView } from "./raw-view";
 import { docOnlyRows } from "./review-model";
 import type { ReviewPreflight } from "./review-seams";
@@ -84,14 +85,15 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     adoDoorOpen: false,
   });
   const pre = checks.preflightResult as PreflightResult | null as ReviewPreflight | null;
-  const needs = useTemplateNeeds(draft.origin, draft.intent);
+  const template = useTemplateNeeds(draft.origin, draft.intent);
 
   const gate = (blockers: number) =>
     launchGateOpen({ blockers, preflight: checks.preflightRead, generation: checks.generation, now: Date.now() });
   const inputs = {
     issues,
     unsupported: wire.unsupported,
-    templateNeeds: needs,
+    templateNeeds: template.needs,
+    templateUnread: template.unread,
     refusal: checks.preflightError === null ? null : { text: checks.preflightError, reason: checks.preflightReason },
     setupItems: missingSetup(pre),
   };
@@ -107,6 +109,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
   }, [open, announce]);
   const checkAgain = () => {
     asked.current = true;
+    if (template.unread) template.retry();
     void checks.preflight();
     void checks.preview.retry();
   };
@@ -139,7 +142,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       <div role="group" aria-label={NR_REVIEW.VIEW_ARIA}>
         <Segmented<"pretty" | "yaml" | "json"> value={view} options={[...VIEWS]} onChange={(v) => go({ screen: "review", view: v }, { replace: true })} />
       </div>
-      <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={!!draft.intent.resources} />
+      <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} />
       <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} />
       {view === "pretty" ? (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">

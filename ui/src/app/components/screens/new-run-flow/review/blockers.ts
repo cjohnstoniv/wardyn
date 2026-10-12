@@ -20,7 +20,7 @@ import type { NewRunLocation } from "../draft/new-run-url";
 import type { RunIntent } from "../draft/run-intent";
 import type { StepIssue, StepIssueCode } from "../lenses/step-issues";
 
-export type BlockerKind = "local" | "unsupported" | "template_setup" | "refusal" | "setup_item" | "stale";
+export type BlockerKind = "local" | "unsupported" | "template_setup" | "template_unread" | "refusal" | "setup_item" | "stale";
 
 export interface Blocker {
   id: string;
@@ -72,6 +72,8 @@ export interface BlockerInput {
   issues: readonly StepIssue[];
   unsupported: readonly string[];
   templateNeeds: readonly TemplateSetupNeed[];
+  /** The template's needs are unread or could not be read: fail closed with the stale line. */
+  templateUnread?: boolean;
   /** The server's refusal of this draft: its own sentence and reason. */
   refusal: { text: string; reason: string } | null;
   setupItems: readonly SetupItem[];
@@ -90,6 +92,7 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
   for (const need of input.templateNeeds) {
     out.push({ id: `template:${need.field}`, kind: "template_setup", text: NR_TEMPLATES.NEEDS_SETUP(fieldLabel(need.field)), to: locationOfHome(homeOfPath(need.field)) });
   }
+  if (input.templateUnread) out.push({ id: "template:unread", kind: "template_unread", text: NR_REVIEW.BLOCKER_STALE });
   if (input.refusal) {
     out.push({ id: "refusal", kind: "refusal", text: input.refusal.text, to: locationOfHome(homeOfReason(input.refusal.reason)) });
   }

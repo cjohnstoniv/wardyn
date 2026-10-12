@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { setField } from "../../../../../test/set-field";
 import { OperatorProvider } from "../../../wardyn/operator-context";
+import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
@@ -17,16 +18,23 @@ import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { RUN_WAIT } from "../../../../lib/runner-pool-refusals";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
 import type { PreflightResult } from "../../../../lib/types/preflight";
+import { intentToWire } from "../draft/intent-to-wire";
 import { PREFLIGHT_FRESH_MS } from "../draft/launch-gate";
 import type { RunIntent } from "../draft/run-intent";
 import { NEW_RUN_SCREENS, NewRunRoute, useNewRunDraft, type Seed, type SeedLoaders } from "../new-run-route";
 import { runDocumentText } from "../document/run-document";
 import { ReviewScreen } from "./review-screen";
 
-const { checks, wfetchMock } = vi.hoisted(() => ({ checks: { current: {} as Record<string, unknown> }, wfetchMock: vi.fn() }));
+const { checks, wfetchMock } = vi.hoisted(() => ({
+  checks: { current: {} as Record<string, unknown>, params: undefined as { body: unknown } | undefined },
+  wfetchMock: vi.fn(),
+}));
 vi.mock("../draft/use-intent-checks", () => ({
   useDraftIdentity: () => ({ principal: "alice", resolved: true, revision: 1, authGeneration: 0 }),
-  useIntentChecks: () => checks.current,
+  useIntentChecks: (params: { body: unknown }) => {
+    checks.params = params;
+    return checks.current;
+  },
 }));
 vi.mock("../../../../lib/api/core", async (orig) => ({ ...(await orig<typeof import("../../../../lib/api/core")>()), wfetch: (...a: unknown[]) => wfetchMock(...a) }));
 
@@ -70,6 +78,8 @@ interface Open {
   query?: string;
   needs?: { field: string }[];
   onLaunch?: () => void;
+  /** The read of the template's document; a template origin only. */
+  templateRead?: () => Promise<Response>;
 }
 function open(intent: RunIntent, o: Open = {}) {
   const loaders: SeedLoaders = {
@@ -79,7 +89,7 @@ function open(intent: RunIntent, o: Open = {}) {
   wfetchMock.mockImplementation(async (path: string, init?: { method?: string }) => {
     if (path === "/templates" && init?.method === "POST") return json({ id: "t9", kind: "template" });
     if (path === "/templates") return json({ templates: [], publish: { org: false, groups: [], groups_unverified: false } });
-    if (path.startsWith("/templates/")) return json({ document: { needs_setup: o.needs ?? [] } });
+    if (path.startsWith("/templates/")) return o.templateRead ? o.templateRead() : json({ document: { needs_setup: o.needs ?? [] } });
     throw new Error(`unexpected ${path}`);
   });
   const door = o.via === "template" ? `template=${TEMPLATE_ID}&rev=1` : `again=${RUN_ID}`;
@@ -204,7 +214,7 @@ describe("Review groups", () => {
     expect(group("work").getByText(NR_REVIEW.WORK_NONE)).toBeInTheDocument();
     expect(group("tools").getByText(NR_REVIEW.HARNESS_STARTS)).toBeInTheDocument();
     expect(group("tools").getByText("Fix the build")).toBeInTheDocument();
-    expect(group("tools").getByText(NR_REVIEW.PROV_MODEL_PROVIDER)).toBeInTheDocument();
+    expect(group("tools").getByText(NR_SHAPE.SOURCE_AGAIN)).toBeInTheDocument();
     expect(group("limits").getByText(NR_SHARED.JOIN(NR_SHARED.CPU("2"), NR_SHARED.MIB("4,096")))).toBeInTheDocument();
   });
 
@@ -312,5 +322,125 @@ describe("Review Save as", () => {
     await ready();
     await user.click(screen.getByRole("button", { name: NR_REVIEW.SAVE_POLICY }));
     expect(await screen.findByRole("dialog")).toHaveTextContent(NR_SAVE.TITLE_POLICY);
+  });
+});
+
+describe("Review requests", () => {
+  it("sends no body while the draft has a local issue, and the serialised draft once it is clean", async () => {
+    open({ ...AGENT, tools: [] });
+    await ready();
+    expect(checks.params?.body).toBeNull();
+    cleanup();
+    open(AGENT);
+    await ready();
+    expect(checks.params?.body).toEqual(intentToWire(AGENT).body);
+  });
+});
+
+describe("Review template setup read", () => {
+  const needs = [{ field: "inline_policy.model_provider" }];
+  const shut = () => {
+    expect(launch()).toBeDisabled();
+    expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKER_STALE);
+  };
+
+  it("keeps Launch shut while the template's setup is still being read", async () => {
+    open(AGENT, { via: "template", templateRead: () => new Promise<Response>(() => {}) });
+    await ready();
+    shut();
+  });
+
+  it("keeps Launch shut when the read fails, and Check again reads it again", async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    open(AGENT, { via: "template", templateRead: () => (++calls === 1 ? Promise.reject(new Error("offline")) : Promise.resolve(json({ document: { needs_setup: [] } }))) });
+    await ready();
+    await waitFor(() => expect(calls).toBe(1));
+    shut();
+    await user.click(screen.getByRole("button", { name: NR_REVIEW.CHECK_AGAIN }));
+    await waitFor(() => expect(launch()).toBeEnabled());
+    expect(calls).toBe(2);
+    expect(blockerList()).toBeEmptyDOMElement();
+  });
+
+  it("still lists what the template left to set once it is read", async () => {
+    open(AGENT, { via: "template", needs });
+    await waitFor(() => expect(blockerList()).toHaveTextContent(NR_TEMPLATES.NEEDS_SETUP("Model provider")));
+    expect(launch()).toBeDisabled();
+  });
+});
+
+describe("Review provenance", () => {
+  const FILES = ["workspace_mounts"];
+  const withProvenance = (source: object) =>
+    answered({ ...SCENARIO_PREFLIGHT.member, provenance: [{ field: FILES[0], value: "/work", source, effect: "added" }] } as PreflightResult);
+
+  it("names a Run again value's origin, not the person", async () => {
+    open(AGENT);
+    await ready();
+    expect(group("work").getByText(NR_SHAPE.SOURCE_AGAIN)).toBeInTheDocument();
+    expect(group("work").queryByText(NR_REVIEW.PROV_ADDED)).toBeNull();
+  });
+
+  it("names the template a value came from", async () => {
+    open(AGENT, { via: "template" });
+    await ready();
+    expect(group("work").getByText(NR_SHARED.JOIN(NR_SHAPE.SOURCE_TEMPLATE, "Nightly"))).toBeInTheDocument();
+    expect(group("tools").getByText(NR_SHARED.JOIN(NR_SHAPE.SOURCE_TEMPLATE, "Nightly"))).toBeInTheDocument();
+  });
+
+  it("takes the server's provenance row over the draft's account", async () => {
+    checks.current = withProvenance({ kind: "policy", name: "Platform team" });
+    open(AGENT);
+    await ready();
+    expect(group("work").getByText(NR_SHARED.JOIN(NR_REVIEW.PROV_SOURCE_POLICY, "Platform team"))).toBeInTheDocument();
+    cleanup();
+    checks.current = withProvenance({ kind: "person" });
+    open(AGENT);
+    await ready();
+    expect(group("work").getByText(NR_REVIEW.PROV_ADDED)).toBeInTheDocument();
+    cleanup();
+    checks.current = withProvenance({ kind: "model_provider" });
+    open(AGENT);
+    await ready();
+    expect(group("tools").getByText(NR_REVIEW.PROV_MODEL_PROVIDER)).toBeInTheDocument();
+  });
+
+  it("shows the person's own pick as theirs once they change it, and not the template's ask as theirs", async () => {
+    const user = userEvent.setup();
+    open({ ...AGENT, resources: { cpu_millis: 2000, memory_mib: 4096 } });
+    await ready();
+    expect(group("limits").getByText(NR_SHAPE.SOURCE_AGAIN)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_LIMITS}` }));
+    setField(screen.getByLabelText(NR_REVIEW.CPU_LABEL), "1");
+    expect(group("limits").getByText(NR_REVIEW.PROV_SELECTED)).toBeInTheDocument();
+  });
+
+  it("does not call a template's narrowed ask the person's", async () => {
+    checks.current = answered(SCENARIO_PREFLIGHT.governed);
+    open({ ...AGENT, resources: { cpu_millis: 16000, memory_mib: 16384 } });
+    await ready();
+    expect(screen.getByText(NR_REVIEW.NARROWED_BY("Platform team"))).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(NR_REVIEW.PROV_ADDED))).toBeNull();
+  });
+});
+
+describe("Review Files and Limits detail", () => {
+  it("reads the main drive's enforcement from facts and its size from the applied amount", async () => {
+    checks.current = answered({ ...SCENARIO_PREFLIGHT.member, main_drive: { applied_mib: 20480, facts: { enforcement: "filesystem" } } } as PreflightResult);
+    open(AGENT);
+    await ready();
+    expect(group("work").getByText(NR_REVIEW.MAIN_DRIVE(20))).toBeInTheDocument();
+    expect(group("work").getByText(NR_FILES.ENFORCED)).toBeInTheDocument();
+  });
+
+  it("opens the limits editor on what was asked for, not the narrowed amount", async () => {
+    const user = userEvent.setup();
+    checks.current = answered(SCENARIO_PREFLIGHT.governed);
+    open({ ...AGENT, resources: { cpu_millis: 16000, memory_mib: 16384 } });
+    await ready();
+    await user.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_LIMITS}` }));
+    expect(screen.getByLabelText(NR_REVIEW.CPU_LABEL)).toHaveValue("16");
+    expect(screen.getByLabelText(NR_REVIEW.MEMORY_LABEL)).toHaveValue("16384");
   });
 });
