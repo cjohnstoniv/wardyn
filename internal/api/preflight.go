@@ -105,6 +105,9 @@ type preflightResponse struct {
 	// Access is what the run brings in (accessFacts), the same projection the
 	// policy preview answers for the same request.
 	Access *accessBlock `json:"access,omitempty"`
+	// Attachments is the run's mount map: each repository, folder and drive at
+	// the path the run uses it at. Never null.
+	Attachments []client.RunAttachment `json:"attachments"`
 }
 
 // preflightBurst and preflightLimiterMaxPeople size the per-person preflight
@@ -335,7 +338,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		llmAccess = runLLMAccess(req, mpChoice)
 	}
 
-	items := s.deriveSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, f.present, llmAccess)
+	items := s.deriveRunSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, f.present, llmAccess, f.wsRefs)
 
 	// credentialConfinementAdvisory (#150): the SAME shared helper the create
 	// path calls (appendCredentialConfinementAdvisory, runs_create.go), off the
@@ -357,6 +360,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		LocalPlacement:           []client.LocalPlacementFact{},
 		AllowedImages:            []client.AllowedImage{},
 		RunnerPools:              []client.RunnerPoolChoice{},
+		Attachments:              f.attachments,
 	}
 	resp.RunnerPool, resp.RunnerPools = f.place.facts()
 	resp.Image, resp.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)

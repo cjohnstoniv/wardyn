@@ -53,6 +53,17 @@ func holdLane(interactive bool, toolApprovals, taskMode string) bool {
 	return !interactive && toolApprovals == "hold" && taskMode != "exec"
 }
 
+// holdLaneHarnessCredentials is stampHarnessCredential for a run on the hold
+// lane alone: only that lane launches a harness through wardyn-toolgate, so no
+// other run is minted any. Its proxy then carries no digest, and any tool-gate
+// call from it is decided as a call from no harness is.
+func (s *Server) holdLaneHarnessCredentials(ctx context.Context, run types.AgentRun, p dispatchParams) ([]types.HarnessCredential, []runner.ManagedFile, error) {
+	if !p.holdLane() {
+		return nil, nil, nil
+	}
+	return s.stampHarnessCredential(ctx, run, p.HarnessToolRules, p.Drive)
+}
+
 // holdLane is holdLane for this dispatch.
 func (p dispatchParams) holdLane() bool {
 	return holdLane(p.Interactive, p.ToolApprovals, p.TaskMode)
@@ -94,8 +105,17 @@ func agentPolicyBasis(level types.AutonomyLevel, hold, locked bool) string {
 //
 // locked is the governance rubric's agent_guardrail_locks term, frozen on the
 // dispatch ceiling.
-func (s *Server) agentPolicyFor(ctx context.Context, run types.AgentRun, hold, locked bool) (runAgentPolicy, error) {
+//
+// The document follows the harness set, not only the started agent: a harness
+// the set carries but Wardyn does not start (one a person starts by hand, or a
+// command starts) runs under the same file as one Wardyn starts.
+func (s *Server) agentPolicyFor(ctx context.Context, run types.AgentRun, harnesses []types.RunHarness, hold, locked bool) (runAgentPolicy, error) {
 	path, content, ok := agentpolicy.ForAgent(run.Agent, run.AutonomyLevel, hold, locked)
+	for _, h := range harnesses {
+		if !ok {
+			path, content, ok = agentpolicy.ForAgent(h.Harness, run.AutonomyLevel, hold, locked)
+		}
+	}
 	if !ok {
 		return runAgentPolicy{}, nil
 	}

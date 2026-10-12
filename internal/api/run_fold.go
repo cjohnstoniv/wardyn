@@ -43,13 +43,23 @@ type runFold struct {
 	// value, so one request cannot grade on two sets.
 	baseline composer.Baseline
 
-	spec              types.RunPolicySpec
-	policyID          *uuid.UUID
-	policyWarns       []string
-	source            policySourceRecord
-	ephemeralDirs     []string
-	driveMount        *types.DriveMount
-	wsRefs            []types.Workspace
+	spec          types.RunPolicySpec
+	policyID      *uuid.UUID
+	policyWarns   []string
+	source        policySourceRecord
+	ephemeralDirs []string
+	driveMount    *types.DriveMount
+	// previewDriveReadOnly is the drive's posture at the preview, which resolves
+	// no mount: nil when the run has no drive.
+	previewDriveReadOnly *bool
+	// seed is what seeding the request's workspaces decided (attached first,
+	// the primary leading); wsRefs adds every other one the spec references.
+	seed   workspaceSeed
+	wsRefs []types.Workspace
+	// attachments is the run's mount map and startFolder its one working
+	// directory (WARDYN_START_FOLDER), both from stepWorkspaces.
+	attachments       []client.RunAttachment
+	startFolder       string
 	present           map[string]bool
 	reqEvents         []requirementAuditEntry
 	directGitHubAdded []string
@@ -128,6 +138,10 @@ type runFoldStep struct {
 //     answer before the confinement floor and the provider's liveness step.
 //   - Confinement, then the model provider, then autonomy: the autonomy grade
 //     reads the enforced class and the chosen model credential.
+//   - The tool lane after autonomy, the last step that can put the run on the
+//     gated lane: a person's rule, or a policy rule that holds or blocks, puts
+//     a background run there too, and the person's allows are held to the
+//     policy with the lane's default under it.
 //   - Azure DevOps standing and PAT narrowing read autonomy's site snapshot.
 //   - The run's end reads the resolved pool, the governance ceiling and the deployment,
 //     so it sits after placement and refuses before capacity.
@@ -156,6 +170,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepPlacementCapability, foldAll},
 	{(*Server).stepModelProvider, foldAll},
 	{(*Server).stepAutonomy, foldAll},
+	{(*Server).stepToolPolicy, foldAll},
 	{(*Server).stepADOStanding, foldAll},
 	{(*Server).stepPATNarrowing, foldPreflight | foldPreview},
 	{(*Server).stepRunEnd, foldAll},

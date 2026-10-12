@@ -9,6 +9,7 @@
   { "key": "FIELD_UNAVAILABLE", "args": ["tools: more than one included tool"], "text": "tools: more than one included tool is not available on this server yet, so the run was not created." },
   { "key": "BACKGROUND_ONLY", "args": ["terminal"], "text": "This run is a background task, so it has no terminal. Its logs, audit trail and status stay available." },
   { "key": "IDLE_STOP_BACKGROUND", "args": [], "text": "A background task ends when its work exits, so it has no idle stop. Remove it, or choose an interactive environment." },
+  { "key": "CODEX_BUILTIN_RULE", "args": ["shell"], "text": "shell is one of Codex CLI's own tools, and Wardyn can't block those. Only its MCP tools can be blocked." },
   { "key": "RUN_SHAPE_CONFLICT", "args": ["environment", "an environment is interactive: set experience interactive"], "text": "shape environment does not fit this run: an environment is interactive: set experience interactive." },
   { "key": "STARTUP_PROMPT_SHAPE", "args": [], "text": "startup.prompt: only a harness startup takes a starting prompt" },
   { "key": "HARNESS_NOT_INSTALLED", "args": ["Claude Code"], "text": "Claude Code isn't installed in this server's sandbox images, so the run was not created. Ask an admin to add an image that includes it." },

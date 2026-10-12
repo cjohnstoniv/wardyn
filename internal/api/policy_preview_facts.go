@@ -50,6 +50,8 @@ type policyPreviewResponse struct {
 	// Access is what the draft brings in (accessFacts), the same projection
 	// Review answers.
 	Access *accessBlock `json:"access,omitempty"`
+	// Attachments is the preflight's, with the same meaning.
+	Attachments []client.RunAttachment `json:"attachments"`
 }
 
 type policyPreviewPending string

@@ -22,6 +22,7 @@ import {
   FolderOpen,
   HardDrive,
   KeyRound,
+  LayoutTemplate,
   Lock,
   Menu,
   Play,
@@ -143,6 +144,9 @@ const ADMIN_NAV: NavItem[] = [
   { to: "/admin/people", label: PEOPLE_PAGE.NAV, icon: Contact },
   { to: "/admin/workspaces", label: "Workspaces", icon: FolderOpen },
   { to: "/admin/policies", label: "Policies", icon: UserCog },
+  // 0.9: saved starting points; org admins rename, delete and publish here. A member route server-side, so
+  // both admin tiers see it. The label is literal like its neighbours: the screen's copy module is lazy-only.
+  { to: "/admin/templates", label: "Templates", icon: LayoutTemplate },
   // GOVERNANCE_NAV_TITLE is one string for the nav and the screen's heading.
   { to: "/admin/governance", label: GOVERNANCE_NAV_TITLE, icon: Scale },
   { to: "/admin/permissions", label: "Permissions", icon: Users },
@@ -161,6 +165,7 @@ const ADMIN_NAV: NavItem[] = [
 ];
 const USER_NAV: NavItem[] = [
   { to: "/runs", label: "Runs", icon: Activity, badge: "attention" },
+  { to: "/templates", label: "Templates", icon: LayoutTemplate },
   { to: "/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
   { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
 ];

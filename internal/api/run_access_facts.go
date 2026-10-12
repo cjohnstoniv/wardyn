@@ -21,6 +21,14 @@ import (
 const (
 	provKindHarness = "harness" // an included harness
 	provKindPosture = "posture" // a harness's tool-lane default (the harness facts)
+
+	// ToolPolicyFact.Lane and .Enforcer.
+	toolLaneGated       = "gated"
+	toolLaneUngated     = "ungated"
+	toolLaneAttended    = "attended"
+	toolLaneUnsupported = "unsupported"
+	toolEnforcerGate    = "wardyn_gate"
+	toolEnforcerNone    = "none"
 )
 
 // What an access row is and which chip it carries.
@@ -302,6 +310,83 @@ func (b *accessBuilder) harnessRow(fact componentFact) {
 		b.addCredential(c)
 	}
 	b.addSetup(setup...)
+	b.out.Harnesses = append(b.out.Harnesses, b.toolPolicyFact(agent.Agent))
+}
+
+// toolPolicyFact is one included harness's tool policy as step 5 shows it: the
+// lane its calls take and who enforces it, its default and the effects the
+// person may choose (each greyed with its reason where the policy is stricter
+// or the harness cannot honour it), and the policy's rules, locked. What it
+// offers is what the server accepts: toolRulesWithinPolicyRefusal,
+// harnessToolRulesRefusal and attendedToolRulesRefusal answer the same cases.
+func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
+	req, rules := *b.in.req, b.in.spec.ToolRules
+	fact := client.ToolPolicyFact{Harness: harness, Lane: toolLaneUngated, Enforcer: toolEnforcerNone, RuleTools: "any",
+		PolicyRules: []client.LockedToolRule{}, MCPServers: []string{}}
+	for _, r := range rules {
+		fact.PolicyRules = append(fact.PolicyRules, client.LockedToolRule{Tool: r.Tool, Effect: r.Effect, Source: b.toolRuleSource(r)})
+	}
+	// What this harness on this lane can never take, for its default and for a
+	// rule, by effect.
+	var forDefault, forRule map[types.ToolEffect]string
+	switch {
+	case harness == codexHarness:
+		fact.RuleTools = "mcp_only"
+		forDefault = map[types.ToolEffect]string{types.ToolHold: "harness_no_hold", types.ToolDeny: "harness_no_block_builtin"}
+		forRule = map[types.ToolEffect]string{types.ToolHold: "harness_no_hold"}
+	case !agentHasHoldLane(harness):
+		fact.Lane = toolLaneUnsupported
+		forDefault = map[types.ToolEffect]string{types.ToolAllow: "custom_harness_rules", types.ToolHold: "custom_harness_rules", types.ToolDeny: "custom_harness_rules"}
+		forRule = forDefault
+	case requestIsInteractive(req):
+		fact.Lane = toolLaneAttended
+		forDefault = map[types.ToolEffect]string{types.ToolAllow: "attended_no_skip", types.ToolDeny: "attended_rules_unavailable"}
+		forRule = map[types.ToolEffect]string{types.ToolAllow: "attended_no_skip", types.ToolHold: "attended_rules_unavailable", types.ToolDeny: "attended_rules_unavailable"}
+	case holdLane(false, req.ToolApprovals, req.TaskMode):
+		fact.Lane, fact.Enforcer = toolLaneGated, toolEnforcerGate
+	}
+	policyDefault := policyToolEffect(rules, toolLaneDefault(req), "*")
+	fact.Default = client.ToolDefaultFact{Effective: policyDefault, Source: b.toolRuleSource(types.ToolRule{Tool: "*", Effect: policyDefault}),
+		Options: toolEffectOptions(policyDefault, forDefault, "policy_stricter_default")}
+	if i := slices.IndexFunc(req.Tools, func(t client.IncludedTool) bool { return t.ID == harness }); i >= 0 &&
+		effectRank(req.Tools[i].DefaultEffect) > effectRank(policyDefault) {
+		fact.Default.Effective, fact.Default.Source = req.Tools[i].DefaultEffect, client.ProvenanceSource{Kind: provKindPerson}
+	}
+	fact.RuleEffects = toolEffectOptions(policyDefault, forRule, "policy_stricter_tool")
+	return fact
+}
+
+// toolEffectOptions is each effect a person may choose against the policy's
+// effect: the harness's own reason where it cannot take it, stricter where the
+// policy is stricter, available otherwise.
+func toolEffectOptions(policy types.ToolEffect, cannot map[types.ToolEffect]string, stricter string) []client.EffectOption {
+	var out []client.EffectOption
+	for _, e := range []types.ToolEffect{types.ToolAllow, types.ToolHold, types.ToolDeny} {
+		opt := client.EffectOption{Effect: e, Available: true}
+		switch {
+		case cannot[e] != "":
+			opt.Available, opt.Reason = false, cannot[e]
+		case effectRank(e) < effectRank(policy):
+			opt.Available, opt.Reason = false, stricter
+		}
+		out = append(out, opt)
+	}
+	return out
+}
+
+// toolRuleSource is who put a tool rule on the run, from the fold's provenance:
+// the source that added it, else the policy the run started from. A "*" that no
+// rule sets is the lane's own default.
+func (b *accessBuilder) toolRuleSource(r types.ToolRule) client.ProvenanceSource {
+	for _, p := range b.in.prov {
+		if p.Field == fieldToolRules && p.Value == r.Tool+":"+string(r.Effect) && p.Effect == provEffectAdded {
+			return client.ProvenanceSource(p.Source)
+		}
+	}
+	if !slices.Contains(b.in.spec.ToolRules, r) {
+		return client.ProvenanceSource{Kind: provKindHarness}
+	}
+	return client.ProvenanceSource(policyProvSource(b.in.source))
 }
 
 // modelCredentials is what the chosen provider hands the run. A key, token or
