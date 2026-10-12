@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package conformance is the driver-agnostic parity gate for runner.Runner
-// implementations. Call Run(t, r) from driver-specific test files.
+// implementations. Call Run(t, r) from driver-specific test files, and
+// RunPlacementRouting(t, substrate, opts) beside it: a placement is honoured or
+// refused, never substituted.
 //
 // Contract assertions enforced here:
 //  1. Capabilities sanity: if ConfinementClasses is non-empty, CreateSandbox

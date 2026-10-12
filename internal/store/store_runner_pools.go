@@ -28,6 +28,9 @@ import (
 type RunnerPoolStore interface {
 	ListRunnerPoolCatalogue(ctx context.Context, owner string) ([]RunnerPoolCatalogueRow, error)
 	GetRunnerPool(ctx context.Context, id uuid.UUID) (types.RunnerPool, error)
+	// ListRunnerPoolMembers is every member of a pool, other people's runners included: only the
+	// admission fold reads it, and only through runnerpool.OwnRunnerCandidates.
+	ListRunnerPoolMembers(ctx context.Context, id uuid.UUID) ([]types.RunnerPoolMember, error)
 	CreateRunnerPool(ctx context.Context, p types.RunnerPool, by string) (types.RunnerPool, error)
 	UpdateRunnerPool(ctx context.Context, id uuid.UUID, revision int64, name *string, state *types.RunnerPoolState, limits *types.RunnerPoolLimits) (types.RunnerPool, error)
 	DeleteRunnerPool(ctx context.Context, id uuid.UUID) (RunnerPoolDeletion, error)
@@ -42,7 +45,7 @@ type RunnerPoolStore interface {
 
 	GetRunnerPoolOrgDefaults(ctx context.Context) (types.RunnerPoolDefaults, error)
 	PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefaults, by string) error
-	BootstrapRunnerPools(ctx context.Context, executors []string, name string) (*types.RunnerPool, error)
+	BootstrapRunnerPools(ctx context.Context, executors []string, name string) (*types.RunnerPool, *types.RunnerPoolDefaults, error)
 }
 
 var _ RunnerPoolStore = PG{}
@@ -150,6 +153,18 @@ func bumpRunnerPoolQ(ctx context.Context, q Querier, id uuid.UUID) (int64, error
 
 func (s PG) GetRunnerPool(ctx context.Context, id uuid.UUID) (types.RunnerPool, error) {
 	return getRunnerPoolQ(ctx, s.Pool, id, false)
+}
+
+func (s PG) ListRunnerPoolMembers(ctx context.Context, id uuid.UUID) ([]types.RunnerPoolMember, error) {
+	return collect(ctx, s.Pool, "list", "runner pool members",
+		`SELECT pool_id, runner_id, COALESCE(executor_id, ''), added_at FROM runner_pool_members WHERE pool_id = $1 ORDER BY runner_id, executor_id`,
+		[]any{id}, func(row pgx.Row) (types.RunnerPoolMember, error) {
+			var m types.RunnerPoolMember
+			if err := row.Scan(&m.PoolID, &m.RunnerID, &m.ExecutorID, &m.AddedAt); err != nil {
+				return m, fmt.Errorf("store: scan runner pool member: %w", err)
+			}
+			return m, nil
+		})
 }
 
 // ListRunnerPoolCatalogue returns every live pool, by name, with its use policy, executor members and
@@ -622,15 +637,18 @@ func (s PG) PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefa
 // BootstrapRunnerPools is the one-time upgrade step: when this deployment has configured executors and
 // no pool has ever existed (a deleted one still counts, so an administrator's deletion sticks), it
 // creates one remote_provided pool named name holding exactly those executors and makes it the
-// organisation's remote default, so existing runs keep the placement they have today. It gives nobody
-// an executor they lacked (no use policy, and no self-hosted pool is ever made); it is still a
-// placement change, since a run may then land on any member that advertises its class. With no
-// executors or a catalogue that has existed it does nothing. Returns the pool it created, nil otherwise.
-func (s PG) BootstrapRunnerPools(ctx context.Context, executors []string, name string) (*types.RunnerPool, error) {
+// organisation's remote default and its preferred hosting type, so existing runs keep the placement
+// they have today and a launch that names no pool or placement still resolves. Defaults the
+// organisation saved before any pool existed keep their preferred hosting type, a blank one included.
+// It gives nobody an executor they lacked (no use policy, and no self-hosted pool is ever made); it is
+// still a placement change, since a run may then land on any member that advertises its class. With no executors or a catalogue that has existed it does nothing.
+// Returns the pool it created and the organisation defaults it left, both nil when it did nothing.
+func (s PG) BootstrapRunnerPools(ctx context.Context, executors []string, name string) (*types.RunnerPool, *types.RunnerPoolDefaults, error) {
 	if len(executors) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var created *types.RunnerPool
+	var defaults *types.RunnerPoolDefaults
 	err := s.inTx(ctx, func(q Querier) error {
 		if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('runner_pools.create'))`); err != nil {
 			return err
@@ -648,13 +666,23 @@ func (s PG) BootstrapRunnerPools(ctx context.Context, executors []string, name s
 				return err
 			}
 		}
-		if _, err := q.Exec(ctx, `
-			INSERT INTO runner_pool_org_defaults (remote_provided, updated_by) VALUES ($1, 'system')
-			ON CONFLICT (singleton) DO UPDATE SET remote_provided = EXCLUDED.remote_provided, updated_by = 'system', updated_at = now()`, p.ID); err != nil {
+		d, err := scanOrgDefaults(q.QueryRow(ctx, `
+			INSERT INTO runner_pool_org_defaults (preferred_hosting, remote_provided, updated_by) VALUES ('remote_provided', $1, 'system')
+			ON CONFLICT (singleton) DO UPDATE SET remote_provided = EXCLUDED.remote_provided, updated_by = 'system', updated_at = now()
+			RETURNING preferred_hosting, remote_provided, self_hosted`, p.ID))
+		if err != nil {
 			return err
 		}
-		created = &p
+		created, defaults = &p, &d
 		return nil
 	})
-	return created, err
+	return created, defaults, err
+}
+
+func scanOrgDefaults(row pgx.Row) (types.RunnerPoolDefaults, error) {
+	var d types.RunnerPoolDefaults
+	var hosting string
+	err := row.Scan(&hosting, &d.RemoteProvided, &d.SelfHosted)
+	d.PreferredHosting = types.RunnerPoolHosting(hosting)
+	return d, err
 }

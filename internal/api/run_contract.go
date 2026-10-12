@@ -43,8 +43,6 @@ import (
 //	built-in components           -> A-L14
 //	allowed_image, image facts     -> the image lane (A-L4/A-L6)
 //	placement local               -> the placement lane (#117)
-//	runner_pool_id                -> the runner pool lane: resolve through runnerpool.Resolve and
-//	                                 admit the exact target; an omitted pool stays accepted until then
 //	resources clamp, targets      -> A-L5, A-L4 (accepted, applied nowhere yet)
 const (
 	maxRunOverrideEntries  = 64
@@ -71,7 +69,7 @@ func (s *Server) runContractRefusal(req createRunRequest) *runRefusal {
 // template document is held to the same list when it is imported.
 var runContractShapeChecks = []func(createRunRequest) *runRefusal{
 	placementShapeRefusal, runnerPoolShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, runOverridesRefusal, builtinComponentsRefusal,
-	runModeShapeRefusal,
+	runModeShapeRefusal, runEndShapeRefusal,
 }
 
 func placementShapeRefusal(req createRunRequest) *runRefusal {
@@ -256,7 +254,7 @@ func overrideInvalid(format string, args ...any) *runRefusal {
 
 // runOverridesRefusal validates the overrides' shape, then refuses every edit the
 // narrowing table never allows from a request. What is left is allowed or
-// ceiling-clamped; applying it is unappliedFieldsRefusal's stub today.
+// ceiling-clamped; applyRunOverrides applies it inside the policy fold.
 func runOverridesRefusal(req createRunRequest) *runRefusal {
 	o := req.Overrides
 	if o == nil {
@@ -301,7 +299,48 @@ func overridesShapeRefusal(o client.RunOverrides) *runRefusal {
 	if refusal := gitPATOverridesShape(o.GitPAT); refusal != nil {
 		return refusal
 	}
+	if refusal := runHostOverridesShape(o.Hosts); refusal != nil {
+		return refusal
+	}
+	if e := o.Egress; e != nil {
+		if e.FirstUseApproval != "" && !e.FirstUseApproval.Valid() {
+			return overrideInvalid("egress.first_use_approval: %q is not one of always_deny, deny_with_review, wait_for_review", e.FirstUseApproval)
+		}
+		if e.AllowAllEgress != nil && !*e.AllowAllEgress {
+			return overrideInvalid("egress.allow_all_egress: set it to true, or leave it out")
+		}
+	}
 	return pushRuleOverridesShape(o.PushRules)
+}
+
+// runHostOverridesShape checks the run-wide host lists. An allowed host is a bare
+// DNS name (the table refuses wildcards); a denied one may be a wildcard, since a
+// deny only takes reach away. Any removal is refused by name.
+func runHostOverridesShape(h *client.RunHostOverrides) *runRefusal {
+	if h == nil {
+		return nil
+	}
+	for name, n := range map[string]int{"hosts.add_allowed": len(h.AddAllowed), "hosts.add_denied": len(h.AddDenied),
+		"hosts.remove_allowed": len(h.RemoveAllowed), "hosts.remove_denied": len(h.RemoveDenied)} {
+		if refusal := overrideListLen(name, n); refusal != nil {
+			return refusal
+		}
+	}
+	for i, host := range h.AddAllowed {
+		if err := overrideHost(host); err != nil {
+			return overrideInvalid("hosts.add_allowed[%d]: %v", i, err)
+		}
+	}
+	for i, host := range h.AddDenied {
+		if !overrideText(host) || net.ParseIP(host) != nil || strings.ContainsAny(host, ":/ ") || proxy.ValidDomainEntry(host) != nil {
+			return overrideInvalid("hosts.add_denied[%d]: %q must be a DNS name such as api.example.com, or a wildcard such as *.example.com", i, host)
+		}
+	}
+	if len(h.RemoveAllowed)+len(h.RemoveDenied) > 0 {
+		return runError(http.StatusUnprocessableEntity, reasonOverrideRefused,
+			"An override cannot remove a host of the base policy: its hosts are read-only on a run. Add a denied host instead, or choose another base.")
+	}
+	return nil
 }
 
 // overrideText is a printable single-line value within the entry's length cap.
@@ -465,15 +504,9 @@ func unappliedFieldsRefusal(req createRunRequest) *runRefusal {
 		return refusal
 	}
 	switch {
-	case req.RunnerPoolID != "":
-		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
-			"runner_pool_id: this server does not manage runner pools yet, so the run was not created.")
 	case req.AllowedImage != "":
 		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
 			"allowed_image: this server does not apply an image choice yet, so the run was not created.")
-	case req.Overrides != nil && len(req.Overrides.Items()) > 0:
-		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
-			"overrides: this server does not apply per-run overrides yet, so the run was not created.")
 	}
 	for i, ref := range req.Components {
 		if ref.Builtin != "" {

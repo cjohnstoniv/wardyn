@@ -379,16 +379,10 @@ func runModeUnavailableRefusal(req createRunRequest) *runRefusal {
 // runModeUnavailable names the first valid carrier this server cannot honour yet:
 // its request path, and what about it is unavailable.
 func runModeUnavailable(req createRunRequest) (path, what string) {
-	if len(req.Tools) > 1 {
-		return "tools", "tools: more than one included tool"
-	}
 	for i, t := range req.Tools {
-		p := fmt.Sprintf("tools[%d]", i)
-		switch {
-		case t.Kind == client.IncludedToolComponent:
+		if t.Kind == client.IncludedToolComponent {
+			p := fmt.Sprintf("tools[%d]", i)
 			return p, p + ": a component tool"
-		case len(t.ToolRules) > 0 || t.DefaultEffect != "":
-			return p, p + ": per-tool tool rules"
 		}
 	}
 	if f := req.StartFolder; f != nil && f.Kind == client.StartFolderAttachment {

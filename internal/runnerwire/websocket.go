@@ -5,6 +5,7 @@ package runnerwire
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -87,7 +88,15 @@ func DialWebSocket(ctx context.Context, orgURL, runnerID string, client *http.Cl
 	c, resp, err := websocket.Dial(ctx, address, &websocket.DialOptions{HTTPClient: &hc, CompressionMode: websocket.CompressionDisabled})
 	if err != nil {
 		if resp != nil && resp.Body != nil {
+			// The org's refusal names its reason code in the JSON body.
+			var body struct {
+				Reason string `json:"reason"`
+			}
+			_ = json.NewDecoder(resp.Body).Decode(&body)
 			_ = resp.Body.Close()
+			if body.Reason != "" {
+				err = fmt.Errorf("%w (reason %s)", err, body.Reason)
+			}
 		}
 		return nil, err
 	}

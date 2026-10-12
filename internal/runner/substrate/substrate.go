@@ -77,6 +77,12 @@ type Substrate interface {
 // capabilities over, or falls back to one.
 const RemotePrefix = "runner:"
 
+// Advertiser is implemented by a remote (runner) substrate: what the runner last
+// advertised, or false while it has advertised nothing.
+type Advertiser interface {
+	Advertised() (runner.TargetFacts, bool)
+}
+
 // IsRemote reports whether s reaches a registered runner rather than this
 // deployment's own executor.
 func IsRemote(s Substrate) bool { return strings.HasPrefix(s.Name(), RemotePrefix) }

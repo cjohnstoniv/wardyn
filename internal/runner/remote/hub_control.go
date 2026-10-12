@@ -71,6 +71,9 @@ func (h *Hub) endWithControl(ctx context.Context, id uuid.UUID, kind runnerwire.
 	defer s.peer.Close()
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
+	// The bound closes the link: a send queued behind a stalled write returns
+	// only once the link is down.
+	defer context.AfterFunc(ctx, s.peer.Close)()
 	payload, err := runnerwire.Marshal(runnerwire.Reason{Reason: reason})
 	if err != nil {
 		return err

@@ -45,6 +45,9 @@
 
 "Offline" and "ungoverned" are never the same thing: an offline runner is still governed and runs nothing new.
 
+> [!NOTE]
+> Behind a shared ingress, unauthenticated runner connections from one address share one pre-auth rate-limit bucket, so put per-client rate limits on the ingress in front of `/api/v1/runners/{id}/stream`.
+
 ## Legacy org enrolment (deprecated)
 
 - A full `wardynd` in member mode (topology m′) can still enrol into an org with `WARDYN_ORG_URL` and `WARDYN_ORG_ENROLMENT_TOKEN`; see [DESKTOP.md](../DESKTOP.md#enrolling-into-an-org-control-plane).

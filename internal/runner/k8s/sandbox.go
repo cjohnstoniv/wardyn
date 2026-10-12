@@ -25,20 +25,23 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// podDeadlineGrace is added to Config.RunMaxAge to make a run pod's
-// activeDeadlineSeconds. The control plane's own max-age stop fires first and
-// tears the run down; the deadline is the backstop for a run whose control
-// plane is gone, so the grace only has to outlast the reaper's scan interval.
+// podDeadlineGrace is added to a run's own lifetime cap to make its pods'
+// activeDeadlineSeconds. The control plane's lease sweep KILLS the run at its cap
+// and tears it down; the deadline is the backstop for a run whose control plane
+// is gone, so the grace only has to outlast the sweep interval.
 const podDeadlineGrace = 10 * time.Minute
 
-// activeDeadline returns the pod deadline for Config.RunMaxAge, or nil when no
-// max age is set. activeDeadlineSeconds fails a pod and deletes nothing: the
-// reconciler finalizes the run from the failed pod and tears the rest down.
-func (d *Driver) activeDeadline() *int64 {
-	if d.cfg.RunMaxAge <= 0 {
+// activeDeadline returns the pod deadline for a run with lifetimeCap left to
+// live (runner.Resources.LifetimeCap), or nil for a run with no cap: only a run
+// whose lifetime is bounded has a deadline, and a run with none is
+// NotTerminating-scoped for the quota. activeDeadlineSeconds fails a pod and
+// deletes nothing: the reconciler finalizes the run from the failed pod and
+// tears the rest down.
+func activeDeadline(lifetimeCap time.Duration) *int64 {
+	if lifetimeCap <= 0 {
 		return nil
 	}
-	secs := int64((d.cfg.RunMaxAge + podDeadlineGrace) / time.Second)
+	secs := int64((lifetimeCap + podDeadlineGrace) / time.Second)
 	return &secs
 }
 
@@ -227,7 +230,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	proxyPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: proxyPodName(spec.RunID), Namespace: ns},
 		Spec: corev1.PodSpec{
-			ActiveDeadlineSeconds:        d.activeDeadline(),
+			ActiveDeadlineSeconds:        activeDeadline(spec.Resources.LifetimeCap),
 			AutomountServiceAccountToken: boolPtr(false),
 			// FSGroup makes proxyConfigSecretFileMode's group-read bit effective
 			// for the init container; without it, "permission denied".
@@ -329,7 +332,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		// No BlockOwnerDeletion: that would need an extra permission on pods/finalizers.
 		ObjectMeta: metav1.ObjectMeta{Name: agentPodName(spec.RunID), Namespace: ns, OwnerReferences: ownedByPod(createdProxy)},
 		Spec: corev1.PodSpec{
-			ActiveDeadlineSeconds:        d.activeDeadline(),
+			ActiveDeadlineSeconds:        activeDeadline(spec.Resources.LifetimeCap),
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
 			EnableServiceLinks:           boolPtr(false), // SECURITY: same service-topology-leak reason as the proxy pod above.

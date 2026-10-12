@@ -99,9 +99,10 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 		// Content rules run BEFORE the capability check: nobody is asked to approve code_write for a
 		// push the rules refuse. A probe moving no ref carries nothing to inspect and stays a read.
 		if len(push.refs) > 0 {
+			rules, entryErr := p.rulesForRemote(host, rest)
 			inspected, release, ok := p.applyPushRules(w, r, body, slog.String("host", host),
 				func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) },
-				nil, p.adoPushTarget(host, adoGitRepoKeys(r)))
+				nil, p.adoPushTarget(host, adoGitRepoKeys(r)), rules, entryErr)
 			defer release()
 			if !ok {
 				return

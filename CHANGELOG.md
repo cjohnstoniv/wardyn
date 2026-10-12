@@ -71,14 +71,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   actor. It refuses to run while any principal-keyed table already holds a name starting `service:`, naming the
   first such table; rename or remove those rows first. Widening the audit actor check briefly locks `audit_events`
   and its partitions.
+- Migration `0159_run_lifetime_cap` adds `agent_runs.lifetime_cap_at` and `lifetime_cap_source`; existing runs keep
+  them empty.
+- Config keys that hold a secret word (for example `CLIENT_SECRET`, `SECRET_FILE`, `*_IMAGE_PULL_SECRET`) are now
+  refused in templates and component config; move such values to a secret reference.
 
 ### Added
 
 - Under `WARDYN_AUDIT_SEAL=full` the `target` column of `person.attach`, `person.token.create`,
   `delegation.exchange`, `session.revoke`, `secret.list` and `auth.signin_unserialized` rows is stored as the
   person's subject, like the actor, when that person has an identity row, and a typed `subject:` string in an actor
-  or target is refused; `GET /audit?target=` matches both forms (#1828). A person named in `data` (`sub`, `target`,
-  `secret_owner`), and the target of `person.create`, stay clear.
+  or target is refused on rows this organisation writes; a row a device forwards is shown as the device sent it and
+  never resolved to a person. `GET /audit?target=<person>` matches both forms on rows this organisation writes and
+  does not list a device-forwarded row that merely names the person's subject; a filter on the raw target string
+  still finds it (#1828). A person named in `data` (`sub`, `target`, `secret_owner`), and the target of
+  `person.create`, stay clear.
 - Personal and shared secrets are named by route. `PUT`/`DELETE /me/secrets/{name}` (and `GET /me/secrets`) store
   your own secret whatever your role or view; `PUT`/`DELETE /shared-secrets/{name}` (and `GET`) store a shared
   service secret, admin only. Neither accepts `?owner=`. `wardyn secret set|delete` take `--personal` or `--shared`,
@@ -98,7 +105,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - AWS KMS can hold the key that wraps stored credentials (`WARDYN_KEK=awskms`): each data key is wrapped by KMS
   Encrypt bound to its row, the key never leaves AWS, and IRSA or EKS Pod Identity is the expected identity (#588). A
   long-lived access key still boots but raises an amber setup row. An AWS KMS platform key, key domains and store mode
-  are not supported yet, and boot refuses them together with `awskms`.
+  are not supported yet, and boot refuses them together with `awskms`. The Helm chart takes `kek.provider=awskms`
+  and `kek.awskms.key` and, like the other key services, needs no age key.
 - Runners management API: `GET /runners` (active, revoked or all, with each runner's live online state and the runs on
   it), `GET /runners/{id}`, and the caller-scoped `GET /me/runners`, which shows a person only their own runners and
   abbreviates an unclaimed runner's fingerprint. Security admins can list and revoke unused registration tokens (never
@@ -134,9 +142,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `template_*` reasons, a declarative configuration schema for custom components, `wardyn template` and SDK methods.
   The `/templates` and `/admin/template-group-admins` routes answer `501 templates_unavailable` until the template
   store lands.
-- Runner pool contract: the run-create, preflight and policy-preview requests accept `runner_pool_id`, which the
-  server refuses with `request_field_unavailable` until the pool resolver lands (never ignored). Preflight and the
-  preview return `runner_pools`. `wardyn run --pool` and `wardyn runner pool list|default get|set|clear` are added.
+- Runner pool contract: the run-create, preflight and policy-preview requests accept `runner_pool_id`. Preflight and
+  the preview return `runner_pools`. `wardyn run --pool` and `wardyn runner pool list|default get|set|clear` are
+  added.
+- A run now lands in a runner pool: the request's pool, or the person's or the organisation's default; a missing or
+  stale default is refused, never guessed, and self-hosted pools only ever run on the launching person's own
+  runners. A run is created on, and every retry stays on, the target it was admitted against. Migration
+  `0160_run_pool_binding` adds the pool binding to `agent_runs`; existing runs keep none. A request with no run type
+  (`wardyn run` without `--experience`, or an older client) is refused `runner_pool_run_type_not_allowed` by any
+  pool that has limits.
 - `wardyn sync <run> <directory>` pushes a local directory over the audited SSH sync subsystem.
   `--pull` opts into receiving files; pulls refuse symlinks, unsafe names and executable modes,
   keep local edits on conflict and never delete files. `--watch` repeats the sync.
@@ -187,12 +201,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `runner_pool_use_policy`). Deleting a pool that has a use policy is refused until the policy is cleared; attaching
   or detaching an executor that a pool holds under a use policy is held for a second human; a leaver's identity is
   removed from every use policy (an emptied policy permits nobody); deleting a pool clears the organisation default
-  that named it. Pool `limits` are refused on create and update until limits are stored. Audit actions
+  that named it. Audit actions
   `runner_pool.*`, `person.runner_pool_default.set|delete`.
 - New Run run mode: a request chooses `experience` (background or interactive), with its workload, included tools,
-  one startup choice, one starting folder and an explicit "no repositories or drives". The console and the CLI's
-  run-mode flags mark requests `mode_contract: "0.9"`, so an unset mode is refused instead of inferred; older
-  requests keep their documented behaviour.
+  one startup choice, one starting folder and an explicit "no repositories or drives". The CLI's run-mode flags
+  mark requests `mode_contract: "0.9"`, so an unset mode is refused instead of inferred; older requests, and the
+  console until it can choose an experience, keep their documented behaviour.
 - Push rules are carried per source-control entry (provider host and canonical organisation; a remote that cannot be
   read exactly is refused) and tool rules per included harness; a request's rules can only narrow. A background task
   has no idle stop from any source, and the idle reaper skips it. Presets refuse run-mode fields until run templates
@@ -218,11 +232,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   expires.
 - Runner pools carry limits per run type: CPU and memory (default and cap), lifetime (default, maximum or
   unlimited), an idle stop for interactive environments only, allowed barriers and a concurrent-run cap; an
-  administrator sets them on create and replaces them on update (migration 0158). The effective limit is the
-  strictest of the pool, the person's governance, the deployment and, for self-hosted pools, the runner's capacity.
+  administrator sets them on create and replaces them on update (migration 0158). A run is admitted by its pool's
+  run types and barriers, and the pool's lifetime bounds its end; CPU, memory, idle stop and the concurrent-run cap
+  are stored and audited but not yet applied to runs.
 - `wardyn-runnerd` ships as a release binary for Linux and macOS (amd64, arm64) with a per-user service: a systemd
   user unit or a LaunchAgent, installed by `deploy/runner/install.sh`, which registers the runner with a single-use
   token and keeps it running; the owner then claims it with `wardyn runner claim` (#1968).
+- Governance profiles can deny runs on self-hosted or remote-provided runners (`deny_placements`); a run's barrier
+  and capabilities are now checked against the runner it actually lands on, and an offline runner is refused rather
+  than guessed. Create, preflight, policy preview and source scans refuse a denied placement with 403
+  `placement_denied`.
+- New Run can set a run's end at launch (`ends_after_sec`, `wardyn run --ends-in`), or No end where every limit
+  allows it (`no_end`, `--no-end`). An end past a limit is cut to it and the response names the limit. An untouched
+  Interactive run now ends after 24 hours when no pool, profile or deployment names a lifetime. `GET /runs?no_end=1`
+  lists live runs with no end.
 
 ### Changed
 
@@ -280,6 +303,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   under it is refused (`403 audit_retention_actor_reserved`) and audited (#1978).
 - The Codex image supports only its pinned Codex. `OPENAI_BASE_URL` and `OPENAI_API_KEY` are still set but unused by
   Codex and deprecated; a later release removes them (#1979).
+- A recording uploaded for a run on a self-hosted runner is audited `evidence_source: runner_asserted`: a local
+  run's recording is self-reported (threat model residuals #50-#52). Masking continuity across restarts (#1512) is
+  pinned by tests for a run with no secrets and for kill and revoke without a masking corpus.
+- `WARDYN_RUN_MAX_AGE` is now every new run's lifetime cap, not only a reaper stop. A run launched from New Run or
+  `POST /runs` that no profile or pool gives an end now ends at creation plus the max age (Interactive at the
+  earlier of 24 hours and the max age). `no_end` at launch is refused naming the deployment, and `PATCH /runs/{id}`
+  can no longer set No end or extend past the cap, a super admin included (a super admin still skips the profile's
+  limits). Until the lease sweep honours the cap, the lease sweep keeps the run at the same moment the reaper stops
+  it.
+- Template and component-schema config keys such as `CLIENT_SECRET`, `JWT_SECRET` and `*_PASSPHRASE` are now
+  refused as secret-named (`SECRET_NAME`/`SECRET_REF` stay plain).
+- Naming a person by a typed `entra:<tenant>:<object>` (erasure, secret owner) is now refused as ambiguous when that
+  tenant and object id also signed in under another issuer, instead of resolving to one principal and leaving the
+  other's data.
 
 ### Removed
 
@@ -378,6 +415,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   count cannot race a sign-in (#1828).
 - A revive that would start an agent is refused at the concurrent-run cap before any identity is minted or image
   pulled, and approval notifications carry the next later SLA tier still ahead (#1825).
+- Registered runners: a late audit record or agent exit for a run that already ended no longer drops the runner's
+  session; a teardown queued for an offline runner is audited once instead of every sweep; runs finished on a runner
+  record their end time.
+- Registered runners: a kill or stop queued while a runner was briefly offline now reaches it when it reconnects;
+  verified runners behind one ingress no longer use up each other's connect rate limit, while unauthenticated
+  connections from one address stay limited; wardyn-runnerd serve logs why connecting fails and when it is
+  connected.
+- Runner links: a session whose writes stop moving now ends within the keepalive window even if the runner keeps
+  sending PONGs. PING replies, dropped-data credit and the answers to stream opens (refusals and accepts) no longer
+  start a goroutine per frame; answers to opens are capped and a peer that overruns the cap ends its session.
+  Revoking or switching off runners no longer hangs on such a session.
+- On a registered runner, a BYOI run's output no longer ends at its image selftest. The run's output is the task's
+  own, and the selftest's output goes to the runner's log.
+- SCIM deprovisioning never links a sign-in through an email that names another person, and refuses
+  (`owner_ambiguous`, shown on the SCIM status card) when a leaver's emails name two different people, until an
+  admin resolves it.
+- `wardynd -recovery-manifest` now refuses at `pool_max_conns` below 2 and names the setting, instead of hanging.
+- `wardyn sync` and sftp now say when the runner is offline or the sandbox is gone, instead of blaming the sandbox
+  image for a missing sftp-server.
 
 
 ## [0.8.9] — 2026-10-09

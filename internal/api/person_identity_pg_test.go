@@ -508,6 +508,56 @@ func TestPG_ErasureRoutes_TheClaimantsErasureNeverReachesAVictim(t *testing.T) {
 	}
 }
 
+// Three principals under one tenant and object id: an identity bound to entra:<tenant>:<object>, a
+// sign-in of the same ids under another issuer, and an admin-created person (people row) with a
+// sign-in under another issuer only. Every route that acts by a typed name (administration by
+// ?owner= and the credentials and ssh-keys routes, erasure by every scope) reaches the bound
+// principal by its canonical name and never the other issuer's, the audit sealer keys the bound name
+// as itself, and the unlinked people row is still refused as ambiguous.
+func TestPG_ErasureRoutes_ABoundEntraNameIsNotAmbiguousAcrossIssuers(t *testing.T) {
+	for _, rt := range crossRoutes() {
+		t.Run(rt.name, func(t *testing.T) {
+			_, srv, pg, sec := identityRig(t)
+			boundOID, unlinkedOID := uuid.NewString(), uuid.NewString()
+			bound, unlinked := "entra:"+identTenant+":"+boundOID, "entra:"+identTenant+":"+unlinkedOID
+			other := "https://login.microsoftonline.com/other/v2.0"
+			if _, _, err := pg.CreatePerson(t.Context(), types.Person{Principal: unlinked, Email: "unlinked-x@corp.example", Issuer: identIssuer,
+				TenantID: identTenant, ObjectID: unlinkedOID, CreatedBy: "admin"}); err != nil {
+				t.Fatal(err)
+			}
+			for _, in := range []store.LoginIdentity{
+				{Principal: bound, Issuer: identIssuer, TenantID: identTenant, ObjectID: boundOID},
+				{Principal: "pairwise-y-" + boundOID, Issuer: other, TenantID: identTenant, ObjectID: boundOID},
+				{Principal: "pairwise-unlinked-" + unlinkedOID, Issuer: other, TenantID: identTenant, ObjectID: unlinkedOID},
+			} {
+				if _, err := pg.UpsertLoginIdentity(t.Context(), in, time.Now().UTC()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got, err := pg.PrincipalForName(t.Context(), bound); err != nil || got != bound {
+				t.Fatalf("the sealer keys %q as %q, %v, want itself", bound, got, err)
+			}
+			y := "pairwise-y-" + boundOID
+			rt.seed(t, srv, pg, sec, bound)
+			rt.seed(t, srv, pg, sec, y)
+			since := time.Now().UTC().Add(-time.Second)
+			if w := rt.call(t, srv, bound); w.Code != rt.ok {
+				t.Fatalf("%s by the bound name = %d %s, want %d", rt.name, w.Code, w.Body, rt.ok)
+			}
+			if !rt.gone(t, srv, pg, sec, bound, since) {
+				t.Errorf("the bound principal %q kept the record", bound)
+			}
+			if rt.gone(t, srv, pg, sec, y, since) {
+				t.Errorf("erasing %q reached the other issuer's %q", bound, y)
+			}
+			w := rt.call(t, srv, unlinked)
+			if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonOwnerAmbiguous {
+				t.Errorf("%s by the unlinked name = %d %s, want 422 %s", rt.name, w.Code, w.Body, reasonOwnerAmbiguous)
+			}
+		})
+	}
+}
+
 // crossClaimedChange is a pending governance change the attacker proposed while signed in with the
 // email claim claimed.
 func crossClaimedChange(t *testing.T, pg store.PG, attacker, claimed string) uuid.UUID {

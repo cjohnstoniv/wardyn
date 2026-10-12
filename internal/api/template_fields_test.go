@@ -438,12 +438,9 @@ func TestTemplateDecoderRefusals(t *testing.T) {
 		{"redacted placeholder", `{` + head + `,"intent":{"inline_policy":{"workspace_mounts":[{"source":"<redacted>","target":"/home/agent/x"}]}}}`, "intent.inline_policy.workspace_mounts[0].source", reasonTemplateFieldInvalid},
 		{"title is entered at launch", `{` + head + `,"intent":{"title":"nightly"}}`, "intent.title", reasonTemplateFieldExcluded},
 		{"description is entered at launch", `{` + head + `,"intent":{"description":"d"}}`, "intent.description", reasonTemplateFieldExcluded},
-		{"pending: pool", `{` + head + `,"intent":{"runner_pool_id":"6f1c2a52-5b1e-4d45-9d6b-0c4f1b2a7e10"}}`, "intent.runner_pool_id", reasonTemplateFieldUnavailable},
-		{"pending: a malformed pool id is still not a way around", `{` + head + `,"intent":{"runner_pool_id":"x"}}`, "intent.runner_pool_id", reasonTemplateFieldUnavailable},
 		{"run mode: a malformed startup", `{` + head + `,"intent":{"startup":"x"}}`, "intent.startup", reasonTemplateFieldInvalid},
 		{"run mode: the working name is not a field", `{` + head + `,"intent":{"included_tools":[]}}`, "intent.included_tools", reasonTemplateFieldUnknown},
 		{"run mode: the working name is not a field (folder)", `{` + head + `,"intent":{"starting_folder":"/home/agent/work"}}`, "intent.starting_folder", reasonTemplateFieldUnknown},
-		{"pending: unkeyed push rules", `{` + head + `,"intent":{"inline_policy":{"push_rules":{"deny_paths":["a/"]}}}}`, "intent.inline_policy.push_rules", reasonTemplateFieldUnavailable},
 		{"empty inline policy", `{` + head + `,"intent":{"inline_policy":{}}}`, "intent.inline_policy", reasonTemplateFieldInvalid},
 		{"policy reference beside an inline policy", `{` + head + `,"intent":{"policy_id":"6f1c2a52-5b1e-4d45-9d6b-0c4f1b2a7e10","inline_policy":{"allowed_domains":[]}}}`, "intent.inline_policy", reasonInlinePolicyXOR},
 		{"secret-formatted config key", `{` + head + `,"intent":{"components":[{"inline":{"hosts":["a.example.com"],"config":{"` + canaryAWSKey + `":"x"}}}]}}`, "intent.components[0].inline.config.<key>", reasonTemplateSecretRefused},
@@ -585,7 +582,6 @@ func TestTemplateImportValidation(t *testing.T) {
 		{"shape check shared with the run", `{` + head + `"coverage":"partial","intent":{"workspaces":[{"workspace_id":"w","target":"work"}]}}`, reasonWorkspaceTargetInvalid + "@intent"},
 		{"unavailable: local placement", `{` + head + `"coverage":"partial","intent":{"placement":"local"}}`, reasonTemplateFieldUnavailable + "@intent.placement"},
 		{"unavailable: allowed image", `{` + head + `"coverage":"partial","intent":{"allowed_image":"img"}}`, reasonTemplateFieldUnavailable + "@intent.allowed_image"},
-		{"unavailable: overrides", `{` + head + `"coverage":"partial","intent":{"overrides":{"agent":{"add_hosts":["a.example.com"]}}}}`, reasonTemplateFieldUnavailable + "@intent.overrides"},
 		{"unavailable: built-in component", `{` + head + `"coverage":"partial","intent":{"components":[{"builtin":"github","org":"acme","repos":["acme/api"]}]}}`, reasonTemplateFieldUnavailable + "@intent.components[0]"},
 		{"plain setting named like a secret is a plain setting", ``, ""},
 	}
@@ -765,8 +761,6 @@ func TestTemplateCarriedFieldsNeverReadAsRunStateOrSecrets(t *testing.T) {
 func TestTemplateRunModeIsHeldToTheRunsOwnRules(t *testing.T) {
 	const head = `"api_version":"wardyn/v1","kind":"RunTemplate","coverage":"partial"`
 	cases := []struct{ name, body, path, reason string }{
-		{"run mode: two included tools are not available yet", `{` + head + `,"intent":{"tools":[{"id":"claude-code","kind":"harness"},{"id":"codex-cli","kind":"harness"}]}}`, "intent.tools", reasonTemplateFieldUnavailable},
-		{"run mode: per-tool rules are not available yet", `{` + head + `,"intent":{"tools":[{"id":"claude-code","kind":"harness","default_effect":"hold"}]}}`, "intent.tools[0]", reasonTemplateFieldUnavailable},
 		{"run mode: a component tool is not available yet", `{` + head + `,"intent":{"tools":[{"id":"x","kind":"component","component":{"inline":{"hosts":["a.example.com"]}}}]}}`, "intent.tools[0]", reasonTemplateFieldUnavailable},
 		{"run mode: a folder inside an attachment is not available yet", `{` + head + `,"intent":{"start_folder":{"kind":"attachment","attachment":"drive","subpath":"src"}}}`, "intent.start_folder", reasonTemplateFieldUnavailable},
 		{"run mode: the older fields do not ride beside it", `{` + head + `,"intent":{"experience":"interactive","agent":"claude-code"}}`, "intent", reasonRunModeConflict},

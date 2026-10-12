@@ -159,9 +159,10 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// operator may never have enabled would make the policy enforce nothing.
 	// A refused push is never forwarded.
 	if verb == "git-receive-pack" {
+		rules, entryErr := p.rulesForRemote(host, rest)
 		body, release, ok := p.applyPushRules(w, r, reqBody, slog.String("host", host),
 			func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) },
-			p.patForge(host, rest, grant), patPushTarget(host, rest, grant))
+			p.patForge(host, rest, grant), patPushTarget(host, rest, grant), rules, entryErr)
 		defer release()
 		if !ok {
 			return
