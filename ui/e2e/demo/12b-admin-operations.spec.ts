@@ -35,17 +35,52 @@
  * against two-subject episodes.
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+import { NR_DOCUMENT } from "../../src/app/components/wardyn/copy/new-run/document";
+import { NR_REVIEW } from "../../src/app/components/wardyn/copy/new-run/review";
+import { NR_SHARED } from "../../src/app/components/wardyn/copy/new-run/shared";
 import { act, beat, caption, chapter, PACE, spotlight } from "./overlay";
+import {
+  confirmLaunchButton,
+  NEW_RUN_HEADING,
+  newRunHeading,
+  nextStep,
+  noExtraFiles,
+  openNameDialog,
+  runTitleField,
+  shapeCard,
+  startGuided,
+  viewRunButton,
+} from "./new-run";
 import { stage } from "./stage";
-import { SPEC_LABEL } from "../policy-source";
-import { newRunEditPolicy, newRunPanel } from "./funnel";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
 test.describe.configure({ mode: "serial" });
 
 const HOST = "example.com";
+
+/**
+ * The member's run policy, written where the guided flow keeps it. Review's
+ * JSON view opens the run document; its inline_policy is the policy, so the
+ * rules are merged into the document the draft already is.
+ *
+ * OPEN: the Minimal preset and the spec box (the old Policy panel) have no
+ * step in the guided flow. The policy is filmed through Review's JSON view and
+ * the document screen; the lead decides whether that is the home.
+ */
+async function setInlinePolicy(page: Page, policy: Record<string, unknown>, text?: string): Promise<void> {
+  const viewAs = page.getByLabel(NR_REVIEW.VIEW_ARIA).getByRole("button", { name: NR_REVIEW.VIEW_JSON });
+  await act(page, viewAs, text);
+  await act(page, page.getByRole("button", { name: NR_REVIEW.EDIT_FORMAT("JSON") }));
+  const editor = page.getByRole("textbox", { name: NR_DOCUMENT.EDITOR_ARIA("JSON") });
+  await expect(editor).toBeVisible();
+  const document = JSON.parse(await editor.inputValue());
+  document.intent.inline_policy = policy;
+  await editor.fill(JSON.stringify(document, null, 2));
+  await act(page, page.getByRole("button", { name: NR_DOCUMENT.CONTINUE_REVIEW }));
+  await expect(newRunHeading(page, NEW_RUN_HEADING.review)).toBeVisible();
+}
 
 async function dexSignIn(email: string): Promise<void> {
   const page = stage();
@@ -109,30 +144,41 @@ test("V12b act 2 — a member's run asks for the outside world", async () => {
   await dexSignIn("member@wardyn.local");
   await page.waitForURL(/\/(runs|setup)/, { timeout: 60_000 });
 
+  // The guided flow sets the order: the barrier on Run, the policy on Review,
+  // the title in the Name dialog.
   await page.goto("/runs/new");
-  await expect(page.getByRole("heading", { name: "New run", level: 1 })).toBeVisible({ timeout: 30_000 });
-  await caption(page, "A member launches a run of their own: a terminal, nothing mounted, Minimal policy.");
+  await expect(newRunHeading(page, NEW_RUN_HEADING.start)).toBeVisible({ timeout: 30_000 });
+  await caption(page, "A member launches a run of their own: a terminal, nothing mounted, and a policy that holds unlisted hosts for review.");
   await beat(page, PACE.read);
-  await page.getByRole("combobox", { name: "Title" }).fill("reach for the outside world");
-  await newRunPanel(page, "run");
-  await act(page, page.getByRole("radio", { name: /^Terminal/ }), "No agent needed — a shell is enough to meet the boundary.");
-  await newRunEditPolicy(page);
-  await act(page, page.getByRole("button", { name: "Minimal" }), "A member's own run — a terminal, nothing mounted, the Minimal policy.");
-  // Minimal ships a CC2 floor; this demo cluster's one barrier is the Fence.
-  // The one-line edit is itself the lesson: the floor is the member's to
-  // RAISE, never to sneak under the admin's ceiling.
-  const spec = page.getByLabel(SPEC_LABEL);
-  await spec.fill(JSON.stringify({
-    allowed_domains: ["api.anthropic.com"],
-    first_use_approval: "deny_with_review",
-    min_confinement_class: "CC1",
-    auto_stop_after_sec: 3600,
-    eligible_grants: [],
-  }, null, 2));
+  await startGuided(page);
+  await act(page, shapeCard(page, "environment"), "No agent needed — a shell is enough to meet the boundary.");
+  await nextStep(page, NEW_RUN_HEADING.runEnvironment);
   await caption(page, "And lowered to Fence — the one barrier this cluster has.");
   await beat(page, PACE.read);
-  await act(page, page.getByRole("radio", { name: /^Fence/ }), undefined);
-  await act(page, page.getByRole("button", { name: /^Launch/ }), "Launch it interactive.");
+  await act(page, page.getByRole("radio", { name: new RegExp(`^${NR_SHARED.BARRIER_FENCE}`) }), undefined);
+  await nextStep(page, NEW_RUN_HEADING.harnesses);
+  await nextStep(page, NEW_RUN_HEADING.files);
+  await act(page, noExtraFiles(page));
+  await nextStep(page, NEW_RUN_HEADING.tools);
+  await nextStep(page, NEW_RUN_HEADING.review);
+  // The cluster's one barrier is the Fence and the policy carries its own
+  // floor, so the one-line edit is itself the lesson: the floor is the
+  // member's to RAISE, never to sneak under the admin's ceiling.
+  await setInlinePolicy(
+    page,
+    {
+      allowed_domains: ["api.anthropic.com"],
+      first_use_approval: "deny_with_review",
+      min_confinement_class: "CC1",
+      auto_stop_after_sec: 3600,
+      eligible_grants: [],
+    },
+    "A member's own run — a terminal, nothing mounted, its own policy.",
+  );
+  await openNameDialog(page, "Launch it interactive.");
+  await runTitleField(page).fill("reach for the outside world");
+  await act(page, confirmLaunchButton(page));
+  await viewRunButton(page).click({ timeout: 240_000 });
 
   // The cockpit: terminal + inline approvals. Ask for a host the policy
   // doesn't list.

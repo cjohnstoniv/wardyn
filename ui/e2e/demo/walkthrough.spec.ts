@@ -28,7 +28,7 @@
  * catalogued in docs/DEMO-SCRIPT.md.
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import {
   DEMO_TASK,
   DEMO_TITLE,
@@ -48,9 +48,31 @@ import { act, beat, caption, chapter, PACE, spotlight, typeInTerminal } from "./
 // The funnel helpers and decide() live in funnel.ts — every video in the 0.5
 // series needs them, and this file is no longer the only spec in the project.
 import { stage } from "./stage";
-import { advance, APPROVAL_APPEARS, clearWorkspace, decide, newRunEditPolicy, newRunPanel } from "./funnel";
+import { advance, APPROVAL_APPEARS, clearWorkspace, decide } from "./funnel";
+import {
+  addHarnessButton,
+  commandField,
+  confirmLaunchButton,
+  harnessPicker,
+  launchRunButton,
+  modeCard,
+  NEW_RUN_HEADING,
+  newRunHeading,
+  nextStep,
+  openNameDialog,
+  providerPicker,
+  repoCheckbox,
+  runTitleField,
+  shapeCard,
+  startGuided,
+  startsHere,
+  taskField,
+  viewRunButton,
+} from "./new-run";
+import { NR_DOCUMENT } from "../../src/app/components/wardyn/copy/new-run/document";
+import { NR_REVIEW } from "../../src/app/components/wardyn/copy/new-run/review";
+import { NR_TOOLS } from "../../src/app/components/wardyn/copy/new-run/tools";
 import { termText } from "../terminal-text";
-import { readSpec, SPEC_LABEL } from "../policy-source";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -60,6 +82,12 @@ test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-dem
 // of them and now lives in funnel.ts, beside the decide() that waits on it.)
 const SANDBOX_UP = 180_000;
 const RUN_FINISHES = 900_000;
+
+/** Files step: the main drive needs a size, and an untouched prefill is not one. */
+async function sizeMainDrive(page: Page): Promise<void> {
+  const size = page.locator("#nr-main-drive-size");
+  if ((await size.count()) > 0 && (await size.inputValue()) === "") await size.fill("10");
+}
 
 test.describe.configure({ mode: "serial" });
 
@@ -376,146 +404,146 @@ test("act 5 — a real run", async () => {
   await act(page, page.getByRole("button", { name: "New run" }), "Now real work, on that workspace.");
   await expect(page).toHaveURL(/\/runs\/new/, { timeout: 30_000 });
 
-  await caption(page, "One page. Everything the run is allowed to do is spelled out on the right as you build it.");
+  await caption(page, "A few short steps. Everything the run is allowed to do is spelled out as you build it, and you check it all once more before it starts.");
   await beat(page, PACE.read + 700);
-
-  // Name it first. The title is required (Launch stays disabled without one)
-  // and it is the key the Runs board groups by, so it is also what this run
-  // will be called everywhere it appears later in the film.
-  const titleBox = page.getByLabel("Title");
-  await newRunPanel(page, "run");
-  await spotlight(page, titleBox);
-  await titleBox.fill(DEMO_TITLE);
-  await spotlight(page, null);
-  await caption(page, "Every run gets a name. Runs that share one are the same piece of work.");
-  await beat(page, PACE.read);
+  await startGuided(page);
 
   // What to run. SHELL_ACT5 records the model-free variant: same workspace, same
-  // two hosts, same governance beats — a Shell command instead of an agent.
+  // two hosts, same governance beats — an Application sandbox (a command) instead of an agent.
   // Wardyn's whole claim is that it governs ANY workload, so this is a true
   // demo, not a degraded one; it just does not show a coding agent writing code.
   if (SHELL_ACT5) {
     await act(
       page,
-      page.getByRole("radio", { name: "Shell command" }),
+      shapeCard(page, "application"),
       "A run does not have to be an agent — Wardyn governs any workload. This one is a plain shell command.",
     );
-    const cmdBox = page.getByLabel("Command");
+    await nextStep(page, NEW_RUN_HEADING.runApplication);
+    const cmdBox = commandField(page);
     await spotlight(page, cmdBox);
     await cmdBox.fill(DEMO_COMMAND);
     await spotlight(page, null);
     await caption(page, "Run the workspace's tests, then reach two hosts: one that stops and asks me, one nothing can open.");
     await beat(page, PACE.read + 1400);
+    await nextStep(page, NEW_RUN_HEADING.harnesses);
   } else {
-  await act(page, page.getByRole("radio", { name: "Agent task" }));
+    await act(page, shapeCard(page, "agent_task"));
+    await nextStep(page, NEW_RUN_HEADING.runAgent);
 
-  // ORDER IS LOAD-BEARING, twice over.
-  //
-  // (1) initialWizardState() defaults to mode "interactive" (wizard-types.ts),
-  // which launches an IDLE sandbox waiting for a human to type. The agent never
-  // executes the task, so nothing reaches for example.com and the held approval
-  // this act is built around can never appear. Autonomous is what makes it an
-  // unattended agent run.
-  //
-  // The alternation carries the old mode name through the rename: copy.ts's
-  // RUN_MODE.autonomous.label is "Autonomous", and ui/src renders the old name
-  // nowhere any more — so a matcher anchored on it alone matched nothing, and
-  // would have failed on shoot day rather than in CI. This spec runs in the
-  // `demo` Playwright project, which no gate executes.
-  //
-  // (2) Autonomous must be clicked BEFORE the task is filled: an interactive run has
-  // no Task field at all now (the server ignores task for one), so the box does
-  // not exist until this click.
-  await act(
-    page,
-    page.getByRole("radio", { name: /^(Autonomous|Batch)/ }),
-    "Unattended: the agent does the work on its own, and I only step in when the policy stops it.",
-  );
+    // ORDER IS LOAD-BEARING.
+    //
+    // A new agent task defaults to an interactive run, which launches an IDLE
+    // sandbox waiting for a human to type. The agent never executes the task,
+    // so nothing reaches for example.com and the held approval this act is
+    // built around can never appear. Autonomous, chosen here on Run, is what
+    // makes it an unattended agent run, and it is also what puts the Task
+    // field on the Harnesses step: an interactive run has no Task field (the
+    // server ignores task for one).
+    await act(
+      page,
+      modeCard(page, "autonomous"),
+      "Unattended: the agent does the work on its own, and I only step in when the policy stops it.",
+    );
+    await nextStep(page, NEW_RUN_HEADING.harnesses);
 
-  const taskBox = page.getByLabel("Task");
-  await spotlight(page, taskBox);
-  await taskBox.fill(DEMO_TASK);
-  await spotlight(page, null);
-  await caption(page, "Add a function and a test — then reach two hosts: one that stops and asks me, one nothing can open.");
-  await beat(page, PACE.read + 1400);
+    await act(page, addHarnessButton(page));
+    await harnessPicker(page).selectOption("claude-code");
+    const taskBox = taskField(page);
+    await spotlight(page, taskBox);
+    await taskBox.fill(DEMO_TASK);
+    await spotlight(page, null);
+    await caption(page, "Add a function and a test — then reach two hosts: one that stops and asks me, one nothing can open.");
+    await beat(page, PACE.read + 1400);
+  }
+  await nextStep(page, NEW_RUN_HEADING.files);
+
+  // OPEN: the workspace is a local directory, and Files lists only repository
+  // sources, never local-directory workspaces. This addresses it as the
+  // repository row the approved flow would give it: "Include <name>" and
+  // "Starts here".
+  await act(page, repoCheckbox(page, WORKSPACE_NAME), "Attach the workspace we just onboarded.");
+  await act(page, startsHere(page, WORKSPACE_NAME));
+  await sizeMainDrive(page);
+  await nextStep(page, NEW_RUN_HEADING.tools);
+
+  // The agent's model provider is a required choice on this step. The provider
+  // was connected off camera in act 1; the first real option is that one.
+  if (!SHELL_ACT5) {
+    const provider = providerPicker(page, "claude-code");
+    await spotlight(page, provider);
+    await provider.selectOption({ index: 1 }, { timeout: 60_000 });
+    await spotlight(page, null);
   }
 
-  // Workspace. Selected by its VISIBLE TEXT, not its accessible name: this
-  // trigger has no accessible name at all (the Agent select beside it is
-  // labelled "Agent" via Field/Label htmlFor; this one was never wired up), so
-  // getByRole("combobox", {name}) can never match it. Filtering on the
-  // placeholder text is the honest workaround until the control gets a label —
-  // an unnamed combobox is a real a11y gap, not just a test inconvenience.
-  await newRunPanel(page, "workspace");
-  await act(
-    page,
-    page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" }),
-    "Attach the workspace we just onboarded.",
-  );
-  await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE_NAME, "i") }).first());
-
-  // The Confinement card and its "Confined" radio are GONE — policy-panel.tsx
-  // replaces the Confinement + Network cards with one spec-JSON Policy card,
-  // which already OPENS on the Minimal template (allowed_domains:
-  // [api.anthropic.com], first_use_approval: deny_with_review) — confined by
-  // construction, the same default the old "Confined" radio asserted. The
-  // click below re-asserts the Minimal chip rather than changing anything —
-  // same "for the camera" role the old radio click played.
-  await newRunEditPolicy(page);
-  await act(page, page.getByRole("button", { name: "Minimal" }), "Confined: default-deny egress, and only what we list gets through.");
+  // The totals ("What this run can reach") state the policy this run starts
+  // with: the model host and the rule for any other host. They replace the
+  // old Policy card, whose Minimal template put the same two facts on screen.
+  const reach = page.getByRole("region", { name: NR_TOOLS.TOTALS_ARIA });
+  await spotlight(page, reach);
+  await caption(page, "Confined: default-deny egress, and only what we list gets through.");
+  await beat(page, PACE.read);
 
   // Network — the load-bearing part of the whole run.
-  //
-  // network-dialog.tsx (Edit hosts…, the model-host toggle chip, the "Hold it
-  // for approval" unlisted-host radio) is DELETED — the same choices are now
-  // made IN the policy spec's JSON, through the Policy card the Minimal click
-  // above already opened. Minimal scopes allowed_domains to exactly
-  // api.anthropic.com by construction; the one edit left is
-  // first_use_approval: deny_with_review -> wait_for_review, the field that
-  // makes the held-at-the-boundary beat below genuine (a HELD connection, not
-  // a denied-then-retried one). Read-modify-fill rather than a hardcoded
-  // literal so the floor (min_confinement_class) stays whatever is actually
-  // on screen — same pattern policies.spec.ts's fillEditor uses for this
-  // textarea.
-  const specBox = page.getByLabel(SPEC_LABEL);
   await caption(page, "This is the part that matters.");
-  await spotlight(page, specBox);
-  const heldSpec = JSON.stringify(
-    { ...(await readSpec(specBox)), first_use_approval: "wait_for_review" },
-    null,
-    2,
-  );
-  await specBox.fill(heldSpec);
-  await beat(page, PACE.read);
-  // The read view lists what the run will be allowed to reach: the one host.
-  await expect(
-    page.getByTestId("policy-document").getByText("api.anthropic.com", { exact: true }).first(),
-  ).toBeVisible({ timeout: 15_000 });
 
-  // The model-host toggle chip (network-dialog.tsx) this if/else used to
-  // drive is DELETED — Minimal's allowed_domains always includes
-  // api.anthropic.com, so the host is unconditionally already on the list;
-  // the toggle's "off" branch can no longer fire.
+  // The totals list what the run will be allowed to reach: the model host.
+  // OPEN: an Application sandbox has no harness, so nothing brings MODEL_HOST
+  // there (the old Minimal policy always listed it); this assertion is kept
+  // unconditional for that variant, to be decided.
+  await expect(reach.getByText(MODEL_HOST).first()).toBeVisible({ timeout: 60_000 });
+
+  // The harness brings the model host, so it is on the list without anyone adding it.
   await caption(page, `${MODEL_HOST} is already on the list — without it the agent has no model at all.`);
   await beat(page, PACE.read);
+  await spotlight(page, null);
   // DIALOG-STALE(old UI): "Allow ${MODEL_HOST} and nothing else — without it
   // the agent has no model at all." narrated clicking the deleted model-host
-  // toggle chip when it started OFF — Minimal's allowed_domains always
-  // includes api.anthropic.com now, so this branch can never fire.
+  // toggle chip when it started OFF — the harness always brings
+  // api.anthropic.com now, so this branch can never fire.
 
-  // The unlisted-host rules (network-dialog.tsx's radios) are DELETED —
-  // "Hold it for approval" is now the first_use_approval: "wait_for_review"
-  // edit made above.
+  // The guided steps have no control for "what happens to a host that is not
+  // on the list", so the one edit left is made in the run document, from
+  // Review: first_use_approval deny_with_review -> wait_for_review, the field
+  // that makes the held-at-the-boundary beat below genuine (a HELD
+  // connection, not a denied-then-retried one). Read-modify-fill rather than
+  // a hardcoded literal so everything else the guided steps chose stays
+  // exactly as it is.
+  // OPEN: the run document (Review -> JSON -> Edit JSON) is the only home the
+  // guided flow has for first_use_approval; the old Policy card's JSON editor
+  // is gone and Tools and access offers no control for it.
+  await nextStep(page, NEW_RUN_HEADING.review);
+  await act(page, page.getByRole("button", { name: NR_REVIEW.VIEW_JSON, exact: true }));
+  await act(page, page.getByRole("button", { name: NR_REVIEW.EDIT_FORMAT("JSON") }));
+  const docBox = page.getByLabel(NR_DOCUMENT.EDITOR_ARIA("JSON"));
+  await spotlight(page, docBox);
+  const draft = JSON.parse(await docBox.inputValue()) as { intent: { inline_policy?: Record<string, unknown> } };
+  draft.intent.inline_policy = { ...draft.intent.inline_policy, first_use_approval: "wait_for_review" };
+  await docBox.fill(JSON.stringify(draft, null, 2));
   await caption(
     page,
     "And for any host that is not on the list: stop, and ask me — nothing off this list goes out unseen.",
   );
   await beat(page, PACE.read);
   await spotlight(page, null);
+  await act(page, page.getByRole("button", { name: NR_DOCUMENT.CONTINUE_REVIEW }));
+  await expect(newRunHeading(page, NEW_RUN_HEADING.review)).toBeVisible({ timeout: 60_000 });
 
   await caption(page, "That's everything this run can reach or change — declared before it starts.");
   await beat(page, PACE.read + 800);
-  await act(page, page.getByRole("button", { name: "Launch run" }));
+  await expect(launchRunButton(page)).toBeEnabled({ timeout: 60_000 });
+  await openNameDialog(page);
+
+  // Name it. The title is required (Launch stays disabled without one)
+  // and it is the key the Runs board groups by, so it is also what this run
+  // will be called everywhere it appears later in the film.
+  const titleBox = runTitleField(page);
+  await titleBox.fill(DEMO_TITLE);
+  await spotlight(page, titleBox);
+  await spotlight(page, null);
+  await caption(page, "Every run gets a name. Runs that share one are the same piece of work.");
+  await beat(page, PACE.read);
+  await act(page, confirmLaunchButton(page));
+  await viewRunButton(page).click({ timeout: SANDBOX_UP });
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
   // Act 6 recaps THIS run's audit/recording — captured now, before the
   // `always` proof detour below navigates away from it.
@@ -606,30 +634,35 @@ test("act 5 — a real run", async () => {
 
   await act(page, page.getByRole("button", { name: "New run" }), "One more run, same workspace — watch what does NOT happen this time.");
   await expect(page).toHaveURL(/\/runs\/new/, { timeout: 30_000 });
+  await startGuided(page);
 
-  const proofTitleBox = page.getByLabel("Title");
-  await spotlight(page, proofTitleBox);
-  await newRunPanel(page, "run");
-  await proofTitleBox.fill(PROOF_RUN_TITLE);
-  await spotlight(page, null);
-
-  // Interactive is the wizard's own default (unlike the batch run above, this
-  // one is left alone) — a bare shell is all this needs, not the agent CLI.
+  // An Environment sandbox is the interactive run with no agent: a bare shell
+  // is all this needs, not the agent CLI. Run and Harnesses are left on their
+  // defaults.
   await act(
     page,
-    page.getByRole("radio", { name: /^Terminal/ }),
+    shapeCard(page, "environment"),
     "A bare shell this time. No agent, no task — just prove the point.",
   );
-  await newRunPanel(page, "workspace");
-  await act(
-    page,
-    page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" }),
-    "The same workspace again.",
-  );
-  await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE_NAME, "i") }).first());
-  // Confined stays the default; Network stays untouched — that omission IS
+  await nextStep(page, NEW_RUN_HEADING.runEnvironment);
+  await nextStep(page, NEW_RUN_HEADING.harnesses);
+  await nextStep(page, NEW_RUN_HEADING.files);
+  // OPEN: same as act 5's Files step: a local-directory workspace has no row on Files.
+  await act(page, repoCheckbox(page, WORKSPACE_NAME), "The same workspace again.");
+  await act(page, startsHere(page, WORKSPACE_NAME));
+  await sizeMainDrive(page);
+  // Confined stays the default; Tools and access stays untouched — that omission IS
   // the point: nothing to configure, the workspace already vouches for it.
-  await act(page, page.getByRole("button", { name: "Launch run" }));
+  await nextStep(page, NEW_RUN_HEADING.tools);
+  await nextStep(page, NEW_RUN_HEADING.review);
+  await expect(launchRunButton(page)).toBeEnabled({ timeout: 60_000 });
+  await openNameDialog(page);
+  const proofTitleBox = runTitleField(page);
+  await proofTitleBox.fill(PROOF_RUN_TITLE);
+  await spotlight(page, proofTitleBox);
+  await spotlight(page, null);
+  await act(page, confirmLaunchButton(page));
+  await viewRunButton(page).click({ timeout: SANDBOX_UP });
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
 
   await expect(page.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP });
