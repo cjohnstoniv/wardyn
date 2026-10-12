@@ -184,6 +184,10 @@ func TestWorkspaceSelectionsShape(t *testing.T) {
 		{"alias names another", withAlias(&bID, sels(client.WorkspaceSelection{WorkspaceID: a}, client.WorkspaceSelection{WorkspaceID: b})), reasonWorkspaceSelectionInvalid},
 		{"malformed id", sels(client.WorkspaceSelection{WorkspaceID: "A"}), reasonWorkspaceSelectionInvalid},
 		{"listed twice", sels(client.WorkspaceSelection{WorkspaceID: a}, client.WorkspaceSelection{WorkspaceID: a}), reasonWorkspaceSelectionInvalid},
+		// r1 H2: another spelling of a valid id would miss the options keyed by it.
+		{"upper-case id", sels(client.WorkspaceSelection{WorkspaceID: strings.ToUpper(a), Repos: repos()}), reasonWorkspaceSelectionInvalid},
+		{"braced id", sels(client.WorkspaceSelection{WorkspaceID: "{" + a + "}", Repos: repos()}), reasonWorkspaceSelectionInvalid},
+		{"urn id", sels(client.WorkspaceSelection{WorkspaceID: "urn:uuid:" + a, Repos: repos()}), reasonWorkspaceSelectionInvalid},
 		{"too many", sels(many...), reasonWorkspaceSelectionInvalid},
 		{"relative target", sels(client.WorkspaceSelection{WorkspaceID: a, Target: "rel"}), reasonWorkspaceTargetInvalid},
 		{"drive path without the drive", sels(client.WorkspaceSelection{WorkspaceID: a, Target: "/home/agent/drive"}), reasonWorkspaceTargetInvalid},

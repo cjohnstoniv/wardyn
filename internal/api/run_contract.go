@@ -155,7 +155,9 @@ func workspaceTargetsRefusal(req createRunRequest) *runRefusal {
 	for i, sel := range req.Workspaces {
 		id, err := uuid.Parse(sel.WorkspaceID)
 		switch {
-		case err != nil || id == uuid.Nil:
+		case err != nil || id == uuid.Nil || id.String() != sel.WorkspaceID:
+			// The canonical spelling only: the selection's options are keyed by it,
+			// so another spelling of the same id would drop them.
 			return runError(http.StatusBadRequest, reasonWorkspaceSelectionInvalid, fmt.Sprintf("workspaces[%d].workspace_id: give a workspace id.", i))
 		case seen[id]:
 			return runError(http.StatusBadRequest, reasonWorkspaceSelectionInvalid, fmt.Sprintf("workspaces[%d]: %s is listed twice.", i, sel.WorkspaceID))

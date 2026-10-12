@@ -52,10 +52,10 @@ type runFold struct {
 	// previewDriveReadOnly is the drive's posture at the preview, which resolves
 	// no mount: nil when the run has no drive.
 	previewDriveReadOnly *bool
-	// attached are the workspaces the request names, the primary first; wsRefs
-	// adds every other one the spec references.
-	attached []types.Workspace
-	wsRefs   []types.Workspace
+	// seed is what seeding the request's workspaces decided (attached first,
+	// the primary leading); wsRefs adds every other one the spec references.
+	seed   workspaceSeed
+	wsRefs []types.Workspace
 	// attachments is the run's mount map and startFolder its one working
 	// directory (WARDYN_START_FOLDER), both from stepWorkspaces.
 	attachments       []client.RunAttachment

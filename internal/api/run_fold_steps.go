@@ -61,12 +61,12 @@ func (s *Server) stepSeedWorkspace(f *runFold, rec *foldRecorder) bool {
 	if f.mode == foldPreview {
 		var refusal *runRefusal
 		seed, refusal = s.seedAuthorizedWorkspace(ctx, f.r, &f.spec, f.req)
-		f.ephemeralDirs, f.attached = seed.ephemeralDirs, seed.attached
+		f.ephemeralDirs, f.seed = seed.ephemeralDirs, seed
 		return !refusal.write(s, f.w, f.r)
 	}
 	var ok bool
 	seed, ok = s.seedAndAdmitWorkspace(ctx, f.w, f.r, &f.spec, f.req, f.mode == foldCreate)
-	f.ephemeralDirs, f.attached = seed.ephemeralDirs, seed.attached
+	f.ephemeralDirs, f.seed = seed.ephemeralDirs, seed
 	return ok
 }
 
@@ -98,15 +98,17 @@ func (s *Server) stepDrive(f *runFold, rec *foldRecorder) bool {
 // one the seeded spec references. Nothing after this step changes the spec's
 // mounts or repos, so the list stays valid for the requirements fold, the
 // egress unions and image resolution. Over every resolved target, the drive's
-// included, it refuses an overlap or a second Azure DevOps organisation and
-// resolves the one starting folder, before anything is granted.
+// included, it refuses an overlap, a second Azure DevOps organisation or (when
+// the workspaces decide the image) a second base image, and resolves the one
+// starting folder, before anything is granted. It runs after the onboarding
+// gate, so every workspace a refusal names is one the caller may launch.
 func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
-	f.wsRefs = attachedWorkspaceRefs(f.attached, s.referencedWorkspaces(f.r.Context(), f.spec))
+	f.wsRefs = attachedWorkspaceRefs(f.seed.attached, s.referencedWorkspaces(f.r.Context(), f.spec))
 	for _, ws := range f.wsRefs {
 		recordWorkspaceSources(rec, f.spec, ws)
 	}
 	var refusal *runRefusal
-	f.attachments, f.startFolder, refusal = s.runAttachments(*f.req, f.spec, f.wsRefs, f.attached,
+	f.attachments, f.startFolder, refusal = s.runAttachments(*f.req, f.spec, f.wsRefs, f.seed,
 		legacyDriveTarget(f.driveMount, f.previewDriveReadOnly))
 	return !refusal.write(s, f.w, f.r)
 }

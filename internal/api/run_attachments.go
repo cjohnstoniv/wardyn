@@ -47,7 +47,7 @@ type runTarget struct {
 //
 // ponytail: the legacy drive is the only drive; D-112-113's plural drive list
 // joins here, each drive at its own server-derived target.
-func runTargets(spec types.RunPolicySpec, wsRefs, attached []types.Workspace, drive *runTarget) []runTarget {
+func runTargets(spec types.RunPolicySpec, wsRefs []types.Workspace, seed workspaceSeed, drive *runTarget) []runTarget {
 	var out []runTarget
 	if drive != nil {
 		out = append(out, *drive)
@@ -66,19 +66,32 @@ func runTargets(spec types.RunPolicySpec, wsRefs, attached []types.Workspace, dr
 		}
 		return "source:" + source, fallback
 	}
-	for _, m := range spec.WorkspaceMounts {
-		id, name := owner(true, m.Source, m.Target)
+	// The entries the seed prepended belong to the workspace that seeded them.
+	seededBy := func(owners []types.Workspace, i int) (string, string, bool) {
+		if i < len(owners) {
+			return owners[i].ID.String(), owners[i].Name, true
+		}
+		return "", "", false
+	}
+	for i, m := range spec.WorkspaceMounts {
+		id, name, ok := seededBy(seed.mountOwners, i)
+		if !ok {
+			id, name = owner(true, m.Source, m.Target)
+		}
 		out = append(out, runTarget{kind: attachmentFolder, owner: id, name: name, target: m.Target, readOnly: m.ReadOnlyOrDefault()})
 	}
-	for _, r := range spec.WorkspaceRepos {
+	for i, r := range spec.WorkspaceRepos {
 		dest, ok := repoCloneTarget(r)
 		if !ok {
 			continue
 		}
-		id, name := owner(false, r.Repo, r.Repo)
+		id, name, seeded := seededBy(seed.repoOwners, i)
+		if !seeded {
+			id, name = owner(false, r.Repo, r.Repo)
+		}
 		out = append(out, runTarget{kind: attachmentRepository, owner: id, name: name, target: dest, repo: r.Repo, ref: r.Ref})
 	}
-	for _, ws := range attached {
+	for _, ws := range seed.attached {
 		for _, src := range workspaceSourcesOfType(ws, types.WorkspaceSourceTypeEphemeral) {
 			if src.Target != "" {
 				out = append(out, runTarget{owner: ws.ID.String(), name: ws.Name, target: src.Target})
@@ -258,14 +271,20 @@ func startFolderDir(f *client.StartFolder, targets []runTarget) (string, int, *r
 	return "", -1, runError(http.StatusBadRequest, reasonStartFolderInvalid, startFolderAttachmentMsg(name))
 }
 
-// runAttachments resolves the run's targets and answers their checks in order:
-// overlap, then the Azure DevOps organisation, then the starting folder. It
+// runAttachments answers the run's cross-workspace checks in order: the base
+// image (when the workspaces decide it), overlap, the Azure DevOps
+// organisation, then the starting folder. It
 // returns the mount map and the starting folder. A method on Server for the
 // reason runContractRefusal is: the parity guard reads gates as s.<Gate>(…) calls.
-func (s *Server) runAttachments(req createRunRequest, spec types.RunPolicySpec, wsRefs, attached []types.Workspace, drive *runTarget) (
+func (s *Server) runAttachments(req createRunRequest, spec types.RunPolicySpec, wsRefs []types.Workspace, seed workspaceSeed, drive *runTarget) (
 	[]client.RunAttachment, string, *runRefusal,
 ) {
-	targets := runTargets(spec, wsRefs, attached, drive)
+	if seed.imageOpen {
+		if _, _, refusal := workspacesBaseImage(wsRefs, nil); refusal != nil {
+			return nil, "", refusal
+		}
+	}
+	targets := runTargets(spec, wsRefs, seed, drive)
 	if refusal := targetOverlapRefusal(targets); refusal != nil {
 		return nil, "", refusal
 	}
