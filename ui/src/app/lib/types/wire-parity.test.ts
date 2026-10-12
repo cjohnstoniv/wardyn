@@ -455,8 +455,8 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   // the dry-run facts, each pinned to its TS mirror in types/new-run-contract.ts.
   it.each([
     ["RunResources", "RequestedResources"],
-    ["ResourceAmounts", "ResourceAmounts"],
-    ["PlacementResources", "PlacementResources"],
+    ["AppliedResources", "AppliedResources"],
+    ["AppliedAmount", "AppliedAmount"],
     ["RunOverrides", "RunOverrides"],
     ["AgentOverrides", "AgentOverrides"],
     ["SecretOverride", "SecretOverride"],
@@ -474,6 +474,9 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["AgentFact", "AgentFact"],
     ["ImageSource", "ImageSource"],
     ["ImageFact", "ImageFact"],
+    ["HarnessSetFact", "HarnessSetFact"],
+    ["HarnessFact", "HarnessFact"],
+    ["HarnessModelCredential", "HarnessModelCredential"],
     ["AllowedImage", "AllowedImage"],
   ])("pkg/client %s: full parity with the TS %s mirror", (goName, tsName) => {
     const goTags = goJSONTags(readFileSync(join(root, "pkg/client/runs_new_run.go"), "utf8"), goName);

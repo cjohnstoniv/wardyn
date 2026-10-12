@@ -137,6 +137,7 @@ func TestRunDocumentDoorAgreesWithCreate(t *testing.T) {
 			}
 			t.Run(tc.name+"/"+door.name, func(t *testing.T) {
 				h := newHarness(t)
+				h.srv.cfg.AgentImages = composeAgentImages
 				w := do(t, h.srv, http.MethodPost, door.path, adminToken, `{"title":"t",`+tc.fields+`}`)
 				if got := errorReason(w); got != tc.reason {
 					t.Fatalf("the run answered %d reason %q, want %q: %s", w.Code, got, tc.reason, w.Body.String())
@@ -321,7 +322,7 @@ func TestPresetDoorHoldsTheRunContract(t *testing.T) {
 		{"a pool id that is not an id", client.CreateRunRequest{Agent: "claude-code", RunnerPoolID: "nope"}, "runner_pool_invalid"},
 		{"an image choice no lane applies yet", client.CreateRunRequest{Agent: "claude-code", AllowedImage: "ghcr.io/acme/dev:1"}, reasonRequestFieldUnavailable},
 		{"a placement that always answers placement_unavailable at launch", client.CreateRunRequest{Agent: "claude-code", Placement: client.PlacementLocal}, reasonRequestFieldUnavailable},
-		{"a built-in component no lane applies yet", client.CreateRunRequest{Agent: "claude-code", Components: []client.ComponentRef{{Builtin: "github", Org: "acme", Repos: []string{"acme/api"}}}}, reasonRequestFieldUnavailable},
+		{"a built-in component no lane applies yet", client.CreateRunRequest{Agent: "claude-code", Components: []client.ComponentRef{{Builtin: "azure_devops", Org: "acme"}}}, reasonRequestFieldUnavailable},
 		{"a workspace target outside home", client.CreateRunRequest{Agent: "claude-code", Workspaces: []client.WorkspaceSelection{{WorkspaceID: wsID, Target: "/etc/x"}}}, reasonWorkspaceTargetInvalid},
 		{"a wildcard override", client.CreateRunRequest{Agent: "claude-code", Overrides: &client.RunOverrides{Agent: &client.AgentOverrides{AddHosts: []string{"*.example.com"}}}}, reasonOverrideRefused},
 		// A preset never carries experience, so a shape would be told to set one and then

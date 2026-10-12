@@ -80,15 +80,23 @@ type preflightResponse struct {
 	// Provenance says why each entry of the resolved spec is there; the policy
 	// preview returns the same rows for the same request. Never null.
 	Provenance []provenanceRow `json:"provenance"`
-	// Resources and LocalPlacement are the policy preview's, with the same
-	// meaning: always an array, empty until the lane that fills them lands.
-	Resources      []client.PlacementResources `json:"resources"`
-	LocalPlacement []client.LocalPlacementFact `json:"local_placement"`
+	// Limits is what this run may get (the resolved pool, the caller's
+	// governance and the deployment, for the run's type) and ResourcesApplied
+	// the CPU and memory it asked for and gets; the policy preview's, with the
+	// same meaning. LocalPlacement is the preview's too: always an array, empty
+	// until the lane that fills it lands.
+	Limits           *types.EffectiveRunLimits   `json:"limits,omitempty"`
+	ResourcesApplied *client.AppliedResources    `json:"resources_applied,omitempty"`
+	LocalPlacement   []client.LocalPlacementFact `json:"local_placement"`
 	// Image is the image the run would start from and its source, absent until
 	// the image lane resolves it; AllowedImages are the organisation's allowed
 	// choices, an array that is empty until that lane fills it.
 	Image         *client.ImageFact     `json:"image,omitempty"`
 	AllowedImages []client.AllowedImage `json:"allowed_images"`
+	// HarnessSet is the run's included harnesses as this door resolved them
+	// (harnessSetFact); absent for an older client's request and a run with no
+	// harness. ModelCredential above is graded from the most resident of them.
+	HarnessSet *client.HarnessSetFact `json:"harness_set,omitempty"`
 	// RunnerPool is the pool the request resolves to, absent until the pool lane
 	// resolves one; RunnerPools are the permitted choices, an array that is
 	// empty until that lane fills it.
@@ -214,7 +222,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "get site config", rerr)
 		return
 	} else if msg != "" {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg)
+		runError(http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg).forTool(harnessRefusalTool(req)).write(s, w, r)
 		return
 	}
 	// Same member request-field denial launch runs (runs_create.go's
@@ -346,12 +354,13 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		OverallRisk:              overallRisk,
 		Warnings:                 warnings,
 		Provenance:               f.prov,
-		Resources:                []client.PlacementResources{},
 		LocalPlacement:           []client.LocalPlacementFact{},
 		AllowedImages:            []client.AllowedImage{},
 		RunnerPools:              []client.RunnerPoolChoice{},
 	}
 	resp.RunnerPool, resp.RunnerPools = f.place.facts()
+	resp.Image, resp.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
+	resp.Limits, resp.ResourcesApplied = f.place.sizeFacts()
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred
 	}

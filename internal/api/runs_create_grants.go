@@ -153,7 +153,9 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 				gw.warnings = append(gw.warnings, s.recordLaneVeto(ctx, runID, drop.lane, g.Kind, *drop.vetoedBy))
 				continue
 			}
-			if gw.firstGitHubGrantID == nil {
+			// A built-in's grant is scoped to its own repositories: the run's
+			// other GitHub repositories are never mapped to it (augmentGitBrokerGrants).
+			if gw.firstGitHubGrantID == nil && !isBuiltinGitHubGrant(g) {
 				id := grantID // copy loop var
 				gw.firstGitHubGrantID = &id
 			}

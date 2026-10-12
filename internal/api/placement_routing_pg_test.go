@@ -87,14 +87,16 @@ func TestPG_PlacementRouting_RefusedBeforeCreateNeverSubstituted(t *testing.T) {
 			status: http.StatusCreated, wantPlacement: types.PlacementRemote,
 		},
 		{
-			name: "3 a size the asked runner cannot hold is placement_capability, not a run on the remote pool that can",
+			// The size no longer refuses (it is reduced to the runner's capacity); until local runs are
+			// enabled the local gate answers, and the run is never moved to the remote pool.
+			name: "3 a size the asked runner cannot hold is not a placement refusal, nor a run on the remote pool that can",
 			setup: func(e *placementEnv, _ string) string {
 				laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
 				small := e.laptop(e.personP, 1000, 1024, types.CC1, types.CC2, types.CC3)
 				e.addToPool(e.person, laptops.ID, small)
 				return runBody(`"placement":"local","resources":{"cpu_millis":4000,"memory_mib":8192},"runner_id":"` + small.String() + `","runner_pool_id":"` + laptops.ID.String() + `"`)
 			},
-			status: http.StatusUnprocessableEntity, reason: string(placement.ReasonPlacementCapability), names: "Laptops",
+			status: http.StatusUnprocessableEntity, reason: string(placement.ReasonPlacementUnavailable), names: "cannot place a run on a runner yet",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
