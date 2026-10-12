@@ -98,6 +98,7 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   template_dependency_missing: "tools",
   template_shared_field_refused: "review", template_scope_forbidden: "review", template_group_unverified: "review",
   template_not_found: "review", template_revision_conflict: "review", templates_unavailable: "review",
+  template_name_taken: "review", template_limit_reached: "review", template_policy_field_refused: "review",
 };
 
 /** A refusal's step; a reason the console does not know goes to Review. */
