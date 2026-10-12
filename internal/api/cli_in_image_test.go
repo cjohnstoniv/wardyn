@@ -6,9 +6,10 @@ package api
 import "testing"
 
 func TestCLIInImage(t *testing.T) {
-	// Each column turns yes in the change that installs its tool: gh is in the
-	// four images that install it, and the multi-harness image has no recipe here.
-	gh := cliImageFact{cliInImageNo, cliInImageNo, cliInImageYes}
+	// Each column turns yes in the change that installs its tool: aws and gh are
+	// in the four images that install them, and the multi-harness image has no
+	// recipe here.
+	gh := cliImageFact{cliInImageNo, cliInImageYes, cliInImageYes}
 	none := cliImageFact{cliInImageNo, cliInImageNo, cliInImageNo}
 	for key, want := range map[string]cliImageFact{"base": gh, "claude-code": gh, "codex-cli": gh, "full": gh, "harnesses": none} {
 		if f := cliInImage(key); f != want {
