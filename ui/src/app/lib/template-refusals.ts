@@ -37,10 +37,10 @@ export type TemplateReason = (typeof TEMPLATE_REASON)[keyof typeof TEMPLATE_REAS
 
 /** The sentences, byte for byte what internal/api/template_refusals.go says. */
 export const TEMPLATE_REFUSAL = {
-  DOCUMENT_INVALID: (detail: string) => `This is not a template document: ${detail}.`,
+  DOCUMENT_INVALID: (detail: string) => `This document cannot be read: ${detail}.`,
   VERSION_UNSUPPORTED: (what: string) =>
-    `${what} is not a template format this server reads. Use api_version wardyn/v1 and kind RunTemplate.`,
-  FIELD_UNKNOWN: (path: string) => `${path} is not a template field. Remove it, or check the spelling.`,
+    `${what} is not a document this server reads. Use api_version wardyn/v1 and kind Run or RunTemplate.`,
+  FIELD_UNKNOWN: (path: string) => `${path} is not a field this document can hold. Remove it, or check the spelling.`,
   FIELD_INVALID: (path: string, detail: string) => `${path} ${detail}.`,
   FIELD_EXCLUDED: (path: string) => `${path} is never part of a template: it belongs to one launch, or it is retired.`,
   SECRET_REFUSED: (path: string) =>
@@ -48,7 +48,7 @@ export const TEMPLATE_REFUSAL = {
   RUN_STATE_REFUSED: (path: string) =>
     `${path} is state of one run. A template holds reusable choices, not a run's history or authority.`,
   METADATA_IN_CONTENT: (path: string) => `${path} is set by the server from who saves the template. Remove it from the document.`,
-  FIELD_UNAVAILABLE: (path: string) => `${path} cannot be used in a template on this server yet. Remove it for now: nothing was dropped.`,
+  FIELD_UNAVAILABLE: (path: string) => `${path} cannot be used in a document on this server yet. Remove it for now: nothing was dropped.`,
   DEPENDENCY_MISSING: (path: string, needs: string) => `${path} needs ${needs}. Include it, or list it under needs_setup.`,
   COVERAGE_INVALID: (detail: string) => `The template's coverage does not fit its content: ${detail}.`,
   SHARED_FIELD_REFUSED: (path: string, scope: string) =>

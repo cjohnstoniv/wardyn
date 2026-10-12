@@ -17,15 +17,15 @@ import (
 // Change a sentence here, in the TypeScript file and in the table together.
 
 func templateDocumentInvalidMsg(detail string) string {
-	return fmt.Sprintf("This is not a template document: %s.", detail)
+	return fmt.Sprintf("This document cannot be read: %s.", detail)
 }
 
 func templateVersionUnsupportedMsg(what string) string {
-	return fmt.Sprintf("%s is not a template format this server reads. Use api_version wardyn/v1 and kind RunTemplate.", what)
+	return fmt.Sprintf("%s is not a document this server reads. Use api_version wardyn/v1 and kind Run or RunTemplate.", what)
 }
 
 func templateFieldUnknownMsg(path string) string {
-	return fmt.Sprintf("%s is not a template field. Remove it, or check the spelling.", path)
+	return fmt.Sprintf("%s is not a field this document can hold. Remove it, or check the spelling.", path)
 }
 
 func templateFieldInvalidMsg(path, detail string) string {
@@ -49,7 +49,7 @@ func templateMetadataInContentMsg(path string) string {
 }
 
 func templateFieldUnavailableMsg(path string) string {
-	return fmt.Sprintf("%s cannot be used in a template on this server yet. Remove it for now: nothing was dropped.", path)
+	return fmt.Sprintf("%s cannot be used in a document on this server yet. Remove it for now: nothing was dropped.", path)
 }
 
 func templateDependencyMissingMsg(path, needs string) string {

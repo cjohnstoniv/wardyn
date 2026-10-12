@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -22,6 +23,10 @@ import (
 // the reason, what this server cannot honour yet.
 
 var templateDocumentKeys = []string{"api_version", "kind", "name", "description", "coverage", "intent", "needs_setup"}
+
+// runDocumentKeys are the top-level keys of a kind Run document: a draft of one
+// run, which has no name, coverage or needs_setup of its own.
+var runDocumentKeys = []string{"api_version", "kind", "intent"}
 
 // templateDependencies are the edges a partial template must not cut: a field
 // and the field it only means anything beside. Either side may be an
@@ -51,16 +56,21 @@ var templateDependencies = []struct{ field, needs string }{
 // calls validateTemplateDocument and stores what it returns.
 
 // validateTemplateImport reads one document the way every door does and
-// returns it normalised, or every diagnostic. It stores nothing.
-func validateTemplateImport(src []byte, format client.TemplateFormat) client.TemplateImportResult {
-	return validateTemplateBytes(src, format, nil)
+// returns it normalised, or every diagnostic. It stores nothing. kind is the
+// document kind the caller expects, "" for either.
+func validateTemplateImport(src []byte, format client.TemplateFormat, kind string) client.TemplateImportResult {
+	return validateTemplateBytes(src, format, nil, kind)
 }
 
 // validateTemplateBytes is the one validator: decode strictly, then (when the
 // text decodes) hold the whole document and the scope it is published to
-// (owner, when given) to the rest. Every problem is reported together.
-func validateTemplateBytes(src []byte, format client.TemplateFormat, owner *types.TemplateOwner) client.TemplateImportResult {
+// (owner, when given) to the rest. Every problem is reported together. A
+// document of a kind other than want (when want is set) is refused at kind.
+func validateTemplateBytes(src []byte, format client.TemplateFormat, owner *types.TemplateOwner, want string) client.TemplateImportResult {
 	doc, diags := decodeTemplateDocument(src, format)
+	if len(diags) == 0 && want != "" && doc.Kind != want {
+		diags = []client.TemplateDiagnostic{{Path: "kind", Reason: reasonTemplateVersionUnsupported, Message: templateVersionUnsupportedMsg(doc.Kind)}}
+	}
 	if len(diags) == 0 {
 		diags = validateTemplateContentDecoded(doc)
 		if owner != nil {
@@ -81,7 +91,7 @@ func validateTemplateDocument(doc client.TemplateDocument, owner types.TemplateO
 	if err != nil {
 		return doc, []client.TemplateDiagnostic{{Reason: reasonTemplateDocumentInvalid, Message: templateDocumentInvalidMsg("it cannot be written as JSON")}}
 	}
-	res := validateTemplateBytes(body, client.TemplateFormatJSON, &owner)
+	res := validateTemplateBytes(body, client.TemplateFormatJSON, &owner, "")
 	if res.Document == nil {
 		return doc, res.Diagnostics
 	}
@@ -106,18 +116,28 @@ func decodeTemplateDocument(src []byte, format client.TemplateFormat) (client.Te
 		d.add("", reasonTemplateDocumentInvalid, templateDocumentInvalidMsg("it must be an object"))
 		return doc, d.diags
 	}
+	kind := documentKind(top)
+	keys := templateDocumentKeys
+	if kind == client.RunDocumentKind {
+		keys = runDocumentKeys
+	}
 	for _, key := range sortedKeys(top) {
-		if !slices.Contains(templateDocumentKeys, key) {
+		switch {
+		case key == "title" || key == "description" && kind == client.RunDocumentKind:
+			d.add(key, reasonTemplateFieldExcluded, templateFieldExcludedMsg(key))
+		case !slices.Contains(keys, key):
 			d.unknownKey("", key)
 		}
 	}
-	d.readHeader(top)
+	d.readHeader(top, kind)
 	if raw, ok := top["intent"]; ok {
 		d.walkIntent(raw, "intent")
 	} else {
 		d.invalid("intent", "is required")
 	}
-	d.readNeedsSetup(top["needs_setup"])
+	if kind != client.RunDocumentKind {
+		d.readNeedsSetup(top["needs_setup"])
+	}
 	if len(d.diags) > 0 {
 		return doc, d.diags
 	}
@@ -127,7 +147,17 @@ func decodeTemplateDocument(src []byte, format client.TemplateFormat) (client.Te
 	return doc, d.diags
 }
 
-func (d *templateDecoder) readHeader(top map[string]json.RawMessage) {
+// documentKind is the document's kind when it is a string, "" otherwise.
+func documentKind(top map[string]json.RawMessage) string {
+	var kind string
+	_ = json.Unmarshal(top["kind"], &kind)
+	return kind
+}
+
+// readHeader reads the header keys by kind. A Run document has neither name nor
+// coverage; any other kind is read as a RunTemplate, and a kind that is neither
+// is reported at kind.
+func (d *templateDecoder) readHeader(top map[string]json.RawMessage, kind string) {
 	text := func(key string, max int) string {
 		raw, ok := top[key]
 		if !ok {
@@ -144,9 +174,18 @@ func (d *templateDecoder) readHeader(top map[string]json.RawMessage) {
 		}
 		return s
 	}
-	version, kind := text("api_version", 32), text("kind", 32)
-	if version != client.TemplateDocumentVersion || kind != client.TemplateDocumentKind {
-		d.add("api_version", reasonTemplateVersionUnsupported, templateVersionUnsupportedMsg(strings.TrimSpace(version+" "+kind)))
+	unsupported := func(path, what string) {
+		d.add(path, reasonTemplateVersionUnsupported, templateVersionUnsupportedMsg(cmp.Or(what, path+" (missing)")))
+	}
+	if version := text("api_version", 32); version != client.TemplateDocumentVersion {
+		unsupported("api_version", version)
+	}
+	text("kind", 32)
+	if kind != client.TemplateDocumentKind && kind != client.RunDocumentKind {
+		unsupported("kind", kind)
+	}
+	if kind != client.TemplateDocumentKind {
+		return
 	}
 	text("name", maxTemplateNameRunes)
 	text("description", maxTemplateDescriptionRune)
@@ -222,7 +261,7 @@ func templateSpecifies(doc client.TemplateDocument, name string) bool {
 }
 
 // validateTemplateContentDecoded holds a decoded document to what needs the
-// whole of it: coverage, dependencies, the request contract's own shape checks,
+// whole of it: coverage (a Run document is a draft and has none), dependencies, the request contract's own shape checks,
 // and what this server cannot honour yet. Only the door calls it.
 func validateTemplateContentDecoded(doc client.TemplateDocument) []client.TemplateDiagnostic {
 	d := &templateDecoder{}
@@ -231,7 +270,9 @@ func validateTemplateContentDecoded(doc client.TemplateDocument) []client.Templa
 		d.invalid("intent", "does not read as a run request: "+err.Error())
 		return d.diags
 	}
-	d.checkCoverage(doc, req)
+	if doc.Kind != client.RunDocumentKind {
+		d.checkCoverage(doc, req)
+	}
 	d.checkDependencies(doc)
 	for _, check := range append([]func(createRunRequest) *runRefusal{runModeConflictRefusal}, runContractShapeChecks...) {
 		if refusal := check(req); refusal != nil {
