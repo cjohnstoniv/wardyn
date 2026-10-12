@@ -91,6 +91,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- GitHub CLI: an organisation's GitHub CLI row gives a run `gh` against its own GitHub repositories, as the
+  organisation's GitHub App, through GitHub's REST API only (GraphQL commands such as `gh pr list` are refused with a
+  pointer to `gh api repos/{owner}/{repo}/...`). The sandbox holds an inert `GH_TOKEN`; the proxy checks each
+  `api.github.com` request against the row's capabilities and the run's repositories and adds a short-lived App token,
+  revoked when the run stops (best effort, with expiry as the backstop). A row may not grant `repo_admin`,
+  `org_admin`, `packages_write` or `actions_admin`; a run with no GitHub repository is refused with
+  `cli_no_github_repo`.
+- AWS CLI signed in as you: an AWS CLI component names an IAM Identity Center portal, an account, a permission set and
+  a region. Each person signs in once (`POST /api/v1/components/{id}/sign-in`); the sign-in stays with Wardyn, and the
+  proxy adds it only to the portal's role-credentials call for the pinned account and role. AWS issues role
+  credentials into the sandbox, valid for the permission set's session duration. With
+  `WARDYN_AWS_SSO_PROXY_INJECT=off` the component is refused. Changing or deleting the component deletes everyone's
+  sign-in for it.
+- The `base`, `claude-code`, `codex-cli` and `full` images include `gh` and AWS CLI v2, each checked by digest.
 - An organisation component can carry a CLI credential block (Azure, AWS or GitHub CLI), and `GET /me/components`
   lists five CLI cards (available, not turned on, or coming soon) without revealing rows the caller is not granted. A run
   can attach up to 16 components (was 8).
