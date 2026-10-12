@@ -256,10 +256,11 @@ func TestAWSCLI_SignInNameReserved(t *testing.T) {
 		}
 	}
 	future := cliSecretPrefix + cliAWSID + "-future"
-	if !secretsAPIReserved(future) || !nameSinkReservedSecret(future) || !broker.ReservedSecretName(future) {
-		t.Error("the secrets API, the value lanes or the broker do not reserve the whole CLI prefix")
+	if !reservedSecret(future) || !sinkReservedSecret(future) || !secretsAPIReserved(future) || !nameSinkReservedSecret(future) ||
+		!broker.ReservedSecretName(future) {
+		t.Error("a sink, the secrets API, the value lanes or the broker do not reserve the whole CLI prefix")
 	}
-	if reservedSecret("wardyn-cli-notes") {
+	if reservedSecret("wardyn-client-notes") {
 		t.Error("an ordinary name was reserved")
 	}
 	srv, _, _ := componentsServer(t)
@@ -386,33 +387,46 @@ func TestAWSCLI_SignInDoor(t *testing.T) {
 }
 
 // A revive replays the stored proxy config through the model-credential strip.
-// The AWS CLI row's portal grant names the AWS SSO sentinel but is the CLI
-// lane's own, so it survives; a Bedrock sign-in grant for a provider the run
-// no longer chose is still stripped.
+// Only the AWS CLI lane's own grant survives it: the AWS SSO sentinel, on a
+// grant whose snapshot names mechanism aws_cli and an AWS CLI row the run
+// carries. Every forged or partial shape is stripped, as is a Bedrock sign-in
+// grant for a provider the run no longer chose.
 func TestAWSCLI_ReviveKeepsThePortalGrant(t *testing.T) {
-	f := newReauthFixture(t, nil)
-	f.st.run.ModelProviderID = ""
-	cliGrant, bedrockGrant := uuid.New(), uuid.New()
-	f.st.grants = []types.CredentialGrant{
-		{ID: cliGrant, RunID: f.runID, Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: cliSnapshotScope(t, cliSnapshot(subOwner))}},
-		{ID: bedrockGrant, RunID: f.runID, Spec: types.GrantSpec{Kind: types.GrantAPIKey,
-			Scope: reauthSnapshotScope(t, subOwner, reauthRegion, "111122223333", "WardynAgent")}},
+	f, st := cliResolveFixture(t, cliSnapshot(subOwner), nil, true)
+	withSnapshot := func(edit func(*awsSSOScopeSnapshot)) json.RawMessage {
+		sn := cliSnapshot(subOwner)
+		edit(&sn)
+		return cliSnapshotScope(t, sn)
 	}
-	rule := func(host string) egress.InjectionRule {
-		return egress.InjectionRule{Host: host, Header: awsSSOInjectHeader, Format: "%s", SecretName: types.AWSSSOAccessTokenSecret}
+	cases := []struct {
+		name   string
+		scope  json.RawMessage
+		secret string
+		kept   bool
+	}{
+		{"the lane's own grant", withSnapshot(func(*awsSSOScopeSnapshot) {}), types.AWSSSOAccessTokenSecret, true},
+		{"another mechanism", withSnapshot(func(sn *awsSSOScopeSnapshot) { sn.Mechanism = string(types.ModelProviderBedrockSSO) }), types.AWSSSOAccessTokenSecret, false},
+		{"aws_cli without a row", withSnapshot(func(sn *awsSSOScopeSnapshot) { sn.ComponentID = "" }), types.AWSSSOAccessTokenSecret, false},
+		{"a row the run does not carry", withSnapshot(func(sn *awsSSOScopeSnapshot) { sn.ComponentID = uuid.NewString() }), types.AWSSSOAccessTokenSecret, false},
+		{"the right shape on another secret", withSnapshot(func(*awsSSOScopeSnapshot) {}), bedrockAPIKeySecret, false},
+		{"a Bedrock sign-in for an unchosen provider", reauthSnapshotScope(t, subOwner, reauthRegion, "111122223333", "WardynAgent"), types.AWSSSOAccessTokenSecret, false},
 	}
-	cfg := &proxy.Config{Injection: []proxy.InjectionConfig{
-		{GrantID: cliGrant, InjectionRule: rule(cliAWSPortal)},
-		{GrantID: bedrockGrant, InjectionRule: rule(reauthPortal)},
-	}}
+	cfg := &proxy.Config{}
+	ids := make([]uuid.UUID, len(cases))
+	st.grants = nil
+	for i, tc := range cases {
+		ids[i] = uuid.New()
+		st.grants = append(st.grants, types.CredentialGrant{ID: ids[i], RunID: f.runID, Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: tc.scope}})
+		cfg.Injection = append(cfg.Injection, proxy.InjectionConfig{GrantID: ids[i],
+			InjectionRule: egress.InjectionRule{Host: cliAWSPortal, Header: awsSSOInjectHeader, Format: "%s", SecretName: tc.secret}})
+	}
 	if rerr := f.srv.stripRevivedModelInjections(context.Background(), f.st.run, cfg); rerr != nil {
 		t.Fatalf("strip refused: %+v", rerr)
 	}
-	kept := map[uuid.UUID]bool{}
-	for _, in := range cfg.Injection {
-		kept[in.GrantID] = true
-	}
-	if !kept[cliGrant] || kept[bedrockGrant] {
-		t.Fatalf("after the revive strip: CLI kept %t, Bedrock kept %t; want the CLI grant only", kept[cliGrant], kept[bedrockGrant])
+	for i, tc := range cases {
+		kept := slices.ContainsFunc(cfg.Injection, func(in proxy.InjectionConfig) bool { return in.GrantID == ids[i] })
+		if kept != tc.kept {
+			t.Errorf("%s: kept = %t, want %t", tc.name, kept, tc.kept)
+		}
 	}
 }
