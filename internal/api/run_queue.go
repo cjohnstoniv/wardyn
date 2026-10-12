@@ -38,9 +38,8 @@ const (
 	// queueEnqueueBound bounds the promotion attempt a create makes after its commit; on the bound the
 	// transaction rolls back, the run stays QUEUED and the leader sweep retries.
 	queueEnqueueBound = 2 * time.Second
-	// queueSweepBound bounds one pool's promotion in a sweep tick or a kick; queueScanLimit bounds how
-	// many waiting runs a pass looks at, so a long queue of runs that cannot be placed never holds the
-	// pool row for long. A pass promotes at most as many runs as the pool has free slots.
+	// queueSweepBound bounds one pool's promotion in a sweep tick or a kick; queueScanLimit is how many
+	// waiting runs a pass reads at a time. A pass promotes at most as many runs as the pool has free slots.
 	queueSweepBound = 5 * time.Second
 	queueScanLimit  = 50
 )
@@ -93,7 +92,10 @@ type queuedLaunch struct {
 // queueWaitSec is the wait a launch gets: max_wait_sec when given, cut at seven days with a warning,
 // else 24 hours for a Background run and 1 hour for an Interactive one.
 func queueWaitSec(req createRunRequest, interactive bool) (sec int, warning string) {
-	asked := req.MaxWaitSec
+	asked := 0
+	if req.MaxWaitSec != nil {
+		asked = *req.MaxWaitSec
+	}
 	switch {
 	case asked > queueMaxWaitSec:
 		return queueMaxWaitSec, fmt.Sprintf("max_wait_sec %d is past the longest wait of %d seconds (7 days), so this run waits at most that long", asked, queueMaxWaitSec)
@@ -292,9 +294,21 @@ func (q queuedCreate) warnings(s *Server, r *http.Request, created types.AgentRu
 }
 
 // abortQueuedRun fails a run that was queued but could not be recorded in full, so it never waits as a
-// half-built row. The hint is the one line under the FAILED badge.
+// half-built row. The hint is the one line under the FAILED badge. A promoter that took the run before
+// the create could finish recording it does not get to start it: the run is killed there, so the error
+// the create answers is true.
 func (s *Server) abortQueuedRun(ctx context.Context, runID uuid.UUID, hint string) {
-	s.exitQueued(context.WithoutCancel(ctx), runID, types.RunFailed, "", hint)
+	ctx = context.WithoutCancel(ctx)
+	if s.exitQueued(ctx, runID, types.RunFailed, "", hint) {
+		return
+	}
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err == nil {
+		_, _, err = s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": queueCancelCreateAborted})
+	}
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: end a promoted run whose create failed", slog.String("run_id", runID.String()), slog.Any("err", err))
+	}
 }
 
 // exitQueued ends a run that is still QUEUED: the state, its queue row and the reason in one statement
@@ -338,6 +352,15 @@ func (s *Server) auditPoolRemovalCancels(ctx context.Context, ids []uuid.UUID) {
 			mustJSON(map[string]any{"queued": true, "reason": string(types.RunEndRunnerPoolRemoved)})))
 	}
 }
+
+// The run.kill reasons of the waiting runs a person's credential revocation and a service identity's
+// retirement cancel.
+const (
+	queueCancelSessionRevoked = "session_revoked"
+	queueCancelServiceRetired = "service_identity_retired"
+	// queueCancelCreateAborted is a run a promoter took before its create had recorded it in full.
+	queueCancelCreateAborted = "create_aborted"
+)
 
 // cancelQueuedRunsOf kills each run owner still has waiting in a pool's queue, as the system, with
 // reason on the run.kill row, and returns how many it cancelled. The queue row holds the owner's

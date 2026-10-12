@@ -60,28 +60,30 @@ func TestPG_PromoteQueueExactlyOnce(t *testing.T) {
 		}
 		ids = append(ids, r.ID)
 	}
-	// Each promoter waits, inside its verdict, for the other to arrive: with the pool row locked the
-	// second never gets there and the wait times out; without the lock both are inside at once.
+	// The verdicts are asked with no lock held, so both promoters judge the queue as having one free
+	// slot, each admitting a different run, and they meet before either goes on. Only the pool row's lock
+	// then stops the second from counting the slot as free and promoting its own run too.
 	var arrived atomic.Int32
-	meet := func(context.Context, types.RunnerPool, store.RunQueueEntry) (store.QueueVerdict, error) {
-		arrived.Add(1)
-		for deadline := time.Now().Add(400 * time.Millisecond); arrived.Load() < 2 && time.Now().Before(deadline); {
-			time.Sleep(5 * time.Millisecond)
+	meet := func(mine uuid.UUID) store.QueueAdmit {
+		return func(_ context.Context, _ types.RunnerPool, e store.RunQueueEntry) (store.QueueVerdict, error) {
+			if e.RunID != mine {
+				return store.QueueVerdict{}, nil
+			}
+			arrived.Add(1)
+			for deadline := time.Now().Add(2 * time.Second); arrived.Load() < 2 && time.Now().Before(deadline); {
+				time.Sleep(time.Millisecond)
+			}
+			return store.QueueVerdict{Admit: true}, nil
 		}
-		return store.QueueVerdict{Admit: true}, nil
 	}
 	var wg sync.WaitGroup
 	var promoted atomic.Int32
 	errs := make(chan error, 2)
-	for range 2 {
+	for i := range 2 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// One row per scan, so the second promoter has a row of its own to take if the pool row's
-			// lock does not hold it back.
-			one := pass(p)
-			one.ScanLimit = 1
-			got, _, err := pg.PromoteRunQueue(ctx, one, meet)
+			got, _, err := pg.PromoteRunQueue(ctx, pass(p), meet(ids[i]))
 			promoted.Add(int32(len(got)))
 			errs <- err
 		}()
@@ -121,8 +123,8 @@ func TestPG_PromoteQueueFIFOAndSkip(t *testing.T) {
 	p := cappedPool(t, pg, 2)
 	now := time.Now().UTC()
 	var ids []uuid.UUID
-	for i := range 3 {
-		r, err := enqueue(t, pg, p, "alice", now.Add(time.Duration(i)*time.Second), 0)
+	for i, owner := range []string{"bob", "alice", "alice"} {
+		r, err := enqueue(t, pg, p, owner, now.Add(time.Duration(i)*time.Second), 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -589,49 +591,32 @@ func TestPG_PromoteQueueNeverRevivesAnExitedRun(t *testing.T) {
 	}
 }
 
-// A kill that lands while the pass is judging a run waits for the pass; it does not deadlock with it.
-// The pass holds the run row before its queue row, the order every exit takes.
+// A kill that lands while the pass is judging a run wins: the pass holds no lock while it judges, so the
+// kill never waits for it, and the promotion CAS then finds the run gone and moves nothing. Neither fails.
 func TestPG_PromoteAndKillDoNotDeadlock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	pg := store.NewPG(runsPGPoolIsolated(t))
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
 	p := cappedPool(t, pg, 1)
 	r, err := enqueue(t, pg, p, "alice", time.Now().UTC(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	inside, release := make(chan struct{}), make(chan struct{})
+	var killed bool
+	var killErr error
 	judging := func(context.Context, types.RunnerPool, store.RunQueueEntry) (store.QueueVerdict, error) {
-		close(inside)
-		<-release
+		killed, killErr = pg.UpdateRunStateIf(ctx, r.ID, types.RunQueued, types.RunKilled)
 		return store.QueueVerdict{Admit: true}, nil
 	}
-	type result struct {
-		promoted int
-		err      error
+	got, _, err := pg.PromoteRunQueue(ctx, pass(p), judging)
+	if err != nil || killErr != nil {
+		t.Fatalf("pass error %v, kill error %v; neither may fail", err, killErr)
 	}
-	passDone, killDone := make(chan result, 1), make(chan result, 1)
-	go func() {
-		got, _, err := pg.PromoteRunQueue(ctx, pass(p), judging)
-		passDone <- result{len(got), err}
-	}()
-	<-inside
-	go func() {
-		ok, err := pg.UpdateRunStateIf(ctx, r.ID, types.RunQueued, types.RunKilled)
-		n := 0
-		if ok {
-			n = 1
-		}
-		killDone <- result{n, err}
-	}()
-	// Let the kill reach its lock wait before the pass goes on to move the run.
-	time.Sleep(300 * time.Millisecond)
-	close(release)
-	pr, kr := <-passDone, <-killDone
-	if pr.err != nil || kr.err != nil {
-		t.Fatalf("pass error %v, kill error %v; neither may fail", pr.err, kr.err)
+	if !killed || len(got) != 0 {
+		t.Errorf("kill won %v, pass promoted %d; the kill lands while the pass judges, so it wins", killed, len(got))
 	}
-	if pr.promoted != 1 || kr.promoted != 0 {
-		t.Errorf("pass promoted %d, kill won %d; the pass held the run first, so it wins and the kill finds it moved", pr.promoted, kr.promoted)
+	if st := runState(t, pg, r.ID).State; st != types.RunKilled || queueRows(t, pool, r.ID) != 0 {
+		t.Errorf("the killed run is %s with %d queue rows", st, queueRows(t, pool, r.ID))
 	}
 }

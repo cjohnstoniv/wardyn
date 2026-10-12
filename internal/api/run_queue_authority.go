@@ -5,12 +5,22 @@ package api
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// queueOwnerCheckTries and queueOwnerCheckBackoff bound how often the start asks an owner check the store
+// could not answer before it fails the run: a busy store is not a reason to end a run that waited.
+const (
+	queueOwnerCheckTries   = 3
+	queueOwnerCheckBackoff = 500 * time.Millisecond
 )
 
 // queueAuthority is the identity a launch was admitted under, kept on its run_queue row so the start,
@@ -84,4 +94,90 @@ func (a queueAuthority) via() (types.DelegationVia, bool) {
 		return types.DelegationVia{}, false
 	}
 	return types.DelegationVia{Delegate: *a.Delegate, Grant: *a.Grant}, true
+}
+
+// identityBlocker is the store's one-statement identity read (store.PG.IdentityBlocked): it needs no
+// connection of its own, so a start never waits on, or is refused for, the identity guard's dials.
+type identityBlocker interface {
+	IdentityBlocked(ctx context.Context, principal string, epoch int64) (bool, error)
+}
+
+// queueOwnerLive reports whether a's owner may still act as they did at queuedAt, the moment the queue
+// row was written, which is the issue time of the authority it holds: their identity is not deactivated
+// or past the epoch the launch carried, no session revocation since cuts them off (oidc.CheckSession,
+// the check every stored credential makes against its issue time), and a service identity is not retired,
+// still has the sponsor it launched under, and that sponsor's session is live. The admin token and local
+// mode have no one to revoke.
+func (s *Server) queueOwnerLive(ctx context.Context, a queueAuthority, queuedAt time.Time) (bool, error) {
+	if a.Sub == "" {
+		return true, nil
+	}
+	epoch := int64(-1)
+	if a.Epoch != nil {
+		epoch = *a.Epoch
+	}
+	if ib, ok := s.cfg.Store.(identityBlocker); ok {
+		if blocked, err := ib.IdentityBlocked(ctx, a.Sub, epoch); err != nil || blocked {
+			return false, err
+		}
+	}
+	if s.cfg.SessionRevocations != nil {
+		if status, err := oidc.CheckSession(ctx, s.cfg.SessionRevocations, a.Sub, a.Email, queuedAt, epoch); err != nil || status != oidc.SessionLive {
+			return false, err
+		}
+	}
+	if a.Service == "" {
+		return true, nil
+	}
+	ss, ok := s.cfg.Store.(store.ServiceIdentityStore)
+	if !ok || s.cfg.SessionRevocations == nil {
+		return false, nil // no store to ask about the identity or its sponsor: fail closed, as its tokens do
+	}
+	switch still, err := ss.ServiceStillSponsored(ctx, a.Service, a.Sponsor, queuedAt); {
+	case errors.Is(err, store.ErrNotFound):
+		return false, nil
+	case err != nil || !still:
+		return false, err
+	}
+	status, err := oidc.CheckSession(ctx, s.cfg.SessionRevocations, a.Sponsor, "", queuedAt, -1)
+	return err == nil && status == oidc.SessionLive, err
+}
+
+// queueCurrentRole judges the start by the owner's role and user type as the current role mappings and
+// user types derive them from the email and groups the launch carried, as GET /people derives a person's
+// role, so a demotion or a new user type made while the run waited is what the start sees. The role only
+// ever narrows (narrowRole). The groups are the launch's own: a group removed at the identity provider is
+// not seen before the run's wait ends (pool-queue.md section 17). A derivation that would refuse the
+// person's sign-in ends the run.
+func (s *Server) queueCurrentRole(st *queuedStart) *queueEnd {
+	a := st.auth
+	if s.cfg.OIDC == nil || a.Sub == "" || a.Service != "" {
+		return nil
+	}
+	rows, err := s.cfg.Store.ListRoleMappings(st.ctx)
+	if err != nil {
+		return &queueEnd{hint: queueStartFailedHint}
+	}
+	userTypes, err := s.cfg.Store.ListUserTypes(st.ctx)
+	if err != nil {
+		return &queueEnd{hint: queueStartFailedHint}
+	}
+	d := s.cfg.OIDC.PreviewRoleAgainst(toOIDCRoleMappings(rows), userTypes, nil, a.Groups, a.Email)
+	if !d.OK() {
+		return &queueEnd{token: string(types.RunEndIdentityDeactivated), hint: types.RunEndIdentityDeactivated.Sentence()}
+	}
+	a.Role, a.UserType = narrowRole(a.Role, d.Role), d.UserType
+	if err := st.bind(a); err != nil {
+		return &queueEnd{hint: queueStartFailedHint}
+	}
+	return nil
+}
+
+// narrowRole is the role a start acts with: the launch's when the derivation still gives it, else the
+// user tier. A start never gains a tier, and the two admin tiers are not each other's subset.
+func narrowRole(launched, derived string) string {
+	if derived == launched {
+		return launched
+	}
+	return oidc.RoleUser
 }
