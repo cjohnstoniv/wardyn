@@ -105,6 +105,30 @@ for (const { name, sections, ns } of SCREENS) {
   });
 }
 
+// "- `NR_TOOLS.KEY` shows only when ..." lines in the doc's Display rules name constants a screen must gate.
+describe("new run canon: display rules", () => {
+  const named = [...readFileSync(DOC, "utf8").matchAll(/^- `(NR_[A-Z]+)\.([A-Z0-9_]+)` /gm)].map((m) => [m[1], m[2]]);
+
+  it("names constants that exist", () => {
+    expect(named.length).toBeGreaterThan(0);
+    const all: Record<string, Record<string, unknown>> = {
+      NR_TOOLS,
+      NR_START,
+      NR_SHAPE,
+      NR_RUN,
+      NR_HARNESSES,
+      NR_FILES,
+      NR_DOCUMENT,
+      NR_REVIEW,
+      NR_SAVE,
+      NR_LAUNCH,
+      NR_TEMPLATES,
+      NR_SHARED,
+    };
+    expect(named.filter(([ns, key]) => !(key in (all[ns] ?? {})))).toEqual([]);
+  });
+});
+
 describe("new run copy is lazy-only", () => {
   it("is not re-exported through the eager copy.ts barrel", () => {
     expect(readFileSync(COPY_BARREL, "utf8")).not.toMatch(/copy\/new-run\//);
