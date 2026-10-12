@@ -59,11 +59,9 @@ func (s *Server) placementCapabilities(ctx context.Context, p types.Placement, r
 	return placementCaps{Capabilities: caps, Source: types.RunEvidenceSubstrate}, nil
 }
 
-// requestCapabilities answers for the placement a request names, or, while it
-// names none, the intersection over every eligible placement. Only the remote
-// placement is eligible today: a local request is refused before any run is
-// placed (stepLocalEligibility), and D-117's resolver adds the local candidates
-// it admits to this list.
+// requestCapabilities answers for the placement a request names (a local one
+// for the runner it pins), or, while it names none, for the remote placement.
+// A pooled run's own candidates answer for it through runPlacement instead.
 func (s *Server) requestCapabilities(ctx context.Context, req createRunRequest) (placementCaps, error) {
 	if req.Placement != "" {
 		return s.placementCapabilities(ctx, req.Placement, requestRunnerID(req))
