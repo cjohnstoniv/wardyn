@@ -87,12 +87,14 @@
 ### `allowed_methods`
 
 - Optional HTTP method restriction.
-- Enforced on every lane the proxy can read a method on:
+- Enforced wherever the proxy can read a method:
   - the plain forward request,
   - the `CONNECT` that opens a tunnel (method `CONNECT`),
-  - and — since the proxy holds the plaintext there — each request **inside** a TLS-intercepted tunnel (`intercept_tls` / subscription injection).
+  - each brokered model request (`/wardyn/llm/*`),
+  - and each request **inside** a TLS-intercepted tunnel (`intercept_tls` / subscription injection).
 - A refused request is `403` with `rule_source` `policy:method` and is never forwarded.
-- An opaque (un-intercepted) tunnel is the exception the transport forces: only its `CONNECT` is seen, so the methods carried inside it are neither visible nor restricted.
+- `/wardyn/gh/` and `/wardyn/git/` ignore it and accept only git smart-HTTP (`GET info/refs`, `POST` upload/receive-pack).
+- An opaque (un-intercepted) tunnel shows only its `CONNECT`, so the methods inside it are neither visible nor restricted.
 
 ### `auto_stop_after_sec`
 

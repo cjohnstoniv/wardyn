@@ -81,11 +81,19 @@ func patForwardSafe(rest, rawQuery string) bool {
 		}
 	}
 	for _, seg := range strings.Split(rest, "/") {
-		if seg == "." || seg == ".." {
+		if isDotSegment(seg) {
 			return false
 		}
 	}
 	return true
+}
+
+// isDotSegment reports whether a decoded path segment is "." or "..", reading
+// it up to its first ";": some servers drop ";" path parameters before they
+// resolve dot-segments.
+func isDotSegment(seg string) bool {
+	s, _, _ := strings.Cut(seg, ";")
+	return s == "." || s == ".."
 }
 
 // handlePATBroker serves /wardyn/git/<host>/<rest> for a git_pat-granted host.

@@ -100,6 +100,8 @@ func TestLLMRouteForwardsModelCallsUnchanged(t *testing.T) {
 			"/v1/models/claude-3.5-sonnet", "X-Api-Key", "BROKERED-KEY"},
 		{"dotted_names", gateway, http.MethodGet, llmAnthropicPrefix + "v1/.well-known/a..b/...", "",
 			"/llm/anthropic/v1/.well-known/a..b/...", "X-Api-Key", "GATEWAY-KEY"},
+		{"semicolon_names", "", http.MethodGet, llmAnthropicPrefix + "v1/files/a;b/...;x", "",
+			"/v1/files/a;b/...;x", "X-Api-Key", "BROKERED-KEY"},
 	}
 	for _, methods := range [][]string{nil, {"GET", "POST"}} {
 		for _, tc := range cases {
@@ -225,22 +227,7 @@ func TestLLMRouteRefusesDotSegments(t *testing.T) {
 		for _, rest := range rests {
 			for _, method := range []string{http.MethodGet, http.MethodPost} {
 				t.Run(route.name+"/"+method+"/"+rest, func(t *testing.T) {
-					up := newRawUpstream(t, `{}`)
-					p, buf := llmChecksProxy(t, types.RunPolicySpec{}, route.gateway, up)
-					rec := httptest.NewRecorder()
-					req := mustLocalReq(t, method, route.prefix+rest, strings.NewReader(`{}`))
-					p.ServeHTTP(rec, req)
-
-					if up.reached {
-						t.Fatalf("upstream received %s %q (key %q)", up.method, up.requestURI,
-							up.header.Get("X-Api-Key")+up.header.Get("Authorization"))
-					}
-					if rec.Code != http.StatusBadRequest {
-						t.Fatalf("status = %d, want 400 (decoded path %q)", rec.Code, req.URL.Path)
-					}
-					if d := lastDecision(t, buf); d.Decision != egress.Deny {
-						t.Fatalf("decision = %s/%s, want deny", d.Decision, d.RuleSource)
-					}
+					assertLLMPathRefused(t, route.gateway, method, route.prefix+rest)
 				})
 			}
 		}
@@ -261,4 +248,83 @@ func TestLLMRouteRefusesDotSegments(t *testing.T) {
 			t.Fatalf("status=%d, upstream got %q: want 400 and no upstream request", resp.StatusCode, up.requestURI)
 		}
 	})
+}
+
+// assertLLMPathRefused sends target and asserts a 400 and a deny row, with
+// nothing sent upstream.
+func assertLLMPathRefused(t *testing.T, gateway, method, target string) {
+	t.Helper()
+	up := newRawUpstream(t, `{}`)
+	p, buf := llmChecksProxy(t, types.RunPolicySpec{}, gateway, up)
+	rec := httptest.NewRecorder()
+	req := mustLocalReq(t, method, target, strings.NewReader(`{}`))
+	p.ServeHTTP(rec, req)
+
+	if up.reached {
+		t.Fatalf("upstream received %s %q (key %q)", up.method, up.requestURI,
+			up.header.Get("X-Api-Key")+up.header.Get("Authorization"))
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (decoded path %q)", rec.Code, req.URL.Path)
+	}
+	if d := lastDecision(t, buf); d.Decision != egress.Deny {
+		t.Fatalf("decision = %s/%s, want deny", d.Decision, d.RuleSource)
+	}
+}
+
+// TestLLMRouteRefusesParameterDotSegments: a segment that is "." or ".." up to
+// its first ";" is refused like a plain dot-segment.
+func TestLLMRouteRefusesParameterDotSegments(t *testing.T) {
+	const gateway = "https://" + llmTestGatewayHost + "/llm/anthropic"
+	for _, tc := range []struct{ gateway, target string }{
+		{gateway, llmAnthropicPrefix + "..;/..;/admin"},
+		{gateway, llmAnthropicPrefix + "v1/%2e%2e;x=1/admin"},
+		{"", llmAnthropicPrefix + ".;x"},
+		{"", llmOpenAIPrefix + "v1/..;a/files"},
+	} {
+		t.Run(tc.target, func(t *testing.T) { assertLLMPathRefused(t, tc.gateway, http.MethodGet, tc.target) })
+	}
+}
+
+// TestLLMRouteRefusesControlCharacters: a decoded rest holding a byte below
+// 0x20 or 0x7f is refused.
+func TestLLMRouteRefusesControlCharacters(t *testing.T) {
+	const gateway = "https://" + llmTestGatewayHost + "/llm/anthropic"
+	for _, rest := range []string{"..%00/admin", "v1/messages%00", "v1/messages%0d%0aX:%20y", "v1/%09models", "v1/%1f", "v1/models%7f"} {
+		t.Run(rest, func(t *testing.T) { assertLLMPathRefused(t, gateway, http.MethodPost, llmAnthropicPrefix+rest) })
+	}
+}
+
+// TestPATBrokerRefusesParameterDotSegments: the git_pat broker refuses a
+// segment that is ".." up to its first ";" before any scope check or mint,
+// and still forwards the plain path on the same unrestricted grant.
+func TestPATBrokerRefusesParameterDotSegments(t *testing.T) {
+	const info = "/info/refs?service=git-upload-pack"
+	for _, tc := range []struct {
+		path     string
+		upstream string
+	}{
+		{"team/app" + info, "/team/app/info/refs"},
+		{"team/..;/app" + info, ""},
+		{"team/.;x/app" + info, ""},
+		{"..;/..;/team/app" + info, ""},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			p, up, last := patScopeProxy(t, "gitlab.com", PATGrant{Forge: "generic"})
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, mustLocalReq(t, http.MethodGet, "/wardyn/git/gitlab.com/"+tc.path, nil))
+			if tc.upstream != "" {
+				if rec.Code != http.StatusOK || up.gitPath != tc.upstream {
+					t.Fatalf("status=%d forwarded %q, want 200 at %q", rec.Code, up.gitPath, tc.upstream)
+				}
+				return
+			}
+			if rec.Code != http.StatusForbidden || up.gitHits != 0 || up.mintCalls != 0 {
+				t.Fatalf("status=%d forge requests=%d mints=%d, want 403 and none", rec.Code, up.gitHits, up.mintCalls)
+			}
+			if d := last(); d.Decision != egress.Deny || d.RuleSource != ruleSourcePATDenied {
+				t.Fatalf("decision = %s/%s, want deny/%s", d.Decision, d.RuleSource, ruleSourcePATDenied)
+			}
+		})
+	}
 }
