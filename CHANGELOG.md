@@ -87,6 +87,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- A `wardyn/v1` document of `kind: Run` holds a draft of one run as its `intent`. `POST /api/v1/templates/import`
+  reads it (or a `RunTemplate`) and answers the normalised document or diagnostics, storing nothing.
+- New optional request field `shape` (`agent_task`, `environment`, `application`), checked against `experience`,
+  `workload` and `tools`. A request that does not fit is `422 run_shape_conflict`.
 - Administrators can let a self-hosted runner's runs use an organisation credential without it leaving the
   organisation (`via_org`): the runner forwards only those destinations, and the organisation re-checks and
   injects every request. Set per credential class with `PUT /governance/credential-delivery` (security tier;
@@ -269,6 +273,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- A preset write is now held to the same shape and availability checks as a launch, so a preset no one could launch
+  is refused when it is saved. Document error sentences no longer say "template", because they serve Run documents too.
 - A held runner-pool use-policy change now records whether the pool had a use policy when it was reviewed, so a
   change reviewed on an open pool no longer applies over a policy a leaver purge emptied (or the reverse); it
   goes stale instead. Held changes proposed before the upgrade must be proposed again.
@@ -362,6 +368,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- Runner spool replay after a reconnect sends each batch of up to 64 decisions before waiting for one
+  acknowledgement, and the pass before READY ends at the spool head seen when it started, so a large backlog or a busy
+  proxy no longer keeps a runner offline for minutes.
+- Erasing an organisation-erased run's local evidence now waits for calls already in flight for that run; a lifecycle
+  observation that finishes after the quarantine no longer restores the exit or recreates the spool directory.
 - `wardyn sync --pull` refuses a sandbox file name holding a control character, and every path or gateway message it
   reports is quoted when it holds a non-printable character, so sandbox text cannot drive the terminal.
 - A held runner pool executor attach or detach is listed to, read by and decided by a super admin only, the tier it
