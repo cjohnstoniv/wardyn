@@ -14,11 +14,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// The runner pool contract (0.9). A pool is a stable, organisation-defined set
-// of execution targets. Choosing one constrains where a run may go; it never
-// grants a runner, a credential, a drive or a confinement class, and it never
-// makes another person's runner a candidate: a self-hosted pool lists many
-// people's runners, but a person's run only ever considers their own.
+// The runner pool contract (0.9). A pool is a stable set of execution targets:
+// an organisation's Remote Provided pool, or one person's own Self-Hosted pool
+// of their own claimed runners. Choosing one constrains where a run may go; it
+// never grants a runner, a credential, a drive or a confinement class, and it
+// never makes another person's runner a candidate.
 //
 // Nothing here is stored yet. These are the shapes the storage, the admission
 // resolver and the console build on, and the wire the server refuses to honour
@@ -69,14 +69,19 @@ func (s RunnerPoolState) Valid() bool {
 	return s == RunnerPoolActive || s == RunnerPoolDisabled || s == RunnerPoolDeleted
 }
 
-// RunnerPool is one pool of the organisation's catalogue.
+// RunnerPool is one pool of the catalogue: an organisation's Remote Provided pool
+// or one person's own Self-Hosted pool.
 type RunnerPool struct {
 	ID uuid.UUID `json:"id"`
 	// Name is a display label a pool's administrator may change. It is never an
 	// identity: every reference is by ID.
 	Name        string            `json:"name"`
 	HostingType RunnerPoolHosting `json:"hosting_type"`
-	State       RunnerPoolState   `json:"state"`
+	// Owner is the person a Self-Hosted pool belongs to (their subject, as runner
+	// ownership names them): only they change it or put runners in it, and only
+	// they use it. A Remote Provided pool has none: administrators keep it.
+	Owner string          `json:"owner,omitempty"`
+	State RunnerPoolState `json:"state"`
 	// Revision starts at 1 and increases by one on every change to the pool, its
 	// membership or its use policy. A run records the revision it was admitted
 	// against, and a writer that names a stale revision is refused.

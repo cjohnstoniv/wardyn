@@ -48,7 +48,7 @@ func TestPG_RunnerPoolLimitsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plain, err := pg.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "Plain", HostingType: types.RunnerPoolSelfHosted}, "test")
+	plain, err := pg.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "Plain", HostingType: types.RunnerPoolSelfHosted, Owner: "nobody"}, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestPG_RunnerPoolLimitsRoundTrip(t *testing.T) {
 	if got, err := pg.GetRunnerPool(ctx, plain.ID); err != nil || got.Limits != nil {
 		t.Errorf("a pool created without limits reads %+v, %v", got.Limits, err)
 	}
-	rows, err := pg.ListRunnerPoolCatalogue(ctx, "nobody")
+	rows, err := pg.ListRunnerPoolCatalogue(ctx, "nobody", false)
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("catalogue = %d rows, %v", len(rows), err)
 	}

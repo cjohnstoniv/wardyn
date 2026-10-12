@@ -105,3 +105,59 @@ func TestRunnerPoolListPrintsTheReasons(t *testing.T) {
 		}
 	}
 }
+
+// create makes the caller's own Self-Hosted pool unless --remote asks an admin route for a Remote
+// Provided one; update and delete read the pool first and take the route its hosting type owns.
+func TestRunnerPoolManageCommandsTakeTheOwnersRoute(t *testing.T) {
+	id := uuid.New()
+	for _, c := range []struct {
+		hosting sdk.RunnerPoolHosting
+		write   string
+	}{{sdk.RunnerPoolSelfHosted, "/api/v1/me/runner-pools/"}, {sdk.RunnerPoolRemoteProvided, "/api/v1/runner-pools/"}} {
+		srv := newCmdServer(t, http.StatusOK, sdk.RunnerPool{ID: id, Name: "Laptop", HostingType: c.hosting, Revision: 3})
+		base := []string{"--url", srv.URL, "--token", "t"}
+		if err := execCmd(t, append([]string{"runner", "pool", "update", id.String(), "--switch", "off"}, base...)...); err != nil {
+			t.Fatal(err)
+		}
+		get, put := srv.reqs[len(srv.reqs)-2], srv.last()
+		var body sdk.UpdateRunnerPoolRequest
+		if err := json.Unmarshal(put.body, &body); err != nil || get.method != http.MethodGet || put.method != http.MethodPut ||
+			put.path != c.write+id.String() || body.Revision != 3 || body.State == nil || *body.State != sdk.RunnerPoolSwitchDisabled {
+			t.Errorf("%s update sent %s %s then %s %s %s", c.hosting, get.method, get.path, put.method, put.path, put.body)
+		}
+		if err := execCmd(t, append([]string{"runner", "pool", "delete", id.String()}, base...)...); err == nil || !strings.Contains(err.Error(), "--yes") {
+			t.Errorf("delete without --yes = %v", err)
+		}
+		if err := execCmd(t, append([]string{"runner", "pool", "delete", id.String(), "--yes"}, base...)...); err != nil {
+			t.Fatal(err)
+		}
+		if r := srv.last(); r.method != http.MethodDelete || r.path != c.write+id.String() {
+			t.Errorf("%s delete sent %s %s", c.hosting, r.method, r.path)
+		}
+	}
+	srv := newCmdServer(t, http.StatusCreated, sdk.RunnerPool{ID: id, Name: "Laptop", HostingType: sdk.RunnerPoolSelfHosted})
+	base := []string{"--url", srv.URL, "--token", "t"}
+	for args, want := range map[string]string{"--name Laptop": "/api/v1/me/runner-pools", "--name Provided --remote": "/api/v1/runner-pools"} {
+		if err := execCmd(t, append(append([]string{"runner", "pool", "create"}, strings.Fields(args)...), base...)...); err != nil {
+			t.Fatal(err)
+		}
+		if r := srv.last(); r.method != http.MethodPost || r.path != want {
+			t.Errorf("create %s sent %s %s", args, r.method, r.path)
+		}
+	}
+	for _, r := range srv.reqs {
+		var mine sdk.CreateMyRunnerPoolRequest
+		if r.path == "/api/v1/me/runner-pools" && (json.Unmarshal(r.body, &mine) != nil || mine.Name != "Laptop" || strings.Contains(string(r.body), "hosting_type")) {
+			t.Errorf("own create body = %s", r.body)
+		}
+	}
+	n := len(srv.reqs)
+	for _, bad := range [][]string{{"create"}, {"update", "not-an-id", "--name", "x"}, {"update", id.String()}, {"update", id.String(), "--switch", "maybe"}} {
+		if err := execCmd(t, append(append([]string{"runner", "pool"}, bad...), base...)...); err == nil {
+			t.Errorf("%v was accepted", bad)
+		}
+	}
+	if len(srv.reqs) != n {
+		t.Error("an invalid command reached the server")
+	}
+}

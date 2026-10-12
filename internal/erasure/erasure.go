@@ -46,12 +46,16 @@ const (
 	// MaskCopies: the masking manifests of the person's runs, after their live
 	// attaches and relays are fenced.
 	MaskCopies Scope = "mask_copies"
+	// RunnerPools: the person's own Self-Hosted runner pools, deleted (their
+	// runners leave them and runs waiting for them end), and their name on
+	// every pool of theirs, the deleted ones included.
+	RunnerPools Scope = "runner_pools"
 )
 
 // order is the sequence scopes run in whatever order they were asked: live
 // consumers are fenced first, the data they could still reach is erased next,
 // and the keys go last.
-var order = []Scope{MaskCopies, RunOutputs, Recordings, RunTasks, Components, RunSetups, AuditPersonalFields, Credentials}
+var order = []Scope{MaskCopies, RunOutputs, Recordings, RunTasks, Components, RunSetups, RunnerPools, AuditPersonalFields, Credentials}
 
 // Scopes lists every scope in the order Orchestrate runs them.
 func Scopes() []Scope { return slices.Clone(order) }
