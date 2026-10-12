@@ -376,15 +376,34 @@ A run can carry components that add destinations and secrets ([POLICIES.md](POLI
 | `PutComponent` | `PUT /api/v1/components/{id}` | admin |
 | `DeleteComponent` | `DELETE /api/v1/components/{id}` | admin |
 
-- `MyComponents` answers `may_define`, `resident_delivery_allowed`, `autonomy_cap`, `mine` and `org`.
-  - `org` holds only the organisation components the caller is granted, as `OrgComponentView`: hosts, delivery modes and config keys, never a secret name.
+- `MyComponents` answers `may_define`, `resident_delivery_allowed`, `autonomy_cap`, `mine`, `org` and `clis`.
+  - `org` holds only the organisation components the caller is granted, as `OrgComponentView`: hosts, delivery modes, config keys, `category` and an optional `cli` or `mcp` view, never a secret name.
+  - `clis` lists five CLI cards in a fixed order (`azure`, `github`, `aws`, `gcloud`, `kubectl`), each `{kind, state, rows}` with `state` `available`, `not_granted` or `coming_soon`, built only from rows the caller is granted.
 - A save answers `ComponentSaved`: the stored row and `requirements[]`.
   - Each requirement is `{kind: "secret", name, status: "present"|"missing", fix: "add_secret"}`. The list is advisory and never refuses a save.
 - `PutComponent` creates an organisation component restricted: nobody may attach it until an admin grants its id under `/api/v1/permissions`.
-- A run attaches components in `CreateRunRequest.Components`: `{id}` for a stored one, `{inline, name}` for a definition used by that run alone. At most 8.
+- A run attaches components in `CreateRunRequest.Components`: `{id}` for a stored one, `{inline, name}` for a definition used by that run alone. At most 16.
 - Preflight and the policy preview answer `components`: one fact per component with `status` (`ready`, `needs_input`, `unavailable` or `unknown`), its `requirements`, hosts and each secret's delivery and `shared` flag.
   - A fact never carries the name of a secret the organisation provides.
 - Create, preflight and preview refuse with the component reasons in [`Reason`](#reason-branch-on-this-never-on-errors-prose); a run is audited as `run.component.attach` and `run.component.refuse`.
+
+## Run documents
+
+A `wardyn/v1` document with `kind: Run` is a draft of one run. Its `intent` holds the `CreateRunRequest` fields, and a `kind: RunTemplate` document is read by the same decoder.
+
+- A `Run` document carries `api_version`, `kind` and `intent`. `name`, `coverage` and `needs_setup` are refused as `template_field_unknown`; a run title or description, at the top or in `intent`, as `template_field_excluded`.
+- A `Run` document has no coverage rules: completeness is checked when the run is reviewed.
+- A `kind` other than Run or RunTemplate is reported at path `kind` and a wrong `api_version` at `api_version`, both as `template_version_unsupported`. When the import request names the `kind` it expects and the document is the other valid kind, `kind` carries a sentence saying so, beside the document's other diagnostics.
+- `POST /api/v1/templates/import` (`Client.ImportTemplate`) takes `{format, source, kind?}`, where `format` is `json` or `yaml` and `kind` is `Run`, `RunTemplate` or empty for either. It answers `200` with the normalised `document` when nothing is wrong, and otherwise with `diagnostics`, each `{path, reason, message}`. It stores nothing, grants nothing and needs only a signed-in person.
+- The door holds a document to the same shape and availability checks as create, preflight and the policy preview, so a request they refuse is refused at the door with the same reason.
+
+`shape` (`agent_task`, `environment` or `application`) names the New Run choice a request was set up from. It is optional and needs `experience`; a value outside the three is `400` `run_mode_invalid`. The server checks it against the run and otherwise does not use it; a request that does not fit is `422` `run_shape_conflict` at create, preflight, preview and the import door.
+
+| `shape` | Requires |
+|---|---|
+| `application` | `experience: background` and `workload.kind: command` |
+| `environment` | `experience: interactive` |
+| `agent_task` | With `background`, `workload.kind: agent_task`; with `interactive`, a `tools[]` entry of kind `harness` |
 
 ## Model providers
 
@@ -539,12 +558,13 @@ start.
 | `request_field_unavailable` | `422`: a field this server cannot honour yet. It is refused, never dropped. |
 | `run_mode_required` / `run_mode_invalid` / `start_folder_invalid` | `400`: a new client's mode (or a background task's workload) is unset, and is never inferred (`mode_contract: "0.9"` marks a request as a new client's even when it carries no other run-mode field); a run-mode carrier is malformed; a `start_folder` is malformed, names an attachment the run lacks, or leaves its mount. |
 | `run_mode_conflict` | `422`: run-mode carriers contradict each other, or an older field they replace (`agent`, `task`, `interactive`) rides beside them. |
+| `run_shape_conflict` | `422`: `shape` does not fit the run: it needs `experience`, and `application`, `environment` and `agent_task` each require the workload or tool shown under [Run documents](#run-documents). |
 | `run_background_only` | `409`: an interactive door of a background task (terminal, exec, SSH, web gateway, desktop). Logs, audit, status and the lifecycle controls (kill, revive, extend) stay. |
-| `template_document_invalid` / `template_field_invalid` / `template_field_unknown` / `template_version_unsupported` | `400`, `422` for the version: a template document that is not one bounded document, a value of the wrong shape (null and redaction placeholders included), a key the schema lacks, or an `api_version` or `kind` this server does not read. |
+| `template_document_invalid` / `template_field_invalid` / `template_field_unknown` / `template_version_unsupported` | `400`, `422` for the version: a document that is not one bounded document, a value of the wrong shape (null and redaction placeholders included), a key the schema lacks, or an `api_version` or `kind` this server does not read. |
 | `template_secret_refused` / `template_run_state_refused` / `template_metadata_in_content` / `template_field_excluded` | `400`: a template never holds a secret value, state of one run (identity, session, claim, admission), an owner, scope, group or revision, or a launch-only (title, description) or retired field. The path is in the diagnostic. |
 | `template_field_unavailable` / `template_dependency_missing` / `template_coverage_invalid` / `template_shared_field_refused` | `422`: a field this server cannot honour yet (refused, never dropped), a field whose dependency is neither included nor listed under `needs_setup`, a coverage that does not fit the content, or a field that names one person's own thing in an organisation or group template. |
 | `template_scope_forbidden` / `template_group_unverified` / `template_not_found` / `template_revision_conflict` | `403`, `403`, `404`, `409`: publishing to a scope the caller does not administer, group membership that cannot be verified from this sign-in, no such template or not visible to the caller, or an update against a revision that has moved. |
-| `templates_unavailable` | `501`: the template store is not available on this server yet. Every `/templates` route and the `/admin/template-group-admins` routes answer it. |
+| `templates_unavailable` | `501`: the template store is not available on this server yet. Every `/templates` route except `POST /templates/import`, and the `/admin/template-group-admins` routes, answer it. |
 | `runner_pools_unavailable` | `501`: this server's store has no runner pool storage; every pool route answers it. |
 | `runner_pool_not_found` / `runner_pool_stale` / `runner_pool_unavailable` / `runner_pool_member_mismatch` / `runner_pool_no_eligible_member` | The pool routes: `404` no such pool or one you may not use (the two read alike), `409` a stale revision, `422` a switched-off pool as a default, a member of the wrong kind or a runner that is not yours, or a use policy on a Self-Hosted pool. `no_eligible_member` is also the `reason` of an unavailable pool in `GET /runner-pools`. |
 | `image_devcontainer_exclusive` / `image_builder_unavailable` | `POST /runs`' image/devcontainer build validation: `image` and `devcontainer_repo` were both set (the caller's own request shape), or a custom image was requested but this control plane has no image builder wired (a deployment capability neither field can fix) — two different causes, two reasons. |

@@ -51,19 +51,24 @@ export interface TemplateSetupNeed {
   reason?: string;
 }
 
-/** The import and export document. Owner, scope, group and revision are the catalogue's, never the document's. */
+/**
+ * The import and export document. Owner, scope, group and revision are the catalogue's, never the document's.
+ * A kind Run document is a draft of one run: it has no name, description, coverage or needs_setup.
+ */
 export interface TemplateDocument {
   api_version: string;
   kind: string;
   name?: string;
   description?: string;
-  coverage: TemplateCoverage;
+  coverage?: TemplateCoverage;
   intent: TemplateIntent;
   needs_setup?: TemplateSetupNeed[];
 }
 
 export const TEMPLATE_API_VERSION = "wardyn/v1";
 export const TEMPLATE_KIND = "RunTemplate";
+/** A draft of one run: `intent` is the create body. */
+export const RUN_DOCUMENT_KIND = "Run";
 
 /** Pins a revision in a new-run draft; a later edit of the template does not move it. */
 export interface TemplateRef {
@@ -122,6 +127,8 @@ export interface TemplateSaveRequest {
 export interface TemplateImportRequest {
   format: TemplateFormat;
   source: string;
+  /** The kind the caller expects: Run, RunTemplate, or absent for either. */
+  kind?: string;
 }
 
 /** One problem with a document: where (a JSON path), why (a closed reason) and a sentence. */

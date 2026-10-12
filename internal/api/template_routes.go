@@ -12,7 +12,9 @@ import (
 // The run template routes (0.9). They are mounted behind their final router
 // tiers so routeMatrix (authz_test.go) knows them before any storage exists,
 // and every one answers 501 templates_unavailable until the template store
-// lands. The handler of each is the one place the storage lane writes:
+// lands, except POST /templates/import: it validates a document and stores
+// nothing (template_import.go). The handler of each is the one place the
+// storage lane writes:
 //
 //	every /templates route        member at the router; the handler then checks the
 //	                              caller against the template's scope with
@@ -30,7 +32,7 @@ import (
 func (s *Server) mountTemplateRoutes(r, operatorOnly chi.Router) {
 	r.Get("/templates", s.handleTemplatesUnavailable)
 	r.Post("/templates", s.handleTemplatesUnavailable)
-	r.Post("/templates/import", s.handleTemplatesUnavailable)
+	r.Post("/templates/import", s.handleImportTemplate)
 	r.Get("/templates/{id}", s.handleTemplatesUnavailable)
 	r.Get("/templates/{id}/revisions/{revision}", s.handleTemplatesUnavailable)
 	r.Put("/templates/{id}", s.handleTemplatesUnavailable)

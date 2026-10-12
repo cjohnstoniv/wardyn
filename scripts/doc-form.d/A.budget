@@ -50,7 +50,9 @@
 # docs/AUDIT-ACTIONS.md 42030 measured after the F-1516 B1+B3 merge.
 # docs/AUDIT-ACTIONS.md 42271 measured after train 10 F-1516 B1+B3 merge.
 # docs/AUDIT-ACTIONS.md 42345 measured after H13 merge-prep.
-docs/AUDIT-ACTIONS.md=42345 share=8
+# docs/AUDIT-ACTIONS.md 42374 measured after train 12 DS1-S2a merge.
+# docs/AUDIT-ACTIONS.md 42448 measured after H13 merge-prep 2.
+docs/AUDIT-ACTIONS.md=42448 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
@@ -71,3 +73,4 @@ docs/AUDIT-ACTIONS.md=42345 share=8
 # docs/AUDIT-ACTIONS.md 40019 adds 81 (0.9 F-1511-1510): the `scope` field and the explicit-route citations on secret.write and secret.delete, and `write_fence` on credential.erase.
 # docs/AUDIT-ACTIONS.md 40094 adds 75 (0.9 F-1511-1510 r1): reserved_principal on person.erasure and credential.erase, the identity-directory resolution and the self check's name set.
 # docs/AUDIT-ACTIONS.md 40126 adds 32 (0.9 F-1511-1510 r4): credential.erase erases the subject and the entra form.
+# docs/AUDIT-ACTIONS.md 42097 adds 103 over 41994 (0.9 DS1-S2a r1): the run.toolgate_credential.write row, recording a withheld tool-approval credential and its reason.

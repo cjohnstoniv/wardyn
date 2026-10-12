@@ -295,6 +295,16 @@ that ceiling down; each run receives only the minimal subset its task needs.
     replacement for it, and does not change this boundary's bypass class.
   - A run correctly resolved to an unattended level still depends on the same in-sandbox,
     cooperative `tool_rules`/`wardyn-toolgate` decision plane once it launches.
+- **Per-harness rules (0.9), same-uid residual:** with two or more harnesses, only the harness Wardyn
+  starts holds the tool-approval credential that selects its own rules. It is a file at
+  `/run/wardyn/secrets/wardyn-toolgate-<harness>` read into that harness's process environment only.
+  - Docker: mode 0400, owned by the agent uid. Kubernetes: a projected Secret item, root-owned 0440
+    through the pod's fsGroup 1000, and the plaintext also sits in the run's Secret object. On krun
+    the guest runs as root, so the mode bounds nothing.
+  - Readers: any process running as uid 1000 in the sandbox, attach and exec shells included (the
+    file or `/proc/<pid>/environ`), and every process the harness starts. Such a process can send
+    the credential and be decided by the started harness's rules. Accepted for 0.9.0; uid isolation
+    is a later follow-up.
 
 ### B6 — Runner data plane vs. control plane
 

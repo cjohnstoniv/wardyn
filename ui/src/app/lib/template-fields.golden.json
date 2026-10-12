@@ -10,10 +10,31 @@
       "remove_secrets",
       "tool_rules"
     ],
+    "CLIAWS": [
+      "start_url",
+      "sso_region",
+      "account_id",
+      "role_name",
+      "region"
+    ],
+    "CLIAzure": [
+      "subscriptions",
+      "access"
+    ],
+    "CLIGitHub": [
+      "capabilities"
+    ],
+    "ComponentCLI": [
+      "kind",
+      "azure",
+      "aws",
+      "github"
+    ],
     "ComponentDefinition": [
       "hosts",
       "secrets",
-      "config"
+      "config",
+      "cli"
     ],
     "ComponentDelivery": [
       "mode",
@@ -653,6 +674,15 @@
       "omitted": "unset_required",
       "empty": "same_as_omitted",
       "meaning": "No mode is assumed: Background task or Interactive environment is chosen, and never inferred.",
+      "section": "run_wide"
+    },
+    {
+      "name": "shape",
+      "tab": "runner",
+      "part": "runner",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No shape is recorded. The experience, workload and tools already say what the run is; a shape only names the choice it was set up from.",
       "section": "run_wide"
     },
     {

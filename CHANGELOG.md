@@ -17,9 +17,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `runner_registration_tokens`, `audit_delivery_cursors`, `runner_spool_cursors`, `runner_executions`,
   `runner_execution_exits`, `runner_inventory_candidates`, `runner_inventory_observations`, `runner_pools`,
   `runner_pool_org_defaults`, `secret_owner_generations`, `person_invitations`, `service_identities` and
-  `api_token_moves`. Without the `runner_pools` grants wardynd refuses to start at the runner pool bootstrap.
+  `api_token_moves`, and `SELECT, INSERT` on `run_harnesses` (migration `0164_run_harnesses`). Without the `runner_pools` grants wardynd refuses to start at the runner pool bootstrap.
   Without the `provider_connection_changes` grant every secret write fails once migration 0143's trigger on
   `secrets` is in place.
+  Without the `run_harnesses` grant every run that records its harnesses fails to launch.
 - Credential erase fence (migration 0156): an older wardynd running beside the new one does not check a person's
   erase generation; finish the upgrade before erasing anyone.
 - Migration `0145_audit_delivery_cursors` adds the `audit_delivery_cursors` table; nothing changes until a webhook
@@ -87,6 +88,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- An organisation component can carry a CLI credential block (Azure, AWS or GitHub CLI), and `GET /me/components`
+  lists five CLI cards (available, not turned on, or coming soon) without revealing rows the caller is not granted. A run
+  can attach up to 16 components (was 8).
+- A `wardyn/v1` document of `kind: Run` holds a draft of one run as its `intent`. `POST /api/v1/templates/import`
+  reads it (or a `RunTemplate`) and answers the normalised document or diagnostics, storing nothing.
+- New optional request field `shape` (`agent_task`, `environment`, `application`), checked against `experience`,
+  `workload` and `tools`. A request that does not fit is `422 run_shape_conflict`.
 - Administrators can let a self-hosted runner's runs use an organisation credential without it leaving the
   organisation (`via_org`): the runner forwards only those destinations, and the organisation re-checks and
   injects every request. Set per credential class with `PUT /governance/credential-delivery` (security tier;
@@ -156,7 +164,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   text and structs, and its partial policy is laid onto the source policy rather than replacing it. Adds the
   `template_*` reasons, a declarative configuration schema for custom components, `wardyn template` and SDK methods.
   The `/templates` and `/admin/template-group-admins` routes answer `501 templates_unavailable` until the template
-  store lands.
+  store lands, except `POST /templates/import`.
 - Runner pool contract: the run-create, preflight and policy-preview requests accept `runner_pool_id`. Preflight and
   the preview return `runner_pools`. `wardyn run --pool` and `wardyn runner pool list|default get|set|clear` are
   added.
@@ -269,6 +277,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- Security: with two or more harnesses, the tool-approval credential now reaches only the harness Wardyn starts,
+  as a file under `/run/wardyn/secrets/` that its own launch reads; it is no longer container or pod env. A harness
+  started by hand, or any other process, is given none, and its tool calls take the strictest of the run's rules,
+  unless it reads the started harness's file (see the threat model's same-uid residual). Where the file cannot be
+  delivered (a runner without managed files, or a shared Kubernetes drive), a `run.toolgate_credential.write` audit
+  row records `delivered: false` with the reason.
+- A preset write is now held to the same shape and availability checks as a launch, so a preset no one could launch
+  is refused when it is saved. Document error sentences no longer say "template", because they serve Run documents too.
 - A held runner-pool use-policy change now records whether the pool had a use policy when it was reviewed, so a
   change reviewed on an open pool no longer applies over a policy a leaver purge emptied (or the reverse); it
   goes stale instead. Held changes proposed before the upgrade must be proposed again.
@@ -345,8 +361,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   limits). Until the lease sweep honours the cap, the lease sweep keeps the run at the same moment the reaper stops
   it.
 - The template decoder and the component config schema refuse secret-named config keys such as `CLIENT_SECRET`,
-  `JWT_SECRET` and `*_PASSPHRASE` (`SECRET_NAME`/`SECRET_REF` stay plain). Neither is served yet: `/templates` answers
-  `501 templates_unavailable`.
+  `JWT_SECRET` and `*_PASSPHRASE` (`SECRET_NAME`/`SECRET_REF` stay plain). Template storage is not served yet: `/templates`
+  answers `501 templates_unavailable` except for `POST /templates/import`, which checks a document and stores nothing.
 - Naming a person by a typed `entra:<tenant>:<object>` (erasure, secret owner) is now refused as ambiguous when that
   tenant and object id also signed in under another issuer, instead of resolving to one principal and leaving the
   other's data.
@@ -362,6 +378,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- Runner spool replay after a reconnect sends each batch of up to 64 decisions before waiting for one
+  acknowledgement, and the pass before READY ends at the spool head seen when it started, so a large backlog or a busy
+  proxy no longer keeps a runner offline for minutes.
+- Erasing an organisation-erased run's local evidence now waits for calls already in flight for that run; a lifecycle
+  observation that finishes after the quarantine no longer restores the exit or recreates the spool directory.
 - `wardyn sync --pull` refuses a sandbox file name holding a control character, and every path or gateway message it
   reports is quoted when it holds a non-printable character, so sandbox text cannot drive the terminal.
 - A held runner pool executor attach or detach is listed to, read by and decided by a super admin only, the tier it

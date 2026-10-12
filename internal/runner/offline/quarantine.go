@@ -67,7 +67,9 @@ func (m *Manager) actionReceipt(a runnerwire.PendingAction, outcome string) (run
 // (asserted) run once its quarantine is contained and either the runner is
 // revoked or types.RunnerAssertedEvidenceTTL has passed since the quarantine.
 // The compact identity, quarantine and attempted generations stay behind as
-// tombstones, so the run can never be recreated or executed.
+// tombstones, so the run can never be recreated or executed. Quarantine admits
+// no new observer or producer, so erasure waits only for those admitted before
+// it to drain; a later pass erases.
 func (m *Manager) eraseAssertedEvidence() error {
 	m.mu.Lock()
 	if err := m.ensureDurable(); err != nil {
@@ -77,7 +79,7 @@ func (m *Manager) eraseAssertedEvidence() error {
 	now := m.now()
 	var due []uuid.UUID
 	for id, r := range m.state.Runs {
-		if r.Quarantine != nil && r.Quarantine.Asserted && !r.EvidenceErased && r.ProxyStoppedAt != nil && r.QuarantinedAt != nil &&
+		if r.Quarantine != nil && r.Quarantine.Asserted && !r.EvidenceErased && r.ProxyStoppedAt != nil && r.QuarantinedAt != nil && m.mutationsDrained(id) &&
 			(m.state.Revoked || now.Sub(*r.QuarantinedAt) >= types.RunnerAssertedEvidenceTTL) {
 			due = append(due, id)
 		}
