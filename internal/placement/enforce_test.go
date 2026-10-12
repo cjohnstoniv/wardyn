@@ -85,6 +85,9 @@ func tableProblems(rows []Entry) []string {
 		if !e.Class.known() {
 			out = append(out, where+": unknown class "+string(e.Class))
 		}
+		if e.ViaOrg && (!slices.Contains([]Rule{RuleDelivery, RuleViaOrgRefuse}, e.Rule) || !slices.Contains(AllowedModes(e.Delivery), ModeViaOrg)) {
+			out = append(out, where+": a via_org row needs a delivery rule of a class that may be via_org")
+		}
 		groups[set{e.Struct, e.Field, e.Class}] = append(groups[set{e.Struct, e.Field, e.Class}], e)
 	}
 	for k, g := range groups {

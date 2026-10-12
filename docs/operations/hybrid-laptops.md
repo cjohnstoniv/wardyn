@@ -15,6 +15,7 @@
 | --- | --- | --- |
 | Scheduling, placement, the ceiling | Yes, the only scheduler | Nothing decides locally |
 | Credentials | Held in the org; the laptop can use a `via_org` credential for a run's life | The person's own; and a `runner_resident` value, held in the OS keystore for one run |
+| A `via_org` credential's requests | The org re-checks each one and injects the credential on a TLS leg it dials itself | The proxy forwards them through the relay; it never holds the value, but sees the request in plaintext |
 | Audit | The org is the only writer; every local run is an org run record | The runner carries bytes and spools rows while offline |
 | Control plane, Postgres, OIDC client, `age.key` | Yes | None of them |
 | Sandbox, proxy sidecar, local Docker | No | Yes, driven through `wardyn-runnerd` |

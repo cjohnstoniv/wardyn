@@ -81,7 +81,9 @@ type Store interface {
 	SetWorkspaceRecordResult(ctx context.Context, id uuid.UUID, taskKey string, result json.RawMessage, onlyIfStatus string) (types.Workspace, bool, error)
 	ClaimWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID, expected *uuid.UUID) (types.Workspace, bool, error)
 	ClearWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID) (bool, error)
-	SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, imageRef, builtHash string) (types.Workspace, error)
+	// SetWorkspaceBuiltImage writes image_ref, built_profile_hash and the build record by one compare-and-swap
+	// on observedRef; applied=false means another build moved image_ref first.
+	SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, observedRef, imageRef, builtHash string, rec *types.ImageBuild) (applied bool, err error)
 	// SetWorkspaceImportState advances the scan pipeline. FENCED: applies only while the import-step
 	// slot still holds expectedActive; applied=false means the caller must re-read, not retry blindly.
 	SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, activeRunID *uuid.UUID, expectedActive *uuid.UUID) (types.Workspace, bool, error)

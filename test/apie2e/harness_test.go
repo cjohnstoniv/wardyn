@@ -459,6 +459,10 @@ func newHarness(t *testing.T, opts harnessOpts) *harness {
 	}
 
 	apiSrv := api.New(cfg)
+	// The boot step wardynd runs before it serves: the remote-provided pool of the configured executors.
+	if err := apiSrv.BootstrapRunnerPools(ctx); err != nil {
+		t.Fatalf("bootstrap runner pools: %v", err)
+	}
 	ts := httptest.NewServer(apiSrv.Handler())
 	t.Cleanup(ts.Close)
 

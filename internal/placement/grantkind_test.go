@@ -144,10 +144,17 @@ func TestLocalEligibilityClassifiesEveryGrantKind(t *testing.T) {
 			refuses("class "+string(class), grantPlan(kind, true, CredentialOrigin{Class: class, Delivery: want.delivery, GrantKind: kind, Stored: true, OwnNamespace: true, OwnerOnly: true}))
 		}
 		// An org-held grant record stays refused whatever delivery the org
-		// configures: it carries no value a placeholder could stand in for.
+		// configures (it carries no value a placeholder could stand in for),
+		// except via_org on the one operator kind of the via_org shape (H12).
 		for _, mode := range []Mode{ModeViaOrg, ModeRunnerResident} {
 			p := grantPlan(kind, true, CredentialOrigin{Class: ClassOperator, Delivery: want.delivery, GrantKind: kind, Stored: true})
 			p.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{want.delivery: {Mode: mode}}}
+			if mode == ModeViaOrg && kind == types.GrantAPIKey {
+				if _, r := LocalEligibility(p); r != nil {
+					t.Errorf("%s/operator delivery via_org: %v, want admitted", kind, r)
+				}
+				continue
+			}
 			refuses("operator delivery "+string(mode), p)
 		}
 		refuses("unknown provenance", grantPlan(kind, true, CredentialOrigin{GrantKind: kind}))

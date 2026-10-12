@@ -169,9 +169,10 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	if isPush {
 		forge := &forgeRepo{p: p, repo: orgRepo,
 			token: func(ctx context.Context) (string, error) { return p.gitToken(ctx, grantID) }}
+		rules, entryErr := p.rulesForRemote(githubHost, orgRepo)
 		body, release, ok := p.applyPushRules(w, r, reqBody, slog.String("repo", orgRepo),
 			func(ruleSource string) { p.emitGitDecision(r, egress.Deny, ruleSource) }, forge,
-			appPushTarget(orgRepo, grantID))
+			appPushTarget(orgRepo, grantID), rules, entryErr)
 		defer release()
 		if !ok {
 			return
@@ -352,7 +353,7 @@ func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser f
 	// usernames, and masking the wrong rendering (the mint's, rather than what
 	// actually goes on the wire) would leave the real one in cleartext.
 	// Residual: only verbatim bytes of those renderings are caught.
-	registerBasicAuthCredential(wireUser(user), tok)
+	registerBasicAuthCredential(p.maskKey, wireUser(user), tok)
 	e.token, e.username, e.expiresAt = tok, user, expMs
 	return tok, user, nil
 }

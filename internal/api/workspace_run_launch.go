@@ -152,7 +152,7 @@ func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task st
 		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: actor,
 		Agent: stepRunAgent, Task: task,
 		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
-		RunnerTarget: s.cfg.RunnerTarget, OperatorOwned: operatorOwned,
+		RunnerTarget: s.cfg.RunnerTarget, OperatorOwned: operatorOwned, HumanAuthor: requestSponsor(ctx, actor),
 	}
 	s.captureRunLimits(&run, gov.ceiling, nil)
 	if set != nil {

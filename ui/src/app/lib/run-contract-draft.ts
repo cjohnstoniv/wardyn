@@ -208,6 +208,14 @@ export function overrideItems(o: RunOverrides): OverrideItem[] {
     if (g.repos !== undefined || g.access === "read" || g.api === false) out.push({ kind: "git_pat_scope", op: "narrow", subject: g.host });
     if (g.access === "write" || g.api === true) out.push({ kind: "git_pat_scope", op: "add", subject: g.host });
   }
+  const hosts = o.hosts;
+  if (hosts) {
+    for (const h of hosts.add_allowed ?? []) out.push({ kind: h.includes("*") ? "run_host_wildcard" : "run_host_allow", op: "add", subject: h });
+    for (const h of hosts.add_denied ?? []) out.push({ kind: "run_host_deny", op: "add", subject: h });
+  }
+  const eg = o.egress;
+  if (eg?.first_use_approval) out.push({ kind: "first_use_approval", op: "set", subject: eg.first_use_approval });
+  if (eg?.allow_all_egress !== undefined) out.push({ kind: "allow_all_egress", op: "set", subject: "allow_all_egress" });
   for (const p of o.push_rules ?? []) {
     for (const path of p.deny_paths ?? []) out.push({ kind: "push_rule_deny", op: "add", subject: `${pushRuleKey(p)} ${path}` });
     for (const path of p.require_review_paths ?? []) out.push({ kind: "push_rule_review", op: "add", subject: `${pushRuleKey(p)} ${path}` });

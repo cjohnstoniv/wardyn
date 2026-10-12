@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -86,7 +85,7 @@ func (s PG) Ping(ctx context.Context) error {
 // column, in order (TestCreateRunBindsEveryInsertColumn).
 var createRunSQL = `
 		INSERT INTO agent_runs (` + runInsertCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46,$47)
 		RETURNING ` + runCols
 
 // runnerPoolFence is the value of the runner_pool_id column in createRunSQL: the pool read through its
@@ -183,7 +182,7 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 }
 
 // lockAndCountActiveRuns takes the deployment cap's transaction-scoped advisory
-// lock and counts the runs it holds (CountNonTerminalRuns' predicate) other than
+// lock and counts the slot-holding runs (CountNonTerminalRuns' predicate) other than
 // except (uuid.Nil for none), in one statement. Every writer that adds a run to
 // that count (a create, a kept run's revive) holds the lock from this count to its
 // commit. q must be a pgx.Tx.
@@ -192,7 +191,7 @@ func lockAndCountActiveRuns(ctx context.Context, q Querier, except uuid.UUID) (i
 		return 0, err
 	}
 	var active int
-	if err := q.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames(), except).Scan(&active); err != nil {
+	if err := q.QueryRow(ctx, activeRunsCountSQL, slotHoldingStateNames(), except).Scan(&active); err != nil {
 		return 0, fmt.Errorf("store: count active runs: %w", err)
 	}
 	return active, nil
@@ -210,14 +209,14 @@ const HoldsSandboxSQL = `(lost_at IS NULL OR (lost_reason = '` + string(types.Lo
 
 const activeRunsCountSQL = `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND id <> $2 AND ` + HoldsSandboxSQL
 
-// CountNonTerminalRuns is the number of non-terminal run rows that hold a sandbox
-// (HoldsSandboxSQL), the quantity CreateRunUnderCap holds under the cap. except is a
+// CountNonTerminalRuns is the number of run rows that hold a slot: a slot-holding state
+// (types.SlotHoldingRunStates, never QUEUED) whose agent still runs (HoldsSandboxSQL), the quantity CreateRunUnderCap holds under the cap. except is a
 // run never counted (uuid.Nil for none): a revive counts the OTHER runs, as
 // markRunRevivedUnderCap does. It takes no lock: a pre-flight read for a refusal that
 // must come before an identity is minted, never the authority.
 func (s PG) CountNonTerminalRuns(ctx context.Context, except uuid.UUID) (int, error) {
 	var n int
-	if err := s.Pool.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames(), except).Scan(&n); err != nil {
+	if err := s.Pool.QueryRow(ctx, activeRunsCountSQL, slotHoldingStateNames(), except).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count active runs: %w", err)
 	}
 	return n, nil
@@ -236,7 +235,7 @@ func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 		r.EndsAt, r.WaitBudgetSec, limitsJSON, r.GovernanceProfileID, r.ModelProviderID, r.UserType,
 		r.Preset, r.PresetVersion, r.OperatorOwned, r.CreatedVia, r.DiskMiB,
 		string(r.Placement), r.PlacementFilled, r.RunnerID, string(r.EvidenceSource), string(r.Experience),
-		r.LifetimeCapAt, string(r.LifetimeCapSource), r.RunnerPoolID, r.RunnerPoolRevision, string(r.RunnerPoolSelection), r.RunnerPoolExecutor,
+		r.LifetimeCapAt, string(r.LifetimeCapSource), r.RunnerPoolID, r.RunnerPoolRevision, string(r.RunnerPoolSelection), r.RunnerPoolExecutor, r.HumanAuthor,
 	}, nil
 }
 
@@ -277,64 +276,6 @@ func (s PG) CountActiveRunsBy(ctx context.Context, createdBy string) (int, error
 		return 0, fmt.Errorf("store: count active runs: %w", err)
 	}
 	return n, nil
-}
-
-// UpdateRunStateIf conditionally transitions a run from fromState to toState in
-// a single UPDATE ... WHERE id=$ AND state=$from, returning whether it applied.
-// TOCTOU-safe: a concurrent kill/stop that already moved the run to a terminal
-// state is never clobbered. False with a nil error means someone else won the
-// transition (or the run doesn't exist); the caller does nothing.
-func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toState types.RunState) (bool, error) {
-	tag, err := s.Pool.Exec(ctx,
-		`UPDATE agent_runs SET state=$1, updated_at=now(), ended_at=CASE WHEN $4 THEN now() ELSE ended_at END
-		 WHERE id=$2 AND state=$3`,
-		string(toState), id, string(fromState), toState.IsTerminal(),
-	)
-	if err != nil {
-		return false, fmt.Errorf("store: conditional update run state: %w", err)
-	}
-	return tag.RowsAffected() > 0, nil
-}
-
-// UpdateRunStateIfIdle is UpdateRunStateIf plus an idleness guard: it transitions
-// a run only when still in fromState, updated_at has not advanced past notAfter
-// (the caller's snapshot), it has no lost/end mark, and it has no open hold-aware
-// request within its wait. Closes the reaper's idleness TOCTOU — an active
-// `wardyn run attach` TouchRun can bump updated_at between snapshot and UPDATE,
-// so guarding on state alone could stop a now-active run; notAfter makes a
-// touched-since-snapshot run no-op instead. The hold-aware clause enforces "idle
-// stop never fires while a request is open within its wait" inside the same
-// atomic CAS, since a request raised in that window is visible only to a check
-// inside the statement.
-func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, notAfter time.Time) (bool, error) {
-	tag, err := s.Pool.Exec(ctx,
-		`UPDATE agent_runs SET state=$1, updated_at=now(), ended_at=CASE WHEN $5 THEN now() ELSE ended_at END
-		 WHERE id=$2 AND state=$3 AND updated_at <= $4 AND lost_at IS NULL AND NOT (`+openHoldSQL+`)`,
-		string(toState), id, string(fromState), notAfter, toState.IsTerminal(),
-	)
-	if err != nil {
-		return false, fmt.Errorf("store: conditional idle update run state: %w", err)
-	}
-	return tag.RowsAffected() > 0, nil
-}
-
-// UpdateRunStateIfCreatedBefore transitions a run only when still in fromState,
-// created_at is at or before createdNotAfter, and its agent still runs
-// (HoldsSandboxSQL: not kept, or kept after an outage before its end; a run kept
-// with its agent stopped is left to its files grace). The
-// max-age stop's own predicate on the run's age: it carries neither the idleness
-// guard nor the open-request guard of UpdateRunStateIfIdle, because an absolute
-// age cap exists to end a run that is not going to finish by itself.
-func (s PG) UpdateRunStateIfCreatedBefore(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, createdNotAfter time.Time) (bool, error) {
-	tag, err := s.Pool.Exec(ctx,
-		`UPDATE agent_runs SET state=$1, updated_at=now(), ended_at=CASE WHEN $5 THEN now() ELSE ended_at END
-		 WHERE id=$2 AND state=$3 AND created_at <= $4 AND `+HoldsSandboxSQL,
-		string(toState), id, string(fromState), createdNotAfter, toState.IsTerminal(),
-	)
-	if err != nil {
-		return false, fmt.Errorf("store: conditional age update run state: %w", err)
-	}
-	return tag.RowsAffected() > 0, nil
 }
 
 // openHoldSQL is TRUE when agent_runs (the outer query's row) has a PENDING
@@ -431,7 +372,7 @@ func (s PG) SetRunFailureHint(ctx context.Context, id uuid.UUID, hint string) er
 
 // SetRunStatusDetail scoped-writes ONLY status_detail — what the substrate says
 // a STARTING run is waiting on, or the control plane's own `image: Building`
-// line on a PENDING run. Fed by runner.SandboxSpec.OnWaiting, once per
+// line on a PENDING run (a lifetime end reason rides KillRunAtLifetimeIf). Fed by runner.SandboxSpec.OnWaiting, once per
 // CHANGE of reason. Deliberately does NOT bump updated_at: that column is also
 // what the idle reaper and the killed-run tail-upload grace measure by, and a
 // diagnostic line a kubelet triggers must never buy a run more life or hold a
@@ -462,8 +403,9 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 // The read list is the write list plus the columns only a scoped UPDATE writes,
 // so a column appended to runInsertCols reaches both lists at once.
 const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, autonomy_level, ` +
-	`ends_at, wait_budget_sec, run_limits, governance_profile_id, model_provider_id, user_type, preset, preset_version, operator_owned, created_via, disk_mib, placement, placement_filled, runner_id, evidence_source, experience, lifetime_cap_at, lifetime_cap_source, runner_pool_id, runner_pool_revision, runner_pool_selection, runner_pool_executor`
-const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at`
+	`ends_at, wait_budget_sec, run_limits, governance_profile_id, model_provider_id, user_type, preset, preset_version, operator_owned, created_via, disk_mib, placement, placement_filled, runner_id, ` +
+	`evidence_source, experience, lifetime_cap_at, lifetime_cap_source, runner_pool_id, runner_pool_revision, runner_pool_selection, runner_pool_executor, human_author`
+const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at`
 
 // scanRun is the ONE reader for runCols. A new column is appended to
 // runInsertCols/runCols and to the end of this Scan — appending is the one edit
@@ -481,9 +423,9 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.EndsAt, &r.WaitBudgetSec, &limitsRaw, &r.GovernanceProfileID, &r.ModelProviderID, &r.UserType,
 		&r.Preset, &r.PresetVersion, &r.OperatorOwned, &r.CreatedVia, &r.DiskMiB,
 		&placement, &r.PlacementFilled, &r.RunnerID, &evidenceSource, &experience, &r.LifetimeCapAt, &capSource,
-		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor,
+		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor, &r.HumanAuthor,
 		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason, &containmentErr, &r.ContainmentErrorAt, &r.EndedAt,
-		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt,
+		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound

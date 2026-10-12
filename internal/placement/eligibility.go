@@ -69,9 +69,10 @@ func (r *Refusal) Error() string                          { return r.Field + ": 
 func refuse(reason Reason, field, detail string) *Refusal { return &Refusal{reason, field, detail} }
 
 // LocalEligibility classifies the complete resolved plan with the canonical
-// table. It does not select placement or enable delivery. H12/H13 must supply
-// enforcement before an org-held class can use any configured delivery mode.
-// The returned spec is a copy with operator network/inspection/config removed.
+// table. It does not select placement. An org-held class is admitted only by a
+// configured via_org mode on a row of the via_org shape; runner_resident (H13)
+// still refuses. The returned spec is a copy with operator network/inspection/
+// config removed and each via_org grant reduced to its ViaOrgRoutes entry.
 func LocalEligibility(p LocalPlan) (runner.SandboxSpec, *Refusal) {
 	if fields := Unclassified(); len(fields) != 0 {
 		return runner.SandboxSpec{}, refuse(ReasonPlacementCredential, fields[0], "unclassified dispatch field")
@@ -110,6 +111,29 @@ func LocalEligibility(p LocalPlan) (runner.SandboxSpec, *Refusal) {
 }
 
 func indexed(path string, i int) string { return path + "[" + strconv.Itoa(i) + "]" }
+
+// viaOrgAdmits is the via_org gate (OD-12, design §7.2-§7.3): a row of the
+// via_org shape whose class the stored policy delivers via_org, and whose class
+// may be. Every other configured mode still refuses here until its delivery is built.
+func viaOrgAdmits(row Entry, mode Mode) bool {
+	return row.ViaOrg && row.Rule != RuleNotConfigured && mode == ModeViaOrg && slices.Contains(classModes[row.Delivery], ModeViaOrg)
+}
+
+// ViaOrgGrant reports whether an org-held grant of origin is delivered via_org
+// under policy: the same table rows and gate LocalEligibility applies to it.
+func ViaOrgGrant(origin CredentialOrigin, policy DeliveryPolicy) bool {
+	return origin.Class != ClassOwn && origin.Class != "" &&
+		classifyCredential(Entries, "ProxyConfig.Policy.EligibleGrants", origin, LocalPlan{Delivery: policy}, reflect.Value{}) == nil &&
+		policy.For(origin.Delivery).Mode == ModeViaOrg
+}
+
+// viaOrgPath reports whether the admitted credential at path is delivered
+// via_org. Classification has already admitted every path the strippers see,
+// and via_org is the only admission of an org-held class.
+func viaOrgPath(p LocalPlan, path string) bool {
+	o, ok := p.Origins[path]
+	return ok && o.Class != ClassOwn && o.Class != "" && p.Delivery.For(o.Delivery).Mode == ModeViaOrg
+}
 
 // matchingRows are the rows of the origin's class, the rows naming its exact
 // delivery first: a row with no delivery applies to any origin of the class
@@ -160,6 +184,9 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 			return nil
 		case RuleDelivery, RuleViaOrgRefuse, RuleNotConfigured:
 			mode := p.Delivery.For(row.Delivery).Mode
+			if viaOrgAdmits(row, mode) {
+				return nil
+			}
 			if mode == ModeRunnerResident && row.Rule == RuleDelivery {
 				if r := residentRefusal(p, path, origin, row.Delivery); r != nil {
 					return r

@@ -285,23 +285,45 @@ type EffectiveRunLimits struct {
 }
 
 // RunEndReason says why the platform ended a run. It is the audit row's `reason`
-// and the run detail's sentence; how a run carries it is the lifetime lane's.
+// and the run detail's sentence, and it rides the run's status_detail as
+// "lifetime: <reason>" when the run is KILLED at its end or its maximum.
 type RunEndReason string
 
-// RunEndMaxLifetimeReached: the run reached its effective maximum lifetime and
-// was KILLED.
-const RunEndMaxLifetimeReached RunEndReason = "max_lifetime_reached"
+const (
+	// RunEndMaxLifetimeReached: the run reached its effective maximum lifetime and was KILLED.
+	RunEndMaxLifetimeReached RunEndReason = "max_lifetime_reached"
+	// The five ways the pool queue ends a run that waited (docs/design/0.9/pool-queue.md section 9).
+	// A run that waited too long, or whose profile, policy or portal changed under it, is FAILED; a
+	// run whose pool was removed is KILLED. identity_deactivated is the existing token, FAILED here.
+	RunEndQueueTimeout        RunEndReason = "queue_timeout"
+	RunEndQueueProfileChanged RunEndReason = "queue_profile_changed"
+	RunEndQueuePolicyChanged  RunEndReason = "queue_policy_changed"
+	RunEndQueuePortalRevoked  RunEndReason = "queue_portal_revoked"
+	RunEndRunnerPoolRemoved   RunEndReason = "runner_pool_removed"
+	RunEndIdentityDeactivated RunEndReason = "identity_deactivated"
+)
+
+// runEndSentences is the one sentence per end reason.
+var runEndSentences = map[RunEndReason]string{
+	RunEndMaxLifetimeReached:  "This run reached its maximum lifetime and was ended.",
+	RunEndEndReached:          "This run reached its end time and was ended.",
+	RunEndQueueTimeout:        "This run waited too long for a free slot and was not started.",
+	RunEndQueueProfileChanged: "Your governance profile changed while this run waited. Start it again.",
+	RunEndQueuePolicyChanged:  "The policy this run used changed while it waited. Start it again to review it.",
+	RunEndQueuePortalRevoked:  "The portal that launched this run was removed while it waited.",
+	RunEndRunnerPoolRemoved:   "The pool this run was waiting for was removed.",
+	RunEndIdentityDeactivated: "This account's access has been removed. Sign in again, or ask your Wardyn admin.",
+}
+
+// RunEndEndReached: a Background task reached its own end time, which came
+// before its maximum lifetime, and was KILLED.
+const RunEndEndReached RunEndReason = "end_reached"
 
 // Valid reports whether r is a defined end reason.
-func (r RunEndReason) Valid() bool { return r == RunEndMaxLifetimeReached }
+func (r RunEndReason) Valid() bool { _, ok := runEndSentences[r]; return ok }
 
 // Sentence is what the run's detail page and the audit view say.
-func (r RunEndReason) Sentence() string {
-	if r == RunEndMaxLifetimeReached {
-		return "This run reached its maximum lifetime and was ended."
-	}
-	return ""
-}
+func (r RunEndReason) Sentence() string { return runEndSentences[r] }
 
 // Apply is a request's value against the limit: 0 asks for the default, a value
 // within the cap is kept, and one past it is reduced to the cap with capped set.

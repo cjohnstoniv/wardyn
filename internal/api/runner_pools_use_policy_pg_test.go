@@ -197,3 +197,65 @@ func TestPG_RunnerPoolUsePolicyIsHeldForASecondHuman(t *testing.T) {
 		t.Errorf("clearing nothing = %d %s", w.Code, w.Body)
 	}
 }
+
+// emptiedByLeaverPurge leaves the pool with a stored policy whose people all left: the state a leaver
+// purge produces, which permits nobody and is not the open pool a missing policy is.
+func (e *poolEnv) emptiedByLeaverPurge(pool uuid.UUID) {
+	e.t.Helper()
+	if w := e.admin(http.MethodPut, usePolicyPath(pool), `{"subjects":[{"subject_type":"user","subject":"sub-leaver"}]}`); w.Code != http.StatusOK {
+		e.t.Fatalf("seed policy = %d %s", w.Code, w.Body)
+	}
+	if _, _, _, err := e.pg.DeleteUserSubjectRows(context.Background(), uuid.New(), []string{"sub-leaver"}, nil); err != nil {
+		e.t.Fatal(err)
+	}
+	if n := e.count(`SELECT count(*) FROM runner_pool_use_policies WHERE pool_id = $1 AND jsonb_array_length(subjects) = 0`, pool); n != 1 {
+		e.t.Fatalf("%d emptied policy rows, want 1", n)
+	}
+}
+
+func (e *poolEnv) approveIsStale(id uuid.UUID) {
+	e.t.Helper()
+	w := e.call(e.bob, http.MethodPost, approvePath(id), "")
+	if w.Code != http.StatusConflict || wireReason(e.t, w) != reasonGovernanceChangeStale {
+		e.t.Fatalf("approving a change over a policy that came or went = %d %s, want 409 %s", w.Code, w.Body, reasonGovernanceChangeStale)
+	}
+}
+
+// Whether a policy exists is part of what a held change reviewed: "no policy" opens the pool and an
+// emptied list permits nobody, so a change reviewed over one and applied over the other goes stale, in
+// either order, and one over an unchanged presence still applies.
+func TestPG_RunnerPoolHeldPolicyChangeGoesStaleWhenThePolicyAppearsOrDisappears(t *testing.T) {
+	const set = `{"subjects":[{"subject_type":"user","subject":"sub-named"}]}`
+	t.Run("open, then emptied by a purge", func(t *testing.T) {
+		e := newPoolEnv(t, true)
+		pool := e.createPool("Provided", types.RunnerPoolRemoteProvided)
+		held := e.pending(e.call(e.alice, http.MethodPut, usePolicyPath(pool.ID), set))
+		e.emptiedByLeaverPurge(pool.ID)
+		e.approveIsStale(held.ID)
+		if got := e.policySubjects(pool.ID); len(got) != 0 {
+			t.Errorf("a stale approval widened the emptied pool to %v", got)
+		}
+	})
+	t.Run("emptied by a purge, then opened", func(t *testing.T) {
+		e := newPoolEnv(t, true)
+		pool := e.createPool("Provided", types.RunnerPoolRemoteProvided)
+		e.emptiedByLeaverPurge(pool.ID)
+		held := e.pending(e.call(e.alice, http.MethodPut, usePolicyPath(pool.ID), set))
+		if w := e.admin(http.MethodDelete, usePolicyPath(pool.ID), ""); w.Code != http.StatusNoContent {
+			t.Fatalf("clear = %d %s", w.Code, w.Body)
+		}
+		e.approveIsStale(held.ID)
+		if n := e.count(`SELECT count(*) FROM runner_pool_use_policies`); n != 0 {
+			t.Errorf("a stale approval stored a policy on the opened pool")
+		}
+	})
+	t.Run("presence unchanged", func(t *testing.T) {
+		e := newPoolEnv(t, true)
+		pool := e.createPool("Provided", types.RunnerPoolRemoteProvided)
+		e.emptiedByLeaverPurge(pool.ID)
+		e.approve(e.pending(e.call(e.alice, http.MethodPut, usePolicyPath(pool.ID), set)).ID)
+		if got := e.policySubjects(pool.ID); len(got) != 1 || got[0].Subject != "sub-named" {
+			t.Errorf("approved replacement of an emptied policy = %v", got)
+		}
+	})
+}

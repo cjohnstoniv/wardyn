@@ -44,10 +44,12 @@ type runnerPoolHeldChange struct {
 }
 
 // runnerPoolUsePolicyState is the target of a change as it stands, hashed by proposal and approval
-// alike: the subjects and the executors, so a change goes stale when who may use the pool or what it
-// holds moved, and a member adding their own runner elsewhere cannot make one stale.
-func runnerPoolUsePolicyState(subjects []types.RunnerPoolSubject, executors []string) any {
-	return map[string]any{"subjects": subjects, "executor_ids": nonNilStrings(executors)}
+// alike: whether a policy exists, its subjects and the executors, so a change goes stale when who may
+// use the pool or what it holds moved, and a member adding their own runner elsewhere cannot make one
+// stale. Presence is its own field: no policy opens the pool, while a stored empty list (what a leaver
+// purge leaves) permits nobody, and both read as no subjects.
+func runnerPoolUsePolicyState(present bool, subjects []types.RunnerPoolSubject, executors []string) any {
+	return map[string]any{"policy_present": present, "subjects": subjects, "executor_ids": nonNilStrings(executors)}
 }
 
 // canonicalPoolSubjects folds each subject to the form the caller's identities are matched in, and
@@ -173,7 +175,8 @@ func (s *Server) writeUsePolicy(w http.ResponseWriter, r *http.Request, mode gov
 			writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: row.Pool.Name})
 			return
 		}
-		beforeState, afterState := runnerPoolUsePolicyState(before, row.ExecutorIDs), runnerPoolUsePolicyState(after, row.ExecutorIDs)
+		beforeState := runnerPoolUsePolicyState(row.Policy != nil, before, row.ExecutorIDs)
+		afterState := runnerPoolUsePolicyState(subjects != nil, after, row.ExecutorIDs)
 		s.proposeGovernanceChange(w, r, govProposal{
 			kind: govKindRunnerPoolUsePolicy, op: op, key: poolID.String(), payload: runnerPoolHeldChange{Subjects: subjects},
 			before: beforeState, after: afterState, changed: changedPaths(beforeState, afterState), baseState: beforeState,
@@ -232,8 +235,8 @@ func (s *Server) holdExecutorChange(w http.ResponseWriter, r *http.Request, row 
 	if detach {
 		executors = slices.DeleteFunc(slices.Clone(row.ExecutorIDs), func(id string) bool { return id == executor })
 	}
-	before := runnerPoolUsePolicyState(subjects, row.ExecutorIDs)
-	after := runnerPoolUsePolicyState(subjects, executors)
+	before := runnerPoolUsePolicyState(row.Policy != nil, subjects, row.ExecutorIDs)
+	after := runnerPoolUsePolicyState(row.Policy != nil, subjects, executors)
 	s.proposeGovernanceChange(w, r, govProposal{
 		kind: govKindRunnerPoolUsePolicy, op: opExecutorAttach, key: row.Pool.ID.String(), payload: runnerPoolHeldChange{Executor: executor, Detach: detach},
 		before: before, after: after, changed: changedPaths(before, after), baseState: before,
@@ -267,19 +270,19 @@ func applyRunnerPoolUsePolicyChange(s *Server, r *http.Request, q store.Querier,
 	} else if err != nil {
 		return govApplied{}, err
 	}
-	before := []types.RunnerPoolSubject{}
+	before, present := []types.RunnerPoolSubject{}, false
 	switch pol, err := store.GetRunnerPoolUsePolicyQ(ctx, q, poolID); {
 	case errors.Is(err, store.ErrNotFound):
 	case err != nil:
 		return govApplied{}, err
 	default:
-		before = pol.Subjects
+		before, present = pol.Subjects, true
 	}
 	executors, err := store.RunnerPoolExecutorIDsQ(ctx, q, poolID)
 	if err != nil {
 		return govApplied{}, err
 	}
-	if computeETag(runnerPoolUsePolicyState(before, executors)) != ch.BaseHash {
+	if computeETag(runnerPoolUsePolicyState(present, before, executors)) != ch.BaseHash {
 		return govApplied{}, store.ErrGovernanceChangeStale
 	}
 	if held.Executor != "" {

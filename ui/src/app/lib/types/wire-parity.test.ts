@@ -411,7 +411,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["internal/api/components_facts.go", "componentFact", "ComponentFact"],
     ["internal/api/components_facts.go", "componentSecretFact", "ComponentSecretFact"],
     ["internal/types/site_config.go", "ComponentSettings", "ComponentSettings", "site.ts"],
-    ["internal/api/preflight.go", "preflightResponse", "PreflightResult", "runs.ts"],
+    ["internal/api/preflight.go", "preflightResponse", "PreflightResult", "preflight.ts"],
     ["internal/api/permissions.go", "meCapabilitiesResponse", "MeCapabilities", "permissions.ts"],
     ["internal/api/run_revive.go", "adminRestartResult", "AdminRestartResult", "runs.ts"],
   ])("%s %s: full parity with the TS %s mirror", (goFile, goName, tsName, tsFile = "components.ts") => {
@@ -641,6 +641,17 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]))).toEqual(goKinds);
   });
 
+  it("RunState: the TS union is exactly the Go RunState consts, and QUEUED is not terminal", () => {
+    const go = readFileSync(join(root, "internal/types/types.go"), "utf8");
+    const goStates = new Set([...go.matchAll(/\bRun\w+\s+RunState = "([A-Z_]+)"/g)].map((m) => m[1]));
+    expect(goStates).toContain("QUEUED");
+    const m = /export type RunState =([^;]+);/.exec(stripComments(runsTs));
+    if (!m) throw new Error("type RunState not found");
+    expect(new Set([...m[1].matchAll(/"([A-Z_]+)"/g)].map((x) => x[1]))).toEqual(goStates);
+    expect(tsInterfaceBody(runsTs, "AgentRun")).toMatch(/admitted_at\?: string;/);
+    expect(go).toMatch(/AdmittedAt \*time\.Time\s+`json:"admitted_at,omitempty"`/);
+  });
+
   // AutonomyResolution.bound_by names a rubric row or the org's component cap.
   it("AutonomyBoundKey names the Go component-cap cause beside the rubric rows", () => {
     const go = readFileSync(join(root, "internal/api/runs_autonomy_components.go"), "utf8");
@@ -661,7 +672,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
 
   it("SetupItemResidency names every residency the setup checklist emits", () => {
     const goRaw = readFileSync(join(root, "internal/api/compose_setup.go"), "utf8");
-    const tsRuns = readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8");
+    const tsRuns = readFileSync(join(root, "ui/src/app/lib/types/preflight.ts"), "utf8");
     const union = /export type SetupItemResidency =([^;]+);/.exec(stripComments(tsRuns))?.[1] ?? "";
     const tsValues = new Set([...union.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]));
     // Code only: whole-line comments (the field's doc block quotes every value) are dropped,

@@ -6,6 +6,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -39,13 +40,13 @@ func (s *Server) stepPolicy(f *runFold, rec *foldRecorder) bool {
 		if refusal.write(s, f.w, f.r) {
 			return false
 		}
-		recordPolicyFold(rec, f.source.Spec, f.spec, policyProvSource(f.source), f.source.Kind == policyKindInline)
+		recordPolicySource(rec, f.source, f.spec)
 		return true
 	}
 	var ok bool
 	f.spec, f.policyID, f.policyWarns, f.source, ok = s.resolveRunPolicy(ctx, f.w, f.r, f.req, f.mode == foldPreflight)
 	if ok {
-		recordPolicyFold(rec, f.source.Spec, f.spec, policyProvSource(f.source), f.source.Kind == policyKindInline)
+		recordPolicySource(rec, f.source, f.spec)
 	}
 	return ok
 }
@@ -93,6 +94,27 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	for _, ws := range f.wsRefs {
 		recordWorkspaceSources(rec, f.spec, ws)
 	}
+	return true
+}
+
+// stepPushRuleSets builds the run's push rules per source-control entry from the
+// resolved spec, at every door, so a remote whose entry cannot be keyed refuses
+// at Review and the preview as it does at create.
+func (s *Server) stepPushRuleSets(f *runFold, rec *foldRecorder) bool {
+	// The site config is read here: f.scmSite is the autonomy step's snapshot and
+	// is not there yet, and an Azure DevOps Server row's base path comes from it.
+	site, err := s.scmLaneSiteConfig(f.r.Context(), f.spec, f.req.Repo)
+	if err != nil {
+		writeServerError(f.w, f.r, "get site config", err)
+		return false
+	}
+	sets, applied, err := s.pushRuleSetsFor(f.spec, f.req, site)
+	if err != nil {
+		runError(http.StatusUnprocessableEntity, reasonInlinePolicyInvalid, "invalid push rules: "+err.Error()).write(s, f.w, f.r)
+		return false
+	}
+	f.pushSets = sets
+	f.source.recordPushRules(applied)
 	return true
 }
 
@@ -276,8 +298,12 @@ func (s *Server) stepAutonomy(f *runFold, rec *foldRecorder) bool {
 // governance and the deployment (run_end_create.go); a refusal is the same at
 // every door and leaves no row.
 func (s *Server) stepRunEnd(f *runFold, rec *foldRecorder) bool {
+	var pool *types.RunnerPool
+	if f.place.pooled {
+		pool = &f.place.row
+	}
 	var refusal *runRefusal
-	f.end, refusal = s.resolveCreateEnd(f.r, *f.req, f.ceiling)
+	f.end, refusal = s.resolveCreateEnd(f.r, *f.req, f.ceiling, pool)
 	return !refusal.write(s, f.w, f.r)
 }
 
@@ -326,7 +352,7 @@ func (s *Server) stepRunCap(f *runFold, rec *foldRecorder) bool {
 // authority on a race.
 func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
 	var refused bool
-	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.r.Context(), f.spec, f.ceiling))
+	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.r.Context(), f.spec, f.ceiling), time.Duration(f.end.capSec)*time.Second)
 	return !refused
 }
 

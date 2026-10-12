@@ -194,6 +194,11 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 		return placement.LocalPlan{}, refusal
 	}
 	p.CredentialIntents = intents
+	policy, err := s.storedDeliveryPolicy(r.Context())
+	if err != nil {
+		return placement.LocalPlan{}, runServerError("read the credential delivery policy", err)
+	}
+	p.Delivery = policy
 	return p, nil
 }
 
@@ -300,21 +305,41 @@ func (s *Server) localEligibilityRefusal(r *http.Request, ceiling governanceCeil
 	return runError(ref.Reason.Status(), string(ref.Reason), ref.Error())
 }
 
+// localGrantDelivery is how one grant of a local run is delivered: its OD-12
+// class key and mode (own or via_org).
+type localGrantDelivery struct {
+	class string
+	mode  placement.Mode
+}
+
 // ownLocalGrantSpecs verifies the entire set before the first write. Local own
 // grant persistence never depends on a caller remembering to stamp OwnerOnly.
-func (s *Server) ownLocalGrantSpecs(r *http.Request, spec types.RunPolicySpec) (types.RunPolicySpec, *runRefusal) {
+// An org-held grant is admitted only when the stored delivery policy delivers
+// its class via_org and its kind has the via_org shape; it stays as authored
+// (never OwnerOnly) and is recorded via_org.
+func (s *Server) ownLocalGrantSpecs(r *http.Request, spec types.RunPolicySpec) (types.RunPolicySpec, []localGrantDelivery, *runRefusal) {
 	spec = spec.Clone()
+	policy, err := s.storedDeliveryPolicy(r.Context())
+	if err != nil {
+		return types.RunPolicySpec{}, nil, runServerError("read the credential delivery policy", err)
+	}
+	out := make([]localGrantDelivery, len(spec.EligibleGrants))
 	for i, g := range spec.EligibleGrants {
 		origin, ref := s.localGrantOrigin(r.Context(), localRequestOwner(r), g)
 		if ref != nil {
-			return types.RunPolicySpec{}, ref
+			return types.RunPolicySpec{}, nil, ref
+		}
+		if placement.ViaOrgGrant(origin, policy) {
+			out[i] = localGrantDelivery{class: origin.Delivery, mode: placement.ModeViaOrg}
+			continue
 		}
 		if origin.Class != placement.ClassOwn || !origin.Stored || !origin.OwnNamespace {
-			return types.RunPolicySpec{}, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), fmt.Sprintf("eligible_grants[%d]: credential is not available in its owner's namespace", i))
+			return types.RunPolicySpec{}, nil, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), fmt.Sprintf("eligible_grants[%d]: credential is not available in its owner's namespace", i))
 		}
 		spec.EligibleGrants[i].OwnerOnly = true
+		out[i] = localGrantDelivery{class: origin.Delivery, mode: placement.ModeOwn}
 	}
-	return spec, nil
+	return spec, out, nil
 }
 
 func localRequestOwner(r *http.Request) string {
