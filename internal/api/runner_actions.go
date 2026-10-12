@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
@@ -35,6 +36,64 @@ type runnerEndpoint struct {
 	link *remote.Link
 }
 
+// ownerSlots are one runner owner's LEASE-send slot and revive slot (capacity 1 each), both taken before a
+// run's lock. They are the person's, not a runner's: runners that stop answering hold at most one lock
+// connection for their owner's lease senders and one for their owner's revives, whatever number of runners
+// that person claims and of their runs are re-leased or revived.
+type ownerSlots struct {
+	leasing, reviving chan struct{}
+}
+
+// runnerOwnerSlots is owner's slots. The owner of a run on a runner is the run's creator: placement
+// (poolOwner, ownRunnerTargets) binds a run only to its creator's own claimed runners, which is what holds a
+// task-less dispatch, a renewal and a proxy-only revive to the owner; BeginRunnerExecution re-checks it
+// only for a run that execs or starts.
+func (s *Server) runnerOwnerSlots(owner string) ownerSlots {
+	s.runnerStreams.subsMu.Lock()
+	defer s.runnerStreams.subsMu.Unlock()
+	if o, ok := s.runnerStreams.owners[owner]; ok {
+		return o
+	}
+	if s.runnerStreams.owners == nil {
+		s.runnerStreams.owners = map[string]ownerSlots{}
+	}
+	o := ownerSlots{leasing: make(chan struct{}, 1), reviving: make(chan struct{}, 1)}
+	s.runnerStreams.owners[owner] = o
+	return o
+}
+
+// acquireLease takes the owner's LEASE-send slot, waiting at most wait (0: only if it is free now).
+func (o ownerSlots) acquireLease(ctx context.Context, wait time.Duration) (release func(), ok bool) {
+	return acquireSlot(ctx, o.leasing, wait)
+}
+
+// acquireRevive takes the owner's revive slot, waiting at most wait.
+func (o ownerSlots) acquireRevive(ctx context.Context, wait time.Duration) (release func(), ok bool) {
+	return acquireSlot(ctx, o.reviving, wait)
+}
+
+// acquireSlot takes a capacity-1 slot, waiting at most wait (0: only if it is free now).
+func acquireSlot(ctx context.Context, slot chan struct{}, wait time.Duration) (release func(), ok bool) {
+	release = func() { <-slot }
+	select {
+	case slot <- struct{}{}:
+		return release, true
+	default:
+	}
+	if wait <= 0 {
+		return nil, false
+	}
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case slot <- struct{}{}:
+		return release, true
+	case <-t.C:
+	case <-ctx.Done():
+	}
+	return nil, false
+}
+
 // runnerEndpoint is the one remote substrate (and Link) of a runner for this
 // process, registered with the orchestrator so its refs route to it. Offline,
 // its teardown verbs queue through the exact-binding pending-action store.
@@ -47,7 +106,10 @@ func (s *Server) runnerEndpoint(id uuid.UUID) runnerEndpoint {
 	ep := runnerEndpoint{link: &remote.Link{}}
 	ep.sub = remote.New(id.String(), ep.link, remote.Options{Queue: func(ctx context.Context, kind types.RunnerActionKind, ref string) error {
 		return s.queueRunnerTeardown(ctx, id, kind, ref)
-	}, Dispatch: s.runnersEnabled, Relay: s.acceptRelay})
+	}, Dispatch: s.runnersEnabled, Relay: s.acceptRelay,
+		ExecutionGeneration: func(ctx context.Context, method, ref string) (uuid.UUID, error) {
+			return s.dispatchedGeneration(ctx, id, method, ref)
+		}})
 	if s.runnerStreams.subs == nil {
 		s.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{}
 	}
@@ -103,6 +165,7 @@ func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admissi
 		},
 		Event:    func(ctx context.Context, ev runnerwire.Event) error { return s.EventFromRunner(ctx, id, ev) },
 		Activity: func(ctx context.Context, runID uuid.UUID) error { return s.ActivityFromRunner(ctx, id, runID) },
+		Ready:    func() { go s.releaseRunnerLeases(s.cfg.BaseCtx, id) },
 	}, nil
 }
 

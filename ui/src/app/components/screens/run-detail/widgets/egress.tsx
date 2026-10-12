@@ -10,11 +10,12 @@
 // the same data.
 import * as React from "react";
 import { Globe } from "lucide-react";
-import type { EgressDecision } from "../../../../lib/types";
-import { relativeTime } from "../../../../lib/format";
+import type { SpooledEgressDecision } from "../../../../lib/api/audit";
+import { absoluteTime, relativeTime } from "../../../../lib/format";
 import { cn } from "../../../ui/utils";
 import { Chip, EgressDecisionChip, WidgetCard } from "../../../wardyn/primitives";
 import { RUN_COCKPIT } from "../../../wardyn/copy";
+import { LOCAL_RUN } from "../../../wardyn/copy/runners";
 
 // Fixed-width, shrink-0 rail widget — an unbounded live feed would grow it
 // without limit. Same silent-cap shape as the (retired) Overview tab's Egress
@@ -27,7 +28,7 @@ export function EgressWidget({
   heldCount = 0,
   onGoAudit,
 }: {
-  egress: EgressDecision[];
+  egress: SpooledEgressDecision[];
   /** How many approvals are HELD right now, from the run's live PENDING rows
    *  (WidgetContext.heldCount). Optional so the widget stays renderable without
    *  the cockpit above it; absent reads as ZERO.
@@ -87,8 +88,11 @@ export function EgressWidget({
               >
                 {e.domain}
               </span>
+              {/* A spooled row's own time is when the runner decided it, which is not when it reached the
+                  chain; the full-log refusal says why it was refused. */}
+              {e.spool_full && <span className="shrink-0 text-meta text-muted-foreground">{LOCAL_RUN.SPOOL_FULL}</span>}
               <span className="shrink-0 font-mono text-meta text-muted-foreground">
-                {relativeTime(e.time)}
+                {e.spooled_at ? LOCAL_RUN.SPOOLED(absoluteTime(e.spooled_at)) : relativeTime(e.time)}
               </span>
             </div>
           ))}

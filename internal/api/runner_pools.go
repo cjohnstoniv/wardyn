@@ -18,18 +18,22 @@ import (
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// The runner pool routes (0.9). A pool is an organisation-defined label for a choice and never
-// authority: choosing one grants no runner, credential, drive or confinement class.
+// The runner pool routes (0.9). A pool is a label for a choice and never authority: choosing one grants
+// no runner, credential, drive or confinement class. Remote Provided pools are the organisation's;
+// each Self-Hosted pool is one person's own, holding only that person's claimed runners.
 //
-//	catalogue reads, own-runner membership, personal defaults   member (the caller's own data only)
-//	pool create/update/delete, executor membership, org default admin  (SUPER)
-//	pool-use policy                                             security (admin or security_admin);
+//	catalogue reads, own Self-Hosted pools and their runners,   member (the caller's own data only)
+//	personal defaults
+//	Remote Provided pool create/update/delete, executor         admin  (SUPER)
+//	membership, org default
+//	pool-use policy (Remote Provided only)                      security (admin or security_admin);
 //	                                                            held for a second human under
 //	                                                            WARDYN_GOVERNANCE_SECOND_HUMAN
 //
-// A person adds only their own claimed runner to a pool: no route here takes an owner, and none may
-// claim, transfer or dispatch another person's runner. A store without pool storage answers every
-// route 501 runner_pools_unavailable.
+// Only a Self-Hosted pool's owner writes it or uses it: another person's pool answers every verb as an
+// unknown id does, and operators list every pool read-only for oversight. No route here takes an
+// owner, and none may claim, transfer or dispatch another person's runner. A store without pool storage
+// answers every route 501 runner_pools_unavailable.
 func (s *Server) mountRunnerPoolRoutes(r, operatorOnly, securityOps chi.Router) {
 	r.Get("/runner-pools", s.handleListRunnerPools)
 	r.Get("/runner-pools/{id}", s.handleGetRunnerPool)
@@ -38,6 +42,9 @@ func (s *Server) mountRunnerPoolRoutes(r, operatorOnly, securityOps chi.Router) 
 	operatorOnly.Delete("/runner-pools/{id}", s.handleDeleteRunnerPool)
 	operatorOnly.Put("/runner-pools/{id}/executors/{executor}", s.handleAddRunnerPoolExecutor)
 	operatorOnly.Delete("/runner-pools/{id}/executors/{executor}", s.handleRemoveRunnerPoolExecutor)
+	r.Post("/me/runner-pools", s.handleCreateMyRunnerPool)
+	r.Put("/me/runner-pools/{id}", s.handleUpdateMyRunnerPool)
+	r.Delete("/me/runner-pools/{id}", s.handleDeleteMyRunnerPool)
 	r.Put("/me/runner-pools/{id}/runners/{runner}", s.handleAddMyRunnerToPool)
 	r.Delete("/me/runner-pools/{id}/runners/{runner}", s.handleRemoveMyRunnerFromPool)
 	securityOps.Get("/runner-pools/{id}/use-policy", s.handleGetRunnerPoolUsePolicy)
@@ -104,18 +111,21 @@ func (c callerSubjects) matchesPoolSubject(sub types.RunnerPoolSubject) bool {
 	return false
 }
 
-// permits reports whether the caller may use a pool: a self-hosted pool is open to every person (their
-// candidates are their own runners), and a remote-provided pool to everyone unless a use policy
-// narrows it to subjects the caller matches. A use policy can only narrow.
-func (c callerSubjects) permits(row store.RunnerPoolCatalogueRow) bool {
-	if row.Pool.HostingType != types.RunnerPoolRemoteProvided || row.Policy == nil {
+// permits reports whether the caller may use a pool: a self-hosted pool only when owner (poolOwner, the
+// signed-in person) is its owner, and a remote-provided pool to everyone unless a use policy narrows it
+// to subjects the caller matches. A use policy can only narrow.
+func (c callerSubjects) permits(row store.RunnerPoolCatalogueRow, owner string) bool {
+	if row.Pool.HostingType == types.RunnerPoolSelfHosted {
+		return owner != "" && row.Pool.Owner == owner
+	}
+	if row.Policy == nil {
 		return true
 	}
 	return slices.ContainsFunc(row.Policy.Subjects, c.matchesPoolSubject)
 }
 
 // poolCatalogue is the pools the caller may use. With forUse false a manager (security admin or admin)
-// gets every live pool instead, because they administer the catalogue and write use policies over it:
+// gets every live pool instead, every person's Self-Hosted pools included, read-only for oversight:
 // that view is for display and management only and is never a statement of what the caller may use, so
 // anything that admits, defaults or offers a choice passes forUse true. A pool the caller may not use is
 // absent, so it is indistinguishable from one that does not exist. ok=false: the answer is written.
@@ -127,18 +137,20 @@ func (s *Server) poolCatalogue(w http.ResponseWriter, r *http.Request, ps store.
 // permittedPools is poolCatalogue's read, answering with a refusal instead of writing it, for the
 // run fold: the same catalogue, the same narrowing, so a launch sees exactly the pools the list shows.
 func (s *Server) permittedPools(ctx context.Context, ps store.RunnerPoolStore, forUse bool) ([]store.RunnerPoolCatalogueRow, *runRefusal) {
-	rows, err := ps.ListRunnerPoolCatalogue(ctx, oidcHumanFromContext(ctx))
+	owner := poolOwner(ctx)
+	oversight := !forUse && s.isSecurityOperator(ctx)
+	rows, err := ps.ListRunnerPoolCatalogue(ctx, owner, oversight)
 	if err != nil {
 		return nil, runServerError("list runner pools", err)
 	}
-	if !forUse && s.isSecurityOperator(ctx) {
+	if oversight {
 		return rows, nil
 	}
 	subj, err := s.callerSubjects(ctx)
 	if err != nil {
 		return nil, ceilingRunRefusal(err)
 	}
-	return slices.DeleteFunc(rows, func(row store.RunnerPoolCatalogueRow) bool { return !subj.permits(row) }), nil
+	return slices.DeleteFunc(rows, func(row store.RunnerPoolCatalogueRow) bool { return !subj.permits(row, owner) }), nil
 }
 
 // catalogueRow finds one pool in rows.
@@ -166,11 +178,6 @@ func (s *Server) poolFromPath(w http.ResponseWriter, r *http.Request, ps store.R
 	}
 	return row, found
 }
-
-// localRunsPlaced is whether this server places a run on a person's own runner. Until it does (the
-// final unsupported-local refusal in localPlacementRefusal), every self-hosted pool reads
-// placement_unavailable, which is what a launch on one answers.
-var localRunsPlaced = false
 
 // poolState is one permitted pool's availability for the caller, and the caller's own candidates
 // when the checks reached a self-hosted pool's runners.
@@ -205,9 +212,8 @@ func (s *Server) poolAvailability(ctx context.Context, ps store.RunnerPoolStore,
 		}
 		return poolState{availability: client.RunnerPoolAvailable}, nil
 	}
-	if !localRunsPlaced {
-		return unavailable(runnerpool.AvailabilityPlacementUnavailable)
-	}
+	// A self-hosted pool places a run on one of the caller's own runners in it (ownRunnerTargets), so
+	// it is available while runners are switched on and one of those runners is online.
 	switch err := s.runnersEnabled(ctx); {
 	case errors.Is(err, errRunnersDisabled):
 		return unavailable(runnerpool.AvailabilityPlacementUnavailable)

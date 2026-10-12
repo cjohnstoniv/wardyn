@@ -130,6 +130,13 @@ declare -A ALLOWLIST=(
   # #1649: the governance profile fixture's created_at/updated_at are passthrough
   # data on the Runner credentials tab; nothing renders or compares them.
   ["ui/src/app/components/screens/governance/governance-delivery-tab.test.tsx"]=2
+  # #1508 C4: migration 0167's keep-an-existing-row test seeds a fixed created_at and checks it is kept;
+  # nothing compares it against the clock.
+  ["internal/db/service_attach_restriction_pg_test.go"]=1
+  # Q-c: a queued run's queued_at is a fixed instant the CLI prints back (and its deadline from it);
+  # nothing compares it against the clock.
+  ["cmd/wardyn/run_inspect_test.go"]=1
+  ["cmd/wardyn/run_queue_wait_test.go"]=1
   # #541 fix review: connectionRowCopy's C5 (expiring) test pins a LITERAL
   # expected string for absoluteTime's clock-time rendering, deliberately not
   # a recomputation through absoluteTime itself (that would let the

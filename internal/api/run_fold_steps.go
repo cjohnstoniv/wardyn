@@ -261,7 +261,7 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 	floor := confinementFloorSpec(f.spec, f.comps)
 	if f.mode == foldCreate {
 		var ok bool
-		f.enforced, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, requestPlacement(*f.req), requestRunnerID(*f.req), floor, f.reqCC, f.baseline, f.place.offeredClasses())
+		f.enforced, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, requestPlacement(*f.req), requestRunnerID(*f.req), floor, f.reqCC, f.baseline, f.place)
 		return ok && !f.place.barrierRefusal(f.enforced).write(s, f.w, f.r)
 	}
 	var advertised []types.ConfinementClass
@@ -297,7 +297,7 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 // runner_offline. The remote placement is the deployment's own executor and is
 // not asked.
 func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
-	return !s.placementCapabilityRefusal(f.r.Context(), *f.req, f.ceiling).write(s, f.w, f.r)
+	return !s.placementCapabilityRefusal(f.r.Context(), *f.req, f.place, f.ceiling).write(s, f.w, f.r)
 }
 
 // stepModelProvider makes the model-provider choice and refuses one whose
@@ -519,12 +519,17 @@ func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
 	return !refused
 }
 
-// stepPlacementDenied is the deny_placements door: a request whose placement the
-// caller's governance profile denies is refused 403 placement_denied, naming
-// the profile, before any local-eligibility work. An unassigned member has no
-// profile and an operator's runs stand outside governance, so for both the list
-// is absent and every placement is permitted.
+// stepPlacementDenied is the deny_placements door for an unpooled request: one
+// whose placement the caller's governance profile denies is refused 403
+// placement_denied, naming the profile, before any local-eligibility work. Where
+// pools place runs, the request's placement is not the run's: resolvePlacement
+// asks the same door with the placement the pool decides. An unassigned member
+// has no profile and an operator's runs stand outside governance, so for both
+// the list is absent and every placement is permitted.
 func (s *Server) stepPlacementDenied(f *runFold, rec *foldRecorder) bool {
+	if s.poolsPlaceRuns() {
+		return true
+	}
 	return !s.placementDeniedRefusal(f.r.Context(), requestPlacement(*f.req), f.ceiling).write(s, f.w, f.r)
 }
 
@@ -547,15 +552,17 @@ func (s *Server) stepResources(f *runFold, rec *foldRecorder) bool {
 
 // stepLocalEligibility is before confinement/provider liveness: create may
 // renew a one-use AWS credential there. No local refusal may reach that phase.
-// The admitted plan supplies specific refusals; final unsupported-local stays
-// before mint/persistence until the resolver and runner route are implemented.
+// The admitted plan supplies specific refusals; an unpooled local request has
+// no runner to go to and is refused before mint/persistence.
 func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 	// A self-hosted pool decides the placement when the request left it out.
 	req := *f.req
 	if f.place.pooled {
 		req.Placement = f.place.placement
 	}
-	return !s.localPlacementRefusal(f.r, req, f.spec, f.ceiling, f.comps, f.driveMount, f.wsRefs, f.baseline).write(s, f.w, f.r)
+	var refusal *runRefusal
+	f.localDelivery, refusal = s.localPlacementRefusal(f.r, req, f.place.pooled, f.spec, f.ceiling, f.comps, f.driveMount, f.wsRefs, f.baseline)
+	return !refusal.write(s, f.w, f.r)
 }
 
 // stepPlacement runs after the components and before the local-eligibility step: the confinement

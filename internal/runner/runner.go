@@ -176,6 +176,8 @@ type ProxyConfig struct {
 	HarnessToolRules     []types.HarnessToolRules  // tool rules per included harness; proxy.Config.HarnessToolRules
 	HarnessCredentials   []types.HarnessCredential // SHA-256 of each harness's approval credential; proxy.Config.HarnessCredentials (never the plaintext)
 	ViaOrgRoutes         []proxy.ViaOrgRoute       // a runner's via_org destinations; set only by placement's local copy
+	MCPServers           []proxy.MCPServerConfig   // the run's MCP servers on the broker route; proxy.Config.MCPServers
+	MCPBindings          []proxy.MCPBinding        // SHA-256 of each harness's MCP token; proxy.Config.MCPBindings (never the token)
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).

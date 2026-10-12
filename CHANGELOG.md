@@ -88,6 +88,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   for existing runs.
 - Migration `0165_run_templates` adds `run_templates`, `run_template_revisions`, `template_group_admins` and
   `template_group_labels`; nothing changes for existing data.
+- Migration `0168_runner_pool_owner` removes every Self-Hosted pool made before it (they have no owner), with its
+  members, the default slots naming it and any run waiting for it; those runs end `KILLED` with
+  `runner_pool_removed` and get no `run.kill` audit row. A pool a finished run is bound to stays as a deleted
+  tombstone. An organisation Self-Hosted default slot or preferred hosting type is cleared to none, never switched
+  to Remote Provided, and is now refused on write; until a person or an administrator sets a preference, a launch
+  that names no pool is refused `runner_pool_required`.
 
 ### Added
 
@@ -356,8 +362,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Runner pools carry limits per run type: CPU and memory (default and cap), a main-drive cap (`disk_mib`, whole GiB),
   lifetime (default, maximum or unlimited), an idle stop for interactive environments only, allowed barriers and a
   concurrent-run cap; an administrator sets them on create and replaces them on update (migration 0158). A run is
-  admitted by its pool's run types and barriers, and the pool's lifetime bounds its end; CPU, memory, idle stop
-  and the concurrent-run cap are stored and audited but not yet applied to runs.
+  admitted by its pool's run types and barriers, the pool's CPU, memory and lifetime size it, and a launch waits at the
+  concurrent-run cap; the idle stop is stored and audited but not yet applied to runs.
 - `wardyn-runnerd` ships as a release binary for Linux and macOS (amd64, arm64) with a per-user service: a systemd
   user unit or a LaunchAgent, installed by `deploy/runner/install.sh`, which registers the runner with a single-use
   token and keeps it running; the owner then claims it with `wardyn runner claim` (#1968).
@@ -413,6 +419,48 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the run's own pool cannot cap disk, such a run is refused with `main_drive_unenforceable` at Review, the policy
   preview and create. The Policy tab tells a pool default from a server default, and `run.policy.resolve` records
   `disk_mib_basis` and `disk_mib_default_source`.
+- Remote MCP servers can be added as components. A harness reaches a server only through the proxy's broker route
+  (`/wardyn/mcp/<token>/<server>`), which binds the request to the harness by its own token, adds the server's
+  credential, answers a tool call the run's rules block with a JSON-RPC error, and re-originates over the same
+  guarded path as the git broker, refusing redirects and any data after the JSON-RPC message. While a server is
+  attached, a direct request to its host is refused. Two organisation MCP servers may not share a name (`409
+  component_name_conflict`). SSE servers are not supported yet. Migration `0166_run_component_mcp_harnesses`.
+- A service identity's sponsor can see and stop its runs, in every runs list view; entering one needs an explicit
+  `service_attach` grant, is recorded as the sponsor, and is never available over SSH. A portal's delegated token
+  gets none of this. Migration `0167_service_attach_restriction` turns the grant off for everyone until an admin
+  names it; an allow written for everyone admits every sponsor.
+- The pool list and the preflight and policy-preview `runner_pools` now carry `main_drive` for each pool you may
+  use: how the pool's runners enforce, keep and mount the main drive, as the weakest across its targets (`unknown`
+  when a runner is offline or has not reported).
+- Fleet capacity and a run's recorded sizing now count the 400 MiB proxy envelope of a run that carries an Azure
+  route gate; they previously recorded the 256 MiB default while the runner applied 400 MiB (#1806).
+- The pool list, preflight and the policy preview say how busy each pool you may use is (`slots`: used, waiting,
+  limit, a verdict and the default wait); counts only, and if they cannot be read the answer comes without them. A
+  waiting run carries `queue` (its place, reason and deadline) on create, `GET /runs/{id}` and `GET /runs`. `wardyn
+  run --max-wait <duration>` sets how long a run may wait for a slot; with `--wait` the server is told `--timeout`
+  minus 60s, so a run that waits too long fails with `queue_timeout` (exit 1) before `--timeout` gives up (exit
+  124), and `--wait` prints a waiting run's place as it changes.
+- Runs on a self-hosted runner are leased to it: the runner refuses to create or execute a run without the
+  organisation's current lease and execution generation; token renewals and end changes extend the lease, a runner's
+  new session is leased again, and reviving such a run starts its agent under a fresh generation. A run is placed
+  only on the launcher's own claimed runners, and a Self-Hosted pool is available while one of them in it is online.
+  deny_placements is also held at dispatch and revive; managed-harness sign-in runs stay exempt at every door, and
+  site-config probe runs at create and dispatch.
+- Self-Hosted runner pools are each person's own: a person creates, edits and deletes their pools
+  (`/api/v1/me/runner-pools`, `wardyn runner pool create|update|delete|show`), up to 10, with names unique per
+  person, and puts their own claimed runners in them (`wardyn runner pool add|remove <pool-id> <runner-id>`). Only
+  the owner sees or uses one; anyone else gets the unknown-id `404`. Administrators list every pool read-only with
+  its `owner`, create Remote Provided pools only, and the organisation default names a Remote Provided pool only. A
+  new erasure scope, `runner_pools`, also runs in the SCIM purge.
+- Console: Admin gains a Runners page (every registered computer with its state, last seen and what it reported,
+  revoke, unused registration tokens, a mint for a named person, the runners switch), and Your account gains a My
+  runner card to register, claim with the fingerprint read on that computer, and revoke. A run on a registered
+  computer names it, says when it is offline (unknown, not offline, when another server copy holds its connection),
+  explains a revoked runner's runs, and marks egress decisions recorded while it was offline; a remote run's
+  Identity shows what `wardyn sync` moved. API: a claimed runner's view carries `capacity`, `classes` and
+  `allowed_roots`; `GET /me/runners`, and so `wardyn runner list`, keeps a runner someone else revoked for seven
+  days with `revoked_by_email`; both runner-token mint answers carry `org_url`; runs on a registered computer carry
+  `runner_name`, `runner_online` and `runner_last_seen_at`.
 
 ### Changed
 
