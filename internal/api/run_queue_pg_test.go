@@ -218,8 +218,9 @@ func TestPG_QueueAFullPoolWaitsHoldingNothing(t *testing.T) {
 		t.Fatalf("run.create rows = %d, want 1", len(rows))
 	}
 	data := queueAuditData(t, rows[0])
-	if _, hasJTI := data["jti"]; hasJTI || data["queue"] == nil {
-		t.Errorf("run.create data = %v; want queue facts and no jti", data)
+	facts, _ := data["queue"].(map[string]any)
+	if _, hasJTI := data["jti"]; hasJTI || facts["reason"] != string(runnerpool.WaitAtCapacity) || facts["pool_id"] != pool.ID.String() {
+		t.Errorf("run.create data = %v; want queue facts naming the wait reason and the pool, and no jti", data)
 	}
 
 	e.free(occupant)
