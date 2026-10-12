@@ -40,7 +40,7 @@ import (
 // What each lane lifts, by the path runModeUnavailable names:
 //
 //	tools[].tool_rules, default_effect   -> A-L3 (per-harness rule enforcement)
-//	more than one harness, component tools -> DS-1 (the harness set), A-L14 (component tools)
+//	component tools                      -> A-L14 (component tools)
 //	start_folder of an attachment        -> A-L4, A-L7, D-112-113 (attachments and the one working directory)
 const (
 	maxRunModeTools      = 16
@@ -453,28 +453,13 @@ func applyRunMode(req *createRunRequest) *runRefusal {
 		return nil
 	}
 	for _, check := range []func(createRunRequest) *runRefusal{
-		runModeShapeRefusal, runModeConflictRefusal, runModeRequiredRefusal, startFolderRefusal, runModeUnavailableRefusal, harnessSetRefusal, personalToolRulesRefusal,
+		runModeShapeRefusal, runModeConflictRefusal, runModeRequiredRefusal, startFolderRefusal, runModeUnavailableRefusal, personalToolRulesRefusal,
 	} {
 		if refusal := check(*req); refusal != nil {
 			return refusal
 		}
 	}
 	projectRunMode(req)
-	return nil
-}
-
-// harnessSetRefusal: a run launches with the first harness's image and provider
-// alone, so a second included harness waits for the lane that builds the set.
-func harnessSetRefusal(req createRunRequest) *runRefusal {
-	n := 0
-	for _, t := range req.Tools {
-		if t.Kind == client.IncludedToolHarness {
-			n++
-		}
-	}
-	if n > 1 {
-		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools: more than one harness"))
-	}
 	return nil
 }
 

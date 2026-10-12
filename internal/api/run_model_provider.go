@@ -256,11 +256,19 @@ func (s *Server) writeProviderChoiceRefusal(w http.ResponseWriter, r *http.Reque
 func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request, req createRunRequest,
 	spec types.RunPolicySpec, wsRefs []types.Workspace, renew bool,
 ) (runProviderChoice, bool) {
-	ctx := r.Context()
 	choice, refusal := s.authorizeRunModelProvider(r, req, wsRefs, false)
 	if refusal.write(s, w, r) {
 		return runProviderChoice{}, false
 	}
+	return s.enforceChosenModelProvider(w, r, req, spec, choice, renew)
+}
+
+// enforceChosenModelProvider is enforceRunModelProvider after the choice: the
+// caller's own credential for it, and the model-credential variable refusal.
+func (s *Server) enforceChosenModelProvider(w http.ResponseWriter, r *http.Request, req createRunRequest,
+	spec types.RunPolicySpec, choice runProviderChoice, renew bool,
+) (runProviderChoice, bool) {
+	ctx := r.Context()
 	if choice.chosen {
 		// Liveness, the check dispatch repeats: the caller's OWN credential for
 		// the provider, never anyone else's (runIdentitySubject is the namespace
