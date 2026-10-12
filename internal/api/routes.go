@@ -444,6 +444,9 @@ func (s *Server) routes() chi.Router {
 			// Least-privilege telemetry: egress hosts runs using this workspace
 			// were denied — promotion candidates (see handleObservedEgress).
 			r.Get("/workspaces/{id}/observed-egress", s.handleObservedEgress)
+			// New Run's branch picker: launch tier (mayLaunchWorkspace), uniform 404,
+			// per-person limiter; see workspace_branches.go.
+			r.Get("/workspaces/{id}/branches", s.handleListWorkspaceBranches)
 			// Record Mode: launch one task's OPEN recording sandbox (learn what
 			// the task actually uses; see handleRecordWorkspace), then promote
 			// the observed-allowed hosts into ApprovedEgress (operator one-click).
