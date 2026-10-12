@@ -389,15 +389,16 @@ func (c *Client) RemoveMyRunnerFromPool(ctx context.Context, poolID, runnerID uu
 	return c.do(ctx, http.MethodDelete, "/api/v1/me/runner-pools/"+poolID.String()+"/runners/"+runnerID.String(), nil, nil)
 }
 
-// GetOrgRunnerPoolDefaults reads the organisation's default hosting type and pools.
+// GetOrgRunnerPoolDefaults reads the organisation's default hosting type, pools and barrier.
 func (c *Client) GetOrgRunnerPoolDefaults(ctx context.Context) (RunnerPoolDefaults, error) {
 	var out RunnerPoolDefaults
 	err := c.do(ctx, http.MethodGet, "/api/v1/runner-pool-defaults", nil, &out)
 	return out, err
 }
 
-// SetOrgRunnerPoolDefaults replaces the organisation's defaults (admin). It
-// never rewrites a person's own.
+// SetOrgRunnerPoolDefaults replaces the whole organisation document (admin), its default barrier
+// included: a d without Barrier clears it, so read the document first to keep what you do not change.
+// It never rewrites a person's own.
 func (c *Client) SetOrgRunnerPoolDefaults(ctx context.Context, d RunnerPoolDefaults) (RunnerPoolDefaults, error) {
 	var out RunnerPoolDefaults
 	err := c.do(ctx, http.MethodPut, "/api/v1/runner-pool-defaults", d, &out)
