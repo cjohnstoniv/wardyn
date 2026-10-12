@@ -94,7 +94,7 @@ func TestRunContractRefusals(t *testing.T) {
 		// Allowed by the table and applied: they pass the contract (the fold applies them).
 		{"push rules are applied", `,"overrides":{"push_rules":[{"provider":"github","org":"acme","deny_paths":["infra/"]},{"provider":"github","org":"other","require_review_paths":["ci/"]}]}`, "", "", 200},
 
-		{"builtin is not dropped", `,"components":[{"builtin":"github","org":"acme","repos":["acme/api"]}]`, reasonRequestFieldUnavailable, "", 422},
+		{"builtin azure_devops is not dropped", `,"components":[{"builtin":"azure_devops","org":"acme"}]`, reasonRequestFieldUnavailable, "", 422},
 		{"builtin github needs repos", `,"components":[{"builtin":"github","org":"acme"}]`, reasonComponentRefInvalid, "", 400},
 		{"builtin alone", `,"components":[{"builtin":"azure_devops","org":"acme","name":"x"}]`, reasonComponentRefInvalid, "", 400},
 		{"builtin unknown", `,"components":[{"builtin":"gitlab","org":"acme"}]`, reasonComponentRefInvalid, "", 400},
