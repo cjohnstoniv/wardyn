@@ -312,12 +312,7 @@ type poolBinding struct {
 // never falls back to a candidate that cannot. prefer, when one of them, is kept: the runner a
 // promotion bound the run to and found room on.
 func (p runPlacement) bind(runID uuid.UUID, enforced types.ConfinementClass, prefer *uuid.UUID) (poolBinding, *runRefusal) {
-	var able []poolTarget
-	for _, t := range p.eligible {
-		if enforced == "" || slices.Contains(t.facts.Classes, enforced) {
-			able = append(able, t)
-		}
-	}
+	able := p.able(enforced)
 	ids := make([]string, len(able))
 	for i, t := range able {
 		ids[i] = t.id
@@ -331,6 +326,29 @@ func (p runPlacement) bind(runID uuid.UUID, enforced types.ConfinementClass, pre
 		return poolBinding{}, targetRefusal(placement.ReasonPlacementCapability, p.pool.Name, p.pool.Scope)
 	}
 	return poolBinding{runnerID: able[i].runnerID, executor: able[i].executor}, nil
+}
+
+// able is the eligible targets that enforce the class the run ended up at ("" for any).
+func (p runPlacement) able(enforced types.ConfinementClass) []poolTarget {
+	var out []poolTarget
+	for _, t := range p.eligible {
+		if enforced == "" || slices.Contains(t.facts.Classes, enforced) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// otherRunners is the registered runners the run could be bound to in place of chosen: the ones its
+// start may fall back to when chosen has no room under its lock.
+func (p runPlacement) otherRunners(enforced types.ConfinementClass, chosen *uuid.UUID) []uuid.UUID {
+	var out []uuid.UUID
+	for _, t := range p.able(enforced) {
+		if t.runnerID != nil && (chosen == nil || *t.runnerID != *chosen) {
+			out = append(out, *t.runnerID)
+		}
+	}
+	return out
 }
 
 // eligibleRunners is the registered runners among the run's eligible targets: the person's own runners

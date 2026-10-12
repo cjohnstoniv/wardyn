@@ -23,12 +23,13 @@ type poolRunnerLister interface {
 
 var _ poolRunnerLister = store.PG{}
 
-// handleListRunnerPoolMembers is GET /api/v1/runner-pools/{id}/members: a pool's runners, both kinds.
-// A self-hosted member carries its runner view (name, machine name, state, online, runs at once and
+// handleListRunnerPoolMembers is GET /api/v1/runner-pools/{id}/members: a pool's runners, both kinds,
+// for whoever may read the pool itself (GET /runner-pools/{id}): anyone who may use an organization
+// pool, a user pool's owner, and a security operator read-only with each runner's owner named. A
+// self-hosted member carries its runner view (name, machine name, state, online, runs at once and
 // running), only ever a runner the pool's owner holds; a remote-hosted member its name, whether this
-// server runs it and whether it answered its last health read. A user pool's owner reads their own pool;
-// a security operator reads any, read-only, with each runner's owner named. Anyone else, and an
-// organization pool for anyone but an operator, gets the unknown-id 404.
+// server runs it and whether it answered its last health read. Another person's user pool is not in the
+// caller's catalogue, so it answers the unknown-id 404.
 func (s *Server) handleListRunnerPoolMembers(w http.ResponseWriter, r *http.Request) {
 	ps, ok := s.runnerPoolStore(w)
 	if !ok {
@@ -38,12 +39,7 @@ func (s *Server) handleListRunnerPoolMembers(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	operator := s.isSecurityOperator(r.Context())
-	owner := row.Pool.Scope == types.RunnerPoolUser && row.Pool.Owner != "" && row.Pool.Owner == poolOwner(r.Context())
-	if !owner && !operator {
-		writePoolNotFound(w)
-		return
-	}
+	owner := row.Pool.Owner != "" && row.Pool.Owner == poolOwner(r.Context())
 	out := []client.RunnerPoolMemberView{}
 	if row.Pool.Scope == types.RunnerPoolUser {
 		rs, ok := s.runnerInventoryStore(w)

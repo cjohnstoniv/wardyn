@@ -312,7 +312,9 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 	f := st.f
 	qs, _ := s.queueStore()
 	run := st.run
-	placed := types.AgentRun{ID: run.ID}
+	// The promotion bound the run to a runner it found room on; the start keeps it while it can still
+	// take the run, and otherwise the store picks another of the run's runners that has room.
+	placed := types.AgentRun{ID: run.ID, RunnerID: run.RunnerID}
 	if ref := f.place.apply(&placed, f.enforced); ref.write(s, st.cw, st.r) {
 		return st.refusalEnd()
 	}
@@ -331,11 +333,11 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 		EndsAt: anchor.EndsAt, WaitBudgetSec: anchor.WaitBudgetSec, RunLimits: anchor.RunLimits, GovernanceProfileID: anchor.GovernanceProfileID,
 		LifetimeCapAt: anchor.LifetimeCapAt, LifetimeCapSource: anchor.LifetimeCapSource,
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID,
-		EvidenceSource: placed.EvidenceSource, RunnerPoolExecutor: placed.RunnerPoolExecutor,
+		EvidenceSource: placed.EvidenceSource, RunnerPoolExecutor: placed.RunnerPoolExecutor, RunnerFallbacks: f.place.otherRunners(f.enforced, placed.RunnerID),
 	})
 	switch {
 	case errors.Is(err, store.ErrRunnerAtCapacity):
-		// The start chose a runner other than the one the promotion found room on, and that one is full.
+		// Every runner the run could start on filled between the promotion and this start.
 		return &queueEnd{token: string(placement.ReasonRunnerAtCapacity), hint: runnerpool.RunnerAtCapacityMsg(f.place.pool.Name)}
 	case err != nil:
 		slog.ErrorContext(st.base, queueStartFailedLogName+": write start columns", slog.String("run_id", run.ID.String()), slog.Any("err", err))

@@ -51,7 +51,7 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !types.ValidRunnerMaxRuns(maxRuns) {
-		writeErrorReason(w, http.StatusBadRequest, reasonRunnerMaxRunsInvalid, "max_runs must be a whole number from 1 to "+strconv.Itoa(types.RunnerMaxRunsCeiling))
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerRegistrationInvalid, "max_runs must be a whole number from 1 to "+strconv.Itoa(types.RunnerMaxRunsCeiling))
 		return
 	}
 	orgHash := federation.OrgURLSHA256(s.cfg.RunnerOrgURL)

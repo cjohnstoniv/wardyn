@@ -66,8 +66,9 @@ func TestPG_PoolRunnersAndRunnerPoolsNeverCrossPeople(t *testing.T) {
 		t.Errorf("the owner's runner lists pools %+v on the admin route", p)
 	}
 	remote := e.createPool("Provided", types.RunnerPoolOrganization)
-	if w := e.call(e.person, http.MethodGet, "/api/v1/runner-pools/"+remote.ID.String()+"/members", ""); w.Code != http.StatusNotFound {
-		t.Errorf("a member's read of an organization pool's members = %d, want 404", w.Code)
+	// A member who may read the pool reads its members too: an empty organization pool has none.
+	if rows := decodeJSON[[]client.RunnerPoolMemberView](t, e.call(e.person, http.MethodGet, "/api/v1/runner-pools/"+remote.ID.String()+"/members", "")); len(rows) != 0 {
+		t.Errorf("a member's read of an empty organization pool's members = %+v, want []", rows)
 	}
 	if rows := decodeJSON[[]client.RunnerPoolMemberView](t, e.admin(http.MethodGet, "/api/v1/runner-pools/"+remote.ID.String()+"/members", "")); len(rows) != 0 {
 		t.Errorf("an empty organization pool's members = %+v, want []", rows)
@@ -76,5 +77,8 @@ func TestPG_PoolRunnersAndRunnerPoolsNeverCrossPeople(t *testing.T) {
 	rows := decodeJSON[[]client.RunnerPoolMemberView](t, e.admin(http.MethodGet, "/api/v1/runner-pools/"+remote.ID.String()+"/members", ""))
 	if len(rows) != 1 || rows[0].Kind != types.RunnerKindRemoteHosted || rows[0].ID != "fake" || rows[0].Name != types.RemoteRunnerDefaultName("fake") || !rows[0].Configured || rows[0].Runner != nil {
 		t.Errorf("an organization pool's members = %+v, want the remote-hosted runner", rows)
+	}
+	if mine := decodeJSON[[]client.RunnerPoolMemberView](t, e.call(e.person, http.MethodGet, "/api/v1/runner-pools/"+remote.ID.String()+"/members", "")); len(mine) != 1 || mine[0].ID != "fake" {
+		t.Errorf("a member who may use the organization pool reads %+v, want its remote-hosted runner", mine)
 	}
 }
