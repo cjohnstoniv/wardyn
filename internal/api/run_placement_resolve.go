@@ -174,12 +174,15 @@ func poolRefusal(ref *runnerpool.Refusal) *runRefusal {
 // run id it allocates.
 func (s *Server) poolChoices(ctx context.Context, ps store.RunnerPoolStore, rows []store.RunnerPoolCatalogueRow, denied []types.Placement) ([]client.RunnerPoolChoice, *runRefusal) {
 	out := make([]client.RunnerPoolChoice, 0, len(rows))
+	read := s.onceExecutorFacts(ctx)
 	for _, row := range rows {
 		st, refusal := s.poolAvailability(ctx, ps, row, denied)
 		if refusal != nil {
 			return nil, refusal
 		}
-		out = append(out, st.choice(row))
+		choice := st.choice(row)
+		choice.MainDrive = s.poolMainDriveFor(row, st.own, read)
+		out = append(out, choice)
 	}
 	return out, nil
 }

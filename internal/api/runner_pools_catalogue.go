@@ -109,6 +109,7 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 			targets, _ = executorTargets(row, s.configuredExecutors(), func(e string) (runner.TargetFacts, bool) { return in.executorFacts(ctx, s, e) })
 		}
 	}
+	e.MainDrive = s.poolMainDriveFor(row, st.own, func(x string) (runner.TargetFacts, bool) { return in.executorFacts(ctx, s, x) })
 	fit, _ := eligibleTargets(targets, placementDemand{floor: in.ceiling.Spec, reqCCOK: true})
 	for _, rt := range want {
 		sources, ref, err := s.limitSources(ctx, rt, &row.Pool, in.ceiling, in.untouched, selfHostedCapacity(row.Pool, fit, ""))
