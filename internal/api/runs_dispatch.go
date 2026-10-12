@@ -660,7 +660,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
-	sb, execution, err := s.createLeasedSandbox(ctx, createCtx, run, spec)
+	// A run on a runner is leased first: its runner refuses a create no lease authorizes.
+	execution, err := s.leaseRunOnRunner(ctx, run)
+	var sb runner.Sandbox
+	if err == nil {
+		sb, err = s.createSandboxAtTarget(createCtx, run, spec)
+	}
 	endStartWait()
 	stopCreateLease()
 	if err != nil {
@@ -708,16 +713,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	stopDispatchLease := s.holdRunWatcherLease(ctx, run.ID)
 	defer stopDispatchLease()
 
-	if err := s.cfg.Store.SetSandboxRef(ctx, run.ID, sb.Ref); err != nil {
-		// A lost sandbox ref is not fatal to THIS dispatch (the run proceeds), but on a
-		// daemon restart ReconcileOnBoot finds no ref and finalizes the run FAILED while
-		// the container keeps running untracked. Log + audit the loss so the orphan is
-		// discoverable, rather than discarding the error silently.
-		slog.ErrorContext(ctx, "wardynd: SetSandboxRef failed; sandbox may be orphaned/untracked across a daemon restart",
-			slog.String("run_id", run.ID.String()), slog.String("sandbox_ref", sb.Ref), slog.Any("err", err))
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": sb.Ref, "set_sandbox_ref_error": err.Error()})))
-	}
+	s.recordSandboxRef(ctx, run.ID, sb.Ref)
 
 	// Kill-race guard: advance STARTING->RUNNING CONDITIONALLY. CreateSandbox can
 	// be slow (image pull); a concurrent POST /runs/{id}/kill may have moved the
