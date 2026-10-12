@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 
 	"github.com/google/uuid"
 
@@ -226,10 +227,21 @@ func (r UpdateRunnerPoolRequest) Validate() error {
 	return errors.Join(nameErr, limitsErr)
 }
 
-// ListRunnerPools lists the pools the caller may use.
+// ListRunnerPools lists the pools the caller may use, judged for every run type each takes.
 func (c *Client) ListRunnerPools(ctx context.Context) (RunnerPoolList, error) {
+	return c.ListRunnerPoolsFor(ctx, "")
+}
+
+// ListRunnerPoolsFor lists the pools judged for one run type: a pool that refuses it is unavailable
+// with runner_pool_run_type_not_allowed, and each pool's limits hold only that type. "" is every type;
+// a value other than background or interactive is a 400 runner_pool_invalid.
+func (c *Client) ListRunnerPoolsFor(ctx context.Context, runType RunnerPoolRunType) (RunnerPoolList, error) {
+	path := "/api/v1/runner-pools"
+	if runType != "" {
+		path += "?run_type=" + url.QueryEscape(string(runType))
+	}
 	var out RunnerPoolList
-	err := c.do(ctx, http.MethodGet, "/api/v1/runner-pools", nil, &out)
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
 	return out, err
 }
 

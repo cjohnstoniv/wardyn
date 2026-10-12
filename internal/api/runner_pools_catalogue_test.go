@@ -6,6 +6,7 @@ package api
 import (
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
@@ -99,22 +100,22 @@ func TestBarrierKVMMissingOnlyForTheDockerExecutor(t *testing.T) {
 // neither.
 func TestPreflightBarrierOptionsDraftFloors(t *testing.T) {
 	pool := types.RunnerPool{HostingType: types.RunnerPoolRemoteProvided}
-	f := &runFold{ceiling: governanceCeiling{Spec: types.RunPolicySpec{MinConfinementClass: types.CC1}},
-		place: runPlacement{pooled: true, row: pool, targets: []poolTarget{{id: "a", facts: classes(types.CC1, types.CC2, types.CC3)}}}}
+	ceiling := governanceCeiling{Spec: types.RunPolicySpec{MinConfinementClass: types.CC1}}
+	place := runPlacement{pooled: true, row: pool, targets: []poolTarget{{id: "a", facts: classes(types.CC1, types.CC2, types.CC3)}}}
 
 	policy := types.RunPolicySpec{MinConfinementClass: types.CC2}
-	opts := draftBarrierOptions(f, policy)
+	opts := draftBarrierOptions(place, ceiling, policy, composer.Baseline{})
 	if got, def := barrierRow(opts); got != [3]runnerpool.BarrierReason{runnerpool.BarrierPolicyFloor, "", ""} || def != types.CC3 || opts[0].Floor != types.CC2 {
 		t.Errorf("policy min CC2: %+v", opts)
 	}
 
 	access := types.RunPolicySpec{MinConfinementClass: types.CC1, EligibleGrants: []types.GrantSpec{{Kind: types.GrantCloudSTS}}}
-	opts = draftBarrierOptions(f, access)
+	opts = draftBarrierOptions(place, ceiling, access, composer.Baseline{})
 	if got, def := barrierRow(opts); got != [3]runnerpool.BarrierReason{runnerpool.BarrierAccessFloor, runnerpool.BarrierAccessFloor, ""} || def != types.CC3 {
 		t.Errorf("a write-capable grant: %+v", opts)
 	}
 
-	if opts := draftBarrierOptions(&runFold{}, policy); opts == nil || len(opts) != 0 {
+	if opts := draftBarrierOptions(runPlacement{}, ceiling, policy, composer.Baseline{}); opts == nil || len(opts) != 0 {
 		t.Errorf("an unpooled run has barrier options %v, want []", opts)
 	}
 }

@@ -90,19 +90,19 @@ func (s *Server) placementDemand(ctx context.Context, in placementInput) placeme
 // unknown id and a runner that is not the caller's is never named.
 func (s *Server) poolTargets(ctx context.Context, req *createRunRequest, ps store.RunnerPoolStore, row store.RunnerPoolCatalogueRow) ([]poolTarget, *runRefusal) {
 	if row.Pool.HostingType == types.RunnerPoolRemoteProvided {
-		return s.executorTargets(ctx, row)
+		return executorTargets(row, s.configuredExecutors(), func(e string) (runner.TargetFacts, bool) { return s.executorFacts(ctx, e) })
 	}
 	return s.ownRunnerTargets(ctx, req, ps, row)
 }
 
-func (s *Server) executorTargets(ctx context.Context, row store.RunnerPoolCatalogueRow) ([]poolTarget, *runRefusal) {
-	configured := s.configuredExecutors()
+// executorTargets is a remote pool's configured executors, each with the facts read reports for it.
+func executorTargets(row store.RunnerPoolCatalogueRow, configured []string, read func(executor string) (runner.TargetFacts, bool)) ([]poolTarget, *runRefusal) {
 	var out []poolTarget
 	for _, e := range runnerpool.SortedUnique(row.ExecutorIDs) {
 		if !slices.Contains(configured, e) {
 			continue
 		}
-		facts, known := s.executorFacts(ctx, e)
+		facts, known := read(e)
 		out = append(out, poolTarget{id: e, executor: e, facts: facts, offline: !known})
 	}
 	if len(out) == 0 {

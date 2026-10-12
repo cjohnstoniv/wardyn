@@ -60,6 +60,9 @@ type placementInput struct {
 	// apart (resourceBaseline, resourceAsk).
 	ceiling        governanceCeiling
 	untouched, ask types.ResourceLimits
+	// dryDoor: the run is a preflight or policy preview, which answer the caller's pool choices; create
+	// never reads them, so a pool the run is not using cannot fail it.
+	dryDoor bool
 }
 
 func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPlacement, *runRefusal) {
@@ -130,9 +133,11 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 			}
 		}
 	}
-	choices, refusal := s.poolChoices(ctx, ps, rows, s.deniedPlacements(ctx, f.ceiling))
-	if refusal != nil {
-		return runPlacement{}, refusal
+	var choices []client.RunnerPoolChoice
+	if f.dryDoor {
+		if choices, refusal = s.poolChoices(ctx, ps, rows, s.deniedPlacements(ctx, f.ceiling)); refusal != nil {
+			return runPlacement{}, refusal
+		}
 	}
 	offers := map[types.Placement]placementOffer{pool.HostingType.Placement(): offerOf(eligible, reason)}
 	decision := placementFor(f.req.PlacementRequest(), offers, nil)

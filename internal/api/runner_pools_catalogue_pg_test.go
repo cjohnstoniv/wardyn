@@ -10,12 +10,14 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -34,8 +36,10 @@ func localOn(t *testing.T) {
 func (e *placementEnv) list(c *http.Cookie, query string) (client.RunnerPoolList, string) {
 	e.t.Helper()
 	path := "/api/v1/runner-pools" + query
-	w := e.admin(http.MethodGet, path, "")
-	if c != nil {
+	var w *httptest.ResponseRecorder
+	if c == nil {
+		w = e.admin(http.MethodGet, path, "")
+	} else {
 		w = e.call(c, http.MethodGet, path, "")
 	}
 	if w.Code != http.StatusOK {
@@ -234,16 +238,23 @@ func TestPoolListSharedFieldsMatchTheDryDoors(t *testing.T) {
 // and no size, governed, ungoverned, and under a profile whose size is below the deployment default.
 func TestPoolListLimitsMatchPreflightForAnUntouchedRun(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		size *types.ResourceLimits
-		gov  bool
-	}{{"governed", &types.ResourceLimits{CPUMillis: 6000, MemoryMiB: 8192}, true}, {"below the default", &types.ResourceLimits{CPUMillis: 500, MemoryMiB: 512}, true}, {"ungoverned", nil, false}} {
+		name   string
+		size   *types.ResourceLimits
+		limits types.GovernanceLimits
+		gov    bool
+	}{
+		{"governed", &types.ResourceLimits{CPUMillis: 6000, MemoryMiB: 8192}, types.GovernanceLimits{}, true},
+		{"below the default", &types.ResourceLimits{CPUMillis: 500, MemoryMiB: 512}, types.GovernanceLimits{}, true},
+		// The profile's own size is wider than its maximums: the run gets the maximums, and so must the list.
+		{"authored wider than its max", &types.ResourceLimits{CPUMillis: 8000, MemoryMiB: 16384}, types.GovernanceLimits{MaxCPUMillis: 1000, MaxMemoryMiB: 1024}, true},
+		{"ungoverned", nil, types.GovernanceLimits{}, false},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newPlacementEnv(t)
 			pool := e.sizedPool("Pool", types.RunnerPoolAmount{Default: 1000, Cap: 16000})
 			var c *http.Cookie
 			if tc.gov {
-				e.assignSizedProfile("sized", tc.size, types.GovernanceLimits{})
+				e.assignSizedProfile("sized", tc.size, tc.limits)
 				c = e.person
 			}
 			path := "/api/v1/runs/preflight"
@@ -262,5 +273,62 @@ func TestPoolListLimitsMatchPreflightForAnUntouchedRun(t *testing.T) {
 				t.Fatalf("list limits %+v, preflight %+v", got.Limits, pf.Limits)
 			}
 		})
+	}
+}
+
+// Only the dry doors answer the caller's pool choices; create never reads them, so a pool the run is
+// not using (a self-hosted pool whose runner reads fail, say) cannot fail its create.
+func TestCreateNeverReadsThePoolChoices(t *testing.T) {
+	e := newPlacementEnv(t)
+	remote := e.createPool("Remote", types.RunnerPoolRemoteProvided)
+	e.addExecutors(remote.ID, "alpha")
+	e.createPool("Other", types.RunnerPoolSelfHosted)
+	ctx := operatorCtx(e.personP, "person@corp.example", oidc.RoleUser)
+	ceiling, err := e.srv.effectiveCeiling(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := createRunRequest{Agent: "claude-code", RunnerPoolID: remote.ID.String()}
+	for _, dry := range []bool{false, true} {
+		plan, refusal := e.srv.resolvePlacement(ctx, placementInput{req: &req, reqCCOK: true, ceiling: ceiling, dryDoor: dry})
+		if refusal != nil {
+			t.Fatalf("dryDoor=%v: placement refused: %d %+v", dry, refusal.status, refusal.body)
+		}
+		want := 0
+		if dry {
+			want = 2 // Remote and Other
+		}
+		if got := len(plan.choices); got != want {
+			t.Errorf("dryDoor=%v: %d pool choices read, want %d", dry, got, want)
+		}
+	}
+}
+
+// countingInspector counts how often each executor's facts are asked for.
+type countingInspector struct {
+	*poolRunner
+	asked map[string]int
+}
+
+func (c *countingInspector) ExecutorFacts(ctx context.Context, name string) (runner.TargetFacts, bool) {
+	c.asked[name]++
+	return c.poolRunner.ExecutorFacts(ctx, name)
+}
+
+// One list asks each executor for its facts at most once, however many pools hold it, so a failing
+// executor (whose answer the orchestrator does not cache) is probed once per list, not once per pool.
+func TestPoolListAsksEachExecutorOnce(t *testing.T) {
+	e := newPlacementEnv(t)
+	for _, name := range []string{"One", "Two", "Three"} {
+		p := e.createPool(name, types.RunnerPoolRemoteProvided)
+		e.addExecutors(p.ID, "alpha", "beta")
+	}
+	counter := &countingInspector{poolRunner: e.runner, asked: map[string]int{}}
+	e.srv.cfg.Runner = counter
+	e.list(e.person, "")
+	for _, ex := range []string{"alpha", "beta"} {
+		if n := counter.asked[ex]; n != 1 {
+			t.Errorf("executor %s asked %d times in one list, want 1", ex, n)
+		}
 	}
 }
