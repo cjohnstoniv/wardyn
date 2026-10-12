@@ -140,6 +140,13 @@ const PeopleScreen = React.lazy(() =>
     default: m.PeopleScreen,
   })),
 );
+// Runners (0.9, packet M-RN-1) — the computers people registered to run their own runs. securityOps
+// server-side, so both admin tiers reach it; no member route.
+const RunnersScreen = React.lazy(() =>
+  import("./components/screens/runners/runners-screen").then((m) => ({
+    default: m.RunnersScreen,
+  })),
+);
 const SecretsScreen = React.lazy(() =>
   import("./components/screens/secrets").then((m) => ({
     default: m.SecretsScreen,
@@ -722,6 +729,7 @@ export default function App() {
             <Route path="/admin/runs/:id" element={suspend(<RunDetailScreen />)} />
             <Route path="/admin/approvals" element={suspend(<ApprovalsScreen onChanged={refreshBadges} />)} />
             <Route path="/admin/people" element={suspend(<PeopleScreen />)} />
+            <Route path="/admin/runners" element={suspend(<RunnersScreen />)} />
             <Route path="/admin/workspaces" element={suspend(<WorkspacesScreen />)} />
             <Route path="/admin/workspaces/:id" element={suspend(<WorkspaceDetailScreen />)} />
             <Route path="/admin/policies" element={suspend(<PoliciesScreen />)} />

@@ -713,6 +713,19 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(readFileSync(join(root, "pkg/client/runs_create.go"), "utf8")).toMatch(/RunnerPoolSlots \*PoolSlots\s+`json:"runner_pool_slots,omitempty"`/);
   });
 
+  // The three read-side runner facts: runner_online is a pointer on the Go side because false is a fact
+  // (offline) and absent is unknown, so the console reads `runner_online === false` for its offline arms.
+  it("AgentRun carries the runner name, liveness and last seen, with liveness a pointer", () => {
+    const go = readFileSync(join(root, "internal/types/types.go"), "utf8");
+    expect(go).toMatch(/RunnerOnline\s+\*bool\s+`json:"runner_online,omitempty"`/);
+    expect(go).toMatch(/RunnerName\s+string\s+`json:"runner_name,omitempty"`/);
+    expect(go).toMatch(/RunnerLastSeenAt\s+\*time\.Time\s+`json:"runner_last_seen_at,omitempty"`/);
+    const body = tsInterfaceBody(runsTs, "AgentRun");
+    expect(body).toMatch(/runner_online\?: boolean;/);
+    expect(body).toMatch(/runner_name\?: string;/);
+    expect(body).toMatch(/runner_last_seen_at\?: string;/);
+  });
+
   // AutonomyResolution.bound_by names a rubric row or the org's component cap.
   it("AutonomyBoundKey names the Go component-cap cause beside the rubric rows", () => {
     const go = readFileSync(join(root, "internal/api/runs_autonomy_components.go"), "utf8");

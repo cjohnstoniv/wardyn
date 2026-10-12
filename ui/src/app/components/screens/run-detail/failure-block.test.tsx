@@ -447,3 +447,75 @@ describe("dispatch failures in plain words (M2)", () => {
     expect(block.querySelector("details")).toBeNull();
   });
 });
+
+// 0.9 (M-RN-3 RS5, RN-Q29): a run on a person's own computer. A runner's revocation ends its runs KILLED with a
+// run.kill row naming the reason and whether the runner was connected; that is not an operator's kill, so it
+// has no killer and its own arms. A clean kill of a local run says what the computer reported.
+describe("RunFailureBlock: a run on a person's computer", () => {
+  const localRun = (over: Partial<AgentRun> = {}): AgentRun => ({
+    ...run("KILLED"),
+    placement: "local",
+    runner_id: "11111111-2222-3333-4444-555555555555",
+    runner_name: "laptop-7",
+    ...over,
+  });
+  const revoked = (online: boolean) =>
+    ev("run.kill", "success", { actor: "wardynd", data: { reason: "runner_revoked", runner_online: online } });
+  const renderLocal = (audit: AuditEvent[], over: Partial<AgentRun> = {}) =>
+    render(<RunFailureBlock run={localRun(over)} audit={audit} onGoAudit={vi.fn()} />);
+
+  it("runEndingFromAudit reads a revocation off the kill row, with whether the runner was online", () => {
+    expect(runEndingFromAudit("KILLED", [revoked(true)])).toMatchObject({ kind: "killed", evidence: "confirmed", runnerRevoked: { online: true } });
+    expect(runEndingFromAudit("KILLED", [revoked(false)])?.runnerRevoked).toEqual({ online: false });
+    expect(runEndingFromAudit("KILLED", [ev("run.kill", "success", { data: { reason: "enough" } })])?.runnerRevoked).toBeUndefined();
+    // Not the runner's reason as a "detail" under the heading: the arm says it in its own words.
+    expect(runEndingFromAudit("KILLED", [revoked(true)])?.detail).toBeUndefined();
+  });
+
+  it("revoked while online: the runner was told to stop its network, the files stay there, and no operator is blamed", () => {
+    renderLocal([revoked(true)]);
+    expect(screen.getByText("laptop-7 was revoked")).toBeInTheDocument();
+    expect(screen.getByText("This run's credentials were revoked, and laptop-7 was told to stop its network. Anything it wrote stays on laptop-7.")).toBeInTheDocument();
+    expect(screen.getByText("The audit row for revoking laptop-7 names who did it.")).toBeInTheDocument();
+    expect(screen.getByText("The sandbox and its files stay on laptop-7. Wardyn can't remove them; the computer's owner can.")).toBeInTheDocument();
+    expect(screen.getByText("Start a new run if the work still needs doing — a killed run cannot resume.")).toBeInTheDocument();
+    expect(screen.queryByText(/An operator killed this run/)).toBeNull();
+    expect(screen.queryByText(/laptop-7 was revoked while offline/)).toBeNull();
+  });
+
+  // C4: the arm follows data.runner_online, and the two are alternatives, never stacked.
+  it("revoked while offline: the replacement arm says it stops when it next connects", () => {
+    renderLocal([revoked(false)]);
+    expect(screen.getByText("laptop-7 was revoked while offline")).toBeInTheDocument();
+    expect(screen.getByText("This run's credentials were revoked at once; laptop-7 stops its network when it next connects. Anything it wrote stays on laptop-7.")).toBeInTheDocument();
+    expect(screen.queryByText("laptop-7 was revoked")).toBeNull();
+    expect(screen.queryByText(/was told to stop its network/)).toBeNull();
+  });
+
+  it("offers no Revive, Extend or End run", () => {
+    renderLocal([revoked(true)]);
+    expect(screen.queryByRole("button", { name: /Revive|Extend|End run/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /Open audit trail/ })).toBeInTheDocument();
+  });
+
+  it("a revocation whose cascade did not finish is still a partial teardown first", () => {
+    renderLocal([ev("run.kill", "failure", { data: { reason: "runner_revoked", runner_online: true, identity_error: "x" } })]);
+    expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "partial");
+    expect(screen.queryByText("laptop-7 was revoked")).toBeNull();
+  });
+
+  // C5: the local complete arm, and the remote one unchanged.
+  it("a clean kill of a local run uses what the computer reported and says the files are on it", () => {
+    renderLocal([ev("run.kill", "success", { actor: "alice", actor_type: "human" })]);
+    expect(screen.getByText("An operator killed this run 26m 0s in. laptop-7 reported it removed the sandbox; Wardyn issues it no more credentials.")).toBeInTheDocument();
+    expect(screen.getByText("Files the run wrote to a folder on laptop-7 are still there; scratch is gone.")).toBeInTheDocument();
+    expect(screen.queryByText(/Wardyn stopped and removed the sandbox/)).toBeNull();
+    expect(screen.queryByText(/still on the host/)).toBeNull();
+  });
+
+  it("a remote kill reads exactly as before", () => {
+    renderLocal([ev("run.kill", "success", { actor: "alice", actor_type: "human" })], { placement: "remote", runner_id: undefined, runner_name: undefined });
+    expect(screen.getByText("An operator killed this run 26m 0s in. Wardyn stopped and removed the sandbox and will issue it no more credentials.")).toBeInTheDocument();
+    expect(screen.getByText("Files written to a mounted workspace are still on the host; scratch is gone.")).toBeInTheDocument();
+  });
+});

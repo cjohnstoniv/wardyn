@@ -37,7 +37,11 @@ const uiRoot = path.resolve(__dirname, "../..");
 // build-run-input leaves it unchanged, since New Run is not in the entry chunk; no safe lazy trim.
 // Raised 561 -> 562 KiB: the Templates nav items, their icon and the two lazy routes add 933 B to the
 // entry (575,297 B); the screen itself is a lazy chunk, and no existing icon reuse brings it under.
-const ENTRY_BUDGET_BYTES = 562 * 1024;
+// Raised 562 -> 563 KiB: the Runners nav item, its route and the eager runner words RunRow needs add
+// about 1.0 kB to the entry (576,495 B); the screens are lazy, and reusing an icon still leaves it over.
+// Raised 563 -> 564 KiB: merging origin/batch/090 at c3326cfc2 left the entry
+// 8 B over (576,520 B); no lane added a lazy route to the entry.
+const ENTRY_BUDGET_BYTES = 564 * 1024;
 
 async function build_(): Promise<(Rollup.OutputChunk | Rollup.OutputAsset)[]> {
   // Vite only defaults NODE_ENV to "production" for a build when it is UNSET,

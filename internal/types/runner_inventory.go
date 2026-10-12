@@ -21,6 +21,12 @@ const (
 // RunnerUnclaimedTTL is how long an unclaimed runner waits for its owner.
 const RunnerUnclaimedTTL = 24 * time.Hour
 
+// RunnerCapacity is the per-run ceiling a runner advertised: the wire shape of its caps event.
+type RunnerCapacity struct {
+	CPUMillisMax int64 `json:"cpu_millis_max"`
+	MemoryMiBMax int64 `json:"memory_mib_max"`
+}
+
 // RunnerView is a runner as the management routes show it to a person or an administrator. It is
 // never sent to a runner. Every posture fact is what the runner said about itself.
 type RunnerView struct {
@@ -51,10 +57,18 @@ type RunnerView struct {
 	// absent until it is revoked.
 	RevokedBy    string `json:"revoked_by,omitempty"`
 	RevokeReason string `json:"revoke_reason,omitempty"`
+	// RevokedByEmail is that person's email where Wardyn holds one, set on a person's own list only.
+	RevokedByEmail string `json:"revoked_by_email,omitempty"`
 	// Posture is absent until the runner has reported; PostureSource is then runner_asserted.
 	Posture           *RunnerPosture `json:"posture,omitempty"`
 	PostureReportedAt *time.Time     `json:"posture_reported_at,omitempty"`
 	PostureSource     string         `json:"posture_source,omitempty"`
+	// Capacity, Classes and AllowedRoots are the claimed runner's last caps event, all runner_asserted.
+	// They are read from this process's live endpoint, so like Online they are absent when the runner
+	// has not connected to this replica, never a stored or guessed value.
+	Capacity     *RunnerCapacity    `json:"capacity,omitempty"`
+	Classes      []ConfinementClass `json:"classes,omitempty"`
+	AllowedRoots []string           `json:"allowed_roots,omitempty"`
 	// RunsActive counts the non-terminal runs on this runner.
 	RunsActive int `json:"runs_active"`
 }
