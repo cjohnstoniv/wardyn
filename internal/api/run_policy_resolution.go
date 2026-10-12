@@ -273,6 +273,9 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	if code, err := s.validateRunSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec, credentials); err != nil {
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, runError(code, reasonInlinePolicyInvalid, "invalid policy: "+err.Error())
 	}
+	if !dryRun {
+		s.auditPolicyOverlay(ctx, r, source.Overlay)
+	}
 	edits.finish(&source, spec)
 	return spec, policyID, storedWarns, source, nil
 }
