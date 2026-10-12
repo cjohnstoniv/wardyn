@@ -78,7 +78,9 @@ function RowAction({ name, attached, reason, onAdd, onRemove }: { name: string; 
   );
 }
 
-function Status({ status }: { status: string }) {
+function Status({ status, answered }: { status: string; answered: boolean }) {
+  // Until the server has answered this body, a state is only Requested.
+  if (!answered) return <Chip>{NR_TOOLS.NET_REQUESTED}</Chip>;
   if (status === "ready") return <Chip tone="success" dot>{NR_TOOLS.STATUS_READY}</Chip>;
   if (status === "needs_setup") return <Chip tone="warning" dot>{NR_TOOLS.STATUS_NEEDS_SETUP}</Chip>;
   return null;
@@ -87,10 +89,12 @@ function Status({ status }: { status: string }) {
 export interface AddToolsProps {
   /** The preview's `access` block: what the added things bring, and the state the server gives each. */
   access: AccessFacts | undefined;
+  /** The server has answered exactly this body; until it has, rows are Requested, not Ready. */
+  answered: boolean;
   intent: RunIntent;
 }
 
-export function AddTools({ access, intent }: AddToolsProps) {
+export function AddTools({ access, answered, intent }: AddToolsProps) {
   const headingId = React.useId();
   const dispatch = useNewRunDispatch();
   const announce = useAnnounce();
@@ -138,12 +142,12 @@ export function AddTools({ access, intent }: AddToolsProps) {
   const orgCard = (row: OrgComponentView) => {
     const residentRow = row.secrets.some((s) => s.delivery.mode !== "header");
     const fact = stateOf(row.id);
-    const reason = residentRow && !residentAllowed ? CC.ERR.RESIDENT_OFF : sentence(fact?.reason);
+    const reason = residentRow && !residentAllowed ? CC.ERR.RESIDENT_OFF : answered ? sentence(fact?.reason) : undefined;
     return (
       <Card key={row.id} title={row.name} body={row.hosts.join(", ")}>
         <div className="flex flex-wrap items-center gap-2">
           <Chip>{NR_TOOLS.FROM_ORG}</Chip>
-          {attached(row.id) && fact && <Status status={fact.status} />}
+          {attached(row.id) && fact && <Status status={fact.status} answered={answered} />}
         </div>
         <RowAction
           name={row.name}
@@ -194,7 +198,7 @@ export function AddTools({ access, intent }: AddToolsProps) {
               <RowAction
                 name={title}
                 attached={!!row && attached(row.id)}
-                reason={sentence(row ? stateOf(row.id)?.reason : undefined)}
+                reason={answered ? sentence(row ? stateOf(row.id)?.reason : undefined) : undefined}
                 onAdd={() => { if (row) edit((i) => attachComponent(i, { id: row.id })); announce(NR_TOOLS.CARD_ADDED(title)); }}
                 onRemove={() => { if (row) edit((i) => detachComponent(i, row.id)); announce(NR_TOOLS.COMPONENT_REMOVED); }}
               />
@@ -232,8 +236,8 @@ export function AddTools({ access, intent }: AddToolsProps) {
               <li key={row.id} className="flex flex-wrap items-center gap-2 rounded-md border border-border p-3 text-sm">
                 <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{row.name}</span>
                 <Chip>{FROM_KIND[row.kind] ?? NR_TOOLS.FROM_CUSTOM}</Chip>
-                <Status status={row.status} />
-                {sentence(row.reason) && <span className="basis-full text-muted-foreground">{sentence(row.reason)}</span>}
+                <Status status={row.status} answered={answered} />
+                {answered && sentence(row.reason) && <span className="basis-full text-muted-foreground">{sentence(row.reason)}</span>}
                 <Button type="button" variant="ghost" size="sm" aria-label={`${NR_TOOLS.ROW_REMOVE} ${row.name}`} onClick={() => removeAdded(row)}>{NR_TOOLS.ROW_REMOVE}</Button>
               </li>
             ))}

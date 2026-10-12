@@ -54,11 +54,17 @@ export function residentSecretRef(secretName: string, delivery: { mode: "env"; v
   return { name: secretName, inline: { hosts: [], secrets: [{ secret_name: secretName, delivery }] } };
 }
 
-/** The bare host of an https URL, or undefined for anything else. */
-export function httpsHost(url: string): string | undefined {
+/**
+ * An https URL's pieces the way the server reads them: `authority` keeps a
+ * non-default port (the component's host entry must name it), `hostname` is the
+ * bare host a header secret is delivered to. A URL with credentials or a
+ * fragment is none of these.
+ */
+export function httpsParts(url: string): { authority: string; hostname: string } | undefined {
   try {
     const u = new URL(url.trim());
-    return u.protocol === "https:" && !u.username && !u.password ? u.hostname : undefined;
+    if (u.protocol !== "https:" || u.username || u.password || u.hash) return undefined;
+    return { authority: u.host, hostname: u.hostname };
   } catch {
     return undefined;
   }
@@ -66,11 +72,11 @@ export function httpsHost(url: string): string | undefined {
 
 /** A remote MCP server by URL, with its token (one saved secret) added by the proxy as a header, or none. */
 export function mcpRef(name: string, url: string, tokenSecret: string | undefined): ComponentRef | undefined {
-  const host = httpsHost(url);
-  if (!host) return undefined;
+  const parts = httpsParts(url);
+  if (!parts) return undefined;
   const inline: McpDefinition = {
-    hosts: [host],
-    ...(tokenSecret && { secrets: [{ secret_name: tokenSecret, delivery: { mode: "header" as const, host } }] }),
+    hosts: [parts.authority],
+    ...(tokenSecret && { secrets: [{ secret_name: tokenSecret, delivery: { mode: "header" as const, host: parts.hostname } }] }),
     mcp: { url: url.trim(), transport: "http" },
   };
   return { name, inline };

@@ -7,6 +7,7 @@ import * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { setField } from "../../../../../../test/set-field";
 import { MY_COMPONENTS, ORG_BILLING, ORG_LINEAR, ORG_POSTGRES, SAVED_SECRETS } from "../../../../../lib/new-run-fixtures/scenarios/catalogue";
 import { SCENARIO_ACCESS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
 import type { MyComponents } from "../../../../../lib/types/components";
@@ -19,7 +20,7 @@ import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../ne
 import { CLI_CARD } from "./catalogue-pending";
 import { AddTools } from "./catalogue";
 
-const h = vi.hoisted(() => ({ mine: vi.fn(), names: vi.fn(), saveMine: vi.fn() }));
+const h = vi.hoisted(() => ({ mine: vi.fn(), names: vi.fn(), saveMine: vi.fn(), answered: true }));
 vi.mock("../../../../../lib/api/components", () => ({ components: { mine: h.mine, saveMine: h.saveMine } }));
 vi.mock("../../../../../lib/api/secrets", () => ({ secrets: { listSecrets: h.names } }));
 vi.mock("../../../new-run/custom-component-dialog", () => ({
@@ -37,7 +38,7 @@ function Seed({ intent, children }: { intent: RunIntent; children: React.ReactNo
 }
 function Live({ access }: { access: AccessFacts | undefined }) {
   const { intent } = useNewRunDraft();
-  return <AddTools access={access} intent={intent} />;
+  return <AddTools access={access} answered={h.answered} intent={intent} />;
 }
 function Draft() {
   const { intent } = useNewRunDraft();
@@ -56,6 +57,7 @@ const card = (title: string) => within(screen.getByRole("heading", { name: title
 const row = (over: Partial<AccessRow>): AccessRow => ({ id: "x", kind: "custom", from: "added", name: "X", status: "ready", hosts: [], credentials: [], source: { kind: "component" }, ...over });
 
 beforeEach(() => {
+  h.answered = true;
   h.mine.mockResolvedValue(COMPONENTS());
   h.names.mockResolvedValue(SAVED_SECRETS);
   h.saveMine.mockResolvedValue({ id: "saved-1" });
@@ -148,11 +150,11 @@ describe("Allow a host", () => {
     expect(document.activeElement).toBe(field);
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
     expect(dialog.getByText(NR_TOOLS.HOST_ERR)).toBeTruthy();
-    await userEvent.type(field, "https://pypi.org");
+    setField(field, "https://pypi.org");
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
     expect(dialog.getByRole("alert").textContent).toContain("https://pypi.org");
-    await userEvent.clear(field);
-    await userEvent.type(field, "pypi.org{Enter}");
+    setField(field, "pypi.org");
+    await userEvent.keyboard("{Enter}");
     expect(draft().overrides).toEqual({ hosts: { add_allowed: ["pypi.org"] } });
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -171,7 +173,7 @@ describe("Add a secret", () => {
     expect([...select.options].map((o) => o.value)).toEqual(SAVED_SECRETS);
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
     expect(dialog.getByText(NR_TOOLS.SECRET_ERR_HOST)).toBeTruthy();
-    await userEvent.type(dialog.getByLabelText(NR_TOOLS.SECRET_HOST_LABEL), "api.linear.app");
+    setField(dialog.getByLabelText(NR_TOOLS.SECRET_HOST_LABEL), "api.linear.app");
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
     expect(draft().overrides).toEqual({
       agent: { add_secrets: [{ secret_name: "linear-token", host: "api.linear.app" }] },
@@ -182,7 +184,7 @@ describe("Add a secret", () => {
   it("does not add a host the run already reaches", async () => {
     const dialog = await open();
     const reached = BASE.hosts[0].host;
-    await userEvent.type(await dialog.findByLabelText(NR_TOOLS.SECRET_HOST_LABEL), reached);
+    setField(await dialog.findByLabelText(NR_TOOLS.SECRET_HOST_LABEL), reached);
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
     expect(draft().overrides).toEqual({ agent: { add_secrets: [{ secret_name: "linear-token", host: reached }] } });
   });
@@ -192,7 +194,7 @@ describe("Add a secret", () => {
     await userEvent.click(await dialog.findByRole("radio", { name: NR_TOOLS.DELIVERY_ENV_OPTION }));
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
     expect(dialog.getByText(NR_TOOLS.SECRET_ERR_VARIABLE)).toBeTruthy();
-    await userEvent.type(dialog.getByLabelText(NR_TOOLS.SECRET_VARIABLE_LABEL), "LINEAR_TOKEN");
+    setField(dialog.getByLabelText(NR_TOOLS.SECRET_VARIABLE_LABEL), "LINEAR_TOKEN");
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
     expect(draft().components).toEqual([{ name: "linear-token", inline: { hosts: [], secrets: [{ secret_name: "linear-token", delivery: { mode: "env", var: "LINEAR_TOKEN" } }] } }]);
     expect(draft().overrides).toBeUndefined();
@@ -202,7 +204,7 @@ describe("Add a secret", () => {
       return within(await screen.findByRole("dialog", { name: NR_TOOLS.SECRET_CARD_TITLE }));
     })();
     await userEvent.click(await dialog.findByRole("radio", { name: NR_TOOLS.DELIVERY_FILE_OPTION }));
-    await userEvent.type(dialog.getByLabelText(NR_TOOLS.SECRET_FILE_LABEL), "deploy.key");
+    setField(dialog.getByLabelText(NR_TOOLS.SECRET_FILE_LABEL), "deploy.key");
     expect(dialog.getByText(NR_TOOLS.SECRET_FILE_PATH("deploy.key"))).toBeTruthy();
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
     expect(draft().components?.[1]).toEqual({ name: "linear-token", inline: { hosts: [], secrets: [{ secret_name: "linear-token", delivery: { mode: "file", file: "deploy.key" } }] } });
@@ -218,12 +220,11 @@ describe("Add an MCP server", () => {
 
   it("adds a remote server by an https URL, its token added by the proxy as a header", async () => {
     const dialog = await open();
-    await userEvent.type(dialog.getByLabelText(NR_TOOLS.MCP_URL), "http://mcp.example.com/mcp");
+    setField(dialog.getByLabelText(NR_TOOLS.MCP_URL), "http://mcp.example.com/mcp");
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
     expect(dialog.getByText(NR_TOOLS.MCP_ERR_URL)).toBeTruthy();
-    await userEvent.clear(dialog.getByLabelText(NR_TOOLS.MCP_URL));
-    await userEvent.type(dialog.getByLabelText(NR_TOOLS.MCP_URL), "https://mcp.example.com/mcp");
-    await userEvent.type(dialog.getByLabelText(NR_TOOLS.MCP_NAME), "Docs");
+    setField(dialog.getByLabelText(NR_TOOLS.MCP_URL), "https://mcp.example.com/mcp");
+    setField(dialog.getByLabelText(NR_TOOLS.MCP_NAME), "Docs");
     await userEvent.selectOptions(dialog.getByLabelText(NR_TOOLS.MCP_TOKEN), "linear-token");
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
     expect(draft().components).toEqual([{
@@ -237,6 +238,41 @@ describe("Add an MCP server", () => {
   });
 });
 
+describe("MCP by URL against the server's reading of the URL", () => {
+  async function add(url: string) {
+    await show();
+    await userEvent.click(await screen.findByRole("button", { name: NR_TOOLS.MCP_CARD_BUTTON }));
+    const dialog = within(await screen.findByRole("dialog", { name: NR_TOOLS.MCP_CARD_TITLE }));
+    setField(dialog.getByLabelText(NR_TOOLS.MCP_URL), url);
+    await userEvent.selectOptions(dialog.getByLabelText(NR_TOOLS.MCP_TOKEN), "linear-token");
+    await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
+    return dialog;
+  }
+
+  it("names a non-default port in the component's hosts and keeps the bare host for the header", async () => {
+    await add("https://mcp.example.com:8443/mcp");
+    expect(draft().components).toEqual([{
+      name: "mcp.example.com",
+      inline: {
+        hosts: ["mcp.example.com:8443"],
+        secrets: [{ secret_name: "linear-token", delivery: { mode: "header", host: "mcp.example.com" } }],
+        mcp: { url: "https://mcp.example.com:8443/mcp", transport: "http" },
+      },
+    }]);
+  });
+
+  it("writes :443 as the bare host, as the server reads it", async () => {
+    await add("https://mcp.example.com:443/mcp");
+    expect((draft().components?.[0].inline as { hosts: string[] }).hosts).toEqual(["mcp.example.com"]);
+  });
+
+  it("refuses a URL with a fragment before it reaches the server", async () => {
+    const dialog = await add("https://mcp.example.com/mcp#section");
+    expect(dialog.getByText(NR_TOOLS.MCP_ERR_URL)).toBeTruthy();
+    expect(draft().components).toBeUndefined();
+  });
+});
+
 describe("Custom component", () => {
   async function open() {
     await show();
@@ -246,11 +282,11 @@ describe("Custom component", () => {
 
   it("asks for a header host only with two or more hosts, and sends the host the header goes to (DR-0050)", async () => {
     const dialog = await open();
-    await userEvent.type(dialog.getByLabelText(NR_TOOLS.CC_NAME), "Billing");
-    await userEvent.type(dialog.getByLabelText(NR_TOOLS.CC_HOSTS), "billing.acme.internal");
+    setField(dialog.getByLabelText(NR_TOOLS.CC_NAME), "Billing");
+    setField(dialog.getByLabelText(NR_TOOLS.CC_HOSTS), "billing.acme.internal");
     await userEvent.selectOptions(dialog.getByLabelText(NR_TOOLS.CC_SECRET), "billing-key");
     expect(dialog.queryByLabelText(NR_TOOLS.CC_HEADER_HOST)).toBeNull();
-    await userEvent.type(dialog.getByLabelText(NR_TOOLS.CC_HOSTS), ", api.stripe.com");
+    setField(dialog.getByLabelText(NR_TOOLS.CC_HOSTS), "billing.acme.internal, api.stripe.com");
     const hostSelect = dialog.getByLabelText(NR_TOOLS.CC_HEADER_HOST);
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
     expect(dialog.getByRole("alert").textContent).toBe(CC.ERR.HEADER_HOST);
@@ -265,8 +301,8 @@ describe("Custom component", () => {
 
   it("saves to the person's components when asked, and attaches the saved row by id", async () => {
     const dialog = await open();
-    await userEvent.type(dialog.getByLabelText(NR_TOOLS.CC_NAME), "Billing");
-    await userEvent.type(dialog.getByLabelText(NR_TOOLS.CC_HOSTS), "billing.acme.internal");
+    setField(dialog.getByLabelText(NR_TOOLS.CC_NAME), "Billing");
+    setField(dialog.getByLabelText(NR_TOOLS.CC_HOSTS), "billing.acme.internal");
     await userEvent.click(dialog.getByLabelText(NR_TOOLS.CC_SAVE));
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
     await waitFor(() => expect(draft().components).toEqual([{ id: "saved-1" }]));
@@ -285,6 +321,23 @@ describe("Custom component", () => {
     await screen.findByRole("heading", { name: "Linear" });
     expect(screen.queryByRole("heading", { name: NR_TOOLS.CUSTOM_COMPONENT })).toBeNull();
     expect(screen.queryByRole("heading", { name: NR_TOOLS.MCP_CARD_TITLE })).toBeNull();
+  });
+});
+
+describe("while the next answer is out", () => {
+  it("shows Requested in place of Ready or a reason, on an attached row and an added row", async () => {
+    h.answered = false;
+    const access: AccessFacts = {
+      ...BASE,
+      rows: [...BASE.rows, row({ id: ORG_BILLING.id, name: "Billing API", status: "ready" }), row({ id: "host:pypi.org", kind: "host", name: "pypi.org", status: "needs_setup", reason: "component_unavailable" })],
+    };
+    await show({ components: [{ id: ORG_BILLING.id }] }, access);
+    await screen.findByRole("heading", { name: NR_TOOLS.ADDED_HEADING });
+    expect(screen.queryByText(NR_TOOLS.STATUS_READY)).toBeNull();
+    expect(screen.queryByText(NR_TOOLS.STATUS_NEEDS_SETUP)).toBeNull();
+    expect(screen.queryByText("This component isn't available to you. Ask your admin.")).toBeNull();
+    expect(card("Billing API").getByText(NR_TOOLS.NET_REQUESTED)).toBeTruthy();
+    expect(screen.getAllByText(NR_TOOLS.NET_REQUESTED).length).toBeGreaterThanOrEqual(3);
   });
 });
 
