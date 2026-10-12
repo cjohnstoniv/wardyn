@@ -238,6 +238,8 @@
      12px helper-text rung immediately above it. */
   --text-meta: 0.6875rem;
   --text-body: 0.8125rem;
+  /* StepHeader h1 only: the one fluid rung above the body scale (CONSOLE-RULES §3). */
+  --text-display: clamp(1.75rem, 1.25rem + 1.5vw, 2rem);
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -371,6 +373,16 @@
     background-clip: padding-box;
   }
   .scroll-thin::-webkit-scrollbar-track { background: transparent; }
+
+  /* unavailable option: a faint hatch under a visible reason line (CONSOLE-RULES §9).
+     The 50% border blend is what keeps --muted-foreground at AA over it. */
+  .hatch-unavailable {
+    background-image: repeating-linear-gradient(
+      135deg,
+      transparent 0 6px,
+      color-mix(in srgb, var(--border) 50%, transparent) 6px 7px
+    );
+  }
 
   /* eyebrow / section micro-label: UPPERCASE, tracked, muted */
   .label-eyebrow {
