@@ -41,6 +41,8 @@ export const RUN_MODE_REFUSAL = {
     `This run is a background task, so it has no ${door}. Its logs, audit trail and status stay available.`,
   IDLE_STOP_BACKGROUND: () => "A background task ends when its work exits, so it has no idle stop. Remove it, or choose an interactive environment.",
   RUN_SHAPE_CONFLICT: (shape: string, detail: string) => `shape ${shape} does not fit this run: ${detail}.`,
+  CODEX_BUILTIN_RULE: (tool: string) =>
+    `${tool} is one of Codex CLI's own tools, and Wardyn can't block those. Only its MCP tools can be blocked.`,
 } as const;
 
 /** Every sentence function by key, for the parity test and for callers that pick one by reason. */
@@ -56,6 +58,7 @@ export const RUN_MODE_REFUSAL_BY_KEY: Record<keyof typeof RUN_MODE_REFUSAL, (...
   BACKGROUND_ONLY: (...a) => RUN_MODE_REFUSAL.BACKGROUND_ONLY(a[0]),
   IDLE_STOP_BACKGROUND: () => RUN_MODE_REFUSAL.IDLE_STOP_BACKGROUND(),
   RUN_SHAPE_CONFLICT: (...a) => RUN_MODE_REFUSAL.RUN_SHAPE_CONFLICT(a[0], a[1]),
+  CODEX_BUILTIN_RULE: (...a) => RUN_MODE_REFUSAL.CODEX_BUILTIN_RULE(a[0]),
 };
 
 /**

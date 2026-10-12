@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -84,11 +85,17 @@ func TestRunModeRefusals(t *testing.T) {
 		{"a startup kind is closed", interactiveOK + `,"startup":{"kind":"both"}`, reasonRunModeInvalid, "", 400},
 		{"an interactive environment with no tool waits for its lane", `"experience":"interactive",` + noRepos, reasonRequestFieldUnavailable, "", 422},
 		{"two harnesses wait for the harness set", `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools: more than one harness"), 422},
-		{"personal tool rules wait for their enforcing lane", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"hold"}]}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: personal tool rules wait for their enforcing lane"), 422},
-		{"nor a background run's rule while it is off the gated lane", `"experience":"background",` + agentTask + `,"tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"hold"}]}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: personal tool rules wait for their enforcing lane"), 422},
-		{"a tool rule that allows widens the policy", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"allow"}]}],` + noRepos, reasonOverrideRefused, toolAllowRefusedMsg(0), 422},
-		{"a default that allows widens the policy", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"allow"}],` + noRepos, reasonOverrideRefused, toolAllowRefusedMsg(0), 422},
-		{"a per-tool default waits for its enforcing lane", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"deny"}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: personal tool rules wait for their enforcing lane"), 422},
+		{"an interactive run's tool rule waits for the harness's settings", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"deny"}]}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: tool rules in an interactive run"), 422},
+		{"a background run's rule is honoured on the gated lane", `"experience":"background",` + agentTask + `,"tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"hold"},{"tool":"Read","effect":"allow"}],"default_effect":"deny"}],` + noRepos, "", "", 200},
+		{"a rule names one tool exactly", `"experience":"background",` + agentTask + `,"tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash(git push:*)","effect":"deny"}]}],` + noRepos, reasonRunModeInvalid, "", 400},
+		{"Codex CLI cannot pause a call", `"experience":"background","workload":{"kind":"agent_task","agent":"codex-cli","task":"t"},"tools":[{"id":"codex-cli","kind":"harness","default_effect":"hold"}],` + noRepos, reasonRequestFieldUnavailable, accessSentences["harness_no_hold"], 422},
+		{"Codex CLI's own tools have no block", `"experience":"background","workload":{"kind":"agent_task","agent":"codex-cli","task":"t"},"tools":[{"id":"codex-cli","kind":"harness","tool_rules":[{"tool":"shell","effect":"deny"}]}],` + noRepos, reasonRequestFieldUnavailable, codexBuiltinRuleMsg("shell"), 422},
+		{"nor a Codex CLI default block", `"experience":"background","workload":{"kind":"agent_task","agent":"codex-cli","task":"t"},"tools":[{"id":"codex-cli","kind":"harness","default_effect":"deny"}],` + noRepos, reasonRequestFieldUnavailable, accessSentences["harness_no_block_builtin"], 422},
+		{"your own tools take no rules", `"experience":"interactive","tools":[{"id":"none","kind":"harness","tool_rules":[{"tool":"Bash","effect":"deny"}]}],` + noRepos, reasonRequestFieldUnavailable, "Wardyn can't set tool rules for Your own tools.", 422},
+		{"an interactive run's allow waits too", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"allow"}]}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: tool rules in an interactive run"), 422},
+		{"an interactive run's default allow waits too", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"allow"}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: tool rules in an interactive run"), 422},
+		{"an interactive run's own default, asking, is honoured", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"hold"}],` + noRepos, "", "", 200},
+		{"an interactive run's default block waits too", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"deny"}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: tool rules in an interactive run"), 422},
 		{"a component tool is not dropped", `"experience":"interactive","tools":[{"id":"lint","kind":"component","component":{"inline":{"hosts":["a.example.com"]}}}],` + noRepos, reasonRequestFieldUnavailable, "", 422},
 		{"a tool id is one token", `"experience":"interactive","tools":[{"id":"a b","kind":"harness"}],` + noRepos, reasonRunModeInvalid, "", 400},
 		{"a tool is included once", `"experience":"interactive","tools":[` + claudeTool + `,` + claudeTool + `],` + noRepos, reasonRunModeInvalid, "", 400},
@@ -131,23 +138,36 @@ func TestRunModeRefusals(t *testing.T) {
 	}
 }
 
-// TestPersonalToolRulesAreHeldOnlyOffTheGatedLane pins the guard's lane test: a
-// background agent run that holds tools is the gated lane and keeps its rules,
-// and the same rules on any other run are refused.
-func TestPersonalToolRulesAreHeldOnlyOffTheGatedLane(t *testing.T) {
-	ruled := []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness, ToolRules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}}}
+// TestPersonalToolRulesPutABackgroundRunOnTheGatedLane pins the posture that
+// replaced the refusal of a person's rules off the gated lane: a background run
+// of a gated harness with any rule or default goes on the gated lane with
+// "*: allow" under the person's layer, a run already there keeps its own default,
+// and nothing else moves.
+func TestPersonalToolRulesPutABackgroundRunOnTheGatedLane(t *testing.T) {
+	ruled := []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness, ToolRules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}}}}
 	for name, tc := range map[string]struct {
-		req     createRunRequest
-		refused bool
+		req       createRunRequest
+		approvals string
+		rules     []types.ToolRule
 	}{
-		"gated background run":   {createRunRequest{Experience: client.ExperienceBackground, ToolApprovals: "hold", Tools: ruled}, false},
-		"ungated background run": {createRunRequest{Experience: client.ExperienceBackground, Tools: ruled}, true},
-		"interactive, even held": {createRunRequest{Experience: client.ExperienceInteractive, ToolApprovals: "hold", Tools: ruled}, true},
-		"a run with no rule":     {createRunRequest{Experience: client.ExperienceInteractive, Tools: []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness}}}, false},
+		"ungated background run": {createRunRequest{Agent: "claude-code", Task: "t", Tools: ruled}, "hold", []types.ToolRule{{Tool: "*", Effect: types.ToolAllow}}},
+		"gated background run":   {createRunRequest{Agent: "claude-code", Task: "t", ToolApprovals: "hold", Tools: ruled}, "hold", nil},
+		"no rule":                {createRunRequest{Agent: "claude-code", Task: "t", Tools: []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness}}}, "", nil},
+		"interactive":            {createRunRequest{Agent: "claude-code", Interactive: true, Tools: ruled}, "", nil},
+		"a gateless harness":     {createRunRequest{Agent: "codex-cli", Task: "t", Tools: ruled}, "", nil},
+		"a command":              {createRunRequest{Agent: "claude-code", Task: "t", TaskMode: "exec", Tools: ruled}, "", nil},
 	} {
-		if got := personalToolRulesRefusal(tc.req) != nil; got != tc.refused {
-			t.Errorf("%s: refused = %v, want %v", name, got, tc.refused)
+		req, spec := tc.req, types.RunPolicySpec{}
+		(&Server{}).applyToolPosture(&req, &spec)
+		if req.ToolApprovals != tc.approvals || !slices.Equal(spec.ToolRules, tc.rules) {
+			t.Errorf("%s: tool_approvals %q rules %v, want %q %v", name, req.ToolApprovals, spec.ToolRules, tc.approvals, tc.rules)
 		}
+	}
+	// A policy's own "*" is never replaced: the posture lies under it.
+	req, spec := createRunRequest{Agent: "claude-code", Task: "t", Tools: ruled}, types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "*", Effect: types.ToolHold}}}
+	(&Server{}).applyToolPosture(&req, &spec)
+	if req.ToolApprovals != "hold" || len(spec.ToolRules) != 1 || spec.ToolRules[0].Effect != types.ToolHold {
+		t.Errorf("a policy default under the posture: %q %v", req.ToolApprovals, spec.ToolRules)
 	}
 }
 
@@ -649,6 +669,7 @@ func TestRunModeRefusalSentencesMatchGolden(t *testing.T) {
 		"BACKGROUND_ONLY":          func(a []string) string { return runBackgroundOnlyMsg(a[0]) },
 		"IDLE_STOP_BACKGROUND":     func([]string) string { return idleStopBackgroundMsg() },
 		"RUN_SHAPE_CONFLICT":       func(a []string) string { return runShapeConflictMsg(a[0], a[1]) },
+		"CODEX_BUILTIN_RULE":       func(a []string) string { return codexBuiltinRuleMsg(a[0]) },
 	}
 	if len(golden) != len(got) {
 		t.Fatalf("golden has %d sentences, the server has %d", len(golden), len(got))

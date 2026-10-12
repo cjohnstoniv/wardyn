@@ -313,6 +313,19 @@ func (s *Server) stepAutonomy(f *runFold, rec *foldRecorder) bool {
 	return ok
 }
 
+// stepToolPolicy settles the tool lane and holds a person's tool rules to the
+// policy, after autonomy so every step that can put the run on the gated lane
+// has: a person's rule or default puts a background run of a gated harness
+// there with "*: allow" under the person's layer (applyToolPosture), and each
+// allow they send stands only where the policy, with the lane's default under
+// it, already allows the tool.
+func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
+	before := f.spec
+	s.applyToolPosture(f.req, &f.spec)
+	recordSpecAdds(rec, before, f.spec, provSource{Kind: provKindPosture})
+	return !s.toolRulesWithinPolicyRefusal(*f.req, f.spec).write(s, f.w, f.r)
+}
+
 // stepRunEnd decides the run's end and its lifetime cap against the pool,
 // governance and the deployment (run_end_create.go); a refusal is the same at
 // every door and leaves no row.

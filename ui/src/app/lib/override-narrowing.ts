@@ -32,9 +32,11 @@ export type OverrideDirection = "tighten" | "widen";
 
 /**
  * allowed: always, it only takes reach away. ceiling_clamped: allowed to ask,
- * the ceiling may still drop it. refused: never, from a run request.
+ * the ceiling may still drop it. within_policy: allowed when no looser than the
+ * policy for that entry (the server checks it against the resolved policy).
+ * refused: never, from a run request.
  */
-export type OverrideRule = "allowed" | "ceiling_clamped" | "refused";
+export type OverrideRule = "allowed" | "ceiling_clamped" | "within_policy" | "refused";
 
 export interface OverrideNarrowing {
   kind: OverrideKind;
