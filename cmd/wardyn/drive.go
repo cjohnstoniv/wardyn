@@ -42,7 +42,7 @@ import (
 func driveCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "drive",
-		Short: "Get or replace the admin-registered drives and their allocations; reclaim one person's storage",
+		Short: "Get or upsert the admin-registered drives and their allocations; reclaim one person's storage",
 		Long: "Read or upsert the admin-registered drives (storage an admin allocates to a\n" +
 			"user, a group, or everyone) and their allocations:\n\n" +
 			"    wardyn drive get > drives.json\n" +

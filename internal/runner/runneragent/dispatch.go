@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -344,6 +345,14 @@ func (d *Dispatcher) sweep(ctx context.Context, args json.RawMessage) (any, erro
 	if a.Remove == nil {
 		var candidates []uuid.UUID
 		_, err := sweep.SweepOrphanedSandboxes(ctx, a.MinAge, func(id uuid.UUID) bool { candidates = append(candidates, id); return false })
+		// An error from the same pass (a leftover drive seed that would not go)
+		// must not hide the candidates it listed: the reply carries one or the
+		// other, and the org removes nothing without the list. The local path
+		// sweeps its candidates whatever the seed sweep answered too.
+		if err != nil && len(candidates) > 0 {
+			slog.WarnContext(ctx, "runner: orphan sweep listed its candidates with an error", slog.String("err", err.Error()))
+			err = nil
+		}
 		return runnerwire.SweepResult{Candidates: candidates}, err
 	}
 	remove := make(map[uuid.UUID]bool, len(a.Remove))
