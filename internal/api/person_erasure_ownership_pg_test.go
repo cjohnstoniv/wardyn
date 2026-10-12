@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -156,29 +157,99 @@ func TestPG_Erasure_SameIssuerHistoryUnderTheEntraNameIsErased(t *testing.T) {
 }
 
 // Y and Q are pairwise subjects with one tenant and object id under two issuers, and nobody is bound to
-// the entra:<tenant>:<object> name: what is under it may be either's. Erasing Y fails closed on both
-// routes, and nothing is erased.
-func TestPG_Erasure_AnAmbiguousEntraNameFailsClosed(t *testing.T) {
-	_, srv, pg, sec := identityRig(t)
-	oid := uuid.NewString()
-	c, y := "entra:"+identTenant+":"+oid, "pairwise-y-"+oid
-	ownBind(t, pg, y, ownIssuerB, oid)
-	ownBind(t, pg, "pairwise-q-"+oid, identIssuer, oid)
-	since := time.Now().UTC().Add(-time.Second)
-	history, own := ownSeed(t, srv, pg, sec, c), ownSeed(t, srv, pg, sec, y)
-	for _, tc := range []struct {
-		method string
-		code   int
-		reason string
-	}{{http.MethodPost, http.StatusInternalServerError, reasonErasureIncomplete}, {http.MethodDelete, http.StatusInternalServerError, reasonInternalError}} {
-		if code, reason := ownErase(t, srv, tc.method, y); code != tc.code || reason != tc.reason {
-			t.Fatalf("%s erasing %q = %d %s, want %d %s", tc.method, y, code, reason, tc.code, tc.reason)
-		}
+// the entra:<tenant>:<object> name c: what is under c may be either's. Erasing Y erases Y's own records on
+// every route (POST /erasure, DELETE /credentials, the SCIM purge's erase), leaves c's alone, and names c
+// and Q as not erased.
+func TestPG_Erasure_AnAmbiguousEntraNameIsLeftAndListed(t *testing.T) {
+	for _, route := range []string{"erasure", "credentials", "scim purge"} {
+		t.Run(route, func(t *testing.T) {
+			_, srv, pg, sec := identityRig(t)
+			oid := uuid.NewString()
+			c, y, q := "entra:"+identTenant+":"+oid, "pairwise-y-"+oid, "pairwise-q-"+oid
+			ownBind(t, pg, y, ownIssuerB, oid)
+			ownBind(t, pg, q, identIssuer, oid)
+			since := time.Now().UTC().Add(-time.Second)
+			history, own := ownSeed(t, srv, pg, sec, c), ownSeed(t, srv, pg, sec, y)
+			sa := ssoSession(t, "sec-1", "sec@corp.example", oidc.RoleSecurityAdmin)
+			var w *httptest.ResponseRecorder
+			switch route {
+			case "erasure":
+				w = doSSO(t, srv, http.MethodPost, "/api/v1/people/"+y+"/erasure", sa, erasureBody("audit_personal_fields", "credentials"))
+			case "credentials":
+				w = doSSO(t, srv, http.MethodDelete, "/api/v1/people/"+y+"/credentials", sa, "")
+			default:
+				if _, err := srv.eraseForPurge(t.Context(), y); err != nil {
+					t.Fatalf("purging %q = %v, want done", y, err)
+				}
+			}
+			if w != nil {
+				var body struct {
+					NotErased struct{ Subjects []string } `json:"not_erased"`
+				}
+				if err := json.Unmarshal(w.Body.Bytes(), &body); w.Code != http.StatusOK || err != nil || !slices.Equal(body.NotErased.Subjects, []string{c, q}) {
+					t.Fatalf("erasing %q = %d %s, want 200 naming %q and %q not erased", y, w.Code, w.Body, c, q)
+				}
+			}
+			cred, key, change := ownKept(t, pg, sec, y, own, since)
+			if cred || (route == "erasure" && (key || change)) {
+				t.Errorf("erasing %q left its own: credential %v, key %v, change %v", y, cred, key, change)
+			}
+			if cred, key, change := ownKept(t, pg, sec, c, history, since); !cred || !key || !change {
+				t.Errorf("erasing %q reached %q: credential kept %v, key kept %v, change kept %v", y, c, cred, key, change)
+			}
+		})
 	}
-	for name, r := range map[string]ownRecords{c: history, y: own} {
-		if cred, key, change := ownKept(t, pg, sec, name, r, since); !cred || !key || !change {
-			t.Errorf("a refused erasure reached %q: credential kept %v, key kept %v, change kept %v", name, cred, key, change)
-		}
+}
+
+// A SCIM leaver Y whose entra:<tenant>:<object> form is bound to another issuer's principal P: the purge
+// never deactivates P, reassigns P's workspace, deletes P's grant or erases P's credential, and its row
+// names P as not erased.
+func TestSCIMPurgeLeavesAnotherIssuersEntraPrincipal(t *testing.T) {
+	e := newSCIMEnv(t)
+	ctx := t.Context()
+	f := e.seedPurgeSubject(purgeSub, purgeEmail, purgeOID)
+	p, other := "entra:"+e.tenant+":"+purgeOID, "https://other-issuer.example/v2.0"
+	if _, err := e.st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: p, Issuer: other, TenantID: e.tenant, ObjectID: purgeOID}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.sec.For(p).Put(ctx, "api-key", []byte("p-secret")); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := e.st.CreateWorkspace(ctx, types.Workspace{ID: uuid.New(), Name: "ws-p", OwnedBy: p, Status: types.WorkspaceScanned,
+		Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.UpsertCapabilityGrant(ctx, types.CapabilityGrant{SubjectType: types.CapabilitySubjectUser, Subject: p,
+		Capability: "egress_domain", Value: "evil.example", Effect: types.CapabilityDeny}); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := e.del(e.a, f.id); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE = %d %s, want 204", w.Code, w.Body.String())
+	}
+	if n := e.credentialCount(purgeSub); n != 0 {
+		t.Errorf("the leaver kept %d credentials", n)
+	}
+	if n := e.credentialCount(p); n != 1 {
+		t.Errorf("%q holds %d credentials, want its own kept", p, n)
+	}
+	if got, err := e.st.GetWorkspace(ctx, ws.ID); err != nil || got.OwnedBy != p {
+		t.Errorf("%q's workspace is owned by %q (%v), want it kept", p, got.OwnedBy, err)
+	}
+	if g, _ := e.userRows(p); g != 1 {
+		t.Errorf("%q holds %d grants, want its own kept", p, g)
+	}
+	if id, err := e.st.GetIdentityByObject(ctx, other, e.tenant, purgeOID); err != nil || id.DeactivatedAt != nil {
+		t.Errorf("%q's identity = %+v (%v), want it active", p, id, err)
+	}
+	rows := e.purgeRows(e.a, e.b)
+	if len(rows) != 1 {
+		t.Fatalf("%d purge rows, want 1", len(rows))
+	}
+	if ne, _ := dataOf(t, rows[0])["not_erased"].(map[string]any); fmt.Sprint(ne["subjects"]) != "["+p+"]" {
+		t.Errorf("purge row not_erased = %v, want [%s]", ne, p)
 	}
 }
 

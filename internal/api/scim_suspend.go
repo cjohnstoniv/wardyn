@@ -65,6 +65,13 @@ type leaverForms struct {
 	// cutoff or session cut keyed by one would reach that principal's credentials too, so none is written;
 	// the person's own are reached through bound and the identity deactivation.
 	shared []string
+	// notErased are the principals the leaver's entra:<tenant>:<object> form names besides them (another
+	// issuer's sign-in with the same ids, or a person of their own), with the form itself: the form is not one
+	// of bound, and a purge lists them as not erased (notErasedDetail).
+	notErased []string
+	// unproved is the leaver's entra form when the directory names no one by it: it is not one of bound, and
+	// a purge refuses rather than leave what may be under it unnamed.
+	unproved string
 	// refusal is set when the emails cannot be resolved (reasonIdentityDirectoryUnreadable, with the error)
 	// or when the emails of a person no row binds name more than one principal (reasonOwnerAmbiguous): the
 	// forms then name nobody safely, targets are bound alone, and a suspension or a purge refuses.
@@ -90,7 +97,25 @@ func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.Prin
 		if tenant == "" && s.cfg.SCIM != nil {
 			tenant = s.cfg.SCIM.Tenant
 		}
-		f.bound = nonEmptyForms(append(f.bound, entraPrincipalPrefix+tenant+":"+ident.ObjectID)...)
+		// A row bound to a principal proves its entra form as an erasure does (deriveOwner): another issuer's
+		// sign-in can share the tenant and object id. A row no sign-in bound yet is known by its form alone.
+		c := entraPrincipalPrefix + tenant + ":" + ident.ObjectID
+		v, others := derivedOwned, []string(nil)
+		if ident.Principal != "" && c != ident.Principal {
+			var err error
+			if v, others, err = deriveOwner(ctx, st, ident.Principal, c); err != nil {
+				f.refusal = reasonIdentityDirectoryUnreadable
+				return f, err
+			}
+		}
+		switch v {
+		case derivedOwned:
+			f.bound = nonEmptyForms(append(f.bound, c)...)
+		case derivedOthers:
+			f.notErased = nonEmptyForms(others...)
+		default:
+			f.unproved = c
+		}
 	}
 	aliases, err := st.IdentityAliasValues(ctx, ident.ID)
 	if err != nil {

@@ -187,9 +187,8 @@ func (s *Server) eraseRunOutputsOf(ctx context.Context, person string) (any, err
 }
 
 // errErasureNameUnproved refuses an erasure that would act on a name derived for the person (an
-// entra:<tenant>:<object> form of their sign-ins) that the directory names as the person and someone else,
-// or as no one: what is under it may be another person's, so nothing is erased and nothing is reported
-// erased.
+// entra:<tenant>:<object> form of their sign-ins) that the directory names as no one: whose records are
+// under it is unknown, so nothing is erased and nothing is reported erased.
 var errErasureNameUnproved = errors.New("a name derived for the person is not proved to be theirs alone")
 
 // errErasureNamesChanged fails a destructive step whose proved names are not the ones the erasure began
@@ -206,20 +205,47 @@ type erasureNames struct {
 	entra, aliases, notErased []string
 }
 
-// notErasedDetail is how an erasure's response and audit row list notErased, when there are any.
-func notErasedDetail(n *erasureNames) (map[string]any, bool) {
-	if n == nil || len(n.notErased) == 0 {
+// notErasedDetail is how an erasure's or a purge's response and audit row list the principals it left
+// alone, when there are any.
+func notErasedDetail(subjects []string) (map[string]any, bool) {
+	if len(subjects) == 0 {
 		return nil, false
 	}
-	return map[string]any{"subjects": n.notErased, "note": "not erased: erase by subject"}, true
+	return map[string]any{"subjects": subjects, "note": "not erased: erase by subject"}, true
 }
 
-// erasureNamesOf proves erasureNames for person. An entra form is built from tenant and object ids, which a
-// sign-in under another issuer can share, so equal ids are no proof: the form is the person's only when the
-// directory resolves it to them alone, as for a people row of the same issuer they signed in under. One the
-// directory resolves to another principal, or that is a principal of its own, is someone else's and is
-// skipped; one it resolves to the person and someone else, or to no one, is errErasureNameUnproved. An alias
-// is claim text that can spell anyone, so one that names anyone else is skipped.
+// derivedVerdict is what the identity directory says of an entra:<tenant>:<object> form derived for a
+// person from their own tenant and object ids.
+type derivedVerdict int
+
+const (
+	derivedOwned   derivedVerdict = iota // the directory names the person alone
+	derivedOthers                        // it names another principal, or the person and another
+	derivedUnknown                       // it names no one
+)
+
+// deriveOwner proves one derived form c for person. Equal tenant and object ids are no proof, since a
+// sign-in under another issuer can share them: c is the person's only when the directory resolves it to
+// them alone, as for a people row of the same issuer they signed in under. Otherwise it is someone else's,
+// or shared, and the subjects to list as not erased are c itself and every principal it names besides
+// person; or it names no one.
+func deriveOwner(ctx context.Context, dir store.PrincipalDirectoryStore, person, c string) (derivedVerdict, []string, error) {
+	owners, err := dir.PrincipalsNamed(ctx, c)
+	switch {
+	case err != nil:
+		return derivedUnknown, nil, err
+	case slices.Equal(owners, []string{person}):
+		return derivedOwned, nil, nil
+	case len(owners) == 0:
+		return derivedUnknown, nil, nil
+	}
+	return derivedOthers, append(slices.DeleteFunc(owners, func(o string) bool { return o == person }), c), nil
+}
+
+// erasureNamesOf proves erasureNames for person. Each entra form goes through deriveOwner: one the person
+// owns is acted on, one that names another principal (alone or beside the person) is skipped and listed in
+// notErased with those principals, and one that names no one is errErasureNameUnproved. An alias is claim
+// text that can spell anyone, so one that names anyone else is skipped.
 func (s *Server) erasureNamesOf(ctx context.Context, person string) (n erasureNames, err error) {
 	pe, err := s.personErasureStore()
 	if err != nil || person == "" {
@@ -245,17 +271,16 @@ func (s *Server) erasureNamesOf(ctx context.Context, person string) (n erasureNa
 		if dir == nil {
 			return n, fmt.Errorf("%w: %s", errErasureNameUnproved, c)
 		}
-		owners, err := dir.PrincipalsNamed(ctx, c)
-		if err != nil {
-			return n, err
-		}
+		v, others, err := deriveOwner(ctx, dir, person, c)
 		switch {
-		case slices.Equal(owners, []string{person}):
+		case err != nil:
+			return n, err
+		case v == derivedOwned:
 			n.entra = append(n.entra, c)
-		case len(owners) == 0 || slices.Contains(owners, person) && !slices.Contains(owners, c):
+		case v == derivedUnknown:
 			return n, fmt.Errorf("%w: %s", errErasureNameUnproved, c)
 		default:
-			n.notErased = append(n.notErased, slices.DeleteFunc(owners, func(o string) bool { return o == person })...)
+			n.notErased = append(n.notErased, others...)
 		}
 	}
 	for _, a := range aliases {
@@ -478,7 +503,7 @@ func (s *Server) handleErasePerson(w http.ResponseWriter, r *http.Request) {
 		detail[string(sc)] = d
 	}
 	data["outcome"], data["detail"] = outcomes, detail
-	if ne, ok := notErasedDetail(&names); ok {
+	if ne, ok := notErasedDetail(names.notErased); ok {
 		data["not_erased"] = ne
 	}
 	if !known {
@@ -495,9 +520,12 @@ func (s *Server) handleErasePerson(w http.ResponseWriter, r *http.Request) {
 				writeLockRefused(w, r, err)
 				return
 			}
+			msg := "erasure is not complete; retry with the same scopes to finish the rest"
+			if errors.Is(err, errErasureNameUnproved) {
+				msg = "erasure did not run: a name derived for this person names no one this deployment knows, so nothing was erased"
+			}
 			writeJSON(w, http.StatusInternalServerError, erasureIncompleteBody{
-				Error:  "erasure is not complete; retry with the same scopes to finish the rest",
-				Reason: reasonErasureIncomplete, Done: scopeNames(inc.Done), Remaining: scopeNames(inc.Remaining),
+				Error: msg, Reason: reasonErasureIncomplete, Done: scopeNames(inc.Done), Remaining: scopeNames(inc.Remaining),
 			})
 			return
 		}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -174,18 +175,27 @@ func (unknownEntraStore) PrincipalsNamed(_ context.Context, name string) ([]stri
 }
 
 // A derived name nobody is known by is not proved the person's, so both erase routes fail closed and
-// erase nothing.
+// erase nothing; the POST answer does not tell the operator a retry finishes it, and the credential.erase
+// failure row carries the cause naming the derived name.
 func TestErasePerson_AnUnknownDerivedNameFailsClosed(t *testing.T) {
-	_, srv, st, sec := erasureRig(t)
+	h, srv, st, sec := erasureRig(t)
 	srv.cfg.Store = unknownEntraStore{st}
 	sa := ssoSession(t, "sec-1", "sec@corp.example", oidc.RoleSecurityAdmin)
-	if w := doSSO(t, srv, http.MethodPost, "/api/v1/people/bob/erasure", sa, erasureBody("credentials")); w.Code != http.StatusInternalServerError || errorReason(w) != reasonErasureIncomplete {
-		t.Fatalf("erasure = %d %s, want 500 %s", w.Code, w.Body, reasonErasureIncomplete)
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/people/bob/erasure", sa, erasureBody("credentials")); w.Code != http.StatusInternalServerError ||
+		errorReason(w) != reasonErasureIncomplete || strings.Contains(w.Body.String(), "retry") {
+		t.Fatalf("erasure = %d %s, want 500 %s with no retry advice", w.Code, w.Body, reasonErasureIncomplete)
 	}
 	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/people/bob/credentials", sa, ""); w.Code != http.StatusInternalServerError {
 		t.Fatalf("credential erase = %d %s, want 500", w.Code, w.Body)
 	}
 	if got := namesOf(t, sec, "bob"); len(got) != 2 {
 		t.Fatalf("a refused erasure left bob %v, want both credentials", got)
+	}
+	var cause bool
+	for _, ev := range h.audit.events {
+		cause = cause || ev.Action == "credential.erase" && ev.Outcome == "failure" && strings.Contains(string(ev.Data), "entra:t:o")
+	}
+	if !cause {
+		t.Errorf("no credential.erase failure row names the unproved entra:t:o")
 	}
 }

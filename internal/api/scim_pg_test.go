@@ -474,6 +474,12 @@ func TestSCIMSuspendReachesEveryForm(t *testing.T) {
 	const email = "leaver@corp.example"
 	entraForm := entraPrincipalPrefix + e.tenant + ":" + oidLeaver
 	e.seedEntra("sub-leaver", email, oidLeaver)
+	// The entra form is the leaver's because the directory proves it: an admin created them by object id on
+	// the issuer they signed in under (TestSCIMPurgeLeavesAnotherIssuersEntraPrincipal is the other shape).
+	if _, _, err := e.st.CreatePerson(context.Background(), types.Person{Principal: entraForm, Issuer: e.issuer, TenantID: e.tenant,
+		ObjectID: oidLeaver, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
 	id := e.postUserID(e.a, oidLeaver, email, email)
 
 	// No token is minted under the email itself: a principal recorded under the address would be another

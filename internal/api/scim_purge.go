@@ -95,6 +95,11 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 	if err != nil {
 		return err
 	}
+	if forms.unproved != "" {
+		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", id.String(), "denied",
+			mustJSON(map[string]any{"kind": store.JobKindPurge, "reason": reasonOwnerAmbiguous, "unproved": forms.unproved})))
+		return fmt.Errorf("%w: the person's entra form %s names no one", errDeprovisionIncomplete, forms.unproved)
+	}
 	isEmail := func(t string) bool { return strings.Contains(t, "@") && !slices.Contains(forms.bound, t) }
 	principals := slices.DeleteFunc(slices.Clone(forms.targets), isEmail)
 	emails := slices.DeleteFunc(slices.Clone(forms.targets), func(t string) bool { return !isEmail(t) })
@@ -128,7 +133,7 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 		slog.WarnContext(ctx, "api: a purge step failed and stays pending", slog.String("identity", id.String()), slog.Any("err", err))
 		return fmt.Errorf("%w: %w", errDeprovisionIncomplete, err)
 	}
-	if err := s.auditPurge(ctx, st, id, forms.targets); err != nil {
+	if err := s.auditPurge(ctx, st, id, forms); err != nil {
 		slog.WarnContext(ctx, "api: a purge's audit row was not written and stays pending", slog.String("identity", id.String()), slog.Any("err", err))
 		return fmt.Errorf("%w: %w", errDeprovisionIncomplete, err)
 	}
@@ -221,7 +226,7 @@ func (s *Server) personDrives(ctx context.Context, subjects []string) ([]string,
 
 // auditPurge writes the person.deprovision row of a purge, once, after every other step is done. A
 // failed write leaves the step pending, so the retry writes it.
-func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, subjects []string) error {
+func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, forms leaverForms) error {
 	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindPurge)
 	if err != nil {
 		return err
@@ -235,7 +240,7 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, sub
 			counts[k] += v
 		}
 	}
-	drives, err := s.personDrives(ctx, subjects)
+	drives, err := s.personDrives(ctx, forms.targets)
 	if err != nil {
 		return err
 	}
@@ -244,6 +249,9 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, sub
 		"kind": store.JobKindPurge, "credentials_erased": counts["credentials_erased"], "masks_fenced": counts["masks_fenced"], "components_erased": counts["components_erased"],
 		"workspaces_reassigned": counts["workspaces_reassigned"], "grants_deleted": counts["grants_deleted"],
 		"assignments_deleted": counts["assignments_deleted"], "email_rows_kept": counts["email_rows_kept"], "drives": drives,
+	}
+	if ne, ok := notErasedDetail(forms.notErased); ok {
+		data["not_erased"] = ne
 	}
 	ev := s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", id.String(), "success", mustJSON(data))
 	if err := s.recordAuditStrict(ctx, ev); err != nil {

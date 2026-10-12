@@ -501,7 +501,19 @@ func (s *scimCovStore) PrincipalsNamed(_ context.Context, name string) ([]string
 	if err := s.enter("PrincipalsNamed"); err != nil {
 		return nil, err
 	}
-	return slices.Clone(s.emailSubs[strings.ToLower(name)]), nil
+	if subs, ok := s.emailSubs[strings.ToLower(name)]; ok {
+		return slices.Clone(subs), nil
+	}
+	// An entra:<tenant>:<object> name stands for the principals bound to that object, as the store's does.
+	var out []string
+	if tid, oid, ok := strings.Cut(strings.TrimPrefix(name, entraPrincipalPrefix), ":"); ok && strings.HasPrefix(name, entraPrincipalPrefix) {
+		for _, id := range s.idents {
+			if id.Principal != "" && id.ObjectID == oid && (id.TenantID == tid || id.TenantID == "") && !slices.Contains(out, id.Principal) {
+				out = append(out, id.Principal)
+			}
+		}
+	}
+	return out, nil
 }
 
 func (s *scimCovStore) ListNonTerminalRunsBy(_ context.Context, createdBy string) ([]types.AgentRun, error) {

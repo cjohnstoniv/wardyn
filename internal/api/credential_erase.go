@@ -103,8 +103,11 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 	if done, ok := orep.Details[erasure.Credentials].(map[string]any); ok {
 		data = done // with runs_fenced
 	}
-	if ne, ok := notErasedDetail(&names); ok {
+	if ne, ok := notErasedDetail(names.notErased); ok {
 		data["not_erased"] = ne
+	}
+	if errors.Is(err, errErasureNameUnproved) || errors.Is(err, errErasureNamesChanged) {
+		data["error"] = err.Error()
 	}
 	resp := maps.Clone(data)
 	if err != nil {
