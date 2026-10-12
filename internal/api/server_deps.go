@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"io"
 
 	"github.com/google/uuid"
@@ -64,18 +65,28 @@ type RefRulesetVerifier interface {
 
 // BuiltImage is what a successful image build produced: the local ref to run,
 // the image ID the daemon reported for it ("" when it reported none), and the
-// digest a BYOI wrap built FROM ("" when the base had none).
+// digest a BYOI wrap built FROM ("" when the base had none). PinFile is the pin
+// file the generated lane's image carries, nil for every other lane.
 type BuiltImage struct {
 	Ref, ID, BaseDigest string
+	PinFile             []byte
 }
 
+// ErrRemoteDigestNotFound is ImageIdentifier.RemoteDigest's answer for a registry
+// that has no such manifest, as against one that could not be asked.
+var ErrRemoteDigestNotFound = errors.New("remote digest not found")
+
 // ImageIdentifier is an OPTIONAL capability an ImageBuilder may additionally
-// implement: the ID of the image a ref names on the build host now. It lets
-// the build view tell a record's image from a tag that has since moved. An
-// ImageBuilder without it is read as current (checked by type assertion, like
-// ImageBuildSweeper).
+// implement: the ID of the image a ref names on the build host now, and the
+// digest the registry gives a ref. The first lets the build view tell a
+// record's image from a tag that has since moved; the second lets a build pin
+// its inputs. An ImageBuilder without it is read as current, and builds
+// unpinned (checked by type assertion, like ImageBuildSweeper).
 type ImageIdentifier interface {
 	LocalImage(ctx context.Context, ref string) (id string, found bool, err error)
+	// RemoteDigest is the digest the registry answers for ref, asked through the
+	// build host. A manifest the registry does not have wraps ErrRemoteDigestNotFound.
+	RemoteDigest(ctx context.Context, ref string) (string, error)
 }
 
 // BranchLister lists one GitHub repository's branches ("owner/name") through

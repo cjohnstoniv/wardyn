@@ -496,6 +496,7 @@ export type RunPolicyCause =
   | "overlay"
   | "profile"
   | "org_disk"
+  | "pool_disk"
   | "restart"
   | "limits"
   | "launch";

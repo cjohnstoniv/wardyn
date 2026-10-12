@@ -214,10 +214,15 @@ func (s *Server) handleAzureFoundrySignIn(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
+	prompt, err := adoRequestedPrompt(r.URL.Query())
+	if err != nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonADOSignInPromptInvalid, err.Error())
+		return
+	}
 	verifier := oauth2.GenerateVerifier()
 	state, nonce := adoRandomToken(), adoRandomToken()
 	authURL, err := cfg.authorizeURL(state, nonce, oauth2.S256ChallengeFromVerifier(verifier),
-		[]string{facts.audience, entraOfflineAccessScope, entraOpenIDScope}, "")
+		[]string{facts.audience, entraOfflineAccessScope, entraOpenIDScope}, prompt)
 	if err != nil {
 		writeServerError(w, r, "composing the Azure authorization request failed", err)
 		return
@@ -265,10 +270,17 @@ func (s *Server) consumeAzureFoundryCookies(w http.ResponseWriter, r *http.Reque
 	return nonceCookie.Value, pkceCookie.Value, true
 }
 
+// azureProviderParam names the row the sign-in was started for, so the console
+// can say which provider connected or failed. The uid is the cookie's claim,
+// escaped, and the console resolves it against the providers it can read.
+func azureProviderParam(uid string) string {
+	return "&azure_provider=" + url.QueryEscape(uid)
+}
+
 // azureFoundryRedirect sends the browser to the console's error page with a
-// fixed reason code.
-func (s *Server) azureFoundryRedirect(w http.ResponseWriter, r *http.Request, reason string) {
-	http.Redirect(w, r, s.cfg.BasePath+azureFoundrySignInErrorPath+reason, http.StatusFound)
+// fixed reason code and the row the sign-in was for.
+func (s *Server) azureFoundryRedirect(w http.ResponseWriter, r *http.Request, reason, uid string) {
+	http.Redirect(w, r, s.cfg.BasePath+azureFoundrySignInErrorPath+reason+azureProviderParam(uid), http.StatusFound)
 }
 
 // handleAzureFoundryCallback finishes a capture started by
@@ -293,7 +305,7 @@ func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Reque
 	}
 	fail := func(reason string) {
 		s.auditAzureCapture(ctx, subject, ec, "failure", map[string]any{"reason": reason})
-		s.azureFoundryRedirect(w, r, reason)
+		s.azureFoundryRedirect(w, r, reason, stamp.RowUID)
 	}
 	// Before the code is spent: the row must still be what the sign-in started
 	// for. The authoritative check is the one under the site-config lock at the write.
@@ -410,7 +422,7 @@ func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Reque
 		"expires_at": blob.ExpiresAt.Format(time.RFC3339),
 	})
 	resolved = s.resolvePendingAzureReauth(ctx, subject, ec.rowUID)
-	http.Redirect(w, r, s.cfg.BasePath+ec.donePath, http.StatusFound)
+	http.Redirect(w, r, s.cfg.BasePath+ec.donePath+azureProviderParam(stamp.RowUID), http.StatusFound)
 }
 
 // storeAzureFoundryCapture stores blob only while the row is still the one the
