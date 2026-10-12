@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/agentpolicy"
 	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -29,6 +30,7 @@ const (
 	toolLaneAttended    = "attended"
 	toolLaneUnsupported = "unsupported"
 	toolEnforcerGate    = "wardyn_gate"
+	toolEnforcerHarness = "harness_settings"
 	toolEnforcerNone    = "none"
 )
 
@@ -141,6 +143,9 @@ type accessInputs struct {
 	ssoProxyInject bool
 	// imageKey is the convention image the run starts from (accessImageKey).
 	imageKey string
+	// level is the autonomy level the fold resolved, which picks an
+	// interactive run's managed settings (attendedDefaultReasons).
+	level types.AutonomyLevel
 }
 
 // accessFor adds the reads accessFacts needs beyond the fold and builds the
@@ -324,7 +329,7 @@ func (b *accessBuilder) harnessRow(fact componentFact) {
 // person may choose (each greyed with its reason where the policy is stricter
 // or the harness cannot honour it), and the policy's rules, locked. What it
 // offers is what the server accepts: toolRulesWithinPolicyRefusal,
-// harnessToolRulesRefusal and attendedToolRulesRefusal answer the same cases.
+// harnessToolRulesRefusal and attendedDefaultRefusal answer the same cases.
 func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
 	req, rules := *b.in.req, b.in.spec.ToolRules
 	fact := client.ToolPolicyFact{Harness: harness, Lane: toolLaneUngated, Enforcer: toolEnforcerNone, RuleTools: "any",
@@ -345,9 +350,8 @@ func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
 		forDefault = map[types.ToolEffect]string{types.ToolAllow: "custom_harness_rules", types.ToolHold: "custom_harness_rules", types.ToolDeny: "custom_harness_rules"}
 		forRule = forDefault
 	case requestIsInteractive(req):
-		fact.Lane = toolLaneAttended
-		forDefault = map[types.ToolEffect]string{types.ToolAllow: "attended_no_skip", types.ToolDeny: "attended_rules_unavailable"}
-		forRule = map[types.ToolEffect]string{types.ToolAllow: "attended_no_skip", types.ToolHold: "attended_rules_unavailable", types.ToolDeny: "attended_rules_unavailable"}
+		fact.Lane, fact.Enforcer = toolLaneAttended, toolEnforcerHarness
+		forDefault = attendedDefaultReasons(b.in.level)
 	case holdLane(false, req.ToolApprovals, req.TaskMode):
 		fact.Lane, fact.Enforcer = toolLaneGated, toolEnforcerGate
 	}
@@ -358,8 +362,36 @@ func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
 		effectRank(req.Tools[i].DefaultEffect) > effectRank(policyDefault) {
 		fact.Default.Effective, fact.Default.Source = req.Tools[i].DefaultEffect, client.ProvenanceSource{Kind: provKindPerson}
 	}
+	if fact.Lane == toolLaneAttended {
+		// Claude Code's settings name tools (agentpolicy.WithToolRules), never "*":
+		// a tool no rule names is answered by the mode the level's document sets,
+		// whatever the policy's "*", which is therefore no locked row here.
+		fact.Default = attendedDefaultFact(b.in.level, forDefault)
+		fact.PolicyRules = slices.DeleteFunc(fact.PolicyRules, func(r client.LockedToolRule) bool { return r.Tool == "*" })
+	}
 	fact.RuleEffects = toolEffectOptions(policyDefault, forRule, "policy_stricter_tool")
 	return fact
+}
+
+// attendedSettingsAcceptEdits is the Source.ID of an interactive Claude Code
+// run's default where its level's document starts the session accepting file
+// edits (L2, locked or not): edits run without asking, every other tool asks.
+const attendedSettingsAcceptEdits = "accept_edits"
+
+// attendedDefaultFact is what an interactive Claude Code run does with a tool no
+// rule names, and what answers that: the level's managed settings asking (L0,
+// L1); the same settings, which accept file edits unasked (L2); or, at a level
+// that brings no document, the lane's own default (posture), which a
+// repository's settings or hooks may answer first.
+func attendedDefaultFact(level types.AutonomyLevel, cannot map[types.ToolEffect]string) client.ToolDefaultFact {
+	src := client.ProvenanceSource{Kind: provKindHarness}
+	switch _, doc, ok := agentpolicy.ForAgent(claudeCodeHarness, level, false, false); {
+	case !ok:
+		src = client.ProvenanceSource{Kind: provKindPosture}
+	case agentpolicy.AcceptsEdits(doc):
+		src.ID = attendedSettingsAcceptEdits
+	}
+	return client.ToolDefaultFact{Effective: types.ToolHold, Source: src, Options: toolEffectOptions(types.ToolHold, cannot, "policy_stricter_default")}
 }
 
 // toolEffectOptions is each effect a person may choose against the policy's

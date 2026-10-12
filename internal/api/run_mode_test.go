@@ -87,18 +87,19 @@ func TestRunModeRefusals(t *testing.T) {
 		{"a harness startup takes a starting prompt", interactiveOK + `,"startup":{"kind":"harness","tool":"claude-code","prompt":"fix the build"}`, "", "", 200},
 		{"a starting prompt needs a harness startup", interactiveOK + `,"startup":{"kind":"none","prompt":"fix the build"}`, reasonRunModeInvalid, startupPromptShapeMsg(), 400},
 		{"a command startup takes no starting prompt", interactiveOK + `,"startup":{"kind":"command","command":"make","prompt":"x"}`, reasonRunModeInvalid, startupPromptShapeMsg(), 400},
-		{"two harnesses wait for the harness set", `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools: more than one harness"), 422},
-		{"an interactive run's tool rule waits for the harness's settings", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"deny"}]}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: tool rules in an interactive run"), 422},
+		{"two harnesses need an image declared for them", `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],` + noRepos, reasonHarnessSetNoImage, harnessSetNoImageMsg("Claude Code", "Codex CLI"), 422},
+		{"an interactive run's tool rule goes to Claude Code's settings", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"deny"}]}],` + noRepos, "", "", 200},
+		{"an interactive run's Codex CLI rule waits", `"experience":"interactive","tools":[{"id":"codex-cli","kind":"harness","tool_rules":[{"tool":"mcp__github__create_issue","effect":"deny"}]}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: tool rules in an interactive run"), 422},
 		{"a background run's rule is honoured on the gated lane", `"experience":"background",` + agentTask + `,"tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"hold"},{"tool":"Read","effect":"allow"}],"default_effect":"deny"}],` + noRepos, "", "", 200},
 		{"a rule names one tool exactly", `"experience":"background",` + agentTask + `,"tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash(git push:*)","effect":"deny"}]}],` + noRepos, reasonRunModeInvalid, "", 400},
 		{"Codex CLI cannot pause a call", `"experience":"background","workload":{"kind":"agent_task","agent":"codex-cli","task":"t"},"tools":[{"id":"codex-cli","kind":"harness","default_effect":"hold"}],` + noRepos, reasonRequestFieldUnavailable, accessSentences["harness_no_hold"], 422},
 		{"Codex CLI's own tools have no block", `"experience":"background","workload":{"kind":"agent_task","agent":"codex-cli","task":"t"},"tools":[{"id":"codex-cli","kind":"harness","tool_rules":[{"tool":"shell","effect":"deny"}]}],` + noRepos, reasonRequestFieldUnavailable, codexBuiltinRuleMsg("shell"), 422},
 		{"nor a Codex CLI default block", `"experience":"background","workload":{"kind":"agent_task","agent":"codex-cli","task":"t"},"tools":[{"id":"codex-cli","kind":"harness","default_effect":"deny"}],` + noRepos, reasonRequestFieldUnavailable, accessSentences["harness_no_block_builtin"], 422},
 		{"your own tools take no rules", `"experience":"interactive","tools":[{"id":"none","kind":"harness","tool_rules":[{"tool":"Bash","effect":"deny"}]}],` + noRepos, reasonRequestFieldUnavailable, "Wardyn can't set tool rules for Your own tools.", 422},
-		{"an interactive run's allow waits too", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"allow"}]}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: tool rules in an interactive run"), 422},
-		{"an interactive run's default allow waits too", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"allow"}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: tool rules in an interactive run"), 422},
+		{"an interactive run's allow stands only where the policy allows the tool", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"allow"}]}],` + noRepos, reasonOverrideRefused, policyStricterMsg("Bash", types.ToolHold), 422},
+		{"an interactive run's default allow has no setting", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"allow"}],` + noRepos, reasonRequestFieldUnavailable, accessSentences["attended_rules_unavailable"], 422},
 		{"an interactive run's own default, asking, is honoured", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"hold"}],` + noRepos, "", "", 200},
-		{"an interactive run's default block waits too", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"deny"}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: tool rules in an interactive run"), 422},
+		{"an interactive run's default block has no setting", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"deny"}],` + noRepos, reasonRequestFieldUnavailable, accessSentences["attended_rules_unavailable"], 422},
 		{"a component tool is not dropped", `"experience":"interactive","tools":[{"id":"lint","kind":"component","component":{"inline":{"hosts":["a.example.com"]}}}],` + noRepos, reasonRequestFieldUnavailable, "", 422},
 		{"a tool id is one token", `"experience":"interactive","tools":[{"id":"a b","kind":"harness"}],` + noRepos, reasonRunModeInvalid, "", 400},
 		{"a tool is included once", `"experience":"interactive","tools":[` + claudeTool + `,` + claudeTool + `],` + noRepos, reasonRunModeInvalid, "", 400},
@@ -138,6 +139,37 @@ func TestRunModeRefusals(t *testing.T) {
 					}
 				}
 			})
+		}
+	}
+}
+
+// TestRunMode_TwoHarnessesStartFromTheSetImage (T0, inverted at DS1-S4): two
+// harnesses are honoured at every door, and create launches them from the
+// image declared for the set, with both recorded and the started one marked.
+func TestRunMode_TwoHarnessesStartFromTheSetImage(t *testing.T) {
+	images := map[string]string{"claude-code": "wardyn/agent-claude-code:local", "claude-code+codex-cli": setImage}
+	body := `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],"startup":{"kind":"harness","tool":"codex-cli"},` + noRepos
+	for _, door := range harnessDoors {
+		srv, st, _ := harnessSetFixture(t, &capStore{}, images, nil)
+		w := harnessSetCall{"sub-plain", body}.ask(t, srv, door)
+		if door != harnessDoors[0] {
+			if w.Code != http.StatusOK {
+				t.Fatalf("%s: %d %s, want 200", door, w.Code, w.Body.String())
+			}
+			continue
+		}
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create: %d %s, want 201", w.Code, w.Body.String())
+		}
+		srv.WaitBackground()
+		id := st.onlyRun(t)
+		if st.images[id] != setImage {
+			t.Errorf("run image = %q, want the declared set image %q", st.images[id], setImage)
+		}
+		rows := st.rows[id]
+		if len(rows) != 2 || !slices.ContainsFunc(rows, func(h types.RunHarness) bool { return h.Harness == "codex-cli" && h.Starts }) ||
+			!slices.ContainsFunc(rows, func(h types.RunHarness) bool { return h.Harness == "claude-code" && !h.Starts }) {
+			t.Errorf("run_harnesses = %+v, want claude-code and codex-cli, codex-cli started", rows)
 		}
 	}
 }
@@ -678,6 +710,8 @@ func TestRunModeRefusalSentencesMatchGolden(t *testing.T) {
 		"HARNESS_SET_CUSTOM_IMAGE":   func([]string) string { return harnessSetCustomImageMsg() },
 		"HARNESS_PROVIDERS_CONFLICT": func(a []string) string { return harnessProvidersConflictMsg(a[0], a[1]) },
 		"CODEX_BUILTIN_RULE":         func(a []string) string { return codexBuiltinRuleMsg(a[0]) },
+		"POLICY_OVERLAY_INVALID":     func(a []string) string { return policyOverlayInvalidMsg(a[0], a[1]) },
+		"POLICY_OVERLAY_CONFLICT":    func([]string) string { return policyOverlayConflictMsg() },
 	}
 	if len(golden) != len(got) {
 		t.Fatalf("golden has %d sentences, the server has %d", len(golden), len(got))
@@ -696,7 +730,8 @@ func TestRunModeRefusalSentencesMatchGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, reason := range []string{reasonRunModeRequired, reasonRunModeInvalid, reasonRunModeConflict, reasonStartFolderInvalid, reasonRunBackgroundOnly, reasonRunShapeConflict,
-		reasonHarnessNotInstalled, reasonHarnessSetNoImage, reasonHarnessSetCustomImage, reasonHarnessProvidersConflict} {
+		reasonHarnessNotInstalled, reasonHarnessSetNoImage, reasonHarnessSetCustomImage, reasonHarnessProvidersConflict,
+		reasonPolicyOverlayInvalid, reasonPolicyOverlayConflict} {
 		if !strings.Contains(string(ts), `"`+reason+`"`) {
 			t.Errorf("run-mode-refusals.ts does not carry the reason %q", reason)
 		}

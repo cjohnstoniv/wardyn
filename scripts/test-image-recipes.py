@@ -5,6 +5,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -234,6 +235,32 @@ class ImageRecipes(unittest.TestCase):
             with self.subTest(recipe=name):
                 result = self.run_recipe(name, **{key: self.env[key].upper() for key in variables})
                 self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class TestHarnessesRecipe(unittest.TestCase):
+    """The multi-CLI harnesses image: same Codex pin as codex-cli, local build only."""
+
+    @staticmethod
+    def codex_pin(name):
+        pins = re.findall(r"^ARG CODEX_VERSION=(\S+)$", (ROOT / f"deploy/images/{name}/Dockerfile").read_text(), re.M)
+        return pins
+
+    def test_codex_pin_matches_codex_cli(self):
+        harnesses, codex_cli = self.codex_pin("harnesses"), self.codex_pin("codex-cli")
+        self.assertEqual(len(codex_cli), 1)
+        self.assertEqual(harnesses, codex_cli)
+
+    def test_in_no_release_or_nightly_matrix(self):
+        for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            with self.subTest(workflow=workflow.name):
+                self.assertNotRegex(workflow.read_text(), r"images/harnesses|agent-harnesses|- name: harnesses\b")
+
+    def test_recipe_is_wired(self):
+        dockerfile = (ROOT / "deploy/images/harnesses/Dockerfile").read_text()
+        self.assertIn("LicenseRef-Anthropic-Terms", dockerfile)
+        self.assertIn("deploy/images/common/agent-run-set /usr/local/bin/agent-run", dockerfile)
+        for harness in ["claude-code", "codex-cli"]:
+            self.assertIn(f"deploy/images/{harness}/agent-run /usr/local/lib/wardyn/harness/{harness}/agent-run", dockerfile)
 
 
 if __name__ == "__main__":

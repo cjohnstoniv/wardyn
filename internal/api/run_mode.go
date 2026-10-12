@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/cjohnstoniv/wardyn/internal/agentpolicy"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -39,8 +40,8 @@ import (
 //
 // What each lane lifts, by the path runModeUnavailable names:
 //
-//	tools[].tool_rules in an interactive run -> TA-3 (the harness's managed settings)
-//	more than one harness, component tools -> DS-1 (the harness set), A-L14 (component tools)
+//	tools[].tool_rules in an interactive run -> no lane for a harness but Claude Code, whose managed settings carry them
+//	component tools                      -> A-L14 (component tools)
 //	start_folder of an attachment        -> A-L4, A-L7, D-112-113 (attachments and the one working directory)
 const (
 	maxRunModeTools      = 16
@@ -342,11 +343,12 @@ func runModeLegacyField(req createRunRequest) (field, instead string) {
 // entry that brings the repository.
 func runModeRunWideRules(req createRunRequest) (field, instead string) {
 	const perTool = "Tool rules belong to each tool: use tools[].tool_rules and default_effect."
+	pol, at := requestPolicyRules(req)
 	switch {
-	case req.InlinePolicy != nil && len(req.InlinePolicy.ToolRules) > 0:
-		return "inline_policy.tool_rules", perTool
-	case req.InlinePolicy != nil && req.InlinePolicy.PushRules != nil:
-		return "inline_policy.push_rules", "Push rules belong to the Git entry that brings the repository: use overrides.push_rules, one set per provider and organisation."
+	case pol != nil && len(pol.ToolRules) > 0:
+		return at + ".tool_rules", perTool
+	case pol != nil && pol.PushRules != nil:
+		return at + ".push_rules", "Push rules belong to the Git entry that brings the repository: use overrides.push_rules, one set per provider and organisation."
 	case req.Overrides != nil && req.Overrides.Agent != nil && len(req.Overrides.Agent.ToolRules) > 0:
 		return "overrides.agent.tool_rules", perTool
 	}
@@ -356,15 +358,16 @@ func runModeRunWideRules(req createRunRequest) (field, instead string) {
 // experienceConflictRefusal holds the carriers to the mode they sit in.
 func experienceConflictRefusal(req createRunRequest) *runRefusal {
 	w := req.Workload
+	pol, at := requestPolicyRules(req)
 	switch req.Experience {
 	case client.ExperienceBackground:
 		switch {
 		case req.Startup != nil:
 			return runModeConflict("startup", "A background task starts its workload; startup is for an interactive environment.")
-		case req.InlinePolicy != nil && req.InlinePolicy.AutoStopAfterSec != 0:
+		case pol != nil && pol.AutoStopAfterSec != 0:
 			return runError(http.StatusUnprocessableEntity, reasonRunModeConflict, idleStopBackgroundMsg())
-		case req.InlinePolicy != nil && len(req.InlinePolicy.UIApps) > 0:
-			return runModeConflict("inline_policy.ui_apps", "A background task has no web application gateway.")
+		case pol != nil && len(pol.UIApps) > 0:
+			return runModeConflict(at+".ui_apps", "A background task has no web application gateway.")
 		case w != nil && w.Kind == client.WorkloadAgentTask && slices.ContainsFunc(req.Tools, func(t client.IncludedTool) bool { return t.ID != w.Agent }):
 			return runModeConflict("tools", "A background agent task includes only the harness it runs, which is workload.agent.")
 		}
@@ -449,11 +452,16 @@ func runModeRequiredRefusal(req createRunRequest) *runRefusal {
 // all three doors. It refuses, then projects the carriers it can honour onto the
 // legacy fields; a request with none of the mode fields is returned untouched.
 func applyRunMode(req *createRunRequest) *runRefusal {
+	// Every request, older clients' too: the overlay is read whole before any
+	// gate (the run-mode checks below among them) reads its keys.
+	if refusal := policyOverlayRefusal(*req); refusal != nil {
+		return refusal
+	}
 	if !req.UsesRunMode() {
 		return nil
 	}
 	for _, check := range []func(createRunRequest) *runRefusal{
-		runModeShapeRefusal, runModeConflictRefusal, runModeRequiredRefusal, startFolderRefusal, runModeUnavailableRefusal, harnessSetRefusal, attendedToolRulesRefusal,
+		runModeShapeRefusal, runModeConflictRefusal, runModeRequiredRefusal, startFolderRefusal, runModeUnavailableRefusal, attendedToolRulesRefusal,
 	} {
 		if refusal := check(*req); refusal != nil {
 			return refusal
@@ -463,35 +471,71 @@ func applyRunMode(req *createRunRequest) *runRefusal {
 	return nil
 }
 
-// harnessSetRefusal: a run launches with the first harness's image and provider
-// alone, so a second included harness waits for the lane that builds the set.
-func harnessSetRefusal(req createRunRequest) *runRefusal {
-	n := 0
-	for _, t := range req.Tools {
-		if t.Kind == client.IncludedToolHarness {
-			n++
-		}
-	}
-	if n > 1 {
-		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools: more than one harness"))
-	}
-	return nil
-}
-
 // attendedToolRulesRefusal: an interactive run's tool rules are enforced by the
-// harness's own settings, which this server does not write yet, so any choice
-// but the lane's own (Claude Code asks you, a hold default) waits for that lane.
+// harness's own settings. Claude Code's are written into its managed settings
+// (agentpolicy.WithToolRules), and its default is answered in the fold
+// (attendedDefaultRefusal), where the level that picks those settings is
+// known. No other harness has such settings, so any choice but the lane's own
+// (the harness asks you, a hold default) is refused for it.
 func attendedToolRulesRefusal(req createRunRequest) *runRefusal {
 	if req.Experience != client.ExperienceInteractive {
 		return nil
 	}
 	for i, t := range req.Tools {
-		if len(t.ToolRules) > 0 || (t.DefaultEffect != "" && t.DefaultEffect != types.ToolHold) {
+		if t.ID != claudeCodeHarness && (len(t.ToolRules) > 0 || (t.DefaultEffect != "" && t.DefaultEffect != types.ToolHold)) {
 			return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
 				runModeUnavailableMsg(fmt.Sprintf("tools[%d]: tool rules in an interactive run", i)))
 		}
 	}
 	return nil
+}
+
+// attendedDefaultRefusal refuses a default Claude Code cannot take in an
+// interactive run, with the sentence step 5 greys it with: its managed settings
+// name tools, and a tool no rule names is answered by its mode, which asks.
+func attendedDefaultRefusal(req createRunRequest, level types.AutonomyLevel) *runRefusal {
+	if !requestIsInteractive(req) {
+		return nil
+	}
+	for _, t := range req.Tools {
+		if code := attendedDefaultReasons(level)[t.DefaultEffect]; t.ID == claudeCodeHarness && code != "" {
+			return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, accessSentences[code])
+		}
+	}
+	return nil
+}
+
+// attendedToolNamesRefusal refuses an interactive Claude Code run whose policy or
+// own rules name a tool its managed settings could not carry exactly (a pattern,
+// or a whole MCP server), here rather than at dispatch after the 201. Dispatch
+// still refuses it (agentPolicyFor), for a run no door folded.
+func attendedToolNamesRefusal(req createRunRequest, spec types.RunPolicySpec) *runRefusal {
+	if !requestIsInteractive(req) {
+		return nil
+	}
+	rules, claude := spec.ToolRules, req.Agent == claudeCodeHarness
+	for _, t := range req.Tools {
+		if t.ID == claudeCodeHarness && t.Kind == client.IncludedToolHarness {
+			rules, claude = slices.Concat(rules, t.ToolRules), true
+		}
+	}
+	if err := agentpolicy.CheckToolRules(rules); claude && err != nil {
+		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
+			"This run's tool rules can't be written into Claude Code's managed settings: "+err.Error())
+	}
+	return nil
+}
+
+// attendedDefaultReasons is why Claude Code's default in an interactive run at
+// level can be neither "Run it" nor "Block it": where the managed settings the
+// level brings lock bypass off, it can never skip asking; elsewhere Wardyn has
+// no setting for it. The locked L2 document leaves bypass on as L2's does.
+func attendedDefaultReasons(level types.AutonomyLevel) map[types.ToolEffect]string {
+	skip := "attended_rules_unavailable"
+	if _, doc, _ := agentpolicy.ForAgent(claudeCodeHarness, level, false, false); agentpolicy.DisablesBypass(doc) {
+		skip = "attended_no_skip"
+	}
+	return map[types.ToolEffect]string{types.ToolAllow: skip, types.ToolDeny: "attended_rules_unavailable"}
 }
 
 // projectRunMode writes the honourable carriers onto the legacy fields the one

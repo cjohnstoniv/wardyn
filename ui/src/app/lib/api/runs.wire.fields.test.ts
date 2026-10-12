@@ -173,6 +173,9 @@ const UI_NEVER_SENDS = new Set([
   // CLI and API send these today.
   "ends_after_sec",
   "no_end",
+  // How long a run may wait for a slot in a full pool (pool-queue.md section 13): the console has no wait
+  // picker in 0.9; the CLI and API send it.
+  "max_wait_sec",
   "devcontainer_repo",
   "devcontainer_ref",
   "model_provider",
@@ -180,6 +183,9 @@ const UI_NEVER_SENDS = new Set([
   "preset_version",
   // The new flow forwards it through the field registry; the old wizard never sends it.
   "shape",
+  // A document's partial policy, laid onto the default: no screen sends it yet,
+  // and the old wizard sends a whole inline_policy instead.
+  "policy_overlay",
 ]);
 
 // ui_apps used to sit on this set as a TS AgentRun key with no Go AgentRun
