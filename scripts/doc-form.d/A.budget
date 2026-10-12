@@ -79,7 +79,8 @@
 # docs/AUDIT-ACTIONS.md 43570 adds 85 (0.9 H14-api): person-owned Self-Hosted pools (owner on the pool rows, the runner_pools erasure scope).
 # docs/AUDIT-ACTIONS.md 44011 measured after H14-api merge into batch: person-owned Self-Hosted pools.
 # docs/AUDIT-ACTIONS.md 44100 adds 89 over 44011 (0.9 B-org-barrier): `confinement_default` on `run.create`, `confinement_class` and `confinement_default` on `run.queue.start`, and the default barrier in `runner_pool.default.set`.
-docs/AUDIT-ACTIONS.md=44100 share=8
+# docs/AUDIT-ACTIONS.md 44517 adds 417 over 44100 (0.9 F-1508-M3): the service identity section, sponsor sealing and the sponsor-entry fields.
+docs/AUDIT-ACTIONS.md=44517 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
