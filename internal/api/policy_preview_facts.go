@@ -44,6 +44,9 @@ type policyPreviewResponse struct {
 	// RunnerPool and RunnerPools are the preflight's, with the same meaning.
 	RunnerPool  *client.ResolvedRunnerPool `json:"runner_pool,omitempty"`
 	RunnerPools []client.RunnerPoolChoice  `json:"runner_pools"`
+	// Access is what the draft brings in (accessFacts), the same projection
+	// Review answers.
+	Access *accessBlock `json:"access,omitempty"`
 }
 
 type policyPreviewPending string

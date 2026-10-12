@@ -111,6 +111,8 @@ type runFoldStep struct {
 //     so it sits after placement and refuses before capacity.
 //   - Host capacity, the run cap and the quota fit last, so a refusal leaves
 //     no identity and no run row.
+//   - The dry doors' derived egress after every gate: create adds those hosts
+//     after the mint (unionRunEgress), so nothing above may grade them.
 var runFoldSteps = []runFoldStep{
 	{(*Server).stepRunContract, foldAll},
 	{(*Server).stepBaseline, foldAll},
@@ -136,6 +138,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepHostCapacity, foldCreate | foldPreflight},
 	{(*Server).stepRunCap, foldCreate | foldPreflight},
 	{(*Server).stepRunFit, foldCreate | foldPreflight},
+	{(*Server).stepDerivedEgress, foldPreflight | foldPreview},
 }
 
 // foldRunRequest runs runFoldSteps for mode over a request the door has

@@ -133,6 +133,25 @@ func (s *Server) stepPreviewEgress(f *runFold, rec *foldRecorder) bool {
 	return true
 }
 
+// stepDerivedEgress gives the dry doors the hosts create's unionRunEgress adds
+// after the mint, from the same deriveRunEgress, so the preview's spec and
+// Review's access facts name what dispatch will allow. Last of the fold: no
+// gate or grade above it reads these hosts at create, so none reads them here.
+//
+// Only the lanes create would wire add hosts (lanesWiredFor). The site-config
+// SCM hosts stay create's: they are the operator's configured host list, which
+// no dry-door reader may see, so that lane is still pending.
+func (s *Server) stepDerivedEgress(f *runFold, rec *foldRecorder) bool {
+	policy := policyProvSource(f.source)
+	wired := lanesWiredFor(f.scmSite, f.req.Agent, repoLocatorsOf(f.spec.WorkspaceRepos), f.spec.EligibleGrants)
+	for _, d := range deriveRunEgress(&f.spec, f.wsRefs, f.req.Repo, types.SiteConfig{}, wired) {
+		for _, host := range d.added {
+			rec.add(fieldAllowed, host, derivedEgressSource(rec, f.spec.EligibleGrants, d.kind, host, policy), provEffectAdded)
+		}
+	}
+	return true
+}
+
 // stepRequirements folds each referenced workspace's requirements contract
 // into the spec before the confinement floor and the grade read it: a
 // workspace's integration:<id> requirement is a credential grant the CC3
