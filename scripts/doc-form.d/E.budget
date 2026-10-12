@@ -23,4 +23,5 @@
 # docs/ENV.md 36372 measured after train 12 DS1-S2a merge.
 # docs/ENV.md 36340 adds 22 (0.9 A-L4): the WARDYN_START_FOLDER row.
 # docs/ENV.md 36396 measured after A-L4 merge (train 19).
-docs/ENV.md=36396 share=5
+# docs/ENV.md 36444 adds 48 over 36396 (0.9 DS1-S2, train 19): the WARDYN_HARNESSES and WARDYN_START_HARNESS rows.
+docs/ENV.md=36444 share=5
