@@ -83,8 +83,14 @@ describe("InfoTip", () => {
     await user.keyboard("{Enter}");
     const dialog = screen.getByRole("dialog", { name: "About Wall" });
     expect(dialog).toContainElement(document.activeElement as HTMLElement);
-    expect(trigger).toHaveAttribute("aria-describedby", dialog.id);
-    expect(trigger).toHaveAccessibleDescription("The Wall keeps the agent off your network.");
+    // A browser reads aria-label in place of the text when the target has one, so the
+    // description target must be a plain body element holding the text.
+    const body = document.getElementById(trigger.getAttribute("aria-describedby") ?? "");
+    expect(body).toHaveTextContent("The Wall keeps the agent off your network.");
+    expect(body).not.toHaveAttribute("aria-label");
+    expect(body).not.toHaveAttribute("aria-labelledby");
+    expect(dialog).toContainElement(body);
+    expect(dialog).toHaveAttribute("aria-describedby", body?.id);
     await user.keyboard("{Escape}");
     expect(content()).toBeNull();
     expect(trigger).toHaveFocus();
@@ -97,5 +103,26 @@ describe("InfoTip", () => {
     await screen.findByText("The Wall keeps the agent off your network.", {}, SLOW);
     expect(document.body).toHaveFocus();
     expect(trigger).toHaveAttribute("aria-describedby");
+  });
+
+  it("a hover open and close leaves focus in the field the person was typing in", async () => {
+    const user = userEvent.setup({ delay: null });
+    render(
+      <>
+        <input aria-label="Name" />
+        <InfoTip label="About Wall">The Wall keeps the agent off your network.</InfoTip>
+      </>,
+    );
+    const field = screen.getByRole("textbox", { name: "Name" });
+    field.focus();
+    const trigger = screen.getByRole("button", { name: "About Wall" });
+    await user.hover(trigger);
+    const text = await screen.findByText("The Wall keeps the agent off your network.", {}, SLOW);
+    expect(field).toHaveFocus();
+    await user.unhover(trigger);
+    await user.hover(text);
+    await user.unhover(text);
+    await waitFor(() => expect(content()).toBeNull(), SLOW);
+    expect(field).toHaveFocus();
   });
 });

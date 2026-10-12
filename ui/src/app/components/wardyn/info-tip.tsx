@@ -26,10 +26,12 @@ export function InfoTip({
   children: React.ReactNode;
   side?: "top" | "right" | "bottom" | "left";
 }) {
-  const id = React.useId();
+  const bodyId = React.useId();
   const [open, setOpen] = React.useState(false);
   const hover = useHoverOpen(open, setOpen);
   const byKeyboard = React.useRef(false);
+  // Set only when the open moved focus into the content, so only that close hands focus back.
+  const focusMoved = React.useRef(false);
   return (
     <Popover
       open={open}
@@ -44,7 +46,7 @@ export function InfoTip({
           size="icon"
           variant="ghost"
           aria-label={label}
-          aria-describedby={open ? id : undefined}
+          aria-describedby={open ? bodyId : undefined}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") byKeyboard.current = true;
           }}
@@ -65,16 +67,22 @@ export function InfoTip({
         </Button>
       </PopoverTrigger>
       <PopoverContent
-        id={id}
         aria-label={label}
+        aria-describedby={bodyId}
         side={side}
         onOpenAutoFocus={(e) => {
-          if (!byKeyboard.current) e.preventDefault();
+          if (byKeyboard.current) focusMoved.current = true;
+          else e.preventDefault();
+        }}
+        onCloseAutoFocus={(e) => {
+          if (!focusMoved.current) e.preventDefault();
+          focusMoved.current = false;
         }}
         {...hover.contentProps}
         className="text-sm"
       >
-        {children}
+        {/* The description target: aria-label on the dialog would be read in place of this text. */}
+        <div id={bodyId}>{children}</div>
       </PopoverContent>
     </Popover>
   );

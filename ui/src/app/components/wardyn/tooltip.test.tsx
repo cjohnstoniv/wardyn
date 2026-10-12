@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Tooltip, HOVER_GRACE_MS } from "./tooltip";
+import { Tooltip, HOVER_GRACE_MS, HOVER_OPEN_MS } from "./tooltip";
 
 // U14: a label-only bubble is hoverable, dismissible and never takes focus.
 function setup() {
@@ -21,14 +21,26 @@ function setup() {
 // Real timers: Testing Library's async wrapper never resolves under Vitest fake timers.
 const sleep = (ms: number) => act(() => new Promise<void>((r) => setTimeout(r, ms)));
 const SLOW = { timeout: 3000 };
+// jsdom's :focus-visible heuristic keeps state between tests in a file, so a Tab in a later
+// test may not count as keyboard focus. Tests that are about what happens after keyboard
+// focus say so explicitly; the click test below uses jsdom's own answer.
+function keyboardFocus() {
+  const real = Element.prototype.matches;
+  return vi.spyOn(Element.prototype, "matches").mockImplementation(function (this: Element, sel: string) {
+    return sel === ":focus-visible" ? true : real.call(this, sel);
+  });
+}
 
 describe("Tooltip", () => {
-  it("opens at once on keyboard focus, as a tooltip the trigger is described by", async () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("opens on keyboard focus after the hover pause, as a tooltip the trigger is described by", async () => {
     const { user, trigger } = setup();
     expect(screen.queryByRole("tooltip")).toBeNull();
     await user.tab();
     expect(trigger).toHaveFocus();
-    const tip = screen.getByRole("tooltip");
+    expect(screen.queryByRole("tooltip")).toBeNull(); // not at once (DECISIONS: same delay as hover)
+    const tip = await screen.findByRole("tooltip", {}, SLOW);
     expect(tip).toHaveTextContent("Copy the run id");
     expect(trigger).toHaveAttribute("aria-describedby", tip.id);
     expect(trigger).toHaveAccessibleDescription("Copy the run id");
@@ -36,11 +48,28 @@ describe("Tooltip", () => {
   });
 
   it("Esc dismisses it and focus stays on the trigger", async () => {
+    const spy = keyboardFocus();
     const { user, trigger } = setup();
     await user.tab();
+    await screen.findByRole("tooltip", {}, SLOW);
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("tooltip")).toBeNull();
     expect(trigger).toHaveFocus();
+    spy.mockRestore();
+  });
+
+  it("losing focus before the pause cancels the pending open", async () => {
+    const spy = keyboardFocus();
+    const { user, trigger } = setup();
+    await user.tab();
+    expect(trigger).toHaveFocus();
+    act(() => trigger.blur());
+    await sleep(HOVER_OPEN_MS + 150);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    // The control: the same sequence without the blur does open.
+    await user.tab();
+    await screen.findByRole("tooltip", {}, SLOW);
+    spy.mockRestore();
   });
 
   it("adds to the control's own description instead of replacing it", async () => {
@@ -86,7 +115,10 @@ describe("Tooltip", () => {
   it("a mouse click that focuses the trigger does not open it (focus-visible only)", async () => {
     const { user, trigger } = setup();
     await user.click(trigger);
+    // The pointer also hovers; take it off so only the focus path could still open it.
+    await user.unhover(trigger);
     expect(trigger).toHaveFocus();
+    await sleep(HOVER_OPEN_MS + 150);
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 

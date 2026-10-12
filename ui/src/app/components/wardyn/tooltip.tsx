@@ -16,18 +16,33 @@ export const HOVER_GRACE_MS = 150;
  * close HOVER_GRACE_MS after the pointer leaves both trigger and bubble (WCAG 1.4.13
  * hoverable). Only a hover-opened bubble closes on leave; one opened by focus, click
  * or tap stays until Esc, outside click or blur. Touch pointers never hover-open.
+ * `openOnFocus` waits the same HOVER_OPEN_MS (its own timer, so a pointer passing over
+ * does not cancel it); `onOpenChange` cancels both.
  */
 export function useHoverOpen(open: boolean, setOpen: (open: boolean) => void) {
   const timer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const focusTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const hoverOpened = React.useRef(false);
   const clear = () => clearTimeout(timer.current);
-  React.useEffect(() => () => clearTimeout(timer.current), []);
+  React.useEffect(
+    () => () => {
+      clearTimeout(timer.current);
+      clearTimeout(focusTimer.current);
+    },
+    [],
+  );
   return {
     /** Wire to Popover's onOpenChange: every non-hover close or open forgets the hover origin. */
     onOpenChange(next: boolean) {
       clear();
+      clearTimeout(focusTimer.current);
       hoverOpened.current = false;
       setOpen(next);
+    },
+    /** Keyboard focus shows the bubble after the same pause as a hover, not at once. */
+    openOnFocus() {
+      clearTimeout(focusTimer.current);
+      if (!open) focusTimer.current = setTimeout(() => setOpen(true), HOVER_OPEN_MS);
     },
     /** True once, when a click lands on a hover-opened bubble: it pins instead of toggling. */
     pinIfHoverOpened(): boolean {
@@ -68,7 +83,7 @@ const both =
     b?.(e);
   };
 
-/** Keyboard focus shows the label at once; a mouse click that focuses the trigger does not. */
+/** Keyboard focus shows the label after the hover pause; a mouse click that focuses the trigger never does. */
 function focusIsVisible(el: Element): boolean {
   try {
     return el.matches(":focus-visible");
@@ -104,7 +119,7 @@ export function Tooltip({
           onPointerEnter: both(child.onPointerEnter, hover.triggerProps.onPointerEnter),
           onPointerLeave: both(child.onPointerLeave, hover.triggerProps.onPointerLeave),
           onFocus: both(child.onFocus, (e: React.FocusEvent) => {
-            if (focusIsVisible(e.currentTarget)) hover.onOpenChange(true);
+            if (focusIsVisible(e.currentTarget)) hover.openOnFocus();
           }),
           onBlur: both(child.onBlur, () => hover.onOpenChange(false)),
         })}
