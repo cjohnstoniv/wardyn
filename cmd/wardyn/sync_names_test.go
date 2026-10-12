@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -118,5 +119,63 @@ func TestSyncGateway_AHugeDirectoryListingIsCutOffByItsByteBudget(t *testing.T) 
 	}
 	if n := g.rn.served.Load(); n >= maxSyncEntries {
 		t.Errorf("the sandbox served %d entries, want the listing cut off before the %d entry cap", n, maxSyncEntries)
+	}
+}
+
+// Text the sandbox supplies reaches the terminal too: refusal reasons, the
+// sftp-server's stderr, its start directory.
+
+const hostileText = "x\x1b]52;c;ZXZpbA==\x07\r\x1b[2K\nrefused (forged): y"
+
+func rawControl(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool { return r < ' ' || r == 0x7f })
+}
+
+func TestPrintSyncReport_ReasonsPrintAsTheyAreOrQuoted(t *testing.T) {
+	rep := newSyncReport()
+	rep.refuse("a", "unreadable: open /x: permission denied")
+	rep.refuse("b", "list é: "+"日本語 ok")
+	rep.refuse("c", hostileText)
+	var b bytes.Buffer
+	printSyncReport(&b, rep)
+	want := "pushed 0 file(s) (0 bytes), pulled 0 file(s) (0 bytes)\n" +
+		"refused (unreadable: open /x: permission denied): a\n" +
+		"refused (list é: 日本語 ok): b\n" +
+		"refused (" + strconv.QuoteToGraphic(hostileText) + "): c\n"
+	if b.String() != want {
+		t.Errorf("report = %q, want %q", b.String(), want)
+	}
+}
+
+func TestSyncExitError_QuotesTheSandboxsStderr(t *testing.T) {
+	if err := syncExitError(3, " boom \n"); err == nil || err.Error() != "sync: the sandbox's sftp-server exited 3: boom" {
+		t.Errorf("plain stderr = %v", err)
+	}
+	if err := syncExitError(3, hostileText); err == nil || rawControl(err.Error()) {
+		t.Errorf("hostile stderr = %q, want no raw control byte", err)
+	}
+}
+
+func TestSyncGateway_SandboxErrorTextNeverReachesTheTerminalRaw(t *testing.T) {
+	g := newSyncRig(t)
+	box := g.mkSandboxDir(syncRemote)
+	g.mkSandboxDir(syncRemote + "/sub")
+	putSyncFile(t, filepath.Join(box, "secret.txt"), "x", 0o644)
+	putSyncFile(t, filepath.Join(box, "ok.txt"), "fine", 0o644)
+	g.rn.failMsg = map[string]string{"sub": hostileText, "secret.txt": hostileText}
+	g.rn.exitCode, g.rn.stderr = 3, hostileText
+	sy, sess, _ := g.syncer(syncRemote, true)
+
+	rep := mustPass(t, sy)
+	var out bytes.Buffer
+	printSyncReport(&out, rep)
+	if len(rep.Refused) != 2 || !slices.Equal(rep.Pulled, []string{"ok.txt"}) {
+		t.Errorf("report = %+v, want sub and secret.txt refused, ok.txt pulled", rep)
+	}
+	if rawControl(strings.ReplaceAll(out.String(), "\n", "")) || strings.Count(out.String(), "\n") != 3 {
+		t.Errorf("report = %q, want three lines and no raw control byte", out.String())
+	}
+	if err := sess.close(); err == nil || rawControl(err.Error()) || !strings.Contains(err.Error(), "exited 3") {
+		t.Errorf("close = %q, want the exit status and no raw control byte", err)
 	}
 }

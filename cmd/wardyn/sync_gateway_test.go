@@ -124,7 +124,12 @@ type syncRunner struct {
 	// bigDir names a sandbox directory that lists more 255-byte names than the entry cap allows;
 	// served counts the entries the listing handed out.
 	bigDir string
-	served atomic.Int64
+	// failMsg makes listing the directory, or reading the file, with that base
+	// name fail with that message; stderr is what sftp-server writes before it
+	// exits.
+	failMsg map[string]string
+	stderr  string
+	served  atomic.Int64
 }
 
 func (r *syncRunner) ExecStream(ctx context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
@@ -147,6 +152,7 @@ func (r *syncRunner) ExecStream(ctx context.Context, _ string, spec runner.ExecS
 	go func() {
 		defer close(done)
 		_ = srv.Serve()
+		_, _ = io.WriteString(errW, r.stderr)
 		_ = outW.Close()
 		_ = errW.Close()
 		time.Sleep(r.exitDelay)
@@ -181,6 +187,9 @@ type rootedFS struct{ r *syncRunner }
 func (h *rootedFS) Fileread(rq *sftp.Request) (io.ReaderAt, error) {
 	if h.r.hangRead != "" && path.Base(rq.Filepath) == h.r.hangRead {
 		<-h.r.release
+	}
+	if msg, ok := h.r.failMsg[path.Base(rq.Filepath)]; ok {
+		return nil, errors.New(msg)
 	}
 	return os.Open(h.r.host(rq.Filepath))
 }
@@ -268,6 +277,9 @@ func (h *rootedFS) Filelist(rq *sftp.Request) (sftp.ListerAt, error) {
 	p := h.r.host(rq.Filepath)
 	switch rq.Method {
 	case "List":
+		if msg, ok := h.r.failMsg[path.Base(rq.Filepath)]; ok {
+			return nil, errors.New(msg)
+		}
 		if h.r.bigDir != "" && p == h.r.host(h.r.bigDir) {
 			return endlessLister{&h.r.served}, nil
 		}
