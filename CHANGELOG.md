@@ -84,9 +84,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - Administrators can let a self-hosted runner's runs use an organisation credential without it leaving the
   organisation (`via_org`): the runner forwards only those destinations, and the organisation re-checks and
-  injects every request. Set per credential class with `PUT /governance/credential-delivery` (security tier,
-  four-eyes); this release delivers header-injected API keys and the GitHub App broker. The byte limit is 8 GiB
-  a run per server replica, reset on restart.
+  injects every request. Set per credential class with `PUT /governance/credential-delivery` (security tier;
+  held for a second person when `WARDYN_GOVERNANCE_SECOND_HUMAN` is set); this release delivers header-injected
+  API keys and the GitHub App broker. The byte limit (8 GiB a run) and the concurrent-stream limit hold per server
+  replica and reset on restart.
 - Under `WARDYN_AUDIT_SEAL=full` the `target` column of `person.attach`, `person.token.create`,
   `delegation.exchange`, `session.revoke`, `secret.list` and `auth.signin_unserialized` rows is stored as the
   person's subject, like the actor, when that person has an identity row, and a typed `subject:` string in an actor
