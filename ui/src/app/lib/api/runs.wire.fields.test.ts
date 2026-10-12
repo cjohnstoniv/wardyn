@@ -83,7 +83,7 @@ const fullInput: WireInput & { workspaces: NonNullable<WireInput["workspaces"]> 
   interactive_start: "agent" as const,
   seed_auto_tools: true,
   tool_approvals: "hold" as const,
-  workspaces: [{ workspace_id: "ws-1", enabled_optional: ["egress:api.stripe.com"], read_only: true, target: "/home/agent/work" }],
+  workspaces: [{ workspace_id: "ws-1", enabled_optional: ["egress:api.stripe.com"], read_only: true, target: "/home/agent/work", repos: [{ repo: "acme/web", ref: "main" }] }],
   workspace_id: "22222222-2222-2222-2222-222222222222",
   integration_id: "anthropic_api_key",
   // The member's drive request (D5): forwarded verbatim by runWireBody — a

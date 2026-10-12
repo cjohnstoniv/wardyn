@@ -10,7 +10,7 @@
 import type { AutonomyResolution } from "../api/governance";
 import type { ComponentFact } from "./components";
 import type { AccessFacts } from "./new-run-access";
-import type { AllowedImage, AppliedResources, HarnessSetFact, ImageFact, LocalPlacementFact } from "./new-run-contract";
+import type { AllowedImage, AppliedResources, HarnessSetFact, ImageFact, LocalPlacementFact, RunAttachment } from "./new-run-contract";
 import type { ProvenanceEntry } from "./policy-preview";
 import type { EffectiveRunLimits, ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
 import type { ConfinementClass, RiskItem, RiskLevel } from "./runs";
@@ -178,6 +178,10 @@ export interface PreflightResult {
   // What the run brings in (rows, hosts, credentials, the unlisted line, setup);
   // the policy preview answers the same block. Optional so an older server still types.
   access?: AccessFacts;
+  // The run's mount map: each repository, folder and drive at the path the run
+  // uses it at, the one holding the starting folder marked. The server always
+  // sends the array; optional here so an older server still types.
+  attachments?: RunAttachment[];
 }
 
 // Where a run's MODEL credential lands (internal/api.modelCredentialResidency).

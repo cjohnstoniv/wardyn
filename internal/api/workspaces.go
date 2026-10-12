@@ -101,7 +101,7 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request, ado adoHosts
 		req.Sources = []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: defaultEphemeralTarget}}
 	}
 
-	// `admitted` is the server's OWN read projection (types.WorkspaceSource), so a
+	// `admitted` and `clone_target` are the server's OWN read projections (types.WorkspaceSource), so a
 	// body carrying it is dropped rather than stored: a client round-tripping a GET
 	// must not be able to persist a provider verdict, and the read path recomputes
 	// it on every response anyway.
@@ -113,7 +113,7 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request, ado adoHosts
 	}
 	adoServerHosts, hostsErr := ado.forAddresses(repos...)
 	for i := range req.Sources {
-		req.Sources[i].Admitted = nil
+		req.Sources[i].Admitted, req.Sources[i].CloneTarget = nil, ""
 		if req.Sources[i].Type == types.WorkspaceSourceTypeRepo {
 			req.Sources[i].Source = canonicalRepoAddress(req.Sources[i].Source, adoServerHosts)
 		}

@@ -283,9 +283,11 @@ func (s PG) ListPoliciesPage(ctx context.Context, p Page) ([]types.RunPolicy, er
 }
 
 // ListWorkspacesPage returns workspaces in reverse creation order, bounded
-// by p (workspaces_created_at_idx covers the ORDER BY).
+// by p (workspaces_created_at_idx covers the ORDER BY). The id breaks a tie,
+// so the order is total: a run's fold reads this list twice and credits a
+// source two workspaces carry from it.
 func (s PG) ListWorkspacesPage(ctx context.Context, p Page) ([]types.Workspace, error) {
-	q, args := p.appendTo(`SELECT `+wsCols+` FROM workspaces ORDER BY created_at DESC`, nil)
+	q, args := p.appendTo(`SELECT `+wsCols+` FROM workspaces ORDER BY created_at DESC, id DESC`, nil)
 	wss, err := collect(ctx, s.Pool, "list", "workspaces", q, args, scanWorkspace)
 	if err != nil {
 		return nil, err

@@ -58,7 +58,10 @@
 # docs/sdk.md 15721 measured after A-L14 merge (train 18).
 # docs/sdk.md 15772 adds 51 over 15721 (0.9 Q-b): the run_queued and run_max_wait_invalid reasons.
 # docs/sdk.md 15798 adds 26 (0.9 Q-b fix-r3): a queued 201's resources_applied is as of the launch.
-docs/sdk.md=15798 share=21
+# 0.9 A-L4: docs/sdk.md 14098 adds 77 over 14021: three multi-workspace reason rows and the widened overlap, target and start-folder rows.
+# docs/sdk.md 15799 measured after A-L4 merge (train 19).
+# docs/sdk.md 15876 measured after merge batch/090 into Q-b (fix-r3).
+docs/sdk.md=15876 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

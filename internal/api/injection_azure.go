@@ -139,8 +139,23 @@ func (s *Server) resolveAzureFoundryInjection(w http.ResponseWriter, r *http.Req
 		// Never resolve against a read that failed: the zero SiteConfig is "no rows".
 		return fail(http.StatusServiceUnavailable, reasonRosterUnreadable, azureResolveUnreadable, nil)
 	}
-	p, found := modelProviderByID(siteCfg.ModelProviders, run.ModelProviderID)
-	lane, laneOK := providerAzureLaneFor(p, run.Agent)
+	// The grant records no harness, but an azure_foundry provider serves one
+	// harness only, and a run carries one at most: the pair is the one whose
+	// provider is the grant's. The run's own pair comes first, as before the
+	// harness set; one the run was not launched with drifts below.
+	pairs, err := s.runHarnessPairs(ctx, run)
+	if err != nil {
+		return fail(http.StatusServiceUnavailable, reasonRunUnreadable, azureResolveUnreadable, nil)
+	}
+	pair := pairs[0]
+	for _, h := range pairs {
+		if q, ok := modelProviderByID(siteCfg.ModelProviders, h.ModelProviderID); ok && h.ModelProviderID != "" && q.UID == uid {
+			pair = h
+			break
+		}
+	}
+	p, found := modelProviderByID(siteCfg.ModelProviders, pair.ModelProviderID)
+	lane, laneOK := providerAzureLaneFor(p, pair.Harness)
 	if drift := azureDrift(sn, p, found, lane, laneOK); drift != "" {
 		return fail(http.StatusForbidden, reasonScopeChanged, azureResolveChanged, map[string]any{"drift": drift, "owner": sn.OwnerSubject})
 	}

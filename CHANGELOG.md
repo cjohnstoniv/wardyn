@@ -332,6 +332,30 @@ and does not yet follow semantic versioning (interfaces are not stable).
   twice is refused. Reviving or extending such a run re-checks the owner's `workspace_provider` permission over its
   repositories. A built-in Azure DevOps component is still refused with `request_field_unavailable`. New refusal
   reasons: `component_builtin_lane_off`, `component_builtin_access_above_ceiling`.
+- A run can attach several workspaces, each at its own path, and pick which repositories of a workspace it clones and
+  at which branch, tag or commit (a ref git could read as an option is refused). Equal or nested paths across them,
+  two model-provider pins, two base images, or two repositories in different Azure DevOps organisations that no one
+  workspace carries both of are refused before anything is granted. `start_folder` can name a repository of an
+  attached workspace. Paths under `/home/agent/drives` and `/home/agent/shared` are reserved for drives. New reasons:
+  `workspace_selection_invalid`, `workspace_repo_unknown`, `run_ref_invalid`.
+- A run's harness set credentials each harness through its own model provider. Dispatch authors one lane per harness,
+  refuses two credentials for one host, and the injection sinks accept only a harness and provider pair the run was
+  launched with. Revive and the owner re-checks keep and re-check every harness's provider. Claude Code's managed
+  settings are delivered whenever it is in the set. New sandbox env: `WARDYN_HARNESSES`, `WARDYN_START_HARNESS`.
+- New Run console: a Start screen with three paths (AI composer coming soon, Guided setup, YAML or JSON); a Shape step
+  that starts from scratch, a saved template or an earlier run and picks the workload; a Run document screen that
+  edits the draft as YAML or JSON, checks it with the server and reports every unsupported field instead of dropping
+  it; and a Save as template / Save as policy dialog (Only me or a group you manage, the whole draft or a subset).
+- Templates screen: `/templates` (User view) and `/admin/templates` (Admin view) list saved starting points with
+  who-it-is-for, kind and name filters. Use opens New Run on the pinned revision; Rename and Delete follow who may
+  change each row; organisation admins publish a template to the organisation from the Admin view.
+- A person's tool rules and default on a New Run combine with the policy's as the stricter of the two for each tool.
+  "Run it" is offered where the policy allows the tool and greyed with the reason where it does not; a rule can be an
+  exception to the person's own default, never to the policy. Tool rules name one tool exactly (`Bash`, `WebFetch`,
+  `mcp__server__tool`); patterns are refused. Codex CLI: "Ask first" and blocks on its own tools are refused with a
+  reason, and rules for its MCP tools are kept in its rule set. Rules for a harness without Wardyn's tool gate, and
+  rules in an interactive run beyond its own "asks you", are refused. New Run's access facts include a tool policy for
+  each included harness.
 
 ### Changed
 
@@ -434,6 +458,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   applies the same member cap as preflight (#1949). A run with no size from its request or policy gets the
   deployment's own default size (the default policy's resources where set, else the platform default), operators' runs
   included.
+- Two repositories that would clone into the same directory are refused; previously one was silently dropped. An
+  explicit `image_default` start folder keeps the image's own directory after a clone.
+- A background Claude Code run whose policy (after the ceiling) holds or blocks a tool, or where the person set any
+  tool rule or default, now goes through Wardyn's tool gate. Before, the policy's `tool_rules` were consulted only
+  when the run asked for `tool_approvals: hold`. Tools nobody names still run without a prompt, and a blocked tool is
+  refused at the proxy. The shipped default policy names no tools, so only policies that name tools change behaviour.
 
 ### Removed
 

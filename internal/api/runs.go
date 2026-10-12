@@ -366,10 +366,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// image build + dispatch continue server-side (runs_create_launch.go).
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+runID.String())
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings, ResourcesApplied: &f.place.applied})
-	spec, harnessRules := applyHarnessToolRules(spec, req.Tools)
+	spec, harnessRules := applyHarnessToolRules(spec, req.Tools, toolLaneDefault(req))
 	launch := createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
-		wsRefs: wsRefs, driveMount: f.driveMount, ephemeralDirs: f.ephemeralDirs,
+		wsRefs: wsRefs, driveMount: f.driveMount, ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
 		runToken: id.Token, created: created, comps: comps, overridden: f.source.overridden(), pushSets: f.pushSets, harnessRules: harnessRules,
 		harnesses: f.harnesses,
 	}
@@ -476,15 +476,15 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 // fold into, which requestRepoProviderRefusals' two free-text fields alone
 // never see. Review (foldPreflight) passes false: see that gate's own doc
 // comment.
-func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWriter, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest, gate bool) ([]string, bool) {
-	dirs, refusal := s.seedAuthorizedWorkspace(ctx, r, spec, req)
+func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWriter, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest, gate bool) (workspaceSeed, bool) {
+	seed, refusal := s.seedAuthorizedWorkspace(ctx, r, spec, req)
 	if refusal.write(s, w, r) {
-		return nil, false
+		return workspaceSeed{}, false
 	}
 	if gate && s.gitCredentialRefusal(w, r, repoLocatorsOf(spec.WorkspaceRepos)...) {
-		return nil, false
+		return workspaceSeed{}, false
 	}
-	return dirs, true
+	return seed, true
 }
 
 // repoSourceWarnings is the pair of 201 sentences provider admission cannot

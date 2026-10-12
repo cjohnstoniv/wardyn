@@ -311,13 +311,14 @@ var templateNestedCarried = map[string]string{
 	"RunResources":       "cpu_millis memory_mib",
 	"RunStartup":         "kind tool command prompt",
 	"RunWorkload":        "kind agent task command",
-	"StartFolder":        "kind attachment subpath",
+	"RepoSelection":      "repo ref",
+	"StartFolder":        "kind attachment repo drive_id subpath",
 	"SecretOverride":     "secret_name host header format",
 	"ToolRule":           "tool effect",
 	"UIApp":              "name port path",
 	"WorkspaceMount":     "source target read_only",
 	"WorkspaceRepo":      "repo target ref",
-	"WorkspaceSelection": "workspace_id enabled_optional read_only target",
+	"WorkspaceSelection": "workspace_id enabled_optional read_only target repos",
 }
 
 var templateNestedExcluded = map[string]TemplateFieldRule{

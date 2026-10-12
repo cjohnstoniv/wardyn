@@ -140,7 +140,7 @@ const (
 	// workspace_refusals.go's, with a TypeScript twin.
 	reasonPlacementInvalid        = "placement_invalid"          // placement is neither remote nor local, or runner_id has no local placement
 	reasonWorkspaceTargetInvalid  = "workspace_target_invalid"   // a workspace selection's target is not an absolute, cleaned path under /home/agent
-	reasonWorkspaceTargetOverlap  = "workspace_target_overlap"   // two different workspaces' targets are equal or nested (a drive's included)
+	reasonWorkspaceTargetOverlap  = "workspace_target_overlap"   // two different workspaces' targets are equal or nested (a drive's included), or two repositories clone into one directory
 	reasonWorkspacePinConflict    = "workspace_pin_conflict"     // the attached workspaces pin two different model providers
 	reasonImageConflict           = "image_conflict"             // the attached workspaces use two different base images: a refusal about the run's image, not a workspace field
 	reasonAllowedImageInvalid     = "allowed_image_invalid"      // allowed_image is malformed, or is combined with image or devcontainer_repo
@@ -149,6 +149,10 @@ const (
 	reasonOverrideInvalid         = "override_invalid"           // an overrides entry is malformed
 	reasonOverrideRefused         = "override_refused"           // an override the narrowing table never allows from a request
 	reasonRequestFieldUnavailable = "request_field_unavailable"  // a field that changes the run's posture, which this server cannot honour yet: refused, never dropped
+	// The run's attached workspaces (run_attachments.go).
+	reasonWorkspaceSelectionInvalid = "workspace_selection_invalid" // workspaces[] names an id twice or a malformed one, or workspace_id is not workspaces[0]
+	reasonWorkspaceRepoUnknown      = "workspace_repo_unknown"      // a workspaces[].repos entry names a repository the workspace does not carry
+	reasonRunRefInvalid             = "run_ref_invalid"             // a workspaces[].repos entry is malformed: a repo named twice, or a ref that is not a branch, tag or commit name
 	// validateImageBuildRequest (#656 M1: split from reasonInvalidImageBuildRequest,
 	// one cause was the caller's own request shape, the other a deployment
 	// capability neither request field can fix).

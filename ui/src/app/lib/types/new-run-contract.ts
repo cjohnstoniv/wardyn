@@ -290,11 +290,37 @@ export interface RunStartup {
 
 export type StartFolderKind = "image_default" | "attachment";
 
-/** The run's exactly-one starting folder; `attachment` is a workspace id or `drive`. */
+/**
+ * The run's exactly-one starting folder; `attachment` is a workspace id or `drive`.
+ * `repo` names one repository the run clones from that workspace; `drive_id` is
+ * refused until the server attaches several drives.
+ */
 export interface StartFolder {
   kind: StartFolderKind;
   attachment?: string;
+  repo?: string;
+  drive_id?: string;
   subpath?: string;
+}
+
+/** One repository a workspace selection clones (pkg/client.RepoSelection); "" ref = the source's own. */
+export interface RepoSelection {
+  repo: string;
+  ref?: string;
+}
+
+/** One entry of the run's mount map on the preflight and the policy preview (pkg/client.RunAttachment). */
+export interface RunAttachment {
+  kind: "repository" | "folder" | "drive";
+  workspace_id?: string;
+  repo?: string;
+  ref?: string;
+  drive_id?: string;
+  /** The workspace or drive name, never a host path. */
+  name: string;
+  target: string;
+  read_only: boolean;
+  starts_here: boolean;
 }
 
 /** The attachment name of the person's drive in `StartFolder.attachment`. */

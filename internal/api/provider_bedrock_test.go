@@ -119,7 +119,7 @@ func TestProviderBedrockDispatch(t *testing.T) {
 			Snapshot providerGrantSnapshot `json:"snapshot"`
 		}
 		_ = json.Unmarshal(st.grants[0].Spec.Scope, &scope)
-		if scope.Snapshot != (providerGrantSnapshot{ProviderUID: p.UID, OwnerSubject: subOwner}) {
+		if scope.Snapshot != (providerGrantSnapshot{ProviderUID: p.UID, OwnerSubject: subOwner, Harness: "claude-code"}) {
 			t.Errorf("snapshot = %+v", scope.Snapshot)
 		}
 		if !slices.Equal(plan.bedrockMITMHosts, []string{host + ":443"}) {
