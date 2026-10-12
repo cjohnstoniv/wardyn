@@ -19,6 +19,7 @@ import { NEW_RUN_PATH, newRunHref, parseNewRunSearch, type NewRunFrom, type NewR
 import { initialDraft, type NewRunDraft, type NewRunOrigin, type RunIntent } from "./draft/run-intent";
 import { firstInvalidStep, localIssues } from "./lenses/local-issues";
 import { NEW_RUN_STEPS, type NewRunStep } from "./lenses/step-issues";
+import { seedLoaders } from "./steps/shape/seed-loaders";
 import { AnnounceContext } from "./steps/step-shell";
 
 const DraftContext = React.createContext<NewRunDraft | null>(null);
@@ -49,13 +50,6 @@ export interface SeedLoaders {
   template: (ref: { id: string; revision?: number }, signal: AbortSignal) => Promise<Seed>;
   again: (runId: string, signal: AbortSignal) => Promise<Seed>;
 }
-// Seam: the template-revision and launch-intent fetchers arrive with their
-// server routes; until then a seeded link reads as a failed load.
-const NO_SEED_LOADERS: SeedLoaders = {
-  template: () => Promise.reject(new Error("template loading is not available")),
-  again: () => Promise.reject(new Error("launch intent loading is not available")),
-};
-
 export type NewRunScreenName = "start" | NewRunStep | "document" | "review" | "launched" | "seedFailed";
 export interface NewRunScreenProps {
   location: NewRunLocation;
@@ -69,8 +63,8 @@ const pending = (name: NewRunScreenName): Screen => function PendingScreen() {
   return <section data-new-run-screen={name} />;
 };
 export const NEW_RUN_SCREENS: Record<NewRunScreenName, Screen> = {
-  start: pending("start"),
-  shape: pending("shape"),
+  start: React.lazy(() => import("./start/start-screen").then((m) => ({ default: m.StartScreen }))),
+  shape: React.lazy(() => import("./steps/shape/shape-step").then((m) => ({ default: m.ShapeStep }))),
   run: pending("run"),
   harnesses: pending("harnesses"),
   files: pending("files"),
@@ -207,7 +201,7 @@ function NewRunFlow({ loaders, screens }: { loaders: SeedLoaders; screens: Recor
   return <Current location={parsed.location} go={go} seedError={seeded.error} startFromScratch={startFromScratch} />;
 }
 
-export function NewRunRoute({ loaders = NO_SEED_LOADERS, screens = NEW_RUN_SCREENS }: { loaders?: SeedLoaders; screens?: Record<NewRunScreenName, Screen> }) {
+export function NewRunRoute({ loaders = seedLoaders, screens = NEW_RUN_SCREENS }: { loaders?: SeedLoaders; screens?: Record<NewRunScreenName, Screen> }) {
   const { principal, operatorResolved } = useRequestIdentity();
   const [message, setMessage] = React.useState("");
   return (
