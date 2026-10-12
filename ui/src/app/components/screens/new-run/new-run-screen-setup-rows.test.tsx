@@ -49,7 +49,7 @@ import { NewRunScreen } from "./new-run-screen";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { NO_BARRIER, RAIL_SETUP } from "../../wardyn/copy";
-import type { SetupItem } from "../../../lib/types/runs";
+import type { SetupItem } from "../../../lib/types/preflight";
 import { goToPanel } from "../../../../test/new-run-panel";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
