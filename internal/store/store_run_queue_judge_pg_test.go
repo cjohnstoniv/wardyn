@@ -74,7 +74,7 @@ func TestPG_PromoteQueueJudgesPastHeldHeads(t *testing.T) {
 	busyBob := func(_ context.Context, _ types.RunnerPool, e store.RunQueueEntry) (store.QueueVerdict, error) {
 		asked[e.Owner]++
 		if e.Owner == "bob" {
-			return store.QueueVerdict{Wait: string(runnerpool.WaitNoRunnerFree)}, nil
+			return store.QueueVerdict{Wait: string(runnerpool.WaitNoRunnerFree), Owner: true}, nil
 		}
 		return store.QueueVerdict{Admit: true}, nil
 	}
@@ -122,5 +122,62 @@ func TestPG_PromoteQueueJudgesWithoutALock(t *testing.T) {
 	}
 	if !poolFree || !capFree {
 		t.Errorf("while the verdict was asked the pool row was free %v and the deployment lock free %v; both must be", poolFree, capFree)
+	}
+}
+
+// A run held for a reason of its own (it is pinned to one runner) holds only itself: the same owner's
+// next run is still judged and promoted in the same pass.
+func TestPG_PromoteQueueHoldsAPinnedRunAlone(t *testing.T) {
+	ctx := context.Background()
+	pg := store.NewPG(runsPGPoolIsolated(t))
+	p := cappedPool(t, pg, 1)
+	now := time.Now().UTC()
+	pinned, err := enqueue(t, pg, p, "bob", now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := enqueue(t, pg, p, "bob", now.Add(time.Second), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinHeld := func(_ context.Context, _ types.RunnerPool, e store.RunQueueEntry) (store.QueueVerdict, error) {
+		if e.RunID == pinned.ID {
+			return store.QueueVerdict{Wait: string(runnerpool.WaitNoRunnerFree)}, nil
+		}
+		return store.QueueVerdict{Admit: true}, nil
+	}
+	got, _, err := pg.PromoteRunQueue(ctx, pass(p), pinHeld)
+	if err != nil || len(got) != 1 || got[0].Run.ID != next.ID {
+		t.Fatalf("promoted %v, %v; want bob's next run, which no pin holds", got, err)
+	}
+}
+
+// A judging cut short by its deadline still promotes the runs it had already admitted.
+func TestPG_PromoteQueueKeepsWhatItAdmittedWhenCutShort(t *testing.T) {
+	pg := store.NewPG(runsPGPoolIsolated(t))
+	p := cappedPool(t, pg, 3)
+	now := time.Now().UTC()
+	var ids []uuid.UUID
+	for i := range 3 {
+		r, err := enqueue(t, pg, p, "alice", now.Add(time.Duration(i)*time.Second), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, r.ID)
+	}
+	slow := func(ctx context.Context, _ types.RunnerPool, e store.RunQueueEntry) (store.QueueVerdict, error) {
+		if e.RunID == ids[0] {
+			return store.QueueVerdict{Admit: true}, nil
+		}
+		<-ctx.Done() // the judging half of the pass is spent on this run
+		return store.QueueVerdict{}, ctx.Err()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	scan := pass(p)
+	scan.ScanLimit = 1
+	got, _, err := pg.PromoteRunQueue(ctx, scan, slow)
+	if err != nil || len(got) != 1 || got[0].Run.ID != ids[0] {
+		t.Fatalf("promoted %v, %v; want the run admitted before the judging ran out of time", got, err)
 	}
 }

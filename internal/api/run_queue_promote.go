@@ -72,12 +72,13 @@ func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.
 	}
 	var auth queueAuthority
 	_ = json.Unmarshal(e.Authority, &auth) //nolint:errcheck // an unreadable authority fails the start's own checks
-	free, err := s.queueRunnerFree(auth.context(ctx), pool, launch)
+	free, pinned, err := s.queueRunnerFree(auth.context(ctx), pool, launch)
 	if err != nil {
 		return store.QueueVerdict{}, err
 	}
 	if !free {
-		return store.QueueVerdict{Wait: string(runnerpool.WaitNoRunnerFree)}, nil
+		// Only an unpinned run's wait is its owner's: a run pinned to one runner waits for that runner alone.
+		return store.QueueVerdict{Wait: string(runnerpool.WaitNoRunnerFree), Owner: !pinned}, nil
 	}
 	if s.admitHostCapacity(ctx, e.Owner, "runs", false) != nil {
 		return store.QueueVerdict{Stop: true}, nil
@@ -91,35 +92,37 @@ func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.
 // queueRunnerFree reports whether one of the owner's candidate targets in the pool can take a run now:
 // at least one is online with known facts. A pool the owner can no longer see, or a refusal of the
 // owner's own (a user type that is gone), counts as free, so the start ends the run with its reason
-// instead of leaving it to wait. Only a read that failed is an error.
-func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, launch queuedLaunch) (bool, error) {
+// instead of leaving it to wait. Only a read that failed is an error. pinned says the launch names its
+// runner (runner_id).
+func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, launch queuedLaunch) (free, pinned bool, err error) {
 	ps, ok := s.cfg.Store.(store.RunnerPoolStore)
 	if !ok {
-		return true, nil
-	}
-	rows, refusal := s.permittedPools(ctx, ps, true)
-	if refusal != nil {
-		if refusal.err != nil && !errors.Is(refusal.err, errUserTypeUnknown) {
-			return false, fmt.Errorf("read the owner's pools: %w", refusal.err)
-		}
-		return true, nil
-	}
-	row, found := catalogueRow(rows, pool.ID)
-	if !found {
-		return true, nil
+		return true, false, nil
 	}
 	var req createRunRequest
 	_ = json.Unmarshal(launch.Request, &req) //nolint:errcheck // an unreadable request pins no runner
+	pinned = req.RunnerID != ""
+	rows, refusal := s.permittedPools(ctx, ps, true)
+	if refusal != nil {
+		if refusal.err != nil && !errors.Is(refusal.err, errUserTypeUnknown) {
+			return false, pinned, fmt.Errorf("read the owner's pools: %w", refusal.err)
+		}
+		return true, pinned, nil
+	}
+	row, found := catalogueRow(rows, pool.ID)
+	if !found {
+		return true, pinned, nil
+	}
 	targets, refusal := s.poolTargets(ctx, &req, ps, row)
 	if refusal != nil {
-		return false, nil
+		return false, pinned, nil
 	}
 	for _, t := range targets {
 		if !t.offline {
-			return true, nil
+			return true, pinned, nil
 		}
 	}
-	return false, nil
+	return false, pinned, nil
 }
 
 // kickQueue asks every pool with waiting runs to promote, off the caller's path. Concurrent kicks
@@ -128,13 +131,13 @@ func (s *Server) kickQueue() {
 	if _, ok := s.queueStore(); !ok {
 		return
 	}
-	if !s.queueKick.start() {
+	if !s.queue.kick.start() {
 		return
 	}
 	s.goBackground(func() {
 		for {
 			s.promoteWaitingPools(s.cfg.BaseCtx)
-			if !s.queueKick.again() {
+			if !s.queue.kick.again() {
 				return
 			}
 		}
