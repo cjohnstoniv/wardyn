@@ -332,6 +332,16 @@ that ceiling down; each run receives only the minimal subset its task needs.
     the signing key.
   - A compromised runner is assumed; the control plane never trusts runner-asserted identity
     claims.
+- **Organisation credentials used by a self-hosted run (`via_org`) [0.9].**
+  - A `via_org` credential is used by the developer's run but never read: the value stays at the
+    organisation, which re-runs the run's egress checks as authoritative and dials the destination over
+    its own TLS.
+  - The organisation serves this only through the run's own runner relay with the run token, for this
+    run's `via_org` grants, to each grant's host on 443, within 16 streams, 8 GiB a run per server
+    replica (reset on restart) and 10 minutes idle.
+  - **Residual:** the laptop proxy terminates the sandbox's TLS to forward these requests, so the
+    developer (root on the laptop) sees each request and response in plaintext and can make any request
+    the rule's pins and the policy allow while the run lives.
 
 ### B8 — Untrusted build container vs. host daemon + registry
 

@@ -12,8 +12,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `runners`,
-  `runner_pending_actions`, `provider_connection_changes`, `runner_inventories`, `runner_pool_members` and
-  `runner_pool_use_policies`, and `SELECT, INSERT, UPDATE` on `credential_delivery_policy`,
+  `runner_pending_actions`, `provider_connection_changes`, `runner_inventories`, `runner_pool_members`,
+  `runner_pool_use_policies` and `run_queue`, and `SELECT, INSERT, UPDATE` on `credential_delivery_policy`,
   `runner_registration_tokens`, `audit_delivery_cursors`, `runner_spool_cursors`, `runner_executions`,
   `runner_execution_exits`, `runner_inventory_candidates`, `runner_inventory_observations`, `runner_pools`,
   `runner_pool_org_defaults`, `secret_owner_generations`, `person_invitations`, `service_identities` and
@@ -82,6 +82,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- Administrators can let a self-hosted runner's runs use an organisation credential without it leaving the
+  organisation (`via_org`): the runner forwards only those destinations, and the organisation re-checks and
+  injects every request. Set per credential class with `PUT /governance/credential-delivery` (security tier,
+  four-eyes); this release delivers header-injected API keys and the GitHub App broker. The byte limit is 8 GiB
+  a run per server replica, reset on restart.
 - Under `WARDYN_AUDIT_SEAL=full` the `target` column of `person.attach`, `person.token.create`,
   `delegation.exchange`, `session.revoke`, `secret.list` and `auth.signin_unserialized` rows is stored as the
   person's subject, like the actor, when that person has an identity row, and a typed `subject:` string in an actor
