@@ -524,3 +524,64 @@ func TestRepoRecordURL(t *testing.T) {
 		}
 	}
 }
+
+func TestRepoRecordURL_UnparseableURLFailsClosed(t *testing.T) {
+	for _, tc := range []struct{ in, secret, want string }{
+		{"https://user:p%zz@host/x.git", "p%zz", "https://host/x.git"},
+		{"https://user:pa ss@host/x.git", "pa ss", "https://host/x.git"},
+		{"https://x-token:abc^def@host/x.git", "abc^def", "https://host/x.git"},
+		{"https://user:ab/cd@host/x.git", "user:ab", unparseableRepoURL},
+		{"not a url with:secret@", "secret", unparseableRepoURL},
+	} {
+		got := repoRecordURL(tc.in)
+		if got != tc.want || strings.Contains(got, tc.secret) || strings.Contains(got, "user:") {
+			t.Errorf("repoRecordURL(%q) = %q, want %q with no part of the credential", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestGetWorkspaceBuild_ExplicitKindsShowTheirRecord: a registry or byo workspace whose row names a
+// cached wrap of its base answers done with the record (read from the row alone, as after a restart),
+// not "nothing_to_build"; with no wrap on the row it still boots as-is.
+func TestGetWorkspaceBuild_ExplicitKindsShowTheirRecord(t *testing.T) {
+	const base = "registry.corp.internal/base:1"
+	for _, kind := range []string{"registry", "byo", "custom"} {
+		t.Run(kind, func(t *testing.T) {
+			srv, st := newTopologyWorkspaceServer(t, "")
+			srv.cfg.ImageBuilder = &idBuilder{id: recImageID, found: true}
+			key := byoiCacheKey(kind, base)
+			st.ws.BaseImage = &types.WorkspaceBaseImage{Kind: kind, Image: base}
+			st.ws.ImageRef, st.ws.BuiltProfileHash = "built/wrap", key
+			st.ws.ImageBuild = newImageBuild(types.ImageBuildLaneBYOI, key, uuid.New(), types.ImageBuildReasonCacheMiss,
+				types.ImageBuildInputs{Base: types.ImageBuildRef{Ref: base}}, BuiltImage{Ref: "built/wrap", ID: recImageID}, time.Now())
+			wantSum, _ := st.ws.ImageBuild.SHA256()
+			admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+			member := ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleUser)
+			id := st.ws.ID.String()
+
+			for name, session := range map[string]*http.Cookie{"full": admin, "member": member} {
+				w := doSSO(t, srv, http.MethodGet, "/api/v1/workspaces/"+id+"/build", session, "")
+				var out map[string]any
+				if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || w.Code != http.StatusOK {
+					t.Fatalf("%s: GET .../build = %d: %s", name, w.Code, w.Body.String())
+				}
+				if out["state"] != "done" || out["record_sha256"] != wantSum || out["reproducible"] != false || out["image"] != "built/wrap" {
+					t.Errorf("%s: view = %v, want done with the record, reproducible=false and the built image", name, out)
+				}
+				if name == "member" && strings.Contains(w.Body.String(), base) {
+					t.Errorf("a member saw the authored base: %s", w.Body.String())
+				}
+			}
+
+			st.ws.ImageRef, st.ws.BuiltProfileHash, st.ws.ImageBuild = "", "", nil
+			w := doSSO(t, srv, http.MethodGet, "/api/v1/workspaces/"+id+"/build", admin, "")
+			wantState := "nothing_to_build"
+			if kind == "custom" {
+				wantState = "none"
+			}
+			if !strings.Contains(w.Body.String(), `"state":"`+wantState+`"`) {
+				t.Errorf("with nothing built the view = %s, want state %s", w.Body.String(), wantState)
+			}
+		})
+	}
+}

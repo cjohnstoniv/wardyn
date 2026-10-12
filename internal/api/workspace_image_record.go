@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"net/url"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -68,15 +70,36 @@ func imageBuildReason(primary types.Workspace, key string) string {
 }
 
 // repoRecordURL is the clone URL as the record keeps it: without userinfo, which
-// repoCloneURL passes through for an https source and which is a credential.
+// repoCloneURL passes through for an https source and which is a credential. A URL
+// that does not parse fails closed: everything up to the last '@' before the path
+// goes, and a URL whose authority cannot be found is not recorded at all.
 func repoRecordURL(cloneURL string) string {
-	u, err := url.Parse(cloneURL)
-	if err != nil || u.User == nil {
-		return cloneURL
+	if u, err := url.Parse(cloneURL); err == nil {
+		u.User = nil
+		return u.String()
 	}
-	u.User = nil
-	return u.String()
+	scheme, rest, ok := strings.Cut(cloneURL, "://")
+	if !ok {
+		if scpRepoURL.MatchString(cloneURL) {
+			return cloneURL // user@host:path carries a user name, never a password
+		}
+		return unparseableRepoURL
+	}
+	authority, path, hasPath := strings.Cut(rest, "/")
+	at := strings.LastIndex(authority, "@")
+	if at < 0 {
+		return unparseableRepoURL
+	}
+	out := scheme + "://" + authority[at+1:]
+	if hasPath {
+		out += "/" + path
+	}
+	return out
 }
+
+var scpRepoURL = regexp.MustCompile(`^[\w.-]+@[\w.-]+:[^\s@]*$`)
+
+const unparseableRepoURL = "<unparseable repository URL>"
 
 // imageBuildView returns ws's build record while it is current (design §3.3):
 // schema known, naming the row's image and cache key, and, when the builder can
