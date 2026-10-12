@@ -13,6 +13,7 @@ import { useModelAccessDoor, useShellSetupStatus } from "../../../../wardyn/mode
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import type { AccessFacts } from "../../../../../lib/types/new-run-access";
+import type { HarnessSetFact } from "../../../../../lib/types/new-run-contract";
 import { intentToWire } from "../../draft/intent-to-wire";
 import { useDraftIdentity, useIntentChecks } from "../../draft/use-intent-checks";
 import { useLocalIssues, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
@@ -42,15 +43,15 @@ function useAccess() {
     autoCheck: NO_AUTO_PREFLIGHT, doorOpen: door.open, adoDoorOpen: false,
   });
   // While the next answer is out, the last one stays on screen with every host back at Requested.
-  const last = React.useRef<AccessFacts>();
+  const last = React.useRef<{ access: AccessFacts; harnessSet?: HarnessSetFact }>();
   const current = checks.preview.result?.access;
-  if (current) last.current = current;
-  return { access: current ?? last.current, answered: checks.preview.current && !!current, recheck: checks.invalidateChecks };
+  if (current) last.current = { access: current, harnessSet: checks.preview.result?.harness_set };
+  return { access: current ?? last.current?.access, harnessSet: last.current?.harnessSet, answered: checks.preview.current && !!current, recheck: checks.invalidateChecks };
 }
 
 export function ToolsStep({ go }: NewRunScreenProps) {
   const draft = useNewRunDraft();
-  const { access, answered, recheck } = useAccess();
+  const { access, harnessSet, answered, recheck } = useAccess();
   const { status } = useShellSetupStatus();
   const names = React.useMemo(() => new Map((status?.harnesses ?? []).map((h) => [h.id, h.display])), [status?.harnesses]);
   // Items finished here wait for the server's next answer: only that answer settles them.
@@ -77,7 +78,7 @@ export function ToolsStep({ go }: NewRunScreenProps) {
       issues={stepIssues("tools", draft.intent)}
     >
       <AlreadyIncluded access={access} answered={answered} intent={draft.intent} names={names} />
-      <HarnessSetup access={access} intent={draft.intent} answered={answered} names={names} onSignedIn={recheck} />
+      <HarnessSetup access={access} harnessSet={harnessSet} intent={draft.intent} answered={answered} names={names} onSignedIn={recheck} />
       <AddTools access={access} answered={answered} intent={draft.intent} />
       <Totals access={access} answered={answered} names={names} />
       <SetupNeeded items={items} pending={pending} done={settled} intent={draft.intent} names={names} onDone={finish} />

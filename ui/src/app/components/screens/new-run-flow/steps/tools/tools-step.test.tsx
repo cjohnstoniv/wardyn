@@ -9,7 +9,9 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { secrets } from "../../../../../lib/api/secrets";
 import { SCENARIO_ACCESS, SETUP_ITEMS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
+import { CLAUDE_UNGATED, withFacts } from "../../../../../lib/new-run-fixtures/scenarios/tools-harness";
 import type { AccessFacts } from "../../../../../lib/types/new-run-access";
+import type { HarnessSetFact } from "../../../../../lib/types/new-run-contract";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
@@ -18,6 +20,7 @@ import { ToolsStep } from "./tools-step";
 
 const h = vi.hoisted(() => ({
   params: vi.fn(),
+  providers: [] as unknown[],
   checks: { preview: { result: undefined as unknown, current: false }, invalidateChecks: vi.fn() },
 }));
 vi.mock("../../draft/use-intent-checks", () => ({
@@ -27,14 +30,14 @@ vi.mock("../../draft/use-intent-checks", () => ({
 vi.mock("../../../../wardyn/model-access-context", () => ({
   useModelAccessDoor: () => ({ openDoor: vi.fn(), open: false }),
   useShellSetupStatus: () => ({
-    status: { harnesses: [{ id: "claude-code", display: "Claude Code" }, { id: "codex-cli", display: "Codex CLI" }], model_providers: [] },
+    status: { harnesses: [{ id: "claude-code", display: "Claude Code" }, { id: "codex-cli", display: "Codex CLI" }], model_providers: h.providers },
     refresh: () => {},
   }),
 }));
 
 const READY: RunIntent = { shape: "environment", experience: "interactive", no_repositories_or_drives: true, tools: [{ id: "claude-code", kind: "harness" }] };
 const go = vi.fn();
-const answer = (access: AccessFacts | undefined, current: boolean) => { h.checks.preview = { result: access ? { access } : undefined, current }; };
+const answer = (access: AccessFacts | undefined, current: boolean, harness_set?: HarnessSetFact) => { h.checks.preview = { result: access ? { access, harness_set } : undefined, current }; };
 
 function Seed({ intent, children }: { intent: RunIntent; children: React.ReactNode }) {
   const dispatch = useNewRunDispatch();
@@ -59,6 +62,7 @@ function show(intent: RunIntent = READY) {
 const network = () => within(screen.getByRole("heading", { name: NR_TOOLS.NETWORK_TITLE }).parentElement as HTMLElement);
 
 beforeEach(() => {
+  h.providers = [];
   answer(undefined, false);
   vi.spyOn(secrets, "setSecret").mockResolvedValue(undefined);
 });
@@ -81,6 +85,15 @@ describe("Tools and access step", () => {
     expect(go).toHaveBeenCalledWith({ screen: "review", view: "pretty" });
     await userEvent.click(screen.getByRole("button", { name: NR_SHARED.BACK }));
     expect(go).toHaveBeenCalledWith({ screen: "step", step: "files" });
+  });
+
+  it("shows the provider the preview's harness_set says the server chose, and leaves the draft alone (R)", async () => {
+    h.providers = [{ id: "only-one", name: "Only provider", kind: "api_key", harnesses: ["claude-code"], host: "h" }];
+    answer(withFacts(SCENARIO_ACCESS.member, [CLAUDE_UNGATED]), true, { shared_model_access: false, harnesses: [{ id: "claude-code", starts: true, model_credential: { provider: "only-one", kind: "api_key", residency: "proxy" } }] });
+    show();
+    const select = (await screen.findByLabelText(NR_TOOLS.PROVIDER_LABEL)) as HTMLSelectElement;
+    expect(select.value).toBe("only-one");
+    expect(screen.queryByText(NR_TOOLS.PROVIDER_REQUIRED)).toBeNull();
   });
 
   it("goes to Review with setup unfinished: it becomes blockers there, not a stop here", async () => {
