@@ -159,10 +159,14 @@ const RunnerPoolDefaultsPrefKey = "runner_pool_defaults.v1"
 // absent field inherits (a person's from the organisation's, the organisation's
 // from nothing); it is never a way to widen what a person may use, because a
 // default only ever seeds a choice the catalogue must still permit.
+//
+// Barrier is the organisation's alone: the class an untouched launch gets when it is at or above the
+// floor and the pool offers it. A person's own document never carries one.
 type RunnerPoolDefaults struct {
 	PreferredHosting RunnerPoolHosting `json:"preferred_hosting,omitempty"`
 	RemoteProvided   *uuid.UUID        `json:"remote_provided,omitempty"`
 	SelfHosted       *uuid.UUID        `json:"self_hosted,omitempty"`
+	Barrier          ConfinementClass  `json:"barrier,omitempty"`
 }
 
 // PoolFor is the default pool for a hosting type, nil when none is set.
@@ -187,6 +191,9 @@ func (d RunnerPoolDefaults) Validate() error {
 		if id != nil && *id == uuid.Nil {
 			return errors.New("a default pool is a pool id")
 		}
+	}
+	if d.Barrier != "" && d.Barrier.Rank() == 0 {
+		return fmt.Errorf("barrier %q is not CC1, CC2 or CC3", d.Barrier)
 	}
 	return nil
 }
