@@ -27,7 +27,8 @@ import (
 // selfHostedOwnerOnlyMsg refuses an administrator's create of a Self-Hosted pool.
 const selfHostedOwnerOnlyMsg = "a Self-Hosted pool belongs to the person whose runners it holds: each person creates their own"
 
-// noOrgSelfHostedDefaultMsg refuses an organisation default naming a Self-Hosted pool.
+// noOrgSelfHostedDefaultMsg refuses an organisation default naming a Self-Hosted pool or preferring
+// Self-Hosted: the organisation's defaults are Remote Provided only.
 const noOrgSelfHostedDefaultMsg = "the organisation has no Self-Hosted default: each person chooses their own Self-Hosted pool"
 
 // personalBarrierDefaultMsg refuses a person's own defaults naming a barrier.
@@ -421,7 +422,7 @@ func (s *Server) handlePutOrgRunnerPoolDefaults(w http.ResponseWriter, r *http.R
 		writePoolInvalid(w, err.Error())
 		return
 	}
-	if d.SelfHosted != nil {
+	if d.SelfHosted != nil || d.PreferredHosting == types.RunnerPoolSelfHosted {
 		writePoolInvalid(w, noOrgSelfHostedDefaultMsg)
 		return
 	}

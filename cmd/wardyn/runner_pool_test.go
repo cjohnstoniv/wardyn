@@ -193,3 +193,35 @@ func TestRunnerPoolOrgDefaultSetKeepsThePoolsAndSetsTheBarrier(t *testing.T) {
 		}
 	}
 }
+
+// add and remove send one of your runners to your own pool's member route and print the server's
+// sentence when it refuses.
+func TestRunnerPoolAddAndRemoveOwnRunner(t *testing.T) {
+	pool, runnerID := uuid.New(), uuid.New()
+	path := "/api/v1/me/runner-pools/" + pool.String() + "/runners/" + runnerID.String()
+	srv := newCmdServer(t, http.StatusCreated, sdk.RunnerPoolMember{PoolID: pool, RunnerID: &runnerID})
+	base := []string{"--url", srv.URL, "--token", "t"}
+	for verb, method := range map[string]string{"add": http.MethodPut, "remove": http.MethodDelete} {
+		if err := execCmd(t, append([]string{"runner", "pool", verb, pool.String(), runnerID.String()}, base...)...); err != nil {
+			t.Fatalf("%s: %v", verb, err)
+		}
+		if r := srv.last(); r.method != method || r.path != path {
+			t.Errorf("%s sent %s %s, want %s %s", verb, r.method, r.path, method, path)
+		}
+	}
+	n := len(srv.reqs)
+	for _, bad := range [][]string{{"add", pool.String()}, {"add", "not-a-pool", runnerID.String()}, {"remove", pool.String(), "not-a-runner"}} {
+		if err := execCmd(t, append(append([]string{"runner", "pool"}, bad...), base...)...); err == nil {
+			t.Errorf("%v was accepted", bad)
+		}
+	}
+	if len(srv.reqs) != n {
+		t.Error("an invalid command reached the server")
+	}
+	sentence := runnerID.String() + " is not one of your runners in Laptop."
+	refusing := newCmdServer(t, http.StatusUnprocessableEntity, map[string]string{"error": sentence, "reason": "runner_pool_member_mismatch"})
+	err := execCmd(t, "runner", "pool", "add", pool.String(), runnerID.String(), "--url", refusing.URL, "--token", "t")
+	if err == nil || !strings.Contains(err.Error(), sentence) {
+		t.Errorf("a refused add = %v, want the server's sentence", err)
+	}
+}

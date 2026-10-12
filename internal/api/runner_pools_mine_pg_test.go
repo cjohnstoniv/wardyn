@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -297,5 +298,79 @@ func TestPG_MyPoolLimitsAreBoundedByGovernance(t *testing.T) {
 	}
 	if got := plan.applied.CPUMillis; got.Applied != 6000 || !got.Capped || got.Source != types.LimitSourceGovernance {
 		t.Errorf("applied cpu = %+v, want 6000 capped by governance", got)
+	}
+}
+
+// A Self-Hosted pool has no use policy. Its owner, on every use-policy verb, is told so in plain words;
+// anyone else, an administrator included, gets the unknown-id 404 byte for byte, and nothing is stored.
+func TestPG_UsePolicyRoutesOnASelfHostedPool(t *testing.T) {
+	e := newPoolEnv(t, false)
+	own := e.createOwnPool(e.alice, "Alice laptop")
+	random := uuid.New()
+	body := `{"subjects":[{"subject_type":"user","subject":"sub-other"}]}`
+	for _, m := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+		w := e.call(e.alice, m, usePolicyPath(own.ID), body)
+		if w.Code != http.StatusUnprocessableEntity || wireReason(t, w) != string(runnerpool.ReasonMemberMismatch) ||
+			!strings.Contains(w.Body.String(), "Alice laptop is your own Self-Hosted pool: only you use it, so it has no use policy.") {
+			t.Errorf("owner %s = %d %s, want 422 saying a Self-Hosted pool has no use policy", m, w.Code, w.Body)
+		}
+		got := e.call(e.super, m, usePolicyPath(own.ID), body)
+		want := e.call(e.super, m, usePolicyPath(random), body)
+		if got.Code != http.StatusNotFound || got.Body.String() != want.Body.String() {
+			t.Errorf("another admin %s = %d %s, a random id = %d %s", m, got.Code, got.Body, want.Code, want.Body)
+		}
+	}
+	if n := e.count(`SELECT count(*) FROM runner_pool_use_policies`); n != 0 || e.revision(own.ID) != 1 {
+		t.Errorf("%d use policies stored, revision %d", n, e.revision(own.ID))
+	}
+}
+
+// Only a claimed runner of the caller's, bound to this organisation, joins a pool: a revoked or an
+// unclaimed one of their own answers exactly as an unknown runner, and nothing is stored.
+func TestPG_RevokedAndUnclaimedRunnersNeverJoinAPool(t *testing.T) {
+	e := newPoolEnv(t, false)
+	pool := e.createOwnPool(e.person, "Laptop")
+	revoked := e.claimedRunner(e.personP)
+	if _, err := e.pg.RevokeRunner(context.Background(), revoked, time.Now(), "", ""); err != nil {
+		t.Fatal(err)
+	}
+	unclaimed := e.rawRunner(e.personP, poolTestOrgURL, false)
+	unknown := uuid.New()
+	answer := func(id uuid.UUID) string {
+		t.Helper()
+		w := e.call(e.person, http.MethodPut, addRunnerPath(pool.ID, id), "")
+		if w.Code != http.StatusUnprocessableEntity || wireReason(t, w) != string(runnerpool.ReasonMemberMismatch) {
+			t.Errorf("adding %s = %d %s, want 422 runner_pool_member_mismatch", id, w.Code, w.Body)
+		}
+		return strings.ReplaceAll(w.Body.String(), id.String(), "X")
+	}
+	want := answer(unknown)
+	for name, id := range map[string]uuid.UUID{"revoked": revoked, "unclaimed": unclaimed} {
+		if got := answer(id); got != want {
+			t.Errorf("a %s runner answered %s, an unknown one %s", name, got, want)
+		}
+	}
+	if n := e.members(pool.ID); n != 0 || e.revision(pool.ID) != 1 {
+		t.Errorf("%d members, revision %d", n, e.revision(pool.ID))
+	}
+}
+
+// The state 0168 leaves an organisation that preferred Self-Hosted in: no organisation preference, its
+// Remote Provided default kept. A launch that names no pool, from a person with no preference of their
+// own, is refused runner_pool_required at every door: the clear never switches anyone to Remote Provided.
+// Once the person (or an administrator) sets a preference, the same launch resolves.
+func TestPG_ClearedOrganisationPreferenceAsksForAChoice(t *testing.T) {
+	e := newPlacementEnv(t)
+	remote := e.createPool("Provided", types.RunnerPoolRemoteProvided)
+	e.addExecutors(remote.ID, "alpha")
+	e.orgDefaults(fmt.Sprintf(`{"remote_provided":%q}`, remote.ID))
+	sameEverywhere(t, "a launch naming nothing", e.answers(e.person, runBody("")), http.StatusUnprocessableEntity, string(runnerpool.ReasonRequired))
+	if w := e.call(e.person, http.MethodPut, "/api/v1/me/runner-pool-defaults", `{"preferred_hosting":"remote_provided"}`); w.Code != http.StatusOK {
+		t.Fatalf("personal preference = %d %s", w.Code, w.Body)
+	}
+	for door, w := range e.answers(e.person, runBody("")) {
+		if w.Code >= 300 && wireReason(t, w) == string(runnerpool.ReasonRequired) {
+			t.Errorf("%s after a personal preference = %d %s", door, w.Code, w.Body)
+		}
 	}
 }

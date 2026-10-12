@@ -10,15 +10,18 @@ import (
 	"github.com/google/uuid"
 )
 
-const runnerPoolOwnerMigration = "0166"
+const runnerPoolOwnerMigration = "0168"
 
-// TestMigration0166_OwnerlessSelfHostedPoolsAreACleanBreak applies the pool-owner migration over a
+// TestMigration0168_OwnerlessSelfHostedPoolsAreACleanBreak applies the pool-owner migration over a
 // catalogue from before it: each ownerless Self-Hosted pool goes, with its members, the organisation and
 // personal default slots naming it and any run waiting for it (ended KILLED); one a run is bound to stays
-// as a tombstone. The Remote Provided pool and its defaults are untouched, and afterwards the schema
+// as a tombstone. The organisation's preference for Self-Hosted is cleared to none, not switched to
+// Remote Provided (what a launch naming nothing then answers is TestPG_ClearedOrganisationPreference
+// AsksForAChoice). The Remote Provided pool, its executor and the organisation's remote
+// default are untouched, and afterwards the schema
 // refuses a live ownerless Self-Hosted pool, an owned Remote Provided pool and an organisation
 // Self-Hosted default, while two owners may share a name.
-func TestMigration0166_OwnerlessSelfHostedPoolsAreACleanBreak(t *testing.T) {
+func TestMigration0168_OwnerlessSelfHostedPoolsAreACleanBreak(t *testing.T) {
 	pool, _ := partialSchemaPool(t, runnerPoolOwnerMigration)
 	ctx := context.Background()
 	remote, waited, bound := uuid.New(), uuid.New(), uuid.New()
@@ -41,7 +44,7 @@ func TestMigration0166_OwnerlessSelfHostedPoolsAreACleanBreak(t *testing.T) {
 		VALUES ($1, 'sub-person', 'claude-code', 'repo', 'CC1', 'COMPLETED', 'spiffe://x/r', 'docker', $2, 'explicit')`, ran, bound)
 
 	if err := Migrate(ctx, pool); err != nil {
-		t.Fatalf("Migrate applying 0166 over a seeded catalogue: %v", err)
+		t.Fatalf("Migrate applying 0168 over a seeded catalogue: %v", err)
 	}
 
 	if n := pgScalar[int](t, pool, `SELECT count(*)::int FROM runner_pools WHERE id = $1`, waited); n != 0 {
@@ -65,8 +68,8 @@ func TestMigration0166_OwnerlessSelfHostedPoolsAreACleanBreak(t *testing.T) {
 	if n := pgScalar[int](t, pool, `SELECT count(*)::int FROM run_queue`); n != 0 {
 		t.Errorf("%d queue rows survived", n)
 	}
-	if got := pgScalar[string](t, pool, `SELECT preferred_hosting || ':' || remote_provided::text || ':' || COALESCE(self_hosted::text, 'null') FROM runner_pool_org_defaults`); got != "self_hosted:"+remote.String()+":null" {
-		t.Errorf("organisation defaults = %s, want the Self-Hosted slot cleared and the rest kept", got)
+	if got := pgScalar[string](t, pool, `SELECT preferred_hosting || ':' || remote_provided::text || ':' || COALESCE(self_hosted::text, 'null') FROM runner_pool_org_defaults`); got != ":"+remote.String()+":null" {
+		t.Errorf("organisation defaults = %s, want the Self-Hosted slot and preference cleared and the remote default kept", got)
 	}
 	if got := pgScalar[string](t, pool, `SELECT value::text FROM principal_prefs WHERE principal = 'sub-person'`); got != `{"remote_provided": "`+remote.String()+`"}` {
 		t.Errorf("personal defaults = %s, want only the remote slot", got)

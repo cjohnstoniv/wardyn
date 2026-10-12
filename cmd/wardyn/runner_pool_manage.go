@@ -24,12 +24,46 @@ import (
 //	wardyn runner pool show <pool-id>
 //	wardyn runner pool update <pool-id> --switch off
 //	wardyn runner pool delete <pool-id> --yes
+//	wardyn runner pool add <pool-id> <runner-id>      # one of your claimed runners, into one of your pools
+//	wardyn runner pool remove <pool-id> <runner-id>
 //
 // --limits-file is the wire `limits` block as JSON (what `show --json` prints), "-" for stdin. An
 // update that names it replaces the pool's limits whole.
 
 func runnerPoolManageCmds(client clientFn) []*cobra.Command {
-	return []*cobra.Command{runnerPoolCreateCmd(client), runnerPoolShowCmd(client), runnerPoolUpdateCmd(client), runnerPoolDeleteCmd(client)}
+	return []*cobra.Command{runnerPoolCreateCmd(client), runnerPoolShowCmd(client), runnerPoolUpdateCmd(client), runnerPoolDeleteCmd(client),
+		runnerPoolMemberCmd(client, true), runnerPoolMemberCmd(client, false)}
+}
+
+// runnerPoolMemberCmd is `add` (add true) or `remove`: one of your own runners into or out of one of your
+// own Self-Hosted pools. Whether the runner may join is the server's to say; its sentence is printed.
+func runnerPoolMemberCmd(client clientFn, add bool) *cobra.Command {
+	use, short := "add <pool-id> <runner-id>", "Put one of your claimed runners in one of your Self-Hosted pools"
+	if !add {
+		use, short = "remove <pool-id> <runner-id>", "Take one of your runners out of one of your Self-Hosted pools"
+	}
+	return &cobra.Command{Use: use, Short: short, Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		pool, err := uuid.Parse(args[0])
+		if err != nil {
+			return fmt.Errorf("parse pool id %q: %w", args[0], err)
+		}
+		runnerID, err := uuid.Parse(args[1])
+		if err != nil {
+			return fmt.Errorf("parse runner id %q: %w", args[1], err)
+		}
+		if !add {
+			if err := client().RemoveMyRunnerFromPool(cmd.Context(), pool, runnerID); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "runner %s is not in pool %s\n", runnerID, pool)
+			return err
+		}
+		if _, err := client().AddMyRunnerToPool(cmd.Context(), pool, runnerID); err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "runner %s is in pool %s\n", runnerID, pool)
+		return err
+	}}
 }
 
 func runnerPoolCreateCmd(client clientFn) *cobra.Command {
