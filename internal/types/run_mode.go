@@ -236,3 +236,13 @@ func ValidateHarnessToolRules(sets []HarnessToolRules) error {
 	}
 	return nil
 }
+
+// RunHarness is one harness a run was launched with and the model provider it
+// was granted ("" for none). The rows are the run's authorisation record: a
+// renew, revive or queued start re-checks the doors each one needed. Starts
+// marks the one harness the sandbox starts; at most one row per run has it.
+type RunHarness struct {
+	Harness         string `json:"harness"`
+	ModelProviderID string `json:"model_provider_id,omitempty"`
+	Starts          bool   `json:"starts,omitempty"`
+}
