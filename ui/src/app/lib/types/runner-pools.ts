@@ -65,6 +65,8 @@ export interface RunnerPoolDuration {
 export interface RunnerPoolBackgroundLimits {
   cpu_millis: RunnerPoolAmount;
   memory_mib: RunnerPoolAmount;
+  /** The main drive's default and cap in MiB, each a whole number of GiB. Absent: the pool sets no main-drive bound. */
+  disk_mib?: RunnerPoolAmount;
   lifetime: RunnerPoolDuration;
 }
 
@@ -72,6 +74,7 @@ export interface RunnerPoolBackgroundLimits {
 export interface RunnerPoolInteractiveLimits {
   cpu_millis: RunnerPoolAmount;
   memory_mib: RunnerPoolAmount;
+  disk_mib?: RunnerPoolAmount;
   lifetime: RunnerPoolDuration;
   idle: RunnerPoolDuration;
 }
@@ -115,6 +118,8 @@ export interface EffectiveRunLimits {
   run_type: RunnerPoolRunType;
   cpu_millis: EffectiveLimit;
   memory_mib: EffectiveLimit;
+  /** The main drive's size in MiB; an unlimited default means an untouched run gets no size. */
+  disk_mib: EffectiveLimit;
   lifetime_sec: EffectiveLimit;
   lifetime_span_sec: EffectiveLimit;
   lifetime_lease_sec: EffectiveLimit;
