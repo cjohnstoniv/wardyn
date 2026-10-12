@@ -351,6 +351,12 @@ func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
 	policyDefault := policyToolEffect(rules, toolLaneDefault(req), "*")
 	fact.Default = client.ToolDefaultFact{Effective: policyDefault, Source: b.toolRuleSource(types.ToolRule{Tool: "*", Effect: policyDefault}),
 		Options: toolEffectOptions(policyDefault, forDefault, "policy_stricter_default")}
+	if fact.Lane == toolLaneAttended {
+		// Claude Code's settings name tools (agentpolicy.WithToolRules): a tool no
+		// rule names is answered by its mode, which asks, whatever the policy's "*".
+		fact.Default = client.ToolDefaultFact{Effective: types.ToolHold, Source: client.ProvenanceSource{Kind: provKindHarness},
+			Options: toolEffectOptions(types.ToolHold, forDefault, "policy_stricter_default")}
+	}
 	if i := slices.IndexFunc(req.Tools, func(t client.IncludedTool) bool { return t.ID == harness }); i >= 0 &&
 		effectRank(req.Tools[i].DefaultEffect) > effectRank(policyDefault) {
 		fact.Default.Effective, fact.Default.Source = req.Tools[i].DefaultEffect, client.ProvenanceSource{Kind: provKindPerson}

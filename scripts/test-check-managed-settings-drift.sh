@@ -38,7 +38,9 @@ fake_cli() {
 # reports the bypass mode when $FAKE_BYPASS is set (a CLI ignoring disableBypassPermissionsMode); a
 # --permission-mode manual run reports $FAKE_MANUAL_MODE (default: "default"). A hook run touches the marker
 # unless the file sets allowManagedHooksOnly, or always when $FAKE_HOOK_FIRES is set; it never touches the
-# marker when $FAKE_NO_HOOK is set (a CLI that runs no repository hook at all, control run included).
+# marker when $FAKE_NO_HOOK is set (a CLI that runs no repository hook at all, control run included). Every
+# init event lists the tools Bash, Read and WebFetch, less those the file's permissions.deny names, unless
+# $FAKE_DENY_IGNORED is set (a CLI that ignores the deny list).
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/docker" <<'FAKE'
 #!/bin/sh
@@ -48,16 +50,21 @@ if [ -n "${m:-}" ]; then
     if [ -z "${d:-}" ] || [ -n "${FAKE_HOOK_FIRES:-}" ] || ! grep -q '"allowManagedHooksOnly": true' "$d/managed-settings.json"; then touch "$m/fired"; fi
     exit 1
 fi
-mode="$(sed -nE 's/^[[:space:]]*"defaultMode":[[:space:]]*"([^"]*)".*/\1/p' "$d/managed-settings.json" | head -1)"
+mode=""; tools=""
+for t in Bash Read WebFetch; do
+    if [ -n "${d:-}" ] && [ -z "${FAKE_DENY_IGNORED:-}" ] && sed -n '/"deny": \[/,/\]/p' "$d/managed-settings.json" | grep -q "\"$t\""; then continue; fi
+    tools="$tools${tools:+,}\"$t\""
+done
+[ -z "${d:-}" ] || mode="$(sed -nE 's/^[[:space:]]*"defaultMode":[[:space:]]*"([^"]*)".*/\1/p' "$d/managed-settings.json" | head -1)"
 mode="${FAKE_MODE:-$mode}"
 [ -z "${by:-}" ] || [ -z "${FAKE_BYPASS:-}" ] || mode=bypassPermissions
 [ -z "${man:-}" ] || mode="${FAKE_MANUAL_MODE:-default}"
-echo "{\"type\":\"system\",\"subtype\":\"init\",\"permissionMode\":\"$mode\"}"
+echo "{\"type\":\"system\",\"subtype\":\"init\",\"permissionMode\":\"$mode\",\"tools\":[$tools]}"
 exit 1
 FAKE
 chmod +x "$TMP/bin/docker"
 probe() { PATH="$TMP/bin:$PATH" CLAUDE_CODE_DIR="$TMP/cli-x64" CLAUDE_CODE_DIR_ARM64="$TMP/cli-arm64" "$TMP/scripts/check-managed-settings-drift.sh" 2>&1; }
-all=(permissions defaultMode disableBypassPermissionsMode disableAutoMode allowManagedHooksOnly allowManagedPermissionRulesOnly /etc/claude-code managed-settings.json)
+all=(permissions defaultMode disableBypassPermissionsMode disableAutoMode allowManagedHooksOnly allowManagedPermissionRulesOnly /etc/claude-code managed-settings.json allow ask deny)
 
 # 1. Nothing drifted => pass.
 fake_cli "$pin" "${all[@]}"
@@ -69,6 +76,12 @@ fake_cli "$pin" permissions defaultMode disableBypassPermissionsMode disableAuto
 if out="$(probe)"; then fail "a CLI missing allowManagedPermissionRulesOnly must FAIL"; fi
 grep -q "DRIFT: managed-settings key 'allowManagedPermissionRulesOnly'" <<<"$out" || fail "drift must name the missing key; got: $out"
 echo "ok  a missing key fails and is named"
+
+# 2b. A permission list the attended-rules documents write gone => fail naming it.
+fake_cli "$pin" "${all[@]:0:8}" allow deny
+if out="$(probe)"; then fail "a CLI missing the ask list must FAIL"; fi
+grep -q "DRIFT: managed-settings key 'ask'" <<<"$out" || fail "drift must name the missing ask list; got: $out"
+echo "ok  a missing permission list fails and is named"
 
 # 3. The file name gone => fail naming it.
 fake_cli "$pin" "${all[@]:0:7}"
@@ -136,6 +149,12 @@ if out="$(probe)"; then fail "no bypass-launchable document with allowManagedHoo
 grep -q "the hook check has nothing to prove" <<<"$out" || fail "an empty hook check must be named; got: $out"
 rm -r "$TMP/internal/agentpolicy" && mv "$TMP/internal/agentpolicy.bak" "$TMP/internal/agentpolicy"
 echo "ok  a hook check with no document to prove fails"
+
+# 8f. A CLI that ignores an attended-rules document's deny list => fail naming the document.
+fake_cli "$pin" "${all[@]}"
+if out="$(FAKE_DENY_IGNORED=1 probe)"; then fail "a CLI that still lists a denied tool must FAIL"; fi
+grep -q "attended-rules/L0.json: Claude Code $pin still lists 'Bash'" <<<"$out" || fail "an ignored deny list must be named; got: $out"
+echo "ok  an ignored deny list fails"
 
 # 9. An unpinned Dockerfile (a channel) => fail before anything is installed. Last: it leaves the copy unpinned.
 fake_cli "$pin" "${all[@]}"

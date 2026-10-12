@@ -177,19 +177,9 @@ var permissionKey = map[types.ToolEffect]string{types.ToolAllow: "allow", types.
 // nobody names, so the document's mode answers it (it asks). With no named rule, doc is returned as it came,
 // nil included. Any error means the rules could not be written exactly, and the run must not launch.
 func WithToolRules(doc []byte, rules []types.ToolRule) ([]byte, error) {
-	lists := map[string][]string{}
-	for _, r := range rules {
-		if r.Tool == "*" {
-			continue
-		}
-		key, ok := permissionKey[r.Effect]
-		if !ok {
-			return nil, fmt.Errorf("tool rule %q: effect %q is not allow, hold or deny", r.Tool, r.Effect)
-		}
-		if !isExactToolName(r.Tool) {
-			return nil, fmt.Errorf("tool rule %q is not one tool's exact name, and Claude Code would read it as a pattern", r.Tool)
-		}
-		lists[key] = append(lists[key], r.Tool)
+	lists, err := permissionLists(rules)
+	if err != nil {
+		return nil, err
 	}
 	if len(lists) == 0 {
 		return doc, nil
@@ -215,7 +205,6 @@ func WithToolRules(doc []byte, rules []types.ToolRule) ([]byte, error) {
 		}
 		perms[key] = raw
 	}
-	var err error
 	if top["permissions"], err = json.Marshal(perms); err != nil {
 		return nil, fmt.Errorf("write the managed settings' permissions: %w", err)
 	}
@@ -225,4 +214,30 @@ func WithToolRules(doc []byte, rules []types.ToolRule) ([]byte, error) {
 		return nil, fmt.Errorf("write the managed settings: %w", err)
 	}
 	return append(out, '\n'), nil
+}
+
+// CheckToolRules reports the first rule WithToolRules could not write, so a door can refuse a run before
+// dispatch would.
+func CheckToolRules(rules []types.ToolRule) error {
+	_, err := permissionLists(rules)
+	return err
+}
+
+// permissionLists is rules as Claude Code's permission lists, by key; "*" is left out.
+func permissionLists(rules []types.ToolRule) (map[string][]string, error) {
+	lists := map[string][]string{}
+	for _, r := range rules {
+		if r.Tool == "*" {
+			continue
+		}
+		key, ok := permissionKey[r.Effect]
+		if !ok {
+			return nil, fmt.Errorf("tool rule %q: effect %q is not allow, hold or deny", r.Tool, r.Effect)
+		}
+		if !isExactToolName(r.Tool) {
+			return nil, fmt.Errorf("tool rule %q is not one tool's exact name, and Claude Code would read it as a pattern", r.Tool)
+		}
+		lists[key] = append(lists[key], r.Tool)
+	}
+	return lists, nil
 }

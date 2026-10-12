@@ -513,6 +513,27 @@ func attendedDefaultRefusal(req createRunRequest, level types.AutonomyLevel) *ru
 	return nil
 }
 
+// attendedToolNamesRefusal refuses an interactive Claude Code run whose policy or
+// own rules name a tool its managed settings could not carry exactly (a pattern,
+// or a whole MCP server), here rather than at dispatch after the 201. Dispatch
+// still refuses it (agentPolicyFor), for a run no door folded.
+func attendedToolNamesRefusal(req createRunRequest, spec types.RunPolicySpec) *runRefusal {
+	if !requestIsInteractive(req) {
+		return nil
+	}
+	rules, claude := spec.ToolRules, req.Agent == claudeCodeHarness
+	for _, t := range req.Tools {
+		if t.ID == claudeCodeHarness && t.Kind == client.IncludedToolHarness {
+			rules, claude = slices.Concat(rules, t.ToolRules), true
+		}
+	}
+	if err := agentpolicy.CheckToolRules(rules); claude && err != nil {
+		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
+			"This run's tool rules can't be written into Claude Code's managed settings: "+err.Error())
+	}
+	return nil
+}
+
 // attendedDefaultReasons is why Claude Code's default in an interactive run at
 // level can be neither "Run it" nor "Block it": where the managed settings the
 // level brings lock bypass off, it can never skip asking; elsewhere Wardyn has
