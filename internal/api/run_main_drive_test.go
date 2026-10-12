@@ -6,6 +6,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -50,6 +53,15 @@ func TestMainDriveFor(t *testing.T) {
 	}, {
 		name: "the default is soft", lim: capped(2048, 8192, types.LimitSourceDeployment),
 		want: mainDrive{MiB: 2048, Basis: client.MainDriveBasisDefault, DefaultSource: types.LimitSourceDeployment, Soft: true},
+	}, {
+		// A cap that stands in as the default (here a profile's maximum) is reported as the server's:
+		// default_source is pool or deployment only.
+		name: "a cap standing in as the default reports a closed default source", lim: types.EffectiveLimit{
+			Default: finite(2048), Cap: finite(2048), DefaultSource: types.LimitSourceGovernance, CapSource: types.LimitSourceGovernance},
+		want: mainDrive{MiB: 2048, Basis: client.MainDriveBasisDefault, DefaultSource: types.LimitSourceDeployment, Soft: true},
+	}, {
+		name: "a pool's default stays the pool's", lim: types.EffectiveLimit{Default: finite(1024), Cap: finite(4096), DefaultSource: types.LimitSourcePool, CapSource: types.LimitSourcePool},
+		want: mainDrive{MiB: 1024, Basis: client.MainDriveBasisDefault, DefaultSource: types.LimitSourcePool, Soft: true},
 	}, {
 		name: "none is no size", lim: unlimited,
 		want: mainDrive{Basis: client.MainDriveBasisNone},
@@ -134,5 +146,21 @@ func TestRunFitSpecAsksTheQuotaAboutTheDecidedSize(t *testing.T) {
 	}
 	if own.DiskMiB != 100 || spec.Resources != own {
 		t.Errorf("the caller's spec was written: %+v", own)
+	}
+}
+
+// TestMainDriveUnenforceableUnpooledSentence: a run in no pool is not told to choose another pool.
+func TestMainDriveUnenforceableUnpooledSentence(t *testing.T) {
+	srv := &Server{cfg: Config{Runner: &fakeRunner{capsDisk: types.StorageEnforcementNone}}}
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/preflight", nil)
+	f := &runFold{mode: foldPreflight, w: rec, r: r, req: &createRunRequest{},
+		spec:  types.RunPolicySpec{Resources: &types.ResourceLimits{DiskMiB: 4096}},
+		place: runPlacement{limits: types.EffectiveRunLimits{DiskMiB: types.EffectiveLimit{Cap: types.LimitAmount{Unlimited: true}, Default: types.LimitAmount{Unlimited: true}}}}}
+	if srv.stepMainDrive(f, &foldRecorder{}) || rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("an unpooled policy size on a runner that cannot cap disk: %d %s", rec.Code, rec.Body)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, mainDriveUnenforceableUnpooledMsg()) || strings.Contains(body, "pool") {
+		t.Errorf("body = %s, want the unpooled sentence", body)
 	}
 }

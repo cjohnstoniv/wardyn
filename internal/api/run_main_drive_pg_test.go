@@ -23,10 +23,13 @@ import (
 
 // diskPool is a remote pool over both executors that takes Background runs, with a main-drive
 // bound when capMiB is set.
-func (e *placementEnv) diskPool(name string, defMiB, capMiB int) types.RunnerPool {
+func (e *placementEnv) diskPool(name string, defMiB, capMiB int, executors ...string) types.RunnerPool {
 	e.t.Helper()
 	p := e.createPool(name, types.RunnerPoolRemoteProvided)
-	e.addExecutors(p.ID, "alpha", "beta")
+	if len(executors) == 0 {
+		executors = []string{"alpha", "beta"}
+	}
+	e.addExecutors(p.ID, executors...)
 	bg := types.RunnerPoolBackgroundLimits{CPUMillis: types.RunnerPoolAmount{Default: 1000, Cap: 4000},
 		MemoryMiB: types.RunnerPoolAmount{Default: 1024, Cap: 8192}, Lifetime: types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}}
 	if capMiB > 0 {
@@ -38,6 +41,15 @@ func (e *placementEnv) diskPool(name string, defMiB, capMiB int) types.RunnerPoo
 		e.t.Fatalf("set pool limits: %v", err)
 	}
 	return out
+}
+
+// setDiskWord makes every executor, and the deployment-wide capability, report one disk word.
+func (e *placementEnv) setDiskWord(w types.StorageEnforcement) {
+	e.runner.fakeRunner.capsDisk = w
+	for name, f := range e.runner.execFacts {
+		f.DiskEnforcement = w
+		e.runner.execFacts[name] = f
+	}
 }
 
 // orgStorage sets the organisation's storage.ephemeral block.
@@ -122,8 +134,14 @@ func TestPreflightAndDispatchAgreeOnEphemeralDisk(t *testing.T) {
 						if got := pv.Spec.Resources; got == nil || int64(got.DiskMiB) != res.DiskMiB {
 							t.Errorf("%+v: the preview's spec shows %v, dispatch created %d MiB", ask, got, res.DiskMiB)
 						}
-						if pf.MainDrive.ClampedBy != "" && !warned(created.Warnings, composer.WarnResourcesCapped) {
-							t.Errorf("%+v: the 201 warnings %v do not say the clamp %q", ask, created.Warnings, pf.MainDrive.ClampedBy)
+						if by := pf.MainDrive.ClampedBy; by != "" {
+							want := composer.WarnResourcesCapped
+							if by == client.MainDriveClampPolicy {
+								want = warnDiskPolicyCut
+							}
+							if !warned(created.Warnings, want) {
+								t.Errorf("%+v: the 201 warnings %v do not say the clamp %q with %q", ask, created.Warnings, by, want)
+							}
 						}
 					}
 				})
@@ -158,11 +176,11 @@ func TestRequestLessRunGetsCapWithoutDefault(t *testing.T) {
 	}
 }
 
-// TestRequestedDiskDegradesOnOverlayExt4: a requested size reaches the runner as a SOFT one, which
-// a docker host over overlay2/ext4 runs uncapped; the same number written by the run's policy is
-// hard, and that host refuses it. The runner here is that host's rule: it fails a create that carries
-// a hard size.
-func TestRequestedDiskDegradesOnOverlayExt4(t *testing.T) {
+// TestRequestedDiskReachesTheRunnerSoft: a requested size reaches the runner as a SOFT one, which a
+// docker host over overlay2/ext4 runs uncapped (docker's TestApplyDiskQuota_SoftSizeOnUnenforceableHost
+// RunsUncapped pins that half); the same number written by the run's policy reaches it hard. The fake
+// runner here only records the bit, so this proves the hand-off, not the host's degrade.
+func TestRequestedDiskReachesTheRunnerSoft(t *testing.T) {
 	e := newPlacementEnv(t)
 	pool := e.diskPool("Plain", 0, 0)
 	e.runner.fakeRunner.createErr = nil
@@ -184,7 +202,7 @@ func TestRequestedDiskDegradesOnOverlayExt4(t *testing.T) {
 // the same runner is not.
 func TestMainDriveUnenforceable(t *testing.T) {
 	e := newPlacementEnv(t)
-	e.runner.fakeRunner.capsDisk = types.StorageEnforcementNone
+	e.setDiskWord(types.StorageEnforcementNone)
 	pool := e.diskPool("Plain", 0, 0)
 	hard, soft := diskBody(pool, 0, 4096), diskBody(pool, 4096, 0)
 	for _, door := range placementDoors {
@@ -199,8 +217,48 @@ func TestMainDriveUnenforceable(t *testing.T) {
 			t.Errorf("%s with a requested size: %d %s, want it accepted (a soft size runs uncapped)", door, w.Code, w.Body)
 		}
 	}
-	e.runner.fakeRunner.capsDisk = types.StorageEnforcementFilesystem
+	e.setDiskWord(types.StorageEnforcementFilesystem)
 	if w := e.call(e.person, http.MethodPost, "/api/v1/runs/preflight", hard); w.Code != http.StatusOK {
 		t.Errorf("a policy size on a runner that can cap disk: %d %s", w.Code, w.Body)
+	}
+}
+
+// TestMainDriveUnenforceableJudgesTheRunsOwnPool: on a mixed estate (docker over ext4 reporting
+// `none`, Kubernetes reporting `eviction`) the deployment-wide word is the weakest, `none`. A policy
+// size is refused only in a pool whose every target reports `none`: a pool of the Kubernetes
+// executor, or one holding both, is accepted.
+func TestMainDriveUnenforceableJudgesTheRunsOwnPool(t *testing.T) {
+	e := newPlacementEnv(t)
+	e.runner.fakeRunner.capsDisk = types.StorageEnforcementNone // the orchestrator's weakest word
+	e.runner.execFacts["alpha"] = runner.TargetFacts{Classes: e.runner.execFacts["alpha"].Classes, DiskEnforcement: types.StorageEnforcementNone}
+	e.runner.execFacts["beta"] = runner.TargetFacts{Classes: e.runner.execFacts["beta"].Classes, DiskEnforcement: types.StorageEnforcementEviction}
+	dockerPool := e.diskPool("Docker", 0, 0, "alpha")
+	k8sPool := e.diskPool("K8s", 0, 0, "beta")
+	both := e.diskPool("Both", 0, 0)
+	for _, door := range placementDoors {
+		for pool, wantRefused := range map[string]bool{dockerPool.Name: true, k8sPool.Name: false, both.Name: false} {
+			p := map[string]types.RunnerPool{dockerPool.Name: dockerPool, k8sPool.Name: k8sPool, both.Name: both}[pool]
+			w := e.call(e.person, http.MethodPost, door, diskBody(p, 0, 4096))
+			refused := w.Code == http.StatusUnprocessableEntity && errorReason(w) == reasonMainDriveUnenforceable
+			if refused != wantRefused || (!refused && w.Code >= 300) {
+				t.Errorf("%s in pool %s: %d %s, want refused=%v", door, pool, w.Code, w.Body, wantRefused)
+			}
+		}
+	}
+}
+
+// TestClampWarningNamesThePolicyWhenThePolicyCut: a request above the size the run's own policy
+// writes is cut to it, and the 201 does not blame an operator maximum for that (the policy may be
+// the launcher's own). A cut by a real maximum keeps the operator sentence.
+func TestClampWarningNamesThePolicyWhenThePolicyCut(t *testing.T) {
+	e := newPlacementEnv(t)
+	pool := e.diskPool("Plain", 0, 0)
+	got := e.create(diskBody(pool, 100000, 7168)).Warnings
+	if !warned(got, warnDiskPolicyCut) || warned(got, composer.WarnResourcesCapped) {
+		t.Errorf("warnings = %v, want the policy sentence and not %q", got, composer.WarnResourcesCapped)
+	}
+	e.orgStorage(0, 6144)
+	if got = e.create(diskBody(pool, 100000, 0)).Warnings; !warned(got, composer.WarnResourcesCapped) {
+		t.Errorf("a cut by the organisation's maximum: warnings = %v, want %q", got, composer.WarnResourcesCapped)
 	}
 }

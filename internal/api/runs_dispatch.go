@@ -594,8 +594,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// agents must not be able to OOM-kill, fork-bomb, or disk-fill the host or
 		// each other (C5). DiskMiB is whatever applyEphemeralDisk above settled on,
 		// and DiskMiBSoft is its provenance: a driver that cannot enforce a cap
-		// refuses a run that ASKED for one and degrades one that merely inherited
-		// the org default (runner.Resources.DiskMiBFilled).
+		// refuses a size the run's policy wrote and degrades one a request or a
+		// default sized (runner.Resources.DiskMiBSoft).
 		Resources: resources,
 		Labels: map[string]string{
 			"wardyn.run":   run.ID.String(),
@@ -620,7 +620,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// snapshot below references still carries the real values.
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
 		run.ID.String(), "success", mustJSON(effectivePolicyDatum{
-			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskSoft, DiskMiBBasis: p.MainDrive.basis(),
+			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskSoft, DiskMiBBasis: p.MainDrive.basis(), DiskMiBDefaultSource: p.MainDrive.defaultSource(),
 		})))
 
 	// Held BEFORE CreateSandbox, not after: the row still carries the

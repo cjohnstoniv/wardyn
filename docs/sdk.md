@@ -189,7 +189,7 @@ The spec always strict-decodes as a policy. Whether it passes policy validation 
 
 #### `changes`
 
-Never `null`. Each item is a `cause` (`workspace`, `source_control`, `mirror`, `model_access`, `git_broker`, `profile`, `org_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `profile` for `profile`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`.
+Never `null`. Each item is a `cause` (`workspace`, `source_control`, `mirror`, `model_access`, `git_broker`, `profile`, `org_disk`, `pool_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `profile` for `profile`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`.
 Grants read `kind:host` or `kind:repo,repo`, mounts by target, repos `repo@ref`: never a hidden value.
 
 ## Following a run's lifecycle

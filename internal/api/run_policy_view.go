@@ -169,7 +169,7 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ev := collectEvidence(events, revives)
-	ev.diskFilled, ev.diskBasis = envelope.DiskMiBFilled, envelope.DiskMiBBasis
+	ev.diskFilled, ev.diskBasis, ev.diskDefaultSource = envelope.DiskMiBFilled, envelope.DiskMiBBasis, envelope.DiskMiBDefaultSource
 	ev.bounded = create.Source != nil && create.Source.Bounded
 	if create.Source != nil {
 		ev.clamp = create.ClampWarnings

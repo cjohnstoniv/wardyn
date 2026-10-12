@@ -29,6 +29,7 @@ const (
 	causeGitBroker     = "git_broker"
 	causeProfile       = "profile"
 	causeOrgDisk       = "org_disk"
+	causePoolDisk      = "pool_disk" // DRAFT (M2 canon pending): the console heading is policy-tab-copy.ts pool_disk
 	causeRestart       = "restart"
 	causeLimits        = "limits"
 	causeLaunch        = "launch"
@@ -36,7 +37,7 @@ const (
 
 var causeOrder = []string{
 	causeWorkspace, causeSourceControl, causeComponent, causeMirror, causeModelAccess, causeGitBroker,
-	causeProfile, causeOrgDisk, causeRestart, causeLimits, causeLaunch,
+	causeProfile, causeOrgDisk, causePoolDisk, causeRestart, causeLimits, causeLaunch,
 }
 
 // The RunPolicySpec fields a change can name, as their JSON names. The list
@@ -93,6 +94,7 @@ type auditEvidence struct {
 	bounded                                                                    bool                  // the member bound applied (policy_source.bounded)
 	diskFilled                                                                 bool                  // disk_mib_filled: no policy wrote the size (soft)
 	diskBasis                                                                  client.MainDriveBasis // disk_mib_basis; empty on a run that predates it
+	diskDefaultSource                                                          types.LimitSource     // disk_mib_default_source, with basis default
 	legacyGitBroker                                                            bool                  // no confine row exists and the run holds a github grant
 }
 
@@ -165,7 +167,7 @@ func explainRunPolicy(base *types.RunPolicySpec, resolved types.RunPolicySpec, e
 	}
 	for i := range out {
 		if out[i].Field == fieldDisk {
-			out[i].Detail = append(out[i].Detail, diskBasisSentence(ev.diskBasis)...)
+			out[i].Detail = append(out[i].Detail, diskBasisSentence(ev.diskBasis, ev.diskDefaultSource)...)
 		}
 	}
 	return out
@@ -287,6 +289,9 @@ func (x *explainer) evidenceCause(field, entry string, added bool) (cause, profi
 	case denyAdded && ev.profileDenied[entry], field == fieldDisk && x.profileClampedDisk():
 		return causeProfile, ev.profile, nil, true
 	case field == fieldDisk && x.diskOutsidePolicy() && ev.diskBasis != client.MainDriveBasisRequest:
+		if ev.diskDefaultSource == types.LimitSourcePool {
+			return causePoolDisk, "", nil, true
+		}
 		return causeOrgDisk, "", nil, true
 	case denyAdded && !ev.restart[entry].IsZero():
 		t := ev.restart[entry]
@@ -445,14 +450,17 @@ func setDiff(a, b []string) []string {
 // diskBasisSentence says where a recorded main-drive size came from, for the sources whose group
 // heading does not already say it. It names "the run's policy", never an admin: an inline or
 // overlay policy can be written by the person who launched the run.
-func diskBasisSentence(b client.MainDriveBasis) []string {
+func diskBasisSentence(b client.MainDriveBasis, src types.LimitSource) []string {
 	switch b {
 	case client.MainDriveBasisRequest:
 		return []string{"The disk size is from your request."}
 	case client.MainDriveBasisPolicy:
 		return []string{"The disk size is set by the run's policy."}
 	case client.MainDriveBasisDefault:
-		return []string{"The disk size is the default for this run's pool or this server."}
+		if src == types.LimitSourcePool {
+			return []string{"The disk size is the default of the pool this run started in."}
+		}
+		return []string{"The disk size is this server's default."}
 	}
 	return nil
 }
