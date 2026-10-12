@@ -12,7 +12,8 @@ import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
 import type { ConfinementClass } from "../../../../lib/types/runs";
 import { sameValue } from "../draft/draft-reducer";
-import type { RunIntent } from "../draft/run-intent";
+import type { NewRunDraft, RunIntent } from "../draft/run-intent";
+import { changedFromOrigin, draftSource, intentAt, originSource, serverSource } from "./provenance";
 import type { ReviewPreflight } from "./review-seams";
 
 export type PolicyRowId = "barrier" | "network" | "credentials" | "files" | "tools";
@@ -28,9 +29,6 @@ export interface PolicyRow {
 const joined = (...parts: (string | undefined)[]): string | undefined =>
   parts.filter((p): p is string => !!p).reduce<string | undefined>((all, p) => (all ? NR_SHARED.JOIN(all, p) : p), undefined);
 
-const at = (intent: RunIntent, path: string): unknown =>
-  path.split(".").reduce<unknown>((v, key) => (v as Record<string, unknown> | undefined)?.[key], intent);
-
 /** The draft keys each row stands for. */
 const ROW_KEYS: Record<PolicyRowId, string[]> = {
   barrier: ["confinement_class", "runner_pool_id"],
@@ -45,21 +43,30 @@ export function changedRows(intent: RunIntent, base: RunIntent): Set<PolicyRowId
   const perTool = (i: RunIntent, key: "model_provider" | "tool_rules" | "default_effect") => (i.tools ?? []).map((t) => t[key]);
   const changed = new Set<PolicyRowId>();
   for (const [id, keys] of Object.entries(ROW_KEYS) as [PolicyRowId, string[]][]) {
-    if (keys.some((k) => !sameValue(at(intent, k), at(base, k)))) changed.add(id);
+    if (keys.some((k) => !sameValue(intentAt(intent, k), intentAt(base, k)))) changed.add(id);
   }
   if (!sameValue(perTool(intent, "model_provider"), perTool(base, "model_provider"))) changed.add("credentials");
   if (!sameValue(perTool(intent, "tool_rules"), perTool(base, "tool_rules")) || !sameValue(perTool(intent, "default_effect"), perTool(base, "default_effect"))) changed.add("tools");
   return changed;
 }
 
-export function policyRows(intent: RunIntent, pre: ReviewPreflight | null, preview: PolicyPreviewResult | null): PolicyRow[] {
+const FILE_KEYS = ROW_KEYS.files;
+
+export function policyRows(draft: NewRunDraft, pre: ReviewPreflight | null, preview: PolicyPreviewResult | null): PolicyRow[] {
+  const { intent } = draft;
+  const ctx = { draft, pre, preview };
   const access = pre?.access ?? preview?.access;
   const rows: PolicyRow[] = [];
 
   const barrier = pre?.enforced_confinement_class ?? intent.confinement_class;
   if (barrier) {
     const fromList = pre?.barrier_options?.find((o) => o.default);
-    const how = intent.confinement_class ? NR_REVIEW.PROV_SELECTED : fromList?.default_source === "organisation" ? NR_REVIEW.PROV_ORG_DEFAULT : NR_RUN.BADGE_DEFAULT;
+    // A class the server raised past the person's pick is no longer the pick: it says nothing about who chose it.
+    const raised = !!intent.confinement_class && !!pre?.enforced_confinement_class && pre.enforced_confinement_class !== intent.confinement_class;
+    const how = raised ? undefined
+      : changedFromOrigin(draft, ["confinement_class"]) ? NR_REVIEW.PROV_SELECTED
+      : intent.confinement_class ? originSource(draft.origin)
+      : fromList?.default_source === "organisation" ? NR_REVIEW.PROV_ORG_DEFAULT : NR_RUN.BADGE_DEFAULT;
     rows.push({ id: "barrier", label: NR_REVIEW.POLICY_BARRIER, barrier, detail: joined(how, pre?.runner_pool && NR_REVIEW.WHERE_VALUE(pre.runner_pool.name)) });
   }
 
@@ -78,7 +85,7 @@ export function policyRows(intent: RunIntent, pre: ReviewPreflight | null, previ
   });
 
   const names = joined(...(pre?.attachments ?? []).map((a) => a.name));
-  rows.push({ id: "files", label: NR_REVIEW.POLICY_FILES, value: names ?? NR_REVIEW.WORK_NONE, detail: NR_REVIEW.PROV_ADDED });
+  rows.push({ id: "files", label: NR_REVIEW.POLICY_FILES, value: names ?? NR_REVIEW.WORK_NONE, detail: serverSource(ctx, { fields: ["workspace_mounts", "workspace_repos"] }) ?? draftSource(draft, FILE_KEYS, NR_REVIEW.PROV_ADDED) });
 
   const effect = access?.harnesses[0]?.default;
   const holds = effect ? effect.effective === "hold" : intent.tool_approvals === "hold";

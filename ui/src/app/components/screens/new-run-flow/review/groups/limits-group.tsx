@@ -11,6 +11,7 @@ import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { EffectiveLimit } from "../../../../../lib/types/runner-pools";
 import { parseCpuMillis, parseMemoryMib, setCpu, setMemory } from "../../lenses/limits-lens";
+import { draftSource } from "../provenance";
 import { cpuNumber, lifetimeText, memoryNumber } from "../format";
 import { ReviewGroup } from "../review-group";
 import type { GroupProps } from "./group-props";
@@ -76,9 +77,9 @@ export function LimitsGroup({ draft, pre, docRows, dispatch }: GroupProps) {
       label={NR_REVIEW.GROUP_LIMITS}
       value={value}
       detail={NR_REVIEW.LIMITS_DETAIL}
-      provenance={source || (requested ? NR_REVIEW.PROV_SELECTED : undefined)}
+      provenance={source || draftSource(draft, ["resources"], NR_REVIEW.PROV_SELECTED)}
       docRows={docRows}
-      editor={(close) => <LimitsEditor cpuMillis={cpuMillis} memoryMib={memoryMib} pre={pre} dispatch={dispatch} close={close} />}
+      editor={(close) => <LimitsEditor cpuMillis={requested?.cpu_millis} memoryMib={requested?.memory_mib} pre={pre} dispatch={dispatch} close={close} />}
     />
   );
 }

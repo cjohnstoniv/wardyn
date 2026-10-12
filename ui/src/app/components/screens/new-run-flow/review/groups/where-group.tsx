@@ -8,6 +8,7 @@ import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { HOSTING_LABEL } from "../../../../../lib/runner-pool-refusals";
+import { draftSource } from "../provenance";
 import { ReviewGroup } from "../review-group";
 import { onlineRunners } from "../review-seams";
 import { stepLocation, type GroupProps } from "./group-props";
@@ -26,7 +27,7 @@ export function WhereGroup({ draft, pre, docRows, go }: GroupProps) {
   const cc = pre?.enforced_confinement_class ?? draft.intent.confinement_class;
   const provenance = pool
     ? pool.selection === "explicit" ? NR_REVIEW.PROV_SELECTED : pool.selection === "organisation_default" ? NR_REVIEW.PROV_ORG_DEFAULT : undefined
-    : draft.intent.runner_pool_id ? NR_REVIEW.PROV_SELECTED : undefined;
+    : draftSource(draft, ["runner_pool_id"], NR_REVIEW.PROV_SELECTED);
   return (
     <ReviewGroup
       id="where"

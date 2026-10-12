@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { ReviewPreflight } from "../../../components/screens/new-run-flow/review/review-seams";
+import type { ReviewPreflight } from "../../types/new-run-review";
 import { everyScenario, type ByScenario } from "./index";
 
 const POOL = { id: "pool-general", name: "General", hosting_type: "remote_provided", revision: 1, selection: "organisation_default" } as const;

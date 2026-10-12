@@ -16,9 +16,8 @@ import type { ReviewPreflight } from "./review-seams";
 export function EffectivePolicyCard({ draft, pre, preview }: { draft: NewRunDraft; pre: ReviewPreflight | null; preview: PolicyPreviewResult | null }) {
   const [onlyChanged, setOnlyChanged] = React.useState(false);
   const changed = changedRows(draft.intent, draft.base);
-  const all = policyRows(draft.intent, pre, preview);
+  const all = policyRows(draft, pre, preview);
   const rows = onlyChanged ? all.filter((r) => changed.has(r.id)) : all;
-  const labelId = React.useId();
   return (
     <aside aria-label={NR_REVIEW.POLICY_TITLE} className="flex flex-col gap-3 rounded-lg border border-border p-4">
       <div>
@@ -27,7 +26,7 @@ export function EffectivePolicyCard({ draft, pre, preview }: { draft: NewRunDraf
       </div>
       <div className="flex items-center gap-2">
         <Switch checked={onlyChanged} onChange={setOnlyChanged} label={NR_REVIEW.ONLY_CHANGED} />
-        <span id={labelId} className="text-sm">{NR_REVIEW.ONLY_CHANGED}</span>
+        <span className="text-sm">{NR_REVIEW.ONLY_CHANGED}</span>
       </div>
       {rows.length === 0 ? (
         <div className="flex flex-col items-start gap-2">
