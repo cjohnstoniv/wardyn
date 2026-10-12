@@ -527,7 +527,7 @@ func (a *Authenticator) deriveLogin(r *http.Request, sub string, cc callbackClai
 	}
 	// A type is settled by matches, so like the role it cannot rest on a claim the token did not
 	// answer: refused with the overage code when such a claim could change it.
-	if unanswerableChangesUserType(claimsOverage(cc.claimNames) || len(cc.unreadable) > 0, d, roleMap, userTypes) {
+	if unanswerableChangesUserType(claimsOverage(cc.claimNames) || len(cc.unreadable) > 0, d, cc.email, roleMap, userTypes) {
 		slog.Warn("oidc: login denied — the IdP omitted a claim, or sent it in a shape this build cannot decode, that a role-map row naming a user type is keyed on, so the user type cannot be settled",
 			"sub", sub, "user_type", d.UserType, "claim_names", claimNamesKeys(cc.claimNames), "unreadable_claims", cc.unreadable)
 		return Derivation{}, authErrorClaimsOverage

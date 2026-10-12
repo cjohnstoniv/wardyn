@@ -11,6 +11,7 @@ package oidc_test
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -89,9 +90,10 @@ func TestUnansweredClaimKeepsSettledUserType(t *testing.T) {
 		// A type is irrelevant on the admin tier.
 		{overageTypeCase{name: "groups overage, answered claim derives admin", roleMap: map[string]string{"contractors-gid": "contractor", "app-admin": writoidc.RoleAdmin},
 			defaultRole: writoidc.RoleUser, overClaim: "groups", roles: []string{"app-admin"}}, writoidc.RoleAdmin, types.UserTypeStandard},
-		// An email-keyed row is answered by the email claim, never by a withheld one.
-		{overageTypeCase{name: "groups overage, only an email row names a higher type", roleMap: map[string]string{"other@corp.example": "lead", "app-dev": "developer"},
-			defaultRole: writoidc.RoleUser, overClaim: "groups", roles: []string{"app-dev"}}, writoidc.RoleUser, "developer"},
+		// Control: an email-shaped key is matched by a group value like any other.
+		{overageTypeCase{name: "no overage, an email-shaped group names the type", roleMap: map[string]string{"contractors@corp.example": "contractor"},
+			defaultRole: writoidc.RoleUser, groups: []string{"contractors@corp.example"}}, writoidc.RoleUser, "contractor"},
+		// The row keyed on the caller's own email is answered by the email claim.
 		{overageTypeCase{name: "groups overage, own email row names the top type", roleMap: map[string]string{"pat@corp.example": "lead", "contractors-gid": "contractor"},
 			defaultRole: writoidc.RoleUser, overClaim: "groups"}, writoidc.RoleUser, "lead"},
 	}
@@ -128,6 +130,12 @@ func TestUnansweredClaimRefusesWhenItCouldChangeUserType(t *testing.T) {
 			defaultRole: writoidc.RoleUser, overClaim: "groups", roles: []string{"app-dev"}},
 		{name: "roles overage, answered group names a lower type", roleMap: map[string]string{"app-contractor": "contractor", "dev-gid": "developer"},
 			defaultRole: writoidc.RoleUser, overClaim: "roles", groups: []string{"dev-gid"}},
+		// An email-shaped key is not answered by the email claim unless it is the
+		// caller's own: a withheld group value can be that address.
+		{name: "groups overage, an email-shaped group row names the type", roleMap: map[string]string{"contractors@corp.example": "contractor"},
+			defaultRole: writoidc.RoleUser, overClaim: "groups"},
+		{name: "groups overage, another person's email row names a higher type", roleMap: map[string]string{"other@corp.example": "lead", "app-dev": "developer"},
+			defaultRole: writoidc.RoleUser, overClaim: "groups", roles: []string{"app-dev"}},
 		{name: "groups overage, answered email row names a lower type", roleMap: map[string]string{"pat@corp.example": "developer", "contractors-gid": "contractor"},
 			defaultRole: writoidc.RoleUser, overClaim: "groups"},
 		{name: "groups overage, security admin on a lower type", roleMap: map[string]string{"contractors-gid": "contractor", "app-ops": writoidc.RoleSecurityAdmin, "app-dev": "developer"},
@@ -144,5 +152,25 @@ func TestUnansweredClaimRefusesWhenItCouldChangeUserType(t *testing.T) {
 				t.Fatalf("callback = %d %q, want 302 with auth_error=claims_overage", resp.StatusCode, resp.Header.Get("Location"))
 			}
 		})
+	}
+}
+
+// TestUnansweredClaimRefusesThePortalExchange: a portal's subject token goes
+// through the same admission as a sign-in, so a withheld groups claim that a
+// type-naming row could answer refuses the exchange too.
+func TestUnansweredClaimRefusesThePortalExchange(t *testing.T) {
+	env := newIdPEnv(t)
+	auth := env.newRoleMappingAuth(t, map[string]string{"contractors@corp.example": "contractor"}, writoidc.RoleUser, nil, nil,
+		func(c *writoidc.Config) { c.UserTypes = &fakeUserTypeSource{list: overageTypes} })
+	claims := env.subjectClaims()
+	delete(claims, "groups")
+	claims["_claim_names"] = map[string]any{"groups": "src1"}
+	claims["_claim_sources"] = map[string]any{"src1": map[string]any{
+		"endpoint": "https://graph.microsoft.com/v1.0/users/person-sub/getMemberObjects",
+	}}
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/token", nil)
+	sess, denied := auth.VerifySubjectToken(r, env.sign(t, claims), testPortalClient, func(string) bool { return false })
+	if denied != "claims_overage" || sess.Sub != "" {
+		t.Fatalf("exchange = %+v denied %q, want a refusal with claims_overage", sess, denied)
 	}
 }

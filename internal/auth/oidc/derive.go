@@ -517,12 +517,14 @@ func unanswerableWidensRole(unanswerable bool, role string, matches []Match) boo
 }
 
 // unanswerableChangesUserType is the user-type twin of unanswerableWidensRole: when a roles/groups
-// claim went unanswered, it reports whether a role-map row keyed on such a claim (claimKeyedRoleMapValues;
-// an email row is answered by the email claim) names a user type that, added to the types d's real
-// matches named, would make pickUserType choose differently from d.UserType or refuse. A row naming
-// a lower-priority type than the one the answered claims settle cannot, so that sign-in is served.
-// The admin tier is exempt, as in deriveRole: no type decides anything for it.
-func unanswerableChangesUserType(unanswerable bool, d Derivation, roleMap map[string]string, userTypes map[string]types.UserType) bool {
+// claim went unanswered, it reports whether a role-map row names a user type that, added to the
+// types d's real matches named, would make pickUserType choose differently from d.UserType or
+// refuse. Any row may be the hidden one, an "@" key included: deriveRole matches every key against
+// roles, groups and email alike, and a group value can be an email address. Only the row keyed on
+// the caller's own email is answered for certain. A row naming a lower-priority type than the one
+// the answered claims settle cannot change the pick, so that sign-in is served. The admin tier is
+// exempt, as in deriveRole: no type decides anything for it.
+func unanswerableChangesUserType(unanswerable bool, d Derivation, email string, roleMap map[string]string, userTypes map[string]types.UserType) bool {
 	if !unanswerable || d.Role == RoleAdmin {
 		return false
 	}
@@ -534,9 +536,10 @@ func unanswerableChangesUserType(unanswerable bool, d Derivation, roleMap map[st
 			named = append(named, m.UserType)
 		}
 	}
-	for _, k := range claimKeyedRoleMapValues(roleMap) {
-		_, userType, ok := SplitMappingTarget(roleMap[k])
-		if !ok || userType == "" || slices.Contains(named, userType) {
+	self := strings.ToLower(strings.TrimSpace(email))
+	for k, v := range roleMap {
+		_, userType, ok := SplitMappingTarget(v)
+		if !ok || userType == "" || k == self || slices.Contains(named, userType) {
 			continue
 		}
 		if id, denial, _, _ := pickUserType(append(slices.Clip(named), userType), userTypes); denial != "" || id != d.UserType {
