@@ -54,6 +54,7 @@ const (
 	// MEMBER ever reads. It names the agent and nothing else: no base URL, no
 	// secret name, no mechanism, no start URL.
 	agent422NotEnabled = "agent: %q is not an enabled agent on this deployment — ask an admin"
+	agent422SetKey     = "agent: %q names an image for several harnesses, not an agent — name one agent, or include each harness in tools"
 )
 
 // errAgentNotEnabled marks a step-run launch refused by the agent roster, so the
@@ -135,6 +136,11 @@ func agentEnabled(sc types.SiteConfig, agentID string) bool {
 // admitting on a database hiccup would silently reopen the roster, and refusing
 // would blame the caller for an outage.
 func (s *Server) agentRosterRefusal(ctx context.Context, agent string) (string, error) {
+	// A harness-set key is in WARDYN_AGENT_IMAGES but is never an agent, roster
+	// or not: launched as one, it would start the set image with no harness.
+	if strings.Contains(agent, harnessSetSeparator) {
+		return fmt.Sprintf(agent422SetKey, agent), nil
+	}
 	if agent == "" || s.cfg.Store == nil {
 		return "", nil
 	}
