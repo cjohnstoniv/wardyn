@@ -81,12 +81,29 @@ func (s *Server) canonicalPoolSubjects(w http.ResponseWriter, r *http.Request, i
 	return out, true
 }
 
+// usePolicyPool resolves {id} for a use-policy route: a Remote Provided pool from the caller's
+// management catalogue. A Self-Hosted pool has no use policy: its owner is told so in plain words, and
+// anyone else's answers exactly as an unknown id. ok=false: the answer is written.
+func (s *Server) usePolicyPool(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore) (store.RunnerPoolCatalogueRow, bool) {
+	row, ok := s.poolFromPath(w, r, ps, false)
+	if !ok || row.Pool.HostingType == types.RunnerPoolRemoteProvided {
+		return row, ok
+	}
+	if owner := poolOwner(r.Context()); owner == "" || row.Pool.Owner != owner {
+		writePoolNotFound(w)
+		return store.RunnerPoolCatalogueRow{}, false
+	}
+	writeErrorReason(w, runnerpool.ReasonMemberMismatch.Status(), string(runnerpool.ReasonMemberMismatch),
+		row.Pool.Name+" is your own Self-Hosted pool: only you use it, so it has no use policy.")
+	return store.RunnerPoolCatalogueRow{}, false
+}
+
 func (s *Server) handleGetRunnerPoolUsePolicy(w http.ResponseWriter, r *http.Request) {
 	ps, ok := s.runnerPoolStore(w)
 	if !ok {
 		return
 	}
-	row, ok := s.poolFromPath(w, r, ps, false)
+	row, ok := s.usePolicyPool(w, r, ps)
 	if !ok {
 		return
 	}
@@ -110,7 +127,7 @@ func (s *Server) handlePutRunnerPoolUsePolicy(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	row, ok := s.poolFromPath(w, r, ps, false)
+	row, ok := s.usePolicyPool(w, r, ps)
 	if !ok {
 		return
 	}
@@ -123,10 +140,6 @@ func (s *Server) handlePutRunnerPoolUsePolicy(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err := (types.RunnerPoolUsePolicy{Subjects: subjects}).Validate(row.Pool.HostingType); err != nil {
-		if row.Pool.HostingType != types.RunnerPoolRemoteProvided {
-			writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonMemberMismatch, Name: row.Pool.Name, Hosting: row.Pool.HostingType})
-			return
-		}
 		writePoolInvalid(w, err.Error())
 		return
 	}
@@ -142,7 +155,7 @@ func (s *Server) handleDeleteRunnerPoolUsePolicy(w http.ResponseWriter, r *http.
 	if !ok {
 		return
 	}
-	row, ok := s.poolFromPath(w, r, ps, false)
+	row, ok := s.usePolicyPool(w, r, ps)
 	if !ok {
 		return
 	}

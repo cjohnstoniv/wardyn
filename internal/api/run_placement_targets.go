@@ -123,7 +123,9 @@ func (s *Server) ownRunnerTargets(ctx context.Context, req *createRunRequest, ps
 	}
 	owner := poolOwner(ctx)
 	rs, ok := s.cfg.Store.(store.RunnerStore)
-	if owner == "" || !ok {
+	// The catalogue offers a person only their own Self-Hosted pools; this holds again here, so a pool
+	// that is not the launcher's yields no candidate even if one reached this far.
+	if owner == "" || !ok || row.Pool.Owner != owner {
 		return nil, none()
 	}
 	members, err := ps.ListRunnerPoolMembers(ctx, row.Pool.ID)

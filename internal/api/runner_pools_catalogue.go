@@ -57,19 +57,21 @@ func (s *Server) poolList(r *http.Request, ps store.RunnerPoolStore, rows []stor
 	}
 	out := client.RunnerPoolList{Pools: make([]client.RunnerPoolCatalogueEntry, 0, len(rows))}
 	var permitted []types.RunnerPool
+	owner := poolOwner(ctx)
 	var usable []uuid.UUID
 	for _, row := range rows {
-		if subj.permits(row) {
+		if subj.permits(row, owner) {
 			usable = append(usable, row.Pool.ID)
 		}
 	}
 	in.slots = s.slotCounts(ctx, usable)
 	for _, row := range rows {
-		if !subj.permits(row) {
-			// Listed for a manager only: they may manage it, not use it, so nothing is computed for it.
+		if !subj.permits(row, owner) {
+			// Listed for a manager only: they may manage it (or, another person's Self-Hosted pool, oversee
+			// it), not use it, so nothing is computed for it.
 			out.Pools = append(out.Pools, client.RunnerPoolCatalogueEntry{
 				RunnerPoolChoice: poolState{availability: client.RunnerPoolUnavailable, reason: runnerpool.ReasonNotFound}.choice(row),
-				RunTypes:         []types.RunnerPoolRunType{}, BarrierOptions: []client.BarrierOption{},
+				RunTypes:         []types.RunnerPoolRunType{}, BarrierOptions: []client.BarrierOption{}, Owner: row.Pool.Owner,
 			})
 			continue
 		}
@@ -97,7 +99,7 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 	if refusal != nil {
 		return client.RunnerPoolCatalogueEntry{}, refusal
 	}
-	e := client.RunnerPoolCatalogueEntry{RunnerPoolChoice: st.choice(row),
+	e := client.RunnerPoolCatalogueEntry{RunnerPoolChoice: st.choice(row), Owner: row.Pool.Owner,
 		RunTypes: []types.RunnerPoolRunType{types.RunnerPoolRunBackground, types.RunnerPoolRunInteractive}, RunTypesSource: client.RunTypesSourceNone}
 	if row.Pool.Limits != nil {
 		e.RunTypes, e.RunTypesSource = row.Pool.Limits.RunTypes(), client.RunTypesSourcePool
@@ -142,13 +144,15 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 		}
 		e.Slots = poolSlots(row.Pool, c, waitSec)
 	}
-	if len(st.own) > 0 {
+	// Membership, not candidacy: every runner of the caller's in the pool, whether or not it could take a
+	// run now, so a person can read which pools each of their runners is in.
+	if len(row.OwnRunnerIDs) > 0 {
 		names, refusal := s.ownRunnerNames(r, in)
 		if refusal != nil {
 			return client.RunnerPoolCatalogueEntry{}, refusal
 		}
-		for _, t := range st.own {
-			e.MyRunners = append(e.MyRunners, client.PoolRunner{ID: *t.runnerID, Name: names[*t.runnerID], Online: s.runnerOnline(*t.runnerID)})
+		for _, id := range row.OwnRunnerIDs {
+			e.MyRunners = append(e.MyRunners, client.PoolRunner{ID: id, Name: names[id], Online: s.runnerOnline(id)})
 		}
 	}
 	return e, nil

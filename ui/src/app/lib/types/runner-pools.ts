@@ -133,6 +133,8 @@ export interface RunnerPool {
   id: string;
   name: string;
   hosting_type: RunnerPoolHosting;
+  /** A Self-Hosted pool's owner (their subject); absent on a Remote Provided pool. */
+  owner?: string;
   state: RunnerPoolState;
   revision: number;
   limits?: RunnerPoolLimits;
@@ -258,8 +260,11 @@ export interface RunnerPoolCatalogueEntry extends RunnerPoolChoice {
   run_types: RunnerPoolRunType[];
   run_types_source?: "pool" | "none";
   barrier_options: BarrierOption[];
+  /** Every one of the caller's own runners in the pool, whether or not it can take a run now. */
   my_runners?: PoolRunner[];
   slots?: PoolSlots;
+  /** A Self-Hosted pool's owner: the caller, or the person on an administrator's oversight row. */
+  owner?: string;
 }
 
 /** Go: client.PersonAllowance. Counts only; absent for a caller outside governance. */
@@ -283,10 +288,16 @@ export interface RunnerPoolList {
   default?: PoolDefault;
 }
 
-/** Go: client.CreateRunnerPoolRequest. */
+/** Go: client.CreateRunnerPoolRequest: a Remote Provided pool (admin); self_hosted is refused. */
 export interface CreateRunnerPoolRequest {
   name: string;
   hosting_type: RunnerPoolHosting;
+  limits?: RunnerPoolLimits;
+}
+
+/** Go: client.CreateMyRunnerPoolRequest: a Self-Hosted pool of the caller's own. */
+export interface CreateMyRunnerPoolRequest {
+  name: string;
   limits?: RunnerPoolLimits;
 }
 

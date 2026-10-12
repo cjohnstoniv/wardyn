@@ -70,6 +70,7 @@ describe("runner pool carriers", () => {
     [clientGo, "PoolDefault", "PoolDefault"],
     [barrierGo, "BarrierOption", "BarrierOption"],
     [clientGo, "CreateRunnerPoolRequest", "CreateRunnerPoolRequest"],
+    [clientGo, "CreateMyRunnerPoolRequest", "CreateMyRunnerPoolRequest"],
     [clientGo, "UpdateRunnerPoolRequest", "UpdateRunnerPoolRequest"],
   ])("%#: %s has full parity with its TS mirror", (go, goName, tsName) => {
     const tags = goJSONTags(go, goName);
