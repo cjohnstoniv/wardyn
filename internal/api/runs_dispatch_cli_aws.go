@@ -73,6 +73,26 @@ func runUsesAWSSignIn(primary runProviderChoice, set []harnessChoice) bool {
 	return sso(primary) || slices.ContainsFunc(set, func(h harnessChoice) bool { return sso(h.choice) })
 }
 
+// runAWSCLIRows is the ids of the AWS CLI org rows a run's component snapshot
+// carries; none on a store that records no components.
+func (s *Server) runAWSCLIRows(ctx context.Context, runID uuid.UUID) (map[string]bool, error) {
+	cs, ok := s.cfg.Store.(store.ComponentStore)
+	if !ok {
+		return nil, nil
+	}
+	rows, err := cs.ListRunComponents(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, rc := range rows {
+		if attachedAWSCLI(attachedComponent{snapshot: rc}) != nil {
+			out[rc.ComponentID.String()] = true
+		}
+	}
+	return out, nil
+}
+
 // cliAWSScope is the scope a person's sign-in for an AWS CLI row lives in.
 func cliAWSScope(componentID, owner string) awsSSOScope {
 	return awsSSOScope{perUser: true, owner: owner, cli: componentID}

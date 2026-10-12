@@ -473,8 +473,9 @@ func (s *Server) revivePATNarrowing(ctx context.Context, run types.AgentRun, cfg
 // grant reading the operator's key, or a managed or subscription sentinel.
 // Every injection the strip would drop goes, audited as run.injection.drop,
 // unless its grant's snapshot names the UID of the run's own provider as it
-// stands now — the grants the provider arms author — or an AWS CLI row, whose
-// portal grant names the AWS SSO sentinel without being a model credential. A run left with no model
+// stands now — the grants the provider arms author — or an AWS CLI row the run
+// carries, whose portal grant names the AWS SSO sentinel without being a model
+// credential. A run left with no model
 // credential revives without one, as dispatch leaves a run no provider serves:
 // never a fallback to the operator's. A site config or grant list that cannot
 // be read refuses the revive.
@@ -494,7 +495,11 @@ func (s *Server) stripRevivedModelInjections(ctx context.Context, run types.Agen
 	if err != nil {
 		return unreadable("the run's grants", err)
 	}
-	authored := map[uuid.UUID]bool{}
+	cliRows, err := s.runAWSCLIRows(ctx, run.ID)
+	if err != nil {
+		return unreadable("the run's components", err)
+	}
+	authored, cliGrants := map[uuid.UUID]bool{}, map[uuid.UUID]bool{}
 	p, ok := modelProviderByID(siteCfg.ModelProviders, run.ModelProviderID)
 	providerUID := ""
 	if ok && run.ModelProviderID != "" {
@@ -511,17 +516,21 @@ func (s *Server) stripRevivedModelInjections(ctx context.Context, run types.Agen
 		if json.Unmarshal(g.Spec.Scope, &sc) != nil {
 			continue
 		}
-		// An AWS CLI row's portal grant is that lane's own, not a model
-		// credential: it names the AWS SSO sentinel, and every resolve re-checks
-		// the row, the run and the owner (cliSSOScopeAt).
-		cli := sc.Snapshot.ComponentID != "" && sc.Snapshot.Mechanism == cliAWSMechanism
-		if cli || (providerUID != "" && sc.Snapshot.ProviderUID == providerUID) {
+		switch {
+		case sc.Snapshot.Mechanism == cliAWSMechanism && cliRows[sc.Snapshot.ComponentID]:
+			cliGrants[g.ID] = true
+		case providerUID != "" && sc.Snapshot.ProviderUID == providerUID:
 			authored[g.ID] = true
 		}
 	}
 	model := s.modelCredentialInjection(nil, s.modelServingHosts(siteCfg))
 	cfg.Injection = slices.DeleteFunc(cfg.Injection, func(in proxy.InjectionConfig) bool {
-		if authored[in.GrantID] || !model(in.InjectionRule) {
+		// An AWS CLI row's portal grant is that lane's own, not a model
+		// credential: the sentinel on a grant whose snapshot names an AWS CLI row
+		// the run carries. Every resolve re-checks the row, the run and the owner
+		// (cliSSOScopeAt).
+		cli := cliGrants[in.GrantID] && in.SecretName == types.AWSSSOAccessTokenSecret
+		if authored[in.GrantID] || cli || !model(in.InjectionRule) {
 			return false
 		}
 		s.auditDroppedInjection(ctx, run, runner.InjectionGrant{GrantID: in.GrantID, Rule: in.InjectionRule}, "model_credential_not_provider_authored")

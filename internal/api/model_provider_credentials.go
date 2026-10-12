@@ -69,13 +69,10 @@ func cliSecretName(componentID, part string) string {
 	return cliSecretPrefix + componentID + "-" + part
 }
 
-// cliSignInSecret reports whether name is a CLI sign-in capture. Reserved at
-// every sink and API beside providerSignInSecret: the proxy injects it through
-// its own grant, and no other grant may name it.
-func cliSignInSecret(name string) bool {
-	return strings.HasPrefix(name, cliSecretPrefix) &&
-		(strings.HasSuffix(name, "-"+providerSSOPart) || strings.HasSuffix(name, "-"+providerEntraPart))
-}
+// cliSignInSecret reports whether name is in the CLI sign-in namespace, any
+// part. Reserved at every sink and API beside providerSignInSecret: the proxy
+// injects a capture through its own grant, and no other grant may name one.
+func cliSignInSecret(name string) bool { return strings.HasPrefix(name, cliSecretPrefix) }
 
 // providerTypedKinds are the kinds whose credential each person types (a key or
 // a token) — the only ones PUT /model-providers/{id}/credential accepts. The two

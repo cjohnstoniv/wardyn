@@ -136,14 +136,15 @@ func sinkReservedSecret(name string) bool {
 // nameSinkReservedSecret is sinkReservedSecret for the two lanes that resolve
 // an AUTHORED secret name to plaintext through the owner-then-operator read —
 // env_secret (into the sandbox env) and llm_inspection (onto the proxy's policy
-// copy) — PLUS every per-person model-provider and CLI sign-in name, whatever its suffix. A
+// copy) — PLUS every per-person model-provider name, whatever its suffix (a CLI
+// sign-in name, whatever its part, is already in reservedSecret). A
 // model credential reaches a run only through its provider's own lane, read
 // strictly from its owner's namespace; either of these lanes naming one would
 // hand the key (the operator's, through the fallback) to the run as a value.
 // Not sinkReservedSecret itself: the api_key sink legitimately resolves the
 // -key and -oauth names for the provider's own host-pinned grant.
 func nameSinkReservedSecret(name string) bool {
-	return sinkReservedSecret(name) || strings.HasPrefix(name, providerSecretPrefix) || strings.HasPrefix(name, cliSecretPrefix)
+	return sinkReservedSecret(name) || strings.HasPrefix(name, providerSecretPrefix)
 }
 
 // secretsAPIReserved is the reserved-name guard for the GENERIC secrets API
@@ -163,10 +164,9 @@ func nameSinkReservedSecret(name string) bool {
 // -key included: those rows are written only by PUT /model-providers/{id}/credential,
 // into the caller's own namespace, and an operator Put under one would plant a
 // row the strict read never consults while every door reported it stored. Every
-// CLI sign-in name (cliSecretPrefix) is here for the same reason.
+// CLI sign-in name is here through reservedSecret (cliSignInSecret).
 func secretsAPIReserved(name string) bool {
-	return reservedSecret(name) || strings.HasPrefix(name, providerSecretPrefix) || strings.HasPrefix(name, cliSecretPrefix) ||
-		name == types.SubscriptionOAuthSecret ||
+	return reservedSecret(name) || strings.HasPrefix(name, providerSecretPrefix) || name == types.SubscriptionOAuthSecret ||
 		name == types.ManagedOAuthSecret || name == types.AWSSSOAccessTokenSecret ||
 		name == types.ADOEntraAccessTokenSecret
 }
