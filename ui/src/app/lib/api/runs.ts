@@ -31,6 +31,7 @@ import type {
   Experience,
   IncludedTool,
   PlacementValue,
+  RepoSelection,
   RequestedResources,
   RunOverrides,
   RunStartup,
@@ -90,7 +91,7 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   inline_policy?: RunPolicySpec;
   // Per-run half of the requirements contract: which optional requirements
   // this run enables, plus any read-only narrowing, per attached workspace.
-  workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean; target?: string }[];
+  workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean; target?: string; repos?: RepoSelection[] }[];
   // Primary-workspace id for a selection that resolves to no mount/repo (a
   // pure-ephemeral / migrated-0029 workspace) — routes its base_image through
   // the server's seedRequestWorkspace, which the mount-less spec can't.

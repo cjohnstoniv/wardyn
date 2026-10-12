@@ -57,13 +57,16 @@ func (s *Server) stepPolicy(f *runFold, rec *foldRecorder) bool {
 // reads no credential at all. ephemeralDirs is create's (WARDYN_EPHEMERAL_DIRS).
 func (s *Server) stepSeedWorkspace(f *runFold, rec *foldRecorder) bool {
 	ctx := f.r.Context()
+	var seed workspaceSeed
 	if f.mode == foldPreview {
 		var refusal *runRefusal
-		f.ephemeralDirs, refusal = s.seedAuthorizedWorkspace(ctx, f.r, &f.spec, f.req)
+		seed, refusal = s.seedAuthorizedWorkspace(ctx, f.r, &f.spec, f.req)
+		f.ephemeralDirs, f.attached = seed.ephemeralDirs, seed.attached
 		return !refusal.write(s, f.w, f.r)
 	}
 	var ok bool
-	f.ephemeralDirs, ok = s.seedAndAdmitWorkspace(ctx, f.w, f.r, &f.spec, f.req, f.mode == foldCreate)
+	seed, ok = s.seedAndAdmitWorkspace(ctx, f.w, f.r, &f.spec, f.req, f.mode == foldCreate)
+	f.ephemeralDirs, f.attached = seed.ephemeralDirs, seed.attached
 	return ok
 }
 
@@ -79,22 +82,33 @@ func (s *Server) stepDrive(f *runFold, rec *foldRecorder) bool {
 		if refusal.write(s, f.w, f.r) {
 			return false
 		}
-		return drive == nil || !driveReadOnlyRefusal(*f.req, *drive).write(s, f.w, f.r)
+		if drive == nil {
+			return true
+		}
+		ro := !drive.Writable || f.req.Drive.ReadOnly != nil && *f.req.Drive.ReadOnly
+		f.previewDriveReadOnly = &ro
+		return !driveReadOnlyRefusal(*f.req, *drive).write(s, f.w, f.r)
 	}
 	var ok bool
 	f.driveMount, ok = s.seedRequestDrive(f.w, f.r, *f.req, f.ceiling)
 	return ok
 }
 
-// stepWorkspaces reads the workspaces the seeded spec references. Nothing after
-// this step changes the spec's mounts or repos, so the list stays valid for the
-// requirements fold, the egress unions and image resolution.
+// stepWorkspaces reads the run's workspaces: the attached ones, then each other
+// one the seeded spec references. Nothing after this step changes the spec's
+// mounts or repos, so the list stays valid for the requirements fold, the
+// egress unions and image resolution. Over every resolved target, the drive's
+// included, it refuses an overlap or a second Azure DevOps organisation and
+// resolves the one starting folder, before anything is granted.
 func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
-	f.wsRefs = s.referencedWorkspaces(f.r.Context(), f.spec)
+	f.wsRefs = attachedWorkspaceRefs(f.attached, s.referencedWorkspaces(f.r.Context(), f.spec))
 	for _, ws := range f.wsRefs {
 		recordWorkspaceSources(rec, f.spec, ws)
 	}
-	return true
+	var refusal *runRefusal
+	f.attachments, f.startFolder, refusal = s.runAttachments(*f.req, f.spec, f.wsRefs, f.attached,
+		legacyDriveTarget(f.driveMount, f.previewDriveReadOnly))
+	return !refusal.write(s, f.w, f.r)
 }
 
 // stepPushRuleSets builds the run's push rules per source-control entry from the

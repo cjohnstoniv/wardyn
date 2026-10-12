@@ -71,6 +71,18 @@ type SetupFix struct {
 // (runComposePipeline). Non-blocking: items never gate the proposal, they only
 // inform the review panel.
 func (s *Server) deriveSetupItems(ctx context.Context, owner string, run composer.RunInput, spec types.RunPolicySpec, presentSecrets map[string]bool, llmAccess *composeLLMAccess) []SetupItem {
+	// applyWorkspaces (compose.go) now puts EVERY git repo, the primary included,
+	// into spec.WorkspaceRepos — so referencedWorkspaces alone resolves it; no
+	// separate run.Repo-keyed lookup needed here.
+	return s.deriveRunSetupItems(ctx, owner, run, spec, presentSecrets, llmAccess, s.referencedWorkspaces(ctx, spec))
+}
+
+// deriveRunSetupItems is deriveSetupItems over the workspaces a run attaches
+// (runFold.wsRefs), so Review names the workspace each requirement row comes
+// from, a workspace with no mount or repo of its own included.
+func (s *Server) deriveRunSetupItems(ctx context.Context, owner string, run composer.RunInput, spec types.RunPolicySpec,
+	presentSecrets map[string]bool, llmAccess *composeLLMAccess, workspaces []types.Workspace,
+) []SetupItem {
 	var items []SetupItem
 
 	if it, ok := s.setupBackendItem(ctx, run, spec); ok {
@@ -81,11 +93,6 @@ func (s *Server) deriveSetupItems(ctx context.Context, owner string, run compose
 	}
 	items = append(items, setupSecretItems(spec, presentSecrets)...)
 
-	// applyWorkspaces (compose.go) now puts EVERY git repo, the primary included,
-	// into spec.WorkspaceRepos — so referencedWorkspaces alone resolves it; no
-	// separate run.Repo-keyed lookup needed here. One derivation, shared with
-	// the real create-run path's own wsRefs (runs.go).
-	workspaces := s.referencedWorkspaces(ctx, spec)
 	items = append(items, setupWorkspaceItems(workspaces)...)
 	items = append(items, setupWorkspaceSecretItems(workspaces, presentSecrets)...)
 	items = append(items, s.setupWorkspaceIntegrationItems(ctx, owner, workspaces, presentSecrets)...)

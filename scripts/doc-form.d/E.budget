@@ -18,4 +18,5 @@
 # docs/ENV.md 36210 measured after F-588 M2 merge.
 # docs/ENV.md 36241 adds 31 (0.9 A-L3): the WARDYN_TOOLGATE_CREDENTIAL row.
 # docs/ENV.md 36318 measured after merge.
-docs/ENV.md=36318 share=5
+# docs/ENV.md 36340 adds 22 (0.9 A-L4): the WARDYN_START_FOLDER row.
+docs/ENV.md=36340 share=5

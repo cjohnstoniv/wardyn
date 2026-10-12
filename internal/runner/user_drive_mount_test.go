@@ -266,8 +266,9 @@ func TestValidateAuthoredTargetReservesTheDriveTarget(t *testing.T) {
 		}
 	}
 	// A NEIGHBOUR under the same allowed prefix is untouched: the reservation is
-	// the subtree, not a string prefix over /home/agent/drive*.
-	for _, tgt := range []string{"/home/agent/drives", "/home/agent/drive-report", "/home/agent/work"} {
+	// the subtree, not a string prefix over /home/agent/drive* (/home/agent/drives
+	// is a drive root of its own, reserved by the same rule).
+	for _, tgt := range []string{"/home/agent/drive-report", "/home/agent/drivesx", "/home/agent/work"} {
 		if err := ValidateAuthoredTarget(tgt); err != nil {
 			t.Errorf("ValidateAuthoredTarget(%q) = %v, want nil", tgt, err)
 		}
