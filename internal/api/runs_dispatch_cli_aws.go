@@ -65,6 +65,14 @@ func attachedAWSCLI(a attachedComponent) *types.CLIAWS {
 	return cli.AWS
 }
 
+// runUsesAWSSignIn reports whether the run's chosen provider, or any included
+// harness's, is a bedrock_sso provider: its lane stages the sandbox's one AWS
+// profile.
+func runUsesAWSSignIn(primary runProviderChoice, set []harnessChoice) bool {
+	sso := func(c runProviderChoice) bool { return c.chosen && c.provider.Kind == types.ModelProviderBedrockSSO }
+	return sso(primary) || slices.ContainsFunc(set, func(h harnessChoice) bool { return sso(h.choice) })
+}
+
 // cliAWSScope is the scope a person's sign-in for an AWS CLI row lives in.
 func cliAWSScope(componentID, owner string) awsSSOScope {
 	return awsSSOScope{perUser: true, owner: owner, cli: componentID}

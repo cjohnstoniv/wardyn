@@ -319,6 +319,17 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 	return ok
 }
 
+// stepAWSCLIProfile refuses an AWS CLI component on a run whose model, or any
+// included harness's, comes through an AWS sign-in: a sandbox holds one AWS
+// profile. Dispatch refuses it too (authorAWSCLI); this is the doors' answer.
+func (s *Server) stepAWSCLIProfile(f *runFold, _ *foldRecorder) bool {
+	if f.comps.awsCLI() == nil || !runUsesAWSSignIn(f.mpChoice, f.harnessChoices) {
+		return true
+	}
+	writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonComponentCLIAWSWithBedrockSignIn, cliAWSWithBedrockSSORefusal)
+	return false
+}
+
 // judgeHarnessProviders is stepModelProvider's half for the harnesses of set
 // beside the primary (req.Agent), whose choice is primary: preview authorizes
 // the selection alone, the other doors also check the caller's own credential

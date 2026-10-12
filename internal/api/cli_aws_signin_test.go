@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/erasure"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -246,12 +247,15 @@ func TestAWSCLI_CaptureLandsUnderTheRow(t *testing.T) {
 // like a provider's sign-in.
 func TestAWSCLI_SignInNameReserved(t *testing.T) {
 	for _, name := range []string{cliSecretName(cliAWSID, providerSSOPart), cliSecretName(cliAWSID, providerEntraPart)} {
-		if !reservedSecret(name) || !sinkReservedSecret(name) || !secretsAPIReserved(name) {
-			t.Errorf("%q: reserved=%t sink=%t api=%t, want all", name, reservedSecret(name), sinkReservedSecret(name), secretsAPIReserved(name))
+		if !reservedSecret(name) || !sinkReservedSecret(name) || !nameSinkReservedSecret(name) || !secretsAPIReserved(name) ||
+			!broker.ReservedSecretName(name) {
+			t.Errorf("%q: reserved=%t sink=%t value-lane=%t api=%t broker=%t, want all", name, reservedSecret(name),
+				sinkReservedSecret(name), nameSinkReservedSecret(name), secretsAPIReserved(name), broker.ReservedSecretName(name))
 		}
 	}
-	if !secretsAPIReserved(cliSecretPrefix + cliAWSID + "-future") {
-		t.Error("the secrets API does not reserve the whole CLI prefix")
+	future := cliSecretPrefix + cliAWSID + "-future"
+	if !secretsAPIReserved(future) || !nameSinkReservedSecret(future) || !broker.ReservedSecretName(future) {
+		t.Error("the secrets API, the value lanes or the broker do not reserve the whole CLI prefix")
 	}
 	if reservedSecret("wardyn-cli-notes") {
 		t.Error("an ordinary name was reserved")

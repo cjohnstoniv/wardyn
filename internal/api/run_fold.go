@@ -147,6 +147,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepConfinement, foldAll},
 	{(*Server).stepPlacementCapability, foldAll},
 	{(*Server).stepModelProvider, foldAll},
+	{(*Server).stepAWSCLIProfile, foldAll},
 	{(*Server).stepAutonomy, foldAll},
 	{(*Server).stepADOStanding, foldAll},
 	{(*Server).stepPATNarrowing, foldPreflight | foldPreview},
