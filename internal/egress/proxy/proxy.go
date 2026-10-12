@@ -103,6 +103,11 @@ type Proxy struct {
 	// trust for the /wardyn/gh/ route — a repo absent here is 403. Empty/nil ==
 	// no repo brokered (the route always 403s). See git_broker.go.
 	gitGrants map[string]uuid.UUID
+	// viaOrgRoutes are the destinations forwarded to the organisation (via_org.go).
+	viaOrgRoutes []ViaOrgRoute
+	// maskKey files the secrets this proxy learns in procRegistry: uuid.Nil in a
+	// sidecar, a ViaOrgEngine's own key at the organisation (procMaskFor).
+	maskKey uuid.UUID
 	// patGrants is the per-run git_pat broker allowlist: lowercased host -> the
 	// grant to mint from. Empty/nil == no host brokered (the route always 403s),
 	// which is also what a deployment with the lane switched off looks like.
@@ -338,6 +343,8 @@ type Options struct {
 	// Dial overrides the connection dialer (tests). Production leaves it nil
 	// and a net.Dialer is used.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// ViaOrgRoutes are a runner proxy's via_org destinations (via_org.go).
+	ViaOrgRoutes []ViaOrgRoute
 	// TLSClientConfig is the EGRESS transport's TLS config. Production sets it
 	// from Config.TrustedCAPEM (system roots plus the operator's corporate CA
 	// bundle — see NewServer); nil means system roots alone. Tests use it to
@@ -456,6 +463,7 @@ func newProxy(opts Options) *Proxy {
 		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),
 		dial:                 dial,
 		now:                  now,
+		viaOrgRoutes:         opts.ViaOrgRoutes,
 	}
 
 	// directDial dials the vetted IP carried on the request context and never
@@ -566,6 +574,12 @@ func newProxy(opts Options) *Proxy {
 // route. This makes the run token unreachable by anything the sandbox can
 // route through the forward proxy.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// A via_org destination is the organisation's to decide: no spool row, no
+	// hold and no decision here (design 0.9 §7.3).
+	if route, authority, ok := p.viaOrgRouteFor(r); ok {
+		p.serveViaOrg(w, r, route, authority)
+		return
+	}
 	var release func()
 	r, release = p.admitSpoolHTTP(w, r)
 	if r == nil {

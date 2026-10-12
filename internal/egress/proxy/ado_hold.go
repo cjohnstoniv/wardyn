@@ -237,5 +237,5 @@ func (i *injector) installResolved(host string, resolved types.ResolvedInjection
 	e.reMu.Lock()
 	e.install(resolved, time.Now())
 	e.reMu.Unlock()
-	registerHeaderCredential(resolved.Value)
+	registerHeaderCredentialFor(i.maskKey, resolved.Value)
 }

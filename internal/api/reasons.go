@@ -248,6 +248,10 @@ const (
 	reasonEgressBaselineInvalid = "egress_baseline_invalid" // a baseline host is not an exact hostname, or the set is too large
 	reasonEgressBaselineStale   = "egress_baseline_stale"   // If-Match does not match the current baseline ETag
 
+	// PUT /governance/credential-delivery.
+	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds, or require_posture without runner_resident
+	reasonCredentialDeliveryUnavailable = "credential_delivery_unavailable" // the store keeps no delivery policy (not the Postgres store)
+
 	// POST /site-config/probe-proxy and PUT/DELETE .../egress-redirects.
 	reasonSiteConfigProbeRequestInvalid = "site_config_probe_request_invalid" // the probe body did not decode
 	reasonSiteConfigProbeURLInvalid     = "site_config_probe_url_invalid"     // the probe target is not a plain http(s) URL

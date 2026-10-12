@@ -173,6 +173,7 @@ type ProxyConfig struct {
 	PushRuleBase         *types.PushRulesSpec      // the run's push rules after the ceiling, for an entry with no set; proxy.Config.PushRuleBase
 	HarnessToolRules     []types.HarnessToolRules  // tool rules per included harness; proxy.Config.HarnessToolRules
 	HarnessCredentials   []types.HarnessCredential // SHA-256 of each harness's approval credential; proxy.Config.HarnessCredentials (never the plaintext)
+	ViaOrgRoutes         []proxy.ViaOrgRoute       // a runner's via_org destinations; set only by placement's local copy
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).

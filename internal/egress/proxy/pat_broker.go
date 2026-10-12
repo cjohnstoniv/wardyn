@@ -273,6 +273,6 @@ func (p *Proxy) patToken(ctx context.Context, g PATGrant) (token, username strin
 	// raw token AND the base64(username+":"+tok) SetBasicAuth puts on the
 	// wire) before it can reach any output stream. registerBasicAuthCredential
 	// (inject.go) is the one definition.
-	registerBasicAuthCredential(username, tok)
+	registerBasicAuthCredential(p.maskKey, username, tok)
 	return tok, username, nil
 }

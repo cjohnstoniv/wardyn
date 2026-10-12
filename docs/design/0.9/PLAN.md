@@ -679,7 +679,7 @@ Run detail and the header show `placement`, the runner's name, `placement_filled
 | TLS | The org always dials TLS itself; cleartext is refused |
 | Holds and spool | The laptop proxy raises no hold and writes no spool row for a `via_org` destination; the org owns both |
 | Per request | Run token (`wardyn-internal` audience), `refuseTerminalRun`, relay `runner_id` == the run's runner |
-| Per run | `16` concurrent streams, `8 GiB` total, `10m` idle timeout (constants, not knobs) |
+| Per run | `16` concurrent streams, `8 GiB` total per server replica (reset on restart), `10m` idle timeout (constants, not knobs) |
 | Closes on | Run end, lease lapse, runner offline |
 | Decisions | Written org-side with `data.relay`; the laptop proxy's own rows are `runner_asserted` |
 | Laptop TLS | The laptop proxy terminates sandbox TLS with its per-run CA, as the cluster proxy does |
