@@ -77,7 +77,11 @@ func TestPG_PromoteQueueExactlyOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			got, _, err := pg.PromoteRunQueue(ctx, pass(p), meet)
+			// One row per scan, so the second promoter has a row of its own to take if the pool row's
+			// lock does not hold it back.
+			one := pass(p)
+			one.ScanLimit = 1
+			got, _, err := pg.PromoteRunQueue(ctx, one, meet)
 			promoted.Add(int32(len(got)))
 			errs <- err
 		}()
@@ -579,6 +583,9 @@ func TestPG_PromoteQueueNeverRevivesAnExitedRun(t *testing.T) {
 	}
 	if st := runState(t, pg, r.ID).State; st != types.RunKilled {
 		t.Errorf("a killed run is %s after a promotion pass", st)
+	}
+	if queueRows(t, pool, r.ID) != 0 {
+		t.Error("the pass left the exited run's queue row behind")
 	}
 }
 

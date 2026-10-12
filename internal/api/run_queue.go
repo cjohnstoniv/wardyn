@@ -264,6 +264,7 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	createData["end"] = q.f.end.audit(created)
 	createData["queue"] = map[string]any{
 		"pool_id": e.PoolID, "position": position, "max_wait_sec": waitSec, "deadline_at": e.DeadlineAt, "capped": true,
+		"reason": string(runnerpool.WaitAtCapacity),
 	}
 	q.f.comps.stampRunCreate(createData)
 	maps.Copy(createData, q.f.place.auditFields(created))

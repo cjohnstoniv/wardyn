@@ -109,6 +109,11 @@ func (s PG) PromoteRunQueue(ctx context.Context, pass PromotePass, admit QueueAd
 				return err
 			}
 			if !ok {
+				// The run left QUEUED some other way and left its row behind; a row exists only while its
+				// run is QUEUED, so put that right instead of judging it again every pass.
+				if _, err := q.Exec(ctx, `DELETE FROM run_queue WHERE run_id = $1`, e.RunID); err != nil {
+					return fmt.Errorf("store: drop orphan queue row: %w", err)
+				}
 				continue
 			}
 			promoted = append(promoted, PromotedRun{Run: run, Entry: e})
@@ -123,8 +128,9 @@ func (s PG) PromoteRunQueue(ctx context.Context, pass PromotePass, admit QueueAd
 	return promoted, held, nil
 }
 
-// listPromotable is the pass's scan: the pool's waiting runs oldest first (queued_at, then run_id), each
-// locked FOR UPDATE SKIP LOCKED, the run row before its queue row. That is the order every exit from
+// listPromotable is the pass's scan: the pool's queue rows oldest first (queued_at, then run_id), each
+// locked FOR UPDATE SKIP LOCKED with its run, the run row before its queue row. Whether the run is
+// still QUEUED is the promotion CAS's to say, not the scan's. That is the order every exit from
 // the queue takes (LeaveRunQueue, ExitQueuedRun and the pool delete update the run, then delete its
 // queue row), so a kill that lands while the pass judges a run waits for the pass instead of
 // deadlocking with it, and a kill already holding a run is skipped. q must be a transaction that holds
@@ -136,8 +142,8 @@ func listPromotable(ctx context.Context, q Querier, poolID uuid.UUID, limit int)
 	rows, err := q.Query(ctx, `
 		SELECT q.run_id, q.pool_id, q.owner, q.queued_at, q.deadline_at, q.policy_ref, q.authority, q.launch
 		FROM agent_runs r JOIN run_queue q ON q.run_id = r.id
-		WHERE q.pool_id = $1 AND r.state = $3
-		ORDER BY q.queued_at, q.run_id LIMIT $2 FOR UPDATE OF r, q SKIP LOCKED`, poolID, limit, string(types.RunQueued))
+		WHERE q.pool_id = $1
+		ORDER BY q.queued_at, q.run_id LIMIT $2 FOR UPDATE OF r, q SKIP LOCKED`, poolID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: list promotable runs: %w", err)
 	}
