@@ -113,6 +113,13 @@ func harnessSetCustomImageMsg() string {
 	return "A run with more than one harness starts from an image your admin declared for them, so it can't use a custom image."
 }
 
+// harnessSignInNotPrimaryMsg: an AWS sign-in serves only the run's primary
+// harness (harnessProviderNeedsPrimary).
+func harnessSignInNotPrimaryMsg(harness, provider string) string {
+	return fmt.Sprintf("Model provider %s uses an AWS sign-in, which only the harness a run starts, or else lists first, can use, so the run was not created. "+
+		"Make %s that harness, or choose another provider for it.", provider, harness)
+}
+
 // harnessProvidersConflictMsg: the proxy keys an injected credential by host, so
 // two providers on one host cannot be kept apart.
 func harnessProvidersConflictMsg(a, b string) string {

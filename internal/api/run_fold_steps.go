@@ -357,7 +357,8 @@ func (s *Server) stepAWSCLIProfile(f *runFold, _ *foldRecorder) bool {
 // beside the primary (req.Agent), whose choice is primary: preview authorizes
 // the selection alone, the other doors also check the caller's own credential
 // (renew at create only, and never for a run that waits: queued), each as its own agent with its own requested
-// provider and no workspace pin. Then the set is held to the one-lane
+// provider and no workspace pin; an AWS sign-in serves the primary alone
+// (harnessProviderNeedsPrimary). Then the set is held to the one-lane
 // invariant (harnessProvidersConflict). It writes its own refusal.
 func (s *Server) judgeHarnessProviders(w http.ResponseWriter, r *http.Request, req createRunRequest, spec types.RunPolicySpec,
 	set []types.RunHarness, rec *foldRecorder, primary runProviderChoice, preview, renew, queued bool,
@@ -368,16 +369,21 @@ func (s *Server) judgeHarnessProviders(w http.ResponseWriter, r *http.Request, r
 		if h.Harness != req.Agent {
 			hreq := req
 			hreq.Agent, hreq.ModelProvider = h.Harness, h.ModelProviderID
-			ok := true
-			if preview {
-				var refusal *runRefusal
-				choice, refusal = s.authorizeRunModelProvider(r, hreq, nil, true)
-				ok = !refusal.write(s, w, r)
-			} else {
-				choice, ok = s.enforceRunModelProvider(w, r, hreq, spec, nil, renew, queued)
-			}
-			if !ok {
+			var refusal *runRefusal
+			if choice, refusal = s.authorizeRunModelProvider(r, hreq, nil, preview); refusal.write(s, w, r) {
 				return nil, false
+			}
+			// Before the credential read, so the reason is this and never a sign-in.
+			if choice.chosen && harnessProviderNeedsPrimary(choice.provider) {
+				runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
+					harnessSignInNotPrimaryMsg(harnessName(h.Harness), choice.provider.ID)).forTool(h.Harness).write(s, w, r)
+				return nil, false
+			}
+			if !preview {
+				var ok bool
+				if choice, ok = s.enforceChosenModelProvider(w, r, hreq, spec, choice, renew, queued); !ok {
+					return nil, false
+				}
 			}
 			recordProviderHost(rec, choice, h.Harness)
 		}

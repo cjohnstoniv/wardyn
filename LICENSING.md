@@ -67,6 +67,10 @@ Code, a JDK — arrives under **that vendor's** terms, direct from that vendor
 to you. Wardyn neither relicenses it nor conveys it; the Dockerfile is a
 recipe, not a distribution.
 
+The `harnesses` image (Claude Code and Codex in one sandbox, `make
+agent-image-harnesses`) is a local build only, for the same reason: it layers on
+`claude-code`.
+
 **Wardyn's own code and all of its dependencies are permissively licensed.** Every
 Go module compiled into the shipped binaries and every npm package bundled into
 the console is Apache-2.0, MIT, BSD, ISC or OFL-1.1. There is no copyleft, no
