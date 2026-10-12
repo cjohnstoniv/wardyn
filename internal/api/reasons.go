@@ -326,6 +326,9 @@ const (
 	reasonInvitationNotPending       = "invitation_not_pending"        // the invitation was claimed, revoked or expired
 	reasonInvitationListParamInvalid = "invitation_list_param_invalid" // GET /invitations: state is not one the endpoint accepts
 
+	// POST /api/v1/tokens/{id}/move (#1508).
+	reasonTokenMoveInvalid = "token_move_invalid" // the token is not live and admin-minted, or the service identity is unknown or retired
+
 	// /api/v1/service-identities and /api/v1/me/service-identities (#1508).
 	reasonServiceIdentityNameInvalid        = "service_identity_name_invalid"        // the name does not match ^[a-z][a-z0-9-]{2,62}$
 	reasonServiceIdentityNameTaken          = "service_identity_name_taken"          // a service identity or a principal-keyed table already holds the name

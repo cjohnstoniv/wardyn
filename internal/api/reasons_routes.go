@@ -98,6 +98,7 @@ const (
 	reasonRunWaitBudgetNotANumber    = "run_wait_budget_not_a_number"   // wait_budget_sec was present but null
 	reasonRunEndWaitAlreadyFinished  = "run_end_wait_already_finished"  // the run is already in a terminal state
 	reasonRunEndWaitFilesGone        = "run_end_wait_files_gone"        // the run ended and its files are no longer kept
+	reasonRunEndWaitMaxLifetime      = "run_end_wait_max_lifetime"      // the run has reached its maximum lifetime and is being ended, so its end and wait cannot move
 	reasonRunEndWaitStoreUnavailable = "run_end_wait_store_unavailable" // this store cannot change a run's end
 	// reasonRunLimitsGateDenied is planRunEndWait's own shared cause: the
 	// user_changes_limits gate refused this change, for any of the 4 fields

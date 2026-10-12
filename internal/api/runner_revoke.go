@@ -138,7 +138,7 @@ func (s *Server) revokedRunKillTail(ctx context.Context, k store.RunnerKilledRun
 	s.cancelCreate(k.ID)
 	s.cancelRunApprovals(ctx, k.ID)
 	killData := s.killTeardownTail(ctx, types.AgentRun{ID: k.ID}, actorType, by,
-		map[string]any{"reason": string(placement.ReasonRunnerRevoked), "runner_online": online})
+		map[string]any{"reason": string(placement.ReasonRunnerRevoked), "runner_online": online}, false)
 	if len(killData) == 0 {
 		return nil
 	}

@@ -1365,8 +1365,8 @@ func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
 	}
 	for name, want := range map[string]string{
 		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS": "app:false,pat:on",
-		"WARDYN_LLM_SCAN":                      "off",
-		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":     "45s",
+		"WARDYN_LLM_SCAN":                     "off",
+		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":    "45s",
 	} {
 		if got[name] != want {
 			t.Errorf("proxy pod env %s = %q, want %q — the knob is set on wardynd and unreachable in the pod",
