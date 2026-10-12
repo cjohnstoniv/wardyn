@@ -10,6 +10,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // foldMode is the door a run request is folded for. The three doors share one
@@ -76,6 +77,12 @@ type runFold struct {
 	// promoted says the fold is the queue's start replaying a promoted run: promotion has already
 	// admitted it against the host, the deployment cap and the fit, so those steps stand down.
 	promoted bool
+	// harnesses is a run-mode request's harness set and image the image that
+	// carries it (stepHarnessSet; nil when a custom image or workspace decides);
+	// harnessChoices is each harness's model-provider choice (stepModelProvider).
+	harnesses      []types.RunHarness
+	image          *client.ImageFact
+	harnessChoices []harnessChoice
 }
 
 // runFoldStep is one gate or fold of the shared sequence. run writes its own
@@ -99,6 +106,9 @@ type runFoldStep struct {
 //   - Workspace seed after policy, the drive after the seed: seeding can set
 //     req.Image, so its re-checks follow it, and its onboarding gate is the
 //     chokepoint on the resolved spec that no drive may answer before.
+//   - The harness set after the workspaces: every included harness meets the
+//     primary's doors, and the set's image refusals read the seeded image and
+//     the workspaces' base images.
 //   - Workspace requirements, the direct-GitHub union and components before
 //     the confinement floor: the CC3 blast-radius floor reads the grants and
 //     hosts they add (invariant 5), and components see what admins already
@@ -107,8 +117,12 @@ type runFoldStep struct {
 //   - A placement the caller's profile denies is refused first of the placement
 //     steps, so no later step spends work on a run that cannot be placed.
 //   - Placement straight after that: the pool resolves (a missing or stale default
-//     refuses, never falls back), its candidates meet the policy floor and the request's size
-//     one by one, and the fully eligible set waits for create to pick a target by run id.
+//     refuses, never falls back), the run's size is bounded by the pool, governance,
+//     the deployment and the runners' capacity, its candidates meet the policy floor and
+//     that applied size one by one, and the fully eligible set waits for create to pick a
+//     target by run id.
+//   - Resources straight after placement: the applied size is written into the spec, so
+//     host capacity, the quota fit and dispatch read what the dry doors report.
 //   - Local eligibility straight after placement, before anything can renew
 //     or mint: the admitted plan's refusals and the unsupported-local refusal
 //     answer before the confinement floor and the provider's liveness step.
@@ -119,6 +133,8 @@ type runFoldStep struct {
 //     so it sits after placement and refuses before capacity.
 //   - Host capacity, the run cap and the quota fit last, so a refusal leaves
 //     no identity and no run row.
+//   - The dry doors' derived egress after every gate: create adds those hosts
+//     after the mint (unionRunEgress), so nothing above may grade them.
 var runFoldSteps = []runFoldStep{
 	{(*Server).stepRunContract, foldAll},
 	{(*Server).stepBaseline, foldAll},
@@ -126,6 +142,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepSeedWorkspace, foldAll},
 	{(*Server).stepDrive, foldAll},
 	{(*Server).stepWorkspaces, foldAll},
+	{(*Server).stepHarnessSet, foldAll},
 	{(*Server).stepPushRuleSets, foldAll},
 	{(*Server).stepPreviewEgress, foldPreflight | foldPreview},
 	{(*Server).stepRequirements, foldAll},
@@ -133,6 +150,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepComponents, foldAll},
 	{(*Server).stepPlacementDenied, foldAll},
 	{(*Server).stepPlacement, foldAll},
+	{(*Server).stepResources, foldAll},
 	{(*Server).stepLocalEligibility, foldAll},
 	{(*Server).stepConfinement, foldAll},
 	{(*Server).stepPlacementCapability, foldAll},
@@ -144,6 +162,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepHostCapacity, foldCreate | foldPreflight},
 	{(*Server).stepRunCap, foldCreate | foldPreflight},
 	{(*Server).stepRunFit, foldCreate | foldPreflight},
+	{(*Server).stepDerivedEgress, foldPreflight | foldPreview},
 }
 
 // foldRunRequest runs runFoldSteps for mode over a request the door has

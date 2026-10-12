@@ -161,11 +161,12 @@ type CreateRunRequest struct {
 	// Accepted and validated; a server that cannot honour pools yet refuses it
 	// with request_field_unavailable, never ignores it.
 	RunnerPoolID string `json:"runner_pool_id,omitempty"`
-	// Resources is the CPU and memory this run asks for, clamped by the server
-	// to the caps of the placement it lands on. Absent leaves the source
-	// policy's own resources or the platform default in effect, and a request
-	// value beats the policy's. Accepted and validated; the clamp is applied by
-	// the placement-aware resources lane.
+	// Resources is the CPU and memory this run asks for. A field set here beats
+	// the source policy's own; a field left out keeps the policy's, else the
+	// default. The server applies it within the strictest of the pool's, the
+	// person's governance, the deployment's and (on their own runner) the
+	// runner's limits: an over-ask is reduced to that cap, never refused.
+	// CreateRunResult.ResourcesApplied and the dry runs say what was applied.
 	Resources *RunResources `json:"resources,omitempty"`
 	// Overrides are the person's per-component edits on the New Run cards
 	// (OD-1), applied inside the resolve fold before the ceiling clamp. See
@@ -212,6 +213,10 @@ type CreateRunRequest struct {
 	// be combined with any repository, workspace or drive. Nothing in the
 	// sandbox is kept when the run ends unless it is pushed or copied out.
 	NoRepositoriesOrDrives bool `json:"no_repositories_or_drives,omitempty"`
+	// Shape is the New Run choice a run was set up from: agent_task,
+	// environment or application. Optional; the server checks it against
+	// experience, workload and tools and otherwise does not use it.
+	Shape RunShape `json:"shape,omitempty"`
 	// EndsAfterSec ends the run this many seconds after it is created, 1 to
 	// 2147483647 (below 1 is a 400, run_end_after_too_small). An end past what the pool, the deployment and the person's
 	// governance allow is cut to it, and the 201 says so; it is never refused. A
@@ -303,6 +308,9 @@ type CreateRunResult struct {
 	// them: the run is live either way, so a dropped warning is a silently
 	// degraded run.
 	Warnings []string `json:"warnings,omitempty"`
+	// ResourcesApplied is the CPU and memory the run asked for and got, and
+	// which limit bound each.
+	ResourcesApplied *AppliedResources `json:"resources_applied,omitempty"`
 }
 
 // CreateRun submits a new agent run and answers once the run row exists (state
@@ -345,9 +353,11 @@ type PreflightResult struct {
 	Components []ComponentFact `json:"components,omitempty"`
 	// Provenance explains which source contributed each resolved policy entry.
 	Provenance []ProvenanceEntry `json:"provenance"`
-	// Resources is what each placement offers this run, keyed by placement and
-	// runner. Empty until the resources lane fills it.
-	Resources []PlacementResources `json:"resources"`
+	// Limits is what this run may get: the resolved pool's, the person's
+	// governance and the deployment's limits for the run's type, folded.
+	// ResourcesApplied is the CPU and memory it asked for and would get.
+	Limits           *EffectiveRunLimits `json:"limits,omitempty"`
+	ResourcesApplied *AppliedResources   `json:"resources_applied,omitempty"`
 	// LocalPlacement says per host, workspace source and component whether the
 	// person's runner can honour it. Empty until the placement lane fills it.
 	LocalPlacement []LocalPlacementFact `json:"local_placement"`
@@ -362,6 +372,10 @@ type PreflightResult struct {
 	// lane fills it. Neither is admission: a launch re-checks both.
 	RunnerPool  *ResolvedRunnerPool `json:"runner_pool,omitempty"`
 	RunnerPools []RunnerPoolChoice  `json:"runner_pools"`
+	// Access is what the run brings in: its rows, hosts, credentials, the line
+	// for an unlisted host and the setup still needed. The policy preview
+	// answers the same block for the same request.
+	Access *AccessFacts `json:"access,omitempty"`
 }
 
 // Preflight DRY-RUNs a create-run request: the server resolves the policy

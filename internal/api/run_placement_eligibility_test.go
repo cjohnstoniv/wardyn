@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
@@ -155,7 +156,7 @@ func TestLocalP3ProfileLimitLiftsOnlyItsOwnRefusal(t *testing.T) {
 		{"org component never needs the limit", false, org, placement.ReasonPlacementUnavailable},
 	} {
 		ceiling := governanceCeiling{Limits: types.GovernanceLimits{LocalSelfDefinedComponents: tc.allowed}}
-		ref := f.srv.localPlacementRefusal(r, req, types.RunPolicySpec{}, ceiling, tc.comps, nil, nil)
+		ref := f.srv.localPlacementRefusal(r, req, types.RunPolicySpec{}, ceiling, tc.comps, nil, nil, composer.Baseline{})
 		if ref == nil || ref.body.Reason != string(tc.reason) {
 			t.Fatalf("%s: %+v", tc.name, ref)
 		}

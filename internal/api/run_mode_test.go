@@ -61,7 +61,7 @@ func TestRunModeRefusals(t *testing.T) {
 		{"an interactive environment keeps its idle stop", interactiveOK + `,"inline_policy":{"auto_stop_after_sec":600,"allowed_domains":["a.example.com"],"first_use_approval":"always_deny","min_confinement_class":"CC2"}`, "", "", 200},
 		{"background has no web gateway", `"experience":"background",` + agentTask + `,"inline_policy":{"ui_apps":[{"name":"ide","port":8080}]},` + noRepos, reasonRunModeConflict, "", 422},
 		{"background runs only the harness it names", `"experience":"background",` + agentTask + `,"tools":[` + codexTool + `],` + noRepos, reasonRunModeConflict, "", 422},
-		{"background command includes no tool", `"experience":"background","workload":{"kind":"command","command":"make"},"tools":[` + claudeTool + `],` + noRepos, reasonRunModeConflict, "", 422},
+		{"a background command may include a harness", `"experience":"background","workload":{"kind":"command","command":"make"},"tools":[` + claudeTool + `],` + noRepos, "", "", 200},
 		{"interactive has no workload", `"experience":"interactive",` + agentTask + `,"tools":[` + claudeTool + `],` + noRepos, reasonRunModeConflict, "", 422},
 
 		{"a legacy model provider does not ride beside the carriers", `"experience":"background",` + agentTask + `,"model_provider":"bedrock-team",` + noRepos, reasonRunModeConflict, runModeConflictMsg("model_provider", "Use tools[].model_provider."), 422},
@@ -82,7 +82,10 @@ func TestRunModeRefusals(t *testing.T) {
 		{"a startup is one choice: none with a tool", interactiveOK + `,"startup":{"kind":"none","tool":"claude-code"}`, reasonRunModeInvalid, "", 400},
 		{"a startup is one choice: command with a tool", interactiveOK + `,"startup":{"kind":"command","command":"x","tool":"claude-code"}`, reasonRunModeInvalid, "", 400},
 		{"a startup kind is closed", interactiveOK + `,"startup":{"kind":"both"}`, reasonRunModeInvalid, "", 400},
-		{"an interactive environment with no tool waits for its lane", `"experience":"interactive",` + noRepos, reasonRequestFieldUnavailable, "", 422},
+		{"an interactive environment with no harness starts from the base image", `"experience":"interactive",` + noRepos, "", "", 200},
+		{"a harness startup takes a starting prompt", interactiveOK + `,"startup":{"kind":"harness","tool":"claude-code","prompt":"fix the build"}`, "", "", 200},
+		{"a starting prompt needs a harness startup", interactiveOK + `,"startup":{"kind":"none","prompt":"fix the build"}`, reasonRunModeInvalid, startupPromptShapeMsg(), 400},
+		{"a command startup takes no starting prompt", interactiveOK + `,"startup":{"kind":"command","command":"make","prompt":"x"}`, reasonRunModeInvalid, startupPromptShapeMsg(), 400},
 		{"two harnesses wait for the harness set", `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools: more than one harness"), 422},
 		{"personal tool rules wait for their enforcing lane", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"hold"}]}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: personal tool rules wait for their enforcing lane"), 422},
 		{"nor a background run's rule while it is off the gated lane", `"experience":"background",` + agentTask + `,"tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"hold"}]}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: personal tool rules wait for their enforcing lane"), 422},
@@ -116,6 +119,7 @@ func TestRunModeRefusals(t *testing.T) {
 			}
 			t.Run(tc.name+"/"+door.name, func(t *testing.T) {
 				h := newHarness(t)
+				h.srv.cfg.AgentImages = composeAgentImages
 				w := do(t, h.srv, http.MethodPost, door.path, adminToken, modeBody(tc.body))
 				if w.Code != tc.status || errorReason(w) != tc.reason {
 					t.Fatalf("got %d %s, want %d reason %q", w.Code, w.Body.String(), tc.status, tc.reason)
@@ -192,11 +196,10 @@ func TestRunModeProjection(t *testing.T) {
 			if refusal := applyRunMode(&got); refusal != nil {
 				t.Fatalf("refused: %+v", refusal.body)
 			}
-			if tc.name == "background command" {
-				// The projected command meets the older engine's own rule for task_mode exec.
-				if msg := agentRequirementError(got); msg == "" || got.TaskMode != "exec" {
-					t.Fatalf("a projected command is not an exec run: %q %+v", msg, got)
-				}
+			if tc.name == "background command" && got.TaskMode != "exec" {
+				// The projected command is an exec run; its image comes from the
+				// harness set, so agentRequirementError asks for no agent.
+				t.Fatalf("a projected command is not an exec run: %+v", got)
 			}
 			// The carriers stay on the request: the fold and the create audit read them.
 			tc.want.Experience, tc.want.Workload, tc.want.Tools, tc.want.Startup, tc.want.NoRepositoriesOrDrives =
@@ -638,16 +641,22 @@ func TestRunModeRefusalSentencesMatchGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := map[string]func(a []string) string{
-		"RUN_MODE_REQUIRED":        func([]string) string { return runModeRequiredMsg() },
-		"RUN_WORKLOAD_REQUIRED":    func([]string) string { return runWorkloadRequiredMsg() },
-		"RUN_MODE_CONFLICT":        func(a []string) string { return runModeConflictMsg(a[0], a[1]) },
-		"STARTUP_TOOL_UNKNOWN":     func(a []string) string { return startupToolUnknownMsg(a[0]) },
-		"START_FOLDER_ATTACHMENT":  func(a []string) string { return startFolderAttachmentMsg(a[0]) },
-		"START_FOLDER_SHAPE":       func(a []string) string { return startFolderShapeMsg(a[0]) },
-		"NO_REPOSITORIES_CONFLICT": func([]string) string { return noRepositoriesConflictMsg() },
-		"FIELD_UNAVAILABLE":        func(a []string) string { return runModeUnavailableMsg(a[0]) },
-		"BACKGROUND_ONLY":          func(a []string) string { return runBackgroundOnlyMsg(a[0]) },
-		"IDLE_STOP_BACKGROUND":     func([]string) string { return idleStopBackgroundMsg() },
+		"RUN_MODE_REQUIRED":          func([]string) string { return runModeRequiredMsg() },
+		"RUN_WORKLOAD_REQUIRED":      func([]string) string { return runWorkloadRequiredMsg() },
+		"RUN_MODE_CONFLICT":          func(a []string) string { return runModeConflictMsg(a[0], a[1]) },
+		"STARTUP_TOOL_UNKNOWN":       func(a []string) string { return startupToolUnknownMsg(a[0]) },
+		"START_FOLDER_ATTACHMENT":    func(a []string) string { return startFolderAttachmentMsg(a[0]) },
+		"START_FOLDER_SHAPE":         func(a []string) string { return startFolderShapeMsg(a[0]) },
+		"NO_REPOSITORIES_CONFLICT":   func([]string) string { return noRepositoriesConflictMsg() },
+		"FIELD_UNAVAILABLE":          func(a []string) string { return runModeUnavailableMsg(a[0]) },
+		"BACKGROUND_ONLY":            func(a []string) string { return runBackgroundOnlyMsg(a[0]) },
+		"IDLE_STOP_BACKGROUND":       func([]string) string { return idleStopBackgroundMsg() },
+		"RUN_SHAPE_CONFLICT":         func(a []string) string { return runShapeConflictMsg(a[0], a[1]) },
+		"STARTUP_PROMPT_SHAPE":       func([]string) string { return startupPromptShapeMsg() },
+		"HARNESS_NOT_INSTALLED":      func(a []string) string { return harnessNotInstalledMsg(a[0]) },
+		"HARNESS_SET_NO_IMAGE":       func(a []string) string { return harnessSetNoImageMsg(a...) },
+		"HARNESS_SET_CUSTOM_IMAGE":   func([]string) string { return harnessSetCustomImageMsg() },
+		"HARNESS_PROVIDERS_CONFLICT": func(a []string) string { return harnessProvidersConflictMsg(a[0], a[1]) },
 	}
 	if len(golden) != len(got) {
 		t.Fatalf("golden has %d sentences, the server has %d", len(golden), len(got))
@@ -665,7 +674,8 @@ func TestRunModeRefusalSentencesMatchGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, reason := range []string{reasonRunModeRequired, reasonRunModeInvalid, reasonRunModeConflict, reasonStartFolderInvalid, reasonRunBackgroundOnly} {
+	for _, reason := range []string{reasonRunModeRequired, reasonRunModeInvalid, reasonRunModeConflict, reasonStartFolderInvalid, reasonRunBackgroundOnly, reasonRunShapeConflict,
+		reasonHarnessNotInstalled, reasonHarnessSetNoImage, reasonHarnessSetCustomImage, reasonHarnessProvidersConflict} {
 		if !strings.Contains(string(ts), `"`+reason+`"`) {
 			t.Errorf("run-mode-refusals.ts does not carry the reason %q", reason)
 		}

@@ -48,7 +48,9 @@ var kernelDoors = map[string][]string{
 	"narrowUserInlinePolicy":    {"capEgressHost", "capSecret", "capWorkspace"},
 	"seededImageRefusal":        {"capImage"},
 	"workspaceProvidersRefusal": {"capWorkspaceProvider"},
-	"authorizeRunModelProvider": {"capModelProvider"},
+	"chooseRunModelProvider":    {"capModelProvider"},
+	// Every harness a run-mode request includes, beside the projected agent.
+	"harnessSetRefusalFor": {"capAgent"},
 	// A record session's model provider, chosen as a run's would be.
 	"recordProviderChoice": {"capModelProvider"},
 	// A revive or an extension, re-checked as the run's owner.

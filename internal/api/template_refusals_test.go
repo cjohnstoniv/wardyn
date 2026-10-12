@@ -36,6 +36,7 @@ func templateSentences() []templateSentence {
 	return []templateSentence{
 		{"DOCUMENT_INVALID", []string{"it has the key \"agent\" twice"}, templateDocumentInvalidMsg("it has the key \"agent\" twice")},
 		{"VERSION_UNSUPPORTED", []string{"wardyn/v2 RunTemplate"}, templateVersionUnsupportedMsg("wardyn/v2 RunTemplate")},
+		{"KIND_MISMATCH", []string{"Run", "RunTemplate"}, templateKindMismatchMsg("Run", "RunTemplate")},
 		{"FIELD_UNKNOWN", []string{"intent.agnet"}, templateFieldUnknownMsg("intent.agnet")},
 		{"FIELD_INVALID", []string{"intent.interactive", "must be true or false"}, templateFieldInvalidMsg("intent.interactive", "must be true or false")},
 		{"FIELD_EXCLUDED", []string{"intent.preset"}, templateFieldExcludedMsg("intent.preset")},
@@ -53,6 +54,9 @@ func templateSentences() []templateSentence {
 		{"NOT_FOUND", nil, templateNotFoundMsg()},
 		{"REVISION_CONFLICT", []string{"4"}, templateRevisionConflictMsg(4)},
 		{"TEMPLATES_UNAVAILABLE", nil, templatesUnavailableMsg()},
+		{"NAME_TAKEN", nil, templateNameTakenMsg()},
+		{"LIMIT_REACHED", []string{"200"}, templateLimitReachedMsg(200)},
+		{"POLICY_FIELD_REFUSED", []string{"intent.agent"}, templatePolicyFieldRefusedMsg("intent.agent")},
 	}
 }
 
@@ -106,8 +110,8 @@ func templateReasonConsts(t *testing.T) map[string]string {
 // TestTemplateReasonsAreTheTypeScriptOnes pins the wire reasons to the console's table.
 func TestTemplateReasonsAreTheTypeScriptOnes(t *testing.T) {
 	goReasons := templateReasonConsts(t)
-	if len(goReasons) != 17 {
-		t.Fatalf("reasons.go declares %d template reasons, want 17", len(goReasons))
+	if len(goReasons) != 20 {
+		t.Fatalf("reasons.go declares %d template reasons, want 20", len(goReasons))
 	}
 	raw, err := os.ReadFile(filepath.Join("..", "..", "ui", "src", "app", "lib", "template-refusals.ts"))
 	if err != nil {

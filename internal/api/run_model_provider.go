@@ -59,6 +59,9 @@ type runProviderChoice struct {
 	// loginHost is the nonsecret destination resolved from the already-read
 	// own AWS session. Preview does not read that session and leaves it empty.
 	loginHost string
+	// tool is the included harness this choice is for, "" for an older
+	// client's run: a refusal of it names the harness.
+	tool string
 }
 
 // chooseModelProvider is the design's resolution order (multi-provider §2.4):
@@ -190,7 +193,7 @@ func (s *Server) writeProviderRefusalAs(w http.ResponseWriter, r *http.Request, 
 	if kind != "" {
 		d = d.With("kind", string(kind))
 	}
-	body := errorBody{Error: msg, Provider: id, Kind: string(kind)}
+	body := errorBody{Error: msg, Provider: id, Kind: string(kind), Tool: d.Detail["tool"]}
 	if credential {
 		body.Reason = llmRefusalAuditReason
 		d = d.With("remedy", llmRefusalAuditReason)
@@ -213,10 +216,14 @@ func (s *Server) writeProviderRefusalAs(w http.ResponseWriter, r *http.Request, 
 //   - none of those: a chosen provider whose liveness check d refused.
 func (s *Server) writeProviderChoiceRefusal(w http.ResponseWriter, r *http.Request, choice runProviderChoice, d providerDenial) {
 	if choice.asMissing || choice.notGranted || choice.refusal != "" {
-		providerChoiceRunRefusal(choice).write(s, w, r)
+		providerChoiceRunRefusal(choice).forTool(choice.tool).write(s, w, r)
 		return
 	}
-	s.writeProviderRefusal(w, r, choice.provider.ID, choice.provider.Kind, d.msg, d.credential)
+	dec := authz.Deny(authz.ReasonModelProviderUnavailable, "runs.model_provider", d.msg)
+	if choice.tool != "" {
+		dec = dec.With("tool", choice.tool)
+	}
+	s.writeProviderRefusalAs(w, r, dec, choice.provider.ID, choice.provider.Kind, d.msg, d.credential)
 }
 
 // enforceRunModelProvider is the model-provider choice at BOTH doors, create

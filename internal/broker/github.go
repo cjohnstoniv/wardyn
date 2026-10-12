@@ -209,6 +209,77 @@ func (m *githubMinter) Revoke(ctx context.Context, token string) error {
 	return nil
 }
 
+// ErrGitHubRefused marks a GitHub answer that refused the App (401, 403, 404
+// or 422): not installed on the repository, missing the permission, or no
+// such repository.
+var ErrGitHubRefused = errors.New("broker: github refused the app")
+
+// ListBranches lists repo's ("owner/name") branches: at most limit names, the
+// default branch, and whether more exist.
+//
+// It mints its own token outside mint(), like VerifyRefRuleset: one
+// repository, contents:read (what a private repository's branch list needs),
+// and nothing else. GitHub fixes an installation token's life at ~1h and it
+// cannot be shortened, so the token is handed back once read; that revoke is
+// best effort, and a failed one leaves the token live until GitHub expires it.
+// The token never leaves this function.
+func (m *githubMinter) ListBranches(ctx context.Context, repo string, limit int) ([]string, string, bool, error) {
+	owner, names, err := splitRepos([]string{repo})
+	if err != nil {
+		return nil, "", false, err
+	}
+	tok, _, err := m.MintInstallationToken(ctx, []string{repo}, map[string]string{"contents": "read"}, defaultMaxTTL)
+	if err != nil {
+		return nil, "", false, githubRefusal(err)
+	}
+	defer func() { _ = m.Revoke(ctx, tok) }()
+	ctx, cancel := context.WithTimeout(ctx, m.timeout())
+	defer cancel()
+	opts := []gh.ClientOptionsFunc{gh.WithAuthToken(tok), gh.WithTimeout(m.timeout())}
+	if m.baseURL != "" {
+		opts = append(opts, gh.WithURLs(&m.baseURL, nil))
+	}
+	c, err := gh.NewClient(opts...)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("broker: build github client: %w", err)
+	}
+	r, _, err := c.Repositories.Get(ctx, owner, names[0])
+	if err != nil {
+		return nil, "", false, githubRefusal(err)
+	}
+	var out []string
+	lo := &gh.BranchListOptions{ListOptions: gh.ListOptions{PerPage: 100}}
+	for {
+		page, resp, err := c.Repositories.ListBranches(ctx, owner, names[0], lo)
+		if err != nil {
+			return nil, "", false, githubRefusal(err)
+		}
+		for _, b := range page {
+			out = append(out, b.GetName())
+		}
+		if len(out) >= limit {
+			return out[:limit], r.GetDefaultBranch(), len(out) > limit || resp.NextPage != 0, nil
+		}
+		if resp.NextPage == 0 {
+			return out, r.GetDefaultBranch(), false, nil
+		}
+		lo.Page = resp.NextPage
+	}
+}
+
+// githubRefusal wraps err in ErrGitHubRefused when GitHub itself answered it
+// with a refusal status; any other error passes through unchanged.
+func githubRefusal(err error) error {
+	var ghErr *gh.ErrorResponse
+	if errors.As(err, &ghErr) && ghErr.Response != nil {
+		switch ghErr.Response.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity:
+			return fmt.Errorf("%w: %w", ErrGitHubRefused, err)
+		}
+	}
+	return err
+}
+
 // installationID resolves (and caches) the installation id for owner via the
 // repository installation lookup.
 func (m *githubMinter) installationID(ctx context.Context, client *gh.Client, owner, repo string) (int64, error) {
@@ -225,7 +296,7 @@ func (m *githubMinter) installationID(ctx context.Context, client *gh.Client, ow
 	}
 	id := inst.GetID()
 	if id == 0 {
-		return 0, fmt.Errorf("broker: no installation for %s", owner)
+		return 0, fmt.Errorf("%w: broker: no installation for %s", ErrGitHubRefused, owner)
 	}
 	m.mu.Lock()
 	m.installByOrg[owner] = id

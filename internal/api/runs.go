@@ -38,6 +38,8 @@ const (
 	createRunGrantAbortHint = "the run's credential grants could not be recorded, so it was never started"
 	// createRunComponentsAbortHint is the same for the run's component snapshot.
 	createRunComponentsAbortHint = "the run's components could not be recorded, so it was never started"
+	// createRunHarnessesAbortHint is the same for the run's harness set.
+	createRunHarnessesAbortHint = "the run's harnesses could not be recorded, so it was never started"
 	// devcontainerNoBuilderWarning is the 201 warning for a devcontainer_repo run
 	// on a deployment with no image builder wired: the build silently fell
 	// through to the convention image, which is a different sandbox from the one
@@ -264,6 +266,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "record run components", err)
 		return
 	}
+	// The same for the harness set: it is the run's authorisation record of
+	// every harness and the provider each was granted.
+	if err := s.persistRunHarnesses(ctx, runID, f.harnesses); err != nil {
+		abort(createRunHarnessesAbortHint)
+		writeServerError(w, r, "record run harnesses", err)
+		return
+	}
 
 	// resolveRunPolicy's own notes come FIRST: they are the ones that say the
 	// run is narrower than what the caller asked for, and launch is the ONLY
@@ -313,6 +322,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		createData["delivery"] = gw.delivery
 	}
 	createData["end"] = f.end.audit(run)
+	stampHarnessSet(createData, f.harnesses, f.image)
 	comps.stampRunCreate(createData)
 	maps.Copy(createData, f.place.auditFields(created))
 	s.markGovernanceExempt(ctx, createData)
@@ -355,12 +365,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Nothing below can become a 4xx, so the caller gets its run now and the
 	// image build + dispatch continue server-side (runs_create_launch.go).
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+runID.String())
-	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
+	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings, ResourcesApplied: &f.place.applied})
 	spec, harnessRules := applyHarnessToolRules(spec, req.Tools)
 	launch := createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
 		wsRefs: wsRefs, driveMount: f.driveMount, ephemeralDirs: f.ephemeralDirs,
 		runToken: id.Token, created: created, comps: comps, overridden: f.source.overridden(), pushSets: f.pushSets, harnessRules: harnessRules,
+		harnesses: f.harnesses,
 	}
 	launchCtx := context.WithoutCancel(ctx)
 	s.goBackground(func() { s.finishCreateRunLaunch(launchCtx, launch) })
@@ -639,6 +650,8 @@ type grantChecker interface {
 type createRunResponse struct {
 	types.AgentRun
 	Warnings []string `json:"warnings,omitempty"`
+	// ResourcesApplied is the CPU and memory the run asked for and got (stepResources).
+	ResourcesApplied *client.AppliedResources `json:"resources_applied,omitempty"`
 }
 
 // runLLMAccess is the deterministic model-access verdict for a run request —

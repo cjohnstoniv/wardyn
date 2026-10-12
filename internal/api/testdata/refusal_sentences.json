@@ -95,6 +95,11 @@
     "sentence": "\"you are not granted agent \" + req.Agent + \" — ask an admin to grant it, or launch one you hold\""
   },
   {
+    "reason": "capKinds[capAgent].reason",
+    "target": "\"runs.tools\"",
+    "sentence": "\"you are not granted agent \" + h.Harness + \" — ask an admin to grant it, or remove it from the run\""
+  },
+  {
     "reason": "capKinds[capComponent].reason",
     "target": "\"runs.component\"",
     "sentence": "componentUnavailableRefusal"
@@ -175,6 +180,11 @@
     "sentence": "\"you are not granted workspace \" + refused.wsID + \" — ask an admin for access, or launch without a workspace\""
   },
   {
+    "reason": "capability_workspace",
+    "target": "ws.ID.String()",
+    "sentence": "\"workspace not found\""
+  },
+  {
     "reason": "delegation_scope",
     "target": "id.String()",
     "sentence": "(audit only)"
@@ -246,6 +256,11 @@
   },
   {
     "reason": "governance_profile",
+    "target": "\"runs.tools\"",
+    "sentence": "fmt.Sprintf(\"A harness your command can start is not allowed under your governance profile %q: its tool rules hold or deny, and nothing can pause a harness a command starts. Remove the harness, or choose an interactive environment.\", name)"
+  },
+  {
+    "reason": "governance_profile",
     "target": "\"runs.ui_apps\"",
     "sentence": "fmt.Sprintf(\"UI apps are not allowed under the governance profile %q this run was launched under.\", p.Name)"
   },
@@ -297,12 +312,12 @@
   {
     "reason": "model_provider_unavailable",
     "target": "\"runs.model_provider\"",
-    "sentence": "msg"
+    "sentence": "d.msg"
   },
   {
-    "reason": "model_provider_unavailable (credential: d.credential)",
-    "target": "choice.provider.ID",
-    "sentence": "d.msg"
+    "reason": "model_provider_unavailable",
+    "target": "\"runs.model_provider\"",
+    "sentence": "msg"
   },
   {
     "reason": "model_provider_unavailable (credential: false)",

@@ -1200,6 +1200,7 @@ erases one person's retained records by explicit scope, in one audited act
 | `recordings` | their session recordings and `source: "recording"` output rows, with durable per-run fences against later writes; direct stdout and pane snapshots retain their independent `run_outputs` scope |
 | `run_tasks` | the task text of the runs the person created |
 | `components` | the components the person saved, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
+| `run_setups` | the person's own run templates and every revision of them, their group template-manager grants, and their name as the author of shared templates, revisions and grants, which stay without it |
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
 | `credentials` | the person's stored credentials, their encryption key and provider connection-change records (also erased by `DELETE /people/{principal}/credentials`) |
 
@@ -1895,6 +1896,37 @@ Moved to [member-mode.md](operations/member-mode.md#exercising-member-mode-as-an
 ## Launch presets
 
 Moved to [launch-presets.md](operations/launch-presets.md#launch-presets).
+
+## Run templates
+
+A run template is a saved run setup that a person keeps for themselves, an organisation administrator publishes to
+everyone, or a group's template managers publish to that group (`/api/v1/templates`, [sdk.md](sdk.md#run-templates)).
+Migration `0165_run_templates` adds `run_templates`, the immutable `run_template_revisions`, `template_group_admins`
+and `template_group_labels`.
+
+- A template is content, never admission: it grants nothing.
+  It holds references (secret names, workspace and drive ids), never values, and the people it is shared with see those
+  names.
+- Each audience holds at most 200 templates per person, 200 per group and 500 for the organisation, counted under a
+  lock per audience. A name is unique within its audience, compared case-insensitively.
+- Organisation templates are written by an administrator in the Admin view. In the User view an administrator is a
+  member, so publishing to the organisation is a copy made from the Admin view.
+- A group's template managers hold a grant an admin writes with `PUT /api/v1/admin/template-group-admins`
+  (`{group_id, person, label}`); there is no console screen for it in this release. The grant is stored in canonical
+  form and reaches nothing but that group's templates. A group write re-reads it inside its own transaction, so a
+  revoke and a write never both succeed.
+  - `label` is the group's display name beside its templates. It is display only: authority follows the group
+    identifier the sign-in provider sends.
+  - That identifier is what access follows. A group deleted and re-created under the same identifier (a name-based
+    provider) reads and manages the old group's templates; delete those templates first, or use a provider whose group
+    identifiers are never reused.
+  - The person resolves as `?owner=` does on the secrets routes: a known name or email is stored as that principal,
+    so the revoke and erasure that name the person find it. An email that matches no one, or more than one person,
+    is refused (`422` `owner_unresolved` or `owner_ambiguous`); grant by subject, or after the person first signs in.
+- A `kind: policy` template holds only run-wide network, credential and access-rule keys. Saving one never writes a
+  stored policy.
+- Erasure's `run_setups` scope removes a person's templates and grants ([Erasing a person](#erasing-a-person)); the
+  SCIM purge asks for it.
 
 ## Console branding
 
@@ -3737,7 +3769,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0159` (`0159_run_lifetime_cap`) adds `agent_runs.lifetime_cap_at` and `lifetime_cap_source` (`0001`'s table), the latest end the run's pool and `WARDYN_RUN_MAX_AGE` allow, counted from launch, and which of the two bound it; existing runs keep both empty.
 - `0160` (`0160_run_pool_binding`) adds the pool binding to `agent_runs`.
 - `0161` (`0161_run_human_author`) adds `agent_runs.human_author` (`0001`'s table), the principal accountable for the run at create (not proof that a person was present); existing runs keep it empty.
-- `0162` (`0162_run_queue`) widens `agent_runs`' state check with `QUEUED`, adds `agent_runs.admitted_at` and rebuilds its watcher sweep index (`0001`'s table) beside its new `run_queue` table, and re-creates `audit_retention_partitions` (as `0123` and `0146` do).
+- `0162` (`0162_run_queue`) widens `agent_runs`' state check with `QUEUED`, adds `agent_runs.admitted_at` and rebuilds its watcher sweep index (`0001`'s table) beside its new `run_queue` table, and re-creates `audit_retention_partitions` (as `0123` does).
 - `0163` (`0163_workspace_image_build`) adds `workspaces.image_build` (`0008`'s table), the image build record.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the

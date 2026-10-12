@@ -60,9 +60,15 @@ type SetupItem struct {
 // not here — this stays a fast, pure read of already-stored state, no live
 // probe and no new injection surface.
 type SetupFix struct {
-	Action      string `json:"action"` // "add_secret" | "scan_workspace" | "none"
+	Action      string `json:"action"` // "add_secret" | "scan_workspace" | "sign_in" | "choose_model_provider" | "none"
 	SecretName  string `json:"secret_name,omitempty"`
 	WorkspaceID string `json:"workspace_id,omitempty"` // ID, not source — api.scanWorkspace takes an id
+	// sign_in: what to sign in to (model_provider, azure_cli or aws_cli) and its
+	// id (a model provider's id, or a component's).
+	Target string `json:"target,omitempty"`
+	ID     string `json:"id,omitempty"`
+	// choose_model_provider: the included harness (tools[].id) that has none.
+	Tool string `json:"tool,omitempty"`
 }
 
 // deriveSetupItems computes the composed run's setup checklist from the FINAL

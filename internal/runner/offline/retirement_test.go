@@ -50,7 +50,7 @@ func TestRetirementRequiresExactDrainedEvidenceAndRetainsTombstones(t *testing.T
 	if err != nil || first.Outcome != "deferred" || m.state.Runs[id].Retired {
 		t.Fatalf("undelivered tail: %+v %v", first, err)
 	}
-	if err := spool.Replay(t.Context(), func(context.Context, runnerspool.Record) error { return nil }); err != nil {
+	if err := spool.Replay(t.Context(), func(context.Context, []runnerspool.Record) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if again, err := m.apply(t.Context(), a); err != nil || again != first {

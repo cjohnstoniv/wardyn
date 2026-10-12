@@ -121,7 +121,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "PATGrants", Variant: "shared CredentialSource", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassGitPATBroker, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "BrokeredPATGrantIDs", Variant: "follows per_user PATGrants", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "BrokeredPATGrantIDs", Variant: "follows shared PATGrants", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassGitPATBroker, Reason: ReasonPlacementCredential},
-	{Struct: StructProxyConfig, Field: "ADOGrant", Variant: "minted PAT from a captured Entra sign-in", Class: ClassBrokered, Rule: RuleViaOrgRefuse, Delivery: ClassADOMintedPAT, Reason: ReasonPlacementCredential},
+	{Struct: StructProxyConfig, Field: "ADOGrant", Variant: "minted PAT or bearer from a captured Entra sign-in; runner_resident only on a connection that opted in", Class: ClassBrokered, Rule: RuleDelivery, Delivery: ClassADOMintedPAT, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "ADOGrant", Variant: "own_pat token mode", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "AzureGates", Variant: "Azure Foundry, the person's own Entra sign-in", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "AzureGates", Variant: "Azure Foundry, any shared capture", Class: ClassBrokered, Rule: RuleDelivery, Delivery: ClassAzureFoundryToken, Reason: ReasonPlacementCredential},

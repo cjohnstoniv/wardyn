@@ -77,6 +77,14 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport) *erasure.
 	if _, ok := s.cfg.Store.(store.ComponentStore); ok {
 		steps[erasure.Components] = s.eraseComponentsOf
 	}
+	if ts, ok := s.cfg.Store.(store.TemplateStore); ok {
+		// run_setups: the person's own templates, their grants, and their name on
+		// shared templates. The person is matched in the canonical form every
+		// template row stores.
+		steps[erasure.RunSetups] = func(ctx context.Context, person string) (any, error) {
+			return ts.EraseRunSetupsOf(ctx, types.CanonicalUserSubject(person))
+		}
+	}
 	if s.cfg.MaskManifests != nil {
 		steps[erasure.MaskCopies] = s.eraseMaskCopies
 	}

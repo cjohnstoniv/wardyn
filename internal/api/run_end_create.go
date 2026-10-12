@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/cjohnstoniv/wardyn/internal/runner/sizing"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -77,34 +76,18 @@ func runTypeForEnd(e types.RunExperience) types.RunnerPoolRunType {
 	return types.RunnerPoolRunBackground
 }
 
-// createEndSources are the sources one create's end is folded from. The pool is
-// the run's own, when it has one; governance is left out when it is skipped; the
-// deployment is always there, carrying WARDYN_RUN_MAX_AGE and the Interactive
-// fallback default.
+// createEndSources are the sources one create's end is folded from, through the one builder
+// (buildLimitSources). The pool is the run's own, when it has one; governance is left out when it is
+// skipped; the deployment is always there, carrying WARDYN_RUN_MAX_AGE and the Interactive fallback
+// default. No size is read: a governance lifetime does not depend on one.
 func createEndSources(in createEndInput) ([]runnerpool.SourceLimits, error) {
-	size := sizing.EffectiveLimits()
-	deploymentSize := types.ResourceLimits{CPUMillis: int(size.CPUMillis), MemoryMiB: int(size.MemoryMiB)}
-	dep, err := runnerpool.DeploymentSource(deploymentSize, in.maxAgeSec, 0)
-	if err != nil {
-		return nil, err
+	sources, refusal, err := buildLimitSources(limitSourceInput{runType: in.runType, pool: in.pool, governed: in.governed,
+		limits: types.GovernanceLimits{RunLimits: in.gov}, maxAgeSec: in.maxAgeSec})
+	if refusal != nil {
+		// Admission (the run-type check) answers this before the end is decided.
+		return nil, fmt.Errorf("pool %q does not take a %s run", in.pool.Name, in.runType)
 	}
-	sources := []runnerpool.SourceLimits{runnerpool.WithInteractiveLifetimeDefault(dep, in.runType)}
-	if in.pool != nil {
-		pool, refusal := runnerpool.PoolSource(*in.pool, in.runType)
-		if refusal != nil {
-			// Admission (the run-type check) answers this before the end is decided.
-			return nil, fmt.Errorf("pool %q does not take a %s run", in.pool.Name, in.runType)
-		}
-		sources = append(sources, pool)
-	}
-	if in.governed {
-		gov, err := runnerpool.GovernanceSource(types.GovernanceLimits{RunLimits: in.gov}, types.ResourceLimits{}, types.ResourceLimits{}, deploymentSize)
-		if err != nil {
-			return nil, err
-		}
-		sources = append(sources, gov)
-	}
-	return sources, nil
+	return sources, err
 }
 
 // planCreateEnd decides a new run's end (design §3.3, with O4-B: any finite end

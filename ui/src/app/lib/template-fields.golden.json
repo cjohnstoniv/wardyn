@@ -10,10 +10,31 @@
       "remove_secrets",
       "tool_rules"
     ],
+    "CLIAWS": [
+      "start_url",
+      "sso_region",
+      "account_id",
+      "role_name",
+      "region"
+    ],
+    "CLIAzure": [
+      "subscriptions",
+      "access"
+    ],
+    "CLIGitHub": [
+      "capabilities"
+    ],
+    "ComponentCLI": [
+      "kind",
+      "azure",
+      "aws",
+      "github"
+    ],
     "ComponentDefinition": [
       "hosts",
       "secrets",
-      "config"
+      "config",
+      "cli"
     ],
     "ComponentDelivery": [
       "mode",
@@ -126,7 +147,8 @@
     "RunStartup": [
       "kind",
       "tool",
-      "command"
+      "command",
+      "prompt"
     ],
     "RunWorkload": [
       "kind",
@@ -661,6 +683,15 @@
       "section": "run_wide"
     },
     {
+      "name": "shape",
+      "tab": "runner",
+      "part": "runner",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No shape is recorded. The experience, workload and tools already say what the run is; a shape only names the choice it was set up from.",
+      "section": "run_wide"
+    },
+    {
       "name": "workload",
       "tab": "tools_image",
       "part": "tools_image",
@@ -676,7 +707,7 @@
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "value",
-      "meaning": "No tool is included. An interactive environment may include several, and including none is valid. Each harness has its own model provider, tool rules and default effect, and nothing is shared between tools.",
+      "meaning": "No tool is included, which is valid: the sandbox starts from the agent base image. An interactive environment or a command may include several harnesses, and at most one starts. Each harness has its own model provider, tool rules and default effect, and nothing is shared between tools.",
       "section": "harness",
       "keyed_by": "harness"
     },
@@ -686,7 +717,7 @@
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
-      "meaning": "Nothing starts automatically unless chosen: one included harness, one command, or none. A removed startup tool is never replaced by another.",
+      "meaning": "Nothing starts automatically unless chosen: one included harness, which may open with a starting prompt, one command, or none. A removed startup tool is never replaced by another.",
       "sensitive": true,
       "section": "run_wide"
     },

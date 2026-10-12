@@ -29,7 +29,8 @@ const reply = (over: Partial<MyComponents> = {}): MyComponents => ({
       updated_at: aheadByHours(-24),
     },
   ],
-  org: [{ id: ORG_ID, name: "Billing API", hosts: ["billing.corp.test"], secrets: [{ delivery: { mode: "header" } }], config_keys: [] }],
+  org: [{ id: ORG_ID, name: "Billing API", hosts: ["billing.corp.test"], secrets: [{ delivery: { mode: "header" } }], config_keys: [], category: "api" }],
+  clis: [],
   ...over,
 });
 

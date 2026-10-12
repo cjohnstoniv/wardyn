@@ -109,6 +109,10 @@ type RunStartup struct {
 	Tool string `json:"tool,omitempty"`
 	// Command is the startup command a command startup runs once at boot.
 	Command string `json:"command,omitempty"`
+	// Prompt is the starting prompt a harness startup opens with: the startup
+	// harness's first message. A harness startup only; it is task text, held to
+	// the same scans and limits as a task.
+	Prompt string `json:"prompt,omitempty"`
 }
 
 // StartFolderKind says where the run's one working directory comes from.
@@ -136,6 +140,23 @@ type StartFolder struct {
 
 // StartFolderDrive names the person's drive as a start folder attachment.
 const StartFolderDrive = "drive"
+
+// RunShape is the New Run choice a run was set up from. It is not a second
+// mode: the server checks it against experience, workload and tools, and
+// otherwise ignores it.
+type RunShape string
+
+// The run shapes.
+const (
+	RunShapeAgentTask   RunShape = "agent_task"
+	RunShapeEnvironment RunShape = "environment"
+	RunShapeApplication RunShape = "application"
+)
+
+// Valid reports whether the shape is one of the three.
+func (s RunShape) Valid() bool {
+	return s == RunShapeAgentTask || s == RunShapeEnvironment || s == RunShapeApplication
+}
 
 // RunModeContractV09 is the one value of CreateRunRequest.ModeContract.
 const RunModeContractV09 = "0.9"

@@ -161,6 +161,14 @@ const (
 	reasonRunModeConflict    = "run_mode_conflict"    // run-mode carriers contradict each other, or an older field that replaced them
 	reasonStartFolderInvalid = "start_folder_invalid" // start_folder is malformed, names an attachment the run lacks, or escapes its mount
 	reasonRunBackgroundOnly  = "run_background_only"  // a background run has no interactive door: attach, exec, SSH, UI gateway, desktop
+	// The run shape (run_shape.go): New Run's choice, checked against the carriers.
+	reasonRunShapeConflict = "run_shape_conflict" // shape does not fit the run's experience, workload or tools
+	// The harness set (run_harness_set.go): the harnesses a run includes and the
+	// image that carries them. Each body names the harness in `tool`.
+	reasonHarnessNotInstalled      = "harness_not_installed"      // a run-mode request includes a harness no sandbox image here carries
+	reasonHarnessSetNoImage        = "harness_set_no_image"       // no declared sandbox image carries every included harness
+	reasonHarnessSetCustomImage    = "harness_set_custom_image"   // a run with two or more harnesses names a custom image
+	reasonHarnessProvidersConflict = "harness_providers_conflict" // two harnesses' different model providers share an injection host, or two Azure Foundry providers
 	// validateWorkspaceSources / authorizeSpecWorkspaceSources (#656 M1: split
 	// from reasonWorkspaceSourcesInvalid/reasonWorkspaceSourcesUnauthorized —
 	// except the not-onboarded arm, which STAYS one shared reason across both
@@ -483,4 +491,7 @@ const (
 	reasonTemplateNotFound           = "template_not_found"            // no such template, or the caller may not see it
 	reasonTemplateRevisionConflict   = "template_revision_conflict"    // the template changed since the revision the caller read
 	reasonTemplatesUnavailable       = "templates_unavailable"         // 501: the template store is not available on this server yet
+	reasonTemplateNameTaken          = "template_name_taken"           // another template of the same audience already uses the name (case-insensitive)
+	reasonTemplateLimitReached       = "template_limit_reached"        // the audience already holds the most templates it may
+	reasonTemplatePolicyFieldRefused = "template_policy_field_refused" // a policy holds only run-wide network, credential and access-rule keys
 )
