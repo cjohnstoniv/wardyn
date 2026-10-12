@@ -189,7 +189,7 @@ func TestOverlap_DriveTargetIncluded(t *testing.T) {
 	drive := legacyDriveTarget(&types.DriveMount{Target: runner.DriveTarget}, nil)
 	for _, target := range []string{runner.DriveTarget, runner.DriveTarget + "/x"} {
 		spec := types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: helloRepo, Target: target}}}
-		_, _, refusal := srv.runAttachments(createRunRequest{}, spec, []types.Workspace{ws}, workspaceSeed{attached: []types.Workspace{ws}}, drive)
+		_, _, refusal := srv.runAttachments(createRunRequest{}, spec, []types.Workspace{ws}, indexWorkspacesBySource([]types.Workspace{ws}), workspaceSeed{attached: []types.Workspace{ws}}, drive)
 		if refusal == nil || refusal.body.Reason != reasonWorkspaceTargetOverlap || !strings.Contains(refusal.body.Error, "your drive") {
 			t.Fatalf("target %s beside the drive: %+v", target, refusal)
 		}
@@ -197,7 +197,7 @@ func TestOverlap_DriveTargetIncluded(t *testing.T) {
 	// The drive's path inside a workspace's mount, the other order.
 	home := folderWS("home", "/srv/home")
 	spec := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/home", Target: "/home/agent"}}}
-	if _, _, refusal := srv.runAttachments(createRunRequest{}, spec, []types.Workspace{home}, workspaceSeed{}, drive); refusal == nil ||
+	if _, _, refusal := srv.runAttachments(createRunRequest{}, spec, []types.Workspace{home}, indexWorkspacesBySource([]types.Workspace{home}), workspaceSeed{}, drive); refusal == nil ||
 		refusal.body.Error != "/home/agent/drive is inside /home/agent, where home mounts. Two mounts can't nest." {
 		t.Fatalf("drive inside a workspace mount: %+v", refusal)
 	}
@@ -647,5 +647,102 @@ func TestLegacyRepoLabelCaseClonesOnce(t *testing.T) {
 	records, _ := buildRepoRecords("Octocat/Hello-World", []types.WorkspaceRepo{{Repo: helloRepo, Ref: "dev"}})
 	if strings.Count(records, "\n") != 0 || !strings.HasSuffix(records, "\tdev") {
 		t.Fatalf("records = %q, want the workspace repo once, at its ref", records)
+	}
+}
+
+// policyCarriedBody is a 0.9 run whose inline policy carries repos and whose
+// workspaces[] entries add options only (the console's custom mode).
+func policyCarriedBody(wss []types.Workspace, repos []string, folder string) string {
+	sels := make([]string, len(wss))
+	for i, ws := range wss {
+		sels[i] = `{"workspace_id":"` + ws.ID.String() + `"}`
+	}
+	body := `{"mode_contract":"0.9","experience":"background","workload":{"kind":"agent_task","agent":"claude-code","task":"t"},` +
+		`"tools":[{"id":"claude-code","kind":"harness"}],"workspaces":[` + strings.Join(sels, ",") + `],` +
+		`"inline_policy":{"min_confinement_class":"CC2","workspace_repos":[{"repo":"` + strings.Join(repos, `"},{"repo":"`) + `"}]}`
+	if folder != "" {
+		body += `,"start_folder":` + folder
+	}
+	return body + `}`
+}
+
+// TestPolicyCarriedSharedRepoStartFolder (NR-2 M-1): a repository the policy
+// carries and two attached workspaces hold starts the run when the start folder
+// names either of them, at every door, and the mount map credits it to the one
+// named.
+func TestPolicyCarriedSharedRepoStartFolder(t *testing.T) {
+	payments := repoWS("payments", helloRepo, spoonRepo)
+	for _, tc := range []struct {
+		name  string
+		docs  types.Workspace
+		store func(p, d types.Workspace) []types.Workspace
+		repos []string
+	}{
+		// The probe: the gate's index credits Hello-World to docs, the last carrier.
+		{"probe", repoWS("docs", helloRepo), func(p, d types.Workspace) []types.Workspace { return []types.Workspace{p, d} },
+			[]string{helloRepo, spoonRepo}},
+		// The gate credits payments, and docs is the policy's through another repo.
+		{"named carrier", repoWS("docs", helloRepo, "octocat/linguist"), func(p, d types.Workspace) []types.Workspace { return []types.Workspace{d, p} },
+			[]string{helloRepo, spoonRepo, "octocat/linguist"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := attachFixture(t, types.SiteConfig{}, tc.store(payments, tc.docs)...)
+			folder := `{"kind":"attachment","attachment":"` + tc.docs.ID.String() + `","repo":"` + helloRepo + `"}`
+			body := policyCarriedBody([]types.Workspace{payments, tc.docs}, tc.repos, folder)
+			for _, door := range runDoors[1:] {
+				w := do(t, srv, http.MethodPost, door.path, adminToken, body)
+				if w.Code != http.StatusOK {
+					t.Fatalf("%s: %d %s", door.name, w.Code, w.Body.String())
+				}
+				for _, at := range attachmentsOf(t, w.Body.Bytes()) {
+					if at.Repo == helloRepo && (at.WorkspaceID != tc.docs.ID.String() || at.Name != "docs" || !at.StartsHere) {
+						t.Fatalf("%s: Hello-World shown as %+v, want docs's, holding the start folder", door.name, at)
+					}
+				}
+			}
+			if _, spec := createAndDispatch(t, srv, body); spec.Env["WARDYN_START_FOLDER"] != "/home/agent/work/hello-world" {
+				t.Fatalf("create: WARDYN_START_FOLDER = %q", spec.Env["WARDYN_START_FOLDER"])
+			}
+		})
+	}
+}
+
+// TestPolicyCarriedRepoCreditedToGateCarrier (NR-2 M-1): with no start folder,
+// a repository the policy carries is credited to the workspace the onboarding
+// gate held it to, at every dry door.
+func TestPolicyCarriedRepoCreditedToGateCarrier(t *testing.T) {
+	payments, docs := repoWS("payments", helloRepo, spoonRepo), repoWS("docs", helloRepo)
+	srv := attachFixture(t, types.SiteConfig{}, payments, docs) // the index's last carrier of Hello-World is docs
+	body := policyCarriedBody([]types.Workspace{payments, docs}, []string{helloRepo, spoonRepo}, "")
+	for _, door := range runDoors[1:] {
+		w := do(t, srv, http.MethodPost, door.path, adminToken, body)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", door.name, w.Code, w.Body.String())
+		}
+		for _, at := range attachmentsOf(t, w.Body.Bytes()) {
+			if want := map[string]string{helloRepo: "docs", spoonRepo: "payments"}[at.Repo]; at.Name != want {
+				t.Fatalf("%s: %s credited to %s, want %s", door.name, at.Repo, at.Name, want)
+			}
+		}
+	}
+}
+
+// TestLegacyRepoLabelCaseOnlyOnCaseInsensitiveForges (NR-2 L-1): a case-only
+// difference is the same repository on GitHub and Azure DevOps, and a different
+// one on any other host.
+func TestLegacyRepoLabelCaseOnlyOnCaseInsensitiveForges(t *testing.T) {
+	for _, tc := range []struct {
+		label, repo string
+		records     int
+	}{
+		{"Octocat/Hello-World", helloRepo, 1},
+		{"https://dev.azure.com/Acme/P/_git/R", "https://dev.azure.com/acme/p/_git/r", 1},
+		{"https://acme.visualstudio.com/P/_git/R", "https://acme.visualstudio.com/p/_git/r", 1},
+		{"https://git.example.com/Org/Tool.git", "https://git.example.com/org/tool.git", 2},
+	} {
+		records, _ := buildRepoRecords(tc.label, []types.WorkspaceRepo{{Repo: tc.repo}})
+		if got := strings.Count(records, "\n") + 1; records == "" || got != tc.records {
+			t.Errorf("%s beside %s: %d records %q, want %d", tc.label, tc.repo, got, records, tc.records)
+		}
 	}
 }
