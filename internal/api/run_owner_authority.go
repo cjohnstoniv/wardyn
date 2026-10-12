@@ -563,7 +563,8 @@ func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg
 }
 
 // runRepos is the run's repos: its legacy repo field and, when its rendered
-// proxy config can be read, the repos of its resolved policy.
+// proxy config can be read, the repos of its resolved policy and of its
+// built-in GitHub components.
 func runRepos(run types.AgentRun, cfg *proxy.Config) []string {
 	var repos []string
 	if run.Repo != "" {
@@ -571,6 +572,7 @@ func runRepos(run types.AgentRun, cfg *proxy.Config) []string {
 	}
 	if cfg != nil {
 		repos = append(repos, repoLocatorsOf(cfg.Policy.WorkspaceRepos)...)
+		repos = append(repos, builtinGitHubRepos(cfg.Policy.EligibleGrants)...)
 	}
 	return repos
 }

@@ -4,16 +4,24 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // githubBuiltin is a built-in GitHub component reference for acme.
@@ -89,7 +97,7 @@ func TestRunComponents_BuiltinGitHubIsBrokered(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The ceiling's approval and TTL bind it as they bind a policy's grant.
-	wantScope := `{"permissions":{"contents":"read"},"repos":["acme/api","Acme/web"]}`
+	wantScope := `{"builtin":"github","permissions":{"contents":"read"},"repos":["acme/api","Acme/web"]}`
 	var found bool
 	f.st.mu.Lock()
 	for _, g := range f.st.grants {
@@ -194,5 +202,121 @@ func TestRunComponents_BuiltinRefusalIsAudited(t *testing.T) {
 		if !slices.Equal(rows, want) {
 			t.Errorf("%s run.component.refuse = %v, want %v", door, rows, want)
 		}
+	}
+}
+
+// A built-in's repositories are read back from its grant and nowhere else: a
+// policy's own github_token grant names repositories that met no provider door
+// at launch, and adds none at revive or extension.
+func TestBuiltinGitHubRepos_ReadsOnlyTheBuiltinGrant(t *testing.T) {
+	f := newComponentFixture(t)
+	ceiling := governanceCeiling{Spec: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitHubToken,
+		Scope: json.RawMessage(`{"repos":[],"permissions":{"contents":"read"}}`)}}}}
+	builtin, ok := f.srv.builtinGitHubGrant(httptest.NewRequest(http.MethodPost, "/", nil), ceiling, []string{"acme/api"}, "read")
+	if !ok {
+		t.Fatal("no grant")
+	}
+	policy := types.GrantSpec{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":["acme/web"],"permissions":{"contents":"write"}}`)}
+	if got := builtinGitHubRepos([]types.GrantSpec{policy, builtin}); !slices.Equal(got, []string{"https://github.com/acme/api"}) {
+		t.Errorf("builtinGitHubRepos = %v, want the built-in's repository only", got)
+	}
+}
+
+// An override keyed to a built-in's organisation finds the entry the built-in
+// brings, so its rules reach the git route for those repositories.
+func TestPushRuleSets_ABuiltinBringsItsEntry(t *testing.T) {
+	req := prReq(client.PushRuleOverride{Provider: "github", Org: "acme", DenyPaths: []string{"infra/"}})
+	req.Components = []types.ComponentRef{{Builtin: types.ComponentBuiltinGitHub, Org: "acme", Repos: []string{"acme/api"}}}
+	sets, _, err := (&Server{}).pushRuleSetsFor(prSpec(), req, types.SiteConfig{})
+	if err != nil || len(sets) != 1 || sets[0].Org != "acme" || !slices.Equal(sets[0].Rules.DenyPaths, []string{".github/workflows/**", "infra/"}) {
+		t.Errorf("sets = %+v err %v, want acme's entry with the policy's deny and the override's", sets, err)
+	}
+}
+
+// builtinRunGrants is a run's grants as the gate writes them for a built-in
+// GitHub component on capProviderRepo, or, with policy, as a policy's own
+// github_token grant naming the same repository.
+func builtinRunGrants(t *testing.T, policy bool) []types.GrantSpec {
+	t.Helper()
+	if policy {
+		return []types.GrantSpec{{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":["` + capProviderRepo + `"],"permissions":{"contents":"read"}}`)}}
+	}
+	g, ok := (&Server{}).builtinGitHubGrant(httptest.NewRequest(http.MethodPost, "/", nil), governanceCeiling{Spec: types.RunPolicySpec{
+		EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":[],"permissions":{"contents":"read"}}`)}}}},
+		[]string{capProviderRepo}, "read")
+	if !ok {
+		t.Fatal("no built-in grant")
+	}
+	return []types.GrantSpec{g}
+}
+
+// A built-in GitHub run's provider is a launch door like a workspace's: the
+// owner losing workspace_provider refuses the revive. A policy's own grant on
+// the same repository is today's run, which met no provider door and revives.
+func TestRevive_RechecksABuiltinsProvider(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		policy bool
+		want   int
+	}{{"built-in", false, http.StatusForbidden}, {"policy grant", true, http.StatusOK}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newReviveFixture(t)
+			f.srv.cfg.OIDC = &oidc.Authenticator{}
+			f.srv.router = f.srv.routes()
+			f.st.site = capProviderSite()
+			f.editConfig(t, func(c *proxy.Config) { c.Policy.EligibleGrants = builtinRunGrants(t, tc.policy) })
+			f.st.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectUser, ownerEmail, capWorkspaceProvider, capProviderRowID, types.CapabilityDeny)}
+			code, body := f.reviveAs(t, true)
+			if code != tc.want {
+				t.Fatalf("revive = %d %s, want %d", code, body, tc.want)
+			}
+			if tc.want == http.StatusForbidden {
+				f.assertReviveRefused(t, "capability_"+capWorkspaceProvider)
+			}
+		})
+	}
+}
+
+// builtinExtendStore is the extension fixture's store keeping the run's proxy
+// config sealed, as run_proxy_config.go reads it.
+type builtinExtendStore struct {
+	*leaseStore
+	cfg, key []byte
+}
+
+func (s *builtinExtendStore) PutRunProxyConfig(context.Context, uuid.UUID, []byte) error { return nil }
+func (s *builtinExtendStore) GetRunProxyConfig(_ context.Context, id uuid.UUID) ([]byte, error) {
+	return kek.Seal(s.key, s.cfg, runProxyConfigAAD(id))
+}
+func (s *builtinExtendStore) DeleteRunProxyConfig(context.Context, uuid.UUID) error { return nil }
+func (s *builtinExtendStore) PurgeTerminalRunProxyConfigs(context.Context) (int64, error) {
+	return 0, nil
+}
+
+// The same door at an extension, which keeps the sandbox and its credentials
+// alive as a revive does.
+func TestExtend_RechecksABuiltinsProvider(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		policy bool
+		want   int
+	}{{"built-in", false, http.StatusForbidden}, {"policy grant", true, http.StatusOK}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newEndWaitFixture(t, types.RunLimits{MaxEndAheadSec: 30 * 86400, UserChangesLimits: true})
+			f.st.site = capProviderSite()
+			f.st.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capWorkspaceProvider, capProviderRowID, types.CapabilityDeny)}
+			cfg, err := runner.BuildProxyConfig(f.st.run.ID, runner.ProxyConfig{RunToken: "t", ControlPlaneURL: "http://127.0.0.1:8081",
+				ControlPlaneCAPEM: string(testHopCA(t).CertPEM), Policy: types.RunPolicySpec{EligibleGrants: builtinRunGrants(t, tc.policy)}}, runner.ProxyListenPort)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := make([]byte, kek.DEKSize)
+			f.srv.cfg.ControlPlaneURL, f.srv.cfg.ControlPlaneCAPEM = "https://wardynd:8443", string(testHopCA(t).CertPEM)
+			f.srv.cfg.Store, f.srv.cfg.RunConfigKey = &builtinExtendStore{leaseStore: f.st, cfg: cfg, key: key}, key
+			w := doSSO(t, f.srv, http.MethodPatch, "/api/v1/runs/"+f.st.run.ID.String(), ownerSessionAs(t), endsAtBody(f.now.Add(7*24*time.Hour)))
+			if w.Code != tc.want {
+				t.Fatalf("extend = %d %s, want %d", w.Code, w.Body.String(), tc.want)
+			}
+		})
 	}
 }
