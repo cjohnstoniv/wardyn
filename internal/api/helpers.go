@@ -19,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -430,11 +431,12 @@ func (s *Server) ownsRunOrAdmin(r *http.Request, run types.AgentRun) bool {
 
 // sponsorsRun reports whether the caller of r is the CURRENT sponsor of the service identity that created
 // run, whatever that identity's state: a sponsor keeps sight of, and the stop on, a suspended or retired
-// service's live runs. A store that cannot answer is no.
+// service's live runs. A store that cannot answer is no. A portal's delegated token never is: it acts for
+// the person but gets no sponsor reach, as portals are refused at the service token mint.
 func (s *Server) sponsorsRun(r *http.Request, run types.AgentRun) bool {
 	name, ok := strings.CutPrefix(run.CreatedBy, types.ServicePrincipalPrefix)
 	principal := principalFromRequest(r)
-	if !ok || principal == "" || isServicePrincipal(principal) {
+	if !ok || principal == "" || isServicePrincipal(principal) || delegatedRequest(r.Context()) {
 		return false
 	}
 	si, err := s.serviceRecord(r.Context(), name)
@@ -442,6 +444,12 @@ func (s *Server) sponsorsRun(r *http.Request, run types.AgentRun) bool {
 		slog.ErrorContext(r.Context(), "wardynd: service identity lookup failed; the sponsor arm refuses", "run_id", run.ID, "err", err)
 	}
 	return err == nil && si.Sponsor == principal
+}
+
+// delegatedRequest reports whether ctx carries a portal's delegated token.
+func delegatedRequest(ctx context.Context) bool {
+	_, delegated := audit.DelegationFrom(ctx)
+	return delegated
 }
 
 // ownsRunOrSponsorOrAdmin is ownsRunOrAdmin plus the sponsor of the service identity that created run (F3):

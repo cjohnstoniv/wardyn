@@ -168,10 +168,11 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		principal := principalFromRequest(r)
-		// A sponsor also reads the runs of the service identities they sponsor (F3). A store that cannot
-		// widen the list lists the caller's own runs only: never more.
+		// A sponsor also reads the runs of the service identities they sponsor (F3), on the filtered path
+		// too (runs_list_filter.go). A store that cannot widen the list, and a portal's delegated token,
+		// list the caller's own runs only: never more.
 		listByCreator := creatorPager.ListRunsPageByCreator
-		if sp, ok := s.cfg.Store.(store.RunsByCreatorOrSponsorPager); ok {
+		if sp, ok := s.cfg.Store.(store.RunsByCreatorOrSponsorPager); ok && !delegatedRequest(r.Context()) {
 			listByCreator = sp.ListRunsPageByCreatorOrSponsor
 		}
 		servePage(w, r, page, func(p store.Page) ([]types.AgentRun, error) {

@@ -20,6 +20,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -31,6 +32,25 @@ const (
 	bossBot = "ops-bot"
 	bossPrn = "service:ops-bot"
 )
+
+// attentionApprovals gives the fake approval service the pending-approvals read the runs list's attention
+// projection (view=...) asks of a real one.
+type attentionApprovals struct {
+	ApprovalService
+	st store.PG
+}
+
+func (a attentionApprovals) ListPendingApprovalsForRuns(ctx context.Context, ids []uuid.UUID) ([]types.ApprovalRequest, error) {
+	return a.st.ListPendingApprovalsForRuns(ctx, ids)
+}
+
+func (a attentionApprovals) CountPendingApprovals(ctx context.Context) (int, error) {
+	return a.st.CountPendingApprovals(ctx)
+}
+
+func (a attentionApprovals) CountPendingApprovalsByRunCreator(ctx context.Context, by string) (int, error) {
+	return a.st.CountPendingApprovalsByRunCreator(ctx, by)
+}
 
 // sponsorEnv is svcEnv with two service identities: ci-bot, sponsored by a member, and ops-bot, sponsored by a
 // super admin.
@@ -49,6 +69,7 @@ func newSponsorEnv(t *testing.T) sponsorEnv {
 	e.mustCreate(t, bossBot, bossSub)
 	e.runner = &holderTestRunner{}
 	e.h.srv.cfg.Runner = e.runner
+	e.h.srv.cfg.Approvals = attentionApprovals{ApprovalService: e.h.srv.cfg.Approvals, st: e.st}
 	return e
 }
 
@@ -153,7 +174,9 @@ func TestServiceIdentity_SponsorReadsAndKillsOnly(t *testing.T) {
 		}
 		return got
 	}
-	for _, q := range []string{"", "?owner=me", "?owner=me&include_killed=1"} {
+	// The console always sends a view; view=user (and a non-operator's view=admin, forced to user) is the
+	// person's own list, which carries the identities they currently sponsor (design §8).
+	for _, q := range []string{"", "?owner=me", "?owner=me&include_killed=1", "?view=user", "?view=user&include_killed=1", "?view=admin&include_killed=1"} {
 		if got := listed(e.sponsor, q); !got[run.ID] || !got[done.ID] || got[foreign.ID] {
 			t.Errorf("sponsor's GET /runs%s lists run=%v done=%v other service's run=%v, want true true false", q, got[run.ID], got[done.ID], got[foreign.ID])
 		}
@@ -161,8 +184,10 @@ func TestServiceIdentity_SponsorReadsAndKillsOnly(t *testing.T) {
 	if got := listed(e.sponsor, "?owner=me&status=active"); !got[run.ID] || got[done.ID] || got[foreign.ID] {
 		t.Errorf("sponsor's filtered list = %v, want the live run only", got)
 	}
-	if got := listed(e.other, ""); got[run.ID] || got[done.ID] {
-		t.Error("another member's GET /runs lists the service's runs")
+	for _, q := range []string{"", "?view=user&include_killed=1", "?owner=all&include_killed=1"} {
+		if got := listed(e.other, q); got[run.ID] || got[done.ID] {
+			t.Errorf("another member's GET /runs%s lists the service's runs", q)
+		}
 	}
 
 	// Read.
@@ -423,6 +448,22 @@ func TestServiceIdentity_SponsorEntryEndsWithSponsorship(t *testing.T) {
 		t.Errorf("a minted ticket after the grant was withdrawn: %d, want 426 (the grant is asked at the mint only)", got)
 	}
 	e.grant(t, "user", "sponsor@corp.example", "allow", featureServiceAttach)
+
+	// Sponsor change A to B and back to A: the person is the sponsor again, but not the one the ticket was
+	// admitted under, so the redemption is refused. The authority time is the ticket's.
+	roundTrip := ticketOf(t, e.mintTicket(t, e.sponsor, run))
+	time.Sleep(20 * time.Millisecond)
+	for _, to := range []string{svcSponsor2, svcSponsor} {
+		if w := doSSO(t, e.h.srv, http.MethodPatch, "/api/v1/service-identities/"+svcName, e.sec, `{"sponsor":"`+to+`"}`); w.Code != http.StatusOK {
+			t.Fatalf("sponsor change to %s: %d %s", to, w.Code, w.Body.String())
+		}
+	}
+	if got := attach(roundTrip); got != http.StatusForbidden {
+		t.Errorf("a ticket redeemed after A to B to A: %d, want 403", got)
+	}
+	if w := e.mintTicket(t, e.sponsor, run); w.Code != http.StatusOK {
+		t.Errorf("the sponsor's fresh mint after A to B to A: %d %s, want 200", w.Code, w.Body.String())
+	}
 
 	// Sponsor change.
 	changed := ticketOf(t, e.mintTicket(t, e.sponsor, run))

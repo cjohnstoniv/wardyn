@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,10 +23,13 @@ type sponsorUIStore struct {
 	*uiMemStore
 	store.ServiceIdentityStore // never called: only ServiceStillSponsored is asked
 	still                      atomic.Bool
+	sponsorSince               atomic.Int64 // unix seconds the current sponsorship began; 0 = always
 }
 
-func (s *sponsorUIStore) ServiceStillSponsored(context.Context, string, string, time.Time) (bool, error) {
-	return s.still.Load(), nil
+// ServiceStillSponsored answers as the real store does: the sponsor is current, and the sponsorship
+// did not begin after openedAt, so a re-sponsor A to B to A ends a session opened before it.
+func (s *sponsorUIStore) ServiceStillSponsored(_ context.Context, _, _ string, openedAt time.Time) (bool, error) {
+	return s.still.Load() && s.sponsorSince.Load() <= openedAt.Unix(), nil
 }
 
 // TestServiceIdentity_SponsorUIEntry: a sponsor's member-stamped ticket opens a UI app of the service's run;
@@ -55,6 +59,17 @@ func TestServiceIdentity_SponsorUIEntry(t *testing.T) {
 	}
 	cookie := enter()
 	path := uiRelayPrefix(h.run.ID, "code") + "/ide"
+	h.audit.mu.Lock()
+	var authorized *types.AuditEvent
+	for i := range h.audit.events {
+		if h.audit.events[i].Action == "ui.authorize" && h.audit.events[i].Outcome == "success" {
+			authorized = &h.audit.events[i]
+		}
+	}
+	h.audit.mu.Unlock()
+	if authorized == nil || !strings.Contains(string(authorized.Data), `"entry":"sponsor"`) || !strings.Contains(string(authorized.Data), `"service_identity":"ci-bot"`) {
+		t.Errorf("the entry's ui.authorize success row = %+v, want the sponsor marks", authorized)
+	}
 	if rec := uiGet(h, path, cookie); rec.Code != http.StatusOK {
 		t.Fatalf("relay: %d %s, want 200", rec.Code, rec.Body.String())
 	}
@@ -89,8 +104,23 @@ func TestServiceIdentity_SponsorUIEntry(t *testing.T) {
 	if rec := h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {h.ticket(h.run.ID, "sponsor-sub", oidc.RoleUser)}}); rec.Code != http.StatusForbidden {
 		t.Errorf("a sponsor's ticket after the sponsorship ended: %d %s, want 403", rec.Code, rec.Body.String())
 	}
-	// A super admin's stamp never takes the sponsor arm.
+	// A sponsorship that began after the ticket was admitted (A to B to A) refuses the redemption, and ends
+	// an open session at its next re-check: the authority time is the ticket's, passed through both.
 	st.still.Store(true)
+	later := time.Now().Add(time.Hour)
+	st.sponsorSince.Store(later.Unix())
+	if rec := h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {h.ticket(h.run.ID, "sponsor-sub", oidc.RoleUser)}}); rec.Code != http.StatusForbidden {
+		t.Errorf("a ticket admitted before the sponsorship began: %d %s, want 403", rec.Code, rec.Body.String())
+	}
+	st.sponsorSince.Store(0)
+	again := enter()
+	st.sponsorSince.Store(time.Now().Add(2 * time.Second).Unix())
+	h.clock.advance(uiReassertInterval + time.Second)
+	if rec := uiGet(h, path, again); rec.Code != http.StatusForbidden {
+		t.Errorf("a session opened before a re-sponsor, at its re-check: %d %s, want 403", rec.Code, rec.Body.String())
+	}
+	st.sponsorSince.Store(0)
+	// A super admin's stamp never takes the sponsor arm.
 	if rec := h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {h.ticket(h.run.ID, "sponsor-sub", oidc.RoleAdmin)}}); rec.Code != http.StatusForbidden {
 		t.Errorf("an admin-stamped ticket on a service run: %d %s, want 403", rec.Code, rec.Body.String())
 	}

@@ -9,7 +9,7 @@ This page is the service-identity half of the [#1508 design](invitations-service
 - `service:<name>`, `name` matching `^[a-z][a-z0-9-]{2,62}$`, so it is already in `CanonicalUserSubject` form.
 - `isReservedPrincipal` gains the `service:` prefix, so no sign-in, cookie, portal exchange or `POST /people` can become one.
 - A name is never reused and never renamed: a retired row stays, so no later identity inherits its grants, ceiling or audit history.
-- `POST /service-identities` refuses a name any principal-keyed table already holds (`409` `service_identity_name_taken`); the tables are listed in [Schema 0196](invitations-service-identities.md#61-schema-0196).
+- `POST /service-identities` refuses a name any principal-keyed table already holds (`409` `service_identity_name_taken`); the tables are listed in [Schema 0157](invitations-service-identities.md#61-schema-0157).
 
 ## 2. Record
 
