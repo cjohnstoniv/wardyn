@@ -100,7 +100,7 @@ describe("HarnessSetup", () => {
         <NewRunDraftProvider owner="alice">
           <Seed intent={CLAUDE}>
             <Live access={withFacts(BASE, [CLAUDE_UNGATED])} />
-            <SetupNeeded items={[item]} done={new Set()} intent={CLAUDE} names={NAMES} onDone={() => {}} />
+            <SetupNeeded items={[item]} pending={new Set()} done={new Set()} intent={CLAUDE} names={NAMES} onDone={() => {}} />
           </Seed>
         </NewRunDraftProvider>,
       );
