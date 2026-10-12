@@ -17,6 +17,7 @@ import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { RUN_WAIT } from "../../../../lib/runner-pool-refusals";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
+import { SCENARIO_ACCESS } from "../../../../lib/new-run-fixtures/scenarios/tools";
 import type { PreflightResult } from "../../../../lib/types/preflight";
 import { intentToWire } from "../draft/intent-to-wire";
 import { PREFLIGHT_FRESH_MS } from "../draft/launch-gate";
@@ -153,6 +154,27 @@ describe("Review Launch gate (U11)", () => {
     expect(onLaunch).toHaveBeenCalledTimes(1);
     fireEvent.click(launch());
     expect(onLaunch).toHaveBeenCalledTimes(2);
+  });
+
+  describe("the Azure DevOps sign-in item", () => {
+    const ADO_ITEM = { id: "repo_credential:azure_devops:acme", kind: "repo_credential", label: "Sign in to Azure DevOps", required_by: "acme", status: "missing", fix: { action: "sign_in", target: "azure_devops" } };
+    const accessWith = (setup: unknown[]) => ({ ...SCENARIO_ACCESS.member, setup });
+    const previewWith = (setup: unknown[]) => ({ result: { spec: {}, source: { name: "Default" }, pending: [], warnings: [], repository_access: [], access: accessWith(setup) }, retry });
+    const withAdo = { ...SCENARIO_PREFLIGHT.member, access: accessWith([ADO_ITEM]) } as unknown as PreflightResult;
+
+    it("leaves Launch open when the policy preview shows no such item, so the launch refusal opens the door", async () => {
+      checks.current = answered(withAdo, 1000, { preview: previewWith([]) });
+      open(AGENT);
+      await ready();
+      expect(launch()).toBeEnabled();
+    });
+
+    it("holds Launch when the preview shows the same item, which the Tools step then offers", async () => {
+      checks.current = answered(withAdo, 1000, { preview: previewWith([ADO_ITEM]) });
+      open(AGENT);
+      await ready();
+      expect(launch()).toBeDisabled();
+    });
   });
 
   it("offers Check again while shut, reads both again, and announces once Launch opens", async () => {
