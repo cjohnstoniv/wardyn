@@ -362,6 +362,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- `wardyn sync --pull` refuses a sandbox file name holding a control character, and every path or gateway message it
+  reports is quoted when it holds a non-printable character, so sandbox text cannot drive the terminal.
 - A held runner pool executor attach or detach is listed to, read by and decided by a super admin only, the tier it
   was written on; a security admin no longer sees or approves it.
 - An open sign-in or key door stays in place when a background status refresh briefly cannot read the secret store.
