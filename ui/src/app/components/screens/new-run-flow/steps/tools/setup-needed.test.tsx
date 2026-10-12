@@ -82,11 +82,6 @@ describe("Setup still needed", () => {
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
-  it("offers Choose only once the harness's provider control exists", async () => {
-    show(SCENARIO_ACCESS.interactive2.setup);
-    expect(screen.queryByRole("button", { name: NR_TOOLS.SETUP_CHOOSE })).not.toBeInTheDocument();
-  });
-
   it("never shows a wire id as text when the name is unknown", () => {
     const item: SetupItem = { ...SETUP_ITEMS.chooseProvider, label: "Choose a model provider" };
     show([item, { ...SETUP_ITEMS.signIn, required_by: "claude-code" }], { names: undefined, intent: {} });

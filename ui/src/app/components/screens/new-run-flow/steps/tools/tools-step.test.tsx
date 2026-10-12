@@ -211,6 +211,7 @@ describe("Tools and access step", () => {
     show();
     const before = (await screen.findByTestId("revision")).textContent;
     for (const toggle of screen.getAllByRole("button", { name: /^Details for / })) await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_CHOOSE }));
     expect(screen.getByTestId("revision").textContent).toBe(before);
     expect(screen.queryByRole("button", { name: NR_TOOLS.CARD_ADD })).not.toBeInTheDocument();
   });
