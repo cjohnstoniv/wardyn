@@ -524,16 +524,6 @@ func (i *injector) apply(req *http.Request, host string, port int) {
 	req.Header.Set(h.name, h.value)
 }
 
-// headerFor returns host's current injection header, if a rule exists — used by the LLM local route
-// to apply the same credential the forward-proxy path would; unresolvable yields (_, false).
-func (i *injector) headerFor(host string) (injectedHeader, bool) {
-	h, ok, err := i.resolve(host)
-	if err != nil {
-		return injectedHeader{}, false
-	}
-	return h, ok
-}
-
 // bootResolveQuery marks the sidecar's boot-time resolves (mirrors adoResolvePhase/adoResolvePhaseBoot).
 var bootResolveQuery = url.Values{"phase": {"boot"}}
 
