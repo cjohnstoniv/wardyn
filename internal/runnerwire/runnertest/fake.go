@@ -31,8 +31,6 @@ type Fake struct {
 	Orphans    []uuid.UUID // runs the sweep may remove
 	execed     map[string]bool
 	StoppedRef map[string]bool
-	// LifecycleErr is what CanManageDrives answers; nil means the fake can delete drives.
-	LifecycleErr error
 }
 
 // NewFake offers CC1 and CC2.
@@ -187,7 +185,8 @@ func (f *Fake) ProbeDrive(_ context.Context, m types.DriveMount) (runner.DrivePr
 	return runner.DriveProbe{Result: runner.DriveProbeReadable, Detail: "fake"}, nil
 }
 
-func (f *Fake) CanManageDrives(context.Context) error { return f.LifecycleErr }
+// CanManageDrives is unavailable: the fake has no ReclaimDrive, and "can manage" must never describe a substrate that cannot delete.
+func (f *Fake) CanManageDrives(context.Context) error { return runner.ErrDriveLifecycleUnavailable }
 
 func (f *Fake) RecoverOutput(_ context.Context, ref string, w io.Writer) error {
 	f.note("recover_output", ref)
