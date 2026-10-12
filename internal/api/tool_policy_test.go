@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -323,5 +324,115 @@ func TestToolPolicy_HandStartedHarnessHasNoCredentialAndDenyHolds(t *testing.T) 
 	}
 	if got := gate.call(t, "Read", started); got != "APPROVED" {
 		t.Errorf("a tool nobody names: %s, want the posture's allow", got)
+	}
+}
+
+// TestToolEffectGolden writes the cases the console's twin of policyToolEffect
+// (ui/src/app/lib/tool-effect.ts) is pinned to; WARDYN_UPDATE_GOLDEN=1 rewrites it.
+func TestToolEffectGolden(t *testing.T) {
+	type tc struct {
+		Name        string           `json:"name"`
+		PolicyRules []types.ToolRule `json:"policy_rules"`
+		LaneDefault types.ToolEffect `json:"lane_default"`
+		Tool        string           `json:"tool"`
+		Effect      types.ToolEffect `json:"effect"`
+	}
+	hold, allow, deny := types.ToolHold, types.ToolAllow, types.ToolDeny
+	cases := []tc{
+		{Name: "no rule on the gated lane is held", PolicyRules: []types.ToolRule{}, LaneDefault: hold, Tool: "Bash"},
+		{Name: "no rule on an ungated lane runs", PolicyRules: []types.ToolRule{}, LaneDefault: allow, Tool: "Bash"},
+		{Name: "the exact rule wins over the default", PolicyRules: []types.ToolRule{{Tool: "*", Effect: deny}, {Tool: "Read", Effect: allow}}, LaneDefault: hold, Tool: "Read"},
+		{Name: "the policy's default wins over the lane's", PolicyRules: []types.ToolRule{{Tool: "Read", Effect: allow}, {Tool: "*", Effect: deny}}, LaneDefault: allow, Tool: "Bash"},
+		{Name: "the posture's allow under the person's layer", PolicyRules: []types.ToolRule{{Tool: "WebFetch", Effect: hold}, {Tool: "*", Effect: allow}}, LaneDefault: hold, Tool: "Bash"},
+		{Name: "a held tool under the posture", PolicyRules: []types.ToolRule{{Tool: "WebFetch", Effect: hold}, {Tool: "*", Effect: allow}}, LaneDefault: hold, Tool: "WebFetch"},
+		{Name: "names match exactly and by case", PolicyRules: []types.ToolRule{{Tool: "bash", Effect: allow}}, LaneDefault: hold, Tool: "Bash"},
+		{Name: "an MCP tool by its full name", PolicyRules: []types.ToolRule{{Tool: "mcp__github__create_issue", Effect: deny}}, LaneDefault: allow, Tool: "mcp__github__create_issue"},
+		{Name: "the default itself", PolicyRules: []types.ToolRule{{Tool: "*", Effect: hold}}, LaneDefault: allow, Tool: "*"},
+	}
+	for i := range cases {
+		cases[i].Effect = policyToolEffect(cases[i].PolicyRules, cases[i].LaneDefault, cases[i].Tool)
+	}
+	compareOrUpdateGolden(t, "../../ui/src/app/lib/tool-effect.golden.json", cases)
+	if cases[0].Effect != hold || cases[1].Effect != allow || cases[4].Effect != allow || cases[6].Effect != hold {
+		t.Errorf("policyToolEffect: %+v", cases)
+	}
+}
+
+// Each harness's tool facts offer exactly what the server accepts: the lane and
+// its enforcer, the default with its source, and every effect greyed with the
+// reason the server would refuse it.
+func TestToolPolicy_HarnessFactsOfferWhatTheServerAccepts(t *testing.T) {
+	avail := func(opts []client.EffectOption) map[types.ToolEffect]string {
+		out := map[types.ToolEffect]string{}
+		for _, o := range opts {
+			if !o.Available {
+				out[o.Effect] = o.Reason
+			}
+		}
+		return out
+	}
+	claude := []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness, ToolRules: []types.ToolRule{{Tool: "WebFetch", Effect: types.ToolDeny}}}}
+	for _, tc := range []struct {
+		name, harness           string
+		req                     createRunRequest
+		spec                    []types.ToolRule
+		prov                    []provenanceRow
+		lane, enforcer, ruleSet string
+		effective               types.ToolEffect
+		source                  string
+		greyDefault, greyRule   map[types.ToolEffect]string
+	}{
+		{"a person's rule on a background run", "claude-code", createRunRequest{Agent: "claude-code", Task: "t", ToolApprovals: "hold", Tools: claude},
+			[]types.ToolRule{{Tool: "*", Effect: types.ToolAllow}}, []provenanceRow{{Field: fieldToolRules, Value: "*:allow", Source: provSource{Kind: provKindPosture}, Effect: provEffectAdded}},
+			toolLaneGated, toolEnforcerGate, "any", types.ToolAllow, provKindPosture, map[types.ToolEffect]string{}, map[types.ToolEffect]string{}},
+		{"a profile's gated lane holds what the policy does not name", "claude-code", createRunRequest{Agent: "claude-code", Task: "t", ToolApprovals: "hold"},
+			[]types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}, nil, toolLaneGated, toolEnforcerGate, "any", types.ToolHold, provKindHarness,
+			map[types.ToolEffect]string{types.ToolAllow: "policy_stricter_default"}, map[types.ToolEffect]string{types.ToolAllow: "policy_stricter_tool"}},
+		{"an ungated run", "claude-code", createRunRequest{Agent: "claude-code", Task: "t"}, nil, nil, toolLaneUngated, toolEnforcerNone, "any", types.ToolAllow, provKindHarness,
+			map[types.ToolEffect]string{}, map[types.ToolEffect]string{}},
+		{"Codex CLI", "codex-cli", createRunRequest{Agent: "codex-cli", Task: "t"}, nil, nil, toolLaneUngated, toolEnforcerNone, "mcp_only", types.ToolAllow, provKindHarness,
+			map[types.ToolEffect]string{types.ToolHold: "harness_no_hold", types.ToolDeny: "harness_no_block_builtin"}, map[types.ToolEffect]string{types.ToolHold: "harness_no_hold"}},
+		{"an interactive run", "claude-code", createRunRequest{Agent: "claude-code", Interactive: true}, nil, nil, toolLaneAttended, toolEnforcerNone, "any", types.ToolHold, provKindHarness,
+			map[types.ToolEffect]string{types.ToolAllow: "attended_no_skip", types.ToolDeny: "attended_rules_unavailable"},
+			map[types.ToolEffect]string{types.ToolAllow: "attended_no_skip", types.ToolHold: "attended_rules_unavailable", types.ToolDeny: "attended_rules_unavailable"}},
+		{"your own tools", "none", createRunRequest{Agent: "none", Interactive: true}, nil, nil, toolLaneUnsupported, toolEnforcerNone, "any", types.ToolHold, provKindHarness,
+			map[types.ToolEffect]string{types.ToolAllow: "custom_harness_rules", types.ToolHold: "custom_harness_rules", types.ToolDeny: "custom_harness_rules"},
+			map[types.ToolEffect]string{types.ToolAllow: "custom_harness_rules", types.ToolHold: "custom_harness_rules", types.ToolDeny: "custom_harness_rules"}},
+	} {
+		req := tc.req
+		b := &accessBuilder{in: accessInputs{req: &req, spec: types.RunPolicySpec{ToolRules: tc.spec}, prov: tc.prov}}
+		f := b.toolPolicyFact(tc.harness)
+		if f.Lane != tc.lane || f.Enforcer != tc.enforcer || f.RuleTools != tc.ruleSet || f.Default.Effective != tc.effective || f.Default.Source.Kind != tc.source {
+			t.Errorf("%s: %+v", tc.name, f)
+		}
+		if got := avail(f.Default.Options); !maps.Equal(got, tc.greyDefault) {
+			t.Errorf("%s: default greyed %v, want %v", tc.name, got, tc.greyDefault)
+		}
+		if got := avail(f.RuleEffects); !maps.Equal(got, tc.greyRule) {
+			t.Errorf("%s: rule effects greyed %v, want %v", tc.name, got, tc.greyRule)
+		}
+		if len(f.PolicyRules) != len(tc.spec) || f.MCPServers == nil {
+			t.Errorf("%s: policy rules %v, mcp servers %v", tc.name, f.PolicyRules, f.MCPServers)
+		}
+		for code := range maps.Values(tc.greyRule) {
+			if accessSentences[code] == "" {
+				t.Errorf("%s: %s has no sentence", tc.name, code)
+			}
+		}
+		// The server refuses the greyed allow exactly where the facts grey it.
+		allowRead := req
+		allowRead.Tools = []client.IncludedTool{{ID: tc.harness, Kind: client.IncludedToolHarness, ToolRules: []types.ToolRule{{Tool: "Read", Effect: types.ToolAllow}}}}
+		refused := (&Server{}).toolRulesWithinPolicyRefusal(allowRead, types.RunPolicySpec{ToolRules: tc.spec}) != nil ||
+			harnessToolRulesRefusal(allowRead.Tools[0]) != nil || (allowRead.Interactive && attendedToolRulesRefusal(createRunRequest{Experience: client.ExperienceInteractive, Tools: allowRead.Tools}) != nil)
+		if _, greyed := tc.greyRule[types.ToolAllow]; refused != greyed && tc.harness != "codex-cli" {
+			t.Errorf("%s: a rule allow refused %v, greyed %v", tc.name, refused, greyed)
+		}
+	}
+	// A person's stricter default is theirs.
+	req := createRunRequest{Agent: "claude-code", Task: "t", ToolApprovals: "hold",
+		Tools: []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness, DefaultEffect: types.ToolDeny}}}
+	f := (&accessBuilder{in: accessInputs{req: &req, spec: types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "*", Effect: types.ToolAllow}}}}}).toolPolicyFact("claude-code")
+	if f.Default.Effective != types.ToolDeny || f.Default.Source.Kind != provKindPerson {
+		t.Errorf("a person's default block: %+v", f.Default)
 	}
 }

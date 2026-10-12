@@ -127,15 +127,20 @@ func toolLaneDefault(req createRunRequest) types.ToolEffect {
 }
 
 // applyToolPosture puts a background run of a harness with Wardyn's gate on the
-// gated lane when the person sets any tool rule or default: only that lane
-// consults the rules (holdLane), so off it a rule would be shown and never read.
+// gated lane when the person sets any tool rule or default, or the policy (any
+// layer, after the ceiling) holds or blocks a tool: only that lane consults the
+// rules (holdLane), so off it a rule would be shown and never read.
 // "*: allow" laid under the person's layer (provenance posture) keeps every tool
 // nobody names running as it did ungated, so the run is never looser than
 // before. A run already on the gated lane (an explicit hold, the profile's or the
 // autonomy level's) keeps its own default, a hold.
 func (s *Server) applyToolPosture(req *createRunRequest, spec *types.RunPolicySpec) {
-	if requestIsInteractive(*req) || req.TaskMode == "exec" || !agentHasHoldLane(req.Agent) || req.ToolApprovals == "hold" ||
-		!slices.ContainsFunc(req.Tools, hasPersonalToolRules) {
+	if requestIsInteractive(*req) || req.TaskMode == "exec" || !agentHasHoldLane(req.Agent) || req.ToolApprovals == "hold" {
+		return
+	}
+	if !slices.ContainsFunc(req.Tools, hasPersonalToolRules) && !slices.ContainsFunc(spec.ToolRules, func(r types.ToolRule) bool {
+		return r.Effect == types.ToolHold || r.Effect == types.ToolDeny
+	}) {
 		return
 	}
 	req.ToolApprovals = "hold"
