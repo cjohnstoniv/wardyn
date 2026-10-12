@@ -51,6 +51,18 @@ var (
 	errRunnerLeaseLapsed = errors.New("the run's token lapsed before its lease reached its runner")
 	errRunnerLeaseEnded  = errors.New("the run's end passed before its lease reached its runner")
 	errRunnerNotReady    = errors.New("the run's runner is not connected")
+	// errRunnerLeaseBusy: another holder of the run's lock (a revive, a dispatch, an end change) is sending
+	// the run a lease of its own. A skipped renewal is safe: the run's proxy renews at least every 30 minutes
+	// (renewMaxInterval), well inside the window the runner's current lease still gives it.
+	errRunnerLeaseBusy = errors.New("the run's lock is held; its lease is left to the holder")
+)
+
+// leaseSendTimeout bounds one LEASE send under the run's lock: a runner that stops acknowledging cannot
+// pin the lock, or the process's lock connections, past it. runnerCallTimeout bounds a revive's calls to
+// a runner, which also run under the run's lock.
+const (
+	leaseSendTimeout  = 5 * time.Second
+	runnerCallTimeout = 2 * time.Minute
 )
 
 // leaseSkew is how far inside the runner's own refusal the organisation stops sending a lease: the two
@@ -132,12 +144,15 @@ func (s *Server) sendRunnerLease(ctx context.Context, run types.AgentRun, genera
 	if err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(ctx, leaseSendTimeout)
+	defer cancel()
 	return s.runnerEndpoint(*run.RunnerID).link.Send(ctx, runnerwire.Frame{Type: runnerwire.TypeLease, Payload: payload})
 }
 
 // renewRunnerLease re-sends a run's lease with the generation already issued: after its token was renewed
-// or its end changed, and on a new runner session. It reads the generation and sends under the run's lock,
-// so it never lands after a revive's newer one.
+// or its end changed, and on a new runner session. It re-reads the run and the generation and sends under
+// the run's lock, so it never lands after a revive's newer lease nor puts back an end that has changed. It
+// never waits for that lock: a busy lock is a holder sending its own lease (errRunnerLeaseBusy).
 func (s *Server) renewRunnerLease(ctx context.Context, run types.AgentRun) error {
 	if run.Placement != types.PlacementLocal || run.RunnerID == nil {
 		return nil
@@ -146,11 +161,17 @@ func (s *Server) renewRunnerLease(ctx context.Context, run types.AgentRun) error
 	if err != nil {
 		return err
 	}
-	ctx, unlock, err := s.lockRunOp(ctx, run.ID)
-	if err != nil {
-		return err
+	ctx, unlock, ok := s.tryLockRunOp(ctx, run.ID)
+	if !ok {
+		return errRunnerLeaseBusy
 	}
 	defer unlock()
+	if run, err = st.GetRun(ctx, run.ID); err != nil {
+		return err
+	}
+	if run.Placement != types.PlacementLocal || run.RunnerID == nil {
+		return nil
+	}
 	renewed, err := s.leaseSendable(ctx, st, run)
 	if err != nil {
 		return err
@@ -187,8 +208,12 @@ func (s *Server) releaseRunnerLeases(ctx context.Context, runnerID uuid.UUID) {
 }
 
 // renewLeaseAfterEndChange re-sends a run's lease once its end changed, with the end it now has: the
-// runner contains a run at the end its lease carries.
+// runner contains a run at the end its lease carries. It runs to completion whatever becomes of the request
+// that changed the end, whose write is already committed. A failure is logged, not answered: the end is
+// committed and enforced by the organisation itself, a runner that is asleep cannot take a lease, and the
+// next renewal (at most 30 minutes away) or the runner's next READY carries the new end.
 func (s *Server) renewLeaseAfterEndChange(ctx context.Context, runID uuid.UUID) {
+	ctx = context.WithoutCancel(ctx)
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err == nil {
 		err = s.renewRunnerLease(ctx, run)
@@ -273,7 +298,9 @@ func (s *Server) startRunOnRunner(ctx context.Context, starter runner.SandboxSta
 	if err != nil {
 		return err
 	}
-	if err := starter.StartSandbox(e.bind(ctx), run.SandboxRef); err != nil {
+	callCtx, cancel := context.WithTimeout(e.bind(ctx), runnerCallTimeout)
+	defer cancel()
+	if err := starter.StartSandbox(callCtx, run.SandboxRef); err != nil {
 		return err
 	}
 	return s.bindRunnerExecution(ctx, e, "")
@@ -282,9 +309,14 @@ func (s *Server) startRunOnRunner(ctx context.Context, starter runner.SandboxSta
 // replaceRevivedProxy is revive's proxy replacement. A run on a runner is re-leased first, on the claim's
 // fresh token stamp: its runner refuses to replace the proxy of a run whose lease has lapsed.
 func (s *Server) replaceRevivedProxy(ctx context.Context, rv runner.ProxyReviver, run types.AgentRun, cfgJSON []byte) error {
+	if run.RunnerID == nil {
+		return rv.ReplaceProxy(ctx, run.SandboxRef, cfgJSON)
+	}
 	if err := s.renewRunnerLease(ctx, run); err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(ctx, runnerCallTimeout)
+	defer cancel()
 	return rv.ReplaceProxy(ctx, run.SandboxRef, cfgJSON)
 }
 

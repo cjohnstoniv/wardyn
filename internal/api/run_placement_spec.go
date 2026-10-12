@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -99,16 +100,20 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, self
 
 // sameScope compares two grant scopes as a typed decode reads them: a stored row's scope has round-tripped
 // through jsonb, which reorders keys and drops the request's spacing, so its bytes are never the policy
-// copy's. A typed decode matches keys without regard to case and keeps the last match, so keys are folded
-// in source order, and numbers are compared exactly rather than as floats.
+// copy's. A typed decode matches keys without regard to case (Unicode folding included, so ſ is s) and
+// keeps the last match, so a scope naming one key twice up to folding decodes by key order, which jsonb
+// changes: such a scope never matches. Numbers are compared exactly rather than as floats.
 func sameScope(a, b json.RawMessage) bool {
 	x, errx := typedScope(json.NewDecoder(bytes.NewReader(a)))
 	y, erry := typedScope(json.NewDecoder(bytes.NewReader(b)))
 	return errx == nil && erry == nil && reflect.DeepEqual(x, y)
 }
 
-// typedScope is the next JSON value as a typed decode sees it: object keys folded to lower case with the
-// last one in source order winning, numbers as their literal.
+// errScopeKeyFolds: an object names one key twice up to case folding.
+var errScopeKeyFolds = errors.New("a scope names one key twice up to case")
+
+// typedScope is the next JSON value as a typed decode sees it: object keys case-folded, numbers as their
+// literal. An object that names a key twice up to folding is refused.
 func typedScope(dec *json.Decoder) (any, error) {
 	dec.UseNumber()
 	tok, err := dec.Token()
@@ -118,16 +123,22 @@ func typedScope(dec *json.Decoder) (any, error) {
 	switch tok {
 	case json.Delim('{'):
 		out := map[string]any{}
+		var keys []string
 		for dec.More() {
-			key, err := dec.Token()
+			tok, err := dec.Token()
 			if err != nil {
 				return nil, err
 			}
+			key := tok.(string)
+			if slices.ContainsFunc(keys, func(k string) bool { return strings.EqualFold(k, key) }) {
+				return nil, errScopeKeyFolds
+			}
+			keys = append(keys, key)
 			v, err := typedScope(dec)
 			if err != nil {
 				return nil, err
 			}
-			out[strings.ToLower(key.(string))] = v
+			out[strings.ToLower(strings.ToUpper(key))] = v
 		}
 		_, err = dec.Token()
 		return out, err

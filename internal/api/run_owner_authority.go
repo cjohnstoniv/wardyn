@@ -550,7 +550,7 @@ func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg
 			return reviveRefused(denied.Reason.Status(), string(denied.Reason), denied.Error())
 		}
 		if err != nil {
-			return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, "re-check local placement authority: "+err.Error())
+			return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, loggedMsg(ctx, "re-check local placement authority", err))
 		}
 	}
 	ref, err := s.ownerCapabilityRefusal(ctx, run, actor == run.CreatedBy, runRepos(run, cfg))

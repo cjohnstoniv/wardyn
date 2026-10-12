@@ -14,6 +14,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -374,8 +375,8 @@ func TestPG_RunnerLease_EndChangeReLeases(t *testing.T) {
 	f := newRunnerLeaseFixture(t)
 	const margin = 6 * time.Second
 	soon := time.Now().Add(margin)
-	extended, control := f.localRun(t, 0), f.localRun(t, 0)
-	for _, run := range []*types.AgentRun{&extended, &control} {
+	extended, abandoned, renewed, control := f.localRun(t, 0), f.localRun(t, 0), f.localRun(t, 0), f.localRun(t, 0)
+	for _, run := range []*types.AgentRun{&extended, &abandoned, &renewed, &control} {
 		f.running(t, run, &soon)
 		f.placed(t, run)
 	}
@@ -383,6 +384,19 @@ func TestPG_RunnerLease_EndChangeReLeases(t *testing.T) {
 	if w := do(t, f.srv, http.MethodPatch, "/api/v1/runs/"+extended.ID.String(), adminToken, `{"ends_at":"`+later+`"}`); w.Code != http.StatusOK {
 		t.Fatalf("set end = %d %s", w.Code, w.Body)
 	}
+	end := time.Now().Add(2 * time.Hour)
+	// fix-r2 N3: a renewal handed a copy of the run read before its end changed sends the end it has now.
+	stale := renewed
+	moved := renewed
+	f.running(t, &moved, &end)
+	if err := f.srv.renewRunnerLease(f.ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	// fix-r2 L2: the end is committed and the request that set it has gone; the re-lease still runs.
+	f.running(t, &abandoned, &end)
+	gone, cancel := context.WithCancel(f.ctx)
+	cancel()
+	f.srv.renewLeaseAfterEndChange(gone, abandoned.ID)
 	time.Sleep(margin + time.Second)
 	if err := f.manager.CheckLapses(f.ctx); err != nil {
 		t.Fatal(err)
@@ -392,6 +406,12 @@ func TestPG_RunnerLease_EndChangeReLeases(t *testing.T) {
 	}
 	if f.contained(extended) {
 		t.Fatal("the extended run was contained at its old end")
+	}
+	if f.contained(abandoned) {
+		t.Fatal("the run whose request went away was contained at its old end")
+	}
+	if f.contained(renewed) {
+		t.Fatal("a renewal from a stale copy put the old end back")
 	}
 }
 
@@ -471,9 +491,10 @@ func TestPG_RunnerLease_OrgRefusesASpentGeneration(t *testing.T) {
 	}
 }
 
-// fix-r1 Opus I2: a renewal waits for the run's lock, so it never lands between a revive's newer lease and
-// the Start that lease authorizes.
-func TestPG_RunnerLease_ConcurrentRenewalWaitsForTheRunLock(t *testing.T) {
+// fix-r1 Opus I2, fix-r2 N1: a renewal never waits for the run's lock. While a holder (here a revive) has
+// it, the renewal yields at once and sends nothing, so it neither lands between the revive's newer lease and
+// its Start nor holds a lock connection waiting. Once the lock is free, a renewal goes through.
+func TestPG_RunnerLease_ConcurrentRenewalYieldsToTheRunLock(t *testing.T) {
 	f := newRunnerLeaseFixture(t)
 	run := f.localRun(t, 0)
 	f.running(t, &run, nil)
@@ -486,17 +507,119 @@ func TestPG_RunnerLease_ConcurrentRenewalWaitsForTheRunLock(t *testing.T) {
 	go func() { done <- f.srv.renewRunnerLease(f.ctx, run) }()
 	select {
 	case err := <-done:
+		if !errors.Is(err, errRunnerLeaseBusy) {
+			unlock()
+			t.Fatalf("renewal under a held lock = %v, want errRunnerLeaseBusy", err)
+		}
+	case <-time.After(3 * time.Second):
 		unlock()
-		t.Fatalf("the renewal did not wait for the run's lock: %v", err)
-	case <-time.After(500 * time.Millisecond):
+		t.Fatal("the renewal waited for the run's lock")
 	}
 	if err := f.srv.startRunOnRunner(lockCtx, f.srv.cfg.Runner.(runner.SandboxStarter), run); err != nil {
 		unlock()
 		t.Fatalf("revive Start under the lock: %v", err)
 	}
 	unlock()
-	if err := <-done; err != nil {
+	if err := f.srv.renewRunnerLease(f.ctx, run); err != nil {
+		t.Fatalf("renewal once the lock is free: %v", err)
+	}
+}
+
+// fix-r2 N1: a runner that stops acknowledging cannot hold the run's lock past the LEASE send timeout. The
+// runner side here reads every frame and never ACKs, so the session's replay room fills; the renewal under
+// the lock gives up at leaseSendTimeout and the lock is free for its next user.
+func TestPG_RunnerLease_ConcurrentStalledSendReleasesTheLock(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	f.running(t, &run, nil)
+	f.placed(t, &run)
+	org, mute := runnerwire.Loopback()
+	go func() {
+		for {
+			if _, err := mute.ReadFrame(f.ctx); err != nil {
+				return
+			}
+		}
+	}()
+	link := f.srv.runnerEndpoint(f.rn.ID).link
+	link.Attach(f.ctx, org)
+	payload, err := runnerwire.Marshal(runnerwire.Lease{RunID: run.ID})
+	if err != nil {
 		t.Fatal(err)
+	}
+	for i := 0; ; i++ {
+		ctx, cancel := context.WithTimeout(f.ctx, 200*time.Millisecond)
+		err := link.Send(ctx, runnerwire.Frame{Type: runnerwire.TypeLease, Payload: payload})
+		cancel()
+		if err != nil {
+			break
+		}
+		if i > 50000 {
+			t.Fatal("the replay room never filled")
+		}
+	}
+	done := make(chan error, 1)
+	go func() { done <- f.srv.renewRunnerLease(f.ctx, run) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a lease went through a session with no replay room")
+		}
+	case <-time.After(leaseSendTimeout + 5*time.Second):
+		t.Fatal("the stalled send held the run's lock past its timeout")
+	}
+	ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+	defer cancel()
+	_, unlock, err := f.srv.lockRunOp(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("the run's lock after the stalled send: %v", err)
+	}
+	unlock()
+}
+
+// fix-r2 F3: the organisation refuses a generation other than the persisted one itself, before any frame
+// reaches the runner, and the persisted one still goes through.
+func TestPG_RunnerLease_OrgRefusesAnotherGeneration(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	g1, err := f.srv.leaseRunOnRunner(f.ctx, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.create(t, &run); err != nil {
+		t.Fatal(err)
+	}
+	other := g1
+	other.generation = uuid.New()
+	before := f.execs.Load()
+	if _, err := f.srv.cfg.Runner.Exec(other.bind(f.ctx), run.SandboxRef, []string{"t"}); !errors.Is(err, errRunnerExecutionUnbound) {
+		t.Fatalf("an Exec under another generation = %v, want the organisation's refusal", err)
+	}
+	if n := f.execs.Load(); n != before {
+		t.Fatalf("%d Exec frame(s) reached the runner", n-before)
+	}
+	if _, err := f.srv.cfg.Runner.Exec(g1.bind(f.ctx), run.SandboxRef, []string{"t"}); err != nil {
+		t.Fatalf("the persisted generation: %v", err)
+	}
+}
+
+// fix-r2 N4: dispatchAdmitted holds the dispatch ceiling's deny_placements to the run, so a lane that never
+// passed a create door fails the run before anything is claimed.
+func TestPG_RunnerLease_DispatchAdmittedRefusesADeniedPlacement(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET state = 'PENDING' WHERE id = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	run.State = types.RunPending
+	limits := types.GovernanceLimits{DenyPlacements: []types.Placement{types.PlacementLocal}}
+	denied := ceilingForDispatch(governanceCeiling{Profile: &ResolvedProfile{Name: "no-local", Limits: limits}, Limits: limits}, adoEntraUngraded(), bedrockCredUngraded())
+	if f.srv.dispatchAdmitted(f.ctx, run, denied) {
+		t.Fatal("dispatch admitted a placement its profile denies")
+	}
+	stored, err := f.st.GetRun(f.ctx, run.ID)
+	if err != nil || stored.State != types.RunFailed {
+		t.Fatalf("run after a denied dispatch = %s (%v), want FAILED", stored.State, err)
 	}
 }
 
@@ -554,5 +677,31 @@ func TestPG_RunnerLease_ReviveThroughTheDoor(t *testing.T) {
 	}
 	if f.srv.dispatchPlacementDenied(f.ctx, stored, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded())) {
 		t.Fatal("dispatch refused a run no profile denies")
+	}
+}
+
+// fix-r2 N5: a runner's new session re-leases every live run on it, a run held for a confirmation included.
+func TestPG_RunnerLease_LiveRunsIncludeHeldRuns(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	want := map[uuid.UUID]bool{}
+	for _, state := range []types.RunState{types.RunStarting, types.RunRunning, types.RunWaiting, types.RunCompleted} {
+		run := f.localRun(t, 0)
+		if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET state = $2 WHERE id = $1`, run.ID, string(state)); err != nil {
+			t.Fatal(err)
+		}
+		if state != types.RunCompleted {
+			want[run.ID] = true
+		}
+	}
+	runs, err := f.st.ListLiveRunnerRuns(f.ctx, f.rn.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[uuid.UUID]bool{}
+	for _, r := range runs {
+		got[r.ID] = true
+	}
+	if !maps.Equal(got, want) {
+		t.Fatalf("live runs = %v, want %v", got, want)
 	}
 }
