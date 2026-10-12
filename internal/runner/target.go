@@ -21,6 +21,9 @@ type TargetFacts struct {
 	// real bound of nothing, never "no bound".
 	CapacityAdvertised         bool
 	CPUMillisMax, MemoryMiBMax int64
+	// EphemeralDiskEnforcement is what binds a run's disk_mib on this target (Capabilities.EphemeralDiskEnforcement
+	// for one executor). Empty is unknown: a caller that refuses on `none` never refuses on unknown.
+	EphemeralDiskEnforcement types.StorageEnforcement
 }
 
 // TargetInspector answers per-target facts. The false answer means the facts are

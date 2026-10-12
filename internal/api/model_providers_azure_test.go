@@ -304,3 +304,87 @@ func TestProviderAddressChangedAzure(t *testing.T) {
 		t.Error("azure_foundry is not in the closed kind list")
 	}
 }
+
+// readModelProviders is GET /model-providers decoded to the two server facts.
+func readModelProviders(t *testing.T, srv *Server) (entra bool, kinds []types.ModelProviderKind) {
+	t.Helper()
+	w := do(t, srv, http.MethodGet, "/api/v1/model-providers", adminToken, "")
+	var body types.ModelProvidersRead
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &body) != nil {
+		t.Fatalf("GET /model-providers = %d %s", w.Code, w.Body.String())
+	}
+	return body.EntraLoginConfigured, body.KindsAvailable
+}
+
+// TestModelProvidersGetKindsAvailable: azure_foundry is listed only while the gate is open, every
+// other kind always; entra_login_configured follows the console login.
+func TestModelProvidersGetKindsAvailable(t *testing.T) {
+	srv := azureDoorServer(t, &fakeSiteConfigStore{}, publicResolver)
+	for _, ready := range []bool{false, true} {
+		setAzureGate(t, ready)
+		entra, kinds := readModelProviders(t, srv)
+		if !entra {
+			t.Error("entra_login_configured = false with the console login configured")
+		}
+		if got := slices.Contains(kinds, types.ModelProviderAzureFoundry); got != ready {
+			t.Errorf("gate=%v: azure_foundry listed = %v (%v)", ready, got, kinds)
+		}
+		if len(kinds) != len(types.ClosedModelProviderKinds)-1+map[bool]int{true: 1}[ready] {
+			t.Errorf("gate=%v: kinds = %v, want every other closed kind", ready, kinds)
+		}
+	}
+	plain, _ := newSiteConfigHarness(t, &fakeSiteConfigStore{})
+	if entra, _ := readModelProviders(t, plain); entra {
+		t.Error("entra_login_configured = true with no console login")
+	}
+}
+
+// TestModelProvidersPutRefusalsNameTheirField: an Azure refusal answers the request field it is about,
+// the reason and sentence unchanged; a refusal that is not about a field carries none.
+func TestModelProvidersPutRefusalsNameTheirField(t *testing.T) {
+	setAzureGate(t, true)
+	srv := azureDoorServer(t, &fakeSiteConfigStore{}, publicResolver)
+	put := func(p types.ModelProvider) (code int, body map[string]any) {
+		raw, _ := json.Marshal(providerBlock(p))
+		w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken, string(raw))
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		return w.Code, body
+	}
+	with := func(edit func(*types.ModelProvider)) types.ModelProvider {
+		p := azureProvider()
+		az := *p.Azure
+		p.Azure = &az
+		p.Harnesses = slices.Clone(p.Harnesses)
+		edit(&p)
+		return p
+	}
+	for name, tc := range map[string]struct {
+		p     types.ModelProvider
+		field string
+	}{
+		"endpoint host":  {with(func(p *types.ModelProvider) { p.Azure.Endpoint = "https://example.com" }), "azure.endpoint"},
+		"endpoint shape": {with(func(p *types.ModelProvider) { p.Azure.Endpoint = "http://res.openai.azure.com" }), "azure.endpoint"},
+		"endpoint need":  {with(func(p *types.ModelProvider) { p.Azure.Endpoint = "" }), "azure.endpoint"},
+		"route":          {with(func(p *types.ModelProvider) { p.Azure.Route = "/nope" }), "azure.route"},
+		"route pair":     {with(func(p *types.ModelProvider) { p.Azure.Route = types.AzureRouteOpenAIV1 }), "azure.route"},
+		"model":          {with(func(p *types.ModelProvider) { p.Harnesses[0].Model = "" }), "harnesses.claude-code.model"},
+		"fast model":     {with(func(p *types.ModelProvider) { p.Harnesses[0].FastModel = "no spaces allowed" }), "harnesses.claude-code.fast_model"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			code, body := put(tc.p)
+			if code != http.StatusBadRequest || body["field"] != tc.field || body["reason"] != reasonSiteConfigInvalid {
+				t.Fatalf("PUT = %d %v, want 400 %s field %q", code, body, reasonSiteConfigInvalid, tc.field)
+			}
+			if !strings.HasPrefix(body["error"].(string), "invalid model providers: model_providers: ") {
+				t.Errorf("sentence changed: %q", body["error"])
+			}
+		})
+	}
+	bad := azureProvider()
+	bad.Kind = "not_a_kind"
+	if code, body := put(bad); code != http.StatusBadRequest {
+		t.Fatalf("non-Azure refusal = %d %v", code, body)
+	} else if _, has := body["field"]; has {
+		t.Errorf("a refusal about no field carries field %v", body["field"])
+	}
+}

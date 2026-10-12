@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -108,27 +107,4 @@ func (s *Server) boundUserSpec(ctx context.Context, w http.ResponseWriter, r *ht
 func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r *http.Request, req *createRunRequest, dryRun bool) (types.RunPolicySpec, *uuid.UUID, []string, policySourceRecord, bool) {
 	spec, id, warnings, source, refusal := s.resolveRunPolicyFacts(ctx, r, req, dryRun, true)
 	return spec, id, warnings, source, !refusal.write(s, w, r)
-}
-
-// capEphemeralDiskPreview bounds spec's disk_mib by the profile's
-// MaxEphemeralDiskMiB and reports whether it changed anything. The LAUNCH half
-// of the pair above; previewEphemeralDisk (runs_dispatch_ceiling.go) is the
-// dry-run half that also fills and applies the org ceiling.
-//
-// A FRESH Resources block, never an in-place write: one shared *ResourceLimits
-// would re-size every later run that reads it — the same aliasing rule dispatch
-// obeys, and the reason composer.Clamp rebuilds the struct instead of editing
-// the caller's.
-func capEphemeralDiskPreview(spec *types.RunPolicySpec, maxEphemeralDiskMiB int) bool {
-	if spec.Resources == nil {
-		return false
-	}
-	capped := composer.CapDiskMiB(spec.Resources.DiskMiB, maxEphemeralDiskMiB)
-	if capped == spec.Resources.DiskMiB {
-		return false
-	}
-	rl := *spec.Resources
-	rl.DiskMiB = capped
-	spec.Resources = &rl
-	return true
 }

@@ -30,17 +30,61 @@ func (r CreateRunRequest) PlacementRequest() placement.Request {
 	return placement.Request{Placement: r.Placement, RunnerID: r.RunnerID}
 }
 
-// RunResources is the CPU and memory a request asks for. A zero field asks for
-// what the run's source policy sets, else the default. The server applies what
-// it is given within the strictest of the pool's, the person's governance, the
-// deployment's and (on their own runner) the runner's limits: a value over that
-// cap is reduced to it, never refused, and the dry runs and the 201 say what was
-// applied (AppliedResources).
+// RunResources is the CPU, memory and main-drive size a request asks for. A zero
+// field asks for what the run's source policy sets, else the default. The server
+// applies what it is given within the strictest of the pool's, the person's
+// governance, the deployment's and (on their own runner) the runner's limits: a
+// value over that cap is reduced to it, never refused, and the dry runs and the
+// 201 say what was applied (AppliedResources, MainDriveApplied).
 type RunResources struct {
 	// CPUMillis is milli-CPU: 2000 is two CPUs. The console works in tenths of a CPU.
 	CPUMillis int `json:"cpu_millis,omitempty"`
 	// MemoryMiB is whole MiB.
 	MemoryMiB int `json:"memory_mib,omitempty"`
+	// DiskMiB is the main drive's size in MiB, 0 to 16 TiB. It is a request: over the
+	// effective cap it is reduced and said so, never refused, and a runner that cannot
+	// cap disk starts the run uncapped. A size the run's policy writes stays a
+	// requirement, and a request may only lower it.
+	DiskMiB int `json:"disk_mib,omitempty"`
+}
+
+// MainDriveBasis says where a run's main-drive size came from.
+type MainDriveBasis string
+
+// The bases of MainDriveApplied.
+const (
+	MainDriveBasisRequest MainDriveBasis = "request" // the run's own request
+	MainDriveBasisPolicy  MainDriveBasis = "policy"  // a size the run's policy writes
+	MainDriveBasisDefault MainDriveBasis = "default" // the pool's or the server's default
+	MainDriveBasisNone    MainDriveBasis = "none"    // no size: unbounded scratch
+)
+
+// MainDriveClampSource says what cut a main-drive size.
+type MainDriveClampSource string
+
+// The clamp sources of MainDriveApplied.
+const (
+	MainDriveClampPool       MainDriveClampSource = "pool"
+	MainDriveClampGovernance MainDriveClampSource = "governance"
+	MainDriveClampDeployment MainDriveClampSource = "deployment"
+	MainDriveClampPolicy     MainDriveClampSource = "policy"
+)
+
+// MainDriveApplied is the main-drive size the dry doors say a run gets: the same
+// number dispatch creates the sandbox with.
+type MainDriveApplied struct {
+	// RequestedMiB is the request's own size; absent when it sent none.
+	RequestedMiB int `json:"requested_mib,omitempty"`
+	// AppliedMiB is what the run gets; 0 is no size, unbounded scratch.
+	AppliedMiB int            `json:"applied_mib"`
+	Basis      MainDriveBasis `json:"basis"`
+	// DefaultSource names the limit whose default sized the run, with basis default.
+	DefaultSource LimitSource `json:"default_source,omitempty"`
+	// ClampedBy names what cut the size, when something did.
+	ClampedBy MainDriveClampSource `json:"clamped_by,omitempty"`
+	// Soft is true when a runner that cannot cap disk starts the run uncapped. A size
+	// the run's policy writes is never soft.
+	Soft bool `json:"soft"`
 }
 
 // AppliedResources is what a run's CPU and memory asked for and what it gets,
