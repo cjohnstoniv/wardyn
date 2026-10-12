@@ -148,11 +148,11 @@ func (s PG) RunTokenRenewedAt(ctx context.Context, runID uuid.UUID) (time.Time, 
 	return at, err
 }
 
-// ListLiveRunnerRuns is every run bound to the runner that is starting or running and not lost: the runs
-// a runner's new session must be leased again.
+// ListLiveRunnerRuns is every run bound to the runner that is starting, running or held for a confirmation
+// and not lost: the runs a runner's new session must be leased again.
 func (s PG) ListLiveRunnerRuns(ctx context.Context, runnerID uuid.UUID) ([]types.AgentRun, error) {
 	return collect(ctx, s.Pool, "list", "live runner runs", `SELECT `+runCols+` FROM agent_runs WHERE runner_id=$1 AND placement='local'
-		AND state IN ('STARTING','RUNNING') AND lost_at IS NULL ORDER BY id`, []any{runnerID}, scanRun)
+		AND state IN ('STARTING','RUNNING','WAITING_FOR_CONFIRMATION') AND lost_at IS NULL ORDER BY id`, []any{runnerID}, scanRun)
 }
 
 func readRunnerExecution(ctx context.Context, tx pgx.Tx, runID uuid.UUID) (RunnerExecution, error) {

@@ -170,6 +170,8 @@ func TestSameScopeComparesTheTypedDecode(t *testing.T) {
 		{"reordered and respaced", `{"name":"FOO","secret_name":"mine"}`, `{"secret_name": "mine", "name": "FOO"}`, true},
 		{"case-variant duplicate key, reordered by jsonb", `{"name":"FOO","secret_name":"mine","Secret_Name":"orgsec"}`,
 			`{"name": "FOO", "Secret_Name": "orgsec", "secret_name": "mine"}`, false},
+		{"Unicode-folded duplicate key (U+017F), reordered by jsonb", `{"name":"FOO","ſecret_name":"orgsec","secret_name":"mine"}`,
+			`{"name": "FOO", "secret_name": "mine", "ſecret_name": "orgsec"}`, false},
 		{"integers past 2^53", `{"ttl":9007199254740993}`, `{"ttl": 9007199254740992}`, false},
 		{"a different value", `{"name":"FOO"}`, `{"name":"BAR"}`, false},
 	} {
