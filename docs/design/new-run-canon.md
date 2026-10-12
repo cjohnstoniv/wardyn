@@ -762,6 +762,13 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `JUST_NOW` | mock | Just now |
 | `GIVES_UP` | mock | Gives up |
 | `GIVES_UP_IN(wait)` | deviation (DS-5 §8) | In {wait} |
+| `SINCE_MINUTE_ONE` | pending (W-45) | 1 minute ago |
+| `SINCE_MINUTES(n)` | pending (W-45) | {n} minutes ago |
+| `SINCE_HOUR_ONE` | pending (W-45) | 1 hour ago |
+| `SINCE_HOURS(n)` | pending (W-45) | {n} hours ago |
+| `SINCE_DAYS(n)` | pending (W-45) | {n} days ago |
+| `MINUTE_ONE` | pending (W-45) | 1 minute |
+| `MINUTES(n)` | pending (W-45) | {n} minutes |
 | `CANCEL_RUN` | mock | Cancel run |
 | `START_ANOTHER` | mock | Start another run |
 | `VIEW_RUN` | mock | View run |

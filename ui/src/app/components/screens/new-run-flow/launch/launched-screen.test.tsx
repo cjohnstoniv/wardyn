@@ -15,7 +15,8 @@ import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
 import { OperatorProvider } from "../../../wardyn/operator-context";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft, type LaunchedState } from "../new-run-route";
 import { LaunchedScreen } from "./launched-screen";
-import type { LaunchedRun, RunQueue } from "./launched-model";
+import type { RunQueue } from "../../../../lib/types/runs";
+import type { LaunchedRun } from "./launched-model";
 
 const ID = "b2222222-2222-4222-8222-222222222222";
 const HOUR = 3_600_000;
@@ -160,6 +161,16 @@ describe("Launched: reload and identity", () => {
     open();
     await screen.findByText(NR_LAUNCH.BADGE_STARTING);
     await waitFor(() => expect(screen.getByTestId("typed")).toHaveTextContent(/^$/));
+  });
+
+  it("moves focus to the heading when Cancel run takes the run out of Waiting", async () => {
+    getRun.mockResolvedValueOnce(run({ state: "QUEUED", queue: queue() })).mockResolvedValue(run({ state: "KILLED" }));
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
+    const confirm = await screen.findByRole("alertdialog", { name: `Kill ${ID}?` });
+    await userEvent.click(confirm.querySelector("button:last-of-type") as HTMLElement);
+    await waitFor(() => expect(screen.queryByRole("button", { name: NR_LAUNCH.CANCEL_RUN })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "nightly build" })).toHaveFocus());
   });
 
   it("keeps reading while the run is starting or waiting, then stops", async () => {

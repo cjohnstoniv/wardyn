@@ -10,18 +10,10 @@
 import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { RUN_WAIT, RUN_WAIT_REASON } from "../../../../lib/runner-pool-refusals";
-import type { AgentRun } from "../../../../lib/types/runs";
+import type { AgentRun, RunQueue } from "../../../../lib/types/runs";
 
-/** Go: types.RunQueue. `position` is how many runs wait ahead in the pool: 0 is next in line. */
-export interface RunQueue {
-  pool_id: string;
-  queued_at: string;
-  deadline_at: string;
-  position: number;
-  reason: string;
-}
-/** A run as the Launched screen reads it: AgentRun plus the queue a waiting run carries, and the create's warnings. */
-export type LaunchedRun = AgentRun & { queue?: RunQueue; warnings?: string[] };
+/** A run as the Launched screen reads it: AgentRun plus the warnings a create answers with. */
+export type LaunchedRun = AgentRun & { warnings?: string[] };
 
 const SUFFIX: Record<string, string> = { one: "st", two: "nd", few: "rd", other: "th" };
 const ORDINALS = new Intl.PluralRules("en-US", { type: "ordinal" });
@@ -32,22 +24,23 @@ export const placeInLine = (queue: RunQueue): string => NR_LAUNCH.IN_LINE(ordina
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
-const AGO = new Intl.RelativeTimeFormat("en-US", { numeric: "always" });
-const MINUTES = new Intl.NumberFormat("en-US", { style: "unit", unit: "minute", unitDisplay: "long" });
-
 export function waitingSince(queuedAt: string, now: number): string {
   const ms = now - Date.parse(queuedAt);
   if (!(ms >= MINUTE)) return NR_LAUNCH.JUST_NOW;
-  if (ms < HOUR) return AGO.format(-Math.floor(ms / MINUTE), "minute");
-  if (ms < 48 * HOUR) return AGO.format(-Math.floor(ms / HOUR), "hour");
-  return AGO.format(-Math.floor(ms / (24 * HOUR)), "day");
+  const minutes = Math.floor(ms / MINUTE);
+  if (ms < HOUR) return minutes === 1 ? NR_LAUNCH.SINCE_MINUTE_ONE : NR_LAUNCH.SINCE_MINUTES(minutes);
+  const hours = Math.floor(ms / HOUR);
+  if (ms < 48 * HOUR) return hours === 1 ? NR_LAUNCH.SINCE_HOUR_ONE : NR_LAUNCH.SINCE_HOURS(hours);
+  const days = Math.floor(hours / 24);
+  return NR_LAUNCH.SINCE_DAYS(days);
 }
 
 export function givesUp(deadlineAt: string, now: number): string {
   const ms = Math.max(Date.parse(deadlineAt) - now, MINUTE);
   const hours = Math.round(ms / HOUR);
-  if (hours < 1) return NR_LAUNCH.GIVES_UP_IN(MINUTES.format(Math.ceil(ms / MINUTE)));
-  return NR_LAUNCH.GIVES_UP_IN(hours === 1 ? NR_SHARED.HOUR_ONE : NR_SHARED.HOURS(hours));
+  if (hours >= 1) return NR_LAUNCH.GIVES_UP_IN(hours === 1 ? NR_SHARED.HOUR_ONE : NR_SHARED.HOURS(hours));
+  const minutes = Math.ceil(ms / MINUTE);
+  return NR_LAUNCH.GIVES_UP_IN(minutes === 1 ? NR_LAUNCH.MINUTE_ONE : NR_LAUNCH.MINUTES(minutes));
 }
 
 /** Why the run waits, in the server's own sentence for that reason. Undefined until the pool is known. */

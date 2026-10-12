@@ -11,7 +11,6 @@ import * as React from "react";
 import { runs } from "../../../../lib/api/runs";
 import { runnerPools } from "../../../../lib/api/runner-pools";
 import { usePoll } from "../../../../lib/use-poll";
-import type { RunnerPoolCatalogueEntry } from "../../../../lib/types/runner-pools";
 import type { LaunchedRun } from "./launched-model";
 
 /** Run detail's cadence. */
@@ -19,8 +18,6 @@ export const LAUNCHED_POLL_MS = 4000;
 const LIVE = new Set(["PENDING", "STARTING", "QUEUED"]);
 export const stillLaunching = (run: LaunchedRun | null | undefined): boolean => !run || LIVE.has(run.state as string);
 
-/** The pool list row as the waiting body reads it: its name and the limit it is running at. */
-type PoolRow = RunnerPoolCatalogueEntry & { slots?: { max?: number } };
 export interface WaitingPool {
   name: string;
   max?: number;
@@ -48,7 +45,7 @@ export function useLaunchedRun(runId: string, seed?: LaunchedRun): LaunchedRead 
     try {
       const next = await runs.getRun(runId);
       if (current.current !== runId) return;
-      setRun((next as LaunchedRun | undefined) ?? null);
+      setRun(next ?? null);
       setFailed(false);
     } catch {
       if (current.current === runId) setFailed(true);
@@ -71,7 +68,7 @@ export function useLaunchedRun(runId: string, seed?: LaunchedRun): LaunchedRead 
     let live = true;
     runnerPools.list().then(
       (list) => {
-        const row = list.pools.find((p) => p.id === poolId) as PoolRow | undefined;
+        const row = list.pools.find((p) => p.id === poolId);
         if (live && row) setPool({ name: row.name, max: row.slots?.max });
       },
       () => {},
