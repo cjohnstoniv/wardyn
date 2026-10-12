@@ -31,6 +31,12 @@ export const TEMPLATE_REASON = {
   REVISION_CONFLICT: "template_revision_conflict",
   /** 501: the template store is not available on this server yet. */
   TEMPLATES_UNAVAILABLE: "templates_unavailable",
+  /** 409: another template of the same audience already uses the name. */
+  NAME_TAKEN: "template_name_taken",
+  /** 409: the audience already holds the most templates it may. */
+  LIMIT_REACHED: "template_limit_reached",
+  /** 422: a policy holds only run-wide network, credential and access-rule keys. */
+  POLICY_FIELD_REFUSED: "template_policy_field_refused",
 } as const;
 
 export type TemplateReason = (typeof TEMPLATE_REASON)[keyof typeof TEMPLATE_REASON];
@@ -56,13 +62,17 @@ export const TEMPLATE_REFUSAL = {
   SHARED_FIELD_REFUSED: (path: string, scope: string) =>
     `${path} names something only one person has, so it cannot be in a ${scope} template.`,
   SCOPE_FORBIDDEN_ORG: () => "Only an organisation administrator can publish templates for the organisation.",
-  SCOPE_FORBIDDEN_GROUP: () => "Only an administrator of that group can publish templates to it.",
+  SCOPE_FORBIDDEN_GROUP: () => "Only the template managers of that group can publish templates to it.",
   SCOPE_FORBIDDEN_PERSON: () => "A personal template belongs to the person who owns it.",
   GROUP_UNVERIFIED: () => "Your group membership cannot be checked from this sign-in. Sign in again, then retry.",
   NOT_FOUND: () => "That template does not exist, or you cannot see it.",
   REVISION_CONFLICT: (current: string) =>
     `This template changed to revision ${current} since you opened it. Reload it, then apply your edit again.`,
   TEMPLATES_UNAVAILABLE: () => "Templates are not available on this server yet.",
+  NAME_TAKEN: () => "Another template available to the same people already uses this name.",
+  LIMIT_REACHED: (limit: string) => `This scope already holds ${limit} templates, the most it can. Delete one first.`,
+  POLICY_FIELD_REFUSED: (path: string) =>
+    `${path} is not a network, credential or access rule. A policy holds only those; save a template instead.`,
 } as const;
 
 /** Every sentence function by key, for the parity test and for callers that pick one by reason. */
@@ -87,6 +97,9 @@ export const TEMPLATE_REFUSAL_BY_KEY: Record<keyof typeof TEMPLATE_REFUSAL, (...
   NOT_FOUND: () => TEMPLATE_REFUSAL.NOT_FOUND(),
   REVISION_CONFLICT: (...a) => TEMPLATE_REFUSAL.REVISION_CONFLICT(a[0]),
   TEMPLATES_UNAVAILABLE: () => TEMPLATE_REFUSAL.TEMPLATES_UNAVAILABLE(),
+  NAME_TAKEN: () => TEMPLATE_REFUSAL.NAME_TAKEN(),
+  LIMIT_REACHED: (...a) => TEMPLATE_REFUSAL.LIMIT_REACHED(a[0]),
+  POLICY_FIELD_REFUSED: (...a) => TEMPLATE_REFUSAL.POLICY_FIELD_REFUSED(a[0]),
 };
 
 /** The reason each sentence belongs to. */
@@ -111,4 +124,7 @@ export const TEMPLATE_REFUSAL_REASON: Record<keyof typeof TEMPLATE_REFUSAL, Temp
   NOT_FOUND: TEMPLATE_REASON.NOT_FOUND,
   REVISION_CONFLICT: TEMPLATE_REASON.REVISION_CONFLICT,
   TEMPLATES_UNAVAILABLE: TEMPLATE_REASON.TEMPLATES_UNAVAILABLE,
+  NAME_TAKEN: TEMPLATE_REASON.NAME_TAKEN,
+  LIMIT_REACHED: TEMPLATE_REASON.LIMIT_REACHED,
+  POLICY_FIELD_REFUSED: TEMPLATE_REASON.POLICY_FIELD_REFUSED,
 };

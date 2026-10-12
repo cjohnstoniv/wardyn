@@ -280,7 +280,7 @@ func (s *Server) routes() chi.Router {
 			s.mountRunnerRevokeRoutes(r, securityOps)             // runner_revoke.go: the security tier, or the runner's own owner
 			s.mountRunnerPoolRoutes(r, operatorOnly, securityOps) // runner_pools.go: 501 until the pool storage lands
 			s.mountRunnerInventoryRoutes(r, operatorOnly, securityOps)
-			s.mountTemplateRoutes(r, operatorOnly) // template_routes.go: 501 until the template store lands, except the import door
+			s.mountTemplateRoutes(r, operatorOnly)
 			r.Get("/me", s.handleMe)
 			// #1197: the shell's two nav badges in one small object, replacing
 			// the two 1000-row reads App.tsx used to poll. classMember, scoped to
@@ -444,6 +444,9 @@ func (s *Server) routes() chi.Router {
 			// Least-privilege telemetry: egress hosts runs using this workspace
 			// were denied — promotion candidates (see handleObservedEgress).
 			r.Get("/workspaces/{id}/observed-egress", s.handleObservedEgress)
+			// New Run's branch picker: launch tier (mayLaunchWorkspace), uniform 404,
+			// per-person limiter; see workspace_branches.go.
+			r.Get("/workspaces/{id}/branches", s.handleListWorkspaceBranches)
 			// Record Mode: launch one task's OPEN recording sandbox (learn what
 			// the task actually uses; see handleRecordWorkspace), then promote
 			// the observed-allowed hosts into ApprovedEgress (operator one-click).

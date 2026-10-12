@@ -106,7 +106,7 @@
     "args": [
       "group"
     ],
-    "text": "Only an administrator of that group can publish templates to it."
+    "text": "Only the template managers of that group can publish templates to it."
   },
   {
     "key": "SCOPE_FORBIDDEN_PERSON",
@@ -136,5 +136,24 @@
     "key": "TEMPLATES_UNAVAILABLE",
     "args": [],
     "text": "Templates are not available on this server yet."
+  },
+  {
+    "key": "NAME_TAKEN",
+    "args": [],
+    "text": "Another template available to the same people already uses this name."
+  },
+  {
+    "key": "LIMIT_REACHED",
+    "args": [
+      "200"
+    ],
+    "text": "This scope already holds 200 templates, the most it can. Delete one first."
+  },
+  {
+    "key": "POLICY_FIELD_REFUSED",
+    "args": [
+      "intent.agent"
+    ],
+    "text": "intent.agent is not a network, credential or access rule. A policy holds only those; save a template instead."
   }
 ]

@@ -62,6 +62,7 @@ type viaOrgUpstream struct {
 	hosts []string
 	open  atomic.Int32
 	hold  chan struct{}
+	big   int // bytes the upstream answers with, when set
 }
 
 func newViaOrgUpstream(t *testing.T) *viaOrgUpstream {
@@ -99,6 +100,10 @@ func newViaOrgUpstream(t *testing.T) *viaOrgUpstream {
 			case <-r.Context().Done():
 			}
 			u.open.Add(-1)
+			return
+		}
+		if u.big > 0 {
+			_, _ = w.Write(bytes.Repeat([]byte("x"), u.big))
 			return
 		}
 		_, _ = io.WriteString(w, "upstream-ok")
@@ -668,4 +673,55 @@ func TestViaOrg_RetiredEngineOutlivesItsProducers(t *testing.T) {
 	close(bw.release)
 	<-done
 	waitFor(t, "the retired engine closes after its last producer", func() bool { return old.engine.Closed() })
+}
+
+// A peer that stops reading cannot keep a retired engine open: the release cancels the stream, and
+// the blocked write to that peer returns, so the stream ends and the engine closes. The peer is a
+// runner's real relay stream, so the write deadline has to take effect on the relay connection itself.
+func TestViaOrg_StalledPeerDoesNotPinARetiredEngine(t *testing.T) {
+	f := newAdmissionFixture(t)
+	up := newViaOrgUpstream(t)
+	up.big = 64 << 20
+	viaOrgAPI(t, f.srv, up, nil)
+	f.srv.cfg.RunnerOnline = func(uuid.UUID) bool { return true }
+	grant := viaOrgGrantFor(t, f.st, f.run.ID, types.GrantAPIKey, types.GrantDeliveryViaOrg)
+	storeViaOrgConfig(t, f.srv, f.run.ID, []proxy.ViaOrgRoute{{GrantID: grant, Host: viaOrgAPIHost}})
+	caPEM, serving := hopServingTLS(t)
+	relaySrv := f.srv.ServeRelay(serving)
+	t.Cleanup(func() { _ = relaySrv.Close() })
+	s := f.connect(t, nil, f.liveRow())
+	if !f.waitReady(s) {
+		t.Fatalf("the runner was not admitted: %v", s.result())
+	}
+	s.mu.Lock()
+	peer := s.peer
+	s.mu.Unlock()
+
+	client := viaOrgRelayClient(t, peer, caPEM, io.Discard)
+	req, _ := http.NewRequest(http.MethodPost, "https://"+relayHost+":8443"+proxy.ViaOrgPathPrefix+grant.String()+"/v1/x", strings.NewReader(`{"q":1}`))
+	req.Header.Set("Authorization", "Bearer "+runToken(t, f.srv, f.run.ID))
+	req.Header.Set(proxy.ViaOrgAuthorityHeader, viaOrgAPIHost)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The body is never read: the relay fills and the org's write blocks.
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	var run *viaOrgRun
+	waitFor(t, "the stream is open and its response has started", func() bool {
+		f.srv.viaOrg.mu.Lock()
+		run = f.srv.viaOrg.runs[f.run.ID]
+		f.srv.viaOrg.mu.Unlock()
+		return run != nil && run.bytes.Load() > 64<<10
+	})
+	// Blocked: the bytes written stop moving.
+	for last := int64(-1); last != run.bytes.Load(); {
+		last = run.bytes.Load()
+		time.Sleep(300 * time.Millisecond)
+	}
+	run.mu.Lock()
+	old := run.engine
+	run.mu.Unlock()
+	f.srv.releaseViaOrgRun(run, false, false)
+	waitFor(t, "the retired engine closes although its peer stopped reading", func() bool { return old.engine.Closed() })
 }
