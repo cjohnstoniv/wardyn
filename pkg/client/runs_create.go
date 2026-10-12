@@ -356,6 +356,10 @@ type PreflightResult struct {
 	// lane fills it. Neither is admission: a launch re-checks both.
 	RunnerPool  *ResolvedRunnerPool `json:"runner_pool,omitempty"`
 	RunnerPools []RunnerPoolChoice  `json:"runner_pools"`
+	// Access is what the run brings in: its rows, hosts, credentials, the line
+	// for an unlisted host and the setup still needed. The policy preview
+	// answers the same block for the same request.
+	Access *AccessFacts `json:"access,omitempty"`
 }
 
 // Preflight DRY-RUNs a create-run request: the server resolves the policy
