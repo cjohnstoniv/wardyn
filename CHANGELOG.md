@@ -497,6 +497,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `launch_intent` and `launch_intent_reason`. Erasure's `run_tasks`, `components` and `run_setups` scopes, and so
   the SCIM purge, delete a person's launch intents. Migration `0171_run_launch_intents` adds `run_launch_intents`; a
   split-role install grants the app role `SELECT, INSERT, DELETE` on it.
+- New Run: the Tools step offers Sign in to Azure DevOps when you have no Azure DevOps sign-in stored, and Review
+  never holds Launch behind an item the Tools step cannot show; an ended sign-in, an own-token row or a missing
+  console app is reported when you launch. The policy preview checks only whether a sign-in is stored, by name, and
+  never reads it.
 
 ### Changed
 
