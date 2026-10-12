@@ -23,6 +23,7 @@ vi.mock("../../../lib/api/credential-delivery", () => ({
   },
 }));
 
+import { setField } from "../../../../test/set-field";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { CHANGES, DELIVERY } from "../../../lib/governance-copy";
 import type { GovernanceChange } from "../../../lib/types";
@@ -134,7 +135,7 @@ describe("RunnerCredentials — save", () => {
     await user.click(option("api_key", "via_org"));
     await user.click(option("env_secret", "runner_resident"));
     await user.click(screen.getByLabelText(DELIVERY.POSTURE_MDM));
-    await user.type(screen.getByLabelText(DELIVERY.OS_MIN(DELIVERY.OS_NAME.darwin)), "15.0");
+    setField(screen.getByLabelText(DELIVERY.OS_MIN(DELIVERY.OS_NAME.darwin)), "15.0");
     await user.click(save);
     await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
     expect(putMock.mock.calls[0][0]).toEqual({
@@ -175,7 +176,7 @@ describe("RunnerCredentials — save", () => {
     await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
     await user.click(option("env_secret", "runner_resident"));
     const field = screen.getByLabelText(DELIVERY.OS_MIN(DELIVERY.OS_NAME.windows));
-    await user.type(field, "latest");
+    setField(field, "latest");
     expect(field).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByText(DELIVERY.OS_MIN_INVALID)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: DELIVERY.SAVE })).toBeDisabled();
