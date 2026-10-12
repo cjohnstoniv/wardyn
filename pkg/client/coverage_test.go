@@ -90,6 +90,20 @@ var (
 	_ client.GovernanceLimits
 	_ client.AutonomyRubric
 	_ client.AutonomyLevel
+	_ []client.Invitation
+	_ client.InvitationState
+	_ []client.ServiceIdentity
+	_ client.ServiceIdentityState
+	_ []client.APIToken
+	_ client.TokenDisposition
+	_ client.TokenMoved
+	_ client.TokenMove
+	_ client.CreateInvitationRequest
+	_ client.ClaimInvitationRequest
+	_ client.CreateServiceIdentityRequest
+	_ client.UpdateServiceIdentityRequest
+	_ client.MintServiceTokenRequest
+	_ client.MoveTokenRequest
 )
 
 // routeFamilies lists EVERY exported *client.Client method under the family
@@ -118,6 +132,8 @@ func routeFamilies() map[string][]string {
 		"sessions":        {"RevokeSessions"},
 		"ssh-keys":        {"ListSSHKeys", "ListSSHKeysPage", "AddSSHKey", "DeleteSSHKey"},
 		"people":          {"ListPeople", "ErasePerson"},
+		"invitations":     {"CreateInvitation", "ListInvitations", "ListPersonInvitations", "ListPersonInvitationsPage", "ListMyInvitations", "RevokeInvitation", "ClaimInvitation"},
+		"service-ids":     {"CreateServiceIdentity", "ListServiceIdentities", "ListServiceIdentitiesPage", "GetServiceIdentity", "UpdateServiceIdentity", "RetireServiceIdentity", "ListMyServiceIdentities", "MintServiceToken", "ListServiceTokens", "ListServiceTokensPage", "RevokeServiceToken", "MoveToken"},
 		"components":      {"MyComponents", "SaveMyComponent", "UpdateMyComponent", "DeleteMyComponent", "ListComponents", "PutComponent", "DeleteComponent"},
 		"runners":         {"MintRunnerToken", "RegisterRunner", "ClaimRunner", "ListRunners", "ListRunnersPage", "GetRunner", "ListMyRunners", "GetMyRunner", "ListRunnerTokens", "ListRunnerTokensPage", "RevokeRunnerToken", "GetRunnerSettings", "SetRunnersEnabled"},
 		"runner-pools":    {"ListRunnerPools", "ListRunnerPoolsFor", "GetRunnerPool", "CreateRunnerPool", "UpdateRunnerPool", "DeleteRunnerPool", "CreateMyRunnerPool", "UpdateMyRunnerPool", "DeleteMyRunnerPool", "AddMyRunnerToPool", "RemoveMyRunnerFromPool", "GetOrgRunnerPoolDefaults", "SetOrgRunnerPoolDefaults", "GetMyRunnerPoolDefaults", "SetMyRunnerPoolDefaults", "ClearMyRunnerPoolDefaults"},
