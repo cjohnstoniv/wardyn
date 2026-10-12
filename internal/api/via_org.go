@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -97,6 +98,11 @@ func (s *Server) handleViaOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer run.release(st)
+	// A cancelled stream (run end, release, idle) must return even while its Write is blocked on a
+	// peer that stopped reading: the server sets no write timeout (streams are long), so the
+	// deadline is set here. Stopped before the release, so a finished response's connection keeps none.
+	stopWriteDeadline := context.AfterFunc(st.ctx, func() { _ = http.NewResponseController(w).SetWriteDeadline(time.Now()) })
+	defer stopWriteDeadline()
 	out := viaOrgEngineRequest(r.WithContext(st.ctx), rest, restEsc, dest, st)
 	cw := &viaOrgCountingWriter{ResponseWriter: w, st: st}
 	if dest.broker {
