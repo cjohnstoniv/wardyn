@@ -138,6 +138,13 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run is terminal")
 		return nil, false
 	}
+	// A run waiting in its pool's queue has minted nothing, so no token names it: refuse by state anyway,
+	// so a credential that somehow did would not reach a door.
+	if run.State == types.RunQueued {
+		s.auditInternalDenied(r, claims, authz.ReasonRunNotFound, "run_state", string(run.State))
+		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunNotFound), "run has not started")
+		return nil, false
+	}
 	if !runIsKept(run) {
 		return &run, true
 	}

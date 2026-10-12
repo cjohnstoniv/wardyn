@@ -37,7 +37,8 @@
 # docs/sdk.md 14019 measured after merge.
 # docs/sdk.md 14021 measured after merge.
 # docs/sdk.md 14080 measured after the 0.9.0 batch merge.
-docs/sdk.md=14080 share=21
+# docs/sdk.md 14130 adds 50 over 14080 (0.9 Q-b): the run_queued and run_max_wait_invalid reasons.
+docs/sdk.md=14130 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

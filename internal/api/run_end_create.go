@@ -22,7 +22,7 @@ import (
 // share latestEndAhead and noEndBlock, so a finite ask is cut to the same bound at
 // both doors.
 
-// runEndShapeRefusal checks ends_after_sec and no_end's shape, before any store
+// runEndShapeRefusal checks ends_after_sec, no_end and max_wait_sec's shape, before any store
 // read: both set, below 1, or past the run-limit ceiling.
 func runEndShapeRefusal(req createRunRequest) *runRefusal {
 	switch {
@@ -32,6 +32,8 @@ func runEndShapeRefusal(req createRunRequest) *runRefusal {
 		return runError(http.StatusBadRequest, reasonRunEndAfterTooSmall, "ends_after_sec must be at least 1")
 	case req.EndsAfterSec != nil && *req.EndsAfterSec > maxRunLimitSec:
 		return runError(http.StatusBadRequest, reasonRunEndAfterTooLarge, fmt.Sprintf("ends_after_sec must be at most %d", maxRunLimitSec))
+	case req.MaxWaitSec < 0:
+		return runError(http.StatusBadRequest, reasonRunMaxWaitInvalid, "max_wait_sec must be at least 1")
 	}
 	return nil
 }
