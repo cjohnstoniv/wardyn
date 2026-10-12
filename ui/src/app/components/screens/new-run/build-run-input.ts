@@ -4,7 +4,8 @@
  */
 
 import type { RunPolicySpec, SetupModelProvider, Workspace } from "../../../lib/types";
-import { buildRunContractWire, NO_ACTIVE_SECTIONS, type ActiveSections } from "../../../lib/run-contract-draft";
+import { buildRunContractWire, NO_ACTIVE_SECTIONS, type ActiveSections, type RunContractWire } from "../../../lib/run-contract-draft";
+import { LEGACY_RUN_MODE_FIELDS, mapRunMode } from "../../../lib/run-mode-map";
 import type { PolicyMode } from "../../wardyn/policy-panel";
 import { referenceLaneDropsWorkspace } from "./new-run-launch-gates";
 import { buildSpec, mergeRunSelections } from "./wizard-spec";
@@ -23,6 +24,20 @@ export interface RunInputParams {
   activeSections?: ActiveSections;
 }
 
+/**
+ * The wizard's run shape as the 0.9 contract's carriers, with the older fields they replace
+ * removed. It reads the FINAL body, policy and overrides included, because the server refuses
+ * some of those beside carriers. A shape the contract cannot say, or a draft that already chose
+ * its experience, keeps the older fields untouched.
+ */
+function withRunMode<T extends CreateRunInputWithComposition & RunContractWire>(body: T): T {
+  const carriers = body.experience ? null : mapRunMode(body);
+  if (!carriers) return body;
+  const rest: CreateRunInputWithComposition & RunContractWire = { ...body };
+  for (const field of LEGACY_RUN_MODE_FIELDS) delete rest[field];
+  return { ...rest, ...carriers } as unknown as T;
+}
+
 /** Returns no request when the active policy mode cannot represent the selections. */
 export function buildRunInput({
   state, workspaces, modelProviders, policyMode, ccTouched, merged, activeSections = NO_ACTIVE_SECTIONS,
@@ -34,13 +49,12 @@ export function buildRunInput({
   const sized = ccTouched ? built : { ...built, confinement_class: undefined };
   // Same body on all three doors; none when the run carries none.
   const withComponents = state.components.length ? { ...sized, components: state.components } : sized;
-  // No mode_contract marker: the console has no experience control yet, and the marker makes
-  // the server refuse an unset experience (run_mode_required). Lane A-L8 re-adds it together with that control.
-  const run = { ...withComponents, ...buildRunContractWire(state.contract, activeSections) };
+  const contract = buildRunContractWire(state.contract, activeSections);
+  const run = { ...withComponents, ...contract };
   // A saved ID may survive a mode switch; only the active mode chooses the policy.
-  if (policyMode === "custom") return merged ? { ...run, inline_policy: merged.spec } : null;
+  if (policyMode === "custom") return merged ? withRunMode({ ...run, inline_policy: merged.spec }) : null;
 
   // Preserve buildSpec's ephemeral fallback when there is no mount/repo primary.
   const referenced = { ...run, workspace_id: primaryWorkspaceId(state.workspaces, workspaces) ?? run.workspace_id };
-  return policyMode === "saved" ? { ...referenced, policy_id: state.selectedPolicyId } : referenced;
+  return withRunMode(policyMode === "saved" ? { ...referenced, policy_id: state.selectedPolicyId } : referenced);
 }
