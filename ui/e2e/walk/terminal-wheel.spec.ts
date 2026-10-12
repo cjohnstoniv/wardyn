@@ -18,7 +18,7 @@
  */
 
 import { expect, test } from "@playwright/test";
-import { MEMBER_EMAIL, SANDBOX_UP, dexSignIn } from "./helpers";
+import { MEMBER_EMAIL, SANDBOX_UP, dexSignIn, launchFromReview, viewLaunchedRun, walkNewRunToReview } from "./helpers";
 import { termText } from "../terminal-text";
 
 test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TEST_K8S=1");
@@ -26,9 +26,10 @@ test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TE
 test("the wheel scrolls tmux history and does not recall bash history", async ({ page }) => {
   await dexSignIn(page, MEMBER_EMAIL);
   await page.goto("/runs/new");
-  await page.getByRole("combobox", { name: "Title" }).fill("terminal wheel walk");
-  await page.getByRole("radio", { name: /^Terminal/ }).click();
-  await page.getByRole("button", { name: /^Launch/ }).click();
+  // An Environment sandbox is the terminal: interactive, no agent.
+  await walkNewRunToReview(page, { shape: "environment" });
+  await launchFromReview(page, "terminal wheel walk");
+  await viewLaunchedRun(page);
 
   const screen = page.locator(".xterm-screen").first();
   await expect(screen).toBeVisible({ timeout: SANDBOX_UP });

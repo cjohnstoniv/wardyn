@@ -91,11 +91,15 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { GOVERNANCE as GOV } from "../../src/app/lib/governance-copy";
 import { DRIVES, DRIVE_MEMBER, PEOPLE, PERM } from "../../src/app/lib/user-drives-copy";
 import { driveModeWord, driveSizeLabel } from "../../src/app/lib/user-drives-display";
 import { MEMBER_GETTING_STARTED as GS } from "../../src/app/components/wardyn/copy";
+import { NR_DOCUMENT } from "../../src/app/components/wardyn/copy/new-run/document";
+import { NR_FILES } from "../../src/app/components/wardyn/copy/new-run/files";
+import { NR_REVIEW } from "../../src/app/components/wardyn/copy/new-run/review";
+import { NR_SHARED } from "../../src/app/components/wardyn/copy/new-run/shared";
 import {
   act,
   beat,
@@ -107,14 +111,22 @@ import {
   typeInTerminal,
 } from "./overlay";
 import { BEAT_SHORT, pollScreen, silentCard } from "./demos";
+import {
+  confirmLaunchButton,
+  NEW_RUN_HEADING,
+  newRunHeading,
+  nextStep,
+  openNameDialog,
+  runTitleField,
+  shapeCard,
+  startGuided,
+} from "./new-run";
 import { bootRun, RUN_OVER } from "./runs";
 import { dexSignIn, dexSignOut } from "./sso";
 // stage.ts is the rig, and importing it is also why 04d gets a FRESH,
 // SIGNED-OUT context: 04c's session does not carry over, so this episode signs
 // itself in on camera.
 import { stage } from "./stage";
-import { SPEC_LABEL } from "../policy-source";
-import { newRunEditPolicy, newRunPanel } from "./funnel";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -202,21 +214,16 @@ const CONTROLCHECK = `cat ${CONTROL_FILE}`;
 const READBACK = `cat ${DRIVE_FILE}`;
 const REFUSE_WRITE = `echo 'run two was here' >> ${DRIVE_FILE}`;
 
-// The member's floor. 04c:127-137 verbatim: Minimal ships a CC2 floor and this
-// demo cluster's one barrier is the Fence, so the one-line edit is itself the
-// lesson — the floor is the member's to RAISE, never to sneak under the
-// admin's ceiling.
-const MEMBER_SPEC = JSON.stringify(
-  {
-    allowed_domains: ["api.anthropic.com"],
-    first_use_approval: "deny_with_review",
-    min_confinement_class: "CC1",
-    auto_stop_after_sec: 3600,
-    eligible_grants: [],
-  },
-  null,
-  2,
-);
+// The member's floor. 04c's policy verbatim: this demo cluster's one barrier is
+// the Fence, so the one-line edit is itself the lesson — the floor is the
+// member's to RAISE, never to sneak under the admin's ceiling.
+const MEMBER_POLICY = {
+  allowed_domains: ["api.anthropic.com"],
+  first_use_approval: "deny_with_review",
+  min_confinement_class: "CC1",
+  auto_stop_after_sec: 3600,
+  eligible_grants: [],
+};
 
 // Captured on camera, handed to the grader.
 let runA = "";
@@ -375,37 +382,81 @@ test.beforeAll(async () => {
 });
 
 /**
- * The member's terminal-run recipe, up to (but not including) the drive
- * checkbox: Title, Terminal, Minimal, the spec, Fence.
+ * The member's terminal-run recipe up to Files, where the drive block lives:
+ * Start, Environment sandbox (the old Terminal), then Fence on Run and the
+ * optional Harnesses step passed by. The guided flow sets the order, so the
+ * title and the policy come later, in `memberRunLaunch`.
  *
  * `narrate` false is act 4's silent repeat — the choices were explained once,
- * at 3.4-3.5, and a second walk-through would be three captions the viewer has
+ * at 3.4-3.5, and a second walk-through would be captions the viewer has
  * already heard.
  */
-async function memberRunForm(title: string, narrate: boolean): Promise<void> {
+async function memberRunToFiles(narrate: boolean): Promise<void> {
   const page = stage();
   await page.goto("/runs/new");
-  await expect(page.getByRole("heading", { name: "New run", level: 1 })).toBeVisible({ timeout: 30_000 });
-  await page.getByLabel("Title").fill(title);
+  await expect(newRunHeading(page, NEW_RUN_HEADING.start)).toBeVisible({ timeout: 30_000 });
+  await startGuided(page);
   await act(
     page,
-    page.getByRole("radio", { name: /^Terminal/ }),
+    shapeCard(page, "environment"),
     narrate ? "A plain command window. No AI agent, and no key to any AI service." : undefined, // C38
   );
-  await newRunEditPolicy(page);
+  await nextStep(page, NEW_RUN_HEADING.runEnvironment);
   await act(
     page,
-    page.getByRole("button", { name: "Minimal" }),
-    narrate
-      ? "Minimal policy — the spec box holds the rules this run starts with. You'll write your own in 'Your first policy'." // C39a
-      : undefined,
-  );
-  await page.getByLabel(SPEC_LABEL).fill(MEMBER_SPEC);
-  await act(
-    page,
-    page.getByRole("radio", { name: /^Fence/ }),
+    page.getByRole("radio", { name: new RegExp(`^${NR_SHARED.BARRIER_FENCE}`) }),
     narrate ? "And lowered to Fence — the one barrier this cluster has." : undefined, // C39b
   );
+  await nextStep(page, NEW_RUN_HEADING.harnesses);
+  await nextStep(page, NEW_RUN_HEADING.files);
+}
+
+/**
+ * The rest of the recipe: Tools and access, Review, the run's policy, then the
+ * Name dialog's Launch. Silent at the end — nothing may be spoken inside the
+ * fast-forward span `bootRun` opens, so the caller boots right after.
+ *
+ * OPEN: the Minimal preset and the spec box (the old Policy panel) have no step
+ * in the guided flow. The policy is filmed through Review's JSON view and the
+ * document screen, which merges it into inline_policy; the lead decides
+ * whether that is the home.
+ */
+async function memberRunLaunch(title: string, narrate: boolean): Promise<void> {
+  const page = stage();
+  await nextStep(page, NEW_RUN_HEADING.tools);
+  await nextStep(page, NEW_RUN_HEADING.review);
+  await act(
+    page,
+    page.getByLabel(NR_REVIEW.VIEW_ARIA).getByRole("button", { name: NR_REVIEW.VIEW_JSON }),
+    narrate
+      ? "The run's policy — the rules this run starts with. You'll write your own in 'Your first policy'." // C39a
+      : undefined,
+  );
+  await act(page, page.getByRole("button", { name: NR_REVIEW.EDIT_FORMAT("JSON") }));
+  const editor = page.getByRole("textbox", { name: NR_DOCUMENT.EDITOR_ARIA("JSON") });
+  await expect(editor).toBeVisible();
+  const document = JSON.parse(await editor.inputValue());
+  document.intent.inline_policy = MEMBER_POLICY;
+  await editor.fill(JSON.stringify(document, null, 2));
+  await act(page, page.getByRole("button", { name: NR_DOCUMENT.CONTINUE_REVIEW }));
+  await expect(newRunHeading(page, NEW_RUN_HEADING.review)).toBeVisible();
+  await openNameDialog(page);
+  await runTitleField(page).fill(title);
+  await act(page, confirmLaunchButton(page));
+}
+
+/**
+ * The drive row on Files, with its two independent choices: "Mount my drive"
+ * and the "Starts here" radio. An Environment run opens with the drive already
+ * attached when it can attach, and attaching never sets where the run starts
+ * unless the preselect did, so the radio is picked on camera if it is not on.
+ */
+async function pickDriveStartsHere(page: Page): Promise<void> {
+  const startsHere = page
+    .getByTestId("nr-drive")
+    .getByRole("radio", { name: new RegExp(NR_FILES.STARTS_HERE) });
+  if (!(await startsHere.isChecked())) await act(page, startsHere);
+  await expect(startsHere).toBeChecked();
 }
 
 // ---------------------------------------------------------------------------
@@ -736,15 +787,15 @@ test("V04d act 3 — the member writes a note, and ends the run", async () => {
   await beat(page, PACE.read);
   await spotlight(page, null);
 
-  await memberRunForm(RUN_A_TITLE, true); // C38, C39a, C39b
-  // C40 DELETED (§8, trim list): the workspace Select stays visibly on
-  // "Ephemeral scratch — no repo" throughout — orthogonality is on screen, not
+  await memberRunToFiles(true); // C38, C39b (C39a follows at Review)
+  // C40 DELETED (§8, trim list): the Files step keeps the drive and the
+  // repositories as separate rows throughout — orthogonality is on screen, not
   // narrated.
 
   const driveBlock = page.getByTestId("nr-drive");
   await expect(
     driveBlock,
-    "the New Run card offers no drive checkbox — this member's allocation did not resolve",
+    "New Run's Files step offers no drive checkbox — this member's allocation did not resolve",
   ).toBeVisible({ timeout: 30_000 });
   await centerInFrame(driveBlock);
   await spotlight(page, driveBlock.getByText(DRIVE_MEMBER.NR_CHECKBOX));
@@ -752,15 +803,15 @@ test("V04d act 3 — the member writes a note, and ends the run", async () => {
   await beat(page, BEAT_SHORT);
 
   const mount = page.locator("#nr-drive-mount");
-  await newRunPanel(page, "workspace");
-  await expect(mount, "the drive checkbox must start unchecked — mounting is the person's choice").not.toBeChecked();
-  await act(page, mount);
-  await expect(mount).toBeChecked();
+  // An Environment run opens with the person's own drive attached when it can
+  // attach, so the checkbox arrives checked: the mount is on screen to be
+  // read, and the "Starts here" radio beside it is the choice left to make.
+  await expect(mount, "an Environment run must open with the drive preselected").toBeChecked();
   // The path IS in the hint, under the checkbox: NR_HINT is
   // `"{name}" at /home/agent/drive — {size}, {mode}.`
   //
   // REHEARSAL PIN — ONE RING, NOT TWO. NR_HINT and NR_RW_NOTE are two
-  // sentences inside ONE <p> (workspace-card.tsx:119-126), so `hint` and
+  // sentences inside ONE <p> (LegacyDriveRow in the Files step), so `hint` and
   // `rwNote` below resolve to the SAME element and C42 and C43 spotlight an
   // identical rectangle. The beat table reads as two rings; the film has one,
   // held across both lines. That is correct and expected — do not chase it as
@@ -784,9 +835,10 @@ test("V04d act 3 — the member writes a note, and ends the run", async () => {
   // C44 DELETED (§8, trim list): NR_READONLY_TOGGLE is on screen under the
   // checkbox, untouched — 4.2 is where it is explained and used.
 
+  await pickDriveStartsHere(page);
   // SILENT launch and a silent boot: nothing may be spoken inside a
   // fast-forward span, and a k8s pod pull is long enough to need one.
-  await act(page, page.getByRole("button", { name: "Launch run" }));
+  await memberRunLaunch(RUN_A_TITLE, true); // C39a
   runA = runIdFrom(await bootRun(page, "run A never came up as an attached terminal"));
   writeHandoff();
 
@@ -867,14 +919,14 @@ test("V04d act 4 — a brand-new sandbox, and the same directory", async () => {
   test.setTimeout(900_000);
   const page = stage();
 
-  await memberRunForm(RUN_B_TITLE, false);
+  await memberRunToFiles(false);
   await caption(page, "A second run, in a brand-new sandbox."); // C48
   await beat(page, PACE.read);
 
   const driveBlock = page.getByTestId("nr-drive");
-  await newRunPanel(page, "workspace");
   await centerInFrame(driveBlock);
-  await act(page, page.locator("#nr-drive-mount"));
+  // The Environment run arrives with the drive attached, as in act 3.
+  await expect(page.locator("#nr-drive-mount"), "an Environment run must open with the drive preselected").toBeChecked();
   // NR_READONLY_TOGGLE renders only for a WRITABLE allocation and only
   // narrows — there is no control here that widens anything, which is exactly
   // what C57 says and all it says.
@@ -886,7 +938,7 @@ test("V04d act 4 — a brand-new sandbox, and the same directory", async () => {
 
   // The hint's {mode} and the sentence under it flip TOGETHER with the toggle,
   // so neither promises persistence a read-only mount cannot give — literally
-  // together: they are one <p> (workspace-card.tsx:119-126).
+  // together: they are one <p> (LegacyDriveRow in the Files step).
   //
   // REHEARSAL PIN — ONE RING, NOT TWO, the C42/C43 note again. C49's ring
   // sits on the read-only toggle (act()'s own), and C50 rings the paragraph;
@@ -903,7 +955,8 @@ test("V04d act 4 — a brand-new sandbox, and the same directory", async () => {
   await beat(page, PACE.read);
   await spotlight(page, null);
 
-  await act(page, page.getByRole("button", { name: "Launch run" }));
+  await pickDriveStartsHere(page);
+  await memberRunLaunch(RUN_B_TITLE, false);
   runB = runIdFrom(await bootRun(page, "run B never came up as an attached terminal"));
   writeHandoff();
 

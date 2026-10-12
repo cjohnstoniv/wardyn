@@ -31,6 +31,7 @@
  */
 
 import { expect, type Locator, type Page } from "@playwright/test";
+import { viewRunButton } from "./new-run";
 import { beat, ffwdEnd, ffwdStart, PACE } from "./overlay";
 
 /** Real containers: a ceiling for waiting on the PRODUCT, never pacing. */
@@ -82,13 +83,13 @@ export async function waitUnlessGone(
 }
 
 /**
- * The silent stretch between "Launch run" and a terminal you can type into.
+ * The silent stretch between the Name dialog's Launch and a terminal you can type into.
  *
  * POST /runs dispatches SYNCHRONOUSLY (runs_dispatch.go: "dispatch is invoked
- * synchronously from the create-run handler"), so the navigate to /runs/<id>
- * does not happen until the container is provisioned: the URL change and the
- * terminal mount are ONE stretch of dead air, which is why the URL wait carries
- * RUN_BOOTS and not a minute.
+ * synchronously from the create-run handler"), so the Launched screen (and its
+ * View run) does not appear until the container is provisioned: the wait for
+ * it, the URL change and the terminal mount are ONE stretch of dead air, which
+ * is why those waits carry RUN_BOOTS and not a minute.
  *
  * NOTHING IS SPOKEN INSIDE THE SPAN. A line narrated inside a fast-forward is a
  * line played over frames the encoder is about to throw away — the voice would
@@ -103,7 +104,9 @@ export async function bootRun(page: Page, why: string): Promise<string> {
   await beat(page, 200);
   await ffwdStart(page);
   try {
-    await expect(page, `${why} — /runs/new never navigated to a run`).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, {
+    // The create answers once the container is provisioned, and the Launched screen then offers View run.
+    await viewRunButton(page).click({ timeout: RUN_BOOTS });
+    await expect(page, `${why} — New Run never launched a run`).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, {
       timeout: RUN_BOOTS,
     });
     await waitUnlessGone(

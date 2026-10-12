@@ -22,7 +22,7 @@ export const WORKSPACE_PATH =
 export const WORKSPACE_NAME = "slugify";
 
 /**
- * The run's TITLE — required on the New run screen, and the key runs are
+ * The run's TITLE — required in the Name dialog, and the key runs are
  * grouped by on the Runs board. Kept short: it is the run's headline in the
  * board card, the table row and the run-detail command bar, all on camera.
  */
