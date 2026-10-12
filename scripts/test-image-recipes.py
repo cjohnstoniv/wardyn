@@ -47,6 +47,22 @@ def recipe(name):
     return next(body for _, kind, body in instructions(text) if kind == "RUN" and "curl -fsSL" in body)
 
 
+def aws_cli_block(name):
+    text = (ROOT / f"deploy/images/{name}/Dockerfile").read_text()
+    start = text.index("# AWS's published PGP public key")
+    return text[start:text.index('ENV AWS_PAGER=""', start)]
+
+
+class AWSCLICopies(unittest.TestCase):
+    # The agent images install the AWS CLI the aws-sso image's way; a pin or a
+    # version bumped in one copy and not the others fails here.
+    def test_agent_images_carry_the_aws_sso_install(self):
+        want = aws_cli_block("aws-sso")
+        for name in ["base", "claude-code", "codex-cli"]:
+            with self.subTest(image=name):
+                self.assertEqual(aws_cli_block(name), want)
+
+
 def sha(path):
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()

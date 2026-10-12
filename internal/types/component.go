@@ -665,10 +665,17 @@ func (g *CLIGitHub) validate() error {
 	return nil
 }
 
+// cliAWSPortalDomain is the AWS access portal's domain. The start URL is
+// written into the sandbox's ~/.aws/config and the person signs in at it, so a
+// row may name only an IAM Identity Center portal, never any https host.
+const cliAWSPortalDomain = ".awsapps.com"
+
 func (a *CLIAWS) validate() error {
 	u, err := url.Parse(a.StartURL)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
-		return errors.New("cli.aws.start_url: must be an https URL with no credentials")
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Port() != "" ||
+		!strings.HasSuffix(u.Hostname(), cliAWSPortalDomain) || len(u.Hostname()) == len(cliAWSPortalDomain) ||
+		strings.ContainsAny(a.StartURL, " \t\r\n") {
+		return errors.New("cli.aws.start_url: must be your AWS access portal URL, https://<name>.awsapps.com/start")
 	}
 	switch {
 	case !cliAWSRegionRE.MatchString(a.SSORegion):

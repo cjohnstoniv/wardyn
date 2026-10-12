@@ -181,6 +181,9 @@ func (a attachedComponent) fact(ordinal int, comps runComponents, baseline compo
 		}
 	}
 	f.Requirements = append(f.Requirements, setupSecretItems(types.RunPolicySpec{EligibleGrants: missing}, nil)...)
+	if a.needsSignIn {
+		f.Requirements = append(f.Requirements, cliSignInItem(f.ID, f.Name))
+	}
 	switch {
 	case a.needsAdminSecret:
 		f.Status = componentUnavailable
