@@ -197,6 +197,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `wardyn template import --kind Run|RunTemplate` checks either document kind, and `wardyn run --file <doc>` launches a
   `kind: Run` document; for now a document that sets `inline_policy` is refused. `wardyn person erase --scope` names
   `run_setups`.
+- New Run picks a run's harnesses and the run follows them: the harness that starts is the one chosen, with its own model
+  provider; an optional starting prompt becomes its first message; Environment and Application runs launch with no
+  harness on the agent base image, and a command may include harnesses. Each harness's agent permission, model provider
+  and the caller's own credential for it are checked at launch, Review and the policy preview, and a refusal names the
+  harness (`tool`). `GET /setup/status` reports `installed` and `approval_hold` per harness plus `harness_sets`;
+  preflight and the preview report the run's `image` and `harness_set`. New Run runs record their harnesses in
+  `run_harnesses`. Two or more harnesses in one run wait for a later lane.
+- Operators can declare one image for several harnesses under a `WARDYN_AGENT_IMAGES` key that joins sorted harness ids
+  with `+`; wardynd refuses to start on a malformed key.
 - `GET /api/v1/workspaces/{id}/branches?repo=<repo>` lists one workspace repository's branches for the New Run
   branch picker, through the credential the run would clone with: Azure DevOps uses the person's own token or
   sign-in; GitHub uses the organisation's GitHub App with a one-repository `contents: read` token, revoked best effort after the
@@ -314,6 +323,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- New Run refuses a harness that no sandbox image on this server carries (`harness_not_installed`). A published install
+  maps Claude Code to the agent base image, which does not include the Claude CLI, so New Run refuses Claude Code until
+  an operator builds one (`make agent-images`, deploy/images/README.md) and registers it under `claude-code` in
+  `WARDYN_AGENT_IMAGES`. A run that names its own image is not refused by this check.
+- Under a governance profile whose tool rules hold or deny, a background command that includes a harness is refused
+  (`governance_profile`, `runs.tools`).
 - Security: with two or more harnesses, the tool-approval credential now reaches only the harness Wardyn starts,
   as a file under `/run/wardyn/secrets/` that its own launch reads; it is no longer container or pod env. A harness
   started by hand, or any other process, is given none, and its tool calls take the strictest of the run's rules,
