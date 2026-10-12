@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { NEW_RUN_REASON, PLACEMENT_REASONS } from "../../../../lib/new-run-refusals";
+import { NEW_RUN_REASON, PLACEMENT_REASONS, WORKSPACE_DOOR_REASONS } from "../../../../lib/new-run-refusals";
 import { RUN_MODE_REASON } from "../../../../lib/run-mode-refusals";
 import { RUNNER_POOL_REASONS } from "../../../../lib/runner-pool-refusals";
 import { TEMPLATE_POLICY_FIELDS, TEMPLATE_REQUEST_FIELDS } from "../../../../lib/template-fields";
@@ -44,12 +44,16 @@ describe("field homes (U7)", () => {
   it("give every reason the console names a step, and send an unknown one to Review", () => {
     const known = [
       ...Object.values(NEW_RUN_REASON), ...PLACEMENT_REASONS, ...Object.values(RUN_MODE_REASON),
-      ...RUNNER_POOL_REASONS, ...Object.values(TEMPLATE_REASON),
+      ...RUNNER_POOL_REASONS, ...Object.values(TEMPLATE_REASON), ...WORKSPACE_DOOR_REASONS,
     ];
     expect(sortedKeys(HOME_OF_REASON)).toEqual([...new Set(known)].sort());
     expect(homeOfReason("runner_pool_stale")).toBe("run");
     expect(homeOfReason("run_shape_conflict")).toBe("shape");
     expect(homeOfReason("something_new")).toBe("review");
+  });
+
+  it("sends the workspace-door refusals to Files, not Review", () => {
+    for (const reason of WORKSPACE_DOOR_REASONS) expect(homeOfReason(reason), reason).toBe("files");
   });
 
   it("resolve a document path to the most specific home", () => {
