@@ -50,7 +50,16 @@ func (s *Server) storedDeliveryPolicy(ctx context.Context) (placement.DeliveryPo
 	if err != nil {
 		return placement.DeliveryPolicy{}, err
 	}
-	return deliveryPolicyOf(doc.Policy)
+	p, err := deliveryPolicyOf(doc.Policy)
+	if err != nil {
+		return placement.DeliveryPolicy{}, err
+	}
+	// Both writers validate, but a document written out of band or by another version is judged
+	// before it decides anything: an invalid one fails every door closed.
+	if err := p.Validate(); err != nil {
+		return placement.DeliveryPolicy{}, fmt.Errorf("stored credential delivery policy: %w", err)
+	}
+	return p, nil
 }
 
 // handleGetCredentialDelivery returns the stored document. securityOps (routes.go).

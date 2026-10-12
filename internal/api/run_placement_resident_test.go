@@ -123,3 +123,14 @@ func TestLocalPlanFacts_OneDeliveryPolicyReadPerDoor(t *testing.T) {
 		t.Errorf("dispatch read the delivery policy %d times, want 1", reads)
 	}
 }
+
+// A stored delivery policy that fails validation (written out of band or by another version) is
+// never judged on: the read errors, so every LocalEligibility door fails closed.
+func TestStoredDeliveryPolicy_InvalidDocumentFailsClosed(t *testing.T) {
+	f := newComponentFixture(t)
+	reads := 0
+	f.srv.cfg.Store = residentFactsStore{localPlanTestStore: localPlanTestStore{f.st}, policy: json.RawMessage(`{"classes":{"cloud_sts":{"mode":"via_org"}}}`), reads: &reads}
+	if _, err := f.srv.storedDeliveryPolicy(context.Background()); err == nil {
+		t.Fatal("an invalid stored delivery policy was accepted")
+	}
+}
