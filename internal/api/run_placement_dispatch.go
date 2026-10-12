@@ -10,6 +10,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -66,6 +67,13 @@ func (s *Server) createSandboxAtTarget(ctx context.Context, run types.AgentRun, 
 	switch {
 	case run.RunnerID != nil:
 		spec.RunnerID = run.RunnerID.String()
+		if rs, ok := s.cfg.Store.(store.RunnerStore); ok {
+			row, err := rs.GetRunner(ctx, *run.RunnerID)
+			if err != nil {
+				return runner.Sandbox{}, fmt.Errorf("read the run's runner: %w", err)
+			}
+			spec.RunnerMaxRuns = row.MaxRuns
+		}
 	case run.RunnerPoolID != nil:
 		if run.RunnerPoolExecutor == "" {
 			return runner.Sandbox{}, fmt.Errorf("%w: the run's pool binding names no executor", runner.ErrExecutorUnavailable)

@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -327,6 +329,9 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 		EvidenceSource: placed.EvidenceSource, RunnerPoolExecutor: placed.RunnerPoolExecutor,
 	})
 	switch {
+	case errors.Is(err, store.ErrRunnerAtCapacity):
+		// The start chose a runner other than the one the promotion found room on, and that one is full.
+		return &queueEnd{token: string(placement.ReasonRunnerAtCapacity), hint: runnerpool.RunnerAtCapacityMsg(f.place.pool.Name)}
 	case err != nil:
 		slog.ErrorContext(st.base, queueStartFailedLogName+": write start columns", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		return &queueEnd{hint: queueStartFailedHint}

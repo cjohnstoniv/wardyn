@@ -177,6 +177,9 @@ func TestLocalP3ProfileLimitLiftsOnlyItsOwnRefusal(t *testing.T) {
 		if ref == nil || ref.body.Reason != string(tc.reason) {
 			t.Fatalf("%s: %+v", tc.name, ref)
 		}
+		if tc.reason == placement.ReasonPlacementUnavailable && ref.body.Error != localUnpooledMsg {
+			t.Fatalf("%s: an unpooled local run must name its remedy, said %q", tc.name, ref.body.Error)
+		}
 	}
 }
 

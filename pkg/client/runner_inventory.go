@@ -71,6 +71,14 @@ func (c *Client) GetMyRunner(ctx context.Context, id uuid.UUID) (RunnerView, err
 	return out, err
 }
 
+// SetMyRunnerMaxRuns changes one of the caller's own runners' "Runs at once" (1 to 64). Only the
+// runner's owner may; another person's runner answers as an absent id, an administrator's included.
+func (c *Client) SetMyRunnerMaxRuns(ctx context.Context, id uuid.UUID, maxRuns int) (RunnerView, error) {
+	var out RunnerView
+	err := c.do(ctx, http.MethodPut, "/api/v1/me/runners/"+id.String(), types.RunnerUpdateRequest{MaxRuns: &maxRuns}, &out)
+	return out, err
+}
+
 // ListRunnerTokens lists the unused registration tokens (admin or security_admin), newest first,
 // for one owner or with owner "" for everyone's. No token value is returned.
 func (c *Client) ListRunnerTokens(ctx context.Context, owner string, opts ...ListOpts) ([]RunnerRegistrationToken, error) {

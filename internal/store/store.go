@@ -107,6 +107,9 @@ func runInsertErr(err error) error {
 // CreateRun inserts a new run and returns the persisted row. A run bound to a runner pool is inserted
 // only while that pool is still active at the recorded revision, else ErrRunnerPoolStale.
 func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, error) {
+	if holdsRunnerSlot(r) {
+		return s.CreateRunUnderCap(ctx, r, 0)
+	}
 	args, err := s.createRunArgs(r)
 	if err != nil {
 		return types.AgentRun{}, err
@@ -136,9 +139,11 @@ var ErrRunCapReached = errors.New("store: deployment run cap reached")
 // runs (WARDYN_MAX_CONCURRENT_RUNS). The count and the insert share one
 // transaction-scoped advisory lock, so two replicas racing at the cap admit
 // exactly the cap. limit <= 0 is unlimited and takes no lock. Rows are counted,
-// not kept in a counter, so a crashed path cannot drift it.
+// not kept in a counter, so a crashed path cannot drift it. A run bound to a
+// registered runner is also held to that runner's max_runs under its row lock,
+// cap or none (RunnerAtCapacityError).
 func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) (types.AgentRun, error) {
-	if limit <= 0 {
+	if limit <= 0 && !holdsRunnerSlot(r) {
 		return s.CreateRun(ctx, r)
 	}
 	args, err := s.createRunArgs(r)
@@ -155,12 +160,26 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 			return types.AgentRun{}, err
 		}
 	}
-	active, err := lockAndCountActiveRuns(ctx, tx, uuid.Nil)
-	if err != nil {
-		return types.AgentRun{}, err
+	if limit > 0 {
+		active, err := lockAndCountActiveRuns(ctx, tx, uuid.Nil)
+		if err != nil {
+			return types.AgentRun{}, err
+		}
+		if active >= limit {
+			return types.AgentRun{}, ErrRunCapReached
+		}
 	}
-	if active >= limit {
-		return types.AgentRun{}, ErrRunCapReached
+	if holdsRunnerSlot(r) {
+		// The insert's pool fence takes the pool row FOR SHARE; taking it before the runner keeps the one
+		// order (pool, then runner) a promotion also takes them in.
+		if r.RunnerPoolID != nil {
+			if _, err := tx.Exec(ctx, `SELECT 1 FROM runner_pools WHERE id = $1 FOR SHARE`, *r.RunnerPoolID); err != nil {
+				return types.AgentRun{}, fmt.Errorf("store: lock run pool: %w", err)
+			}
+		}
+		if err := admitOnRunner(ctx, tx, *r.RunnerID, uuid.Nil); err != nil {
+			return types.AgentRun{}, err
+		}
 	}
 	anchor, err := db.CaptureAppClock(ctx, tx, s.now)
 	if err != nil {
