@@ -38,7 +38,10 @@ export const modelProviders = {
   // GET /api/v1/model-providers — operatorOnly, like GET /agent-providers.
   async getModelProviders(): Promise<ModelProvidersList> {
     const res = await wfetch("/model-providers");
-    const { connected_people, ...providers } = await asJson<ModelProvidersRead>(res);
+    // The read-only server facts (counts, entra_login_configured, kinds_available) never ride back on a PUT,
+    // whose strict decode refuses them.
+    const { connected_people, entra_login_configured: _entra, kinds_available: _kinds, ...providers } =
+      await asJson<ModelProvidersRead>(res);
     return { providers, connected: connected_people ?? {}, etag: res.headers.get("ETag") };
   },
 
