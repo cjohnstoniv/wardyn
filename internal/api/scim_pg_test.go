@@ -486,9 +486,9 @@ func TestSCIMSuspendReachesEveryForm(t *testing.T) {
 	}
 	runSub, runEntra := e.seedRun("sub-leaver", types.RunRunning), e.seedRun(entraForm, types.RunPending)
 	cookies := map[string]*http.Cookie{
-		"sub":   scimCookie(t, "sub-leaver", email, 0),
-		"entra": scimCookie(t, entraForm, "x@corp.example", 0),
-		"email": scimCookie(t, "idp-other-sub", "LEAVER@Corp.Example", 0),
+		"sub":   scimCookieAt(t, "sub-leaver", email, 0, time.Now().UTC().Add(-clockStepMargin)),
+		"entra": scimCookieAt(t, entraForm, "x@corp.example", 0, time.Now().UTC().Add(-clockStepMargin)),
+		"email": scimCookieAt(t, "idp-other-sub", "LEAVER@Corp.Example", 0, time.Now().UTC().Add(-clockStepMargin)),
 	}
 
 	_, rawBy := e.seedToken("sub-bystander", "bystander@corp.example")

@@ -17,11 +17,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `runner_registration_tokens`, `audit_delivery_cursors`, `runner_spool_cursors`, `runner_executions`,
   `runner_execution_exits`, `runner_inventory_candidates`, `runner_inventory_observations`, `runner_pools`,
   `runner_pool_org_defaults`, `secret_owner_generations`, `person_invitations`, `service_identities` and
-  `api_token_moves`, and `SELECT, INSERT` on `run_harnesses` (migration `0164_run_harnesses`). Without the `runner_pools` grants wardynd refuses to start at the runner pool bootstrap.
+  `api_token_moves`, `SELECT, INSERT` on `run_harnesses` (migration `0164_run_harnesses`), and `SELECT, INSERT, DELETE` on
+  `run_launch_intents` (migration `0171_run_launch_intents`). Without the `runner_pools` grants wardynd refuses to start at the runner pool bootstrap.
   Without the `provider_connection_changes` grant every secret write fails once migration 0143's trigger on
   `secrets` is in place.
   Without the `run_harnesses` grant every run that records its harnesses fails to launch.
   Without the template grants (migration `0165_run_templates`) every template route answers `500`.
+  Without the `run_launch_intents` grant every run launch fails.
 - Credential erase fence (migration 0156): an older wardynd running beside the new one does not check a person's
   erase generation; finish the upgrade before erasing anyone.
 - Migration `0145_audit_delivery_cursors` adds the `audit_delivery_cursors` table; nothing changes until a webhook
@@ -97,6 +99,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - `wardyn drive set` now adds every grant in its file and never removes an allocation, so `drive get` then `drive
   set` changes nothing. In 0.8 a file that changed a subject's `drive_id` moved the subject; in 0.9 it adds the new
   drive beside the old one. Remove the old allocation with `DELETE /drives/grants/{id}` or in the console.
+- `PUT /api/v1/runner-pool-defaults` replaces the whole document, so a PUT that leaves `barrier` out clears it; use
+  `wardyn runner pool org-default set` (it reads first) or GET then PUT.
 
 ### Added
 
@@ -478,6 +482,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Files; the Tools step's model-provider picker shows the provider the server has already chosen (the default or the
   only one) with how its credential is delivered, and asks for a choice only when one is needed; Review lists the
   server's preflight warnings in one notice and shows a read-only Recording row under Where it runs.
+- An administrator can set the organisation's default barrier (`wardyn runner pool org-default set --barrier CC2`,
+  or `PUT /api/v1/runner-pool-defaults` with `barrier`). A launch that names no barrier gets it when it is at or
+  above the caller's floor and the pool offers it; otherwise the strongest barrier offered at or above the floor
+  applies, as before. The pool list's default says who chose it (`default_source`), `run.create` records
+  `confinement_default`, and a run that waits for a pool slot keeps the barrier its create resolved
+  (`run.queue.start` records it). A person's own pool defaults cannot set a barrier (400). Server-originated
+  launches such as source scans keep the strongest class. New migration `0170_runner_pool_org_default_barrier`.
+- Run again: each run keeps the setup it was launched with as a `kind: Run` document, readable only by its creator
+  (`GET /api/v1/me/launch-intents`, `GET /api/v1/runs/{id}/launch-intent`), including a run that waits in a pool's
+  queue. The document leaves out what is chosen at each launch (title, description, `max_wait_sec`) and where the
+  request came from; `policy_overlay` becomes `intent.inline_policy`. A run whose request sets a whole
+  `inline_policy`, or whose document the import door refuses, keeps none but still starts, and `run.create` records
+  `launch_intent` and `launch_intent_reason`. Erasure's `run_tasks`, `components` and `run_setups` scopes, and so
+  the SCIM purge, delete a person's launch intents. Migration `0171_run_launch_intents` adds `run_launch_intents`; a
+  split-role install grants the app role `SELECT, INSERT, DELETE` on it.
+- New Run: the Tools step offers Sign in to Azure DevOps when you have no Azure DevOps sign-in stored, and Review
+  never holds Launch behind an item the Tools step cannot show; an ended sign-in, an own-token row or a missing
+  console app is reported when you launch. The policy preview checks only whether a sign-in is stored, by name, and
+  never reads it.
 
 ### Changed
 
