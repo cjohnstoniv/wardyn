@@ -55,6 +55,14 @@ export interface ComponentDefinition {
   config?: Record<string, string>;
   // Org rows only: marks the row as a CLI credential card.
   cli?: ComponentCLI;
+  // Makes the component a remote MCP server, reached only through the proxy's broker route.
+  mcp?: ComponentMCP;
+}
+
+/** A remote MCP server: its streamable HTTP URL, whose host is one of the component's hosts. */
+export interface ComponentMCP {
+  url: string;
+  transport: "http";
 }
 
 export type CLIKind = "azure" | "aws" | "github";
@@ -112,6 +120,8 @@ export interface ComponentRef {
   repos?: string[];
   // Empty reads as read.
   access?: "read" | "write";
+  // The included harnesses (tools[].id) an MCP component's server is turned on for; absent means every harness that can take it.
+  mcp_harnesses?: string[];
 }
 
 export type ComponentBuiltin = "github" | "azure_devops";

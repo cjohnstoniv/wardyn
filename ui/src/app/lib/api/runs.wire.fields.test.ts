@@ -519,7 +519,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     const typesGoSrc = readFileSync(join(root, "pkg/client/types.go"), "utf8");
     expect(typesGoSrc).toMatch(/ComponentRef\s*=\s*types\.ComponentRef/);
     const refGo = goJSONTags(readFileSync(join(root, "internal/types/component.go"), "utf8"), "ComponentRef");
-    expect(refGo.sort()).toEqual(["access", "builtin", "id", "inline", "name", "org", "repos"]);
+    expect(refGo.sort()).toEqual(["access", "builtin", "id", "inline", "mcp_harnesses", "name", "org", "repos"]);
     const componentsTs = readFileSync(join(root, "ui/src/app/lib/types/components.ts"), "utf8");
     expect(tsInterfaceKeys(componentsTs, "ComponentRef").sort()).toEqual(refGo);
   });
