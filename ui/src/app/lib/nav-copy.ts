@@ -38,6 +38,8 @@ export const runOnChip = (name: string): string => `On ${name}`;
 /**
  * What the run page calls a local run's runner: the name the server projected, else a short form of its id
  * (a read that failed leaves the name off), never a guess. Data, so it reads as a name anywhere in a sentence.
+ * pending H11-P4: the fallbacks ("Runner 3f2a1c9e", "Its runner") are recommended text until the owner answers;
+ * the packet draws only the case where the name is known.
  */
 export function runnerLabel(run: { runner_name?: string; runner_id?: string }): string {
   return run.runner_name || (run.runner_id ? `Runner ${run.runner_id.slice(0, 8)}` : "Its runner");
