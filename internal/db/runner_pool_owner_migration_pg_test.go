@@ -15,8 +15,9 @@ const runnerPoolOwnerMigration = "0168"
 // TestMigration0168_OwnerlessSelfHostedPoolsAreACleanBreak applies the pool-owner migration over a
 // catalogue from before it: each ownerless Self-Hosted pool goes, with its members, the organisation and
 // personal default slots naming it and any run waiting for it (ended KILLED); one a run is bound to stays
-// as a tombstone. The organisation's preference for Self-Hosted is cleared, so a launch naming nothing is
-// not refused runner_pool_required. The Remote Provided pool, its executor and the organisation's remote
+// as a tombstone. The organisation's preference for Self-Hosted is cleared to none, not switched to
+// Remote Provided (what a launch naming nothing then answers is TestPG_ClearedOrganisationPreference
+// AsksForAChoice). The Remote Provided pool, its executor and the organisation's remote
 // default are untouched, and afterwards the schema
 // refuses a live ownerless Self-Hosted pool, an owned Remote Provided pool and an organisation
 // Self-Hosted default, while two owners may share a name.

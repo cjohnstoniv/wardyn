@@ -354,3 +354,23 @@ func TestPG_RevokedAndUnclaimedRunnersNeverJoinAPool(t *testing.T) {
 		t.Errorf("%d members, revision %d", n, e.revision(pool.ID))
 	}
 }
+
+// The state 0168 leaves an organisation that preferred Self-Hosted in: no organisation preference, its
+// Remote Provided default kept. A launch that names no pool, from a person with no preference of their
+// own, is refused runner_pool_required at every door: the clear never switches anyone to Remote Provided.
+// Once the person (or an administrator) sets a preference, the same launch resolves.
+func TestPG_ClearedOrganisationPreferenceAsksForAChoice(t *testing.T) {
+	e := newPlacementEnv(t)
+	remote := e.createPool("Provided", types.RunnerPoolRemoteProvided)
+	e.addExecutors(remote.ID, "alpha")
+	e.orgDefaults(fmt.Sprintf(`{"remote_provided":%q}`, remote.ID))
+	sameEverywhere(t, "a launch naming nothing", e.answers(e.person, runBody("")), http.StatusUnprocessableEntity, string(runnerpool.ReasonRequired))
+	if w := e.call(e.person, http.MethodPut, "/api/v1/me/runner-pool-defaults", `{"preferred_hosting":"remote_provided"}`); w.Code != http.StatusOK {
+		t.Fatalf("personal preference = %d %s", w.Code, w.Body)
+	}
+	for door, w := range e.answers(e.person, runBody("")) {
+		if w.Code >= 300 && wireReason(t, w) == string(runnerpool.ReasonRequired) {
+			t.Errorf("%s after a personal preference = %d %s", door, w.Code, w.Body)
+		}
+	}
+}
