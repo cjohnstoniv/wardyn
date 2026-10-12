@@ -349,6 +349,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Templates screen: `/templates` (User view) and `/admin/templates` (Admin view) list saved starting points with
   who-it-is-for, kind and name filters. Use opens New Run on the pinned revision; Rename and Delete follow who may
   change each row; organisation admins publish a template to the organisation from the Admin view.
+- A person's tool rules and default on a New Run combine with the policy's as the stricter of the two for each tool.
+  "Run it" is offered where the policy allows the tool and greyed with the reason where it does not; a rule can be an
+  exception to the person's own default, never to the policy. Tool rules name one tool exactly (`Bash`, `WebFetch`,
+  `mcp__server__tool`); patterns are refused. Codex CLI: "Ask first" and blocks on its own tools are refused with a
+  reason, and rules for its MCP tools are kept in its rule set. Rules for a harness without Wardyn's tool gate, and
+  rules in an interactive run beyond its own "asks you", are refused. New Run's access facts include a tool policy for
+  each included harness.
 
 ### Changed
 
@@ -453,6 +460,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   included.
 - Two repositories that would clone into the same directory are refused; previously one was silently dropped. An
   explicit `image_default` start folder keeps the image's own directory after a clone.
+- A background Claude Code run whose policy (after the ceiling) holds or blocks a tool, or where the person set any
+  tool rule or default, now goes through Wardyn's tool gate. Before, the policy's `tool_rules` were consulted only
+  when the run asked for `tool_approvals: hold`. Tools nobody names still run without a prompt, and a blocked tool is
+  refused at the proxy. The shipped default policy names no tools, so only policies that name tools change behaviour.
 
 ### Removed
 
