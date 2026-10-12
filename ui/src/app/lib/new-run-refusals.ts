@@ -35,6 +35,15 @@ export const NEW_RUN_REASON = {
 
 export type NewRunReason = (typeof NEW_RUN_REASON)[keyof typeof NEW_RUN_REASON];
 
+/**
+ * The workspace-door reasons a launch answers with that the Files step owns (internal/api/reasons.go,
+ * reasons_routes.go): a repository off the admitted list, and a workspace or its provider the caller's
+ * capabilities no longer open.
+ */
+export const WORKSPACE_DOOR_REASONS = ["workspace_repo_not_admitted", "capability_workspace", "capability_workspace_provider"] as const;
+
+export type WorkspaceDoorReason = (typeof WORKSPACE_DOOR_REASONS)[number];
+
 /** The closed set of placement and runner-link refusal reasons (internal/placement/reasons.go). */
 export const PLACEMENT_REASONS = [
   "placement_required",
