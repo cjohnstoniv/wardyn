@@ -73,22 +73,25 @@ type QueueHeld struct {
 // Then one transaction takes the pool row (FOR NO KEY UPDATE, the lock an enqueue takes) and the
 // deployment cap's advisory lock, always in that order, counts the slot-holders again, and moves the
 // admitted runs by a state CAS while there is room. A run the verdict will not admit keeps its place and
-// the pass judges the next, so one run that cannot be placed never blocks another's.
+// the pass judges the next, so one run that cannot be placed never blocks another's. An error with
+// promoted runs is a judging cut short (a page read failed, or its time ran out) after those were
+// admitted: they are promoted all the same, and the caller starts them.
 func (s PG) PromoteRunQueue(ctx context.Context, pass PromotePass, admit QueueAdmit) ([]PromotedRun, []QueueHeld, error) {
 	pool, room, err := s.queueRoom(ctx, pass)
 	if err != nil || room <= 0 {
 		return nil, nil, err
 	}
-	// A judging cut short still promotes what it admitted; the next pass reads on.
-	admitted, held, err := s.judgeQueue(ctx, pass, pool, room, admit)
+	// A judging cut short still promotes what it admitted, and returns its error beside them; the next
+	// pass reads on.
+	admitted, held, jerr := s.judgeQueue(ctx, pass, pool, room, admit)
 	if len(admitted) == 0 {
-		return nil, held, err
+		return nil, held, jerr
 	}
 	promoted, err := s.promoteAdmitted(ctx, pass, admitted)
 	if err != nil {
 		return nil, nil, err
 	}
-	return promoted, held, nil
+	return promoted, held, jerr
 }
 
 // queueRoom is how many runs the pool and the deployment could take now, read without a lock: the
@@ -141,7 +144,7 @@ func (s PG) setPoolQueueWait(ctx context.Context, poolID uuid.UUID, detail strin
 // spent (the rest is the promotion's). Once a run is held for a reason of its owner's (Owner), that
 // owner's later runs are passed over this time, so neither a long run of one person's held heads nor a
 // fixed scan window keeps a run further back from being judged. A read that fails, or a deadline spent,
-// part way still returns the runs already admitted, with the error.
+// part way still returns the runs already admitted, with the error, and PromoteRunQueue promotes them.
 func (s PG) judgeQueue(ctx context.Context, pass PromotePass, pool types.RunnerPool, room int, admit QueueAdmit) ([]RunQueueEntry, []QueueHeld, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		var cancel context.CancelFunc
