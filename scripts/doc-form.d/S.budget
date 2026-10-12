@@ -80,7 +80,8 @@
 # docs/sdk.md 16466 adds 39 over 16427 (0.9 B-org-barrier): the pool-defaults PUT replaces the whole document, the default barrier included.
 # 0.9 DS2-S4: docs/sdk.md 16622 adds 195 over 16427: the Run again routes and fields, and the launch_intent_not_found row.
 # docs/sdk.md 16657 measured after train 29: B-org-barrier + DS2-S4 sdk.md combined.
-docs/sdk.md=16657 share=21
+# docs/sdk.md 16851 adds 194 over 16657 (0.9 RP-1): the scope, member kind and single default pool wire, the remote-hosted runner methods and remote_runner_not_found.
+docs/sdk.md=16851 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

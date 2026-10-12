@@ -238,31 +238,43 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/runners/settings":       {class: classAdmin},
 	"GET /api/v1/me/runners":             {class: classMember},
 	"GET /api/v1/me/runners/{id}":        {class: classMember},
+	"PUT /api/v1/me/runners/{id}":        {class: classMember},
 	// Runner pools (runner_pools.go): 501 until the pool storage lands. The
 	// catalogue reads and the person's own runner membership and defaults are
-	// member routes scoped to the caller's own data; pool writes, executor
-	// membership and the organisation default are SUPER; the pool-use policy is
-	// the security tier.
-	"GET /api/v1/runner-pools":                              {class: classMember},
-	"GET /api/v1/runner-pools/{id}":                         {class: classMember},
-	"POST /api/v1/runner-pools":                             {class: classAdmin},
-	"PUT /api/v1/runner-pools/{id}":                         {class: classAdmin},
-	"DELETE /api/v1/runner-pools/{id}":                      {class: classAdmin},
-	"PUT /api/v1/runner-pools/{id}/executors/{executor}":    {class: classAdmin},
-	"DELETE /api/v1/runner-pools/{id}/executors/{executor}": {class: classAdmin},
-	"POST /api/v1/me/runner-pools":                          {class: classMember},
-	"PUT /api/v1/me/runner-pools/{id}":                      {class: classMember},
-	"DELETE /api/v1/me/runner-pools/{id}":                   {class: classMember},
-	"PUT /api/v1/me/runner-pools/{id}/runners/{runner}":     {class: classMember},
-	"DELETE /api/v1/me/runner-pools/{id}/runners/{runner}":  {class: classMember},
-	"GET /api/v1/runner-pools/{id}/use-policy":              {class: classSecurity},
-	"PUT /api/v1/runner-pools/{id}/use-policy":              {class: classSecurity},
-	"DELETE /api/v1/runner-pools/{id}/use-policy":           {class: classSecurity},
-	"GET /api/v1/runner-pool-defaults":                      {class: classMember},
-	"PUT /api/v1/runner-pool-defaults":                      {class: classAdmin},
-	"GET /api/v1/me/runner-pool-defaults":                   {class: classMember},
-	"PUT /api/v1/me/runner-pool-defaults":                   {class: classMember},
-	"DELETE /api/v1/me/runner-pool-defaults":                {class: classMember},
+	// member routes scoped to the caller's own data; organization pool writes,
+	// their remote-hosted runner membership and the organisation default are
+	// SUPER; the pool-use policy is the security tier.
+	"GET /api/v1/runner-pools":                                 {class: classMember},
+	"GET /api/v1/runner-pools/{id}":                            {class: classMember},
+	"POST /api/v1/runner-pools":                                {class: classAdmin},
+	"PUT /api/v1/runner-pools/{id}":                            {class: classAdmin},
+	"DELETE /api/v1/runner-pools/{id}":                         {class: classAdmin},
+	"GET /api/v1/runner-pools/{id}/members":                    {class: classMember},
+	"PUT /api/v1/runner-pools/{id}/remote-runners/{rid}":       {class: classAdmin},
+	"DELETE /api/v1/runner-pools/{id}/remote-runners/{rid}":    {class: classAdmin},
+	"PUT /api/v1/me/runner-pools/{id}/remote-runners/{rid}":    {class: classMember},
+	"DELETE /api/v1/me/runner-pools/{id}/remote-runners/{rid}": {class: classMember},
+	// Remote-hosted runners (remote_runners.go): the operators read them and write the people policy
+	// (held for a second human); only an admin renames one; a person lists the ones they may add.
+	"GET /api/v1/remote-runners":                           {class: classSecurity},
+	"GET /api/v1/remote-runners/{rid}":                     {class: classSecurity},
+	"PUT /api/v1/remote-runners/{rid}":                     {class: classAdmin},
+	"PUT /api/v1/remote-runners/{rid}/people-policy":       {class: classSecurity},
+	"DELETE /api/v1/remote-runners/{rid}/people-policy":    {class: classSecurity},
+	"GET /api/v1/me/remote-runners":                        {class: classMember},
+	"POST /api/v1/me/runner-pools":                         {class: classMember},
+	"PUT /api/v1/me/runner-pools/{id}":                     {class: classMember},
+	"DELETE /api/v1/me/runner-pools/{id}":                  {class: classMember},
+	"PUT /api/v1/me/runner-pools/{id}/runners/{runner}":    {class: classMember},
+	"DELETE /api/v1/me/runner-pools/{id}/runners/{runner}": {class: classMember},
+	"GET /api/v1/runner-pools/{id}/use-policy":             {class: classSecurity},
+	"PUT /api/v1/runner-pools/{id}/use-policy":             {class: classSecurity},
+	"DELETE /api/v1/runner-pools/{id}/use-policy":          {class: classSecurity},
+	"GET /api/v1/runner-pool-defaults":                     {class: classMember},
+	"PUT /api/v1/runner-pool-defaults":                     {class: classAdmin},
+	"GET /api/v1/me/runner-pool-defaults":                  {class: classMember},
+	"PUT /api/v1/me/runner-pool-defaults":                  {class: classMember},
+	"DELETE /api/v1/me/runner-pool-defaults":               {class: classMember},
 	// Console branding (#1125): the sign-in page draws the brand before anyone
 	// has signed in, so its read and the logo it names are anonymous. The
 	// read is the public subset only (TestBrandingAnonymousReadIsThePublicSubset).
@@ -1692,8 +1704,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// 0.9 invitations add the security tier's create, two lists and revoke, and service identities its five
 	// routes (= 77 SEC). POST /tokens/{id}/move adds one more (= 78 SEC).
 	// 0.9 H12's GET and PUT /governance/credential-delivery are the security tier's (= 80 SEC).
-	if sec != 80 || super != 67 {
-		t.Errorf("tier split = %d security / %d admin, want 80 / 67 (the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes)", sec, super)
+	// 0.9 RP-1's remote-hosted runners: the two reads and the people-policy pair are the security tier's
+	// (= 84 SEC), the rename is SUPER (= 68 SUPER).
+	if sec != 84 || super != 68 {
+		t.Errorf("tier split = %d security / %d admin, want 84 / 68 (the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
 	}
 }
 

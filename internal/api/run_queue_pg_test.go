@@ -31,7 +31,7 @@ func newQueueEnv(t *testing.T) *queueEnv { return &queueEnv{newPlacementEnv(t)} 
 // cappedPool is a remote-provided pool on executor alpha that runs at most max runs at once.
 func (e *queueEnv) cappedPool(name string, max int) types.RunnerPool {
 	e.t.Helper()
-	body := fmt.Sprintf(`{"name":%q,"hosting_type":"remote_provided","limits":{"background":{"cpu_millis":{"default":500,"cap":4000},`+
+	body := fmt.Sprintf(`{"name":%q,"limits":{"background":{"cpu_millis":{"default":500,"cap":4000},`+
 		`"memory_mib":{"default":512,"cap":8192},"lifetime":{"default_sec":3600,"max_sec":7200}},"barriers":["CC1","CC2","CC3"],"max_concurrent_runs":%d}}`, name, max)
 	w := e.admin(http.MethodPost, "/api/v1/runner-pools", body)
 	if w.Code != http.StatusCreated {

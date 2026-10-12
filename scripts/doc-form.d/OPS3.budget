@@ -31,7 +31,8 @@
 docs/operations/who-gets-in.md=1453 share=35
 # docs/operations/admin-only-writes.md 3173 measured after F-1511-1510 merge.
 # docs/operations/admin-only-writes.md 3182 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
-docs/operations/admin-only-writes.md=3182 share=35
+# docs/operations/admin-only-writes.md 3242 adds 60 over 3182 (0.9 RP-1): organization pools, the remote-hosted runner rename and the /remote-runners reads and people-policy row.
+docs/operations/admin-only-writes.md=3242 share=35
 docs/operations/three-roles.md=4012 share=35
 docs/operations/provider-policy.md=1278 share=35
 docs/operations/ownership-and-offboarding.md=2370 share=35

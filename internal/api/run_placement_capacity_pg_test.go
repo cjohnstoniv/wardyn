@@ -20,11 +20,11 @@ import (
 // Raising the limit lets the next run in.
 func TestPG_RunnerAtItsMaxRunsRefusesOrWaits(t *testing.T) {
 	e := newPlacementEnv(t)
-	laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	laptops := e.createPool("Laptops", types.RunnerPoolUser)
 	awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
 	e.addToPool(e.person, laptops.ID, awake)
 	e.stream(awake, types.CC1, types.CC2)
-	e.personDefaults(e.person, fmt.Sprintf(`{"preferred_hosting":"self_hosted","self_hosted":%q}`, laptops.ID))
+	e.personDefaults(e.person, fmt.Sprintf(`{"pool_id":%q}`, laptops.ID))
 	if _, err := e.pool.Exec(context.Background(), `UPDATE runners SET max_runs = 1 WHERE id = $1`, awake); err != nil {
 		t.Fatal(err)
 	}
