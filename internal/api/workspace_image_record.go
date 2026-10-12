@@ -5,15 +5,20 @@ package api
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log/slog"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/distribution/reference"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
+	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // newImageBuild assembles the record of one successful build (design
@@ -202,4 +207,98 @@ func buildSuccessData(data map[string]any, imageID string) map[string]any {
 		data["image_id"] = imageID
 	}
 	return data
+}
+
+// remoteDigestTimeout bounds each registry lookup a build makes before it starts.
+const remoteDigestTimeout = 10 * time.Second
+
+const pinnedInputGoneError = "a pinned input is no longer available; refresh the image to resolve it again"
+
+// remoteDigest is one bounded RemoteDigest lookup. A builder that cannot answer is an error,
+// which every caller reads as "leave it unpinned" or "inconclusive".
+func (s *Server) remoteDigest(ctx context.Context, ref string) (string, error) {
+	ider, ok := s.cfg.ImageBuilder.(ImageIdentifier)
+	if !ok {
+		return "", errors.New("the image builder cannot resolve digests")
+	}
+	ctx, cancel := context.WithTimeout(ctx, remoteDigestTimeout)
+	defer cancel()
+	return ider.RemoteDigest(ctx, ref)
+}
+
+// resolveGeneratedPins pins the generated build's base and each feature to the digest the
+// registry gives now (design env-build-record §6.1). A lookup that fails for any reason leaves
+// that input unpinned: an unresolvable input is recorded as such, never a failed run.
+func (s *Server) resolveGeneratedPins(ctx context.Context, unpinned types.ImageBuildInputs) workspacescan.Pins {
+	pins := workspacescan.Pins{Features: map[string]string{}}
+	refs := []string{unpinned.Base.Ref}
+	for _, f := range unpinned.Features {
+		refs = append(refs, f.Ref)
+	}
+	for i, ref := range refs {
+		d, err := s.remoteDigest(ctx, ref)
+		if err != nil {
+			slog.DebugContext(ctx, "wardynd: image input left unpinned", slog.String("ref", ref), slog.Any("err", err))
+			continue
+		}
+		if i == 0 {
+			pins.BaseDigest = d
+		} else {
+			pins.Features[ref] = d
+		}
+	}
+	return pins
+}
+
+// pinnedInputsGone is the rebuild pre-check (design §6.4): each pinned base and feature is
+// asked of the registry as <repository>@<digest>. A manifest the registry reports missing is a
+// difference; a lookup that could not be answered is not one, and the build goes ahead pinned.
+func (s *Server) pinnedInputsGone(ctx context.Context, in types.ImageBuildInputs, pins workspacescan.Pins) []buildDifference {
+	var gone []buildDifference
+	check := func(kind, ref, digest string) {
+		if digest == "" {
+			return
+		}
+		named, err := reference.ParseNormalizedNamed(ref)
+		if err != nil {
+			return
+		}
+		if _, err := s.remoteDigest(ctx, reference.TrimNamed(named).String()+"@"+digest); errors.Is(err, ErrRemoteDigestNotFound) {
+			gone = append(gone, buildDifference{Input: kind + ":" + ref, Want: digest, Got: "not_found"})
+		}
+	}
+	check("base", in.Base.Ref, pins.BaseDigest)
+	for _, f := range in.Features {
+		check("feature", f.Ref, pins.Features[f.Ref])
+	}
+	return gone
+}
+
+// withObservedInstaller fills the recorded installer fields from the pin file the build wrote;
+// a pin file that does not parse leaves them empty.
+func withObservedInstaller(in types.ImageBuildInputs, pinFile []byte) types.ImageBuildInputs {
+	pin, ok := workspacescan.ParseInstallerPin(pinFile)
+	if !ok {
+		return in
+	}
+	for i := range in.Installers {
+		in.Installers[i].Version, in.Installers[i].Platform, in.Installers[i].SHA256 = pin.Version, pin.Platform, pin.SHA256
+	}
+	return in
+}
+
+// buildDifference is one entry of a failed rebuild's `difference`.
+type buildDifference struct {
+	Input string `json:"input"`
+	Want  string `json:"want"`
+	Got   string `json:"got"`
+}
+
+// describeDifference renders the entries for GET /build's detail: ": <input> (want <digest>, got <got>)[; ...]".
+func describeDifference(diff []buildDifference) string {
+	parts := make([]string, 0, len(diff))
+	for _, d := range diff {
+		parts = append(parts, fmt.Sprintf("%s (want %s, got %s)", d.Input, d.Want, d.Got))
+	}
+	return ": " + strings.Join(parts, "; ")
 }
