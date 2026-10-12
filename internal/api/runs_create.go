@@ -405,11 +405,11 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			buildFailed(map[string]any{"byoi_base": req.Image, "error": berr.Error()})
 			return "", true
 		}
-		image = built
+		image = built.Ref
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
-			runID.String(), "success", mustJSON(map[string]any{
-				"byoi_base": req.Image, "image": built,
-			})))
+			runID.String(), "success", mustJSON(buildSuccessData(map[string]any{
+				"byoi_base": req.Image, "image": built.Ref,
+			}, built.ID))))
 	case req.DevcontainerRepo != "" && s.cfg.ImageBuilder != nil:
 		outTag := "wardyn-devcontainer/" + runID.String() + ":latest"
 		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
@@ -420,11 +420,11 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			buildFailed(map[string]any{"devcontainer_repo": req.DevcontainerRepo, "error": berr.Error()})
 			return "", true
 		}
-		image = built
+		image = built.Ref
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
-			runID.String(), "success", mustJSON(map[string]any{
-				"devcontainer_repo": req.DevcontainerRepo, "image": built,
-			})))
+			runID.String(), "success", mustJSON(buildSuccessData(map[string]any{
+				"devcontainer_repo": req.DevcontainerRepo, "image": built.Ref,
+			}, built.ID))))
 	case len(wsRefs) > 0:
 		// A base_image workspace reached here via mounts/repos — a composed
 		// or UI run that did NOT send workspace_id (the workspace_id door sets req.Image

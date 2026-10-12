@@ -60,17 +60,17 @@ func (s *buildEventStore) SetWorkspaceBuiltImage(context.Context, uuid.UUID, str
 // buildEventBuilder records which builder method ran into the same log.
 type buildEventBuilder struct{ log *buildEventLog }
 
-func (b buildEventBuilder) FinalizeBase(_ context.Context, _, tag string, _ io.Writer) (string, error) {
+func (b buildEventBuilder) FinalizeBase(_ context.Context, _, tag string, _ io.Writer) (BuiltImage, error) {
 	b.log.add("build:FinalizeBase")
-	return tag, nil
+	return BuiltImage{Ref: tag}, nil
 }
-func (b buildEventBuilder) BuildDevcontainer(_ context.Context, _, _, tag string, _ io.Writer) (string, error) {
+func (b buildEventBuilder) BuildDevcontainer(_ context.Context, _, _, tag string, _ io.Writer) (BuiltImage, error) {
 	b.log.add("build:BuildDevcontainer")
-	return tag, nil
+	return BuiltImage{Ref: tag}, nil
 }
-func (b buildEventBuilder) BuildFromDevcontainerFiles(_ context.Context, _ map[string]string, tag string, _ io.Writer) (string, error) {
+func (b buildEventBuilder) BuildFromDevcontainerFiles(_ context.Context, _ map[string]string, tag string, _ io.Writer) (BuiltImage, error) {
 	b.log.add("build:BuildFromDevcontainerFiles")
-	return tag, nil
+	return BuiltImage{Ref: tag}, nil
 }
 
 const buildingLine = "detail:" + statusDetailBuilding

@@ -34,12 +34,12 @@ func TestFinalizeBase_WrapsPresentBase(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	tag, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-1:latest", nil)
+	built, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-1:latest", nil)
 	if err != nil {
 		t.Fatalf("FinalizeBase: %v", err)
 	}
-	if tag != "wardyn-byoi/run-1:latest" {
-		t.Fatalf("wrong output tag: %q", tag)
+	if built.Ref != "wardyn-byoi/run-1:latest" {
+		t.Fatalf("wrong output tag: %q", built.Ref)
 	}
 	if !f.imageBuildCalled {
 		t.Fatal("finalize did not run the wrap ImageBuild")
