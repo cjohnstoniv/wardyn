@@ -80,9 +80,6 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, self
 		UpstreamProxySecretRef: sc.UpstreamProxySecretRef, LocalSelfDefinedComponents: selfDefinedAllowed,
 		TrustedOutput: localTrustedOutputRun(run), SelfDefinedComponents: selfDefinedSnapshotNames(comps),
 	}
-	if p.Delivery, err = s.storedDeliveryPolicy(ctx); err != nil {
-		return placement.LocalPlan{}, err
-	}
 	owner := runIdentitySubject(ctx, run.CreatedBy)
 	byID := map[uuid.UUID]types.CredentialGrant{}
 	for _, g := range rows {

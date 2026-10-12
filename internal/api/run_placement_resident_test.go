@@ -6,11 +6,14 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -23,9 +26,13 @@ type residentFactsStore struct {
 	localPlanTestStore
 	policy  json.RawMessage
 	posture types.RunnerPosture
+	reads   *int // delivery-policy reads, when set
 }
 
 func (s residentFactsStore) GetCredentialDeliveryPolicy(context.Context) (types.CredentialDeliveryPolicyDoc, error) {
+	if s.reads != nil {
+		*s.reads++
+	}
 	return types.CredentialDeliveryPolicyDoc{Policy: s.policy}, nil
 }
 
@@ -94,4 +101,25 @@ func TestLocalResident_DispatchAndReviveDoorsJudgeTheFloorAndPosture(t *testing.
 	f.srv.cfg.Store = st
 	want("dispatch, posture unmet", dispatch(), placement.ReasonRunnerPostureUnmet)
 	want("revive, posture unmet", revive(env), placement.ReasonRunnerPostureUnmet)
+}
+
+// Every LocalEligibility door reads the delivery policy once, through
+// localPlanFacts: the plan builders behind create and dispatch read none.
+func TestLocalPlanFacts_OneDeliveryPolicyReadPerDoor(t *testing.T) {
+	f := newComponentFixture(t)
+	reads := 0
+	f.srv.cfg.Store = residentFactsStore{localPlanTestStore: localPlanTestStore{f.st}, policy: json.RawMessage(`{"classes":{}}`), reads: &reads}
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(utCtx("user", "", nil))
+	_ = f.srv.localPlacementRefusal(r, createRunRequest{Placement: placement.Local}, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
+	if reads != 1 {
+		t.Errorf("create read the delivery policy %d times, want 1", reads)
+	}
+	reads = 0
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: capSub, Placement: types.PlacementLocal}
+	if _, err := f.srv.localResolvedPlan(context.Background(), run, false, types.SiteConfig{}, runner.SandboxSpec{RunID: run.ID}, nil, llmTransport{}, adoEntraRun{}); err != nil {
+		t.Fatal(err)
+	}
+	if reads != 1 {
+		t.Errorf("dispatch read the delivery policy %d times, want 1", reads)
+	}
 }
