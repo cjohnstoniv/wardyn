@@ -88,17 +88,10 @@ func (s *Server) handleViaOrg(w http.ResponseWriter, r *http.Request) {
 	}
 	token, _ := bearerToken(r)
 	run.token.Store(&token)
-	engine, routes, err := s.viaOrgEngine(r.Context(), run, claims.RunID)
-	if err != nil {
-		slog.ErrorContext(r.Context(), "api: build the via_org engine", slog.String("run_id", claims.RunID.String()), slog.Any("err", err))
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalLivenessReadFailed, "the organisation's egress for this run could not be built; retry")
+	gen, st, refused, ok := s.admitViaOrg(w, r, run, claims, grant.ID)
+	if !ok {
 		return
 	}
-	if !slices.ContainsFunc(routes, func(rt proxy.ViaOrgRoute) bool { return rt.GrantID == grant.ID }) {
-		s.denyViaOrg(w, r, claims, placement.ReasonDeliveryNotViaOrg, "the grant was not dispatched via_org for this run")
-		return
-	}
-	st, refused := run.open(r.Context())
 	if refused != "" {
 		s.denyViaOrg(w, r, claims, placement.ReasonViaOrgCapExceeded, refused)
 		return
@@ -107,10 +100,41 @@ func (s *Server) handleViaOrg(w http.ResponseWriter, r *http.Request) {
 	out := viaOrgEngineRequest(r.WithContext(st.ctx), rest, restEsc, dest, st)
 	cw := &viaOrgCountingWriter{ResponseWriter: w, st: st}
 	if dest.broker {
-		engine.ServeBroker(cw, out)
+		gen.engine.ServeBroker(cw, out)
 		return
 	}
-	engine.ServeInjected(cw, out, dest.host)
+	gen.engine.ServeInjected(cw, out, dest.host)
+}
+
+// viaOrgAfterEngine is a test seam: it runs between taking the run's engine and admitting the stream.
+var viaOrgAfterEngine func()
+
+// admitViaOrg takes the run's current engine generation and admits one stream to it. A generation
+// retired in between (an idle or offline release) is never served: the request takes the live
+// replacement, once, and is told to retry if that one is retired too. ok is false once a refusal
+// is written; refused names a bound the stream would cross.
+func (s *Server) admitViaOrg(w http.ResponseWriter, r *http.Request, run *viaOrgRun, claims *identity.Claims, grantID uuid.UUID) (gen *viaOrgGen, st *viaOrgStream, refused string, ok bool) {
+	for range 2 {
+		g, routes, err := s.viaOrgEngine(r.Context(), run, claims.RunID)
+		if err != nil {
+			slog.ErrorContext(r.Context(), "api: build the via_org engine", slog.String("run_id", claims.RunID.String()), slog.Any("err", err))
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalLivenessReadFailed, "the organisation's egress for this run could not be built; retry")
+			return nil, nil, "", false
+		}
+		if !slices.ContainsFunc(routes, func(rt proxy.ViaOrgRoute) bool { return rt.GrantID == grantID }) {
+			s.denyViaOrg(w, r, claims, placement.ReasonDeliveryNotViaOrg, "the grant was not dispatched via_org for this run")
+			return nil, nil, "", false
+		}
+		if viaOrgAfterEngine != nil {
+			viaOrgAfterEngine()
+		}
+		st, refused, retired := run.open(r.Context(), g)
+		if !retired {
+			return g, st, refused, true
+		}
+	}
+	writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalLivenessReadFailed, "the organisation's egress for this run was replaced while the request waited; retry")
+	return nil, nil, "", false
 }
 
 // refuseViaOrgEndedRun is this route's own liveness check, beside internalAuth's: the request path
@@ -220,7 +244,7 @@ func (s *Server) denyViaOrg(w http.ResponseWriter, r *http.Request, claims *iden
 
 // viaOrgEngine is the run's engine, built once from its stored config and grants, and the routes
 // the run was dispatched with.
-func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UUID) (*proxy.ViaOrgEngine, []proxy.ViaOrgRoute, error) {
+func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UUID) (*viaOrgGen, []proxy.ViaOrgRoute, error) {
 	run.mu.Lock()
 	defer run.mu.Unlock()
 	if run.engine != nil {
@@ -243,8 +267,8 @@ func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UU
 		_ = engine.Close(ctx)
 		return nil, nil, errors.New("via_org: the run's egress closed")
 	}
-	run.engine, run.routes = engine, routes
-	return engine, routes, nil
+	run.engine, run.routes = &viaOrgGen{engine: engine}, routes
+	return run.engine, routes, nil
 }
 
 // viaOrgEngineConfig reduces the run's stored config to its via_org grants (design §7.3): each

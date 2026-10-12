@@ -1059,7 +1059,7 @@ spec:
   - It also refuses a hand-set `WARDYN_HA` in `env` or `extraEnv`.
   - wardynd itself refuses `WARDYN_HA` unless the runner is Kubernetes (`k8s.enabled`) and the store is `pg` or `off`, which is the half that still holds after a `kubectl scale`.
   - The strategy stays `Recreate`: this is node-failure tolerance, not zero-downtime upgrades.
-  - Per-replica limits (connection caps, rate limiters) add up across replicas.
+  - Per-replica limits (connection caps, rate limiters, the `via_org` byte total of a local run) add up across replicas.
   - See [docs/OPERATIONS.md#high-availability](../../../docs/OPERATIONS.md#high-availability).
 
 Where this chart is headed: [ROADMAP.md](../../../ROADMAP.md).

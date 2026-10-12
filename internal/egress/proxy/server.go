@@ -353,10 +353,15 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// a repeat count that never hit the eviction path is still recorded.
 	s.proxy.flushPrivateIPMemo()
 	sinkErr := s.sink.close(ctx)
-	// An engine's own secrets leave with it, after its last row is masked; a
-	// sidecar's (uuid.Nil) are the process's and are never evicted.
-	if s.maskKey != uuid.Nil {
-		procRegistry.Evict(s.maskKey)
+	// An engine's own secrets leave with it, after its last row is masked: a
+	// close that gave up waiting leaves the sink's worker posting its queue, so
+	// the key is evicted only once that worker has finished. A sidecar's
+	// (uuid.Nil) are the process's and are never evicted.
+	if key := s.maskKey; key != uuid.Nil {
+		go func() {
+			s.sink.wait()
+			procRegistry.Evict(key)
+		}()
 	}
 	if httpErr != nil {
 		return httpErr
