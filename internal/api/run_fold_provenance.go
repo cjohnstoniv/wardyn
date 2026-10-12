@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -144,8 +145,53 @@ func recordPolicySource(rec *foldRecorder, src policySourceRecord, resolved type
 	if src.edits != nil {
 		authored = src.edits.folded
 	}
-	recordPolicyFold(rec, authored, resolved, policyProvSource(src), src.Kind == policyKindInline, src.edits)
+	if src.overlaid != nil {
+		recordOverlayFold(rec, src, resolved)
+	} else {
+		recordPolicyFold(rec, authored, resolved, policyProvSource(src), src.Kind == policyKindInline, src.edits)
+	}
 	src.edits.settle(rec, resolved)
+}
+
+// recordOverlayFold is recordPolicyFold for a run whose policy_overlay was laid
+// onto its default. An entry of a key the overlay names is the person's: added
+// while the resolved spec holds it, clamped once it does not. An entry the
+// default held in such a key and the overlay left out was removed by the person,
+// which is how a run explains a grant left without the host the overlay replaced.
+// A default entry in a key the overlay leaves alone is the policy's, and
+// anything else the ceiling put there.
+func recordOverlayFold(rec *foldRecorder, src policySourceRecord, resolved types.RunPolicySpec) {
+	named := func(e specEntry) bool {
+		key, _, _ := strings.Cut(e.field, ".")
+		return slices.Contains(src.Overlay, key)
+	}
+	base, overlaid := src.Spec, *src.overlaid
+	base.FirstUseApproval, overlaid.FirstUseApproval, resolved.FirstUseApproval =
+		base.FirstUseApproval.Normalize(), overlaid.FirstUseApproval.Normalize(), resolved.FirstUseApproval.Normalize()
+	was, now := specEntries(base), specEntries(resolved)
+	mine := slices.DeleteFunc(specEntries(overlaid), func(e specEntry) bool { return !named(e) })
+	policy, person := policyProvSource(src), provSource{Kind: provKindPerson}
+	for _, e := range now {
+		switch {
+		case src.edits.owns(e.field, e.value):
+		case slices.Contains(mine, e):
+			rec.add(e.field, e.value, person, provEffectAdded)
+		case slices.Contains(was, e) && !named(e):
+			rec.add(e.field, e.value, policy, provEffectAdded)
+		default:
+			rec.add(e.field, e.value, provSource{Kind: provKindCeiling}, provEffectAdded)
+		}
+	}
+	for _, e := range mine {
+		if !slices.Contains(now, e) && !src.edits.owns(e.field, e.value) {
+			rec.add(e.field, e.value, person, provEffectClamped)
+		}
+	}
+	for _, e := range was {
+		if named(e) && !slices.Contains(mine, e) && !src.edits.owns(e.field, e.value) {
+			rec.add(e.field, e.value, person, provEffectRemoved)
+		}
+	}
 }
 
 func policyProvSource(rec policySourceRecord) provSource {

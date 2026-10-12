@@ -189,7 +189,7 @@ The spec always strict-decodes as a policy. Whether it passes policy validation 
 
 #### `changes`
 
-Never `null`. Each item is a `cause` (`workspace`, `source_control`, `mirror`, `model_access`, `git_broker`, `profile`, `org_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `profile` for `profile`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`.
+Never `null`. Each item is a `cause` (`workspace`, `source_control`, `mirror`, `model_access`, `git_broker`, `overlay`, `profile`, `org_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `profile` for `profile`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`.
 Grants read `kind:host` or `kind:repo,repo`, mounts by target, repos `repo@ref`: never a hidden value.
 
 ## Following a run's lifecycle
@@ -461,6 +461,8 @@ A `wardyn/v1` document with `kind: Run` is a draft of one run. Its `intent` hold
 - The door holds a document to the same shape and availability checks as create, preflight and the policy preview, so a request they refuse is refused at the door with the same reason.
 - `wardyn run --file <doc>` (`-` reads stdin) has the door check a `Run` document, then creates the run from its `intent`. A document that sets `inline_policy` is refused until the request carries `policy_overlay`, because `inline_policy` would replace your default policy. Only `--title`, `--description`, `--wait`, `--timeout`, `--json` and `--dry-run` go with it. `wardyn template import --kind Run|RunTemplate` sets the kind the import expects.
 
+`policy_overlay` carries a document's `intent.inline_policy`: the policy keys it names replace your default policy's (your governance ceiling, or the deployment default), and the rest keep the default's values. Only the named keys are bounded by your ceiling, so the default's operator mounts and grant pairings stay. Beside `policy_id` or `inline_policy` it is `400` `policy_overlay_conflict`; beside `preset`, `preset_field_not_per_launch`. A null or empty overlay, an unknown key, a wrongly typed value, an excluded field or a redaction placeholder is `400` `policy_overlay_invalid`, naming the first path. Edits beside a saved policy travel as `overrides`.
+
 `shape` (`agent_task`, `environment` or `application`) names the New Run choice a request was set up from. It is optional and needs `experience`; a value outside the three is `400` `run_mode_invalid`. The server checks it against the run and otherwise does not use it; a request that does not fit is `422` `run_shape_conflict` at create, preflight, preview and the import door.
 
 | `shape` | Requires |
@@ -632,6 +634,7 @@ start.
 | `harness_not_installed` / `harness_set_no_image` / `harness_set_custom_image` / `harness_providers_conflict` | `422`: no image here carries a harness, or the harnesses together; two or more harnesses name a custom image; or two harnesses' providers share a host. `tool` names the harness. |
 | `run_mode_required` / `run_mode_invalid` / `start_folder_invalid` | `400`: a new client's mode (or a background task's workload) is unset, and is never inferred (`mode_contract: "0.9"` marks a request as a new client's even when it carries no other run-mode field); a run-mode carrier is malformed; a `start_folder` is malformed, names an attachment or a repository the run lacks, or leaves its mount. |
 | `run_mode_conflict` | `422`: run-mode carriers contradict each other, or an older field they replace (`agent`, `task`, `interactive`) rides beside them. |
+| `policy_overlay_invalid` / `policy_overlay_conflict` | `400`: an unusable `policy_overlay`, or one beside `policy_id` or `inline_policy` (see [Run documents](#run-documents)). |
 | `run_shape_conflict` | `422`: `shape` does not fit the run: it needs `experience`, and `application`, `environment` and `agent_task` each require the workload or tool shown under [Run documents](#run-documents). |
 | `run_background_only` | `409`: an interactive door of a background task (terminal, exec, SSH, web gateway, desktop). Logs, audit, status and the lifecycle controls (kill, revive, extend) stay. |
 | `template_document_invalid` / `template_field_invalid` / `template_field_unknown` / `template_version_unsupported` | `400`, `422` for the version: a document that is not one bounded document, a value of the wrong shape (null and redaction placeholders included), a key the schema lacks, or an `api_version` or `kind` this server does not read. |

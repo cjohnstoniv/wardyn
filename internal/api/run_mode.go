@@ -342,11 +342,12 @@ func runModeLegacyField(req createRunRequest) (field, instead string) {
 // entry that brings the repository.
 func runModeRunWideRules(req createRunRequest) (field, instead string) {
 	const perTool = "Tool rules belong to each tool: use tools[].tool_rules and default_effect."
+	pol, at := requestPolicyRules(req)
 	switch {
-	case req.InlinePolicy != nil && len(req.InlinePolicy.ToolRules) > 0:
-		return "inline_policy.tool_rules", perTool
-	case req.InlinePolicy != nil && req.InlinePolicy.PushRules != nil:
-		return "inline_policy.push_rules", "Push rules belong to the Git entry that brings the repository: use overrides.push_rules, one set per provider and organisation."
+	case pol != nil && len(pol.ToolRules) > 0:
+		return at + ".tool_rules", perTool
+	case pol != nil && pol.PushRules != nil:
+		return at + ".push_rules", "Push rules belong to the Git entry that brings the repository: use overrides.push_rules, one set per provider and organisation."
 	case req.Overrides != nil && req.Overrides.Agent != nil && len(req.Overrides.Agent.ToolRules) > 0:
 		return "overrides.agent.tool_rules", perTool
 	}
@@ -356,15 +357,16 @@ func runModeRunWideRules(req createRunRequest) (field, instead string) {
 // experienceConflictRefusal holds the carriers to the mode they sit in.
 func experienceConflictRefusal(req createRunRequest) *runRefusal {
 	w := req.Workload
+	pol, at := requestPolicyRules(req)
 	switch req.Experience {
 	case client.ExperienceBackground:
 		switch {
 		case req.Startup != nil:
 			return runModeConflict("startup", "A background task starts its workload; startup is for an interactive environment.")
-		case req.InlinePolicy != nil && req.InlinePolicy.AutoStopAfterSec != 0:
+		case pol != nil && pol.AutoStopAfterSec != 0:
 			return runError(http.StatusUnprocessableEntity, reasonRunModeConflict, idleStopBackgroundMsg())
-		case req.InlinePolicy != nil && len(req.InlinePolicy.UIApps) > 0:
-			return runModeConflict("inline_policy.ui_apps", "A background task has no web application gateway.")
+		case pol != nil && len(pol.UIApps) > 0:
+			return runModeConflict(at+".ui_apps", "A background task has no web application gateway.")
 		case w != nil && w.Kind == client.WorkloadAgentTask && slices.ContainsFunc(req.Tools, func(t client.IncludedTool) bool { return t.ID != w.Agent }):
 			return runModeConflict("tools", "A background agent task includes only the harness it runs, which is workload.agent.")
 		}
@@ -449,6 +451,11 @@ func runModeRequiredRefusal(req createRunRequest) *runRefusal {
 // all three doors. It refuses, then projects the carriers it can honour onto the
 // legacy fields; a request with none of the mode fields is returned untouched.
 func applyRunMode(req *createRunRequest) *runRefusal {
+	// Every request, older clients' too: the overlay is read whole before any
+	// gate (the run-mode checks below among them) reads its keys.
+	if refusal := policyOverlayRefusal(*req); refusal != nil {
+		return refusal
+	}
 	if !req.UsesRunMode() {
 		return nil
 	}

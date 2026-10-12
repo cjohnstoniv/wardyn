@@ -31,6 +31,17 @@ export const RUN_MODE_REASON = {
 
 export type RunModeReason = (typeof RUN_MODE_REASON)[keyof typeof RUN_MODE_REASON];
 
+/**
+ * The policy_overlay refusals (internal/api/run_policy_overlay.go). Kept apart from
+ * RUN_MODE_REASON: no screen sends policy_overlay yet, so none has a home for them.
+ */
+export const POLICY_OVERLAY_REASON = {
+  /** policy_overlay is not a non-empty object of policy keys with usable values. */
+  INVALID: "policy_overlay_invalid",
+  /** policy_overlay rides beside policy_id or inline_policy. */
+  CONFLICT: "policy_overlay_conflict",
+} as const;
+
 /** The sentences, byte for byte what internal/api/run_mode_refusals.go says. */
 export const RUN_MODE_REFUSAL = {
   RUN_MODE_REQUIRED: () => "Choose what you're starting: a background task or an interactive environment.",
@@ -60,6 +71,9 @@ export const RUN_MODE_REFUSAL = {
     `${a} and ${b} use different model providers that reach the same host, so the proxy can't keep their credentials apart. Choose one provider for both, or another provider.`,
   CODEX_BUILTIN_RULE: (tool: string) =>
     `${tool} is one of Codex CLI's own tools, and Wardyn can't block those. Only its MCP tools can be blocked.`,
+  POLICY_OVERLAY_INVALID: (path: string, detail: string) => `policy_overlay is not usable: ${path} ${detail}.`,
+  POLICY_OVERLAY_CONFLICT: () =>
+    "policy_overlay changes your organisation's default policy, so it cannot be combined with policy_id or inline_policy.",
 } as const;
 
 /** Every sentence function by key, for the parity test and for callers that pick one by reason. */
@@ -81,6 +95,8 @@ export const RUN_MODE_REFUSAL_BY_KEY: Record<keyof typeof RUN_MODE_REFUSAL, (...
   HARNESS_SET_CUSTOM_IMAGE: () => RUN_MODE_REFUSAL.HARNESS_SET_CUSTOM_IMAGE(),
   HARNESS_PROVIDERS_CONFLICT: (...a) => RUN_MODE_REFUSAL.HARNESS_PROVIDERS_CONFLICT(a[0], a[1]),
   CODEX_BUILTIN_RULE: (...a) => RUN_MODE_REFUSAL.CODEX_BUILTIN_RULE(a[0]),
+  POLICY_OVERLAY_INVALID: (...a) => RUN_MODE_REFUSAL.POLICY_OVERLAY_INVALID(a[0], a[1]),
+  POLICY_OVERLAY_CONFLICT: () => RUN_MODE_REFUSAL.POLICY_OVERLAY_CONFLICT(),
 };
 
 /**
