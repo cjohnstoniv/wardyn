@@ -481,8 +481,8 @@ A `wardyn/v1` document with `kind: Run` is a draft of one run. Its `intent` hold
 | `GET /api/v1/runs/{id}/launch-intent` | `{run_id, created_at, document}`, the document of kind `Run`; `404` `launch_intent_not_found` when the run kept none |
 
 - Anyone but the run's creator, an administrator included, gets the `404` a missing run gets.
-- The document is your request after a preset expands, without title, description, `preset`, `preset_version` and `mode_contract`; `policy_overlay` becomes `intent.inline_policy`.
-- A run keeps none when it sets a whole `inline_policy`, when the import door refuses the document (a secret-shaped task, say), or when it waits in a pool's queue. It still starts; `run.create` says `launch_intent: not_kept` and why.
+- The document is your request after a preset expands, without the fields chosen at each launch (title, description, `max_wait_sec`) or the stamps of where it came from (`preset`, `preset_version`, `mode_contract`); `policy_overlay` becomes `intent.inline_policy`. A run that waits in a pool's queue keeps one too.
+- A run keeps none when it sets a whole `inline_policy` or when the import door refuses the document (a secret-shaped task, say). It still starts; `run.create` says `launch_intent: not_kept` and why.
 - Erasure's `run_tasks`, `components` and `run_setups` scopes delete a person's launch intents.
 - The SDK has no method for these routes yet.
 

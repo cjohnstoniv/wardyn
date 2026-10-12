@@ -155,3 +155,48 @@ func containsJSONKey(obj, key string, want float64) bool {
 	var m map[string]any
 	return json.Unmarshal([]byte(obj), &m) == nil && m[key] == want
 }
+
+// The SCIM purge erases the person's launch intents with their run setups, and
+// its person.deprovision counts still read the templates it erased.
+func TestLaunchIntentSCIMPurge(t *testing.T) {
+	f := newPresetFixture(t)
+	ctx := context.Background()
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/templates", f.member, templateSaveBody("person", "", "mine")); w.Code != http.StatusCreated {
+		t.Fatalf("save a template = %d %s", w.Code, w.Body.String())
+	}
+	id := f.liLaunch(t, f.member, `{"agent":"claude-code","task":"t"}`)
+	run, err := f.pg.GetRun(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := f.srv.eraseForPurge(ctx, run.CreatedBy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail["templates_erased"] != 1 {
+		t.Errorf("purge detail = %v, want templates_erased 1", detail)
+	}
+	if _, err := f.pg.GetLaunchIntent(ctx, id, run.CreatedBy); err != store.ErrNotFound {
+		t.Errorf("the purge left the launch intent: %v", err)
+	}
+}
+
+// A launch that waits in a capped pool's queue keeps its intent in the queued
+// create's own transaction, without the wait it chose.
+func TestLaunchIntentQueuedLaunchKeepsOne(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Busy", 1)
+	e.occupy(pool)
+	q := e.queuedLaunch(nil, pool, `,"max_wait_sec":600`)
+	run := e.run(q.ID)
+	rec, err := e.pg.GetLaunchIntent(context.Background(), q.ID, run.CreatedBy)
+	if err != nil {
+		t.Fatalf("the queued run kept no intent: %v", err)
+	}
+	if intent := liIntent(t, rec.Document); intent["max_wait_sec"] != nil || intent["workload"] == nil {
+		t.Errorf("queued intent = %s", rec.Document)
+	}
+	if data := queueAuditData(t, e.waitAudit(q.ID, "run.create")[0]); data["launch_intent"] != "kept" {
+		t.Errorf("queued run.create launch_intent = %v, want kept", data["launch_intent"])
+	}
+}

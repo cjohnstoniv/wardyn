@@ -176,16 +176,11 @@ func (s *Server) alsoEraseLaunchIntents(step erasure.Step) erasure.Step {
 		case map[string]any:
 			d["launch_intents"] = n
 		case store.RunSetupsErased:
-			detail = runSetupsErased{d, n}
+			d.LaunchIntents = n
+			detail = d
 		}
 		return detail, err
 	}
-}
-
-// runSetupsErased is the run_setups detail with the launch intents it erased.
-type runSetupsErased struct {
-	store.RunSetupsErased
-	LaunchIntents int `json:"launch_intents"`
 }
 
 func (s *Server) personErasureStore() (store.PersonErasureStore, error) {

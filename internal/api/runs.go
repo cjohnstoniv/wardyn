@@ -204,14 +204,16 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if f.place.apply(&placed, enforced).write(s, w, r) {
 		return
 	}
+	intent := launchIntentFor(asked)
 	// A run bound for a capped pool waits for a slot instead of starting: nothing is minted, renewed or
 	// delivered for it, and the start does all of that when the pool has room.
 	if f.queued {
 		now := s.cfg.Now().UTC()
 		row := newRunRow(ctx, runRowInput{runID: runID, now: now, createdBy: createdBy, req: req, f: f, placed: placed,
 			enforced: enforced, workspacePath: workspacePath, runnerTarget: s.cfg.RunnerTarget})
+		row.LaunchIntent = intent.doc
 		queuedCreate{run: row, req: req, original: original, f: f, reqCC: reqCC, createdByType: createdByType,
-			taskWarning: taskWarning, workspacePath: workspacePath}.answer(s, w, r)
+			taskWarning: taskWarning, workspacePath: workspacePath, intent: intent}.answer(s, w, r)
 		return
 	}
 	// Subject vs attribution: createdBy is the ATTRIBUTION — the run row's
@@ -232,7 +234,6 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		enforced: enforced, workspacePath: workspacePath, runnerTarget: s.cfg.RunnerTarget})
 	run.State, run.SPIFFEID = types.RunPending, id.SPIFFEID
 	s.captureRunLimits(&run, ceiling, &f.end)
-	intent := launchIntentFor(asked)
 	run.LaunchIntent = intent.doc
 	created, err := s.createRun(ctx, run)
 	if err != nil {
