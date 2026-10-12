@@ -356,8 +356,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Runner pools carry limits per run type: CPU and memory (default and cap), a main-drive cap (`disk_mib`, whole GiB),
   lifetime (default, maximum or unlimited), an idle stop for interactive environments only, allowed barriers and a
   concurrent-run cap; an administrator sets them on create and replaces them on update (migration 0158). A run is
-  admitted by its pool's run types and barriers, and the pool's lifetime bounds its end; CPU, memory, the
-  main-drive cap, idle stop and the concurrent-run cap are stored and audited but not yet applied to runs.
+  admitted by its pool's run types and barriers, and the pool's lifetime bounds its end; CPU, memory, idle stop
+  and the concurrent-run cap are stored and audited but not yet applied to runs.
 - `wardyn-runnerd` ships as a release binary for Linux and macOS (amd64, arm64) with a per-user service: a systemd
   user unit or a LaunchAgent, installed by `deploy/runner/install.sh`, which registers the runner with a single-use
   token and keeps it running; the owner then claims it with `wardyn runner claim` (#1968).
@@ -405,6 +405,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   reason, and rules for its MCP tools are kept in its rule set. Rules for a harness without Wardyn's tool gate, and
   rules in an interactive run beyond its own "asks you", are refused. New Run's access facts include a tool policy for
   each included harness.
+- A run's main drive is sized from one rule at Review and at launch: `resources.disk_mib` on a request is reduced to
+  the strictest of the pool, your governance profile and this server's maximum, and the run says so. A run that asks
+  for no size gets the strictest of the pool, profile and server defaults as a soft size; a host that cannot cap
+  disk, such as overlay2 over ext4, runs a soft size uncapped. On Kubernetes this adds an ephemeral-storage limit to
+  CLI and CI runs that had none. A size the run's policy writes is a requirement that a request may only lower; when
+  the run's own pool cannot cap disk, such a run is refused with `main_drive_unenforceable` at Review, the policy
+  preview and create. The Policy tab tells a pool default from a server default, and `run.policy.resolve` records
+  `disk_mib_basis` and `disk_mib_default_source`.
 
 ### Changed
 
