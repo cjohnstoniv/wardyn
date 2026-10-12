@@ -41,6 +41,8 @@ type policyPreviewResponse struct {
 	// choices, an array that is empty until that lane fills it.
 	Image         *client.ImageFact     `json:"image,omitempty"`
 	AllowedImages []client.AllowedImage `json:"allowed_images"`
+	// HarnessSet is the preflight's, with the same meaning.
+	HarnessSet *client.HarnessSetFact `json:"harness_set,omitempty"`
 	// RunnerPool and RunnerPools are the preflight's, with the same meaning.
 	RunnerPool  *client.ResolvedRunnerPool `json:"runner_pool,omitempty"`
 	RunnerPools []client.RunnerPoolChoice  `json:"runner_pools"`
