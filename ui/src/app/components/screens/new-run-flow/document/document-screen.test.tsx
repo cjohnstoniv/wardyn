@@ -12,11 +12,12 @@ import { RUN_DOCUMENT_CANON } from "../../../../lib/run-document-canon";
 import type { TemplateDiagnostic, TemplateImportResult } from "../../../../lib/types/templates";
 import { OperatorProvider } from "../../../wardyn/operator-context";
 import { NEW_RUN_SCREENS, NewRunRoute, useNewRunDraft, type NewRunScreenName, type NewRunScreenProps } from "../new-run-route";
-import { DOCUMENT_COPY } from "./copy-seam";
+import { NR_DOCUMENT as C } from "../../../wardyn/copy/new-run/document";
+import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
+import { MISSING_COPY } from "./missing-copy";
 import { DocumentScreen, type DocumentDeps } from "./document-screen";
 import { MAX_DOCUMENT_BYTES } from "./run-document";
 
-const C = DOCUMENT_COPY;
 const ROSTER = SCENARIO_HARNESSES.member;
 
 const EXCLUDED = "template_field_excluded";
@@ -64,7 +65,7 @@ function open(deps: Partial<DocumentDeps> = {}, entry = "/runs/new?step=document
   return { importDocument };
 }
 
-const editor = () => screen.getByRole("textbox", { name: C.editorLabel("yaml") }) as HTMLTextAreaElement;
+const editor = () => screen.getByRole("textbox", { name: C.EDITOR_ARIA("YAML") }) as HTMLTextAreaElement;
 const type = (value: string) => fireEvent.change(screen.getByRole("textbox"), { target: { value } });
 const press = (name: string) => fireEvent.click(screen.getByRole("button", { name }));
 const text = (id: string) => screen.getByTestId(id).textContent;
@@ -87,7 +88,7 @@ describe("run document editor", () => {
     });
     await screen.findByRole("textbox");
     type(MOCK_YAML);
-    press(C.validate);
+    press(C.VALIDATE);
     expect(await screen.findByText(RUN_DOCUMENT_CANON.TITLE_OR_DESCRIPTION)).toBeInTheDocument();
     expect(within(screen.getByRole("list")).getAllByText(RUN_DOCUMENT_CANON.END_CONFLICT, { exact: false })).toHaveLength(2);
     expect(screen.getByText(RUN_DOCUMENT_CANON.API_VERSION)).toBeInTheDocument();
@@ -95,8 +96,10 @@ describe("run document editor", () => {
     expect(screen.queryByText("server end sentence")).toBeNull();
     // title, api_version, the agent key, and both end keys
     expect(markedLines()).toEqual(["1", "3", "5", "6", "7"]);
-    expect(screen.getByText(C.issues(5))).toBeInTheDocument();
+    expect(screen.getByText(C.ISSUES(5))).toBeInTheDocument();
     expect(editor()).toHaveAttribute("aria-invalid", "true");
+    // every sentence is on its line; the panel adds only the headline, and no pending-copy line
+    expect(screen.getByTestId("validation-panel").querySelectorAll("p")).toHaveLength(1);
     expect(importDocument).toHaveBeenCalledWith("yaml", MOCK_YAML, expect.any(AbortSignal));
   });
 
@@ -104,7 +107,7 @@ describe("run document editor", () => {
     const { importDocument } = open({}, "/runs/new?step=document&format=json");
     await screen.findByRole("textbox");
     type('{"api_version":"wardyn/v1","kind":"Run","intent":{');
-    press(C.validate);
+    press(C.VALIDATE);
     expect(await screen.findByText(RUN_DOCUMENT_CANON.JSON_INVALID)).toBeInTheDocument();
     expect(screen.getAllByText(RUN_DOCUMENT_CANON.JSON_INVALID)).toHaveLength(1);
     expect(importDocument).not.toHaveBeenCalled();
@@ -117,8 +120,8 @@ describe("run document editor", () => {
     const { importDocument } = open();
     await screen.findByRole("textbox");
     type("intent: [unclosed");
-    press(C.validate);
-    expect(await screen.findByText(C.yamlInvalid)).toBeInTheDocument();
+    press(C.VALIDATE);
+    expect(await screen.findByText(C.YAML_INVALID)).toBeInTheDocument();
     expect(importDocument).not.toHaveBeenCalled();
   });
 
@@ -129,7 +132,7 @@ describe("run document editor", () => {
     const big = file("big.yaml", "a: 1");
     Object.defineProperty(big, "size", { value: MAX_DOCUMENT_BYTES + 1 });
     upload(big);
-    expect(await screen.findByText(C.tooLarge)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("validation-panel")).toHaveAttribute("data-status", "issues"));
     expect(editor().value).toBe(before);
     expect(importDocument).not.toHaveBeenCalled();
   });
@@ -139,35 +142,35 @@ describe("run document editor", () => {
     await screen.findByRole("textbox");
     upload(file("run.json", '{"api_version":"wardyn/v1","kind":"Run","intent":{"agent":"codex-cli"}}'));
     await waitFor(() => expect(text("path")).toContain("format=json"));
-    expect((screen.getByRole("textbox", { name: C.editorLabel("json") }) as HTMLTextAreaElement).value).toContain('"agent":"codex-cli"');
+    expect((screen.getByRole("textbox", { name: C.EDITOR_ARIA("JSON") }) as HTMLTextAreaElement).value).toContain('"agent":"codex-cli"');
     expect(JSON.parse(text("doc")!).format).toBe("json");
   });
 
   it("Load example writes a run of the roster's first enabled harness", async () => {
     open({ loadHarnesses: async () => [{ ...ROSTER[0], enabled: false }, { ...ROSTER[1], id: "second", enabled: true }] });
-    await waitFor(() => expect(screen.getByRole("button", { name: C.loadExample })).toBeEnabled());
-    press(C.loadExample);
+    await waitFor(() => expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).toBeEnabled());
+    press(C.LOAD_EXAMPLE);
     expect(editor().value).toContain("kind: harness");
     expect(editor().value).toContain("id: second");
     expect(editor().value).not.toContain(ROSTER[0].id);
   });
 
-  it("holds Load example with its reason when no harness is enabled", async () => {
+  it("holds Load example when no harness is enabled", async () => {
     open({ loadHarnesses: async () => [{ ...ROSTER[0], enabled: false }] });
-    expect(await screen.findByText(C.noHarness)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: C.loadExample })).toBeDisabled();
-    expect(screen.getByRole("button", { name: C.loadExample })).toHaveAccessibleDescription(C.noHarness);
+    await waitFor(() => expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).toBeDisabled());
+    // The canon has no reason text yet (MISSING_COPY), so none is rendered.
+    expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).not.toHaveAttribute("aria-describedby");
   });
 
   it("Validate alone marks a clean document valid, announces it, and stays put", async () => {
     open();
     await screen.findByRole("textbox");
     type(MOCK_YAML);
-    press(C.validate);
+    press(C.VALIDATE);
     await waitFor(() => expect(screen.getByTestId("validation-panel")).toHaveAttribute("data-status", "valid"));
     expect(JSON.parse(text("doc")!).validated).toBe(true);
     expect(text("origin")).toBe("scratch");
-    expect(screen.getByRole("status")).toHaveTextContent(C.valid);
+    expect(screen.getByRole("status")).toHaveTextContent(C.ANNOUNCE_VALID);
     expect(text("path")).toContain("step=document");
   });
 
@@ -176,7 +179,7 @@ describe("run document editor", () => {
     open({ importDocument: async () => answers([], intent) });
     await screen.findByRole("textbox");
     type(MOCK_YAML);
-    press(C.openInGuided);
+    press(C.OPEN_IN_GUIDED);
     await waitFor(() => expect(text("path")).toContain("step=shape"));
     expect(JSON.parse(text("intent")!)).toEqual(intent);
     expect(text("origin")).toBe("import");
@@ -187,7 +190,7 @@ describe("run document editor", () => {
     open({ importDocument: async () => answers([], { agent: "claude-code" }) });
     await screen.findByRole("textbox");
     type(MOCK_YAML);
-    press(C.continueToReview);
+    press(C.CONTINUE_REVIEW);
     await waitFor(() => expect(text("path")).toContain("step=review"));
     expect(text("intent")).toBe('{"agent":"claude-code"}');
   });
@@ -204,7 +207,7 @@ describe("run document editor", () => {
     open({ importDocument: async () => answers([{ path: "title", reason: EXCLUDED, message: "x" }]) });
     await screen.findByRole("textbox");
     type(MOCK_YAML);
-    press(C.openInGuided);
+    press(C.OPEN_IN_GUIDED);
     expect(await screen.findByText(RUN_DOCUMENT_CANON.TITLE_OR_DESCRIPTION)).toBeInTheDocument();
     expect(text("path")).toContain("step=document");
     expect(text("intent")).toBe("{}");
@@ -215,7 +218,7 @@ describe("run document editor", () => {
     open({ importDocument: async () => { throw new Error("The server did not answer."); } });
     await screen.findByRole("textbox");
     type(MOCK_YAML);
-    press(C.continueToReview);
+    press(C.CONTINUE_REVIEW);
     expect(await screen.findByText("The server did not answer.")).toBeInTheDocument();
     expect(text("path")).toContain("step=document");
     expect(text("intent")).toBe("{}");
@@ -226,7 +229,7 @@ describe("run document editor", () => {
     open({ importDocument: () => new Promise<TemplateImportResult>((resolve) => { release = resolve; }) });
     await screen.findByRole("textbox");
     type(MOCK_YAML);
-    press(C.continueToReview);
+    press(C.CONTINUE_REVIEW);
     type(`${MOCK_YAML}# edited\n`);
     await act(async () => release(answers([])));
     expect(text("path")).toContain("step=document");
@@ -241,7 +244,18 @@ describe("run document editor", () => {
     fireEvent.click(screen.getByRole("button", { name: "JSON" }));
     fireEvent.click(await screen.findByRole("button", { name: "Switch to JSON" }));
     await waitFor(() => expect(text("path")).toContain("format=json"));
-    expect((screen.getByRole("textbox", { name: C.editorLabel("json") }) as HTMLTextAreaElement).value).toBe('{\n  "agent": "claude-code"\n}');
+    expect((screen.getByRole("textbox", { name: C.EDITOR_ARIA("JSON") }) as HTMLTextAreaElement).value).toBe('{\n  "agent": "claude-code"\n}');
+  });
+
+  it("Back returns to Start", async () => {
+    open();
+    await screen.findByRole("textbox");
+    press(NR_SHARED.BACK);
+    await waitFor(() => expect(text("path")).not.toContain("step="));
+  });
+
+  it("the words the canon lacks are an empty seam, not text on any normal path", () => {
+    expect(Object.values(MISSING_COPY)).toEqual(["", "", ""]);
   });
 
   it("starts from the draft's intent written as a kind Run document", async () => {

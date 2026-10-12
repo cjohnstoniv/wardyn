@@ -10,7 +10,6 @@
 import * as React from "react";
 import { setup } from "../../../../lib/api/setup";
 import { parsePolicySource } from "../../../../lib/policy-document";
-import { RUN_DOCUMENT_CANON } from "../../../../lib/run-document-canon";
 import type { SetupHarnessTool } from "../../../../lib/types/setup";
 import type { TemplateDocument } from "../../../../lib/types/templates";
 import { Button } from "../../../ui/button";
@@ -19,7 +18,9 @@ import type { NewRunLocation } from "../draft/new-run-url";
 import type { DocBuffer, RunIntent } from "../draft/run-intent";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../new-run-route";
 import { StepShell, useAnnounce } from "../steps/step-shell";
-import { DOCUMENT_COPY, type DocumentCopy } from "./copy-seam";
+import { NR_DOCUMENT } from "../../../wardyn/copy/new-run/document";
+import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
+import { MISSING_COPY } from "./missing-copy";
 import { importRunDocument, type ImportDocument } from "./import-door";
 import { exampleDocumentText, MAX_DOCUMENT_BYTES, placeDiagnostics, runDocumentText, tooLarge, type DocumentFormat } from "./run-document";
 import { ValidationPanel, type DocumentStatus } from "./validation-panel";
@@ -36,7 +37,7 @@ const EDITOR_ID = "run-document";
 const STATUS_ID = `${EDITOR_ID}-status`;
 const NO_HARNESS_ID = `${EDITOR_ID}-no-harness`;
 
-export function DocumentScreen({ location, go, copy = DOCUMENT_COPY, deps }: NewRunScreenProps & { copy?: DocumentCopy; deps?: Partial<DocumentDeps> }) {
+export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRunScreenProps & { copy?: typeof NR_DOCUMENT; deps?: Partial<DocumentDeps> }) {
   const draft = useNewRunDraft();
   const dispatch = useNewRunDispatch();
   const announce = useAnnounce();
@@ -87,7 +88,7 @@ export function DocumentScreen({ location, go, copy = DOCUMENT_COPY, deps }: New
   const refuse = (id: number, reasons: string[]) => {
     if (id !== check.current.id) return;
     setLines(reasons);
-    announce(copy.announceIssues(reasons.length));
+    announce(copy.ANNOUNCE_ERRORS(reasons.length));
   };
 
   /** Checks the text through the server's door; the document it accepted, or undefined. */
@@ -98,20 +99,20 @@ export function DocumentScreen({ location, go, copy = DOCUMENT_COPY, deps }: New
     check.current = mine;
     setBusy(true);
     try {
-      if (tooLarge(source)) return void refuse(mine.id, [copy.tooLarge]);
+      if (tooLarge(source)) return void refuse(mine.id, [MISSING_COPY.TOO_LARGE]);
       // A document that does not parse is refused here, without a request.
-      if (!parsePolicySource(source, as).ok) return void refuse(mine.id, [as === "json" ? RUN_DOCUMENT_CANON.JSON_INVALID : copy.yamlInvalid]);
+      if (!parsePolicySource(source, as).ok) return void refuse(mine.id, [as === "json" ? copy.JSON_INVALID : copy.YAML_INVALID]);
       const answer = await importDocument(as, source, mine.abort.signal);
       if (mine.id !== check.current.id) return undefined;
       if (answer.diagnostics.length > 0) {
         const placed = placeDiagnostics(source, as, answer.diagnostics);
         dispatch({ type: "doc", doc: { format: as, text: source, diagnostics: placed, validated: false } });
-        announce(copy.announceIssues(placed.length));
+        announce(copy.ANNOUNCE_ERRORS(placed.length));
         return undefined;
       }
       dispatch({ type: "doc", doc: buffer(source, as, { diagnostics: [], validated: true }) });
       setValid(true);
-      announce(copy.valid);
+      announce(copy.ANNOUNCE_VALID);
       return answer.document;
     } catch (error) {
       if (mine.id === check.current.id) refuse(mine.id, [error instanceof Error ? error.message : String(error)]);
@@ -132,11 +133,11 @@ export function DocumentScreen({ location, go, copy = DOCUMENT_COPY, deps }: New
     if (!file) return;
     if (file.size > MAX_DOCUMENT_BYTES) {
       supersede();
-      return refuse(check.current.id, [copy.tooLarge]);
+      return refuse(check.current.id, [MISSING_COPY.TOO_LARGE]);
     }
     const reader = new FileReader();
     reader.onload = () => setSource(String(reader.result), /\.json$/i.test(file.name) ? "json" : "yaml");
-    reader.onerror = () => refuse(check.current.id, [copy.fileUnreadable]);
+    reader.onerror = () => refuse(check.current.id, [MISSING_COPY.FILE_UNREADABLE]);
     reader.readAsText(file);
   };
 
@@ -146,21 +147,21 @@ export function DocumentScreen({ location, go, copy = DOCUMENT_COPY, deps }: New
 
   return (
     <StepShell
-      eyebrow={copy.eyebrow}
-      title={copy.title}
-      lede={copy.lede}
-      back={{ label: copy.back, onBack: () => go({ screen: "start" }) }}
-      primary={{ label: copy.continueToReview, onActivate: () => void proceed({ screen: "review", view: "pretty" }), disabled: busy }}
+      eyebrow={copy.EYEBROW}
+      title={copy.TITLE}
+      lede={copy.LEDE}
+      back={{ label: NR_SHARED.BACK, onBack: () => go({ screen: "start" }) }}
+      primary={{ label: copy.CONTINUE_REVIEW, onActivate: () => void proceed({ screen: "review", view: "pretty" }), disabled: busy }}
     >
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="outline" onClick={() => fileInput.current?.click()}>{copy.importFile}</Button>
+          <Button type="button" variant="outline" onClick={() => fileInput.current?.click()}>{copy.IMPORT_FILE}</Button>
           <input
             ref={fileInput}
             type="file"
             accept=".yaml,.yml,.json"
             data-testid="document-file"
-            aria-label={copy.importFile}
+            aria-label={copy.IMPORT_FILE}
             tabIndex={-1}
             className="sr-only"
             onChange={(e) => {
@@ -169,14 +170,14 @@ export function DocumentScreen({ location, go, copy = DOCUMENT_COPY, deps }: New
               importFile(file);
             }}
           />
-          <Button type="button" variant="outline" disabled={!harness} aria-describedby={harness === null ? NO_HARNESS_ID : undefined}
+          <Button type="button" variant="outline" disabled={!harness} aria-describedby={harness === null && MISSING_COPY.NO_HARNESS ? NO_HARNESS_ID : undefined}
             onClick={() => harness && setSource(exampleDocumentText(harness, format), format)}>
-            {copy.loadExample}
+            {copy.LOAD_EXAMPLE}
           </Button>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => void validate()}>{copy.validate}</Button>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => void proceed({ screen: "step", step: "shape" })}>{copy.openInGuided}</Button>
+          <Button type="button" variant="outline" disabled={busy} onClick={() => void validate()}>{copy.VALIDATE}</Button>
+          <Button type="button" variant="outline" disabled={busy} onClick={() => void proceed({ screen: "step", step: "shape" })}>{copy.OPEN_IN_GUIDED}</Button>
         </div>
-        {harness === null && <p id={NO_HARNESS_ID} className="text-xs text-muted-foreground">{copy.noHarness}</p>}
+        {harness === null && MISSING_COPY.NO_HARNESS && <p id={NO_HARNESS_ID} className="text-xs text-muted-foreground">{MISSING_COPY.NO_HARNESS}</p>}
         <DocumentEditor
           id={EDITOR_ID}
           value={text}
@@ -184,7 +185,7 @@ export function DocumentScreen({ location, go, copy = DOCUMENT_COPY, deps }: New
           onChange={(next) => setSource(next, format)}
           onFormatChange={(as, next) => setSource(next, as)}
           diagnostics={diagnostics}
-          label={copy.editorLabel(format)}
+          label={copy.EDITOR_ARIA(format.toUpperCase())}
           describedBy={STATUS_ID}
           rows={16}
         />
