@@ -60,7 +60,8 @@ func dispatchTwoHarnessRun(t *testing.T, rn *fakeRunner, p dispatchParams) (*Ser
 	run.Task, run.CreatedBy = "", fileOwner
 	_, sec, _ := fileSecretServer(t)
 	srv.cfg.Secrets, srv.cfg.MaskRegistry = sec, secretmask.NewRegistry()
-	p.RunToken, p.Image, p.HarnessToolRules = "run-token", "img", twoHarnessSets
+	// The hold lane: the only one a credential is minted for.
+	p.RunToken, p.Image, p.HarnessToolRules, p.ToolApprovals = "run-token", "img", twoHarnessSets, "hold"
 	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), p)
 	if rn.createCalls != 1 {
 		t.Fatalf("the sandbox was not created; events: %s", auditDump(audit.events, run.ID))

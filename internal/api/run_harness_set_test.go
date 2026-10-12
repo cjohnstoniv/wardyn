@@ -634,6 +634,16 @@ func TestHarnessProviderPairsConflict(t *testing.T) {
 			return p
 		}(), false},
 		{"a second Azure Foundry provider", azure("az-1"), azure("az-2"), true},
+		{"a Claude subscription through the endpoint's host", types.ModelProvider{ID: "sub", Kind: types.ModelProviderAnthropicSubscription,
+			BaseURL: "https://gw.example.com", Harnesses: []types.ProviderHarness{claude}}, endpoint("gw-b", codex), true},
+		{"a gateway-routed subscription beside an endpoint on the vendor host", types.ModelProvider{ID: "sub", Kind: types.ModelProviderAnthropicSubscription,
+			BaseURL: "https://gw.example.com", Harnesses: []types.ProviderHarness{claude}}, func() types.ModelProvider {
+			p := endpoint("gw-b", codex)
+			p.BaseURL = "https://api.anthropic.com"
+			return p
+		}(), true},
+		{"Bedrock beside an endpoint on its runtime host", types.ModelProvider{ID: "br", Kind: types.ModelProviderBedrockBearer,
+			Bedrock: &types.BedrockSettings{Region: "us-west-2", BaseURL: "https://gw.example.com"}, Harnesses: []types.ProviderHarness{claude}}, endpoint("gw-b", codex), true},
 	} {
 		if got := harnessProviderPairsConflict("claude-code", tc.pa, "codex-cli", tc.pb); got != tc.conflict {
 			t.Errorf("%s: conflict = %v, want %v", tc.name, got, tc.conflict)

@@ -318,7 +318,11 @@ func harnessProviderPairsConflict(a string, pa types.ModelProvider, b string, pb
 	})
 }
 
-// providerInjectionHosts is where the proxy injects p's credential for harness.
+// providerInjectionHosts is every host the proxy injects p's credential on
+// for harness, whatever the kind: the key or endpoint host, the Azure Foundry
+// endpoint, a Claude subscription's host (and its gateway when it routes
+// through one), and Bedrock's runtime and control hosts. A Bedrock SSO portal host is
+// the signed-in session's region, unknown before dispatch.
 func providerInjectionHosts(p types.ModelProvider, harness string) []string {
 	var hosts []string
 	if lane, ok := providerKeyLaneFor(p, harness); ok {
@@ -326,6 +330,16 @@ func providerInjectionHosts(p types.ModelProvider, harness string) []string {
 	}
 	if lane, ok := providerAzureLaneFor(p, harness); ok {
 		hosts = append(hosts, lane.host)
+	}
+	switch {
+	case !p.Serves(harness):
+	case p.Kind == types.ModelProviderAnthropicSubscription:
+		hosts = append(hosts, strings.ToLower(gatewayHost(providerSubscriptionBase(p))))
+		if p.BaseURL != "" { // the grant author also drops the vendor host's injections
+			hosts = append(hosts, subscriptionInjectionHost)
+		}
+	case p.Kind.IsBedrock():
+		hosts = append(hosts, strings.ToLower(providerBedrockRuntimeHost(p)), bedrockControlHost(providerBedrockSettings(p).Region))
 	}
 	return hosts
 }
