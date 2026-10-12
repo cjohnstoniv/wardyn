@@ -89,7 +89,7 @@ var SlotHoldingRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWa
 
 // RunQueue is what a QUEUED run says about its wait: the pool, when it joined, when its wait ends,
 // how many runs are ahead of it in that pool (a count, never whose) and the wait reason token
-// (runner_pool_at_capacity or runner_pool_no_runner_free).
+// (runner_pool_at_capacity, runner_pool_no_runner_free or runner_pool_runners_at_capacity).
 type RunQueue struct {
 	PoolID     uuid.UUID `json:"pool_id"`
 	QueuedAt   time.Time `json:"queued_at"`

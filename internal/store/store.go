@@ -160,6 +160,14 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 			return types.AgentRun{}, err
 		}
 	}
+	// Every writer that adds a slot-holder takes the pool row, then the deployment cap's advisory lock,
+	// then runner rows: the insert's pool fence would take the pool row FOR SHARE after the advisory lock,
+	// the other way round from a promotion or a revive, so it is taken here first.
+	if r.RunnerPoolID != nil {
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM runner_pools WHERE id = $1 FOR SHARE`, *r.RunnerPoolID); err != nil {
+			return types.AgentRun{}, fmt.Errorf("store: lock run pool: %w", err)
+		}
+	}
 	if limit > 0 {
 		active, err := lockAndCountActiveRuns(ctx, tx, uuid.Nil)
 		if err != nil {
@@ -170,13 +178,6 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 		}
 	}
 	if holdsRunnerSlot(r) {
-		// The insert's pool fence takes the pool row FOR SHARE; taking it before the runner keeps the one
-		// order (pool, then runner) a promotion also takes them in.
-		if r.RunnerPoolID != nil {
-			if _, err := tx.Exec(ctx, `SELECT 1 FROM runner_pools WHERE id = $1 FOR SHARE`, *r.RunnerPoolID); err != nil {
-				return types.AgentRun{}, fmt.Errorf("store: lock run pool: %w", err)
-			}
-		}
 		if err := admitOnRunner(ctx, tx, *r.RunnerID, uuid.Nil); err != nil {
 			return types.AgentRun{}, err
 		}

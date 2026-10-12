@@ -33,7 +33,7 @@ func (f *runnerRegistrationFake) SetRunnerMachineName(_ context.Context, id uuid
 
 // registerWith redeems a fresh token with req's max_runs and machine name, and returns the answer and
 // whether the token is still unspent.
-func registerWith(t *testing.T, srv *Server, f *runnerRegistrationFake, maxRuns int, machine string) (int, types.RunnerRegistration, bool) {
+func registerWith(t *testing.T, srv *Server, f *runnerRegistrationFake, maxRuns int, machine string) (int, types.RunnerRegistration, bool, string) {
 	t.Helper()
 	raw := newBearer("wdr_")
 	now := time.Now().UTC()
@@ -51,18 +51,18 @@ func registerWith(t *testing.T, srv *Server, f *runnerRegistrationFake, maxRuns 
 	f.lock.Lock()
 	unspent := f.tokens[raw].ConsumedAt == nil
 	f.lock.Unlock()
-	return w.Code, out, unspent
+	return w.Code, out, unspent, w.Body.String()
 }
 
 // Registration stores the runs at once and machine name it is sent, the default when an older runner
 // sends none, and refuses a value out of bounds before it spends the token.
 func TestRunnerRegistrationStoresMaxRunsAndMachineName(t *testing.T) {
 	srv, f, _ := newRunnerRegistrationServer(t)
-	code, reg, _ := registerWith(t, srv, f, 5, "alice-mbp.corp")
+	code, reg, _, _ := registerWith(t, srv, f, 5, "alice-mbp.corp")
 	if code != http.StatusCreated || reg.MaxRuns != 5 || f.rows[reg.RunnerID].MaxRuns != 5 || f.rows[reg.RunnerID].MachineName != "alice-mbp.corp" {
 		t.Fatalf("explicit: %d %+v row %+v", code, reg, f.rows[reg.RunnerID])
 	}
-	code, reg, _ = registerWith(t, srv, f, 0, "")
+	code, reg, _, _ = registerWith(t, srv, f, 0, "")
 	if code != http.StatusCreated || f.rows[reg.RunnerID].MaxRuns != types.RunnerMaxRunsDefault {
 		t.Fatalf("omitted max_runs: %d, stored %d, want the default", code, f.rows[reg.RunnerID].MaxRuns)
 	}
@@ -72,14 +72,14 @@ func TestRunnerRegistrationStoresMaxRunsAndMachineName(t *testing.T) {
 		machine string
 		reason  string
 	}{
-		{"max_runs past the ceiling", types.RunnerMaxRunsCeiling + 1, "", reasonRunnerMaxRunsInvalid},
-		{"negative max_runs", -1, "", reasonRunnerMaxRunsInvalid},
+		{"max_runs past the ceiling", types.RunnerMaxRunsCeiling + 1, "", reasonRunnerRegistrationInvalid},
+		{"negative max_runs", -1, "", reasonRunnerRegistrationInvalid},
 		{"over-long machine name", 2, strings.Repeat("m", types.MachineNameMax+1), reasonRunnerRegistrationInvalid},
 		{"control character in machine name", 2, "box\x1b[31m", reasonRunnerRegistrationInvalid},
 	} {
-		code, _, unspent := registerWith(t, srv, f, tc.maxRuns, tc.machine)
-		if code/100 != 4 || !unspent {
-			t.Errorf("%s: %d, token unspent %v; want a refusal that keeps the token", tc.name, code, unspent)
+		code, _, unspent, body := registerWith(t, srv, f, tc.maxRuns, tc.machine)
+		if code != http.StatusUnprocessableEntity || !unspent || !strings.Contains(body, `"reason":"`+tc.reason+`"`) {
+			t.Errorf("%s: %d %s, token unspent %v; want 422 %s keeping the token", tc.name, code, body, unspent, tc.reason)
 		}
 	}
 }
@@ -145,7 +145,8 @@ func TestRunnerCapsUpdateTheMachineName(t *testing.T) {
 		{"new-name.corp", "new-name.corp"},
 		{strings.Repeat("x", types.MachineNameMax+1), "new-name.corp"},
 		{"bad\nname", "new-name.corp"},
-		{"", "new-name.corp"},
+		{"  spaced.corp \t", "spaced.corp"},
+		{"", "spaced.corp"},
 	} {
 		if err := srv.EventFromRunner(context.Background(), row.ID, caps(step.sent)); err != nil {
 			t.Fatalf("caps %q refused: %v", step.sent, err)
@@ -155,11 +156,11 @@ func TestRunnerCapsUpdateTheMachineName(t *testing.T) {
 		}
 	}
 	alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
-	if v := viewIDs(runnerViewsOf(t, doSSO(t, srv, http.MethodGet, "/api/v1/me/runners", alice, "")))[row.ID]; v.MachineName != "new-name.corp" {
+	if v := viewIDs(runnerViewsOf(t, doSSO(t, srv, http.MethodGet, "/api/v1/me/runners", alice, "")))[row.ID]; v.MachineName != "spaced.corp" {
 		t.Fatalf("own view machine_name = %q", v.MachineName)
 	}
 	sec := memberModeSSOSession(t, "sam", "sam@example.com", oidc.RoleSecurityAdmin, false)
-	if v := viewIDs(runnerViewsOf(t, doSSO(t, srv, http.MethodGet, "/api/v1/runners", sec, "")))[row.ID]; v.MachineName != "new-name.corp" {
+	if v := viewIDs(runnerViewsOf(t, doSSO(t, srv, http.MethodGet, "/api/v1/runners", sec, "")))[row.ID]; v.MachineName != "spaced.corp" {
 		t.Fatalf("admin view machine_name = %q", v.MachineName)
 	}
 }
