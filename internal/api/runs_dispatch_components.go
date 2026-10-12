@@ -52,6 +52,8 @@ type componentDispatch struct {
 	// Config is each component's plain, non-secret environment, in the order
 	// the components were attached. The gate refused a key two of them share.
 	Config []componentConfig
+	// MCP is each MCP server, which the broker route alone reaches (run_mcp.go).
+	MCP []componentMCP
 }
 
 // componentConfig is one component's plain config, and what a record about it
@@ -67,17 +69,26 @@ type componentConfig struct {
 // dispatch is the part of the gate's decision that dispatch acts on. A header
 // an organisation's component delivers over plain HTTP gets no interception
 // entry: there is no TLS to terminate, and the proxy sets it on the plain lane.
+//
+// An MCP server's header gets no interception entry either: the broker sets it
+// on the request it re-originates.
 func (c runComponents) dispatch() componentDispatch {
 	var d componentDispatch
+	keys := mcpServerKeys(c.attached)
 	for i, a := range c.attached {
 		def := a.snapshot.Definition
+		if def.MCP != nil {
+			server, _ := types.MCPURLDestination(def.MCP.URL)
+			d.MCP = append(d.MCP, componentMCP{Ordinal: i, Key: keys[i], URL: def.MCP.URL, Host: server.Host,
+				Harnesses: a.snapshot.MCPHarnesses, Credentialed: len(def.Secrets) > 0})
+		}
 		for _, sec := range def.Secrets {
 			del := sec.Delivery
 			if del.Mode != types.ComponentDeliveryHeader {
 				continue
 			}
 			d.HeaderHosts = append(d.HeaderHosts, del.Host)
-			if !del.PlainHTTP {
+			if !del.PlainHTTP && def.MCP == nil {
 				d.MITMHosts = append(d.MITMHosts, net.JoinHostPort(del.Host, componentHeaderPort))
 			}
 		}

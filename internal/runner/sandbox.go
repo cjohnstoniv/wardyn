@@ -205,6 +205,8 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		HarnessToolRules:     pc.HarnessToolRules,
 		ViaOrgRoutes:         pc.ViaOrgRoutes,
 		HarnessCredentials:   pc.HarnessCredentials,
+		MCPServers:           pc.MCPServers,
+		MCPBindings:          pc.MCPBindings,
 	}
 	return json.Marshal(cfg)
 }

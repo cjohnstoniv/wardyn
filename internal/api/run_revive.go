@@ -420,6 +420,9 @@ func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver,
 		return nil, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad,
 			"a git_pat grant's scope could not be read, so what it is narrowed to is unknown: "+err.Error())
 	}
+	if rerr := s.reviveMCPBindings(ctx, run, cfg); rerr != nil {
+		return nil, rerr
+	}
 	return cfg, nil
 }
 
