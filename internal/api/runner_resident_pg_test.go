@@ -74,7 +74,7 @@ func TestResident_ErasedAtRunEndAndAudited(t *testing.T) {
 	srv := New(cfg)
 	ctx := t.Context()
 	grant, err := cfg.Store.CreateGrant(ctx, types.CredentialGrant{ID: uuid.New(), RunID: run.ID, Delivery: types.GrantDeliveryResident,
-		Spec: types.GrantSpec{Kind: types.GrantEnvSecret, Scope: json.RawMessage(`{"env":"TOKEN","secret_name":"ci-token"}`)}})
+		Spec: types.GrantSpec{Kind: types.GrantEnvSecret, Scope: json.RawMessage(`{"name":"TOKEN","secret_name":"ci-token"}`)}})
 	if err != nil {
 		t.Fatal(err)
 	}

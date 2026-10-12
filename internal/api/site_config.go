@@ -828,14 +828,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		datum["egress_redirects_truncated"] = true
 	}
 	auditSiteBranding(datum, present["branding"], saved.Branding, siteLogo, logoErr != nil, logoPending)
-	// Only once a provider block exists, so a deployment without one writes the
-	// row it always wrote.
-	if saved.ModelProviders != nil {
-		datum["model_providers"] = enabledModelProviderCount(saved)
-	}
-	if saved.ModelProviders != nil || invalidated > 0 {
-		datum["per_user_credentials_invalidated"] = invalidated
-	}
+	auditProviderBlocks(datum, saved, invalidated)
 	// Only when the body NAMED the block — see the count above.
 	if narrowed != nil {
 		datum["sources_no_longer_admitted"] = *narrowed
@@ -939,3 +932,19 @@ type siteConfigPutResponse struct {
 // siteConfigAppliesFromNextDispatch is the ONE value AppliesFrom takes today:
 // the write lands immediately, and every run dispatched from now on compiles it.
 const siteConfigAppliesFromNextDispatch = "next_dispatch"
+
+// auditProviderBlocks adds the provider blocks to a site_config.write datum,
+// each only once its block exists, so a deployment without one writes the row
+// it always wrote.
+func auditProviderBlocks(datum map[string]any, saved types.SiteConfig, invalidated int) {
+	if saved.ModelProviders != nil {
+		datum["model_providers"] = enabledModelProviderCount(saved)
+	}
+	if saved.ModelProviders != nil || invalidated > 0 {
+		datum["per_user_credentials_invalidated"] = invalidated
+	}
+	// This door writes the Azure DevOps runner_resident opt-ins too.
+	if saved.WorkspaceProviders != nil {
+		datum["runner_resident"], datum["runner_resident_sandbox"] = residentOptInRows(*saved.WorkspaceProviders)
+	}
+}

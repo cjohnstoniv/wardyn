@@ -26,7 +26,7 @@
 
 - An admin can set a credential class to `runner_resident` with a `require_posture` (`mdm_managed`, `disk_encrypted`, `os_min`).
 - The runner reports its posture when it connects and again when it changes. A root-owned `/etc/wardyn/posture.json` from your MDM wins over the runner's own probe.
-- The value is held in the Secret Service keystore for the run and erased at run end. A runner with no keystore refuses the run (`runner_keystore_unavailable`); a macOS runner has none yet.
+- The value sits in the OS keystore for the run (Secret Service; on macOS the Keychain, written over stdin) and is erased at run end. A runner with no keystore refuses (`runner_keystore_unavailable`).
 - Posture is self-reported, and a run with a CC3 floor never takes a resident credential.
 
 ## Claiming a runner

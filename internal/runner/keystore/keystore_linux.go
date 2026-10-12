@@ -1,38 +1,31 @@
 // Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build linux
-
 package keystore
 
 import (
-	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
 
-	"github.com/zalando/go-keyring"
+	"github.com/godbus/dbus/v5"
 )
 
-// Set stores value under account in the Secret Service (D-Bus; no process is run).
-func Set(account, value string) error {
-	if err := keyring.Set(service, account, value); err != nil {
-		return fmt.Errorf("%w: %w", ErrUnavailable, err)
-	}
-	return nil
-}
+// runtimeDir is the user's runtime directory, where a session bus socket lives.
+var runtimeDir = func() string { return "/run/user/" + strconv.Itoa(os.Getuid()) }
 
-// Get returns the value stored under account.
-func Get(account string) (string, error) {
-	v, err := keyring.Get(service, account)
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", ErrUnavailable, err)
+// ready finds the session bus the way godbus does, without its last resort:
+// with no DBUS_SESSION_BUS_ADDRESS and no user bus socket, godbus runs
+// dbus-launch from PATH. The runner runs no tool, so it refuses instead, and
+// pins the address it found so godbus never looks further.
+func ready() error {
+	if a := os.Getenv("DBUS_SESSION_BUS_ADDRESS"); a != "" && a != "autolaunch:" {
+		return nil
 	}
-	return v, nil
-}
-
-// Delete removes account; one that is already gone is not an error.
-func Delete(account string) error {
-	if err := keyring.Delete(service, account); err != nil && !errors.Is(err, keyring.ErrNotFound) {
-		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	bus := filepath.Join(runtimeDir(), "bus")
+	if _, err := os.Stat(bus); err != nil {
+		return fmt.Errorf("%w: no session bus (DBUS_SESSION_BUS_ADDRESS is unset and %s is absent)", ErrUnavailable, bus)
 	}
-	return nil
+	return os.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path="+dbus.EscapeBusAddressValue(bus))
 }

@@ -24,6 +24,6 @@ func osVersion() string {
 	return ""
 }
 
-// ponytail: FileVault state needs fdesetup or IOKit, neither reachable from a
-// static binary that runs no OS tool; without the MDM file it reads false.
+// ponytail: FileVault state needs fdesetup or IOKit, which a static binary
+// does not reach; without the MDM file it reads false.
 func diskEncrypted() bool { return false }
