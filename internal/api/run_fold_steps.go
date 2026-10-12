@@ -260,7 +260,7 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 	floor := confinementFloorSpec(f.spec, f.comps)
 	if f.mode == foldCreate {
 		var ok bool
-		f.enforced, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, requestPlacement(*f.req), requestRunnerID(*f.req), floor, f.reqCC, f.baseline, f.place.offeredClasses())
+		f.enforced, f.confinementDefault, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, requestPlacement(*f.req), requestRunnerID(*f.req), floor, f.reqCC, f.baseline, f.place.offeredClasses(), f.place.orgBarrier)
 		return ok && !f.place.barrierRefusal(f.enforced).write(s, f.w, f.r)
 	}
 	var advertised []types.ConfinementClass
@@ -278,12 +278,12 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 	if offered := f.place.offeredClasses(); offered != nil {
 		advertised = offered
 	}
-	enforced, err := enforcedConfinement(floor, f.reqCC, advertised, f.baseline)
+	enforced, source, err := enforcedConfinement(floor, f.reqCC, advertised, f.place.orgBarrier, f.baseline)
 	if err != nil {
 		writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return false
 	}
-	f.enforced = enforced
+	f.enforced, f.confinementDefault = enforced, source
 	if f.mode == foldPreflight {
 		f.barrierOptions = draftBarrierOptions(f.place, f.ceiling, floor, f.baseline)
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -58,25 +59,26 @@ type runFold struct {
 	wsRefs []types.Workspace
 	// attachments is the run's mount map and startFolder its one working
 	// directory (WARDYN_START_FOLDER), both from stepWorkspaces.
-	attachments       []client.RunAttachment
-	startFolder       string
-	present           map[string]bool
-	reqEvents         []requirementAuditEntry
-	directGitHubAdded []string
-	comps             runComponents
-	enforced          types.ConfinementClass
-	mpChoice          runProviderChoice
-	modelCred         modelCredentialFacts
-	autonomy          types.AutonomyResolution
-	autonomyWarns     []string
-	scmSite           types.SiteConfig
-	adoGrade          adoEntraGrade
-	bedrockGrade      bedrockCredGrade
-	adoNarrowed       string
-	fitWarnings       []string
-	end               createEnd
-	prov              []provenanceRow
-	pushSets          []types.PushRuleSet
+	attachments        []client.RunAttachment
+	startFolder        string
+	present            map[string]bool
+	reqEvents          []requirementAuditEntry
+	directGitHubAdded  []string
+	comps              runComponents
+	enforced           types.ConfinementClass
+	confinementDefault runnerpool.BarrierDefaultSource // who chose enforced when the request named no class
+	mpChoice           runProviderChoice
+	modelCred          modelCredentialFacts
+	autonomy           types.AutonomyResolution
+	autonomyWarns      []string
+	scmSite            types.SiteConfig
+	adoGrade           adoEntraGrade
+	bedrockGrade       bedrockCredGrade
+	adoNarrowed        string
+	fitWarnings        []string
+	end                createEnd
+	prov               []provenanceRow
+	pushSets           []types.PushRuleSet
 	// place is where the run goes (stepPlacement): the resolved pool and the fully eligible targets.
 	place runPlacement
 	// queued says the run waits for a slot (pool-queue.md section 6): its pool has a concurrent-run cap,

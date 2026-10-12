@@ -161,3 +161,35 @@ func TestRunnerPoolManageCommandsTakeTheOwnersRoute(t *testing.T) {
 		t.Error("an invalid command reached the server")
 	}
 }
+
+func TestRunnerPoolOrgDefaultSetKeepsThePoolsAndSetsTheBarrier(t *testing.T) {
+	remote := uuid.New()
+	srv := newCmdServer(t, http.StatusOK, sdk.RunnerPoolDefaults{RemoteProvided: &remote})
+	base := []string{"--url", srv.URL, "--token", "t"}
+	if err := execCmd(t, append([]string{"runner", "pool", "org-default", "set", "--barrier", "CC2"}, base...)...); err != nil {
+		t.Fatal(err)
+	}
+	req := srv.last()
+	var got sdk.RunnerPoolDefaults
+	if err := json.Unmarshal(req.body, &got); err != nil || req.method != http.MethodPut || req.path != "/api/v1/runner-pool-defaults" ||
+		got.Barrier != sdk.CC2 || got.RemoteProvided == nil || *got.RemoteProvided != remote {
+		t.Fatalf("set sent %s %s %s", req.method, req.path, req.body)
+	}
+	if err := execCmd(t, append([]string{"runner", "pool", "org-default", "set", "--barrier", "none"}, base...)...); err != nil {
+		t.Fatal(err)
+	}
+	if body := srv.last().body; strings.Contains(string(body), "barrier") {
+		t.Errorf("none sent %s, want no barrier", body)
+	}
+	n := len(srv.reqs)
+	for _, bad := range [][]string{{"set"}, {"set", "--barrier", "CC9"}} {
+		if err := execCmd(t, append(append([]string{"runner", "pool", "org-default"}, bad...), base...)...); err == nil {
+			t.Errorf("%v was accepted", bad)
+		}
+	}
+	for _, r := range srv.reqs[n:] {
+		if r.method == http.MethodPut {
+			t.Fatal("an invalid barrier reached the server")
+		}
+	}
+}
