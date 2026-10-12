@@ -5,10 +5,10 @@
 
 import * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { secrets } from "../../../../../lib/api/secrets";
-import { SCENARIO_ACCESS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
+import { SCENARIO_ACCESS, SETUP_ITEMS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
 import type { AccessFacts } from "../../../../../lib/types/new-run-access";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
@@ -153,30 +153,57 @@ describe("Tools and access step", () => {
     expect(screen.getByText(NR_TOOLS.SETUP_ALL_SET)).toBeInTheDocument();
   });
 
-  it("finishing a setup door marks the item Done, lowers the count and asks the server again", async () => {
-    answer(SCENARIO_ACCESS.app, true);
-    show();
-    expect(await screen.findByText(NR_TOOLS.STICKY_ONE)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_ADD }));
-    await userEvent.type(screen.getByLabelText(NR_TOOLS.TOKEN_LABEL), "tok");
-    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM }));
-    await waitFor(() => expect(screen.getByText(NR_TOOLS.STICKY_DONE)).toBeInTheDocument());
-    expect(secrets.setSecret).toHaveBeenCalledWith("deploy-key", "tok");
-    expect(screen.getByText(NR_TOOLS.SETUP_DONE)).toBeInTheDocument();
-    expect(h.checks.invalidateChecks).toHaveBeenCalledTimes(1);
-  });
-
-  it("brings an item back as missing when the next answer still lists it", async () => {
-    answer(SCENARIO_ACCESS.app, true);
-    const view = show();
+  const again = (view: ReturnType<typeof show>) =>
+    view.rerender(<NewRunDraftProvider owner="alice"><Seed intent={READY}><ToolsStep {...props} /><Revision /></Seed></NewRunDraftProvider>);
+  const saveToken = async () => {
     await userEvent.click(await screen.findByRole("button", { name: NR_TOOLS.SETUP_ADD }));
     await userEvent.type(screen.getByLabelText(NR_TOOLS.TOKEN_LABEL), "tok");
     await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM }));
-    await screen.findByText(NR_TOOLS.STICKY_DONE);
+    await waitFor(() => expect(secrets.setSecret).toHaveBeenCalledWith("deploy-key", "tok"));
+  };
+
+  it("counts only items the server reports missing: satisfied and unverified ones are neither listed nor counted", async () => {
+    const base = SCENARIO_ACCESS.member;
+    const unverified = { ...SETUP_ITEMS.addSecret, id: "git_provider:github:app", label: "GitHub App installation", status: "unverified" };
+    answer({ ...base, setup: [unverified, { ...SETUP_ITEMS.addSecret, id: "secret:ok", label: "ok-key", status: "satisfied" }] }, true);
+    show();
+    expect(await screen.findByText(NR_TOOLS.STICKY_DONE)).toBeInTheDocument();
+    expect(screen.getByText(NR_TOOLS.SETUP_ALL_SET)).toBeInTheDocument();
+    expect(screen.queryByText("GitHub App installation")).not.toBeInTheDocument();
+  });
+
+  it("finishing a door shows neither Done nor Everything is set up until the server answers again", async () => {
+    answer(SCENARIO_ACCESS.app, true);
+    const view = show();
+    expect(await screen.findByText(NR_TOOLS.STICKY_ONE)).toBeInTheDocument();
+    await saveToken();
+    await waitFor(() => expect(h.checks.invalidateChecks).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(NR_TOOLS.SETUP_DONE)).not.toBeInTheDocument();
+    expect(screen.queryByText(NR_TOOLS.STICKY_DONE)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: NR_TOOLS.SETUP_ADD })).not.toBeInTheDocument();
+
+    answer({ ...SCENARIO_ACCESS.app, setup: [{ ...SETUP_ITEMS.addSecret, status: "satisfied" }] }, true);
+    again(view);
+    expect(await screen.findByText(NR_TOOLS.STICKY_DONE)).toBeInTheDocument();
+    expect(screen.getByText(NR_TOOLS.SETUP_DONE)).toBeInTheDocument();
+  });
+
+  it("brings an item back with its door when the next answer still lists it as missing", async () => {
+    answer(SCENARIO_ACCESS.app, true);
+    const view = show();
+    await saveToken();
     answer({ ...SCENARIO_ACCESS.app, setup: [...SCENARIO_ACCESS.app.setup] }, true);
-    await act(async () => view.rerender(<NewRunDraftProvider owner="alice"><Seed intent={READY}><ToolsStep {...props} /><Revision /></Seed></NewRunDraftProvider>));
+    again(view);
     expect(await screen.findByText(NR_TOOLS.STICKY_ONE)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: NR_TOOLS.SETUP_ADD })).toBeInTheDocument();
+  });
+
+  it("holds the rows' Ready chips and the policy sentence while the answer is stale", async () => {
+    answer(SCENARIO_ACCESS.member, false);
+    show();
+    await screen.findByRole("heading", { name: NR_TOOLS.TITLE });
+    expect(screen.queryByText(NR_TOOLS.STATUS_READY)).not.toBeInTheDocument();
+    expect(screen.queryByText(NR_TOOLS.NET_POLICY_DENY_REVIEW_YOU, { exact: false })).not.toBeInTheDocument();
   });
 
   it("adds nothing until the person chooses: opening rows and focusing doors leave the draft as it was", async () => {
@@ -184,7 +211,6 @@ describe("Tools and access step", () => {
     show();
     const before = (await screen.findByTestId("revision")).textContent;
     for (const toggle of screen.getAllByRole("button", { name: /^Details for / })) await userEvent.click(toggle);
-    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_CHOOSE }));
     expect(screen.getByTestId("revision").textContent).toBe(before);
     expect(screen.queryByRole("button", { name: NR_TOOLS.CARD_ADD })).not.toBeInTheDocument();
   });

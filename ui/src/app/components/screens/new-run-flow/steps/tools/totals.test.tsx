@@ -84,12 +84,16 @@ describe("the unlisted-host line", () => {
     [u({ mode: "wait_for_review", decider: "admin" }), NR_TOOLS.NET_POLICY_HELD_ADMIN],
     [u({ mode: "always_deny", allow_all: true }), NR_TOOLS.NET_POLICY_ALLOW_ALL],
   ])("picks the sentence for %j", (unlisted, sentence) => {
-    expect(unlistedSentences(unlisted, false)[0]).toBe(sentence);
+    expect(unlistedSentences(unlisted, true)[0]).toBe(sentence);
   });
 
   it("adds the hold timeout to a held mode, and not to a refused one", () => {
-    expect(unlistedSentences(u({ mode: "wait_for_review", hold_sec: 30 }), false)).toContain(NR_TOOLS.NET_POLICY_TIMEOUT(30));
-    expect(unlistedSentences(u({ mode: "always_deny", hold_sec: 30 }), false)).not.toContain(NR_TOOLS.NET_POLICY_TIMEOUT(30));
+    expect(unlistedSentences(u({ mode: "wait_for_review", hold_sec: 30 }), true)).toContain(NR_TOOLS.NET_POLICY_TIMEOUT(30));
+    expect(unlistedSentences(u({ mode: "always_deny", hold_sec: 30 }), true)).not.toContain(NR_TOOLS.NET_POLICY_TIMEOUT(30));
+  });
+
+  it("says only the ceiling line while the answer is stale, never the last answer's mode", () => {
+    expect(unlistedSentences(u({ allow_all: true }), false)).toEqual([NR_TOOLS.NET_POLICY_CEILING]);
   });
 
   it("names the ceiling until the check, and the check after it", () => {
@@ -111,6 +115,12 @@ describe("Credentials total", () => {
     expect(credentials().getByText(NR_TOOLS.FOR_ROW("Claude Code"))).toBeInTheDocument();
     expect(credentials().getByText(NR_TOOLS.FOR_ROW("acme/web"))).toBeInTheDocument();
     expect(credentials().getByText(NR_TOOLS.CREDENTIALS_POLICY)).toBeInTheDocument();
+  });
+
+  it("shows no row name for a credential whose row is unknown, never its id", () => {
+    const orphan: AccessFacts = { ...MEMBER, credentials: [{ ...MEMBER.credentials[0], row: "agent:unlisted" }] };
+    render(<Totals names={HARNESS_NAMES} access={orphan} answered />);
+    expect(credentials().queryByText(/agent:unlisted/)).not.toBeInTheDocument();
   });
 
   it("with the proxy-inject switch on, a Bedrock SSO credential is one short-lived line Wardyn renews", () => {

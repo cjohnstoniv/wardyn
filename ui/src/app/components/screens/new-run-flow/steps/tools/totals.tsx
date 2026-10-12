@@ -35,6 +35,7 @@ const credentialKind = (c: AccessCredential): string | undefined => (c.kind === 
 
 /** "Anything else" for the clamped, effective spec, then whether the organisation's limits have been checked. */
 export function unlistedSentences(u: AccessUnlisted, answered: boolean): string[] {
+  if (!answered) return [NR_TOOLS.NET_POLICY_CEILING];
   const admin = u.decider !== "you";
   const out: string[] = [];
   if (u.allow_all) out.push(NR_TOOLS.NET_POLICY_ALLOW_ALL);
@@ -44,7 +45,7 @@ export function unlistedSentences(u: AccessUnlisted, answered: boolean): string[
     out.push(admin ? NR_TOOLS.NET_POLICY_HELD_ADMIN : NR_TOOLS.NET_POLICY_HELD_YOU);
     if (u.hold_sec) out.push(NR_TOOLS.NET_POLICY_TIMEOUT(u.hold_sec));
   }
-  out.push(answered ? NR_TOOLS.NET_POLICY_CHECKED : NR_TOOLS.NET_POLICY_CEILING);
+  out.push(NR_TOOLS.NET_POLICY_CHECKED);
   return out;
 }
 
@@ -91,7 +92,7 @@ export function Totals({ access, answered, names: harnessNames }: { access: Acce
               <li key={c.id} className="flex flex-wrap items-center justify-between gap-2">
                 <span className="min-w-0 [overflow-wrap:anywhere]">
                   {kind && <span>{kind} </span>}
-                  <span className="text-sm text-muted-foreground">{NR_TOOLS.FOR_ROW(names.get(c.row) ?? c.row)}</span>
+                  {names.has(c.row) && <span className="text-sm text-muted-foreground">{NR_TOOLS.FOR_ROW(names.get(c.row) ?? "")}</span>}
                 </span>
                 {delivery && <Chip className="whitespace-normal">{delivery}</Chip>}
               </li>

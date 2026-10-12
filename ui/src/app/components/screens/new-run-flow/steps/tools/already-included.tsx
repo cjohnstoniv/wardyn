@@ -31,7 +31,8 @@ function subLine(row: AccessRow, access: AccessFacts, intent: RunIntent): string
   return undefined;
 }
 
-function Status({ status }: { status: string }) {
+function Status({ status, answered }: { status: string; answered: boolean }) {
+  if (!answered) return <Chip>{NR_TOOLS.NET_REQUESTED}</Chip>;
   if (status === "ready") return <Chip tone="success" dot>{NR_TOOLS.STATUS_READY}</Chip>;
   if (status === "needs_setup") return <Chip tone="warning" dot>{NR_TOOLS.STATUS_NEEDS_SETUP}</Chip>;
   return null;
@@ -63,7 +64,7 @@ function Detail({ row, access }: { row: AccessRow; access: AccessFacts }) {
   );
 }
 
-function IncludedRow({ row, access, intent, names }: { row: AccessRow; access: AccessFacts; intent: RunIntent; names?: HarnessNames }) {
+function IncludedRow({ row, access, answered, intent, names }: { row: AccessRow; access: AccessFacts; answered: boolean; intent: RunIntent; names?: HarnessNames }) {
   const [open, setOpen] = React.useState(false);
   const detail = React.useId();
   const sub = subLine(row, access, intent);
@@ -78,8 +79,8 @@ function IncludedRow({ row, access, intent, names }: { row: AccessRow; access: A
           </div>
           {sub && <p className="text-sm text-muted-foreground">{sub}</p>}
         </div>
-        <Status status={row.status} />
-        <Button type="button" variant="ghost" size="sm" aria-expanded={open} aria-controls={detail} onClick={() => setOpen(!open)}>
+        <Status status={row.status} answered={answered} />
+        <Button type="button" variant="ghost" size="sm" aria-expanded={open} aria-controls={open ? detail : undefined} onClick={() => setOpen(!open)}>
           <ChevronDown aria-hidden className={open ? "rotate-180" : undefined} />
           <span className="sr-only">{NR_TOOLS.DETAILS_FOR(name)}</span>
         </Button>
@@ -89,7 +90,7 @@ function IncludedRow({ row, access, intent, names }: { row: AccessRow; access: A
   );
 }
 
-export function AlreadyIncluded({ access, intent, names }: { access: AccessFacts | undefined; intent: RunIntent; names?: HarnessNames }) {
+export function AlreadyIncluded({ access, answered, intent, names }: { access: AccessFacts | undefined; answered: boolean; intent: RunIntent; names?: HarnessNames }) {
   const headingId = React.useId();
   const rows = access?.rows.filter((r) => r.from in FROM) ?? [];
   return (
@@ -100,7 +101,7 @@ export function AlreadyIncluded({ access, intent, names }: { access: AccessFacts
       </div>
       {access && rows.length > 0 && (
         <ul className="flex flex-col gap-2">
-          {rows.map((row) => <IncludedRow key={row.id} row={row} access={access} intent={intent} names={names} />)}
+          {rows.map((row) => <IncludedRow key={row.id} row={row} access={access} answered={answered} intent={intent} names={names} />)}
         </ul>
       )}
     </section>

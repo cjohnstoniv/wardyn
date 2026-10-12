@@ -77,7 +77,9 @@ function AddTokenDialog({ item, onClose, onSaved }: { item: SetupItem; onClose: 
 
 export interface SetupNeededProps {
   items: readonly SetupItem[];
-  /** Ids the person finished here, shown Done until the server's next answer settles them. */
+  /** Ids finished here that wait for the server's next answer: no door, no verdict yet. */
+  pending: ReadonlySet<string>;
+  /** Ids the server's answer now reports satisfied. */
   done: ReadonlySet<string>;
   intent: RunIntent;
   names?: HarnessNames;
@@ -85,19 +87,29 @@ export interface SetupNeededProps {
   onDone: (id: string) => void;
 }
 
-export function SetupNeeded({ items, done, intent, names, onDone }: SetupNeededProps) {
+export function SetupNeeded({ items, pending, done, intent, names, onDone }: SetupNeededProps) {
   const headingId = React.useId();
   const announce = useAnnounce();
   const door = useModelAccessDoor();
   const { status } = useShellSetupStatus();
   const [adding, setAdding] = React.useState<SetupItem | null>(null);
 
-  const providerName = (id: string) => status?.model_providers?.find((p) => p.id === id)?.name ?? id;
+  // Choose has nothing to focus until Harness setup renders that harness's provider control.
+  const [chooseReady, setChooseReady] = React.useState<ReadonlySet<string>>(new Set());
+  React.useEffect(() => {
+    const ready = new Set(items.flatMap((i) => (i.fix?.tool && document.getElementById(providerControlId(i.fix.tool)) ? [i.fix.tool] : [])));
+    setChooseReady((old) => (old.size === ready.size && [...ready].every((t) => old.has(t)) ? old : ready));
+  });
+
+  const providerName = (id: string) => status?.model_providers?.find((p) => p.id === id)?.name;
   const sentence = (item: SetupItem): string => {
-    if (item.fix?.action === "choose_model_provider" && item.fix.tool) return NR_TOOLS.SETUP_CHOOSE_PROVIDER(names?.get(item.fix.tool) ?? item.fix.tool);
-    const provider = item.fix?.action === "sign_in" ? signInProvider(intent, item) : undefined;
-    return provider ? NR_TOOLS.SETUP_SIGN_IN_TO(providerName(provider)) : item.label;
+    const harness = item.fix?.action === "choose_model_provider" ? names?.get(item.fix.tool ?? "") : undefined;
+    if (harness) return NR_TOOLS.SETUP_CHOOSE_PROVIDER(harness);
+    const provider = item.fix?.action === "sign_in" ? providerName(signInProvider(intent, item) ?? "") : undefined;
+    return provider ? NR_TOOLS.SETUP_SIGN_IN_TO(provider) : item.label;
   };
+  // The server names a harness's setup by its id until the shell's names load: say nothing rather than the id.
+  const requiredBy = (item: SetupItem): string | undefined => names?.get(item.required_by) ?? (item.kind === "llm_access" ? undefined : item.required_by);
 
   const open = (item: SetupItem, kind: SetupDoor, trigger: HTMLElement) => {
     if (kind === "add") setAdding(item);
@@ -123,13 +135,14 @@ export function SetupNeeded({ items, done, intent, names, onDone }: SetupNeededP
           {items.map((item) => {
             const finished = done.has(item.id);
             const doorKind = setupDoor(item);
-            const kind = doorKind === "sign_in" && !signInProvider(intent, item) ? undefined : doorKind;
+            const kind = pending.has(item.id) || (doorKind === "sign_in" && !signInProvider(intent, item)) ||
+              (doorKind === "choose" && !chooseReady.has(item.fix?.tool ?? "")) ? undefined : doorKind;
             return (
               <li key={item.id} id={setupRowId(item)} tabIndex={-1} className="flex flex-wrap items-center gap-3 rounded-md border border-border p-3 outline-none">
                 {finished ? <Check aria-hidden className="size-4 text-success" /> : <TriangleAlert aria-hidden className="size-4 text-warning" />}
                 <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
                   <strong className="font-medium">{sentence(item)}</strong>{" "}
-                  <span className="text-sm text-muted-foreground">{names?.get(item.required_by) ?? item.required_by}</span>
+                  <span className="text-sm text-muted-foreground">{requiredBy(item)}</span>
                 </span>
                 {finished ? <Chip tone="success">{NR_TOOLS.SETUP_DONE}</Chip> : kind && (
                   <Button type="button" variant="outline" size="sm" onClick={(e) => open(item, kind, e.currentTarget)}>{DOOR_LABEL[kind]}</Button>
