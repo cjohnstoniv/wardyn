@@ -57,3 +57,6 @@ reason component_autonomy
 
 reason placement_component_self_defined
 reason service_scope
+reason drive_not_found
+reason drive_target_conflict
+reason drive_not_in_pool

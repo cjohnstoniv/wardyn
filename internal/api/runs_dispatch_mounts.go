@@ -641,7 +641,8 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drives []types.DriveMount) 
 // cannot read back the object it was allocated. `enforcement` is what actually
 // binds the drive's bytes (types.StorageEnforcement), logged beside the mount so
 // a size read back in a later dispute carries its caveat instead of reading as a
-// promise. Five fields, matching docs/AUDIT-ACTIONS.md exactly.
+// promise. `drive_id` and the in-sandbox `target` say which drive went where
+// when a run attaches several. Seven fields, matching docs/AUDIT-ACTIONS.md.
 //
 // The nil test lives HERE rather than at the assembly site for a mechanical
 // reason worth stating: dispatchRun sits at its gocyclo ceiling, so one more
@@ -653,9 +654,11 @@ func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, drives []
 			driveAuditTarget(drive), "success", mustJSON(map[string]any{
 				"backend":     drive.Backend,
 				"drive":       drive.HomeName,
+				"drive_id":    drive.DriveID,
 				"enforcement": drive.Enforcement,
 				"mode":        driveAuditMode(drive.ReadOnly),
 				"object":      driveAuditTarget(drive),
+				"target":      drive.Target,
 			})))
 	}
 }

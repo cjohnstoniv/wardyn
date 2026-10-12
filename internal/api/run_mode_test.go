@@ -5,6 +5,7 @@ package api
 
 import (
 	"encoding/json"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -110,7 +111,7 @@ func TestRunModeRefusals(t *testing.T) {
 		{"a start folder cannot leave its mount", `"experience":"interactive","tools":[` + claudeTool + `],"drive":{"enabled":true},"start_folder":{"kind":"attachment","attachment":"drive","subpath":"../etc"}`, reasonStartFolderInvalid, startFolderShapeMsg("../etc"), 400},
 		{"a start folder is relative", `"experience":"interactive","tools":[` + claudeTool + `],"drive":{"enabled":true},"start_folder":{"kind":"attachment","attachment":"drive","subpath":"/etc"}`, reasonStartFolderInvalid, "", 400},
 		{"a start folder on a drive names one of drives[]", `"experience":"interactive","tools":[` + claudeTool + `],"start_folder":{"kind":"attachment","drive_id":"d1","subpath":"src"}`, reasonStartFolderInvalid, startFolderAttachmentMsg("d1"), 400},
-		{"a listed drive the caller's grants do not reach", `"experience":"interactive","tools":[` + claudeTool + `],"drives":[{"drive_id":"` + listedDrive + `"}],"start_folder":{"kind":"attachment","drive_id":"` + listedDrive + `","subpath":"src"}`, reasonDriveNotFound, driveNotFoundMsg(listedDrive), 422},
+		{"a listed drive the caller's grants do not reach", `"experience":"interactive","tools":[` + claudeTool + `],"drives":[{"drive_id":"` + listedDrive + `"}],"start_folder":{"kind":"attachment","drive_id":"` + listedDrive + `","subpath":"src"}`, string(authz.ReasonDriveNotFound), driveNotFoundMsg(listedDrive), 422},
 		{"drive and drives are one choice", `"experience":"interactive","tools":[` + claudeTool + `],"drive":{"enabled":true},"drives":[{"drive_id":"` + listedDrive + `"}]`, reasonDriveSelectionConflict, driveSelectionConflictMsg(), 400},
 		{"no repositories beside a listed drive", interactiveOK + `,"drives":[{"drive_id":"` + listedDrive + `"}]`, reasonRunModeConflict, noRepositoriesConflictMsg(), 422},
 		{"a subpath cannot step out through its mount's target", `"experience":"interactive","tools":[` + claudeTool + `],"workspaces":[{"workspace_id":"` + wsID + `","target":"/home/agent/work"}],"start_folder":{"kind":"attachment","attachment":"` + wsID + `","subpath":"a/../../../etc"}`, reasonStartFolderInvalid, "", 400},

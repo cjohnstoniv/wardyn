@@ -623,7 +623,7 @@ start.
 | `override_refused` | `422`: a widening, base-host removal or foreign secret the narrowing table never allows. |
 | `request_field_unavailable` | `422`: a field this server cannot honour yet. It is refused, never dropped. |
 | `harness_not_installed` / `harness_set_no_image` / `harness_set_custom_image` / `harness_providers_conflict` | `422`: no image here carries a harness, or the harnesses together; two or more harnesses name a custom image; or two harnesses' providers share a host. `tool` names the harness. |
-| `drive_selection_conflict` / `drive_invalid` / `drive_not_found` / `drive_not_in_pool` / `drive_target_conflict` | `drives[]`: `400` `drive` beside `drives`, or a bad or repeated id; `422` an id the caller's grants miss, a drive the pool cannot mount, two drives on one path. |
+| `drive_selection_conflict` / `drive_invalid` / `drive_not_found` / `drive_not_in_pool` / `drive_target_conflict` / `drive_share_beside_managed` | `drives[]`: `400` `drive` beside `drives`, or a bad id; `422` an unreachable id, an unmountable pool, two drives on one path, a Kubernetes share beside managed. |
 | `run_mode_required` / `run_mode_invalid` / `start_folder_invalid` | `400`: a new client's mode (or a background task's workload) is unset, and is never inferred (`mode_contract: "0.9"` marks a request as a new client's even when it carries no other run-mode field); a run-mode carrier is malformed; a `start_folder` is malformed, names an attachment or a repository the run lacks, or leaves its mount. |
 | `run_mode_conflict` | `422`: run-mode carriers contradict each other, or an older field they replace (`agent`, `task`, `interactive`) rides beside them. |
 | `run_shape_conflict` | `422`: `shape` does not fit the run: it needs `experience`, and `application`, `environment` and `agent_task` each require the workload or tool shown under [Run documents](#run-documents). |
@@ -1068,7 +1068,7 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
   today.
 - Absent `?view=`, it defaults to `user`; `view=admin` from a
   non-security-operator is coerced to `user`.
-- `GET /api/v1/me/drives?runner_pool_id=<uuid>`: the caller's drive catalogue ([user-drives.md](operations/user-drives.md#user-drives-on-docker)).
+- `GET /api/v1/me/drives?runner_pool_id=<uuid>`: drive catalogue ([user-drives.md](operations/user-drives.md#user-drives-on-docker)). `POST /drives/grants` replaces; `additional: true` adds.
 
 Beyond `run_id`, the audit query accepts server-side predicates:
 

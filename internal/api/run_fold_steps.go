@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -510,8 +511,8 @@ func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
 	if len(f.drives) == 0 || !f.place.pooled || !driveNotInPool(f.place.row) {
 		return true
 	}
-	return !runError(http.StatusUnprocessableEntity, reasonDriveNotInPool,
-		driveNotInPoolMsg(f.drives[0].resolved.Drive.Name)).write(s, f.w, f.r)
+	msg := driveNotInPoolMsg(f.drives[0].resolved.Drive.Name)
+	return !driveDenied(authz.Deny(authz.ReasonDriveNotInPool, "runs.drive", msg), msg).write(s, f.w, f.r)
 }
 
 // stepPlacement runs after the components and before the local-eligibility step: the confinement

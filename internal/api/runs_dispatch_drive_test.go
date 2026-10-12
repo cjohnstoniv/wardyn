@@ -132,6 +132,8 @@ func TestDispatch_DriveReachesSpecEnvAndAudit(t *testing.T) {
 		"enforcement": "external",
 		"mode":        "ro",
 		"object":      "nas/alice",
+		"drive_id":    drive.DriveID.String(),
+		"target":      runner.DriveTarget,
 	}
 	for k, v := range want {
 		if data[k] != v {
@@ -140,7 +142,7 @@ func TestDispatch_DriveReachesSpecEnvAndAudit(t *testing.T) {
 	}
 	for k := range data {
 		if _, ok := want[k]; !ok {
-			t.Errorf("run.drive.mount payload carries an undocumented field %q — docs/AUDIT-ACTIONS.md lists five", k)
+			t.Errorf("run.drive.mount payload carries an undocumented field %q — docs/AUDIT-ACTIONS.md lists seven", k)
 		}
 	}
 	// The whole row, not one field of it: nothing a member can fetch may spell
@@ -392,4 +394,37 @@ func driveList(drive *types.DriveMount) []types.DriveMount {
 		return nil
 	}
 	return []types.DriveMount{*drive}
+}
+
+// TestDispatch_EveryDriveIsMountedAndAudited: a run with several drives hands
+// the runner every one and writes one run.drive.mount per drive, each naming
+// the drive and the path it went to.
+func TestDispatch_EveryDriveIsMountedAndAudited(t *testing.T) {
+	fr := &fakeRunner{}
+	srv, _, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
+	run.Task = ""
+	first, second := dispatchDrive(false), dispatchDrive(true)
+	first.DriveID, second.DriveID = uuid.New(), uuid.New()
+	second.Target, second.HomeName = runner.SharedRoot+"/nas", "alice-2"
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+		RunToken: "run-token", Image: "wardyn/claude-code:latest", Drives: []types.DriveMount{*first, *second},
+	})
+	if len(fr.lastSpec.Drives) != 2 {
+		t.Fatalf("SandboxSpec.Drives = %+v, want both drives", fr.lastSpec.Drives)
+	}
+	got := map[string]string{}
+	for _, ev := range audit.events {
+		if ev.Action != "run.drive.mount" {
+			continue
+		}
+		var data map[string]any
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		got[data["drive_id"].(string)] = data["target"].(string)
+	}
+	want := map[string]string{first.DriveID.String(): runner.DriveTarget, second.DriveID.String(): runner.SharedRoot + "/nas"}
+	if len(got) != len(want) || got[first.DriveID.String()] != want[first.DriveID.String()] || got[second.DriveID.String()] != want[second.DriveID.String()] {
+		t.Errorf("run.drive.mount rows = %v, want %v", got, want)
+	}
 }

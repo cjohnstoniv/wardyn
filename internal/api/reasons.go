@@ -466,9 +466,10 @@ const (
 const (
 	reasonDriveSelectionConflict = "drive_selection_conflict" // drive and drives were both sent
 	reasonDriveInvalid           = "drive_invalid"            // a drives[] entry is malformed or repeated, or there are too many
-	reasonDriveNotFound          = "drive_not_found"          // a drive id the caller's own grants do not reach
-	reasonDriveNotInPool         = "drive_not_in_pool"        // the run's pool cannot mount one of its drives
-	reasonDriveTargetConflict    = "drive_target_conflict"    // two attached drives derive one path
+	// drive_not_found, drive_not_in_pool and drive_target_conflict are authz
+	// reasons (authz.ReasonDrive*): each is also an authz.denied row.
+	// reasonDriveShareBesideManaged: a shared and a managed Kubernetes drive in one run.
+	reasonDriveShareBesideManaged = "drive_share_beside_managed"
 )
 
 // git_pat narrowing (runs_dispatch_pat_scope.go): a run is refused when a

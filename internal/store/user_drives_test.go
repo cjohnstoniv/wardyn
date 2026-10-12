@@ -360,10 +360,10 @@ func TestPG_UserDrive_DeleteRestrictedWhileGranted(t *testing.T) {
 	}
 }
 
-// TestPG_UserDriveGrant_NaturalKeyUpsert: re-allocating a subject the SAME drive
-// must update its one row for that drive, not accumulate a second (migration
-// 0166 keys on subject and drive; another drive is another row, pinned by
-// TestPG_UpsertUserDriveGrant_PerDriveKey).
+// TestPG_UserDriveGrant_NaturalKeyUpsert: re-allocating a subject must REPOINT
+// its one row, not accumulate a second. Two rows for one subject would make
+// "which drive does Bob get" depend on the priority/name tie-breaks instead of
+// the admin's last write.
 //
 // It also pins the TRI-STATE writable override, which a plain bool could not
 // carry: nil is "use the drive's posture" and an explicit false is an admin
@@ -374,6 +374,7 @@ func TestPG_UserDriveGrant_NaturalKeyUpsert(t *testing.T) {
 	st := store.NewPG(pool)
 
 	first := seedUserDrive(t, st, "test-grant-a-"+uuid.NewString())
+	second := seedUserDrive(t, st, "test-grant-b-"+uuid.NewString())
 	subject := "test-user-" + uuid.NewString()
 
 	g1 := seedUserDriveGrant(t, st, types.UserDriveGrant{
@@ -391,7 +392,7 @@ func TestPG_UserDriveGrant_NaturalKeyUpsert(t *testing.T) {
 	g2, err := st.UpsertUserDriveGrant(ctx, types.UserDriveGrant{
 		SubjectType:      types.CapabilitySubjectUser,
 		Subject:          subject,
-		DriveID:          first.ID,
+		DriveID:          second.ID,
 		Priority:         9,
 		Enabled:          true,
 		SizeMiBOverride:  512,
@@ -404,7 +405,7 @@ func TestPG_UserDriveGrant_NaturalKeyUpsert(t *testing.T) {
 	if g2.ID != g1.ID {
 		t.Errorf("re-allocate id = %s, want the existing row's %s", g2.ID, g1.ID)
 	}
-	if g2.DriveID != first.ID || g2.Priority != 9 || g2.SizeMiBOverride != 512 || g2.HomeOverride != "bsmith" {
+	if g2.DriveID != second.ID || g2.Priority != 9 || g2.SizeMiBOverride != 512 || g2.HomeOverride != "bsmith" {
 		t.Errorf("re-allocate = %+v, want every override carried through", g2)
 	}
 	if g2.WritableOverride == nil || *g2.WritableOverride {

@@ -29,3 +29,7 @@ func driveNotInPoolMsg(name string) string {
 func driveTargetConflictMsg(a, b, target string) string {
 	return fmt.Sprintf("%s and %s both mount at %s. Attach one of them.", a, b, target)
 }
+
+func driveShareBesideManagedMsg(share, managed string) string {
+	return fmt.Sprintf("%s is a shared drive and %s a managed one; a Kubernetes run mounts one kind or the other. Attach one of them.", share, managed)
+}

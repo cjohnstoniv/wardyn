@@ -8,6 +8,9 @@ package docker
 import (
 	"context"
 	"fmt"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
@@ -152,8 +155,20 @@ func driveVolumeAdoptable(v volume.Volume, name string, drive *types.DriveMount)
 	return nil
 }
 
-// driveSeedPrefix names the container seedDriveVolume creates for a volume.
+// driveSeedPrefix starts the name of the container seedDriveVolume creates;
+// driveSeedName completes it with the run, so concurrent runs on one volume
+// never contend for a name, and teardown can remove one a crash left behind.
 const driveSeedPrefix = "wardyn-drive-seed-"
+
+func driveSeedName(runID uuid.UUID) string { return driveSeedPrefix + runID.String() }
+
+// componentDriveSeed labels the seed container (wardynLabels), so a label sweep
+// finds one that outlived its run.
+const componentDriveSeed = "drive-seed"
+
+// driveSeedRemoveTimeout bounds the seed's last removal, which runs even when
+// the create's context has ended: a seed left behind holds the volume.
+const driveSeedRemoveTimeout = 30 * time.Second
 
 // seedDriveVolume gives a managed volume mounted below runner.DrivesRoot the
 // ownership the legacy drive gets. Docker copies an image directory's owner and
@@ -166,28 +181,36 @@ const driveSeedPrefix = "wardyn-drive-seed-"
 // created and removed, never started, with no network: the copy happens at
 // create, nothing in the image runs, nothing is chowned, and a volume that
 // already holds data is left as it is (Docker copies into an empty volume
-// only). The container is named after the volume, so one a crash left behind
-// is replaced rather than doubled.
-func (d *Driver) seedDriveVolume(ctx context.Context, image string, drive *types.DriveMount) error {
-	name := driveSeedPrefix + drive.ObjectName
-	remove := func() error {
+// only). One run seeds its drives one at a time under its own name, so two
+// runs on one volume never collide; two copies into one empty volume write the
+// same directory.
+func (d *Driver) seedDriveVolume(ctx context.Context, runID uuid.UUID, image string, drive *types.DriveMount) error {
+	name := driveSeedName(runID)
+	remove := func(ctx context.Context) error {
 		if _, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
 			return fmt.Errorf("docker: seed user drive volume %q: remove: %w", drive.ObjectName, err)
 		}
 		return nil
 	}
-	if err := remove(); err != nil {
+	if err := remove(ctx); err != nil {
 		return err
 	}
-	if _, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Name:   name,
-		Config: &container.Config{Image: image, Cmd: []string{"true"}, NetworkDisabled: true},
+	_, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: name,
+		Config: &container.Config{Image: image, Cmd: []string{"true"}, NetworkDisabled: true,
+			Labels: wardynLabels(runID, componentDriveSeed, map[string]string{labelDrive: drive.DriveID.String()})},
 		HostConfig: &container.HostConfig{
 			NetworkMode: "none",
 			Mounts:      []mount.Mount{{Type: mount.TypeVolume, Source: drive.ObjectName, Target: runner.DriveTarget}},
 		},
-	}); err != nil {
+	})
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driveSeedRemoveTimeout)
+	defer cancel()
+	if rerr := remove(rctx); err == nil {
+		err = rerr
+	}
+	if err != nil {
 		return fmt.Errorf("docker: seed user drive volume %q: %w", drive.ObjectName, err)
 	}
-	return remove()
+	return nil
 }
