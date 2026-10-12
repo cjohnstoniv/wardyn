@@ -39,6 +39,8 @@ type runPlacement struct {
 	filled bool
 	// eligible is every candidate that survived the intersection, by target id, never empty once pooled.
 	eligible []poolTarget
+	// targets is every candidate with its own facts, before any demand: Review's barrier options.
+	targets []poolTarget
 	// choices is the caller's permitted catalogue with each pool's availability, for the two dry doors.
 	choices []client.RunnerPoolChoice
 	// limits are what this run may get, pooled or not; applied is the CPU and memory it gets.
@@ -128,13 +130,17 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 			}
 		}
 	}
+	choices, refusal := s.poolChoices(ctx, ps, rows, s.deniedPlacements(ctx, f.ceiling))
+	if refusal != nil {
+		return runPlacement{}, refusal
+	}
 	offers := map[types.Placement]placementOffer{pool.HostingType.Placement(): offerOf(eligible, reason)}
 	decision := placementFor(f.req.PlacementRequest(), offers, nil)
 	if decision.Refusal != "" {
 		return runPlacement{}, targetRefusal(decision.Refusal, row.Pool.Name, pool.HostingType)
 	}
 	return runPlacement{pooled: true, pool: pool, row: row.Pool, placement: decision.Placement, filled: decision.Filled,
-		eligible: pickTargets(eligible, decision.Targets), choices: s.poolChoices(rows), limits: limits, applied: applied}, nil
+		eligible: pickTargets(eligible, decision.Targets), targets: targets, choices: choices, limits: limits, applied: applied}, nil
 }
 
 // hostingOfPlacement is the hosting type a request's placement names; the pool decides when it is absent.
@@ -152,16 +158,19 @@ func poolRefusal(ref *runnerpool.Refusal) *runRefusal {
 	return runError(ref.Reason.Status(), string(ref.Reason), ref.Message())
 }
 
-// poolChoices is the permitted catalogue as the two dry doors show it. The candidate sets and limits
-// are what a launch will intersect; a target is never named here, because the launch picks it from the
+// poolChoices is the permitted catalogue as the two dry doors show it, each pool's availability the
+// pool list's (poolAvailability). A target is never named here, because the launch picks it from the
 // run id it allocates.
-func (s *Server) poolChoices(rows []store.RunnerPoolCatalogueRow) []client.RunnerPoolChoice {
+func (s *Server) poolChoices(ctx context.Context, ps store.RunnerPoolStore, rows []store.RunnerPoolCatalogueRow, denied []types.Placement) ([]client.RunnerPoolChoice, *runRefusal) {
 	out := make([]client.RunnerPoolChoice, 0, len(rows))
 	for _, row := range rows {
-		availability, reason := s.poolAvailability(row)
-		out = append(out, client.RunnerPoolChoice{ID: row.Pool.ID, Name: row.Pool.Name, HostingType: row.Pool.HostingType, Availability: availability, Reason: reason})
+		st, refusal := s.poolAvailability(ctx, ps, row, denied)
+		if refusal != nil {
+			return nil, refusal
+		}
+		out = append(out, st.choice(row))
 	}
-	return out
+	return out, nil
 }
 
 // placementOffer is what one placement can give this run: the fully eligible targets, or the reason
@@ -378,7 +387,7 @@ func targetRefusal(reason placement.Reason, pool string, hosting types.RunnerPoo
 		if hosting == types.RunnerPoolRemoteProvided {
 			return poolRefusal(&runnerpool.Refusal{Reason: runnerpool.ReasonNoEligibleMember, Name: pool, Hosting: hosting})
 		}
-		return runError(reason.Status(), string(reason), "None of your runners in "+pool+" is online right now. Start one, or choose another pool.")
+		return runError(reason.Status(), string(reason), runnerpool.NoOnlineRunnerMsg(pool))
 	case placement.ReasonPlacementCapability:
 		return runError(reason.Status(), string(reason), "No runner in "+pool+" offers the barrier or size this run needs. Choose another pool, or ask for less.")
 	case placement.ReasonPlacementUnavailable:

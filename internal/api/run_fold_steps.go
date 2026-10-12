@@ -284,6 +284,9 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 		return false
 	}
 	f.enforced = enforced
+	if f.mode == foldPreflight {
+		f.barrierOptions = draftBarrierOptions(f, floor)
+	}
 	return !f.place.barrierRefusal(enforced).write(s, f.w, f.r)
 }
 

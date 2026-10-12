@@ -79,6 +79,8 @@ type runFold struct {
 	pushSets          []types.PushRuleSet
 	// place is where the run goes (stepPlacement): the resolved pool and the fully eligible targets.
 	place runPlacement
+	// barrierOptions are Review's barriers for the resolved pool under this draft's floors (stepConfinement).
+	barrierOptions []client.BarrierOption
 	// harnesses is a run-mode request's harness set and image the image that
 	// carries it (stepHarnessSet; nil when a custom image or workspace decides);
 	// harnessChoices is each harness's model-provider choice (stepModelProvider).

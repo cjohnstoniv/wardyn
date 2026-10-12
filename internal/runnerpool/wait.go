@@ -29,5 +29,5 @@ func (w *Wait) Sentence() string { return WaitAtCapacityMsg(w.Pool, w.Max) }
 
 // WaitAtCapacityMsg is the sentence of a run waiting behind the pool's cap.
 func WaitAtCapacityMsg(pool string, max int) string {
-	return fmt.Sprintf("%s is running its limit of %d. This run starts when one finishes.", pool, max)
+	return fmt.Sprintf("%s is running its limit of %d. This run starts when there's room.", pool, max)
 }
