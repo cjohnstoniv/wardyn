@@ -64,6 +64,8 @@ func (s *Server) resolveFileSecretGrants(ctx context.Context, run types.AgentRun
 			skip = "scope invalid: " + err.Error()
 		case nameSinkReservedSecret(secretName):
 			skip = "references a reserved platform-internal secret name"
+		case reservedToolgateCredentialFile(file):
+			skip = "names a file reserved for the run's tool-approval credential"
 		case secretName == bedrockAPIKeySecret:
 			skip = "the Bedrock API key is injected proxy-side only and never written into the sandbox"
 		case s.cfg.Secrets == nil:
