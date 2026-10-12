@@ -306,7 +306,7 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 		lanes[i] = lane
 		laneHosts = append(laneHosts, lane.hosts(s)...)
 	}
-	if i, host := s.laneConflict(lanes); i > 0 {
+	if i, host := laneConflict(pairs, lanes); i > 0 {
 		c := lanes[i].chosen.provider
 		s.refuseProviderDispatch(ctx, laneRun(run, pairs[i]), c.Kind, providerDenial{msg: fmt.Sprintf(mpRunLaneConflict, c.ID, host)}, nil)
 		return nil, nil, injections, providerDispatch{}, false
@@ -341,7 +341,7 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 			continue
 		}
 		// Two harnesses sharing one key provider share its one grant.
-		if !slices.ContainsFunc(lanes[:i], func(l providerLane) bool { return sameKeyGrant(l, lane) }) {
+		if !sharesKeyGrant(pairs, lanes, i) {
 			grant, ok := s.authorProviderKeyInjection(ctx, lr, lane.key)
 			if !ok {
 				return nil, nil, injections, providerDispatch{}, false
@@ -363,42 +363,47 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 const mpRunLaneConflict = "Model provider %s would put a second credential on %s, which another harness of this run " +
 	"already uses, so nothing was started. An admin gives each harness's provider its own address."
 
-// laneConflict is the first lane that would put a second credential on a host
-// an earlier lane of the run already credentials, or would be a second
-// azure_foundry lane (a run carries one at most), with that host; 0 when there
-// is none. The proxy cannot tell the harnesses' requests to one host apart,
-// and two injections for one host fail the sidecar at startup. Two harnesses
-// sharing one key provider's key, sent the same way, share its one grant
-// (sameKeyGrant) and do not conflict.
-func (s *Server) laneConflict(lanes []providerLane) (int, string) {
+// laneConflict is the first lane, by index into pairs and lanes, whose
+// provider cannot be credentialed beside an earlier lane's in one sandbox, and
+// the host they would share; 0 when there is none. The test is the create
+// door's own (harnessProviderPairsConflict), so dispatch refuses exactly the
+// pairs create refuses: a run admitted before a provider changed is caught
+// here, before anything is authored.
+func laneConflict(pairs []types.RunHarness, lanes []providerLane) (int, string) {
 	for j := 1; j < len(lanes); j++ {
 		b := lanes[j]
 		if b.chosen == nil {
 			continue
 		}
-		for _, a := range lanes[:j] {
-			switch {
-			case a.chosen == nil || sameKeyGrant(a, b):
-			case a.chosen.provider.Kind == types.ModelProviderAzureFoundry && b.chosen.provider.Kind == types.ModelProviderAzureFoundry:
-				return j, b.azure.host
-			default:
-				for _, h := range b.hosts(s) {
-					if slices.ContainsFunc(a.hosts(s), func(x string) bool { return hostEqual(x, h) }) {
-						return j, h
-					}
+		for i, a := range lanes[:j] {
+			if a.chosen == nil || !harnessProviderPairsConflict(pairs[i].Harness, a.chosen.provider, pairs[j].Harness, b.chosen.provider) {
+				continue
+			}
+			host := b.azure.host
+			for _, h := range providerInjectionHosts(b.chosen.provider, pairs[j].Harness) {
+				if slices.ContainsFunc(providerInjectionHosts(a.chosen.provider, pairs[i].Harness), func(x string) bool { return hostEqual(x, h) }) {
+					host = h
+					break
 				}
 			}
+			return j, host
 		}
 	}
 	return 0, ""
 }
 
-// sameKeyGrant is whether key lanes a and b would author the same grant: one
-// provider's key, to one host, sent the same way.
-func sameKeyGrant(a, b providerLane) bool {
-	return a.chosen != nil && b.chosen != nil && providerKeyKind(a.chosen.provider.Kind) && providerKeyKind(b.chosen.provider.Kind) &&
-		a.key.provider.UID == b.key.provider.UID && hostEqual(a.key.host, b.key.host) &&
-		a.key.header == b.key.header && a.key.format == b.key.format
+// sharesKeyGrant is whether key lane i shares an earlier key lane's grant: the
+// same host, which laneConflict has already let through only when the two
+// would author the same grant (harnessProviderPairsConflict).
+func sharesKeyGrant(pairs []types.RunHarness, lanes []providerLane, i int) bool {
+	b := lanes[i]
+	for k, a := range lanes[:i] {
+		if a.chosen != nil && providerKeyKind(a.chosen.provider.Kind) && hostEqual(a.key.host, b.key.host) &&
+			!harnessProviderPairsConflict(pairs[k].Harness, a.chosen.provider, pairs[i].Harness, b.chosen.provider) {
+			return true
+		}
+	}
+	return false
 }
 
 // providerLanePairs is the (harness, model provider) pairs dispatch gives a

@@ -429,3 +429,51 @@ func TestNoToolgateCredentialInContainerEnvAfterRevive(t *testing.T) {
 		t.Errorf("revived digests = %+v, want the dispatched %+v", got, digests)
 	}
 }
+
+// Create and dispatch refuse the same provider pairs: dispatch's lane test is
+// the create door's (harnessProviderPairsConflict), so a run create admits is
+// never refused at dispatch for a pair create judged otherwise, and the
+// reverse. One Azure Foundry provider on two harnesses is a conflict.
+func TestHarnessProviderConflict_CreateAndDispatchAgree(t *testing.T) {
+	endpoint := func(id, base string, harnesses ...types.ProviderHarness) types.ModelProvider {
+		return types.ModelProvider{ID: id, UID: "uid-" + id, Kind: types.ModelProviderCustomEndpoint, BaseURL: base, Harnesses: harnesses}
+	}
+	claude, codex := types.ProviderHarness{Harness: "claude-code"}, types.ProviderHarness{Harness: laneSecondHarness}
+	codexOwnHeader := types.ProviderHarness{Harness: laneSecondHarness, AuthHeader: "x-codex-key", AuthFormat: "%s"}
+	azure := func(id string) types.ModelProvider {
+		return types.ModelProvider{ID: id, UID: "uid-" + id, Kind: types.ModelProviderAzureFoundry, Harnesses: []types.ProviderHarness{claude, codex}}
+	}
+	shared := endpoint("gw", "https://gw.example.com", claude, codex)
+	ownHeader := endpoint("gw", "https://gw.example.com", claude, codexOwnHeader)
+	oneAzure := azure("az")
+	for _, tc := range []struct {
+		name     string
+		pa, pb   types.ModelProvider
+		conflict bool
+	}{
+		{"one endpoint, the same key sent the same way", shared, shared, false},
+		{"one endpoint whose header differs per harness", ownHeader, ownHeader, true},
+		{"two providers on one host", endpoint("gw-a", "https://gw.example.com", claude), endpoint("gw-b", "https://gw.example.com", codex), true},
+		{"two providers on two hosts", endpoint("gw-a", "https://gw.example.com", claude), endpoint("gw-b", "https://other.example.com", codex), false},
+		{"two Azure Foundry providers", azure("az-1"), azure("az-2"), true},
+		{"one Azure Foundry provider on two harnesses", oneAzure, oneAzure, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, atCreate := harnessProvidersConflict([]harnessChoice{
+				{harness: "claude-code", choice: runProviderChoice{provider: tc.pa, chosen: true}},
+				{harness: laneSecondHarness, choice: runProviderChoice{provider: tc.pb, chosen: true}},
+			})
+			pairs := []types.RunHarness{{Harness: "claude-code", ModelProviderID: tc.pa.ID}, {Harness: laneSecondHarness, ModelProviderID: tc.pb.ID}}
+			lanes := make([]providerLane, len(pairs))
+			for i, p := range []types.ModelProvider{tc.pa, tc.pb} {
+				lanes[i].chosen = &chosenProvider{provider: p}
+				lanes[i].key, _ = providerKeyLaneFor(p, pairs[i].Harness)
+				lanes[i].azure, _ = providerAzureLaneFor(p, pairs[i].Harness)
+			}
+			j, _ := laneConflict(pairs, lanes)
+			if atCreate != tc.conflict || (j > 0) != tc.conflict {
+				t.Errorf("conflict at create %v, at dispatch %v; want both %v", atCreate, j > 0, tc.conflict)
+			}
+		})
+	}
+}
