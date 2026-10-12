@@ -170,3 +170,44 @@ func TestReviveMCPBindingsNarrows(t *testing.T) {
 		t.Fatalf("narrowed %+v", cfg)
 	}
 }
+
+// TestAccessFacts_MCPRowAndBrokerEnforcer: step 5 shows an MCP component as an
+// mcp row whose server's host is reached via the broker, each harness's
+// servers, and the broker as the enforcer of Codex CLI's (MCP-only) rules.
+func TestAccessFacts_MCPRowAndBrokerEnforcer(t *testing.T) {
+	def := *mcpInline("Linear").Inline
+	comps := runComponents{attached: []attachedComponent{{source: componentSourceInline,
+		snapshot: types.RunComponent{SelfDefined: true, Name: "Linear", Definition: def, MCPHarnesses: []string{"codex-cli"}}}}}
+	req := createRunRequest{}
+	req.Tools = harnessTools("claude-code", "codex-cli")
+	b := &accessBuilder{in: accessInputs{req: &req, comps: comps}, hosts: map[string]*client.AccessHost{}}
+	b.componentRow(componentFact{ID: "inline:0", Name: "Linear", Status: componentReady, Hosts: def.Hosts})
+	row := b.out.Rows[0]
+	if row.Kind != accessKindMCP || row.MCP == nil || row.MCP.ServerKey != "linear" || !slices.Equal(row.MCP.Harnesses, []string{"codex-cli"}) {
+		t.Fatalf("row %+v", row)
+	}
+	if b.hosts["mcp.linear.test"].Via != viaMCPBroker || b.hosts["api.linear.test"].Via != viaEgress {
+		t.Fatalf("hosts %+v %+v", b.hosts["mcp.linear.test"], b.hosts["api.linear.test"])
+	}
+	codex, claude := b.toolPolicyFact("codex-cli"), b.toolPolicyFact("claude-code")
+	if codex.Enforcer != toolEnforcerMCPBroker || !slices.Equal(codex.MCPServers, []string{"linear"}) || len(claude.MCPServers) != 0 {
+		t.Fatalf("codex %+v\nclaude %+v", codex, claude)
+	}
+}
+
+// TestHarnessToolRules_CodexMCPBlockReachesTheBrokerSet: a person's Block on a
+// Codex CLI MCP tool compiles into Codex's own set, the set the broker reads
+// for Codex's token, and into no other harness's.
+func TestHarnessToolRules_CodexMCPBlockReachesTheBrokerSet(t *testing.T) {
+	tools := harnessTools("claude-code", "codex-cli")
+	tools[1].ToolRules = []types.ToolRule{{Tool: "mcp__linear__delete_issue", Effect: types.ToolDeny}}
+	_, sets := applyHarnessToolRules(types.RunPolicySpec{}, tools, types.ToolAllow)
+	codex, ok := types.ToolEffectForHarness(sets, "codex-cli", "mcp__linear__delete_issue")
+	claude, _ := types.ToolEffectForHarness(sets, "claude-code", "mcp__linear__delete_issue")
+	if !ok || codex != types.ToolDeny || claude == types.ToolDeny {
+		t.Fatalf("codex %q (%v), claude %q; sets %+v", codex, ok, claude, sets)
+	}
+	if harnessToolRulesRefusal(tools[1]) != nil {
+		t.Fatal("a Codex MCP Block is refused")
+	}
+}
