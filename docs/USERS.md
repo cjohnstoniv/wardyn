@@ -275,8 +275,7 @@ resolves your drive the same way, in a dry run too:
 - A template is a run setup you save to reuse (`POST /api/v1/templates`). Yours are only yours; your organisation's
   are offered to everyone; a group's are offered to its members.
 - You can publish to a group when you are in it and an admin made you one of its template managers.
-- A shared template shows the names of what it uses (a secret's name, a workspace), never a value. Using one checks
-  your own access again.
+- A shared template shows the names of what it uses (a secret's name, a workspace), never a value.
 - Readers of a shared template are not told who published it.
 - Your own templates are erased with the `run_setups` scope of an erasure.
 

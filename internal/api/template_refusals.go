@@ -96,6 +96,16 @@ func templateRevisionConflictMsg(current int) string {
 	return fmt.Sprintf("This template changed to revision %d since you opened it. Reload it, then apply your edit again.", current)
 }
 
+// templateGrantOwnerRefusalMsg words one of resolveSecretOwner's refusals for
+// the group template-manager grant; the reason stays the resolver's.
+func templateGrantOwnerRefusalMsg(refusal string) string {
+	if refusal == secretOwnerAmbiguousMsg {
+		return "That matches more than one person, so no grant was written. Use the person's subject exactly, as the Audit log shows it."
+	}
+	return "That email address doesn't match anyone this deployment knows, so no grant was written. " +
+		"Use the person's subject, as the Audit log shows it, or grant after they first sign in."
+}
+
 func templateNameTakenMsg() string {
 	return "Another template available to the same people already uses this name."
 }

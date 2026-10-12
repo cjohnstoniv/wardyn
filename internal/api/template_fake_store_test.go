@@ -30,6 +30,8 @@ type fakeTemplateStore struct {
 	revisions map[uuid.UUID][]types.RunTemplate
 	grants    []types.TemplateGroupAdmin
 	labels    map[string]string
+	// tokens is the identity directory the grant route resolves a person in.
+	tokens []types.APIToken
 }
 
 func newFakeTemplateStore() *fakeTemplateStore {
@@ -256,9 +258,19 @@ type templateTestStore struct {
 	*fakeTemplateStore
 }
 
-// ListAPITokens answers none: the grant route asks the identity directory who
-// a name is, and the base fake has no token table.
-func (templateTestStore) ListAPITokens(context.Context) ([]types.APIToken, error) { return nil, nil }
+// ListAPITokens is the identity directory the grant route resolves a person in.
+func (s templateTestStore) ListAPITokens(context.Context) ([]types.APIToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.tokens), nil
+}
+
+// signIn records a person in the identity directory, as their first token does.
+func (e *templateEnv) signIn(principal, email string) {
+	e.ts.mu.Lock()
+	defer e.ts.mu.Unlock()
+	e.ts.tokens = append(e.ts.tokens, types.APIToken{ID: uuid.New(), Principal: principal, Email: email})
+}
 
 // templateEnv is a server with SSO on and the fake template store.
 type templateEnv struct {

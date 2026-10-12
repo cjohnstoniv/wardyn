@@ -220,6 +220,9 @@ func TestTemplateForeignIDIsTheMissingID404(t *testing.T) {
 		for cname, cookie := range callers {
 			_, missing := e.call(cookie, rt.method, "/api/v1/templates/"+uuid.NewString()+rt.suffix, rt.body)
 			for fname, tpl := range foreign {
+				if cname == "truncated member" && tpl.Owner.Scope == types.TemplateScopeGroup && (rt.method == http.MethodPut || rt.method == http.MethodDelete) {
+					continue // a write the snapshot cannot answer is 403 (TestTemplateUnverifiedSnapshotWritesAre403)
+				}
 				status, body := e.call(cookie, rt.method, "/api/v1/templates/"+tpl.ID.String()+rt.suffix, rt.body)
 				if status != http.StatusNotFound || body != missing {
 					t.Errorf("%s %s as %s on %s: %d %q, want the missing id's 404 %q", rt.method, rt.suffix, cname, fname, status, body, missing)

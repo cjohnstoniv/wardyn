@@ -21,30 +21,40 @@ import (
 // maxTemplateGroupLabelRunes bounds a group's display label.
 const maxTemplateGroupLabelRunes = 64
 
-// templateGrantFromRequest decodes a grant body and makes it canonical. A
-// person the identity directory knows by exactly that name is stored by their
-// principal, the subject erasure finds them by; any other name is kept as
-// written (a sub or an email the sign-in will carry).
+// templateGrantFromRequest decodes a grant body and makes it canonical. The
+// person resolves as ?owner= does on the secrets routes (resolveSecretOwner):
+// a name the identity directory knows becomes that principal, an unknown sub is
+// kept as written, and an email that pairs with no principal, or with more than
+// one, is refused. So every grant is keyed by the subject the person's revoke
+// and erasure name, never by an email that someone else may later carry.
 func (s *Server) templateGrantFromRequest(w http.ResponseWriter, r *http.Request) (types.TemplateGroupAdmin, bool) {
 	var g types.TemplateGroupAdmin
 	if !decodeStrict(w, r, &g) {
 		return g, false
 	}
-	owner, known, _, err := s.resolveSecretOwner(r.Context(), g.Person)
+	owner, _, refusal, err := s.resolveSecretOwner(r.Context(), g.Person)
 	if err != nil {
 		writeServerError(w, r, "resolve the grant's person", err)
 		return g, false
 	}
-	if known {
-		g.Person = owner
+	if refusal != "" {
+		writeErrorReason(w, http.StatusUnprocessableEntity, ownerRefusalReason(refusal), templateGrantOwnerRefusalMsg(refusal))
+		return g, false
 	}
+	g.Person = owner
 	canon, ok := g.Canonical()
 	if !ok {
 		writeTemplateDiagnostics(w, *templateInvalid("group_id", "and person must name one group and one person"))
 		return g, false
 	}
+	d := &templateDecoder{}
 	if utf8.RuneCountInString(canon.Label) > maxTemplateGroupLabelRunes || !validTemplateText(canon.Label) {
-		writeTemplateDiagnostics(w, *templateInvalid("label", fmt.Sprintf("must be printable text of at most %d characters", maxTemplateGroupLabelRunes)))
+		d.invalid("label", fmt.Sprintf("must be printable text of at most %d characters", maxTemplateGroupLabelRunes))
+	} else {
+		d.scanString("label", canon.Label)
+	}
+	if len(d.diags) > 0 {
+		writeTemplateDiagnostics(w, d.diags...)
 		return g, false
 	}
 	return canon, true
@@ -92,8 +102,9 @@ func (s *Server) handlePutTemplateGroupAdmin(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, stored)
 }
 
-// handleDeleteTemplateGroupAdmin revokes one grant. Revoking one that is not
-// there succeeds: the grant is gone either way. A group write that began before
+// handleDeleteTemplateGroupAdmin revokes one grant. The person resolves as on
+// the grant, so the revoke names the key the grant was stored under. Revoking
+// one that is not there succeeds: removed is false in the audit row. A group write that began before
 // the revoke finishes first; one after it is refused (the store's FOR SHARE).
 func (s *Server) handleDeleteTemplateGroupAdmin(w http.ResponseWriter, r *http.Request) {
 	ts, ok := s.templateStoreOr501(w)
