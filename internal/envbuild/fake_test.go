@@ -6,9 +6,12 @@
 package envbuild
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"io"
 	"iter"
 	"strconv"
@@ -48,8 +51,16 @@ type fakeEnvbuilderDocker struct {
 	// daemon reports them from ImageInspect. Refs absent here inspect clean.
 	onBuild map[string][]string
 
+	// repoDigests maps image ref -> the RepoDigests a real daemon reports for it from ImageInspect.
+	repoDigests map[string][]string
+
 	// inspected records the refs passed to ImageInspect, in order.
 	inspected []string
+
+	// lastDockerfile is the Dockerfile of the last ImageBuild context.
+	lastDockerfile string
+	// noAuxID, when true, makes ImageBuild's stream carry no {"aux":{"ID":...}} message.
+	noAuxID bool
 
 	// exitCode is the exit code that ContainerWait returns. 0 = success.
 	exitCode int64
@@ -221,7 +232,7 @@ func (f *fakeEnvbuilderDocker) ImageInspect(_ context.Context, imageID string, _
 		}
 	}
 	return client.ImageInspectResult{
-		InspectResponse: image.InspectResponse{ID: imageID, Config: cfg},
+		InspectResponse: image.InspectResponse{ID: imageID, Config: cfg, RepoDigests: f.repoDigests[imageID]},
 	}, nil
 }
 
@@ -243,9 +254,17 @@ func (f *fakeEnvbuilderDocker) ImageBuild(_ context.Context, buildContext io.Rea
 		}
 	}
 	f.mu.Unlock()
-	// Drain the context so the caller's tar writer isn't left dangling.
-	_, _ = io.Copy(io.Discard, buildContext)
-	body := `{"stream":"Step 1/3 : FROM base\n"}` + "\n" + `{"stream":"Successfully built deadbeef\n"}` + "\n"
+	// Read the whole context so the caller's tar writer isn't left dangling, and keep its Dockerfile.
+	dockerfile := tarEntry(buildContext, "Dockerfile")
+	f.mu.Lock()
+	f.lastDockerfile = dockerfile
+	noAuxID := f.noAuxID
+	f.mu.Unlock()
+	body := `{"stream":"Step 1/3 : FROM base\n"}` + "\n"
+	if !noAuxID && len(options.Tags) > 0 {
+		body += `{"aux":{"ID":` + strconv.Quote(fakeImageID(options.Tags[0])) + `}}` + "\n"
+	}
+	body += `{"stream":"Successfully built deadbeef\n"}` + "\n"
 	if buildErr != "" {
 		body = `{"error":` + strconv.Quote(buildErr) + `}` + "\n"
 	}
@@ -365,4 +384,28 @@ func (f *fakeEnvbuilderDocker) ContainerList(_ context.Context, options client.C
 	f.lastListFilters = options.Filters
 	f.lastListAll = options.All
 	return client.ContainerListResult{Items: f.listItems}, nil
+}
+
+// fakeImageID is the deterministic image ID the fake's build stream reports for a tag.
+func fakeImageID(tag string) string {
+	sum := sha256.Sum256([]byte(tag))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// tarEntry returns the named entry of a tar stream ("" when absent), draining the rest.
+func tarEntry(r io.Reader, name string) string {
+	var found string
+	tr := tar.NewReader(r)
+	for {
+		h, err := tr.Next()
+		if err != nil {
+			break
+		}
+		b, _ := io.ReadAll(tr)
+		if h.Name == name {
+			found = string(b)
+		}
+	}
+	_, _ = io.Copy(io.Discard, r)
+	return found
 }
