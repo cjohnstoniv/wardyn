@@ -185,7 +185,7 @@ function SaveAsForm({
           }}
         />
         {nameTaken && (
-          <p id="save-as-name-error" role="alert" className="text-xs text-destructive">
+          <p id="save-as-name-error" role="alert" className="text-xs text-danger">
             {nameTaken}
           </p>
         )}
@@ -244,7 +244,7 @@ function SaveAsForm({
 
       {shared && <p className="text-xs text-muted-foreground">{copy.disclosure}</p>}
       {failure && (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="text-sm text-danger">
           {failure}
         </p>
       )}
