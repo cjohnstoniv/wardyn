@@ -288,3 +288,34 @@ func TestAccessReasonSentencesMatchGolden(t *testing.T) {
 	sort.Slice(got, func(i, j int) bool { return got[i].Key < got[j].Key })
 	compareOrUpdateGolden(t, "../../ui/src/app/lib/access-reasons.golden.json", got)
 }
+
+// A CLI component's row says whether its tool is in the image the run starts
+// from: the convention table for a harness's own image, unknown for an image
+// the run names or the operator pinned.
+func TestAccessRow_CLIInImageFromTheRunsImage(t *testing.T) {
+	id := uuid.MustParse("0b5c3a52-77e1-4c1e-9d0a-1d4f3c2b1a00")
+	comps := runComponents{attached: []attachedComponent{{source: componentSourceOrg, snapshot: types.RunComponent{
+		ComponentID: &id, Name: "GitHub CLI", Definition: types.ComponentDefinition{Hosts: []string{"api.github.com"},
+			CLI: &types.ComponentCLI{Kind: types.CLIKindGitHub, GitHub: &types.CLIGitHub{}}}}}}}
+	for _, tc := range []struct {
+		name   string
+		image  string
+		pinned map[string]string
+		want   string
+	}{
+		{"the harness's convention image", "", nil, cliInImageNo},
+		{"an image the run names", "registry.example/mine:1", nil, cliInImageUnknown},
+		{"an image the operator pinned", "", map[string]string{"claude-code": "registry.example/pinned:1"}, cliInImageUnknown},
+	} {
+		req := createRunRequest{Agent: "claude-code", Task: "t", Image: tc.image}
+		facts := componentFacts(componentFactInputs{req: &req, comps: comps}, nil)
+		srv := &Server{cfg: Config{AgentImages: tc.pinned}}
+		access, err := srv.accessFor(httptest.NewRequest(http.MethodPost, preflightDoor, nil), accessInputs{req: &req, comps: comps, facts: facts})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r, ok := accessRow(access, id.String()); !ok || r.Kind != accessKindCLI || r.InImage != tc.want {
+			t.Errorf("%s: CLI row = %+v (%v), want kind cli in_image %s", tc.name, r, ok, tc.want)
+		}
+	}
+}
