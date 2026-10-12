@@ -568,6 +568,11 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		"confinement_class": enforced, "confinement_source": confinementSource, "jti": jti,
 		"inline_policy": req.InlinePolicy != nil,
 	}
+	if keys := policyOverlayKeys(req.PolicyOverlay); len(keys) > 0 {
+		// The keys the run's policy_overlay laid onto its default, never their
+		// values: binds policy.overlay.apply, which has no run id, to this run.
+		data["policy_overlay"] = keys
+	}
 	if req.Preset != "" {
 		// The preset stamp is also on the run row, but the chained audit row
 		// outlives it: this ties the run to the preset version it came from.

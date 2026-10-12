@@ -303,11 +303,17 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 // blending every drop into one event) keeps `reason` the single value every
 // authz.denied consumer already reads, with the affected values beside it.
 func (s *Server) auditUserPolicyDrops(ctx context.Context, r *http.Request, drops []capDrop) {
+	s.auditPolicyDrops(ctx, r, "runs.inline_policy", drops)
+}
+
+// auditPolicyDrops is auditUserPolicyDrops for the request field the drops came
+// from (target): runs.policy_overlay for an overlay's own keys.
+func (s *Server) auditPolicyDrops(ctx context.Context, r *http.Request, target string, drops []capDrop) {
 	byReason := map[authz.Reason][]string{}
 	for _, d := range drops {
 		byReason[d.reason] = append(byReason[d.reason], d.detail)
 	}
 	for _, reason := range slices.Sorted(maps.Keys(byReason)) { // stable order for the stream
-		s.recordRefusal(ctx, r, authz.Drop(reason, "runs.inline_policy", byReason[reason]))
+		s.recordRefusal(ctx, r, authz.Drop(reason, target, byReason[reason]))
 	}
 }

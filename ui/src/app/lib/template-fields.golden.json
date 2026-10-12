@@ -479,6 +479,11 @@
       "section": "run_wide"
     },
     {
+      "name": "policy_overlay",
+      "excluded": "origin",
+      "why": "In a document the overlay is written under inline_policy; policy_overlay is how a client sends it."
+    },
+    {
       "name": "devcontainer_repo",
       "tab": "tools_image",
       "part": "tools_image",

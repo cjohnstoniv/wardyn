@@ -83,6 +83,7 @@ describe("template field registry", () => {
       "integration_id",
       "max_wait_sec",
       "mode_contract",
+      "policy_overlay",
       "preset",
       "preset_version",
       "title",
