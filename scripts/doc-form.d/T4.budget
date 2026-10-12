@@ -3,4 +3,6 @@
 # threatmodel/THREAT-MODEL.md 52270 after F-1511-1510 (erase fence + who a name is).
 # threatmodel/THREAT-MODEL.md 52303 measured after R2-runner-2 merge.
 # threatmodel/THREAT-MODEL.md 52431 after the via_org B6 bullet (H12, train 10).
-threatmodel/THREAT-MODEL.md=52431 share=20
+# threatmodel/THREAT-MODEL.md 52364 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
+# threatmodel/THREAT-MODEL.md 52492 measured after train 10 F-1508-author merge.
+threatmodel/THREAT-MODEL.md=52492 share=20

@@ -182,10 +182,15 @@ func (s *Server) serviceRecord(ctx context.Context, name string) (types.ServiceI
 	return ss.GetServiceIdentity(ctx, name)
 }
 
+// errRunAuthorUnrecorded is runAuthoredBy's answer for a service identity's run with no recorded human
+// author (one created before agent_runs.human_author): no decider can be shown not to be its author.
+var errRunAuthorUnrecorded = errors.New("the run has no recorded human author")
+
 // runAuthoredBy reports whether principal is the author of run for the second-human rule: its creator, or,
-// for a service identity's run, the person sponsoring that service (retired or not), so a sponsor cannot
-// launch through the service and approve as the second human. A service whose sponsor cannot be read is an
-// error, which the callers treat as a refusal.
+// for a service identity's run, the person sponsoring that service now (retired or not) or the sponsor
+// recorded when the run was created, so neither launching through a service nor a later sponsor change
+// makes that person a second human. A service whose sponsor cannot be read is an error, and a service run
+// with no recorded author is errRunAuthorUnrecorded; the callers treat both as a refusal.
 func (s *Server) runAuthoredBy(ctx context.Context, run types.AgentRun, principal string) (bool, error) {
 	if run.CreatedBy == "" {
 		return false, nil
@@ -198,7 +203,16 @@ func (s *Server) runAuthoredBy(ctx context.Context, run types.AgentRun, principa
 		return false, nil
 	}
 	si, err := s.serviceRecord(ctx, name)
-	return err == nil && si.Sponsor == principal, err
+	if err != nil {
+		return false, err
+	}
+	if si.Sponsor == principal || run.HumanAuthor == principal {
+		return true, nil
+	}
+	if run.HumanAuthor == "" {
+		return false, errRunAuthorUnrecorded
+	}
+	return false, nil
 }
 
 // rateLimitedActor reports who a per-person limiter counts the request against, and whether it counts it

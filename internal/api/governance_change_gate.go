@@ -177,6 +177,7 @@ var governanceChangeKinds = map[string]govKind{
 	govKindEgressBaseline:      {approver: securityApprover, apply: applyEgressBaselineChange},
 	govKindRunnerPoolUsePolicy: {approver: securityApprover, apply: applyRunnerPoolUsePolicyChange},
 	govKindCredentialDelivery:  {approver: securityApprover, apply: applyCredentialDeliveryChange},
+	govKindServiceIdentity:     {approver: securityApprover, apply: applyServiceIdentityChange},
 }
 
 // forChange is the kind as it decides one held change. A runner pool executor attach or detach is held
