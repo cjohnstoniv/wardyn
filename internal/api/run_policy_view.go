@@ -55,8 +55,13 @@ type policySourceRecord struct {
 	// OverridesDiff is what the person changed on the New Run cards, set only
 	// when they changed something (run_overrides_apply.go).
 	OverridesDiff *client.RunOverridesDiff `json:"overrides_diff,omitempty"`
+	// Overlay is the keys a policy_overlay laid onto Spec, the default it
+	// started from (run_policy_overlay.go); never its values.
+	Overlay []string `json:"overlay,omitempty"`
 	// edits stays in memory: the person's provenance rows for this request.
 	edits *overrideEdits
+	// overlaid stays in memory: Spec with the overlay laid on, before the clamp.
+	overlaid *types.RunPolicySpec
 }
 
 // newPolicySourceRecord is the one place a starting policy becomes an audit

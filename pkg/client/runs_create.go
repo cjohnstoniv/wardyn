@@ -5,6 +5,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -59,6 +60,14 @@ type CreateRunRequest struct {
 	// (mounts pass the same deny-list; api_key grants must reference an existing
 	// secret) and attaches it with no stored policy id.
 	InlinePolicy *RunPolicySpec `json:"inline_policy,omitempty"`
+	// PolicyOverlay lays the policy keys it names onto the caller's default
+	// policy (their governance ceiling, or the deployment default); a key it
+	// leaves out keeps the default's value. A non-empty JSON object of
+	// RunPolicySpec keys, never beside PolicyID or InlinePolicy (400
+	// policy_overlay_conflict). The keys it names are bounded by the caller's
+	// ceiling like an inline policy; the rest stay as the default has them. In a
+	// run document it is written under intent.inline_policy.
+	PolicyOverlay json.RawMessage `json:"policy_overlay,omitempty"`
 	// DevcontainerRepo, when set AND an image builder is wired (WARDYN_ENVBUILD),
 	// triggers a devcontainer build of that git repo whose resulting image becomes
 	// the sandbox image. Ignored (degrades to the convention image) when no builder

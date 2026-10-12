@@ -180,6 +180,9 @@ const UI_NEVER_SENDS = new Set([
   "preset_version",
   // The new flow forwards it through the field registry; the old wizard never sends it.
   "shape",
+  // A document's partial policy, laid onto the default: no screen sends it yet,
+  // and the old wizard sends a whole inline_policy instead.
+  "policy_overlay",
 ]);
 
 // ui_apps used to sit on this set as a TS AgentRun key with no Go AgentRun

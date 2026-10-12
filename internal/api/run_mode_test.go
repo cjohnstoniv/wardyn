@@ -657,6 +657,8 @@ func TestRunModeRefusalSentencesMatchGolden(t *testing.T) {
 		"HARNESS_SET_NO_IMAGE":       func(a []string) string { return harnessSetNoImageMsg(a...) },
 		"HARNESS_SET_CUSTOM_IMAGE":   func([]string) string { return harnessSetCustomImageMsg() },
 		"HARNESS_PROVIDERS_CONFLICT": func(a []string) string { return harnessProvidersConflictMsg(a[0], a[1]) },
+		"POLICY_OVERLAY_INVALID":     func(a []string) string { return policyOverlayInvalidMsg(a[0], a[1]) },
+		"POLICY_OVERLAY_CONFLICT":    func([]string) string { return policyOverlayConflictMsg() },
 	}
 	if len(golden) != len(got) {
 		t.Fatalf("golden has %d sentences, the server has %d", len(golden), len(got))
@@ -675,7 +677,8 @@ func TestRunModeRefusalSentencesMatchGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, reason := range []string{reasonRunModeRequired, reasonRunModeInvalid, reasonRunModeConflict, reasonStartFolderInvalid, reasonRunBackgroundOnly, reasonRunShapeConflict,
-		reasonHarnessNotInstalled, reasonHarnessSetNoImage, reasonHarnessSetCustomImage, reasonHarnessProvidersConflict} {
+		reasonHarnessNotInstalled, reasonHarnessSetNoImage, reasonHarnessSetCustomImage, reasonHarnessProvidersConflict,
+		reasonPolicyOverlayInvalid, reasonPolicyOverlayConflict} {
 		if !strings.Contains(string(ts), `"`+reason+`"`) {
 			t.Errorf("run-mode-refusals.ts does not carry the reason %q", reason)
 		}

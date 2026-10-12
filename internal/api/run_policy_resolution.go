@@ -175,13 +175,20 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	// The starting policy, before the env-secret posture and the member clamp
 	// below change it: a stored row, or the caller's own ceiling.
 	source := newPolicySourceRecord(origin.kind, policyID, origin.name, origin.updatedAt, !ceiling.Operator, spec)
+	// A document's partial policy, laid onto the default (policyID is nil: the
+	// overlay never rides beside one) with its own keys bounded, before the
+	// person's card edits, which edit the policy the overlay made.
+	spec, overlayWarns, refusal := s.applyPolicyOverlay(ctx, r, spec, req, ceiling, dryRun, &source)
+	if refusal != nil {
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
+	}
 	// The person's New Run edits, before the posture and the clamp (see the
 	// inline branch).
 	spec, edits, refusal := s.applyRunOverrides(ctx, r, spec, req)
 	if refusal != nil {
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 	}
-	storedWarns := append([]string(nil), ceiling.Warnings...)
+	storedWarns := append(append([]string(nil), ceiling.Warnings...), overlayWarns...)
 	// Same unconditional env_secret posture the inline branch applies, in the
 	// same position, and it is the half the scoped clamp below CANNOT carry: the
 	// clamp fires only for an ASSIGNED member selecting a row, while this rule
