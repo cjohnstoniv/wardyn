@@ -41,9 +41,13 @@ func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.
 		PoolID: poolID, DeploymentCap: s.cfg.MaxConcurrentRuns, ScanLimit: queueScanLimit, WatcherOwner: watcherOwner,
 		AtCapacityDetail: statusDetailQueuePrefix + string(runnerpool.WaitAtCapacity),
 	}, s.queueAdmit)
-	if err != nil {
+	switch {
+	case err != nil && len(promoted) == 0:
 		slog.WarnContext(ctx, "wardynd: queue promotion deferred", slog.String("pool_id", poolID.String()), slog.Any("err", err))
 		return
+	case err != nil:
+		slog.WarnContext(ctx, "wardynd: queue promotion judged part of the queue", slog.String("pool_id", poolID.String()),
+			slog.Int("promoted", len(promoted)), slog.Any("err", err))
 	}
 	for _, h := range held {
 		if h.Wait == "" {
@@ -93,7 +97,7 @@ func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.
 // at least one is online with known facts. A pool the owner can no longer see, or a refusal of the
 // owner's own (a user type that is gone), counts as free, so the start ends the run with its reason
 // instead of leaving it to wait. Only a read that failed is an error. pinned says the launch names its
-// runner (runner_id).
+// runner (runner_id): on a pool of the owner's own runners only that runner is asked.
 func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, launch queuedLaunch) (free, pinned bool, err error) {
 	ps, ok := s.cfg.Store.(store.RunnerPoolStore)
 	if !ok {
@@ -118,7 +122,7 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 		return false, pinned, nil
 	}
 	for _, t := range targets {
-		if !t.offline {
+		if !t.offline && (!pinned || pool.HostingType != types.RunnerPoolSelfHosted || t.id == req.RunnerID) {
 			return true, pinned, nil
 		}
 	}

@@ -281,3 +281,30 @@ func TestPG_QueueAdmitHoldsAPinnedRunAlone(t *testing.T) {
 		}
 	}
 }
+
+// A waiting run pinned to one of its owner's runners is judged by that runner alone: with the pinned
+// runner offline it keeps waiting, owner-scope off, though another of the owner's runners is online; the
+// same run pinned to the online runner is admitted.
+func TestPG_QueuePinnedRunWaitsForItsOwnRunner(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	asleep := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
+	awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
+	e.addToPool(e.person, pool.ID, asleep)
+	e.addToPool(e.person, pool.ID, awake)
+	e.online[asleep] = false
+	auth, _ := json.Marshal(queueAuthority{Sub: e.personP, Role: oidc.RoleUser, UserType: types.UserTypeStandard, Groups: []string{}})
+	for _, tc := range []struct {
+		pin   uuid.UUID
+		admit bool
+	}{{asleep, false}, {awake, true}} {
+		launch, _ := json.Marshal(queuedLaunch{Request: json.RawMessage(`{"agent":"claude-code","placement":"local","runner_id":"` + tc.pin.String() + `"}`)})
+		v, err := e.srv.queueAdmit(context.Background(), e.reread(pool), store.RunQueueEntry{RunID: uuid.New(), Owner: e.personP, Launch: launch, Authority: auth})
+		if err != nil || v.Admit != tc.admit || v.Owner {
+			t.Errorf("pinned to %s: verdict %+v, %v; want admit %v and no owner scope", tc.pin, v, err, tc.admit)
+		}
+		if !tc.admit && v.Wait != "runner_pool_no_runner_free" {
+			t.Errorf("a run whose pinned runner is offline waits with %q", v.Wait)
+		}
+	}
+}

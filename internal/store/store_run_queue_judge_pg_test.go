@@ -177,7 +177,10 @@ func TestPG_PromoteQueueKeepsWhatItAdmittedWhenCutShort(t *testing.T) {
 	scan := pass(p)
 	scan.ScanLimit = 1
 	got, _, err := pg.PromoteRunQueue(ctx, scan, slow)
-	if err != nil || len(got) != 1 || got[0].Run.ID != ids[0] {
-		t.Fatalf("promoted %v, %v; want the run admitted before the judging ran out of time", got, err)
+	if len(got) != 1 || got[0].Run.ID != ids[0] {
+		t.Fatalf("promoted %v (%v); want the run admitted before the judging ran out of time", got, err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v; the cut-short judging's error comes back beside what it promoted", err)
 	}
 }

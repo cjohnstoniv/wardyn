@@ -103,6 +103,36 @@ func TestQueuedRunRenewsNothing(t *testing.T) {
 	}
 }
 
+// A waiting run's other harnesses renew nothing either: a Bedrock harness beside a Codex primary spends
+// its sign-in only when the run starts.
+func TestQueuedRunsOtherHarnessesRenewNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		queue bool
+		want  int32
+	}{{"waiting", true, 0}, {"starting", false, 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := createRenewalFixture(t)
+			calls := renewedOIDC(t)
+			req := createRunRequest{Agent: "codex-cli", Task: "t"}
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
+			r = r.WithContext(withHumanIdentity(r.Context(), createRenewalOwner, "", "admin", "", nil, false))
+			w := httptest.NewRecorder()
+			f := &runFold{mode: foldCreate, queued: tc.queue, w: w, r: r, req: &req,
+				harnesses: []types.RunHarness{{Harness: "codex-cli", Starts: true}, {Harness: "claude-code", ModelProviderID: "bedrock-sso"}}}
+			if !srv.stepModelProvider(f, &foldRecorder{}) {
+				t.Fatalf("the provider check refused: %d %s", w.Code, w.Body)
+			}
+			if len(f.harnessChoices) != 2 {
+				t.Fatalf("harness choices = %d, want 2", len(f.harnessChoices))
+			}
+			if calls.Load() != tc.want {
+				t.Errorf("CreateToken calls = %d, want %d", calls.Load(), tc.want)
+			}
+		})
+	}
+}
+
 // The start only narrows: a different model provider or a weaker barrier than the launch was admitted
 // with ends the run as a policy change; the same or a stronger one starts.
 func TestQueueNarrowOnly(t *testing.T) {
