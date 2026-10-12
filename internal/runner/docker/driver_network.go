@@ -525,6 +525,35 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	return nil
 }
 
+// sweepDriveSeeds removes drive seed containers (seedDriveVolume) older than
+// minAge. A seed lives for one create and remove, never started, so one that
+// old outlived a crash between the two; it holds its drive's volume, so a
+// reclaim would answer "in use" until it is gone. Keyed on the component label
+// the seed carries, never on a run's state: no live run owns a seed that long.
+func (d *Driver) sweepDriveSeeds(ctx context.Context, lister containerListerAPI, minAge time.Duration) (int, error) {
+	res, err := lister.ContainerList(ctx, client.ContainerListOptions{
+		All:     true,
+		Filters: client.Filters{}.Add("label", labelComponent+"="+componentDriveSeed),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("docker: list drive seeds for orphan sweep: %w", err)
+	}
+	cutoff := time.Now().Add(-minAge)
+	var swept int
+	var errs []error
+	for _, c := range res.Items {
+		if c.Labels[labelComponent] != componentDriveSeed || c.Labels[labelManaged] != "true" || time.Unix(c.Created, 0).After(cutoff) {
+			continue
+		}
+		if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+			errs = append(errs, fmt.Errorf("docker: remove leftover drive seed %s: %w", c.ID, err))
+			continue
+		}
+		swept++
+	}
+	return swept, errors.Join(errs...)
+}
+
 // containerListerAPI is the narrow docker-client slice SweepOrphanedSandboxes needs beyond
 // dockerAPI's own methods, kept separate so the main seam does not grow ContainerList until
 // something else needs to list. A client that doesn't implement it is simply not swept.
@@ -535,7 +564,7 @@ type containerListerAPI interface {
 // the real client must implement it.
 var _ containerListerAPI = (*client.Client)(nil)
 
-// SweepOrphanedSandboxes tears down the sandbox objects (agent container + sibling proxy + per-run
+// SweepOrphanedSandboxes removes leftover drive seeds (sweepDriveSeeds), then tears down the sandbox objects (agent container + sibling proxy + per-run
 // internal network) of every run whose row no longer owns them — the residue of a crash BETWEEN
 // CreateSandbox and SetSandboxRef, which leaves those containers running under a run row with no
 // sandbox_ref, so no ref-keyed teardown ever revisits them. isOrphan (supplied by the control plane,
@@ -553,6 +582,7 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 	if !ok {
 		return 0, nil
 	}
+	seeds, seedErr := d.sweepDriveSeeds(ctx, lister, minAge)
 	res, err := lister.ContainerList(ctx, client.ContainerListOptions{
 		All:     true, // a crashed sandbox's agent may be exited, not running
 		Filters: client.Filters{}.Add("label", labelComponent+"="+componentAgent),
@@ -561,8 +591,7 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 		return 0, fmt.Errorf("docker: list containers for orphan sweep: %w", err)
 	}
 	cutoff := time.Now().Add(-minAge)
-	var swept int
-	var errs []error
+	swept, errs := seeds, []error{seedErr}
 	for _, c := range res.Items {
 		runID, perr := parseRunID(c.Labels[labelRun])
 		if perr != nil {

@@ -5,6 +5,9 @@ package store_test
 
 import (
 	"context"
+	"fmt"
+	"slices"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -134,13 +137,49 @@ func TestPG_AddAndReplaceUserDriveGrants(t *testing.T) {
 		t.Errorf("re-adding drive a = %+v, %v; want the existing row %s updated to 7", again, err, first.ID)
 	}
 
-	replaced, err := st.UpsertUserDriveGrant(ctx, grant(c, 3), true)
+	replaced, removed, err := st.ReplaceUserDriveGrant(ctx, grant(c, 3), true)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(removed) != 2 || !slices.Contains(removed, a.ID) || !slices.Contains(removed, b.ID) {
+		t.Errorf("removed = %v, want drives a and b, the ones the subject lost", removed)
 	}
 	t.Cleanup(func() { _, _ = st.DeleteUserDriveGrant(ctx, replaced.ID) })
 	rows := subjectGrants(t, st, sub)
 	if len(rows) != 1 || rows[0].DriveID != c.ID || replaced.ID != first.ID {
 		t.Errorf("replacing with drive c left %+v (returned id %s); want one row, drive c, the earliest row %s repointed", rows, replaced.ID, first.ID)
+	}
+}
+
+// TestPG_ConcurrentReplacesLeaveOneDrive: replacing writes for a subject with
+// no allocation yet, racing, still leave the subject exactly one drive (the
+// per-subject advisory lock); without it both insert.
+func TestPG_ConcurrentReplacesLeaveOneDrive(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	uniq := uuid.NewString()[:8]
+	a := seedUserDrive(t, st, "race-a-"+uniq)
+	b := seedUserDrive(t, st, "race-b-"+uniq)
+	for trial := range 20 {
+		sub := fmt.Sprintf("race-%s-%d", uniq, trial)
+		var wg sync.WaitGroup
+		for _, d := range []types.UserDrive{a, b} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, err := st.UpsertUserDriveGrant(ctx, types.UserDriveGrant{SubjectType: types.CapabilitySubjectUser, Subject: sub, DriveID: d.ID, Enabled: true}, true); err != nil {
+					t.Errorf("replace %s: %v", sub, err)
+				}
+			}()
+		}
+		wg.Wait()
+		rows := subjectGrants(t, st, sub)
+		for _, g := range rows {
+			t.Cleanup(func() { _, _ = st.DeleteUserDriveGrant(ctx, g.ID) })
+		}
+		if len(rows) != 1 {
+			t.Fatalf("trial %d: subject holds %d drives after two racing replaces, want 1", trial, len(rows))
+		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -34,14 +35,16 @@ type UserDriveCatalogueStore interface {
 
 var _ UserDriveCatalogueStore = PG{}
 
-// UserDriveGrantAdder allocates a drive beside a subject's others
-// (POST /drives/grants with additional), where UpsertUserDriveGrant replaces
-// them. Optional like UserDriveCatalogueStore.
-type UserDriveGrantAdder interface {
+// UserDriveGrantWriter is POST /drives/grants' two verbs: AddUserDriveGrant
+// allocates a drive beside a subject's others (additional), and
+// ReplaceUserDriveGrant is UpsertUserDriveGrant returning the drives the
+// subject lost, for the audit row. Optional like UserDriveCatalogueStore.
+type UserDriveGrantWriter interface {
 	AddUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error)
+	ReplaceUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, []uuid.UUID, error)
 }
 
-var _ UserDriveGrantAdder = PG{}
+var _ UserDriveGrantWriter = PG{}
 
 // ResolveUserDrives is ResolveUserDrive per drive: DISTINCT ON keeps each
 // drive's top-ranked row, then the outer ORDER BY ranks the winners. Both

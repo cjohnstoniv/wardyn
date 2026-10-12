@@ -204,15 +204,20 @@ func driveSource(tier types.CapabilitySubjectType) string {
 	}
 }
 
-// writeUserDriveGrant is POST /drives/grants' store write: the replacing upsert,
-// or with additional an allocation beside the subject's others.
-func (s *Server) writeUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated, additional bool) (types.UserDriveGrant, error) {
-	if !additional {
-		return s.cfg.Store.UpsertUserDriveGrant(ctx, g, homeOverrideStated)
+// writeUserDriveGrant is POST /drives/grants' store write: the replacing
+// upsert, which also reports the drives the subject lost, or with additional an
+// allocation beside the subject's others.
+func (s *Server) writeUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated, additional bool) (types.UserDriveGrant, []uuid.UUID, error) {
+	w, ok := s.cfg.Store.(store.UserDriveGrantWriter)
+	switch {
+	case additional && ok:
+		saved, err := w.AddUserDriveGrant(ctx, g, homeOverrideStated)
+		return saved, nil, err
+	case additional:
+		return types.UserDriveGrant{}, nil, errors.New("api: this store cannot allocate a drive beside another")
+	case ok:
+		return w.ReplaceUserDriveGrant(ctx, g, homeOverrideStated)
 	}
-	adder, ok := s.cfg.Store.(store.UserDriveGrantAdder)
-	if !ok {
-		return types.UserDriveGrant{}, errors.New("api: this store cannot allocate a drive beside another")
-	}
-	return adder.AddUserDriveGrant(ctx, g, homeOverrideStated)
+	saved, err := s.cfg.Store.UpsertUserDriveGrant(ctx, g, homeOverrideStated)
+	return saved, nil, err
 }

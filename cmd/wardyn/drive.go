@@ -49,7 +49,8 @@ func driveCmd(client clientFn) *cobra.Command {
 			"    wardyn drive set drives.json\n\n" +
 			"`set` upserts every drive and grant the file names — a drive whose id `get`\n" +
 			"already issued is REPLACED in place, one with none is CREATED, and a grant is\n" +
-			"always upserted by its (subject_type, subject) natural key. Nothing the file\n" +
+			"upserted by its (subject_type, subject, drive_id) key, beside the subject's\n" +
+			"other drives. Nothing the file\n" +
 			"omits is touched and nothing is deleted, so `wardyn drive get > f && wardyn\n" +
 			"drive set f` is a no-op.\n\n" +
 			"`reclaim` is the one verb that destroys data: see `wardyn drive reclaim --help`.",
