@@ -424,11 +424,16 @@ func (s *Server) stepAutonomy(f *runFold, rec *foldRecorder) bool {
 // a background run of a gated harness there with "*: allow" under the person's
 // layer (applyToolPosture), and each
 // allow they send stands only where the policy, with the lane's default under
-// it, already allows the tool.
+// it, already allows the tool. An interactive Claude Code run's default, and
+// every tool name it carries, is held to what its managed settings can say
+// first, as step 5 greys it.
 func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
 	before := f.spec
 	s.applyToolPosture(f.req, &f.spec)
 	recordSpecAdds(rec, before, f.spec, provSource{Kind: provKindPosture})
+	if attendedDefaultRefusal(*f.req, f.autonomy.Level).write(s, f.w, f.r) || attendedToolNamesRefusal(*f.req, f.spec).write(s, f.w, f.r) {
+		return false
+	}
 	return !s.toolRulesWithinPolicyRefusal(*f.req, f.spec).write(s, f.w, f.r)
 }
 
