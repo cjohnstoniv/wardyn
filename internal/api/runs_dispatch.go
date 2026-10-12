@@ -457,13 +457,13 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// halves — after EVERY writer above, so the "already set" guards each of them
 	// runs saw the whole map. See splitSecretEnv (it moves, never copies).
 	// Per-harness approval credentials: digests to the proxy config below, the
-	// started harness's plaintext to its own process as secret env, nowhere else.
-	harnessCreds, extraSecretKeys, merr := stampHarnessCredential(p.HarnessToolRules, run.Agent, sandboxEnv, llm.secretEnvKeys)
+	// started harness's plaintext as a file only its own launch reads, never env.
+	harnessCreds, credFiles, merr := s.stampHarnessCredential(ctx, p.HarnessToolRules, run.Agent, p.Drive)
 	if merr != nil {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's tool-approval credential could not be made")
 		return
 	}
-	secretEnv := splitSecretEnv(sandboxEnv, append(secretEnvKeys, extraSecretKeys...))
+	secretEnv := splitSecretEnv(sandboxEnv, append(secretEnvKeys, llm.secretEnvKeys...))
 
 	resources := resourceLimitsToRunner(policy.Resources)
 	resources.DiskMiBFilled = diskFilled
@@ -494,9 +494,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		SecretEnv: secretEnv,
 		Mounts:    mounts,
 		Drive:     p.Drive,
-		// The managed settings this run's autonomy level generates; nil for a
-		// run with none, or on a runner that cannot deliver them root-owned.
-		ManagedFiles: agentPolicy.files,
+		// The managed settings this run's autonomy level generates and the
+		// started harness's approval credential; nil for a run with neither, or
+		// on a runner that cannot deliver them.
+		ManagedFiles: slices.Concat(agentPolicy.files, credFiles),
 		// nil for an operator run (the driver then behaves exactly as it does
 		// today); non-nil marks a member-owned-workspace run whose MEMBER-AUTHORED
 		// binds (stamped above by buildRunMounts) the driver re-checks against
