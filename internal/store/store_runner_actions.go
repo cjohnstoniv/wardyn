@@ -280,6 +280,21 @@ func (s PG) RunHasPendingRunnerAction(ctx context.Context, runID uuid.UUID) (boo
 	return has, nil
 }
 
+// RunHeldContainedOnRunner reports whether the run's runner holds it contained: a kill, end, stop_proxy
+// or quarantine was queued for it and no later recover_containment succeeded. Such a runner refuses any
+// lease for the run, and a refused lease ends its session.
+func (s PG) RunHeldContainedOnRunner(ctx context.Context, runID uuid.UUID) (bool, error) {
+	var held bool
+	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_pending_actions c WHERE c.run_id = $1
+		AND c.kind IN ('kill', 'end', 'stop_proxy', 'quarantine_run')
+		AND NOT EXISTS (SELECT 1 FROM runner_pending_actions r WHERE r.run_id = c.run_id AND r.kind = 'recover_containment'
+			AND r.outcome = 'success' AND r.queued_at > c.queued_at))`, runID).Scan(&held)
+	if err != nil {
+		return false, fmt.Errorf("store: check runner containment: %w", err)
+	}
+	return held, nil
+}
+
 // RecordRunnerActionResult records an authenticated action_result: runnerID is
 // the stream's stored identity and runID the event's run; both must be the
 // action's own. Only success and deferred are outcomes, observedAt is the

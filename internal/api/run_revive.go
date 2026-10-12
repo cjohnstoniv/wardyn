@@ -262,7 +262,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		"proxy_release":           version.Version,
 	}
 	s.stampLiveRevive(run)
-	if err := rv.ReplaceProxy(ctx, run.SandboxRef, cfgJSON); err != nil {
+	if err := s.replaceRevivedProxy(ctx, rv, run, cfgJSON); err != nil {
 		data["error"] = err.Error()
 		if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
 			// The old proxy was never touched (an image that cannot be pulled, a
@@ -308,7 +308,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		}
 		// Only now, behind the new proxy. A failed start is lost (reboot) again,
 		// which stops the new proxy with the agent.
-		if err := starter.StartSandbox(ctx, run.SandboxRef); err != nil {
+		if err := s.startRevivedAgent(ctx, starter, run); err != nil {
 			data["error"] = "start agent: " + err.Error()
 			return reviveResult{}, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonReviveAgentStartFailedLost,
 				"the run's agent could not be started, so the run is stopped and lost until revived: ", err)

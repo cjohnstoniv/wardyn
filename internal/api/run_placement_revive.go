@@ -15,9 +15,9 @@ import (
 
 // refreshLocalDeploymentConfig must run before any operator secret resolution.
 // Revive reuses the actual-spec classifier and today's owner profile; a stale
-// rendered network configuration cannot supply authority. The routing refusal
-// remains even for a fully own plan: reviving a run on a runner needs a fresh
-// lease and execution generation for its Start, which the server does not send.
+// rendered network configuration cannot supply authority. The revived run is
+// re-leased, and a stopped agent started under a fresh generation, by
+// reviveRunProxy (renewRunnerLease, startRunOnRunner).
 func (s *Server) refreshLocalDeploymentConfig(ctx context.Context, run types.AgentRun, sc types.SiteConfig, cfg *proxy.Config) error {
 	if run.Placement != types.PlacementLocal {
 		return &placement.Refusal{Reason: placement.ReasonPlacementUnavailable, Field: "placement", Detail: "unclassified stored run placement"}
@@ -40,7 +40,7 @@ func (s *Server) refreshLocalDeploymentConfig(ctx context.Context, run types.Age
 	cfg.Policy, cfg.MITMHosts = stripped.ProxyConfig.Policy, stripped.ProxyConfig.MITMHosts
 	cfg.UpstreamProxyURL, cfg.TrustedCAPEM = "", ""
 	cfg.InternalHosts, cfg.UpstreamProxyNoProxy, cfg.LLMUpstreams = nil, nil, nil
-	return &placement.Refusal{Reason: placement.ReasonPlacementUnavailable, Field: "placement", Detail: "Your own runner is not available: this server cannot revive a run on a runner yet."}
+	return nil
 }
 
 func localStoredSpec(c proxy.Config) runner.SandboxSpec {

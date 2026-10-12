@@ -660,7 +660,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
-	sb, err := s.createSandboxAtTarget(createCtx, run, spec)
+	sb, execution, err := s.createLeasedSandbox(ctx, createCtx, run, spec)
 	endStartWait()
 	stopCreateLease()
 	if err != nil {
@@ -753,7 +753,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
 
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
-	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive, auditAgentPolicy)
+	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive, execution, auditAgentPolicy)
 }
 
 // startAgentOrIdle is dispatch's final phase, after the run is RUNNING.
@@ -776,7 +776,7 @@ const mainProcessExecID = runner.MainProcessExecID
 // onAgentStarted, when non-nil, runs once the agent's Exec has succeeded: on an
 // exec-less runner that is the moment its container — and the managed files
 // delivered into it — first exists.
-func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, image string, interactive bool, onAgentStarted func()) {
+func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, image string, interactive bool, execution runnerExecution, onAgentStarted func()) {
 	byoi := strings.HasPrefix(image, "wardyn-byoi/")
 
 	if interactive {
@@ -810,7 +810,10 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 			}
 		}
 		argv := []string{"/usr/local/bin/agent-run", run.Task}
-		execID, xerr := s.cfg.Runner.Exec(ctx, ref, argv)
+		execID, xerr := s.cfg.Runner.Exec(execution.bind(ctx), ref, argv)
+		if xerr == nil {
+			xerr = s.bindRunnerExecution(ctx, execution, execID)
+		}
 		if xerr != nil {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
 				run.ID.String(), "failure", mustJSON(map[string]any{"error": xerr.Error(), "reason": "agent_start"})))

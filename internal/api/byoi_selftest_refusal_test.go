@@ -36,7 +36,7 @@ func TestStartAgentOrIdle_BYOIFailingSelftestRefusesTheRun(t *testing.T) {
 	cfg.Runner = rn
 	srv := New(cfg)
 
-	srv.startAgentOrIdle(context.Background(), run, "fake-"+runID.String(), "wardyn-byoi/custom:latest", false, nil)
+	srv.startAgentOrIdle(context.Background(), run, "fake-"+runID.String(), "wardyn-byoi/custom:latest", false, runnerExecution{}, nil)
 
 	if rn.execs != 1 {
 		t.Fatalf("Exec calls = %d, want the selftest only", rn.execs)
