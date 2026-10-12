@@ -94,7 +94,7 @@ type dispatchParams struct {
 	// (runs_dispatch_ceiling.go).
 	//
 	// Drives are the acting principal's drives, resolved and narrowed at create
-	// time by stepDrive (migrations 0054, 0166). EMPTY for every run that
+	// time by stepDrive (migrations 0054, 0169). EMPTY for every run that
 	// did not ask for one — which is every run on a deployment that has
 	// allocated no drives, and every scan/probe/harness lane, none of which
 	// carries a member principal to resolve a drive for.

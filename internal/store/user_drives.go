@@ -280,7 +280,7 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 // UpsertUserDriveGrant allocates one drive to one subject and REPLACES whatever the subject was
 // allocated before: the subject ends with exactly this drive, and an existing row is repointed
 // rather than a second left beside it, so the admin's last write decides which drive the subject
-// gets. Since migration 0166 a subject may hold several rows (AddUserDriveGrant); this keeps one,
+// gets. Since migration 0169 a subject may hold several rows (AddUserDriveGrant); this keeps one,
 // repoints it, and removes the others, in one transaction. On a repoint the returned id is the
 // EXISTING row's, not g.ID. Returns ErrNotFound when drive_id names no drive (FK, 23503).
 //
@@ -358,7 +358,7 @@ func (s PG) ReplaceUserDriveGrant(ctx context.Context, g types.UserDriveGrant, h
 }
 
 // AddUserDriveGrant allocates one drive to one subject BESIDE the subject's other drives, keyed
-// on UNIQUE(subject_type, subject, drive_id) (migration 0166): writing the same subject and drive
+// on UNIQUE(subject_type, subject, drive_id) (migration 0169): writing the same subject and drive
 // again updates that row and returns its id; another drive is another row. The guards and error
 // mapping are UpsertUserDriveGrant's.
 func (s PG) AddUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error) {

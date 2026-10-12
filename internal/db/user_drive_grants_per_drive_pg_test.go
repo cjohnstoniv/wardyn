@@ -15,13 +15,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPG_UserDriveGrantsPerDriveUpgrade applies 0166 over a database holding
+// TestPG_UserDriveGrantsPerDriveUpgrade applies 0169 over a database holding
 // 0.8 grants (one row per subject) and requires every caller's single-drive
 // resolution to be byte-identical after it: the drive behind /home/agent/drive
 // does not move on upgrade. Then the new key takes a subject's second drive as
 // a second row. Guarded by WARDYN_TEST_PG.
 func TestPG_UserDriveGrantsPerDriveUpgrade(t *testing.T) {
-	pool, _ := db.PartialSchemaPool(t, "0166")
+	pool, _ := db.PartialSchemaPool(t, "0169")
 	ctx := context.Background()
 	st := store.PG{Pool: pool}
 
@@ -77,7 +77,7 @@ func TestPG_UserDriveGrantsPerDriveUpgrade(t *testing.T) {
 	after := resolveAll()
 	for i := range before {
 		if before[i] != after[i] {
-			t.Errorf("caller %v resolves differently after 0166:\n before %s\n after  %s", callers[i].users, before[i], after[i])
+			t.Errorf("caller %v resolves differently after 0169:\n before %s\n after  %s", callers[i].users, before[i], after[i])
 		}
 	}
 

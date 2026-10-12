@@ -754,7 +754,7 @@ type userDriveGrantRequest = client.DriveGrantRequest
 // the subject's allocation: re-allocating repoints the subject's row rather than
 // accumulating a second, so the admin's last write decides which drive they
 // get. With `additional` the drive is allocated beside the subject's others
-// instead (writeUserDriveGrant; migration 0166 keys on subject and drive).
+// instead (writeUserDriveGrant; migration 0169 keys on subject and drive).
 //
 // 201 for a genuinely new allocation, 200 when an existing one was repointed —
 // the same created/updated signal handleUpsertGovernanceAssignment gives,
