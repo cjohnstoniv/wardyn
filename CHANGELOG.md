@@ -91,6 +91,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- A workspace image build pins its base image, devcontainer features and the Claude Code version it used; when the
+  image is later missing, Wardyn rebuilds it from those pins and fails, naming the input, if one is gone. A build that
+  could not be pinned is recorded as not reproducible (#1516).
+- Governance → Runner credentials: a security operator sets, per credential class, whether an organisation credential
+  stays in the organisation, is stored on a person's own runner (with the device posture the runner must report), or
+  is not allowed, held for a second person where that is required.
+- `GET /model-providers` also reports `entra_login_configured` and `kinds_available`; a `400` from `PUT
+  /model-providers` for an Azure provider may carry `field`, the dotted path of the request field it is about. Azure
+  Foundry stays switched off in this release.
 - The runner pool list (`GET /runner-pools`) now says, for each pool you may use, whether it is available to you and
   why not, your own active runs against your profile's cap, the pool's limits as your runs get them, its barrier
   options and your runners in it; `?run_type=` narrows it to one run type (`400 runner_pool_invalid` otherwise).
