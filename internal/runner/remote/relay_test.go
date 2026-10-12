@@ -76,3 +76,21 @@ func TestRelay_OpenWithTargetOrNoSinkRefused(t *testing.T) {
 		t.Fatal("a relay was accepted where the org serves none")
 	}
 }
+
+// TestRunnerOpenedInteractiveStreamsAreRefused: a runner opens only a relay or
+// an output copy toward the org. A PTY or exec stream it opens on its own,
+// with no org call in flight, is refused, so a runner cannot start a terminal
+// the org did not issue.
+func TestRunnerOpenedInteractiveStreamsAreRefused(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	srv := relayRunner(t, func(string, net.Conn) error { t.Error("an interactive stream reached the relay sink"); return nil })
+	for _, kind := range []string{runnerwire.KindPTY, runnerwire.KindExec, runnerwire.KindExecStderr} {
+		if _, err := srv.Peer.Open(ctx, runnerwire.Open{Kind: kind}); err == nil {
+			t.Errorf("the org accepted a runner-opened %s stream", kind)
+		}
+		if _, err := srv.Peer.Open(ctx, runnerwire.Open{Kind: kind, Call: 999999}); err == nil {
+			t.Errorf("the org accepted a runner-opened %s stream for a call it never made", kind)
+		}
+	}
+}
