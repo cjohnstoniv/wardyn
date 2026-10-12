@@ -498,6 +498,28 @@ describe("RunLifetimeBanner: a local run (RS4)", () => {
     expect(listAuditMock).not.toHaveBeenCalled();
   });
 
+  // RN3-D6: a local run never shows the remote Lost sentence, whatever the lost reason.
+  it.each(["outage", "reboot"] as const)("a local run lost to a %s never shows the remote Lost title", async (reason) => {
+    renderBanner(lost({ lost_reason: reason }));
+    await screen.findByTestId("run-lifetime-local-stopped");
+    expect(screen.queryByTestId("run-lifetime-lost")).toBeNull();
+    expect(screen.queryByText("This run's sandbox stopped")).toBeNull();
+    expect(screen.queryByText(/The machine it ran on restarted/)).toBeNull();
+  });
+
+  it("a local run lost to a reboot with its computer offline cannot confirm the stop, with End run only", async () => {
+    renderBanner(lost({ lost_reason: "reboot", runner_online: false }));
+    await screen.findByTestId("run-lifetime-local-lapse");
+    expect(screen.queryByRole("button", { name: "Revive" })).toBeNull();
+    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+  });
+
+  // WARDYN_HA: the server leaves runner_online unset when it cannot know; unset is unknown, never offline.
+  it("an unknown liveness (runner_online unset) shows no offline banner on a running local run", () => {
+    const { container } = renderBanner(local({ runner_online: undefined }));
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("a local run on an online computer, running normally, has no local banner", () => {
     const { container } = renderBanner(local());
     expect(container).toBeEmptyDOMElement();

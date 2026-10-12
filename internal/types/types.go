@@ -141,7 +141,9 @@ type AgentRun struct {
 	// the run routes and never stored. They are absent for a remote run and when the runner could not be
 	// read. The name is the runner's current one, which equals the name at create: a runner is never
 	// renamed and a claimed row is never deleted, so a revoked runner's run keeps it. RunnerOnline is
-	// this process's live view (false when the hub cannot be asked), so a pointer: false is a fact.
+	// this process's live view, so a pointer: absent is unknown. false is a fact on a single replica (also
+	// when the hub cannot be asked); under WARDYN_HA it is never sent, because a replica that does not hold
+	// the runner's session cannot tell offline from connected elsewhere.
 	RunnerName       string     `json:"runner_name,omitempty"`
 	RunnerOnline     *bool      `json:"runner_online,omitempty"`
 	RunnerLastSeenAt *time.Time `json:"runner_last_seen_at,omitempty"`

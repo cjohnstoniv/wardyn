@@ -44,11 +44,11 @@ function isClaudeCode(agent: string): boolean {
 // running instead.
 type Action = "revive" | "extend" | "endRun" | "resume" | null;
 
-// Whether a local run lost to an outage was stopped LATE: its runner came back with the network still on and
+// Whether a local run lost to an outage or a reboot was stopped LATE: its runner came back with the network still on and
 // the org had it stopped then (a run.containment.reassert row with containment "late"). Only that row tells the
 // two stopped sentences apart, so it is read for a local outage-lost run alone; null until it has been read.
 function useStoppedLate(run: RunDetail): boolean | null {
-  const applies = run.placement === "local" && run.lost_reason === "outage";
+  const applies = run.placement === "local" && (run.lost_reason === "outage" || run.lost_reason === "reboot");
   const [late, setLate] = React.useState<boolean | null>(null);
   React.useEffect(() => {
     if (!applies) return;
@@ -171,11 +171,11 @@ export function RunLifetimeBanner({
   // function (not a component-level early return) so the tightened note
   // below can still render alongside whichever of these wins (F19).
   function renderPrimary(): React.ReactNode {
-    // ---- A local run its runner lost contact with (RS4b/c/d): what the runner did, as it reported it ----
+    // ---- A local run its runner lost contact with, whatever the lost reason (RS4b/c/d, RN3-D6): what the runner did, as it reported it ----
     // The remote sentences say Wardyn was unreachable; for a computer that went offline that is false, and
     // whether the network was stopped is the runner's report, not Wardyn's own act. Chosen from server facts
     // only: the runner's liveness and the late-stop row, never elapsed time.
-    if (local && run.lost_reason === "outage") {
+    if (local && (run.lost_reason === "outage" || run.lost_reason === "reboot")) {
       // Only a runner that is known to be connected can have confirmed the stop; an unknown one is treated as
       // offline, which claims no more than "can't confirm that yet".
       const offline = run.runner_online !== true && stoppedLate !== true;
