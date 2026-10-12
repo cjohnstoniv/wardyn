@@ -24,7 +24,12 @@ type envbuilderDockerAPI interface {
 	// ImageRemove best-effort drops the per-build base tag after wrapping.
 	ImageRemove(ctx context.Context, ref string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error)
 
+	// DistributionInspect asks the registry (through the daemon, with its proxy and mirrors) for a ref's digest.
+	DistributionInspect(ctx context.Context, imageRef string, options client.DistributionInspectOptions) (client.DistributionInspectResult, error)
+
 	ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error)
+	// CopyFromContainer reads the pin file out of the finished image through a container that is never started.
+	CopyFromContainer(ctx context.Context, containerID string, options client.CopyFromContainerOptions) (client.CopyFromContainerResult, error)
 	// CopyToContainer is the host-agnostic delivery for the build context: a
 	// bind mount would name a HOST path, which a containerized wardynd lacks.
 	CopyToContainer(ctx context.Context, containerID string, options client.CopyToContainerOptions) (client.CopyToContainerResult, error)
