@@ -6,6 +6,7 @@
 // U16 — the barrier comparison is ONE radiogroup in the accessibility tree at
 // every width. vitest does not compile Tailwind, so each test installs the two
 // display rules the component's classes rely on, in Tailwind's source order.
+import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isInaccessible, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -47,6 +48,13 @@ function renderTable(props: Partial<React.ComponentProps<typeof BarrierCompareTa
   return onChange;
 }
 
+// Real state, so a re-render after a click shows what the browser would: the
+// table and card radios must not share one native group.
+function Stateful() {
+  const [value, setValue] = React.useState<"CC1" | "CC2" | "CC3">("CC2");
+  return <BarrierCompareTable label="Barrier" options={OPTIONS} value={value} onChange={setValue} showWhere />;
+}
+
 describe.each([
   ["md and wider", WIDE],
   ["below md", NARROW],
@@ -85,6 +93,17 @@ describe.each([
     expect(onChange).toHaveBeenCalledExactlyOnceWith("CC3");
     await userEvent.click(screen.getByRole("radio", { name: "Fence" }));
     expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the picked barrier as the one checked live radio after a click", async () => {
+    viewport(css);
+    render(<Stateful />);
+    await userEvent.click(screen.getByRole("radio", { name: "Vault" }));
+    expect(screen.getByRole("radio", { name: "Vault" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Wall" })).not.toBeChecked();
+    await userEvent.click(screen.getByRole("radio", { name: "Wall" }));
+    expect(screen.getByRole("radio", { name: "Wall" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Vault" })).not.toBeChecked();
   });
 
   it("opens an info popover per barrier", async () => {
