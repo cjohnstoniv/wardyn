@@ -296,7 +296,7 @@ func (m *githubMinter) installationID(ctx context.Context, client *gh.Client, ow
 	}
 	id := inst.GetID()
 	if id == 0 {
-		return 0, fmt.Errorf("broker: no installation for %s", owner)
+		return 0, fmt.Errorf("%w: broker: no installation for %s", ErrGitHubRefused, owner)
 	}
 	m.mu.Lock()
 	m.installByOrg[owner] = id
