@@ -16,6 +16,8 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
+	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/erasure"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -380,5 +382,37 @@ func TestAWSCLI_SignInDoor(t *testing.T) {
 		CLI: &types.ComponentCLI{Kind: types.CLIKindGitHub, GitHub: &types.CLIGitHub{}}})
 	if w := doSSO(t, notAWS, http.MethodPost, door, member, ""); w.Code != http.StatusUnprocessableEntity || reasonOf(t, w) != reasonCLISignInNotAWS {
 		t.Errorf("non-AWS sign-in = %d %s, want 422 %s", w.Code, w.Body.String(), reasonCLISignInNotAWS)
+	}
+}
+
+// A revive replays the stored proxy config through the model-credential strip.
+// The AWS CLI row's portal grant names the AWS SSO sentinel but is the CLI
+// lane's own, so it survives; a Bedrock sign-in grant for a provider the run
+// no longer chose is still stripped.
+func TestAWSCLI_ReviveKeepsThePortalGrant(t *testing.T) {
+	f := newReauthFixture(t, nil)
+	f.st.run.ModelProviderID = ""
+	cliGrant, bedrockGrant := uuid.New(), uuid.New()
+	f.st.grants = []types.CredentialGrant{
+		{ID: cliGrant, RunID: f.runID, Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: cliSnapshotScope(t, cliSnapshot(subOwner))}},
+		{ID: bedrockGrant, RunID: f.runID, Spec: types.GrantSpec{Kind: types.GrantAPIKey,
+			Scope: reauthSnapshotScope(t, subOwner, reauthRegion, "111122223333", "WardynAgent")}},
+	}
+	rule := func(host string) egress.InjectionRule {
+		return egress.InjectionRule{Host: host, Header: awsSSOInjectHeader, Format: "%s", SecretName: types.AWSSSOAccessTokenSecret}
+	}
+	cfg := &proxy.Config{Injection: []proxy.InjectionConfig{
+		{GrantID: cliGrant, InjectionRule: rule(cliAWSPortal)},
+		{GrantID: bedrockGrant, InjectionRule: rule(reauthPortal)},
+	}}
+	if rerr := f.srv.stripRevivedModelInjections(context.Background(), f.st.run, cfg); rerr != nil {
+		t.Fatalf("strip refused: %+v", rerr)
+	}
+	kept := map[uuid.UUID]bool{}
+	for _, in := range cfg.Injection {
+		kept[in.GrantID] = true
+	}
+	if !kept[cliGrant] || kept[bedrockGrant] {
+		t.Fatalf("after the revive strip: CLI kept %t, Bedrock kept %t; want the CLI grant only", kept[cliGrant], kept[bedrockGrant])
 	}
 }
