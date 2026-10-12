@@ -158,3 +158,34 @@ func TestErasePersonCredentials_AnUnreadableListErasesNothing(t *testing.T) {
 		t.Fatalf("bob holds %v after a refused erase, want both credentials", got)
 	}
 }
+
+// unknownEntraStore derives an entra:<tenant>:<object> name for bob that the directory resolves to no one.
+type unknownEntraStore struct{ *erasureTestStore }
+
+func (unknownEntraStore) PrincipalEntraNames(context.Context, string) ([]string, error) {
+	return []string{"entra:t:o"}, nil
+}
+
+func (unknownEntraStore) PrincipalsNamed(_ context.Context, name string) ([]string, error) {
+	if name == "bob" {
+		return []string{"bob"}, nil
+	}
+	return nil, nil
+}
+
+// A derived name nobody is known by is not proved the person's, so both erase routes fail closed and
+// erase nothing.
+func TestErasePerson_AnUnknownDerivedNameFailsClosed(t *testing.T) {
+	_, srv, st, sec := erasureRig(t)
+	srv.cfg.Store = unknownEntraStore{st}
+	sa := ssoSession(t, "sec-1", "sec@corp.example", oidc.RoleSecurityAdmin)
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/people/bob/erasure", sa, erasureBody("credentials")); w.Code != http.StatusInternalServerError || errorReason(w) != reasonErasureIncomplete {
+		t.Fatalf("erasure = %d %s, want 500 %s", w.Code, w.Body, reasonErasureIncomplete)
+	}
+	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/people/bob/credentials", sa, ""); w.Code != http.StatusInternalServerError {
+		t.Fatalf("credential erase = %d %s, want 500", w.Code, w.Body)
+	}
+	if got := namesOf(t, sec, "bob"); len(got) != 2 {
+		t.Fatalf("a refused erasure left bob %v, want both credentials", got)
+	}
+}

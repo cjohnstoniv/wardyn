@@ -151,7 +151,7 @@ func (s *Server) purgeStep(ctx context.Context, st scimStore, id uuid.UUID, jobs
 // not configured on this server holds nothing of the person's, so it is skipped rather than failing
 // the purge; a configured scope that fails keeps the step pending.
 func (s *Server) eraseForPurge(ctx context.Context, principal string) (map[string]int, error) {
-	orch := s.erasureOrchestrator(nil)
+	orch := s.erasureOrchestrator(nil, nil)
 	scopes := slices.DeleteFunc(slices.Clone(scimPurgeScopes), func(sc erasure.Scope) bool { return orch.Steps[sc] == nil })
 	detail := map[string]int{}
 	if len(scopes) == 0 {

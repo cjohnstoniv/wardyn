@@ -53,8 +53,9 @@ type erasureIncompleteBody struct {
 // erasureOrchestrator is this server's steps. A scope whose backing is not
 // configured has no step, so asking for it fails instead of reporting it
 // erased. credRep, when non-nil, receives the credentials scope's report even
-// when that scope fails part way.
-func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport) *erasure.Orchestrator {
+// when that scope fails part way. want, when non-nil, is the person's names the
+// caller proved before anything ran (erasureNamesOf); the steps act on no others.
+func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport, want *erasureNames) *erasure.Orchestrator {
 	steps := map[erasure.Scope]erasure.Step{
 		erasure.RunTasks:   s.eraseRunTasks,
 		erasure.RunOutputs: s.eraseRunOutputsOf,
@@ -63,7 +64,7 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport) *erasure.
 	if s.cfg.Secrets != nil {
 		steps[erasure.Credentials] = func(ctx context.Context, person string) (any, error) {
 			var rep secretstore.EraseReport
-			fenced, err := s.eraseCredentialsScope(ctx, person, &rep)
+			fenced, err := s.eraseCredentialsScope(ctx, person, want, &rep)
 			if credRep != nil {
 				*credRep = rep
 			}
@@ -81,7 +82,9 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport) *erasure.
 		steps[erasure.MaskCopies] = s.eraseMaskCopies
 	}
 	if s.cfg.SubjectKeys != nil {
-		steps[erasure.AuditPersonalFields] = s.eraseAuditSealKeys
+		steps[erasure.AuditPersonalFields] = func(ctx context.Context, person string) (any, error) {
+			return s.eraseAuditSealKeys(ctx, person, want)
+		}
 	}
 	return &erasure.Orchestrator{Steps: steps}
 }
@@ -122,7 +125,7 @@ func credentialEraseData(rep secretstore.EraseReport) map[string]any {
 // masking values are sealed under it, so a replica that has not opened them
 // could no longer vouch for those runs' masking. It returns how many runs it
 // fenced. Their history and sandboxes are untouched.
-func (s *Server) eraseCredentialsScope(ctx context.Context, owner string, rep *secretstore.EraseReport) (int, error) {
+func (s *Server) eraseCredentialsScope(ctx context.Context, owner string, want *erasureNames, rep *secretstore.EraseReport) (int, error) {
 	rowID, cfgErr := s.adoSignInRowID(ctx)
 	if cfgErr != nil {
 		return 0, errSignInConfigUnreadable
@@ -144,7 +147,7 @@ func (s *Server) eraseCredentialsScope(ctx context.Context, owner string, rep *s
 			return 0, err
 		}
 	}
-	return len(runs), s.eraseLocked(ctx, owner, rowID, rep)
+	return len(runs), s.eraseLocked(ctx, owner, rowID, want, rep)
 }
 
 func (s *Server) personErasureStore() (store.PersonErasureStore, error) {
@@ -183,48 +186,101 @@ func (s *Server) eraseRunOutputsOf(ctx context.Context, person string) (any, err
 	return map[string]any{"runs": len(ids)}, nil
 }
 
+// errErasureNameUnproved refuses an erasure that would act on a name derived for the person (an
+// entra:<tenant>:<object> form of their sign-ins) that the directory names as the person and someone else,
+// or as no one: what is under it may be another person's, so nothing is erased and nothing is reported
+// erased.
+var errErasureNameUnproved = errors.New("a name derived for the person is not proved to be theirs alone")
+
+// errErasureNamesChanged fails a destructive step whose proved names are not the ones the erasure began
+// with: a sign-in was bound or released in between.
+var errErasureNamesChanged = errors.New("the person's names changed while the erasure ran")
+
+// erasureNames are the names besides the principal that an erasure of the person acts on, each one the
+// directory (PrincipalsNamed) resolves to that person alone: the entra:<tenant>:<object> forms of their
+// sign-ins, and the email aliases they signed in with.
+type erasureNames struct {
+	entra, aliases []string
+}
+
+// erasureNamesOf proves erasureNames for person. An entra form is built from tenant and object ids, which a
+// sign-in under another issuer can share, so equal ids are no proof: the form is the person's only when the
+// directory resolves it to them alone, as for a people row of the same issuer they signed in under. One the
+// directory resolves to another principal, or that is a principal of its own, is someone else's and is
+// skipped; one it resolves to the person and someone else, or to no one, is errErasureNameUnproved. An alias
+// is claim text that can spell anyone, so one that names anyone else is skipped.
+func (s *Server) erasureNamesOf(ctx context.Context, person string) (erasureNames, error) {
+	var n erasureNames
+	pe, err := s.personErasureStore()
+	if err != nil || person == "" {
+		return n, nil
+	}
+	entra, err := pe.PrincipalEntraNames(ctx, person)
+	if err != nil {
+		return n, err
+	}
+	aliases, err := pe.PrincipalAliases(ctx, person)
+	if err != nil {
+		return n, err
+	}
+	dir, _ := s.cfg.Store.(store.PrincipalDirectoryStore)
+	for _, c := range entra {
+		if c == person {
+			continue
+		}
+		if dir == nil {
+			return n, fmt.Errorf("%w: %s", errErasureNameUnproved, c)
+		}
+		owners, err := dir.PrincipalsNamed(ctx, c)
+		if err != nil {
+			return n, err
+		}
+		switch {
+		case slices.Equal(owners, []string{person}):
+			n.entra = append(n.entra, c)
+		case len(owners) == 0 || slices.Contains(owners, person) && !slices.Contains(owners, c):
+			return n, fmt.Errorf("%w: %s", errErasureNameUnproved, c)
+		}
+	}
+	for _, a := range aliases {
+		if dir == nil || a == person || slices.Contains(entra, a) {
+			continue
+		}
+		owners, err := dir.PrincipalsNamed(ctx, a)
+		if err != nil {
+			return n, err
+		}
+		if slices.Equal(owners, []string{person}) {
+			n.aliases = append(n.aliases, a)
+		}
+	}
+	return n, nil
+}
+
+// provedNames is erasureNamesOf at a destructive step. An erasure that proved want before it began acts
+// only if the directory still proves the same names, so a binding that changed in between cannot widen it.
+func (s *Server) provedNames(ctx context.Context, person string, want *erasureNames) (erasureNames, error) {
+	got, err := s.erasureNamesOf(ctx, person)
+	if err == nil && want != nil && (!slices.Equal(got.entra, want.entra) || !slices.Equal(got.aliases, want.aliases)) {
+		err = errErasureNamesChanged
+	}
+	return got, err
+}
+
 // eraseAuditSealKeys is the audit_personal_fields scope for person, the principal the route resolved
 // (resolveSecretOwner): it destroys, in every version, the key the person's sealed audit fields are
 // under, and clears the person from the governance changes they proposed or decided (migration 0126).
 // The fields are sealed under the person's principal; a name the directory did not yet know when a row
-// was written is under its own key, so the principal's entra:<tenant>:<object> forms, and each alias
-// the directory (PrincipalsNamed, people an admin created included) names as this principal and no
-// one else, are destroyed too (a destroy that finds no live key writes nothing). An alias is claim
-// text the person sent and can spell another person's name, so one that names anyone else is skipped.
-// A governance change matches on its recorded principal by those names, and on its recorded email by
-// the admitted aliases alone: an email claim can spell the principal, so the principal is never
-// matched against one.
-func (s *Server) eraseAuditSealKeys(ctx context.Context, person string) (any, error) {
-	names, emails := []string{person}, []string(nil)
-	pe, peErr := s.personErasureStore()
-	if peErr == nil {
-		aliases, err := pe.PrincipalAliases(ctx, person)
-		if err != nil {
-			return nil, err
-		}
-		entra, err := pe.PrincipalEntraNames(ctx, person)
-		if err != nil {
-			return nil, err
-		}
-		for _, n := range entra {
-			if !slices.Contains(names, n) {
-				names = append(names, n)
-			}
-		}
-		dir, _ := s.cfg.Store.(store.PrincipalDirectoryStore)
-		for _, a := range aliases {
-			if dir == nil || slices.Contains(names, a) {
-				continue
-			}
-			owners, err := dir.PrincipalsNamed(ctx, a)
-			if err != nil {
-				return nil, err
-			}
-			if len(owners) == 1 && owners[0] == person {
-				names, emails = append(names, a), append(emails, a)
-			}
-		}
+// was written is under its own key, so the keys of the person's proved names (erasureNames) are
+// destroyed too (a destroy that finds no live key writes nothing). A governance change matches on its
+// recorded principal by those names, and on its recorded email by the proved aliases alone: an email
+// claim can spell the principal, so the principal is never matched against one.
+func (s *Server) eraseAuditSealKeys(ctx context.Context, person string, want *erasureNames) (any, error) {
+	proved, err := s.provedNames(ctx, person, want)
+	if err != nil {
+		return nil, err
 	}
+	names := slices.Concat([]string{person}, proved.entra, proved.aliases)
 	generations := 0
 	for _, name := range names {
 		gens, err := s.cfg.SubjectKeys.Destroy(ctx, name, subjectkey.PurposeAuditSeal)
@@ -234,10 +290,10 @@ func (s *Server) eraseAuditSealKeys(ctx context.Context, person string) (any, er
 		generations += len(gens)
 	}
 	detail := map[string]any{"generations": generations}
-	if peErr == nil {
+	if pe, err := s.personErasureStore(); err == nil {
 		// A pending change whose proposer is erased leaves pending in the same statement, so a change
 		// with no recorded proposer can never be approved.
-		n, err := pe.EraseGovernanceChangePersonalFields(ctx, names, emails)
+		n, err := pe.EraseGovernanceChangePersonalFields(ctx, names, proved.aliases)
 		if err != nil {
 			return nil, err
 		}
@@ -265,11 +321,12 @@ func erasureSelfTarget(actorType types.ActorType, principal, email, owner, raw s
 // (resolveSecretOwner), with its aliases. The caller is their principal and
 // email, each resolved through the same answer, with that principal's aliases,
 // so an entra:<tenant>:<object> form or an email of the caller's, or another
-// identity of theirs their email names, still counts as the caller. The caller
+// identity of theirs their email names, still counts as the caller. names, when
+// non-nil, are the target's proved names the steps will act on (erasureNamesOf). The caller
 // is the target when any name of the target's matches any name of the caller's,
 // compared case-folded (a refusal that is too wide is the safe side). An error
 // reading the directory is returned: the erasure does not go ahead unchecked.
-func (s *Server) erasureTargetsCaller(ctx context.Context, actorType types.ActorType, principal, email, owner, raw string) (bool, error) {
+func (s *Server) erasureTargetsCaller(ctx context.Context, actorType types.ActorType, principal, email, owner, raw string, names *erasureNames) (bool, error) {
 	if actorType == types.ActorSystem {
 		return false, nil
 	}
@@ -285,6 +342,9 @@ func (s *Server) erasureTargetsCaller(ctx context.Context, actorType types.Actor
 		return false, err
 	}
 	target = append(target, owner, raw)
+	if names != nil {
+		target = slices.Concat(target, names.entra, names.aliases)
+	}
 	var caller []string
 	for _, n := range []string{principal, email} {
 		if n == "" {
@@ -357,8 +417,23 @@ func (s *Server) handleErasePerson(w http.ResponseWriter, r *http.Request) {
 	if s.refuseReservedErasure(w, r, "person.erasure", owner) {
 		return
 	}
+	// The names the credentials and audit steps act on are proved once, before anything runs, and the
+	// self check below covers them.
+	var names *erasureNames
+	var unproved error
+	if slices.ContainsFunc(scopes, func(sc erasure.Scope) bool { return sc == erasure.Credentials || sc == erasure.AuditPersonalFields }) {
+		n, err := s.erasureNamesOf(r.Context(), owner)
+		if errors.Is(err, errErasureNameUnproved) {
+			unproved = err
+		} else if err != nil {
+			record(owner, "failure", map[string]any{"reason": reasonIdentityDirectoryUnreadable, "scopes": scopeNames(scopes)})
+			writeServerError(w, r, "prove whose names an erasure acts on", err)
+			return
+		}
+		names = &n
+	}
 	if slices.ContainsFunc(scopes, func(sc erasure.Scope) bool { return sc != erasure.Credentials }) {
-		self, err := s.erasureTargetsCaller(r.Context(), actorType, principal, oidcEmailFromContext(r.Context()), owner, raw)
+		self, err := s.erasureTargetsCaller(r.Context(), actorType, principal, oidcEmailFromContext(r.Context()), owner, raw, names)
 		if err != nil {
 			record(owner, "failure", map[string]any{"reason": reasonIdentityDirectoryUnreadable, "scopes": scopeNames(scopes)})
 			writeServerError(w, r, "check who an erasure names", err)
@@ -372,7 +447,12 @@ func (s *Server) handleErasePerson(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	rep, err := s.erasureOrchestrator(nil).Orchestrate(r.Context(), owner, scopes)
+	var rep erasure.Report
+	if unproved != nil {
+		err = &erasure.IncompleteError{Remaining: sortedScopes(scopes), Cause: unproved}
+	} else {
+		rep, err = s.erasureOrchestrator(nil, names).Orchestrate(r.Context(), owner, scopes)
+	}
 	data := map[string]any{"scopes": scopeNames(sortedScopes(scopes))}
 	outcomes := map[string]string{}
 	for _, sc := range scopes {

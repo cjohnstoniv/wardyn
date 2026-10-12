@@ -45,7 +45,7 @@ type erasureComponentHarnessStore struct {
 // seam answers ErrNotAvailable instead of reporting the scope erased, and the SCIM purge skips it.
 func TestErasureComponentsScopeNeedsAComponentStore(t *testing.T) {
 	srv := newHarness(t).srv
-	_, err := srv.erasureOrchestrator(nil).Orchestrate(t.Context(), "bob", []erasure.Scope{erasure.Components})
+	_, err := srv.erasureOrchestrator(nil, nil).Orchestrate(t.Context(), "bob", []erasure.Scope{erasure.Components})
 	if !errors.Is(err, erasure.ErrNotAvailable) {
 		t.Fatalf("no component store: %v, want ErrNotAvailable", err)
 	}
@@ -61,7 +61,7 @@ func TestErasureComponentsScopeRunsBothStatements(t *testing.T) {
 	srv := newHarness(t).srv
 	srv.cfg.Store = erasureComponentHarnessStore{Store: srv.cfg.Store, erasureComponentStore: cs}
 
-	rep, err := srv.erasureOrchestrator(nil).Orchestrate(t.Context(), "bob", []erasure.Scope{erasure.Components})
+	rep, err := srv.erasureOrchestrator(nil, nil).Orchestrate(t.Context(), "bob", []erasure.Scope{erasure.Components})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestErasureComponentsScopeRunsBothStatements(t *testing.T) {
 	for _, fail := range []string{"delete", "erase"} {
 		cs.fail = fail
 		var inc *erasure.IncompleteError
-		if _, err := srv.erasureOrchestrator(nil).Orchestrate(t.Context(), "bob", []erasure.Scope{erasure.Components}); !errors.As(err, &inc) ||
+		if _, err := srv.erasureOrchestrator(nil, nil).Orchestrate(t.Context(), "bob", []erasure.Scope{erasure.Components}); !errors.As(err, &inc) ||
 			!slices.Equal(inc.Remaining, []erasure.Scope{erasure.Components}) {
 			t.Errorf("%s failing: %v, want an *IncompleteError leaving the scope", fail, err)
 		}

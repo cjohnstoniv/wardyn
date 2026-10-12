@@ -27,7 +27,7 @@ func TestProviderCausePG_PersonErasureRemovesHistory(t *testing.T) {
 					t.Fatal(err)
 				}
 			} else {
-				if _, err := pair.a.erasureOrchestrator(nil).Orchestrate(t.Context(), "person-a", []erasure.Scope{erasure.Credentials}); err != nil {
+				if _, err := pair.a.erasureOrchestrator(nil, nil).Orchestrate(t.Context(), "person-a", []erasure.Scope{erasure.Credentials}); err != nil {
 					t.Fatal(err)
 				}
 			}
