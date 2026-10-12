@@ -17,15 +17,17 @@ import (
 // other value is local or unknown, and a layer that cannot handle it refuses.
 func remotePlacement(p types.Placement) bool { return p == "" || p == types.PlacementRemote }
 
-// unsupportedLocalDispatch closes non-HTTP dispatch lanes too, before their
-// CAS, renewal, grant authoring or mask-manifest writes. H3/D117 must replace
-// this refusal with the complete classified plan, never merely a runner id.
+// unsupportedLocalDispatch closes every dispatch lane, before its CAS, renewal,
+// grant authoring or mask-manifest writes, to a run create did not bind to a
+// runner: a placement this server does not know, or a local run with no runner.
+// A bound local run goes on to the actual-spec classifier (classifyLocalDispatch)
+// after the final spec writer, and to its runner only (createSandboxAtTarget).
 func (s *Server) unsupportedLocalDispatch(ctx context.Context, run types.AgentRun) bool {
-	if remotePlacement(run.Placement) {
+	if remotePlacement(run.Placement) || (run.Placement == types.PlacementLocal && run.RunnerID != nil) {
 		return false
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch", run.ID.String(), "failure", mustJSON(map[string]any{"reason": placement.ReasonPlacementUnavailable})))
-	s.failAndRevoke(context.WithoutCancel(ctx), run.ID, types.RunPending, "Your own runner is not available: this server cannot place a run on a runner yet.")
+	s.failAndRevoke(context.WithoutCancel(ctx), run.ID, types.RunPending, "Your own runner is not available: this run is not bound to one of your runners.")
 	return true
 }
 

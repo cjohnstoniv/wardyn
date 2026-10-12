@@ -88,6 +88,9 @@ func createEndSources(in createEndInput) ([]runnerpool.SourceLimits, error) {
 	}
 	sources := []runnerpool.SourceLimits{runnerpool.WithInteractiveLifetimeDefault(dep, in.runType)}
 	if in.pool != nil {
+		// An older-shape request (no stored experience) reads as Background here. That holds only while
+		// admission refuses that shape in every pool that sets limits (resolvePlacement's PoolSource check),
+		// so no pool's limits ever decide such a run's end.
 		pool, refusal := runnerpool.PoolSource(*in.pool, in.runType)
 		if refusal != nil {
 			// Admission (the run-type check) answers this before the end is decided.

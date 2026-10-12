@@ -4,8 +4,8 @@
 package api
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"slices"
@@ -95,6 +95,16 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, self
 	return p, s.localPlanFacts(ctx, &p, egressBaselineOf(sc), run.RunnerID)
 }
 
+// sameScope compares two grant scopes by meaning: a stored row's scope has round-tripped through jsonb,
+// which reorders keys and drops the request's spacing, so its bytes are never the policy copy's.
+func sameScope(a, b json.RawMessage) bool {
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return false
+	}
+	return reflect.DeepEqual(x, y)
+}
+
 func selfDefinedSnapshotNames(comps []types.RunComponent) []string {
 	var names []string
 	for _, c := range comps {
@@ -117,7 +127,7 @@ func (s *Server) localPolicyGrantOrigins(ctx context.Context, owner string, rows
 	p.Spec.ProxyConfig.Policy = p.Spec.ProxyConfig.Policy.Clone()
 	for i, g := range p.Spec.ProxyConfig.Policy.EligibleGrants {
 		for _, row := range rows {
-			if row.Spec.Kind != g.Kind || !bytes.Equal(row.Spec.Scope, g.Scope) {
+			if row.Spec.Kind != g.Kind || !sameScope(row.Spec.Scope, g.Scope) {
 				continue
 			}
 			origin, ref := s.localGrantOrigin(ctx, owner, row.Spec)

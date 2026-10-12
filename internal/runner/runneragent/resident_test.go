@@ -277,3 +277,43 @@ func TestResident_KeystorePromptIsBounded(t *testing.T) {
 		t.Fatalf("index after a timed-out write = %v (%v), want the grant kept", reloaded.held, err)
 	}
 }
+
+// A value past its NotAfter is erased by the runner's own sweep, with no org erase: a run whose end never
+// reached the runner does not leave its value in the keystore. A failed delete keeps the grant indexed for
+// the next sweep; a value still within its NotAfter, or with none, is left alone.
+func TestResident_ExpiredValuesAreErased(t *testing.T) {
+	ks := &memKeystore{items: map[string]string{}}
+	dir := t.TempDir()
+	r, err := NewResident(ks.keystore(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	run, expired, live, unbounded := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for g, notAfter := range map[uuid.UUID]time.Time{expired: now.Add(-time.Minute), live: now.Add(time.Hour), unbounded: {}} {
+		if err := r.track(run, g, &residentGrant{NotAfter: notAfter}); err != nil {
+			t.Fatal(err)
+		}
+		ks.items[residentAccount(run, g)] = "v"
+	}
+	failing := ks.keystore()
+	failing.Delete = func(string) error { return errors.New("keychain locked") }
+	r.keystore = failing
+	if err := r.EraseExpired(context.Background(), now); err == nil {
+		t.Fatal("a failed delete was not reported")
+	}
+	if reloaded, err := NewResident(ks.keystore(), dir); err != nil || len(reloaded.held[run]) != 3 {
+		t.Fatalf("index after a failed delete = %v (%v), want every grant kept", reloaded.held, err)
+	}
+	r.keystore = ks.keystore()
+	if err := r.EraseExpired(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ks.items[residentAccount(run, expired)]; ok || len(ks.items) != 2 {
+		t.Fatalf("keystore after the sweep = %v, want only the two unexpired values", ks.items)
+	}
+	reloaded, err := NewResident(ks.keystore(), dir)
+	if _, ok := reloaded.held[run][expired]; err != nil || ok || len(reloaded.held[run]) != 2 {
+		t.Fatalf("index after the sweep = %v (%v), want the expired grant gone", reloaded.held, err)
+	}
+}

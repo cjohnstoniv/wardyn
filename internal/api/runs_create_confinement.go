@@ -126,11 +126,16 @@ func appendCredentialConfinementAdvisory(warnings []string, spec types.RunPolicy
 // error). Writes the HTTP error itself and returns ok=false on any refusal.
 // Extracted verbatim from handleCreateRun.
 //
-// offered, when not nil, is the set the DEFAULT class is chosen from instead of the deployment's union:
-// a pooled run is placed on one of its pool's eligible candidates, so its default barrier is the
-// strongest one of those, and create, Review and the preview agree on it. The membership check below
-// still reads the capabilities of the placement and runner the request names.
-func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.ResponseWriter, p types.Placement, runnerID uuid.UUID, spec types.RunPolicySpec, reqCC types.ConfinementClass, baseline composer.Baseline, offered []types.ConfinementClass) (types.ConfinementClass, bool) {
+// place is the run's resolved placement. A pooled run is placed on one of its pool's eligible candidates,
+// so its default barrier is the strongest of theirs (offeredClasses), and create, Review and the preview
+// agree on it. Its capabilities are those of the placement the POOL decided, never the request's: a
+// self-hosted run is held to its own eligible runners' classes (bind then picks one that enforces the
+// class), and a remote-provided one to the deployment's executor. p and runnerID are an unpooled
+// request's placement and runner.
+func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.ResponseWriter, p types.Placement, runnerID uuid.UUID, spec types.RunPolicySpec, reqCC types.ConfinementClass, baseline composer.Baseline, place runPlacement) (types.ConfinementClass, bool) {
+	if place.pooled {
+		p = place.placement
+	}
 	// Capabilities are read BEFORE the pure math now, not after: the default
 	// branch needs the advertised set to pick the strongest class rather than
 	// just the policy minimum. Still one read, still fail-closed on any error:
@@ -144,7 +149,10 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 	// call: the hermetic UI e2e backend creates runs in that mode.
 	headless := p == types.PlacementRemote && s.cfg.Runner == nil
 	var caps runner.Capabilities
-	if !headless {
+	switch {
+	case place.pooled && p == types.PlacementLocal:
+		caps = runner.Capabilities{ConfinementClasses: place.candidateClasses()}
+	case !headless:
 		pc, err := s.placementCapabilities(ctx, p, runnerID)
 		if err != nil {
 			var ref *placement.Refusal
@@ -159,7 +167,7 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 	}
 
 	defaultFrom := caps.ConfinementClasses
-	if offered != nil {
+	if offered := place.offeredClasses(); offered != nil {
 		defaultFrom = offered
 	}
 	enforced, err := enforcedConfinement(spec, reqCC, defaultFrom, baseline)
@@ -182,6 +190,11 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 	// floor unchanged when nothing advertised meets it, so THIS check is what
 	// still 422s that case exactly as it did before the default rule existed.
 	if !headless && enforced != "" && !slices.Contains(caps.ConfinementClasses, enforced) {
+		if place.pooled && p == types.PlacementLocal {
+			ref := targetRefusal(placement.ReasonPlacementCapability, place.pool.Name, place.pool.HostingType)
+			writeJSON(w, ref.status, ref.body)
+			return "", false
+		}
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassUnsupported, fmt.Sprintf(
 			"runner %q cannot enforce confinement_class %s (available: %s)",
 			caps.Driver, enforced, classesOrNone(caps.ConfinementClasses)))
