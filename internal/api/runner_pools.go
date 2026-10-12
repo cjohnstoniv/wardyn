@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 
@@ -166,28 +167,78 @@ func (s *Server) poolFromPath(w http.ResponseWriter, r *http.Request, ps store.R
 	return row, found
 }
 
-// poolAvailability says whether a pool can take a run for the caller by what the catalogue knows: it is
-// switched on and holds a target the caller's run could use. Whether that target is online, has room
-// or passes the run's own checks is the admission fold's to decide, never read as available here.
-func (s *Server) poolAvailability(row store.RunnerPoolCatalogueRow) (string, runnerpool.Reason) {
-	if row.Pool.State != types.RunnerPoolActive {
-		return client.RunnerPoolUnavailable, runnerpool.ReasonUnavailable
+// localRunsPlaced is whether this server places a run on a person's own runner. Until it does (the
+// final unsupported-local refusal in localPlacementRefusal), every self-hosted pool reads
+// placement_unavailable, which is what a launch on one answers.
+var localRunsPlaced = false
+
+// poolState is one permitted pool's availability for the caller, and the caller's own candidates
+// when the checks reached a self-hosted pool's runners.
+type poolState struct {
+	availability string
+	reason       runnerpool.Reason
+	own          []poolTarget
+}
+
+func (st poolState) choice(row store.RunnerPoolCatalogueRow) client.RunnerPoolChoice {
+	return client.RunnerPoolChoice{ID: row.Pool.ID, Name: row.Pool.Name, HostingType: row.Pool.HostingType, Availability: st.availability, Reason: st.reason}
+}
+
+// poolAvailability says whether a pool can take a run for the caller: the first of
+// runnerpool.AvailabilityReasons that applies, in that order, by the catalogue, the caller's
+// deny_placements, the runner switch and, for a self-hosted pool, whether any of the caller's OWN
+// runners in it is online. The pool list and the dry doors both ask it, so they agree. Whether a
+// candidate has room or passes the run's own checks is the admission fold's to decide.
+func (s *Server) poolAvailability(ctx context.Context, ps store.RunnerPoolStore, row store.RunnerPoolCatalogueRow, denied []types.Placement) (poolState, *runRefusal) {
+	unavailable := func(r runnerpool.Reason) (poolState, *runRefusal) {
+		return poolState{availability: client.RunnerPoolUnavailable, reason: r}, nil
 	}
-	if row.Pool.HostingType == types.RunnerPoolSelfHosted && row.OwnRunners == 0 {
-		return client.RunnerPoolUnavailable, runnerpool.ReasonNoEligibleMember
-	}
-	if row.Pool.HostingType == types.RunnerPoolRemoteProvided {
+	switch {
+	case row.Pool.State != types.RunnerPoolActive:
+		return unavailable(runnerpool.ReasonUnavailable)
+	case slices.Contains(denied, row.Pool.HostingType.Placement()):
+		return unavailable(runnerpool.AvailabilityPlacementDenied)
+	case row.Pool.HostingType == types.RunnerPoolRemoteProvided:
 		configured := s.configuredExecutors()
 		if !slices.ContainsFunc(row.ExecutorIDs, func(id string) bool { return slices.Contains(configured, id) }) {
-			return client.RunnerPoolUnavailable, runnerpool.ReasonNoEligibleMember
+			return unavailable(runnerpool.ReasonNoEligibleMember)
 		}
+		return poolState{availability: client.RunnerPoolAvailable}, nil
 	}
-	return client.RunnerPoolAvailable, ""
+	if !localRunsPlaced {
+		return unavailable(runnerpool.AvailabilityPlacementUnavailable)
+	}
+	switch err := s.runnersEnabled(ctx); {
+	case errors.Is(err, errRunnersDisabled):
+		return unavailable(runnerpool.AvailabilityPlacementUnavailable)
+	case err != nil:
+		return poolState{availability: client.RunnerPoolUnknown}, nil
+	}
+	if row.OwnRunners == 0 {
+		return unavailable(runnerpool.ReasonNoEligibleMember)
+	}
+	own, refusal := s.ownRunnerTargets(ctx, &createRunRequest{}, ps, row)
+	if refusal != nil {
+		if refusal.status >= http.StatusInternalServerError {
+			return poolState{}, refusal
+		}
+		return unavailable(runnerpool.Reason(refusal.body.Reason))
+	}
+	st := poolState{availability: client.RunnerPoolAvailable, own: own}
+	if !slices.ContainsFunc(own, func(t poolTarget) bool { return s.runnerOnline(*t.runnerID) }) {
+		st.availability, st.reason = client.RunnerPoolUnavailable, runnerpool.AvailabilityNoOnlineRunner
+	}
+	return st, nil
 }
 
 func (s *Server) handleListRunnerPools(w http.ResponseWriter, r *http.Request) {
 	ps, ok := s.runnerPoolStore(w)
 	if !ok {
+		return
+	}
+	rt := types.RunnerPoolRunType(r.URL.Query().Get("run_type"))
+	if rt != "" && !rt.Valid() {
+		writePoolInvalid(w, "run_type is background or interactive.")
 		return
 	}
 	rows, ok := s.poolCatalogue(w, r, ps, false)
@@ -199,18 +250,16 @@ func (s *Server) handleListRunnerPools(w http.ResponseWriter, r *http.Request) {
 		writeCeilingError(w, r, err)
 		return
 	}
-	out := client.RunnerPoolList{Pools: make([]client.RunnerPoolChoice, 0, len(rows))}
-	for _, row := range rows {
-		availability, reason := s.poolAvailability(row)
-		if !subj.permits(row) {
-			// Listed for a manager only: they may manage it, not use it.
-			availability, reason = client.RunnerPoolUnavailable, runnerpool.ReasonNotFound
-		}
-		out.Pools = append(out.Pools, client.RunnerPoolChoice{
-			ID: row.Pool.ID, Name: row.Pool.Name, HostingType: row.Pool.HostingType, Availability: availability, Reason: reason,
-		})
+	ceiling, err := s.effectiveCeiling(r.Context())
+	if err != nil {
+		writeCeilingError(w, r, err)
+		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	list, refusal := s.poolList(r, ps, rows, subj, ceiling, rt)
+	if refusal.write(s, w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
 }
 
 func (s *Server) handleGetRunnerPool(w http.ResponseWriter, r *http.Request) {

@@ -424,6 +424,9 @@ type PreflightResult struct {
 	// lane fills it. Neither is admission: a launch re-checks both.
 	RunnerPool  *ResolvedRunnerPool `json:"runner_pool,omitempty"`
 	RunnerPools []RunnerPoolChoice  `json:"runner_pools"`
+	// BarrierOptions are the resolved pool's three barriers under this draft's
+	// floors (policy_floor and access_floor appear only here); empty when unpooled.
+	BarrierOptions []BarrierOption `json:"barrier_options"`
 	// Access is what the run brings in: its rows, hosts, credentials, the line
 	// for an unlisted host and the setup still needed. The policy preview
 	// answers the same block for the same request.

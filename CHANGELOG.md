@@ -91,11 +91,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- The runner pool list (`GET /runner-pools`) now says, for each pool you may use, whether it is available to you and
+  why not, your own active runs against your profile's cap, the pool's limits as your runs get them, its barrier
+  options and your runners in it; `?run_type=` narrows it to one run type (`400 runner_pool_invalid` otherwise).
+  Preflight and the policy preview answer the same facts. The Go SDK gains `ListRunnerPoolsFor(ctx, runType)`.
 - Interactive runs: Claude Code now enforces tool rules (Ask first, Block it, and Run it for a named tool) through its
   locked managed settings, so a policy's named tool rules apply to interactive Claude Code runs too. If the rules
   cannot be written exactly, or the runner cannot deliver managed settings (including a krun runner that cannot vouch
   for them), the run is refused, never launched without them. A default of "Run it" or "Block it" is still refused in
-  interactive runs.
+  interactive runs. A policy's default for unnamed tools (`*`) does not apply there; Claude Code asks.
 - A launch into a runner pool at its concurrent-run limit now waits for a slot instead of failing. It holds no
   credential while it waits, starts in launch order once its owner's access, role and user type are re-checked, and
   gives up after 24 hours (Background) or 1 hour (Interactive). `POST /runs` takes `max_wait_sec` (1 or more; a longer
