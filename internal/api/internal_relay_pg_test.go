@@ -381,7 +381,7 @@ func TestRelayedViaOrgRoutesAreInternalOnly(t *testing.T) {
 		r := httptest.NewRequest(m, "/api/v1/internal/via-org/"+uuid.NewString()+"/repos", nil)
 		r.Header.Set("Authorization", "Bearer "+adminToken)
 		w := httptest.NewRecorder()
-		srv.router.ServeHTTP(w, r)
+		panicFails(t, srv.Handler()).ServeHTTP(w, r)
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("%s via_org with a human admin token = %d %s, want 401", m, w.Code, w.Body.String())
 		}
