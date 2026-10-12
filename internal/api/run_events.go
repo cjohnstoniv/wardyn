@@ -183,7 +183,7 @@ func (h *runEventHub) moved(runID uuid.UUID, from, to types.RunState) {
 // substrate's error text, and this feed carries no log content.
 func failedPhase(from types.RunState) string {
 	switch from {
-	case types.RunPending:
+	case types.RunQueued, types.RunPending:
 		return client.RunFailedNotStarted
 	case types.RunStarting:
 		return client.RunFailedStartFailed

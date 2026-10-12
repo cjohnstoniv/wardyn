@@ -174,6 +174,11 @@ func TestRunEndReason(t *testing.T) {
 	if RunEndReason("x").Sentence() != "" {
 		t.Fatal("an unknown reason has no sentence")
 	}
+	for _, r := range []RunEndReason{RunEndQueueTimeout, RunEndQueueProfileChanged, RunEndQueuePolicyChanged, RunEndQueuePortalRevoked, RunEndRunnerPoolRemoved, RunEndIdentityDeactivated} {
+		if !r.Valid() || r.Sentence() == "" {
+			t.Errorf("queue end reason %q must be valid and have a sentence", r)
+		}
+	}
 }
 
 func TestRunnerPoolWithoutLimitsAddsNoBound(t *testing.T) {

@@ -33,7 +33,14 @@ export type RunnerPoolRunType = "background" | "interactive";
 export type LimitSource = "pool" | "governance" | "deployment" | "runner_capacity";
 
 /** Why the platform ended a run (Go: types.RunEndReason). */
-export type RunEndReason = "max_lifetime_reached";
+export type RunEndReason =
+  | "max_lifetime_reached"
+  | "queue_timeout"
+  | "queue_profile_changed"
+  | "queue_policy_changed"
+  | "queue_portal_revoked"
+  | "runner_pool_removed"
+  | "identity_deactivated";
 
 /** Go: types.RunnerPoolAmount. A CPU (milli-CPU) or memory (MiB) limit; `default` is at most `cap`. */
 export interface RunnerPoolAmount {

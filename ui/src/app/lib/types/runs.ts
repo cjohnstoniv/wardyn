@@ -59,6 +59,8 @@ export type RunPlacement = "" | "local" | "remote";
 export type RunEvidenceSource = "" | "substrate" | "runner_asserted";
 
 export type RunState =
+  // QUEUED: waiting for a slot in a capped runner pool; it holds no slot, identity or sandbox.
+  | "QUEUED"
   | "PENDING"
   | "STARTING"
   | "RUNNING"
@@ -90,6 +92,7 @@ export interface AgentRun {
   policy_id?: string;
   confinement_class: ConfinementClass;
   state: RunState;
+  // Empty while the run is QUEUED; written when it starts.
   spiffe_id: string;
   runner_target: string;
   // Where the sandbox lives (0.9 client mode): "remote", the organisation's own
@@ -240,6 +243,8 @@ export interface AgentRun {
   // (migration 0159, #1319). Absent when neither bounds the lifetime and for a
   // run from before it; an extension never goes past it.
   lifetime_cap_at?: string;
+  // When the run left the pool queue (migration 0162); absent for a run that never waited.
+  admitted_at?: string;
   wait_budget_sec?: number;
   run_limits?: RunLimits;
   governance_profile_id?: string;

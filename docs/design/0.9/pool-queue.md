@@ -104,8 +104,8 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
 
 1. Lock the pool row `FOR NO KEY UPDATE`, then the deployment-cap advisory lock (always this order).
 2. Count the pool's and the deployment's slot-holders. `AtCapacity` non-nil promotes nothing; a deployment at `WARDYN_MAX_CONCURRENT_RUNS` leaves heads waiting.
-3. Candidates oldest first (`queued_at`, `run_id`) `FOR UPDATE SKIP LOCKED`; skip any the runner pick cannot place now. It keeps its place.
-4. Before the CAS, host capacity and the fit check (`Need > Left`) run lock-free; a no leaves the run waiting with `runner_pool_no_runner_free`.
+3. Candidates oldest first (`queued_at`, `run_id`) `FOR UPDATE SKIP LOCKED`; skip any whose eligible runners are all busy now. It keeps its place.
+4. Before the CAS, host capacity and the fit check (`Need > Left`) run lock-free; a no leaves the run waiting; a run held back because every eligible runner is busy is waiting with `runner_pool_no_runner_free`.
 5. CAS `QUEUED`→`PENDING`; set `admitted_at`, the runner binding and the watcher heartbeat; delete the `run_queue` row, returning its inputs.
 
 **The start**, in the promoting process:
@@ -132,7 +132,7 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
 | Rule | Detail |
 |---|---|
 | Order | FIFO per pool by `queued_at`, then `run_id` ([Q2a](#q2a-order-and-a-per-person-limit)) |
-| Head that cannot be placed | Skipped, keeps its place: a run waiting for its owner's laptop never blocks another person's |
+| Head that cannot be placed | Skipped, keeps its place: a run whose owner's runners are all busy never blocks another person's |
 | Flood | 100 waiting runs per person per pool, counted in `run_queue`, and the person cap under [Q2b](#q2b-do-waiting-runs-count-against-a-persons-run-limit)-A |
 | Priority, revive | None ([Q3](#q3-priority)), super admins included; revive per [Q10](#q10-reviving-a-kept-run-in-a-full-pool) |
 | Position | `run_queue` rows ahead in the pool; a count, never whose |
@@ -146,7 +146,7 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
 | Token | Kind | HTTP | Where recorded | Console matcher |
 |---|---|---|---|---|
 | `runner_pool_at_capacity` | Wait | None, ever | `status_detail` `queue: …` → `status_reason`; `run.create` | `RUN_WAIT.AT_CAPACITY` (exists) |
-| `runner_pool_no_runner_free` | Wait | None, ever | As above | New `RUN_WAIT.NO_RUNNER_FREE` |
+| `runner_pool_no_runner_free` | Wait, busy runners only | None, ever | As above | New `RUN_WAIT.NO_RUNNER_FREE` |
 | `runner_pool_queue_full` | Refusal, create | `422` | Error body; no row, no audit row | New `RUNNER_POOL_REFUSAL.QUEUE_FULL`, golden-pinned |
 | `runner_pool_full` | Refusal, revive | `422` | Error body; revive refusal audit row | New `RUNNER_POOL_REFUSAL.FULL`, golden-pinned |
 | `queue_timeout` | End, `FAILED` | None (no request open); `GET` is `200` | `status_detail`, `failure_hint`, `run.queue.expire` | New `RUN_END_REASON_SENTENCE` entry |
@@ -157,7 +157,7 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
 
 | Token | Draft sentence (canon after the mock round) |
 |---|---|
-| `runner_pool_no_runner_free` | "None of your runners in {pool} is online. This run starts when one is." / "{pool}'s runners are busy. This run starts when there's room." |
+| `runner_pool_no_runner_free` | "{pool}'s runners are busy. This run starts when there's room." |
 | `runner_pool_queue_full` | "You already have {n} runs waiting for {pool}. Cancel one or wait for one to start." |
 | `runner_pool_full` | "{pool} is running its limit of {n}, and others are waiting. Try again when one finishes." |
 | `queue_timeout` | "This run waited too long for a free slot and was not started." |
@@ -175,7 +175,7 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
 | Pool switched off | Keep waiting; promotion skips it; the deadline runs | H10-pools' rule |
 | Cap lowered below the running count | Wait until slot-holders fall under it | Keep running; a cap never kills |
 | Run type, barrier, use policy, CPU, memory, lifetime tightened | Judged at the start; O6-A2 does not apply (no end yet) | CPU, memory: none. Lifetime: O6-A2 |
-| Self-hosted runner offline | Waits with `runner_pool_no_runner_free`; others pass it | #1319 and PLAN's pending kill |
+| Self-hosted runner offline | Not queued: a Review blocker and a create refusal (`runner_pool_no_eligible_member`, `422`), as today. Only busy runners wait (`runner_pool_no_runner_free`); a runner that drops offline while the run waits is not free, so the run keeps its place until its deadline | Owner ruling O-A3 (DR-0085); #1319 and PLAN's pending kill |
 
 - `run_queue.pool_id` is `ON DELETE RESTRICT`. Pool removal cancels each waiting run, which deletes its row, then deletes the pool in the same transaction; a delete that skips the cancellation fails instead of orphaning waiting runs.
 
