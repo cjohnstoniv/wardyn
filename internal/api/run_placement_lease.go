@@ -168,7 +168,11 @@ func (s *Server) leaseRunOnRunner(ctx context.Context, run types.AgentRun) (runn
 	if run.Task != "" {
 		operation = runnerwire.MethodExec
 	}
-	return s.leaseRunnerExecution(ctx, run, uuid.Nil, operation)
+	e, err := s.leaseRunnerExecution(ctx, run, uuid.Nil, operation)
+	if err != nil {
+		return runnerExecution{}, fmt.Errorf("lease the run to its runner: %w", err)
+	}
+	return e, nil
 }
 
 // startRunOnRunner is revive's Start of a stopped agent on a runner: a fresh generation after the run's
@@ -193,17 +197,6 @@ func (s *Server) startRunOnRunner(ctx context.Context, starter runner.SandboxSta
 		return err
 	}
 	return s.bindRunnerExecution(ctx, e, "")
-}
-
-// createLeasedSandbox is dispatch's create: a run on a runner is leased first, since its runner refuses a
-// create no lease authorizes. The execution is what the agent's Exec then carries.
-func (s *Server) createLeasedSandbox(ctx, createCtx context.Context, run types.AgentRun, spec runner.SandboxSpec) (runner.Sandbox, runnerExecution, error) {
-	e, err := s.leaseRunOnRunner(ctx, run)
-	if err != nil {
-		return runner.Sandbox{}, runnerExecution{}, fmt.Errorf("lease the run to its runner: %w", err)
-	}
-	sb, err := s.createSandboxAtTarget(createCtx, run, spec)
-	return sb, e, err
 }
 
 // replaceRevivedProxy is revive's proxy replacement. A run on a runner is re-leased first, on the claim's
