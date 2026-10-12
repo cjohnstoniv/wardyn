@@ -29,7 +29,7 @@ func quotedSet(s string) map[string]bool {
 // source of the terminal set. Two ways this drifts and neither is loud:
 // a new non-terminal state omitted here is simply never adopted (runs strand
 // exactly as they did before the lease existed), and a list that stops matching
-// migration 0027's partial-index predicate silently loses the index, turning
+// the partial-index predicate of migration 0162 (the newest definition; 0027 made it) silently loses the index, turning
 // every sweep tick into a seq scan of unbounded run history.
 //
 // The state universe is read from types.go's source, not a copy, so a state
@@ -50,18 +50,18 @@ func TestNonTerminalRunStates_MatchesTypes(t *testing.T) {
 		t.Fatalf("found %d RunState constants (%d non-terminal) in types.go; the scan regex is stale", len(all), len(want))
 	}
 
-	mig, err := os.ReadFile(filepath.Join("..", "db", "migrations", "0027_run_watcher_lease.sql"))
+	mig, err := os.ReadFile(filepath.Join("..", "db", "migrations", "0162_run_queue.sql"))
 	if err != nil {
-		t.Fatalf("read migration 0027: %v", err)
+		t.Fatalf("read migration 0162: %v", err)
 	}
 	idx := regexp.MustCompile(`(?is)CREATE\s+INDEX[^;]*agent_runs_watcher_sweep_idx[^;]*state\s+IN\s*\(([^)]*)\)`).FindStringSubmatch(string(mig))
 	if idx == nil {
-		t.Fatal("no agent_runs_watcher_sweep_idx ... WHERE state IN (...) predicate in migration 0027")
+		t.Fatal("no agent_runs_watcher_sweep_idx ... WHERE state IN (...) predicate in migration 0162")
 	}
 
 	for name, got := range map[string]map[string]bool{
 		"store.nonTerminalRunStates":        quotedSet(nonTerminalRunStates),
-		"0027 agent_runs_watcher_sweep_idx": quotedSet(idx[1]),
+		"0162 agent_runs_watcher_sweep_idx": quotedSet(idx[1]),
 	} {
 		for state := range want {
 			if !got[state] {

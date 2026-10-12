@@ -36,22 +36,22 @@ const (
 //
 // TestBuildFromDevcontainerFiles_BakesAgentCLI (WARDYN_TEST_DOCKER=1)
 // smoke-tests this; logSink, non-nil, receives output (else Builder.DefaultLogSink).
-func (b *Builder) BuildFromDevcontainerFiles(ctx context.Context, files map[string]string, outputTag string, logSink io.Writer) (imageRef string, err error) {
+func (b *Builder) BuildFromDevcontainerFiles(ctx context.Context, files map[string]string, outputTag string, logSink io.Writer) (Built, error) {
 	if outputTag == "" {
-		return "", fmt.Errorf("envbuild: outputTag is required")
+		return Built{}, fmt.Errorf("envbuild: outputTag is required")
 	}
 	if err := validateGeneratedTag(outputTag); err != nil {
-		return "", err
+		return Built{}, err
 	}
 	if err := validateGeneratedFiles(files); err != nil {
-		return "", err
+		return Built{}, err
 	}
 
 	// Delivered as a TAR via CopyToContainer, not a bind mount — a bind names a
 	// HOST path invisible from a containerized wardynd's own /tmp.
 	tarCtx, err := generatedFilesTar(files, localContextWorkspaceFolder)
 	if err != nil {
-		return "", err
+		return Built{}, err
 	}
 	// A fresh per-build push ref: see Builder.newPushRef.
 	pushRepo, buildTag := b.newPushRef()

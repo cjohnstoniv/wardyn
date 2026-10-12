@@ -159,7 +159,7 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 		return fmt.Errorf("sync: %w", err)
 	}
 	defer lroot.Close()
-	sy := &syncer{c: sess.sftp, root: lroot, o: syncOptions{remote: remote, pull: f.pull, maxPullBytes: f.maxPullBytes}, st: st, stateFile: stateFile}
+	sy := &syncer{c: sess.sftp, meter: sess.meter, root: lroot, o: syncOptions{remote: remote, pull: f.pull, maxPullBytes: f.maxPullBytes}, st: st, stateFile: stateFile}
 	runErr := runSyncLoop(ctx, cmd, sy, f)
 	if cerr := sess.close(); runErr == nil {
 		runErr = cerr
@@ -219,10 +219,10 @@ func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *syncer, f syncFlag
 func printSyncReport(w io.Writer, r *syncReport) {
 	fmt.Fprintf(w, "pushed %d file(s) (%d bytes), pulled %d file(s) (%d bytes)\n", len(r.Pushed), r.BytesOut, len(r.Pulled), r.BytesIn)
 	for _, p := range r.Conflicts {
-		fmt.Fprintf(w, "conflict (changed on both sides; the laptop's copy wins, the sandbox's is not pulled): %s\n", p)
+		fmt.Fprintf(w, "conflict (changed on both sides; the laptop's copy wins, the sandbox's is not pulled): %s\n", syncShown(p))
 	}
 	for _, x := range r.Refused {
-		fmt.Fprintf(w, "refused (%s): %s\n", x.Reason, x.Path)
+		fmt.Fprintf(w, "refused (%s): %s\n", syncShown(x.Reason), syncShown(x.Path))
 	}
 }
 
@@ -340,6 +340,7 @@ func dialProxyCommand(ctx context.Context, proxy, host, port, user string) (net.
 type syncSession struct {
 	ch      ssh.Channel
 	sftp    *sftp.Client
+	meter   *listMeter
 	status  int           // the exit-status, valid once exited is closed; -1 when none came
 	exited  chan struct{} // closed when the channel's requests end
 	errDone chan struct{} // closed when stderr is drained
@@ -389,7 +390,8 @@ func openSyncSession(c *ssh.Client, dir, direction string) (*syncSession, error)
 		_ = ch.Close()
 		return nil, fmt.Errorf("sync: the gateway refused the %s subsystem: %w", syncSubsystem, err)
 	}
-	s.sftp, err = sftp.NewClientPipe(ch, stdinEOF{ch})
+	s.meter = &listMeter{r: ch}
+	s.sftp, err = sftp.NewClientPipe(s.meter, stdinEOF{ch})
 	if err != nil {
 		return nil, fmt.Errorf("sync: %w", s.refusal())
 	}
@@ -398,7 +400,7 @@ func openSyncSession(c *ssh.Client, dir, direction string) (*syncSession, error)
 		if err != nil {
 			return nil, fmt.Errorf("sync: ask the sandbox for its start directory: %w", err)
 		}
-		return nil, fmt.Errorf("sync: the sandbox started in %s, not %s; does %s exist in the sandbox?", got, dir, dir)
+		return nil, fmt.Errorf("sync: the sandbox started in %s, not %s; does %s exist in the sandbox?", syncShown(got), syncShown(dir), syncShown(dir))
 	}
 	return s, nil
 }
@@ -430,7 +432,7 @@ func (s *syncSession) finish() bool {
 func (s *syncSession) refusal() error {
 	s.finish()
 	if msg := strings.TrimSpace(s.stderr.String()); msg != "" {
-		return errors.New(msg)
+		return errors.New(syncShown(msg))
 	}
 	return errors.New("the gateway ended the sync channel without a message")
 }
@@ -464,5 +466,5 @@ func syncExitError(status int, stderr string) error {
 	case -1:
 		return errors.New("sync: the channel ended without an exit status from the sandbox's sftp-server")
 	}
-	return fmt.Errorf("sync: the sandbox's sftp-server exited %d: %s", status, strings.TrimSpace(stderr))
+	return fmt.Errorf("sync: the sandbox's sftp-server exited %d: %s", status, syncShown(strings.TrimSpace(stderr)))
 }

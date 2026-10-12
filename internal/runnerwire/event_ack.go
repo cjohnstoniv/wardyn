@@ -10,13 +10,25 @@ import "context"
 // it with its stable event identity. Sequence replay can also deliver it, so
 // the durable receiver must deduplicate by that identity.
 func (p *Peer) EventAck(ctx context.Context, ev Event) error {
-	b, err := Marshal(ev)
-	if err != nil {
-		return err
+	return p.EventsAck(ctx, []Event{ev})
+}
+
+// EventsAck sends every event in order, then waits once for durable acceptance
+// of the last. The org ingests sequenced events in order before its cumulative
+// ACK covers them, so that one ACK covers the whole batch.
+func (p *Peer) EventsAck(ctx context.Context, evs []Event) error {
+	var seq uint64
+	for _, ev := range evs {
+		b, err := Marshal(ev)
+		if err != nil {
+			return err
+		}
+		if seq, err = p.sendFrame(ctx, Frame{Type: TypeEvent, Payload: b}); err != nil {
+			return err
+		}
 	}
-	seq, err := p.sendFrame(ctx, Frame{Type: TypeEvent, Payload: b})
-	if err != nil {
-		return err
+	if seq == 0 {
+		return nil
 	}
 	return p.replay.waitAck(ctx, p.done, seq)
 }

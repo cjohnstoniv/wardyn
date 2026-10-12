@@ -139,7 +139,7 @@ func (s PG) SetRunEndAndWait(ctx context.Context, id uuid.UUID, fromLimits types
 		  AND run_limits = $10
 		  AND CASE WHEN $8::timestamptz IS NULL THEN lost_at IS NULL OR lost_reason <> $7
 		           ELSE lost_reason = $7 AND lost_at = $8 AND lost_at > $9::timestamptz END`,
-		id, fromEnd, fromWait, toEnd, toWait, nonTerminalStateNames(), string(types.LostEnded), lostAt, keptAfter, limitsJSON)
+		id, fromEnd, fromWait, toEnd, toWait, slotHoldingStateNames(), string(types.LostEnded), lostAt, keptAfter, limitsJSON)
 	if err != nil {
 		return false, fmt.Errorf("store: set run end and wait: %w", err)
 	}
@@ -195,9 +195,16 @@ func (s PG) StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, 
 
 // nonTerminalStateNames is types.NonTerminalRunStates as the text[] a
 // `state = ANY($n)` parameter takes.
-func nonTerminalStateNames() []string {
-	states := make([]string, 0, len(types.NonTerminalRunStates))
-	for _, st := range types.NonTerminalRunStates {
+func nonTerminalStateNames() []string { return stateNames(types.NonTerminalRunStates) }
+
+// slotHoldingStateNames is types.SlotHoldingRunStates in the same form: the states a pool,
+// deployment or host slot is counted over, and the ones a run's end, limits or age are written to.
+// A QUEUED run is in neither.
+func slotHoldingStateNames() []string { return stateNames(types.SlotHoldingRunStates) }
+
+func stateNames(in []types.RunState) []string {
+	states := make([]string, 0, len(in))
+	for _, st := range in {
 		states = append(states, string(st))
 	}
 	return states

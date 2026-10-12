@@ -237,6 +237,13 @@ type buildResponse struct {
 	// "done" resolved from the workspace row's own ImageRef never populates it
 	// (nothing was streamed this process — no log to show).
 	Log []string `json:"log,omitempty"`
+	// Record is the build record, present only on a "done" answer while the
+	// record is current (design env-build-record §3.3), projected to the
+	// reader's tier. RecordSHA256 is the hash of the FULL record — the value on
+	// the build's run.build row. Reproducible is the record's Resolved.
+	Record       *types.ImageBuild `json:"record,omitempty"`
+	RecordSHA256 string            `json:"record_sha256,omitempty"`
+	Reproducible *bool             `json:"reproducible,omitempty"`
 }
 
 // resolveBuildView derives the honest view for GET/POST responses.
@@ -296,11 +303,16 @@ func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) bu
 	// workspace is refused there (runs_create.go's wsRefs door), not booted
 	// as-is. Gate on the builder so a builder-less host instead falls through
 	// to the same honest report "custom" already gets below.
-	if b := ws.BaseImage; b != nil && b.Kind != "recommended" && b.Kind != "custom" && b.Image != "" && s.cfg.ImageBuilder != nil {
+	//
+	// Once the row names a cached wrap for this very base (the byoi key), the wrap
+	// exists and has a build record, so the row-derived `done` below answers
+	// instead: "no build involved" would be false, and the record would never show.
+	key, keyed := s.workspaceBuiltImageKey(ws)
+	wrapped := keyed && ws.ImageRef != "" && ws.BuiltProfileHash == key
+	if b := ws.BaseImage; b != nil && b.Kind != "recommended" && b.Kind != "custom" && b.Image != "" && s.cfg.ImageBuilder != nil && !wrapped {
 		return buildResponse{State: "nothing_to_build", Image: authoredImage(b.Image),
 			Detail: "this image boots as-is — no build involved"}
 	}
-	key, keyed := s.workspaceBuiltImageKey(ws)
 	st := s.builds.get(ws.ID)
 	switch {
 	case st.Building:
@@ -395,7 +407,8 @@ func (s *Server) handleGetWorkspaceBuild(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, s.resolveBuildView(ws, s.workspaceReadTierFor(r, ws)))
+	tier := s.workspaceReadTierFor(r, ws)
+	writeJSON(w, http.StatusOK, s.withBuildRecord(r.Context(), s.resolveBuildView(ws, tier), ws, tier))
 }
 
 // handleBuildWorkspace kicks the workspace's image build asynchronously —
@@ -415,9 +428,10 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	view := s.resolveBuildView(ws, s.workspaceReadTierFor(r, ws))
+	tier := s.workspaceReadTierFor(r, ws)
+	view := s.resolveBuildView(ws, tier)
 	if view.State == "nothing_to_build" || view.State == "done" {
-		writeJSON(w, http.StatusOK, view)
+		writeJSON(w, http.StatusOK, s.withBuildRecord(r.Context(), view, ws, tier))
 		return
 	}
 	// This route is on the owner-or-admin router, so a MEMBER reaches it — and
