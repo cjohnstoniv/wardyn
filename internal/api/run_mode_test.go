@@ -648,6 +648,7 @@ func TestRunModeRefusalSentencesMatchGolden(t *testing.T) {
 		"FIELD_UNAVAILABLE":        func(a []string) string { return runModeUnavailableMsg(a[0]) },
 		"BACKGROUND_ONLY":          func(a []string) string { return runBackgroundOnlyMsg(a[0]) },
 		"IDLE_STOP_BACKGROUND":     func([]string) string { return idleStopBackgroundMsg() },
+		"RUN_SHAPE_CONFLICT":       func(a []string) string { return runShapeConflictMsg(a[0], a[1]) },
 	}
 	if len(golden) != len(got) {
 		t.Fatalf("golden has %d sentences, the server has %d", len(golden), len(got))
@@ -665,7 +666,7 @@ func TestRunModeRefusalSentencesMatchGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, reason := range []string{reasonRunModeRequired, reasonRunModeInvalid, reasonRunModeConflict, reasonStartFolderInvalid, reasonRunBackgroundOnly} {
+	for _, reason := range []string{reasonRunModeRequired, reasonRunModeInvalid, reasonRunModeConflict, reasonStartFolderInvalid, reasonRunBackgroundOnly, reasonRunShapeConflict} {
 		if !strings.Contains(string(ts), `"`+reason+`"`) {
 			t.Errorf("run-mode-refusals.ts does not carry the reason %q", reason)
 		}

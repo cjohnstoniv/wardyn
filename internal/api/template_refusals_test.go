@@ -36,6 +36,7 @@ func templateSentences() []templateSentence {
 	return []templateSentence{
 		{"DOCUMENT_INVALID", []string{"it has the key \"agent\" twice"}, templateDocumentInvalidMsg("it has the key \"agent\" twice")},
 		{"VERSION_UNSUPPORTED", []string{"wardyn/v2 RunTemplate"}, templateVersionUnsupportedMsg("wardyn/v2 RunTemplate")},
+		{"KIND_MISMATCH", []string{"Run", "RunTemplate"}, templateKindMismatchMsg("Run", "RunTemplate")},
 		{"FIELD_UNKNOWN", []string{"intent.agnet"}, templateFieldUnknownMsg("intent.agnet")},
 		{"FIELD_INVALID", []string{"intent.interactive", "must be true or false"}, templateFieldInvalidMsg("intent.interactive", "must be true or false")},
 		{"FIELD_EXCLUDED", []string{"intent.preset"}, templateFieldExcludedMsg("intent.preset")},
