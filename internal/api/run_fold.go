@@ -87,6 +87,8 @@ type runFold struct {
 	// promoted says the fold is the queue's start replaying a promoted run: promotion has already
 	// admitted it against the host, the deployment cap and the fit, so those steps stand down.
 	promoted bool
+	// barrierOptions are Review's barriers for the resolved pool under this draft's floors (stepConfinement).
+	barrierOptions []client.BarrierOption
 	// harnesses is a run-mode request's harness set and image the image that
 	// carries it (stepHarnessSet; nil when a custom image or workspace decides);
 	// harnessChoices is each harness's model-provider choice (stepModelProvider).

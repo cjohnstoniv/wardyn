@@ -29,6 +29,32 @@ export const RUNNER_POOL_REASONS = [
 
 export type RunnerPoolReason = (typeof RUNNER_POOL_REASONS)[number];
 
+/** What a listed pool's reason may hold (runnerpool.AvailabilityReasons), in the order the server checks them. */
+export const POOL_AVAILABILITY_REASONS = [
+  "runner_pool_unavailable",
+  "placement_denied",
+  "placement_unavailable",
+  "runner_pool_no_eligible_member",
+  "runner_pool_no_online_runner",
+  "runner_pool_run_type_not_allowed",
+  "runner_pool_not_found",
+] as const;
+
+export type PoolAvailabilityReason = (typeof POOL_AVAILABILITY_REASONS)[number];
+
+/** Why a barrier is not available (runnerpool.BarrierReasons); when several apply, the first wins. */
+export const BARRIER_REASON = ["below_floor", "policy_floor", "access_floor", "pool_not_allowed", "unknown", "not_offered"] as const;
+
+export type BarrierReason = (typeof BARRIER_REASON)[number];
+
+/**
+ * A self-hosted pool whose own runners are all offline (runnerpool.NoOnlineRunnerMsg): the pool's
+ * runner_pool_no_online_runner and a launch's runner_offline say this sentence.
+ */
+export const POOL_OFFLINE = {
+  NO_ONLINE_RUNNER: (name: string) => `None of your runners in ${name} is online.`,
+} as const;
+
 /** The console's name for a hosting type (runnerpool.HostingLabel). */
 export const HOSTING_LABEL = { remote_provided: "Remote Provided", self_hosted: "Self-Hosted" } as const;
 
@@ -81,7 +107,7 @@ export const RUNNER_POOL_REFUSAL = {
  * RUNNER_POOL_REASONS, and the console shows it on a queued run, not on a rejected launch.
  */
 export const RUN_WAIT = {
-  AT_CAPACITY: (name: string, max: number) => `${name} is running its limit of ${max}. This run starts when one finishes.`,
+  AT_CAPACITY: (name: string, max: number) => `${name} is running its limit of ${max}. This run starts when there's room.`,
   NO_RUNNER_FREE: (name: string) => `None of your runners in ${name} is online. This run starts when one is.`,
 } as const;
 
