@@ -21,6 +21,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -36,11 +37,36 @@ func (t *capsTransport) TakeStream(uint32) (*runnerwire.Stream, error) {
 }
 func (t *capsTransport) SetHandler(remote.Handler) {}
 
-// installRunner registers a runner substrate on s as the boot and admission
-// paths do. reported nil means the runner never sent a `caps` event.
+// capsOwner is the signed-in person capsCtx carries; installRunner's runners are theirs.
+const capsOwner = "caps-owner"
+
+var capsCtx = withOIDCHuman(context.Background(), capsOwner)
+
+// ownedRunners is a store that knows only the runners' rows.
+type ownedRunners struct {
+	store.Store
+	rows map[uuid.UUID]types.Runner
+}
+
+func (o ownedRunners) GetRunner(_ context.Context, id uuid.UUID) (types.Runner, error) {
+	r, ok := o.rows[id]
+	if !ok {
+		return types.Runner{}, store.ErrNotFound
+	}
+	return r, nil
+}
+
+// installRunner registers a claimed runner of capsOwner on s as the boot and
+// admission paths do. reported nil means the runner never sent a `caps` event.
 func installRunner(t *testing.T, s *Server, online bool, reported *runnerwire.Caps) uuid.UUID {
 	t.Helper()
+	return installRunnerOf(t, s, capsOwner, online, reported)
+}
+
+func installRunnerOf(t *testing.T, s *Server, owner string, online bool, reported *runnerwire.Caps) uuid.UUID {
+	t.Helper()
 	id := uuid.New()
+	s.cfg.Store.(ownedRunners).rows[id] = types.Runner{ID: id, Owner: owner, State: types.RunnerClaimed}
 	sub := remote.New(id.String(), &capsTransport{online: online}, remote.Options{})
 	if reported != nil {
 		data, err := json.Marshal(reported)
@@ -67,7 +93,9 @@ func laptopCaps(classes ...types.ConfinementClass) *runnerwire.Caps {
 	}
 }
 
-func capsServer(rn runner.Runner) *Server { return &Server{cfg: Config{Runner: rn}} }
+func capsServer(rn runner.Runner) *Server {
+	return &Server{cfg: Config{Runner: rn, Store: ownedRunners{rows: map[uuid.UUID]types.Runner{}}}}
+}
 
 func asRefusal(t *testing.T, err error) *placement.Refusal {
 	t.Helper()
@@ -93,11 +121,9 @@ func TestPlacementCapabilities_LocalOfflineRefuses(t *testing.T) {
 	}{
 		{"the link is down", installRunner(t, s, false, laptopCaps(types.CC1))},
 		{"it never reported capabilities", installRunner(t, s, true, nil)},
-		{"no such runner is registered", uuid.New()},
-		{"the request names no runner", uuid.Nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := s.placementCapabilities(context.Background(), types.PlacementLocal, tc.id)
+			got, err := s.placementCapabilities(capsCtx, types.PlacementLocal, tc.id)
 			if ref := asRefusal(t, err); ref.Reason != placement.ReasonRunnerOffline || ref.Reason.Status() != http.StatusUnprocessableEntity {
 				t.Errorf("refusal = %+v, want runner_offline 422", ref)
 			}
@@ -110,7 +136,7 @@ func TestPlacementCapabilities_LocalOfflineRefuses(t *testing.T) {
 	t.Run("create refuses runner_offline and never reads the deployment's classes", func(t *testing.T) {
 		id := installRunner(t, s, false, laptopCaps(types.CC1))
 		w := httptest.NewRecorder()
-		_, _, ok := s.resolveEnforcedConfinement(context.Background(), w, types.PlacementLocal, id, types.RunPolicySpec{MinConfinementClass: types.CC1}, "", composer.Baseline{}, nil, "")
+		_, _, ok := s.resolveEnforcedConfinement(capsCtx, w, types.PlacementLocal, id, types.RunPolicySpec{MinConfinementClass: types.CC1}, "", composer.Baseline{}, runPlacement{})
 		if ok || w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `"runner_offline"`) {
 			t.Errorf("ok=%v %d %s, want a 422 runner_offline refusal", ok, w.Code, w.Body.String())
 		}
@@ -122,7 +148,7 @@ func TestPlacementCapabilities_LocalOfflineRefuses(t *testing.T) {
 func TestPlacementCapabilities_LocalIsTheRunnersOwnAnswer(t *testing.T) {
 	s := capsServer(&fakeRunner{})
 	id := installRunner(t, s, true, laptopCaps(types.CC1))
-	got, err := s.placementCapabilities(context.Background(), types.PlacementLocal, id)
+	got, err := s.placementCapabilities(capsCtx, types.PlacementLocal, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,9 +157,69 @@ func TestPlacementCapabilities_LocalIsTheRunnersOwnAnswer(t *testing.T) {
 		t.Errorf("caps = %+v, want CC1 only, runner_asserted, 4000 mCPU, one root", got)
 	}
 	w := httptest.NewRecorder()
-	_, _, ok := s.resolveEnforcedConfinement(context.Background(), w, types.PlacementLocal, id, types.RunPolicySpec{MinConfinementClass: types.CC2}, "", composer.Baseline{}, nil, "")
+	_, _, ok := s.resolveEnforcedConfinement(capsCtx, w, types.PlacementLocal, id, types.RunPolicySpec{MinConfinementClass: types.CC2}, "", composer.Baseline{}, runPlacement{})
 	if ok || w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "confinement_class_unsupported") {
 		t.Errorf("ok=%v %d %s: the runner offers CC1, so a CC2 demand must be refused though the deployment offers CC2", ok, w.Code, w.Body.String())
+	}
+}
+
+// LE-4: another person's runner, online and reporting, is answered exactly like
+// an id that does not exist, at every reader of a runner's capabilities: 404
+// runner_not_found, with nothing of its stream (online, driver, classes) in it.
+func TestPlacementCapabilities_AnotherPersonsRunnerIsNotFound(t *testing.T) {
+	s := capsServer(&fakeRunner{})
+	theirs := installRunnerOf(t, s, "someone-else", true, laptopCaps(types.CC1, types.CC2))
+	unclaimed := installRunner(t, s, true, laptopCaps(types.CC1))
+	rows := s.cfg.Store.(ownedRunners).rows
+	r := rows[unclaimed]
+	r.State = types.RunnerUnclaimed
+	rows[unclaimed] = r
+	for name, id := range map[string]uuid.UUID{"another person's": theirs, "my unclaimed": unclaimed, "unknown": uuid.New(), "none named": uuid.Nil} {
+		t.Run(name, func(t *testing.T) {
+			got, err := s.placementCapabilities(capsCtx, types.PlacementLocal, id)
+			if ref := asRefusal(t, err); ref.Reason != placement.ReasonRunnerNotFound || ref.Reason.Status() != http.StatusNotFound {
+				t.Errorf("refusal = %+v, want runner_not_found 404", ref)
+			}
+			if got.Driver != "" || len(got.ConfinementClasses) != 0 {
+				t.Errorf("caps = %+v: the runner's stream was read", got)
+			}
+			pausing := governanceCeiling{Limits: types.GovernanceLimits{RunLimits: types.RunLimits{PauseIdleAfterSec: 300}}}
+			req := createRunRequest{Placement: types.PlacementLocal, RunnerID: id.String()}
+			if ref := s.placementCapabilityRefusal(capsCtx, req, runPlacement{}, pausing); ref == nil || ref.status != http.StatusNotFound || ref.body.Reason != string(placement.ReasonRunnerNotFound) {
+				t.Errorf("capability step = %+v, want 404 runner_not_found", ref)
+			}
+			w := httptest.NewRecorder()
+			if _, _, ok := s.resolveEnforcedConfinement(capsCtx, w, types.PlacementLocal, id, types.RunPolicySpec{}, "", composer.Baseline{}, runPlacement{}); ok || w.Code != http.StatusNotFound {
+				t.Fatalf("confinement = %d %s, want 404", w.Code, w.Body)
+			}
+			for _, leak := range []string{"offline", "CC2", "runner:"} {
+				if strings.Contains(w.Body.String(), leak) {
+					t.Errorf("the 404 discloses %q: %s", leak, w.Body)
+				}
+			}
+		})
+	}
+	// The same runner is its owner's to read.
+	if _, err := s.placementCapabilities(withOIDCHuman(context.Background(), "someone-else"), types.PlacementLocal, theirs); err != nil {
+		t.Errorf("the owner's own read = %v", err)
+	}
+}
+
+// D-TM r2 finding 2: dispatch's managed-file decisions read the substrate the run lands on. A run bound to a
+// runner that delivers no managed files withholds the harness credential file though the deployment's own
+// executor delivers them; an unbound run still reads the deployment's.
+func TestRunCapabilities_DispatchReadsTheLandingRunner(t *testing.T) {
+	s := capsServer(&fakeRunner{})
+	id := installRunner(t, s, true, laptopCaps(types.CC1, types.CC2))
+	bound := types.AgentRun{ID: uuid.New(), Placement: types.PlacementLocal, RunnerID: &id, ConfinementClass: types.CC2}
+	if reason := s.toolgateCredentialWithheld(context.Background(), bound, nil); reason == "" {
+		t.Error("a runner without managed files was handed the harness credential file")
+	}
+	if caps, err := s.runCapabilities(context.Background(), bound); err != nil || caps.ManagedFiles || len(caps.ConfinementClasses) != 2 {
+		t.Errorf("the bound run's capabilities = %+v (%v), want the runner's own: CC1 and CC2, no managed files", caps, err)
+	}
+	if reason := s.toolgateCredentialWithheld(context.Background(), types.AgentRun{ID: uuid.New(), ConfinementClass: types.CC2}, nil); reason != "" {
+		t.Errorf("the deployment's executor delivers managed files, yet: %q", reason)
 	}
 }
 
@@ -210,20 +296,20 @@ func TestPlacementCapability_UnsupportedInterfaceRefused(t *testing.T) {
 	local := createRunRequest{Placement: types.PlacementLocal, RunnerID: id.String()}
 	pausing := governanceCeiling{Limits: types.GovernanceLimits{RunLimits: types.RunLimits{PauseIdleAfterSec: 300}}}
 
-	ref := s.placementCapabilityRefusal(context.Background(), local, pausing)
+	ref := s.placementCapabilityRefusal(capsCtx, local, runPlacement{}, pausing)
 	if ref == nil || ref.body.Reason != string(placement.ReasonPlacementCapability) || ref.status != http.StatusUnprocessableEntity ||
 		!strings.Contains(ref.body.Error, "pause_idle_after_sec") {
 		t.Fatalf("refusal = %+v, want 422 placement_capability naming pause_idle_after_sec", ref)
 	}
-	if ref := s.placementCapabilityRefusal(context.Background(), local, governanceCeiling{}); ref != nil {
+	if ref := s.placementCapabilityRefusal(capsCtx, local, runPlacement{}, governanceCeiling{}); ref != nil {
 		t.Errorf("no demand was made, yet: %+v", ref)
 	}
 	remoteReq := createRunRequest{Placement: types.PlacementRemote}
-	if ref := s.placementCapabilityRefusal(context.Background(), remoteReq, pausing); ref != nil {
+	if ref := s.placementCapabilityRefusal(capsCtx, remoteReq, runPlacement{}, pausing); ref != nil {
 		t.Errorf("the deployment's own executor was asked: %+v", ref)
 	}
 	offline := createRunRequest{Placement: types.PlacementLocal, RunnerID: installRunner(t, s, false, laptopCaps(types.CC1)).String()}
-	if ref := s.placementCapabilityRefusal(context.Background(), offline, pausing); ref == nil || ref.body.Reason != string(placement.ReasonRunnerOffline) {
+	if ref := s.placementCapabilityRefusal(capsCtx, offline, runPlacement{}, pausing); ref == nil || ref.body.Reason != string(placement.ReasonRunnerOffline) {
 		t.Errorf("an offline runner = %+v, want runner_offline", ref)
 	}
 }
@@ -379,13 +465,13 @@ func TestResolveEnforcedConfinement_PlacementTable(t *testing.T) {
 		wantStatus int
 		wantReason string
 	}{
-		{"local placement, no runner wired: runner_offline", capsServer(nil), types.PlacementLocal, false, http.StatusUnprocessableEntity, "runner_offline"},
+		{"local placement, no runner wired: runner_not_found", capsServer(nil), types.PlacementLocal, false, http.StatusNotFound, "runner_not_found"},
 		{"remote placement, wired runner cannot answer: 503", capsServer(&fakeRunner{capsErr: errors.New("daemon down")}), types.PlacementRemote, false, http.StatusServiceUnavailable, reasonRunnerCapabilitiesUnavailable},
 		{"remote placement, nothing wired: the headless carve-out", capsServer(nil), types.PlacementRemote, true, 0, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			_, _, ok := tc.srv.resolveEnforcedConfinement(context.Background(), w, tc.placement, uuid.Nil, spec, "", composer.Baseline{}, nil, "")
+			_, _, ok := tc.srv.resolveEnforcedConfinement(capsCtx, w, tc.placement, uuid.Nil, spec, "", composer.Baseline{}, runPlacement{})
 			if ok != tc.wantOK {
 				t.Fatalf("ok = %v (%d %s), want %v", ok, w.Code, w.Body.String(), tc.wantOK)
 			}

@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -180,6 +181,48 @@ func (r *Resident) erase(ctx context.Context, peer *runnerwire.Peer, runID uuid.
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
+}
+
+// EraseExpired deletes every held value whose NotAfter has passed by now, whether or not its run's end
+// ever reached this runner (an org erase that never arrived, a run the org lost). A value whose delete
+// fails stays indexed, so the next sweep retries it.
+func (r *Resident) EraseExpired(ctx context.Context, now time.Time) error {
+	type held struct{ run, grant uuid.UUID }
+	var expired []held
+	r.mu.Lock()
+	for run, grants := range r.held {
+		for grant, g := range grants {
+			if !g.NotAfter.IsZero() && now.After(g.NotAfter) {
+				expired = append(expired, held{run, grant})
+			}
+		}
+	}
+	r.mu.Unlock()
+	var errs []error
+	for _, h := range expired {
+		if _, err := bounded(ctx, func() (struct{}, error) { return struct{}{}, r.keystore.Delete(residentAccount(h.run, h.grant)) }); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		errs = append(errs, r.track(h.run, h.grant, nil))
+	}
+	return errors.Join(errs...)
+}
+
+// SweepExpired runs EraseExpired every interval until ctx ends.
+func (r *Resident) SweepExpired(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		if err := r.EraseExpired(ctx, time.Now()); err != nil {
+			slog.WarnContext(ctx, "runner resident expiry sweep will retry", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // residentToken matches a whole JSON string that is a placeholder.

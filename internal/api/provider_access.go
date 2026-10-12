@@ -27,6 +27,10 @@ const (
 	providerAccessAddKeyAction   = "Add your key"
 	providerAccessAddTokenAction = "Add your token"
 	providerAccessSignInClaude   = "Sign in to Claude"
+	providerAccessSignInAzure    = "Sign in to Azure"
+	// providerAccessAzureEndedAction: the stored Azure sign-in's renewal was
+	// refused in a way only a person present can clear.
+	providerAccessAzureEndedAction = "Your Azure sign-in has ended — sign in again."
 	// providerAccessClaudeAgingAction mirrors the Getting-started aging line
 	// (multi-provider-design.md 5.4, row C10) byte for byte, since the console
 	// may render it verbatim like every other composed action.
@@ -144,6 +148,8 @@ func providerCredentialNoun(k types.ModelProviderKind) string {
 		return "AWS sign-in"
 	case types.ModelProviderAnthropicSubscription:
 		return "Claude sign-in"
+	case types.ModelProviderAzureFoundry:
+		return "Azure sign-in" // pending F1649-P3
 	case types.ModelProviderCustomEndpoint:
 		return "token"
 	default:
@@ -225,6 +231,8 @@ func (s *Server) providerAccessFor(ctx context.Context, p types.ModelProvider, o
 		s.gradeProviderBedrockSSO(ctx, &row, p, owner)
 	case types.ModelProviderAnthropicSubscription:
 		s.gradeProviderSubscription(ctx, &row, p, owner)
+	case types.ModelProviderAzureFoundry:
+		s.gradeProviderAzureFoundry(ctx, &row, p, owner)
 	default:
 		// Every other closed kind is a typed key or token: providerTypedKinds
 		// (model_provider_credentials.go) — anthropic_api_key, openai_api_key,
@@ -257,6 +265,31 @@ func (s *Server) gradeProviderKey(ctx context.Context, row *SetupProviderAccess,
 	}
 	row.State = modelAccessNotConfigured
 	row.Action = addAction
+}
+
+// gradeProviderAzureFoundry grades a per-person Azure sign-in from the
+// person's own sealed -entra part, never the -key part: absent -> not_configured,
+// present -> live, present with a recorded end (adoEntraBlob.DeadAt, set when a
+// renewal met a refusal only a person present clears) -> expired_signin. A dead
+// refresh token is deleted by the redeem path, so it reads not_configured.
+func (s *Server) gradeProviderAzureFoundry(ctx context.Context, row *SetupProviderAccess, p types.ModelProvider, owner string) {
+	raw, found, err := s.ownSecret(ctx, owner, providerSecretName(p.UID, providerEntraPart))
+	if err != nil {
+		unreadableProvider(row)
+		return
+	}
+	if !found || len(raw) == 0 {
+		row.State = modelAccessNotConfigured
+		row.Action = providerAccessSignInAzure
+		return
+	}
+	var blob adoEntraBlob
+	if json.Unmarshal(raw, &blob) == nil && blob.signInEnded() {
+		row.State = modelAccessExpiredSignin
+		row.Action = providerAccessAzureEndedAction
+		return
+	}
+	row.State = modelAccessLive
 }
 
 // gradeProviderSubscription grades a per-person Claude subscription: absent ->

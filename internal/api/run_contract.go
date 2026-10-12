@@ -43,12 +43,12 @@ import (
 //	built-in components           -> A-L14
 //	allowed_image, image facts     -> the image lane (A-L4/A-L6)
 //	placement local               -> the placement lane (#117)
-//	resources clamp               -> A-L5 (accepted, applied nowhere yet)
 const (
 	maxRunOverrideEntries  = 64
 	maxRunOverrideValueLen = 256
-	maxRunResourceCPU      = 1_000_000 // milli-CPU: a thousand CPUs
-	maxRunResourceMemory   = 16 << 20  // MiB: 16 TiB
+	maxRunResourceCPU      = 1_000_000                  // milli-CPU: a thousand CPUs
+	maxRunResourceMemory   = 16 << 20                   // MiB: 16 TiB
+	maxRunResourceDisk     = types.RunnerPoolDiskMiBMax // MiB: 16 TiB, the pool disk limit's bound
 	runUserHome            = "/home/agent"
 	runDriveName           = "your drive"
 	// maxRunWorkspaces bounds workspaces[]: each entry is a store read and an
@@ -116,9 +116,10 @@ func resourcesRefusal(req createRunRequest) *runRefusal {
 	if r == nil {
 		return nil
 	}
-	if r.CPUMillis < 0 || r.CPUMillis > maxRunResourceCPU || r.MemoryMiB < 0 || r.MemoryMiB > maxRunResourceMemory {
+	if r.CPUMillis < 0 || r.CPUMillis > maxRunResourceCPU || r.MemoryMiB < 0 || r.MemoryMiB > maxRunResourceMemory ||
+		r.DiskMiB < 0 || r.DiskMiB > maxRunResourceDisk {
 		return runError(http.StatusBadRequest, reasonResourcesInvalid, fmt.Sprintf(
-			"resources: cpu_millis must be 0 to %d and memory_mib 0 to %d", maxRunResourceCPU, maxRunResourceMemory))
+			"resources: cpu_millis must be 0 to %d, memory_mib 0 to %d and disk_mib 0 to %d", maxRunResourceCPU, maxRunResourceMemory, maxRunResourceDisk))
 	}
 	return nil
 }

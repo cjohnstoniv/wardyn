@@ -357,7 +357,6 @@ func TestPG_RunnerPoolsStaleRevisionIsRefused(t *testing.T) {
 // DONE WHEN (7): revoking a runner and tidying it away never depend on its pool; a revoked runner stops
 // counting as the owner's.
 func TestPG_RunnerPoolsRevokeIsIndependentOfMembership(t *testing.T) {
-	localOn(t)
 	e := newPoolEnv(t, false)
 	if _, err := e.pg.PutSiteConfig(context.Background(), types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true}}); err != nil {
 		t.Fatal(err)

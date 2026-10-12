@@ -64,6 +64,8 @@ describe("runner pool carriers", () => {
     [clientGo, "RunnerPoolList", "RunnerPoolList"],
     [clientGo, "RunnerPoolCatalogueEntry", "RunnerPoolCatalogueEntry"],
     [clientGo, "PoolRunner", "PoolRunner"],
+    [clientGo, "MainDriveFacts", "MainDriveFacts"],
+    [clientGo, "MainDriveKeep", "MainDriveKeep"],
     [clientGo, "PersonAllowance", "PersonAllowance"],
     [clientGo, "PoolDefault", "PoolDefault"],
     [barrierGo, "BarrierOption", "BarrierOption"],
@@ -84,7 +86,7 @@ describe("runner pool carriers", () => {
       [preview, read("internal/api/policy_preview_facts.go"), "policyPreviewResponse"],
     ] as const) {
       const tags = goJSONTags(goSrc, goName).filter((t) => t.startsWith("runner_pool"));
-      expect(tags.sort()).toEqual(["runner_pool", "runner_pools"]);
+      expect(tags.sort()).toEqual(["runner_pool", "runner_pool_slots", "runner_pools"]);
       for (const t of tags) expect(stripComments(src), t).toContain(`${t}?:`);
     }
     expect(goJSONTags(read("pkg/client/runs_create.go"), "CreateRunRequest")).toContain("runner_pool_id");
@@ -105,6 +107,9 @@ describe("runner pool carriers", () => {
     expect(union("RunnerPoolState").size).toBe(3);
     expect(union("RunnerPoolSelection").size).toBe(3);
     expect(union("RunnerPoolAvailability").size).toBe(3);
+    expect(union("MainDriveEnforcement")).toEqual(consts(clientGo, '\\bMainDrive\\w+\\s+MainDriveEnforcement = "([a-z_]+)"'));
+    expect(union("MainDriveCoverage")).toEqual(consts(clientGo, '\\bMainDriveCoverage\\w+\\s+MainDriveCoverage = "([a-z_]+)"'));
+    expect(union("MainDriveEnforcement").size).toBe(4);
     expect(union("RunnerPoolSwitch")).toEqual(consts(clientGo, '\\bRunnerPoolSwitch\\w+\\s+RunnerPoolSwitch = "([a-z_]+)"'));
     expect(union("RunnerPoolSwitch")).toEqual(new Set(["active", "disabled"]));
     expect(union("RunnerPoolRunType")).toEqual(consts(limitsGo, '\\bRunnerPoolRun\\w+\\s+RunnerPoolRunType = "([a-z_]+)"'));

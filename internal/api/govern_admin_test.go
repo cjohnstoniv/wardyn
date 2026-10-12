@@ -132,7 +132,7 @@ func governSites() []governSite {
 				c.Limits.MaxCPUMillis = 3000
 				spec := types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 4000}}
 				// The cut is the outcome; stepResources, not this bound, says it was cut.
-				s.boundResources(ctx, governReq(ctx), &spec, c, false)
+				s.boundResources(ctx, governReq(ctx), &spec, c)
 				return spec.Resources.CPUMillis == 3000
 			}},
 		{"runs_policy.go resolvePolicy", plain,

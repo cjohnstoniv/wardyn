@@ -8,10 +8,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
 	"sync"
+
+	"github.com/containerd/errdefs"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/envbuild"
@@ -32,7 +35,7 @@ var (
 
 // builtImage maps the builder's result to the api's.
 func builtImage(b envbuild.Built, err error) (api.BuiltImage, error) {
-	return api.BuiltImage{Ref: b.Ref, ID: b.ID, BaseDigest: b.BaseDigest}, err
+	return api.BuiltImage{Ref: b.Ref, ID: b.ID, BaseDigest: b.BaseDigest, PinFile: b.PinFile}, err
 }
 
 func (e envBuilderAdapter) BuildDevcontainer(ctx context.Context, repoURL, ref, outputTag string, logSink io.Writer) (api.BuiltImage, error) {
@@ -60,6 +63,16 @@ func (e envBuilderAdapter) FinalizeBase(ctx context.Context, baseRef, outputTag 
 // LocalImage satisfies api.ImageIdentifier.
 func (e envBuilderAdapter) LocalImage(ctx context.Context, ref string) (string, bool, error) {
 	return e.b.LocalImageID(ctx, ref)
+}
+
+// RemoteDigest satisfies api.ImageIdentifier; a manifest the registry does not have
+// is api.ErrRemoteDigestNotFound, any other failure passes through.
+func (e envBuilderAdapter) RemoteDigest(ctx context.Context, ref string) (string, error) {
+	d, err := e.b.RemoteDigest(ctx, ref)
+	if errdefs.IsNotFound(err) {
+		return "", fmt.Errorf("%w: %w", api.ErrRemoteDigestNotFound, err)
+	}
+	return d, err
 }
 
 // SweepOrphanedBuilds satisfies api.ImageBuildSweeper: force-removes build

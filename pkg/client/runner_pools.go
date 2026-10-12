@@ -90,6 +90,7 @@ const (
 //
 // Limits and Barriers are never filled on these doors: the list carries a
 // pool's limits and barrier_options, and preflight carries this run's.
+// MainDrive is filled on the list and on both doors.
 type RunnerPoolChoice struct {
 	ID           uuid.UUID                `json:"id"`
 	Name         string                   `json:"name"`
@@ -98,6 +99,48 @@ type RunnerPoolChoice struct {
 	Reason       RunnerPoolReason         `json:"reason,omitempty"`
 	Limits       []EffectiveRunLimits     `json:"limits,omitempty"`
 	Barriers     []types.ConfinementClass `json:"barriers,omitempty"`
+	// MainDrive is what this pool's runners do with a run's main-drive size, for the caller's own eligible
+	// targets. Absent on a pool the caller may only manage. The enforcement word reaches members only here.
+	MainDrive *MainDriveFacts `json:"main_drive,omitempty"`
+}
+
+// MainDriveEnforcement is how a pool binds a run's main-drive size. Never request or external.
+type MainDriveEnforcement string
+
+// MainDriveCoverage is how much of the sandbox the enforced size covers.
+type MainDriveCoverage string
+
+const (
+	MainDriveFilesystem MainDriveEnforcement = "filesystem"
+	MainDriveEviction   MainDriveEnforcement = "eviction"
+	MainDriveNone       MainDriveEnforcement = "none"
+	MainDriveUnknown    MainDriveEnforcement = "unknown"
+
+	// MainDriveCoverageAll is the sandbox's writable layer (Docker's /tmp is a separate in-memory tmpfs).
+	MainDriveCoverageAll MainDriveCoverage = "all"
+	// MainDriveCoverageScratch is /tmp, /home/agent/work and /home/agent/.cache only.
+	MainDriveCoverageScratch MainDriveCoverage = "scratch_paths"
+)
+
+// MainDriveFacts is what a pool's runners do with the main drive, over the caller's eligible targets.
+type MainDriveFacts struct {
+	// Enforcement is the WEAKEST word across the targets; unknown when any target's is unknown (offline,
+	// never reported, or no target at all).
+	Enforcement MainDriveEnforcement `json:"enforcement"`
+	// Basis is substrate (this deployment's executor) or runner_asserted (a self-hosted runner's own report).
+	Basis types.RunEvidenceSource `json:"basis"`
+	// Coverage is absent when enforcement is none or unknown.
+	Coverage MainDriveCoverage `json:"coverage,omitempty"`
+	// Keep is what happens to an Interactive run's sandbox at its end time.
+	Keep MainDriveKeep `json:"keep"`
+	// DriveMounts: the pool's runners can mount drives at all (false for a self-hosted pool).
+	DriveMounts bool `json:"drive_mounts"`
+}
+
+// MainDriveKeep: every target keeps a stopped sandbox and the deployment's ended-run grace is above zero.
+type MainDriveKeep struct {
+	Supported bool `json:"supported"`
+	GraceSec  int  `json:"grace_sec,omitempty"` // set only when Supported
 }
 
 // Where a pool's run types come from: its own limits, or none, which takes both.
@@ -124,9 +167,31 @@ type RunnerPoolCatalogueEntry struct {
 	// self-hosted pool, whether or not it can take a run now; never another
 	// person's. It is how a person reads which pools each of their runners is in.
 	MyRunners []PoolRunner `json:"my_runners,omitempty"`
+	// Slots is how busy the pool is; absent on a row the caller may only manage.
+	Slots *PoolSlots `json:"slots,omitempty"`
 	// Owner is a Self-Hosted pool's owner: the caller on their own pools, and the
 	// person each other pool belongs to on an administrator's oversight rows.
 	Owner string `json:"owner,omitempty"`
+}
+
+// The Verdict of PoolSlots: advisory, since the launch decides.
+const (
+	SlotsStartsNow = "starts_now"
+	SlotsWaits     = "waits"
+)
+
+// PoolSlots is a pool's slot counts, everyone's and never saying whose. On the pool list MaxWaitSec
+// is set only when ?run_type= is asked; on preflight and the policy preview it is the run's own.
+type PoolSlots struct {
+	// Used is the runs holding one of the pool's slots; Waiting the runs queued for one.
+	Used    int `json:"used"`
+	Waiting int `json:"waiting"`
+	// Max is the pool's max_concurrent_runs; absent means no pool limit.
+	Max *int `json:"max,omitempty"`
+	// Verdict is SlotsWaits when the pool has a limit and is at it or has runs waiting, else SlotsStartsNow.
+	Verdict string `json:"verdict"`
+	// MaxWaitSec is how long a run of that type waits by default: 86400 Background, 3600 Interactive.
+	MaxWaitSec int `json:"max_wait_sec,omitempty"`
 }
 
 // PoolRunner is one of the caller's own runners in a self-hosted pool.

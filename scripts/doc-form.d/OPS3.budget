@@ -40,7 +40,7 @@ docs/operations/ownership-and-offboarding.md=2370 share=35
 docs/operations/governance-writes.md=2888 share=35
 docs/operations/member-runs.md=1044 share=35
 docs/operations/user-drives.md=4804 share=35
-docs/operations/capabilities.md=3861 share=35
+docs/operations/capabilities.md=3963 share=35
 docs/operations/custom-components.md=1184 share=35
 # G-1423: docs/operations/api-tokens.md 4002 adds 11 over 3991 for GET /runs/{id}/output on the delegated-token list.
 docs/operations/api-tokens.md=4002 share=35
@@ -68,3 +68,4 @@ docs/operations/denials.md=4877 share=35
 # Batch merge of H10: admin-only-writes.md 2994 -> 3074 (+80), the four runners tier rows (GET /runners, tokens list/revoke, settings read; PUT /runners/settings) moved from OPERATIONS.md.
 # docs/operations/denials.md 4696 adds 19 (0.9 G-sec-rest, #1976): the exec relay refusal's denied row (target `exec.relay`) and pending output row.
 # H3 integration: admin-only-writes.md 3074 -> 3107 (+33), the security-tier DELETE /runners/{id} row moved from OPERATIONS.md.
+# F-1508 C4: docs/operations/capabilities.md 3963 adds 102 over 3861 for the service_attach value.

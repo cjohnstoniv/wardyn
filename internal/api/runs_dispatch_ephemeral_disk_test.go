@@ -140,8 +140,8 @@ func TestDispatchEphemeralDisk_Precedence(t *testing.T) {
 			if res.DiskMiB != int64(tc.want) {
 				t.Errorf("sandbox DiskMiB = %d, want %d", res.DiskMiB, tc.want)
 			}
-			if res.DiskMiBFilled != tc.wantFilled {
-				t.Errorf("DiskMiBFilled = %v, want %v", res.DiskMiBFilled, tc.wantFilled)
+			if res.DiskMiBSoft != tc.wantFilled {
+				t.Errorf("DiskMiBFilled = %v, want %v", res.DiskMiBSoft, tc.wantFilled)
 			}
 			// The effective number is DISCLOSED to every caller through the
 			// envelope — the audit is why the clamp can be silent at the API.
@@ -312,17 +312,13 @@ func TestBoundMemberSpec_PreviewsTheGovernanceEphemeralLimit(t *testing.T) {
 	}
 }
 
-// TestResolveRunPolicy_DefaultArmPreviewsTheEphemeralCap is the arm composer.
-// Clamp cannot reach, and it is the commonest member request there is: no
-// policy_id, no inline_policy, so resolvePolicy hands back the PROFILE's own
-// ceiling spec — which an admin may have written wider than the limit standing
-// beside it. The member bounding pipeline runs only for a SELECTED row, so
-// without a clamp here Review previewed one size and the run got another, with
-// nothing said to the member (dispatch's disclosure is a log line and an audit
-// row, neither of which is a preview).
-//
-// Pinned as preview == dispatch on the same inputs, which is the claim.
-func TestResolveRunPolicy_DefaultArmPreviewsTheEphemeralCap(t *testing.T) {
+// TestResolveRunPolicy_DefaultArmLeavesDiskToTheMainDriveStep: the no-policy member arm hands back
+// the PROFILE's own ceiling spec, which an admin may have written wider than the limit standing
+// beside it. resolveRunPolicy no longer sizes the main drive: stepMainDrive does, once, for every
+// door (TestPreflightAndDispatchAgreeOnEphemeralDisk pins that the number it reports is the number the
+// run gets), so the resolved spec still carries the authored size and the profile's own ceiling spec
+// is never re-sized under later runs.
+func TestResolveRunPolicy_DefaultArmLeavesDiskToTheMainDriveStep(t *testing.T) {
 	const authored, limit = 8192, 2048
 	profileCeiling := types.RunPolicySpec{
 		MinConfinementClass: types.CC2,
@@ -339,7 +335,7 @@ func TestResolveRunPolicy_DefaultArmPreviewsTheEphemeralCap(t *testing.T) {
 	srv := New(cfg)
 
 	r, ctx := boundMemberRequest(t)
-	spec, policyID, warns, _, ok := srv.resolveRunPolicy(ctx, httptest.NewRecorder(), r,
+	spec, policyID, _, _, ok := srv.resolveRunPolicy(ctx, httptest.NewRecorder(), r,
 		&createRunRequest{Agent: "claude-code", Repo: "acme/widgets"}, true)
 	if !ok {
 		t.Fatal("the default arm refused a member request carrying no policy at all")
@@ -347,38 +343,10 @@ func TestResolveRunPolicy_DefaultArmPreviewsTheEphemeralCap(t *testing.T) {
 	if policyID != nil {
 		t.Fatalf("policy_id = %v, want nil — this is the no-policy arm", policyID)
 	}
-	if spec.Resources == nil || spec.Resources.DiskMiB != limit {
-		t.Fatalf("previewed disk_mib = %v, want %d", spec.Resources, limit)
+	if spec.Resources == nil || spec.Resources.DiskMiB != authored {
+		t.Fatalf("resolved disk_mib = %v, want the authored %d: the main drive is sized by stepMainDrive", spec.Resources, authored)
 	}
-	var capped bool
-	for _, w := range warns {
-		capped = capped || strings.Contains(w, composer.WarnResourcesCapped)
-	}
-	if !capped {
-		t.Errorf("warns = %q, want %q — a silent clamp is the defect", warns, composer.WarnResourcesCapped)
-	}
-	// The profile's own ceiling spec must not have been re-sized under it: every
-	// later run resolving the same profile reads that value.
 	if profileCeiling.Resources.DiskMiB != authored {
 		t.Errorf("the profile's ceiling Resources was mutated to %d", profileCeiling.Resources.DiskMiB)
-	}
-
-	// …and the number the run actually gets, from the same inputs.
-	res, _, _ := ephemeralDispatch(t, profileCeiling, types.SiteConfig{}, assignedCeiling(limit))
-	if res.DiskMiB != int64(spec.Resources.DiskMiB) {
-		t.Errorf("preview shows %d but dispatch gives %d", spec.Resources.DiskMiB, res.DiskMiB)
-	}
-
-	// THE COUNTERFACTUAL: an OPERATOR is the ceiling-setting authority and is
-	// exempt from the limit, here exactly as at dispatch.
-	opCtx := operatorCtx("sub-admin", "admin@corp.example", oidc.RoleAdmin)
-	opReq := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(opCtx)
-	spec, _, _, _, ok = srv.resolveRunPolicy(opCtx, httptest.NewRecorder(), opReq,
-		&createRunRequest{Agent: "claude-code", Repo: "acme/widgets"}, true)
-	if !ok {
-		t.Fatal("the operator request was refused")
-	}
-	if spec.Resources == nil || spec.Resources.DiskMiB != authored {
-		t.Errorf("operator previewed disk_mib = %v, want the unclamped %d", spec.Resources, authored)
 	}
 }

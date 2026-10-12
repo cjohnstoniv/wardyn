@@ -410,6 +410,8 @@ type PreflightResult struct {
 	// ResourcesApplied is the CPU and memory it asked for and would get.
 	Limits           *EffectiveRunLimits `json:"limits,omitempty"`
 	ResourcesApplied *AppliedResources   `json:"resources_applied,omitempty"`
+	// MainDrive is the main-drive size it asked for and would get, with its basis.
+	MainDrive *MainDriveApplied `json:"main_drive,omitempty"`
 	// LocalPlacement says per host, workspace source and component whether the
 	// person's runner can honour it. Empty until the placement lane fills it.
 	LocalPlacement []LocalPlacementFact `json:"local_placement"`
@@ -427,6 +429,9 @@ type PreflightResult struct {
 	// BarrierOptions are the resolved pool's three barriers under this draft's
 	// floors (policy_floor and access_floor appear only here); empty when unpooled.
 	BarrierOptions []BarrierOption `json:"barrier_options"`
+	// RunnerPoolSlots is the resolved pool's slot counts, with the run's max_wait_sec; absent when
+	// unpooled. Advisory: the launch decides.
+	RunnerPoolSlots *PoolSlots `json:"runner_pool_slots,omitempty"`
 	// Access is what the run brings in: its rows, hosts, credentials, the line
 	// for an unlisted host and the setup still needed. The policy preview
 	// answers the same block for the same request.
