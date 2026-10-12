@@ -319,7 +319,7 @@ A service identity is automation that runs under its own name. It is not a perso
 | The sponsor in member mode | `409` `api_token_member_mode_mint` |
 | The sponsor, with `20` live tokens on the identity | `422` `api_token_cap_reached` |
 
-- **A service token** is an ordinary `wdn_` token with principal `service:<name>`, role `member` and no email or groups.
+- **A service token** is an ordinary `wdn_` token with principal `service:<name>`, role `user` and no email or groups.
   - It must expire: the default and maximum are `90d`, or the deployment cap if lower.
   - It is a bearer. Wardyn does not bind it to a workload or a network.
 - **Every request is re-checked** against the live identity and its sponsor.
@@ -347,6 +347,7 @@ A service identity is automation that runs under its own name. It is not a perso
   - The current sponsor can list, read and kill its runs, and nothing more: not the held approvals, sandbox files or run tokens.
   - Entering one (a terminal or a UI app) needs an explicit `service_attach` grant ([Capabilities](capabilities.md#service_attach)), off for everyone by default, super admins included. SSH never admits it.
   - A portal's delegated token has none of this reach.
+
 **Lifecycle.**
 
 | Event | Effect |

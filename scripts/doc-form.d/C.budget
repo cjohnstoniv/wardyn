@@ -1,6 +1,6 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words, so growth fails.
 # docs/CI.md: base 6759 + 66 (headings and row summaries of five cell expansions in the exit-code table; the 124 summary carries four more words) + 39 (--placement/--runner bullet in "Driving an existing control plane instead").
-# docs/CI.md 7035 adds 166 over 6869 (0.9 F-1508-M3): CI runs as a service identity, not a person.
-docs/CI.md=7035 share=35 # +5: the runner-units job row (#1968).
+# docs/CI.md 7039 adds 170 over 6869 (0.9 F-1508-M3): CI runs as a service identity, not a person; its audit.json is an empty list.
+docs/CI.md=7039 share=35 # +5: the runner-units job row (#1968).
 docs/ci-jobs-as-runs.md=2091 share=35
 .claude/skills/wardyn-ci/SKILL.md=684 share=35
