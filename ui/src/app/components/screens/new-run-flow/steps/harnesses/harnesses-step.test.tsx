@@ -144,7 +144,6 @@ describe("Harnesses step: Interactive", () => {
 
 describe("Harnesses step: Autonomous", () => {
   it("holds one harness and one task, with Add another harness Coming soon", async () => {
-    const user = userEvent.setup();
     show({ ...AUTONOMOUS, tools: [harness("claude-code")], workload: { kind: "agent_task", agent: "claude-code", task: "" } });
     expect(await screen.findByText(NR_HARNESSES.LEDE_AUTONOMOUS)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: NR_HARNESSES.ADD_ANOTHER })).toBeDisabled();
