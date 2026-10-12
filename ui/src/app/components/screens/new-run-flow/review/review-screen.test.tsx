@@ -283,6 +283,14 @@ describe("Review notices", () => {
     expect(screen.getByText(NR_REVIEW.NARROWED_BY("Platform team"))).toBeInTheDocument();
     expect(screen.getByText(`${NR_REVIEW.NARROWED_APPLIES("8 CPU · 8,192 MiB")} ${NR_REVIEW.NARROWED_TAIL_CEILING}`)).toBeInTheDocument();
   });
+
+  it("lists the preflight's warnings before launch", async () => {
+    checks.current = answered({ ...SCENARIO_PREFLIGHT.member, warnings: ["inline_policy: a grant was dropped by your ceiling"] });
+    open(AGENT);
+    await ready();
+    expect(screen.getByText(NR_REVIEW.WARNINGS_TITLE)).toBeInTheDocument();
+    expect(screen.getByText("inline_policy: a grant was dropped by your ceiling")).toBeInTheDocument();
+  });
 });
 
 describe("Review raw views", () => {

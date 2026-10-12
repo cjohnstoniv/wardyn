@@ -23,17 +23,19 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The user drive is the FIRST and ONLY Volume/VolumeMount this substrate creates, arriving on its
-// own field (SandboxSpec.Drive) — why CreateSandbox's blanket refusal of spec.Mounts needs no exemption for it.
+// The drives are the only persistent Volumes/VolumeMounts this substrate creates, arriving on their
+// own field (SandboxSpec.Drives) — why CreateSandbox's blanket refusal of spec.Mounts needs no exemption for them.
 const (
 	// driveVolumeName ties the agent pod's Volume to the VolumeMount on its main container and the
-	// ephemeral exec container Exec adds. Static: one principal has at most one drive.
+	// ephemeral exec container Exec adds: the first drive's name, and the stem of the others'
+	// (driveVolumeNameAt).
 	driveVolumeName = "drive"
 
-	// driveDirectfsAnnotation is the key applyDriveToPod stamps on runsc drive pods. It is inert today:
-	// runsc only honors a mount hint carrying `share`, `source` AND `type` together (this key sets
-	// none); the working remedy is the NODE flag --directfs=false (docs/OPERATIONS.md) — kept
-	// stamped as the right key if the hint is ever completed.
+	// driveDirectfsAnnotation is the key applyDriveToPod stamps on runsc drive pods for the first
+	// drive (the others' carry their own volume name). It is inert today: runsc only honors a
+	// mount hint carrying `share`, `source` AND `type` together (this key sets none); the working
+	// remedy is the NODE flag --directfs=false (docs/OPERATIONS.md) — kept stamped as the right key
+	// if the hint is ever completed.
 	driveDirectfsAnnotation = "dev.gvisor.spec.mount." + driveVolumeName + ".directfs"
 
 	// labelDrive marks a claim as belonging to one drive ROW, labelDriveHome to one person's home
@@ -77,11 +79,37 @@ func validateDriveMount(drive *types.DriveMount) error {
 		return fmt.Errorf("k8s: drive: a managed drive's allocation is its volume request and %d MiB cannot be requested: %w",
 			drive.SizeMiB, errDriveAllocationInvalid)
 	}
-	if drive.Target != runner.DriveTarget {
-		return fmt.Errorf("k8s: drive: %q is not the reserved drive target %q: %w",
-			drive.Target, runner.DriveTarget, errDriveTargetInvalid)
+	if err := runner.ValidateDriveTarget(drive.Target, drive.Backend); err != nil {
+		return fmt.Errorf("k8s: drive: %v: %w", err, errDriveTargetInvalid)
 	}
 	return nil
+}
+
+// validateDriveSet is the run's drives taken together: no two at one target, and never a share beside
+// a managed drive, whose fsGroup would reach the share (applyDriveToPod).
+func validateDriveSet(drives []types.DriveMount) error {
+	seen := map[string]bool{}
+	managed := false
+	for _, d := range drives {
+		if seen[d.Target] {
+			return fmt.Errorf("k8s: drive: two drives mount at %q: %w", d.Target, errDriveTargetInvalid)
+		}
+		seen[d.Target] = true
+		managed = managed || d.Backend.Kind() == types.DriveKindManaged
+	}
+	if managed && hasShareDrive(drives) {
+		return fmt.Errorf("k8s: %w", errDriveShareBesideManaged)
+	}
+	return nil
+}
+
+// driveVolumeNameAt names the i-th drive's Volume: the first keeps driveVolumeName, so a one-drive pod
+// is unchanged.
+func driveVolumeNameAt(i int) string {
+	if i == 0 {
+		return driveVolumeName
+	}
+	return fmt.Sprintf("%s-%d", driveVolumeName, i)
 }
 
 // driveClaimDrift lists every way an EXISTING claim disagrees with the drive the resolver says it
@@ -319,8 +347,8 @@ func reuseDriveClaim(claim *corev1.PersistentVolumeClaim, drive *types.DriveMoun
 	return nil
 }
 
-// applyDriveToPod attaches the run's drive to the agent pod: the claim as a Volume, the mount at the
-// RESERVED target the control plane carried (runner.DriveTarget, never re-typed), the one pod-level
+// applyDriveToPod attaches one of the run's drives (the i-th) to the agent pod: the claim as a Volume,
+// the mount at the target the control plane derived (runner.DriveTargetFor, never re-typed), the one pod-level
 // SecurityContext this substrate ever sets, and — on a gVisor pod only — the per-mount directfs
 // annotation. Append and set, never assign over, on all four: a wholesale assignment would silently
 // drop whatever else adds one later with no test catching it; the mount goes on the MAIN container by name, not index.
@@ -342,16 +370,17 @@ func reuseDriveClaim(claim *corev1.PersistentVolumeClaim, drive *types.DriveMoun
 // resolved RuntimeClass handler is runsc; the annotation alone does not deliver it (runsc discards
 // this hint outright — see driveDirectfsAnnotation), so the node flag `--directfs=false` is the only
 // real remedy (docs/OPERATIONS.md).
-func applyDriveToPod(pod *corev1.Pod, drive *types.DriveMount, runtimeHandler string) {
+func applyDriveToPod(pod *corev1.Pod, drive *types.DriveMount, i int, runtimeHandler string) {
+	name := driveVolumeNameAt(i)
 	if strings.HasPrefix(runtimeHandler, handlerRunscPrefix) {
 		if pod.Annotations == nil {
 			pod.Annotations = map[string]string{}
 		}
-		pod.Annotations[driveDirectfsAnnotation] = "off"
+		pod.Annotations[strings.Replace(driveDirectfsAnnotation, "."+driveVolumeName+".", "."+name+".", 1)] = "off"
 	}
 	spec := &pod.Spec
 	spec.Volumes = append(spec.Volumes, corev1.Volume{
-		Name: driveVolumeName,
+		Name: name,
 		VolumeSource: corev1.VolumeSource{
 			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 				ClaimName: drive.ObjectName,
@@ -359,7 +388,7 @@ func applyDriveToPod(pod *corev1.Pod, drive *types.DriveMount, runtimeHandler st
 			},
 		},
 	})
-	mount := corev1.VolumeMount{Name: driveVolumeName, MountPath: drive.Target, ReadOnly: drive.ReadOnly}
+	mount := corev1.VolumeMount{Name: name, MountPath: drive.Target, ReadOnly: drive.ReadOnly}
 	for i := range spec.Containers {
 		if spec.Containers[i].Name == mainContainerName {
 			spec.Containers[i].VolumeMounts = append(spec.Containers[i].VolumeMounts, mount)

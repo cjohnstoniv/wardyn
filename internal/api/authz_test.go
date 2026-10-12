@@ -597,6 +597,8 @@ var routeMatrix = map[string]classifiedRoute{
 	// own doc) — classMember, not classOwner: there is no foreign-id path to
 	// distinguish.
 	"GET /api/v1/me/attention": {class: classMember},
+	// The caller's own drive catalogue: only drives their own grants reach.
+	"GET /api/v1/me/drives": {class: classMember},
 	// The Support link the header shows every signed-in person (#1125).
 	"GET /api/v1/branding/settings": {class: classMember},
 	// /me/ssh-keys (SSH lane, C2): classMember, NOT classOwner — this is a

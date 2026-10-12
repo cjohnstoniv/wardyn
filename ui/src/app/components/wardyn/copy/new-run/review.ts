@@ -15,6 +15,8 @@ export const NR_REVIEW = {
   VIEW_PRETTY: "Pretty",
   VIEW_YAML: "YAML",
   VIEW_JSON: "JSON",
+  /** pending W-46: the recommended text until the owner answers. */
+  WARNINGS_TITLE: "Before you launch",
   /** pending W-04: the recommended text until the owner answers. */
   NARROWED_BY: (source: string | number) => `Your request was narrowed by ${source}.`,
   NARROWED_APPLIES: (applied: string | number) => `${applied} will apply.`,
@@ -56,6 +58,10 @@ export const NR_REVIEW = {
     `${hosting} · ${used} of ${max} running`,
   /** pending W-03: the recommended text until the owner answers. */
   WHERE_ONLINE: (n: string | number) => `${n} of your runners online`,
+  /** pending W-45: the recommended text until the owner answers. */
+  RECORDING_LABEL: "Recording",
+  /** pending W-45: the recommended text until the owner answers. */
+  RECORDING_ON: "Every keystroke and every outbound connection.",
   PROV_ADDED: "Added by you",
   PROV_SELECTED: "Selected by you",
   PROV_RUN_SETUP: "Run setup",

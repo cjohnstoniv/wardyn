@@ -43,7 +43,7 @@ type createRunLaunch struct {
 	ceiling       dispatchCeiling
 	gw            grantWiring
 	wsRefs        []types.Workspace
-	driveMount    *types.DriveMount
+	driveMounts   []types.DriveMount
 	ephemeralDirs []string
 	// startFolder is the run's one working directory (stepWorkspaces): "" keeps
 	// the sandbox's own choice.
@@ -130,11 +130,11 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			ExtraEnv:           startFolderEnv(l.startFolder),
 			Toolchains:         runToolchainNeeds(l.wsRefs),
 			// The member's own persistent storage, already resolved and narrowed
-			// at create (seedRequestDrive) — nil unless this run asked for it.
+			// at create (stepDrive) — empty unless this run asked for it.
 			// Carried rather than re-resolved for the reason the ceiling is:
 			// resolution keys on the caller's OIDC claims, which the run row does
 			// not hold. See user_drives_run.go's own note.
-			Drive: l.driveMount,
+			Drives: l.driveMounts,
 			// The zero posture unless this run attaches a MEMBER-OWNED workspace, in
 			// which case the driver re-checks that member's own binds against these
 			// roots immediately before ContainerCreate (userMountPosture,
