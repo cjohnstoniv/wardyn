@@ -42,20 +42,47 @@ func TestCapResources(t *testing.T) {
 	runner.SetDefaultLimits(1000, 2048)
 	lim := types.GovernanceLimits{MaxCPUMillis: 500, MaxMemoryMiB: 4096}
 
-	// An unset field stands at the deployment size: cut when that is above the maximum.
+	// An unset field stands at the deployment size, which the member cap is never below (#1949).
 	got, changed := CapResources(nil, lim)
-	if !changed || got.CPUMillis != 500 || got.MemoryMiB != 0 {
-		t.Errorf("nil = %+v changed=%v, want cpu 500 and memory left to the default", got, changed)
+	if changed || got != nil {
+		t.Errorf("nil = %+v changed=%v, want the deployment default left alone", got, changed)
 	}
 	orig := &types.ResourceLimits{CPUMillis: 64000, MemoryMiB: 1 << 20, DiskMiB: 7}
 	got, changed = CapResources(orig, lim)
-	if !changed || got.CPUMillis != 500 || got.MemoryMiB != 4096 || got.DiskMiB != 7 {
-		t.Errorf("set = %+v, want 500/4096, disk untouched", got)
+	if !changed || got.CPUMillis != 1000 || got.MemoryMiB != 4096 || got.DiskMiB != 7 {
+		t.Errorf("set = %+v, want 1000 (the default over a 500 maximum)/4096, disk untouched", got)
 	}
 	if orig.CPUMillis != 64000 {
 		t.Error("CapResources wrote through the caller's block")
 	}
 	if same, changed := CapResources(orig, types.GovernanceLimits{}); changed || same != orig {
 		t.Error("no limit must return the block untouched")
+	}
+}
+
+// TestClampUsesMemberCap pins #1949 in Clamp and CapResources: a profile maximum counts as the
+// ceiling's size, so with no ceiling size, a maximum of 8 CPU and a deployment default of 2 an inline
+// ask of 8 keeps 8; and the cap never falls below the default, so a maximum under it cuts nothing.
+func TestClampUsesMemberCap(t *testing.T) {
+	t.Cleanup(func() { runner.SetDefaultLimits(0, 0) })
+	runner.SetDefaultLimits(2000, 4096)
+	eight := types.GovernanceLimits{MaxCPUMillis: 8000}
+	got, warns := Clamp(types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 8000}}, types.RunPolicySpec{}, eight)
+	if got.Resources.CPUMillis != 8000 || hasWarn(warns, WarnResourcesCapped) {
+		t.Errorf("Clamp ask 8000 under max 8000 = %+v warns=%v, want 8000 kept", got.Resources, warns)
+	}
+	got, _ = Clamp(types.RunPolicySpec{}, types.RunPolicySpec{}, eight)
+	if got.Resources.CPUMillis != 2000 {
+		t.Errorf("Clamp fill = %+v, want the default 2000, never the cap", got.Resources)
+	}
+	if out, changed := CapResources(&types.ResourceLimits{CPUMillis: 8000}, eight); changed || out.CPUMillis != 8000 {
+		t.Errorf("CapResources ask 8000 under max 8000 = %+v changed=%v, want 8000 kept", out, changed)
+	}
+	under := types.GovernanceLimits{MaxCPUMillis: 1000}
+	if out, changed := CapResources(nil, under); changed || out != nil {
+		t.Errorf("CapResources nil under max 1000 = %+v changed=%v, want the default left alone", out, changed)
+	}
+	if out, changed := CapResources(&types.ResourceLimits{CPUMillis: 4000}, under); !changed || out.CPUMillis != 2000 {
+		t.Errorf("CapResources 4000 under max 1000 = %+v changed=%v, want 2000 (the default, never below it)", out, changed)
 	}
 }

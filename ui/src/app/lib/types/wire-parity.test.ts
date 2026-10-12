@@ -425,8 +425,8 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   // the dry-run facts, each pinned to its TS mirror in types/new-run-contract.ts.
   it.each([
     ["RunResources", "RequestedResources"],
-    ["ResourceAmounts", "ResourceAmounts"],
-    ["PlacementResources", "PlacementResources"],
+    ["AppliedResources", "AppliedResources"],
+    ["AppliedAmount", "AppliedAmount"],
     ["RunOverrides", "RunOverrides"],
     ["AgentOverrides", "AgentOverrides"],
     ["SecretOverride", "SecretOverride"],

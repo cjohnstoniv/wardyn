@@ -40,6 +40,9 @@ type runPlacement struct {
 	eligible []poolTarget
 	// choices is the caller's permitted catalogue with each pool's availability, for the two dry doors.
 	choices []client.RunnerPoolChoice
+	// limits are what this run may get, pooled or not; applied is the CPU and memory it gets.
+	limits  types.EffectiveRunLimits
+	applied client.AppliedResources
 }
 
 // placementInput is what the fold knows of the run when it resolves where it goes.
@@ -50,6 +53,10 @@ type placementInput struct {
 	reqCC    types.ConfinementClass
 	// reqCCOK is false when the request's class did not parse; the confinement step answers that.
 	reqCCOK bool
+	// ceiling is the caller's governance ceiling; untouched and ask are the size inputs runSize keeps
+	// apart (resourceBaseline, resourceAsk).
+	ceiling        governanceCeiling
+	untouched, ask types.ResourceLimits
 }
 
 func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPlacement, *runRefusal) {
@@ -61,7 +68,9 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 		if f.req.RunnerPoolID != "" {
 			return runPlacement{}, runError(runnerpool.ReasonPoolsUnavailable.Status(), string(runnerpool.ReasonPoolsUnavailable), runnerpool.UnavailableServerMsg())
 		}
-		return runPlacement{}, nil
+		// Unpooled: the deployment and governance still size the run.
+		limits, applied, refusal := s.runSize(ctx, f, nil, nil)
+		return runPlacement{limits: limits, applied: applied}, refusal
 	}
 	rows, refusal := s.permittedPools(ctx, ps, true)
 	if refusal != nil {
@@ -98,7 +107,16 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	if refusal != nil {
 		return runPlacement{}, refusal
 	}
+	// The size is bounded before any candidate is held to it: the candidates that are online and can
+	// enforce the barrier give the runner capacity, the ask is applied, and only the APPLIED size is
+	// held per candidate, so an over-ask is reduced, never refused.
 	demand := s.placementDemand(ctx, f)
+	fit, _ := eligibleTargets(targets, demand)
+	limits, applied, refusal := s.runSize(ctx, f, &row.Pool, selfHostedCapacity(row.Pool, fit, f.req.RunnerID))
+	if refusal != nil {
+		return runPlacement{}, refusal
+	}
+	demand.cpu, demand.mem = int64(applied.CPUMillis.Applied), int64(applied.MemoryMiB.Applied)
 	eligible, reason := eligibleTargets(targets, demand)
 	// A pin names one of the caller's own candidates (pinRefusal has refused every other id), so when that
 	// candidate fails the demand the answer is ITS reason, not "no such runner" because another is fine.
@@ -115,7 +133,7 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 		return runPlacement{}, targetRefusal(decision.Refusal, row.Pool.Name, pool.HostingType)
 	}
 	return runPlacement{pooled: true, pool: pool, row: row.Pool, placement: decision.Placement, filled: decision.Filled,
-		eligible: pickTargets(eligible, decision.Targets), choices: s.poolChoices(rows)}, nil
+		eligible: pickTargets(eligible, decision.Targets), choices: s.poolChoices(rows), limits: limits, applied: applied}, nil
 }
 
 // hostingOfPlacement is the hosting type a request's placement names; the pool decides when it is absent.
@@ -325,6 +343,12 @@ func (p runPlacement) facts() (*client.ResolvedRunnerPool, []client.RunnerPoolCh
 	}
 	pool := p.pool
 	return &pool, p.choices
+}
+
+// sizeFacts are the run's limits and applied size as the two dry doors show them, pooled or not.
+func (p runPlacement) sizeFacts() (*types.EffectiveRunLimits, *client.AppliedResources) {
+	limits, applied := p.limits, p.applied
+	return &limits, &applied
 }
 
 // auditFields are the binding as run.create records it.

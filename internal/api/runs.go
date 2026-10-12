@@ -348,6 +348,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		createData["delivery"] = gw.delivery
 	}
 	createData["end"] = f.end.audit(run)
+	createData["resources_applied"] = f.place.applied
 	comps.stampRunCreate(createData)
 	maps.Copy(createData, f.place.auditFields(created))
 	s.markGovernanceExempt(ctx, createData)
@@ -390,7 +391,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Nothing below can become a 4xx, so the caller gets its run now and the
 	// image build + dispatch continue server-side (runs_create_launch.go).
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+runID.String())
-	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
+	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings, ResourcesApplied: &f.place.applied})
 	spec, harnessRules := applyHarnessToolRules(spec, req.Tools)
 	launch := createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
@@ -595,6 +596,8 @@ type grantChecker interface {
 type createRunResponse struct {
 	types.AgentRun
 	Warnings []string `json:"warnings,omitempty"`
+	// ResourcesApplied is the CPU and memory the run asked for and got (stepResources).
+	ResourcesApplied *client.AppliedResources `json:"resources_applied,omitempty"`
 }
 
 // runLLMAccess is the deterministic model-access verdict for a run request —

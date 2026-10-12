@@ -31,8 +31,11 @@ func (r CreateRunRequest) PlacementRequest() placement.Request {
 }
 
 // RunResources is the CPU and memory a request asks for. A zero field asks for
-// the placement's default. The server clamps what it is given to the caps of
-// the placement the run lands on; a value over the cap is reduced, not refused.
+// what the run's source policy sets, else the default. The server applies what
+// it is given within the strictest of the pool's, the person's governance, the
+// deployment's and (on their own runner) the runner's limits: a value over that
+// cap is reduced to it, never refused, and the dry runs and the 201 say what was
+// applied (AppliedResources).
 type RunResources struct {
 	// CPUMillis is milli-CPU: 2000 is two CPUs. The console works in tenths of a CPU.
 	CPUMillis int `json:"cpu_millis,omitempty"`
@@ -40,22 +43,23 @@ type RunResources struct {
 	MemoryMiB int `json:"memory_mib,omitempty"`
 }
 
-// ResourceAmounts is a CPU and memory pair in a dry-run answer, where zero is a
-// value and never "unset".
-type ResourceAmounts struct {
-	CPUMillis int `json:"cpu_millis"`
-	MemoryMiB int `json:"memory_mib"`
+// AppliedResources is what a run's CPU and memory asked for and what it gets,
+// on preflight, the policy preview, the 201 and the run.create audit row.
+type AppliedResources struct {
+	CPUMillis AppliedAmount `json:"cpu_millis"`
+	MemoryMiB AppliedAmount `json:"memory_mib"`
 }
 
-// PlacementResources is what one placement offers: Defaults is what an
-// untouched run receives there (the source policy's own resources folded in),
-// Caps what a request may ask for at most. RunnerID names the runner when
-// Placement is local; a run on the organisation's runners carries none.
-type PlacementResources struct {
-	Placement Placement       `json:"placement"`
-	RunnerID  string          `json:"runner_id,omitempty"`
-	Defaults  ResourceAmounts `json:"defaults"`
-	Caps      ResourceAmounts `json:"caps"`
+// AppliedAmount is one field of AppliedResources. Source names the limit that
+// cut an over-ask when Capped, else the one whose default an ask of 0 got;
+// SourceName is the pool's name (pool) or the governance profile's name
+// (governance), and empty for the deployment and the runner's capacity.
+type AppliedAmount struct {
+	Requested  int         `json:"requested"` // the request's value, else its source policy's; 0 asks for the default
+	Applied    int         `json:"applied"`   // what the sandbox gets
+	Capped     bool        `json:"capped,omitempty"`
+	Source     LimitSource `json:"source,omitempty"`
+	SourceName string      `json:"source_name,omitempty"`
 }
 
 // RunOverrides carries the edits a person made on the New Run cards, one block

@@ -9,9 +9,9 @@
 
 import type { AutonomyResolution } from "../api/governance";
 import type { ComponentFact } from "./components";
-import type { AllowedImage, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
+import type { AllowedImage, AppliedResources, ImageFact, LocalPlacementFact } from "./new-run-contract";
 import type { ProvenanceEntry } from "./policy-preview";
-import type { ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
+import type { EffectiveRunLimits, ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
 import type { ConfinementClass, RiskItem, RiskLevel } from "./runs";
 import type { SCMAccess } from "./setup";
 
@@ -150,10 +150,11 @@ export interface PreflightResult {
   // Why each entry of the resolved spec is there; the policy preview returns the same rows
   // for the same request. Absent on an older server.
   provenance?: ProvenanceEntry[];
-  // What each placement offers this run, keyed by placement and runner; empty
-  // until the resources lane fills it (internal/api's preflightResponse.Resources;
-  // optional here so an older server still types, the server always sends the array).
-  resources?: PlacementResources[];
+  // What this run may get (the resolved pool's, the person's governance and the
+  // deployment's limits for its type) and the CPU and memory it asked for and
+  // gets. Absent on an older server.
+  limits?: EffectiveRunLimits;
+  resources_applied?: AppliedResources;
   // Whether each host, workspace source and component can run on the person's
   // runner; empty until the placement lane fills it.
   local_placement?: LocalPlacementFact[];
