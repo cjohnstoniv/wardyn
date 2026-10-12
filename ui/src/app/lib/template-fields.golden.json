@@ -95,6 +95,10 @@
       "deny_new_executables",
       "max_file_size_mib"
     ],
+    "RepoSelection": [
+      "repo",
+      "ref"
+    ],
     "ResourceLimits": [
       "cpu_millis",
       "memory_mib",
@@ -143,6 +147,8 @@
     "StartFolder": [
       "kind",
       "attachment",
+      "repo",
+      "drive_id",
       "subpath"
     ],
     "ToolRule": [
@@ -168,7 +174,8 @@
       "workspace_id",
       "enabled_optional",
       "read_only",
-      "target"
+      "target",
+      "repos"
     ]
   },
   "nested_excluded": [

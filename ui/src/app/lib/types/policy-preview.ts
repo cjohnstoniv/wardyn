@@ -4,7 +4,7 @@
  */
 
 import type { ComponentFact } from "./components";
-import type { AllowedImage, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
+import type { AllowedImage, ImageFact, LocalPlacementFact, PlacementResources, RunAttachment } from "./new-run-contract";
 import type { RunPolicySpec } from "./policy";
 import type { ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
 
@@ -79,4 +79,8 @@ export interface PolicyPreviewResult {
   // The preflight's pool facts, with the same meaning.
   runner_pool?: ResolvedRunnerPool;
   runner_pools?: RunnerPoolChoice[];
+  // The run's mount map: each repository, folder and drive at the path the run
+  // uses it at, the one holding the starting folder marked. The server always
+  // sends the array; optional here so an older server still types.
+  attachments?: RunAttachment[];
 }

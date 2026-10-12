@@ -10,6 +10,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // foldMode is the door a run request is folded for. The three doors share one
@@ -42,13 +43,23 @@ type runFold struct {
 	// value, so one request cannot grade on two sets.
 	baseline composer.Baseline
 
-	spec              types.RunPolicySpec
-	policyID          *uuid.UUID
-	policyWarns       []string
-	source            policySourceRecord
-	ephemeralDirs     []string
-	driveMount        *types.DriveMount
-	wsRefs            []types.Workspace
+	spec          types.RunPolicySpec
+	policyID      *uuid.UUID
+	policyWarns   []string
+	source        policySourceRecord
+	ephemeralDirs []string
+	driveMount    *types.DriveMount
+	// previewDriveReadOnly is the drive's posture at the preview, which resolves
+	// no mount: nil when the run has no drive.
+	previewDriveReadOnly *bool
+	// attached are the workspaces the request names, the primary first; wsRefs
+	// adds every other one the spec references.
+	attached []types.Workspace
+	wsRefs   []types.Workspace
+	// attachments is the run's mount map and startFolder its one working
+	// directory (WARDYN_START_FOLDER), both from stepWorkspaces.
+	attachments       []client.RunAttachment
+	startFolder       string
 	present           map[string]bool
 	reqEvents         []requirementAuditEntry
 	directGitHubAdded []string

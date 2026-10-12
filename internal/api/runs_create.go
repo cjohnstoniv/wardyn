@@ -4,9 +4,11 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"log/slog"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // composerWorkspaceTarget is the in-sandbox path a local-directory workspace
@@ -25,14 +28,15 @@ import (
 // workspace_run.go), not a composer-specific concern.
 const composerWorkspaceTarget = "/home/agent/work"
 
-// seedRequestWorkspace attaches the workspace named by req.WorkspaceID to the
+// seedRequestWorkspace attaches every workspace the request names
+// (attachedWorkspaceIDs: workspaces[] in order, else workspace_id) to the
 // RESOLVED spec. Without it the only way to launch against an onboarded
 // workspace is to hand-reproduce its exact source string in a policy file — the
 // console hides that by synthesizing an inline policy, the CLI and SDK could not.
 //
-// It walks the workspace's Sources in order, collecting each one's
+// It walks each workspace's Sources in order, collecting each one's
 // mount/repo entry, then PREPENDS the whole batch onto the resolved spec in
-// ONE shot — so wsRefs[0] (referencedWorkspaces) stays this workspace even
+// ONE shot — so the primary (workspaces[0]) leads wsRefs even
 // when the caller also passed a policy (that first ref is what drives the
 // run's model/harness cred binding and its built image), AND this
 // workspace's own sources keep their relative order ahead of any
@@ -50,6 +54,14 @@ const composerWorkspaceTarget = "/home/agent/work"
 //     one) — its target is returned in ephemeralDirs for the caller to surface
 //     as WARDYN_EPHEMERAL_DIRS at dispatch (runs_dispatch.go); the sandbox
 //     mkdirs it.
+//
+// Per workspace, the selection's Repos picks which repo sources clone and at
+// which ref (an unknown repo is 422 workspace_repo_unknown), and its Target
+// replaces the one repository or folder it then attaches. A workspaces[] entry
+// the resolved policy already attaches adds no sources a second time; a target
+// or repos on it is 422, since the policy sets its paths. When the caller named no
+// image, every attached workspace and every one the policy attaches must agree
+// on a base image (422 image_conflict); "recommended" is no choice.
 //
 // A COMPOSED launch never sets req.WorkspaceID, so this function does not run
 // for one — compose.go's applyWorkspaces seeds the SAME mount/repo entries
@@ -79,8 +91,8 @@ const composerWorkspaceTarget = "/home/agent/work"
 // run→workspace linkage the scan/verify/record uploads authorize on, so a user
 // run must never claim it.
 //
-// seededImageOwner is the ownership half of seededImageRefusal's fix: the
-// OwnedBy of the workspace whose base_image just set req.Image, and "" in
+// seed.imageOwner is the ownership half of seededImageRefusal's fix: the
+// OwnedBy of a member-owned workspace whose base_image just set req.Image, and "" in
 // every other case — including a member-owned workspace that set no image and an
 // operator-owned one that did. The callers' capability re-check keys on exactly
 // that emptiness, so returning the owner unconditionally would turn an
@@ -89,21 +101,131 @@ const composerWorkspaceTarget = "/home/agent/work"
 // #656 M1: five distinct causes used to share one reason (reasonWorkspaceSeedFailed);
 // each return below now names its own, since a caller who gets one back cannot
 // otherwise tell "no store" from "no base image" from "conflicts with the policy".
-func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicySpec, req *createRunRequest) (ephemeralDirs []string, seededImageOwner string, code int, reason string, err error) {
-	if req.WorkspaceID == nil {
-		return nil, "", 0, "", nil
+func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicySpec, req *createRunRequest) (seed workspaceSeed, refusal *runRefusal) {
+	// The older refusals keep their "workspace_id: " prefix; the multi-workspace
+	// ones are New Run sentences and go out verbatim.
+	seedErr := func(code int, reason string, err error) *runRefusal {
+		return runError(code, reason, "workspace_id: "+err.Error())
+	}
+	ids := attachedWorkspaceIDs(*req)
+	if len(ids) == 0 {
+		return workspaceSeed{}, nil
 	}
 	if s.cfg.Store == nil {
-		return nil, "", http.StatusUnprocessableEntity, reasonWorkspaceSeedStoreUnavailable,
-			fmt.Errorf("workspace_id requires a store, but none is configured")
+		return workspaceSeed{}, seedErr(http.StatusUnprocessableEntity, reasonWorkspaceSeedStoreUnavailable, fmt.Errorf("workspace_id requires a store, but none is configured"))
 	}
-	ws, gerr := s.cfg.Store.GetWorkspace(ctx, *req.WorkspaceID)
-	if gerr != nil {
-		return nil, "", http.StatusUnprocessableEntity, reasonWorkspaceSeedUnreadable,
-			fmt.Errorf("workspace %s: %w", *req.WorkspaceID, gerr)
+	all, lerr := s.cfg.Store.ListWorkspaces(ctx)
+	if lerr != nil {
+		return workspaceSeed{}, seedErr(http.StatusUnprocessableEntity, reasonWorkspaceSeedUnreadable, fmt.Errorf("list workspaces: %w", lerr))
 	}
+	byPolicy := referencedWorkspacesIn(all, *spec)
+	sels := resolveWorkspaceSelections(*req)
 	var newMounts []types.WorkspaceMount
 	var newRepos []types.WorkspaceRepo
+	for _, id := range ids {
+		ws, gerr := s.cfg.Store.GetWorkspace(ctx, id)
+		if gerr != nil {
+			return workspaceSeed{}, seedErr(http.StatusUnprocessableEntity, reasonWorkspaceSeedUnreadable, fmt.Errorf("workspace %s: %w", id, gerr))
+		}
+		seed.attached = append(seed.attached, ws)
+		sel := sels[id.String()]
+		// workspace_id keeps its older rule and seeds every source; a workspaces[]
+		// entry the policy already attaches only adds its options (the console's
+		// custom policy carries the sources itself).
+		if (req.WorkspaceID == nil || *req.WorkspaceID != id) && slices.ContainsFunc(byPolicy, func(p types.Workspace) bool { return p.ID == id }) {
+			if sel.Target != "" || sel.Repos != nil {
+				return workspaceSeed{}, seedErr(http.StatusUnprocessableEntity, reasonWorkspaceSeedPolicyConflict, fmt.Errorf(
+					"%s is attached by the run's policy, which sets its paths and repositories: drop target and repos", ws.Name))
+			}
+			continue
+		}
+		mounts, repos, dirs, refusal := seedWorkspaceSources(ws, sel)
+		if refusal != nil {
+			return workspaceSeed{}, refusal
+		}
+		newMounts, newRepos = append(newMounts, mounts...), append(newRepos, repos...)
+		seed.ephemeralDirs = append(seed.ephemeralDirs, dirs...)
+	}
+	spec.WorkspaceMounts = append(newMounts, spec.WorkspaceMounts...)
+	spec.WorkspaceRepos = append(newRepos, spec.WorkspaceRepos...)
+	if req.Repo == "" && len(newRepos) > 0 {
+		req.Repo = newRepos[0].Repo // run-row label only; the gate + wsRefs read WorkspaceRepos
+	}
+	// base_image replaces the old container-kind image resolution. An explicit
+	// user --image always wins (never silently overridden); "recommended"
+	// just means "no override", so only a real build choice sets req.Image.
+	if req.Image == "" {
+		image, owner, refusal := workspacesBaseImage(append(slices.Clone(seed.attached), byPolicy...), seed.attached)
+		if refusal != nil {
+			return workspaceSeed{}, refusal
+		}
+		req.Image, seed.imageOwner = image, owner
+	}
+	// agentRequirementError deferred exactly this question to here: an exec
+	// run naming a workspace but no agent needed SOME image to run the command
+	// in, and now that base_image has had its one chance to supply req.Image,
+	// still having neither is the caller's request, resolved. Never "attach a
+	// workspace" — one already is attached; what it lacks is a base image.
+	if req.TaskMode == "exec" && req.Agent == "" && req.Image == "" {
+		return workspaceSeed{}, seedErr(http.StatusBadRequest, reasonWorkspaceSeedNoBaseImage, fmt.Errorf(
+			"workspace %s has no base image to run a command in: pass --image or --agent", ids[0]))
+	}
+	// The seed mutated an ALREADY-validated spec, so re-run the one invariant it
+	// can break: the unique in-container target across workspace_mounts +
+	// workspace_repos (policy.go). Without this, a workspace whose target
+	// collides with a policy mount reaches the driver as a duplicate mount point
+	// (opaque dispatch failure) — or a repo clone targets the EXACT path of a
+	// writable bind. Equal or nested targets across workspaces, defaults
+	// included, are the overlap check's, over every resolved target.
+	if verr := validatePolicyWorkspaces(*spec); verr != nil {
+		return workspaceSeed{}, seedErr(http.StatusUnprocessableEntity, reasonWorkspaceSeedPolicyConflict, fmt.Errorf("workspace %s conflicts with the policy: %w", ids[0], verr))
+	}
+	return seed, nil
+}
+
+// workspaceSeed is what seeding the request's workspaces decided.
+type workspaceSeed struct {
+	// attached are the workspaces the request names, in order: [0] is the primary.
+	attached      []types.Workspace
+	ephemeralDirs []string
+	imageOwner    string
+}
+
+// attachedWorkspaceIDs is the request's attach list: workspaces[] in order, else
+// the workspace_id alias. workspaceTargetsRefusal already held each id to a
+// uuid, once, and workspace_id to workspaces[0].
+func attachedWorkspaceIDs(req createRunRequest) []uuid.UUID {
+	if len(req.Workspaces) == 0 {
+		if req.WorkspaceID == nil {
+			return nil
+		}
+		return []uuid.UUID{*req.WorkspaceID}
+	}
+	ids := make([]uuid.UUID, 0, len(req.Workspaces))
+	for _, sel := range req.Workspaces {
+		if id, err := uuid.Parse(sel.WorkspaceID); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// seedWorkspaceSources is one workspace's mount, repo and scratch entries under
+// its selection: the repos it picks at their refs, and its target on the one
+// repository or folder left.
+func seedWorkspaceSources(ws types.Workspace, sel client.WorkspaceSelection) (
+	mounts []types.WorkspaceMount, repos []types.WorkspaceRepo, ephemeralDirs []string, refusal *runRefusal,
+) {
+	var picked map[string]string // repo -> ref; nil keeps every repo source
+	if sel.Repos != nil {
+		picked = make(map[string]string, len(*sel.Repos))
+		for _, rs := range *sel.Repos {
+			if !slices.ContainsFunc(workspaceSourcesOfType(ws, types.WorkspaceSourceTypeRepo), func(src types.WorkspaceSource) bool { return src.Source == rs.Repo }) {
+				return nil, nil, nil, runError(http.StatusUnprocessableEntity, reasonWorkspaceRepoUnknown, workspaceRepoUnknownMsg(rs.Repo, ws.Name))
+			}
+			picked[rs.Repo] = rs.Ref
+		}
+	}
 	for _, src := range ws.Sources {
 		// The stored target becomes an in-container mount/clone/scratch target
 		// here, so re-validate it against the same deny-list
@@ -112,13 +234,22 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 		target := src.Target
 		if target != "" {
 			if verr := runner.ValidateAuthoredTarget(target); verr != nil {
-				return nil, "", http.StatusUnprocessableEntity, reasonWorkspaceSeedSourceTargetInvalid,
-					fmt.Errorf("workspace %s source target: %w", ws.ID, verr)
+				return nil, nil, nil, runError(http.StatusUnprocessableEntity, reasonWorkspaceSeedSourceTargetInvalid,
+					fmt.Sprintf("workspace_id: workspace %s source target: %v", ws.ID, verr))
 			}
 		}
 		switch src.Type {
 		case types.WorkspaceSourceTypeRepo:
-			newRepos = append(newRepos, types.WorkspaceRepo{Repo: src.Source, Target: target, Ref: src.Ref})
+			ref, ok := src.Ref, true
+			if picked != nil {
+				var runRef string
+				if runRef, ok = picked[src.Source]; ok {
+					ref = cmp.Or(runRef, src.Ref)
+				}
+			}
+			if ok {
+				repos = append(repos, types.WorkspaceRepo{Repo: src.Source, Target: target, Ref: ref})
+			}
 		case types.WorkspaceSourceTypeLocalDir:
 			// Read-only unless the operator ticked Writable on this source — the
 			// same per-source opt-in wireWorkspaceSource honors for import runs.
@@ -126,7 +257,7 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 			if target == "" {
 				target = composerWorkspaceTarget
 			}
-			newMounts = append(newMounts, types.WorkspaceMount{Source: src.Path, Target: target, ReadOnly: &ro})
+			mounts = append(mounts, types.WorkspaceMount{Source: src.Path, Target: target, ReadOnly: &ro})
 		case types.WorkspaceSourceTypeEphemeral:
 			// No policy entry — it's a mkdir inside the sandbox, not a mount/clone.
 			// ponytail: a plain directory has no size cap; a tmpfs mount (with a
@@ -137,41 +268,60 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 			}
 		}
 	}
-	spec.WorkspaceMounts = append(newMounts, spec.WorkspaceMounts...)
-	spec.WorkspaceRepos = append(newRepos, spec.WorkspaceRepos...)
-	if req.Repo == "" && len(newRepos) > 0 {
-		req.Repo = newRepos[0].Repo // run-row label only; the gate + wsRefs read WorkspaceRepos
+	if sel.Target != "" {
+		switch {
+		case len(mounts) == 1 && len(repos) == 0:
+			mounts[0].Target = sel.Target
+		case len(repos) == 1 && len(mounts) == 0:
+			repos[0].Target = sel.Target
+		default:
+			return nil, nil, nil, runError(http.StatusUnprocessableEntity, reasonWorkspaceTargetInvalid, fmt.Sprintf(
+				"%s attaches %d repositories and folders, and a target names one place: pick one with repos, or leave target empty.",
+				ws.Name, len(mounts)+len(repos)))
+		}
 	}
-	// base_image replaces the old container-kind image resolution. An explicit
-	// user --image always wins (never silently overridden); "recommended"
-	// just means "no override", so only a real build choice sets req.Image.
-	if req.Image == "" && ws.BaseImage != nil && ws.BaseImage.Kind != "recommended" {
-		req.Image = ws.BaseImage.Image
-		seededImageOwner = ws.OwnedBy
+	return mounts, repos, ephemeralDirs, nil
+}
+
+// workspacesBaseImage is the one base image the run's workspaces (all: the
+// attached and the policy's) agree on: "recommended" is no choice, and two
+// different real choices are 422 image_conflict. It sets the run's image only
+// when an ATTACHED workspace carries it (a policy's alone is resolveCreateRunImage's,
+// as before), and owner is the first member owner among those, so
+// seededImageRefusal re-checks the image whenever a member chose it.
+func workspacesBaseImage(all, attached []types.Workspace) (image, owner string, refusal *runRefusal) {
+	var from string
+	for _, ws := range all {
+		switch b := workspaceBaseImage(ws); {
+		case b == "":
+		case image == "":
+			image, from = b, ws.Name
+		case b != image:
+			return "", "", runError(http.StatusUnprocessableEntity, reasonImageConflict, imageConflictMsg(from, ws.Name))
+		}
 	}
-	// agentRequirementError deferred exactly this question to here: an exec
-	// run naming a workspace but no agent needed SOME image to run the command
-	// in, and now that base_image has had its one chance to supply req.Image,
-	// still having neither is the caller's request, resolved. Never "attach a
-	// workspace" — one already is attached; what it lacks is a base image.
-	if req.TaskMode == "exec" && req.Agent == "" && req.Image == "" {
-		return nil, "", http.StatusBadRequest, reasonWorkspaceSeedNoBaseImage, fmt.Errorf(
-			"workspace %s has no base image to run a command in: pass --image or --agent", ws.ID)
+	carried := false
+	for _, ws := range attached {
+		if image != "" && workspaceBaseImage(ws) == image {
+			carried = true
+			if owner == "" {
+				owner = ws.OwnedBy
+			}
+		}
 	}
-	// The seed mutated an ALREADY-validated spec, so re-run the one invariant it
-	// can break: the unique in-container target across workspace_mounts +
-	// workspace_repos (policy.go). Without this, a workspace whose target
-	// collides with a policy mount reaches the driver as a duplicate mount point
-	// (opaque dispatch failure) — or a repo clone targets the EXACT path of a
-	// writable bind. Exact-target only, like the invariant itself: a repo target
-	// nested INSIDE a writable mount still clones into the host bind — permitted,
-	// since clone-into-mounted-workspace is how the legacy default dest
-	// ~/work/<name> already behaves when ~/work is a mounted dir.
-	if verr := validatePolicyWorkspaces(*spec); verr != nil {
-		return nil, "", http.StatusUnprocessableEntity, reasonWorkspaceSeedPolicyConflict,
-			fmt.Errorf("workspace %s conflicts with the policy: %w", ws.ID, verr)
+	if !carried {
+		return "", "", nil
 	}
-	return ephemeralDirs, seededImageOwner, 0, "", nil
+	return image, owner, nil
+}
+
+// workspaceBaseImage is a workspace's real base-image choice, "" for none or
+// "recommended".
+func workspaceBaseImage(ws types.Workspace) string {
+	if b := ws.BaseImage; b != nil && b.Kind != "recommended" {
+		return strings.TrimSpace(b.Image)
+	}
+	return ""
 }
 
 // authorizeSpecWorkspaceSources is the RESOLVED-SPEC half of the onboarding
@@ -364,7 +514,8 @@ func warnCeilingDeniedWorkspaceEgress(ceiling governanceCeiling, wsRefs []types.
 
 // resolveCreateRunImage resolves the sandbox image. Default: the agent
 // convention image. Precedence: a BYOI wrap (top) > a request-level
-// devcontainer build > the primary onboarded workspace's profile. A BYOI or
+// devcontainer build > the onboarded workspace that chose a base image, else
+// the primary's profile. A BYOI or
 // DEVCONTAINER-REPO build failure marks the run FAILED (observable, never a
 // 500) and returns failed=true — the caller (one frame up, off-request-capable)
 // owns refreshing the run and answering the response; a WORKSPACE image build
@@ -426,6 +577,12 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 				"devcontainer_repo": req.DevcontainerRepo, "image": built,
 			})))
 	case len(wsRefs) > 0:
+		// The workspace that chose the image, else the primary: the seed already
+		// refused two different choices (image_conflict).
+		imageWS := wsRefs[0]
+		if i := slices.IndexFunc(wsRefs, func(ws types.Workspace) bool { return workspaceBaseImage(ws) != "" }); i >= 0 {
+			imageWS = wsRefs[i]
+		}
 		// A base_image workspace reached here via mounts/repos — a composed
 		// or UI run that did NOT send workspace_id (the workspace_id door sets req.Image
 		// and takes the case above). If it declares an explicit base_image CHOICE but no
@@ -435,7 +592,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		// creates). resolveWorkspaceImage is fail-open by design (shared with the
 		// wizard/record paths), so the fail-closed decision for the CHOSEN base image
 		// lives here, on the create door, not in it.
-		if b := wsRefs[0].BaseImage; b != nil && b.Kind != "recommended" &&
+		if b := imageWS.BaseImage; b != nil && b.Kind != "recommended" &&
 			strings.TrimSpace(b.Image) != "" && s.cfg.ImageBuilder == nil {
 			buildFailed(map[string]any{
 				"base_image": b.Image,
@@ -445,7 +602,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			return "", true
 		}
 		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
-		if built, ok := s.resolveWorkspaceImage(buildCtx, runID, wsRefs[0], nil, s.announceImageBuild(ctx, runID)); ok {
+		if built, ok := s.resolveWorkspaceImage(buildCtx, runID, imageWS, nil, s.announceImageBuild(ctx, runID)); ok {
 			image = built
 		}
 		cancelBuild()

@@ -11,7 +11,7 @@ import type { AutonomyLevel, AutonomyResolution, RunLimits } from "../api/govern
 import type { PolicyRef } from "../api/health";
 import type { ComponentFact } from "./components";
 import type { ProvenanceEntry } from "./policy-preview";
-import type { AllowedImage, Experience, ImageFact, LocalPlacementFact, PlacementResources, RunOverrides } from "./new-run-contract";
+import type { AllowedImage, Experience, ImageFact, LocalPlacementFact, PlacementResources, RunAttachment, RunOverrides } from "./new-run-contract";
 import type { RunPolicySpec } from "./policy";
 import type { ResolvedRunnerPool, RunnerPoolChoice, RunnerPoolSelection } from "./runner-pools";
 import type { SCMAccess } from "./setup";
@@ -840,6 +840,10 @@ export interface PreflightResult {
   // whether it is available; empty until that lane fills it.
   runner_pool?: ResolvedRunnerPool;
   runner_pools?: RunnerPoolChoice[];
+  // The run's mount map: each repository, folder and drive at the path the run
+  // uses it at, the one holding the starting folder marked. The server always
+  // sends the array; optional here so an older server still types.
+  attachments?: RunAttachment[];
 }
 
 // Where a run's MODEL credential lands (internal/api.modelCredentialResidency).

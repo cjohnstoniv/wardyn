@@ -44,6 +44,8 @@ type policyPreviewResponse struct {
 	// RunnerPool and RunnerPools are the preflight's, with the same meaning.
 	RunnerPool  *client.ResolvedRunnerPool `json:"runner_pool,omitempty"`
 	RunnerPools []client.RunnerPoolChoice  `json:"runner_pools"`
+	// Attachments is the preflight's, with the same meaning.
+	Attachments []client.RunAttachment `json:"attachments"`
 }
 
 type policyPreviewPending string

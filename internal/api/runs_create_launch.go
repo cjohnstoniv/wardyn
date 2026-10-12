@@ -45,8 +45,11 @@ type createRunLaunch struct {
 	wsRefs        []types.Workspace
 	driveMount    *types.DriveMount
 	ephemeralDirs []string
-	runToken      string
-	created       types.AgentRun
+	// startFolder is the run's one working directory (stepWorkspaces): "" keeps
+	// the sandbox's own choice.
+	startFolder string
+	runToken    string
+	created     types.AgentRun
 	// comps is the component gate's decision; dispatch takes its own half of it.
 	comps runComponents
 	// overridden: the run's person edited the New Run cards (policy_source.overrides_diff).
@@ -118,6 +121,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			SeedAutoTools:      l.req.SeedAutoTools,
 			ToolApprovals:      l.req.ToolApprovals,
 			EphemeralDirs:      l.ephemeralDirs,
+			ExtraEnv:           startFolderEnv(l.startFolder),
 			Toolchains:         runToolchainNeeds(l.wsRefs),
 			// The member's own persistent storage, already resolved and narrowed
 			// at create (seedRequestDrive) — nil unless this run asked for it.

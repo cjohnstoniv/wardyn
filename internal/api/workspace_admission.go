@@ -652,7 +652,8 @@ func (s *Server) admissionStamper(ctx context.Context) func(types.Workspace) typ
 	return func(ws types.Workspace) types.Workspace { return stampSourceAdmission(sc, ws) }
 }
 
-// stampSourceAdmission sets `admitted` on every REPO source of one workspace.
+// stampSourceAdmission sets `admitted` and `clone_target` on every REPO source
+// of one workspace.
 // local_dir and ephemeral sources are left alone: they clone nothing, and a
 // flag on them would invite the console to render a provider state for a
 // directory.
@@ -667,6 +668,7 @@ func stampSourceAdmission(sc types.SiteConfig, ws types.Workspace) types.Workspa
 		}
 		_, admitted := providerFor(sc, repoCloneURL(ws.Sources[i].Source))
 		ws.Sources[i].Admitted = &admitted
+		ws.Sources[i].CloneTarget, _ = repoCloneTarget(types.WorkspaceRepo{Repo: ws.Sources[i].Source, Target: ws.Sources[i].Target})
 	}
 	return ws
 }

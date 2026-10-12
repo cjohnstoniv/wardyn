@@ -54,6 +54,7 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	response := policyPreviewFacts(req, f.spec, f.source, f.policyWarns, f.scmSite, f.mpChoice)
 	response.Provenance = f.prov
+	response.Attachments = f.attachments
 	response.RunnerPool, response.RunnerPools = f.place.facts()
 	response.Components = componentFacts(componentFactInputs{
 		req: f.req, spec: f.spec, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
