@@ -26,6 +26,9 @@ type RunFilter struct {
 	// Owner exact-matches created_by; empty = every creator. The api layer
 	// resolves ?owner=me|all before calling down.
 	Owner string
+	// WithSponsored widens Owner to the runs of every service identity Owner sponsors (#1508): a
+	// sponsor reads those runs. Ignored with no Owner.
+	WithSponsored bool
 	// Statuses is a subset of "active"/"ended"/"failed"/"killed", OR'd
 	// together; empty = no filter. "needs" is rejected at the api layer.
 	Statuses []string
@@ -103,7 +106,12 @@ func statusSQL(status string, nonTerminal string) string {
 func baseWhere(f RunFilter, nonTerminal string, args *[]any) string {
 	var clauses []string
 	if f.Owner != "" {
-		clauses = append(clauses, "created_by = "+bindArg(args, f.Owner))
+		owner := bindArg(args, f.Owner)
+		if f.WithSponsored {
+			clauses = append(clauses, "(created_by = "+owner+" OR created_by IN "+sponsoredServicePrincipalsSQL(owner)+")")
+		} else {
+			clauses = append(clauses, "created_by = "+owner)
+		}
 	}
 	if len(f.Statuses) > 0 {
 		var arms []string

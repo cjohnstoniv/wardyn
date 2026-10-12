@@ -94,6 +94,30 @@ type RunsByCreatorPager interface {
 
 var _ RunsByCreatorPager = PG{}
 
+// RunsByCreatorOrSponsorPager is RunsByCreatorPager widened to the runs of the service identities the
+// caller sponsors (#1508): a sponsor reads those runs. Optional; a store without it lists a sponsor's own
+// runs only, never more.
+type RunsByCreatorOrSponsorPager interface {
+	ListRunsPageByCreatorOrSponsor(ctx context.Context, principal string, p Page) ([]types.AgentRun, error)
+}
+
+var _ RunsByCreatorOrSponsorPager = PG{}
+
+// sponsoredServicePrincipalsSQL is the subquery of the service principals sponsor sponsors, retired
+// identities included: their runs are still the sponsor's to read and stop. sponsor is a bound placeholder.
+func sponsoredServicePrincipalsSQL(sponsor string) string {
+	return "(SELECT '" + types.ServicePrincipalPrefix + "' || name FROM service_identities WHERE sponsor = " + sponsor + ")"
+}
+
+// ListRunsPageByCreatorOrSponsor is ListRunsPageByCreator plus the runs of the service identities principal
+// sponsors, same order.
+func (s PG) ListRunsPageByCreatorOrSponsor(ctx context.Context, principal string, p Page) ([]types.AgentRun, error) {
+	q, args := p.appendTo(`
+		SELECT `+runCols+`
+		FROM agent_runs WHERE created_by = $1 OR created_by IN `+sponsoredServicePrincipalsSQL("$1")+` ORDER BY created_at DESC`, []any{principal})
+	return collect(ctx, s.Pool, "list", "runs by creator or sponsor", q, args, scanRun)
+}
+
 // ActiveRunsByCreatorReader answers which of a person's runs of one
 // task+agent are still non-terminal, so a new sign-in's supersede
 // (supersedeCallerLoginRuns) can end them. Its absence has no fallback; PG

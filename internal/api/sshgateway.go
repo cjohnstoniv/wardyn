@@ -304,6 +304,11 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 			// A fresh admin key still opens no shell in a person's run (#1476).
 			reason = runOwnerOnlyReason
 		}
+		// A service identity's run takes no SSH entry at all, its sponsor's key included, whatever
+		// service_attach grant the sponsor holds (F7: sponsor attach is the terminal and UI app only).
+		if _, isService := serviceOfRun(run); isService {
+			reason = runOwnerOnlyReason
+		}
 		if reason != "" {
 			s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, reason)
 			return nil, errors.New("ssh: not authorized for this run")
