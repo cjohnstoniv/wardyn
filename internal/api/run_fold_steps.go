@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -73,27 +74,28 @@ func (s *Server) stepSeedWorkspace(f *runFold, rec *foldRecorder) bool {
 	return ok
 }
 
-// stepDrive resolves the run's user drive, after the onboarding gate: the
-// drive is per-principal and never appears in the spec, so it does not pass
-// through validateWorkspaceSources, but it must not answer before that gate
-// either. The refusals are the point at every door; the mount is create's.
-// The preview checks the read-only narrowing and leaves runner and share
-// readiness pending. No drive flag is a provable no-op: no store read at all.
+// stepDrive resolves the run's drives, after the onboarding gate: a drive is
+// per-principal and never appears in the spec, so it does not pass through
+// validateWorkspaceSources, but it must not answer before that gate either.
+// The refusals are the point at every door; the mounts are create's and
+// preflight's (seedRequestDrives). The preview checks the read-only narrowing
+// and leaves runner and share readiness pending.
 func (s *Server) stepDrive(f *runFold, rec *foldRecorder) bool {
 	if f.mode == foldPreview {
-		drive, refusal := s.authorizeRequestDrive(f.r, *f.req, f.ceiling)
+		drives, refusal := s.authorizeRequestDrives(f.r, *f.req, f.ceiling)
 		if refusal.write(s, f.w, f.r) {
 			return false
 		}
-		if drive == nil {
-			return true
+		for _, d := range drives {
+			if driveReadOnlyRefusal(d.narrow, d.resolved).write(s, f.w, f.r) {
+				return false
+			}
 		}
-		ro := !drive.Writable || f.req.Drive.ReadOnly != nil && *f.req.Drive.ReadOnly
-		f.previewDriveReadOnly = &ro
-		return !driveReadOnlyRefusal(*f.req, *drive).write(s, f.w, f.r)
+		f.drives = drives
+		return true
 	}
 	var ok bool
-	f.driveMount, ok = s.seedRequestDrive(f.w, f.r, *f.req, f.ceiling)
+	f.drives, f.driveMounts, ok = s.seedRequestDrives(f.w, f.r, *f.req, f.ceiling)
 	return ok
 }
 
@@ -119,7 +121,7 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	}
 	var refusal *runRefusal
 	f.attachments, f.startFolder, refusal = s.runAttachments(*f.req, f.spec, f.wsRefs, indexWorkspacesBySource(all), f.seed,
-		legacyDriveTarget(f.driveMount, f.previewDriveReadOnly))
+		driveTargets(f.drives))
 	return !refusal.write(s, f.w, f.r)
 }
 
@@ -261,7 +263,7 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 	floor := confinementFloorSpec(f.spec, f.comps)
 	if f.mode == foldCreate {
 		var ok bool
-		f.enforced, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, requestPlacement(*f.req), requestRunnerID(*f.req), floor, f.reqCC, f.baseline, f.place)
+		f.enforced, f.confinementDefault, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, requestPlacement(*f.req), requestRunnerID(*f.req), floor, f.reqCC, f.baseline, f.place)
 		return ok && !f.place.barrierRefusal(f.enforced).write(s, f.w, f.r)
 	}
 	var advertised []types.ConfinementClass
@@ -279,12 +281,12 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 	if offered := f.place.offeredClasses(); offered != nil {
 		advertised = offered
 	}
-	enforced, err := enforcedConfinement(floor, f.reqCC, advertised, f.baseline)
+	enforced, source, err := enforcedConfinement(floor, f.reqCC, advertised, f.place.orgBarrier, f.baseline)
 	if err != nil {
 		writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return false
 	}
-	f.enforced = enforced
+	f.enforced, f.confinementDefault = enforced, source
 	if f.mode == foldPreflight {
 		f.barrierOptions = draftBarrierOptions(f.place, f.ceiling, floor, f.baseline)
 	}
@@ -561,8 +563,19 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 		req.Placement = f.place.placement
 	}
 	var refusal *runRefusal
-	f.localDelivery, refusal = s.localPlacementRefusal(f.r, req, f.place.pooled, f.spec, f.ceiling, f.comps, f.driveMount, f.wsRefs, f.baseline)
+	f.localDelivery, refusal = s.localPlacementRefusal(f.r, req, f.place.pooled, f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
 	return !refusal.write(s, f.w, f.r)
+}
+
+// stepDriveEligibility holds the run's drives to its resolved pool: no drive
+// mounts on a self-hosted pool's runners (driveNotInPool), so one drive there
+// refuses the run, named, before anything is sized or minted.
+func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
+	if len(f.drives) == 0 || !f.place.pooled || !driveNotInPool(f.place.row) {
+		return true
+	}
+	msg := driveNotInPoolMsg(f.drives[0].resolved.Drive.Name)
+	return !driveDenied(authz.Deny(authz.ReasonDriveNotInPool, "runs.drive", msg), msg).write(s, f.w, f.r)
 }
 
 // stepPlacement runs after the components and before the local-eligibility step: the confinement

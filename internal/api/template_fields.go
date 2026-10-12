@@ -184,6 +184,8 @@ var templateRequestRules = []TemplateFieldRule{
 		in(templateSectionHarness, "harness"),
 	carriedField("drive", templateTabRepoDrives, partDrives, templateOmitOptional, templateEmptyValue,
 		"No drive is attached or declined. enabled false is a choice to leave the drive out."),
+	carriedField("drives", templateTabRepoDrives, partDrives, templateOmitOptional, templateEmptyValue,
+		"No drive from the drive list is attached. Each drive is checked against the launching person's own grants."),
 	carriedField("components", templateTabAccess, partComps, templateOmitOptional, templateEmptyValue,
 		"No component is attached.").
 		in(templateSectionComp, "component"),
@@ -307,6 +309,7 @@ var templateNestedCarried = map[string]string{
 		"classified_markers scan_attachments inspect_forward_egress max_scan_bytes on_scanner_error require_inspectable_llm intercept_tls block_min_severity",
 	"PushRuleOverride":   "provider host org deny_paths require_review_paths",
 	"PushRulesSpec":      "deny_paths max_inspect_pack_mib require_review_paths hold_seconds deny_new_executables max_file_size_mib",
+	"DriveAttachment":    "drive_id read_only",
 	"ResourceLimits":     "cpu_millis memory_mib pids_limit disk_mib",
 	"RunHostOverrides":   "add_allowed add_denied remove_allowed remove_denied",
 	"RunEgressOverrides": "first_use_approval allow_all_egress",

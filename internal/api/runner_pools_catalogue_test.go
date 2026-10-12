@@ -65,7 +65,7 @@ func TestBarrierOptions(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			opts := runnerpool.BarrierOptions(barrierFacts(tc.pool, tc.targets, tc.floor))
+			opts := runnerpool.BarrierOptions(barrierFacts(tc.pool, tc.targets, tc.floor, ""))
 			if len(opts) != 3 || opts[0].Class != types.CC1 || opts[1].Class != types.CC2 || opts[2].Class != types.CC3 {
 				t.Fatalf("options %+v, want CC1, CC2, CC3", opts)
 			}

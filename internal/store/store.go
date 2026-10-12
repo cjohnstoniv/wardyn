@@ -105,7 +105,9 @@ func runInsertErr(err error) error {
 }
 
 // CreateRun inserts a new run and returns the persisted row. A run bound to a runner pool is inserted
-// only while that pool is still active at the recorded revision, else ErrRunnerPoolStale.
+// only while that pool is still active at the recorded revision, else ErrRunnerPoolStale. A run that
+// carries a LaunchIntent is inserted with it in one transaction (store_launch_intents.go); the returned
+// run carries it only when it was kept.
 func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, error) {
 	if holdsRunnerSlot(r) {
 		return s.CreateRunUnderCap(ctx, r, 0)
@@ -115,7 +117,11 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 		return types.AgentRun{}, err
 	}
 	var out types.AgentRun
-	err = s.guarded(ctx, func(q queryRower) (e error) {
+	write := func(q queryRower) (e error) {
+		keep, e := lockLaunchIntent(ctx, q, r)
+		if e != nil {
+			return e
+		}
 		anchor, e := db.CaptureAppClock(ctx, q, s.now)
 		if e != nil {
 			return e
@@ -125,9 +131,17 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 		} else {
 			args[2] = anchor.Translate(r.UpdatedAt)
 		}
-		out, e = scanRun(q.QueryRow(ctx, createRunSQL, args...))
+		if out, e = scanRun(q.QueryRow(ctx, createRunSQL, args...)); e != nil || !keep {
+			return e
+		}
+		out, e = insertLaunchIntent(ctx, q, out, r.LaunchIntent)
 		return e
-	})
+	}
+	if r.LaunchIntent != nil {
+		err = s.createRunWithIntent(ctx, write)
+	} else {
+		err = s.guarded(ctx, write)
+	}
 	return out, runInsertErr(err)
 }
 
@@ -160,9 +174,14 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 			return types.AgentRun{}, err
 		}
 	}
+	keep, err := lockLaunchIntent(ctx, tx, r)
+	if err != nil {
+		return types.AgentRun{}, err
+	}
 	// Every writer that adds a slot-holder takes the pool row, then the deployment cap's advisory lock,
 	// then runner rows: the insert's pool fence would take the pool row FOR SHARE after the advisory lock,
-	// the other way round from a promotion or a revive, so it is taken here first.
+	// the other way round from a promotion or a revive, so it is taken here first. (The launch intent's
+	// lock is a try-lock and never waits.)
 	if r.RunnerPoolID != nil {
 		if _, err := tx.Exec(ctx, `SELECT 1 FROM runner_pools WHERE id = $1 FOR SHARE`, *r.RunnerPoolID); err != nil {
 			return types.AgentRun{}, fmt.Errorf("store: lock run pool: %w", err)
@@ -194,6 +213,11 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 	created, err := scanRun(tx.QueryRow(ctx, createRunSQL, args...))
 	if err != nil {
 		return types.AgentRun{}, runInsertErr(err)
+	}
+	if keep {
+		if created, err = insertLaunchIntent(ctx, tx, created, r.LaunchIntent); err != nil {
+			return types.AgentRun{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return types.AgentRun{}, err

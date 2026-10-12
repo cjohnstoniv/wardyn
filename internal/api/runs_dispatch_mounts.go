@@ -570,13 +570,14 @@ func splitSecretEnv(sandboxEnv map[string]string, keys []string) map[string]stri
 	return secretEnv
 }
 
-// applyUserDriveEnv announces the mounted USER DRIVE to the sandbox as
-// "<target>:ro" or "<target>:rw" — the one in-sandbox signal that a run has
-// persistent storage and whether it may write to it. No-op for the runs that
-// carry no drive, which is most of them.
+// applyUserDriveEnv announces the drive mounted at /home/agent/drive to the
+// sandbox as "<target>:ro" or "<target>:rw" — the one in-sandbox signal that a
+// run has that persistent storage and whether it may write to it. No-op for the
+// runs that carry no drive there, which is most of them; the other drives are
+// at their own paths under /home/agent/drives and /home/agent/shared.
 //
 // It is an ANNOUNCEMENT, never the mechanism: the mount itself is made by the
-// driver from SandboxSpec.Drive, so an agent that ignores this variable still
+// driver from SandboxSpec.Drives, so an agent that ignores this variable still
 // gets the drive, and one that fabricates it still gets nothing. That split is
 // what lets it be non-secret env (invariant 1) beside WARDYN_EPHEMERAL_DIRS —
 // and it is why the value names the in-container target and the mode and
@@ -588,15 +589,16 @@ func splitSecretEnv(sandboxEnv map[string]string, keys []string) map[string]stri
 // mount reads as everywhere else a human sees one (`docker inspect`, `mount`,
 // the console's own chip), and a variable an agent is expected to print in a
 // startup banner should not need a translation table.
-func applyUserDriveEnv(sandboxEnv map[string]string, drive *types.DriveMount) {
-	if drive == nil {
-		return
+func applyUserDriveEnv(sandboxEnv map[string]string, drives []types.DriveMount) {
+	for _, drive := range drives {
+		if drive.Target == runner.DriveTarget {
+			sandboxEnv["WARDYN_USER_DRIVE"] = drive.Target + ":" + driveAuditMode(drive.ReadOnly)
+		}
 	}
-	sandboxEnv["WARDYN_USER_DRIVE"] = drive.Target + ":" + driveAuditMode(drive.ReadOnly)
 }
 
-// auditDriveMount records run.drive.mount: dispatch attached a member's user
-// drive to this sandbox. Silent when no drive was attached — an audit action
+// auditDriveMount records run.drive.mount, one row per drive dispatch attached
+// to this sandbox, in the run's order. Silent when no drive was attached — an audit action
 // that fires on every run is noise an operator learns to skip past.
 //
 // Called AFTER CreateSandbox has returned, never beside the spec assembly: the
@@ -639,23 +641,26 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drive *types.DriveMount) {
 // cannot read back the object it was allocated. `enforcement` is what actually
 // binds the drive's bytes (types.StorageEnforcement), logged beside the mount so
 // a size read back in a later dispute carries its caveat instead of reading as a
-// promise. Five fields, matching docs/AUDIT-ACTIONS.md exactly.
+// promise. `drive_id` and the in-sandbox `target` say which drive went where
+// when a run attaches several. Seven fields, matching docs/AUDIT-ACTIONS.md.
 //
 // The nil test lives HERE rather than at the assembly site for a mechanical
 // reason worth stating: dispatchRun sits at its gocyclo ceiling, so one more
 // branch there is a lint failure. It belongs with the payload anyway.
-func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, drive *types.DriveMount) {
-	if drive == nil {
-		return
+func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, drives []types.DriveMount) {
+	for i := range drives {
+		drive := &drives[i]
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.drive.mount",
+			driveAuditTarget(drive), "success", mustJSON(map[string]any{
+				"backend":     drive.Backend,
+				"drive":       drive.HomeName,
+				"drive_id":    drive.DriveID,
+				"enforcement": drive.Enforcement,
+				"mode":        driveAuditMode(drive.ReadOnly),
+				"object":      driveAuditTarget(drive),
+				"target":      drive.Target,
+			})))
 	}
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.drive.mount",
-		driveAuditTarget(drive), "success", mustJSON(map[string]any{
-			"backend":     drive.Backend,
-			"drive":       drive.HomeName,
-			"enforcement": drive.Enforcement,
-			"mode":        driveAuditMode(drive.ReadOnly),
-			"object":      driveAuditTarget(drive),
-		})))
 }
 
 // driveAuditTarget is what run.drive.mount's Target names, and it differs by

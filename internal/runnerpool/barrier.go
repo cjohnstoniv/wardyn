@@ -41,8 +41,12 @@ const BarrierDetailKVMMissing = "kvm_missing"
 // BarrierDefaultSource says who chose the default barrier.
 type BarrierDefaultSource string
 
-// BarrierDefaultServer: the strongest class offered at or above the floor.
-const BarrierDefaultServer BarrierDefaultSource = "server"
+const (
+	// BarrierDefaultServer: the strongest class offered at or above the floor.
+	BarrierDefaultServer BarrierDefaultSource = "server"
+	// BarrierDefaultOrganisation: the organisation's default barrier, at or above the floor and offered.
+	BarrierDefaultOrganisation BarrierDefaultSource = "organisation"
+)
 
 // BarrierOption is one barrier as a pool offers it to the caller: always CC1, CC2 and CC3, in that order.
 type BarrierOption struct {
@@ -66,12 +70,15 @@ type BarrierFacts struct {
 	// Floor is the governance floor. PolicyFloor and AccessFloor are a draft's (Review); zero on the list.
 	Floor, PolicyFloor types.ConfinementClass
 	AccessFloor        bool
+	// Org is the organisation's default barrier; zero when it sets none.
+	Org types.ConfinementClass
 	// KVMMissing: Vault is not offered because the deployment's Docker host has no KVM.
 	KVMMissing bool
 }
 
-// BarrierOptions is the three barriers for one pool. The default is the strongest available class,
-// which is the class an untouched run gets (the strongest offered at or above every floor).
+// BarrierOptions is the three barriers for one pool. The default is the class an untouched run gets:
+// the organisation's when it is available, else the strongest available one (the strongest offered at
+// or above every floor).
 func BarrierOptions(f BarrierFacts) []BarrierOption {
 	out := make([]BarrierOption, 0, 3)
 	for _, c := range []types.ConfinementClass{types.CC1, types.CC2, types.CC3} {
@@ -82,6 +89,10 @@ func BarrierOptions(f BarrierFacts) []BarrierOption {
 			o.ReasonDetail = BarrierDetailKVMMissing
 		}
 		out = append(out, o)
+	}
+	if i := slices.IndexFunc(out, func(o BarrierOption) bool { return o.Class == f.Org && o.Available }); i >= 0 {
+		out[i].Default, out[i].DefaultSource = true, BarrierDefaultOrganisation
+		return out
 	}
 	for i := len(out) - 1; i >= 0; i-- {
 		if out[i].Available {

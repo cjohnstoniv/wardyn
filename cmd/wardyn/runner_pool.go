@@ -50,7 +50,7 @@ func runnerPoolCmd(client clientFn) *cobra.Command {
 		return printRunnerPools(cmd.OutOrStdout(), out)
 	}}
 	list.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
-	cmd.AddCommand(list, runnerPoolDefaultCmd(client))
+	cmd.AddCommand(list, runnerPoolDefaultCmd(client), runnerPoolOrgDefaultCmd(client))
 	cmd.AddCommand(runnerPoolManageCmds(client)...)
 	return subcommandGroup(cmd)
 }

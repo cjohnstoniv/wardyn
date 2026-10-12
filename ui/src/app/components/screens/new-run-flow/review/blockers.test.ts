@@ -55,6 +55,15 @@ describe("Review blockers", () => {
     expect(missingSetup(null)).toEqual([]);
   });
 
+  it("holds Launch for the Azure DevOps sign-in only when the preview shows the same item", () => {
+    const ado: SetupItem = { id: "repo_credential:azure_devops:acme", kind: "repo_credential", label: "Sign in to Azure DevOps", required_by: "acme", status: "missing", fix: { action: "sign_in", target: "azure_devops" } };
+    const pre = { access: { setup: [ado] } };
+    expect(missingSetup(pre, null)).toEqual([]);
+    expect(missingSetup(pre, { access: { setup: [] } })).toEqual([]);
+    expect(missingSetup(pre, { access: { setup: [ado] } })).toEqual([ado]);
+    expect(missingSetup(pre)).toEqual([]);
+  });
+
   it("counts a template field as set once the draft specifies it", () => {
     expect(specifies({}, "inline_policy.model_provider")).toBe(false);
     expect(specifies({ inline_policy: { allowed_domains: [] } }, "inline_policy.allowed_domains")).toBe(true);

@@ -469,6 +469,16 @@ const (
 	driveRefusalDrivesDisabled = "drives_disabled"
 )
 
+// The drives[] carrier (run_drives.go); the sentences are drive_refusals.go's.
+const (
+	reasonDriveSelectionConflict = "drive_selection_conflict" // drive and drives were both sent
+	reasonDriveInvalid           = "drive_invalid"            // a drives[] entry is malformed or repeated, or there are too many
+	// drive_not_found, drive_not_in_pool and drive_target_conflict are authz
+	// reasons (authz.ReasonDrive*): each is also an authz.denied row.
+	// reasonDriveShareBesideManaged: a shared and a managed Kubernetes drive in one run.
+	reasonDriveShareBesideManaged = "drive_share_beside_managed"
+)
+
 // git_pat narrowing (runs_dispatch_pat_scope.go): a run is refused when a
 // narrowed git_pat grant's repos, access or api could not be enforced.
 const (

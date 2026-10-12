@@ -55,8 +55,10 @@ type erasureIncompleteBody struct {
 // erased. credRep, when non-nil, receives the credentials scope's report even
 // when that scope fails part way.
 func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport) *erasure.Orchestrator {
+	// Launch intents hold task text and inline component definitions, so the
+	// run_tasks and components steps erase them too, and so does run_setups.
 	steps := map[erasure.Scope]erasure.Step{
-		erasure.RunTasks:   s.eraseRunTasks,
+		erasure.RunTasks:   s.alsoEraseLaunchIntents(s.eraseRunTasks),
 		erasure.RunOutputs: s.eraseRunOutputsOf,
 		erasure.Recordings: s.eraseRecordingsOf,
 	}
@@ -75,15 +77,15 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport) *erasure.
 		}
 	}
 	if _, ok := s.cfg.Store.(store.ComponentStore); ok {
-		steps[erasure.Components] = s.eraseComponentsOf
+		steps[erasure.Components] = s.alsoEraseLaunchIntents(s.eraseComponentsOf)
 	}
 	if ts, ok := s.cfg.Store.(store.TemplateStore); ok {
 		// run_setups: the person's own templates, their grants, and their name on
 		// shared templates. The person is matched in the canonical form every
 		// template row stores.
-		steps[erasure.RunSetups] = func(ctx context.Context, person string) (any, error) {
+		steps[erasure.RunSetups] = s.alsoEraseLaunchIntents(func(ctx context.Context, person string) (any, error) {
 			return ts.EraseRunSetupsOf(ctx, types.CanonicalUserSubject(person))
-		}
+		})
 	}
 	if s.cfg.MaskManifests != nil {
 		steps[erasure.MaskCopies] = s.eraseMaskCopies
@@ -156,6 +158,29 @@ func (s *Server) eraseCredentialsScope(ctx context.Context, owner string, rep *s
 		}
 	}
 	return len(runs), s.eraseLocked(ctx, owner, rowID, rep)
+}
+
+// alsoEraseLaunchIntents runs step, then erases the person's launch intents and
+// counts them in the step's detail. The intents are matched on the runs'
+// created_by, as run_tasks matches the runs. A store that keeps no intents has
+// none to erase.
+func (s *Server) alsoEraseLaunchIntents(step erasure.Step) erasure.Step {
+	return func(ctx context.Context, person string) (any, error) {
+		detail, err := step(ctx, person)
+		ls, ok := s.cfg.Store.(store.LaunchIntentStore)
+		if err != nil || !ok {
+			return detail, err
+		}
+		n, err := ls.DeleteLaunchIntentsCreatedBy(ctx, person)
+		switch d := detail.(type) {
+		case map[string]any:
+			d["launch_intents"] = n
+		case store.RunSetupsErased:
+			d.LaunchIntents = n
+			detail = d
+		}
+		return detail, err
+	}
 }
 
 func (s *Server) personErasureStore() (store.PersonErasureStore, error) {

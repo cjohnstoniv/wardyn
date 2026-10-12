@@ -62,12 +62,9 @@ wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes
 ## User drives on Docker
 
 - A **user drive** is persistent storage an admin registers once and allocates to people or groups; a member mounts theirs per run at `/home/agent/drive`.
+- Since `0169_user_drive_grants_per_drive` a subject may hold several (`additional`); a run's others mount at `/home/agent/drives/<slug>` or `/home/agent/shared/<slug>`.
 - On a Docker deployment there are two backends, and the difference is who owns the bytes.
-- With `storage.user_drive.disabled` set, all three surfaces answer that one switch identically:
-  - a run is refused 422,
-  - `POST /drives/preview` answers the same 422,
-  - and `GET /me` reports no allocation at all.
-- So nothing in the console ever offers a mount the create path refuses (see "Turning drives OFF deployment-wide").
+- With `storage.user_drive.disabled` set, a run and `POST /drives/preview` answer 422 and `GET /me` reports no allocation, so the console never offers a mount the create path refuses (see "Turning drives OFF deployment-wide").
 
 - **`docker_volume` — Wardyn allocates.** A per-person named volume (`wardyn-drive-<drive-slug>-<home>`), created on first use with the `local` driver and mounted at the reserved target.
   - Nothing to configure.

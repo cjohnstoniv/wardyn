@@ -239,6 +239,10 @@ type AgentRun struct {
 	// record of accountability, not proof that a person was present. Empty for a run from before it was recorded.
 	// Read by the second-human rules only.
 	HumanAuthor string `json:"-"`
+	// LaunchIntent is the setup kept for Run again (a kind Run document), written in the run row's own
+	// transaction when set. Never on the wire and never read back onto a listed run: the creator reads it by
+	// run id. On a created run it is set only when the store kept it.
+	LaunchIntent json.RawMessage `json:"-"`
 }
 
 // GrantKind enumerates broker-mintable credential kinds.

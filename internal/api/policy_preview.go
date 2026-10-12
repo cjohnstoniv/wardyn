@@ -60,10 +60,11 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	response.Limits, response.ResourcesApplied = f.place.sizeFacts()
 	response.RunnerPoolSlots = s.runnerPoolSlots(r.Context(), f.place, *f.req)
 	response.MainDrive = f.mainDrive.applied()
+	runRepos := append([]string{f.req.Repo, f.req.DevcontainerRepo}, repoLocatorsOf(f.spec.WorkspaceRepos)...)
 	response.Components = componentFacts(componentFactInputs{
 		req: f.req, spec: f.spec, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
 		ceiling: f.ceiling, mpChoice: f.mpChoice, pushSets: f.pushSets,
-	}, nil)
+	}, s.adoSignInPresenceFact(r.Context(), f.scmSite, oidcHumanFromContext(r.Context()), runRepos))
 	// After the facts' own warnings, which previewSafeWarnings has already filtered.
 	if f.adoNarrowed != "" {
 		response.Warnings = append(response.Warnings, f.adoNarrowed)
@@ -145,7 +146,7 @@ func previewPending(req createRunRequest, choice runProviderChoice) []policyPrev
 	if _, model := agentLLMProvider(req.Agent); model && createDoorIsModelRun(req) && !choice.chosen {
 		pending = append(pending, previewProvider)
 	}
-	if req.Drive != nil && req.Drive.Enabled {
+	if req.Drive != nil && req.Drive.Enabled || len(req.Drives) > 0 {
 		pending = append(pending, previewDrive)
 	}
 	return pending

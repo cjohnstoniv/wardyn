@@ -595,6 +595,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `VIEW_PRETTY` | mock | Pretty |
 | `VIEW_YAML` | mock | YAML |
 | `VIEW_JSON` | mock | JSON |
+| `WARNINGS_TITLE` | pending (W-46) | Before you launch |
 | `NARROWED_BY(source)` | pending (W-04) | Your request was narrowed by {source}. |
 | `NARROWED_APPLIES(applied)` | mock | {applied} will apply. |
 | `NARROWED_TAIL_POOL(pool)` | pending (W-04) | Not allowed in {pool}. |
@@ -629,6 +630,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `WHERE_VALUE(pool)` | mock | {pool} pool |
 | `WHERE_DETAIL(hosting, used, max)` | mock | {hosting} · {used} of {max} running |
 | `WHERE_ONLINE(n)` | pending (W-03) | {n} of your runners online |
+| `RECORDING_LABEL` | pending (W-45) | Recording |
+| `RECORDING_ON` | pending (W-45) | Every keystroke and every outbound connection. |
 | `PROV_ADDED` | mock | Added by you |
 | `PROV_SELECTED` | mock | Selected by you |
 | `PROV_RUN_SETUP` | mock | Run setup |
@@ -762,6 +765,13 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `JUST_NOW` | mock | Just now |
 | `GIVES_UP` | mock | Gives up |
 | `GIVES_UP_IN(wait)` | deviation (DS-5 §8) | In {wait} |
+| `SINCE_MINUTE_ONE` | pending (W-47) | 1 minute ago |
+| `SINCE_MINUTES(n)` | pending (W-47) | {n} minutes ago |
+| `SINCE_HOUR_ONE` | pending (W-47) | 1 hour ago |
+| `SINCE_HOURS(n)` | pending (W-47) | {n} hours ago |
+| `SINCE_DAYS(n)` | pending (W-47) | {n} days ago |
+| `MINUTE_ONE` | pending (W-47) | 1 minute |
+| `MINUTES(n)` | pending (W-47) | {n} minutes |
 | `CANCEL_RUN` | mock | Cancel run |
 | `START_ANOTHER` | mock | Start another run |
 | `VIEW_RUN` | mock | View run |

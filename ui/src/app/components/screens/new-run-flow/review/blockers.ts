@@ -104,11 +104,23 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
   return out;
 }
 
-/** Missing setup items of a result: the checklist and the access block's own, once each. */
-export function missingSetup(result: { setup_items?: SetupItem[]; access?: { setup: SetupItem[] } } | null): SetupItem[] {
+/** The Azure DevOps sign-in item: its Tools-step door lives in the policy preview, not in the preflight alone. */
+const isAdoSignIn = (i: SetupItem): boolean => i.kind === "repo_credential" && i.fix?.action === "sign_in" && i.fix.target === "azure_devops";
+
+/**
+ * Missing setup items of a result: the checklist and the access block's own, once each.
+ * The Azure DevOps sign-in item holds Launch only when the policy preview shows the same
+ * item, so the Tools step it links to has its door; otherwise Launch stays open and the
+ * launch refusal opens that door.
+ */
+export function missingSetup(
+  result: { setup_items?: SetupItem[]; access?: { setup: SetupItem[] } } | null,
+  preview?: { access?: { setup: SetupItem[] } } | null,
+): SetupItem[] {
   const seen = new Set<string>();
   return [...(result?.setup_items ?? []), ...(result?.access?.setup ?? [])].filter((i) => {
     if (i.status !== "missing" || seen.has(i.id)) return false;
+    if (isAdoSignIn(i) && !preview?.access?.setup.some((p) => p.id === i.id && p.status === "missing")) return false;
     seen.add(i.id);
     return true;
   });
