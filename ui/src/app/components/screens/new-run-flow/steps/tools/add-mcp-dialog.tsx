@@ -11,7 +11,7 @@ import * as React from "react";
 import type { ComponentRef } from "../../../../../lib/types/components";
 import { Input } from "../../../../ui/input";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
-import { httpsHost, mcpRef } from "./catalogue-edits";
+import { httpsParts, mcpRef } from "./catalogue-edits";
 import { SELECT_CLASS, ToolDialog, ToolField } from "./tool-dialog";
 
 export function AddMcpDialog({ names, onAdd, onClose }: { names: readonly string[]; onAdd: (ref: ComponentRef) => void; onClose: () => void }) {
@@ -20,7 +20,7 @@ export function AddMcpDialog({ names, onAdd, onClose }: { names: readonly string
   const [url, setUrl] = React.useState("");
   const [token, setToken] = React.useState("");
   const [submitted, setSubmitted] = React.useState(false);
-  const host = httpsHost(url);
+  const host = httpsParts(url)?.hostname;
   const error = submitted && !host ? NR_TOOLS.MCP_ERR_URL : "";
 
   const confirm = () => {

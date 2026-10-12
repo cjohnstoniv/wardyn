@@ -76,7 +76,7 @@ export function ToolsStep({ go }: NewRunScreenProps) {
       <AlreadyIncluded access={access} intent={draft.intent} names={names} />
       {/* Harness setup and Add tools and access mount here. */}
       <div data-tools-slot="harness-setup" />
-      <AddTools access={access} intent={draft.intent} />
+      <AddTools access={access} answered={answered} intent={draft.intent} />
       <Totals access={access} answered={answered} names={names} />
       <SetupNeeded items={items} done={done} intent={draft.intent} names={names} onDone={finish} />
       <p aria-live="polite" className="sticky bottom-0 bg-background py-2 text-sm text-muted-foreground">
