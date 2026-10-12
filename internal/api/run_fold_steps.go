@@ -315,8 +315,9 @@ func (s *Server) stepAutonomy(f *runFold, rec *foldRecorder) bool {
 
 // stepToolPolicy settles the tool lane and holds a person's tool rules to the
 // policy, after autonomy so every step that can put the run on the gated lane
-// has: a person's rule or default puts a background run of a gated harness
-// there with "*: allow" under the person's layer (applyToolPosture), and each
+// has: a person's rule or default, or a policy rule that holds or blocks, puts
+// a background run of a gated harness there with "*: allow" under the person's
+// layer (applyToolPosture), and each
 // allow they send stands only where the policy, with the lane's default under
 // it, already allows the tool.
 func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {

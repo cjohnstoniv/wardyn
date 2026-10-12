@@ -107,8 +107,9 @@ type runFoldStep struct {
 //   - Confinement, then the model provider, then autonomy: the autonomy grade
 //     reads the enforced class and the chosen model credential.
 //   - The tool lane after autonomy, the last step that can put the run on the
-//     gated lane: a person's rule puts a background run there too, and their
-//     allows are held to the policy with the lane's default under it.
+//     gated lane: a person's rule, or a policy rule that holds or blocks, puts
+//     a background run there too, and the person's allows are held to the
+//     policy with the lane's default under it.
 //   - Azure DevOps standing and PAT narrowing read autonomy's site snapshot.
 //   - The run's end reads the resolved pool, the governance ceiling and the deployment,
 //     so it sits after placement and refuses before capacity.
