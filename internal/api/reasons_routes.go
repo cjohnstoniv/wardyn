@@ -720,6 +720,12 @@ const (
 // per-person rate limit, so not an authz.denied reason and not audited.
 const reasonPreflightRateLimited = "preflight_rate_limited"
 
+// GET /api/v1/workspaces/{id}/branches (workspace_branches.go).
+const (
+	reasonWorkspaceRepoUnknown  = "workspace_repo_unknown"
+	reasonBranchListRateLimited = "branch_list_rate_limited"
+)
+
 // POST /api/v1/runs and POST /api/v1/runs/preflight (run_fit.go): the runs namespace's
 // ResourceQuota cannot hold this run. A 422 before the mint, not audited, like run_quota.
 const reasonNamespaceQuotaExceeded = "namespace_quota_exceeded"

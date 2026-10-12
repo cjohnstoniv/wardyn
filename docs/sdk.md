@@ -362,6 +362,26 @@ A successful response contains `spec` (authorized, clamped, workspace-folded and
 - Clients should associate results with the request and principal, mark them stale after 60 seconds or relevant auth/config changes, and honor `Retry-After` without replacing a last good preview with an empty result.
 - Never use this read output as editable policy input.
 
+## Listing a repository's branches
+
+`GET /api/v1/workspaces/{id}/branches?repo=<repo>` lists the branches of one of the workspace's repositories, for the New Run branch picker.
+
+| Field | Meaning |
+|---|---|
+| `listing` | `listed`, or `unavailable`: show a text field instead. A failed listing is still a `200`. |
+| `branches` | Never null. The default branch first, then by name, at most `200`. |
+| `default` | The default branch, when the forge named one. |
+| `truncated` | More branches exist than were returned. |
+| `credential` | `ado_signin` (the person's own Azure DevOps sign-in), `ado_own_token` (their own token) or `github_app` (the organisation's GitHub App). |
+| `reason` | Why it is `unavailable`: `forge_not_supported`, `no_credential`, `signin_needed`, `forge_refused` or `forge_unreachable`. |
+
+- Only a caller the launch door admits for the workspace may ask; anyone else gets the `404` a missing workspace gets.
+- `repo` must be one of the workspace's repository sources (`422` `workspace_repo_unknown`), and each person is rate-limited (`429` `branch_list_rate_limited`).
+- Azure DevOps is asked at the admitting provider row's own address, never the repository URL's host. A `minted_pat` row lists nothing.
+- On GitHub the App mints a one-repository token with `contents: read`, which private repositories need.
+- GitHub fixes that token's life at `1` hour and it cannot be shortened. Wardyn revokes it after the read, best effort.
+- Each listing writes one `workspace.branches.list` audit row, with no branch names.
+
 ## Custom components
 
 A run can carry components that add destinations and secrets ([POLICIES.md](POLICIES.md#custom-components) defines them; [custom-components.md](operations/custom-components.md) is the admin side). The client wraps both stores of them.
@@ -556,6 +576,8 @@ start.
 | `workspace_providers_invalid` | The operator-only `PUT /api/v1/workspace-providers` (deployment-wide, not a per-workspace route): the submitted block fails validation. Its stale-`If-Match` arm shares `site_config_stale` below — the identical ETag cause, on the same underlying site-config document. |
 | `workspace_request_invalid` / `workspace_ssh_sources_not_ready` / `workspace_sources_not_allowed` | `POST/PUT /workspaces`: the request body fails validation, an SSH-remote source names a secret not yet stored, or the caller's own `local_dir` sources fail the member-safe mount gate. |
 | `workspace_delete_active_run` | `DELETE /workspaces/{id}`: the workspace is in use by a still-active run. |
+| `workspace_repo_unknown` | `GET /workspaces/{id}/branches`: `repo` is not one of the workspace's repository sources (`422`). |
+| `branch_list_rate_limited` | `GET /workspaces/{id}/branches`: the person passed `30` lists a minute (burst `10`, per wardynd replica), answered `429` before anything is read. Not audited; the admin token is exempt. |
 | `groups_snapshot_stale` | `PUT/POST /governance/*` and the user-drive resolver: the caller's group-membership snapshot is missing or was truncated at sign-in, so a group-keyed governance profile cannot be resolved. The SAME value as authz's own registered reason ([`internal/authz/registry.go`](../internal/authz/registry.go)) — a literal in `reasons.go` (the docs⟷reasons.go guard only reads literals), tied to authz's constant by a documented `TestNoAdHocAuthz` exception rather than a reference or a second copy invented for this package. |
 | `egress_baseline_invalid` / `egress_baseline_stale` | `PUT /governance/egress-baseline`: a host or suffix is invalid, or `If-Match` is stale. |
 | `site_config_request_invalid` / `site_config_artifact_override_invalid` / `site_config_integrations_via_own_route` / `site_config_invalid` / `site_config_stale` / `site_config_egress_via_own_route` | `PUT /site-config`: the body did not decode, a legacy artifact-override field fails validation, integrations were named inline instead of through their own endpoints, the submitted config fails one of the agent/model-provider/default-provider validators, `If-Match` is stale, or the body changes the egress baseline (the `egress` block or the baseline-marked `internal_hosts`), which only `PUT /governance/egress-baseline` writes (`PutSiteConfigResult` sends neither, so a captured document restores, and `EgressBaselineIgnored` reports a baseline it did not apply; `PutSiteConfig` sends the document as given and gets this refusal; a restore is still refused when the security tier marked an internal host the older capture does not list: lift the mark first). `site_config_stale` is shared by every `PUT` that checks `If-Match` against this same document's ETag: `PUT /agent-providers`, `PUT /model-providers` and `PUT /workspace-providers` all answer it too, one reason for one cause regardless of which sub-block the write targeted. |
