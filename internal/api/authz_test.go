@@ -250,6 +250,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"DELETE /api/v1/runner-pools/{id}":                      {class: classAdmin},
 	"PUT /api/v1/runner-pools/{id}/executors/{executor}":    {class: classAdmin},
 	"DELETE /api/v1/runner-pools/{id}/executors/{executor}": {class: classAdmin},
+	"POST /api/v1/me/runner-pools":                          {class: classMember},
+	"PUT /api/v1/me/runner-pools/{id}":                      {class: classMember},
+	"DELETE /api/v1/me/runner-pools/{id}":                   {class: classMember},
 	"PUT /api/v1/me/runner-pools/{id}/runners/{runner}":     {class: classMember},
 	"DELETE /api/v1/me/runner-pools/{id}/runners/{runner}":  {class: classMember},
 	"GET /api/v1/runner-pools/{id}/use-policy":              {class: classSecurity},
@@ -594,6 +597,8 @@ var routeMatrix = map[string]classifiedRoute{
 	// own doc) — classMember, not classOwner: there is no foreign-id path to
 	// distinguish.
 	"GET /api/v1/me/attention": {class: classMember},
+	// The caller's own drive catalogue: only drives their own grants reach.
+	"GET /api/v1/me/drives": {class: classMember},
 	// The Support link the header shows every signed-in person (#1125).
 	"GET /api/v1/branding/settings": {class: classMember},
 	// /me/ssh-keys (SSH lane, C2): classMember, NOT classOwner — this is a

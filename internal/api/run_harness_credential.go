@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -34,7 +35,7 @@ func reservedToolgateCredentialFile(file string) bool {
 // then holds no credential and its calls are decided as a call from no harness
 // is, the strictest of all the sets. Never a refusal; the
 // run.toolgate_credential.write row records delivered false with the reason.
-func (s *Server) stampHarnessCredential(ctx context.Context, run types.AgentRun, sets []types.HarnessToolRules, drive *types.DriveMount) ([]types.HarnessCredential, []runner.ManagedFile, error) {
+func (s *Server) stampHarnessCredential(ctx context.Context, run types.AgentRun, sets []types.HarnessToolRules, drives []types.DriveMount) ([]types.HarnessCredential, []runner.ManagedFile, error) {
 	digests, cred, err := mintHarnessCredentials(sets, run.Agent)
 	if err != nil || cred == "" {
 		return digests, nil, err
@@ -43,7 +44,7 @@ func (s *Server) stampHarnessCredential(ctx context.Context, run types.AgentRun,
 		Path: runner.ComponentSecretDir + "/" + toolgateCredentialFilePrefix + run.Agent,
 		Mode: runner.ComponentSecretFileMode, AgentOwned: true, Content: []byte(cred),
 	}
-	if reason := s.toolgateCredentialWithheld(ctx, run.ConfinementClass, drive); reason != "" {
+	if reason := s.toolgateCredentialWithheld(ctx, run, drives); reason != "" {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.toolgate_credential.write",
 			run.ID.String(), "success", mustJSON(map[string]any{
 				"agent": run.Agent, "path": file.Path, "delivered": false, "reason": reason,
@@ -60,15 +61,17 @@ func (s *Server) stampHarnessCredential(ctx context.Context, run types.AgentRun,
 // Kubernetes driver refuses a delivered secret beside a shared drive (the
 // fsGroup it needs would re-own other people's files), and a drive mounts only
 // on the target its backend names. A Docker host-path share gets the file.
-func (s *Server) toolgateCredentialWithheld(ctx context.Context, class types.ConfinementClass, drive *types.DriveMount) string {
-	caps, err := s.cfg.Runner.Capabilities(ctx)
+func (s *Server) toolgateCredentialWithheld(ctx context.Context, run types.AgentRun, drives []types.DriveMount) string {
+	caps, err := s.runCapabilities(ctx, run)
 	if err != nil {
 		return "the runner's capabilities could not be read"
 	}
-	if reason, deliverable := managedFilesGap(caps, class); !deliverable {
+	if reason, deliverable := managedFilesGap(caps, run.ConfinementClass); !deliverable {
 		return reason
 	}
-	if drive != nil && drive.Backend.Kind() != types.DriveKindManaged && drive.Backend.RunnerTarget() == "k8s" {
+	if slices.ContainsFunc(drives, func(d types.DriveMount) bool {
+		return d.Backend.Kind() != types.DriveKindManaged && d.Backend.RunnerTarget() == "k8s"
+	}) {
 		return "the run mounts a shared Kubernetes drive, beside which the runner delivers no secret file"
 	}
 	return ""

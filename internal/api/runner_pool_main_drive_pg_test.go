@@ -18,7 +18,6 @@ import (
 // A member's pool list and both dry doors state the pool's main-drive facts, the same for the same pool,
 // and a pool whose executor cannot report says unknown. The enforcement word reaches a member only here.
 func TestListRunnerPoolsMainDriveForMember(t *testing.T) {
-	localOn(t)
 	e := newPlacementEnv(t)
 	e.srv.cfg.EndedRunGrace = 30 * time.Minute
 	e.runner.execFacts["alpha"] = runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1, types.CC2, types.CC3},

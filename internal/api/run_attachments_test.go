@@ -187,7 +187,7 @@ func TestOverlap_ResolvedDefaultTargetsCollide(t *testing.T) {
 func TestOverlap_DriveTargetIncluded(t *testing.T) {
 	ws := repoWS("payments", helloRepo)
 	srv := attachFixture(t, types.SiteConfig{}, ws)
-	drive := legacyDriveTarget(&types.DriveMount{Target: runner.DriveTarget}, nil)
+	drive := driveTargets([]runDrive{{target: runner.DriveTarget, legacy: true}})
 	for _, target := range []string{runner.DriveTarget, runner.DriveTarget + "/x"} {
 		spec := types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: helloRepo, Target: target}}}
 		_, _, refusal := srv.runAttachments(createRunRequest{}, spec, []types.Workspace{ws}, indexWorkspacesBySource([]types.Workspace{ws}), workspaceSeed{attached: []types.Workspace{ws}}, drive)
@@ -378,7 +378,7 @@ func TestStartFolderRepoAndDrive(t *testing.T) {
 	}{
 		{"repo with the drive", `{"kind":"attachment","attachment":"drive","repo":"x/y"}`, reasonStartFolderInvalid, 400},
 		{"attachment and drive_id", `{"kind":"attachment","attachment":"` + one.ID.String() + `","drive_id":"d1"}`, reasonStartFolderInvalid, 400},
-		{"drive_id waits for the drive list", `{"kind":"attachment","drive_id":"d1"}`, reasonRequestFieldUnavailable, 422},
+		{"drive_id names one of drives[]", `{"kind":"attachment","drive_id":"d1"}`, reasonStartFolderInvalid, 400},
 		{"image default carries no repo", `{"kind":"image_default","repo":"x/y"}`, reasonStartFolderInvalid, 400},
 	} {
 		w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, startFolderBody(sel, tc.folder))

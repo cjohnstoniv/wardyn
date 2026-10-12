@@ -77,9 +77,10 @@ type grantDeliveryRecord struct {
 // writeServerError, so the driver text behind it reaches the LOG and not the
 // member who called POST /runs. That chokepoint is why the request is a
 // parameter beside the writer: it is what names the method and path in the log
-// line an operator is already reading.
+// line an operator is already reading. delivery is the credential delivery
+// policy a local run's plan was judged on; a remote run never reads it.
 // Extracted verbatim from handleCreateRun.
-func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, runID uuid.UUID, now time.Time, spec types.RunPolicySpec, runPlacement types.Placement) (grantWiring, bool) {
+func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, runID uuid.UUID, now time.Time, spec types.RunPolicySpec, runPlacement types.Placement, delivery placement.DeliveryPolicy) (grantWiring, bool) {
 	if !remotePlacement(runPlacement) && runPlacement != types.PlacementLocal {
 		writeErrorReason(w, placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable), "unclassified stored run placement")
 		return grantWiring{}, false
@@ -87,7 +88,7 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 	var deliveries []localGrantDelivery
 	if runPlacement == types.PlacementLocal {
 		var refusal *runRefusal
-		spec, deliveries, refusal = s.ownLocalGrantSpecs(r, spec)
+		spec, deliveries, refusal = s.ownLocalGrantSpecs(r, spec, delivery)
 		if refusal.write(s, w, r) {
 			return grantWiring{}, false
 		}

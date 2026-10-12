@@ -287,6 +287,9 @@ func (s *Server) routes() chi.Router {
 			// the caller's own view exactly as GET /runs?view= and GET /approvals
 			// are (handleMeAttention's own doc).
 			r.Get("/me/attention", s.handleMeAttention)
+			// The drive catalogue New Run attaches from: only the caller's own
+			// grants, no host path (user_drives_catalogue.go).
+			r.Get("/me/drives", s.handleListMeDrives)
 			// Own effective capability set — member-safe (classMember): every
 			// route AROUND this one on /permissions below is operator-only, but
 			// a member reading only their OWN grants (ListCapabilityGrantsFor,

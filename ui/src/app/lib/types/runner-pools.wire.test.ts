@@ -70,6 +70,7 @@ describe("runner pool carriers", () => {
     [clientGo, "PoolDefault", "PoolDefault"],
     [barrierGo, "BarrierOption", "BarrierOption"],
     [clientGo, "CreateRunnerPoolRequest", "CreateRunnerPoolRequest"],
+    [clientGo, "CreateMyRunnerPoolRequest", "CreateMyRunnerPoolRequest"],
     [clientGo, "UpdateRunnerPoolRequest", "UpdateRunnerPoolRequest"],
   ])("%#: %s has full parity with its TS mirror", (go, goName, tsName) => {
     const tags = goJSONTags(go, goName);
@@ -85,7 +86,7 @@ describe("runner pool carriers", () => {
       [preview, read("internal/api/policy_preview_facts.go"), "policyPreviewResponse"],
     ] as const) {
       const tags = goJSONTags(goSrc, goName).filter((t) => t.startsWith("runner_pool"));
-      expect(tags.sort()).toEqual(["runner_pool", "runner_pools"]);
+      expect(tags.sort()).toEqual(["runner_pool", "runner_pool_slots", "runner_pools"]);
       for (const t of tags) expect(stripComments(src), t).toContain(`${t}?:`);
     }
     expect(goJSONTags(read("pkg/client/runs_create.go"), "CreateRunRequest")).toContain("runner_pool_id");

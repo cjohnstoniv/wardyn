@@ -94,7 +94,7 @@ func TestLocalResident_DispatchAndReviveDoorsJudgeTheFloorAndPosture(t *testing.
 	}
 
 	want("dispatch, no floor, posture met", dispatch(), "")
-	want("revive, no floor", revive(), placement.ReasonPlacementUnavailable)
+	want("revive, no floor", revive(), "")
 	want("dispatch, CC3 floor", dispatch(apiKey), placement.ReasonRunnerPostureUnmet)
 	want("revive, CC3 floor", revive(apiKey), placement.ReasonRunnerPostureUnmet)
 	st.posture.DiskEncrypted = false
@@ -110,7 +110,7 @@ func TestLocalPlanFacts_OneDeliveryPolicyReadPerDoor(t *testing.T) {
 	reads := 0
 	f.srv.cfg.Store = residentFactsStore{localPlanTestStore: localPlanTestStore{f.st}, policy: json.RawMessage(`{"classes":{}}`), reads: &reads}
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(utCtx("user", "", nil))
-	_ = f.srv.localPlacementRefusal(r, createRunRequest{Placement: placement.Local}, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
+	_, _ = f.srv.localPlacementRefusal(r, createRunRequest{Placement: placement.Local}, false, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
 	if reads != 1 {
 		t.Errorf("create read the delivery policy %d times, want 1", reads)
 	}

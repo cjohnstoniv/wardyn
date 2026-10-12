@@ -58,6 +58,7 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	response.RunnerPool, response.RunnerPools = f.place.facts()
 	response.Image, response.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
 	response.Limits, response.ResourcesApplied = f.place.sizeFacts()
+	response.RunnerPoolSlots = s.runnerPoolSlots(r.Context(), f.place, *f.req)
 	response.MainDrive = f.mainDrive.applied()
 	response.Components = componentFacts(componentFactInputs{
 		req: f.req, spec: f.spec, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
@@ -144,7 +145,7 @@ func previewPending(req createRunRequest, choice runProviderChoice) []policyPrev
 	if _, model := agentLLMProvider(req.Agent); model && createDoorIsModelRun(req) && !choice.chosen {
 		pending = append(pending, previewProvider)
 	}
-	if req.Drive != nil && req.Drive.Enabled {
+	if req.Drive != nil && req.Drive.Enabled || len(req.Drives) > 0 {
 		pending = append(pending, previewDrive)
 	}
 	return pending

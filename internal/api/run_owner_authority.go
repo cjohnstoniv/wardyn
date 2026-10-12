@@ -594,14 +594,19 @@ func (s *Server) refreshDeploymentConfig(ctx context.Context, run types.AgentRun
 // must not refuse over a credential the strip removes. A refusal is audited as
 // run.revive denied; a check that cannot be answered refuses too.
 func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg *proxy.Config, actorType types.ActorType, actor string) *reviveError {
-	if !remotePlacement(run.Placement) {
+	// A run on a runner is re-classified first, before any operator secret is resolved below; an own plan
+	// then meets the same owner rechecks as any run.
+	local := !remotePlacement(run.Placement)
+	if local {
 		err := s.refreshDeploymentConfig(ctx, run, cfg)
 		var denied *placement.Refusal
 		if errors.As(err, &denied) {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied", mustJSON(map[string]any{"reason": denied.Reason})))
 			return reviveRefused(denied.Reason.Status(), string(denied.Reason), denied.Error())
 		}
-		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, "re-check local placement authority")
+		if err != nil {
+			return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, loggedMsg(ctx, "re-check local placement authority", err))
+		}
 	}
 	ref, err := s.ownerCapabilityRefusal(ctx, run, actor == run.CreatedBy, runRepos(run, cfg))
 	if err == nil && ref == nil {
@@ -614,7 +619,7 @@ func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg
 		s.pruneUnpairedInterception(cfg)
 		ref, err = s.modelCredentialRefusal(ctx, run, cfg)
 	}
-	if err == nil && ref == nil {
+	if err == nil && ref == nil && !local {
 		err = s.refreshDeploymentConfig(ctx, run, cfg)
 	}
 	if err != nil {

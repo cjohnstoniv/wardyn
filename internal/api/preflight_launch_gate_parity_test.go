@@ -72,7 +72,7 @@ var preflightInlinedWrappers = map[string]string{
 	"admitRepoSources":            "workspace_admission.go",
 	"denyUserWorkspaceProviders":  "workspace_providers.go",
 	"seedAndAdmitWorkspace":       "runs.go",
-	"seedRequestDrive":            "user_drives_run.go",
+	"seedRequestDrives":           "run_drives.go",
 	"enforceRunModelProvider":     "run_model_provider.go",
 	"enforceChosenModelProvider":  "run_model_provider.go",
 	"authorizePreviewRequest":     "policy_preview.go",
@@ -81,6 +81,7 @@ var preflightInlinedWrappers = map[string]string{
 	"boundRunUserSpec":            "run_policy_resolution.go",
 	"seedAuthorizedWorkspace":     "run_workspace_authorization.go",
 	"authorizeRequestDrive":       "run_drive_authorization.go",
+	"authorizeRequestDrives":      "run_drives.go",
 	"authorizeRunModelProvider":   "run_provider_authorization.go",
 }
 
@@ -137,6 +138,7 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepComponents", foldCreate | foldPreflight | foldPreview},
 	{"stepPlacementDenied", foldCreate | foldPreflight | foldPreview},
 	{"stepPlacement", foldCreate | foldPreflight | foldPreview},
+	{"stepDriveEligibility", foldCreate | foldPreflight | foldPreview},
 	{"stepResources", foldCreate | foldPreflight | foldPreview},
 	{"stepLocalEligibility", foldCreate | foldPreflight | foldPreview},
 	{"stepConfinement", foldCreate | foldPreflight | foldPreview},

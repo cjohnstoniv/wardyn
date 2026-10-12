@@ -16,9 +16,9 @@ type runPlacementFlags struct {
 }
 
 func (f *runPlacementFlags) register(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&f.placement, "placement", "", "where the run's sandbox lives: remote (the organisation's executor) or local (a runner you registered); unset lets the server choose when only one placement is eligible")
-	cmd.Flags().StringVar(&f.runner, "runner", "", "runner id for --placement local (needed when more than one of your runners is online — see 'wardyn runner')")
-	cmd.Flags().StringVar(&f.pool, "pool", "", "runner pool id to start the run on; the server refuses a pool at run create until runner-pool selection lands (unset keeps today's placement — see 'wardyn runner pool list')")
+	cmd.Flags().StringVar(&f.placement, "placement", "", "where the run's sandbox lives: remote (an organisation executor) or local (one of your own runners in a self-hosted pool); unset lets the pool decide")
+	cmd.Flags().StringVar(&f.runner, "runner", "", "pin a local run to this runner of yours in the pool; unset, the pool picks one of your online runners — see 'wardyn runner'")
+	cmd.Flags().StringVar(&f.pool, "pool", "", "runner pool id to start the run on; unset uses your default pool, else the organisation's — see 'wardyn runner pool list'")
 }
 
 // apply copies the flags into body. --pool is parsed here so a typo names its flag before any request.
