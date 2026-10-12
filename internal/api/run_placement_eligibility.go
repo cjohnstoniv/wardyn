@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -83,7 +84,7 @@ func placementDeniedMsg(p types.Placement, profile string) string {
 // the actual-spec classifier must inspect before H3/D117 enable execution.
 func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest,
 	spec types.RunPolicySpec, ceiling governanceCeiling, comps runComponents,
-	drive *types.DriveMount, workspaces []types.Workspace,
+	drive *types.DriveMount, workspaces []types.Workspace, baseline composer.Baseline,
 ) *runRefusal {
 	if req.Placement != placement.Local {
 		return nil
@@ -92,11 +93,43 @@ func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest,
 	if refusal != nil {
 		return refusal
 	}
+	if err := s.localPlanFacts(r.Context(), &p, baseline, nil); err != nil {
+		return runServerError("read the local placement facts", err)
+	}
 	if _, ref := placement.LocalEligibility(p); ref != nil {
 		return s.localEligibilityRefusal(r, ceiling, ref)
 	}
 	return runError(placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable),
 		"Your own runner is not available: this server cannot place a run on a runner yet.")
+}
+
+// localPlanFacts fills what every LocalEligibility door (create, dispatch and
+// revive) judges a runner_resident credential on: the stored delivery policy,
+// the bound runner's reported posture, and the run's blast-radius floor (Q7).
+// Before a runner is bound (create) Posture stays nil; a store that keeps no
+// policy leaves every class refused.
+func (s *Server) localPlanFacts(ctx context.Context, p *placement.LocalPlan, baseline composer.Baseline, runnerID *uuid.UUID) error {
+	p.ConfinementFloor = composer.RequiredConfinementFloor(p.Spec.ProxyConfig.Policy, baseline)
+	policy, err := s.storedDeliveryPolicy(ctx)
+	if err != nil {
+		return err
+	}
+	p.Delivery = policy
+	st, ok := s.cfg.Store.(interface {
+		GetRunner(context.Context, uuid.UUID) (types.Runner, error)
+	})
+	if !ok || runnerID == nil {
+		return nil
+	}
+	rn, err := st.GetRunner(ctx, *runnerID)
+	if err != nil {
+		return err
+	}
+	if rn.PostureReportedAt != nil {
+		posture := rn.Posture
+		p.Posture = &posture
+	}
+	return nil
 }
 
 // localAdmittedPlan builds the plan a local candidate is judged on from the
@@ -149,11 +182,6 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 		return placement.LocalPlan{}, refusal
 	}
 	p.CredentialIntents = intents
-	policy, err := s.storedDeliveryPolicy(r.Context())
-	if err != nil {
-		return placement.LocalPlan{}, runServerError("read the credential delivery policy", err)
-	}
-	p.Delivery = policy
 	return p, nil
 }
 

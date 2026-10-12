@@ -792,6 +792,12 @@ echo "agent-run: anthropic auth mode = $ANTHROPIC_MODE" >&2
 #     Only this lane: the autonomous lane below already runs every tool, and the
 #     interactive lanes have no Wardyn gate to bypass (the human in the pane is
 #     the approver, behind Claude Code's own workspace-trust prompt).
+#   WARDYN_TOOLGATE_CREDENTIAL   the approval credential dispatch delivered for
+#     this harness alone, as a file only the agent's uid can read. It is read
+#     into claude's exec environment and nowhere else: never exported here,
+#     never in the container's env, the tmux server's or a login shell's, so a
+#     harness started any other way sends none and is held. claude's MCP child
+#     (wardyn-toolgate) inherits it from claude. Empty when there is no file.
 if [[ "${WARDYN_TOOL_APPROVALS:-}" == "hold" ]]; then
     mkdir -p "$HOME/.wardyn"  # only --idle creates it; this is the exec path
     export CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0
@@ -813,7 +819,11 @@ if [[ "${WARDYN_TOOL_APPROVALS:-}" == "hold" ]]; then
     fi
     printf '{"mcpServers":{"gate":{"command":"wardyn-toolgate"%s}}}\n' "$toolgate_args" > "$HOME/.wardyn/toolgate-mcp.json"
     echo "agent-run: tool-approval hold — gated tool use parks on Wardyn approvals" >&2
-    exec claude -p "$task" --output-format text \
+    toolgate_credential=""
+    if [[ -r /run/wardyn/secrets/wardyn-toolgate-claude-code ]]; then
+        toolgate_credential=$(< /run/wardyn/secrets/wardyn-toolgate-claude-code)
+    fi
+    WARDYN_TOOLGATE_CREDENTIAL="$toolgate_credential" exec claude -p "$task" --output-format text \
         --permission-mode manual --setting-sources user \
         --mcp-config "$HOME/.wardyn/toolgate-mcp.json" --strict-mcp-config \
         --permission-prompt-tool mcp__gate__approve

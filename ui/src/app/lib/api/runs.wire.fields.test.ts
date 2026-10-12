@@ -181,6 +181,8 @@ const UI_NEVER_SENDS = new Set([
   "model_provider",
   "preset",
   "preset_version",
+  // The new flow forwards it through the field registry; the old wizard never sends it.
+  "shape",
 ]);
 
 // ui_apps used to sit on this set as a TS AgentRun key with no Go AgentRun

@@ -270,6 +270,15 @@ resolves your drive the same way, in a dry run too:
 - A component that names an IP address, a host that serves a model, or a host that already carries a credential on the run is refused.
 - Details for admins: [custom-components.md](operations/custom-components.md).
 
+## Run templates
+
+- A template is a run setup you save to reuse (`POST /api/v1/templates`). Yours are only yours; your organisation's
+  are offered to everyone; a group's are offered to its members.
+- You can publish to a group when you are in it and an admin made you one of its template managers.
+- A shared template shows the names of what it uses (a secret's name, a workspace), never a value.
+- Readers of a shared template are not told who published it.
+- Your own templates are erased with the `run_setups` scope of an erasure.
+
 ## Where your runs' audit lives
 
 - `GET /audit?run_id=<your run>` — reachable from the run's Audit tab in the console.

@@ -6,6 +6,7 @@ package types
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 )
 
 // ComponentKind names a thing a run can be given access to. Every kind but
@@ -60,7 +62,7 @@ const (
 	MaxComponentConfigKeys       = 32
 	MaxComponentConfigValueBytes = 4096
 	MaxComponentNameRunes        = 64
-	MaxComponentRefs             = 8
+	MaxComponentRefs             = 16
 	// MaxComponentEnvNameBytes bounds an env var or config key name;
 	// MaxComponentHeaderFormatBytes the header value template, which the
 	// proxy writes onto every injected request.
@@ -75,6 +77,8 @@ type ComponentDefinition struct {
 	Hosts   []string          `json:"hosts"`
 	Secrets []ComponentSecret `json:"secrets,omitempty"`
 	Config  map[string]string `json:"config,omitempty"`
+	// CLI marks an org row as a CLI credential card (azure, aws or github).
+	CLI *ComponentCLI `json:"cli,omitempty"`
 }
 
 // ComponentSecret is one secret a component carries.
@@ -210,6 +214,9 @@ func (d ComponentDefinition) Validate(validHost func(string) error, personDefine
 		return err
 	}
 	if err := validateComponentConfig(d.Config); err != nil {
+		return err
+	}
+	if err := d.validateCLI(personDefined); err != nil {
 		return err
 	}
 	if len(d.Secrets) > MaxComponentSecrets {
@@ -544,4 +551,135 @@ func ValidateComponentRefs(refs []ComponentRef, validHost func(string) error) er
 // characters, which excludes line breaks and every other control character.
 func printable(s string) bool {
 	return utf8.ValidString(s) && strings.IndexFunc(s, func(r rune) bool { return !unicode.IsPrint(r) }) < 0
+}
+
+// CLI kinds a component row can carry. gcloud and kubectl are not built.
+const (
+	CLIKindAzure  = "azure"
+	CLIKindAWS    = "aws"
+	CLIKindGitHub = "github"
+)
+
+// MaxCLIAzureSubscriptions bounds the subscriptions one Azure CLI row pins.
+const MaxCLIAzureSubscriptions = 16
+
+// ComponentCLI is the credential an org row gives a run's command-line tool.
+// Kind names which of the three arms is set, and only that one is.
+type ComponentCLI struct {
+	Kind   string     `json:"kind"` // azure | aws | github
+	Azure  *CLIAzure  `json:"azure,omitempty"`
+	AWS    *CLIAWS    `json:"aws,omitempty"`
+	GitHub *CLIGitHub `json:"github,omitempty"`
+}
+
+// CLIGitHub scopes the GitHub CLI to the run's repositories by capability.
+type CLIGitHub struct {
+	Capabilities []ghscope.Capability `json:"capabilities"`
+}
+
+// CLIAWS pins one IAM Identity Center account and permission set.
+type CLIAWS struct {
+	StartURL  string `json:"start_url"`  // the access portal, https
+	SSORegion string `json:"sso_region"` // where the portal lives
+	AccountID string `json:"account_id"` // 12 digits
+	RoleName  string `json:"role_name"`  // the permission set name
+	Region    string `json:"region"`     // the CLI's default region
+}
+
+// CLIAzure pins subscriptions and whether the CLI may change them.
+type CLIAzure struct {
+	Subscriptions []string `json:"subscriptions"` // 1..MaxCLIAzureSubscriptions GUIDs
+	Access        string   `json:"access"`        // read (GET and HEAD only) | write
+}
+
+var (
+	cliAWSAccountRE = regexp.MustCompile(`^[0-9]{12}$`)
+	cliAWSRegionRE  = regexp.MustCompile(`^[a-z]{2}(-[a-z0-9]+)+-[0-9]$`)
+	cliAWSRoleRE    = regexp.MustCompile(`^[A-Za-z0-9+=,.@_-]{1,64}$`)
+)
+
+// validateCLI checks the cli block: an org row only, carrying no secrets, with
+// its own kind's arm and no other.
+func (d ComponentDefinition) validateCLI(personDefined bool) error {
+	c := d.CLI
+	if c == nil {
+		return nil
+	}
+	if personDefined {
+		return errors.New("cli: only an organisation component can carry a CLI credential")
+	}
+	if len(d.Secrets) > 0 {
+		return errors.New("cli: a CLI row carries no secrets; its credential is the run's")
+	}
+	arms := map[string]bool{CLIKindAzure: c.Azure != nil, CLIKindAWS: c.AWS != nil, CLIKindGitHub: c.GitHub != nil}
+	have, ok := arms[c.Kind]
+	if !ok {
+		return fmt.Errorf("cli.kind: %q is not azure, aws or github", c.Kind)
+	}
+	if !have {
+		return fmt.Errorf("cli.%s: required for kind %q", c.Kind, c.Kind)
+	}
+	for kind, set := range arms {
+		if set && kind != c.Kind {
+			return fmt.Errorf("cli.%s: not allowed for kind %q", kind, c.Kind)
+		}
+	}
+	switch c.Kind {
+	case CLIKindAzure:
+		return c.Azure.validate()
+	case CLIKindAWS:
+		return c.AWS.validate()
+	}
+	return c.GitHub.validate()
+}
+
+func (g *CLIGitHub) validate() error {
+	if len(g.Capabilities) == 0 {
+		return errors.New("cli.github.capabilities: at least one is required")
+	}
+	for i, cp := range g.Capabilities {
+		if !cp.Grantable() {
+			return fmt.Errorf("cli.github.capabilities[%d]: %q is not grantable; want one of: %s", i, cp, ghscope.GrantableCapabilityList())
+		}
+		if slices.Contains(g.Capabilities[:i], cp) {
+			return fmt.Errorf("cli.github.capabilities[%d]: %q is listed twice", i, cp)
+		}
+	}
+	return nil
+}
+
+func (a *CLIAWS) validate() error {
+	u, err := url.Parse(a.StartURL)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+		return errors.New("cli.aws.start_url: must be an https URL with no credentials")
+	}
+	switch {
+	case !cliAWSRegionRE.MatchString(a.SSORegion):
+		return fmt.Errorf("cli.aws.sso_region: %q is not a region", a.SSORegion)
+	case !cliAWSAccountRE.MatchString(a.AccountID):
+		return errors.New("cli.aws.account_id: must be 12 digits")
+	case !cliAWSRoleRE.MatchString(a.RoleName):
+		return fmt.Errorf("cli.aws.role_name: %q is not a permission set name", a.RoleName)
+	case !cliAWSRegionRE.MatchString(a.Region):
+		return fmt.Errorf("cli.aws.region: %q is not a region", a.Region)
+	}
+	return nil
+}
+
+func (a *CLIAzure) validate() error {
+	if n := len(a.Subscriptions); n == 0 || n > MaxCLIAzureSubscriptions {
+		return fmt.Errorf("cli.azure.subscriptions: must list 1 to %d subscriptions", MaxCLIAzureSubscriptions)
+	}
+	for i, sub := range a.Subscriptions {
+		if _, err := uuid.Parse(sub); err != nil || len(sub) != 36 {
+			return fmt.Errorf("cli.azure.subscriptions[%d]: %q is not a subscription GUID", i, sub)
+		}
+		if slices.Contains(a.Subscriptions[:i], sub) {
+			return fmt.Errorf("cli.azure.subscriptions[%d]: %q is listed twice", i, sub)
+		}
+	}
+	if a.Access != ComponentAccessRead && a.Access != ComponentAccessWrite {
+		return fmt.Errorf("cli.azure.access: %q is not read or write", a.Access)
+	}
+	return nil
 }

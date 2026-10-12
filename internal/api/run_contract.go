@@ -69,7 +69,7 @@ func (s *Server) runContractRefusal(req createRunRequest) *runRefusal {
 // template document is held to the same list when it is imported.
 var runContractShapeChecks = []func(createRunRequest) *runRefusal{
 	placementShapeRefusal, runnerPoolShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, runOverridesRefusal, builtinComponentsRefusal,
-	runModeShapeRefusal, runEndShapeRefusal,
+	runModeShapeRefusal, runShapeRefusal, runEndShapeRefusal,
 }
 
 func placementShapeRefusal(req createRunRequest) *runRefusal {
@@ -509,9 +509,8 @@ func unappliedFieldsRefusal(req createRunRequest) *runRefusal {
 			"allowed_image: this server does not apply an image choice yet, so the run was not created.")
 	}
 	for i, ref := range req.Components {
-		if ref.Builtin != "" {
-			return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, fmt.Sprintf(
-				"components[%d]: built-in %s access is not available on this server yet, so the run was not created.", i, ref.Builtin))
+		if ref.Builtin == types.ComponentBuiltinAzureDevOps {
+			return builtinUnavailable(i, ref.Builtin)
 		}
 	}
 	return nil

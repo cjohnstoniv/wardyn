@@ -41,8 +41,9 @@ func TestMemberSandboxSizeNeverEscapesTheDeployment(t *testing.T) {
 		{"member whose profile sets 64000 and no maximum", false, profile(wide, types.GovernanceLimits{}), 64000, 1 << 20},
 		{"member whose profile sets 64000 under a maximum", false,
 			profile(wide, types.GovernanceLimits{MaxCPUMillis: 4000, MaxMemoryMiB: 8192}), 4000, 8192},
-		{"a maximum below the deployment's size", false,
-			profile(nil, types.GovernanceLimits{MaxCPUMillis: 500, MaxMemoryMiB: 1024}), 500, 1024},
+		// #1949: the member cap is never below the size an untouched run already gets.
+		{"a maximum below the deployment's size never cuts below it", false,
+			profile(nil, types.GovernanceLimits{MaxCPUMillis: 500, MaxMemoryMiB: 1024}), 1000, 2048},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
@@ -83,7 +84,8 @@ func TestMemberSandboxSizeNeverEscapesTheDeployment(t *testing.T) {
 }
 
 // A member's own inline request is bounded by the deployment's size when their
-// profile omits resources, and by the profile's maximum when it sets one.
+// profile omits resources, and a profile maximum below that size does not cut
+// below it (#1949: the member cap is max(untouched, size)).
 func TestMemberInlineRequestBoundByInheritedSize(t *testing.T) {
 	prof := &types.GovernanceProfile{
 		ID: uuid.New(), Name: "p",
@@ -104,8 +106,8 @@ func TestMemberInlineRequestBoundByInheritedSize(t *testing.T) {
 	if !ok {
 		t.Fatal("refused")
 	}
-	if got.Resources.CPUMillis != 1000 || got.Resources.MemoryMiB != 1024 {
-		t.Errorf("resolved %+v, want 1000m/1024MiB", got.Resources)
+	if got.Resources.CPUMillis != 1000 || got.Resources.MemoryMiB != 2048 {
+		t.Errorf("resolved %+v, want 1000m/2048MiB", got.Resources)
 	}
 }
 
@@ -131,8 +133,9 @@ func TestNoPolicyMemberKeepsProfileMountsUnderSizeCap(t *testing.T) {
 	if len(got.WorkspaceMounts) != 1 || got.WorkspaceMounts[0] != mount {
 		t.Errorf("mounts = %+v, want the profile's one mount kept", got.WorkspaceMounts)
 	}
-	if got.Resources == nil || got.Resources.CPUMillis != 500 {
-		t.Errorf("Resources = %+v, want cpu capped to 500", got.Resources)
+	// #1949: a maximum under the deployment's default size never cuts below it.
+	if got.Resources == nil || got.Resources.CPUMillis != 2000 {
+		t.Errorf("Resources = %+v, want cpu left at the default 2000", got.Resources)
 	}
 }
 

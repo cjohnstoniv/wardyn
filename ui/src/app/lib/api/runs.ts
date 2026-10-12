@@ -27,6 +27,7 @@ import type {
   RunResources,
 } from "../types";
 import type { ComponentRef } from "../types/components";
+import type { PolicyPreviewResult } from "../types/policy-preview";
 import type {
   Experience,
   IncludedTool,
@@ -403,6 +404,26 @@ export const runs = {
       LAUNCH_DEADLINE_MS,
     );
     return asJson<PreflightResult>(res);
+  },
+
+  // The new New Run's three requests. Each sends the body its serializer built,
+  // byte for byte, so preflight, policy preview and create judge the same request.
+  async createRunWire(body: object): Promise<CreateRunResult> {
+    const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(body) });
+    return asJson<CreateRunResult>(res);
+  },
+  async preflightRunWire(body: object, signal?: AbortSignal): Promise<PreflightResult> {
+    const res = await wfetch("/runs/preflight", { method: "POST", body: JSON.stringify(body), signal }, LAUNCH_DEADLINE_MS);
+    return asJson<PreflightResult>(res);
+  },
+  async previewRunPolicyWire(body: object, signal?: AbortSignal): Promise<PolicyPreviewResult> {
+    const res = await wfetch("/runs/policy-preview", { method: "POST", body: JSON.stringify(body), signal });
+    try {
+      return await asJson<PolicyPreviewResult>(res);
+    } catch (e) {
+      if (e instanceof HttpError) e.retryAfter = res.headers.get("Retry-After") ?? undefined;
+      throw e;
+    }
   },
 
   // POST /api/v1/policies/grade — composer.Grade of a bare spec, no run

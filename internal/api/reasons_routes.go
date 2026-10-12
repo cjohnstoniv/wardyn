@@ -720,6 +720,12 @@ const (
 // per-person rate limit, so not an authz.denied reason and not audited.
 const reasonPreflightRateLimited = "preflight_rate_limited"
 
+// GET /api/v1/workspaces/{id}/branches (workspace_branches.go).
+const (
+	reasonWorkspaceRepoUnknown  = "workspace_repo_unknown"
+	reasonBranchListRateLimited = "branch_list_rate_limited"
+)
+
 // POST /api/v1/runs and POST /api/v1/runs/preflight (run_fit.go): the runs namespace's
 // ResourceQuota cannot hold this run. A 422 before the mint, not audited, like run_quota.
 const reasonNamespaceQuotaExceeded = "namespace_quota_exceeded"
@@ -900,6 +906,13 @@ const (
 	reasonComponentHostServesModel        = "component_host_serves_model"        // a host of the component serves a model on this deployment
 	reasonComponentHostCollision          = "component_host_collision"           // a header delivery names a host that already carries a credential on the run
 	reasonComponentResidentDeliveryDenied = "component_resident_delivery_denied" // the organisation turned off env and file delivery (components.deny_resident_delivery)
+)
+
+// A built-in Git provider component's own refusals; its repositories meet the
+// workspace doors' reasons (workspace_repo_not_admitted, capability_workspace_provider).
+const (
+	reasonComponentBuiltinLaneOff            = "component_builtin_lane_off"             // the GitHub provider row that admits a repository has the GitHub App lane off
+	reasonComponentBuiltinAccessAboveCeiling = "component_builtin_access_above_ceiling" // the caller's ceiling does not allow the asked access to GitHub repositories
 )
 
 // reasonCredentialHostCollision: two of a run's credentials are bound to one

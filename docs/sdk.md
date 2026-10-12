@@ -352,7 +352,7 @@ A successful response contains `spec` (authorized, clamped, workspace-folded and
 - It reads no credential values, renews or mints nothing, persists no run or grant, dispatches nothing, and performs no runner, share, capacity or quota probe.
 - After the shared authentication and CSRF middleware, the handler may emit only existing dry-run `authz.denied` and `workspace.provider.admit` events, coalesced with identical preflight denials.
 - Authentication failures retain their existing middleware audit behavior.
-- Its deterministic egress includes authorized workspace declarations and clone hosts; site-config/SSH/PAT/ADO dispatch unions remain pending.
+- Its egress includes the hosts create adds after the mint from the run's own declarations: workspace declarations and clone hosts, an `ssh_key` grant's SSH-over-443 endpoint and a `git_pat` grant's Azure DevOps hosts, each only for a lane create will wire (not one the admitting provider row turns off, an `ssh_key` for Azure DevOps, or an `ssh_key` on `codex-cli`). The site-config SCM hosts, the model provider's hosts and the per-person Azure DevOps lane stay pending (`dispatch_egress`); the configured host list is never shown.
 - Custom inline runs with an authorized `github.com` HTTPS/slug clone and no surviving `github_token` also derive `github.com` and `*.githubusercontent.com`, narrowed through the caller's ceiling and personal domain capabilities before union.
 - Preflight and create use the same rule; only create audits its additions as `run.egress.add` with `kind: github_direct`.
 - Saved/default policy and authored manual-domain semantics are unchanged.
@@ -361,6 +361,40 @@ A successful response contains `spec` (authorized, clamped, workspace-folded and
 - Credentials, policies, capabilities and connections may change after it answers; create independently re-resolves every gate.
 - Clients should associate results with the request and principal, mark them stale after 60 seconds or relevant auth/config changes, and honor `Retry-After` without replacing a last good preview with an empty result.
 - Never use this read output as editable policy input.
+
+### Access
+
+Preflight (`PreflightResult.Access`) and the policy preview answer `access`, one block built by one function from the same fold, so the two agree for any request both admit.
+
+- `rows`: what brings access, inherited first (the harness, each Git provider's repositories, a command), then what the person added (components, secrets by header, allowed hosts). Each has a `status`: `ready`, `needs_setup`, `unavailable` or `refused`.
+- `hosts`: the Network total, without the site-config SCM hosts. Each host has a `verdict` against the resolved, clamped policy, never the request: `allowed`, `needs_approval` (a review mode) or `not_allowed` with `reason` `clamped`, `denied_list` or `always_deny`. A deny entry wins over everything.
+- `credentials`: the Credentials total, each with its `delivery` and what is left once the run ends (`after_end`). The repository on Wardyn's git broker lists no raw host; its credential is delivered `git_broker`.
+- An AWS sign-in follows `WARDYN_AWS_SSO_PROXY_INJECT`. On: the role credentials are in the sandbox, short-lived. Off: the session's access token is in the sandbox too, as a file. Both expire at the lifetime AWS sets.
+- `unlisted`: what happens to a host nothing lists: the effective `mode`, `allow_all`, `hold_sec` for `wait_for_review`, and `decider` (`you`, `admin` or `you_or_admin`, from your `egress_host` capability).
+- `setup`: what is still needed, as checklist rows with a `fix`: `add_secret`, `sign_in` (`target`, and `id` for a component) or `choose_model_provider` (`tool`). A model-provider sign-in names no provider id; sign in to the provider the draft chose.
+- A CLI component's row has kind `cli` and `in_image`: `yes` or `no` for a harness's own image, `unknown` for an image the run names or the operator pinned.
+- `harnesses` is empty until the tool-policy facts land.
+- Source kinds add `harness` and `posture` to the provenance set; a client shows no chip for a kind it does not know.
+
+## Listing a repository's branches
+
+`GET /api/v1/workspaces/{id}/branches?repo=<repo>` lists the branches of one of the workspace's repositories, for the New Run branch picker.
+
+| Field | Meaning |
+|---|---|
+| `listing` | `listed`, or `unavailable`: show a text field instead. A failed listing is still a `200`. |
+| `branches` | Never null. The default branch first, then by name, at most `200`. |
+| `default` | The default branch, when the forge named one. |
+| `truncated` | More branches exist than were returned. |
+| `credential` | `ado_signin` (the person's own Azure DevOps sign-in), `ado_own_token` (their own token) or `github_app` (the organisation's GitHub App). |
+| `reason` | Why it is `unavailable`: `forge_not_supported`, `no_credential`, `signin_needed`, `forge_refused` or `forge_unreachable`. |
+
+- Only a caller the launch door admits for the workspace may ask; anyone else gets the `404` a missing workspace gets.
+- `repo` must be one of the workspace's repository sources (`422` `workspace_repo_unknown`), and each person is rate-limited (`429` `branch_list_rate_limited`).
+- Azure DevOps is asked at the admitting provider row's own address, never the repository URL's host. A `minted_pat` row lists nothing.
+- On GitHub the App mints a one-repository token with `contents: read`, which private repositories need.
+- GitHub fixes that token's life at `1` hour and it cannot be shortened. Wardyn revokes it after the read, best effort.
+- Each listing writes one `workspace.branches.list` audit row, with no branch names.
 
 ## Custom components
 
@@ -376,15 +410,64 @@ A run can carry components that add destinations and secrets ([POLICIES.md](POLI
 | `PutComponent` | `PUT /api/v1/components/{id}` | admin |
 | `DeleteComponent` | `DELETE /api/v1/components/{id}` | admin |
 
-- `MyComponents` answers `may_define`, `resident_delivery_allowed`, `autonomy_cap`, `mine` and `org`.
-  - `org` holds only the organisation components the caller is granted, as `OrgComponentView`: hosts, delivery modes and config keys, never a secret name.
+- `MyComponents` answers `may_define`, `resident_delivery_allowed`, `autonomy_cap`, `mine`, `org` and `clis`.
+  - `org` holds only the organisation components the caller is granted, as `OrgComponentView`: hosts, delivery modes, config keys, `category` and an optional `cli` or `mcp` view, never a secret name.
+  - `clis` lists five CLI cards in a fixed order (`azure`, `github`, `aws`, `gcloud`, `kubectl`), each `{kind, state, rows}` with `state` `available`, `not_granted` or `coming_soon`, built only from rows the caller is granted.
 - A save answers `ComponentSaved`: the stored row and `requirements[]`.
   - Each requirement is `{kind: "secret", name, status: "present"|"missing", fix: "add_secret"}`. The list is advisory and never refuses a save.
 - `PutComponent` creates an organisation component restricted: nobody may attach it until an admin grants its id under `/api/v1/permissions`.
-- A run attaches components in `CreateRunRequest.Components`: `{id}` for a stored one, `{inline, name}` for a definition used by that run alone. At most 8.
+- A run attaches components in `CreateRunRequest.Components`: `{id}` for a stored one, `{inline, name}` for a definition used by that run alone. At most 16.
+- `{builtin: "github", org, repos, access}` reaches the listed repositories of `org` without a workspace, only through Wardyn's git broker. Each repository meets workspace admission and the `workspace_provider` capability; `access` (`read` by default, or `write`) must be within the caller's ceiling for a `github_token` grant. `azure_devops` is refused with `request_field_unavailable`.
 - Preflight and the policy preview answer `components`: one fact per component with `status` (`ready`, `needs_input`, `unavailable` or `unknown`), its `requirements`, hosts and each secret's delivery and `shared` flag.
   - A fact never carries the name of a secret the organisation provides.
 - Create, preflight and preview refuse with the component reasons in [`Reason`](#reason-branch-on-this-never-on-errors-prose); a run is audited as `run.component.attach` and `run.component.refuse`.
+
+## Run templates
+
+A template is a saved run setup, whole or partial, kept for yourself, published to the organisation or published to one group. It is content: a published template grants nothing.
+
+| Method | Route | Who |
+|---|---|---|
+| `ListTemplates` | `GET /api/v1/templates` | any signed-in person; each row is one they may read |
+| `GetTemplate` | `GET /api/v1/templates/{id}`, `/revisions/{revision}` | a reader of that template |
+| `SaveTemplate` | `POST /api/v1/templates`, `PUT /api/v1/templates/{id}` | the owner (personal), an organisation administrator (organisation), the group's template managers (group) |
+| `DeleteTemplate` | `DELETE /api/v1/templates/{id}` | as `SaveTemplate` |
+| `CopyTemplate` | `POST /api/v1/templates/{id}/copy` | a reader of the source who may write the target |
+| `ListTemplateGroupAdmins`, `GrantTemplateGroupAdmin`, `RevokeTemplateGroupAdmin` | `GET`/`PUT`/`DELETE /api/v1/admin/template-group-admins` | admin |
+
+- A template you cannot read, and one that does not exist, answer the same `404` `template_not_found`.
+- `ListTemplates` answers `publish`: where you may save one.
+  - `org` is true only for an organisation administrator in the Admin view: in the User view an administrator is a member, so publishing to the organisation is a copy made from the Admin view.
+  - `groups` lists each group you are a verified member of and manage templates for; `groups_unverified` is true, with no group offered, when your sign-in's group list is missing or incomplete.
+- `TemplateSaveRequest.kind` is `template` (the default) or `policy`.
+  - A policy holds only `inline_policy` with run-wide network, credential and access-rule keys (`allowed_domains`, `denied_domains`, `allow_all_egress`, `first_use_approval`, `first_use_hold_seconds`, `max_holds`, `allowed_methods`, `eligible_grants`, `llm_inspection`), with `coverage: partial` and no `needs_setup`.
+  - Saving one writes no stored policy.
+- An update needs `expected_revision`, the revision you read. Another current revision answers `409` `template_revision_conflict` and changes nothing; keep your edits, reload, and apply them again.
+  - Every revision stays readable by number; scope and kind never change (copy a template to publish it elsewhere).
+- A refused document answers `TemplateSaveRefusal`: the first diagnostic's `error` and `reason`, and every diagnostic with its path.
+- A shared template holds references (secret names, workspace and drive ids), never values, and its readers see those names.
+- `created_by` and `updated_by` are set only for someone who may write the template.
+- A group grant (`TemplateGroupAdmin`) names one group and one person, stored in canonical form; its optional `label` is the group's display name, shown beside its templates, and never authority.
+- The CLI covers these: `wardyn template list|show|save|import`, and for administrators `wardyn template group-admin list|grant|revoke` and `wardyn template from-preset <name> [--everyone]`. `from-preset` saves a launch preset to the organisation through `PresetDocument`, which refuses a preset limited to `user_types` unless `--everyone` is passed. A preset's `inline_policy` replaced your default policy, and in a template it is laid onto it.
+
+## Run documents
+
+A `wardyn/v1` document with `kind: Run` is a draft of one run. Its `intent` holds the `CreateRunRequest` fields, and a `kind: RunTemplate` document is read by the same decoder.
+
+- A `Run` document carries `api_version`, `kind` and `intent`. `name`, `coverage` and `needs_setup` are refused as `template_field_unknown`; a run title or description, at the top or in `intent`, as `template_field_excluded`.
+- A `Run` document has no coverage rules: completeness is checked when the run is reviewed.
+- A `kind` other than Run or RunTemplate is reported at path `kind` and a wrong `api_version` at `api_version`, both as `template_version_unsupported`. When the import request names the `kind` it expects and the document is the other valid kind, `kind` carries a sentence saying so, beside the document's other diagnostics.
+- `POST /api/v1/templates/import` (`Client.ImportTemplate`) takes `{format, source, kind?}`, where `format` is `json` or `yaml` and `kind` is `Run`, `RunTemplate` or empty for either. It answers `200` with the normalised `document` when nothing is wrong, and otherwise with `diagnostics`, each `{path, reason, message}`. It stores nothing, grants nothing and needs only a signed-in person.
+- The door holds a document to the same shape and availability checks as create, preflight and the policy preview, so a request they refuse is refused at the door with the same reason.
+- `wardyn run --file <doc>` (`-` reads stdin) has the door check a `Run` document, then creates the run from its `intent`. A document that sets `inline_policy` is refused until the request carries `policy_overlay`, because `inline_policy` would replace your default policy. Only `--title`, `--description`, `--wait`, `--timeout`, `--json` and `--dry-run` go with it. `wardyn template import --kind Run|RunTemplate` sets the kind the import expects.
+
+`shape` (`agent_task`, `environment` or `application`) names the New Run choice a request was set up from. It is optional and needs `experience`; a value outside the three is `400` `run_mode_invalid`. The server checks it against the run and otherwise does not use it; a request that does not fit is `422` `run_shape_conflict` at create, preflight, preview and the import door.
+
+| `shape` | Requires |
+|---|---|
+| `application` | `experience: background` and `workload.kind: command` |
+| `environment` | `experience: interactive` |
+| `agent_task` | With `background`, `workload.kind: agent_task`; with `interactive`, a `tools[]` entry of kind `harness` |
 
 ## Model providers
 
@@ -531,19 +614,24 @@ start.
 | `placement_invalid` / `resources_invalid` / `workspace_target_invalid` / `override_invalid` / `allowed_image_invalid` / `runner_pool_invalid` | `400`: a malformed `placement`, `resources`, workspace `target`, `overrides` entry, `allowed_image` or `runner_pool_id`. |
 | `workspace_target_overlap` / `workspace_pin_conflict` / `image_conflict` / `workspace_ado_org_conflict` | `422`: the attached workspaces cannot share one run. |
 | `placement_unavailable` / `placement_credential` / `placement_capability` / `placement_local_path` / `placement_trusted_output` | `422`: a `placement: "local"` run this server cannot place on your own runner yet, or one carrying a credential, mount, storage, path or trusted-output operation a runner cannot take. |
+| `runner_posture_unmet` | `422`: a `runner_resident` credential the runner's reported posture does not meet (the detail names the field), or a run with a CC3 floor, which a runner-asserted class never meets for a resident credential. |
 | `placement_required` | `422`: no placement chosen. |
 | `placement_denied` | `403`: your governance profile's `deny_placements` refuses the run's placement, at create, preflight, policy preview and source scans; audited `authz.denied` (target `runs.placement`). |
 | `runner_offline` | `422`: a `placement: "local"` run whose runner is offline or has not reported its capabilities yet, or none of your runners is online. |
 | `override_refused` | `422`: a widening, base-host removal or foreign secret the narrowing table never allows. |
 | `request_field_unavailable` | `422`: a field this server cannot honour yet. It is refused, never dropped. |
+| `harness_not_installed` / `harness_set_no_image` / `harness_set_custom_image` / `harness_providers_conflict` | `422`: no image here carries a harness, or the harnesses together; two or more harnesses name a custom image; or two harnesses' providers share a host. `tool` names the harness. |
 | `run_mode_required` / `run_mode_invalid` / `start_folder_invalid` | `400`: a new client's mode (or a background task's workload) is unset, and is never inferred (`mode_contract: "0.9"` marks a request as a new client's even when it carries no other run-mode field); a run-mode carrier is malformed; a `start_folder` is malformed, names an attachment the run lacks, or leaves its mount. |
 | `run_mode_conflict` | `422`: run-mode carriers contradict each other, or an older field they replace (`agent`, `task`, `interactive`) rides beside them. |
+| `run_shape_conflict` | `422`: `shape` does not fit the run: it needs `experience`, and `application`, `environment` and `agent_task` each require the workload or tool shown under [Run documents](#run-documents). |
 | `run_background_only` | `409`: an interactive door of a background task (terminal, exec, SSH, web gateway, desktop). Logs, audit, status and the lifecycle controls (kill, revive, extend) stay. |
-| `template_document_invalid` / `template_field_invalid` / `template_field_unknown` / `template_version_unsupported` | `400`, `422` for the version: a template document that is not one bounded document, a value of the wrong shape (null and redaction placeholders included), a key the schema lacks, or an `api_version` or `kind` this server does not read. |
+| `template_document_invalid` / `template_field_invalid` / `template_field_unknown` / `template_version_unsupported` | `400`, `422` for the version: a document that is not one bounded document, a value of the wrong shape (null and redaction placeholders included), a key the schema lacks, or an `api_version` or `kind` this server does not read. |
 | `template_secret_refused` / `template_run_state_refused` / `template_metadata_in_content` / `template_field_excluded` | `400`: a template never holds a secret value, state of one run (identity, session, claim, admission), an owner, scope, group or revision, or a launch-only (title, description) or retired field. The path is in the diagnostic. |
 | `template_field_unavailable` / `template_dependency_missing` / `template_coverage_invalid` / `template_shared_field_refused` | `422`: a field this server cannot honour yet (refused, never dropped), a field whose dependency is neither included nor listed under `needs_setup`, a coverage that does not fit the content, or a field that names one person's own thing in an organisation or group template. |
 | `template_scope_forbidden` / `template_group_unverified` / `template_not_found` / `template_revision_conflict` | `403`, `403`, `404`, `409`: publishing to a scope the caller does not administer, group membership that cannot be verified from this sign-in, no such template or not visible to the caller, or an update against a revision that has moved. |
-| `templates_unavailable` | `501`: the template store is not available on this server yet. Every `/templates` route and the `/admin/template-group-admins` routes answer it. |
+| `templates_unavailable` | `501`: this server's store keeps no templates. Every `/templates` route except `POST /templates/import`, and the `/admin/template-group-admins` routes, answer it; the Postgres store keeps them. |
+| `template_name_taken` / `template_limit_reached` | `409`: another template available to the same people already uses the name (compared case-insensitively, per person, per group and for the organisation), or that audience already holds its most templates (200 per person, 200 per group, 500 for the organisation). |
+| `template_policy_field_refused` | `422`: a template saved as `kind: "policy"` holds something other than run-wide network, credential and access-rule keys under `inline_policy`. Each refused path is a diagnostic. |
 | `runner_pools_unavailable` | `501`: this server's store has no runner pool storage; every pool route answers it. |
 | `runner_pool_not_found` / `runner_pool_stale` / `runner_pool_unavailable` / `runner_pool_member_mismatch` / `runner_pool_no_eligible_member` | The pool routes: `404` no such pool or one you may not use (the two read alike), `409` a stale revision, `422` a switched-off pool as a default, a member of the wrong kind or a runner that is not yours, or a use policy on a Self-Hosted pool. `no_eligible_member` is also the `reason` of an unavailable pool in `GET /runner-pools`. |
 | `image_devcontainer_exclusive` / `image_builder_unavailable` | `POST /runs`' image/devcontainer build validation: `image` and `devcontainer_repo` were both set (the caller's own request shape), or a custom image was requested but this control plane has no image builder wired (a deployment capability neither field can fix) — two different causes, two reasons. |
@@ -559,6 +647,8 @@ start.
 | `workspace_providers_invalid` | The operator-only `PUT /api/v1/workspace-providers` (deployment-wide, not a per-workspace route): the submitted block fails validation. Its stale-`If-Match` arm shares `site_config_stale` below — the identical ETag cause, on the same underlying site-config document. |
 | `workspace_request_invalid` / `workspace_ssh_sources_not_ready` / `workspace_sources_not_allowed` | `POST/PUT /workspaces`: the request body fails validation, an SSH-remote source names a secret not yet stored, or the caller's own `local_dir` sources fail the member-safe mount gate. |
 | `workspace_delete_active_run` | `DELETE /workspaces/{id}`: the workspace is in use by a still-active run. |
+| `workspace_repo_unknown` | `GET /workspaces/{id}/branches`: `repo` is not one of the workspace's repository sources (`422`). |
+| `branch_list_rate_limited` | `GET /workspaces/{id}/branches`: the person passed `30` lists a minute (burst `10`, per wardynd replica), answered `429` before anything is read. Not audited; the admin token is exempt. |
 | `groups_snapshot_stale` | `PUT/POST /governance/*` and the user-drive resolver: the caller's group-membership snapshot is missing or was truncated at sign-in, so a group-keyed governance profile cannot be resolved. The SAME value as authz's own registered reason ([`internal/authz/registry.go`](../internal/authz/registry.go)) — a literal in `reasons.go` (the docs⟷reasons.go guard only reads literals), tied to authz's constant by a documented `TestNoAdHocAuthz` exception rather than a reference or a second copy invented for this package. |
 | `egress_baseline_invalid` / `egress_baseline_stale` | `PUT /governance/egress-baseline`: a host or suffix is invalid, or `If-Match` is stale. |
 | `credential_delivery_invalid` / `credential_delivery_unavailable` | `PUT /governance/credential-delivery`: an unknown or fixed class, a mode outside the class's bounds, or `require_posture` without `runner_resident`; or the store is not Postgres. |
@@ -636,7 +726,7 @@ sending `error` alone — completing the sweep this issue tracks:
 | `git_pat_api_forge_disabled` | `POST /runs/preflight` and `POST /runs/policy-preview`, and the failure of a launched run: a `git_pat` grant sets `api` for `bitbucket_server` while `WARDYN_GIT_PAT_API_BITBUCKET_SERVER` is off on this deployment. Policy and governance writes refuse the same grant with `400`. |
 | `policy_request_invalid` / `policy_secret_refs_invalid` / `policy_name_conflict` | `PUT/POST/DELETE /api/v1/policies`: the create/update body fails `decodePolicyRequest`, a secret reference in the spec fails shape validation, or a policy by that name already exists. |
 | `model_provider_id_invalid` / `model_provider_not_applicable` / `model_provider_no_block_configured` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` model-provider authorization (`run_provider_authorization.go`), the three field-validation arms outside `writeProviderRefusal` (which always carries its own reason, either the credential-refusal's audit reason or the generic `model_provider_unavailable`): `model_provider` is not a plain provider id, was set on a run that calls no model, or was named but this deployment has no model providers. `integration_id` is refused earlier, unconditionally (`integration_id_retired`), before this door is reached. |
-| `component_ref_invalid` / `component_store_unavailable` / `component_definition_invalid` / `component_secret_not_owned` / `component_secret_missing` / `component_host_denied` / `component_host_serves_model` / `component_host_collision` / `component_resident_delivery_denied` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` component gate (`components_run.go`), over the request's `components[]`: the list is malformed (400); this store cannot record components (501); or one component breaks a rule (422) — its definition, a secret that is not the caller's own, a secret the organisation provides and has not stored (the preview alone does not refuse this one), a host that is blocked, that serves a model or that already carries a credential on the run, or env/file delivery the organisation turned off. Who may attach a component is the authorization reasons `capability_component` and `capability_feature`. |
+| `component_ref_invalid` / `component_store_unavailable` / `component_definition_invalid` / `component_secret_not_owned` / `component_secret_missing` / `component_host_denied` / `component_host_serves_model` / `component_host_collision` / `component_resident_delivery_denied` / `component_builtin_lane_off` / `component_builtin_access_above_ceiling` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` component gate (`components_run.go`), over the request's `components[]`: the list is malformed (400); this store cannot record components (501); or one component breaks a rule (422) — its definition, a secret that is not the caller's own, a secret the organisation provides and has not stored (the preview alone does not refuse this one), a host that is blocked, that serves a model or that already carries a credential on the run, or env/file delivery the organisation turned off; or a built-in GitHub component whose provider has its GitHub App lane off, or whose `access` is above the ceiling. Who may attach a component is the authorization reasons `capability_component` and `capability_feature`. |
 | `credential_host_collision` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview`, for any run (422, `credentialHostRefusal` in `runs_dispatch_components.go`): two of the run's credentials are bound to one host, and a host carries only one — two `api_key` grants, or an `api_key` grant on a host that a token-bearing redirect, the Azure DevOps lane or a `git_pat` API grant also credentials. The body names no host. Also the `reason` on a failed run's `run.create` row when the collision only appears at dispatch; that row carries the `grant_ids` involved and never the host. `component_host_collision` is the same rule for a component's own header. |
 | `run_title_store_unavailable` | `PATCH /runs/{id}/title` (`run_title.go`): this store cannot rename a run. |
 | `run_inspect_no_runner` / `run_inspect_terminal` / `run_inspect_no_sandbox` / `run_inspect_paused` / `run_inspect_exec_stream_unsupported` / `run_resources_read_failed` / `run_files_no_exec_session` | `GET /runs/{id}/resources` and `GET /runs/{id}/files` (`run_resources.go`, `run_files.go`): the two widgets read the identical run-state facts and share a reason per cause rather than each inventing its own synonym. |
