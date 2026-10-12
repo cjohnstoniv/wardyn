@@ -163,12 +163,12 @@ func TestRelayConn_ReadDeadlineUnblocksARead(t *testing.T) {
 func TestRelayConn_ZeroClearsAndRearmReplaces(t *testing.T) {
 	c, _, _ := relayPair(t)
 	for _, set := range []func(time.Time) error{c.SetWriteDeadline, c.SetReadDeadline, c.SetDeadline} {
-		_ = set(time.Now().Add(50 * time.Millisecond))
+		_ = set(time.Now().Add(time.Second))
 		_ = set(time.Time{})
 	}
-	_ = c.SetWriteDeadline(time.Now().Add(50 * time.Millisecond))
+	_ = c.SetWriteDeadline(time.Now().Add(time.Second))
 	_ = c.SetWriteDeadline(time.Now().Add(time.Hour))
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(1500 * time.Millisecond)
 	if _, err := c.Write([]byte("still open")); err != nil {
 		t.Fatalf("write after cleared and replaced deadlines = %v", err)
 	}
