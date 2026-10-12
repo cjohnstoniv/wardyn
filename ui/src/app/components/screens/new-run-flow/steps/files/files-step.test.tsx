@@ -14,35 +14,34 @@ import { filesPreflight, limitsFor, MAIN_DRIVE_FACTS, REPO_ATTACHMENT, SCENARIO_
 import type { RepoBranches } from "../../../../../lib/api/repo-branches";
 import type { RunIntent } from "../../draft/run-intent";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
-import type { FilesPreflight } from "./files-seams";
 import { FilesStep } from "./files-step";
 
 const wfetchMock = vi.fn();
 const go = vi.fn();
 vi.mock("../../../../../lib/api/core", async (orig) => ({ ...(await orig<typeof import("../../../../../lib/api/core")>()), wfetch: (...a: unknown[]) => wfetchMock(...a) }));
-vi.mock("../../draft/use-intent-checks", () => ({ PREFLIGHT_DEBOUNCE_MS: 0 }));
+// The shared checks hook is faked: it owns debounce and identity fencing, which are its own tests'.
+const checks = vi.hoisted(() => ({ bodies: [] as (Record<string, unknown> | null)[], result: null as unknown, principal: "alice" }));
+vi.mock("../../draft/use-intent-checks", () => ({
+  useDraftIdentity: () => ({ principal: checks.principal, resolved: true, revision: 0, authGeneration: 0 }),
+  useIntentChecks: (params: { body: Record<string, unknown> | null }) => {
+    checks.bodies.push(params.body);
+    return { preflightResult: params.body === null ? null : checks.result };
+  },
+}));
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const LISTED: RepoBranches = { listing: "listed", branches: ["main", "dev"], default: "main", truncated: false };
 const INTERACTIVE: RunIntent = { shape: "environment", experience: "interactive" };
 const BACKGROUND: RunIntent = { shape: "application", experience: "background", workload: { kind: "command", command: "make" } };
 
-let preflight: FilesPreflight;
 let branches: RepoBranches | Response;
-let holdPreflight = false;
-const bodies: Record<string, unknown>[] = [];
 beforeEach(() => {
-  preflight = filesPreflight(MAIN_DRIVE_FACTS.filesystem);
+  checks.result = filesPreflight(MAIN_DRIVE_FACTS.filesystem);
   branches = LISTED;
-  bodies.length = 0;
+  checks.bodies.length = 0;
+  checks.principal = "alice";
   go.mockReset();
-  holdPreflight = false;
-  wfetchMock.mockImplementation(async (path: string, init?: { body?: string }) => {
-    if (path === "/runs/preflight" && holdPreflight) return new Promise(() => {});
-    if (path === "/runs/preflight") {
-      bodies.push(JSON.parse(init?.body ?? "{}"));
-      return json(preflight);
-    }
+  wfetchMock.mockImplementation(async (path: string) => {
     if (path.includes("/branches")) return branches instanceof Response ? branches : json(branches);
     if (path.startsWith("/workspaces")) return json(SCENARIO_FILES_WORKSPACES.member);
     throw new Error(`unexpected ${path}`);
@@ -102,7 +101,7 @@ describe("main drive", () => {
   });
 
   it("names the server or the organisation when they, not the pool, set the cap", async () => {
-    preflight = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), runner_pools: [{ ...filesPreflight(MAIN_DRIVE_FACTS.filesystem).runner_pools![0], limits: [limitsFor("interactive", 4096, "deployment")] }] };
+    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), runner_pools: [{ ...filesPreflight(MAIN_DRIVE_FACTS.filesystem).runner_pools![0], limits: [limitsFor("interactive", 4096, "deployment")] }] };
     show();
     await screen.findByText(NR_FILES.UP_TO(4));
     await userEvent.clear(size());
@@ -122,14 +121,14 @@ describe("main drive", () => {
   });
 
   it("reads a cap under 1 GiB with one decimal (A8)", async () => {
-    preflight = filesPreflight(MAIN_DRIVE_FACTS.filesystem, 512);
+    checks.result = filesPreflight(MAIN_DRIVE_FACTS.filesystem, 512);
     show();
     expect(await screen.findByText(NR_FILES.UP_TO("0.5"))).toBeInTheDocument();
     expect(size()).toHaveValue(0.5);
   });
 
   it("omits the cap line when nothing caps the size, and asks for a size when nothing defaults it", async () => {
-    preflight = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), runner_pools: [{ ...filesPreflight(MAIN_DRIVE_FACTS.filesystem).runner_pools![0], limits: [limitsFor("interactive")] }] };
+    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), runner_pools: [{ ...filesPreflight(MAIN_DRIVE_FACTS.filesystem).runner_pools![0], limits: [limitsFor("interactive")] }] };
     show();
     await screen.findByText(NR_FILES.ENFORCED);
     expect(screen.queryByText(/^Up to/)).toBeNull();
@@ -148,13 +147,13 @@ describe("enforcement chip (W1)", () => {
     ["none", NR_FILES.NOT_ENFORCED],
     ["runner", `${NR_FILES.ENFORCED} ${NR_FILES.REPORTED_BY_RUNNER}`],
   ] as const)("%s says its own words", async (word, text) => {
-    preflight = filesPreflight(MAIN_DRIVE_FACTS[word]);
+    checks.result = filesPreflight(MAIN_DRIVE_FACTS[word]);
     show();
     expect(await screen.findByText(text)).toBeInTheDocument();
   });
 
   it("an unknown word shows no chip", async () => {
-    preflight = filesPreflight(MAIN_DRIVE_FACTS.unknown);
+    checks.result = filesPreflight(MAIN_DRIVE_FACTS.unknown);
     show();
     await screen.findByText(NR_FILES.UP_TO(8));
     expect(screen.queryByText(NR_FILES.ENFORCED)).toBeNull();
@@ -162,7 +161,7 @@ describe("enforcement chip (W1)", () => {
   });
 
   it("its tooltip opens on press and carries the server's sentence", async () => {
-    preflight = filesPreflight(MAIN_DRIVE_FACTS.none);
+    checks.result = filesPreflight(MAIN_DRIVE_FACTS.none);
     show();
     await userEvent.click(await screen.findByRole("button", { name: NR_FILES.NOT_ENFORCED_ARIA }));
     expect(await screen.findByText(NR_FILES.NOT_ENFORCED_TIP)).toBeInTheDocument();
@@ -176,11 +175,11 @@ describe("what happens to it (W2)", () => {
   });
 
   it("deletes it when the pool keeps nothing, and for a Background run", async () => {
-    preflight = filesPreflight(MAIN_DRIVE_FACTS.eviction);
+    checks.result = filesPreflight(MAIN_DRIVE_FACTS.eviction);
     show();
     expect(await screen.findByText(NR_FILES.LIFE_DELETED)).toBeInTheDocument();
     cleanup();
-    preflight = filesPreflight(MAIN_DRIVE_FACTS.filesystem, 8192, "background");
+    checks.result = filesPreflight(MAIN_DRIVE_FACTS.filesystem, 8192, "background");
     show(BACKGROUND);
     expect(await screen.findByText(NR_FILES.LIFE_DELETED)).toBeInTheDocument();
   });
@@ -189,6 +188,7 @@ describe("what happens to it (W2)", () => {
     show({ ...INTERACTIVE, no_end: true });
     expect(await screen.findByText(NR_FILES.LIFE_NO_END)).toBeInTheDocument();
     cleanup();
+    checks.result = null;
     show();
     expect(screen.queryByText(NR_FILES.LIFE_LABEL)).toBeNull();
   });
@@ -255,7 +255,7 @@ describe("repositories", () => {
 
 describe("mount map and summary", () => {
   it("lists the main drive and the server's attachment paths, marking the start, from the run's own preflight", async () => {
-    preflight = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), attachments: [{ ...REPO_ATTACHMENT, target: "/srv/checkout/payments", starts_here: true }] };
+    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), attachments: [{ ...REPO_ATTACHMENT, target: "/srv/checkout/payments", starts_here: true }] };
     show({ ...INTERACTIVE, workspaces: [{ workspace_id: "ws-payments", repos: [{ repo: "github.com/acme/payments" }] }], start_folder: { kind: "attachment", attachment: "ws-payments", repo: "github.com/acme/payments" } });
     const map = screen.getByRole("region", { name: NR_FILES.MOUNT_TITLE });
     expect(await within(map).findByText("└ /srv/checkout/payments")).toBeInTheDocument();
@@ -264,11 +264,27 @@ describe("mount map and summary", () => {
     expect(screen.getByText("/srv/checkout/payments", { selector: "code" })).toBeInTheDocument();
   });
 
-  it("falls back to the workspace's clone path while the preflight is not in", async () => {
-    holdPreflight = true;
-    show({ ...INTERACTIVE, workspaces: [{ workspace_id: "ws-docs", repos: [{ repo: "github.com/acme/docs" }] }] });
+  it("keeps the last server answer through an edit instead of guessing a map from the draft", async () => {
+    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), attachments: [REPO_ATTACHMENT, { kind: "drive", drive_id: "d1", name: "Notes", target: "/home/agent/drives/notes", read_only: false, starts_here: false }] };
+    show({ ...INTERACTIVE, workspaces: [{ workspace_id: "ws-payments" }], start_folder: { kind: "attachment", attachment: "ws-payments" } });
     const map = screen.getByRole("region", { name: NR_FILES.MOUNT_TITLE });
-    expect(await within(map).findByText("└ /home/agent/work/docs")).toBeInTheDocument();
+    expect(await within(map).findByText("└ /home/agent/drives/notes")).toBeInTheDocument();
+    // the next answer is not in yet: the hook has nothing current for this body
+    checks.result = null;
+    await userEvent.click(await includeBox("docs"));
+    expect(within(map).getByText("└ /home/agent/drives/notes")).toBeInTheDocument();
+    expect(within(map).getByText("└ /home/agent/work/payments")).toBeInTheDocument();
+  });
+
+  it("drops a kept answer when the person it was for is gone", async () => {
+    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), attachments: [REPO_ATTACHMENT] };
+    show({ ...INTERACTIVE, workspaces: [{ workspace_id: "ws-payments" }], start_folder: { kind: "attachment", attachment: "ws-payments" } });
+    const map = screen.getByRole("region", { name: NR_FILES.MOUNT_TITLE });
+    expect(await within(map).findByText("└ /home/agent/work/payments")).toBeInTheDocument();
+    checks.principal = "bob";
+    checks.result = null;
+    await userEvent.click(await includeBox("docs"));
+    expect(within(map).queryByText("└ /home/agent/work/payments")).toBeNull();
   });
 
   it("the summary is a status that follows the choices", async () => {
@@ -294,7 +310,7 @@ describe("choices and Continue", () => {
     expect(drawn().no_repositories_or_drives).toBeUndefined();
   });
 
-  it("holds Continue on the 'No extra files' choice until one is made, then opens Tools and access with the size committed", async () => {
+  it("holds Continue on the 'No extra files' choice until one is made, then opens Tools and access; an untouched size is not sent", async () => {
     show();
     await screen.findByText(NR_FILES.UP_TO(8));
     await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_TOOLS) }));
@@ -303,7 +319,7 @@ describe("choices and Continue", () => {
     await userEvent.click(screen.getByRole("radio", { name: NR_FILES.NO_EXTRA }));
     await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_TOOLS) }));
     expect(go).toHaveBeenCalledWith({ screen: "step", step: "tools" });
-    expect(drawn().resources).toEqual({ disk_mib: 4096 });
+    expect(drawn().resources).toBeUndefined();
   });
 
   it("holds Continue on the first Starts here radio when something is included and nothing starts", async () => {
@@ -314,9 +330,35 @@ describe("choices and Continue", () => {
     expect(go).not.toHaveBeenCalled();
   });
 
-  it("asks nothing of the server until the earlier steps are answered", async () => {
+  it("sends nothing while a step's local issues are open, and sends once they close", async () => {
     show({});
     await screen.findByRole("checkbox", { name: NR_FILES.INCLUDE_ARIA("payments") });
-    expect(bodies).toHaveLength(0);
+    expect(checks.bodies.every((b) => b === null)).toBe(true);
+    cleanup();
+    checks.bodies.length = 0;
+    show();
+    await userEvent.click(await includeBox("docs"));
+    expect(checks.bodies.at(-1)).toBeNull();
+    await userEvent.click(screen.getByRole("radio", { name: `docs ${NR_FILES.STARTS_HERE}` }));
+    expect(checks.bodies.at(-1)).toMatchObject({ mode_contract: "0.9", start_folder: { attachment: "ws-docs" } });
+  });
+
+  it("asks for the pool's facts before anything is chosen, but never sends the prefilled size as a request", async () => {
+    show();
+    await screen.findByText(NR_FILES.UP_TO(8));
+    expect(size()).toHaveValue(4);
+    await userEvent.click(screen.getByRole("radio", { name: NR_FILES.NO_EXTRA }));
+    await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_TOOLS) }));
+    expect(go).toHaveBeenCalled();
+    expect(drawn().resources).toBeUndefined();
+    expect(checks.bodies.at(-1)).not.toHaveProperty("resources");
+  });
+
+  it("with no repository included, a held Continue focuses the Repositories section", async () => {
+    show({ ...INTERACTIVE, drive: { enabled: true } });
+    await screen.findByRole("checkbox", { name: NR_FILES.INCLUDE_ARIA("payments") });
+    await userEvent.type(size(), "2");
+    await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_TOOLS) }));
+    expect(document.getElementById("nr-starts-here")).toHaveFocus();
   });
 });

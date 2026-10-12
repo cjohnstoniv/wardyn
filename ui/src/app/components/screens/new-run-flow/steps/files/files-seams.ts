@@ -10,12 +10,11 @@
 // replaces the placeholder here and nothing else changes.
 
 import * as React from "react";
-import { runs } from "../../../../../lib/api/runs";
 import type { PreflightResult } from "../../../../../lib/types/preflight";
 import type { LimitSource, RunnerPoolChoice, RunnerPoolRunType } from "../../../../../lib/types/runner-pools";
 import type { Workspace } from "../../../../../lib/types/workspaces";
 import type { CreateRunWire } from "../../draft/intent-to-wire";
-import { PREFLIGHT_DEBOUNCE_MS } from "../../draft/use-intent-checks";
+import { useDraftIdentity, useIntentChecks } from "../../draft/use-intent-checks";
 
 /** Seam: DS3-S3. The weakest word across the pool's eligible targets. */
 export type MainDriveEnforcement = "filesystem" | "eviction" | "none" | "unknown";
@@ -106,23 +105,19 @@ export function readMainDrive(pre: FilesPreflight | null, runType: RunnerPoolRun
   };
 }
 
-/** What the draft's own preflight answered. `current` is false while a newer draft is still being asked. */
-export function useFilesPreflight(body: CreateRunWire | null): { result: FilesPreflight | null; current: boolean } {
-  const key = body === null ? "" : JSON.stringify(body);
-  const [read, setRead] = React.useState<{ key: string; result: FilesPreflight } | null>(null);
-  React.useEffect(() => {
-    if (body === null) return;
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-      // A refusal leaves the last answer in place: the step reads facts, it does not gate on them.
-      runs.preflightRunWire(body, controller.signal).then(
-        (result) => { if (!controller.signal.aborted) setRead({ key, result: result as FilesPreflight }); },
-        () => {},
-      );
-    }, PREFLIGHT_DEBOUNCE_MS);
-    return () => { clearTimeout(timer); controller.abort(); };
-    // `key` stands for `body`: a new object with the same content is no new question.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
-  return { result: read?.result ?? null, current: read !== null && read.key === key };
+/**
+ * The run's preflight through the shared checks hook, which fences every answer by identity and auth
+ * generation and sends nothing while `body` is null. The last answer of the current identity is kept
+ * across edits, so what the step shows never falls back to a local guess while a newer one is asked.
+ */
+export function useFilesPreflight(body: CreateRunWire | null): FilesPreflight | null {
+  const identity = useDraftIdentity();
+  const checks = useIntentChecks({
+    body, selectionKey: "", identity, externalRevision: "", sourceRefreshPending: false,
+    autoCheck: { local: true, backendArm: false, modelArm: false }, doorOpen: false, adoDoorOpen: false,
+  });
+  const identityKey = `${identity.principal}|${identity.authGeneration}`;
+  const last = React.useRef<{ key: string; result: FilesPreflight } | null>(null);
+  if (checks.preflightResult) last.current = { key: identityKey, result: checks.preflightResult as FilesPreflight };
+  return last.current?.key === identityKey ? last.current.result : null;
 }

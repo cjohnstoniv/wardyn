@@ -15,7 +15,7 @@ describe("summaryText", () => {
     expect(summaryText({ ...BASE, keptDrives: ["Notes"], life: { kind: "kept", grace: "24 hours" } }))
       .toBe("Main drive 4 GiB · starts in payments · Notes is kept · the main drive is kept 24 hours after its end time");
     expect(summaryText({ ...BASE, keptDrives: ["A", "B"], life: { kind: "noEnd" } }))
-      .toBe("Main drive 4 GiB · starts in payments · A and B are kept · the main drive is kept until you end the run");
+      .toBe("Main drive 4 GiB · starts in payments · A is kept · B is kept · the main drive is kept until you end the run");
   });
 
   it("asks for a choice until something is chosen and marked as the start", () => {

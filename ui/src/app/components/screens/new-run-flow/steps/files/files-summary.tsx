@@ -32,11 +32,11 @@ export function summaryText(f: SummaryFacts): string {
   const life = lifeFragment(f.life);
   if (f.noExtra) return life ? NR_FILES.SUMMARY_NO_EXTRA(f.size, life) : NR_FILES.SUMMARY_MAIN(f.size);
   if (!f.chosen || !f.startsName) return NR_FILES.CHOOSE_FILES;
-  const kept = f.keptDrives.join(" and ");
   const parts = [
     NR_FILES.SUMMARY_MAIN(f.size),
     NR_FILES.SUMMARY_STARTS(f.startsName),
-    f.keptDrives.length === 0 ? undefined : f.keptDrives.length === 1 ? NR_FILES.SUMMARY_KEPT_ONE(kept) : NR_FILES.SUMMARY_KEPT_MANY(kept),
+    // One canon clause per drive, joined with the canon separator: no local conjunction.
+    ...f.keptDrives.map((name) => NR_FILES.SUMMARY_KEPT_ONE(name)),
     life,
   ].filter((p): p is string => !!p);
   return parts.reduce((all, p) => NR_SHARED.JOIN(all, p));
