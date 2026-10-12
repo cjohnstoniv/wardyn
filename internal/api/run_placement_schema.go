@@ -36,8 +36,9 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[awsCLIDispatch]():        strings.Fields("ComponentID AWS"),
 	reflect.TypeFor[types.CLIAWS]():          strings.Fields("StartURL SSORegion AccountID RoleName Region"),
 	reflect.TypeFor[dispatchCeiling]():       strings.Fields("localSelfDefinedComponents resolved deny profile maxEphemeralDiskMiB maxCPUMillis maxMemoryMiB adoEntra bedrock adoStanding agentGuardrailLocks"),
-	reflect.TypeFor[dispatchParams](): strings.Fields("TrustedOutput RunToken Image Policy FirstGitHubGrantID GitGrants PATBroker PATAPI GitPATGrants SSHGrants Injections Interactive TaskMode InteractiveStart SeedAutoTools ToolApprovals ApprovalExpiryAfter ExtraEnv Toolchains UserMounts EphemeralDirs Drive Components " +
+	reflect.TypeFor[dispatchParams](): strings.Fields("TrustedOutput RunToken Image Policy FirstGitHubGrantID GitGrants PATBroker PATAPI GitPATGrants SSHGrants Injections Interactive TaskMode InteractiveStart SeedAutoTools ToolApprovals ApprovalExpiryAfter ExtraEnv Toolchains UserMounts EphemeralDirs Drive MainDrive Components " +
 		"PolicyOverridden PushRuleSets HarnessToolRules Harnesses"),
+	reflect.TypeFor[mainDriveDecision]():    strings.Fields("MiB Soft Basis DefaultSource"),
 	reflect.TypeFor[llmTransport]():         strings.Fields("bedrock bedrockReady injectBedrockBearer injectBedrockSSO azure provider secretEnvKeys bedrockAudit"),
 	reflect.TypeFor[providerAzureLane]():    strings.Fields("provider owner harness endpoint host route audience model fast"),
 	reflect.TypeFor[toolchainNeeds]():       strings.Fields("goTools jvmTools"),
