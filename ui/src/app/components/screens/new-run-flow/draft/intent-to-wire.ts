@@ -23,36 +23,47 @@ export interface WireResult {
 }
 
 const carried = (rows: readonly TemplateFieldRule[]) => new Set(rows.filter((r) => !r.excluded && !r.pending).map((r) => r.name));
-const REQUEST = carried(TEMPLATE_REQUEST_FIELDS);
-const POLICY = carried(TEMPLATE_POLICY_FIELDS);
 
-function policyOverlay(spec: Record<string, unknown>, unsupported: string[]): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(spec)) {
-    if (value === undefined) continue;
-    if (POLICY.has(name)) out[name] = value;
-    else unsupported.push(`inline_policy.${name}`);
-  }
-  return out;
-}
+/**
+ * A serializer over one registry. The overlay's row may be named either way
+ * (`inline_policy` today, `policy_overlay` once the server renames it).
+ */
+export function wireSerializer(requestRows: readonly TemplateFieldRule[], policyRows: readonly TemplateFieldRule[]) {
+  const REQUEST = carried(requestRows);
+  const POLICY = carried(policyRows);
+  const overlayCarried = REQUEST.has("inline_policy") || REQUEST.has(POLICY_CARRIER);
 
-export function intentToWire(intent: RunIntent, launch?: { title: string; description: string }): WireResult {
-  const unsupported: string[] = [];
-  const body: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(intent)) {
-    if (value === undefined) continue;
-    if (!REQUEST.has(key)) {
-      unsupported.push(key);
-      continue;
+  function policyOverlay(spec: Record<string, unknown>, unsupported: string[]): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const [name, value] of Object.entries(spec)) {
+      if (value === undefined) continue;
+      if (POLICY.has(name)) out[name] = value;
+      else unsupported.push(`inline_policy.${name}`);
     }
-    if (key === "inline_policy" && value !== null && typeof value === "object") {
-      body[POLICY_CARRIER] = policyOverlay(value as Record<string, unknown>, unsupported);
-    } else body[key] = value;
+    return out;
   }
-  body.mode_contract = "0.9";
-  if (launch) {
-    body.title = launch.title;
-    if (launch.description) body.description = launch.description;
-  }
-  return { body: body as CreateRunWire, unsupported };
+
+  return function serialize(intent: RunIntent, launch?: { title: string; description: string }): WireResult {
+    const unsupported: string[] = [];
+    const body: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(intent)) {
+      if (value === undefined) continue;
+      const overlay = key === "inline_policy";
+      if (overlay ? !overlayCarried : !REQUEST.has(key)) {
+        unsupported.push(key);
+        continue;
+      }
+      if (overlay && value !== null && typeof value === "object") {
+        body[POLICY_CARRIER] = policyOverlay(value as Record<string, unknown>, unsupported);
+      } else body[key] = value;
+    }
+    body.mode_contract = "0.9";
+    if (launch) {
+      body.title = launch.title;
+      if (launch.description) body.description = launch.description;
+    }
+    return { body: body as CreateRunWire, unsupported };
+  };
 }
+
+export const intentToWire = wireSerializer(TEMPLATE_REQUEST_FIELDS, TEMPLATE_POLICY_FIELDS);

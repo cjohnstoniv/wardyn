@@ -42,6 +42,13 @@ describe("New Run URL grammar (U8)", () => {
     expect(parse(`again=${R}`)).toEqual({ location: { screen: "review", view: "pretty" }, again: R, normalised: false });
   });
 
+  it("never carries a template or run to run again into Start or Launched", () => {
+    const from = { template: { id: T, revision: 4 }, again: R };
+    expect(newRunHref({ screen: "start" }, from)).toBe("/runs/new");
+    expect(newRunHref({ screen: "launched", runId: R }, from)).toBe(`/runs/new?launched=${R}`);
+    expect(parse(newRunHref({ screen: "start" }, { template: { id: T } })).location).toEqual({ screen: "start" });
+  });
+
   it("lets launched win over every other key", () => {
     expect(parse(`step=files&again=${R}&launched=${R}`)).toEqual({ location: { screen: "launched", runId: R }, normalised: false });
   });
@@ -50,6 +57,8 @@ describe("New Run URL grammar (U8)", () => {
     "step=review2", "step=Files", "step=start", "step=document", "step=document&format=xml", "step=review&view=raw",
     `template=not-a-uuid`, `template=${T}&rev=0`, `template=${T}&rev=x`, `template=${T}&again=${R}`,
     "again=123", "launched=", "launched=../admin",
+    "foo=1", "step=shape&foo=1", "rev=3", "step=shape&format=yaml", "step=review&format=json", "step=document&format=yaml&view=pretty",
+    "step=shape&step=run", `again=${R}&rev=2`,
   ])("?%s is outside the grammar: Start, replacing the URL", (query) => {
     expect(parse(query)).toEqual(START);
   });

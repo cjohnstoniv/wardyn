@@ -73,12 +73,19 @@ export function parseNewRunSearch(q: URLSearchParams): ParsedNewRunSearch {
   }
   const seeded = template !== null || again !== null;
   const location = stepLocation(q.get("step"), q, seeded ? { screen: "review", view: "pretty" } : { screen: "start" });
-  return location ? { location, ...from, normalised: false } : START;
+  if (!location) return START;
+  const known = new Set(["step", ...(template !== null ? ["template", "rev"] : []), ...(again !== null ? ["again"] : [])]);
+  if (location.screen === "document") known.add("format");
+  if (location.screen === "review") known.add("view");
+  const keys = [...q.keys()];
+  if (keys.some((k) => !known.has(k)) || new Set(keys).size !== keys.length) return START;
+  return { location, ...from, normalised: false };
 }
 
-/** The canonical href of a New Run screen. */
+/** The canonical href of a New Run screen. Start and Launched name no template or run to run again. */
 export function newRunHref(loc: NewRunLocation, from: NewRunFrom = {}): string {
   const q = new URLSearchParams();
+  if (loc.screen === "start") return NEW_RUN_PATH;
   if (loc.screen === "launched") {
     q.set("launched", loc.runId);
     return `${NEW_RUN_PATH}?${q}`;

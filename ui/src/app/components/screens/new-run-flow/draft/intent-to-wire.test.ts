@@ -6,7 +6,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runs } from "../../../../lib/api/runs";
 import { launchGateOpen } from "./launch-gate";
-import { intentToWire } from "./intent-to-wire";
+import { TEMPLATE_POLICY_FIELDS, TEMPLATE_REQUEST_FIELDS } from "../../../../lib/template-fields";
+import { intentToWire, wireSerializer } from "./intent-to-wire";
 import type { RunIntent } from "./run-intent";
 
 // A document-loaded intent: carriers, a document-only end, a policy overlay
@@ -111,5 +112,29 @@ describe("intentToWire unsupported fields (U2)", () => {
     const gate = (blockers: number) => launchGateOpen({ blockers, preflight: { generation: 3, at: now }, generation: 3, now });
     expect(gate(unsupported.length)).toBe(false);
     expect(gate(intentToWire(INTENT).unsupported.length)).toBe(true);
+  });
+});
+
+describe("the overlay's registry row, under either name", () => {
+  const overlay = { inline_policy: { allowed_domains: ["a.example"] } } satisfies RunIntent;
+  const rows = (rename: (name: string) => string | undefined) =>
+    TEMPLATE_REQUEST_FIELDS.flatMap((r) => (rename(r.name) ? [{ ...r, name: rename(r.name) as string }] : []));
+
+  it("sends the overlay when the registry names its row inline_policy", () => {
+    expect(wireSerializer(rows((n) => n), TEMPLATE_POLICY_FIELDS)(overlay)).toEqual({
+      body: { policy_overlay: { allowed_domains: ["a.example"] }, mode_contract: "0.9" }, unsupported: [],
+    });
+  });
+
+  it("sends the overlay when the registry names its row policy_overlay", () => {
+    const renamed = rows((n) => (n === "inline_policy" ? "policy_overlay" : n));
+    expect(wireSerializer(renamed, TEMPLATE_POLICY_FIELDS)(overlay)).toEqual({
+      body: { policy_overlay: { allowed_domains: ["a.example"] }, mode_contract: "0.9" }, unsupported: [],
+    });
+  });
+
+  it("reports the overlay when the registry carries neither", () => {
+    const without = rows((n) => (n === "inline_policy" ? undefined : n));
+    expect(wireSerializer(without, TEMPLATE_POLICY_FIELDS)(overlay)).toEqual({ body: { mode_contract: "0.9" }, unsupported: ["inline_policy"] });
   });
 });

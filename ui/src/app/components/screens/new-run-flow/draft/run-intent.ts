@@ -35,7 +35,8 @@ export type NewRunOrigin =
   | { kind: "again"; runId: string; title: string }
   | { kind: "import" }
   | { kind: "composer" }
-  | { kind: "clone"; runId: string };
+  /** runId is absent while the older clone door's prefill does not carry it. */
+  | { kind: "clone"; runId?: string };
 
 /** UI-only facts with no wire field. Never serialised, never saved, never sent. */
 export interface GuidedFacts {
