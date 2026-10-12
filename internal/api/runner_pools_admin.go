@@ -100,6 +100,13 @@ func (s *Server) handleUpdateRunnerPool(w http.ResponseWriter, r *http.Request) 
 		writePoolInvalid(w, err.Error())
 		return
 	}
+	// The audit row below is built from cur, so a request naming any other revision is refused before the
+	// store call: one that names a revision another admin's write just made would otherwise be a store
+	// no-op audited against the older pool. The store checks the revision again under the pool lock.
+	if req.Revision != cur.Revision {
+		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: cur.Name})
+		return
+	}
 	var state *types.RunnerPoolState
 	if req.State != nil {
 		st := types.RunnerPoolState(*req.State)
