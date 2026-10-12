@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"slices"
@@ -425,6 +426,30 @@ func (s *Server) getRunOr404(w http.ResponseWriter, r *http.Request, id uuid.UUI
 //     credentials: it loads the run through getRunForEntry (run_entry.go).
 func (s *Server) ownsRunOrAdmin(r *http.Request, run types.AgentRun) bool {
 	return s.isSecurityOperator(r.Context()) || run.CreatedBy == principalFromRequest(r)
+}
+
+// sponsorsRun reports whether the caller of r is the CURRENT sponsor of the service identity that created
+// run, whatever that identity's state: a sponsor keeps sight of, and the stop on, a suspended or retired
+// service's live runs. A store that cannot answer is no.
+func (s *Server) sponsorsRun(r *http.Request, run types.AgentRun) bool {
+	name, ok := strings.CutPrefix(run.CreatedBy, types.ServicePrincipalPrefix)
+	principal := principalFromRequest(r)
+	if !ok || principal == "" || isServicePrincipal(principal) {
+		return false
+	}
+	si, err := s.serviceRecord(r.Context(), name)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		slog.ErrorContext(r.Context(), "wardynd: service identity lookup failed; the sponsor arm refuses", "run_id", run.ID, "err", err)
+	}
+	return err == nil && si.Sponsor == principal
+}
+
+// ownsRunOrSponsorOrAdmin is ownsRunOrAdmin plus the sponsor of the service identity that created run (F3):
+// read and stop, nothing else. It is wired into exactly GET /runs/{id}, /events, /output and POST
+// /runs/{id}/kill (GET /runs lists through the store, runs_policy.go); every other run route keeps
+// ownsRunOrAdmin, so a sponsor reaches no hold, file, grant, profile or run token. A census test pins the set.
+func (s *Server) ownsRunOrSponsorOrAdmin(r *http.Request, run types.AgentRun) bool {
+	return s.ownsRunOrAdmin(r, run) || s.sponsorsRun(r, run)
 }
 
 // ownsRunOrSuperAdmin is ownsRunOrAdmin's strict twin: the run's owner, or a
