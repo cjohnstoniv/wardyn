@@ -152,3 +152,37 @@ func TestEventAckLostAckResumesWithoutLosingDurableTail(t *testing.T) {
 		t.Fatalf("durable tail replayed despite accepted cursor: %d ingests", accepted.Load())
 	}
 }
+
+// EventsAck writes the whole batch before it waits, and one cumulative ACK for
+// the last event settles it: one round trip per batch.
+func TestEventsAckPipelinesUntilCumulativeAck(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	org, b := Loopback()
+	run := NewPeer(b, PeerConfig{})
+	defer run.Close()
+	go run.Run(ctx) //nolint:errcheck // the test owns shutdown
+	evs := make([]Event, 8)
+	for i := range evs {
+		evs[i] = Event{Kind: EventSpool}
+	}
+	done := make(chan error, 1)
+	go func() { done <- run.EventsAck(ctx, evs) }()
+	for seq := uint64(1); seq <= uint64(len(evs)); seq++ {
+		f, err := org.ReadFrame(ctx)
+		if err != nil || f.Type != TypeEvent || f.Seq != seq {
+			t.Fatalf("event %d not sent before any ACK: %+v %v", seq, f, err)
+		}
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("returned before the ACK: %v", err)
+	default:
+	}
+	if err := org.WriteFrame(ctx, Frame{Type: TypeAck, Payload: EncodeAck(uint64(len(evs)))}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
