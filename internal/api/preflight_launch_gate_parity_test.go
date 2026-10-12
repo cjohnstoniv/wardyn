@@ -143,6 +143,7 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepModelProvider", foldCreate | foldPreflight | foldPreview},
 	{"stepAutonomy", foldCreate | foldPreflight | foldPreview},
 	{"stepToolPolicy", foldCreate | foldPreflight | foldPreview},
+	{"stepGitHubCLIRepo", foldCreate | foldPreflight},
 	{"stepADOStanding", foldCreate | foldPreflight | foldPreview},
 	{"stepPATNarrowing", foldPreflight | foldPreview},
 	{"stepRunEnd", foldCreate | foldPreflight | foldPreview},
