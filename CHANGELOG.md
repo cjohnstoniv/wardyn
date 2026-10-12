@@ -86,6 +86,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   them. An older proxy refuses them under strict decode, so upgrade proxies together with wardynd.
 - Migration `0162_run_queue` adds the QUEUED run state, `admitted_at` and the `run_queue` table; nothing changes
   for existing runs.
+- Migration `0165_run_templates` adds `run_templates`, `run_template_revisions`, `template_group_admins` and
+  `template_group_labels`; nothing changes for existing data.
 
 ### Added
 
@@ -164,8 +166,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (unknown fields, secrets, run state, owner fields, titles and descriptions are refused) through one validator for
   text and structs, and its partial policy is laid onto the source policy rather than replacing it. Adds the
   `template_*` reasons, a declarative configuration schema for custom components, `wardyn template` and SDK methods.
-  The `/templates` and `/admin/template-group-admins` routes answer `501 templates_unavailable` until the template
-  store lands, except `POST /templates/import`.
+- Run templates are stored. A person keeps a run setup for themselves, an admin publishes one to the organisation
+  from the Admin view, and a person granted management of a group's templates publishes to that group. Every
+  revision is kept, and an update names the revision it read, so a stale update changes nothing. Names are unique per
+  audience; each person and each group holds at most 200 templates and the organisation 500. A template saved as
+  `kind: policy` holds only run-wide network, credential and access-rule keys and never writes a stored policy.
+- `PUT /api/v1/admin/template-group-admins` grants one known person management of one group's templates and can give
+  the group a display label; a name that matches no person, or more than one, is refused. There is no console screen
+  for it in this release.
+- Erasure gains the `run_setups` scope: a person's own templates, their group grants and their name on shared
+  templates. The SCIM purge asks for it. New reasons: `template_name_taken` (409), `template_limit_reached` (409) and
+  `template_policy_field_refused` (422).
+- `GET /api/v1/workspaces/{id}/branches?repo=<repo>` lists one workspace repository's branches for the New Run
+  branch picker, through the credential the run would clone with: Azure DevOps uses the person's own token or
+  sign-in; GitHub uses the organisation's GitHub App with a one-repository `contents: read` token, revoked best effort after the
+  read. A listing that fails answers `200` with `listing: unavailable`. Adds the reasons `workspace_repo_unknown` (422)
+  and `branch_list_rate_limited` (429, 30 a minute per person) and the audit action `workspace.branches.list`.
 - Runner pool contract: the run-create, preflight and policy-preview requests accept `runner_pool_id`. Preflight and
   the preview return `runner_pools`. `wardyn run --pool` and `wardyn runner pool list|default get|set|clear` are
   added.
@@ -379,6 +395,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- A relayed runner connection honours read and write deadlines, so a response written to a peer that stopped reading
+  is aborted instead of holding the run's stream open.
 - Runner spool replay after a reconnect sends each batch of up to 64 decisions before waiting for one
   acknowledgement, and the pass before READY ends at the spool head seen when it started, so a large backlog or a busy
   proxy no longer keeps a runner offline for minutes.
