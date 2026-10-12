@@ -196,6 +196,11 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		return reviveResult{}, reviveRefused(http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
 	}
 	defer unlockRun()
+	// One deadline bounds every call the revive makes to a runner while it holds the run's lock, so a
+	// runner that stops answering cannot hold the lock, or a lock connection, past it.
+	runnerDeadline := time.Now().Add(reviveRunnerTimeout)
+	ctx, endRunnerCalls := withRunnerDeadline(ctx, run, runnerDeadline)
+	defer endRunnerCalls()
 
 	c, rerr := s.reviveCeilingAdmitting(ctx, run, actorType, actor)
 	if rerr != nil {
@@ -251,6 +256,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// This is also what bounds how long the run's lock is held.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
+	// The runner calls below stay under the revive's one runner deadline; the compensation does not.
+	runnerCtx, endClaimedRunnerCalls := withRunnerDeadline(ctx, run, runnerDeadline)
+	defer endClaimedRunnerCalls()
 	data := map[string]any{
 		"subject":                 run.CreatedBy,
 		"profile_id":              run.GovernanceProfileID,
@@ -263,7 +271,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		"proxy_release":           version.Version,
 	}
 	s.stampLiveRevive(run)
-	if err := s.replaceRevivedProxy(ctx, rv, run, cfgJSON); err != nil {
+	if err := s.replaceRevivedProxy(runnerCtx, rv, run, cfgJSON); err != nil {
 		data["error"] = err.Error()
 		if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
 			// The old proxy was never touched (an image that cannot be pulled, a
@@ -309,7 +317,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		}
 		// Only now, behind the new proxy. A failed start is lost (reboot) again,
 		// which stops the new proxy with the agent.
-		if err := s.startRevivedAgent(ctx, starter, run); err != nil {
+		if err := s.startRevivedAgent(runnerCtx, starter, run); err != nil {
 			data["error"] = "start agent: " + err.Error()
 			return reviveResult{}, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonReviveAgentStartFailedLost,
 				"the run's agent could not be started, so the run is stopped and lost until revived: ", err)
@@ -690,7 +698,8 @@ func (s *Server) revivePlacementDenied(ctx context.Context, run types.AgentRun, 
 	if remotePlacement(p) {
 		p = types.PlacementRemote
 	}
-	if !slices.Contains(c.denyPlacements, p) {
+	// A managed-harness sign-in (a server-set task no request can name) is exempt, as at create.
+	if run.Task == harnessLoginTask || !slices.Contains(c.denyPlacements, p) {
 		return nil
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",

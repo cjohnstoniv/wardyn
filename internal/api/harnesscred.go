@@ -489,7 +489,9 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	if cerr != nil {
 		return types.AgentRun{}, harnessLoginDispatch{}, cerr
 	}
-	// Exempt from deny_placements on purpose: Wardyn-authored, no workspace content, and the only way to authenticate a harness.
+	// Exempt from deny_placements on purpose, at create, dispatch (dispatchCeiling.placementExempt) and
+	// revive (revivePlacementDenied): Wardyn-authored, no workspace content, and the only way to
+	// authenticate a harness.
 	// Strongest advertised at or above the floor: a ~1yr credential deserves the
 	// best available isolation, so the capture must never run weaker than the
 	// admin floor demands. ceilingFloorClass is the same admin floor

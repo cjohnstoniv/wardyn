@@ -126,7 +126,7 @@ func (s *Server) finishHarnessLoginLaunch(ctx context.Context, run types.AgentRu
 		s.failAndRevoke(ctx, run.ID, types.RunPending, harnessLoginCeilingUnresolved)
 		return
 	}
-	s.dispatchRun(ctx, run, dc, dispatchParams{
+	s.dispatchRun(ctx, run, dc.placementExempt(), dispatchParams{
 		RunToken: d.RunToken, Image: d.Image, Policy: d.Policy,
 		Interactive: true, ExtraEnv: d.ExtraEnv,
 	})

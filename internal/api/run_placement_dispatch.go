@@ -48,6 +48,14 @@ func (s *Server) dispatchPlacementDenied(ctx context.Context, run types.AgentRun
 	return true
 }
 
+// placementExempt is c for a run Wardyn authors itself, a managed-harness sign-in or a site-config probe,
+// which deny_placements does not bind at any door: no workspace content, and the only way to do what it
+// does (harnesscred.go's create-time exemption).
+func (c dispatchCeiling) placementExempt() dispatchCeiling {
+	c.denyPlacements = nil
+	return c
+}
+
 // createSandboxAtTarget creates the run's sandbox on the exact target it was admitted against, the one
 // persisted on its row, and nowhere else. A pool is only the label the run was admitted under: the pool's
 // members, a revoked runner and anyone's defaults can change after admission, and none of that reroutes a

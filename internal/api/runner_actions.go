@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
@@ -33,6 +34,35 @@ type substrateRegistry interface {
 type runnerEndpoint struct {
 	sub  *remote.Substrate
 	link *remote.Link
+	// leasing is the runner's one LEASE-send slot (capacity 1), taken before the run's lock: a runner that
+	// stops acknowledging holds at most one lock connection, whatever number of its runs are re-leased.
+	leasing chan struct{}
+}
+
+// acquireLease takes the runner's LEASE-send slot, waiting at most wait (0: only if it is free now). An
+// endpoint built without a slot has none to take.
+func (ep runnerEndpoint) acquireLease(ctx context.Context, wait time.Duration) (release func(), ok bool) {
+	if ep.leasing == nil {
+		return func() {}, true
+	}
+	release = func() { <-ep.leasing }
+	select {
+	case ep.leasing <- struct{}{}:
+		return release, true
+	default:
+	}
+	if wait <= 0 {
+		return nil, false
+	}
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case ep.leasing <- struct{}{}:
+		return release, true
+	case <-t.C:
+	case <-ctx.Done():
+	}
+	return nil, false
 }
 
 // runnerEndpoint is the one remote substrate (and Link) of a runner for this
@@ -44,7 +74,7 @@ func (s *Server) runnerEndpoint(id uuid.UUID) runnerEndpoint {
 	if ep, ok := s.runnerStreams.subs[id]; ok {
 		return ep
 	}
-	ep := runnerEndpoint{link: &remote.Link{}}
+	ep := runnerEndpoint{link: &remote.Link{}, leasing: make(chan struct{}, 1)}
 	ep.sub = remote.New(id.String(), ep.link, remote.Options{Queue: func(ctx context.Context, kind types.RunnerActionKind, ref string) error {
 		return s.queueRunnerTeardown(ctx, id, kind, ref)
 	}, Dispatch: s.runnersEnabled, Relay: s.acceptRelay,
