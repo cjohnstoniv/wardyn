@@ -251,6 +251,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- A held runner-pool use-policy change now records whether the pool had a use policy when it was reviewed, so a
+  change reviewed on an open pool no longer applies over a policy a leaver purge emptied (or the reverse); it
+  goes stale instead. Held changes proposed before the upgrade must be proposed again.
+- Updating a runner pool with a revision that another admin's write just made is refused as stale instead of
+  writing a `runner_pool.update` audit row for a change that did not happen.
 - Per-run overrides: a narrowing edit on a run with no chosen policy keeps the default's workspace mounts and
   onboarded repositories. The Azure DevOps card narrows within the provider's default profile when the policy
   names no capabilities. `remove_secrets` accepts only your own stored secrets and refuses any other name the
