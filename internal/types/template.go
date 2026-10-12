@@ -3,7 +3,13 @@
 
 package types
 
-import "slices"
+import (
+	"encoding/json"
+	"slices"
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // Run templates (0.9): reusable run setups a person keeps for themselves, an
 // administrator publishes to the organisation, or a group administrator
@@ -28,6 +34,19 @@ const (
 func (s TemplateScope) Valid() bool {
 	return s == TemplateScopePerson || s == TemplateScopeOrg || s == TemplateScopeGroup
 }
+
+// TemplateKind is what a template holds. A policy is a template whose intent
+// holds only run-wide network, credential and access-rule keys under
+// inline_policy, laid onto the user's defaults at use.
+type TemplateKind string
+
+const (
+	TemplateKindTemplate TemplateKind = "template"
+	TemplateKindPolicy   TemplateKind = "policy"
+)
+
+// Valid reports whether k is one of the two kinds.
+func (k TemplateKind) Valid() bool { return k == TemplateKindTemplate || k == TemplateKindPolicy }
 
 // TemplateOwner is the trusted catalogue key of one template: the scope and
 // the identity that scope is bound to. The server assigns it from the
@@ -67,6 +86,9 @@ type TemplateGroupAdmin struct {
 	Group     string `json:"group_id"`
 	Person    string `json:"person"`
 	GrantedBy string `json:"granted_by,omitempty"`
+	// Label is the group's display label, set by an organisation
+	// administrator. Display only: authority follows Group.
+	Label string `json:"label,omitempty"`
 }
 
 // Canonical returns the grant in the form TemplateAuthorize compares: the group
@@ -81,7 +103,24 @@ func (g TemplateGroupAdmin) Canonical() (TemplateGroupAdmin, bool) {
 	if !ok || person == "" {
 		return TemplateGroupAdmin{}, false
 	}
-	return TemplateGroupAdmin{Group: group, Person: person, GrantedBy: g.GrantedBy}, true
+	return TemplateGroupAdmin{Group: group, Person: person, GrantedBy: g.GrantedBy, Label: g.Label}, true
+}
+
+// RunTemplate is one stored template revision: the catalogue key, the kind,
+// and the name, description and document that revision saved. Document is the
+// door-normalised template document as JSON; the store never reads into it.
+type RunTemplate struct {
+	ID          uuid.UUID
+	Owner       TemplateOwner
+	Kind        TemplateKind
+	Name        string
+	Description string
+	Revision    int
+	Document    json.RawMessage
+	CreatedAt   time.Time
+	CreatedBy   string
+	UpdatedAt   time.Time
+	UpdatedBy   string
 }
 
 // TemplateActor is the caller, as the server verified them for this request.
@@ -212,7 +251,7 @@ const (
 // reaching the handler, and the per-scope authority the handler then enforces
 // with TemplateAuthorize. RouterClass uses authz_test.go's route class names
 // and TestTemplateRoutesMatchRouteMatrix holds each row to routeMatrix and the
-// router. The routes are mounted and answer 501 until the template store lands.
+// router.
 type TemplateRoute struct {
 	Route       string
 	RouterClass string

@@ -233,8 +233,8 @@ type failingStore struct{ store.Store }
 
 // TestTemplateImportDoorIsLitAndStoresNothing: POST /templates/import answers
 // 200 with the normalised document for a valid Run document and with
-// diagnostics for an invalid one; it touches no store, and every other
-// template route still answers 501 until the storage lane lands.
+// diagnostics for an invalid one; it touches no store, and on a store that
+// keeps no templates every other template route answers 501.
 func TestTemplateImportDoorIsLitAndStoresNothing(t *testing.T) {
 	h := newHarness(t)
 	srv := New(baseTestConfig(h, failingStore{}))
