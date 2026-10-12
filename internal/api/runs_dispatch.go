@@ -458,7 +458,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// runs saw the whole map. See splitSecretEnv (it moves, never copies).
 	// Per-harness approval credentials: digests to the proxy config below, the
 	// started harness's plaintext as a file only its own launch reads, never env.
-	harnessCreds, credFiles, merr := s.stampHarnessCredential(ctx, p.HarnessToolRules, run.Agent, p.Drive)
+	harnessCreds, credFiles, merr := s.stampHarnessCredential(ctx, run, p.HarnessToolRules, p.Drive)
 	if merr != nil {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's tool-approval credential could not be made")
 		return

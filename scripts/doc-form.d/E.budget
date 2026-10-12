@@ -18,4 +18,5 @@
 # docs/ENV.md 36210 measured after F-588 M2 merge.
 # docs/ENV.md 36241 adds 31 (0.9 A-L3): the WARDYN_TOOLGATE_CREDENTIAL row.
 # docs/ENV.md 36318 measured after merge.
-docs/ENV.md=36318 share=5
+docs/ENV.md=36330 share=5
+# docs/ENV.md 36330 adds 12 over 36318 (0.9 DS1-S2a r1): the WARDYN_TOOLGATE_CREDENTIAL row names the credential file and its mode on each substrate.
