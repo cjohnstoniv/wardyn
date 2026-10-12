@@ -7,6 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -218,5 +221,44 @@ func TestAWSCLI_SecondRowRefused(t *testing.T) {
 	w := f.ask(t, componentDoors[1], componentBody(ref, second))
 	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "second AWS CLI component") {
 		t.Fatalf("two AWS CLI rows = %d %s, want 422", w.Code, w.Body.String())
+	}
+}
+
+// A run whose model, or an included harness's, comes through an AWS sign-in is
+// refused an AWS CLI component at every door, not first at dispatch: the step
+// runs at all three and answers 422.
+func TestAWSCLI_BedrockSignInRefusedAtTheDoors(t *testing.T) {
+	i := slices.IndexFunc(runFoldSteps, func(st runFoldStep) bool {
+		return strings.HasSuffix(runtime.FuncForPC(reflect.ValueOf(st.run).Pointer()).Name(), ".stepAWSCLIProfile")
+	})
+	if i < 0 || runFoldSteps[i].modes != foldAll {
+		t.Fatalf("stepAWSCLIProfile is not a fold step at every door")
+	}
+	id := uuid.MustParse(cliAWSID)
+	comps := runComponents{attached: []attachedComponent{{source: componentSourceOrg,
+		snapshot: types.RunComponent{ComponentID: &id, Name: "AWS", Definition: cliAWSRowDef()}}}}
+	sso := runProviderChoice{chosen: true, provider: types.ModelProvider{Kind: types.ModelProviderBedrockSSO}}
+	key := runProviderChoice{chosen: true, provider: types.ModelProvider{Kind: types.ModelProviderAnthropicAPIKey}}
+	for _, tc := range []struct {
+		name    string
+		primary runProviderChoice
+		set     []harnessChoice
+		comps   runComponents
+		refused bool
+	}{
+		{"the run's provider is a Bedrock sign-in", sso, nil, comps, true},
+		{"an included harness's is", key, []harnessChoice{{harness: "codex-cli", choice: sso}}, comps, true},
+		{"a key provider", key, nil, comps, false},
+		{"no AWS CLI component", sso, nil, runComponents{}, false},
+	} {
+		w := httptest.NewRecorder()
+		f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/", nil), comps: tc.comps, mpChoice: tc.primary, harnessChoices: tc.set}
+		ok := (&Server{}).stepAWSCLIProfile(f, &foldRecorder{})
+		if ok == tc.refused {
+			t.Errorf("%s: step passed = %t, want %t", tc.name, ok, !tc.refused)
+		}
+		if tc.refused && (w.Code != http.StatusUnprocessableEntity || reasonOf(t, w) != reasonComponentCLIAWSWithBedrockSignIn) {
+			t.Errorf("%s: answer %d %s", tc.name, w.Code, w.Body.String())
+		}
 	}
 }

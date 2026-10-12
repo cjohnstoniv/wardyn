@@ -136,14 +136,14 @@ func sinkReservedSecret(name string) bool {
 // nameSinkReservedSecret is sinkReservedSecret for the two lanes that resolve
 // an AUTHORED secret name to plaintext through the owner-then-operator read —
 // env_secret (into the sandbox env) and llm_inspection (onto the proxy's policy
-// copy) — PLUS every per-person model-provider name, whatever its suffix. A
+// copy) — PLUS every per-person model-provider and CLI sign-in name, whatever its suffix. A
 // model credential reaches a run only through its provider's own lane, read
 // strictly from its owner's namespace; either of these lanes naming one would
 // hand the key (the operator's, through the fallback) to the run as a value.
 // Not sinkReservedSecret itself: the api_key sink legitimately resolves the
 // -key and -oauth names for the provider's own host-pinned grant.
 func nameSinkReservedSecret(name string) bool {
-	return sinkReservedSecret(name) || strings.HasPrefix(name, providerSecretPrefix)
+	return sinkReservedSecret(name) || strings.HasPrefix(name, providerSecretPrefix) || strings.HasPrefix(name, cliSecretPrefix)
 }
 
 // secretsAPIReserved is the reserved-name guard for the GENERIC secrets API
