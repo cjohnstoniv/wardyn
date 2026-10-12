@@ -222,7 +222,7 @@ func printSyncReport(w io.Writer, r *syncReport) {
 		fmt.Fprintf(w, "conflict (changed on both sides; the laptop's copy wins, the sandbox's is not pulled): %s\n", syncShown(p))
 	}
 	for _, x := range r.Refused {
-		fmt.Fprintf(w, "refused (%s): %s\n", x.Reason, syncShown(x.Path))
+		fmt.Fprintf(w, "refused (%s): %s\n", syncShown(x.Reason), syncShown(x.Path))
 	}
 }
 
@@ -466,5 +466,5 @@ func syncExitError(status int, stderr string) error {
 	case -1:
 		return errors.New("sync: the channel ended without an exit status from the sandbox's sftp-server")
 	}
-	return fmt.Errorf("sync: the sandbox's sftp-server exited %d: %s", status, strings.TrimSpace(stderr))
+	return fmt.Errorf("sync: the sandbox's sftp-server exited %d: %s", status, syncShown(strings.TrimSpace(stderr)))
 }
