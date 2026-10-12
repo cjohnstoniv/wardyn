@@ -319,6 +319,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	createData := createRunAuditData(req, f.policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
 	createData["policy_source"], createData["end"] = f.source, f.end.audit(run)
+	stampConfinementDefault(createData, reqCC, f.confinementDefault)
 	if len(gw.delivery) > 0 {
 		createData["delivery"] = gw.delivery
 	}
