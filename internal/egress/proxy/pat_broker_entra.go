@@ -151,7 +151,7 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 		p.httpError(w, "resolve Azure DevOps credential", fmt.Errorf("no Azure DevOps credential is configured for %s", host), http.StatusBadGateway)
 		return
 	}
-	registerHeaderCredential(hdr.value)
+	registerHeaderCredentialFor(p.maskKey, hdr.value)
 
 	// A lane that enforces content rules asks for a pack it can read: the
 	// same no-thin rewrite, on the same trigger, the other two lanes make
@@ -182,7 +182,7 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 		if retry {
 			drainClose(resp)
 			hdr = fresh
-			registerHeaderCredential(hdr.value)
+			registerHeaderCredentialFor(p.maskKey, hdr.value)
 			p.emitDialledAllow(decisionLog(p.reqOf(r, host, 443), egress.Allow, ruleSourceADOGitReresolved), host)
 			again, ok := p.forwardBrokeredGit(w, r, host, rest, replay(), allowSrc, ruleSourceADOGitDenied, authorize)
 			if !ok {

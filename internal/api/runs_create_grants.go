@@ -54,6 +54,15 @@ type grantWiring struct {
 	// reason: a lane dropped silently fails mid-clone, inside the sandbox, where
 	// nobody is reading.
 	warnings []string
+	// delivery is a local run's per-grant delivery, for run.create (design 0.9 §7.5).
+	delivery []grantDeliveryRecord
+}
+
+// grantDeliveryRecord is one run.create delivery entry: the grant, its OD-12 class and its mode.
+type grantDeliveryRecord struct {
+	GrantID uuid.UUID      `json:"grant_id"`
+	Class   string         `json:"class"`
+	Mode    placement.Mode `json:"mode"`
 }
 
 // persistRunGrants persists each eligible grant as an eligibility record (NOT
@@ -72,9 +81,10 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 		writeErrorReason(w, placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable), "unclassified stored run placement")
 		return grantWiring{}, false
 	}
+	var deliveries []localGrantDelivery
 	if runPlacement == types.PlacementLocal {
 		var refusal *runRefusal
-		spec, refusal = s.ownLocalGrantSpecs(r, spec)
+		spec, deliveries, refusal = s.ownLocalGrantSpecs(r, spec)
 		if refusal.write(s, w, r) {
 			return grantWiring{}, false
 		}
@@ -98,7 +108,7 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 	// there — two rows of one kind on one host are a supported configuration, and
 	// whichever of them is listed first is not an answer.
 	specRepos := repoLocatorsOf(spec.WorkspaceRepos)
-	for _, g := range spec.EligibleGrants {
+	for i, g := range spec.EligibleGrants {
 		grantID := uuid.New()
 		// A stored git token for an Azure DevOps host is read from the run
 		// owner's OWN row only (#1429): the shared, operator-namespace token is
@@ -108,11 +118,13 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 				g.OwnerOnly = true
 			}
 		}
-		// A local run's grants are all its owner's own (ownLocalGrantSpecs); the
-		// relay serves an injection or mint only for a grant recorded so.
+		// A local run's grant is its owner's own or delivered via_org
+		// (ownLocalGrantSpecs); the relay serves an injection or mint only for a
+		// grant recorded own, and /internal/via-org/ only for one recorded via_org.
 		delivery := types.GrantDeliveryNone
 		if runPlacement == types.PlacementLocal {
-			delivery = types.GrantDeliveryOwn
+			delivery = types.GrantDelivery(deliveries[i].mode)
+			gw.delivery = append(gw.delivery, grantDeliveryRecord{GrantID: grantID, Class: deliveries[i].class, Mode: deliveries[i].mode})
 		}
 		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
 			ID:        grantID,

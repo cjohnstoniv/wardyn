@@ -4925,6 +4925,8 @@ What the switch needs, and refuses to render or boot without:
 - **A PodDisruptionBudget** (`minAvailable: 1`) and a preferred **pod anti-affinity**
   across nodes (soft, so a one-node cluster still schedules every replica; an
   `affinity.podAntiAffinity` of your own replaces it).
+- **Per-replica limits add up.** The `via_org` byte total of a local run is 8 GiB per
+  run per replica and resets on restart.
 
 > [!WARNING]
 > `allowMultiReplica` and the `-allow-multi-instance` flag are **removed**, a

@@ -343,6 +343,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	createData := createRunAuditData(req, f.policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
 	createData["policy_source"] = f.source
+	if len(gw.delivery) > 0 {
+		createData["delivery"] = gw.delivery
+	}
 	createData["end"] = f.end.audit(run)
 	comps.stampRunCreate(createData)
 	maps.Copy(createData, f.place.auditFields(created))
