@@ -65,6 +65,9 @@ type attachedComponent struct {
 	// provides — never which: that name is the operator's.
 	needsOwnSecrets  []string
 	needsAdminSecret bool
+	// needsSignIn: the caller has not signed in for this AWS CLI row yet. Set on
+	// the preview alone, like needsOwnSecrets; the other doors refuse it.
+	needsSignIn bool
 }
 
 // componentAdmission is one request's state while its components are admitted
@@ -79,6 +82,8 @@ type componentAdmission struct {
 	credentials bool
 	// operatorSecrets is the operator namespace's names, listed at most once.
 	operatorSecrets map[string]bool
+	// awsCLI: an AWS CLI row was admitted already.
+	awsCLI bool
 }
 
 // componentRefusal is a gate refusal and what its audit row may say about the
@@ -247,6 +252,9 @@ func (s *Server) admitComponent(r *http.Request, adm *componentAdmission, i int,
 		return attachedComponent{}, refused
 	}
 	if refused := s.componentHostsBounded(r, adm, c, i); refused != nil {
+		return attachedComponent{}, refused
+	}
+	if refused := s.componentCLIAdmitted(r, adm, &c, i); refused != nil {
 		return attachedComponent{}, refused
 	}
 	if si := componentResidentSecret(def); si >= 0 && adm.settings.DenyResidentDelivery {

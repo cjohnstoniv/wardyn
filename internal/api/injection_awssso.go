@@ -211,7 +211,10 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 	// model-provider conversion, and no session serves it any more.
 	drift := "model_provider"
 	var scope awsSSOScope
-	if run.ModelProviderID != "" && snapshot.ProviderUID != "" {
+	switch {
+	case snapshot.ComponentID != "":
+		scope, drift = s.cliSSOScopeAt(ctx, run, snapshot, claims.Sub)
+	case run.ModelProviderID != "" && snapshot.ProviderUID != "":
 		scope, drift = providerSSOScopeAt(siteCfg, run, snapshot, claims.Sub)
 	}
 	if drift != "" {
@@ -231,6 +234,12 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 		return fail(http.StatusForbidden, reasonStoreError, credentialReauthStoreErrorBody, nil)
 	}
 	reason := awsSSOReauthReasonNotFound
+	if found && scope.cli != "" && !blob.bindsSnapshot(snapshot) {
+		// A CLI session is stored for the row it was captured for, and the
+		// row's pin is what the sandbox's profile names.
+		return fail(http.StatusForbidden, reasonScopeChanged, credentialReauthScopeChangedRefusal,
+			map[string]any{"drift": "sso_pin", "owner": snapshot.OwnerSubject})
+	}
 	if found {
 		var refreshFailure string
 		blob, refreshFailure = s.refreshAWSSSOBlob(ctx, scope, blob)
@@ -256,7 +265,11 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 	if reason != "" {
 		// A provider run is held like any other: its owner's sign-in through
 		// that provider's own door (provider_signin.go) answers the hold.
-		return s.holdOrRefuseCredentialReauth(w, r, claims, snapshot, run.ModelProviderID, reason)
+		modelProvider := run.ModelProviderID
+		if snapshot.ComponentID != "" {
+			modelProvider = "" // a CLI row's hold names the row, never the run's model provider
+		}
+		return s.holdOrRefuseCredentialReauth(w, r, claims, snapshot, modelProvider, reason)
 	}
 
 	// (6) LIVE. Per-run masking is ADDITIVE to the global registration
@@ -313,6 +326,7 @@ type awsSSOReauthScopeBody struct {
 	Owner            string `json:"owner"`
 	Provider         string `json:"provider,omitempty"`
 	ProviderUID      string `json:"provider_uid,omitempty"`
+	ComponentID      string `json:"component_id,omitempty"`
 }
 
 // holdOrRefuseCredentialReauth answers the DEAD-credential path: 423 while a
@@ -386,6 +400,7 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 	if snapshot.ProviderUID != "" {
 		scope.Provider, scope.ProviderUID = modelProvider, snapshot.ProviderUID
 	}
+	scope.ComponentID = snapshot.ComponentID
 	reqScope, _ := json.Marshal(scope)
 	// The id is minted HERE so this caller can tell whether it RAISED the request
 	// or merely found one. RequestApproval's dedup — the pre-insert
@@ -416,13 +431,16 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 	// RequestApproval itself emits nothing (its dedup is silent by design), so
 	// without this row "whose credential, held how long, resolved by whom" is
 	// unanswerable from the trail.
+	data := withModelProvider(map[string]any{
+		"approval_id": created.ID, "owner": snapshot.OwnerSubject,
+		"credential_source": snapshot.CredentialSource, "provider": awsSSOProvider,
+		"reason": reason, "detail": credentialReauthRaisedSentence,
+	}, modelProvider)
+	if snapshot.ComponentID != "" {
+		data["component_id"], data["detail"] = snapshot.ComponentID, cliAWSReauthRaisedSentence
+	}
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorSystem, "wardynd",
-		"credential.reauth.request", created.ID.String(), "success",
-		mustJSON(withModelProvider(map[string]any{
-			"approval_id": created.ID, "owner": snapshot.OwnerSubject,
-			"credential_source": snapshot.CredentialSource, "provider": awsSSOProvider,
-			"reason": reason, "detail": credentialReauthRaisedSentence,
-		}, modelProvider))))
+		"credential.reauth.request", created.ID.String(), "success", mustJSON(data)))
 	s.metrics.credentialReauthRecorded(credentialReauthOutcomeRequested)
 	writeJSON(w, http.StatusLocked, reauthPendingResponse{State: reauthPendingState, ApprovalID: created.ID})
 	return true
@@ -529,6 +547,7 @@ func reauthResolvableBy(ap types.ApprovalRequest, scope awsSSOScope, loginRun ty
 		Owner            string `json:"owner"`
 		CredentialSource string `json:"credential_source"`
 		ProviderUID      string `json:"provider_uid"`
+		ComponentID      string `json:"component_id"`
 	}
 	if json.Unmarshal(ap.RequestedScope, &sc) != nil {
 		return false
@@ -537,7 +556,8 @@ func reauthResolvableBy(ap types.ApprovalRequest, scope awsSSOScope, loginRun ty
 	// LAUNCH (loginRunScope), never from the live roster. And which provider's:
 	// a capture answers only its own provider's holds, a roster capture only
 	// roster holds (both "").
-	if sc.Owner != scope.owner || sc.CredentialSource != awsSSOCredentialSourceLabel(scope) || sc.ProviderUID != scope.provider {
+	if sc.Owner != scope.owner || sc.CredentialSource != awsSSOCredentialSourceLabel(scope) || sc.ProviderUID != scope.provider ||
+		sc.ComponentID != scope.cli {
 		return false
 	}
 	// I6 — generation. Strictly after: a login run created in the same instant

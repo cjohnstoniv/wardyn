@@ -508,28 +508,19 @@ func (s *Server) maskSSOBlob(blob awsSSOBlob, sso awsSSOScope) error {
 		[]byte(blob.AccessToken), []byte(blob.RefreshToken), []byte(blob.ClientSecret))
 }
 
-// bedrockSSOAuth is the captured-AWS-SSO credential mode over a live blob: the
-// synthetic ~/.aws the sandbox SDK resolves (its token cache a placeholder under
-// Phase B), the SSO egress hosts, and the blob's secrets masked. env is the
-// shared Bedrock env (bedrockBaseEnv) and hosts the Bedrock egress hosts; both
-// are extended. sso is the scope the blob was read in. The caller stamps readiness.
-func (s *Server) bedrockSSOAuth(blob awsSSOBlob, sso awsSSOScope, env map[string]string, hosts []string) bedrockAuth {
+// stageAWSSSOFiles writes the synthetic ~/.aws an AWS sign-in lane's sandbox
+// resolves, a Bedrock provider's and an AWS CLI row's alike: config as given,
+// the SSO token cache for blob (a placeholder when proxyInjected), and the
+// profile the SDK and the CLI select.
+func (s *Server) stageAWSSSOFiles(env map[string]string, config string, blob awsSSOBlob, proxyInjected bool) {
 	env[envAWSConfigFile] = sandboxAWSDir + "/config"
 	// Deliberately not materialized: a missing shared-credentials file is
 	// normal ("no static creds") and every AWS SDK treats it that way, which
 	// is exactly right here — the only credential source is the SSO cache.
 	env[envAWSSharedCredsFile] = sandboxAWSDir + "/credentials"
 	env[envAWSProfile] = awsSSOProfileName
-	// Phase B: with WARDYN_AWS_SSO_PROXY_INJECT on, the cache file
-	// carries an inert placeholder and the real access token is injected
-	// on the wire at portal.sso by the proxy. The switch is read ONCE,
-	// here, at dispatch: a run already dispatched keeps the lane it was
-	// authored with (its placeholder cache, its grant and its MITM entry)
-	// until it ends, so flipping the switch is a change to NEW dispatches
-	// and never a change under a running sandbox.
-	proxyInjected := s.cfg.AWSSSOProxyInject
 	env[awsSSOConfigEnvVar] = encodeArtifactConfig(map[string]string{
-		".aws/config": awsSSOConfigFileContents(blob),
+		".aws/config": config,
 		".aws/sso/cache/" + awsSSOCacheFileName(awsSSOProfileName) + ".json": awsSSOCacheFileContents(blob, proxyInjected),
 	})
 	// The TEST endpoint hatch, if the operator set it: the SDK resolves
@@ -538,6 +529,23 @@ func (s *Server) bedrockSSOAuth(blob awsSSOBlob, sso awsSSOScope, env map[string
 	// call denied on the real AWS host. nil on every real deployment, so
 	// this env map is byte-identical to before the knob existed.
 	maps.Copy(env, ssoInjectEndpointEnv(s.cfg.AWSSSOEndpointOverride))
+}
+
+// bedrockSSOAuth is the captured-AWS-SSO credential mode over a live blob: the
+// synthetic ~/.aws the sandbox SDK resolves (its token cache a placeholder under
+// Phase B), the SSO egress hosts, and the blob's secrets masked. env is the
+// shared Bedrock env (bedrockBaseEnv) and hosts the Bedrock egress hosts; both
+// are extended. sso is the scope the blob was read in. The caller stamps readiness.
+func (s *Server) bedrockSSOAuth(blob awsSSOBlob, sso awsSSOScope, env map[string]string, hosts []string) bedrockAuth {
+	// Phase B: with WARDYN_AWS_SSO_PROXY_INJECT on, the cache file
+	// carries an inert placeholder and the real access token is injected
+	// on the wire at portal.sso by the proxy. The switch is read ONCE,
+	// here, at dispatch: a run already dispatched keeps the lane it was
+	// authored with (its placeholder cache, its grant and its MITM entry)
+	// until it ends, so flipping the switch is a change to NEW dispatches
+	// and never a change under a running sandbox.
+	proxyInjected := s.cfg.AWSSSOProxyInject
+	s.stageAWSSSOFiles(env, awsSSOConfigFileContents(blob), blob, proxyInjected)
 	hosts = append(hosts, ssoEgressHosts(blob.Region, s.cfg.AWSSSOEndpointOverride)...)
 	// An error is carried on the result: the dispatch that built it refuses the
 	// run rather than start it with a credential that is not on record.
