@@ -96,7 +96,7 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 		return err
 	}
 	if forms.unproved != "" {
-		return s.refuseUnproved(ctx, st, id, forms.unproved)
+		return s.refuseUnproved(ctx, st, ident, forms.unproved)
 	}
 	forms = forms.destructive()
 	isEmail := func(t string) bool { return strings.Contains(t, "@") && !slices.Contains(forms.bound, t) }
@@ -141,8 +141,14 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 
 // refuseUnproved stops a purge whose leaver's entra form c is not proved theirs. The refusal is held on the
 // ledger's audit step, where /scim/status lists it; a retry that finds it there writes no second denied row.
-func (s *Server) refuseUnproved(ctx context.Context, st scimStore, id uuid.UUID, c string) error {
-	refused := fmt.Errorf("%w: the person's entra form %s is not proved theirs", errDeprovisionIncomplete, c)
+// No retry finishes it, so the refusal says what an admin does instead.
+func (s *Server) refuseUnproved(ctx context.Context, st scimStore, ident store.PrincipalIdentity, c string) error {
+	id := ident.ID
+	remedy := "an admin erases what is under that form by subject"
+	if ident.Principal == "" {
+		remedy = "an admin binds the SCIM user to the person's sign-in, or removes the other issuer's sign-in bound to that form"
+	}
+	refused := fmt.Errorf("%w: the person's entra form %s is not proved theirs; %s", errDeprovisionHeld, c, remedy)
 	key := store.JobKey{Step: store.JobStepAuditDeprovision}
 	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindPurge)
 	if err != nil {
@@ -289,11 +295,18 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 	if s.cfg.SCIM.PurgeAfter > 0 {
 		due, err := st.PurgeDueIdentities(ctx, scimSweepBatch)
 		errs = append(errs, err)
-		for _, id := range due {
-			if purged, err := s.purgeIdentity(ctx, st, id, scimSweeperSlot, true); err != nil {
+		for _, d := range due {
+			// A schedule on an identity no suspension of its own was recorded for came with another identity's
+			// suspension; it is left for an admin, and /scim/status keeps it listed as deactivated.
+			if !d.Suspended {
+				slog.WarnContext(ctx, "api: scim: not purging a deactivated identity with no suspension of its own on the ledger",
+					slog.String("identity", d.ID.String()))
+				continue
+			}
+			if purged, err := s.purgeIdentity(ctx, st, d.ID, scimSweeperSlot, true); err != nil {
 				errs = append(errs, err)
 			} else if purged {
-				slog.InfoContext(ctx, "api: scim: purged a suspended person past the purge delay", slog.String("identity", id.String()))
+				slog.InfoContext(ctx, "api: scim: purged a suspended person past the purge delay", slog.String("identity", d.ID.String()))
 			}
 		}
 	}

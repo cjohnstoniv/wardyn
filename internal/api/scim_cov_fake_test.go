@@ -621,18 +621,26 @@ func (s *scimCovStore) MarkIdentityPurged(_ context.Context, id uuid.UUID, requi
 	return true, nil
 }
 
-func (s *scimCovStore) PurgeDueIdentities(_ context.Context, _ int) ([]uuid.UUID, error) {
+func (s *scimCovStore) PurgeDueIdentities(_ context.Context, _ int) ([]store.DueIdentity, error) {
 	s.mu.Lock()
 	if err := s.enter("PurgeDueIdentities"); err != nil {
 		s.mu.Unlock()
 		return nil, err
 	}
-	var out []uuid.UUID
+	var suspended, out []store.DueIdentity
 	for _, id := range s.order {
 		if i := s.idents[id]; i.PurgedAt == nil && i.DeactivatedAt != nil && i.PurgeAfter != nil && !i.PurgeAfter.After(s.now) {
-			out = append(out, id)
+			d := store.DueIdentity{ID: id, Suspended: slices.ContainsFunc(s.jobs, func(j *store.DeprovisionJob) bool {
+				return j.IdentityID == id && j.Kind == store.JobKindSuspend
+			})}
+			if d.Suspended {
+				suspended = append(suspended, d)
+			} else {
+				out = append(out, d)
+			}
 		}
 	}
+	out = append(suspended, out...)
 	hook := s.afterDue
 	s.mu.Unlock()
 	if hook != nil {

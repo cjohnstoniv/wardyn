@@ -108,7 +108,7 @@ type LeaverStore interface {
 	FailDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey, cause error) error
 	ReopenDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey) error
 	MarkIdentityPurged(ctx context.Context, id uuid.UUID, requireDue bool) (bool, error)
-	PurgeDueIdentities(ctx context.Context, limit int) ([]uuid.UUID, error)
+	PurgeDueIdentities(ctx context.Context, limit int) ([]DueIdentity, error)
 	PendingLeavers(ctx context.Context, idleFor time.Duration, limit int) ([]PendingLeaver, error)
 	DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals, emails []string) (grants, assignments, kept int64, err error)
 	HeldEmails(ctx context.Context, id uuid.UUID, principals, emails []string) ([]string, error)

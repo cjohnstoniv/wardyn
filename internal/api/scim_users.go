@@ -82,7 +82,10 @@ func (s *Server) scimIdentity(w http.ResponseWriter, r *http.Request) (scimStore
 func (s *Server) scimServerError(w http.ResponseWriter, r *http.Request, what string, err error) {
 	slog.ErrorContext(r.Context(), "api: scim: "+what, slog.String("method", r.Method), slog.String("path", r.URL.Path), slog.Any("err", err))
 	status, detail := http.StatusInternalServerError, "the server could not complete the request; retry"
-	if errors.Is(err, errDeprovisionIncomplete) {
+	switch {
+	case errors.Is(err, errDeprovisionHeld):
+		detail = errDeprovisionHeld.Error()
+	case errors.Is(err, errDeprovisionIncomplete):
 		detail = "deprovisioning is incomplete; retry the request"
 	}
 	writeSCIMError(w, scim.NewError(status, "", detail))

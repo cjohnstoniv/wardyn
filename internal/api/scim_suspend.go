@@ -44,6 +44,10 @@ const (
 // every pending step is on the ledger, but the caller must retry.
 var errDeprovisionIncomplete = errors.New("deprovisioning is incomplete; retry the request")
 
+// errDeprovisionHeld is a purge that stops before its destructive steps until an admin acts: a retry does
+// not finish it. The request still answers 5xx.
+var errDeprovisionHeld = errors.New("deprovisioning is held until an admin acts; a retry does not finish it")
+
 // scimStore is what the SCIM routes need of the store: the identity rows, the leaver operations
 // and the groups.
 type scimStore interface {

@@ -237,6 +237,15 @@ func (e *scimEnv) seedOtherIssuersPrincipal(p, oid string) otherIssuersPrincipal
 // scheduled for purge nor purged.
 func (e *scimEnv) kept(o otherIssuersPrincipal, oid, when string) {
 	e.t.Helper()
+	e.keptRecords(o, when)
+	if id, err := e.st.GetIdentityByObject(context.Background(), o.issuer, e.tenant, oid); err != nil || id.PurgeAfter != nil || id.PurgedAt != nil {
+		e.t.Errorf("%s: %q's identity = %+v (%v), want it neither scheduled for purge nor purged", when, o.p, id, err)
+	}
+}
+
+// keptRecords checks P's credential, workspace and grant are all still there.
+func (e *scimEnv) keptRecords(o otherIssuersPrincipal, when string) {
+	e.t.Helper()
 	if n := e.credentialCount(o.p); n != 1 {
 		e.t.Errorf("%s: %q holds %d credentials, want its own kept", when, o.p, n)
 	}
@@ -245,9 +254,6 @@ func (e *scimEnv) kept(o otherIssuersPrincipal, oid, when string) {
 	}
 	if g, _ := e.userRows(o.p); g != 1 {
 		e.t.Errorf("%s: %q holds %d grants, want its own kept", when, o.p, g)
-	}
-	if id, err := e.st.GetIdentityByObject(context.Background(), o.issuer, e.tenant, oid); err != nil || id.PurgeAfter != nil || id.PurgedAt != nil {
-		e.t.Errorf("%s: %q's identity = %+v (%v), want it neither scheduled for purge nor purged", when, o.p, id, err)
 	}
 }
 
@@ -301,6 +307,42 @@ func TestSCIMPurgeLeavesAnotherIssuersEntraPrincipal(t *testing.T) {
 	e.kept(o, purgeOID, "after the sweeper")
 }
 
+// A schedule an earlier release left on P's identity, deactivated alongside the SCIM leaver Y whose
+// entra:<tenant>:<object> form is P's principal: P has no suspension of its own on the ledger, so the
+// sweeper past the purge delay leaves P's identity, credential, workspace and grant alone, and still purges
+// Y on schedule.
+func TestSCIMSweeperLeavesAScheduleWithNoSuspensionOfItsOwn(t *testing.T) {
+	e := newSCIMEnv(t, func(c *Config) { c.SCIM.PurgeAfter = time.Hour })
+	ctx := t.Context()
+	f := e.seedPurgeSubject(purgeSub, purgeEmail, purgeOID)
+	o := e.seedOtherIssuersPrincipal("entra:"+e.tenant+":"+purgeOID, purgeOID)
+	e.suspendOn(e.a, purgeEmail)
+	if _, err := e.pool.Exec(ctx, `UPDATE principal_identities SET purge_after = now() - interval '1 minute' WHERE issuer = $1`, o.issuer); err != nil {
+		t.Fatal(err)
+	}
+	p, err := e.st.GetIdentityByObject(ctx, o.issuer, e.tenant, purgeOID)
+	if err != nil || p.DeactivatedAt == nil || p.PurgeAfter == nil {
+		t.Fatalf("control: %q's identity = %+v (%v), want it deactivated and scheduled", o.p, p, err)
+	}
+	if jobs, err := e.st.ListDeprovisionJobs(ctx, p.ID, store.JobKindSuspend); err != nil || len(jobs) != 0 {
+		t.Fatalf("control: %q's suspension ledger = %+v (%v), want none of its own", o.p, jobs, err)
+	}
+
+	if err := e.sweepPastThePurgeDelay(); err != nil {
+		t.Errorf("sweep: %v", err)
+	}
+	e.keptRecords(o, "after the sweeper")
+	if p, err = e.st.GetIdentity(ctx, p.ID); err != nil || p.PurgedAt != nil {
+		t.Errorf("%q's identity = %+v (%v), want it not purged", o.p, p, err)
+	}
+	if row := e.identity(f.id); row.PurgedAt == nil {
+		t.Errorf("the leaver's identity = %+v, want it purged on schedule", row)
+	}
+	if n := e.credentialCount(purgeSub); n != 0 {
+		t.Errorf("the leaver kept %d credentials", n)
+	}
+}
+
 // A SCIM row no sign-in bound, whose entra:<tenant>:<object> form is another issuer's principal P: the
 // suspension cuts the form, and the purge refuses its destructive steps, so P's credential, workspace and
 // grant survive the DELETE and the sweeper.
@@ -337,15 +379,20 @@ func TestSCIMPurgeRefusalIsOnTheLedgerOnce(t *testing.T) {
 	ctx := t.Context()
 	e.seedOtherIssuersPrincipal("entra:"+e.tenant+":"+purgeOID, purgeOID)
 	id := e.postUserID(e.a, purgeOID, purgeEmail, purgeEmail)
-	if w := e.del(e.a, id); w.Code != http.StatusInternalServerError {
+	w := e.del(e.a, id)
+	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("DELETE = %d %s, want 500 (the purge refuses)", w.Code, w.Body.String())
+	}
+	if b := w.Body.String(); !strings.Contains(b, "a retry does not finish it") || strings.Contains(b, "retry the request") {
+		t.Errorf("DELETE body = %s, want it to say a retry does not finish the purge", b)
 	}
 	failures := func(when string) {
 		t.Helper()
 		got, err := e.st.ListDeprovisionFailures(ctx, 10)
 		if err != nil || len(got) != 1 || got[0].IdentityID.String() != id || got[0].Kind != store.JobKindPurge ||
-			got[0].Step != store.JobStepAuditDeprovision || got[0].LastError == "" {
-			t.Errorf("%s: deprovision failures = %+v (%v), want the one refusal on the purge's audit step", when, got, err)
+			got[0].Step != store.JobStepAuditDeprovision || !strings.Contains(got[0].LastError, "binds the SCIM user to the person's sign-in") ||
+			strings.Contains(got[0].LastError, "retry the request") {
+			t.Errorf("%s: deprovision failures = %+v (%v), want the one refusal on the purge's audit step, naming what an admin does", when, got, err)
 		}
 	}
 	failures("after the DELETE")
