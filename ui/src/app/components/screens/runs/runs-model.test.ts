@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import type { AgentRun, RunState } from "../../../lib/types";
-import { rowPresentation, sectionRuns, isTopQuiet, nonAttentionRuns } from "./runs-model";
+import { rowPresentation, sectionRuns, isTopQuiet, nonAttentionRuns, isLiveRunState } from "./runs-model";
 import { glyphKindFor } from "./row-glyph";
 
 // Relative to the moment the suite runs, not a literal date (scripts/
@@ -346,5 +346,12 @@ describe("isTopQuiet", () => {
   it("false when only an owner's sign-in is waiting (#1197 L4 H-3) — that is not quiet either", () => {
     const s = sectionRuns([run({ state: "RUNNING", attention: { kind: "reauth", by: "owner", pending: 1 } })], NOW);
     expect(isTopQuiet(s)).toBe(false);
+  });
+});
+
+describe("isLiveRunState — a waiting run is live", () => {
+  it("counts QUEUED with the other non-terminal states and no terminal one", () => {
+    for (const s of ["QUEUED", "PENDING", "STARTING", "RUNNING", "WAITING_FOR_CONFIRMATION"]) expect(isLiveRunState(s as RunState), s).toBe(true);
+    for (const s of ["COMPLETED", "STOPPED", "ARCHIVED", "FAILED", "KILLED"]) expect(isLiveRunState(s as RunState), s).toBe(false);
   });
 });

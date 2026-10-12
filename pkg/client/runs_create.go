@@ -429,6 +429,9 @@ type PreflightResult struct {
 	// BarrierOptions are the resolved pool's three barriers under this draft's
 	// floors (policy_floor and access_floor appear only here); empty when unpooled.
 	BarrierOptions []BarrierOption `json:"barrier_options"`
+	// RunnerPoolSlots is the resolved pool's slot counts, with the run's max_wait_sec; absent when
+	// unpooled. Advisory: the launch decides.
+	RunnerPoolSlots *PoolSlots `json:"runner_pool_slots,omitempty"`
 	// Access is what the run brings in: its rows, hosts, credentials, the line
 	// for an unlisted host and the setup still needed. The policy preview
 	// answers the same block for the same request.

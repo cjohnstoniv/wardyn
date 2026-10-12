@@ -107,6 +107,8 @@ type preflightResponse struct {
 	RunnerPools []client.RunnerPoolChoice  `json:"runner_pools"`
 	// BarrierOptions are the resolved pool's three barriers under this draft's floors; empty when unpooled.
 	BarrierOptions []client.BarrierOption `json:"barrier_options"`
+	// RunnerPoolSlots is the resolved pool's slot counts and this run's max_wait_sec; absent when unpooled. Advisory: the launch decides.
+	RunnerPoolSlots *client.PoolSlots `json:"runner_pool_slots,omitempty"`
 	// Access is what the run brings in (accessFacts), the same projection the
 	// policy preview answers for the same request.
 	Access *accessBlock `json:"access,omitempty"`
@@ -371,6 +373,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	resp.BarrierOptions = f.barrierOptions
 	resp.Image, resp.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
 	resp.Limits, resp.ResourcesApplied = f.place.sizeFacts()
+	resp.RunnerPoolSlots = s.runnerPoolSlots(ctx, f.place, *f.req)
 	resp.MainDrive = f.mainDrive.applied()
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred

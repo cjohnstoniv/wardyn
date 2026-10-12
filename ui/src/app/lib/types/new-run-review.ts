@@ -11,17 +11,10 @@
 import type { MainDriveApplied as RealMainDriveApplied } from "./new-run-contract";
 import type { PreflightResult } from "./preflight";
 import type { ConfinementClass } from "./runs";
-import type { RunnerPoolChoice } from "./runner-pools";
+import type { PoolSlots, RunnerPoolChoice } from "./runner-pools";
 
-/** Seam: Q-c. `runner_pool_slots` on preflight and preview (client.PoolSlots). */
-export interface PoolSlotsFact {
-  used: number;
-  /** Absent: the pool has no limit. */
-  max?: number;
-  waiting: number;
-  verdict: "starts_now" | "waits";
-  max_wait_sec?: number;
-}
+/** `runner_pool_slots` on preflight and preview (client.PoolSlots). */
+export type PoolSlotsFact = PoolSlots;
 
 /** Seam: DS-5. One of the caller's own runners in a self-hosted pool. */
 export interface PoolRunnerFact {
@@ -52,7 +45,6 @@ export type ReviewPoolChoice = RunnerPoolChoice & { my_runners?: PoolRunnerFact[
 
 export type ReviewPreflight = Omit<PreflightResult, "runner_pools" > & {
   runner_pools?: ReviewPoolChoice[];
-  runner_pool_slots?: PoolSlotsFact;
   barrier_options?: BarrierOptionFact[];
   main_drive?: MainDriveApplied;
 };
