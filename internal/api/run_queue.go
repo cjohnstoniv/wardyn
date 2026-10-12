@@ -80,6 +80,10 @@ type queuedLaunch struct {
 	ProfileID *uuid.UUID `json:"profile_id,omitempty"`
 	// ProviderID is the model provider the launch chose; the start re-resolves this one, never another.
 	ProviderID string `json:"provider_id,omitempty"`
+	// ConfinementDefault says who chose the class of a launch that named none (the organisation or the
+	// server); the start replays that class as the run's own, so a later change of the organisation's
+	// default never ends a run that already waited under one.
+	ConfinementDefault runnerpool.BarrierDefaultSource `json:"confinement_default,omitempty"`
 	// Repos are the run's repository locators, for the owner's provider door at the start.
 	Repos []string `json:"repos,omitempty"`
 	// Resources and LifetimeCapSec are what promotion's quota fit check asks about.
@@ -240,7 +244,7 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		return store.RunQueueEntry{}, err
 	}
 	launch := queuedLaunch{
-		Request: q.original, ProviderID: q.f.mpChoice.provider.ID, MaxWaitSec: waitSec,
+		Request: q.original, ProviderID: q.f.mpChoice.provider.ID, MaxWaitSec: waitSec, ConfinementDefault: q.f.confinementDefault,
 		Repos: runRepos(types.AgentRun{Repo: q.req.Repo}, nil), LifetimeCapSec: q.f.end.capSec,
 		Resources: s.runFitSpec(q.f.spec, q.f.mainDrive).Resources,
 	}
