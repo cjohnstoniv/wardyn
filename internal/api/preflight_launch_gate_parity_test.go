@@ -135,6 +135,7 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepComponents", foldCreate | foldPreflight | foldPreview},
 	{"stepPlacementDenied", foldCreate | foldPreflight | foldPreview},
 	{"stepPlacement", foldCreate | foldPreflight | foldPreview},
+	{"stepResources", foldCreate | foldPreflight | foldPreview},
 	{"stepLocalEligibility", foldCreate | foldPreflight | foldPreview},
 	{"stepConfinement", foldCreate | foldPreflight | foldPreview},
 	{"stepPlacementCapability", foldCreate | foldPreflight | foldPreview},

@@ -31,11 +31,12 @@ type policyPreviewResponse struct {
 	Components []componentFact `json:"components,omitempty"`
 	// Provenance says why each entry of the spec is there (runFold.prov); never null.
 	Provenance []provenanceRow `json:"provenance"`
-	// Resources is what each placement offers the draft and LocalPlacement
-	// whether each entry can run on the person's runner; both are always an
-	// array, empty until the lane that fills them lands.
-	Resources      []client.PlacementResources `json:"resources"`
-	LocalPlacement []client.LocalPlacementFact `json:"local_placement"`
+	// Limits and ResourcesApplied are the preflight's, with the same meaning.
+	// LocalPlacement says whether each entry can run on the person's runner:
+	// always an array, empty until the lane that fills it lands.
+	Limits           *types.EffectiveRunLimits   `json:"limits,omitempty"`
+	ResourcesApplied *client.AppliedResources    `json:"resources_applied,omitempty"`
+	LocalPlacement   []client.LocalPlacementFact `json:"local_placement"`
 	// Image is the image the run would start from and its source, absent until
 	// the image lane resolves it; AllowedImages are the organisation's allowed
 	// choices, an array that is empty until that lane fills it.
@@ -91,7 +92,7 @@ func policyPreviewFacts(req createRunRequest, spec types.RunPolicySpec, source p
 		Warnings: previewSafeWarnings(warnings), Pending: previewPending(req, choice),
 		RepositoryAccess: previewRepositoryAccess(req, out, site),
 		Provenance:       []provenanceRow{},
-		Resources:        []client.PlacementResources{}, LocalPlacement: []client.LocalPlacementFact{}, AllowedImages: []client.AllowedImage{},
+		LocalPlacement:   []client.LocalPlacementFact{}, AllowedImages: []client.AllowedImage{},
 		RunnerPools: []client.RunnerPoolChoice{},
 	}
 }

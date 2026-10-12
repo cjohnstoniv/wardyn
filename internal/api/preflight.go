@@ -80,10 +80,14 @@ type preflightResponse struct {
 	// Provenance says why each entry of the resolved spec is there; the policy
 	// preview returns the same rows for the same request. Never null.
 	Provenance []provenanceRow `json:"provenance"`
-	// Resources and LocalPlacement are the policy preview's, with the same
-	// meaning: always an array, empty until the lane that fills them lands.
-	Resources      []client.PlacementResources `json:"resources"`
-	LocalPlacement []client.LocalPlacementFact `json:"local_placement"`
+	// Limits is what this run may get (the resolved pool, the caller's
+	// governance and the deployment, for the run's type) and ResourcesApplied
+	// the CPU and memory it asked for and gets; the policy preview's, with the
+	// same meaning. LocalPlacement is the preview's too: always an array, empty
+	// until the lane that fills it lands.
+	Limits           *types.EffectiveRunLimits   `json:"limits,omitempty"`
+	ResourcesApplied *client.AppliedResources    `json:"resources_applied,omitempty"`
+	LocalPlacement   []client.LocalPlacementFact `json:"local_placement"`
 	// Image is the image the run would start from and its source, absent until
 	// the image lane resolves it; AllowedImages are the organisation's allowed
 	// choices, an array that is empty until that lane fills it.
@@ -343,12 +347,12 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		OverallRisk:              overallRisk,
 		Warnings:                 warnings,
 		Provenance:               f.prov,
-		Resources:                []client.PlacementResources{},
 		LocalPlacement:           []client.LocalPlacementFact{},
 		AllowedImages:            []client.AllowedImage{},
 		RunnerPools:              []client.RunnerPoolChoice{},
 	}
 	resp.RunnerPool, resp.RunnerPools = f.place.facts()
+	resp.Limits, resp.ResourcesApplied = f.place.sizeFacts()
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred
 	}

@@ -320,8 +320,8 @@ func GovernanceSource(l types.GovernanceLimits, ceiling, untouched, deploymentDe
 	if deploymentDefault.CPUMillis < 1 || deploymentDefault.MemoryMiB < 1 {
 		return out, errors.New("governance needs the deployment's default size to bound a member")
 	}
-	out.CPUMillis.Max = Int(memberCap(ceiling.CPUMillis, l.MaxCPUMillis, cmp.Or(untouched.CPUMillis, deploymentDefault.CPUMillis)))
-	out.MemoryMiB.Max = Int(memberCap(ceiling.MemoryMiB, l.MaxMemoryMiB, cmp.Or(untouched.MemoryMiB, deploymentDefault.MemoryMiB)))
+	out.CPUMillis.Max = Int(MemberCap(ceiling.CPUMillis, l.MaxCPUMillis, cmp.Or(untouched.CPUMillis, deploymentDefault.CPUMillis)))
+	out.MemoryMiB.Max = Int(MemberCap(ceiling.MemoryMiB, l.MaxMemoryMiB, cmp.Or(untouched.MemoryMiB, deploymentDefault.MemoryMiB)))
 	noEnd := l.AllowNoEnd && l.UserChangesLimits
 	out.NoEnd = &noEnd
 	switch {
@@ -337,10 +337,12 @@ func GovernanceSource(l types.GovernanceLimits, ceiling, untouched, deploymentDe
 	return out, nil
 }
 
-// memberCap is one field of the member cap: max(untouched, size), where the
-// profile's maximum is the size when the ceiling sets none and lowers it when it
-// does. untouched is at least 1, so the cap always is.
-func memberCap(ceiling, profileMax, untouched int) int {
+// MemberCap is one field of the member cap (#1949), the one rule every bound on a
+// governed member's CPU and memory uses: max(untouched, size), where the profile's
+// maximum is the size when the ceiling sets none and lowers it when it does. A
+// caller with no baseline passes the deployment's default as untouched, so the
+// cap is at least 1 whenever untouched is.
+func MemberCap(ceiling, profileMax, untouched int) int {
 	size := ceiling
 	switch {
 	case size < 1:

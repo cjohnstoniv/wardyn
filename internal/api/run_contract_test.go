@@ -223,7 +223,7 @@ func TestPreviewAndPreflightCarryTheNewFacts(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 			t.Fatal(err)
 		}
-		for _, field := range []string{"resources", "local_placement", "allowed_images", "runner_pools"} {
+		for _, field := range []string{"local_placement", "allowed_images", "runner_pools"} {
 			if string(body[field]) != "[]" {
 				t.Errorf("%s %s = %s, want []", door.name, field, body[field])
 			}

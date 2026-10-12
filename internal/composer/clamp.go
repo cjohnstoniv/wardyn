@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner/sizing"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -162,28 +163,28 @@ func Clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits)
 
 // clampResources is Clamp's resource step, split out to keep Clamp readable.
 func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limits types.GovernanceLimits, warns []string) []string {
-	// Resources: cap each set field at the ceiling's; an unset ceiling is not "no opinion" (Clamp is the
-	// operator-ceiling authority for every caller), so fall back to
-	// (sizing.EffectiveLimits(): the deployment's configured default, else
-	// sizing.Default{CPUMillis,MemoryMiB,PidsLimit}) rather than leave it unbounded. DiskMiB has no
-	// such default and stays skip-when-both-unset.
-	effCeilingResources := ceiling.Resources
-	if effCeilingResources == nil {
-		eff := sizing.EffectiveLimits()
-		effCeilingResources = &types.ResourceLimits{
-			CPUMillis: int(eff.CPUMillis),
-			MemoryMiB: int(eff.MemoryMiB),
-			PidsLimit: int(eff.PidsLimit),
-		}
+	// Resources: an unset ceiling is not "no opinion" (Clamp is the operator-ceiling authority for every
+	// caller), so it stands at sizing.EffectiveLimits() (the deployment's configured default, else
+	// sizing.Default{CPUMillis,MemoryMiB,PidsLimit}) rather than leave a field unbounded. CPU and
+	// memory are bounded by the member cap (runnerpool.MemberCap, #1949) from the member's default
+	// size, the rule preflight and dispatch also apply; an unset field is filled from the ceiling's
+	// size, never above that cap. DiskMiB has no such default and stays skip-when-both-unset.
+	eff := sizing.EffectiveLimits()
+	var size types.ResourceLimits
+	pids := int(eff.PidsLimit)
+	if ceiling.Resources != nil {
+		size, pids = *ceiling.Resources, ceiling.Resources.PidsLimit
 	}
-	// The profile's own CPU/memory maximum is one more ceiling on the same fields, so a fill
-	// from the ceiling and a cut of a request both stop at it.
-	if limits.MaxCPUMillis > 0 || limits.MaxMemoryMiB > 0 {
-		eff := sizing.EffectiveLimits()
-		capped := *effCeilingResources
-		capped.CPUMillis = capToLimit(capped.CPUMillis, limits.MaxCPUMillis, int(eff.CPUMillis))
-		capped.MemoryMiB = capToLimit(capped.MemoryMiB, limits.MaxMemoryMiB, int(eff.MemoryMiB))
-		effCeilingResources = &capped
+	untouched := MemberDefault(ceiling.Resources)
+	effCeilingResources := &types.ResourceLimits{
+		CPUMillis: runnerpool.MemberCap(size.CPUMillis, limits.MaxCPUMillis, untouched.CPUMillis),
+		MemoryMiB: runnerpool.MemberCap(size.MemoryMiB, limits.MaxMemoryMiB, untouched.MemoryMiB),
+		PidsLimit: pids,
+		DiskMiB:   size.DiskMiB,
+	}
+	fill := types.ResourceLimits{
+		CPUMillis: min(cmp.Or(size.CPUMillis, int(eff.CPUMillis)), effCeilingResources.CPUMillis),
+		MemoryMiB: min(cmp.Or(size.MemoryMiB, int(eff.MemoryMiB)), effCeilingResources.MemoryMiB),
 	}
 	{
 		before := out.Resources
@@ -193,23 +194,23 @@ func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limit
 		}
 		// An unset (<=0) field is FILLED from the ceiling silently: the policy
 		// asked for no particular size, so nothing it asked for was cut. Only a
-		// positive request above the ceiling is a cap, and only a cap warns.
+		// positive request above the cap is cut, and only a cut warns.
 		exceeded := false
-		capField := func(proposed *int, ceil int) {
+		capField := func(proposed *int, ceil, fill int) {
 			if ceil <= 0 {
 				return
 			}
-			if *proposed > ceil {
-				exceeded = true
-			}
-			if *proposed <= 0 || *proposed > ceil {
-				*proposed = ceil
+			switch {
+			case *proposed > ceil:
+				*proposed, exceeded = ceil, true
+			case *proposed <= 0:
+				*proposed = fill
 			}
 		}
-		capField(&cr.CPUMillis, effCeilingResources.CPUMillis)
-		capField(&cr.MemoryMiB, effCeilingResources.MemoryMiB)
-		capField(&cr.PidsLimit, effCeilingResources.PidsLimit)
-		capField(&cr.DiskMiB, effCeilingResources.DiskMiB)
+		capField(&cr.CPUMillis, effCeilingResources.CPUMillis, fill.CPUMillis)
+		capField(&cr.MemoryMiB, effCeilingResources.MemoryMiB, fill.MemoryMiB)
+		capField(&cr.PidsLimit, effCeilingResources.PidsLimit, effCeilingResources.PidsLimit)
+		capField(&cr.DiskMiB, effCeilingResources.DiskMiB, effCeilingResources.DiskMiB)
 		// Governance limit folded into the same warning; bounds a non-zero request only (see CapDiskMiB).
 		if capped := CapDiskMiB(cr.DiskMiB, limits.MaxEphemeralDiskMiB); capped != cr.DiskMiB {
 			cr.DiskMiB, exceeded = capped, true
@@ -391,25 +392,33 @@ func CapDiskMiB(disk, ceil int) int {
 	return disk
 }
 
-// capToLimit folds a profile's CPU or memory maximum into a ceiling value: the lower of the two,
-// where an unset ceiling stands at def (the deployment's size) rather than at "no bound". max <= 0
-// leaves the ceiling alone.
-func capToLimit(ceil, max, def int) int {
-	if max <= 0 {
-		return ceil
+// MemberDefault is a governed member's size before anything asks for one: the deployment's default
+// (sizing.EffectiveLimits), lowered per field to the ceiling's own size where it sets one. It is the
+// untouched size runnerpool.MemberCap starts from when no admin-authored policy names one, so the
+// member cap is never raised past a ceiling below the default (a resolved ceiling carries the
+// deployment's own size where its profile sets none).
+func MemberDefault(ceiling *types.ResourceLimits) types.ResourceLimits {
+	eff := sizing.EffectiveLimits()
+	out := types.ResourceLimits{CPUMillis: int(eff.CPUMillis), MemoryMiB: int(eff.MemoryMiB)}
+	if ceiling != nil {
+		if ceiling.CPUMillis > 0 {
+			out.CPUMillis = min(out.CPUMillis, ceiling.CPUMillis)
+		}
+		if ceiling.MemoryMiB > 0 {
+			out.MemoryMiB = min(out.MemoryMiB, ceiling.MemoryMiB)
+		}
 	}
-	if ceil <= 0 {
-		ceil = def
-	}
-	return min(ceil, max)
+	return out
 }
 
 // CapResources bounds a run's CPU and memory by the profile's maximums and reports whether it
 // changed anything. It is the resource-only half of Clamp, for the member launch that carries no
-// policy: its spec is the profile's own ceiling, which Clamp must not process because it drops
-// workspace mounts. A zero field means "the deployment's default size" (sizing.EffectiveLimits),
-// so it is cut only when that default is itself above the maximum. Returns a FRESH block, never an
-// in-place write, so one shared spec cannot re-size every later run that reads it.
+// policy (its spec is the profile's own ceiling, which Clamp must not process because it drops
+// workspace mounts), and dispatch's re-assertion of the same bound. Each maximum is the member cap
+// with no ceiling size (runnerpool.MemberCap): the maximum, never below the deployment's default
+// size (sizing.EffectiveLimits), so it never cuts what preflight said a run gets (#1949). A zero
+// field is that default, which the cap is never below. Returns a FRESH block, never an in-place
+// write, so one shared spec cannot re-size every later run that reads it.
 func CapResources(r *types.ResourceLimits, limits types.GovernanceLimits) (*types.ResourceLimits, bool) {
 	if limits.MaxCPUMillis <= 0 && limits.MaxMemoryMiB <= 0 {
 		return r, false
@@ -419,18 +428,14 @@ func CapResources(r *types.ResourceLimits, limits types.GovernanceLimits) (*type
 		out = *r
 	}
 	eff := sizing.EffectiveLimits()
-	cpu, mem := out.CPUMillis, out.MemoryMiB
-	if limits.MaxCPUMillis > 0 {
-		if cur := cmp.Or(cpu, int(eff.CPUMillis)); cur > limits.MaxCPUMillis {
-			out.CPUMillis = limits.MaxCPUMillis
+	bound := func(field *int, profileMax, def int) {
+		if c := runnerpool.MemberCap(0, profileMax, def); profileMax > 0 && *field > c {
+			*field = c
 		}
 	}
-	if limits.MaxMemoryMiB > 0 {
-		if cur := cmp.Or(mem, int(eff.MemoryMiB)); cur > limits.MaxMemoryMiB {
-			out.MemoryMiB = limits.MaxMemoryMiB
-		}
-	}
-	if out.CPUMillis == cpu && out.MemoryMiB == mem {
+	bound(&out.CPUMillis, limits.MaxCPUMillis, int(eff.CPUMillis))
+	bound(&out.MemoryMiB, limits.MaxMemoryMiB, int(eff.MemoryMiB))
+	if r == nil || (out.CPUMillis == r.CPUMillis && out.MemoryMiB == r.MemoryMiB) {
 		return r, false
 	}
 	return &out, true
