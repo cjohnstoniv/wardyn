@@ -5,7 +5,12 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -79,18 +84,50 @@ func TestToolgateCredential_ReservedFileSecretNameSkipped(t *testing.T) {
 	noEventCarries(t, audit.events, fileOwnValue)
 }
 
+// toolgateCredentialRows are run's run.toolgate_credential.write rows' data.
+func toolgateCredentialRows(t *testing.T, events []types.AuditEvent, run uuid.UUID) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, ev := range events {
+		if ev.Action != "run.toolgate_credential.write" || ev.RunID == nil || *ev.RunID != run {
+			continue
+		}
+		var d map[string]any
+		if err := json.Unmarshal(ev.Data, &d); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+// A Docker host-path drive is a share, but the Docker driver delivers a secret
+// file beside it, so the started harness keeps its own credential.
+func TestToolgateCredential_DockerShareDriveDelivered(t *testing.T) {
+	rn := &fakeRunner{}
+	_, audit, run := dispatchTwoHarnessRun(t, rn, dispatchParams{Drive: dispatchDrive(false)})
+	toolgateCredentialOf(t, rn.lastSpec)
+	if rows := toolgateCredentialRows(t, audit.events, run.ID); len(rows) != 0 {
+		t.Errorf("withheld rows = %v, want none", rows)
+	}
+}
+
 // Where no file can be delivered the run still launches and the started harness
-// holds no credential, in any form; the proxy still has every digest.
-func TestToolgateCredential_NoFileNoEnvFallback(t *testing.T) {
+// holds no credential, in any form; the proxy still has every digest, and the
+// withheld credential is recorded with its reason.
+func TestToolgateCredential_WithheldIsAudited(t *testing.T) {
+	k8sShare := dispatchDrive(false)
+	k8sShare.Backend = types.DriveBackendK8sPVCStatic
 	for name, c := range map[string]struct {
-		rn *fakeRunner
-		p  dispatchParams
+		rn     *fakeRunner
+		p      dispatchParams
+		reason string
 	}{
-		"a runner that delivers no file": {&fakeRunner{noManagedFiles: true}, dispatchParams{}},
-		"a shared drive":                 {&fakeRunner{}, dispatchParams{Drive: dispatchDrive(false)}},
+		"a runner that delivers no file": {&fakeRunner{noManagedFiles: true}, dispatchParams{}, "does not deliver managed files"},
+		"a shared Kubernetes drive":      {&fakeRunner{}, dispatchParams{Drive: k8sShare}, "the run mounts a shared Kubernetes drive"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			dispatchTwoHarnessRun(t, c.rn, c.p)
+			_, audit, run := dispatchTwoHarnessRun(t, c.rn, c.p)
 			spec := c.rn.lastSpec
 			for _, f := range spec.ManagedFiles {
 				if f.AgentOwned {
@@ -101,7 +138,13 @@ func TestToolgateCredential_NoFileNoEnvFallback(t *testing.T) {
 				t.Error("the credential fell back to env")
 			}
 			if len(spec.ProxyConfig.HarnessCredentials) != 2 {
-				t.Errorf("digests = %+v", spec.ProxyConfig.HarnessCredentials)
+				t.Errorf("digests = %d, want 2", len(spec.ProxyConfig.HarnessCredentials))
+			}
+			rows := toolgateCredentialRows(t, audit.events, run.ID)
+			if len(rows) != 1 || rows[0]["delivered"] != false || rows[0]["agent"] != "claude-code" ||
+				rows[0]["path"] != runner.ComponentSecretDir+"/"+toolgateCredentialFilePrefix+"claude-code" ||
+				!strings.Contains(fmt.Sprint(rows[0]["reason"]), c.reason) {
+				t.Errorf("withheld rows = %v, want one delivered:false row whose reason names %q", rows, c.reason)
 			}
 		})
 	}
