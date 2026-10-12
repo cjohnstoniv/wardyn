@@ -343,8 +343,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.renewStop()
 		<-s.renewStopped
 	}
-	httpErr := s.http.Shutdown(ctx)
+	// Before http.Shutdown, which waits on open sandbox connections: the
+	// runtime's stop timeout may kill the process before anything after it.
 	s.proxy.revokeGitHubAPITokens(ctx)
+	httpErr := s.http.Shutdown(ctx)
 	// End any open credential re-auth hold: its poll loop is detached from the
 	// request that opened it (so a hung-up SDK can't end a hold its owner is
 	// still signing in for), which also means nothing else would stop it

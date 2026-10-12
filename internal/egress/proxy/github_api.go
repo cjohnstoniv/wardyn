@@ -44,8 +44,9 @@ const (
 	// gitHubAPIPort is the one port the door terminates.
 	gitHubAPIPort = 443
 
-	// gitHubAPIRevokeBudget bounds the shutdown hand-back of every cached token.
-	gitHubAPIRevokeBudget = 10 * time.Second
+	// gitHubAPIRevokeBudget bounds the shutdown hand-back of every cached
+	// token, well inside a container runtime's stop timeout (10 s on Docker).
+	gitHubAPIRevokeBudget = 3 * time.Second
 )
 
 // GitHubAPIGrant is the run's GitHub CLI grant: the capabilities the row
@@ -59,8 +60,11 @@ type GitHubAPIGrant struct {
 }
 
 // grantFor is the grant a classified request mints from: its owner's, or for
-// a request that names no owner (the API root, the rate limit) the first
-// owner's.
+// a request that names no owner the first owner's. Only metadata (the API
+// root, the rate limit) and identity (GET /user, which GitHub refuses an
+// installation token) classify with no owner; every route that names an owner
+// or repository is pinned by Permits first. A verdict class added to the
+// owner-less set must not reach anything an owner's grant could not.
 func (g *GitHubAPIGrant) grantFor(v ghscope.Verdict) (uuid.UUID, bool) {
 	if v.Owner != "" {
 		id, ok := g.Grants[v.Owner]
@@ -97,20 +101,32 @@ func (p *Proxy) isGitHubAPIHost(host string) bool {
 	return p.ghAPI != nil && patAPIHost(host) == ghscope.APIHost
 }
 
-// gitHubAPIAdmit is the whole gate: "" admits the request, otherwise the clause
-// that completes "Wardyn refused this GitHub API request: …". It mints nothing.
+// gitHubAPIRefusedPrefix opens every refusal sentence but the GraphQL one.
+const gitHubAPIRefusedPrefix = "Wardyn refused this GitHub API request: "
+
+// gitHubAPIRESTOnly is the GraphQL refusal. gh's issue, pull request and
+// repository commands use GraphQL, so this is the sentence a person meets
+// most; it names the way that works.
+const gitHubAPIRESTOnly = "Wardyn's GitHub CLI works through GitHub's REST API only; this command uses GraphQL. " +
+	"Use `gh api repos/{owner}/{repo}/...` instead."
+
+// gitHubAPIAdmit is the whole gate: "" admits the request, otherwise the
+// sentence its refusal carries. It mints nothing.
 func gitHubAPIAdmit(r *http.Request, g *GitHubAPIGrant) (ghscope.Verdict, string) {
 	v, err := ghscope.Classify(ghscope.Request{Method: r.Method, Host: ghscope.APIHost, Path: adoRawPath(r), RawQuery: r.URL.RawQuery, Header: r.Header})
-	if err != nil {
-		return v, "it could not be read as one GitHub operation"
+	switch {
+	case err != nil:
+		return v, gitHubAPIRefusedPrefix + "it could not be read as one GitHub operation."
+	case ghscope.Permits(g.Capabilities, g.Repos, v):
+		return v, ""
+	case v.Capability == ghscope.CapDeniedGraphQL:
+		return v, gitHubAPIRESTOnly
+	case !v.Capability.Grantable() && v.Capability != ghscope.CapMetadata:
+		return v, "Wardyn refused this GitHub API request. " + ghscope.Label(v.Capability) + "."
+	case !ghscope.Permits(ghscope.GrantableCapabilities(), g.Repos, v):
+		return v, gitHubAPIRefusedPrefix + "it names a repository or an owner outside this run's own."
 	}
-	if !ghscope.Permits(g.Capabilities, g.Repos, v) {
-		if v.Capability.Denied() {
-			return v, "it is in an area no run is granted (" + string(v.Capability) + ")"
-		}
-		return v, "this run's GitHub CLI does not hold " + string(v.Capability) + " for it, or it names a repository outside this run's own"
-	}
-	return v, ""
+	return v, gitHubAPIRefusedPrefix + "this run's GitHub CLI is not granted \"" + ghscope.Label(v.Capability) + "\"."
 }
 
 // serveGitHubAPI is the door: judge, mint, forward.
@@ -122,7 +138,7 @@ func (p *Proxy) serveGitHubAPI(w http.ResponseWriter, r *http.Request, host stri
 	}
 	grantID, ok := p.ghAPI.grantFor(v)
 	if !ok {
-		p.refuseGitHubAPI(w, r, host, port, "no grant of this run covers "+v.Owner)
+		p.refuseGitHubAPI(w, r, host, port, gitHubAPIRefusedPrefix+"no grant of this run covers "+v.Owner+".")
 		return
 	}
 	p.forwardAPIDoor(w, r, host, port, apiDoor{allow: ruleSourceGitHubAPI, denied: ruleSourceGitHubAPIRefused, mintFailed: "mint github token",
@@ -138,13 +154,13 @@ func (p *Proxy) serveGitHubAPI(w http.ResponseWriter, r *http.Request, host stri
 // refuseGitHubAPI is the door's one refusal point: a decision row under
 // brokered:github-api:refused and a 403 (never 401, which gh reads as "sign in
 // again") whose JSON carries the code and the sentence.
-func (p *Proxy) refuseGitHubAPI(w http.ResponseWriter, r *http.Request, host string, port int, why string) {
+func (p *Proxy) refuseGitHubAPI(w http.ResponseWriter, r *http.Request, host string, port int, message string) {
 	p.emitPATAPIDecision(r, host, port, egress.Deny, ruleSourceGitHubAPIRefused)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"wardyn":  gitHubAPIRefused,
-		"message": "Wardyn refused this GitHub API request: " + why + ".",
+		"message": message,
 	})
 }
 
@@ -158,7 +174,7 @@ func (p *Proxy) refuseGitHubAPIPlain(w http.ResponseWriter, r *http.Request) boo
 	if !p.isGitHubAPIHost(host) {
 		return false
 	}
-	p.refuseGitHubAPI(w, r, host, port, "api.github.com is reached only through Wardyn's checked HTTPS tunnel (CONNECT), not as a plain proxy request")
+	p.refuseGitHubAPI(w, r, host, port, gitHubAPIRefusedPrefix+"api.github.com is reached only through Wardyn's checked HTTPS tunnel (CONNECT), not as a plain proxy request.")
 	return true
 }
 
@@ -168,7 +184,7 @@ func (p *Proxy) refuseGitHubAPITunnel(w http.ResponseWriter, r *http.Request, ho
 	if !p.isGitHubAPIHost(host) {
 		return false
 	}
-	p.refuseGitHubAPI(w, r, host, port, "this run reaches api.github.com only through Wardyn's checked HTTPS door on port 443")
+	p.refuseGitHubAPI(w, r, host, port, gitHubAPIRefusedPrefix+"this run reaches api.github.com only through Wardyn's checked HTTPS door on port 443.")
 	return true
 }
 

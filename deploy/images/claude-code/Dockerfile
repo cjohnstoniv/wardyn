@@ -240,19 +240,28 @@ RUN set -eu; \
     fi
 
 # ── GitHub CLI (gh) ──────────────────────────────────────────────────────────
-# From cli.github.com's apt repository: the keyring is checked by digest and
-# named by signed-by, so it vouches for that repository alone, and the version
-# is pinned (the repository indexes only its newest release, so a bump moves
-# GH_VERSION, and the keyring digest if GitHub rotates it). gh gets no GitHub
+# The versioned .deb from the cli/cli release, checked against its sha256 per
+# architecture (the release's gh_<version>_checksums.txt). A release URL stays
+# put, unlike cli.github.com's apt index, which carries only the newest version;
+# a bump moves GH_VERSION and both digests together. gh gets no GitHub
 # credential here: a run with a GitHub CLI row gets an inert GH_TOKEN, and the
 # proxy adds the App token per request.
 ARG GH_VERSION=2.102.0
-RUN mkdir -p /etc/apt/keyrings \
-    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-    && echo "6084d5d7bd8e288441e0e94fc6275570895da18e6751f70f057485dc2d1a811b  /etc/apt/keyrings/githubcli-archive-keyring.gpg" | sha256sum -c -
-RUN echo "deb [signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
-    && apt-get update && apt-get install -y --no-install-recommends "gh=${GH_VERSION}" \
-    && rm -rf /var/lib/apt/lists/*
+ARG GH_SHA256_AMD64=7e54a307f90afdc59796c325ec0c49fb09e6c18537727207a8ac7513584ea5b0
+ARG GH_SHA256_ARM64=5006962696f01e1624b3fcf1f9d8e1a11547f24bf067dd2a0371b7b421945237
+ARG TARGETARCH
+RUN set -eu; \
+    arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+    case "$arch" in \
+        amd64) sum="$GH_SHA256_AMD64";; \
+        arm64) sum="$GH_SHA256_ARM64";; \
+        *) echo "unsupported arch '$arch' for gh" >&2; exit 1;; \
+    esac; \
+    printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
+    curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.deb" -o /tmp/gh.deb; \
+    echo "$sum  /tmp/gh.deb" | sha256sum --strict -c -; \
+    dpkg -i /tmp/gh.deb; \
+    rm -f /tmp/gh.deb
 
 # The node:24-trixie-slim base image ships a `node` user at uid=1000.
 # Rename it to `agent` and relocate the home directory to /home/agent so the

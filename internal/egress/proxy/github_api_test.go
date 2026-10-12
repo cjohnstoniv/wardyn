@@ -68,11 +68,16 @@ func (u *ghUpstream) counts() (mints int, seen []string) {
 // writes it (confineBrokerEgress).
 func newGHProxy(t *testing.T, up *ghUpstream) (*Proxy, *GitHubAPIGrant) {
 	t.Helper()
+	return newGHProxySpec(t, up, types.RunPolicySpec{AllowedDomains: []string{"api.github.com:443"}})
+}
+
+func newGHProxySpec(t *testing.T, up *ghUpstream, spec types.RunPolicySpec) (*Proxy, *GitHubAPIGrant) {
+	t.Helper()
 	g := &GitHubAPIGrant{Capabilities: []ghscope.Capability{ghscope.CapIssuesRead}, Repos: []string{"acme/app"},
 		Grants: map[string]uuid.UUID{"acme": uuid.New()}}
 	p := newProxy(Options{
 		RunID:           uuid.New(),
-		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"api.github.com:443"}}),
+		Policy:          CompilePolicy(spec),
 		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
 		Resolver:        publicResolver{},
 		Dial:            redirectDial(upstreamAddr(up.srv)),
@@ -142,6 +147,7 @@ func TestGitHubAPI_GateOnBothLanes(t *testing.T) {
 func TestGitHubAPI_RepoOutsideRunRefused(t *testing.T) {
 	for _, tc := range []struct{ method, target string }{
 		{http.MethodGet, "/repos/other/repo/issues"},
+		{http.MethodGet, "/repos/acme/other/issues"},
 		{http.MethodGet, "/repos/other/repo"},
 		{http.MethodGet, "/orgs/other/repos"},
 		{http.MethodPost, "/repos/acme/app/issues"},
@@ -176,4 +182,53 @@ func TestGitHubAPI_MintRelayAndShutdownRevoke(t *testing.T) {
 	if want := "DELETE /installation/token token " + ghCLIToken; len(seen) != 2 || seen[1] != want {
 		t.Fatalf("seen %q, want the request then %q", seen, want)
 	}
+}
+
+// Shutdown hands the cached token back before it stops serving: the runtime's
+// stop timeout may kill the process while http.Shutdown still waits on open
+// sandbox connections.
+func TestGitHubAPI_ShutdownRevokesFirst(t *testing.T) {
+	up := newGHUpstream(t)
+	p, _ := newGHProxy(t, up)
+	p.serveMITMRequest(httptest.NewRecorder(), ghTunnelRequest(t, http.MethodGet, "/repos/acme/app/issues"), ghscope.APIHost, 443)
+	srv := &Server{proxy: p, http: &http.Server{}, sink: p.sink}
+	seenAtShutdown := make(chan []string, 1)
+	srv.http.RegisterOnShutdown(func() { _, seen := up.counts(); seenAtShutdown <- seen })
+	_ = srv.Shutdown(t.Context())
+	seen := <-seenAtShutdown
+	if want := "DELETE /installation/token token " + ghCLIToken; len(seen) != 2 || seen[1] != want {
+		t.Fatalf("when serving stopped the upstream had seen %q, want the request then %q", seen, want)
+	}
+}
+
+// A refusal says why in a sentence: GraphQL names the REST way that works.
+func TestGitHubAPI_RefusalSentences(t *testing.T) {
+	for _, tc := range []struct{ method, target, want string }{
+		{http.MethodPost, "/graphql", gitHubAPIRESTOnly},
+		{http.MethodGet, "/repos/acme/other/issues", gitHubAPIRefusedPrefix + "it names a repository or an owner outside this run's own."},
+		{http.MethodPost, "/repos/acme/app/issues", gitHubAPIRefusedPrefix + `this run's GitHub CLI is not granted "` + ghscope.Label(ghscope.CapIssuesWrite) + `".`},
+		{http.MethodGet, "/search/issues", "Wardyn refused this GitHub API request. " + ghscope.Label(ghscope.CapDeniedSearch) + "."},
+	} {
+		up := newGHUpstream(t)
+		p, _ := newGHProxy(t, up)
+		rec := httptest.NewRecorder()
+		p.serveMITMRequest(rec, ghTunnelRequest(t, tc.method, tc.target), ghscope.APIHost, 443)
+		var body map[string]string
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		if body["message"] != tc.want {
+			t.Errorf("%s %s: message %q, want %q", tc.method, tc.target, body["message"], tc.want)
+		}
+	}
+}
+
+// A CONNECT to the door's host on any port the door does not terminate is
+// refused, even where the policy would let a blind tunnel through.
+func TestGitHubAPI_OtherPortTunnelRefused(t *testing.T) {
+	up := newGHUpstream(t)
+	p, _ := newGHProxySpec(t, up, types.RunPolicySpec{AllowAllEgress: true})
+	req := httptest.NewRequest(http.MethodConnect, "api.github.com:8443", nil)
+	req.Host = "api.github.com:8443"
+	rec := httptest.NewRecorder()
+	p.handleConnect(rec, req)
+	ghRefused(t, rec)
 }

@@ -10,6 +10,9 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -21,8 +24,13 @@ const ghCLIRowID = "6f0c1d2e-0000-4000-8000-0000000c05a5"
 // App lane on acme/app, with an organisation's GitHub CLI row stored.
 func githubCLIFixture(t *testing.T) (*componentFixture, map[string]any) {
 	t.Helper()
+	return githubCLIFixtureScope(t, `{"repos":["acme/app"]}`)
+}
+
+func githubCLIFixtureScope(t *testing.T, scope string) (*componentFixture, map[string]any) {
+	t.Helper()
 	f := newComponentFixture(t)
-	f.srv.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":["acme/app"]}`)}}
+	f.srv.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{{Kind: types.GrantGitHubToken, Scope: json.RawMessage(scope)}}
 	ref := f.org(ghCLIRowID, types.ComponentDefinition{CLI: &types.ComponentCLI{Kind: types.CLIKindGitHub,
 		GitHub: &types.CLIGitHub{Capabilities: []ghscope.Capability{ghscope.CapIssuesRead, ghscope.CapCodeRead}}}})
 	return f, ref
@@ -77,7 +85,7 @@ func TestGitHubCLI_CreateWiresTheDoor(t *testing.T) {
 // Without a GitHub repository the launch and Review doors refuse with the
 // card's reason, and the preview shows the row unavailable for it.
 func TestGitHubCLI_NoRepoIsTheCardsReason(t *testing.T) {
-	f, ref := githubCLIFixture(t)
+	f, ref := githubCLIFixtureScope(t, `{"repos":[]}`)
 	for _, door := range componentDoors[:2] {
 		w := f.ask(t, door, componentBody(ref))
 		if got := decodeErrorBody(t, w); w.Code != http.StatusUnprocessableEntity || got.Reason != reasonCLINoGitHubRepo {
@@ -97,5 +105,87 @@ func TestGitHubCLI_NoRepoIsTheCardsReason(t *testing.T) {
 	i := slices.IndexFunc(got.Access.Rows, func(r client.AccessRow) bool { return r.Kind == accessKindCLI })
 	if i < 0 || got.Access.Rows[i].Status != accessUnavailable || got.Access.Rows[i].Reason != reasonCLINoGitHubRepo || len(got.Access.Rows[i].Credentials) != 0 {
 		t.Fatalf("access rows %+v, want the CLI row unavailable for %s with no credential", got.Access.Rows, reasonCLINoGitHubRepo)
+	}
+}
+
+// The repositories the card and the Review gate read (githubCLIRepos) are the
+// door's: the git broker's, which create derives from the same grants.
+func TestGitHubCLI_CardReposAreTheDoors(t *testing.T) {
+	for _, tc := range []struct {
+		name, scope, repo string
+		want              []string
+	}{
+		{"template grant, the run's repository", `{"repos":[]}`, "Acme/App", []string{"acme/app"}},
+		{"the grant's own repositories", `{"repos":["acme/app","acme/lib"]}`, "", []string{"acme/app", "acme/lib"}},
+		{"both", `{"repos":["acme/lib"]}`, "acme/app", []string{"acme/app", "acme/lib"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, ref := githubCLIFixtureScope(t, tc.scope)
+			fr := f.srv.cfg.Runner.(*fakeRunner)
+			body := componentBody(ref)
+			if tc.repo != "" {
+				body["repo"] = tc.repo
+			}
+			if w := f.ask(t, componentDoors[0], body); w.Code != http.StatusCreated {
+				t.Fatalf("create = %d %s", w.Code, w.Body)
+			}
+			fr.waitForSandbox(t)
+			fr.mu.Lock()
+			door := fr.lastSpec.ProxyConfig.GitHubAPI
+			fr.mu.Unlock()
+			card := githubCLIRepos(createRunRequest{Agent: "claude-code", Repo: tc.repo}, f.srv.cfg.DefaultPolicy, types.SiteConfig{})
+			if door == nil || !slices.Equal(door.Repos, tc.want) || !slices.Equal(card, tc.want) {
+				t.Fatalf("door %+v card %v, want both %v", door, card, tc.want)
+			}
+		})
+	}
+}
+
+// The preview's CLI row names the host the door opens and terminates, and the
+// App credential as proxy only.
+func TestGitHubCLI_RowListsTheDoorsHost(t *testing.T) {
+	f, ref := githubCLIFixture(t)
+	body := componentBody(ref)
+	body["repo"] = "acme/app"
+	w := f.ask(t, componentDoors[2], body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("preview = %d %s", w.Code, w.Body)
+	}
+	var got struct {
+		Access accessBlock `json:"access"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(got.Access.Rows, func(r client.AccessRow) bool { return r.Kind == accessKindCLI })
+	if i < 0 || !slices.Contains(got.Access.Rows[i].Hosts, "api.github.com") || len(got.Access.Rows[i].Credentials) != 1 {
+		t.Fatalf("CLI row = %+v", got.Access.Rows)
+	}
+	h := slices.IndexFunc(got.Access.Hosts, func(h client.AccessHost) bool { return h.Host == "api.github.com" })
+	if h < 0 || got.Access.Hosts[h].Via != viaInjected || got.Access.Hosts[h].Verdict != verdictAllowed {
+		t.Fatalf("hosts = %+v, want api.github.com injected and allowed", got.Access.Hosts)
+	}
+}
+
+// The door lifts only the git broker's own deny of api.github.com; a deny the
+// run already carried stays, and the door's host stays unreachable.
+func TestGitHubCLI_ConfineKeepsTheRunsOwnDeny(t *testing.T) {
+	door := &proxy.GitHubAPIGrant{Repos: []string{"acme/app"}, Grants: map[string]uuid.UUID{"acme": uuid.New()}}
+	p := dispatchParams{GitGrants: map[string]uuid.UUID{"acme/app": uuid.New()}, Components: componentDispatch{GitHubAPI: door}}
+	for _, tc := range []struct {
+		name     string
+		denied   []string
+		wantDeny bool
+	}{
+		{"broker's deny lifted", nil, false},
+		{"run's own deny kept", []string{"api.github.com"}, true},
+	} {
+		policy := types.RunPolicySpec{DeniedDomains: tc.denied}
+		env := map[string]string{}
+		confineBrokerEgress(&policy, p, env)
+		denied := slices.ContainsFunc(policy.DeniedDomains, func(d string) bool { return ceilingDenies([]string{d}, "api.github.com") })
+		if denied != tc.wantDeny || !slices.Contains(policy.AllowedDomains, "api.github.com:443") || env["GH_TOKEN"] != githubCLITokenSentinel {
+			t.Errorf("%s: denied %v allowed %v env %v", tc.name, policy.DeniedDomains, policy.AllowedDomains, env)
+		}
 	}
 }
