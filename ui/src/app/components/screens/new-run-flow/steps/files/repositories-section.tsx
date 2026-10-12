@@ -64,15 +64,17 @@ function Row({ row, path, startsId }: { row: RepoRow; path?: string; startsId?: 
   );
 }
 
-export function RepositoriesSection({ rows, pathOf, startsFocusKey }: {
+export function RepositoriesSection({ rows, pathOf, startsFocusKey, focusSelf }: {
   rows: readonly RepoRow[];
   /** The path the run's own preflight gives a row, falling back to the workspace's `clone_target`. */
   pathOf: (row: RepoRow) => string | undefined;
   /** The row whose Starts here radio a held Continue focuses. */
   startsFocusKey?: string;
+  /** No row can take the failed-Continue focus (only a drive is included): the section does. */
+  focusSelf?: boolean;
 }) {
   return (
-    <section aria-labelledby="nr-repos-title" className="flex flex-col gap-2 rounded-lg border border-border p-4">
+    <section id={focusSelf ? "nr-starts-here" : undefined} tabIndex={focusSelf ? -1 : undefined} aria-labelledby="nr-repos-title" className="flex flex-col gap-2 rounded-lg border border-border p-4">
       <div>
         <h2 id="nr-repos-title" className="font-semibold">{NR_FILES.REPOS_TITLE}</h2>
         <p className="text-sm text-muted-foreground">{NR_FILES.REPOS_BODY}</p>

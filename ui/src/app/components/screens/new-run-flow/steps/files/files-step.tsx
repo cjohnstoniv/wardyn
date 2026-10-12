@@ -22,13 +22,15 @@ import { useLoaded } from "../shape/use-loaded";
 import { readMainDrive, repoRows, useFilesPreflight } from "./files-seams";
 import { FilesSummary, summaryText } from "./files-summary";
 import { lifecycleOf, MainDriveSection, useMainDriveSize } from "./main-drive-section";
-import { draftAttachments, MountMap } from "./mount-map";
+import { MountMap } from "./mount-map";
 import { RepositoriesSection } from "./repositories-section";
 
 const STEP_LABELS = {
   shape: NR_SHARED.STEP_SHAPE, run: NR_SHARED.STEP_RUN, harnesses: NR_SHARED.STEP_HARNESSES, files: NR_SHARED.STEP_FILES, tools: NR_SHARED.STEP_TOOLS,
 };
 const EARLIER = ["shape", "run", "harnesses"] as const;
+// Choosing nothing yet is the step's open question, not a reason to withhold the pool's facts that frame it.
+const FILES_CHOICE = "files_choice_required";
 const list = () => workspaces.listWorkspaces();
 
 export function FilesStep({ go }: NewRunScreenProps) {
@@ -38,23 +40,24 @@ export function FilesStep({ go }: NewRunScreenProps) {
   const loaded = useLoaded(list);
   const rows = React.useMemo(() => (loaded.status === "ready" ? repoRows(loaded.value) : []), [loaded]);
 
-  // Facts need a body the server would read; a draft still missing an earlier step's answer asks nothing.
+  // Nothing is sent while a step's local issues are open; the size has no issue here, as an untouched prefill is not a request.
   const wire = React.useMemo(() => intentToWire(intent), [intent]);
-  const earlierOpen = EARLIER.some((s) => stepIssues(s, intent).length > 0);
-  const { result: pre, current } = useFilesPreflight(earlierOpen ? null : wire.body);
+  const open = [...EARLIER, "files" as const].some((step) => stepIssues(step, intent).some((i) => i.code !== FILES_CHOICE));
+  const pre = useFilesPreflight(open ? null : wire.body);
   const view = readMainDrive(pre, intent.experience);
   const size = useMainDriveSize(view);
   const life = lifecycleOf(intent, view);
 
-  const attachments = current && pre?.attachments ? pre.attachments : draftAttachments(intent, rows);
+  const attachments = pre?.attachments ?? [];
   const pathOf = (r: (typeof rows)[number]) =>
-    (current ? pre?.attachments?.find((a) => a.kind === "repository" && a.workspace_id === r.workspaceId && a.repo === r.repo)?.target : undefined) ?? r.path;
+    attachments.find((a) => a.kind === "repository" && a.workspace_id === r.workspaceId && a.repo === r.repo)?.target ?? r.path;
   const noExtra = intent.no_repositories_or_drives === true;
   const sizeMib = parseGiB(size.text);
   const sizeText = sizeMib === undefined ? "0" : mibToGibText(sizeMib);
   const startsName = rows.find((r) => repoIncluded(intent, r.workspaceId, r.repo) && startsAt(intent, r.workspaceId, r.repo, r.siblings.length))?.name ??
     attachments.find((a) => a.starts_here)?.name;
 
+  const includedKey = rows.find((r) => repoIncluded(intent, r.workspaceId, r.repo))?.key;
   const issues: StepIssue[] = [...(size.missing ? [issue("files", "main_drive_size_required")] : []), ...stepIssues("files", intent)];
   const keptNote = life.kind === "deleted" ? NR_FILES.NO_EXTRA_DELETED : life.kind === "kept" ? NR_FILES.NO_EXTRA_KEPT(life.grace) : undefined;
 
@@ -80,9 +83,10 @@ export function FilesStep({ go }: NewRunScreenProps) {
         <RepositoriesSection
           rows={rows}
           pathOf={pathOf}
-          startsFocusKey={rows.find((r) => repoIncluded(intent, r.workspaceId, r.repo))?.key}
+          startsFocusKey={includedKey}
+          focusSelf={includedKey === undefined}
         />
-        <section aria-labelledby="nr-computer-title" className="flex flex-col gap-1 rounded-lg border border-border p-4 opacity-70">
+        <section aria-labelledby="nr-computer-title" className="flex flex-col gap-1 rounded-lg border border-border p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
               <h2 id="nr-computer-title" className="font-semibold">{NR_FILES.COMPUTER_TITLE}</h2>

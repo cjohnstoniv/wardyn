@@ -81,6 +81,8 @@ export function useMainDriveSize(view: MainDriveView) {
 
   // A pool's default (else its cap) fills the empty field once; clearing it afterwards is the person's.
   const filled = React.useRef(false);
+  // A prefill is shown, never sent: only a size the person typed becomes the request.
+  const edited = React.useRef(false);
   React.useEffect(() => {
     if (!filled.current && typed === "" && committed === undefined && view.defaultMib !== undefined) {
       filled.current = true;
@@ -89,6 +91,7 @@ export function useMainDriveSize(view: MainDriveView) {
   }, [typed, committed, view.defaultMib, dispatch]);
 
   const commit = React.useCallback(() => {
+    if (!edited.current) return;
     const { mib, clamped } = commitSize(text, view.capMib);
     if (mib === undefined) return;
     dispatch({ type: "edit", apply: (i) => setMainDrive(i, mib) });
@@ -107,6 +110,7 @@ export function useMainDriveSize(view: MainDriveView) {
     note: draft.guided.mainDriveClampNote,
     setText: (next: string) => {
       filled.current = true;
+      edited.current = true;
       dispatch({ type: "guided", patch: { mainDriveText: next, mainDriveClampNote: undefined } });
     },
     commit,
