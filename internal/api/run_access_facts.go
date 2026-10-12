@@ -31,6 +31,7 @@ const (
 	accessKindSecret     = "secret"
 	accessKindHost       = "host"
 	accessKindCustom     = "custom"
+	accessKindCLI        = "cli"
 	accessFromAdded      = "added"
 )
 
@@ -113,8 +114,10 @@ type accessInputs struct {
 	source   policySourceRecord
 	scmSite  types.SiteConfig
 	mpChoice runProviderChoice
-	// facts are the component facts the door built from the same fold.
+	// facts are the component facts the door built from the same fold, and
+	// comps the components the gate admitted for them.
 	facts []componentFact
+	comps runComponents
 	// decider is who decides a request for an unlisted host (accessDecider).
 	decider string
 	// providerStored: the caller has stored a credential for the chosen
@@ -122,6 +125,8 @@ type accessInputs struct {
 	providerStored bool
 	// ssoProxyInject is WARDYN_AWS_SSO_PROXY_INJECT as dispatch reads it.
 	ssoProxyInject bool
+	// imageKey is the convention image the run starts from (accessImageKey).
+	imageKey string
 }
 
 // accessFor adds the reads accessFacts needs beyond the fold and builds the
@@ -133,6 +138,7 @@ func (s *Server) accessFor(r *http.Request, in accessInputs) (*accessBlock, erro
 		return nil, err
 	}
 	in.providerStored, in.ssoProxyInject = s.accessProviderStored(r, in.mpChoice), s.cfg.AWSSSOProxyInject
+	in.imageKey = accessImageKey(*in.req, s.cfg.AgentImages)
 	out := accessFacts(in)
 	return &out, nil
 }
@@ -394,6 +400,9 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 	row := client.AccessRow{ID: fact.ID, Kind: accessKindCustom, From: accessFromAdded, Name: fact.Name,
 		Status: accessStatus(fact.Status), Hosts: slices.Clone(fact.Hosts),
 		Source: client.ProvenanceSource{Kind: provKindComponent, ID: fact.ID, Name: fact.Name}}
+	if cli := attachedCLI(b.in.comps, fact.ID); cli != nil {
+		row.Kind, row.InImage = accessKindCLI, cliToolInImage(cliInImage(b.in.imageKey), cli.Kind)
+	}
 	b.addRow(row)
 	for _, h := range row.Hosts {
 		b.addHost(h, viaEgress, row.ID)
@@ -413,6 +422,47 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 		b.addCredential(c)
 	}
 	b.addSetup(fact.Requirements...)
+}
+
+// attachedCLI is the CLI block of the attached component a fact describes, or
+// nil when it carries none.
+func attachedCLI(comps runComponents, factID string) *types.ComponentCLI {
+	for i, a := range comps.attached {
+		if componentProvSource(a, i).ID == factID {
+			return a.snapshot.Definition.CLI
+		}
+	}
+	return nil
+}
+
+// cliToolInImage is one CLI kind's column of an image's install fact.
+func cliToolInImage(f cliImageFact, kind string) string {
+	switch kind {
+	case types.CLIKindAzure:
+		return f.AZ
+	case types.CLIKindAWS:
+		return f.AWS
+	case types.CLIKindGitHub:
+		return f.GH
+	}
+	return cliInImageUnknown
+}
+
+// accessImageKey is the convention image key a run starts from: its harness's
+// catalogue key. A run that names its own image (or a workspace that set one)
+// and an agent the operator pinned in WARDYN_AGENT_IMAGES have none, so
+// cliInImage answers unknown for them.
+func accessImageKey(req createRunRequest, images map[string]string) string {
+	if strings.TrimSpace(req.Image) != "" {
+		return ""
+	}
+	if _, pinned := images[req.Agent]; pinned {
+		return ""
+	}
+	if def, ok := harnessByID(req.Agent); ok && def.ImageKey != "" {
+		return def.ImageKey
+	}
+	return req.Agent
 }
 
 // secretRows are the person's own secrets added by header

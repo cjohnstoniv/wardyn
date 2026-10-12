@@ -372,6 +372,7 @@ Preflight (`PreflightResult.Access`) and the policy preview answer `access`, one
 - An AWS sign-in follows `WARDYN_AWS_SSO_PROXY_INJECT`. On: the role credentials are in the sandbox, short-lived. Off: the session's access token is in the sandbox too, as a file. Both expire at the lifetime AWS sets.
 - `unlisted`: what happens to a host nothing lists: the effective `mode`, `allow_all`, `hold_sec` for `wait_for_review`, and `decider` (`you`, `admin` or `you_or_admin`, from your `egress_host` capability).
 - `setup`: what is still needed, as checklist rows with a `fix`: `add_secret`, `sign_in` (`target`, and `id` for a component) or `choose_model_provider` (`tool`). A model-provider sign-in names no provider id; sign in to the provider the draft chose.
+- A CLI component's row has kind `cli` and `in_image`: `yes` or `no` for a harness's own image, `unknown` for an image the run names or the operator pinned.
 - `harnesses` is empty until the tool-policy facts land.
 - Source kinds add `harness` and `posture` to the provenance set; a client shows no chip for a kind it does not know.
 
