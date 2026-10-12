@@ -11,6 +11,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // The steps of runFoldSteps, in its order. Each writes its own refusal and
@@ -514,7 +515,7 @@ func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
 		return true
 	}
 	var refused bool
-	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.r.Context(), f.spec, f.ceiling), time.Duration(f.end.capSec)*time.Second, f.queued)
+	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.spec, f.mainDrive), time.Duration(f.end.capSec)*time.Second, f.queued)
 	return !refused
 }
 
@@ -577,6 +578,41 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	// The queue's own start replays the fold as promoted, and must not queue again.
 	if f.mode != foldPreview {
 		f.queued = plan.queues() && !f.promoted
+	}
+	return true
+}
+
+// stepMainDrive sizes the main drive after placement, which resolved the effective limits, and
+// refuses a size the run's policy writes on a runner that cannot cap disk. The dry doors write the
+// number into their answered spec, so spec.resources.disk_mib keeps showing what the run gets;
+// create writes nothing into the launch spec and hands dispatch the decision instead.
+func (s *Server) stepMainDrive(f *runFold, rec *foldRecorder) bool {
+	policyMiB, requestMiB := 0, 0
+	if f.spec.Resources != nil {
+		policyMiB = f.spec.Resources.DiskMiB
+	}
+	if f.req.Resources != nil {
+		requestMiB = f.req.Resources.DiskMiB
+	}
+	md := mainDriveFor(policyMiB, requestMiB, f.place.limits.DiskMiB)
+	if !md.Soft && md.MiB > 0 && s.runnerCannotCapDisk(f.r.Context(), *f.req, f.place) {
+		msg := mainDriveUnenforceableMsg()
+		if !f.place.pooled {
+			msg = mainDriveUnenforceableUnpooledMsg()
+		}
+		runError(http.StatusUnprocessableEntity, reasonMainDriveUnenforceable, msg).write(s, f.w, f.r)
+		return false
+	}
+	f.mainDrive = md
+	warn := composer.WarnResourcesCapped
+	if md.ClampedBy == client.MainDriveClampPolicy {
+		warn = warnDiskPolicyCut
+	}
+	if md.ClampedBy != "" && !slices.Contains(f.policyWarns, warn) {
+		f.policyWarns = append(f.policyWarns, warn)
+	}
+	if f.mode != foldCreate {
+		(&mainDriveDecision{MiB: md.MiB}).apply(&f.spec)
 	}
 	return true
 }

@@ -232,6 +232,7 @@ function headingFor(c: RunPolicyChange, ownRun: boolean, person: string): { key:
     case "model_access":
     case "mirror":
     case "org_disk":
+    case "pool_disk":
     case "overlay":
       return { key: c.cause, heading: CHANGE_HEADING[c.cause as PlainCause] };
   }
@@ -245,7 +246,7 @@ function groupChanges(changes: RunPolicyChange[], ownRun: boolean, person: strin
     const g = groups.get(key) ?? { key, heading, detail: [], entries: [] };
     groups.set(key, g);
     // The heading of a restart or a disk change already says what happened.
-    const plain = c.cause === "restart" || c.cause === "org_disk";
+    const plain = c.cause === "restart" || c.cause === "org_disk" || c.cause === "pool_disk";
     for (const text of c.added ?? []) g.entries.push({ text: entryText(c.field, text, holdSeconds), mark: plain ? undefined : "added" });
     for (const text of c.removed ?? []) g.entries.push({ text: entryText(c.field, text, holdSeconds), mark: plain ? undefined : "removed" });
     g.detail.push(...(c.detail ?? []));
