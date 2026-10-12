@@ -166,7 +166,7 @@ Each row of `?minted_for_others=true` gains `disposition`, derived at read. Revo
 | Admin-token runs are operator-owned and read the operator namespace | `TestOwnerOnlyGrant_OperatorOwnedRunReadsTheOperatorRow`, `TestRunComponents_OperatorOwnedRunReadsTheOperatorNamespace` |
 | The admin token still authenticates | `TestAPITokenAuth_AdminTokenStillWorks` |
 | A CI principal that is an IdP user keeps its own token | `TestAPITokens_CreateListRevoke` |
-| Local mode, with no sign-in, is unchanged; both new families answer `409` `needs_sso` there | `TestServiceIdentity_LocalModeRefusesAndRunsStillLaunch` (new) |
+| Local mode is unchanged; service identities answer `409` `needs_sso` there, invitation claims per [§3.4](#34-who-gets-what) | `TestServiceIdentity_LocalModeRefusesAndRunsStillLaunch` (new) |
 | The upgrade itself changes no token | `TestMigration0196_TokensAndRunsUnchanged` (new): seeded 0195 database, every `api_tokens` and `agent_runs` row byte-identical after |
 
 ## 7. Wire

@@ -166,8 +166,8 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 // step: every line of this endpoint is a display, so a step added later inherits
 // the right posture instead of having to remember it.
 //
-// Routing is SUPER-only, beside the /drives CRUD family; this handler is
-// deliberately complete so that registration is one line.
+// Routing is securityOps (admin or security_admin), beside the /drives CRUD
+// family; this handler is deliberately complete so that registration is one line.
 func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(withDisplayRead(r.Context()))
 	var req governancePreviewRequest
@@ -284,11 +284,11 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 // typed, writing the launch path's own 403 and returning false once it has.
 //
 // The door at launch keys on the CALLER (userDriveDoorRefusal → driveDoorProfile,
-// which exempts an operator). Here the caller is always an operator — every
-// /drives route is SUPER — so asking about them would answer "open" for every
-// previewed principal and the preview would keep saying "this person mounts
-// their drive" about somebody whose profile forbids it. So the ceiling is
-// resolved for the PREVIEWED claims and only the shared predicate
+// which exempts an operator). Here the caller is always an admin, never the
+// previewed person, so asking about the caller would answer for the wrong
+// principal ("open" for a super admin) and the preview would keep saying "this
+// person mounts their drive" about somebody whose profile forbids it. So the
+// ceiling is resolved for the PREVIEWED claims and only the shared predicate
 // (driveDoorShut) is asked.
 //
 // SAME BYTES as the launch refusal (driveDeniedByProfileMsg): an admin checking
