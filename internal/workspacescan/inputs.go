@@ -12,26 +12,28 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// GeneratedInputs describes the unpinned inputs of the generated build for p:
-// the base, the features, the baked installers, and the hash of every file
-// GenerateDevcontainer returns. It calls GenerateDevcontainer, so the record
-// and the files cannot drift. Digests stay empty until a resolver fills them.
-func GeneratedInputs(p WorkspaceProfile) (types.ImageBuildInputs, error) {
-	files, err := GenerateDevcontainer(p)
+// GeneratedInputs describes the inputs of the generated build for p under pins: the
+// base, the features, the baked installers, and the hash of every file
+// GenerateDevcontainer(p, pins) returns. It calls GenerateDevcontainer, so the record
+// and the files cannot drift. A digest, version or checksum is filled only from a
+// valid pin; an unpinned input has it empty.
+func GeneratedInputs(p WorkspaceProfile, pins Pins) (types.ImageBuildInputs, error) {
+	files, err := GenerateDevcontainer(p, pins)
 	if err != nil {
 		return types.ImageBuildInputs{}, err
 	}
 	in := types.ImageBuildInputs{
-		Base:      types.ImageBuildRef{Ref: genBaseImage},
+		Base:      types.ImageBuildRef{Ref: genBaseImage, Digest: pins.base()},
 		Generator: &types.ImageBuildGenerator{Salt: cacheKeySalt, FilesSHA256: make(map[string]string, len(files))},
 	}
 	for ref, opts := range featuresFor(p.Languages) {
-		in.Features = append(in.Features, types.ImageBuildFeature{Ref: ref, Options: opts})
+		in.Features = append(in.Features, types.ImageBuildFeature{Ref: ref, Digest: pins.feature(ref), Options: opts})
 	}
 	slices.SortFunc(in.Features, func(a, b types.ImageBuildFeature) int { return strings.Compare(a.Ref, b.Ref) })
 	for _, t := range genStandardTools {
 		if _, baked := genAgentToolInstalls[t]; baked {
-			in.Installers = append(in.Installers, types.ImageBuildInstaller{Tool: t, Channel: "stable"})
+			pin, _ := pins.installer(t)
+			in.Installers = append(in.Installers, types.ImageBuildInstaller{Tool: t, Channel: "stable", Version: pin.Version, Platform: pin.Platform, SHA256: pin.SHA256})
 		}
 	}
 	for path, content := range files {

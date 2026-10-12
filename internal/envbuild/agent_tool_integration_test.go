@@ -53,7 +53,7 @@ func TestBuildFromDevcontainerFiles_BakesAgentCLI(t *testing.T) {
 	profile := workspacescan.WorkspaceProfile{
 		Languages: []string{"Go"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,
 	}
-	files, err := workspacescan.GenerateDevcontainer(profile)
+	files, err := workspacescan.GenerateDevcontainer(profile, workspacescan.Pins{})
 	if err != nil {
 		t.Fatalf("GenerateDevcontainer: %v", err)
 	}
