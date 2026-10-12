@@ -632,6 +632,7 @@ start.
 | `override_refused` | `422`: a widening, base-host removal or foreign secret the narrowing table never allows. |
 | `request_field_unavailable` / `main_drive_unenforceable` | `422`: a field this server cannot honour yet, refused and never dropped; or a disk size the run's policy sets that the pool's runners cannot cap. |
 | `harness_not_installed` / `harness_set_no_image` / `harness_set_custom_image` / `harness_providers_conflict` | `422`: no image here carries a harness, or the harnesses together; two or more harnesses name a custom image; or two harnesses' providers share a host. `tool` names the harness. |
+| `drive_selection_conflict` / `drive_invalid` / `drive_not_found` / `drive_not_in_pool` / `drive_target_conflict` / `drive_share_beside_managed` | `drives[]`: `400` `drive` beside `drives`, or a bad id; `422` an unreachable id, an unmountable pool, two drives on one path, a Kubernetes share beside managed. |
 | `run_mode_required` / `run_mode_invalid` / `start_folder_invalid` | `400`: a new client's mode (or a background task's workload) is unset, and is never inferred (`mode_contract: "0.9"` marks a request as a new client's even when it carries no other run-mode field); a run-mode carrier is malformed; a `start_folder` is malformed, names an attachment or a repository the run lacks, or leaves its mount. |
 | `run_mode_conflict` | `422`: run-mode carriers contradict each other, or an older field they replace (`agent`, `task`, `interactive`) rides beside them. |
 | `policy_overlay_invalid` / `policy_overlay_conflict` | `400`: an unusable `policy_overlay`, or one beside `policy_id` or `inline_policy` (see [Run documents](#run-documents)). |
@@ -712,7 +713,7 @@ start.
 | `user_drive_reclaim_invalid` / `user_drive_reclaim_subject_ambiguous` / `user_drive_not_reclaimable` / `user_drive_reclaim_unsupported` / `user_drive_reclaim_conflict` | `POST /user-drives/{id}/reclaim` (operator-only). |
 | `user_drive_reclaim_failed` / `user_drive_reclaim_no_directory_name` | The reclaim object resolver's own two causes: a store read failure, or the allocation resolving to no directory name at all. |
 | `user_drive_preview_no_claims` / `user_drive_denied_by_profile` | The user-drive naming and bind-failure preview routes (operator-only, mirrors the launch-time resolver's own verdict so an admin reads the SAME sentence a member would). |
-| `no_allocation` / `paused` / `runner_cannot_mount` / `backend_elsewhere` / `ceiling_moved` / `home_missing` / `home_unreadable` / `share_unreachable` / `read_only` / `drives_disabled` | `POST /runs`' drive-mount resolution (`seedRequestDrive`, `refuseDrive`) — the SAME closed set (declared in [`internal/api/reasons.go`](../internal/api/reasons.go), moved there from beside `refuseDrive` so this guard can see it) already used for the `wardyn_drive_refusals_total` metric and the WARN log line, now also on the wire. Two arms of `driveBindFailure` stay bare on purpose: the runner-unavailable case (a 503 about the deployment, not a class) and the CALLER-cancelled probe (`silent`), which must not be counted OR named as a real refusal either way. |
+| `no_allocation` / `paused` / `runner_cannot_mount` / `backend_elsewhere` / `ceiling_moved` / `home_missing` / `home_unreadable` / `share_unreachable` / `read_only` / `drives_disabled` | `POST /runs`' drive-mount refusals (`seedRequestDrives`, `refuseDrive`), the closed set the `wardyn_drive_refusals_total` metric and its WARN line use. The runner-unavailable 503 and a caller-cancelled probe (`silent`) stay unclassed on purpose. |
 | `user_type_unknown` / `unmountable` | The user-drive resolver's own closed enum ([`internal/api/user_drives_resolve.go`](../internal/api/user_drives_resolve.go)) members that reach `writeDriveError`'s wire body. Two siblings in that same enum, `unavailable` and `governance_unavailable`, never leave `GET /me`'s own field — no route sends them via `writeErrorReason` — so they are deliberately UNDOCUMENTED here rather than given a row that claims a wire presence they don't have; `unavailable` would also collide with `ADOEntraFailure`'s own reason of the same name above. |
 
 #656 slice 3 converts the remaining route families — `run_*.go`'s per-run
@@ -1082,6 +1083,7 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
   today.
 - Absent `?view=`, it defaults to `user`; `view=admin` from a
   non-security-operator is coerced to `user`.
+- `GET /api/v1/me/drives?runner_pool_id=<uuid>`: drive catalogue ([user-drives.md](operations/user-drives.md#user-drives-on-docker)). `POST /drives/grants` replaces; `additional: true` adds.
 
 Beyond `run_id`, the audit query accepts server-side predicates:
 

@@ -49,10 +49,10 @@ type runFold struct {
 	policyWarns   []string
 	source        policySourceRecord
 	ephemeralDirs []string
-	driveMount    *types.DriveMount
-	// previewDriveReadOnly is the drive's posture at the preview, which resolves
-	// no mount: nil when the run has no drive.
-	previewDriveReadOnly *bool
+	// drives are the run's authorized drives (stepDrive), and driveMounts their
+	// mounts at create and preflight; the preview resolves no mount.
+	drives      []runDrive
+	driveMounts []types.DriveMount
 	// seed is what seeding the request's workspaces decided (attached first,
 	// the primary leading); wsRefs adds every other one the spec references.
 	seed   workspaceSeed
@@ -139,6 +139,8 @@ type runFoldStep struct {
 //     the deployment and the runners' capacity, its candidates meet the policy floor and
 //     that applied size one by one, and the fully eligible set waits for create to pick a
 //     target by run id.
+//   - The drives against the resolved pool straight after placement, so a drive
+//     the pool's runners cannot mount refuses before the run is sized.
 //   - Resources straight after placement: the applied size is written into the spec, so
 //     host capacity, the quota fit and dispatch read what the dry doors report.
 //   - Local eligibility straight after placement, before anything can renew
@@ -172,6 +174,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepComponents, foldAll},
 	{(*Server).stepPlacementDenied, foldAll},
 	{(*Server).stepPlacement, foldAll},
+	{(*Server).stepDriveEligibility, foldAll},
 	{(*Server).stepResources, foldAll},
 	{(*Server).stepLocalEligibility, foldAll},
 	{(*Server).stepConfinement, foldAll},

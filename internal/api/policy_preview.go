@@ -145,7 +145,7 @@ func previewPending(req createRunRequest, choice runProviderChoice) []policyPrev
 	if _, model := agentLLMProvider(req.Agent); model && createDoorIsModelRun(req) && !choice.chosen {
 		pending = append(pending, previewProvider)
 	}
-	if req.Drive != nil && req.Drive.Enabled {
+	if req.Drive != nil && req.Drive.Enabled || len(req.Drives) > 0 {
 		pending = append(pending, previewDrive)
 	}
 	return pending

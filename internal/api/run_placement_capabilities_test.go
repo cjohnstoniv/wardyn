@@ -325,12 +325,12 @@ func TestVerifiedLocalPaths_BoundToTheCandidateInsideItsRoots(t *testing.T) {
 		"SandboxSpec.Mounts[2]": {cand, "/srv/dev/workshop"},
 		"SandboxSpec.Mounts[3]": {cand, "/srv/dev/work/../.ssh"},
 		"SandboxSpec.Mounts[4]": {cand, "work/app"},
-		"SandboxSpec.Drive":     {cand, "/srv/dev/work"},
+		"SandboxSpec.Drives[0]": {cand, "/srv/dev/work"},
 	})
-	if len(got) != 2 || !got["SandboxSpec.Mounts[0]"] || !got["SandboxSpec.Drive"] {
+	if len(got) != 2 || !got["SandboxSpec.Mounts[0]"] || !got["SandboxSpec.Drives[0]"] {
 		t.Errorf("verified = %v, want only the candidate's paths inside its roots", got)
 	}
-	if v := verifiedLocalPaths(uuid.Nil, roots, map[string]boundLocalPath{"SandboxSpec.Drive": {uuid.Nil, "/srv/dev/work"}}); len(v) != 0 {
+	if v := verifiedLocalPaths(uuid.Nil, roots, map[string]boundLocalPath{"SandboxSpec.Drives[0]": {uuid.Nil, "/srv/dev/work"}}); len(v) != 0 {
 		t.Errorf("no candidate runner verified %v", v)
 	}
 }

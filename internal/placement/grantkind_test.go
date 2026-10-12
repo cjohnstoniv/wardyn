@@ -216,13 +216,20 @@ func TestLocalEligibilityMountsAndDriveStayBoundToTheRunner(t *testing.T) {
 	if _, r := LocalEligibility(bound); r != nil {
 		t.Fatal(r)
 	}
-	drive := LocalPlan{Spec: runner.SandboxSpec{Drive: &types.DriveMount{Backend: types.DriveBackendK8sPVC}}}
+	drive := LocalPlan{Spec: runner.SandboxSpec{Drives: []types.DriveMount{{Backend: types.DriveBackendK8sPVC}}}}
 	if _, r := LocalEligibility(drive); r == nil || r.Reason != ReasonPlacementCapability {
 		t.Fatalf("org drive: %v", r)
 	}
-	drive.Spec.Drive.Backend = types.DriveBackendHostPath
+	drive.Spec.Drives[0].Backend = types.DriveBackendHostPath
 	if _, r := LocalEligibility(drive); r == nil || r.Reason != ReasonPlacementLocalPath {
 		t.Fatalf("unbound host drive: %v", r)
+	}
+	// Every drive is held, not the first: a bound first drive leaves the
+	// second's refusal standing.
+	drive.VerifiedLocalPaths = map[string]bool{"SandboxSpec.Drives[0]": true}
+	drive.Spec.Drives = append(drive.Spec.Drives, types.DriveMount{Backend: types.DriveBackendDockerVolume})
+	if _, r := LocalEligibility(drive); r == nil || r.Reason != ReasonPlacementCapability || r.Field != "SandboxSpec.Drives[1]" {
+		t.Fatalf("second drive: %+v", r)
 	}
 }
 
