@@ -81,6 +81,17 @@ func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun,
 	if !callerIsOwner && run.OperatorOwned {
 		return nil, nil
 	}
+	// A built-in GitHub component's repositories, from the grant its admission
+	// wrote: a run with no stored proxy config still meets their provider door.
+	if s.cfg.Store != nil {
+		grants, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
+		if err != nil {
+			return nil, fmt.Errorf("read the run's grants: %w", err)
+		}
+		for _, g := range grants {
+			repos = append(repos, builtinGitHubRepos([]types.GrantSpec{g.Spec})...)
+		}
+	}
 	rows, err := s.ownerProviderRows(ctx, repos)
 	if err != nil {
 		return nil, err

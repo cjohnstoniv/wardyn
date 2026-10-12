@@ -55,6 +55,9 @@ type createRunLaunch struct {
 	pushSets []types.PushRuleSet
 	// harnessRules are the run's tool rules per included harness (harnessToolRulesFor).
 	harnessRules []types.HarnessToolRules
+	// harnesses is the run's harness set as create authorised it, in tools[]
+	// order, each with the model provider it was granted (the run_harnesses rows).
+	harnesses []types.RunHarness
 }
 
 // DRAFT (M2 canon pending) — the run's failure_hint when the detached launch

@@ -909,6 +909,13 @@ const (
 	reasonCLINoGitHubRepo                 = "cli_no_github_repo"                 // a GitHub CLI row is attached, and the run has no GitHub repository on the App lane for it to act on
 )
 
+// A built-in Git provider component's own refusals; its repositories meet the
+// workspace doors' reasons (workspace_repo_not_admitted, capability_workspace_provider).
+const (
+	reasonComponentBuiltinLaneOff            = "component_builtin_lane_off"             // the GitHub provider row that admits a repository has the GitHub App lane off
+	reasonComponentBuiltinAccessAboveCeiling = "component_builtin_access_above_ceiling" // the caller's ceiling does not allow the asked access to GitHub repositories
+)
+
 // reasonCredentialHostCollision: two of a run's credentials are bound to one
 // host, and the proxy carries one per host. The three run doors answer it as a
 // 422 for any run (credentialHostRefusal), and dispatch records it on a failed

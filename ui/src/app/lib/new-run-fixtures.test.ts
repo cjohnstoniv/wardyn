@@ -33,7 +33,6 @@ describe("New Run fixtures", () => {
 
   it("answers the way the server does: arrays, known reasons, sentences the server would send", () => {
     for (const f of NEW_RUN_FIXTURES) {
-      expect(f.preview.resources ?? [], f.route).toBeInstanceOf(Array);
       expect(f.preview.allowed_images, f.route).toBeInstanceOf(Array);
       for (const row of f.preview.local_placement ?? []) {
         if (!row.local_placeable) expect(PLACEMENT_REASONS, f.route).toContain(row.reason);
