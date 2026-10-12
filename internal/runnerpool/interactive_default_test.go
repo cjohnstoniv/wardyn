@@ -11,7 +11,7 @@ import (
 
 func interactiveEffective(t *testing.T, rt types.RunnerPoolRunType, maxAgeSec int, others ...SourceLimits) types.EffectiveRunLimits {
 	t.Helper()
-	dep, err := DeploymentSource(depDefault, maxAgeSec, 0)
+	dep, err := DeploymentSource(depDefault, types.EphemeralProvider{}, maxAgeSec, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
