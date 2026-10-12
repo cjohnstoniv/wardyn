@@ -464,6 +464,7 @@ func TestHarnessProviderConflict_CreateAndDispatchAgree(t *testing.T) {
 		{"one Azure Foundry provider on two harnesses", oneAzure, oneAzure, true},
 		{"a Claude subscription through the endpoint's host", subThrough("https://gw.example.com"), endpoint("gw-b", "https://gw.example.com", codex), true},
 		{"a Claude subscription on the vendor host", subThrough(""), endpoint("gw-b", "https://gw.example.com", codex), false},
+		{"a gateway-routed subscription beside an endpoint on the vendor host", subThrough("https://gw.example.com"), endpoint("gw-b", "https://api.anthropic.com", codex), true},
 		{"Bedrock beside an endpoint on its runtime host", bedrockKey, endpoint("gw-b", "https://bedrock-runtime.us-west-2.amazonaws.com", codex), true},
 		{"Bedrock beside an endpoint on its control host", bedrockKey, endpoint("gw-b", "https://bedrock.us-west-2.amazonaws.com", codex), true},
 	} {
