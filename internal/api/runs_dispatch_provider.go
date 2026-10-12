@@ -363,7 +363,7 @@ func (s *Server) harnessLanes(ctx context.Context, run types.AgentRun, pairs []t
 		}
 		lr := laneRun(run, h)
 		if p, found := modelProviderByID(siteCfg.ModelProviders, h.ModelProviderID); i > 0 && found && harnessProviderNeedsPrimary(p) {
-			s.refuseProviderDispatch(ctx, lr, p.Kind, providerDenial{msg: fmt.Sprintf(mpRunSignInNotPrimary, p.ID)}, nil)
+			s.refuseProviderDispatch(ctx, lr, p.Kind, providerDenial{msg: fmt.Sprintf(mpRunSignInNotPrimary, p.ID, harnessName(h.Harness))}, nil)
 			return nil, nil, false
 		}
 		lane, kind, d := s.providerLaneForRun(ctx, lr, siteCfg)
@@ -385,7 +385,7 @@ func (s *Server) harnessLanes(ctx context.Context, run types.AgentRun, pairs []t
 // mpRunSignInNotPrimary is create's harnessSignInNotPrimaryMsg at dispatch, for
 // a provider that became an AWS sign-in after the run was created.
 const mpRunSignInNotPrimary = "Model provider %s uses an AWS sign-in, which only the harness a run starts, or else lists first, can use, " +
-	"so nothing was started. Launch the run again with that harness first, or with another provider for it."
+	"so nothing was started. Launch the run again with %s first, or with another provider for it."
 
 // DRAFT (M2 canon pending).
 const mpRunLaneConflict = "Model provider %s would put a second credential on %s, which another harness of this run " +
