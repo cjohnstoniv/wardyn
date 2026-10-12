@@ -259,6 +259,18 @@ describe("Focus mode — the bottom strip states the facts", () => {
     expect(strip().getByText("docker")).toBeInTheDocument();
   });
 
+  // 0.9 (M-RN-3 RS3): a local run names its computer where the bare substrate word was; a remote run keeps it.
+  it("names a local run's computer in place of the substrate word, and leaves a remote run's as it was", () => {
+    const local = { ...RUN, placement: "local", runner_id: "11111111-2222-3333-4444-555555555555", runner_name: "laptop-7" };
+    const { unmount } = render(<FocusMode ctx={ctx({ run: local as unknown as WidgetContext["run"] })} onExit={() => {}} />);
+    expect(strip().getByText("On laptop-7")).toBeInTheDocument();
+    expect(strip().queryByText("docker")).toBeNull();
+    unmount();
+    render(<FocusMode ctx={ctx({ run: { ...RUN, placement: "remote" } as unknown as WidgetContext["run"] })} onExit={() => {}} />);
+    expect(strip().getByText("docker")).toBeInTheDocument();
+    expect(strip().queryByText(/^On /)).toBeNull();
+  });
+
   // B3 — the SECOND copy of the lying count (the first is the Egress widget's
   // own chip). The audit trail is append-only, so the egress.hold row for a
   // hold that was approved an hour ago is still there and always will be:
