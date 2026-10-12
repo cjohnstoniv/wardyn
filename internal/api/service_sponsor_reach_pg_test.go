@@ -541,3 +541,72 @@ func TestServiceIdentity_SSHRefusesSponsorEntry(t *testing.T) {
 		})
 	}
 }
+
+// TestServiceIdentity_SponsoredRunNeedsNoActionFromTheSponsor: the user view lists a sponsored run, but only
+// the run's owner can revive it or clear its credential holds, so its attention is "owner", never "you":
+// the sponsor's Revive button does not appear, `status=needs` omits the run, and the nav badge never counted
+// it. The sponsor's own lost run is still "you", listed under needs and counted.
+func TestServiceIdentity_SponsoredRunNeedsNoActionFromTheSponsor(t *testing.T) {
+	e := newSponsorEnv(t)
+	lose := func(r types.AgentRun) {
+		t.Helper()
+		if _, err := e.pool.Exec(context.Background(), `UPDATE agent_runs SET lost_at = now(), lost_reason = 'outage' WHERE id = $1`, r.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sponsored := e.seedRun(t, svcPrin, nil)
+	own := e.seedRun(t, svcSponsor, nil)
+	lose(sponsored)
+	lose(own)
+
+	attention := func(path string) map[uuid.UUID]*types.RunAttention {
+		t.Helper()
+		w := doSSO(t, e.h.srv, http.MethodGet, path, e.sponsor, "")
+		var runs []types.AgentRun
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &runs) != nil {
+			t.Fatalf("GET %s: %d %s", path, w.Code, w.Body.String())
+		}
+		out := map[uuid.UUID]*types.RunAttention{}
+		for _, r := range runs {
+			out[r.ID] = r.Attention
+		}
+		return out
+	}
+	got := attention("/api/v1/runs?view=user")
+	if a, ok := got[sponsored.ID]; !ok || a == nil || a.Kind != types.AttentionLost || a.By != types.AttentionOwner {
+		t.Errorf("the sponsored lost run in view=user: listed=%v attention=%+v, want {lost owner}", ok, a)
+	}
+	if a := got[own.ID]; a == nil || a.By != types.AttentionYou {
+		t.Errorf("the sponsor's own lost run: attention=%+v, want {lost you}", a)
+	}
+	needs := attention("/api/v1/runs?view=user&status=needs")
+	if _, ok := needs[sponsored.ID]; ok {
+		t.Error("status=needs lists the sponsored run: the sponsor can act on nothing there")
+	}
+	if _, ok := needs[own.ID]; !ok {
+		t.Error("status=needs omits the sponsor's own lost run")
+	}
+	w := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/me/attention", e.sponsor, "")
+	var badge struct {
+		NeedsYou int `json:"needs_you"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &badge); err != nil || w.Code != http.StatusOK || badge.NeedsYou != len(needs) {
+		t.Errorf("/me/attention = %d %s, want needs_you equal to the %d runs under status=needs", w.Code, w.Body.String(), len(needs))
+	}
+	// The same rule for the credential holds, whose "you" was the owner's (rows 6 and 7).
+	s := attentionFixture(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil).WithContext(memberCtxFor(svcSponsor))
+	for _, c := range []struct {
+		name, scope string
+		kind        types.AttentionKind
+	}{
+		{"ado consent", `{"lane":"azure_devops","mechanism":"entra_signin","owner":"service:ci-bot","provider_id":"p1"}`, types.AttentionADOConsent},
+		{"reauth", `{"credential_source":"aws_sso"}`, types.AttentionReauth},
+	} {
+		pending := []types.ApprovalRequest{pendingRow(sponsored.ID, types.ApprovalCredentialReauth, c.scope, nil)}
+		s.projectHolds(pending)
+		if a := s.attention(req, sponsored, pending, false); a == nil || a.Kind != c.kind || a.By != types.AttentionOwner {
+			t.Errorf("%s hold on a sponsored run: attention=%+v, want {%s owner}", c.name, a, c.kind)
+		}
+	}
+}
