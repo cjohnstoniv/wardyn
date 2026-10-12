@@ -400,7 +400,7 @@ func openSyncSession(c *ssh.Client, dir, direction string) (*syncSession, error)
 		if err != nil {
 			return nil, fmt.Errorf("sync: ask the sandbox for its start directory: %w", err)
 		}
-		return nil, fmt.Errorf("sync: the sandbox started in %s, not %s; does %s exist in the sandbox?", got, dir, dir)
+		return nil, fmt.Errorf("sync: the sandbox started in %s, not %s; does %s exist in the sandbox?", syncShown(got), syncShown(dir), syncShown(dir))
 	}
 	return s, nil
 }
@@ -432,7 +432,7 @@ func (s *syncSession) finish() bool {
 func (s *syncSession) refusal() error {
 	s.finish()
 	if msg := strings.TrimSpace(s.stderr.String()); msg != "" {
-		return errors.New(msg)
+		return errors.New(syncShown(msg))
 	}
 	return errors.New("the gateway ended the sync channel without a message")
 }

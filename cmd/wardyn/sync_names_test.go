@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // The sandbox chooses every remote name, and the report is read in a terminal.
@@ -177,5 +179,31 @@ func TestSyncGateway_SandboxErrorTextNeverReachesTheTerminalRaw(t *testing.T) {
 	}
 	if err := sess.close(); err == nil || rawControl(err.Error()) || !strings.Contains(err.Error(), "exited 3") {
 		t.Errorf("close = %q, want the exit status and no raw control byte", err)
+	}
+}
+
+// closedChannel is a channel whose Close is all refusal needs.
+type closedChannel struct{ ssh.Channel }
+
+func (closedChannel) Close() error { return nil }
+
+func TestSyncSession_RefusalQuotesTheGatewaysStderr(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	s := &syncSession{ch: closedChannel{}, exited: done, errDone: done}
+	s.stderr.WriteString(hostileText)
+	if err := s.refusal(); rawControl(err.Error()) {
+		t.Errorf("refusal = %q, want no raw control byte", err)
+	}
+}
+
+func TestSyncGateway_HostileStartDirectoryIsQuoted(t *testing.T) {
+	g := newSyncRig(t)
+	g.mkSandboxDir("/home/agent/work")
+	g.mkSandboxDir("/home/agent/x\x1b[2Kevil")
+	g.rn.start = "/home/agent/x\x1b[2Kevil"
+	_, err := openSyncSession(g.dial(), "/home/agent/work", "push")
+	if err == nil || !strings.Contains(err.Error(), "started in") || rawControl(err.Error()) {
+		t.Fatalf("err = %q, want the start-directory abort with no raw control byte", err)
 	}
 }
