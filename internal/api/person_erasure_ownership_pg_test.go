@@ -7,9 +7,12 @@ package api
 // identity directory proves the form is theirs alone. Guarded by WARDYN_TEST_PG.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -231,6 +234,53 @@ func TestPG_Erasure_ABindingThatChangesAfterTheProofFailsTheStep(t *testing.T) {
 				}
 				if cred, key, _ := ownKept(t, pg, sec, c, history, since); !cred || !key {
 					t.Errorf("a step that failed on the change reached %q: credential kept %v, key kept %v", c, cred, key)
+				}
+			})
+		}
+	}
+}
+
+// Erasing either of P (bound to entra:<tenant>:<object> under one issuer) and Y (a pairwise subject with
+// the same ids under another) leaves the other alone, and the response and the audit row name the other by
+// its exact subject, to be erased by subject.
+func TestPG_Erasure_NamesTheOtherIssuersPrincipalNotErased(t *testing.T) {
+	for _, erasingY := range []bool{true, false} {
+		for _, method := range []string{http.MethodPost, http.MethodDelete} {
+			t.Run(fmt.Sprintf("erasingY=%v/%s", erasingY, method), func(t *testing.T) {
+				h, srv, pg, _ := identityRig(t)
+				oid := uuid.NewString()
+				p, y := "entra:"+identTenant+":"+oid, "pairwise-y-"+oid
+				ownPerson(t, pg, p, identIssuer, oid)
+				ownBind(t, pg, p, identIssuer, oid)
+				ownBind(t, pg, y, ownIssuerB, oid)
+				target, other := y, p
+				if !erasingY {
+					target, other = p, y
+				}
+				sa := ssoSession(t, "sec-1", "sec@corp.example", oidc.RoleSecurityAdmin)
+				path, body, action := "/api/v1/people/"+target+"/erasure", erasureBody("run_tasks"), "person.erasure"
+				if method == http.MethodDelete {
+					path, body, action = "/api/v1/people/"+target+"/credentials", "", "credential.erase"
+				}
+				w := doSSO(t, srv, method, path, sa, body)
+				var resp struct {
+					NotErased struct {
+						Subjects []string
+						Note     string
+					} `json:"not_erased"`
+				}
+				if err := json.Unmarshal(w.Body.Bytes(), &resp); w.Code != http.StatusOK || err != nil ||
+					!slices.Equal(resp.NotErased.Subjects, []string{other}) || resp.NotErased.Note != "not erased: erase by subject" {
+					t.Fatalf("erasing %q = %d %s, want 200 naming %q not erased", target, w.Code, w.Body, other)
+				}
+				var row *types.AuditEvent
+				for i, ev := range h.audit.events {
+					if ev.Action == action && ev.Outcome == "success" {
+						row = &h.audit.events[i]
+					}
+				}
+				if row == nil || !strings.Contains(string(row.Data), `"not_erased":{"note":"not erased: erase by subject","subjects":["`+other+`"]}`) {
+					t.Fatalf("the %s row = %+v, want it to name %q not erased", action, row, other)
 				}
 			})
 		}

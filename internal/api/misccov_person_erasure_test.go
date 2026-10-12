@@ -98,6 +98,10 @@ func (s *miscCovPersonStore) PrincipalEntraNames(context.Context, string) ([]str
 	return nil, nil
 }
 
+func (s *miscCovPersonStore) PrincipalsSharingObject(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
 func (s *miscCovPersonStore) EraseGovernanceChangePersonalFields(_ context.Context, principals, emails []string) (int, error) {
 	s.note("governance:" + strings.Join(principals, ",") + "|" + strings.Join(emails, ","))
 	return s.govN, s.govErr
