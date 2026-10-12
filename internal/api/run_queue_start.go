@@ -364,11 +364,14 @@ func (s *Server) revokeKilledStart(st *queuedStart) {
 }
 
 // auditQueueStart is the run.queue.start success row: how long the run waited, the pool's slots, the
-// limits it started under and the jti of its identity; a portal launch's row carries via.
+// limits it started under, the CPU and memory it got as the replayed placement applied them against the
+// limits as they stand at the start (resources_applied, run.create's shape), and the jti of its identity;
+// a portal launch's row carries via.
 func (s *Server) auditQueueStart(st *queuedStart, started, anchor types.AgentRun, jti string) {
 	data := map[string]any{
 		"waited_sec": int(started.AdmittedAt.Sub(st.entry.QueuedAt).Seconds()), "pool_id": st.entry.PoolID, "jti": jti,
-		"limits": map[string]any{"ends_at": anchor.EndsAt, "lifetime_cap_at": anchor.LifetimeCapAt, "run_limits": anchor.RunLimits},
+		"limits":            map[string]any{"ends_at": anchor.EndsAt, "lifetime_cap_at": anchor.LifetimeCapAt, "run_limits": anchor.RunLimits},
+		"resources_applied": st.f.place.applied,
 	}
 	if c, ok := s.cfg.Store.(interface {
 		CountRunnerPoolSlotHolders(ctx context.Context, poolID uuid.UUID) (int, error)

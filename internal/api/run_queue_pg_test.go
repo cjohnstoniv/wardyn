@@ -308,3 +308,39 @@ func (e *queueEnv) exec(sql string, args ...any) {
 		e.t.Fatal(err)
 	}
 }
+
+// The start sizes the run against the limits as they stand when it starts, not as they stood at launch,
+// and records what it got on run.queue.start as run.create would: a pool cap lowered while the run
+// waited cuts the ask to the new cap.
+func TestPG_QueueStartRecordsTheSizeItApplied(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Busy", 1)
+	occupant := e.occupy(pool)
+	waiting := e.queuedLaunch(nil, pool, `,"resources":{"cpu_millis":3000}`)
+	cur := e.reread(pool)
+	limits := *cur.Limits
+	limits.Background.CPUMillis.Cap = 2000
+	if w := e.admin(http.MethodPut, "/api/v1/runner-pools/"+pool.ID.String(), fmt.Sprintf(`{"revision":%d,"limits":%s}`, cur.Revision, mustJSON(limits))); w.Code != http.StatusOK {
+		t.Fatalf("lower the pool's CPU cap = %d %s", w.Code, w.Body)
+	}
+	e.free(occupant)
+	rows := e.waitAudit(waiting.ID, "run.queue.start")
+	if len(rows) != 1 || rows[0].Outcome != "success" {
+		t.Fatalf("run.queue.start rows = %+v; want one success", rows)
+	}
+	var data struct {
+		Applied struct {
+			CPUMillis struct {
+				Requested, Applied int
+				Capped             bool
+				Source             string
+			} `json:"cpu_millis"`
+		} `json:"resources_applied"`
+	}
+	if err := json.Unmarshal(rows[0].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if got := data.Applied.CPUMillis; got.Requested != 3000 || got.Applied != 2000 || !got.Capped || got.Source != string(types.LimitSourcePool) {
+		t.Errorf("resources_applied.cpu_millis = %+v; want 3000 asked, 2000 applied, capped by the pool", got)
+	}
+}
