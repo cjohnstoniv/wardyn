@@ -20,6 +20,7 @@ import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../..
 import { flowSteps, StepShell } from "../step-shell";
 import { useLoaded } from "../shape/use-loaded";
 import { readMainDrive, repoRows, useFilesPreflight } from "./files-seams";
+import { DrivesSection, useDriveStartsTarget } from "./drives-section";
 import { FilesSummary, summaryText } from "./files-summary";
 import { lifecycleOf, MainDriveSection, useMainDriveSize } from "./main-drive-section";
 import { MountMap } from "./mount-map";
@@ -57,6 +58,7 @@ export function FilesStep({ go }: NewRunScreenProps) {
   const startsName = rows.find((r) => repoIncluded(intent, r.workspaceId, r.repo) && startsAt(intent, r.workspaceId, r.repo, r.siblings.length))?.name ??
     attachments.find((a) => a.starts_here)?.name;
 
+  const driveTakesFocus = useDriveStartsTarget();
   const includedKey = rows.find((r) => repoIncluded(intent, r.workspaceId, r.repo))?.key;
   const issues: StepIssue[] = [...(size.missing ? [issue("files", "main_drive_size_required")] : []), ...stepIssues("files", intent)];
   const keptNote = life.kind === "deleted" ? NR_FILES.NO_EXTRA_DELETED : life.kind === "kept" ? NR_FILES.NO_EXTRA_KEPT(life.grace) : undefined;
@@ -84,8 +86,9 @@ export function FilesStep({ go }: NewRunScreenProps) {
           rows={rows}
           pathOf={pathOf}
           startsFocusKey={includedKey}
-          focusSelf={includedKey === undefined}
+          focusSelf={includedKey === undefined && !driveTakesFocus}
         />
+        <DrivesSection focus={includedKey === undefined && driveTakesFocus} />
         <section aria-labelledby="nr-computer-title" className="flex flex-col gap-1 rounded-lg border border-border p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
