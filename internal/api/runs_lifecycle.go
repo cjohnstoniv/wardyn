@@ -595,7 +595,8 @@ func (s *Server) finalizeRunTailOrdered(ctx context.Context, runID uuid.UUID, re
 // won, so a concurrent kill that legitimately moved the run first is never
 // annotated with a failure reason it did not have. "" leaves the column empty
 // (a clean FAILED-by-nonzero-exit carries its exit code instead).
-func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.RunState, hint string) {
+// It reports whether this transition won.
+func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.RunState, hint string) bool {
 	applied, err := s.casRunState(ctx, runID, from, types.RunFailed)
 	if err != nil {
 		// "The compensator itself failed" is categorically different from
@@ -606,7 +607,7 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 			slog.String("run_id", runID.String()), slog.String("from_state", string(from)), slog.Any("err", err))
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.fail",
 			runID.String(), "failure", mustJSON(map[string]any{"from": string(from), "error": err.Error()})))
-		return
+		return false
 	}
 	if applied {
 		// The cascade is conditional on `from`, and the condition is load-bearing.
@@ -656,6 +657,7 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		}
 		s.FinishRunOutput(ctx, runID)
 	}
+	return applied
 }
 
 // runFailureHintSetter is the OPTIONAL store capability failAndRevoke uses to

@@ -284,7 +284,8 @@ func TestOfflineSelfHostedIsRefusedNotQueued(t *testing.T) {
 }
 
 // A run whose runner became unreachable after it queued is not refused: it keeps its place, says
-// runner_pool_no_runner_free, and starts when the runner is back.
+// runner_pool_no_runner_free, goes back to runner_pool_at_capacity when the pool fills again, and starts
+// when the runner is back and a slot frees.
 func TestPG_QueueWaitsForARunnerThatWentAway(t *testing.T) {
 	e := newQueueEnv(t)
 	pool := e.cappedPool("Busy", 1)
@@ -299,8 +300,14 @@ func TestPG_QueueWaitsForARunnerThatWentAway(t *testing.T) {
 	if got.State != types.RunQueued || got.StatusDetail != "queue: runner_pool_no_runner_free" || e.queueRows(waiting.ID) != 1 {
 		t.Fatalf("a run whose executor went away is %s %q with %d rows; want QUEUED waiting with runner_pool_no_runner_free", got.State, got.StatusDetail, e.queueRows(waiting.ID))
 	}
+	again := e.occupy(pool)
+	e.sweep()
+	if got := e.run(waiting.ID); got.StatusDetail != "queue: runner_pool_at_capacity" {
+		t.Errorf("with the pool full again the run says %q; want runner_pool_at_capacity", got.StatusDetail)
+	}
 	e.runner.execFacts["alpha"] = facts
 	delete(e.runner.silent, "alpha")
+	e.free(again)
 	e.sweep()
 	e.waitStarted(waiting.ID)
 }

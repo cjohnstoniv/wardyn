@@ -69,6 +69,9 @@ type queuedStart struct {
 	ctx    context.Context
 	r      *http.Request
 	cw     *queueRefusalCapture
+	// daemon and prep are base and ctx before the owner's identity is put on them, so the start can put
+	// a narrower one on in its place (queueCurrentRole).
+	daemon, prep context.Context
 	// f is the replayed fold, set once it has run.
 	f runFold
 }
@@ -107,19 +110,26 @@ func (s *Server) startQueuedRun(base context.Context, p store.PromotedRun) {
 // replay and the mint work on. On an unreadable row it still returns the start, so the caller can end
 // the run.
 func newQueuedStart(base, prep context.Context, p store.PromotedRun) (*queuedStart, error) {
-	st := &queuedStart{run: p.Run, entry: p.Entry, base: base, cw: newQueueRefusalCapture()}
+	st := &queuedStart{run: p.Run, entry: p.Entry, base: base, daemon: base, prep: prep, cw: newQueueRefusalCapture()}
 	if err := json.Unmarshal(p.Entry.Launch, &st.launch); err != nil {
 		return st, err
 	}
-	_ = json.Unmarshal(p.Entry.Authority, &st.auth) //nolint:errcheck // an unreadable authority fails the owner checks
-	st.base = st.auth.context(base)
-	st.ctx = withPromotedStart(withCeilingMemo(withCapBatch(st.auth.context(prep))))
+	var auth queueAuthority
+	_ = json.Unmarshal(p.Entry.Authority, &auth) //nolint:errcheck // an unreadable authority fails the owner checks
+	return st, st.bind(auth)
+}
+
+// bind makes a the identity the start acts as: on its contexts and on the request the gates read.
+func (st *queuedStart) bind(a queueAuthority) error {
+	st.auth = a
+	st.base = a.context(st.daemon)
+	st.ctx = withPromotedStart(withCeilingMemo(withCapBatch(a.context(st.prep))))
 	r, err := http.NewRequestWithContext(st.ctx, http.MethodPost, "/api/v1/runs", nil)
 	if err != nil {
-		return st, err
+		return err
 	}
 	st.r = r
-	return st, nil
+	return nil
 }
 
 // runQueuedStart is the table of section 7: the owner's standing, the profile, the doors, the policy,
@@ -127,6 +137,9 @@ func newQueuedStart(base, prep context.Context, p store.PromotedRun) (*queuedSta
 // when the run was handed to dispatch or was already taken by a kill.
 func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
 	if end := s.queueOwnerStanding(st); end != nil {
+		return end
+	}
+	if end := s.queueCurrentRole(st); end != nil {
 		return end
 	}
 	var req createRunRequest
@@ -174,21 +187,26 @@ func (st *queuedStart) refusalEnd() *queueEnd {
 	return end
 }
 
-// queueOwnerStanding is step 1: the owner is still active, and a portal launch's portal is still
-// registered. The portal is read from its row (delegates.revoked_at), never from the delegated
-// token, whose ten-minute expiry says nothing about a run that waited longer.
+// queueOwnerStanding is step 1: the owner may still act as they did when the run was queued
+// (queueOwnerLive), and a portal launch's portal is still registered. The portal is read from its row
+// (delegates.revoked_at), never from the delegated token, whose ten-minute expiry says nothing about a
+// run that waited longer. A check the store could not answer is asked again before the start gives up.
 func (s *Server) queueOwnerStanding(st *queuedStart) *queueEnd {
-	if sh, ok := s.cfg.Store.(identitySharer); ok && st.auth.Sub != "" {
-		g := store.IdentityGuard{Principal: st.auth.Sub, Epoch: -1}
-		if st.auth.Epoch != nil {
-			g.Epoch = *st.auth.Epoch
-		}
-		switch err := sh.WithIdentityShared(st.ctx, g, func() error { return nil }); {
-		case errors.Is(err, store.ErrIdentityDeactivated):
-			return &queueEnd{token: string(types.RunEndIdentityDeactivated), hint: types.RunEndIdentityDeactivated.Sentence()}
-		case err != nil:
+	live, err := s.queueOwnerLive(st.ctx, st.auth, st.entry.QueuedAt)
+	for try := 1; err != nil && try < queueOwnerCheckTries; try++ {
+		select {
+		case <-st.ctx.Done():
 			return &queueEnd{hint: queueStartFailedHint}
+		case <-time.After(time.Duration(try) * queueOwnerCheckBackoff):
 		}
+		live, err = s.queueOwnerLive(st.ctx, st.auth, st.entry.QueuedAt)
+	}
+	switch {
+	case err != nil:
+		slog.ErrorContext(st.base, queueStartFailedLogName+": check the owner", slog.String("run_id", st.run.ID.String()), slog.Any("err", err))
+		return &queueEnd{hint: queueStartFailedHint}
+	case !live:
+		return &queueEnd{token: string(types.RunEndIdentityDeactivated), hint: types.RunEndIdentityDeactivated.Sentence()}
 	}
 	via, ok := st.auth.via()
 	if !ok {
@@ -374,7 +392,9 @@ func (s *Server) endPromoted(st *queuedStart, end *queueEnd) {
 			}
 		}
 	}
-	s.failAndRevoke(st.base, run.ID, types.RunPending, end.hint)
+	if !s.failAndRevoke(st.base, run.ID, types.RunPending, end.hint) {
+		return // a kill or another start's end moved the run first, and wrote its own rows
+	}
 	data := map[string]any{"reason": end.token, "pool_id": st.entry.PoolID}
 	for k, v := range end.extra {
 		data[k] = v

@@ -100,13 +100,13 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
 
 ## 7. Starting a queued run
 
-**Promotion**, one transaction:
+**Promotion** judges without a lock, then moves runs in one transaction:
 
-1. Lock the pool row `FOR NO KEY UPDATE`, then the deployment-cap advisory lock (always this order).
-2. Count the pool's and the deployment's slot-holders. `AtCapacity` non-nil promotes nothing; a deployment at `WARDYN_MAX_CONCURRENT_RUNS` leaves heads waiting.
-3. Candidates oldest first (`queued_at`, `run_id`) `FOR UPDATE SKIP LOCKED`; skip any whose eligible runners are all busy now. It keeps its place.
-4. Before the CAS, host capacity and the fit check (`Need > Left`) run lock-free; a no leaves the run waiting; a run held back because every eligible runner is busy is waiting with `runner_pool_no_runner_free`.
-5. CAS `QUEUED`→`PENDING`; set `admitted_at`, the runner binding and the watcher heartbeat; delete the `run_queue` row, returning its inputs.
+1. Count the pool's and the deployment's slot-holders. `AtCapacity` non-nil promotes nothing and records `runner_pool_at_capacity` on the waiting runs; a deployment at `WARDYN_MAX_CONCURRENT_RUNS` leaves heads waiting.
+2. Candidates oldest first (`queued_at`, `run_id`), a page at a time until the free slots are filled; skip any whose eligible runners are all busy now (`runner_pool_no_runner_free`), and that person's later runs in the same pass. It keeps its place.
+3. Host capacity and the fit check (`Need > Left`) also run before any lock; a no leaves the run waiting. A run that cannot be judged keeps its place, and the next is judged.
+4. Lock the pool row `FOR NO KEY UPDATE`, then the deployment-cap advisory lock (always this order), and count the slot-holders again.
+5. While there is room, CAS each admitted run `QUEUED`→`PENDING`; set `admitted_at`, the runner binding and the watcher heartbeat; delete the `run_queue` row, returning its inputs.
 
 **The start**, in the promoting process:
 
@@ -259,7 +259,7 @@ One migration; its number comes from the lead.
 |---|---|---|
 | Credentials for a run nobody may start | Invariant 1: identity, grants and renewal only after promotion and re-checks | None while `QUEUED` |
 | Profile reassigned while waiting | Re-resolved at the start; different profile fails | None |
-| Authority lost while waiting | Start re-checks; suspension kills queued runs | A group removal is never seen before the max wait: the epoch moves only on deactivation |
+| Authority lost while waiting | Start re-checks the identity, the revocation cutoff from `queued_at`, a service identity, and the role and user type the current mappings derive; suspension, a credential revocation and a retirement cancel queued runs | A group removal is never seen before the max wait: the epoch moves only on deactivation |
 | Policy changed while waiting | Q7-A fails the run | None |
 | Queue flood | 100 waiting per person per pool; Q2b | Without a cap, 100 rows per person per pool |
 | Crashed promoter | Stale-lease pass on promoted runs | A dead promoted run holds its slot about 100 s |

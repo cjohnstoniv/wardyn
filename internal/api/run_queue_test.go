@@ -33,7 +33,11 @@ func TestQueueWaitSec(t *testing.T) {
 		{"asked longest", 604800, true, 604800, false},
 		{"cut at seven days with a warning", 604801, false, 604800, true},
 	} {
-		got, warn := queueWaitSec(createRunRequest{MaxWaitSec: tc.asked}, tc.interactive)
+		req := createRunRequest{}
+		if tc.asked != 0 {
+			req.MaxWaitSec = &tc.asked
+		}
+		got, warn := queueWaitSec(req, tc.interactive)
 		if got != tc.want || (warn != "") != tc.warns {
 			t.Errorf("%s: wait %d, warning %q; want %d, warning %v", tc.name, got, warn, tc.want, tc.warns)
 		}
@@ -124,14 +128,24 @@ func TestQueueNarrowOnly(t *testing.T) {
 	}
 }
 
+// max_wait_sec below 1, a 0 included, is refused 422 rather than read as absent; absent is the default.
 func TestMaxWaitShape(t *testing.T) {
-	if ref := runEndShapeRefusal(createRunRequest{MaxWaitSec: -1}); ref == nil || ref.status != http.StatusBadRequest || ref.body.Reason != reasonRunMaxWaitInvalid {
-		t.Errorf("max_wait_sec -1 = %+v; want 400 %s", ref, reasonRunMaxWaitInvalid)
+	for _, bad := range []int{-1, 0} {
+		if ref := runEndShapeRefusal(createRunRequest{MaxWaitSec: &bad}); ref == nil || ref.status != http.StatusUnprocessableEntity || ref.body.Reason != reasonRunMaxWaitInvalid {
+			t.Errorf("max_wait_sec %d = %+v; want 422 %s", bad, ref, reasonRunMaxWaitInvalid)
+		}
 	}
-	for _, ok := range []int{0, 1, 604800, 999999} {
-		if ref := runEndShapeRefusal(createRunRequest{MaxWaitSec: ok}); ref != nil {
+	if ref := runEndShapeRefusal(createRunRequest{}); ref != nil {
+		t.Errorf("an absent max_wait_sec refused: %+v", ref)
+	}
+	for _, ok := range []int{1, 604800, 999999} {
+		if ref := runEndShapeRefusal(createRunRequest{MaxWaitSec: &ok}); ref != nil {
 			t.Errorf("max_wait_sec %d refused: %+v", ok, ref)
 		}
+	}
+	var decoded createRunRequest
+	if err := json.Unmarshal([]byte(`{"max_wait_sec":0}`), &decoded); err != nil || runEndShapeRefusal(decoded) == nil {
+		t.Errorf("a request carrying max_wait_sec 0 was not refused: %v", err)
 	}
 }
 

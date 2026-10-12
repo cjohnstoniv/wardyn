@@ -32,8 +32,8 @@ func runEndShapeRefusal(req createRunRequest) *runRefusal {
 		return runError(http.StatusBadRequest, reasonRunEndAfterTooSmall, "ends_after_sec must be at least 1")
 	case req.EndsAfterSec != nil && *req.EndsAfterSec > maxRunLimitSec:
 		return runError(http.StatusBadRequest, reasonRunEndAfterTooLarge, fmt.Sprintf("ends_after_sec must be at most %d", maxRunLimitSec))
-	case req.MaxWaitSec < 0:
-		return runError(http.StatusBadRequest, reasonRunMaxWaitInvalid, "max_wait_sec must be at least 1")
+	case req.MaxWaitSec != nil && *req.MaxWaitSec < 1:
+		return runError(http.StatusUnprocessableEntity, reasonRunMaxWaitInvalid, "max_wait_sec must be at least 1")
 	}
 	return nil
 }

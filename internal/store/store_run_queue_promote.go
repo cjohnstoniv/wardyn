@@ -28,22 +28,29 @@ type PromotePass struct {
 	// DeploymentCap is WARDYN_MAX_CONCURRENT_RUNS, 0 for none. The pass counts the deployment's
 	// slot-holders under the same advisory lock a create takes, so it never exceeds the cap.
 	DeploymentCap int
-	// ScanLimit bounds how many waiting runs the pass looks at, so one pool with a long queue of
-	// unplaceable heads cannot hold its row lock for an unbounded time. 0 is every row.
+	// ScanLimit is how many waiting runs the pass reads at a time; it reads on past runs it holds while it
+	// still has room to fill. 0 reads them all at once.
 	ScanLimit int
 	// WatcherOwner is the lease holder written on each promoted run: the promoting process.
 	WatcherOwner string
+	// AtCapacityDetail is the status_detail of a run waiting behind the pool's cap. A pass that finds the
+	// pool full writes it on every waiting run of the pool that says something else, so a run that waited
+	// for a runner goes back to waiting for a slot. "" writes nothing.
+	AtCapacityDetail string
 }
 
-// QueueVerdict is the pass's answer for one waiting run, decided without any lock beyond the pool's.
+// QueueVerdict is the pass's answer for one waiting run.
 type QueueVerdict struct {
 	// Admit promotes the run. Wait is the reason it keeps its place otherwise, "" for none to say.
 	Admit bool
 	Wait  string
+	// Stop says no run can be admitted this pass (the host has no room), so the rest are not judged.
+	Stop bool
 }
 
-// QueueAdmit judges one waiting run while the pass holds the pool row. It runs inside the transaction,
-// so it must be quick and must not write to the queue.
+// QueueAdmit judges one waiting run before the pass takes any lock (pool-queue.md section 7 step 4), so it
+// may read the store and ask the substrate. It must not write to the queue. An error leaves that run in
+// its place and the pass judges the next.
 type QueueAdmit func(ctx context.Context, pool types.RunnerPool, e RunQueueEntry) (QueueVerdict, error)
 
 // PromotedRun is a run the pass moved to PENDING, with the queue row it carried.
@@ -58,16 +65,145 @@ type QueueHeld struct {
 	Wait  string
 }
 
-// PromoteRunQueue moves waiting runs of one pool to PENDING, oldest first, while the pool has a free
-// slot, in one transaction. Lock order is always the pool row (FOR NO KEY UPDATE, the lock an enqueue
-// takes) and then the deployment cap's advisory lock, so no create, revive or pass can deadlock with
-// another. A pool that is gone or not active promotes nothing. A run the verdict will not admit keeps
-// its place and the pass tries the next, so one run that cannot be placed never blocks another's.
+// PromoteRunQueue moves waiting runs of one pool to PENDING, oldest first, while the pool has a free slot.
+// It judges first, holding no lock: the pool's room and each candidate's verdict are read as they stand.
+// Then one transaction takes the pool row (FOR NO KEY UPDATE, the lock an enqueue takes) and the
+// deployment cap's advisory lock, always in that order, counts the slot-holders again, and moves the
+// admitted runs by a state CAS while there is room. A run the verdict will not admit keeps its place and
+// the pass judges the next, so one run that cannot be placed never blocks another's.
 func (s PG) PromoteRunQueue(ctx context.Context, pass PromotePass, admit QueueAdmit) ([]PromotedRun, []QueueHeld, error) {
-	var promoted []PromotedRun
+	pool, room, err := s.queueRoom(ctx, pass)
+	if err != nil || room <= 0 {
+		return nil, nil, err
+	}
+	admitted, held, err := s.judgeQueue(ctx, pass, pool, room, admit)
+	if err != nil || len(admitted) == 0 {
+		return nil, held, err
+	}
+	promoted, err := s.promoteAdmitted(ctx, pass, admitted)
+	if err != nil {
+		return nil, nil, err
+	}
+	return promoted, held, nil
+}
+
+// queueRoom is how many runs the pool and the deployment could take now, read without a lock: the
+// promotion transaction counts again under its locks. A pool that is gone or not on has none; a pool at
+// its cap has its waiting runs told so.
+func (s PG) queueRoom(ctx context.Context, pass PromotePass) (types.RunnerPool, int, error) {
+	pool, err := scanRunnerPool(s.Pool.QueryRow(ctx, `SELECT `+runnerPoolCols+` FROM runner_pools WHERE id = $1`, pass.PoolID))
+	if errors.Is(err, ErrNotFound) || (err == nil && pool.State != types.RunnerPoolActive) {
+		return pool, 0, nil
+	}
+	if err != nil {
+		return pool, 0, err
+	}
+	running, err := countPoolSlotHolders(ctx, s.Pool, pool.ID)
+	if err != nil {
+		return pool, 0, err
+	}
+	room := 1 << 30
+	if pool.Limits != nil && pool.Limits.MaxConcurrentRuns != nil {
+		room = *pool.Limits.MaxConcurrentRuns - running
+	}
+	if room <= 0 {
+		return pool, 0, s.setPoolQueueWait(ctx, pool.ID, pass.AtCapacityDetail)
+	}
+	if pass.DeploymentCap > 0 {
+		active, err := s.CountNonTerminalRuns(ctx, uuid.Nil)
+		if err != nil {
+			return pool, 0, err
+		}
+		room = min(room, pass.DeploymentCap-active)
+	}
+	return pool, room, nil
+}
+
+// setPoolQueueWait writes detail on every waiting run of poolID whose status_detail says otherwise.
+func (s PG) setPoolQueueWait(ctx context.Context, poolID uuid.UUID, detail string) error {
+	if detail == "" {
+		return nil
+	}
+	if _, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET status_detail = $2
+		WHERE state = $3 AND status_detail <> $2 AND id IN (SELECT run_id FROM run_queue WHERE pool_id = $1)`,
+		poolID, detail, string(types.RunQueued)); err != nil {
+		return fmt.Errorf("store: set pool queue wait: %w", err)
+	}
+	return nil
+}
+
+// judgeQueue reads the pool's waiting runs oldest first, a page at a time, and asks the verdict of each
+// until room runs are admitted, the queue ends, a verdict stops the pass, or half the pass's deadline is
+// spent (the rest is the promotion's). Once a run is held because its owner's runners are all busy, that
+// owner's later runs are passed over this time, so neither a long run of one person's held heads nor a
+// fixed scan window keeps a run further back from being judged.
+func (s PG) judgeQueue(ctx context.Context, pass PromotePass, pool types.RunnerPool, room int, admit QueueAdmit) ([]RunQueueEntry, []QueueHeld, error) {
+	if dl, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, time.Now().Add(time.Until(dl)/2))
+		defer cancel()
+	}
+	var admitted []RunQueueEntry
 	var held []QueueHeld
+	busy := map[string]bool{}
+	var after *RunQueueEntry
+	for {
+		page, err := s.queuePage(ctx, pool.ID, after, pass.ScanLimit)
+		if err != nil {
+			return nil, held, err
+		}
+		for i := range page {
+			e := page[i]
+			if busy[e.Owner] {
+				continue
+			}
+			if ctx.Err() != nil {
+				return admitted, held, nil
+			}
+			v, err := admit(ctx, pool, e)
+			switch {
+			case err != nil:
+				held = append(held, QueueHeld{RunID: e.RunID})
+			case v.Stop:
+				return admitted, held, nil
+			case v.Admit:
+				if admitted = append(admitted, e); len(admitted) >= room {
+					return admitted, held, nil
+				}
+			default:
+				held = append(held, QueueHeld{RunID: e.RunID, Wait: v.Wait})
+				busy[e.Owner] = v.Wait == string(runnerpool.WaitNoRunnerFree)
+			}
+		}
+		if pass.ScanLimit <= 0 || len(page) < pass.ScanLimit {
+			return admitted, held, nil
+		}
+		after = &page[len(page)-1]
+	}
+}
+
+// queuePage is one page of the pool's queue rows, oldest first (queued_at, then run_id), after the given
+// row (nil: from the head). It takes no lock: whether a run is still QUEUED is the promotion CAS's to say.
+func (s PG) queuePage(ctx context.Context, poolID uuid.UUID, after *RunQueueEntry, limit int) ([]RunQueueEntry, error) {
+	if limit <= 0 {
+		limit = 1 << 30
+	}
+	q, args := `SELECT `+runQueueCols+` FROM run_queue WHERE pool_id = $1 ORDER BY queued_at, run_id LIMIT $2`, []any{poolID, limit}
+	if after != nil {
+		q = `SELECT ` + runQueueCols + ` FROM run_queue WHERE pool_id = $1 AND (queued_at, run_id) > ($3, $4)
+			ORDER BY queued_at, run_id LIMIT $2`
+		args = append(args, after.QueuedAt, after.RunID)
+	}
+	return collect(ctx, s.Pool, "list", "promotable runs", q, args, func(row pgx.Row) (RunQueueEntry, error) { return scanRunQueueEntry(row) })
+}
+
+// promoteAdmitted is the pass's one transaction: the pool row, then the deployment cap's advisory lock,
+// the slot-holders counted again, and each admitted run moved by the promotion CAS while there is room.
+// Nothing here waits on the substrate or judges a run.
+func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []RunQueueEntry) ([]PromotedRun, error) {
+	var promoted []PromotedRun
 	err := s.inTx(ctx, func(q Querier) error {
-		promoted, held = nil, nil
+		promoted = nil
 		pool, err := scanRunnerPool(q.QueryRow(ctx, `SELECT `+runnerPoolCols+` FROM runner_pools WHERE id = $1 FOR NO KEY UPDATE`, pass.PoolID))
 		if errors.Is(err, ErrNotFound) {
 			return nil
@@ -88,21 +224,9 @@ func (s PG) PromoteRunQueue(ctx context.Context, pass PromotePass, admit QueueAd
 		if err != nil {
 			return err
 		}
-		entries, err := listPromotable(ctx, q, pool.ID, pass.ScanLimit)
-		if err != nil {
-			return err
-		}
-		for _, e := range entries {
+		for _, e := range admitted {
 			if runnerpool.AtCapacity(pool, running) != nil || (pass.DeploymentCap > 0 && deployment >= pass.DeploymentCap) {
 				break
-			}
-			v, err := admit(ctx, pool, e)
-			if err != nil {
-				return err
-			}
-			if !v.Admit {
-				held = append(held, QueueHeld{RunID: e.RunID, Wait: v.Wait})
-				continue
 			}
 			run, ok, err := promoteQueuedRun(ctx, q, e.RunID, pass.WatcherOwner)
 			if err != nil {
@@ -122,45 +246,12 @@ func (s PG) PromoteRunQueue(ctx context.Context, pass PromotePass, admit QueueAd
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, nil, err
-	}
-	return promoted, held, nil
-}
-
-// listPromotable is the pass's scan: the pool's queue rows oldest first (queued_at, then run_id), each
-// locked FOR UPDATE SKIP LOCKED with its run, the run row before its queue row. Whether the run is
-// still QUEUED is the promotion CAS's to say, not the scan's. That is the order every exit from
-// the queue takes (LeaveRunQueue, ExitQueuedRun and the pool delete update the run, then delete its
-// queue row), so a kill that lands while the pass judges a run waits for the pass instead of
-// deadlocking with it, and a kill already holding a run is skipped. q must be a transaction that holds
-// the pool row's lock.
-func listPromotable(ctx context.Context, q Querier, poolID uuid.UUID, limit int) ([]RunQueueEntry, error) {
-	if limit <= 0 {
-		limit = 1 << 30
-	}
-	rows, err := q.Query(ctx, `
-		SELECT q.run_id, q.pool_id, q.owner, q.queued_at, q.deadline_at, q.policy_ref, q.authority, q.launch
-		FROM agent_runs r JOIN run_queue q ON q.run_id = r.id
-		WHERE q.pool_id = $1
-		ORDER BY q.queued_at, q.run_id LIMIT $2 FOR UPDATE OF r, q SKIP LOCKED`, poolID, limit)
-	if err != nil {
-		return nil, fmt.Errorf("store: list promotable runs: %w", err)
-	}
-	defer rows.Close()
-	var out []RunQueueEntry
-	for rows.Next() {
-		e, err := scanRunQueueEntry(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
+	return promoted, err
 }
 
 // promoteQueuedRun is the promotion CAS: QUEUED to PENDING, admitted_at and the watcher lease stamped,
-// and the run_queue row deleted in the same statement. ok is false when another exit won first.
+// and the run_queue row deleted in the same statement, the run row before its queue row as every exit
+// from the queue takes them. ok is false when another exit won first.
 func promoteQueuedRun(ctx context.Context, q Querier, id uuid.UUID, owner string) (types.AgentRun, bool, error) {
 	run, err := scanRun(q.QueryRow(ctx, `
 		WITH moved AS (

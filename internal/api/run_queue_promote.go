@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -38,6 +39,7 @@ func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.
 	defer cancel()
 	promoted, held, err := qs.PromoteRunQueue(pctx, store.PromotePass{
 		PoolID: poolID, DeploymentCap: s.cfg.MaxConcurrentRuns, ScanLimit: queueScanLimit, WatcherOwner: watcherOwner,
+		AtCapacityDetail: statusDetailQueuePrefix + string(runnerpool.WaitAtCapacity),
 	}, s.queueAdmit)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: queue promotion deferred", slog.String("pool_id", poolID.String()), slog.Any("err", err))
@@ -57,10 +59,11 @@ func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.
 	}
 }
 
-// queueAdmit is the verdict on one waiting run while the pass holds its pool: the run must be placeable
-// on a runner of its owner now, and the host and the quota must have room for it. A run that is not
-// keeps its place. Whether the owner may still launch at all is not asked here: the start re-checks
-// that and ends the run with a reason, rather than letting it wait for ever behind a refusal.
+// queueAdmit is the verdict on one waiting run, asked before the pass takes any lock: the run must be
+// placeable on a runner of its owner now, and the host and the quota must have room for it. A run that is
+// not keeps its place; a host with no room stops the pass. Whether the owner may still launch at all is
+// not asked here: the start re-checks that and ends the run with a reason, rather than letting it wait
+// for ever behind a refusal. An error is a read that failed, and the run keeps its place.
 func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.RunQueueEntry) (store.QueueVerdict, error) {
 	var launch queuedLaunch
 	if err := json.Unmarshal(e.Launch, &launch); err != nil {
@@ -77,7 +80,7 @@ func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.
 		return store.QueueVerdict{Wait: string(runnerpool.WaitNoRunnerFree)}, nil
 	}
 	if s.admitHostCapacity(ctx, e.Owner, "runs", false) != nil {
-		return store.QueueVerdict{}, nil
+		return store.QueueVerdict{Stop: true}, nil
 	}
 	if s.runFit(ctx, types.RunPolicySpec{Resources: launch.Resources}, time.Duration(launch.LifetimeCapSec)*time.Second, false).refusal != "" {
 		return store.QueueVerdict{}, nil
@@ -86,8 +89,9 @@ func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.
 }
 
 // queueRunnerFree reports whether one of the owner's candidate targets in the pool can take a run now:
-// at least one is online with known facts. A pool the owner can no longer see counts as free, so the
-// start ends the run with the pool reason instead of leaving it to wait.
+// at least one is online with known facts. A pool the owner can no longer see, or a refusal of the
+// owner's own (a user type that is gone), counts as free, so the start ends the run with its reason
+// instead of leaving it to wait. Only a read that failed is an error.
 func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, launch queuedLaunch) (bool, error) {
 	ps, ok := s.cfg.Store.(store.RunnerPoolStore)
 	if !ok {
@@ -95,7 +99,10 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	}
 	rows, refusal := s.permittedPools(ctx, ps, true)
 	if refusal != nil {
-		return false, errors.New("read the owner's pools")
+		if refusal.err != nil && !errors.Is(refusal.err, errUserTypeUnknown) {
+			return false, fmt.Errorf("read the owner's pools: %w", refusal.err)
+		}
+		return true, nil
 	}
 	row, found := catalogueRow(rows, pool.ID)
 	if !found {
@@ -203,7 +210,9 @@ func (s *Server) failStalePromoted(ctx context.Context) {
 		return
 	}
 	for _, run := range runs {
-		s.failAndRevoke(ctx, run.ID, types.RunPending, queueStartLostHint)
+		if !s.failAndRevoke(ctx, run.ID, types.RunPending, queueStartLostHint) {
+			continue
+		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.queue.start", run.ID.String(), "failure",
 			mustJSON(map[string]any{"reason": "start_lost", "pool_id": run.RunnerPoolID})))
 	}

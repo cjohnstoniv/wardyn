@@ -10,6 +10,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 )
 
 // runQueueSweepInterval is how often the pool queue's leader sweep ticks: it ends waiting runs past their
@@ -24,17 +25,22 @@ type runQueueSweeper interface {
 	SweepRunQueue(context.Context) error
 }
 
-// runRunQueueSweeper ticks every interval until ctx ends.
-func runRunQueueSweeper(ctx context.Context, srv runQueueSweeper, interval time.Duration) {
+// runRunQueueSweeper ticks every interval until ctx ends. ticks records each tick as the run_queue
+// sweep (nil records nothing); an error is an attempt without a success.
+func runRunQueueSweeper(ctx context.Context, srv runQueueSweeper, interval time.Duration, ticks *sweephealth.Tracker) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := srv.SweepRunQueue(ctx); err != nil {
-			slog.WarnContext(ctx, "wardynd: run queue sweep error", slog.Any("err", err))
-		}
+		_ = ticks.Tick(ctx, sweephealth.RunQueue, func(ctx context.Context) error {
+			err := srv.SweepRunQueue(ctx)
+			if err != nil {
+				slog.WarnContext(ctx, "wardynd: run queue sweep error", slog.Any("err", err))
+			}
+			return err
+		})
 		select {
 		case <-ctx.Done():
 			return
@@ -47,9 +53,9 @@ func runRunQueueSweeper(ctx context.Context, srv runQueueSweeper, interval time.
 // started and stopped with it; a nil leader (a test, or a deployment that never built one) runs it
 // unconditionally. Every write is a CAS under the pool's row lock, so a second leader for a moment is
 // harmless.
-func startRunQueueSweeper(ctx context.Context, leader *db.SweeperLeader, srv runQueueSweeper, interval time.Duration) {
+func startRunQueueSweeper(ctx context.Context, leader *db.SweeperLeader, srv runQueueSweeper, interval time.Duration, ticks *sweephealth.Tracker) {
 	leaderGo(ctx, leader, "run_queue.sweeper", func(ctx context.Context) {
-		runRunQueueSweeper(ctx, srv, interval)
+		runRunQueueSweeper(ctx, srv, interval, ticks)
 	})
 	slog.Info("wardynd: run queue sweeper started", slog.Duration("interval", interval))
 }
