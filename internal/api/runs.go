@@ -159,6 +159,8 @@ func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, worksp
 // Without a runner the run stays PENDING with a clear status message (headless
 // API-only operation is allowed for v0).
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
+	var asked []byte // the request as asked, for the launch intent (launch_intent.go)
+	r = withAskedRequest(r, &asked)
 	ctx := r.Context()
 	if s.refuseAdminViewLaunch(w, r) {
 		return
@@ -229,6 +231,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		enforced: enforced, workspacePath: workspacePath, runnerTarget: s.cfg.RunnerTarget})
 	run.State, run.SPIFFEID = types.RunPending, id.SPIFFEID
 	s.captureRunLimits(&run, ceiling, &f.end)
+	intent := launchIntentFor(asked)
+	run.LaunchIntent = intent.doc
 	created, err := s.createRun(ctx, run)
 	if err != nil {
 		s.cfg.Identity.RevokeRun(context.WithoutCancel(ctx), runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
@@ -322,6 +326,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		createData["delivery"] = gw.delivery
 	}
 	createData["end"] = f.end.audit(run)
+	intent.stamp(createData, created.LaunchIntent != nil)
 	stampHarnessSet(createData, f.harnesses, f.image)
 	comps.stampRunCreate(createData)
 	maps.Copy(createData, f.place.auditFields(created))
