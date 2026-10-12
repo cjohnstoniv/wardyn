@@ -234,3 +234,27 @@ func TestListRuns_BlanksStatusDetailOnNonStartingRun(t *testing.T) {
 		t.Errorf("completed run on the board = %q/%q, want both blank", got.StatusDetail, got.StatusReason)
 	}
 }
+
+// TestProjectStatusDetail_KilledKeepsOnlyAValidEndReason: a KILLED run keeps a
+// lifetime end reason (and its token), and any other stale detail is blanked.
+func TestProjectStatusDetail_KilledKeepsOnlyAValidEndReason(t *testing.T) {
+	for _, tc := range []struct {
+		name, detail, wantDetail, wantReason string
+	}{
+		{"max lifetime", "lifetime: max_lifetime_reached", "lifetime: max_lifetime_reached", "max_lifetime_reached"},
+		{"end reached", "lifetime: end_reached", "lifetime: end_reached", "end_reached"},
+		{"a stale substrate wait", "agent: ContainerCreating", "", ""},
+		{"a leftover build line", statusDetailBuilding, "", ""},
+		{"an unknown lifetime reason", "lifetime: fell_asleep", "", ""},
+		{"no detail", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runs := []types.AgentRun{{ID: uuid.New(), State: types.RunKilled, StatusDetail: tc.detail}}
+			projectStatusDetail(runs)
+			if runs[0].StatusDetail != tc.wantDetail || runs[0].StatusReason != tc.wantReason {
+				t.Errorf("(detail, reason) = (%q, %q), want (%q, %q)",
+					runs[0].StatusDetail, runs[0].StatusReason, tc.wantDetail, tc.wantReason)
+			}
+		})
+	}
+}

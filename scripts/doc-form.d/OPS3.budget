@@ -30,12 +30,14 @@
 # authz_denied_doc_test.go and docs_r3_guard_test.go read.
 docs/operations/who-gets-in.md=1453 share=35
 # docs/operations/admin-only-writes.md 3173 measured after F-1511-1510 merge.
-docs/operations/admin-only-writes.md=3173 share=35
+# docs/operations/admin-only-writes.md 3182 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
+docs/operations/admin-only-writes.md=3182 share=35
 docs/operations/three-roles.md=4012 share=35
 docs/operations/provider-policy.md=1278 share=35
 docs/operations/ownership-and-offboarding.md=2370 share=35
 # 0.9 F-1515: governance-writes.md 2754 adds 28 over 2726 for the `governance plan` bullet and example.
-docs/operations/governance-writes.md=2754 share=35
+# docs/operations/governance-writes.md 2888 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
+docs/operations/governance-writes.md=2888 share=35
 docs/operations/member-runs.md=1044 share=35
 docs/operations/user-drives.md=4804 share=35
 docs/operations/capabilities.md=3861 share=35

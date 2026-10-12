@@ -113,7 +113,10 @@ func specEntries(sp types.RunPolicySpec) []specEntry {
 // recorded only for an inline policy, whose entries the caller typed. A saved or
 // default policy is the operator's, and what the ceiling removed from it is not
 // the caller's to read (previewSafeWarnings keeps the same line).
-func recordPolicyFold(rec *foldRecorder, authored, resolved types.RunPolicySpec, policy provSource, callerAuthored bool) {
+//
+// authored is the policy after the person's overrides (see recordPolicySource);
+// an entry those overrides decided is recorded as the person's, not here.
+func recordPolicyFold(rec *foldRecorder, authored, resolved types.RunPolicySpec, policy provSource, callerAuthored bool, edits *overrideEdits) {
 	// An unset first_use_approval is the fail-closed mode once composer.Clamp ran.
 	authored.FirstUseApproval, resolved.FirstUseApproval = authored.FirstUseApproval.Normalize(), resolved.FirstUseApproval.Normalize()
 	was, now := specEntries(authored), specEntries(resolved)
@@ -122,13 +125,27 @@ func recordPolicyFold(rec *foldRecorder, authored, resolved types.RunPolicySpec,
 		if !slices.Contains(was, e) {
 			src = provSource{Kind: provKindCeiling}
 		}
-		rec.add(e.field, e.value, src, provEffectAdded)
+		if !edits.owns(e.field, e.value) {
+			rec.add(e.field, e.value, src, provEffectAdded)
+		}
 	}
 	for _, e := range was {
-		if callerAuthored && !slices.Contains(now, e) {
+		if callerAuthored && !slices.Contains(now, e) && !edits.owns(e.field, e.value) {
 			rec.add(e.field, e.value, policy, provEffectClamped)
 		}
 	}
+}
+
+// recordPolicySource records what the policy chokepoint did to the run's
+// starting policy: the person's overrides first, then the policy and the
+// ceiling over the spec those overrides left.
+func recordPolicySource(rec *foldRecorder, src policySourceRecord, resolved types.RunPolicySpec) {
+	authored := src.Spec
+	if src.edits != nil {
+		authored = src.edits.folded
+	}
+	recordPolicyFold(rec, authored, resolved, policyProvSource(src), src.Kind == policyKindInline, src.edits)
+	src.edits.settle(rec, resolved)
 }
 
 func policyProvSource(rec policySourceRecord) provSource {

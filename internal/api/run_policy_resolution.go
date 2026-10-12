@@ -17,10 +17,20 @@ import (
 )
 
 func (s *Server) boundRunUserSpec(ctx context.Context, r *http.Request, spec types.RunPolicySpec, ceiling governanceCeiling, errPrefix string, dryRun bool) (types.RunPolicySpec, []string, *runRefusal) {
+	spec, warns, drops, refusal := s.boundRunUserSpecDrops(ctx, r, spec, ceiling, errPrefix)
+	if refusal == nil && !dryRun {
+		s.auditUserPolicyDrops(ctx, r, drops)
+	}
+	return spec, warns, refusal
+}
+
+// boundRunUserSpecDrops is the member pipeline without its audit: the bounded
+// spec, the warnings and the structured drops the audit is made from.
+func (s *Server) boundRunUserSpecDrops(ctx context.Context, r *http.Request, spec types.RunPolicySpec, ceiling governanceCeiling, errPrefix string) (types.RunPolicySpec, []string, []capDrop, *runRefusal) {
 	spec, warns := composer.Clamp(spec, ceiling.Spec, ceiling.Limits)
 	kept, grantWarns, code, gerr := s.filterUserGrants(ctx, s.secretOwnerFromRequest(r), spec.AllowedDomains, spec.EligibleGrants)
 	if gerr != nil {
-		return types.RunPolicySpec{}, nil, runError(code, reasonInlinePolicyInvalid, errPrefix+gerr.Error())
+		return types.RunPolicySpec{}, nil, nil, runError(code, reasonInlinePolicyInvalid, errPrefix+gerr.Error())
 	}
 	spec.EligibleGrants = kept
 	warns = append(warns, grantWarns...)
@@ -30,13 +40,9 @@ func (s *Server) boundRunUserSpec(ctx context.Context, r *http.Request, spec typ
 	}
 	capWarns, capDrops, cerr := s.narrowUserInlinePolicy(ctx, s.secretOwnerFromRequest(r), &spec)
 	if cerr != nil {
-		return types.RunPolicySpec{}, nil, capabilityRunRefusal(cerr)
+		return types.RunPolicySpec{}, nil, nil, capabilityRunRefusal(cerr)
 	}
-	warns = append(warns, capWarns...)
-	if !dryRun {
-		s.auditUserPolicyDrops(ctx, r, append(drops, capDrops...))
-	}
-	return spec, warns, nil
+	return spec, append(warns, capWarns...), append(drops, capDrops...), nil
 }
 
 func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req *createRunRequest, dryRun, credentials bool) (types.RunPolicySpec, *uuid.UUID, []string, policySourceRecord, *runRefusal) {
@@ -86,6 +92,12 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		// The policy as authored, recorded BEFORE the env-secret posture and the
 		// member clamp change it (policySourceRecord stamps it redacted).
 		source := newPolicySourceRecord(policyKindInline, nil, "", nil, !ceiling.Operator, spec)
+		// The person's New Run edits, BEFORE the posture and the clamp below, so
+		// everything an edit adds is bounded like anything else they authored.
+		spec, edits, refusal := s.applyRunOverrides(ctx, r, spec, req)
+		if refusal != nil {
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
+		}
 		clampWarnings := append([]string(nil), ceiling.Warnings...)
 		// env_secret's admin-only posture, applied FIRST and unconditionally for
 		// a non-operator — it is a role check, not a ceiling check, so it must
@@ -107,7 +119,6 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 			// (applyRequiredSecretGrant, applyIntegrationRequirement) folded in
 			// by runs.go/preflight.go AFTER this function returns.
 			var warns []string
-			var refusal *runRefusal
 			spec, warns, refusal = s.boundRunUserSpec(ctx, r, spec, ceiling, "invalid inline_policy: ", dryRun)
 			if refusal != nil {
 				return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
@@ -146,6 +157,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 					"eligible_grants":       len(spec.EligibleGrants),
 				})))
 		}
+		edits.finish(&source, spec)
 		return spec, nil, clampWarnings, source, nil
 	}
 
@@ -163,6 +175,12 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	// The starting policy, before the env-secret posture and the member clamp
 	// below change it: a stored row, or the caller's own ceiling.
 	source := newPolicySourceRecord(origin.kind, policyID, origin.name, origin.updatedAt, !ceiling.Operator, spec)
+	// The person's New Run edits, before the posture and the clamp (see the
+	// inline branch).
+	spec, edits, refusal := s.applyRunOverrides(ctx, r, spec, req)
+	if refusal != nil {
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
+	}
 	storedWarns := append([]string(nil), ceiling.Warnings...)
 	// Same unconditional env_secret posture the inline branch applies, in the
 	// same position, and it is the half the scoped clamp below CANNOT carry: the
@@ -209,10 +227,21 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	// rule whether body or row id" claim would be false at exactly the
 	// grant-bearing rows, which are the ones that matter. Dropping the unlisted
 	// pairing is filterUserGrants' job, stage 2.
-	if policyID != nil && ceiling.Profile != nil && !s.runUngoverned(r.Context()) {
+	//
+	// The person's New Run edits do not change which spec is clamped as a whole:
+	// wherever that is not the rule (the no-policy default, which IS the ceiling,
+	// and a stored row with no declared profile), only the additions are bounded
+	// (boundOverrideAdds). Clamping the default as a whole would drop the
+	// operator's workspace_mounts and onboarded workspace_repos for a person who
+	// only narrowed something.
+	if !s.runUngoverned(r.Context()) {
 		var warns []string
-		var refusal *runRefusal
-		spec, warns, refusal = s.boundRunUserSpec(ctx, r, spec, ceiling, "invalid policy: ", dryRun)
+		switch {
+		case policyID != nil && ceiling.Profile != nil:
+			spec, warns, refusal = s.boundRunUserSpec(ctx, r, spec, ceiling, "invalid policy: ", dryRun)
+		default:
+			spec, warns, refusal = s.boundOverrideAdds(ctx, r, spec, edits, ceiling, dryRun)
+		}
 		if refusal != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 		}
@@ -237,6 +266,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	if code, err := s.validateRunSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec, credentials); err != nil {
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, runError(code, reasonInlinePolicyInvalid, "invalid policy: "+err.Error())
 	}
+	edits.finish(&source, spec)
 	return spec, policyID, storedWarns, source, nil
 }
 

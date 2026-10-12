@@ -15,4 +15,4 @@
 # threatmodel/THREAT-MODEL.md 52270 after F-1511-1510 (erase fence + who a name is).
 # 52063 adds 31 (residual 65: the runner endpoint's shared pre-auth bucket behind an ingress).
 # threatmodel/THREAT-MODEL.md 52303 measured after R2-runner-2 merge.
-threatmodel/THREAT-MODEL.md=52303
+threatmodel/THREAT-MODEL.md=52364
