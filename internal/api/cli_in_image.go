@@ -18,10 +18,10 @@ type cliImageFact struct{ AZ, AWS, GH string }
 // yes in the same change that installs that tool into the image, so the table
 // never promises a tool an image lacks.
 var cliConventionImages = map[string]cliImageFact{
-	"base":        {cliInImageNo, cliInImageNo, cliInImageYes},
-	"claude-code": {cliInImageNo, cliInImageNo, cliInImageYes},
-	"codex-cli":   {cliInImageNo, cliInImageNo, cliInImageYes},
-	"full":        {cliInImageNo, cliInImageNo, cliInImageYes},
+	"base":        {cliInImageNo, cliInImageYes, cliInImageYes},
+	"claude-code": {cliInImageNo, cliInImageYes, cliInImageYes},
+	"codex-cli":   {cliInImageNo, cliInImageYes, cliInImageYes},
+	"full":        {cliInImageNo, cliInImageYes, cliInImageYes},
 	"harnesses":   {cliInImageNo, cliInImageNo, cliInImageNo},
 }
 

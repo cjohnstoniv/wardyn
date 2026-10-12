@@ -55,6 +55,8 @@ type componentDispatch struct {
 	// GitHubAPI is the GitHub CLI door's grant, written at create once the
 	// run's repositories are known (persistGitHubCLIGrants); nil without one.
 	GitHubAPI *proxy.GitHubAPIGrant
+	// AWSCLI is the run's AWS CLI row, nil when it attached none (authorAWSCLI).
+	AWSCLI *awsCLIDispatch
 }
 
 // dispatchWith is dispatch with the GitHub CLI door create wrote.
@@ -78,7 +80,7 @@ type componentConfig struct {
 // an organisation's component delivers over plain HTTP gets no interception
 // entry: there is no TLS to terminate, and the proxy sets it on the plain lane.
 func (c runComponents) dispatch() componentDispatch {
-	var d componentDispatch
+	d := componentDispatch{AWSCLI: c.awsCLI()}
 	for i, a := range c.attached {
 		def := a.snapshot.Definition
 		for _, sec := range def.Secrets {

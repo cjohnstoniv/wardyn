@@ -730,7 +730,7 @@ var reservedBrokerSecretNames = map[string]bool{
 
 // reservedBrokerSecret mirrors internal/api.reservedSecret (secrets.go): the
 // static keys above PLUS the managed-harness OAuth-blob pattern
-// (wardyn-harness-<provider>-oauth) PLUS every model-provider credential name. The static map alone missed the pattern, so
+// (wardyn-harness-<provider>-oauth) PLUS every model-provider credential name PLUS every CLI sign-in name. The static map alone missed the pattern, so
 // a policy could name e.g. "wardyn-harness-anthropic-oauth" as a git_pat/ssh_key
 // secret and have the broker resolve the resident OAuth token into the sandbox.
 func reservedBrokerSecret(name string) bool {
@@ -738,8 +738,13 @@ func reservedBrokerSecret(name string) bool {
 		return true
 	}
 	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth") ||
-		strings.HasPrefix(name, providerSecretPrefix)
+		strings.HasPrefix(name, providerSecretPrefix) || strings.HasPrefix(name, cliSecretPrefix)
 }
+
+// cliSecretPrefix mirrors internal/api's: every person's CLI sign-in capture
+// (wardyn-cli-<component id>-{sso,entra}). The proxy injects it through its
+// own grant; minted, it would hand the whole sign-in record to the sandbox.
+const cliSecretPrefix = "wardyn-cli-"
 
 // providerSecretPrefix mirrors internal/api's: every per-person model-provider
 // credential (wardyn-provider-<uid>-{key,oauth,sso,entra}). A model key is injected

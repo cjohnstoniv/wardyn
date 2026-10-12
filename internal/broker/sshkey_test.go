@@ -104,6 +104,8 @@ func TestMintSSHKey_FailsClosed(t *testing.T) {
 	secrets.m["wardyn-ssh-host-key"] = []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nfake-host-key-material\n-----END OPENSSH PRIVATE KEY-----\n")
 	secrets.m["wardyn-ui-session-key"] = []byte("0123456789abcdef0123456789abcdef")
 	secrets.m["bedrock-api-key"] = []byte("bedrock-bearer-token-value")
+	const cliSignIn = cliSecretPrefix + "6f0c1d2e-0000-4000-8000-0000000c0a05-sso"
+	secrets.m[cliSignIn] = []byte(`{"access_token":"planted","refresh_token":"planted"}`)
 
 	cases := []struct {
 		name string
@@ -126,6 +128,8 @@ func TestMintSSHKey_FailsClosed(t *testing.T) {
 		{"reserved-ui-session-key-as-keyref", sshKeySpec("github.com", "wardyn-ui-session-key", "", "")},
 		{"reserved-bedrock-api-key-as-keyref", sshKeySpec("github.com", "bedrock-api-key", "", "")},
 		{"reserved-github-app-key-as-known-hosts", sshKeySpec("github.com", "real-key", "", "github-app-key")},
+		{"reserved-cli-sign-in-as-keyref", sshKeySpec("github.com", cliSignIn, "", "")},
+		{"reserved-cli-sign-in-as-known-hosts", sshKeySpec("github.com", "real-key", "", cliSignIn)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

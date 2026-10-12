@@ -93,7 +93,9 @@ const (
 	credKindGitPAT       = "git_pat"
 	credKindSSHKey       = "ssh_key"
 	credKindSecret       = "secret"
+	credKindAWSRole      = "aws_role"
 	signInModelProvider  = "model_provider"
+	signInAWSCLI         = "aws_cli"
 	fixSignIn            = "sign_in"
 	fixChooseProvider    = "choose_model_provider"
 	deciderYou           = "you"
@@ -510,6 +512,14 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 	}
 	for _, h := range row.Hosts {
 		b.addHost(h, viaEgress, row.ID)
+	}
+	if cli != nil && cli.Kind == types.CLIKindAWS && cli.AWS != nil {
+		// The portal the proxy sets the person's session on, and the role
+		// credentials AWS issues into the sandbox there, renewed while the run
+		// lives and valid at AWS until they expire.
+		b.addHost(ssoPortalHost(cli.AWS.SSORegion, ""), viaInjected, row.ID)
+		b.addCredential(client.AccessCredential{ID: row.ID + ":aws_role", Kind: credKindAWSRole, Owner: credOwnerOwn,
+			Delivery: deliveryShortLived, Renewed: true, AfterEnd: afterEndExpires})
 	}
 	for i, sec := range fact.Secrets {
 		c := client.AccessCredential{ID: row.ID + ":secret:" + strconv.Itoa(i), Kind: credKindSecret, Owner: credOwnerOwn,

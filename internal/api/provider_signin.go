@@ -58,11 +58,17 @@ type loginTarget struct {
 	scope    awsSSOScope
 	provider *types.ModelProvider
 	model    string // signInModel's, on the provider door
+	// cliComponent is the AWS CLI org row a sign-in through its own door is
+	// for (cli_aws_signin.go); the capture lands under that row's id.
+	cliComponent string
 }
 
-// stampProvider adds the provider half of harness.login.start (the stamp an
-// upload binds to): nothing on the legacy door.
+// stampProvider adds the provider or CLI row half of harness.login.start (the
+// stamp an upload binds to).
 func (t loginTarget) stampProvider(stamp map[string]any) {
+	if t.cliComponent != "" {
+		stamp["cli_component_id"], stamp["sso_region"] = t.cliComponent, t.region
+	}
 	if t.provider == nil {
 		return
 	}
