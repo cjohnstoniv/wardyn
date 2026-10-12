@@ -360,6 +360,13 @@ func (s PG) ClearWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID) (b
 // applied=false means another build moved image_ref first (or the workspace is
 // gone); the caller keeps its own image and must not reclaim the old tag.
 func (s PG) SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, observedRef, imageRef, builtHash string, rec *types.ImageBuild) (bool, error) {
+	// workspaceImageBuildParam folds a marshal error to NULL, which would move image_ref
+	// and leave a record that silently reads unrecorded: fail before the swap instead.
+	if rec != nil {
+		if _, err := json.Marshal(rec); err != nil {
+			return false, fmt.Errorf("store: encode workspace image build record: %w", err)
+		}
+	}
 	tag, err := s.Pool.Exec(ctx,
 		`UPDATE workspaces SET image_ref=$1, built_profile_hash=$2, image_build=$3, updated_at=now() `+
 			`WHERE id=$4 AND image_ref IS NOT DISTINCT FROM $5`,

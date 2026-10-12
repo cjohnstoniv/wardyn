@@ -547,14 +547,14 @@ type sweepableImageBuilder struct {
 	swept int
 }
 
-func (*sweepableImageBuilder) BuildDevcontainer(context.Context, string, string, string, io.Writer) (string, error) {
-	return "", errors.New("not implemented")
+func (*sweepableImageBuilder) BuildDevcontainer(context.Context, string, string, string, io.Writer) (BuiltImage, error) {
+	return BuiltImage{}, errors.New("not implemented")
 }
-func (*sweepableImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (string, error) {
-	return "", errors.New("not implemented")
+func (*sweepableImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (BuiltImage, error) {
+	return BuiltImage{}, errors.New("not implemented")
 }
-func (*sweepableImageBuilder) FinalizeBase(context.Context, string, string, io.Writer) (string, error) {
-	return "", errors.New("not implemented")
+func (*sweepableImageBuilder) FinalizeBase(context.Context, string, string, io.Writer) (BuiltImage, error) {
+	return BuiltImage{}, errors.New("not implemented")
 }
 func (s *sweepableImageBuilder) SweepOrphanedBuilds(context.Context) error {
 	s.mu.Lock()

@@ -128,12 +128,12 @@ type blockingImageBuilder struct {
 	calls int
 }
 
-func (b *blockingImageBuilder) BuildFromDevcontainerFiles(_ context.Context, _ map[string]string, tag string, _ io.Writer) (string, error) {
+func (b *blockingImageBuilder) BuildFromDevcontainerFiles(_ context.Context, _ map[string]string, tag string, _ io.Writer) (BuiltImage, error) {
 	b.mu.Lock()
 	b.calls++
 	b.mu.Unlock()
 	<-b.gate
-	return tag, nil
+	return BuiltImage{Ref: tag}, nil
 }
 
 func (b *blockingImageBuilder) callCount() int {
@@ -147,8 +147,8 @@ func (b *blockingImageBuilder) callCount() int {
 // there, rather than seeding the tracker by hand.
 type failingImageBuilder struct{ fakeImageBuilder }
 
-func (failingImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (string, error) {
-	return "", errors.New("step 3/7 : RUN go build — exit code 2")
+func (failingImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (BuiltImage, error) {
+	return BuiltImage{}, errors.New("step 3/7 : RUN go build — exit code 2")
 }
 
 // TestWorkspaceBuild_TrackerIsSubordinateToTheRow: the in-memory buildState is this

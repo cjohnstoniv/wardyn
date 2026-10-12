@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"testing"
 
@@ -22,6 +23,48 @@ type lostSwapStore struct{ store.Store }
 
 func (lostSwapStore) SetWorkspaceBuiltImage(context.Context, uuid.UUID, string, string, string, *types.ImageBuild) (bool, error) {
 	return false, nil
+}
+
+// errSwapStore fails every compare-and-swap with a store error.
+type errSwapStore struct{ store.Store }
+
+func (errSwapStore) SetWorkspaceBuiltImage(context.Context, uuid.UUID, string, string, string, *types.ImageBuild) (bool, error) {
+	return false, errors.New("x")
+}
+
+// TestResolveWorkspaceImage_WriteErrorServesItsImageAndKeepsTheOldTag: a store
+// error on the swap is non-fatal, rides the run.build row as cache_warn, and
+// leaves the old tag alone — nothing was swapped.
+func TestResolveWorkspaceImage_WriteErrorServesItsImageAndKeepsTheOldTag(t *testing.T) {
+	h := newHarness(t)
+	cfg := baseTestConfig(h, errSwapStore{})
+	cfg.ImageBuilder = &lostSwapBuilder{}
+	rr := &imageRemoverRunner{fakeRunner: &fakeRunner{}}
+	cfg.Runner = rr
+	srv := New(cfg)
+	generated := workspacescan.WorkspaceProfile{
+		Languages: []string{"Go"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,
+	}
+	ws := types.Workspace{ID: uuid.New(), Profile: mustJSON(generated), ImageRef: "wardyn-workspace/old-id:stale", BuiltProfileHash: "stale"}
+	runID := uuid.New()
+
+	got, ok := srv.resolveWorkspaceImage(context.Background(), runID, ws, nil, nil)
+	if !ok || got == "" || got == ws.ImageRef {
+		t.Fatalf("resolveWorkspaceImage = (%q, %v), want the lane's own built image", got, ok)
+	}
+	ev := waitForRecAudit(t, h.audit, runID, "run.build", "success")
+	var data map[string]any
+	if err := json.Unmarshal(ev.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data["cache_warn"] != "x" {
+		t.Errorf("run.build data = %v, want cache_warn=x", data)
+	}
+	rr.mu.Lock()
+	defer rr.mu.Unlock()
+	if len(rr.removed) != 0 {
+		t.Errorf("ImageRemove saw %v after a failed write, want no call", rr.removed)
+	}
 }
 
 // TestResolveWorkspaceImage_LostSwapServesItsOwnImage: a run-launch build that
@@ -81,10 +124,10 @@ func TestResolveWorkspaceImage_LostSwapServesItsOwnImage(t *testing.T) {
 // lostSwapBuilder builds all three lanes without a daemon.
 type lostSwapBuilder struct{ capturingByoiImageBuilder }
 
-func (b *lostSwapBuilder) BuildFromDevcontainerFiles(_ context.Context, _ map[string]string, tag string, _ io.Writer) (string, error) {
-	return "built/" + tag, nil
+func (b *lostSwapBuilder) BuildFromDevcontainerFiles(_ context.Context, _ map[string]string, tag string, _ io.Writer) (BuiltImage, error) {
+	return BuiltImage{Ref: "built/" + tag}, nil
 }
 
-func (b *lostSwapBuilder) BuildDevcontainer(_ context.Context, _, _, tag string, _ io.Writer) (string, error) {
-	return "built/" + tag, nil
+func (b *lostSwapBuilder) BuildDevcontainer(_ context.Context, _, _, tag string, _ io.Writer) (BuiltImage, error) {
+	return BuiltImage{Ref: "built/" + tag}, nil
 }
