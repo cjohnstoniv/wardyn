@@ -225,6 +225,23 @@ func TestPG_RunnerLease_ExecutionGenerationEndToEnd(t *testing.T) {
 	if cur := f.execution(t, run); cur.Generation != g1.generation || cur.ExecID != execID || execID == "" {
 		t.Fatalf("execution = %+v, want G1 bound to %q", cur, execID)
 	}
+	// The agent's exit comes back through the runner: what the completion watcher waits on.
+	if code, err := f.srv.cfg.Runner.Wait(f.ctx, run.SandboxRef); err != nil || code != 0 {
+		t.Fatalf("Wait = %d, %v, want the agent's exit 0", code, err)
+	}
+
+	// A run that execs nothing (an Interactive one) is leased with no generation and created.
+	idle := f.localRun(t, 0)
+	idle.Task = ""
+	if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET task = '' WHERE id = $1`, idle.ID); err != nil {
+		t.Fatal(err)
+	}
+	if e, err := f.srv.leaseRunOnRunner(f.ctx, idle); err != nil || e.generation != uuid.Nil {
+		t.Fatalf("lease of a run with no task = %+v, %v, want no generation", e, err)
+	}
+	if err := f.create(t, &idle); err != nil {
+		t.Fatalf("create of a leased run with no task: %v", err)
+	}
 
 	// (c) A renewal re-leases the run: past the window it was first leased for, its proxy stays up, while a
 	// run that was never renewed is contained.
