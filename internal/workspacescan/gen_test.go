@@ -78,7 +78,7 @@ func TestGenerateDevcontainer_ProfilesToJSON(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			files, err := GenerateDevcontainer(tc.prof)
+			files, err := GenerateDevcontainer(tc.prof, Pins{})
 			if err != nil {
 				t.Fatalf("GenerateDevcontainer: %v", err)
 			}
@@ -103,11 +103,11 @@ func TestGenerateDevcontainer_ProfilesToJSON(t *testing.T) {
 // same profile must hash to identical bytes across calls regardless of the
 // language slice order.
 func TestGenerateDevcontainer_Deterministic(t *testing.T) {
-	a, err := GenerateDevcontainer(WorkspaceProfile{Languages: []string{"Python", "Go", "Rust"}})
+	a, err := GenerateDevcontainer(WorkspaceProfile{Languages: []string{"Python", "Go", "Rust"}}, Pins{})
 	if err != nil {
 		t.Fatalf("GenerateDevcontainer a: %v", err)
 	}
-	b, err := GenerateDevcontainer(WorkspaceProfile{Languages: []string{"Rust", "Go", "Python"}})
+	b, err := GenerateDevcontainer(WorkspaceProfile{Languages: []string{"Rust", "Go", "Python"}}, Pins{})
 	if err != nil {
 		t.Fatalf("GenerateDevcontainer b: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestGenerateDevcontainer_Deterministic(t *testing.T) {
 // install fails the whole build. The only keys we emit are build/features/
 // containerEnv.
 func TestGenerateDevcontainer_NoLifecycleCommand(t *testing.T) {
-	files, err := GenerateDevcontainer(WorkspaceProfile{Languages: []string{"JavaScript"}})
+	files, err := GenerateDevcontainer(WorkspaceProfile{Languages: []string{"JavaScript"}}, Pins{})
 	if err != nil {
 		t.Fatalf("GenerateDevcontainer: %v", err)
 	}
@@ -177,13 +177,13 @@ func TestGenAgentToolInstalls(t *testing.T) {
 // caller today), so it's still exercised directly here rather than only
 // through GenerateDevcontainer.
 func TestGenAgentToolDockerfile(t *testing.T) {
-	if got := genAgentToolDockerfile(nil, ""); got != "" {
+	if got := genAgentToolDockerfile(nil, "", nil); got != "" {
 		t.Errorf("no tools must emit no Dockerfile, got %q", got)
 	}
-	if got := genAgentToolDockerfile([]string{"codex-cli"}, ""); got != "" {
+	if got := genAgentToolDockerfile([]string{"codex-cli"}, "", nil); got != "" {
 		t.Errorf("nothing bakeable must emit no Dockerfile, got %q", got)
 	}
-	df := genAgentToolDockerfile([]string{"claude-code"}, "")
+	df := genAgentToolDockerfile([]string{"claude-code"}, "", nil)
 	if !strings.HasPrefix(df, "FROM "+genBaseImage+"\n") {
 		t.Errorf("Dockerfile must FROM the same base image: %s", df)
 	}

@@ -21,12 +21,33 @@ export type PlacementValue = "remote" | "local";
 /** How an organisation-held credential reaches a local run (OD-12). */
 export type LocalDeliveryMode = "own" | "via_org" | "runner_resident" | "refuse";
 
-/** The CPU and memory a request asks for (Go: client.RunResources). A zero or absent field asks for the placement's default. */
+/** The CPU, memory and main-drive size a request asks for (Go: client.RunResources). A zero or absent field asks for the placement's default. */
 export interface RequestedResources {
   /** Milli-CPU: 2000 is two CPUs. The console works in tenths of a CPU. */
   cpu_millis?: number;
   /** Whole MiB. */
   memory_mib?: number;
+  /** The main drive in MiB, 0 to 16 TiB. A soft request: over the cap it is reduced and said so; a runner that cannot cap disk runs it uncapped. */
+  disk_mib?: number;
+}
+
+/** Where a main-drive size came from (Go: client.MainDriveBasis). */
+export type MainDriveBasis = "request" | "policy" | "default" | "none";
+
+/** What cut a main-drive size (Go: client.MainDriveClampSource). */
+export type MainDriveClampSource = "pool" | "governance" | "deployment" | "policy";
+
+/** The main-drive size a run asks for and gets, the number dispatch creates the sandbox with (Go: client.MainDriveApplied). */
+export interface MainDriveApplied {
+  requested_mib?: number;
+  /** 0 is no size: unbounded scratch. */
+  applied_mib: number;
+  basis: MainDriveBasis;
+  /** With basis "default": the limit whose default sized the run. */
+  default_source?: LimitSource;
+  clamped_by?: MainDriveClampSource;
+  /** True when a runner that cannot cap disk starts the run uncapped. A size the run's policy writes is never soft. */
+  soft: boolean;
 }
 
 /** The CPU and memory a run asked for and gets (Go: client.AppliedResources). */

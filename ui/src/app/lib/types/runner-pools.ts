@@ -196,6 +196,29 @@ export interface RunnerPoolChoice {
   reason?: PoolAvailabilityReason | RunnerPoolReason;
   limits?: EffectiveRunLimits[];
   barriers?: ConfinementClass[];
+  /** What this pool's runners do with the main drive's size; absent on a pool the caller may only manage. */
+  main_drive?: MainDriveFacts;
+}
+
+/** Go: client.MainDriveEnforcement. The weakest word across the pool's targets; never request or external. */
+export type MainDriveEnforcement = "filesystem" | "eviction" | "none" | "unknown";
+
+/** Go: client.MainDriveCoverage. Absent when enforcement is none or unknown. */
+export type MainDriveCoverage = "all" | "scratch_paths";
+
+/** Go: client.MainDriveKeep. `grace_sec` is set only when supported. */
+export interface MainDriveKeep {
+  supported: boolean;
+  grace_sec?: number;
+}
+
+/** Go: client.MainDriveFacts. */
+export interface MainDriveFacts {
+  enforcement: MainDriveEnforcement;
+  basis: "substrate" | "runner_asserted";
+  coverage?: MainDriveCoverage;
+  keep: MainDriveKeep;
+  drive_mounts: boolean;
 }
 
 /** Go: runnerpool.BarrierOption. Always CC1, CC2, CC3, in that order. */
@@ -218,6 +241,20 @@ export interface PoolRunner {
 }
 
 /**
+ * Go: client.PoolSlots. A pool's slot counts, everyone's and never saying whose. The verdict is advisory:
+ * the launch decides. `max_wait_sec` is the wait a run of the asked type gets (86400 Background, 3600
+ * Interactive); on the pool list only with ?run_type=.
+ */
+export interface PoolSlots {
+  used: number;
+  waiting: number;
+  /** Absent: the pool has no limit. */
+  max?: number;
+  verdict: "starts_now" | "waits";
+  max_wait_sec?: number;
+}
+
+/**
  * Go: client.RunnerPoolCatalogueEntry, one row of GET /runner-pools: the dry doors' fields plus what the
  * pool offers. A row the caller may only manage (runner_pool_not_found) carries none of these.
  */
@@ -227,6 +264,7 @@ export interface RunnerPoolCatalogueEntry extends RunnerPoolChoice {
   barrier_options: BarrierOption[];
   /** Every one of the caller's own runners in the pool, whether or not it can take a run now. */
   my_runners?: PoolRunner[];
+  slots?: PoolSlots;
   /** A Self-Hosted pool's owner: the caller, or the person on an administrator's oversight row. */
   owner?: string;
 }

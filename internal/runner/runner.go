@@ -176,6 +176,8 @@ type ProxyConfig struct {
 	HarnessToolRules     []types.HarnessToolRules  // tool rules per included harness; proxy.Config.HarnessToolRules
 	HarnessCredentials   []types.HarnessCredential // SHA-256 of each harness's approval credential; proxy.Config.HarnessCredentials (never the plaintext)
 	ViaOrgRoutes         []proxy.ViaOrgRoute       // a runner's via_org destinations; set only by placement's local copy
+	MCPServers           []proxy.MCPServerConfig   // the run's MCP servers on the broker route; proxy.Config.MCPServers
+	MCPBindings          []proxy.MCPBinding        // SHA-256 of each harness's MCP token; proxy.Config.MCPBindings (never the token)
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).
@@ -199,10 +201,11 @@ type Resources struct {
 	// Capabilities.EphemeralDiskEnforcement): docker quotas only when
 	// supported, else uncapped; k8s enforces via kubelet EVICTION.
 	DiskMiB int64
-	// DiskMiBFilled says DiskMiB was FILLED IN from the org default rather
-	// than policy-authored: the desktop tier fails closed only for a
-	// POLICY-AUTHORED value; a FILLED default degrades to uncapped instead.
-	DiskMiBFilled bool
+	// DiskMiBSoft says no policy wrote DiskMiB: a runner that cannot cap disk
+	// fails closed only for a size a policy wrote, and runs a soft one uncapped.
+	// The JSON member keeps its old name, DiskMiBFilled, so a runner and a
+	// control plane of different versions still agree on the bit.
+	DiskMiBSoft bool `json:"DiskMiBFilled"`
 	// LifetimeCap is how much longer the run may live, counted from the sandbox
 	// create: the run's own lifetime cap (lifetime_cap_at) less now. Zero means the
 	// run has no cap. Only the k8s substrate reads it, as the run pods'

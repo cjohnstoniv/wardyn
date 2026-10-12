@@ -179,11 +179,6 @@ func (s *Server) poolFromPath(w http.ResponseWriter, r *http.Request, ps store.R
 	return row, found
 }
 
-// localRunsPlaced is whether this server places a run on a person's own runner. Until it does (the
-// final unsupported-local refusal in localPlacementRefusal), every self-hosted pool reads
-// placement_unavailable, which is what a launch on one answers.
-var localRunsPlaced = false
-
 // poolState is one permitted pool's availability for the caller, and the caller's own candidates
 // when the checks reached a self-hosted pool's runners.
 type poolState struct {
@@ -217,9 +212,8 @@ func (s *Server) poolAvailability(ctx context.Context, ps store.RunnerPoolStore,
 		}
 		return poolState{availability: client.RunnerPoolAvailable}, nil
 	}
-	if !localRunsPlaced {
-		return unavailable(runnerpool.AvailabilityPlacementUnavailable)
-	}
+	// A self-hosted pool places a run on one of the caller's own runners in it (ownRunnerTargets), so
+	// it is available while runners are switched on and one of those runners is online.
 	switch err := s.runnersEnabled(ctx); {
 	case errors.Is(err, errRunnersDisabled):
 		return unavailable(runnerpool.AvailabilityPlacementUnavailable)

@@ -36,6 +36,7 @@ type policyPreviewResponse struct {
 	// always an array, empty until the lane that fills it lands.
 	Limits           *types.EffectiveRunLimits   `json:"limits,omitempty"`
 	ResourcesApplied *client.AppliedResources    `json:"resources_applied,omitempty"`
+	MainDrive        *client.MainDriveApplied    `json:"main_drive,omitempty"`
 	LocalPlacement   []client.LocalPlacementFact `json:"local_placement"`
 	// Image is the image the run would start from and its source, absent until
 	// the image lane resolves it; AllowedImages are the organisation's allowed
@@ -47,6 +48,8 @@ type policyPreviewResponse struct {
 	// RunnerPool and RunnerPools are the preflight's, with the same meaning.
 	RunnerPool  *client.ResolvedRunnerPool `json:"runner_pool,omitempty"`
 	RunnerPools []client.RunnerPoolChoice  `json:"runner_pools"`
+	// RunnerPoolSlots is the preflight's, with the same meaning.
+	RunnerPoolSlots *client.PoolSlots `json:"runner_pool_slots,omitempty"`
 	// Access is what the draft brings in (accessFacts), the same projection
 	// Review answers.
 	Access *accessBlock `json:"access,omitempty"`
@@ -116,7 +119,7 @@ var previewSafeWarning = regexp.MustCompile(`^(confinement raised from "(CC[1-3]
 func previewSafeWarnings(warnings []string) []string {
 	out := []string{}
 	for _, warning := range warnings {
-		if warning == composer.WarnResourcesCapped || warning == "push_rules inherited from the operator's policy" ||
+		if warning == composer.WarnResourcesCapped || warning == warnDiskPolicyCut || warning == "push_rules inherited from the operator's policy" ||
 			warning == "allow_all_egress disabled: operator policy does not permit allow-all egress" ||
 			warning == "git_push_any_branch disabled: operator policy keeps push branch-namespace confinement on" || previewSafeWarning.MatchString(warning) {
 			out = append(out, warning)

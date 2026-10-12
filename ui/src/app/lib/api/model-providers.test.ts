@@ -35,6 +35,13 @@ describe("modelProviders.getModelProviders() — connected_people", () => {
     expect(snap.etag).toBe('"e1"');
   });
 
+  it("keeps the server facts off the document PUT sends back", async () => {
+    const providers = [{ id: "anthropic", kind: "anthropic_api_key" }];
+    fetchMock.mockResolvedValueOnce(res({ providers, entra_login_configured: true, kinds_available: ["anthropic_api_key"] }));
+    const snap = await modelProviders.getModelProviders();
+    expect(snap.providers).toEqual({ providers });
+  });
+
   it("reads a never-configured install ({}) as no counts", async () => {
     fetchMock.mockResolvedValueOnce(res({}));
     const snap = await modelProviders.getModelProviders();

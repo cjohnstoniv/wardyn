@@ -222,6 +222,10 @@ func (b *idBuilder) LocalImage(context.Context, string) (string, bool, error) {
 	return b.id, b.found, b.err
 }
 
+func (b *idBuilder) RemoteDigest(context.Context, string) (string, error) {
+	return "", errors.New("idBuilder resolves nothing")
+}
+
 func recCurrentWorkspace() types.Workspace {
 	lane := recLanes()[0]
 	ws := lane.ws

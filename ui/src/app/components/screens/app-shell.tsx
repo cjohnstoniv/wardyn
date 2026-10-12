@@ -22,6 +22,7 @@ import {
   FolderOpen,
   HardDrive,
   KeyRound,
+  Laptop,
   LayoutTemplate,
   Lock,
   Menu,
@@ -46,7 +47,7 @@ import { SidebarLowerLinks } from "./sidebar-settings-link";
 // from nav-copy.ts rather than the screen's own copy module so the eager
 // sidebar doesn't drag a whole screen-only canon table into the entry chunk
 // (#498) for one string.
-import { CREDENTIALS_NAV_TITLE, GOVERNANCE_NAV_TITLE, USER_TYPES_NAV_TITLE } from "../../lib/nav-copy";
+import { CREDENTIALS_NAV_TITLE, GOVERNANCE_NAV_TITLE, RUNNERS_NAV_TITLE, USER_TYPES_NAV_TITLE } from "../../lib/nav-copy";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
@@ -142,6 +143,9 @@ const ADMIN_NAV: NavItem[] = [
   // 0.8.6 (ppl-p2, M12 D1): right after Approvals, because leaver work is frequent and urgent. securityOps
   // server-side, so both admin tiers see it.
   { to: "/admin/people", label: PEOPLE_PAGE.NAV, icon: Contact },
+  // 0.9: people's own computers that run their runs. securityOps server-side, so both admin tiers see it;
+  // the page explains the off state, so the item is always there (RN-Q4).
+  { to: "/admin/runners", label: RUNNERS_NAV_TITLE, icon: Laptop },
   { to: "/admin/workspaces", label: "Workspaces", icon: FolderOpen },
   { to: "/admin/policies", label: "Policies", icon: UserCog },
   // 0.9: saved starting points; org admins rename, delete and publish here. A member route server-side, so

@@ -84,6 +84,32 @@ codex_set_toml_key() {
     mv "$tmp" "$file"
 }
 
+# codex_set_mcp_servers FILE: one [mcp_servers.<key>] table with its url per
+# entry of WARDYN_MCP_SERVERS_JSON ({"<key>":"<url>",...}: server keys and the
+# proxy's broker URLs, as dispatch writes them, never a server's own address or
+# credential).  A table of the same key is replaced, so a revive leaves no
+# duplicate; nothing else in FILE is touched.  The proxy, not this file, decides
+# which servers codex reaches: editing it reaches nothing more.
+codex_set_mcp_servers() {
+    local file="$1" json="${WARDYN_MCP_SERVERS_JSON:-}" tables="" keys="" tmp
+    local re='"([a-z0-9-]+)":"(https?://[A-Za-z0-9._:/-]+)"'
+    [[ -n "$json" ]] || return 0
+    while [[ $json =~ $re ]]; do
+        keys+="${BASH_REMATCH[1]} "
+        tables+="[mcp_servers.${BASH_REMATCH[1]}]"$'\n'"url = \"${BASH_REMATCH[2]}\""$'\n'
+        json="${json#*"${BASH_REMATCH[0]}"}"
+    done
+    [[ -f "$file" ]] || : > "$file"
+    tmp="$(mktemp "$file.XXXXXX")"
+    CODEX_MCP_KEYS="$keys" awk '
+        BEGIN { n = split(ENVIRON["CODEX_MCP_KEYS"], k, " "); for (i = 1; i <= n; i++) drop["[mcp_servers." k[i] "]"] = 1 }
+        /^[[:space:]]*\[/ { t = $0; gsub(/[[:space:]]/, "", t); skip = (t in drop) }
+        !skip { print }
+    ' "$file" > "$tmp"
+    printf '%s' "$tables" >> "$tmp"
+    mv "$tmp" "$file"
+}
+
 # prepare_codex_config: point codex at its route through the config it reads
 # (and, when dispatch pins one, its model), and authenticate it with the inert
 # sentinel.  Each piece is written only when its variable is non-empty, so a run
@@ -98,6 +124,7 @@ prepare_codex_config() {
     if [[ -n "${WARDYN_CODEX_MODEL:-}" ]]; then
         codex_set_toml_key "$cfg_dir/config.toml" model "$WARDYN_CODEX_MODEL"
     fi
+    codex_set_mcp_servers "$cfg_dir/config.toml"
     if [[ -n "${CODEX_API_KEY:-}" ]]; then
         printf '%s' "$CODEX_API_KEY" | codex login --with-api-key >&2 \
             || echo "agent-run: WARNING codex login --with-api-key failed; an interactive codex will ask to sign in" >&2

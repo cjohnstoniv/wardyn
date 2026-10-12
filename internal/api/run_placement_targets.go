@@ -75,6 +75,8 @@ func poolOwner(ctx context.Context) string {
 func (s *Server) placementDemand(ctx context.Context, in placementInput) placementDemand {
 	d := placementDemand{floor: in.floor, reqCC: in.reqCC, reqCCOK: in.reqCCOK, baseline: in.baseline}
 	advertised := s.advertisedConfinement(ctx, *in.req)
+	// The org default barrier is left out ("") on purpose: it is chosen only from the advertised set,
+	// so it never changes whether the resulting class is enforced.
 	if enforced, _, err := enforcedConfinement(in.floor, in.reqCC, advertised, "", in.baseline); err != nil ||
 		(enforced != "" && !slices.Contains(advertised, enforced)) {
 		d.reqCCOK = false
@@ -201,5 +203,7 @@ func (s *Server) executorFacts(ctx context.Context, executor string) (runner.Tar
 	if err != nil {
 		return runner.TargetFacts{}, false
 	}
-	return runner.TargetFacts{Classes: caps.ConfinementClasses}, true
+	_, keeps := s.cfg.Runner.(runner.SandboxEnder)
+	return runner.TargetFacts{Classes: caps.ConfinementClasses, EphemeralDiskEnforcement: caps.EphemeralDiskEnforcement,
+		KeepsEnded: keeps, UserDrives: caps.UserDrives}, true
 }

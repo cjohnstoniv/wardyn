@@ -134,11 +134,9 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		if code, err := s.validateRunSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec, credentials); err != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, runError(code, reasonInlinePolicyInvalid, "invalid inline_policy: "+err.Error())
 		}
-		// The size half for the inline arm, the same helper the stored arm calls
-		// below: composer.Clamp bounds a member's disk_mib by the PROFILE, but
-		// the org's default_disk_mib/max_disk_mib are dispatch's and reach no
-		// preview at all without this. A no-op on launch (see the helper).
-		clampWarnings = append(clampWarnings, s.boundResources(ctx, r, &spec, ceiling, dryRun)...)
+		// The CPU and memory half for the inline arm, the same helper the stored arm
+		// calls below. The main drive is sized by stepMainDrive, for every door.
+		s.boundResources(ctx, r, &spec, ceiling)
 		clampWarnings = append(clampWarnings, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
 		clampWarnings = append(clampWarnings, boundBackgroundIdleStop(*req, &spec)...)
 		if refusal := noRepositoriesResolvedRefusal(*req, spec); refusal != nil {
@@ -254,14 +252,13 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		}
 		storedWarns = append(storedWarns, warns...)
 	}
-	// The size half, for the arm composer.Clamp never reaches. The block above
-	// runs only for a member who SELECTED a stored row (policyID != nil), but the
-	// commonest member request there is carries no policy at all — and its spec is
-	// then the profile's OWN ceiling, which an admin may well have written wider
-	// than the limit standing beside it. That member previewed a scratch size
-	// their run does not get, and a dispatch-side log line is not a disclosure to
-	// them. Both arms call the SAME helper (runs_dispatch_ceiling.go).
-	storedWarns = append(storedWarns, s.boundResources(ctx, r, &spec, ceiling, dryRun)...)
+	// The CPU and memory half, for the arm composer.Clamp never reaches. The block
+	// above runs only for a member who SELECTED a stored row (policyID != nil), but
+	// the commonest member request there is carries no policy at all — and its spec
+	// is then the profile's OWN ceiling, which an admin may well have written wider
+	// than the limit standing beside it. Both arms call the SAME helper
+	// (runs_dispatch_ceiling.go).
+	s.boundResources(ctx, r, &spec, ceiling)
 	storedWarns = append(storedWarns, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
 	storedWarns = append(storedWarns, boundBackgroundIdleStop(*req, &spec)...)
 	if refusal := noRepositoriesResolvedRefusal(*req, spec); refusal != nil {
