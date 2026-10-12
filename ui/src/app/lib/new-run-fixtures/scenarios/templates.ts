@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { TemplateList, TemplateSummary } from "../../types/templates";
+import type { RunShape } from "../../types/runs";
+import type { TemplateDocument, TemplateList, TemplateSummary } from "../../types/templates";
 import { everyScenario, type ByScenario } from "./index";
 
 const MEMBER_PUBLISH = { org: false, groups: [], groups_unverified: false };
@@ -24,4 +25,28 @@ const ORG_BASELINE: TemplateSummary = {
 export const SCENARIO_TEMPLATES: ByScenario<TemplateList> = everyScenario<TemplateList>({ templates: [NIGHTLY], publish: MEMBER_PUBLISH }, {
   admin: { templates: [NIGHTLY, { ...ORG_BASELINE, writable: true }], publish: ADMIN_PUBLISH },
   governed: { templates: [NIGHTLY, ORG_BASELINE], publish: MEMBER_PUBLISH },
+});
+
+// Stand-ins for lib/types/launch-intents.ts (DS2-S4, not merged): the DS-2
+// LaunchIntent* structs. The fixtures re-type onto the real twin when it lands.
+export interface LaunchIntentSummary {
+  run_id: string;
+  title: string;
+  shape?: RunShape;
+  created_at: string;
+}
+export interface LaunchIntentList {
+  intents: LaunchIntentSummary[];
+}
+export interface LaunchIntent {
+  run_id: string;
+  created_at: string;
+  document: TemplateDocument;
+}
+
+export const NIGHTLY_RUN_ID = "e1111111-1111-4111-8111-111111111111";
+
+/** GET /me/launch-intents, per scenario. Only a run that kept its setup is listed. */
+export const SCENARIO_LAUNCH_INTENTS: ByScenario<LaunchIntentList> = everyScenario<LaunchIntentList>({
+  intents: [{ run_id: NIGHTLY_RUN_ID, title: "Fix the flaky retry", shape: "agent_task", created_at: "2026-10-11T08:00:00Z" }],
 });
