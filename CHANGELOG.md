@@ -413,6 +413,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the run's own pool cannot cap disk, such a run is refused with `main_drive_unenforceable` at Review, the policy
   preview and create. The Policy tab tells a pool default from a server default, and `run.policy.resolve` records
   `disk_mib_basis` and `disk_mib_default_source`.
+- Remote MCP servers can be added as components. A harness reaches a server only through the proxy's broker route
+  (`/wardyn/mcp/<token>/<server>`), which binds the request to the harness by its own token, adds the server's
+  credential, answers a tool call the run's rules block with a JSON-RPC error, and re-originates over the same
+  guarded path as the git broker, refusing redirects and any data after the JSON-RPC message. While a server is
+  attached, a direct request to its host is refused. Two organisation MCP servers may not share a name (`409
+  component_name_conflict`). SSE servers are not supported yet. Migration `0166_run_component_mcp_harnesses`.
+- A service identity's sponsor can see and stop its runs, in every runs list view; entering one needs an explicit
+  `service_attach` grant, is recorded as the sponsor, and is never available over SSH. A portal's delegated token
+  gets none of this. Migration `0167_service_attach_restriction` turns the grant off for everyone until an admin
+  names it; an allow written for everyone admits every sponsor.
+- The pool list and the preflight and policy-preview `runner_pools` now carry `main_drive` for each pool you may
+  use: how the pool's runners enforce, keep and mount the main drive, as the weakest across its targets (`unknown`
+  when a runner is offline or has not reported).
+- Fleet capacity and a run's recorded sizing now count the 400 MiB proxy envelope of a run that carries an Azure
+  route gate; they previously recorded the 256 MiB default while the runner applied 400 MiB (#1806).
 
 ### Changed
 
