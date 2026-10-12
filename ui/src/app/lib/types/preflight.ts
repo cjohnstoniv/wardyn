@@ -79,7 +79,7 @@ export interface SetupFix {
   secret_name?: string;
   // A Workspace.id, NOT a source path — api.scanWorkspace takes an id.
   workspace_id?: string;
-  // sign_in: what to sign in to (model_provider, azure_cli or aws_cli) and its id.
+  // sign_in: what to sign in to (model_provider, azure_devops, azure_cli or aws_cli) and its id.
   target?: string;
   id?: string;
   // choose_model_provider: the included harness that has none.
