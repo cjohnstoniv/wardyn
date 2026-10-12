@@ -122,6 +122,9 @@ type Config struct {
 	// AzureGates are the run's azure_foundry route gates, one per row (azure_gate.go). Empty == off.
 	// Omitempty and set only for a run with such a row: an older proxy refuses a key it does not know.
 	AzureGates []AzureGateConfig `json:"azure_gates,omitempty"`
+	// GitHubAPI is the run's GitHub CLI grant, which drives the api.github.com
+	// door (github_api.go). Nil == off. Omitempty for the reason AzureGates is.
+	GitHubAPI *GitHubAPIGrant `json:"github_api,omitempty"`
 	// MITMLLM reports whether TLS-MITM of the BUILT-IN LLM hosts (Anthropic/OpenAI)
 	// is actually intended for this run — i.e. subscription credential injection OR
 	// intercept_tls content inspection. Dispatch also mints the per-run CA for
@@ -495,6 +498,9 @@ func (c *Config) validateTerminatedGates() error {
 		if g.API && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
 			return fmt.Errorf("config: pat_grants[%q] sets api and requires mitm_ca_cert_pem and mitm_ca_key_pem — the forge API door runs only on a terminated connection", host)
 		}
+	}
+	if c.GitHubAPI != nil && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
+		return fmt.Errorf("config: github_api requires mitm_ca_cert_pem and mitm_ca_key_pem — the GitHub CLI door runs only on a terminated connection")
 	}
 	return c.validateAzureGates()
 }

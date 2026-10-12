@@ -52,6 +52,16 @@ type componentDispatch struct {
 	// Config is each component's plain, non-secret environment, in the order
 	// the components were attached. The gate refused a key two of them share.
 	Config []componentConfig
+	// GitHubAPI is the GitHub CLI door's grant, written at create once the
+	// run's repositories are known (persistGitHubCLIGrants); nil without one.
+	GitHubAPI *proxy.GitHubAPIGrant
+}
+
+// dispatchWith is dispatch with the GitHub CLI door create wrote.
+func (c runComponents) dispatchWith(githubAPI *proxy.GitHubAPIGrant) componentDispatch {
+	d := c.dispatch()
+	d.GitHubAPI = githubAPI
+	return d
 }
 
 // componentConfig is one component's plain config, and what a record about it

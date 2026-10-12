@@ -260,7 +260,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 // it preserves today's error behavior for legitimate callers without opening a
 // hole. Fail-closed here would only convert a control-plane 400 into a proxy 403.
 func (p *Proxy) isBrokeredGitGrant(body []byte) bool {
-	if len(p.gitGrants) == 0 {
+	if len(p.gitGrants) == 0 && p.ghAPI == nil {
 		return false
 	}
 	var req struct {
@@ -274,7 +274,8 @@ func (p *Proxy) isBrokeredGitGrant(body []byte) bool {
 			return true
 		}
 	}
-	return false
+	// The GitHub CLI's grants mint the same App's tokens, with wider permissions.
+	return p.ghAPI.holds(req.GrantID)
 }
 
 // isBrokeredPATGrant reports whether a sandbox-supplied mint body names one of

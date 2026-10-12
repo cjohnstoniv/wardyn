@@ -163,6 +163,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepModelProvider, foldAll},
 	{(*Server).stepAutonomy, foldAll},
 	{(*Server).stepToolPolicy, foldAll},
+	{(*Server).stepGitHubCLIRepo, foldCreate | foldPreflight},
 	{(*Server).stepADOStanding, foldAll},
 	{(*Server).stepPATNarrowing, foldPreflight | foldPreview},
 	{(*Server).stepRunEnd, foldAll},

@@ -231,6 +231,30 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi 
  && npm install -g "npm@${NPM_VERSION}" \
  && npm --version
 
+# ── GitHub CLI (gh) ──────────────────────────────────────────────────────────
+# The versioned .deb from the cli/cli release, checked against its sha256 per
+# architecture (the release's gh_<version>_checksums.txt). A release URL stays
+# put, unlike cli.github.com's apt index, which carries only the newest version;
+# a bump moves GH_VERSION and both digests together. gh gets no GitHub
+# credential here: a run with a GitHub CLI row gets an inert GH_TOKEN, and the
+# proxy adds the App token per request.
+ARG GH_VERSION=2.102.0
+ARG GH_SHA256_AMD64=7e54a307f90afdc59796c325ec0c49fb09e6c18537727207a8ac7513584ea5b0
+ARG GH_SHA256_ARM64=5006962696f01e1624b3fcf1f9d8e1a11547f24bf067dd2a0371b7b421945237
+ARG TARGETARCH
+RUN set -eu; \
+    arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+    case "$arch" in \
+        amd64) sum="$GH_SHA256_AMD64";; \
+        arm64) sum="$GH_SHA256_ARM64";; \
+        *) echo "unsupported arch '$arch' for gh" >&2; exit 1;; \
+    esac; \
+    printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
+    curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.deb" -o /tmp/gh.deb; \
+    echo "$sum  /tmp/gh.deb" | sha256sum --strict -c -; \
+    dpkg -i /tmp/gh.deb; \
+    rm -f /tmp/gh.deb
+
 # /home/agent/drive is the RESERVED mount point for a user drive (runner.DriveTarget).
 # It is created here, owned by agent, EVEN THOUGH nothing mounts it on most runs:
 # Docker's copy-up gives a fresh named volume the uid/gid of the image directory it

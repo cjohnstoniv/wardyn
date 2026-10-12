@@ -577,6 +577,20 @@ type CLIGitHub struct {
 	Capabilities []ghscope.Capability `json:"capabilities"`
 }
 
+// CLIGitHubRefused is the closed list of grantable capabilities a GitHub CLI
+// row never carries: each changes a repository's or an organisation's
+// settings, deletes packages, or administers Actions, and the CLI's token
+// acts as the organisation's App rather than as the person.
+var CLIGitHubRefused = []ghscope.Capability{ghscope.CapRepoAdmin, ghscope.CapOrgAdmin, ghscope.CapPackagesWrite, ghscope.CapActionsAdmin}
+
+// CLIGitHubCapabilities is caps without anything a GitHub CLI token may not
+// hold: a capability that is not grantable, or one CLIGitHubRefused names.
+func CLIGitHubCapabilities(caps []ghscope.Capability) []ghscope.Capability {
+	return slices.DeleteFunc(slices.Clone(caps), func(c ghscope.Capability) bool {
+		return !c.Grantable() || slices.Contains(CLIGitHubRefused, c)
+	})
+}
+
 // CLIAWS pins one IAM Identity Center account and permission set.
 type CLIAWS struct {
 	StartURL  string `json:"start_url"`  // the access portal, https
@@ -640,6 +654,9 @@ func (g *CLIGitHub) validate() error {
 	for i, cp := range g.Capabilities {
 		if !cp.Grantable() {
 			return fmt.Errorf("cli.github.capabilities[%d]: %q is not grantable; want one of: %s", i, cp, ghscope.GrantableCapabilityList())
+		}
+		if slices.Contains(CLIGitHubRefused, cp) {
+			return fmt.Errorf("cli.github.capabilities[%d]: %q is not available to the GitHub CLI", i, cp)
 		}
 		if slices.Contains(g.Capabilities[:i], cp) {
 			return fmt.Errorf("cli.github.capabilities[%d]: %q is listed twice", i, cp)
