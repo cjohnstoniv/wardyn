@@ -284,7 +284,11 @@ var templatePolicyRules = []TemplateFieldRule{
 var templateNestedCarried = map[string]string{
 	"ADOOverrides":        "capabilities",
 	"AgentOverrides":      "add_hosts remove_hosts add_secrets remove_secrets tool_rules",
-	"ComponentDefinition": "hosts secrets config",
+	"CLIAWS":              "start_url sso_region account_id role_name region",
+	"CLIAzure":            "subscriptions access",
+	"CLIGitHub":           "capabilities",
+	"ComponentCLI":        "kind azure aws github",
+	"ComponentDefinition": "hosts secrets config cli",
 	"ComponentDelivery":   "mode host header format plain_http var file",
 	"ComponentRef":        "id inline name builtin org repos access",
 	"ComponentSecret":     "secret_name shared delivery",

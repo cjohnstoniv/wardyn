@@ -6,6 +6,9 @@ package api
 import (
 	"net/http"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -25,7 +28,47 @@ func orgComponentView(c types.Component) client.OrgComponentView {
 	for _, sec := range c.Definition.Secrets {
 		v.Secrets = append(v.Secrets, client.ComponentSecretView{Delivery: sec.Delivery, Shared: sec.Shared})
 	}
+	v.Category = "api"
+	if cli := c.Definition.CLI; cli != nil {
+		v.Category, v.CLI = "cli", cliView(cli)
+	}
 	return v
+}
+
+// cliView is the non-secret face of a CLI block: no portal URL, no subscription ids.
+func cliView(c *types.ComponentCLI) *client.CLIView {
+	v := &client.CLIView{Kind: c.Kind}
+	switch {
+	case c.Azure != nil:
+		v.Subscriptions, v.Access = len(c.Azure.Subscriptions), c.Azure.Access
+	case c.AWS != nil:
+		v.AccountID, v.RoleName, v.Region = c.AWS.AccountID, c.AWS.RoleName, c.AWS.Region
+	case c.GitHub != nil:
+		v.Capabilities = append([]ghscope.Capability{}, c.GitHub.Capabilities...)
+	}
+	return v
+}
+
+// catalogueCLIs is the five CLI cards in their fixed order. It reads only the
+// rows the caller is granted, so it cannot say anything about an ungranted one.
+func catalogueCLIs(granted []client.OrgComponentView) []client.CatalogueCLI {
+	cards := []client.CatalogueCLI{
+		{Kind: types.CLIKindAzure}, {Kind: types.CLIKindGitHub}, {Kind: types.CLIKindAWS},
+		{Kind: "gcloud", State: client.CLIStateComingSoon}, {Kind: "kubectl", State: client.CLIStateComingSoon},
+	}
+	for i := range cards {
+		cards[i].Rows = []uuid.UUID{}
+		if cards[i].State == "" {
+			cards[i].State = client.CLIStateNotGranted
+		}
+		for _, row := range granted {
+			if row.CLI != nil && row.CLI.Kind == cards[i].Kind {
+				cards[i].State = client.CLIStateAvailable
+				cards[i].Rows = append(cards[i].Rows, row.ID)
+			}
+		}
+	}
+	return cards
 }
 
 // handleMyComponents is GET /me/components: what the caller may do, the rows they
@@ -91,5 +134,6 @@ func (s *Server) handleMyComponents(w http.ResponseWriter, r *http.Request) {
 		AutonomyCap:             settings.AutonomyCap,
 		Mine:                    mine,
 		Org:                     org,
+		CLIs:                    catalogueCLIs(org),
 	})
 }
