@@ -236,7 +236,11 @@ func (s *Sealer) Seal(ctx context.Context, ev types.AuditEvent) (types.AuditEven
 		}
 		pending = pending || p
 	}
-	return out, pending, nil
+	var p bool
+	if out, p, err = s.sealSponsors(ctx, out); err != nil {
+		return out, pending, err
+	}
+	return out, pending || p, nil
 }
 
 func (s *Sealer) sealFields(ctx context.Context, ev types.AuditEvent) (out types.AuditEvent, pending bool, err error) {
@@ -505,6 +509,18 @@ func (s *Sealer) Unseal(ctx context.Context, evs []types.AuditEvent) ([]types.Au
 			}
 			ev.Target, changed = target, true
 		}
+		if !device && s.Subjects != nil && bytes.Contains(ev.Data, []byte(`"`+SubjectActorPrefix)) {
+			if memo == nil {
+				memo = newKeyMemo()
+			}
+			data, did, err := s.unsealSponsors(ctx, memo, ev)
+			if err != nil {
+				return nil, err
+			}
+			if did {
+				ev.Data, changed = data, true
+			}
+		}
 		if fields := sealFields[ev.Action]; !device && len(fields) > 0 && bytes.Contains(ev.Data, []byte(`"`+sealedPrefix)) {
 			if memo == nil {
 				memo = newKeyMemo()
@@ -620,7 +636,10 @@ func (s *Sealer) Reseal(ctx context.Context, ev types.AuditEvent) (types.AuditEv
 	if ev, err = s.resealActor(ctx, ev, pk); err != nil {
 		return ev, err
 	}
-	return s.resealTarget(ctx, ev, pk)
+	if ev, err = s.resealTarget(ctx, ev, pk); err != nil {
+		return ev, err
+	}
+	return s.resealSponsors(ctx, ev, pk)
 }
 
 // subjectKeyUnlessGone is subjectKey, except ErrKeyErased when the subject's

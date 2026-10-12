@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -557,5 +558,31 @@ func TestSSHGateway_SFTPTransferAuditCountsBothWays(t *testing.T) {
 	d := sshAuditData(t, ev)
 	if d["bytes"] != float64(9) || d["bytes_in"] != float64(5) || d["bytes_out"] != float64(9) {
 		t.Errorf("ssh.sftp.transfer data = %s, want bytes 9 (unchanged), bytes_in 5, bytes_out 9", ev.Data)
+	}
+}
+
+// A launch failure blames the image only when nothing better explains it: an offline runner or a gone
+// sandbox is told as such, so nobody rebuilds an image that is fine.
+func TestExecSFTPServerNamesTheLaunchFailure(t *testing.T) {
+	for _, c := range []struct {
+		name         string
+		err          error
+		want, absent string
+	}{
+		{"runner offline", fmt.Errorf("%w: substrate x", runner.ErrRunnerOffline), "is offline", "image"},
+		{"sandbox gone", fmt.Errorf("exec create: %w", runner.ErrSandboxGone), "sandbox is gone", "image"},
+		{"unsupported", runner.ErrExecStreamUnsupported, "does not support", "image"},
+		{"anything else", errors.New("exec create failed"), "image has no " + sftpServerPath, "offline"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := &Server{cfg: Config{Runner: &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) { return nil, c.err }}}}
+			_, reason, err := s.execSFTPServer(context.Background(), types.AgentRun{SandboxRef: "sb"})
+			if !errors.Is(err, c.err) {
+				t.Fatalf("err = %v, want %v", err, c.err)
+			}
+			if !strings.Contains(reason, c.want) || strings.Contains(reason, c.absent) {
+				t.Errorf("reason = %q, want it to contain %q and not %q", reason, c.want, c.absent)
+			}
+		})
 	}
 }

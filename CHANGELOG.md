@@ -73,6 +73,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and its partitions.
 - Migration `0159_run_lifetime_cap` adds `agent_runs.lifetime_cap_at` and `lifetime_cap_source`; existing runs keep
   them empty.
+- Config keys that hold a secret word (for example `CLIENT_SECRET`, `SECRET_FILE`, `*_IMAGE_PULL_SECRET`) are now
+  refused in templates and component config; move such values to a secret reference.
 
 ### Added
 
@@ -310,6 +312,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   can no longer set No end or extend past the cap, a super admin included (a super admin still skips the profile's
   limits). Until the lease sweep honours the cap, the lease sweep keeps the run at the same moment the reaper stops
   it.
+- Template and component-schema config keys such as `CLIENT_SECRET`, `JWT_SECRET` and `*_PASSPHRASE` are now
+  refused as secret-named (`SECRET_NAME`/`SECRET_REF` stay plain).
+- Naming a person by a typed `entra:<tenant>:<object>` (erasure, secret owner) is now refused as ambiguous when that
+  tenant and object id also signed in under another issuer, instead of resolving to one principal and leaving the
+  other's data.
 
 ### Removed
 
@@ -424,6 +431,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - SCIM deprovisioning never links a sign-in through an email that names another person, and refuses
   (`owner_ambiguous`, shown on the SCIM status card) when a leaver's emails name two different people, until an
   admin resolves it.
+- `wardynd -recovery-manifest` now refuses at `pool_max_conns` below 2 and names the setting, instead of hanging.
+- `wardyn sync` and sftp now say when the runner is offline or the sandbox is gone, instead of blaming the sandbox
+  image for a missing sftp-server.
 
 
 ## [0.8.9] — 2026-10-09

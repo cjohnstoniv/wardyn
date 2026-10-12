@@ -201,7 +201,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// secret namespace at mint/inject time, so it comes from runIdentitySubject,
 	// which no request header can move.
 	operatorOwned := operatorOwnedRequest(ctx)
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, createdBy), createdBy, internalAudience, operatorOwned)
+	// The sponsor claim is the accountable person: createdBy for a person, the sponsor for a service identity.
+	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, createdBy), requestSponsor(ctx, createdBy), internalAudience, operatorOwned)
 	if err != nil {
 		writeServerError(w, r, "mint run identity", err)
 		return
@@ -386,10 +387,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// image build + dispatch continue server-side (runs_create_launch.go).
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+runID.String())
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
+	spec, harnessRules := applyHarnessToolRules(spec, req.Tools)
 	launch := createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
 		wsRefs: wsRefs, driveMount: f.driveMount, ephemeralDirs: f.ephemeralDirs,
-		runToken: id.Token, created: created, comps: comps,
+		runToken: id.Token, created: created, comps: comps, overridden: f.source.OverridesDiff != nil, pushSets: f.pushSets, harnessRules: harnessRules,
 	}
 	launchCtx := context.WithoutCancel(ctx)
 	s.goBackground(func() { s.finishCreateRunLaunch(launchCtx, launch) })

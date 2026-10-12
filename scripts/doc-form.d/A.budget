@@ -15,6 +15,7 @@
 # docs/AUDIT-ACTIONS.md 40391 measured after F-1514 de.
 # docs/AUDIT-ACTIONS.md 40495 measured after F-1514 merge.
 # docs/AUDIT-ACTIONS.md 40502 measured after H3 merge.
+# docs/AUDIT-ACTIONS.md 40943 measured after A-L3 (overrides_diff on run.create policy_source).
 # docs/AUDIT-ACTIONS.md 40918 measured after H10-pools merge.
 # H6 erased-row quarantine adds 40 measured audit-reference words: the runner.inventory.hold row (asserted-subject cap); combined total 40958.
 # docs/AUDIT-ACTIONS.md 41145 measured after F-1511-1510 merge.
@@ -31,7 +32,13 @@
 # docs/AUDIT-ACTIONS.md 41679 measured after F-1511-scim merge.
 # docs/AUDIT-ACTIONS.md 41646 adds 13 (0.9 R2-audit-2): a device-forwarded row's target and sealed fields read as sent.
 # docs/AUDIT-ACTIONS.md 41692 measured after R2-audit-2 merge.
-docs/AUDIT-ACTIONS.md=41692 share=8
+# docs/AUDIT-ACTIONS.md 41757 adds 124 over 41633 (0.9 F-1508 C2): the four service_identity rows, `service_scope` in the authz.denied vocabulary and the two auth.fail reasons.
+# docs/AUDIT-ACTIONS.md 41816 measured after train 5 merge.
+# docs/AUDIT-ACTIONS.md 41717 measured after the A-L3 merge.
+# docs/AUDIT-ACTIONS.md 41841 measured after scripts/doc-form.d/A.budget.
+# docs/AUDIT-ACTIONS.md 41788 adds 31 over 41757 (0.9 F-1508 C3): the token.update row.
+# docs/AUDIT-ACTIONS.md 41872 measured after merge.
+docs/AUDIT-ACTIONS.md=41872 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

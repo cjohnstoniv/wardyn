@@ -95,6 +95,8 @@ const (
 	ActorHuman  ActorType = "human"
 	ActorAgent  ActorType = "agent"
 	ActorSystem ActorType = "system"
+	// ActorService is a service identity (#1508): actor "service:<name>", with its sponsor on every row.
+	ActorService ActorType = "service"
 )
 
 // AgentRun is one governed execution of a coding agent on behalf of a human, with its own identity
@@ -482,7 +484,9 @@ type APIToken struct {
 	RevokedAt       *time.Time `json:"revoked_at,omitempty"`
 	ExpiresAt       *time.Time `json:"expires_at,omitempty"` // nil = never expires; an expired token authenticates nothing
 	MintedBy        string     `json:"minted_by,omitempty"`  // admin who minted this for its owner; empty when the owner minted it
-	Token           string     `json:"token,omitempty"`      // plaintext, create response ONLY
+	// Disposition is where an admin-minted token stands, derived at read (#1508); empty on any other token.
+	Disposition TokenDisposition `json:"disposition,omitempty"`
+	Token       string           `json:"token,omitempty"` // plaintext, create response ONLY
 	// IdentityStampedAt is when Role and Groups were last stamped: at mint, then at each sign-in of
 	// the owner. Nil reads as stale under WARDYN_ROLE_STAMP_TTL. Never on the wire.
 	IdentityStampedAt *time.Time `json:"-"`

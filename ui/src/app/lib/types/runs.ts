@@ -11,7 +11,7 @@ import type { AutonomyLevel, AutonomyResolution, RunLimits } from "../api/govern
 import type { PolicyRef } from "../api/health";
 import type { ComponentFact } from "./components";
 import type { ProvenanceEntry } from "./policy-preview";
-import type { AllowedImage, Experience, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
+import type { AllowedImage, Experience, ImageFact, LocalPlacementFact, PlacementResources, RunOverrides } from "./new-run-contract";
 import type { RunPolicySpec } from "./policy";
 import type { ResolvedRunnerPool, RunnerPoolChoice, RunnerPoolSelection } from "./runner-pools";
 import type { SCMAccess } from "./setup";
@@ -462,7 +462,12 @@ export interface RunPolicySource {
   deleted?: boolean;
   preset?: string;
   preset_version?: number;
+  /** What the person changed on the New Run cards (the edits that stood, never a secret value); absent when nothing was edited. */
+  overrides_diff?: RunOverridesDiff;
 }
+
+/** The recorded New Run edits; `clamped` lists, as "field value", the ones the ceiling then dropped. */
+export type RunOverridesDiff = RunOverrides & { clamped?: string[] };
 
 // The closed set of reasons launch changed a policy; an unknown one reads as "launch".
 export type RunPolicyCause =
