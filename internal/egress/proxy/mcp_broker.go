@@ -325,6 +325,14 @@ func exactKeys(raw json.RawMessage, names ...string) (map[string]json.RawMessage
 		}
 		obj[k] = v
 	}
+	// The object ends, and the body with it: a server that reads a second
+	// value from the same body would run a call the broker never checked.
+	if t, err := dec.Token(); err != nil || t != json.Delim('}') {
+		return nil, notObject
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, notObject
+	}
 	return obj, nil
 }
 
@@ -366,21 +374,37 @@ func (x *mcpExchange) refuseBlockedCalls(w http.ResponseWriter, body []byte) boo
 	return true
 }
 
-// Characters a harness replaces with "_" when it names an MCP tool: Claude Code
-// (2.1.231) keeps [A-Za-z0-9_-]; Codex CLI's code mode exposes a tool as an
-// identifier, [A-Za-z0-9_].
-var (
-	claudeToolNameRE = regexp.MustCompile(`[^A-Za-z0-9_-]`)
-	identToolNameRE  = regexp.MustCompile(`[^A-Za-z0-9_]`)
-)
+// identToolNameRE is what Codex CLI's code mode replaces with "_" when it
+// exposes a tool as an identifier.
+var identToolNameRE = regexp.MustCompile(`[^A-Za-z0-9_]`)
+
+// claudeToolName is a name as Claude Code (2.1.231) shows it: every UTF-16 code
+// unit outside [A-Za-z0-9_-] becomes "_" (a JavaScript regex without the u
+// flag), so a character outside the Basic Multilingual Plane becomes "__".
+func claudeToolName(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r < utf8.RuneSelf && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-'):
+			b.WriteRune(r)
+		case r > 0xFFFF:
+			b.WriteString("__")
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
+
+func identToolName(s string) string { return identToolNameRE.ReplaceAllString(s, "_") }
 
 // mcpToolNames is every name a rule may give one server's tool: as the server
 // names it, and as each harness shows it. A call is blocked when a Block names
 // any of them.
 func mcpToolNames(key, tool string) []string {
 	names := []string{"mcp__" + key + "__" + tool}
-	for _, re := range []*regexp.Regexp{claudeToolNameRE, identToolNameRE} {
-		name := "mcp__" + re.ReplaceAllString(key, "_") + "__" + re.ReplaceAllString(tool, "_")
+	for _, norm := range []func(string) string{claudeToolName, identToolName} {
+		name := "mcp__" + norm(key) + "__" + norm(tool)
 		if !slices.Contains(names, name) {
 			names = append(names, name)
 		}

@@ -543,3 +543,31 @@ func TestMCPBroker_DuplicateKeysRefused(t *testing.T) {
 		t.Fatalf("plain call: %d", rec.Code)
 	}
 }
+
+// TestMCPBroker_TrailingDataRefused: a single message must be the whole body.
+// A second value after it would reach a server that reads a stream of values
+// without the broker having checked it; whitespace after it is fine.
+func TestMCPBroker_TrailingDataRefused(t *testing.T) {
+	f := newMCPFixture(t, types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "mcp__linear__delete_issue", Effect: types.ToolDeny}}}, nil, nil)
+	for name, body := range map[string]string{
+		"concatenated objects": mcpCall(1, "list_issues") + mcpCall(2, "delete_issue"),
+		"trailing garbage":     mcpCall(1, "list_issues") + " xyz",
+	} {
+		if rec := f.post(t, mcpToken("codex-cli"), "linear", body); !strings.Contains(rec.Body.String(), `"error"`) || f.up.hitCount() != 0 {
+			t.Errorf("%s: %q forwarded=%v", name, rec.Body, f.up.hitCount() != 0)
+		}
+	}
+	if rec := f.post(t, mcpToken("codex-cli"), "linear", mcpCall(1, "list_issues")+" \n\t"); rec.Code != http.StatusOK || f.up.hitCount() != 1 {
+		t.Fatalf("trailing whitespace: status %d hits %d; want forwarded", rec.Code, f.up.hitCount())
+	}
+}
+
+// TestMCPBroker_ClaudeAstralNameBlocked: Claude Code shows a character outside
+// the Basic Multilingual Plane as two underscores (one per UTF-16 code unit), and
+// a Block written that way holds.
+func TestMCPBroker_ClaudeAstralNameBlocked(t *testing.T) {
+	f := newMCPFixture(t, types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "mcp__linear__admin__delete", Effect: types.ToolDeny}}}, nil, nil)
+	if rec := f.post(t, mcpToken("codex-cli"), "linear", mcpCall(1, "admin\U0001F600delete")); !strings.Contains(rec.Body.String(), mcpBlockedMessage) || f.up.hitCount() != 0 {
+		t.Fatalf("%q hits %d; want blocked", rec.Body, f.up.hitCount())
+	}
+}
