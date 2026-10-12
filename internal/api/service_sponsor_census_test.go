@@ -1,0 +1,91 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"slices"
+	"strings"
+	"testing"
+)
+
+// sponsorReachRoutes are the five routes a service identity's sponsor reaches (F3): the handler that asks
+// ownsRunOrSponsorOrAdmin, and the route line that mounts it. GET /runs has no per-run check: its handler
+// lists through the store's sponsor-aware pager, which the second test pins.
+var sponsorReachRoutes = map[string]string{
+	"handleGetRun":    `r.Get("/runs/{id}", s.handleGetRun)`,
+	"handleRunEvents": `r.Get("/runs/{id}/events", s.handleRunEvents)`,
+	"handleRunOutput": `r.Get("/runs/{id}/output", s.handleRunOutput)`,
+	"handleKillRun":   `r.Post("/runs/{id}/kill", s.handleKillRun)`,
+}
+
+// TestSponsorReach_RouteCensus: ownsRunOrSponsorOrAdmin is asked by exactly the four per-run handlers above, once
+// each, and by nothing else; those handlers are mounted where the design says. A new caller is a new route a sponsor
+// reaches, and has to be classified here before it merges.
+func TestSponsorReach_RouteCensus(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]int{}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "ownsRunOrSponsorOrAdmin" {
+					found[fn.Name.Name]++
+				}
+				return true
+			})
+		}
+	}
+	for fn, route := range sponsorReachRoutes {
+		if found[fn] != 1 {
+			t.Errorf("%s asks ownsRunOrSponsorOrAdmin %d times, want once", fn, found[fn])
+		}
+		delete(found, fn)
+		if src, err := os.ReadFile("routes.go"); err != nil || !strings.Contains(string(src), route) {
+			t.Errorf("routes.go does not mount %s (%v)", route, err)
+		}
+	}
+	if len(found) != 0 {
+		t.Errorf("ownsRunOrSponsorOrAdmin is also asked by %v: a route a sponsor now reaches", slices.Sorted(func(yield func(string) bool) {
+			for k := range found {
+				if !yield(k) {
+					return
+				}
+			}
+		}))
+	}
+}
+
+// TestSponsorReach_ListIsSponsorAware: GET /runs lists through the sponsor-aware pager on both its paths, and the
+// run routes that must stay the owner's or an admin's still ask the unchanged predicate.
+func TestSponsorReach_ListIsSponsorAware(t *testing.T) {
+	for file, want := range map[string]string{
+		"runs_policy.go":         "RunsByCreatorOrSponsorPager",
+		"runs_list_filter.go":    "WithSponsored",
+		"run_files.go":           "getRunAuthorized(",
+		"approvals_decidable.go": "ownsRunOrAdmin(r, run)",
+	} {
+		src, err := os.ReadFile(file)
+		if err != nil || !strings.Contains(string(src), want) {
+			t.Errorf("%s no longer contains %q (%v)", file, want, err)
+		}
+	}
+}

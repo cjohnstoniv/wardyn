@@ -130,9 +130,9 @@ The mechanism is on [service-identities.md](service-identities.md). In short:
 
 ## 6. Migration
 
-### 6.1 Schema 0196
+### 6.1 Schema 0157
 
-- One file, `0196_invitations_service_identities.sql`, provisional and renumbered at merge.
+- One file, `0157_invitations_service_identities.sql`, merged under that number.
 - `person_invitations` ([§3.1](#31-record)) and `service_identities` ([record](service-identities.md#2-record)).
 - `api_token_moves (token_id PK → api_tokens, service_identity → service_identities, linked_by, linked_at)`.
 - The `actor_type` check on the partitioned `audit_events` parent widened to add `service`.
@@ -258,9 +258,9 @@ The docs lane places these as new numbered residuals. [`ARCHITECTURE.md`](../../
 
 | Slice | Executor | Content | After |
 |---|---|---|---|
-| C1 | core, Sonnet high | Migration 0196; invitation store and routes; the shared mint core; claim; mint-site pin | owner decisions |
+| C1 | core, Sonnet high | Migration 0157; invitation store and routes; the shared mint core; claim; mint-site pin | owner decisions |
 | C2 | core, Sonnet high | Service identity store, routes and auth branch; `ActorService`; allow-list; sponsor checks; run sponsor; actor-type call-site review | C1 |
-| C4 | core, Sonnet high | `ownsRunOrSponsorOrAdmin` on the read and kill routes only; the `service_attach` value and its 0196 restriction row; the sponsor arm of `mayEnterRun`; the sponsor ticket stamp ([sponsor reach](service-identities.md#8-sponsor-reach-over-the-services-runs)) | C2 |
+| C4 | core, Sonnet high | `ownsRunOrSponsorOrAdmin` on the read and kill routes only; the `service_attach` value and its restriction row (`0167_service_attach_restriction`); the sponsor arm of `mayEnterRun`; the sponsor ticket stamp ([sponsor reach](service-identities.md#8-sponsor-reach-over-the-services-runs)) | C2 |
 | C3 | core, Sonnet high | Dispositions; `POST /tokens/{id}/move`; sponsored-token sweep in `revokePersonCredentials`; directory exclusions | C1, C2 |
 | U1 | Sonnet, console | One mock round, then the Account claim card, the sponsor's mint card and the disposition column | C1–C3 |
 | M1 | free or Haiku | `pkg/client` methods, CLI verbs, TS mirror (the `service_attach` feature label included), wire-parity tests | C1–C4 |

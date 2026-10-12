@@ -100,12 +100,13 @@ const (
 	// (enforceRunModelProvider).
 	capModelProvider = "model_provider"
 	// capFeature NARROWS: it bounds whether a person may MINT a personal
-	// credential at all, or define a component of their own. Three values, a
-	// closed set (featureValues), plus `*`: featureSSHKey gates POST
+	// credential at all, or define a component of their own, or enter the runs of
+	// a service identity they sponsor. Four values, a closed set
+	// (featureValues), plus `*`: featureSSHKey gates POST
 	// /me/ssh-keys and featureAPIToken gates POST /me/tokens, one check at each
 	// mint door (the token door also keeps member mode's 409; the SSH door
 	// stores a capped key instead, #564); featureCustomComponent is
-	// componentAttachRefusal's.
+	// componentAttachRefusal's; featureServiceAttach is sponsorMayEnter's.
 	//
 	// Narrowing, on capAgent's rule: every signed-in person could already add a
 	// key and mint a token, so the unenforced default stays ALLOWED and an
@@ -166,9 +167,13 @@ const (
 	featureSSHKey          = "ssh_key"
 	featureAPIToken        = "api_token"
 	featureCustomComponent = "custom_component"
+	// featureServiceAttach: "may enter the runs of service identities I sponsor". The value is
+	// restricted by migration 0167, so it is off for everyone until a grant names it, a `*` allow
+	// included. Asked only by sponsorMayEnter, with the operator step off.
+	featureServiceAttach = "service_attach"
 )
 
-var featureValues = []string{featureSSHKey, featureAPIToken, featureCustomComponent}
+var featureValues = []string{featureSSHKey, featureAPIToken, featureCustomComponent, featureServiceAttach}
 
 // capabilityKinds is the closed set, in the order the admin surface shows them.
 var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capWorkspaceProvider, capModelProvider, capFeature, capPolicy, capComponent}
@@ -324,6 +329,18 @@ func (s *Server) capAllowed(ctx context.Context, kind, value string) (bool, erro
 		return false, fmt.Errorf("api: capability %q cannot be resolved: no store configured", kind)
 	}
 	return s.capSeamAllowed(ctx, kind, value)
+}
+
+// capAllowedAsMember is capAllowed with decide's operator step off: a super admin, the admin token and
+// local mode are bounded by the grants like a member. It exists for service_attach alone (F6: a super
+// admin sponsor needs the grant too), and answers a deployment with no Store as an error, never as allowed.
+func (s *Server) capAllowedAsMember(ctx context.Context, kind, value string) (bool, error) {
+	if s.cfg.Store == nil {
+		return false, fmt.Errorf("api: capability %q cannot be resolved: no store configured", kind)
+	}
+	b := s.newCapBatch(ctx)
+	b.operator = false
+	return b.allowed(ctx, kind, value)
 }
 
 // capGranted asks the WIDENING question of `kind`, whatever its row says: does
