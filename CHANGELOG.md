@@ -88,6 +88,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- An organisation component can carry a CLI credential block (Azure, AWS or GitHub CLI), and `GET /me/components`
+  lists five CLI cards (available, not turned on, or coming soon) without revealing rows the caller is not granted. A run
+  can attach up to 16 components (was 8).
 - A `wardyn/v1` document of `kind: Run` holds a draft of one run as its `intent`. `POST /api/v1/templates/import`
   reads it (or a `RunTemplate`) and answers the normalised document or diagnostics, storing nothing.
 - New optional request field `shape` (`agent_task`, `environment`, `application`), checked against `experience`,
