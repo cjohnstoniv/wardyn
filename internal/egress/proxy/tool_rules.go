@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
@@ -31,16 +32,29 @@ func (p *Proxy) decideByToolRules(w http.ResponseWriter, r *http.Request, tool s
 	}
 	switch eff {
 	case types.ToolAllow:
-		p.emitLocalDecision(r, egress.Allow, ruleSourceToolAllow, nil)
+		p.emitToolDecision(r, egress.Allow, ruleSourceToolAllow, tool)
 		writeToolDecision(w, "APPROVED")
 		return true
 	case types.ToolDeny:
-		p.emitLocalDecision(r, egress.Deny, ruleSourceToolDeny, nil)
+		p.emitToolDecision(r, egress.Deny, ruleSourceToolDeny, tool)
 		writeToolDecision(w, "DENIED")
 		return true
 	}
 	// types.ToolHold: the human is the point. Fall through.
 	return false
+}
+
+// emitToolDecision is emitLocalDecision for a call tool_rules answered. No
+// approval row stands behind it, so the row's Cause names the tool, quoted
+// since the name is the sandbox's own text.
+func (p *Proxy) emitToolDecision(r *http.Request, decision egress.Decision, ruleSource, tool string) {
+	if p.sink == nil {
+		return
+	}
+	host, port, _ := hostPortFromURL(p.controlPlaneURL)
+	log := decisionLog(p.reqOf(r, host, port), decision, ruleSource)
+	log.Cause = "tool " + strconv.Quote(tool)
+	p.sink.emit(log)
 }
 
 // toolEffect is what the run's rules say about one call. Under per-harness rules

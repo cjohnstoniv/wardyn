@@ -178,3 +178,62 @@ func TestToolRulesAtTheLocalRoute(t *testing.T) {
 		})
 	}
 }
+
+// toolRuleRow drives one tool call through the approval route under rules that
+// allow Read, deny WebFetch and hold everything else, and returns its row.
+func toolRuleRow(t *testing.T, tool string) egress.DecisionLog {
+	t.Helper()
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(types.ApprovalRequest{
+			ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalToolCall,
+			RequestedScope: json.RawMessage(`{"tool":"Bash"}`), State: types.ApprovalPending,
+		})
+	}))
+	defer cp.Close()
+	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cp), nil, nil)
+	p.policy = CompilePolicy(types.RunPolicySpec{ToolRules: []types.ToolRule{
+		{Tool: "Read", Effect: types.ToolAllow},
+		{Tool: "WebFetch", Effect: types.ToolDeny},
+		{Tool: "*", Effect: types.ToolHold},
+	}})
+	payload, _ := json.Marshal(map[string]any{"kind": "tool_call", "payload": map[string]string{"tool": tool, "cmd": "make test"}})
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost, routeApprovalsCreate, bytes.NewReader(payload)))
+	return lastDecision(t, buf)
+}
+
+// The row a tool_rules decision writes keeps its shape: the control plane as
+// the recorded host, the approval route as the path, no approval id, and a hold
+// still records its approval row with no cause of its own.
+func TestToolRuleDecisionRowShape(t *testing.T) {
+	for _, tool := range []string{"Read", "WebFetch", "Bash"} {
+		d := toolRuleRow(t, tool)
+		if d.Request.Host != "wardynd.test" || d.Request.Port != 8080 || d.Request.Path != routeApprovalsCreate ||
+			d.Request.Method != http.MethodPost {
+			t.Errorf("%s: row request = %+v, want POST wardynd.test:8080%s", tool, d.Request, routeApprovalsCreate)
+		}
+		if tool != "Bash" && d.ApprovalID != nil {
+			t.Errorf("%s: approval id = %v, want none: a policy decision creates no approval row", tool, d.ApprovalID)
+		}
+	}
+	if d := toolRuleRow(t, "Bash"); d.RuleSource != ruleSourceApprovals || d.Cause != "" {
+		t.Errorf("held row = %s cause %q, want %s with no cause", d.RuleSource, d.Cause, ruleSourceApprovals)
+	}
+}
+
+// An allow or deny answered by tool_rules leaves no approval row, so its decision
+// row is the only record of the call: it names the tool the rules answered.
+func TestToolRuleDecisionRowNamesTheTool(t *testing.T) {
+	for _, tc := range []struct{ tool, source, cause string }{
+		{"Read", ruleSourceToolAllow, `tool "Read"`},
+		{"WebFetch", ruleSourceToolDeny, `tool "WebFetch"`},
+	} {
+		d := toolRuleRow(t, tc.tool)
+		if d.RuleSource != tc.source || d.Cause != tc.cause {
+			t.Errorf("row = %s cause %q, want %s cause %q", d.RuleSource, d.Cause, tc.source, tc.cause)
+		}
+	}
+}
