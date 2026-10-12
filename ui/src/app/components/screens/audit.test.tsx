@@ -388,12 +388,15 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
       ev({ id: "e7", action: "run.requirement.inject", target: "corp-anthropic" }),
       ev({ id: "e8", action: "run.bedrock.configure", target: "run-1" }),
       ev({ id: "e9", action: "run.subscription.inject", target: "run-1" }),
+      ev({ id: "e10", action: "ssh.sync.transfer", target: "run-1" }),
     ]);
     renderScreen();
 
     expect(await screen.findByText(/An ssh authentication attempt against a run's terminal/)).toBeInTheDocument();
     expect(screen.getByText(/Ran a command over the run's ssh channel/)).toBeInTheDocument();
     expect(screen.getByText(/An sftp session against the run's sandbox/)).toBeInTheDocument();
+    expect(screen.getByText(/A wardyn sync session against the run's sandbox/)).toBeInTheDocument();
+    expect(screen.queryByText("ssh.sync.transfer")).not.toBeInTheDocument();
     expect(screen.getByText(/An ssh port forward into the run's sandbox/)).toBeInTheDocument();
     expect(screen.getByText(/Applied a workspace's required egress to the run — ws-1/)).toBeInTheDocument();
     expect(

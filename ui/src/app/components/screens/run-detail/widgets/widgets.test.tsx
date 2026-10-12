@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { AgentRun, AuditEvent, CredentialGrant, EgressDecision } from "../../../../lib/types";
 
 const getFilesMock = vi.fn();
@@ -15,6 +15,10 @@ vi.mock("../../../../lib/api/runs", () => ({
     getResources: (...a: unknown[]) => getResourcesMock(...a),
   },
 }));
+
+// The Sync rows ask /healthz whether SSH is on; every other suite here answers "no SSH".
+const healthMock = vi.fn();
+vi.mock("../../../../lib/api/health", () => ({ health: { health: (...a: unknown[]) => healthMock(...a) } }));
 
 import { HttpError } from "../../../../lib/api/core";
 import { fmtBytes } from "../../../../lib/format";
@@ -29,6 +33,7 @@ import { aheadByHours } from "../../../../lib/test-clock";
 beforeEach(() => {
   getFilesMock.mockReset();
   getResourcesMock.mockReset();
+  healthMock.mockReset().mockResolvedValue({ status: "ok" });
 });
 
 describe("SandboxWidget", () => {
@@ -319,5 +324,108 @@ describe("IdentityWidget", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+// 0.9 (packet M-RN-3 RS1, RS1b): the Identity widget's Sync rows. Ended sessions are the run's
+// ssh.sync.transfer audit rows (bytes_in is INTO the sandbox); open ones are RunDetail.sync.open.
+describe("IdentityWidget: Sync rows", () => {
+  const run = {
+    id: "run-1",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    created_by: "me",
+    agent: "claude-code",
+    repo: "acme/widgets",
+    task: "",
+    confinement_class: "CC2",
+    state: "RUNNING",
+    spiffe_id: "spiffe://x",
+    runner_target: "docker",
+    placement: "remote",
+  } as AgentRun;
+  const transfer = (dir: string, bytesIn: number, bytesOut: number, hoursAgo = 1, extra: Record<string, unknown> = {}): AuditEvent => ({
+    id: `${dir}-${bytesIn}-${hoursAgo}`,
+    time: aheadByHours(-hoursAgo),
+    actor_type: "human",
+    actor: "me",
+    action: "ssh.sync.transfer",
+    outcome: "success",
+    data: { dir, direction: "push", bytes_in: bytesIn, bytes_out: bytesOut, ...extra },
+  });
+  const renderRows = (over: Record<string, unknown> = {}, audit: AuditEvent[] = [], onGoAudit = () => {}) =>
+    render(<IdentityWidget run={{ ...run, ...over } as AgentRun} audit={audit} onGoPolicy={() => {}} onGoAudit={onGoAudit} />);
+
+  it("shows per directory the bytes to and from the sandbox and the last activity, summed over ended sessions", () => {
+    renderRows({}, [transfer("/workspace/app", 4_000_000, 1000), transfer("/workspace/app", 200_000, 0, 2)]);
+    expect(screen.getByText("Sync")).toBeInTheDocument();
+    expect(screen.getByText("/workspace/app")).toBeInTheDocument();
+    // 4,200,000 B into the sandbox, 1,000 B out: the direction is the contract.
+    expect(screen.getByText(`${fmtBytes(4_200_000)} to the sandbox · ${fmtBytes(1000)} from the sandbox`)).toBeInTheDocument();
+    expect(screen.getByText(/^Last activity /)).toBeInTheDocument();
+    expect(screen.queryByText("Byte counts update when a session ends.")).not.toBeInTheDocument();
+  });
+
+  it("an open session says since when, with the note, and a directory never synced before is only that (RS1b)", () => {
+    renderRows({ sync: { open: [{ dir: "/workspace/new-dir", opened_at: aheadByHours(-0.5) }] } });
+    expect(screen.getByText("/workspace/new-dir")).toBeInTheDocument();
+    expect(screen.getByText(/^Open since /)).toBeInTheDocument();
+    expect(screen.getByText("Byte counts update when a session ends.")).toBeInTheDocument();
+    expect(screen.queryByText(/to the sandbox/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Last activity/)).not.toBeInTheDocument();
+  });
+
+  it("merges an open session into its directory's ended totals", () => {
+    renderRows({ sync: { open: [{ dir: "/w", opened_at: aheadByHours(-0.1) }] } }, [transfer("/w", 10, 20)]);
+    expect(screen.getAllByText("/w")).toHaveLength(1);
+    expect(screen.getByText(/^Open since /)).toBeInTheDocument();
+    expect(screen.getByText(`${fmtBytes(10)} to the sandbox · ${fmtBytes(20)} from the sandbox`)).toBeInTheDocument();
+  });
+
+  it("an ended session's error is shown verbatim under its directory", () => {
+    renderRows({}, [transfer("/w", 0, 0, 1, { error: "sftp-server exited 3" })]);
+    expect(screen.getByText("Last session ended with an error: sftp-server exited 3")).toBeInTheDocument();
+  });
+
+  it("shows at most three directories, most recent first, then a link to the Audit tab for the rest", () => {
+    const onGoAudit = vi.fn();
+    renderRows({}, [transfer("/d1", 1, 1, 5), transfer("/d2", 1, 1, 4), transfer("/d3", 1, 1, 3), transfer("/d4", 1, 1, 2), transfer("/d5", 1, 1, 1)], onGoAudit);
+    expect(["/d5", "/d4", "/d3"].every((d) => screen.queryByText(d))).toBe(true);
+    expect(screen.queryByText("/d2")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "and 2 more in the Audit tab" }));
+    expect(onGoAudit).toHaveBeenCalledTimes(1);
+  });
+
+  it("a plain sftp session is its own row with its own bytes", () => {
+    renderRows({}, [{ ...transfer("", 0, 0), action: "ssh.sftp.transfer", data: { bytes: 512, bytes_in: 2_100_000, bytes_out: 512 } }]);
+    expect(screen.getByText("sftp")).toBeInTheDocument();
+    expect(screen.getByText(`${fmtBytes(2_100_000)} to the sandbox · ${fmtBytes(512)} from the sandbox`)).toBeInTheDocument();
+    expect(screen.queryByText("Sync")).not.toBeInTheDocument();
+  });
+
+  it("says Nothing synced yet only for a live run while /healthz reports SSH on", async () => {
+    healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true } });
+    renderRows();
+    expect(await screen.findByText("Nothing synced yet.")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["SSH off", { status: "ok", ssh: { enabled: false } }, {}],
+    ["no answer from /healthz", {}, {}],
+    ["a finished run", { status: "ok", ssh: { enabled: true } }, { state: "SUCCEEDED" }],
+  ])("shows nothing at all when there is nothing synced and: %s", async (_name, health, over) => {
+    healthMock.mockResolvedValue(health);
+    renderRows(over);
+    await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(over.state ? 0 : 1));
+    expect(screen.queryByText("Sync")).not.toBeInTheDocument();
+    expect(screen.queryByText("Nothing synced yet.")).not.toBeInTheDocument();
+  });
+
+  it("a local run has no Sync rows, whatever its audit trail holds", async () => {
+    healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true } });
+    renderRows({ placement: "local", sync: { open: [{ dir: "/w", opened_at: aheadByHours(-1) }] } }, [transfer("/w", 1, 1)]);
+    expect(screen.queryByText("Sync")).not.toBeInTheDocument();
+    expect(screen.queryByText("/w")).not.toBeInTheDocument();
+    expect(healthMock).not.toHaveBeenCalled();
   });
 });
