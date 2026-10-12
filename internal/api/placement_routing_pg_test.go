@@ -146,7 +146,7 @@ func TestPG_PlacementRouting_RefusedBeforeCreateNeverSubstituted(t *testing.T) {
 				return rows
 			}
 			runs := func() int { return len(stored()) }
-			isRunCreate := func(ev types.AuditEvent) bool { return ev.Action == "run.create" }
+			isRunCreate := func(ev types.AuditEvent) bool { return ev.Action == "run.create" && ev.Outcome == "success" }
 			isDenied := func(ev types.AuditEvent) bool { return ev.Action == authz.AuditAction && ev.Target == "runs.placement" }
 			if runs() != 0 || e.runner.creates() != 0 {
 				t.Fatalf("fixture is not empty: %d runs, %d creates", runs(), e.runner.creates())

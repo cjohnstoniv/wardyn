@@ -113,3 +113,29 @@ func (s *Server) revivePlacementDenied(ctx context.Context, run types.AgentRun, 
 		mustJSON(map[string]any{"subject": run.CreatedBy, "reason": placement.ReasonPlacementDenied})))
 	return reviveRefused(placement.ReasonPlacementDenied.Status(), string(placement.ReasonPlacementDenied), placementDeniedMsg(p, c.profile))
 }
+
+// ownerCeiling is the part of the owner's profile a revive re-asserts: its
+// denies, and its name for the audit row.
+type ownerCeiling struct {
+	deny    []string
+	profile string
+	// denyPlacements is the profile's deny_placements, judged against where the run already is.
+	denyPlacements []types.Placement
+}
+
+// reviveCeiling is the OWNER's current ceiling: the profile captured on the
+// run at create, as it stands now. It is not a dispatch lane's ceiling (no
+// principal is resolved; the run row names the profile). No captured profile
+// (an unassigned or super-admin owner) has no profile denies, as at dispatch.
+// A captured profile that no longer exists is refused: its walls cannot be
+// known.
+func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun) (ownerCeiling, *reviveError) {
+	p, ref := s.ownerProfile(ctx, run)
+	switch {
+	case ref != nil:
+		return ownerCeiling{}, reviveRefused(ref.status, ref.reason, ref.msg)
+	case p == nil:
+		return ownerCeiling{}, nil
+	}
+	return ownerCeiling{deny: p.Ceiling.DeniedDomains, profile: p.Name, denyPlacements: p.Limits.DenyPlacements}, nil
+}
