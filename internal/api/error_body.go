@@ -20,6 +20,10 @@ type errorBody struct {
 	// provider is known — never on an unrelated 4xx.
 	Provider string `json:"provider,omitempty"`
 	Kind     string `json:"kind,omitempty"`
+	// Tool is the included tool (tools[].id) a run refusal is ABOUT, so the
+	// console can attach the blocker to that harness. Present only on a refusal
+	// of one included harness.
+	Tool string `json:"tool,omitempty"`
 	// Policy (deny-f2) names the policy whose ceiling refused the request and how
 	// to ask for a change. Present only on a ceiling refusal that carries one.
 	Policy *policyref.Ref `json:"policy,omitempty"`

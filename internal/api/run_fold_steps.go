@@ -97,6 +97,18 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	return true
 }
 
+// stepHarnessSet holds every harness a run-mode request includes to the agent
+// capability, the org roster and the installed gate, and resolves the image
+// that carries the set (run_harness_set.go). Older clients pass untouched.
+func (s *Server) stepHarnessSet(f *runFold, rec *foldRecorder) bool {
+	set, image, refusal := s.harnessSetRefusalFor(f.r, *f.req, f.wsRefs)
+	if refusal.write(s, f.w, f.r) {
+		return false
+	}
+	f.harnesses, f.image = set, image
+	return true
+}
+
 // stepPushRuleSets builds the run's push rules per source-control entry from the
 // resolved spec, at every door, so a remote whose entry cannot be keyed refuses
 // at Review and the preview as it does at create.
@@ -245,7 +257,14 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 // before autonomy because that gate grades this credential (#504). Only create
 // renews an expired AWS sign-in; the preview authorizes the selection without
 // reading any credential and leaves the choice pending when nothing pins it.
+//
+// Every other harness a run-mode request includes is judged the same way, as
+// its own agent with its own requested provider and no workspace pin (only the
+// primary inherits the pin), then the set is held to the one-lane invariant
+// (harnessProvidersConflict). modelCred is the most resident choice, so
+// autonomy grades the deepest credential the sandbox gets.
 func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
+	var ok bool
 	if f.mode == foldPreview {
 		choice, refusal := s.authorizeRunModelProvider(f.r, *f.req, f.wsRefs, true)
 		if refusal.write(s, f.w, f.r) {
@@ -260,16 +279,60 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 				return false
 			}
 		}
-		return true
+		f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, true, false)
+		grantHarnessProviders(f.harnesses, f.harnessChoices)
+		return ok
 	}
-	choice, ok := s.enforceRunModelProvider(f.w, f.r, *f.req, f.spec, f.wsRefs, f.mode == foldCreate)
-	if !ok {
+	var choice runProviderChoice
+	if choice, ok = s.enforceRunModelProvider(f.w, f.r, *f.req, f.spec, f.wsRefs, f.mode == foldCreate); !ok {
 		return false
 	}
 	f.mpChoice = choice
 	f.modelCred = choice.modelCredential()
 	recordProviderHost(rec, choice, f.req.Agent)
-	return true
+	f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, false, f.mode == foldCreate)
+	grantHarnessProviders(f.harnesses, f.harnessChoices)
+	if len(f.harnessChoices) > 1 {
+		f.modelCred = mostResident(f.harnessChoices).modelCredential()
+	}
+	return ok
+}
+
+// judgeHarnessProviders is stepModelProvider's half for the harnesses of set
+// beside the primary (req.Agent), whose choice is primary: preview authorizes
+// the selection alone, the other doors also check the caller's own credential
+// (renew at create only), each as its own agent with its own requested
+// provider and no workspace pin. Then the set is held to the one-lane
+// invariant (harnessProvidersConflict). It writes its own refusal.
+func (s *Server) judgeHarnessProviders(w http.ResponseWriter, r *http.Request, req createRunRequest, spec types.RunPolicySpec,
+	set []types.RunHarness, rec *foldRecorder, primary runProviderChoice, preview, renew bool,
+) ([]harnessChoice, bool) {
+	choices := make([]harnessChoice, 0, len(set))
+	for _, h := range set {
+		choice := primary
+		if h.Harness != req.Agent {
+			hreq := req
+			hreq.Agent, hreq.ModelProvider = h.Harness, h.ModelProviderID
+			ok := true
+			if preview {
+				var refusal *runRefusal
+				choice, refusal = s.authorizeRunModelProvider(r, hreq, nil, true)
+				ok = !refusal.write(s, w, r)
+			} else {
+				choice, ok = s.enforceRunModelProvider(w, r, hreq, spec, nil, renew)
+			}
+			if !ok {
+				return nil, false
+			}
+			recordProviderHost(rec, choice, h.Harness)
+		}
+		choices = append(choices, harnessChoice{harness: h.Harness, choice: choice})
+	}
+	if a, b, conflict := harnessProvidersConflict(choices); conflict {
+		runError(http.StatusUnprocessableEntity, reasonHarnessProvidersConflict, harnessProvidersConflictMsg(harnessName(a), harnessName(b))).forTool(b).write(s, w, r)
+		return nil, false
+	}
+	return choices, true
 }
 
 // stepAutonomy is the posture-gated autonomy, resolved once and enforced at

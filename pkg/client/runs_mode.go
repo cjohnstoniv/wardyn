@@ -109,6 +109,10 @@ type RunStartup struct {
 	Tool string `json:"tool,omitempty"`
 	// Command is the startup command a command startup runs once at boot.
 	Command string `json:"command,omitempty"`
+	// Prompt is the starting prompt a harness startup opens with: the startup
+	// harness's first message. A harness startup only; it is task text, held to
+	// the same scans and limits as a task.
+	Prompt string `json:"prompt,omitempty"`
 }
 
 // StartFolderKind says where the run's one working directory comes from.

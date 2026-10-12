@@ -375,6 +375,13 @@ func warnCeilingDeniedWorkspaceEgress(ceiling governanceCeiling, wsRefs []types.
 // already detached from client cancellation.
 func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest, runID uuid.UUID, wsRefs []types.Workspace) (string, bool) {
 	image := agentImage(req.Agent, s.cfg.AgentImages)
+	if req.UsesRunMode() {
+		// The set's image (the fold already refused a set no image carries), so a
+		// run with no harness starts from the agent base image. The cases below
+		// keep their precedence over it.
+		fact, _ := harnessSetImage(harnessSet(req), s.cfg.AgentImages, customImageRequested(req, wsRefs))
+		image = fact.Ref
+	}
 
 	// Shared FAILED path for the two explicit build lanes (BYOI + devcontainer):
 	// CAS from PENDING so a run a concurrent kill already moved to KILLED is not
