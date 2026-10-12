@@ -70,6 +70,8 @@ export const CHANGE_HEADING = {
   restart: (date: string) => `Blocked when the run was restarted on ${date}`, // S-21
   org_disk: "Disk size set from your organization's default", // S-22
   launch: "Set by Wardyn when the run started", // S-23
+  // DRAFT (canon pending owner approval): the policy_overlay cause, the policy keys the run's setup laid onto the default.
+  overlay: "Set by the policy you chose for this run",
 } as const;
 
 export type PlainCause = Exclude<RunPolicyCause, "limits" | "profile" | "restart">;

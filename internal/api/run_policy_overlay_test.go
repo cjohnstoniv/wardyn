@@ -6,6 +6,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -279,5 +280,76 @@ func TestPolicyIDWithOverridesParity(t *testing.T) {
 		if w := doSSO(t, srv, http.MethodPost, door.path, ovCookie(t), overlay); w.Code != http.StatusBadRequest || errorReason(w) != reasonPolicyOverlayConflict {
 			t.Errorf("%s: an overlay beside policy_id = %d %s, want 400 %s", door.name, w.Code, w.Body.String(), reasonPolicyOverlayConflict)
 		}
+	}
+}
+
+// withPolicyKeys copies exactly the named key, for every top-level policy key:
+// one it skipped would silently drop that key of a document's overlay.
+func TestWithPolicyKeysCopiesEveryPolicyKey(t *testing.T) {
+	var from types.RunPolicySpec
+	v := reflect.ValueOf(&from).Elem()
+	for i := range v.NumField() {
+		switch f := v.Field(i); f.Kind() {
+		case reflect.Slice:
+			f.Set(reflect.MakeSlice(f.Type(), 1, 1))
+		case reflect.Pointer:
+			f.Set(reflect.New(f.Type().Elem()))
+		case reflect.Bool:
+			f.SetBool(true)
+		case reflect.Int:
+			f.SetInt(1)
+		case reflect.String:
+			f.SetString("x")
+		default:
+			t.Fatalf("%s is a %s this test cannot fill", v.Type().Field(i).Name, f.Kind())
+		}
+	}
+	for i := range policySpecType.NumField() {
+		key, _, _ := strings.Cut(policySpecType.Field(i).Tag.Get("json"), ",")
+		out := reflect.ValueOf(withPolicyKeys(types.RunPolicySpec{}, from, []string{key}))
+		for j := range out.NumField() {
+			if copied := !out.Field(j).IsZero(); copied != (i == j) {
+				t.Errorf("key %s: field %s copied = %v", key, policySpecType.Field(j).Name, copied)
+			}
+		}
+	}
+}
+
+// policy.overlay.apply is written only for a create the policy step let through:
+// a card edit refused after the overlay was laid leaves no row behind.
+func TestPolicyOverlayRefusedCreateLeavesNoApplyRow(t *testing.T) {
+	srv, st := ovOverlayFixture(t)
+	body := `{"agent":"claude-code","task":"t","policy_overlay":{"denied_domains":["x.example"]},` +
+		`"overrides":{"agent":{"add_secrets":[{"secret_name":"theirs","host":"api.anthropic.com"}]}}}`
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", ovCookie(t), body); w.Code == http.StatusCreated {
+		t.Fatalf("create = %d, want a refusal: %s", w.Code, w.Body.String())
+	}
+	for _, ev := range st.audit.snapshot() {
+		if ev.Action == "policy.overlay.apply" {
+			t.Errorf("a refused create wrote %s %s", ev.Action, ev.Data)
+		}
+	}
+}
+
+// The run page explains a key the overlay replaced as the person's overlay, its
+// removals and additions alike; a key it left alone keeps its usual cause.
+func TestRunPolicyViewOverlayCause(t *testing.T) {
+	base := types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com", ovHostInside}}
+	resolved := types.RunPolicySpec{MinConfinementClass: types.CC3, AllowedDomains: []string{"api.anthropic.com", "mine.example"},
+		DeniedDomains: []string{"x.example"}}
+	srv, st := pvFixture(t, &capStore{})
+	run := st.seedRun(pvOwner, types.RunRunning)
+	src := pvSource(policyKindProfile, nil, "walled", true, base)
+	src.Overlay = []string{"allowed_domains", "min_confinement_class"}
+	st.rows(run.ID, pvCreate(nil, src), pvResolve(resolved, false))
+	_, resp := pvMember(t, pvOwner).get(t, srv, run.ID)
+	if c := pvChange(resp.Changes, causeOverlay, fieldAllowed); c == nil || !slices.Equal(c.Added, []string{"mine.example"}) || !slices.Equal(c.Removed, []string{ovHostInside}) {
+		t.Errorf("the overlay's hosts: %+v in %+v", c, resp.Changes)
+	}
+	if c := pvChange(resp.Changes, causeOverlay, fieldMinCC); c == nil {
+		t.Errorf("the overlay's confinement: %+v", resp.Changes)
+	}
+	if c := pvChange(resp.Changes, causeLimits, fieldDenied); c == nil || !slices.Equal(c.Added, []string{"x.example"}) {
+		t.Errorf("a key the overlay left alone lost its cause: %+v", resp.Changes)
 	}
 }

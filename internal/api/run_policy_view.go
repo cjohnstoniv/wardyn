@@ -177,7 +177,7 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	ev.diskFilled = envelope.DiskMiBFilled
 	ev.bounded = create.Source != nil && create.Source.Bounded
 	if create.Source != nil {
-		ev.clamp = create.ClampWarnings
+		ev.clamp, ev.overlay = create.ClampWarnings, create.Source.Overlay
 	} else {
 		ev.legacyGitBroker = s.holdsGitHubGrant(ctx, run.ID)
 	}

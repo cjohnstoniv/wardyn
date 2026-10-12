@@ -131,7 +131,7 @@ func (s *Server) applyPolicyOverlay(ctx context.Context, r *http.Request, base t
 		spec = withPolicyKeys(base, bounded, keys)
 		warns = slices.DeleteFunc(mergedWarns, func(w string) bool { return slices.Contains(baseWarns, w) })
 		if !dryRun {
-			s.auditUserPolicyDrops(ctx, r, slices.DeleteFunc(drops, func(d capDrop) bool { return !slices.Contains(keys, capDropField(d)) }))
+			s.auditPolicyDrops(ctx, r, "runs.policy_overlay", slices.DeleteFunc(drops, func(d capDrop) bool { return !slices.Contains(keys, capDropField(d)) }))
 		}
 	}
 	if err := validatePolicySpec(spec); err != nil {
@@ -139,13 +139,17 @@ func (s *Server) applyPolicyOverlay(ctx context.Context, r *http.Request, base t
 	}
 	overlaid := redactSpecForUser(auditablePolicy(merged))
 	src.Overlay, src.overlaid = keys, &overlaid
-	// Keys only, never values: the run id is not minted yet, and run.create
-	// carries the same keys bound to it (see policy.inline.apply).
-	if !dryRun {
+	return spec, warns, nil
+}
+
+// auditPolicyOverlay records a launch's overlay once the policy step has passed
+// every check, as policy.inline.apply is. Keys only, never values: the run id is
+// not minted yet, and run.create carries the same keys bound to it.
+func (s *Server) auditPolicyOverlay(ctx context.Context, r *http.Request, keys []string) {
+	if len(keys) > 0 {
 		s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 			"policy.overlay.apply", "", "success", mustJSON(map[string]any{"keys": keys})))
 	}
-	return spec, warns, nil
 }
 
 // capDropField is the policy key a member-pipeline drop took its entry from.
