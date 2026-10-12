@@ -94,6 +94,9 @@ type preflightResponse struct {
 	// empty until that lane fills it.
 	RunnerPool  *client.ResolvedRunnerPool `json:"runner_pool,omitempty"`
 	RunnerPools []client.RunnerPoolChoice  `json:"runner_pools"`
+	// Access is what the run brings in (accessFacts), the same projection the
+	// policy preview answers for the same request.
+	Access *accessBlock `json:"access,omitempty"`
 }
 
 // preflightBurst and preflightLimiterMaxPeople size the per-person preflight
@@ -369,5 +372,12 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		ceiling: f.ceiling, mpChoice: f.mpChoice, pushSets: f.pushSets, autonomy: f.autonomy,
 		credentialChecked: true, autonomyResolved: true,
 	}, resp.GitCredential)
+	access, err := s.accessFor(r, accessInputs{req: f.req, spec: f.spec, prov: f.prov, source: f.source,
+		scmSite: f.scmSite, mpChoice: f.mpChoice, facts: resp.Components})
+	if err != nil {
+		writeServerError(w, r, "resolve capability", err)
+		return
+	}
+	resp.Access = access
 	writeJSON(w, http.StatusOK, resp)
 }

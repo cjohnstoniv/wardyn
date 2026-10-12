@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"log/slog"
@@ -245,8 +246,8 @@ func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Requ
 //
 // wsRefs is the run's referenced onboarded workspaces, resolved by the caller
 // (it also feeds the workspace cred binding + image resolution). legacyRepo is
-// the request's single `repo` field, which the declaresRepo gate below needs
-// and grantWiring cannot supply. scmSite is the site-config snapshot the
+// the request's single `repo` field, which deriveRunEgress's repository test
+// needs and grantWiring cannot supply. scmSite is the site-config snapshot the
 // autonomy gate graded the SCM-host lane from (resolveRunAutonomy), so the
 // hosts dispatched here are the hosts that were graded. Extracted verbatim
 // from handleCreateRun.
@@ -268,44 +269,32 @@ func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *type
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.egress.add",
 			runID.String(), "success", mustJSON(data)))
 	}
-	auditAdded("workspace", unionWorkspaceEgress(spec, wsRefs))
-	// Repo clone host(s) each referenced workspace needs: a
-	// non-GitHub HTTPS clone (GitLab, self-hosted git) reaches its forge as an
-	// ordinary egress host, and nothing else in this union adds it — so a real run
-	// of a workspace whose only access is anonymous read got NO clone host and the
-	// clone was proxy-denied, even though the confined Verify (which unions
-	// workspaceCloneEgress via confinedEgressDomains) proved it. Direct GitHub
-	// candidates were bounded before grading; brokered clones need no host. This makes
-	// promoteSkipHosts' "wired into every scan/verify for free" comment true for a
-	// real run too.
-	var cloneAdded []string
-	for _, ws := range wsRefs {
-		cloneAdded = append(cloneAdded, unionAllowedDomains(spec, workspaceCloneEgress(ws))...)
+	// The dispatch-only lanes come from deriveRunEgress, the function the dry
+	// doors' stepDerivedEgress calls, so Review names the hosts launched here.
+	for _, d := range deriveRunEgress(spec, wsRefs, legacyRepo, scmSite, wiredLaneGrants(spec.EligibleGrants, gw)) {
+		auditAdded(d.kind, d.added)
 	}
-	auditAdded("workspace_clone", cloneAdded)
-	// Site-config SCM hosts (GHES / ADO Server) are a CLONE lane, so union them
-	// only when this run actually declares a repo: a sealed
-	// local-dir-only analysis run must not inherit an unauthenticated HTTPS lane to
-	// every internal SCM host the operator declared for GHES clone runs. A repo is
-	// declared via spec.WorkspaceRepos, the legacy single `repo` field, or any
-	// git-clone grant lane.
-	//
-	// legacyRepo is checked DIRECTLY, not via gw.gitGrants: that fold is a
-	// no-op when gw.firstGitHubGrantID == nil, i.e. whenever the run has no
-	// github grant, and repoCloneURL (runs_scm.go) accepts a full https:// URL, so
-	// `--repo https://ghes.corp.example/team/app` is an
-	// ordinary credential-free HTTPS clone whose ONLY egress source is this
-	// union — without checking legacyRepo directly, declaresRepo would read false
-	// and the proxy would deny the clone. The gate's actual intent (a sealed
-	// local-dir-only run inherits no SCM lane) is unchanged: no repo, no union.
-	declaresRepo := len(spec.WorkspaceRepos) > 0 || strings.TrimSpace(legacyRepo) != "" ||
-		gw.firstGitHubGrantID != nil ||
-		len(gw.gitGrants) > 0 || len(gw.gitPATGrants) > 0 || len(gw.sshGrants) > 0
-	if declaresRepo {
-		auditAdded("site_config", unionSiteConfigScmHosts(spec, scmSite))
-	}
-	auditAdded("ssh", unionAllowedDomains(spec, gw.sshEgress))
-	auditAdded("git_pat", unionAllowedDomains(spec, gw.gitPATEgress))
+}
+
+// wiredLaneGrants is grants without the ones whose lane persistRunGrants or
+// applySSHLaneWarnings declined to wire: a vetoed lane keeps its grant row (an
+// eligibility record nothing mints) but must add no host and declare no repo.
+// A github_token counts while any github lane is wired, which is all the
+// repository test asks of it.
+func wiredLaneGrants(grants []types.GrantSpec, gw grantWiring) []types.GrantSpec {
+	return slices.DeleteFunc(slices.Clone(grants), func(g types.GrantSpec) bool {
+		switch g.Kind {
+		case types.GrantGitHubToken:
+			return gw.firstGitHubGrantID == nil && len(gw.gitGrants) == 0
+		case types.GrantGitPAT:
+			sc, err := types.DecodeGitPATScope(g.Scope)
+			return err != nil || gw.gitPATGrants[sc.Host] == ""
+		case types.GrantSSHKey:
+			host, _, _, _, err := sshKeyScopeFields(g.Scope)
+			return err != nil || gw.sshGrants[host] == ""
+		}
+		return false
+	})
 }
 
 // warnCeilingDeniedWorkspaceEgress names, at CREATE time, every host an operator

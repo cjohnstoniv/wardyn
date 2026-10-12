@@ -4,6 +4,7 @@
  */
 
 import type { ComponentFact } from "./components";
+import type { AccessFacts } from "./new-run-access";
 import type { AllowedImage, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
 import type { RunPolicySpec } from "./policy";
 import type { ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
@@ -79,4 +80,6 @@ export interface PolicyPreviewResult {
   // The preflight's pool facts, with the same meaning.
   runner_pool?: ResolvedRunnerPool;
   runner_pools?: RunnerPoolChoice[];
+  // What the draft brings in, Review's same block (optional so an older server still types).
+  access?: AccessFacts;
 }
