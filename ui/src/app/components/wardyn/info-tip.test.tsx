@@ -76,4 +76,26 @@ describe("InfoTip", () => {
     await sleep(HOVER_GRACE_MS * 3);
     expect(content()).toBeInTheDocument();
   });
+
+  it("a keyboard open moves focus into the named content and points the trigger at it; Esc returns focus", async () => {
+    const { user, trigger } = setup();
+    await user.tab();
+    await user.keyboard("{Enter}");
+    const dialog = screen.getByRole("dialog", { name: "About Wall" });
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    expect(trigger).toHaveAttribute("aria-describedby", dialog.id);
+    expect(trigger).toHaveAccessibleDescription("The Wall keeps the agent off your network.");
+    await user.keyboard("{Escape}");
+    expect(content()).toBeNull();
+    expect(trigger).toHaveFocus();
+    expect(trigger).not.toHaveAttribute("aria-describedby");
+  });
+
+  it("a hover open leaves focus where it was", async () => {
+    const { user, trigger } = setup();
+    await user.hover(trigger);
+    await screen.findByText("The Wall keeps the agent off your network.", {}, SLOW);
+    expect(document.body).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-describedby");
+  });
 });

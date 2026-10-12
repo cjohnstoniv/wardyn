@@ -99,7 +99,8 @@ export function Tooltip({
     <Popover open={open} onOpenChange={hover.onOpenChange}>
       <PopoverAnchor asChild>
         {React.cloneElement(children, {
-          "aria-describedby": open ? id : child["aria-describedby"],
+          // Keep the control's own description (a disabled reason): the tooltip adds to it.
+          "aria-describedby": [child["aria-describedby"], open ? id : null].filter(Boolean).join(" ") || undefined,
           onPointerEnter: both(child.onPointerEnter, hover.triggerProps.onPointerEnter),
           onPointerLeave: both(child.onPointerLeave, hover.triggerProps.onPointerLeave),
           onFocus: both(child.onFocus, (e: React.FocusEvent) => {
