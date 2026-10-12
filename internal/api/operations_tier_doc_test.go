@@ -268,6 +268,7 @@ var docTierUndocumented = map[string]string{
 	"GET /api/v1/service-identities/{name}":    "0.9 F-1508: as the POST above",
 	"PATCH /api/v1/service-identities/{name}":  "0.9 F-1508: as the POST above",
 	"DELETE /api/v1/service-identities/{name}": "0.9 F-1508: as the POST above",
+	"POST /api/v1/tokens/{id}/move":            "0.9 F-1508: the tier-table row is the docs pass's",
 }
 
 // TestOperationsTierTableMatchesRouteMatrix pins the "What admin-only still

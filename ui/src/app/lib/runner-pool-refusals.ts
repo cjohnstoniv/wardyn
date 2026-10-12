@@ -39,6 +39,7 @@ export const BARRIER_LABEL = { CC1: "Fence", CC2: "Wall", CC3: "Vault" } as cons
 /** Why the platform ended a run (types.RunEndReason), with the sentence the run detail and the audit view say. */
 export const RUN_END_REASON_SENTENCE = {
   max_lifetime_reached: "This run reached its maximum lifetime and was ended.",
+  end_reached: "This run reached its end time and was ended.",
 } as const;
 
 /** The sentences, byte for byte what internal/runnerpool/reasons.go says. */

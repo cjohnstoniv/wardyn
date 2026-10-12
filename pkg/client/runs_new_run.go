@@ -80,6 +80,37 @@ type RunOverrides struct {
 	// each Git section edits its own set and the proxy's git route applies the
 	// set matching the repository's provider and organisation.
 	PushRules []PushRuleOverride `json:"push_rules,omitempty"`
+	// Hosts adds to the run-wide allowed and denied lists on top of the chosen
+	// base policy. The base's own hosts are read-only.
+	Hosts *RunHostOverrides `json:"hosts,omitempty"`
+	// Egress sets the run-wide egress scalars on top of the chosen base policy.
+	Egress *RunEgressOverrides `json:"egress,omitempty"`
+}
+
+// RunEgressOverrides are the run-wide egress choices a person makes beside the
+// base policy's own. Both are bounded by the ceiling like any host they add.
+type RunEgressOverrides struct {
+	// FirstUseApproval is how a destination no list names is handled:
+	// always_deny, deny_with_review or wait_for_review.
+	FirstUseApproval types.FirstUseMode `json:"first_use_approval,omitempty"`
+	// AllowAllEgress true requests every other public destination (the deny
+	// list still wins). False is not an edit: omit it.
+	AllowAllEgress *bool `json:"allow_all_egress,omitempty"`
+}
+
+// RunHostOverrides are the hosts a person adds to the run as a whole, beside the
+// chosen base policy's own (the agent component's hosts are AgentOverrides').
+type RunHostOverrides struct {
+	// AddAllowed are destinations to reach. Bare DNS names only; the ceiling
+	// still bounds them, and the preview shows the ones it dropped.
+	AddAllowed []string `json:"add_allowed,omitempty"`
+	// AddDenied are destinations to refuse. A host or a wildcard; a deny wins
+	// over every allow, so it only takes reach away.
+	AddDenied []string `json:"add_denied,omitempty"`
+	// RemoveAllowed and RemoveDenied would drop a host of the base policy. They
+	// are always refused (override_refused): the base is read-only on a run.
+	RemoveAllowed []string `json:"remove_allowed,omitempty"`
+	RemoveDenied  []string `json:"remove_denied,omitempty"`
 }
 
 // AgentOverrides are the edits on the agent component.
@@ -206,8 +237,46 @@ func (o RunOverrides) Items() []OverrideItem {
 			out = append(out, OverrideItem{types.OverridePushReview, types.OverrideAdd, p.PushRuleKey() + " " + path})
 		}
 	}
+	if h := o.Hosts; h != nil {
+		for _, host := range h.AddAllowed {
+			kind := types.OverrideRunHostAllow
+			if types.IsWildcardHost(host) {
+				kind = types.OverrideRunHostWildcard
+			}
+			out = append(out, OverrideItem{kind, types.OverrideAdd, host})
+		}
+		for _, host := range h.AddDenied {
+			out = append(out, OverrideItem{types.OverrideRunHostDeny, types.OverrideAdd, host})
+		}
+	}
+	if e := o.Egress; e != nil {
+		if e.FirstUseApproval != "" {
+			out = append(out, OverrideItem{types.OverrideFirstUseApproval, types.OverrideSet, string(e.FirstUseApproval)})
+		}
+		if e.AllowAllEgress != nil {
+			out = append(out, OverrideItem{types.OverrideAllowAllEgress, types.OverrideSet, "allow_all_egress"})
+		}
+	}
 	return out
 }
+
+// Pruned is o with every block that holds no edit dropped, so a record of what
+// took effect carries no empty shell.
+func (o RunOverrides) Pruned() RunOverrides {
+	if a := o.Agent; a != nil && len(a.AddHosts)+len(a.RemoveHosts)+len(a.AddSecrets)+len(a.RemoveSecrets)+len(a.ToolRules) == 0 {
+		o.Agent = nil
+	}
+	if h := o.Hosts; h != nil && len(h.AddAllowed)+len(h.AddDenied)+len(h.RemoveAllowed)+len(h.RemoveDenied) == 0 {
+		o.Hosts = nil
+	}
+	if e := o.Egress; e != nil && e.FirstUseApproval == "" && e.AllowAllEgress == nil {
+		o.Egress = nil
+	}
+	return o
+}
+
+// Empty reports whether a recorded diff holds no edit and no clamped edit.
+func (d RunOverridesDiff) Empty() bool { return len(d.Pruned().Items()) == 0 && len(d.Clamped) == 0 }
 
 // The kinds a LocalPlacementFact is about.
 const (

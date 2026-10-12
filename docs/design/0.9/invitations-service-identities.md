@@ -166,7 +166,7 @@ Each row of `?minted_for_others=true` gains `disposition`, derived at read. Revo
 | Admin-token runs are operator-owned and read the operator namespace | `TestOwnerOnlyGrant_OperatorOwnedRunReadsTheOperatorRow`, `TestRunComponents_OperatorOwnedRunReadsTheOperatorNamespace` |
 | The admin token still authenticates | `TestAPITokenAuth_AdminTokenStillWorks` |
 | A CI principal that is an IdP user keeps its own token | `TestAPITokens_CreateListRevoke` |
-| Local mode, with no sign-in, is unchanged; both new families answer `409` `needs_sso` there | `TestServiceIdentity_LocalModeRefusesAndRunsStillLaunch` (new) |
+| Local mode is unchanged; service identities answer `409` `needs_sso` there, invitation claims per [§3.4](#34-who-gets-what) | `TestServiceIdentity_LocalModeRefusesAndRunsStillLaunch` (new) |
 | The upgrade itself changes no token | `TestMigration0196_TokensAndRunsUnchanged` (new): seeded 0195 database, every `api_tokens` and `agent_runs` row byte-identical after |
 
 ## 7. Wire
@@ -312,4 +312,6 @@ The owner accepted every recommendation except D11, amended, and re-ruled four r
 | D16 | **Amended.** Console: the claim card, the sponsor's service-token mint card and the token-state column, in one mock round. Create, suspend and retire stay API and CLI only; the CLI has no token mint |
 | D17 | Create, suspend and retire on the security tier, as `POST /people` |
 
-**Four-eyes on create and sponsor change (owner ruling, 2026-10-11, extends D10 and D17).** A service identity takes any existing user type directly, and its ceiling is not bounded by the sponsor's (D10). With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, a create and any `PATCH` that changes the sponsor are therefore held as governance change kind `service_identity` and need a distinct human on the security tier; the `PATCH` is held whole. Description, suspend, unsuspend and retire stay direct (D17). An approval applies only against the reviewed state, otherwise `409 governance_change_stale`. No migration: `governance_changes.target_kind` has no CHECK. See [governance writes](../../operations/governance-writes.md).
+**Four-eyes on create and sponsor change (owner ruling, 2026-10-11, extends D10 and D17).** A service identity takes any existing user type directly, and its ceiling is not bounded by the sponsor's (D10).
+
+With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, a create and any `PATCH` that changes the sponsor are therefore held as governance change kind `service_identity` and need a distinct human on the security tier; the `PATCH` is held whole. Description, suspend, unsuspend and retire stay direct (D17). An approval applies only against the reviewed state, otherwise `409 governance_change_stale`. No migration: `governance_changes.target_kind` has no CHECK. See [governance writes](../../operations/governance-writes.md).

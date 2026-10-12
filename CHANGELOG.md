@@ -78,6 +78,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   sponsor changes. Existing runs keep it empty, and under a second-human switch a service identity's run without it
   is refused for every decider: decide such a run's pending approvals with the admin token, or let the run time out
   and launch it again.
+- Config keys that hold a secret word (for example `CLIENT_SECRET`, `SECRET_FILE`, `*_IMAGE_PULL_SECRET`) are now
+  refused in templates and component config; move such values to a secret reference.
+- Proxy compatibility: a run carrying `push_rule_base` or `harness_credentials` keys needs a proxy that reads
+  them. An older proxy refuses them under strict decode, so upgrade proxies together with wardynd.
 
 ### Added
 
@@ -257,6 +261,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- Per-run overrides: a narrowing edit on a run with no chosen policy keeps the default's workspace mounts and
+  onboarded repositories. The Azure DevOps card narrows within the provider's default profile when the policy
+  names no capabilities. `remove_secrets` accepts only your own stored secrets and refuses any other name the
+  same way. A launch audits the additions your egress capability drops. Git component facts show a push rule you
+  added for an organisation.
+- `wardyn governance plan` now lists the write `set` makes when a composed profile's base was renamed on the
+  server.
 - `wardyn site-config set` restores a document captured with `get` whatever the stored egress baseline (after a
   reset, or after the security tier moved it): the baseline stays as stored and `set` warns only when the file
   asserted a different one. The SDK's `PutSiteConfig` still sends the baseline and gets the server's refusal;

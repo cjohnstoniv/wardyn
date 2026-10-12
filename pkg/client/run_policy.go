@@ -55,6 +55,17 @@ type RunPolicySource struct {
 	Deleted       bool       `json:"deleted,omitempty"`
 	Preset        string     `json:"preset,omitempty"`
 	PresetVersion int        `json:"preset_version,omitempty"`
+	// OverridesDiff is what the person changed on the New Run cards: the edits
+	// that stood, never a secret value. Absent for a run they did not edit.
+	OverridesDiff *RunOverridesDiff `json:"overrides_diff,omitempty"`
+}
+
+// RunOverridesDiff is a run's recorded New Run edits (policy_source.overrides_diff
+// on run.create, and RunPolicySource.OverridesDiff on the run). Clamped lists the
+// edits the person's ceiling then dropped, as "field value".
+type RunOverridesDiff struct {
+	RunOverrides
+	Clamped []string `json:"clamped,omitempty"`
 }
 
 // RunPolicyChange is one group of entries changed at launch for one Cause:

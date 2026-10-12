@@ -123,6 +123,7 @@ type componentFactInputs struct {
 	scmSite           types.SiteConfig
 	ceiling           governanceCeiling
 	mpChoice          runProviderChoice
+	pushSets          []types.PushRuleSet
 	autonomy          types.AutonomyResolution
 	credentialChecked bool
 	autonomyResolved  bool
