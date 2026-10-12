@@ -597,6 +597,12 @@ func TestPG_RunnerActions_RevokeKillsRunsAndSettlesActionsInOneCommit(t *testing
 	if _, err := f.st.RevokeRunner(ctx, f.rn.ID, time.Now(), "security-admin", ""); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a second revoke = %v, want ErrNotFound", err)
 	}
+	if _, err := f.st.ClaimRunner(ctx, f.rn.ID, f.rn.Owner, f.rn.KeyFingerprint, time.Now().UTC()); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("claiming a revoked runner = %v, want ErrConflict", err)
+	}
+	if got, _ := f.st.GetRunner(ctx, f.rn.ID); got.State != types.RunnerRevoked || got.RevokedAt == nil {
+		t.Fatalf("after a refused claim the runner is %s, want still revoked", got.State)
+	}
 	if _, _, err := f.st.QueueRunnerAction(ctx, f.action(open, types.RunnerActionEnd, uuid.Nil)); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("queueing for a revoked runner = %v, want ErrNotFound", err)
 	}
