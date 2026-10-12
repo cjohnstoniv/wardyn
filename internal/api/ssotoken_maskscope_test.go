@@ -5,7 +5,10 @@ package api
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -56,6 +59,50 @@ func TestUploadSSOToken_MaskPatternsAreRunScoped(t *testing.T) {
 	}
 	if !containsSecret(reg.Snapshot(runID), poison) {
 		t.Error("the captured value is not masked for the login run that produced it")
+	}
+}
+
+// uploadWithMaskWriteFailing PUTs a valid capture while the masking store refuses
+// the run's values, returning the answer, the harness and the secret store.
+func uploadWithMaskWriteFailing(t *testing.T) (*httptest.ResponseRecorder, *harness, *memSecrets) {
+	t.Helper()
+	h := newHarness(t)
+	runID := uuid.New()
+	p := defaultUploadProvider()
+	st := ssoBindingStore{run: loginRunFor(runID), events: uploadStamp(runID, p, uploadOwner), siteCfg: uploadSite(p)}
+	sec := &memSecrets{m: map[string][]byte{}}
+	reg := secretmask.NewRegistry()
+	reg.SetBackend(&gapCovMaskBackend{putRunErr: errors.New("mask store unavailable")})
+	cfg := baseTestConfig(h, st)
+	cfg.Secrets = sec
+	cfg.BedrockRegion = operatorRegion
+	cfg.MaskRegistry = reg
+	srv := New(cfg)
+	h.srv = srv
+	w := do(t, srv, http.MethodPut, "/api/v1/internal/sso-token/"+runID.String(), h.mintRunToken(t, runID),
+		ssoBlobBody(operatorStartURL, operatorRegion, "aws-sso-access-token-value"))
+	return w, h, sec
+}
+
+// TestUploadSSOToken_MaskWriteFailureRefuses: a capture whose values cannot be
+// recorded for masking is answered 503 mask_state_unavailable and writes no
+// capture row.
+func TestUploadSSOToken_MaskWriteFailureRefuses(t *testing.T) {
+	w, h, _ := uploadWithMaskWriteFailing(t)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "mask_state_unavailable") {
+		t.Fatalf("upload = %d %s, want 503 mask_state_unavailable", w.Code, w.Body.String())
+	}
+	if auditHas(h.audit.events, "harness.credential.capture") {
+		t.Error("a capture row was written for a refused capture")
+	}
+}
+
+// TestUploadSSOToken_MaskWriteFailureStoresNothing: the refused capture is not
+// stored either, so the person's credential is exactly what it was.
+func TestUploadSSOToken_MaskWriteFailureStoresNothing(t *testing.T) {
+	_, _, sec := uploadWithMaskWriteFailing(t)
+	if _, ok := uploadedBlob(sec, uploadOwner); ok {
+		t.Fatal("the credential was stored although its capture was refused")
 	}
 }
 
