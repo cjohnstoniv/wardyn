@@ -127,8 +127,12 @@ func (s *Server) templateRoute(w http.ResponseWriter, r *http.Request, withID bo
 }
 
 // readableTemplate loads id (revision 0 = current) and answers the 404 a
-// missing template gets when the caller may not read it.
-func readableTemplate(w http.ResponseWriter, r *http.Request, ts store.TemplateStore, c templateCaller, id uuid.UUID, revision int) (types.RunTemplate, bool) {
+// missing template gets when the caller may not read it. The one exception is a
+// write (forWrite: PUT, DELETE) to a group template that the caller's missing or
+// truncated group snapshot cannot answer: that is 403 group_unverified, as
+// templateDenialRefusal says, since the caller already holds the id and only
+// signing in again helps.
+func readableTemplate(w http.ResponseWriter, r *http.Request, ts store.TemplateStore, c templateCaller, id uuid.UUID, revision int, forWrite bool) (types.RunTemplate, bool) {
 	var t types.RunTemplate
 	var err error
 	if revision > 0 {
@@ -143,7 +147,12 @@ func readableTemplate(w http.ResponseWriter, r *http.Request, ts store.TemplateS
 	case err != nil:
 		writeServerError(w, r, "read template", err)
 		return t, false
-	case types.TemplateAuthorize(c.actor, t.Owner, types.TemplateRead) != types.TemplateAllowed:
+	}
+	switch d := types.TemplateAuthorize(c.actor, t.Owner, types.TemplateRead); {
+	case d == types.TemplateDenyGroupUnverified && forWrite:
+		writeErrorReason(w, http.StatusForbidden, reasonTemplateGroupUnverified, templateGroupUnverifiedMsg())
+		return t, false
+	case d != types.TemplateAllowed:
 		writeTemplateNotFound(w)
 		return t, false
 	}
@@ -217,7 +226,7 @@ func (s *Server) getTemplate(w http.ResponseWriter, r *http.Request, revision in
 	if !ok {
 		return
 	}
-	t, ok := readableTemplate(w, r, ts, c, id, revision)
+	t, ok := readableTemplate(w, r, ts, c, id, revision, false)
 	if !ok {
 		return
 	}

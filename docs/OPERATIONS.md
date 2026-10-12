@@ -1904,7 +1904,7 @@ everyone, or a group's template managers publish to that group (`/api/v1/templat
 Migration `0161_run_templates` adds `run_templates`, the immutable `run_template_revisions`, `template_group_admins`
 and `template_group_labels`.
 
-- A template is content, never admission: using one re-checks the user's current policy, credentials, pools and drives.
+- A template is content, never admission: it grants nothing.
   It holds references (secret names, workspace and drive ids), never values, and the people it is shared with see those
   names.
 - Each audience holds at most 200 templates per person, 200 per group and 500 for the organisation, counted under a
@@ -1920,10 +1920,11 @@ and `template_group_labels`.
   - That identifier is what access follows. A group deleted and re-created under the same identifier (a name-based
     provider) reads and manages the old group's templates; delete those templates first, or use a provider whose group
     identifiers are never reused.
-  - A grant to a person the identity directory knows by exactly that name is stored by their principal, so erasure
-    finds it. A grant to an email no one has signed in with is kept as written.
-- A `kind: policy` template holds only run-wide network, credential and access-rule keys and is laid onto the user's
-  defaults when used. Saving one never writes a stored policy.
+  - The person resolves as `?owner=` does on the secrets routes: a known name or email is stored as that principal,
+    so the revoke and erasure that name the person find it. An email that matches no one, or more than one person,
+    is refused (`422` `owner_unresolved` or `owner_ambiguous`); grant by subject, or after the person first signs in.
+- A `kind: policy` template holds only run-wide network, credential and access-rule keys. Saving one never writes a
+  stored policy.
 - Erasure's `run_setups` scope removes a person's templates and grants ([Erasing a person](#erasing-a-person)); the
   SCIM purge asks for it.
 

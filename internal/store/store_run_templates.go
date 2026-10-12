@@ -120,7 +120,9 @@ func (s PG) GetTemplate(ctx context.Context, id uuid.UUID) (types.RunTemplate, e
 
 // GetTemplateRevision — see TemplateStore.
 func (s PG) GetTemplateRevision(ctx context.Context, id uuid.UUID, revision int) (types.RunTemplate, error) {
-	const q = `SELECT ` + runTemplateCols + `, r.name, r.description, r.document
+	// The revision's own saver and time stand where the current revision's would.
+	const q = `SELECT t.id, t.scope, t.owner_id, t.group_id, t.kind, t.revision, t.created_at, t.created_by,
+		r.created_at, r.created_by, r.name, r.description, r.document
 		FROM run_templates t JOIN run_template_revisions r ON r.template_id = t.id
 		WHERE t.id = $1 AND r.revision = $2`
 	t, err := scanRunTemplate(s.Pool.QueryRow(ctx, q, id, revision))

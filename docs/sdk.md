@@ -388,7 +388,7 @@ A run can carry components that add destinations and secrets ([POLICIES.md](POLI
 
 ## Run templates
 
-A template is a saved run setup, whole or partial, kept for yourself, published to the organisation or published to one group. It is content: using one re-checks your current policy, credentials, pools and drives, and a published template grants nothing.
+A template is a saved run setup, whole or partial, kept for yourself, published to the organisation or published to one group. It is content: a published template grants nothing.
 
 | Method | Route | Who |
 |---|---|---|
@@ -405,11 +405,11 @@ A template is a saved run setup, whole or partial, kept for yourself, published 
   - `groups` lists each group you are a verified member of and manage templates for; `groups_unverified` is true, with no group offered, when your sign-in's group list is missing or incomplete.
 - `TemplateSaveRequest.kind` is `template` (the default) or `policy`.
   - A policy holds only `inline_policy` with run-wide network, credential and access-rule keys (`allowed_domains`, `denied_domains`, `allow_all_egress`, `first_use_approval`, `first_use_hold_seconds`, `max_holds`, `allowed_methods`, `eligible_grants`, `llm_inspection`), with `coverage: partial` and no `needs_setup`.
-  - It is laid onto your defaults when it is used. No stored policy is written.
+  - Saving one writes no stored policy.
 - An update needs `expected_revision`, the revision you read. Another current revision answers `409` `template_revision_conflict` and changes nothing; keep your edits, reload, and apply them again.
   - Every revision stays readable by number; scope and kind never change (copy a template to publish it elsewhere).
 - A refused document answers `TemplateSaveRefusal`: the first diagnostic's `error` and `reason`, and every diagnostic with its path.
-- A shared template holds references (secret names, workspace and drive ids), never values, and its readers see those names. Each person's own access is checked when they use it.
+- A shared template holds references (secret names, workspace and drive ids), never values, and its readers see those names.
 - `created_by` and `updated_by` are set only for someone who may write the template.
 - A group grant (`TemplateGroupAdmin`) names one group and one person, stored in canonical form; its optional `label` is the group's display name, shown beside its templates, and never authority.
 

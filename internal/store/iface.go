@@ -450,8 +450,9 @@ type TemplateStore interface {
 	ListTemplatesVisible(ctx context.Context, person string, groups []string) ([]types.RunTemplate, error)
 	// GetTemplate returns the current revision; ErrNotFound when absent.
 	GetTemplate(ctx context.Context, id uuid.UUID) (types.RunTemplate, error)
-	// GetTemplateRevision returns one saved revision; ErrNotFound when the
-	// template or that revision is absent.
+	// GetTemplateRevision returns one saved revision, with that revision's own
+	// saver and time as UpdatedBy and UpdatedAt; ErrNotFound when the template or
+	// that revision is absent.
 	GetTemplateRevision(ctx context.Context, id uuid.UUID, revision int) (types.RunTemplate, error)
 	// CreateTemplate inserts t at revision 1 under the id the caller chose.
 	// *TemplateLimitError when the audience is full, ErrTemplateNameTaken on a

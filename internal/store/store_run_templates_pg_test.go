@@ -45,7 +45,7 @@ func TestPG_RunTemplates_RevisionsAndCAS(t *testing.T) {
 		t.Fatalf("create = %+v, %v", created, err)
 	}
 	next := created
-	next.Name, next.Document, next.UpdatedBy = "second", json.RawMessage(`{"intent":{"v":2}}`), "alice"
+	next.Name, next.Document, next.UpdatedBy = "second", json.RawMessage(`{"intent":{"v":2}}`), "bob"
 	updated, err := st.UpdateTemplate(ctx, next, 1, nil)
 	if err != nil || updated.Revision != 2 || updated.Name != "second" {
 		t.Fatalf("update = %+v, %v", updated, err)
@@ -64,6 +64,9 @@ func TestPG_RunTemplates_RevisionsAndCAS(t *testing.T) {
 	old, err := st.GetTemplateRevision(ctx, created.ID, 1)
 	if err != nil || old.Name != "first" || old.Revision != 1 {
 		t.Fatalf("revision 1 = %+v, %v", old, err)
+	}
+	if old.UpdatedBy != "alice" || !old.UpdatedAt.Equal(created.UpdatedAt) || cur.UpdatedBy != "bob" {
+		t.Fatalf("revision 1 reads saver %q at %v, current saver %q; want revision 1's own (alice at %v)", old.UpdatedBy, old.UpdatedAt, cur.UpdatedBy, created.UpdatedAt)
 	}
 	if _, err := st.GetTemplateRevision(ctx, created.ID, 3); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("revision 3 err = %v", err)

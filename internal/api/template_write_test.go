@@ -293,3 +293,94 @@ func TestEraseRunSetupsScope(t *testing.T) {
 		t.Error("the SCIM purge does not erase run setups")
 	}
 }
+
+// TestTemplateGrantPersonResolvesOrIsRefused: the grant route resolves the
+// person as ?owner= does. An email no principal pairs with, and one two
+// principals share, are refused; a known email is stored as its principal, so
+// the revoke and erasure that name the person find the grant.
+func TestTemplateGrantPersonResolvesOrIsRefused(t *testing.T) {
+	e := newTemplateEnv(t)
+	root := templateCookie(t, "root", oidc.RoleAdmin, false, []string{}, false)
+	put := func(method, person string) (int, string) {
+		return e.call(root, method, "/api/v1/admin/template-group-admins", `{"group_id":"eng","person":"`+person+`"}`)
+	}
+	if status, body := put(http.MethodPut, "nobody@corp.example"); status != http.StatusUnprocessableEntity || !strings.Contains(body, reasonOwnerUnresolved) {
+		t.Errorf("an unknown email = %d %s, want 422 %s", status, body, reasonOwnerUnresolved)
+	}
+	e.signIn("bob", "shared@corp.example")
+	e.signIn("mallory", "shared@corp.example")
+	if status, body := put(http.MethodPut, "shared@corp.example"); status != http.StatusUnprocessableEntity || !strings.Contains(body, reasonOwnerAmbiguous) {
+		t.Errorf("a shared email = %d %s, want 422 %s", status, body, reasonOwnerAmbiguous)
+	}
+	if grants, _ := e.ts.ListTemplateGroupAdmins(context.Background()); len(grants) != 0 {
+		t.Fatalf("a refused grant was stored: %+v", grants)
+	}
+
+	// Granted by subject before the person ever signed in, revoked by email after.
+	carol := templateCookie(t, "carol", oidc.RoleUser, false, []string{"eng"}, false)
+	if status, body := put(http.MethodPut, "carol"); status != http.StatusOK || !strings.Contains(body, `"person":"carol"`) {
+		t.Fatalf("grant by subject = %d %s", status, body)
+	}
+	e.signIn("carol", "carol@corp.example")
+	if status, body := e.call(carol, http.MethodPost, "/api/v1/templates", templateSaveBody("group", "eng", "carol's")); status != http.StatusCreated {
+		t.Fatalf("carol publishes = %d %s", status, body)
+	}
+	if status, body := put(http.MethodDelete, "carol@corp.example"); status != http.StatusNoContent {
+		t.Fatalf("revoke by email = %d %s", status, body)
+	}
+	if grants, _ := e.ts.ListTemplateGroupAdmins(context.Background()); len(grants) != 0 {
+		t.Fatalf("the revoke left the grant: %+v", grants)
+	}
+	if status, body := e.call(carol, http.MethodPost, "/api/v1/templates", templateSaveBody("group", "eng", "after")); status != http.StatusForbidden {
+		t.Errorf("carol after the revoke = %d %s, want 403", status, body)
+	}
+
+	// Granted by email once known: stored as the principal.
+	if status, body := put(http.MethodPut, "Carol@corp.example"); status != http.StatusOK || !strings.Contains(body, `"person":"carol"`) {
+		t.Errorf("grant by a known email = %d %s, want it stored as carol", status, body)
+	}
+}
+
+// TestTemplateUnverifiedSnapshotWritesAre403: with a missing or truncated
+// group snapshot, a read of a group template is the missing id's 404, and a
+// write (PUT, DELETE, create) is 403 template_group_unverified.
+func TestTemplateUnverifiedSnapshotWritesAre403(t *testing.T) {
+	e := newTemplateEnv(t)
+	e.grant("eng", "gary")
+	tpl := e.seed(types.TemplateOwner{Scope: types.TemplateScopeGroup, Group: "eng"}, types.TemplateKindTemplate, "eng's", templateIntentEgress)
+	path := "/api/v1/templates/" + tpl.ID.String()
+	for name, cookie := range map[string]*http.Cookie{
+		"truncated":   templateCookie(t, "gary", oidc.RoleUser, false, []string{"eng"}, true),
+		"no snapshot": templateCookie(t, "gary", oidc.RoleUser, false, nil, false),
+	} {
+		_, missing := e.call(cookie, http.MethodGet, "/api/v1/templates/"+uuid.NewString(), "")
+		if status, body := e.call(cookie, http.MethodGet, path, ""); status != http.StatusNotFound || body != missing {
+			t.Errorf("%s GET = %d %s, want the missing id's 404", name, status, body)
+		}
+		put := `{"name":"x","expected_revision":1,"document":` + templateDocBody(templateIntentEgress) + `}`
+		for _, w := range []struct{ method, path, body string }{
+			{http.MethodPut, path, put},
+			{http.MethodDelete, path, ""},
+			{http.MethodPost, "/api/v1/templates", templateSaveBody("group", "eng", "new")},
+		} {
+			if status, body := e.call(cookie, w.method, w.path, w.body); status != http.StatusForbidden || !strings.Contains(body, reasonTemplateGroupUnverified) {
+				t.Errorf("%s %s = %d %s, want 403 %s", name, w.method, status, body, reasonTemplateGroupUnverified)
+			}
+		}
+	}
+}
+
+// TestTemplateGroupLabelIsSecretScanned: a group label is held to the same
+// secret scan as a template's name and description.
+func TestTemplateGroupLabelIsSecretScanned(t *testing.T) {
+	const canary = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+	e := newTemplateEnv(t)
+	root := templateCookie(t, "root", oidc.RoleAdmin, false, []string{}, false)
+	status, body := e.call(root, http.MethodPut, "/api/v1/admin/template-group-admins", `{"group_id":"eng","person":"gary","label":"team `+canary+`"}`)
+	if status != http.StatusBadRequest || !strings.Contains(body, `"path":"label","reason":"template_secret_refused"`) || strings.Contains(body, canary) {
+		t.Fatalf("a secret-shaped label = %d %s", status, body)
+	}
+	if labels, _ := e.ts.TemplateGroupLabels(context.Background(), []string{"eng"}); len(labels) != 0 {
+		t.Fatalf("the label was stored: %v", labels)
+	}
+}

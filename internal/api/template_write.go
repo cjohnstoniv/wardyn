@@ -198,7 +198,7 @@ func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	cur, ok := readableTemplate(w, r, ts, c, id, 0)
+	cur, ok := readableTemplate(w, r, ts, c, id, 0, true)
 	if !ok || s.refuseTemplateWrite(w, r, c, cur.Owner) {
 		return
 	}
@@ -237,7 +237,7 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	cur, ok := readableTemplate(w, r, ts, c, id, 0)
+	cur, ok := readableTemplate(w, r, ts, c, id, 0, true)
 	if !ok || s.refuseTemplateWrite(w, r, c, cur.Owner) {
 		return
 	}
@@ -264,7 +264,7 @@ func (s *Server) handleCopyTemplate(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	src, ok := readableTemplate(w, r, ts, c, id, 0)
+	src, ok := readableTemplate(w, r, ts, c, id, 0, false)
 	if !ok {
 		return
 	}
