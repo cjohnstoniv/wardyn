@@ -56,7 +56,10 @@ function stepLocation(step: string | null, q: URLSearchParams, fallback: NewRunL
 export function parseNewRunSearch(q: URLSearchParams): ParsedNewRunSearch {
   const launched = q.get("launched");
   if (launched !== null) {
-    return UUID.test(launched) ? { location: { screen: "launched", runId: launched }, normalised: false } : START;
+    const grammar = new Set(["launched", "step", "format", "view", "template", "rev", "again"]);
+    const keys = [...q.keys()];
+    if (!UUID.test(launched) || keys.some((k) => !grammar.has(k)) || keys.filter((k) => k === "launched").length > 1) return START;
+    return { location: { screen: "launched", runId: launched }, normalised: false };
   }
   const template = q.get("template");
   const again = q.get("again");

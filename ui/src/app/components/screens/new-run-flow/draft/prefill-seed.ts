@@ -24,7 +24,7 @@ interface PrefillState {
   workspaces?: { workspaceId: string }[];
 }
 export interface RouterPrefill {
-  prefill?: { source?: string; state?: PrefillState };
+  prefill?: { source?: string; inlinePolicy?: boolean; state?: PrefillState };
 }
 
 const workspacesOf = (s: PrefillState): Pick<RunIntent, "workspaces"> => {
@@ -40,12 +40,17 @@ function composerIntent(s: PrefillState): RunIntent {
 /**
  * A clone of a run, in the 0.9 carriers. Title and description are not cloned.
  * The older tool-approval hold becomes its harness's default "hold", never a
- * quieter run; the boot-seed opt-in only widens, so it is not carried.
+ * quieter run. With no harness this build can name, the hold stays as the
+ * older field: the server refuses it beside the carriers until it is resolved,
+ * and any harness added meanwhile starts held. The boot-seed opt-in only
+ * widens, so it is not carried.
  */
 function cloneIntent(s: PrefillState): RunIntent {
-  const tools = s.agent ? [{ id: s.agent, kind: "harness" as const, ...(s.toolApprovals === "hold" ? { default_effect: "hold" as const } : {}) }] : undefined;
+  const hold = s.toolApprovals === "hold";
+  const tools = s.agent ? [{ id: s.agent, kind: "harness" as const, ...(hold ? { default_effect: "hold" as const } : {}) }] : undefined;
   const common: RunIntent = {
     ...(tools ? { tools } : {}),
+    ...(hold && !tools ? { tool_approvals: "hold" as const } : {}),
     ...(s.confinementClass ? { confinement_class: s.confinementClass } : {}),
     ...(s.selectedPolicyId ? { policy_id: s.selectedPolicyId } : {}),
     ...workspacesOf(s),
@@ -73,5 +78,5 @@ export function prefillSeed(state: unknown): { origin: NewRunOrigin; intent: Run
   const s = prefill.state ?? {};
   return prefill.source === "composer"
     ? { origin: { kind: "composer" }, intent: composerIntent(s) }
-    : { origin: { kind: "clone" }, intent: cloneIntent(s) };
+    : { origin: { kind: "clone", ...(prefill.inlinePolicy ? { policyDropped: true } : {}) }, intent: cloneIntent(s) };
 }
