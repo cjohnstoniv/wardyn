@@ -5,7 +5,7 @@
 
 import type { ComponentFact } from "./components";
 import type { AccessFacts } from "./new-run-access";
-import type { AllowedImage, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
+import type { AllowedImage, HarnessSetFact, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
 import type { RunPolicySpec } from "./policy";
 import type { ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
 
@@ -77,6 +77,8 @@ export interface PolicyPreviewResult {
   // lane resolves it), and the images the organisation lets the person choose.
   image?: ImageFact;
   allowed_images?: AllowedImage[];
+  // The preflight's harness_set fact, with the same meaning.
+  harness_set?: HarnessSetFact;
   // The preflight's pool facts, with the same meaning.
   runner_pool?: ResolvedRunnerPool;
   runner_pools?: RunnerPoolChoice[];

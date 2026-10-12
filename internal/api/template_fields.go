@@ -220,10 +220,10 @@ var templateRequestRules = []TemplateFieldRule{
 	carriedField("workload", templateTabToolsImage, partTools, templateOmitRequired, templateEmptySame,
 		"A background task needs an agent task or a command, and none is chosen. An interactive environment has no workload.").sensitive(),
 	carriedField("tools", templateTabToolsImage, partTools, templateOmitOptional, templateEmptyValue,
-		"No tool is included. An interactive environment may include several, and including none is valid. Each harness has its own model provider, tool rules and default effect, and nothing is shared between tools.").
+		"No tool is included, which is valid: the sandbox starts from the agent base image. An interactive environment or a command may include several harnesses, and at most one starts. Each harness has its own model provider, tool rules and default effect, and nothing is shared between tools.").
 		in(templateSectionHarness, "harness"),
 	carriedField("startup", templateTabToolsImage, partTools, templateOmitOptional, templateEmptySame,
-		"Nothing starts automatically unless chosen: one included harness, one command, or none. A removed startup tool is never replaced by another.").sensitive(),
+		"Nothing starts automatically unless chosen: one included harness, which may open with a starting prompt, one command, or none. A removed startup tool is never replaced by another.").sensitive(),
 	carriedField("start_folder", templateTabRepoDrives, partRepos, templateOmitBaseline, templateEmptySame,
 		"The first attached repository, or the sandbox's default working directory when none is attached. A run has exactly one starting folder."),
 	carriedField("no_repositories_or_drives", templateTabRepoDrives, partRepos, templateOmitRequired, templateEmptySame,
@@ -307,7 +307,7 @@ var templateNestedCarried = map[string]string{
 	"RunEgressOverrides": "first_use_approval allow_all_egress",
 	"RunOverrides":       "agent azure_devops git_pat push_rules hosts egress",
 	"RunResources":       "cpu_millis memory_mib",
-	"RunStartup":         "kind tool command",
+	"RunStartup":         "kind tool command prompt",
 	"RunWorkload":        "kind agent task command",
 	"StartFolder":        "kind attachment subpath",
 	"SecretOverride":     "secret_name host header format",
