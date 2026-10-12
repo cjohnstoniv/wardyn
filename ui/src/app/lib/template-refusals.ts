@@ -60,7 +60,7 @@ export const TEMPLATE_REFUSAL = {
   SHARED_FIELD_REFUSED: (path: string, scope: string) =>
     `${path} names something only one person has, so it cannot be in a ${scope} template.`,
   SCOPE_FORBIDDEN_ORG: () => "Only an organisation administrator can publish templates for the organisation.",
-  SCOPE_FORBIDDEN_GROUP: () => "Only that group's template managers can publish templates to it.",
+  SCOPE_FORBIDDEN_GROUP: () => "Only the template managers of that group can publish templates to it.",
   SCOPE_FORBIDDEN_PERSON: () => "A personal template belongs to the person who owns it.",
   GROUP_UNVERIFIED: () => "Your group membership cannot be checked from this sign-in. Sign in again, then retry.",
   NOT_FOUND: () => "That template does not exist, or you cannot see it.",

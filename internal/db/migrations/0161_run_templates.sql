@@ -22,7 +22,7 @@
 -- Names are unique per audience, case-insensitively, the group's identity included,
 -- so two templates offered to the same people never share a name.
 
-CREATE TABLE run_templates (
+CREATE TABLE IF NOT EXISTS run_templates (
   id          uuid PRIMARY KEY,
   scope       text NOT NULL CHECK (scope IN ('person', 'org', 'group')),
   owner_id    text,
@@ -40,12 +40,12 @@ CREATE TABLE run_templates (
       OR (scope = 'group' AND group_id IS NOT NULL AND owner_id IS NULL))
 );
 
-CREATE UNIQUE INDEX run_templates_name_per_audience
+CREATE UNIQUE INDEX IF NOT EXISTS run_templates_name_per_audience
   ON run_templates (scope, COALESCE(owner_id, ''), COALESCE(group_id, ''), lower(name));
-CREATE INDEX run_templates_owner ON run_templates (owner_id) WHERE owner_id IS NOT NULL;
-CREATE INDEX run_templates_group ON run_templates (group_id) WHERE group_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS run_templates_owner ON run_templates (owner_id) WHERE owner_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS run_templates_group ON run_templates (group_id) WHERE group_id IS NOT NULL;
 
-CREATE TABLE run_template_revisions (
+CREATE TABLE IF NOT EXISTS run_template_revisions (
   template_id uuid NOT NULL REFERENCES run_templates (id) ON DELETE CASCADE,
   revision    integer NOT NULL,
   name        text NOT NULL,
@@ -55,18 +55,18 @@ CREATE TABLE run_template_revisions (
   created_by  text NOT NULL,
   PRIMARY KEY (template_id, revision)
 );
-CREATE INDEX run_template_revisions_created_by ON run_template_revisions (created_by);
+CREATE INDEX IF NOT EXISTS run_template_revisions_created_by ON run_template_revisions (created_by);
 
-CREATE TABLE template_group_admins (
+CREATE TABLE IF NOT EXISTS template_group_admins (
   group_id   text NOT NULL,
   person     text NOT NULL,
   granted_by text NOT NULL,
   granted_at timestamptz NOT NULL,
   PRIMARY KEY (group_id, person)
 );
-CREATE INDEX template_group_admins_person ON template_group_admins (person);
+CREATE INDEX IF NOT EXISTS template_group_admins_person ON template_group_admins (person);
 
-CREATE TABLE template_group_labels (
+CREATE TABLE IF NOT EXISTS template_group_labels (
   group_id text PRIMARY KEY,
   label    text NOT NULL
 );
