@@ -454,3 +454,52 @@ type RunHarnessStore interface {
 
 // Compile-time assertion: PG satisfies RunHarnessStore.
 var _ RunHarnessStore = PG{}
+
+// TemplateStore persists run templates (migration 0165_run_templates); bodies in
+// store_run_templates.go. Optional like ComponentStore: callers type-assert, and a
+// caller that finds it absent answers 501 templates_unavailable rather than
+// pretending to store anything.
+//
+// The store does not authorise: the API checks types.TemplateAuthorize first. What
+// the store holds for it is what must sit in the write's own transaction: a group
+// write's grant re-read (TemplateGrantCheck, FOR SHARE), the audience limit counted
+// under a named lock, and the revision compare-and-set.
+type TemplateStore interface {
+	// ListTemplatesVisible returns the current revision of every organisation
+	// template, of person's own, and of the groups' templates, by name.
+	ListTemplatesVisible(ctx context.Context, person string, groups []string) ([]types.RunTemplate, error)
+	// GetTemplate returns the current revision; ErrNotFound when absent.
+	GetTemplate(ctx context.Context, id uuid.UUID) (types.RunTemplate, error)
+	// GetTemplateRevision returns one saved revision, with that revision's own
+	// saver and time as UpdatedBy and UpdatedAt; ErrNotFound when the template or
+	// that revision is absent.
+	GetTemplateRevision(ctx context.Context, id uuid.UUID, revision int) (types.RunTemplate, error)
+	// CreateTemplate inserts t at revision 1 under the id the caller chose.
+	// *TemplateLimitError when the audience is full, ErrTemplateNameTaken on a
+	// name the audience already uses, ErrTemplateGrantGone when grant finds no row.
+	CreateTemplate(ctx context.Context, t types.RunTemplate, grant *TemplateGrantCheck) (types.RunTemplate, error)
+	// UpdateTemplate saves t's name, description and document as the next
+	// revision when the row is at expected; *TemplateRevisionConflictError (and
+	// nothing written) otherwise. ErrNotFound, ErrTemplateNameTaken and
+	// ErrTemplateGrantGone as for create.
+	UpdateTemplate(ctx context.Context, t types.RunTemplate, expected int, grant *TemplateGrantCheck) (types.RunTemplate, error)
+	// DeleteTemplate removes the template and every revision, and returns the
+	// row it removed (without a document).
+	DeleteTemplate(ctx context.Context, id uuid.UUID, grant *TemplateGrantCheck) (types.RunTemplate, error)
+	// The group-management grants. Put stores the grant as given, which the
+	// caller has made canonical, and a non-empty Label as the group's label.
+	ListTemplateGroupAdmins(ctx context.Context) ([]types.TemplateGroupAdmin, error)
+	PutTemplateGroupAdmin(ctx context.Context, g types.TemplateGroupAdmin) (types.TemplateGroupAdmin, error)
+	DeleteTemplateGroupAdmin(ctx context.Context, group, person string) (bool, error)
+	// TemplateGroupAdminGroups lists the groups any of persons holds a grant on.
+	TemplateGroupAdminGroups(ctx context.Context, persons []string) ([]string, error)
+	// TemplateGroupLabels returns the labels of those of groups that have one.
+	TemplateGroupLabels(ctx context.Context, groups []string) (map[string]string, error)
+	// EraseRunSetupsOf is the run_setups erasure scope: person's own templates
+	// (with their revisions) and grants go, and their name is blanked wherever
+	// it is the author of a shared template, a revision or a grant.
+	EraseRunSetupsOf(ctx context.Context, person string) (RunSetupsErased, error)
+}
+
+// Compile-time assertion: PG satisfies TemplateStore.
+var _ TemplateStore = PG{}

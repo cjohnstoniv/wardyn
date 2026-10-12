@@ -489,4 +489,7 @@ const (
 	reasonTemplateNotFound           = "template_not_found"            // no such template, or the caller may not see it
 	reasonTemplateRevisionConflict   = "template_revision_conflict"    // the template changed since the revision the caller read
 	reasonTemplatesUnavailable       = "templates_unavailable"         // 501: the template store is not available on this server yet
+	reasonTemplateNameTaken          = "template_name_taken"           // another template of the same audience already uses the name (case-insensitive)
+	reasonTemplateLimitReached       = "template_limit_reached"        // the audience already holds the most templates it may
+	reasonTemplatePolicyFieldRefused = "template_policy_field_refused" // a policy holds only run-wide network, credential and access-rule keys
 )

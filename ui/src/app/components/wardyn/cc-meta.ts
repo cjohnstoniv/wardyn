@@ -25,6 +25,8 @@ export interface CCMeta {
   label: string;
   /** Short "what it is / strength / availability" tagline. */
   tagline: string;
+  /** One-word rank on the weakest-to-strongest ladder, the comparison table's column tagline. */
+  short: string;
   /** Plain "what this barrier protects you from". */
   protects: string;
   /** Honest "what it does NOT protect from" — the residual risk. */
@@ -45,6 +47,7 @@ export interface CCMeta {
 export const CC_META: Record<ConfinementClass, CCMeta> = {
   CC1: {
     label: "Fence",
+    short: "Weakest",
     tagline: "Weakest · runs anywhere",
     protects:
       "The agent seeing or touching the rest of your machine — it gets its own files, processes, and network.",
@@ -57,6 +60,7 @@ export const CC_META: Record<ConfinementClass, CCMeta> = {
   },
   CC2: {
     label: "Wall",
+    short: "Stronger",
     tagline: "Default · needs one-time setup",
     protects:
       "Everything Fence does, plus most kernel exploits — a software kernel (gVisor) handles the agent's system calls so it never touches your real kernel (the holes are closed).",
@@ -69,6 +73,7 @@ export const CC_META: Record<ConfinementClass, CCMeta> = {
   },
   CC3: {
     label: "Vault",
+    short: "Strongest",
     tagline: "Strongest · experimental · needs KVM hardware",
     protects:
       "Everything Wall does, plus a full break-in staying trapped — its own hardware-walled VM with its own kernel; even total takeover inside stays inside.",
@@ -80,6 +85,9 @@ export const CC_META: Record<ConfinementClass, CCMeta> = {
       "Kata microVM — hardware-virtualized, with its own guest kernel (requires /dev/kvm).",
   },
 };
+
+// Prefix of a caveat cell's residual-risk line in the barrier comparison table.
+export const CAVEAT_PREFIX = "Except:";
 
 // Applies to EVERY tier — the barrier only sets isolation strength; the other
 // protections (egress, credentials, approvals, audit) are policy-driven and

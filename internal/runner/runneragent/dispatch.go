@@ -54,8 +54,9 @@ type Config struct {
 	Output       func(uuid.UUID) (io.Writer, error)
 	BindOutput   func(uuid.UUID, string) error
 	ForgetOutput func(uuid.UUID) error
-	// Resident is the credential-delivery adapter; nil refuses both verbs.
-	Resident func(context.Context, string, json.RawMessage) (any, error)
+	// Resident is the runner_resident adapter; nil refuses both verbs and any
+	// create or proxy replacement that names a resident grant.
+	Resident *Resident
 }
 
 type Dispatcher struct {
@@ -96,7 +97,7 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 		if d.cfg.Resident == nil {
 			return nil, runnerwire.Refuse("runner credential delivery is unavailable")
 		}
-		return d.cfg.Resident(ctx, method, args)
+		return d.cfg.Resident.Call(ctx, peer, method, args)
 	case runnerwire.MethodEnsureProxyImg:
 		proxy, ok := d.cfg.Substrate.(runner.ProxyReviver)
 		if !ok {
@@ -160,7 +161,13 @@ func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint3
 		data, _ := runnerwire.Marshal(runnerwire.Waiting{Detail: detail})
 		_ = peer.Event(ctx, runnerwire.Event{Kind: runnerwire.EventWaiting, Call: id, RunID: &a.Spec.RunID, Data: data})
 	}
-	sandbox, err := d.cfg.Substrate.CreateSandbox(ctx, a.Spec)
+	// Only the substrate sees resident values; a.Spec, which the lifecycle
+	// handlers persist, keeps the placeholders.
+	filled, err := d.cfg.Resident.fill(ctx, a.Spec)
+	if err != nil {
+		return nil, err
+	}
+	sandbox, err := d.cfg.Substrate.CreateSandbox(ctx, filled)
 	if err != nil {
 		// A substrate may lose its create response or fail best-effort rollback.
 		// Without a known ref and confirmed cleanup, retain the output history.
@@ -308,7 +315,11 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 		if method == runnerwire.MethodCanReplace {
 			return nil, proxy.CanReplaceProxy(ctx, ref)
 		}
-		return nil, proxy.ReplaceProxy(ctx, ref, a.CfgJSON)
+		cfg, err := d.cfg.Resident.fillReplacedProxy(ctx, a.CfgJSON)
+		if err != nil {
+			return nil, err
+		}
+		return nil, proxy.ReplaceProxy(ctx, ref, cfg)
 	default:
 		return nil, runnerwire.Refuse("unknown runner method")
 	}
