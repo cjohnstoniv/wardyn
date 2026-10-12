@@ -472,8 +472,9 @@ func (s *Server) revivePATNarrowing(ctx context.Context, run types.AgentRun, cfg
 // still carry a model credential no provider authored: a policy's api_key
 // grant reading the operator's key, or a managed or subscription sentinel.
 // Every injection the strip would drop goes, audited as run.injection.drop,
-// unless its grant's snapshot names the UID of the run's own provider as it
-// stands now — the grants the provider arms author. A run left with no model
+// unless its grant's snapshot names the UID, as it stands now, of a provider
+// the run was launched with for any harness of its set (runHarnessPairs) —
+// the grants the provider arms author. A run left with no model
 // credential revives without one, as dispatch leaves a run no provider serves:
 // never a fallback to the operator's. A site config or grant list that cannot
 // be read refuses the revive.
@@ -493,15 +494,23 @@ func (s *Server) stripRevivedModelInjections(ctx context.Context, run types.Agen
 	if err != nil {
 		return unreadable("the run's grants", err)
 	}
+	pairs, err := s.runHarnessPairs(ctx, run)
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, "re-check the run's model credentials: "+err.Error())
+	}
+	var uids []string
+	for _, h := range pairs {
+		if p, ok := modelProviderByID(siteCfg.ModelProviders, h.ModelProviderID); ok && h.ModelProviderID != "" && p.UID != "" {
+			uids = append(uids, p.UID)
+		}
+	}
 	authored := map[uuid.UUID]bool{}
-	if p, ok := modelProviderByID(siteCfg.ModelProviders, run.ModelProviderID); ok && run.ModelProviderID != "" && p.UID != "" {
-		for _, g := range grants {
-			var sc struct {
-				Snapshot providerGrantSnapshot `json:"snapshot"`
-			}
-			if json.Unmarshal(g.Spec.Scope, &sc) == nil && sc.Snapshot.ProviderUID == p.UID {
-				authored[g.ID] = true
-			}
+	for _, g := range grants {
+		var sc struct {
+			Snapshot providerGrantSnapshot `json:"snapshot"`
+		}
+		if json.Unmarshal(g.Spec.Scope, &sc) == nil && sc.Snapshot.ProviderUID != "" && slices.Contains(uids, sc.Snapshot.ProviderUID) {
+			authored[g.ID] = true
 		}
 	}
 	model := s.modelCredentialInjection(nil, s.modelServingHosts(siteCfg))

@@ -18,7 +18,7 @@ import (
 // Nil/empty child carriers are inspected too. A new provider, grant, config or
 // control field therefore needs an explicit classification before local use.
 var localDispatchFields = map[reflect.Type][]string{
-	reflect.TypeFor[providerGrantSnapshot](): strings.Fields("ProviderUID OwnerSubject"),
+	reflect.TypeFor[providerGrantSnapshot](): strings.Fields("ProviderUID OwnerSubject Harness"),
 	reflect.TypeFor[azureGrantSnapshot]():    strings.Fields("ProviderUID OwnerSubject Audience"),
 	reflect.TypeFor[awsSSOScopeSnapshot]():   strings.Fields("OwnerSubject CredentialSource Mechanism SSOAccountID SSORoleName Region ProviderUID"),
 	reflect.TypeFor[adoEntraScopeSnapshot](): strings.Fields("ProviderRowID Organisation OwnerSubject CredentialSource TenantID ClientID TokenMode Capabilities"),
@@ -35,7 +35,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[componentDispatch]():     strings.Fields("HeaderHosts MITMHosts Config"),
 	reflect.TypeFor[dispatchCeiling]():       strings.Fields("localSelfDefinedComponents resolved deny profile maxEphemeralDiskMiB maxCPUMillis maxMemoryMiB adoEntra bedrock adoStanding agentGuardrailLocks"),
 	reflect.TypeFor[dispatchParams](): strings.Fields("TrustedOutput RunToken Image Policy FirstGitHubGrantID GitGrants PATBroker PATAPI GitPATGrants SSHGrants Injections Interactive TaskMode InteractiveStart SeedAutoTools ToolApprovals ApprovalExpiryAfter ExtraEnv Toolchains UserMounts EphemeralDirs Drive Components " +
-		"PolicyOverridden PushRuleSets HarnessToolRules"),
+		"PolicyOverridden PushRuleSets HarnessToolRules Harnesses"),
 	reflect.TypeFor[llmTransport]():         strings.Fields("bedrock bedrockReady injectBedrockBearer injectBedrockSSO azure provider secretEnvKeys bedrockAudit"),
 	reflect.TypeFor[providerAzureLane]():    strings.Fields("provider owner harness endpoint host route audience model fast"),
 	reflect.TypeFor[toolchainNeeds]():       strings.Fields("goTools jvmTools"),
@@ -59,6 +59,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.ModelProviders]():      strings.Fields("Providers"),
 	reflect.TypeFor[types.ProviderAuth]():        strings.Fields("Header Format"),
 	reflect.TypeFor[types.ProviderHarness]():     strings.Fields("Harness Model FastModel Path AuthHeader AuthFormat"),
+	reflect.TypeFor[types.RunHarness]():          strings.Fields("Harness ModelProviderID Starts"),
 	reflect.TypeFor[types.RunnerSettings]():      strings.Fields("Enabled"),
 	reflect.TypeFor[types.SiteBranding]():        strings.Fields("LogoPath"),
 	reflect.TypeFor[types.SiteConfig](): strings.Fields("Runners UpstreamProxySecretRef UpstreamProxyURL UpstreamProxyNoProxy ArtifactOverrides EgressRedirects ScmHosts Integrations InternalHosts Egress " +

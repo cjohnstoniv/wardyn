@@ -55,6 +55,9 @@ type createRunLaunch struct {
 	pushSets []types.PushRuleSet
 	// harnessRules are the run's tool rules per included harness (harnessToolRulesFor).
 	harnessRules []types.HarnessToolRules
+	// harnesses are the run's harness set and the model provider each was
+	// granted, as persisted in run_harnesses; nil for a run launched without it.
+	harnesses []types.RunHarness
 }
 
 // DRAFT (M2 canon pending) — the run's failure_hint when the detached launch
@@ -134,6 +137,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			PolicyOverridden: l.overridden,
 			PushRuleSets:     l.pushSets,
 			HarnessToolRules: l.harnessRules,
+			Harnesses:        l.harnesses,
 		})
 	}
 }
