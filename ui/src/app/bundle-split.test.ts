@@ -17,6 +17,7 @@
 //
 // So this asserts the OUTPUT, not the source: the real production build must
 // still be split, and the terminal stack must not be in the entry chunk.
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 // Rollup's types come via vite's own re-export (`export { rollup as Rollup }`) —
 // rollup is a transitive dep, not a direct one, so importing "rollup" here would
@@ -147,5 +148,84 @@ describe("UI bundle carries no root-absolute asset URL", () => {
       .filter((o) => /["'(]\/assets\//.test(o.type === "chunk" ? o.code : String(o.source)))
       .map((o) => o.fileName);
     expect(rooted, "root-absolute /assets/ URLs in the bundle").toEqual([]);
+  }, 180_000);
+});
+
+// New Run (0.9.0): its copy modules and flow directory are lazy-only, and the barrier art ships as hashed
+// files. The entry's static imports load eagerly, so this walks them rather than trusting `isEntry` alone.
+const NEW_RUN_MODULE = /\/(?:wardyn\/copy\/new-run|new-run-flow)\//;
+const NEW_RUN_IMPORT = /(?:from|import\()\s*["'][^"']*(?:copy\/new-run|new-run-flow)\/[^"']*["']/;
+const BARRIER_ART_IMPORT = /from\s+["'][^"']*barrier-(?:art|compare-table)["']/;
+
+// True when a non-test source file outside `skip` imports a matching module: from then on the build must
+// contain it, so "absent from the eager chunks" cannot pass by the module being dropped altogether.
+function appImports(pattern: RegExp, skip: RegExp): boolean {
+  const walk = (dir: string): boolean =>
+    readdirSync(dir, { withFileTypes: true }).some((e) => {
+      const file = path.join(dir, e.name);
+      if (e.isDirectory()) return walk(file);
+      if (!/\.tsx?$/.test(e.name) || /\.test\.tsx?$/.test(e.name) || skip.test(file)) return false;
+      return pattern.test(readFileSync(file, "utf8"));
+    });
+  return walk(path.join(uiRoot, "src"));
+}
+
+const modulesOf = (chunks: Rollup.OutputChunk[]) => chunks.flatMap((c) => Object.keys(c.modules));
+
+describe("New Run copy and flow stay out of the eager chunks", () => {
+  it("keeps copy/new-run/ and new-run-flow/ in lazy chunks only", async () => {
+    const chunks = chunksOf(await buildOnce());
+    const eager = new Set(chunks.filter((c) => c.isEntry).map((c) => c.fileName));
+    for (const name of eager) for (const imported of chunks.find((c) => c.fileName === name)?.imports ?? []) eager.add(imported);
+    const inEager = modulesOf(chunks.filter((c) => eager.has(c.fileName))).filter((m) => NEW_RUN_MODULE.test(m));
+    expect(inEager, `New Run modules leaked into an eager chunk: ${inEager.join(", ")}`).toEqual([]);
+
+    if (appImports(NEW_RUN_IMPORT, NEW_RUN_MODULE)) {
+      const inLazy = modulesOf(chunks.filter((c) => !eager.has(c.fileName))).filter((m) => NEW_RUN_MODULE.test(m));
+      expect(inLazy.length, "the app imports New Run modules but no lazy chunk carries them").toBeGreaterThan(0);
+    }
+  }, 180_000);
+});
+
+// Vite inlines an asset under assetsInlineLimit (4096 B) as a data: URI, and the CSP's default-src 'self'
+// blocks data: images. Only the 128 and 256 px art may ship; smaller files use the SVG BarrierMark.
+describe("barrier art ships as files, never inlined", () => {
+  it("emits no data:image/png in any chunk or asset of the app build", async () => {
+    const inlined = (await buildOnce())
+      .filter((o) => (o.type === "chunk" ? o.code : String(o.source)).includes("data:image/png"))
+      .map((o) => o.fileName);
+    expect(inlined, "PNG inlined as a data: URI").toEqual([]);
+  }, 180_000);
+
+  it("emits all six barrier PNGs as asset files once a screen imports the art", async () => {
+    const emitted = (await buildOnce()).filter((o) => o.type === "asset" && /barrier-(fence|wall|vault)-(128|256)-.*\.png$/.test(o.fileName));
+    const wired = appImports(BARRIER_ART_IMPORT, /barrier-(art|compare-table)\.tsx$/);
+    expect(emitted.length).toBe(wired ? 6 : 0);
+  }, 180_000);
+
+  it("builds the art component alone with six PNG files and no data: URI", async () => {
+    const result = (await build({
+      configFile: path.join(uiRoot, "vite.config.ts"),
+      root: uiRoot,
+      logLevel: "silent",
+      mode: "production",
+      build: {
+        write: false,
+        // Not `lib`: library mode inlines every asset, which would hide the very thing this checks.
+        rollupOptions: { input: path.join(uiRoot, "src/app/components/wardyn/barrier-art.tsx") },
+      },
+    })) as Rollup.RollupOutput | Rollup.RollupOutput[];
+    const out = (Array.isArray(result) ? result[0] : result).output;
+    const pngs = out.filter((o) => o.type === "asset" && o.fileName.endsWith(".png"));
+    expect(pngs.map((o) => /barrier-(?:fence|wall|vault)-(?:128|256)/.exec(o.fileName)?.[0]).sort()).toEqual([
+      "barrier-fence-128",
+      "barrier-fence-256",
+      "barrier-vault-128",
+      "barrier-vault-256",
+      "barrier-wall-128",
+      "barrier-wall-256",
+    ]);
+    const inlined = out.filter((o) => (o.type === "chunk" ? o.code : String(o.source)).includes("data:image/png"));
+    expect(inlined.map((o) => o.fileName)).toEqual([]);
   }, 180_000);
 });

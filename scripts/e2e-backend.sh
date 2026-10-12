@@ -250,9 +250,14 @@ cmd_up() {
     export WARDYN_E2E_TMUX_CONF="${WARDYN_E2E_TMUX_CONF:-${REPO_ROOT}/deploy/images/common/tmux.conf}"
     echo "${WARDYN_E2E_TMUX_SOCKET}" > "${TMUX_SOCK_FILE}"
   fi
+  # The compose stack's Claude Code image: New Run refuses a harness no image
+  # carries (harness_not_installed), and its default draft is Claude Code. Neither
+  # runner here pulls it.
+  local agent_images='{"claude-code":"wardyn/agent-claude-code:local"}'
+  agent_images="${WARDYN_AGENT_IMAGES:-${agent_images}}"
   log "Starting wardynd (runner=${runner_sel}) on ${ADDR} → ${BASE_URL}, DB ${PG_DBNAME}"
   WARDYN_PG_DSN="${DSN}" WARDYN_ADMIN_TOKEN="${TOKEN}" WARDYN_AGE_KEY="${AGE_KEY}" \
-    WARDYN_RUNNER_TARGET=docker \
+    WARDYN_RUNNER_TARGET=docker WARDYN_AGENT_IMAGES="${agent_images}" \
     "${daemon_bin}" \
       -runner "${runner_sel}" \
       -listen "${ADDR}" \

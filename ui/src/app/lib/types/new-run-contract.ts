@@ -14,6 +14,7 @@
 import type { PlacementReason } from "../new-run-refusals";
 import type { ToolRule } from "./policy";
 import type { ComponentRef } from "./components";
+import type { LimitSource } from "./runner-pools";
 
 export type PlacementValue = "remote" | "local";
 
@@ -28,19 +29,21 @@ export interface RequestedResources {
   memory_mib?: number;
 }
 
-/** A CPU and memory pair in a dry-run answer, where zero is a value. */
-export interface ResourceAmounts {
-  cpu_millis: number;
-  memory_mib: number;
+/** The CPU and memory a run asked for and gets (Go: client.AppliedResources). */
+export interface AppliedResources {
+  cpu_millis: AppliedAmount;
+  memory_mib: AppliedAmount;
 }
 
-/** What one placement offers: `defaults` is what an untouched run receives there, `caps` the most a request may ask for. */
-export interface PlacementResources {
-  placement: PlacementValue;
-  /** Set when `placement` is local. */
-  runner_id?: string;
-  defaults: ResourceAmounts;
-  caps: ResourceAmounts;
+/** One field of AppliedResources (Go: client.AppliedAmount). `source` names the limit that cut an over-ask when `capped`, else the one whose default an ask of 0 got; `source_name` is the pool's or the profile's name. */
+export interface AppliedAmount {
+  /** The request's value, else its source policy's; 0 asks for the default. */
+  requested: number;
+  /** What the sandbox gets. */
+  applied: number;
+  capped?: boolean;
+  source?: LimitSource;
+  source_name?: string;
 }
 
 export interface SecretOverride {
@@ -199,9 +202,9 @@ export interface PlacementRunner {
   last_seen?: string;
 }
 
-export type ImageSourceKind = "agent" | "workspace" | "build" | "org_allowed";
+export type ImageSourceKind = "base" | "agent" | "harness_set" | "workspace" | "build" | "org_allowed";
 
-/** Where the resolved image comes from: the Runner tab's Image section says "from {source}". Name is empty for the agent. */
+/** Where the resolved image comes from: the Runner tab's Image section says "from {source}". Name is the harness for agent and the set key for harness_set; empty for base. */
 export interface ImageSource {
   kind: ImageSourceKind;
   name?: string;
@@ -211,6 +214,26 @@ export interface ImageSource {
 export interface ImageFact {
   ref: string;
   source: ImageSource;
+}
+
+/** One included harness's model credential: provider, kind, and where it lands. */
+export interface HarnessModelCredential {
+  provider: string;
+  kind: string;
+  residency: string;
+}
+
+/** One included harness: whether it starts with the run, and its model credential (absent when it takes none or the choice is open). */
+export interface HarnessFact {
+  id: string;
+  starts: boolean;
+  model_credential?: HarnessModelCredential;
+}
+
+/** The run's included harnesses as the door resolved them. `shared_model_access`: two or more carry a model credential, which any process in the sandbox can use. */
+export interface HarnessSetFact {
+  harnesses: HarnessFact[];
+  shared_model_access: boolean;
 }
 
 /** One image the organisation lets a person choose for a run (`allowed_image` on the request). */
@@ -261,6 +284,8 @@ export interface RunStartup {
   kind: StartupKind;
   tool?: string;
   command?: string;
+  /** The started harness's first message; a harness startup only. */
+  prompt?: string;
 }
 
 export type StartFolderKind = "image_default" | "attachment";

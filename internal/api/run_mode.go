@@ -40,8 +40,7 @@ import (
 // What each lane lifts, by the path runModeUnavailable names:
 //
 //	tools[].tool_rules, default_effect   -> A-L3 (per-harness rule enforcement)
-//	more than one tool, component tools  -> A-L9, A-L14 (installed tools, startup, image/config)
-//	interactive with no included tool    -> A-L9, D-117 (a harness-free environment)
+//	more than one harness, component tools -> DS-1 (the harness set), A-L14 (component tools)
 //	start_folder of an attachment        -> A-L4, A-L7, D-112-113 (attachments and the one working directory)
 const (
 	maxRunModeTools      = 16
@@ -230,12 +229,19 @@ func startupShapeRefusal(req createRunRequest) *runRefusal {
 		if !includedToolIDRE.MatchString(s.Tool) || s.Command != "" {
 			return runModeInvalid("startup: a harness startup names one included tool and no command")
 		}
+		if s.Prompt != "" && !runModeText(s.Prompt, true) {
+			return runModeInvalid("startup.prompt: write the starting prompt, up to %d characters", maxRunTaskLen)
+		}
+		return nil
 	case client.StartupCommand:
 		if !runModeText(s.Command, true) || s.Tool != "" {
 			return runModeInvalid("startup: a command startup gives one command, up to %d characters, and no tool", maxRunTaskLen)
 		}
 	default:
 		return runModeInvalid("startup.kind: %q is not one of none, harness, command", s.Kind)
+	}
+	if s.Prompt != "" {
+		return runError(http.StatusBadRequest, reasonRunModeInvalid, startupPromptShapeMsg())
 	}
 	return nil
 }
@@ -355,8 +361,6 @@ func experienceConflictRefusal(req createRunRequest) *runRefusal {
 			return runError(http.StatusUnprocessableEntity, reasonRunModeConflict, idleStopBackgroundMsg())
 		case req.InlinePolicy != nil && len(req.InlinePolicy.UIApps) > 0:
 			return runModeConflict("inline_policy.ui_apps", "A background task has no web application gateway.")
-		case w != nil && w.Kind == client.WorkloadCommand && len(req.Tools) > 0:
-			return runModeConflict("tools", "A command runs no harness.")
 		case w != nil && w.Kind == client.WorkloadAgentTask && slices.ContainsFunc(req.Tools, func(t client.IncludedTool) bool { return t.ID != w.Agent }):
 			return runModeConflict("tools", "A background agent task includes only the harness it runs, which is workload.agent.")
 		}
@@ -442,22 +446,13 @@ func applyRunMode(req *createRunRequest) *runRefusal {
 		return nil
 	}
 	for _, check := range []func(createRunRequest) *runRefusal{
-		runModeShapeRefusal, runModeConflictRefusal, runModeRequiredRefusal, startFolderRefusal, runModeUnavailableRefusal, interactiveToolRequiredRefusal, harnessSetRefusal, personalToolRulesRefusal,
+		runModeShapeRefusal, runModeConflictRefusal, runModeRequiredRefusal, startFolderRefusal, runModeUnavailableRefusal, harnessSetRefusal, personalToolRulesRefusal,
 	} {
 		if refusal := check(*req); refusal != nil {
 			return refusal
 		}
 	}
 	projectRunMode(req)
-	return nil
-}
-
-// interactiveToolRequiredRefusal: an interactive environment with no included
-// harness has no image to select, so it waits for the lane that picks one.
-func interactiveToolRequiredRefusal(req createRunRequest) *runRefusal {
-	if req.Experience == client.ExperienceInteractive && len(req.Tools) == 0 {
-		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools: an interactive environment with no included tool"))
-	}
 	return nil
 }
 
@@ -494,13 +489,19 @@ func personalToolRulesRefusal(req createRunRequest) *runRefusal {
 }
 
 // projectRunMode writes the honourable carriers onto the legacy fields the one
-// engine reads. It never chooses: every value is one the person sent.
+// engine reads. It never chooses: every value is one the person sent. The
+// legacy agent and model provider are the PRIMARY harness's (primaryHarness):
+// the startup harness, else the first; none when the run includes no harness,
+// which starts from the agent base image (harnessSetImage).
 func projectRunMode(req *createRunRequest) {
 	switch req.Experience {
 	case client.ExperienceBackground:
 		w := req.Workload
 		if w.Kind == client.WorkloadCommand {
 			req.TaskMode, req.Task = "exec", w.Command
+			if t, ok := primaryHarness(*req); ok {
+				req.Agent, req.ModelProvider = t.ID, t.ModelProvider
+			}
 			return
 		}
 		req.Agent, req.Task = w.Agent, w.Task
@@ -509,11 +510,15 @@ func projectRunMode(req *createRunRequest) {
 		}
 	case client.ExperienceInteractive:
 		req.Interactive = true
-		req.Agent, req.ModelProvider = req.Tools[0].ID, req.Tools[0].ModelProvider
+		if t, ok := primaryHarness(*req); ok {
+			req.Agent, req.ModelProvider = t.ID, t.ModelProvider
+		}
 		if s := req.Startup; s != nil {
 			switch s.Kind {
 			case client.StartupHarness:
-				req.InteractiveStart = "agent"
+				// The starting prompt is the harness's first message: the boot seed
+				// (interactiveBootSeed) the started harness opens with.
+				req.InteractiveStart, req.Task = "agent", s.Prompt
 			case client.StartupCommand:
 				req.InteractiveStart, req.Task = "shell", s.Command
 			}

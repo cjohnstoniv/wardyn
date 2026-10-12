@@ -380,6 +380,27 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goJSONTags(go, goName)));
   });
 
+  // Step 5's access block: the SDK structs and their TS twins.
+  it.each([
+    ["AccessFacts"], ["AccessRow"], ["AccessMCP"], ["AccessHost"], ["AccessCredential"], ["AccessUnlisted"],
+    ["ToolPolicyFact"], ["ToolDefaultFact"], ["EffectOption"], ["LockedToolRule"],
+  ])("access: %s mirrors pkg/client", (name) => {
+    const go = readFileSync(join(root, "pkg/client/runs_access.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/new-run-access.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(ts, name))).toEqual(new Set(goJSONTags(go, name)));
+  });
+
+  it("access source kinds are provenance's plus the access facts' own", () => {
+    const go = readFileSync(join(root, "internal/api/run_access_facts.go"), "utf8");
+    const ts = stripComments(readFileSync(join(root, "ui/src/app/lib/types/new-run-access.ts"), "utf8"));
+    const own = new Set([...go.matchAll(/\bprovKind\w+\s+=\s*"([a-z_]+)"/g)].map((m) => m[1]));
+    const kind = /kind: ([^;]+);/.exec(tsInterfaceBody(ts, "AccessSource"))![1];
+    expect(own).toEqual(new Set(["harness", "posture"]));
+    expect(kind).toContain('ProvenanceSource["kind"]');
+    const added = kind.replace('ProvenanceSource["kind"]', "");
+    expect(new Set([...added.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]))).toEqual(own);
+  });
+
   it("provenance source kinds and effects are the Go closed sets", () => {
     const go = readFileSync(join(root, "internal/api/run_fold_provenance.go"), "utf8");
     const ts = stripComments(readFileSync(join(root, "ui/src/app/lib/types/policy-preview.ts"), "utf8"));
@@ -418,6 +439,9 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["internal/api/components_facts.go", "componentSecretFact", "ComponentSecretFact"],
     ["internal/types/site_config.go", "ComponentSettings", "ComponentSettings", "site.ts"],
     ["internal/api/preflight.go", "preflightResponse", "PreflightResult", "preflight.ts"],
+    ["internal/api/compose_setup.go", "SetupItem", "SetupItem", "preflight.ts"],
+    ["internal/api/compose_setup.go", "SetupFix", "SetupFix", "preflight.ts"],
+    ["internal/api/run_access_facts.go", "accessBlock", "AccessFacts", "new-run-access.ts"],
     ["internal/api/permissions.go", "meCapabilitiesResponse", "MeCapabilities", "permissions.ts"],
     ["internal/api/run_revive.go", "adminRestartResult", "AdminRestartResult", "runs.ts"],
   ])("%s %s: full parity with the TS %s mirror", (goFile, goName, tsName, tsFile = "components.ts") => {
@@ -431,8 +455,8 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   // the dry-run facts, each pinned to its TS mirror in types/new-run-contract.ts.
   it.each([
     ["RunResources", "RequestedResources"],
-    ["ResourceAmounts", "ResourceAmounts"],
-    ["PlacementResources", "PlacementResources"],
+    ["AppliedResources", "AppliedResources"],
+    ["AppliedAmount", "AppliedAmount"],
     ["RunOverrides", "RunOverrides"],
     ["AgentOverrides", "AgentOverrides"],
     ["SecretOverride", "SecretOverride"],
@@ -450,6 +474,9 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["AgentFact", "AgentFact"],
     ["ImageSource", "ImageSource"],
     ["ImageFact", "ImageFact"],
+    ["HarnessSetFact", "HarnessSetFact"],
+    ["HarnessFact", "HarnessFact"],
+    ["HarnessModelCredential", "HarnessModelCredential"],
     ["AllowedImage", "AllowedImage"],
   ])("pkg/client %s: full parity with the TS %s mirror", (goName, tsName) => {
     const goTags = goJSONTags(readFileSync(join(root, "pkg/client/runs_new_run.go"), "utf8"), goName);

@@ -67,20 +67,17 @@ func poolOwner(ctx context.Context) string {
 	return oidcHumanFromContext(ctx)
 }
 
-// placementDemand reads what the fold knows of the run's needs: the barrier its policy floor and its
-// request ask for and the size it asks for. The size the run gets when it asks for none is the
-// resources lane's (A-L5), which clamps per candidate when it lands. A class no executor and no runner
-// of the deployment enforces at all is left to the confinement step, whose sentence is the long-standing
-// one for it; only a class SOME target enforces is held against each candidate here.
+// placementDemand reads the barrier the run's policy floor and its request ask for. Its size starts
+// at none: resolvePlacement sets the APPLIED size once runSize has bounded the ask, never the request's
+// own. A class no executor and no runner of the deployment enforces at all is left to the confinement
+// step, whose sentence is the long-standing one for it; only a class SOME target enforces is held
+// against each candidate here.
 func (s *Server) placementDemand(ctx context.Context, in placementInput) placementDemand {
 	d := placementDemand{floor: in.floor, reqCC: in.reqCC, reqCCOK: in.reqCCOK, baseline: in.baseline}
 	advertised := s.advertisedConfinement(ctx, *in.req)
 	if enforced, err := enforcedConfinement(in.floor, in.reqCC, advertised, in.baseline); err != nil ||
 		(enforced != "" && !slices.Contains(advertised, enforced)) {
 		d.reqCCOK = false
-	}
-	if r := in.req.Resources; r != nil {
-		d.cpu, d.mem = int64(r.CPUMillis), int64(r.MemoryMiB)
 	}
 	return d
 }

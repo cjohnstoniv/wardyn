@@ -142,3 +142,9 @@ the box on the compose stack. Four things ship pre-wired:
 
 - `GET /api/v1/setup/status` carries this as its own row, `claude_signin_image` — `info` once it resolves, `warn` with the fix above when it doesn't.
 - It's never `blocking`: the kind is optional, so an install offering only API-key or Bedrock providers is never funneled back into setup over it.
+
+## The image a run's harnesses start from
+
+- A New Run request's image comes from its harnesses: the agent base image for none, and a harness's own image for one. Otherwise it is the smallest image declared for the set, under a `WARDYN_AGENT_IMAGES` key that joins sorted harness ids with `+`.
+- A harness no image here carries is refused (`harness_not_installed`). On a published install Claude Code maps to the agent base image, so it is not installed.
+- Migration `0164_run_harnesses` records each run's harnesses. A split-role install grants the app role `SELECT, INSERT` on `run_harnesses`.
