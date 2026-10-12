@@ -141,6 +141,18 @@ func TestGitHubCLI_CardReposAreTheDoors(t *testing.T) {
 	}
 }
 
+// A built-in GitHub component's grant counts only its own repositories: the run's
+// declared repository is not mapped onto it, at the door or on the card.
+func TestGitHubCLI_CardSkipsDeclaredReposForABuiltinGrant(t *testing.T) {
+	builtin := types.GrantSpec{Kind: types.GrantGitHubToken,
+		Scope: json.RawMessage(`{"builtin":"` + types.ComponentBuiltinGitHub + `","repos":["acme/lib"]}`)}
+	spec := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{builtin}}
+	got := githubCLIRepos(createRunRequest{Agent: "claude-code", Repo: "acme/app"}, spec, types.SiteConfig{})
+	if !slices.Equal(got, []string{"acme/lib"}) {
+		t.Fatalf("card repos = %v, want only the built-in's [acme/lib]", got)
+	}
+}
+
 // The preview's CLI row names the host the door opens and terminates, and the
 // App credential as proxy only.
 func TestGitHubCLI_RowListsTheDoorsHost(t *testing.T) {

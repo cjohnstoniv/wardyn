@@ -54,7 +54,9 @@ func githubCLIRepos(req createRunRequest, spec types.RunPolicySpec, site types.S
 		if g.Kind != types.GrantGitHubToken {
 			continue
 		}
-		wired = true
+		// A built-in component's grant serves only its own repositories; create never maps the
+		// run's declared ones onto it (firstGitHubGrantID skips it).
+		wired = wired || !isBuiltinGitHubGrant(g)
 		for _, repo := range githubScopeRepos(g.Scope) {
 			out = append(out, strings.ToLower(repo))
 		}
