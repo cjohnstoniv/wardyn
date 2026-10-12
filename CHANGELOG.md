@@ -501,6 +501,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   never holds Launch behind an item the Tools step cannot show; an ended sign-in, an own-token row or a missing
   console app is reported when you launch. The policy preview checks only whether a sign-in is stored, by name, and
   never reads it.
+- The Go SDK and the CLI now cover invitations and service identities: `wardyn person invite`, `person invitations`,
+  `invitation revoke`, `service-identity create|list|get|update|retire`, `service-identity token list|revoke` and
+  `token move`. There is no CLI claim and no CLI service-token mint, because both need a signed-in browser session.
+- Your account lists the invitations waiting for you and lets you claim them, and lists the service identities you
+  sponsor with a mint, a list and a revoke for each one's tokens. A new token is shown once and is held nowhere
+  after the dialog closes. Admin > Credentials gains a State column for tokens an admin created for someone else and
+  a toggle that adds the revoked ones. A moved token's row names its service identity, and minting a token for a
+  service identity whose sponsor is not active is refused like a suspended one.
 
 ### Changed
 
