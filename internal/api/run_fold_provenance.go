@@ -239,6 +239,9 @@ func recordComponents(rec *foldRecorder, comps runComponents) {
 		for _, sec := range c.snapshot.Definition.Secrets {
 			rec.add(fieldGrants, grantKey(componentGrant(sec)), src, provEffectAdded)
 		}
+		if c.builtin != nil {
+			rec.add(fieldGrants, grantKey(c.builtin.grant), src, provEffectAdded)
+		}
 	}
 }
 
