@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -28,6 +29,22 @@ func (s *Server) unsupportedLocalDispatch(ctx context.Context, run types.AgentRu
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch", run.ID.String(), "failure", mustJSON(map[string]any{"reason": placement.ReasonPlacementUnavailable})))
 	s.failAndRevoke(context.WithoutCancel(ctx), run.ID, types.RunPending, "Your own runner is not available: this run is not bound to one of your runners.")
+	return true
+}
+
+// dispatchPlacementDenied fails, before anything is claimed or written, a run whose placement its
+// dispatch ceiling's deny_placements denies: a lane that did not pass the create doors, or a profile that
+// changed between create and dispatch.
+func (s *Server) dispatchPlacementDenied(ctx context.Context, run types.AgentRun, c dispatchCeiling) bool {
+	p := run.Placement
+	if remotePlacement(p) {
+		p = types.PlacementRemote
+	}
+	if !slices.Contains(c.denyPlacements, p) {
+		return false
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch", run.ID.String(), "failure", mustJSON(map[string]any{"reason": placement.ReasonPlacementDenied})))
+	s.failAndRevoke(context.WithoutCancel(ctx), run.ID, types.RunPending, placementDeniedMsg(p, c.profile))
 	return true
 }
 

@@ -4,12 +4,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -95,14 +97,53 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, self
 	return p, s.localPlanFacts(ctx, &p, egressBaselineOf(sc), run.RunnerID)
 }
 
-// sameScope compares two grant scopes by meaning: a stored row's scope has round-tripped through jsonb,
-// which reorders keys and drops the request's spacing, so its bytes are never the policy copy's.
+// sameScope compares two grant scopes as a typed decode reads them: a stored row's scope has round-tripped
+// through jsonb, which reorders keys and drops the request's spacing, so its bytes are never the policy
+// copy's. A typed decode matches keys without regard to case and keeps the last match, so keys are folded
+// in source order, and numbers are compared exactly rather than as floats.
 func sameScope(a, b json.RawMessage) bool {
-	var x, y any
-	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
-		return false
+	x, errx := typedScope(json.NewDecoder(bytes.NewReader(a)))
+	y, erry := typedScope(json.NewDecoder(bytes.NewReader(b)))
+	return errx == nil && erry == nil && reflect.DeepEqual(x, y)
+}
+
+// typedScope is the next JSON value as a typed decode sees it: object keys folded to lower case with the
+// last one in source order winning, numbers as their literal.
+func typedScope(dec *json.Decoder) (any, error) {
+	dec.UseNumber()
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
 	}
-	return reflect.DeepEqual(x, y)
+	switch tok {
+	case json.Delim('{'):
+		out := map[string]any{}
+		for dec.More() {
+			key, err := dec.Token()
+			if err != nil {
+				return nil, err
+			}
+			v, err := typedScope(dec)
+			if err != nil {
+				return nil, err
+			}
+			out[strings.ToLower(key.(string))] = v
+		}
+		_, err = dec.Token()
+		return out, err
+	case json.Delim('['):
+		out := []any{}
+		for dec.More() {
+			v, err := typedScope(dec)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, v)
+		}
+		_, err = dec.Token()
+		return out, err
+	}
+	return tok, nil
 }
 
 func selfDefinedSnapshotNames(comps []types.RunComponent) []string {

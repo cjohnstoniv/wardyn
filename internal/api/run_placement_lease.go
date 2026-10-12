@@ -8,9 +8,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -44,8 +47,15 @@ var (
 	errRunnerExecutionUnbound = runnerwire.Refuse("this call carries no execution generation the organisation issued")
 	// errRunnerContained: the runner contained the run while it was offline and refuses it a lease until a
 	// recovery the server does not send yet.
-	errRunnerContained = errors.New("the run was contained on its runner while it was offline and cannot be leased again")
+	errRunnerContained   = errors.New("the run was contained on its runner while it was offline and cannot be leased again")
+	errRunnerLeaseLapsed = errors.New("the run's token lapsed before its lease reached its runner")
+	errRunnerLeaseEnded  = errors.New("the run's end passed before its lease reached its runner")
+	errRunnerNotReady    = errors.New("the run's runner is not connected")
 )
+
+// leaseSkew is how far inside the runner's own refusal the organisation stops sending a lease: the two
+// clocks agree only to the session's handshake.
+const leaseSkew = 5 * time.Second
 
 // runnerExecutionStore is the Postgres store: runs on runners exist only there.
 func (s *Server) runnerExecutionStore() (store.PG, error) {
@@ -58,11 +68,21 @@ func (s *Server) runnerExecutionStore() (store.PG, error) {
 
 // leaseRunnerExecution issues the run's next execution generation for operation (Exec at dispatch, Start
 // at revive), after previous, and sends the runner the lease that carries it. operation "" issues none:
-// a run that execs nothing is leased with no generation. Both happen before the call the lease authorizes.
+// a run that execs nothing is leased with no generation. Both happen before the call the lease authorizes,
+// under the run's lock, so a renewal never sends an older generation after this one.
 func (s *Server) leaseRunnerExecution(ctx context.Context, run types.AgentRun, previous uuid.UUID, operation string) (runnerExecution, error) {
 	st, err := s.runnerExecutionStore()
 	if err != nil || run.RunnerID == nil {
 		return runnerExecution{}, cmp.Or(err, store.ErrRunnerExecutionRefused)
+	}
+	ctx, unlock, err := s.lockRunOp(ctx, run.ID)
+	if err != nil {
+		return runnerExecution{}, err
+	}
+	defer unlock()
+	renewed, err := s.leaseSendable(ctx, st, run)
+	if err != nil {
+		return runnerExecution{}, err
 	}
 	e := runnerExecution{runnerID: *run.RunnerID, runID: run.ID, operation: operation}
 	if operation != "" {
@@ -71,22 +91,39 @@ func (s *Server) leaseRunnerExecution(ctx context.Context, run types.AgentRun, p
 			return runnerExecution{}, err
 		}
 	}
-	return e, s.sendRunnerLease(ctx, st, run, e.generation)
+	return e, s.sendRunnerLease(ctx, run, e.generation, renewed)
+}
+
+// leaseSendable is the run's token stamp when the runner would accept its lease now, else why not. The
+// runner ends its whole session on a LEASE it refuses, dropping every other run on it, so the organisation
+// never sends one: not for a run the runner holds contained, nor one whose token stamp or end is past, nor
+// to a session that is not READY.
+func (s *Server) leaseSendable(ctx context.Context, st store.PG, run types.AgentRun) (time.Time, error) {
+	switch held, err := st.RunHeldContainedOnRunner(ctx, run.ID); {
+	case err != nil:
+		return time.Time{}, err
+	case held:
+		return time.Time{}, errRunnerContained
+	}
+	renewed, err := st.RunTokenRenewedAt(ctx, run.ID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	now := s.cfg.Now()
+	switch {
+	case now.Sub(renewed) >= identity.RunTokenLapseAfter-leaseSkew:
+		return time.Time{}, errRunnerLeaseLapsed
+	case run.EndsAt != nil && !run.EndsAt.After(now.Add(leaseSkew)):
+		return time.Time{}, errRunnerLeaseEnded
+	case !s.runnerEndpoint(*run.RunnerID).link.Online():
+		return time.Time{}, errRunnerNotReady
+	}
+	return renewed, nil
 }
 
 // sendRunnerLease sends the run's lease: its token stamp, the one the organisation's lapsed-token sweep
 // reads, and its stored end (zero for none). A LEASE is processed before any later call on the session.
-func (s *Server) sendRunnerLease(ctx context.Context, st store.PG, run types.AgentRun, generation uuid.UUID) error {
-	switch held, err := st.RunHeldContainedOnRunner(ctx, run.ID); {
-	case err != nil:
-		return err
-	case held:
-		return errRunnerContained
-	}
-	renewed, err := st.RunTokenRenewedAt(ctx, run.ID)
-	if err != nil {
-		return err
-	}
+func (s *Server) sendRunnerLease(ctx context.Context, run types.AgentRun, generation uuid.UUID, renewed time.Time) error {
 	l := runnerwire.Lease{RunID: run.ID, ExecutionGeneration: generation, TokenRenewedAt: renewed}
 	if run.EndsAt != nil {
 		l.EndsAt = *run.EndsAt
@@ -98,13 +135,23 @@ func (s *Server) sendRunnerLease(ctx context.Context, st store.PG, run types.Age
 	return s.runnerEndpoint(*run.RunnerID).link.Send(ctx, runnerwire.Frame{Type: runnerwire.TypeLease, Payload: payload})
 }
 
-// renewRunnerLease re-sends a run's lease after its token was renewed, with the generation already issued,
-// so the runner keeps the run's egress past the lapse window it was first leased for.
+// renewRunnerLease re-sends a run's lease with the generation already issued: after its token was renewed
+// or its end changed, and on a new runner session. It reads the generation and sends under the run's lock,
+// so it never lands after a revive's newer one.
 func (s *Server) renewRunnerLease(ctx context.Context, run types.AgentRun) error {
 	if run.Placement != types.PlacementLocal || run.RunnerID == nil {
 		return nil
 	}
 	st, err := s.runnerExecutionStore()
+	if err != nil {
+		return err
+	}
+	ctx, unlock, err := s.lockRunOp(ctx, run.ID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	renewed, err := s.leaseSendable(ctx, st, run)
 	if err != nil {
 		return err
 	}
@@ -115,7 +162,40 @@ func (s *Server) renewRunnerLease(ctx context.Context, run types.AgentRun) error
 	case !errors.Is(err, store.ErrNotFound):
 		return err
 	}
-	return s.sendRunnerLease(ctx, st, run, generation)
+	return s.sendRunnerLease(ctx, run, generation, renewed)
+}
+
+// releaseRunnerLeases re-leases every live run of a runner whose session just became READY. A runner keeps
+// its leases' deadlines in memory only, and a run's renewals come from its own proxy, which a lapse stops:
+// without this, a runner whose session was replaced while a renewal could not reach it contains the run.
+func (s *Server) releaseRunnerLeases(ctx context.Context, runnerID uuid.UUID) {
+	st, err := s.runnerExecutionStore()
+	if err != nil {
+		return
+	}
+	runs, err := st.ListLiveRunnerRuns(ctx, runnerID)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: listing a runner's live runs to lease them failed", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
+		return
+	}
+	for _, run := range runs {
+		if err := s.renewRunnerLease(ctx, run); err != nil {
+			slog.WarnContext(ctx, "wardynd: re-leasing a run on its runner's new session failed",
+				slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		}
+	}
+}
+
+// renewLeaseAfterEndChange re-sends a run's lease once its end changed, with the end it now has: the
+// runner contains a run at the end its lease carries.
+func (s *Server) renewLeaseAfterEndChange(ctx context.Context, runID uuid.UUID) {
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err == nil {
+		err = s.renewRunnerLease(ctx, run)
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: re-leasing a run whose end changed failed", slog.String("run_id", runID.String()), slog.Any("err", err))
+	}
 }
 
 // bindRunnerExecution binds the handle of the Exec or Start that e authorized, from that call's own

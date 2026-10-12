@@ -157,3 +157,24 @@ func TestLocalStoredSpecNeverCarriesTheDecisionSpoolDir(t *testing.T) {
 		t.Fatalf("the laptop-bound spec carries the org's spool path: %s", b)
 	}
 }
+
+// fix-r1 Opus F2: a stored scope matches the policy copy only when a typed decode reads both alike. jsonb
+// reorders keys, so two keys that differ only in case decode by order and must not match; integers past
+// 2^53 compare exactly. Spacing and key order alone do not matter.
+func TestSameScopeComparesTheTypedDecode(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		copy, row   string
+		wantSimilar bool
+	}{
+		{"reordered and respaced", `{"name":"FOO","secret_name":"mine"}`, `{"secret_name": "mine", "name": "FOO"}`, true},
+		{"case-variant duplicate key, reordered by jsonb", `{"name":"FOO","secret_name":"mine","Secret_Name":"orgsec"}`,
+			`{"name": "FOO", "Secret_Name": "orgsec", "secret_name": "mine"}`, false},
+		{"integers past 2^53", `{"ttl":9007199254740993}`, `{"ttl": 9007199254740992}`, false},
+		{"a different value", `{"name":"FOO"}`, `{"name":"BAR"}`, false},
+	} {
+		if got := sameScope(json.RawMessage(tc.copy), json.RawMessage(tc.row)); got != tc.wantSimilar {
+			t.Errorf("%s: sameScope = %v, want %v", tc.name, got, tc.wantSimilar)
+		}
+	}
+}

@@ -952,7 +952,7 @@ func patBrokerGrants(pat map[string]string, on bool) map[string]proxy.PATGrant {
 // lane may dispatch (a non-remote placement create bound to no runner) and a
 // ceiling nobody resolved.
 func (s *Server) dispatchAdmitted(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling) bool {
-	if s.unsupportedLocalDispatch(ctx, run) {
+	if s.unsupportedLocalDispatch(ctx, run) || s.dispatchPlacementDenied(ctx, run, ceiling) {
 		return false
 	}
 	// Fail closed on a ceiling nobody resolved. The compiler already forces a

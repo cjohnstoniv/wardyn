@@ -159,6 +159,9 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if p.endChanged {
+		if run.Placement == types.PlacementLocal {
+			s.renewLeaseAfterEndChange(r.Context(), run.ID)
+		}
 		data := endSetAudit(run, p.resp, exempt)
 		s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, "run.end.set", run.ID.String(),
 			"success", mustJSON(data)))

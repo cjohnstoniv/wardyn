@@ -12,8 +12,12 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +26,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/offline"
 	"github.com/cjohnstoniv/wardyn/internal/runner/orchestrator"
@@ -42,6 +47,12 @@ type runnerLeaseFixture struct {
 	rn      types.Runner
 	fake    *runnertest.Fake // the sandbox substrate under the runner
 	manager *offline.Manager
+	hooks   runnerwire.RunnerHooks
+	key     ed25519.PrivateKey
+	// execs counts the Exec frames that reached the runner.
+	execs atomic.Int32
+	// disconnect ends the current session.
+	disconnect context.CancelFunc
 }
 
 func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
@@ -70,6 +81,8 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 	cfg.RunnerAuditPrepare = func(_ context.Context, ev types.AuditEvent) (types.AuditEvent, error) { return ev, nil }
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.Secrets = getErrStore{getErr: secretstore.ErrNotFound}
+	cfg.RunConfigKey = make([]byte, 32)
+	cfg.ControlPlaneURL = "http://127.0.0.1:8080" // a hop the proxy config loader accepts
 	f := &runnerLeaseFixture{ctx: ctx, st: st, srv: New(cfg), rn: rn, fake: runnertest.NewFake()}
 
 	// The runner side, composed as wardyn-runnerd composes it.
@@ -91,8 +104,14 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hooks := runnerwire.RunnerHooks{
-		Call: dispatcher.Call,
+	f.key = key
+	f.hooks = runnerwire.RunnerHooks{
+		Call: func(ctx context.Context, peer *runnerwire.Peer, id uint32, method string, args json.RawMessage) (any, error) {
+			if method == runnerwire.MethodExec {
+				f.execs.Add(1)
+			}
+			return dispatcher.Call(ctx, peer, id, method, args)
+		},
 		Open: func(*runnerwire.Peer, *runnerwire.Stream, runnerwire.Open) error {
 			return runnerwire.Refuse("unsupported runner stream")
 		},
@@ -115,8 +134,19 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 		Online:        func(peer *runnerwire.Peer, _ bool) { m.Online(peer); streams.Online(peer) },
 		StreamOffline: streams.Offline,
 	}
-	hub := f.srv.runnerHub(st)
-	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: admissionOrgURL, RunnerID: id.String(), PrivateKey: key, Hooks: hooks,
+	f.disconnect = f.connect(t)
+	return f
+}
+
+// connect opens a fresh session of the runner (a new runner process's first connection, with the same
+// state directory) and waits until it is READY. The returned func ends the session.
+func (f *runnerLeaseFixture) connect(t *testing.T) context.CancelFunc {
+	t.Helper()
+	ctx, cancel := context.WithCancel(f.ctx)
+	t.Cleanup(cancel)
+	hub := f.srv.runnerHub(f.st)
+	id := f.rn.ID
+	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: admissionOrgURL, RunnerID: id.String(), PrivateKey: f.key, Hooks: f.hooks,
 		Dial: func(context.Context) (runnerwire.Conn, error) {
 			org, run := runnerwire.Loopback()
 			go func() { _ = hub.Serve(ctx, org, id) }()
@@ -129,13 +159,12 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 	ep := f.srv.runnerEndpoint(id)
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 		if _, ok := ep.sub.Caps(); ok && ep.link.Online() {
-			break
+			return cancel
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("the runner never became ready")
 		}
 	}
-	return f
 }
 
 // localRun is a STARTING task run bound to the fixture's runner whose token was stamped stampAge ago.
@@ -304,5 +333,226 @@ func TestPG_RunnerLease_NeverLeasesAContainedRun(t *testing.T) {
 	}
 	if !f.srv.runnerEndpoint(f.rn.ID).link.Online() {
 		t.Fatal("the runner's session ended")
+	}
+}
+
+// running makes the run RUNNING with the given end, as dispatch and a set end leave it.
+func (f *runnerLeaseFixture) running(t *testing.T, run *types.AgentRun, end *time.Time) {
+	t.Helper()
+	if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET state = 'RUNNING', ends_at = $2 WHERE id = $1`, run.ID, end); err != nil {
+		t.Fatal(err)
+	}
+	run.State, run.EndsAt = types.RunRunning, end
+}
+
+// placed leases and creates the run on the runner and starts its agent under G1, as dispatch does.
+func (f *runnerLeaseFixture) placed(t *testing.T, run *types.AgentRun) runnerExecution {
+	t.Helper()
+	e, err := f.srv.leaseRunOnRunner(f.ctx, *run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.create(t, run); err != nil {
+		t.Fatal(err)
+	}
+	execID, err := f.srv.cfg.Runner.Exec(e.bind(f.ctx), run.SandboxRef, []string{"/usr/local/bin/agent-run", "t"})
+	if err == nil {
+		err = f.srv.bindRunnerExecution(f.ctx, e, execID)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func (f *runnerLeaseFixture) contained(run types.AgentRun) bool {
+	return f.fake.Called("stop_proxy", "fake-"+run.ID.String())
+}
+
+// fix-r1 F1: changing a run's end re-sends its lease, so the runner contains it at the new end, not the old.
+func TestPG_RunnerLease_EndChangeReLeases(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	const margin = 6 * time.Second
+	soon := time.Now().Add(margin)
+	extended, control := f.localRun(t, 0), f.localRun(t, 0)
+	for _, run := range []*types.AgentRun{&extended, &control} {
+		f.running(t, run, &soon)
+		f.placed(t, run)
+	}
+	later := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339)
+	if w := do(t, f.srv, http.MethodPatch, "/api/v1/runs/"+extended.ID.String(), adminToken, `{"ends_at":"`+later+`"}`); w.Code != http.StatusOK {
+		t.Fatalf("set end = %d %s", w.Code, w.Body)
+	}
+	time.Sleep(margin + time.Second)
+	if err := f.manager.CheckLapses(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !f.contained(control) {
+		t.Fatal("the control run was not contained at its end: the end did not pass")
+	}
+	if f.contained(extended) {
+		t.Fatal("the extended run was contained at its old end")
+	}
+}
+
+// fix-r1 Fable M1: a lease the runner would refuse is never sent, since a refused LEASE ends the runner's
+// whole session. The run is refused alone; nothing is persisted for it, and the session carries on.
+func TestPG_RunnerLease_RefusesALeaseTheRunnerWouldRefuse(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	lapsed := f.localRun(t, identity.RunTokenLapseAfter+time.Minute)
+	if _, err := f.srv.leaseRunOnRunner(f.ctx, lapsed); !errors.Is(err, errRunnerLeaseLapsed) {
+		t.Fatalf("lease of a lapsed run = %v, want errRunnerLeaseLapsed", err)
+	}
+	ended := f.localRun(t, 0)
+	past := time.Now().Add(-time.Minute)
+	f.running(t, &ended, &past)
+	if _, err := f.srv.leaseRunOnRunner(f.ctx, ended); !errors.Is(err, errRunnerLeaseEnded) {
+		t.Fatalf("lease of an ended run = %v, want errRunnerLeaseEnded", err)
+	}
+	for _, run := range []types.AgentRun{lapsed, ended} {
+		if _, err := f.st.RunnerExecutionOf(f.ctx, run.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("a refused lease persisted a generation for %s: %v", run.ID, err)
+		}
+	}
+	time.Sleep(time.Second)
+	live := f.localRun(t, 0)
+	f.placed(t, &live)
+	if !f.srv.runnerEndpoint(f.rn.ID).link.Online() {
+		t.Fatal("the runner's session ended")
+	}
+	f.disconnect()
+	for deadline := time.Now().Add(5 * time.Second); f.srv.runnerEndpoint(f.rn.ID).link.Online() && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	}
+	if err := f.srv.renewRunnerLease(f.ctx, live); !errors.Is(err, errRunnerNotReady) {
+		t.Fatalf("lease to a session that is not READY = %v, want errRunnerNotReady", err)
+	}
+}
+
+// fix-r1 Fable M2: a new runner session is leased again once READY. A renewal that could not reach the
+// runner while its session was down is carried by the new session, so the run keeps its proxy past the
+// window it was first leased for.
+func TestPG_RunnerLease_NewSessionReLeasesLiveRuns(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	const margin = 12 * time.Second
+	start := time.Now()
+	run := f.localRun(t, identity.RunTokenLapseAfter-margin)
+	f.running(t, &run, nil)
+	f.placed(t, &run)
+	f.disconnect()
+	for deadline := time.Now().Add(5 * time.Second); f.srv.runnerEndpoint(f.rn.ID).link.Online() && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	}
+	if _, err := f.st.StampRunTokenRenewed(f.ctx, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.srv.renewRunnerLease(f.ctx, run); !errors.Is(err, errRunnerNotReady) {
+		t.Fatalf("renewal while the runner is away = %v, want errRunnerNotReady", err)
+	}
+	f.disconnect = f.connect(t)
+	time.Sleep(time.Until(start.Add(margin + time.Second)))
+	if err := f.manager.CheckLapses(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if f.contained(run) {
+		t.Fatal("the run was contained: its new session was not leased")
+	}
+}
+
+// fix-r1 Opus F3: the organisation refuses a spent generation itself, before any frame reaches the runner.
+func TestPG_RunnerLease_OrgRefusesASpentGeneration(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	g1 := f.placed(t, &run)
+	before := f.execs.Load()
+	if _, err := f.srv.cfg.Runner.Exec(g1.bind(f.ctx), run.SandboxRef, []string{"again"}); !errors.Is(err, errRunnerExecutionUnbound) {
+		t.Fatalf("an Exec reusing the bound G1 = %v, want the organisation's refusal", err)
+	}
+	if n := f.execs.Load(); n != before {
+		t.Fatalf("%d Exec frame(s) reached the runner", n-before)
+	}
+}
+
+// fix-r1 Opus I2: a renewal waits for the run's lock, so it never lands between a revive's newer lease and
+// the Start that lease authorizes.
+func TestPG_RunnerLease_ConcurrentRenewalWaitsForTheRunLock(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	f.running(t, &run, nil)
+	f.placed(t, &run)
+	lockCtx, unlock, err := f.srv.lockRunOp(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- f.srv.renewRunnerLease(f.ctx, run) }()
+	select {
+	case err := <-done:
+		unlock()
+		t.Fatalf("the renewal did not wait for the run's lock: %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	if err := f.srv.startRunOnRunner(lockCtx, f.srv.cfg.Runner.(runner.SandboxStarter), run); err != nil {
+		unlock()
+		t.Fatalf("revive Start under the lock: %v", err)
+	}
+	unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// fix-r1 Fable M3 and Opus I1: a run on a runner revives through the door (reviveRunProxy) on the real
+// runner side: re-leased on the claim's stamp, its proxy replaced, its stopped agent started under a fresh
+// generation. Once the owner's profile denies its placement, the next revive is refused placement_denied.
+func TestPG_RunnerLease_ReviveThroughTheDoor(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	f.running(t, &run, nil)
+	g1 := f.placed(t, &run)
+	if err := f.srv.keepRunProxyConfig(f.ctx, run.ID, runner.ProxyConfig{RunToken: "old", ControlPlaneURL: "http://127.0.0.1:8081"}); err != nil {
+		t.Fatal(err)
+	}
+	if lost, err := f.st.MarkRunLost(f.ctx, run.ID, types.LostReboot, time.Now(), 0); err != nil || !lost {
+		t.Fatalf("mark lost = %v, %v", lost, err)
+	}
+	stored, err := f.st.GetRun(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, rerr := f.srv.reviveRunProxy(f.ctx, stored, types.ActorSystem, "test", true)
+	if rerr != nil {
+		t.Fatalf("revive = %+v", rerr)
+	}
+	local := "fake-" + run.ID.String()
+	replaced := slices.ContainsFunc(f.fake.Calls, func(c string) bool {
+		return strings.HasPrefix(c, "replace_proxy ") && strings.Contains(c, run.ID.String())
+	})
+	if !res.AgentStarted || !replaced || !f.fake.Called("start", local) {
+		t.Fatalf("revive = %+v, calls %v: want the proxy replaced and the agent started", res, f.fake.Calls)
+	}
+	if cur := f.execution(t, run); cur.Generation == g1.generation || cur.Operation != runnerwire.MethodStart || cur.ExecID != runner.MainProcessExecID {
+		t.Fatalf("execution after revive = %+v, want a new Start generation bound", cur)
+	}
+
+	profile, err := f.st.UpsertGovernanceProfile(f.ctx, types.GovernanceProfile{Name: "no-local", CreatedBy: "seed",
+		Limits: types.GovernanceLimits{DenyPlacements: []types.Placement{types.PlacementLocal}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET governance_profile_id = $2 WHERE id = $1`, run.ID, profile.ID); err != nil {
+		t.Fatal(err)
+	}
+	if stored, err = f.st.GetRun(f.ctx, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, rerr := f.srv.reviveRunProxy(f.ctx, stored, types.ActorSystem, "test", true); rerr == nil || rerr.reason != string(placement.ReasonPlacementDenied) {
+		t.Fatalf("revive under a profile denying local = %+v, want placement_denied", rerr)
+	}
+	// Dispatch holds the same profile to the run's placement.
+	denied := ceilingForDispatch(governanceCeiling{Profile: &ResolvedProfile{ID: profile.ID, Name: profile.Name, Limits: profile.Limits}, Limits: profile.Limits}, adoEntraUngraded(), bedrockCredUngraded())
+	if !f.srv.dispatchPlacementDenied(f.ctx, stored, denied) {
+		t.Fatal("dispatch let a denied placement through")
+	}
+	if f.srv.dispatchPlacementDenied(f.ctx, stored, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded())) {
+		t.Fatal("dispatch refused a run no profile denies")
 	}
 }
