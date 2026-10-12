@@ -19,13 +19,15 @@ import (
 )
 
 // fakeGate is an IdentityGate that records what it is asked and answers what the case says.
+// refused refuses every identity; deactivated refuses only the principals it holds.
 type fakeGate struct {
-	refused   bool
-	refuseErr error
-	issueErr  error
-	epoch     int64
-	refs      []writoidc.IdentityRef
-	issued    []writoidc.LoginFacts
+	refused     bool
+	deactivated map[string]bool
+	refuseErr   error
+	issueErr    error
+	epoch       int64
+	refs        []writoidc.IdentityRef
+	issued      []writoidc.LoginFacts
 	// bound maps an object id to the principal its identity row is bound to; boundErr fails that read.
 	bound     map[string]string
 	boundErr  error
@@ -39,7 +41,7 @@ func (g *fakeGate) Bound(_ context.Context, ref writoidc.IdentityRef) (string, e
 
 func (g *fakeGate) Refused(_ context.Context, ref writoidc.IdentityRef) (bool, error) {
 	g.refs = append(g.refs, ref)
-	return g.refused, g.refuseErr
+	return g.refused || g.deactivated[ref.Principal], g.refuseErr
 }
 
 func (g *fakeGate) Issue(_ context.Context, f writoidc.LoginFacts) (int64, error) {
