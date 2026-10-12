@@ -174,7 +174,7 @@ func TestPoolListNeverNamesAnotherPersonsRunner(t *testing.T) {
 	}
 }
 
-// T11: a pool a security admin may only manage carries no limits, run types, barriers or runners.
+// T11: a pool a security admin may only manage carries no limits, run types, barriers, runners or slot counts.
 func TestPoolListManagerRowsCarryNoFacts(t *testing.T) {
 	e := newPlacementEnv(t)
 	narrowed := e.sizedPool("Narrowed", types.RunnerPoolAmount{Default: 1000, Cap: 2000})
@@ -186,7 +186,7 @@ func TestPoolListManagerRowsCarryNoFacts(t *testing.T) {
 	if got.Reason != runnerpool.ReasonNotFound || got.Availability != client.RunnerPoolUnavailable {
 		t.Fatalf("manager row = %+v, want unavailable runner_pool_not_found", got)
 	}
-	if len(got.Limits) != 0 || len(got.RunTypes) != 0 || len(got.BarrierOptions) != 0 || got.MyRunners != nil || got.RunTypesSource != "" {
+	if len(got.Limits) != 0 || len(got.RunTypes) != 0 || len(got.BarrierOptions) != 0 || got.MyRunners != nil || got.RunTypesSource != "" || got.Slots != nil {
 		t.Errorf("manager row carries facts: %+v", got)
 	}
 	if !strings.Contains(raw, `"run_types":[]`) || !strings.Contains(raw, `"barrier_options":[]`) {

@@ -92,6 +92,12 @@ describe("pool limit wording", () => {
     }
   });
 
+  it("has a sentence for every end reason the server records, and no other", () => {
+    const goReasons = [...goLimits.matchAll(/\bRunEnd\w+\s+RunEndReason = "([a-z_]+)"/g)].map((m) => m[1]);
+    expect(goReasons.length).toBeGreaterThanOrEqual(8);
+    expect(Object.keys(RUN_END_REASON_SENTENCE).sort()).toEqual([...goReasons].sort());
+  });
+
   it("lists one, two and three allowed barriers the way the server does", () => {
     expect(RUNNER_POOL_REFUSAL.BARRIER_NOT_ALLOWED("P", "CC3", ["CC1"])).toBe("P doesn't allow the Vault barrier. It allows Fence.");
     expect(RUNNER_POOL_REFUSAL.BARRIER_NOT_ALLOWED("P", "CC1", ["CC2", "CC3"])).toBe("P doesn't allow the Fence barrier. It allows Wall and Vault.");

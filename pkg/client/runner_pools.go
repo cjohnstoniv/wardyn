@@ -164,6 +164,28 @@ type RunnerPoolCatalogueEntry struct {
 	BarrierOptions []BarrierOption `json:"barrier_options"`
 	// MyRunners is the caller's OWN runners in a self-hosted pool; never another person's.
 	MyRunners []PoolRunner `json:"my_runners,omitempty"`
+	// Slots is how busy the pool is; absent on a row the caller may only manage.
+	Slots *PoolSlots `json:"slots,omitempty"`
+}
+
+// The Verdict of PoolSlots: advisory, since the launch decides.
+const (
+	SlotsStartsNow = "starts_now"
+	SlotsWaits     = "waits"
+)
+
+// PoolSlots is a pool's slot counts, everyone's and never saying whose. On the pool list MaxWaitSec
+// is set only when ?run_type= is asked; on preflight and the policy preview it is the run's own.
+type PoolSlots struct {
+	// Used is the runs holding one of the pool's slots; Waiting the runs queued for one.
+	Used    int `json:"used"`
+	Waiting int `json:"waiting"`
+	// Max is the pool's max_concurrent_runs; absent means no pool limit.
+	Max *int `json:"max,omitempty"`
+	// Verdict is SlotsWaits when the pool has a limit and is at it or has runs waiting, else SlotsStartsNow.
+	Verdict string `json:"verdict"`
+	// MaxWaitSec is how long a run of that type waits by default: 86400 Background, 3600 Interactive.
+	MaxWaitSec int `json:"max_wait_sec,omitempty"`
 }
 
 // PoolRunner is one of the caller's own runners in a self-hosted pool.
