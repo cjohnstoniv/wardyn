@@ -11,8 +11,7 @@ import { TEMPLATE_REASON, TEMPLATE_REFUSAL } from "../../../../lib/template-refu
 import type { Template, TemplatePublish, TemplateSaveRequest } from "../../../../lib/types/templates";
 import type { RunIntent } from "../draft/run-intent";
 import { TemplateSaveError } from "./save-as-dialog.api";
-import { SAVE_AS_COPY } from "./save-as-dialog.copy";
-import { SaveAsDialog, type SaveAsDialogProps } from "./save-as-dialog";
+import { SAVE_AS_COPY, SaveAsDialog, type SaveAsDialogProps } from "./save-as-dialog";
 
 afterEach(cleanup);
 
@@ -22,6 +21,8 @@ const INTENT = {
   experience: "background", runner_pool_id: "p1", no_end: false,
   inline_policy: { allowed_domains: ["pypi.org"], eligible_grants: [], tool_rules: [] },
 } as unknown as RunIntent;
+// The two sentences the canon lacks: fixtures here, empty strings in the module.
+const SEAM_COPY = { ...SAVE_AS_COPY, nothingPicked: "Fixture: pick a part.", ownDrivesLeftOut: "Fixture: own drives are left out." };
 const SAVED = { id: "t1" } as Template;
 
 function setup(over: Partial<SaveAsDialogProps> = {}) {
@@ -135,12 +136,22 @@ describe("SaveAsDialog", () => {
   });
 
   it("blocks Save, with the reason in view, when every group is unchecked", async () => {
-    const { user } = setup();
+    const { user } = setup({ copy: SEAM_COPY });
     await user.click(screen.getByLabelText(SAVE_AS_COPY.subset));
     for (const id of ["run", "where", "access", "limits"] as const) await user.click(screen.getByLabelText(SAVE_AS_COPY.partLabels[id]));
     setField(screen.getByLabelText("Name"), "None");
     expect(saveButton()).toBeDisabled();
-    expect(screen.getByText(SAVE_AS_COPY.nothingPicked)).toBeVisible();
+    expect(screen.getByText(SEAM_COPY.nothingPicked)).toBeVisible();
+  });
+
+  it("keeps Save off with nothing checked even while the canon has no sentence for it, and invents none", async () => {
+    const { user } = setup();
+    expect(SAVE_AS_COPY.nothingPicked).toBe("");
+    await user.click(screen.getByLabelText(SAVE_AS_COPY.subset));
+    for (const id of ["run", "where", "access", "limits"] as const) await user.click(screen.getByLabelText(SAVE_AS_COPY.partLabels[id]));
+    setField(screen.getByLabelText("Name"), "None");
+    expect(saveButton()).toBeDisabled();
+    expect(document.querySelectorAll("fieldset p")).toHaveLength(1); // the omitted-values line only
   });
 
   it("lists a left-out dependency under needs_setup, in the server's words, and retries once", async () => {
@@ -189,10 +200,19 @@ describe("SaveAsDialog", () => {
     const withDrives = { experience: "background", drives: [{ drive_id: "mine" }, { drive_id: "team" }] } as unknown as RunIntent;
 
     it("leaves them out of the checklist and the saved document, and says so, once the audience is shared", async () => {
-      const { user, save } = setup({ publish: MANAGER, intent: withDrives, ownDriveIds: new Set(["mine"]) });
-      expect(screen.queryByText(SAVE_AS_COPY.ownDrivesLeftOut)).toBeNull();
+      const { user, save } = setup({ publish: MANAGER, intent: withDrives, ownDriveIds: new Set(["mine"]), copy: SEAM_COPY });
+      expect(screen.queryByText(SEAM_COPY.ownDrivesLeftOut)).toBeNull();
       await user.selectOptions(screen.getByLabelText("Available to"), "Platform group");
-      expect(screen.getByText(SAVE_AS_COPY.ownDrivesLeftOut)).toBeVisible();
+      expect(screen.getByText(SEAM_COPY.ownDrivesLeftOut)).toBeVisible();
+      setField(screen.getByLabelText("Name"), "Team");
+      await user.click(saveButton());
+      expect((sent(save).document.intent as { drives: unknown }).drives).toEqual([{ drive_id: "team" }]);
+    });
+
+    it("still leaves them out of the document while the canon has no sentence for it", async () => {
+      const { user, save } = setup({ publish: MANAGER, intent: withDrives, ownDriveIds: new Set(["mine"]) });
+      expect(SAVE_AS_COPY.ownDrivesLeftOut).toBe("");
+      await user.selectOptions(screen.getByLabelText("Available to"), "Platform group");
       setField(screen.getByLabelText("Name"), "Team");
       await user.click(saveButton());
       expect((sent(save).document.intent as { drives: unknown }).drives).toEqual([{ drive_id: "team" }]);
