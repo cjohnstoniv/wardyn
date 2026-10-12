@@ -772,8 +772,12 @@ case "$(uname -m)" in
   *)       ARCH="$(uname -m)" ;;
 esac
 if ! command -v zstd >/dev/null 2>&1; then ` + zstdBootstrapLine(e.family) + `; fi
-curl -fsSL -o /tmp/kata-static.tar.zst "https://github.com/kata-containers/kata-containers/releases/download/${VER}/kata-static-${VER}-${ARCH}.tar.zst"
-sudo tar -C / --zstd -xf /tmp/kata-static.tar.zst
+# Stage the archive in a fresh owner-only directory, removed on exit, and
+# unpack it only once the download has completed.
+KATA_TMP="$(mktemp -d /tmp/wardyn-kata.XXXXXXXXXX)"
+trap 'rm -rf "$KATA_TMP"' EXIT
+curl -fsSL -o "$KATA_TMP/kata-static.tar.zst" "https://github.com/kata-containers/kata-containers/releases/download/${VER}/kata-static-${VER}-${ARCH}.tar.zst"
+sudo tar -C / --zstd -xf "$KATA_TMP/kata-static.tar.zst"
 echo "-> checking host virtualization"
 # Non-fatal: the check can be conservative (e.g. under a nested hypervisor) even
 # when Kata runs fine as docker-root; do not abort the install/registration on it.
