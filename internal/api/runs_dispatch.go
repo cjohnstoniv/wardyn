@@ -106,6 +106,9 @@ type dispatchParams struct {
 	// runs inline in the create request, so the snapshot has no staleness window
 	// to be stale in. See user_drives_run.go.
 	Drive *types.DriveMount
+	// MainDrive is the main drive create's fold decided (stepMainDrive): its size and whether it
+	// is soft. NIL for every lane that has no fold decision (scans, record, verify, logins, probes).
+	MainDrive *mainDriveDecision
 	// Components is the dispatch half of the run's components, from the gate's
 	// decision at create (runs_dispatch_components.go). Zero for every other lane.
 	Components componentDispatch
@@ -290,7 +293,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	applyEphemeralDirsEnv(sandboxEnv, p.EphemeralDirs)
 	applyUserDriveEnv(sandboxEnv, p.Drive)
 	// The agent-side half of this run's autonomy level — see agentPolicyFor.
-	agentPolicy, apErr := s.agentPolicyFor(ctx, run, p.Harnesses, p.holdLane(), ceiling.agentGuardrailLocks)
+	agentPolicy, apErr := s.agentPolicyFor(ctx, run, p.Harnesses, p.holdLane(), ceiling.agentGuardrailLocks, p.attendedToolRules())
 	if apErr != nil {
 		// apErr wraps s.cfg.Runner.Capabilities' own error, which can carry
 		// driver/substrate text (a Docker daemon socket error, a k8s API
@@ -298,10 +301,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// as their FailureHint (the #445 class SD-4's guard exists to catch).
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": apErr.Error()})))
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, fmt.Sprintf(
-			"This run was not launched: its runner's capabilities could not be confirmed, "+
-				"so whether it can deliver this run's managed settings (%s) is unknown",
-			agentPolicyBasis(run.AutonomyLevel, p.holdLane(), ceiling.agentGuardrailLocks)))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, agentPolicyFailureHint(apErr, run.AutonomyLevel, p.holdLane(), ceiling.agentGuardrailLocks))
 		return
 	}
 	// Caller-supplied non-secret env (p.ExtraEnv): the AWS harness login's
@@ -421,12 +421,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// bind-mount all survived a profile that walls off Bedrock. Narrowed
 	// here, before buildRunMounts and splitSecretEnv read them below.
 	//
-	// Ephemeral disk — the ONE fill + clamp, immediately above the re-assertion so
-	// the row that phase writes carries the effective size. See applyEphemeralDisk:
-	// the policy's own disk_mib, else the org's default_disk_mib, clamped to
-	// min(provider maximum, this profile's maximum). Never a refusal, and a zero
-	// request with no org default stays unbounded.
-	diskFilled := applyEphemeralDisk(ctx, run, &policy, siteCfg, ceiling)
+	// Ephemeral disk, above the re-assertion so its row carries the effective size.
+	diskSoft := settleMainDrive(ctx, run, &policy, siteCfg, ceiling, p.MainDrive)
 	applySandboxSize(ctx, run, &policy, ceiling)
 	s.recordRunDiskCap(ctx, run.ID, policy.Resources)
 	// Record the reservation the driver will apply (best-effort, like the disk cap above).
@@ -469,7 +465,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	secretEnv := splitSecretEnv(sandboxEnv, append(secretEnvKeys, llm.secretEnvKeys...))
 
 	resources := resourceLimitsToRunner(policy.Resources)
-	resources.DiskMiBFilled = diskFilled
+	resources.DiskMiBSoft = diskSoft
 	if run.LifetimeCapAt != nil {
 		// The run pods' deadline follows this run's own cap, not a driver-wide one.
 		resources.LifetimeCap = max(run.LifetimeCapAt.Sub(s.cfg.Now()), time.Second)
@@ -595,9 +591,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// PID capped even when the policy sets nothing — a fleet of independent
 		// agents must not be able to OOM-kill, fork-bomb, or disk-fill the host or
 		// each other (C5). DiskMiB is whatever applyEphemeralDisk above settled on,
-		// and DiskMiBFilled is its provenance: a driver that cannot enforce a cap
-		// refuses a run that ASKED for one and degrades one that merely inherited
-		// the org default (runner.Resources.DiskMiBFilled).
+		// and DiskMiBSoft is its provenance: a driver that cannot enforce a cap
+		// refuses a size the run's policy wrote and degrades one a request or a
+		// default sized (runner.Resources.DiskMiBSoft).
 		Resources: resources,
 		Labels: map[string]string{
 			"wardyn.run":   run.ID.String(),
@@ -622,7 +618,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// snapshot below references still carries the real values.
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
 		run.ID.String(), "success", mustJSON(effectivePolicyDatum{
-			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskFilled,
+			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskSoft, DiskMiBBasis: p.MainDrive.basis(), DiskMiBDefaultSource: p.MainDrive.defaultSource(),
 		})))
 
 	// Held BEFORE CreateSandbox, not after: the row still carries the

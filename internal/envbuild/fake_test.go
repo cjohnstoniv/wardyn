@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"iter"
 	"strconv"
@@ -129,6 +130,21 @@ type fakeEnvbuilderDocker struct {
 	// here to model the daemon failing to answer, which is a different question
 	// from "the image is absent" and has to stay one.
 	inspectErrs map[string]error
+
+	// remoteDigests maps a ref to the digest DistributionInspect answers; a ref absent here is not found,
+	// and remoteErrs overrides that with any other error (the registry unreachable).
+	remoteDigests map[string]string
+	remoteErrs    map[string]error
+	remoteAsked   []string
+
+	// pinFiles maps an output image ref to the pin file a never-started container made from it serves;
+	// an image absent here has no such file. pinReadImages and pinReadConfig record what created the
+	// pin-read container (the one with the placeholder command), pinReadHost its host config.
+	pinFiles       map[string][]byte
+	pinReadImages  []string
+	pinReadConfig  *container.Config
+	pinReadHost    *container.HostConfig
+	pinContainerOf map[string]string // container ID -> image it was created from
 }
 
 func newFakeEnvbuilderDocker() *fakeEnvbuilderDocker {
@@ -275,6 +291,16 @@ func (f *fakeEnvbuilderDocker) ContainerCreate(_ context.Context, opts client.Co
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.createCalled++
+	if opts.Config != nil && len(opts.Config.Cmd) == 1 && opts.Config.Cmd[0] == "/wardyn-pin-read" {
+		id := "fake-pin-container-" + strconv.Itoa(len(f.pinReadImages))
+		f.pinReadImages = append(f.pinReadImages, opts.Config.Image)
+		f.pinReadConfig, f.pinReadHost = opts.Config, opts.HostConfig
+		if f.pinContainerOf == nil {
+			f.pinContainerOf = map[string]string{}
+		}
+		f.pinContainerOf[id] = opts.Config.Image
+		return client.ContainerCreateResult{ID: id}, nil
+	}
 	if opts.Config != nil {
 		f.lastEnv = opts.Config.Env
 		f.lastLabels = opts.Config.Labels
@@ -300,6 +326,42 @@ func (f *fakeEnvbuilderDocker) CopyToContainer(_ context.Context, containerID st
 	}
 	f.copiedTo = append(f.copiedTo, containerID)
 	return client.CopyToContainerResult{}, nil
+}
+
+// DistributionInspect answers from remoteDigests, the way a registry does: an unknown ref is not found.
+func (f *fakeEnvbuilderDocker) DistributionInspect(_ context.Context, ref string, _ client.DistributionInspectOptions) (client.DistributionInspectResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.remoteAsked = append(f.remoteAsked, ref)
+	if err, ok := f.remoteErrs[ref]; ok {
+		return client.DistributionInspectResult{}, err
+	}
+	d, ok := f.remoteDigests[ref]
+	if !ok {
+		return client.DistributionInspectResult{}, errdefs.ErrNotFound
+	}
+	var out client.DistributionInspectResult
+	if err := json.Unmarshal([]byte(`{"Descriptor":{"digest":`+strconv.Quote(d)+`}}`), &out.DistributionInspect); err != nil {
+		return client.DistributionInspectResult{}, err
+	}
+	return out, nil
+}
+
+// CopyFromContainer serves pinFiles[image] as the one-entry tar a real daemon returns for a file, and
+// not-found for an image without it.
+func (f *fakeEnvbuilderDocker) CopyFromContainer(_ context.Context, containerID string, opts client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	payload, ok := f.pinFiles[f.pinContainerOf[containerID]]
+	if !ok || opts.SourcePath != pinFilePath {
+		return client.CopyFromContainerResult{}, errdefs.ErrNotFound
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	_ = tw.WriteHeader(&tar.Header{Name: "claude-code", Mode: 0o644, Size: int64(len(payload))})
+	_, _ = tw.Write(payload)
+	_ = tw.Close()
+	return client.CopyFromContainerResult{Content: io.NopCloser(&buf)}, nil
 }
 
 func (f *fakeEnvbuilderDocker) ContainerStart(_ context.Context, _ string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {

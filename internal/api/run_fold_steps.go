@@ -11,6 +11,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // The steps of runFoldSteps, in its order. Each writes its own refusal and
@@ -284,6 +285,9 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 		return false
 	}
 	f.enforced = enforced
+	if f.mode == foldPreflight {
+		f.barrierOptions = draftBarrierOptions(f.place, f.ceiling, floor, f.baseline)
+	}
 	return !f.place.barrierRefusal(enforced).write(s, f.w, f.r)
 }
 
@@ -424,11 +428,16 @@ func (s *Server) stepAutonomy(f *runFold, rec *foldRecorder) bool {
 // a background run of a gated harness there with "*: allow" under the person's
 // layer (applyToolPosture), and each
 // allow they send stands only where the policy, with the lane's default under
-// it, already allows the tool.
+// it, already allows the tool. An interactive Claude Code run's default, and
+// every tool name it carries, is held to what its managed settings can say
+// first, as step 5 greys it.
 func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
 	before := f.spec
 	s.applyToolPosture(f.req, &f.spec)
 	recordSpecAdds(rec, before, f.spec, provSource{Kind: provKindPosture})
+	if attendedDefaultRefusal(*f.req, f.autonomy.Level).write(s, f.w, f.r) || attendedToolNamesRefusal(*f.req, f.spec).write(s, f.w, f.r) {
+		return false
+	}
 	return !s.toolRulesWithinPolicyRefusal(*f.req, f.spec).write(s, f.w, f.r)
 }
 
@@ -506,7 +515,7 @@ func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
 		return true
 	}
 	var refused bool
-	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.r.Context(), f.spec, f.ceiling), time.Duration(f.end.capSec)*time.Second, f.queued)
+	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.spec, f.mainDrive), time.Duration(f.end.capSec)*time.Second, f.queued)
 	return !refused
 }
 
@@ -554,6 +563,9 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
 		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling))}
+	if f.mode != foldCreate {
+		in.dryDoor = true
+	}
 	if f.mode == foldPreflight { // preflight parses the class inside stepConfinement, after this step
 		in.reqCC, in.reqCCOK = parseConfinementClass(f.req.ConfinementClass)
 	}
@@ -566,6 +578,41 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	// The queue's own start replays the fold as promoted, and must not queue again.
 	if f.mode != foldPreview {
 		f.queued = plan.queues() && !f.promoted
+	}
+	return true
+}
+
+// stepMainDrive sizes the main drive after placement, which resolved the effective limits, and
+// refuses a size the run's policy writes on a runner that cannot cap disk. The dry doors write the
+// number into their answered spec, so spec.resources.disk_mib keeps showing what the run gets;
+// create writes nothing into the launch spec and hands dispatch the decision instead.
+func (s *Server) stepMainDrive(f *runFold, rec *foldRecorder) bool {
+	policyMiB, requestMiB := 0, 0
+	if f.spec.Resources != nil {
+		policyMiB = f.spec.Resources.DiskMiB
+	}
+	if f.req.Resources != nil {
+		requestMiB = f.req.Resources.DiskMiB
+	}
+	md := mainDriveFor(policyMiB, requestMiB, f.place.limits.DiskMiB)
+	if !md.Soft && md.MiB > 0 && s.runnerCannotCapDisk(f.r.Context(), *f.req, f.place) {
+		msg := mainDriveUnenforceableMsg()
+		if !f.place.pooled {
+			msg = mainDriveUnenforceableUnpooledMsg()
+		}
+		runError(http.StatusUnprocessableEntity, reasonMainDriveUnenforceable, msg).write(s, f.w, f.r)
+		return false
+	}
+	f.mainDrive = md
+	warn := composer.WarnResourcesCapped
+	if md.ClampedBy == client.MainDriveClampPolicy {
+		warn = warnDiskPolicyCut
+	}
+	if md.ClampedBy != "" && !slices.Contains(f.policyWarns, warn) {
+		f.policyWarns = append(f.policyWarns, warn)
+	}
+	if f.mode != foldCreate {
+		(&mainDriveDecision{MiB: md.MiB}).apply(&f.spec)
 	}
 	return true
 }

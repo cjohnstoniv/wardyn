@@ -54,6 +54,7 @@ func TestRefusalSentencesMatchGolden(t *testing.T) {
 		"WAIT_NO_RUNNER_FREE": func(a []string) string { return WaitNoRunnerFreeMsg(a[0]) },
 		"QUEUE_FULL":          func(a []string) string { n, _ := strconv.Atoi(a[1]); return QueueFullMsg(a[0], n) },
 		"FULL":                func(a []string) string { n, _ := strconv.Atoi(a[1]); return FullMsg(a[0], n) },
+		"NO_ONLINE_RUNNER":    func(a []string) string { return NoOnlineRunnerMsg(a[0]) },
 	}
 	var golden []struct {
 		Key  string   `json:"key"`

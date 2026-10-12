@@ -213,8 +213,11 @@ func harnessToolRulesRefusal(t client.IncludedTool) *runRefusal {
 	return nil
 }
 
-// codexHarness is Codex CLI's harness id.
-const codexHarness = "codex-cli"
+// codexHarness and claudeCodeHarness are Codex CLI's and Claude Code's harness ids.
+const (
+	codexHarness      = "codex-cli"
+	claudeCodeHarness = "claude-code"
+)
 
 // exactToolNameRE is one tool's exact name, as the harness reports it (Bash,
 // WebFetch, mcp__server__tool). Rules never match a pattern (types.ToolRule).

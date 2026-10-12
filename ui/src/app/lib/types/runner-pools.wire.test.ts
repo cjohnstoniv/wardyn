@@ -41,6 +41,7 @@ const ts = read("ui/src/app/lib/types/runner-pools.ts");
 const typesGo = read("internal/types/runner_pool.go");
 const clientGo = read("pkg/client/runner_pools.go");
 const limitsGo = read("internal/types/runner_pool_limits.go");
+const barrierGo = read("internal/runnerpool/barrier.go");
 
 describe("runner pool carriers", () => {
   it.each([
@@ -61,6 +62,11 @@ describe("runner pool carriers", () => {
     [limitsGo, "EffectiveRunLimits", "EffectiveRunLimits"],
     [clientGo, "RunnerPoolChoice", "RunnerPoolChoice"],
     [clientGo, "RunnerPoolList", "RunnerPoolList"],
+    [clientGo, "RunnerPoolCatalogueEntry", "RunnerPoolCatalogueEntry"],
+    [clientGo, "PoolRunner", "PoolRunner"],
+    [clientGo, "PersonAllowance", "PersonAllowance"],
+    [clientGo, "PoolDefault", "PoolDefault"],
+    [barrierGo, "BarrierOption", "BarrierOption"],
     [clientGo, "CreateRunnerPoolRequest", "CreateRunnerPoolRequest"],
     [clientGo, "UpdateRunnerPoolRequest", "UpdateRunnerPoolRequest"],
   ])("%#: %s has full parity with its TS mirror", (go, goName, tsName) => {

@@ -60,12 +60,17 @@
 # docs/sdk.md 15798 adds 26 (0.9 Q-b fix-r3): a queued 201's resources_applied is as of the launch.
 # 0.9 A-L4: docs/sdk.md 14098 adds 77 over 14021: three multi-workspace reason rows and the widened overlap, target and start-folder rows.
 # docs/sdk.md 15799 measured after A-L4 merge (train 19).
+# 0.9 DS3-S2: docs/sdk.md 15814 adds 15 over 15799 for the main_drive_unenforceable reason on the request_field_unavailable row.
+# 0.9 DS3-S2 fix r1: docs/sdk.md 15815 adds 1 over 15814 for the pool_disk cause.
 # docs/sdk.md 15876 measured after merge batch/090 into Q-b (fix-r3).
 # docs/sdk.md 16079 measured after Q-b.
 # 0.9 DS1-S4: docs/sdk.md 15914 adds 115 over 15799 for the several-harnesses section.
 # docs/sdk.md 16194 measured after DS1-S4.
 # docs/sdk.md 16302 measured after DS2-S2.
-docs/sdk.md=16302 share=21
+# 0.9 B-pool-catalogue: docs/sdk.md 15811 adds 12 over 15799: the pool list's availability reasons and the 400 for a bad ?run_type=.
+# docs/sdk.md 16314 measured after measured after B-pool-catalogue (train 24).
+# docs/sdk.md 16330 measured after measured after merge batch into DS3-S2.
+docs/sdk.md=16330 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.
