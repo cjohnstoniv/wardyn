@@ -61,13 +61,24 @@
 # docs/AUDIT-ACTIONS.md 42798 measured after merge batch/090 into DS1-S1b.
 # docs/AUDIT-ACTIONS.md 42313 adds 42 over 42271 (0.9 B-limits): `resources_applied` on run.create.
 # docs/AUDIT-ACTIONS.md 42840 measured after B-limits merge (train 18).
+# docs/AUDIT-ACTIONS.md 42861 adds 21 over 42840 (0.9 local-enable): the run.create pool binding fields D-117 writes, and the sandbox-ref emit site citation.
+# docs/AUDIT-ACTIONS.md 42899 adds 38 over 42861 (0.9 local-enable fix-r2): run.dispatch `reason`, placement_denied at revive and dispatch.
+# 0.9 DS3-S2 fix r1: docs/AUDIT-ACTIONS.md 42844 adds 4 over 42840 for disk_mib_basis and disk_mib_default_source on run.policy.resolve.
 # docs/AUDIT-ACTIONS.md 43030 adds 190 over 42840 (0.9 Q-b): the run.queue.start and run.queue.expire rows and the run.create row's queue citation.
 # docs/AUDIT-ACTIONS.md 43045 adds 15 (0.9 Q-b, New Run delta change 3): resources_applied on run.queue.start.
 # docs/AUDIT-ACTIONS.md 43047 adds 2 (0.9 Q-b fix-r3): resources_applied and via in the run.queue.start fields.
 # docs/AUDIT-ACTIONS.md 43347 measured after Q-b.
 # docs/AUDIT-ACTIONS.md 43393 measured after DS2-S2.
 # docs/AUDIT-ACTIONS.md 43485 measured after measured after TA-3 (train 23).
-docs/AUDIT-ACTIONS.md=43485 share=8
+# docs/AUDIT-ACTIONS.md 43157 adds 17 over 43140 (0.9 F-1516 B4): the run.build `difference` field of a failed rebuild from a record.
+# docs/AUDIT-ACTIONS.md 43502 measured after measured after F-1516 B4 (train 25).
+# docs/AUDIT-ACTIONS.md 43489 measured after measured after merge batch into DS3-S2.
+# docs/AUDIT-ACTIONS.md 43506 measured after DS3-S2 merge into batch: main-drive disk default sources.
+# docs/AUDIT-ACTIONS.md 43867 adds 361 over 43506 (0.9 train 26): TA-4 MCP broker rows, F-1508 C4 sponsor entry marks, merged after their lanes measured separately.
+# docs/AUDIT-ACTIONS.md 43926 measured after local-enable merge.
+# docs/AUDIT-ACTIONS.md 43570 adds 85 (0.9 H14-api): person-owned Self-Hosted pools (owner on the pool rows, the runner_pools erasure scope).
+# docs/AUDIT-ACTIONS.md 44011 measured after H14-api merge into batch: person-owned Self-Hosted pools.
+docs/AUDIT-ACTIONS.md=44011 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

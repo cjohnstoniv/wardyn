@@ -1,0 +1,98 @@
+/**
+ * Copyright 2026 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { describe, expect, it } from "vitest";
+import golden from "../../../../../lib/tool-effect.golden.json";
+import type { ToolEffect } from "../../../../../lib/tool-effect";
+import { CLAUDE_ATTENDED, CLAUDE_GATED, CLAUDE_UNGATED, CLAUDE_UNGATED_LOCKED, CODEX, CUSTOM } from "../../../../../lib/new-run-fixtures/scenarios/tools-harness";
+import type { ToolPolicyFact } from "../../../../../lib/types/new-run-access";
+import { defaultChoices, lockedRowEnforced, reasonText, ruleChoices } from "./tool-facts";
+
+const CASES = golden as { name: string; policy_rules: { tool: string; effect: string }[]; lane_default: ToolEffect; tool: string; effect: ToolEffect }[];
+const RANK = { allow: 0, hold: 1, deny: 2 };
+
+// A fact whose lane and rows are a golden case's, and whose harness takes any effect.
+const factFor = (c: (typeof CASES)[number]): ToolPolicyFact => ({
+  ...CLAUDE_UNGATED,
+  lane: c.lane_default === "allow" ? "ungated" : "gated",
+  policy_rules: c.policy_rules.map((r) => ({ ...r, source: { kind: "policy" } })),
+});
+
+describe("ruleChoices", () => {
+  it.each(CASES)("greys what is looser than the policy's effect, as tool-effect.golden.json: $name", (c) => {
+    const choices = ruleChoices(factFor(c), "Claude Code", c.tool);
+    for (const choice of choices) {
+      expect(choice.available, `${c.name}: ${choice.effect}`).toBe(RANK[choice.effect] >= RANK[c.effect]);
+      expect(!!choice.reason).toBe(!choice.available);
+    }
+  });
+
+  it("names the tool and the policy's verb in the reason", () => {
+    const fact = { ...CLAUDE_UNGATED, policy_rules: [{ tool: "WebFetch", effect: "deny", source: { kind: "policy" } }] };
+    const [allow, hold] = ruleChoices(fact, "Claude Code", "WebFetch");
+    expect(allow.reason).toBe("Your policy blocks WebFetch. A run can only be stricter.");
+    expect(hold.reason).toBe("Your policy blocks WebFetch. A run can only be stricter.");
+  });
+
+  it("lets Codex CLI take rules for MCP tools only, with the server's own sentence for the rest", () => {
+    const own = ruleChoices(CODEX, "Codex CLI", "WebFetch");
+    expect(own.every((c) => !c.available)).toBe(true);
+    expect(own[2].reason).toBe("Wardyn can't block Codex CLI's own tools. Rules for its MCP tools still apply.");
+    const mcp = ruleChoices(CODEX, "Codex CLI", "mcp__jira__create_issue");
+    expect(mcp.map((c) => [c.effect, c.available])).toEqual([["allow", true], ["hold", false], ["deny", true]]);
+    expect(mcp[1].reason).toBe("Codex CLI can't pause a tool call for approval.");
+  });
+
+  it("offers only what the harness can honour before a tool is named", () => {
+    expect(ruleChoices(CODEX, "Codex CLI", "").map((c) => c.available)).toEqual([true, false, true]);
+  });
+
+  it("offers nothing for a harness Wardyn sets no rules for", () => {
+    const choices = ruleChoices(CUSTOM, "Your own tools", "Bash");
+    expect(choices.every((c) => !c.available)).toBe(true);
+    expect(choices[0].reason).toBe("Wardyn can't set tool rules for Your own tools.");
+  });
+});
+
+describe("defaultChoices", () => {
+  it("greys Run it on the gated lane with the policy's sentence", () => {
+    const [allow, hold, deny] = defaultChoices(CLAUDE_GATED, "Claude Code");
+    expect([allow.available, hold.available, deny.available]).toEqual([false, true, true]);
+    expect(allow.reason).toBe("Your policy asks first for tools with no rule. A run can only be stricter.");
+  });
+
+  it("says Codex CLI cannot hold or block", () => {
+    const choices = defaultChoices(CODEX, "Codex CLI");
+    expect(choices.map((c) => c.available)).toEqual([true, false, false]);
+    expect(choices[1].reason).toBe("Codex CLI can't pause a tool call for approval.");
+  });
+});
+
+describe("lockedRowEnforced", () => {
+  const rule = { tool: "WebFetch", effect: "deny", source: { kind: "policy" } };
+  it("is true when Wardyn's gate or the harness's settings enforce", () => {
+    expect(lockedRowEnforced({ enforcer: "wardyn_gate" }, rule)).toBe(true);
+    expect(lockedRowEnforced({ enforcer: "harness_settings" }, rule)).toBe(true);
+  });
+  it("is never true when the server names no enforcer, on any lane (R)", () => {
+    for (const enforcer of ["none", "something-new"]) expect(lockedRowEnforced({ enforcer }, rule)).toBe(false);
+    expect(lockedRowEnforced(CLAUDE_UNGATED_LOCKED, rule)).toBe(false);
+    expect(lockedRowEnforced({ ...CLAUDE_ATTENDED, enforcer: "none" }, rule)).toBe(false);
+  });
+  it("counts the MCP broker only for an MCP tool's row", () => {
+    expect(lockedRowEnforced({ enforcer: "mcp_broker" }, { ...rule, tool: "mcp__jira__create_issue" })).toBe(true);
+    expect(lockedRowEnforced({ enforcer: "mcp_broker" }, rule)).toBe(false);
+  });
+  it("is false when the server marks the row so, even under the gate (A23 b)", () => {
+    expect(lockedRowEnforced({ enforcer: "wardyn_gate" }, { ...rule, enforced: false })).toBe(false);
+  });
+});
+
+describe("reasonText", () => {
+  it("returns nothing for a code this console does not know", () => {
+    expect(reasonText("a_new_code")).toBeUndefined();
+    expect(reasonText(undefined)).toBeUndefined();
+  });
+});

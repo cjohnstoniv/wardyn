@@ -709,6 +709,7 @@ func TestRunModeRefusalSentencesMatchGolden(t *testing.T) {
 		"HARNESS_SET_NO_IMAGE":       func(a []string) string { return harnessSetNoImageMsg(a...) },
 		"HARNESS_SET_CUSTOM_IMAGE":   func([]string) string { return harnessSetCustomImageMsg() },
 		"HARNESS_PROVIDERS_CONFLICT": func(a []string) string { return harnessProvidersConflictMsg(a[0], a[1]) },
+		"MAIN_DRIVE_UNENFORCEABLE":   func([]string) string { return mainDriveUnenforceableMsg() },
 		"CODEX_BUILTIN_RULE":         func(a []string) string { return codexBuiltinRuleMsg(a[0]) },
 		"POLICY_OVERLAY_INVALID":     func(a []string) string { return policyOverlayInvalidMsg(a[0], a[1]) },
 		"POLICY_OVERLAY_CONFLICT":    func([]string) string { return policyOverlayConflictMsg() },
@@ -731,7 +732,7 @@ func TestRunModeRefusalSentencesMatchGolden(t *testing.T) {
 	}
 	for _, reason := range []string{reasonRunModeRequired, reasonRunModeInvalid, reasonRunModeConflict, reasonStartFolderInvalid, reasonRunBackgroundOnly, reasonRunShapeConflict,
 		reasonHarnessNotInstalled, reasonHarnessSetNoImage, reasonHarnessSetCustomImage, reasonHarnessProvidersConflict,
-		reasonPolicyOverlayInvalid, reasonPolicyOverlayConflict} {
+		reasonPolicyOverlayInvalid, reasonPolicyOverlayConflict, reasonMainDriveUnenforceable} {
 		if !strings.Contains(string(ts), `"`+reason+`"`) {
 			t.Errorf("run-mode-refusals.ts does not carry the reason %q", reason)
 		}

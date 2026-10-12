@@ -51,10 +51,11 @@ const (
 )
 
 // scimPurgeScopes is the erasure a purge asks for (Q-SCIM5): the person's credentials, the masking
-// copies of them, the components they saved and their run setups (templates and template grants).
+// copies of them, the components they saved, their run setups (templates and template grants) and
+// their own Self-Hosted runner pools.
 // The record scopes (audit fields, run tasks, outputs, recordings) stay a deliberate
 // POST /people/{principal}/erasure.
-var scimPurgeScopes = []erasure.Scope{erasure.Credentials, erasure.MaskCopies, erasure.Components, erasure.RunSetups}
+var scimPurgeScopes = []erasure.Scope{erasure.Credentials, erasure.MaskCopies, erasure.Components, erasure.RunSetups, erasure.RunnerPools}
 
 func (s *Server) handleSCIMDeleteUser(w http.ResponseWriter, r *http.Request) {
 	st, ident, ok := s.scimIdentity(w, r)
@@ -170,6 +171,9 @@ func (s *Server) eraseForPurge(ctx context.Context, principal string) (map[strin
 	}
 	if m, ok := rep.Details[erasure.RunSetups].(store.RunSetupsErased); ok {
 		detail["templates_erased"] = m.Templates
+	}
+	if m, ok := rep.Details[erasure.RunnerPools].(map[string]any); ok {
+		detail["runner_pools_deleted"], _ = m["runner_pools"].(int)
 	}
 	return detail, err
 }

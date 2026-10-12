@@ -1,7 +1,7 @@
 // Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Launch intents (migration 0166) against a real Postgres. Guarded by
+// Launch intents (migration 0171) against a real Postgres. Guarded by
 // WARDYN_TEST_PG; each test works in its own throwaway database.
 package store_test
 

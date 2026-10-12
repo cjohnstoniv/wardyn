@@ -181,5 +181,9 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 			relay.Offline(peer)
 		},
 	}
-	return runnerRuntime{hooks: hooks, run: manager.Run, close: func() error { return errors.Join(manager.Close(), relay.Close()) }}, nil
+	run := func(ctx context.Context) error {
+		go resident.SweepExpired(ctx, time.Minute)
+		return manager.Run(ctx)
+	}
+	return runnerRuntime{hooks: hooks, run: run, close: func() error { return errors.Join(manager.Close(), relay.Close()) }}, nil
 }

@@ -52,7 +52,7 @@ function response(o: Partial<RunCapacityResponse> = {}): RunCapacityResponse {
   return {
     generated_at: aheadByHours(0),
     basis: "configured_reservations",
-    states: { RUNNING: 9, STARTING: 2, WAITING_FOR_CONFIRMATION: 1, PENDING: 3 },
+    states: { RUNNING: 9, STARTING: 2, WAITING_FOR_CONFIRMATION: 1, PENDING: 3, QUEUED: 4 },
     paused: 2,
     kept: 1,
     totals: { basis: "requests", ...k8s },
@@ -154,7 +154,7 @@ describe("FleetCapacityCard", () => {
     expect(block).toHaveTextContent("3 unknown — not in these totals.");
     expect(block).toHaveTextContent("Runs started before 0.8.6 recorded no reservation");
     expect(screen.getByTestId("fleet-capacity-states")).toHaveTextContent(
-      "Running 9 · Starting 2 · Awaiting confirmation 1 · Paused 2 · Pending 3 · Kept 1",
+      "Running 9 · Starting 2 · Awaiting confirmation 1 · Paused 2 · Pending 3 · Queued 4 · Kept 1",
     );
     expect(screen.getByTestId("fleet-capacity-age")).toHaveTextContent("Under 1h 4 · 1–8h 6 · 8–24h 2 · 1–7d 2 · Over 7d 0");
   });

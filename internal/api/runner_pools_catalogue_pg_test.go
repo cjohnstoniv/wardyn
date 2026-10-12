@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -23,14 +24,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
-
-// localOn is local-enable for one test: self-hosted pools are judged on the caller's own runners. The
-// tests that use it never run in parallel.
-func localOn(t *testing.T) {
-	t.Helper()
-	localRunsPlaced = true
-	t.Cleanup(func() { localRunsPlaced = false })
-}
 
 // list is GET /runner-pools as c (nil: the admin token) with the query; it must answer 200.
 func (e *placementEnv) list(c *http.Cookie, query string) (client.RunnerPoolList, string) {
@@ -79,6 +72,7 @@ func TestPoolListAvailabilityReasons(t *testing.T) {
 	background := e.limitedPool("Background only", types.CC1, types.CC2, types.CC3)
 	home := e.createPool("Home server", types.RunnerPoolSelfHosted)
 	e.addToPool(e.person, home.ID, e.claimedRunner(e.personP)) // claimed, never online
+	bare := e.createOwnPool(e.person, "Bare")
 
 	reasonOf := func(c *http.Cookie, query string, id uuid.UUID) runnerpool.Reason {
 		t.Helper()
@@ -97,12 +91,12 @@ func TestPoolListAvailabilityReasons(t *testing.T) {
 	}
 	want("switched off", reasonOf(e.person, "", off.ID), runnerpool.ReasonUnavailable)
 	want("no configured executor", reasonOf(e.person, "", empty.ID), runnerpool.ReasonNoEligibleMember)
-	want("self-hosted before local runs are placed", reasonOf(e.person, "", home.ID), runnerpool.AvailabilityPlacementUnavailable)
 	want("an available remote pool", reasonOf(e.person, "", remote.ID), "")
-
-	localOn(t)
 	want("own runners all offline", reasonOf(e.person, "", home.ID), runnerpool.AvailabilityNoOnlineRunner)
-	want("no own runner in the pool", reasonOf(e.other, "", home.ID), runnerpool.ReasonNoEligibleMember)
+	want("no own runner in the pool", reasonOf(e.person, "", bare.ID), runnerpool.ReasonNoEligibleMember)
+	if list, _ := e.list(e.other, ""); slices.ContainsFunc(list.Pools, func(p client.RunnerPoolCatalogueEntry) bool { return p.ID == home.ID }) {
+		t.Error("another person's list shows the person's own Self-Hosted pool")
+	}
 	e.runnersOn(false)
 	want("runners switched off", reasonOf(e.person, "", home.ID), runnerpool.AvailabilityPlacementUnavailable)
 	e.runnersOn(true)
@@ -123,18 +117,22 @@ func TestPoolListAvailabilityReasons(t *testing.T) {
 	want("deny_placements remote", reasonOf(e.person, "", remote.ID), runnerpool.AvailabilityPlacementDenied)
 	want("deny wins over the run type", reasonOf(e.person, "?run_type=interactive", background.ID), runnerpool.AvailabilityPlacementDenied)
 	want("a self-hosted pool under a remote deny", reasonOf(e.person, "", home.ID), runnerpool.AvailabilityNoOnlineRunner)
+	// LE-11: an online, runner-enabled self-hosted pool is available, never placement_unavailable.
+	e.addToPool(e.person, home.ID, e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3))
+	want("an own runner online", reasonOf(e.person, "", home.ID), "")
 }
 
-// T10: another person's runner in the same pool is never named, never counted as capacity and never
-// makes the pool available to the caller.
+// T10: another person's runner in the same pool (a membership no route can write) is never named, never
+// counted as capacity and never makes the pool available to the caller.
 func TestPoolListNeverNamesAnotherPersonsRunner(t *testing.T) {
-	localOn(t)
 	e := newPlacementEnv(t)
 	home := e.createPool("Home server", types.RunnerPoolSelfHosted)
 	mine := e.claimedRunner(e.personP)
 	e.addToPool(e.person, home.ID, mine)
 	theirs := e.laptop(e.otherP, 8000, 16384, types.CC1, types.CC2, types.CC3)
-	e.addToPool(e.other, home.ID, theirs)
+	if _, err := e.pool.Exec(context.Background(), `INSERT INTO runner_pool_members (pool_id, runner_id) VALUES ($1, $2)`, home.ID, theirs); err != nil {
+		t.Fatal(err)
+	}
 
 	list, raw := e.list(e.person, "")
 	got := entryOf(t, list, home.ID)
@@ -174,7 +172,7 @@ func TestPoolListNeverNamesAnotherPersonsRunner(t *testing.T) {
 	}
 }
 
-// T11: a pool a security admin may only manage carries no limits, run types, barriers or runners.
+// T11: a pool a security admin may only manage carries no limits, run types, barriers, runners or slot counts.
 func TestPoolListManagerRowsCarryNoFacts(t *testing.T) {
 	e := newPlacementEnv(t)
 	narrowed := e.sizedPool("Narrowed", types.RunnerPoolAmount{Default: 1000, Cap: 2000})
@@ -186,7 +184,7 @@ func TestPoolListManagerRowsCarryNoFacts(t *testing.T) {
 	if got.Reason != runnerpool.ReasonNotFound || got.Availability != client.RunnerPoolUnavailable {
 		t.Fatalf("manager row = %+v, want unavailable runner_pool_not_found", got)
 	}
-	if len(got.Limits) != 0 || len(got.RunTypes) != 0 || len(got.BarrierOptions) != 0 || got.MyRunners != nil || got.RunTypesSource != "" {
+	if len(got.Limits) != 0 || len(got.RunTypes) != 0 || len(got.BarrierOptions) != 0 || got.MyRunners != nil || got.RunTypesSource != "" || got.Slots != nil {
 		t.Errorf("manager row carries facts: %+v", got)
 	}
 	if !strings.Contains(raw, `"run_types":[]`) || !strings.Contains(raw, `"barrier_options":[]`) {
@@ -196,7 +194,6 @@ func TestPoolListManagerRowsCarryNoFacts(t *testing.T) {
 
 // DR-0091: the fields the dry doors' runner_pools carry are the list's, for the same pool and caller.
 func TestPoolListSharedFieldsMatchTheDryDoors(t *testing.T) {
-	localOn(t)
 	e := newPlacementEnv(t)
 	remote := e.sizedPool("Remote", types.RunnerPoolAmount{Default: 1000, Cap: 2000})
 	e.createPool("Empty", types.RunnerPoolRemoteProvided)

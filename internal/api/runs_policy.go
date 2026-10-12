@@ -135,8 +135,8 @@ func servePage[T any](w http.ResponseWriter, r *http.Request, page store.Page, p
 }
 
 // handleListRuns returns runs in reverse creation order, paginated by
-// ?limit=&offset= (see parseListPage). A member sees only runs they created
-// (store.RunsByCreatorPager); an admin — and a security admin — sees every run.
+// ?limit=&offset= (see parseListPage). A member sees only runs they created, and
+// those of the service identities they sponsor (store.RunsByCreatorPager); an admin — and a security admin — sees every run.
 //
 // isSecurityOperator, not isOperator: an approval or an audit line names a run
 // id, and a tier that can decide the one but cannot see the other is doing
@@ -168,13 +168,21 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		principal := principalFromRequest(r)
+		// A sponsor also reads the runs of the service identities they sponsor (F3), on the filtered path
+		// too (runs_list_filter.go). A store that cannot widen the list, and a portal's delegated token,
+		// list the caller's own runs only: never more.
+		listByCreator := creatorPager.ListRunsPageByCreator
+		if sp, ok := s.cfg.Store.(store.RunsByCreatorOrSponsorPager); ok && !delegatedRequest(r.Context()) {
+			listByCreator = sp.ListRunsPageByCreatorOrSponsor
+		}
 		servePage(w, r, page, func(p store.Page) ([]types.AgentRun, error) {
-			runs, err := creatorPager.ListRunsPageByCreator(r.Context(), principal, p)
+			runs, err := listByCreator(r.Context(), principal, p)
 			if err != nil {
 				return nil, err
 			}
 			s.projectRecordingMeta(r, runs)
 			s.projectStatusDetailFor(r, runs)
+			s.projectRunnerFacts(r, runs)
 			return runs, nil
 		}, nil)
 		return
@@ -188,6 +196,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 			}
 			s.projectRecordingMeta(r, runs)
 			s.projectStatusDetailFor(r, runs)
+			s.projectRunnerFacts(r, runs)
 			return runs, nil
 		}
 	}
@@ -198,19 +207,20 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 		}
 		s.projectRecordingMeta(r, runs)
 		s.projectStatusDetailFor(r, runs)
+		s.projectRunnerFacts(r, runs)
 		return runs, nil
 	})
 }
 
-// handleGetRun returns one run by id. Owner-or-admin (getRunAuthorized): a
-// member reading a run they did not create gets the same 404 a missing run
-// would.
+// handleGetRun returns one run by id. Owner, admin or the sponsor of the service
+// identity that created it (ownsRunOrSponsorOrAdmin): a member reading a run they
+// did not create gets the same 404 a missing run would.
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "run")
 	if !ok {
 		return
 	}
-	run, ok := s.getRunAuthorized(w, r, id)
+	run, ok := s.getRunAuthorizedBy(w, r, id, s.ownsRunOrSponsorOrAdmin)
 	if !ok {
 		return
 	}
@@ -219,6 +229,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	runs := []types.AgentRun{run}
 	s.projectRecordingMeta(r, runs)
 	s.projectStatusDetailFor(r, runs)
+	s.projectRunnerFacts(r, runs)
 	run = runs[0]
 	// ui_apps is a READ-ONLY denormalization of the run's EFFECTIVE policy onto
 	// the run payload — the console's UI-apps lane needs it, and the run row

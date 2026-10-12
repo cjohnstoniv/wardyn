@@ -180,7 +180,7 @@ func (s *Server) agentPolicyFor(ctx context.Context, run types.AgentRun, harness
 		return runAgentPolicy{}, nil
 	}
 	p.bytes = len(content)
-	caps, err := s.cfg.Runner.Capabilities(ctx)
+	caps, err := s.runCapabilities(ctx, run)
 	if err != nil {
 		return runAgentPolicy{}, fmt.Errorf("the runner's capabilities could not be read, so whether it can deliver this run's managed settings (%s) is unknown: %w",
 			agentPolicyBasis(run.AutonomyLevel, hold, locked), err)

@@ -61,10 +61,11 @@ func TestLocalEligibility_ViaOrgOnlyWhenConfiguredAndShaped(t *testing.T) {
 	}
 
 	// Every kind at the persistence gate, which reads the same stored policy.
-	admitted := func(g types.GrantSpec) bool {
-		_, d, ref := f.h.srv.ownLocalGrantSpecs(localMemberRequest("bob"), types.RunPolicySpec{EligibleGrants: []types.GrantSpec{g}})
+	admittedUnder := func(g types.GrantSpec, policy placement.DeliveryPolicy) bool {
+		_, d, ref := f.h.srv.ownLocalGrantSpecs(localMemberRequest("bob"), types.RunPolicySpec{EligibleGrants: []types.GrantSpec{g}}, policy)
 		return ref == nil && len(d) == 1 && d[0].mode == placement.ModeViaOrg
 	}
+	admitted := func(g types.GrantSpec) bool { return admittedUnder(g, storedPolicy(t, f.h.srv)) }
 	for _, tc := range []struct {
 		class string
 		grant types.GrantSpec
@@ -81,15 +82,18 @@ func TestLocalEligibility_ViaOrgOnlyWhenConfiguredAndShaped(t *testing.T) {
 			t.Errorf("%s refused with the class delivered via_org", tc.class)
 		}
 	}
-	// Never: the helper shape of git_pat, cloud_sts, and a resident-only class, even from a row
-	// written around Validate.
-	f.setDeliveryPolicy(t, `{"classes":{"git_pat_broker":{"mode":"via_org"},"git_pat_helper":{"mode":"via_org"},"cloud_sts":{"mode":"via_org"},"env_secret":{"mode":"via_org"},"oauth_subscription":{"mode":"via_org"}}}`)
+	// Never: the helper shape of git_pat, cloud_sts, and a resident-only class, even under a policy no
+	// writer would accept (a stored one fails every door closed before persistence is reached).
+	unshaped := placement.DeliveryPolicy{Classes: map[string]placement.ClassPolicy{}}
+	for _, c := range []string{"git_pat_broker", "git_pat_helper", "cloud_sts", "env_secret", "oauth_subscription"} {
+		unshaped.Classes[c] = placement.ClassPolicy{Mode: placement.ModeViaOrg}
+	}
 	for _, g := range []types.GrantSpec{
 		{Kind: types.GrantGitPAT, Scope: json.RawMessage(`{"host":"git.corp.example","secret_name":"` + localCorpSecret + `"}`)},
 		{Kind: types.GrantCloudSTS},
 		{Kind: types.GrantEnvSecret, Scope: json.RawMessage(`{"name":"CORP_KEY","secret_name":"` + localCorpSecret + `"}`)},
 	} {
-		if admitted(g) {
+		if admittedUnder(g, unshaped) {
 			t.Errorf("%s admitted via_org", g.Kind)
 		}
 	}
@@ -100,13 +104,13 @@ func TestLocalEligibility_ViaOrgOnlyWhenConfiguredAndShaped(t *testing.T) {
 	f.setDeliveryPolicy(t, `{"classes":{}}`)
 	refused := uuid.New()
 	f.createRun(t, refused, "bob", types.PlacementLocal)
-	if _, ok := f.h.srv.persistRunGrants(ctx, httptest.NewRecorder(), localMemberRequest("bob"), refused, time.Now().UTC(), spec, types.PlacementLocal); ok {
+	if _, ok := f.h.srv.persistRunGrants(ctx, httptest.NewRecorder(), localMemberRequest("bob"), refused, time.Now().UTC(), spec, types.PlacementLocal, storedPolicy(t, f.h.srv)); ok {
 		t.Fatal("an operator grant persisted for a local run with no via_org policy")
 	}
 	f.setDeliveryPolicy(t, `{"classes":{"api_key":{"mode":"via_org"}}}`)
 	runID := uuid.New()
 	f.createRun(t, runID, "bob", types.PlacementLocal)
-	gw, ok := f.h.srv.persistRunGrants(ctx, httptest.NewRecorder(), localMemberRequest("bob"), runID, time.Now().UTC(), spec, types.PlacementLocal)
+	gw, ok := f.h.srv.persistRunGrants(ctx, httptest.NewRecorder(), localMemberRequest("bob"), runID, time.Now().UTC(), spec, types.PlacementLocal, storedPolicy(t, f.h.srv))
 	if !ok {
 		t.Fatal("a via_org grant was refused at persistence")
 	}

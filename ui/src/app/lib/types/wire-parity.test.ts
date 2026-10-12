@@ -455,6 +455,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   // the dry-run facts, each pinned to its TS mirror in types/new-run-contract.ts.
   it.each([
     ["RunResources", "RequestedResources"],
+    ["MainDriveApplied", "MainDriveApplied"],
     ["AppliedResources", "AppliedResources"],
     ["AppliedAmount", "AppliedAmount"],
     ["RunOverrides", "RunOverrides"],
@@ -686,6 +687,43 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set([...m[1].matchAll(/"([A-Z_]+)"/g)].map((x) => x[1]))).toEqual(goStates);
     expect(tsInterfaceBody(runsTs, "AgentRun")).toMatch(/admitted_at\?: string;/);
     expect(go).toMatch(/AdmittedAt \*time\.Time\s+`json:"admitted_at,omitempty"`/);
+  });
+
+  // Q-c: the queue's surface. A waiting run's place and a pool's slot counts are the same fields in Go and TS.
+  it.each([
+    ["internal/types/types.go", "RunQueue", "runs.ts", "RunQueue"],
+    ["pkg/client/runner_pools.go", "PoolSlots", "runner-pools.ts", "PoolSlots"],
+    ["pkg/client/runner_pools.go", "RunnerPoolCatalogueEntry", "runner-pools.ts", "RunnerPoolCatalogueEntry"],
+  ])("%s %s: full parity with the TS %s %s mirror", (goFile, goName, tsFile, tsName) => {
+    const go = readFileSync(join(root, goFile), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types", tsFile), "utf8");
+    const goTags = goJSONTags(go, goName);
+    expect(goTags.length).toBeGreaterThanOrEqual(5);
+    expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
+  });
+
+  it("AgentRun.queue and the slot fields are on the wire in Go and TS", () => {
+    const go = readFileSync(join(root, "internal/types/types.go"), "utf8");
+    expect(go).toMatch(/Queue\s+\*RunQueue\s+`json:"queue,omitempty"`/);
+    expect(tsInterfaceBody(runsTs, "AgentRun")).toMatch(/queue\?: RunQueue;/);
+    const pf = readFileSync(join(root, "ui/src/app/lib/types/preflight.ts"), "utf8");
+    const pv = readFileSync(join(root, "ui/src/app/lib/types/policy-preview.ts"), "utf8");
+    expect(tsInterfaceBody(pf, "PreflightResult")).toMatch(/runner_pool_slots\?: PoolSlots;/);
+    expect(tsInterfaceBody(pv, "PolicyPreviewResult")).toMatch(/runner_pool_slots\?: PoolSlots;/);
+    expect(readFileSync(join(root, "pkg/client/runs_create.go"), "utf8")).toMatch(/RunnerPoolSlots \*PoolSlots\s+`json:"runner_pool_slots,omitempty"`/);
+  });
+
+  // The three read-side runner facts: runner_online is a pointer on the Go side because false is a fact
+  // (offline) and absent is unknown, so the console reads `runner_online === false` for its offline arms.
+  it("AgentRun carries the runner name, liveness and last seen, with liveness a pointer", () => {
+    const go = readFileSync(join(root, "internal/types/types.go"), "utf8");
+    expect(go).toMatch(/RunnerOnline\s+\*bool\s+`json:"runner_online,omitempty"`/);
+    expect(go).toMatch(/RunnerName\s+string\s+`json:"runner_name,omitempty"`/);
+    expect(go).toMatch(/RunnerLastSeenAt\s+\*time\.Time\s+`json:"runner_last_seen_at,omitempty"`/);
+    const body = tsInterfaceBody(runsTs, "AgentRun");
+    expect(body).toMatch(/runner_online\?: boolean;/);
+    expect(body).toMatch(/runner_name\?: string;/);
+    expect(body).toMatch(/runner_last_seen_at\?: string;/);
   });
 
   // AutonomyResolution.bound_by names a rubric row or the org's component cap.

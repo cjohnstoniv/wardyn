@@ -83,6 +83,9 @@ func runTypeForEnd(e types.RunExperience) types.RunnerPoolRunType {
 func createEndSources(in createEndInput) ([]runnerpool.SourceLimits, error) {
 	sources, refusal, err := buildLimitSources(limitSourceInput{runType: in.runType, pool: in.pool, governed: in.governed,
 		limits: types.GovernanceLimits{RunLimits: in.gov}, maxAgeSec: in.maxAgeSec})
+	// An older-shape request (no stored experience) reads as Background here. That holds only while
+	// admission refuses that shape in every pool that sets limits (resolvePlacement's PoolSource check),
+	// so no pool's limits ever decide such a run's end.
 	if refusal != nil {
 		// Admission (the run-type check) answers this before the end is decided.
 		return nil, fmt.Errorf("pool %q does not take a %s run", in.pool.Name, in.runType)

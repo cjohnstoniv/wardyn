@@ -46,11 +46,24 @@ export function canonicalAuditAction(a: string): string {
   return LEGACY_AUDIT_ACTIONS[a] ?? a;
 }
 
+// An egress row replayed from a runner's offline spool (0.9, M-RN-3 RS7): the decision was made on the
+// runner while it was disconnected, so its own time is `observed_at` (spooled_at), not the arrival time the
+// chain records; and a `builtin:spool-full` denial is the runner refusing because its offline log was full
+// (spool_full), not a policy decision. Both are absent on every other row.
+// A run ending, with the one fact a runner's revocation adds: the runner was revoked, and was connected or
+// not when it happened (the run.kill row's runner_online). Absent on every other ending.
+export type RunEndingFacts = RunEnding & { runnerRevoked?: { online: boolean } };
+
+export type SpooledEgressDecision = EgressDecision & { spooled_at?: string; spool_full?: boolean };
+
+// The rule_source of the refusal a runner records when its offline log is full (internal/runnerspool).
+const SPOOL_FULL_RULE = "builtin:spool-full";
+
 // Project egress.allow / egress.deny / egress.hold audit events into
 // the EgressDecision shape the run-detail screen renders. Exported so callers
 // that already hold a run's audit events can derive egress WITHOUT a second
 // /audit round-trip.
-export function egressFromAudit(events: AuditEvent[]): EgressDecision[] {
+export function egressFromAudit(events: AuditEvent[]): SpooledEgressDecision[] {
   const map: Record<string, EgressDecision["decision"]> = {
     "egress.allow": "allow",
     "egress.deny": "deny",
@@ -80,7 +93,9 @@ export function egressFromAudit(events: AuditEvent[]): EgressDecision[] {
         // B3: only egress.hold stamps one (docs/AUDIT-ACTIONS.md); str()
         // answers undefined for the other two actions and for an older trail.
         approval_id: str(d.approval_id),
-      } satisfies EgressDecision;
+        ...(d.spooled === true && str(d.observed_at) ? { spooled_at: str(d.observed_at) } : {}),
+        ...(str(d.rule_source) === SPOOL_FULL_RULE ? { spool_full: true } : {}),
+      } satisfies SpooledEgressDecision;
     });
 }
 
@@ -239,7 +254,7 @@ function latestEvent(events: AuditEvent[], pick: (e: AuditEvent) => boolean): Au
 // someone stopped on purpose is not a failure and gets no block at all).
 // Returns undefined for every state that ended fine — the block must not
 // appear on a run that completed.
-export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEnding | undefined {
+export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEndingFacts | undefined {
   const from = (kind: RunEndingKind, e: AuditEvent | undefined, action: string): RunEnding => ({
     kind,
     action: e?.action ?? action,
@@ -259,6 +274,19 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
     // truncated by the 1000-row cap) proves nothing — the state alone is the
     // fact, and the block says so rather than inventing who or how.
     const kill = latestEvent(events, (e) => e.action === "run.kill");
+    // A runner's revocation kills the runs on it (internal/api/runner_revoke.go) and writes the reason and
+    // whether the runner was connected at the time. That is not an operator's kill: there is no killer to name.
+    if (kill && str(kill.data?.reason) === "runner_revoked") {
+      return {
+        kind: "killed",
+        action: kill.action,
+        outcome: kill.outcome,
+        actor: kill.actor,
+        time: kill.time,
+        evidence: kill.outcome === "success" ? "confirmed" : "partial",
+        runnerRevoked: { online: kill.data?.runner_online === true },
+      };
+    }
     return {
       ...from("killed", kill, "run.kill"),
       evidence: !kill ? "unknown" : kill.outcome === "success" ? "confirmed" : "partial",
