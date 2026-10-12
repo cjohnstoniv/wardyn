@@ -88,3 +88,16 @@ func TestMemberDrivePolicyKeepsOnTheWire(t *testing.T) {
 		t.Fatalf("stored member_create = %+v", got)
 	}
 }
+
+// The whole-document site-config door applies the same target-aware refusal as
+// the workspace-providers door, so a Docker size cannot be saved through it.
+func TestMemberDrivePolicyValidation_SiteConfigDoor(t *testing.T) {
+	h := newHarness(t)
+	cfg := baseTestConfig(h, &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{}})
+	cfg.Runner = namedRunner{fakeRunner: &fakeRunner{}, name: "docker"}
+	body := `{"workspace_providers":` + memberDriveBlock(0, types.MemberDrivePolicy{Enabled: true, MaxPerPerson: 2, SizeMiB: 512}) + `}`
+	w := do(t, New(cfg), http.MethodPut, "/api/v1/site-config", adminToken, body)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "a promise nothing keeps") {
+		t.Fatalf("site-config with a docker member-drive size = %d %s, want 400 naming the refusal", w.Code, w.Body.String())
+	}
+}
