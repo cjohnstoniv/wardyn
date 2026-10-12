@@ -274,6 +274,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- Security: with two or more harnesses, the tool-approval credential now reaches only the harness Wardyn starts,
+  as a file under `/run/wardyn/secrets/` that its own launch reads; it is no longer container or pod env. A harness
+  started by hand, or any other process, is given none, and its tool calls take the strictest of the run's rules,
+  unless it reads the started harness's file (see the threat model's same-uid residual). Where the file cannot be
+  delivered (a runner without managed files, or a shared Kubernetes drive), a `run.toolgate_credential.write` audit
+  row records `delivered: false` with the reason.
 - A preset write is now held to the same shape and availability checks as a launch, so a preset no one could launch
   is refused when it is saved. Document error sentences no longer say "template", because they serve Run documents too.
 - A held runner-pool use-policy change now records whether the pool had a use policy when it was reviewed, so a
