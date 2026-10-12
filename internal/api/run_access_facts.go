@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/agentpolicy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -351,18 +352,40 @@ func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
 	policyDefault := policyToolEffect(rules, toolLaneDefault(req), "*")
 	fact.Default = client.ToolDefaultFact{Effective: policyDefault, Source: b.toolRuleSource(types.ToolRule{Tool: "*", Effect: policyDefault}),
 		Options: toolEffectOptions(policyDefault, forDefault, "policy_stricter_default")}
-	if fact.Lane == toolLaneAttended {
-		// Claude Code's settings name tools (agentpolicy.WithToolRules): a tool no
-		// rule names is answered by its mode, which asks, whatever the policy's "*".
-		fact.Default = client.ToolDefaultFact{Effective: types.ToolHold, Source: client.ProvenanceSource{Kind: provKindHarness},
-			Options: toolEffectOptions(types.ToolHold, forDefault, "policy_stricter_default")}
-	}
 	if i := slices.IndexFunc(req.Tools, func(t client.IncludedTool) bool { return t.ID == harness }); i >= 0 &&
 		effectRank(req.Tools[i].DefaultEffect) > effectRank(policyDefault) {
 		fact.Default.Effective, fact.Default.Source = req.Tools[i].DefaultEffect, client.ProvenanceSource{Kind: provKindPerson}
 	}
+	if fact.Lane == toolLaneAttended {
+		// Claude Code's settings name tools (agentpolicy.WithToolRules), never "*":
+		// a tool no rule names is answered by the mode the level's document sets,
+		// whatever the policy's "*", which is therefore no locked row here.
+		fact.Default = attendedDefaultFact(b.in.level, forDefault)
+		fact.PolicyRules = slices.DeleteFunc(fact.PolicyRules, func(r client.LockedToolRule) bool { return r.Tool == "*" })
+	}
 	fact.RuleEffects = toolEffectOptions(policyDefault, forRule, "policy_stricter_tool")
 	return fact
+}
+
+// attendedSettingsAcceptEdits is the Source.ID of an interactive Claude Code
+// run's default where its level's document starts the session accepting file
+// edits (L2, locked or not): edits run without asking, every other tool asks.
+const attendedSettingsAcceptEdits = "accept_edits"
+
+// attendedDefaultFact is what an interactive Claude Code run does with a tool no
+// rule names, and what answers that: the level's managed settings asking (L0,
+// L1); the same settings, which accept file edits unasked (L2); or, at a level
+// that brings no document, the lane's own default (posture), which a
+// repository's settings or hooks may answer first.
+func attendedDefaultFact(level types.AutonomyLevel, cannot map[types.ToolEffect]string) client.ToolDefaultFact {
+	src := client.ProvenanceSource{Kind: provKindHarness}
+	switch _, doc, ok := agentpolicy.ForAgent(claudeCodeHarness, level, false, false); {
+	case !ok:
+		src = client.ProvenanceSource{Kind: provKindPosture}
+	case agentpolicy.AcceptsEdits(doc):
+		src.ID = attendedSettingsAcceptEdits
+	}
+	return client.ToolDefaultFact{Effective: types.ToolHold, Source: src, Options: toolEffectOptions(types.ToolHold, cannot, "policy_stricter_default")}
 }
 
 // toolEffectOptions is each effect a person may choose against the policy's

@@ -187,8 +187,10 @@ func (s *Server) agentPolicyFor(ctx context.Context, run types.AgentRun, harness
 	}
 	var deliverable bool
 	p.withheld, deliverable = managedFilesGap(caps, run.ConfinementClass)
-	if !deliverable && p.toolRules > 0 {
-		return runAgentPolicy{}, agentPolicyRefusal("This run was not launched: Claude Code's managed settings enforce its tool rules in an interactive run, and " + p.withheld)
+	if p.toolRules > 0 && (!deliverable || p.withheld != "") {
+		// Withheld covers krun too: the file is placed there, but a guest that
+		// runs as root could rewrite the rules it carries.
+		return runAgentPolicy{}, agentPolicyRefusal("This run was not launched: Claude Code's managed settings enforce its tool rules in an interactive run, and this runner cannot vouch for them: " + p.withheld)
 	}
 	if !deliverable {
 		return p, nil

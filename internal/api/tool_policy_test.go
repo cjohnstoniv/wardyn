@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -431,16 +432,17 @@ func TestToolPolicy_HarnessFactsOfferWhatTheServerAccepts(t *testing.T) {
 			map[types.ToolEffect]string{}, map[types.ToolEffect]string{}},
 		{"Codex CLI", "codex-cli", createRunRequest{Agent: "codex-cli", Task: "t"}, nil, nil, toolLaneUngated, toolEnforcerNone, "mcp_only", types.ToolAllow, provKindHarness,
 			map[types.ToolEffect]string{types.ToolHold: "harness_no_hold", types.ToolDeny: "harness_no_block_builtin"}, map[types.ToolEffect]string{types.ToolHold: "harness_no_hold"}},
-		{"an interactive run", "claude-code", createRunRequest{Agent: "claude-code", Interactive: true}, nil, nil, toolLaneAttended, toolEnforcerHarness, "any", types.ToolHold, provKindHarness,
+		{"an interactive run", "claude-code", createRunRequest{Agent: "claude-code", Interactive: true}, nil, nil, toolLaneAttended, toolEnforcerHarness, "any", types.ToolHold, provKindPosture,
 			map[types.ToolEffect]string{types.ToolAllow: "attended_rules_unavailable", types.ToolDeny: "attended_rules_unavailable"},
 			map[types.ToolEffect]string{types.ToolAllow: "policy_stricter_tool"}},
-		// Claude Code's settings carry no "*", so whatever the policy's, an unnamed tool asks.
+		// Claude Code's settings carry no "*", so whatever the policy's, an unnamed
+		// tool takes the lane's own default; at no level no document manages it.
 		{"an interactive run whose policy allows every tool", "claude-code", createRunRequest{Agent: "claude-code", Interactive: true},
-			[]types.ToolRule{{Tool: "*", Effect: types.ToolAllow}}, nil, toolLaneAttended, toolEnforcerHarness, "any", types.ToolHold, provKindHarness,
+			[]types.ToolRule{{Tool: "*", Effect: types.ToolAllow}}, nil, toolLaneAttended, toolEnforcerHarness, "any", types.ToolHold, provKindPosture,
 			map[types.ToolEffect]string{types.ToolAllow: "attended_rules_unavailable", types.ToolDeny: "attended_rules_unavailable"},
 			map[types.ToolEffect]string{}},
 		{"an interactive run whose policy blocks every tool", "claude-code", createRunRequest{Agent: "claude-code", Interactive: true},
-			[]types.ToolRule{{Tool: "*", Effect: types.ToolDeny}}, nil, toolLaneAttended, toolEnforcerHarness, "any", types.ToolHold, provKindHarness,
+			[]types.ToolRule{{Tool: "*", Effect: types.ToolDeny}}, nil, toolLaneAttended, toolEnforcerHarness, "any", types.ToolHold, provKindPosture,
 			map[types.ToolEffect]string{types.ToolAllow: "attended_rules_unavailable", types.ToolDeny: "attended_rules_unavailable"},
 			map[types.ToolEffect]string{types.ToolAllow: "policy_stricter_tool", types.ToolHold: "policy_stricter_tool"}},
 		{"your own tools", "none", createRunRequest{Agent: "none", Interactive: true}, nil, nil, toolLaneUnsupported, toolEnforcerNone, "any", types.ToolHold, provKindHarness,
@@ -459,7 +461,8 @@ func TestToolPolicy_HarnessFactsOfferWhatTheServerAccepts(t *testing.T) {
 		if got := avail(f.RuleEffects); !maps.Equal(got, tc.greyRule) {
 			t.Errorf("%s: rule effects greyed %v, want %v", tc.name, got, tc.greyRule)
 		}
-		if len(f.PolicyRules) != len(tc.spec) || f.MCPServers == nil {
+		locked := slices.DeleteFunc(slices.Clone(tc.spec), func(r types.ToolRule) bool { return tc.lane == toolLaneAttended && r.Tool == "*" })
+		if len(f.PolicyRules) != len(locked) || f.MCPServers == nil {
 			t.Errorf("%s: policy rules %v, mcp servers %v", tc.name, f.PolicyRules, f.MCPServers)
 		}
 		for code := range maps.Values(tc.greyRule) {
@@ -474,6 +477,32 @@ func TestToolPolicy_HarnessFactsOfferWhatTheServerAccepts(t *testing.T) {
 			harnessToolRulesRefusal(allowRead.Tools[0]) != nil || (allowRead.Interactive && attendedToolRulesRefusal(createRunRequest{Experience: client.ExperienceInteractive, Tools: allowRead.Tools}) != nil)
 		if _, greyed := tc.greyRule[types.ToolAllow]; refused != greyed && tc.harness != "codex-cli" {
 			t.Errorf("%s: a rule allow refused %v, greyed %v", tc.name, refused, greyed)
+		}
+	}
+	// An interactive run's default, level by level: who answers a tool no rule
+	// names. L0 and L1's settings ask; L2's (locked or not, the same mode) accept
+	// file edits unasked; with no level or L3 no document manages it.
+	for _, c := range []struct {
+		level types.AutonomyLevel
+		src   client.ProvenanceSource
+		skip  string
+	}{
+		{types.AutonomyL0, client.ProvenanceSource{Kind: provKindHarness}, "attended_no_skip"},
+		{types.AutonomyL1, client.ProvenanceSource{Kind: provKindHarness}, "attended_no_skip"},
+		{types.AutonomyL2, client.ProvenanceSource{Kind: provKindHarness, ID: attendedSettingsAcceptEdits}, "attended_rules_unavailable"},
+		{types.AutonomyL3, client.ProvenanceSource{Kind: provKindPosture}, "attended_rules_unavailable"},
+		{"", client.ProvenanceSource{Kind: provKindPosture}, "attended_rules_unavailable"},
+	} {
+		req := createRunRequest{Agent: "claude-code", Interactive: true}
+		f := (&accessBuilder{in: accessInputs{req: &req, level: c.level, spec: types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "*", Effect: types.ToolDeny}, {Tool: "Bash", Effect: types.ToolDeny}}}}}).toolPolicyFact("claude-code")
+		if f.Default.Effective != types.ToolHold || f.Default.Source != c.src || f.Enforcer != toolEnforcerHarness {
+			t.Errorf("%q: default %+v enforcer %s, want hold from %+v", c.level, f.Default, f.Enforcer, c.src)
+		}
+		if got := avail(f.Default.Options); !maps.Equal(got, map[types.ToolEffect]string{types.ToolAllow: c.skip, types.ToolDeny: "attended_rules_unavailable"}) {
+			t.Errorf("%q: default greyed %v", c.level, got)
+		}
+		if len(f.PolicyRules) != 1 || f.PolicyRules[0].Tool != "Bash" {
+			t.Errorf("%q: locked rows %+v, want Bash alone: the policy's \"*\" is not written to Claude Code's settings", c.level, f.PolicyRules)
 		}
 	}
 	// A person's stricter default is theirs.

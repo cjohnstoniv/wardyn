@@ -155,6 +155,12 @@ func DisablesBypass(content []byte) bool {
 	return strings.Contains(string(content), `"disableBypassPermissionsMode": "disable"`)
 }
 
+// AcceptsEdits reports whether content starts the session in acceptEdits mode, where Claude Code runs a
+// file edit without asking.
+func AcceptsEdits(content []byte) bool {
+	return strings.Contains(string(content), `"defaultMode": "acceptEdits"`)
+}
+
 // exactToolName is one tool's exact name, as Claude Code reports it (Bash, WebFetch, mcp__server__tool).
 // Claude Code reads a permission rule as a pattern ("Bash(git:*)", or "mcp__server" for every tool of a
 // server), so a name it would read wider than one tool is refused rather than written: no pattern
