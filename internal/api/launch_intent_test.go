@@ -90,6 +90,11 @@ func TestLaunchIntentContent(t *testing.T) {
 			plain: true,
 		},
 		{
+			name: "the wait chosen at launch",
+			body: `{"agent":"claude-code","task":"t","max_wait_sec":600}`,
+			want: []string{"agent", "task"}, absent: []string{"max_wait_sec"},
+		},
+		{
 			name: "a whole inline_policy", reason: launchIntentWholeInlinePolicy,
 			body: `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC1","allowed_domains":["api.anthropic.com"]}}`,
 		},

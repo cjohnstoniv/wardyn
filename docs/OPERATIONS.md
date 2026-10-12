@@ -1213,10 +1213,12 @@ erases one person's retained records by explicit scope, in one audited act
   rest.
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
 
-- **A launch intent (a run's setup, kept for Run again) never outlives an erase that overlaps its launch.**
-  - A run's insert takes a per-person Postgres lock, shared and without waiting, and writes the intent in the same transaction.
+- **A launch intent (a run's setup, kept for Run again) is erased with every launch whose run insert began before the erase.**
+  - A run's insert takes a per-person Postgres lock first, shared and without waiting, and writes the intent in the same transaction.
   - An erase takes it exclusively and waits, so it deletes what earlier launches wrote.
   - A launch that meets a running erase starts with no intent (`run.create` `launch_intent_reason` `erasure_in_progress`).
+  - A request decoded before the erase whose insert begins after it commits keeps its intent, as its run row keeps its task.
+  - Migration `0171_run_launch_intents` adds the table; a split-role install grants the app role `SELECT, INSERT, DELETE` on it.
 
 - **A credential write that began before the erase never lands behind it.**
   - The `credentials` scope advances the person's erase generation before it lists anything and again after the deletes, so a write that began between the two is refused as well.

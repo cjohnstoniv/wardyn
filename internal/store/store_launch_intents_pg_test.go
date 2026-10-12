@@ -123,6 +123,11 @@ func TestPG_LaunchIntentEraseLinearizesWithLaunches(t *testing.T) {
 		erased <- n
 	}()
 	waitAdvisoryWaiters(ctx, t, pool, 2) // the erase waits for that launch
+	// The uncapped path (no WARDYN_MAX_CONCURRENT_RUNS) meets the queued erase too: it starts at once, with no intent.
+	uncapped, err := st.CreateRun(ctx, intentRun("alice", `{"agent":"claude-code","task":"uncapped"}`))
+	if err != nil || uncapped.LaunchIntent != nil {
+		t.Fatalf("CreateRun beside a queued erase = %v, kept %v; want started with no intent", err, uncapped.LaunchIntent != nil)
+	}
 	during := intentRun("alice", `{"agent":"claude-code","task":"during"}`)
 	duringDone := launch(during)
 	waitAdvisoryWaiters(ctx, t, pool, 3) // met the queued erase, now waits on the cap
@@ -140,7 +145,7 @@ func TestPG_LaunchIntentEraseLinearizesWithLaunches(t *testing.T) {
 	if d.run.LaunchIntent != nil {
 		t.Error("the launch that met the erase kept an intent")
 	}
-	for name, run := range map[string]types.AgentRun{"before": before, "during": during} {
+	for name, run := range map[string]types.AgentRun{"before": before, "during": during, "uncapped, during": uncapped} {
 		if _, err := st.GetLaunchIntent(ctx, run.ID, "alice"); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("the launch %s the erase still has an intent after it: %v", name, err)
 		}

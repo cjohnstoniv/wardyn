@@ -79,6 +79,8 @@ type RunSetupsErased struct {
 	Templates         int `json:"templates"`
 	Grants            int `json:"grants"`
 	AuthorshipCleared int `json:"authorship_cleared"`
+	// LaunchIntents is set by the caller that also erases the person's launch intents (LaunchIntentStore).
+	LaunchIntents int `json:"launch_intents"`
 }
 
 // templateAudienceLockSQL is the named lock of D25-B: a transaction-scoped

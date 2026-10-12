@@ -162,6 +162,7 @@ type queuedCreate struct {
 	createdByType types.ActorType
 	taskWarning   string
 	workspacePath string
+	intent        launchIntent // run.LaunchIntent carries its document
 }
 
 // answer inserts the QUEUED run and its queue row in one transaction, audits it, makes one bounded
@@ -267,6 +268,7 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	delete(createData, "jti") // nothing is minted while the run waits
 	createData["policy_source"] = q.f.source
 	createData["end"] = q.f.end.audit(created)
+	q.intent.stamp(createData, created.LaunchIntent != nil)
 	createData["queue"] = map[string]any{
 		"pool_id": e.PoolID, "position": position, "max_wait_sec": waitSec, "deadline_at": e.DeadlineAt, "capped": true,
 		"reason": string(runnerpool.WaitAtCapacity),

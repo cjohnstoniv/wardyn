@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -46,9 +47,14 @@ const (
 	launchIntentErasureInProgress = "erasure_in_progress" // an erasure of the creator's intents held the person lock
 )
 
-// launchIntentDropped are request fields a Run document never holds: the run's
-// own name, and the stamps of where the request came from.
-var launchIntentDropped = []string{"title", "description", "preset", "preset_version", "mode_contract"}
+// launchIntentDropped reports a request field a Run document never holds: one
+// the template field registry excludes as chosen at each launch (title,
+// description, max_wait_sec) or as where the request came from (preset stamps,
+// mode_contract). policy_overlay, also an origin field, is moved first.
+func launchIntentDropped(field string) bool {
+	r, ok := templateRule(templateRequestRules, field)
+	return ok && (r.Excluded == templateExcludeLaunch || r.Excluded == templateExcludeOrigin)
+}
 
 // launchIntent is the document a create will keep, or why it keeps none.
 type launchIntent struct {
@@ -68,18 +74,14 @@ func launchIntentFor(asked []byte) launchIntent {
 	if _, ok := fields["inline_policy"]; ok {
 		return launchIntent{reason: launchIntentWholeInlinePolicy}
 	}
-	for _, k := range launchIntentDropped {
-		delete(fields, k)
-	}
-	for _, k := range []string{"agent", "repo"} { // the two request fields written even when empty
-		if string(fields[k]) == `""` {
-			delete(fields, k)
-		}
-	}
 	if overlay, ok := fields["policy_overlay"]; ok {
 		fields["inline_policy"] = overlay
 		delete(fields, "policy_overlay")
 	}
+	maps.DeleteFunc(fields, func(k string, v json.RawMessage) bool {
+		// agent and repo are the two request fields written even when empty.
+		return launchIntentDropped(k) || (k == "agent" || k == "repo") && string(v) == `""`
+	})
 	body, err := json.Marshal(map[string]any{"api_version": client.TemplateDocumentVersion, "kind": client.RunDocumentKind, "intent": fields})
 	if err != nil {
 		return launchIntent{reason: launchIntentDocumentRefused}
