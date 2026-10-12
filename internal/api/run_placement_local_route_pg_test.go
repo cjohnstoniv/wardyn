@@ -233,3 +233,26 @@ func TestPG_LocalRun_RepositoryGoesThroughTheBroker(t *testing.T) {
 		t.Errorf("stored grants = %+v, want the one github_token grant delivered via_org", rows)
 	}
 }
+
+// LE-6: on the person's own runner, a Background run that asks for more CPU and memory than the runner
+// holds is created, reduced to the runner's capacity with source runner_capacity, and dispatched to that
+// runner at the reduced size.
+func TestPG_LocalRun_OverAskReducedToRunnerCapacity(t *testing.T) {
+	e := newPlacementEnv(t)
+	laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	small := e.laptop(e.personP, 2000, 2048, types.CC1, types.CC2, types.CC3)
+	e.addToPool(e.person, laptops.ID, small)
+	e.stream(small, types.CC1, types.CC2, types.CC3)
+	e.assignSizedProfile("eight", &types.ResourceLimits{CPUMillis: 8000, MemoryMiB: 16384}, types.GovernanceLimits{})
+	created := e.create(limitsBody(`"placement":"local","runner_id":"` + small.String() + `","runner_pool_id":"` + laptops.ID.String() +
+		`","resources":{"cpu_millis":4000,"memory_mib":8192}`))
+	if created.RunnerID == nil || *created.RunnerID != small || created.ResourcesApplied == nil {
+		t.Fatalf("created = %+v, want a run on %s with its applied size", created, small)
+	}
+	wantAmount(t, "cpu", created.ResourcesApplied.CPUMillis, 2000, true, types.LimitSourceRunnerCapacity, "")
+	wantAmount(t, "memory", created.ResourcesApplied.MemoryMiB, 2048, true, types.LimitSourceRunnerCapacity, "")
+	spec := e.dispatchedSpec(created.ID)
+	if spec.RunnerID != small.String() || spec.Resources.CPUMillis != 2000 || spec.Resources.MemoryMiB != 2048 {
+		t.Errorf("dispatched to %q with %+v, want %s at 2000 m / 2048 MiB", spec.RunnerID, spec.Resources, small)
+	}
+}
