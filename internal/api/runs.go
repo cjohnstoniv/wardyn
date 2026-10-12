@@ -318,11 +318,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, f.modelCred.Kind)
 
 	createData := createRunAuditData(req, f.policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
-	createData["policy_source"] = f.source
+	createData["policy_source"], createData["end"] = f.source, f.end.audit(run)
 	if len(gw.delivery) > 0 {
 		createData["delivery"] = gw.delivery
 	}
-	createData["end"] = f.end.audit(run)
+	stampDriveAudit(createData, f.drives)
 	stampHarnessSet(createData, f.harnesses, f.image)
 	comps.stampRunCreate(createData)
 	maps.Copy(createData, f.place.auditFields(created))
@@ -370,7 +370,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	spec, harnessRules := applyHarnessToolRules(spec, req.Tools, toolLaneDefault(req))
 	launch := createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
-		wsRefs: wsRefs, driveMount: f.driveMount, ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
+		wsRefs: wsRefs, driveMounts: f.driveMounts, ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
 		runToken: id.Token, created: created, comps: comps, overridden: f.source.overridden(), pushSets: f.pushSets, harnessRules: harnessRules,
 		harnesses: f.harnesses, mainDrive: f.mainDrive.decision(),
 	}

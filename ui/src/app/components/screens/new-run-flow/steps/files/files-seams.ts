@@ -10,9 +10,11 @@
 // replaces the placeholder here and nothing else changes.
 
 import * as React from "react";
+import { DENIED } from "../../../../../lib/permissions-copy";
 import type { PreflightResult } from "../../../../../lib/types/preflight";
 import type { LimitSource, RunnerPoolChoice, RunnerPoolRunType } from "../../../../../lib/types/runner-pools";
 import type { Workspace } from "../../../../../lib/types/workspaces";
+import { PROVIDERS } from "../../../../../lib/workspace-providers-copy";
 import type { CreateRunWire } from "../../draft/intent-to-wire";
 import { useDraftIdentity, useIntentChecks } from "../../draft/use-intent-checks";
 
@@ -58,22 +60,27 @@ export interface RepoRow {
   path?: string;
   /** Every repository of this workspace, for an entry that carries no repos list. */
   siblings: string[];
+  /** The sentence for why this row cannot be included; absent when it can. */
+  unavailable?: string;
 }
 
 const repoName = (source: string): string => source.replace(/[/\\]+$/, "").replace(/\.git$/, "").split(/[/:\\]/).pop() || source;
 
-/** The repository sources of the workspaces the person may launch, one row each. */
+/**
+ * The repository sources of every workspace the person can see, one row each. A row the server says
+ * they cannot launch stays listed with its reason (visibility is not capability); only `admitted ===
+ * false` means refused, an absent flag says nothing.
+ */
 export function repoRows(workspaces: readonly Workspace[]): RepoRow[] {
-  return workspaces
-    .filter((w) => w.available_to_you !== false)
-    .flatMap((w) => {
-      const repos = (w.sources ?? []).filter((s) => s.type === "repo" && s.source);
-      const siblings = repos.map((s) => s.source as string);
-      return repos.map((s) => ({
-        key: `${w.id}/${s.source}`, workspaceId: w.id, repo: s.source as string, name: repoName(s.source as string),
-        ref: s.ref, path: s.clone_target, siblings,
-      }));
-    });
+  return workspaces.flatMap((w) => {
+    const repos = (w.sources ?? []).filter((s) => s.type === "repo" && s.source);
+    const siblings = repos.map((s) => s.source as string);
+    return repos.map((s) => ({
+      key: `${w.id}/${s.source}`, workspaceId: w.id, repo: s.source as string, name: repoName(s.source as string),
+      ref: s.ref, path: s.clone_target, siblings,
+      unavailable: w.available_to_you === false ? DENIED.WORKSPACE_NOT_AVAILABLE : s.admitted === false ? PROVIDERS.CARD_NOT_ADMITTED : undefined,
+    }));
+  });
 }
 
 /** What the step reads of the pool the run lands in, for the run's type. */

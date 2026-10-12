@@ -289,7 +289,7 @@ func startFolderShapeRefusal(req createRunRequest) *runRefusal {
 // runAttachesAnything reports whether the request attaches a repository, a
 // workspace or a drive, by any of the doors the older fields give.
 func runAttachesAnything(req createRunRequest) bool {
-	if req.Repo != "" || req.WorkspaceID != nil || len(req.Workspaces) > 0 || (req.Drive != nil && req.Drive.Enabled) {
+	if req.Repo != "" || req.WorkspaceID != nil || len(req.Workspaces) > 0 || (req.Drive != nil && req.Drive.Enabled) || len(req.Drives) > 0 {
 		return true
 	}
 	p := req.InlinePolicy
@@ -398,11 +398,6 @@ func runModeUnavailable(req createRunRequest) (path, what string) {
 			return p, p + ": a component tool"
 		}
 	}
-	// ponytail: drive_id waits for D-112-113's drive list; a legacy drive starts
-	// through attachment "drive".
-	if f := req.StartFolder; f != nil && f.DriveID != "" {
-		return "start_folder.drive_id", "start_folder.drive_id: a drive from the drive list"
-	}
 	return "", ""
 }
 
@@ -419,13 +414,21 @@ func startFolderAttachmentKnown(req createRunRequest, attachment string) bool {
 }
 
 // startFolderRefusal holds a start folder to the attachments of this run, by the
-// request alone; a drive_id is runModeUnavailable's. The subpath is already
+// request alone: a workspace or the legacy drive, or a drive_id of drives[]. The subpath is already
 // cleaned and has no ".." element (startFolderShapeRefusal), so the resolved
 // folder stays inside the mount. The folder itself, a named repo included, is
 // resolved over the run's targets once its workspaces are seeded (startFolderDir).
 func startFolderRefusal(req createRunRequest) *runRefusal {
 	f := req.StartFolder
-	if f == nil || f.Kind != client.StartFolderAttachment || f.DriveID != "" || startFolderAttachmentKnown(req, f.Attachment) {
+	switch {
+	case f == nil || f.Kind != client.StartFolderAttachment:
+		return nil
+	case f.DriveID != "":
+		if driveStartFolderKnown(req, f.DriveID) {
+			return nil
+		}
+		return runError(http.StatusBadRequest, reasonStartFolderInvalid, startFolderAttachmentMsg(f.DriveID))
+	case startFolderAttachmentKnown(req, f.Attachment):
 		return nil
 	}
 	return runError(http.StatusBadRequest, reasonStartFolderInvalid, startFolderAttachmentMsg(f.Attachment))

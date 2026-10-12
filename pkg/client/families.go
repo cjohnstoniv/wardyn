@@ -628,13 +628,18 @@ type DriveRequest struct {
 }
 
 // DriveGrantRequest is the POST /drives/grants body — one allocation of a
-// drive to a subject, upserted by the natural key (subject_type, subject): a
-// second POST for the same subject repoints its single row rather than
-// accumulating another one.
+// drive to a subject. It REPLACES the subject's allocation: the subject ends
+// with exactly this drive, and an existing allocation is repointed (200), so a
+// second POST for the same subject moves them to the new drive. With
+// Additional the drive is allocated BESIDE the subject's others, keyed on
+// (subject_type, subject, drive_id).
 type DriveGrantRequest struct {
 	SubjectType CapabilitySubjectType `json:"subject_type"`
 	Subject     string                `json:"subject"`
 	DriveID     uuid.UUID             `json:"drive_id"`
+	// Additional allocates this drive beside the subject's other drives
+	// instead of replacing them (0.9: a run may attach several drives).
+	Additional bool `json:"additional,omitempty"`
 	// Priority breaks ties within a tier (higher wins) when a subject's
 	// membership qualifies it for more than one group-tier grant. It does not
 	// cross tiers (user beats group beats all).
@@ -730,9 +735,9 @@ func (c *Client) ApplyDrives(ctx context.Context, doc DrivesDocument) (DrivesDoc
 // (PUT), a zero id is CREATED (POST) — which is what makes `wardyn drive get
 // > f && wardyn drive set f` a no-op: the ids `get` wrote back are exactly
 // what route the re-`set` to an update of the same rows, not a second copy
-// under a fresh name. A grant carries no id of its own; every one is POSTed,
-// and the server's own (subject_type, subject) upsert repoints an existing
-// allocation rather than duplicating it.
+// under a fresh name. A grant carries no id of its own; every one is POSTed
+// with Additional, so it upserts the one (subject_type, subject, drive_id)
+// allocation it names and never replaces a subject's other drives.
 //
 // Nothing doc omits is touched and nothing is deleted — neither POST nor PUT
 // can express that, and this function does not attempt it by other means.
@@ -784,6 +789,9 @@ func (c *Client) ApplyDrivesResult(ctx context.Context, doc DrivesDocument) (Dri
 			// different from what GetDrives just reported.
 			HomeOverride: &g.HomeOverride,
 			Enabled:      &g.Enabled,
+			// Additional: the document's grants are added beside one another;
+			// replacing would leave a subject only the last of its drives.
+			Additional: true,
 		}
 		var saved UserDriveGrant
 		err := c.do(ctx, http.MethodPost, "/api/v1/drives/grants", req, &saved)

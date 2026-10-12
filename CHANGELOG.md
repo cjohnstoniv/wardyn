@@ -94,6 +94,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   tombstone. An organisation Self-Hosted default slot or preferred hosting type is cleared to none, never switched
   to Remote Provided, and is now refused on write; until a person or an administrator sets a preference, a launch
   that names no pool is refused `runner_pool_required`.
+- `wardyn drive set` now adds every grant in its file and never removes an allocation, so `drive get` then `drive
+  set` changes nothing. In 0.8 a file that changed a subject's `drive_id` moved the subject; in 0.9 it adds the new
+  drive beside the old one. Remove the old allocation with `DELETE /drives/grants/{id}` or in the console.
 
 ### Added
 
@@ -461,6 +464,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `allowed_roots`; `GET /me/runners`, and so `wardyn runner list`, keeps a runner someone else revoked for seven
   days with `revoked_by_email`; both runner-token mint answers carry `org_url`; runs on a registered computer carry
   `runner_name`, `runner_online` and `runner_last_seen_at`.
+- A run can attach several drives: `GET /api/v1/me/drives` lists the drives your grants reach, each with its path,
+  and `POST /runs` takes `drives: [{drive_id, read_only?}]`. Your top-ranked drive stays at `/home/agent/drive`; the
+  others mount at `/home/agent/drives/<slug>` or `/home/agent/shared/<slug>`, and a drive that cannot mount refuses
+  the whole run. `POST /drives/grants` with `additional: true` allocates a drive beside a subject's others; without
+  it, allocating still replaces the subject's drive, and concurrent replaces leave one (migration
+  `0169_user_drive_grants_per_drive`). New refusals: `drive_selection_conflict` and `drive_invalid` (400);
+  `drive_not_found`, `drive_not_in_pool`, `drive_target_conflict` and `drive_share_beside_managed` (422), the first
+  three audited as `authz.denied`. `run.drive.mount` is written per drive with `drive_id` and `target`, and
+  `drive.grant.write` carries `removed_drive_ids`. Docker's orphan sweep removes leftover drive seed containers.
+- New Run: the Files step lists a repository you cannot launch (its workspace is not available to you, or its host
+  is not an enabled git provider) disabled with the reason instead of hiding it, and those launch refusals link to
+  Files; the Tools step's model-provider picker shows the provider the server has already chosen (the default or the
+  only one) with how its credential is delivered, and asks for a choice only when one is needed; Review lists the
+  server's preflight warnings in one notice and shows a read-only Recording row under Where it runs.
 
 ### Changed
 
@@ -523,8 +540,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Own-runner (local) eligibility classifies the complete dispatch plan: own credentials are separated from operator,
   brokered and platform-minted material, every unclassified or unknown field refuses, own stored grants are persisted
   owner-only after the owner's namespace is proven, and a self-defined component on a local run needs
-  `local_self_defined_components` (default deny). Own-runner execution itself stays unavailable
-  (`placement_unavailable`) until routing and delivery land.
+  `local_self_defined_components` (default deny). A local run is placed through a Self-Hosted pool of the launcher's
+  own; one with no pool is refused `placement_unavailable`.
 - Run detail and `wardyn run policy` identify organisation-component egress as
   "Added for an attached component"; direct GitHub clone hosts are attributed to source control.
 
