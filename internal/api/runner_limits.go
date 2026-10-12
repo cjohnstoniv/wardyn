@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -32,7 +33,10 @@ var _ machineNameStore = store.PG{}
 func (s *Server) capsFromRunner(ctx context.Context, runnerID uuid.UUID, ev runnerwire.Event) {
 	ms, ok := s.cfg.Store.(machineNameStore)
 	var caps runnerwire.Caps
-	if !ok || runnerwire.Unmarshal(ev.Data, &caps) != nil || caps.MachineName == "" {
+	if !ok || runnerwire.Unmarshal(ev.Data, &caps) != nil {
+		return
+	}
+	if caps.MachineName = strings.TrimSpace(caps.MachineName); caps.MachineName == "" {
 		return
 	}
 	if !types.ValidMachineName(caps.MachineName) {

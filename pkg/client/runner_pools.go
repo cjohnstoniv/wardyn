@@ -453,8 +453,9 @@ func (c *Client) RemoveMyPoolRemoteRunner(ctx context.Context, poolID uuid.UUID,
 	return c.do(ctx, http.MethodDelete, "/api/v1/me/runner-pools/"+poolID.String()+"/remote-runners/"+url.PathEscape(remoteRunnerID), nil, nil)
 }
 
-// ListRunnerPoolMembers lists a pool's runners, both kinds: its owner reads their own user pool, and an
-// administrator or security admin reads any pool. Anyone else gets the unknown-id 404.
+// ListRunnerPoolMembers lists a pool's runners, both kinds, to whoever may read the pool: a user pool's
+// owner, anyone who may use an organization pool, and an administrator or security admin (any pool).
+// Another person's user pool is the unknown-id 404.
 func (c *Client) ListRunnerPoolMembers(ctx context.Context, poolID uuid.UUID) ([]RunnerPoolMemberView, error) {
 	var out []RunnerPoolMemberView
 	err := c.do(ctx, http.MethodGet, "/api/v1/runner-pools/"+poolID.String()+"/members", nil, &out)

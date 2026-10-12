@@ -131,20 +131,24 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 		out.wait = runnerpool.WaitNoRunnerFree
 		return out, nil
 	}
-	online := false
+	online, executor := false, false
 	for _, t := range targets {
 		if t.offline || (out.pinned && pool.Scope == types.RunnerPoolUser && t.id != req.RunnerID) {
 			continue
 		}
 		online = true
-		if t.runnerID == nil {
-			return out, nil
-		}
-		if !t.full {
+		switch {
+		case t.runnerID == nil:
+			executor = true
+		case !t.full:
 			out.runners = append(out.runners, *t.runnerID)
 		}
 	}
 	switch {
+	case executor:
+		// An online executor can take the run whatever the registered runners hold, so the promotion
+		// binds no runner and the start picks the target (a mixed pool is the runner-pool redesign's).
+		out.runners = nil
 	case !online:
 		out.wait = runnerpool.WaitNoRunnerFree
 	case len(out.runners) == 0:

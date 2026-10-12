@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -137,12 +138,123 @@ func TestPG_PromotionHoldsEachRunnerToItsMaxRuns(t *testing.T) {
 		t.Fatalf("a second pass promoted %d (%v), want none while both runners are full", len(again), err)
 	}
 
-	// The start keeps the runner the promotion found room on; moving to a full one is refused.
-	if _, _, err := pg.StartQueuedRun(ctx, got[0].Run.ID, store.QueueStart{RunnerID: &busy.ID, Placement: types.PlacementLocal, ConfinementClass: types.CC2}); !errors.Is(err, store.ErrRunnerAtCapacity) {
-		t.Fatalf("a start onto the full runner = %v, want ErrRunnerAtCapacity", err)
+	// A start onto a full runner with nowhere else to go is refused; with the run's other runner offered it
+	// lands there (the promoted run does not count against itself), never ending for one full runner.
+	start := func(runner uuid.UUID, fallbacks ...uuid.UUID) (types.AgentRun, bool, error) {
+		return pg.StartQueuedRun(ctx, got[0].Run.ID, store.QueueStart{RunnerID: &runner, RunnerFallbacks: fallbacks,
+			Placement: types.PlacementLocal, ConfinementClass: types.CC2})
 	}
-	if _, ok, err := pg.StartQueuedRun(ctx, got[0].Run.ID, store.QueueStart{RunnerID: &free.ID, Placement: types.PlacementLocal, ConfinementClass: types.CC2}); err != nil || !ok {
-		t.Fatalf("a start on the runner it was promoted to = %v %v, want admitted (it does not count itself)", ok, err)
+	if _, _, err := start(busy.ID); !errors.Is(err, store.ErrRunnerAtCapacity) {
+		t.Fatalf("a start onto the full runner alone = %v, want ErrRunnerAtCapacity", err)
+	}
+	started, ok, err := start(busy.ID, free.ID)
+	if err != nil || !ok || started.RunnerID == nil || *started.RunnerID != free.ID {
+		t.Fatalf("a start offered the free runner too = %v %v on %v, want it on %s", ok, err, started.RunnerID, free.ID)
+	}
+}
+
+// A pass spreads its runs: a run whose runners all have room goes to the one with the most left.
+func TestPG_PromotionBindsTheRoomiestRunner(t *testing.T) {
+	ctx := context.Background()
+	pg := store.NewPG(runsPGPoolIsolated(t))
+	p := cappedPool(t, pg, 10)
+	loaded := capacityRunner(t, pg, 3)
+	idle := capacityRunner(t, pg, 3)
+	if _, err := pg.CreateRun(ctx, onRunner(p, loaded, types.RunRunning)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := enqueueOnRunner(t, pg, p, loaded); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := pg.PromoteRunQueue(ctx, pass(p), func(context.Context, types.RunnerPool, store.RunQueueEntry) (store.QueueVerdict, error) {
+		return store.QueueVerdict{Admit: true, Runners: []uuid.UUID{loaded.ID, idle.ID}}, nil
+	})
+	if err != nil || len(got) != 1 || *got[0].Run.RunnerID != idle.ID {
+		t.Fatalf("promoted %+v (%v), want the run on the idle runner", got, err)
+	}
+}
+
+// A revive that starts an agent takes a place on its runner: on a runner at its max_runs it is refused,
+// naming the runner and its limit, and claimed once a run there ends.
+func TestPG_ReviveOntoAFullRunnerIsRefused(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	p := queuePool(t, pg)
+	runner := capacityRunner(t, pg, 1)
+	kept, err := pg.CreateRun(ctx, onRunner(p, runner, types.RunRunning))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at=now(), lost_reason='reboot' WHERE id=$1`, kept.ID); err != nil {
+		t.Fatal(err)
+	}
+	busy, err := pg.CreateRun(ctx, onRunner(p, runner, types.RunRunning))
+	if err != nil {
+		t.Fatalf("a kept run holds no place, so another run takes the runner's one: %v", err)
+	}
+	_, err = pg.MarkRunRevived(ctx, kept.ID, types.LostReboot, nil, 0, true)
+	var full *store.RunnerAtCapacityError
+	if !errors.As(err, &full) || full.Max != 1 || full.Runner != runner.Name {
+		t.Fatalf("revive onto a full runner = %v, want a RunnerAtCapacityError naming it and 1", err)
+	}
+	if ok, err := pg.UpdateRunStateIf(ctx, busy.ID, types.RunRunning, types.RunCompleted); err != nil || !ok {
+		t.Fatal(err)
+	}
+	if claimed, err := pg.MarkRunRevived(ctx, kept.ID, types.LostReboot, nil, 0, true); err != nil || !claimed {
+		t.Fatalf("revive once the runner has room = %v, %v; want claimed", claimed, err)
+	}
+}
+
+// A create into a pool takes the pool row before the deployment cap's advisory lock, the order a
+// promotion and a revive use: while another writer holds the pool row, a waiting create holds no cap
+// lock that writer could next wait on.
+func TestPG_CreateTakesThePoolBeforeTheRunCap(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	p := queuePool(t, pg)
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(ctx) //nolint:errcheck // a no-op after Commit
+	if _, err := holder.Exec(ctx, `SELECT 1 FROM runner_pools WHERE id = $1 FOR NO KEY UPDATE`, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := pg.CreateRunUnderCap(ctx, poolRun(p, types.RunPending, "alice"), 100)
+		done <- err
+	}()
+	waiting := false
+	for deadline := time.Now().Add(5 * time.Second); !waiting && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if err := pool.QueryRow(ctx, `SELECT count(*) > 0 FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !waiting {
+		t.Fatal("the create never waited on the held pool row")
+	}
+	var free bool
+	probe, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = probe.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1, 0)`, db.RunCapLockClass).Scan(&free)
+	_ = probe.Rollback(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("the create after the pool was released = %v", err)
+	}
+	if !free {
+		t.Fatal("a create waiting on the pool row already held the deployment cap's lock: pool before cap is broken")
 	}
 }
 

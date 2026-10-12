@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -259,11 +258,9 @@ func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []ad
 			}
 			var bind *uuid.UUID
 			if len(a.runners) > 0 {
-				i := slices.IndexFunc(a.runners, func(id uuid.UUID) bool { return rooms[id].free() })
-				if i < 0 {
+				if bind = roomiest(a.runners, rooms); bind == nil {
 					continue
 				}
-				bind = &a.runners[i]
 			}
 			run, ok, err := promoteQueuedRun(ctx, q, e.RunID, pass.WatcherOwner, bind)
 			if err != nil {
@@ -289,6 +286,19 @@ func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []ad
 		return nil
 	})
 	return promoted, err
+}
+
+// roomiest is the runner of ids with the most room left, the first of them on a tie, nil when none has
+// any: a pass spreads its runs over the runners rather than filling the first.
+func roomiest(ids []uuid.UUID, rooms map[uuid.UUID]runnerRoom) *uuid.UUID {
+	var best *uuid.UUID
+	for i, id := range ids {
+		room := rooms[id]
+		if room.free() && (best == nil || room.max-room.used > rooms[*best].max-rooms[*best].used) {
+			best = &ids[i]
+		}
+	}
+	return best
 }
 
 // promoteQueuedRun is the promotion CAS: QUEUED to PENDING, admitted_at and the watcher lease stamped,
@@ -412,15 +422,19 @@ type QueueStart struct {
 	Placement           types.Placement
 	PlacementFilled     bool
 	RunnerID            *uuid.UUID
-	EvidenceSource      types.RunEvidenceSource
-	RunnerPoolExecutor  string
+	// RunnerFallbacks are the run's other runners, in order: when RunnerID has no room under its lock the
+	// start takes the first of these that has, so a run is never ended for one full runner while another
+	// can take it.
+	RunnerFallbacks    []uuid.UUID
+	EvidenceSource     types.RunEvidenceSource
+	RunnerPoolExecutor string
 }
 
 // StartQueuedRun writes the start's columns on a run that was promoted (PENDING, admitted_at set) and
 // has not been dispatched, and returns the row. ok is false when the run is no longer in that state,
 // so a kill that won leaves nothing written. A run bound to a registered runner is held to that runner's
-// max_runs, the run itself not counted, under the runner's row lock (RunnerAtCapacityError): the
-// promotion already found it room there unless the start chose another runner.
+// max_runs, the run itself not counted, under the runner rows' locks: RunnerID when it has room (the
+// promotion found it room there), else the first of RunnerFallbacks that has, else RunnerAtCapacityError.
 func (s PG) StartQueuedRun(ctx context.Context, id uuid.UUID, st QueueStart) (run types.AgentRun, ok bool, err error) {
 	limits, err := json.Marshal(st.RunLimits)
 	if err != nil {
@@ -428,9 +442,11 @@ func (s PG) StartQueuedRun(ctx context.Context, id uuid.UUID, st QueueStart) (ru
 	}
 	err = s.inTx(ctx, func(q Querier) error {
 		if st.RunnerID != nil {
-			if err := admitOnRunner(ctx, q, *st.RunnerID, id); err != nil {
+			chosen, err := admitOnFirstRunner(ctx, q, append([]uuid.UUID{*st.RunnerID}, st.RunnerFallbacks...), id)
+			if err != nil {
 				return err
 			}
+			st.RunnerID = &chosen
 		}
 		var err error
 		run, ok, err = startQueuedRun(ctx, q, id, st, limits)
