@@ -3,7 +3,12 @@
 
 package api
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
 
 // The sentences of the run-mode refusals New Run shows inline. The console
 // prints the server's sentence on a refusal and uses the same bytes for its own
@@ -60,8 +65,22 @@ func idleStopBackgroundMsg() string {
 	return "A background task ends when its work exits, so it has no idle stop. Remove it, or choose an interactive environment."
 }
 
-// toolAllowRefusedMsg: a request's tool rules and default may only narrow what
-// the policy decided.
-func toolAllowRefusedMsg(i int) string {
-	return fmt.Sprintf("tools[%d]: a request can hold or deny a tool but cannot let the agent use one without asking, because that would widen what the policy decided.", i)
+// policyStricterMsg: a person's allow for a tool ("*" is their default) that the
+// policy holds or blocks. The access step's own sentence, filled in.
+func policyStricterMsg(tool string, policy types.ToolEffect) string {
+	verb := "asks first for"
+	if policy == types.ToolDeny {
+		verb = "blocks"
+	}
+	key := "policy_stricter_tool"
+	if tool == "*" {
+		key = "policy_stricter_default"
+	}
+	return strings.NewReplacer("{asks first for|blocks}", verb, "{tool}", tool).Replace(accessSentences[key])
+}
+
+// codexBuiltinRuleMsg: a rule on one of Codex CLI's own tools, which no Wardyn
+// contract reaches.
+func codexBuiltinRuleMsg(tool string) string {
+	return fmt.Sprintf("%s is one of Codex CLI's own tools, and Wardyn can't block those. Only its MCP tools can be blocked.", tool)
 }
