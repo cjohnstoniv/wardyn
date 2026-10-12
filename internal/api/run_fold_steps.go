@@ -103,12 +103,19 @@ func (s *Server) stepDrive(f *runFold, rec *foldRecorder) bool {
 // starting folder, before anything is granted. It runs after the onboarding
 // gate, so every workspace a refusal names is one the caller may launch.
 func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
-	f.wsRefs = attachedWorkspaceRefs(f.seed.attached, s.referencedWorkspaces(f.r.Context(), f.spec))
+	// One read serves the referenced workspaces and the index the onboarding
+	// gate held each policy source to; a failed read references none, as
+	// referencedWorkspaces does.
+	var all []types.Workspace
+	if s.cfg.Store != nil {
+		all, _ = s.cfg.Store.ListWorkspaces(f.r.Context())
+	}
+	f.wsRefs = attachedWorkspaceRefs(f.seed.attached, referencedWorkspacesIn(all, f.spec))
 	for _, ws := range f.wsRefs {
 		recordWorkspaceSources(rec, f.spec, ws)
 	}
 	var refusal *runRefusal
-	f.attachments, f.startFolder, refusal = s.runAttachments(*f.req, f.spec, f.wsRefs, f.seed,
+	f.attachments, f.startFolder, refusal = s.runAttachments(*f.req, f.spec, f.wsRefs, indexWorkspacesBySource(all), f.seed,
 		legacyDriveTarget(f.driveMount, f.previewDriveReadOnly))
 	return !refusal.write(s, f.w, f.r)
 }

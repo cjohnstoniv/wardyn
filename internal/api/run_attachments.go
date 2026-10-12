@@ -6,6 +6,7 @@ package api
 import (
 	"cmp"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -38,6 +39,9 @@ type runTarget struct {
 	repo     string
 	ref      string
 	readOnly bool
+	// seeded: a workspaces[] selection seeded this entry, so its owner is that
+	// workspace; otherwise the policy carries it and its owner is the gate's.
+	seeded bool
 }
 
 // runTargets lists every resolved path of a run, the drive first, then each
@@ -47,22 +51,22 @@ type runTarget struct {
 //
 // ponytail: the legacy drive is the only drive; D-112-113's plural drive list
 // joins here, each drive at its own server-derived target.
-func runTargets(spec types.RunPolicySpec, wsRefs []types.Workspace, seed workspaceSeed, drive *runTarget) []runTarget {
+func runTargets(spec types.RunPolicySpec, carriers workspaceSourceIndex, seed workspaceSeed, drive *runTarget) []runTarget {
 	var out []runTarget
 	if drive != nil {
 		out = append(out, *drive)
 	}
-	// The first of the run's workspaces carrying a source owns it. Every mount and
-	// repo of a run passed the onboarding gate, so one always does; an unowned
+	// A source the policy carries is owned by the workspace the onboarding gate
+	// held it to (authorizeSpecWorkspaceSources reads the same index). Every
+	// mount and repo of a run passed that gate, so one always does; an unowned
 	// one is still its own owner, never everyone's.
 	owner := func(local bool, source, fallback string) (string, string) {
-		for _, ws := range wsRefs {
-			for _, src := range ws.Sources {
-				if local && src.Type == types.WorkspaceSourceTypeLocalDir && src.Path == source ||
-					!local && src.Type == types.WorkspaceSourceTypeRepo && src.Source == source {
-					return ws.ID.String(), ws.Name
-				}
-			}
+		ws, ok := carriers.repo[source]
+		if local {
+			ws, ok = carriers.localDir[source]
+		}
+		if ok {
+			return ws.ID.String(), ws.Name
 		}
 		return "source:" + source, fallback
 	}
@@ -78,7 +82,7 @@ func runTargets(spec types.RunPolicySpec, wsRefs []types.Workspace, seed workspa
 		if !ok {
 			id, name = owner(true, m.Source, m.Target)
 		}
-		out = append(out, runTarget{kind: attachmentFolder, owner: id, name: name, target: m.Target, readOnly: m.ReadOnlyOrDefault()})
+		out = append(out, runTarget{kind: attachmentFolder, owner: id, name: name, target: m.Target, readOnly: m.ReadOnlyOrDefault(), seeded: ok})
 	}
 	for i, r := range spec.WorkspaceRepos {
 		dest, ok := repoCloneTarget(r)
@@ -89,7 +93,7 @@ func runTargets(spec types.RunPolicySpec, wsRefs []types.Workspace, seed workspa
 		if !seeded {
 			id, name = owner(false, r.Repo, r.Repo)
 		}
-		out = append(out, runTarget{kind: attachmentRepository, owner: id, name: name, target: dest, repo: r.Repo, ref: r.Ref})
+		out = append(out, runTarget{kind: attachmentRepository, owner: id, name: name, target: dest, repo: r.Repo, ref: r.Ref, seeded: seeded})
 	}
 	for _, ws := range seed.attached {
 		for _, src := range workspaceSourcesOfType(ws, types.WorkspaceSourceTypeEphemeral) {
@@ -239,7 +243,12 @@ func adoOrgConflictRefusal(targets []runTarget) *runRefusal {
 // attachment with no repo is the workspace's first attachment. The subpath is
 // already relative and cleaned (startFolderShapeRefusal), so the folder stays
 // inside the mount; symlinks are resolved inside the sandbox.
-func startFolderDir(f *client.StartFolder, targets []runTarget) (string, int, *runRefusal) {
+//
+// A repository the policy carries may sit in several of the run's workspaces
+// while one owner is shown. A start folder naming another workspace that
+// carries it is that clone too: it resolves, and the clone is shown as that
+// workspace's, so the mount map and the starting folder agree.
+func startFolderDir(f *client.StartFolder, targets []runTarget, wsRefs []types.Workspace) (string, int, *runRefusal) {
 	switch {
 	case f == nil:
 		return "", -1, nil
@@ -251,12 +260,25 @@ func startFolderDir(f *client.StartFolder, targets []runTarget) (string, int, *r
 		owner = attachmentDrive
 	}
 	name := f.Repo
+	at := func(i int) (string, int, *runRefusal) {
+		return strings.TrimSuffix(targets[i].target+"/"+f.Subpath, "/"), i, nil
+	}
 	for i, t := range targets {
 		if t.kind == "" || t.owner != owner {
 			continue
 		}
 		if f.Repo == "" || t.kind == attachmentRepository && t.repo == f.Repo {
-			return strings.TrimSuffix(t.target+"/"+f.Subpath, "/"), i, nil
+			return at(i)
+		}
+	}
+	if i := slices.IndexFunc(wsRefs, func(ws types.Workspace) bool { return ws.ID.String() == f.Attachment }); i >= 0 && f.Repo != "" &&
+		slices.ContainsFunc(workspaceSourcesOfType(wsRefs[i], types.WorkspaceSourceTypeRepo), func(src types.WorkspaceSource) bool { return src.Source == f.Repo }) {
+		named := wsRefs[i]
+		for j, t := range targets {
+			if t.kind == attachmentRepository && !t.seeded && t.repo == f.Repo {
+				targets[j].owner, targets[j].name = named.ID.String(), named.Name
+				return at(j)
+			}
 		}
 	}
 	if name == "" {
@@ -276,7 +298,7 @@ func startFolderDir(f *client.StartFolder, targets []runTarget) (string, int, *r
 // organisation, then the starting folder. It
 // returns the mount map and the starting folder. A method on Server for the
 // reason runContractRefusal is: the parity guard reads gates as s.<Gate>(…) calls.
-func (s *Server) runAttachments(req createRunRequest, spec types.RunPolicySpec, wsRefs []types.Workspace, seed workspaceSeed, drive *runTarget) (
+func (s *Server) runAttachments(req createRunRequest, spec types.RunPolicySpec, wsRefs []types.Workspace, carriers workspaceSourceIndex, seed workspaceSeed, drive *runTarget) (
 	[]client.RunAttachment, string, *runRefusal,
 ) {
 	if seed.imageOpen {
@@ -284,14 +306,14 @@ func (s *Server) runAttachments(req createRunRequest, spec types.RunPolicySpec, 
 			return nil, "", refusal
 		}
 	}
-	targets := runTargets(spec, wsRefs, seed, drive)
+	targets := runTargets(spec, carriers, seed, drive)
 	if refusal := targetOverlapRefusal(targets); refusal != nil {
 		return nil, "", refusal
 	}
 	if refusal := adoOrgConflictRefusal(targets); refusal != nil {
 		return nil, "", refusal
 	}
-	dir, at, refusal := startFolderDir(req.StartFolder, targets)
+	dir, at, refusal := startFolderDir(req.StartFolder, targets, wsRefs)
 	if refusal != nil {
 		return nil, "", refusal
 	}
