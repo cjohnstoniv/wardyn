@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/netip"
 	"net/url"
 	"strings"
@@ -159,7 +160,7 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 		remove()
 		return "", fmt.Errorf("docker: connect proxy to %s: %w", d.cfg.InternalNetwork, err)
 	}
-	if err := d.startWithConfig(ctx, resp.ID, cfgJSON); err != nil {
+	if err := d.startWithConfig(ctx, runID, resp.ID, cfgJSON); err != nil {
 		remove()
 		return "", err
 	}
@@ -182,8 +183,9 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 // startWithConfig attaches to the created proxy's stdin, starts it, writes
 // cfgJSON there and closes it: the proxy reads its config to EOF. Attaching
 // before the start is what `docker run -i` does, so no byte is written before
-// the proxy's stdin exists.
-func (d *Driver) startWithConfig(ctx context.Context, id string, cfgJSON []byte) error {
+// the proxy's stdin exists. The config's listen address is first bound to the
+// proxy's own address on runID's per-run network (see listenOnRunNetwork).
+func (d *Driver) startWithConfig(ctx context.Context, runID uuid.UUID, id string, cfgJSON []byte) error {
 	att, err := d.cli.ContainerAttach(ctx, id, client.ContainerAttachOptions{Stream: true, Stdin: true})
 	if err != nil {
 		return fmt.Errorf("docker: attach proxy stdin: %w", err)
@@ -191,6 +193,9 @@ func (d *Driver) startWithConfig(ctx context.Context, id string, cfgJSON []byte)
 	defer att.Close()
 	if _, err := d.cli.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("docker: start proxy: %w", err)
+	}
+	if cfgJSON, err = d.listenOnRunNetwork(ctx, runID, id, cfgJSON); err != nil {
+		return err
 	}
 	_ = att.Conn.SetWriteDeadline(time.Now().Add(proxyConfigWriteTimeout))
 	if _, err := att.Conn.Write(cfgJSON); err != nil {
@@ -200,6 +205,45 @@ func (d *Driver) startWithConfig(ctx context.Context, id string, cfgJSON []byte)
 		return fmt.Errorf("docker: close proxy stdin: %w", err)
 	}
 	return nil
+}
+
+// listenOnRunNetwork returns cfgJSON with its listen address set to the
+// started proxy id's address on runID's per-run network, keeping the port.
+// The proxy also sits on the control-plane-facing network, which other
+// containers share; binding to the per-run address keeps its listener off
+// that network, so only the run's own agent can reach it. The address exists
+// only once the container has started, which is why this runs between the
+// start and the config write.
+func (d *Driver) listenOnRunNetwork(ctx context.Context, runID uuid.UUID, id string, cfgJSON []byte) ([]byte, error) {
+	res, err := d.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("docker: inspect proxy for its listen address: %w", err)
+	}
+	var addr netip.Addr
+	if ns := res.Container.NetworkSettings; ns != nil {
+		if ep := ns.Networks[internalNetName(runID)]; ep != nil {
+			addr = ep.IPAddress
+		}
+	}
+	if !addr.IsValid() || addr.IsUnspecified() {
+		return nil, fmt.Errorf("docker: proxy has no IP on the per-run internal network %q to listen on", internalNetName(runID))
+	}
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(cfgJSON, &data); err != nil {
+		return nil, fmt.Errorf("docker: proxy config: %w", err)
+	}
+	var listen string
+	if err := json.Unmarshal(data["listen"], &listen); err != nil {
+		return nil, fmt.Errorf("docker: proxy config listen: %w", err)
+	}
+	_, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return nil, fmt.Errorf("docker: proxy config listen %q: %w", listen, err)
+	}
+	if data["listen"], err = json.Marshal(net.JoinHostPort(addr.Unmap().String(), port)); err != nil {
+		return nil, err
+	}
+	return json.Marshal(data)
 }
 
 // watchProxyExit polls id for up to proxyStartWatch, returning a named error
