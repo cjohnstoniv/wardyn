@@ -469,6 +469,13 @@ A `wardyn/v1` document with `kind: Run` is a draft of one run. Its `intent` hold
 | `environment` | `experience: interactive` |
 | `agent_task` | With `background`, `workload.kind: agent_task`; with `interactive`, a `tools[]` entry of kind `harness` |
 
+### Several harnesses in one run
+
+- `tools[]` may include more than one entry of kind `harness` with `interactive`, or with `workload.kind: command`. A background agent task includes only `workload.agent`.
+- Each harness names its own `model_provider`, judged as its own choice. The primary harness is the `startup` harness, else the first listed; the run's `agent` and `model_provider` are the primary's.
+- The run starts from the image the operator declared for the set, under a `WARDYN_AGENT_IMAGES` key joining the sorted ids with `+`. Without one the request is `422` `harness_set_no_image`; a published install declares none ([build-images.md](operations/build-images.md#the-image-a-runs-harnesses-start-from)).
+- An AWS sign-in provider (`bedrock_sso`) serves only the primary harness. On any other it is `422` `request_field_unavailable`, with `tool` naming the harness.
+
 ## Model providers
 
 `GetModelProviders` (`GET /api/v1/model-providers`, admin) answers a `ModelProvidersRead`: the provider records, and per provider id how many people hold a credential of their own for it. It returns configuration and counts, never a credential value. Changing providers, signing in and storing a credential stay in the console.
