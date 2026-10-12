@@ -746,3 +746,81 @@ func TestLegacyRepoLabelCaseOnlyOnCaseInsensitiveForges(t *testing.T) {
 		}
 	}
 }
+
+// sharedLayout is the fix-r3 probes' layout: payments mounts /srv/pay at
+// /home/agent/work/pay and carries Hello-World, which the policy clones inside
+// that mount; docs carries Hello-World too (and, when extra is set, linguist).
+func sharedLayout(extra bool) (payments, docs types.Workspace, repos string) {
+	payments = folderWS("payments", "/srv/pay")
+	payments.Sources[0].Target = "/home/agent/work/pay"
+	payments.Sources = append(payments.Sources, types.WorkspaceSource{Type: types.WorkspaceSourceTypeRepo, Source: helloRepo})
+	docs = repoWS("docs", helloRepo)
+	repos = `{"repo":"` + helloRepo + `","target":"/home/agent/work/pay/hw"}`
+	if extra {
+		docs.Sources = append(docs.Sources, types.WorkspaceSource{Type: types.WorkspaceSourceTypeRepo, Source: "octocat/linguist"})
+		repos += `,{"repo":"octocat/linguist"}`
+	}
+	return payments, docs, repos
+}
+
+func sharedBody(payments, docs types.Workspace, repos, folder string) string {
+	body := `{"mode_contract":"0.9","experience":"background","workload":{"kind":"agent_task","agent":"claude-code","task":"t"},` +
+		`"tools":[{"id":"claude-code","kind":"harness"}],"workspaces":[{"workspace_id":"` + payments.ID.String() + `"},{"workspace_id":"` + docs.ID.String() + `"}],` +
+		`"inline_policy":{"min_confinement_class":"CC2","workspace_mounts":[{"source":"/srv/pay","target":"/home/agent/work/pay"}],"workspace_repos":[` + repos + `]}`
+	if folder != "" {
+		body += `,"start_folder":` + folder
+	}
+	return body + `}`
+}
+
+// storeOrders are both onboarding orders of two workspaces; the gate's index
+// credits a shared source to the later one.
+func storeOrders(a, b types.Workspace) map[string][]types.Workspace {
+	return map[string][]types.Workspace{"a then b": {a, b}, "b then a": {b, a}}
+}
+
+// TestOverlapSharedSourceNestsInACarrier (fix-r3 M-1): a source the policy
+// carries belongs to every workspace that carries it, so it may nest inside
+// any of their mounts, whichever one the gate credits it to, at every door,
+// with or without a start folder naming a carrier.
+func TestOverlapSharedSourceNestsInACarrier(t *testing.T) {
+	payments, docs, repos := sharedLayout(false)
+	for order, store := range storeOrders(payments, docs) {
+		for _, folder := range []string{"", `{"kind":"attachment","attachment":"` + payments.ID.String() + `","repo":"` + helloRepo + `"}`} {
+			srv := attachFixture(t, types.SiteConfig{}, store...)
+			body := sharedBody(payments, docs, repos, folder)
+			for _, door := range runDoors[1:] {
+				if w := do(t, srv, http.MethodPost, door.path, adminToken, body); w.Code != http.StatusOK {
+					t.Fatalf("%s, folder %q, %s: %d %s", order, folder, door.name, w.Code, w.Body.String())
+				}
+			}
+			createAndDispatch(t, srv, body)
+		}
+	}
+}
+
+// TestStartFolderRecreditAgreesWithOverlap (fix-r3 M-1): a start folder naming
+// docs on the shared clone gives one verdict in both onboarding orders, and the
+// mount map shows the clone under docs, holding the start folder.
+func TestStartFolderRecreditAgreesWithOverlap(t *testing.T) {
+	payments, docs, repos := sharedLayout(true)
+	folder := `{"kind":"attachment","attachment":"` + docs.ID.String() + `","repo":"` + helloRepo + `"}`
+	for order, store := range storeOrders(payments, docs) {
+		srv := attachFixture(t, types.SiteConfig{}, store...)
+		body := sharedBody(payments, docs, repos, folder)
+		for _, door := range runDoors[1:] {
+			w := do(t, srv, http.MethodPost, door.path, adminToken, body)
+			if w.Code != http.StatusOK {
+				t.Fatalf("%s, %s: %d %s", order, door.name, w.Code, w.Body.String())
+			}
+			for _, at := range attachmentsOf(t, w.Body.Bytes()) {
+				if at.Repo == helloRepo && (at.Name != "docs" || !at.StartsHere || at.Target != "/home/agent/work/pay/hw") {
+					t.Fatalf("%s, %s: Hello-World shown as %+v", order, door.name, at)
+				}
+			}
+		}
+		if _, spec := createAndDispatch(t, srv, body); spec.Env["WARDYN_START_FOLDER"] != "/home/agent/work/pay/hw" {
+			t.Fatalf("%s: create WARDYN_START_FOLDER = %q", order, spec.Env["WARDYN_START_FOLDER"])
+		}
+	}
+}

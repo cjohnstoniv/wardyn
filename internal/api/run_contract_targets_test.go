@@ -29,7 +29,7 @@ func targetOverlapRefusalPairwise(targets []runTarget) *runRefusal {
 			}
 		}
 		for _, p := range placed {
-			if p.owner != t.owner && (pathWithin(t.target, p.target) || pathWithin(p.target, t.target)) {
+			if !sharesCarrier(p.carriers, t.carriers) && (pathWithin(t.target, p.target) || pathWithin(p.target, t.target)) {
 				return overlapRefusal(t.target, t.name, p.name, p.target)
 			}
 		}
@@ -58,18 +58,23 @@ func sameRefusal(a, b *runRefusal) bool {
 func folders(pairs ...string) []runTarget {
 	var out []runTarget
 	for i := 0; i+1 < len(pairs); i += 2 {
-		out = append(out, runTarget{kind: attachmentFolder, owner: pairs[i], name: pairs[i], target: pairs[i+1]})
+		out = append(out, runTarget{kind: attachmentFolder, owner: pairs[i], name: pairs[i], carriers: []string{pairs[i]}, target: pairs[i+1]})
 	}
 	return out
 }
 
+// shared is a repository the policy carries, shown under owner and carried by each of carriers.
+func shared(owner string, carriers []string, repo, target string) runTarget {
+	return runTarget{kind: attachmentRepository, owner: owner, name: owner, carriers: carriers, repo: repo, target: target}
+}
+
 func repoAt(owner, repo, ref, target string) runTarget {
-	return runTarget{kind: attachmentRepository, owner: owner, name: owner, repo: repo, ref: ref, target: target}
+	return runTarget{kind: attachmentRepository, owner: owner, name: owner, carriers: []string{owner}, repo: repo, ref: ref, target: target}
 }
 
 func TestTargetOverlapRefusalCases(t *testing.T) {
 	const h = "/home/agent/"
-	drive := runTarget{kind: attachmentDrive, owner: attachmentDrive, name: runDriveName, target: h + "drive"}
+	drive := runTarget{kind: attachmentDrive, owner: attachmentDrive, name: runDriveName, carriers: []string{attachmentDrive}, target: h + "drive"}
 	for _, tc := range []struct {
 		name    string
 		targets []runTarget
@@ -83,7 +88,7 @@ func TestTargetOverlapRefusalCases(t *testing.T) {
 		{"same workspace may repeat and nest", folders("A", h+"w", "A", h+"w", "A", h+"w/x"), ""},
 		{"earliest overlapping mount is named", folders("A", h+"w/x", "A", h+"w", "B", h+"w/x/y"), h + "w/x/y is inside " + h + "w/x, where A mounts. Two mounts can't nest."},
 		{"drive equal", append([]runTarget{drive}, folders("A", h+"drive")...), h + "drive is also where your drive mounts. Give one of them another path."},
-		{"drive nested in a workspace", append(folders("A", h+"work"), runTarget{kind: attachmentDrive, owner: attachmentDrive, name: runDriveName, target: h + "work/drive"}),
+		{"drive nested in a workspace", append(folders("A", h+"work"), runTarget{kind: attachmentDrive, owner: attachmentDrive, name: runDriveName, carriers: []string{attachmentDrive}, target: h + "work/drive"}),
 			h + "work/drive is inside " + h + "work, where A mounts. Two mounts can't nest."},
 		{"two repos one directory in one workspace", []runTarget{repoAt("A", "acme/web", "", h+"work/web"), repoAt("A", "other/web", "", h+"work/web")},
 			h + "work/web is also where A mounts. Give one of them another path."},
@@ -91,6 +96,11 @@ func TestTargetOverlapRefusalCases(t *testing.T) {
 		{"one repo at two refs collides", []runTarget{repoAt("A", "acme/web", "", h+"work/web"), repoAt("A", "acme/web", "dev", h+"work/web")},
 			h + "work/web is also where A mounts. Give one of them another path."},
 		{"a repo inside its own folder", append(folders("A", h+"work"), repoAt("A", "acme/web", "", h+"work/web")), ""},
+		// A source two workspaces carry belongs to both: it nests in either one's mount.
+		{"shared repo inside a carrier's folder", append(folders("A", h+"work"), shared("B", []string{"B", "A"}, "acme/web", h+"work/web")), ""},
+		{"a folder around a shared repo", append([]runTarget{shared("B", []string{"B", "A"}, "acme/web", h+"work/web")}, folders("A", h+"work")...), ""},
+		{"shared repo inside a stranger's folder", append(folders("C", h+"work"), shared("B", []string{"B", "A"}, "acme/web", h+"work/web")),
+			h + "work/web is inside " + h + "work, where C mounts. Two mounts can't nest."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := targetOverlapRefusal(tc.targets)
@@ -123,7 +133,10 @@ func TestTargetOverlapRefusalAgreesWithPairwise(t *testing.T) {
 		var targets []runTarget
 		for k := rng.Intn(7); k > 0; k-- {
 			o := owners[rng.Intn(len(owners))]
-			tgt := runTarget{kind: attachmentFolder, owner: o, name: o, target: paths[rng.Intn(len(paths))]}
+			tgt := runTarget{kind: attachmentFolder, owner: o, name: o, carriers: []string{o}, target: paths[rng.Intn(len(paths))]}
+			if rng.Intn(3) == 0 {
+				tgt.carriers = append(tgt.carriers, owners[rng.Intn(len(owners))])
+			}
 			if rng.Intn(2) == 0 {
 				tgt.kind, tgt.repo, tgt.ref = attachmentRepository, repos[rng.Intn(len(repos))], []string{"", "dev"}[rng.Intn(2)]
 			}
