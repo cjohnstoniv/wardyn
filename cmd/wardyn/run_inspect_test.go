@@ -27,7 +27,7 @@ func TestRunGetCmd_QueuedShowsPositionAndDeadline(t *testing.T) {
 		want  []string
 	}{
 		{"waiting", &types.RunQueue{PoolID: poolID, QueuedAt: queuedAt, DeadlineAt: queuedAt.Add(24 * time.Hour), Position: 2, Reason: "runner_pool_at_capacity"},
-			[]string{"QUEUED", "waiting: 2 ahead", poolID.String(), "2026-10-13T09:00:00Z", "runner_pool_at_capacity"}},
+			[]string{"QUEUED", "waiting: 2 ahead", poolID.String(), queuedAt.Add(24 * time.Hour).Format(time.RFC3339), "runner_pool_at_capacity"}},
 		{"not waiting", nil, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
