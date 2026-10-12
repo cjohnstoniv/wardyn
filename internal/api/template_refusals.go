@@ -69,7 +69,7 @@ func templateScopeForbiddenMsg(scope string) string {
 	case types.TemplateScopeOrg:
 		return "Only an organisation administrator can publish templates for the organisation."
 	case types.TemplateScopeGroup:
-		return "Only that group's template managers can publish templates to it."
+		return "Only the template managers of that group can publish templates to it."
 	}
 	return "A personal template belongs to the person who owns it."
 }

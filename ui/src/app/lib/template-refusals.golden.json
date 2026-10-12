@@ -98,7 +98,7 @@
     "args": [
       "group"
     ],
-    "text": "Only that group's template managers can publish templates to it."
+    "text": "Only the template managers of that group can publish templates to it."
   },
   {
     "key": "SCOPE_FORBIDDEN_PERSON",
