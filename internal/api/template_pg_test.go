@@ -69,9 +69,6 @@ func TestPG_TemplateRoutesThroughSessionsAndTokens(t *testing.T) {
 	}
 
 	for _, row := range types.TemplateRoutes {
-		if row.Route == "POST /api/v1/templates/import" {
-			continue
-		}
 		method, path, _ := strings.Cut(row.Route, " ")
 		path = strings.ReplaceAll(strings.ReplaceAll(path, "{id}", id.String()), "{revision}", "1")
 		if w := do(t, srv, method, path, adminToken, `{}`); w.Code == http.StatusNotImplemented {

@@ -660,8 +660,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// Run templates (template_routes.go). Every /templates route is a member route
 	// whose handler scopes by the template's own scope (types.TemplateRoutes); a
 	// template the caller cannot read is the missing-id 404, probed per route, scope
-	// and caller by TestTemplateForeignIDIsTheMissingID404. The grant that lets one
-	// person publish to one group is SUPER.
+	// and caller by TestTemplateForeignIDIsTheMissingID404. POST /templates/import
+	// validates a document and stores nothing. The grant that lets one person
+	// publish to one group is SUPER.
 	"GET /api/v1/templates":                           {class: classMember},
 	"POST /api/v1/templates":                          {class: classMember},
 	"POST /api/v1/templates/import":                   {class: classMember},

@@ -290,16 +290,12 @@ func TestTemplatePublishOffersOnlyWritableAudiences(t *testing.T) {
 }
 
 // TestNoTemplateRouteAnswersUnavailable: with a template store, every template
-// route answers on its own merits, never 501. The import door is lit by its
-// own lane and is the one row this does not cover yet.
+// route answers on its own merits, never 501.
 func TestNoTemplateRouteAnswersUnavailable(t *testing.T) {
 	e := newTemplateEnv(t)
 	tpl := e.seed(types.TemplateOwner{Scope: types.TemplateScopeOrg}, types.TemplateKindTemplate, "org", templateIntentEgress)
 	admin := templateCookie(t, "root", oidc.RoleAdmin, false, []string{}, false)
 	for _, row := range types.TemplateRoutes {
-		if row.Route == "POST /api/v1/templates/import" {
-			continue
-		}
 		method, path, _ := strings.Cut(row.Route, " ")
 		path = strings.ReplaceAll(strings.ReplaceAll(path, "{id}", tpl.ID.String()), "{revision}", "1")
 		if status, body := e.call(admin, method, path, `{}`); status == http.StatusNotImplemented {
