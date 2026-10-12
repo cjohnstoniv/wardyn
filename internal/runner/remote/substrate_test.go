@@ -61,6 +61,19 @@ func TestNameAndClassesServedFromCaps(t *testing.T) {
 	}
 }
 
+// A runner's advertised facts carry its own disk word and drive support, and the remote substrate keeps
+// an ended sandbox.
+func TestAdvertisedCarriesDiskWordKeepAndDrives(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	rig.Fake.Support.EphemeralDiskEnforcement = types.StorageEnforcementEviction
+	rig.Fake.Support.UserDrives = true
+	rig.Connect(t)
+	f, ok := rig.Sub.Advertised()
+	if !ok || f.EphemeralDiskEnforcement != types.StorageEnforcementEviction || !f.KeepsEnded || !f.UserDrives {
+		t.Fatalf("Advertised = %+v, %v", f, ok)
+	}
+}
+
 func TestCreateSandboxRoundTripWaitingEventsBeforeReturn(t *testing.T) {
 	rig := runnertest.NewRig(t, rid)
 	var details []string
