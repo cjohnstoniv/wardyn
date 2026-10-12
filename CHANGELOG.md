@@ -378,8 +378,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   limits). Until the lease sweep honours the cap, the lease sweep keeps the run at the same moment the reaper stops
   it.
 - The template decoder and the component config schema refuse secret-named config keys such as `CLIENT_SECRET`,
-  `JWT_SECRET` and `*_PASSPHRASE` (`SECRET_NAME`/`SECRET_REF` stay plain). Template storage is not served yet: `/templates`
-  answers `501 templates_unavailable` except for `POST /templates/import`, which checks a document and stores nothing.
+  `JWT_SECRET` and `*_PASSPHRASE` (`SECRET_NAME`/`SECRET_REF` stay plain).
 - Naming a person by a typed `entra:<tenant>:<object>` (erasure, secret owner) is now refused as ambiguous when that
   tenant and object id also signed in under another issuer, instead of resolving to one principal and leaving the
   other's data.
