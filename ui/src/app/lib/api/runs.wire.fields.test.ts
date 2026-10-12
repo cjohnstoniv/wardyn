@@ -183,6 +183,8 @@ const UI_NEVER_SENDS = new Set([
   "preset_version",
   // The new flow forwards it through the field registry; the old wizard never sends it.
   "shape",
+  // The plural drive carrier (GET /me/drives ids): the console's drive rows are a later slice.
+  "drives",
   // A document's partial policy, laid onto the default: no screen sends it yet,
   // and the old wizard sends a whole inline_policy instead.
   "policy_overlay",

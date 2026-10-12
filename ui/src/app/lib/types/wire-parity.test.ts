@@ -486,6 +486,18 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
   });
 
+  // The drive carrier and catalogue (pkg/client/runs_create.go, pkg/client/me_drives.go).
+  it.each([
+    ["runs_create.go", "DriveAttachment", "types/new-run-contract.ts", "DriveAttachment"],
+    ["me_drives.go", "MeDrive", "api/me-drives.ts", "MeDrive"],
+    ["me_drives.go", "MeDriveCatalogue", "api/me-drives.ts", "MeDriveCatalogue"],
+  ])("pkg/client/%s %s: full parity with the TS %s mirror", (goFile, goName, tsFile, tsName) => {
+    const goTags = goJSONTags(readFileSync(join(root, "pkg/client", goFile), "utf8"), goName);
+    expect(goTags.length).toBeGreaterThanOrEqual(2);
+    const ts = readFileSync(join(root, "ui/src/app/lib", tsFile), "utf8");
+    expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
+  });
+
   // The run-mode contract (pkg/client/runs_mode.go).
   it.each([
     ["RunWorkload", "RunWorkload"],

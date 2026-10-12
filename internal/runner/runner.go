@@ -84,10 +84,11 @@ type SandboxSpec struct {
 	// and carries the roots those mounts must resolve inside, re-checked at
 	// BIND time. Nil elsewhere — never narrows an operator mount.
 	UserMountRoots []string
-	// Drive is the acting principal's USER DRIVE, already resolved by the
-	// control plane — nil if none was asked for. NOT a Mount: the request
-	// carried a flag rather than a path.
-	Drive *types.DriveMount
+	// Drives are the acting principal's drives, already resolved by the
+	// control plane, each at its own server-derived Target (DriveTargetFor) —
+	// empty if none was asked for. NOT Mounts: the request carried drive ids
+	// rather than paths. A driver mounts every one or refuses the sandbox.
+	Drives []types.DriveMount
 	// ManagedFiles are operator-authored files the AGENT CANNOT MODIFY —
 	// root-owned, unwritable, present BEFORE the main process runs — and,
 	// marked ManagedFile.AgentOwned, secret files only the agent may read.
@@ -127,8 +128,8 @@ type Mount struct {
 	// MemberAuthored marks a bind whose SOURCE a MEMBER chose. ONLY these are
 	// re-checked against SandboxSpec.UserMountRoots at bind time.
 	MemberAuthored bool `json:"member_authored,omitempty"`
-	// DriveAuthored marks the ONE bind a driver synthesizes from
-	// SandboxSpec.Drive. A LABEL, NEVER A GATE: WARDYN_USER_DRIVE_HOST_ROOTS
+	// DriveAuthored marks a bind a driver synthesizes from an entry of
+	// SandboxSpec.Drives. A LABEL, NEVER A GATE: WARDYN_USER_DRIVE_HOST_ROOTS
 	// runs on EVERY host_path drive regardless of this flag.
 	DriveAuthored bool `json:"drive_authored,omitempty"`
 }

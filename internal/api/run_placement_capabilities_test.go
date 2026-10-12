@@ -136,7 +136,7 @@ func TestPlacementCapabilities_LocalOfflineRefuses(t *testing.T) {
 	t.Run("create refuses runner_offline and never reads the deployment's classes", func(t *testing.T) {
 		id := installRunner(t, s, false, laptopCaps(types.CC1))
 		w := httptest.NewRecorder()
-		_, ok := s.resolveEnforcedConfinement(capsCtx, w, types.PlacementLocal, id, types.RunPolicySpec{MinConfinementClass: types.CC1}, "", composer.Baseline{}, runPlacement{})
+		_, _, ok := s.resolveEnforcedConfinement(capsCtx, w, types.PlacementLocal, id, types.RunPolicySpec{MinConfinementClass: types.CC1}, "", composer.Baseline{}, runPlacement{})
 		if ok || w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `"runner_offline"`) {
 			t.Errorf("ok=%v %d %s, want a 422 runner_offline refusal", ok, w.Code, w.Body.String())
 		}
@@ -157,7 +157,7 @@ func TestPlacementCapabilities_LocalIsTheRunnersOwnAnswer(t *testing.T) {
 		t.Errorf("caps = %+v, want CC1 only, runner_asserted, 4000 mCPU, one root", got)
 	}
 	w := httptest.NewRecorder()
-	_, ok := s.resolveEnforcedConfinement(capsCtx, w, types.PlacementLocal, id, types.RunPolicySpec{MinConfinementClass: types.CC2}, "", composer.Baseline{}, runPlacement{})
+	_, _, ok := s.resolveEnforcedConfinement(capsCtx, w, types.PlacementLocal, id, types.RunPolicySpec{MinConfinementClass: types.CC2}, "", composer.Baseline{}, runPlacement{})
 	if ok || w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "confinement_class_unsupported") {
 		t.Errorf("ok=%v %d %s: the runner offers CC1, so a CC2 demand must be refused though the deployment offers CC2", ok, w.Code, w.Body.String())
 	}
@@ -189,7 +189,7 @@ func TestPlacementCapabilities_AnotherPersonsRunnerIsNotFound(t *testing.T) {
 				t.Errorf("capability step = %+v, want 404 runner_not_found", ref)
 			}
 			w := httptest.NewRecorder()
-			if _, ok := s.resolveEnforcedConfinement(capsCtx, w, types.PlacementLocal, id, types.RunPolicySpec{}, "", composer.Baseline{}, runPlacement{}); ok || w.Code != http.StatusNotFound {
+			if _, _, ok := s.resolveEnforcedConfinement(capsCtx, w, types.PlacementLocal, id, types.RunPolicySpec{}, "", composer.Baseline{}, runPlacement{}); ok || w.Code != http.StatusNotFound {
 				t.Fatalf("confinement = %d %s, want 404", w.Code, w.Body)
 			}
 			for _, leak := range []string{"offline", "CC2", "runner:"} {
@@ -325,12 +325,12 @@ func TestVerifiedLocalPaths_BoundToTheCandidateInsideItsRoots(t *testing.T) {
 		"SandboxSpec.Mounts[2]": {cand, "/srv/dev/workshop"},
 		"SandboxSpec.Mounts[3]": {cand, "/srv/dev/work/../.ssh"},
 		"SandboxSpec.Mounts[4]": {cand, "work/app"},
-		"SandboxSpec.Drive":     {cand, "/srv/dev/work"},
+		"SandboxSpec.Drives[0]": {cand, "/srv/dev/work"},
 	})
-	if len(got) != 2 || !got["SandboxSpec.Mounts[0]"] || !got["SandboxSpec.Drive"] {
+	if len(got) != 2 || !got["SandboxSpec.Mounts[0]"] || !got["SandboxSpec.Drives[0]"] {
 		t.Errorf("verified = %v, want only the candidate's paths inside its roots", got)
 	}
-	if v := verifiedLocalPaths(uuid.Nil, roots, map[string]boundLocalPath{"SandboxSpec.Drive": {uuid.Nil, "/srv/dev/work"}}); len(v) != 0 {
+	if v := verifiedLocalPaths(uuid.Nil, roots, map[string]boundLocalPath{"SandboxSpec.Drives[0]": {uuid.Nil, "/srv/dev/work"}}); len(v) != 0 {
 		t.Errorf("no candidate runner verified %v", v)
 	}
 }
@@ -471,7 +471,7 @@ func TestResolveEnforcedConfinement_PlacementTable(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			_, ok := tc.srv.resolveEnforcedConfinement(capsCtx, w, tc.placement, uuid.Nil, spec, "", composer.Baseline{}, runPlacement{})
+			_, _, ok := tc.srv.resolveEnforcedConfinement(capsCtx, w, tc.placement, uuid.Nil, spec, "", composer.Baseline{}, runPlacement{})
 			if ok != tc.wantOK {
 				t.Fatalf("ok = %v (%d %s), want %v", ok, w.Code, w.Body.String(), tc.wantOK)
 			}

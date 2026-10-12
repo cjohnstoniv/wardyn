@@ -160,6 +160,8 @@ func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, worksp
 // Without a runner the run stays PENDING with a clear status message (headless
 // API-only operation is allowed for v0).
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
+	var asked []byte // the request as asked, for the launch intent (launch_intent.go)
+	r = withAskedRequest(r, &asked)
 	ctx := r.Context()
 	if s.refuseAdminViewLaunch(w, r) {
 		return
@@ -202,14 +204,16 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if f.place.apply(&placed, enforced).write(s, w, r) {
 		return
 	}
+	intent := launchIntentFor(asked)
 	// A run bound for a capped pool waits for a slot instead of starting: nothing is minted, renewed or
 	// delivered for it, and the start does all of that when the pool has room.
 	if f.queued {
 		now := s.cfg.Now().UTC()
 		row := newRunRow(ctx, runRowInput{runID: runID, now: now, createdBy: createdBy, req: req, f: f, placed: placed,
 			enforced: enforced, workspacePath: workspacePath, runnerTarget: s.cfg.RunnerTarget})
+		row.LaunchIntent = intent.doc
 		queuedCreate{run: row, req: req, original: original, f: f, reqCC: reqCC, createdByType: createdByType,
-			taskWarning: taskWarning, workspacePath: workspacePath}.answer(s, w, r)
+			taskWarning: taskWarning, workspacePath: workspacePath, intent: intent}.answer(s, w, r)
 		return
 	}
 	// Subject vs attribution: createdBy is the ATTRIBUTION — the run row's
@@ -230,6 +234,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		enforced: enforced, workspacePath: workspacePath, runnerTarget: s.cfg.RunnerTarget})
 	run.State, run.SPIFFEID = types.RunPending, id.SPIFFEID
 	s.captureRunLimits(&run, ceiling, &f.end)
+	run.LaunchIntent = intent.doc
 	created, err := s.createRun(ctx, run)
 	if err != nil {
 		s.cfg.Identity.RevokeRun(context.WithoutCancel(ctx), runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
@@ -323,11 +328,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, f.modelCred.Kind)
 
 	createData := createRunAuditData(req, f.policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
-	createData["policy_source"] = f.source
+	createData["policy_source"], createData["end"] = f.source, f.end.audit(run)
+	stampConfinementDefault(createData, reqCC, f.confinementDefault)
 	if len(gw.delivery) > 0 {
 		createData["delivery"] = gw.delivery
 	}
-	createData["end"] = f.end.audit(run)
+	stampDriveAudit(createData, f.drives)
+	intent.stamp(createData, created.LaunchIntent != nil)
 	stampHarnessSet(createData, f.harnesses, f.image)
 	comps.stampRunCreate(createData)
 	maps.Copy(createData, f.place.auditFields(created))
@@ -375,7 +382,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	spec, harnessRules := applyHarnessToolRules(spec, req.Tools, toolLaneDefault(req))
 	launch := createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
-		wsRefs: wsRefs, driveMount: f.driveMount, ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
+		wsRefs: wsRefs, driveMounts: f.driveMounts, ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
 		runToken: id.Token, created: created, comps: comps, overridden: f.source.overridden(), pushSets: f.pushSets, harnessRules: harnessRules,
 		harnesses: f.harnesses, mainDrive: f.mainDrive.decision(),
 	}

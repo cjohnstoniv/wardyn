@@ -11,6 +11,7 @@
 import * as React from "react";
 import type { ToolEffect } from "../../../../../lib/tool-effect";
 import type { AccessFacts, AccessRow, ToolPolicyFact } from "../../../../../lib/types/new-run-access";
+import type { HarnessSetFact } from "../../../../../lib/types/new-run-contract";
 import type { SetupStatus } from "../../../../../lib/types/setup";
 import { Button } from "../../../../ui/button";
 import { Label } from "../../../../ui/label";
@@ -33,6 +34,8 @@ const NEEDS_SIGN_IN = ["not_configured", "expired_signin"];
 export interface HarnessSetupProps {
   /** The preview's `access` block; nothing shows until the server has answered once. */
   access: AccessFacts | undefined;
+  /** The preview's `harness_set`: the provider the server chose for a harness whose draft entry names none. */
+  harnessSet?: HarnessSetFact;
   intent: RunIntent;
   /** The server has answered exactly this body; until it has, the last answer is held, not claimed. */
   answered: boolean;
@@ -41,13 +44,17 @@ export interface HarnessSetupProps {
   onSignedIn: () => void;
 }
 
-function ProviderPicker({ fact, access, intent, status, onSignedIn }: { fact: ToolPolicyFact; access: AccessFacts; intent: RunIntent; status: SetupStatus | null; onSignedIn: () => void }) {
+function ProviderPicker({ fact, access, harnessSet, intent, status, onSignedIn }: { fact: ToolPolicyFact; access: AccessFacts; harnessSet?: HarnessSetFact; intent: RunIntent; status: SetupStatus | null; onSignedIn: () => void }) {
   const dispatch = useNewRunDispatch();
   const announce = useAnnounce();
   const door = useModelAccessDoor();
   const providers = (status?.model_providers ?? []).filter((p) => p.harnesses.includes(fact.harness) && !p.disabled);
-  const selected = (intent.tools ?? []).find((t) => t.id === fact.harness)?.model_provider ?? "";
+  const picked = (intent.tools ?? []).find((t) => t.id === fact.harness)?.model_provider ?? "";
+  // The server's own choice (the roster default or the only candidate) stands in until the person picks; it is shown, never written to the draft.
+  const chosenId = harnessSet?.harnesses.find((h) => h.id === fact.harness)?.model_credential?.provider ?? "";
+  const selected = picked || (providers.some((p) => p.id === chosenId) ? chosenId : "");
   const current = providers.find((p) => p.id === selected);
+  const asked = access.setup.some((i) => i.fix?.action === "choose_model_provider" && i.fix.tool === fact.harness);
   // A harness Wardyn sets nothing up for has no provider to pick.
   if (fact.lane === "unsupported") return null;
 
@@ -72,14 +79,14 @@ function ProviderPicker({ fact, access, intent, status, onSignedIn }: { fact: To
         onChange={(e) => {
           const provider = e.target.value;
           dispatch({ type: "edit", apply: (i) => setModelProvider(i, fact.harness, provider) });
-          const picked = providers.find((p) => p.id === provider);
-          if (picked) announce(NR_TOOLS.PROVIDER_SET(picked.name ?? picked.id));
+          const chosen = providers.find((p) => p.id === provider);
+          if (chosen) announce(NR_TOOLS.PROVIDER_SET(chosen.name ?? chosen.id));
         }}
       >
         <option value="">{NR_TOOLS.PROVIDER_CHOOSE}</option>
         {providers.map((p) => <option key={p.id} value={p.id}>{p.name ?? p.id}</option>)}
       </select>
-      <p id={`${id}-help`} className="text-sm text-muted-foreground">{selected ? delivery : NR_TOOLS.PROVIDER_REQUIRED}</p>
+      <p id={`${id}-help`} className="text-sm text-muted-foreground">{selected ? delivery : asked ? NR_TOOLS.PROVIDER_REQUIRED : null}</p>
       {selected && signedOut && (
         <Button
           type="button"
@@ -95,7 +102,7 @@ function ProviderPicker({ fact, access, intent, status, onSignedIn }: { fact: To
   );
 }
 
-function HarnessCard({ fact, access, intent, name, answered, status, onSignedIn }: { fact: ToolPolicyFact; access: AccessFacts; intent: RunIntent; name: string; answered: boolean; status: SetupStatus | null; onSignedIn: () => void }) {
+function HarnessCard({ fact, access, harnessSet, intent, name, answered, status, onSignedIn }: { fact: ToolPolicyFact; access: AccessFacts; harnessSet?: HarnessSetFact; intent: RunIntent; name: string; answered: boolean; status: SetupStatus | null; onSignedIn: () => void }) {
   const dispatch = useNewRunDispatch();
   const announce = useAnnounce();
   const door = useModelAccessDoor();
@@ -123,7 +130,7 @@ function HarnessCard({ fact, access, intent, name, answered, status, onSignedIn 
   return (
     <section aria-label={name} className="flex flex-col gap-4 border-t border-border pt-4">
       <h3 className="font-medium">{name}</h3>
-      <ProviderPicker fact={fact} access={access} intent={intent} status={status} onSignedIn={onSignedIn} />
+      <ProviderPicker fact={fact} access={access} harnessSet={harnessSet} intent={intent} status={status} onSignedIn={onSignedIn} />
       {unsupported ? (
         <p className="text-sm text-muted-foreground">{reasonText(fact.default.options[0]?.reason ?? "custom_harness_rules", { harness: name })}</p>
       ) : (
@@ -155,7 +162,7 @@ function HarnessCard({ fact, access, intent, name, answered, status, onSignedIn 
   );
 }
 
-export function HarnessSetup({ access, intent, answered, names, onSignedIn }: HarnessSetupProps) {
+export function HarnessSetup({ access, harnessSet, intent, answered, names, onSignedIn }: HarnessSetupProps) {
   const headingId = React.useId();
   const { status } = useShellSetupStatus();
   if (!access) return null;
@@ -169,7 +176,7 @@ export function HarnessSetup({ access, intent, answered, names, onSignedIn }: Ha
         <p className="text-sm text-muted-foreground">{NR_TOOLS.NO_HARNESSES}</p>
       ) : (
         access.harnesses.map((fact) => (
-          <HarnessCard key={fact.harness} fact={fact} access={access} intent={intent} name={names?.get(fact.harness) ?? fact.harness} answered={answered} status={status} onSignedIn={onSignedIn} />
+          <HarnessCard key={fact.harness} fact={fact} access={access} harnessSet={harnessSet} intent={intent} name={names?.get(fact.harness) ?? fact.harness} answered={answered} status={status} onSignedIn={onSignedIn} />
         ))
       )}
     </section>

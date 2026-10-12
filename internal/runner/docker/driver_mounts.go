@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/mount"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -38,8 +39,8 @@ import (
 //     ValidateUserMountSource against operator/MDM-set roots, but only for
 //     binds the MEMBER authored — checked right before the bind is appended,
 //     since a symlink benign at onboarding can be repointed before the run.
-//   - USER DRIVE (spec.Drive non-nil): appended LAST by driveMount, arriving
-//     as a types.DriveMount rather than a specMounts entry.
+//   - DRIVES (spec.Drives): appended LAST by driveMount, each arriving as a
+//     types.DriveMount rather than a specMounts entry.
 //
 // rroSupported is passed in (not re-derived) so it can't disagree with the
 // `docker info` call CreateSandbox already resolved.
@@ -73,7 +74,7 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSu
 		// reserved-target rule is a property of the target namespace — a policy
 		// row predating that rule could otherwise land inside the member's
 		// drive. The drive's own mount never enters this loop (rides
-		// SandboxSpec.Drive via driveMount instead), so this stays strict.
+		// SandboxSpec.Drives via driveMount instead), so this stays strict.
 		if err := runner.ValidateMountSource(m.Source); err != nil {
 			return nil, fmt.Errorf("docker: denied workspace mount %q -> %q: %w", m.Source, m.Target, err)
 		}
@@ -93,18 +94,30 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSu
 		})
 	}
 
-	// User drive LAST, so its host-path resolved-real-path checks run right
-	// before ContainerCreate.
-	driveMounts, err := d.driveMount(ctx, spec.Drive, rroSupported)
-	if err != nil {
-		return nil, err
+	// Drives LAST, so their host-path resolved-real-path checks run right
+	// before ContainerCreate. Every drive mounts or the sandbox is refused: two
+	// drives at one target would hide one of them, so a repeated target is
+	// refused here as well as at the control plane.
+	seen := map[string]bool{}
+	for i := range spec.Drives {
+		drive := &spec.Drives[i]
+		if seen[drive.Target] {
+			return nil, fmt.Errorf("docker: denied user drive (%s) -> %q: %w (another drive mounts there)",
+				runner.DriveSubject(drive), drive.Target, errDriveTargetInvalid)
+		}
+		seen[drive.Target] = true
+		driveMounts, err := d.driveMount(ctx, drive, spec.RunID, spec.Image, rroSupported)
+		if err != nil {
+			return nil, err
+		}
+		mounts = append(mounts, driveMounts...)
 	}
-	return append(mounts, driveMounts...), nil
+	return mounts, nil
 }
 
-// driveMount converts SandboxSpec.Drive into the ZERO OR ONE container mount
-// that backs it, per backend. A nil drive returns nothing and touches no
-// daemon state.
+// driveMount converts one SandboxSpec.Drives entry into the ZERO OR ONE
+// container mount that backs it, per backend. A nil drive returns nothing and
+// touches no daemon state.
 //
 // The two backends are different MECHANISMS, not two configurations of one:
 //   - docker_volume (MANAGED): a per-person named volume, created on first use
@@ -124,21 +137,21 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSu
 // A Kubernetes backend is an error, never a skip: types.ValidateUserDrive
 // refuses it on a Docker deployment at the write boundary, so reaching here
 // means the deployment's runner target changed under a stored row.
-func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, rroSupported bool) ([]mount.Mount, error) {
+func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, runID uuid.UUID, image string, rroSupported bool) ([]mount.Mount, error) {
 	if drive == nil {
 		return nil, nil
 	}
-	// A drive binds at the RESERVED path or not at all (equality, not prefix):
-	// a DriveMount addressed to /home/agent/.claude, /home/agent, or /work
-	// would mount the member's volume on top of credential staging, home, or
-	// workspace. Nothing in the control plane can reach this today, but an
-	// in-process caller building SandboxSpec directly has no other validating
-	// boundary. Named by DriveSubject, never drive.ObjectName: this refusal
-	// becomes the run's failure_hint verbatim, and on a SHARE the object name
-	// is the operator's absolute share path.
-	if drive.Target != runner.DriveTarget {
-		return nil, fmt.Errorf("docker: denied user drive (%s) -> %q: %w (%q)",
-			runner.DriveSubject(drive), drive.Target, errDriveTargetInvalid, runner.DriveTarget)
+	// A drive binds at a derived drive path or not at all (runner.
+	// ValidateDriveTarget): a DriveMount addressed to /home/agent/.claude,
+	// /home/agent, or /work would mount the member's volume on top of
+	// credential staging, home, or workspace. Nothing in the control plane can
+	// reach this today, but an in-process caller building SandboxSpec directly
+	// has no other validating boundary. Named by DriveSubject, never
+	// drive.ObjectName: this refusal becomes the run's failure_hint verbatim,
+	// and on a SHARE the object name is the operator's absolute share path.
+	if err := runner.ValidateDriveTarget(drive.Target, drive.Backend); err != nil {
+		return nil, fmt.Errorf("docker: denied user drive (%s) -> %q: %w (%v)",
+			runner.DriveSubject(drive), drive.Target, errDriveTargetInvalid, err)
 	}
 	// Still checked as a path via ValidateTarget (never ValidateAuthoredTarget,
 	// which refuses this path by design — the reservation exists to stop a
@@ -154,6 +167,11 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, rroSup
 		// host path, so there's no source to deny.
 		if err := ensureDriveVolume(ctx, d.cli, drive); err != nil {
 			return nil, err
+		}
+		if drive.Target != runner.DriveTarget {
+			if err := d.seedDriveVolume(ctx, runID, image, drive); err != nil {
+				return nil, err
+			}
 		}
 		return []mount.Mount{{
 			Type:     mount.TypeVolume,

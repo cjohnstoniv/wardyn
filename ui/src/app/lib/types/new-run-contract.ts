@@ -313,8 +313,8 @@ export type StartFolderKind = "image_default" | "attachment";
 
 /**
  * The run's exactly-one starting folder; `attachment` is a workspace id or `drive`.
- * `repo` names one repository the run clones from that workspace; `drive_id` is
- * refused until the server attaches several drives.
+ * `repo` names one repository the run clones from that workspace; `drive_id` names
+ * one entry of the request's `drives`, exclusive with `attachment`.
  */
 export interface StartFolder {
   kind: StartFolderKind;
@@ -322,6 +322,12 @@ export interface StartFolder {
   repo?: string;
   drive_id?: string;
   subpath?: string;
+}
+
+/** One drive the run attaches from GET /me/drives (pkg/client.DriveAttachment); `read_only` narrows only. */
+export interface DriveAttachment {
+  drive_id: string;
+  read_only?: boolean;
 }
 
 /** One repository a workspace selection clones (pkg/client.RepoSelection); "" ref = the source's own. */

@@ -199,7 +199,7 @@ func TestLocalPlacement_OrgDriveRefusedOnSelfHosted(t *testing.T) {
 		{types.DriveBackendK8sPVCStatic, placement.ReasonPlacementCapability},
 		{types.DriveBackendHostPath, placement.ReasonPlacementLocalPath},
 	} {
-		drive := &types.DriveMount{Backend: tc.backend, ObjectName: "wardyn-drive-team-home"}
+		drive := []types.DriveMount{{Backend: tc.backend, ObjectName: "wardyn-drive-team-home"}}
 		_, ref := f.srv.localPlacementRefusal(r, req, true, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, drive, nil, composer.Baseline{})
 		if ref == nil || ref.body.Reason != string(tc.reason) {
 			t.Errorf("%s drive on a self-hosted run = %+v, want %s", tc.backend, ref, tc.reason)
