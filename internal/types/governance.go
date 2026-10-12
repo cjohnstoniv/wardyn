@@ -69,6 +69,12 @@ type GovernanceLimits struct {
 	// "may this principal persist anything at all" is the question (403 +
 	// authz.denied), not "how big".
 	DenyUserDrive bool `json:"deny_user_drive,omitempty"`
+	// DenyMemberDrives refuses CREATING a member drive under this profile, on top of
+	// storage.user_drive.member_create (the org switch). A DOOR with no zero-value
+	// opinion: false inherits the switch, so an unset profile changes nothing. DenyUserDrive
+	// also blocks creation (a person who may mount no drive may not make one); this door
+	// narrows only the creating. Operators are exempt from both doors.
+	DenyMemberDrives bool `json:"deny_member_drives,omitempty"`
 	// DenyPlacements refuses a run whose resolved placement is listed (403 placement_denied +
 	// authz.denied). A DENY LIST: absent means every placement is permitted, including for a
 	// member with no assigned profile. Values are `remote` and `local`; a profile denying both is
