@@ -1022,7 +1022,8 @@ func (f *runnerLeaseFixture) muteRun(t *testing.T, owner string, runnerID uuid.U
 // still gets a connection. Another owner's revive is not held behind the first owner's slot.
 func TestPG_RunnerLease_ConcurrentOneOwnerHoldsTwoLockConnections(t *testing.T) {
 	saved := reviveRunnerTimeout
-	reviveRunnerTimeout = 5 * time.Second
+	// Longer than leaseWait, so the owner's other revives give up waiting for the slot the first one holds.
+	reviveRunnerTimeout = leaseWait + 2*time.Second
 	t.Cleanup(func() { reviveRunnerTimeout = saved })
 	f := newRunnerLeaseFixture(t)
 	revived, renewed := make(chan *reviveError, 4), make(chan error, 4)
@@ -1058,9 +1059,13 @@ func TestPG_RunnerLease_ConcurrentOneOwnerHoldsTwoLockConnections(t *testing.T) 
 	case <-time.After(wait):
 		t.Fatal("another owner's revive did not return")
 	}
+	slotBusy := 0
 	for range 4 {
 		select {
-		case <-revived:
+		case rerr := <-revived:
+			if rerr != nil && rerr.reason == reasonLockUnavailable {
+				slotBusy++
+			}
 		case <-time.After(wait):
 			t.Fatal("a revive did not return")
 		}
@@ -1069,5 +1074,9 @@ func TestPG_RunnerLease_ConcurrentOneOwnerHoldsTwoLockConnections(t *testing.T) 
 		case <-time.After(wait):
 			t.Fatal("a renewal did not return")
 		}
+	}
+	// One revive slot for the owner: the revives on the owner's other runners waited for it and gave up.
+	if slotBusy < 2 {
+		t.Errorf("%d of the owner's 4 revives answered lock_unavailable, want at least 2: the revive slot is not the owner's", slotBusy)
 	}
 }
