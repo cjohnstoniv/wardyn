@@ -188,8 +188,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		if eng == nil && spec.Mode != "" && spec.Mode != "off" {
 			// Configured to inspect but the effective secret corpus is empty —
 			// scanning is a no-op. Surface it so the operator is not misled.
-			slog.WarnContext(ctx, "wardyn-proxy: llm_inspection configured but no effective secret corpus — scanning disabled",
-				slog.String("mode", spec.Mode))
+			slog.WarnContext(ctx, "wardyn-proxy: llm_inspection configured but no effective secret corpus — scanning disabled", slog.String("mode", spec.Mode))
 		}
 	}
 
