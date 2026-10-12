@@ -261,9 +261,9 @@ func TestPG_QueueFitAndHostCapacitySplit(t *testing.T) {
 // at its cap and a launch into it would otherwise wait.
 func TestOfflineSelfHostedIsRefusedNotQueued(t *testing.T) {
 	e := newQueueEnv(t)
-	body := `{"name":"Laptops","hosting_type":"self_hosted","limits":{"background":{"cpu_millis":{"default":500,"cap":4000},` +
+	body := `{"name":"Laptops","limits":{"background":{"cpu_millis":{"default":500,"cap":4000},` +
 		`"memory_mib":{"default":512,"cap":8192},"lifetime":{"default_sec":3600,"max_sec":7200}},"barriers":["CC1","CC2","CC3"],"max_concurrent_runs":1}}`
-	w := e.admin(http.MethodPost, "/api/v1/runner-pools", body)
+	w := e.call(e.person, http.MethodPost, "/api/v1/me/runner-pools", body)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create pool = %d %s", w.Code, w.Body)
 	}

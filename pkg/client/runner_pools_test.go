@@ -94,7 +94,7 @@ func TestRunnerPoolMethodsHitTheirRoutes(t *testing.T) {
 		{"GET", "/api/v1/runner-pools", func() error { _, err := c.ListRunnerPools(ctx); return err }},
 		{"GET", "/api/v1/runner-pools/" + pool.String(), func() error { _, err := c.GetRunnerPool(ctx, pool); return err }},
 		{"POST", "/api/v1/runner-pools", func() error {
-			_, err := c.CreateRunnerPool(ctx, client.CreateRunnerPoolRequest{Name: name, HostingType: client.RunnerPoolSelfHosted})
+			_, err := c.CreateRunnerPool(ctx, client.CreateRunnerPoolRequest{Name: name, HostingType: client.RunnerPoolRemoteProvided})
 			return err
 		}},
 		{"PUT", "/api/v1/runner-pools/" + pool.String(), func() error {
@@ -102,6 +102,15 @@ func TestRunnerPoolMethodsHitTheirRoutes(t *testing.T) {
 			return err
 		}},
 		{"DELETE", "/api/v1/runner-pools/" + pool.String(), func() error { return c.DeleteRunnerPool(ctx, pool) }},
+		{"POST", "/api/v1/me/runner-pools", func() error {
+			_, err := c.CreateMyRunnerPool(ctx, client.CreateMyRunnerPoolRequest{Name: name})
+			return err
+		}},
+		{"PUT", "/api/v1/me/runner-pools/" + pool.String(), func() error {
+			_, err := c.UpdateMyRunnerPool(ctx, pool, client.UpdateRunnerPoolRequest{Revision: 1, Name: &name})
+			return err
+		}},
+		{"DELETE", "/api/v1/me/runner-pools/" + pool.String(), func() error { return c.DeleteMyRunnerPool(ctx, pool) }},
 		{"PUT", "/api/v1/me/runner-pools/" + pool.String() + "/runners/" + runner.String(), func() error { _, err := c.AddMyRunnerToPool(ctx, pool, runner); return err }},
 		{"DELETE", "/api/v1/me/runner-pools/" + pool.String() + "/runners/" + runner.String(), func() error { return c.RemoveMyRunnerFromPool(ctx, pool, runner) }},
 		{"GET", "/api/v1/runner-pool-defaults", func() error { _, err := c.GetOrgRunnerPoolDefaults(ctx); return err }},

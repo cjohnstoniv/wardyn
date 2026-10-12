@@ -15,7 +15,8 @@ import (
 )
 
 // runner_pool.go — the person-facing half of the runner pool contract: list the
-// pools you may use and keep your own defaults. A server that does not manage
+// pools you may use and keep your own defaults (runner_pool_manage.go keeps
+// the pools themselves). A server that does not manage
 // pools yet answers each with runner_pools_unavailable.
 //
 //	wardyn runner pool list
@@ -36,7 +37,7 @@ func poolIDFlag(flag, s string) (*uuid.UUID, error) {
 }
 
 func runnerPoolCmd(client clientFn) *cobra.Command {
-	cmd := &cobra.Command{Use: "pool", Short: "List the runner pools you may use and set your own defaults"}
+	cmd := &cobra.Command{Use: "pool", Short: "List the runner pools you may use, keep your own Self-Hosted pools and set your own defaults"}
 	var asJSON bool
 	list := &cobra.Command{Use: "list", Short: "List the runner pools you may use", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		out, err := client().ListRunnerPools(cmd.Context())
@@ -50,6 +51,7 @@ func runnerPoolCmd(client clientFn) *cobra.Command {
 	}}
 	list.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	cmd.AddCommand(list, runnerPoolDefaultCmd(client))
+	cmd.AddCommand(runnerPoolManageCmds(client)...)
 	return subcommandGroup(cmd)
 }
 
