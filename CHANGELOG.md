@@ -88,6 +88,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   for existing runs.
 - Migration `0165_run_templates` adds `run_templates`, `run_template_revisions`, `template_group_admins` and
   `template_group_labels`; nothing changes for existing data.
+- Migration `0168_runner_pool_owner` removes every Self-Hosted pool made before it (they have no owner), with its
+  members, the default slots naming it and any run waiting for it; those runs end `KILLED` with
+  `runner_pool_removed` and get no `run.kill` audit row. A pool a finished run is bound to stays as a deleted
+  tombstone. An organisation Self-Hosted default slot or preferred hosting type is cleared to none, never switched
+  to Remote Provided, and is now refused on write; until a person or an administrator sets a preference, a launch
+  that names no pool is refused `runner_pool_required`.
 
 ### Added
 
@@ -428,6 +434,33 @@ and does not yet follow semantic versioning (interfaces are not stable).
   when a runner is offline or has not reported).
 - Fleet capacity and a run's recorded sizing now count the 400 MiB proxy envelope of a run that carries an Azure
   route gate; they previously recorded the 256 MiB default while the runner applied 400 MiB (#1806).
+- The pool list, preflight and the policy preview say how busy each pool you may use is (`slots`: used, waiting,
+  limit, a verdict and the default wait); counts only, and if they cannot be read the answer comes without them. A
+  waiting run carries `queue` (its place, reason and deadline) on create, `GET /runs/{id}` and `GET /runs`. `wardyn
+  run --max-wait <duration>` sets how long a run may wait for a slot; with `--wait` the server is told `--timeout`
+  minus 60s, so a run that waits too long fails with `queue_timeout` (exit 1) before `--timeout` gives up (exit
+  124), and `--wait` prints a waiting run's place as it changes.
+- Runs on a self-hosted runner are leased to it: the runner refuses to create or execute a run without the
+  organisation's current lease and execution generation; token renewals and end changes extend the lease, a runner's
+  new session is leased again, and reviving such a run starts its agent under a fresh generation. A run is placed
+  only on the launcher's own claimed runners, and a Self-Hosted pool is available while one of them in it is online.
+  deny_placements is also held at dispatch and revive; managed-harness sign-in runs stay exempt at every door, and
+  site-config probe runs at create and dispatch.
+- Self-Hosted runner pools are each person's own: a person creates, edits and deletes their pools
+  (`/api/v1/me/runner-pools`, `wardyn runner pool create|update|delete|show`), up to 10, with names unique per
+  person, and puts their own claimed runners in them (`wardyn runner pool add|remove <pool-id> <runner-id>`). Only
+  the owner sees or uses one; anyone else gets the unknown-id `404`. Administrators list every pool read-only with
+  its `owner`, create Remote Provided pools only, and the organisation default names a Remote Provided pool only. A
+  new erasure scope, `runner_pools`, also runs in the SCIM purge.
+- Console: Admin gains a Runners page (every registered computer with its state, last seen and what it reported,
+  revoke, unused registration tokens, a mint for a named person, the runners switch), and Your account gains a My
+  runner card to register, claim with the fingerprint read on that computer, and revoke. A run on a registered
+  computer names it, says when it is offline (unknown, not offline, when another server copy holds its connection),
+  explains a revoked runner's runs, and marks egress decisions recorded while it was offline; a remote run's
+  Identity shows what `wardyn sync` moved. API: a claimed runner's view carries `capacity`, `classes` and
+  `allowed_roots`; `GET /me/runners`, and so `wardyn runner list`, keeps a runner someone else revoked for seven
+  days with `revoked_by_email`; both runner-token mint answers carry `org_url`; runs on a registered computer carry
+  `runner_name`, `runner_online` and `runner_last_seen_at`.
 
 ### Changed
 
