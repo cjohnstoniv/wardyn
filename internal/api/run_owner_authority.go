@@ -81,6 +81,17 @@ func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun,
 	if !callerIsOwner && run.OperatorOwned {
 		return nil, nil
 	}
+	// A built-in GitHub component's repositories, from the grant its admission
+	// wrote: a run with no stored proxy config still meets their provider door.
+	if s.cfg.Store != nil {
+		grants, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
+		if err != nil {
+			return nil, fmt.Errorf("read the run's grants: %w", err)
+		}
+		for _, g := range grants {
+			repos = append(repos, builtinGitHubRepos([]types.GrantSpec{g.Spec})...)
+		}
+	}
 	rows, err := s.ownerProviderRows(ctx, repos)
 	if err != nil {
 		return nil, err
@@ -563,8 +574,7 @@ func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg
 }
 
 // runRepos is the run's repos: its legacy repo field and, when its rendered
-// proxy config can be read, the repos of its resolved policy and of its
-// built-in GitHub components.
+// proxy config can be read, the repos of its resolved policy.
 func runRepos(run types.AgentRun, cfg *proxy.Config) []string {
 	var repos []string
 	if run.Repo != "" {
@@ -572,7 +582,6 @@ func runRepos(run types.AgentRun, cfg *proxy.Config) []string {
 	}
 	if cfg != nil {
 		repos = append(repos, repoLocatorsOf(cfg.Policy.WorkspaceRepos)...)
-		repos = append(repos, builtinGitHubRepos(cfg.Policy.EligibleGrants)...)
 	}
 	return repos
 }

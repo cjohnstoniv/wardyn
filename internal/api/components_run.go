@@ -84,6 +84,8 @@ type componentAdmission struct {
 	// caller's ceiling, which a built-in Git provider component is held to.
 	site    types.SiteConfig
 	ceiling governanceCeiling
+	// grants is the run's eligible grants before any component's.
+	grants []types.GrantSpec
 	// operatorSecrets is the operator namespace's names, listed at most once.
 	operatorSecrets map[string]bool
 }
@@ -178,7 +180,7 @@ func (s *Server) admitRunComponents(r *http.Request, refs []types.ComponentRef, 
 	if err != nil {
 		return runComponents{}, &componentRefusal{refusal: runServerError("get site config", err)}
 	}
-	adm.settings, adm.site, adm.ceiling = componentSettings(sc), sc, ceiling
+	adm.settings, adm.site, adm.ceiling, adm.grants = componentSettings(sc), sc, ceiling, spec.EligibleGrants
 	adm.bounds = s.newComponentHostBounds(r, sc, spec, ceiling, wsRefs)
 
 	comps := runComponents{settings: adm.settings}
