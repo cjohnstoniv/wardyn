@@ -9,7 +9,7 @@
 
 import type { AutonomyResolution } from "../api/governance";
 import type { ComponentFact } from "./components";
-import type { AllowedImage, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
+import type { AllowedImage, HarnessSetFact, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
 import type { ProvenanceEntry } from "./policy-preview";
 import type { ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
 import type { ConfinementClass, RiskItem, RiskLevel } from "./runs";
@@ -161,6 +161,8 @@ export interface PreflightResult {
   // lane resolves it), and the images the organisation lets the person choose.
   image?: ImageFact;
   allowed_images?: AllowedImage[];
+  // The run's included harnesses (absent for a run with none).
+  harness_set?: HarnessSetFact;
   // The pool the request resolves to and how it was chosen (absent until the
   // pool lane resolves one), and the pools the person may choose, each with
   // whether it is available; empty until that lane fills it.

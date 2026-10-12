@@ -23,6 +23,7 @@ import (
 // client's run, whatever its legacy flags say, stores none.
 func TestPG_CreateRunStoresTheChosenExperienceOnly(t *testing.T) {
 	srv, pool := pgHarness(t)
+	srv.cfg.AgentImages = composeAgentImages
 	for _, tc := range []struct {
 		name, body     string
 		experience     types.RunExperience
@@ -73,6 +74,7 @@ func TestPG_CreateRunStoresTheChosenExperienceOnly(t *testing.T) {
 // stores 0 and says so, an interactive run keeps what the policy gave it.
 func TestPG_ABackgroundRunHasNoIdleStopFromAnySource(t *testing.T) {
 	srv, pool := pgHarness(t)
+	srv.cfg.AgentImages = composeAgentImages
 	srv.cfg.DefaultPolicy.AutoStopAfterSec = 1800
 	// A policy name is unique in the database, so a reused database must not meet last run's.
 	polName := "idle-900-" + strconv.FormatInt(time.Now().UnixNano(), 36)

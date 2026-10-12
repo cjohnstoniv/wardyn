@@ -3,7 +3,10 @@
 
 package api
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // The sentences of the run-mode refusals New Run shows inline. The console
 // prints the server's sentence on a refusal and uses the same bytes for its own
@@ -64,4 +67,38 @@ func idleStopBackgroundMsg() string {
 // the policy decided.
 func toolAllowRefusedMsg(i int) string {
 	return fmt.Sprintf("tools[%d]: a request can hold or deny a tool but cannot let the agent use one without asking, because that would widen what the policy decided.", i)
+}
+
+// startupPromptShapeMsg: only the harness that starts with the run can receive a
+// starting prompt.
+func startupPromptShapeMsg() string {
+	return "startup.prompt: only a harness startup takes a starting prompt"
+}
+
+// harnessNotInstalledMsg: no sandbox image this server launches carries the
+// harness's CLI.
+func harnessNotInstalledMsg(name string) string {
+	return fmt.Sprintf("%s isn't installed in this server's sandbox images, so the run was not created. Ask an admin to add an image that includes it.", name)
+}
+
+// harnessSetNoImageMsg: no declared sandbox image carries the harnesses together.
+func harnessSetNoImageMsg(names ...string) string {
+	both := "both"
+	list := strings.Join(names, " and ")
+	if len(names) > 2 {
+		both = "all of them"
+		list = strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+	}
+	return fmt.Sprintf("No sandbox image on this server includes %s together, so the run was not created. Remove one, or ask an admin to add an image with %s.", list, both)
+}
+
+// harnessSetCustomImageMsg: several harnesses need the image an admin declared for them.
+func harnessSetCustomImageMsg() string {
+	return "A run with more than one harness starts from an image your admin declared for them, so it can't use a custom image."
+}
+
+// harnessProvidersConflictMsg: the proxy keys an injected credential by host, so
+// two providers on one host cannot be kept apart.
+func harnessProvidersConflictMsg(a, b string) string {
+	return fmt.Sprintf("%s and %s use different model providers that reach the same host, so the proxy can't keep their credentials apart. Choose one provider for both, or another provider.", a, b)
 }

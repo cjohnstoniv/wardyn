@@ -146,11 +146,26 @@ type DeliverResidentArgs struct {
 	Kind     string    `json:"kind"`
 	Value    string    `json:"value"`
 	NotAfter time.Time `json:"not_after"`
+	// Sandbox lets the runner place the value in SecretEnv or ManagedFiles;
+	// false keeps it in the runner's own proxy configuration only.
+	Sandbox bool `json:"sandbox,omitempty"`
 }
 
 type EraseResidentArgs struct {
 	RunID uuid.UUID `json:"run_id"`
 }
+
+// ResidentErase is the `resident_erase` event's data: one grant's erase at run end.
+type ResidentErase struct {
+	GrantID uuid.UUID `json:"grant_id"`
+	Outcome string    `json:"outcome"`
+}
+
+// ResidentErase outcomes.
+const (
+	ResidentErased      = "erased"
+	ResidentEraseFailed = "failed"
+)
 
 // OutputAckArgs acknowledges bytes accepted by the org's output writer, never
 // merely bytes received in the transport's buffer. Offset is the next byte.

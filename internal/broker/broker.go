@@ -200,6 +200,10 @@ type GitHubMinter interface {
 	// a minter that silently did nothing would leave the discard doors leaking
 	// exactly as they leaked before, and the compiler must ask.
 	Revoke(ctx context.Context, token string) error
+	// ListBranches lists repo's ("owner/name") branches for the New Run branch
+	// picker (github.go). It mints its own one-repo, read-only token outside
+	// mint(), like VerifyRefRuleset's probe.
+	ListBranches(ctx context.Context, repo string, limit int) (branches []string, defaultBranch string, truncated bool, err error)
 }
 
 // Querier is the minimal transaction surface the broker needs. It is satisfied

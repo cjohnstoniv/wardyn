@@ -450,6 +450,9 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["AgentFact", "AgentFact"],
     ["ImageSource", "ImageSource"],
     ["ImageFact", "ImageFact"],
+    ["HarnessSetFact", "HarnessSetFact"],
+    ["HarnessFact", "HarnessFact"],
+    ["HarnessModelCredential", "HarnessModelCredential"],
     ["AllowedImage", "AllowedImage"],
   ])("pkg/client %s: full parity with the TS %s mirror", (goName, tsName) => {
     const goTags = goJSONTags(readFileSync(join(root, "pkg/client/runs_new_run.go"), "utf8"), goName);
@@ -514,7 +517,9 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["pkg/client/templates.go", "Template"],
     ["pkg/client/templates.go", "TemplateSummary"],
     ["pkg/client/templates.go", "TemplateList"],
+    ["pkg/client/templates.go", "TemplatePublish"],
     ["pkg/client/templates.go", "TemplateSaveRequest"],
+    ["pkg/client/templates.go", "TemplateSaveRefusal"],
     ["pkg/client/templates.go", "TemplateImportRequest"],
     ["pkg/client/templates.go", "TemplateDiagnostic"],
     ["pkg/client/templates.go", "TemplateImportResult"],
@@ -547,6 +552,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     const template = readFileSync(join(root, "internal/types/template.go"), "utf8");
     const consts = (src: string, re: RegExp) => new Set([...src.matchAll(re)].map((m) => m[1]));
     expect(union("TemplateScope")).toEqual(consts(template, /\bTemplateScope\w+\s+TemplateScope = "([a-z_]+)"/g));
+    expect(union("TemplateKind")).toEqual(consts(template, /\bTemplateKind\w+\s+TemplateKind = "([a-z_]+)"/g));
     expect(union("TemplateCoverage")).toEqual(consts(client, /\bTemplateCoverage\w+\s+TemplateCoverage = "([a-z_]+)"/g));
     expect(union("TemplateFormat")).toEqual(consts(client, /\bTemplateFormat\w+\s+TemplateFormat = "([a-z_]+)"/g));
     expect(union("TemplatePart")).toEqual(consts(client, /\bTemplatePart\w+\s+TemplatePart = "([a-z_]+)"/g));

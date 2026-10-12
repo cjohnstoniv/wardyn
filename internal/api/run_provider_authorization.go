@@ -12,7 +12,17 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// authorizeRunModelProvider judges req.Agent's model provider: the request's,
+// else the pin of wsRefs' primary workspace, else the harness default. For a
+// run-mode request every refusal names the harness (forTool), and so does a
+// later liveness refusal of the choice (writeProviderChoiceRefusal).
 func (s *Server) authorizeRunModelProvider(r *http.Request, req createRunRequest, wsRefs []types.Workspace, incomplete bool) (runProviderChoice, *runRefusal) {
+	choice, refusal := s.chooseRunModelProvider(r, req, wsRefs, incomplete)
+	choice.tool = harnessRefusalTool(req)
+	return choice, refusal.forTool(choice.tool)
+}
+
+func (s *Server) chooseRunModelProvider(r *http.Request, req createRunRequest, wsRefs []types.Workspace, incomplete bool) (runProviderChoice, *runRefusal) {
 	ctx := r.Context()
 	if req.ModelProvider != "" && !modelProviderIDPattern.MatchString(req.ModelProvider) {
 		return runProviderChoice{}, runError(http.StatusBadRequest, reasonModelProviderIDInvalid, fmt.Sprintf(mpRunBadID, req.ModelProvider))

@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sync"
+	"time"
 )
 
 // ResetError is what a read or write on an aborted stream answers.
@@ -37,8 +39,10 @@ type Stream struct {
 	opened       chan struct{}
 	done         chan struct{}
 	doneOnce     sync.Once
-	unacked      int64 // consumed by Read, not yet returned to the sender as WINDOW
-	heldReleased bool  // both ends closed: the unread buffer no longer counts toward Peer.held
+	unacked      int64       // consumed by Read, not yet returned to the sender as WINDOW
+	heldReleased bool        // both ends closed: the unread buffer no longer counts toward Peer.held
+	readBy       time.Time   // Read gives up with os.ErrDeadlineExceeded from here; zero is none
+	readTimer    *time.Timer // wakes a Read waiting at readBy
 }
 
 func (p *Peer) newStream(id uint32, kind string) *Stream {
@@ -68,14 +72,40 @@ func (s *Stream) Err() error {
 
 func (s *Stream) finish() { s.doneOnce.Do(func() { close(s.done) }) }
 
+// SetReadDeadline makes a Read that has nothing to return at t fail with
+// os.ErrDeadlineExceeded, leaving the stream usable; a zero t clears it.
+func (s *Stream) SetReadDeadline(t time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.readTimer != nil {
+		s.readTimer.Stop()
+		s.readTimer = nil
+	}
+	s.readBy = t
+	if d := time.Until(t); !t.IsZero() && d > 0 {
+		s.readTimer = time.AfterFunc(d, func() {
+			s.mu.Lock()
+			s.cond.Broadcast()
+			s.mu.Unlock()
+		})
+	}
+	s.cond.Broadcast()
+	return nil
+}
+
 // Read returns buffered bytes, io.EOF once the peer half-closed and the buffer
-// is drained, or a *ResetError after an abort.
+// is drained, a *ResetError after an abort, or os.ErrDeadlineExceeded once the
+// read deadline has passed with nothing to return.
 func (s *Stream) Read(b []byte) (int, error) {
 	if len(b) == 0 {
 		return 0, nil
 	}
 	s.mu.Lock()
 	for len(s.buf) == 0 && s.reset == nil && !s.remoteClosed {
+		if !s.readBy.IsZero() && !time.Now().Before(s.readBy) {
+			s.mu.Unlock()
+			return 0, os.ErrDeadlineExceeded
+		}
 		s.cond.Wait()
 	}
 	if s.reset != nil {
@@ -191,6 +221,9 @@ func (s *Stream) abort(code uint32) bool {
 		return false
 	}
 	s.reset = &ResetError{Code: code}
+	if s.readTimer != nil {
+		s.readTimer.Stop()
+	}
 	owed := s.releaseHeldLocked()
 	s.buf = nil
 	s.cond.Broadcast()
