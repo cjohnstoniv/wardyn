@@ -39,7 +39,7 @@ func personEraseCmd(client clientFn) *cobra.Command {
   run_tasks              the task text of the runs they created
   components             the components they saved and the content of each run's snapshot of one they defined; the snapshot row stays
   run_setups             their own run templates and revisions, their group template grants, and their name on shared templates
-  runner_pools           their own Self-Hosted runner pools (deleted; their runners stay)
+  runner_pools           their own user pools (deleted; their runners stay)
   audit_personal_fields  their sealed audit fields (the key is destroyed; the chain still verifies)
   credentials            their stored credentials and the key they sit under
 

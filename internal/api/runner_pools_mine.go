@@ -39,7 +39,7 @@ func (s *Server) handleCreateMyRunnerPool(w http.ResponseWriter, r *http.Request
 		writePoolInvalid(w, err.Error())
 		return
 	}
-	s.createPool(w, r, ps, types.RunnerPool{ID: uuid.New(), Name: req.Name, HostingType: types.RunnerPoolSelfHosted, Owner: owner, Limits: req.Limits},
+	s.createPool(w, r, ps, types.RunnerPool{ID: uuid.New(), Name: req.Name, Scope: types.RunnerPoolUser, Owner: owner, Limits: req.Limits},
 		http.StatusUnprocessableEntity, "You already have 10 Self-Hosted pools, the most one person may keep. Delete one to make another.")
 }
 
@@ -80,7 +80,7 @@ func (s *Server) myPool(w http.ResponseWriter, r *http.Request, ps store.RunnerP
 		writeServerError(w, r, "read runner pool", err)
 		return types.RunnerPool{}, false
 	}
-	if err != nil || p.State == types.RunnerPoolDeleted || p.HostingType != types.RunnerPoolSelfHosted || p.Owner != owner {
+	if err != nil || p.State == types.RunnerPoolDeleted || p.Scope != types.RunnerPoolUser || p.Owner != owner {
 		writePoolNotFound(w)
 		return types.RunnerPool{}, false
 	}

@@ -15,16 +15,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The runner pool contract (0.9). A pool is a set of execution targets: an
-// organisation's Remote Provided pool (administrators keep it) or one person's
-// own Self-Hosted pool of their own claimed runners (only they keep or use it).
+// The runner pool contract (0.9). A pool is a set of runners: an organization
+// pool of remote-hosted runners (administrators keep it) or one person's own user
+// pool of their own self-hosted runners and the remote-hosted runners an
+// administrator made available to people's pools (only they keep or use it).
 // Choosing one constrains where a run may go and grants nothing. A server that cannot honour pools yet answers every method below,
 // and a CreateRunRequest.RunnerPoolID, with a refusal rather than ignoring it.
 
 // The canonical pool shapes, re-exported so SDK callers can name them.
 type (
 	RunnerPool          = types.RunnerPool
-	RunnerPoolHosting   = types.RunnerPoolHosting
+	RunnerPoolScope     = types.RunnerPoolScope
+	RunnerKind          = types.RunnerKind
 	RunnerPoolState     = types.RunnerPoolState
 	RunnerPoolMember    = types.RunnerPoolMember
 	RunnerPoolDefaults  = types.RunnerPoolDefaults
@@ -49,10 +51,13 @@ type (
 	RunnerPoolReason = runnerpool.Reason
 )
 
-// The hosting types, lifecycle states and selection provenance values.
+// The scopes, runner kinds, lifecycle states and selection provenance values.
 const (
-	RunnerPoolRemoteProvided = types.RunnerPoolRemoteProvided
-	RunnerPoolSelfHosted     = types.RunnerPoolSelfHosted
+	RunnerPoolOrganization = types.RunnerPoolOrganization
+	RunnerPoolUser         = types.RunnerPoolUser
+
+	RunnerKindSelfHosted   = types.RunnerKindSelfHosted
+	RunnerKindRemoteHosted = types.RunnerKindRemoteHosted
 
 	RunnerPoolActive   = types.RunnerPoolActive
 	RunnerPoolDisabled = types.RunnerPoolDisabled
@@ -94,7 +99,7 @@ const (
 type RunnerPoolChoice struct {
 	ID           uuid.UUID                `json:"id"`
 	Name         string                   `json:"name"`
-	HostingType  RunnerPoolHosting        `json:"hosting_type"`
+	Scope        RunnerPoolScope          `json:"scope"`
 	Availability string                   `json:"availability"`
 	Reason       RunnerPoolReason         `json:"reason,omitempty"`
 	Limits       []EffectiveRunLimits     `json:"limits,omitempty"`
@@ -127,13 +132,13 @@ type MainDriveFacts struct {
 	// Enforcement is the WEAKEST word across the targets; unknown when any target's is unknown (offline,
 	// never reported, or no target at all).
 	Enforcement MainDriveEnforcement `json:"enforcement"`
-	// Basis is substrate (this deployment's executor) or runner_asserted (a self-hosted runner's own report).
+	// Basis is substrate (a remote-hosted runner) or runner_asserted (a self-hosted runner's own report).
 	Basis types.RunEvidenceSource `json:"basis"`
 	// Coverage is absent when enforcement is none or unknown.
 	Coverage MainDriveCoverage `json:"coverage,omitempty"`
 	// Keep is what happens to an Interactive run's sandbox at its end time.
 	Keep MainDriveKeep `json:"keep"`
-	// DriveMounts: the pool's runners can mount drives at all (false for a self-hosted pool).
+	// DriveMounts: the pool's runners can mount drives at all (false for a user pool).
 	DriveMounts bool `json:"drive_mounts"`
 }
 
@@ -163,13 +168,13 @@ type RunnerPoolCatalogueEntry struct {
 	// RunTypesSource is RunTypesSourcePool or RunTypesSourceNone.
 	RunTypesSource string          `json:"run_types_source,omitempty"`
 	BarrierOptions []BarrierOption `json:"barrier_options"`
-	// MyRunners is every one of the caller's OWN runners that is a member of a
-	// self-hosted pool, whether or not it can take a run now; never another
+	// MyRunners is every one of the caller's OWN self-hosted runners that is a
+	// member of a user pool, whether or not it can take a run now; never another
 	// person's. It is how a person reads which pools each of their runners is in.
 	MyRunners []PoolRunner `json:"my_runners,omitempty"`
 	// Slots is how busy the pool is; absent on a row the caller may only manage.
 	Slots *PoolSlots `json:"slots,omitempty"`
-	// Owner is a Self-Hosted pool's owner: the caller on their own pools, and the
+	// Owner is a user pool's owner: the caller on their own pools, and the
 	// person each other pool belongs to on an administrator's oversight rows.
 	Owner string `json:"owner,omitempty"`
 }
@@ -194,7 +199,7 @@ type PoolSlots struct {
 	MaxWaitSec int `json:"max_wait_sec,omitempty"`
 }
 
-// PoolRunner is one of the caller's own runners in a self-hosted pool.
+// PoolRunner is one of the caller's own self-hosted runners in a user pool.
 type PoolRunner struct {
 	ID     uuid.UUID `json:"id"`
 	Name   string    `json:"name"`
@@ -230,22 +235,16 @@ type PoolDefault struct {
 	Reason    RunnerPoolReason    `json:"reason,omitempty"`
 }
 
-// CreateRunnerPoolRequest names a new Remote Provided pool (admin); a server
-// refuses self_hosted here, since each person creates their own
-// (CreateMyRunnerPoolRequest). The hosting type is fixed for its life. Limits are validated (RunnerPoolLimits.Validate); a pool created without
-// them adds no bound of its own.
+// CreateRunnerPoolRequest names a new organization pool (admin). Limits are
+// validated (RunnerPoolLimits.Validate); a pool created without them adds no
+// bound of its own.
 type CreateRunnerPoolRequest struct {
-	Name        string            `json:"name"`
-	HostingType RunnerPoolHosting `json:"hosting_type"`
-	Limits      *RunnerPoolLimits `json:"limits,omitempty"`
+	Name   string            `json:"name"`
+	Limits *RunnerPoolLimits `json:"limits,omitempty"`
 }
 
-// Validate refuses a bad name, a hosting type outside the two and limits a pool
-// cannot keep.
+// Validate refuses a bad name and limits a pool cannot keep.
 func (r CreateRunnerPoolRequest) Validate() error {
-	if !r.HostingType.Valid() {
-		return errors.New("hosting_type is remote_provided or self_hosted")
-	}
 	if err := types.ValidateRunnerPoolName(r.Name); err != nil {
 		return err
 	}
@@ -255,9 +254,9 @@ func (r CreateRunnerPoolRequest) Validate() error {
 	return nil
 }
 
-// CreateMyRunnerPoolRequest names a new Self-Hosted pool of the caller's own.
-// Limits are as CreateRunnerPoolRequest's; every run is still bounded by the
-// caller's governance profile.
+// CreateMyRunnerPoolRequest names a new user pool of the caller's own. Limits
+// are as CreateRunnerPoolRequest's; every run is still bounded by the caller's
+// governance profile.
 type CreateMyRunnerPoolRequest struct {
 	Name   string            `json:"name"`
 	Limits *RunnerPoolLimits `json:"limits,omitempty"`
@@ -265,7 +264,7 @@ type CreateMyRunnerPoolRequest struct {
 
 // Validate refuses a bad name and limits a pool cannot keep.
 func (r CreateMyRunnerPoolRequest) Validate() error {
-	return CreateRunnerPoolRequest{Name: r.Name, HostingType: RunnerPoolSelfHosted, Limits: r.Limits}.Validate()
+	return CreateRunnerPoolRequest(r).Validate()
 }
 
 // RunnerPoolSwitch is the state an update may put a pool in: active or disabled.
@@ -337,26 +336,26 @@ func (c *Client) GetRunnerPool(ctx context.Context, id uuid.UUID) (RunnerPool, e
 	return out, err
 }
 
-// CreateRunnerPool adds a Remote Provided pool to the organisation's catalogue (admin).
+// CreateRunnerPool adds an organization pool to the catalogue (admin).
 func (c *Client) CreateRunnerPool(ctx context.Context, req CreateRunnerPoolRequest) (RunnerPool, error) {
 	var out RunnerPool
 	err := c.do(ctx, http.MethodPost, "/api/v1/runner-pools", req, &out)
 	return out, err
 }
 
-// UpdateRunnerPool renames, switches or re-limits a Remote Provided pool (admin).
+// UpdateRunnerPool renames, switches or re-limits an organization pool (admin).
 func (c *Client) UpdateRunnerPool(ctx context.Context, id uuid.UUID, req UpdateRunnerPoolRequest) (RunnerPool, error) {
 	var out RunnerPool
 	err := c.do(ctx, http.MethodPut, "/api/v1/runner-pools/"+id.String(), req, &out)
 	return out, err
 }
 
-// DeleteRunnerPool tombstones a Remote Provided pool (admin). Runs bound to it keep their history.
+// DeleteRunnerPool tombstones an organization pool (admin). Runs bound to it keep their history.
 func (c *Client) DeleteRunnerPool(ctx context.Context, id uuid.UUID) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/runner-pools/"+id.String(), nil, nil)
 }
 
-// CreateMyRunnerPool creates a Self-Hosted pool of the caller's own.
+// CreateMyRunnerPool creates a user pool of the caller's own.
 func (c *Client) CreateMyRunnerPool(ctx context.Context, req CreateMyRunnerPoolRequest) (RunnerPool, error) {
 	var out RunnerPool
 	err := c.do(ctx, http.MethodPost, "/api/v1/me/runner-pools", req, &out)
@@ -364,20 +363,20 @@ func (c *Client) CreateMyRunnerPool(ctx context.Context, req CreateMyRunnerPoolR
 }
 
 // UpdateMyRunnerPool renames, switches or re-limits one of the caller's own
-// Self-Hosted pools; anyone else's answers as an unknown id does.
+// user pools; anyone else's answers as an unknown id does.
 func (c *Client) UpdateMyRunnerPool(ctx context.Context, id uuid.UUID, req UpdateRunnerPoolRequest) (RunnerPool, error) {
 	var out RunnerPool
 	err := c.do(ctx, http.MethodPut, "/api/v1/me/runner-pools/"+id.String(), req, &out)
 	return out, err
 }
 
-// DeleteMyRunnerPool tombstones one of the caller's own Self-Hosted pools.
+// DeleteMyRunnerPool tombstones one of the caller's own user pools.
 func (c *Client) DeleteMyRunnerPool(ctx context.Context, id uuid.UUID) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/me/runner-pools/"+id.String(), nil, nil)
 }
 
-// AddMyRunnerToPool puts the caller's own claimed runner into one of their own
-// Self-Hosted pools. Nobody adds a runner on another person's behalf.
+// AddMyRunnerToPool puts the caller's own claimed self-hosted runner into one of
+// their own user pools. Nobody adds a runner on another person's behalf.
 func (c *Client) AddMyRunnerToPool(ctx context.Context, poolID, runnerID uuid.UUID) (RunnerPoolMember, error) {
 	var out RunnerPoolMember
 	err := c.do(ctx, http.MethodPut, "/api/v1/me/runner-pools/"+poolID.String()+"/runners/"+runnerID.String(), nil, &out)
@@ -389,7 +388,7 @@ func (c *Client) RemoveMyRunnerFromPool(ctx context.Context, poolID, runnerID uu
 	return c.do(ctx, http.MethodDelete, "/api/v1/me/runner-pools/"+poolID.String()+"/runners/"+runnerID.String(), nil, nil)
 }
 
-// GetOrgRunnerPoolDefaults reads the organisation's default hosting type, pools and barrier.
+// GetOrgRunnerPoolDefaults reads the organisation's default pool and barrier.
 func (c *Client) GetOrgRunnerPoolDefaults(ctx context.Context) (RunnerPoolDefaults, error) {
 	var out RunnerPoolDefaults
 	err := c.do(ctx, http.MethodGet, "/api/v1/runner-pool-defaults", nil, &out)
@@ -405,24 +404,59 @@ func (c *Client) SetOrgRunnerPoolDefaults(ctx context.Context, d RunnerPoolDefau
 	return out, err
 }
 
-// GetMyRunnerPoolDefaults reads the caller's own defaults; an unset field
-// inherits the organisation's.
+// GetMyRunnerPoolDefaults reads the caller's own default pool; with none, a run
+// that names no pool uses the organisation's.
 func (c *Client) GetMyRunnerPoolDefaults(ctx context.Context) (RunnerPoolDefaults, error) {
 	var out RunnerPoolDefaults
 	err := c.do(ctx, http.MethodGet, "/api/v1/me/runner-pool-defaults", nil, &out)
 	return out, err
 }
 
-// SetMyRunnerPoolDefaults replaces the caller's own defaults. A default only
-// seeds a choice: it never grants a pool the caller could not choose.
+// SetMyRunnerPoolDefaults sets the caller's own default pool, one they may use.
+// A default only seeds a choice: it never grants a pool the caller could not choose.
 func (c *Client) SetMyRunnerPoolDefaults(ctx context.Context, d RunnerPoolDefaults) (RunnerPoolDefaults, error) {
 	var out RunnerPoolDefaults
 	err := c.do(ctx, http.MethodPut, "/api/v1/me/runner-pool-defaults", d, &out)
 	return out, err
 }
 
-// ClearMyRunnerPoolDefaults removes the caller's own defaults, so every field
-// inherits the organisation's again.
+// ClearMyRunnerPoolDefaults removes the caller's own default pool, so the
+// organisation's applies again.
 func (c *Client) ClearMyRunnerPoolDefaults(ctx context.Context) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/me/runner-pool-defaults", nil, nil)
+}
+
+// AddRunnerPoolRemoteRunner puts a remote-hosted runner this server is set up with into an
+// organization pool (admin). It is held for a second human when another pool holds that runner under a
+// use policy.
+func (c *Client) AddRunnerPoolRemoteRunner(ctx context.Context, poolID uuid.UUID, remoteRunnerID string) (RunnerPoolMember, error) {
+	var out RunnerPoolMember
+	err := c.do(ctx, http.MethodPut, "/api/v1/runner-pools/"+poolID.String()+"/remote-runners/"+url.PathEscape(remoteRunnerID), nil, &out)
+	return out, err
+}
+
+// RemoveRunnerPoolRemoteRunner takes a remote-hosted runner out of an organization pool (admin).
+func (c *Client) RemoveRunnerPoolRemoteRunner(ctx context.Context, poolID uuid.UUID, remoteRunnerID string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/runner-pools/"+poolID.String()+"/remote-runners/"+url.PathEscape(remoteRunnerID), nil, nil)
+}
+
+// AddMyPoolRemoteRunner puts a remote-hosted runner into one of the caller's own user pools: one
+// whose "Available to people's pools" policy admits the caller (ListMyRemoteRunners).
+func (c *Client) AddMyPoolRemoteRunner(ctx context.Context, poolID uuid.UUID, remoteRunnerID string) (RunnerPoolMember, error) {
+	var out RunnerPoolMember
+	err := c.do(ctx, http.MethodPut, "/api/v1/me/runner-pools/"+poolID.String()+"/remote-runners/"+url.PathEscape(remoteRunnerID), nil, &out)
+	return out, err
+}
+
+// RemoveMyPoolRemoteRunner takes a remote-hosted runner out of one of the caller's own user pools.
+func (c *Client) RemoveMyPoolRemoteRunner(ctx context.Context, poolID uuid.UUID, remoteRunnerID string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/me/runner-pools/"+poolID.String()+"/remote-runners/"+url.PathEscape(remoteRunnerID), nil, nil)
+}
+
+// ListRunnerPoolMembers lists a pool's runners, both kinds: its owner reads their own user pool, and an
+// administrator or security admin reads any pool. Anyone else gets the unknown-id 404.
+func (c *Client) ListRunnerPoolMembers(ctx context.Context, poolID uuid.UUID) ([]RunnerPoolMemberView, error) {
+	var out []RunnerPoolMemberView
+	err := c.do(ctx, http.MethodGet, "/api/v1/runner-pools/"+poolID.String()+"/members", nil, &out)
+	return out, err
 }

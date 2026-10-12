@@ -205,7 +205,7 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 	// still 422s that case exactly as it did before the default rule existed.
 	if !headless && enforced != "" && !slices.Contains(caps.ConfinementClasses, enforced) {
 		if place.pooled && p == types.PlacementLocal {
-			ref := targetRefusal(placement.ReasonPlacementCapability, place.pool.Name, place.pool.HostingType)
+			ref := targetRefusal(placement.ReasonPlacementCapability, place.pool.Name, place.pool.Scope)
 			writeJSON(w, ref.status, ref.body)
 			return "", "", false
 		}

@@ -105,7 +105,7 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	if err != nil {
 		return runPlacement{}, runServerError("read runner pool defaults", err)
 	}
-	choice := runnerpool.Choice{Hosting: hostingOfPlacement(f.req.Placement)}
+	choice := runnerpool.Choice{Placement: f.req.Placement}
 	if f.req.RunnerPoolID != "" {
 		id, _ := uuid.Parse(f.req.RunnerPoolID) // the contract step already refused a malformed id
 		choice.PoolID = &id
@@ -119,8 +119,9 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 		return runPlacement{}, poolRefusal(ref)
 	}
 	// deny_placements holds the placement the pool decides, not the request's: a member who denies remote
-	// launches on a self-hosted pool, and one whose default is a remote pool is refused like an explicit ask.
-	if refusal := s.placementDeniedRefusal(ctx, pool.HostingType.Placement(), f.ceiling); refusal != nil {
+	// launches is refused an organization pool, and one who denies local launches a user pool, whether
+	// the pool was named or came from a default.
+	if refusal := s.placementDeniedRefusal(ctx, pool.Scope.Placement(), f.ceiling); refusal != nil {
 		return runPlacement{}, refusal
 	}
 	row, _ := catalogueRow(rows, pool.ID)
@@ -143,7 +144,7 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	demand.holdRunnerCapacity = !capped && !f.promoted
 	// A self-hosted pool offers only the person's own runners, so no deployment-wide sentence answers a
 	// class none of them enforces: the class is held against each of them, the same at every door.
-	if pool.HostingType == types.RunnerPoolSelfHosted && f.reqCCOK {
+	if pool.Scope == types.RunnerPoolUser && f.reqCCOK {
 		if _, _, err := enforcedConfinement(f.floor, f.reqCC, nil, "", f.baseline); err == nil {
 			demand.reqCCOK = true
 		}
@@ -160,7 +161,7 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	if pin := f.req.RunnerID; pin != "" {
 		if i := slices.IndexFunc(targets, func(t poolTarget) bool { return t.id == pin }); i >= 0 {
 			if why := demand.refusal(targets[i]); why != "" {
-				return runPlacement{}, targetRefusal(why, row.Pool.Name, pool.HostingType)
+				return runPlacement{}, targetRefusal(why, row.Pool.Name, pool.Scope)
 			}
 		}
 	}
@@ -170,10 +171,10 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 			return runPlacement{}, refusal
 		}
 	}
-	offers := map[types.Placement]placementOffer{pool.HostingType.Placement(): offerOf(eligible, reason)}
+	offers := map[types.Placement]placementOffer{pool.Scope.Placement(): offerOf(eligible, reason)}
 	decision := placementFor(f.req.PlacementRequest(), offers, s.deniedPlacements(ctx, f.ceiling))
 	if decision.Refusal != "" {
-		return runPlacement{}, targetRefusal(decision.Refusal, row.Pool.Name, pool.HostingType)
+		return runPlacement{}, targetRefusal(decision.Refusal, row.Pool.Name, pool.Scope)
 	}
 	picked := pickTargets(eligible, decision.Targets)
 	return runPlacement{pooled: true, pool: pool, row: row.Pool, placement: decision.Placement, filled: decision.Filled,
@@ -185,17 +186,6 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 // concurrent-run cap. A pool with no cap never has a queue, and neither does an unpooled run.
 func (p runPlacement) queues() bool {
 	return p.pooled && p.row.Limits != nil && p.row.Limits.MaxConcurrentRuns != nil
-}
-
-// hostingOfPlacement is the hosting type a request's placement names; the pool decides when it is absent.
-func hostingOfPlacement(p types.Placement) types.RunnerPoolHosting {
-	switch p {
-	case types.PlacementRemote:
-		return types.RunnerPoolRemoteProvided
-	case types.PlacementLocal:
-		return types.RunnerPoolSelfHosted
-	}
-	return ""
 }
 
 func poolRefusal(ref *runnerpool.Refusal) *runRefusal {
@@ -338,7 +328,7 @@ func (p runPlacement) bind(runID uuid.UUID, enforced types.ConfinementClass, pre
 	}
 	i := slices.IndexFunc(able, func(t poolTarget) bool { return t.id == chosen })
 	if i < 0 {
-		return poolBinding{}, targetRefusal(placement.ReasonPlacementCapability, p.pool.Name, p.pool.HostingType)
+		return poolBinding{}, targetRefusal(placement.ReasonPlacementCapability, p.pool.Name, p.pool.Scope)
 	}
 	return poolBinding{runnerID: able[i].runnerID, executor: able[i].executor}, nil
 }
@@ -454,17 +444,17 @@ func (p runPlacement) auditFields(run types.AgentRun) map[string]any {
 		data["runner_id"] = run.RunnerID
 	}
 	if run.RunnerPoolExecutor != "" {
-		data["runner_pool_executor"] = run.RunnerPoolExecutor
+		data["remote_runner_id"] = run.RunnerPoolExecutor
 	}
 	return data
 }
 
 // targetRefusal words a placement reason for the person: the pool is named, no runner of anyone else.
-func targetRefusal(reason placement.Reason, pool string, hosting types.RunnerPoolHosting) *runRefusal {
+func targetRefusal(reason placement.Reason, pool string, scope types.RunnerPoolScope) *runRefusal {
 	switch reason {
 	case placement.ReasonRunnerOffline:
-		if hosting == types.RunnerPoolRemoteProvided {
-			return poolRefusal(&runnerpool.Refusal{Reason: runnerpool.ReasonNoEligibleMember, Name: pool, Hosting: hosting})
+		if scope == types.RunnerPoolOrganization {
+			return poolRefusal(&runnerpool.Refusal{Reason: runnerpool.ReasonNoEligibleMember, Name: pool, Scope: scope})
 		}
 		return runError(reason.Status(), string(reason), runnerpool.NoOnlineRunnerMsg(pool))
 	case placement.ReasonPlacementCapability:
