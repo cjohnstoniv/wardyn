@@ -411,7 +411,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["internal/api/components_facts.go", "componentFact", "ComponentFact"],
     ["internal/api/components_facts.go", "componentSecretFact", "ComponentSecretFact"],
     ["internal/types/site_config.go", "ComponentSettings", "ComponentSettings", "site.ts"],
-    ["internal/api/preflight.go", "preflightResponse", "PreflightResult", "runs.ts"],
+    ["internal/api/preflight.go", "preflightResponse", "PreflightResult", "preflight.ts"],
     ["internal/api/permissions.go", "meCapabilitiesResponse", "MeCapabilities", "permissions.ts"],
     ["internal/api/run_revive.go", "adminRestartResult", "AdminRestartResult", "runs.ts"],
   ])("%s %s: full parity with the TS %s mirror", (goFile, goName, tsName, tsFile = "components.ts") => {
@@ -661,7 +661,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
 
   it("SetupItemResidency names every residency the setup checklist emits", () => {
     const goRaw = readFileSync(join(root, "internal/api/compose_setup.go"), "utf8");
-    const tsRuns = readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8");
+    const tsRuns = readFileSync(join(root, "ui/src/app/lib/types/preflight.ts"), "utf8");
     const union = /export type SetupItemResidency =([^;]+);/.exec(stripComments(tsRuns))?.[1] ?? "";
     const tsValues = new Set([...union.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]));
     // Code only: whole-line comments (the field's doc block quotes every value) are dropped,
