@@ -99,9 +99,10 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 		// Content rules run BEFORE the capability check: nobody is asked to approve code_write for a
 		// push the rules refuse. A probe moving no ref carries nothing to inspect and stays a read.
 		if len(push.refs) > 0 {
+			rules, entryErr := p.rulesForRemote(host, rest)
 			inspected, release, ok := p.applyPushRules(w, r, body, slog.String("host", host),
 				func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) },
-				nil, p.adoPushTarget(host, adoGitRepoKeys(r)))
+				nil, p.adoPushTarget(host, adoGitRepoKeys(r)), rules, entryErr)
 			defer release()
 			if !ok {
 				return
@@ -150,7 +151,7 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 		p.httpError(w, "resolve Azure DevOps credential", fmt.Errorf("no Azure DevOps credential is configured for %s", host), http.StatusBadGateway)
 		return
 	}
-	registerHeaderCredential(hdr.value)
+	registerHeaderCredentialFor(p.maskKey, hdr.value)
 
 	// A lane that enforces content rules asks for a pack it can read: the
 	// same no-thin rewrite, on the same trigger, the other two lanes make
@@ -181,7 +182,7 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 		if retry {
 			drainClose(resp)
 			hdr = fresh
-			registerHeaderCredential(hdr.value)
+			registerHeaderCredentialFor(p.maskKey, hdr.value)
 			p.emitDialledAllow(decisionLog(p.reqOf(r, host, 443), egress.Allow, ruleSourceADOGitReresolved), host)
 			again, ok := p.forwardBrokeredGit(w, r, host, rest, replay(), allowSrc, ruleSourceADOGitDenied, authorize)
 			if !ok {

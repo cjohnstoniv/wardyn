@@ -712,6 +712,7 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	r.Delete("/me/tokens/{id}", s.handleRevokeAPIToken)
 	securityOps.Get("/tokens", s.handleListAllAPITokens)
 	securityOps.Delete("/tokens/{id}", s.handleAdminRevokeAPIToken)
+	securityOps.Post("/tokens/{id}/move", s.handleMoveAPIToken)
 	securityOps.With(s.refuseSubjectPrincipalParam).Delete("/people/{principal}/ssh-keys", s.handleAdminDeleteSSHKeys)
 	s.mountPeopleRoutes(securityOps)
 	s.mountInvitationRoutes(r, securityOps)
@@ -802,6 +803,8 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Get("/permissions/explain", s.handleExplainCapabilities)
 	securityOps.Get("/governance/egress-baseline", s.handleGetEgressBaseline)
 	securityOps.Put("/governance/egress-baseline", s.handlePutEgressBaseline)
+	securityOps.Get("/governance/credential-delivery", s.handleGetCredentialDelivery)
+	securityOps.Put("/governance/credential-delivery", s.handlePutCredentialDelivery)
 }
 
 // adminRoutes registers the two admin-gated maintenance routes — one per tier,
@@ -882,6 +885,9 @@ func (s *Server) mountInternalRoutes(r chi.Router) {
 	// raised instead of leaving it PENDING for the sweep.
 	r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
 	r.Post("/internal/credentials/mint", s.handleInternalMint)
+	// via_org egress (design 0.9 §7.3): a local run's request for a via_org
+	// destination, served by the organisation; via_org.go.
+	s.mountViaOrgRoute(r)
 
 	// Token renew: POST /api/v1/internal/token/renew
 	// The per-run proxy re-issues its own (short-TTL) run token before it

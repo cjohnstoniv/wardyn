@@ -58,6 +58,11 @@ func workspaceLLMCredParam(c *types.WorkspaceLLMCred) any {
 	return jsonOrNull(c, c == nil)
 }
 
+// workspaceImageBuildParam serializes the build record; nil ⇒ NULL.
+func workspaceImageBuildParam(r *types.ImageBuild) any {
+	return jsonOrNull(r, r == nil)
+}
+
 // workspaceSourcesParam serializes for the NOT NULL sources JSONB column:
 // unlike the other helpers here, it never returns nil — a nil/empty slice
 // still marshals to "[]" (migration 0029).
@@ -105,13 +110,13 @@ func workspaceAttachmentsParam(atts []types.WorkspaceAttachment) []byte {
 const wsCols = `id, name, sources, base_image, requirements, profile, image_ref, ` +
 	`built_profile_hash, approved_egress, active_run_id, status, created_at, updated_at, ` +
 	`record_results, llm_cred, attachments, base_image_id, denied_egress, owned_by, ` +
-	`egress_edited_at`
+	`egress_edited_at, image_build`
 
 // CreateWorkspace inserts an onboarded workspace and returns the persisted row.
 func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Workspace, error) {
 	q := `
 		INSERT INTO workspaces (` + wsCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
 		RETURNING ` + wsCols
 	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx, q,
 		ws.ID, ws.Name, workspaceSourcesParam(ws.Sources), workspaceBaseImageParam(ws.BaseImage),
@@ -120,6 +125,7 @@ func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Work
 		string(ws.Status), ws.CreatedAt, ws.UpdatedAt, workspaceProfileParam(ws.RecordResults),
 		workspaceLLMCredParam(ws.LLMCred), workspaceAttachmentsParam(ws.Attachments), ws.BaseImageID,
 		workspaceDeniedParam(ws.DeniedEgress), ws.OwnedBy, ws.EgressEditedAt,
+		workspaceImageBuildParam(ws.ImageBuild),
 	))
 }
 
@@ -347,13 +353,28 @@ func (s PG) ClearWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID) (b
 	return tag.RowsAffected() > 0, nil
 }
 
-// SetWorkspaceBuiltImage scoped-writes ONLY the image cache columns
-// (build-once/reuse-many), same anti-clobber discipline as the other scoped
-// writers.
-func (s PG) SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, imageRef, builtHash string) (types.Workspace, error) {
-	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
-		`UPDATE workspaces SET image_ref=$1, built_profile_hash=$2, updated_at=now() WHERE id=$3 RETURNING `+wsCols,
-		imageRef, builtHash, id))
+// SetWorkspaceBuiltImage scoped-writes ONLY the image cache columns and the
+// build record (build-once/reuse-many) in one statement. It is a
+// compare-and-swap on the image_ref the caller observed: that is what fences a
+// run-launch build against a concurrent build (design env-build-record §3.1).
+// applied=false means another build moved image_ref first (or the workspace is
+// gone); the caller keeps its own image and must not reclaim the old tag.
+func (s PG) SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, observedRef, imageRef, builtHash string, rec *types.ImageBuild) (bool, error) {
+	// workspaceImageBuildParam folds a marshal error to NULL, which would move image_ref
+	// and leave a record that silently reads unrecorded: fail before the swap instead.
+	if rec != nil {
+		if _, err := json.Marshal(rec); err != nil {
+			return false, fmt.Errorf("store: encode workspace image build record: %w", err)
+		}
+	}
+	tag, err := s.Pool.Exec(ctx,
+		`UPDATE workspaces SET image_ref=$1, built_profile_hash=$2, image_build=$3, updated_at=now() `+
+			`WHERE id=$4 AND image_ref IS NOT DISTINCT FROM $5`,
+		imageRef, builtHash, workspaceImageBuildParam(rec), id, observedRef)
+	if err != nil {
+		return false, fmt.Errorf("store: set workspace built image: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 // SetWorkspaceImportState is the scoped writer the scan orchestrator uses to
@@ -420,12 +441,13 @@ func (s PG) hydratedScan(ctx context.Context, row pgx.Row) (types.Workspace, err
 func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 	var ws types.Workspace
 	var status string
-	var sourcesRaw, baseImageRaw, requirementsRaw, profileRaw, approvedRaw, recordRaw, llmCredRaw, attachmentsRaw, deniedRaw []byte
+	var sourcesRaw, baseImageRaw, requirementsRaw, profileRaw, approvedRaw, recordRaw, llmCredRaw, attachmentsRaw, deniedRaw, imageBuildRaw []byte
 	err := row.Scan(
 		&ws.ID, &ws.Name, &sourcesRaw, &baseImageRaw, &requirementsRaw,
 		&profileRaw, &ws.ImageRef, &ws.BuiltProfileHash, &approvedRaw, &ws.ActiveRunID,
 		&status, &ws.CreatedAt, &ws.UpdatedAt, &recordRaw, &llmCredRaw,
 		&attachmentsRaw, &ws.BaseImageID, &deniedRaw, &ws.OwnedBy, &ws.EgressEditedAt,
+		&imageBuildRaw,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Workspace{}, ErrNotFound
@@ -462,6 +484,12 @@ func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 		var c types.WorkspaceLLMCred
 		if json.Unmarshal(llmCredRaw, &c) == nil {
 			ws.LLMCred = &c
+		}
+	}
+	if imageBuildRaw != nil {
+		var r types.ImageBuild
+		if json.Unmarshal(imageBuildRaw, &r) == nil {
+			ws.ImageBuild = &r
 		}
 	}
 	if attachmentsRaw != nil {

@@ -302,14 +302,14 @@ func TestBuild_SuccessPath(t *testing.T) {
 		RepoURL:        "https://github.com/example/repo",
 		OutputImageTag: "wardyn-ws:abc",
 	}
-	ref, err := b.Build(t.Context(), spec)
+	built, err := b.Build(t.Context(), spec)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	// Build returns the finalize local tag (now genuinely produced by the
 	// second-stage ImageBuild).
-	if ref != spec.OutputImageTag {
-		t.Errorf("imageRef = %q, want %q", ref, spec.OutputImageTag)
+	if built.Ref != spec.OutputImageTag {
+		t.Errorf("imageRef = %q, want %q", built.Ref, spec.OutputImageTag)
 	}
 	if f.createCalled == 0 {
 		t.Error("expected ContainerCreate to be called")

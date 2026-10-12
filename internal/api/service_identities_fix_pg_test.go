@@ -82,7 +82,7 @@ func TestServiceIdentity_SponsorAsSecondHuman(t *testing.T) {
 			_, ok := e.h.srv.requireSecondHuman(w, as(sub), uuid.New(), ap, run, true, true)
 			return w.Code, ok
 		}
-		run := types.AgentRun{CreatedBy: svcPrin}
+		run := types.AgentRun{CreatedBy: svcPrin, HumanAuthor: svcSponsor}
 		if e.h.srv.secondHumanAllows(as(svcSponsor), ap, run) {
 			t.Error("the admin who sponsors the service passes the read-only second-human mirror on its run")
 		}

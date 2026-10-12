@@ -332,6 +332,16 @@ that ceiling down; each run receives only the minimal subset its task needs.
     the signing key.
   - A compromised runner is assumed; the control plane never trusts runner-asserted identity
     claims.
+- **Organisation credentials used by a self-hosted run (`via_org`) [0.9].**
+  - A `via_org` credential is used by the developer's run but never read: the value stays at the
+    organisation, which re-runs the run's egress checks as authoritative and dials the destination over
+    its own TLS.
+  - The organisation serves this only through the run's own runner relay with the run token, for this
+    run's `via_org` grants, to each grant's host on 443, within 16 streams, 8 GiB a run per server
+    replica (reset on restart) and 10 minutes idle.
+  - **Residual:** the laptop proxy terminates the sandbox's TLS to forward these requests, so the
+    developer (root on the laptop) sees each request and response in plaintext and can make any request
+    the rule's pins and the policy allow while the run lives.
 
 ### B8 — Untrusted build container vs. host daemon + registry
 
@@ -2807,6 +2817,9 @@ has four-eyes.**
 
 - `WARDYN_GOVERNANCE_SECOND_HUMAN` (off by default) holds an authority-changing write as a pending change until a second, distinct human with the authority to make that write approves it.
 - The covered set, the exemptions and the approver table are in [`docs/OPERATIONS.md`](../docs/OPERATIONS.md#four-eyes-on-governance-writes-a-walkthrough) "Four-eyes on governance writes: a walkthrough".
+- A service identity carries any existing user type directly, so its create and any change of its sponsor
+  are covered (governance change kind `service_identity`), held for a second security-tier human and
+  applied only against the reviewed state.
 - It is published here because of what it leaves open.
 
 **What it guarantees**, with SSO configured and the admin token held out of band:
@@ -2845,8 +2858,10 @@ has four-eyes.**
    - `PUT /workspaces/{id}/approved-egress` and `/denied-egress`, and record-egress promotion;
    - `/policies`, `/site-config` and `/integrations`;
    - the approval `always` scope;
-   - user-type create and delete (a new type takes effect only through a covered role-mapping write,
-     and a type a mapping references cannot be deleted);
+   - user-type create and delete (a new type reaches a person through a covered role-mapping write
+     and a service identity through its covered create; a type that a mapping, or a service identity
+     that is not retired, references cannot be deleted);
+   - a service identity's description, suspend, unsuspend and retire;
    - the SCIM purge, which deletes the departed person's user-subject governance assignments and
      capability grants directly, without a pending change: the identity provider is the single
      authority for that write.

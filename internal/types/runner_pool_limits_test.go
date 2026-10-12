@@ -171,8 +171,16 @@ func TestRunEndReason(t *testing.T) {
 	if RunEndMaxLifetimeReached != "max_lifetime_reached" || !strings.Contains(RunEndMaxLifetimeReached.Sentence(), "maximum lifetime") {
 		t.Fatalf("reason %q sentence %q", RunEndMaxLifetimeReached, RunEndMaxLifetimeReached.Sentence())
 	}
+	if !RunEndEndReached.Valid() || RunEndEndReached != "end_reached" || !strings.Contains(RunEndEndReached.Sentence(), "end time") {
+		t.Fatalf("reason %q sentence %q", RunEndEndReached, RunEndEndReached.Sentence())
+	}
 	if RunEndReason("x").Sentence() != "" {
 		t.Fatal("an unknown reason has no sentence")
+	}
+	for _, r := range []RunEndReason{RunEndQueueTimeout, RunEndQueueProfileChanged, RunEndQueuePolicyChanged, RunEndQueuePortalRevoked, RunEndRunnerPoolRemoved, RunEndIdentityDeactivated} {
+		if !r.Valid() || r.Sentence() == "" {
+			t.Errorf("queue end reason %q must be valid and have a sentence", r)
+		}
 	}
 }
 

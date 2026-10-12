@@ -27,28 +27,39 @@ type envBuilderAdapter struct {
 var (
 	_ api.ImageBuilder      = envBuilderAdapter{}
 	_ api.ImageBuildSweeper = envBuilderAdapter{}
+	_ api.ImageIdentifier   = envBuilderAdapter{}
 )
 
-func (e envBuilderAdapter) BuildDevcontainer(ctx context.Context, repoURL, ref, outputTag string, logSink io.Writer) (string, error) {
-	return e.b.Build(ctx, envbuild.BuildSpec{
+// builtImage maps the builder's result to the api's.
+func builtImage(b envbuild.Built, err error) (api.BuiltImage, error) {
+	return api.BuiltImage{Ref: b.Ref, ID: b.ID, BaseDigest: b.BaseDigest}, err
+}
+
+func (e envBuilderAdapter) BuildDevcontainer(ctx context.Context, repoURL, ref, outputTag string, logSink io.Writer) (api.BuiltImage, error) {
+	return builtImage(e.b.Build(ctx, envbuild.BuildSpec{
 		RepoURL:        repoURL,
 		Ref:            ref,
 		OutputImageTag: outputTag,
 		LogSink:        e.tee(logSink),
-	})
+	}))
 }
 
 // BuildFromDevcontainerFiles builds a per-workspace image from generated
 // devcontainer files (workspacescan.GenerateDevcontainer's output) via the
 // git-free local-context envbuilder path. Same hardened builder, no git URL.
-func (e envBuilderAdapter) BuildFromDevcontainerFiles(ctx context.Context, files map[string]string, outputTag string, logSink io.Writer) (string, error) {
-	return e.b.BuildFromDevcontainerFiles(ctx, files, outputTag, e.tee(logSink))
+func (e envBuilderAdapter) BuildFromDevcontainerFiles(ctx context.Context, files map[string]string, outputTag string, logSink io.Writer) (api.BuiltImage, error) {
+	return builtImage(e.b.BuildFromDevcontainerFiles(ctx, files, outputTag, e.tee(logSink)))
 }
 
 // FinalizeBase wraps a user-supplied base image (BYOI) with the runner tools +
 // a cleared ENTRYPOINT via the trusted finalize stage.
-func (e envBuilderAdapter) FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer) (string, error) {
-	return e.b.FinalizeBase(ctx, baseRef, outputTag, e.tee(logSink))
+func (e envBuilderAdapter) FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer) (api.BuiltImage, error) {
+	return builtImage(e.b.FinalizeBase(ctx, baseRef, outputTag, e.tee(logSink)))
+}
+
+// LocalImage satisfies api.ImageIdentifier.
+func (e envBuilderAdapter) LocalImage(ctx context.Context, ref string) (string, bool, error) {
+	return e.b.LocalImageID(ctx, ref)
 }
 
 // SweepOrphanedBuilds satisfies api.ImageBuildSweeper: force-removes build

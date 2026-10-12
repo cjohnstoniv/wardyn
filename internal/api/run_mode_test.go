@@ -83,12 +83,12 @@ func TestRunModeRefusals(t *testing.T) {
 		{"a startup is one choice: command with a tool", interactiveOK + `,"startup":{"kind":"command","command":"x","tool":"claude-code"}`, reasonRunModeInvalid, "", 400},
 		{"a startup kind is closed", interactiveOK + `,"startup":{"kind":"both"}`, reasonRunModeInvalid, "", 400},
 		{"an interactive environment with no tool waits for its lane", `"experience":"interactive",` + noRepos, reasonRequestFieldUnavailable, "", 422},
-		{"two tools are not dropped", `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],` + noRepos, reasonRequestFieldUnavailable, "", 422},
-		{"per-tool rules are not dropped", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"hold"}]}],` + noRepos, reasonRequestFieldUnavailable, "", 422},
+		{"two harnesses wait for the harness set", `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools: more than one harness"), 422},
+		{"personal tool rules wait for their enforcing lane", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"hold"}]}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: personal tool rules wait for their enforcing lane"), 422},
+		{"nor a background run's rule while it is off the gated lane", `"experience":"background",` + agentTask + `,"tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"hold"}]}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: personal tool rules wait for their enforcing lane"), 422},
 		{"a tool rule that allows widens the policy", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"allow"}]}],` + noRepos, reasonOverrideRefused, toolAllowRefusedMsg(0), 422},
 		{"a default that allows widens the policy", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"allow"}],` + noRepos, reasonOverrideRefused, toolAllowRefusedMsg(0), 422},
-		{"a tool rule that holds is not available yet", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"hold"}]}],` + noRepos, reasonRequestFieldUnavailable, "", 422},
-		{"a per-tool default is not dropped", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"deny"}],` + noRepos, reasonRequestFieldUnavailable, "", 422},
+		{"a per-tool default waits for its enforcing lane", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"deny"}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: personal tool rules wait for their enforcing lane"), 422},
 		{"a component tool is not dropped", `"experience":"interactive","tools":[{"id":"lint","kind":"component","component":{"inline":{"hosts":["a.example.com"]}}}],` + noRepos, reasonRequestFieldUnavailable, "", 422},
 		{"a tool id is one token", `"experience":"interactive","tools":[{"id":"a b","kind":"harness"}],` + noRepos, reasonRunModeInvalid, "", 400},
 		{"a tool is included once", `"experience":"interactive","tools":[` + claudeTool + `,` + claudeTool + `],` + noRepos, reasonRunModeInvalid, "", 400},
@@ -107,7 +107,7 @@ func TestRunModeRefusals(t *testing.T) {
 		{"a start folder is relative", `"experience":"interactive","tools":[` + claudeTool + `],"drive":{"enabled":true},"start_folder":{"kind":"attachment","attachment":"drive","subpath":"/etc"}`, reasonStartFolderInvalid, "", 400},
 		{"a start folder inside an attachment is not dropped", `"experience":"interactive","tools":[` + claudeTool + `],"drive":{"enabled":true},"start_folder":{"kind":"attachment","attachment":"drive","subpath":"src"}`, reasonRequestFieldUnavailable, "", 422},
 		{"a subpath cannot step out through its mount's target", `"experience":"interactive","tools":[` + claudeTool + `],"workspaces":[{"workspace_id":"` + wsID + `","target":"/home/agent/work"}],"start_folder":{"kind":"attachment","attachment":"` + wsID + `","subpath":"a/../../../etc"}`, reasonStartFolderInvalid, "", 400},
-		{"an unavailable carrier answers before the older gates read the projection", `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],"startup":{"kind":"command","command":"harness login"},` + noRepos, reasonRequestFieldUnavailable, "", 422},
+		{"an unavailable carrier answers before the older gates read the projection", `"experience":"interactive","tools":[` + claudeTool + `,{"id":"c","kind":"component","component":{"inline":{"hosts":["a.example.com"]}}}],"startup":{"kind":"command","command":"harness login"},` + noRepos, reasonRequestFieldUnavailable, "", 422},
 		{"a start folder kind is closed", `"experience":"interactive","tools":[` + claudeTool + `],"start_folder":{"kind":"home"},` + noRepos, reasonStartFolderInvalid, "", 400},
 	} {
 		for _, door := range contractDoors {
@@ -127,6 +127,26 @@ func TestRunModeRefusals(t *testing.T) {
 					}
 				}
 			})
+		}
+	}
+}
+
+// TestPersonalToolRulesAreHeldOnlyOffTheGatedLane pins the guard's lane test: a
+// background agent run that holds tools is the gated lane and keeps its rules,
+// and the same rules on any other run are refused.
+func TestPersonalToolRulesAreHeldOnlyOffTheGatedLane(t *testing.T) {
+	ruled := []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness, ToolRules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}}}
+	for name, tc := range map[string]struct {
+		req     createRunRequest
+		refused bool
+	}{
+		"gated background run":   {createRunRequest{Experience: client.ExperienceBackground, ToolApprovals: "hold", Tools: ruled}, false},
+		"ungated background run": {createRunRequest{Experience: client.ExperienceBackground, Tools: ruled}, true},
+		"interactive, even held": {createRunRequest{Experience: client.ExperienceInteractive, ToolApprovals: "hold", Tools: ruled}, true},
+		"a run with no rule":     {createRunRequest{Experience: client.ExperienceInteractive, Tools: []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness}}}, false},
+	} {
+		if got := personalToolRulesRefusal(tc.req) != nil; got != tc.refused {
+			t.Errorf("%s: refused = %v, want %v", name, got, tc.refused)
 		}
 	}
 }
@@ -332,12 +352,11 @@ func TestNoRepositoriesIsHeldToTheResolvedPolicy(t *testing.T) {
 	}
 }
 
-// TestHarnessRulesStayRefusedUntilTheHarnessIsBound pins the dependency
-// types.HarnessToolRules documents: the harness id that keys a tool-rule lookup
-// has no trusted source until the proxy binds it, so a second included tool, a
-// per-tool rule and a per-tool default are all refused out loud. Lifting any of
-// the three before A-L3 lands the binding lets one tool borrow a sibling's allow.
-func TestHarnessRulesStayRefusedUntilTheHarnessIsBound(t *testing.T) {
+// TestHarnessRulesAreAvailableOnceTheHarnessIsBound pins the other side of the
+// dependency types.HarnessToolRules documents: the proxy now names the harness of
+// a call from a per-harness credential, so a second included tool, a per-tool
+// rule and a per-tool default are honoured; a component tool still is not.
+func TestHarnessRulesAreAvailableOnceTheHarnessIsBound(t *testing.T) {
 	claude := client.IncludedTool{ID: "claude-code", Kind: client.IncludedToolHarness}
 	codex := client.IncludedTool{ID: "codex-cli", Kind: client.IncludedToolHarness}
 	held := claude
@@ -345,17 +364,19 @@ func TestHarnessRulesStayRefusedUntilTheHarnessIsBound(t *testing.T) {
 	ruled := claude
 	ruled.ToolRules = []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}
 	for name, req := range map[string]createRunRequest{
+		"one plain harness":        {Tools: []client.IncludedTool{claude}},
 		"a second included tool":   {Tools: []client.IncludedTool{claude, codex}},
 		"a per-tool default":       {Tools: []client.IncludedTool{held}},
 		"a per-tool rule":          {Tools: []client.IncludedTool{ruled}},
 		"a rule on the second one": {Tools: []client.IncludedTool{claude, ruled}},
 	} {
-		if refusal := runModeUnavailableRefusal(req); refusal == nil || refusal.body.Reason != reasonRequestFieldUnavailable {
-			t.Errorf("%s: refusal = %+v, want %s", name, refusal, reasonRequestFieldUnavailable)
+		if refusal := runModeUnavailableRefusal(req); refusal != nil {
+			t.Errorf("%s: refused: %+v", name, refusal)
 		}
 	}
-	if refusal := runModeUnavailableRefusal(createRunRequest{Tools: []client.IncludedTool{claude}}); refusal != nil {
-		t.Errorf("one plain harness is available: %+v", refusal)
+	comp := client.IncludedTool{ID: "c", Kind: client.IncludedToolComponent, Component: &client.ComponentRef{Inline: &types.ComponentDefinition{Hosts: []string{"a.example.com"}}}}
+	if refusal := runModeUnavailableRefusal(createRunRequest{Tools: []client.IncludedTool{claude, comp}}); refusal == nil || refusal.body.Reason != reasonRequestFieldUnavailable {
+		t.Errorf("a component tool is still unavailable: %+v", refusal)
 	}
 }
 

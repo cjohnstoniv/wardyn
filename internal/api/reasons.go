@@ -248,6 +248,10 @@ const (
 	reasonEgressBaselineInvalid = "egress_baseline_invalid" // a baseline host is not an exact hostname, or the set is too large
 	reasonEgressBaselineStale   = "egress_baseline_stale"   // If-Match does not match the current baseline ETag
 
+	// PUT /governance/credential-delivery.
+	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds, or require_posture without runner_resident
+	reasonCredentialDeliveryUnavailable = "credential_delivery_unavailable" // the store keeps no delivery policy (not the Postgres store)
+
 	// POST /site-config/probe-proxy and PUT/DELETE .../egress-redirects.
 	reasonSiteConfigProbeRequestInvalid = "site_config_probe_request_invalid" // the probe body did not decode
 	reasonSiteConfigProbeURLInvalid     = "site_config_probe_url_invalid"     // the probe target is not a plain http(s) URL
@@ -325,6 +329,9 @@ const (
 	reasonInvitationNotFound         = "invitation_not_found"          // no invitation by that id that this caller may act on
 	reasonInvitationNotPending       = "invitation_not_pending"        // the invitation was claimed, revoked or expired
 	reasonInvitationListParamInvalid = "invitation_list_param_invalid" // GET /invitations: state is not one the endpoint accepts
+
+	// POST /api/v1/tokens/{id}/move (#1508).
+	reasonTokenMoveInvalid = "token_move_invalid" // the token is not live and admin-minted, or the service identity is unknown or retired
 
 	// /api/v1/service-identities and /api/v1/me/service-identities (#1508).
 	reasonServiceIdentityNameInvalid        = "service_identity_name_invalid"        // the name does not match ^[a-z][a-z0-9-]{2,62}$

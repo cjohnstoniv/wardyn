@@ -3736,6 +3736,9 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0158` (`0158_runner_pool_limits`) adds `runner_pools.limits` (`0152`'s table), the pool's own limits.
 - `0159` (`0159_run_lifetime_cap`) adds `agent_runs.lifetime_cap_at` and `lifetime_cap_source` (`0001`'s table), the latest end the run's pool and `WARDYN_RUN_MAX_AGE` allow, counted from launch, and which of the two bound it; existing runs keep both empty.
 - `0160` (`0160_run_pool_binding`) adds the pool binding to `agent_runs`.
+- `0161` (`0161_run_human_author`) adds `agent_runs.human_author` (`0001`'s table), the principal accountable for the run at create (not proof that a person was present); existing runs keep it empty.
+- `0162` (`0162_run_queue`) widens `agent_runs`' state check with `QUEUED`, adds `agent_runs.admitted_at` and rebuilds its watcher sweep index (`0001`'s table) beside its new `run_queue` table, and re-creates `audit_retention_partitions` (as `0123` and `0146` do).
+- `0163` (`0163_workspace_image_build`) adds `workspaces.image_build` (`0008`'s table), the image build record.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -4925,6 +4928,8 @@ What the switch needs, and refuses to render or boot without:
 - **A PodDisruptionBudget** (`minAvailable: 1`) and a preferred **pod anti-affinity**
   across nodes (soft, so a one-node cluster still schedules every replica; an
   `affinity.podAntiAffinity` of your own replaces it).
+- **Per-replica limits add up.** The `via_org` byte total of a local run is 8 GiB per
+  run per replica and resets on restart.
 
 > [!WARNING]
 > `allowMultiReplica` and the `-allow-multi-instance` flag are **removed**, a
