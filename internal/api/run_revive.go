@@ -21,6 +21,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -196,7 +197,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	}
 	defer unlockRun()
 
-	c, rerr := s.reviveCeiling(ctx, run)
+	c, rerr := s.reviveCeilingAdmitting(ctx, run, actorType, actor)
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
@@ -652,6 +653,8 @@ func reviveFrom(run types.AgentRun) string {
 type ownerCeiling struct {
 	deny    []string
 	profile string
+	// denyPlacements is the profile's deny_placements, judged against where the run already is.
+	denyPlacements []types.Placement
 }
 
 // reviveCeiling is the OWNER's current ceiling: the profile captured on the
@@ -668,7 +671,31 @@ func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun) (ownerCe
 	case p == nil:
 		return ownerCeiling{}, nil
 	}
-	return ownerCeiling{deny: p.Ceiling.DeniedDomains, profile: p.Name}, nil
+	return ownerCeiling{deny: p.Ceiling.DeniedDomains, profile: p.Name, denyPlacements: p.Limits.DenyPlacements}, nil
+}
+
+// reviveCeilingAdmitting is the owner's ceiling, once it still admits the run where it is.
+func (s *Server) reviveCeilingAdmitting(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string) (ownerCeiling, *reviveError) {
+	c, rerr := s.reviveCeiling(ctx, run)
+	if rerr == nil {
+		rerr = s.revivePlacementDenied(ctx, run, c, actorType, actor)
+	}
+	return c, rerr
+}
+
+// revivePlacementDenied refuses a revive of a run whose placement the owner's profile now denies, with
+// the create doors' reason and sentence: a profile changed after create stops the run's next revive.
+func (s *Server) revivePlacementDenied(ctx context.Context, run types.AgentRun, c ownerCeiling, actorType types.ActorType, actor string) *reviveError {
+	p := run.Placement
+	if remotePlacement(p) {
+		p = types.PlacementRemote
+	}
+	if !slices.Contains(c.denyPlacements, p) {
+		return nil
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
+		mustJSON(map[string]any{"subject": run.CreatedBy, "reason": placement.ReasonPlacementDenied})))
+	return reviveRefused(placement.ReasonPlacementDenied.Status(), string(placement.ReasonPlacementDenied), placementDeniedMsg(p, c.profile))
 }
 
 // reasserted is what reassertProxyCeiling changed.
