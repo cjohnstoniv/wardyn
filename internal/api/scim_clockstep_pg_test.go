@@ -1,4 +1,4 @@
-// Copyright 2025 The Wardyn Authors
+// Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package api
