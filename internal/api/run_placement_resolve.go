@@ -6,6 +6,7 @@ package api
 import (
 	"cmp"
 	"context"
+	"maps"
 	"net/http"
 	"slices"
 
@@ -351,15 +352,16 @@ func (p runPlacement) sizeFacts() (*types.EffectiveRunLimits, *client.AppliedRes
 	return &limits, &applied
 }
 
-// auditFields are the binding as run.create records it.
+// auditFields are the applied size and, for a pooled run, the binding, as run.create records them.
 func (p runPlacement) auditFields(run types.AgentRun) map[string]any {
+	data := map[string]any{"resources_applied": p.applied}
 	if !p.pooled {
-		return nil
+		return data
 	}
-	data := map[string]any{
+	maps.Copy(data, map[string]any{
 		"placement": run.Placement, "placement_filled": run.PlacementFilled, "evidence_source": run.EvidenceSource,
 		"runner_pool_id": p.pool.ID, "runner_pool_revision": run.RunnerPoolRevision, "runner_pool_selection": run.RunnerPoolSelection,
-	}
+	})
 	if run.RunnerID != nil {
 		data["runner_id"] = run.RunnerID
 	}

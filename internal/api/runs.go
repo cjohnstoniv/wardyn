@@ -358,7 +358,6 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	}
 	createData["end"] = f.end.audit(run)
 	stampHarnessSet(createData, f.harnesses, f.image)
-	createData["resources_applied"] = f.place.applied
 	comps.stampRunCreate(createData)
 	maps.Copy(createData, f.place.auditFields(created))
 	s.markGovernanceExempt(ctx, createData)
