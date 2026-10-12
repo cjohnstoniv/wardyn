@@ -16,10 +16,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -124,12 +123,12 @@ func rawEgressHosts(def types.ComponentDefinition) []string {
 
 // mcpServerKeys names each attached MCP server, index-aligned with attached
 // ("" for any other component). It is the <server> of the tool names
-// mcp__<server>__<tool> rules name, so an organisation's server is keyed by
-// itself alone: its name's slug and the start of its component id
-// (mcpOrgKey), whatever else the run attaches and in whatever order. Those
-// keys are claimed first; a person's own server takes its name's slug, "mcp"
-// without one, with a numeric suffix on a collision, and so can never draw an
-// organisation's rules for one of its servers onto itself.
+// mcp__<server>__<tool> rules name. Each is its name's slug ("mcp" without
+// one). An organisation's servers claim theirs first, in component-id order:
+// two organisation MCP components never share a key (orgMCPKeyFree), so an
+// organisation server's key is the same on every run that attaches it. A
+// person's own server takes a numeric suffix on a collision, and so can never
+// draw an organisation's rules for one of its servers onto itself.
 func mcpServerKeys(attached []attachedComponent) []string {
 	var org, own []int
 	for i, a := range attached {
@@ -148,9 +147,6 @@ func mcpServerKeys(attached []attachedComponent) []string {
 	taken := map[string]bool{}
 	for _, i := range slices.Concat(org, own) {
 		base := mcpSlug(attached[i].snapshot.Name)
-		if slices.Contains(org, i) {
-			base = mcpOrgKey(base, *attached[i].snapshot.ComponentID)
-		}
 		key := base
 		for n := 2; taken[key]; n++ {
 			key = base + "-" + strconv.Itoa(n)
@@ -160,16 +156,29 @@ func mcpServerKeys(attached []attachedComponent) []string {
 	return keys
 }
 
-// mcpOrgKey is an organisation server's key: its name's slug, cut to leave
-// room, and the first six hex digits of its component id. Two organisation
-// servers whose names slug alike keep apart, and each keeps its key on every
-// run that attaches it.
-func mcpOrgKey(slug string, id uuid.UUID) string {
-	const max = mcpServerKeyMax - 7
-	if len(slug) > max {
-		slug = strings.TrimRight(slug[:max], "-")
+// orgMCPKeyFree refuses an organisation MCP component whose server key (its
+// name's slug, as cut for the key) is another organisation MCP component's:
+// that key is what an organisation's rules name, so it must name one server
+// whichever of them a run attaches. 409 component_name_conflict; it reports
+// whether the save may go on.
+func orgMCPKeyFree(w http.ResponseWriter, r *http.Request, cs store.ComponentStore, c types.Component) bool {
+	if c.Definition.MCP == nil {
+		return true
 	}
-	return slug + "-" + id.String()[:6]
+	rows, err := cs.ListComponents(r.Context(), "")
+	if err != nil {
+		writeServerError(w, r, "list components", err)
+		return false
+	}
+	key := mcpSlug(c.Name)
+	for _, row := range rows {
+		if row.ID != c.ID && row.Definition.MCP != nil && mcpSlug(row.Name) == key {
+			writeErrorReason(w, http.StatusConflict, reasonComponentNameConflict, fmt.Sprintf(
+				"another organisation MCP server's name gives the same server key %q, which tool rules name; choose a name that differs in letters or digits", key))
+			return false
+		}
+	}
+	return true
 }
 
 // mcpSlug is name in lower-case letters, digits and single hyphens.
