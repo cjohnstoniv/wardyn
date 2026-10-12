@@ -198,15 +198,15 @@ func lockAndCountActiveRuns(ctx context.Context, q Querier, except uuid.UUID) (i
 	return active, nil
 }
 
-// HoldsSandboxSQL is TRUE when the agent_runs row's agent is still running: the run
-// is not kept, or it was kept after a control-plane outage, its agent was not
-// stopped (agent_stopped_at, written by MarkRunAgentStopped when the lease sweep
-// stops an outage run's agent past its end) and it has not reached its end, so only
-// its proxy was stopped (api stopLostSandbox). A run kept after its end or a reboot,
-// or an outage-kept run whose agent was stopped, has no agent, even if an extension
-// has since moved its end ahead. It is the one rule for a live run under
-// WARDYN_MAX_CONCURRENT_RUNS, in the fleet capacity view and under WARDYN_RUN_MAX_AGE.
-const HoldsSandboxSQL = `(lost_at IS NULL OR (lost_reason = '` + string(types.LostOutage) + `' AND agent_stopped_at IS NULL AND (ends_at IS NULL OR ends_at > now())))`
+// HoldsSandboxSQL is TRUE when the agent_runs row's agent may still be running: the run
+// is not kept, or it was kept after a control-plane outage and no stop of its agent is
+// recorded (agent_stopped_at, written by MarkRunAgentStopped once the lease sweep stopped
+// it past its end). A failed stop records nothing, so the run holds its slot past its end
+// until the stop is confirmed. A run kept after its end or a reboot, or an outage-kept run
+// whose agent was stopped, has no agent, even if an extension has since moved its end
+// ahead. It is the one rule for a live run under WARDYN_MAX_CONCURRENT_RUNS, in the fleet
+// capacity view and under WARDYN_RUN_MAX_AGE.
+const HoldsSandboxSQL = `(lost_at IS NULL OR (lost_reason = '` + string(types.LostOutage) + `' AND agent_stopped_at IS NULL))`
 
 const activeRunsCountSQL = `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND id <> $2 AND ` + HoldsSandboxSQL
 
@@ -320,8 +320,8 @@ func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, t
 
 // UpdateRunStateIfCreatedBefore transitions a run only when still in fromState,
 // created_at is at or before createdNotAfter, and its agent still runs
-// (HoldsSandboxSQL: not kept, or kept after an outage before its end; a run kept
-// with its agent stopped is left to its files grace). The
+// (HoldsSandboxSQL: not kept, or kept after an outage with no agent stop recorded; a
+// run kept with its agent stopped is left to its files grace). The
 // max-age stop's own predicate on the run's age: it carries neither the idleness
 // guard nor the open-request guard of UpdateRunStateIfIdle, because an absolute
 // age cap exists to end a run that is not going to finish by itself.

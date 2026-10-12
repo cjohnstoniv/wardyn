@@ -105,9 +105,10 @@ const lockUnavailableMsg = "another operation on this resource is in progress, o
 // the sweep re-reads the row once it holds it.
 //
 // The lock is a Postgres advisory lock, so it holds across replicas. It is per
-// run, never global, so two runs never wait on each other. Only the revive
-// (reviveRunProxy) and the two sweeps that re-assert a destructive stop
-// (leaseRun, keepRebootedRun) take it. It is NOT taken inside loseRun,
+// run, never global, so two runs never wait on each other. The revive
+// (reviveRunProxy), the end edit's write (handleSetRunEndAndWait) and the two
+// sweeps that re-assert a destructive stop (leaseRun, keepRebootedRun) take
+// it, among others. It is NOT taken inside loseRun,
 // stopLostSandbox, endSandbox, reconcileFinalize or stopKeptRun: they run under
 // it. The sweep side only ever tries: a run whose lock is held, or that the
 // lock pool cannot take now, is skipped and retried next pass.

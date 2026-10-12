@@ -154,8 +154,8 @@ func zeroNil(p *int64) int64 {
 // counted as active) and folds it per the state table in the 0.8.6 fleet design: STARTING,
 // RUNNING and WAITING_FOR_CONFIRMATION rows with lost_at NULL hold capacity, paused ones
 // included; kept rows (lost_at set) count as Kept; PENDING rows appear only in States. A kept
-// row whose agent still runs (HoldsSandboxSQL: kept after an outage, before its end) also
-// holds its agent's reservation, without the proxy that was stopped.
+// row whose agent may still run (HoldsSandboxSQL: kept after an outage, no agent stop recorded)
+// also holds its agent's reservation, without the proxy that was stopped.
 func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, error) {
 	states := make([]string, 0, len(types.NonTerminalRunStates))
 	for _, st := range types.NonTerminalRunStates {

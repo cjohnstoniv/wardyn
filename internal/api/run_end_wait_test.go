@@ -325,6 +325,27 @@ func TestPatchRunEnds_ExtendsALostRun(t *testing.T) {
 	})
 }
 
+// TestSetRunEnd_WritesUnderTheRunLock: the end edit writes while holding the run's lock, the one
+// the lease sweep holds from its re-read of a kept run to its stop, so a moved end cannot land
+// between that read and that stop.
+func TestSetRunEnd_WritesUnderTheRunLock(t *testing.T) {
+	f := newEndWaitFixture(t, types.RunLimits{MaxEndAheadSec: 30 * 86400})
+	held := false
+	f.st.beforeSetEnd = func() {
+		_, unlock, ok := f.srv.tryLockRunOp(context.Background(), f.st.run.ID)
+		if ok {
+			unlock()
+		}
+		held = !ok
+	}
+	if code, _ := f.patch(t, ownerSession(t), endsAtBody(f.now.Add(48*time.Hour))); code != http.StatusOK {
+		t.Fatalf("extend = %d, want 200", code)
+	}
+	if !held {
+		t.Error("the end was written without the run's lock held")
+	}
+}
+
 // profileErrStore is the reclamp store whose profile list can fail.
 type profileErrStore struct {
 	*reclampStore

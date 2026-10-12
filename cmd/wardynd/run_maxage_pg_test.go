@@ -88,7 +88,8 @@ func (o ownRuns) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.RunSumm
 // TestPG_MaxAgeStopsAnOutageKeptLiveAgent: a run kept after a control-plane outage before its
 // end still runs its agent, so WARDYN_RUN_MAX_AGE ends it like a live run: STOPPED, torn down
 // and audited run.max_age.expire. A run kept with its agent already stopped (after a reboot, or
-// an outage past its end) is left to its files grace, by the scan and by the transition alike.
+// an outage past its end with the stop recorded) is left to its files grace, by the scan and by
+// the transition alike.
 func TestPG_MaxAgeStopsAnOutageKeptLiveAgent(t *testing.T) {
 	pool := revocationPool(t)
 	ctx := context.Background()
@@ -106,7 +107,8 @@ func TestPG_MaxAgeStopsAnOutageKeptLiveAgent(t *testing.T) {
 			t.Fatalf("create run: %v", err)
 		}
 		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id=$1`, id) })
-		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at = now(), lost_reason = $2 WHERE id=$1`, id, string(reason)); err != nil {
+		// Past its end the lease sweep has stopped the agent and recorded it.
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at = now(), lost_reason = $2, agent_stopped_at = CASE WHEN ends_at < now() THEN now() END WHERE id=$1`, id, string(reason)); err != nil {
 			t.Fatalf("keep the run: %v", err)
 		}
 		return id
