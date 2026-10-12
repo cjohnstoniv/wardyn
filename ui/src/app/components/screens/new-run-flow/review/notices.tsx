@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The two true notices: the pool is at its limit, and a size was narrowed.
+// The true notices: the pool is at its limit, a size was narrowed, and the server's own preflight warnings.
 
 import { Notice } from "../../../wardyn/notice";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
@@ -12,6 +12,9 @@ import type { AppliedAmount, AppliedResources } from "../../../../lib/types/new-
 import type { LimitSource } from "../../../../lib/types/runner-pools";
 import { amountText } from "./format";
 import type { PoolSlotsFact } from "./review-seams";
+
+/** composer.WarnResourcesCapped. A CPU or memory cut is said again, with its source, by the narrowed notice; a pids or disk cut is not. */
+const RESOURCES_CAPPED = "resources capped to operator maximum";
 
 /** What the person asked for; a zero asked for the default, which is then what they got. */
 const asked = (a: AppliedAmount) => (a.requested > 0 ? a.requested : a.applied);
@@ -44,15 +47,18 @@ export interface NoticesProps {
   applied?: AppliedResources;
   /** The person set the size themselves, so the struck-through ask is theirs. */
   askedByYou: boolean;
+  /** The preflight's `warnings`, the server's sentences, shown as they came. */
+  warnings?: readonly string[];
 }
 
-export function Notices({ poolName, slots, applied, askedByYou }: NoticesProps) {
+export function Notices({ poolName, slots, applied, askedByYou, warnings }: NoticesProps) {
   const full = slots?.verdict === "waits" && slots.max !== undefined && !!poolName;
   const found = applied
     ? [narrowing(applied.cpu_millis, poolName), narrowing(applied.memory_mib, poolName)].filter((n): n is Narrowing => n !== undefined)
     : [];
   const distinct = found.filter((n, i) => found.findIndex((m) => m.key === n.key) === i);
-  if (!full && distinct.length === 0) return null;
+  const server = (warnings ?? []).filter((w) => w !== RESOURCES_CAPPED || distinct.length === 0);
+  if (!full && distinct.length === 0 && server.length === 0) return null;
   return (
     <div className="flex flex-col gap-3">
       {full && slots && poolName && (
@@ -71,6 +77,13 @@ export function Notices({ poolName, slots, applied, askedByYou }: NoticesProps) 
           </p>
         </Notice>
       ))}
+      {server.length > 0 && (
+        <Notice tone="warning" title={NR_REVIEW.WARNINGS_TITLE}>
+          <ul className="list-disc pl-4">
+            {server.map((w, i) => <li key={`${i}:${w}`}>{w}</li>)}
+          </ul>
+        </Notice>
+      )}
     </div>
   );
 }

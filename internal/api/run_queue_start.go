@@ -164,6 +164,11 @@ func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
 	if refusal.write(s, st.cw, st.r) {
 		return st.refusalEnd()
 	}
+	if st.launch.ConfinementDefault != "" {
+		// The launch named no class: it keeps the one the create resolved, not a fresh pick of the
+		// organisation's default. The fold still holds that class to the floor and to what the pool offers.
+		reqCC = st.run.ConfinementClass
+	}
 	f, ok := s.foldRunRequest(st.cw, st.r, foldCreate, &req, ceiling, reqCC)
 	if !ok {
 		return st.refusalEnd()
@@ -354,7 +359,7 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 	s.metrics.queueWait(queueOutcomeStarted, run.AdmittedAt.Sub(st.entry.QueuedAt))
 	s.finishCreateRunLaunch(st.base, createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
-		wsRefs: f.wsRefs, driveMount: f.driveMount, ephemeralDirs: f.ephemeralDirs,
+		wsRefs: f.wsRefs, driveMounts: f.driveMounts, ephemeralDirs: f.ephemeralDirs,
 		runToken: id.Token, created: started, comps: f.comps, overridden: f.source.overridden(), pushSets: f.pushSets, harnessRules: harnessRules,
 	})
 	return nil
@@ -377,6 +382,11 @@ func (s *Server) auditQueueStart(st *queuedStart, started, anchor types.AgentRun
 		"waited_sec": int(started.AdmittedAt.Sub(st.entry.QueuedAt).Seconds()), "pool_id": st.entry.PoolID, "jti": jti,
 		"limits":            map[string]any{"ends_at": anchor.EndsAt, "lifetime_cap_at": anchor.LifetimeCapAt, "run_limits": anchor.RunLimits},
 		"resources_applied": st.f.place.applied,
+		// The class the run started under: the one its create resolved, whoever chose it then.
+		"confinement_class": started.ConfinementClass,
+	}
+	if st.launch.ConfinementDefault != "" {
+		data["confinement_default"] = st.launch.ConfinementDefault
 	}
 	if c, ok := s.cfg.Store.(interface {
 		CountRunnerPoolSlotHolders(ctx context.Context, poolID uuid.UUID) (int, error)

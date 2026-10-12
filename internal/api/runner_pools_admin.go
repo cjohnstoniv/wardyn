@@ -31,6 +31,9 @@ const selfHostedOwnerOnlyMsg = "a Self-Hosted pool belongs to the person whose r
 // Self-Hosted: the organisation's defaults are Remote Provided only.
 const noOrgSelfHostedDefaultMsg = "the organisation has no Self-Hosted default: each person chooses their own Self-Hosted pool"
 
+// personalBarrierDefaultMsg refuses a person's own defaults naming a barrier.
+const personalBarrierDefaultMsg = "barrier is an organisation setting; an admin sets it"
+
 // livePool reads a Remote Provided pool for an administrator's write; ok=false: the 404 or 500 is
 // written. A person's Self-Hosted pool is the 404 an unknown id gets: no administrator writes one.
 func (s *Server) livePool(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore) (types.RunnerPool, bool) {

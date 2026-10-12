@@ -287,6 +287,9 @@ func (s *Server) routes() chi.Router {
 			// the caller's own view exactly as GET /runs?view= and GET /approvals
 			// are (handleMeAttention's own doc).
 			r.Get("/me/attention", s.handleMeAttention)
+			// The drive catalogue New Run attaches from: only the caller's own
+			// grants, no host path (user_drives_catalogue.go).
+			r.Get("/me/drives", s.handleListMeDrives)
 			// Own effective capability set — member-safe (classMember): every
 			// route AROUND this one on /permissions below is operator-only, but
 			// a member reading only their OWN grants (ListCapabilityGrantsFor,
@@ -687,6 +690,9 @@ func (s *Server) mountRunLeaseRoutes(r chi.Router) {
 	// run state, unlike the lease PATCH above — see run_title.go's own doc
 	// comment for why this stays a separate route.
 	r.Patch("/runs/{id}/title", s.handleSetRunTitle)
+	// The setup the run was launched with, for Run again: OWNER ONLY like the
+	// title (ownsRun, no admin bypass), any run state (launch_intent.go).
+	r.Get("/runs/{id}/launch-intent", s.handleGetLaunchIntent)
 	r.Post("/runs/{id}/kill", s.handleKillRun)
 	r.Post("/runs/{id}/revive", s.handleReviveRun) // owner or super admin (run_revive.go); they open no shell, so #1476 leaves them
 }
@@ -726,6 +732,8 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	// the caller's OWN principal at the store, exactly like the ssh-keys
 	// block above — never a principal taken from the body.
 	r.Get("/me/run-layout", s.handleGetRunLayout)
+	// The caller's own kept launch setups, newest first (launch_intent.go).
+	r.Get("/me/launch-intents", s.handleListLaunchIntents)
 	r.Put("/me/run-layout", s.handlePutRunLayout)
 	// Per-user Azure DevOps sign-in (ado_entra.go): two browser doors that
 	// capture ONE PERSON'S Azure DevOps refresh token. It belongs in this

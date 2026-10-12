@@ -47,7 +47,7 @@ type meUserDrive struct {
 // quiet is right: /me is a display read whose other fields the console needs to
 // render the shell at all, so a store hiccup must degrade the drive chip rather
 // than 500 the whole endpoint and log the human out of their own console. The
-// ENFORCEMENT path (seedRequestDrive) makes the opposite choice for the same
+// ENFORCEMENT path (seedRequestDrives) makes the opposite choice for the same
 // error, and must: mounting nothing where an admin allocated something is a
 // data loss, while showing nothing for a moment is a refresh.
 // A bare nil is not enough of an answer. Three distinct states the launch path

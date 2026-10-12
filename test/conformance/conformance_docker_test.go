@@ -131,7 +131,9 @@ func requireStrongestClass(t *testing.T, r runner.Runner) {
 }
 
 // agentUserImage commits base with USER 1000:1000 — the image contract's
-// agent identity — under a unique tag removed at cleanup.
+// agent identity — and the contract's /home/agent/drive owned by it (a fresh
+// managed drive volume takes its owner from that directory), under a unique tag
+// removed at cleanup.
 func agentUserImage(t *testing.T, base string) string {
 	t.Helper()
 	cli, err := dockerclient.New(dockerclient.FromEnv)
@@ -149,7 +151,7 @@ func agentUserImage(t *testing.T, base string) string {
 	suffix := uuid.NewString()[:8]
 	created, err := cli.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{
 		Name:   "wardyn-conformance-uid1000-" + suffix,
-		Config: &container.Config{Image: base, Cmd: []string{"true"}},
+		Config: &container.Config{Image: base, Cmd: []string{"sh", "-c", "mkdir -p /home/agent/drive && chown 1000:1000 /home/agent/drive"}},
 	})
 	if err != nil {
 		t.Fatalf("agentUserImage: create: %v", err)
@@ -157,6 +159,18 @@ func agentUserImage(t *testing.T, base string) string {
 	defer func() {
 		_, _ = cli.ContainerRemove(context.Background(), created.ID, dockerclient.ContainerRemoveOptions{Force: true})
 	}()
+	if _, err := cli.ContainerStart(ctx, created.ID, dockerclient.ContainerStartOptions{}); err != nil {
+		t.Fatalf("agentUserImage: start: %v", err)
+	}
+	wait := cli.ContainerWait(ctx, created.ID, dockerclient.ContainerWaitOptions{})
+	select {
+	case res := <-wait.Result:
+		if res.StatusCode != 0 {
+			t.Fatalf("agentUserImage: preparing /home/agent/drive exited %d", res.StatusCode)
+		}
+	case err := <-wait.Error:
+		t.Fatalf("agentUserImage: wait: %v", err)
+	}
 	ref := "wardyn-conformance-uid1000:" + suffix
 	if _, err := cli.ContainerCommit(ctx, created.ID, dockerclient.ContainerCommitOptions{Reference: ref, Changes: []string{"USER 1000:1000"}}); err != nil {
 		t.Fatalf("agentUserImage: commit: %v", err)
