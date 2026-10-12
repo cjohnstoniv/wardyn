@@ -80,6 +80,8 @@ export interface ApiToken {
   /** The admin who minted it for its owner; absent when the owner minted it. */
   minted_by?: string;
   disposition?: TokenDisposition;
+  /** The service identity an admin linked this token to; set with `disposition` on a token that was moved. */
+  service_identity?: string;
   token?: string;
 }
 

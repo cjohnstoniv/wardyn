@@ -465,6 +465,16 @@ func (s *Server) handleMintServiceToken(w http.ResponseWriter, r *http.Request) 
 		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityInactive, "this deployment cannot check the sponsor's session, so a service token would never authenticate")
 		return
 	}
+	// An active record whose sponsor session is not live is sponsor_inactive: its tokens would be refused
+	// at once, so the mint is refused the way a suspended or retired identity's is.
+	if err := s.withServiceState(r, &si); err != nil {
+		writeServerError(w, r, "read the sponsor's session", err)
+		return
+	}
+	if si.State == types.ServiceIdentitySponsorInactive {
+		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityInactive, "this service identity's sponsor is not active; its tokens cannot be minted")
+		return
+	}
 	if !s.mintSessionLive(w, r, sub, authorizedAt) {
 		return
 	}
