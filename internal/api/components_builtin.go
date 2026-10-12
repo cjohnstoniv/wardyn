@@ -140,8 +140,47 @@ func (s *Server) builtinGitHubGrant(r *http.Request, ceiling governanceCeiling, 
 		}
 		g = clamped.EligibleGrants[0]
 	}
-	g.Scope = mustJSON(map[string]any{"repos": repos, "permissions": perms})
+	// builtin marks the grant as this component's: the record a revive and an
+	// extension read its repositories back from (builtinGitHubRepos). The
+	// broker's decode ignores the key.
+	g.Scope = mustJSON(map[string]any{"repos": repos, "permissions": perms, "builtin": types.ComponentBuiltinGitHub})
 	return g, true
+}
+
+// builtinGitHubRepos is the repositories of a run's built-in GitHub
+// components, as clone URLs, read from the grants their admission wrote. A
+// policy's own github_token grant carries no builtin key and is not read, so
+// its repositories meet no provider door they did not meet at launch.
+func builtinGitHubRepos(grants []types.GrantSpec) []string {
+	var out []string
+	for _, g := range grants {
+		var sc struct {
+			Builtin string   `json:"builtin"`
+			Repos   []string `json:"repos"`
+		}
+		if g.Kind != types.GrantGitHubToken || json.Unmarshal(g.Scope, &sc) != nil || sc.Builtin != types.ComponentBuiltinGitHub {
+			continue
+		}
+		for _, repo := range sc.Repos {
+			out = append(out, "https://github.com/"+repo)
+		}
+	}
+	return out
+}
+
+// builtinGitHubRemotes is the clone URLs of the request's built-in GitHub
+// components, the remotes their push rules are keyed by.
+func builtinGitHubRemotes(refs []types.ComponentRef) []string {
+	var out []string
+	for _, ref := range refs {
+		if ref.Builtin != types.ComponentBuiltinGitHub {
+			continue
+		}
+		for _, repo := range ref.Repos {
+			out = append(out, "https://github.com/"+repo)
+		}
+	}
+	return out
 }
 
 // builtinDoorRefusal wraps a repository door's refusal with what the
