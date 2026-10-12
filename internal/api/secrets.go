@@ -79,7 +79,7 @@ func reservedSecret(name string) bool {
 		return true
 	}
 	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth") ||
-		providerSignInSecret(name)
+		providerSignInSecret(name) || cliSignInSecret(name)
 }
 
 // ReservedPlatformSecret reports whether name is one of this package's
@@ -162,9 +162,11 @@ func nameSinkReservedSecret(name string) bool {
 // Every per-person model-provider name (providerSecretPrefix) is here too, the
 // -key included: those rows are written only by PUT /model-providers/{id}/credential,
 // into the caller's own namespace, and an operator Put under one would plant a
-// row the strict read never consults while every door reported it stored.
+// row the strict read never consults while every door reported it stored. Every
+// CLI sign-in name (cliSecretPrefix) is here for the same reason.
 func secretsAPIReserved(name string) bool {
-	return reservedSecret(name) || strings.HasPrefix(name, providerSecretPrefix) || name == types.SubscriptionOAuthSecret ||
+	return reservedSecret(name) || strings.HasPrefix(name, providerSecretPrefix) || strings.HasPrefix(name, cliSecretPrefix) ||
+		name == types.SubscriptionOAuthSecret ||
 		name == types.ManagedOAuthSecret || name == types.AWSSSOAccessTokenSecret ||
 		name == types.ADOEntraAccessTokenSecret
 }

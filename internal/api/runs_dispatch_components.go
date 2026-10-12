@@ -52,6 +52,8 @@ type componentDispatch struct {
 	// Config is each component's plain, non-secret environment, in the order
 	// the components were attached. The gate refused a key two of them share.
 	Config []componentConfig
+	// AWSCLI is the run's AWS CLI row, nil when it attached none (authorAWSCLI).
+	AWSCLI *awsCLIDispatch
 }
 
 // componentConfig is one component's plain config, and what a record about it
@@ -68,7 +70,7 @@ type componentConfig struct {
 // an organisation's component delivers over plain HTTP gets no interception
 // entry: there is no TLS to terminate, and the proxy sets it on the plain lane.
 func (c runComponents) dispatch() componentDispatch {
-	var d componentDispatch
+	d := componentDispatch{AWSCLI: c.awsCLI()}
 	for i, a := range c.attached {
 		def := a.snapshot.Definition
 		for _, sec := range def.Secrets {
