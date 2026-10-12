@@ -85,3 +85,18 @@ func (s *Server) createRun(ctx context.Context, run types.AgentRun) (types.Agent
 	}
 	return capped.CreateRunUnderCap(ctx, run, s.cfg.MaxConcurrentRuns)
 }
+
+// createQueuedRun is createRun for a launch that waits in a pool's queue: the same gates (a revoked
+// hybrid laptop creates no local run, a deactivated or stale-epoch owner gets no row) in front of the
+// one transaction that inserts the QUEUED run and its queue row under the pool's row lock. It holds
+// no deployment slot, so WARDYN_MAX_CONCURRENT_RUNS is the promotion's to apply, not the insert's.
+func (s *Server) createQueuedRun(ctx context.Context, run types.AgentRun, entry store.RunQueueEntry) (types.AgentRun, error) {
+	if s.cfg.OrgFederation != nil && s.cfg.OrgFederation().Revoked {
+		return types.AgentRun{}, errOrgRevoked
+	}
+	qs, ok := s.queueStore()
+	if !ok {
+		return types.AgentRun{}, errors.New("store cannot hold a run queue")
+	}
+	return qs.CreateQueuedRun(guardOwner(ctx, run.CreatedBy), run, entry, queueMaxPerOwner)
+}

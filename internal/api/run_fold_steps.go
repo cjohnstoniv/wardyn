@@ -323,18 +323,18 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 				return false
 			}
 		}
-		f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, true, false)
+		f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, true, false, false)
 		grantHarnessProviders(f.harnesses, f.harnessChoices)
 		return ok
 	}
 	var choice runProviderChoice
-	if choice, ok = s.enforceRunModelProvider(f.w, f.r, *f.req, f.spec, f.wsRefs, f.mode == foldCreate); !ok {
+	if choice, ok = s.enforceRunModelProvider(f.w, f.r, *f.req, f.spec, f.wsRefs, f.mode == foldCreate, f.queued); !ok {
 		return false
 	}
 	f.mpChoice = choice
 	f.modelCred = choice.modelCredential()
 	recordProviderHost(rec, choice, f.req.Agent)
-	f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, false, f.mode == foldCreate)
+	f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, false, f.mode == foldCreate, f.queued)
 	grantHarnessProviders(f.harnesses, f.harnessChoices)
 	if len(f.harnessChoices) > 1 {
 		f.modelCred = mostResident(f.harnessChoices).modelCredential()
@@ -356,11 +356,11 @@ func (s *Server) stepAWSCLIProfile(f *runFold, _ *foldRecorder) bool {
 // judgeHarnessProviders is stepModelProvider's half for the harnesses of set
 // beside the primary (req.Agent), whose choice is primary: preview authorizes
 // the selection alone, the other doors also check the caller's own credential
-// (renew at create only), each as its own agent with its own requested
+// (renew at create only, and never for a run that waits: queued), each as its own agent with its own requested
 // provider and no workspace pin. Then the set is held to the one-lane
 // invariant (harnessProvidersConflict). It writes its own refusal.
 func (s *Server) judgeHarnessProviders(w http.ResponseWriter, r *http.Request, req createRunRequest, spec types.RunPolicySpec,
-	set []types.RunHarness, rec *foldRecorder, primary runProviderChoice, preview, renew bool,
+	set []types.RunHarness, rec *foldRecorder, primary runProviderChoice, preview, renew, queued bool,
 ) ([]harnessChoice, bool) {
 	choices := make([]harnessChoice, 0, len(set))
 	for _, h := range set {
@@ -374,7 +374,7 @@ func (s *Server) judgeHarnessProviders(w http.ResponseWriter, r *http.Request, r
 				choice, refusal = s.authorizeRunModelProvider(r, hreq, nil, true)
 				ok = !refusal.write(s, w, r)
 			} else {
-				choice, ok = s.enforceRunModelProvider(w, r, hreq, spec, nil, renew)
+				choice, ok = s.enforceRunModelProvider(w, r, hreq, spec, nil, renew, queued)
 			}
 			if !ok {
 				return nil, false
@@ -475,6 +475,9 @@ func (s *Server) stepPATNarrowing(f *runFold, rec *foldRecorder) bool {
 // stepHostCapacity is the same 503, reason and Retry-After at create and
 // Review; only create writes the audit row.
 func (s *Server) stepHostCapacity(f *runFold, rec *foldRecorder) bool {
+	if f.queued || f.promoted { // the run waits for them, or promotion has applied them
+		return true
+	}
 	return !writeHostCapacityRefusal(f.w, f.r, s.admitHostCapacity(f.r.Context(), principalFromRequest(f.r), "runs", f.mode == foldCreate))
 }
 
@@ -482,15 +485,22 @@ func (s *Server) stepHostCapacity(f *runFold, rec *foldRecorder) bool {
 // and no live token for a run that gets no row. CreateRunUnderCap still
 // decides a race at the cap.
 func (s *Server) stepRunCap(f *runFold, rec *foldRecorder) bool {
+	if f.queued || f.promoted { // the run waits for them, or promotion has applied them
+		return true
+	}
 	return !s.refuseRunCapFull(f.w, f.r)
 }
 
 // stepRunFit refuses a run the runs namespace's ResourceQuota cannot hold; its
 // advisories join the door's warnings. The quota's own admission stays the
-// authority on a race.
+// authority on a race. A run that waits for a slot is refused only when no quota
+// could ever hold it: it may fit once other runs finish, and promotion asks again.
 func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
+	if f.promoted {
+		return true
+	}
 	var refused bool
-	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.r.Context(), f.spec, f.ceiling), time.Duration(f.end.capSec)*time.Second)
+	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.r.Context(), f.spec, f.ceiling), time.Duration(f.end.capSec)*time.Second, f.queued)
 	return !refused
 }
 
@@ -546,5 +556,10 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 		return false
 	}
 	f.place = plan
+	// A run bound for a capped pool waits for a slot instead of failing (the dry doors answer the same).
+	// The queue's own start replays the fold as promoted, and must not queue again.
+	if f.mode != foldPreview {
+		f.queued = plan.queues() && !f.promoted
+	}
 	return true
 }

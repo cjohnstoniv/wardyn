@@ -174,6 +174,12 @@ type CreateRunRequest struct {
 	// (OD-1), applied inside the resolve fold before the ceiling clamp. See
 	// RunOverrides.
 	Overrides *RunOverrides `json:"overrides,omitempty"`
+	// MaxWaitSec is how long this run may wait for a slot when its runner pool is at its
+	// concurrent-run limit, in seconds (1 to 604800; more is cut to 7 days with a warning). Absent
+	// is 24 hours for a Background run and 1 hour for an Interactive one. At the end of the wait
+	// the run is FAILED with the reason queue_timeout. Ignored by a pool with no limit. A pointer, so
+	// a 0 is sent and refused rather than read as absent.
+	MaxWaitSec *int `json:"max_wait_sec,omitempty"`
 	// ModeContract marks a request as a 0.9 client's, whatever else it carries:
 	// it is RunModeContractV09 and nothing else. The server then holds the
 	// request to the run-mode contract, so an unset Experience is refused
