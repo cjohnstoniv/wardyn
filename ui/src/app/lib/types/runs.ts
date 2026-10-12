@@ -487,6 +487,7 @@ export type RunPolicyCause =
   | "git_broker"
   | "profile"
   | "org_disk"
+  | "pool_disk"
   | "restart"
   | "limits"
   | "launch";

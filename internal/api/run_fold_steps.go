@@ -11,6 +11,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // The steps of runFoldSteps, in its order. Each writes its own refusal and
@@ -532,12 +533,20 @@ func (s *Server) stepMainDrive(f *runFold, rec *foldRecorder) bool {
 	}
 	md := mainDriveFor(policyMiB, requestMiB, f.place.limits.DiskMiB)
 	if !md.Soft && md.MiB > 0 && s.runnerCannotCapDisk(f.r.Context(), *f.req, f.place) {
-		runError(http.StatusUnprocessableEntity, reasonMainDriveUnenforceable, mainDriveUnenforceableMsg()).write(s, f.w, f.r)
+		msg := mainDriveUnenforceableMsg()
+		if !f.place.pooled {
+			msg = mainDriveUnenforceableUnpooledMsg()
+		}
+		runError(http.StatusUnprocessableEntity, reasonMainDriveUnenforceable, msg).write(s, f.w, f.r)
 		return false
 	}
 	f.mainDrive = md
-	if md.ClampedBy != "" && !slices.Contains(f.policyWarns, composer.WarnResourcesCapped) {
-		f.policyWarns = append(f.policyWarns, composer.WarnResourcesCapped)
+	warn := composer.WarnResourcesCapped
+	if md.ClampedBy == client.MainDriveClampPolicy {
+		warn = warnDiskPolicyCut
+	}
+	if md.ClampedBy != "" && !slices.Contains(f.policyWarns, warn) {
+		f.policyWarns = append(f.policyWarns, warn)
 	}
 	if f.mode != foldCreate {
 		(&mainDriveDecision{MiB: md.MiB}).apply(&f.spec)

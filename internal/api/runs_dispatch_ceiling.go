@@ -160,6 +160,8 @@ type effectivePolicyDatum struct {
 	types.RunPolicySpec
 	DiskMiBFilled bool                  `json:"disk_mib_filled,omitempty"`
 	DiskMiBBasis  client.MainDriveBasis `json:"disk_mib_basis,omitempty"`
+	// DiskMiBDefaultSource is the layer whose default sized the run (pool or deployment), with basis default.
+	DiskMiBDefaultSource types.LimitSource `json:"disk_mib_default_source,omitempty"`
 }
 
 // applyEphemeralDisk is where the org and profile maximums bind a run's ephemeral scratch size at

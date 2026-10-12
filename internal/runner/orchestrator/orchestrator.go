@@ -419,7 +419,7 @@ func (o *Orchestrator) ExecutorFacts(ctx context.Context, executor string) (runn
 	if err != nil {
 		return runner.TargetFacts{}, false
 	}
-	return runner.TargetFacts{Classes: slices.Clone(cs.Classes)}, true
+	return runner.TargetFacts{Classes: slices.Clone(cs.Classes), DiskEnforcement: cs.EphemeralDiskEnforcement}, true
 }
 
 // CreateSandboxOn creates the sandbox on the named configured executor only. An executor this

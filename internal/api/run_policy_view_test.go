@@ -838,19 +838,23 @@ func TestExplainRunPolicy_DiskBasis(t *testing.T) {
 		name       string
 		basis      client.MainDriveBasis
 		filled     bool
+		source     types.LimitSource
 		wantCause  string
 		wantDetail string
 	}{
-		{"policy: the policy's own size", client.MainDriveBasisPolicy, false, "", ""},
-		{"request: from the request", client.MainDriveBasisRequest, true, causeLaunch, "The disk size is from your request."},
-		{"default: from the default", client.MainDriveBasisDefault, true, causeOrgDisk, "default for this run's pool or this server"},
-		{"older run: the filled bit alone", "", true, causeOrgDisk, ""},
+		{"policy: the policy's own size", client.MainDriveBasisPolicy, false, "", "", ""},
+		{"request: from the request", client.MainDriveBasisRequest, true, "", causeLaunch, "The disk size is from your request."},
+		{"server default", client.MainDriveBasisDefault, true, types.LimitSourceDeployment, causeOrgDisk, "is this server's default."},
+		{"pool default", client.MainDriveBasisDefault, true, types.LimitSourcePool, causePoolDisk, "default of the pool this run started in"},
+		{"older run: the filled bit alone", "", true, "", causeOrgDisk, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := explainRunPolicy(nil, disk(8192), evidenceOf(func(e *auditEvidence) { e.diskBasis, e.diskFilled = tc.basis, tc.filled }), types.SiteConfig{}, types.AgentRun{})
+			got := explainRunPolicy(nil, disk(8192), evidenceOf(func(e *auditEvidence) {
+				e.diskBasis, e.diskFilled, e.diskDefaultSource = tc.basis, tc.filled, tc.source
+			}), types.SiteConfig{}, types.AgentRun{})
 			c := pvChange(got, tc.wantCause, fieldDisk)
 			if tc.wantCause == "" {
-				if pvChange(got, causeOrgDisk, fieldDisk) != nil || pvChange(got, causeLaunch, fieldDisk) != nil {
+				if pvChange(got, causeOrgDisk, fieldDisk) != nil || pvChange(got, causePoolDisk, fieldDisk) != nil || pvChange(got, causeLaunch, fieldDisk) != nil {
 					t.Fatalf("a size the policy wrote was explained: %+v", got)
 				}
 				return

@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -45,7 +46,7 @@ func mainDriveFor(policyMiB, requestMiB int, lim types.EffectiveLimit) mainDrive
 	case policyMiB > 0:
 		md.MiB, md.Basis = policyMiB, client.MainDriveBasisPolicy
 	case !lim.Default.Unlimited && lim.Default.Value > 0:
-		md.MiB, md.Basis, md.DefaultSource = lim.Default.Value, client.MainDriveBasisDefault, lim.DefaultSource
+		md.MiB, md.Basis, md.DefaultSource = lim.Default.Value, client.MainDriveBasisDefault, defaultSourceOf(lim.DefaultSource)
 	}
 	if policyMiB > 0 && md.MiB > policyMiB {
 		md.MiB, md.ClampedBy = policyMiB, client.MainDriveClampPolicy
@@ -55,6 +56,15 @@ func mainDriveFor(policyMiB, requestMiB int, lim types.EffectiveLimit) mainDrive
 	}
 	md.Soft = policyMiB == 0 && md.MiB > 0
 	return md
+}
+
+// defaultSourceOf keeps default_source to the two layers that name a default (spec 3.5). A cap
+// that stands in as the default (a profile's maximum, a runner's capacity) reads as the server's.
+func defaultSourceOf(src types.LimitSource) types.LimitSource {
+	if src == types.LimitSourcePool {
+		return src
+	}
+	return types.LimitSourceDeployment
 }
 
 func mainDriveClampOf(src types.LimitSource) client.MainDriveClampSource {
@@ -79,13 +89,14 @@ func (m mainDrive) applied() *client.MainDriveApplied {
 // reads the size back out of the launch spec, so a requested or defaulted size is never taken for
 // one the policy wrote.
 type mainDriveDecision struct {
-	MiB   int
-	Soft  bool
-	Basis client.MainDriveBasis
+	MiB           int
+	Soft          bool
+	Basis         client.MainDriveBasis
+	DefaultSource types.LimitSource
 }
 
 func (m mainDrive) decision() *mainDriveDecision {
-	return &mainDriveDecision{MiB: m.MiB, Soft: m.Soft, Basis: m.Basis}
+	return &mainDriveDecision{MiB: m.MiB, Soft: m.Soft, Basis: m.Basis, DefaultSource: m.DefaultSource}
 }
 
 // basis is the decision's basis for the audit envelope: "" when the lane has no decision.
@@ -94,6 +105,14 @@ func (d *mainDriveDecision) basis() client.MainDriveBasis {
 		return ""
 	}
 	return d.Basis
+}
+
+// defaultSource is the layer whose default sized the run, for the envelope: "" unless the basis is default.
+func (d *mainDriveDecision) defaultSource() types.LimitSource {
+	if d == nil || d.Basis != client.MainDriveBasisDefault {
+		return ""
+	}
+	return d.DefaultSource
 }
 
 // apply writes the size into policy as a FRESH block, never in place: policy is a shallow copy of
@@ -116,17 +135,23 @@ func (c governanceCeiling) authoredDiskMiB() int {
 	return c.Spec.Resources.DiskMiB
 }
 
-// runnerCannotCapDisk reports whether the runner this run lands on says it enforces no disk cap.
+// runnerCannotCapDisk reports whether the run can only land where disk is not capped. A pooled run
+// is judged by the targets it can land on (the pool's executors or runners), and is refused only
+// when every one of them reports `none`: the deployment-wide word is the WEAKEST across substrates,
+// so on a mixed estate it would refuse a run bound for the substrate that does enforce. A target
+// that reports nothing is unknown, never `none`. An unpooled run has only the deployment's word.
 // A runner that cannot answer is not asked to refuse here: the placement steps own that.
 func (s *Server) runnerCannotCapDisk(ctx context.Context, req createRunRequest, place runPlacement) bool {
-	placement := requestPlacement(req)
-	if place.pooled {
-		placement = place.placement
+	if place.pooled && len(place.eligible) > 0 {
+		return !slices.ContainsFunc(place.eligible, func(t poolTarget) bool {
+			return t.offline || t.facts.DiskEnforcement != types.StorageEnforcementNone
+		})
 	}
-	if placement == "" {
-		placement = types.PlacementRemote
+	p := requestPlacement(req)
+	if p == "" {
+		p = types.PlacementRemote
 	}
-	caps, err := s.placementCapabilities(ctx, placement, requestRunnerID(req))
+	caps, err := s.placementCapabilities(ctx, p, requestRunnerID(req))
 	return err == nil && caps.EphemeralDiskEnforcement == types.StorageEnforcementNone
 }
 
@@ -135,3 +160,18 @@ func (s *Server) runnerCannotCapDisk(ctx context.Context, req createRunRequest, 
 func mainDriveUnenforceableMsg() string {
 	return "This run's policy sets a disk size that this pool's runners can't cap. Choose another pool, or ask your admin."
 }
+
+// mainDriveUnenforceableUnpooledMsg is the same refusal for a run in no pool, which has no pool to
+// choose instead.
+//
+// DRAFT (M2 canon pending)
+func mainDriveUnenforceableUnpooledMsg() string {
+	return "This run's policy sets a disk size that this server's runner can't cap. Ask your admin."
+}
+
+// warnDiskPolicyCut is the clamp warning when the run's own policy, not an operator maximum, cut a
+// requested disk size; composer.WarnResourcesCapped would blame an operator for a policy the person
+// may have written.
+//
+// DRAFT (M2 canon pending)
+const warnDiskPolicyCut = "disk size reduced to the size this run's policy sets"

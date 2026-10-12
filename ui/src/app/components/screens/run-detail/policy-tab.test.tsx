@@ -302,6 +302,13 @@ describe("PolicyTab — changes grouped by cause", () => {
     expect(within(g).getByText("20480 MiB").parentElement).not.toHaveTextContent("Added at start");
   });
 
+  it("disk size from a pool's default reads as the pool's, with no chip", async () => {
+    show(view({ changes: [change({ cause: "pool_disk", field: "resources.disk_mib", added: ["20480"] })] }));
+    await ready();
+    const g = screen.getByRole("heading", { name: "Disk size set from this pool's default" }).parentElement!;
+    expect(within(g).getByText("20480 MiB").parentElement).not.toHaveTextContent("Added at start");
+  });
+
   describe("limits: whose limits", () => {
     const limits = view({
       changes: [
