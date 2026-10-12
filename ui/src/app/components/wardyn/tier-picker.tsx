@@ -39,7 +39,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { StatusChip } from "./status-chip";
 import { Chip, ConfinementChip } from "./primitives";
-import { CC_META, CC_MATRIX_ROWS, CC_MATRIX_WHERE, CONFINEMENT_CONSTANT_NOTE, type CCMark } from "./cc-meta";
+import { CC_META, CC_MATRIX_ROWS, CC_MATRIX_WHERE, CONFINEMENT_CONSTANT_NOTE } from "./cc-meta";
+import { MarkCell } from "./mark-cell";
 import { RESIDUAL_PREFIX } from "./copy";
 import { TIER_PICKER } from "../../lib/tier-picker-copy";
 import { CC_ORDER, type ConfinementClass } from "../../lib/types";
@@ -460,15 +461,5 @@ function MatrixRow({
         </td>
       ))}
     </tr>
-  );
-}
-
-function MarkCell({ mark, cc }: { mark: CCMark; cc: ConfinementClass }) {
-  if (mark === "yes") return <span className="text-success">&#10003;</span>;
-  if (mark === "no") return <span className="text-danger">&#10007;</span>;
-  return (
-    <span title={`${RESIDUAL_PREFIX} ${CC_META[cc].doesntProtect}`} className="text-warning">
-      &#9888;
-    </span>
   );
 }
