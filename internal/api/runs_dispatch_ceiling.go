@@ -309,10 +309,11 @@ func (s *Server) boundResources(ctx context.Context, r *http.Request, spec *type
 	}
 	// CPU and memory first, and on BOTH arms of both call sites: the member who sent no policy
 	// never reaches composer.Clamp (it would drop their workspace mounts), so this resource-only
-	// bound is the only thing between their ceiling's own size and their sandbox.
+	// bound is the only thing between their ceiling's own size and their sandbox. Its cut is not
+	// warned here: stepResources applies the run's ask within every limit and says when it was cut.
 	capped := false
 	if bounded, changed := composer.CapResources(spec.Resources, limits); changed {
-		spec.Resources, capped = bounded, true
+		spec.Resources = bounded
 	}
 	if dryRun {
 		capped = s.previewEphemeralDisk(ctx, spec, profileMax) || capped

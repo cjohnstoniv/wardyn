@@ -56,6 +56,23 @@ func EffectiveConfinementFloor(policyMin, floor, cap types.ConfinementClass) typ
 // dispatch's own ephemeral-disk clamp so preview and the actual run agree, and only clamps a non-zero
 // request since 0 means unbounded scratch. CPU and memory fold into the resource ceiling below.
 func Clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits) (types.RunPolicySpec, []string) {
+	var size types.ResourceLimits
+	if r := ceiling.Resources; r != nil {
+		size = types.ResourceLimits{CPUMillis: r.CPUMillis, MemoryMiB: r.MemoryMiB}
+	}
+	return clamp(proposed, ceiling, limits, size, true)
+}
+
+// ClampMember is Clamp for a governed member's own run policy. CPU and memory are bounded by the
+// member cap from size, the profile's AUTHORED size (a resolved ceiling carries the deployment's size
+// where its profile sets none, #1949), and a cut of either is not warned here: the run's placement
+// step applies the ask within every limit and says exactly when it was cut, so the warning and the
+// run's resources_applied agree.
+func ClampMember(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits, size types.ResourceLimits) (types.RunPolicySpec, []string) {
+	return clamp(proposed, ceiling, limits, size, false)
+}
+
+func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits, size types.ResourceLimits, warnSize bool) (types.RunPolicySpec, []string) {
 	out := cloneProposal(proposed)
 	var warns []string
 
@@ -139,7 +156,7 @@ func Clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits)
 
 	out.EligibleGrants = clampGrants(out.EligibleGrants, ceiling, &warns)
 
-	warns = clampResources(&out, ceiling, limits, warns)
+	warns = clampResources(&out, ceiling, limits, size, warnSize, warns)
 
 	// Auto-stop: cap at the ceiling's positive maximum. 0 (platform default) and negative (never reap —
 	// most permissive) both rank more permissive than an explicit cap and are capped the same way. When
@@ -162,7 +179,9 @@ func Clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits)
 }
 
 // clampResources is Clamp's resource step, split out to keep Clamp readable.
-func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limits types.GovernanceLimits, warns []string) []string {
+// size is the ceiling's own CPU and memory the member cap reads; warnSize says whether a cut of
+// either joins the warning.
+func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limits types.GovernanceLimits, size types.ResourceLimits, warnSize bool, warns []string) []string {
 	// Resources: an unset ceiling is not "no opinion" (Clamp is the operator-ceiling authority for every
 	// caller), so it stands at sizing.EffectiveLimits() (the deployment's configured default, else
 	// sizing.Default{CPUMillis,MemoryMiB,PidsLimit}) rather than leave a field unbounded. CPU and
@@ -170,21 +189,21 @@ func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limit
 	// size, the rule preflight and dispatch also apply; an unset field is filled from the ceiling's
 	// size, never above that cap. DiskMiB has no such default and stays skip-when-both-unset.
 	eff := sizing.EffectiveLimits()
-	var size types.ResourceLimits
+	var own types.ResourceLimits
 	pids := int(eff.PidsLimit)
 	if ceiling.Resources != nil {
-		size, pids = *ceiling.Resources, ceiling.Resources.PidsLimit
+		own, pids = *ceiling.Resources, ceiling.Resources.PidsLimit
 	}
 	untouched := MemberDefault(ceiling.Resources)
 	effCeilingResources := &types.ResourceLimits{
 		CPUMillis: runnerpool.MemberCap(size.CPUMillis, limits.MaxCPUMillis, untouched.CPUMillis),
 		MemoryMiB: runnerpool.MemberCap(size.MemoryMiB, limits.MaxMemoryMiB, untouched.MemoryMiB),
 		PidsLimit: pids,
-		DiskMiB:   size.DiskMiB,
+		DiskMiB:   own.DiskMiB,
 	}
 	fill := types.ResourceLimits{
-		CPUMillis: min(cmp.Or(size.CPUMillis, int(eff.CPUMillis)), effCeilingResources.CPUMillis),
-		MemoryMiB: min(cmp.Or(size.MemoryMiB, int(eff.MemoryMiB)), effCeilingResources.MemoryMiB),
+		CPUMillis: min(cmp.Or(own.CPUMillis, int(eff.CPUMillis)), effCeilingResources.CPUMillis),
+		MemoryMiB: min(cmp.Or(own.MemoryMiB, int(eff.MemoryMiB)), effCeilingResources.MemoryMiB),
 	}
 	{
 		before := out.Resources
@@ -195,22 +214,23 @@ func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limit
 		// An unset (<=0) field is FILLED from the ceiling silently: the policy
 		// asked for no particular size, so nothing it asked for was cut. Only a
 		// positive request above the cap is cut, and only a cut warns.
-		exceeded := false
-		capField := func(proposed *int, ceil, fill int) {
+		capField := func(proposed *int, ceil, fill int) (cut bool) {
 			if ceil <= 0 {
-				return
+				return false
 			}
 			switch {
 			case *proposed > ceil:
-				*proposed, exceeded = ceil, true
+				*proposed, cut = ceil, true
 			case *proposed <= 0:
 				*proposed = fill
 			}
+			return cut
 		}
-		capField(&cr.CPUMillis, effCeilingResources.CPUMillis, fill.CPUMillis)
-		capField(&cr.MemoryMiB, effCeilingResources.MemoryMiB, fill.MemoryMiB)
-		capField(&cr.PidsLimit, effCeilingResources.PidsLimit, effCeilingResources.PidsLimit)
-		capField(&cr.DiskMiB, effCeilingResources.DiskMiB, effCeilingResources.DiskMiB)
+		cpu := capField(&cr.CPUMillis, effCeilingResources.CPUMillis, fill.CPUMillis)
+		mem := capField(&cr.MemoryMiB, effCeilingResources.MemoryMiB, fill.MemoryMiB)
+		exceeded := warnSize && (cpu || mem)
+		exceeded = capField(&cr.PidsLimit, effCeilingResources.PidsLimit, effCeilingResources.PidsLimit) || exceeded
+		exceeded = capField(&cr.DiskMiB, effCeilingResources.DiskMiB, effCeilingResources.DiskMiB) || exceeded
 		// Governance limit folded into the same warning; bounds a non-zero request only (see CapDiskMiB).
 		if capped := CapDiskMiB(cr.DiskMiB, limits.MaxEphemeralDiskMiB); capped != cr.DiskMiB {
 			cr.DiskMiB, exceeded = capped, true

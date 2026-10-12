@@ -13,10 +13,12 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/sizing"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
@@ -332,4 +334,51 @@ func TestRunCreateAuditCarriesAppliedResources(t *testing.T) {
 		t.Fatalf("run.create resources_applied = %+v, the 201 says %+v", data.ResourcesApplied, created.ResourcesApplied)
 	}
 	wantAmount(t, "audited cpu", data.ResourcesApplied.CPUMillis, 2000, true, types.LimitSourcePool, "Small")
+}
+
+// The cap warning and resources_applied agree, on the 201 and on run.create: an inline policy asking 8
+// CPU under a profile whose maximum is 8 and which sets no size is not cut and not warned (#1949); the
+// same ask under a maximum of 4 is cut to 4 and warned.
+func TestCapWarningAgreesWithAppliedResources(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		max    int
+		want   int
+		capped bool
+	}{
+		{"a maximum of 8 with no size of its own keeps an ask of 8", 8000, 8000, false},
+		{"a maximum of 4 cuts an ask of 8", 4000, 4000, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newPlacementEnv(t)
+			remote := e.createPool("Remote", types.RunnerPoolRemoteProvided)
+			e.addExecutors(remote.ID, "alpha", "beta")
+			e.assignSizedProfile("sized", nil, types.GovernanceLimits{MaxCPUMillis: tc.max})
+			created := e.create(runBody(fmt.Sprintf(`"runner_pool_id":%q,"inline_policy":{"min_confinement_class":"CC2","resources":{"cpu_millis":8000}}`, remote.ID)))
+			got := created.ResourcesApplied.CPUMillis
+			if got.Applied != tc.want || got.Capped != tc.capped {
+				t.Fatalf("cpu = %+v, want applied %d capped %v", got, tc.want, tc.capped)
+			}
+			if warned := slices.Contains(created.Warnings, composer.WarnResourcesCapped); warned != tc.capped {
+				t.Errorf("201 warnings %v carry the cap sentence = %v, resources_applied capped = %v", created.Warnings, warned, tc.capped)
+			}
+			rows := e.audits("run.create")
+			if len(rows) != 1 {
+				t.Fatalf("run.create rows = %d, want 1", len(rows))
+			}
+			var data struct {
+				ResourcesApplied *client.AppliedResources `json:"resources_applied"`
+				ClampWarnings    []string                 `json:"clamp_warnings"`
+			}
+			if err := json.Unmarshal(rows[0].Data, &data); err != nil {
+				t.Fatal(err)
+			}
+			if data.ResourcesApplied == nil || data.ResourcesApplied.CPUMillis != got {
+				t.Errorf("run.create resources_applied = %+v, the 201 says %+v", data.ResourcesApplied, got)
+			}
+			if warned := slices.Contains(data.ClampWarnings, composer.WarnResourcesCapped); warned != tc.capped {
+				t.Errorf("run.create clamp_warnings %v carry the cap sentence = %v, resources_applied capped = %v", data.ClampWarnings, warned, tc.capped)
+			}
+		})
+	}
 }

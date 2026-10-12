@@ -131,7 +131,9 @@ func governSites() []governSite {
 				// Above the deployment's default: the member cap is never below it (#1949).
 				c.Limits.MaxCPUMillis = 3000
 				spec := types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 4000}}
-				return len(s.boundResources(ctx, governReq(ctx), &spec, c, false)) > 0 && spec.Resources.CPUMillis == 3000
+				// The cut is the outcome; stepResources, not this bound, says it was cut.
+				s.boundResources(ctx, governReq(ctx), &spec, c, false)
+				return spec.Resources.CPUMillis == 3000
 			}},
 		{"runs_policy.go resolvePolicy", plain,
 			func(t *testing.T, s *Server, ctx context.Context) bool {
