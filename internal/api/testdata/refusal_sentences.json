@@ -202,7 +202,7 @@
   {
     "reason": "drive_not_found",
     "target": "\"runs.drive\"",
-    "sentence": "driveNotFoundAuditSentence"
+    "sentence": "(audit only)"
   },
   {
     "reason": "drive_not_in_pool",

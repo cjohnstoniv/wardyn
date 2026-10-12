@@ -860,7 +860,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	}
 	g.ID = uuid.New()
 	g.CreatedBy = principalFromRequest(r)
-	saved, err := s.writeUserDriveGrant(r.Context(), g, homeOverrideStated, req.Additional)
+	saved, removed, err := s.writeUserDriveGrant(r.Context(), g, homeOverrideStated, req.Additional)
 	// ErrNotFound here is the FK refusing an unknown drive_id — a 404 naming the
 	// drive, not a 500, and not a silent no-op.
 	if notFoundIf(w, err, "user drive", reasonUserDriveNotFound) {
@@ -892,17 +892,22 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	// directory NAME on a corporate share, which is their username as often as
 	// not. Whether an admin pinned one is the governance fact; what they pinned
 	// it to is in the row, readable by anyone who may read the row.
+	data := map[string]any{
+		"subject_type":      saved.SubjectType,
+		"subject":           saved.Subject,
+		"drive_id":          saved.DriveID,
+		"priority":          saved.Priority,
+		"size_mib_override": saved.SizeMiBOverride,
+		"writable_override": saved.WritableOverride,
+		"home_override_set": saved.HomeOverride != "",
+		"enabled":           saved.Enabled,
+	}
+	// A replacing write that took drives away from the subject says which.
+	if len(removed) > 0 {
+		data["removed_drive_ids"] = removed
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"drive.grant.write", saved.ID.String(), "success", mustJSON(map[string]any{
-			"subject_type":      saved.SubjectType,
-			"subject":           saved.Subject,
-			"drive_id":          saved.DriveID,
-			"priority":          saved.Priority,
-			"size_mib_override": saved.SizeMiBOverride,
-			"writable_override": saved.WritableOverride,
-			"home_override_set": saved.HomeOverride != "",
-			"enabled":           saved.Enabled,
-		})))
+		"drive.grant.write", saved.ID.String(), "success", mustJSON(data)))
 	writeJSON(w, status, saved)
 }
 

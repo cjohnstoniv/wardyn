@@ -304,35 +304,57 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 // returned, read as ErrConflict); stating it IS the confirmation, no ?confirm= to invent. The zero
 // value is safe — a caller that forgets the argument gets a refusal, not a silent clear.
 func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error) {
+	out, _, err := s.ReplaceUserDriveGrant(ctx, g, homeOverrideStated)
+	return out, err
+}
+
+// ReplaceUserDriveGrant is UpsertUserDriveGrant that also returns the drives the subject lost:
+// the drive ids of the rows it removed and of the kept row's drive before the repoint.
+func (s PG) ReplaceUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, []uuid.UUID, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return types.UserDriveGrant{}, fmt.Errorf("store: begin drive grant write: %w", err)
+		return types.UserDriveGrant{}, nil, fmt.Errorf("store: begin drive grant write: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	var keep uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT id FROM user_drive_grants WHERE subject_type = $1 AND subject = $2
-		ORDER BY (drive_id = $3) DESC, created_at, id LIMIT 1 FOR UPDATE`, g.SubjectType, g.Subject, g.DriveID).Scan(&keep)
+	// Serialises replacing writes for one subject, including the first one for
+	// a subject with no row yet, which the FOR UPDATE below has nothing to lock:
+	// without it two concurrent replaces both insert and the subject keeps both.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('user_drive_grants:' || $1 || '/' || $2, 0))`,
+		g.SubjectType, g.Subject); err != nil {
+		return types.UserDriveGrant{}, nil, fmt.Errorf("store: lock drive grants: %w", err)
+	}
+	var keep, keptDrive uuid.UUID
+	var removed []uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT id, drive_id FROM user_drive_grants WHERE subject_type = $1 AND subject = $2
+		ORDER BY (drive_id = $3) DESC, created_at, id LIMIT 1 FOR UPDATE`, g.SubjectType, g.Subject, g.DriveID).Scan(&keep, &keptDrive)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 	case err != nil:
-		return types.UserDriveGrant{}, fmt.Errorf("store: read drive grants: %w", err)
+		return types.UserDriveGrant{}, nil, fmt.Errorf("store: read drive grants: %w", err)
 	default:
-		if _, err := tx.Exec(ctx, `DELETE FROM user_drive_grants WHERE subject_type = $1 AND subject = $2 AND id <> $3`,
-			g.SubjectType, g.Subject, keep); err != nil {
-			return types.UserDriveGrant{}, fmt.Errorf("store: replace drive grants: %w", err)
+		rows, err := tx.Query(ctx, `DELETE FROM user_drive_grants WHERE subject_type = $1 AND subject = $2 AND id <> $3 RETURNING drive_id`,
+			g.SubjectType, g.Subject, keep)
+		if err == nil {
+			removed, err = pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
 		}
-		if _, err := tx.Exec(ctx, `UPDATE user_drive_grants SET drive_id = $2 WHERE id = $1 AND drive_id <> $2`, keep, g.DriveID); err != nil {
-			return types.UserDriveGrant{}, grantWriteErr(err)
+		if err != nil {
+			return types.UserDriveGrant{}, nil, fmt.Errorf("store: replace drive grants: %w", err)
+		}
+		if keptDrive != g.DriveID {
+			removed = append(removed, keptDrive)
+			if _, err := tx.Exec(ctx, `UPDATE user_drive_grants SET drive_id = $2 WHERE id = $1`, keep, g.DriveID); err != nil {
+				return types.UserDriveGrant{}, nil, grantWriteErr(err)
+			}
 		}
 	}
 	out, err := upsertUserDriveGrant(ctx, tx, g, homeOverrideStated)
 	if err != nil {
-		return types.UserDriveGrant{}, err
+		return types.UserDriveGrant{}, nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return types.UserDriveGrant{}, fmt.Errorf("store: commit drive grant write: %w", err)
+		return types.UserDriveGrant{}, nil, fmt.Errorf("store: commit drive grant write: %w", err)
 	}
-	return out, nil
+	return out, removed, nil
 }
 
 // AddUserDriveGrant allocates one drive to one subject BESIDE the subject's other drives, keyed

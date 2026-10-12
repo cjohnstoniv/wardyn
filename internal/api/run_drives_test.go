@@ -493,15 +493,17 @@ func TestMeDrivesCatalogue_DrivesOff(t *testing.T) {
 	}
 }
 
-// grantVerbStore records which grant verb a write took.
+// grantVerbStore records which grant verb a write took; a replace reports
+// removed as the drives the subject lost.
 type grantVerbStore struct {
 	*driveStore
-	verb string
+	verb    string
+	removed []uuid.UUID
 }
 
-func (s *grantVerbStore) UpsertUserDriveGrant(_ context.Context, g types.UserDriveGrant, _ bool) (types.UserDriveGrant, error) {
+func (s *grantVerbStore) ReplaceUserDriveGrant(_ context.Context, g types.UserDriveGrant, _ bool) (types.UserDriveGrant, []uuid.UUID, error) {
 	s.verb = "replace"
-	return g, nil
+	return g, s.removed, nil
 }
 
 func (s *grantVerbStore) AddUserDriveGrant(_ context.Context, g types.UserDriveGrant, _ bool) (types.UserDriveGrant, error) {
@@ -515,8 +517,25 @@ func TestWriteUserDriveGrant_Verb(t *testing.T) {
 	for additional, want := range map[bool]string{false: "replace", true: "add"} {
 		st := &grantVerbStore{driveStore: &driveStore{}}
 		srv := New(Config{Store: st, RunnerTarget: "docker"})
-		if _, err := srv.writeUserDriveGrant(context.Background(), types.UserDriveGrant{}, true, additional); err != nil || st.verb != want {
+		if _, _, err := srv.writeUserDriveGrant(context.Background(), types.UserDriveGrant{}, true, additional); err != nil || st.verb != want {
 			t.Errorf("additional=%v took %q (%v), want %q", additional, st.verb, err, want)
 		}
+	}
+}
+
+// TestUpsertUserDriveGrant_AuditsRemovedDrives: a replacing write's
+// drive.grant.write row names the drives the subject lost.
+func TestUpsertUserDriveGrant_AuditsRemovedDrives(t *testing.T) {
+	lost := uuid.New()
+	st := &grantVerbStore{driveStore: &driveStore{}, removed: []uuid.UUID{lost}}
+	audit := &recRecorder{}
+	srv := New(Config{Store: st, Audit: audit, RunnerTarget: "docker"})
+	body := `{"subject_type":"user","subject":"alice@example.com","drive_id":"` + uuid.NewString() + `","priority":0}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/drives/grants", strings.NewReader(body)).
+		WithContext(operatorCtx("sub-admin", "admin@example.com", "admin"))
+	srv.handleUpsertUserDriveGrant(w, r)
+	if w.Code/100 != 2 || len(audit.events) != 1 || !strings.Contains(string(audit.events[0].Data), `"removed_drive_ids":["`+lost.String()+`"]`) {
+		t.Fatalf("%d %s, events %+v; want a drive.grant.write row naming %s", w.Code, w.Body, audit.events, lost)
 	}
 }

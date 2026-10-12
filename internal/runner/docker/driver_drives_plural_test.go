@@ -10,8 +10,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -161,6 +163,36 @@ func TestTeardown_RemovesALeftDriveSeed(t *testing.T) {
 	}
 	if c := f.containers[driveSeedName(id)]; c != nil && !c.removed {
 		t.Errorf("teardown left the drive seed %s", driveSeedName(id))
+	}
+}
+
+// TestSweepOrphanedSandboxes_RemovesLeftoverDriveSeeds: a seed a crash left
+// behind (older than minAge, carrying the seed's managed labels) is removed by
+// the orphan sweep, whatever its run's state; a young seed, which a create may
+// still be using, is left alone, and so is everything else.
+func TestSweepOrphanedSandboxes_RemovesLeftoverDriveSeeds(t *testing.T) {
+	f := newFakeDocker()
+	oldRun, youngRun, liveRun := uuid.New(), uuid.New(), uuid.New()
+	seedLabels := func(id uuid.UUID) map[string]string { return wardynLabels(id, componentDriveSeed, nil) }
+	for _, id := range []uuid.UUID{oldRun, youngRun} {
+		f.containers[driveSeedName(id)] = &createdContainer{name: driveSeedName(id)}
+	}
+	seedSandbox(f, liveRun)
+	old := time.Now().Add(-time.Hour).Unix()
+	f.listItems = []container.Summary{
+		{ID: driveSeedName(oldRun), Created: old, Labels: seedLabels(oldRun)},
+		{ID: driveSeedName(youngRun), Created: time.Now().Unix(), Labels: seedLabels(youngRun)},
+		{ID: agentContainerName(liveRun), Created: old, Labels: wardynLabels(liveRun, componentAgent, nil)},
+	}
+	swept, err := newTestDriver(f).SweepOrphanedSandboxes(context.Background(), 10*time.Minute, func(uuid.UUID) bool { return false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if swept != 1 || !f.containers[driveSeedName(oldRun)].removed {
+		t.Errorf("swept %d; the aged seed removed = %v, want it removed", swept, f.containers[driveSeedName(oldRun)].removed)
+	}
+	if f.containers[driveSeedName(youngRun)].removed || f.containers[agentContainerName(liveRun)].removed {
+		t.Error("the sweep removed a young seed or a live run's agent")
 	}
 }
 

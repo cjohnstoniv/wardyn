@@ -735,9 +735,9 @@ func (c *Client) ApplyDrives(ctx context.Context, doc DrivesDocument) (DrivesDoc
 // (PUT), a zero id is CREATED (POST) — which is what makes `wardyn drive get
 // > f && wardyn drive set f` a no-op: the ids `get` wrote back are exactly
 // what route the re-`set` to an update of the same rows, not a second copy
-// under a fresh name. A grant carries no id of its own; every one is POSTed,
-// and the server's own replacing upsert repoints an existing allocation rather
-// than duplicating it.
+// under a fresh name. A grant carries no id of its own; every one is POSTed
+// with Additional, so it upserts the one (subject_type, subject, drive_id)
+// allocation it names and never replaces a subject's other drives.
 //
 // Nothing doc omits is touched and nothing is deleted — neither POST nor PUT
 // can express that, and this function does not attempt it by other means.
@@ -789,6 +789,9 @@ func (c *Client) ApplyDrivesResult(ctx context.Context, doc DrivesDocument) (Dri
 			// different from what GetDrives just reported.
 			HomeOverride: &g.HomeOverride,
 			Enabled:      &g.Enabled,
+			// Additional: the document's grants are added beside one another;
+			// replacing would leave a subject only the last of its drives.
+			Additional: true,
 		}
 		var saved UserDriveGrant
 		err := c.do(ctx, http.MethodPost, "/api/v1/drives/grants", req, &saved)

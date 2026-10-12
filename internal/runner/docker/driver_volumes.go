@@ -162,8 +162,8 @@ const driveSeedPrefix = "wardyn-drive-seed-"
 
 func driveSeedName(runID uuid.UUID) string { return driveSeedPrefix + runID.String() }
 
-// componentDriveSeed labels the seed container (wardynLabels), so a label sweep
-// finds one that outlived its run.
+// componentDriveSeed labels the seed container (wardynLabels), so the orphan
+// sweep (sweepDriveSeeds) finds one a crash left behind.
 const componentDriveSeed = "drive-seed"
 
 // driveSeedRemoveTimeout bounds the seed's last removal, which runs even when

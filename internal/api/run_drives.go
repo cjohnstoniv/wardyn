@@ -85,9 +85,10 @@ func (s *Server) authorizeRequestDrives(r *http.Request, req createRunRequest, c
 	for _, a := range req.Drives {
 		i := slices.IndexFunc(reach, func(d reachableDrive) bool { return d.winner.Drive.ID.String() == a.DriveID })
 		if i < 0 {
-			// The audit row's sentence names no id: another person's drive and
-			// an id that names nothing leave the same row.
-			return nil, driveDenied(authz.Deny(authz.ReasonDriveNotFound, "runs.drive", driveNotFoundAuditSentence), driveNotFoundMsg(a.DriveID))
+			// The row carries no id (authz.Datum records no sentence), so
+			// another person's drive and an id that names nothing leave the
+			// same row; only the 422 body echoes the id as sent.
+			return nil, driveDenied(authz.Deny(authz.ReasonDriveNotFound, "runs.drive", ""), driveNotFoundMsg(a.DriveID))
 		}
 		d := reach[i]
 		switch {
@@ -108,12 +109,8 @@ func (s *Server) authorizeRequestDrives(r *http.Request, req createRunRequest, c
 	return out, driveKindMixRefusal(out)
 }
 
-// driveNotFoundAuditSentence is drive_not_found's audit sentence: the same for
-// every id, so the row says nothing about whether one exists.
-const driveNotFoundAuditSentence = "a drives[] id the caller's own grants do not reach"
-
 // driveDenied is a drives[] refusal that is also d's authz.denied row (target
-// runs.drive): the wire answer is msg, the row's sentence is d's own.
+// runs.drive); the wire answer is msg.
 func driveDenied(d authz.Decision, msg string) *runRefusal {
 	return &runRefusal{status: http.StatusUnprocessableEntity, body: errorBody{Error: msg, Reason: string(d.Reason)}, decision: &d}
 }
