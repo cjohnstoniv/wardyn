@@ -151,3 +151,25 @@ func TestAgentPolicy_DisablesBypassNamesTheSupervisedRungs(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentPolicy_AcceptsEditsNamesTheUnattendedRung: L2's documents, locked or
+// not and rules or not, start the session accepting file edits; no other does.
+func TestAgentPolicy_AcceptsEditsNamesTheUnattendedRung(t *testing.T) {
+	for _, c := range []struct {
+		level  types.AutonomyLevel
+		locked bool
+		want   bool
+	}{
+		{types.AutonomyL0, false, false}, {types.AutonomyL1, false, false},
+		{types.AutonomyL2, false, true}, {types.AutonomyL2, true, true}, {types.AutonomyL3, false, false}, {"", false, false},
+	} {
+		_, doc, _ := ForAgent("claude-code", c.level, false, c.locked)
+		withRules, err := WithToolRules(doc, attendedRules)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if AcceptsEdits(doc) != c.want || AcceptsEdits(withRules) != c.want {
+			t.Errorf("%s locked=%v: AcceptsEdits = %v / %v with rules, want %v", c.level, c.locked, AcceptsEdits(doc), AcceptsEdits(withRules), c.want)
+		}
+	}
+}

@@ -121,7 +121,10 @@ func TestAgentPolicyDispatch_AttendedRulesFailClosed(t *testing.T) {
 		{"a rule Claude Code would read as a pattern", &fakeRunner{}, dispatchParams{Interactive: true, Policy: pattern},
 			`tool rules could not be written into Claude Code's managed settings: tool rule "Bash(rm:*)"`},
 		{"a runner that cannot deliver the file", &fakeRunner{noManagedFiles: true}, dispatchParams{Interactive: true, Policy: types.RunPolicySpec{ToolRules: attendedGoldenRules}},
-			"managed settings enforce its tool rules in an interactive run, and runner"},
+			"managed settings enforce its tool rules in an interactive run, and this runner cannot vouch for them: runner"},
+		{"a runtime whose guest may run as root (krun)", &fakeRunner{capsResolved: map[types.ConfinementClass]string{types.CC1: "oci/krun"}},
+			dispatchParams{Interactive: true, Policy: types.RunPolicySpec{ToolRules: attendedGoldenRules}},
+			"cannot vouch for them: unverified on this runtime: libkrun may run the guest as root"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, data, st := attendedDispatch(t, c.fr, "", c.p)
