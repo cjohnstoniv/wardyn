@@ -49,6 +49,12 @@ export interface UIApp {
 // not import from components/, so a home under components/ forced a second copy.
 export const CC_ORDER: ConfinementClass[] = ["CC1", "CC2", "CC3"];
 
+// The New Run choice a request was set up from (Go: client.RunShape, request field
+// `shape`). The server checks it against experience, workload and tools
+// (run_shape_conflict) and otherwise does not use it.
+export type RunShape = "agent_task" | "environment" | "application";
+export const RUN_SHAPES: readonly RunShape[] = ["agent_task", "environment", "application"];
+
 // Where a run's sandbox lives (Go internal/types.Placement). "" is a run from
 // before 0.9 and any run whose placement nothing recorded, and it is on the wire
 // in both cases — so this is the full value set, not an optional field.

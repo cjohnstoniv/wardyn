@@ -136,8 +136,9 @@ func (s *Server) handleGetPreset(w http.ResponseWriter, r *http.Request) {
 // validatePresetRequest checks a preset write and writes its own 400. It
 // checks what can be known without a caller: the name, the description, the
 // user types named, and that the stored request is a well-formed create-run
-// body carrying no per-launch field. Everything else is the create path's, at
-// launch, under the launching caller.
+// body carrying no per-launch field and holding the run contract's shape and
+// availability checks, as a document does at the import door. Everything else
+// is the create path's, at launch, under the launching caller.
 func (s *Server) validatePresetRequest(w http.ResponseWriter, r *http.Request, name string, req presetRequest) bool {
 	if len(name) > maxPresetNameLen || !presetNameRE.MatchString(name) {
 		writeErrorReason(w, http.StatusBadRequest, reasonPresetRequestInvalid, fmt.Sprintf(
@@ -154,7 +155,7 @@ func (s *Server) validatePresetRequest(w http.ResponseWriter, r *http.Request, n
 			"request.%s is set per launch, so a preset cannot carry it", bad[0]))
 		return false
 	}
-	if presetRunModeRefusal(req.Request).write(s, w, r) {
+	if presetRunModeRefusal(req.Request).write(s, w, r) || s.runContractRefusal(req.Request).write(s, w, r) {
 		return false
 	}
 	if msg := agentRequirementError(req.Request); msg != "" {

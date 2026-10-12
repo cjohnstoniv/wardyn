@@ -206,6 +206,10 @@ type CreateRunRequest struct {
 	// be combined with any repository, workspace or drive. Nothing in the
 	// sandbox is kept when the run ends unless it is pushed or copied out.
 	NoRepositoriesOrDrives bool `json:"no_repositories_or_drives,omitempty"`
+	// Shape is the New Run choice a run was set up from: agent_task,
+	// environment or application. Optional; the server checks it against
+	// experience, workload and tools and otherwise does not use it.
+	Shape RunShape `json:"shape,omitempty"`
 	// EndsAfterSec ends the run this many seconds after it is created, 1 to
 	// 2147483647 (below 1 is a 400, run_end_after_too_small). An end past what the pool, the deployment and the person's
 	// governance allow is cut to it, and the 201 says so; it is never refused. A

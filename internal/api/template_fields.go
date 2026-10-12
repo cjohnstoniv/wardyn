@@ -215,6 +215,8 @@ var templateRequestRules = []TemplateFieldRule{
 	// attachment) is refused by runModeUnavailable at the run and in a template.
 	carriedField("experience", templateTabRunner, partRunner, templateOmitRequired, templateEmptySame,
 		"No mode is assumed: Background task or Interactive environment is chosen, and never inferred."),
+	carriedField("shape", templateTabRunner, partRunner, templateOmitOptional, templateEmptySame,
+		"No shape is recorded. The experience, workload and tools already say what the run is; a shape only names the choice it was set up from."),
 	carriedField("workload", templateTabToolsImage, partTools, templateOmitRequired, templateEmptySame,
 		"A background task needs an agent task or a command, and none is chosen. An interactive environment has no workload.").sensitive(),
 	carriedField("tools", templateTabToolsImage, partTools, templateOmitOptional, templateEmptyValue,
