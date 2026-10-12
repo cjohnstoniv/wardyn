@@ -175,6 +175,11 @@
     "sentence": "\"you are not granted workspace \" + refused.wsID + \" — ask an admin for access, or launch without a workspace\""
   },
   {
+    "reason": "capability_workspace",
+    "target": "ws.ID.String()",
+    "sentence": "\"workspace not found\""
+  },
+  {
     "reason": "delegation_scope",
     "target": "id.String()",
     "sentence": "(audit only)"

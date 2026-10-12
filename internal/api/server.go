@@ -93,6 +93,10 @@ type Config struct {
 	// is also what happens when no GitHub App is configured, so the vast majority
 	// of deployments never make the call.
 	GitHubRulesets RefRulesetVerifier
+	// GitHubBranches lists a github.com repository's branches through the
+	// organisation's GitHub App (workspace_branches.go). Nil: GitHub
+	// repositories answer the branch list with no_credential.
+	GitHubBranches BranchLister
 	// Audit records control-plane-originated audit events. The recorder handed in
 	// is the shared masking → spooling → store/fanout chain (see cmd/wardynd), so a
 	// failed durable write is masked, logged loudly, and spooled to the local
@@ -824,6 +828,9 @@ type Server struct {
 	// hit once per keystroke, and each miss is an upstream Graph call
 	// (directory_search.go). Zero value is ready to use.
 	dirLimiter principalLimiter
+	// branchLimiter rate-bounds GET /workspaces/{id}/branches per person
+	// (workspace_branches.go): each call can use a forge credential.
+	branchLimiter principalLimiter
 	// preflightLimiter rate-bounds POST /runs/preflight per person
 	// (preflight.go); nil when Config.PreflightRatePerMin is 0 (off).
 	preflightLimiter     *principalLimiter
@@ -913,6 +920,7 @@ func New(cfg Config) *Server {
 		cfg.BaseCtx = context.Background()
 	}
 	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
+		branchLimiter: principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
 		deviceRouteState: deviceRouteState{
 			enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
 			ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
