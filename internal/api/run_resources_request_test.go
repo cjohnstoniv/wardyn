@@ -129,3 +129,22 @@ func TestResourcesOperatorBoundIsTheContractMax(t *testing.T) {
 		t.Errorf("limits cpu = %+v, want the deployment's contract bound", l)
 	}
 }
+
+// A profile that sets a maximum and no size of its own (#1949): the maximum is the size, so an ask of
+// 8 CPU is kept; an untouched run still gets the deployment's own size (its default policy's 1000m,
+// below the platform's 2000m), never more.
+func TestResourcesProfileMaximumRaisesTheCapNotTheDefault(t *testing.T) {
+	t.Cleanup(func() { runner.SetDefaultLimits(0, 0) })
+	runner.SetDefaultLimits(2000, 4096)
+	cfg := baseTestConfig(newHarness(t), resourceStore{&memberBoundStore{profile: &types.GovernanceProfile{ID: uuid.New(), Name: "max-eight",
+		Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}},
+		Limits:  types.GovernanceLimits{MaxCPUMillis: 8000}}}})
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
+		Resources: &types.ResourceLimits{CPUMillis: 1000, MemoryMiB: 2048}}
+	srv := New(cfg)
+	f := resourceFold(t, srv, sizeMemberCtx(), createRunRequest{Agent: "claude-code", Resources: &client.RunResources{CPUMillis: 8000}})
+	checkCPU(t, f, 8000, 8000, false, "")
+	f = resourceFold(t, srv, sizeMemberCtx(), createRunRequest{Agent: "claude-code"})
+	checkCPU(t, f, 0, 1000, false, types.LimitSourceDeployment)
+}
