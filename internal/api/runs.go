@@ -325,7 +325,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// (github/git_pat/ssh grant ids, api_key proxy injections, SCM egress) —
 	// see persistRunGrants. A grant write failure has already answered 500.
 	gw, ok := s.persistRunGrants(ctx, w, r, runID, now, spec, run.Placement)
-	if !ok {
+	// Git-broker: map the run's declared GitHub clone set to its github grant so the
+	// proxy's /wardyn/gh/ route serves exactly these repos (github.com is dropped
+	// from egress; an un-granted github repo is denied), then write the GitHub
+	// CLI's grants over those repos (persistGitHubCLIGrants).
+	if ok = ok && s.persistGitHubCLIGrants(ctx, w, r, runID, now, req.Repo, spec.WorkspaceRepos, comps, &gw); !ok {
 		abort(createRunGrantAbortHint)
 		return
 	}
@@ -337,17 +341,6 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// SSH-lane honesty: drop the wiring for agents with no SSH clone lane
 	// (codex-cli) and advise BYOI images about the required tools.
 	warnings = append(warnings, s.applySSHLaneWarnings(ctx, req, runID, &gw)...)
-
-	// Git-broker: map the run's declared GitHub clone set to its github grant so the
-	// proxy's /wardyn/gh/ route serves exactly these repos (github.com is dropped
-	// from egress; an un-granted github repo is denied).
-	gw.augmentGitBrokerGrants(req.Repo, spec.WorkspaceRepos)
-	var cliRefusal *runRefusal
-	if gw.githubAPI, cliRefusal = s.persistGitHubCLIGrants(ctx, runID, now, comps, gw.gitGrants); cliRefusal != nil {
-		abort(createRunGrantAbortHint)
-		cliRefusal.write(s, w, r)
-		return
-	}
 
 	// credentialConfinementAdvisory (#150): a run whose model credential just
 	// graded as the captured-AWS-SSO lane (f.modelCred.Kind, stepModelProvider) but

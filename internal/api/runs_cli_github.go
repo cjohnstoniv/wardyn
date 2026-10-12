@@ -42,18 +42,28 @@ func (c runComponents) githubCLICapabilities() (caps []ghscope.Capability, attac
 	return slices.Compact(caps), attached
 }
 
-// githubCLIRepos is the run's GitHub repositories the App lane serves, as the
-// git broker keys them: the repositories the CLI may reach. The devcontainer
-// repository is only read for its build and is not one of them.
+// githubCLIRepos is the run's GitHub repositories the CLI may reach: the ones
+// create keys the git broker by, derived the same way. Each wired github_token
+// grant's own repositories, and with any such grant wired the run's declared
+// repositories on github.com (persistRunGrants, then augmentGitBrokerGrants).
+// The devcontainer repository is only read for its build and is not one.
 func githubCLIRepos(req createRunRequest, spec types.RunPolicySpec, site types.SiteConfig) []string {
-	req.DevcontainerRepo = ""
 	var out []string
-	for _, repo := range previewRepos(req, spec, site) {
-		if repo.kind != "github" || gitProviderLane(repo, spec, site) != string(types.GitLaneApp) {
+	wired := false
+	for _, g := range lanesWiredFor(site, req.Agent, repoLocatorsOf(spec.WorkspaceRepos), spec.EligibleGrants) {
+		if g.Kind != types.GrantGitHubToken {
 			continue
 		}
-		if key := gitBrokerKeyFromSlug(repo.locator); key != "" {
-			out = append(out, key)
+		wired = true
+		for _, repo := range githubScopeRepos(g.Scope) {
+			out = append(out, strings.ToLower(repo))
+		}
+	}
+	if wired {
+		for _, slug := range append(repoLocatorsOf(spec.WorkspaceRepos), req.Repo) {
+			if key := gitBrokerKeyFromSlug(slug); key != "" {
+				out = append(out, key)
+			}
 		}
 	}
 	slices.Sort(out)
@@ -69,21 +79,26 @@ func githubCLIRepoRefusal(comps runComponents, req createRunRequest, spec types.
 	return runError(http.StatusUnprocessableEntity, reasonCLINoGitHubRepo, accessSentences[reasonCLINoGitHubRepo])
 }
 
-// persistGitHubCLIGrants writes the GitHub CLI's grants once the git broker's
-// repositories are known: one github_token grant per owner (an installation
-// token covers one owner's repositories) whose scope sets api and carries the
-// capabilities, and returns the door's grant for dispatch. Nil without a row.
-func (s *Server) persistGitHubCLIGrants(ctx context.Context, runID uuid.UUID, now time.Time, comps runComponents, gitGrants map[string]uuid.UUID) (*proxy.GitHubAPIGrant, *runRefusal) {
+// persistGitHubCLIGrants completes create's git wiring: the git broker's
+// repositories (augmentGitBrokerGrants), then the GitHub CLI's grants over
+// them, one github_token grant per owner (an installation token covers one
+// owner's repositories) whose scope sets api and carries the capabilities. The
+// door's grant lands on gw for dispatch. A refusal is written here; false
+// means the caller aborts the run.
+func (s *Server) persistGitHubCLIGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, runID uuid.UUID, now time.Time,
+	legacyRepo string, wsRepos []types.WorkspaceRepo, comps runComponents, gw *grantWiring,
+) bool {
+	gw.augmentGitBrokerGrants(legacyRepo, wsRepos)
 	caps, attached := comps.githubCLICapabilities()
 	switch {
 	case !attached:
-		return nil, nil
+		return true
 	case len(caps) == 0:
-		return nil, runError(http.StatusUnprocessableEntity, reasonComponentDefinitionInvalid, "the GitHub CLI row grants no capability the GitHub CLI may hold")
-	case len(gitGrants) == 0:
-		return nil, runError(http.StatusUnprocessableEntity, reasonCLINoGitHubRepo, accessSentences[reasonCLINoGitHubRepo])
+		return !runError(http.StatusUnprocessableEntity, reasonComponentDefinitionInvalid, "the GitHub CLI row grants no capability the GitHub CLI may hold").write(s, w, r)
+	case len(gw.gitGrants) == 0:
+		return !runError(http.StatusUnprocessableEntity, reasonCLINoGitHubRepo, accessSentences[reasonCLINoGitHubRepo]).write(s, w, r)
 	}
-	door := &proxy.GitHubAPIGrant{Capabilities: caps, Repos: slices.Sorted(maps.Keys(gitGrants)), Grants: map[string]uuid.UUID{}}
+	door := &proxy.GitHubAPIGrant{Capabilities: caps, Repos: slices.Sorted(maps.Keys(gw.gitGrants)), Grants: map[string]uuid.UUID{}}
 	byOwner := map[string][]string{}
 	for _, repo := range door.Repos {
 		owner, _, _ := strings.Cut(repo, "/")
@@ -94,11 +109,12 @@ func (s *Server) persistGitHubCLIGrants(ctx context.Context, runID uuid.UUID, no
 		scope := mustJSON(map[string]any{"repos": byOwner[owner], "api": true, "capabilities": caps})
 		if _, err := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{ID: id, RunID: runID, CreatedAt: now,
 			Spec: types.GrantSpec{Kind: types.GrantGitHubToken, Scope: scope, TTLSeconds: 3600}}); err != nil {
-			return nil, runServerError("create grant", err)
+			return !runServerError("create grant", err).write(s, w, r)
 		}
 		door.Grants[owner] = id
 	}
-	return door, nil
+	gw.githubAPI = door
+	return true
 }
 
 // confineBrokerEgress is confineGitBrokerEgress plus the GitHub CLI door, the

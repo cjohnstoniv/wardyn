@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -47,6 +48,9 @@ const (
 const (
 	viaEgress    = "egress"
 	viaModelLane = "model_lane"
+	// viaInjected is a host the proxy opens and terminates to add a credential
+	// itself (the GitHub CLI's api.github.com).
+	viaInjected = "injected"
 
 	verdictAllowed       = "allowed"
 	verdictNeedsApproval = "needs_approval"
@@ -411,8 +415,12 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 	if githubCLI && len(githubCLIRepos(*b.in.req, b.in.spec, b.in.scmSite)) == 0 {
 		row.Status, row.Reason, githubCLI = accessUnavailable, reasonCLINoGitHubRepo, false
 	}
+	if githubCLI && !slices.Contains(row.Hosts, ghscope.APIHost) {
+		row.Hosts = append(row.Hosts, ghscope.APIHost)
+	}
 	b.addRow(row)
 	if githubCLI {
+		b.addHost(ghscope.APIHost, viaInjected, row.ID)
 		b.addCredential(client.AccessCredential{ID: row.ID + ":cli", Kind: credKindGitHubApp, Owner: credOwnerOrgApp, Delivery: deliveryProxy, AfterEnd: afterEndGone})
 	}
 	for _, h := range row.Hosts {
