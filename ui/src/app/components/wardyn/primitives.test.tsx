@@ -38,6 +38,11 @@ describe("RunStateBadge", () => {
     expect(screen.getByText("Completed")).toBeInTheDocument();
   });
 
+  it("renders the QUEUED state as Queued, not as the raw value", () => {
+    render(<RunStateBadge state="QUEUED" />);
+    expect(screen.getByText("Queued")).toBeInTheDocument();
+  });
+
   it("renders a known state", () => {
     render(<RunStateBadge state="RUNNING" />);
     expect(screen.getByText("Running")).toBeInTheDocument();

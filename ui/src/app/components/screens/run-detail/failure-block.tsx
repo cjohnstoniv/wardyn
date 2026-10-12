@@ -36,6 +36,7 @@ import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Mono } from "../../wardyn/code-block";
 import { MODEL_ACCESS_RUN_DOOR } from "../../wardyn/model-access-copy";
+import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
 import { useClaimModelAccessDoor, useModelAccessDoor, useShellSetupStatus } from "../../wardyn/model-access-context";
 import { useOperatorResolved } from "../../wardyn/operator-context";
 import { OpenInUserView, useConsoleMode } from "../../wardyn/console-view";
@@ -54,6 +55,8 @@ const OPEN_AUDIT = "Open audit trail";
 const PLATFORM_MESSAGE = "Platform message";
 
 type EndingCopy = {
+  /** A line above `happened`, for an ending that opens with what it is (a revoked runner). */
+  title?: string;
   /** `elapsed` is the run's own lifetime up to the ending event. */
   happened: (elapsed: string) => string;
   /** Nodes, not strings, so a wire literal in a line can be <Mono> (§3). */
@@ -163,7 +166,19 @@ function heldLines(held: HeldCredentials | undefined): string[] {
     );
 }
 
-function killedCopy(evidence: RunEnding["evidence"], held: HeldCredentials | undefined): EndingCopy {
+// A run its runner's revocation ended KILLED (RN-Q29): no operator killed it. The org revoked its credentials
+// at once and can no longer reach the computer, which stops the run's network itself, now if it was connected
+// and when it next connects if not. What the run wrote stays there, and only the computer's owner can clear
+// it, so the list says that, and where to read who revoked the runner.
+function revokedRunnerCopy(online: boolean, name: string): EndingCopy {
+  return {
+    title: online ? LOCAL_RUN.REVOKED_TITLE(name) : LOCAL_RUN.REVOKED_OFFLINE_TITLE(name),
+    happened: () => (online ? LOCAL_RUN.REVOKED_BODY(name) : LOCAL_RUN.REVOKED_OFFLINE_BODY(name)),
+    todo: [LOCAL_RUN.REVOKED_TODO_AUDIT(name), LOCAL_RUN.REVOKED_TODO_FILES(name), KILL_START_NEW],
+  };
+}
+
+function killedCopy(evidence: RunEnding["evidence"], held: HeldCredentials | undefined, localRunner?: string): EndingCopy {
   if (evidence === "partial") {
     return {
       happened: (elapsed) =>
@@ -176,6 +191,14 @@ function killedCopy(evidence: RunEnding["evidence"], held: HeldCredentials | und
       happened: () =>
         "This run is marked KILLED, but its audit trail has no kill record, so Wardyn can't confirm who killed it or whether teardown finished.",
       todo: [KILL_AGAIN, KILL_START_NEW],
+    };
+  }
+  // A clean kill of a run on a person's computer says what that computer reported, and that its files are
+  // on that computer; the org's own "stopped and removed" sentence is about a sandbox it runs itself.
+  if (localRunner) {
+    return {
+      happened: (elapsed) => LOCAL_RUN.KILL_DONE(elapsed, localRunner),
+      todo: [KILL_AUDIT_ROW, LOCAL_RUN.KILL_FILES_LOCAL(localRunner), ...heldLines(held), KILL_START_NEW],
     };
   }
   return {
@@ -266,7 +289,13 @@ export function RunFailureBlock({
     void refresh();
   }, [credential, refresh]);
   if (!ending) return null;
-  const copy = ending.kind === "killed" ? killedCopy(ending.evidence, held) : ENDING_COPY[ending.kind];
+  const copy =
+    ending.kind === "killed"
+      ? // A revocation whose cascade did not finish is a partial teardown first: its credentials may still work.
+        ending.runnerRevoked && ending.evidence === "confirmed"
+        ? revokedRunnerCopy(ending.runnerRevoked.online, runnerLabel(run))
+        : killedCopy(ending.evidence, held, run.placement === "local" ? runnerLabel(run) : undefined)
+      : ENDING_COPY[ending.kind];
   // The ending event's own timestamp bounds the run's lifetime; without one
   // (a truncated trail) fall back to the run's last update, which is what the
   // command bar's own clock freezes at.
@@ -289,6 +318,7 @@ export function RunFailureBlock({
       {(copy || run.failure_hint) && (
         <>
           <p className="label-eyebrow">{HAPPENED}</p>
+          {copy?.title && <p className="mt-1 text-sm font-medium text-foreground">{copy.title}</p>}
           {copy && (
             <p className="mt-1 text-xs leading-relaxed text-foreground">{copy.happened(elapsed)}</p>
           )}

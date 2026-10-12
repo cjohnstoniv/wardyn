@@ -15,9 +15,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The runner pool contract (0.9). A pool is an organisation-defined set of
-// execution targets; choosing one constrains where a run may go and grants
-// nothing. A server that cannot honour pools yet answers every method below,
+// The runner pool contract (0.9). A pool is a set of execution targets: an
+// organisation's Remote Provided pool (administrators keep it) or one person's
+// own Self-Hosted pool of their own claimed runners (only they keep or use it).
+// Choosing one constrains where a run may go and grants nothing. A server that cannot honour pools yet answers every method below,
 // and a CreateRunRequest.RunnerPoolID, with a refusal rather than ignoring it.
 
 // The canonical pool shapes, re-exported so SDK callers can name them.
@@ -89,6 +90,7 @@ const (
 //
 // Limits and Barriers are never filled on these doors: the list carries a
 // pool's limits and barrier_options, and preflight carries this run's.
+// MainDrive is filled on the list and on both doors.
 type RunnerPoolChoice struct {
 	ID           uuid.UUID                `json:"id"`
 	Name         string                   `json:"name"`
@@ -97,6 +99,48 @@ type RunnerPoolChoice struct {
 	Reason       RunnerPoolReason         `json:"reason,omitempty"`
 	Limits       []EffectiveRunLimits     `json:"limits,omitempty"`
 	Barriers     []types.ConfinementClass `json:"barriers,omitempty"`
+	// MainDrive is what this pool's runners do with a run's main-drive size, for the caller's own eligible
+	// targets. Absent on a pool the caller may only manage. The enforcement word reaches members only here.
+	MainDrive *MainDriveFacts `json:"main_drive,omitempty"`
+}
+
+// MainDriveEnforcement is how a pool binds a run's main-drive size. Never request or external.
+type MainDriveEnforcement string
+
+// MainDriveCoverage is how much of the sandbox the enforced size covers.
+type MainDriveCoverage string
+
+const (
+	MainDriveFilesystem MainDriveEnforcement = "filesystem"
+	MainDriveEviction   MainDriveEnforcement = "eviction"
+	MainDriveNone       MainDriveEnforcement = "none"
+	MainDriveUnknown    MainDriveEnforcement = "unknown"
+
+	// MainDriveCoverageAll is the sandbox's writable layer (Docker's /tmp is a separate in-memory tmpfs).
+	MainDriveCoverageAll MainDriveCoverage = "all"
+	// MainDriveCoverageScratch is /tmp, /home/agent/work and /home/agent/.cache only.
+	MainDriveCoverageScratch MainDriveCoverage = "scratch_paths"
+)
+
+// MainDriveFacts is what a pool's runners do with the main drive, over the caller's eligible targets.
+type MainDriveFacts struct {
+	// Enforcement is the WEAKEST word across the targets; unknown when any target's is unknown (offline,
+	// never reported, or no target at all).
+	Enforcement MainDriveEnforcement `json:"enforcement"`
+	// Basis is substrate (this deployment's executor) or runner_asserted (a self-hosted runner's own report).
+	Basis types.RunEvidenceSource `json:"basis"`
+	// Coverage is absent when enforcement is none or unknown.
+	Coverage MainDriveCoverage `json:"coverage,omitempty"`
+	// Keep is what happens to an Interactive run's sandbox at its end time.
+	Keep MainDriveKeep `json:"keep"`
+	// DriveMounts: the pool's runners can mount drives at all (false for a self-hosted pool).
+	DriveMounts bool `json:"drive_mounts"`
+}
+
+// MainDriveKeep: every target keeps a stopped sandbox and the deployment's ended-run grace is above zero.
+type MainDriveKeep struct {
+	Supported bool `json:"supported"`
+	GraceSec  int  `json:"grace_sec,omitempty"` // set only when Supported
 }
 
 // Where a pool's run types come from: its own limits, or none, which takes both.
@@ -119,8 +163,35 @@ type RunnerPoolCatalogueEntry struct {
 	// RunTypesSource is RunTypesSourcePool or RunTypesSourceNone.
 	RunTypesSource string          `json:"run_types_source,omitempty"`
 	BarrierOptions []BarrierOption `json:"barrier_options"`
-	// MyRunners is the caller's OWN runners in a self-hosted pool; never another person's.
+	// MyRunners is every one of the caller's OWN runners that is a member of a
+	// self-hosted pool, whether or not it can take a run now; never another
+	// person's. It is how a person reads which pools each of their runners is in.
 	MyRunners []PoolRunner `json:"my_runners,omitempty"`
+	// Slots is how busy the pool is; absent on a row the caller may only manage.
+	Slots *PoolSlots `json:"slots,omitempty"`
+	// Owner is a Self-Hosted pool's owner: the caller on their own pools, and the
+	// person each other pool belongs to on an administrator's oversight rows.
+	Owner string `json:"owner,omitempty"`
+}
+
+// The Verdict of PoolSlots: advisory, since the launch decides.
+const (
+	SlotsStartsNow = "starts_now"
+	SlotsWaits     = "waits"
+)
+
+// PoolSlots is a pool's slot counts, everyone's and never saying whose. On the pool list MaxWaitSec
+// is set only when ?run_type= is asked; on preflight and the policy preview it is the run's own.
+type PoolSlots struct {
+	// Used is the runs holding one of the pool's slots; Waiting the runs queued for one.
+	Used    int `json:"used"`
+	Waiting int `json:"waiting"`
+	// Max is the pool's max_concurrent_runs; absent means no pool limit.
+	Max *int `json:"max,omitempty"`
+	// Verdict is SlotsWaits when the pool has a limit and is at it or has runs waiting, else SlotsStartsNow.
+	Verdict string `json:"verdict"`
+	// MaxWaitSec is how long a run of that type waits by default: 86400 Background, 3600 Interactive.
+	MaxWaitSec int `json:"max_wait_sec,omitempty"`
 }
 
 // PoolRunner is one of the caller's own runners in a self-hosted pool.
@@ -159,8 +230,9 @@ type PoolDefault struct {
 	Reason    RunnerPoolReason    `json:"reason,omitempty"`
 }
 
-// CreateRunnerPoolRequest names a new pool. The hosting type is fixed for its
-// life. Limits are validated (RunnerPoolLimits.Validate); a pool created without
+// CreateRunnerPoolRequest names a new Remote Provided pool (admin); a server
+// refuses self_hosted here, since each person creates their own
+// (CreateMyRunnerPoolRequest). The hosting type is fixed for its life. Limits are validated (RunnerPoolLimits.Validate); a pool created without
 // them adds no bound of its own.
 type CreateRunnerPoolRequest struct {
 	Name        string            `json:"name"`
@@ -181,6 +253,19 @@ func (r CreateRunnerPoolRequest) Validate() error {
 		return r.Limits.Validate()
 	}
 	return nil
+}
+
+// CreateMyRunnerPoolRequest names a new Self-Hosted pool of the caller's own.
+// Limits are as CreateRunnerPoolRequest's; every run is still bounded by the
+// caller's governance profile.
+type CreateMyRunnerPoolRequest struct {
+	Name   string            `json:"name"`
+	Limits *RunnerPoolLimits `json:"limits,omitempty"`
+}
+
+// Validate refuses a bad name and limits a pool cannot keep.
+func (r CreateMyRunnerPoolRequest) Validate() error {
+	return CreateRunnerPoolRequest{Name: r.Name, HostingType: RunnerPoolSelfHosted, Limits: r.Limits}.Validate()
 }
 
 // RunnerPoolSwitch is the state an update may put a pool in: active or disabled.
@@ -252,27 +337,47 @@ func (c *Client) GetRunnerPool(ctx context.Context, id uuid.UUID) (RunnerPool, e
 	return out, err
 }
 
-// CreateRunnerPool adds a pool to the organisation's catalogue (admin).
+// CreateRunnerPool adds a Remote Provided pool to the organisation's catalogue (admin).
 func (c *Client) CreateRunnerPool(ctx context.Context, req CreateRunnerPoolRequest) (RunnerPool, error) {
 	var out RunnerPool
 	err := c.do(ctx, http.MethodPost, "/api/v1/runner-pools", req, &out)
 	return out, err
 }
 
-// UpdateRunnerPool renames or switches a pool off or on (admin).
+// UpdateRunnerPool renames, switches or re-limits a Remote Provided pool (admin).
 func (c *Client) UpdateRunnerPool(ctx context.Context, id uuid.UUID, req UpdateRunnerPoolRequest) (RunnerPool, error) {
 	var out RunnerPool
 	err := c.do(ctx, http.MethodPut, "/api/v1/runner-pools/"+id.String(), req, &out)
 	return out, err
 }
 
-// DeleteRunnerPool tombstones a pool (admin). Runs bound to it keep their history.
+// DeleteRunnerPool tombstones a Remote Provided pool (admin). Runs bound to it keep their history.
 func (c *Client) DeleteRunnerPool(ctx context.Context, id uuid.UUID) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/runner-pools/"+id.String(), nil, nil)
 }
 
-// AddMyRunnerToPool puts the caller's own claimed runner into a self-hosted
-// pool. Nobody adds a runner on another person's behalf.
+// CreateMyRunnerPool creates a Self-Hosted pool of the caller's own.
+func (c *Client) CreateMyRunnerPool(ctx context.Context, req CreateMyRunnerPoolRequest) (RunnerPool, error) {
+	var out RunnerPool
+	err := c.do(ctx, http.MethodPost, "/api/v1/me/runner-pools", req, &out)
+	return out, err
+}
+
+// UpdateMyRunnerPool renames, switches or re-limits one of the caller's own
+// Self-Hosted pools; anyone else's answers as an unknown id does.
+func (c *Client) UpdateMyRunnerPool(ctx context.Context, id uuid.UUID, req UpdateRunnerPoolRequest) (RunnerPool, error) {
+	var out RunnerPool
+	err := c.do(ctx, http.MethodPut, "/api/v1/me/runner-pools/"+id.String(), req, &out)
+	return out, err
+}
+
+// DeleteMyRunnerPool tombstones one of the caller's own Self-Hosted pools.
+func (c *Client) DeleteMyRunnerPool(ctx context.Context, id uuid.UUID) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/me/runner-pools/"+id.String(), nil, nil)
+}
+
+// AddMyRunnerToPool puts the caller's own claimed runner into one of their own
+// Self-Hosted pools. Nobody adds a runner on another person's behalf.
 func (c *Client) AddMyRunnerToPool(ctx context.Context, poolID, runnerID uuid.UUID) (RunnerPoolMember, error) {
 	var out RunnerPoolMember
 	err := c.do(ctx, http.MethodPut, "/api/v1/me/runner-pools/"+poolID.String()+"/runners/"+runnerID.String(), nil, &out)

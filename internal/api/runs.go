@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -301,7 +302,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Persist the eligibility records + derive the non-secret sandbox wiring
 	// (github/git_pat/ssh grant ids, api_key proxy injections, SCM egress) —
 	// see persistRunGrants. A grant write failure has already answered 500.
-	gw, grantWarnings, ok := s.wireRunGrants(ctx, w, r, run, now, spec, req, comps)
+	gw, grantWarnings, ok := s.wireRunGrants(ctx, w, r, run, now, spec, req, comps, f.localDelivery)
 	if !ok {
 		abort(createRunGrantAbortHint)
 		return
@@ -386,9 +387,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // Create and the pool queue's start wire a run the same way. A grant write failure has already
 // answered 500 (ok is false).
 func (s *Server) wireRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, run types.AgentRun, now time.Time, spec types.RunPolicySpec,
-	req createRunRequest, comps runComponents,
+	req createRunRequest, comps runComponents, delivery placement.DeliveryPolicy,
 ) (grantWiring, []string, bool) {
-	gw, ok := s.persistRunGrants(ctx, w, r, run.ID, now, spec, run.Placement)
+	gw, ok := s.persistRunGrants(ctx, w, r, run.ID, now, spec, run.Placement, delivery)
 	// The git broker's repositories, then the GitHub CLI's grants over them.
 	if !ok || !s.persistGitHubCLIGrants(ctx, w, r, run.ID, now, req.Repo, spec.WorkspaceRepos, comps, &gw) {
 		return grantWiring{}, nil, false

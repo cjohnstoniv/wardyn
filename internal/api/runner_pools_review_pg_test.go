@@ -241,9 +241,9 @@ func TestPG_RunnerPoolPersonalDefaultReadIsFilteredByTheCatalogue(t *testing.T) 
 func TestPG_RunnerPoolAuditRowsCarryTheirOwnRevisionAndWhatADeleteDropped(t *testing.T) {
 	e := newPoolEnv(t, false)
 	self := e.createPool("Laptops", types.RunnerPoolSelfHosted)
-	a, b := e.claimedRunner(e.personP), e.claimedRunner(e.otherP)
+	a, b := e.claimedRunner(e.personP), e.claimedRunner(e.personP)
 	e.call(e.person, http.MethodPut, addRunnerPath(self.ID, a), "")
-	e.call(e.other, http.MethodPut, addRunnerPath(self.ID, b), "")
+	e.call(e.person, http.MethodPut, addRunnerPath(self.ID, b), "")
 	e.call(e.person, http.MethodDelete, addRunnerPath(self.ID, a), "")
 	revOf := func(action string) []float64 {
 		var out []float64
@@ -261,8 +261,8 @@ func TestPG_RunnerPoolAuditRowsCarryTheirOwnRevisionAndWhatADeleteDropped(t *tes
 
 	remote := e.createPool("Provided", types.RunnerPoolRemoteProvided)
 	e.admin(http.MethodPut, poolPath(remote.ID)+"/executors/fake", "")
-	e.admin(http.MethodPut, "/api/v1/runner-pool-defaults", fmt.Sprintf(`{"remote_provided":%q,"self_hosted":%q}`, remote.ID, self.ID))
-	if w := e.admin(http.MethodDelete, poolPath(self.ID), ""); w.Code != http.StatusNoContent {
+	e.admin(http.MethodPut, "/api/v1/runner-pool-defaults", fmt.Sprintf(`{"remote_provided":%q}`, remote.ID))
+	if w := e.call(e.person, http.MethodDelete, "/api/v1/me/runner-pools/"+self.ID.String(), ""); w.Code != http.StatusNoContent {
 		t.Fatalf("delete self-hosted = %d %s", w.Code, w.Body)
 	}
 	if w := e.admin(http.MethodDelete, poolPath(remote.ID), ""); w.Code != http.StatusNoContent {
@@ -272,11 +272,14 @@ func TestPG_RunnerPoolAuditRowsCarryTheirOwnRevisionAndWhatADeleteDropped(t *tes
 	if len(del) != 2 {
 		t.Fatalf("%d delete rows", len(del))
 	}
-	if d := auditData(t, del[0]); d["runner_count"] != float64(1) || !jsonListIs(d["executor_ids"]) {
-		t.Errorf("self-hosted delete row = %v, want runner_count 1 and no executors", d)
+	if d := auditData(t, del[0]); d["runner_count"] != float64(1) || !jsonListIs(d["executor_ids"]) || d["owner"] != e.personP {
+		t.Errorf("self-hosted delete row = %v, want runner_count 1, no executors and the owner", d)
 	}
-	if d := auditData(t, del[1]); d["runner_count"] != float64(0) || !jsonListIs(d["executor_ids"], "fake") {
-		t.Errorf("remote delete row = %v, want executor_ids [fake]", d)
+	if d := auditData(t, del[1]); d["runner_count"] != float64(0) || !jsonListIs(d["executor_ids"], "fake") || d["owner"] != nil {
+		t.Errorf("remote delete row = %v, want executor_ids [fake] and no owner", d)
+	}
+	if d := auditData(t, e.audits(auditPoolCreate)[0]); d["owner"] != e.personP {
+		t.Errorf("self-hosted create row = %v, want the owner", d)
 	}
 	var rp, sh *uuid.UUID
 	if err := e.pool.QueryRow(context.Background(), `SELECT remote_provided, self_hosted FROM runner_pool_org_defaults`).Scan(&rp, &sh); err != nil {
@@ -286,10 +289,10 @@ func TestPG_RunnerPoolAuditRowsCarryTheirOwnRevisionAndWhatADeleteDropped(t *tes
 		t.Errorf("organisation defaults still name deleted pools: %v %v", rp, sh)
 	}
 	rows := e.audits(auditPoolDefaultSet)
-	if len(rows) != 3 { // the admin write, then one clear per deleted pool
-		t.Fatalf("%d default audit rows, want 3", len(rows))
+	if len(rows) != 2 { // the admin write, then the clear of the deleted remote pool
+		t.Fatalf("%d default audit rows, want 2", len(rows))
 	}
-	if d := auditData(t, rows[2]); d["cause"] != "pool_deleted" || d["after"] == nil {
+	if d := auditData(t, rows[1]); d["cause"] != "pool_deleted" || d["after"] == nil {
 		t.Errorf("clear audit data = %v", d)
 	}
 }

@@ -8,8 +8,7 @@ package api
 // leaves no run row, no run.create audit row and no create on any runner, at create, Review and the preview.
 // The reasons and sentences are pinned where they are decided and are not re-asserted here:
 // TestPG_OwnOfflinePinAnswersRunnerOffline (runner_offline), TestDenyPlacements_RefusedAtEveryDoor
-// (placement_denied), TestPG_HeterogeneousRemotePoolNeverWidens (placement_capability on a remote pool). A local pause/idle demand
-// (design 3.4) and a local barrier the runner lacks are answered after the unsupported-local refusal and are carried.
+// (placement_denied), TestPG_HeterogeneousRemotePoolNeverWidens (placement_capability on a remote pool).
 // Guarded by WARDYN_TEST_PG: skipped cleanly when unset, must PASS when set.
 
 import (
@@ -89,14 +88,47 @@ func TestPG_PlacementRouting_RefusedBeforeCreateNeverSubstituted(t *testing.T) {
 		{
 			// The size no longer refuses (it is reduced to the runner's capacity); until local runs are
 			// enabled the local gate answers, and the run is never moved to the remote pool.
-			name: "3 a size the asked runner cannot hold is not a placement refusal, nor a run on the remote pool that can",
+			name: "3 a size the asked runner cannot hold is reduced on that runner, not refused nor run on the remote pool that can",
 			setup: func(e *placementEnv, _ string) string {
 				laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
 				small := e.laptop(e.personP, 1000, 1024, types.CC1, types.CC2, types.CC3)
 				e.addToPool(e.person, laptops.ID, small)
 				return runBody(`"placement":"local","resources":{"cpu_millis":4000,"memory_mib":8192},"runner_id":"` + small.String() + `","runner_pool_id":"` + laptops.ID.String() + `"`)
 			},
-			status: http.StatusUnprocessableEntity, reason: string(placement.ReasonPlacementUnavailable), names: "cannot place a run on a runner yet",
+			status: http.StatusCreated, wantPlacement: types.PlacementLocal,
+		},
+		{
+			name: "4 a profile that pauses idle runs is placement_capability on a runner that cannot pause, not a remote run",
+			setup: func(e *placementEnv, _ string) string {
+				e.assignProfile(walled, types.GovernanceLimits{RunLimits: types.RunLimits{PauseIdleAfterSec: 300}})
+				laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+				awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
+				e.stream(awake, types.CC1, types.CC2, types.CC3)
+				e.addToPool(e.person, laptops.ID, awake)
+				// The pool, not the request, decides local: the demand is held against the runner it would place on.
+				return runBody(`"runner_pool_id":"` + laptops.ID.String() + `"`)
+			},
+			status: http.StatusUnprocessableEntity, reason: string(placement.ReasonPlacementCapability), names: "pause_idle_after_sec",
+		},
+		{
+			name: "5 a barrier the runner lacks is placement_capability, not a run on the remote pool that has it",
+			setup: func(e *placementEnv, _ string) string {
+				laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+				weak := e.laptop(e.personP, 4000, 8192, types.CC1)
+				e.addToPool(e.person, laptops.ID, weak)
+				return runBody(`"placement":"local","confinement_class":"CC3","runner_id":"` + weak.String() + `","runner_pool_id":"` + laptops.ID.String() + `"`)
+			},
+			status: http.StatusUnprocessableEntity, reason: string(placement.ReasonPlacementCapability), names: "Laptops",
+		},
+		{
+			name: "6 a local run on the person's own online runner is created there",
+			setup: func(e *placementEnv, _ string) string {
+				laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+				awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
+				e.addToPool(e.person, laptops.ID, awake)
+				return runBody(`"placement":"local","runner_id":"` + awake.String() + `","runner_pool_id":"` + laptops.ID.String() + `"`)
+			},
+			status: http.StatusCreated, wantPlacement: types.PlacementLocal,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -114,7 +146,7 @@ func TestPG_PlacementRouting_RefusedBeforeCreateNeverSubstituted(t *testing.T) {
 				return rows
 			}
 			runs := func() int { return len(stored()) }
-			isRunCreate := func(ev types.AuditEvent) bool { return ev.Action == "run.create" }
+			isRunCreate := func(ev types.AuditEvent) bool { return ev.Action == "run.create" && ev.Outcome == "success" }
 			isDenied := func(ev types.AuditEvent) bool { return ev.Action == authz.AuditAction && ev.Target == "runs.placement" }
 			if runs() != 0 || e.runner.creates() != 0 {
 				t.Fatalf("fixture is not empty: %d runs, %d creates", runs(), e.runner.creates())

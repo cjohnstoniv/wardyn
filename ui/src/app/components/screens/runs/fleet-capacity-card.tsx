@@ -137,6 +137,7 @@ export function FleetCapacityCard() {
         [runStateLabel("WAITING_FOR_CONFIRMATION"), data.states.WAITING_FOR_CONFIRMATION ?? 0],
         [FC.STATES_PAUSED, data.paused],
         [runStateLabel("PENDING"), data.states.PENDING ?? 0],
+        [runStateLabel("QUEUED"), data.states.QUEUED ?? 0],
         [FC.STATES_KEPT, data.kept],
       ]
         .map(([label, n]) => `${label} ${n}`)
