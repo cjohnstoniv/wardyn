@@ -4,6 +4,7 @@
 package oidc
 
 import (
+	"log/slog"
 	"net/http"
 	"slices"
 )
@@ -23,6 +24,9 @@ const (
 	SubjectTokenAudience = "subject_token_audience"
 	// SubjectTokenNoIssuedAt: token carries no iat, so the session cutoff (SessionRevocations) has nothing to compare against.
 	SubjectTokenNoIssuedAt = "subject_token_no_iat"
+	// SubjectTokenUnbound: an Entra token issued to the portal names an identity (tenant and object
+	// id) that no sign-in here has bound to a principal and no person was set up by.
+	SubjectTokenUnbound = "subject_token_unbound"
 )
 
 // ClientID is this deployment's own client id at the identity provider — what
@@ -38,6 +42,11 @@ func (a *Authenticator) ClientID() string { return a.cfg.ClientID }
 // or issued to the portal itself (aud is exactly portalClientID; azp, if present, agrees). A
 // token for any other client is refused, and a portal registered under Wardyn's own client id
 // matches nothing — else every Wardyn ID token would double as a subject token for it.
+//
+// On Entra ID, `sub` is pairwise per app registration, so a token issued to the portal names the
+// person under the portal's sub, not Wardyn's. Its principal is the one the person's own sign-in
+// bound to the token's (issuer, tid, oid), else a person set up by that object id; with neither,
+// the exchange is refused (boundPortalSubject).
 //
 // The returned Session carries the token's iat as IssuedAt (compared against the session cutoff)
 // and exp as Expiry. denied is non-empty on any refusal, with a zero Session. The caller records
@@ -70,6 +79,11 @@ func (a *Authenticator) VerifySubjectToken(r *http.Request, raw, portalClientID 
 	if denied != "" {
 		return Session{}, denied
 	}
+	if a.entra && !slices.Contains(tok.Audience, a.cfg.ClientID) {
+		if sess, denied = a.boundPortalSubject(r, sess, cc); denied != "" {
+			return Session{}, denied
+		}
+	}
 	sess.IssuedAt, sess.Expiry = tok.IssuedAt, tok.Expiry
 	return sess, ""
 }
@@ -83,4 +97,35 @@ func subjectAudienceOK(aud []string, azp, wardyn, portal string) bool {
 		return azp == portal
 	}
 	return len(aud) == 1 && aud[0] == portal && (azp == "" || azp == portal)
+}
+
+// boundPortalSubject resolves an admitted Entra token issued to the portal to the principal bound to
+// its (issuer, tid, oid). A binding to another principal than admission resolved replaces it and is
+// checked by the identity gate as a sign-in under it would be. Without a binding, only a person set
+// up by that object id (sess.attached) is kept; a token with no tenant or well-formed object id names
+// no identity and is refused.
+func (a *Authenticator) boundPortalSubject(r *http.Request, sess Session, cc callbackClaims) (Session, string) {
+	ref := a.identityRef(sess.Sub, cc)
+	if ref.ObjectID == "" {
+		return Session{}, SubjectTokenUnbound
+	}
+	var bound string
+	if a.cfg.Identities != nil {
+		var err error
+		if bound, err = a.cfg.Identities.Bound(r.Context(), ref); err != nil {
+			slog.Error("oidc: identity binding unavailable, refusing the token exchange (fail closed)", "error", err)
+			return Session{}, authErrorRoleCheckUnavailable
+		}
+	}
+	switch {
+	case bound == "" && sess.attached == nil:
+		slog.Warn("oidc: token exchange refused — no sign-in has bound the identity the portal's token names", "issuer", ref.Issuer)
+		return Session{}, SubjectTokenUnbound
+	case bound != "" && bound != sess.Sub:
+		sess.Sub, sess.attached = bound, nil
+		if denied := a.admitIdentity(r, a.identityRef(bound, cc), nil); denied != "" {
+			return Session{}, denied
+		}
+	}
+	return sess, ""
 }

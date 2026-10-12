@@ -50,6 +50,10 @@ type IdentityGate interface {
 	// either precedes it (ErrIdentityDeactivated) or leaves the cookie's epoch stale. An error
 	// fails the sign-in closed.
 	Issue(ctx context.Context, f LoginFacts) (epoch int64, err error)
+	// Bound reports, without writing, the principal the identity row keyed by ref's issuer, tenant
+	// and object id is bound to: "" when there is no such row or it is bound to no one yet. An error
+	// fails the caller closed.
+	Bound(ctx context.Context, ref IdentityRef) (string, error)
 }
 
 // identityRef is who a verified token names once admission has resolved its principal. Only an Entra

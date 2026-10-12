@@ -35,6 +35,10 @@ func (g *gapCovGateStore) IssueLoginIdentity(_ context.Context, in store.LoginId
 	return g.epoch, g.issueErr
 }
 
+func (g *gapCovGateStore) GetIdentityByObject(context.Context, string, string, string) (store.PrincipalIdentity, error) {
+	return store.PrincipalIdentity{}, store.ErrNotFound
+}
+
 func TestGapCovIdentityGateRefusedAsksTheStoreAboutTheWholeIdentity(t *testing.T) {
 	boom := errors.New("gapcov: store down")
 	for _, tc := range []struct {

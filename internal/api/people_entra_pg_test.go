@@ -495,3 +495,67 @@ func TestPeopleEntra_LateCookieAfterSuspendIsRefused(t *testing.T) {
 		t.Fatalf("late cookie GET /me/tokens = %d %s, want 401", w.Code, w.Body.String())
 	}
 }
+
+// entraPortalExchange registers a portal for group "portal-users" and returns an exchange that
+// presents a token Entra issued to that portal (aud is the portal, sub pairwise to its registration)
+// for the person entraObject names, carrying group. It answers the status and the exchange's last
+// delegation.exchange row.
+func (e entraPeoplePG) entraPortalExchange(t *testing.T) func(group string) (int, types.AuditEvent) {
+	t.Helper()
+	w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/admin/delegates", e.super,
+		`{"name":"front end","idp_client_id":"`+delegPortalClient+`","group":"portal-users"}`)
+	var d types.Delegate
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &d) != nil {
+		t.Fatalf("register portal: %d %s", w.Code, w.Body.String())
+	}
+	return func(group string) (int, types.AuditEvent) {
+		subject := e.sign(map[string]any{
+			"iss": e.issuer, "sub": "portal-pairwise", "aud": delegPortalClient,
+			"email": personEmail, "groups": []string{group}, "tid": entraTenant, "oid": entraObject,
+			"iat": time.Now().Unix(), "exp": time.Now().Add(5 * time.Minute).Unix(),
+		})
+		form := url.Values{"grant_type": {grantTypeTokenExchange}, "subject_token": {subject}, "subject_token_type": {tokenTypeIDToken}}
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/token", strings.NewReader(form.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.SetBasicAuth(d.ID.String(), d.Credential)
+		w := httptest.NewRecorder()
+		panicFails(t, e.h.srv.Handler()).ServeHTTP(w, r)
+		rows := e.auditRows("delegation.exchange")
+		if len(rows) == 0 {
+			t.Fatalf("exchange %d wrote no delegation.exchange row", w.Code)
+		}
+		return w.Code, rows[len(rows)-1]
+	}
+}
+
+// TestPeopleEntra_PortalTokenOutsideGroupIsRefused: a token Entra issued to the portal, for a person
+// who has signed in, is still refused outside the portal's group and mints nothing.
+func TestPeopleEntra_PortalTokenOutsideGroupIsRefused(t *testing.T) {
+	e := newEntraPeoplePG(t, func(p peoplePG, c *oidc.Config) { c.Identities = NewIdentityGate(p.st) })
+	e.signIn("wardyn-pairwise", entraTenant, entraObject)
+	if _, c := e.callback(t); c == nil {
+		t.Fatal("sign-in refused")
+	}
+	exchange := e.entraPortalExchange(t)
+	if code, ev := exchange("eng"); code != http.StatusForbidden || ev.Outcome != "denied" {
+		t.Fatalf("exchange outside the portal's group = %d %+v, want 403 denied", code, ev)
+	}
+}
+
+// TestPeopleEntra_PortalTokenActsAsTheSignedInPerson: a token Entra issued to the portal carries a sub
+// pairwise to the portal's registration. The exchange acts for the principal the person's own sign-in
+// bound to the token's tenant and object id, and is refused while no sign-in has bound it.
+func TestPeopleEntra_PortalTokenActsAsTheSignedInPerson(t *testing.T) {
+	e := newEntraPeoplePG(t, func(p peoplePG, c *oidc.Config) { c.Identities = NewIdentityGate(p.st) })
+	exchange := e.entraPortalExchange(t)
+	if code, ev := exchange("portal-users"); code != http.StatusBadRequest || !strings.Contains(string(ev.Data), `"subject_token_unbound"`) {
+		t.Fatalf("exchange before any sign-in = %d %s, want 400 subject_token_unbound", code, ev.Data)
+	}
+	e.signIn("wardyn-pairwise", entraTenant, entraObject)
+	if _, c := e.callback(t); c == nil {
+		t.Fatal("sign-in refused")
+	}
+	if code, ev := exchange("portal-users"); code != http.StatusOK || ev.Target != "wardyn-pairwise" {
+		t.Fatalf("exchange after sign-in = %d, target %q; want 200 for wardyn-pairwise", code, ev.Target)
+	}
+}

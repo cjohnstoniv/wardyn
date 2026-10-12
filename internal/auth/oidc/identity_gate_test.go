@@ -26,6 +26,15 @@ type fakeGate struct {
 	epoch     int64
 	refs      []writoidc.IdentityRef
 	issued    []writoidc.LoginFacts
+	// bound maps an object id to the principal its identity row is bound to; boundErr fails that read.
+	bound     map[string]string
+	boundErr  error
+	boundRefs []writoidc.IdentityRef
+}
+
+func (g *fakeGate) Bound(_ context.Context, ref writoidc.IdentityRef) (string, error) {
+	g.boundRefs = append(g.boundRefs, ref)
+	return g.bound[ref.ObjectID], g.boundErr
 }
 
 func (g *fakeGate) Refused(_ context.Context, ref writoidc.IdentityRef) (bool, error) {
