@@ -17,6 +17,7 @@ import { intentToWire } from "../../draft/intent-to-wire";
 import { useDraftIdentity, useIntentChecks } from "../../draft/use-intent-checks";
 import { useLocalIssues, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import { stepIssues } from "../../lenses/local-issues";
+import { needsSetup } from "../../lenses/tools-lens";
 import { flowSteps, StepShell } from "../step-shell";
 import { AlreadyIncluded } from "./already-included";
 import { SetupNeeded } from "./setup-needed";
@@ -50,15 +51,16 @@ export function ToolsStep({ go }: NewRunScreenProps) {
   const { access, answered, recheck } = useAccess();
   const { status } = useShellSetupStatus();
   const names = React.useMemo(() => new Map((status?.harnesses ?? []).map((h) => [h.id, h.display])), [status?.harnesses]);
-  const [done, setDone] = React.useState<ReadonlySet<string>>(new Set());
-  const setup = access?.setup;
-  // A new answer settles what was finished: an item still missing comes back as itself.
-  React.useEffect(() => setDone(new Set()), [setup]);
-
-  const items = setup ?? [];
-  const left = items.filter((i) => !done.has(i.id)).length;
+  // Items finished here wait for the server's next answer: only that answer settles them.
+  const [finished, setFinished] = React.useState<{ ids: ReadonlySet<string>; base: AccessFacts | undefined }>();
+  const waiting = !!finished && (!answered || access === finished.base);
+  const setup = access?.setup ?? [];
+  const missing = setup.filter(needsSetup);
+  const settled = !finished || waiting ? new Set<string>() : new Set(setup.filter((i) => i.status === "satisfied" && finished.ids.has(i.id)).map((i) => i.id));
+  const items = [...missing, ...setup.filter((i) => settled.has(i.id))];
+  const pending = waiting ? finished.ids : new Set<string>();
   const finish = (id: string) => {
-    setDone((old) => new Set(old).add(id));
+    setFinished((old) => ({ ids: new Set(old?.ids).add(id), base: access }));
     recheck();
   };
 
@@ -72,14 +74,14 @@ export function ToolsStep({ go }: NewRunScreenProps) {
       primary={{ label: NR_TOOLS.REVIEW_RUN, onActivate: () => go({ screen: "review", view: "pretty" }) }}
       issues={stepIssues("tools", draft.intent)}
     >
-      <AlreadyIncluded access={access} intent={draft.intent} names={names} />
+      <AlreadyIncluded access={access} answered={answered} intent={draft.intent} names={names} />
       {/* Harness setup and Add tools and access mount here. */}
       <div data-tools-slot="harness-setup" />
       <div data-tools-slot="add-tools" />
       <Totals access={access} answered={answered} names={names} />
-      <SetupNeeded items={items} done={done} intent={draft.intent} names={names} onDone={finish} />
+      <SetupNeeded items={items} pending={pending} done={settled} intent={draft.intent} names={names} onDone={finish} />
       <p aria-live="polite" className="sticky bottom-0 bg-background py-2 text-sm text-muted-foreground">
-        {access && (left === 0 ? NR_TOOLS.STICKY_DONE : left === 1 ? NR_TOOLS.STICKY_ONE : NR_TOOLS.STICKY_MANY(left))}
+        {access && !waiting && (missing.length === 0 ? NR_TOOLS.STICKY_DONE : missing.length === 1 ? NR_TOOLS.STICKY_ONE : NR_TOOLS.STICKY_MANY(missing.length))}
       </p>
     </StepShell>
   );

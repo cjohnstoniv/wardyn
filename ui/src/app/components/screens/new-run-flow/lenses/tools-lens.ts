@@ -7,7 +7,7 @@
 // components and overrides. It never writes inline_policy: a host the person
 // adds is overrides.hosts.add_allowed, which works beside policy_id.
 
-import type { AccessFacts, AccessHost, AccessRow } from "../../../../lib/types/new-run-access";
+import type { AccessHost, AccessRow } from "../../../../lib/types/new-run-access";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { RunIntent } from "../draft/run-intent";
 import { harnessIds, withKeys } from "./lens-keys";
@@ -68,20 +68,10 @@ export function setupDoor(item: SetupItem): SetupDoor | undefined {
 export const signInProvider = (intent: RunIntent, item: SetupItem): string | undefined =>
   (intent.tools ?? []).find((t) => t.id === item.required_by)?.model_provider;
 
-/** A setup item left at Review: a blocker that links back to this step. */
-export interface ToolsBlocker {
-  id: string;
-  item: SetupItem;
-  home: "tools";
-  /** DOM id of the item's row on this step. */
-  focus: string;
-}
-
 export const setupRowId = (item: SetupItem): string => `nr-setup-${item.id}`;
 
-/** Every setup item the server still reports missing becomes a Review blocker. */
-export const setupBlockers = (access: Pick<AccessFacts, "setup"> | null | undefined): ToolsBlocker[] =>
-  (access?.setup ?? []).filter((i) => i.status === "missing").map((item) => ({ id: item.id, item, home: "tools", focus: setupRowId(item) }));
+/** Only an item the server reports missing needs setup, here and at Review; satisfied and unverified ones do not. */
+export const needsSetup = (item: SetupItem): boolean => item.status === "missing";
 
 /** harness id -> display name, from the shell's setup status. */
 export type HarnessNames = ReadonlyMap<string, string>;

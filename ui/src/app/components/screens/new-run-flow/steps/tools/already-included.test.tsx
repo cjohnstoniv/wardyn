@@ -19,7 +19,7 @@ const open = async (name: string) => userEvent.click(within(rowOf(name)).getByRo
 
 describe("Already included", () => {
   it("lists what the earlier steps bring, each with its chip and sub-line, and offers nothing to add or remove", () => {
-    render(<AlreadyIncluded names={HARNESS_NAMES} access={SCENARIO_ACCESS.member} intent={{ tools: [{ id: "claude-code", kind: "harness" }] }} />);
+    render(<AlreadyIncluded names={HARNESS_NAMES} answered access={SCENARIO_ACCESS.member} intent={{ tools: [{ id: "claude-code", kind: "harness" }] }} />);
     expect(screen.getByRole("heading", { level: 2, name: NR_TOOLS.INCLUDED_TITLE })).toBeInTheDocument();
     expect(screen.getByText(NR_TOOLS.INCLUDED_BODY)).toBeInTheDocument();
     const harness = within(rowOf("Claude Code"));
@@ -34,19 +34,19 @@ describe("Already included", () => {
 
   it("starts the startup harness with the run and leaves the others available", () => {
     const intent: RunIntent = { ...TWO_HARNESSES, startup: { kind: "harness", tool: "codex-cli" } };
-    render(<AlreadyIncluded names={HARNESS_NAMES} access={SCENARIO_ACCESS.interactive2} intent={intent} />);
+    render(<AlreadyIncluded names={HARNESS_NAMES} answered access={SCENARIO_ACCESS.interactive2} intent={intent} />);
     expect(within(rowOf("Codex CLI")).getByText(NR_TOOLS.SUB_STARTS)).toBeInTheDocument();
     expect(within(rowOf("Claude Code")).getByText(NR_TOOLS.SUB_AVAILABLE)).toBeInTheDocument();
   });
 
   it("marks a row that still needs setup, and a ready one", () => {
-    render(<AlreadyIncluded names={HARNESS_NAMES} access={SCENARIO_ACCESS.interactive2} intent={TWO_HARNESSES} />);
+    render(<AlreadyIncluded names={HARNESS_NAMES} answered access={SCENARIO_ACCESS.interactive2} intent={TWO_HARNESSES} />);
     expect(within(rowOf("Codex CLI")).getByText(NR_TOOLS.STATUS_NEEDS_SETUP)).toBeInTheDocument();
     expect(within(rowOf("Claude Code")).getByText(NR_TOOLS.STATUS_READY)).toBeInTheDocument();
   });
 
   it("opens a row to its hosts and credentials, closed until asked", async () => {
-    render(<AlreadyIncluded names={HARNESS_NAMES} access={SCENARIO_ACCESS.member} intent={{}} />);
+    render(<AlreadyIncluded names={HARNESS_NAMES} answered access={SCENARIO_ACCESS.member} intent={{}} />);
     expect(screen.queryByText(NR_TOOLS.DETAIL_NETWORK)).not.toBeInTheDocument();
     const toggle = within(rowOf("Claude Code")).getByRole("button", { name: NR_TOOLS.DETAILS_FOR("Claude Code") });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -60,7 +60,7 @@ describe("Already included", () => {
   });
 
   it("says a drive needs no network or credentials, and a command's registry access comes from the policy", async () => {
-    render(<AlreadyIncluded names={HARNESS_NAMES} access={SCENARIO_ACCESS.app} intent={{}} />);
+    render(<AlreadyIncluded names={HARNESS_NAMES} answered access={SCENARIO_ACCESS.app} intent={{}} />);
     await open("Your drive");
     expect(within(rowOf("Your drive")).getByText(NR_TOOLS.NOTE_NONE_NEEDED)).toBeInTheDocument();
     await open("npm test");
@@ -69,15 +69,23 @@ describe("Already included", () => {
   });
 
   it("opens a Bedrock SSO harness (switch off) to both of its credentials", async () => {
-    render(<AlreadyIncluded names={HARNESS_NAMES} access={BEDROCK_SSO_SWITCH_OFF} intent={{}} />);
+    render(<AlreadyIncluded names={HARNESS_NAMES} answered access={BEDROCK_SSO_SWITCH_OFF} intent={{}} />);
     await open("Claude Code");
     const detail = within(rowOf("Claude Code"));
     expect(detail.getByText(NR_TOOLS.DELIVERY_SHORT_LIVED)).toBeInTheDocument();
     expect(detail.getByText(NR_TOOLS.DELIVERY_FILE)).toBeInTheDocument();
   });
 
+  it("holds Ready and Needs setup as Requested while the answer is stale, and leaves aria-controls off a closed row", () => {
+    render(<AlreadyIncluded names={HARNESS_NAMES} answered={false} access={SCENARIO_ACCESS.interactive2} intent={TWO_HARNESSES} />);
+    expect(within(rowOf("Claude Code")).getByText(NR_TOOLS.NET_REQUESTED)).toBeInTheDocument();
+    expect(screen.queryByText(NR_TOOLS.STATUS_READY)).not.toBeInTheDocument();
+    expect(screen.queryByText(NR_TOOLS.STATUS_NEEDS_SETUP)).not.toBeInTheDocument();
+    expect(within(rowOf("Claude Code")).getByRole("button", { name: NR_TOOLS.DETAILS_FOR("Claude Code") })).not.toHaveAttribute("aria-controls");
+  });
+
   it("shows nothing but its heading before the server has answered", () => {
-    render(<AlreadyIncluded names={HARNESS_NAMES} access={undefined} intent={{}} />);
+    render(<AlreadyIncluded names={HARNESS_NAMES} answered access={undefined} intent={{}} />);
     expect(screen.getByRole("heading", { name: NR_TOOLS.INCLUDED_TITLE })).toBeInTheDocument();
     expect(screen.queryByRole("list")).not.toBeInTheDocument();
   });

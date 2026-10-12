@@ -12,7 +12,7 @@ import type { SetupItem } from "../../../../../lib/types/preflight";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import type { RunIntent } from "../../draft/run-intent";
-import { providerControlId, setupBlockers, setupDoor, setupRowId, signInProvider } from "../../lenses/tools-lens";
+import { needsSetup, providerControlId, setupDoor, setupRowId, signInProvider } from "../../lenses/tools-lens";
 import { SetupNeeded, type SetupNeededProps } from "./setup-needed";
 
 const openDoor = vi.fn();
@@ -28,7 +28,7 @@ const ADDED_SECRET: SetupItem = { ...SETUP_ITEMS.addSecret, id: "secret:sentry-t
 
 const onDone = vi.fn();
 function show(items: SetupItem[], over: Partial<SetupNeededProps> = {}) {
-  render(<SetupNeeded items={items} done={new Set()} intent={BEDROCK_RUN} names={HARNESS_NAMES} onDone={onDone} {...over} />);
+  render(<SetupNeeded items={items} pending={new Set()} done={new Set()} intent={BEDROCK_RUN} names={HARNESS_NAMES} onDone={onDone} {...over} />);
 }
 
 let setSecret: Mock<typeof secrets.setSecret>;
@@ -54,7 +54,7 @@ describe("Setup still needed", () => {
     render(<select id={providerControlId("codex-cli")} />);
     show(SCENARIO_ACCESS.interactive2.setup);
     expect(screen.getByText(NR_TOOLS.SETUP_CHOOSE_PROVIDER("Codex CLI"))).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_CHOOSE }));
+    await userEvent.click(await screen.findByRole("button", { name: NR_TOOLS.SETUP_CHOOSE }));
     expect(document.getElementById(providerControlId("codex-cli"))).toHaveFocus();
   });
 
@@ -69,11 +69,28 @@ describe("Setup still needed", () => {
     expect(onDone).toHaveBeenCalledWith(SETUP_ITEMS.signIn.id);
   });
 
-  it("shows a finished item as Done with no door, and leaves the rest", () => {
+  it("shows an item the server now reports satisfied as Done with no door, and leaves the rest", () => {
     show([SETUP_ITEMS.signIn, COMPONENT_SECRET], { done: new Set([SETUP_ITEMS.signIn.id]) });
     expect(screen.getAllByText(NR_TOOLS.SETUP_DONE)).toHaveLength(1);
     expect(screen.queryByRole("button", { name: NR_TOOLS.SETUP_SIGN_IN })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: NR_TOOLS.SETUP_ADD })).toBeInTheDocument();
+  });
+
+  it("shows an item finished here but not yet answered with neither Done nor a door", () => {
+    show([SETUP_ITEMS.signIn], { pending: new Set([SETUP_ITEMS.signIn.id]) });
+    expect(screen.queryByText(NR_TOOLS.SETUP_DONE)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("offers Choose only once the harness's provider control exists", async () => {
+    show(SCENARIO_ACCESS.interactive2.setup);
+    expect(screen.queryByRole("button", { name: NR_TOOLS.SETUP_CHOOSE })).not.toBeInTheDocument();
+  });
+
+  it("never shows a wire id as text when the name is unknown", () => {
+    const item: SetupItem = { ...SETUP_ITEMS.chooseProvider, label: "Choose a model provider" };
+    show([item, { ...SETUP_ITEMS.signIn, required_by: "claude-code" }], { names: undefined, intent: {} });
+    expect(screen.queryByText(/codex-cli|claude-code/)).not.toBeInTheDocument();
   });
 
   it("gives an item with no door here no button, still listed", () => {
@@ -128,26 +145,16 @@ describe("the add-token door", () => {
   });
 });
 
-describe("setup items left at Review", () => {
-  it("every missing item becomes a blocker that links to its row on this step", () => {
-    const blockers = setupBlockers({ setup: [SETUP_ITEMS.chooseProvider, COMPONENT_SECRET, ADDED_SECRET] });
-    expect(blockers.map((b) => b.id)).toEqual([SETUP_ITEMS.chooseProvider.id, COMPONENT_SECRET.id, ADDED_SECRET.id]);
-    expect(blockers.every((b) => b.home === "tools")).toBe(true);
-    expect(blockers[1].focus).toBe(setupRowId(COMPONENT_SECRET));
+describe("which items need setup", () => {
+  it("only an item the server reports missing does", () => {
+    expect(needsSetup(COMPONENT_SECRET)).toBe(true);
+    expect(needsSetup({ ...COMPONENT_SECRET, status: "satisfied" })).toBe(false);
+    expect(needsSetup({ ...COMPONENT_SECRET, status: "unverified" })).toBe(false);
   });
 
-  it("an item the server has satisfied or cannot verify is not a blocker", () => {
-    const setup = [{ ...COMPONENT_SECRET, status: "satisfied" }, { ...ADDED_SECRET, status: "unverified" }, SETUP_ITEMS.signIn];
-    expect(setupBlockers({ setup }).map((b) => b.id)).toEqual([SETUP_ITEMS.signIn.id]);
-  });
-
-  it("no answer yet means no blockers from this step", () => {
-    expect(setupBlockers(undefined)).toEqual([]);
-  });
-
-  it("each row carries the id its blocker focuses", () => {
+  it("each row carries the id a link from Review focuses", () => {
     show([COMPONENT_SECRET]);
-    expect(document.getElementById(setupBlockers({ setup: [COMPONENT_SECRET] })[0].focus)).toBeInTheDocument();
+    expect(document.getElementById(setupRowId(COMPONENT_SECRET))).toBeInTheDocument();
   });
 });
 
