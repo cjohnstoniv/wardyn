@@ -177,6 +177,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Erasure gains the `run_setups` scope: a person's own templates, their group grants and their name on shared
   templates. The SCIM purge asks for it. New reasons: `template_name_taken` (409), `template_limit_reached` (409) and
   `template_policy_field_refused` (422).
+- The credential delivery policy gains `runner_resident`: an administrator can let a class of organisation credential
+  be handed to a self-hosted runner for a run's lifetime, and only to runners whose reported device posture meets the
+  class's requirement. The runner keeps the value in the OS keystore (the Secret Service on Linux, which needs a
+  session bus; the login Keychain on macOS, written over stdin; values up to about 3 KB). Azure DevOps minted tokens
+  can be opted in per connection. Delivery itself arrives with local runner placement; until then no run receives one.
 - `GET /api/v1/workspaces/{id}/branches?repo=<repo>` lists one workspace repository's branches for the New Run
   branch picker, through the credential the run would clone with: Azure DevOps uses the person's own token or
   sign-in; GitHub uses the organisation's GitHub App with a one-repository `contents: read` token, revoked best effort after the
@@ -394,6 +399,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- A run a laptop submits with a device credential and no person is refused at launch when a per-person Azure DevOps
+  connection covers one of its repositories (#731).
 - A relayed runner connection honours read and write deadlines, so a response written to a peer that stopped reading
   is aborted instead of holding the run's stream open.
 - Runner spool replay after a reconnect sends each batch of up to 64 decisions before waiting for one
