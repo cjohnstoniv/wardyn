@@ -371,3 +371,61 @@ func TestAccessSecretRow_StatusFollowsItsHost(t *testing.T) {
 		}
 	}
 }
+
+// A person's own Azure DevOps lane that is not connected brings one sign-in
+// item that targets the existing connect door; connected, or never graded (the
+// door read no credential), it brings none.
+func TestAccessRepo_ADOSignInSetupItem(t *testing.T) {
+	row := adoEntra(adoRow("ado-row", false, "https://dev.azure.com/acme"))
+	req := createRunRequest{Agent: "claude-code", Task: "t", Repo: "https://dev.azure.com/acme/project/_git/one"}
+	site := types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{row}}}
+	for _, tc := range []struct {
+		name string
+		scm  *SCMAccess
+		want bool
+	}{
+		{"not connected", &SCMAccess{Kind: "azure_devops", Org: "https://dev.azure.com/acme", State: modelAccessNotConfigured}, true},
+		{"sign-in ended", &SCMAccess{Kind: "azure_devops", Org: "https://dev.azure.com/acme", State: modelAccessExpiredSignin}, true},
+		{"connected", &SCMAccess{Kind: "azure_devops", Org: "https://dev.azure.com/acme", State: modelAccessLive}, false},
+		{"not graded", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			facts := componentFacts(componentFactInputs{req: &req, scmSite: site}, tc.scm)
+			access := accessFacts(accessInputs{req: &req, scmSite: site, facts: facts, decider: deciderYou, providerStored: true})
+			var got []SetupItem
+			for _, it := range access.Setup {
+				if it.Kind == "repo_credential" {
+					got = append(got, it)
+				}
+			}
+			if !tc.want {
+				if len(got) != 0 {
+					t.Fatalf("setup = %+v, want none", got)
+				}
+				return
+			}
+			if len(got) != 1 || got[0].Status != "missing" || got[0].Fix == nil || got[0].Fix.Action != fixSignIn || got[0].Fix.Target != signInAzureDevOps {
+				t.Fatalf("setup = %+v, want one missing azure_devops sign-in", got)
+			}
+			if r, ok := accessRow(&access, facts[0].ID); !ok || r.Status != accessNeedsSetup {
+				t.Errorf("repository row = %+v", r)
+			}
+		})
+	}
+}
+
+// Review's door carries the Azure DevOps sign-in item for a person whose own
+// sign-in is missing. The preview grades no sign-in (it must not read the
+// stored sign-in's value), so it carries none yet.
+func TestAccessFacts_ADOSignInItemAtPreflight(t *testing.T) {
+	f := newComponentFixture(t)
+	f.st.siteConfig = adoTestSiteConfig(false)
+	f.srv.cfg.ADOEntra = adoTestEntraSource
+	f.srv.cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
+		FirstUseApproval: types.FirstUseDenyWithReview}
+	access := decodeAccess(t, preflightDoor, f.ask(t, preflightDoor, map[string]any{"agent": "claude-code", "task": "access", "repo": scmTestADORepo})).Access
+	i := slices.IndexFunc(access.Setup, func(it SetupItem) bool { return it.Kind == "repo_credential" })
+	if i < 0 || access.Setup[i].Status != "missing" || access.Setup[i].Fix == nil || access.Setup[i].Fix.Target != signInAzureDevOps {
+		t.Errorf("setup = %+v, want the azure_devops sign-in item", access.Setup)
+	}
+}

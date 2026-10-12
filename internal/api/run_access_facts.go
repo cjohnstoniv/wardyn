@@ -98,6 +98,7 @@ const (
 	credKindAWSRole      = "aws_role"
 	signInModelProvider  = "model_provider"
 	signInAWSCLI         = "aws_cli"
+	signInAzureDevOps    = "azure_devops"
 	fixSignIn            = "sign_in"
 	fixChooseProvider    = "choose_model_provider"
 	deciderYou           = "you"
@@ -495,6 +496,12 @@ func (b *accessBuilder) repositoryRow(fact componentFact) {
 		b.addCredential(*cred)
 	}
 	b.addSetup(fact.Requirements...)
+	// The door grades the person's own sign-in only where it read it (see
+	// gitProviderStatus): a row that needs input is theirs to connect.
+	if fact.Provider == string(types.GitProviderAzureDevOps) && fact.Status == componentNeedsInput {
+		b.addSetup(SetupItem{Kind: "repo_credential", ID: "repo_credential:azure_devops:" + fact.Org, Label: "Sign in to Azure DevOps",
+			RequiredBy: row.Name, Status: "missing", Fix: &SetupFix{Action: fixSignIn, Target: signInAzureDevOps}})
+	}
 }
 
 // directGitHubEgressHosts are the hosts a direct GitHub clone reaches
