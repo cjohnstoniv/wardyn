@@ -82,6 +82,7 @@ describe("template field registry", () => {
       "description",
       "integration_id",
       "mode_contract",
+      "policy_overlay",
       "preset",
       "preset_version",
       "title",

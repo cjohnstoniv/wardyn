@@ -157,6 +157,8 @@ var templateRequestRules = []TemplateFieldRule{
 		"No workspace is attached through this older single-workspace field."),
 	carriedField("inline_policy", templateTabAccess, "", templateOmitBaseline, templateEmptyValue,
 		"No policy field is set by the template. Only the policy keys it names are laid onto the source policy; a key it leaves out keeps the source's value."),
+	excludedField("policy_overlay", templateExcludeOrigin,
+		"In a document the overlay is written under inline_policy; policy_overlay is how a client sends it."),
 	carriedField("devcontainer_repo", templateTabToolsImage, partTools, templateOmitOptional, templateEmptySame,
 		"No image is built from a repository."),
 	carriedField("devcontainer_ref", templateTabToolsImage, partTools, templateOmitOptional, templateEmptySame,
