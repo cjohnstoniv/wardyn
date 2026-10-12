@@ -86,7 +86,7 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, self
 	s.localProxyGrantOrigins(ctx, owner, byID, &p)
 	s.localResidentOrigins(ctx, owner, rows, llm, &p)
 	s.localIdentityOrigins(ctx, owner, ado, llm, &p)
-	return p, nil
+	return p, s.localPlanFacts(ctx, &p, egressBaselineOf(sc), run.RunnerID)
 }
 
 func selfDefinedSnapshotNames(comps []types.RunComponent) []string {

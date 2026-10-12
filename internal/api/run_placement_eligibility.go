@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -93,12 +94,54 @@ func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest,
 	if refusal != nil {
 		return refusal
 	}
-	p.ConfinementFloor = composer.RequiredConfinementFloor(spec, baseline)
+	if err := s.localPlanFacts(r.Context(), &p, baseline, nil); err != nil {
+		return runServerError("read the local placement facts", err)
+	}
 	if _, ref := placement.LocalEligibility(p); ref != nil {
 		return s.localEligibilityRefusal(r, ceiling, ref)
 	}
 	return runError(placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable),
 		"Your own runner is not available: this server cannot place a run on a runner yet.")
+}
+
+// localPlanFacts fills what every LocalEligibility door (create, dispatch and
+// revive) judges a runner_resident credential on: the stored delivery policy,
+// the bound runner's reported posture, and the run's blast-radius floor (Q7).
+// Before a runner is bound (create) Posture stays nil; a store that keeps no
+// policy leaves every class refused.
+func (s *Server) localPlanFacts(ctx context.Context, p *placement.LocalPlan, baseline composer.Baseline, runnerID *uuid.UUID) error {
+	p.ConfinementFloor = composer.RequiredConfinementFloor(p.Spec.ProxyConfig.Policy, baseline)
+	if st, ok := s.cfg.Store.(interface {
+		GetCredentialDeliveryPolicy(context.Context) (types.CredentialDeliveryPolicyDoc, error)
+	}); ok {
+		doc, err := st.GetCredentialDeliveryPolicy(ctx)
+		if err != nil {
+			return err
+		}
+		var policy placement.DeliveryPolicy
+		if err := json.Unmarshal(doc.Policy, &policy); err != nil {
+			return err
+		}
+		if err := policy.Validate(); err != nil {
+			return err
+		}
+		p.Delivery = policy
+	}
+	st, ok := s.cfg.Store.(interface {
+		GetRunner(context.Context, uuid.UUID) (types.Runner, error)
+	})
+	if !ok || runnerID == nil {
+		return nil
+	}
+	rn, err := st.GetRunner(ctx, *runnerID)
+	if err != nil {
+		return err
+	}
+	if rn.PostureReportedAt != nil {
+		posture := rn.Posture
+		p.Posture = &posture
+	}
+	return nil
 }
 
 // localAdmittedPlan builds the plan a local candidate is judged on from the

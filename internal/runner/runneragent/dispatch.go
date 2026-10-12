@@ -163,7 +163,7 @@ func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint3
 	}
 	// Only the substrate sees resident values; a.Spec, which the lifecycle
 	// handlers persist, keeps the placeholders.
-	filled, err := d.cfg.Resident.fill(a.Spec)
+	filled, err := d.cfg.Resident.fill(ctx, a.Spec)
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +315,7 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 		if method == runnerwire.MethodCanReplace {
 			return nil, proxy.CanReplaceProxy(ctx, ref)
 		}
-		cfg, err := d.cfg.Resident.fillReplacedProxy(a.CfgJSON)
+		cfg, err := d.cfg.Resident.fillReplacedProxy(ctx, a.CfgJSON)
 		if err != nil {
 			return nil, err
 		}

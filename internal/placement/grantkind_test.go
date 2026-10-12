@@ -17,6 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/google/uuid"
 )
 
 // grantKindFixture is the expected local outcome per grant kind. A new kind
@@ -142,18 +143,12 @@ func TestLocalEligibilityClassifiesEveryGrantKind(t *testing.T) {
 		for _, class := range []Class{ClassOperator, ClassBrokered, ClassPlatform} {
 			refuses("class "+string(class), grantPlan(kind, true, CredentialOrigin{Class: class, Delivery: want.delivery, GrantKind: kind, Stored: true, OwnNamespace: true, OwnerOnly: true}))
 		}
-		// An org-held class stays refused under via_org; runner_resident admits it
-		// only where its class may be resident.
-		p := grantPlan(kind, true, CredentialOrigin{Class: ClassOperator, Delivery: want.delivery, GrantKind: kind, Stored: true})
-		p.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{want.delivery: {Mode: ModeViaOrg}}}
-		refuses("operator delivery via_org", p)
-		p.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{want.delivery: {Mode: ModeRunnerResident}}}
-		if slices.Contains(AllowedModes(want.delivery), ModeRunnerResident) {
-			if _, r := LocalEligibility(p); r != nil {
-				t.Errorf("%s/operator delivery runner_resident: refusal=%v", kind, r)
-			}
-		} else {
-			refuses("operator delivery runner_resident", p)
+		// An org-held grant record stays refused whatever delivery the org
+		// configures: it carries no value a placeholder could stand in for.
+		for _, mode := range []Mode{ModeViaOrg, ModeRunnerResident} {
+			p := grantPlan(kind, true, CredentialOrigin{Class: ClassOperator, Delivery: want.delivery, GrantKind: kind, Stored: true})
+			p.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{want.delivery: {Mode: mode}}}
+			refuses("operator delivery "+string(mode), p)
 		}
 		refuses("unknown provenance", grantPlan(kind, true, CredentialOrigin{GrantKind: kind}))
 		refuses("origin of another kind", grantPlan(kind, true, CredentialOrigin{Class: ClassOwn, Delivery: want.delivery, GrantKind: "other", Stored: true, OwnNamespace: true, OwnerOnly: true}))
@@ -265,6 +260,7 @@ func TestLocalEligibilityOwnBedrockRoleCredentialsAreDeliveryOrRefuse(t *testing
 		t.Fatalf("mode refuse: %v", r)
 	}
 	p.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: ModeRunnerResident}}}
+	p.Spec.SecretEnv = map[string]string{"ROLE_SIGNING_KEY": ResidentPlaceholder(uuid.New())}
 	if _, r := LocalEligibility(p); r != nil {
 		t.Fatalf("mode runner_resident: %v", r)
 	}

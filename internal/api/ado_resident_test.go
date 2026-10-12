@@ -50,6 +50,21 @@ func TestADOResident_SandboxOptInRequiresTheFirst(t *testing.T) {
 	if i < 0 || json.Unmarshal(audit.events[i].Data, &data) != nil || !slices.Equal(data.Resident, []string{"ado"}) || !slices.Equal(data.Sandbox, []string{"ado"}) {
 		t.Fatalf("workspace_provider.write data = %+v", data)
 	}
+
+	// PUT /site-config writes the same block, so its audit row names the rows too.
+	fake = &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{}}
+	srv, siteAudit := newProvidersHarness(t, fake)
+	both := row(func(c *types.ADOEntraConfig) { c.RunnerResident, c.RunnerResidentSandbox = true, true })
+	if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"workspace_providers":`+both+`}`); w.Code != http.StatusOK {
+		t.Fatalf("site-config PUT = %d %s", w.Code, w.Body.String())
+	}
+	siteAudit.mu.Lock()
+	defer siteAudit.mu.Unlock()
+	data.Resident, data.Sandbox = nil, nil
+	i = slices.IndexFunc(siteAudit.events, func(ev types.AuditEvent) bool { return ev.Action == "site_config.write" })
+	if i < 0 || json.Unmarshal(siteAudit.events[i].Data, &data) != nil || !slices.Equal(data.Resident, []string{"ado"}) || !slices.Equal(data.Sandbox, []string{"ado"}) {
+		t.Fatalf("site_config.write data = %+v", data)
+	}
 }
 
 // The opt-in is the admitting connection's, never the deployment's: another
@@ -74,11 +89,12 @@ func TestADOResident_OptInIsPerConnection(t *testing.T) {
 		})
 		return r
 	}
-	if r := admitted(); r == nil || r.Reason != placement.ReasonPlacementCredential {
-		t.Fatalf("another connection's opt-in: %+v, want this run refused", r)
+	if r := admitted(); r == nil || r.Reason != placement.ReasonPlacementCredential || !strings.Contains(r.Detail, "opted in") {
+		t.Fatalf("another connection's opt-in: %+v, want this run refused for its own opt-in", r)
 	}
+	// Opted in, the run passes the opt-in gate; the deliver step holds it after that.
 	sc.WorkspaceProviders.Git[1].Entra.RunnerResident = true
-	if r := admitted(); r != nil {
+	if r := admitted(); r != nil && strings.Contains(r.Detail, "opted in") {
 		t.Fatalf("this connection opted in: %v", r)
 	}
 }

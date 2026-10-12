@@ -7,13 +7,16 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -116,8 +119,14 @@ func TestResident_KeystoreFailureRefuses(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), string(placement.ReasonRunnerKeystoreUnavailable)) {
 		t.Fatalf("deliver = %v, want %s", err, placement.ReasonRunnerKeystoreUnavailable)
 	}
-	if entries, _ := os.ReadDir(f.dir); len(entries) != 0 {
-		t.Fatalf("state dir holds %v after a refused delivery, want nothing", entries)
+	entries, _ := os.ReadDir(f.dir)
+	for _, e := range entries {
+		if b, _ := os.ReadFile(filepath.Join(f.dir, e.Name())); strings.Contains(string(b), "s3cret-value") {
+			t.Fatalf("%s holds the value after a refused delivery", e.Name())
+		}
+	}
+	if reloaded, err := NewResident(f.ks.keystore(), f.dir); err != nil || len(reloaded.held) != 0 {
+		t.Fatalf("index after a refused delivery = %v (%v), want empty", reloaded.held, err)
 	}
 	if err := f.create(runner.SandboxSpec{SecretEnv: map[string]string{"TOKEN": placement.ResidentPlaceholder(grant)}}); err == nil || len(f.fake.Created) != 0 {
 		t.Fatalf("create after a refused delivery = %v (created %d)", err, len(f.fake.Created))
@@ -149,27 +158,37 @@ func TestResident_ProxyOnlyNeverReachesTheSandbox(t *testing.T) {
 	}
 	var persisted runner.SandboxSpec
 	f.d.cfg.Created = func(_ context.Context, s runner.SandboxSpec, _ string) error { persisted = s; return nil }
+	// A credential field of the proxy configuration is filled; a field that is
+	// not one (a detail string the sandbox can read) keeps the placeholder.
 	err := f.create(runner.SandboxSpec{
-		SecretEnv:   map[string]string{"TOKEN": placement.ResidentPlaceholder(sandbox)},
-		ProxyConfig: runner.ProxyConfig{LLMUnavailableDetail: placement.ResidentPlaceholder(proxyOnly)},
+		SecretEnv: map[string]string{"TOKEN": placement.ResidentPlaceholder(sandbox)},
+		ProxyConfig: runner.ProxyConfig{
+			PATGrants:            map[string]proxy.PATGrant{"dev.azure.com": {GrantID: proxyOnly, Username: placement.ResidentPlaceholder(proxyOnly)}},
+			LLMUnavailableDetail: placement.ResidentPlaceholder(proxyOnly),
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := f.fake.Created[0]
-	if got.SecretEnv["TOKEN"] != "sandbox-secret" || got.ProxyConfig.LLMUnavailableDetail != "proxy-only-pat" {
-		t.Fatalf("substrate spec: env=%v proxy=%q", got.SecretEnv, got.ProxyConfig.LLMUnavailableDetail)
+	if got.SecretEnv["TOKEN"] != "sandbox-secret" || got.ProxyConfig.PATGrants["dev.azure.com"].Username != "proxy-only-pat" {
+		t.Fatalf("substrate spec: env=%v proxy=%+v", got.SecretEnv, got.ProxyConfig.PATGrants)
 	}
-	if persisted.SecretEnv["TOKEN"] != placement.ResidentPlaceholder(sandbox) || persisted.ProxyConfig.LLMUnavailableDetail != placement.ResidentPlaceholder(proxyOnly) {
+	if got.ProxyConfig.LLMUnavailableDetail != placement.ResidentPlaceholder(proxyOnly) {
+		t.Fatalf("a non-credential proxy field was filled: %q", got.ProxyConfig.LLMUnavailableDetail)
+	}
+	if persisted.SecretEnv["TOKEN"] != placement.ResidentPlaceholder(sandbox) || persisted.ProxyConfig.PATGrants["dev.azure.com"].Username != placement.ResidentPlaceholder(proxyOnly) {
 		t.Fatalf("persisted spec carries a value: %+v", persisted.SecretEnv)
 	}
 	ref := placement.RunnerRefPrefix(f.id) + "fake-" + f.run.String()
-	data, _ := runnerwire.Marshal(runnerwire.ReplaceProxyArgs{Ref: ref, CfgJSON: []byte(`{"run_id":"` + f.run.String() + `","token":"` + placement.ResidentPlaceholder(proxyOnly) + `"}`)})
+	cfg := `{"run_id":"` + f.run.String() + `","pat_grants":{"dev.azure.com":{"grant_id":"` + proxyOnly.String() + `","username":"` + placement.ResidentPlaceholder(proxyOnly) + `"}},"llm_unavailable_detail":"` + placement.ResidentPlaceholder(proxyOnly) + `"}`
+	data, _ := runnerwire.Marshal(runnerwire.ReplaceProxyArgs{Ref: ref, CfgJSON: []byte(cfg)})
 	if _, err := f.d.Call(context.Background(), f.peer, 4, runnerwire.MethodReplaceProxy, data); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.ContainsFunc(f.fake.Calls, func(c string) bool { return strings.Contains(c, `"token":"proxy-only-pat"`) }) {
-		t.Fatalf("revive did not re-apply the value from the keystore: %v", f.fake.Calls)
+	i := slices.IndexFunc(f.fake.Calls, func(c string) bool { return strings.HasPrefix(c, "replace_proxy ") })
+	if i < 0 || !strings.Contains(f.fake.Calls[i], `"username":"proxy-only-pat"`) || !strings.Contains(f.fake.Calls[i], `"llm_unavailable_detail":"`+placement.ResidentPlaceholder(proxyOnly)) {
+		t.Fatalf("revive re-applied the wrong fields: %v", f.fake.Calls)
 	}
 }
 
@@ -208,5 +227,53 @@ func TestResident_ErasedAtRunEnd(t *testing.T) {
 	reloaded, err := NewResident(f.ks.keystore(), f.dir)
 	if err != nil || len(reloaded.held) != 0 {
 		t.Fatalf("index after erase = %v (%v)", reloaded.held, err)
+	}
+}
+
+// A keystore delete that fails keeps the grant indexed, so the next erase
+// retries it instead of orphaning the value.
+func TestResident_FailedEraseIsRetried(t *testing.T) {
+	f := newResidentFixture(t, nil)
+	grant := uuid.New()
+	if err := f.deliver(grant, "v", true); err != nil {
+		t.Fatal(err)
+	}
+	failing := f.ks.keystore()
+	failing.Delete = func(string) error { return errors.New("keychain locked") }
+	f.d.cfg.Resident.keystore = failing
+	data, _ := runnerwire.Marshal(runnerwire.EraseResidentArgs{RunID: f.run})
+	if _, err := f.d.Call(context.Background(), f.peer, 5, runnerwire.MethodEraseResident, data); err != nil {
+		t.Fatal(err)
+	}
+	if reloaded, err := NewResident(f.ks.keystore(), f.dir); err != nil || len(reloaded.held[f.run]) != 1 {
+		t.Fatalf("index after a failed erase = %v (%v), want the grant kept", reloaded.held, err)
+	}
+	f.d.cfg.Resident.keystore = f.ks.keystore()
+	if _, err := f.d.Call(context.Background(), f.peer, 6, runnerwire.MethodEraseResident, data); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.ks.items) != 0 {
+		t.Fatalf("keystore after the retried erase = %v", f.ks.items)
+	}
+}
+
+// A keystore call that never returns (an unanswered OS prompt) is refused
+// after keystoreTimeout; the grant stays indexed so erase still covers it.
+func TestResident_KeystorePromptIsBounded(t *testing.T) {
+	f := newResidentFixture(t, nil)
+	prev := keystoreTimeout
+	keystoreTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { keystoreTimeout = prev })
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	stuck := f.ks.keystore()
+	stuck.Set = func(string, string) error { <-release; return nil }
+	f.d.cfg.Resident.keystore = stuck
+	err := f.deliver(uuid.New(), "v", true)
+	if err == nil || !strings.Contains(err.Error(), string(placement.ReasonRunnerKeystoreUnavailable)) {
+		t.Fatalf("deliver = %v, want %s after the timeout", err, placement.ReasonRunnerKeystoreUnavailable)
+	}
+	if reloaded, err := NewResident(f.ks.keystore(), f.dir); err != nil || len(reloaded.held[f.run]) != 1 {
+		t.Fatalf("index after a timed-out write = %v (%v), want the grant kept", reloaded.held, err)
 	}
 }

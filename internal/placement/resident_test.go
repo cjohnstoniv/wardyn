@@ -4,7 +4,11 @@
 package placement
 
 import (
+	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -15,7 +19,7 @@ const secretEnvPath = "SandboxSpec.SecretEnv[TOKEN]"
 // residentPlan is an operator env_secret under the given class policy.
 func residentPlan(cp ClassPolicy, posture *types.RunnerPosture) LocalPlan {
 	return LocalPlan{
-		Spec:     runner.SandboxSpec{SecretEnv: map[string]string{"TOKEN": "value"}},
+		Spec:     runner.SandboxSpec{SecretEnv: map[string]string{"TOKEN": ResidentPlaceholder(uuid.New())}},
 		Origins:  map[string]CredentialOrigin{secretEnvPath: {Class: ClassOperator, Delivery: ClassEnvSecret}},
 		Delivery: DeliveryPolicy{Classes: map[string]ClassPolicy{ClassEnvSecret: cp}},
 		Posture:  posture,
@@ -76,13 +80,46 @@ func adoResidentPlan(origin CredentialOrigin) LocalPlan {
 }
 
 // The 2026-10-10 ruling: an Azure DevOps minted token is resident only on a
-// connection an admin opted in, even when the class policy says resident.
+// connection an admin opted in, even when the class policy says resident. An
+// opted-in connection passes that gate and is then held at the deliver step,
+// which is not built: an intent has no dispatched value to replace.
 func TestLocalEligibility_ADOResidentIsOffByDefault(t *testing.T) {
-	if _, r := LocalEligibility(adoResidentPlan(CredentialOrigin{Class: ClassBrokered, Delivery: ClassADOMintedPAT})); r == nil || r.Reason != ReasonPlacementCredential || r.Field != adoPath {
-		t.Fatalf("no opt-in: %+v, want %s", r, ReasonPlacementCredential)
+	_, r := LocalEligibility(adoResidentPlan(CredentialOrigin{Class: ClassBrokered, Delivery: ClassADOMintedPAT}))
+	if r == nil || r.Reason != ReasonPlacementCredential || r.Field != adoPath || !strings.Contains(r.Detail, "opted in") {
+		t.Fatalf("no opt-in: %+v, want the opt-in refusal", r)
 	}
-	if _, r := LocalEligibility(adoResidentPlan(CredentialOrigin{Class: ClassBrokered, Delivery: ClassADOMintedPAT, ResidentOptIn: true})); r != nil {
-		t.Fatalf("opted-in connection: %v", r)
+	_, r = LocalEligibility(adoResidentPlan(CredentialOrigin{Class: ClassBrokered, Delivery: ClassADOMintedPAT, ResidentOptIn: true}))
+	if r == nil || r.Reason != ReasonPlacementCredential || !strings.Contains(r.Detail, "not built") {
+		t.Fatalf("opted-in connection: %+v, want past the opt-in and held at delivery", r)
+	}
+}
+
+// B1: an admitted runner_resident value leaves the org only through
+// DeliverResident, so the dispatched leaf must already be its placeholder.
+func TestLocalEligibility_ResidentValueMustBeItsPlaceholder(t *testing.T) {
+	grant := uuid.New()
+	cp := ClassPolicy{Mode: ModeRunnerResident}
+	inline := residentPlan(cp, nil)
+	inline.Spec.SecretEnv = map[string]string{"TOKEN": "an-inline-secret"}
+	if _, r := LocalEligibility(inline); r == nil || r.Reason != ReasonPlacementCredential || r.Field != secretEnvPath {
+		t.Fatalf("inline env value: %+v, want %s", r, ReasonPlacementCredential)
+	}
+	const filePath = "SandboxSpec.ManagedFiles[0]"
+	file := func(content string) LocalPlan {
+		return LocalPlan{
+			Spec:     runner.SandboxSpec{ManagedFiles: []runner.ManagedFile{{Path: "/run/secret", AgentOwned: true, Content: []byte(content)}}},
+			Origins:  map[string]CredentialOrigin{filePath: {Class: ClassOperator, Delivery: ClassFileSecret}},
+			Delivery: DeliveryPolicy{Classes: map[string]ClassPolicy{ClassFileSecret: cp}},
+		}
+	}
+	if _, r := LocalEligibility(file("an-inline-file")); r == nil || r.Reason != ReasonPlacementCredential || r.Field != filePath {
+		t.Fatalf("inline file content: %+v, want %s", r, ReasonPlacementCredential)
+	}
+	if _, r := LocalEligibility(file(ResidentPlaceholder(grant))); r != nil {
+		t.Fatalf("placeholder file content: %v", r)
+	}
+	if _, r := LocalEligibility(residentPlan(cp, nil)); r != nil {
+		t.Fatalf("placeholder env value: %v", r)
 	}
 }
 
@@ -100,3 +137,19 @@ func TestLocalEligibility_GitHubTokenIsNeverResident(t *testing.T) {
 		t.Fatalf("github_token resident: %+v, want %s", r, ReasonPlacementCredential)
 	}
 }
+
+// The grant-record call shape H12's via_org admission (ViaOrgGrant) uses: a
+// nil answer must never stand for a resident grant, under any posture, or a
+// resident-configured class would be stamped via_org.
+func TestClassifyCredential_ResidentGrantRecordIsNeverAdmitted(t *testing.T) {
+	healthy := &types.RunnerPosture{MDMManaged: true, DiskEncrypted: true, OS: "linux"}
+	for _, class := range []string{ClassAPIKey, ClassEnvSecret} {
+		origin := CredentialOrigin{Class: ClassOperator, Delivery: class, GrantKind: types.GrantKind(classGrantKind[class]), Stored: true}
+		p := LocalPlan{Delivery: DeliveryPolicy{Classes: map[string]ClassPolicy{class: {Mode: ModeRunnerResident}}}, Posture: healthy}
+		if r := classifyCredential(Entries, "ProxyConfig.Policy.EligibleGrants", origin, p, reflect.Value{}); r == nil || r.Reason != ReasonPlacementCredential {
+			t.Errorf("%s resident grant record: %+v, want %s", class, r, ReasonPlacementCredential)
+		}
+	}
+}
+
+var classGrantKind = map[string]string{ClassAPIKey: "api_key", ClassEnvSecret: "env_secret"}
