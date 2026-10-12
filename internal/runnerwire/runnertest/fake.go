@@ -31,6 +31,8 @@ type Fake struct {
 	Orphans    []uuid.UUID // runs the sweep may remove
 	execed     map[string]bool
 	StoppedRef map[string]bool
+	// LifecycleErr is what CanManageDrives answers; nil means the fake can delete drives.
+	LifecycleErr error
 }
 
 // NewFake offers CC1 and CC2.
@@ -42,13 +44,14 @@ func NewFake() *Fake {
 }
 
 var (
-	_ substrate.Substrate    = (*Fake)(nil)
-	_ runner.SandboxEnder    = (*Fake)(nil)
-	_ runner.ProxyStopper    = (*Fake)(nil)
-	_ runner.ProxyReviver    = (*Fake)(nil)
-	_ runner.SandboxStarter  = (*Fake)(nil)
-	_ runner.DriveProber     = (*Fake)(nil)
-	_ runner.OutputRecoverer = (*Fake)(nil)
+	_ substrate.Substrate          = (*Fake)(nil)
+	_ runner.SandboxEnder          = (*Fake)(nil)
+	_ runner.ProxyStopper          = (*Fake)(nil)
+	_ runner.ProxyReviver          = (*Fake)(nil)
+	_ runner.SandboxStarter        = (*Fake)(nil)
+	_ runner.DriveProber           = (*Fake)(nil)
+	_ runner.DriveLifecycleChecker = (*Fake)(nil)
+	_ runner.OutputRecoverer       = (*Fake)(nil)
 )
 
 func (f *Fake) note(verb, ref string) {
@@ -183,6 +186,8 @@ func (f *Fake) EnsureProxyImage(context.Context) error { f.note("ensure_proxy_im
 func (f *Fake) ProbeDrive(_ context.Context, m types.DriveMount) (runner.DriveProbe, error) {
 	return runner.DriveProbe{Result: runner.DriveProbeReadable, Detail: "fake"}, nil
 }
+
+func (f *Fake) CanManageDrives(context.Context) error { return f.LifecycleErr }
 
 func (f *Fake) RecoverOutput(_ context.Context, ref string, w io.Writer) error {
 	f.note("recover_output", ref)

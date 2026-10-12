@@ -289,6 +289,19 @@ func (o *Orchestrator) ReclaimDrive(ctx context.Context, mount types.DriveMount)
 	return "", errors.New("orchestrator: no wired substrate can reclaim drive storage")
 }
 
+// CanManageDrives implements runner.DriveLifecycleChecker by delegating to the
+// first wired substrate that implements it, the same single fan-out
+// ReclaimDrive takes, so the answer is about the substrate that will do the
+// delete. Remote substrates are never asked: member drives never mount there.
+func (o *Orchestrator) CanManageDrives(ctx context.Context) error {
+	for _, s := range o.locals() {
+		if c, ok := s.(runner.DriveLifecycleChecker); ok {
+			return c.CanManageDrives(ctx)
+		}
+	}
+	return runner.ErrDriveLifecycleUnavailable
+}
+
 // CheckFit implements runner.FitChecker by delegating to the first wired substrate that
 // implements it, the same single fan-out ProbeDrive takes. A substrate with no fit to check
 // (docker) is skipped; none at all answers runner.ErrFitUnsupported.

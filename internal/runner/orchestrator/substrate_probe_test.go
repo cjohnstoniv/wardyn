@@ -48,3 +48,28 @@ func TestOrchestrator_ProbeSubstrate_FallsBackToCapabilities(t *testing.T) {
 		t.Fatalf("capabilities error: ProbeSubstrate = %q, want unreachable", got)
 	}
 }
+
+// lifecycleSubstrate is a fakeSubstrate that answers the drive lifecycle check.
+type lifecycleSubstrate struct {
+	*fakeSubstrate
+	err error
+}
+
+func (l lifecycleSubstrate) CanManageDrives(context.Context) error { return l.err }
+
+// CanManageDrives asks the first substrate that implements the check and takes
+// its word, whatever a later one would say; none at all is unavailable.
+func TestOrchestrator_CanManageDrives_DelegatesToTheFirstChecker(t *testing.T) {
+	plain := &fakeSubstrate{name: "plain", classes: []types.ConfinementClass{types.CC1}}
+	denied := lifecycleSubstrate{&fakeSubstrate{name: "first", classes: []types.ConfinementClass{types.CC1}}, runner.ErrDriveLifecycleUnavailable}
+	allowed := lifecycleSubstrate{&fakeSubstrate{name: "second", classes: []types.ConfinementClass{types.CC1}}, nil}
+	if err := New(plain, denied, allowed).CanManageDrives(context.Background()); !errors.Is(err, runner.ErrDriveLifecycleUnavailable) {
+		t.Fatalf("CanManageDrives = %v, want the first checker's denial", err)
+	}
+	if err := New(plain, allowed, denied).CanManageDrives(context.Background()); err != nil {
+		t.Fatalf("CanManageDrives = %v, want the first checker's yes", err)
+	}
+	if err := New(plain).CanManageDrives(context.Background()); !errors.Is(err, runner.ErrDriveLifecycleUnavailable) {
+		t.Fatalf("no checker: CanManageDrives = %v, want ErrDriveLifecycleUnavailable", err)
+	}
+}
