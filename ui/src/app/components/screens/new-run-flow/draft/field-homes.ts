@@ -7,7 +7,7 @@
 // Keys are the template field registry's request names and every policy name
 // as `inline_policy.<name>`; a registry row without a home fails its test.
 
-import type { NewRunReason, PlacementReason } from "../../../../lib/new-run-refusals";
+import type { NewRunReason, PlacementReason, WorkspaceDoorReason } from "../../../../lib/new-run-refusals";
 import type { RunModeReason } from "../../../../lib/run-mode-refusals";
 import type { RunnerPoolReason } from "../../../../lib/runner-pool-refusals";
 import type { TemplateReason } from "../../../../lib/template-refusals";
@@ -34,7 +34,7 @@ export const FIELD_HOME: Record<string, FieldHome> = {
   ...homes("shape", "shape"),
   ...homes("run", "experience workload runner_pool_id confinement_class"),
   ...homes("harnesses", "tools startup"),
-  ...homes("files", "workspaces drive start_folder no_repositories_or_drives"),
+  ...homes("files", "workspaces drive drives start_folder no_repositories_or_drives"),
   ...homes("tools", "components overrides"),
   ...homes("review", "resources inline_policy"),
   ...homes("document", "ends_after_sec no_end image allowed_image devcontainer_repo devcontainer_ref placement runner_id " +
@@ -60,14 +60,14 @@ export const REVIEW_GROUP_OF_FIELD: Record<string, ReviewGroupId> = {
   ...groups("run", "shape experience workload interactive task_mode interactive_start agent task preset preset_version title description mode_contract max_wait_sec policy_overlay"),
   ...groups("where", "runner_pool_id confinement_class placement runner_id image allowed_image devcontainer_repo devcontainer_ref " +
     policy("min_confinement_class")),
-  ...groups("work", "workspaces drive start_folder no_repositories_or_drives repo workspace_id " + policy("workspace_mounts workspace_repos")),
+  ...groups("work", "workspaces drive drives start_folder no_repositories_or_drives repo workspace_id " + policy("workspace_mounts workspace_repos")),
   ...groups("tools", "tools startup components model_provider integration_id seed_auto_tools tool_approvals " + policy("ui_apps")),
   ...groups("access", "overrides policy_id inline_policy " + policy(`${POLICY_REVIEW} llm_inspection`)),
   ...groups("limits", "resources ends_after_sec no_end " + policy("resources auto_stop_after_sec")),
 };
 
 /** Every reason a preflight or create refusal can carry that the console names. */
-export type KnownLaunchReason = NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | TemplateReason;
+export type KnownLaunchReason = NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | TemplateReason | WorkspaceDoorReason;
 
 /** Written out key by key, so a new reason without a home fails typecheck. */
 export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
@@ -75,6 +75,7 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   workspace_target_invalid: "files", workspace_target_overlap: "files", workspace_pin_conflict: "files",
   workspace_selection_invalid: "files", workspace_repo_unknown: "files", run_ref_invalid: "files",
   workspace_ado_org_conflict: "files",
+  workspace_repo_not_admitted: "files", capability_workspace: "files", capability_workspace_provider: "files",
   resources_invalid: "review", request_field_unavailable: "review",
   override_invalid: "tools", override_refused: "tools",
   placement_required: "run", placement_unavailable: "run", placement_denied: "run", placement_trusted_output: "run",

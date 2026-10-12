@@ -93,8 +93,8 @@ type dispatchParams struct {
 	// site and three of five lanes had opted out. See dispatchCeiling
 	// (runs_dispatch_ceiling.go).
 	//
-	// Drive is the acting principal's USER DRIVE, resolved and narrowed at
-	// create time by seedRequestDrive (migration 0054). NIL for every run that
+	// Drives are the acting principal's drives, resolved and narrowed at create
+	// time by stepDrive (migrations 0054, 0169). EMPTY for every run that
 	// did not ask for one — which is every run on a deployment that has
 	// allocated no drives, and every scan/probe/harness lane, none of which
 	// carries a member principal to resolve a drive for.
@@ -105,7 +105,7 @@ type dispatchParams struct {
 	// exactly the constraint dispatchCeiling is a snapshot for. dispatchRun
 	// runs inline in the create request, so the snapshot has no staleness window
 	// to be stale in. See user_drives_run.go.
-	Drive *types.DriveMount
+	Drives []types.DriveMount
 	// MainDrive is the main drive create's fold decided (stepMainDrive): its size and whether it
 	// is soft. NIL for every lane that has no fold decision (scans, record, verify, logins, probes).
 	MainDrive *mainDriveDecision
@@ -291,7 +291,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			"Drop the github_token grant to push with your own PAT instead")
 	applyRepoCloneEnv(sandboxEnv, run, policy)
 	applyEphemeralDirsEnv(sandboxEnv, p.EphemeralDirs)
-	applyUserDriveEnv(sandboxEnv, p.Drive)
+	applyUserDriveEnv(sandboxEnv, p.Drives)
 	// The agent-side half of this run's autonomy level — see agentPolicyFor.
 	agentPolicy, apErr := s.agentPolicyFor(ctx, run, p.Harnesses, p.holdLane(), ceiling.agentGuardrailLocks, p.attendedToolRules())
 	if apErr != nil {
@@ -495,7 +495,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// Bedrock credential, which is most of them.
 		SecretEnv: secretEnv,
 		Mounts:    mounts,
-		Drive:     p.Drive,
+		Drives:    p.Drives,
 		// The managed settings this run's autonomy level generates and the
 		// started harness's approval credential; nil for a run with neither, or
 		// on a runner that cannot deliver them.
@@ -682,8 +682,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 
-	// User drive attached — a no-op for the runs (most of them) that carry
-	// none. See auditDriveMount.
+	// Drives attached — a no-op for the runs (most of them) that carry none.
+	// See auditDriveMount.
 	//
 	// AFTER CreateSandbox, not beside the spec that carries the drive: the
 	// driver has the last word on whether the drive is actually bound (the
@@ -693,7 +693,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// that the very next event — `run.create` `failure` — contradicted. Nothing
 	// downstream of here can refuse the drive, so this row is now true when it
 	// is written.
-	s.auditDriveMount(ctx, run.ID, p.Drive)
+	s.auditDriveMount(ctx, run.ID, p.Drives)
 	auditAgentPolicy := func() { s.auditAgentPolicy(ctx, run, agentPolicy, spec) }
 	if !agentPolicy.execLess {
 		auditAgentPolicy()

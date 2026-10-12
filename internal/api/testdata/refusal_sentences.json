@@ -210,6 +210,21 @@
     "sentence": "delegationRefusal"
   },
   {
+    "reason": "drive_not_found",
+    "target": "\"runs.drive\"",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "drive_not_in_pool",
+    "target": "\"runs.drive\"",
+    "sentence": "msg"
+  },
+  {
+    "reason": "drive_target_conflict",
+    "target": "\"runs.drive\"",
+    "sentence": "msg"
+  },
+  {
     "reason": "event_stream_cap",
     "target": "id.String()",
     "sentence": "fmt.Sprintf(\"too many open event streams (max %d) — close one and retry\", maxRunEventStreams)"
@@ -277,6 +292,11 @@
   {
     "reason": "groups_snapshot_stale",
     "target": "\"governance.ceiling\"",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "groups_snapshot_stale",
+    "target": "\"runs.drive\"",
     "sentence": "(audit only)"
   },
   {

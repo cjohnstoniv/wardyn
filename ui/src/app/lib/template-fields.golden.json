@@ -65,6 +65,10 @@
       "shared",
       "delivery"
     ],
+    "DriveAttachment": [
+      "drive_id",
+      "read_only"
+    ],
     "DriveSelection": [
       "enabled",
       "read_only"
@@ -586,6 +590,15 @@
       "omitted": "unset_optional",
       "empty": "value",
       "meaning": "No drive is attached or declined. enabled false is a choice to leave the drive out.",
+      "section": "run_wide"
+    },
+    {
+      "name": "drives",
+      "tab": "repositories_drives",
+      "part": "drives",
+      "omitted": "unset_optional",
+      "empty": "value",
+      "meaning": "No drive from the drive list is attached. Each drive is checked against the launching person's own grants.",
       "section": "run_wide"
     },
     {

@@ -68,7 +68,7 @@ func (f *fakeRunner) Capabilities(context.Context) (runner.Capabilities, error) 
 		Driver:             "fake",
 		ConfinementClasses: classes,
 		StructuralEgress:   true,
-		// This double's CreateSandbox accepts any spec, spec.Drive included, so
+		// This double's CreateSandbox accepts any spec, spec.Drives included, so
 		// the declaration has to say so: api.driveIsMountableHere refuses a
 		// drive-carrying run whose runner declares it cannot bind one, and a
 		// double that under-declares would refuse runs its own CreateSandbox

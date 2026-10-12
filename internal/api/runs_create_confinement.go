@@ -15,13 +15,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // enforcedConfinement is the PURE confinement math both the launch path and the
 // preflight dry-run run: the requested class when set (never WEAKER than the
 // policy minimum), else the STRONGEST class advertised is that meets
-// the policy minimum (never the minimum itself; see strongestAdvertisedAtOrAbove),
+// the policy minimum (never the minimum itself; see strongestAdvertisedAtOrAbove) unless the
+// organisation's default barrier org is at or above it and advertised (defaultBarrier),
 // then the deterministic BLAST-RADIUS floor.
 //
 // advertised is the runner's advertised confinement set, passed IN rather than
@@ -41,24 +43,35 @@ import (
 // It writes no HTTP so preflight can share it: the returned error's text IS the
 // 422 body both callers send (the wizard test hardcodes that string), and
 // preflight deliberately skips the caller-side gates that follow it.
-func enforcedConfinement(spec types.RunPolicySpec, reqCC types.ConfinementClass, advertised []types.ConfinementClass, baseline composer.Baseline) (types.ConfinementClass, error) {
-	// Assigned in BOTH branches below — declared without a value so the dead
-	// store staticcheck flags (SA4006) cannot come back: the floor is no longer
-	// the default, it is only the lower bound the default is chosen at or above.
-	var enforced types.ConfinementClass
+//
+// source says who chose a defaulted class (the organisation or the server) and is empty when the
+// request named one. The blast-radius floor raising a defaulted class to CC3 makes it the server's.
+func enforcedConfinement(spec types.RunPolicySpec, reqCC types.ConfinementClass, advertised []types.ConfinementClass, org types.ConfinementClass, baseline composer.Baseline) (enforced types.ConfinementClass, source runnerpool.BarrierDefaultSource, err error) {
 	if reqCC != "" {
 		if !confinementGE(reqCC, spec.MinConfinementClass) {
-			return "", fmt.Errorf("confinement_class %s is weaker than the policy minimum %s",
+			return "", "", fmt.Errorf("confinement_class %s is weaker than the policy minimum %s",
 				reqCC, spec.MinConfinementClass)
 		}
 		enforced = reqCC
 	} else {
-		enforced = strongestAdvertisedAtOrAbove(advertised, spec.MinConfinementClass)
+		enforced, source = defaultBarrier(advertised, spec.MinConfinementClass, org)
 	}
 	if composer.RequiredConfinementFloor(spec, baseline) == types.CC3 && !confinementGE(enforced, types.CC3) {
 		enforced = types.CC3
+		if source != "" {
+			source = runnerpool.BarrierDefaultServer
+		}
 	}
-	return enforced, nil
+	return enforced, source, nil
+}
+
+// stampConfinementDefault records on run.create who chose the class of a launch that named none: the
+// organisation's default barrier or the server's strongest-offered rule. A launch that named a class
+// carries nothing, as confinement_source already says so.
+func stampConfinementDefault(data map[string]any, reqCC types.ConfinementClass, source runnerpool.BarrierDefaultSource) {
+	if reqCC == "" && source != "" {
+		data["confinement_default"] = source
+	}
 }
 
 // credentialConfinementBelowFloor is the ONE value the run.create audit row's
@@ -131,8 +144,9 @@ func appendCredentialConfinementAdvisory(warnings []string, spec types.RunPolicy
 // agree on it. Its capabilities are those of the placement the POOL decided, never the request's: a
 // self-hosted run is held to its own eligible runners' classes (bind then picks one that enforces the
 // class), and a remote-provided one to the deployment's executor. p and runnerID are an unpooled
-// request's placement and runner.
-func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.ResponseWriter, p types.Placement, runnerID uuid.UUID, spec types.RunPolicySpec, reqCC types.ConfinementClass, baseline composer.Baseline, place runPlacement) (types.ConfinementClass, bool) {
+// request's placement and runner. place.orgBarrier is the organisation's default barrier (defaultBarrier);
+// source says who chose a defaulted class.
+func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.ResponseWriter, p types.Placement, runnerID uuid.UUID, spec types.RunPolicySpec, reqCC types.ConfinementClass, baseline composer.Baseline, place runPlacement) (types.ConfinementClass, runnerpool.BarrierDefaultSource, bool) {
 	if place.pooled {
 		p = place.placement
 	}
@@ -158,10 +172,10 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 			var ref *placement.Refusal
 			if errors.As(err, &ref) {
 				writeErrorReason(w, ref.Reason.Status(), string(ref.Reason), ref.Error())
-				return "", false
+				return "", "", false
 			}
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunnerCapabilitiesUnavailable, loggedMsg(ctx, "runner capabilities unavailable", err))
-			return "", false
+			return "", "", false
 		}
 		caps = pc.Capabilities
 	}
@@ -170,10 +184,10 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 	if offered := place.offeredClasses(); offered != nil {
 		defaultFrom = offered
 	}
-	enforced, err := enforcedConfinement(spec, reqCC, defaultFrom, baseline)
+	enforced, source, err := enforcedConfinement(spec, reqCC, defaultFrom, place.orgBarrier, baseline)
 	if err != nil {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
-		return "", false
+		return "", "", false
 	}
 
 	// Confinement gating: refuse to schedule a run whose confinement class the
@@ -193,12 +207,12 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 		if place.pooled && p == types.PlacementLocal {
 			ref := targetRefusal(placement.ReasonPlacementCapability, place.pool.Name, place.pool.HostingType)
 			writeJSON(w, ref.status, ref.body)
-			return "", false
+			return "", "", false
 		}
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassUnsupported, fmt.Sprintf(
 			"runner %q cannot enforce confinement_class %s (available: %s)",
 			caps.Driver, enforced, classesOrNone(caps.ConfinementClasses)))
-		return "", false
+		return "", "", false
 	}
 
 	// Reject cloud_sts grants up front: the embedded provider hard-requires
@@ -208,8 +222,8 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 		if err := checker.CheckGrants(spec.EligibleGrants); err != nil {
 			writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunGrantsRequireSPIRE,
 				"policy requires the spire identity provider: "+err.Error())
-			return "", false
+			return "", "", false
 		}
 	}
-	return enforced, true
+	return enforced, source, true
 }

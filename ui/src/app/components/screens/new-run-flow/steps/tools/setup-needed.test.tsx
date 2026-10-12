@@ -6,6 +6,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { ADO } from "../../../../../lib/ado-entra-copy";
+import { ADO_PAT } from "../../../../../lib/ado-pat-copy";
 import { secrets } from "../../../../../lib/api/secrets";
 import { HARNESS_NAMES, SCENARIO_ACCESS, SETUP_ITEMS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
 import type { SetupItem } from "../../../../../lib/types/preflight";
@@ -20,6 +22,9 @@ vi.mock("../../../../wardyn/model-access-context", () => ({
   useModelAccessDoor: () => ({ openDoor, open: false }),
   useShellSetupStatus: () => ({ status: { model_providers: [{ id: "bedrock", name: "Bedrock" }] }, refresh: () => {} }),
 }));
+
+const adoConnect = vi.hoisted(() => ({ connect: vi.fn(), connectFallback: vi.fn(), cancel: vi.fn(), connecting: false, blockedUrl: null as string | null }));
+vi.mock("../../../../../lib/hooks/use-ado-connect", () => ({ useAdoConnect: () => adoConnect }));
 
 const BEDROCK_RUN: RunIntent = { tools: [{ id: "claude-code", kind: "harness", model_provider: "bedrock" }] };
 const COMPONENT_SECRET: SetupItem = { ...SETUP_ITEMS.addSecret, id: "secret:billing-key", label: "billing-key", required_by: "Billing API", fix: { action: "add_secret", secret_name: "billing-key" } };
@@ -37,6 +42,9 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  adoConnect.connect.mockReset();
+  adoConnect.connectFallback.mockReset();
+  adoConnect.blockedUrl = null;
   vi.restoreAllMocks();
   openDoor.mockReset();
   onDone.mockReset();
@@ -95,6 +103,35 @@ describe("Setup still needed", () => {
     expect(screen.getByText("Scan the repository")).toBeInTheDocument();
     expect(screen.getByText("Sign in to Azure")).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+});
+
+// The server's step-5 item for a person's own Azure DevOps lane that is not connected.
+const ADO_SIGN_IN: SetupItem = { id: "repo_credential:azure_devops:acme", kind: "repo_credential", label: "Sign in to Azure DevOps", required_by: "acme", status: "missing", fix: { action: "sign_in", target: "azure_devops" } };
+
+describe("the Azure DevOps connect door", () => {
+  it("opens the existing connect popup, and is Done once the person reads connected", async () => {
+    adoConnect.connect.mockResolvedValue(true);
+    show([ADO_SIGN_IN], { intent: {} });
+    expect(screen.getByText("Sign in to Azure DevOps")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: ADO_PAT.MEMBER_CONNECT }));
+    expect(adoConnect.connect).toHaveBeenCalledTimes(1);
+    expect(openDoor).not.toHaveBeenCalled();
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith(ADO_SIGN_IN.id));
+  });
+
+  it("is not Done when the person closes the popup, and offers the link when the browser blocked it", async () => {
+    adoConnect.connect.mockResolvedValue(false);
+    adoConnect.blockedUrl = "/api/v1/scm/azure-devops/signin";
+    adoConnect.connectFallback.mockResolvedValue(true);
+    show([ADO_SIGN_IN], { intent: {} });
+    await userEvent.click(screen.getByRole("button", { name: ADO_PAT.MEMBER_CONNECT }));
+    expect(onDone).not.toHaveBeenCalled();
+    expect(screen.getByText(ADO.CONNECT_POPUP_BLOCKED, { exact: false })).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: ADO.CONNECT_POPUP_OPEN });
+    expect(link).toHaveAttribute("href", "/api/v1/scm/azure-devops/signin");
+    await userEvent.click(link);
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith(ADO_SIGN_IN.id));
   });
 });
 
@@ -157,6 +194,8 @@ describe("setup doors", () => {
   it("maps each fix action to its door, and an add-secret from any source to the add door", () => {
     expect(setupDoor(SETUP_ITEMS.chooseProvider)).toBe("choose");
     expect(setupDoor(SETUP_ITEMS.signIn)).toBe("sign_in");
+    expect(setupDoor(ADO_SIGN_IN)).toBe("connect");
+    expect(setupDoor({ ...ADO_SIGN_IN, fix: { action: "sign_in", target: "azure_cli" } })).toBeUndefined();
     expect(setupDoor(COMPONENT_SECRET)).toBe("add");
     expect(setupDoor(ADDED_SECRET)).toBe("add");
     expect(setupDoor({ ...COMPONENT_SECRET, fix: { action: "add_secret" } })).toBeUndefined();

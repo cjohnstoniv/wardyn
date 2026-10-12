@@ -597,6 +597,8 @@ var routeMatrix = map[string]classifiedRoute{
 	// own doc) — classMember, not classOwner: there is no foreign-id path to
 	// distinguish.
 	"GET /api/v1/me/attention": {class: classMember},
+	// The caller's own drive catalogue: only drives their own grants reach.
+	"GET /api/v1/me/drives": {class: classMember},
 	// The Support link the header shows every signed-in person (#1125).
 	"GET /api/v1/branding/settings": {class: classMember},
 	// /me/ssh-keys (SSH lane, C2): classMember, NOT classOwner — this is a
@@ -658,11 +660,13 @@ var routeMatrix = map[string]classifiedRoute{
 	// /me/run-layout is the same shape as /me/ssh-keys above: classMember, not
 	// classOwner. It names no entity in its path — the STORE scopes it to the
 	// caller's own principal, so there is no foreign row to 404 on.
-	"GET /api/v1/me/run-layout":    {class: classMember},
-	"PUT /api/v1/me/run-layout":    {class: classMember},
-	"GET /api/v1/policies":         {class: classMember},
-	"GET /api/v1/policies/default": {class: classMember},
-	"GET /api/v1/policies/{id}":    {class: classMember},
+	"GET /api/v1/me/run-layout": {class: classMember},
+	"PUT /api/v1/me/run-layout": {class: classMember},
+	// The same shape again: the store scopes the list to the caller's own runs.
+	"GET /api/v1/me/launch-intents": {class: classMember},
+	"GET /api/v1/policies":          {class: classMember},
+	"GET /api/v1/policies/default":  {class: classMember},
+	"GET /api/v1/policies/{id}":     {class: classMember},
 	// Run templates (template_routes.go). Every /templates route is a member route
 	// whose handler scopes by the template's own scope (types.TemplateRoutes); a
 	// template the caller cannot read is the missing-id 404, probed per route, scope
@@ -786,7 +790,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// The title (#1197 L2): OWNER ONLY, no admin bypass at all (packet H-5 =
 	// A) — a rename is a display-field write with no security or
 	// incident-response warrant behind it. See run_title.go's doc comment.
-	"PATCH /api/v1/runs/{id}/title":           {class: classOwner, entity: entityRun, ownerTier: tierOwnerOnly},
+	"PATCH /api/v1/runs/{id}/title": {class: classOwner, entity: entityRun, ownerTier: tierOwnerOnly},
+	// A run's launch intent holds its task text: its creator only, no admin bypass
+	// (launch_intent.go). seedRun gives every fixture run one, so the owner arm reads 200.
+	"GET /api/v1/runs/{id}/launch-intent":     {class: classOwner, entity: entityRun, ownerTier: tierOwnerOnly},
 	"GET /api/v1/runs/{id}/recording/{runID}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/attach-ticket":    {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// /attach/ticket, /attach/holder and /profile/synthesize (below) are the
@@ -1052,7 +1059,8 @@ func TestAuthzMatrix(t *testing.T) {
 	seedRun := func(createdBy string) uuid.UUID {
 		id := uuid.New()
 		ast.mu.Lock()
-		ast.runs[id] = types.AgentRun{ID: id, CreatedBy: createdBy, State: types.RunRunning, Agent: "claude-code"}
+		ast.runs[id] = types.AgentRun{ID: id, CreatedBy: createdBy, State: types.RunRunning, Agent: "claude-code",
+			LaunchIntent: json.RawMessage(`{"api_version":"wardyn/v1","kind":"Run","intent":{"agent":"claude-code","task":"t"}}`)}
 		ast.mu.Unlock()
 		_ = rs.SaveCast(context.Background(), id.String(), strings.NewReader(`{"version":2}`+"\n"))
 		return id
@@ -1563,9 +1571,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// /runs/{id}/policy; 29 since #1428 added GET /runs/{id}/ado-tokens; 30
 		// since #1891 added GET /runs/{id}/sign-in; 32 since 0.8.9 added PUT and
 		// DELETE /me/components/{id}; 33 since 0.9 added GET
-		// /workspaces/{id}/branches.
-		if probed != 33 {
-			t.Errorf("probed %d classOwner routes, want 33 — a route that left classOwner takes its tier "+
+		// /workspaces/{id}/branches; 34 since 0.9 added GET
+		// /runs/{id}/launch-intent.
+		if probed != 34 {
+			t.Errorf("probed %d classOwner routes, want 34 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
@@ -1815,6 +1824,46 @@ func (s *authzStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, er
 		return types.AgentRun{}, store.ErrNotFound
 	}
 	return r, nil
+}
+
+// The launch-intent capability (store.LaunchIntentStore), read off the runs a
+// fixture seeded or created with one.
+var _ store.LaunchIntentStore = (*authzStore)(nil)
+
+func (s *authzStore) ListLaunchIntents(_ context.Context, createdBy string, limit int) ([]store.LaunchIntentRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.LaunchIntentRecord
+	for _, r := range s.runs {
+		if r.CreatedBy == createdBy && r.LaunchIntent != nil && len(out) < limit {
+			out = append(out, store.LaunchIntentRecord{RunID: r.ID, Title: r.Title, CreatedAt: r.CreatedAt})
+		}
+	}
+	return out, nil
+}
+
+func (s *authzStore) GetLaunchIntent(_ context.Context, id uuid.UUID, createdBy string) (store.LaunchIntentRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.runs[id]
+	if !ok || r.CreatedBy != createdBy || r.LaunchIntent == nil {
+		return store.LaunchIntentRecord{}, store.ErrNotFound
+	}
+	return store.LaunchIntentRecord{RunID: r.ID, Title: r.Title, CreatedAt: r.CreatedAt, Document: r.LaunchIntent}, nil
+}
+
+func (s *authzStore) DeleteLaunchIntentsCreatedBy(_ context.Context, createdBy string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for id, r := range s.runs {
+		if r.CreatedBy == createdBy && r.LaunchIntent != nil {
+			r.LaunchIntent = nil
+			s.runs[id] = r
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (s *authzStore) ListRuns(context.Context) ([]types.AgentRun, error) {

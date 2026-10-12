@@ -10,6 +10,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -510,6 +512,16 @@ func strongestAdvertisedAtOrAbove(classes []types.ConfinementClass, floor types.
 		return best
 	}
 	return floor
+}
+
+// defaultBarrier is the class an untouched launch gets: the organisation's default when it is at or
+// above the floor and offered, else today's rule (strongestAdvertisedAtOrAbove). offered is the set
+// the run's placement can enforce, so a default the placement cannot honour never wins.
+func defaultBarrier(offered []types.ConfinementClass, floor, org types.ConfinementClass) (types.ConfinementClass, runnerpool.BarrierDefaultSource) {
+	if org != "" && confinementGE(org, floor) && slices.Contains(offered, org) {
+		return org, runnerpool.BarrierDefaultOrganisation
+	}
+	return strongestAdvertisedAtOrAbove(offered, floor), runnerpool.BarrierDefaultServer
 }
 
 // classesOrNone renders an advertised confinement set for error messages, or
