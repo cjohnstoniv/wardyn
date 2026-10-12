@@ -4,11 +4,17 @@
  */
 
 import * as React from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { PolicySourceFormat } from "../../../lib/policy-document";
 import { DocumentEditor, type DocumentDiagnostic } from "./document-editor";
+import * as policySource from "./policy-source";
+
+vi.mock("./policy-source", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./policy-source")>();
+  return { ...real, parseSpec: vi.fn(real.parseSpec) };
+});
 
 const YAML = "# who may reach what\nmin_confinement_class: CC2\nallowed_domains:\n  - api.example.com\n";
 
@@ -75,6 +81,16 @@ describe("DocumentEditor — gutter and error marks", () => {
     expect(screen.getByText("Line 2, column 5")).toBeInTheDocument();
   });
 
+  it("sizes the box from the textarea's rows, never from the gutter", () => {
+    seen.length = 0;
+    render(<Editor initial={Array.from({ length: 40 }, (_, i) => `k${i}: ${i}`).join("\n")} />);
+    // jsdom has no layout: the gutter must carry size containment so its one row per line
+    // cannot set the row's height, and the textarea must keep the rows it was given.
+    expect(gutter().className).toContain("[contain:size]");
+    expect(box()).toHaveAttribute("rows", "12");
+    expect(box().className).not.toContain("[contain:size]");
+  });
+
   it("follows the textarea's scroll", () => {
     seen.length = 0;
     render(<Editor />);
@@ -120,6 +136,22 @@ describe("DocumentEditor — format conversion", () => {
     seen.length = 0;
     render(<Editor initial={"a: [1,\n"} />);
     expect(screen.getByRole("button", { name: "JSON" })).toBeDisabled();
+    expect(screen.getByTestId("document-switch-reason").textContent).toMatch(/^Invalid YAML — /);
+  });
+
+  it("says nothing about the switch while the source parses", () => {
+    seen.length = 0;
+    render(<Editor />);
+    expect(screen.queryByTestId("document-switch-reason")).toBeNull();
+  });
+
+  it("parses once per value change, not on every render", async () => {
+    seen.length = 0;
+    render(<Editor />);
+    vi.mocked(policySource.parseSpec).mockClear();
+    await userEvent.click(screen.getByRole("button", { name: "JSON" })); // re-renders: the dialog opens
+    expect(screen.getByText("Switch to JSON?")).toBeInTheDocument();
+    expect(policySource.parseSpec).not.toHaveBeenCalled();
   });
 
   it("shows no switch when the caller does not offer conversion", () => {
