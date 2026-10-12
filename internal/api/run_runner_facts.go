@@ -41,7 +41,13 @@ func (s *Server) projectRunnerFacts(r *http.Request, runs []types.AgentRun) {
 		if row == nil {
 			continue
 		}
+		run.RunnerName, run.RunnerLastSeenAt = row.Name, row.LastSeenAt
 		online := row.State == types.RunnerClaimed && s.runnerOnline(id)
-		run.RunnerName, run.RunnerOnline, run.RunnerLastSeenAt = row.Name, &online, row.LastSeenAt
+		// Under WARDYN_HA a replica that does not hold the runner's session answers offline for a runner
+		// connected to another, so there false is a guess and stays unset (unknown); true is always a fact.
+		if s.cfg.HA && !online {
+			continue
+		}
+		run.RunnerOnline = &online
 	}
 }

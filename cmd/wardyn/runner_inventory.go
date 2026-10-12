@@ -31,7 +31,7 @@ func runnerListCmd(client clientFn) *cobra.Command {
 		case all:
 			rows, truncated, err = client().ListRunnersPage(cmd.Context(), sdk.RunnerFilter(state), listPageOptsAt(limit, offset)...)
 		case state != "":
-			return fmt.Errorf("--state applies to --all; your own list is the unclaimed and claimed runners")
+			return fmt.Errorf("--state applies to --all; your own list is your unclaimed and claimed runners, plus any revoked by someone else in the last 7 days")
 		default:
 			rows, err = client().ListMyRunners(cmd.Context())
 		}

@@ -130,3 +130,43 @@ func TestRunRunnerFacts_ARevokedRunnersRunKeepsItsName(t *testing.T) {
 		t.Fatalf("a revoked runner's run must keep its name and read offline: %v", got)
 	}
 }
+
+// Under WARDYN_HA a replica that does not hold the runner's session answers "offline" for a runner connected
+// to another replica, so there false is a guess: liveness stays unset (unknown) and the page claims nothing.
+// A runner this replica does hold is still reported online, and the name and last seen are unaffected.
+func TestRunRunnerFacts_UnderHAOfflineIsUnknownNotFalse(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	srv.cfg.HA = true
+	held := f.addRunner(srv, "alice", "held-here", types.RunnerClaimed, 24*time.Hour)
+	elsewhere := f.addRunner(srv, "alice", "held-elsewhere", types.RunnerClaimed, 24*time.Hour)
+	srv.cfg.RunnerOnline = func(id uuid.UUID) bool { return id == held.ID }
+	heldRun := addLocalRun(f, &held)
+	elsewhereRun := addLocalRun(f, &elsewhere)
+
+	w := do(t, srv, http.MethodGet, "/api/v1/runs/"+heldRun.ID.String(), adminToken, "")
+	if got := runnerFactsOf(t, w.Body.Bytes()); string(got["runner_online"]) != "true" {
+		t.Fatalf("a runner this replica holds is a fact: %v", got)
+	}
+	for _, path := range []string{"/api/v1/runs/" + elsewhereRun.ID.String(), "/api/v1/runs"} {
+		w := do(t, srv, http.MethodGet, path, adminToken, "")
+		body := w.Body.Bytes()
+		if path == "/api/v1/runs" {
+			var rows []json.RawMessage
+			if json.Unmarshal(body, &rows) != nil {
+				t.Fatalf("decode list: %s", body)
+			}
+			body = nil
+			for _, raw := range rows {
+				var id struct{ ID uuid.UUID }
+				_ = json.Unmarshal(raw, &id)
+				if id.ID == elsewhereRun.ID {
+					body = raw
+				}
+			}
+		}
+		got := runnerFactsOf(t, body)
+		if _, present := got["runner_online"]; present || string(got["runner_name"]) != `"held-elsewhere"` {
+			t.Fatalf("%s: under HA an unheld runner must keep its name and leave liveness unset: %v", path, got)
+		}
+	}
+}
