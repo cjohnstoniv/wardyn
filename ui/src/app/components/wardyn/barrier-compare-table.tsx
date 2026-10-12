@@ -182,7 +182,7 @@ function BarrierChoice({
             <BarrierArt cc={cc} size={artSize} />
             <input
               type="radio"
-              name={`${uid}-barrier`}
+              name={`${uid}-${instance}-barrier`}
               value={cc}
               checked={value === cc}
               disabled={!available}
@@ -196,7 +196,7 @@ function BarrierChoice({
           <span className="text-xs font-medium text-muted-foreground">{meta.short}</span>
           {(defaultBadge?.cc === cc || badge) && (
             <span className="flex flex-wrap gap-1">
-              {defaultBadge?.cc === cc && <Chip tone="info">{defaultBadge.text}</Chip>}
+              {defaultBadge?.cc === cc && <Chip>{defaultBadge.text}</Chip>}
               {badge && <Chip>{badge}</Chip>}
             </span>
           )}
@@ -230,11 +230,11 @@ function BarrierInfo({ cc }: { cc: ConfinementClass }) {
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-72 text-xs">
-        <h5 className="text-sm font-medium text-foreground">{INFO_HEADINGS.protects}</h5>
+        <p className="text-sm font-medium text-foreground">{INFO_HEADINGS.protects}</p>
         <p className="mt-1 text-muted-foreground">{meta.protects}</p>
-        <h5 className="mt-2 text-sm font-medium text-foreground">{INFO_HEADINGS.doesntProtect}</h5>
+        <p className="mt-2 text-sm font-medium text-foreground">{INFO_HEADINGS.doesntProtect}</p>
         <p className="mt-1 text-muted-foreground">{meta.doesntProtect}</p>
-        <h5 className="mt-2 text-sm font-medium text-foreground">{INFO_HEADINGS.howItWorks}</h5>
+        <p className="mt-2 text-sm font-medium text-foreground">{INFO_HEADINGS.howItWorks}</p>
         <p className="mt-1 text-muted-foreground">{meta.mechanism}</p>
       </PopoverContent>
     </Popover>
