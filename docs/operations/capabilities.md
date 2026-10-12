@@ -22,7 +22,7 @@ the ADMIN pre-authorized.
 | `agent` | exact `--agent` string | narrows | which agent/harness a member may launch (same seam). Deliberately NOT constrained to the harness catalog, at the gate or at the grant write: `WARDYN_AGENT_IMAGES` custom agents are supported, so a catalog check would make an operator's own entry unwriteable |
 | `workspace_provider` | exact git provider row id | narrows | which git provider row a member's repositories may come from; see [`workspace_provider`](#workspace_provider) below |
 | `model_provider` | exact model provider id | narrows | which model provider a person's run may use; see [`model_provider`](#model_provider) below |
-| `feature` | `ssh_key`, `api_token` or `custom_component` | narrows | whether a member may add an SSH key, mint an API token or define a custom component at all; see [`feature`](#feature) below |
+| `feature` | `ssh_key`, `api_token`, `custom_component` or `service_attach` | narrows | whether a member may add an SSH key, mint an API token, define a custom component or enter the runs of a service identity they sponsor; see [`feature`](#feature) below |
 | `policy` | stored policy uuid | narrows | which stored policy a member may select for their own run (`policy_id` on `POST /runs`/preflight, `denyUserRequest`, same seam). |
 | | | | Only the choice: the selected row is still bounded by the member's ceiling, and a run that names no policy is not gated. |
 | | | | Checked before the row is read, so an ungranted id is refused whether or not it exists |
@@ -237,7 +237,16 @@ the ADMIN pre-authorized.
   - Where `feature` is already enforced, it is off for anyone no allow row (the value or `*`) covers, so write that row before upgrading.
   - A refusal carries the reason `capability_feature` with the target `runs.component`.
   - See [Custom components](custom-components.md#custom-components).
+- `service_attach` gates a service identity's sponsor entering one of its runs (a terminal or a UI app); see [`service_attach`](#service_attach) below.
 - Any other value is refused at write time (`400`)
+#### `service_attach`
+
+- Off for everyone: migration `0167_service_attach_restriction` restricts the value, so a `*` allow grants nobody.
+- An allow row that names `service_attach` admits its subject; one written for subject `all` admits every sponsor.
+- A deny, a user-type deny included, wins; a super admin sponsor needs the grant too.
+- Asked at the attach-ticket mint only: a withdrawn grant refuses the next ticket and ends no session already open.
+- A portal's delegated token gets no sponsor reach.
+
 ### `GET /permissions/explain`
 
 - the Explain grid (K4): for one named `user`, `group` or `user_type` subject, every kind's state —

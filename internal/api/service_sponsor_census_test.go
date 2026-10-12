@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -31,7 +32,7 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := map[string]int{}
+	found, direct := map[string]int{}, map[string]int{}
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -47,8 +48,13 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 				continue
 			}
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "ownsRunOrSponsorOrAdmin" {
-					found[fn.Name.Name]++
+				if sel, ok := n.(*ast.SelectorExpr); ok {
+					switch sel.Sel.Name {
+					case "ownsRunOrSponsorOrAdmin":
+						found[fn.Name.Name]++
+					case "sponsorsRun":
+						direct[fn.Name.Name]++
+					}
 				}
 				return true
 			})
@@ -62,6 +68,11 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 		if src, err := os.ReadFile("routes.go"); err != nil || !strings.Contains(string(src), route) {
 			t.Errorf("routes.go does not mount %s (%v)", route, err)
 		}
+	}
+	// sponsorsRun itself is asked only by the predicate above and by the ticket mint, whose load admits a
+	// sponsor so that its entry check can refuse by capability; any other caller is a new sponsor door.
+	if want := map[string]int{"ownsRunOrSponsorOrAdmin": 1, "handleAttachTicket": 1, "sponsorMayEnter": 1}; !maps.Equal(direct, want) {
+		t.Errorf("sponsorsRun is asked by %v, want %v", direct, want)
 	}
 	if len(found) != 0 {
 		t.Errorf("ownsRunOrSponsorOrAdmin is also asked by %v: a route a sponsor now reaches", slices.Sorted(func(yield func(string) bool) {
