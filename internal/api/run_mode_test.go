@@ -87,7 +87,7 @@ func TestRunModeRefusals(t *testing.T) {
 		{"a harness startup takes a starting prompt", interactiveOK + `,"startup":{"kind":"harness","tool":"claude-code","prompt":"fix the build"}`, "", "", 200},
 		{"a starting prompt needs a harness startup", interactiveOK + `,"startup":{"kind":"none","prompt":"fix the build"}`, reasonRunModeInvalid, startupPromptShapeMsg(), 400},
 		{"a command startup takes no starting prompt", interactiveOK + `,"startup":{"kind":"command","command":"make","prompt":"x"}`, reasonRunModeInvalid, startupPromptShapeMsg(), 400},
-		{"two harnesses wait for the harness set", `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools: more than one harness"), 422},
+		{"two harnesses need an image declared for them", `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],` + noRepos, reasonHarnessSetNoImage, harnessSetNoImageMsg("Claude Code", "Codex CLI"), 422},
 		{"an interactive run's tool rule waits for the harness's settings", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"deny"}]}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: tool rules in an interactive run"), 422},
 		{"a background run's rule is honoured on the gated lane", `"experience":"background",` + agentTask + `,"tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"hold"},{"tool":"Read","effect":"allow"}],"default_effect":"deny"}],` + noRepos, "", "", 200},
 		{"a rule names one tool exactly", `"experience":"background",` + agentTask + `,"tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash(git push:*)","effect":"deny"}]}],` + noRepos, reasonRunModeInvalid, "", 400},
@@ -138,6 +138,37 @@ func TestRunModeRefusals(t *testing.T) {
 					}
 				}
 			})
+		}
+	}
+}
+
+// TestRunMode_TwoHarnessesStartFromTheSetImage (T0, inverted at DS1-S4): two
+// harnesses are honoured at every door, and create launches them from the
+// image declared for the set, with both recorded and the started one marked.
+func TestRunMode_TwoHarnessesStartFromTheSetImage(t *testing.T) {
+	images := map[string]string{"claude-code": "wardyn/agent-claude-code:local", "claude-code+codex-cli": setImage}
+	body := `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],"startup":{"kind":"harness","tool":"codex-cli"},` + noRepos
+	for _, door := range harnessDoors {
+		srv, st, _ := harnessSetFixture(t, &capStore{}, images, nil)
+		w := harnessSetCall{"sub-plain", body}.ask(t, srv, door)
+		if door != harnessDoors[0] {
+			if w.Code != http.StatusOK {
+				t.Fatalf("%s: %d %s, want 200", door, w.Code, w.Body.String())
+			}
+			continue
+		}
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create: %d %s, want 201", w.Code, w.Body.String())
+		}
+		srv.WaitBackground()
+		id := st.onlyRun(t)
+		if st.images[id] != setImage {
+			t.Errorf("run image = %q, want the declared set image %q", st.images[id], setImage)
+		}
+		rows := st.rows[id]
+		if len(rows) != 2 || !slices.ContainsFunc(rows, func(h types.RunHarness) bool { return h.Harness == "codex-cli" && h.Starts }) ||
+			!slices.ContainsFunc(rows, func(h types.RunHarness) bool { return h.Harness == "claude-code" && !h.Starts }) {
+			t.Errorf("run_harnesses = %+v, want claude-code and codex-cli, codex-cli started", rows)
 		}
 	}
 }
