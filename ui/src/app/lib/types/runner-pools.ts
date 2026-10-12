@@ -35,6 +35,7 @@ export type LimitSource = "pool" | "governance" | "deployment" | "runner_capacit
 /** Why the platform ended a run (Go: types.RunEndReason). */
 export type RunEndReason =
   | "max_lifetime_reached"
+  | "end_reached"
   | "queue_timeout"
   | "queue_profile_changed"
   | "queue_policy_changed"

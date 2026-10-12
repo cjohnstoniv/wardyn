@@ -187,15 +187,16 @@ func endSourceLabel(src types.LimitSource, pool string) string {
 	return "this deployment"
 }
 
-// resolveCreateEnd is stepRunEnd's check: the run's end, or the refusal. A pool
-// limits the end only once the run resolves one (D-117 sets pool here); until then
-// the pool source is absent.
-func (s *Server) resolveCreateEnd(r *http.Request, req createRunRequest, ceiling governanceCeiling) (createEnd, *runRefusal) {
+// resolveCreateEnd is stepRunEnd's check: the run's end, or the refusal. pool is
+// the pool the run resolved to (stepPlacement), nil for an unpooled run; its
+// lifetime limits the end like the other sources.
+func (s *Server) resolveCreateEnd(r *http.Request, req createRunRequest, ceiling governanceCeiling, pool *types.RunnerPool) (createEnd, *runRefusal) {
 	in := createEndInput{
 		runType:   runTypeForEnd(req.Experience),
+		pool:      pool,
 		governed:  !s.runUngoverned(r.Context()),
 		gov:       ceiling.Limits.RunLimits,
-		maxAgeSec: int(s.cfg.RunMaxAge / time.Second),
+		maxAgeSec: max(0, int(s.cfg.RunMaxAge/time.Second)), // a negative WARDYN_RUN_MAX_AGE is off, as 0 is
 		noEnd:     req.NoEnd,
 	}
 	if req.EndsAfterSec != nil {

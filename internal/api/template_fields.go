@@ -119,8 +119,6 @@ func (r TemplateFieldRule) in(section, keyedBy string) TemplateFieldRule {
 	return r
 }
 
-func (r TemplateFieldRule) pending(lane string) TemplateFieldRule { r.Pending = lane; return r }
-
 func (r TemplateFieldRule) sensitive() TemplateFieldRule  { r.Sensitive = true; return r }
 func (r TemplateFieldRule) personOnly() TemplateFieldRule { r.PersonOnly = true; return r }
 
@@ -270,8 +268,8 @@ var templatePolicyRules = []TemplateFieldRule{
 		"Pushes stay inside the run's own branch namespace. False is a choice to keep that.").
 		in(templateSectionSCMEntry, "provider+org"),
 	carriedField("push_rules", templateTabAccess, partRules, templateOmitOptional, templateEmptySame,
-		"Push rules exist only inside an SCM entry, one set per provider and organisation. This run-wide block is not accepted until the keyed carrier lands.").
-		in(templateSectionSCMEntry, "provider+org").pending("A-L3/A-L10"),
+		"Push rules exist only inside an SCM entry, one set per provider and organisation (overrides.push_rules).").
+		in(templateSectionSCMEntry, "provider+org"),
 	carriedField("azure_devops_capabilities", templateTabAccess, partCreds, templateOmitBaseline, templateEmptySame,
 		"The provider's default profile applies.").
 		in(templateSectionSCMEntry, "provider+org"),
@@ -299,7 +297,9 @@ var templateNestedCarried = map[string]string{
 	"PushRuleOverride":   "provider host org deny_paths require_review_paths",
 	"PushRulesSpec":      "deny_paths max_inspect_pack_mib require_review_paths hold_seconds deny_new_executables max_file_size_mib",
 	"ResourceLimits":     "cpu_millis memory_mib pids_limit disk_mib",
-	"RunOverrides":       "agent azure_devops git_pat push_rules",
+	"RunHostOverrides":   "add_allowed add_denied remove_allowed remove_denied",
+	"RunEgressOverrides": "first_use_approval allow_all_egress",
+	"RunOverrides":       "agent azure_devops git_pat push_rules hosts egress",
 	"RunResources":       "cpu_millis memory_mib",
 	"RunStartup":         "kind tool command",
 	"RunWorkload":        "kind agent task command",

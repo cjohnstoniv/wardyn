@@ -49,6 +49,12 @@ type createRunLaunch struct {
 	created       types.AgentRun
 	// comps is the component gate's decision; dispatch takes its own half of it.
 	comps runComponents
+	// overridden: the run's person edited the New Run cards (policy_source.overrides_diff).
+	overridden bool
+	// pushSets are the run's push rules per SCM entry (pushRuleSetsFor).
+	pushSets []types.PushRuleSet
+	// harnessRules are the run's tool rules per included harness (harnessToolRulesFor).
+	harnessRules []types.HarnessToolRules
 }
 
 // DRAFT (M2 canon pending) — the run's failure_hint when the detached launch
@@ -123,8 +129,11 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			// which case the driver re-checks that member's own binds against these
 			// roots immediately before ContainerCreate (userMountPosture,
 			// workspace_refs.go).
-			UserMounts: s.userMountPosture(l.wsRefs),
-			Components: l.comps.dispatch(),
+			UserMounts:       s.userMountPosture(l.wsRefs),
+			Components:       l.comps.dispatch(),
+			PolicyOverridden: l.overridden,
+			PushRuleSets:     l.pushSets,
+			HarnessToolRules: l.harnessRules,
 		})
 	}
 }

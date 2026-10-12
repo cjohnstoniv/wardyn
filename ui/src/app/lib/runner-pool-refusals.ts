@@ -39,6 +39,7 @@ export const BARRIER_LABEL = { CC1: "Fence", CC2: "Wall", CC3: "Vault" } as cons
 /** Why the platform ended a run (types.RunEndReason), with the sentence the run detail and the audit view say. */
 export const RUN_END_REASON_SENTENCE = {
   max_lifetime_reached: "This run reached its maximum lifetime and was ended.",
+  end_reached: "This run reached its end time and was ended.",
   queue_timeout: "This run waited too long for a free slot and was not started.",
   queue_profile_changed: "Your governance profile changed while this run waited. Start it again.",
   queue_policy_changed: "The policy this run used changed while it waited. Start it again to review it.",

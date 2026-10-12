@@ -184,6 +184,9 @@ func (s *Server) projectStatusDetailFor(r *http.Request, runs []types.AgentRun) 
 //   - QUEUED: the "queue: <token>" wait reason, as stored, plus its token (the queue's own line).
 //   - FAILED with a "queue: <token>" end reason, or KILLED with "queue: runner_pool_removed": kept,
 //     plus its token. The queue writes these; the substrate-wait rules below do not apply to them.
+//   - KILLED with a lifetime end reason ("lifetime: end_reached" or
+//     "lifetime: max_lifetime_reached", types.RunEndReason): kept, plus its token.
+//     Any other detail on a KILLED run is blanked.
 //   - anything else, including a FAILED run whose last wait was ordinary:
 //     blanked. Presenting a stale wait as the cause is the misdiagnosis this
 //     field exists to end.
@@ -203,6 +206,14 @@ func projectStatusDetail(runs []types.AgentRun) {
 			r.StatusDetail = ""
 		case r.State == types.RunStarting:
 			r.StatusReason = reason
+		case r.State == types.RunKilled:
+			// Only a lifetime end reason survives a kill (killRunAtLifetime writes
+			// it with the state); a kill's stale substrate wait is blanked.
+			if end := types.RunEndReason(reason); end == types.RunEndMaxLifetimeReached || end == types.RunEndEndReached {
+				r.StatusReason = reason
+			} else {
+				r.StatusDetail = ""
+			}
 		case r.State == types.RunFailed:
 			if !runner.IsTerminalWaitingReason(reason) {
 				// The row may be missing the ending, or holding a stale one.

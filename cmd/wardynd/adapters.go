@@ -517,7 +517,7 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	const q = `
 		SELECT id, created_at, admitted_at, updated_at,
 		       CASE WHEN experience = 'background' THEN 0 ELSE auto_stop_after_sec END,
-		       lost_at IS NOT NULL, now()
+		       lost_at IS NOT NULL, lifetime_cap_at IS NOT NULL, now()
 		FROM agent_runs
 		WHERE state = $1 AND ` + store.HoldsSandboxSQL
 	rows, err := l.pool.Query(ctx, q, string(types.RunRunning))
@@ -531,7 +531,7 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	for rows.Next() {
 		var s lifecycle.RunSummary
 		var admitted *time.Time
-		if err := rows.Scan(&s.ID, &s.CreatedAt, &admitted, &s.UpdatedAt, &s.PolicyAutoStopAfterSec, &s.Kept, &dbNow); err != nil {
+		if err := rows.Scan(&s.ID, &s.CreatedAt, &admitted, &s.UpdatedAt, &s.PolicyAutoStopAfterSec, &s.Kept, &s.HasLifetimeCap, &dbNow); err != nil {
 			return nil, time.Time{}, fmt.Errorf("wardynd: scan run summary: %w", err)
 		}
 		if admitted != nil {

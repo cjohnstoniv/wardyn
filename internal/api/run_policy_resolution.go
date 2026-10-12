@@ -86,6 +86,12 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		// The policy as authored, recorded BEFORE the env-secret posture and the
 		// member clamp change it (policySourceRecord stamps it redacted).
 		source := newPolicySourceRecord(policyKindInline, nil, "", nil, !ceiling.Operator, spec)
+		// The person's New Run edits, BEFORE the posture and the clamp below, so
+		// everything an edit adds is bounded like anything else they authored.
+		spec, edits, refusal := s.applyRunOverrides(ctx, r, spec, req.Overrides)
+		if refusal != nil {
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
+		}
 		clampWarnings := append([]string(nil), ceiling.Warnings...)
 		// env_secret's admin-only posture, applied FIRST and unconditionally for
 		// a non-operator — it is a role check, not a ceiling check, so it must
@@ -107,7 +113,6 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 			// (applyRequiredSecretGrant, applyIntegrationRequirement) folded in
 			// by runs.go/preflight.go AFTER this function returns.
 			var warns []string
-			var refusal *runRefusal
 			spec, warns, refusal = s.boundRunUserSpec(ctx, r, spec, ceiling, "invalid inline_policy: ", dryRun)
 			if refusal != nil {
 				return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
@@ -146,6 +151,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 					"eligible_grants":       len(spec.EligibleGrants),
 				})))
 		}
+		edits.finish(&source, spec)
 		return spec, nil, clampWarnings, source, nil
 	}
 
@@ -163,6 +169,12 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	// The starting policy, before the env-secret posture and the member clamp
 	// below change it: a stored row, or the caller's own ceiling.
 	source := newPolicySourceRecord(origin.kind, policyID, origin.name, origin.updatedAt, !ceiling.Operator, spec)
+	// The person's New Run edits, before the posture and the clamp (see the
+	// inline branch).
+	spec, edits, refusal := s.applyRunOverrides(ctx, r, spec, req.Overrides)
+	if refusal != nil {
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
+	}
 	storedWarns := append([]string(nil), ceiling.Warnings...)
 	// Same unconditional env_secret posture the inline branch applies, in the
 	// same position, and it is the half the scoped clamp below CANNOT carry: the
@@ -209,10 +221,19 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	// rule whether body or row id" claim would be false at exactly the
 	// grant-bearing rows, which are the ones that matter. Dropping the unlisted
 	// pairing is filterUserGrants' job, stage 2.
-	if policyID != nil && ceiling.Profile != nil && !s.runUngoverned(r.Context()) {
+	//
+	// The person's New Run edits change both halves: with edits, the default
+	// policy is the ceiling PLUS what they added, so it is clamped as a whole
+	// too; and where a stored row is not clamped as a whole (no declared
+	// profile), the additions alone are bounded (boundOverrideAdds).
+	if !s.runUngoverned(r.Context()) {
 		var warns []string
-		var refusal *runRefusal
-		spec, warns, refusal = s.boundRunUserSpec(ctx, r, spec, ceiling, "invalid policy: ", dryRun)
+		switch {
+		case policyID != nil && ceiling.Profile != nil, policyID == nil && edits != nil:
+			spec, warns, refusal = s.boundRunUserSpec(ctx, r, spec, ceiling, "invalid policy: ", dryRun)
+		default:
+			spec, warns, refusal = s.boundOverrideAdds(ctx, r, spec, edits, ceiling)
+		}
 		if refusal != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 		}
@@ -237,6 +258,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	if code, err := s.validateRunSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec, credentials); err != nil {
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, runError(code, reasonInlinePolicyInvalid, "invalid policy: "+err.Error())
 	}
+	edits.finish(&source, spec)
 	return spec, policyID, storedWarns, source, nil
 }
 

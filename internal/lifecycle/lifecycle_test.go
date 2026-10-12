@@ -924,3 +924,32 @@ func TestMaxAgeLostCompareAndSetWritesNoAudit(t *testing.T) {
 		t.Fatalf("audit rows = %d for a stop that did not apply, want 0", rec.len())
 	}
 }
+
+// TestReaper_SkipsARunCarryingLifetimeCap: a run that carries a lifetime cap is
+// ended by the lease sweep at that cap (WARDYN_RUN_MAX_AGE is one of the limits
+// the cap is measured from), so the max-age stop leaves it alone; an older run
+// with no cap is still stopped, and a capped idle run still reaches the idle stop.
+func TestReaper_SkipsARunCarryingLifetimeCap(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	store := &fakeStore{}
+	stopper := newFakeStopper()
+	rec := &fakeRecorder{}
+	capped, older, cappedIdle := uuid.New(), uuid.New(), uuid.New()
+	store.rows = []lifecycle.RunSummary{
+		{ID: capped, CreatedAt: base.Add(-48 * time.Hour), UpdatedAt: base.Add(-time.Second), HasLifetimeCap: true},
+		{ID: older, CreatedAt: base.Add(-48 * time.Hour), UpdatedAt: base.Add(-time.Second)},
+		{ID: cappedIdle, CreatedAt: base.Add(-48 * time.Hour), UpdatedAt: base.Add(-48 * time.Hour), PolicyAutoStopAfterSec: 60, HasLifetimeCap: true},
+	}
+
+	maxAgeReaper(store, stopper, rec, base, 24*time.Hour).Tick(context.Background())
+
+	if !slices.Equal(stopper.maxAgeStopped, []uuid.UUID{older}) {
+		t.Fatalf("max-age stops = %v, want only the run with no cap (%v)", stopper.maxAgeStopped, older)
+	}
+	if stopper.wasStopped(capped) {
+		t.Error("a capped, active run was stopped")
+	}
+	if !stopper.wasStopped(cappedIdle) || slices.Contains(stopper.maxAgeStopped, cappedIdle) {
+		t.Errorf("the capped idle run: stopped=%v by max age=%v; want the idle stop only", stopper.wasStopped(cappedIdle), slices.Contains(stopper.maxAgeStopped, cappedIdle))
+	}
+}
