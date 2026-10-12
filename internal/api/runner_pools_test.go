@@ -23,8 +23,8 @@ func TestRunnerPoolRoutesAnswerWithoutPoolStorage(t *testing.T) {
 			routes = append(routes, key)
 		}
 	}
-	if len(routes) != 17 {
-		t.Fatalf("%d pool routes are classified, want 17", len(routes))
+	if len(routes) != 20 {
+		t.Fatalf("%d pool routes are classified, want 20", len(routes))
 	}
 	h := newHarness(t)
 	for _, key := range routes {

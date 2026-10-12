@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -71,6 +72,7 @@ func TestPoolListAvailabilityReasons(t *testing.T) {
 	background := e.limitedPool("Background only", types.CC1, types.CC2, types.CC3)
 	home := e.createPool("Home server", types.RunnerPoolSelfHosted)
 	e.addToPool(e.person, home.ID, e.claimedRunner(e.personP)) // claimed, never online
+	bare := e.createOwnPool(e.person, "Bare")
 
 	reasonOf := func(c *http.Cookie, query string, id uuid.UUID) runnerpool.Reason {
 		t.Helper()
@@ -91,7 +93,10 @@ func TestPoolListAvailabilityReasons(t *testing.T) {
 	want("no configured executor", reasonOf(e.person, "", empty.ID), runnerpool.ReasonNoEligibleMember)
 	want("an available remote pool", reasonOf(e.person, "", remote.ID), "")
 	want("own runners all offline", reasonOf(e.person, "", home.ID), runnerpool.AvailabilityNoOnlineRunner)
-	want("no own runner in the pool", reasonOf(e.other, "", home.ID), runnerpool.ReasonNoEligibleMember)
+	want("no own runner in the pool", reasonOf(e.person, "", bare.ID), runnerpool.ReasonNoEligibleMember)
+	if list, _ := e.list(e.other, ""); slices.ContainsFunc(list.Pools, func(p client.RunnerPoolCatalogueEntry) bool { return p.ID == home.ID }) {
+		t.Error("another person's list shows the person's own Self-Hosted pool")
+	}
 	e.runnersOn(false)
 	want("runners switched off", reasonOf(e.person, "", home.ID), runnerpool.AvailabilityPlacementUnavailable)
 	e.runnersOn(true)
@@ -117,15 +122,17 @@ func TestPoolListAvailabilityReasons(t *testing.T) {
 	want("an own runner online", reasonOf(e.person, "", home.ID), "")
 }
 
-// T10: another person's runner in the same pool is never named, never counted as capacity and never
-// makes the pool available to the caller.
+// T10: another person's runner in the same pool (a membership no route can write) is never named, never
+// counted as capacity and never makes the pool available to the caller.
 func TestPoolListNeverNamesAnotherPersonsRunner(t *testing.T) {
 	e := newPlacementEnv(t)
 	home := e.createPool("Home server", types.RunnerPoolSelfHosted)
 	mine := e.claimedRunner(e.personP)
 	e.addToPool(e.person, home.ID, mine)
 	theirs := e.laptop(e.otherP, 8000, 16384, types.CC1, types.CC2, types.CC3)
-	e.addToPool(e.other, home.ID, theirs)
+	if _, err := e.pool.Exec(context.Background(), `INSERT INTO runner_pool_members (pool_id, runner_id) VALUES ($1, $2)`, home.ID, theirs); err != nil {
+		t.Fatal(err)
+	}
 
 	list, raw := e.list(e.person, "")
 	got := entryOf(t, list, home.ID)
