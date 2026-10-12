@@ -4,12 +4,14 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"slices"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -20,8 +22,9 @@ import (
 // The pool list's enrichment (GET /runner-pools): per usable pool its run types, the limits a run of
 // each type gets, its three barriers and the caller's own runners in it; for the caller, their
 // allowance and the pool an untouched run resolves to. Every value comes from the function admission
-// uses, and every fact is a cached one (the hub, TargetInspector.ExecutorFacts), so this unthrottled
-// read never drives a substrate probe. The list is advisory: create recomputes everything.
+// uses. Facts come from the hub and TargetInspector.ExecutorFacts, which caches a healthy executor's
+// classes; one whose facts are not cached (a failing executor) is asked at most once per list,
+// however many pools hold it. The list is advisory: create recomputes everything.
 
 // dockerExecutor is the Docker substrate's executor name (its driverName), the one executor whose
 // missing Vault the deployment's own KVM explains.
@@ -34,6 +37,10 @@ type poolListInput struct {
 	denied  []types.Placement
 	// runType is the ?run_type= asked for; "" asks for every type a pool takes.
 	runType types.RunnerPoolRunType
+	// untouched is the size a run that names no policy resolves to (memberResources), as preflight's.
+	untouched types.ResourceLimits
+	// executors are the configured executors' facts, each read once per list however many pools hold it.
+	executors map[string]executorRead
 	// runnerNames are the caller's runners' names, read on the first self-hosted row that needs them.
 	runnerNames map[uuid.UUID]string
 }
@@ -42,7 +49,10 @@ func (s *Server) poolList(r *http.Request, ps store.RunnerPoolStore, rows []stor
 	ceiling governanceCeiling, rt types.RunnerPoolRunType,
 ) (client.RunnerPoolList, *runRefusal) {
 	ctx := r.Context()
-	in := &poolListInput{ps: ps, ceiling: ceiling, denied: s.deniedPlacements(ctx, ceiling), runType: rt}
+	in := &poolListInput{ps: ps, ceiling: ceiling, denied: s.deniedPlacements(ctx, ceiling), runType: rt, executors: map[string]executorRead{}}
+	if res, _ := s.memberResources(ctx, ceiling.Spec.Resources, ceiling); res != nil {
+		in.untouched = types.ResourceLimits{CPUMillis: res.CPUMillis, MemoryMiB: res.MemoryMiB}
+	}
 	out := client.RunnerPoolList{Pools: make([]client.RunnerPoolCatalogueEntry, 0, len(rows))}
 	var permitted []types.RunnerPool
 	for _, row := range rows {
@@ -94,18 +104,14 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 	}
 	targets := st.own
 	if row.Pool.HostingType == types.RunnerPoolRemoteProvided && st.availability == client.RunnerPoolAvailable {
-		// Only through the inspector's cached facts: a lone driver's own probe is never run per row.
+		// Only through the inspector's facts, never a lone driver's own probe.
 		if _, ok := s.targetInspector(); ok {
-			targets, _ = s.executorTargets(ctx, row)
+			targets, _ = executorTargets(row, s.configuredExecutors(), func(e string) (runner.TargetFacts, bool) { return in.executorFacts(ctx, s, e) })
 		}
 	}
 	fit, _ := eligibleTargets(targets, placementDemand{floor: in.ceiling.Spec, reqCCOK: true})
-	var untouched types.ResourceLimits
-	if res := in.ceiling.Spec.Resources; res != nil {
-		untouched = types.ResourceLimits{CPUMillis: res.CPUMillis, MemoryMiB: res.MemoryMiB}
-	}
 	for _, rt := range want {
-		sources, ref, err := s.limitSources(ctx, rt, &row.Pool, in.ceiling, untouched, selfHostedCapacity(row.Pool, fit, ""))
+		sources, ref, err := s.limitSources(ctx, rt, &row.Pool, in.ceiling, in.untouched, selfHostedCapacity(row.Pool, fit, ""))
 		if err != nil {
 			return client.RunnerPoolCatalogueEntry{}, runServerError("resolve pool limits", err)
 		}
@@ -129,6 +135,23 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 		}
 	}
 	return e, nil
+}
+
+// executorRead is one executor's facts as the list read them.
+type executorRead struct {
+	facts runner.TargetFacts
+	known bool
+}
+
+// executorFacts reads an executor's facts at most once per list. The orchestrator caches a healthy
+// executor's classes; a failing one is asked again on the next list, never once per pool.
+func (in *poolListInput) executorFacts(ctx context.Context, s *Server, executor string) (runner.TargetFacts, bool) {
+	r, ok := in.executors[executor]
+	if !ok {
+		r.facts, r.known = s.executorFacts(ctx, executor)
+		in.executors[executor] = r
+	}
+	return r.facts, r.known
 }
 
 // ownRunnerNames is the caller's own runners by id, read once per list.
@@ -185,13 +208,13 @@ func kvmExplainsNoVault(pool types.RunnerPool, targets []poolTarget) bool {
 
 // draftBarrierOptions is Review's barriers for the run's resolved pool: the list's, plus this draft's
 // policy floor and the Vault its access needs. An unpooled run has none.
-func draftBarrierOptions(f *runFold, floor types.RunPolicySpec) []client.BarrierOption {
-	if !f.place.pooled {
+func draftBarrierOptions(place runPlacement, ceiling governanceCeiling, floor types.RunPolicySpec, baseline composer.Baseline) []client.BarrierOption {
+	if !place.pooled {
 		return []client.BarrierOption{}
 	}
-	bf := barrierFacts(f.place.row, f.place.targets, f.ceiling.Spec.MinConfinementClass)
+	bf := barrierFacts(place.row, place.targets, ceiling.Spec.MinConfinementClass)
 	bf.PolicyFloor = floor.MinConfinementClass
-	bf.AccessFloor = composer.RequiredConfinementFloor(floor, f.baseline) == types.CC3
+	bf.AccessFloor = composer.RequiredConfinementFloor(floor, baseline) == types.CC3
 	return runnerpool.BarrierOptions(bf)
 }
 

@@ -285,7 +285,7 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 	}
 	f.enforced = enforced
 	if f.mode == foldPreflight {
-		f.barrierOptions = draftBarrierOptions(f, floor)
+		f.barrierOptions = draftBarrierOptions(f.place, f.ceiling, floor, f.baseline)
 	}
 	return !f.place.barrierRefusal(enforced).write(s, f.w, f.r)
 }
@@ -510,6 +510,9 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
 		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling))}
+	if f.mode != foldCreate {
+		in.dryDoor = true
+	}
 	if f.mode == foldPreflight { // preflight parses the class inside stepConfinement, after this step
 		in.reqCC, in.reqCCOK = parseConfinementClass(f.req.ConfinementClass)
 	}
