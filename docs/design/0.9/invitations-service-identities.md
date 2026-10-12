@@ -311,3 +311,7 @@ The owner accepted every recommendation except D11, amended, and re-ruled four r
 | D15 | Names as in [§7](#7-wire); audit verb `claim`; console noun "Service identities" |
 | D16 | **Amended.** Console: the claim card, the sponsor's service-token mint card and the token-state column, in one mock round. Create, suspend and retire stay API and CLI only; the CLI has no token mint |
 | D17 | Create, suspend and retire on the security tier, as `POST /people` |
+
+**Four-eyes on create and sponsor change (owner ruling, 2026-10-11, extends D10 and D17).** A service identity takes any existing user type directly, and its ceiling is not bounded by the sponsor's (D10).
+
+With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, a create and any `PATCH` that changes the sponsor are therefore held as governance change kind `service_identity` and need a distinct human on the security tier; the `PATCH` is held whole. Description, suspend, unsuspend and retire stay direct (D17). An approval applies only against the reviewed state, otherwise `409 governance_change_stale`. No migration: `governance_changes.target_kind` has no CHECK. See [governance writes](../../operations/governance-writes.md).
