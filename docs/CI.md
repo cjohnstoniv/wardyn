@@ -82,7 +82,7 @@ A run's model credential is its owner's, and CI is no exception. So `ci-run.sh` 
   * Scope it with `capModelProvider`/`capAgent` through the `user` subject `service:<name>`.
 * A person's token is not the CI credential: it acts as that person, and leaves with them when they leave.
 * A service token reaches only what a pipeline needs: launch and dry-run, read, `PATCH` and kill its own runs, `GET /me`, `GET /setup/status` and its model-provider credential. Anything else answers `403` `service_scope`.
-  * It has no audit read, so `run --wait` reports a `FAILED` run as exit `1` and not the task's own code, and `ci-run.sh` collects no `audit.json` or `session.cast`.
+  * It has no audit read, so `run --wait` reports a `FAILED` run as exit `1` and not the task's own code, and `ci-run.sh` writes an empty `audit.json` (`[]`) and collects no `session.cast`.
   * Read those as the sponsor or an admin in the console.
 * When the sponsor leaves, is suspended or is replaced, the identity's tokens stop and its live runs continue: change the sponsor (`wardyn service-identity update <name> --sponsor <principal>`) and mint a new token.
 * The deployment's admin token is no substitute: under OIDC it holds no model credential, and `ci-run.sh` says so if it is handed one.
