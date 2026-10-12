@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import golden from "../../../../../lib/tool-effect.golden.json";
 import type { ToolEffect } from "../../../../../lib/tool-effect";
-import { CLAUDE_GATED, CLAUDE_UNGATED, CLAUDE_UNGATED_LOCKED, CODEX, CUSTOM } from "../../../../../lib/new-run-fixtures/scenarios/tools-harness";
+import { CLAUDE_ATTENDED, CLAUDE_GATED, CLAUDE_UNGATED, CLAUDE_UNGATED_LOCKED, CODEX, CUSTOM } from "../../../../../lib/new-run-fixtures/scenarios/tools-harness";
 import type { ToolPolicyFact } from "../../../../../lib/types/new-run-access";
 import { defaultChoices, lockedRowEnforced, reasonText, ruleChoices } from "./tool-facts";
 
@@ -72,16 +72,21 @@ describe("defaultChoices", () => {
 
 describe("lockedRowEnforced", () => {
   const rule = { tool: "WebFetch", effect: "deny", source: { kind: "policy" } };
-  it("is true on the gated and attended lanes", () => {
-    expect(lockedRowEnforced({ lane: "gated" }, rule)).toBe(true);
-    expect(lockedRowEnforced({ lane: "attended" }, rule)).toBe(true);
+  it("is true when Wardyn's gate or the harness's settings enforce", () => {
+    expect(lockedRowEnforced({ enforcer: "wardyn_gate" }, rule)).toBe(true);
+    expect(lockedRowEnforced({ enforcer: "harness_settings" }, rule)).toBe(true);
   });
-  it("is never true on a lane that does not consult the rows", () => {
-    for (const lane of ["ungated", "unsupported", "something-new"]) expect(lockedRowEnforced({ lane }, rule)).toBe(false);
+  it("is never true when the server names no enforcer, on any lane (R)", () => {
+    for (const enforcer of ["none", "something-new"]) expect(lockedRowEnforced({ enforcer }, rule)).toBe(false);
     expect(lockedRowEnforced(CLAUDE_UNGATED_LOCKED, rule)).toBe(false);
+    expect(lockedRowEnforced({ ...CLAUDE_ATTENDED, enforcer: "none" }, rule)).toBe(false);
   });
-  it("is false when the server marks the row so, even on the gated lane (A23 b)", () => {
-    expect(lockedRowEnforced({ lane: "gated" }, { ...rule, enforced: false })).toBe(false);
+  it("counts the MCP broker only for an MCP tool's row", () => {
+    expect(lockedRowEnforced({ enforcer: "mcp_broker" }, { ...rule, tool: "mcp__jira__create_issue" })).toBe(true);
+    expect(lockedRowEnforced({ enforcer: "mcp_broker" }, rule)).toBe(false);
+  });
+  it("is false when the server marks the row so, even under the gate (A23 b)", () => {
+    expect(lockedRowEnforced({ enforcer: "wardyn_gate" }, { ...rule, enforced: false })).toBe(false);
   });
 });
 

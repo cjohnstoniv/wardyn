@@ -34,6 +34,8 @@ export interface HarnessSetupProps {
   /** The preview's `access` block; nothing shows until the server has answered once. */
   access: AccessFacts | undefined;
   intent: RunIntent;
+  /** The server has answered exactly this body; until it has, the last answer is held, not claimed. */
+  answered: boolean;
   names?: HarnessNames;
   /** A provider sign-in finished: the server is asked again. */
   onSignedIn: () => void;
@@ -46,7 +48,8 @@ function ProviderPicker({ fact, access, intent, status, onSignedIn }: { fact: To
   const providers = (status?.model_providers ?? []).filter((p) => p.harnesses.includes(fact.harness) && !p.disabled);
   const selected = (intent.tools ?? []).find((t) => t.id === fact.harness)?.model_provider ?? "";
   const current = providers.find((p) => p.id === selected);
-  if (providers.length === 0 && !selected) return null;
+  // A harness Wardyn sets nothing up for has no provider to pick.
+  if (fact.lane === "unsupported") return null;
 
   const id = providerControlId(fact.harness);
   const name = current?.name ?? selected;
@@ -64,6 +67,7 @@ function ProviderPicker({ fact, access, intent, status, onSignedIn }: { fact: To
         id={id}
         className={SELECT_CLASS}
         value={selected}
+        disabled={providers.length === 0}
         aria-describedby={`${id}-help`}
         onChange={(e) => {
           const provider = e.target.value;
@@ -91,7 +95,7 @@ function ProviderPicker({ fact, access, intent, status, onSignedIn }: { fact: To
   );
 }
 
-function HarnessCard({ fact, access, intent, name, status, onSignedIn }: { fact: ToolPolicyFact; access: AccessFacts; intent: RunIntent; name: string; status: SetupStatus | null; onSignedIn: () => void }) {
+function HarnessCard({ fact, access, intent, name, answered, status, onSignedIn }: { fact: ToolPolicyFact; access: AccessFacts; intent: RunIntent; name: string; answered: boolean; status: SetupStatus | null; onSignedIn: () => void }) {
   const dispatch = useNewRunDispatch();
   const announce = useAnnounce();
   const door = useModelAccessDoor();
@@ -99,6 +103,10 @@ function HarnessCard({ fact, access, intent, name, status, onSignedIn }: { fact:
   const tool = (intent.tools ?? []).find((t) => t.id === fact.harness);
   const edit = (apply: (i: RunIntent) => RunIntent) => dispatch({ type: "edit", apply });
   const unsupported = fact.lane === "unsupported";
+  // Run it removes the personal default, so until the server answers again its own echo of the old default must not win.
+  const [picked, setPicked] = React.useState<ToolEffect>();
+  React.useEffect(() => { if (answered) setPicked(undefined); }, [answered]);
+  const selected = (!answered && picked) || tool?.default_effect || fact.default.effective;
   const help = fact.lane === "attended" ? NR_TOOLS.DEFAULT_HELP_ATTENDED : door.operator ? NR_TOOLS.DEFAULT_HELP_OPERATOR : NR_TOOLS.DEFAULT_HELP_GATED;
   const servers = access.rows.filter((r) => r.kind === "mcp" && r.mcp);
 
@@ -126,9 +134,9 @@ function HarnessCard({ fact, access, intent, name, status, onSignedIn }: { fact:
             <EffectChoice
               name={`nr-default-${fact.harness}`}
               labelledBy={labelId}
-              value={(tool?.default_effect ?? fact.default.effective) as ToolEffect}
+              value={selected as ToolEffect}
               choices={defaultChoices(fact, name)}
-              onChange={(effect) => edit((i) => setDefaultEffect(i, fact.harness, effect))}
+              onChange={(effect) => { setPicked(effect); edit((i) => setDefaultEffect(i, fact.harness, effect)); }}
             />
             <p className="text-sm text-muted-foreground">{help}</p>
           </div>
@@ -136,6 +144,7 @@ function HarnessCard({ fact, access, intent, name, status, onSignedIn }: { fact:
             fact={fact}
             harnessName={name}
             personal={personalRules(intent, fact.harness)}
+            answered={answered}
             onAdd={(rule) => { edit((i) => addToolRule(i, fact.harness, rule)); announce(NR_TOOLS.RULE_ADDED); }}
             onRemove={(t) => edit((i) => removeToolRule(i, fact.harness, t))}
           />
@@ -146,7 +155,7 @@ function HarnessCard({ fact, access, intent, name, status, onSignedIn }: { fact:
   );
 }
 
-export function HarnessSetup({ access, intent, names, onSignedIn }: HarnessSetupProps) {
+export function HarnessSetup({ access, intent, answered, names, onSignedIn }: HarnessSetupProps) {
   const headingId = React.useId();
   const { status } = useShellSetupStatus();
   if (!access) return null;
@@ -160,7 +169,7 @@ export function HarnessSetup({ access, intent, names, onSignedIn }: HarnessSetup
         <p className="text-sm text-muted-foreground">{NR_TOOLS.NO_HARNESSES}</p>
       ) : (
         access.harnesses.map((fact) => (
-          <HarnessCard key={fact.harness} fact={fact} access={access} intent={intent} name={names?.get(fact.harness) ?? fact.harness} status={status} onSignedIn={onSignedIn} />
+          <HarnessCard key={fact.harness} fact={fact} access={access} intent={intent} name={names?.get(fact.harness) ?? fact.harness} answered={answered} status={status} onSignedIn={onSignedIn} />
         ))
       )}
     </section>
