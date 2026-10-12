@@ -155,6 +155,10 @@ declare -A ALLOWLIST=(
   # the hourly test's t0 seeds an injected fake clock, never the wall clock.
   ["internal/api/people_keydomains_fake_test.go"]=2
   ["internal/notify/worker_unit_test.go"]=1
+  ["internal/store/workspaces_order_pg_test.go"]=1 # passthrough: one shared created_at so only the id tie-break orders the list
+  ["ui/src/app/components/screens/new-run-flow/steps/shape/seed-loaders.test.ts"]=1 # passthrough: a launch intent's created_at, never compared to the clock
+  ["ui/src/app/components/screens/templates/rename-template-dialog.test.tsx"]=1 # display only: a template's updated_at
+  ["ui/src/app/components/screens/templates/templates-screen.test.tsx"]=1 # display only: a template's updated_at
 )
 
 fail=0

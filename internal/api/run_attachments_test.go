@@ -45,6 +45,7 @@ func attachFixture(t *testing.T, site types.SiteConfig, wss ...types.Workspace) 
 	t.Helper()
 	srv := providerRunFixture(t, site, &capStore{}, nil)
 	srv.cfg.Store.(*integStore).workspaces = wss
+	srv.cfg.AgentImages = composeAgentImages // an image carries Claude Code, so launches pass the installed-harness check
 	return srv
 }
 
