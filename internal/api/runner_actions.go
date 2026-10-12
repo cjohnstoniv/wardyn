@@ -44,8 +44,10 @@ type ownerSlots struct {
 	leasing, reviving chan struct{}
 }
 
-// runnerOwnerSlots is owner's slots. The owner of a run on a runner is the run's creator: placement offers
-// only the person's own runners, and BeginRunnerExecution holds the run to its runner's owner.
+// runnerOwnerSlots is owner's slots. The owner of a run on a runner is the run's creator: placement
+// (poolOwner, ownRunnerTargets) binds a run only to its creator's own claimed runners, which is what holds a
+// task-less dispatch, a renewal and a proxy-only revive to the owner; BeginRunnerExecution re-checks it
+// only for a run that execs or starts.
 func (s *Server) runnerOwnerSlots(owner string) ownerSlots {
 	s.runnerStreams.subsMu.Lock()
 	defer s.runnerStreams.subsMu.Unlock()
