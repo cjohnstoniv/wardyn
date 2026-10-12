@@ -75,11 +75,15 @@ type componentConfig struct {
 func (c runComponents) dispatch() componentDispatch {
 	var d componentDispatch
 	keys := mcpServerKeys(c.attached)
+	row := -1 // the run_components ordinal: a built-in writes no row (persistRunComponents)
 	for i, a := range c.attached {
+		if a.builtin == nil {
+			row++
+		}
 		def := a.snapshot.Definition
 		if def.MCP != nil {
 			server, _ := types.MCPURLDestination(def.MCP.URL)
-			d.MCP = append(d.MCP, componentMCP{Ordinal: i, Key: keys[i], URL: def.MCP.URL, Host: server.Host,
+			d.MCP = append(d.MCP, componentMCP{Ordinal: row, Key: keys[i], URL: def.MCP.URL, Host: server.Host,
 				Harnesses: a.snapshot.MCPHarnesses, Credentialed: len(def.Secrets) > 0})
 		}
 		for _, sec := range def.Secrets {

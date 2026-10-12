@@ -211,3 +211,77 @@ func TestHarnessToolRules_CodexMCPBlockReachesTheBrokerSet(t *testing.T) {
 		t.Fatal("a Codex MCP Block is refused")
 	}
 }
+
+// TestMCPServerKeys_OrgClaimsItsKeyFirst: a person's own server named like an
+// organisation's, placed first in the request, takes the suffix; the
+// organisation's server keeps "linear", so a policy Block on
+// mcp__linear__delete_issue holds its delete_issue at the broker.
+func TestMCPServerKeys_OrgClaimsItsKeyFirst(t *testing.T) {
+	f := newComponentFixture(t)
+	orgID := uuid.MustParse(compOrgID)
+	orgDef := types.ComponentDefinition{Hosts: []string{"mcp.org-linear.test"},
+		MCP: &types.ComponentMCP{URL: "https://mcp.org-linear.test/mcp", Transport: types.ComponentMCPTransportHTTP}}
+	f.st.components = append(f.st.components, types.Component{ID: orgID, Name: "Linear", Version: 1, Definition: orgDef})
+	r := httptest.NewRequest(http.MethodPost, componentDoors[0], nil).WithContext(memberCtx([]string{"eng"}))
+	req := createRunRequest{Components: []types.ComponentRef{mcpInline("linear!"), {ID: &orgID}}}
+	req.Tools = harnessTools("claude-code")
+	spec := govDeployment()
+	comps, refusal := f.srv.applyRunComponents(r, req, &spec, governanceCeiling{Spec: govDeployment()}, nil, true)
+	if refusal != nil {
+		t.Fatalf("refused: %+v", refusal.body)
+	}
+	byKey := map[string]string{}
+	for _, m := range comps.dispatch().MCP {
+		byKey[m.Key] = m.URL
+	}
+	if byKey["linear"] != "https://mcp.org-linear.test/mcp" || byKey["linear-2"] != "https://mcp.linear.test/mcp" {
+		t.Fatalf("keys %v: the organisation's server must keep linear", byKey)
+	}
+	// Request order never moves it: two organisation servers named alike are
+	// keyed by component id.
+	a, b := uuid.MustParse("00000000-0000-4000-8000-00000000000a"), uuid.MustParse("00000000-0000-4000-8000-00000000000b")
+	org := func(id uuid.UUID) attachedComponent {
+		return attachedComponent{snapshot: types.RunComponent{ComponentID: &id, Name: "Linear", Definition: orgDef}}
+	}
+	if k1, k2 := mcpServerKeys([]attachedComponent{org(b), org(a)}), mcpServerKeys([]attachedComponent{org(a), org(b)}); k1[1] != k2[0] || k1[1] != "linear" {
+		t.Fatalf("org keys depend on request order: %q vs %q", k1, k2)
+	}
+}
+
+// TestDispatchMCP_AutonomousRunNeverCarriesManagedMCP: Claude Code refuses
+// --strict-mcp-config while managed-mcp.json exists, so no autonomous run is
+// given it.
+func TestDispatchMCP_AutonomousRunNeverCarriesManagedMCP(t *testing.T) {
+	servers := []componentMCP{{Key: "linear", URL: "https://mcp.linear.test/mcp", Harnesses: []string{"claude-code", "codex-cli"}}}
+	out := dispatchMCP(servers, &[]runner.InjectionGrant{}, "http://p:3128", false, map[string]string{})
+	for _, f := range out.files {
+		if f.Path == claudeMCPInteractivePath {
+			t.Fatalf("autonomous run carries %s", f.Path)
+		}
+	}
+	if len(out.files) != 1 {
+		t.Fatalf("files %+v", out.files)
+	}
+}
+
+// TestReviveMCPBindingsNarrows_BuiltinFirst: a built-in writes no
+// run_components row, so dispatch numbers servers by their row: with
+// [github built-in, Alpha, Beta] and Alpha erased, the revive keeps Beta.
+func TestReviveMCPBindingsNarrows_BuiltinFirst(t *testing.T) {
+	mcp := func(host string) types.ComponentDefinition {
+		return types.ComponentDefinition{Hosts: []string{host}, MCP: &types.ComponentMCP{URL: "https://" + host + "/mcp", Transport: types.ComponentMCPTransportHTTP}}
+	}
+	comps := runComponents{attached: []attachedComponent{
+		{builtin: &builtinGit{}},
+		{snapshot: types.RunComponent{SelfDefined: true, Name: "Alpha", Definition: mcp("mcp.alpha.test"), MCPHarnesses: []string{"codex-cli"}}},
+		{snapshot: types.RunComponent{SelfDefined: true, Name: "Beta", Definition: mcp("mcp.beta.test"), MCPHarnesses: []string{"codex-cli"}}},
+	}}
+	out := dispatchMCP(comps.dispatch().MCP, &[]runner.InjectionGrant{}, "http://p:3128", false, map[string]string{})
+	cfg := proxy.Config{MCPServers: out.servers, MCPBindings: out.bindings}
+	rows := []types.RunComponent{{Ordinal: 0, Erased: true, MCPHarnesses: []string{"codex-cli"}},
+		{Ordinal: 1, Definition: mcp("mcp.beta.test"), MCPHarnesses: []string{"codex-cli"}}}
+	narrowMCPBindings(&cfg, rows)
+	if len(cfg.MCPServers) != 1 || cfg.MCPServers[0].Key != "beta" || !slices.Equal(cfg.MCPBindings[0].Servers, []string{"beta"}) {
+		t.Fatalf("narrowed %+v %+v: want Beta kept and erased Alpha dropped", cfg.MCPServers, cfg.MCPBindings)
+	}
+}
