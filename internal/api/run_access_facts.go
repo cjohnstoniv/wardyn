@@ -28,6 +28,7 @@ const (
 	toolLaneAttended    = "attended"
 	toolLaneUnsupported = "unsupported"
 	toolEnforcerGate    = "wardyn_gate"
+	toolEnforcerHarness = "harness_settings"
 	toolEnforcerNone    = "none"
 )
 
@@ -135,6 +136,9 @@ type accessInputs struct {
 	ssoProxyInject bool
 	// imageKey is the convention image the run starts from (accessImageKey).
 	imageKey string
+	// level is the autonomy level the fold resolved, which picks an
+	// interactive run's managed settings (attendedDefaultReasons).
+	level types.AutonomyLevel
 }
 
 // accessFor adds the reads accessFacts needs beyond the fold and builds the
@@ -318,7 +322,7 @@ func (b *accessBuilder) harnessRow(fact componentFact) {
 // person may choose (each greyed with its reason where the policy is stricter
 // or the harness cannot honour it), and the policy's rules, locked. What it
 // offers is what the server accepts: toolRulesWithinPolicyRefusal,
-// harnessToolRulesRefusal and attendedToolRulesRefusal answer the same cases.
+// harnessToolRulesRefusal and attendedDefaultRefusal answer the same cases.
 func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
 	req, rules := *b.in.req, b.in.spec.ToolRules
 	fact := client.ToolPolicyFact{Harness: harness, Lane: toolLaneUngated, Enforcer: toolEnforcerNone, RuleTools: "any",
@@ -339,9 +343,8 @@ func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
 		forDefault = map[types.ToolEffect]string{types.ToolAllow: "custom_harness_rules", types.ToolHold: "custom_harness_rules", types.ToolDeny: "custom_harness_rules"}
 		forRule = forDefault
 	case requestIsInteractive(req):
-		fact.Lane = toolLaneAttended
-		forDefault = map[types.ToolEffect]string{types.ToolAllow: "attended_no_skip", types.ToolDeny: "attended_rules_unavailable"}
-		forRule = map[types.ToolEffect]string{types.ToolAllow: "attended_no_skip", types.ToolHold: "attended_rules_unavailable", types.ToolDeny: "attended_rules_unavailable"}
+		fact.Lane, fact.Enforcer = toolLaneAttended, toolEnforcerHarness
+		forDefault = attendedDefaultReasons(b.in.level)
 	case holdLane(false, req.ToolApprovals, req.TaskMode):
 		fact.Lane, fact.Enforcer = toolLaneGated, toolEnforcerGate
 	}

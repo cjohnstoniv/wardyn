@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/cjohnstoniv/wardyn/internal/agentpolicy"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -39,7 +40,7 @@ import (
 //
 // What each lane lifts, by the path runModeUnavailable names:
 //
-//	tools[].tool_rules in an interactive run -> TA-3 (the harness's managed settings)
+//	tools[].tool_rules in an interactive run -> no lane for a harness but Claude Code, whose managed settings carry them
 //	more than one harness, component tools -> DS-1 (the harness set), A-L14 (component tools)
 //	start_folder of an attachment        -> A-L4, A-L7, D-112-113 (attachments and the one working directory)
 const (
@@ -479,19 +480,49 @@ func harnessSetRefusal(req createRunRequest) *runRefusal {
 }
 
 // attendedToolRulesRefusal: an interactive run's tool rules are enforced by the
-// harness's own settings, which this server does not write yet, so any choice
-// but the lane's own (Claude Code asks you, a hold default) waits for that lane.
+// harness's own settings. Claude Code's are written into its managed settings
+// (agentpolicy.WithToolRules), and its default is answered in the fold
+// (attendedDefaultRefusal), where the level that picks those settings is
+// known. No other harness has such settings, so any choice but the lane's own
+// (the harness asks you, a hold default) is refused for it.
 func attendedToolRulesRefusal(req createRunRequest) *runRefusal {
 	if req.Experience != client.ExperienceInteractive {
 		return nil
 	}
 	for i, t := range req.Tools {
-		if len(t.ToolRules) > 0 || (t.DefaultEffect != "" && t.DefaultEffect != types.ToolHold) {
+		if t.ID != claudeCodeHarness && (len(t.ToolRules) > 0 || (t.DefaultEffect != "" && t.DefaultEffect != types.ToolHold)) {
 			return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
 				runModeUnavailableMsg(fmt.Sprintf("tools[%d]: tool rules in an interactive run", i)))
 		}
 	}
 	return nil
+}
+
+// attendedDefaultRefusal refuses a default Claude Code cannot take in an
+// interactive run, with the sentence step 5 greys it with: its managed settings
+// name tools, and a tool no rule names is answered by its mode, which asks.
+func attendedDefaultRefusal(req createRunRequest, level types.AutonomyLevel) *runRefusal {
+	if !requestIsInteractive(req) {
+		return nil
+	}
+	for _, t := range req.Tools {
+		if code := attendedDefaultReasons(level)[t.DefaultEffect]; t.ID == claudeCodeHarness && code != "" {
+			return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, accessSentences[code])
+		}
+	}
+	return nil
+}
+
+// attendedDefaultReasons is why Claude Code's default in an interactive run at
+// level can be neither "Run it" nor "Block it": where the managed settings the
+// level brings lock bypass off, it can never skip asking; elsewhere Wardyn has
+// no setting for it. The locked L2 document leaves bypass on as L2's does.
+func attendedDefaultReasons(level types.AutonomyLevel) map[types.ToolEffect]string {
+	skip := "attended_rules_unavailable"
+	if _, doc, _ := agentpolicy.ForAgent(claudeCodeHarness, level, false, false); agentpolicy.DisablesBypass(doc) {
+		skip = "attended_no_skip"
+	}
+	return map[types.ToolEffect]string{types.ToolAllow: skip, types.ToolDeny: "attended_rules_unavailable"}
 }
 
 // projectRunMode writes the honourable carriers onto the legacy fields the one
