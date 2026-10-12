@@ -16,9 +16,9 @@ import (
 func personCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "person",
-		Short: "Act on a person's retained records (security tier)",
+		Short: "Erase a person's retained records or invite them to create a token (security tier)",
 	}
-	cmd.AddCommand(personEraseCmd(client))
+	cmd.AddCommand(personEraseCmd(client), personInviteCmd(client), personInvitationsCmd(client))
 	return subcommandGroup(cmd)
 }
 
