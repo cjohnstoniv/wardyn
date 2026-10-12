@@ -58,7 +58,8 @@
 # docs/sdk.md 15721 measured after A-L14 merge (train 18).
 # docs/sdk.md 15757 adds 36 over 15721 (0.9 local-enable fix-r3): placement_denied at revive and dispatch, run_renew_lease_busy.
 # docs/sdk.md 15773 adds 16 over 15757 (0.9 local-enable fix-r4): the probe's exemption is at create and dispatch; a revive's per-runner slot.
-docs/sdk.md=15773 share=21
+# docs/sdk.md 15776 adds 3 over 15773 (0.9 local-enable fix-r5): a revive's slot is the runner owner's.
+docs/sdk.md=15776 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

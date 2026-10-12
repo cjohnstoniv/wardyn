@@ -28,6 +28,8 @@ type runnerStreamState struct {
 	runners principalLimiter
 	subsMu  sync.Mutex
 	subs    map[uuid.UUID]runnerEndpoint
+	// owners is each runner owner's slots, under subsMu.
+	owners  map[string]ownerSlots
 	offline runnerOfflineSweeps
 	relay   relayListener
 }

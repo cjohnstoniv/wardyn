@@ -63,14 +63,15 @@ func localStoredSpec(c proxy.Config) runner.SandboxSpec {
 	return runner.SandboxSpec{RunID: c.RunID, ProxyConfig: pc}
 }
 
-// lockRevive takes the run's lock for a revive. For a run on a runner it first takes the runner's one
-// revive slot, waiting at most leaseWait: a runner that stops answering holds at most one lock connection
-// for its revives, whatever number of its runs are revived. Either one busy is lock_unavailable.
+// lockRevive takes the run's lock for a revive. For a run on a runner it first takes the runner owner's
+// one revive slot, waiting at most leaseWait: runners that stop answering hold at most one lock connection
+// for their owner's revives, whatever number of runners that person claims and of their runs are revived.
+// Either one busy is lock_unavailable.
 func (s *Server) lockRevive(ctx context.Context, run types.AgentRun) (context.Context, func(), *reviveError) {
 	busy := reviveRefused(http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
 	releaseSlot := func() {}
 	if run.RunnerID != nil {
-		release, ok := s.runnerEndpoint(*run.RunnerID).acquireRevive(ctx, leaseWait)
+		release, ok := s.runnerOwnerSlots(run.CreatedBy).acquireRevive(ctx, leaseWait)
 		if !ok {
 			return ctx, nil, busy
 		}
@@ -81,7 +82,10 @@ func (s *Server) lockRevive(ctx context.Context, run types.AgentRun) (context.Co
 		releaseSlot()
 		return ctx, nil, busy
 	}
-	return lctx, func() { unlock(); releaseSlot() }, nil
+	return lctx, func() {
+		defer releaseSlot()
+		unlock()
+	}, nil
 }
 
 // reviveCeilingAdmitting is the owner's ceiling, once it still admits the run where it is.

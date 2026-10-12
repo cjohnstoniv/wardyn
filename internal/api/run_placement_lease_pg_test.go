@@ -737,6 +737,13 @@ func TestPG_RunnerLease_LiveRunsIncludeHeldRuns(t *testing.T) {
 // replay room: every later LEASE send waits for room until its deadline.
 func (f *runnerLeaseFixture) mute(t *testing.T) {
 	t.Helper()
+	f.muteSession(t, f.rn.ID)
+}
+
+// muteSession gives runner id a session that reads every frame and never answers or acknowledges, its
+// replay room filled.
+func (f *runnerLeaseFixture) muteSession(t *testing.T, id uuid.UUID) {
+	t.Helper()
 	org, mute := runnerwire.Loopback()
 	go func() {
 		for {
@@ -745,7 +752,7 @@ func (f *runnerLeaseFixture) mute(t *testing.T) {
 			}
 		}
 	}()
-	link := f.srv.runnerEndpoint(f.rn.ID).link
+	link := f.srv.runnerEndpoint(id).link
 	link.Attach(f.ctx, org)
 	payload, err := runnerwire.Marshal(runnerwire.Lease{RunID: uuid.New()})
 	if err != nil {
@@ -884,7 +891,7 @@ func TestPG_RunnerLease_BusyRenewalAnswers503(t *testing.T) {
 	tok := f.h.mintRunToken(t, run.ID)
 	mints := &mintCounter{Provider: f.srv.cfg.Identity}
 	f.srv.cfg.Identity = mints
-	release, ok := f.srv.runnerEndpoint(f.rn.ID).acquireLease(f.ctx, 0)
+	release, ok := f.srv.runnerOwnerSlots(f.rn.Owner).acquireLease(f.ctx, 0)
 	if !ok {
 		t.Fatal("the runner's slot is taken")
 	}
@@ -968,6 +975,99 @@ func TestPG_RunnerLease_ConcurrentMuteRunnerRevivesHoldOneLockConnection(t *test
 			}
 		case <-time.After(reviveRunnerTimeout + 3*leaseWait):
 			t.Fatal("a revive did not return")
+		}
+	}
+}
+
+// muteRunner is a claimed runner of owner whose session never answers.
+func (f *runnerLeaseFixture) muteRunner(t *testing.T, owner string) uuid.UUID {
+	t.Helper()
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	id := uuid.New()
+	rn, err := f.st.CreateRunner(f.ctx, types.Runner{ID: id, Owner: owner, Name: "spare", PublicKey: pub, KeyFingerprint: id.String(),
+		Version: "0.9.0", OrgURLSHA256: federation.OrgURLSHA256(admissionOrgURL)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.ClaimRunner(f.ctx, rn.ID, owner, rn.KeyFingerprint, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	f.muteSession(t, id)
+	return id
+}
+
+// muteRun is a RUNNING run of owner on runnerID, with a sandbox and a stored proxy config to revive from.
+func (f *runnerLeaseFixture) muteRun(t *testing.T, owner string, runnerID uuid.UUID) types.AgentRun {
+	t.Helper()
+	run := newFinalizeRun()
+	run.CreatedBy, run.Placement, run.RunnerID = owner, types.PlacementLocal, &runnerID
+	run, err := f.st.CreateRun(f.ctx, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SetSandboxRef(f.ctx, run.ID, "runner:"+runnerID.String()+"/fake-"+run.ID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.srv.keepRunProxyConfig(f.ctx, run.ID, runner.ProxyConfig{RunToken: "old", ControlPlaneURL: "http://127.0.0.1:8081"}); err != nil {
+		t.Fatal(err)
+	}
+	if run, err = f.st.GetRun(f.ctx, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	return run
+}
+
+// fix-r5 R4-1: both slots are the runner owner's, so one person holds at most two lock connections however
+// many runners they claim: four mute runners, a revive and a renewal on each at once, and an unrelated lock
+// still gets a connection. Another owner's revive is not held behind the first owner's slot.
+func TestPG_RunnerLease_ConcurrentOneOwnerHoldsTwoLockConnections(t *testing.T) {
+	saved := reviveRunnerTimeout
+	reviveRunnerTimeout = 5 * time.Second
+	t.Cleanup(func() { reviveRunnerTimeout = saved })
+	f := newRunnerLeaseFixture(t)
+	revived, renewed := make(chan *reviveError, 4), make(chan error, 4)
+	for range 4 {
+		id := f.muteRunner(t, f.rn.Owner)
+		revive, renew := f.muteRun(t, f.rn.Owner, id), f.muteRun(t, f.rn.Owner, id)
+		go func() {
+			_, rerr := f.srv.reviveRunProxy(f.ctx, revive, types.ActorSystem, "test", true)
+			revived <- rerr
+		}()
+		go func() { renewed <- f.srv.renewRunnerLease(f.ctx, renew, 0) }()
+	}
+	other := f.muteRun(t, "other-owner", f.muteRunner(t, "other-owner"))
+	time.Sleep(time.Second)
+	otherDone := make(chan *reviveError, 1)
+	go func() {
+		_, rerr := f.srv.reviveRunProxy(f.ctx, other, types.ActorSystem, "test", true)
+		otherDone <- rerr
+	}()
+	ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+	defer cancel()
+	_, unlock, err := f.srv.lockRunOp(ctx, uuid.New())
+	if err != nil {
+		t.Fatalf("an unrelated lock while one owner's mute runners are revived and renewed: %v", err)
+	}
+	unlock()
+	wait := reviveRunnerTimeout + 3*leaseWait
+	select {
+	case rerr := <-otherDone:
+		if rerr == nil || rerr.reason == reasonLockUnavailable {
+			t.Errorf("another owner's revive = %+v, want it past the first owner's slot to its own runner", rerr)
+		}
+	case <-time.After(wait):
+		t.Fatal("another owner's revive did not return")
+	}
+	for range 4 {
+		select {
+		case <-revived:
+		case <-time.After(wait):
+			t.Fatal("a revive did not return")
+		}
+		select {
+		case <-renewed:
+		case <-time.After(wait):
+			t.Fatal("a renewal did not return")
 		}
 	}
 }

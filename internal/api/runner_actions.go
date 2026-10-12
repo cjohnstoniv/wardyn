@@ -34,28 +34,44 @@ type substrateRegistry interface {
 type runnerEndpoint struct {
 	sub  *remote.Substrate
 	link *remote.Link
-	// leasing is the runner's one LEASE-send slot and reviving its one revive slot (capacity 1 each), both
-	// taken before the run's lock: a runner that stops answering holds at most one lock connection for its
-	// lease senders and one for its revives, whatever number of its runs are re-leased or revived.
+}
+
+// ownerSlots are one runner owner's LEASE-send slot and revive slot (capacity 1 each), both taken before a
+// run's lock. They are the person's, not a runner's: runners that stop answering hold at most one lock
+// connection for their owner's lease senders and one for their owner's revives, whatever number of runners
+// that person claims and of their runs are re-leased or revived.
+type ownerSlots struct {
 	leasing, reviving chan struct{}
 }
 
-// acquireLease takes the runner's LEASE-send slot, waiting at most wait (0: only if it is free now).
-func (ep runnerEndpoint) acquireLease(ctx context.Context, wait time.Duration) (release func(), ok bool) {
-	return acquireSlot(ctx, ep.leasing, wait)
-}
-
-// acquireRevive takes the runner's revive slot, waiting at most wait.
-func (ep runnerEndpoint) acquireRevive(ctx context.Context, wait time.Duration) (release func(), ok bool) {
-	return acquireSlot(ctx, ep.reviving, wait)
-}
-
-// acquireSlot takes a capacity-1 slot, waiting at most wait (0: only if it is free now). An endpoint built
-// without slots has none to take.
-func acquireSlot(ctx context.Context, slot chan struct{}, wait time.Duration) (release func(), ok bool) {
-	if slot == nil {
-		return func() {}, true
+// runnerOwnerSlots is owner's slots. The owner of a run on a runner is the run's creator: placement offers
+// only the person's own runners, and BeginRunnerExecution holds the run to its runner's owner.
+func (s *Server) runnerOwnerSlots(owner string) ownerSlots {
+	s.runnerStreams.subsMu.Lock()
+	defer s.runnerStreams.subsMu.Unlock()
+	if o, ok := s.runnerStreams.owners[owner]; ok {
+		return o
 	}
+	if s.runnerStreams.owners == nil {
+		s.runnerStreams.owners = map[string]ownerSlots{}
+	}
+	o := ownerSlots{leasing: make(chan struct{}, 1), reviving: make(chan struct{}, 1)}
+	s.runnerStreams.owners[owner] = o
+	return o
+}
+
+// acquireLease takes the owner's LEASE-send slot, waiting at most wait (0: only if it is free now).
+func (o ownerSlots) acquireLease(ctx context.Context, wait time.Duration) (release func(), ok bool) {
+	return acquireSlot(ctx, o.leasing, wait)
+}
+
+// acquireRevive takes the owner's revive slot, waiting at most wait.
+func (o ownerSlots) acquireRevive(ctx context.Context, wait time.Duration) (release func(), ok bool) {
+	return acquireSlot(ctx, o.reviving, wait)
+}
+
+// acquireSlot takes a capacity-1 slot, waiting at most wait (0: only if it is free now).
+func acquireSlot(ctx context.Context, slot chan struct{}, wait time.Duration) (release func(), ok bool) {
 	release = func() { <-slot }
 	select {
 	case slot <- struct{}{}:
@@ -85,7 +101,7 @@ func (s *Server) runnerEndpoint(id uuid.UUID) runnerEndpoint {
 	if ep, ok := s.runnerStreams.subs[id]; ok {
 		return ep
 	}
-	ep := runnerEndpoint{link: &remote.Link{}, leasing: make(chan struct{}, 1), reviving: make(chan struct{}, 1)}
+	ep := runnerEndpoint{link: &remote.Link{}}
 	ep.sub = remote.New(id.String(), ep.link, remote.Options{Queue: func(ctx context.Context, kind types.RunnerActionKind, ref string) error {
 		return s.queueRunnerTeardown(ctx, id, kind, ref)
 	}, Dispatch: s.runnersEnabled, Relay: s.acceptRelay,
