@@ -218,6 +218,14 @@ describe("SaveAsDialog", () => {
       expect((sent(save).document.intent as { drives: unknown }).drives).toEqual([{ drive_id: "team" }]);
     });
 
+    it("saves a shared template that left them out as partial", async () => {
+      const { user, save } = setup({ publish: MANAGER, intent: withDrives, ownDriveIds: new Set(["mine"]) });
+      await user.selectOptions(screen.getByLabelText("Available to"), "Platform group");
+      setField(screen.getByLabelText("Name"), "Team");
+      await user.click(saveButton());
+      expect(sent(save).document.coverage).toBe("partial");
+    });
+
     it("keeps them for Only me", async () => {
       const { user, save } = setup({ publish: MANAGER, intent: withDrives, ownDriveIds: new Set(["mine"]) });
       setField(screen.getByLabelText("Name"), "Mine");
