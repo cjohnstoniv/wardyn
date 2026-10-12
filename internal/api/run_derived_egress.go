@@ -35,9 +35,9 @@ const (
 // cannot disagree about which hosts a run gets.
 //
 // grants are the grant specs whose lanes are wired: create passes the ones
-// persistRunGrants kept after its provider-row veto (wiredLaneGrants); the dry
-// doors, which veto nothing, pass the spec's own. A github_token grant adds no
-// host and only counts toward declaring a repository.
+// persistRunGrants and applySSHLaneWarnings kept (wiredLaneGrants); the dry
+// doors pass lanesWiredFor's answer, from the same decisions. A github_token
+// grant adds no host and only counts toward declaring a repository.
 func deriveRunEgress(spec *types.RunPolicySpec, wsRefs []types.Workspace, legacyRepo string,
 	scmSite types.SiteConfig, grants []types.GrantSpec,
 ) []derivedEgress {
