@@ -41,6 +41,7 @@ import (
 const (
 	agent400Unknown = "agents: %q names no agent this deployment can run — a catalog id or a WARDYN_AGENT_IMAGES key"
 	agent400DupID   = "agents: id %q is not unique"
+	agent400SetKey  = "agents: %q joins harness ids with +, which names a harness-set image, not an agent"
 	agent412Stale   = "agents changed since you loaded them — reload and retry"
 
 	// The default model provider. A turned-off provider is still a valid
@@ -210,6 +211,9 @@ func validateAgentProviders(p *types.AgentProviders, images map[string]string) e
 			return fmt.Errorf(agent400DupID, row.ID)
 		}
 		seen[row.ID] = true
+		if strings.Contains(row.ID, harnessSetSeparator) {
+			return fmt.Errorf(agent400SetKey, row.ID)
+		}
 		if _, inCatalog := harnessByID(row.ID); !inCatalog {
 			if _, known := images[row.ID]; !known {
 				return fmt.Errorf(agent400Unknown, row.ID)

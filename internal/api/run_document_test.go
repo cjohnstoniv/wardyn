@@ -137,6 +137,7 @@ func TestRunDocumentDoorAgreesWithCreate(t *testing.T) {
 			}
 			t.Run(tc.name+"/"+door.name, func(t *testing.T) {
 				h := newHarness(t)
+				h.srv.cfg.AgentImages = composeAgentImages
 				w := do(t, h.srv, http.MethodPost, door.path, adminToken, `{"title":"t",`+tc.fields+`}`)
 				if got := errorReason(w); got != tc.reason {
 					t.Fatalf("the run answered %d reason %q, want %q: %s", w.Code, got, tc.reason, w.Body.String())
