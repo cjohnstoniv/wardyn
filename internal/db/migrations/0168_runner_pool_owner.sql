@@ -6,12 +6,16 @@
 -- that person's subject, the same identity runners.owner holds. A Remote Provided pool has no owner:
 -- administrators keep it. A tombstoned Self-Hosted pool may lose its owner to the person's erasure.
 --
--- The organisation no longer has a Self-Hosted default: each person's own default names their own pool.
+-- The organisation no longer has a Self-Hosted default: each person's own default names their own pool,
+-- and an organisation preference for Self-Hosted is cleared to none, never switched to Remote Provided.
+-- With no organisation preference, a launch that names no pool, from a person with no preference of
+-- their own, is refused runner_pool_required until the person or an administrator sets one.
 --
 -- Clean break: a Self-Hosted pool created before this migration has no owner, so it is removed, with
 -- its members, the organisation and personal default slots that name it, and any run still waiting for
--- it (ended KILLED, runner_pool_removed, as a pool delete ends one). A pool a run is bound to stays as a
--- tombstone so the run keeps its history; every other one is deleted.
+-- it (ended KILLED, runner_pool_removed, as a pool delete ends one, but with no run.kill audit row: a
+-- migration writes no audit). A pool a run is bound to stays as a tombstone so the run keeps its
+-- history; every other one is deleted.
 ALTER TABLE runner_pools ADD COLUMN IF NOT EXISTS owner TEXT CHECK (owner IS NULL OR owner <> '');
 
 UPDATE agent_runs SET state = 'KILLED', updated_at = now(), ended_at = now(),
@@ -21,6 +25,7 @@ DELETE FROM run_queue WHERE pool_id IN (SELECT id FROM runner_pools WHERE hostin
 DELETE FROM runner_pool_members WHERE pool_id IN (SELECT id FROM runner_pools WHERE hosting_type = 'self_hosted' AND owner IS NULL);
 DELETE FROM runner_pool_use_policies WHERE pool_id IN (SELECT id FROM runner_pools WHERE hosting_type = 'self_hosted' AND owner IS NULL);
 UPDATE runner_pool_org_defaults SET self_hosted = NULL, updated_by = 'system', updated_at = now() WHERE self_hosted IS NOT NULL;
+UPDATE runner_pool_org_defaults SET preferred_hosting = '', updated_by = 'system', updated_at = now() WHERE preferred_hosting = 'self_hosted';
 UPDATE principal_prefs SET value = value - 'self_hosted', updated_at = now()
 WHERE key = 'runner_pool_defaults.v1' AND value->>'self_hosted' IN (SELECT id::text FROM runner_pools WHERE hosting_type = 'self_hosted' AND owner IS NULL);
 DELETE FROM runner_pools p WHERE p.hosting_type = 'self_hosted' AND p.owner IS NULL

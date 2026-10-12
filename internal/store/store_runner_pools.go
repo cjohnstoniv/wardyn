@@ -67,7 +67,8 @@ var (
 
 // RunnerPoolsMax bounds the organisation's live pools and RunnerPoolsPerOwnerMax one person's, so a
 // person's catalogue read is bounded and no person's pools can crowd the organisation's out of it.
-// RunnerPoolsOversightMax bounds the oversight read, which lists the organisation's pools first.
+// RunnerPoolsOversightMax bounds the oversight read, which lists the organisation's pools and then the
+// caller's own before anyone else's, so neither can drop out of it.
 const (
 	RunnerPoolsMax          = 200
 	RunnerPoolsPerOwnerMax  = 10
@@ -180,7 +181,7 @@ func (s PG) ListRunnerPoolMembers(ctx context.Context, id uuid.UUID) ([]types.Ru
 }
 
 // ListRunnerPoolCatalogue returns the live organisation pools and owner's own live Self-Hosted pools
-// (with all, every person's, the organisation's first), by name, each with its use policy, executor
+// (with all, every person's: the organisation's first, then owner's own), by name, each with its use policy, executor
 // members, the count of owner's own claimed runners it holds and the ids of owner's runners in it.
 func (s PG) ListRunnerPoolCatalogue(ctx context.Context, owner string, all bool) ([]RunnerPoolCatalogueRow, error) {
 	const q = `
@@ -194,7 +195,7 @@ func (s PG) ListRunnerPoolCatalogue(ctx context.Context, owner string, all bool)
 		                 WHERE m.pool_id = p.id AND r.owner = $1 AND $1 <> ''), '{}')
 		FROM runner_pools p LEFT JOIN runner_pool_use_policies u ON u.pool_id = p.id
 		WHERE p.state <> 'deleted' AND ($3 OR p.owner IS NULL OR p.owner = $1)
-		ORDER BY p.owner IS NOT NULL, lower(p.name), p.id LIMIT $2`
+		ORDER BY CASE WHEN p.owner IS NULL THEN 0 WHEN p.owner = $1 THEN 1 ELSE 2 END, lower(p.name), p.id LIMIT $2`
 	limit := RunnerPoolsMax + RunnerPoolsPerOwnerMax
 	if all {
 		limit = RunnerPoolsOversightMax
@@ -365,11 +366,15 @@ func deleteRunnerPoolQ(ctx context.Context, q Querier, id uuid.UUID) (RunnerPool
 
 // DeleteRunnerPoolsByOwner is a person's erasure of their pools: each live pool owner holds is deleted
 // as DeleteRunnerPool deletes one, and then every pool of theirs, the tombstones included, forgets them
-// (owner and created_by cleared). Returns the deletions, in pool id order.
+// (owner and created_by cleared). It holds the lock every create takes, so a pool the person creates
+// meanwhile is either deleted here or made after it. Returns the deletions, in pool id order.
 func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]RunnerPoolDeletion, error) {
 	var out []RunnerPoolDeletion
 	err := s.inTx(ctx, func(q Querier) error {
 		out = nil
+		if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('runner_pools.create'))`); err != nil {
+			return err
+		}
 		ids, err := collect(ctx, q, "list", "owned runner pools",
 			`SELECT id FROM runner_pools WHERE owner = $1 AND state <> 'deleted' ORDER BY id FOR UPDATE`, []any{owner},
 			func(r pgx.Row) (uuid.UUID, error) {
@@ -386,7 +391,7 @@ func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]Runne
 			}
 			out = append(out, d)
 		}
-		_, err = q.Exec(ctx, `UPDATE runner_pools SET owner = NULL, created_by = '' WHERE owner = $1`, owner)
+		_, err = q.Exec(ctx, `UPDATE runner_pools SET owner = NULL, created_by = '' WHERE owner = $1 AND state = 'deleted'`, owner)
 		return err
 	})
 	return out, err
@@ -698,7 +703,7 @@ func (s PG) PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefa
 }
 
 // BootstrapRunnerPools is the one-time upgrade step: when this deployment has configured executors and
-// no pool has ever existed (a deleted one still counts, so an administrator's deletion sticks), it
+// no Remote Provided pool has ever existed (a deleted one still counts, so an administrator's deletion sticks), it
 // creates one remote_provided pool named name holding exactly those executors and makes it the
 // organisation's remote default and its preferred hosting type, so existing runs keep the placement
 // they have today and a launch that names no pool or placement still resolves. Defaults the
@@ -717,7 +722,8 @@ func (s PG) BootstrapRunnerPools(ctx context.Context, executors []string, name s
 			return err
 		}
 		var exists bool
-		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_pools)`).Scan(&exists); err != nil || exists {
+		// A person's own Self-Hosted pool says nothing about the organisation's catalogue.
+		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_pools WHERE hosting_type = 'remote_provided')`).Scan(&exists); err != nil || exists {
 			return err
 		}
 		var p types.RunnerPool
