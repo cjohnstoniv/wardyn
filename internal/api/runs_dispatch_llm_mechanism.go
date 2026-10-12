@@ -44,8 +44,12 @@ import (
 //
 // enforceRunModelProvider (run_model_provider.go) asks exactly this (#767 step
 // 2), so the create door and dispatch can never ask a different question.
+//
+// A run-mode command that includes a harness is a model run too: the command
+// can start the harness, which needs its model access.
 func createDoorIsModelRun(req createRunRequest) bool {
-	return req.Task != harnessLoginTask && isModelRun(req.TaskMode, nil, nil, req.Interactive)
+	_, harness := primaryHarness(req)
+	return req.Task != harnessLoginTask && (isModelRun(req.TaskMode, nil, nil, req.Interactive) || (req.TaskMode == "exec" && harness))
 }
 
 // siteConfigForDispatch reads the operator-wide site config for ONE dispatch,

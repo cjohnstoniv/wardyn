@@ -42,6 +42,7 @@
 # docs/sdk.md 14400 adds 320 (0.9 DS2-S1, train 11): Run documents, the import door and the shape table.
 # docs/sdk.md 14061 adds 40 (0.9 TA-8): the clis cards and the OrgComponentView category, cli and mcp views.
 # docs/sdk.md 14440 measured after train 12 TA-8 merge.
+# DS1-S1b: docs/sdk.md 14477 adds 37 over 14440 for the four harness-set reasons the docs guard derives.
 # docs/sdk.md 14265 adds 244 over 14021 (0.9 DS3-S5): the branch-list section and the workspace_repo_unknown and branch_list_rate_limited rows.
 # docs/sdk.md 14685 measured after train 13: DS3-S5 merge.
 # DS2-S3: docs/sdk.md 14759 adds 738 over 14021: 321 for DS2-S1's Run documents section (merged at b8ea1f8cf, which measures 14342 alone) and 417 for the Run templates section and the three template reason rows.
@@ -51,7 +52,9 @@
 # docs/sdk.md 15492 (train 15): TA-1 access block beside the branch-list section.
 # docs/sdk.md 15221 adds 119: template group-admin, from-preset, import --kind and run --file.
 # docs/sdk.md 15611 measured after train 15: DS2-S5 merge.
-docs/sdk.md=15611 share=21
+# docs/sdk.md 15173 measured after merge batch/090 into DS1-S1b.
+# docs/sdk.md 15648 measured after train 17: DS1-S1b merge.
+docs/sdk.md=15648 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

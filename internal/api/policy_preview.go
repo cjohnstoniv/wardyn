@@ -55,6 +55,7 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	response := policyPreviewFacts(req, f.spec, f.source, f.policyWarns, f.scmSite, f.mpChoice)
 	response.Provenance = f.prov
 	response.RunnerPool, response.RunnerPools = f.place.facts()
+	response.Image, response.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
 	response.Components = componentFacts(componentFactInputs{
 		req: f.req, spec: f.spec, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
 		ceiling: f.ceiling, mpChoice: f.mpChoice, pushSets: f.pushSets,
@@ -79,7 +80,7 @@ func (s *Server) authorizePreviewRequest(r *http.Request, req createRunRequest) 
 	if msg, err := s.agentRosterRefusal(r.Context(), req.Agent); err != nil {
 		return governanceCeiling{}, "", runServerError("get site config", err)
 	} else if msg != "" {
-		return governanceCeiling{}, "", runError(http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg)
+		return governanceCeiling{}, "", runError(http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg).forTool(harnessRefusalTool(req))
 	}
 	if reservedRunTasks[req.Task] {
 		return governanceCeiling{}, "", runError(http.StatusBadRequest, reasonRunTaskReserved, fmt.Sprintf("task %q is set by the server and cannot be requested directly", req.Task))

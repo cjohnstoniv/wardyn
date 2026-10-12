@@ -474,6 +474,9 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["AgentFact", "AgentFact"],
     ["ImageSource", "ImageSource"],
     ["ImageFact", "ImageFact"],
+    ["HarnessSetFact", "HarnessSetFact"],
+    ["HarnessFact", "HarnessFact"],
+    ["HarnessModelCredential", "HarnessModelCredential"],
     ["AllowedImage", "AllowedImage"],
   ])("pkg/client %s: full parity with the TS %s mirror", (goName, tsName) => {
     const goTags = goJSONTags(readFileSync(join(root, "pkg/client/runs_new_run.go"), "utf8"), goName);
