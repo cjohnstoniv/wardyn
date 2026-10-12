@@ -7,6 +7,7 @@
 // CS-6 PR #1164 — internal/api/credential_inventory.go) and erasing a
 // person's whole namespace (CS-5, design F-5/F-6 — internal/api/credential_erase.go).
 // Both admin tiers read/act (K5-A); a member is refused at the route.
+import type { TokenDisposition } from "../types/service-identities";
 import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 
 export interface CredentialRow {
@@ -50,6 +51,8 @@ export interface AdminMintedToken {
   revoked_at?: string;
   /** When the token stops authenticating; absent when it never expires. */
   expires_at?: string;
+  /** Where the token stands (#1508); absent from a daemon that predates the field. */
+  disposition?: TokenDisposition;
 }
 
 export interface EraseResult {

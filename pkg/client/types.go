@@ -41,6 +41,24 @@ type (
 	PersonSummary = types.PersonSummary
 	PersonList    = types.PersonList
 
+	// Invitation lets one named person mint their own API token (ListInvitations, ClaimInvitation);
+	// InvitationState is its derived state.
+	Invitation      = types.Invitation
+	InvitationState = types.InvitationState
+
+	// ServiceIdentity is a named, sponsored non-human principal; ServiceIdentityState is its derived state.
+	ServiceIdentity      = types.ServiceIdentity
+	ServiceIdentityState = types.ServiceIdentityState
+
+	// APIToken is one API token row. Token carries the plaintext on a create or claim answer only;
+	// Disposition says where an admin-minted token stands.
+	APIToken         = types.APIToken
+	TokenDisposition = types.TokenDisposition
+
+	// TokenMoved is MoveToken's answer: the link written and the token's new disposition.
+	TokenMoved = types.TokenMoved
+	TokenMove  = types.TokenMove
+
 	// Device is one enrolled laptop in the organisation's inventory (no
 	// credential material). Returned by ListDevices.
 	Device = types.Device
@@ -440,4 +458,25 @@ const (
 	AutonomyL1 = types.AutonomyL1
 	AutonomyL2 = types.AutonomyL2
 	AutonomyL3 = types.AutonomyL3
+)
+
+// Invitation, service-identity and admin-minted-token states, the values of the *State and
+// TokenDisposition fields above.
+const (
+	InvitationPending = types.InvitationPending
+	InvitationClaimed = types.InvitationClaimed
+	InvitationExpired = types.InvitationExpired
+	InvitationRevoked = types.InvitationRevoked
+
+	ServiceIdentityActive          = types.ServiceIdentityActive
+	ServiceIdentitySuspended       = types.ServiceIdentitySuspended
+	ServiceIdentityRetired         = types.ServiceIdentityRetired
+	ServiceIdentitySponsorInactive = types.ServiceIdentitySponsorInactive
+
+	TokenNeedsDecision   = types.TokenNeedsDecision
+	TokenAwaitingOwner   = types.TokenAwaitingOwner
+	TokenReplacedByOwner = types.TokenReplacedByOwner
+	TokenLinkedToService = types.TokenLinkedToService
+	TokenMovedToService  = types.TokenMovedToService
+	TokenRevoked         = types.TokenRevoked
 )
