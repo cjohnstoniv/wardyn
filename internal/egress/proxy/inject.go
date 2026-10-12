@@ -254,6 +254,12 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 			registerHeaderCredentialFor(i.maskKey, resolved.Value)
 			return h, true, nil
 		}
+		if ctx.Err() != nil && transientResolveFailure(err) {
+			// The caller went away mid-ask, which says nothing about the control plane: arm neither
+			// last-good nor its pacing, and leave the entry for the next caller to re-resolve.
+			e.reMu.Unlock()
+			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, err)
+		}
 		if e.lastGood(err, time.Now()) {
 			h := e.header
 			e.reMu.Unlock()

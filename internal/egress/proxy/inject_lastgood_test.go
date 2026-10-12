@@ -204,3 +204,36 @@ func TestInjector_AnAnswerStaleOnArrivalIsPaced(t *testing.T) {
 		t.Errorf("control-plane calls = %d, want 2 (boot + one re-resolve, then paced)", got)
 	}
 }
+
+// A live caller's context changes nothing: an outage seen through resolveCtx is
+// ridden out on the last-good value exactly as resolve rides it out.
+func TestInjector_LiveContextOutageServesTheLastGoodHeader(t *testing.T) {
+	inj, calls := lastGoodControlPlane(t, func() int { return http.StatusServiceUnavailable })
+	for range 2 {
+		h, ok, err := inj.resolveCtx(context.Background(), "api.test")
+		if err != nil || !ok || h.value != "sk-last-good-value" {
+			t.Fatalf("resolveCtx during an outage = %q ok=%v err=%v, want the last-good value", h.value, ok, err)
+		}
+	}
+	if got := atomic.LoadInt32(calls); got != 2 {
+		t.Errorf("control-plane calls = %d, want 2 (boot + one re-resolve, then paced)", got)
+	}
+}
+
+// A re-resolve that failed because its own caller went away learned nothing
+// about the control plane: it neither serves the last-good value nor paces the
+// next caller, who asks the control plane and gets its answer.
+func TestInjector_CallerCancelledResolveLeavesTheEntryAlone(t *testing.T) {
+	inj, calls := lastGoodControlPlane(t, func() int { return http.StatusForbidden })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if h, _, err := inj.resolveCtx(ctx, "api.test"); err == nil || h.value != "" {
+		t.Fatalf("resolve for a caller already gone = %q err=%v, want an error and no header", h.value, err)
+	}
+	if h, _, err := inj.resolve("api.test"); err == nil || h.value != "" {
+		t.Fatalf("next resolve = %q err=%v, want the control plane's refusal", h.value, err)
+	}
+	if got := atomic.LoadInt32(calls); got != 2 {
+		t.Errorf("control-plane calls = %d, want 2 (boot + the next caller's re-resolve)", got)
+	}
+}
