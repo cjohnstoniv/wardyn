@@ -362,6 +362,26 @@ A successful response contains `spec` (authorized, clamped, workspace-folded and
 - Clients should associate results with the request and principal, mark them stale after 60 seconds or relevant auth/config changes, and honor `Retry-After` without replacing a last good preview with an empty result.
 - Never use this read output as editable policy input.
 
+## Listing a repository's branches
+
+`GET /api/v1/workspaces/{id}/branches?repo=<repo>` lists the branches of one of the workspace's repositories, for the New Run branch picker.
+
+| Field | Meaning |
+|---|---|
+| `listing` | `listed`, or `unavailable`: show a text field instead. A failed listing is still a `200`. |
+| `branches` | Never null. The default branch first, then by name, at most `200`. |
+| `default` | The default branch, when the forge named one. |
+| `truncated` | More branches exist than were returned. |
+| `credential` | `ado_signin` (the person's own Azure DevOps sign-in), `ado_own_token` (their own token) or `github_app` (the organisation's GitHub App). |
+| `reason` | Why it is `unavailable`: `forge_not_supported`, `no_credential`, `signin_needed`, `forge_refused` or `forge_unreachable`. |
+
+- Only a caller the launch door admits for the workspace may ask; anyone else gets the `404` a missing workspace gets.
+- `repo` must be one of the workspace's repository sources (`422` `workspace_repo_unknown`), and each person is rate-limited (`429` `branch_list_rate_limited`).
+- Azure DevOps is asked at the admitting provider row's own address, never the repository URL's host. A `minted_pat` row lists nothing.
+- On GitHub the App mints a one-repository token with `contents: read`, which private repositories need.
+- GitHub fixes that token's life at `1` hour and it cannot be shortened. Wardyn revokes it after the read, best effort.
+- Each listing writes one `workspace.branches.list` audit row, with no branch names.
+
 ## Custom components
 
 A run can carry components that add destinations and secrets ([POLICIES.md](POLICIES.md#custom-components) defines them; [custom-components.md](operations/custom-components.md) is the admin side). The client wraps both stores of them.
@@ -387,6 +407,33 @@ A run can carry components that add destinations and secrets ([POLICIES.md](POLI
 - Preflight and the policy preview answer `components`: one fact per component with `status` (`ready`, `needs_input`, `unavailable` or `unknown`), its `requirements`, hosts and each secret's delivery and `shared` flag.
   - A fact never carries the name of a secret the organisation provides.
 - Create, preflight and preview refuse with the component reasons in [`Reason`](#reason-branch-on-this-never-on-errors-prose); a run is audited as `run.component.attach` and `run.component.refuse`.
+
+## Run templates
+
+A template is a saved run setup, whole or partial, kept for yourself, published to the organisation or published to one group. It is content: a published template grants nothing.
+
+| Method | Route | Who |
+|---|---|---|
+| `ListTemplates` | `GET /api/v1/templates` | any signed-in person; each row is one they may read |
+| `GetTemplate` | `GET /api/v1/templates/{id}`, `/revisions/{revision}` | a reader of that template |
+| `SaveTemplate` | `POST /api/v1/templates`, `PUT /api/v1/templates/{id}` | the owner (personal), an organisation administrator (organisation), the group's template managers (group) |
+| `DeleteTemplate` | `DELETE /api/v1/templates/{id}` | as `SaveTemplate` |
+| `CopyTemplate` | `POST /api/v1/templates/{id}/copy` | a reader of the source who may write the target |
+| `ListTemplateGroupAdmins`, `GrantTemplateGroupAdmin`, `RevokeTemplateGroupAdmin` | `GET`/`PUT`/`DELETE /api/v1/admin/template-group-admins` | admin |
+
+- A template you cannot read, and one that does not exist, answer the same `404` `template_not_found`.
+- `ListTemplates` answers `publish`: where you may save one.
+  - `org` is true only for an organisation administrator in the Admin view: in the User view an administrator is a member, so publishing to the organisation is a copy made from the Admin view.
+  - `groups` lists each group you are a verified member of and manage templates for; `groups_unverified` is true, with no group offered, when your sign-in's group list is missing or incomplete.
+- `TemplateSaveRequest.kind` is `template` (the default) or `policy`.
+  - A policy holds only `inline_policy` with run-wide network, credential and access-rule keys (`allowed_domains`, `denied_domains`, `allow_all_egress`, `first_use_approval`, `first_use_hold_seconds`, `max_holds`, `allowed_methods`, `eligible_grants`, `llm_inspection`), with `coverage: partial` and no `needs_setup`.
+  - Saving one writes no stored policy.
+- An update needs `expected_revision`, the revision you read. Another current revision answers `409` `template_revision_conflict` and changes nothing; keep your edits, reload, and apply them again.
+  - Every revision stays readable by number; scope and kind never change (copy a template to publish it elsewhere).
+- A refused document answers `TemplateSaveRefusal`: the first diagnostic's `error` and `reason`, and every diagnostic with its path.
+- A shared template holds references (secret names, workspace and drive ids), never values, and its readers see those names.
+- `created_by` and `updated_by` are set only for someone who may write the template.
+- A group grant (`TemplateGroupAdmin`) names one group and one person, stored in canonical form; its optional `label` is the group's display name, shown beside its templates, and never authority.
 
 ## Run documents
 
@@ -551,6 +598,7 @@ start.
 | `placement_invalid` / `resources_invalid` / `workspace_target_invalid` / `override_invalid` / `allowed_image_invalid` / `runner_pool_invalid` | `400`: a malformed `placement`, `resources`, workspace `target`, `overrides` entry, `allowed_image` or `runner_pool_id`. |
 | `workspace_target_overlap` / `workspace_pin_conflict` / `image_conflict` / `workspace_ado_org_conflict` | `422`: the attached workspaces cannot share one run. |
 | `placement_unavailable` / `placement_credential` / `placement_capability` / `placement_local_path` / `placement_trusted_output` | `422`: a `placement: "local"` run this server cannot place on your own runner yet, or one carrying a credential, mount, storage, path or trusted-output operation a runner cannot take. |
+| `runner_posture_unmet` | `422`: a `runner_resident` credential the runner's reported posture does not meet (the detail names the field), or a run with a CC3 floor, which a runner-asserted class never meets for a resident credential. |
 | `placement_required` | `422`: no placement chosen. |
 | `placement_denied` | `403`: your governance profile's `deny_placements` refuses the run's placement, at create, preflight, policy preview and source scans; audited `authz.denied` (target `runs.placement`). |
 | `runner_offline` | `422`: a `placement: "local"` run whose runner is offline or has not reported its capabilities yet, or none of your runners is online. |
@@ -564,7 +612,9 @@ start.
 | `template_secret_refused` / `template_run_state_refused` / `template_metadata_in_content` / `template_field_excluded` | `400`: a template never holds a secret value, state of one run (identity, session, claim, admission), an owner, scope, group or revision, or a launch-only (title, description) or retired field. The path is in the diagnostic. |
 | `template_field_unavailable` / `template_dependency_missing` / `template_coverage_invalid` / `template_shared_field_refused` | `422`: a field this server cannot honour yet (refused, never dropped), a field whose dependency is neither included nor listed under `needs_setup`, a coverage that does not fit the content, or a field that names one person's own thing in an organisation or group template. |
 | `template_scope_forbidden` / `template_group_unverified` / `template_not_found` / `template_revision_conflict` | `403`, `403`, `404`, `409`: publishing to a scope the caller does not administer, group membership that cannot be verified from this sign-in, no such template or not visible to the caller, or an update against a revision that has moved. |
-| `templates_unavailable` | `501`: the template store is not available on this server yet. Every `/templates` route except `POST /templates/import`, and the `/admin/template-group-admins` routes, answer it. |
+| `templates_unavailable` | `501`: this server's store keeps no templates. Every `/templates` route except `POST /templates/import`, and the `/admin/template-group-admins` routes, answer it; the Postgres store keeps them. |
+| `template_name_taken` / `template_limit_reached` | `409`: another template available to the same people already uses the name (compared case-insensitively, per person, per group and for the organisation), or that audience already holds its most templates (200 per person, 200 per group, 500 for the organisation). |
+| `template_policy_field_refused` | `422`: a template saved as `kind: "policy"` holds something other than run-wide network, credential and access-rule keys under `inline_policy`. Each refused path is a diagnostic. |
 | `runner_pools_unavailable` | `501`: this server's store has no runner pool storage; every pool route answers it. |
 | `runner_pool_not_found` / `runner_pool_stale` / `runner_pool_unavailable` / `runner_pool_member_mismatch` / `runner_pool_no_eligible_member` | The pool routes: `404` no such pool or one you may not use (the two read alike), `409` a stale revision, `422` a switched-off pool as a default, a member of the wrong kind or a runner that is not yours, or a use policy on a Self-Hosted pool. `no_eligible_member` is also the `reason` of an unavailable pool in `GET /runner-pools`. |
 | `image_devcontainer_exclusive` / `image_builder_unavailable` | `POST /runs`' image/devcontainer build validation: `image` and `devcontainer_repo` were both set (the caller's own request shape), or a custom image was requested but this control plane has no image builder wired (a deployment capability neither field can fix) — two different causes, two reasons. |
@@ -578,6 +628,8 @@ start.
 | `workspace_providers_invalid` | The operator-only `PUT /api/v1/workspace-providers` (deployment-wide, not a per-workspace route): the submitted block fails validation. Its stale-`If-Match` arm shares `site_config_stale` below — the identical ETag cause, on the same underlying site-config document. |
 | `workspace_request_invalid` / `workspace_ssh_sources_not_ready` / `workspace_sources_not_allowed` | `POST/PUT /workspaces`: the request body fails validation, an SSH-remote source names a secret not yet stored, or the caller's own `local_dir` sources fail the member-safe mount gate. |
 | `workspace_delete_active_run` | `DELETE /workspaces/{id}`: the workspace is in use by a still-active run. |
+| `workspace_repo_unknown` | `GET /workspaces/{id}/branches`: `repo` is not one of the workspace's repository sources (`422`). |
+| `branch_list_rate_limited` | `GET /workspaces/{id}/branches`: the person passed `30` lists a minute (burst `10`, per wardynd replica), answered `429` before anything is read. Not audited; the admin token is exempt. |
 | `groups_snapshot_stale` | `PUT/POST /governance/*` and the user-drive resolver: the caller's group-membership snapshot is missing or was truncated at sign-in, so a group-keyed governance profile cannot be resolved. The SAME value as authz's own registered reason ([`internal/authz/registry.go`](../internal/authz/registry.go)) — a literal in `reasons.go` (the docs⟷reasons.go guard only reads literals), tied to authz's constant by a documented `TestNoAdHocAuthz` exception rather than a reference or a second copy invented for this package. |
 | `egress_baseline_invalid` / `egress_baseline_stale` | `PUT /governance/egress-baseline`: a host or suffix is invalid, or `If-Match` is stale. |
 | `credential_delivery_invalid` / `credential_delivery_unavailable` | `PUT /governance/credential-delivery`: an unknown or fixed class, a mode outside the class's bounds, or `require_posture` without `runner_resident`; or the store is not Postgres. |

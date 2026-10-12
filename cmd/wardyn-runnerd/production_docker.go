@@ -17,7 +17,9 @@ import (
 	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
+	"github.com/cjohnstoniv/wardyn/internal/runner/keystore"
 	"github.com/cjohnstoniv/wardyn/internal/runner/offline"
+	"github.com/cjohnstoniv/wardyn/internal/runner/posture"
 	"github.com/cjohnstoniv/wardyn/internal/runner/runneragent"
 	"github.com/cjohnstoniv/wardyn/internal/runner/runnerio"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
@@ -96,6 +98,9 @@ func dockerHostGateway(ctx context.Context) (netip.Addr, []netip.Addr, error) {
 	return gateway, held, nil
 }
 
+// postureInterval is how often a connected runner re-reads its posture.
+const postureInterval = 15 * time.Minute
+
 func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay *localRelay) (_ runnerRuntime, retErr error) {
 	streams, err := runnerio.New(sub, identity.RunnerID.String(), stateDir)
 	if err != nil {
@@ -112,6 +117,11 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 			retErr = errors.Join(retErr, manager.Close())
 		}
 	}()
+	resident, err := runneragent.NewResident(runneragent.Keystore{Set: keystore.Set, Get: keystore.Get, Delete: keystore.Delete}, stateDir)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
+	reporter := posture.NewReporter()
 	dispatcher, err := runneragent.New(runneragent.Config{
 		RunnerID: identity.RunnerID.String(), Substrate: sub,
 		BeforeCreate: manager.BeforeCreate, Created: manager.Created, CreateFailed: manager.CreateFailed,
@@ -119,6 +129,7 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 		MutationFinished: manager.MutationFinished,
 		ExecutionResult:  manager.ExecutionResult,
 		Streams:          streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
+		Resident: resident,
 	})
 	if err != nil {
 		return runnerRuntime{}, err
@@ -152,12 +163,18 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 			if err := peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
 				return err
 			}
+			// Posture only gates runner_resident delivery; a refused report
+			// must not keep the runner from READY.
+			if err := reporter.Send(ctx, peer); err != nil {
+				slog.WarnContext(ctx, "runner posture report failed", "error", err)
+			}
 			return manager.Replay(ctx, peer)
 		},
 		Online: func(peer *runnerwire.Peer, _ bool) {
 			manager.Online(peer)
 			streams.Online(peer)
 			relay.Online(peer)
+			go reporter.Watch(peer, postureInterval)
 		},
 		StreamOffline: func(peer *runnerwire.Peer) {
 			streams.Offline(peer)
