@@ -40,6 +40,8 @@ export const TEMPLATE_REFUSAL = {
   DOCUMENT_INVALID: (detail: string) => `This document cannot be read: ${detail}.`,
   VERSION_UNSUPPORTED: (what: string) =>
     `${what} is not a document this server reads. Use api_version wardyn/v1 and kind Run or RunTemplate.`,
+  KIND_MISMATCH: (want: string, got: string) =>
+    `This door reads a document of kind ${want}, and this one is kind ${got}. Change kind to ${want}.`,
   FIELD_UNKNOWN: (path: string) => `${path} is not a field this document can hold. Remove it, or check the spelling.`,
   FIELD_INVALID: (path: string, detail: string) => `${path} ${detail}.`,
   FIELD_EXCLUDED: (path: string) => `${path} is never part of a template: it belongs to one launch, or it is retired.`,
@@ -67,6 +69,7 @@ export const TEMPLATE_REFUSAL = {
 export const TEMPLATE_REFUSAL_BY_KEY: Record<keyof typeof TEMPLATE_REFUSAL, (...args: string[]) => string> = {
   DOCUMENT_INVALID: (...a) => TEMPLATE_REFUSAL.DOCUMENT_INVALID(a[0]),
   VERSION_UNSUPPORTED: (...a) => TEMPLATE_REFUSAL.VERSION_UNSUPPORTED(a[0]),
+  KIND_MISMATCH: (...a) => TEMPLATE_REFUSAL.KIND_MISMATCH(a[0], a[1]),
   FIELD_UNKNOWN: (...a) => TEMPLATE_REFUSAL.FIELD_UNKNOWN(a[0]),
   FIELD_INVALID: (...a) => TEMPLATE_REFUSAL.FIELD_INVALID(a[0], a[1]),
   FIELD_EXCLUDED: (...a) => TEMPLATE_REFUSAL.FIELD_EXCLUDED(a[0]),
@@ -90,6 +93,7 @@ export const TEMPLATE_REFUSAL_BY_KEY: Record<keyof typeof TEMPLATE_REFUSAL, (...
 export const TEMPLATE_REFUSAL_REASON: Record<keyof typeof TEMPLATE_REFUSAL, TemplateReason> = {
   DOCUMENT_INVALID: TEMPLATE_REASON.DOCUMENT_INVALID,
   VERSION_UNSUPPORTED: TEMPLATE_REASON.VERSION_UNSUPPORTED,
+  KIND_MISMATCH: TEMPLATE_REASON.VERSION_UNSUPPORTED,
   FIELD_UNKNOWN: TEMPLATE_REASON.FIELD_UNKNOWN,
   FIELD_INVALID: TEMPLATE_REASON.FIELD_INVALID,
   FIELD_EXCLUDED: TEMPLATE_REASON.FIELD_EXCLUDED,

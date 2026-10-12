@@ -34,7 +34,7 @@ func runShapeRefusal(req createRunRequest) *runRefusal {
 	}
 	switch {
 	case !req.Shape.Valid():
-		return conflict("it is not one of agent_task, environment, application")
+		return runModeInvalid("shape: %q is not one of agent_task, environment, application", string(req.Shape))
 	case req.Experience == "":
 		return conflict("it needs experience, which says whether the run is background or interactive")
 	case req.Shape == client.RunShapeApplication && (!background || kind != client.WorkloadCommand):

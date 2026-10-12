@@ -14,6 +14,14 @@
     "text": "wardyn/v2 RunTemplate is not a document this server reads. Use api_version wardyn/v1 and kind Run or RunTemplate."
   },
   {
+    "key": "KIND_MISMATCH",
+    "args": [
+      "Run",
+      "RunTemplate"
+    ],
+    "text": "This door reads a document of kind Run, and this one is kind RunTemplate. Change kind to Run."
+  },
+  {
     "key": "FIELD_UNKNOWN",
     "args": [
       "intent.agnet"

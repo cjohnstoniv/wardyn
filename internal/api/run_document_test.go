@@ -48,6 +48,20 @@ func TestRunDocumentHeaderPerKind(t *testing.T) {
 		})
 	}
 
+	// A header value that is present but not a string is a wrong type, never "(missing)".
+	for _, body := range []string{
+		`{"api_version":"wardyn/v1","kind":5,` + intent + `}`,
+		`{"api_version":2,"kind":"Run",` + intent + `}`,
+	} {
+		_, diags := decodeJSONTemplate(t, []byte(body))
+		if len(diags) != 1 || diags[0].Reason != reasonTemplateFieldInvalid {
+			t.Errorf("%s: diagnostics %+v, want one %s", body, diags, reasonTemplateFieldInvalid)
+		}
+	}
+	if _, diags := decodeJSONTemplate(t, []byte(`{"api_version":"wardyn/v1",`+intent+`}`)); len(diags) != 1 || !strings.Contains(diags[0].Message, "kind (missing)") {
+		t.Errorf("an absent kind is called missing: %+v", diags)
+	}
+
 	if doc, diags := decodeJSONTemplate(t, []byte(`{`+runDocHead+`,`+intent+`}`)); len(diags) != 0 || doc.Kind != client.RunDocumentKind {
 		t.Fatalf("a bare Run document is refused: %v", diagReasons(diags))
 	}
@@ -158,7 +172,6 @@ func TestRunShapeConflict(t *testing.T) {
 		{"agent_task: interactive with a harness", `"shape":"agent_task",` + interactiveOK, ""},
 		{"agent_task: a background command is not an agent task", `"shape":"agent_task",` + cmdWorkload, "a background agent task needs workload kind agent_task"},
 		{"a shape needs an experience", `"shape":"environment","agent":"claude-code","task":"t"`, "it needs experience, which says whether the run is background or interactive"},
-		{"a shape is one of three", `"shape":"service",` + interactiveOK, "it is not one of agent_task, environment, application"},
 	} {
 		shape := strings.SplitN(strings.SplitN(tc.fields, `"shape":"`, 2)[1], `"`, 2)[0]
 		for _, door := range contractDoors {
@@ -187,6 +200,19 @@ func TestRunShapeConflict(t *testing.T) {
 				t.Fatalf("door diagnostics %v, shape conflict wanted: %v", importReasons(res), tc.detail != "")
 			}
 		})
+	}
+	// A value outside the three is malformed, as an unknown experience is: 400 run_mode_invalid.
+	for _, door := range contractDoors {
+		t.Run("unknown shape/"+door.name, func(t *testing.T) {
+			h := newHarness(t)
+			w := do(t, h.srv, http.MethodPost, door.path, adminToken, modeBody(`"shape":"service",`+interactiveOK))
+			if w.Code != http.StatusBadRequest || errorReason(w) != reasonRunModeInvalid {
+				t.Fatalf("got %d %s, want 400 %s", w.Code, w.Body.String(), reasonRunModeInvalid)
+			}
+		})
+	}
+	if res := validateTemplateImport([]byte(docIntent(`"shape":"service",`+interactiveOK)), client.TemplateFormatJSON, ""); !slices.Contains(importReasons(res), reasonRunModeInvalid+"@intent") {
+		t.Errorf("the door does not call an unknown shape malformed: %v", importReasons(res))
 	}
 	// An interactive agent task needs a harness in tools. The run's decode asks
 	// for a tool first (request_field_unavailable), so the rule is reached by the
@@ -241,8 +267,24 @@ func TestTemplateImportDoorIsLitAndStoresNothing(t *testing.T) {
 		}
 	}
 
-	if _, res, _ = post(client.TemplateImportRequest{Format: client.TemplateFormatJSON, Kind: client.TemplateDocumentKind, Source: docIntent(`"agent":"claude-code"`)}); !slices.Contains(importReasons(res), reasonTemplateVersionUnsupported+"@kind") {
-		t.Errorf("a Run document where a RunTemplate was expected: %v", importReasons(res))
+	// A valid document of the other kind: its own sentence, naming both kinds, and the
+	// document's other problems are reported beside it.
+	template := `{"api_version":"wardyn/v1","kind":"RunTemplate","coverage":"partial","intent":{"agent":"claude-code"}}`
+	for _, tc := range []struct{ name, source, want, got string }{
+		{"a RunTemplate at the Run door", template, client.RunDocumentKind, client.TemplateDocumentKind},
+		{"a Run at the RunTemplate door", docIntent(`"agent":"claude-code"`), client.TemplateDocumentKind, client.RunDocumentKind},
+	} {
+		_, res, _ = post(client.TemplateImportRequest{Format: client.TemplateFormatJSON, Kind: tc.want, Source: tc.source})
+		i := slices.IndexFunc(res.Diagnostics, func(d client.TemplateDiagnostic) bool { return d.Path == "kind" })
+		if res.Document != nil || i < 0 || res.Diagnostics[i].Reason != reasonTemplateVersionUnsupported || res.Diagnostics[i].Message != templateKindMismatchMsg(tc.want, tc.got) {
+			t.Errorf("%s: %+v, want the kind-mismatch sentence", tc.name, res.Diagnostics)
+		}
+	}
+	_, res, _ = post(client.TemplateImportRequest{Format: client.TemplateFormatJSON, Kind: client.TemplateDocumentKind, Source: `{` + runDocHead + `,"title":"t","intent":{"agent":"claude-code"}}`})
+	for _, want := range []string{reasonTemplateVersionUnsupported + "@kind", reasonTemplateFieldExcluded + "@title"} {
+		if !slices.Contains(importReasons(res), want) {
+			t.Errorf("a mismatched kind with another problem: %v do not hold %s", importReasons(res), want)
+		}
 	}
 	if _, res, _ = post(client.TemplateImportRequest{Format: client.TemplateFormatJSON, Source: `{"api_version":"wardyn/v1","kind":"RunTemplate","coverage":"partial","intent":{"agent":"claude-code"}}`}); res.Document == nil {
 		t.Errorf("a RunTemplate imports through the same door: %v", importReasons(res))
@@ -281,7 +323,9 @@ func TestPresetDoorHoldsTheRunContract(t *testing.T) {
 		{"a built-in component no lane applies yet", client.CreateRunRequest{Agent: "claude-code", Components: []client.ComponentRef{{Builtin: "github", Org: "acme", Repos: []string{"acme/api"}}}}, reasonRequestFieldUnavailable},
 		{"a workspace target outside home", client.CreateRunRequest{Agent: "claude-code", Workspaces: []client.WorkspaceSelection{{WorkspaceID: wsID, Target: "/etc/x"}}}, reasonWorkspaceTargetInvalid},
 		{"a wildcard override", client.CreateRunRequest{Agent: "claude-code", Overrides: &client.RunOverrides{Agent: &client.AgentOverrides{AddHosts: []string{"*.example.com"}}}}, reasonOverrideRefused},
-		{"a shape that fits no experience", client.CreateRunRequest{Agent: "claude-code", Shape: client.RunShapeEnvironment}, reasonRunShapeConflict},
+		// A preset never carries experience, so a shape would be told to set one and then
+		// refused for it: it is refused as a run-mode field instead.
+		{"a shape", client.CreateRunRequest{Agent: "claude-code", Shape: client.RunShapeEnvironment}, reasonRequestFieldUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := f.put(t, "team-x", client.PresetRequest{Request: tc.req})
@@ -289,6 +333,9 @@ func TestPresetDoorHoldsTheRunContract(t *testing.T) {
 				t.Fatalf("= %d %s, want reason %s", w.Code, w.Body.String(), tc.reason)
 			}
 		})
+	}
+	if w := f.put(t, "team-x", client.PresetRequest{Request: client.CreateRunRequest{Agent: "claude-code", Shape: client.RunShapeEnvironment}}); !strings.Contains(w.Body.String(), "request.shape cannot be stored in a preset") {
+		t.Errorf("a preset carrying shape = %d %s, want request.shape named", w.Code, w.Body.String())
 	}
 	if w := f.put(t, "team-x", client.PresetRequest{Request: client.CreateRunRequest{Agent: "claude-code", Resources: &client.RunResources{CPUMillis: 2000}}}); w.Code != http.StatusCreated {
 		t.Fatalf("a preset that holds the contract = %d %s", w.Code, w.Body.String())
