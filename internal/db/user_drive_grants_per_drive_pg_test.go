@@ -90,8 +90,8 @@ func TestPG_UserDriveGrantsPerDriveUpgrade(t *testing.T) {
 		t.Errorf("carol's drives = %+v, want gamma (ops, priority 9) first and alpha second", ws)
 	}
 
-	// The new key: alice's second drive is a second row, not a repoint.
-	if _, err := st.UpsertUserDriveGrant(ctx, types.UserDriveGrant{
+	// The new key: alice's second drive, added, is a second row.
+	if _, err := st.AddUserDriveGrant(ctx, types.UserDriveGrant{
 		SubjectType: types.CapabilitySubjectUser, Subject: "alice", DriveID: alpha, Enabled: true,
 	}, true); err != nil {
 		t.Fatalf("grant alice a second drive: %v", err)

@@ -750,12 +750,13 @@ func (s *Server) handleDeleteUserDrive(w http.ResponseWriter, r *http.Request) {
 // all TRI-STATE pointers, lives there.
 type userDriveGrantRequest = client.DriveGrantRequest
 
-// handleUpsertUserDriveGrant allocates one drive to one subject, keyed on the
-// natural (subject_type, subject, drive_id): writing the same subject and drive
-// again updates that row, and another drive is another allocation (migration
-// 0166). The drive behind /home/agent/drive stays the resolver's one winner.
+// handleUpsertUserDriveGrant allocates one drive to one subject and REPLACES
+// the subject's allocation: re-allocating repoints the subject's row rather than
+// accumulating a second, so the admin's last write decides which drive they
+// get. With `additional` the drive is allocated beside the subject's others
+// instead (writeUserDriveGrant; migration 0166 keys on subject and drive).
 //
-// 201 for a genuinely new allocation, 200 when an existing one was updated —
+// 201 for a genuinely new allocation, 200 when an existing one was repointed —
 // the same created/updated signal handleUpsertGovernanceAssignment gives,
 // derived the same way (the store returns the EXISTING row's id on a conflict,
 // never the candidate's). operatorOnly (routes.go).
@@ -859,7 +860,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	}
 	g.ID = uuid.New()
 	g.CreatedBy = principalFromRequest(r)
-	saved, err := s.cfg.Store.UpsertUserDriveGrant(r.Context(), g, homeOverrideStated)
+	saved, err := s.writeUserDriveGrant(r.Context(), g, homeOverrideStated, req.Additional)
 	// ErrNotFound here is the FK refusing an unknown drive_id — a 404 naming the
 	// drive, not a 500, and not a silent no-op.
 	if notFoundIf(w, err, "user drive", reasonUserDriveNotFound) {

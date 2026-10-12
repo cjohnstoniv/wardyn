@@ -4,12 +4,14 @@
 package api
 
 import (
+	"cmp"
 	"fmt"
 	"net/http"
 	"slices"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -81,11 +83,11 @@ func (s *Server) authorizeRequestDrives(r *http.Request, req createRunRequest, c
 	}
 	out := make([]runDrive, 0, len(req.Drives))
 	for _, a := range req.Drives {
-		// A drive a person owns is authorized by ownership, never through a
-		// grant: that arm belongs here, before the grant lookup.
 		i := slices.IndexFunc(reach, func(d reachableDrive) bool { return d.winner.Drive.ID.String() == a.DriveID })
 		if i < 0 {
-			return nil, runError(http.StatusUnprocessableEntity, reasonDriveNotFound, driveNotFoundMsg(a.DriveID))
+			// The audit row's sentence names no id: another person's drive and
+			// an id that names nothing leave the same row.
+			return nil, driveDenied(authz.Deny(authz.ReasonDriveNotFound, "runs.drive", driveNotFoundAuditSentence), driveNotFoundMsg(a.DriveID))
 		}
 		d := reach[i]
 		switch {
@@ -98,12 +100,45 @@ func (s *Server) authorizeRequestDrives(r *http.Request, req createRunRequest, c
 				errDriveUnmountable, d.winner.Drive.Name))
 		}
 		if j := slices.IndexFunc(out, func(o runDrive) bool { return o.target == d.target() }); j >= 0 {
-			return nil, runError(http.StatusUnprocessableEntity, reasonDriveTargetConflict,
-				driveTargetConflictMsg(out[j].resolved.Drive.Name, d.winner.Drive.Name, d.target()))
+			msg := driveTargetConflictMsg(out[j].resolved.Drive.Name, d.winner.Drive.Name, d.target())
+			return nil, driveDenied(authz.Deny(authz.ReasonDriveTargetConflict, "runs.drive", msg), msg)
 		}
 		out = append(out, runDrive{resolved: *d.resolved, target: d.target(), narrow: a.ReadOnly, legacy: d.legacy, id: a.DriveID})
 	}
-	return out, nil
+	return out, driveKindMixRefusal(out)
+}
+
+// driveNotFoundAuditSentence is drive_not_found's audit sentence: the same for
+// every id, so the row says nothing about whether one exists.
+const driveNotFoundAuditSentence = "a drives[] id the caller's own grants do not reach"
+
+// driveDenied is a drives[] refusal that is also d's authz.denied row (target
+// runs.drive): the wire answer is msg, the row's sentence is d's own.
+func driveDenied(d authz.Decision, msg string) *runRefusal {
+	return &runRefusal{status: http.StatusUnprocessableEntity, body: errorBody{Error: msg, Reason: string(d.Reason)}, decision: &d}
+}
+
+// driveKindMixRefusal refuses a shared Kubernetes drive beside a managed one,
+// before anything is created: the managed drive needs the pod's fsGroup, which
+// is never set beside a share (the k8s substrate refuses the pair too). A
+// Kubernetes backend mounts only on a Kubernetes deployment, so its backend is
+// the deployment's.
+func driveKindMixRefusal(drives []runDrive) *runRefusal {
+	var share, managed string
+	for _, d := range drives {
+		b := d.resolved.Drive.Backend
+		switch {
+		case b.RunnerTarget() != "k8s":
+		case b.Kind() == types.DriveKindManaged:
+			managed = cmp.Or(managed, d.resolved.Drive.Name)
+		default:
+			share = cmp.Or(share, d.resolved.Drive.Name)
+		}
+	}
+	if share == "" || managed == "" {
+		return nil
+	}
+	return runError(http.StatusUnprocessableEntity, reasonDriveShareBesideManaged, driveShareBesideManagedMsg(share, managed))
 }
 
 // seedRequestDrives resolves the request's drives into the mounts the runner

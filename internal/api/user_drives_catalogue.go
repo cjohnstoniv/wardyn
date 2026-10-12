@@ -203,3 +203,16 @@ func driveSource(tier types.CapabilitySubjectType) string {
 		return client.MeDriveSourceOrganisation
 	}
 }
+
+// writeUserDriveGrant is POST /drives/grants' store write: the replacing upsert,
+// or with additional an allocation beside the subject's others.
+func (s *Server) writeUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated, additional bool) (types.UserDriveGrant, error) {
+	if !additional {
+		return s.cfg.Store.UpsertUserDriveGrant(ctx, g, homeOverrideStated)
+	}
+	adder, ok := s.cfg.Store.(store.UserDriveGrantAdder)
+	if !ok {
+		return types.UserDriveGrant{}, errors.New("api: this store cannot allocate a drive beside another")
+	}
+	return adder.AddUserDriveGrant(ctx, g, homeOverrideStated)
+}

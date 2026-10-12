@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -152,8 +153,8 @@ func TestAuthorizeRequestDrives_ForeignAndRandomAreOneAnswer(t *testing.T) {
 	srv, _ := multiDriveServer(ds.personal, ds.team, ds.foreign)
 	for _, id := range []string{ds.foreign.Drive.ID.String(), uuid.NewString()} {
 		drives, ref := authorizeDrives(srv, driveMemberCtx([]string{"eng"}, false), drivesRequest(id))
-		if ref == nil || ref.status != http.StatusUnprocessableEntity || ref.body.Reason != reasonDriveNotFound || ref.body.Error != driveNotFoundMsg(id) || drives != nil {
-			t.Fatalf("drives[%s] = %+v, %+v; want 422 %s %q", id, drives, ref, reasonDriveNotFound, driveNotFoundMsg(id))
+		if ref == nil || ref.status != http.StatusUnprocessableEntity || ref.body.Reason != string(authz.ReasonDriveNotFound) || ref.body.Error != driveNotFoundMsg(id) || drives != nil {
+			t.Fatalf("drives[%s] = %+v, %+v; want 422 %s %q", id, drives, ref, string(authz.ReasonDriveNotFound), driveNotFoundMsg(id))
 		}
 	}
 }
@@ -173,8 +174,8 @@ func TestAuthorizeRequestDrives_PausedAndConflicts(t *testing.T) {
 	}
 	_, ref = authorizeDrives(srv, ctx, drivesRequest(ds.share.Drive.ID.String(), twin.Drive.ID.String()))
 	want := driveTargetConflictMsg("Shared Docs", "shared docs", runner.SharedRoot+"/shared-docs")
-	if ref == nil || ref.body.Reason != reasonDriveTargetConflict || ref.body.Error != want {
-		t.Errorf("two shares on one slug = %+v, want 422 %s %q", ref, reasonDriveTargetConflict, want)
+	if ref == nil || ref.body.Reason != string(authz.ReasonDriveTargetConflict) || ref.body.Error != want {
+		t.Errorf("two shares on one slug = %+v, want 422 %s %q", ref, string(authz.ReasonDriveTargetConflict), want)
 	}
 }
 
@@ -247,7 +248,7 @@ func TestStepDriveEligibility_SelfHostedPool(t *testing.T) {
 		if got := (&Server{}).stepDriveEligibility(f, &foldRecorder{}); got != want {
 			t.Fatalf("%s: step = %v, want %v (%s)", hosting, got, want, w.Body)
 		}
-		if !want && (w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), reasonDriveNotInPool) ||
+		if !want && (w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), string(authz.ReasonDriveNotInPool)) ||
 			!strings.Contains(w.Body.String(), "Team Data: not available in this pool's runners.")) {
 			t.Errorf("%s refusal = %d %s", hosting, w.Code, w.Body)
 		}
@@ -285,9 +286,13 @@ func TestStartFolderOnAListedDrive(t *testing.T) {
 // nested either way against a workspace.
 func TestOverlap_PluralDriveTargets(t *testing.T) {
 	ds := newDriveSet()
-	drive := driveTargets([]runDrive{{resolved: types.ResolvedDrive{Drive: ds.team.Drive}, target: runner.DrivesRoot + "/team-data", id: ds.team.Drive.ID.String()}})
+	// Two drives: the overlap with the SECOND one is the one a [0]-only tree misses.
+	drive := driveTargets([]runDrive{
+		{resolved: types.ResolvedDrive{Drive: ds.personal.Drive}, target: runner.SharedRoot + "/personal", id: ds.personal.Drive.ID.String()},
+		{resolved: types.ResolvedDrive{Drive: ds.team.Drive}, target: runner.DrivesRoot + "/team-data", id: ds.team.Drive.ID.String()},
+	})
 	home := folderWS("home", "/srv/home")
-	for _, target := range []string{"/home/agent", runner.DrivesRoot + "/team-data/inner"} {
+	for _, target := range []string{runner.DrivesRoot, runner.DrivesRoot + "/team-data/inner"} {
 		spec := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/home", Target: target}}}
 		_, _, ref := (&Server{}).runAttachments(createRunRequest{}, spec, []types.Workspace{home},
 			indexWorkspacesBySource([]types.Workspace{home}), workspaceSeed{attached: []types.Workspace{home}}, drive)
@@ -400,6 +405,118 @@ func TestDriveCreateAudit(t *testing.T) {
 		data := map[string]any{}
 		if stampDriveAudit(data, drives); len(data) != 0 {
 			t.Errorf("drives %+v recorded %v", drives, data)
+		}
+	}
+}
+
+// TestStepDrive_K8sShareBesideManagedAtEveryDoor: a shared Kubernetes drive
+// beside a managed one is refused, named, at the preview, the preflight and
+// create, before anything is created (the substrate cannot mount the pair).
+func TestStepDrive_K8sShareBesideManagedAtEveryDoor(t *testing.T) {
+	managed := winnerOf("Cluster Home", types.DriveBackendK8sPVC, types.CapabilitySubjectUser, "sub-drive-bob", true)
+	share := winnerOf("Cluster Share", types.DriveBackendK8sPVCStatic, types.CapabilitySubjectAll, "", true)
+	srv, _ := multiDriveServer(managed, share)
+	srv.cfg.RunnerTarget = "k8s"
+	req := drivesRequest(managed.Drive.ID.String(), share.Drive.ID.String())
+	for _, mode := range []foldMode{foldPreview, foldPreflight, foldCreate} {
+		w := httptest.NewRecorder()
+		f := &runFold{mode: mode, w: w, req: &req,
+			r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(driveMemberCtx([]string{"eng"}, false))}
+		if srv.stepDrive(f, &foldRecorder{}) {
+			t.Fatalf("mode %d: a share beside a managed drive passed", mode)
+		}
+		want := driveShareBesideManagedMsg("Cluster Share", "Cluster Home")
+		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), reasonDriveShareBesideManaged) || !strings.Contains(w.Body.String(), want) {
+			t.Errorf("mode %d: %d %s, want 422 %s %q", mode, w.Code, w.Body, reasonDriveShareBesideManaged, want)
+		}
+	}
+	if drives, ref := authorizeDrives(srv, driveMemberCtx(nil, false), drivesRequest(managed.Drive.ID.String())); ref != nil || len(drives) != 1 {
+		t.Errorf("the managed drive alone = %+v, %+v; want it attached", drives, ref)
+	}
+}
+
+// TestDriveDenialsAreAudited: drive_not_found, drive_target_conflict and
+// drive_not_in_pool each leave an authz.denied row; another person's drive and
+// an id that names nothing leave the same row.
+func TestDriveDenialsAreAudited(t *testing.T) {
+	ds := newDriveSet()
+	twin := winnerOf("shared docs", types.DriveBackendHostPath, types.CapabilitySubjectAll, "", true)
+	srv, _ := multiDriveServer(ds.personal, ds.share, twin, ds.foreign)
+	audit := srv.cfg.Audit.(*recRecorder)
+	ctx := driveMemberCtx([]string{"eng"}, false)
+	deny := func(req createRunRequest) types.AuditEvent {
+		t.Helper()
+		audit.events = nil
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
+		_, ref := srv.authorizeRequestDrives(r, req, governanceCeiling{})
+		if !ref.write(srv, httptest.NewRecorder(), r) || len(audit.events) != 1 || audit.events[0].Action != "authz.denied" {
+			t.Fatalf("refusal %+v wrote events %+v, want one authz.denied", ref, audit.events)
+		}
+		return audit.events[0]
+	}
+	foreign := deny(drivesRequest(ds.foreign.Drive.ID.String()))
+	random := deny(drivesRequest(uuid.NewString()))
+	if foreign.Target != "runs.drive" || foreign.Target != random.Target || string(foreign.Data) != string(random.Data) {
+		t.Errorf("foreign row %s %s != random row %s %s", foreign.Target, foreign.Data, random.Target, random.Data)
+	}
+	if strings.Contains(string(foreign.Data), ds.foreign.Drive.ID.String()) || strings.Contains(string(foreign.Data), "Theirs") {
+		t.Errorf("the drive_not_found row names the drive: %s", foreign.Data)
+	}
+	if ev := deny(drivesRequest(ds.share.Drive.ID.String(), twin.Drive.ID.String())); !strings.Contains(string(ev.Data), string(authz.ReasonDriveTargetConflict)) {
+		t.Errorf("target conflict row = %s", ev.Data)
+	}
+
+	audit.events = nil
+	w := httptest.NewRecorder()
+	f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx),
+		drives: []runDrive{{resolved: types.ResolvedDrive{Drive: ds.share.Drive}}},
+		place:  runPlacement{pooled: true, row: types.RunnerPool{HostingType: types.RunnerPoolSelfHosted}}}
+	if srv.stepDriveEligibility(f, &foldRecorder{}) || len(audit.events) != 1 || !strings.Contains(string(audit.events[0].Data), string(authz.ReasonDriveNotInPool)) {
+		t.Errorf("not_in_pool events = %+v", audit.events)
+	}
+}
+
+// TestMeDrivesCatalogue_DrivesOff: with storage.user_drive.disabled the
+// catalogue lists nothing a launch would refuse.
+func TestMeDrivesCatalogue_DrivesOff(t *testing.T) {
+	ds := newDriveSet()
+	srv, st := multiDriveServer(ds.personal, ds.share)
+	st.site = types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Storage: &types.StorageProviders{UserDrive: &types.UserDriveProvider{Disabled: true}}}}
+	w := httptest.NewRecorder()
+	srv.handleListMeDrives(w, httptest.NewRequest(http.MethodGet, "/api/v1/me/drives", nil).WithContext(driveMemberCtx([]string{"eng"}, false)))
+	var got client.MeDriveCatalogue
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Drives) != 0 || got.Unavailable != driveUnavailableUnknown {
+		t.Errorf("drives off = %+v, want no rows and %q", got, driveUnavailableUnknown)
+	}
+}
+
+// grantVerbStore records which grant verb a write took.
+type grantVerbStore struct {
+	*driveStore
+	verb string
+}
+
+func (s *grantVerbStore) UpsertUserDriveGrant(_ context.Context, g types.UserDriveGrant, _ bool) (types.UserDriveGrant, error) {
+	s.verb = "replace"
+	return g, nil
+}
+
+func (s *grantVerbStore) AddUserDriveGrant(_ context.Context, g types.UserDriveGrant, _ bool) (types.UserDriveGrant, error) {
+	s.verb = "add"
+	return g, nil
+}
+
+// TestWriteUserDriveGrant_Verb: an allocation replaces the subject's drive
+// unless the request says additional.
+func TestWriteUserDriveGrant_Verb(t *testing.T) {
+	for additional, want := range map[bool]string{false: "replace", true: "add"} {
+		st := &grantVerbStore{driveStore: &driveStore{}}
+		srv := New(Config{Store: st, RunnerTarget: "docker"})
+		if _, err := srv.writeUserDriveGrant(context.Background(), types.UserDriveGrant{}, true, additional); err != nil || st.verb != want {
+			t.Errorf("additional=%v took %q (%v), want %q", additional, st.verb, err, want)
 		}
 	}
 }

@@ -517,6 +517,11 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	if _, err := d.cli.NetworkRemove(ctx, internalNetName(id), client.NetworkRemoveOptions{}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove internal network: %w", err)
 	}
+	// A drive seed left by a crash between its create and its removal still
+	// holds that drive's volume.
+	if _, err := d.cli.ContainerRemove(ctx, driveSeedName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+		return fmt.Errorf("docker: remove drive seed: %w", err)
+	}
 	return nil
 }
 

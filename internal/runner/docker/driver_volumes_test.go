@@ -166,7 +166,7 @@ func TestDriveMount_ManagedIsExactlyOneMount(t *testing.T) {
 	d := newWithClient(newFakeDocker(), Config{ProxyImage: "wardyn-proxy:dev"})
 	drive := dockerVolumeDrive()
 
-	got, err := d.driveMount(context.Background(), drive, "busybox:latest", true)
+	got, err := d.driveMount(context.Background(), drive, uuid.Nil, "busybox:latest", true)
 	if err != nil {
 		t.Fatalf("driveMount for a managed drive: %v", err)
 	}

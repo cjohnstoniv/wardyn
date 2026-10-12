@@ -34,12 +34,13 @@ func TestDriveRefusalSentencesMatchGolden(t *testing.T) {
 		return n
 	}
 	got := map[string]func(a []string) string{
-		"SELECTION_CONFLICT": func([]string) string { return driveSelectionConflictMsg() },
-		"INVALID":            func(a []string) string { return driveInvalidMsg(atoi(a[0])) },
-		"TOO_MANY":           func(a []string) string { return driveTooManyMsg(atoi(a[0])) },
-		"NOT_FOUND":          func(a []string) string { return driveNotFoundMsg(a[0]) },
-		"NOT_IN_POOL":        func(a []string) string { return driveNotInPoolMsg(a[0]) },
-		"TARGET_CONFLICT":    func(a []string) string { return driveTargetConflictMsg(a[0], a[1], a[2]) },
+		"SELECTION_CONFLICT":   func([]string) string { return driveSelectionConflictMsg() },
+		"INVALID":              func(a []string) string { return driveInvalidMsg(atoi(a[0])) },
+		"TOO_MANY":             func(a []string) string { return driveTooManyMsg(atoi(a[0])) },
+		"NOT_FOUND":            func(a []string) string { return driveNotFoundMsg(a[0]) },
+		"NOT_IN_POOL":          func(a []string) string { return driveNotInPoolMsg(a[0]) },
+		"TARGET_CONFLICT":      func(a []string) string { return driveTargetConflictMsg(a[0], a[1], a[2]) },
+		"SHARE_BESIDE_MANAGED": func(a []string) string { return driveShareBesideManagedMsg(a[0], a[1]) },
 	}
 	if len(golden) != len(got) {
 		t.Fatalf("golden has %d sentences, the server has %d", len(golden), len(got))

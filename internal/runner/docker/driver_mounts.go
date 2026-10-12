@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/mount"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -105,7 +106,7 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSu
 				runner.DriveSubject(drive), drive.Target, errDriveTargetInvalid)
 		}
 		seen[drive.Target] = true
-		driveMounts, err := d.driveMount(ctx, drive, spec.Image, rroSupported)
+		driveMounts, err := d.driveMount(ctx, drive, spec.RunID, spec.Image, rroSupported)
 		if err != nil {
 			return nil, err
 		}
@@ -136,7 +137,7 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSu
 // A Kubernetes backend is an error, never a skip: types.ValidateUserDrive
 // refuses it on a Docker deployment at the write boundary, so reaching here
 // means the deployment's runner target changed under a stored row.
-func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, image string, rroSupported bool) ([]mount.Mount, error) {
+func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, runID uuid.UUID, image string, rroSupported bool) ([]mount.Mount, error) {
 	if drive == nil {
 		return nil, nil
 	}
@@ -168,7 +169,7 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, image 
 			return nil, err
 		}
 		if drive.Target != runner.DriveTarget {
-			if err := d.seedDriveVolume(ctx, image, drive); err != nil {
+			if err := d.seedDriveVolume(ctx, runID, image, drive); err != nil {
 				return nil, err
 			}
 		}

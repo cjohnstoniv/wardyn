@@ -33,13 +33,10 @@ func TestPG_ResolveUserDrives_OneWinnerPerDrive(t *testing.T) {
 	seedUserDriveGrant(t, st, types.UserDriveGrant{SubjectType: types.CapabilitySubjectUser, Subject: sub, DriveID: personal.ID, CreatedBy: "admin@example.com"})
 	seedUserDriveGrant(t, st, types.UserDriveGrant{SubjectType: types.CapabilitySubjectGroup, Subject: group, DriveID: team.ID, CreatedBy: "admin@example.com"})
 	// The paused drive: a group grant would mount it, the person's own grant on
-	// the same drive is switched off and must win.
-	seedUserDriveGrant(t, st, types.UserDriveGrant{SubjectType: types.CapabilitySubjectGroup, Subject: group, DriveID: paused.ID, CreatedBy: "admin@example.com"})
-	off, err := st.UpsertUserDriveGrant(ctx, types.UserDriveGrant{SubjectType: types.CapabilitySubjectUser, Subject: sub, DriveID: paused.ID, CreatedBy: "admin@example.com"}, true)
-	if err != nil {
-		t.Fatalf("seed the disabled grant: %v", err)
-	}
-	t.Cleanup(func() { _, _ = st.DeleteUserDriveGrant(ctx, off.ID) })
+	// the same drive is switched off and must win. Both are second drives of
+	// their subject, so they are added beside the first.
+	addUserDriveGrant(t, st, types.UserDriveGrant{SubjectType: types.CapabilitySubjectGroup, Subject: group, DriveID: paused.ID, Enabled: true, CreatedBy: "admin@example.com"})
+	off := addUserDriveGrant(t, st, types.UserDriveGrant{SubjectType: types.CapabilitySubjectUser, Subject: sub, DriveID: paused.ID, CreatedBy: "admin@example.com"})
 
 	ws, err := st.ResolveUserDrives(ctx, []string{sub}, []string{group}, "")
 	if err != nil {
@@ -83,41 +80,67 @@ func TestPG_ResolveUserDrives_OneWinnerPerDrive(t *testing.T) {
 	}
 }
 
-// TestPG_UpsertUserDriveGrant_PerDriveKey: a subject granted a second drive
-// keeps the first grant beside it (migration 0166), and writing the same
-// subject and drive again updates that row and returns its id.
-func TestPG_UpsertUserDriveGrant_PerDriveKey(t *testing.T) {
+// addUserDriveGrant allocates g beside the subject's other drives and
+// registers its cleanup.
+func addUserDriveGrant(t *testing.T, st store.PG, g types.UserDriveGrant) types.UserDriveGrant {
+	t.Helper()
+	saved, err := st.AddUserDriveGrant(context.Background(), g, true)
+	if err != nil {
+		t.Fatalf("add grant %s %s: %v", g.SubjectType, g.Subject, err)
+	}
+	t.Cleanup(func() { _, _ = st.DeleteUserDriveGrant(context.Background(), saved.ID) })
+	return saved
+}
+
+func subjectGrants(t *testing.T, st store.PG, subject string) []types.UserDriveGrant {
+	t.Helper()
+	all, err := st.ListUserDriveGrants(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []types.UserDriveGrant
+	for _, g := range all {
+		if g.Subject == subject {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// TestPG_AddAndReplaceUserDriveGrants: the additive verb keeps a subject's
+// first drive beside a second (migration 0166) and updates the row it already
+// has for a drive; the replacing verb leaves the subject with exactly the drive
+// it names, repointing the earliest row and removing the rest.
+func TestPG_AddAndReplaceUserDriveGrants(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	st := store.NewPG(pool)
 	uniq := uuid.NewString()[:8]
 	a := seedUserDrive(t, st, "per-drive-a-"+uniq)
 	b := seedUserDrive(t, st, "per-drive-b-"+uniq)
+	c := seedUserDrive(t, st, "per-drive-c-"+uniq)
 	sub := "sub-" + uniq
+	grant := func(d types.UserDrive, priority int) types.UserDriveGrant {
+		return types.UserDriveGrant{SubjectType: types.CapabilitySubjectUser, Subject: sub, DriveID: d.ID, Priority: priority, Enabled: true, CreatedBy: "admin@example.com"}
+	}
 
-	first := seedUserDriveGrant(t, st, types.UserDriveGrant{SubjectType: types.CapabilitySubjectUser, Subject: sub, DriveID: a.ID, CreatedBy: "admin@example.com"})
-	second := seedUserDriveGrant(t, st, types.UserDriveGrant{SubjectType: types.CapabilitySubjectUser, Subject: sub, DriveID: b.ID, CreatedBy: "admin@example.com"})
-	if first.ID == second.ID {
-		t.Fatalf("the second drive repointed the first grant (%s)", first.ID)
+	first := addUserDriveGrant(t, st, grant(a, 0))
+	second := addUserDriveGrant(t, st, grant(b, 0))
+	if first.ID == second.ID || len(subjectGrants(t, st, sub)) != 2 {
+		t.Fatalf("adding a second drive replaced the first: %+v", subjectGrants(t, st, sub))
 	}
-	again, err := st.UpsertUserDriveGrant(ctx, types.UserDriveGrant{SubjectType: types.CapabilitySubjectUser, Subject: sub, DriveID: a.ID, Priority: 7, Enabled: true, CreatedBy: "admin@example.com"}, true)
+	again, err := st.AddUserDriveGrant(ctx, grant(a, 7), true)
+	if err != nil || again.ID != first.ID || again.Priority != 7 {
+		t.Errorf("re-adding drive a = %+v, %v; want the existing row %s updated to 7", again, err, first.ID)
+	}
+
+	replaced, err := st.UpsertUserDriveGrant(ctx, grant(c, 3), true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again.ID != first.ID || again.Priority != 7 {
-		t.Errorf("re-upsert = id %s priority %d, want the existing row %s updated to 7", again.ID, again.Priority, first.ID)
-	}
-	ws, err := st.ResolveUserDrives(ctx, []string{sub}, nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	mine := 0
-	for _, w := range ws {
-		if w.Drive.ID == a.ID || w.Drive.ID == b.ID {
-			mine++
-		}
-	}
-	if mine != 2 {
-		t.Errorf("reached %d of the subject's drives, want both", mine)
+	t.Cleanup(func() { _, _ = st.DeleteUserDriveGrant(ctx, replaced.ID) })
+	rows := subjectGrants(t, st, sub)
+	if len(rows) != 1 || rows[0].DriveID != c.ID || replaced.ID != first.ID {
+		t.Errorf("replacing with drive c left %+v (returned id %s); want one row, drive c, the earliest row %s repointed", rows, replaced.ID, first.ID)
 	}
 }

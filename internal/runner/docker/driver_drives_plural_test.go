@@ -8,6 +8,7 @@ package docker
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -24,11 +25,12 @@ func secondVolumeDrive() types.DriveMount {
 	return d
 }
 
-func createWithDrives(t *testing.T, f *fakeDocker, drives ...types.DriveMount) ([]mount.Mount, error) {
+func createWithDrives(t *testing.T, f *fakeDocker, runID uuid.UUID, drives ...types.DriveMount) ([]mount.Mount, error) {
 	t.Helper()
 	f.images["busybox:latest"] = true
 	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
 	spec := testSpec()
+	spec.RunID = runID
 	spec.Drives = drives
 	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
 		return nil, err
@@ -39,11 +41,17 @@ func createWithDrives(t *testing.T, f *fakeDocker, drives ...types.DriveMount) (
 // TestCreateSandbox_MountsEveryDrive: two drives, each at its own path, each a
 // volume of its own. The one below DrivesRoot is first seeded through the
 // image's own drive directory by a container created and removed, never
-// started; the legacy one needs no seed.
+// started, with no network and the run's labels; the legacy one needs no seed.
 func TestCreateSandbox_MountsEveryDrive(t *testing.T) {
 	f := newFakeDocker()
+	var seeds []string
+	f.onCreate = func(name string) {
+		if strings.HasPrefix(name, driveSeedPrefix) {
+			seeds = append(seeds, name)
+		}
+	}
 	second := secondVolumeDrive()
-	mounts, err := createWithDrives(t, f, *dockerVolumeDrive(), second)
+	mounts, err := createWithDrives(t, f, testSpec().RunID, *dockerVolumeDrive(), second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,15 +61,60 @@ func TestCreateSandbox_MountsEveryDrive(t *testing.T) {
 			t.Errorf("drive at %s mounted as %+v, want volume %s ro=%v", d.Target, m, d.ObjectName, d.ReadOnly)
 		}
 	}
-	seed := f.containers[driveSeedPrefix+second.ObjectName]
+	if len(seeds) != 1 {
+		t.Fatalf("seed containers created = %v, want one, for the drive below DrivesRoot only", seeds)
+	}
+	seed := f.containers[driveSeedName(testSpec().RunID)]
 	if seed == nil || !seed.removed || seed.state != nil && seed.state.Running {
 		t.Fatalf("seed container = %+v, want one created and removed, never started", seed)
 	}
-	if m := findMount(seed.host.Mounts, runner.DriveTarget); m == nil || m.Source != second.ObjectName || m.ReadOnly {
-		t.Errorf("seed mounts = %+v, want %s writable at %s", seed.host.Mounts, second.ObjectName, runner.DriveTarget)
+	if m := findMount(seed.host.Mounts, runner.DriveTarget); m == nil || m.Source != second.ObjectName || m.ReadOnly || len(seed.host.Mounts) != 1 {
+		t.Errorf("seed mounts = %+v, want only %s writable at %s", seed.host.Mounts, second.ObjectName, runner.DriveTarget)
 	}
-	if f.containers[driveSeedPrefix+dockerVolumeDrive().ObjectName] != nil {
-		t.Error("the legacy drive was seeded; the image's copy-up serves it directly")
+	if !seed.cfg.NetworkDisabled || seed.host.NetworkMode != "none" {
+		t.Errorf("seed network = disabled %v, mode %q; want no network at all", seed.cfg.NetworkDisabled, seed.host.NetworkMode)
+	}
+	if seed.cfg.Labels[labelRun] != testSpec().RunID.String() || seed.cfg.Labels[labelManaged] != "true" || seed.cfg.Labels[labelComponent] != componentDriveSeed {
+		t.Errorf("seed labels = %v, want the run's managed labels", seed.cfg.Labels)
+	}
+}
+
+// TestCreateSandbox_ConcurrentRunsSeedOneVolume: two runs attaching the same
+// drive at once each seed under their own name, so neither refuses the other.
+func TestCreateSandbox_ConcurrentRunsSeedOneVolume(t *testing.T) {
+	f := newFakeDocker()
+	var mu sync.Mutex
+	seen := map[string]int{}
+	f.onCreate = func(name string) {
+		if strings.HasPrefix(name, driveSeedPrefix) {
+			mu.Lock()
+			seen[name]++
+			mu.Unlock()
+		}
+	}
+	f.images["busybox:latest"] = true
+	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
+	drive := secondVolumeDrive()
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			spec := testSpec()
+			spec.RunID = uuid.New()
+			spec.Drives = []types.DriveMount{drive}
+			_, errs[i] = d.CreateSandbox(context.Background(), spec)
+		}()
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("run %d: %v", i, err)
+		}
+	}
+	if len(seen) != 2 {
+		t.Errorf("seed names = %v, want one per run", seen)
 	}
 }
 
@@ -70,7 +123,7 @@ func TestCreateSandbox_MountsEveryDrive(t *testing.T) {
 func TestCreateSandbox_DriveSeedFailureRefuses(t *testing.T) {
 	f := newFakeDocker()
 	f.failCreateContainer = driveSeedPrefix
-	if _, err := createWithDrives(t, f, secondVolumeDrive()); err == nil || !strings.Contains(err.Error(), "seed user drive volume") {
+	if _, err := createWithDrives(t, f, testSpec().RunID, secondVolumeDrive()); err == nil || !strings.Contains(err.Error(), "seed user drive volume") {
 		t.Fatalf("CreateSandbox = %v, want the seed refusal", err)
 	}
 }
@@ -89,11 +142,25 @@ func TestCreateSandbox_DrivesAtOneOrForeignTargetRefused(t *testing.T) {
 	}
 	for name, drives := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := createWithDrives(t, newFakeDocker(), drives...)
+			_, err := createWithDrives(t, newFakeDocker(), testSpec().RunID, drives...)
 			if err == nil || !strings.Contains(err.Error(), errDriveTargetInvalid.Error()) {
 				t.Fatalf("CreateSandbox = %v, want %v", err, errDriveTargetInvalid)
 			}
 		})
+	}
+}
+
+// TestTeardown_RemovesALeftDriveSeed: a seed a crash left behind holds its
+// drive's volume; the run's teardown removes it by its run-derived name.
+func TestTeardown_RemovesALeftDriveSeed(t *testing.T) {
+	f := newFakeDocker()
+	id := uuid.New()
+	f.containers[driveSeedName(id)] = &createdContainer{name: driveSeedName(id)}
+	if err := newTestDriver(f).teardown(context.Background(), agentContainerName(id)); err != nil {
+		t.Fatal(err)
+	}
+	if c := f.containers[driveSeedName(id)]; c != nil && !c.removed {
+		t.Errorf("teardown left the drive seed %s", driveSeedName(id))
 	}
 }
 

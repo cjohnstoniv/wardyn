@@ -34,6 +34,15 @@ type UserDriveCatalogueStore interface {
 
 var _ UserDriveCatalogueStore = PG{}
 
+// UserDriveGrantAdder allocates a drive beside a subject's others
+// (POST /drives/grants with additional), where UpsertUserDriveGrant replaces
+// them. Optional like UserDriveCatalogueStore.
+type UserDriveGrantAdder interface {
+	AddUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error)
+}
+
+var _ UserDriveGrantAdder = PG{}
+
 // ResolveUserDrives is ResolveUserDrive per drive: DISTINCT ON keeps each
 // drive's top-ranked row, then the outer ORDER BY ranks the winners. Both
 // orders are subjectPrecedence, so the per-drive pick and the single-drive pick

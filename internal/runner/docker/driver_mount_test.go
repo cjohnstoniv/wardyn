@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -753,7 +754,7 @@ func TestDriveMount_HostPathCeilingIsUnconditional(t *testing.T) {
 	drive := hostPathDrive(home)
 
 	d := newWithClient(newFakeDocker(), Config{ProxyImage: "wardyn-proxy:dev", UserDriveHostRoots: []string{root}})
-	got, err := d.driveMount(context.Background(), drive, "busybox:latest", true)
+	got, err := d.driveMount(context.Background(), drive, uuid.Nil, "busybox:latest", true)
 	if err != nil {
 		t.Fatalf("driveMount for an in-root share: %v", err)
 	}
@@ -767,7 +768,7 @@ func TestDriveMount_HostPathCeilingIsUnconditional(t *testing.T) {
 	// The SAME drive, on a deployment that configured no roots: refused. No
 	// flag, provenance stamp or backend detail sits between the two calls.
 	unset := newWithClient(newFakeDocker(), Config{ProxyImage: "wardyn-proxy:dev"})
-	if _, err := unset.driveMount(context.Background(), drive, "busybox:latest", true); err == nil {
+	if _, err := unset.driveMount(context.Background(), drive, uuid.Nil, "busybox:latest", true); err == nil {
 		t.Error("driveMount bound a share on a deployment with no WARDYN_USER_DRIVE_HOST_ROOTS — the ceiling must run unconditionally")
 	} else if !strings.Contains(err.Error(), "denied user drive") {
 		t.Errorf("the refusal should identify the denied drive, got: %v", err)
