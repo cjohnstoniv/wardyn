@@ -10,6 +10,7 @@ import golden from "./runner-pool-refusals.golden.json";
 import {
   BARRIER_LABEL,
   HOSTING_LABEL,
+  POOL_OFFLINE,
   RUN_END_REASON_SENTENCE,
   RUN_WAIT,
   RUN_WAIT_REASON,
@@ -33,7 +34,7 @@ const root = repoRoot();
 
 describe("runner pool refusal sentences", () => {
   it("are the golden bytes the server's twin is pinned to", () => {
-    const waits = ["WAIT_AT_CAPACITY", "WAIT_NO_RUNNER_FREE"];
+    const waits = ["WAIT_AT_CAPACITY", "WAIT_NO_RUNNER_FREE", "NO_ONLINE_RUNNER"];
     expect(golden.map((g) => g.key).sort()).toEqual([...Object.keys(RUNNER_POOL_REFUSAL), ...waits].sort());
     for (const g of golden.filter((x) => !waits.includes(x.key))) {
       expect(RUNNER_POOL_REFUSAL_BY_KEY[g.key as keyof typeof RUNNER_POOL_REFUSAL](...g.args), g.key).toBe(g.text);
@@ -59,6 +60,11 @@ describe("runner pool refusal sentences", () => {
     expect(RUN_WAIT.NO_RUNNER_FREE(g.args[0])).toBe(g.text);
     expect(RUNNER_POOL_REASONS as readonly string[]).not.toContain(RUN_WAIT_REASON.NO_RUNNER_FREE);
     expect(readFileSync(join(root, "internal/runnerpool/wait.go"), "utf8")).toContain(`WaitReason = "${RUN_WAIT_REASON.NO_RUNNER_FREE}"`);
+  });
+
+  it("says a pool with no online runner of yours in the server's sentence", () => {
+    const g = golden.find((x) => x.key === "NO_ONLINE_RUNNER")!;
+    expect(POOL_OFFLINE.NO_ONLINE_RUNNER(g.args[0])).toBe(g.text);
   });
 
   it("names the hosting types as the server does", () => {

@@ -79,6 +79,8 @@ type runFold struct {
 	pushSets          []types.PushRuleSet
 	// place is where the run goes (stepPlacement): the resolved pool and the fully eligible targets.
 	place runPlacement
+	// mainDrive is the main drive's size (stepMainDrive).
+	mainDrive mainDrive
 	// queued says the run waits for a slot (pool-queue.md section 6): its pool has a concurrent-run cap,
 	// set by stepPlacement at create and Review. A waiting run renews no credential, takes no host
 	// capacity or deployment slot, and is refused for its size only when it can never fit; promotion
@@ -87,6 +89,8 @@ type runFold struct {
 	// promoted says the fold is the queue's start replaying a promoted run: promotion has already
 	// admitted it against the host, the deployment cap and the fit, so those steps stand down.
 	promoted bool
+	// barrierOptions are Review's barriers for the resolved pool under this draft's floors (stepConfinement).
+	barrierOptions []client.BarrierOption
 	// harnesses is a run-mode request's harness set and image the image that
 	// carries it (stepHarnessSet; nil when a custom image or workspace decides);
 	// harnessChoices is each harness's model-provider choice (stepModelProvider).
@@ -168,6 +172,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepLocalEligibility, foldAll},
 	{(*Server).stepConfinement, foldAll},
 	{(*Server).stepPlacementCapability, foldAll},
+	{(*Server).stepMainDrive, foldAll},
 	{(*Server).stepModelProvider, foldAll},
 	{(*Server).stepAWSCLIProfile, foldAll},
 	{(*Server).stepAutonomy, foldAll},
