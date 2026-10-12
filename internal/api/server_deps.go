@@ -124,5 +124,5 @@ type ImageBuilder interface {
 	// the trusted FROM+COPY finalize stage; the base is pulled only if absent, so
 	// a host-pre-pulled private image works. outputTag is the per-run tag.
 	// logSink: see BuildDevcontainer.
-	FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer) (BuiltImage, error)
+	FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer, forcePull bool) (BuiltImage, error)
 }

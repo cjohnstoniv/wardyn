@@ -553,7 +553,7 @@ func (*sweepableImageBuilder) BuildDevcontainer(context.Context, string, string,
 func (*sweepableImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (BuiltImage, error) {
 	return BuiltImage{}, errors.New("not implemented")
 }
-func (*sweepableImageBuilder) FinalizeBase(context.Context, string, string, io.Writer) (BuiltImage, error) {
+func (*sweepableImageBuilder) FinalizeBase(context.Context, string, string, io.Writer, bool) (BuiltImage, error) {
 	return BuiltImage{}, errors.New("not implemented")
 }
 func (s *sweepableImageBuilder) SweepOrphanedBuilds(context.Context) error {
