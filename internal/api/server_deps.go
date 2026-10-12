@@ -62,6 +62,22 @@ type RefRulesetVerifier interface {
 	VerifyRefRuleset(ctx context.Context, repo string) (confined bool, detail string, err error)
 }
 
+// BuiltImage is what a successful image build produced: the local ref to run,
+// the image ID the daemon reported for it ("" when it reported none), and the
+// digest a BYOI wrap built FROM ("" when the base had none).
+type BuiltImage struct {
+	Ref, ID, BaseDigest string
+}
+
+// ImageIdentifier is an OPTIONAL capability an ImageBuilder may additionally
+// implement: the ID of the image a ref names on the build host now. It lets
+// the build view tell a record's image from a tag that has since moved. An
+// ImageBuilder without it is read as current (checked by type assertion, like
+// ImageBuildSweeper).
+type ImageIdentifier interface {
+	LocalImage(ctx context.Context, ref string) (id string, found bool, err error)
+}
+
 // ImageBuilder builds a per-run sandbox image from a devcontainer repo. It is
 // target-agnostic (the parity rule): the concrete envbuilder implementation is
 // wired in wardynd behind the "docker" build tag, so the control-plane default
@@ -72,7 +88,7 @@ type ImageBuilder interface {
 	// the result is committed under. logSink, when non-nil, receives build
 	// output lines as they happen (e.g. the wizard Build step's in-memory log);
 	// nil preserves the implementation's own default (wardynd's slog).
-	BuildDevcontainer(ctx context.Context, repoURL, ref, outputTag string, logSink io.Writer) (imageRef string, err error)
+	BuildDevcontainer(ctx context.Context, repoURL, ref, outputTag string, logSink io.Writer) (BuiltImage, error)
 	// BuildFromDevcontainerFiles builds an image from IN-MEMORY generated
 	// devcontainer files (relative path -> content, e.g.
 	// ".devcontainer/devcontainer.json") rather than a repo checkout, returning
@@ -81,12 +97,12 @@ type ImageBuilder interface {
 	// devcontainer, where internal/workspacescan generates a minimal one from the
 	// detected profile. outputTag is the deterministic profile-hash-keyed tag
 	// the result is committed under. logSink: see BuildDevcontainer.
-	BuildFromDevcontainerFiles(ctx context.Context, files map[string]string, outputTag string, logSink io.Writer) (imageRef string, err error)
+	BuildFromDevcontainerFiles(ctx context.Context, files map[string]string, outputTag string, logSink io.Writer) (BuiltImage, error)
 	// FinalizeBase wraps an arbitrary USER-supplied base image (Bring Your Own
 	// Image) with Wardyn's runner tools + a cleared ENTRYPOINT, returning the
 	// runnable local image reference. No untrusted build, no registry push — just
 	// the trusted FROM+COPY finalize stage; the base is pulled only if absent, so
 	// a host-pre-pulled private image works. outputTag is the per-run tag.
 	// logSink: see BuildDevcontainer.
-	FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer) (imageRef string, err error)
+	FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer) (BuiltImage, error)
 }
