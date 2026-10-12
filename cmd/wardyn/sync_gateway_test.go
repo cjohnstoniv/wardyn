@@ -124,6 +124,8 @@ type syncRunner struct {
 	// bigDir names a sandbox directory that lists more 255-byte names than the entry cap allows;
 	// served counts the entries the listing handed out.
 	bigDir string
+	// start, when set, is where sftp-server starts whatever directory was asked for.
+	start string
 	// failMsg makes listing the directory, or reading the file, with that base
 	// name fail with that message; stderr is what sftp-server writes before it
 	// exits.
@@ -140,6 +142,9 @@ func (r *syncRunner) ExecStream(ctx context.Context, _ string, spec runner.ExecS
 		if fi, err := os.Stat(r.host(spec.Argv[i+1])); err == nil && fi.IsDir() {
 			start = spec.Argv[i+1]
 		}
+	}
+	if r.start != "" {
+		start = r.start
 	}
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
