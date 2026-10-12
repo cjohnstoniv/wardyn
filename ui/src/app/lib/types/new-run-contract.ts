@@ -14,6 +14,7 @@
 import type { PlacementReason } from "../new-run-refusals";
 import type { ToolRule } from "./policy";
 import type { ComponentRef } from "./components";
+import type { LimitSource } from "./runner-pools";
 
 export type PlacementValue = "remote" | "local";
 
@@ -28,19 +29,21 @@ export interface RequestedResources {
   memory_mib?: number;
 }
 
-/** A CPU and memory pair in a dry-run answer, where zero is a value. */
-export interface ResourceAmounts {
-  cpu_millis: number;
-  memory_mib: number;
+/** The CPU and memory a run asked for and gets (Go: client.AppliedResources). */
+export interface AppliedResources {
+  cpu_millis: AppliedAmount;
+  memory_mib: AppliedAmount;
 }
 
-/** What one placement offers: `defaults` is what an untouched run receives there, `caps` the most a request may ask for. */
-export interface PlacementResources {
-  placement: PlacementValue;
-  /** Set when `placement` is local. */
-  runner_id?: string;
-  defaults: ResourceAmounts;
-  caps: ResourceAmounts;
+/** One field of AppliedResources (Go: client.AppliedAmount). `source` names the limit that cut an over-ask when `capped`, else the one whose default an ask of 0 got; `source_name` is the pool's or the profile's name. */
+export interface AppliedAmount {
+  /** The request's value, else its source policy's; 0 asks for the default. */
+  requested: number;
+  /** What the sandbox gets. */
+  applied: number;
+  capped?: boolean;
+  source?: LimitSource;
+  source_name?: string;
 }
 
 export interface SecretOverride {

@@ -56,6 +56,7 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	response.Provenance = f.prov
 	response.RunnerPool, response.RunnerPools = f.place.facts()
 	response.Image, response.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
+	response.Limits, response.ResourcesApplied = f.place.sizeFacts()
 	response.Components = componentFacts(componentFactInputs{
 		req: f.req, spec: f.spec, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
 		ceiling: f.ceiling, mpChoice: f.mpChoice, pushSets: f.pushSets,

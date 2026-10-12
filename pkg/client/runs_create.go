@@ -161,11 +161,12 @@ type CreateRunRequest struct {
 	// Accepted and validated; a server that cannot honour pools yet refuses it
 	// with request_field_unavailable, never ignores it.
 	RunnerPoolID string `json:"runner_pool_id,omitempty"`
-	// Resources is the CPU and memory this run asks for, clamped by the server
-	// to the caps of the placement it lands on. Absent leaves the source
-	// policy's own resources or the platform default in effect, and a request
-	// value beats the policy's. Accepted and validated; the clamp is applied by
-	// the placement-aware resources lane.
+	// Resources is the CPU and memory this run asks for. A field set here beats
+	// the source policy's own; a field left out keeps the policy's, else the
+	// default. The server applies it within the strictest of the pool's, the
+	// person's governance, the deployment's and (on their own runner) the
+	// runner's limits: an over-ask is reduced to that cap, never refused.
+	// CreateRunResult.ResourcesApplied and the dry runs say what was applied.
 	Resources *RunResources `json:"resources,omitempty"`
 	// Overrides are the person's per-component edits on the New Run cards
 	// (OD-1), applied inside the resolve fold before the ceiling clamp. See
@@ -301,6 +302,9 @@ type CreateRunResult struct {
 	// them: the run is live either way, so a dropped warning is a silently
 	// degraded run.
 	Warnings []string `json:"warnings,omitempty"`
+	// ResourcesApplied is the CPU and memory the run asked for and got, and
+	// which limit bound each.
+	ResourcesApplied *AppliedResources `json:"resources_applied,omitempty"`
 }
 
 // CreateRun submits a new agent run and answers once the run row exists (state
@@ -343,9 +347,11 @@ type PreflightResult struct {
 	Components []ComponentFact `json:"components,omitempty"`
 	// Provenance explains which source contributed each resolved policy entry.
 	Provenance []ProvenanceEntry `json:"provenance"`
-	// Resources is what each placement offers this run, keyed by placement and
-	// runner. Empty until the resources lane fills it.
-	Resources []PlacementResources `json:"resources"`
+	// Limits is what this run may get: the resolved pool's, the person's
+	// governance and the deployment's limits for the run's type, folded.
+	// ResourcesApplied is the CPU and memory it asked for and would get.
+	Limits           *EffectiveRunLimits `json:"limits,omitempty"`
+	ResourcesApplied *AppliedResources   `json:"resources_applied,omitempty"`
 	// LocalPlacement says per host, workspace source and component whether the
 	// person's runner can honour it. Empty until the placement lane fills it.
 	LocalPlacement []LocalPlacementFact `json:"local_placement"`
