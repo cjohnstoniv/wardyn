@@ -429,15 +429,17 @@ type ComponentFact struct {
 
 // The kinds of source a run's resolved image comes from.
 const (
+	ImageSourceBase       = "base"        // the agent base image, for a run with no harness CLI
 	ImageSourceAgent      = "agent"       // the agent's own convention image
+	ImageSourceHarnessSet = "harness_set" // an image the operator declared for several harnesses; Name is its key
 	ImageSourceWorkspace  = "workspace"   // a workspace's base image; Name is the workspace
 	ImageSourceBuild      = "build"       // the person's own build (a custom image or devcontainer)
 	ImageSourceOrgAllowed = "org_allowed" // one of the images the organisation allows, chosen by the person
 )
 
 // ImageSource says where the resolved image comes from, so the Runner tab can
-// say "from {source}". Name is the workspace, the build or the allowed entry;
-// it is empty for the agent.
+// say "from {source}". Name is the workspace, the build, the allowed entry, the
+// harness (agent) or the declared set's key (harness_set); it is empty for base.
 type ImageSource struct {
 	Kind string `json:"kind"`
 	Name string `json:"name,omitempty"`
@@ -448,6 +450,34 @@ type ImageSource struct {
 type ImageFact struct {
 	Ref    string      `json:"ref"`
 	Source ImageSource `json:"source"`
+}
+
+// HarnessSetFact is the run's included harnesses as this door resolved them.
+// Absent for an older client's request and for a run with no harness.
+type HarnessSetFact struct {
+	Harnesses []HarnessFact `json:"harnesses"`
+	// SharedModelAccess: two or more harnesses carry a model credential. The
+	// proxy injects each by destination host, so any process in the sandbox can
+	// use each one.
+	SharedModelAccess bool `json:"shared_model_access"`
+}
+
+// HarnessFact is one included harness: whether it starts with the run, and the
+// model credential it gets.
+type HarnessFact struct {
+	ID     string `json:"id"`
+	Starts bool   `json:"starts"`
+	// ModelCredential is this harness's provider, kind and residency; absent when
+	// the harness takes none or its choice is still open.
+	ModelCredential *HarnessModelCredential `json:"model_credential,omitempty"`
+}
+
+// HarnessModelCredential is one harness's model credential: its provider, the
+// provider's kind, and where the credential lands (proxy or sandbox).
+type HarnessModelCredential struct {
+	Provider  string `json:"provider"`
+	Kind      string `json:"kind"`
+	Residency string `json:"residency"`
 }
 
 // AllowedImage is one image the organisation lets a person choose for a run
