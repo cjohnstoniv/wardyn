@@ -19,7 +19,7 @@
 import type { AutonomyLevel } from "../api/governance";
 import type { AgentFact, LocalDeliveryMode, RepoAccessFact, TokenScopeFact } from "./new-run-contract";
 import type { PushRulesSpec } from "./policy";
-import type { SetupItem } from "./runs";
+import type { SetupItem } from "./preflight";
 
 /** How one component secret reaches the run. */
 export type ComponentDeliveryMode = "header" | "env" | "file";

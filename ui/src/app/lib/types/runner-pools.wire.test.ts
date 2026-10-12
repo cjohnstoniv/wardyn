@@ -70,7 +70,7 @@ describe("runner pool carriers", () => {
   });
 
   it("the dry-run answers carry the pool facts under the Go names", () => {
-    const run = read("ui/src/app/lib/types/runs.ts");
+    const run = read("ui/src/app/lib/types/preflight.ts");
     const preview = read("ui/src/app/lib/types/policy-preview.ts");
     for (const [src, goSrc, goName] of [
       [run, read("pkg/client/runs_create.go"), "PreflightResult"],
