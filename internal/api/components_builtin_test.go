@@ -17,9 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
-	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
-	"github.com/cjohnstoniv/wardyn/internal/runner"
-	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
+	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -56,11 +54,11 @@ func TestRunComponents_BuiltinGitHubIsBrokered(t *testing.T) {
 	f := newComponentFixture(t)
 	githubCeiling(f, "write", true, 1800)
 	githubRows(f, types.GitLaneApp)
-	body := componentBody(githubBuiltin("", "acme/api", "Acme/web"))
+	body := componentBody(githubBuiltin("", "acme/api", "Acme/Web")) // GitHub names are case-insensitive
 
 	wantFact := componentFact{Kind: types.ComponentGitProvider, Provider: "github", ID: "inline:0", Name: "GitHub: acme",
 		Reason: "org", Status: componentUnknown, Requirements: []SetupItem{}, Lane: "app", Org: "acme",
-		Repos: []string{"https://github.com/acme/api", "https://github.com/Acme/web"}}
+		Repos: []string{"https://github.com/acme/api", "https://github.com/acme/web"}}
 	for _, door := range componentDoors[1:] {
 		w := f.ask(t, door, body)
 		if w.Code != http.StatusOK {
@@ -97,7 +95,11 @@ func TestRunComponents_BuiltinGitHubIsBrokered(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The ceiling's approval and TTL bind it as they bind a policy's grant.
-	wantScope := `{"builtin":"github","permissions":{"contents":"read"},"repos":["acme/api","Acme/web"]}`
+	// One owner spelling, which the broker's mint requires of a grant (splitRepos).
+	wantScope := `{"builtin":"github","permissions":{"contents":"read"},"repos":["acme/api","acme/web"]}`
+	if err := broker.ValidateGitHubScopeShape(json.RawMessage(wantScope)); err != nil {
+		t.Fatalf("the broker refuses the scope: %v", err)
+	}
 	var found bool
 	f.st.mu.Lock()
 	for _, g := range f.st.grants {
@@ -130,7 +132,7 @@ func TestRunComponents_BuiltinGitHubIsBrokered(t *testing.T) {
 		}
 	}
 
-	want := `{"access":"read","kind":"git_provider","ordinal":0,"org":"acme","provider":"github","repos":["acme/api","Acme/web"],"source":"org"}`
+	want := `{"access":"read","kind":"git_provider","ordinal":0,"org":"acme","provider":"github","repos":["acme/api","acme/web"],"source":"org"}`
 	if got := f.componentAudit(0, "run.component.attach"); !slices.Equal(got, []string{created.ID.String() + " " + want}) {
 		t.Errorf("run.component.attach = %v, want %s", got, want)
 	}
@@ -151,6 +153,8 @@ func TestRunComponents_BuiltinRefusals(t *testing.T) {
 	for _, c := range []componentCase{
 		{name: "a repository of another organisation", setup: with(ceiling("write"), githubBuiltin("", "acme/api", "other/x")),
 			status: 400, reason: "component_ref_invalid", sentence: `components[0]: repos[1]: "other/x" is not a repository of acme`},
+		{name: "one repository twice in two cases", setup: with(ceiling("write"), githubBuiltin("", "acme/api", "ACME/API")),
+			status: 400, reason: "component_ref_invalid", sentence: `components[0]: repos[1]: "ACME/API" is repos[0] again`},
 		{name: "one organisation twice", setup: with(ceiling("write"), githubBuiltin("", "acme/api"),
 			map[string]any{"builtin": "github", "org": "ACME", "repos": []string{"ACME/web"}}),
 			status: 400, reason: "component_ref_invalid", sentence: "components[1]: the same built-in component as components[0]"},
@@ -250,6 +254,15 @@ func builtinRunGrants(t *testing.T, policy bool) []types.GrantSpec {
 	return []types.GrantSpec{g}
 }
 
+// builtinCredGrants is builtinRunGrants as the run's credential_grants rows.
+func builtinCredGrants(t *testing.T, policy bool) []types.CredentialGrant {
+	var out []types.CredentialGrant
+	for _, g := range builtinRunGrants(t, policy) {
+		out = append(out, types.CredentialGrant{ID: uuid.New(), Spec: g})
+	}
+	return out
+}
+
 // A built-in GitHub run's provider is a launch door like a workspace's: the
 // owner losing workspace_provider refuses the revive. A policy's own grant on
 // the same repository is today's run, which met no provider door and revives.
@@ -264,7 +277,7 @@ func TestRevive_RechecksABuiltinsProvider(t *testing.T) {
 			f.srv.cfg.OIDC = &oidc.Authenticator{}
 			f.srv.router = f.srv.routes()
 			f.st.site = capProviderSite()
-			f.editConfig(t, func(c *proxy.Config) { c.Policy.EligibleGrants = builtinRunGrants(t, tc.policy) })
+			f.st.credGrants = builtinCredGrants(t, tc.policy)
 			f.st.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectUser, ownerEmail, capWorkspaceProvider, capProviderRowID, types.CapabilityDeny)}
 			code, body := f.reviveAs(t, true)
 			if code != tc.want {
@@ -277,24 +290,9 @@ func TestRevive_RechecksABuiltinsProvider(t *testing.T) {
 	}
 }
 
-// builtinExtendStore is the extension fixture's store keeping the run's proxy
-// config sealed, as run_proxy_config.go reads it.
-type builtinExtendStore struct {
-	*leaseStore
-	cfg, key []byte
-}
-
-func (s *builtinExtendStore) PutRunProxyConfig(context.Context, uuid.UUID, []byte) error { return nil }
-func (s *builtinExtendStore) GetRunProxyConfig(_ context.Context, id uuid.UUID) ([]byte, error) {
-	return kek.Seal(s.key, s.cfg, runProxyConfigAAD(id))
-}
-func (s *builtinExtendStore) DeleteRunProxyConfig(context.Context, uuid.UUID) error { return nil }
-func (s *builtinExtendStore) PurgeTerminalRunProxyConfigs(context.Context) (int64, error) {
-	return 0, nil
-}
-
 // The same door at an extension, which keeps the sandbox and its credentials
-// alive as a revive does.
+// alive as a revive does, read from the run's grants: this run has no stored
+// proxy config.
 func TestExtend_RechecksABuiltinsProvider(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -304,19 +302,82 @@ func TestExtend_RechecksABuiltinsProvider(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newEndWaitFixture(t, types.RunLimits{MaxEndAheadSec: 30 * 86400, UserChangesLimits: true})
 			f.st.site = capProviderSite()
+			f.st.credGrants = builtinCredGrants(t, tc.policy)
 			f.st.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capWorkspaceProvider, capProviderRowID, types.CapabilityDeny)}
-			cfg, err := runner.BuildProxyConfig(f.st.run.ID, runner.ProxyConfig{RunToken: "t", ControlPlaneURL: "http://127.0.0.1:8081",
-				ControlPlaneCAPEM: string(testHopCA(t).CertPEM), Policy: types.RunPolicySpec{EligibleGrants: builtinRunGrants(t, tc.policy)}}, runner.ProxyListenPort)
-			if err != nil {
-				t.Fatal(err)
-			}
-			key := make([]byte, kek.DEKSize)
-			f.srv.cfg.ControlPlaneURL, f.srv.cfg.ControlPlaneCAPEM = "https://wardynd:8443", string(testHopCA(t).CertPEM)
-			f.srv.cfg.Store, f.srv.cfg.RunConfigKey = &builtinExtendStore{leaseStore: f.st, cfg: cfg, key: key}, key
 			w := doSSO(t, f.srv, http.MethodPatch, "/api/v1/runs/"+f.st.run.ID.String(), ownerSessionAs(t), endsAtBody(f.now.Add(7*24*time.Hour)))
 			if w.Code != tc.want {
 				t.Fatalf("extend = %d %s, want %d", w.Code, w.Body.String(), tc.want)
 			}
 		})
 	}
+}
+
+// githubPATGrant is a policy's git_pat grant for github.com.
+const githubPATGrant = `{"kind":"git_pat","scope":{"host":"github.com","secret_name":"` + compOperatorSecret + `"}}`
+
+// A brokered forge is single-lane: a built-in GitHub component beside a
+// policy's github.com git_pat is refused as the policy holding both grants is.
+func TestRunComponents_BuiltinMeetsTheSingleLaneRule(t *testing.T) {
+	f := newComponentFixture(t)
+	control := `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC1","eligible_grants":[` + githubPATGrant +
+		`,{"kind":"github_token","scope":{"repos":["acme/api"],"permissions":{"contents":"read"}}}]}}`
+	if w := do(t, f.srv, http.MethodPost, componentDoors[1], adminToken, control); w.Code != http.StatusBadRequest ||
+		!strings.Contains(w.Body.String(), "BOTH a github_token grant and a git_pat grant") {
+		t.Fatalf("control = %d %s, want the policy's 400", w.Code, w.Body.String())
+	}
+	body := `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC1","eligible_grants":[` + githubPATGrant +
+		`]},"components":[{"builtin":"github","org":"acme","repos":["acme/api"]}]}`
+	for _, door := range componentDoors {
+		w := do(t, f.srv, http.MethodPost, door, adminToken, body)
+		if got := decodeErrorBody(t, w); w.Code != http.StatusBadRequest || got.Reason != "component_ref_invalid" ||
+			!strings.HasPrefix(got.Error, "components[0]: eligible_grants[0]: this policy declares BOTH a github_token grant and a git_pat grant") {
+			t.Errorf("%s = %d %s, want 400 component_ref_invalid naming both lanes", door, w.Code, w.Body.String())
+		}
+	}
+}
+
+// The run's other GitHub repositories are never mapped to a built-in's grant,
+// whose token is scoped to the built-in's own: with a policy's github_token
+// they keep that grant, without one they stay unbrokered.
+func TestRunComponents_BuiltinGrantServesOnlyItsRepos(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		policy string
+	}{{"with a policy grant", `,"inline_policy":{"min_confinement_class":"CC1","eligible_grants":[{"kind":"github_token","scope":{"repos":[],"permissions":{"contents":"write"}}}]}`}, {"without one", ""}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newComponentFixture(t)
+			w := do(t, f.srv, http.MethodPost, componentDoors[0], adminToken, `{"agent":"claude-code","task":"t","repo":"https://github.com/other/app"`+
+				tc.policy+`,"components":[{"builtin":"github","org":"acme","repos":["acme/api"]}]}`)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("create = %d %s", w.Code, w.Body.String())
+			}
+			fr := f.srv.cfg.Runner.(*fakeRunner)
+			fr.waitForSandbox(t)
+			fr.mu.Lock()
+			gg := fr.lastSpec.ProxyConfig.GitGrants
+			fr.mu.Unlock()
+			f.st.mu.Lock()
+			builtin := map[uuid.UUID]bool{}
+			for _, g := range f.st.grants {
+				builtin[g.ID] = isBuiltinGitHubGrant(g.Spec)
+			}
+			f.st.mu.Unlock()
+			if id, ok := gg["acme/api"]; !ok || !builtin[id] {
+				t.Errorf("acme/api -> %v, want the built-in's grant", gg)
+			}
+			id, mapped := gg["other/app"]
+			if mapped && builtin[id] {
+				t.Errorf("other/app is mapped to the built-in's grant: %v", gg)
+			}
+			if mapped != (tc.policy != "") {
+				t.Errorf("other/app mapped = %v, want %v (the policy's grant only)", mapped, tc.policy != "")
+			}
+		})
+	}
+}
+
+// ListGrantsByRun answers the owner re-check's read of a run's grants
+// (ownerCapabilityRefusal) for the capability fixture: it holds none.
+func (s *capStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
+	return nil, nil
 }

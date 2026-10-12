@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -33,14 +34,18 @@ var builtinLabels = map[string]string{
 }
 
 // builtinRefShape is the part of a built-in reference's shape that reads the
-// rest of the list: a GitHub repository is the organisation's own, and one
-// provider and organisation is one component. "" when it holds.
+// rest of the list: a GitHub repository is the organisation's own and named
+// once, whatever its case, and one provider and organisation is one component.
+// "" when it holds.
 func builtinRefShape(refs []types.ComponentRef, i int) string {
 	ref := refs[i]
 	if ref.Builtin == types.ComponentBuiltinGitHub {
 		for ri, repo := range ref.Repos {
 			if owner, _, _ := strings.Cut(repo, "/"); !strings.EqualFold(owner, ref.Org) {
 				return fmt.Sprintf("components[%d]: repos[%d]: %q is not a repository of %s", i, ri, repo, ref.Org)
+			}
+			if j := slices.IndexFunc(ref.Repos[:ri], func(o string) bool { return strings.EqualFold(o, repo) }); j >= 0 {
+				return fmt.Sprintf("components[%d]: repos[%d]: %q is repos[%d] again", i, ri, repo, j)
 			}
 		}
 	}
@@ -72,6 +77,13 @@ func (s *Server) admitBuiltinComponent(r *http.Request, adm *componentAdmission,
 		return attachedComponent{}, &componentRefusal{ordinal: i, source: componentSourceOrg, reason: reasonRequestFieldUnavailable,
 			refusal: builtinUnavailable(i, ref.Builtin)}
 	}
+	// GitHub names are case-insensitive, and the broker mints one grant's
+	// repositories under ONE owner spelling (splitRepos): lowercase, the
+	// spelling the broker map already keys on.
+	ref.Repos = slices.Clone(ref.Repos)
+	for ri, repo := range ref.Repos {
+		ref.Repos[ri] = strings.ToLower(repo)
+	}
 	urls := make([]string, len(ref.Repos))
 	for ri, repo := range ref.Repos {
 		urls[ri] = "https://github.com/" + repo
@@ -100,6 +112,17 @@ func (s *Server) admitBuiltinComponent(r *http.Request, adm *componentAdmission,
 	if !ok {
 		return attachedComponent{}, refused(reasonComponentBuiltinAccessAboveCeiling,
 			fmt.Sprintf("access: your organisation does not allow %s access to GitHub repositories on your runs.", access))
+	}
+	// The broker's own shape rule, so a grant it would refuse at mint never
+	// launches; then the single-lane rule a policy holding both grants meets
+	// (validateGrantLaneExclusivity), over the run's grants and this one.
+	err := broker.ValidateGitHubScopeShape(grant.Scope)
+	if err == nil {
+		err = validateGrantLaneExclusivity(append(slices.Clone(adm.grants), grant))
+	}
+	if err != nil {
+		return attachedComponent{}, &componentRefusal{ordinal: i, source: componentSourceOrg, reason: reasonComponentRefInvalid,
+			refusal: runError(http.StatusBadRequest, reasonComponentRefInvalid, fmt.Sprintf("components[%d]: %v", i, err))}
 	}
 	_, canWrite := s.builtinGitHubGrant(r, adm.ceiling, ref.Repos, types.ComponentAccessWrite)
 	return attachedComponent{
@@ -154,18 +177,22 @@ func (s *Server) builtinGitHubGrant(r *http.Request, ceiling governanceCeiling, 
 func builtinGitHubRepos(grants []types.GrantSpec) []string {
 	var out []string
 	for _, g := range grants {
-		var sc struct {
-			Builtin string   `json:"builtin"`
-			Repos   []string `json:"repos"`
-		}
-		if g.Kind != types.GrantGitHubToken || json.Unmarshal(g.Scope, &sc) != nil || sc.Builtin != types.ComponentBuiltinGitHub {
-			continue
-		}
-		for _, repo := range sc.Repos {
-			out = append(out, "https://github.com/"+repo)
+		if isBuiltinGitHubGrant(g) {
+			for _, repo := range githubScopeRepos(g.Scope) {
+				out = append(out, "https://github.com/"+repo)
+			}
 		}
 	}
 	return out
+}
+
+// isBuiltinGitHubGrant reports whether g is the grant a built-in GitHub
+// component's admission wrote.
+func isBuiltinGitHubGrant(g types.GrantSpec) bool {
+	var sc struct {
+		Builtin string `json:"builtin"`
+	}
+	return g.Kind == types.GrantGitHubToken && json.Unmarshal(g.Scope, &sc) == nil && sc.Builtin == types.ComponentBuiltinGitHub
 }
 
 // builtinGitHubRemotes is the clone URLs of the request's built-in GitHub
