@@ -213,9 +213,9 @@ func TestHarnessToolRules_CodexMCPBlockReachesTheBrokerSet(t *testing.T) {
 }
 
 // TestMCPServerKeys_OrgClaimsItsKeyFirst: a person's own server named like an
-// organisation's, placed first in the request, never takes the organisation
-// server's key, so a policy Block on mcp__<org key>__delete_issue holds the
-// organisation's delete_issue at the broker.
+// organisation's, placed first in the request, takes the suffix, so a policy
+// Block on mcp__linear__delete_issue holds the organisation's delete_issue at
+// the broker.
 func TestMCPServerKeys_OrgClaimsItsKeyFirst(t *testing.T) {
 	f := newComponentFixture(t)
 	orgID := uuid.MustParse(compOrgID)
@@ -234,29 +234,8 @@ func TestMCPServerKeys_OrgClaimsItsKeyFirst(t *testing.T) {
 	for _, m := range comps.dispatch().MCP {
 		byKey[m.Key] = m.URL
 	}
-	if byKey["linear-6f0c1d"] != "https://mcp.org-linear.test/mcp" || byKey["linear"] != "https://mcp.linear.test/mcp" {
-		t.Fatalf("keys %v: the organisation's server must keep its own key", byKey)
-	}
-	// A person's server named as an organisation key still takes a suffix.
-	own := attachedComponent{snapshot: types.RunComponent{SelfDefined: true, Name: "linear-6f0c1d", Definition: orgDef}}
-	org := attachedComponent{snapshot: types.RunComponent{ComponentID: &orgID, Name: "Linear", Definition: orgDef}}
-	if keys := mcpServerKeys([]attachedComponent{own, org}); keys[1] != "linear-6f0c1d" || keys[0] == keys[1] {
-		t.Fatalf("keys %q", keys)
-	}
-}
-
-// TestMCPServerKeys_OrgKeyIgnoresTheRestOfTheRun: two organisation servers
-// whose names share their first 28 slug characters keep the same keys whether
-// one or both are attached, so an organisation Block written for either one
-// still names it on a run that attaches only that one.
-func TestMCPServerKeys_OrgKeyIgnoresTheRestOfTheRun(t *testing.T) {
-	prodID, euID := uuid.MustParse("a1a1a1a1-0000-4000-8000-000000000001"), uuid.MustParse("b2b2b2b2-0000-4000-8000-000000000002")
-	def := types.ComponentDefinition{MCP: &types.ComponentMCP{URL: "https://x.test/mcp"}}
-	prod := attachedComponent{snapshot: types.RunComponent{ComponentID: &prodID, Name: "Atlassian Confluence Cloud Production", Definition: def}}
-	eu := attachedComponent{snapshot: types.RunComponent{ComponentID: &euID, Name: "Atlassian Confluence Cloud Production EU", Definition: def}}
-	both, euOnly, swapped := mcpServerKeys([]attachedComponent{prod, eu}), mcpServerKeys([]attachedComponent{eu}), mcpServerKeys([]attachedComponent{eu, prod})
-	if both[1] != euOnly[0] || swapped[0] != euOnly[0] || both[0] == both[1] || len(euOnly[0]) > 32 {
-		t.Fatalf("EU's key: both %q, alone %q, swapped %q", both, euOnly, swapped)
+	if byKey["linear"] != "https://mcp.org-linear.test/mcp" || byKey["linear-2"] != "https://mcp.linear.test/mcp" {
+		t.Fatalf("keys %v: the organisation's server must keep linear", byKey)
 	}
 }
 

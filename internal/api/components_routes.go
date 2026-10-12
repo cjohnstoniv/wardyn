@@ -359,6 +359,9 @@ func (s *Server) handlePutComponent(w http.ResponseWriter, r *http.Request) {
 		saveRefusal(w, reason, msg)
 		return
 	}
+	if !orgMCPKeyFree(w, r, cs, c) {
+		return
+	}
 	_, err := cs.GetComponent(r.Context(), id, "")
 	switch {
 	case err == nil:
