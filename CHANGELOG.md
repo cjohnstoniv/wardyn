@@ -182,6 +182,30 @@ and does not yet follow semantic versioning (interfaces are not stable).
   class's requirement. The runner keeps the value in the OS keystore (the Secret Service on Linux, which needs a
   session bus; the login Keychain on macOS, written over stdin; values up to about 3 KB). Azure DevOps minted tokens
   can be opted in per connection. Delivery itself arrives with local runner placement; until then no run receives one.
+- Preflight (`PreflightResult.Access`) and the policy preview answer an `access` block built from one projection of the
+  shared fold: what brings access (the harness, each Git provider's repositories, components, secrets, added hosts),
+  each host's verdict against the resolved and clamped policy, every credential with where it is delivered and what is
+  left once the run ends, what happens to an unlisted host and who decides it, and the setup still needed. A CLI
+  component's row says whether its tool is in the run's image. The site-config SCM host list is never shown.
+- The preview's policy now includes the hosts a run's `ssh_key` and `git_pat` grants open at dispatch, for the lanes
+  create will actually wire, so a lane create drops (an SSH key for a harness with no SSH lane, a provider row that
+  turns a lane off) shows no host and no credential. Preflight's `risk_assessment` can move from LOW to MEDIUM for those
+  hosts; nothing newly refuses.
+- `wardyn template group-admin list|grant|revoke` manages group template grants, and `wardyn template from-preset
+  <name> [--everyone]` publishes a launch preset to the organisation as a template (a preset limited to user types
+  needs `--everyone`; its `inline_policy` is laid onto the default policy instead of replacing it).
+  `wardyn template import --kind Run|RunTemplate` checks either document kind, and `wardyn run --file <doc>` launches a
+  `kind: Run` document; for now a document that sets `inline_policy` is refused. `wardyn person erase --scope` names
+  `run_setups`.
+- New Run picks a run's harnesses and the run follows them: the harness that starts is the one chosen, with its own model
+  provider; an optional starting prompt becomes its first message; Environment and Application runs launch with no
+  harness on the agent base image, and a command may include harnesses. Each harness's agent permission, model provider
+  and the caller's own credential for it are checked at launch, Review and the policy preview, and a refusal names the
+  harness (`tool`). `GET /setup/status` reports `installed` and `approval_hold` per harness plus `harness_sets`;
+  preflight and the preview report the run's `image` and `harness_set`. New Run runs record their harnesses in
+  `run_harnesses`. Two or more harnesses in one run wait for a later lane.
+- Operators can declare one image for several harnesses under a `WARDYN_AGENT_IMAGES` key that joins sorted harness ids
+  with `+`; wardynd refuses to start on a malformed key.
 - `GET /api/v1/workspaces/{id}/branches?repo=<repo>` lists one workspace repository's branches for the New Run
   branch picker, through the credential the run would clone with: Azure DevOps uses the person's own token or
   sign-in; GitHub uses the organisation's GitHub App with a one-repository `contents: read` token, revoked best effort after the
@@ -296,9 +320,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   allows it (`no_end`, `--no-end`). An end past a limit is cut to it and the response names the limit. An untouched
   Interactive run now ends after 24 hours when no pool, profile or deployment names a lifetime. `GET /runs?no_end=1`
   lists live runs with no end.
+- A run's CPU and memory are bounded by the strictest of its pool, the person's governance profile, the deployment
+  and, on a person's own runner, the runner's advertised capacity. A larger ask is reduced to that limit, never
+  refused; an own runner smaller than the ask no longer refuses the run. `POST /runs/preflight` and the policy preview
+  return `limits` and `resources_applied` (requested, applied, capped, and the limit that bound it with its name); the
+  create response and the `run.create` audit row carry `resources_applied`.
+- A run can carry a built-in GitHub component, `components[]{builtin: "github", org, repos, access}`, without a
+  workspace. It reaches only the listed repositories, through Wardyn's git broker. Each repository must pass workspace
+  admission and the `workspace_provider` capability, and access must be within the caller's ceiling for a
+  `github_token` grant, which also sets approval and lifetime. Repository names are lowercased; a repository listed
+  twice is refused. Reviving or extending such a run re-checks the owner's `workspace_provider` permission over its
+  repositories. A built-in Azure DevOps component is still refused with `request_field_unavailable`. New refusal
+  reasons: `component_builtin_lane_off`, `component_builtin_access_above_ceiling`.
 
 ### Changed
 
+- New Run refuses a harness that no sandbox image on this server carries (`harness_not_installed`). A published install
+  maps Claude Code to the agent base image, which does not include the Claude CLI, so New Run refuses Claude Code until
+  an operator builds one (`make agent-images`, deploy/images/README.md) and registers it under `claude-code` in
+  `WARDYN_AGENT_IMAGES`. A run that names its own image is not refused by this check.
+- Under a governance profile whose tool rules hold or deny, a background command that includes a harness is refused
+  (`governance_profile`, `runs.tools`).
 - Security: with two or more harnesses, the tool-approval credential now reaches only the harness Wardyn starts,
   as a file under `/run/wardyn/secrets/` that its own launch reads; it is no longer container or pod env. A harness
   started by hand, or any other process, is given none, and its tool calls take the strictest of the run's rules,
@@ -387,6 +429,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Naming a person by a typed `entra:<tenant>:<object>` (erasure, secret owner) is now refused as ambiguous when that
   tenant and object id also signed in under another issuer, instead of resolving to one principal and leaving the
   other's data.
+- The request's `resources` field is now applied. A governance profile's CPU or memory maximum no longer cuts a run
+  below the member default (the deployment's own default size, lowered by the profile's own size), and dispatch
+  applies the same member cap as preflight (#1949). A run with no size from its request or policy gets the
+  deployment's own default size (the default policy's resources where set, else the platform default), operators' runs
+  included.
 
 ### Removed
 
@@ -396,9 +443,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The `WARDYN_MEMBER_MODE`, `WARDYN_MEMBER_WORKSPACE_ROOTS`, `WARDYN_MEMBER_WORKSPACE_ROOTS_MAP`,
   `WARDYN_MEMBER_WRITABLE_ROOTS`, `WARDYN_MEMBER_WRITABLE_DENY` and `WARDYN_ALLOW_MEMBER_ENV_SECRET`
   aliases. Boot refuses while one is set, naming its `WARDYN_USER_*` replacement (#623).
+- The always-empty `resources` array in preflight, the policy preview and the SDK (`PlacementResources`,
+  `ResourceAmounts`); read `resources_applied` instead.
 
 ### Fixed
 
+- `wardyn template save -` reads stdin again: `template save` takes `--format`.
 - A run a laptop submits with a device credential and no person is refused at launch when a per-person Azure DevOps
   connection covers one of its repositories (#731).
 - A relayed runner connection honours read and write deadlines, so a response written to a peer that stopped reading

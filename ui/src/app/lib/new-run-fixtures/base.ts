@@ -13,7 +13,7 @@ import type { ComponentFact } from "../types/components";
 import type {
   AgentFact,
   AllowedImage,
-  PlacementResources,
+  AppliedResources,
   PlacementRunner,
 } from "../types/new-run-contract";
 import type { PolicyPreviewResult, ProvenanceEntry } from "../types/policy-preview";
@@ -100,7 +100,6 @@ export function preview(over: Partial<PolicyPreviewResult> = {}): PolicyPreviewR
     warnings: [],
     pending: ["credential_liveness", "autonomy", "tool_approvals", "runner_confinement", "dispatch_egress"],
     repository_access: [],
-    resources: [],
     local_placement: [],
     image: { ref: "ghcr.io/wardyn/agent-claude-code:0.9", source: { kind: "agent" } },
     allowed_images: [],
@@ -115,7 +114,7 @@ export const ALLOWED_IMAGES: AllowedImage[] = [
 ];
 
 export function preflight(over: Partial<PreflightResult> = {}): PreflightResult {
-  return { setup_items: [], enforced_confinement_class: "CC2", resources: [], local_placement: [], allowed_images: [], ...over };
+  return { setup_items: [], enforced_confinement_class: "CC2", local_placement: [], allowed_images: [], ...over };
 }
 
 export const RUNNER_ONLINE: PlacementRunner = { id: "11111111-1111-4111-8111-111111111111", name: "ada-laptop", state: "online" };
@@ -123,17 +122,12 @@ export const RUNNER_SECOND: PlacementRunner = { id: "22222222-2222-4222-8222-222
 export const RUNNER_OFFLINE: PlacementRunner = { id: "33333333-3333-4333-8333-333333333333", name: "ada-laptop", state: "offline", last_seen: "2026-10-09T08:12:00Z" };
 export const RUNNER_UNCLAIMED: PlacementRunner = { id: "44444444-4444-4444-8444-444444444444", name: "ada-laptop", state: "unclaimed" };
 
-export const RESOURCES_ORG: PlacementResources = {
-  placement: "remote",
-  defaults: { cpu_millis: 2000, memory_mib: 4096 },
-  caps: { cpu_millis: 8000, memory_mib: 16384 },
-};
-export const resourcesFor = (runner: PlacementRunner, caps = { cpu_millis: 4000, memory_mib: 8192 }): PlacementResources => ({
-  placement: "local",
-  runner_id: runner.id,
-  defaults: { cpu_millis: 2000, memory_mib: 4096 },
-  caps,
+/** An untouched run's size: nothing asked, the deployment's default applied. */
+export const appliedResources = (cpu_millis = 2000, memory_mib = 4096): AppliedResources => ({
+  cpu_millis: { requested: 0, applied: cpu_millis, source: "deployment" },
+  memory_mib: { requested: 0, applied: memory_mib, source: "deployment" },
 });
+export const APPLIED_ORG = appliedResources();
 
 export const agentFact = (over: Partial<AgentFact> = {}): AgentFact => ({
   agent: "claude-code",

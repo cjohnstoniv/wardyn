@@ -472,3 +472,42 @@ describe("prefers-reduced-motion — one global guard", () => {
     expect(body).toMatch(/transition-duration:\s*0\.01ms/);
   });
 });
+
+// U18: an unavailable row's reason is --muted-foreground text sitting on the hatch. The
+// hatch line is the worst pixel (a 1px stripe of --border at the rule's mix percentage),
+// so the text must clear AA against that blend over --card in BOTH themes. The percentage
+// is read from the rule, so a hatch drawn at full --border (4.25:1 in light) fails here.
+describe(".hatch-unavailable keeps the reason text at AA", () => {
+  const rule = /\.hatch-unavailable\s*\{([^}]*)\}/.exec(css);
+  const mix = rule && /color-mix\(in srgb,\s*var\(--border\)\s+(\d+)%,\s*transparent\)/.exec(rule[1]);
+
+  it("is tokens only: one --border color-mix and no literal colour", () => {
+    expect(rule, ".hatch-unavailable not found in theme.css").not.toBeNull();
+    expect(mix, "hatch must be color-mix(in srgb, var(--border) N%, transparent)").not.toBeNull();
+    expect(rule![1]).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(/);
+  });
+
+  const darkStart = css.indexOf(".dark {");
+  const blocks: [string, string][] = [
+    ["light", root],
+    ["dark", css.slice(darkStart, css.indexOf("\n}", darkStart))],
+  ];
+  for (const [theme, block] of blocks) {
+    it(`${theme}: --muted-foreground on the hatch blend over --card is >= 4.5:1`, () => {
+      const hex = (name: string): string => {
+        const m = block.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`));
+        if (!m) throw new Error(`--${name} not found in ${theme}`);
+        return m[1];
+      };
+      const a = +mix![1] / 100;
+      const [border, card] = [hex("border"), hex("card")];
+      const blend =
+        "#" +
+        [1, 3, 5]
+          .map((i) => Math.round(a * parseInt(border.slice(i, i + 2), 16) + (1 - a) * parseInt(card.slice(i, i + 2), 16)))
+          .map((v) => v.toString(16).padStart(2, "0"))
+          .join("");
+      expect(ratio(hex("muted-foreground"), blend)).toBeGreaterThanOrEqual(4.5);
+    });
+  }
+});

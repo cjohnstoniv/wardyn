@@ -62,6 +62,7 @@ func (p *poolRunner) RunnerFacts(id string) (runner.TargetFacts, bool) {
 func (p *poolRunner) CreateSandboxOn(_ context.Context, executor string, spec runner.SandboxSpec) (runner.Sandbox, error) {
 	p.fakeRunner.mu.Lock()
 	p.onExecutor = append(p.onExecutor, executor)
+	p.fakeRunner.lastSpec = spec
 	p.fakeRunner.mu.Unlock()
 	return runner.Sandbox{Ref: "fake-" + spec.RunID.String(), Driver: executor, EnforcedClass: spec.ConfinementClass}, nil
 }
@@ -83,6 +84,7 @@ func newPlacementEnv(t *testing.T) *placementEnv {
 		runnerFacts: map[string]runner.TargetFacts{}}
 	e.srv.cfg.Runner = e.runner
 	e.srv.cfg.RunnerOnline = func(id uuid.UUID) bool { return e.online[id] }
+	e.srv.cfg.AgentImages = composeAgentImages
 	if _, err := e.pg.PutSiteConfig(context.Background(), types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true}}); err != nil {
 		t.Fatal(err)
 	}

@@ -75,7 +75,7 @@ func (s *Server) runRequestGovernance(r *http.Request, req createRunRequest) (go
 	if req.Agent != "" {
 		if refusal := s.runCapabilityRefusal(r, capAgent, req.Agent, "runs.agent",
 			"you are not granted agent "+req.Agent+" — ask an admin to grant it, or launch one you hold"); refusal != nil {
-			return governanceCeiling{}, refusal
+			return governanceCeiling{}, refusal.forTool(harnessRefusalTool(req))
 		}
 	}
 	// The stored policy the caller SELECTED, and only that: a run naming no
@@ -141,6 +141,15 @@ func (s *Server) runGovernanceSupervision(r *http.Request, req createRunRequest,
 	if req.SeedAutoTools {
 		return runDenied(authz.Deny(authz.ReasonGovernanceProfile, "runs.seed_auto_tools", fmt.Sprintf(
 			"`seed_auto_tools` is not allowed by your governance profile %q: its tool rules hold or deny, and the pre-attach seed runs before any human is at the pane. Launch without it.", name)).WithPolicy(policy))
+	}
+	// A command run can start any harness it includes, and nothing pauses a
+	// harness a command starts: the DenyTaskModeExec rationale, on the hold-rules
+	// lane. Before the codex arm, which a command naming codex-cli would meet too.
+	if req.TaskMode == "exec" {
+		if t, ok := primaryHarness(req); ok {
+			return runDenied(authz.Deny(authz.ReasonGovernanceProfile, "runs.tools", fmt.Sprintf(
+				"A harness your command can start is not allowed under your governance profile %q: its tool rules hold or deny, and nothing can pause a harness a command starts. Remove the harness, or choose an interactive environment.", name)).WithPolicy(policy).With("tool", t.ID))
+		}
 	}
 	// Scoped to exactly the case where effectiveToolApprovals WOULD derive
 	// hold: codex-cli has no external tool-approval contract, so a derived hold

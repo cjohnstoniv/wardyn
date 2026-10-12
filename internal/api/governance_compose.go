@@ -52,6 +52,10 @@ type ResolvedProfile struct {
 	Chain   []profileLink
 	Ceiling types.RunPolicySpec
 	Limits  types.GovernanceLimits
+	// AuthoredResources is the CPU and memory the chain's own rows set, before Ceiling inherits the
+	// deployment's size: a zero field is one no row set. The member cap reads it (#1949), so a
+	// maximum with no size of its own is the size.
+	AuthoredResources types.ResourceLimits
 	// Warnings name the LEAF only and never a base's name, id, overlay or contact: they reach a
 	// member's 201 clamp_warnings.
 	Warnings []string
@@ -266,6 +270,9 @@ func (s *Server) composeChain(chain []types.GovernanceProfile) (*ResolvedProfile
 	} else {
 		var warns []string
 		base, warns = s.standaloneAuthority(chain[root])
+		if r := chain[root].Ceiling.Resources; r != nil {
+			out.AuthoredResources = types.ResourceLimits{CPUMillis: r.CPUMillis, MemoryMiB: r.MemoryMiB}
+		}
 		out.AdminWarnings = append(out.AdminWarnings, warns...)
 		if root == 0 {
 			out.Warnings = warns
@@ -337,6 +344,15 @@ func (s *Server) applyStep(out *ResolvedProfile, base composer.Authority, row ty
 			field, _, _ := strings.Cut(w, ": ")
 			out.Warnings = append(out.Warnings, fmt.Sprintf(
 				"governance profile %q: its overlay names %s beyond what the profile it builds on allows, so it was narrowed", row.Name, field))
+		}
+	}
+	// A size the overlay names is authored by the chain: the meet's answer for that field.
+	if row.Overlay != nil && row.Overlay.Resources != nil {
+		if v := row.Overlay.Resources.CPUMillis; v != nil && *v > 0 && res.Ceiling.Resources != nil {
+			out.AuthoredResources.CPUMillis = res.Ceiling.Resources.CPUMillis
+		}
+		if v := row.Overlay.Resources.MemoryMiB; v != nil && *v > 0 && res.Ceiling.Resources != nil {
+			out.AuthoredResources.MemoryMiB = res.Ceiling.Resources.MemoryMiB
 		}
 	}
 	// The meet passes the overlay's own grants through unchanged: bound them by the resolved base.
