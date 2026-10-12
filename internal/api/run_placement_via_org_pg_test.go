@@ -62,7 +62,7 @@ func TestLocalEligibility_ViaOrgOnlyWhenConfiguredAndShaped(t *testing.T) {
 
 	// Every kind at the persistence gate, which reads the same stored policy.
 	admitted := func(g types.GrantSpec) bool {
-		_, d, ref := f.h.srv.ownLocalGrantSpecs(localMemberRequest("bob"), types.RunPolicySpec{EligibleGrants: []types.GrantSpec{g}})
+		_, d, ref := f.h.srv.ownLocalGrantSpecs(localMemberRequest("bob"), types.RunPolicySpec{EligibleGrants: []types.GrantSpec{g}}, storedPolicy(t, f.h.srv))
 		return ref == nil && len(d) == 1 && d[0].mode == placement.ModeViaOrg
 	}
 	for _, tc := range []struct {
@@ -100,13 +100,13 @@ func TestLocalEligibility_ViaOrgOnlyWhenConfiguredAndShaped(t *testing.T) {
 	f.setDeliveryPolicy(t, `{"classes":{}}`)
 	refused := uuid.New()
 	f.createRun(t, refused, "bob", types.PlacementLocal)
-	if _, ok := f.h.srv.persistRunGrants(ctx, httptest.NewRecorder(), localMemberRequest("bob"), refused, time.Now().UTC(), spec, types.PlacementLocal); ok {
+	if _, ok := f.h.srv.persistRunGrants(ctx, httptest.NewRecorder(), localMemberRequest("bob"), refused, time.Now().UTC(), spec, types.PlacementLocal, storedPolicy(t, f.h.srv)); ok {
 		t.Fatal("an operator grant persisted for a local run with no via_org policy")
 	}
 	f.setDeliveryPolicy(t, `{"classes":{"api_key":{"mode":"via_org"}}}`)
 	runID := uuid.New()
 	f.createRun(t, runID, "bob", types.PlacementLocal)
-	gw, ok := f.h.srv.persistRunGrants(ctx, httptest.NewRecorder(), localMemberRequest("bob"), runID, time.Now().UTC(), spec, types.PlacementLocal)
+	gw, ok := f.h.srv.persistRunGrants(ctx, httptest.NewRecorder(), localMemberRequest("bob"), runID, time.Now().UTC(), spec, types.PlacementLocal, storedPolicy(t, f.h.srv))
 	if !ok {
 		t.Fatal("a via_org grant was refused at persistence")
 	}

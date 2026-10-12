@@ -950,7 +950,8 @@ func patBrokerGrants(pat map[string]string, on bool) map[string]proxy.PATGrant {
 }
 
 // dispatchAdmitted refuses, before anything is claimed or written, a run no
-// lane may dispatch yet (a non-remote placement) and a ceiling nobody resolved.
+// lane may dispatch (a non-remote placement create bound to no runner) and a
+// ceiling nobody resolved.
 func (s *Server) dispatchAdmitted(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling) bool {
 	if s.unsupportedLocalDispatch(ctx, run) {
 		return false

@@ -24,7 +24,7 @@ import (
 // substrate (Kata/CC3 stays exec-capable: its Resolved label carries no such
 // prefix). Reports whether it refused; the caller must return immediately.
 func (s *Server) byoiExecLessRefused(ctx context.Context, run types.AgentRun, ref string) bool {
-	caps, cerr := s.cfg.Runner.Capabilities(ctx)
+	caps, cerr := s.runCapabilities(ctx, run)
 	if cerr != nil || !strings.HasPrefix(caps.Resolved[run.ConfinementClass], "oci/krun") {
 		return false
 	}

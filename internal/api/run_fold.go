@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -68,6 +69,9 @@ type runFold struct {
 	pushSets          []types.PushRuleSet
 	// place is where the run goes (stepPlacement): the resolved pool and the fully eligible targets.
 	place runPlacement
+	// localDelivery is the credential delivery policy a local run was judged on (stepLocalEligibility);
+	// create persists its grants by the same policy, never a second read.
+	localDelivery placement.DeliveryPolicy
 }
 
 // runFoldStep is one gate or fold of the shared sequence. run writes its own

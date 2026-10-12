@@ -57,7 +57,8 @@
 # docs/AUDIT-ACTIONS.md 42664 measured after train 13: DS2-S3 merge.
 # docs/AUDIT-ACTIONS.md 42448 measured after H13 merge-prep 2.
 # docs/AUDIT-ACTIONS.md 42738 measured after train 14: H13 merge.
-docs/AUDIT-ACTIONS.md=42738 share=8
+# docs/AUDIT-ACTIONS.md 42758 adds 20 over 42738 (0.9 local-enable): the run.create pool binding fields D-117 writes.
+docs/AUDIT-ACTIONS.md=42758 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

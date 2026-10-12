@@ -50,19 +50,28 @@ type placementInput struct {
 	reqCC    types.ConfinementClass
 	// reqCCOK is false when the request's class did not parse; the confinement step answers that.
 	reqCCOK bool
+	// ceiling is the caller's governance ceiling: its deny_placements is held against the pool's placement.
+	ceiling governanceCeiling
+}
+
+// poolsPlaceRuns reports whether runner pools decide where this deployment's runs go: a store that holds
+// pools and a wired runner. Otherwise every run is unpooled and keeps today's remote behaviour.
+func (s *Server) poolsPlaceRuns() bool {
+	_, ok := s.cfg.Store.(store.RunnerPoolStore)
+	return ok && s.cfg.Runner != nil
 }
 
 func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPlacement, *runRefusal) {
 	f := in
-	ps, ok := s.cfg.Store.(store.RunnerPoolStore)
 	// A deployment with no runner wired is headless: runs are recorded and never placed, so there is no
 	// target to choose. A pool named there is refused rather than ignored.
-	if !ok || s.cfg.Runner == nil {
+	if !s.poolsPlaceRuns() {
 		if f.req.RunnerPoolID != "" {
 			return runPlacement{}, runError(runnerpool.ReasonPoolsUnavailable.Status(), string(runnerpool.ReasonPoolsUnavailable), runnerpool.UnavailableServerMsg())
 		}
 		return runPlacement{}, nil
 	}
+	ps := s.cfg.Store.(store.RunnerPoolStore)
 	rows, refusal := s.permittedPools(ctx, ps, true)
 	if refusal != nil {
 		return runPlacement{}, refusal
@@ -88,6 +97,11 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	if ref != nil {
 		return runPlacement{}, poolRefusal(ref)
 	}
+	// deny_placements holds the placement the pool decides, not the request's: a member who denies remote
+	// launches on a self-hosted pool, and one whose default is a remote pool is refused like an explicit ask.
+	if refusal := s.placementDeniedRefusal(ctx, pool.HostingType.Placement(), f.ceiling); refusal != nil {
+		return runPlacement{}, refusal
+	}
 	row, _ := catalogueRow(rows, pool.ID)
 	// The pool's own limits admit by the run's STORED run type. A request that names none (an older
 	// client) never satisfies a pool that sets limits, and is refused here at every door.
@@ -99,6 +113,13 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 		return runPlacement{}, refusal
 	}
 	demand := s.placementDemand(ctx, f)
+	// A self-hosted pool offers only the person's own runners, so no deployment-wide sentence answers a
+	// class none of them enforces: the class is held against each of them, the same at every door.
+	if pool.HostingType == types.RunnerPoolSelfHosted && f.reqCCOK {
+		if _, err := enforcedConfinement(f.floor, f.reqCC, nil, f.baseline); err == nil {
+			demand.reqCCOK = true
+		}
+	}
 	eligible, reason := eligibleTargets(targets, demand)
 	// A pin names one of the caller's own candidates (pinRefusal has refused every other id), so when that
 	// candidate fails the demand the answer is ITS reason, not "no such runner" because another is fine.
@@ -110,7 +131,7 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 		}
 	}
 	offers := map[types.Placement]placementOffer{pool.HostingType.Placement(): offerOf(eligible, reason)}
-	decision := placementFor(f.req.PlacementRequest(), offers, nil)
+	decision := placementFor(f.req.PlacementRequest(), offers, s.deniedPlacements(ctx, f.ceiling))
 	if decision.Refusal != "" {
 		return runPlacement{}, targetRefusal(decision.Refusal, row.Pool.Name, pool.HostingType)
 	}
@@ -262,6 +283,33 @@ func (p runPlacement) bind(runID uuid.UUID, enforced types.ConfinementClass) (po
 		return poolBinding{}, targetRefusal(placement.ReasonPlacementCapability, p.pool.Name, p.pool.HostingType)
 	}
 	return poolBinding{runnerID: able[i].runnerID, executor: able[i].executor}, nil
+}
+
+// eligibleRunners is the registered runners among the run's eligible targets: the person's own runners
+// one of which a self-hosted run is bound to.
+func (p runPlacement) eligibleRunners() []uuid.UUID {
+	var out []uuid.UUID
+	for _, t := range p.eligible {
+		if t.runnerID != nil {
+			out = append(out, *t.runnerID)
+		}
+	}
+	return out
+}
+
+// candidateClasses is every barrier some eligible target enforces, the pool's allowed barriers aside
+// (barrierRefusal answers those): what a pooled run's class can be held to before bind picks the one
+// target that enforces it.
+func (p runPlacement) candidateClasses() []types.ConfinementClass {
+	var out []types.ConfinementClass
+	for _, t := range p.eligible {
+		for _, c := range t.facts.Classes {
+			if !slices.Contains(out, c) {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
 }
 
 // barrierRefusal holds the barrier the run ended up at to the pool's allowed barriers. The class is
