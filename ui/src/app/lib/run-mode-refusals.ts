@@ -58,6 +58,8 @@ export const RUN_MODE_REFUSAL = {
     "A run with more than one harness starts from an image your admin declared for them, so it can't use a custom image.",
   HARNESS_PROVIDERS_CONFLICT: (a: string, b: string) =>
     `${a} and ${b} use different model providers that reach the same host, so the proxy can't keep their credentials apart. Choose one provider for both, or another provider.`,
+  CODEX_BUILTIN_RULE: (tool: string) =>
+    `${tool} is one of Codex CLI's own tools, and Wardyn can't block those. Only its MCP tools can be blocked.`,
 } as const;
 
 /** Every sentence function by key, for the parity test and for callers that pick one by reason. */
@@ -78,6 +80,7 @@ export const RUN_MODE_REFUSAL_BY_KEY: Record<keyof typeof RUN_MODE_REFUSAL, (...
   HARNESS_SET_NO_IMAGE: (...a) => RUN_MODE_REFUSAL.HARNESS_SET_NO_IMAGE(...a),
   HARNESS_SET_CUSTOM_IMAGE: () => RUN_MODE_REFUSAL.HARNESS_SET_CUSTOM_IMAGE(),
   HARNESS_PROVIDERS_CONFLICT: (...a) => RUN_MODE_REFUSAL.HARNESS_PROVIDERS_CONFLICT(a[0], a[1]),
+  CODEX_BUILTIN_RULE: (...a) => RUN_MODE_REFUSAL.CODEX_BUILTIN_RULE(a[0]),
 };
 
 /**

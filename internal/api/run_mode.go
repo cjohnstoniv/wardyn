@@ -39,7 +39,7 @@ import (
 //
 // What each lane lifts, by the path runModeUnavailable names:
 //
-//	tools[].tool_rules, default_effect   -> A-L3 (per-harness rule enforcement)
+//	tools[].tool_rules in an interactive run -> TA-3 (the harness's managed settings)
 //	more than one harness, component tools -> DS-1 (the harness set), A-L14 (component tools)
 //	start_folder of an attachment        -> A-L4, A-L7, D-112-113 (attachments and the one working directory)
 const (
@@ -205,14 +205,14 @@ func toolRulesShapeRefusal(i int, t client.IncludedTool) *runRefusal {
 	if slices.ContainsFunc(t.ToolRules, func(r types.ToolRule) bool { return r.Tool == "*" }) {
 		return runModeInvalid("tools[%d].tool_rules: the default is default_effect, not a rule named *", i)
 	}
-	// A request's rules sit on top of the policy's and the ceiling's and may only
-	// narrow them, as the overrides do (the narrowing table's tool_rule_allow row):
-	// an allow here could displace an administrator's hold or deny.
-	if row, _ := types.OverrideRuleFor(types.OverrideToolRuleAllow, types.OverrideAdd); row.Rule == types.OverrideRefused &&
-		(t.DefaultEffect == types.ToolAllow || slices.ContainsFunc(t.ToolRules, func(r types.ToolRule) bool { return r.Effect == types.ToolAllow })) {
-		return runError(http.StatusUnprocessableEntity, reasonOverrideRefused, toolAllowRefusedMsg(i))
+	for j, r := range t.ToolRules {
+		if !exactToolNameRE.MatchString(r.Tool) {
+			return runModeInvalid("tools[%d].tool_rules[%d]: %q is not one tool's exact name. Name a tool such as Bash, WebFetch or mcp__server__tool; patterns aren't supported.", i, j, r.Tool)
+		}
 	}
-	return nil
+	// Whether an allow is within the policy needs the resolved policy, so the
+	// fold answers it (toolRulesWithinPolicyRefusal), not this shape layer.
+	return harnessToolRulesRefusal(t)
 }
 
 func startupShapeRefusal(req createRunRequest) *runRefusal {
@@ -453,7 +453,7 @@ func applyRunMode(req *createRunRequest) *runRefusal {
 		return nil
 	}
 	for _, check := range []func(createRunRequest) *runRefusal{
-		runModeShapeRefusal, runModeConflictRefusal, runModeRequiredRefusal, startFolderRefusal, runModeUnavailableRefusal, harnessSetRefusal, personalToolRulesRefusal,
+		runModeShapeRefusal, runModeConflictRefusal, runModeRequiredRefusal, startFolderRefusal, runModeUnavailableRefusal, harnessSetRefusal, attendedToolRulesRefusal,
 	} {
 		if refusal := check(*req); refusal != nil {
 			return refusal
@@ -478,18 +478,17 @@ func harnessSetRefusal(req createRunRequest) *runRefusal {
 	return nil
 }
 
-// personalToolRulesRefusal: a person's own tool rule or default is consulted
-// only by the gated lane (holdLane), so on any other run it would be shown as
-// enforced and never read. It waits for the lane that derives the gated lane
-// from it.
-func personalToolRulesRefusal(req createRunRequest) *runRefusal {
-	if holdLane(req.Experience != client.ExperienceBackground, req.ToolApprovals, "") {
+// attendedToolRulesRefusal: an interactive run's tool rules are enforced by the
+// harness's own settings, which this server does not write yet, so any choice
+// but the lane's own (Claude Code asks you, a hold default) waits for that lane.
+func attendedToolRulesRefusal(req createRunRequest) *runRefusal {
+	if req.Experience != client.ExperienceInteractive {
 		return nil
 	}
 	for i, t := range req.Tools {
-		if len(t.ToolRules) > 0 || t.DefaultEffect != "" {
+		if len(t.ToolRules) > 0 || (t.DefaultEffect != "" && t.DefaultEffect != types.ToolHold) {
 			return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
-				runModeUnavailableMsg(fmt.Sprintf("tools[%d]: personal tool rules wait for their enforcing lane", i)))
+				runModeUnavailableMsg(fmt.Sprintf("tools[%d]: tool rules in an interactive run", i)))
 		}
 	}
 	return nil
