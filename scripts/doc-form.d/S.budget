@@ -22,6 +22,8 @@
 # docs/sdk.md 13288 adds 70 over 13218 (0.9 F-1508 C1): the invitation reason rows.
 # docs/sdk.md 13447 measured after F-1508 C1 merge.
 # 0.9 H5: docs/sdk.md 13556 adds 109 over 13447 for the six relay and delivery reasons internal_relay.go now publishes.
+# 0.9 H12 (#1964): docs/sdk.md 13609 adds 53 over 13556 for the via_org route reasons and credential_delivery_invalid/_unavailable.
+# 0.9 H12 r2: docs/sdk.md 13615 adds 6 over 13609: the via_org byte total is per server replica, reset on restart (owner ruling).
 # D-108-114 merge: docs/sdk.md 13595 adds 39 over 13556 for the placement_denied and runner_offline rows the docs guard derives.
 # No-end runs (#1319): the Run end section (a table and four bullets) and four wire reasons add the measured words: docs/sdk.md 13460.
 # docs/sdk.md 13849 measured after D-1319 S1 merge.
@@ -34,7 +36,11 @@
 # docs/sdk.md 13714 adds 24 over 13690 (0.9 F-1508 C3): the token_move_invalid row.
 # docs/sdk.md 14019 measured after merge.
 # docs/sdk.md 14021 measured after merge.
-docs/sdk.md=14021 share=21
+# docs/sdk.md 14080 measured after the 0.9.0 batch merge.
+# docs/sdk.md 14400 adds 320 (0.9 DS2-S1, train 11): Run documents, the import door and the shape table.
+# docs/sdk.md 14061 adds 40 (0.9 TA-8): the clis cards and the OrgComponentView category, cli and mcp views.
+# docs/sdk.md 14440 measured after train 12 TA-8 merge.
+docs/sdk.md=14440 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

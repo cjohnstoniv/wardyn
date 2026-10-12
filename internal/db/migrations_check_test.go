@@ -18,6 +18,7 @@ import (
 // persist. It is derived from the types constants so adding a new RunState
 // without widening the DB CHECK constraint fails this test.
 var allRunStates = []types.RunState{
+	types.RunQueued,
 	types.RunPending,
 	types.RunStarting,
 	types.RunRunning,

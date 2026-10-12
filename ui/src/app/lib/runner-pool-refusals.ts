@@ -40,6 +40,12 @@ export const BARRIER_LABEL = { CC1: "Fence", CC2: "Wall", CC3: "Vault" } as cons
 export const RUN_END_REASON_SENTENCE = {
   max_lifetime_reached: "This run reached its maximum lifetime and was ended.",
   end_reached: "This run reached its end time and was ended.",
+  queue_timeout: "This run waited too long for a free slot and was not started.",
+  queue_profile_changed: "Your governance profile changed while this run waited. Start it again.",
+  queue_policy_changed: "The policy this run used changed while it waited. Start it again to review it.",
+  queue_portal_revoked: "The portal that launched this run was removed while it waited.",
+  runner_pool_removed: "The pool this run was waiting for was removed.",
+  identity_deactivated: "This account's access has been removed. Sign in again, or ask your Wardyn admin.",
 } as const;
 
 /** The sentences, byte for byte what internal/runnerpool/reasons.go says. */

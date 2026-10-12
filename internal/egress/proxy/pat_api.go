@@ -217,7 +217,7 @@ func (p *Proxy) servePATAPI(w http.ResponseWriter, r *http.Request, host string,
 		return
 	}
 	name, value := patAPIForges[grant.scope().Forge].header(token)
-	registerHeaderCredential(value) // the rendering that leaves the process, beside the raw token patToken masked
+	registerHeaderCredentialFor(p.maskKey, value) // the rendering that leaves the process, beside the raw token patToken masked
 
 	target, _, err := p.egressTarget(host, port)
 	if err != nil {

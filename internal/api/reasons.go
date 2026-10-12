@@ -161,6 +161,8 @@ const (
 	reasonRunModeConflict    = "run_mode_conflict"    // run-mode carriers contradict each other, or an older field that replaced them
 	reasonStartFolderInvalid = "start_folder_invalid" // start_folder is malformed, names an attachment the run lacks, or escapes its mount
 	reasonRunBackgroundOnly  = "run_background_only"  // a background run has no interactive door: attach, exec, SSH, UI gateway, desktop
+	// The run shape (run_shape.go): New Run's choice, checked against the carriers.
+	reasonRunShapeConflict = "run_shape_conflict" // shape does not fit the run's experience, workload or tools
 	// validateWorkspaceSources / authorizeSpecWorkspaceSources (#656 M1: split
 	// from reasonWorkspaceSourcesInvalid/reasonWorkspaceSourcesUnauthorized —
 	// except the not-onboarded arm, which STAYS one shared reason across both
@@ -247,6 +249,10 @@ const (
 	// GET/PUT /governance/egress-baseline.
 	reasonEgressBaselineInvalid = "egress_baseline_invalid" // a baseline host is not an exact hostname, or the set is too large
 	reasonEgressBaselineStale   = "egress_baseline_stale"   // If-Match does not match the current baseline ETag
+
+	// PUT /governance/credential-delivery.
+	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds, or require_posture without runner_resident
+	reasonCredentialDeliveryUnavailable = "credential_delivery_unavailable" // the store keeps no delivery policy (not the Postgres store)
 
 	// POST /site-config/probe-proxy and PUT/DELETE .../egress-redirects.
 	reasonSiteConfigProbeRequestInvalid = "site_config_probe_request_invalid" // the probe body did not decode

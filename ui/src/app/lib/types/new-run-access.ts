@@ -9,7 +9,7 @@
 
 import type { FirstUseMode } from "./policy";
 import type { ProvenanceSource } from "./policy-preview";
-import type { SetupItem } from "./runs";
+import type { SetupItem } from "./preflight";
 
 /** Who put an access row or host there: provenance's kinds plus two of step 5's own. An unknown kind renders no chip. */
 export interface AccessSource {

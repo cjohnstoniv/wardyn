@@ -28,7 +28,7 @@ func TestSealRequiresDrainedWriterAndExactReceipt(t *testing.T) {
 	if sealed, err := s.Seal(ctx, accepted); err != nil || sealed {
 		t.Fatal("unacknowledged evidence sealed")
 	}
-	if err := s.Replay(ctx, func(_ context.Context, _ Record) error { return nil }); err != nil {
+	if err := s.Replay(ctx, func(context.Context, []Record) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	accepted, err = s.Receipt(ctx)
@@ -56,7 +56,7 @@ func TestSealRequiresDrainedWriterAndExactReceipt(t *testing.T) {
 	if sealed, err := s.Seal(ctx, accepted); err != nil || sealed {
 		t.Fatal("late tail discarded by old receipt")
 	}
-	if err := s.Replay(ctx, func(_ context.Context, _ Record) error { return nil }); err != nil {
+	if err := s.Replay(ctx, func(context.Context, []Record) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	accepted, err = s.Receipt(ctx)
@@ -97,7 +97,7 @@ func TestSealRequiresDrainedWriterAndExactReceipt(t *testing.T) {
 	if err != nil || got != accepted {
 		t.Fatal("sealed receipt changed")
 	}
-	if err := reopened.Replay(ctx, func(context.Context, Record) error { t.Fatal("settled history replayed"); return nil }); err != nil {
+	if err := reopened.Replay(ctx, func(context.Context, []Record) error { t.Fatal("settled history replayed"); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if sealed, err := reopened.Seal(ctx, accepted); err != nil || !sealed {

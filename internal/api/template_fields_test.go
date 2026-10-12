@@ -450,7 +450,7 @@ func TestTemplateDecoderRefusals(t *testing.T) {
 		{"bad coverage", `{"api_version":"wardyn/v1","kind":"RunTemplate","coverage":"all","intent":{"agent":"claude"}}`, "coverage", reasonTemplateFieldInvalid},
 		{"missing intent", `{` + head + `}`, "intent", reasonTemplateFieldInvalid},
 		{"wrong version", `{"api_version":"wardyn/v2","kind":"RunTemplate","coverage":"partial","intent":{"agent":"claude"}}`, "api_version", reasonTemplateVersionUnsupported},
-		{"wrong kind", `{"api_version":"wardyn/v1","kind":"RunPolicy","coverage":"partial","intent":{"agent":"claude"}}`, "api_version", reasonTemplateVersionUnsupported},
+		{"wrong kind", `{"api_version":"wardyn/v1","kind":"RunPolicy","coverage":"partial","intent":{"agent":"claude"}}`, "kind", reasonTemplateVersionUnsupported},
 		{"duplicate key", `{` + head + `,"intent":{"agent":"a","agent":"b"}}`, "", reasonTemplateDocumentInvalid},
 		{"two documents", `{` + head + `,"intent":{"agent":"a"}} {}`, "", reasonTemplateDocumentInvalid},
 		{"not an object", `[1]`, "", reasonTemplateDocumentInvalid},
@@ -555,7 +555,7 @@ func TestTemplateOmittedIsNotEmpty(t *testing.T) {
 func TestTemplateImportValidation(t *testing.T) {
 	const head = `"api_version":"wardyn/v1","kind":"RunTemplate",`
 	run := func(body string) client.TemplateImportResult {
-		return validateTemplateImport([]byte(body), client.TemplateFormatJSON)
+		return validateTemplateImport([]byte(body), client.TemplateFormatJSON, "")
 	}
 	if res := run(`{` + head + `"coverage":"partial","name":"egress only","intent":{"inline_policy":{"allowed_domains":["api.example.com"]}}}`); res.Document == nil || len(res.Diagnostics) != 0 {
 		t.Fatalf("an egress-only partial template with no repository must import: %+v", res)
@@ -769,7 +769,7 @@ func TestTemplateRunModeIsHeldToTheRunsOwnRules(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			diags := validateTemplateImport([]byte(tc.body), client.TemplateFormatJSON).Diagnostics
+			diags := validateTemplateImport([]byte(tc.body), client.TemplateFormatJSON, "").Diagnostics
 			if !slices.ContainsFunc(diags, func(d client.TemplateDiagnostic) bool { return d.Path == tc.path && d.Reason == tc.reason }) {
 				t.Fatalf("diagnostics = %+v, want %s at %q", diags, tc.reason, tc.path)
 			}

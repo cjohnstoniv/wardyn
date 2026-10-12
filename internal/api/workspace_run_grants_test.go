@@ -61,13 +61,11 @@ func (s *fkGrantStore) ClearWorkspaceActiveRun(context.Context, uuid.UUID, uuid.
 func (s *fkGrantStore) SetWorkspaceRecordResult(_ context.Context, _ uuid.UUID, _ string, _ json.RawMessage, _ string) (types.Workspace, bool, error) {
 	return s.ws, true, nil
 }
-func (s *fkGrantStore) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, imageRef, hash string) (types.Workspace, error) {
+func (s *fkGrantStore) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, _, imageRef, _ string, _ *types.ImageBuild) (bool, error) {
 	s.mu.Lock()
 	s.built = imageRef
 	s.mu.Unlock()
-	ws := s.ws
-	ws.ImageRef, ws.BuiltProfileHash = imageRef, hash
-	return ws, nil
+	return true, nil
 }
 
 func (s *fkGrantStore) CreateRun(_ context.Context, run types.AgentRun) (types.AgentRun, error) {

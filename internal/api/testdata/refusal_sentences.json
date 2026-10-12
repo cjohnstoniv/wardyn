@@ -390,6 +390,11 @@
     "sentence": "sw + \" is set: a second human must decide this — you created this run, so someone else approves or denies its egress\""
   },
   {
+    "reason": "second_human_required",
+    "target": "id.String()",
+    "sentence": "sw + \" is set: this run has no recorded human author, so no decision on it can be verified as a second human's\""
+  },
+  {
     "reason": "security_admin_surface",
     "target": "ap.ID.String()",
     "sentence": "\"decision_scope always is operator-only\""

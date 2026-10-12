@@ -178,6 +178,8 @@ const UI_NEVER_SENDS = new Set([
   "model_provider",
   "preset",
   "preset_version",
+  // The new flow forwards it through the field registry; the old wizard never sends it.
+  "shape",
 ]);
 
 // ui_apps used to sit on this set as a TS AgentRun key with no Go AgentRun
@@ -503,9 +505,10 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     const previewGo = readFileSync(join(root, "internal/api/policy_preview_facts.go"), "utf8");
     for (const src of [preflightGo, previewGo]) expect(src).toMatch(/Components\s+\[\]componentFact\s+`json:"components,omitempty"`/);
     const previewTs = readFileSync(join(root, "ui/src/app/lib/types/policy-preview.ts"), "utf8");
-    expect(tsInterfaceKeys(runsTs, "PreflightResult")).toContain("components");
+    const preflightTs = readFileSync(join(root, "ui/src/app/lib/types/preflight.ts"), "utf8");
+    expect(tsInterfaceKeys(preflightTs, "PreflightResult")).toContain("components");
     expect(tsInterfaceKeys(previewTs, "PolicyPreviewResult")).toContain("components");
-    expect(runsTs).toMatch(/components\?: ComponentFact\[\];/);
+    expect(preflightTs).toMatch(/components\?: ComponentFact\[\];/);
     expect(previewTs).toMatch(/components\?: ComponentFact\[\];/);
   });
 });

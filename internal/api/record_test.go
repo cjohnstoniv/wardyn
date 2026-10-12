@@ -195,10 +195,8 @@ func (s *recordStore) ClearWorkspaceActiveRun(_ context.Context, _ uuid.UUID, _ 
 	s.clearedActive = true
 	return true, nil
 }
-func (s *recordStore) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, imageRef, hash string) (types.Workspace, error) {
-	ws := s.ws
-	ws.ImageRef, ws.BuiltProfileHash = imageRef, hash
-	return ws, nil
+func (s *recordStore) SetWorkspaceBuiltImage(context.Context, uuid.UUID, string, string, string, *types.ImageBuild) (bool, error) {
+	return true, nil
 }
 func (s *recordStore) SetWorkspaceApprovedEgress(_ context.Context, _ uuid.UUID, domains []string) (types.Workspace, error) {
 	s.ws.ApprovedEgress = domains

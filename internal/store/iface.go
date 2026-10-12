@@ -81,7 +81,9 @@ type Store interface {
 	SetWorkspaceRecordResult(ctx context.Context, id uuid.UUID, taskKey string, result json.RawMessage, onlyIfStatus string) (types.Workspace, bool, error)
 	ClaimWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID, expected *uuid.UUID) (types.Workspace, bool, error)
 	ClearWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID) (bool, error)
-	SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, imageRef, builtHash string) (types.Workspace, error)
+	// SetWorkspaceBuiltImage writes image_ref, built_profile_hash and the build record by one compare-and-swap
+	// on observedRef; applied=false means another build moved image_ref first.
+	SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, observedRef, imageRef, builtHash string, rec *types.ImageBuild) (applied bool, err error)
 	// SetWorkspaceImportState advances the scan pipeline. FENCED: applies only while the import-step
 	// slot still holds expectedActive; applied=false means the caller must re-read, not retry blindly.
 	SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, activeRunID *uuid.UUID, expectedActive *uuid.UUID) (types.Workspace, bool, error)
@@ -434,3 +436,21 @@ type ComponentStore interface {
 
 // Compile-time assertion: PG satisfies ComponentStore.
 var _ ComponentStore = PG{}
+
+// RunHarnessStore persists the harnesses a run was launched with and the model
+// provider each was granted (migration run_harnesses). The rows are the run's
+// authorisation tombstone; they hold configuration ids only, so erasure never
+// clears them.
+type RunHarnessStore interface {
+	// PutRunHarnesses writes run runID's rows, once, in one transaction; each row's position in
+	// hs is its ordinal. ErrNotFound when the run does not exist; ErrConflict when the run
+	// already has rows, a harness repeats, or more than one row starts. An empty hs is refused: a
+	// run launched without harnesses writes nothing, so the caller does not call this.
+	PutRunHarnesses(ctx context.Context, runID uuid.UUID, hs []types.RunHarness) error
+	// ListRunHarnesses returns a run's rows in request order; empty for a run launched without
+	// any.
+	ListRunHarnesses(ctx context.Context, runID uuid.UUID) ([]types.RunHarness, error)
+}
+
+// Compile-time assertion: PG satisfies RunHarnessStore.
+var _ RunHarnessStore = PG{}

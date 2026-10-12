@@ -80,10 +80,8 @@ func (s *recordLLMModeStore) SetSandboxRef(_ context.Context, id uuid.UUID, ref 
 }
 func (s *recordLLMModeStore) SetRunAgentExecID(context.Context, uuid.UUID, string) error { return nil }
 func (s *recordLLMModeStore) SetRunDiskMiB(context.Context, uuid.UUID, int) error        { return nil }
-func (s *recordLLMModeStore) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, imageRef, hash string) (types.Workspace, error) {
-	ws := s.ws
-	ws.ImageRef, ws.BuiltProfileHash = imageRef, hash
-	return ws, nil
+func (s *recordLLMModeStore) SetWorkspaceBuiltImage(context.Context, uuid.UUID, string, string, string, *types.ImageBuild) (bool, error) {
+	return true, nil
 }
 func (s *recordLLMModeStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return s.sc, nil

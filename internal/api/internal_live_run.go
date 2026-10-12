@@ -232,7 +232,12 @@ func (s *Server) auditInternalDenied(r *http.Request, claims *identity.Claims, r
 // match rather than a chi route pattern because this runs as middleware, before
 // the sub-router has bound one; the segments all carry their surrounding
 // slashes so "/internal/recordings/" cannot match a suffix of some other route.
+// Only the door itself is matched: the via_org route carries the sandbox's own
+// request path after its grant id, and no sandbox path may name a door here.
 func pathHasAny(path string, segments []string) bool {
+	if i := strings.Index(path, viaOrgDoor); i >= 0 {
+		path = path[:i+len(viaOrgDoor)]
+	}
 	for _, seg := range segments {
 		if strings.Contains(path, seg) {
 			return true

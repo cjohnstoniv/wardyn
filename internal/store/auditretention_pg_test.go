@@ -506,13 +506,13 @@ func TestPG_RetentionPolicyCooldown(t *testing.T) {
 
 // The SQL spells the live-run states out; they must be the ones types.NonTerminalRunStates names.
 func TestRetentionSQLLiveRunStatesAreTheNonTerminalOnes(t *testing.T) {
-	b, err := os.ReadFile("../db/migrations/0123_audit_retention.sql")
+	b, err := os.ReadFile("../db/migrations/0162_run_queue.sql") // the newest audit_retention_partitions (0123 made it)
 	if err != nil {
 		t.Fatalf("read the migration: %v", err)
 	}
 	m := regexp.MustCompile(`ar\.state IN \(([^)]*)\)`).FindSubmatch(b)
 	if m == nil {
-		t.Fatal("0123 has no live-run state list")
+		t.Fatal("0162 has no live-run state list")
 	}
 	var got []string
 	for _, s := range strings.Split(string(m[1]), ",") {
@@ -523,6 +523,6 @@ func TestRetentionSQLLiveRunStatesAreTheNonTerminalOnes(t *testing.T) {
 		want = append(want, string(s))
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("0123 treats %v as live, types.NonTerminalRunStates is %v", got, want)
+		t.Errorf("0162 treats %v as live, types.NonTerminalRunStates is %v", got, want)
 	}
 }

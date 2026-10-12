@@ -280,7 +280,7 @@ func (s *Server) routes() chi.Router {
 			s.mountRunnerRevokeRoutes(r, securityOps)             // runner_revoke.go: the security tier, or the runner's own owner
 			s.mountRunnerPoolRoutes(r, operatorOnly, securityOps) // runner_pools.go: 501 until the pool storage lands
 			s.mountRunnerInventoryRoutes(r, operatorOnly, securityOps)
-			s.mountTemplateRoutes(r, operatorOnly) // template_routes.go: 501 until the template store lands
+			s.mountTemplateRoutes(r, operatorOnly) // template_routes.go: 501 until the template store lands, except the import door
 			r.Get("/me", s.handleMe)
 			// #1197: the shell's two nav badges in one small object, replacing
 			// the two 1000-row reads App.tsx used to poll. classMember, scoped to
@@ -803,6 +803,8 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Get("/permissions/explain", s.handleExplainCapabilities)
 	securityOps.Get("/governance/egress-baseline", s.handleGetEgressBaseline)
 	securityOps.Put("/governance/egress-baseline", s.handlePutEgressBaseline)
+	securityOps.Get("/governance/credential-delivery", s.handleGetCredentialDelivery)
+	securityOps.Put("/governance/credential-delivery", s.handlePutCredentialDelivery)
 }
 
 // adminRoutes registers the two admin-gated maintenance routes — one per tier,
@@ -883,6 +885,9 @@ func (s *Server) mountInternalRoutes(r chi.Router) {
 	// raised instead of leaving it PENDING for the sweep.
 	r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
 	r.Post("/internal/credentials/mint", s.handleInternalMint)
+	// via_org egress (design 0.9 §7.3): a local run's request for a via_org
+	// destination, served by the organisation; via_org.go.
+	s.mountViaOrgRoute(r)
 
 	// Token renew: POST /api/v1/internal/token/renew
 	// The per-run proxy re-issues its own (short-TTL) run token before it

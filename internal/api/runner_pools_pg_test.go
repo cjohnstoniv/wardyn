@@ -22,6 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -539,5 +540,41 @@ func TestPG_RunnerPoolsManagementIsAudited(t *testing.T) {
 		if d := auditData(t, rows[0]); d["name"] != "Renamed" || d["name_before"] != "Provided" || d["revision"] != float64(3) {
 			t.Errorf("update audit data = %v", d)
 		}
+	}
+}
+
+// racingPoolRead runs after the pool read of an update, the way another admin's write lands between
+// that read and the store call.
+type racingPoolRead struct {
+	store.PG
+	after func()
+}
+
+func (r *racingPoolRead) GetRunnerPool(ctx context.Context, id uuid.UUID) (types.RunnerPool, error) {
+	p, err := r.PG.GetRunnerPool(ctx, id)
+	if r.after != nil {
+		r.after()
+		r.after = nil
+	}
+	return p, err
+}
+
+// An update naming the revision another admin's write just made is refused, not answered as a store
+// no-op that audits a change against the pool as it stood before.
+func TestPG_RunnerPoolUpdateNamingTheNextRevisionWritesNoFalseAuditRow(t *testing.T) {
+	e := newPoolEnv(t, false)
+	pool := e.createPool("Provided", types.RunnerPoolRemoteProvided)
+	renamed := "Renamed"
+	e.srv.cfg.Store = &racingPoolRead{PG: e.pg, after: func() {
+		if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, 1, &renamed, nil, nil); err != nil {
+			t.Error(err)
+		}
+	}}
+	w := e.admin(http.MethodPut, "/api/v1/runner-pools/"+pool.ID.String(), `{"revision":2,"name":"Renamed"}`)
+	if w.Code != http.StatusConflict || wireReason(t, w) != string(runnerpool.ReasonStale) {
+		t.Errorf("update naming the next revision = %d %s, want 409 runner_pool_stale", w.Code, w.Body)
+	}
+	if n := len(e.audits(auditPoolUpdate)); n != 0 {
+		t.Errorf("%d update audit rows for a request that wrote nothing", n)
 	}
 }

@@ -172,8 +172,8 @@ type ActiveRunsAtPathReader interface {
 
 var _ ActiveRunsAtPathReader = PG{}
 
-// ActiveRunsAtWorkspacePath returns the non-terminal runs bound to one host
-// workspace path. Uses the POSITIVE state list, same reasoning as
+// ActiveRunsAtWorkspacePath returns the slot-holding runs bound to one host
+// workspace path (a QUEUED run has no sandbox on it yet). Uses the POSITIVE state list, same reasoning as
 // ActiveRunsByCreator: a forgotten new state merely under-warns rather than
 // mis-treating it as active.
 //
@@ -181,10 +181,7 @@ var _ ActiveRunsAtPathReader = PG{}
 // is a cheap check over matching rows; a composite (workspace_path, state)
 // index is the upgrade if a deployment ever has enough runs on ONE path.
 func (s PG) ActiveRunsAtWorkspacePath(ctx context.Context, workspacePath string) ([]types.AgentRun, error) {
-	states := make([]string, 0, len(types.NonTerminalRunStates))
-	for _, st := range types.NonTerminalRunStates {
-		states = append(states, string(st))
-	}
+	states := slotHoldingStateNames()
 	q := `SELECT ` + runCols + ` FROM agent_runs WHERE workspace_path = $1 AND state = ANY($2) ORDER BY created_at DESC`
 	return collect(ctx, s.Pool, "list", "active runs at workspace path", q, []any{workspacePath, states}, scanRun)
 }

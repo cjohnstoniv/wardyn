@@ -10,6 +10,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { RUN_SHAPES } from "./types/runs";
 import {
   TEMPLATE_NESTED_CARRIED,
   TEMPLATE_NESTED_EXCLUDED,
@@ -112,6 +113,14 @@ describe("template field registry", () => {
       expect(r.tab as string, r.name).not.toBe("info");
       expect(r.part as string, r.name).not.toBe("info");
     }
+  });
+
+  it("carries shape as an optional runner-tab field, with the three shapes Go declares", () => {
+    expect(templateFieldRule("shape")).toMatchObject({ tab: "runner", part: "runner", omitted: "unset_optional" });
+    expect(templateFieldRule("shape")?.pending).toBeFalsy();
+    expect(templateCarriedFields()).toContain("shape");
+    const goShapes = new Set([...readFileSync(join(root, "pkg/client/runs_mode.go"), "utf8").matchAll(/\bRunShape\w+\s+RunShape = "([a-z_]+)"/g)].map((m) => m[1]));
+    expect(new Set(RUN_SHAPES)).toEqual(goShapes);
   });
 
   it("looks a field up by request or policy name", () => {

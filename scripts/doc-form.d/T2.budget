@@ -2,4 +2,7 @@
 # rewrites; the itemised count is in T1.budget.
 # threatmodel/THREAT-MODEL.md 52270 after F-1511-1510 (erase fence + who a name is).
 # threatmodel/THREAT-MODEL.md 52303 measured after R2-runner-2 merge.
-threatmodel/THREAT-MODEL.md=52303
+# threatmodel/THREAT-MODEL.md 52431 after the via_org B6 bullet (H12, train 10).
+# threatmodel/THREAT-MODEL.md 52492 measured after train 10 F-1508-author merge.
+# threatmodel/THREAT-MODEL.md 52620 adds 128 (0.9 DS1-S2a, train 12): the per-harness credential same-uid residual.
+threatmodel/THREAT-MODEL.md=52620
