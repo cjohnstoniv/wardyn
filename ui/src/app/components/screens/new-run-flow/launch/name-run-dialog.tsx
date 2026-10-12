@@ -37,14 +37,18 @@ import { useLaunchRun } from "./use-launch-run";
 // Only the manual check runs here: nothing is asked again while the person types.
 const MANUAL_ONLY = { local: false, backendArm: false, modelArm: false };
 
-/** pool · CPU · lifetime, from what the server just answered; a part it did not give is left out. */
+/**
+ * pool · CPU · lifetime, from what the server just answered; a part it did not give is left out.
+ * The lifetime is the ask held to the answer's cap, or the answer's default when nothing was asked.
+ */
 export function summaryLine(pre: ReviewPreflight, intent: RunIntent): string {
   const pool = pre.runner_pool?.name;
-  const cpuMillis = pre.resources_applied?.cpu_millis.applied ?? intent.resources?.cpu_millis;
-  const defaultLifetime = pre.limits?.lifetime_sec.default;
-  const seconds = intent.ends_after_sec ?? (defaultLifetime?.unlimited ? undefined : defaultLifetime?.value);
+  const cpuMillis = pre.resources_applied?.cpu_millis.applied;
+  const lifetimeLimit = pre.limits?.lifetime_sec;
+  const wanted = intent.ends_after_sec ?? (lifetimeLimit?.default.unlimited ? undefined : lifetimeLimit?.default.value);
+  const seconds = wanted === undefined || !lifetimeLimit || lifetimeLimit.cap.unlimited ? wanted : Math.min(wanted, lifetimeLimit.cap.value);
   const cpu = cpuMillis === undefined ? undefined : cpuNumber(cpuMillis);
-  const lifetime = seconds === undefined ? undefined : lifetimeText(seconds);
+  const lifetime = !lifetimeLimit || seconds === undefined ? undefined : lifetimeText(seconds);
   if (pool && cpu !== undefined && lifetime !== undefined) return NR_LAUNCH.SUMMARY(pool, cpu, lifetime);
   const parts = [pool, cpu === undefined ? undefined : NR_SHARED.CPU(cpu), lifetime].filter((p): p is string => !!p);
   return parts.length ? parts.reduce((all, part) => NR_SHARED.JOIN(all, part)) : "";
@@ -122,6 +126,8 @@ function NameRunForm({ onOpenChange, onCreated }: Pick<NameRunDialogProps, "onOp
   const sentence = create.refusal ?? (checking ? null : checks.preflightError);
   const named = title.trim() !== "";
   const canLaunch = named && !checking && !create.creating && !checks.preflightBlock;
+  // The visible reason a held Launch is held: the missing title, the check in flight, or the refusal.
+  const heldBy = canLaunch || create.creating ? undefined : !named ? "name-run-required" : checking ? "name-run-checking" : sentence ? "name-run-sentence" : undefined;
 
   return (
     <>
@@ -139,7 +145,7 @@ function NameRunForm({ onOpenChange, onCreated }: Pick<NameRunDialogProps, "onOp
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <Label htmlFor="name-run-title">{NR_LAUNCH.TITLE_LABEL}</Label>
-            <span className="text-xs text-muted-foreground">{NR_SHARED.REQUIRED}</span>
+            <span id="name-run-required" className="text-xs text-muted-foreground">{NR_SHARED.REQUIRED}</span>
           </div>
           <Input
             id="name-run-title"
@@ -163,7 +169,7 @@ function NameRunForm({ onOpenChange, onCreated }: Pick<NameRunDialogProps, "onOp
         </div>
 
         <div className="flex flex-col gap-2 rounded-md border border-border p-3" data-testid="name-run-summary">
-          {checking && <p role="status" className="text-sm text-muted-foreground">{NR_LAUNCH.CHECKING}</p>}
+          {checking && <p id="name-run-checking" role="status" className="text-sm text-muted-foreground">{NR_LAUNCH.CHECKING}</p>}
           {!checking && answered && (
             <>
               <p className="flex flex-wrap items-baseline gap-x-2 text-sm">
@@ -181,7 +187,7 @@ function NameRunForm({ onOpenChange, onCreated }: Pick<NameRunDialogProps, "onOp
         </div>
 
         {sentence && (
-          <p role="alert" className="text-sm text-danger">
+          <p id="name-run-sentence" role="alert" className="text-sm text-danger">
             {sentence}
           </p>
         )}
@@ -190,7 +196,7 @@ function NameRunForm({ onOpenChange, onCreated }: Pick<NameRunDialogProps, "onOp
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             {NR_LAUNCH.CANCEL}
           </Button>
-          <Button ref={launchButton} type="submit" disabled={!canLaunch}>
+          <Button ref={launchButton} type="submit" disabled={!canLaunch} aria-describedby={heldBy}>
             <Loader2 className={create.spinning ? "size-4 animate-spin" : "hidden"} />
             {NR_LAUNCH.LAUNCH}
           </Button>

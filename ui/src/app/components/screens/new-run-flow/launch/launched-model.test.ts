@@ -4,7 +4,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { givesUp, ordinal, placeInLine, waitingBody, waitingSince, type RunQueue } from "./launched-model";
+import type { RunQueue } from "../../../../lib/types/runs";
+import { givesUp, ordinal, placeInLine, waitingBody, waitingSince } from "./launched-model";
 
 const NOW = Date.parse("2026-10-12T12:00:00Z");
 const at = (ms: number) => new Date(NOW + ms).toISOString();

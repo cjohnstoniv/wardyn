@@ -58,6 +58,12 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
     if (!loaded) return;
     heading.current?.focus();
   }, [loaded]);
+  // Cancel run leaves with the waiting state; focus goes to the heading rather than to the body.
+  const wasWaiting = React.useRef(false);
+  React.useEffect(() => {
+    if (wasWaiting.current && !waiting) heading.current?.focus();
+    wasWaiting.current = waiting;
+  }, [waiting]);
 
   if (run === null || (failed && !loaded)) {
     return <ErrorState as="h1" onRetry={failed ? reload : undefined} />;

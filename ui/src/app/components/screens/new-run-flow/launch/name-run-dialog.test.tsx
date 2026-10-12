@@ -26,7 +26,8 @@ vi.mock("../../../wardyn/model-access-context", () => ({ useModelAccessDoor: () 
 const INTENT: RunIntent = {
   shape: "environment", experience: "interactive", no_repositories_or_drives: true, ends_after_sec: 3600,
 };
-const CLEAR = SCENARIO_PREFLIGHT.member as PreflightResult;
+const LIFETIME = { default: { value: 3600 }, cap: { value: 7200 } };
+const CLEAR = { ...SCENARIO_PREFLIGHT.member, limits: { lifetime_sec: LIFETIME } } as unknown as PreflightResult;
 const preflight = vi.fn();
 const create = vi.fn();
 const onCreated = vi.fn();
@@ -134,8 +135,46 @@ describe("Name this run: the fresh check (U12)", () => {
 
 describe("Name this run: summary", () => {
   it("leaves out a part the server did not give", () => {
-    expect(summaryLine({ ...CLEAR, runner_pool: undefined }, INTENT)).toBe("2 CPU · 1 hour");
-    expect(summaryLine({ ...CLEAR, resources_applied: undefined }, { ...INTENT, ends_after_sec: undefined })).toBe("General");
+    expect(summaryLine({ ...CLEAR, runner_pool: undefined } as never, INTENT)).toBe("2 CPU · 1 hour");
+    expect(summaryLine({ ...CLEAR, resources_applied: undefined } as never, INTENT)).toBe("General · 1 hour");
+  });
+
+  it("never falls back to what the draft asked for", () => {
+    const asked: RunIntent = { ...INTENT, resources: { cpu_millis: 8000 }, ends_after_sec: undefined };
+    const bare = { ...CLEAR, resources_applied: undefined, limits: undefined } as never;
+    expect(summaryLine(bare, asked)).toBe("General");
+    expect(summaryLine(bare, INTENT)).toBe("General");
+  });
+
+  it("holds the asked lifetime to the answer's cap, and uses the answer's default when nothing was asked", () => {
+    expect(summaryLine(CLEAR, { ...INTENT, ends_after_sec: 36_000 })).toBe("General · 2 CPU · 2 hours");
+    expect(summaryLine(CLEAR, { ...INTENT, ends_after_sec: undefined })).toBe("General · 2 CPU · 1 hour");
+  });
+});
+
+describe("Name this run: why Launch is held", () => {
+  it("points the held button at the Required tag, then at Checking, then at the refusal", async () => {
+    let answer!: (r: PreflightResult) => void;
+    preflight.mockReturnValue(new Promise<PreflightResult>((yes) => { answer = yes; }));
+    open();
+    const box = await dialog();
+    const described = () => document.getElementById(launchButton().getAttribute("aria-describedby") ?? "");
+    expect(described()).toHaveTextContent("Required");
+    await userEvent.type(within(box).getByLabelText(NR_LAUNCH.TITLE_LABEL), "x");
+    expect(described()).toHaveTextContent(NR_LAUNCH.CHECKING);
+    await act(async () => answer(CLEAR));
+    await within(box).findByText(NR_LAUNCH.CHECKED_JUST_NOW);
+    expect(launchButton()).toBeEnabled();
+    expect(launchButton()).not.toHaveAttribute("aria-describedby");
+  });
+
+  it("points a refusal-held button at the refusal sentence", async () => {
+    preflight.mockRejectedValue(refusal(422, "General is switched off right now.", "runner_pool_unavailable"));
+    open();
+    const box = await dialog();
+    await userEvent.type(within(box).getByLabelText(NR_LAUNCH.TITLE_LABEL), "x");
+    await within(box).findByRole("alert");
+    expect(document.getElementById(launchButton().getAttribute("aria-describedby") ?? "")).toHaveTextContent("General is switched off right now.");
   });
 });
 
