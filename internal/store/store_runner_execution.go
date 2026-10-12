@@ -127,6 +127,27 @@ func (s PG) BindRunnerExecution(ctx context.Context, runnerID, runID, generation
 	return tx.Commit(ctx)
 }
 
+// RunnerExecutionOf is the run's persisted execution intent, ErrNotFound while it has none. It is the
+// check an issued generation is verified against, never a source for one.
+func (s PG) RunnerExecutionOf(ctx context.Context, runID uuid.UUID) (RunnerExecution, error) {
+	var out RunnerExecution
+	err := s.Pool.QueryRow(ctx, `SELECT run_id,runner_id,generation,operation,exec_id FROM runner_executions WHERE run_id=$1`, runID).Scan(&out.RunID, &out.RunnerID, &out.Generation, &out.Operation, &out.ExecID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return out, ErrNotFound
+	}
+	return out, err
+}
+
+// RunTokenRenewedAt is the run's token renewal stamp, the one the lapsed-token sweep reads.
+func (s PG) RunTokenRenewedAt(ctx context.Context, runID uuid.UUID) (time.Time, error) {
+	var at time.Time
+	err := s.Pool.QueryRow(ctx, `SELECT token_renewed_at FROM agent_runs WHERE id=$1`, runID).Scan(&at)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return at, ErrNotFound
+	}
+	return at, err
+}
+
 func readRunnerExecution(ctx context.Context, tx pgx.Tx, runID uuid.UUID) (RunnerExecution, error) {
 	var out RunnerExecution
 	err := tx.QueryRow(ctx, `SELECT run_id,runner_id,generation,operation,exec_id FROM runner_executions WHERE run_id=$1 FOR UPDATE`, runID).Scan(&out.RunID, &out.RunnerID, &out.Generation, &out.Operation, &out.ExecID)

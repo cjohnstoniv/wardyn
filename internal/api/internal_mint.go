@@ -413,6 +413,13 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 			writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunKept), "run is lost")
 			return
 		}
+		// A run on a runner is contained there when its lease lapses: the renewed stamp goes to the
+		// runner too. A runner that does not get it contains the run at the lapse window, the same
+		// outcome the organisation's own sweep reaches, so a failed send is logged, not refused.
+		if err := s.renewRunnerLease(r.Context(), run); err != nil {
+			slog.WarnContext(r.Context(), "wardynd: renewing a run's runner lease failed",
+				slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		}
 	}
 
 	// Honest trail: the provider records its own identity.mint for the new token;

@@ -47,7 +47,10 @@ func (s *Server) runnerEndpoint(id uuid.UUID) runnerEndpoint {
 	ep := runnerEndpoint{link: &remote.Link{}}
 	ep.sub = remote.New(id.String(), ep.link, remote.Options{Queue: func(ctx context.Context, kind types.RunnerActionKind, ref string) error {
 		return s.queueRunnerTeardown(ctx, id, kind, ref)
-	}, Dispatch: s.runnersEnabled, Relay: s.acceptRelay})
+	}, Dispatch: s.runnersEnabled, Relay: s.acceptRelay,
+		ExecutionGeneration: func(ctx context.Context, method, ref string) (uuid.UUID, error) {
+			return s.dispatchedGeneration(ctx, id, method, ref)
+		}})
 	if s.runnerStreams.subs == nil {
 		s.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{}
 	}

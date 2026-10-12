@@ -23,27 +23,36 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
-	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// stream registers an online runner endpoint for id that reports classes, as the hub does on admission, so
-// a reader of its own capabilities (the pause demand) has an answer.
+// stream connects the runner's own endpoint to a served runner over loopback, as the hub does on
+// admission, reporting classes: dispatch can lease the run to it and a reader of its own capabilities
+// (the pause demand) has an answer. The sandbox itself is still the deployment's fake runner.
 func (e *placementEnv) stream(id uuid.UUID, classes ...types.ConfinementClass) {
 	e.t.Helper()
-	sub := remote.New(id.String(), &capsTransport{online: true}, remote.Options{})
-	data, err := json.Marshal(laptopCaps(classes...))
-	if err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	e.t.Cleanup(cancel)
+	fake := runnertest.NewFake()
+	fake.Support.Classes = classes
+	ep := e.srv.runnerEndpoint(id)
+	org, run := runnerwire.Loopback()
+	ep.link.Attach(ctx, org)
+	served := runnertest.Serve(ctx, run, id.String(), fake)
+	if err := served.PublishCaps(ctx, placement.Capacity{CPUMillisMax: 4000, MemoryMiBMax: 8192}, []string{"/srv/dev/work"}, "test"); err != nil {
 		e.t.Fatal(err)
 	}
-	sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
-	e.srv.runnerStreams.subsMu.Lock()
-	defer e.srv.runnerStreams.subsMu.Unlock()
-	if e.srv.runnerStreams.subs == nil {
-		e.srv.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if _, ok := ep.sub.Caps(); ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			e.t.Fatal("the runner's caps never arrived")
+		}
 	}
-	e.srv.runnerStreams.subs[id] = runnerEndpoint{sub: sub, link: &remote.Link{}}
 }
 
 // localCreate is the one run row a create inserted, after create answered 201.
@@ -85,6 +94,14 @@ func TestPG_LocalRun_DispatchedToItsBoundRunner(t *testing.T) {
 	spec := e.dispatchedSpec(run.ID).RunnerID
 	if spec != awake.String() {
 		t.Fatalf("dispatch created for runner %q, the run is bound to %s; audit: %s", spec, awake, auditDump(e.h.audit.snapshot(), run.ID))
+	}
+	// Dispatch leased the run to its runner under a generation and bound the agent's Exec to it.
+	var cur store.RunnerExecution
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline) && cur.ExecID == ""; time.Sleep(20 * time.Millisecond) {
+		cur, _ = e.pg.RunnerExecutionOf(context.Background(), run.ID)
+	}
+	if cur.RunnerID != awake || cur.Operation != runnerwire.MethodExec || cur.Generation == uuid.Nil || cur.ExecID == "" {
+		t.Errorf("execution = %+v, want an Exec generation on %s bound to the agent's exec", cur, awake)
 	}
 	if n := len(e.runner.executorCalls()); n != 0 {
 		t.Errorf("a self-hosted run reached the deployment's executors %d time(s)", n)

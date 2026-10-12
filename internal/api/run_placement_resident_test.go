@@ -94,7 +94,7 @@ func TestLocalResident_DispatchAndReviveDoorsJudgeTheFloorAndPosture(t *testing.
 	}
 
 	want("dispatch, no floor, posture met", dispatch(), "")
-	want("revive, no floor", revive(), placement.ReasonPlacementUnavailable)
+	want("revive, no floor", revive(), "")
 	want("dispatch, CC3 floor", dispatch(apiKey), placement.ReasonRunnerPostureUnmet)
 	want("revive, CC3 floor", revive(apiKey), placement.ReasonRunnerPostureUnmet)
 	st.posture.DiskEncrypted = false

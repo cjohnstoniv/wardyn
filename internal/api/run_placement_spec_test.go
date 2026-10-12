@@ -76,12 +76,12 @@ func TestLocalReviveRefusesBeforeOperatorSecretReadsAndStripsCopy(t *testing.T) 
 		f.st.siteConfig.UpstreamProxySecretRef = secretRef
 		cfg := proxy.Config{RunID: run.ID, UpstreamProxyURL: "https://user:password@parent", TrustedCAPEM: "corporate", InternalHosts: []types.InternalHost{{HostSuffix: "corp"}}, LLMUpstreams: map[string]string{"vendor": "corp"}}
 		ref := f.srv.reviveOwnerRecheck(context.Background(), run, &cfg, types.ActorSystem, "wardynd")
-		want := placement.ReasonPlacementUnavailable
-		if secretRef != "" {
-			want = placement.ReasonPlacementCredential
+		// An own plan revives; the organisation's upstream proxy secret is never sent to a runner.
+		if secretRef != "" && (ref == nil || ref.reason != string(placement.ReasonPlacementCredential)) {
+			t.Fatalf("revive=%v wanted %s", ref, placement.ReasonPlacementCredential)
 		}
-		if ref == nil || ref.reason != string(want) {
-			t.Fatalf("revive=%v wanted %s", ref, want)
+		if secretRef == "" && ref != nil {
+			t.Fatalf("revive of an own plan = %v, want it admitted", ref)
 		}
 		if secretRef == "" && (cfg.UpstreamProxyURL != "" || cfg.TrustedCAPEM != "" || len(cfg.InternalHosts)+len(cfg.LLMUpstreams) != 0) {
 			t.Fatal("revive retained organisation network configuration")
