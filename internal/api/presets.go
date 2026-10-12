@@ -158,6 +158,11 @@ func (s *Server) validatePresetRequest(w http.ResponseWriter, r *http.Request, n
 	if presetRunModeRefusal(req.Request).write(s, w, r) || s.runContractRefusal(req.Request).write(s, w, r) {
 		return false
 	}
+	if paths := documentAvailabilityRefusal(req.Request); len(paths) > 0 {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, fmt.Sprintf(
+			"request.%s is not available on this server yet, so it cannot be stored in a preset.", paths[0]))
+		return false
+	}
 	if msg := agentRequirementError(req.Request); msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonPresetRequestInvalid, "request: "+msg)
 		return false

@@ -85,13 +85,14 @@ func validateTemplateBytes(src []byte, format client.TemplateFormat, owner *type
 
 // validateTemplateDocument is the save door: it holds a struct-shaped document,
 // and the scope it is published to, to everything validateTemplateImport holds
-// text to. It returns the normalised document to store.
+// text to. It returns the normalised document to store. It saves a template, so
+// a document of kind Run is refused.
 func validateTemplateDocument(doc client.TemplateDocument, owner types.TemplateOwner) (client.TemplateDocument, []client.TemplateDiagnostic) {
 	body, err := json.Marshal(doc)
 	if err != nil {
 		return doc, []client.TemplateDiagnostic{{Reason: reasonTemplateDocumentInvalid, Message: templateDocumentInvalidMsg("it cannot be written as JSON")}}
 	}
-	res := validateTemplateBytes(body, client.TemplateFormatJSON, &owner, "")
+	res := validateTemplateBytes(body, client.TemplateFormatJSON, &owner, client.TemplateDocumentKind)
 	if res.Document == nil {
 		return doc, res.Diagnostics
 	}
@@ -372,21 +373,31 @@ func (d *templateDecoder) checkDependencies(doc client.TemplateDocument) {
 // template even if its registry Pending flag is cleared early. Fields whose lane
 // has not landed are refused earlier, by the decoder, through the flag.
 func (d *templateDecoder) checkAvailable(req createRunRequest) {
-	refuse := func(path string) { d.add(path, reasonTemplateFieldUnavailable, templateFieldUnavailableMsg(path)) }
+	for _, path := range documentAvailabilityRefusal(req) {
+		d.add("intent."+path, reasonTemplateFieldUnavailable, templateFieldUnavailableMsg("intent."+path))
+	}
+}
+
+// documentAvailabilityRefusal lists the request paths a document or a preset
+// cannot hold because this server cannot honour them yet. Both doors read it,
+// and the local-enable lane lifts the local case for both at once.
+func documentAvailabilityRefusal(req createRunRequest) []string {
+	var paths []string
 	if req.Placement == client.PlacementLocal {
-		refuse("intent.placement")
+		paths = append(paths, "placement")
 	}
 	if path, what := runModeUnavailable(req); what != "" {
-		refuse("intent." + path)
+		paths = append(paths, path)
 	}
 	if req.AllowedImage != "" {
-		refuse("intent.allowed_image")
+		paths = append(paths, "allowed_image")
 	}
 	for i, ref := range req.Components {
 		if ref.Builtin != "" {
-			refuse(fmt.Sprintf("intent.components[%d]", i))
+			paths = append(paths, fmt.Sprintf("components[%d]", i))
 		}
 	}
+	return paths
 }
 
 // validateTemplateScopeDecoded holds a decoded document to the scope it is published to.
