@@ -218,7 +218,10 @@ func seedOwnedBy(ast *authzStore, aap *authzApprovals, rs *recording.FSStore, e 
 		ast.mu.Unlock()
 		return id
 	}
-	ast.runs[id] = types.AgentRun{ID: id, CreatedBy: owner, State: types.RunRunning, Agent: "claude-code"}
+	// With a launch intent, so GET /runs/{id}/launch-intent answers the owner from the handler, not its
+	// no-intent 404.
+	ast.runs[id] = types.AgentRun{ID: id, CreatedBy: owner, State: types.RunRunning, Agent: "claude-code",
+		LaunchIntent: json.RawMessage(`{"api_version":"wardyn/v1","kind":"Run","intent":{"agent":"claude-code","task":"t"}}`)}
 	ast.mu.Unlock()
 	_ = rs.SaveCast(context.Background(), id.String(), strings.NewReader(`{"version":2}`+"\n"))
 	if e == entityApproval {

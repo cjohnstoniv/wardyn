@@ -162,6 +162,10 @@ func (s *Server) handlePutMyRunnerPoolDefaults(w http.ResponseWriter, r *http.Re
 		writePoolInvalid(w, err.Error())
 		return
 	}
+	if d.Barrier != "" {
+		writePoolInvalid(w, personalBarrierDefaultMsg)
+		return
+	}
 	rows, ok := s.poolCatalogue(w, r, ps, true)
 	if !ok || !checkDefaultPools(w, d, rows) {
 		return
