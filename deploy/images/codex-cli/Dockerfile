@@ -176,6 +176,21 @@ RUN set -eu; \
         echo "installed codex $CODEX_VERSION via npm"; \
     fi
 
+# ── GitHub CLI (gh) ──────────────────────────────────────────────────────────
+# From cli.github.com's apt repository: the keyring is checked by digest and
+# named by signed-by, so it vouches for that repository alone, and the version
+# is pinned (the repository indexes only its newest release, so a bump moves
+# GH_VERSION, and the keyring digest if GitHub rotates it). gh gets no GitHub
+# credential here: a run with a GitHub CLI row gets an inert GH_TOKEN, and the
+# proxy adds the App token per request.
+ARG GH_VERSION=2.102.0
+RUN mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "6084d5d7bd8e288441e0e94fc6275570895da18e6751f70f057485dc2d1a811b  /etc/apt/keyrings/githubcli-archive-keyring.gpg" | sha256sum -c -
+RUN echo "deb [signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends "gh=${GH_VERSION}" \
+    && rm -rf /var/lib/apt/lists/*
+
 # The node:24-trixie-slim base image ships a `node` user at uid=1000.
 # Rename it to `agent` and relocate the home directory so the sandbox contract
 # is satisfied without creating a conflicting second uid-1000 user.

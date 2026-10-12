@@ -396,7 +396,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// phases so nothing above can re-add a managed host. See
 	// confineGitBrokerEgress; the run.policy.resolve audit below records the
 	// narrowed envelope, so the removal is disclosed, not silent.
-	if confined := confineGitBrokerEgress(&policy, p.GitGrants); len(confined) > 0 {
+	if confined := confineBrokerEgress(&policy, p, sandboxEnv); len(confined) > 0 {
 		slog.InfoContext(ctx, "wardynd: git-broker run — broker-managed hosts confined to the /wardyn/gh/ route",
 			slog.String("run_id", run.ID.String()), slog.Any("hosts", confined))
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.egress.confine",
@@ -548,7 +548,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			BrokeredPATGrantIDs: brokeredPATIDs,
 			// The per-person Azure DevOps REST gate's grant (runs_dispatch_ado_inject.go).
 			// Nil for every run not on that lane, which leaves the gate off.
-			ADOGrant: ado.gate,
+			ADOGrant:  ado.gate,
+			GitHubAPI: p.Components.GitHubAPI,
 			// The azure_foundry lane's route gate and channel host (provider_azure.go). Empty for every
 			// run not on that lane, which leaves both off.
 			AzureGates:      plan.azure.gates,

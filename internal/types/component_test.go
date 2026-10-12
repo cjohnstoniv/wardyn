@@ -655,6 +655,7 @@ func TestComponentCLI_Shape(t *testing.T) {
 		"other arm set":        {cliDef(&types.ComponentCLI{Kind: "aws", AWS: &aws, GitHub: gh}), "cli.github: not allowed"},
 		"github no caps":       {cliDef(&types.ComponentCLI{Kind: "github", GitHub: &types.CLIGitHub{}}), "at least one"},
 		"github not grantable": {cliDef(&types.ComponentCLI{Kind: "github", GitHub: &types.CLIGitHub{Capabilities: []ghscope.Capability{"nope"}}}), "not grantable"},
+		"github refused":       {cliDef(&types.ComponentCLI{Kind: "github", GitHub: &types.CLIGitHub{Capabilities: []ghscope.Capability{ghscope.CapIssuesRead, ghscope.CapOrgAdmin}}}), "not available to the GitHub CLI"},
 		"aws http":             {cliDef(badAWS(func(a *types.CLIAWS) { a.StartURL = "http://p.example" })), "start_url"},
 		"aws account":          {cliDef(badAWS(func(a *types.CLIAWS) { a.AccountID = "12" })), "account_id"},
 		"aws role":             {cliDef(badAWS(func(a *types.CLIAWS) { a.RoleName = "a b" })), "role_name"},

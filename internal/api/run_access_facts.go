@@ -403,10 +403,18 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 	row := client.AccessRow{ID: fact.ID, Kind: accessKindCustom, From: accessFromAdded, Name: fact.Name,
 		Status: accessStatus(fact.Status), Hosts: slices.Clone(fact.Hosts),
 		Source: client.ProvenanceSource{Kind: provKindComponent, ID: fact.ID, Name: fact.Name}}
-	if cli := attachedCLI(b.in.comps, fact.ID); cli != nil {
+	cli := attachedCLI(b.in.comps, fact.ID)
+	githubCLI := cli != nil && cli.Kind == types.CLIKindGitHub
+	if cli != nil {
 		row.Kind, row.InImage = accessKindCLI, cliToolInImage(cliInImage(b.in.imageKey), cli.Kind)
 	}
+	if githubCLI && len(githubCLIRepos(*b.in.req, b.in.spec, b.in.scmSite)) == 0 {
+		row.Status, row.Reason, githubCLI = accessUnavailable, reasonCLINoGitHubRepo, false
+	}
 	b.addRow(row)
+	if githubCLI {
+		b.addCredential(client.AccessCredential{ID: row.ID + ":cli", Kind: credKindGitHubApp, Owner: credOwnerOrgApp, Delivery: deliveryProxy, AfterEnd: afterEndGone})
+	}
 	for _, h := range row.Hosts {
 		b.addHost(h, viaEgress, row.ID)
 	}
