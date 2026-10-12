@@ -97,7 +97,7 @@ func (s *Server) localRedirectIntents(r *http.Request, spec types.RunPolicySpec,
 // other token mode is minted by the organisation.
 func (s *Server) localADOOrigin(ctx context.Context, owner string, a adoEntraRun) placement.CredentialOrigin {
 	if a.tokenMode != types.ADOTokenModeOwnPAT || owner == "" || a.owner != owner || !adoEntraValidRowID(a.rowID) {
-		return placement.CredentialOrigin{Class: placement.ClassBrokered, Delivery: placement.ClassADOMintedPAT}
+		return placement.CredentialOrigin{Class: placement.ClassBrokered, Delivery: placement.ClassADOMintedPAT, ResidentOptIn: a.residentOptIn && a.tokenMode != types.ADOTokenModeOwnPAT}
 	}
 	own := s.ownsSecretMemoized(ctx, owner, adoOwnPATSecretName(a.rowID))
 	return placement.CredentialOrigin{Class: placement.ClassOwn, Stored: true, OwnNamespace: own, OwnerOnly: own}

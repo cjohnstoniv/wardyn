@@ -33,10 +33,12 @@
 # docs/sdk.md 13690 adds 18 over 13672 (0.9 F-1508 C2 r1): the retired-service renew/revive and no-revocation-store answers of service_identity_inactive.
 # docs/sdk.md 13997 measured after D-1319 S2 (new PATCH reason).
 # docs/sdk.md 13995 measured after train 5 merge.
+# docs/sdk.md 13995 adds 34 (0.9 H13): the runner_posture_unmet reason row.
 # docs/sdk.md 13714 adds 24 over 13690 (0.9 F-1508 C3): the token_move_invalid row.
 # docs/sdk.md 14019 measured after merge.
 # docs/sdk.md 14021 measured after merge.
 # docs/sdk.md 14080 measured after the 0.9.0 batch merge.
+# docs/sdk.md 14113 measured after H13 merge-prep.
 # docs/sdk.md 14400 adds 320 (0.9 DS2-S1, train 11): Run documents, the import door and the shape table.
 # docs/sdk.md 14061 adds 40 (0.9 TA-8): the clis cards and the OrgComponentView category, cli and mcp views.
 # docs/sdk.md 14440 measured after train 12 TA-8 merge.
@@ -44,7 +46,9 @@
 # docs/sdk.md 14685 measured after train 13: DS3-S5 merge.
 # DS2-S3: docs/sdk.md 14759 adds 738 over 14021: 321 for DS2-S1's Run documents section (merged at b8ea1f8cf, which measures 14342 alone) and 417 for the Run templates section and the three template reason rows.
 # docs/sdk.md 15102 measured after train 13: DS2-S3 merge.
-docs/sdk.md=15102 share=21
+# docs/sdk.md 14474 measured after H13 merge-prep 2.
+# docs/sdk.md 15136 measured after train 14: H13 merge.
+docs/sdk.md=15136 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.
