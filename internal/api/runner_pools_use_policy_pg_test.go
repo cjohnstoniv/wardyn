@@ -66,7 +66,7 @@ func TestPG_RunnerPoolUsePolicyOnlyNarrowsARemoteProvidedPool(t *testing.T) {
 		want             int
 		reason           string
 	}{
-		{"self-hosted pool", usePolicyPath(self.ID), `{"subjects":[{"subject_type":"user","subject":"a"}]}`, e.alice, http.StatusUnprocessableEntity, string(runnerpool.ReasonMemberMismatch)},
+		{"another person's self-hosted pool", usePolicyPath(self.ID), `{"subjects":[{"subject_type":"user","subject":"a"}]}`, e.alice, http.StatusNotFound, string(runnerpool.ReasonNotFound)},
 		{"empty list", usePolicyPath(remote.ID), `{"subjects":[]}`, e.alice, http.StatusBadRequest, string(runnerpool.ReasonInvalid)},
 		{"no list", usePolicyPath(remote.ID), `{}`, e.alice, http.StatusBadRequest, string(runnerpool.ReasonInvalid)},
 		{"all", usePolicyPath(remote.ID), `{"subjects":[{"subject_type":"all","subject":"*"}]}`, e.alice, http.StatusBadRequest, string(runnerpool.ReasonInvalid)},

@@ -303,7 +303,7 @@ func TestAccessRow_CLIInImageFromTheRunsImage(t *testing.T) {
 		pinned map[string]string
 		want   string
 	}{
-		{"the harness's convention image", "", nil, cliInImageNo},
+		{"the harness's convention image", "", nil, cliInImageYes},
 		{"an image the run names", "registry.example/mine:1", nil, cliInImageUnknown},
 		{"an image the operator pinned", "", map[string]string{"claude-code": "registry.example/pinned:1"}, cliInImageUnknown},
 	} {

@@ -12,6 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // The steps of runFoldSteps, in its order. Each writes its own refusal and
@@ -262,7 +263,7 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 	floor := confinementFloorSpec(f.spec, f.comps)
 	if f.mode == foldCreate {
 		var ok bool
-		f.enforced, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, requestPlacement(*f.req), requestRunnerID(*f.req), floor, f.reqCC, f.baseline, f.place.offeredClasses())
+		f.enforced, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, requestPlacement(*f.req), requestRunnerID(*f.req), floor, f.reqCC, f.baseline, f.place)
 		return ok && !f.place.barrierRefusal(f.enforced).write(s, f.w, f.r)
 	}
 	var advertised []types.ConfinementClass
@@ -286,6 +287,9 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 		return false
 	}
 	f.enforced = enforced
+	if f.mode == foldPreflight {
+		f.barrierOptions = draftBarrierOptions(f.place, f.ceiling, floor, f.baseline)
+	}
 	return !f.place.barrierRefusal(enforced).write(s, f.w, f.r)
 }
 
@@ -295,7 +299,7 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 // runner_offline. The remote placement is the deployment's own executor and is
 // not asked.
 func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
-	return !s.placementCapabilityRefusal(f.r.Context(), *f.req, f.ceiling).write(s, f.w, f.r)
+	return !s.placementCapabilityRefusal(f.r.Context(), *f.req, f.place, f.ceiling).write(s, f.w, f.r)
 }
 
 // stepModelProvider makes the model-provider choice and refuses one whose
@@ -325,18 +329,18 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 				return false
 			}
 		}
-		f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, true, false)
+		f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, true, false, false)
 		grantHarnessProviders(f.harnesses, f.harnessChoices)
 		return ok
 	}
 	var choice runProviderChoice
-	if choice, ok = s.enforceRunModelProvider(f.w, f.r, *f.req, f.spec, f.wsRefs, f.mode == foldCreate); !ok {
+	if choice, ok = s.enforceRunModelProvider(f.w, f.r, *f.req, f.spec, f.wsRefs, f.mode == foldCreate, f.queued); !ok {
 		return false
 	}
 	f.mpChoice = choice
 	f.modelCred = choice.modelCredential()
 	recordProviderHost(rec, choice, f.req.Agent)
-	f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, false, f.mode == foldCreate)
+	f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, false, f.mode == foldCreate, f.queued)
 	grantHarnessProviders(f.harnesses, f.harnessChoices)
 	if len(f.harnessChoices) > 1 {
 		f.modelCred = mostResident(f.harnessChoices).modelCredential()
@@ -344,14 +348,26 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 	return ok
 }
 
+// stepAWSCLIProfile refuses an AWS CLI component on a run whose model, or any
+// included harness's, comes through an AWS sign-in: a sandbox holds one AWS
+// profile. Dispatch refuses it too (authorAWSCLI); this is the doors' answer.
+func (s *Server) stepAWSCLIProfile(f *runFold, _ *foldRecorder) bool {
+	if f.comps.awsCLI() == nil || !runUsesAWSSignIn(f.mpChoice, f.harnessChoices) {
+		return true
+	}
+	writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonComponentCLIAWSWithBedrockSignIn, cliAWSWithBedrockSSORefusal)
+	return false
+}
+
 // judgeHarnessProviders is stepModelProvider's half for the harnesses of set
 // beside the primary (req.Agent), whose choice is primary: preview authorizes
 // the selection alone, the other doors also check the caller's own credential
-// (renew at create only), each as its own agent with its own requested
-// provider and no workspace pin. Then the set is held to the one-lane
+// (renew at create only, and never for a run that waits: queued), each as its own agent with its own requested
+// provider and no workspace pin; an AWS sign-in serves the primary alone
+// (harnessProviderNeedsPrimary). Then the set is held to the one-lane
 // invariant (harnessProvidersConflict). It writes its own refusal.
 func (s *Server) judgeHarnessProviders(w http.ResponseWriter, r *http.Request, req createRunRequest, spec types.RunPolicySpec,
-	set []types.RunHarness, rec *foldRecorder, primary runProviderChoice, preview, renew bool,
+	set []types.RunHarness, rec *foldRecorder, primary runProviderChoice, preview, renew, queued bool,
 ) ([]harnessChoice, bool) {
 	choices := make([]harnessChoice, 0, len(set))
 	for _, h := range set {
@@ -359,16 +375,21 @@ func (s *Server) judgeHarnessProviders(w http.ResponseWriter, r *http.Request, r
 		if h.Harness != req.Agent {
 			hreq := req
 			hreq.Agent, hreq.ModelProvider = h.Harness, h.ModelProviderID
-			ok := true
-			if preview {
-				var refusal *runRefusal
-				choice, refusal = s.authorizeRunModelProvider(r, hreq, nil, true)
-				ok = !refusal.write(s, w, r)
-			} else {
-				choice, ok = s.enforceRunModelProvider(w, r, hreq, spec, nil, renew)
-			}
-			if !ok {
+			var refusal *runRefusal
+			if choice, refusal = s.authorizeRunModelProvider(r, hreq, nil, preview); refusal.write(s, w, r) {
 				return nil, false
+			}
+			// Before the credential read, so the reason is this and never a sign-in.
+			if choice.chosen && harnessProviderNeedsPrimary(choice.provider) {
+				runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
+					harnessSignInNotPrimaryMsg(harnessName(h.Harness), choice.provider.ID)).forTool(h.Harness).write(s, w, r)
+				return nil, false
+			}
+			if !preview {
+				var ok bool
+				if choice, ok = s.enforceChosenModelProvider(w, r, hreq, spec, choice, renew, queued); !ok {
+					return nil, false
+				}
 			}
 			recordProviderHost(rec, choice, h.Harness)
 		}
@@ -401,6 +422,31 @@ func (s *Server) stepAutonomy(f *runFold, rec *foldRecorder) bool {
 	var ok bool
 	f.autonomy, f.autonomyWarns, f.scmSite, f.adoGrade, f.bedrockGrade, ok = s.resolveRunAutonomy(f.w, f.r, f.req, f.spec, f.wsRefs, f.enforced, f.ceiling, f.modelCred, f.comps, f.baseline)
 	return ok
+}
+
+// stepToolPolicy settles the tool lane and holds a person's tool rules to the
+// policy, after autonomy so every step that can put the run on the gated lane
+// has: a person's rule or default, or a policy rule that holds or blocks, puts
+// a background run of a gated harness there with "*: allow" under the person's
+// layer (applyToolPosture), and each
+// allow they send stands only where the policy, with the lane's default under
+// it, already allows the tool. An interactive Claude Code run's default, and
+// every tool name it carries, is held to what its managed settings can say
+// first, as step 5 greys it.
+func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
+	before := f.spec
+	s.applyToolPosture(f.req, &f.spec)
+	recordSpecAdds(rec, before, f.spec, provSource{Kind: provKindPosture})
+	if attendedDefaultRefusal(*f.req, f.autonomy.Level).write(s, f.w, f.r) || attendedToolNamesRefusal(*f.req, f.spec).write(s, f.w, f.r) {
+		return false
+	}
+	return !s.toolRulesWithinPolicyRefusal(*f.req, f.spec).write(s, f.w, f.r)
+}
+
+// stepGitHubCLIRepo is githubCLIRepoRefusal (runs_cli_github.go) at the doors that launch and
+// review. The preview shows the same fact as the card's reason instead.
+func (s *Server) stepGitHubCLIRepo(f *runFold, _ *foldRecorder) bool {
+	return !githubCLIRepoRefusal(f.comps, *f.req, f.spec, f.scmSite).write(s, f.w, f.r)
 }
 
 // stepRunEnd decides the run's end and its lifetime cap against the pool,
@@ -446,6 +492,9 @@ func (s *Server) stepPATNarrowing(f *runFold, rec *foldRecorder) bool {
 // stepHostCapacity is the same 503, reason and Retry-After at create and
 // Review; only create writes the audit row.
 func (s *Server) stepHostCapacity(f *runFold, rec *foldRecorder) bool {
+	if f.queued || f.promoted { // the run waits for them, or promotion has applied them
+		return true
+	}
 	return !writeHostCapacityRefusal(f.w, f.r, s.admitHostCapacity(f.r.Context(), principalFromRequest(f.r), "runs", f.mode == foldCreate))
 }
 
@@ -453,24 +502,36 @@ func (s *Server) stepHostCapacity(f *runFold, rec *foldRecorder) bool {
 // and no live token for a run that gets no row. CreateRunUnderCap still
 // decides a race at the cap.
 func (s *Server) stepRunCap(f *runFold, rec *foldRecorder) bool {
+	if f.queued || f.promoted { // the run waits for them, or promotion has applied them
+		return true
+	}
 	return !s.refuseRunCapFull(f.w, f.r)
 }
 
 // stepRunFit refuses a run the runs namespace's ResourceQuota cannot hold; its
 // advisories join the door's warnings. The quota's own admission stays the
-// authority on a race.
+// authority on a race. A run that waits for a slot is refused only when no quota
+// could ever hold it: it may fit once other runs finish, and promotion asks again.
 func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
+	if f.promoted {
+		return true
+	}
 	var refused bool
-	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.r.Context(), f.spec, f.ceiling), time.Duration(f.end.capSec)*time.Second)
+	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.spec, f.mainDrive), time.Duration(f.end.capSec)*time.Second, f.queued)
 	return !refused
 }
 
-// stepPlacementDenied is the deny_placements door: a request whose placement the
-// caller's governance profile denies is refused 403 placement_denied, naming
-// the profile, before any local-eligibility work. An unassigned member has no
-// profile and an operator's runs stand outside governance, so for both the list
-// is absent and every placement is permitted.
+// stepPlacementDenied is the deny_placements door for an unpooled request: one
+// whose placement the caller's governance profile denies is refused 403
+// placement_denied, naming the profile, before any local-eligibility work. Where
+// pools place runs, the request's placement is not the run's: resolvePlacement
+// asks the same door with the placement the pool decides. An unassigned member
+// has no profile and an operator's runs stand outside governance, so for both
+// the list is absent and every placement is permitted.
 func (s *Server) stepPlacementDenied(f *runFold, rec *foldRecorder) bool {
+	if s.poolsPlaceRuns() {
+		return true
+	}
 	return !s.placementDeniedRefusal(f.r.Context(), requestPlacement(*f.req), f.ceiling).write(s, f.w, f.r)
 }
 
@@ -493,15 +554,17 @@ func (s *Server) stepResources(f *runFold, rec *foldRecorder) bool {
 
 // stepLocalEligibility is before confinement/provider liveness: create may
 // renew a one-use AWS credential there. No local refusal may reach that phase.
-// The admitted plan supplies specific refusals; final unsupported-local stays
-// before mint/persistence until the resolver and runner route are implemented.
+// The admitted plan supplies specific refusals; an unpooled local request has
+// no runner to go to and is refused before mint/persistence.
 func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 	// A self-hosted pool decides the placement when the request left it out.
 	req := *f.req
 	if f.place.pooled {
 		req.Placement = f.place.placement
 	}
-	return !s.localPlacementRefusal(f.r, req, f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline).write(s, f.w, f.r)
+	var refusal *runRefusal
+	f.localDelivery, refusal = s.localPlacementRefusal(f.r, req, f.place.pooled, f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
+	return !refusal.write(s, f.w, f.r)
 }
 
 // stepDriveEligibility holds the run's drives to its resolved pool: no drive
@@ -520,6 +583,9 @@ func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
 func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
 		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling))}
+	if f.mode != foldCreate {
+		in.dryDoor = true
+	}
 	if f.mode == foldPreflight { // preflight parses the class inside stepConfinement, after this step
 		in.reqCC, in.reqCCOK = parseConfinementClass(f.req.ConfinementClass)
 	}
@@ -528,5 +594,45 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 		return false
 	}
 	f.place = plan
+	// A run bound for a capped pool waits for a slot instead of failing (the dry doors answer the same).
+	// The queue's own start replays the fold as promoted, and must not queue again.
+	if f.mode != foldPreview {
+		f.queued = plan.queues() && !f.promoted
+	}
+	return true
+}
+
+// stepMainDrive sizes the main drive after placement, which resolved the effective limits, and
+// refuses a size the run's policy writes on a runner that cannot cap disk. The dry doors write the
+// number into their answered spec, so spec.resources.disk_mib keeps showing what the run gets;
+// create writes nothing into the launch spec and hands dispatch the decision instead.
+func (s *Server) stepMainDrive(f *runFold, rec *foldRecorder) bool {
+	policyMiB, requestMiB := 0, 0
+	if f.spec.Resources != nil {
+		policyMiB = f.spec.Resources.DiskMiB
+	}
+	if f.req.Resources != nil {
+		requestMiB = f.req.Resources.DiskMiB
+	}
+	md := mainDriveFor(policyMiB, requestMiB, f.place.limits.DiskMiB)
+	if !md.Soft && md.MiB > 0 && s.runnerCannotCapDisk(f.r.Context(), *f.req, f.place) {
+		msg := mainDriveUnenforceableMsg()
+		if !f.place.pooled {
+			msg = mainDriveUnenforceableUnpooledMsg()
+		}
+		runError(http.StatusUnprocessableEntity, reasonMainDriveUnenforceable, msg).write(s, f.w, f.r)
+		return false
+	}
+	f.mainDrive = md
+	warn := composer.WarnResourcesCapped
+	if md.ClampedBy == client.MainDriveClampPolicy {
+		warn = warnDiskPolicyCut
+	}
+	if md.ClampedBy != "" && !slices.Contains(f.policyWarns, warn) {
+		f.policyWarns = append(f.policyWarns, warn)
+	}
+	if f.mode != foldCreate {
+		(&mainDriveDecision{MiB: md.MiB}).apply(&f.spec)
+	}
 	return true
 }

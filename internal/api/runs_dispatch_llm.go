@@ -392,10 +392,11 @@ type dispatchLLMPlan struct {
 	// bedrockMITMHosts is this run's per-run MITM host list beyond the built-in
 	// api.anthropic.com/api.openai.com, if any, each as "host:port" (never a
 	// bare host): the Bedrock bearer's runtime host (authorBedrockBearerInjection),
-	// the captured-SSO portal host (authorBedrockSSOInjection), and a Claude
+	// the captured-SSO portal host (authorBedrockSSOInjection), a Claude
 	// subscription provider's route-through host
 	// (authorProviderSubscriptionInjection) — all three are mutually exclusive
-	// per run, so one slice is safe.
+	// per run — and an AWS CLI row's portal host (authorAWSCLI), which refuses a
+	// run on the captured-SSO lane.
 	bedrockMITMHosts []string
 	// azure is the azure_foundry lane's share of the proxy config: its MITM entry (a fourth producer
 	// beside the artifact, Bedrock and Azure DevOps ones), its route gate and its channel host.
@@ -475,7 +476,8 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	mitmForInspect := llmInspectMITMEnabled(policy)
 	var mitmCACertPEM, mitmCAKeyPEM string
 	if subscription || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject ||
-		slices.ContainsFunc(llms, llmTransport.azureInject) || p.PATAPI || len(p.Components.MITMHosts) > 0 {
+		slices.ContainsFunc(llms, llmTransport.azureInject) || p.PATAPI || len(p.Components.MITMHosts) > 0 ||
+		p.Components.GitHubAPI != nil || p.Components.AWSCLI != nil {
 		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
 			return dispatchLLMPlan{}, false
 		}
@@ -495,6 +497,13 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		mitmCACertPEM, mitmCAKeyPEM, policy, injections); !ok {
 		return dispatchLLMPlan{}, false
 	}
+	// The AWS CLI row's grant and portal entry, after the Bedrock lanes it
+	// refuses to share a sandbox profile with. Same stop-on-failure contract.
+	var cliMITMHosts []string
+	if injections, cliMITMHosts, ok = s.authorAWSCLI(ctx, run, p.Components.AWSCLI, policy, sandboxEnv, injections); !ok {
+		return dispatchLLMPlan{}, false
+	}
+	bedrockMITMHosts = append(bedrockMITMHosts, cliMITMHosts...)
 
 	// Artifact-redirect token injections (authored in planArtifactRedirect, whose
 	// egress substitution already added each corp host to policy.AllowedDomains, so

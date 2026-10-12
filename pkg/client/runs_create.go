@@ -5,6 +5,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -59,6 +60,14 @@ type CreateRunRequest struct {
 	// (mounts pass the same deny-list; api_key grants must reference an existing
 	// secret) and attaches it with no stored policy id.
 	InlinePolicy *RunPolicySpec `json:"inline_policy,omitempty"`
+	// PolicyOverlay lays the policy keys it names onto the caller's default
+	// policy (their governance ceiling, or the deployment default); a key it
+	// leaves out keeps the default's value. A non-empty JSON object of
+	// RunPolicySpec keys, never beside PolicyID or InlinePolicy (400
+	// policy_overlay_conflict). The keys it names are bounded by the caller's
+	// ceiling like an inline policy; the rest stay as the default has them. In a
+	// run document it is written under intent.inline_policy.
+	PolicyOverlay json.RawMessage `json:"policy_overlay,omitempty"`
 	// DevcontainerRepo, when set AND an image builder is wired (WARDYN_ENVBUILD),
 	// triggers a devcontainer build of that git repo whose resulting image becomes
 	// the sandbox image. Ignored (degrades to the convention image) when no builder
@@ -180,6 +189,12 @@ type CreateRunRequest struct {
 	// (OD-1), applied inside the resolve fold before the ceiling clamp. See
 	// RunOverrides.
 	Overrides *RunOverrides `json:"overrides,omitempty"`
+	// MaxWaitSec is how long this run may wait for a slot when its runner pool is at its
+	// concurrent-run limit, in seconds (1 to 604800; more is cut to 7 days with a warning). Absent
+	// is 24 hours for a Background run and 1 hour for an Interactive one. At the end of the wait
+	// the run is FAILED with the reason queue_timeout. Ignored by a pool with no limit. A pointer, so
+	// a 0 is sent and refused rather than read as absent.
+	MaxWaitSec *int `json:"max_wait_sec,omitempty"`
 	// ModeContract marks a request as a 0.9 client's, whatever else it carries:
 	// it is RunModeContractV09 and nothing else. The server then holds the
 	// request to the run-mode contract, so an unset Experience is refused
@@ -410,6 +425,8 @@ type PreflightResult struct {
 	// ResourcesApplied is the CPU and memory it asked for and would get.
 	Limits           *EffectiveRunLimits `json:"limits,omitempty"`
 	ResourcesApplied *AppliedResources   `json:"resources_applied,omitempty"`
+	// MainDrive is the main-drive size it asked for and would get, with its basis.
+	MainDrive *MainDriveApplied `json:"main_drive,omitempty"`
 	// LocalPlacement says per host, workspace source and component whether the
 	// person's runner can honour it. Empty until the placement lane fills it.
 	LocalPlacement []LocalPlacementFact `json:"local_placement"`
@@ -424,6 +441,12 @@ type PreflightResult struct {
 	// lane fills it. Neither is admission: a launch re-checks both.
 	RunnerPool  *ResolvedRunnerPool `json:"runner_pool,omitempty"`
 	RunnerPools []RunnerPoolChoice  `json:"runner_pools"`
+	// BarrierOptions are the resolved pool's three barriers under this draft's
+	// floors (policy_floor and access_floor appear only here); empty when unpooled.
+	BarrierOptions []BarrierOption `json:"barrier_options"`
+	// RunnerPoolSlots is the resolved pool's slot counts, with the run's max_wait_sec; absent when
+	// unpooled. Advisory: the launch decides.
+	RunnerPoolSlots *PoolSlots `json:"runner_pool_slots,omitempty"`
 	// Access is what the run brings in: its rows, hosts, credentials, the line
 	// for an unlisted host and the setup still needed. The policy preview
 	// answers the same block for the same request.

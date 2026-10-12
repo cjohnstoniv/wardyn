@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -30,6 +31,8 @@ type grantWiring struct {
 	// grant id, from each github_token grant's scope.repos. Delivered proxy-side
 	// only (never the sandbox) so the /wardyn/gh/ route serves exactly these repos.
 	gitGrants map[string]uuid.UUID
+	// githubAPI is the GitHub CLI door's grant (persistGitHubCLIGrants); nil without one.
+	githubAPI *proxy.GitHubAPIGrant
 	// injections are the proxy injection configs for auto-mintable api_key
 	// grants: the proxy resolves their secret VALUES at startup via the internal
 	// injection endpoint (values live only in proxy memory, never in the sandbox).
@@ -74,9 +77,10 @@ type grantDeliveryRecord struct {
 // writeServerError, so the driver text behind it reaches the LOG and not the
 // member who called POST /runs. That chokepoint is why the request is a
 // parameter beside the writer: it is what names the method and path in the log
-// line an operator is already reading.
+// line an operator is already reading. delivery is the credential delivery
+// policy a local run's plan was judged on; a remote run never reads it.
 // Extracted verbatim from handleCreateRun.
-func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, runID uuid.UUID, now time.Time, spec types.RunPolicySpec, runPlacement types.Placement) (grantWiring, bool) {
+func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, runID uuid.UUID, now time.Time, spec types.RunPolicySpec, runPlacement types.Placement, delivery placement.DeliveryPolicy) (grantWiring, bool) {
 	if !remotePlacement(runPlacement) && runPlacement != types.PlacementLocal {
 		writeErrorReason(w, placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable), "unclassified stored run placement")
 		return grantWiring{}, false
@@ -84,7 +88,7 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 	var deliveries []localGrantDelivery
 	if runPlacement == types.PlacementLocal {
 		var refusal *runRefusal
-		spec, deliveries, refusal = s.ownLocalGrantSpecs(r, spec)
+		spec, deliveries, refusal = s.ownLocalGrantSpecs(r, spec, delivery)
 		if refusal.write(s, w, r) {
 			return grantWiring{}, false
 		}

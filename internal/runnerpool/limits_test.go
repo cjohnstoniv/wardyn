@@ -380,7 +380,7 @@ func TestAtCapacity(t *testing.T) {
 		if (w != nil) != waits {
 			t.Errorf("%d running against a cap of 3: %+v", running, w)
 		}
-		if w != nil && (w.Reason() != WaitAtCapacity || w.Sentence() != "App servers is running its limit of 3. This run starts when one finishes.") {
+		if w != nil && (w.Reason() != WaitAtCapacity || w.Sentence() != "App servers is running its limit of 3. This run starts when there's room.") {
 			t.Errorf("wait = %+v", w)
 		}
 	}

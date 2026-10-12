@@ -78,7 +78,10 @@ func (s *Server) handleGetModelProviders(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.Header().Set("ETag", computeETag(block))
-	writeJSON(w, http.StatusOK, types.ModelProvidersRead{ModelProviders: block, ConnectedPeople: connected})
+	writeJSON(w, http.StatusOK, types.ModelProvidersRead{
+		ModelProviders: block, ConnectedPeople: connected,
+		EntraLoginConfigured: s.providerWriteEnv(nil).EntraLoginConfigured, KindsAvailable: kindsAvailable(),
+	})
 }
 
 // handlePutModelProviders replaces the WHOLE block; {} is the clear form.
@@ -109,7 +112,7 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 	}
 	warnings, err := validateModelProviders(block, s.providerWriteEnv(internalHosts))
 	if err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid model providers: "+err.Error())
+		writeErrorReasonField(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid model providers: "+err.Error(), refusalField(err))
 		return
 	}
 	imageOK := s.claudeSignInImageOK(ctx, block)

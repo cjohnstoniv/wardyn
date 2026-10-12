@@ -116,7 +116,50 @@
       "allow_all": false,
       "decider": "you"
     },
-    "harnesses": [],
+    "harnesses": [
+      {
+        "harness": "claude-code",
+        "lane": "ungated",
+        "enforcer": "none",
+        "default": {
+          "effective": "allow",
+          "source": {
+            "kind": "harness"
+          },
+          "options": [
+            {
+              "effect": "allow",
+              "available": true
+            },
+            {
+              "effect": "hold",
+              "available": true
+            },
+            {
+              "effect": "deny",
+              "available": true
+            }
+          ]
+        },
+        "policy_rules": [],
+        "rule_effects": [
+          {
+            "effect": "allow",
+            "available": true
+          },
+          {
+            "effect": "hold",
+            "available": true
+          },
+          {
+            "effect": "deny",
+            "available": true
+          }
+        ],
+        "rule_tools": "any",
+        "mcp_servers": []
+      }
+    ],
     "setup": [
       {
         "kind": "llm_access",

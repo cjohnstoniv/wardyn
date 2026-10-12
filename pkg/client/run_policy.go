@@ -69,7 +69,7 @@ type RunOverridesDiff struct {
 }
 
 // RunPolicyChange is one group of entries changed at launch for one Cause:
-// workspace, source_control, mirror, model_access, git_broker, profile,
+// workspace, source_control, mirror, model_access, git_broker, overlay, profile,
 // org_disk, restart, limits or launch. Field is a RunPolicySpec json name.
 // Entries are keys that never name a hidden value: a grant is "kind:host" or
 // "kind:repo,repo", a mount its target, a repo "repo@ref", an app its name.

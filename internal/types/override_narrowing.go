@@ -61,6 +61,10 @@ const (
 	OverrideClamped OverrideRule = "ceiling_clamped"
 	// OverrideRefused: never, from a run request.
 	OverrideRefused OverrideRule = "refused"
+	// OverrideWithinPolicy: allowed when no looser than the policy for that
+	// entry, refused otherwise. The check needs the resolved policy, so the
+	// server answers it after the policy fold, not from this row alone.
+	OverrideWithinPolicy OverrideRule = "within_policy"
 )
 
 // OverrideNarrowing is one row of the narrowing table.
@@ -78,7 +82,8 @@ type OverrideNarrowing struct {
 // from this table by TestOverrideNarrowingGolden; a parity test pins both).
 //
 // Tightening is always allowed. Widening is either clamped (a host or a secret
-// the person adds is still bounded by their ceiling) or refused (anything the
+// the person adds is still bounded by their ceiling), within the policy (a tool
+// allow stands only where the policy already allows that tool) or refused (anything the
 // source did not grant, and anything a rule removal would give back). Push and
 // branch rules are monotone: a person may add a deny or a review path, never
 // remove one (OD-1).
@@ -89,7 +94,7 @@ var overrideNarrowing = []OverrideNarrowing{
 	{OverrideAgentSecret, OverrideAdd, OverrideWiden, OverrideClamped},
 	{OverrideAgentSecret, OverrideRemove, OverrideTighten, OverrideAllowed},
 	{OverrideToolRuleRestrict, OverrideAdd, OverrideTighten, OverrideAllowed},
-	{OverrideToolRuleAllow, OverrideAdd, OverrideWiden, OverrideRefused},
+	{OverrideToolRuleAllow, OverrideAdd, OverrideWiden, OverrideWithinPolicy},
 	{OverrideADOCapability, OverrideNarrow, OverrideTighten, OverrideAllowed},
 	{OverrideADOCapability, OverrideAdd, OverrideWiden, OverrideRefused},
 	{OverrideGitPATScope, OverrideNarrow, OverrideTighten, OverrideAllowed},

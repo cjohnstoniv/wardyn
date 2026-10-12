@@ -6,6 +6,7 @@ package remote_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -58,6 +59,22 @@ func TestNameAndClassesServedFromCaps(t *testing.T) {
 	caps, _ := rig.Sub.Caps()
 	if caps.CPUMillisMax != 4000 || caps.MemoryMiBMax != 8192 || caps.AllowedRoots[0] != "/work" || caps.Version != "test" {
 		t.Fatalf("caps = %+v", caps)
+	}
+}
+
+// A runner's advertised facts carry its own disk word and drive support, and the remote substrate keeps
+// an ended sandbox.
+func TestAdvertisedCarriesDiskWordKeepAndDrives(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	data, err := json.Marshal(runnerwire.Caps{Support: substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC1},
+		EphemeralDiskEnforcement: types.StorageEnforcementEviction, UserDrives: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.Sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+	f, ok := rig.Sub.Advertised()
+	if !ok || f.EphemeralDiskEnforcement != types.StorageEnforcementEviction || !f.KeepsEnded || !f.UserDrives {
+		t.Fatalf("Advertised = %+v, %v", f, ok)
 	}
 }
 

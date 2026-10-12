@@ -297,6 +297,14 @@ func harnessProvidersConflict(choices []harnessChoice) (first, second string, co
 	return "", "", false
 }
 
+// harnessProviderNeedsPrimary: an AWS sign-in's sink and its renewal hold
+// resolve the run's own provider alone (providerSSOScopeAt, reauthScopeForRun),
+// so on any other harness of the set it would launch with no working
+// credential. Create and dispatch both refuse it there.
+func harnessProviderNeedsPrimary(p types.ModelProvider) bool {
+	return p.Kind == types.ModelProviderBedrockSSO
+}
+
 // harnessProviderPairsConflict is the one predicate create and dispatch share
 // for "harness a on provider pa and harness b on provider pb cannot both be
 // credentialed in one sandbox". The proxy injects by destination host and
@@ -321,8 +329,10 @@ func harnessProviderPairsConflict(a string, pa types.ModelProvider, b string, pb
 // providerInjectionHosts is every host the proxy injects p's credential on
 // for harness, whatever the kind: the key or endpoint host, the Azure Foundry
 // endpoint, a Claude subscription's host (and its gateway when it routes
-// through one), and Bedrock's runtime and control hosts. A Bedrock SSO portal host is
-// the signed-in session's region, unknown before dispatch.
+// through one), Bedrock's runtime and control hosts, and an AWS sign-in's
+// portal host. A provider's sign-in is stored only for its own region
+// (storeProviderSignIn), so the portal is known before dispatch; the endpoint
+// override is a test seam this predicate does not see.
 func providerInjectionHosts(p types.ModelProvider, harness string) []string {
 	var hosts []string
 	if lane, ok := providerKeyLaneFor(p, harness); ok {
@@ -339,7 +349,11 @@ func providerInjectionHosts(p types.ModelProvider, harness string) []string {
 			hosts = append(hosts, subscriptionInjectionHost)
 		}
 	case p.Kind.IsBedrock():
-		hosts = append(hosts, strings.ToLower(providerBedrockRuntimeHost(p)), bedrockControlHost(providerBedrockSettings(p).Region))
+		region := providerBedrockSettings(p).Region
+		hosts = append(hosts, strings.ToLower(providerBedrockRuntimeHost(p)), bedrockControlHost(region))
+		if p.Kind == types.ModelProviderBedrockSSO {
+			hosts = append(hosts, ssoPortalHost(region, ""))
+		}
 	}
 	return hosts
 }

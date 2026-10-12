@@ -61,6 +61,9 @@ type createRunLaunch struct {
 	// harnesses is the run's harness set as create authorised it, in tools[]
 	// order, each with the model provider it was granted (the run_harnesses rows).
 	harnesses []types.RunHarness
+	// mainDrive is the main drive the fold decided (stepMainDrive); dispatch writes its size and
+	// treats it as soft unless the run's policy wrote it.
+	mainDrive *mainDriveDecision
 }
 
 // DRAFT (M2 canon pending) — the run's failure_hint when the detached launch
@@ -137,11 +140,12 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			// roots immediately before ContainerCreate (userMountPosture,
 			// workspace_refs.go).
 			UserMounts:       s.userMountPosture(l.wsRefs),
-			Components:       l.comps.dispatch(),
+			Components:       l.comps.dispatchWith(l.gw.githubAPI),
 			PolicyOverridden: l.overridden,
 			PushRuleSets:     l.pushSets,
 			HarnessToolRules: l.harnessRules,
 			Harnesses:        l.harnesses,
+			MainDrive:        l.mainDrive,
 		})
 	}
 }

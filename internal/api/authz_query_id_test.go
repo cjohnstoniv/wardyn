@@ -130,6 +130,7 @@ var queryIDMatrix = map[string]queryIDRoute{
 var queryParamNotAnID = map[string]string{
 	"limit":                     "page window (parseListPage)",
 	"runner_pool_id":            "GET /me/drives: an organisation runner pool the caller's own drive catalogue is checked against; a pool the caller may not use answers exactly as one that does not exist (pool_checked false), and no principal's entity is selected",
+	"run_type":                  "GET /runner-pools: background or interactive, the kind of run the caller's own pool list is judged for; it names no entity",
 	"filter":                    "GET /scim/v2/Users and GET /scim/v2/Groups (SCIM bearer only, never a member): the identity provider's own userName, externalId or emails.value eq filter (displayName or externalId for Groups); the routes admit no human credential at all (classSCIM)",
 	"org":                       "DELETE /me/scm/azure-devops/token: the address of Azure DevOps rows on which the caller's own token is removed (adoOwnPATRowFor, and every row on that address for DELETE); it removes the caller's own token only",
 	"organisation":              "the Azure DevOps organisation an admin-only org check runs against; it must be one the row itself serves (rowServesOrganisation)",

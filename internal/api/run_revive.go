@@ -22,6 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -190,13 +191,18 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// pass that read the run's lost mark before the claim cannot stop the proxy
 	// this revive starts. It is released after the settle, and after the
 	// compensation of a failed one.
-	ctx, unlockRun, err := s.lockRunOp(ctx, run.ID)
-	if err != nil {
-		return reviveResult{}, reviveRefused(http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
+	ctx, unlockRun, rerr := s.lockRevive(ctx, run)
+	if rerr != nil {
+		return reviveResult{}, rerr
 	}
 	defer unlockRun()
+	// One deadline bounds every call the revive makes to a runner while it holds the run's lock, so a
+	// runner that stops answering cannot hold the lock, or a lock connection, past it.
+	runnerDeadline := time.Now().Add(reviveRunnerTimeout)
+	ctx, endRunnerCalls := withRunnerDeadline(ctx, run, runnerDeadline)
+	defer endRunnerCalls()
 
-	c, rerr := s.reviveCeiling(ctx, run)
+	c, rerr := s.reviveCeilingAdmitting(ctx, run, actorType, actor)
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
@@ -240,7 +246,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// the row as read here, so a run read live still had its old proxy running.
 	// It also refreshes the watcher lease, so the watcher sweep does not find
 	// a rebooted agent not yet started and lose the run again.
-	if rerr := s.claimRevive(ctx, reviver, run, rebooted); rerr != nil {
+	if rerr := s.claimRevive(ctx, reviver, run, rebooted, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
 	// From the claim on, the revive finishes or compensates whatever becomes of
@@ -250,6 +256,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// This is also what bounds how long the run's lock is held.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
+	// The runner calls below stay under the revive's one runner deadline; the compensation does not.
+	runnerCtx, endClaimedRunnerCalls := withRunnerDeadline(ctx, run, runnerDeadline)
+	defer endClaimedRunnerCalls()
 	data := map[string]any{
 		"subject":                 run.CreatedBy,
 		"profile_id":              run.GovernanceProfileID,
@@ -262,7 +271,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		"proxy_release":           version.Version,
 	}
 	s.stampLiveRevive(run)
-	if err := rv.ReplaceProxy(ctx, run.SandboxRef, cfgJSON); err != nil {
+	if err := s.replaceRevivedProxy(runnerCtx, rv, run, cfgJSON); err != nil {
 		data["error"] = err.Error()
 		if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
 			// The old proxy was never touched (an image that cannot be pulled, a
@@ -308,7 +317,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		}
 		// Only now, behind the new proxy. A failed start is lost (reboot) again,
 		// which stops the new proxy with the agent.
-		if err := starter.StartSandbox(ctx, run.SandboxRef); err != nil {
+		if err := s.startRevivedAgent(runnerCtx, starter, run); err != nil {
 			data["error"] = "start agent: " + err.Error()
 			return reviveResult{}, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonReviveAgentStartFailedLost,
 				"the run's agent could not be started, so the run is stopped and lost until revived: ", err)
@@ -328,12 +337,19 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 
 // claimRevive is reviveRunProxy's claim (store.RunReviver.MarkRunRevived). A
 // revive that starts the run's stopped agent (startsAgent, reviveNeedsAgentStart)
-// takes a slot under WARDYN_MAX_CONCURRENT_RUNS, under the cap's lock, and at the
-// cap is refused as a create is, the run left kept.
-func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run types.AgentRun, startsAgent bool) *reviveError {
+// takes a slot under its pool's cap and WARDYN_MAX_CONCURRENT_RUNS, pool lock first, then
+// the cap's lock, and at either cap is refused as a create is, the run left kept.
+func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run types.AgentRun, startsAgent bool, actorType types.ActorType, actor string) *reviveError {
 	claimed, err := reviver.MarkRunRevived(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()), s.cfg.MaxConcurrentRuns, startsAgent)
 	if errors.Is(err, store.ErrRunCapReached) {
 		return reviveRefused(http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)
+	}
+	// A revive takes a pool slot only when nobody waits (Q10-A): a waiting run is first in line.
+	var full *store.RunnerPoolFullError
+	if errors.As(err, &full) {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
+			mustJSON(map[string]any{"subject": run.CreatedBy, "reason": string(runnerpool.ReasonFull), "pool_id": run.RunnerPoolID})))
+		return reviveRefused(runnerpool.ReasonFull.Status(), string(runnerpool.ReasonFull), runnerpool.FullMsg(full.Pool, full.Max))
 	}
 	if err != nil {
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, "claim the run for revive: "+err.Error())
@@ -420,6 +436,9 @@ func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver,
 		return nil, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad,
 			"a git_pat grant's scope could not be read, so what it is narrowed to is unknown: "+err.Error())
 	}
+	if rerr := s.reviveMCPBindings(ctx, run, cfg); rerr != nil {
+		return nil, rerr
+	}
 	return cfg, nil
 }
 
@@ -474,7 +493,9 @@ func (s *Server) revivePATNarrowing(ctx context.Context, run types.AgentRun, cfg
 // Every injection the strip would drop goes, audited as run.injection.drop,
 // unless its grant's snapshot names the UID, as it stands now, of a provider
 // the run was launched with for any harness of its set (runHarnessPairs) —
-// the grants the provider arms author. A run left with no model
+// the grants the provider arms author — or an AWS CLI row the run carries,
+// whose portal grant names the AWS SSO sentinel without being a model
+// credential. A run left with no model
 // credential revives without one, as dispatch leaves a run no provider serves:
 // never a fallback to the operator's. A site config or grant list that cannot
 // be read refuses the revive.
@@ -504,18 +525,37 @@ func (s *Server) stripRevivedModelInjections(ctx context.Context, run types.Agen
 			uids = append(uids, p.UID)
 		}
 	}
-	authored := map[uuid.UUID]bool{}
+	cliRows, err := s.runAWSCLIRows(ctx, run.ID)
+	if err != nil {
+		return unreadable("the run's components", err)
+	}
+	authored, cliGrants := map[uuid.UUID]bool{}, map[uuid.UUID]bool{}
 	for _, g := range grants {
 		var sc struct {
-			Snapshot providerGrantSnapshot `json:"snapshot"`
+			Snapshot struct {
+				ProviderUID string `json:"provider_uid"`
+				ComponentID string `json:"component_id"`
+				Mechanism   string `json:"mechanism"`
+			} `json:"snapshot"`
 		}
-		if json.Unmarshal(g.Spec.Scope, &sc) == nil && sc.Snapshot.ProviderUID != "" && slices.Contains(uids, sc.Snapshot.ProviderUID) {
+		if json.Unmarshal(g.Spec.Scope, &sc) != nil {
+			continue
+		}
+		switch {
+		case sc.Snapshot.Mechanism == cliAWSMechanism && cliRows[sc.Snapshot.ComponentID]:
+			cliGrants[g.ID] = true
+		case sc.Snapshot.ProviderUID != "" && slices.Contains(uids, sc.Snapshot.ProviderUID):
 			authored[g.ID] = true
 		}
 	}
 	model := s.modelCredentialInjection(nil, s.modelServingHosts(siteCfg))
 	cfg.Injection = slices.DeleteFunc(cfg.Injection, func(in proxy.InjectionConfig) bool {
-		if authored[in.GrantID] || !model(in.InjectionRule) {
+		// An AWS CLI row's portal grant is that lane's own, not a model
+		// credential: the sentinel on a grant whose snapshot names an AWS CLI row
+		// the run carries. Every resolve re-checks the row, the run and the owner
+		// (cliSSOScopeAt).
+		cli := cliGrants[in.GrantID] && in.SecretName == types.AWSSSOAccessTokenSecret
+		if authored[in.GrantID] || cli || !model(in.InjectionRule) {
 			return false
 		}
 		s.auditDroppedInjection(ctx, run, runner.InjectionGrant{GrantID: in.GrantID, Rule: in.InjectionRule}, "model_credential_not_provider_authored")
@@ -654,30 +694,6 @@ func reviveFrom(run types.AgentRun) string {
 		return "live"
 	}
 	return string(run.LostReason)
-}
-
-// ownerCeiling is the part of the owner's profile a revive re-asserts: its
-// denies, and its name for the audit row.
-type ownerCeiling struct {
-	deny    []string
-	profile string
-}
-
-// reviveCeiling is the OWNER's current ceiling: the profile captured on the
-// run at create, as it stands now. It is not a dispatch lane's ceiling (no
-// principal is resolved; the run row names the profile). No captured profile
-// (an unassigned or super-admin owner) has no profile denies, as at dispatch.
-// A captured profile that no longer exists is refused: its walls cannot be
-// known.
-func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun) (ownerCeiling, *reviveError) {
-	p, ref := s.ownerProfile(ctx, run)
-	switch {
-	case ref != nil:
-		return ownerCeiling{}, reviveRefused(ref.status, ref.reason, ref.msg)
-	case p == nil:
-		return ownerCeiling{}, nil
-	}
-	return ownerCeiling{deny: p.Ceiling.DeniedDomains, profile: p.Name}, nil
 }
 
 // reasserted is what reassertProxyCeiling changed.

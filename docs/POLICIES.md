@@ -1187,7 +1187,7 @@ So an entry a pattern matches is judged one of two ways:
 | `cpu_millis` | `int` | `2000` (2 vCPU) | Milli-CPU cap. |
 | `memory_mib` | `int` | `4096` | Hard memory cap, MiB. |
 | `pids_limit` | `int` | `512` | Max processes/threads — the fork-bomb guard. |
-| `disk_mib` | `int` | (storage-driver default) | Writable-storage cap, MiB, best-effort: `overlay2` needs `xfs` with `pquota` or the daemon refuses the create, `btrfs`/`zfs` enforce it natively, drivers that take no `size` option run UNCAPPED with a warning, and Kubernetes enforces it by eviction. See [`disk_mib`](#disk_mib). |
+| `disk_mib` | `int` | the pool's or server's default, else none | Main-drive size, MiB. A size the policy writes is a requirement: `overlay2` needs `xfs` with `pquota`, `btrfs`/`zfs` enforce it, other drivers run UNCAPPED with a warning, and Kubernetes enforces it by eviction. See [`disk_mib`](#disk_mib). |
 
 ### `disk_mib`
 
@@ -1200,19 +1200,17 @@ So an entry a pattern matches is judged one of two ways:
   - so a run whose policy sets `disk_mib` is **refused by the daemon at create** instead of starting without the cap its policy promised.
   - That is deliberate: a promised cap must not silently evaporate.
 - `btrfs`/`zfs` enforce it natively.
-- On a driver that cannot take a `size` option at all (`vfs`, `fuse-overlayfs`, …) **Docker warns and the run proceeds UNCAPPED** — `applyDiskQuota` returns without setting `StorageOpt`; nothing refuses a run on that branch.
+- On a driver that cannot take a `size` option at all (`vfs`, `fuse-overlayfs`, …) **Docker warns and a soft size proceeds UNCAPPED** — `applyDiskQuota` returns without setting `StorageOpt`. A size the policy writes is refused before then (below).
 - **On Kubernetes the cap is enforced by EVICTION**: `disk_mib` becomes the agent container's `resources.limits[ephemeral-storage]`
   - (with a small fixed 256Mi request rather than the cap — a node short on allocatable ephemeral storage can newly reject the pod),
   - and the kubelet — which measures periodically rather than refusing the write — kills the pod over the limit,
   - so the run fails with `Evicted: Pod ephemeral local storage usage exceeds …`, naming it.
 - That is `eviction`, not a filesystem quota: in-flight work is lost and the agent never sees `ENOSPC`.
-- **An org `storage.ephemeral.default_disk_mib` is treated differently from a policy's own `disk_mib` on that non-xfs overlay2 host**:
-  - a size Wardyn FILLED IN for a run that requested none proceeds UNCAPPED with a warning instead of being refused at create.
-  - An org default reaches laptops by MDM, and refusing there would stop every request-less desktop run in the estate.
-  - While a `disk_mib` an admin wrote on a policy keeps the refusal described above.
-- **Preview parity:** `POST /runs/preflight` and the Review rail show the number the run will actually get —
-  - the org `default_disk_mib` fill and BOTH ceilings (`storage.ephemeral.max_disk_mib`, which binds every caller, and the per-profile `max_ephemeral_disk_mib`, which binds an assigned member), computed by the one expression dispatch applies.
-- Until 0.7.2 the preview applied the per-profile ceiling alone, so under an org storage block a run could start with a smaller, or a newly non-zero, scratch size than Review showed.
-- What the preview still does NOT do is WRITE a filled size onto the policy the run launches with:
-  - the fill happens once at dispatch, which is what keeps a filled size uncapped-with-a-warning rather than refused at create on the non-xfs overlay2 host above.
+- **A size the policy writes differs from a requested or default one on that non-xfs overlay2 host**:
+  - a request's `resources.disk_mib`, or the pool's or server's default, is a soft size: the run proceeds UNCAPPED with a warning.
+  - A `disk_mib` the run's policy writes keeps the refusal described above, and the request may only lower it.
+  - Where the runner reports it cannot cap disk, such a run is refused at Review and create: `main_drive_unenforceable`.
+- **Preview parity:** `POST /runs/preflight` and the Review rail show the number the run will actually get (`main_drive`),
+  - computed by the one expression create and dispatch use: the request, else the policy's size, else the default, cut to the strictest of the pool, both organisation and profile maximums.
+  - A run with a cap and no default gets the cap, as a soft size.
 - The effective number is always on the run's `run.policy.resolve` audit event.

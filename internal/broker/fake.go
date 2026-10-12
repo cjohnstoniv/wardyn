@@ -54,6 +54,17 @@ type FakeGitHubMinter struct {
 	BranchesTruncated bool
 	BranchesErr       error
 	LastListedRepos   []string
+
+	// AppPermissions is the App's own grant InstallationPermissions answers
+	// with; AppPermissionsErr, if set, is returned instead.
+	AppPermissions    map[string]string
+	AppPermissionsErr error
+}
+
+func (f *FakeGitHubMinter) InstallationPermissions(_ context.Context, _ string) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.AppPermissions, f.AppPermissionsErr
 }
 
 func (f *FakeGitHubMinter) ListBranches(_ context.Context, repo string, _ int) ([]string, string, bool, error) {

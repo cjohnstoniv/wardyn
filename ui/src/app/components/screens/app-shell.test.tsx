@@ -657,11 +657,11 @@ describe("SidebarNav — per view (M-2)", () => {
     return { sheet, labels };
   }
 
-  it("an admin's Admin view: the eyebrow, the thirteen items, then Setup and Settings", async () => {
+  it("an admin's Admin view: the eyebrow, the fourteen items, then Setup and Settings", async () => {
     const { sheet, labels } = await open("admin");
     expect(within(sheet).getByText("Admin view", { selector: ".label-eyebrow" })).toBeInTheDocument();
     expect(labels).toEqual([
-      "Runs", "Approvals", "People", "Workspaces", "Policies", "Templates", "Governance", "Permissions", "Credentials", "User types",
+      "Runs", "Approvals", "People", "Runners", "Workspaces", "Policies", "Templates", "Governance", "Permissions", "Credentials", "User types",
       "Secrets", "Audit", "Recordings", "Setup", "Settings",
     ]);
     expect(within(sheet).getByRole("link", { name: /^Runs/ })).toHaveAttribute("href", "/admin/runs");
@@ -669,7 +669,7 @@ describe("SidebarNav — per view (M-2)", () => {
 
   it("a security admin's Admin view: Credentials, User types and Drives join; Secrets, Recordings, Setup and Settings do not", async () => {
     const { labels } = await open("security_admin");
-    expect(labels).toEqual(["Runs", "Approvals", "People", "Workspaces", "Policies", "Templates", "Governance", "Permissions", "Credentials", "User types", "Drives", "Audit"]);
+    expect(labels).toEqual(["Runs", "Approvals", "People", "Runners", "Workspaces", "Policies", "Templates", "Governance", "Permissions", "Credentials", "User types", "Drives", "Audit"]);
   });
 
   it("Templates (0.9): after Runs in the User view, after Policies in the Admin view, both admin tiers", async () => {
@@ -697,6 +697,20 @@ describe("SidebarNav — per view (M-2)", () => {
     cleanup();
     const userView = await open("admin", true);
     expect(within(userView.sheet).queryByRole("link", { name: /^People/ })).toBeNull();
+  });
+
+  it("Runners (0.9): right after People for both admin tiers; not for a member or an admin in the User view", async () => {
+    for (const role of ["admin", "security_admin"] as const) {
+      const { sheet, labels } = await open(role);
+      expect(labels.indexOf("Runners")).toBe(labels.indexOf("People") + 1);
+      expect(within(sheet).getByRole("link", { name: /^Runners/ })).toHaveAttribute("href", "/admin/runners");
+      cleanup();
+    }
+    const member = await open("user");
+    expect(within(member.sheet).queryByRole("link", { name: /^Runners/ })).toBeNull();
+    cleanup();
+    const userView = await open("admin", true);
+    expect(within(userView.sheet).queryByRole("link", { name: /^Runners/ })).toBeNull();
   });
 
   it("a user: no eyebrow, four items, then Getting started and Your account", async () => {

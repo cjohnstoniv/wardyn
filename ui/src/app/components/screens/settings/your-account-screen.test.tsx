@@ -7,7 +7,7 @@
 // part of the unsplit settings-screen.test.tsx until M-5 split the page in
 // two (issue #636's own "Check": "the settings specs split per view").
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -25,6 +25,13 @@ vi.mock("../../../lib/api/ssh-keys", () => ({
   },
 }));
 
+// My runner (0.9) reads /me/runners; the default here is runners off, which is "no card".
+const listMineMock = vi.fn();
+vi.mock("../../../lib/api/runners", () => ({
+  RUNNERS_DISABLED: "runners_disabled",
+  runners: { listMine: (...a: unknown[]) => listMineMock(...a) },
+}));
+
 vi.mock("../../../lib/api/secrets", () => ({
   secrets: { setSecret: vi.fn(), deleteSecret: vi.fn() },
 }));
@@ -35,6 +42,7 @@ vi.mock("./harness-login-pane", () => ({
   HarnessLoginPane: () => <div data-testid="login-pane" />,
 }));
 
+import { HttpError } from "../../../lib/api/core";
 import { YourAccountScreen } from "./your-account-screen";
 import { MODEL_PROVIDERS, baseStatus, providerStatus } from "../../../lib/test-fixtures";
 import { WithDoor } from "../../../../test/door-harness";
@@ -56,6 +64,7 @@ function renderScreen(operator = false) {
 beforeEach(() => {
   getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
   listKeysMock.mockReset().mockResolvedValue([]);
+  listMineMock.mockReset().mockRejectedValue(new HttpError(403, "runners are off", "runners_disabled"));
 });
 
 describe("YourAccountScreen", () => {
@@ -113,6 +122,41 @@ describe("YourAccountScreen", () => {
 // S-2 (#636, approved 2026-09-27): the SSH pane's own strings, rewritten so
 // the non-admin side is never called "member" and its "no admin view of
 // anyone else's" no longer collides with the console's Admin view.
+// 0.9 (M-RN-2): My runner is the fifth card, after My components and before SSH keys, in the User view only,
+// and absent while runners are off.
+describe("YourAccountScreen — My runner", () => {
+  const renderAt = (path: string) =>
+    render(
+      <WithDoor status={baseStatus()} path={path} operator={false}>
+        <YourAccountScreen />
+      </WithDoor>,
+    );
+
+  it("is absent while runners are off", async () => {
+    renderAt("/account");
+    await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
+    await waitFor(() => expect(listMineMock).toHaveBeenCalled());
+    expect(screen.queryByRole("heading", { name: startsWith("My runner") })).toBeNull();
+  });
+
+  it("sits right before Your SSH keys in the User view", async () => {
+    listMineMock.mockReset().mockResolvedValue([]);
+    renderAt("/account");
+    const runner = await screen.findByRole("heading", { name: startsWith("My runner"), level: 3 });
+    const keys = await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
+    expect(runner.compareDocumentPosition(keys) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(runner.closest("section")?.id).toBe("my-runner");
+  });
+
+  it("is not read at all in the Admin view", async () => {
+    listMineMock.mockReset().mockResolvedValue([]);
+    renderAt("/admin/account");
+    await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
+    expect(screen.queryByRole("heading", { name: startsWith("My runner") })).toBeNull();
+    expect(listMineMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("YourAccountScreen — Your SSH keys, the S-2 strings", () => {
   it("carries the rewritten description", async () => {
     renderScreen();

@@ -66,7 +66,7 @@ export const NEW_RUN_SCREENS: Record<NewRunScreenName, Screen> = {
   start: React.lazy(() => import("./start/start-screen").then((m) => ({ default: m.StartScreen }))),
   shape: React.lazy(() => import("./steps/shape/shape-step").then((m) => ({ default: m.ShapeStep }))),
   run: pending("run"),
-  harnesses: pending("harnesses"),
+  harnesses: React.lazy(() => import("./steps/harnesses/harnesses-step").then((m) => ({ default: m.HarnessesStep }))),
   files: pending("files"),
   tools: pending("tools"),
   document: pending("document"),

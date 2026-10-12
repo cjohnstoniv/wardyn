@@ -250,6 +250,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"DELETE /api/v1/runner-pools/{id}":                      {class: classAdmin},
 	"PUT /api/v1/runner-pools/{id}/executors/{executor}":    {class: classAdmin},
 	"DELETE /api/v1/runner-pools/{id}/executors/{executor}": {class: classAdmin},
+	"POST /api/v1/me/runner-pools":                          {class: classMember},
+	"PUT /api/v1/me/runner-pools/{id}":                      {class: classMember},
+	"DELETE /api/v1/me/runner-pools/{id}":                   {class: classMember},
 	"PUT /api/v1/me/runner-pools/{id}/runners/{runner}":     {class: classMember},
 	"DELETE /api/v1/me/runner-pools/{id}/runners/{runner}":  {class: classMember},
 	"GET /api/v1/runner-pools/{id}/use-policy":              {class: classSecurity},
@@ -710,6 +713,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// given provider is provider_signin_test.go's job.
 	"POST /api/v1/model-providers/{id}/sign-in": {class: classMember},
 	"PUT /api/v1/model-providers/{id}/sign-in":  {class: classMember},
+	"POST /api/v1/components/{id}/sign-in":      {class: classMember},
 
 	// The workspace READS stay member-class: an operator-owned workspace — every
 	// pre-0048 row — is readable by any authenticated caller exactly as before.

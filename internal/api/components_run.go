@@ -36,6 +36,10 @@ type runComponents struct {
 	// each of these on its standard TLS port; it is also how the confinement
 	// floor tells a component's credential from any other (confinementFloorSpec).
 	mitmHosts []string
+	// mcpHosts is the bare host of every MCP server's header credential. The
+	// broker sets it, so nothing intercepts; the confinement floor treats it
+	// as it treats mitmHosts.
+	mcpHosts []string
 	// configEnv is the components' plain, non-secret environment. Dispatch
 	// writes it into the sandbox, never over a variable the platform set.
 	configEnv map[string]string
@@ -65,6 +69,9 @@ type attachedComponent struct {
 	// provides — never which: that name is the operator's.
 	needsOwnSecrets  []string
 	needsAdminSecret bool
+	// needsSignIn: the caller has not signed in for this AWS CLI row yet. Set on
+	// the preview alone, like needsOwnSecrets; the other doors refuse it.
+	needsSignIn bool
 	// builtin is set for a built-in Git provider component, which has no
 	// definition and is never written to the run's component snapshot.
 	builtin *builtinGit
@@ -88,6 +95,11 @@ type componentAdmission struct {
 	grants []types.GrantSpec
 	// operatorSecrets is the operator namespace's names, listed at most once.
 	operatorSecrets map[string]bool
+	// awsCLI: an AWS CLI row was admitted already.
+	awsCLI bool
+	// harnesses are the request's included harness ids, which an MCP
+	// component's server may be turned on for.
+	harnesses []string
 }
 
 // componentRefusal is a gate refusal and what its audit row may say about the
@@ -131,7 +143,7 @@ func (s *Server) applyRunComponents(r *http.Request, req createRunRequest, spec 
 	// One capability snapshot and one listing of the caller's own secrets for
 	// the whole list, however many hosts and secrets it names.
 	r = r.WithContext(withOwnedSecretMemo(withCapBatch(r.Context())))
-	comps, refused := s.admitRunComponents(r, req.Components, *spec, ceiling, wsRefs, credentials)
+	comps, refused := s.admitRunComponents(r, req.Components, *spec, ceiling, wsRefs, credentials, mcpIncludedHarnesses(req))
 	if refused != nil {
 		s.auditComponentRefusal(r, *refused)
 		return runComponents{}, refused.refusal
@@ -143,7 +155,7 @@ func (s *Server) applyRunComponents(r *http.Request, req createRunRequest, spec 
 // admitRunComponents decides every component before any is expanded, so a
 // refusal leaves the spec untouched.
 func (s *Server) admitRunComponents(r *http.Request, refs []types.ComponentRef, spec types.RunPolicySpec,
-	ceiling governanceCeiling, wsRefs []types.Workspace, credentials bool,
+	ceiling governanceCeiling, wsRefs []types.Workspace, credentials bool, harnesses []string,
 ) (runComponents, *componentRefusal) {
 	ctx := r.Context()
 	if refused := componentRefsShape(refs); refused != nil {
@@ -156,7 +168,7 @@ func (s *Server) admitRunComponents(r *http.Request, refs []types.ComponentRef, 
 		return runComponents{}, &componentRefusal{ordinal: -1, reason: reasonComponentStoreUnavailable, refusal: runError(
 			http.StatusNotImplemented, reasonComponentStoreUnavailable, "components require the Postgres store backend")}
 	}
-	adm := componentAdmission{caller: runIdentitySubject(ctx, principalFromRequest(r)), resident: residentTargets(spec), credentials: credentials}
+	adm := componentAdmission{caller: runIdentitySubject(ctx, principalFromRequest(r)), resident: residentTargets(spec), credentials: credentials, harnesses: harnesses}
 	var ids []uuid.UUID
 	for _, ref := range refs {
 		if ref.ID != nil {
@@ -268,6 +280,9 @@ func (s *Server) admitComponent(r *http.Request, adm *componentAdmission, i int,
 	if refused := s.componentHostsBounded(r, adm, c, i); refused != nil {
 		return attachedComponent{}, refused
 	}
+	if refused := s.componentCLIAdmitted(r, adm, &c, i); refused != nil {
+		return attachedComponent{}, refused
+	}
 	if si := componentResidentSecret(def); si >= 0 && adm.settings.DenyResidentDelivery {
 		return attachedComponent{}, componentRefused(c, i, reasonComponentResidentDeliveryDenied,
 			fmt.Sprintf("secrets[%d].delivery.mode: your organisation has turned off delivering a secret into the sandbox as a variable or a file; deliver it as a header", si),
@@ -280,6 +295,14 @@ func (s *Server) admitComponent(r *http.Request, adm *componentAdmission, i int,
 	if problem != "" {
 		return attachedComponent{}, componentRefused(c, i, reasonComponentDefinitionInvalid, problem, "has a definition that is not valid here.")
 	}
+	// The harnesses are the person's own choice, so the refusal names them for
+	// an organisation's component too.
+	harnesses, bad := admitMCPHarnesses(def, ref.MCPHarnesses, adm.harnesses)
+	if bad != nil {
+		return attachedComponent{}, &componentRefusal{refusal: runError(bad.status, bad.reason, fmt.Sprintf("components[%d].%s", i, bad.msg)),
+			reason: bad.reason, ordinal: i, source: c.source, id: c.snapshot.ComponentID}
+	}
+	c.snapshot.MCPHarnesses = harnesses
 	return s.componentSharedSecretsPresent(r, adm, c, i)
 }
 
@@ -405,10 +428,13 @@ func (c *runComponents) expand(spec *types.RunPolicySpec) {
 			continue
 		}
 		def := a.snapshot.Definition
-		a.addedHosts = unionAllowedDomains(spec, def.Hosts)
+		a.addedHosts = unionAllowedDomains(spec, rawEgressHosts(def))
 		for _, sec := range def.Secrets {
 			spec.EligibleGrants = append(spec.EligibleGrants, componentGrant(sec))
-			if sec.Delivery.Mode == types.ComponentDeliveryHeader {
+			switch {
+			case def.MCP != nil:
+				c.mcpHosts = append(c.mcpHosts, sec.Delivery.Host)
+			case sec.Delivery.Mode == types.ComponentDeliveryHeader:
 				c.mitmHosts = append(c.mitmHosts, sec.Delivery.Host)
 			}
 		}
@@ -457,13 +483,14 @@ func componentGrant(sec types.ComponentSecret) types.GrantSpec {
 // off by default), so with it off the copy omits those grants. Every other
 // grant, and every other reader of the spec, is untouched.
 func confinementFloorSpec(spec types.RunPolicySpec, comps runComponents) types.RunPolicySpec {
-	if comps.settings.RequireVaultForCredentials || len(comps.mitmHosts) == 0 {
+	hosts := slices.Concat(comps.mitmHosts, comps.mcpHosts)
+	if comps.settings.RequireVaultForCredentials || len(hosts) == 0 {
 		return spec
 	}
 	// One credential per host is the gate's own rule, so the host identifies
 	// the component's grant.
 	spec.EligibleGrants = slices.DeleteFunc(slices.Clone(spec.EligibleGrants), func(g types.GrantSpec) bool {
-		return g.Kind == types.GrantAPIKey && slices.Contains(comps.mitmHosts, apiKeyGrantScopeHost(g.Scope))
+		return g.Kind == types.GrantAPIKey && slices.Contains(hosts, apiKeyGrantScopeHost(g.Scope))
 	})
 	return spec
 }
@@ -552,6 +579,9 @@ func (a attachedComponent) auditEntry(ordinal int) map[string]any {
 	}
 	if !a.snapshot.SelfDefined {
 		e["name"] = a.snapshot.Name
+	}
+	if def.MCP != nil {
+		e["mcp_harnesses"] = slices.Concat([]string{}, a.snapshot.MCPHarnesses)
 	}
 	return e
 }
