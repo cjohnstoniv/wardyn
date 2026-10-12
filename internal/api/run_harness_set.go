@@ -254,6 +254,9 @@ func (s *Server) harnessSetRefusalFor(r *http.Request, req createRunRequest, wsR
 		return nil, nil, nil
 	}
 	set := harnessSet(req)
+	// A run that names its own image is not known to lack a CLI: the installed
+	// gate reads only the images this server declares.
+	custom := customImageRequested(req, wsRefs)
 	for _, h := range set {
 		if refusal := s.runCapabilityRefusal(r, capAgent, h.Harness, "runs.tools",
 			"you are not granted agent "+h.Harness+" — ask an admin to grant it, or remove it from the run"); refusal != nil {
@@ -266,11 +269,10 @@ func (s *Server) harnessSetRefusalFor(r *http.Request, req createRunRequest, wsR
 		if msg != "" {
 			return nil, nil, runError(http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg).forTool(h.Harness)
 		}
-		if !harnessInstalled(h.Harness, s.cfg.AgentImages) {
+		if !custom && !harnessInstalled(h.Harness, s.cfg.AgentImages) {
 			return nil, nil, runError(http.StatusUnprocessableEntity, reasonHarnessNotInstalled, harnessNotInstalledMsg(harnessName(h.Harness))).forTool(h.Harness)
 		}
 	}
-	custom := customImageRequested(req, wsRefs)
 	image, refusal := harnessSetImage(set, s.cfg.AgentImages, custom)
 	if refusal != nil {
 		return nil, nil, refusal
@@ -281,26 +283,39 @@ func (s *Server) harnessSetRefusalFor(r *http.Request, req createRunRequest, wsR
 	return set, &image, nil
 }
 
-// harnessProvidersConflict is the one-lane-per-harness invariant (D5): two
-// harnesses on different model providers must not share an injection host,
-// and a run has at most one Azure Foundry provider. It returns the second
-// harness of the first pair that breaks it.
+// harnessProvidersConflict is the one-lane-per-harness invariant (D5) over a
+// run's choices: the second harness of the first pair that breaks it
+// (harnessProviderPairsConflict).
 func harnessProvidersConflict(choices []harnessChoice) (first, second string, conflict bool) {
 	for j, b := range choices {
 		for _, a := range choices[:j] {
-			pa, pb := a.choice.provider, b.choice.provider
-			if !a.choice.chosen || !b.choice.chosen || pa.ID == pb.ID {
-				continue
-			}
-			bothAzure := pa.Kind == types.ModelProviderAzureFoundry && pb.Kind == types.ModelProviderAzureFoundry
-			if bothAzure || slices.ContainsFunc(providerInjectionHosts(pa, a.harness), func(h string) bool {
-				return slices.Contains(providerInjectionHosts(pb, b.harness), h)
-			}) {
+			if a.choice.chosen && b.choice.chosen && harnessProviderPairsConflict(a.harness, a.choice.provider, b.harness, b.choice.provider) {
 				return a.harness, b.harness, true
 			}
 		}
 	}
 	return "", "", false
+}
+
+// harnessProviderPairsConflict is the one predicate create and dispatch share
+// for "harness a on provider pa and harness b on provider pb cannot both be
+// credentialed in one sandbox". The proxy injects by destination host and
+// cannot tell two harnesses' requests to one host apart, so a host both reach
+// conflicts unless the two would author the same grant: one key provider's
+// key, to one host, sent the same way. A run carries at most one Azure
+// Foundry lane, so a second one always conflicts.
+func harnessProviderPairsConflict(a string, pa types.ModelProvider, b string, pb types.ModelProvider) bool {
+	ka, keyA := providerKeyLaneFor(pa, a)
+	kb, keyB := providerKeyLaneFor(pb, b)
+	if keyA && keyB && pa.ID == pb.ID && pa.UID == pb.UID && hostEqual(ka.host, kb.host) && ka.header == kb.header && ka.format == kb.format {
+		return false
+	}
+	if pa.Kind == types.ModelProviderAzureFoundry && pb.Kind == types.ModelProviderAzureFoundry {
+		return true
+	}
+	return slices.ContainsFunc(providerInjectionHosts(pa, a), func(h string) bool {
+		return slices.ContainsFunc(providerInjectionHosts(pb, b), func(x string) bool { return hostEqual(x, h) })
+	})
 }
 
 // providerInjectionHosts is where the proxy injects p's credential for harness.

@@ -430,8 +430,9 @@ func TestHarnessProviders_Conflict(t *testing.T) {
 	if _, b, conflict := harnessProvidersConflict([]harnessChoice{azure("az-1", "claude-code"), azure("az-2", "codex-cli")}); !conflict || b != "codex-cli" {
 		t.Errorf("two Azure Foundry providers: conflict=%v %q, want codex-cli refused", conflict, b)
 	}
-	if _, _, conflict := harnessProvidersConflict([]harnessChoice{azure("az-1", "claude-code"), azure("az-1", "codex-cli")}); conflict {
-		t.Error("one Azure Foundry provider shared by both was refused")
+	// A run carries one Azure Foundry lane, so even one provider can't serve two harnesses' lanes.
+	if _, _, conflict := harnessProvidersConflict([]harnessChoice{azure("az-1", "claude-code"), azure("az-1", "codex-cli")}); !conflict {
+		t.Error("one Azure Foundry provider on two harnesses was admitted")
 	}
 }
 
@@ -604,5 +605,66 @@ func TestSetupStatus_HarnessFacts(t *testing.T) {
 	}
 	if sets := visibleHarnessSets(nil, tools); sets == nil || len(sets) != 0 {
 		t.Errorf("no declared set: %v, want [] (never null)", sets)
+	}
+}
+
+// TestHarnessProviderPairsConflict (fix-r1 M2): the one predicate create and
+// dispatch share. A host both harnesses reach conflicts unless they would
+// author the same grant; a second Azure Foundry lane always does.
+func TestHarnessProviderPairsConflict(t *testing.T) {
+	endpoint := func(id string, harnesses ...types.ProviderHarness) types.ModelProvider {
+		return types.ModelProvider{ID: id, Kind: types.ModelProviderCustomEndpoint, BaseURL: "https://gw.example.com", Harnesses: harnesses}
+	}
+	claude, codex := types.ProviderHarness{Harness: "claude-code"}, types.ProviderHarness{Harness: "codex-cli"}
+	codexBearer := types.ProviderHarness{Harness: "codex-cli", AuthHeader: "x-codex-key", AuthFormat: "%s"}
+	azure := func(id string) types.ModelProvider {
+		return types.ModelProvider{ID: id, Kind: types.ModelProviderAzureFoundry, Harnesses: []types.ProviderHarness{claude, codex}}
+	}
+	for _, tc := range []struct {
+		name     string
+		pa, pb   types.ModelProvider
+		conflict bool
+	}{
+		{"one endpoint, one grant: the same key sent the same way", endpoint("gw", claude, codex), endpoint("gw", claude, codex), false},
+		{"one endpoint whose header differs per harness", endpoint("gw", claude, codexBearer), endpoint("gw", claude, codexBearer), true},
+		{"two providers on one host", endpoint("gw-a", claude), endpoint("gw-b", codex), true},
+		{"two providers on different hosts", endpoint("gw-a", claude), func() types.ModelProvider {
+			p := endpoint("gw-b", codex)
+			p.BaseURL = "https://other.example.com"
+			return p
+		}(), false},
+		{"a second Azure Foundry provider", azure("az-1"), azure("az-2"), true},
+	} {
+		if got := harnessProviderPairsConflict("claude-code", tc.pa, "codex-cli", tc.pb); got != tc.conflict {
+			t.Errorf("%s: conflict = %v, want %v", tc.name, got, tc.conflict)
+		}
+	}
+}
+
+// TestHarnessSet_CustomImageSkipsTheInstalledGate (fix-r1 L1): a run that
+// names its own image is not known to lack the CLI.
+func TestHarnessSet_CustomImageSkipsTheInstalledGate(t *testing.T) {
+	srv, r := memberWith(t, &capStore{}, installShAgentImages)
+	req := twoHarnessRequest("claude-code", client.IncludedTool{ID: "claude-code", Kind: client.IncludedToolHarness})
+	if _, _, refusal := srv.harnessSetRefusalFor(r, req, nil); refusal == nil || refusal.body.Reason != reasonHarnessNotInstalled {
+		t.Fatalf("no image of its own: %+v, want harness_not_installed", refusal)
+	}
+	req.Image = "ghcr.io/acme/claude:1"
+	set, image, refusal := srv.harnessSetRefusalFor(r, req, nil)
+	if refusal != nil || len(set) != 1 || image != nil {
+		t.Fatalf("its own image: set %+v image %+v refusal %+v, want admitted with no image fact", set, image, refusal)
+	}
+}
+
+// TestHarnessSetKeyIsNotAnAgent (fix-r1 L3): a set key named as an older
+// client's agent is refused at every door, roster or not.
+func TestHarnessSetKeyIsNotAnAgent(t *testing.T) {
+	images := map[string]string{"claude-code": "wardyn/agent-claude-code:local", "claude-code+codex-cli": setImage}
+	for _, door := range harnessDoors {
+		srv, _, _ := harnessSetFixture(t, &capStore{}, images, nil)
+		w := doSSO(t, srv, http.MethodPost, door, govSession(t, "sub-plain", []string{"eng"}, false), `{"agent":"claude-code+codex-cli","task":"t"}`)
+		if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonAgentNotEnabled {
+			t.Errorf("%s = %d %s, want 422 agent_not_enabled", door, w.Code, w.Body.String())
+		}
 	}
 }
