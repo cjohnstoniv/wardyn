@@ -34,6 +34,14 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 
 - A `server` row names the Go reason that owns the sentence. The console shows the server's sentence, so no constant exists for it.
 - Step lanes import these constants and never add strings. A missing string goes to the lead.
+- `REF_NOT_CHECKED` (W-14), `SHARED_DISCLOSURE` (W-25) and `MCP_ASKS` (W-44) are lane-composed: Part B gives no recommended text for them, so they need owner wording.
+
+### Display rules
+
+Some constants show only under a condition. A step lane applies the rule; `new-run-copy.test.ts` checks that each constant named here exists.
+
+- `NR_TOOLS.PROVIDER_PROXY` shows only when the provider credential's delivery is `proxy`: key, token and subscription kinds. A provider whose delivery is `sandbox_short_lived` (Bedrock SSO, whose role credentials sit in the sandbox) shows `NR_TOOLS.DELIVERY_SHORT_LIVED` and `NR_TOOLS.DELIVERY_AWS` instead.
+- `NR_TOOLS.EFFECT_ALLOW` is both the default option and a rule effect ("Run it" stays, per the tool-rule ruling): offered when the policy allows it, otherwise disabled with the server's reason.
 
 ## 4. Never shown
 
@@ -43,7 +51,7 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | "NFS", "Project", and any `/mnt/...` path | No server concept stands behind them. |
 | A "(team)" suffix on a model provider | Providers show their record names. |
 | "Platform team" as an approver | No team routing exists. An approval sentence says "An admin decides each new host." |
-| A "Run it" tool rule, and "Custom harness" as a literal row | A tool rule is Ask first or Block it only. The harness roster comes from the server. |
+| "Custom harness" as a literal row | The harness roster comes from the server. |
 | The mock's interactive "kept until its 72-hour maximum lifetime" line and "the main drive is kept until its lifetime ends" | False for runners that keep a drive for a grace period only. |
 
 ## 7. Frozen strings
@@ -216,8 +224,8 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | `BARRIER_UNKNOWN` | pending (W-03) | Not known right now. Check again in a moment. |
 | `BARRIER_NO_TERMINAL` | pending (W-07) | This pool's runners can't open a terminal at Vault. |
 | `POLICY_NOTE` | mock | Whatever the barrier, every run still gets Wardyn's egress filtering, short-lived brokered credentials, human approvals, and full audit — those are set by policy, not the barrier. The barrier only decides how strongly the sandbox is walled off from your machine. |
-| `NO_ONLINE_RUNNER` | server | reason from NoOnlineRunnerMsg: "None of your runners in {pool} is online." |
-| `WAIT_AT_CAPACITY` | server | reason from WaitAtCapacityMsg: "{pool} is running its limit of {n}. Your run will wait for a slot (up to {wait})." |
+| `NO_ONLINE_RUNNER` | server | reason runner_offline (Go owns the sentence) |
+| `WAIT_AT_CAPACITY` | server | wait reason at_capacity, runnerpool WaitAtCapacityMsg (Go owns the sentence) |
 
 ### 7.4 Harnesses
 
@@ -438,7 +446,7 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | `RULE_ADDED` | mock | Rule added. |
 | `RULE_ERR_TOOL` | mock | Enter a tool name. |
 | `RULE_ERR_DUPLICATE` | mock | That tool already has a rule. |
-| `RULE_CODEX_BUILTIN` | server | reason harness_no_block_builtin: "{tool} is one of Codex CLI's own tools, and Wardyn can't block those. Only its MCP tools can be blocked." |
+| `RULE_CODEX_BUILTIN` | server | reason harness_no_block_builtin (Go and its golden own the sentence) |
 | `SECRET_CARD_TITLE` | mock | Add a secret |
 | `SECRET_CARD_BODY` | mock | Give the run one of your saved secrets as an environment variable, a file, or a header the proxy adds. |
 | `SECRET_CARD_BUTTON` | mock | Add secret |
@@ -452,10 +460,10 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | `COMPONENT_ADDED` | mock | Added to this run. |
 | `COMPONENT_ADDED_NAMED(name)` | mock | {name} added to this run. |
 | `COMPONENT_REMOVED` | mock | Removed. |
-| `CATALOGUE_NOT_AVAILABLE` | server | reason component_unavailable: "This component isn't available to you. Ask your admin." |
-| `CATALOGUE_BLOCKED_HOST` | server | reason componentRefused: "Reaches a host that is blocked for you." |
-| `CLI_NOT_GRANTED` | server | reason cli_not_granted: "Not turned on for you. Ask your admin." |
-| `CLI_NO_REPO` | server | reason cli_no_github_repo: "GitHub CLI works only with this run's GitHub repositories. Add one on the Files step." |
+| `CATALOGUE_NOT_AVAILABLE` | server | reason component_unavailable (Go owns the sentence) |
+| `CATALOGUE_BLOCKED_HOST` | server | reason componentRefused (Go owns the sentence) |
+| `CLI_NOT_GRANTED` | server | reason cli_not_granted (Go owns the sentence) |
+| `CLI_NO_REPO` | server | reason cli_no_github_repo (Go owns the sentence) |
 | `ADD_TO_RUN` | mock | Add to run |
 | `SECRET_INTRO` | pending (W-39) | Choose one of your saved secrets and how the run receives it. Prefer a request header: no copy is placed in the sandbox. |
 | `SECRET_LABEL` | mock | Secret |
@@ -527,6 +535,7 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | `DELIVERY_GIT_HELPER` | pending (W-33) | Given to git when it asks |
 | `DELIVERY_AZURE` | pending (W-33) | Proxy only · renewed every hour or so |
 | `DELIVERY_GITHUB` | pending (W-33) | Proxy only · acts as your organisation's Wardyn GitHub App, limited to this run's repositories |
+| `DELIVERY_AWS(session)` | pending (W-33) | Your AWS role credentials are issued into the sandbox for up to {session} at a time. Wardyn renews them while the run lives and stops when it ends; ones already issued stay valid at AWS until they expire. |
 | `SETUP_TITLE` | mock | Setup still needed |
 | `SETUP_BODY` | mock | Finish these here, or review now and they appear as blockers before launch. |
 | `SETUP_ALL_SET` | mock | Nothing else to set up. |
@@ -571,9 +580,9 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | `ANNOUNCE_VALID` | mock | Document valid. |
 | `JSON_INVALID` | mock | This JSON document isn't valid. Check the highlighted structure. |
 | `YAML_INVALID` | pending (W-19) | This YAML document isn't valid. Check the highlighted structure. |
-| `ERR_TITLE_EXCLUDED` | server | reason template_field_excluded, mapped by run-document-canon: "Templates and imports do not carry a run title or description. Remove them; you name the run when you launch it." |
-| `ERR_END_CONFLICT` | server | reason run_end_conflicting_fields, mapped by run-document-canon: "ends_after_sec and no_end cannot be used together." |
-| `ERR_VERSION` | server | reason template_version_unsupported, mapped by run-document-canon: "api_version must be wardyn/v1." |
+| `ERR_TITLE_EXCLUDED` | server | reason template_field_excluded, mapped by run-document-canon (it owns the sentence) |
+| `ERR_END_CONFLICT` | server | reason run_end_conflicting_fields, mapped by run-document-canon (it owns the sentence) |
+| `ERR_VERSION` | server | reason template_version_unsupported, mapped by run-document-canon (it owns the sentence) |
 
 ### 7.8 Review
 
@@ -687,8 +696,8 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | `SAVE_TEMPLATE` | mock | Save as template |
 | `SAVE_POLICY` | mock | Save as policy |
 | `LAUNCH_RUN` | mock | Launch run |
-| `POOL_FULL` | server | reason WaitAtCapacityMsg, shown as the pool-full notice |
-| `OFFLINE_BLOCKER` | server | reason NoOnlineRunnerMsg, shown as a blocker |
+| `POOL_FULL` | server | wait reason at_capacity, runnerpool WaitAtCapacityMsg (Go owns the sentence) |
+| `OFFLINE_BLOCKER` | server | reason runner_offline (Go owns the sentence) |
 
 ### 7.9 Save as
 
@@ -718,9 +727,9 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | `CONFIRM_TEMPLATE` | mock | Save template |
 | `CONFIRM_POLICY` | mock | Save policy |
 | `SAVED(kind)` | mock | {kind} saved without changing the draft. |
-| `NAME_TAKEN` | server | reason template_name_taken: "Another template available to the same people already uses this name." |
-| `LIMIT_REACHED` | server | reason template_limit_reached: "This scope already holds {n} templates, the most it can. Delete one first." |
-| `POLICY_FIELD_REFUSED` | server | reason template_policy_field_refused: "{path} is not a network, credential or access rule. A policy holds only those; save a template instead." |
+| `NAME_TAKEN` | server | reason template_name_taken (Go owns the sentence) |
+| `LIMIT_REACHED` | server | reason template_limit_reached (Go owns the sentence) |
+| `POLICY_FIELD_REFUSED` | server | reason template_policy_field_refused (Go owns the sentence) |
 
 ### 7.10 Name and launch
 
@@ -819,7 +828,7 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | `DELETE_CONFIRM` | mock | Delete template |
 | `DELETED(name)` | mock | {name} deleted. |
 | `CANCEL` | mock | Cancel |
-| `NAME_TAKEN` | server | reason template_name_taken: "Another template available to the same people already uses this name." |
+| `NAME_TAKEN` | server | reason template_name_taken (Go owns the sentence) |
 
 ### 7.13 Shared
 

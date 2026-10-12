@@ -234,6 +234,9 @@ export const NR_TOOLS = {
   /** pending W-33: the recommended text until the owner answers. */
   DELIVERY_GITHUB:
     "Proxy only · acts as your organisation's Wardyn GitHub App, limited to this run's repositories",
+  /** pending W-33: the recommended text until the owner answers. */
+  DELIVERY_AWS: (session: string | number) =>
+    `Your AWS role credentials are issued into the sandbox for up to ${session} at a time. Wardyn renews them while the run lives and stops when it ends; ones already issued stay valid at AWS until they expire.`,
   SETUP_TITLE: "Setup still needed",
   SETUP_BODY: "Finish these here, or review now and they appear as blockers before launch.",
   SETUP_ALL_SET: "Nothing else to set up.",
