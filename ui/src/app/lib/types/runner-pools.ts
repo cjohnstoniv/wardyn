@@ -199,7 +199,8 @@ export interface BarrierOption {
   class: ConfinementClass;
   available: boolean;
   default?: boolean;
-  default_source?: "server";
+  /** "organisation" arrives with the organisation default barrier; Review already reads it. */
+  default_source?: "server" | "organisation";
   reason_code?: BarrierReason;
   reason_detail?: "kvm_missing";
   floor?: ConfinementClass;
