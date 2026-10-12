@@ -172,7 +172,7 @@ func (s *Server) driveUnavailableHere(ctx context.Context, d reachableDrive, poo
 // for per-executor pool facts; until then the deployment-wide runner
 // capability decides it, as unmountable.
 func driveNotInPool(pool types.RunnerPool) bool {
-	return pool.HostingType == types.RunnerPoolSelfHosted
+	return pool.Scope == types.RunnerPoolUser
 }
 
 // catalogueDrivePool resolves runner_pool_id to a pool the caller may use, or

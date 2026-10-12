@@ -16,16 +16,17 @@ import (
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// runner_pool_manage.go — create, show, change and delete a pool. A Self-Hosted pool is your own:
-// `create` makes one, and `update` and `delete` reach it through your own routes. A Remote Provided
-// pool is the organisation's: `create --remote`, and `update` or `delete` on one, need an admin.
+// runner_pool_manage.go — create, show, change and delete a pool. A user pool is your own: `create`
+// makes one, and `update` and `delete` reach it through your own routes. An organization pool is the
+// organisation's: `create --org`, and `update` or `delete` on one, need an admin.
 //
 //	wardyn runner pool create --name Laptop [--limits-file limits.json]
 //	wardyn runner pool show <pool-id>
 //	wardyn runner pool update <pool-id> --switch off
 //	wardyn runner pool delete <pool-id> --yes
-//	wardyn runner pool add <pool-id> <runner-id>      # one of your claimed runners, into one of your pools
-//	wardyn runner pool remove <pool-id> <runner-id>
+//	wardyn runner pool add <pool-id> <runner-id>      # one of your self-hosted runners, into one of your user pools
+//	wardyn runner pool add <pool-id> --remote <id>    # a remote-hosted runner (see `wardyn runner remote list`)
+//	wardyn runner pool remove <pool-id> <runner-id> | --remote <id>
 //
 // --limits-file is the wire `limits` block as JSON (what `show --json` prints), "-" for stdin. An
 // update that names it replaces the pool's limits whole.
@@ -35,14 +36,23 @@ func runnerPoolManageCmds(client clientFn) []*cobra.Command {
 		runnerPoolMemberCmd(client, true), runnerPoolMemberCmd(client, false)}
 }
 
-// runnerPoolMemberCmd is `add` (add true) or `remove`: one of your own runners into or out of one of your
-// own Self-Hosted pools. Whether the runner may join is the server's to say; its sentence is printed.
+// runnerPoolMemberCmd is `add` (add true) or `remove`. A self-hosted runner goes only into one of your
+// own user pools. A remote-hosted runner (--remote) goes into an organization pool (admin) or into one
+// of your own user pools when it is available to people's pools. Whether it may join is the server's to
+// say; its sentence is printed.
 func runnerPoolMemberCmd(client clientFn, add bool) *cobra.Command {
-	use, short := "add <pool-id> <runner-id>", "Put one of your claimed runners in one of your Self-Hosted pools"
+	use, short := "add <pool-id> <runner-id> | add <pool-id> --remote <id>", "Put a runner in a pool: your self-hosted runner in your user pool, or a remote-hosted runner"
 	if !add {
-		use, short = "remove <pool-id> <runner-id>", "Take one of your runners out of one of your Self-Hosted pools"
+		use, short = "remove <pool-id> <runner-id> | remove <pool-id> --remote <id>", "Take a runner out of a pool"
 	}
-	return &cobra.Command{Use: use, Short: short, Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+	var remote string
+	cmd := &cobra.Command{Use: use, Short: short, Args: cobra.RangeArgs(1, 2), RunE: func(cmd *cobra.Command, args []string) error {
+		if (remote == "") != (len(args) == 2) {
+			return fmt.Errorf("name a pool and either a self-hosted runner id or --remote <id>")
+		}
+		if remote != "" {
+			return runnerPoolRemoteMember(cmd, client, args[0], remote, add)
+		}
 		pool, err := uuid.Parse(args[0])
 		if err != nil {
 			return fmt.Errorf("parse pool id %q: %w", args[0], err)
@@ -64,20 +74,51 @@ func runnerPoolMemberCmd(client clientFn, add bool) *cobra.Command {
 		_, err = fmt.Fprintf(cmd.OutOrStdout(), "runner %s is in pool %s\n", runnerID, pool)
 		return err
 	}}
+	cmd.Flags().StringVar(&remote, "remote", "", "a remote-hosted runner's id instead of a self-hosted runner")
+	return cmd
+}
+
+// runnerPoolRemoteMember adds or removes a remote-hosted runner, through the organisation's routes for
+// an organization pool and through your own for one of your user pools.
+func runnerPoolRemoteMember(cmd *cobra.Command, client clientFn, poolArg, rid string, add bool) error {
+	cur, err := readPoolArg(cmd, client, poolArg)
+	if err != nil {
+		return err
+	}
+	c, mine := client(), cur.Scope == sdk.RunnerPoolUser
+	switch {
+	case add && mine:
+		_, err = c.AddMyPoolRemoteRunner(cmd.Context(), cur.ID, rid)
+	case add:
+		_, err = c.AddRunnerPoolRemoteRunner(cmd.Context(), cur.ID, rid)
+	case mine:
+		err = c.RemoveMyPoolRemoteRunner(cmd.Context(), cur.ID, rid)
+	default:
+		err = c.RemoveRunnerPoolRemoteRunner(cmd.Context(), cur.ID, rid)
+	}
+	if err != nil {
+		return err
+	}
+	verb := "is in"
+	if !add {
+		verb = "is not in"
+	}
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "remote-hosted runner %s %s pool %s\n", rid, verb, cur.ID)
+	return err
 }
 
 func runnerPoolCreateCmd(client clientFn) *cobra.Command {
 	var name, limitsFile string
-	var remote, asJSON bool
-	cmd := &cobra.Command{Use: "create", Short: "Create a Self-Hosted pool of your own (or, an admin, a Remote Provided pool with --remote)",
+	var org, asJSON bool
+	cmd := &cobra.Command{Use: "create", Short: "Create a user pool of your own (or, an admin, an organization pool with --org)",
 		Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 			limits, err := readPoolLimits(limitsFile)
 			if err != nil {
 				return err
 			}
 			var p sdk.RunnerPool
-			if remote {
-				req := sdk.CreateRunnerPoolRequest{Name: name, HostingType: sdk.RunnerPoolRemoteProvided, Limits: limits}
+			if org {
+				req := sdk.CreateRunnerPoolRequest{Name: name, Limits: limits}
 				if err := req.Validate(); err != nil {
 					return err
 				}
@@ -95,7 +136,7 @@ func runnerPoolCreateCmd(client clientFn) *cobra.Command {
 			return printRunnerPool(cmd.OutOrStdout(), p, asJSON)
 		}}
 	cmd.Flags().StringVar(&name, "name", "", "the pool's name, 1 to 64 characters")
-	cmd.Flags().BoolVar(&remote, "remote", false, "create a Remote Provided pool for the organisation (admin)")
+	cmd.Flags().BoolVar(&org, "org", false, "create an organization pool, of remote-hosted runners only (admin)")
 	cmd.Flags().StringVar(&limitsFile, "limits-file", "", "the pool's limits as JSON (\"-\" for stdin)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	return cmd
@@ -118,7 +159,7 @@ func runnerPoolShowCmd(client clientFn) *cobra.Command {
 func runnerPoolUpdateCmd(client clientFn) *cobra.Command {
 	var name, onOff, limitsFile string
 	var asJSON bool
-	cmd := &cobra.Command{Use: "update <pool-id>", Short: "Rename, switch or re-limit your own Self-Hosted pool (or, an admin, a Remote Provided pool)",
+	cmd := &cobra.Command{Use: "update <pool-id>", Short: "Rename, switch or re-limit your own user pool (or, an admin, an organization pool)",
 		Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 			var req sdk.UpdateRunnerPoolRequest
 			if cmd.Flags().Changed("name") {
@@ -145,7 +186,7 @@ func runnerPoolUpdateCmd(client clientFn) *cobra.Command {
 			}
 			req.Revision = cur.Revision
 			update := client().UpdateRunnerPool
-			if cur.HostingType == sdk.RunnerPoolSelfHosted {
+			if cur.Scope == sdk.RunnerPoolUser {
 				update = client().UpdateMyRunnerPool
 			}
 			p, err := update(cmd.Context(), cur.ID, req)
@@ -163,7 +204,7 @@ func runnerPoolUpdateCmd(client clientFn) *cobra.Command {
 
 func runnerPoolDeleteCmd(client clientFn) *cobra.Command {
 	var yes bool
-	cmd := &cobra.Command{Use: "delete <pool-id>", Short: "Delete your own Self-Hosted pool (or, an admin, a Remote Provided pool)",
+	cmd := &cobra.Command{Use: "delete <pool-id>", Short: "Delete your own user pool (or, an admin, an organization pool)",
 		Long: "Delete a pool. Its runners leave it, and runs waiting for it end; runs already running are not touched.",
 		Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 			if !yes {
@@ -173,7 +214,7 @@ func runnerPoolDeleteCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if cur.HostingType == sdk.RunnerPoolSelfHosted {
+			if cur.Scope == sdk.RunnerPoolUser {
 				return client().DeleteMyRunnerPool(cmd.Context(), cur.ID)
 			}
 			return client().DeleteRunnerPool(cmd.Context(), cur.ID)
@@ -223,13 +264,13 @@ func printRunnerPool(w io.Writer, p sdk.RunnerPool, asJSON bool) error {
 	tw := newTab(w)
 	owner := p.Owner
 	if owner == "" {
-		owner = "the organisation"
+		owner = "the organization"
 	}
 	limits := "none of its own"
 	if p.Limits != nil {
 		limits = "set (show --json prints them)"
 	}
-	for _, row := range [][2]string{{"ID", p.ID.String()}, {"NAME", p.Name}, {"HOSTING", string(p.HostingType)}, {"OWNER", owner},
+	for _, row := range [][2]string{{"ID", p.ID.String()}, {"NAME", p.Name}, {"SCOPE", string(p.Scope)}, {"OWNER", owner},
 		{"STATE", string(p.State)}, {"REVISION", fmt.Sprint(p.Revision)}, {"LIMITS", limits}} {
 		fmt.Fprintf(tw, "%s\t%s\n", row[0], row[1])
 	}

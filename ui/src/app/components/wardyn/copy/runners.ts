@@ -13,7 +13,6 @@
 // defined here with D-UI-a's text, because the keys they were written under were not built.
 
 import { RUNNER_OFFLINE_WORD, RUNNERS_NAV_TITLE, runnerLabel, runOnChip } from "../../../lib/nav-copy";
-import { HOSTING_LABEL } from "../../../lib/runner-pool-refusals";
 
 export const RUNNERS = {
   NAV: RUNNERS_NAV_TITLE,
@@ -167,8 +166,8 @@ export const MY_RUNNER = {
 // Provided", a local run on its owner's computer "{name} · Self-Hosted" (DECISIONS 2026-10-10 D-UI-b ruling).
 export const RUN_PLACEMENT = {
   LABEL: "Runs on",
-  ORG: HOSTING_LABEL.remote_provided,
-  MINE: (name: string) => `${name} · ${HOSTING_LABEL.self_hosted}`,
+  ORG: "Remote Provided",
+  MINE: (name: string) => `${name} · Self-Hosted`,
   OTHERS: (name: string, owner: string) => `${name} · ${owner}'s runner`,
   /**
    * pending H11-P1: recommended text until the owner answers. The approved FILLED text, "The only placement

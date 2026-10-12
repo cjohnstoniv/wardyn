@@ -135,13 +135,13 @@ export interface AgentRun {
   evidence_source?: RunEvidenceSource;
   // The runner pool the run was admitted into, and how it was chosen (Go:
   // AgentRun.RunnerPool*), written once at create. A pool is a label, never
-  // admission: the run goes to the exact target in runner_id (self-hosted) or
-  // runner_pool_executor (remote-provided). All absent for a run from before
+  // admission: the run goes to the exact runner in runner_id (self-hosted) or
+  // remote_runner_id (remote-hosted). All absent for a run from before
   // pools and for a server-originated run that names none.
   runner_pool_id?: string;
   runner_pool_revision?: number;
   runner_pool_selection?: RunnerPoolSelection;
-  runner_pool_executor?: string;
+  remote_runner_id?: string;
   sandbox_ref?: string;
   // interactive runs come up idle (no agent task) so a human attaches and drives
   // them via the WS PTY; the runs board badges these as "awaiting attach".

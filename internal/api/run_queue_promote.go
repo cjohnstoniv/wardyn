@@ -133,7 +133,7 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	}
 	online := false
 	for _, t := range targets {
-		if t.offline || (out.pinned && pool.HostingType == types.RunnerPoolSelfHosted && t.id != req.RunnerID) {
+		if t.offline || (out.pinned && pool.Scope == types.RunnerPoolUser && t.id != req.RunnerID) {
 			continue
 		}
 		online = true
