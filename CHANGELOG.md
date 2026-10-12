@@ -91,6 +91,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- A launch into a runner pool at its concurrent-run limit now waits for a slot instead of failing. It holds no
+  credential while it waits, starts in launch order once its owner's access, role and user type are re-checked, and
+  gives up after 24 hours (Background) or 1 hour (Interactive). `POST /runs` takes `max_wait_sec` (1 to 604800; `0` is
+  `422 run_max_wait_invalid`). A waiting run can be cancelled, ends `FAILED queue_timeout`, and is cancelled with its
+  pool, or when its owner's sessions are revoked. A run pinned to one of your runners waits for that runner. An all-
+  offline self-hosted pool is still refused at launch. New metrics: `wardyn_runner_pool_queue_depth`,
+  `wardyn_runner_pool_slots_used`, `wardyn_runner_pool_queue_wait_seconds`.
+- New Run can include more than one harness in a sandbox (an interactive environment, or a command), each on its own
+  model provider, started from the image an operator declares for the set. An AWS sign-in model provider
+  (`bedrock_sso`) serves only the harness a run starts, or else lists first; on any other harness it is refused with
+  `request_field_unavailable`, naming the harness.
+- `POST /runs`, `/runs/preflight` and `/runs/policy-preview` accept `policy_overlay`: a document's partial policy laid
+  onto your default policy. Only the keys it names are bounded by your ceiling, so the default's operator mounts and
+  grant pairings stay. It is refused beside `policy_id` or `inline_policy` (`policy_overlay_conflict`); a malformed
+  overlay is `policy_overlay_invalid`. Launches write `policy.overlay.apply` (keys only), and the run's policy view
+  names the `overlay` cause.
 - GitHub CLI: an organisation's GitHub CLI row gives a run `gh` against its own GitHub repositories, as the
   organisation's GitHub App, through GitHub's REST API only (GraphQL commands such as `gh pr list` are refused with a
   pointer to `gh api repos/{owner}/{repo}/...`). The sandbox holds an inert `GH_TOKEN`; the proxy checks each
