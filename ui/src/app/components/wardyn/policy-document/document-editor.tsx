@@ -60,7 +60,11 @@ export interface DocumentEditorProps {
 }
 
 // Gutter and textarea share one font, line height and vertical padding, and the
-// textarea never wraps, so line N of the gutter is line N of the text.
+// textarea never wraps, so line N of the gutter is line N of the text. The
+// gutter is contained in size: its one-row-per-line content must not set the
+// height of the row, or the box grows to the whole document and `rows` and the
+// scroll sync do nothing.
+const GUTTER_CONTAIN = "[contain:size]";
 const LINE = "py-2 font-mono text-xs leading-5";
 
 export function DocumentEditor({
@@ -82,7 +86,7 @@ export function DocumentEditor({
   const errorLines = new Set(diagnostics.map((d) => d.line));
   const lineCount = value.split("\n").length;
   // The caller's diagnostics may come from the server; the switch needs only a local parse.
-  const parsed = parseSpec(value, format);
+  const parsed = React.useMemo(() => parseSpec(value, format), [value, format]);
 
   const requestFormat = (next: PolicySourceFormat) => {
     if (next === format || !parsed.ok) return;
@@ -92,14 +96,24 @@ export function DocumentEditor({
 
   return (
     <div className={cn("flex min-w-0 flex-col gap-2", className)} data-testid="document-editor" data-format={format}>
-      {onFormatChange && <Segmented value={format} options={FORMATS} onChange={requestFormat} disabled={!parsed.ok} />}
+      {onFormatChange && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Segmented value={format} options={FORMATS} onChange={requestFormat} disabled={!parsed.ok} />
+          {/* A held switch says why, in the words PolicyEditor uses; the parser's message can quote the source. */}
+          {!parsed.ok && (
+            <p data-testid="document-switch-reason" className="select-text whitespace-pre-wrap break-words text-xs text-danger">
+              {format === "json" ? D.INVALID_JSON(parsed.message) : D.INVALID_YAML(parsed.message)}
+            </p>
+          )}
+        </div>
+      )}
 
       <div className={cn("flex min-w-0 rounded-md border bg-input-background focus-within:ring-[3px] focus-within:ring-ring", invalid ? "border-destructive" : "border-input")}>
         <div
           ref={gutter}
           aria-hidden="true"
           data-testid="document-gutter"
-          className={cn("w-10 shrink-0 select-none overflow-hidden rounded-l-md border-r border-border bg-muted text-right text-muted-foreground", LINE)}
+          className={cn(GUTTER_CONTAIN, "w-10 shrink-0 select-none overflow-hidden rounded-l-md border-r border-border bg-muted text-right text-muted-foreground", LINE)}
         >
           {Array.from({ length: lineCount }, (_, i) => {
             const error = errorLines.has(i + 1);
