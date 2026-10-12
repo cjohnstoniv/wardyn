@@ -36,7 +36,7 @@ export function UsageMeter({
           aria-label={label}
           aria-valuemin={0}
           aria-valuemax={max}
-          aria-valuenow={used}
+          aria-valuenow={Math.min(Math.max(used, 0), max)}
           aria-valuetext={valueText}
           className="h-1.5 overflow-hidden rounded-full bg-muted"
         >

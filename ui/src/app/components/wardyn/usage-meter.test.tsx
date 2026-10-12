@@ -32,4 +32,11 @@ describe("UsageMeter", () => {
     expect(screen.getByText("No pool limit")).toBeVisible();
     expect(container.querySelector(".bg-muted")).toBeNull();
   });
+
+  it("never reports a value above its max; the text keeps the true figure", () => {
+    render(<UsageMeter label="Pool" used={12} max={10} valueText="12 of 10 in use" />);
+    const m = screen.getByRole("meter");
+    expect(m).toHaveAttribute("aria-valuenow", "10");
+    expect(m).toHaveAttribute("aria-valuetext", "12 of 10 in use");
+  });
 });
