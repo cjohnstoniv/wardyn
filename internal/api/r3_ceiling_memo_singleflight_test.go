@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
 )
 
 // The memo released its lock between the check and the fill, so two concurrent

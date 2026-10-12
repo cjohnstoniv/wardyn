@@ -76,6 +76,7 @@ describe("pool limit wording", () => {
       expect(goLimits, reason).toContain(`return "${sentence}"`);
     }
     expect(goLimits).toContain('RunEndMaxLifetimeReached RunEndReason = "max_lifetime_reached"');
+    expect(goLimits).toContain('RunEndEndReached RunEndReason = "end_reached"');
   });
 
   it("lists one, two and three allowed barriers the way the server does", () => {

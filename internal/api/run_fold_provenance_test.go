@@ -93,7 +93,7 @@ func TestRecordPolicyFold(t *testing.T) {
 	resolved := types.RunPolicySpec{AllowedDomains: []string{"keep.example"}, DeniedDomains: []string{"deny.example"}, MinConfinementClass: types.CC2}
 
 	rec := &foldRecorder{}
-	recordPolicyFold(rec, authored, resolved, policy, true)
+	recordPolicyFold(rec, authored, resolved, policy, true, nil)
 	rows := rec.result()
 	for _, w := range []provenanceRow{
 		{fieldAllowed, "keep.example", policy, provEffectAdded},
@@ -114,7 +114,7 @@ func TestRecordPolicyFold(t *testing.T) {
 
 	// A saved or default policy is the operator's: what the ceiling took out of it is not named.
 	rec = &foldRecorder{}
-	recordPolicyFold(rec, authored, resolved, provSource{Kind: provKindPolicy, Name: "default"}, false)
+	recordPolicyFold(rec, authored, resolved, provSource{Kind: provKindPolicy, Name: "default"}, false, nil)
 	for _, r := range rec.result() {
 		if r.Effect == provEffectClamped {
 			t.Errorf("a clamped row for a policy the caller did not author: %+v", r)

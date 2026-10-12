@@ -95,10 +95,6 @@ type Config struct {
 	// CapacityWait is WARDYN_SANDBOX_CAPACITY_WAIT: how long a pod the scheduler has no room for waits,
 	// on top of StartTimeout. Zero turns the wait off: such a pod fails at StartTimeout.
 	CapacityWait time.Duration
-	// RunMaxAge is WARDYN_RUN_MAX_AGE. When positive, both run pods get
-	// activeDeadlineSeconds = RunMaxAge + podDeadlineGrace, so a run whose control plane has
-	// gone away still fails its pods on a bounded schedule. Zero (the default) sets no deadline.
-	RunMaxAge time.Duration
 	// ReadNodes is WARDYN_K8S_READ_NODES: list the cluster's nodes (a ClusterRole the chart grants only
 	// under k8s.readNodes) so preflight and create can warn when no node a run may be placed on is large
 	// enough. Off by default: nodes are cluster-scoped and a shared-cluster tenant may not be granted them.

@@ -161,7 +161,7 @@ type AgentRun struct {
 	AutoStopAfterSec int    `json:"auto_stop_after_sec,omitempty"`
 	AgentExecID      string `json:"agent_exec_id,omitempty"` // docker exec id, so the crash reconciler can check agent liveness across a wardynd restart
 	FailureHint      string `json:"failure_hint,omitempty"`  // operator-facing reason a run FAILED before the agent started; display-only
-	// StatusDetail is what the substrate says this run awaits while STARTING; blanked on leaving STARTING except a TERMINAL failure reason (kept for postmortem).
+	// StatusDetail is what the substrate says this run awaits while STARTING, and a lifetime end reason ("lifetime: end_reached", "lifetime: max_lifetime_reached") on a run KILLED at its end or its maximum; blanked on leaving STARTING except a TERMINAL failure reason or a lifetime end reason (kept for postmortem).
 	StatusDetail string `json:"status_detail,omitempty"`
 	StatusReason string `json:"status_reason,omitempty"` // reason token parsed out of StatusDetail, derived at read, never stored
 	// AutonomyLevel freezes the level resolved at create, not the profile/posture that produced it (that's on the audit row).
@@ -484,7 +484,9 @@ type APIToken struct {
 	RevokedAt       *time.Time `json:"revoked_at,omitempty"`
 	ExpiresAt       *time.Time `json:"expires_at,omitempty"` // nil = never expires; an expired token authenticates nothing
 	MintedBy        string     `json:"minted_by,omitempty"`  // admin who minted this for its owner; empty when the owner minted it
-	Token           string     `json:"token,omitempty"`      // plaintext, create response ONLY
+	// Disposition is where an admin-minted token stands, derived at read (#1508); empty on any other token.
+	Disposition TokenDisposition `json:"disposition,omitempty"`
+	Token       string           `json:"token,omitempty"` // plaintext, create response ONLY
 	// IdentityStampedAt is when Role and Groups were last stamped: at mint, then at each sign-in of
 	// the owner. Nil reads as stale under WARDYN_ROLE_STAMP_TTL. Never on the wire.
 	IdentityStampedAt *time.Time `json:"-"`
