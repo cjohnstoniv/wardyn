@@ -92,8 +92,8 @@ func TestAgentPolicyDispatch_AttendedRulesInManagedSettings(t *testing.T) {
 			if got, want := managedSettingsOf(spec), golden(c.golden); got != want {
 				t.Fatalf("managed settings = %s, want the %s golden %s (run %s, hint %q)", got, c.golden, want, st.state, st.failureHint)
 			}
-			if data == nil || !data.Delivered || data.ToolRules != 6 || data.Bytes != len(golden(c.golden)) {
-				t.Errorf("run.agent_policy.write = %+v, want delivered with tool_rules 6", data)
+			if data == nil || !data.Delivered || data.ToolRules != 5 || data.Bytes != len(golden(c.golden)) {
+				t.Errorf("run.agent_policy.write = %+v, want delivered with tool_rules 5 (distinct names)", data)
 			}
 		})
 	}
@@ -168,10 +168,45 @@ func TestToolPolicy_AttendedRulesReachClaudeCodeSettings(t *testing.T) {
 		strings.Join(doc.Permissions.Deny, ",") != "Bash" || strings.Join(doc.Permissions.Ask, ",") != "WebFetch" {
 		t.Fatalf("dispatched managed settings %q (%v), want deny Bash and ask WebFetch, locked", managedSettingsOf(fr.lastSpec), err)
 	}
+	// A name Claude Code would read wider than one tool is refused at every door,
+	// before a 201, not at dispatch after one.
+	server := harnessSetCall{"sub-plain", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"mcp__github","effect":"deny"}]}],` + noRepos}
+	for _, door := range harnessDoors {
+		if w := server.ask(t, srv, door); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `can't be written into Claude Code's managed settings: tool rule \"mcp__github\"`) {
+			t.Errorf("%s: a whole-server rule = %d %s, want 422 before the run exists", door, w.Code, w.Body.String())
+		}
+	}
 	skip := harnessSetCall{"sub-plain", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"allow"}],` + noRepos}
 	for _, door := range harnessDoors {
 		if w := skip.ask(t, srv, door); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), accessSentences["attended_rules_unavailable"]) {
 			t.Errorf("%s: a Run it default = %d %s, want 422 with the attended sentence", door, w.Code, w.Body.String())
+		}
+	}
+}
+
+// TestToolPolicy_AttendedToolNamesRefusedAtTheFold: a policy's or a person's
+// name that Claude Code's settings could not carry exactly refuses an
+// interactive Claude Code run at the fold; any other run keeps the name as the
+// gate's exact match.
+func TestToolPolicy_AttendedToolNamesRefusedAtTheFold(t *testing.T) {
+	interactive := createRunRequest{Agent: "claude-code", Interactive: true}
+	for _, c := range []struct {
+		name  string
+		req   createRunRequest
+		rules []types.ToolRule
+		want  bool
+	}{
+		{"a policy pattern", interactive, []types.ToolRule{{Tool: "Bash(rm:*)", Effect: types.ToolDeny}}, true},
+		{"a policy's whole MCP server", interactive, []types.ToolRule{{Tool: "mcp__github", Effect: types.ToolAllow}}, true},
+		{"a person's whole MCP server on a non-primary Claude Code", createRunRequest{Agent: "codex-cli", Interactive: true, Tools: []client.IncludedTool{
+			{ID: "codex-cli", Kind: client.IncludedToolHarness}, {ID: "claude-code", Kind: client.IncludedToolHarness, ToolRules: []types.ToolRule{{Tool: "mcp__github", Effect: types.ToolDeny}}}}}, nil, true},
+		{"exact names and the default", interactive, []types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}, {Tool: "mcp__github__get_issue", Effect: types.ToolAllow}, {Tool: "*", Effect: types.ToolDeny}}, false},
+		{"a background run", createRunRequest{Agent: "claude-code", Task: "t"}, []types.ToolRule{{Tool: "mcp__github", Effect: types.ToolDeny}}, false},
+		{"an interactive run without Claude Code", createRunRequest{Agent: "codex-cli", Interactive: true}, []types.ToolRule{{Tool: "mcp__github", Effect: types.ToolDeny}}, false},
+	} {
+		refusal := attendedToolNamesRefusal(c.req, types.RunPolicySpec{ToolRules: c.rules})
+		if got := refusal != nil; got != c.want || (got && refusal.body.Reason != reasonRequestFieldUnavailable) {
+			t.Errorf("%s: refusal %+v, want refused=%v", c.name, refusal, c.want)
 		}
 	}
 }

@@ -38,8 +38,8 @@ type runAgentPolicy struct {
 	hold bool
 	// locked: the document ForAgent chose is the locked L2 one (agentpolicy.IsLocked).
 	locked bool
-	// toolRules counts the interactive run's tool rules written into the
-	// document (agentpolicy.WithToolRules); 0 when it carries none.
+	// toolRules counts the distinct tool names the interactive run's rules
+	// wrote into the document (agentpolicy.WithToolRules); 0 when none.
 	toolRules int
 }
 
@@ -173,7 +173,7 @@ func (s *Server) agentPolicyFor(ctx context.Context, run types.AgentRun, harness
 		}
 		if !bytes.Equal(withRules, content) {
 			p.path, content, ok = agentpolicy.ClaudeCodeManagedSettingsPath, withRules, true
-			p.toolRules = len(slices.DeleteFunc(slices.Clone(attended), func(r types.ToolRule) bool { return r.Tool == "*" }))
+			p.toolRules = distinctToolNames(attended)
 		}
 	}
 	if !ok {
@@ -309,4 +309,16 @@ func (s *Server) auditAgentPolicy(ctx context.Context, run types.AgentRun, p run
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.agent_policy.write",
 		run.ID.String(), "success", mustJSON(data)))
+}
+
+// distinctToolNames counts the tools rules name, "*" aside.
+func distinctToolNames(rules []types.ToolRule) int {
+	var names []string
+	for _, r := range rules {
+		if r.Tool != "*" {
+			names = append(names, r.Tool)
+		}
+	}
+	slices.Sort(names)
+	return len(slices.Compact(names))
 }
