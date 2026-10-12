@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -30,6 +31,8 @@ type grantWiring struct {
 	// grant id, from each github_token grant's scope.repos. Delivered proxy-side
 	// only (never the sandbox) so the /wardyn/gh/ route serves exactly these repos.
 	gitGrants map[string]uuid.UUID
+	// githubAPI is the GitHub CLI door's grant (persistGitHubCLIGrants); nil without one.
+	githubAPI *proxy.GitHubAPIGrant
 	// injections are the proxy injection configs for auto-mintable api_key
 	// grants: the proxy resolves their secret VALUES at startup via the internal
 	// injection endpoint (values live only in proxy memory, never in the sandbox).

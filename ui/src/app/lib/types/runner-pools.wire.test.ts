@@ -41,6 +41,7 @@ const ts = read("ui/src/app/lib/types/runner-pools.ts");
 const typesGo = read("internal/types/runner_pool.go");
 const clientGo = read("pkg/client/runner_pools.go");
 const limitsGo = read("internal/types/runner_pool_limits.go");
+const barrierGo = read("internal/runnerpool/barrier.go");
 
 describe("runner pool carriers", () => {
   it.each([
@@ -61,6 +62,13 @@ describe("runner pool carriers", () => {
     [limitsGo, "EffectiveRunLimits", "EffectiveRunLimits"],
     [clientGo, "RunnerPoolChoice", "RunnerPoolChoice"],
     [clientGo, "RunnerPoolList", "RunnerPoolList"],
+    [clientGo, "RunnerPoolCatalogueEntry", "RunnerPoolCatalogueEntry"],
+    [clientGo, "PoolRunner", "PoolRunner"],
+    [clientGo, "MainDriveFacts", "MainDriveFacts"],
+    [clientGo, "MainDriveKeep", "MainDriveKeep"],
+    [clientGo, "PersonAllowance", "PersonAllowance"],
+    [clientGo, "PoolDefault", "PoolDefault"],
+    [barrierGo, "BarrierOption", "BarrierOption"],
     [clientGo, "CreateRunnerPoolRequest", "CreateRunnerPoolRequest"],
     [clientGo, "UpdateRunnerPoolRequest", "UpdateRunnerPoolRequest"],
   ])("%#: %s has full parity with its TS mirror", (go, goName, tsName) => {
@@ -98,6 +106,9 @@ describe("runner pool carriers", () => {
     expect(union("RunnerPoolState").size).toBe(3);
     expect(union("RunnerPoolSelection").size).toBe(3);
     expect(union("RunnerPoolAvailability").size).toBe(3);
+    expect(union("MainDriveEnforcement")).toEqual(consts(clientGo, '\\bMainDrive\\w+\\s+MainDriveEnforcement = "([a-z_]+)"'));
+    expect(union("MainDriveCoverage")).toEqual(consts(clientGo, '\\bMainDriveCoverage\\w+\\s+MainDriveCoverage = "([a-z_]+)"'));
+    expect(union("MainDriveEnforcement").size).toBe(4);
     expect(union("RunnerPoolSwitch")).toEqual(consts(clientGo, '\\bRunnerPoolSwitch\\w+\\s+RunnerPoolSwitch = "([a-z_]+)"'));
     expect(union("RunnerPoolSwitch")).toEqual(new Set(["active", "disabled"]));
     expect(union("RunnerPoolRunType")).toEqual(consts(limitsGo, '\\bRunnerPoolRun\\w+\\s+RunnerPoolRunType = "([a-z_]+)"'));

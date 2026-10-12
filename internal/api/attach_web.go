@@ -58,7 +58,7 @@ func (wa *webAttach) fail(err error, promotion bool) {
 func (wa *webAttach) audit(outcome string, data map[string]any) {
 	id := wa.run.ID
 	wa.s.recordStreamAudit(wa.finishCtx, wa.run.SandboxRef, wa.s.auditEvent(&id, wa.principalType, wa.principal, "session.attach",
-		id.String(), outcome, mustJSON(data)))
+		id.String(), outcome, mustJSON(withSponsorEntry(wa.run, data))))
 }
 
 // open opens the exec and writes the second session.attach row, the outcome,

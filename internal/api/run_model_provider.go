@@ -252,21 +252,31 @@ func (s *Server) writeProviderChoiceRefusal(w http.ResponseWriter, r *http.Reque
 // renew is create's alone: it lets the Bedrock check renew an expired AWS
 // sign-in whose refresh token is live (withCreateRenewal), so no run is
 // created that dispatch could not boot. Review passes false: a dry check never
-// spends a one-use refresh token.
+// spends a one-use refresh token. A run that waits in a pool's queue (queued)
+// renews nothing either: nothing is minted, renewed or delivered while it waits,
+// and the start does the renewing.
 func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request, req createRunRequest,
-	spec types.RunPolicySpec, wsRefs []types.Workspace, renew bool,
+	spec types.RunPolicySpec, wsRefs []types.Workspace, renew, queued bool,
 ) (runProviderChoice, bool) {
-	ctx := r.Context()
 	choice, refusal := s.authorizeRunModelProvider(r, req, wsRefs, false)
 	if refusal.write(s, w, r) {
 		return runProviderChoice{}, false
 	}
+	return s.enforceChosenModelProvider(w, r, req, spec, choice, renew, queued)
+}
+
+// enforceChosenModelProvider is enforceRunModelProvider after the choice: the
+// caller's own credential for it, and the model-credential variable refusal.
+func (s *Server) enforceChosenModelProvider(w http.ResponseWriter, r *http.Request, req createRunRequest,
+	spec types.RunPolicySpec, choice runProviderChoice, renew, queued bool,
+) (runProviderChoice, bool) {
+	ctx := r.Context()
 	if choice.chosen {
 		// Liveness, the check dispatch repeats: the caller's OWN credential for
 		// the provider, never anyone else's (runIdentitySubject is the namespace
 		// dispatch reads for this run). Only create renews, and only a Bedrock
 		// sign-in: the subscription arm keeps its status read at both doors.
-		refresh := renew && choice.provider.Kind.IsBedrock()
+		refresh := renew && !queued && choice.provider.Kind.IsBedrock()
 		lctx := ctx
 		if refresh {
 			lctx = withCreateRenewal(ctx)

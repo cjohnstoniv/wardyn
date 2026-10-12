@@ -173,7 +173,7 @@ func (a attachedComponent) fact(ordinal int, comps runComponents, baseline compo
 		f.Secrets = append(f.Secrets, componentSecretFact{Delivery: sec.Delivery.Mode, Shared: sec.Shared})
 		g := componentGrant(sec)
 		grants = append(grants, g)
-		if sec.Delivery.Mode == types.ComponentDeliveryHeader && !sec.Delivery.PlainHTTP {
+		if sec.Delivery.Mode == types.ComponentDeliveryHeader && !sec.Delivery.PlainHTTP && def.MCP == nil {
 			f.TLSIntercept = true
 		}
 		if !sec.Shared && slices.Contains(a.needsOwnSecrets, sec.SecretName) {
@@ -181,6 +181,9 @@ func (a attachedComponent) fact(ordinal int, comps runComponents, baseline compo
 		}
 	}
 	f.Requirements = append(f.Requirements, setupSecretItems(types.RunPolicySpec{EligibleGrants: missing}, nil)...)
+	if a.needsSignIn {
+		f.Requirements = append(f.Requirements, cliSignInItem(f.ID, f.Name))
+	}
 	switch {
 	case a.needsAdminSecret:
 		f.Status = componentUnavailable

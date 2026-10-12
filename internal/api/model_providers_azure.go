@@ -9,6 +9,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -57,6 +58,28 @@ const (
 		"Set up Entra console login (the OIDC client and tenant), then grant that login application the delegated permission for this provider's audience (%s), with admin consent"
 )
 
+// providerFieldError is a refusal that names the request field it is about (errorBody.Field), so the
+// console can put the sentence under that field. The message is the wrapped error's, byte for byte.
+type providerFieldError struct {
+	field string
+	err   error
+}
+
+func (e providerFieldError) Error() string { return e.err.Error() }
+func (e providerFieldError) Unwrap() error { return e.err }
+
+// atField names field on err.
+func atField(field string, err error) error { return providerFieldError{field: field, err: err} }
+
+// refusalField is the field an error from validateModelProviders names, "" when it names none.
+func refusalField(err error) string {
+	var fe providerFieldError
+	if errors.As(err, &fe) {
+		return fe.field
+	}
+	return ""
+}
+
 // azureHostPattern is a lower-case DNS name: dot-separated labels of letters, digits and inner hyphens.
 var azureHostPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$`)
 
@@ -88,6 +111,18 @@ func lookupWithDeadline(host string) ([]net.IP, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	return net.DefaultResolver.LookupIP(ctx, "ip", host)
+}
+
+// kindsAvailable is every closed kind a write door accepts right now, in the stable order of
+// ClosedModelProviderKindList: azure_foundry is listed only while its gate is open.
+func kindsAvailable() []types.ModelProviderKind {
+	var out []types.ModelProviderKind
+	for _, k := range types.ClosedModelProviderKindList() {
+		if kind := types.ModelProviderKind(k); kind != types.ModelProviderAzureFoundry || azureFoundryGateReady {
+			out = append(out, kind)
+		}
+	}
+	return out
 }
 
 // hasAzureFoundry reports whether block holds a row of the kind.
@@ -130,14 +165,14 @@ func validateProviderAzure(mp types.ModelProvider, env providerWriteEnv) error {
 		return fmt.Errorf(mp400AzureOther, mp.ID)
 	}
 	if mp.Azure == nil || mp.Azure.Endpoint == "" || mp.Azure.Route == "" {
-		return fmt.Errorf(mp400AzureNeed, mp.ID)
+		return atField("azure.endpoint", fmt.Errorf(mp400AzureNeed, mp.ID))
 	}
 	if err := validateAzureEndpoint(mp.ID, mp.Azure.Endpoint); err != nil {
-		return err
+		return atField("azure.endpoint", err)
 	}
 	audience, ok := azureAudienceForRoute(mp.Azure.Route)
 	if !ok {
-		return fmt.Errorf(mp400AzureRoute, mp.ID, mp.Azure.Route, types.AzureRouteAnthropic, types.AzureRouteOpenAIV1)
+		return atField("azure.route", fmt.Errorf(mp400AzureRoute, mp.ID, mp.Azure.Route, types.AzureRouteAnthropic, types.AzureRouteOpenAIV1))
 	}
 	for _, h := range mp.Harnesses {
 		if err := validateAzureHarness(mp, h); err != nil {
@@ -171,22 +206,22 @@ func validateAzureHarness(mp types.ModelProvider, h types.ProviderHarness) error
 	switch h.Harness {
 	case azureMessagesHarness:
 		if route != types.AzureRouteAnthropic {
-			return fmt.Errorf(mp400AzurePair, mp.ID, h.Harness, types.AzureRouteAnthropic, route, types.AzureRouteAnthropic, h.Harness, types.AzureRouteOpenAIV1)
+			return atField("azure.route", fmt.Errorf(mp400AzurePair, mp.ID, h.Harness, types.AzureRouteAnthropic, route, types.AzureRouteAnthropic, h.Harness, types.AzureRouteOpenAIV1))
 		}
 	case azureResponsesHarness:
 		if route != types.AzureRouteOpenAIV1 {
-			return fmt.Errorf(mp400AzurePair, mp.ID, h.Harness, types.AzureRouteOpenAIV1, route, types.AzureRouteOpenAIV1, h.Harness, types.AzureRouteAnthropic)
+			return atField("azure.route", fmt.Errorf(mp400AzurePair, mp.ID, h.Harness, types.AzureRouteOpenAIV1, route, types.AzureRouteOpenAIV1, h.Harness, types.AzureRouteAnthropic))
 		}
 	default:
 		return fmt.Errorf(mp400AzureHarness, mp.ID, h.Harness)
 	}
 	switch {
 	case h.Model == "":
-		return fmt.Errorf(mp400AzureModelNeed, mp.ID, h.Harness)
+		return atField("harnesses."+h.Harness+".model", fmt.Errorf(mp400AzureModelNeed, mp.ID, h.Harness))
 	case h.FastModel != "" && h.Harness != azureMessagesHarness:
-		return fmt.Errorf(mp400AzureFastModel, mp.ID, h.Harness)
+		return atField("harnesses."+h.Harness+".fast_model", fmt.Errorf(mp400AzureFastModel, mp.ID, h.Harness))
 	case h.FastModel != "" && !modelIDPattern.MatchString(h.FastModel):
-		return fmt.Errorf(mp400AzureFast, mp.ID, h.Harness, h.FastModel)
+		return atField("harnesses."+h.Harness+".fast_model", fmt.Errorf(mp400AzureFast, mp.ID, h.Harness, h.FastModel))
 	}
 	return nil
 }

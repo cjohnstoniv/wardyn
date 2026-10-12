@@ -45,8 +45,11 @@ type createRunLaunch struct {
 	wsRefs        []types.Workspace
 	driveMount    *types.DriveMount
 	ephemeralDirs []string
-	runToken      string
-	created       types.AgentRun
+	// startFolder is the run's one working directory (stepWorkspaces): "" keeps
+	// the sandbox's own choice.
+	startFolder string
+	runToken    string
+	created     types.AgentRun
 	// comps is the component gate's decision; dispatch takes its own half of it.
 	comps runComponents
 	// overridden: the run's person edited the New Run cards (policy_source.overrides_diff).
@@ -58,6 +61,9 @@ type createRunLaunch struct {
 	// harnesses is the run's harness set as create authorised it, in tools[]
 	// order, each with the model provider it was granted (the run_harnesses rows).
 	harnesses []types.RunHarness
+	// mainDrive is the main drive the fold decided (stepMainDrive); dispatch writes its size and
+	// treats it as soft unless the run's policy wrote it.
+	mainDrive *mainDriveDecision
 }
 
 // DRAFT (M2 canon pending) — the run's failure_hint when the detached launch
@@ -121,6 +127,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			SeedAutoTools:      l.req.SeedAutoTools,
 			ToolApprovals:      l.req.ToolApprovals,
 			EphemeralDirs:      l.ephemeralDirs,
+			ExtraEnv:           startFolderEnv(l.startFolder),
 			Toolchains:         runToolchainNeeds(l.wsRefs),
 			// The member's own persistent storage, already resolved and narrowed
 			// at create (seedRequestDrive) — nil unless this run asked for it.
@@ -133,10 +140,12 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			// roots immediately before ContainerCreate (userMountPosture,
 			// workspace_refs.go).
 			UserMounts:       s.userMountPosture(l.wsRefs),
-			Components:       l.comps.dispatch(),
+			Components:       l.comps.dispatchWith(l.gw.githubAPI),
 			PolicyOverridden: l.overridden,
 			PushRuleSets:     l.pushSets,
 			HarnessToolRules: l.harnessRules,
+			Harnesses:        l.harnesses,
+			MainDrive:        l.mainDrive,
 		})
 	}
 }

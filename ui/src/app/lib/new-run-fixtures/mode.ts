@@ -88,7 +88,7 @@ const MODE_FRAMES: FixtureBody[] = [
   },
   {
     route: "v16/starting-folder",
-    note: "Exactly one starting folder, inside one attachment, with the other mounts still available. Refused until attachments apply it (A-L4, A-L7).",
+    note: "Exactly one starting folder, inside one attachment, with the other mounts still available.",
     preview: preview(),
     workspaces: [PAYMENTS],
     contract: withMode({
@@ -96,7 +96,6 @@ const MODE_FRAMES: FixtureBody[] = [
       tools: [claude],
       startFolder: { kind: "attachment", attachment: PAYMENTS.id, subpath: "services/api" },
     }),
-    refusal: unavailable("start_folder: a folder inside an attachment"),
   },
   {
     route: "v16/starting-folder-missing",

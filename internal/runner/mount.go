@@ -50,6 +50,14 @@ var allowedTargetPrefixes = []string{"/home/agent", "/work", "/workspace"}
 // collision would surface as silent disappearance rather than a refusal.
 const DriveTarget = "/home/agent/drive"
 
+// DrivesRoot and SharedRoot hold the managed and share drives a run attaches
+// beside the legacy one, each at its own server-derived path below them. They
+// are reserved for the same reason DriveTarget is.
+const (
+	DrivesRoot = "/home/agent/drives"
+	SharedRoot = "/home/agent/shared"
+)
+
 // ScratchTmpPath, ScratchWorkPath and ScratchCachePath are where the
 // Kubernetes substrate mounts its three disk_mib-sized emptyDirs, the bytes
 // that substrate's `eviction` enforcement counts against a run's disk cap.
@@ -81,13 +89,19 @@ func ValidateAuthoredTarget(tgt string) error {
 		// the string — with backticks the wire bytes and the canon couldn't match.
 		return fmt.Errorf("target %s is reserved for the user drive", DriveTarget)
 	}
+	for _, root := range []string{DrivesRoot, SharedRoot} {
+		if tgt == root || strings.HasPrefix(tgt, root+"/") {
+			return fmt.Errorf("target %s is reserved for drives", root)
+		}
+	}
 	return nil
 }
 
 // targetReservedForDrive reports whether tgt IS the reserved drive target or
 // nests under it. UNDER it counts: a mount at /home/agent/drive/shared would
 // be bound inside a tree the drive owns, shadowing or shadowed by it
-// depending on mount order — an ambiguity a refusal is cheaper than.
+// depending on mount order — an ambiguity a refusal is cheaper than. The
+// drive roots above are reserved by the same rule.
 func targetReservedForDrive(tgt string) bool {
 	return tgt == DriveTarget || strings.HasPrefix(tgt, DriveTarget+"/")
 }
