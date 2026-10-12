@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
@@ -59,4 +61,50 @@ func localStoredSpec(c proxy.Config) runner.SandboxSpec {
 		pc.Injection = append(pc.Injection, runner.InjectionGrant{GrantID: in.GrantID, Rule: in.InjectionRule})
 	}
 	return runner.SandboxSpec{RunID: c.RunID, ProxyConfig: pc}
+}
+
+// lockRevive takes the run's lock for a revive. For a run on a runner it first takes the runner's one
+// revive slot, waiting at most leaseWait: a runner that stops answering holds at most one lock connection
+// for its revives, whatever number of its runs are revived. Either one busy is lock_unavailable.
+func (s *Server) lockRevive(ctx context.Context, run types.AgentRun) (context.Context, func(), *reviveError) {
+	busy := reviveRefused(http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
+	releaseSlot := func() {}
+	if run.RunnerID != nil {
+		release, ok := s.runnerEndpoint(*run.RunnerID).acquireRevive(ctx, leaseWait)
+		if !ok {
+			return ctx, nil, busy
+		}
+		releaseSlot = release
+	}
+	lctx, unlock, err := s.lockRunOp(ctx, run.ID)
+	if err != nil {
+		releaseSlot()
+		return ctx, nil, busy
+	}
+	return lctx, func() { unlock(); releaseSlot() }, nil
+}
+
+// reviveCeilingAdmitting is the owner's ceiling, once it still admits the run where it is.
+func (s *Server) reviveCeilingAdmitting(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string) (ownerCeiling, *reviveError) {
+	c, rerr := s.reviveCeiling(ctx, run)
+	if rerr == nil {
+		rerr = s.revivePlacementDenied(ctx, run, c, actorType, actor)
+	}
+	return c, rerr
+}
+
+// revivePlacementDenied refuses a revive of a run whose placement the owner's profile now denies, with
+// the create doors' reason and sentence: a profile changed after create stops the run's next revive.
+func (s *Server) revivePlacementDenied(ctx context.Context, run types.AgentRun, c ownerCeiling, actorType types.ActorType, actor string) *reviveError {
+	p := run.Placement
+	if remotePlacement(p) {
+		p = types.PlacementRemote
+	}
+	// A managed-harness sign-in (a server-set task no request can name) is exempt, as at create.
+	if run.Task == harnessLoginTask || !slices.Contains(c.denyPlacements, p) {
+		return nil
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
+		mustJSON(map[string]any{"subject": run.CreatedBy, "reason": placement.ReasonPlacementDenied})))
+	return reviveRefused(placement.ReasonPlacementDenied.Status(), string(placement.ReasonPlacementDenied), placementDeniedMsg(p, c.profile))
 }

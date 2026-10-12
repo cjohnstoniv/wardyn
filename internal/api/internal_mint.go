@@ -392,6 +392,15 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
+	// A run on a runner takes its runner's LEASE-send slot before anything is minted or stamped: a renewal
+	// that meets another lease sender answers 503 having changed nothing, and the proxy keeps its current
+	// token and retries in a minute (renewRetry); it never tears down on a 5xx.
+	releaseLease, busy := s.renewalLeaseSlot(r.Context(), run)
+	if busy {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunRenewLeaseBusy, "the run's runner lease is being sent; retry the renewal")
+		return
+	}
+	defer releaseLease()
 	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, sponsor, internalAudience, claims.OperatorOwned)
 	if err != nil {
 		writeServerError(w, r, "renew run identity", err)
@@ -415,10 +424,9 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		}
 		// A run on a runner is contained there when its lease lapses: the renewed stamp goes to the
 		// runner too. A runner that does not get it contains the run at the lapse window, the same
-		// outcome the organisation's own sweep reaches, so a failed send is logged, not refused. A
-		// renewal that meets another lease sender (errRunnerLeaseBusy) answers 503: the proxy keeps
-		// its current token and retries in a minute (renewRetry), never tears down on a 5xx.
-		switch err := s.renewRunnerLease(r.Context(), run, 0); {
+		// outcome the organisation's own sweep reaches, so a failed send is logged, not refused. The
+		// run's lock held by another sender (errRunnerLeaseBusy) still answers 503.
+		switch err := s.sendRenewedLease(r.Context(), run); {
 		case errors.Is(err, errRunnerLeaseBusy):
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunRenewLeaseBusy, "the run's runner lease is being sent; retry the renewal")
 			return

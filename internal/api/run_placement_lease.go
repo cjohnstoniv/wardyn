@@ -198,12 +198,42 @@ func (s *Server) renewRunnerLease(ctx context.Context, run types.AgentRun, wait 
 		return errRunnerLeaseBusy
 	}
 	defer release()
+	return s.renewRunnerLeaseHeld(ctx, st, run, wait)
+}
+
+// renewalLeaseSlot takes, for a token renewal of a run on a runner, the runner's LEASE-send slot before
+// anything is minted or stamped, so a renewal that meets another sender changes nothing. busy says the slot
+// is taken; a run on no runner has none to take.
+func (s *Server) renewalLeaseSlot(ctx context.Context, run types.AgentRun) (release func(), busy bool) {
+	if run.Placement != types.PlacementLocal || run.RunnerID == nil {
+		return func() {}, false
+	}
+	release, ok := s.runnerEndpoint(*run.RunnerID).acquireLease(ctx, 0)
+	return release, !ok
+}
+
+// sendRenewedLease is a token renewal's lease, sent with the runner's LEASE-send slot already taken
+// (renewalLeaseSlot); it never waits for the run's lock.
+func (s *Server) sendRenewedLease(ctx context.Context, run types.AgentRun) error {
+	if run.Placement != types.PlacementLocal || run.RunnerID == nil {
+		return nil
+	}
+	st, err := s.runnerExecutionStore()
+	if err != nil {
+		return err
+	}
+	return s.renewRunnerLeaseHeld(ctx, st, run, 0)
+}
+
+// renewRunnerLeaseHeld is renewRunnerLease for a caller that already holds the runner's LEASE-send slot.
+func (s *Server) renewRunnerLeaseHeld(ctx context.Context, st store.PG, run types.AgentRun, wait time.Duration) error {
 	ctx, unlock, ok := s.lockRunOpWithin(ctx, run.ID, wait)
 	if !ok {
 		return errRunnerLeaseBusy
 	}
 	defer unlock()
-	if run, err = st.GetRun(ctx, run.ID); err != nil {
+	run, err := st.GetRun(ctx, run.ID)
+	if err != nil {
 		return err
 	}
 	if run.Placement != types.PlacementLocal || run.RunnerID == nil {

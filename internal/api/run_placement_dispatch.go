@@ -49,8 +49,9 @@ func (s *Server) dispatchPlacementDenied(ctx context.Context, run types.AgentRun
 }
 
 // placementExempt is c for a run Wardyn authors itself, a managed-harness sign-in or a site-config probe,
-// which deny_placements does not bind at any door: no workspace content, and the only way to do what it
-// does (harnesscred.go's create-time exemption).
+// which deny_placements does not bind at dispatch, as at create (harnesscred.go): no workspace content,
+// and the only way to do what it does. At revive only the sign-in is exempt (revivePlacementDenied): a
+// probe run carries no server-set marker, so its revive stays held to the deny list.
 func (c dispatchCeiling) placementExempt() dispatchCeiling {
 	c.denyPlacements = nil
 	return c

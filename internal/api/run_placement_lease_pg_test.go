@@ -688,6 +688,15 @@ func TestPG_RunnerLease_ReviveThroughTheDoor(t *testing.T) {
 	if _, rerr := f.srv.reviveRunProxy(f.ctx, stored, types.ActorSystem, "test", true); rerr == nil || rerr.reason != string(placement.ReasonPlacementDenied) {
 		t.Fatalf("revive under a profile denying local = %+v, want placement_denied", rerr)
 	}
+	// fix-r4 R3-3: a managed-harness sign-in run is exempt at revive, as at create and dispatch.
+	signIn := stored
+	signIn.Task = harnessLoginTask
+	if rerr := f.srv.revivePlacementDenied(f.ctx, signIn, ownerCeiling{profile: profile.Name, denyPlacements: profile.Limits.DenyPlacements}, types.ActorSystem, "test"); rerr != nil {
+		t.Fatalf("revive of a sign-in run under a profile denying its placement = %+v, want it exempt", rerr)
+	}
+	if rerr := f.srv.revivePlacementDenied(f.ctx, stored, ownerCeiling{profile: profile.Name, denyPlacements: profile.Limits.DenyPlacements}, types.ActorSystem, "test"); rerr == nil {
+		t.Fatal("the same run without the sign-in task was not denied")
+	}
 	// Dispatch holds the same profile to the run's placement.
 	denied := ceilingForDispatch(governanceCeiling{Profile: &ResolvedProfile{ID: profile.ID, Name: profile.Name, Limits: profile.Limits}, Limits: profile.Limits}, adoEntraUngraded(), bedrockCredUngraded())
 	if !f.srv.dispatchPlacementDenied(f.ctx, stored, denied) {
@@ -873,6 +882,8 @@ func TestPG_RunnerLease_BusyRenewalAnswers503(t *testing.T) {
 	f.running(t, &run, nil)
 	f.placed(t, &run)
 	tok := f.h.mintRunToken(t, run.ID)
+	mints := &mintCounter{Provider: f.srv.cfg.Identity}
+	f.srv.cfg.Identity = mints
 	release, ok := f.srv.runnerEndpoint(f.rn.ID).acquireLease(f.ctx, 0)
 	if !ok {
 		t.Fatal("the runner's slot is taken")
@@ -891,7 +902,72 @@ func TestPG_RunnerLease_BusyRenewalAnswers503(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), reasonRunRenewLeaseBusy) {
 		t.Fatalf("renewal while the runner's lease is being sent = %d %s, want 503 %s", w.Code, w.Body, reasonRunRenewLeaseBusy)
 	}
+	// fix-r4 R3-2: a busy renewal changed nothing: no token minted, so no orphan identity.mint row.
+	if n := mints.n.Load(); n != 0 {
+		t.Fatalf("a busy renewal minted %d token(s)", n)
+	}
 	if w := renew(); w.Code != http.StatusOK {
 		t.Fatalf("renewal once the sender is done = %d %s, want 200", w.Code, w.Body)
+	}
+}
+
+// mintCounter counts run identities minted.
+type mintCounter struct {
+	identity.Provider
+	n atomic.Int32
+}
+
+func (m *mintCounter) MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSub, sponsor, audience string, operatorOwned bool) (identity.RunIdentity, error) {
+	m.n.Add(1)
+	return m.Provider.MintRunIdentity(ctx, runID, humanSub, sponsor, audience, operatorOwned)
+}
+
+// fix-r4 R3-1: one runner's revives hold at most one lock connection: the runner's revive slot is taken
+// before the run's lock. With nine of a mute runner's runs revived at once, an unrelated lock still gets a
+// connection.
+func TestPG_RunnerLease_ConcurrentMuteRunnerRevivesHoldOneLockConnection(t *testing.T) {
+	saved := reviveRunnerTimeout
+	reviveRunnerTimeout = 5 * time.Second
+	t.Cleanup(func() { reviveRunnerTimeout = saved })
+	f := newRunnerLeaseFixture(t)
+	var runs []types.AgentRun
+	for range 9 {
+		run := f.localRun(t, 0)
+		f.running(t, &run, nil)
+		f.placed(t, &run)
+		if err := f.srv.keepRunProxyConfig(f.ctx, run.ID, runner.ProxyConfig{RunToken: "old", ControlPlaneURL: "http://127.0.0.1:8081"}); err != nil {
+			t.Fatal(err)
+		}
+		stored, err := f.st.GetRun(f.ctx, run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runs = append(runs, stored)
+	}
+	f.mute(t)
+	done := make(chan *reviveError, len(runs))
+	for _, run := range runs {
+		go func() {
+			_, rerr := f.srv.reviveRunProxy(f.ctx, run, types.ActorSystem, "test", true)
+			done <- rerr
+		}()
+	}
+	time.Sleep(time.Second)
+	ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+	defer cancel()
+	_, unlock, err := f.srv.lockRunOp(ctx, uuid.New())
+	if err != nil {
+		t.Fatalf("an unrelated lock while the mute runner's runs are revived: %v", err)
+	}
+	unlock()
+	for range runs {
+		select {
+		case rerr := <-done:
+			if rerr == nil {
+				t.Error("a revive against a mute runner succeeded")
+			}
+		case <-time.After(reviveRunnerTimeout + 3*leaseWait):
+			t.Fatal("a revive did not return")
+		}
 	}
 }

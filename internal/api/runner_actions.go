@@ -34,20 +34,31 @@ type substrateRegistry interface {
 type runnerEndpoint struct {
 	sub  *remote.Substrate
 	link *remote.Link
-	// leasing is the runner's one LEASE-send slot (capacity 1), taken before the run's lock: a runner that
-	// stops acknowledging holds at most one lock connection, whatever number of its runs are re-leased.
-	leasing chan struct{}
+	// leasing is the runner's one LEASE-send slot and reviving its one revive slot (capacity 1 each), both
+	// taken before the run's lock: a runner that stops answering holds at most one lock connection for its
+	// lease senders and one for its revives, whatever number of its runs are re-leased or revived.
+	leasing, reviving chan struct{}
 }
 
-// acquireLease takes the runner's LEASE-send slot, waiting at most wait (0: only if it is free now). An
-// endpoint built without a slot has none to take.
+// acquireLease takes the runner's LEASE-send slot, waiting at most wait (0: only if it is free now).
 func (ep runnerEndpoint) acquireLease(ctx context.Context, wait time.Duration) (release func(), ok bool) {
-	if ep.leasing == nil {
+	return acquireSlot(ctx, ep.leasing, wait)
+}
+
+// acquireRevive takes the runner's revive slot, waiting at most wait.
+func (ep runnerEndpoint) acquireRevive(ctx context.Context, wait time.Duration) (release func(), ok bool) {
+	return acquireSlot(ctx, ep.reviving, wait)
+}
+
+// acquireSlot takes a capacity-1 slot, waiting at most wait (0: only if it is free now). An endpoint built
+// without slots has none to take.
+func acquireSlot(ctx context.Context, slot chan struct{}, wait time.Duration) (release func(), ok bool) {
+	if slot == nil {
 		return func() {}, true
 	}
-	release = func() { <-ep.leasing }
+	release = func() { <-slot }
 	select {
-	case ep.leasing <- struct{}{}:
+	case slot <- struct{}{}:
 		return release, true
 	default:
 	}
@@ -57,7 +68,7 @@ func (ep runnerEndpoint) acquireLease(ctx context.Context, wait time.Duration) (
 	t := time.NewTimer(wait)
 	defer t.Stop()
 	select {
-	case ep.leasing <- struct{}{}:
+	case slot <- struct{}{}:
 		return release, true
 	case <-t.C:
 	case <-ctx.Done():
@@ -74,7 +85,7 @@ func (s *Server) runnerEndpoint(id uuid.UUID) runnerEndpoint {
 	if ep, ok := s.runnerStreams.subs[id]; ok {
 		return ep
 	}
-	ep := runnerEndpoint{link: &remote.Link{}, leasing: make(chan struct{}, 1)}
+	ep := runnerEndpoint{link: &remote.Link{}, leasing: make(chan struct{}, 1), reviving: make(chan struct{}, 1)}
 	ep.sub = remote.New(id.String(), ep.link, remote.Options{Queue: func(ctx context.Context, kind types.RunnerActionKind, ref string) error {
 		return s.queueRunnerTeardown(ctx, id, kind, ref)
 	}, Dispatch: s.runnersEnabled, Relay: s.acceptRelay,
