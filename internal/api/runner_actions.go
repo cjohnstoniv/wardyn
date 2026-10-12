@@ -132,6 +132,10 @@ func (s *Server) EventFromRunner(ctx context.Context, runnerID uuid.UUID, ev run
 		return s.ExitFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventSpool:
 		return s.DecisionIngestFromRunner(ctx, runnerID, ev)
+	case runnerwire.EventPosture:
+		return s.PostureFromRunner(ctx, runnerID, ev)
+	case runnerwire.EventResidentErase:
+		return s.ResidentEraseFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventCaps, runnerwire.EventWaiting:
 		return nil
 	default:

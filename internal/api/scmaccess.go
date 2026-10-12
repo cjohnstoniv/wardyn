@@ -557,6 +557,11 @@ func writeGitCredentialUnreadable(w http.ResponseWriter, r *http.Request, err er
 	})
 }
 
+// gitCredentialNoPersonRefusal answers a DEVICE caller (a laptop's wdd_
+// credential) whose run would need a per-person Azure DevOps credential. Not UI
+// canon: no console renders it, since a device has no console session.
+const gitCredentialNoPersonRefusal = "this run needs a person's own Azure DevOps connection, and a device submitted it with no person — submit it as the person"
+
 // gitCredentialRefusalForLauncher is the git_credential launch GATE for a
 // caller with no ResponseWriter — a SERVER-SIDE launcher
 // (recordLaunchRefusals, called from launchRecordRun). nil when admitted; a *gitCredentialRefusalError
@@ -568,12 +573,22 @@ func writeGitCredentialUnreadable(w http.ResponseWriter, r *http.Request, err er
 // subject == "" (no OIDC human — an admin-token or local-mode caller) never
 // refuses: no sign-in it could complete, the same rule the HTTP-facing
 // gitCredentialRefusal follows for the identical reason.
+//
+// A DEVICE caller with no human is the exception, and it fails closed: a
+// device context carries no OIDC human, so it would otherwise read as the
+// admin token, skip this gate, and fail at dispatch with no credential stored
+// under any person.
 func (s *Server) gitCredentialRefusalForLauncher(ctx context.Context, subject string, repos ...string) error {
 	repos = presentRepos(repos)
-	if len(repos) == 0 || s.cfg.Store == nil || subject == "" {
+	_, isDevice := deviceFromContext(ctx)
+	noPerson := isDevice && subject == ""
+	if len(repos) == 0 || s.cfg.Store == nil || (subject == "" && !noPerson) {
 		return nil
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil && noPerson {
+		return &gitCredentialRefusalError{Sentence: gitCredentialNoPersonRefusal}
+	}
 	if err != nil {
 		return fmt.Errorf("%w: read site config: %w", errGitCredentialUnreadable, err)
 	}
@@ -585,6 +600,9 @@ func (s *Server) gitCredentialRefusalForLauncher(ctx context.Context, subject st
 		return fmt.Errorf("%w: %w", errGitCredentialUnreadable, err)
 	}
 	for _, row := range rows {
+		if noPerson {
+			return &gitCredentialRefusalError{Org: adoOrgDisplay(row.row), Sentence: gitCredentialNoPersonRefusal}
+		}
 		access, err := s.scmAccessForRow(ctx, row, subject)
 		if err != nil {
 			return fmt.Errorf("%w: %w", errGitCredentialUnreadable, err)

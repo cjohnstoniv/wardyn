@@ -39,6 +39,8 @@ const (
 	providers400EntraHrs  = "git[%d].entra.pat_max_hours: Enter 1 to %d hours."
 	providers400EntraDays = "git[%d].entra.pat_max_days: Enter 1 to %d days."
 	providers400EntraMode = "git[%d].entra.token_mode: %q is not a token mode — want one of: %s"
+	providers400EntraRes  = "git[%d].entra.runner_resident_sandbox: a token goes into the sandbox only from the runner's keystore — turn on runner_resident first"
+	providers400EntraOwnR = "git[%d].entra.runner_resident: an own_pat row's token is the person's own — only a token Wardyn creates can be held on a runner"
 	providers400Source    = "git[%d].credential_source: %q is not a credential source — want one of: %s"
 	providers400PerUser   = "git[%d].credential_source: per_user needs the %q lane — no other git lane authorizes a person as themselves"
 	providers400EntraTwo  = "git[%d].lanes: git[%d] already carries the %q lane — a person signs in to one Azure DevOps organisation per deployment, so disable one of the two rows"
@@ -183,6 +185,12 @@ func validateEntraBlock(i int, cfg types.ADOEntraConfig) error {
 	if cfg.PATMaxDays < 0 || cfg.PATMaxDays > types.ADOPATMaxDaysLimit {
 		//lint:ignore ST1005 the sentence the admin reads, as written in the approved copy; it ends as a sentence does
 		return fmt.Errorf(providers400EntraDays, i, types.ADOPATMaxDaysLimit)
+	}
+	if cfg.RunnerResidentSandbox && !cfg.RunnerResident {
+		return fmt.Errorf(providers400EntraRes, i)
+	}
+	if cfg.RunnerResident && cfg.TokenMode == types.ADOTokenModeOwnPAT {
+		return fmt.Errorf(providers400EntraOwnR, i)
 	}
 	return nil
 }

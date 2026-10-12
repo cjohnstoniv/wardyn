@@ -33,7 +33,17 @@ type RunnerPosture struct {
 	DiskEncrypted bool   `json:"disk_encrypted"`
 	OS            string `json:"os"`
 	OSVersion     string `json:"os_version"`
+	// Evidence is where the runner read mdm_managed and disk_encrypted from: a
+	// root-owned file the device's MDM wrote, else its own probe of the OS.
+	// Either way the org records the posture as runner_asserted.
+	Evidence string `json:"evidence"`
 }
+
+// RunnerPosture.Evidence values.
+const (
+	PostureEvidenceMDMFile = "mdm_file"
+	PostureEvidenceOSProbe = "os_probe"
+)
 
 // Runner is one registered wardyn-runnerd. Owner is a person's principal, so the
 // row is personal data.
