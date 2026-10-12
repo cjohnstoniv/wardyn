@@ -94,13 +94,6 @@ export function SetupNeeded({ items, pending, done, intent, names, onDone }: Set
   const { status } = useShellSetupStatus();
   const [adding, setAdding] = React.useState<SetupItem | null>(null);
 
-  // Choose has nothing to focus until Harness setup renders that harness's provider control.
-  const [chooseReady, setChooseReady] = React.useState<ReadonlySet<string>>(new Set());
-  React.useEffect(() => {
-    const ready = new Set(items.flatMap((i) => (i.fix?.tool && document.getElementById(providerControlId(i.fix.tool)) ? [i.fix.tool] : [])));
-    setChooseReady((old) => (old.size === ready.size && [...ready].every((t) => old.has(t)) ? old : ready));
-  });
-
   const providerName = (id: string) => status?.model_providers?.find((p) => p.id === id)?.name;
   const sentence = (item: SetupItem): string => {
     const harness = item.fix?.action === "choose_model_provider" ? names?.get(item.fix.tool ?? "") : undefined;
@@ -135,8 +128,7 @@ export function SetupNeeded({ items, pending, done, intent, names, onDone }: Set
           {items.map((item) => {
             const finished = done.has(item.id);
             const doorKind = setupDoor(item);
-            const kind = pending.has(item.id) || (doorKind === "sign_in" && !signInProvider(intent, item)) ||
-              (doorKind === "choose" && !chooseReady.has(item.fix?.tool ?? "")) ? undefined : doorKind;
+            const kind = pending.has(item.id) || (doorKind === "sign_in" && !signInProvider(intent, item)) ? undefined : doorKind;
             return (
               <li key={item.id} id={setupRowId(item)} tabIndex={-1} className="flex flex-wrap items-center gap-3 rounded-md border border-border p-3 outline-none">
                 {finished ? <Check aria-hidden className="size-4 text-success" /> : <TriangleAlert aria-hidden className="size-4 text-warning" />}
