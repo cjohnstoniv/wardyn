@@ -582,7 +582,7 @@ func TestTemplateImportValidation(t *testing.T) {
 		{"shape check shared with the run", `{` + head + `"coverage":"partial","intent":{"workspaces":[{"workspace_id":"w","target":"work"}]}}`, reasonWorkspaceTargetInvalid + "@intent"},
 		{"unavailable: local placement", `{` + head + `"coverage":"partial","intent":{"placement":"local"}}`, reasonTemplateFieldUnavailable + "@intent.placement"},
 		{"unavailable: allowed image", `{` + head + `"coverage":"partial","intent":{"allowed_image":"img"}}`, reasonTemplateFieldUnavailable + "@intent.allowed_image"},
-		{"unavailable: built-in component", `{` + head + `"coverage":"partial","intent":{"components":[{"builtin":"github","org":"acme","repos":["acme/api"]}]}}`, reasonTemplateFieldUnavailable + "@intent.components[0]"},
+		{"unavailable: built-in azure_devops component", `{` + head + `"coverage":"partial","intent":{"components":[{"builtin":"azure_devops","org":"acme"}]}}`, reasonTemplateFieldUnavailable + "@intent.components[0]"},
 		{"plain setting named like a secret is a plain setting", ``, ""},
 	}
 	for _, tc := range cases {
@@ -619,6 +619,7 @@ func TestTemplateUnavailableMirrorsRunRefusal(t *testing.T) {
 		"runner pool":          `{"runner_pool_id":"6f1c2a52-5b1e-4d45-9d6b-0c4f1b2a7e10"}`,
 		"overrides":            `{"overrides":{"agent":{"add_hosts":["a.example.com"]}}}`,
 		"built-in":             `{"components":[{"builtin":"github","org":"acme","repos":["acme/api"]}]}`,
+		"built-in ado":         `{"components":[{"builtin":"azure_devops","org":"acme"}]}`,
 		"remote placement":     `{"placement":"remote"}`,
 		"inline component":     `{"components":[{"inline":{"hosts":["a.example.com"]}}]}`,
 		"resources":            `{"resources":{"cpu_millis":1000}}`,

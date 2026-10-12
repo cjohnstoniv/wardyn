@@ -10,7 +10,7 @@
 import type { RunnerDraft } from "../run-contract-draft";
 import { RUNNER_POOL_REFUSAL, RUNNER_POOL_REFUSAL_REASON } from "../runner-pool-refusals";
 import type { ResolvedRunnerPool, RunnerPoolChoice } from "../types/runner-pools";
-import { noContract, preview, RESOURCES_ORG, type FixtureBody } from "./base";
+import { noContract, preview, APPLIED_ORG, type FixtureBody } from "./base";
 
 const BUILD_FARM: RunnerPoolChoice = { id: "a1111111-1111-4111-8111-111111111111", name: "Build farm", hosting_type: "remote_provided", availability: "available" };
 const GPU_FARM: RunnerPoolChoice = { id: "a2222222-2222-4222-8222-222222222222", name: "GPU farm", hosting_type: "remote_provided", availability: "available" };
@@ -30,7 +30,7 @@ const resolved = (pool: RunnerPoolChoice, selection: ResolvedRunnerPool["selecti
 });
 const draft = (runner: RunnerDraft) => ({ ...noContract(), runner });
 const answer = (pools: RunnerPoolChoice[], runner_pool?: ResolvedRunnerPool) =>
-  preview({ resources: [RESOURCES_ORG], runner_pools: pools, ...(runner_pool ? { runner_pool } : {}) });
+  preview({ resources_applied: APPLIED_ORG, runner_pools: pools, ...(runner_pool ? { runner_pool } : {}) });
 
 export const POOL_FIXTURES: FixtureBody[] = [
   {
