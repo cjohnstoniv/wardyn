@@ -3,23 +3,43 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The New Run rail's Azure DevOps launch door (#386) — the git_credential
-// twin of new-run.spec.ts's model_credential launch-door case. The hermetic
-// e2e backend runs no Entra tenant (scripts/e2e-backend.sh), so both the 422
-// and the connection landing "live" are forced at the route level, the way
-// new-run.spec.ts's own refuseLaunch/perUserRow helpers force model_credential.
-import { test, expect, gotoConsole } from "./fixtures";
+// New Run's Azure DevOps launch door (#386) — the git_credential twin of
+// new-run-review-launch.spec.ts's model_credential launch-door case. The
+// hermetic e2e backend runs no Entra tenant (scripts/e2e-backend.sh), so both
+// the 422 and the connection landing "live" are forced at the route level.
+// The create is refused from the Name dialog on Review (reached through the
+// run document path); the door opens over it and nothing relaunches.
+import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { ADO } from "../src/app/lib/ado-entra-copy";
+import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
+import { NR_LAUNCH } from "../src/app/components/wardyn/copy/new-run/launch";
+import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
+import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
+import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
 import type { Page } from "@playwright/test";
 
-async function openNewRun(page: Page) {
+const DOCUMENT = "api_version: wardyn/v1\nkind: Run\nintent:\n  shape: environment\n  experience: interactive\n  no_repositories_or_drives: true\n";
+const nameDialog = (page: Page) => page.getByRole("dialog", { name: NR_LAUNCH.TITLE });
+const adoDialog = (page: Page) =>
+  page.locator('[role="dialog"], [role="alertdialog"]').filter({ has: page.getByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE }) });
+
+/** Start, the document path to Review, then the Name dialog with a typed title. */
+async function openNameDialog(page: Page, title: string) {
+  await page.route("**/api/v1/runs/preflight", (route) => route.fulfill({ json: SCENARIO_PREFLIGHT.member }));
   await gotoConsole(page);
-  await page.getByRole("button", { name: "New run" }).click();
-  await expect(page).toHaveURL(/\/runs\/new$/);
-  await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+  await navToRoute(page, "/runs/new");
+  await page.getByRole("button", { name: NR_START.DOC_YAML, exact: true }).click();
+  await page.getByRole("textbox", { name: NR_DOCUMENT.EDITOR_ARIA("YAML") }).fill(DOCUMENT);
+  await page.getByRole("button", { name: NR_DOCUMENT.CONTINUE_REVIEW, exact: true }).click();
+  await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();
+  await expect(page.getByRole("button", { name: NR_REVIEW.LAUNCH_RUN })).toBeEnabled();
+  await page.getByRole("button", { name: NR_REVIEW.LAUNCH_RUN }).click();
+  await nameDialog(page).getByLabel(NR_LAUNCH.TITLE_LABEL).fill(title);
 }
 
-test.describe("New run rail — the Azure DevOps launch door", () => {
+const launchInDialog = (page: Page) => nameDialog(page).getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true }).click();
+
+test.describe("New Run — the Azure DevOps launch door", () => {
   test("launch -> 422 -> dialog names the org -> connect -> toast -> form intact, not relaunched", async ({
     page,
     context,
@@ -27,10 +47,12 @@ test.describe("New run rail — the Azure DevOps launch door", () => {
     const org = "https://dev.azure.com/contoso";
 
     // The launch-time refusal (runs.go's gitCredentialRefusal): the ONLY
-    // door this case exercises is POST /api/v1/runs, mirroring new-run.spec.ts's
-    // own refuseLaunch helper.
+    // door this case exercises is POST /api/v1/runs, mirroring new-run-review-launch.spec.ts's
+    // own create-refusal stubs.
+    let creates = 0;
     await page.route("**/api/v1/runs", async (route) => {
       if (route.request().method() !== "POST") return route.fallback();
+      creates++;
       await route.fulfill({
         status: 422,
         contentType: "application/json",
@@ -55,12 +77,11 @@ test.describe("New run rail — the Azure DevOps launch door", () => {
       });
     });
 
-    await openNewRun(page);
-    await page.getByLabel("Title").fill("e2e ado launch door");
-    await page.getByRole("button", { name: "Launch run" }).click();
+    await openNameDialog(page, "e2e ado launch door");
+    await launchInDialog(page);
 
     // The dialog opened itself, with no click, and names the org from the
-    // 422 body (review finding F1) — no preflight verdict has run yet.
+    // 422 body (review finding F1).
     await expect(page.getByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toBeVisible();
     await expect(page.getByText(ADO.LAUNCH_DIALOG_BODY(org))).toBeVisible();
 
@@ -78,11 +99,12 @@ test.describe("New run rail — the Azure DevOps launch door", () => {
     await expect(page.getByText(ADO.RELAUNCH_TOAST_TITLE)).toBeVisible();
     await expect(page.getByText(ADO.RELAUNCH_TOAST_BODY)).toBeVisible();
 
-    // ...but review finding F8: NOTHING relaunches. The form is exactly as
-    // it stood, still on /runs/new, ready for the person to press Launch.
-    await expect(page).toHaveURL(/\/runs\/new$/);
-    await expect(page.getByLabel("Title")).toHaveValue("e2e ado launch door");
-    await expect(page.getByRole("button", { name: "Launch run" })).toBeVisible();
+    // ...but review finding F8: NOTHING relaunches. The Name dialog is exactly
+    // as it stood, over Review, ready for the person to press Launch.
+    await expect(page).not.toHaveURL(/launched=/);
+    expect(creates).toBe(1);
+    await expect(nameDialog(page).getByLabel(NR_LAUNCH.TITLE_LABEL)).toHaveValue("e2e ado launch door");
+    await expect(nameDialog(page).getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true })).toBeVisible();
   });
 
   test("Cancel closes the dialog without ever opening a popup", async ({ page, context }) => {
@@ -99,16 +121,15 @@ test.describe("New run rail — the Azure DevOps launch door", () => {
       });
     });
 
-    await openNewRun(page);
-    await page.getByLabel("Title").fill("e2e ado cancel");
-    await page.getByRole("button", { name: "Launch run" }).click();
+    await openNameDialog(page, "e2e ado cancel");
+    await launchInDialog(page);
     await expect(page.getByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toBeVisible();
 
     let popupOpened = false;
     context.on("page", () => {
       popupOpened = true;
     });
-    await page.getByRole("button", { name: "Cancel" }).click();
+    await adoDialog(page).getByRole("button", { name: "Cancel" }).click();
     await expect(page.getByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toHaveCount(0);
     expect(popupOpened).toBe(false);
   });
