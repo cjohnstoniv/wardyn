@@ -61,8 +61,9 @@ printf '\033[90mℹ egress 403? check the X-Wardyn-Egress header (approval-pendi
 # itself.
 #
 # The command is still resolved from a fixed list against PATH, never from the
-# request: each image ships exactly one of these, so no client-supplied text is
-# parsed by THIS file.
+# request: a one-CLI image ships exactly one of these, the harnesses image two
+# (WARDYN_START_HARNESS picks between them), so no client-supplied text is parsed
+# by THIS file.
 #
 # What this comment used to promise, and no longer can: that no client text
 # reached a shell in this container AT ALL. A run may now carry a SEED (its task
@@ -83,12 +84,19 @@ printf '\033[90mℹ egress 403? check the X-Wardyn-Egress header (approval-pendi
 if [ "${WARDYN_INTERACTIVE_START:-}" = "agent" ] && [ ! -e "$HOME/.wardyn/agent-started" ]; then
   mkdir -p "$HOME/.wardyn" 2>/dev/null
   : > "$HOME/.wardyn/agent-started" 2>/dev/null
-  for _c in claude codex; do
+  # The harnesses image carries several CLIs; dispatch names the one to start.
+  # Unset (an older dispatch, or a one-CLI image) keeps the fixed list.
+  case "${WARDYN_START_HARNESS:-}" in
+    claude-code) _cmds="claude" ;;
+    codex-cli) _cmds="codex" ;;
+    *) _cmds="claude codex" ;;
+  esac
+  for _c in $_cmds; do
     if command -v "$_c" >/dev/null 2>&1; then
       printf '\033[36m▸ starting %s — exit it for a shell.\033[0m\n' "$_c"
       "$_c"
       break
     fi
   done
-  unset _c
+  unset _c _cmds
 fi

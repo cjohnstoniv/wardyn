@@ -655,6 +655,9 @@ type loginRunStamp struct {
 	ModelProviderAddress string `json:"model_provider_address,omitempty"`
 	SSORegion            string `json:"sso_region,omitempty"`
 	Model                string `json:"model,omitempty"`
+	// CLIComponentID is the AWS CLI org row a sign-in through its door is for
+	// ("" on a provider's): the capture lands under that row's id.
+	CLIComponentID string `json:"cli_component_id,omitempty"`
 }
 
 // loginRunStamp also accepts a run launched before 0.8, whose row was written

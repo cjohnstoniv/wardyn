@@ -25,6 +25,10 @@ control_plane_url
 decision_buffer_size
 decision_spool_dir
 git_grants
+github_api
+github_api.capabilities
+github_api.grants
+github_api.repos
 harness_credentials
 harness_credentials.harness
 harness_credentials.sha256

@@ -293,7 +293,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	applyEphemeralDirsEnv(sandboxEnv, p.EphemeralDirs)
 	applyUserDriveEnv(sandboxEnv, p.Drive)
 	// The agent-side half of this run's autonomy level — see agentPolicyFor.
-	agentPolicy, apErr := s.agentPolicyFor(ctx, run, p.Harnesses, p.holdLane(), ceiling.agentGuardrailLocks)
+	agentPolicy, apErr := s.agentPolicyFor(ctx, run, p.Harnesses, p.holdLane(), ceiling.agentGuardrailLocks, p.attendedToolRules())
 	if apErr != nil {
 		// apErr wraps s.cfg.Runner.Capabilities' own error, which can carry
 		// driver/substrate text (a Docker daemon socket error, a k8s API
@@ -301,10 +301,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// as their FailureHint (the #445 class SD-4's guard exists to catch).
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": apErr.Error()})))
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, fmt.Sprintf(
-			"This run was not launched: its runner's capabilities could not be confirmed, "+
-				"so whether it can deliver this run's managed settings (%s) is unknown",
-			agentPolicyBasis(run.AutonomyLevel, p.holdLane(), ceiling.agentGuardrailLocks)))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, agentPolicyFailureHint(apErr, run.AutonomyLevel, p.holdLane(), ceiling.agentGuardrailLocks))
 		return
 	}
 	// Caller-supplied non-secret env (p.ExtraEnv): the AWS harness login's
@@ -402,7 +399,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// phases so nothing above can re-add a managed host. See
 	// confineGitBrokerEgress; the run.policy.resolve audit below records the
 	// narrowed envelope, so the removal is disclosed, not silent.
-	if confined := confineGitBrokerEgress(&policy, p.GitGrants); len(confined) > 0 {
+	if confined := confineBrokerEgress(&policy, p, sandboxEnv); len(confined) > 0 {
 		slog.InfoContext(ctx, "wardynd: git-broker run — broker-managed hosts confined to the /wardyn/gh/ route",
 			slog.String("run_id", run.ID.String()), slog.Any("hosts", confined))
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.egress.confine",
@@ -550,7 +547,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			BrokeredPATGrantIDs: brokeredPATIDs,
 			// The per-person Azure DevOps REST gate's grant (runs_dispatch_ado_inject.go).
 			// Nil for every run not on that lane, which leaves the gate off.
-			ADOGrant: ado.gate,
+			ADOGrant:  ado.gate,
+			GitHubAPI: p.Components.GitHubAPI,
 			// The azure_foundry lane's route gate and channel host (provider_azure.go). Empty for every
 			// run not on that lane, which leaves both off.
 			AzureGates:      plan.azure.gates,

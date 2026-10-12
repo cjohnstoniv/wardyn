@@ -12,7 +12,8 @@
 # CLI version deploy/images/claude-code/Dockerfile pins (never a channel) and fails, naming
 # each key, when that CLI's bundled code no longer contains it.
 #
-# DRIFT means: a key in internal/agentpolicy/testdata/*-managed-settings.json, or the
+# DRIFT means: a key in internal/agentpolicy/testdata/*-managed-settings.json (the frozen documents) or
+# testdata/attended-rules/*.json (the frozen documents with an interactive run's tool rules written in), or the
 # directory or file name of ClaudeCodeManagedSettingsPath, is absent from the installed
 # CLI. The presence check runs on both shipped platforms (amd64, and arm64 from a second
 # `npm install --cpu=arm64 --os=linux`; the arm64 binary is only read, never run, and its
@@ -23,7 +24,8 @@
 # under --permission-mode bypassPermissions when the document disables bypass, and that the
 # hold lane's --permission-mode manual still reports `default` under every document (a launch
 # flag beats a managed defaultMode: acceptEdits, so a hold run is never auto-accepting). A last
-# check proves allowManagedHooksOnly on the bypass-launched document: a repository SessionStart
+# check proves allowManagedHooksOnly on the bypass-launched document; another that every built-in tool an
+# attended-rules document denies is missing from the tools its init event lists, and present without a file: a repository SessionStart
 # hook fires without the managed file and does not with it. No step needs a credential. Bump the Dockerfile pin and this probe re-runs against the
 # new version.
 #
@@ -47,7 +49,8 @@ pin="${pins#ARG CLAUDE_CODE_VERSION=}"
 [[ "$pin" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "CLAUDE_CODE_VERSION='$pin' is not an exact x.y.z version — the probe never tests a channel"
 
 # 2. What Wardyn writes: every JSON key in the frozen documents, and the file path.
-keys="$(cat "$POLICY_DIR"/testdata/*-managed-settings.json | grep -oE '"[^"]+"[[:space:]]*:' | sed -E 's/^"([^"]*)".*/\1/' | sort -u)"
+docs=("$POLICY_DIR"/testdata/*-managed-settings.json "$POLICY_DIR"/testdata/attended-rules/*.json)
+keys="$(cat "${docs[@]}" | grep -oE '"[^"]+"[[:space:]]*:' | sed -E 's/^"([^"]*)".*/\1/' | sort -u)"
 [ -n "$keys" ] || die "no managed-settings keys found under $POLICY_DIR/testdata — the probe would pass vacuously"
 path="$(sed -nE 's/^const ClaudeCodeManagedSettingsPath = "([^"]+)"$/\1/p' "$POLICY_DIR/agentpolicy.go")"
 [ -n "$path" ] || die "ClaudeCodeManagedSettingsPath not found in $POLICY_DIR/agentpolicy.go"
@@ -127,10 +130,10 @@ mode_of() { # <settings dir> [claude args...] -> the init event's permissionMode
         | sed -nE 's/.*"subtype":"init".*"permissionMode":"([^"]*)".*/\1/p' | head -1 || true
 }
 behaved=0
-for doc in "$POLICY_DIR"/testdata/*-managed-settings.json; do
+for doc in "${docs[@]}"; do
     want="$(sed -nE 's/^[[:space:]]*"defaultMode":[[:space:]]*"([^"]*)".*/\1/p' "$doc" | head -1)"
     [ -n "$want" ] || die "$doc has no permissions.defaultMode — the behaviour check would pass vacuously"
-    dir="$tmp/settings-$(basename "$doc" -managed-settings.json)"
+    dir="$tmp/settings-$(basename "$(dirname "$doc")")-$(basename "$doc" .json)"
     mkdir -p "$dir"; cp "$doc" "$dir/$(basename "$path")"
     got="$(mode_of "$dir")"
     [ "$got" = "$want" ] || die "$(basename "$doc"): Claude Code $pin reports permissionMode '${got:-none}', the managed defaultMode is '$want' — the CLI does not act on the file it reads; stderr: $(head -c 400 "$tmp/stderr")"
@@ -170,9 +173,36 @@ hooked=0
 for doc in "$POLICY_DIR"/testdata/*-managed-settings.json; do
     grep -q '"allowManagedHooksOnly": true' "$doc" || continue
     ! grep -q '"disableBypassPermissionsMode"' "$doc" || continue
-    dir="$tmp/settings-$(basename "$doc" -managed-settings.json)"
+    dir="$tmp/settings-testdata-$(basename "$doc" .json)"
     [ "$(hook_fired "$dir")" != fired ] || die "$(basename "$doc"): a repository hook still fired under --dangerously-skip-permissions although the file sets allowManagedHooksOnly"
     hooked=$((hooked + 1))
 done
 [ "$hooked" -gt 0 ] || die "no bypass-launchable document under $POLICY_DIR/testdata sets allowManagedHooksOnly — the hook check has nothing to prove"
 echo "ok: Claude Code $pin runs no repository hook under --dangerously-skip-permissions with $hooked managed-settings document(s) that set allowManagedHooksOnly"
+
+# 7. Denied tools. An attended-rules document's permissions.deny has to take each built-in tool it names out of
+# the session: the init event lists the session's tools before any model call, so this is offline too. A tool
+# the CLI does not list without the managed file proves nothing, so that control is required.
+tools_of() { # <settings dir or ""> -> the init event's tools array, as JSON text
+    local mount=()
+    [ -z "$1" ] || mount=(-v "$1:/etc/claude-code:ro")
+    docker run --rm --network none --user node --cap-drop ALL --security-opt no-new-privileges \
+        --read-only --tmpfs /tmp -v "$amd_exe:/usr/local/bin/claude:ro" ${mount[@]+"${mount[@]}"} \
+        -e HOME=/tmp -e CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 "$image" \
+        claude --print hi --output-format stream-json --verbose 2>"$tmp/stderr" \
+        | sed -nE 's/.*"subtype":"init".*"tools":\[([^]]*)\].*/\1/p' | head -1 || true
+}
+unfiled="$(tools_of "")"
+denied=0
+for doc in "$POLICY_DIR"/testdata/attended-rules/*.json; do
+    names="$(sed -n '/"deny": \[/,/\]/p' "$doc" | grep -v ':' | grep -oE '"[A-Za-z0-9_.-]+"' | tr -d '"' | grep -v '^mcp__' || true)"
+    dir="$tmp/settings-attended-rules-$(basename "$doc" .json)"
+    listed="$(tools_of "$dir")"
+    for n in $names; do
+        grep -qF "\"$n\"" <<<"$unfiled" || die "$(basename "$doc"): '$n' is not among the tools Claude Code $pin lists without a managed file — the deny check would pass vacuously; stderr: $(head -c 400 "$tmp/stderr")"
+        ! grep -qF "\"$n\"" <<<"$listed" || die "attended-rules/$(basename "$doc"): Claude Code $pin still lists '$n', which the file's permissions.deny names — the deny list is not honoured"
+        denied=$((denied + 1))
+    done
+done
+[ "$denied" -gt 0 ] || die "no attended-rules document denies a built-in tool — the deny check has nothing to prove"
+echo "ok: Claude Code $pin drops every built-in tool the attended-rules documents deny ($denied checks)"

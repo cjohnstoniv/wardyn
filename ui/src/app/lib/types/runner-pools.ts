@@ -13,7 +13,7 @@
 // The UI words are "Remote Provided" (`remote_provided`) and "Self-Hosted"
 // (`self_hosted`); the run's transport value stays `placement` remote / local.
 
-import type { RunnerPoolReason } from "../runner-pool-refusals";
+import type { BarrierReason, PoolAvailabilityReason, RunnerPoolReason } from "../runner-pool-refusals";
 import type { ConfinementClass } from "./runs";
 
 export type RunnerPoolHosting = "remote_provided" | "self_hosted";
@@ -179,20 +179,70 @@ export interface RunnerPoolUsePolicy {
   updated_by?: string;
 }
 
-/** Go: client.RunnerPoolChoice. Only pools the caller may use are ever sent. */
+/**
+ * Go: client.RunnerPoolChoice, as the preflight and the policy preview send it. Only pools the caller may
+ * use are ever sent. `limits` and `barriers` are never filled on those doors.
+ */
 export interface RunnerPoolChoice {
   id: string;
   name: string;
   hosting_type: RunnerPoolHosting;
   availability: RunnerPoolAvailability;
-  reason?: RunnerPoolReason;
+  // The server sends one of POOL_AVAILABILITY_REASONS; RunnerPoolReason stays for older fixtures.
+  reason?: PoolAvailabilityReason | RunnerPoolReason;
   limits?: EffectiveRunLimits[];
   barriers?: ConfinementClass[];
 }
 
+/** Go: runnerpool.BarrierOption. Always CC1, CC2, CC3, in that order. */
+export interface BarrierOption {
+  class: ConfinementClass;
+  available: boolean;
+  default?: boolean;
+  /** "organisation" arrives with the organisation default barrier; Review already reads it. */
+  default_source?: "server" | "organisation";
+  reason_code?: BarrierReason;
+  reason_detail?: "kvm_missing";
+  floor?: ConfinementClass;
+}
+
+/** Go: client.PoolRunner. One of the caller's OWN runners in a self-hosted pool. */
+export interface PoolRunner {
+  id: string;
+  name: string;
+  online: boolean;
+}
+
+/**
+ * Go: client.RunnerPoolCatalogueEntry, one row of GET /runner-pools: the dry doors' fields plus what the
+ * pool offers. A row the caller may only manage (runner_pool_not_found) carries none of these.
+ */
+export interface RunnerPoolCatalogueEntry extends RunnerPoolChoice {
+  run_types: RunnerPoolRunType[];
+  run_types_source?: "pool" | "none";
+  barrier_options: BarrierOption[];
+  my_runners?: PoolRunner[];
+}
+
+/** Go: client.PersonAllowance. Counts only; absent for a caller outside governance. */
+export interface PersonAllowance {
+  active: number;
+  max?: number;
+  profile_name?: string;
+}
+
+/** Go: client.PoolDefault. The pool an untouched run resolves to, or the default that no longer applies. */
+export interface PoolDefault {
+  pool_id?: string;
+  selection?: RunnerPoolSelection;
+  reason?: RunnerPoolReason;
+}
+
 /** Go: client.RunnerPoolList. */
 export interface RunnerPoolList {
-  pools: RunnerPoolChoice[];
+  pools: RunnerPoolCatalogueEntry[];
+  allowance?: PersonAllowance;
+  default?: PoolDefault;
 }
 
 /** Go: client.CreateRunnerPoolRequest. */

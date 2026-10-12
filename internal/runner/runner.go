@@ -152,6 +152,8 @@ type ProxyConfig struct {
 	// AzureGates are the run's azure_foundry route gates. A non-empty set also sizes the sidecar's
 	// memory envelope up (ProxyLimitsFor): the in-flight body budget does not fit the default.
 	AzureGates []proxy.AzureGateConfig
+	// GitHubAPI is the run's GitHub CLI grant for the proxy's api.github.com door; nil == off.
+	GitHubAPI *proxy.GitHubAPIGrant
 	// BrokeredPATGrantIDs is every git_pat grant id of the run while the PAT broker is on; the proxy refuses a raw mint of one.
 	BrokeredPATGrantIDs []uuid.UUID
 	// UpstreamProxyURL is the OPTIONAL corporate parent proxy the sidecar

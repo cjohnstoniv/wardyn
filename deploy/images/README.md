@@ -303,9 +303,11 @@ Two details are load-bearing, and copying a shortened form silently drops them:
 | `oracle/`       | `wardyn/agent-oracle:local`      | none (e2e stand-in; §4/§6 exempt — no git broker) |
 | `full/`         | `wardyn/agent-full:local`    | `claude` (inherited) |
 | `vscode/`       | `wardyn/agent-vscode:local`  | none by default (agent-base); adds `code-server` behind the UI-sandbox relay |
+| `harnesses/`    | `wardyn/agent-harnesses:local` | `claude` and `codex` in one image (local build only) |
 | `aws-sso/`      | `wardyn/agent-aws-sso:local` | `aws` (AWS CLI v2, no LLM harness) |
 
 - `claude-code/` and `codex-cli/` are the two user-facing agent harnesses; `make agent-images-core` builds them plus `base/`, which carries the setup connectivity probe.
+- `base/`, `claude-code/` and `codex-cli/` (so `full/` too) also carry AWS CLI v2 for the AWS CLI component, installed exactly as `aws-sso/` installs it; [scripts/test-image-recipes.py](../../scripts/test-image-recipes.py) fails when the copies drift.
 - `make agent-images` additionally builds `oracle/`
   - NOT a real coding agent: it runs a task's scripted, known-good solution so the e2e suite can prove each task in `test/e2e/tasks/` is solvable and its grader scores correctly
   - and `aws-sso/`, also not a coding agent:
@@ -321,6 +323,8 @@ Two details are load-bearing, and copying a shortened form silently drops them:
   - `AWS_CLI_INSTALL=staged` swaps in a host-staged installer zip for offline/strict-allowlist builds, mirroring `claude-code`'s `CLAUDE_INSTALL=native` pattern.
 - `full/` is a separate, fat opt-in image (`make agent-image-full`) built `FROM wardyn/agent-claude-code:local` plus real Go/Python/Rust/JDK+Maven/pnpm toolchains, for workspaces whose import Record/Verify setup commands need an actual toolchain rather than the toolchain-less core image (which dies "command not found").
 
+- `harnesses/` is a separate, opt-in image (`make agent-image-harnesses`) built `FROM wardyn/agent-claude-code:local` plus Codex at the same pin as `codex-cli/`, for a run that carries more than one harness. See "[Harness-set image (`harnesses/`)](#harness-set-image-harnesses)" below.
+
 - `vscode/` is likewise a separate, opt-in image (`make agent-image-vscode`) built `FROM wardyn/agent-base:local`
   - (its `BASE_IMAGE` build arg default — the launcher only execs `code-server`, never a coding-agent CLI)
   - plus a pinned, sha256-verified `code-server`
@@ -328,6 +332,16 @@ Two details are load-bearing, and copying a shortened form silently drops them:
 - A developer checkout that wants `claude` reachable from the vscode terminal overrides the default: `make agent-image-vscode BASE_IMAGE=wardyn/agent-claude-code:local` (build the vendor base first with `make agent-images-core`).
 
 ---
+
+## Harness-set image (`harnesses/`)
+
+One image carrying Claude Code and Codex, for a run that carries both.
+
+- LOCAL BUILD ONLY: it layers on the claude-code image, so it is in no release or nightly matrix ([`scripts/test-image-recipes.py`](../../scripts/test-image-recipes.py) fails if it appears in one; `LICENSING.md` says why).
+- Build: `make agent-image-harnesses`. `BASE_IMAGE=wardyn/agent-full:local` layers it on the toolchain image.
+- Declare it with a `+` key (ids sorted), then restart wardynd: `WARDYN_AGENT_IMAGES='{"claude-code+codex-cli":"wardyn/agent-harnesses:local"}'`. On k8s, push it to a registry the cluster pulls from and declare that ref.
+- `/usr/local/bin/agent-run` is `common/agent-run-set`; each harness's own launcher is at `/usr/local/lib/wardyn/harness/<id>/agent-run`.
+- With `WARDYN_HARNESSES` and `WARDYN_START_HARNESS` from dispatch, `--idle` runs `--prepare-only` (CLI configuration only) for every other harness, then the start harness's `--idle`. The attach shell's auto-start launches the start harness's CLI.
 
 ## UI-sandbox image (`vscode/`)
 

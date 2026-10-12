@@ -105,6 +105,8 @@ type preflightResponse struct {
 	// empty until that lane fills it.
 	RunnerPool  *client.ResolvedRunnerPool `json:"runner_pool,omitempty"`
 	RunnerPools []client.RunnerPoolChoice  `json:"runner_pools"`
+	// BarrierOptions are the resolved pool's three barriers under this draft's floors; empty when unpooled.
+	BarrierOptions []client.BarrierOption `json:"barrier_options"`
 	// Access is what the run brings in (accessFacts), the same projection the
 	// policy preview answers for the same request.
 	Access *accessBlock `json:"access,omitempty"`
@@ -366,6 +368,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		Attachments:              f.attachments,
 	}
 	resp.RunnerPool, resp.RunnerPools = f.place.facts()
+	resp.BarrierOptions = f.barrierOptions
 	resp.Image, resp.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
 	resp.Limits, resp.ResourcesApplied = f.place.sizeFacts()
 	resp.MainDrive = f.mainDrive.applied()
@@ -390,7 +393,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		credentialChecked: true, autonomyResolved: true,
 	}, resp.GitCredential)
 	access, err := s.accessFor(r, accessInputs{req: f.req, spec: f.spec, prov: f.prov, source: f.source,
-		scmSite: f.scmSite, mpChoice: f.mpChoice, comps: f.comps, facts: resp.Components})
+		scmSite: f.scmSite, mpChoice: f.mpChoice, comps: f.comps, facts: resp.Components, level: f.autonomy.Level})
 	if err != nil {
 		writeServerError(w, r, "resolve capability", err)
 		return

@@ -116,13 +116,13 @@ func addRunnerPath(pool, runner uuid.UUID) string {
 	return "/api/v1/me/runner-pools/" + pool.String() + "/runners/" + runner.String()
 }
 
-func (e *poolEnv) listed(c *http.Cookie) map[uuid.UUID]client.RunnerPoolChoice {
+func (e *poolEnv) listed(c *http.Cookie) map[uuid.UUID]client.RunnerPoolCatalogueEntry {
 	e.t.Helper()
 	w := e.call(c, http.MethodGet, "/api/v1/runner-pools", "")
 	if w.Code != http.StatusOK {
 		e.t.Fatalf("list = %d %s", w.Code, w.Body)
 	}
-	out := map[uuid.UUID]client.RunnerPoolChoice{}
+	out := map[uuid.UUID]client.RunnerPoolCatalogueEntry{}
 	for _, p := range decodeJSON[client.RunnerPoolList](e.t, w).Pools {
 		out[p.ID] = p
 	}
@@ -338,9 +338,14 @@ func TestPG_RunnerPoolsStaleRevisionIsRefused(t *testing.T) {
 // DONE WHEN (7): revoking a runner and tidying it away never depend on its pool; a revoked runner stops
 // counting as the owner's.
 func TestPG_RunnerPoolsRevokeIsIndependentOfMembership(t *testing.T) {
+	localOn(t)
 	e := newPoolEnv(t, false)
+	if _, err := e.pg.PutSiteConfig(context.Background(), types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
 	pool := e.createPool("Laptops", types.RunnerPoolSelfHosted)
 	mine := e.claimedRunner(e.personP)
+	e.srv.cfg.RunnerOnline = func(id uuid.UUID) bool { return id == mine }
 	if w := e.call(e.person, http.MethodPut, addRunnerPath(pool.ID, mine), ""); w.Code != http.StatusCreated {
 		t.Fatalf("add = %d %s", w.Code, w.Body)
 	}
@@ -388,7 +393,7 @@ func TestPG_RunnerPoolsLegacyBootstrapIsOneRemoteProvidedPoolOnce(t *testing.T) 
 	if len(pools) != 1 {
 		t.Fatalf("bootstrap made %d pools visible to a member, want 1", len(pools))
 	}
-	var bootstrapped client.RunnerPoolChoice
+	var bootstrapped client.RunnerPoolCatalogueEntry
 	for _, p := range pools {
 		bootstrapped = p
 	}
