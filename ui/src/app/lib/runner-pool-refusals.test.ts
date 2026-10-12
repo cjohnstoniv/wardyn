@@ -73,9 +73,9 @@ describe("pool limit wording", () => {
 
   it("says the same end-of-life sentence as the run's stored reason", () => {
     for (const [reason, sentence] of Object.entries(RUN_END_REASON_SENTENCE)) {
-      expect(goLimits, reason).toContain(`return "${sentence}"`);
+      expect(goLimits, reason).toContain(`RunEndReason = "${reason}"`);
+      expect(goLimits, reason).toMatch(new RegExp(`:\\s+"${sentence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}",`));
     }
-    expect(goLimits).toContain('RunEndMaxLifetimeReached RunEndReason = "max_lifetime_reached"');
   });
 
   it("lists one, two and three allowed barriers the way the server does", () => {

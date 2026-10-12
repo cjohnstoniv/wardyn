@@ -52,6 +52,9 @@ var ConfinementClassNames = map[ConfinementClass]string{
 type RunState string
 
 const (
+	// RunQueued is a launch waiting for a slot in a capped runner pool: non-terminal, before PENDING,
+	// and holding nothing (no identity, no sandbox, no slot).
+	RunQueued   RunState = "QUEUED"
 	RunPending  RunState = "PENDING"
 	RunStarting RunState = "STARTING"
 	RunRunning  RunState = "RUNNING"
@@ -78,7 +81,11 @@ func (s RunState) IsTerminal() bool {
 // NonTerminalRunStates is IsTerminal's complement, for the active-run quota query. POSITIVE, never
 // `NOT IN (terminal)`: a forgotten member only undercounts here, but a negation would wedge capped
 // accounts at their limit forever. Pinned against IsTerminal by test.
-var NonTerminalRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWaiting}
+var NonTerminalRunStates = []RunState{RunQueued, RunPending, RunStarting, RunRunning, RunWaiting}
+
+// SlotHoldingRunStates is NonTerminalRunStates minus RunQueued: the states whose runs hold a pool,
+// deployment or host slot, and the only ones a sandbox reaper may age. A waiting run holds nothing.
+var SlotHoldingRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWaiting}
 
 // PauseReason says why a run's agent is frozen (AgentRun.PausedReason).
 type PauseReason string
@@ -116,7 +123,7 @@ type AgentRun struct {
 	PolicyID         *uuid.UUID       `json:"policy_id,omitempty"`
 	ConfinementClass ConfinementClass `json:"confinement_class"`
 	State            RunState         `json:"state"`
-	SPIFFEID         string           `json:"spiffe_id"`     // spiffe://<trust-domain>/agent-run/<id>
+	SPIFFEID         string           `json:"spiffe_id"`     // spiffe://<trust-domain>/agent-run/<id>; empty while QUEUED, written when the run starts
 	RunnerTarget     string           `json:"runner_target"` // "docker"
 	// Placement is where the sandbox lives (OD-8): remote (the organisation's own
 	// executor), local (a runner the person registered), or empty for a run from
@@ -166,7 +173,9 @@ type AgentRun struct {
 	StatusReason string `json:"status_reason,omitempty"` // reason token parsed out of StatusDetail, derived at read, never stored
 	// AutonomyLevel freezes the level resolved at create, not the profile/posture that produced it (that's on the audit row).
 	AutonomyLevel AutonomyLevel `json:"autonomy_level,omitempty"`
-	EndsAt        *time.Time    `json:"ends_at"` // run's lease end, captured once at create from RunLimits, never re-resolved
+	// AdmittedAt is when a queued run was promoted out of the queue; written by promotion only, so nil for a run that never waited.
+	AdmittedAt *time.Time `json:"admitted_at,omitempty"`
+	EndsAt     *time.Time `json:"ends_at"` // run's lease end, captured once at create from RunLimits, never re-resolved
 	// LifetimeCapAt is the latest end the pool and the deployment allow, measured from launch (created_at plus the lowest of their maximums); absent when neither bounds the lifetime or for a run from before this column. LifetimeCapSource names which one bound it (pool or deployment) and stays off the wire.
 	LifetimeCapAt     *time.Time  `json:"lifetime_cap_at,omitempty"`
 	LifetimeCapSource LimitSource `json:"-"`
