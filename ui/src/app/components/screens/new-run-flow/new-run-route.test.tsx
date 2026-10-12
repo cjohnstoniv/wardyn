@@ -121,6 +121,12 @@ describe("New Run route (U9)", () => {
     expect(text("nav")).toBe("REPLACE");
   });
 
+  it("drops launched router state that names no owner", async () => {
+    show({ pathname: "/runs/new", search: `?launched=${R}`, state: { created: { id: R } } });
+    expect(await screen.findByText("launched")).toBeInTheDocument();
+    expect(text("state")).toBe("null");
+  });
+
   it("keeps the launched router state of the person signed in", async () => {
     const state = { created: { id: R }, owner: "alice" };
     show({ pathname: "/runs/new", search: `?launched=${R}`, state });

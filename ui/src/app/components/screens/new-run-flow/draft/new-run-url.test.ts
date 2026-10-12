@@ -58,7 +58,7 @@ describe("New Run URL grammar (U8)", () => {
     `template=not-a-uuid`, `template=${T}&rev=0`, `template=${T}&rev=x`, `template=${T}&again=${R}`,
     "again=123", "launched=", "launched=../admin",
     "foo=1", "step=shape&foo=1", "rev=3", "step=shape&format=yaml", "step=review&format=json", "step=document&format=yaml&view=pretty",
-    "step=shape&step=run", `again=${R}&rev=2`,
+    "step=shape&step=run", `again=${R}&rev=2`, `launched=${R}&junk=1`, `launched=${R}&launched=${R}`,
   ])("?%s is outside the grammar: Start, replacing the URL", (query) => {
     expect(parse(query)).toEqual(START);
   });

@@ -9,9 +9,11 @@ import type { RunIntent } from "../draft/run-intent";
 import { harnessIds, withKeys } from "./lens-keys";
 import { issue, type StepIssue, type StepValidator } from "./step-issues";
 
+/** A harness added beside the older tool-approval hold starts held, so a clone is never quieter. */
 export function addHarness(intent: RunIntent, id: string): RunIntent {
   if (harnessIds(intent).includes(id)) return intent;
-  const tools = [...(intent.tools ?? []), { id, kind: "harness" as const }];
+  const held = intent.tool_approvals === "hold" ? { default_effect: "hold" as const } : {};
+  const tools = [...(intent.tools ?? []), { id, kind: "harness" as const, ...held }];
   const workload = intent.workload?.kind === "agent_task" && !intent.workload.agent ? { ...intent.workload, agent: id } : intent.workload;
   return withKeys(intent, { tools, workload });
 }

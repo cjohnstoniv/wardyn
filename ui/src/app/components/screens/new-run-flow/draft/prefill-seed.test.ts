@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { addHarness } from "../lenses/harness-lens";
 import { prefillSeed } from "./prefill-seed";
 
 const clone = (state: object) => prefillSeed({ prefill: { inlinePolicy: false, state } });
@@ -36,6 +37,19 @@ describe("router-state prefill seeds", () => {
       shape: "environment", experience: "interactive", tools: [{ id: "claude-code", kind: "harness" }],
       startup: { kind: "command", command: "make dev" },
     });
+  });
+
+  it("keeps a held posture with no harness it can name, so any harness added later starts held", () => {
+    const seed = clone({ runType: "agent", mode: "batch", toolApprovals: "hold", task: "t" });
+    expect(seed?.intent).toMatchObject({ tool_approvals: "hold" });
+    expect(seed?.intent.tools).toBeUndefined();
+    expect(addHarness(seed?.intent ?? {}, "claude-code").tools).toEqual([{ id: "claude-code", kind: "harness", default_effect: "hold" }]);
+    expect(addHarness({}, "claude-code").tools).toEqual([{ id: "claude-code", kind: "harness" }]);
+  });
+
+  it("marks a clone whose source policy was inline and not kept, so Review can say so", () => {
+    expect(prefillSeed({ prefill: { inlinePolicy: true, state: {} } })?.origin).toEqual({ kind: "clone", policyDropped: true });
+    expect(prefillSeed({ prefill: { inlinePolicy: false, state: {} } })?.origin).toEqual({ kind: "clone" });
   });
 
   it("keeps a held tool-approval posture as the harness default, never a quieter run", () => {
