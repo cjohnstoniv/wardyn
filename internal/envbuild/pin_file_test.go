@@ -88,7 +88,7 @@ func TestPinFile_OnlyTheGeneratedLaneReadsIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	byoi, err := b.FinalizeBase(t.Context(), "ubuntu:24.04", "wardyn-byoi/r:latest", nil)
+	byoi, err := b.FinalizeBase(t.Context(), "ubuntu:24.04", "wardyn-byoi/r:latest", nil, false)
 	if err != nil {
 		t.Fatalf("FinalizeBase: %v", err)
 	}
