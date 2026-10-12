@@ -5,6 +5,7 @@ package api
 
 import (
 	"cmp"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -119,11 +120,54 @@ func runTargets(spec types.RunPolicySpec, wsRefs []types.Workspace, index worksp
 	return out
 }
 
+// carrierSet is a target's carriers for the overlap tree, interned and sorted,
+// so comparing two is one merge of short lists rather than a scan of one per
+// element of the other.
+type carrierSet struct {
+	ids []int
+	key string // the set as one string, for an exact set match
+}
+
+// carrierSets builds the carrierSet of each target.
+func carrierSets(targets []runTarget) []carrierSet {
+	index := map[string]int{}
+	out := make([]carrierSet, len(targets))
+	for i, t := range targets {
+		for _, id := range t.carriers {
+			n, ok := index[id]
+			if !ok {
+				n = len(index)
+				index[id] = n
+			}
+			out[i].ids = append(out[i].ids, n)
+		}
+		slices.Sort(out[i].ids)
+		out[i].ids = slices.Compact(out[i].ids)
+		out[i].key = fmt.Sprint(out[i].ids)
+	}
+	return out
+}
+
 // placedMount is one target placed in the overlap tree; seq is its position.
 type placedMount struct {
 	name, target string
-	carriers     []string
+	set          carrierSet
 	seq          int
+}
+
+// disjoint reports whether two carrier sets share no carrier.
+func disjoint(a, b carrierSet) bool {
+	for i, j := 0, 0; i < len(a.ids) && j < len(b.ids); {
+		switch {
+		case a.ids[i] == b.ids[j]:
+			return false
+		case a.ids[i] < b.ids[j]:
+			i++
+		default:
+			j++
+		}
+	}
+	return true
 }
 
 // firstMounts answers "the earliest mount placed here that shares no carrier
@@ -131,22 +175,34 @@ type placedMount struct {
 // only up to limit owners: when the earliest mount disjoint from x was not kept,
 // limit owners came before it, and since x has fewer carriers than limit, one
 // of those earlier mounts is disjoint from x too. A mount with several carriers
-// (a source two of the run's workspaces carry, which is rare) is always kept.
-type firstMounts struct{ single, multi []*placedMount }
+// (a source two of the run's workspaces carry, which is rare) is kept as the
+// first of its carrier set: an earlier mount with the same set is disjoint from
+// x whenever it is. That bounds the list by the distinct shared sources, not
+// by how many targets repeat one.
+type firstMounts struct {
+	single, multi []*placedMount
+	multiSets     map[string]bool // the carrier sets in multi
+}
 
 func (f *firstMounts) add(m *placedMount, limit int) {
 	switch {
-	case len(m.carriers) > 1:
-		f.multi = append(f.multi, m)
-	case len(f.single) < limit && !slices.ContainsFunc(f.single, func(p *placedMount) bool { return p.carriers[0] == m.carriers[0] }):
+	case len(m.set.ids) > 1:
+		if !f.multiSets[m.set.key] {
+			if f.multiSets == nil {
+				f.multiSets = map[string]bool{}
+			}
+			f.multiSets[m.set.key] = true
+			f.multi = append(f.multi, m)
+		}
+	case len(f.single) < limit && !slices.ContainsFunc(f.single, func(p *placedMount) bool { return p.set.ids[0] == m.set.ids[0] }):
 		f.single = append(f.single, m)
 	}
 }
 
-func (f *firstMounts) disjointFrom(carriers []string) *placedMount {
+func (f *firstMounts) disjointFrom(x carrierSet) *placedMount {
 	var earliest *placedMount
 	for _, list := range [][]*placedMount{f.single, f.multi} {
-		if i := slices.IndexFunc(list, func(m *placedMount) bool { return !sharesCarrier(m.carriers, carriers) }); i >= 0 &&
+		if i := slices.IndexFunc(list, func(m *placedMount) bool { return disjoint(m.set, x) }); i >= 0 &&
 			(earliest == nil || list[i].seq < earliest.seq) {
 			earliest = list[i]
 		}
@@ -177,6 +233,7 @@ func targetOverlapRefusal(targets []runTarget) *runRefusal {
 	for _, t := range targets {
 		limit = max(limit, len(t.carriers)+1)
 	}
+	sets := carrierSets(targets)
 	root := &mountNode{}
 	clones := map[string]runTarget{}
 	for seq, t := range targets {
@@ -198,18 +255,18 @@ func targetOverlapRefusal(targets []runTarget) *runRefusal {
 		}
 		node := root
 		for _, e := range elems {
-			consider(node.exact.disjointFrom(t.carriers)) // an enclosing mount
+			consider(node.exact.disjointFrom(sets[seq])) // an enclosing mount
 			if node = node.children[e]; node == nil {
 				break
 			}
 		}
 		if node != nil {
-			consider(node.tree.disjointFrom(t.carriers)) // an equal or enclosed mount
+			consider(node.tree.disjointFrom(sets[seq])) // an equal or enclosed mount
 		}
 		if earliest != nil {
 			return overlapRefusal(t.target, t.name, earliest.name, earliest.target)
 		}
-		m := &placedMount{name: t.name, target: t.target, carriers: t.carriers, seq: seq}
+		m := &placedMount{name: t.name, target: t.target, set: sets[seq], seq: seq}
 		node = root
 		for _, e := range elems {
 			if node.children == nil {
@@ -243,22 +300,35 @@ func overlapRefusal(t, self, other, otherPath string) *runRefusal {
 
 // adoOrgConflictRefusal holds a run to one Azure DevOps organisation across its
 // workspaces (DECISIONS 2026-10-09): an Entra token carries no organisation
-// claim, so a run spanning two would need two pins and gets neither.
+// claim, so a run spanning two would need two pins and gets neither. Two
+// repositories in different organisations are refused unless one workspace
+// carries both (two organisations inside one workspace keep today's rule).
+// Every pair is compared: sharing a workspace is not transitive, so comparing
+// with one repository would let a third organisation through.
 func adoOrgConflictRefusal(targets []runTarget) *runRefusal {
-	var first runTarget
-	var firstOrg string
+	type seen struct {
+		t        runTarget
+		org, key string
+	}
+	var earlier []seen
 	for _, t := range targets {
 		if t.kind != attachmentRepository || t.owner == "" {
 			continue
 		}
 		org, ok := adoOrganisationOf(t.repo)
-		switch {
-		case !ok:
-		case firstOrg == "":
-			first, firstOrg = t, org
-		case org != firstOrg && !sharesCarrier(t.carriers, first.carriers):
-			return runError(http.StatusUnprocessableEntity, reasonWorkspaceADOOrgConflict,
-				workspaceADOOrgConflictMsg(first.name, firstOrg, t.name, org))
+		if !ok {
+			continue
+		}
+		key := strings.Join(slices.Sorted(slices.Values(t.carriers)), ",")
+		for _, e := range earlier {
+			if e.org != org && !sharesCarrier(t.carriers, e.t.carriers) {
+				return runError(http.StatusUnprocessableEntity, reasonWorkspaceADOOrgConflict,
+					workspaceADOOrgConflictMsg(e.t.name, e.org, t.name, org))
+			}
+		}
+		// One repository per organisation and carrier set answers every later pair.
+		if !slices.ContainsFunc(earlier, func(e seen) bool { return e.org == org && e.key == key }) {
+			earlier = append(earlier, seen{t, org, key})
 		}
 	}
 	return nil

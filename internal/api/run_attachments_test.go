@@ -824,3 +824,32 @@ func TestStartFolderRecreditAgreesWithOverlap(t *testing.T) {
 		}
 	}
 }
+
+// TestADOOrgConflictEveryPair (fix-r4 H-1): sharing a workspace is not
+// transitive, so alpha {X acme, Y globex} and beta {X acme, Z initech}, all
+// three carried by the policy, span globex and initech with no workspace
+// holding both, and are refused at every door in both onboarding orders.
+func TestADOOrgConflictEveryPair(t *testing.T) {
+	const x, y, z = "https://dev.azure.com/acme/p/_git/x", "https://dev.azure.com/globex/p/_git/y", "https://dev.azure.com/initech/p/_git/z"
+	alpha, beta := repoWS("alpha", x, y), repoWS("beta", x, z)
+	site := types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{{
+		ID: "ado-row", Kind: types.GitProviderAzureDevOps,
+		BaseURLs: []string{"https://dev.azure.com/acme", "https://dev.azure.com/globex", "https://dev.azure.com/initech"},
+	}}}}
+	body := policyCarriedBody([]types.Workspace{alpha, beta}, []string{x, y, z}, "")
+	for order, store := range storeOrders(alpha, beta) {
+		srv := attachFixture(t, site, store...)
+		for _, door := range runDoors {
+			w := do(t, srv, http.MethodPost, door.path, adminToken, body)
+			if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), reasonWorkspaceADOOrgConflict) ||
+				!strings.Contains(w.Body.String(), "globex") || !strings.Contains(w.Body.String(), "initech") {
+				t.Fatalf("%s, %s: %d %s, want the globex/initech conflict", order, door.name, w.Code, w.Body.String())
+			}
+		}
+	}
+	// Two organisations inside one workspace stay allowed.
+	srv := attachFixture(t, site, alpha)
+	if w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, policyCarriedBody([]types.Workspace{alpha}, []string{x, y}, "")); w.Code != http.StatusOK {
+		t.Fatalf("one workspace, two organisations: %d %s", w.Code, w.Body.String())
+	}
+}

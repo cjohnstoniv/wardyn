@@ -239,3 +239,30 @@ func TestRunRefShape(t *testing.T) {
 		}
 	}
 }
+
+// TestTargetOverlapSharedChainIsBounded (fix-r4 L-1): the costliest shape the
+// shared-carrier lists allow, nested targets carried by 32 workspaces each,
+// every set distinct and sharing one carrier, placed deepest first so each
+// encloses all placed before it. The 1 MiB request body bounds the chain near
+// 1,000 targets; at that depth the check must stay well under a second.
+func TestTargetOverlapSharedChainIsBounded(t *testing.T) {
+	const depth = 1000
+	var targets []runTarget
+	for d := depth; d > 0; d-- {
+		set := make([]string, 0, 32)
+		for i := 0; i < 31; i++ {
+			set = append(set, fmt.Sprint("d", d, "-", i))
+		}
+		set = append(set, "common")
+		targets = append(targets, shared(set[0], set, "acme/web", "/home/agent"+strings.Repeat("/c", d)))
+	}
+	start := time.Now()
+	if got := targetOverlapRefusal(targets); got != nil {
+		t.Fatalf("refused: %+v", got.body)
+	}
+	elapsed := time.Since(start)
+	t.Logf("a chain of %d shared targets took %v", depth, elapsed)
+	if elapsed > time.Second {
+		t.Fatalf("a chain of %d shared targets took %v", depth, elapsed)
+	}
+}
