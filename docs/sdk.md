@@ -376,12 +376,13 @@ A run can carry components that add destinations and secrets ([POLICIES.md](POLI
 | `PutComponent` | `PUT /api/v1/components/{id}` | admin |
 | `DeleteComponent` | `DELETE /api/v1/components/{id}` | admin |
 
-- `MyComponents` answers `may_define`, `resident_delivery_allowed`, `autonomy_cap`, `mine` and `org`.
-  - `org` holds only the organisation components the caller is granted, as `OrgComponentView`: hosts, delivery modes and config keys, never a secret name.
+- `MyComponents` answers `may_define`, `resident_delivery_allowed`, `autonomy_cap`, `mine`, `org` and `clis`.
+  - `org` holds only the organisation components the caller is granted, as `OrgComponentView`: hosts, delivery modes, config keys, `category` and an optional `cli` or `mcp` view, never a secret name.
+  - `clis` lists five CLI cards in a fixed order (`azure`, `github`, `aws`, `gcloud`, `kubectl`), each `{kind, state, rows}` with `state` `available`, `not_granted` or `coming_soon`, built only from rows the caller is granted.
 - A save answers `ComponentSaved`: the stored row and `requirements[]`.
   - Each requirement is `{kind: "secret", name, status: "present"|"missing", fix: "add_secret"}`. The list is advisory and never refuses a save.
 - `PutComponent` creates an organisation component restricted: nobody may attach it until an admin grants its id under `/api/v1/permissions`.
-- A run attaches components in `CreateRunRequest.Components`: `{id}` for a stored one, `{inline, name}` for a definition used by that run alone. At most 8.
+- A run attaches components in `CreateRunRequest.Components`: `{id}` for a stored one, `{inline, name}` for a definition used by that run alone. At most 16.
 - Preflight and the policy preview answer `components`: one fact per component with `status` (`ready`, `needs_input`, `unavailable` or `unknown`), its `requirements`, hosts and each secret's delivery and `shared` flag.
   - A fact never carries the name of a secret the organisation provides.
 - Create, preflight and preview refuse with the component reasons in [`Reason`](#reason-branch-on-this-never-on-errors-prose); a run is audited as `run.component.attach` and `run.component.refuse`.
