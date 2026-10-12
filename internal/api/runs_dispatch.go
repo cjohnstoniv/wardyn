@@ -457,12 +457,15 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// runs saw the whole map. See splitSecretEnv (it moves, never copies).
 	// Per-harness approval credentials: digests to the proxy config below, the
 	// started harness's plaintext as a file only its own launch reads, never env.
+	// MCP servers: their credentials move to the broker and each harness's
+	// token goes into its own configuration (run_mcp.go).
+	mcp := dispatchMCP(p.Components.MCP, &injections, proxyURL, p.Interactive, sandboxEnv)
 	harnessCreds, credFiles, merr := s.holdLaneHarnessCredentials(ctx, run, p)
 	if merr != nil {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's tool-approval credential could not be made")
 		return
 	}
-	secretEnv := splitSecretEnv(sandboxEnv, append(secretEnvKeys, llm.secretEnvKeys...))
+	secretEnv := splitSecretEnv(sandboxEnv, slices.Concat(secretEnvKeys, llm.secretEnvKeys, []string{codexMCPEnv}))
 
 	resources := resourceLimitsToRunner(policy.Resources)
 	resources.DiskMiBSoft = diskSoft
@@ -496,7 +499,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// The managed settings this run's autonomy level generates and the
 		// started harness's approval credential; nil for a run with neither, or
 		// on a runner that cannot deliver them.
-		ManagedFiles: slices.Concat(agentPolicy.files, credFiles),
+		ManagedFiles: slices.Concat(agentPolicy.files, credFiles, mcp.files),
 		// nil for an operator run (the driver then behaves exactly as it does
 		// today); non-nil marks a member-owned-workspace run whose MEMBER-AUTHORED
 		// binds (stamped above by buildRunMounts) the driver re-checks against
@@ -581,6 +584,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			PushRuleBase:       pushRuleBase(policy, p.PushRuleSets),
 			HarnessToolRules:   p.HarnessToolRules,
 			HarnessCredentials: harnessCreds,
+			MCPServers:         mcp.servers, MCPBindings: mcp.bindings,
 			// The policy a refusal names (runs_dispatch_attribution.go); nil when
 			// the run has no profile and the site sets no policy_help, because an
 			// older proxy refuses the key.

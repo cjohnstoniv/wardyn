@@ -259,6 +259,38 @@ type Config struct {
 	// proxy only: a request for one is forwarded to the organisation, which injects the credential.
 	// Each names its grant and destination host, never the rule or a secret name.
 	ViaOrgRoutes []ViaOrgRoute `json:"via_org_routes,omitempty"`
+	// MCPServers are the run's remote MCP servers. The broker route
+	// (mcp_broker.go) is the only path to each: none is in the allowlist, a
+	// direct request to one is refused while it is attached, and its header
+	// credential is the broker's alone, never an Injection rule.
+	MCPServers []MCPServerConfig `json:"mcp_servers,omitempty"`
+	// MCPBindings bind each harness's MCP token, by SHA-256 digest, to the
+	// servers turned on for it. Digests only: the token is in that harness's
+	// configuration, never here.
+	MCPBindings []MCPBinding `json:"mcp_bindings,omitempty"`
+}
+
+// MCPServerConfig is one remote MCP server on the broker route.
+type MCPServerConfig struct {
+	// Key is the server's name in /wardyn/mcp/<token>/<key> and in its tools'
+	// names, mcp__<key>__<tool>.
+	Key string `json:"key"`
+	// URL is the https address the broker re-originates to.
+	URL string `json:"url"`
+	// GrantID is the api_key grant of the server's header credential; nil when
+	// the server takes none.
+	GrantID *uuid.UUID `json:"grant_id,omitempty"`
+	// Ordinal is the component's run_components ordinal (built-ins have no
+	// row), which a revive reads its row by.
+	Ordinal int `json:"ordinal"`
+}
+
+// MCPBinding is one harness's MCP token, as its digest, and the servers it may
+// reach.
+type MCPBinding struct {
+	Harness string   `json:"harness"`
+	SHA256  string   `json:"sha256"`
+	Servers []string `json:"servers"`
 }
 
 const (
@@ -471,6 +503,9 @@ func (c *Config) applyDefaultsAndValidate() error {
 		}
 	}
 	if err := c.validateTerminatedGates(); err != nil {
+		return err
+	}
+	if err := c.validateMCP(); err != nil {
 		return err
 	}
 	// Parse-check (but do not retain a compiled form) each configured LLM

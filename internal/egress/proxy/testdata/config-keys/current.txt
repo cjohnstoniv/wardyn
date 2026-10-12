@@ -58,6 +58,15 @@ listen
 llm_channel_hosts
 llm_unavailable_detail
 llm_upstreams
+mcp_bindings
+mcp_bindings.harness
+mcp_bindings.servers
+mcp_bindings.sha256
+mcp_servers
+mcp_servers.grant_id
+mcp_servers.key
+mcp_servers.ordinal
+mcp_servers.url
 mitm_ca_cert_pem
 mitm_ca_key_pem
 mitm_hosts

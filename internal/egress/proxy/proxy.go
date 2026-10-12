@@ -231,6 +231,9 @@ type Proxy struct {
 	// (tool_rules.go); empty means the older run-wide policy.ToolRules.
 	harnessRules []types.HarnessToolRules
 	harnessCreds []types.HarnessCredential
+	// mcp is the run's MCP servers and harness bindings (mcp_broker.go); nil
+	// for a run with none.
+	mcp *mcpBroker
 	// gatewayVendor is the REVERSE of llmUpstreams (gateway host -> vendor
 	// public host), feeding isLLMHost/channelForHost so gateway traffic is
 	// recognised as LLM traffic (coverage/classification only — the SSRF vet
@@ -643,6 +646,11 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	trustedLiteralIP, denied := p.literalIPGuard(req, host, port)
 	if denied != nil {
 		return egress.Deny, "", denied
+	}
+	// An attached MCP server's host is the broker's alone, above every allow.
+	if p.mcp.mcpDirectOrigin(host) {
+		log := decisionLog(req, egress.Deny, ruleSourceMCPDirect)
+		return egress.Deny, "", &log
 	}
 
 	// 1. Policy host verdict (deny beats allow, default-deny) — delegated to the
