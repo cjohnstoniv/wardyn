@@ -3,13 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Repositories: every repository of the workspaces the person may launch, each
+// Repositories: every repository of the workspaces the person can see, each
 // included on its own, at its own branch, at the path the server fixes. A
-// repository the person has not onboarded is added from Workspaces.
+// repository the person has not onboarded is added from Workspaces. A repository
+// they cannot launch stays listed, disabled, with the server's reason.
 
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { Checkbox } from "../../../../ui/checkbox";
+import { cn } from "../../../../ui/utils";
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { excludeRepo, includeRepo, repoIncluded, setRepoRef, setStartsHere, startsAt } from "../../lenses/files-lens";
@@ -22,15 +24,19 @@ function Row({ row, path, startsId }: { row: RepoRow; path?: string; startsId?: 
   const draft = useNewRunDraft();
   const dispatch = useNewRunDispatch();
   const nameId = React.useId();
+  const reasonId = React.useId();
   const entry = draft.intent.workspaces?.find((w) => w.workspace_id === row.workspaceId);
   const included = repoIncluded(draft.intent, row.workspaceId, row.repo);
   const ref = entry?.repos?.find((r) => r.repo === row.repo)?.ref;
   const edit = (apply: (i: typeof draft.intent) => typeof draft.intent) => dispatch({ type: "edit", apply });
 
   return (
-    <li className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3">
+    <li className={cn("flex flex-wrap items-center gap-x-4 gap-y-2 py-3", row.unavailable && "hatch-unavailable")}>
       <Checkbox
         checked={included}
+        // An unavailable row already in the draft stays uncheckable, so the person can take it out.
+        disabled={!!row.unavailable && !included}
+        aria-describedby={row.unavailable ? reasonId : undefined}
         aria-label={NR_FILES.INCLUDE_ARIA(row.name)}
         onCheckedChange={(on) => edit((i) => (on === true ? includeRepo(i, row.workspaceId, row.repo) : excludeRepo(i, row.workspaceId, row.repo, row.siblings)))}
       />
@@ -60,6 +66,7 @@ function Row({ row, path, startsId }: { row: RepoRow; path?: string; startsId?: 
           onSelect={() => edit((i) => setStartsHere(i, row.workspaceId, row.repo))}
         />
       </div>
+      {row.unavailable && <p id={reasonId} className="basis-full text-xs text-muted-foreground">{row.unavailable}</p>}
     </li>
   );
 }
