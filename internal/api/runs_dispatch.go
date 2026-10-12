@@ -121,6 +121,9 @@ type dispatchParams struct {
 	// (harnessToolRulesFor). When set, the proxy carries them, and a credential
 	// per harness, INSTEAD of the policy's run-wide tool_rules.
 	HarnessToolRules []types.HarnessToolRules
+	// Harnesses are the run's run_harnesses rows, nil without the harness set;
+	// each that names a provider gets its own model credential lane.
+	Harnesses []types.RunHarness
 }
 
 // dispatchRun launches the sandbox via the runner and advances run state. On any
@@ -287,7 +290,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	applyEphemeralDirsEnv(sandboxEnv, p.EphemeralDirs)
 	applyUserDriveEnv(sandboxEnv, p.Drive)
 	// The agent-side half of this run's autonomy level — see agentPolicyFor.
-	agentPolicy, apErr := s.agentPolicyFor(ctx, run, p.holdLane(), ceiling.agentGuardrailLocks)
+	agentPolicy, apErr := s.agentPolicyFor(ctx, run, p.Harnesses, p.holdLane(), ceiling.agentGuardrailLocks)
 	if apErr != nil {
 		// apErr wraps s.cfg.Runner.Capabilities' own error, which can carry
 		// driver/substrate text (a Docker daemon socket error, a k8s API
@@ -458,7 +461,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// runs saw the whole map. See splitSecretEnv (it moves, never copies).
 	// Per-harness approval credentials: digests to the proxy config below, the
 	// started harness's plaintext as a file only its own launch reads, never env.
-	harnessCreds, credFiles, merr := s.stampHarnessCredential(ctx, run, p.HarnessToolRules, p.Drive)
+	harnessCreds, credFiles, merr := s.holdLaneHarnessCredentials(ctx, run, p)
 	if merr != nil {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's tool-approval credential could not be made")
 		return
