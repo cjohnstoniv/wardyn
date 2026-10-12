@@ -446,6 +446,11 @@ func TestHarnessProviderConflict_CreateAndDispatchAgree(t *testing.T) {
 	shared := endpoint("gw", "https://gw.example.com", claude, codex)
 	ownHeader := endpoint("gw", "https://gw.example.com", claude, codexOwnHeader)
 	oneAzure := azure("az")
+	subThrough := func(base string) types.ModelProvider {
+		return types.ModelProvider{ID: "sub", UID: "uid-sub", Kind: types.ModelProviderAnthropicSubscription, BaseURL: base, Harnesses: []types.ProviderHarness{claude}}
+	}
+	bedrockKey := types.ModelProvider{ID: "br", UID: "uid-br", Kind: types.ModelProviderBedrockBearer,
+		Bedrock: &types.BedrockSettings{Region: "us-west-2"}, Harnesses: []types.ProviderHarness{claude}}
 	for _, tc := range []struct {
 		name     string
 		pa, pb   types.ModelProvider
@@ -457,6 +462,10 @@ func TestHarnessProviderConflict_CreateAndDispatchAgree(t *testing.T) {
 		{"two providers on two hosts", endpoint("gw-a", "https://gw.example.com", claude), endpoint("gw-b", "https://other.example.com", codex), false},
 		{"two Azure Foundry providers", azure("az-1"), azure("az-2"), true},
 		{"one Azure Foundry provider on two harnesses", oneAzure, oneAzure, true},
+		{"a Claude subscription through the endpoint's host", subThrough("https://gw.example.com"), endpoint("gw-b", "https://gw.example.com", codex), true},
+		{"a Claude subscription on the vendor host", subThrough(""), endpoint("gw-b", "https://gw.example.com", codex), false},
+		{"Bedrock beside an endpoint on its runtime host", bedrockKey, endpoint("gw-b", "https://bedrock-runtime.us-west-2.amazonaws.com", codex), true},
+		{"Bedrock beside an endpoint on its control host", bedrockKey, endpoint("gw-b", "https://bedrock.us-west-2.amazonaws.com", codex), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, atCreate := harnessProvidersConflict([]harnessChoice{
