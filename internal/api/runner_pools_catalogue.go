@@ -43,13 +43,19 @@ type poolListInput struct {
 	executors map[string]executorRead
 	// runnerNames are the caller's runners' names, read on the first self-hosted row that needs them.
 	runnerNames map[uuid.UUID]string
+	// org is the organisation's defaults: its barrier is every row's default when the row offers it.
+	org types.RunnerPoolDefaults
 }
 
 func (s *Server) poolList(r *http.Request, ps store.RunnerPoolStore, rows []store.RunnerPoolCatalogueRow, subj callerSubjects,
 	ceiling governanceCeiling, rt types.RunnerPoolRunType,
 ) (client.RunnerPoolList, *runRefusal) {
 	ctx := r.Context()
-	in := &poolListInput{ps: ps, ceiling: ceiling, denied: s.deniedPlacements(ctx, ceiling), runType: rt, executors: map[string]executorRead{}}
+	org, err := ps.GetRunnerPoolOrgDefaults(ctx)
+	if err != nil {
+		return client.RunnerPoolList{}, runServerError("read runner pool defaults", err)
+	}
+	in := &poolListInput{ps: ps, ceiling: ceiling, denied: s.deniedPlacements(ctx, ceiling), runType: rt, executors: map[string]executorRead{}, org: org}
 	if res, _ := s.memberResources(ctx, ceiling.Spec.Resources, ceiling); res != nil {
 		in.untouched = types.ResourceLimits{CPUMillis: res.CPUMillis, MemoryMiB: res.MemoryMiB}
 	}
@@ -74,7 +80,7 @@ func (s *Server) poolList(r *http.Request, ps store.RunnerPoolStore, rows []stor
 		out.Pools = append(out.Pools, entry)
 	}
 	var refusal *runRefusal
-	if out.Default, refusal = s.poolDefault(r, ps, permitted); refusal != nil {
+	if out.Default, refusal = s.poolDefault(r, permitted, org); refusal != nil {
 		return client.RunnerPoolList{}, refusal
 	}
 	if out.Allowance, refusal = s.personAllowance(r, ceiling); refusal != nil {
@@ -126,7 +132,7 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 		}
 		e.Limits = append(e.Limits, eff)
 	}
-	e.BarrierOptions = runnerpool.BarrierOptions(barrierFacts(row.Pool, targets, in.ceiling.Spec.MinConfinementClass))
+	e.BarrierOptions = runnerpool.BarrierOptions(barrierFacts(row.Pool, targets, in.ceiling.Spec.MinConfinementClass, in.org.Barrier))
 	// Membership, not candidacy: every runner of the caller's in the pool, whether or not it could take a
 	// run now, so a person can read which pools each of their runners is in.
 	if len(row.OwnRunnerIDs) > 0 {
@@ -179,8 +185,8 @@ func (s *Server) ownRunnerNames(r *http.Request, in *poolListInput) (map[uuid.UU
 // barrierFacts is what a pool's barriers are judged on from its candidates' own facts: the classes the
 // candidates that are known enforce (the offeredClasses rule over every candidate, not only those a
 // draft admits), at the governance floor.
-func barrierFacts(pool types.RunnerPool, targets []poolTarget, floor types.ConfinementClass) runnerpool.BarrierFacts {
-	f := runnerpool.BarrierFacts{Limits: pool.Limits, Floor: floor}
+func barrierFacts(pool types.RunnerPool, targets []poolTarget, floor, org types.ConfinementClass) runnerpool.BarrierFacts {
+	f := runnerpool.BarrierFacts{Limits: pool.Limits, Floor: floor, Org: org}
 	for _, t := range targets {
 		if t.offline {
 			continue
@@ -216,7 +222,7 @@ func draftBarrierOptions(place runPlacement, ceiling governanceCeiling, floor ty
 	if !place.pooled {
 		return []client.BarrierOption{}
 	}
-	bf := barrierFacts(place.row, place.targets, ceiling.Spec.MinConfinementClass)
+	bf := barrierFacts(place.row, place.targets, ceiling.Spec.MinConfinementClass, place.orgBarrier)
 	bf.PolicyFloor = floor.MinConfinementClass
 	bf.AccessFloor = composer.RequiredConfinementFloor(floor, baseline) == types.CC3
 	return runnerpool.BarrierOptions(bf)
@@ -224,14 +230,10 @@ func draftBarrierOptions(place runPlacement, ceiling governanceCeiling, floor ty
 
 // poolDefault is the pool a run that names none resolves to, by today's resolver; a default that no
 // longer applies is said with whose it was, and none is nil.
-func (s *Server) poolDefault(r *http.Request, ps store.RunnerPoolStore, permitted []types.RunnerPool) (*client.PoolDefault, *runRefusal) {
+func (s *Server) poolDefault(r *http.Request, permitted []types.RunnerPool, org types.RunnerPoolDefaults) (*client.PoolDefault, *runRefusal) {
 	personal, refusal := s.personalPoolDefaults(r.Context())
 	if refusal != nil {
 		return nil, refusal
-	}
-	org, err := ps.GetRunnerPoolOrgDefaults(r.Context())
-	if err != nil {
-		return nil, runServerError("read runner pool defaults", err)
 	}
 	pool, ref := runnerpool.Resolve(permitted, runnerpool.Choice{}, personal, org)
 	switch {

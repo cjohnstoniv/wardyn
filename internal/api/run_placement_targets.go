@@ -75,7 +75,7 @@ func poolOwner(ctx context.Context) string {
 func (s *Server) placementDemand(ctx context.Context, in placementInput) placementDemand {
 	d := placementDemand{floor: in.floor, reqCC: in.reqCC, reqCCOK: in.reqCCOK, baseline: in.baseline}
 	advertised := s.advertisedConfinement(ctx, *in.req)
-	if enforced, err := enforcedConfinement(in.floor, in.reqCC, advertised, in.baseline); err != nil ||
+	if enforced, _, err := enforcedConfinement(in.floor, in.reqCC, advertised, "", in.baseline); err != nil ||
 		(enforced != "" && !slices.Contains(advertised, enforced)) {
 		d.reqCCOK = false
 	}

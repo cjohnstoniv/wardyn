@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"slices"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // tsList is the string literals of one `NAME = [...]` array in runner-pool-refusals.ts, in order.
@@ -37,5 +39,29 @@ func TestAvailabilityAndBarrierReasonsAreTheTypeScriptOnes(t *testing.T) {
 	}
 	if ts := tsList(t, "BARRIER_REASON"); !slices.Equal(barrier, ts) {
 		t.Errorf("Go barrier reasons %v, TypeScript %v", barrier, ts)
+	}
+}
+
+// The organisation's default barrier is the list's default when that barrier is available; one that is
+// below the floor, not offered or not allowed leaves the strongest available one, chosen by the server.
+func TestBarrierOptionsOrgDefault(t *testing.T) {
+	offered := []types.ConfinementClass{types.CC1, types.CC2, types.CC3}
+	for _, tc := range []struct {
+		name string
+		f    BarrierFacts
+		want types.ConfinementClass
+		by   BarrierDefaultSource
+	}{
+		{"available", BarrierFacts{Known: true, Offered: offered, Floor: types.CC1, Org: types.CC2}, types.CC2, BarrierDefaultOrganisation},
+		{"below the floor", BarrierFacts{Known: true, Offered: offered, Floor: types.CC2, Org: types.CC1}, types.CC3, BarrierDefaultServer},
+		{"not offered", BarrierFacts{Known: true, Offered: []types.ConfinementClass{types.CC1, types.CC3}, Org: types.CC2}, types.CC3, BarrierDefaultServer},
+		{"not allowed by the pool", BarrierFacts{Known: true, Offered: offered, Org: types.CC2, Limits: &types.RunnerPoolLimits{Barriers: []types.ConfinementClass{types.CC1, types.CC3}}}, types.CC3, BarrierDefaultServer},
+		{"none set", BarrierFacts{Known: true, Offered: offered}, types.CC3, BarrierDefaultServer},
+	} {
+		for _, o := range BarrierOptions(tc.f) {
+			if o.Default != (o.Class == tc.want) || (o.Default && o.DefaultSource != tc.by) {
+				t.Errorf("%s: %s default=%v from %q, want %s from %q", tc.name, o.Class, o.Default, o.DefaultSource, tc.want, tc.by)
+			}
+		}
 	}
 }

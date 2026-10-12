@@ -396,16 +396,16 @@ func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]Runne
 // defaults before and after on out; it records nothing when no slot named it.
 func clearOrgDefaultSlotsQ(ctx context.Context, q Querier, id uuid.UUID, out *RunnerPoolDeletion) error {
 	var before types.RunnerPoolDefaults
-	var hosting string
-	err := q.QueryRow(ctx, `SELECT preferred_hosting, remote_provided, self_hosted FROM runner_pool_org_defaults FOR UPDATE`).
-		Scan(&hosting, &before.RemoteProvided, &before.SelfHosted)
+	var hosting, barrier string
+	err := q.QueryRow(ctx, `SELECT preferred_hosting, remote_provided, self_hosted, barrier FROM runner_pool_org_defaults FOR UPDATE`).
+		Scan(&hosting, &before.RemoteProvided, &before.SelfHosted, &barrier)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	before.PreferredHosting = types.RunnerPoolHosting(hosting)
+	before.PreferredHosting, before.Barrier = types.RunnerPoolHosting(hosting), types.ConfinementClass(barrier)
 	after := before
 	if after.RemoteProvided != nil && *after.RemoteProvided == id {
 		after.RemoteProvided = nil
@@ -678,13 +678,10 @@ func DeleteRunnerPoolUsePolicyQ(ctx context.Context, q Querier, id uuid.UUID) er
 
 // GetRunnerPoolOrgDefaults reads the organisation's defaults; the zero value when none were written.
 func (s PG) GetRunnerPoolOrgDefaults(ctx context.Context) (types.RunnerPoolDefaults, error) {
-	var d types.RunnerPoolDefaults
-	var hosting string
-	err := s.Pool.QueryRow(ctx, `SELECT preferred_hosting, remote_provided, self_hosted FROM runner_pool_org_defaults`).Scan(&hosting, &d.RemoteProvided, &d.SelfHosted)
+	d, err := scanOrgDefaults(s.Pool.QueryRow(ctx, `SELECT preferred_hosting, remote_provided, self_hosted, barrier FROM runner_pool_org_defaults`))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.RunnerPoolDefaults{}, nil
 	}
-	d.PreferredHosting = types.RunnerPoolHosting(hosting)
 	return d, err
 }
 
@@ -692,11 +689,11 @@ func (s PG) GetRunnerPoolOrgDefaults(ctx context.Context) (types.RunnerPoolDefau
 // default only names one, and the resolver refuses a name that has since gone or been switched off.
 func (s PG) PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefaults, by string) error {
 	_, err := s.Pool.Exec(ctx, `
-		INSERT INTO runner_pool_org_defaults (preferred_hosting, remote_provided, self_hosted, updated_by) VALUES ($1,$2,$3,$4)
+		INSERT INTO runner_pool_org_defaults (preferred_hosting, remote_provided, self_hosted, barrier, updated_by) VALUES ($1,$2,$3,$4,$5)
 		ON CONFLICT (singleton) DO UPDATE SET preferred_hosting = EXCLUDED.preferred_hosting,
-		       remote_provided = EXCLUDED.remote_provided, self_hosted = EXCLUDED.self_hosted,
+		       remote_provided = EXCLUDED.remote_provided, self_hosted = EXCLUDED.self_hosted, barrier = EXCLUDED.barrier,
 		       updated_by = EXCLUDED.updated_by, updated_at = now()`,
-		string(d.PreferredHosting), d.RemoteProvided, d.SelfHosted, by)
+		string(d.PreferredHosting), d.RemoteProvided, d.SelfHosted, string(d.Barrier), by)
 	return err
 }
 
@@ -735,7 +732,7 @@ func (s PG) BootstrapRunnerPools(ctx context.Context, executors []string, name s
 		d, err := scanOrgDefaults(q.QueryRow(ctx, `
 			INSERT INTO runner_pool_org_defaults (preferred_hosting, remote_provided, updated_by) VALUES ('remote_provided', $1, 'system')
 			ON CONFLICT (singleton) DO UPDATE SET remote_provided = EXCLUDED.remote_provided, updated_by = 'system', updated_at = now()
-			RETURNING preferred_hosting, remote_provided, self_hosted`, p.ID))
+			RETURNING preferred_hosting, remote_provided, self_hosted, barrier`, p.ID))
 		if err != nil {
 			return err
 		}
@@ -747,8 +744,8 @@ func (s PG) BootstrapRunnerPools(ctx context.Context, executors []string, name s
 
 func scanOrgDefaults(row pgx.Row) (types.RunnerPoolDefaults, error) {
 	var d types.RunnerPoolDefaults
-	var hosting string
-	err := row.Scan(&hosting, &d.RemoteProvided, &d.SelfHosted)
-	d.PreferredHosting = types.RunnerPoolHosting(hosting)
+	var hosting, barrier string
+	err := row.Scan(&hosting, &d.RemoteProvided, &d.SelfHosted, &barrier)
+	d.PreferredHosting, d.Barrier = types.RunnerPoolHosting(hosting), types.ConfinementClass(barrier)
 	return d, err
 }
