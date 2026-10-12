@@ -345,7 +345,9 @@ func (b *accessBuilder) repositoryRow(fact componentFact) {
 		switch {
 		case perPerson:
 			cred.Owner, cred.Delivery, cred.AfterEnd = credOwnerOwn, deliveryProxy, afterEndGone
-		case grant != nil:
+		case grant == nil:
+			cred = nil // create drops the lane: no credential, no host
+		default:
 			if grant.OwnerOnly {
 				cred.Owner = credOwnerOwn
 			}
@@ -372,9 +374,9 @@ func (b *accessBuilder) repositoryRow(fact componentFact) {
 // (unionDirectGitHubEgress's candidates).
 var directGitHubEgressHosts = []string{"github.com", "*.githubusercontent.com"}
 
-// laneServingGrant is the grant that serves a pat or ssh repository row, or
-// perPerson when the row is the person's own Azure DevOps lane, which no grant
-// selects. The lane is gitProviderLane's, asked of each repository the row holds.
+// laneServingGrant is the wired grant (lanesWiredFor) that serves a pat or ssh
+// repository row, or perPerson when the row is the person's own Azure DevOps
+// lane, which no grant selects. nil for a lane create will not wire. The lane is gitProviderLane's, asked of each repository the row holds.
 func laneServingGrant(req createRunRequest, spec types.RunPolicySpec, site types.SiteConfig, fact componentFact) (*types.GrantSpec, bool) {
 	want := map[string]types.GrantKind{string(types.GitLanePAT): types.GrantGitPAT, string(types.GitLaneSSH): types.GrantSSHKey}[fact.Lane]
 	if want == "" {
@@ -387,8 +389,9 @@ func laneServingGrant(req createRunRequest, spec types.RunPolicySpec, site types
 		if _, ok := adoEntraRunForRepo(site, repo.locator, ""); ok {
 			return nil, true
 		}
-		if i := slices.IndexFunc(spec.EligibleGrants, func(g types.GrantSpec) bool { return g.Kind == want && gitGrantServes(g, repo) }); i >= 0 {
-			return &spec.EligibleGrants[i], false
+		wired := lanesWiredFor(site, req.Agent, repoLocatorsOf(spec.WorkspaceRepos), spec.EligibleGrants)
+		if i := slices.IndexFunc(wired, func(g types.GrantSpec) bool { return g.Kind == want && gitGrantServes(g, repo) }); i >= 0 {
+			return &wired[i], false
 		}
 	}
 	return nil, false
@@ -501,8 +504,7 @@ func (b *accessBuilder) personHostRows() {
 }
 
 // settleHosts gives every host its verdict and source, in the order rows
-// brought them, and marks a person's host row refused when its host is not
-// allowed.
+// brought them, and settles the one-host rows' status (singleHostRowStatus).
 func (b *accessBuilder) settleHosts() {
 	spec := b.in.spec
 	for _, host := range b.order {
@@ -515,14 +517,27 @@ func (b *accessBuilder) settleHosts() {
 		h.Source = src
 		h.Verdict, h.Reason = accessHostVerdict(*h, spec, clamped)
 		b.out.Hosts = append(b.out.Hosts, *h)
-		if h.Verdict == verdictNotAllowed {
-			for i := range b.out.Rows {
-				if r := &b.out.Rows[i]; r.Kind == accessKindHost && r.Name == host {
-					r.Status = accessRefused
-				}
+		for i := range b.out.Rows {
+			if r := &b.out.Rows[i]; (r.Kind == accessKindHost || r.Kind == accessKindSecret) && slices.Equal(r.Hosts, []string{host}) {
+				r.Status = singleHostRowStatus(r.Kind, h.Verdict, r.Status)
 			}
 		}
 	}
+}
+
+// singleHostRowStatus is a one-host row's status once its host has a verdict.
+// Either kind is refused when the host is not allowed. A secret added by
+// header is injected only on an allowlisted host, so one whose host waits on
+// approval needs that settled first; an allowed-host row under approval is
+// the request itself and stays as it was.
+func singleHostRowStatus(kind, verdict, status string) string {
+	switch {
+	case verdict == verdictNotAllowed:
+		return accessRefused
+	case verdict == verdictNeedsApproval && kind == accessKindSecret:
+		return accessNeedsSetup
+	}
+	return status
 }
 
 // accessHostSource is who put host on the run, from the fold's provenance:

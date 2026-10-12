@@ -138,11 +138,13 @@ func (s *Server) stepPreviewEgress(f *runFold, rec *foldRecorder) bool {
 // Review's access facts name what dispatch will allow. Last of the fold: no
 // gate or grade above it reads these hosts at create, so none reads them here.
 //
-// The site-config SCM hosts stay create's: they are the operator's configured
-// host list, which no dry-door reader may see, so that lane is still pending.
+// Only the lanes create would wire add hosts (lanesWiredFor). The site-config
+// SCM hosts stay create's: they are the operator's configured host list, which
+// no dry-door reader may see, so that lane is still pending.
 func (s *Server) stepDerivedEgress(f *runFold, rec *foldRecorder) bool {
 	policy := policyProvSource(f.source)
-	for _, d := range deriveRunEgress(&f.spec, f.wsRefs, f.req.Repo, types.SiteConfig{}, f.spec.EligibleGrants) {
+	wired := lanesWiredFor(f.scmSite, f.req.Agent, repoLocatorsOf(f.spec.WorkspaceRepos), f.spec.EligibleGrants)
+	for _, d := range deriveRunEgress(&f.spec, f.wsRefs, f.req.Repo, types.SiteConfig{}, wired) {
 		for _, host := range d.added {
 			rec.add(fieldAllowed, host, derivedEgressSource(rec, f.spec.EligibleGrants, d.kind, host, policy), provEffectAdded)
 		}

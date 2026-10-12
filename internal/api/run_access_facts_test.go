@@ -319,3 +319,55 @@ func TestAccessRow_CLIInImageFromTheRunsImage(t *testing.T) {
 		}
 	}
 }
+
+// An ssh_key on an agent with no SSH lane brings neither the lane's host nor
+// the key at either dry door, as create drops it; the same request on
+// claude-code brings both.
+func TestAccessRepo_UnwiredSSHLaneBringsNoHostOrCredential(t *testing.T) {
+	sshEndpoint, _ := sshOver443Endpoint("github.com")
+	for _, tc := range []struct {
+		agent string
+		wired bool
+	}{{"claude-code", true}, {"codex-cli", false}} {
+		id := uuid.New()
+		body := `{"agent":"` + tc.agent + `","task":"t","workspace_id":"` + id.String() + `",` +
+			`"inline_policy":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"],` +
+			`"eligible_grants":[{"kind":"ssh_key","scope":{"host":"github.com","key_secret_ref":"` + compOperatorSecret + `"}}]}}`
+		for _, door := range dryDoors {
+			f := newComponentFixture(t)
+			f.st.ws = &types.Workspace{ID: id, Name: "ssh", Status: types.WorkspaceScanned, Sources: []types.WorkspaceSource{
+				{Type: types.WorkspaceSourceTypeRepo, Source: "git@github.com:acme/one.git", Target: "/home/agent/one"}}}
+			f.st.workspaces = []types.Workspace{*f.st.ws}
+			access := decodeAccess(t, door, do(t, f.srv, http.MethodPost, door, adminToken, body)).Access
+			// The workspace's SSH clone host is the workspace's either way; the
+			// lane's own host and key are what create drops.
+			h, _ := accessHost(access, sshEndpoint)
+			hasHost := slices.Contains(h.Rows, "git_provider:github:ssh:acme")
+			hasKey := slices.ContainsFunc(access.Credentials, func(c client.AccessCredential) bool { return c.Kind == credKindSSHKey })
+			if hasHost != tc.wired || hasKey != tc.wired {
+				t.Errorf("%s %s: lane host %v, ssh key %v, want %v: %+v", tc.agent, door, hasHost, hasKey, tc.wired, access)
+			}
+		}
+	}
+}
+
+// A secret added by header is ready only when its host is allowed: refused
+// when the host is not, needing setup while the host waits on approval.
+func TestAccessSecretRow_StatusFollowsItsHost(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		spec types.RunPolicySpec
+		want string
+	}{
+		{"listed", types.RunPolicySpec{AllowedDomains: []string{"api.example"}}, accessReady},
+		{"refused", types.RunPolicySpec{FirstUseApproval: types.FirstUseAlwaysDeny}, accessRefused},
+		{"waits on approval", types.RunPolicySpec{FirstUseApproval: types.FirstUseDenyWithReview}, accessNeedsSetup},
+	} {
+		req := createRunRequest{Agent: "claude-code", Task: "t", Overrides: &client.RunOverrides{Agent: &client.AgentOverrides{
+			AddSecrets: []client.SecretOverride{{SecretName: "my-key", Host: "api.example"}}}}}
+		access := accessFacts(accessInputs{req: &req, spec: tc.spec, decider: deciderYou, providerStored: true})
+		if r, ok := accessRow(&access, "secret:my-key"); !ok || r.Status != tc.want {
+			t.Errorf("%s: secret row = %+v (%v), want %s", tc.name, r, ok, tc.want)
+		}
+	}
+}

@@ -5,8 +5,11 @@ package api
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -83,5 +86,54 @@ func TestDerivedEgress_VetoedLaneAddsNothingAtDispatch(t *testing.T) {
 	newComponentFixture(t).srv.unionRunEgress(context.Background(), uuid.New(), &spec, grantWiring{}, nil, "", site, nil, runComponents{})
 	if len(spec.AllowedDomains) != 0 {
 		t.Errorf("a vetoed git_pat lane still dispatched %v", spec.AllowedDomains)
+	}
+}
+
+// The dry doors add hosts only for the lanes create wires. Create here is its
+// real grant wiring (persistRunGrants, then applySSHLaneWarnings): an ssh_key
+// on an agent with no SSH lane, an ssh lane the admitting row turns off, and a
+// git_pat on Azure DevOps Services each add nothing at either door.
+func TestDerivedEgress_VetoedLanesMatchDispatch(t *testing.T) {
+	sshGrant := types.GrantSpec{Kind: types.GrantSSHKey, Scope: mustJSON(map[string]string{"host": "github.com", "key_secret_ref": compOperatorSecret})}
+	githubAppOnly := types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{
+		{ID: "gh", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://github.com"}, Lanes: []types.GitLane{types.GitLaneApp}}}}}
+	adoServices := types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{
+		{ID: "ado", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://dev.azure.com/contoso"}, Lanes: []types.GitLane{types.GitLanePAT}}}}}
+	sshEndpoint, _ := sshOver443Endpoint("github.com")
+	for _, tc := range []struct {
+		name, agent string
+		site        types.SiteConfig
+		grant       types.GrantSpec
+		dropped     string
+	}{
+		{"codex-cli has no ssh lane", "codex-cli", types.SiteConfig{}, sshGrant, sshEndpoint},
+		{"the row turns the ssh lane off", "claude-code", githubAppOnly, sshGrant, sshEndpoint},
+		{"Azure DevOps Services has no pat lane", "claude-code", adoServices, gitPATGrant("dev.azure.com", "ado-pat"), "dev.azure.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, EligibleGrants: []types.GrantSpec{tc.grant}}
+			req := createRunRequest{Agent: tc.agent}
+			f := runFold{spec: base.Clone(), req: &req, scmSite: tc.site}
+			if !(&Server{}).stepDerivedEgress(&f, &foldRecorder{}) {
+				t.Fatal("stepDerivedEgress answered")
+			}
+			fx := newComponentFixture(t)
+			fx.st.siteConfig = tc.site
+			ctx, runID := context.Background(), uuid.New()
+			w, r := httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
+			dispatched := base.Clone()
+			gw, ok := fx.srv.persistRunGrants(ctx, w, r, runID, time.Now(), dispatched, types.PlacementRemote)
+			if !ok {
+				t.Fatalf("persistRunGrants answered %d %s", w.Code, w.Body.String())
+			}
+			fx.srv.applySSHLaneWarnings(ctx, req, runID, &gw)
+			fx.srv.unionRunEgress(ctx, runID, &dispatched, gw, nil, "", tc.site, nil, runComponents{})
+			if slices.Contains(dispatched.AllowedDomains, tc.dropped) {
+				t.Fatalf("create wired the lane: %v", dispatched.AllowedDomains)
+			}
+			if !slices.Equal(f.spec.AllowedDomains, dispatched.AllowedDomains) {
+				t.Errorf("preview allows %v; dispatch allows %v", f.spec.AllowedDomains, dispatched.AllowedDomains)
+			}
+		})
 	}
 }
