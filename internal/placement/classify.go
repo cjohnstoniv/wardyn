@@ -99,6 +99,7 @@ var Table = []Entry{
 	{Struct: StructSandboxSpec, Field: "UserMountRoots", Class: ClassExempt, Rule: RuleExempt, Variant: "re-checked against allowed_roots"},
 	{Struct: StructSandboxSpec, Field: "RunID", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructSandboxSpec, Field: "RunnerID", Class: ClassExempt, Rule: RuleExempt, Variant: "routing carrier"},
+	{Struct: StructSandboxSpec, Field: "RunnerMaxRuns", Class: ClassExempt, Rule: RuleExempt, Variant: "runner limit carrier"},
 	{Struct: StructSandboxSpec, Field: "ConfinementClass", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructSandboxSpec, Field: "Resources", Class: ClassExempt, Rule: RuleExempt, Variant: "checked against the advertised capacity"},
 	{Struct: StructSandboxSpec, Field: "Interactive", Class: ClassExempt, Rule: RuleExempt},

@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
@@ -97,7 +98,7 @@ func newResumeRuntimeFixture(t *testing.T) *resumeRuntimeFixture {
 		peers: make(chan *runnerwire.Peer, 2), conns: make(chan *resumeObservedConn, 2), connected: make(chan error, 2), hubDone: make(chan error, 2),
 		entered: make(chan struct{}), release: make(chan struct{}), frames: make(chan runnerwire.Frame, 8)}
 	f.runtime, err = localRunnerRuntime(ctx, runneridentity.Identity{RunnerID: f.runnerID, PrivateKey: key}, f.stateDir, f.sub,
-		func(id uuid.UUID) string { return "fake-" + id.String() }, newLocalRelay(ctx, netip.Addr{}, nil, nil))
+		func(id uuid.UUID) string { return "fake-" + id.String() }, newLocalRelay(ctx, netip.Addr{}, nil, nil), placement.Capacity{})
 	if err != nil {
 		t.Fatal(err)
 	}

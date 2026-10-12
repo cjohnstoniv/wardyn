@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,6 +50,10 @@ type QueueVerdict struct {
 	// Owner says a held run's reason is its owner's (none of their runners can take a run), so their
 	// later runs are passed over this pass. A run held for a reason of its own holds only itself.
 	Owner bool
+	// Runners are the registered runners an admitted run may be placed on, each with room as judged;
+	// empty for a run placed on none. The promotion binds the run to the first that still has room
+	// under its row lock, and leaves the run waiting when none has.
+	Runners []uuid.UUID
 }
 
 // QueueAdmit judges one waiting run before the pass takes any lock (pool-queue.md section 7 step 4), so it
@@ -145,13 +150,13 @@ func (s PG) setPoolQueueWait(ctx context.Context, poolID uuid.UUID, detail strin
 // owner's later runs are passed over this time, so neither a long run of one person's held heads nor a
 // fixed scan window keeps a run further back from being judged. A read that fails, or a deadline spent,
 // part way still returns the runs already admitted, with the error, and PromoteRunQueue promotes them.
-func (s PG) judgeQueue(ctx context.Context, pass PromotePass, pool types.RunnerPool, room int, admit QueueAdmit) ([]RunQueueEntry, []QueueHeld, error) {
+func (s PG) judgeQueue(ctx context.Context, pass PromotePass, pool types.RunnerPool, room int, admit QueueAdmit) ([]admittedRun, []QueueHeld, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadline(ctx, time.Now().Add(time.Until(dl)/2))
 		defer cancel()
 	}
-	var admitted []RunQueueEntry
+	var admitted []admittedRun
 	var held []QueueHeld
 	busy := map[string]bool{}
 	var after *RunQueueEntry
@@ -175,7 +180,7 @@ func (s PG) judgeQueue(ctx context.Context, pass PromotePass, pool types.RunnerP
 			case v.Stop:
 				return admitted, held, nil
 			case v.Admit:
-				if admitted = append(admitted, e); len(admitted) >= room {
+				if admitted = append(admitted, admittedRun{entry: e, runners: v.Runners}); len(admitted) >= room {
 					return admitted, held, nil
 				}
 			default:
@@ -188,6 +193,12 @@ func (s PG) judgeQueue(ctx context.Context, pass PromotePass, pool types.RunnerP
 		}
 		after = &page[len(page)-1]
 	}
+}
+
+// admittedRun is a waiting run the verdict admitted and the runners it may be bound to.
+type admittedRun struct {
+	entry   RunQueueEntry
+	runners []uuid.UUID
 }
 
 // queuePage is one page of the pool's queue rows, oldest first (queued_at, then run_id), after the given
@@ -206,9 +217,10 @@ func (s PG) queuePage(ctx context.Context, poolID uuid.UUID, after *RunQueueEntr
 }
 
 // promoteAdmitted is the pass's one transaction: the pool row, then the deployment cap's advisory lock,
-// the slot-holders counted again, and each admitted run moved by the promotion CAS while there is room.
-// Nothing here waits on the substrate or judges a run.
-func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []RunQueueEntry) ([]PromotedRun, error) {
+// then the admitted runs' runners, the slot-holders counted again, and each admitted run moved by the
+// promotion CAS while there is room, bound to a runner of its own that has room. A run none of whose
+// runners has room keeps its place. Nothing here waits on the substrate or judges a run.
+func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []admittedRun) ([]PromotedRun, error) {
 	var promoted []PromotedRun
 	err := s.inTx(ctx, func(q Querier) error {
 		promoted = nil
@@ -232,11 +244,28 @@ func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []Ru
 		if err != nil {
 			return err
 		}
-		for _, e := range admitted {
+		var runnerIDs []uuid.UUID
+		for _, a := range admitted {
+			runnerIDs = append(runnerIDs, a.runners...)
+		}
+		rooms, err := lockRunnerRooms(ctx, q, runnerIDs, uuid.Nil)
+		if err != nil {
+			return err
+		}
+		for _, a := range admitted {
+			e := a.entry
 			if runnerpool.AtCapacity(pool, running) != nil || (pass.DeploymentCap > 0 && deployment >= pass.DeploymentCap) {
 				break
 			}
-			run, ok, err := promoteQueuedRun(ctx, q, e.RunID, pass.WatcherOwner)
+			var bind *uuid.UUID
+			if len(a.runners) > 0 {
+				i := slices.IndexFunc(a.runners, func(id uuid.UUID) bool { return rooms[id].free() })
+				if i < 0 {
+					continue
+				}
+				bind = &a.runners[i]
+			}
+			run, ok, err := promoteQueuedRun(ctx, q, e.RunID, pass.WatcherOwner, bind)
 			if err != nil {
 				return err
 			}
@@ -251,6 +280,11 @@ func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []Ru
 			promoted = append(promoted, PromotedRun{Run: run, Entry: e})
 			running++
 			deployment++
+			if bind != nil {
+				room := rooms[*bind]
+				room.used++
+				rooms[*bind] = room
+			}
 		}
 		return nil
 	})
@@ -258,16 +292,18 @@ func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []Ru
 }
 
 // promoteQueuedRun is the promotion CAS: QUEUED to PENDING, admitted_at and the watcher lease stamped,
-// and the run_queue row deleted in the same statement, the run row before its queue row as every exit
-// from the queue takes them. ok is false when another exit won first.
-func promoteQueuedRun(ctx context.Context, q Querier, id uuid.UUID, owner string) (types.AgentRun, bool, error) {
+// the runner it now holds a place on written when runner is set, and the run_queue row deleted in the
+// same statement, the run row before its queue row as every exit from the queue takes them. ok is false
+// when another exit won first.
+func promoteQueuedRun(ctx context.Context, q Querier, id uuid.UUID, owner string, runner *uuid.UUID) (types.AgentRun, bool, error) {
 	run, err := scanRun(q.QueryRow(ctx, `
 		WITH moved AS (
-			UPDATE agent_runs SET state=$2, updated_at=now(), admitted_at=now(), watcher_owner=$3, watcher_heartbeat=now()
+			UPDATE agent_runs SET state=$2, updated_at=now(), admitted_at=now(), watcher_owner=$3, watcher_heartbeat=now(),
+				runner_id=COALESCE($5, runner_id)
 			WHERE id=$1 AND state=$4 RETURNING `+runCols+`),
 		gone AS (DELETE FROM run_queue WHERE run_id IN (SELECT id FROM moved) RETURNING run_id)
 		SELECT `+runCols+` FROM moved`,
-		id, string(types.RunPending), owner, string(types.RunQueued)))
+		id, string(types.RunPending), owner, string(types.RunQueued), runner))
 	if errors.Is(err, ErrNotFound) {
 		return types.AgentRun{}, false, nil
 	}
@@ -382,13 +418,29 @@ type QueueStart struct {
 
 // StartQueuedRun writes the start's columns on a run that was promoted (PENDING, admitted_at set) and
 // has not been dispatched, and returns the row. ok is false when the run is no longer in that state,
-// so a kill that won leaves nothing written.
-func (s PG) StartQueuedRun(ctx context.Context, id uuid.UUID, st QueueStart) (types.AgentRun, bool, error) {
+// so a kill that won leaves nothing written. A run bound to a registered runner is held to that runner's
+// max_runs, the run itself not counted, under the runner's row lock (RunnerAtCapacityError): the
+// promotion already found it room there unless the start chose another runner.
+func (s PG) StartQueuedRun(ctx context.Context, id uuid.UUID, st QueueStart) (run types.AgentRun, ok bool, err error) {
 	limits, err := json.Marshal(st.RunLimits)
 	if err != nil {
 		return types.AgentRun{}, false, fmt.Errorf("store: marshal run limits: %w", err)
 	}
-	run, err := scanRun(s.Pool.QueryRow(ctx, `
+	err = s.inTx(ctx, func(q Querier) error {
+		if st.RunnerID != nil {
+			if err := admitOnRunner(ctx, q, *st.RunnerID, id); err != nil {
+				return err
+			}
+		}
+		var err error
+		run, ok, err = startQueuedRun(ctx, q, id, st, limits)
+		return err
+	})
+	return run, ok && err == nil, err
+}
+
+func startQueuedRun(ctx context.Context, q Querier, id uuid.UUID, st QueueStart, limits []byte) (types.AgentRun, bool, error) {
+	run, err := scanRun(q.QueryRow(ctx, `
 		UPDATE agent_runs SET spiffe_id=$2, confinement_class=$3, model_provider_id=$4, autonomy_level=$5, ends_at=$6,
 			wait_budget_sec=$7, run_limits=$8, governance_profile_id=$9, lifetime_cap_at=$10, lifetime_cap_source=$11,
 			placement=$12, placement_filled=$13, runner_id=$14, evidence_source=$15, runner_pool_executor=$16, updated_at=now()

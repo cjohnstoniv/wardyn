@@ -962,6 +962,7 @@ const (
 	reasonRunnerSessionRequired  = "runner_session_required"
 	reasonRunnersOrgURLInvalid   = "runners_org_url_invalid"
 	reasonRunnersEnabledRequired = "runners_enabled_required"
+	reasonRunnerMaxRunsInvalid   = "runner_max_runs_invalid"
 )
 
 // Runner route admission fails closed on absent or unreadable configuration.

@@ -569,7 +569,8 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 // floor it reads is the policy's and the components', and the plan it gates is the one that step judges.
 func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
-		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling))}
+		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling)),
+		promoted: f.promoted}
 	if f.mode != foldCreate {
 		in.dryDoor = true
 	}

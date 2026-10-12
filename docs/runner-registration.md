@@ -3,7 +3,7 @@
 A runner holds its own Ed25519 key. Registration creates an **unclaimed** runner: it cannot receive a run or relay traffic until its owner confirms the fingerprint. The organisation must configure `WARDYN_RUNNER_ORG_URL` with its public HTTPS URL; HTTP is accepted only for loopback development.
 
 1. Sign in under your personal account and run `wardyn runner token`. The token is printed once to stdout and expires after one hour. Save it in a private file for the runner.
-2. On the runner host, run `wardyn-runnerd register --org https://wardyn.example.com --token-file ./registration-token --name my-laptop`. The runner generates its key locally and prints its fingerprint.
+2. On the runner host, run `wardyn-runnerd register --org https://wardyn.example.com --token-file ./registration-token --name my-laptop`. The runner generates its key locally and prints its fingerprint and its runs at once (see [Runs at once](#runs-at-once)).
 3. Under that same owner's personal account, run `wardyn runner claim --url https://wardyn.example.com`. The CLI reads the local runner identity and confirms its fingerprint. An administrator's personal account can claim its own runner; administrator credentials cannot claim for another person.
 
 An operator can mint for a named person with `wardyn runner token --owner <principal>`. That token expires after 72 hours and still requires the named owner's fingerprint claim. Every token is single-use, including self-minted tokens. An unclaimed runner expires after 24 hours.
@@ -39,10 +39,27 @@ An administrator turns runners on at **Admin → Runners**, or with `PUT /api/v1
 | `GET /api/v1/runners/tokens?owner=&limit=&offset=` | admin or `security_admin` | Unused, unexpired registration tokens, optionally one person's. No token value is ever returned. |
 | `DELETE /api/v1/runners/tokens/{id}` | admin or `security_admin` | The token stops being redeemable at once; audited as `runner.token.revoke`. Minting stays admin only. |
 | `GET /api/v1/runners/settings` | admin or `security_admin` | `{"enabled": bool}`, readable while the runner routes refuse. |
+| `PUT /api/v1/me/runners/{id}` | the owner | `{"max_runs": N}` changes the runner's runs at once; see [Runs at once](#runs-at-once). |
 
-Both lists are paged and set `X-Wardyn-Truncated` when more exist. An unclaimed runner older than 24 hours is not listed, and the periodic sweep deletes it, freeing its key to register again. On a person's own list `minted_by_email` names the minter when someone else minted the token and an email is held. A runner another person revoked stays on its owner's list for seven days, with `revoked_by_email`; the owner's own revoke and older ones are hidden. A claimed runner's view carries `capacity`, `classes` and `allowed_roots` from its last `caps` event, and omits them until it has connected to the replica that answers. The mint answers (`POST /api/v1/runners/tokens`, `POST /api/v1/me/runners/tokens`) carry `org_url`, the URL `wardyn-runnerd register --org` must match; a token list never does. The runner views report what a runner said about itself as reported, never as verified.
+Both lists are paged and set `X-Wardyn-Truncated` when more exist. An unclaimed runner older than 24 hours is not listed, and the periodic sweep deletes it, freeing its key to register again. On a person's own list `minted_by_email` names the minter when someone else minted the token and an email is held. A runner another person revoked stays on its owner's list for seven days, with `revoked_by_email`; the owner's own revoke and older ones are hidden. Every view carries `machine_name`, the host name the runner reported at registration and again on each connect, the latest kept. It is runner-reported, never verified and never an identity; a name over 253 bytes or with a control character is refused at registration and not stored from a connect. `wardyn runner list` shows it as MACHINE. A claimed runner's view carries `capacity`, `classes` and `allowed_roots` from its last `caps` event, and omits them until it has connected to the replica that answers. The mint answers (`POST /api/v1/runners/tokens`, `POST /api/v1/me/runners/tokens`) carry `org_url`, the URL `wardyn-runnerd register --org` must match; a token list never does. The runner views report what a runner said about itself as reported, never as verified.
 
 `wardyn runner list` (`--all` for every person's runners) and `wardyn runner tokens list [--owner]|revoke` use these routes.
+
+## Runs at once
+
+A runner's `max_runs` is how many runs may hold a sandbox on it at the same time, from 1 to 64. `wardyn-runnerd register --max-runs N` sets it; without the flag registration sends half the host's CPU cores, at least 1. Migration `0172_runner_max_runs` gives a runner registered before it 2.
+
+| Who | Can |
+|---|---|
+| The owner | Change it with `wardyn runner set --max-runs N <id>` or `PUT /api/v1/me/runners/{id}`; audited as `runner.update` with the value before and after. |
+| An administrator | Read `max_runs` and `running` on `/runners`. No route changes another person's runner, since the machine is theirs. |
+
+- Every runner view carries `max_runs` and `running`, the runs holding a sandbox there now.
+- Placement never puts more than `max_runs` such runs on one runner. A create, a queue promotion, a queued run's start and a revive that starts an agent each count under the runner's row lock.
+- In a pool with a concurrent-run cap, a run whose runners are all at their limit waits, with reason `runner_pool_runners_at_capacity`.
+- In a pool with no cap, the launch is refused `runner_at_capacity`, as is a revive. Preflight answers the same.
+- Lowering the limit ends no run. Raising it lets waiting runs start at once.
+- Each sandbox create carries the limit, and the runner refuses one past the runs it still holds itself. This backstop only catches a count the control plane got wrong.
 
 Migration `0144_runner_minted_by` records on each runner who minted the registration token it redeemed, so the owner's list can tell a token they made from one an administrator made for them.
 

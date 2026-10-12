@@ -146,6 +146,12 @@ func NoOnlineRunnerMsg(name string) string {
 	return fmt.Sprintf("None of your runners in %s is online.", name)
 }
 
+// RunnerAtCapacityMsg is the create and preflight refusal (runner_at_capacity) for a run that would
+// start at once while each of the person's runners in the pool holds its max_runs.
+func RunnerAtCapacityMsg(name string) string {
+	return fmt.Sprintf("Your runners in %s are all running as many runs as they allow at once. Try again when one finishes, or raise Runs at once on your runner.", name)
+}
+
 // MemberMismatchMsg names the runner the caller asked for: their own runner's
 // name, or the id as they sent it. Never another person's runner's name; a
 // runner that is not the caller's is answered exactly like an unknown one.

@@ -55,6 +55,15 @@ export const POOL_OFFLINE = {
   NO_ONLINE_RUNNER: (name: string) => `None of your runners in ${name} is online.`,
 } as const;
 
+/**
+ * A run that would start at once while each of the person's runners in the pool already holds its
+ * "Runs at once" (runnerpool.RunnerAtCapacityMsg): the create and preflight runner_at_capacity.
+ */
+export const RUNNER_CAPACITY = {
+  RUNNER_AT_CAPACITY: (name: string) =>
+    `Your runners in ${name} are all running as many runs as they allow at once. Try again when one finishes, or raise Runs at once on your runner.`,
+} as const;
+
 /** The console's name for a hosting type (runnerpool.HostingLabel). */
 export const HOSTING_LABEL = { remote_provided: "Remote Provided", self_hosted: "Self-Hosted" } as const;
 
@@ -109,12 +118,15 @@ export const RUNNER_POOL_REFUSAL = {
 export const RUN_WAIT = {
   AT_CAPACITY: (name: string, max: number) => `${name} is running its limit of ${max}. This run starts when there's room.`,
   NO_RUNNER_FREE: (name: string) => `None of your runners in ${name} is online. This run starts when one is.`,
+  RUNNERS_AT_CAPACITY: (name: string) =>
+    `Your runners in ${name} are all running as many runs as they allow at once. This run starts when one has room.`,
 } as const;
 
 /** The reason a waiting run carries for each RUN_WAIT sentence. */
 export const RUN_WAIT_REASON: Record<keyof typeof RUN_WAIT, string> = {
   AT_CAPACITY: "runner_pool_at_capacity",
   NO_RUNNER_FREE: "runner_pool_no_runner_free",
+  RUNNERS_AT_CAPACITY: "runner_pool_runners_at_capacity",
 };
 
 /** The reason each sentence belongs to; the console matches on these, never on the text. */

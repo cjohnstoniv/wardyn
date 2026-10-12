@@ -140,9 +140,11 @@ func TestReasonsMatchDesign(t *testing.T) {
 		"relay_runner_mismatch": 403, "relay_required": 403, "relay_route_refused": 403, "delivery_via_org": 403,
 		"delivery_runner_resident": 403, "delivery_not_via_org": 403, "via_org_destination_refused": 403,
 		"via_org_cap_exceeded": http.StatusTooManyRequests,
+		// runner_at_capacity is the runner's runs at once (migration 0172), after the design.
+		"runner_at_capacity": 422,
 	}
 	if got := Reasons(); len(got) != len(want) {
-		t.Fatalf("%d reasons, design §12.3 lists %d", len(got), len(want))
+		t.Fatalf("%d reasons, design §12.3 lists %d plus runner_at_capacity", len(got), len(want)-1)
 	}
 	for r, status := range want {
 		if r.Status() != status || !r.Valid() {

@@ -119,7 +119,7 @@ func routeFamilies() map[string][]string {
 		"ssh-keys":        {"ListSSHKeys", "ListSSHKeysPage", "AddSSHKey", "DeleteSSHKey"},
 		"people":          {"ListPeople", "ErasePerson"},
 		"components":      {"MyComponents", "SaveMyComponent", "UpdateMyComponent", "DeleteMyComponent", "ListComponents", "PutComponent", "DeleteComponent"},
-		"runners":         {"MintRunnerToken", "RegisterRunner", "ClaimRunner", "ListRunners", "ListRunnersPage", "GetRunner", "ListMyRunners", "GetMyRunner", "ListRunnerTokens", "ListRunnerTokensPage", "RevokeRunnerToken", "GetRunnerSettings", "SetRunnersEnabled"},
+		"runners":         {"MintRunnerToken", "RegisterRunner", "ClaimRunner", "ListRunners", "ListRunnersPage", "GetRunner", "ListMyRunners", "GetMyRunner", "SetMyRunnerMaxRuns", "ListRunnerTokens", "ListRunnerTokensPage", "RevokeRunnerToken", "GetRunnerSettings", "SetRunnersEnabled"},
 		"runner-pools":    {"ListRunnerPools", "ListRunnerPoolsFor", "GetRunnerPool", "CreateRunnerPool", "UpdateRunnerPool", "DeleteRunnerPool", "CreateMyRunnerPool", "UpdateMyRunnerPool", "DeleteMyRunnerPool", "AddMyRunnerToPool", "RemoveMyRunnerFromPool", "GetOrgRunnerPoolDefaults", "SetOrgRunnerPoolDefaults", "GetMyRunnerPoolDefaults", "SetMyRunnerPoolDefaults", "ClearMyRunnerPoolDefaults"},
 		"devices":         {"MintDeviceEnrolmentToken", "ListDeviceEnrolmentTokens", "RevokeDeviceEnrolmentToken", "ListDevices", "RevokeDevice"},
 		"model-providers": {"GetModelProviders"},
