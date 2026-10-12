@@ -478,6 +478,19 @@ start_revive_session() {
     fi
 }
 
+# --prepare-only: this harness's CLI configuration and nothing else (no clone, no
+# boot session, no hold). The harnesses image runs it for every harness it is not
+# starting (deploy/images/common/agent-run-set), so a claude started by hand is
+# configured like one this launcher starts. Idempotent.
+if [[ "${1:-}" == "--prepare-only" ]]; then
+    : "${HOME:=/home/agent}"; export HOME
+    prepare_claude_config_dir
+    seed_claude_onboarding
+    materialize_managed_claude_config
+    materialize_aws_sso_config
+    exit 0
+fi
+
 # A container that has booted before is being revived: same prep, no seed.
 if [[ "${1:-}" == "--idle" ]] && booted_before; then
     set -- --revive

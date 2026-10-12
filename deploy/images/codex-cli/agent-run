@@ -127,6 +127,16 @@ if [[ "${1:-}" == "--selftest" ]]; then
     fi
 fi
 
+# --prepare-only: this harness's CLI configuration and nothing else (no clone, no
+# boot session, no hold). The harnesses image runs it for every harness it is not
+# starting (deploy/images/common/agent-run-set): a codex started by hand needs the
+# config.toml and auth.json this writes. Idempotent.
+if [[ "${1:-}" == "--prepare-only" ]]; then
+    : "${HOME:=/home/agent}"; export HOME
+    prepare_codex_config
+    exit 0
+fi
+
 # ── boot session (a seeded interactive run starts its agent at BOOT) ─────────
 # THE SESSION MUST WIN THE NAME, so this runs BEFORE the shared prep rather than
 # after it.  Both drivers attach with `tmux new-session -A -s wardyn bash` the
