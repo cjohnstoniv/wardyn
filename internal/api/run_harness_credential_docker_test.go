@@ -187,7 +187,7 @@ chmod +x ~/fakebin/*
 	t.Logf("agent-run: %s", strings.TrimSpace(out))
 	for file, want := range map[string]string{"harness.cred": c.cred, "mcp-child.cred": c.cred, "sibling.cred": ""} {
 		if got := c.exec(t, "sh", "-c", "cat ~/"+file+" 2>/dev/null || echo ABSENT"); got != want {
-			t.Errorf("%s = %q, want %q", file, got, want)
+			t.Errorf("%s holds the credential: %v, want %v (absent: %v)", file, got == c.cred || strings.Contains(got, c.cred), want != "", got == "ABSENT\n")
 		}
 	}
 	if got := c.handStartedCredential(t); got != "" {
