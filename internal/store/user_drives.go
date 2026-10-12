@@ -277,10 +277,10 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 		})
 }
 
-// UpsertUserDriveGrant allocates one drive to one subject, keyed on UNIQUE(subject_type, subject):
-// re-allocating REPOINTS the existing row rather than leaving a second one, so a subject's
-// allocation is always the admin's last write. On conflict the returned id is the EXISTING row's,
-// not g.ID. Returns ErrNotFound when drive_id names no drive (FK, 23503).
+// UpsertUserDriveGrant allocates one drive to one subject, keyed on UNIQUE(subject_type, subject,
+// drive_id) (migration 0166): writing the same subject and drive again UPDATES that row, and
+// allocating the subject another drive adds a second row beside it. On conflict the returned id
+// is the EXISTING row's, not g.ID. Returns ErrNotFound when drive_id names no drive (FK, 23503).
 //
 // SECURITY: refuses (ErrConflict) if another subject already holds the same home_override in the
 // same object-name NAMESPACE (host_root, not drive — see shareBackend) — one home_override must
@@ -320,8 +320,8 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, ho
 			       OR (nd.backend = '` + shareBackend + `' AND od.backend = '` + shareBackend + `'
 			           AND nd.host_root <> '' AND od.host_root = nd.host_root))
 		)
-		ON CONFLICT (subject_type, subject) DO UPDATE
-			SET drive_id = EXCLUDED.drive_id, priority = EXCLUDED.priority,
+		ON CONFLICT (subject_type, subject, drive_id) DO UPDATE
+			SET priority = EXCLUDED.priority,
 			    size_mib_override = EXCLUDED.size_mib_override,
 			    writable_override = EXCLUDED.writable_override,
 			    home_override = EXCLUDED.home_override, enabled = EXCLUDED.enabled

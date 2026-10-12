@@ -46,6 +46,11 @@ type UserDriveFixture struct {
 	ReadBack func(t *testing.T, name string) string
 	// Refused are drives outside the ceiling; CreateSandbox must refuse each.
 	Refused []RefusedDrive
+	// Also, when set, is a second drive at its own derived path (below
+	// runner.DrivesRoot or runner.SharedRoot). The case mounts it beside Mount
+	// in one sandbox and requires the agent to write and read back both, then
+	// requires a second drive at Mount's own target to be refused.
+	Also *types.DriveMount
 }
 
 // RefusedDrive is one drive the substrate must refuse.
@@ -69,6 +74,11 @@ type RefusedDrive struct {
 // three refusals after it mean something: a directory that never arrived
 // refuses everything too.
 func userDriveProbeScript(token string) string {
+	return userDriveProbeScriptAt(runner.DriveTarget, token)
+}
+
+// userDriveProbeScriptAt is userDriveProbeScript for the drive at target.
+func userDriveProbeScriptAt(target, token string) string {
 	return fmt.Sprintf(`D=%[1]s
 echo uid=$(id -u)
 if (printf '%%s' %[2]s > $D/%[3]s) 2>/dev/null; then echo w_drive=WROTE; else echo w_drive=REFUSED; fi
@@ -77,7 +87,7 @@ if [ -d $D/%[4]s ]; then echo locked=PRESENT; else echo locked=ABSENT; fi
 if (ls $D/%[4]s) >/dev/null 2>&1; then echo r_locked_dir=READ; else echo r_locked_dir=REFUSED; fi
 if (cat $D/%[4]s/%[5]s) >/dev/null 2>&1; then echo r_locked_file=READ; else echo r_locked_file=REFUSED; fi
 if (: > $D/%[4]s/wardyn-intruder) 2>/dev/null; then echo w_locked=WROTE; else echo w_locked=REFUSED; fi
-`, runner.DriveTarget, token, userDriveProbeFile, UserDriveLockedDir, UserDriveLockedFile)
+`, target, token, userDriveProbeFile, UserDriveLockedDir, UserDriveLockedFile)
 }
 
 // testUserDrives is conformance case 8. A driver advertising
@@ -116,10 +126,10 @@ func testUserDrives(t *testing.T, r runner.Runner, opts Options) {
 	if opts.AgentUserImage != "" {
 		image = opts.AgentUserImage
 	}
-	withDrive := func(d types.DriveMount) func(*runner.SandboxSpec) {
+	withDrive := func(d ...types.DriveMount) func(*runner.SandboxSpec) {
 		return func(spec *runner.SandboxSpec) {
 			spec.Image = image
-			spec.Drive = &d
+			spec.Drives = d
 		}
 	}
 
@@ -185,4 +195,48 @@ func testUserDrives(t *testing.T, r runner.Runner, opts Options) {
 			t.Logf("refused as required: %v", err)
 		})
 	}
+
+	if fx.Also != nil {
+		testTwoDrives(t, ctx, r, caps, opts, fx, withDrive)
+	}
+}
+
+// testTwoDrives is case 8's plural half: Mount and Also in ONE sandbox, each at
+// its own path, each written and read back by the agent; then a second drive at
+// Mount's own target, which must be refused rather than hide one of the two.
+func testTwoDrives(t *testing.T, ctx context.Context, r runner.Runner, caps runner.Capabilities, opts Options,
+	fx *UserDriveFixture, withDrive func(...types.DriveMount) func(*runner.SandboxSpec)) {
+	t.Run("TwoDrives", func(t *testing.T) {
+		sb := createStrongestSandboxWith(t, ctx, r, caps, opts, "UserDrives two drives", withDrive(fx.Mount, *fx.Also))
+		for _, d := range []types.DriveMount{fx.Mount, *fx.Also} {
+			token := "wardyn-drive-" + uuid.NewString()
+			got := ExecKeyValues(t, ctx, r, sb.Ref, userDriveProbeScriptAt(d.Target, token))
+			if got["w_drive"] != "WROTE" || got["r_drive"] != token {
+				t.Errorf("beside another drive, the agent could not write and read back %s (w_drive=%s, r_drive=%q)",
+					d.Target, got["w_drive"], got["r_drive"])
+			}
+			if d.Target == fx.Mount.Target && fx.ReadBack != nil {
+				if host := fx.ReadBack(t, userDriveProbeFile); host != token {
+					t.Errorf("outside the sandbox the first drive's %s holds %q, want %q", userDriveProbeFile, host, token)
+				}
+			}
+		}
+	})
+	t.Run("TwoDrivesOneTarget", func(t *testing.T) {
+		same := *fx.Also
+		same.Target = fx.Mount.Target
+		spec := minimalSpec(opts.image())
+		spec.ConfinementClass = caps.ConfinementClasses[len(caps.ConfinementClasses)-1]
+		withDrive(fx.Mount, same)(&spec)
+		sb, err := r.CreateSandbox(ctx, spec)
+		if err == nil {
+			stopCtx, stop := context.WithTimeout(context.Background(), conformanceCleanupTimeout)
+			defer stop()
+			_ = r.StopSandbox(stopCtx, sb.Ref)
+			t.Fatalf("CreateSandbox mounted two drives at %s", fx.Mount.Target)
+		}
+		if !strings.Contains(err.Error(), "its own drive path") {
+			t.Errorf("CreateSandbox refused two drives at one target, but not as a drive-target refusal: %v", err)
+		}
+	})
 }

@@ -9,9 +9,12 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -22,8 +25,10 @@ import (
 // deny and no host-root ceiling to escape; host_path runs that deny matrix
 // instead (driver_mounts.go). Ownership is the image's job: a named volume
 // mounted over an image directory inherits its uid/gid via Docker's copy-up,
-// so every agent image pre-creates /home/agent/drive owned by agent — wardynd
-// never chowns or runs a privileged helper.
+// so every agent image pre-creates /home/agent/drive owned by agent. A volume
+// at a derived path the image has no directory for is seeded through that same
+// directory first (seedDriveVolume) — wardynd never chowns or runs a
+// privileged helper.
 
 const (
 	// driveVolumeDriver: LOCAL, ALWAYS, never operator-configurable. SECURITY:
@@ -145,4 +150,44 @@ func driveVolumeAdoptable(v volume.Volume, name string, drive *types.DriveMount)
 			name, labelDriveSubject, drive.HomeName, types.HomeTemplateHash)
 	}
 	return nil
+}
+
+// driveSeedPrefix names the container seedDriveVolume creates for a volume.
+const driveSeedPrefix = "wardyn-drive-seed-"
+
+// seedDriveVolume gives a managed volume mounted below runner.DrivesRoot the
+// ownership the legacy drive gets. Docker copies an image directory's owner and
+// contents onto an EMPTY volume mounted over it, and every agent image
+// pre-creates runner.DriveTarget owned by the agent, but no image has a
+// directory at a derived path, so a fresh volume there would start root-owned
+// and unwritable by the agent.
+//
+// So the volume is mounted once at runner.DriveTarget in a container that is
+// created and removed, never started, with no network: the copy happens at
+// create, nothing in the image runs, nothing is chowned, and a volume that
+// already holds data is left as it is (Docker copies into an empty volume
+// only). The container is named after the volume, so one a crash left behind
+// is replaced rather than doubled.
+func (d *Driver) seedDriveVolume(ctx context.Context, image string, drive *types.DriveMount) error {
+	name := driveSeedPrefix + drive.ObjectName
+	remove := func() error {
+		if _, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+			return fmt.Errorf("docker: seed user drive volume %q: remove: %w", drive.ObjectName, err)
+		}
+		return nil
+	}
+	if err := remove(); err != nil {
+		return err
+	}
+	if _, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name:   name,
+		Config: &container.Config{Image: image, Cmd: []string{"true"}, NetworkDisabled: true},
+		HostConfig: &container.HostConfig{
+			NetworkMode: "none",
+			Mounts:      []mount.Mount{{Type: mount.TypeVolume, Source: drive.ObjectName, Target: runner.DriveTarget}},
+		},
+	}); err != nil {
+		return fmt.Errorf("docker: seed user drive volume %q: %w", drive.ObjectName, err)
+	}
+	return remove()
 }

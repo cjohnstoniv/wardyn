@@ -35,10 +35,11 @@ var errCapsUnenforceable = fmt.Errorf("resource caps not enforceable on this hos
 var errTeardownUnresolved = errors.New("teardown could not resolve run id; sibling proxy/network may be orphaned")
 
 // errDriveTargetInvalid is driveMount's refusal of a drive whose Target isn't
-// the one reserved in-container bind path (parity with the Kubernetes
-// driver's sentinel). A wrong Target would shadow a reserved path — e.g. the
-// injected credential dir or the workspace — with persistent storage.
-var errDriveTargetInvalid = errors.New("a user drive may bind only at the reserved drive path")
+// a derived drive path (runner.ValidateDriveTarget), or is another drive's
+// (parity with the Kubernetes driver's sentinel). A wrong Target would shadow
+// a reserved path — e.g. the injected credential dir or the workspace — with
+// persistent storage.
+var errDriveTargetInvalid = errors.New("a user drive may bind only at its own drive path")
 
 // pullFailure is ensureImage's error when an image is absent locally and
 // unpullable. Only demo agent tags get the `make agent-images` hint

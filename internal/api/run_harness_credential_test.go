@@ -106,7 +106,7 @@ func toolgateCredentialRows(t *testing.T, events []types.AuditEvent, run uuid.UU
 // file beside it, so the started harness keeps its own credential.
 func TestToolgateCredential_DockerShareDriveDelivered(t *testing.T) {
 	rn := &fakeRunner{}
-	_, audit, run := dispatchTwoHarnessRun(t, rn, dispatchParams{Drive: dispatchDrive(false)})
+	_, audit, run := dispatchTwoHarnessRun(t, rn, dispatchParams{Drives: []types.DriveMount{*dispatchDrive(false)}})
 	toolgateCredentialOf(t, rn.lastSpec)
 	if rows := toolgateCredentialRows(t, audit.events, run.ID); len(rows) != 0 {
 		t.Errorf("withheld rows = %v, want none", rows)
@@ -125,7 +125,7 @@ func TestToolgateCredential_WithheldIsAudited(t *testing.T) {
 		reason string
 	}{
 		"a runner that delivers no file": {&fakeRunner{noManagedFiles: true}, dispatchParams{}, "does not deliver managed files"},
-		"a shared Kubernetes drive":      {&fakeRunner{}, dispatchParams{Drive: k8sShare}, "the run mounts a shared Kubernetes drive"},
+		"a shared Kubernetes drive":      {&fakeRunner{}, dispatchParams{Drives: []types.DriveMount{*k8sShare}}, "the run mounts a shared Kubernetes drive"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, audit, run := dispatchTwoHarnessRun(t, c.rn, c.p)

@@ -88,7 +88,18 @@ func dockerDriveFixture(t *testing.T) (roots []string, fx *conformance.UserDrive
 		t.Fatalf("docker.New (widened ceiling): %v", err)
 	}
 
+	// The second drive is a managed volume at its own derived path, which no
+	// agent image pre-creates: the driver, not copy-up, makes its root the
+	// agent's. Drive volumes outlive every run, so the fixture removes it.
+	volName := "wardyn-conformance-drive-" + uuid.NewString()[:8]
+	t.Cleanup(func() {
+		_, _ = cli.VolumeRemove(context.Background(), volName, dockerclient.VolumeRemoveOptions{Force: true})
+	})
 	return []string{share}, &conformance.UserDriveFixture{
+		Also: &types.DriveMount{
+			DriveID: uuid.New(), Backend: types.DriveBackendDockerVolume, ObjectName: volName,
+			DriveName: "conformance-second", HomeName: "conf-alice", Target: runner.DrivesRoot + "/conformance-second",
+		},
 		Mount: drive(share, home),
 		Lock: func(t *testing.T) {
 			runAsRootIn(t, cli, filepath.Join(share, home), "mkdir /d/"+conformance.UserDriveLockedDir+
