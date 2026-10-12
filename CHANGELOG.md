@@ -96,8 +96,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   gives up after 24 hours (Background) or 1 hour (Interactive). `POST /runs` takes `max_wait_sec` (1 or more; a longer
   wait is cut to 604800 seconds, 7 days, with a warning; `0` is `422 run_max_wait_invalid`). A waiting run can be
   cancelled, ends `FAILED queue_timeout`, and is cancelled with its pool, or when its owner's sessions are revoked. A
-  run pinned to one of your runners waits for that runner. An all- offline self-hosted pool is still refused at
-  launch. New metrics: `wardyn_runner_pool_queue_depth`, `wardyn_runner_pool_slots_used`,
+  run pinned to one of your runners waits for that runner. An all-offline self-hosted pool is still refused at launch.
+  New metrics: `wardyn_runner_pool_queue_depth`, `wardyn_runner_pool_slots_used`,
   `wardyn_runner_pool_queue_wait_seconds`.
 - New Run can include more than one harness in a sandbox (an interactive environment, or a command), each on its own
   model provider, started from the image an operator declares for the set. An AWS sign-in model provider
