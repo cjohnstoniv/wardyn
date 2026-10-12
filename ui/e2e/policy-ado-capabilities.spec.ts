@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, goToNewRunPanel } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, openNewRun, reviewRunDocument } from "./fixtures";
 import { ADO_ACCESS } from "../src/app/lib/ado-access-copy";
 import { ADO_ENTRA_EDITOR } from "../src/app/lib/workspace-providers-copy";
 import type { RunPolicySpec } from "../src/app/lib/types";
@@ -110,7 +110,13 @@ test("the Azure DevOps access section locks what the ceiling does not grant, and
   }
 });
 
-test("New Run summarises the picked saved policy's Azure DevOps access", async ({ page, request }) => {
+// OPEN QUESTION FOR THE LEAD: the guided flow has no saved-policy picker and no Azure DevOps access summary
+// (the old Access panel drew `ado-access-summary`; Review's Access group names the policy but not its
+// Azure DevOps access). A saved policy now reaches New Run as `policy_id` in a run document, so this case
+// opens Review through the JSON door and asserts the summary where the approved Review would carry it.
+// It stays fixme until the app draws the summary on Review (or the lead retires the case; the Policies
+// list in the first case above keeps the summary line itself proven).
+test.fixme("New Run summarises the picked saved policy's Azure DevOps access", async ({ page, request }) => {
   const stamp = Date.now().toString(36);
   const ids: string[] = [];
   // The per-area packet's four saved policies (Member · State 4), with the line each reads as.
@@ -131,21 +137,13 @@ test("New Run summarises the picked saved policy's Azure DevOps access", async (
       expect(res.status()).toBe(201);
       ids.push(((await res.json()) as { id: string }).id);
     }
-    await gotoConsole(page);
-    await page.getByRole("button", { name: "New run" }).click();
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
-    await goToNewRunPanel(page, "policy");
-    await page.getByRole("button", { name: /^Reuse a saved policy/ }).click();
-    const summary = page.getByTestId("ado-access-summary");
-
-    for (const [name, , line] of policies) {
-      await goToNewRunPanel(page, "policy");
-      await page.getByRole("combobox", { name: "Saved policy" }).click();
-      await page.getByRole("option", { name }).click();
-      await goToNewRunPanel(page, "access");
-      await expect(summary).toHaveText(line);
+    for (const [i, [, , line]] of policies.entries()) {
+      await gotoConsole(page);
+      await openNewRun(page);
+      await reviewRunDocument(page, { shape: "environment", policy_id: ids[i] });
+      await expect(page.getByTestId("ado-access-summary")).toHaveText(line);
     }
-    await expect(summary.getByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE)).toBeVisible();
+    await expect(page.getByTestId("ado-access-summary").getByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE)).toBeVisible();
   } finally {
     for (const id of ids) expect((await request.delete(`/api/v1/policies/${id}`, { headers: auth })).ok()).toBe(true);
   }

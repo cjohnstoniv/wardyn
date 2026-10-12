@@ -65,7 +65,7 @@ import { SPEC_LABEL } from "./policy-source";
 //      the decoded run.policy.resolve envelope, and
 //      governance_ceiling_test.go's governance_profile_name pin.
 //
-//   2. THE MEMBER'S TWO DISPLAY MOMENTS. Same cause: the field the rail and
+//   2. THE MEMBER'S TWO DISPLAY MOMENTS. Same cause: the field New Run's Run step and
 //      the Getting Started card read is the one the operator short-circuit
 //      omits — see governance-member.spec.ts for that splice.
 //

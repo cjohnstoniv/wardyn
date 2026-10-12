@@ -15,9 +15,16 @@ import {
   navTo,
   navToRoute,
   sidebarLink,
+  chooseFiles,
+  continueNewRun,
   launchRun,
-  goToNewRunPanel,
+  newRunHeading,
+  submitLaunch,
+  walkGuidedToFiles,
 } from "./fixtures";
+import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
+import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
+import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 import { DRIVES, DRIVE_MEMBER, PEOPLE, PERM, PREVIEW } from "../src/app/lib/user-drives-copy";
 import { GOVERNANCE as GOV, MEMBER } from "../src/app/lib/governance-copy";
 import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
@@ -206,6 +213,33 @@ async function watchLaunch(page: Page): Promise<{ body: LaunchBody | null }> {
     await route.continue();
   });
   return seen;
+}
+
+// New Run's Files step, as a person reaches it: the drive block is a section of that step. An agent task
+// is used because an Environment run opens with the person's drive already attached when it can be (A18),
+// and these cases are about what the person is told before they choose anything.
+async function openFilesStep(page: Page): Promise<void> {
+  await navToRoute(page, "/runs/new");
+  await expect(newRunHeading(page, NR_START.TITLE)).toBeVisible();
+  await walkGuidedToFiles(page, { shape: "agent_task" });
+}
+
+// Mounting the drive attaches it; where the run starts is still the person's choice, so the drive's own
+// "Starts here" is taken before Continue.
+async function startHereOnDrive(page: Page): Promise<void> {
+  await page.getByRole("radio", { name: /Starts here/ }).check();
+}
+
+// Reaches Review and runs the launch until the SERVER's refusal is on screen: either the preflight already
+// carries it as a blocker, or Launch opens the Name dialog and the create answers it there.
+async function launchUntilRefused(page: Page, title: string): Promise<void> {
+  await continueNewRun(page, NR_TOOLS.TITLE);
+  await continueNewRun(page, NR_REVIEW.TITLE);
+  const refusal = page.getByText(DRIVE_MEMBER.REFUSED_NO_GRANT);
+  const launch = page.locator("button:enabled", { hasText: NR_REVIEW.LAUNCH_RUN });
+  await expect(refusal.or(launch).first()).toBeVisible();
+  if (!(await refusal.isVisible())) await submitLaunch(page, title);
+  await expect(refusal).toBeVisible();
 }
 
 // ---------------------------------------------------------------------------
@@ -583,10 +617,7 @@ test.describe("drives — what the member is told at New run", () => {
     // before the feature existed.
     await mockMemberRole(page);
     await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
-
-    await goToNewRunPanel(page, "workspace");
+    await openFilesStep(page);
     await expect(page.getByTestId("nr-drive")).toHaveCount(0);
     await expect(page.getByTestId("nr-drive-reason")).toHaveCount(0);
     await expect(page.getByText(DRIVE_MEMBER.NR_CHECKBOX)).toHaveCount(0);
@@ -597,10 +628,9 @@ test.describe("drives — what the member is told at New run", () => {
   test("a WRITABLE allocation: the checkbox, its sentence, and the narrowing toggle", async ({ page }) => {
     await mockMemberDrive(page, ALLOCATED);
     await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
+    await openFilesStep(page);
 
     const block = page.getByTestId("nr-drive");
-    await goToNewRunPanel(page, "workspace");
     await expect(block).toBeVisible();
     await expect(block.getByText(DRIVE_MEMBER.NR_CHECKBOX)).toBeVisible();
     // The hint names the drive, the size and the mode of the MOUNT — and the
@@ -635,9 +665,7 @@ test.describe("drives — what the member is told at New run", () => {
   test("a READ-ONLY allocation has no narrowing toggle — there is nothing to narrow", async ({ page }) => {
     await mockMemberDrive(page, { ...ALLOCATED, writable: false });
     await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
-
-    await goToNewRunPanel(page, "workspace");
+    await openFilesStep(page);
     await expect(page.getByTestId("nr-drive")).toBeVisible();
     await expect(page.getByText(DRIVE_MEMBER.NR_HINT(NAME, SIZE, DRIVES.MODE_RO_INLINE))).toBeVisible();
     await expect(page.getByText(DRIVE_MEMBER.NR_RO_NOTE)).toBeVisible();
@@ -650,10 +678,9 @@ test.describe("drives — what the member is told at New run", () => {
   test("a PAUSED allocation is one sentence where the checkbox would be", async ({ page }) => {
     await mockMemberDrive(page, { ...ALLOCATED, paused: true });
     await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
+    await openFilesStep(page);
 
     // An unmountable drive is not a disabled checkbox with a tooltip.
-    await goToNewRunPanel(page, "workspace");
     await expect(page.getByTestId("nr-drive-reason")).toHaveText(DRIVE_MEMBER.NR_PAUSED);
     await expect(page.getByTestId("nr-drive")).toHaveCount(0);
     await expect(page.locator("#nr-drive-mount")).toHaveCount(0);
@@ -665,9 +692,8 @@ test.describe("drives — what the member is told at New run", () => {
     // to someone whose profile is the actual reason.
     await mockMemberDrive(page, ALLOCATED, "walled");
     await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
+    await openFilesStep(page);
 
-    await goToNewRunPanel(page, "workspace");
     await expect(page.getByTestId("nr-drive-reason")).toHaveText(DRIVE_MEMBER.NR_DENIED("walled"));
     await expect(page.getByTestId("nr-drive")).toHaveCount(0);
     await expect(page.getByText(DRIVE_MEMBER.NR_CHECKBOX)).toHaveCount(0);
@@ -696,9 +722,7 @@ test.describe("drives — what the member is told at New run", () => {
   test("user_drive_unavailable:governance_unavailable renders NR_GOVERNANCE_UNAVAILABLE", async ({ page }) => {
     await mockMemberDriveUnavailable(page, "governance_unavailable");
     await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
-
-    await goToNewRunPanel(page, "workspace");
+    await openFilesStep(page);
     await expect(page.getByTestId("nr-drive-reason")).toHaveText(DRIVE_MEMBER.NR_GOVERNANCE_UNAVAILABLE);
     await expect(page.getByTestId("nr-drive")).toHaveCount(0);
   });
@@ -707,8 +731,7 @@ test.describe("drives — what the member is told at New run", () => {
     for (const token of ["unavailable", "unmountable"]) {
       await mockMemberDriveUnavailable(page, token);
       await gotoConsole(page);
-      await navToRoute(page, "/runs/new");
-      await goToNewRunPanel(page, "workspace");
+      await openFilesStep(page);
       await expect(page.getByTestId("nr-drive-reason")).toHaveText(DRIVE_MEMBER.NR_UNAVAILABLE);
       await expect(page.getByTestId("nr-drive")).toHaveCount(0);
     }
@@ -719,8 +742,7 @@ test.describe("drives — what the member is told at New run", () => {
   test("user_drive_unavailable:groups_snapshot_stale renders MEMBER.DENIED_STALE_GROUPS", async ({ page }) => {
     await mockMemberDriveUnavailable(page, "groups_snapshot_stale");
     await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
-    await goToNewRunPanel(page, "workspace");
+    await openFilesStep(page);
     await expect(page.getByTestId("nr-drive-reason")).toHaveText(MEMBER.DENIED_STALE_GROUPS);
     await expect(page.getByTestId("nr-drive")).toHaveCount(0);
   });
@@ -760,20 +782,17 @@ test.describe("drives — ticking the box puts `drive` on the wire", () => {
     await mockMemberDrive(page, ALLOCATED);
     const seen = await watchLaunch(page);
     await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
+    await openFilesStep(page);
 
-    await goToNewRunPanel(page, "workspace");
     await page.locator("#nr-drive-mount").click();
     await expect(page.locator("#nr-drive-mount")).toBeChecked();
-    await goToNewRunPanel(page, "run");
-    await page.getByLabel("Title").fill("e2e drive mount");
-    await page.getByRole("button", { name: "Launch run" }).click();
+    await startHereOnDrive(page);
 
-    // The refusal is the SERVER's own §7.7 string, rendered verbatim in the
-    // launch rail — and this backend can only have raised it by reading a
-    // `drive` flag off the request, because seedRequestDrive is a provable
-    // no-op without one.
-    await expect(page.getByText(DRIVE_MEMBER.REFUSED_NO_GRANT)).toBeVisible();
+    // The refusal is the SERVER's own §7.7 string, rendered verbatim (a
+    // blocker on Review, or the Name dialog's error) — and this backend can
+    // only have raised it by reading a `drive` flag off the request, because
+    // seedRequestDrive is a provable no-op without one.
+    await launchUntilRefused(page, "e2e drive mount");
 
     // …and the shape the console put there: a bare FLAG. Nothing names a
     // drive, a path or a directory — the server resolves which drive is the
@@ -785,16 +804,13 @@ test.describe("drives — ticking the box puts `drive` on the wire", () => {
     await mockMemberDrive(page, ALLOCATED);
     const seen = await watchLaunch(page);
     await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
+    await openFilesStep(page);
 
-    await goToNewRunPanel(page, "workspace");
     await page.locator("#nr-drive-mount").click();
     await page.locator("#nr-drive-readonly").click();
-    await goToNewRunPanel(page, "run");
-    await page.getByLabel("Title").fill("e2e drive mount ro");
-    await page.getByRole("button", { name: "Launch run" }).click();
+    await startHereOnDrive(page);
 
-    await expect(page.getByText(DRIVE_MEMBER.REFUSED_NO_GRANT)).toBeVisible();
+    await launchUntilRefused(page, "e2e drive mount ro");
     expect(seen.body?.drive).toEqual({ enabled: true, read_only: true });
   });
 
@@ -805,16 +821,16 @@ test.describe("drives — ticking the box puts `drive` on the wire", () => {
     // no allocation and therefore no checkbox to leave alone.
     const seen = await watchLaunch(page);
     await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
-    // On the SCREEN THAT DRAWS IT — asserted before the launch, not from /runs,
+    // On the STEP THAT DRAWS IT — asserted before the launch, not from /runs,
     // where its absence would be true of every screen in the app.
-    await goToNewRunPanel(page, "workspace");
+    await openFilesStep(page);
     await expect(page.getByTestId("nr-drive")).toHaveCount(0);
 
-    await goToNewRunPanel(page, "run");
-    await page.getByLabel("Title").fill("e2e no drive");
-    await launchRun(page);
+    // The launch itself: an agent task with no extra files.
+    await chooseFiles(page);
+    await continueNewRun(page, NR_TOOLS.TITLE);
+    await continueNewRun(page, NR_REVIEW.TITLE);
+    await launchRun(page, "e2e no drive");
     expect(seen.body).not.toBeNull();
     expect(seen.body?.drive).toBeUndefined();
   });
@@ -827,12 +843,10 @@ test.describe("drives — ticking the box puts `drive` on the wire", () => {
 test.describe("drives — an admin's New run says none of the member's sentences", () => {
   test("no checkbox, no reason line, no chip — the admin's own /me has no allocation", async ({ page }) => {
     await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await openFilesStep(page);
 
     // Without this the four member assertions above would pass just as well on
     // a screen that renders the block for everybody.
-    await goToNewRunPanel(page, "workspace");
     await expect(page.getByTestId("nr-drive")).toHaveCount(0);
     await expect(page.getByTestId("nr-drive-reason")).toHaveCount(0);
     for (const s of [
