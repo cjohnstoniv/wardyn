@@ -42,6 +42,9 @@ const (
 	// mpNoProviderDetail is the brokered-LLM 404's detail for a model run no
 	// provider serves: under a provider block nothing else credentials it.
 	mpNoProviderDetail = "no model provider serves this agent on this deployment — an admin adds one under Settings → Model providers"
+	// mpNoProviderHarnessDetail is mpNoProviderDetail for a run whose other
+	// harnesses each reach their own provider: it names the one that has none.
+	mpNoProviderHarnessDetail = "no model provider serves %s on this deployment, though this run's other harnesses have their own — an admin adds one under Settings → Model providers"
 )
 
 // providerDenial is a model-provider refusal: the sentence, and whether the
@@ -291,24 +294,8 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 	policy.WorkspaceMounts = slices.DeleteFunc(slices.Clone(policy.WorkspaceMounts), func(wm types.WorkspaceMount) bool {
 		return wm.Target == claudeCredTarget || wm.Target == claudeCredJSONTarget
 	})
-	lanes := make([]providerLane, len(pairs))
-	var laneHosts []string
-	for i, h := range pairs {
-		if h.ModelProviderID == "" || !modelRun {
-			continue
-		}
-		lr := laneRun(run, h)
-		lane, kind, d := s.providerLaneForRun(ctx, lr, siteCfg)
-		if d.msg != "" {
-			s.refuseProviderDispatch(ctx, lr, kind, d, nil)
-			return nil, nil, injections, providerDispatch{}, false
-		}
-		lanes[i] = lane
-		laneHosts = append(laneHosts, lane.hosts(s)...)
-	}
-	if i, host := laneConflict(pairs, lanes); i > 0 {
-		c := lanes[i].chosen.provider
-		s.refuseProviderDispatch(ctx, laneRun(run, pairs[i]), c.Kind, providerDenial{msg: fmt.Sprintf(mpRunLaneConflict, c.ID, host)}, nil)
+	lanes, laneHosts, ok := s.harnessLanes(ctx, run, pairs, siteCfg, modelRun)
+	if !ok {
 		return nil, nil, injections, providerDispatch{}, false
 	}
 	injections = s.dropLegacyModelInjections(ctx, run, injections, laneHosts, s.modelServingHosts(siteCfg))
@@ -324,6 +311,9 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 	var lanePairs []types.RunHarness
 	if lanes[0].chosen == nil {
 		prov.detail = mpNoProviderDetail
+		if slices.ContainsFunc(lanes, func(l providerLane) bool { return l.chosen != nil }) {
+			prov.detail = fmt.Sprintf(mpNoProviderHarnessDetail, harnessName(run.Agent))
+		}
 	}
 	for i, lane := range lanes {
 		if i > 0 && lane.chosen == nil {
@@ -358,6 +348,44 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 	}
 	return llms, lanePairs, injections, prov, true
 }
+
+// harnessLanes is resolveProviderLane's lane per pair: each provider re-read
+// and its owner's credential checked live, an AWS sign-in on any harness but
+// the primary refused first (harnessProviderNeedsPrimary), then the set held
+// to create's one-lane test (laneConflict). hosts is every lane's hosts, for
+// the one strip. ok=false means the run was refused and is already FAILED.
+func (s *Server) harnessLanes(ctx context.Context, run types.AgentRun, pairs []types.RunHarness, siteCfg types.SiteConfig, modelRun bool,
+) (lanes []providerLane, hosts []string, ok bool) {
+	lanes = make([]providerLane, len(pairs))
+	for i, h := range pairs {
+		if h.ModelProviderID == "" || !modelRun {
+			continue
+		}
+		lr := laneRun(run, h)
+		if p, found := modelProviderByID(siteCfg.ModelProviders, h.ModelProviderID); i > 0 && found && harnessProviderNeedsPrimary(p) {
+			s.refuseProviderDispatch(ctx, lr, p.Kind, providerDenial{msg: fmt.Sprintf(mpRunSignInNotPrimary, p.ID, harnessName(h.Harness))}, nil)
+			return nil, nil, false
+		}
+		lane, kind, d := s.providerLaneForRun(ctx, lr, siteCfg)
+		if d.msg != "" {
+			s.refuseProviderDispatch(ctx, lr, kind, d, nil)
+			return nil, nil, false
+		}
+		lanes[i] = lane
+		hosts = append(hosts, lane.hosts(s)...)
+	}
+	if i, host := laneConflict(pairs, lanes); i > 0 {
+		c := lanes[i].chosen.provider
+		s.refuseProviderDispatch(ctx, laneRun(run, pairs[i]), c.Kind, providerDenial{msg: fmt.Sprintf(mpRunLaneConflict, c.ID, host)}, nil)
+		return nil, nil, false
+	}
+	return lanes, hosts, true
+}
+
+// mpRunSignInNotPrimary is create's harnessSignInNotPrimaryMsg at dispatch, for
+// a provider that became an AWS sign-in after the run was created.
+const mpRunSignInNotPrimary = "Model provider %s uses an AWS sign-in, which only the harness a run starts, or else lists first, can use, " +
+	"so nothing was started. Launch the run again with %s first, or with another provider for it."
 
 // DRAFT (M2 canon pending).
 const mpRunLaneConflict = "Model provider %s would put a second credential on %s, which another harness of this run " +

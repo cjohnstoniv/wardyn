@@ -230,6 +230,10 @@ func TestPG_PoolReasonsAreTheSameAtEveryDoor(t *testing.T) {
 	}
 	check("a personal default that was deleted", e.person, "", http.StatusUnprocessableEntity, runnerpool.ReasonDefaultUnavailable)
 
+	// The queue's two refusals are one door each, not the three launch doors' shared ones: a create into
+	// a person's 101st waiting run (TestPG_QueueFloodLimit) and a revive into a full pool
+	// (TestPG_QueueReviveRefusedForAFullPool).
+	handled[runnerpool.ReasonQueueFull], handled[runnerpool.ReasonFull] = true, true
 	for _, r := range runnerpool.Reasons() {
 		if !handled[r] {
 			t.Errorf("reason %s is covered at no door", r)

@@ -162,6 +162,9 @@ type metrics struct {
 	// lands on "other", which is itself the signal that the vocabulary needs a row.
 	startWaitSum   map[string]float64
 	startWaitCount map[string]int64
+
+	// queueHist is how long runs waited in a runner pool's queue, by how they left it (metrics_queue.go).
+	queueHist queueWaitHist
 }
 
 // startWaited records one stretch a starting sandbox spent on one reason.
@@ -473,6 +476,7 @@ func (m *metrics) write(w io.Writer) {
 		"# TYPE wardyn_sandbox_launch_seconds summary\n"+
 		"wardyn_sandbox_launch_seconds_sum %g\nwardyn_sandbox_launch_seconds_count %d\n",
 		m.launchSum, m.launchCount)
+	m.queueHist.write(w)
 }
 
 // handleMetrics serves the scrape surface. It is admin-only (mounted INSIDE the
@@ -499,6 +503,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	s.metrics.write(&body)
 	s.writeHealthGauges(r, &body)
 	s.writeFleetGauges(r, &body)
+	s.writeQueueGauges(r, &body)
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	_, _ = w.Write(body.Bytes())
 }

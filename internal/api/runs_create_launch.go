@@ -140,7 +140,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			// roots immediately before ContainerCreate (userMountPosture,
 			// workspace_refs.go).
 			UserMounts:       s.userMountPosture(l.wsRefs),
-			Components:       l.comps.dispatch(),
+			Components:       l.comps.dispatchWith(l.gw.githubAPI),
 			PolicyOverridden: l.overridden,
 			PushRuleSets:     l.pushSets,
 			HarnessToolRules: l.harnessRules,

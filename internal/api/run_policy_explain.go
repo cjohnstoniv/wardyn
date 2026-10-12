@@ -27,6 +27,7 @@ const (
 	causeMirror        = "mirror"
 	causeModelAccess   = "model_access"
 	causeGitBroker     = "git_broker"
+	causeOverlay       = "overlay"
 	causeProfile       = "profile"
 	causeOrgDisk       = "org_disk"
 	causePoolDisk      = "pool_disk" // DRAFT (M2 canon pending): the console heading is policy-tab-copy.ts pool_disk
@@ -37,7 +38,7 @@ const (
 
 var causeOrder = []string{
 	causeWorkspace, causeSourceControl, causeComponent, causeMirror, causeModelAccess, causeGitBroker,
-	causeProfile, causeOrgDisk, causePoolDisk, causeRestart, causeLimits, causeLaunch,
+	causeOverlay, causeProfile, causeOrgDisk, causePoolDisk, causeRestart, causeLimits, causeLaunch,
 }
 
 // The RunPolicySpec fields a change can name, as their JSON names. The list
@@ -92,6 +93,7 @@ type auditEvidence struct {
 	restartHosts                                                               []string // restart denies in the order they were added
 	clamp                                                                      []string
 	bounded                                                                    bool                  // the member bound applied (policy_source.bounded)
+	overlay                                                                    []string              // the keys a policy_overlay laid onto the default (policy_source.overlay)
 	diskFilled                                                                 bool                  // disk_mib_filled: no policy wrote the size (soft)
 	diskBasis                                                                  client.MainDriveBasis // disk_mib_basis; empty on a run that predates it
 	diskDefaultSource                                                          types.LimitSource     // disk_mib_default_source, with basis default
@@ -307,12 +309,22 @@ func (x *explainer) derivedCause(field, entry string, added bool) string {
 		return causeModelAccess
 	case allowAdded && x.adoEntries[entry]:
 		return causeSourceControl
+	case x.overlaid(field):
+		return causeOverlay
 	case x.ev.bounded && limitsFields[field] && (scalarFields[field] || !added || field == fieldDenied):
 		return causeLimits
 	case (denyAdded || field == fieldAllowed && !added) && x.legacyGit(entry):
 		return causeGitBroker
 	}
 	return causeLaunch
+}
+
+// overlaid reports whether the run's policy_overlay named the key field belongs
+// to: the overlay replaced the default's value there, so a difference in it is
+// the person's, its clamp included (the clamp only takes back what they named).
+func (x *explainer) overlaid(field string) bool {
+	key, _, _ := strings.Cut(field, ".")
+	return slices.Contains(x.ev.overlay, key)
 }
 
 // redirectEntry is the allowlist entry substituteArtifactEgress writes for a

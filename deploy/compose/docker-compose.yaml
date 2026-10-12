@@ -524,6 +524,9 @@ services:
       WARDYN_UI_SANDBOX_ADVERTISE: "${WARDYN_UI_SANDBOX_ADVERTISE:-}"
       # Agent image overrides: map agent-name -> OCI image ref. The demo tags
       # are produced by `make agent-images` or `docker compose --profile build-only build`.
+      # A key joining harness ids with "+" declares an image carrying all of them, e.g.
+      #   WARDYN_AGENT_IMAGES='{"claude-code+codex-cli":"wardyn/agent-harnesses:local"}'
+      # (local build only: `make agent-image-harnesses`; deploy/images/README.md).
       WARDYN_AGENT_IMAGES: "${WARDYN_AGENT_IMAGES:-{\"base\":\"wardyn/agent-base:local\",\"claude-code\":\"wardyn/agent-claude-code:local\",\"codex-cli\":\"wardyn/agent-codex-cli:local\",\"aws-sso\":\"wardyn/agent-aws-sso:local\"}}"
     volumes:
       # Daemon trust: see the loud note at the top of this file.

@@ -629,7 +629,7 @@ func TestComponentCLI_PersonDefinedRefused(t *testing.T) {
 
 func TestComponentCLI_Shape(t *testing.T) {
 	gh := &types.CLIGitHub{Capabilities: []ghscope.Capability{ghscope.CapIssuesRead}}
-	aws := types.CLIAWS{StartURL: "https://p.example/start", SSORegion: "eu-west-1", AccountID: "123456789012", RoleName: "ReadOnly", Region: "eu-west-2"}
+	aws := types.CLIAWS{StartURL: "https://acme.awsapps.com/start", SSORegion: "eu-west-1", AccountID: "123456789012", RoleName: "ReadOnly", Region: "eu-west-2"}
 	az := types.CLIAzure{Subscriptions: []string{"11111111-2222-3333-4444-555555555555"}, Access: "read"}
 	withSecret := cliDef(&types.ComponentCLI{Kind: "github", GitHub: gh})
 	withSecret.Secrets = []types.ComponentSecret{{SecretName: "k", Delivery: types.ComponentDelivery{Mode: "env", Var: "K"}}}
@@ -655,7 +655,12 @@ func TestComponentCLI_Shape(t *testing.T) {
 		"other arm set":        {cliDef(&types.ComponentCLI{Kind: "aws", AWS: &aws, GitHub: gh}), "cli.github: not allowed"},
 		"github no caps":       {cliDef(&types.ComponentCLI{Kind: "github", GitHub: &types.CLIGitHub{}}), "at least one"},
 		"github not grantable": {cliDef(&types.ComponentCLI{Kind: "github", GitHub: &types.CLIGitHub{Capabilities: []ghscope.Capability{"nope"}}}), "not grantable"},
-		"aws http":             {cliDef(badAWS(func(a *types.CLIAWS) { a.StartURL = "http://p.example" })), "start_url"},
+		"github refused":       {cliDef(&types.ComponentCLI{Kind: "github", GitHub: &types.CLIGitHub{Capabilities: []ghscope.Capability{ghscope.CapIssuesRead, ghscope.CapOrgAdmin}}}), "not available to the GitHub CLI"},
+		"aws http":             {cliDef(badAWS(func(a *types.CLIAWS) { a.StartURL = "http://acme.awsapps.com/start" })), "start_url"},
+		"aws not portal":       {cliDef(badAWS(func(a *types.CLIAWS) { a.StartURL = "https://p.example/start" })), "start_url"},
+		"aws portal lookalike": {cliDef(badAWS(func(a *types.CLIAWS) { a.StartURL = "https://acme.awsapps.com.example/start" })), "start_url"},
+		"aws bare domain":      {cliDef(badAWS(func(a *types.CLIAWS) { a.StartURL = "https://awsapps.com/start" })), "start_url"},
+		"aws port":             {cliDef(badAWS(func(a *types.CLIAWS) { a.StartURL = "https://acme.awsapps.com:8443/start" })), "start_url"},
 		"aws account":          {cliDef(badAWS(func(a *types.CLIAWS) { a.AccountID = "12" })), "account_id"},
 		"aws role":             {cliDef(badAWS(func(a *types.CLIAWS) { a.RoleName = "a b" })), "role_name"},
 		"aws region":           {cliDef(badAWS(func(a *types.CLIAWS) { a.Region = "" })), "region"},

@@ -577,6 +577,20 @@ type CLIGitHub struct {
 	Capabilities []ghscope.Capability `json:"capabilities"`
 }
 
+// CLIGitHubRefused is the closed list of grantable capabilities a GitHub CLI
+// row never carries: each changes a repository's or an organisation's
+// settings, deletes packages, or administers Actions, and the CLI's token
+// acts as the organisation's App rather than as the person.
+var CLIGitHubRefused = []ghscope.Capability{ghscope.CapRepoAdmin, ghscope.CapOrgAdmin, ghscope.CapPackagesWrite, ghscope.CapActionsAdmin}
+
+// CLIGitHubCapabilities is caps without anything a GitHub CLI token may not
+// hold: a capability that is not grantable, or one CLIGitHubRefused names.
+func CLIGitHubCapabilities(caps []ghscope.Capability) []ghscope.Capability {
+	return slices.DeleteFunc(slices.Clone(caps), func(c ghscope.Capability) bool {
+		return !c.Grantable() || slices.Contains(CLIGitHubRefused, c)
+	})
+}
+
 // CLIAWS pins one IAM Identity Center account and permission set.
 type CLIAWS struct {
 	StartURL  string `json:"start_url"`  // the access portal, https
@@ -641,6 +655,9 @@ func (g *CLIGitHub) validate() error {
 		if !cp.Grantable() {
 			return fmt.Errorf("cli.github.capabilities[%d]: %q is not grantable; want one of: %s", i, cp, ghscope.GrantableCapabilityList())
 		}
+		if slices.Contains(CLIGitHubRefused, cp) {
+			return fmt.Errorf("cli.github.capabilities[%d]: %q is not available to the GitHub CLI", i, cp)
+		}
 		if slices.Contains(g.Capabilities[:i], cp) {
 			return fmt.Errorf("cli.github.capabilities[%d]: %q is listed twice", i, cp)
 		}
@@ -648,10 +665,17 @@ func (g *CLIGitHub) validate() error {
 	return nil
 }
 
+// cliAWSPortalDomain is the AWS access portal's domain. The start URL is
+// written into the sandbox's ~/.aws/config and the person signs in at it, so a
+// row may name only an IAM Identity Center portal, never any https host.
+const cliAWSPortalDomain = ".awsapps.com"
+
 func (a *CLIAWS) validate() error {
 	u, err := url.Parse(a.StartURL)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
-		return errors.New("cli.aws.start_url: must be an https URL with no credentials")
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Port() != "" ||
+		!strings.HasSuffix(u.Hostname(), cliAWSPortalDomain) || len(u.Hostname()) == len(cliAWSPortalDomain) ||
+		strings.ContainsAny(a.StartURL, " \t\r\n") {
+		return errors.New("cli.aws.start_url: must be your AWS access portal URL, https://<name>.awsapps.com/start")
 	}
 	switch {
 	case !cliAWSRegionRE.MatchString(a.SSORegion):

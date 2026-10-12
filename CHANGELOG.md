@@ -91,6 +91,46 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- The runner pool list (`GET /runner-pools`) now says, for each pool you may use, whether it is available to you and
+  why not, your own active runs against your profile's cap, the pool's limits as your runs get them, its barrier
+  options and your runners in it; `?run_type=` narrows it to one run type (`400 runner_pool_invalid` otherwise).
+  Preflight and the policy preview answer the same facts. The Go SDK gains `ListRunnerPoolsFor(ctx, runType)`.
+- Interactive runs: Claude Code now enforces tool rules (Ask first, Block it, and Run it for a named tool) through its
+  locked managed settings, so a policy's named tool rules apply to interactive Claude Code runs too. If the rules
+  cannot be written exactly, or the runner cannot deliver managed settings (including a krun runner that cannot vouch
+  for them), the run is refused, never launched without them. A default of "Run it" or "Block it" is still refused in
+  interactive runs. A policy's default for unnamed tools (`*`) does not apply there; Claude Code asks.
+- A launch into a runner pool at its concurrent-run limit now waits for a slot instead of failing. It holds no
+  credential while it waits, starts in launch order once its owner's access, role and user type are re-checked, and
+  gives up after 24 hours (Background) or 1 hour (Interactive). `POST /runs` takes `max_wait_sec` (1 or more; a longer
+  wait is cut to 604800 seconds, 7 days, with a warning; `0` is `422 run_max_wait_invalid`). A waiting run can be
+  cancelled, ends `FAILED queue_timeout`, and is cancelled with its pool, or when its owner's sessions are revoked. A
+  run pinned to one of your runners waits for that runner. An all-offline self-hosted pool is still refused at launch.
+  New metrics: `wardyn_runner_pool_queue_depth`, `wardyn_runner_pool_slots_used`,
+  `wardyn_runner_pool_queue_wait_seconds`.
+- New Run can include more than one harness in a sandbox (an interactive environment, or a command), each on its own
+  model provider, started from the image an operator declares for the set. An AWS sign-in model provider
+  (`bedrock_sso`) serves only the harness a run starts, or else lists first; on any other harness it is refused with
+  `request_field_unavailable`, naming the harness.
+- `POST /runs`, `/runs/preflight` and `/runs/policy-preview` accept `policy_overlay`: a document's partial policy laid
+  onto your default policy. Only the keys it names are bounded by your ceiling, so the default's operator mounts and
+  grant pairings stay. It is refused beside `policy_id` or `inline_policy` (`policy_overlay_conflict`); a malformed
+  overlay is `policy_overlay_invalid`. Launches write `policy.overlay.apply` (keys only), and the run's policy view
+  names the `overlay` cause.
+- GitHub CLI: an organisation's GitHub CLI row gives a run `gh` against its own GitHub repositories, as the
+  organisation's GitHub App, through GitHub's REST API only (GraphQL commands such as `gh pr list` are refused with a
+  pointer to `gh api repos/{owner}/{repo}/...`). The sandbox holds an inert `GH_TOKEN`; the proxy checks each
+  `api.github.com` request against the row's capabilities and the run's repositories and adds a short-lived App token,
+  revoked when the run stops (best effort, with expiry as the backstop). A row may not grant `repo_admin`,
+  `org_admin`, `packages_write` or `actions_admin`; a run with no GitHub repository is refused with
+  `cli_no_github_repo`.
+- AWS CLI signed in as you: an AWS CLI component names an IAM Identity Center portal, an account, a permission set and
+  a region. Each person signs in once (`POST /api/v1/components/{id}/sign-in`); the sign-in stays with Wardyn, and the
+  proxy adds it only to the portal's role-credentials call for the pinned account and role. AWS issues role
+  credentials into the sandbox, valid for the permission set's session duration. With
+  `WARDYN_AWS_SSO_PROXY_INJECT=off` the component is refused. Changing or deleting the component deletes everyone's
+  sign-in for it.
+- The `base`, `claude-code`, `codex-cli` and `full` images include `gh` and AWS CLI v2, each checked by digest.
 - An organisation component can carry a CLI credential block (Azure, AWS or GitHub CLI), and `GET /me/components`
   lists five CLI cards (available, not turned on, or coming soon) without revealing rows the caller is not granted. A run
   can attach up to 16 components (was 8).
@@ -349,6 +389,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Templates screen: `/templates` (User view) and `/admin/templates` (Admin view) list saved starting points with
   who-it-is-for, kind and name filters. Use opens New Run on the pinned revision; Rename and Delete follow who may
   change each row; organisation admins publish a template to the organisation from the Admin view.
+- A person's tool rules and default on a New Run combine with the policy's as the stricter of the two for each tool.
+  "Run it" is offered where the policy allows the tool and greyed with the reason where it does not; a rule can be an
+  exception to the person's own default, never to the policy. Tool rules name one tool exactly (`Bash`, `WebFetch`,
+  `mcp__server__tool`); patterns are refused. Codex CLI: "Ask first" and blocks on its own tools are refused with a
+  reason, and rules for its MCP tools are kept in its rule set. Rules for a harness without Wardyn's tool gate, and
+  rules in an interactive run beyond its own "asks you", are refused. New Run's access facts include a tool policy for
+  each included harness.
 
 ### Changed
 
@@ -453,6 +500,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   included.
 - Two repositories that would clone into the same directory are refused; previously one was silently dropped. An
   explicit `image_default` start folder keeps the image's own directory after a clone.
+- A background Claude Code run whose policy (after the ceiling) holds or blocks a tool, or where the person set any
+  tool rule or default, now goes through Wardyn's tool gate. Before, the policy's `tool_rules` were consulted only
+  when the run asked for `tool_approvals: hold`. Tools nobody names still run without a prompt, and a blocked tool is
+  refused at the proxy. The shipped default policy names no tools, so only policies that name tools change behaviour.
 
 ### Removed
 

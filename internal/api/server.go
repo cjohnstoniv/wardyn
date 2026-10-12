@@ -781,6 +781,8 @@ type Server struct {
 	attachHolders attachHolderRegistry
 	// creates lets a kill cancel a STARTING run's CreateSandbox (runs_create_cancel.go).
 	creates inflightCreates
+	// queue is the pool queue's in-process state: kick coalescing and the gauge snapshot (metrics_queue.go).
+	queue runQueueState
 	// replica is this server's identity when no LiveBus names one (replicaName).
 	replica         string
 	replicaOnce     sync.Once

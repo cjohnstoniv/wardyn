@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -54,15 +55,36 @@ func runnerPoolCmd(client clientFn) *cobra.Command {
 
 func printRunnerPools(w io.Writer, list sdk.RunnerPoolList) error {
 	tw := newTab(w)
-	fmt.Fprintln(tw, "ID\tNAME\tHOSTING\tAVAILABILITY")
+	fmt.Fprintln(tw, "ID\tNAME\tHOSTING\tAVAILABILITY\tBARRIERS")
 	for _, p := range list.Pools {
 		availability := p.Availability
 		if p.Reason != "" {
 			availability += " (" + string(p.Reason) + ")"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", p.ID, p.Name, p.HostingType, availability)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", p.ID, p.Name, p.HostingType, availability, barrierSummary(p.BarrierOptions))
 	}
 	return tw.Flush()
+}
+
+// barrierSummary names each barrier with * on the default and the reason one is not available, e.g.
+// "CC1 (below_floor) CC2* CC3 (not_offered: kvm_missing)".
+func barrierSummary(opts []sdk.BarrierOption) string {
+	cells := make([]string, 0, len(opts))
+	for _, o := range opts {
+		cell := string(o.Class)
+		if o.Default {
+			cell += "*"
+		}
+		if !o.Available {
+			reason := string(o.ReasonCode)
+			if o.ReasonDetail != "" {
+				reason += ": " + o.ReasonDetail
+			}
+			cell += " (" + reason + ")"
+		}
+		cells = append(cells, cell)
+	}
+	return strings.Join(cells, " ")
 }
 
 func runnerPoolDefaultCmd(client clientFn) *cobra.Command {

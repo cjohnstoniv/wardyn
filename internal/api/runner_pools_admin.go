@@ -136,6 +136,8 @@ func (s *Server) handleUpdateRunnerPool(w http.ResponseWriter, r *http.Request) 
 			data["limits_before"], data["limits"] = cur.Limits, p.Limits
 		}
 		s.auditPool(r, auditPoolUpdate, p.ID.String(), data)
+		// A raised cap, or a pool switched back on, may have room for a waiting run.
+		s.kickQueue()
 	}
 	writeJSON(w, http.StatusOK, p)
 }
@@ -164,6 +166,7 @@ func (s *Server) handleDeleteRunnerPool(w http.ResponseWriter, r *http.Request) 
 	s.auditPool(r, auditPoolDelete, d.Pool.ID.String(), map[string]any{
 		"name": d.Pool.Name, "hosting_type": d.Pool.HostingType, "revision": d.Pool.Revision,
 		"executor_ids": nonNilStrings(d.ExecutorIDs), "runner_count": d.RunnerCount})
+	s.auditPoolRemovalCancels(r.Context(), d.CancelledRuns)
 	if d.OrgDefaultsBefore != nil {
 		s.auditPool(r, auditPoolDefaultSet, "organisation", map[string]any{"before": d.OrgDefaultsBefore, "after": d.OrgDefaultsAfter, "cause": "pool_deleted"})
 	}

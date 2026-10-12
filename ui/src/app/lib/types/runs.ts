@@ -485,6 +485,7 @@ export type RunPolicyCause =
   | "mirror"
   | "model_access"
   | "git_broker"
+  | "overlay"
   | "profile"
   | "org_disk"
   | "pool_disk"

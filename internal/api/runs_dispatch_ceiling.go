@@ -310,18 +310,25 @@ func orgEphemeralOf(siteCfg types.SiteConfig) types.EphemeralProvider {
 // Scope, per ceiling: the profile's MaxCPUMillis and MaxMemoryMiB bind an ASSIGNED MEMBER only — an
 // operator short-circuits at effectiveCeiling's step 1 and an unassigned member resolves no limits —
 // so they are ZEROED for anyone else rather than the block being skipped.
-func (s *Server) boundResources(r *http.Request, spec *types.RunPolicySpec, ceiling governanceCeiling) {
-	var limits types.GovernanceLimits
-	if ceiling.Profile != nil && !s.runUngoverned(r.Context()) {
-		limits = types.GovernanceLimits{MaxCPUMillis: ceiling.Limits.MaxCPUMillis, MaxMemoryMiB: ceiling.Limits.MaxMemoryMiB}
-	}
+func (s *Server) boundResources(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, ceiling governanceCeiling) {
 	// The member who sent no policy never reaches composer.Clamp (it would drop their workspace
 	// mounts), so this resource-only bound is the only thing between their ceiling's own size and
 	// their sandbox. Its cut is not warned here: stepResources applies the run's ask within every
 	// limit and says when it was cut.
-	if bounded, changed := composer.CapResources(spec.Resources, limits, ceiling.memberSize()); changed {
+	if bounded, changed := s.memberResources(ctx, spec.Resources, ceiling); changed {
 		spec.Resources = bounded
 	}
+}
+
+// memberResources is a spec's CPU and memory under the caller's profile maximums (composer.CapResources
+// at the member default): what boundResources leaves on every run's spec, and the size the pool list
+// takes as an untouched run's, so the two answer one size. Anyone not under a profile is unchanged.
+func (s *Server) memberResources(ctx context.Context, res *types.ResourceLimits, ceiling governanceCeiling) (*types.ResourceLimits, bool) {
+	var limits types.GovernanceLimits
+	if ceiling.Profile != nil && !s.runUngoverned(ctx) {
+		limits = types.GovernanceLimits{MaxCPUMillis: ceiling.Limits.MaxCPUMillis, MaxMemoryMiB: ceiling.Limits.MaxMemoryMiB}
+	}
+	return composer.CapResources(res, limits, ceiling.memberSize())
 }
 
 // resolveDispatchCeiling is effectiveCeiling + ceilingForDispatch, for the lanes

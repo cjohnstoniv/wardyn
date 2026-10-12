@@ -233,6 +233,7 @@ function headingFor(c: RunPolicyChange, ownRun: boolean, person: string): { key:
     case "mirror":
     case "org_disk":
     case "pool_disk":
+    case "overlay":
       return { key: c.cause, heading: CHANGE_HEADING[c.cause as PlainCause] };
   }
   return { key: "launch", heading: CHANGE_HEADING.launch };

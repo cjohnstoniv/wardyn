@@ -285,6 +285,9 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 		return false
 	}
 	f.enforced = enforced
+	if f.mode == foldPreflight {
+		f.barrierOptions = draftBarrierOptions(f.place, f.ceiling, floor, f.baseline)
+	}
 	return !f.place.barrierRefusal(enforced).write(s, f.w, f.r)
 }
 
@@ -324,18 +327,18 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 				return false
 			}
 		}
-		f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, true, false)
+		f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, true, false, false)
 		grantHarnessProviders(f.harnesses, f.harnessChoices)
 		return ok
 	}
 	var choice runProviderChoice
-	if choice, ok = s.enforceRunModelProvider(f.w, f.r, *f.req, f.spec, f.wsRefs, f.mode == foldCreate); !ok {
+	if choice, ok = s.enforceRunModelProvider(f.w, f.r, *f.req, f.spec, f.wsRefs, f.mode == foldCreate, f.queued); !ok {
 		return false
 	}
 	f.mpChoice = choice
 	f.modelCred = choice.modelCredential()
 	recordProviderHost(rec, choice, f.req.Agent)
-	f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, false, f.mode == foldCreate)
+	f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, false, f.mode == foldCreate, f.queued)
 	grantHarnessProviders(f.harnesses, f.harnessChoices)
 	if len(f.harnessChoices) > 1 {
 		f.modelCred = mostResident(f.harnessChoices).modelCredential()
@@ -343,14 +346,26 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 	return ok
 }
 
+// stepAWSCLIProfile refuses an AWS CLI component on a run whose model, or any
+// included harness's, comes through an AWS sign-in: a sandbox holds one AWS
+// profile. Dispatch refuses it too (authorAWSCLI); this is the doors' answer.
+func (s *Server) stepAWSCLIProfile(f *runFold, _ *foldRecorder) bool {
+	if f.comps.awsCLI() == nil || !runUsesAWSSignIn(f.mpChoice, f.harnessChoices) {
+		return true
+	}
+	writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonComponentCLIAWSWithBedrockSignIn, cliAWSWithBedrockSSORefusal)
+	return false
+}
+
 // judgeHarnessProviders is stepModelProvider's half for the harnesses of set
 // beside the primary (req.Agent), whose choice is primary: preview authorizes
 // the selection alone, the other doors also check the caller's own credential
-// (renew at create only), each as its own agent with its own requested
-// provider and no workspace pin. Then the set is held to the one-lane
+// (renew at create only, and never for a run that waits: queued), each as its own agent with its own requested
+// provider and no workspace pin; an AWS sign-in serves the primary alone
+// (harnessProviderNeedsPrimary). Then the set is held to the one-lane
 // invariant (harnessProvidersConflict). It writes its own refusal.
 func (s *Server) judgeHarnessProviders(w http.ResponseWriter, r *http.Request, req createRunRequest, spec types.RunPolicySpec,
-	set []types.RunHarness, rec *foldRecorder, primary runProviderChoice, preview, renew bool,
+	set []types.RunHarness, rec *foldRecorder, primary runProviderChoice, preview, renew, queued bool,
 ) ([]harnessChoice, bool) {
 	choices := make([]harnessChoice, 0, len(set))
 	for _, h := range set {
@@ -358,16 +373,21 @@ func (s *Server) judgeHarnessProviders(w http.ResponseWriter, r *http.Request, r
 		if h.Harness != req.Agent {
 			hreq := req
 			hreq.Agent, hreq.ModelProvider = h.Harness, h.ModelProviderID
-			ok := true
-			if preview {
-				var refusal *runRefusal
-				choice, refusal = s.authorizeRunModelProvider(r, hreq, nil, true)
-				ok = !refusal.write(s, w, r)
-			} else {
-				choice, ok = s.enforceRunModelProvider(w, r, hreq, spec, nil, renew)
-			}
-			if !ok {
+			var refusal *runRefusal
+			if choice, refusal = s.authorizeRunModelProvider(r, hreq, nil, preview); refusal.write(s, w, r) {
 				return nil, false
+			}
+			// Before the credential read, so the reason is this and never a sign-in.
+			if choice.chosen && harnessProviderNeedsPrimary(choice.provider) {
+				runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
+					harnessSignInNotPrimaryMsg(harnessName(h.Harness), choice.provider.ID)).forTool(h.Harness).write(s, w, r)
+				return nil, false
+			}
+			if !preview {
+				var ok bool
+				if choice, ok = s.enforceChosenModelProvider(w, r, hreq, spec, choice, renew, queued); !ok {
+					return nil, false
+				}
 			}
 			recordProviderHost(rec, choice, h.Harness)
 		}
@@ -400,6 +420,31 @@ func (s *Server) stepAutonomy(f *runFold, rec *foldRecorder) bool {
 	var ok bool
 	f.autonomy, f.autonomyWarns, f.scmSite, f.adoGrade, f.bedrockGrade, ok = s.resolveRunAutonomy(f.w, f.r, f.req, f.spec, f.wsRefs, f.enforced, f.ceiling, f.modelCred, f.comps, f.baseline)
 	return ok
+}
+
+// stepToolPolicy settles the tool lane and holds a person's tool rules to the
+// policy, after autonomy so every step that can put the run on the gated lane
+// has: a person's rule or default, or a policy rule that holds or blocks, puts
+// a background run of a gated harness there with "*: allow" under the person's
+// layer (applyToolPosture), and each
+// allow they send stands only where the policy, with the lane's default under
+// it, already allows the tool. An interactive Claude Code run's default, and
+// every tool name it carries, is held to what its managed settings can say
+// first, as step 5 greys it.
+func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
+	before := f.spec
+	s.applyToolPosture(f.req, &f.spec)
+	recordSpecAdds(rec, before, f.spec, provSource{Kind: provKindPosture})
+	if attendedDefaultRefusal(*f.req, f.autonomy.Level).write(s, f.w, f.r) || attendedToolNamesRefusal(*f.req, f.spec).write(s, f.w, f.r) {
+		return false
+	}
+	return !s.toolRulesWithinPolicyRefusal(*f.req, f.spec).write(s, f.w, f.r)
+}
+
+// stepGitHubCLIRepo is githubCLIRepoRefusal (runs_cli_github.go) at the doors that launch and
+// review. The preview shows the same fact as the card's reason instead.
+func (s *Server) stepGitHubCLIRepo(f *runFold, _ *foldRecorder) bool {
+	return !githubCLIRepoRefusal(f.comps, *f.req, f.spec, f.scmSite).write(s, f.w, f.r)
 }
 
 // stepRunEnd decides the run's end and its lifetime cap against the pool,
@@ -445,6 +490,9 @@ func (s *Server) stepPATNarrowing(f *runFold, rec *foldRecorder) bool {
 // stepHostCapacity is the same 503, reason and Retry-After at create and
 // Review; only create writes the audit row.
 func (s *Server) stepHostCapacity(f *runFold, rec *foldRecorder) bool {
+	if f.queued || f.promoted { // the run waits for them, or promotion has applied them
+		return true
+	}
 	return !writeHostCapacityRefusal(f.w, f.r, s.admitHostCapacity(f.r.Context(), principalFromRequest(f.r), "runs", f.mode == foldCreate))
 }
 
@@ -452,15 +500,22 @@ func (s *Server) stepHostCapacity(f *runFold, rec *foldRecorder) bool {
 // and no live token for a run that gets no row. CreateRunUnderCap still
 // decides a race at the cap.
 func (s *Server) stepRunCap(f *runFold, rec *foldRecorder) bool {
+	if f.queued || f.promoted { // the run waits for them, or promotion has applied them
+		return true
+	}
 	return !s.refuseRunCapFull(f.w, f.r)
 }
 
 // stepRunFit refuses a run the runs namespace's ResourceQuota cannot hold; its
 // advisories join the door's warnings. The quota's own admission stays the
-// authority on a race.
+// authority on a race. A run that waits for a slot is refused only when no quota
+// could ever hold it: it may fit once other runs finish, and promotion asks again.
 func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
+	if f.promoted {
+		return true
+	}
 	var refused bool
-	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.spec, f.mainDrive), time.Duration(f.end.capSec)*time.Second)
+	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.spec, f.mainDrive), time.Duration(f.end.capSec)*time.Second, f.queued)
 	return !refused
 }
 
@@ -508,6 +563,9 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
 		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling))}
+	if f.mode != foldCreate {
+		in.dryDoor = true
+	}
 	if f.mode == foldPreflight { // preflight parses the class inside stepConfinement, after this step
 		in.reqCC, in.reqCCOK = parseConfinementClass(f.req.ConfinementClass)
 	}
@@ -516,6 +574,11 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 		return false
 	}
 	f.place = plan
+	// A run bound for a capped pool waits for a slot instead of failing (the dry doors answer the same).
+	// The queue's own start replays the fold as promoted, and must not queue again.
+	if f.mode != foldPreview {
+		f.queued = plan.queues() && !f.promoted
+	}
 	return true
 }
 

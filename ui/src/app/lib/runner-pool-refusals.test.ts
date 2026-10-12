@@ -10,6 +10,7 @@ import golden from "./runner-pool-refusals.golden.json";
 import {
   BARRIER_LABEL,
   HOSTING_LABEL,
+  POOL_OFFLINE,
   RUN_END_REASON_SENTENCE,
   RUN_WAIT,
   RUN_WAIT_REASON,
@@ -33,8 +34,9 @@ const root = repoRoot();
 
 describe("runner pool refusal sentences", () => {
   it("are the golden bytes the server's twin is pinned to", () => {
-    expect(golden.map((g) => g.key).sort()).toEqual([...Object.keys(RUNNER_POOL_REFUSAL), "WAIT_AT_CAPACITY"].sort());
-    for (const g of golden.filter((x) => x.key !== "WAIT_AT_CAPACITY")) {
+    const waits = ["WAIT_AT_CAPACITY", "WAIT_NO_RUNNER_FREE", "NO_ONLINE_RUNNER"];
+    expect(golden.map((g) => g.key).sort()).toEqual([...Object.keys(RUNNER_POOL_REFUSAL), ...waits].sort());
+    for (const g of golden.filter((x) => !waits.includes(x.key))) {
       expect(RUNNER_POOL_REFUSAL_BY_KEY[g.key as keyof typeof RUNNER_POOL_REFUSAL](...g.args), g.key).toBe(g.text);
     }
   });
@@ -51,6 +53,18 @@ describe("runner pool refusal sentences", () => {
     expect(RUN_WAIT.AT_CAPACITY(g.args[0], Number(g.args[1]))).toBe(g.text);
     expect(RUNNER_POOL_REASONS as readonly string[]).not.toContain(RUN_WAIT_REASON.AT_CAPACITY);
     expect(readFileSync(join(root, "internal/runnerpool/wait.go"), "utf8")).toContain(`WaitReason = "${RUN_WAIT_REASON.AT_CAPACITY}"`);
+  });
+
+  it("says a run no runner can take yet as a wait too, never as a refusal", () => {
+    const g = golden.find((x) => x.key === "WAIT_NO_RUNNER_FREE")!;
+    expect(RUN_WAIT.NO_RUNNER_FREE(g.args[0])).toBe(g.text);
+    expect(RUNNER_POOL_REASONS as readonly string[]).not.toContain(RUN_WAIT_REASON.NO_RUNNER_FREE);
+    expect(readFileSync(join(root, "internal/runnerpool/wait.go"), "utf8")).toContain(`WaitReason = "${RUN_WAIT_REASON.NO_RUNNER_FREE}"`);
+  });
+
+  it("says a pool with no online runner of yours in the server's sentence", () => {
+    const g = golden.find((x) => x.key === "NO_ONLINE_RUNNER")!;
+    expect(POOL_OFFLINE.NO_ONLINE_RUNNER(g.args[0])).toBe(g.text);
   });
 
   it("names the hosting types as the server does", () => {
@@ -92,7 +106,7 @@ describe("reasons", () => {
   it("are the Go closed set of internal/runnerpool/reasons.go", () => {
     const go = readFileSync(join(root, "internal/runnerpool/reasons.go"), "utf8");
     const goReasons = [...go.matchAll(/\bReason\w+\s+Reason = "([a-z_]+)"/g)].map((m) => m[1]);
-    expect(goReasons).toHaveLength(11);
+    expect(goReasons).toHaveLength(13);
     expect(new Set(RUNNER_POOL_REASONS)).toEqual(new Set(goReasons));
   });
 });
