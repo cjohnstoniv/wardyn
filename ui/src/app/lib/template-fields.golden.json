@@ -10,10 +10,31 @@
       "remove_secrets",
       "tool_rules"
     ],
+    "CLIAWS": [
+      "start_url",
+      "sso_region",
+      "account_id",
+      "role_name",
+      "region"
+    ],
+    "CLIAzure": [
+      "subscriptions",
+      "access"
+    ],
+    "CLIGitHub": [
+      "capabilities"
+    ],
+    "ComponentCLI": [
+      "kind",
+      "azure",
+      "aws",
+      "github"
+    ],
     "ComponentDefinition": [
       "hosts",
       "secrets",
-      "config"
+      "config",
+      "cli"
     ],
     "ComponentDelivery": [
       "mode",
