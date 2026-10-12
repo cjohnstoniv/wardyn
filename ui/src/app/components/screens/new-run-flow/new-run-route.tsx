@@ -12,7 +12,9 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { modalLayerOpen } from "../../../lib/modal-layer-open";
 import { useRequestLeave, useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { useRequestIdentity } from "../../wardyn/operator-context";
+import type { CreateRunResult } from "../../../lib/types/run-create";
 import { draftReducer, isDirty, type DraftAction } from "./draft/draft-reducer";
+import { prefillSeed } from "./draft/prefill-seed";
 import { NEW_RUN_PATH, newRunHref, parseNewRunSearch, type NewRunFrom, type NewRunLocation } from "./draft/new-run-url";
 import { initialDraft, type NewRunDraft, type NewRunOrigin, type RunIntent } from "./draft/run-intent";
 import { firstInvalidStep, localIssues } from "./lenses/local-issues";
@@ -90,20 +92,16 @@ function guardTarget(draft: NewRunDraft, loc: NewRunLocation): NewRunLocation | 
   return beyond ? { screen: "step", step: first } : undefined;
 }
 
-interface ComposerState {
-  prefill?: { source?: string; state?: { task?: string; workspaces?: { workspaceId: string }[] } };
+/** The router state a create hands the Launched screen. It names whose run it is. */
+export interface LaunchedState {
+  created: CreateRunResult;
+  owner: string;
 }
-/** The Runs composer's text becomes an agent task; its workspace stays chosen. */
-function composerSeed(state: unknown): RunIntent | undefined {
-  const prefill = (state as ComposerState | null)?.prefill;
-  if (prefill?.source !== "composer") return undefined;
-  const workspaces = (prefill.state?.workspaces ?? []).map((w) => ({ workspace_id: w.workspaceId }));
-  return {
-    shape: "agent_task",
-    workload: { kind: "agent_task", task: prefill.state?.task ?? "" },
-    ...(workspaces.length ? { workspaces } : {}),
-  };
-}
+/** Launched state from another person (Back into their entry) is never shown. */
+const foreignLaunched = (state: unknown, principal: string): boolean => {
+  const s = state as Partial<LaunchedState> | null;
+  return s?.created !== undefined && s.owner !== principal;
+};
 
 const seedKey = (from: NewRunFrom) =>
   from.template ? `template:${from.template.id}:${from.template.revision ?? ""}` : from.again ? `again:${from.again}` : "";
@@ -146,11 +144,17 @@ function NewRunFlow({ loaders, screens }: { loaders: SeedLoaders; screens: Recor
   React.useEffect(() => {
     if (!owned || prefillRead.current) return;
     prefillRead.current = true;
-    if (!(location.state as ComposerState | null)?.prefill) return;
-    const intent = composerSeed(location.state);
-    if (intent) dispatch({ type: "seed", origin: { kind: "composer" }, intent });
-    void navigate(intent ? newRunHref({ screen: "step", step: "run" }) : `${location.pathname}${location.search}`, { replace: true, state: null });
-  }, [owned, location.state, location.pathname, location.search, dispatch, navigate]);
+    const seed = prefillSeed(location.state);
+    if (!seed) return;
+    dispatch({ type: "seed", ...seed });
+    const next: NewRunLocation = seed.origin.kind === "composer" ? { screen: "step", step: "run" } : { screen: "review", view: "pretty" };
+    void navigate(newRunHref(next), { replace: true, state: null });
+  }, [owned, location.state, dispatch, navigate]);
+
+  const foreign = owned && foreignLaunched(location.state, principal);
+  React.useEffect(() => {
+    if (foreign) void navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }, [foreign, location.pathname, location.search, navigate]);
 
   React.useEffect(() => {
     if (!owned || !key || stale || seeded.key === key) return;
@@ -196,7 +200,7 @@ function NewRunFlow({ loaders, screens }: { loaders: SeedLoaders; screens: Recor
     void navigate(NEW_RUN_PATH);
   }, [dispatch, draft.owner, navigate]);
 
-  if (!owned || stale || parsed.normalised || target) return null;
+  if (!owned || stale || foreign || parsed.normalised || target) return null;
   if (key && seeded.key !== key) return null;
   const name = seeded.error !== undefined && key ? "seedFailed" : screenOf(parsed.location);
   const Current = screens[name];

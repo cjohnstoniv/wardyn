@@ -101,6 +101,33 @@ describe("New Run route (U9)", () => {
     expect(text("state")).toBe("null");
   });
 
+  it("seeds a clone from the run page's prefill as origin clone, opens Review and drops the router state", async () => {
+    const prefill = { inlinePolicy: false, state: { title: "Old", runType: "agent", mode: "batch", agent: "claude-code", task: "fix it", workspaces: [] } };
+    show({ pathname: "/runs/new", state: { prefill } });
+    expect(await screen.findByText("review")).toBeInTheDocument();
+    expect(text("origin")).toBe("clone");
+    expect(JSON.parse(text("intent") ?? "")).toEqual({
+      shape: "agent_task", experience: "background", tools: [{ id: "claude-code", kind: "harness" }],
+      workload: { kind: "agent_task", agent: "claude-code", task: "fix it" },
+    });
+    expect(text("path")).toBe("/runs/new?step=review");
+    expect(text("state")).toBe("null");
+  });
+
+  it("never shows another person's launched run from router state: Back into their entry drops it", async () => {
+    show({ pathname: "/runs/new", search: `?launched=${R}`, state: { created: { id: R }, owner: "mallory" } });
+    expect(await screen.findByText("launched")).toBeInTheDocument();
+    expect(text("state")).toBe("null");
+    expect(text("nav")).toBe("REPLACE");
+  });
+
+  it("keeps the launched router state of the person signed in", async () => {
+    const state = { created: { id: R }, owner: "alice" };
+    show({ pathname: "/runs/new", search: `?launched=${R}`, state });
+    expect(await screen.findByText("launched")).toBeInTheDocument();
+    expect(JSON.parse(text("state") ?? "")).toEqual(state);
+  });
+
   it("replaces a query outside the grammar with Start", async () => {
     show("/runs/new?step=nope");
     expect(await screen.findByText("start")).toBeInTheDocument();
