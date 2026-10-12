@@ -118,6 +118,12 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 		eligible: pickTargets(eligible, decision.Targets), choices: s.poolChoices(rows)}, nil
 }
 
+// queues says a run bound for this pool waits for a slot instead of starting at once: the pool sets a
+// concurrent-run cap. A pool with no cap never has a queue, and neither does an unpooled run.
+func (p runPlacement) queues() bool {
+	return p.pooled && p.row.Limits != nil && p.row.Limits.MaxConcurrentRuns != nil
+}
+
 // hostingOfPlacement is the hosting type a request's placement names; the pool decides when it is absent.
 func hostingOfPlacement(p types.Placement) types.RunnerPoolHosting {
 	switch p {

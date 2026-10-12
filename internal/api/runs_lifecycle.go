@@ -211,6 +211,10 @@ func (s *Server) casRunState(ctx context.Context, runID uuid.UUID, from, to type
 	}
 	if applied {
 		s.runEvents.moved(runID, from, to)
+		// A run that held a slot in its pool has freed it: a waiting run may start.
+		if to.IsTerminal() && !from.IsTerminal() && from != types.RunQueued {
+			s.kickQueue()
+		}
 	}
 	return applied, err
 }
@@ -869,6 +873,9 @@ func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (b
 // at the org, so it records the sandbox stop as queued instead.
 func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any, queuedOK bool) map[string]any {
 	id := run.ID
+	if run.State == types.RunQueued {
+		return s.killQueuedTail(ctx, run, killerType, killer, extra)
+	}
 	killData := map[string]any{}
 	queued := false
 	// (2) Runner teardown (immediate). Idempotent on a gone sandbox.

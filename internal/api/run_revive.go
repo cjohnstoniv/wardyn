@@ -22,6 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -240,7 +241,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// the row as read here, so a run read live still had its old proxy running.
 	// It also refreshes the watcher lease, so the watcher sweep does not find
 	// a rebooted agent not yet started and lose the run again.
-	if rerr := s.claimRevive(ctx, reviver, run, rebooted); rerr != nil {
+	if rerr := s.claimRevive(ctx, reviver, run, rebooted, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
 	// From the claim on, the revive finishes or compensates whatever becomes of
@@ -328,12 +329,19 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 
 // claimRevive is reviveRunProxy's claim (store.RunReviver.MarkRunRevived). A
 // revive that starts the run's stopped agent (startsAgent, reviveNeedsAgentStart)
-// takes a slot under WARDYN_MAX_CONCURRENT_RUNS, under the cap's lock, and at the
-// cap is refused as a create is, the run left kept.
-func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run types.AgentRun, startsAgent bool) *reviveError {
+// takes a slot under its pool's cap and WARDYN_MAX_CONCURRENT_RUNS, pool lock first, then
+// the cap's lock, and at either cap is refused as a create is, the run left kept.
+func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run types.AgentRun, startsAgent bool, actorType types.ActorType, actor string) *reviveError {
 	claimed, err := reviver.MarkRunRevived(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()), s.cfg.MaxConcurrentRuns, startsAgent)
 	if errors.Is(err, store.ErrRunCapReached) {
 		return reviveRefused(http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)
+	}
+	// A revive takes a pool slot only when nobody waits (Q10-A): a waiting run is first in line.
+	var full *store.RunnerPoolFullError
+	if errors.As(err, &full) {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
+			mustJSON(map[string]any{"subject": run.CreatedBy, "reason": string(runnerpool.ReasonFull), "pool_id": run.RunnerPoolID})))
+		return reviveRefused(runnerpool.ReasonFull.Status(), string(runnerpool.ReasonFull), runnerpool.FullMsg(full.Pool, full.Max))
 	}
 	if err != nil {
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, "claim the run for revive: "+err.Error())
