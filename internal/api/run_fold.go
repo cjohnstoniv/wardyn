@@ -79,6 +79,8 @@ type runFold struct {
 	pushSets          []types.PushRuleSet
 	// place is where the run goes (stepPlacement): the resolved pool and the fully eligible targets.
 	place runPlacement
+	// mainDrive is the main drive's size (stepMainDrive).
+	mainDrive mainDrive
 	// queued says the run waits for a slot (pool-queue.md section 6): its pool has a concurrent-run cap,
 	// set by stepPlacement at create and Review. A waiting run renews no credential, takes no host
 	// capacity or deployment slot, and is refused for its size only when it can never fit; promotion
@@ -170,6 +172,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepLocalEligibility, foldAll},
 	{(*Server).stepConfinement, foldAll},
 	{(*Server).stepPlacementCapability, foldAll},
+	{(*Server).stepMainDrive, foldAll},
 	{(*Server).stepModelProvider, foldAll},
 	{(*Server).stepAWSCLIProfile, foldAll},
 	{(*Server).stepAutonomy, foldAll},

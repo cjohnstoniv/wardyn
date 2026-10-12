@@ -204,7 +204,7 @@ export function runWireBody(input: RunWireInput): Record<string, unknown> {
   if (input.runner_id) body.runner_id = input.runner_id;
   if (input.runner_pool_id) body.runner_pool_id = input.runner_pool_id;
   if (input.allowed_image) body.allowed_image = input.allowed_image;
-  if (input.resources && (input.resources.cpu_millis || input.resources.memory_mib)) body.resources = input.resources;
+  if (input.resources && (input.resources.cpu_millis || input.resources.memory_mib || input.resources.disk_mib)) body.resources = input.resources;
   if (input.overrides) body.overrides = input.overrides;
   if (input.mode_contract) body.mode_contract = input.mode_contract;
   if (input.experience) body.experience = input.experience;
