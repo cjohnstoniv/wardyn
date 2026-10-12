@@ -504,3 +504,42 @@ func TestMCPBroker_TokenNeverLogged(t *testing.T) {
 		t.Fatalf("decision rows lack the redacted, attributed path:\n%s", records)
 	}
 }
+
+// TestMCPBroker_HarnessNormalisedNameBlocked: a Block written as a harness
+// shows the tool is enforced on the tool's wire name. Claude Code shows
+// admin.delete as admin_delete; Codex CLI's code mode, which keeps no "-", shows
+// admin-purge as admin_purge.
+func TestMCPBroker_HarnessNormalisedNameBlocked(t *testing.T) {
+	f := newMCPFixture(t, types.RunPolicySpec{ToolRules: []types.ToolRule{
+		{Tool: "mcp__linear__admin_delete", Effect: types.ToolDeny},
+		{Tool: "mcp__linear__admin_purge", Effect: types.ToolDeny},
+	}}, nil, nil)
+	for _, tool := range []string{"admin.delete", "admin-purge"} {
+		if rec := f.post(t, mcpToken("codex-cli"), "linear", mcpCall(1, tool)); !strings.Contains(rec.Body.String(), mcpBlockedMessage) || f.up.hitCount() != 0 {
+			t.Fatalf("%s: %q, hits %d; want blocked", tool, rec.Body, f.up.hitCount())
+		}
+	}
+	if rec := f.post(t, mcpToken("codex-cli"), "linear", mcpCall(2, "admin.list")); rec.Code != http.StatusOK || f.up.hitCount() != 1 {
+		t.Fatalf("unblocked tool: status %d hits %d", rec.Code, f.up.hitCount())
+	}
+}
+
+// TestMCPBroker_DuplicateKeysRefused: a body that gives method, params or name
+// twice is refused, since a server reading the first would see a call the
+// broker did not check.
+func TestMCPBroker_DuplicateKeysRefused(t *testing.T) {
+	f := newMCPFixture(t, types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "mcp__linear__delete_issue", Effect: types.ToolDeny}}}, nil, nil)
+	for name, body := range map[string]string{
+		"method": `{"jsonrpc":"2.0","id":1,"method":"tools/call","method":"ping","params":{"name":"delete_issue"}}`,
+		"params": `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_issue"},"params":{"name":"ok"}}`,
+		"name":   `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_issue","name":"ok"}}`,
+	} {
+		rec := f.post(t, mcpToken("codex-cli"), "linear", body)
+		if !strings.Contains(rec.Body.String(), "ambiguous key") || f.up.hitCount() != 0 {
+			t.Errorf("duplicate %s: %q forwarded=%v", name, rec.Body, f.up.hitCount() != 0)
+		}
+	}
+	if rec := f.post(t, mcpToken("codex-cli"), "linear", mcpCall(1, "list_issues")); rec.Code != http.StatusOK {
+		t.Fatalf("plain call: %d", rec.Code)
+	}
+}

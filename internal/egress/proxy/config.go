@@ -277,8 +277,8 @@ type MCPServerConfig struct {
 	// GrantID is the api_key grant of the server's header credential; nil when
 	// the server takes none.
 	GrantID *uuid.UUID `json:"grant_id,omitempty"`
-	// Ordinal is the component's position on the run, which a revive reads its
-	// run_components row by.
+	// Ordinal is the component's run_components ordinal (built-ins have no
+	// row), which a revive reads its row by.
 	Ordinal int `json:"ordinal"`
 }
 

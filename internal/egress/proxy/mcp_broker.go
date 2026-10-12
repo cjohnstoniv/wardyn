@@ -301,19 +301,29 @@ func parseMCPMessage(raw json.RawMessage) (mcpMessage, error) {
 	return m, nil
 }
 
-// exactKeys decodes a JSON object, refusing one whose keys spell any of names
-// with different case.
+// exactKeys decodes a JSON object, refusing one that spells any of names
+// with different case or gives it twice: a server reading the other spelling,
+// or the first of two, would see a call the broker did not check.
 func exactKeys(raw json.RawMessage, names ...string) (map[string]json.RawMessage, error) {
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
-		return nil, errors.New("not a JSON object")
+	notObject := errors.New("not a JSON object")
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return nil, notObject
 	}
-	for k := range obj {
+	obj := map[string]json.RawMessage{}
+	for dec.More() {
+		t, err := dec.Token()
+		k, ok := t.(string)
+		var v json.RawMessage
+		if err != nil || !ok || dec.Decode(&v) != nil {
+			return nil, notObject
+		}
 		for _, n := range names {
-			if k != n && strings.EqualFold(k, n) {
+			if _, dup := obj[k]; strings.EqualFold(k, n) && (k != n || dup) {
 				return nil, fmt.Errorf("ambiguous key %q", k)
 			}
 		}
+		obj[k] = v
 	}
 	return obj, nil
 }
@@ -332,7 +342,9 @@ func (x *mcpExchange) refuseBlockedCalls(w http.ResponseWriter, body []byte) boo
 		return true
 	}
 	if !slices.ContainsFunc(msgs, func(m mcpMessage) bool {
-		return m.tool != "" && x.p.mcpToolEffect(x.harness, "mcp__"+x.server.key+"__"+m.tool) == types.ToolDeny
+		return m.tool != "" && slices.ContainsFunc(mcpToolNames(x.server.key, m.tool), func(name string) bool {
+			return x.p.mcpToolEffect(x.harness, name) == types.ToolDeny
+		})
 	}) {
 		return false
 	}
@@ -352,6 +364,28 @@ func (x *mcpExchange) refuseBlockedCalls(w http.ResponseWriter, body []byte) boo
 		writeJSONRPC(w, out[0])
 	}
 	return true
+}
+
+// Characters a harness replaces with "_" when it names an MCP tool: Claude Code
+// (2.1.231) keeps [A-Za-z0-9_-]; Codex CLI's code mode exposes a tool as an
+// identifier, [A-Za-z0-9_].
+var (
+	claudeToolNameRE = regexp.MustCompile(`[^A-Za-z0-9_-]`)
+	identToolNameRE  = regexp.MustCompile(`[^A-Za-z0-9_]`)
+)
+
+// mcpToolNames is every name a rule may give one server's tool: as the server
+// names it, and as each harness shows it. A call is blocked when a Block names
+// any of them.
+func mcpToolNames(key, tool string) []string {
+	names := []string{"mcp__" + key + "__" + tool}
+	for _, re := range []*regexp.Regexp{claudeToolNameRE, identToolNameRE} {
+		name := "mcp__" + re.ReplaceAllString(key, "_") + "__" + re.ReplaceAllString(tool, "_")
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // mcpToolEffect is the run's rule for one MCP tool of harness: its own set when

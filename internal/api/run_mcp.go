@@ -122,20 +122,35 @@ func rawEgressHosts(def types.ComponentDefinition) []string {
 
 // mcpServerKeys names each attached MCP server, index-aligned with attached
 // ("" for any other component): its name as a lower-case slug, "mcp" without
-// one, made unique in request order with a numeric suffix. It is the <server>
-// of the tool names mcp__<server>__<tool> a person's rules name.
+// one, made unique with a numeric suffix. It is the <server> of the tool names
+// mcp__<server>__<tool> rules name, so an organisation's servers claim their
+// keys first, in component-id order, whatever the request order: a person's
+// own server named like an organisation's takes the suffix, and can never
+// draw the organisation's rules for that server onto itself and leave the
+// organisation's server without them.
 func mcpServerKeys(attached []attachedComponent) []string {
-	keys := make([]string, len(attached))
+	var org, own []int
 	for i, a := range attached {
-		if a.builtin != nil || a.snapshot.Definition.MCP == nil {
-			continue
+		switch {
+		case a.builtin != nil || a.snapshot.Definition.MCP == nil:
+		case !a.snapshot.SelfDefined && a.snapshot.ComponentID != nil:
+			org = append(org, i)
+		default:
+			own = append(own, i)
 		}
-		base := mcpSlug(a.snapshot.Name)
+	}
+	slices.SortFunc(org, func(x, y int) int {
+		return strings.Compare(attached[x].snapshot.ComponentID.String(), attached[y].snapshot.ComponentID.String())
+	})
+	keys := make([]string, len(attached))
+	taken := map[string]bool{}
+	for _, i := range slices.Concat(org, own) {
+		base := mcpSlug(attached[i].snapshot.Name)
 		key := base
-		for n := 2; slices.Contains(keys[:i], key); n++ {
+		for n := 2; taken[key]; n++ {
 			key = base + "-" + strconv.Itoa(n)
 		}
-		keys[i] = key
+		keys[i], taken[key] = key, true
 	}
 	return keys
 }
@@ -163,6 +178,8 @@ func mcpSlug(name string) string {
 
 // componentMCP is one MCP server as dispatch configures it.
 type componentMCP struct {
+	// Ordinal is the component's run_components ordinal: its position among
+	// the attached components that have a row, so a built-in is not counted.
 	Ordinal   int
 	Key       string
 	URL       string
