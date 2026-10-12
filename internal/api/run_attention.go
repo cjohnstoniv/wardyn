@@ -34,21 +34,28 @@ func isADOReauth(ap types.ApprovalRequest) bool {
 	return k == approval.TallyReauthADOSignIn || k == approval.TallyReauthADOConsent
 }
 
+// ownerAttentionBy is who an owner-only action (revive, credential re-sign-in, ADO consent) waits on:
+// "you" only when the caller is the run's owner. A user view lists more than the caller's own runs (the
+// runs of the service identities they sponsor, #1508), and a sponsor cannot revive or re-sign-in for one,
+// so a sponsored run reads "owner" there and stays out of `status=needs` and the nav badge alike.
+func ownerAttentionBy(r *http.Request, run types.AgentRun, adminView bool) types.AttentionBy {
+	if p := principalFromRequest(r); !adminView && p != "" && run.CreatedBy == p {
+		return types.AttentionYou
+	}
+	return types.AttentionOwner
+}
+
 // heldCandidates lists every held row on the run (pending must already be
 // projectHolds'd), each classified into rule 6 (ado_consent), 7 (reauth) or 8
 // (approval) — in that order, rule 6's rows first, then 7's, then 8's, which
 // is the precedence attention() walks to pick one. Rule 6/7's `by` depends
-// only on which view is asking (view=user forces owner=me, so "you" IS the
-// run's owner there; the Admin view is never forced to it, so a
-// credential_reauth/lost run's clearer is always the run's owner, "owner" —
-// only the actor who can actually act is ever shown "you"). Rule 8's `by`
+// on the view and on whose run it is (ownerBy): only the run's owner can
+// clear a credential_reauth or lost run, so only they are ever shown "you".
+// Rule 8's `by`
 // depends on THIS caller's own mayDecide verdict, since
 // unlike 6/7 a member CAN sometimes clear one of these.
 func (s *Server) heldCandidates(r *http.Request, run types.AgentRun, pending []types.ApprovalRequest, adminView bool) []attentionCandidate {
-	ownerBy := types.AttentionOwner
-	if !adminView {
-		ownerBy = types.AttentionYou
-	}
+	ownerBy := ownerAttentionBy(r, run, adminView)
 	var rule6, rule7, rule8 []attentionCandidate
 	for _, ap := range pending {
 		if !ap.Held {
@@ -92,11 +99,7 @@ func (s *Server) attention(r *http.Request, run types.AgentRun, pending []types.
 	// owner-or-super-admin only (run_revive.go), hence `owner` in the
 	// Admin view: reviving is only ever offered on the User view's own page.
 	if run.LostAt != nil {
-		by := types.AttentionOwner
-		if !adminView {
-			by = types.AttentionYou
-		}
-		return &types.RunAttention{Kind: types.AttentionLost, By: by, Pending: len(pending)}
+		return &types.RunAttention{Kind: types.AttentionLost, By: ownerAttentionBy(r, run, adminView), Pending: len(pending)}
 	}
 	// Row 4: reserved, no producer today (types.RunWaiting's own doc) — kept
 	// so a future producer needs no change here.

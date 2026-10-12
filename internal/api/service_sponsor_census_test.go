@@ -32,7 +32,7 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found, direct := map[string]int{}, map[string]int{}
+	found, direct, redeem := map[string]int{}, map[string]int{}, map[string]int{}
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -54,6 +54,8 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 						found[fn.Name.Name]++
 					case "sponsorsRun":
 						direct[fn.Name.Name]++
+					case "mayEnterRunOrSponsor":
+						redeem[fn.Name.Name]++
 					}
 				}
 				return true
@@ -73,6 +75,13 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 	// sponsor so that its entry check can refuse by capability; any other caller is a new sponsor door.
 	if want := map[string]int{"ownsRunOrSponsorOrAdmin": 1, "handleAttachTicket": 1, "sponsorMayEnter": 1}; !maps.Equal(direct, want) {
 		t.Errorf("sponsorsRun is asked by %v, want %v", direct, want)
+	}
+	// mayEnterRunOrSponsor admits a sponsor on a redeemed ticket or an open UI session without a delegation
+	// check of its own: the portal refusal holds because the one ticket mint refuses. A new redemption site
+	// is a new way in, and has to be classified here.
+	wantRedeem := map[string]int{"refuseAttachEntry": 1, "uiEnterCommon": 1, "uiSessionStillAuthorized": 1}
+	if !maps.Equal(redeem, wantRedeem) {
+		t.Errorf("mayEnterRunOrSponsor is asked by %v, want %v", redeem, wantRedeem)
 	}
 	if len(found) != 0 {
 		t.Errorf("ownsRunOrSponsorOrAdmin is also asked by %v: a route a sponsor now reaches", slices.Sorted(func(yield func(string) bool) {
