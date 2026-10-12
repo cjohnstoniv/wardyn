@@ -6,6 +6,7 @@ package remote_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -65,9 +66,12 @@ func TestNameAndClassesServedFromCaps(t *testing.T) {
 // an ended sandbox.
 func TestAdvertisedCarriesDiskWordKeepAndDrives(t *testing.T) {
 	rig := runnertest.NewRig(t, rid)
-	rig.Fake.Support.EphemeralDiskEnforcement = types.StorageEnforcementEviction
-	rig.Fake.Support.UserDrives = true
-	rig.Connect(t)
+	data, err := json.Marshal(runnerwire.Caps{Support: substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC1},
+		EphemeralDiskEnforcement: types.StorageEnforcementEviction, UserDrives: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.Sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
 	f, ok := rig.Sub.Advertised()
 	if !ok || f.EphemeralDiskEnforcement != types.StorageEnforcementEviction || !f.KeepsEnded || !f.UserDrives {
 		t.Fatalf("Advertised = %+v, %v", f, ok)
