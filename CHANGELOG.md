@@ -356,8 +356,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Runner pools carry limits per run type: CPU and memory (default and cap), a main-drive cap (`disk_mib`, whole GiB),
   lifetime (default, maximum or unlimited), an idle stop for interactive environments only, allowed barriers and a
   concurrent-run cap; an administrator sets them on create and replaces them on update (migration 0158). A run is
-  admitted by its pool's run types and barriers, and the pool's lifetime bounds its end; CPU, memory, idle stop
-  and the concurrent-run cap are stored and audited but not yet applied to runs.
+  admitted by its pool's run types and barriers, the pool's CPU, memory and lifetime size it, and a launch waits at the
+  concurrent-run cap; the idle stop is stored and audited but not yet applied to runs.
 - `wardyn-runnerd` ships as a release binary for Linux and macOS (amd64, arm64) with a per-user service: a systemd
   user unit or a LaunchAgent, installed by `deploy/runner/install.sh`, which registers the runner with a single-use
   token and keeps it running; the owner then claims it with `wardyn runner claim` (#1968).
