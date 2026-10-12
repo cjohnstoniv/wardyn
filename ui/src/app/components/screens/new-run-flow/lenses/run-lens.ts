@@ -7,6 +7,7 @@
 // confinement_class.
 
 import type { ConfinementClass } from "../../../../lib/types/runs";
+import type { RunnerPoolHosting } from "../../../../lib/types/runner-pools";
 import type { RunIntent } from "../draft/run-intent";
 import { withKeys } from "./lens-keys";
 import { shapeCarriers, type RunMode } from "./shape-lens";
@@ -19,6 +20,13 @@ export function chooseMode(intent: RunIntent, mode: RunMode): RunIntent {
 
 export const setCommand = (intent: RunIntent, command: string): RunIntent =>
   withKeys(intent, { workload: { kind: "command", command } });
+
+/**
+ * Organization pools and User pools are the console's words for the two kinds of pool. Today's wire still
+ * says hosting_type; this is the one place it is read, so the scope rename is a change to this map.
+ */
+export type PoolScope = "organization" | "user";
+export const poolScope = (hosting: RunnerPoolHosting): PoolScope => (hosting === "self_hosted" ? "user" : "organization");
 
 export const choosePool = (intent: RunIntent, poolId: string): RunIntent => withKeys(intent, { runner_pool_id: poolId });
 
