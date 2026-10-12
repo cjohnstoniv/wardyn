@@ -34,7 +34,8 @@ type componentFact struct {
 	Provider string `json:"provider,omitempty"`
 	// ID keys the row within one response: a stored component's id in its
 	// canonical spelling, "inline:<position in the request>" for one defined on
-	// the request, "git_provider:<provider>:<lane>[:<org>]" for a Git provider.
+	// the request (a built-in Git provider's too), "git_provider:<provider>:<lane>[:<org>]"
+	// for a Git provider.
 	ID      string `json:"id"`
 	Name    string `json:"name,omitempty"`
 	Version int    `json:"version,omitempty"` // a stored component's, as attached
@@ -141,6 +142,10 @@ func componentFacts(f componentFactInputs, scm *SCMAccess) []componentFact {
 		facts = append(facts, agent)
 	}
 	for i, a := range f.comps.attached {
+		if a.builtin != nil {
+			facts = append(facts, a.builtin.fact(i, a.snapshot.Name, f))
+			continue
+		}
 		facts = append(facts, a.fact(i, f.comps, f.baseline))
 	}
 	return facts

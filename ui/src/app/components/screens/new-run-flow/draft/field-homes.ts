@@ -99,6 +99,8 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   template_shared_field_refused: "review", template_scope_forbidden: "review", template_group_unverified: "review",
   template_not_found: "review", template_revision_conflict: "review", templates_unavailable: "review",
   template_name_taken: "review", template_limit_reached: "review", template_policy_field_refused: "review",
+  harness_not_installed: "harnesses", harness_set_no_image: "harnesses", harness_set_custom_image: "harnesses",
+  harness_providers_conflict: "harnesses",
 };
 
 /** A refusal's step; a reason the console does not know goes to Review. */
