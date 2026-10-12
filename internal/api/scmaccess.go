@@ -287,7 +287,7 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 	}
 	isMechanism := subject == ""
 	minted := cmpTokenMode(pr.cfg.TokenMode) == types.ADOTokenModeMintedPAT
-	unusable := minted && !isMechanism && errors.Is(pr.cfg.validate(), ErrADOMintNeedsSecret)
+	unusable := !isMechanism && pr.mintUnusable()
 	var blob adoEntraBlob
 	var found bool
 	if !isMechanism && !unusable {
@@ -318,6 +318,12 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 		out.Source = scmAccessSourceFor(blob.Source)
 	}
 	return out, nil
+}
+
+// mintUnusable: a minted_pat row S1 refuses (ErrADOMintNeedsSecret), which only
+// an administrator can fix.
+func (pr perUserADORow) mintUnusable() bool {
+	return cmpTokenMode(pr.cfg.TokenMode) == types.ADOTokenModeMintedPAT && errors.Is(pr.cfg.validate(), ErrADOMintNeedsSecret)
 }
 
 // scmAccessForOwnPAT grades an own_pat row for subject from their own stored
@@ -468,6 +474,37 @@ func (s *Server) gitCredentialFactForRepos(ctx context.Context, subject string, 
 		return nil
 	}
 	return &out
+}
+
+// adoSignInPresenceFact is the policy preview's counterpart of
+// gitCredentialFactForRepos: the same row (perUserADORowsAdmitting, first), but
+// graded by PRESENCE alone. It lists the names in the caller's own namespace and
+// never Gets, so the preview reads no credential value. A sign-in that is
+// absent is not_configured (the draft needs input; TokenMode own_pat for an
+// own-token row, whose fix is a pasted token); one that is present, a caller
+// that is no person, a minted_pat row without its console app (an administrator's
+// to fix) and a store that cannot list all return nil, which reads "unknown":
+// whether the stored sign-in has ended or lacks consent is Review's to say.
+func (s *Server) adoSignInPresenceFact(ctx context.Context, sc types.SiteConfig, subject string, repos []string) *SCMAccess {
+	if s.cfg.Secrets == nil || s.providerAccessMechanism(subject) || !providersConfigured(sc) {
+		return nil
+	}
+	rows, err := s.perUserADORowsAdmitting(ctx, sc, repos)
+	if err != nil || len(rows) == 0 || !adoEntraValidRowID(rows[0].row.ID) {
+		return nil
+	}
+	row := rows[0].row
+	name, mode := adoEntraSecretName(row.ID), ""
+	if isADOOwnTokenRow(row) {
+		name, mode = adoOwnPATSecretName(row.ID), string(types.ADOTokenModeOwnPAT)
+	}
+	if rows[0].mintUnusable() {
+		return nil
+	}
+	if stored, err := s.secretPresentIn(ctx, []string{subject}, name); err != nil || stored {
+		return nil
+	}
+	return &SCMAccess{State: modelAccessNotConfigured, Org: adoOrgDisplay(row), Kind: string(row.Kind), TokenMode: mode}
 }
 
 // gitCredentialErrorBody is the git_credential 422's body: the frozen
