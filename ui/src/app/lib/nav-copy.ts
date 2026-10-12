@@ -24,3 +24,8 @@ export const USER_TYPES_NAV_TITLE = "User types";
 // wardyn/copy/credentials.ts) — the design draws the nav entry and the page
 // heading as two distinct strings, so this constant is nav-only.
 export const CREDENTIALS_NAV_TITLE = "Credentials";
+
+// The Runners nav label, kept here for the entry-chunk reason above (the sidebar is eager,
+// wardyn/copy/runners.ts is lazy). copy/runners.ts's RUNNERS.NAV reads this constant, so the nav
+// label and the page heading stay one string.
+export const RUNNERS_NAV_TITLE = "Runners";

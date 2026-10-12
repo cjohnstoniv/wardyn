@@ -34,7 +34,7 @@ const stripComments = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").repl
 function tsKeys(src: string, iface: string): string[] {
   const m = new RegExp(`export\\s+interface\\s+${iface}\\b[^{]*\\{([\\s\\S]*?)\\n\\}`).exec(stripComments(src));
   if (!m) throw new Error(`interface ${iface} not found`);
-  return [...m[1].matchAll(/^\s*([a-z_]+)\??\s*:/gm)].map((k) => k[1]);
+  return [...m[1].matchAll(/^\s*([a-z0-9_]+)\??\s*:/gm)].map((k) => k[1]);
 }
 
 const ts = read("ui/src/app/lib/types/runners.ts");
@@ -45,6 +45,10 @@ describe("runners management wire", () => {
     ["internal/types/runner_inventory.go", "RunnerSettingsRequest", "RunnerSettingsRequest"],
     ["internal/types/runner_registration.go", "RunnerRegistrationToken", "RunnerRegistrationToken"],
     ["internal/types/runner.go", "RunnerPosture", "RunnerPosture"],
+    ["internal/types/runner_inventory.go", "RunnerCapacity", "RunnerCapacity"],
+    ["internal/types/runner_registration_wire.go", "RunnerTokenRequest", "RunnerTokenRequest"],
+    ["internal/types/runner_registration_wire.go", "RunnerClaimRequest", "RunnerClaimRequest"],
+    ["internal/types/runner_registration_wire.go", "RunnerRegistration", "RunnerRegistration"],
   ])("%#: %s has full parity with its TS mirror", (file, goName, tsName) => {
     const tags = goJSONTags(read(file), goName);
     expect(tags.length).toBeGreaterThanOrEqual(1);

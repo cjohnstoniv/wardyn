@@ -313,3 +313,27 @@ func TestRunnerTokenCannotNameReservedMechanismAsOwner(t *testing.T) {
 		t.Fatalf("reserved owner accepted:%d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestRunnerTokenMintAnswersCarryTheOrgURLAndAListNever(t *testing.T) {
+	srv, _, _ := newRunnerRegistrationServer(t)
+	admin := memberModeSSOSession(t, "carol", "carol@example.com", oidc.RoleAdmin, false)
+	alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
+	for name, mint := range map[string]func() *httptest.ResponseRecorder{
+		"admin": func() *httptest.ResponseRecorder {
+			return doSSO(t, srv, http.MethodPost, "/api/v1/runners/tokens", admin, `{"owner":"alice"}`)
+		},
+		"self": func() *httptest.ResponseRecorder {
+			return doSSO(t, srv, http.MethodPost, "/api/v1/me/runners/tokens", alice, "{}")
+		},
+	} {
+		w := mint()
+		var token types.RunnerRegistrationToken
+		if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &token) != nil || token.OrgURL != srv.cfg.RunnerOrgURL {
+			t.Fatalf("%s mint = %d %s: want org_url %q", name, w.Code, w.Body.String(), srv.cfg.RunnerOrgURL)
+		}
+	}
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/runners/tokens", admin, "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"owner"`) || strings.Contains(w.Body.String(), "org_url") {
+		t.Fatalf("a token list must name its tokens and never carry org_url: %d %s", w.Code, w.Body.String())
+	}
+}

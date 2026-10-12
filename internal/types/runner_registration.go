@@ -27,4 +27,7 @@ type RunnerRegistrationToken struct {
 	CreatedAt    time.Time  `json:"created_at"`
 	ExpiresAt    time.Time  `json:"expires_at"`
 	ConsumedAt   *time.Time `json:"consumed_at,omitempty"`
+	// OrgURL is the organisation URL the runner must register against: the mint answers carry it, a
+	// token list never does. wardyn-runnerd refuses an --org that does not hash to the server's.
+	OrgURL string `json:"org_url,omitempty"`
 }
