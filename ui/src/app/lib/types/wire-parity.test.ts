@@ -641,6 +641,17 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]))).toEqual(goKinds);
   });
 
+  it("RunState: the TS union is exactly the Go RunState consts, and QUEUED is not terminal", () => {
+    const go = readFileSync(join(root, "internal/types/types.go"), "utf8");
+    const goStates = new Set([...go.matchAll(/\bRun\w+\s+RunState = "([A-Z_]+)"/g)].map((m) => m[1]));
+    expect(goStates).toContain("QUEUED");
+    const m = /export type RunState =([^;]+);/.exec(stripComments(runsTs));
+    if (!m) throw new Error("type RunState not found");
+    expect(new Set([...m[1].matchAll(/"([A-Z_]+)"/g)].map((x) => x[1]))).toEqual(goStates);
+    expect(tsInterfaceBody(runsTs, "AgentRun")).toMatch(/admitted_at\?: string;/);
+    expect(go).toMatch(/AdmittedAt \*time\.Time\s+`json:"admitted_at,omitempty"`/);
+  });
+
   // AutonomyResolution.bound_by names a rubric row or the org's component cap.
   it("AutonomyBoundKey names the Go component-cap cause beside the rubric rows", () => {
     const go = readFileSync(join(root, "internal/api/runs_autonomy_components.go"), "utf8");

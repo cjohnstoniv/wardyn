@@ -77,6 +77,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   refused in templates and component config; move such values to a secret reference.
 - Proxy compatibility: a run carrying `push_rule_base` or `harness_credentials` keys needs a proxy that reads
   them. An older proxy refuses them under strict decode, so upgrade proxies together with wardynd.
+- Migration `0162_run_queue` adds the QUEUED run state, `admitted_at` and the `run_queue` table; nothing changes
+  for existing runs.
 
 ### Added
 

@@ -190,7 +190,7 @@ func (s PG) RevokeRunner(ctx context.Context, id uuid.UUID, now time.Time, by, r
 	out.Killed, err = collect(ctx, tx, "kill", "revoked runner's runs", `WITH live AS (
 			SELECT id, state FROM agent_runs WHERE runner_id = $1 AND state = ANY($3) ORDER BY id FOR UPDATE)
 		UPDATE agent_runs a SET state = $2, updated_at = now(), ended_at = now() FROM live
-		WHERE a.id = live.id RETURNING a.id, live.state`, []any{id, string(types.RunKilled), nonTerminalStateStrings()},
+		WHERE a.id = live.id RETURNING a.id, live.state`, []any{id, string(types.RunKilled), slotHoldingStateNames()},
 		func(row pgx.Row) (RunnerKilledRun, error) {
 			var k RunnerKilledRun
 			err := row.Scan(&k.ID, &k.From)
