@@ -16,12 +16,14 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } f
 import { Input } from "../../../ui/input";
 import { Label } from "../../../ui/label";
 import { RadioGroup, RadioGroupItem } from "../../../ui/radio-group";
+import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
+import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
+import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { getErrorMessage } from "../../../../lib/format";
 import { TEMPLATE_REASON, TEMPLATE_REFUSAL } from "../../../../lib/template-refusals";
 import type { Template, TemplateKind, TemplatePublish } from "../../../../lib/types/templates";
 import type { RunIntent } from "../draft/run-intent";
 import { saveTemplate, TemplateSaveError, type SaveTemplate } from "./save-as-dialog.api";
-import { SAVE_AS_COPY, type SaveAsCopy } from "./save-as-dialog.copy";
 import {
   buildSaveRequest,
   leaveOutOwnDrives,
@@ -32,6 +34,38 @@ import {
   savePartsOf,
   type SavePartId,
 } from "./save-as-dialog.model";
+
+export const SAVE_AS_COPY = {
+  title: (kind: TemplateKind) => (kind === "template" ? NR_SAVE.TITLE_TEMPLATE : NR_SAVE.TITLE_POLICY),
+  intro: (kind: TemplateKind) => NR_SAVE.INTRO(kind),
+  nameLabel: NR_SAVE.NAME_LABEL,
+  required: NR_SHARED.REQUIRED,
+  namePlaceholder: (kind: TemplateKind) => (kind === "template" ? NR_SAVE.NAME_PLACEHOLDER_TEMPLATE : NR_SAVE.NAME_PLACEHOLDER_POLICY),
+  availableTo: NR_SAVE.AVAILABLE_LABEL,
+  onlyMe: NR_SAVE.SCOPE_ME,
+  groupLabelled: (label: string) => NR_SAVE.SCOPE_GROUP(label),
+  helperPlain: NR_SAVE.HELP_NO_GRANTS,
+  helperManager: NR_SAVE.HELP_MANAGER,
+  include: NR_SAVE.INCLUDE_LEGEND,
+  everything: NR_SAVE.INCLUDE_ALL,
+  subset: NR_SAVE.INCLUDE_SUBSET,
+  omittedValues: NR_SAVE.OMITTED,
+  partLabels: {
+    run: NR_REVIEW.GROUP_RUN, where: NR_REVIEW.GROUP_WHERE, work: NR_REVIEW.GROUP_WORK, tools: NR_REVIEW.GROUP_TOOLS,
+    access: NR_REVIEW.GROUP_ACCESS, limits: NR_REVIEW.GROUP_LIMITS,
+    network: NR_SAVE.SUBSET_NETWORK, credentials: NR_SAVE.SUBSET_CREDENTIALS, access_rules: NR_SAVE.SUBSET_ACCESS_RULES,
+  } as Record<SavePartId, string>,
+  disclosure: NR_SAVE.SHARED_DISCLOSURE,
+  nothingChanged: NR_REVIEW.NOTHING_CHANGED,
+  cancel: NR_SAVE.CANCEL_SAVE,
+  save: (kind: TemplateKind) => (kind === "template" ? NR_SAVE.CONFIRM_TEMPLATE : NR_SAVE.CONFIRM_POLICY),
+  // TODO(E1d follow-up): the canon has no sentence for these two. Empty renders nothing; the behaviour behind them
+  // (Save stays off with nothing checked, own drives are left out of a shared document) does not depend on the text.
+  nothingPicked: "",
+  ownDrivesLeftOut: "",
+};
+
+export type SaveAsCopy = typeof SAVE_AS_COPY;
 
 const NAME_MAX = 128;
 const NO_DRIVES: ReadonlySet<string> = new Set();
@@ -91,8 +125,8 @@ function SaveAsForm({
   const fields = everything
     ? [...parts.flatMap((p) => p.fields), ...unassigned]
     : parts.filter((p) => !unchecked.has(p.id)).flatMap((p) => p.fields);
-  const reason = nothingToSave ? copy.nothingChanged : fields.length === 0 ? copy.nothingPicked : "";
-  const canSave = name.trim() !== "" && reason === "" && !saving;
+  const reason = nothingToSave ? copy.nothingChanged : copy.nothingPicked;
+  const canSave = name.trim() !== "" && !nothingToSave && fields.length > 0 && !saving;
 
   const submit = async () => {
     setSaving(true);
@@ -203,8 +237,8 @@ function SaveAsForm({
           </ul>
         )}
         <p className="text-xs text-muted-foreground">{copy.omittedValues}</p>
-        {audienceIntent.leftOut && <p className="text-xs text-muted-foreground">{copy.ownDrivesLeftOut}</p>}
-        {reason && <p className="text-xs text-muted-foreground">{reason}</p>}
+        {audienceIntent.leftOut && copy.ownDrivesLeftOut && <p className="text-xs text-muted-foreground">{copy.ownDrivesLeftOut}</p>}
+        {(nothingToSave || fields.length === 0) && reason && <p className="text-xs text-muted-foreground">{reason}</p>}
       </fieldset>
 
       {shared && <p className="text-xs text-muted-foreground">{copy.disclosure}</p>}
