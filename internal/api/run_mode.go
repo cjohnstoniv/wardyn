@@ -440,7 +440,7 @@ func applyRunMode(req *createRunRequest) *runRefusal {
 		return nil
 	}
 	for _, check := range []func(createRunRequest) *runRefusal{
-		runModeShapeRefusal, runModeConflictRefusal, runModeRequiredRefusal, startFolderRefusal, runModeUnavailableRefusal, interactiveToolRequiredRefusal,
+		runModeShapeRefusal, runModeConflictRefusal, runModeRequiredRefusal, startFolderRefusal, runModeUnavailableRefusal, interactiveToolRequiredRefusal, harnessSetRefusal, personalToolRulesRefusal,
 	} {
 		if refusal := check(*req); refusal != nil {
 			return refusal
@@ -455,6 +455,38 @@ func applyRunMode(req *createRunRequest) *runRefusal {
 func interactiveToolRequiredRefusal(req createRunRequest) *runRefusal {
 	if req.Experience == client.ExperienceInteractive && len(req.Tools) == 0 {
 		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools: an interactive environment with no included tool"))
+	}
+	return nil
+}
+
+// harnessSetRefusal: a run launches with the first harness's image and provider
+// alone, so a second included harness waits for the lane that builds the set.
+func harnessSetRefusal(req createRunRequest) *runRefusal {
+	n := 0
+	for _, t := range req.Tools {
+		if t.Kind == client.IncludedToolHarness {
+			n++
+		}
+	}
+	if n > 1 {
+		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools: more than one harness"))
+	}
+	return nil
+}
+
+// personalToolRulesRefusal: a person's own tool rule or default is consulted
+// only by the gated lane (holdLane), so on any other run it would be shown as
+// enforced and never read. It waits for the lane that derives the gated lane
+// from it.
+func personalToolRulesRefusal(req createRunRequest) *runRefusal {
+	if holdLane(req.Experience != client.ExperienceBackground, req.ToolApprovals, "") {
+		return nil
+	}
+	for i, t := range req.Tools {
+		if len(t.ToolRules) > 0 || t.DefaultEffect != "" {
+			return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
+				runModeUnavailableMsg(fmt.Sprintf("tools[%d]: personal tool rules wait for their enforcing lane", i)))
+		}
 	}
 	return nil
 }
