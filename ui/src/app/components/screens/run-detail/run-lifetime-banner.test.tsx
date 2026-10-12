@@ -28,6 +28,12 @@ vi.mock("../../../lib/api/runs", () => ({
     resumeRun: (...a: unknown[]) => resumeRunMock(...a),
   },
 }));
+// A local run lost to an outage reads its late-stop row; every other case never asks.
+const listAuditMock = vi.fn();
+vi.mock("../../../lib/api/audit", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../lib/api/audit")>()),
+  audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
+}));
 const toastInfoMock = vi.fn();
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: (...a: unknown[]) => toastInfoMock(...a) },
@@ -59,6 +65,7 @@ beforeEach(() => {
   setRunEndAndWaitMock.mockResolvedValue({ id: "run-1", ends_at: null, wait_budget_sec: 0, capped: [] });
   killRunMock.mockResolvedValue(undefined);
   resumeRunMock.mockResolvedValue(undefined);
+  listAuditMock.mockReset().mockResolvedValue([]);
 });
 
 describe("RunLifetimeBanner — terminal guard (F3)", () => {
@@ -400,5 +407,121 @@ describe("RunLifetimeBanner — F16: a non-owner, non-operator viewer gets no ac
     expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Extend 1 day" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Change end…" })).not.toBeInTheDocument();
+  });
+});
+
+// 0.9 (M-RN-3 RS4): a run on a person's own computer. The banner is chosen from server facts only: the runner's
+// liveness (runner_online, projected by the server), the run's lost_reason and the late-stop audit row. The
+// remote sentences ("Wardyn was unreachable") are false for it and are never shown.
+describe("RunLifetimeBanner: a local run (RS4)", () => {
+  const local = (o: Partial<RunDetail> = {}) =>
+    detail({
+      state: "RUNNING",
+      placement: "local",
+      runner_id: "11111111-2222-3333-4444-555555555555",
+      runner_name: "laptop-7",
+      runner_online: true,
+      runner_last_seen_at: new Date(NOW - 3_600_000).toISOString(),
+      ...o,
+    });
+  const lost = (o: Partial<RunDetail> = {}) => local({ lost_reason: "outage", lost_at: new Date(NOW - 60_000).toISOString(), ...o });
+
+  it("RS4a: a running run on an offline computer says it goes on there, with no buttons", () => {
+    renderBanner(local({ runner_online: false }));
+    const banner = screen.getByTestId("run-lifetime-local-offline");
+    expect(banner).toHaveTextContent("laptop-7 is offline");
+    expect(banner).toHaveTextContent("This run keeps going there under the policy it started with.");
+    expect(banner).toHaveTextContent("Egress decisions it makes meanwhile appear here when it reconnects.");
+    expect(banner.querySelector("button")).toBeNull();
+  });
+
+  it("RS4a is absent while the computer is online or its liveness is unknown", () => {
+    const online = renderBanner(local());
+    expect(online.container).toBeEmptyDOMElement();
+    online.unmount();
+    const { container } = renderBanner(local({ runner_online: undefined }));
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("RS4b: lost to an outage while the computer is offline cannot confirm the stop, and offers End run only", async () => {
+    renderBanner(lost({ runner_online: false }));
+    const banner = await screen.findByTestId("run-lifetime-local-lapse");
+    expect(banner).toHaveTextContent("laptop-7 has been offline for over an hour");
+    expect(banner).toHaveTextContent("so it can't confirm that yet.");
+    expect(banner).toHaveTextContent("You can revive it once laptop-7 is back online.");
+    expect(screen.queryByRole("button", { name: "Revive" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Extend 1 day" })).toBeNull();
+    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+  });
+
+  it("RS4c: lost to an outage with the computer back and no late stop reports the stop, with Revive, Extend and End run", async () => {
+    renderBanner(lost());
+    const banner = await screen.findByTestId("run-lifetime-local-stopped");
+    expect(banner).toHaveTextContent("This run's network was stopped");
+    expect(banner).toHaveTextContent("laptop-7 reports its runner stopped this run's network after an hour offline.");
+    expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+    expect(listAuditMock).toHaveBeenCalledWith(expect.any(String), { action: "run.containment.reassert" });
+  });
+
+  it("RS4d: a late-stop row says Wardyn had the runner stop the network when it came back", async () => {
+    listAuditMock.mockResolvedValue([{ id: "a1", action: "run.containment.reassert", data: { containment: "late" } }]);
+    renderBanner(lost());
+    expect(await screen.findByText(/was still on when it came back, so Wardyn had its runner stop it then\./)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
+  });
+
+  it("says nothing about the stop until the late-stop row has been read, and falls back to the unconfirmed sentence if it cannot be", async () => {
+    let settle: (v: unknown) => void = () => {};
+    listAuditMock.mockReturnValueOnce(new Promise((r) => (settle = r)));
+    const first = renderBanner(lost());
+    expect(first.container).toBeEmptyDOMElement();
+    settle([]);
+    await screen.findByTestId("run-lifetime-local-stopped");
+    first.unmount();
+    listAuditMock.mockRejectedValueOnce(new Error("audit down"));
+    renderBanner(lost());
+    await waitFor(() => expect(screen.getByTestId("run-lifetime-local-stopped")).toBeInTheDocument());
+    expect(screen.queryByText(/was still on when it came back/)).toBeNull();
+  });
+
+  // C3: the remote sentence is not for a local run, and a remote run still gets it.
+  it("a local lost run never shows the remote outage sentence; a remote one still does", async () => {
+    const localRun = renderBanner(lost());
+    await screen.findByTestId("run-lifetime-local-stopped");
+    expect(screen.queryByText(/Wardyn was unreachable/)).toBeNull();
+    expect(screen.queryByTestId("run-lifetime-lost")).toBeNull();
+    localRun.unmount();
+    listAuditMock.mockClear();
+    renderBanner(detail({ state: "RUNNING", placement: "remote", lost_reason: "outage", lost_at: new Date(NOW - 60_000).toISOString() }));
+    expect(screen.getByTestId("run-lifetime-lost")).toHaveTextContent("Wardyn was unreachable for over an hour");
+    expect(listAuditMock).not.toHaveBeenCalled();
+  });
+
+  // RN3-D6: a local run never shows the remote Lost sentence, whatever the lost reason.
+  it.each(["outage", "reboot"] as const)("a local run lost to a %s never shows the remote Lost title", async (reason) => {
+    renderBanner(lost({ lost_reason: reason }));
+    await screen.findByTestId("run-lifetime-local-stopped");
+    expect(screen.queryByTestId("run-lifetime-lost")).toBeNull();
+    expect(screen.queryByText("This run's sandbox stopped")).toBeNull();
+    expect(screen.queryByText(/The machine it ran on restarted/)).toBeNull();
+  });
+
+  it("a local run lost to a reboot with its computer offline cannot confirm the stop, with End run only", async () => {
+    renderBanner(lost({ lost_reason: "reboot", runner_online: false }));
+    await screen.findByTestId("run-lifetime-local-lapse");
+    expect(screen.queryByRole("button", { name: "Revive" })).toBeNull();
+    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+  });
+
+  // WARDYN_HA: the server leaves runner_online unset when it cannot know; unset is unknown, never offline.
+  it("an unknown liveness (runner_online unset) shows no offline banner on a running local run", () => {
+    const { container } = renderBanner(local({ runner_online: undefined }));
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("a local run on an online computer, running normally, has no local banner", () => {
+    const { container } = renderBanner(local());
+    expect(container).toBeEmptyDOMElement();
   });
 });

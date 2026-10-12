@@ -29,6 +29,7 @@ import { rowPresentation, waitingSignInPresentation } from "./runs-model";
 import { mayReadSignIn } from "../run-detail/sign-in-run";
 import { RUNS_ROW_ACTION } from "../../wardyn/copy/runs-landing";
 import { REVIVE, REVIVING, revivePolicy } from "../../wardyn/copy/run-lifetime";
+import { RUNNER_OFFLINE_WORD, runnerLabel, runOnChip } from "../../../lib/nav-copy";
 
 // Lazy: the read loop is for the rare sign-in row, so it stays out of the entry
 // chunk. The gate (sign-in-run) is eager, and decides whether this loads at all.
@@ -44,6 +45,12 @@ function formatDuration(startIso: string, endIso: string): string {
 
 function metaLine(run: AgentRun, adminView: boolean, own: boolean): string {
   const parts: string[] = [repoLabel(run).text];
+  // 0.9 (M-RN-3 RS8): a local run names its computer, and says so while it is offline, in neutral words in
+  // the meta line; the row's hue, word and action are rowPresentation's and unchanged.
+  if (run.placement === "local") {
+    parts.push(runOnChip(runnerLabel(run)));
+    if (run.runner_online === false) parts.push(RUNNER_OFFLINE_WORD);
+  }
   if (adminView) parts.push(ownerLabel(run.created_by, own));
   // A lease-ended run (lost_reason "ended") has no ended_at — its
   // own end time is lost_at (runs-model.ts's endedAtMs makes the same
