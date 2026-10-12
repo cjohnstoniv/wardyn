@@ -60,15 +60,12 @@ func TestRunContractRefusals(t *testing.T) {
 		{"target outside home", `,"workspaces":[` + sel(ws1, "/etc/x") + `]`, reasonWorkspaceTargetInvalid, "", 400},
 		{"target is the home", `,"workspaces":[` + sel(ws1, "/home/agent") + `]`, reasonWorkspaceTargetInvalid, "", 400},
 		{"target sibling prefix", `,"workspaces":[` + sel(ws1, "/home/agentx/work") + `]`, reasonWorkspaceTargetInvalid, "", 400},
-		{"target ok", `,"workspaces":[` + sel(ws1, "/home/agent/work") + `]`, "", "", 200},
-		{"targets equal", `,"workspaces":[` + sel(ws1, "/home/agent/work") + `,` + sel(ws2, "/home/agent/work") + `]`,
-			reasonWorkspaceTargetOverlap, "/home/agent/work is also where " + ws1 + " mounts. Give one of them another path.", 422},
-		{"target nested inside", `,"workspaces":[` + sel(ws1, "/home/agent/work") + `,` + sel(ws2, "/home/agent/work/api") + `]`,
-			reasonWorkspaceTargetOverlap, "/home/agent/work/api is inside /home/agent/work, where " + ws1 + " mounts. Two mounts can't nest.", 422},
-		{"target nested around", `,"workspaces":[` + sel(ws1, "/home/agent/work/api") + `,` + sel(ws2, "/home/agent/work") + `]`,
-			reasonWorkspaceTargetOverlap, "/home/agent/work/api is inside /home/agent/work, where " + ws2 + " mounts. Two mounts can't nest.", 422},
-		{"siblings are fine", `,"workspaces":[` + sel(ws1, "/home/agent/work") + `,` + sel(ws2, "/home/agent/worker") + `]`, "", "", 200},
-		{"one workspace may nest its own", `,"workspaces":[` + sel(ws1, "/home/agent/work") + `,` + sel(ws1, "/home/agent/work/api") + `]`, "", "", 200},
+		// Equal or nested targets are judged over every resolved target once the
+		// workspaces are seeded (run_attachments_test.go); the shape is the contract's.
+		{"a workspace listed twice", `,"workspaces":[` + sel(ws1, "/home/agent/work") + `,` + sel(ws1, "/home/agent/work/api") + `]`, reasonWorkspaceSelectionInvalid, "", 400},
+		{"workspace_id is not the first", `,"workspace_id":"` + ws2 + `","workspaces":[` + sel(ws1, "/home/agent/work") + `]`, reasonWorkspaceSelectionInvalid, "", 400},
+		{"a drives root is reserved", `,"workspaces":[` + sel(ws1, "/home/agent/shared/x") + `]`, reasonWorkspaceTargetInvalid, "", 400},
+		{"a ref read as an option", `,"workspaces":[{"workspace_id":"` + ws1 + `","repos":[{"repo":"acme/api","ref":"--upload-pack=x"}]}]`, reasonRunRefInvalid, "", 400},
 		{"drive equal", `,"drive":{"enabled":true},"workspaces":[` + sel(ws1, "/home/agent/drive") + `]`,
 			reasonWorkspaceTargetOverlap, "/home/agent/drive is also where your drive mounts. Give one of them another path.", 422},
 		{"drive nested", `,"drive":{"enabled":true},"workspaces":[` + sel(ws1, "/home/agent/drive/x") + `]`,
@@ -257,6 +254,7 @@ func TestWorkspaceRefusalSentencesMatchGolden(t *testing.T) {
 		"PIN_CONFLICT":     func(g []string) string { return workspacePinConflictMsg(a(g, 0), a(g, 1), a(g, 2), a(g, 3)) },
 		"IMAGE_CONFLICT":   func(g []string) string { return imageConflictMsg(a(g, 0), a(g, 1)) },
 		"ADO_ORG_CONFLICT": func(g []string) string { return workspaceADOOrgConflictMsg(a(g, 0), a(g, 1), a(g, 2), a(g, 3)) },
+		"REPO_UNKNOWN":     func(g []string) string { return workspaceRepoUnknownMsg(a(g, 0), a(g, 1)) },
 	}
 	if len(golden) != len(got) {
 		t.Fatalf("golden has %d sentences, the server has %d", len(golden), len(got))

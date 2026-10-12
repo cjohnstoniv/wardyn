@@ -265,12 +265,16 @@ func startFolderShapeRefusal(req createRunRequest) *runRefusal {
 	}
 	switch f.Kind {
 	case client.StartFolderImageDefault:
-		if f.Attachment != "" || f.Subpath != "" {
+		if f.Attachment != "" || f.Repo != "" || f.DriveID != "" || f.Subpath != "" {
 			return runError(http.StatusBadRequest, reasonStartFolderInvalid, "start_folder: the image default carries no attachment or subpath")
 		}
 	case client.StartFolderAttachment:
-		if f.Attachment == "" || len(f.Attachment) > maxRunRepoLen || !controlCharFree(f.Attachment) {
+		if (f.Attachment == "") == (f.DriveID == "") || len(f.Attachment) > maxRunRepoLen || !controlCharFree(f.Attachment) ||
+			len(f.DriveID) > maxRunRepoLen || !controlCharFree(f.DriveID) {
 			return runError(http.StatusBadRequest, reasonStartFolderInvalid, "start_folder.attachment: name one attachment of this run")
+		}
+		if f.Repo != "" && (f.Attachment == "" || f.Attachment == client.StartFolderDrive || len(f.Repo) > maxRunRepoLen || !controlCharFree(f.Repo)) {
+			return runError(http.StatusBadRequest, reasonStartFolderInvalid, "start_folder.repo: name a repository of the workspace attachment")
 		}
 		if !startFolderSubpathOK(f.Subpath) {
 			return runError(http.StatusBadRequest, reasonStartFolderInvalid, startFolderShapeMsg(f.Subpath))
@@ -391,8 +395,10 @@ func runModeUnavailable(req createRunRequest) (path, what string) {
 			return p, p + ": a component tool"
 		}
 	}
-	if f := req.StartFolder; f != nil && f.Kind == client.StartFolderAttachment {
-		return "start_folder", "start_folder: a folder inside an attachment"
+	// ponytail: drive_id waits for D-112-113's drive list; a legacy drive starts
+	// through attachment "drive".
+	if f := req.StartFolder; f != nil && f.DriveID != "" {
+		return "start_folder.drive_id", "start_folder.drive_id: a drive from the drive list"
 	}
 	return "", ""
 }
@@ -409,13 +415,14 @@ func startFolderAttachmentKnown(req createRunRequest, attachment string) bool {
 	return slices.ContainsFunc(req.Workspaces, func(sel client.WorkspaceSelection) bool { return sel.WorkspaceID == attachment })
 }
 
-// startFolderRefusal holds a start folder to the attachments of this run. The
-// subpath is already cleaned and has no ".." element (startFolderShapeRefusal),
-// so the resolved folder stays inside the mount, and the mount's own target is
-// the one workspaceTargetsRefusal validated.
+// startFolderRefusal holds a start folder to the attachments of this run, by the
+// request alone; a drive_id is runModeUnavailable's. The subpath is already
+// cleaned and has no ".." element (startFolderShapeRefusal), so the resolved
+// folder stays inside the mount. The folder itself, a named repo included, is
+// resolved over the run's targets once its workspaces are seeded (startFolderDir).
 func startFolderRefusal(req createRunRequest) *runRefusal {
 	f := req.StartFolder
-	if f == nil || f.Kind != client.StartFolderAttachment || startFolderAttachmentKnown(req, f.Attachment) {
+	if f == nil || f.Kind != client.StartFolderAttachment || f.DriveID != "" || startFolderAttachmentKnown(req, f.Attachment) {
 		return nil
 	}
 	return runError(http.StatusBadRequest, reasonStartFolderInvalid, startFolderAttachmentMsg(f.Attachment))

@@ -1899,6 +1899,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_REPO_SLUG` | string | (unset) | repo slug for the run |
 | `WARDYN_REPOS` | string (JSON) | (unset) | multi-repo spec for the run |
 | `WARDYN_EPHEMERAL_DIRS` | string (CSV) | (unset) | scratch targets a workspace's ephemeral sources ask for: `agent-run` mkdirs them in the sandbox. No host path is involved — they die with the run |
+| `WARDYN_START_FOLDER` | string | (unset) | the run's `start_folder`: a folder inside one attachment, or `image_default` for the image's own directory. `agent-run` fails rather than start elsewhere |
 | `WARDYN_USER_DRIVE` | string (`<target>:ro\|rw`) | (unset) | the run's USER DRIVE, present ONLY when one is mounted: the in-container target and the mode. An ANNOUNCEMENT, never the mechanism: the mount is made by the runner (`applyUserDriveEnv`, [`internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)). [Details](#wardyn_user_drive) |
 | `WARDYN_SSH_GRANTS` 🔒 | string (JSON) | (unset) | brokered SSH grants |
 | `WARDYN_MITM_CA_PEM` | string (PEM bundle) | (unset) | CA certificate(s) the sandbox trusts: the per-run TLS-MITM CA when active, with the operator's `WARDYN_TRUSTED_CA_FILE` bundle appended when configured (`installSandboxTrustedCA`, [`internal/api/runs_dispatch_llm.go`](../internal/api/runs_dispatch_llm.go)). [Details](#wardyn_mitm_ca_pem) |
