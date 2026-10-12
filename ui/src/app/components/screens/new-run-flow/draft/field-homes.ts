@@ -73,6 +73,7 @@ export type KnownLaunchReason = NewRunReason | PlacementReason | RunModeReason |
 export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   placement_invalid: "document", image_conflict: "document", allowed_image_invalid: "document",
   workspace_target_invalid: "files", workspace_target_overlap: "files", workspace_pin_conflict: "files",
+  workspace_selection_invalid: "files", workspace_repo_unknown: "files", run_ref_invalid: "files",
   workspace_ado_org_conflict: "files",
   resources_invalid: "review", request_field_unavailable: "review",
   override_invalid: "tools", override_refused: "tools",
