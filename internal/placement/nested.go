@@ -20,9 +20,11 @@ import (
 // exempts a newly added child: both the table and this closed schema must cover it.
 var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.Config](): strings.Fields("RunID ControlPlaneURL ControlPlaneCAPEM RunToken Policy Injection Listen DecisionBufferSize MITMCACertPEM MITMCAKeyPEM MITMHosts GitGrants PATGrants " +
-		"BrokeredPATGrantIDs ADOGrant AzureGates GitHubAPI MITMLLM UpstreamProxyURL UpstreamProxyNoProxy TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail Unattended Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes"),
+		"BrokeredPATGrantIDs ADOGrant AzureGates GitHubAPI MITMLLM UpstreamProxyURL UpstreamProxyNoProxy TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail Unattended Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes MCPServers MCPBindings"),
 	reflect.TypeFor[proxy.InjectionConfig]():   strings.Fields("InjectionRule GrantID"),
 	reflect.TypeFor[proxy.ViaOrgRoute]():       strings.Fields("GrantID Host"),
+	reflect.TypeFor[proxy.MCPServerConfig]():   strings.Fields("Key URL GrantID Ordinal"),
+	reflect.TypeFor[proxy.MCPBinding]():        strings.Fields("Harness SHA256 Servers"),
 	reflect.TypeFor[LocalPlan]():               strings.Fields("Spec Origins CredentialIntents OrgConfigKeys VerifiedLocalPaths UpstreamProxySecretRef TrustedOutput SelfDefinedComponents LocalSelfDefinedComponents Delivery Posture ConfinementFloor"),
 	reflect.TypeFor[CredentialOrigin]():        strings.Fields("Class Delivery GrantKind Stored OwnNamespace OwnerOnly ResidentOptIn"),
 	reflect.TypeFor[CredentialIntent]():        strings.Fields("Field Origin"),

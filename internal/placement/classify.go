@@ -165,6 +165,8 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "HarnessCredentials", Class: ClassExempt, Rule: RuleExempt, Variant: "SHA-256 of each harness's approval credential; a digest, never the plaintext, which goes to that harness's own process as secret env"},
 	{Struct: StructProxyConfig, Field: "HarnessToolRules", Class: ClassExempt, Rule: RuleExempt, Variant: "tool rules per included harness; policy content, no credential"},
 	{Struct: StructProxyConfig, Field: "ViaOrgRoutes", Class: ClassExempt, Rule: RuleExempt, Variant: "grant id and destination host of each via_org grant; no credential, and the organisation re-checks both"},
+	{Struct: StructProxyConfig, Field: "MCPServers", Class: ClassExempt, Rule: RuleExempt, Variant: "key, URL and the grant id of each MCP server's header credential; no credential, which the broker resolves from the control plane per request"},
+	{Struct: StructProxyConfig, Field: "MCPBindings", Class: ClassExempt, Rule: RuleExempt, Variant: "SHA-256 of each harness's MCP token and its server keys; a digest, never the token"},
 
 	// Grant eligibility is classified even when approval has withheld its dispatch value.
 	{Struct: StructGrantKind, Field: "api_key", Variant: "own namespace", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},

@@ -79,6 +79,9 @@ type ComponentDefinition struct {
 	Config  map[string]string `json:"config,omitempty"`
 	// CLI marks an org row as a CLI credential card (azure, aws or github).
 	CLI *ComponentCLI `json:"cli,omitempty"`
+	// MCP makes the component a remote MCP server, which a run's harnesses
+	// reach only through the proxy's broker route (component_mcp.go).
+	MCP *ComponentMCP `json:"mcp,omitempty"`
 }
 
 // ComponentSecret is one secret a component carries.
@@ -146,6 +149,9 @@ type ComponentRef struct {
 	Repos []string `json:"repos,omitempty"`
 	// Access is read or write; empty reads as read.
 	Access string `json:"access,omitempty"`
+	// MCPHarnesses are the included harnesses (tools[].id) an MCP component's
+	// server is turned on for. Absent means every harness that can take it.
+	MCPHarnesses []string `json:"mcp_harnesses,omitempty"`
 }
 
 // The built-in Git provider components a ComponentRef may name.
@@ -187,6 +193,10 @@ type RunComponent struct {
 	// Version is the stored component's version at launch; 0 for inline.
 	Version    int                 `json:"version"`
 	Definition ComponentDefinition `json:"definition"`
+	// MCPHarnesses are the harnesses an MCP component's server was turned on
+	// for at launch. Not personal data: it survives an erasure, so a revive
+	// still knows which harness reached which server.
+	MCPHarnesses []string `json:"mcp_harnesses,omitempty"`
 }
 
 var (
@@ -217,6 +227,9 @@ func (d ComponentDefinition) Validate(validHost func(string) error, personDefine
 		return err
 	}
 	if err := d.validateCLI(personDefined); err != nil {
+		return err
+	}
+	if err := d.validateMCP(); err != nil {
 		return err
 	}
 	if len(d.Secrets) > MaxComponentSecrets {
@@ -475,7 +488,11 @@ func (r ComponentRef) Validate(validHost func(string) error) error {
 		return errors.New("org, repos and access: scope a builtin component only")
 	case (r.ID == nil) == (r.Inline == nil):
 		return errors.New("give exactly one of id and inline")
-	case r.ID != nil:
+	}
+	if err := validMCPHarnesses(r.MCPHarnesses); err != nil {
+		return err
+	}
+	if r.ID != nil {
 		if r.Name != "" {
 			return errors.New("name: labels an inline component only")
 		}
@@ -501,8 +518,8 @@ const (
 // validateBuiltin checks a built-in Git provider reference's shape. That the
 // person may attach it, and what it grants, is the caller's.
 func (r ComponentRef) validateBuiltin() error {
-	if r.ID != nil || r.Inline != nil || r.Name != "" {
-		return errors.New("builtin: give it alone, without id, inline or name")
+	if r.ID != nil || r.Inline != nil || r.Name != "" || r.MCPHarnesses != nil {
+		return errors.New("builtin: give it alone, without id, inline, name or mcp_harnesses")
 	}
 	if r.Builtin != ComponentBuiltinGitHub && r.Builtin != ComponentBuiltinAzureDevOps {
 		return fmt.Errorf("builtin: %q is not one of %s, %s", r.Builtin, ComponentBuiltinGitHub, ComponentBuiltinAzureDevOps)
@@ -704,6 +721,116 @@ func (a *CLIAzure) validate() error {
 	}
 	if a.Access != ComponentAccessRead && a.Access != ComponentAccessWrite {
 		return fmt.Errorf("cli.azure.access: %q is not read or write", a.Access)
+	}
+	return nil
+}
+
+// ComponentMCPTransportHTTP is the one MCP transport a component may use:
+// streamable HTTP.
+const ComponentMCPTransportHTTP = "http"
+
+// Bounds on an MCP component and on what one reference turns it on for.
+const (
+	MaxComponentMCPURLBytes  = 2048
+	MaxComponentMCPHarnesses = 8
+)
+
+// ComponentMCP is a remote MCP server. The run's harnesses never reach URL
+// itself: each is configured with the proxy's broker route, which adds the
+// server's header credential, applies the run's tool rules to its tools and is
+// the only network path to the server.
+type ComponentMCP struct {
+	// URL is the server's streamable HTTP address: https, no userinfo, its
+	// host one of the component's hosts.
+	URL       string `json:"url"`
+	Transport string `json:"transport"` // http
+}
+
+// harnessIDRE is a harness id as tools[].id names one.
+var harnessIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+
+// validateMCP checks the mcp block. Its credential goes to the server and never
+// into the sandbox, so its only secret mode is a header to the server's own
+// host, over TLS.
+func (d ComponentDefinition) validateMCP() error {
+	m := d.MCP
+	if m == nil {
+		return nil
+	}
+	if d.CLI != nil {
+		return errors.New("mcp: a component is an MCP server or a CLI credential, not both")
+	}
+	switch m.Transport {
+	case ComponentMCPTransportHTTP:
+	case "sse":
+		return errors.New("mcp.transport: servers that use SSE are not supported yet; use the server's streamable HTTP address")
+	default:
+		return fmt.Errorf("mcp.transport: %q is not http", m.Transport)
+	}
+	host, err := MCPURLDestination(m.URL)
+	if err != nil {
+		return fmt.Errorf("mcp.url: %w", err)
+	}
+	if !slices.ContainsFunc(d.Hosts, func(h string) bool { return mcpHostAdmits(h, host) }) {
+		return fmt.Errorf("mcp.url: its host %q must be one of this component's hosts", host.String())
+	}
+	for i, s := range d.Secrets {
+		del := s.Delivery
+		switch {
+		case del.Mode != ComponentDeliveryHeader:
+			return fmt.Errorf("secrets[%d].delivery.mode: an MCP server's secret is sent to the server as a header, never into the sandbox", i)
+		case del.Host != host.Host:
+			return fmt.Errorf("secrets[%d].delivery.host: an MCP server's secret goes to the server's host %q", i, host.Host)
+		case del.PlainHTTP:
+			return fmt.Errorf("secrets[%d].delivery.plain_http: an MCP server's secret is only ever sent over TLS", i)
+		}
+	}
+	return nil
+}
+
+// MCPURLDestination checks an MCP server URL and returns its host and port as
+// a destination (Port 0 for the standard https port).
+func MCPURLDestination(raw string) (Destination, error) {
+	if len(raw) > MaxComponentMCPURLBytes || !printable(raw) {
+		return Destination{}, fmt.Errorf("must be printable text of at most %d bytes", MaxComponentMCPURLBytes)
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" || u.Opaque != "" {
+		return Destination{}, errors.New("must be an https URL with a host, and no credentials or fragment")
+	}
+	d, err := ParseDestination(u.Host)
+	if err != nil || d.Wildcard {
+		return Destination{}, fmt.Errorf("%q is not one host", u.Host)
+	}
+	if d.Port == 443 {
+		d.Port = 0
+	}
+	return d, nil
+}
+
+// mcpHostAdmits reports whether a component host entry names the MCP URL's
+// host on its port, the standard port written bare or as :443.
+func mcpHostAdmits(entry string, url Destination) bool {
+	e, err := ParseDestination(entry)
+	if err != nil || e.Wildcard || e.Host != url.Host {
+		return false
+	}
+	return e.Port == url.Port || (url.Port == 0 && e.Port == 443)
+}
+
+// validMCPHarnesses checks the harness list of one reference: harness ids,
+// each once.
+func validMCPHarnesses(ids []string) error {
+	if len(ids) > MaxComponentMCPHarnesses {
+		return fmt.Errorf("mcp_harnesses: %d entries exceeds the %d-harness limit", len(ids), MaxComponentMCPHarnesses)
+	}
+	for i, id := range ids {
+		if !harnessIDRE.MatchString(id) {
+			return fmt.Errorf("mcp_harnesses[%d]: %q is not a harness id", i, id)
+		}
+		if slices.Contains(ids[:i], id) {
+			return fmt.Errorf("mcp_harnesses[%d]: %q is listed twice", i, id)
+		}
 	}
 	return nil
 }
