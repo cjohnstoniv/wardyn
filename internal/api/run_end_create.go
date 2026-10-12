@@ -82,7 +82,7 @@ func runTypeForEnd(e types.RunExperience) types.RunnerPoolRunType {
 func createEndSources(in createEndInput) ([]runnerpool.SourceLimits, error) {
 	size := sizing.EffectiveLimits()
 	deploymentSize := types.ResourceLimits{CPUMillis: int(size.CPUMillis), MemoryMiB: int(size.MemoryMiB)}
-	dep, err := runnerpool.DeploymentSource(deploymentSize, in.maxAgeSec, 0)
+	dep, err := runnerpool.DeploymentSource(deploymentSize, types.EphemeralProvider{}, in.maxAgeSec, 0)
 	if err != nil {
 		return nil, err
 	}
