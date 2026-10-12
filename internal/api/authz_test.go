@@ -761,6 +761,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"DELETE /api/v1/workspaces/{id}":          {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"POST /api/v1/workspaces/{id}/scan":       {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"POST /api/v1/workspaces/{id}/build":      {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
+	"GET /api/v1/workspaces/{id}/branches":    {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"GET /api/v1/runs/{id}":                   {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/events":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/output":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
@@ -1545,9 +1546,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// since #1232 added GET /runs/{id}/output; 28 since #1425 added GET
 		// /runs/{id}/policy; 29 since #1428 added GET /runs/{id}/ado-tokens; 30
 		// since #1891 added GET /runs/{id}/sign-in; 32 since 0.8.9 added PUT and
-		// DELETE /me/components/{id}.
-		if probed != 32 {
-			t.Errorf("probed %d classOwner routes, want 32 — a route that left classOwner takes its tier "+
+		// DELETE /me/components/{id}; 33 since 0.9 added GET
+		// /workspaces/{id}/branches.
+		if probed != 33 {
+			t.Errorf("probed %d classOwner routes, want 33 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
