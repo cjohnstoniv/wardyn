@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -119,6 +121,17 @@ type syncRunner struct {
 	hangRead string
 	release  chan struct{}
 	liar     map[string]int64
+	// bigDir names a sandbox directory that lists more 255-byte names than the entry cap allows;
+	// served counts the entries the listing handed out.
+	bigDir string
+	// start, when set, is where sftp-server starts whatever directory was asked for.
+	start string
+	// failMsg makes listing the directory, or reading the file, with that base
+	// name fail with that message; stderr is what sftp-server writes before it
+	// exits.
+	failMsg map[string]string
+	stderr  string
+	served  atomic.Int64
 }
 
 func (r *syncRunner) ExecStream(ctx context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
@@ -129,6 +142,9 @@ func (r *syncRunner) ExecStream(ctx context.Context, _ string, spec runner.ExecS
 		if fi, err := os.Stat(r.host(spec.Argv[i+1])); err == nil && fi.IsDir() {
 			start = spec.Argv[i+1]
 		}
+	}
+	if r.start != "" {
+		start = r.start
 	}
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
@@ -141,6 +157,7 @@ func (r *syncRunner) ExecStream(ctx context.Context, _ string, spec runner.ExecS
 	go func() {
 		defer close(done)
 		_ = srv.Serve()
+		_, _ = io.WriteString(errW, r.stderr)
 		_ = outW.Close()
 		_ = errW.Close()
 		time.Sleep(r.exitDelay)
@@ -175,6 +192,9 @@ type rootedFS struct{ r *syncRunner }
 func (h *rootedFS) Fileread(rq *sftp.Request) (io.ReaderAt, error) {
 	if h.r.hangRead != "" && path.Base(rq.Filepath) == h.r.hangRead {
 		<-h.r.release
+	}
+	if msg, ok := h.r.failMsg[path.Base(rq.Filepath)]; ok {
+		return nil, errors.New(msg)
 	}
 	return os.Open(h.r.host(rq.Filepath))
 }
@@ -230,10 +250,44 @@ func (l fileLister) ListAt(out []os.FileInfo, off int64) (int, error) {
 	return n, nil
 }
 
+// endlessLister lists more entries than the entry cap allows (generated on
+// demand, so the fake sandbox holds none of them): every entry is a regular
+// file with a distinct 255-byte name.
+type endlessLister struct{ served *atomic.Int64 }
+
+const endlessEntries = maxSyncEntries + 50_000
+
+type longEntry struct{ name string }
+
+func (e longEntry) Name() string     { return e.name }
+func (longEntry) Size() int64        { return 1 }
+func (longEntry) Mode() os.FileMode  { return 0o644 }
+func (longEntry) ModTime() time.Time { return time.Unix(1, 0) }
+func (longEntry) IsDir() bool        { return false }
+func (longEntry) Sys() any           { return nil }
+
+func (l endlessLister) ListAt(out []os.FileInfo, off int64) (int, error) {
+	n := 0
+	for ; n < len(out) && off+int64(n) < endlessEntries; n++ {
+		out[n] = longEntry{fmt.Sprintf("%0255d", off+int64(n))}
+	}
+	l.served.Add(int64(n))
+	if n < len(out) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
 func (h *rootedFS) Filelist(rq *sftp.Request) (sftp.ListerAt, error) {
 	p := h.r.host(rq.Filepath)
 	switch rq.Method {
 	case "List":
+		if msg, ok := h.r.failMsg[path.Base(rq.Filepath)]; ok {
+			return nil, errors.New(msg)
+		}
+		if h.r.bigDir != "" && p == h.r.host(h.r.bigDir) {
+			return endlessLister{&h.r.served}, nil
+		}
 		ents, err := os.ReadDir(p)
 		if err != nil {
 			return nil, err
@@ -353,7 +407,7 @@ func (g *syncRig) syncer(remote string, pull bool) (*syncer, *syncSession, strin
 		g.t.Fatal(err)
 	}
 	g.t.Cleanup(func() { _ = lroot.Close() })
-	return &syncer{c: sess.sftp, root: lroot, o: syncOptions{remote: remote, pull: pull, maxPullBytes: defaultMaxPullBytes}, st: st, stateFile: stateFile}, sess, root
+	return &syncer{c: sess.sftp, meter: sess.meter, root: lroot, o: syncOptions{remote: remote, pull: pull, maxPullBytes: defaultMaxPullBytes}, st: st, stateFile: stateFile}, sess, root
 }
 
 func putSyncFile(t *testing.T, p, body string, mode os.FileMode) {
