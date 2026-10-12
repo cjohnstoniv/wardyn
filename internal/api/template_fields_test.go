@@ -763,7 +763,6 @@ func TestTemplateRunModeIsHeldToTheRunsOwnRules(t *testing.T) {
 	const head = `"api_version":"wardyn/v1","kind":"RunTemplate","coverage":"partial"`
 	cases := []struct{ name, body, path, reason string }{
 		{"run mode: a component tool is not available yet", `{` + head + `,"intent":{"tools":[{"id":"x","kind":"component","component":{"inline":{"hosts":["a.example.com"]}}}]}}`, "intent.tools[0]", reasonTemplateFieldUnavailable},
-		{"run mode: a folder on a listed drive is not available yet", `{` + head + `,"intent":{"start_folder":{"kind":"attachment","drive_id":"d1","subpath":"src"}}}`, "intent.start_folder.drive_id", reasonTemplateFieldUnavailable},
 		{"run mode: the older fields do not ride beside it", `{` + head + `,"intent":{"experience":"interactive","agent":"claude-code"}}`, "intent", reasonRunModeConflict},
 		{"run mode: a background task has no idle stop", `{` + head + `,"intent":{"experience":"background","workload":{"kind":"command","command":"make"},"inline_policy":{"auto_stop_after_sec":600}}}`, "intent", reasonRunModeConflict},
 		{"run mode: no repositories beside a repository", `{` + head + `,"intent":{"no_repositories_or_drives":true,"repo":"acme/api"}}`, "intent", reasonRunModeConflict},

@@ -124,11 +124,15 @@ var errAgentSecretBesideShare = errors.New("a secret delivered as a file needs t
 // agentSecretsAllowDrive is CreateSandbox's preflight half of
 // applyAgentSecretFSGroup: nil unless files carry a delivered secret AND the
 // run mounts a drive that is not a managed one.
-func agentSecretsAllowDrive(files []runner.ManagedFile, drive *types.DriveMount) error {
-	if drive == nil || drive.Backend.Kind() == types.DriveKindManaged || !hasAgentSecret(files) {
+func agentSecretsAllowDrive(files []runner.ManagedFile, drives []types.DriveMount) error {
+	if !hasShareDrive(drives) || !hasAgentSecret(files) {
 		return nil
 	}
 	return errAgentSecretBesideShare
+}
+
+func hasShareDrive(drives []types.DriveMount) bool {
+	return slices.ContainsFunc(drives, func(d types.DriveMount) bool { return d.Backend.Kind() != types.DriveKindManaged })
 }
 
 // applyAgentSecretFSGroup sets the agent pod's fsGroup to agentFSGroup when

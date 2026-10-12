@@ -150,6 +150,8 @@ interface UserDriveGrantInput {
   subject_type: CapabilitySubjectType;
   subject: string;
   drive_id: string;
+  /** Allocates the drive beside the subject's others instead of replacing them. */
+  additional?: boolean;
   priority: number;
   size_mib_override?: number;
   writable_override?: boolean;
