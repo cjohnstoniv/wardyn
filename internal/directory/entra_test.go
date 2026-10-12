@@ -31,6 +31,7 @@ type fakeGraph struct {
 	// last request seen per path, for header/query assertions.
 	lastUsers  atomic.Pointer[recorded]
 	lastGroups atomic.Pointer[recorded]
+	lastSP     atomic.Pointer[recorded]
 
 	// canned responses
 	users     []graphUser
@@ -76,6 +77,7 @@ func newFakeGraph(t *testing.T) *fakeGraph {
 
 	mux.HandleFunc("/v1.0/servicePrincipals", func(w http.ResponseWriter, r *http.Request) {
 		f.spCalls.Add(1)
+		f.lastSP.Store(&recorded{query: r.URL.Query(), headers: r.Header.Clone()})
 		if f.spStatus != 0 {
 			w.WriteHeader(f.spStatus)
 			_, _ = w.Write([]byte(`{"error":{"code":"Authorization_RequestDenied","message":"Insufficient privileges to complete the operation."}}`))
@@ -169,6 +171,35 @@ func TestAppRoleLookupIsFilterNotSearch(t *testing.T) {
 	}
 	if f.spCalls.Load() != 1 {
 		t.Fatalf("servicePrincipals calls = %d, want 1", f.spCalls.Load())
+	}
+}
+
+// With no sign-in app named, App Roles are read from the credential app's own
+// service principal: the shape where the sign-in app is also the directory app.
+func TestAppRolesReadTheCredentialAppByDefault(t *testing.T) {
+	f := newFakeGraph(t)
+	if _, err := f.dir(t).Search(context.Background(), "war", KindAppRole); err != nil {
+		t.Fatalf("approle search: %v", err)
+	}
+	if got := f.lastSP.Load().query.Get("$filter"); got != "appId eq 'client-guid'" {
+		t.Fatalf("servicePrincipals $filter = %q, want the credential app's appId", got)
+	}
+}
+
+// The roles claim carries the sign-in app's App Roles, so a dedicated directory
+// app reads the sign-in app's service principal, not its own.
+func TestAppRolesReadTheSignInApp(t *testing.T) {
+	f := newFakeGraph(t)
+	d, err := newEntra(EntraConfig{TenantID: "tenant-guid", ClientID: "dir-app", ClientSecret: "s3cret", AppRolesAppID: "signin-app"},
+		f.srv.URL+"/token", f.srv.URL+"/v1.0")
+	if err != nil {
+		t.Fatalf("newEntra: %v", err)
+	}
+	if _, err := d.Search(context.Background(), "war", KindAppRole); err != nil {
+		t.Fatalf("approle search: %v", err)
+	}
+	if got := f.lastSP.Load().query.Get("$filter"); got != "appId eq 'signin-app'" {
+		t.Fatalf("servicePrincipals $filter = %q, want the sign-in app's appId", got)
 	}
 }
 
