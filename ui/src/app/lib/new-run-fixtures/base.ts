@@ -18,7 +18,7 @@ import type {
 } from "../types/new-run-contract";
 import type { PolicyPreviewResult, ProvenanceEntry } from "../types/policy-preview";
 import type { RunPolicySpec } from "../types/policy";
-import type { PreflightResult } from "../types/runs";
+import type { PreflightResult } from "../types/preflight";
 
 /** The same provenance rows decoded from the policy-preview and preflight wire. */
 export type FixtureProvenance = ProvenanceEntry;
