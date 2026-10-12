@@ -22,8 +22,9 @@ import (
 // b000..., served 100 a page with a Link header, and a record of the token
 // request and the hand-back.
 type branchesFake struct {
-	n      int
-	status int // non-zero: every repository read answers it
+	n         int
+	status    int  // non-zero: every repository read answers it
+	noInstall bool // the installation lookup names no installation (id 0)
 
 	mu        sync.Mutex
 	perms     string
@@ -41,6 +42,8 @@ func (f *branchesFake) serve(t *testing.T) *githubMinter {
 		case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/installation/token"):
 			f.revoked = true
 			w.WriteHeader(http.StatusNoContent)
+		case strings.HasSuffix(r.URL.Path, "/installation") && f.noInstall:
+			_, _ = w.Write([]byte(`{"id": 0}`))
 		case strings.HasSuffix(r.URL.Path, "/installation"):
 			_, _ = w.Write([]byte(`{"id": 42}`))
 		case strings.HasSuffix(r.URL.Path, "/access_tokens"):
@@ -125,5 +128,19 @@ func TestListBranches_RefusalIsErrGitHubRefused(t *testing.T) {
 	}
 	if !f.revoked {
 		t.Fatal("the listing token was not handed back after a refusal")
+	}
+}
+
+// An App with no installation on the repository's owner is a refusal too
+// (forge_refused), not an outage; nothing is minted, so nothing is revoked.
+func TestListBranches_NoInstallationIsErrGitHubRefused(t *testing.T) {
+	f := &branchesFake{noInstall: true}
+	m := f.serve(t)
+	_, _, _, err := m.ListBranches(context.Background(), "acme/widgets", 200)
+	if !errors.Is(err, ErrGitHubRefused) {
+		t.Fatalf("err = %v, want ErrGitHubRefused", err)
+	}
+	if f.perms != "" {
+		t.Fatalf("a token was requested (%s) with no installation", f.perms)
 	}
 }

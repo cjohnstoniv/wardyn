@@ -145,6 +145,7 @@ func TestWorkspaceBranches_UniformNotFound(t *testing.T) {
 	srv, _ := newBranchServer(t, types.SiteConfig{}, deny, nil, open, walled, foreign)
 	member := memberCookie(t)
 	security := ssoSession(t, "sub-sec", "sec@corp.example", oidc.RoleSecurityAdmin)
+	const unknown = "https://other.invalid/q/_git/z"
 
 	wantCode, want := getBranches(t, srv, member, uuid.New(), "https://example.invalid/x/_git/y")
 	if wantCode != http.StatusNotFound {
@@ -154,6 +155,11 @@ func TestWorkspaceBranches_UniformNotFound(t *testing.T) {
 		"another member's workspace":             func() (int, string) { return getBranches(t, srv, member, foreign.ID, foreign.Sources[0].Source) },
 		"security admin on a member's workspace": func() (int, string) { return getBranches(t, srv, security, foreign.ID, foreign.Sources[0].Source) },
 		"a workspace the member is not granted":  func() (int, string) { return getBranches(t, srv, member, walled.ID, walled.Sources[0].Source) },
+		// A repo the workspace does not carry: the launch door answers before
+		// the repo check, so no 422 names the workspace to someone refused it.
+		"another member's workspace, unknown repo": func() (int, string) { return getBranches(t, srv, member, foreign.ID, unknown) },
+		"security admin, unknown repo":             func() (int, string) { return getBranches(t, srv, security, foreign.ID, unknown) },
+		"not granted, unknown repo":                func() (int, string) { return getBranches(t, srv, member, walled.ID, unknown) },
 	} {
 		if code, body := got(); code != wantCode || body != want {
 			t.Errorf("%s = %d %q, want the random id's %d %q", name, code, body, wantCode, want)
@@ -409,6 +415,12 @@ func TestADOBranchTarget(t *testing.T) {
 		{services, "https://contoso.visualstudio.com/DefaultCollection/proj/_git/app", adoOwnPATAPIBase + "/contoso", "proj", "app", true},
 		{services, "https://dev.azure.com/contoso/_git/app", adoOwnPATAPIBase + "/contoso", "app", "app", true},
 		{services, "https://dev.azure.com/contoso/proj/app", "", "", "", false},
+		{services, "https://dev.azure.com/contoso/proj/_git/..", "", "", "", false},
+		{services, "https://dev.azure.com/contoso/proj/_git/.", "", "", "", false},
+		{services, "https://dev.azure.com/contoso/../_git/app", "", "", "", false},
+		{services, "https://dev.azure.com/contoso/_git/..", "", "", "", false},
+		{services, "https://dev.azure.com/contoso/proj/_git/%2e%2e", "", "", "", false},
+		{services, "https://dev.azure.com/contoso/%2E%2E/_git/app", "", "", "", false},
 		{srv, "https://tfs.corp.example/tfs/Coll/proj/_git/app", "https://tfs.corp.example/tfs/Coll", "proj", "app", true},
 	} {
 		base, project, name, ok := adoBranchTarget(sc, tc.lane, tc.repo)

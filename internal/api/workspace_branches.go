@@ -274,12 +274,19 @@ func adoBranchTarget(sc types.SiteConfig, a adoEntraRun, repo string) (base, pro
 		}
 	}
 	switch {
-	case len(segs) == 3 && segs[1] == "_git" && segs[0] != "" && segs[2] != "":
-		return base, segs[0], segs[2], true
-	case len(segs) == 2 && segs[0] == "_git" && segs[1] != "":
-		return base, segs[1], segs[1], true
+	case len(segs) == 3 && segs[1] == "_git":
+		project, name = segs[0], segs[2]
+	case len(segs) == 2 && segs[0] == "_git":
+		project, name = segs[1], segs[1]
 	}
-	return "", "", "", false
+	// PathEscape leaves "." and "..", which would climb out of the repository
+	// path on the forge's own host.
+	for _, seg := range []string{project, name} {
+		if seg == "" || seg == "." || seg == ".." {
+			return "", "", "", false
+		}
+	}
+	return base, project, name, true
 }
 
 // adoBranchAuth is the Authorization value for the person's own credential,
