@@ -100,6 +100,7 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 			mustJSON(map[string]any{"kind": store.JobKindPurge, "reason": reasonOwnerAmbiguous, "unproved": forms.unproved})))
 		return fmt.Errorf("%w: the person's entra form %s names no one", errDeprovisionIncomplete, forms.unproved)
 	}
+	forms = forms.destructive()
 	isEmail := func(t string) bool { return strings.Contains(t, "@") && !slices.Contains(forms.bound, t) }
 	principals := slices.DeleteFunc(slices.Clone(forms.targets), isEmail)
 	emails := slices.DeleteFunc(slices.Clone(forms.targets), func(t string) bool { return !isEmail(t) })

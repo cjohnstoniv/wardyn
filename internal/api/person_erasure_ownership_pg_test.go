@@ -202,8 +202,8 @@ func TestPG_Erasure_AnAmbiguousEntraNameIsLeftAndListed(t *testing.T) {
 }
 
 // A SCIM leaver Y whose entra:<tenant>:<object> form is bound to another issuer's principal P: the purge
-// never deactivates P, reassigns P's workspace, deletes P's grant or erases P's credential, and its row
-// names P as not erased.
+// never reassigns P's workspace, deletes P's grant or erases P's credential, and its row names P as not
+// erased.
 func TestSCIMPurgeLeavesAnotherIssuersEntraPrincipal(t *testing.T) {
 	e := newSCIMEnv(t)
 	ctx := t.Context()
@@ -241,8 +241,10 @@ func TestSCIMPurgeLeavesAnotherIssuersEntraPrincipal(t *testing.T) {
 	if g, _ := e.userRows(p); g != 1 {
 		t.Errorf("%q holds %d grants, want its own kept", p, g)
 	}
-	if id, err := e.st.GetIdentityByObject(ctx, other, e.tenant, purgeOID); err != nil || id.DeactivatedAt != nil {
-		t.Errorf("%q's identity = %+v (%v), want it active", p, id, err)
+	// The suspension the purge begins with is the leaver's cutoff and cuts the form SCIM names, P's binding
+	// included (TestSCIMSuspendReachesEveryForm); only the destructive steps above are proved.
+	if id, err := e.st.GetIdentityByObject(ctx, other, e.tenant, purgeOID); err != nil || id.DeactivatedAt == nil {
+		t.Errorf("%q's identity = %+v (%v), want it deactivated by the suspension", p, id, err)
 	}
 	rows := e.purgeRows(e.a, e.b)
 	if len(rows) != 1 {
