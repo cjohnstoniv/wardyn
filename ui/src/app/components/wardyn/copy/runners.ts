@@ -12,7 +12,7 @@
 // Words the placement vocabulary owns ("Online", "Offline", "You haven't registered a runner.") are
 // defined here with D-UI-a's text, because the keys they were written under were not built.
 
-import { RUNNERS_NAV_TITLE } from "../../../lib/nav-copy";
+import { RUNNER_OFFLINE_WORD, RUNNERS_NAV_TITLE, runnerLabel, runOnChip } from "../../../lib/nav-copy";
 import { HOSTING_LABEL } from "../../../lib/runner-pool-refusals";
 
 export const RUNNERS = {
@@ -83,7 +83,7 @@ export const RUNNERS = {
 export const RUNNER = {
   // D-UI-a's placement words, reused byte for byte (NEW_RUN_FLOW.PLACEMENT.ONLINE / OFFLINE_WORD).
   ONLINE: "Online",
-  OFFLINE: "Offline",
+  OFFLINE: RUNNER_OFFLINE_WORD,
   TOKEN_LABEL: "Registration token",
   COPY_TOKEN: "Copy token",
   TOKEN_EXPIRES: (when: string) => `Expires ${when}. It works once.`,
@@ -175,7 +175,7 @@ export const RUN_PLACEMENT = {
    * this run could use.", carries the banned word "placement".
    */
   FILLED: "The only place this run could run.",
-  CHIP: (name: string) => `On ${name}`,
+  CHIP: runOnChip,
   EVIDENCE: "Evidence",
   REPORTED_BY: (name: string) => `Reported by ${name}`,
   REPORTED_NOTE: (name: string) =>
@@ -227,3 +227,5 @@ export const LOCAL_RUN = {
   SPOOLED: (when: string) => `Recorded offline at ${when}`,
   SPOOL_FULL: "Refused — the runner's offline log was full",
 } as const;
+
+export { runnerLabel };

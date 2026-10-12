@@ -154,3 +154,29 @@ describe("RunRow — a waiting sign-in (M2)", () => {
     expect(signInMock).not.toHaveBeenCalled();
   });
 });
+
+// 0.9 (M-RN-3 RS8): a run on a person's own computer names it in the meta line, and says Offline while it is
+// offline: neutral words, never the row's accent. rowPresentation (hue, word, action) is runs-model.test.ts's.
+describe("RunRow — a local run's meta line (RS8)", () => {
+  const local = (over: Partial<AgentRun> = {}) =>
+    makeRun({ repo: "acme/payments", state: "RUNNING", placement: "local", runner_id: "11111111-2222-3333-4444-555555555555", runner_name: "laptop-7", runner_online: true, ...over });
+  const metaOf = () => screen.getByTestId("run-row").querySelector("[title]")?.textContent ?? "";
+
+  it("adds 'On {name}' after the repo", () => {
+    renderRow(local());
+    expect(metaOf()).toMatch(/^acme\/payments · On laptop-7 · started /);
+  });
+
+  it("adds Offline while the computer is offline, and not while it is online or unknown", () => {
+    const offline = renderRow(local({ runner_online: false }));
+    expect(metaOf()).toMatch(/^acme\/payments · On laptop-7 · Offline · started /);
+    offline.unmount();
+    renderRow(local({ runner_online: undefined }));
+    expect(metaOf()).not.toMatch(/Offline/);
+  });
+
+  it("leaves a remote run's meta line as it was", () => {
+    renderRow(makeRun({ repo: "acme/payments", state: "RUNNING", placement: "remote", runner_online: false }));
+    expect(metaOf()).toMatch(/^acme\/payments · started /);
+  });
+});

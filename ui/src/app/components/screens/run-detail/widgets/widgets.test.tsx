@@ -24,11 +24,13 @@ import { HttpError } from "../../../../lib/api/core";
 import { fmtBytes } from "../../../../lib/format";
 import { RUN_COCKPIT } from "../../../wardyn/copy";
 import { EgressWidget } from "./egress";
+import type { SpooledEgressDecision } from "../../../../lib/api/audit";
 import { FilesChangedWidget } from "./files-changed";
 import { SandboxWidget } from "./sandbox";
 import { CredentialsWidget } from "./credentials";
 import { IdentityWidget } from "./identity";
 import { aheadByHours } from "../../../../lib/test-clock";
+import { OperatorProvider } from "../../../wardyn/operator-context";
 
 beforeEach(() => {
   getFilesMock.mockReset();
@@ -240,6 +242,21 @@ describe("EgressWidget", () => {
     render(<EgressWidget egress={egress} />);
     expect(screen.queryByText(/held/)).not.toBeInTheDocument();
   });
+
+  // 0.9 (M-RN-3 RS7): a decision a runner made while it was offline shows when it made it, not when it reached us;
+  // the refusal a full offline log forces says so.
+  it("shows a spooled row's own time and the full-log reason, and an ordinary row's age", () => {
+    const observed = aheadByHours(-5);
+    const egress: SpooledEgressDecision[] = [
+      { id: "e1", time: new Date().toISOString(), domain: "api.example.com", decision: "allow", spooled_at: observed },
+      { id: "e2", time: new Date().toISOString(), domain: "blocked.example.com", decision: "deny", spooled_at: observed, spool_full: true },
+      { id: "e3", time: new Date().toISOString(), domain: "plain.example.com", decision: "allow" },
+    ];
+    render(<EgressWidget egress={egress} />);
+    expect(screen.getAllByText(/^Recorded offline at /)).toHaveLength(2);
+    expect(screen.getByText("Refused — the runner's offline log was full")).toBeInTheDocument();
+    expect(screen.getByText("plain.example.com").parentElement).toHaveTextContent("just now");
+  });
 });
 
 // The command bar's h1 is the run's TITLE now, and it truncates in the
@@ -409,14 +426,14 @@ describe("IdentityWidget: Sync rows", () => {
     expect(await screen.findByText("Nothing synced yet.")).toBeInTheDocument();
   });
 
-  it.each([
-    ["SSH off", { status: "ok", ssh: { enabled: false } }, {}],
-    ["no answer from /healthz", {}, {}],
-    ["a finished run", { status: "ok", ssh: { enabled: true } }, { state: "SUCCEEDED" }],
-  ])("shows nothing at all when there is nothing synced and: %s", async (_name, health, over) => {
+  it.each<[string, Record<string, unknown>, Record<string, unknown>, number]>([
+    ["SSH off", { status: "ok", ssh: { enabled: false } }, {}, 1],
+    ["no answer from /healthz", {}, {}, 1],
+    ["a finished run", { status: "ok", ssh: { enabled: true } }, { state: "SUCCEEDED" }, 0],
+  ])("shows nothing at all when there is nothing synced and: %s", async (_name, health, over, asked) => {
     healthMock.mockResolvedValue(health);
     renderRows(over);
-    await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(over.state ? 0 : 1));
+    await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(asked));
     expect(screen.queryByText("Sync")).not.toBeInTheDocument();
     expect(screen.queryByText("Nothing synced yet.")).not.toBeInTheDocument();
   });
@@ -427,5 +444,73 @@ describe("IdentityWidget: Sync rows", () => {
     expect(screen.queryByText("Sync")).not.toBeInTheDocument();
     expect(screen.queryByText("/w")).not.toBeInTheDocument();
     expect(healthMock).not.toHaveBeenCalled();
+  });
+});
+
+// 0.9 (M-RN-3 RS3): where a run runs, and for a local run whose evidence the computer reported, whose word it is.
+describe("IdentityWidget: Runs on and Evidence", () => {
+  const base = {
+    id: "run-1",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    created_by: "me",
+    agent: "claude-code",
+    repo: "acme/widgets",
+    task: "",
+    confinement_class: "CC2",
+    state: "RUNNING",
+    spiffe_id: "spiffe://x",
+    runner_target: "docker",
+    placement: "local",
+    runner_id: "11111111-2222-3333-4444-555555555555",
+    runner_name: "laptop-7",
+    evidence_source: "runner_asserted",
+  } as AgentRun;
+  const renderAs = (run: AgentRun, principal: string) =>
+    render(
+      <OperatorProvider operator={false} principal={principal}>
+        <IdentityWidget run={run} onGoPolicy={() => {}} />
+      </OperatorProvider>,
+    );
+
+  it("a local run's owner reads 'laptop-7 · Self-Hosted', Evidence 'Reported by laptop-7', and the note", () => {
+    renderAs(base, "me");
+    expect(screen.getByText("Runs on")).toBeInTheDocument();
+    expect(screen.getByText("laptop-7 · Self-Hosted")).toBeInTheDocument();
+    expect(screen.getByText("Evidence")).toBeInTheDocument();
+    expect(screen.getByText("Reported by laptop-7")).toBeInTheDocument();
+    expect(screen.getByText("laptop-7 is a computer its owner administers, so this run's barrier, egress decisions made on laptop-7, recording, output and exit code are as laptop-7 reported them.")).toBeInTheDocument();
+    expect(screen.queryByText("Placement")).not.toBeInTheDocument();
+  });
+
+  it("someone else reads whose runner it is", () => {
+    renderAs(base, "admin");
+    expect(screen.getByText("laptop-7 · me's runner")).toBeInTheDocument();
+  });
+
+  it("no Evidence row or note unless the computer vouched for the evidence", () => {
+    renderAs({ ...base, evidence_source: "substrate" } as AgentRun, "me");
+    expect(screen.queryByText("Evidence")).not.toBeInTheDocument();
+    expect(screen.queryByText(/is a computer its owner administers/)).not.toBeInTheDocument();
+  });
+
+  it("names a runner the server could not read by a short id, never an empty name", () => {
+    renderAs({ ...base, runner_name: undefined } as AgentRun, "me");
+    expect(screen.getByText("Runner 11111111 · Self-Hosted")).toBeInTheDocument();
+  });
+
+  // C2: a remote run's Identity is today's, unless the resolver filled the place.
+  it.each(["substrate", "runner_asserted"] as const)("a remote run has none of it, whatever its evidence_source (%s)", (evidence_source) => {
+    renderAs({ ...base, placement: "remote", runner_id: undefined, runner_name: undefined, evidence_source } as AgentRun, "me");
+    expect(screen.queryByText("Runs on")).not.toBeInTheDocument();
+    expect(screen.queryByText("Evidence")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Self-Hosted|Remote Provided/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/is a computer its owner administers/)).not.toBeInTheDocument();
+  });
+
+  it("a remote run the resolver placed says where, and that it was the only place", () => {
+    renderAs({ ...base, placement: "remote", placement_filled: true, runner_id: undefined, runner_name: undefined, evidence_source: "substrate" } as AgentRun, "me");
+    expect(screen.getByText("Remote Provided")).toBeInTheDocument();
+    expect(screen.getByText("The only place this run could run.")).toBeInTheDocument();
   });
 });

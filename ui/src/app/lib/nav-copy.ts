@@ -29,3 +29,16 @@ export const CREDENTIALS_NAV_TITLE = "Credentials";
 // wardyn/copy/runners.ts is lazy). copy/runners.ts's RUNNERS.NAV reads this constant, so the nav
 // label and the page heading stay one string.
 export const RUNNERS_NAV_TITLE = "Runners";
+
+// The Runs board is in the entry chunk and names a local run's computer in each row's meta line (0.9,
+// M-RN-3 RS8), so the three small things that row needs live here, for the same entry-chunk reason, and the
+// lazy wardyn/copy/runners.ts reads them from here (RUN_PLACEMENT.CHIP, RUNNER.OFFLINE, runnerLabel).
+export const RUNNER_OFFLINE_WORD = "Offline";
+export const runOnChip = (name: string): string => `On ${name}`;
+/**
+ * What the run page calls a local run's runner: the name the server projected, else a short form of its id
+ * (a read that failed leaves the name off), never a guess. Data, so it reads as a name anywhere in a sentence.
+ */
+export function runnerLabel(run: { runner_name?: string; runner_id?: string }): string {
+  return run.runner_name || (run.runner_id ? `Runner ${run.runner_id.slice(0, 8)}` : "Its runner");
+}

@@ -24,6 +24,11 @@ export function useRunnersData(): RunnersData & { reload: () => void } {
   const [data, setData] = React.useState<RunnersData>({ status: "loading", enabled: true, rows: [], tokens: [] });
   const seq = React.useRef(0);
 
+  // A read that was in flight when the page went away must not set state.
+  const abandon = React.useCallback(() => {
+    seq.current++;
+  }, []);
+
   const read = React.useCallback((silent: boolean) => {
     const mine = ++seq.current;
     if (!silent) setData((d) => ({ ...d, status: "loading" }));
@@ -44,9 +49,9 @@ export function useRunnersData(): RunnersData & { reload: () => void } {
     return () => {
       clearInterval(id);
       document.removeEventListener("visibilitychange", tick);
-      seq.current++;
+      abandon();
     };
-  }, [read]);
+  }, [read, abandon]);
 
   const reload = React.useCallback(() => read(true), [read]);
   return { ...data, reload };

@@ -203,12 +203,14 @@ export function MyRunnerCard() {
         else if (!silent) setStatus("error");
       });
   }, []);
+  // A read that was in flight when the card went away must not set state.
+  const abandon = React.useCallback(() => {
+    seq.current++;
+  }, []);
   React.useEffect(() => {
     read(false);
-    return () => {
-      seq.current++;
-    };
-  }, [read]);
+    return abandon;
+  }, [read, abandon]);
 
   const expired = token !== null && now >= Date.parse(token.expires_at);
   const live = rows.filter((r) => r.state !== "revoked");
