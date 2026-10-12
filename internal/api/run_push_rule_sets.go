@@ -38,12 +38,7 @@ func (s *Server) pushRuleSetsFor(spec types.RunPolicySpec, req *createRunRequest
 		if cloneURL == "" {
 			continue // admission refuses an unreadable locator; nothing is pushed there
 		}
-		provider, basePath := pushRuleProvider(sc, cloneURL)
-		host, org, err := types.PushRuleEntryOfServerRemote(provider, cloneURL, basePath)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%s: %w", repo, err)
-		}
-		key, err := types.PushRuleKey(provider, host, org)
+		entry, key, err := pushRuleEntryOf(sc, cloneURL)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", repo, err)
 		}
@@ -71,13 +66,29 @@ func (s *Server) pushRuleSetsFor(spec types.RunPolicySpec, req *createRunRequest
 			}
 		}
 		if rules.IsSet() {
-			sets = append(sets, types.PushRuleSet{Provider: provider, Host: host, Org: org, BasePath: basePath, Rules: rules})
+			entry.Rules = rules
+			sets = append(sets, entry)
 		}
 	}
 	if err := types.ValidatePushRuleSets(sets); err != nil {
 		return nil, nil, err
 	}
 	return sets, applied, nil
+}
+
+// pushRuleEntryOf is the SCM entry a remote's push rules are filed under: its
+// identity (no rules yet) and canonical key, the one the dispatch plan and the
+// component facts both derive.
+func pushRuleEntryOf(sc types.SiteConfig, cloneURL string) (entry types.PushRuleSet, key string, err error) {
+	provider, basePath := pushRuleProvider(sc, cloneURL)
+	host, org, err := types.PushRuleEntryOfServerRemote(provider, cloneURL, basePath)
+	if err != nil {
+		return types.PushRuleSet{}, "", err
+	}
+	if key, err = types.PushRuleKey(provider, host, org); err != nil {
+		return types.PushRuleSet{}, "", err
+	}
+	return types.PushRuleSet{Provider: provider, Host: host, Org: org, BasePath: basePath}, key, nil
 }
 
 // pushRuleRemotes are the repositories a run brings: the request's own and every
