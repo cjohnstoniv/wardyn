@@ -313,6 +313,12 @@ func (s *Server) stepAutonomy(f *runFold, rec *foldRecorder) bool {
 	return ok
 }
 
+// stepGitHubCLIRepo is githubCLIRepoRefusal (runs_cli_github.go) at the doors that launch and
+// review. The preview shows the same fact as the card's reason instead.
+func (s *Server) stepGitHubCLIRepo(f *runFold, _ *foldRecorder) bool {
+	return !githubCLIRepoRefusal(f.comps, *f.req, f.spec, f.scmSite).write(s, f.w, f.r)
+}
+
 // stepRunEnd decides the run's end and its lifetime cap against the pool,
 // governance and the deployment (run_end_create.go); a refusal is the same at
 // every door and leaves no row.

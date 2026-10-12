@@ -333,6 +333,12 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// proxy's /wardyn/gh/ route serves exactly these repos (github.com is dropped
 	// from egress; an un-granted github repo is denied).
 	gw.augmentGitBrokerGrants(req.Repo, spec.WorkspaceRepos)
+	var cliRefusal *runRefusal
+	if gw.githubAPI, cliRefusal = s.persistGitHubCLIGrants(ctx, runID, now, comps, gw.gitGrants); cliRefusal != nil {
+		abort(createRunGrantAbortHint)
+		cliRefusal.write(s, w, r)
+		return
+	}
 
 	// credentialConfinementAdvisory (#150): a run whose model credential just
 	// graded as the captured-AWS-SSO lane (f.modelCred.Kind, stepModelProvider) but

@@ -906,6 +906,7 @@ const (
 	reasonComponentHostServesModel        = "component_host_serves_model"        // a host of the component serves a model on this deployment
 	reasonComponentHostCollision          = "component_host_collision"           // a header delivery names a host that already carries a credential on the run
 	reasonComponentResidentDeliveryDenied = "component_resident_delivery_denied" // the organisation turned off env and file delivery (components.deny_resident_delivery)
+	reasonCLINoGitHubRepo                 = "cli_no_github_repo"                 // a GitHub CLI row is attached, and the run has no GitHub repository on the App lane for it to act on
 )
 
 // reasonCredentialHostCollision: two of a run's credentials are bound to one
