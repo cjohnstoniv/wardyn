@@ -1,3 +1,6 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package api
 
 import (
@@ -53,21 +56,37 @@ func (s *Server) attachAuthorityLookupBound() time.Duration {
 }
 
 // attachAuthority returns the check an attach socket opened by r repeats while it is open, or nil for a
-// lane with nothing to repeat: the admin bearer token, local mode and the non-browser credential lanes
-// keep their handshake-only semantics.
+// lane with nothing to repeat: the admin bearer token, local mode and a token presented directly on the
+// socket keep their handshake-only semantics. A ticket is checked whatever credential minted it.
 //
 //   - Ticket lane: what redemption asked (ticketAuthority), against the ticket's own issue time and
-//     sequence. The ticket's 30-second redemption window is not the terminal's lifetime.
+//     sequence. The ticket's 30-second redemption window is not the terminal's lifetime; with
+//     RoleStampTTL set the socket ends at the ticket's issue time plus it, and when the handshake also
+//     carries the same person's session cookie, at that cookie's deadline too.
 //   - Session cookie lane: the cookie's owner check as the OIDC middleware asks it (identity, authority
-//     epoch, revocation sequence, session-only cuts included), and its expiry: the earlier of the
-//     cookie's expiry and its sign-in time plus RoleStampTTL.
+//     epoch, revocation sequence, session-only cuts included), and its deadline.
+//
+// A session cookie's deadline is the earlier of its expiry and its sign-in time plus RoleStampTTL.
 func (s *Server) attachAuthority(r *http.Request, runID uuid.UUID) func(context.Context) error {
 	ctx := r.Context()
+	ttl := s.cfg.RoleStampTTL
 	if ta, ok := ticketActorFromContext(ctx); ok {
-		if s.cfg.SessionRevocations == nil && ta.via == nil {
+		var deadline time.Time
+		if ttl > 0 {
+			deadline = ta.authorizedAt.Add(ttl)
+		}
+		if s.cfg.OIDC != nil {
+			if sub, expiry, issuedAt, ok := s.cfg.OIDC.SessionBounds(r); ok && sub == ta.principal {
+				deadline = earlierDeadline(deadline, sessionDeadline(expiry, issuedAt, ttl))
+			}
+		}
+		if s.cfg.SessionRevocations == nil && ta.via == nil && deadline.IsZero() {
 			return nil
 		}
 		return func(lctx context.Context) error {
+			if !deadline.IsZero() && !s.cfg.Now().Before(deadline) {
+				return errAttachAuthorityEnded
+			}
 			if _, v := s.ticketAuthority(lctx, ta, runID); v != verdictOK {
 				return errAttachAuthorityEnded
 			}
@@ -81,12 +100,7 @@ func (s *Server) attachAuthority(r *http.Request, runID uuid.UUID) func(context.
 	email := oidc.EmailFromContext(ctx)
 	issue := oidc.Issue{At: oidc.IssuedAtFromContext(ctx), Seq: oidc.RevocationSeqFor(ctx, sub)}
 	epoch, _ := oidc.AuthorityEpochFromContext(ctx)
-	deadline := oidc.ExpiryFromContext(ctx)
-	if ttl := s.cfg.RoleStampTTL; ttl > 0 {
-		if stamp := issue.At.Add(ttl); stamp.Before(deadline) {
-			deadline = stamp
-		}
-	}
+	deadline := sessionDeadline(oidc.ExpiryFromContext(ctx), issue.At, ttl)
 	rev := s.cfg.SessionRevocations
 	return func(lctx context.Context) error {
 		if !s.cfg.Now().Before(deadline) {
@@ -104,6 +118,22 @@ func (s *Server) attachAuthority(r *http.Request, runID uuid.UUID) func(context.
 		}
 		return nil
 	}
+}
+
+// sessionDeadline is a session cookie's deadline: the earlier of its expiry and issuedAt + ttl (ttl > 0).
+func sessionDeadline(expiry, issuedAt time.Time, ttl time.Duration) time.Time {
+	if ttl > 0 {
+		return earlierDeadline(expiry, issuedAt.Add(ttl))
+	}
+	return expiry
+}
+
+// earlierDeadline is the earlier of two deadlines, a zero one meaning none.
+func earlierDeadline(a, b time.Time) time.Time {
+	if a.IsZero() || (!b.IsZero() && b.Before(a)) {
+		return b
+	}
+	return a
 }
 
 // holdAttachAuthority runs check every attachAuthorityEvery until ctx ends, and calls end once, on the

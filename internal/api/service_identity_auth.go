@@ -116,7 +116,7 @@ func (s *Server) serviceTokenAuth(w http.ResponseWriter, r *http.Request, t type
 		reject(authFailedServiceSponsorInactive)
 		return
 	}
-	status, rerr := oidc.CheckSession(ctx, s.cfg.SessionRevocations, si.Sponsor, "", oidc.Issue{At: t.CreatedAt}, -1)
+	status, rerr := oidc.CheckSession(ctx, s.cfg.SessionRevocations, si.Sponsor, "", oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
 	if rerr != nil {
 		unavailable("session-revocation", rerr)
 		return

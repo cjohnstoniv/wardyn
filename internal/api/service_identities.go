@@ -397,13 +397,15 @@ func (s *Server) handleMintServiceToken(w http.ResponseWriter, r *http.Request) 
 		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityInactive, "this deployment cannot check the sponsor's session, so a service token would never authenticate")
 		return
 	}
-	if _, ok := s.mintSessionLive(w, r, sub, authorizedAt); !ok {
+	issue, ok := s.mintSessionLive(w, r, sub, authorizedAt)
+	if !ok {
 		return
 	}
 	expires := authorizedAt.Add(lifetime)
+	// RevSeq orders the token against the sponsor's revocation cuts (serviceTokenAuth).
 	row := types.APIToken{
 		ID: uuid.New(), Principal: si.Principal(), Role: oidc.RoleUser, UserType: si.UserType, Groups: []string{},
-		GroupsTruncated: new(bool), Name: name, CreatedAt: authorizedAt, ExpiresAt: &expires,
+		GroupsTruncated: new(bool), Name: name, CreatedAt: authorizedAt, ExpiresAt: &expires, RevSeq: issue.Seq,
 	}
 	plaintext := newBearer(apiTokenPrefix)
 	created, err := ss.CreateServiceToken(guardOwner(r.Context(), sub), si.Name, sub, apiTokenMaxPerPrincipal, row, plaintext)

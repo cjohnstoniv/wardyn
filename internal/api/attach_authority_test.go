@@ -1,3 +1,6 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package api
 
 import (
@@ -215,7 +218,7 @@ func (rig *authorityRig) ticket(t *testing.T, cookie *http.Cookie) string {
 	return out.Ticket
 }
 
-// dial opens the attach socket with the cookie (cookie lane) or ?ticket= (ticket lane), reads the
+// dial opens the attach socket with ?ticket= (ticket lane) and/or the cookie (cookie lane), reads the
 // attach-mode frame, checks the mode and then drains the socket, returning where its read ended.
 func (rig *authorityRig) dial(t *testing.T, cookie *http.Cookie, ticket string, wantReadOnly bool) (*websocket.Conn, <-chan error) {
 	t.Helper()
@@ -223,7 +226,8 @@ func (rig *authorityRig) dial(t *testing.T, cookie *http.Cookie, ticket string, 
 	opts := &websocket.DialOptions{}
 	if ticket != "" {
 		url += "?ticket=" + ticket
-	} else {
+	}
+	if cookie != nil {
 		opts.HTTPHeader = http.Header{"Cookie": {cookie.String()}}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -248,16 +252,21 @@ func (rig *authorityRig) dial(t *testing.T, cookie *http.Cookie, ticket string, 
 	return c, done
 }
 
-// pair opens a writer and an observer socket for alice on the lane.
+// pair opens a writer and an observer socket for alice on the lane: "cookie", "ticket" (a ticket the
+// cookie minted, presented alone) or "ticket+cookie" (the ticket with the cookie beside it, as the
+// console's handshake carries it).
 func (rig *authorityRig) pair(t *testing.T, lane string, cookie *http.Cookie) [2]<-chan error {
 	t.Helper()
 	var ends [2]<-chan error
 	for i, readOnly := range []bool{false, true} {
-		tk := ""
-		if lane == "ticket" {
+		tk, sent := "", cookie
+		if lane != "cookie" {
 			tk = rig.ticket(t, cookie)
 		}
-		_, ends[i] = rig.dial(t, cookie, tk, readOnly)
+		if lane == "ticket" {
+			sent = nil
+		}
+		_, ends[i] = rig.dial(t, sent, tk, readOnly)
 	}
 	return ends
 }
@@ -304,10 +313,10 @@ func TestAttachAuthority_CutsEndOpenSockets(t *testing.T) {
 		{name: "one lookup past its bound", lanes: both, apply: func(t *testing.T, rig *authorityRig, _ *http.Cookie) {
 			rig.rev.setHang(2)
 		}},
-		{name: "cookie expiry", lanes: []string{"cookie"}, apply: func(t *testing.T, rig *authorityRig, _ *http.Cookie) {
+		{name: "cookie expiry", lanes: []string{"cookie", "ticket+cookie"}, apply: func(t *testing.T, rig *authorityRig, _ *http.Cookie) {
 			rig.offset.Store(int64(time.Hour + time.Second))
 		}},
-		{name: "role-stamp deadline before the cookie expiry", ttl: 30 * time.Minute, lanes: []string{"cookie"},
+		{name: "role-stamp deadline before the cookie expiry", ttl: 30 * time.Minute, lanes: []string{"cookie", "ticket", "ticket+cookie"},
 			apply: func(t *testing.T, rig *authorityRig, _ *http.Cookie) {
 				rig.offset.Store(int64(31 * time.Minute))
 			}},
@@ -349,7 +358,7 @@ func TestAttachAuthority_TicketDelegationWithdrawn(t *testing.T) {
 // observer sockets across many check intervals, on both lanes: a sign-in after an earlier cut, a cut
 // of another person and a clock short of both deadlines end nothing.
 func TestAttachAuthority_LiveSessionStaysOpen(t *testing.T) {
-	for _, lane := range []string{"cookie", "ticket"} {
+	for _, lane := range []string{"cookie", "ticket", "ticket+cookie"} {
 		t.Run(lane, func(t *testing.T) {
 			rig := newAuthorityRig(t, 30*time.Minute)
 			_ = rig.rev.CutSessions(context.Background(), holderOwner) // an earlier sign-out
