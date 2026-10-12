@@ -91,6 +91,36 @@ func TestProviderAccess_KeyKinds_OwnNamespaceOnly(t *testing.T) {
 	}
 }
 
+// TestProviderAccess_AzureFoundry grades an azure_foundry row from the
+// person's own sealed -entra part: never by the -key part, never by another
+// person's, and a part whose renewal recorded an end reads expired_signin.
+func TestProviderAccess_AzureFoundry(t *testing.T) {
+	h, sec := newSecretsHarness(t)
+	p := paKeyProvider("foundry", types.ModelProviderAzureFoundry)
+	ctx := context.Background()
+
+	_ = sec.For(paOwner).Put(ctx, providerSecretName(p.UID, providerKeyPart), []byte("a-key-part-must-not-grade-it"))
+	_ = sec.For("bob@example.com").Put(ctx, providerSecretName(p.UID, providerEntraPart), []byte(`{"refresh_token":"bobs"}`))
+	got := h.srv.providerAccessFor(ctx, p, paOwner)
+	if got.State != modelAccessNotConfigured || got.Action != providerAccessSignInAzure {
+		t.Fatalf("no own -entra part: got %+v, want not_configured with the sign-in action", got)
+	}
+
+	_ = sec.For(paOwner).Put(ctx, providerSecretName(p.UID, providerEntraPart), []byte(`{"refresh_token":"r","source":"sign_in"}`))
+	if got = h.srv.providerAccessFor(ctx, p, paOwner); got.State != modelAccessLive || got.Action != "" {
+		t.Fatalf("own -entra part: got %+v, want live", got)
+	}
+
+	ended, _ := json.Marshal(adoEntraBlob{RefreshToken: "r", DeadAt: time.Now().Add(-time.Hour).UTC(), DeadReason: ADOEntraFailureInteractionRequired})
+	_ = sec.For(paOwner).Put(ctx, providerSecretName(p.UID, providerEntraPart), ended)
+	if got = h.srv.providerAccessFor(ctx, p, paOwner); got.State != modelAccessExpiredSignin || got.Action != providerAccessAzureEndedAction {
+		t.Fatalf("an ended sign-in: got %+v, want expired_signin", got)
+	}
+	if n := providerCredentialNoun(types.ModelProviderAzureFoundry); n != "Azure sign-in" {
+		t.Errorf("noun = %q", n)
+	}
+}
+
 // TestProviderAccess_AnthropicSubscription walks not_configured -> live ->
 // expiring (harnessTokenAging, a conservative age heuristic) for a
 // per-person Claude sign-in.

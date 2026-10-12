@@ -6,6 +6,7 @@ package api
 import (
 	"cmp"
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
@@ -30,6 +31,8 @@ type limitSourceInput struct {
 	// deploymentDefault is the deployment's own sandbox size (inheritDeploymentResources); a zero
 	// field is sizing.EffectiveLimits'.
 	deploymentDefault types.ResourceLimits
+	// ephemeral is the organisation's storage.ephemeral block: the main drive's default and maximum.
+	ephemeral types.EphemeralProvider
 	// capacity is a self-hosted run's candidates' advertised capacity; empty for any other run.
 	capacity                  []runnerpool.RunnerCapacity
 	maxAgeSec, concurrentRuns int
@@ -43,7 +46,7 @@ func buildLimitSources(in limitSourceInput) ([]runnerpool.SourceLimits, *runnerp
 	size := sizing.EffectiveLimits()
 	deploymentSize := types.ResourceLimits{CPUMillis: cmp.Or(in.deploymentDefault.CPUMillis, int(size.CPUMillis)),
 		MemoryMiB: cmp.Or(in.deploymentDefault.MemoryMiB, int(size.MemoryMiB))}
-	dep, err := runnerpool.DeploymentSource(deploymentSize, types.EphemeralProvider{}, in.maxAgeSec, in.concurrentRuns)
+	dep, err := runnerpool.DeploymentSource(deploymentSize, in.ephemeral, in.maxAgeSec, in.concurrentRuns)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -89,8 +92,24 @@ func (s *Server) limitSources(ctx context.Context, rt types.RunnerPoolRunType, p
 		maxAgeSec: max(0, int(s.cfg.RunMaxAge/time.Second)), concurrentRuns: max(0, s.cfg.MaxConcurrentRuns),
 	}
 	in.ceiling, in.memberDefault = ceiling.authoredSize(), ceiling.memberSize()
+	in.ceiling.DiskMiB = ceiling.authoredDiskMiB()
+	in.ephemeral = s.orgEphemeral(ctx)
 	if d := s.inheritDeploymentResources(nil); d != nil {
 		in.deploymentDefault = types.ResourceLimits{CPUMillis: d.CPUMillis, MemoryMiB: d.MemoryMiB}
 	}
 	return buildLimitSources(in)
+}
+
+// orgEphemeral is the organisation's storage.ephemeral block, the zero value (no default, no
+// maximum) when it is absent. A site-config read that fails degrades to that: the dry doors are
+// advisory, and dispatch applies the organisation's maximum again.
+func (s *Server) orgEphemeral(ctx context.Context) types.EphemeralProvider {
+	if s.cfg.Store == nil {
+		return types.EphemeralProvider{}
+	}
+	site, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: could not read the org storage block; sizing the main drive without it", slog.Any("error", err))
+	}
+	return orgEphemeralOf(site)
 }

@@ -310,11 +310,11 @@ Three more the tier inherits rather than introduces:
 ### An org `default_disk_mib` runs UNCAPPED here, with a warning
 
 - The `storage.ephemeral` ceilings in `site-config.json` are the one part of the provider policy that lands differently on this tier, and it is deliberate.
-- A `default_disk_mib` is a size Wardyn **fills in** for a run that requested none; `disk_mib` on a policy is a size an admin **wrote**.
+- A `default_disk_mib` is a size Wardyn **fills in** for a run that requested none; `disk_mib` on a policy is a size the policy **wrote**.
 - On Docker, a writable-layer cap needs `overlay2` on an `xfs` filesystem mounted with `pquota` — and the desktop default everywhere that matters (Docker Desktop, WSL2, stock Ubuntu/Debian) is overlay2 over ext4, which cannot take one.
-- There, a policy-authored `disk_mib` is **refused at container create**, because a promised cap must not silently evaporate.
-- An org-default-FILLED size instead **runs uncapped with a warning** — a `slog.Warn` carrying `enforcement: none`, the same word the admin setup status reports for this host's disk cap.
-- The bit that tells the two cases apart is on the run's own record: `run.policy.resolve` carries `disk_mib_filled`, so a reader can see whether the number came from the request or from the org.
+- There, a policy-authored `disk_mib` is **refused** (`main_drive_unenforceable`), because a promised cap must not silently evaporate.
+- A requested or default size instead **runs uncapped with a warning** — a `slog.Warn` carrying `enforcement: none`, the same word the admin setup status reports for this host's disk cap.
+- The bit that tells the two cases apart is on the run's own record: `run.policy.resolve` carries `disk_mib_filled` and `disk_mib_basis`, so a reader can see whether the number came from the request, a default or the policy.
 - It never fails closed, and that is the whole reason for the split:
   - an org default reaches laptops through this file,
   - so failing closed on it would stop every request-less run on every desktop in the estate the day an admin typed a number into the Storage tab.
