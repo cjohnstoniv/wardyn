@@ -182,6 +182,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   class's requirement. The runner keeps the value in the OS keystore (the Secret Service on Linux, which needs a
   session bus; the login Keychain on macOS, written over stdin; values up to about 3 KB). Azure DevOps minted tokens
   can be opted in per connection. Delivery itself arrives with local runner placement; until then no run receives one.
+- Preflight (`PreflightResult.Access`) and the policy preview answer an `access` block built from one projection of the
+  shared fold: what brings access (the harness, each Git provider's repositories, components, secrets, added hosts),
+  each host's verdict against the resolved and clamped policy, every credential with where it is delivered and what is
+  left once the run ends, what happens to an unlisted host and who decides it, and the setup still needed. A CLI
+  component's row says whether its tool is in the run's image. The site-config SCM host list is never shown.
+- The preview's policy now includes the hosts a run's `ssh_key` and `git_pat` grants open at dispatch, for the lanes
+  create will actually wire, so a lane create drops (an SSH key for a harness with no SSH lane, a provider row that
+  turns a lane off) shows no host and no credential. Preflight's `risk_assessment` can move from LOW to MEDIUM for those
+  hosts; nothing newly refuses.
+- `wardyn template group-admin list|grant|revoke` manages group template grants, and `wardyn template from-preset
+  <name> [--everyone]` publishes a launch preset to the organisation as a template (a preset limited to user types
+  needs `--everyone`; its `inline_policy` is laid onto the default policy instead of replacing it).
+  `wardyn template import --kind Run|RunTemplate` checks either document kind, and `wardyn run --file <doc>` launches a
+  `kind: Run` document; for now a document that sets `inline_policy` is refused. `wardyn person erase --scope` names
+  `run_setups`.
 - `GET /api/v1/workspaces/{id}/branches?repo=<repo>` lists one workspace repository's branches for the New Run
   branch picker, through the credential the run would clone with: Azure DevOps uses the person's own token or
   sign-in; GitHub uses the organisation's GitHub App with a one-repository `contents: read` token, revoked best effort after the
@@ -399,6 +414,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- `wardyn template save -` reads stdin again: `template save` takes `--format`.
 - A run a laptop submits with a device credential and no person is refused at launch when a per-person Azure DevOps
   connection covers one of its repositories (#731).
 - A relayed runner connection honours read and write deadlines, so a response written to a peer that stopped reading
