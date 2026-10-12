@@ -115,11 +115,8 @@ func (s *Server) remoteRunnerFromPath(w http.ResponseWriter, r *http.Request, rs
 	return row, true
 }
 
-// reasonRemoteRunnerNotFound answers an unknown remote-hosted runner on the operators' routes.
-const (
-	reasonRemoteRunnerNotFound = "remote_runner_not_found"
-	remoteRunnerNotFoundMsg    = "That runner isn't one this server is set up with."
-)
+// remoteRunnerNotFoundMsg answers an unknown remote-hosted runner on the operators' routes.
+const remoteRunnerNotFoundMsg = "That runner isn't one this server is set up with."
 
 func (s *Server) handleGetRemoteRunner(w http.ResponseWriter, r *http.Request) {
 	rs, ok := s.remoteRunnerStore(w)

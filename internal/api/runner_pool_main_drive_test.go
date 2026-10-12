@@ -26,12 +26,12 @@ func TestPoolMainDriveWeakest(t *testing.T) {
 	fs, ev, none := types.StorageEnforcementFilesystem, types.StorageEnforcementEviction, types.StorageEnforcementNone
 	offline := diskTarget("off", fs, true, true)
 	offline.offline = true
-	remote, self := types.RunnerPoolRemoteProvided, types.RunnerPoolSelfHosted
+	remote, self := types.RunnerPoolOrganization, types.RunnerPoolUser
 	keep := client.MainDriveKeep{Supported: true, GraceSec: 1800}
 	for _, tc := range []struct {
 		name    string
 		targets []poolTarget
-		hosting types.RunnerPoolHosting
+		hosting types.RunnerPoolScope
 		grace   time.Duration
 		want    client.MainDriveFacts
 	}{

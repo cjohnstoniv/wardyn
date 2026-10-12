@@ -33,74 +33,71 @@ func TestPG_BootstrapKeepsExplicitLaunchesAndAdministratorDefaults(t *testing.T)
 	e.bootDoors("placement named", runBody(`"placement":"remote"`))
 
 	d, err := e.pg.GetRunnerPoolOrgDefaults(ctx)
-	if err != nil || d.RemoteProvided == nil {
+	if err != nil || d.PoolID == nil {
 		t.Fatalf("defaults after bootstrap = %+v, %v", d, err)
 	}
-	if w := e.admin(http.MethodPut, "/api/v1/runner-pool-defaults", `{"remote_provided":"`+d.RemoteProvided.String()+`"}`); w.Code != http.StatusOK {
+	if w := e.admin(http.MethodPut, "/api/v1/runner-pool-defaults", `{"pool_id":"`+d.PoolID.String()+`","barrier":"CC2"}`); w.Code != http.StatusOK {
 		t.Fatalf("administrator defaults = %d %s", w.Code, w.Body)
 	}
 	if err := e.srv.BootstrapRunnerPools(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := e.pg.GetRunnerPoolOrgDefaults(ctx); got.PreferredHosting != "" || got.RemoteProvided == nil || *got.RemoteProvided != *d.RemoteProvided {
+	if got, _ := e.pg.GetRunnerPoolOrgDefaults(ctx); got.Barrier != types.CC2 || got.PoolID == nil || *got.PoolID != *d.PoolID {
 		t.Errorf("a boot rewrote the administrator's defaults: %+v", got)
 	}
 
-	// A preferred hosting type the organisation set before any pool existed is kept by the bootstrap.
+	// A default barrier the organisation set before any pool existed is kept by the bootstrap.
 	chosen := newPoolEnv(t, false)
-	if _, err := chosen.pool.Exec(ctx, `INSERT INTO runner_pool_org_defaults (preferred_hosting, updated_by) VALUES ('self_hosted', 'admin')`); err != nil {
-		t.Fatal(err)
+	if w := chosen.admin(http.MethodPut, "/api/v1/runner-pool-defaults", `{"barrier":"CC1"}`); w.Code != http.StatusOK {
+		t.Fatalf("administrator barrier = %d %s", w.Code, w.Body)
 	}
 	if err := chosen.srv.BootstrapRunnerPools(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := chosen.pg.GetRunnerPoolOrgDefaults(ctx); got.PreferredHosting != types.RunnerPoolSelfHosted || got.RemoteProvided == nil {
-		t.Errorf("bootstrap over an organisation's own preference = %+v, want self_hosted kept and the remote default set", got)
+	if got, _ := chosen.pg.GetRunnerPoolOrgDefaults(ctx); got.Barrier != types.CC1 || got.PoolID == nil {
+		t.Errorf("bootstrap over an organisation's own barrier = %+v, want the barrier kept and the default pool set", got)
 	}
 }
 
-// R2-0153: the real boot step on a database with no catalogue makes the pool the organisation's
-// preferred hosting type as well as its remote default, and audits both, so a launch that names no pool
-// and no placement is admitted at create, preflight and the preview.
+// R2-0153: the real boot step on a database with no catalogue gives each configured remote-hosted runner
+// its row, makes one organization pool named Organization holding them as the organisation's default
+// pool, and audits all three, so a launch that names no pool and no placement is admitted at create,
+// preflight and the preview. A second boot makes nothing and audits nothing.
 func TestPG_BootstrapLetsALaunchNameNoPool(t *testing.T) {
 	e := newPoolEnv(t, false)
 	ctx := context.Background()
+	if _, err := e.pool.Exec(ctx, `DELETE FROM remote_runners`); err != nil { // a database from before 0173 ran a boot
+		t.Fatal(err)
+	}
 	if err := e.srv.BootstrapRunnerPools(ctx); err != nil {
 		t.Fatal(err)
 	}
 	d, _ := e.pg.GetRunnerPoolOrgDefaults(ctx)
-	if d.PreferredHosting != types.RunnerPoolRemoteProvided || d.RemoteProvided == nil {
-		t.Errorf("defaults after bootstrap = %+v, want the pool as remote default and remote_provided preferred", d)
+	if d.PoolID == nil {
+		t.Fatalf("defaults after bootstrap = %+v, want the pool as the default", d)
+	}
+	p, err := e.pg.GetRunnerPool(ctx, *d.PoolID)
+	if err != nil || p.Name != "Organization" || p.Scope != types.RunnerPoolOrganization {
+		t.Errorf("bootstrap pool = %+v, %v", p, err)
+	}
+	if rr, err := e.pg.GetRemoteRunner(ctx, "fake"); err != nil || rr.Runner.PeoplePools != types.PeoplePoolsOff || len(rr.Pools) != 1 || rr.Pools[0].ID != p.ID {
+		t.Errorf("the configured runner's row = %+v, %v; want it off for people's pools and in the pool", rr, err)
 	}
 	sets := e.audits(auditPoolDefaultSet)
 	if len(sets) != 1 {
 		t.Fatalf("bootstrap recorded %d default.set rows, want 1", len(sets))
 	}
-	after, _ := auditData(t, sets[0])["after"].(map[string]any)
-	if after["preferred_hosting"] != string(types.RunnerPoolRemoteProvided) {
-		t.Errorf("bootstrap default.set after = %v, want preferred_hosting remote_provided", after)
+	if after, _ := auditData(t, sets[0])["after"].(map[string]any); after["pool_id"] != d.PoolID.String() {
+		t.Errorf("bootstrap default.set after = %v, want pool_id %s", after, d.PoolID)
+	}
+	if made := e.audits(auditRemoteRunnerCreate); len(made) != 1 || made[0].Target != "fake" {
+		t.Errorf("remote_runner.create rows = %+v, want one for the configured runner", made)
 	}
 	e.bootDoors("no pool or placement named", runBody(""))
-}
-
-// DR-0035: defaults an administrator saved with no preferred hosting type before any pool existed keep
-// it blank through the first bootstrap, which still names its pool as the remote default and audits the
-// defaults as stored.
-func TestPG_BootstrapKeepsABlankPreferenceSavedBeforeAnyPool(t *testing.T) {
-	ctx := context.Background()
-	blank := newPoolEnv(t, false)
-	if w := blank.admin(http.MethodPut, "/api/v1/runner-pool-defaults", `{}`); w.Code != http.StatusOK {
-		t.Fatalf("administrator blank defaults = %d %s", w.Code, w.Body)
-	}
-	if err := blank.srv.BootstrapRunnerPools(ctx); err != nil {
+	if err := e.srv.BootstrapRunnerPools(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, _ := blank.pg.GetRunnerPoolOrgDefaults(ctx)
-	if got.PreferredHosting != "" || got.RemoteProvided == nil {
-		t.Errorf("bootstrap over an administrator's blank preference = %+v, want it blank and the remote default set", got)
-	}
-	sets := blank.audits(auditPoolDefaultSet)
-	if after, _ := auditData(t, sets[len(sets)-1])["after"].(map[string]any); after["preferred_hosting"] != nil || after["remote_provided"] != got.RemoteProvided.String() {
-		t.Errorf("bootstrap default.set after = %v, want the stored defaults %+v", after, got)
+	if len(e.audits(auditRemoteRunnerCreate)) != 1 || len(e.audits(auditPoolCreate)) != 1 {
+		t.Error("a second boot audited a create")
 	}
 }
