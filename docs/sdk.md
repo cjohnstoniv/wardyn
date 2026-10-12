@@ -471,6 +471,21 @@ A `wardyn/v1` document with `kind: Run` is a draft of one run. Its `intent` hold
 | `environment` | `experience: interactive` |
 | `agent_task` | With `background`, `workload.kind: agent_task`; with `interactive`, a `tools[]` entry of kind `harness` |
 
+### Run again
+
+`POST /runs` keeps each run's setup as a `Run` document for Run again. Only the run's creator reads it.
+
+| Route | Answers |
+|---|---|
+| `GET /api/v1/me/launch-intents?limit=` | `{intents: [{run_id, title, shape?, created_at}]}`: your own runs that kept one, newest first; `limit` defaults to 20, at most 50 |
+| `GET /api/v1/runs/{id}/launch-intent` | `{run_id, created_at, document}`, the document of kind `Run`; `404` `launch_intent_not_found` when the run kept none |
+
+- Anyone but the run's creator, an administrator included, gets the `404` a missing run gets.
+- The document is your request after a preset expands, without title, description, `preset`, `preset_version` and `mode_contract`; `policy_overlay` becomes `intent.inline_policy`.
+- A run keeps none when it sets a whole `inline_policy`, when the import door refuses the document (a secret-shaped task, say), or when it waits in a pool's queue. It still starts; `run.create` says `launch_intent: not_kept` and why.
+- Erasure's `run_tasks`, `components` and `run_setups` scopes delete a person's launch intents.
+- The SDK has no method for these routes yet.
+
 ### Several harnesses in one run
 
 - `tools[]` may include more than one entry of kind `harness` with `interactive`, or with `workload.kind: command`. A background agent task includes only `workload.agent`.
@@ -643,6 +658,7 @@ start.
 | `template_scope_forbidden` / `template_group_unverified` / `template_not_found` / `template_revision_conflict` | `403`, `403`, `404`, `409`: publishing to a scope the caller does not administer, group membership that cannot be verified from this sign-in, no such template or not visible to the caller, or an update against a revision that has moved. |
 | `templates_unavailable` | `501`: this server's store keeps no templates. Every `/templates` route except `POST /templates/import`, and the `/admin/template-group-admins` routes, answer it; the Postgres store keeps them. |
 | `template_name_taken` / `template_limit_reached` | `409`: another template available to the same people already uses the name (compared case-insensitively, per person, per group and for the organisation), or that audience already holds its most templates (200 per person, 200 per group, 500 for the organisation). |
+| `launch_intent_not_found` | `404` on `GET /runs/{id}/launch-intent`: the run kept no setup. A run you did not create answers the `404` a missing run does. |
 | `template_policy_field_refused` | `422`: a template saved as `kind: "policy"` holds something other than run-wide network, credential and access-rule keys under `inline_policy`. Each refused path is a diagnostic. |
 | `runner_pools_unavailable` | `501`: this server's store has no runner pool storage; every pool route answers it. |
 | `runner_pool_not_found` / `runner_pool_stale` / `runner_pool_unavailable` / `runner_pool_member_mismatch` / `runner_pool_no_eligible_member` | The pool routes: `404` no such pool or one you may not use (the two read alike), `409` a stale revision, `422` a switched-off pool as a default, a member of the wrong kind or a runner that is not yours, or a use policy on a Self-Hosted pool. `GET /runner-pools` (`ListRunnerPoolsFor`) gives an unavailable pool's first reason: `runner_pool_unavailable`, `placement_denied`, `placement_unavailable`, `runner_pool_no_eligible_member`, `runner_pool_no_online_runner`, `runner_pool_run_type_not_allowed`, or `runner_pool_not_found` (manage-only); a bad `?run_type=` is `400` `runner_pool_invalid`. |
