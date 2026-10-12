@@ -63,18 +63,27 @@ describe("Review notices", () => {
     expect(screen.getByText(NR_REVIEW.NARROWED_BY("General"))).toBeInTheDocument();
   });
 
-  it("lists the server's warnings as it wrote them, without the resources-capped line", () => {
+  it("lists the server's warnings as it wrote them, and drops the resources-capped line when the narrowed notice says it", () => {
     const warn = ["inline_policy: allowed_domains narrowed by your ceiling", "resources capped to operator maximum"];
-    render(<Notices askedByYou={false} warnings={warn} />);
+    render(<Notices poolName="General" applied={narrowedBy({ source: "governance", source_name: "Platform team" })} askedByYou={false} warnings={warn} />);
     expect(screen.getByText(NR_REVIEW.WARNINGS_TITLE)).toBeInTheDocument();
     expect(screen.getByText(warn[0])).toBeInTheDocument();
+    expect(screen.getByText(NR_REVIEW.NARROWED_BY("Platform team"))).toBeInTheDocument();
     expect(screen.queryByText(warn[1])).toBeNull();
   });
 
-  it("shows no warnings notice when there are none, or only the resources-capped line", () => {
-    const { container, rerender } = render(<Notices askedByYou={false} warnings={[]} />);
-    expect(container).toBeEmptyDOMElement();
-    rerender(<Notices askedByYou={false} warnings={["resources capped to operator maximum"]} />);
+  it("shows the resources-capped line when no CPU or memory cut is rendered (a pids or disk cut)", () => {
+    render(<Notices askedByYou={false} warnings={["resources capped to operator maximum"]} />);
+    expect(screen.getByText("resources capped to operator maximum")).toBeInTheDocument();
+  });
+
+  it("keeps two identical warnings from two sources", () => {
+    render(<Notices askedByYou={false} warnings={["same", "same"]} />);
+    expect(screen.getAllByText("same")).toHaveLength(2);
+  });
+
+  it("shows no warnings notice when there are none", () => {
+    const { container } = render(<Notices askedByYou={false} warnings={[]} />);
     expect(container).toBeEmptyDOMElement();
   });
 });

@@ -13,7 +13,7 @@ import type { LimitSource } from "../../../../lib/types/runner-pools";
 import { amountText } from "./format";
 import type { PoolSlotsFact } from "./review-seams";
 
-/** composer.WarnResourcesCapped: the narrowed notice already says it, with its source. */
+/** composer.WarnResourcesCapped. A CPU or memory cut is said again, with its source, by the narrowed notice; a pids or disk cut is not. */
 const RESOURCES_CAPPED = "resources capped to operator maximum";
 
 /** What the person asked for; a zero asked for the default, which is then what they got. */
@@ -57,7 +57,7 @@ export function Notices({ poolName, slots, applied, askedByYou, warnings }: Noti
     ? [narrowing(applied.cpu_millis, poolName), narrowing(applied.memory_mib, poolName)].filter((n): n is Narrowing => n !== undefined)
     : [];
   const distinct = found.filter((n, i) => found.findIndex((m) => m.key === n.key) === i);
-  const server = (warnings ?? []).filter((w) => w !== RESOURCES_CAPPED);
+  const server = (warnings ?? []).filter((w) => w !== RESOURCES_CAPPED || distinct.length === 0);
   if (!full && distinct.length === 0 && server.length === 0) return null;
   return (
     <div className="flex flex-col gap-3">
@@ -80,7 +80,7 @@ export function Notices({ poolName, slots, applied, askedByYou, warnings }: Noti
       {server.length > 0 && (
         <Notice tone="warning" title={NR_REVIEW.WARNINGS_TITLE}>
           <ul className="list-disc pl-4">
-            {server.map((w) => <li key={w}>{w}</li>)}
+            {server.map((w, i) => <li key={`${i}:${w}`}>{w}</li>)}
           </ul>
         </Notice>
       )}
