@@ -181,6 +181,8 @@ const ACTION_VERB: Record<string, string> = {
   "ssh.authenticate": "an ssh authentication attempt against a run's terminal",
   "ssh.exec": "ran a command over the run's ssh channel",
   "ssh.sftp.transfer": "an sftp session against the run's sandbox",
+  // pending H11-P2: recommended text until the owner answers; the packet names no label for wardyn sync's own row.
+  "ssh.sync.transfer": "a wardyn sync session against the run's sandbox",
   "ssh.forward": "an ssh port forward into the run's sandbox",
   "kernel.process.exec": "observed a process exec",
   "kernel.network.connect": "observed a network connect",

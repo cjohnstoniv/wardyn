@@ -205,7 +205,8 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
   identity: {
     label: "Identity",
     Icon: Fingerprint,
-    component: (ctx) => React.createElement(IdentityWidget, { run: ctx.run, onGoPolicy: ctx.onGoPolicy }),
+    component: (ctx) =>
+      React.createElement(IdentityWidget, { run: ctx.run, audit: ctx.audit, onGoPolicy: ctx.onGoPolicy, onGoAudit: ctx.onGoAudit }),
     defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
     presets: {
       live: { x: 8, y: 16, w: 4, h: 4 },

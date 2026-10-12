@@ -15,13 +15,25 @@
 // it is the answer to "what was this agent actually allowed to do", and the
 // rest of the page never states it.
 import { Fingerprint } from "lucide-react";
-import type { RunDetail } from "../../../../lib/types";
+import type { AuditEvent, RunDetail } from "../../../../lib/types";
 import { absoluteTime } from "../../../../lib/format";
 import { CopyButton } from "../../../wardyn/copy-button";
 import { WidgetCard } from "../../../wardyn/primitives";
 import { IDENTITY_POLICY_VIEW } from "../policy-tab-copy";
+import { SyncRows } from "./identity-sync";
 
-export function IdentityWidget({ run, onGoPolicy }: { run: RunDetail; onGoPolicy: () => void }) {
+export function IdentityWidget({
+  run,
+  audit = [],
+  onGoPolicy,
+  onGoAudit = () => {},
+}: {
+  run: RunDetail;
+  /** The run's audit rows, for the Sync rows. */
+  audit?: AuditEvent[];
+  onGoPolicy: () => void;
+  onGoAudit?: () => void;
+}) {
   // UT-7a: "Ran as {type}" reads the name GET /runs/{id} resolved server-side
   // (RunDetail.user_type_name). Nothing renders for a run with no type or a
   // type since deleted — never the raw id.
@@ -119,6 +131,8 @@ export function IdentityWidget({ run, onGoPolicy }: { run: RunDetail; onGoPolicy
             <dd className="min-w-0 truncate text-right text-foreground">{ranAs}</dd>
           </>
         )}
+
+        <SyncRows run={run} audit={audit} onGoAudit={onGoAudit} />
       </dl>
     </WidgetCard>
   );
