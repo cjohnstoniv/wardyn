@@ -77,7 +77,27 @@ func (s *Server) runnerView(row types.Runner, runs int, admin bool) types.Runner
 		posture := row.Posture
 		v.Posture, v.PostureReportedAt = &posture, row.PostureReportedAt
 	}
+	if row.State == types.RunnerClaimed {
+		v.Capacity, v.Classes, v.AllowedRoots = s.runnerReportedCaps(row.ID)
+	}
 	return v
+}
+
+// runnerReportedCaps is the runner's last caps event as this process holds it. It reads the endpoint
+// map and never creates one (runnerEndpoint would): a runner that has not connected here reports nothing.
+func (s *Server) runnerReportedCaps(id uuid.UUID) (*types.RunnerCapacity, []types.ConfinementClass, []string) {
+	s.runnerStreams.subsMu.Lock()
+	ep, ok := s.runnerStreams.subs[id]
+	s.runnerStreams.subsMu.Unlock()
+	if !ok {
+		return nil, nil, nil
+	}
+	caps, ok := ep.sub.Caps()
+	if !ok {
+		return nil, nil, nil
+	}
+	return &types.RunnerCapacity{CPUMillisMax: caps.CPUMillisMax, MemoryMiBMax: caps.MemoryMiBMax},
+		slices.Clone(caps.Support.Classes), slices.Clone(caps.AllowedRoots)
 }
 
 const (
@@ -105,18 +125,26 @@ func (s *Server) runnerViews(w http.ResponseWriter, r *http.Request, rs store.Ru
 	}
 	out := make([]types.RunnerView, len(rows))
 	emails := map[string]string{}
+	// A name is a courtesy: a failed lookup leaves the opaque subject, never fails the read.
+	emailOf := func(principal string) string {
+		email, seen := emails[principal]
+		if !seen {
+			email, _ = s.principalEmail(r.Context(), principal)
+			emails[principal] = email
+		}
+		return email
+	}
 	for i, row := range rows {
 		out[i] = s.runnerView(row, runs[row.ID], admin)
-		if admin || row.MintedBy == "" || row.MintedBy == row.Owner {
+		if admin {
 			continue
 		}
-		email, seen := emails[row.MintedBy]
-		if !seen {
-			// A name is a courtesy: a failed lookup leaves the opaque subject, never fails the read.
-			email, _ = s.principalEmail(r.Context(), row.MintedBy)
-			emails[row.MintedBy] = email
+		if row.MintedBy != "" && row.MintedBy != row.Owner {
+			out[i].MintedByEmail = emailOf(row.MintedBy)
 		}
-		out[i].MintedByEmail = email
+		if row.RevokedBy != "" {
+			out[i].RevokedByEmail = emailOf(row.RevokedBy)
+		}
 	}
 	return out, true
 }
@@ -163,7 +191,24 @@ func (s *Server) handleGetRunner(w http.ResponseWriter, r *http.Request) {
 	s.getRunnerView(w, r, "", true)
 }
 
-// handleListMyRunners is GET /api/v1/me/runners: the caller's own unclaimed and claimed runners.
+// myRunnerRevokedShown is how long a runner someone else revoked stays on its owner's list, so the
+// owner learns it happened.
+const myRunnerRevokedShown = 7 * 24 * time.Hour
+
+// myRunnerHidden reports a row the owner's own list leaves out: another person's, a lapsed unclaimed
+// one, and a revoked one unless someone other than the owner revoked it within myRunnerRevokedShown.
+func myRunnerHidden(row types.Runner, owner string, now time.Time) bool {
+	if row.Owner != owner || runnerLapsed(row, now) {
+		return true
+	}
+	if row.State != types.RunnerRevoked {
+		return false
+	}
+	return row.RevokedAt == nil || row.RevokedBy == owner || row.RevokedAt.Before(now.Add(-myRunnerRevokedShown))
+}
+
+// handleListMyRunners is GET /api/v1/me/runners: the caller's own unclaimed and claimed runners, and
+// any a different person revoked in the last week.
 func (s *Server) handleListMyRunners(w http.ResponseWriter, r *http.Request) {
 	if !s.requireRunnersEnabled(w, r) {
 		return
@@ -182,9 +227,7 @@ func (s *Server) handleListMyRunners(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.cfg.Now().UTC()
-	rows = slices.DeleteFunc(rows, func(row types.Runner) bool {
-		return row.Owner != owner || row.State == types.RunnerRevoked || runnerLapsed(row, now)
-	})
+	rows = slices.DeleteFunc(rows, func(row types.Runner) bool { return myRunnerHidden(row, owner, now) })
 	if views, ok := s.runnerViews(w, r, rs, rows, false); ok {
 		writeJSON(w, http.StatusOK, views)
 	}

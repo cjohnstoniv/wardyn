@@ -78,29 +78,33 @@ func placementDeniedMsg(p types.Placement, profile string) string {
 }
 
 // localPlacementRefusal is the create-time answer for a local request: the
-// admitted plan's own refusal, else the final unsupported-local refusal. That
-// final refusal is deliberate even when the admitted inputs classify as own:
-// late dispatch can add provider/capture/redirect credentials and files that
-// the actual-spec classifier must inspect before H3/D117 enable execution.
-func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest,
+// admitted plan's own refusal, else nil for a pooled run, which create binds to
+// one of the person's own runners (runPlacement.apply), with the delivery policy
+// the plan was judged on. Dispatch classifies the actual spec again
+// (classifyLocalDispatch) for what late authoring adds. An unpooled local
+// request has no runner to go to and is refused.
+func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest, pooled bool,
 	spec types.RunPolicySpec, ceiling governanceCeiling, comps runComponents,
-	drive *types.DriveMount, workspaces []types.Workspace, baseline composer.Baseline,
-) *runRefusal {
+	drives []types.DriveMount, workspaces []types.Workspace, baseline composer.Baseline,
+) (placement.DeliveryPolicy, *runRefusal) {
 	if req.Placement != placement.Local {
-		return nil
+		return placement.DeliveryPolicy{}, nil
 	}
-	p, refusal := s.localAdmittedPlan(r, req, spec, ceiling, comps, drive, workspaces)
+	p, refusal := s.localAdmittedPlan(r, req, spec, ceiling, comps, drives, workspaces)
 	if refusal != nil {
-		return refusal
+		return placement.DeliveryPolicy{}, refusal
 	}
 	if err := s.localPlanFacts(r.Context(), &p, baseline, nil); err != nil {
-		return runServerError("read the local placement facts", err)
+		return placement.DeliveryPolicy{}, runServerError("read the local placement facts", err)
 	}
 	if _, ref := placement.LocalEligibility(p); ref != nil {
-		return s.localEligibilityRefusal(r, ceiling, ref)
+		return placement.DeliveryPolicy{}, s.localEligibilityRefusal(r, ceiling, ref)
 	}
-	return runError(placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable),
-		"Your own runner is not available: this server cannot place a run on a runner yet.")
+	if pooled {
+		return p.Delivery, nil
+	}
+	return placement.DeliveryPolicy{}, runError(placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable),
+		"Your own runner is not available: this server does not place runs on runners.")
 }
 
 // localPlanFacts fills what every LocalEligibility door (create, dispatch and
@@ -139,7 +143,7 @@ func (s *Server) localPlanFacts(ctx context.Context, p *placement.LocalPlan, bas
 // routing; D-117 adds per-candidate verified paths and capabilities to it.
 func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 	spec types.RunPolicySpec, ceiling governanceCeiling, comps runComponents,
-	drive *types.DriveMount, workspaces []types.Workspace,
+	drives []types.DriveMount, workspaces []types.Workspace,
 ) (placement.LocalPlan, *runRefusal) {
 	if fields := localDispatchUnclassified(); len(fields) != 0 {
 		return placement.LocalPlan{}, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), fields[0]+": unclassified dispatch metadata")
@@ -153,7 +157,7 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 		}
 	}
 	p := placement.LocalPlan{
-		Spec:    runner.SandboxSpec{Image: req.Image, Drive: drive, Mounts: buildRunMounts(spec, s.userMountPosture(workspaces)), ProxyConfig: runner.ProxyConfig{Policy: spec.Clone()}},
+		Spec:    runner.SandboxSpec{Image: req.Image, Drives: drives, Mounts: buildRunMounts(spec, s.userMountPosture(workspaces)), ProxyConfig: runner.ProxyConfig{Policy: spec.Clone()}},
 		Origins: map[string]placement.CredentialOrigin{}, UpstreamProxySecretRef: sc.UpstreamProxySecretRef,
 		LocalSelfDefinedComponents: ceiling.Limits.LocalSelfDefinedComponents,
 		TrustedOutput:              localTrustedOutputRequest(req),
@@ -194,7 +198,7 @@ type boundLocalPath struct {
 // verifiedLocalPaths is the plan's VerifiedLocalPaths: a path is verified only
 // when its stored runner binding is the candidate runner and the path lies
 // inside one of that runner's allowed roots. bound is keyed by the plan path
-// ("SandboxSpec.Mounts[0]", "SandboxSpec.Drive"). Nothing produces a binding on
+// ("SandboxSpec.Mounts[0]", "SandboxSpec.Drives[0]"). Nothing produces a binding on
 // batch yet (local_dir sources and host_path drives carry no runner column), so
 // every local mount still refuses placement_local_path until one does.
 func verifiedLocalPaths(candidate uuid.UUID, roots []string, bound map[string]boundLocalPath) map[string]bool {
@@ -297,15 +301,11 @@ type localGrantDelivery struct {
 
 // ownLocalGrantSpecs verifies the entire set before the first write. Local own
 // grant persistence never depends on a caller remembering to stamp OwnerOnly.
-// An org-held grant is admitted only when the stored delivery policy delivers
-// its class via_org and its kind has the via_org shape; it stays as authored
-// (never OwnerOnly) and is recorded via_org.
-func (s *Server) ownLocalGrantSpecs(r *http.Request, spec types.RunPolicySpec) (types.RunPolicySpec, []localGrantDelivery, *runRefusal) {
+// An org-held grant is admitted only when policy, the delivery policy the run's
+// plan was judged on, delivers its class via_org and its kind has the via_org
+// shape; it stays as authored (never OwnerOnly) and is recorded via_org.
+func (s *Server) ownLocalGrantSpecs(r *http.Request, spec types.RunPolicySpec, policy placement.DeliveryPolicy) (types.RunPolicySpec, []localGrantDelivery, *runRefusal) {
 	spec = spec.Clone()
-	policy, err := s.storedDeliveryPolicy(r.Context())
-	if err != nil {
-		return types.RunPolicySpec{}, nil, runServerError("read the credential delivery policy", err)
-	}
 	out := make([]localGrantDelivery, len(spec.EligibleGrants))
 	for i, g := range spec.EligibleGrants {
 		origin, ref := s.localGrantOrigin(r.Context(), localRequestOwner(r), g)

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -327,5 +329,45 @@ func TestFinishHarnessLoginLaunch_PanicFailsTheRunFromItsCurrentState(t *testing
 	}
 	if n := len(audit.find("run.dispatch")); n < 1 {
 		t.Errorf("run.dispatch failure rows = %d, want at least 1 — a panicked launch must leave a trail", n)
+	}
+}
+
+// fix-r3 R2-3: a managed-harness sign-in is exempt from deny_placements at dispatch as it is at create
+// (harnesscred.go): a member whose profile denies remote still gets the sign-in box the run needs.
+func TestFinishHarnessLoginLaunch_DenyRemoteMemberSignInDispatches(t *testing.T) {
+	h := newHarness(t)
+	st := &integStore{govEscapeStore: newGovEscapeStore(assignedStore(limitsProfile("no-remote",
+		types.GovernanceLimits{DenyPlacements: []types.Placement{types.PlacementRemote}}))), site: credentialSite(ssoProvider())}
+	rnr := &fakeRunner{}
+	audit := &memAudit{}
+	cfg := baseTestConfig(h, st)
+	cfg.Audit = audit
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.Runner = rnr
+	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+	cfg.MaskRegistry = secretmask.NewRegistry()
+	cfg.DefaultPolicy = govDeployment()
+	srv := New(cfg)
+	ctx := withOIDCGroups(withOIDCRole(withOIDCHuman(context.Background(), "sub-member"), oidc.RoleUser), []string{"eng"})
+	ctx = withOIDCEmail(ctx, "member@corp.example")
+	if c, err := srv.effectiveCeiling(ctx); err != nil || !slices.Contains(c.Limits.DenyPlacements, types.PlacementRemote) {
+		t.Fatalf("the member's ceiling = %+v (%v), want it to deny remote", c.Limits.DenyPlacements, err)
+	}
+	hl, ok := agentHarnessLogin(awsSSOAgent)
+	if !ok {
+		t.Fatal("aws-sso harness login convention missing")
+	}
+	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, loginTarget{startURL: "https://acme.awsapps.com/start"})
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	srv.finishHarnessLoginLaunch(ctx, run, dispatch)
+	for _, ev := range audit.find("run.dispatch") {
+		if strings.Contains(string(ev.Data), string(placement.ReasonPlacementDenied)) {
+			t.Fatalf("the sign-in run was refused placement_denied at dispatch: %s", ev.Data)
+		}
+	}
+	if rnr.createCalls != 1 {
+		t.Fatalf("CreateSandbox calls = %d, want the sign-in box created", rnr.createCalls)
 	}
 }

@@ -1,0 +1,9 @@
+[
+  { "key": "SELECTION_CONFLICT", "args": [], "text": "Send drive or drives, not both." },
+  { "key": "INVALID", "args": ["0"], "text": "drives[0].drive_id: give a drive id from your drive list, once." },
+  { "key": "TOO_MANY", "args": ["16"], "text": "drives: attach at most 16 drives." },
+  { "key": "NOT_FOUND", "args": ["8b1f6a52-3c1e-4c55-9d0e-2f4b7c9a1e10"], "text": "No drive 8b1f6a52-3c1e-4c55-9d0e-2f4b7c9a1e10 is available to you." },
+  { "key": "NOT_IN_POOL", "args": ["team-data"], "text": "team-data: not available in this pool's runners." },
+  { "key": "TARGET_CONFLICT", "args": ["Team data", "team data", "/home/agent/shared/team-data"], "text": "Team data and team data both mount at /home/agent/shared/team-data. Attach one of them." },
+  { "key": "SHARE_BESIDE_MANAGED", "args": ["Team share", "Personal"], "text": "Team share is a shared drive and Personal a managed one; a Kubernetes run mounts one kind or the other. Attach one of them." }
+]

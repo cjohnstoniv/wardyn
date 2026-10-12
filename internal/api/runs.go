@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -301,7 +302,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Persist the eligibility records + derive the non-secret sandbox wiring
 	// (github/git_pat/ssh grant ids, api_key proxy injections, SCM egress) —
 	// see persistRunGrants. A grant write failure has already answered 500.
-	gw, grantWarnings, ok := s.wireRunGrants(ctx, w, r, run, now, spec, req, comps)
+	gw, grantWarnings, ok := s.wireRunGrants(ctx, w, r, run, now, spec, req, comps, f.localDelivery)
 	if !ok {
 		abort(createRunGrantAbortHint)
 		return
@@ -317,11 +318,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, f.modelCred.Kind)
 
 	createData := createRunAuditData(req, f.policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
-	createData["policy_source"] = f.source
+	createData["policy_source"], createData["end"] = f.source, f.end.audit(run)
 	if len(gw.delivery) > 0 {
 		createData["delivery"] = gw.delivery
 	}
-	createData["end"] = f.end.audit(run)
+	stampDriveAudit(createData, f.drives)
 	stampHarnessSet(createData, f.harnesses, f.image)
 	comps.stampRunCreate(createData)
 	maps.Copy(createData, f.place.auditFields(created))
@@ -369,7 +370,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	spec, harnessRules := applyHarnessToolRules(spec, req.Tools, toolLaneDefault(req))
 	launch := createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
-		wsRefs: wsRefs, driveMount: f.driveMount, ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
+		wsRefs: wsRefs, driveMounts: f.driveMounts, ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
 		runToken: id.Token, created: created, comps: comps, overridden: f.source.overridden(), pushSets: f.pushSets, harnessRules: harnessRules,
 		harnesses: f.harnesses, mainDrive: f.mainDrive.decision(),
 	}
@@ -386,9 +387,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // Create and the pool queue's start wire a run the same way. A grant write failure has already
 // answered 500 (ok is false).
 func (s *Server) wireRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, run types.AgentRun, now time.Time, spec types.RunPolicySpec,
-	req createRunRequest, comps runComponents,
+	req createRunRequest, comps runComponents, delivery placement.DeliveryPolicy,
 ) (grantWiring, []string, bool) {
-	gw, ok := s.persistRunGrants(ctx, w, r, run.ID, now, spec, run.Placement)
+	gw, ok := s.persistRunGrants(ctx, w, r, run.ID, now, spec, run.Placement, delivery)
 	// The git broker's repositories, then the GitHub CLI's grants over them.
 	if !ok || !s.persistGitHubCLIGrants(ctx, w, r, run.ID, now, req.Repo, spec.WorkspaceRepos, comps, &gw) {
 		return grantWiring{}, nil, false

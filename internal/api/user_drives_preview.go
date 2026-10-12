@@ -127,7 +127,7 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 //     tell an admin a profile refused somebody it did not.
 //  1. THE DOOR, resolved for the PREVIEWED claims rather than for the admin
 //     doing the previewing (driveDoorShut over ResolveGovernanceProfile).
-//     seedRequestDrive runs it after the switch and before the resolver, so a
+//     seedRequestDrives runs it after the switch and before the resolver, so a
 //     403 beats a 500 or an allocation-shaped 422; so does this.
 //  2. The unanswerable group tier. A request that carries no `groups` at all
 //     has not evaluated the group tier, which is the same condition a nil

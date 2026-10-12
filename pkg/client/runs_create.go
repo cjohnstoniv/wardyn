@@ -147,6 +147,12 @@ type CreateRunRequest struct {
 	// their own identity, so this flag can only ever ask for the storage the
 	// caller was already granted.
 	Drive *DriveSelection `json:"drive,omitempty"`
+	// Drives attaches drives from GET /me/drives by id, each at the target the
+	// catalogue shows; the person's legacy drive keeps /home/agent/drive. Each
+	// is authorised through the caller's own grants. Sending both Drive and
+	// Drives is 400 drive_selection_conflict. One drive that cannot be mounted
+	// refuses the run; none is dropped.
+	Drives []DriveAttachment `json:"drives,omitempty"`
 	// Components attaches custom components to this run: each entry names a
 	// stored component by id or carries a run-only definition inline. Nil and
 	// empty are the same and attach nothing, byte for byte today.
@@ -271,6 +277,15 @@ type DriveSelection struct {
 	//
 	// The same direction WorkspaceSelection.ReadOnly enforces, and for the same
 	// reason: a run-level option may only ever narrow what an admin granted.
+	ReadOnly *bool `json:"read_only,omitempty"`
+}
+
+// DriveAttachment is one entry of CreateRunRequest.Drives.
+type DriveAttachment struct {
+	// DriveID is a drive id from GET /me/drives, in its canonical spelling.
+	DriveID string `json:"drive_id"`
+	// ReadOnly narrows only, as DriveSelection.ReadOnly does: false against a
+	// read-only drive is 422.
 	ReadOnly *bool `json:"read_only,omitempty"`
 }
 
@@ -429,6 +444,9 @@ type PreflightResult struct {
 	// BarrierOptions are the resolved pool's three barriers under this draft's
 	// floors (policy_floor and access_floor appear only here); empty when unpooled.
 	BarrierOptions []BarrierOption `json:"barrier_options"`
+	// RunnerPoolSlots is the resolved pool's slot counts, with the run's max_wait_sec; absent when
+	// unpooled. Advisory: the launch decides.
+	RunnerPoolSlots *PoolSlots `json:"runner_pool_slots,omitempty"`
 	// Access is what the run brings in: its rows, hosts, credentials, the line
 	// for an unlisted host and the setup still needed. The policy preview
 	// answers the same block for the same request.

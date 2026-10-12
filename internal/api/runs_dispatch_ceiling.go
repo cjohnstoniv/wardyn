@@ -66,8 +66,11 @@ type dispatchCeiling struct {
 	// would kill every broker lane on a deployment with no profile at all.
 	deny []string
 	// profile is the assigned profile's NAME, for the run.ceiling.reassert audit
-	// event. Nothing branches on it.
+	// event and the placement_denied sentence.
 	profile string
+	// denyPlacements is the profile's deny_placements, held against the run's placement once more at
+	// dispatch (dispatchPlacementDenied).
+	denyPlacements []types.Placement
 	// maxEphemeralDiskMiB is GovernanceLimits.MaxEphemeralDiskMiB — the profile's
 	// ceiling on the writable scratch a run gets, 0 = unlimited. It rides here for
 	// the same reason deny does: applyEphemeralDisk is a dispatch phase, and the
@@ -134,7 +137,7 @@ func ceilingForDispatch(c governanceCeiling, ado adoEntraGrade, bedrock bedrockC
 		return dispatchCeiling{resolved: true, adoEntra: ado, bedrock: bedrock, adoStanding: standing}
 	}
 	return dispatchCeiling{
-		resolved: true, deny: c.Spec.DeniedDomains, profile: c.Profile.Name,
+		resolved: true, deny: c.Spec.DeniedDomains, profile: c.Profile.Name, denyPlacements: c.Limits.DenyPlacements,
 		localSelfDefinedComponents: c.Limits.LocalSelfDefinedComponents,
 		maxEphemeralDiskMiB:        c.Limits.MaxEphemeralDiskMiB, maxCPUMillis: memberBound(c.Limits.MaxCPUMillis, c.memberSize().CPUMillis),
 		maxMemoryMiB: memberBound(c.Limits.MaxMemoryMiB, c.memberSize().MemoryMiB), adoEntra: ado, bedrock: bedrock, adoStanding: standing,

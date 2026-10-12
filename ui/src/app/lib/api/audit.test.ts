@@ -25,6 +25,29 @@ function ev(partial: Partial<AuditEvent>): AuditEvent {
 }
 
 describe("egressFromAudit", () => {
+  // 0.9 (M-RN-3 RS7): a decision replayed from a runner's offline spool keeps the time the runner made it, and
+  // the refusal a full log forces is marked; an ordinary row carries neither key.
+  it("marks a spooled row with the time the runner decided it, and a full-log refusal", () => {
+    const observed = aheadByHours(-5);
+    const out = egressFromAudit([
+      ev({ id: "s", action: "egress.allow", target: "api.example.com:443", data: { spooled: true, observed_at: observed, rule_source: "policy:domain" } }),
+      ev({ id: "f", action: "egress.deny", target: "x.example.com:443", data: { spooled: true, observed_at: observed, rule_source: "builtin:spool-full" } }),
+      ev({ id: "n", action: "egress.allow", target: "plain.example.com:443", data: { rule_source: "policy:domain" } }),
+    ]);
+    expect(out[0]).toMatchObject({ id: "s", spooled_at: observed });
+    expect(out[0].spool_full).toBeUndefined();
+    expect(out[1]).toMatchObject({ id: "f", decision: "deny", spooled_at: observed, spool_full: true });
+    expect("spooled_at" in out[2] || "spool_full" in out[2]).toBe(false);
+  });
+
+  it("does not call a row spooled without the spooled flag, or without an observed time", () => {
+    const out = egressFromAudit([
+      ev({ id: "a", action: "egress.allow", target: "a.example.com:443", data: { observed_at: aheadByHours(-5) } }),
+      ev({ id: "b", action: "egress.allow", target: "b.example.com:443", data: { spooled: true } }),
+    ]);
+    expect(out.every((d) => d.spooled_at === undefined)).toBe(true);
+  });
+
   it("maps the three egress actions to their decisions", () => {
     const out = egressFromAudit([
       ev({ id: "a", action: "egress.allow", target: "api.anthropic.com:443" }),

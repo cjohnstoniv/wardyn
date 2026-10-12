@@ -14,6 +14,8 @@ import {
   MODEL_PROVIDERS, PROVIDER_ACCESS, withFacts,
 } from "../../../../../lib/new-run-fixtures/scenarios/tools-harness";
 import type { AccessFacts, ToolPolicyFact } from "../../../../../lib/types/new-run-access";
+import type { HarnessSetFact } from "../../../../../lib/types/new-run-contract";
+import type { SetupItem } from "../../../../../lib/types/preflight";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import type { RunIntent } from "../../draft/run-intent";
@@ -43,14 +45,18 @@ function Draft() {
   const { intent } = useNewRunDraft();
   return <pre data-testid="draft">{JSON.stringify({ tools: intent.tools, components: intent.components })}</pre>;
 }
-function Live({ access }: { access: AccessFacts | undefined }) {
+function Live({ access, harnessSet }: { access: AccessFacts | undefined; harnessSet?: HarnessSetFact }) {
   const { intent } = useNewRunDraft();
-  return <HarnessSetup access={access} intent={intent} answered={h.answered} names={NAMES} onSignedIn={onSignedIn} />;
+  return <HarnessSetup access={access} harnessSet={harnessSet} intent={intent} answered={h.answered} names={NAMES} onSignedIn={onSignedIn} />;
 }
-function show(facts: ToolPolicyFact[] | undefined, intent: RunIntent = CLAUDE, rows = [MCP_DOCS]) {
+/** The server asks for a choice (the preview's `choose_model_provider` item) only when it chose none. */
+const CHOOSE: SetupItem = { id: "llm_access:claude-code", kind: "llm_access", label: "Choose a model provider", required_by: "claude-code", status: "missing", fix: { action: "choose_model_provider", tool: "claude-code" } };
+/** The preview's harness_set when the server itself chose `provider` for Claude Code. */
+const chose = (provider: string): HarnessSetFact => ({ shared_model_access: false, harnesses: [{ id: "claude-code", starts: true, model_credential: { provider, kind: "api_key", residency: "proxy" } }] });
+function show(facts: ToolPolicyFact[] | undefined, intent: RunIntent = CLAUDE, rows = [MCP_DOCS], extra: { setup?: SetupItem[]; harnessSet?: HarnessSetFact } = {}) {
   return render(
     <NewRunDraftProvider owner="alice">
-      <Seed intent={intent}><Live access={facts ? withFacts(BASE, facts, rows) : undefined} /><Draft /></Seed>
+      <Seed intent={intent}><Live access={facts ? { ...withFacts(BASE, facts, rows), setup: extra.setup ?? [] } : undefined} harnessSet={extra.harnessSet} /><Draft /></Seed>
     </NewRunDraftProvider>,
   );
 }
@@ -72,7 +78,7 @@ describe("HarnessSetup", () => {
 
   describe("model provider", () => {
     it("lists the providers that serve the harness by record name, and never a switched-off one", () => {
-      show([CLAUDE_UNGATED]);
+      show([CLAUDE_UNGATED], CLAUDE, [MCP_DOCS], { setup: [CHOOSE] });
       const select = screen.getByLabelText(NR_TOOLS.PROVIDER_LABEL);
       expect(select.id).toBe(providerControlId("claude-code"));
       expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual([NR_TOOLS.PROVIDER_CHOOSE, "Anthropic API key", "Bedrock (SSO)"]);
@@ -80,7 +86,7 @@ describe("HarnessSetup", () => {
     });
 
     it("writes the choice to the harness's own tool entry", async () => {
-      show([CLAUDE_UNGATED]);
+      show([CLAUDE_UNGATED], CLAUDE, [MCP_DOCS], { setup: [CHOOSE] });
       await userEvent.selectOptions(screen.getByLabelText(NR_TOOLS.PROVIDER_LABEL), "anthropic-key");
       expect(draft().tools).toEqual([{ id: "claude-code", kind: "harness", model_provider: "anthropic-key" }]);
       expect(screen.queryByText(NR_TOOLS.PROVIDER_REQUIRED)).toBeNull();
@@ -111,10 +117,35 @@ describe("HarnessSetup", () => {
 
     it("still renders the provider control, off and required, when no provider serves the harness", () => {
       h.providers = [];
-      show([CLAUDE_UNGATED]);
+      show([CLAUDE_UNGATED], CLAUDE, [MCP_DOCS], { setup: [CHOOSE] });
       const select = screen.getByLabelText(NR_TOOLS.PROVIDER_LABEL) as HTMLSelectElement;
       expect(select.id).toBe("nr-provider-claude-code");
       expect(select.disabled).toBe(true);
+      expect(screen.getByText(NR_TOOLS.PROVIDER_REQUIRED)).toBeTruthy();
+    });
+
+    it("shows the provider the server chose, with its delivery line, and neither asks for a choice nor writes one to the draft (R)", () => {
+      show([CLAUDE_UNGATED], CLAUDE, [MCP_DOCS], { harnessSet: chose("anthropic-key") });
+      expect((screen.getByLabelText(NR_TOOLS.PROVIDER_LABEL) as HTMLSelectElement).value).toBe("anthropic-key");
+      expect(screen.getByText(NR_TOOLS.PROVIDER_PROXY)).toBeTruthy();
+      expect(screen.queryByText(NR_TOOLS.PROVIDER_REQUIRED)).toBeNull();
+      expect(draft().tools).toEqual([{ id: "claude-code", kind: "harness" }]);
+    });
+
+    it("lets a pick replace the server's choice, and says nothing when the server asks for none and chose none", async () => {
+      show([CLAUDE_UNGATED], CLAUDE, [MCP_DOCS], { harnessSet: chose("anthropic-key") });
+      await userEvent.selectOptions(screen.getByLabelText(NR_TOOLS.PROVIDER_LABEL), "bedrock-sso");
+      expect((screen.getByLabelText(NR_TOOLS.PROVIDER_LABEL) as HTMLSelectElement).value).toBe("bedrock-sso");
+      expect(draft().tools).toEqual([{ id: "claude-code", kind: "harness", model_provider: "bedrock-sso" }]);
+      cleanup();
+      show([CLAUDE_UNGATED]);
+      expect((screen.getByLabelText(NR_TOOLS.PROVIDER_LABEL) as HTMLSelectElement).value).toBe("");
+      expect(screen.queryByText(NR_TOOLS.PROVIDER_REQUIRED)).toBeNull();
+    });
+
+    it("ignores a server choice the picker does not list", () => {
+      show([CLAUDE_UNGATED], CLAUDE, [MCP_DOCS], { harnessSet: chose("gateway-off"), setup: [CHOOSE] });
+      expect((screen.getByLabelText(NR_TOOLS.PROVIDER_LABEL) as HTMLSelectElement).value).toBe("");
       expect(screen.getByText(NR_TOOLS.PROVIDER_REQUIRED)).toBeTruthy();
     });
 
