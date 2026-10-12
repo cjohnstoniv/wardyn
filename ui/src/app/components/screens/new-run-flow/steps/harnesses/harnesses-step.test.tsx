@@ -7,6 +7,7 @@ import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { setField } from "../../../../../../test/set-field";
 import { MemoryRouter } from "react-router-dom";
 import { NR_HARNESSES } from "../../../../wardyn/copy/new-run/harnesses";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
@@ -120,7 +121,7 @@ describe("Harnesses step: Interactive", () => {
     const [first, second] = await screen.findAllByRole("switch", { name: NR_HARNESSES.START_IN_HARNESS });
     expect(screen.queryByLabelText(new RegExp(NR_HARNESSES.STARTING_PROMPT))).not.toBeInTheDocument();
     await user.click(first);
-    await user.type(await screen.findByLabelText(new RegExp(NR_HARNESSES.STARTING_PROMPT)), "look around");
+    setField(await screen.findByLabelText(new RegExp(NR_HARNESSES.STARTING_PROMPT)), "look around");
     expect(intentNow().startup).toEqual({ kind: "harness", tool: "claude-code", prompt: "look around" });
     await user.click(second);
     expect(first).toHaveAttribute("aria-checked", "false");
@@ -149,7 +150,7 @@ describe("Harnesses step: Autonomous", () => {
     expect(screen.getByRole("button", { name: NR_HARNESSES.ADD_ANOTHER })).toBeDisabled();
     expect(screen.getByText(NR_SHARED.COMING_SOON)).toBeInTheDocument();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
-    await user.type(screen.getByRole("textbox", { name: new RegExp(NR_HARNESSES.TASK_LABEL) }), "ship it");
+    setField(screen.getByRole("textbox", { name: new RegExp(NR_HARNESSES.TASK_LABEL) }), "ship it");
     expect(intentNow().workload).toEqual({ kind: "agent_task", agent: "claude-code", task: "ship it" });
     expect(intentNow().startup).toBeUndefined();
   });
@@ -173,7 +174,7 @@ describe("Harnesses step: Autonomous", () => {
     expect(go).not.toHaveBeenCalled();
     expect(task).toHaveFocus();
     expect(await screen.findByText(NR_HARNESSES.TASK_ERROR)).toBeInTheDocument();
-    await user.type(task, "x");
+    setField(task, "x");
     expect(screen.queryByText(NR_HARNESSES.TASK_ERROR)).not.toBeInTheDocument();
   });
 });
