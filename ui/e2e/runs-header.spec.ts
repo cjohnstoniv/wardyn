@@ -37,7 +37,7 @@ async function openRuns(page: Page): Promise<void> {
 // run.autonomy_level freezes the level resolveRunAutonomy capped this run at,
 // at create time — never populated by the seeded backend's operator bearer
 // (same operator short-circuit governance.spec.ts's header note explains for
-// the rail), so spliced onto the real GET response — the same
+// the member's New Run), so spliced onto the real GET response — the same
 // route.fetch()+patch+refulfill technique the interactive/failure_hint splice
 // in runs-detail.spec.ts uses.
 test.describe("Run header — the autonomy chip (#93/#97)", () => {

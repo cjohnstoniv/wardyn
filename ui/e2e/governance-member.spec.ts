@@ -3,8 +3,21 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, mockMemberRole, navToRoute, sidebarLink, goToNewRunPanel } from "./fixtures";
+import {
+  test,
+  expect,
+  chooseShape,
+  continueNewRun,
+  gotoConsole,
+  mockMemberRole,
+  navToRoute,
+  sidebarLink,
+  startGuided,
+} from "./fixtures";
 import { GOVERNANCE as GOV, MEMBER } from "../src/app/lib/governance-copy";
+import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
+import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
+import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import type { Page } from "@playwright/test";
 
@@ -17,6 +30,15 @@ import type { Page } from "@playwright/test";
 test.describe.configure({ mode: "serial" });
 
 const NAME = "walled";
+
+// New Run's Run step, as a person reaches it: Start, guided setup, an Environment, Continue.
+async function openRunStep(page: Page): Promise<void> {
+  await navToRoute(page, "/runs/new");
+  await expect(page.getByRole("heading", { name: NR_START.TITLE })).toBeVisible();
+  await startGuided(page);
+  await chooseShape(page, "environment");
+  await continueNewRun(page, NR_RUN.TITLE_ENV);
+}
 
 test.describe("governance — a member sees none of it (mocked /me role)", () => {
   test("Governance is absent from the member nav, beside the rest of the admin set", async ({ page }) => {
@@ -52,20 +74,25 @@ async function mockAssignedCeiling(page: Page, name: string): Promise<void> {
     json.governance_profile_name = name;
     await route.fulfill({ response, json });
   });
+  // The Run step reads the same profile off the pool list's allowance, so it is spliced there too.
+  await page.route("**/api/v1/runner-pools*", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch();
+    const json = await response.json();
+    json.allowance = { active: 0, ...json.allowance, profile_name: name };
+    await route.fulfill({ response, json });
+  });
 }
 
 test.describe("governance — the member is told which ceiling bounds them", () => {
-  test("the run rail names the assigned profile, above the policy it clamps", async ({ page }) => {
+  test("the Run step names the assigned profile in the per-run limits note", async ({ page }) => {
     await mockMemberRole(page);
     await mockAssignedCeiling(page, NAME);
     await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
+    await openRunStep(page);
 
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
-    await expect(page.getByText(MEMBER.CEILING_PROFILE(NAME))).toBeVisible();
-    // Under the rail's Ceiling section — first, because it bounds everything
-    // below it.
-    await expect(page.getByText(GOV.CEILING_TITLE, { exact: true })).toBeVisible();
+    // The limits note names whose ceiling bounds the run, beside the pool's own and the server's.
+    await expect(page.getByText(NR_RUN.LIMITS_NOTE(NAME))).toBeVisible();
   });
 
   test("the member Getting Started card names it too — the chip and the line", async ({ page }) => {
@@ -91,96 +118,98 @@ test.describe("governance — the member is told which ceiling bounds them", () 
     await expect(page.getByText(/Governance ·/)).toHaveCount(0);
     await expect(page.getByText(/Your runs are bounded by/)).toHaveCount(0);
 
-    await navToRoute(page, "/runs/new");
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await openRunStep(page);
     await expect(page.getByText(/the governance profile your admin assigned you/)).toHaveCount(0);
+    await expect(page.getByText(NR_RUN.LIMITS_NOTE(NAME))).toHaveCount(0);
   });
 });
 
 // ---------------------------------------------------------------------------
-// #1200 — the shared TierPicker on the member's own New Run page: the
-// installed ∧ allowed filter, the decided state it collapses to with exactly
-// one tier left, and T-9's requirement card when the floor and the host
-// disagree. mockAssignedCeiling above only ever named a PROFILE; this splices
-// the floor itself (min_confinement_class) the same documented way, plus
-// /setup/status's confinement_classes — this harness's own runner (`-runner
-// none`) advertises none at all, so "what this host has installed" has to be
-// spliced too, or every tier would read as unknown rather than as a real
-// install fact.
+// #1200 — the barrier choice on the member's own New Run page: which of
+// Fence / Wall / Vault the Run step offers, the decided state it collapses to
+// with exactly one choice left, and T-9's requirement when the floor and the
+// host disagree. The Run step reads its barriers from the pool list
+// (GET /runner-pools, `barrier_options`: disabled plus a reason, the default
+// and its source), so that list is what is spliced. The hermetic runner
+// (`-runner none`) installs no tier at all, and the floor is an admin's
+// setting a member session cannot mint, so a real answer cannot be asked for.
 // ---------------------------------------------------------------------------
 
-async function mockGovernanceFloor(page: Page, floor: string, profileName: string): Promise<void> {
-  await page.route("**/api/v1/policies/default", async (route) => {
+interface BarrierSplice {
+  class: "CC1" | "CC2" | "CC3";
+  available: boolean;
+  default?: boolean;
+  default_source?: "organisation" | "server";
+  reason_code?: "below_floor" | "not_offered";
+  reason_detail?: "kvm_missing";
+  floor?: "CC2" | "CC3";
+}
+
+async function mockBarriers(page: Page, options: BarrierSplice[]): Promise<void> {
+  await page.route("**/api/v1/runner-pools*", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
     const response = await route.fetch();
     const json = await response.json();
-    json.min_confinement_class = floor;
-    json.governance_profile_name = profileName;
+    json.pools = (json.pools ?? []).map((pool: object) => ({ ...pool, barrier_options: options }));
     await route.fulfill({ response, json });
   });
 }
 
-async function mockInstalledTiers(page: Page, classes: string[]): Promise<void> {
-  await page.route("**/api/v1/setup/status", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
-    json.runner = { ...json.runner, driver: "docker", confinement_classes: classes };
-    await route.fulfill({ response, json });
-  });
-}
+const barrier = (page: Page, name: string) => page.getByRole("radio", { name: new RegExp(`^${name}`) });
 
-test.describe("governance — the member's own picker obeys the floor (T-9)", () => {
-  test("a Vault floor, with Vault installed, leaves no picker at all — 'Vault' decided", async ({ page }) => {
+const BELOW_VAULT: BarrierSplice[] = [
+  { class: "CC1", available: false, reason_code: "below_floor", floor: "CC3" },
+  { class: "CC2", available: false, reason_code: "below_floor", floor: "CC3" },
+];
+
+test.describe("governance — the member's own barrier choice obeys the floor (T-9)", () => {
+  test("a Vault floor, with Vault available, leaves one choice — Vault, set by the organisation", async ({ page }) => {
     await mockMemberRole(page);
-    await mockGovernanceFloor(page, "CC3", "vault-required");
-    await mockInstalledTiers(page, ["CC1", "CC2", "CC3"]);
+    await mockBarriers(page, [...BELOW_VAULT, { class: "CC3", available: true, default: true, default_source: "organisation" }]);
     await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
+    await openRunStep(page);
 
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
-    // The barrier leads the Policy panel (#1922).
-    await goToNewRunPanel(page, "policy");
-    await expect(page.getByText("Vault · set by your admin")).toBeVisible();
-    // No control at all — not Fence/Wall disabled, not present. (The
-    // authored-policy spec's OWN floor chip, unrelated to this governance
-    // floor, legitimately renders "Fence" elsewhere on this page — the
-    // radiogroup is what actually proves "no picker".)
-    await expect(page.getByRole("radio", { name: "Fence" })).toHaveCount(0);
-    await expect(page.getByRole("radio", { name: "Wall" })).toHaveCount(0);
-    await expect(page.getByRole("radio", { name: "Vault" })).toHaveCount(0);
+    // Fence and Wall stay on the table, shut, each saying why; Vault is the only live choice.
+    await expect(page.getByText(NR_RUN.BARRIER_REQUIRED(NR_SHARED.BARRIER_VAULT)).first()).toBeVisible();
+    await expect(barrier(page, NR_SHARED.BARRIER_FENCE)).toBeDisabled();
+    await expect(barrier(page, NR_SHARED.BARRIER_WALL)).toBeDisabled();
+    await expect(barrier(page, NR_SHARED.BARRIER_VAULT)).toBeEnabled();
+    await expect(barrier(page, NR_SHARED.BARRIER_VAULT)).toBeChecked();
+    await expect(page.getByText(NR_RUN.BADGE_ORG_DEFAULT)).toBeVisible();
   });
 
   test("a Vault floor the host cannot build shows the requirement, never a silent fallback", async ({ page }) => {
     await mockMemberRole(page);
-    await mockGovernanceFloor(page, "CC3", "vault-required");
     // This host only has Fence/Wall — the floor and the host disagree.
-    await mockInstalledTiers(page, ["CC1", "CC2"]);
+    await mockBarriers(page, [
+      ...BELOW_VAULT,
+      { class: "CC3", available: false, reason_code: "not_offered", reason_detail: "kvm_missing" },
+    ]);
     await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
+    await openRunStep(page);
 
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
-    await goToNewRunPanel(page, "policy");
-    // Review P2-6: the governance-sourced wording, not the generic one —
-    // this member's floor IS the governance ceiling's doing.
-    await expect(
-      page.getByText(/Your admin requires Vault, and this host can't run it/),
-    ).toBeVisible();
-    // Never the false claim that Wall (the strongest tier this host DOES
-    // have) is what the member gets.
-    await expect(page.getByText("Wall · set by your admin")).toHaveCount(0);
-    await expect(page.getByRole("radio", { name: "Wall" })).toHaveCount(0);
+    await expect(page.getByText(NR_RUN.BARRIER_REQUIRED(NR_SHARED.BARRIER_VAULT)).first()).toBeVisible();
+    await expect(page.getByText(NR_RUN.BARRIER_NO_KVM)).toBeVisible();
+    // Never the false claim that Wall (the strongest tier this host DOES have) is what the member gets.
+    await expect(barrier(page, NR_SHARED.BARRIER_WALL)).toBeDisabled();
+    await expect(barrier(page, NR_SHARED.BARRIER_WALL)).not.toBeChecked();
+    await expect(barrier(page, NR_SHARED.BARRIER_VAULT)).toBeDisabled();
   });
 
-  test("a tier the host hasn't installed never shows on the member's page, floor or not", async ({ page }) => {
+  test("a tier the host hasn't installed is never selectable on the member's page, floor or not", async ({ page }) => {
     await mockMemberRole(page);
-    await mockInstalledTiers(page, ["CC1", "CC2"]); // no Vault, no floor spliced
+    await mockBarriers(page, [
+      { class: "CC1", available: true },
+      { class: "CC2", available: true, default: true, default_source: "server" },
+      { class: "CC3", available: false, reason_code: "not_offered" },
+    ]);
     await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
+    await openRunStep(page);
 
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
-    await goToNewRunPanel(page, "policy");
-    await expect(page.getByRole("radio", { name: "Fence" })).toBeVisible();
-    await expect(page.getByRole("radio", { name: "Wall" })).toBeVisible();
-    await expect(page.getByRole("radio", { name: "Vault" })).toHaveCount(0);
+    await expect(barrier(page, NR_SHARED.BARRIER_FENCE)).toBeEnabled();
+    await expect(barrier(page, NR_SHARED.BARRIER_WALL)).toBeEnabled();
+    await expect(barrier(page, NR_SHARED.BARRIER_VAULT)).toBeDisabled();
+    await expect(page.getByText(NR_RUN.BARRIER_NONE_OFFERS(NR_SHARED.BARRIER_VAULT))).toBeVisible();
   });
 });
 

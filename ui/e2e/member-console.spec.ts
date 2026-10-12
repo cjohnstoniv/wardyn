@@ -4,7 +4,27 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { test, expect, ADMIN_TOKEN, MEMBER_PRINCIPAL, asRealMember, asRealSecurityAdmin, consoleAPI, gotoConsole, mockMemberRole, navToRoute, sidebarLink, sql, goToNewRunPanel } from "./fixtures";
+import {
+  test,
+  expect,
+  ADMIN_TOKEN,
+  MEMBER_PRINCIPAL,
+  asRealMember,
+  asRealSecurityAdmin,
+  consoleAPI,
+  continueNewRun,
+  gotoConsole,
+  mockMemberRole,
+  navToRoute,
+  openNewRun,
+  sidebarLink,
+  sql,
+  startGuided,
+  chooseShape,
+} from "./fixtures";
+import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
+import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
+import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
 import { DENIED } from "../src/app/lib/permissions-copy";
 
 test.describe("member console — real member navigation", () => {
@@ -141,31 +161,43 @@ test.describe("member why-denied (mocked /me role, real enforcement)", () => {
     await expect(page.getByText(DENIED.STALE_GROUPS)).toBeVisible();
   });
 
-  test("an ungranted workspace stays LISTED and annotated — visibility is not capability", async ({ page }) => {
+  test("an ungranted workspace is not offered as a repository — availability decides what New Run lists", async ({ page, request }) => {
     // #1267: available_to_you is computed for the REAL caller (decide's own
     // step 1 exempts an operator unconditionally), so a role SPLICE no longer
     // suffices here — mockMemberRole's request still carries the operator
     // bearer, which the server now correctly reports as always available.
     // asRealMember is a genuine non-operator token, so the real backend's
     // real enforcement (this describe's own beforeEach) refuses it for real.
-    await asRealMember(page);
-    await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    //
+    // The Files step lists the repositories of workspaces the caller may launch and no other, so the
+    // ungranted workspace is one with a repository (a local directory is never listed there).
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const created = await request.post("/api/v1/workspaces", {
+      headers: auth,
+      data: { name: "e2e-mc-ungranted", sources: [{ type: "repo", source: "https://dev.azure.com/contoso/nr/_git/e2e-mc-ungranted" }] },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const id = ((await created.json()) as { id: string }).id;
+    try {
+      await asRealMember(page);
+      await gotoConsole(page);
+      await openNewRun(page);
+      await startGuided(page);
+      await chooseShape(page, "environment");
+      await continueNewRun(page, NR_RUN.TITLE_ENV);
+      await continueNewRun(page, NR_HARNESSES.TITLE);
+      const listed = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/workspaces" && r.request().method() === "GET");
+      await continueNewRun(page, NR_FILES.TITLE);
+      await listed;
 
-    // The workspace Select's trigger carries no accessible name of its own —
-    // its content IS the current selection, so filter on that.
-    const picker = page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" });
-    await goToNewRunPanel(page, "workspace");
-    await picker.click();
-    const option = page.getByRole("option", { name: /payments/ });
-    await expect(option).toBeVisible();
-    await expect(option.getByText(DENIED.WORKSPACE_CHIP)).toBeVisible();
-
-    await option.click();
-    // #922 review F5: the picker's own advisory line now shares the ONE
-    // canon sentence Launch's own disable reads, rather than its own wording.
-    await expect(page.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeVisible();
+      await expect(page.getByRole("heading", { name: NR_FILES.REPOS_TITLE })).toBeVisible();
+      await expect(page.getByRole("checkbox", { name: NR_FILES.INCLUDE_ARIA("e2e-mc-ungranted") })).toHaveCount(0);
+      // Nothing about it is annotated either: it is simply not on offer.
+      await expect(page.getByText(DENIED.WORKSPACE_CHIP)).toHaveCount(0);
+      await expect(page.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toHaveCount(0);
+    } finally {
+      await request.delete(`/api/v1/workspaces/${id}`, { headers: auth });
+    }
   });
 });
 

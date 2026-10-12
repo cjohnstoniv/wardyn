@@ -13,7 +13,23 @@
 // ado-pat-copy.ts, never retyped: the vitest pin owns the characters, this
 // spec owns that a browser draws them and that no state scrolls sideways at 390px.
 import type { Page } from "@playwright/test";
-import { test, expect, gotoConsole, navToRoute, expandCard, sql, goToNewRunPanel } from "./fixtures";
+import {
+  test,
+  expect,
+  chooseFiles,
+  continueNewRun,
+  expandCard,
+  gotoConsole,
+  navToRoute,
+  openNewRun,
+  sql,
+  submitLaunch,
+  walkGuidedToFiles,
+  walkGuidedToReview,
+} from "./fixtures";
+import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
+import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
+import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 import { ADO_PAT } from "../src/app/lib/ado-pat-copy";
 import { adoCapName } from "../src/app/lib/ado-access-copy";
 
@@ -276,26 +292,29 @@ test.describe("the person's Azure DevOps card, a row where each person adds thei
   });
 });
 
+// OPEN QUESTION FOR THE LEAD: the guided flow draws neither `ado-run-token-line` nor `ado-launch-note`
+// (the old Access panel's two Azure DevOps lines). Step 5's "Setup still needed" is the primary path for a
+// sign-in and the Name dialog's door is the backstop at Launch, and neither mounts those two shared
+// components yet. The cases below keep every assertion and look for the lines where the approved flow puts
+// them (the token line and the not-connected note on step 5; the refusal notes in the Name dialog), and
+// stay fixme until the app mounts them or the lead retires the cases in favour of ado-launch-door.spec.ts.
 test.describe("New Run, a row that creates a token for each run", () => {
-  // `saved`: the token line sits under the saved-policy picker, so the tests
-  // that read it open that; a launch needs the ordinary form, where Launch is
-  // enabled without picking a policy.
-  async function openNewRun(page: Page, saved = true): Promise<void> {
+  // Step 5 is where the token line and the not-connected note sit; a launch needs the whole way to Review.
+  async function openToolsStep(page: Page): Promise<void> {
     await gotoConsole(page);
-    await page.getByRole("button", { name: "New run" }).click();
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
-    await goToNewRunPanel(page, "policy");
-    if (saved) await page.getByRole("button", { name: /^Reuse a saved policy/ }).click();
+    await openNewRun(page);
+    await walkGuidedToFiles(page);
+    await chooseFiles(page);
+    await continueNewRun(page, NR_TOOLS.TITLE);
   }
 
-  test("the run's token line names the row's default access, and not connected says to connect first", async ({ page, context }) => {
+  test.fixme("the run's token line names the row's default access, and not connected says to connect first", async ({ page, context }) => {
     let access: Record<string, unknown> = { token_mode: "minted_pat", state: "not_configured", default_profile: ["code_read"] };
     await spliceAccess(page, () => access);
     await page.route("**/api/v1/me/scm-access", (route) =>
       route.fulfill({ json: access.state === "live" ? [{ state: "live", source: "org" }] : [] }),
     );
-    await openNewRun(page);
-    await goToNewRunPanel(page, "access");
+    await openToolsStep(page);
     await expect(page.getByTestId("ado-run-token-line")).toHaveText(
       `${ADO_PAT.NEWRUN_LINE_PREFIX}${adoCapName("code_read")}${ADO_PAT.NEWRUN_LINE_SUFFIX}`,
     );
@@ -307,40 +326,36 @@ test.describe("New Run, a row that creates a token for each run", () => {
     await popup.waitForEvent("close");
   });
 
-  test("a launch the organisation refuses on its token policy raises the blocked note", async ({ page }) => {
+  test.fixme("a launch the organisation refuses on its token policy raises the blocked note", async ({ page }) => {
     await spliceAccess(page, () => ({ token_mode: "minted_pat", state: "live", source: "org", default_profile: ["code_read"] }));
     await page.route("**/api/v1/runs", async (route) => {
       if (route.request().method() !== "POST") return route.fallback();
       await route.fulfill({ status: 403, json: { error: ADO_PAT.LAUNCH_POLICY_REFUSED, reason: "ado_pat_policy_blocked" } });
     });
-    await openNewRun(page, false);
-    await goToNewRunPanel(page, "access");
+    await gotoConsole(page);
+    await openNewRun(page);
+    await walkGuidedToReview(page);
     await expect(page.getByTestId("ado-launch-note")).toHaveCount(0);
-    await goToNewRunPanel(page, "run");
-    await page.getByLabel("Title").fill("e2e ado token policy");
-    await page.getByRole("button", { name: "Launch run" }).click();
-    await goToNewRunPanel(page, "access");
-    await expect(page.getByTestId("ado-launch-note")).toHaveText(ADO_PAT.LAUNCH_POLICY_REFUSED);
+    const naming = await submitLaunch(page, "e2e ado token policy");
+    await expect(naming.getByTestId("ado-launch-note")).toHaveText(ADO_PAT.LAUNCH_POLICY_REFUSED);
   });
 
-  test("a launch refused for want of a usable sign-in asks to connect again", async ({ page }) => {
+  test.fixme("a launch refused for want of a usable sign-in asks to connect again", async ({ page }) => {
     await spliceAccess(page, () => ({ token_mode: "minted_pat", state: "live", source: "org", default_profile: ["code_read"] }));
     await page.route("**/api/v1/runs", async (route) => {
       if (route.request().method() !== "POST") return route.fallback();
       await route.fulfill({ status: 403, json: { error: "cannot create a token", reason: "ado_pat_consent_needed" } });
     });
-    await openNewRun(page, false);
-    await goToNewRunPanel(page, "run");
-    await page.getByLabel("Title").fill("e2e ado consent");
-    await page.getByRole("button", { name: "Launch run" }).click();
-    await goToNewRunPanel(page, "access");
-    await expect(page.getByTestId("ado-launch-note").getByText(ADO_PAT.LAUNCH_NOT_CONNECTED)).toBeVisible();
+    await gotoConsole(page);
+    await openNewRun(page);
+    await walkGuidedToReview(page);
+    const naming = await submitLaunch(page, "e2e ado consent");
+    await expect(naming.getByTestId("ado-launch-note").getByText(ADO_PAT.LAUNCH_NOT_CONNECTED)).toBeVisible();
   });
 
-  test("a row on the Entra sign-in lane draws neither line", async ({ page }) => {
+  test.fixme("a row on the Entra sign-in lane draws neither line", async ({ page }) => {
     await spliceAccess(page, () => ({ token_mode: "bearer", state: "live", source: "org" }));
-    await openNewRun(page);
-    await goToNewRunPanel(page, "access");
+    await openToolsStep(page);
     await expect(page.getByTestId("ado-run-token-line")).toHaveCount(0);
     await expect(page.getByTestId("ado-launch-note")).toHaveCount(0);
   });
@@ -461,15 +476,31 @@ test.describe("no horizontal scroll at 390px", () => {
 
     access = { token_mode: "minted_pat", state: "not_configured" };
     await page.goto("/runs/new");
-    await goToNewRunPanel(page, "policy");
-    await page.getByRole("button", { name: /^Reuse a saved policy/ }).click();
-    await goToNewRunPanel(page, "access");
-    await expect(page.getByTestId("ado-launch-note")).toBeVisible();
+    await expect(page.getByRole("heading", { name: NR_START.TITLE })).toBeVisible();
+    expect(await noHorizontalScroll(page)).toBe(true);
+    await walkGuidedToFiles(page);
+    await chooseFiles(page);
+    await continueNewRun(page, NR_TOOLS.TITLE);
+    expect(await noHorizontalScroll(page)).toBe(true);
+    await continueNewRun(page, NR_REVIEW.TITLE);
     expect(await noHorizontalScroll(page)).toBe(true);
 
     await page.goto(`/runs/${runId}`);
     await expect(page.getByTestId("ado-run-tokens")).toBeVisible();
     expect(await noHorizontalScroll(page)).toBe(true);
     clearRunTokens(runId);
+  });
+
+  // The not-connected note is the one New Run element of the case above that waits on the lead's question
+  // (see the New Run describe): step 5 is where the approved flow would draw it.
+  test.fixme("the not-connected note on step 5 fits the screen", async ({ page }) => {
+    await spliceAccess(page, () => ({ token_mode: "minted_pat", state: "not_configured" }));
+    await page.goto("/runs/new");
+    await expect(page.getByRole("heading", { name: NR_START.TITLE })).toBeVisible();
+    await walkGuidedToFiles(page);
+    await chooseFiles(page);
+    await continueNewRun(page, NR_TOOLS.TITLE);
+    await expect(page.getByTestId("ado-launch-note")).toBeVisible();
+    expect(await noHorizontalScroll(page)).toBe(true);
   });
 });

@@ -91,7 +91,7 @@ test.describe("the model-access strip", () => {
   });
 
   // "NOT an error — it is the first-run state". A member who
-  // never launches an agent must be able to set it aside; the rail and Getting
+  // never launches an agent must be able to set it aside; New Run's step 5 and Getting
   // Started keep saying it.
   test("'Not now' clears the first-run strip for this session", async ({ page }) => {
     await mockMemberRole(page);

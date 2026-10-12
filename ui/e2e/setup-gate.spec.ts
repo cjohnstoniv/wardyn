@@ -6,6 +6,7 @@
 import type { Page } from "@playwright/test";
 import { test, expect, mockMemberRole, ADMIN_TOKEN } from "./fixtures";
 import { SITE } from "../src/app/components/wardyn/copy";
+import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 
 /**
  * Count the /setup/status reads the page has actually made. The console
@@ -317,7 +318,7 @@ test.describe("setup gate — forced on access, never a prison", () => {
     });
 
     await page.goto("/runs/new");
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: NR_START.TITLE })).toBeVisible();
 
     // usePoll drops a refocus while a read is already in flight
     // (`if (pausedRef.current || inFlight.current) return`), and it clears that
