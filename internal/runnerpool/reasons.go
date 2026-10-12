@@ -59,6 +59,23 @@ var reasonStatus = map[Reason]int{
 	ReasonFull:               http.StatusUnprocessableEntity,
 }
 
+// What a pool row's reason holds when the pool cannot take a run for the caller, beyond the refusal
+// reasons above: GET /runner-pools and the dry doors answer 200 with them. A launch on such a pool
+// answers the same token, except a pool whose own runners are all offline, which create answers
+// runner_offline with NoOnlineRunnerMsg. The two placement tokens are placement.Reason's.
+const (
+	AvailabilityNoOnlineRunner       Reason = "runner_pool_no_online_runner"
+	AvailabilityPlacementDenied      Reason = "placement_denied"
+	AvailabilityPlacementUnavailable Reason = "placement_unavailable"
+)
+
+// AvailabilityReasons is the closed set a pool row's reason may hold, in the order the list checks
+// them. runner-pool-refusals.ts repeats it as POOL_AVAILABILITY_REASONS.
+func AvailabilityReasons() []Reason {
+	return []Reason{ReasonUnavailable, AvailabilityPlacementDenied, AvailabilityPlacementUnavailable, ReasonNoEligibleMember,
+		AvailabilityNoOnlineRunner, ReasonRunTypeNotAllowed, ReasonNotFound}
+}
+
 // Status is the HTTP status the reason answers with; 0 for a reason outside the set.
 func (r Reason) Status() int { return reasonStatus[r] }
 
@@ -121,6 +138,12 @@ func NoEligibleMemberMsg(name string) string {
 
 func NoOwnRunnerMsg(name string) string {
 	return fmt.Sprintf("None of your own runners in %s can run this right now.", name)
+}
+
+// NoOnlineRunnerMsg is the one sentence for a self-hosted pool whose own runners are all offline: the
+// pool list's reason, the dry doors' blocker and the create refusal.
+func NoOnlineRunnerMsg(name string) string {
+	return fmt.Sprintf("None of your runners in %s is online.", name)
 }
 
 // MemberMismatchMsg names the runner the caller asked for: their own runner's

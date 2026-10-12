@@ -315,17 +315,15 @@ func (s *Server) boundResources(ctx context.Context, r *http.Request, spec *type
 	ceiling governanceCeiling, dryRun bool,
 ) []string {
 	profileMax := 0
-	var limits types.GovernanceLimits
 	if ceiling.Profile != nil && !s.runUngoverned(r.Context()) {
 		profileMax = ceiling.Limits.MaxEphemeralDiskMiB
-		limits = types.GovernanceLimits{MaxCPUMillis: ceiling.Limits.MaxCPUMillis, MaxMemoryMiB: ceiling.Limits.MaxMemoryMiB}
 	}
 	// CPU and memory first, and on BOTH arms of both call sites: the member who sent no policy
 	// never reaches composer.Clamp (it would drop their workspace mounts), so this resource-only
 	// bound is the only thing between their ceiling's own size and their sandbox. Its cut is not
 	// warned here: stepResources applies the run's ask within every limit and says when it was cut.
 	capped := false
-	if bounded, changed := composer.CapResources(spec.Resources, limits, ceiling.memberSize()); changed {
+	if bounded, changed := s.memberResources(ctx, spec.Resources, ceiling); changed {
 		spec.Resources = bounded
 	}
 	if dryRun {
@@ -337,6 +335,17 @@ func (s *Server) boundResources(ctx context.Context, r *http.Request, spec *type
 		return []string{composer.WarnResourcesCapped}
 	}
 	return nil
+}
+
+// memberResources is a spec's CPU and memory under the caller's profile maximums (composer.CapResources
+// at the member default): what boundResources leaves on every run's spec, and the size the pool list
+// takes as an untouched run's, so the two answer one size. Anyone not under a profile is unchanged.
+func (s *Server) memberResources(ctx context.Context, res *types.ResourceLimits, ceiling governanceCeiling) (*types.ResourceLimits, bool) {
+	var limits types.GovernanceLimits
+	if ceiling.Profile != nil && !s.runUngoverned(ctx) {
+		limits = types.GovernanceLimits{MaxCPUMillis: ceiling.Limits.MaxCPUMillis, MaxMemoryMiB: ceiling.Limits.MaxMemoryMiB}
+	}
+	return composer.CapResources(res, limits, ceiling.memberSize())
 }
 
 // previewEphemeralDisk writes the number dispatch will settle on into a PREVIEW
