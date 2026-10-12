@@ -459,7 +459,7 @@ func (s *Server) stepRunCap(f *runFold, rec *foldRecorder) bool {
 // authority on a race.
 func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
 	var refused bool
-	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.r.Context(), f.spec, f.ceiling), time.Duration(f.end.capSec)*time.Second)
+	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.spec, f.mainDrive), time.Duration(f.end.capSec)*time.Second)
 	return !refused
 }
 
@@ -515,5 +515,32 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 		return false
 	}
 	f.place = plan
+	return true
+}
+
+// stepMainDrive sizes the main drive after placement, which resolved the effective limits, and
+// refuses a size the run's policy writes on a runner that cannot cap disk. The dry doors write the
+// number into their answered spec, so spec.resources.disk_mib keeps showing what the run gets;
+// create writes nothing into the launch spec and hands dispatch the decision instead.
+func (s *Server) stepMainDrive(f *runFold, rec *foldRecorder) bool {
+	policyMiB, requestMiB := 0, 0
+	if f.spec.Resources != nil {
+		policyMiB = f.spec.Resources.DiskMiB
+	}
+	if f.req.Resources != nil {
+		requestMiB = f.req.Resources.DiskMiB
+	}
+	md := mainDriveFor(policyMiB, requestMiB, f.place.limits.DiskMiB)
+	if !md.Soft && md.MiB > 0 && s.runnerCannotCapDisk(f.r.Context(), *f.req, f.place) {
+		runError(http.StatusUnprocessableEntity, reasonMainDriveUnenforceable, mainDriveUnenforceableMsg()).write(s, f.w, f.r)
+		return false
+	}
+	f.mainDrive = md
+	if md.ClampedBy != "" && !slices.Contains(f.policyWarns, composer.WarnResourcesCapped) {
+		f.policyWarns = append(f.policyWarns, composer.WarnResourcesCapped)
+	}
+	if f.mode != foldCreate {
+		(&mainDriveDecision{MiB: md.MiB}).apply(&f.spec)
+	}
 	return true
 }

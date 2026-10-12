@@ -36,6 +36,7 @@ type policyPreviewResponse struct {
 	// always an array, empty until the lane that fills it lands.
 	Limits           *types.EffectiveRunLimits   `json:"limits,omitempty"`
 	ResourcesApplied *client.AppliedResources    `json:"resources_applied,omitempty"`
+	MainDrive        *client.MainDriveApplied    `json:"main_drive,omitempty"`
 	LocalPlacement   []client.LocalPlacementFact `json:"local_placement"`
 	// Image is the image the run would start from and its source, absent until
 	// the image lane resolves it; AllowedImages are the organisation's allowed

@@ -182,6 +182,10 @@ const UI_NEVER_SENDS = new Set([
   "shape",
 ]);
 
+// Nested request fields the console never sends, as "carrier.field". resources.disk_mib: the new flow
+// forwards it through the field registry; the old wizard never sends it.
+const UI_NEVER_SENDS_NESTED = new Set(["resources.disk_mib"]);
+
 // ui_apps used to sit on this set as a TS AgentRun key with no Go AgentRun
 // json tag (handleGetRun's anonymous wrapper struct, runs_policy.go:172-175,
 // GET /runs/{id} only) — it now lives on RunDetail instead (see the RunDetail
@@ -426,6 +430,14 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       expect(body).not.toHaveProperty(key);
     }
     for (const key of REPLACED_BY_RUN_MODE.filter((k) => k !== "model_provider")) expect(body).toHaveProperty(key);
+  });
+
+  it("every RunResources json tag is forwarded or on the nested never-sends list", () => {
+    const goTags = goJSONTags(clientGo, "RunResources");
+    const sent = new Set(Object.keys(fullInput.resources ?? {}));
+    const missing = goTags.filter((t) => !sent.has(t) && !UI_NEVER_SENDS_NESTED.has(`resources.${t}`));
+    expect(missing).toEqual([]);
+    for (const path of UI_NEVER_SENDS_NESTED) expect(goTags, `${path} is no longer a Go field`).toContain(path.slice("resources.".length));
   });
 
   it("WorkspaceSelection: the TS wire entry's keys are exactly Go's json tags", () => {
