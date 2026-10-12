@@ -160,6 +160,7 @@ export const LIMIT_FIELDS: Field[] = [
   // durations are seconds on the wire), so the wire key names the row, mono,
   // as the ceiling rows do. The autonomy rubric has its own section.
   ceilingField("deny_ui_apps", "true"),
+  ceilingField("deny_member_drives", "true"),
   ceilingField("max_cpu_millis", "number"),
   ceilingField("max_memory_mib", "number"),
   ceilingField("max_end_ahead_sec", "number"),
