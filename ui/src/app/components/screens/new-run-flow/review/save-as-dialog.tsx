@@ -132,7 +132,8 @@ function SaveAsForm({
     setSaving(true);
     setNameTaken("");
     setFailure("");
-    const coverage = kind === "template" && everything && !hasBlockers ? "full" : "partial";
+    // Leaving the saver's own drives out makes a shared template partial: it no longer attaches everything.
+    const coverage = kind === "template" && everything && !hasBlockers && !audienceIntent.leftOut ? "full" : "partial";
     const request = buildSaveRequest({ kind, audience, name, intent: pickIntent(audienceIntent.intent, fields), coverage });
     try {
       let saved: Template;
