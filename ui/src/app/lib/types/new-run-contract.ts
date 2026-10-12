@@ -199,9 +199,9 @@ export interface PlacementRunner {
   last_seen?: string;
 }
 
-export type ImageSourceKind = "agent" | "workspace" | "build" | "org_allowed";
+export type ImageSourceKind = "base" | "agent" | "harness_set" | "workspace" | "build" | "org_allowed";
 
-/** Where the resolved image comes from: the Runner tab's Image section says "from {source}". Name is empty for the agent. */
+/** Where the resolved image comes from: the Runner tab's Image section says "from {source}". Name is the harness for agent and the set key for harness_set; empty for base. */
 export interface ImageSource {
   kind: ImageSourceKind;
   name?: string;
@@ -211,6 +211,26 @@ export interface ImageSource {
 export interface ImageFact {
   ref: string;
   source: ImageSource;
+}
+
+/** One included harness's model credential: provider, kind, and where it lands. */
+export interface HarnessModelCredential {
+  provider: string;
+  kind: string;
+  residency: string;
+}
+
+/** One included harness: whether it starts with the run, and its model credential (absent when it takes none or the choice is open). */
+export interface HarnessFact {
+  id: string;
+  starts: boolean;
+  model_credential?: HarnessModelCredential;
+}
+
+/** The run's included harnesses as the door resolved them. `shared_model_access`: two or more carry a model credential, which any process in the sandbox can use. */
+export interface HarnessSetFact {
+  harnesses: HarnessFact[];
+  shared_model_access: boolean;
 }
 
 /** One image the organisation lets a person choose for a run (`allowed_image` on the request). */
@@ -261,6 +281,8 @@ export interface RunStartup {
   kind: StartupKind;
   tool?: string;
   command?: string;
+  /** The started harness's first message; a harness startup only. */
+  prompt?: string;
 }
 
 export type StartFolderKind = "image_default" | "attachment";

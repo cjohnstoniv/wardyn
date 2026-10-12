@@ -137,6 +137,7 @@ func TestRunDocumentDoorAgreesWithCreate(t *testing.T) {
 			}
 			t.Run(tc.name+"/"+door.name, func(t *testing.T) {
 				h := newHarness(t)
+				h.srv.cfg.AgentImages = composeAgentImages
 				w := do(t, h.srv, http.MethodPost, door.path, adminToken, `{"title":"t",`+tc.fields+`}`)
 				if got := errorReason(w); got != tc.reason {
 					t.Fatalf("the run answered %d reason %q, want %q: %s", w.Code, got, tc.reason, w.Body.String())
@@ -233,8 +234,8 @@ type failingStore struct{ store.Store }
 
 // TestTemplateImportDoorIsLitAndStoresNothing: POST /templates/import answers
 // 200 with the normalised document for a valid Run document and with
-// diagnostics for an invalid one; it touches no store, and every other
-// template route still answers 501 until the storage lane lands.
+// diagnostics for an invalid one; it touches no store, and on a store that
+// keeps no templates every other template route answers 501.
 func TestTemplateImportDoorIsLitAndStoresNothing(t *testing.T) {
 	h := newHarness(t)
 	srv := New(baseTestConfig(h, failingStore{}))

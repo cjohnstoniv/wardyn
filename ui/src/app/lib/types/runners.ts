@@ -17,6 +17,8 @@ export interface RunnerPosture {
   disk_encrypted: boolean;
   os: string;
   os_version: string;
+  /** "mdm_file" or "os_probe"; empty on a posture stored before it was recorded. */
+  evidence: string;
 }
 
 /**

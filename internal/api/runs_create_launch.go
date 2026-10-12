@@ -55,8 +55,8 @@ type createRunLaunch struct {
 	pushSets []types.PushRuleSet
 	// harnessRules are the run's tool rules per included harness (harnessToolRulesFor).
 	harnessRules []types.HarnessToolRules
-	// harnesses are the run's harness set and the model provider each was
-	// granted, as persisted in run_harnesses; nil for a run launched without it.
+	// harnesses is the run's harness set as create authorised it, in tools[]
+	// order, each with the model provider it was granted (the run_harnesses rows).
 	harnesses []types.RunHarness
 }
 

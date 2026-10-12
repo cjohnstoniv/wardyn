@@ -660,11 +660,12 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/policies":         {class: classMember},
 	"GET /api/v1/policies/default": {class: classMember},
 	"GET /api/v1/policies/{id}":    {class: classMember},
-	// Run templates (template_routes.go): 501 until the template store lands, except
-	// POST /templates/import, which validates a document and stores nothing. Every
-	// /templates route is a member route whose handler scopes by the template's own
-	// scope (types.TemplateRoutes); the grant that lets one person publish to one
-	// group is SUPER.
+	// Run templates (template_routes.go). Every /templates route is a member route
+	// whose handler scopes by the template's own scope (types.TemplateRoutes); a
+	// template the caller cannot read is the missing-id 404, probed per route, scope
+	// and caller by TestTemplateForeignIDIsTheMissingID404. POST /templates/import
+	// validates a document and stores nothing. The grant that lets one person
+	// publish to one group is SUPER.
 	"GET /api/v1/templates":                           {class: classMember},
 	"POST /api/v1/templates":                          {class: classMember},
 	"POST /api/v1/templates/import":                   {class: classMember},
@@ -765,6 +766,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"DELETE /api/v1/workspaces/{id}":          {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"POST /api/v1/workspaces/{id}/scan":       {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"POST /api/v1/workspaces/{id}/build":      {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
+	"GET /api/v1/workspaces/{id}/branches":    {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"GET /api/v1/runs/{id}":                   {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/events":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/output":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
@@ -1556,9 +1558,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// since #1232 added GET /runs/{id}/output; 28 since #1425 added GET
 		// /runs/{id}/policy; 29 since #1428 added GET /runs/{id}/ado-tokens; 30
 		// since #1891 added GET /runs/{id}/sign-in; 32 since 0.8.9 added PUT and
-		// DELETE /me/components/{id}.
-		if probed != 32 {
-			t.Errorf("probed %d classOwner routes, want 32 — a route that left classOwner takes its tier "+
+		// DELETE /me/components/{id}; 33 since 0.9 added GET
+		// /workspaces/{id}/branches.
+		if probed != 33 {
+			t.Errorf("probed %d classOwner routes, want 33 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

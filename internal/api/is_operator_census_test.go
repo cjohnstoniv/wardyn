@@ -36,6 +36,9 @@ var isOperatorCensus = map[string]int{
 	"attach.go:refuseAttachEntry":         1,
 	"run_entry.go:getRunForEntry":         1,
 	"sshkeys.go:handleAddSSHKey":          1,
+	// Reach: organisation templates are written with the effective role, so the
+	// User view publishes to the organisation as the member it is.
+	"template_list.go:templateCallerOf": 1,
 	// Credential namespace.
 	"runs_policy.go:secretOwnerFromRequest":         1,
 	"inline_policy_bounds.go:boundEnvSecretPosture": 1,

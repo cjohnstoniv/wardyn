@@ -78,6 +78,15 @@ type ImageIdentifier interface {
 	LocalImage(ctx context.Context, ref string) (id string, found bool, err error)
 }
 
+// BranchLister lists one GitHub repository's branches ("owner/name") through
+// the organisation's GitHub App: at most limit names, the default branch, and
+// whether more exist. Satisfied by broker.GitHubMinter. A refusal by GitHub
+// wraps broker.ErrGitHubRefused; an App with no stored credentials wraps
+// secretstore.ErrNotFound.
+type BranchLister interface {
+	ListBranches(ctx context.Context, repo string, limit int) (branches []string, defaultBranch string, truncated bool, err error)
+}
+
 // ImageBuilder builds a per-run sandbox image from a devcontainer repo. It is
 // target-agnostic (the parity rule): the concrete envbuilder implementation is
 // wired in wardynd behind the "docker" build tag, so the control-plane default

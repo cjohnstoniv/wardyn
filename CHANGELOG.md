@@ -13,7 +13,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `runners`,
   `runner_pending_actions`, `provider_connection_changes`, `runner_inventories`, `runner_pool_members`,
-  `runner_pool_use_policies` and `run_queue`, and `SELECT, INSERT, UPDATE` on `credential_delivery_policy`,
+  `runner_pool_use_policies`, `run_queue`, `run_templates` and `template_group_admins`, and `SELECT, INSERT, UPDATE` on `run_template_revisions`, `template_group_labels`, `credential_delivery_policy`,
   `runner_registration_tokens`, `audit_delivery_cursors`, `runner_spool_cursors`, `runner_executions`,
   `runner_execution_exits`, `runner_inventory_candidates`, `runner_inventory_observations`, `runner_pools`,
   `runner_pool_org_defaults`, `secret_owner_generations`, `person_invitations`, `service_identities` and
@@ -21,6 +21,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Without the `provider_connection_changes` grant every secret write fails once migration 0143's trigger on
   `secrets` is in place.
   Without the `run_harnesses` grant every run that records its harnesses fails to launch.
+  Without the template grants (migration `0165_run_templates`) every template route answers `500`.
 - Credential erase fence (migration 0156): an older wardynd running beside the new one does not check a person's
   erase generation; finish the upgrade before erasing anyone.
 - Migration `0145_audit_delivery_cursors` adds the `audit_delivery_cursors` table; nothing changes until a webhook
@@ -85,6 +86,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   them. An older proxy refuses them under strict decode, so upgrade proxies together with wardynd.
 - Migration `0162_run_queue` adds the QUEUED run state, `admitted_at` and the `run_queue` table; nothing changes
   for existing runs.
+- Migration `0165_run_templates` adds `run_templates`, `run_template_revisions`, `template_group_admins` and
+  `template_group_labels`; nothing changes for existing data.
 
 ### Added
 
@@ -163,8 +166,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (unknown fields, secrets, run state, owner fields, titles and descriptions are refused) through one validator for
   text and structs, and its partial policy is laid onto the source policy rather than replacing it. Adds the
   `template_*` reasons, a declarative configuration schema for custom components, `wardyn template` and SDK methods.
-  The `/templates` and `/admin/template-group-admins` routes answer `501 templates_unavailable` until the template
-  store lands, except `POST /templates/import`.
+- Run templates are stored. A person keeps a run setup for themselves, an admin publishes one to the organisation
+  from the Admin view, and a person granted management of a group's templates publishes to that group. Every
+  revision is kept, and an update names the revision it read, so a stale update changes nothing. Names are unique per
+  audience; each person and each group holds at most 200 templates and the organisation 500. A template saved as
+  `kind: policy` holds only run-wide network, credential and access-rule keys and never writes a stored policy.
+- `PUT /api/v1/admin/template-group-admins` grants one known person management of one group's templates and can give
+  the group a display label; a name that matches no person, or more than one, is refused. There is no console screen
+  for it in this release.
+- Erasure gains the `run_setups` scope: a person's own templates, their group grants and their name on shared
+  templates. The SCIM purge asks for it. New reasons: `template_name_taken` (409), `template_limit_reached` (409) and
+  `template_policy_field_refused` (422).
+- The credential delivery policy gains `runner_resident`: an administrator can let a class of organisation credential
+  be handed to a self-hosted runner for a run's lifetime, and only to runners whose reported device posture meets the
+  class's requirement. The runner keeps the value in the OS keystore (the Secret Service on Linux, which needs a
+  session bus; the login Keychain on macOS, written over stdin; values up to about 3 KB). Azure DevOps minted tokens
+  can be opted in per connection. Delivery itself arrives with local runner placement; until then no run receives one.
+- `GET /api/v1/workspaces/{id}/branches?repo=<repo>` lists one workspace repository's branches for the New Run
+  branch picker, through the credential the run would clone with: Azure DevOps uses the person's own token or
+  sign-in; GitHub uses the organisation's GitHub App with a one-repository `contents: read` token, revoked best effort after the
+  read. A listing that fails answers `200` with `listing: unavailable`. Adds the reasons `workspace_repo_unknown` (422)
+  and `branch_list_rate_limited` (429, 30 a minute per person) and the audit action `workspace.branches.list`.
 - Runner pool contract: the run-create, preflight and policy-preview requests accept `runner_pool_id`. Preflight and
   the preview return `runner_pools`. `wardyn run --pool` and `wardyn runner pool list|default get|set|clear` are
   added.
@@ -258,11 +280,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   /people/{principal}/invitations`); only that person, signed in, can claim the invitation, and the API token it
   mints is shown once, to them alone. Invitations can be listed and revoked before they are claimed, and each one
   expires.
-- Runner pools carry limits per run type: CPU and memory (default and cap), lifetime (default, maximum or
-  unlimited), an idle stop for interactive environments only, allowed barriers and a concurrent-run cap; an
-  administrator sets them on create and replaces them on update (migration 0158). A run is admitted by its pool's
-  run types and barriers, and the pool's lifetime bounds its end; CPU, memory, idle stop and the concurrent-run cap
-  are stored and audited but not yet applied to runs.
+- Runner pools carry limits per run type: CPU and memory (default and cap), a main-drive cap (`disk_mib`, whole GiB),
+  lifetime (default, maximum or unlimited), an idle stop for interactive environments only, allowed barriers and a
+  concurrent-run cap; an administrator sets them on create and replaces them on update (migration 0158). A run is
+  admitted by its pool's run types and barriers, and the pool's lifetime bounds its end; CPU, memory, the
+  main-drive cap, idle stop and the concurrent-run cap are stored and audited but not yet applied to runs.
 - `wardyn-runnerd` ships as a release binary for Linux and macOS (amd64, arm64) with a per-user service: a systemd
   user unit or a LaunchAgent, installed by `deploy/runner/install.sh`, which registers the runner with a single-use
   token and keeps it running; the owner then claims it with `wardyn runner claim` (#1968).
@@ -361,8 +383,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   limits). Until the lease sweep honours the cap, the lease sweep keeps the run at the same moment the reaper stops
   it.
 - The template decoder and the component config schema refuse secret-named config keys such as `CLIENT_SECRET`,
-  `JWT_SECRET` and `*_PASSPHRASE` (`SECRET_NAME`/`SECRET_REF` stay plain). Template storage is not served yet: `/templates`
-  answers `501 templates_unavailable` except for `POST /templates/import`, which checks a document and stores nothing.
+  `JWT_SECRET` and `*_PASSPHRASE` (`SECRET_NAME`/`SECRET_REF` stay plain).
 - Naming a person by a typed `entra:<tenant>:<object>` (erasure, secret owner) is now refused as ambiguous when that
   tenant and object id also signed in under another issuer, instead of resolving to one principal and leaving the
   other's data.
@@ -378,6 +399,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- A run a laptop submits with a device credential and no person is refused at launch when a per-person Azure DevOps
+  connection covers one of its repositories (#731).
+- A relayed runner connection honours read and write deadlines, so a response written to a peer that stopped reading
+  is aborted instead of holding the run's stream open.
 - Runner spool replay after a reconnect sends each batch of up to 64 decisions before waiting for one
   acknowledgement, and the pass before READY ends at the spool head seen when it started, so a large backlog or a busy
   proxy no longer keeps a runner offline for minutes.
