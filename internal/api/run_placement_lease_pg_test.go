@@ -16,6 +16,7 @@ import (
 	"errors"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
@@ -54,6 +56,43 @@ type runnerLeaseFixture struct {
 	execs atomic.Int32
 	// disconnect ends the current session.
 	disconnect context.CancelFunc
+	h          *harness
+	// sub is the substrate the runner serves: the fake, with calls that can be made to hang.
+	sub *stallingSub
+}
+
+// stallingSub is the runner's sandbox substrate with one verb that can be made to hang until the call's
+// context ends: a runner that takes a call and never answers it.
+type stallingSub struct {
+	*runnertest.Fake
+	stall   atomic.Value // the verb that hangs: "can_replace" or "replace_proxy"
+	release chan struct{}
+}
+
+func (s *stallingSub) hang(ctx context.Context, verb string) error {
+	if v, _ := s.stall.Load().(string); v != verb {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.release:
+		return errors.New("released")
+	}
+}
+
+func (s *stallingSub) CanReplaceProxy(ctx context.Context, ref string) error {
+	if err := s.hang(ctx, "can_replace"); err != nil {
+		return err
+	}
+	return s.Fake.CanReplaceProxy(ctx, ref)
+}
+
+func (s *stallingSub) ReplaceProxy(ctx context.Context, ref string, cfg []byte) error {
+	if err := s.hang(ctx, "replace_proxy"); err != nil {
+		return err
+	}
+	return s.Fake.ReplaceProxy(ctx, ref, cfg)
 }
 
 func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
@@ -74,7 +113,8 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 	if _, err := st.PutSiteConfig(ctx, types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true}}); err != nil {
 		t.Fatal(err)
 	}
-	cfg := baseTestConfig(newHarness(t), st)
+	h := newHarness(t)
+	cfg := baseTestConfig(h, st)
 	cfg.BaseCtx = ctx
 	cfg.Runner = orchestrator.New(runnertest.NewFake())
 	cfg.Audit = &syncAudit{}
@@ -84,21 +124,23 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 	cfg.Secrets = getErrStore{getErr: secretstore.ErrNotFound}
 	cfg.RunConfigKey = make([]byte, 32)
 	cfg.ControlPlaneURL = "http://127.0.0.1:8080" // a hop the proxy config loader accepts
-	f := &runnerLeaseFixture{ctx: ctx, st: st, srv: New(cfg), rn: rn, fake: runnertest.NewFake()}
+	f := &runnerLeaseFixture{ctx: ctx, st: st, srv: New(cfg), rn: rn, fake: runnertest.NewFake(), h: h}
+	f.sub = &stallingSub{Fake: f.fake, release: make(chan struct{})}
+	t.Cleanup(func() { close(f.sub.release) })
 
 	// The runner side, composed as wardyn-runnerd composes it.
 	dir := t.TempDir()
-	streams, err := runnerio.New(f.fake, id.String(), dir)
+	streams, err := runnerio.New(f.sub, id.String(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.manager, err = offline.New(dir, id, f.fake, func(run uuid.UUID) string { return "fake-" + run.String() }, streams.OutputSettled, streams.EraseOutput)
+	f.manager, err = offline.New(dir, id, f.sub, func(run uuid.UUID) string { return "fake-" + run.String() }, streams.OutputSettled, streams.EraseOutput)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = f.manager.Close() })
 	m := f.manager
-	dispatcher, err := runneragent.New(runneragent.Config{RunnerID: id.String(), Substrate: f.fake,
+	dispatcher, err := runneragent.New(runneragent.Config{RunnerID: id.String(), Substrate: f.sub,
 		BeforeCreate: m.BeforeCreate, Created: m.Created, CreateFailed: m.CreateFailed,
 		BeforeRefCall: m.BeforeRefCall, AfterRefCall: m.AfterRefCall, MutationFinished: m.MutationFinished, ExecutionResult: m.ExecutionResult,
 		Streams: streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput})
@@ -285,7 +327,7 @@ func TestPG_RunnerLease_ExecutionGenerationEndToEnd(t *testing.T) {
 	if _, err := f.st.StampRunTokenRenewed(f.ctx, run.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.srv.renewRunnerLease(f.ctx, run); err != nil {
+	if err := f.srv.renewRunnerLease(f.ctx, run, 0); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(margin + time.Second)
@@ -329,7 +371,7 @@ func TestPG_RunnerLease_NeverLeasesAContainedRun(t *testing.T) {
 	if _, _, err := f.st.QueueRunnerTeardown(f.ctx, f.rn.ID, types.RunnerActionKill, run.SandboxRef); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.srv.renewRunnerLease(f.ctx, run); !errors.Is(err, errRunnerContained) {
+	if err := f.srv.renewRunnerLease(f.ctx, run, 0); !errors.Is(err, errRunnerContained) {
 		t.Fatalf("renewal of a contained run = %v, want errRunnerContained", err)
 	}
 	if !f.srv.runnerEndpoint(f.rn.ID).link.Online() {
@@ -389,7 +431,7 @@ func TestPG_RunnerLease_EndChangeReLeases(t *testing.T) {
 	stale := renewed
 	moved := renewed
 	f.running(t, &moved, &end)
-	if err := f.srv.renewRunnerLease(f.ctx, stale); err != nil {
+	if err := f.srv.renewRunnerLease(f.ctx, stale, 0); err != nil {
 		t.Fatal(err)
 	}
 	// fix-r2 L2: the end is committed and the request that set it has gone; the re-lease still runs.
@@ -443,7 +485,7 @@ func TestPG_RunnerLease_RefusesALeaseTheRunnerWouldRefuse(t *testing.T) {
 	f.disconnect()
 	for deadline := time.Now().Add(5 * time.Second); f.srv.runnerEndpoint(f.rn.ID).link.Online() && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 	}
-	if err := f.srv.renewRunnerLease(f.ctx, live); !errors.Is(err, errRunnerNotReady) {
+	if err := f.srv.renewRunnerLease(f.ctx, live, 0); !errors.Is(err, errRunnerNotReady) {
 		t.Fatalf("lease to a session that is not READY = %v, want errRunnerNotReady", err)
 	}
 }
@@ -464,7 +506,7 @@ func TestPG_RunnerLease_NewSessionReLeasesLiveRuns(t *testing.T) {
 	if _, err := f.st.StampRunTokenRenewed(f.ctx, run.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.srv.renewRunnerLease(f.ctx, run); !errors.Is(err, errRunnerNotReady) {
+	if err := f.srv.renewRunnerLease(f.ctx, run, 0); !errors.Is(err, errRunnerNotReady) {
 		t.Fatalf("renewal while the runner is away = %v, want errRunnerNotReady", err)
 	}
 	f.disconnect = f.connect(t)
@@ -504,7 +546,7 @@ func TestPG_RunnerLease_ConcurrentRenewalYieldsToTheRunLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- f.srv.renewRunnerLease(f.ctx, run) }()
+	go func() { done <- f.srv.renewRunnerLease(f.ctx, run, 0) }()
 	select {
 	case err := <-done:
 		if !errors.Is(err, errRunnerLeaseBusy) {
@@ -520,7 +562,7 @@ func TestPG_RunnerLease_ConcurrentRenewalYieldsToTheRunLock(t *testing.T) {
 		t.Fatalf("revive Start under the lock: %v", err)
 	}
 	unlock()
-	if err := f.srv.renewRunnerLease(f.ctx, run); err != nil {
+	if err := f.srv.renewRunnerLease(f.ctx, run, 0); err != nil {
 		t.Fatalf("renewal once the lock is free: %v", err)
 	}
 }
@@ -533,33 +575,9 @@ func TestPG_RunnerLease_ConcurrentStalledSendReleasesTheLock(t *testing.T) {
 	run := f.localRun(t, 0)
 	f.running(t, &run, nil)
 	f.placed(t, &run)
-	org, mute := runnerwire.Loopback()
-	go func() {
-		for {
-			if _, err := mute.ReadFrame(f.ctx); err != nil {
-				return
-			}
-		}
-	}()
-	link := f.srv.runnerEndpoint(f.rn.ID).link
-	link.Attach(f.ctx, org)
-	payload, err := runnerwire.Marshal(runnerwire.Lease{RunID: run.ID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; ; i++ {
-		ctx, cancel := context.WithTimeout(f.ctx, 200*time.Millisecond)
-		err := link.Send(ctx, runnerwire.Frame{Type: runnerwire.TypeLease, Payload: payload})
-		cancel()
-		if err != nil {
-			break
-		}
-		if i > 50000 {
-			t.Fatal("the replay room never filled")
-		}
-	}
+	f.mute(t)
 	done := make(chan error, 1)
-	go func() { done <- f.srv.renewRunnerLease(f.ctx, run) }()
+	go func() { done <- f.srv.renewRunnerLease(f.ctx, run, 0) }()
 	select {
 	case err := <-done:
 		if err == nil {
@@ -703,5 +721,177 @@ func TestPG_RunnerLease_LiveRunsIncludeHeldRuns(t *testing.T) {
 	}
 	if !maps.Equal(got, want) {
 		t.Fatalf("live runs = %v, want %v", got, want)
+	}
+}
+
+// mute replaces the runner's session with one that reads every frame and never acknowledges, and fills its
+// replay room: every later LEASE send waits for room until its deadline.
+func (f *runnerLeaseFixture) mute(t *testing.T) {
+	t.Helper()
+	org, mute := runnerwire.Loopback()
+	go func() {
+		for {
+			if _, err := mute.ReadFrame(f.ctx); err != nil {
+				return
+			}
+		}
+	}()
+	link := f.srv.runnerEndpoint(f.rn.ID).link
+	link.Attach(f.ctx, org)
+	payload, err := runnerwire.Marshal(runnerwire.Lease{RunID: uuid.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; ; i++ {
+		ctx, cancel := context.WithTimeout(f.ctx, 200*time.Millisecond)
+		err := link.Send(ctx, runnerwire.Frame{Type: runnerwire.TypeLease, Payload: payload})
+		cancel()
+		if err != nil {
+			return
+		}
+		if i > 50000 {
+			t.Fatal("the replay room never filled")
+		}
+	}
+}
+
+// fix-r3 R2-2: a mute runner holds at most one lock connection however many of its runs are re-leased: one
+// LEASE send per runner at a time. With nine of its runs renewing at once, an unrelated lock still gets a
+// connection.
+func TestPG_RunnerLease_ConcurrentMuteRunnerHoldsOneLockConnection(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	var runs []types.AgentRun
+	for range 9 {
+		run := f.localRun(t, 0)
+		f.running(t, &run, nil)
+		f.placed(t, &run)
+		runs = append(runs, run)
+	}
+	f.mute(t)
+	done := make(chan error, len(runs))
+	for _, run := range runs {
+		go func() { done <- f.srv.renewRunnerLease(f.ctx, run, 0) }()
+	}
+	time.Sleep(500 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+	defer cancel()
+	_, unlock, err := f.srv.lockRunOp(ctx, uuid.New())
+	if err != nil {
+		t.Fatalf("an unrelated lock while the mute runner's runs renew: %v", err)
+	}
+	unlock()
+	busy := 0
+	for range runs {
+		if errors.Is(<-done, errRunnerLeaseBusy) {
+			busy++
+		}
+	}
+	if busy < len(runs)-1 {
+		t.Errorf("%d of %d renewals yielded the runner's slot, want all but one", busy, len(runs))
+	}
+}
+
+// fix-r3 R2-1, R2-6: a revive of a run on a runner releases the run's lock at its one runner deadline,
+// whichever call the runner never answers: before the claim (CanReplaceProxy) or after it (ReplaceProxy).
+func TestPG_RunnerLease_ConcurrentReviveReleasesTheLockAtItsDeadline(t *testing.T) {
+	saved := reviveRunnerTimeout
+	reviveRunnerTimeout = 2 * time.Second
+	t.Cleanup(func() { reviveRunnerTimeout = saved })
+	for _, verb := range []string{"can_replace", "replace_proxy"} {
+		t.Run(verb, func(t *testing.T) {
+			f := newRunnerLeaseFixture(t)
+			run := f.localRun(t, 0)
+			f.running(t, &run, nil)
+			f.placed(t, &run)
+			if err := f.srv.keepRunProxyConfig(f.ctx, run.ID, runner.ProxyConfig{RunToken: "old", ControlPlaneURL: "http://127.0.0.1:8081"}); err != nil {
+				t.Fatal(err)
+			}
+			if lost, err := f.st.MarkRunLost(f.ctx, run.ID, types.LostReboot, time.Now(), 0); err != nil || !lost {
+				t.Fatalf("mark lost = %v, %v", lost, err)
+			}
+			stored, err := f.st.GetRun(f.ctx, run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.sub.stall.Store(verb)
+			done := make(chan *reviveError, 1)
+			go func() {
+				_, rerr := f.srv.reviveRunProxy(f.ctx, stored, types.ActorSystem, "test", true)
+				done <- rerr
+			}()
+			select {
+			case rerr := <-done:
+				if rerr == nil {
+					t.Fatal("a revive whose runner never answered succeeded")
+				}
+			case <-time.After(reviveRunnerTimeout + 8*time.Second):
+				t.Fatal("the revive held the run's lock past its runner deadline")
+			}
+			_, unlock, ok := f.srv.tryLockRunOp(f.ctx, run.ID)
+			if !ok {
+				t.Fatal("the run's lock is still held after the revive returned")
+			}
+			unlock()
+		})
+	}
+}
+
+// fix-r3 R2-4: an end change waits out a lease sender holding the run's lock (a renewal that read the old
+// end) instead of yielding to it, so its own lease, with the new end, lands last.
+func TestPG_RunnerLease_ConcurrentEndChangeWaitsOutARenewal(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	const margin = 6 * time.Second
+	soon := time.Now().Add(margin)
+	run := f.localRun(t, 0)
+	f.running(t, &run, &soon)
+	f.placed(t, &run)
+	_, unlock, err := f.srv.lockRunOp(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(2 * time.Hour)
+	f.running(t, &run, &later)
+	done := make(chan struct{})
+	go func() { f.srv.renewLeaseAfterEndChange(f.ctx, run.ID); close(done) }()
+	time.Sleep(time.Second)
+	unlock()
+	<-done
+	time.Sleep(time.Until(soon.Add(time.Second)))
+	if err := f.manager.CheckLapses(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if f.contained(run) {
+		t.Fatal("the end change yielded to the lock's holder and the run was contained at its old end")
+	}
+}
+
+// fix-r3 R2-5: a token renewal that meets another lease sender answers 503 (the proxy keeps its token and
+// retries in a minute); once the sender is done the renewal goes through.
+func TestPG_RunnerLease_BusyRenewalAnswers503(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	f.running(t, &run, nil)
+	f.placed(t, &run)
+	tok := f.h.mintRunToken(t, run.ID)
+	release, ok := f.srv.runnerEndpoint(f.rn.ID).acquireLease(f.ctx, 0)
+	if !ok {
+		t.Fatal("the runner's slot is taken")
+	}
+	// The renewal arrives over the run's own runner relay, as a run on a runner's always does.
+	renew := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/internal/token/renew", nil)
+		r = r.WithContext(context.WithValue(audit.WithRelay(r.Context(), f.rn.ID), relayRunnerKey{}, f.rn.ID))
+		r.Header.Set("Authorization", "Bearer "+tok)
+		w := httptest.NewRecorder()
+		panicFails(t, f.srv.Handler()).ServeHTTP(w, r)
+		return w
+	}
+	w := renew()
+	release()
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), reasonRunRenewLeaseBusy) {
+		t.Fatalf("renewal while the runner's lease is being sent = %d %s, want 503 %s", w.Code, w.Body, reasonRunRenewLeaseBusy)
+	}
+	if w := renew(); w.Code != http.StatusOK {
+		t.Fatalf("renewal once the sender is done = %d %s, want 200", w.Code, w.Body)
 	}
 }

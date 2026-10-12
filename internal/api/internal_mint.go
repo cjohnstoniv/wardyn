@@ -415,8 +415,14 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		}
 		// A run on a runner is contained there when its lease lapses: the renewed stamp goes to the
 		// runner too. A runner that does not get it contains the run at the lapse window, the same
-		// outcome the organisation's own sweep reaches, so a failed send is logged, not refused.
-		if err := s.renewRunnerLease(r.Context(), run); err != nil {
+		// outcome the organisation's own sweep reaches, so a failed send is logged, not refused. A
+		// renewal that meets another lease sender (errRunnerLeaseBusy) answers 503: the proxy keeps
+		// its current token and retries in a minute (renewRetry), never tears down on a 5xx.
+		switch err := s.renewRunnerLease(r.Context(), run, 0); {
+		case errors.Is(err, errRunnerLeaseBusy):
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunRenewLeaseBusy, "the run's runner lease is being sent; retry the renewal")
+			return
+		case err != nil:
 			slog.WarnContext(r.Context(), "wardynd: renewing a run's runner lease failed",
 				slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}

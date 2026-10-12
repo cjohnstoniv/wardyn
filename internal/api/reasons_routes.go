@@ -273,6 +273,7 @@ const (
 	reasonRunRenewStoreUnavailable            = "run_renew_store_unavailable" // no store configured to verify the run is still alive
 	reasonRunRenewReadFailed                  = "run_renew_read_failed"       // reading the run for the renew gate failed
 	reasonRunRenewStampFailed                 = "run_renew_stamp_failed"      // stamping the run's token-renewed marker failed
+	reasonRunRenewLeaseBusy                   = "run_renew_lease_busy"        // the run's runner lease is being sent by another holder; retry
 	// reasonInternalLivenessReadFailed is refuseTerminalRun's own 503
 	// (internal_live_run.go) — the shared /internal/* liveness gate every
 	// sidecar door runs through.
