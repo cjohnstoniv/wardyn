@@ -79,6 +79,8 @@ type runFold struct {
 	pushSets          []types.PushRuleSet
 	// place is where the run goes (stepPlacement): the resolved pool and the fully eligible targets.
 	place runPlacement
+	// mainDrive is the main drive's size (stepMainDrive).
+	mainDrive mainDrive
 	// harnesses is a run-mode request's harness set and image the image that
 	// carries it (stepHarnessSet; nil when a custom image or workspace decides);
 	// harnessChoices is each harness's model-provider choice (stepModelProvider).
@@ -156,6 +158,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepLocalEligibility, foldAll},
 	{(*Server).stepConfinement, foldAll},
 	{(*Server).stepPlacementCapability, foldAll},
+	{(*Server).stepMainDrive, foldAll},
 	{(*Server).stepModelProvider, foldAll},
 	{(*Server).stepAutonomy, foldAll},
 	{(*Server).stepADOStanding, foldAll},

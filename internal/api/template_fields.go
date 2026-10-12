@@ -306,7 +306,7 @@ var templateNestedCarried = map[string]string{
 	"RunHostOverrides":   "add_allowed add_denied remove_allowed remove_denied",
 	"RunEgressOverrides": "first_use_approval allow_all_egress",
 	"RunOverrides":       "agent azure_devops git_pat push_rules hosts egress",
-	"RunResources":       "cpu_millis memory_mib",
+	"RunResources":       "cpu_millis memory_mib disk_mib",
 	"RunStartup":         "kind tool command prompt",
 	"RunWorkload":        "kind agent task command",
 	"RepoSelection":      "repo ref",

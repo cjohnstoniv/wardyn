@@ -14,6 +14,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // The closed set of runPolicyChange.Cause values, in the order the changes are
@@ -89,9 +90,10 @@ type auditEvidence struct {
 	restart                                                                    map[string]time.Time
 	restartHosts                                                               []string // restart denies in the order they were added
 	clamp                                                                      []string
-	bounded                                                                    bool // the member bound applied (policy_source.bounded)
-	diskFilled                                                                 bool // disk_mib_filled: the size came from the org default
-	legacyGitBroker                                                            bool // no confine row exists and the run holds a github grant
+	bounded                                                                    bool                  // the member bound applied (policy_source.bounded)
+	diskFilled                                                                 bool                  // disk_mib_filled: no policy wrote the size (soft)
+	diskBasis                                                                  client.MainDriveBasis // disk_mib_basis; empty on a run that predates it
+	legacyGitBroker                                                            bool                  // no confine row exists and the run holds a github grant
 }
 
 // explainRunPolicy attributes each difference between the policy a run started
@@ -161,6 +163,11 @@ func explainRunPolicy(base *types.RunPolicySpec, resolved types.RunPolicySpec, e
 			break
 		}
 	}
+	for i := range out {
+		if out[i].Field == fieldDisk {
+			out[i].Detail = append(out[i].Detail, diskBasisSentence(ev.diskBasis)...)
+		}
+	}
 	return out
 }
 
@@ -195,7 +202,7 @@ func (x *explainer) evidenceBase(resolved types.RunPolicySpec) types.RunPolicySp
 	}
 	b.AllowedDomains = slices.DeleteFunc(b.AllowedDomains, func(e string) bool { return claimed(fieldAllowed, e) })
 	b.DeniedDomains = slices.DeleteFunc(b.DeniedDomains, func(e string) bool { return claimed(fieldDenied, e) })
-	if b.Resources != nil && (x.ev.diskFilled || x.profileClampedDisk()) {
+	if b.Resources != nil && (x.diskOutsidePolicy() || x.profileClampedDisk()) {
 		r := *b.Resources
 		r.DiskMiB = 0
 		b.Resources = &r
@@ -207,6 +214,18 @@ func (x *explainer) evidenceBase(resolved types.RunPolicySpec) types.RunPolicySp
 // github grant (confineGitBrokerEgress is a no-op without one).
 func (x *explainer) legacyGit(entry string) bool {
 	return x.ev.legacyGitBroker && (gitBrokerManaged(entry) || slices.Contains(gitBrokerSSHHosts(), egressEntryHost(entry)))
+}
+
+// diskOutsidePolicy: the size is not one the run's policy wrote. A run recorded with a basis says
+// so; an older one has only the bit that its size was filled in from the org default.
+func (x *explainer) diskOutsidePolicy() bool {
+	switch x.ev.diskBasis {
+	case client.MainDriveBasisRequest, client.MainDriveBasisDefault:
+		return true
+	case "":
+		return x.ev.diskFilled
+	}
+	return false
 }
 
 func (x *explainer) profileClampedDisk() bool {
@@ -267,7 +286,7 @@ func (x *explainer) evidenceCause(field, entry string, added bool) (cause, profi
 		return causeGitBroker, "", nil, true
 	case denyAdded && ev.profileDenied[entry], field == fieldDisk && x.profileClampedDisk():
 		return causeProfile, ev.profile, nil, true
-	case field == fieldDisk && ev.diskFilled:
+	case field == fieldDisk && x.diskOutsidePolicy() && ev.diskBasis != client.MainDriveBasisRequest:
 		return causeOrgDisk, "", nil, true
 	case denyAdded && !ev.restart[entry].IsZero():
 		t := ev.restart[entry]
@@ -421,4 +440,19 @@ func setDiff(a, b []string) []string {
 		}
 	}
 	return out
+}
+
+// diskBasisSentence says where a recorded main-drive size came from, for the sources whose group
+// heading does not already say it. It names "the run's policy", never an admin: an inline or
+// overlay policy can be written by the person who launched the run.
+func diskBasisSentence(b client.MainDriveBasis) []string {
+	switch b {
+	case client.MainDriveBasisRequest:
+		return []string{"The disk size is from your request."}
+	case client.MainDriveBasisPolicy:
+		return []string{"The disk size is set by the run's policy."}
+	case client.MainDriveBasisDefault:
+		return []string{"The disk size is the default for this run's pool or this server."}
+	}
+	return nil
 }

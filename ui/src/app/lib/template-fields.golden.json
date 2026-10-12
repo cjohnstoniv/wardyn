@@ -146,7 +146,8 @@
     ],
     "RunResources": [
       "cpu_millis",
-      "memory_mib"
+      "memory_mib",
+      "disk_mib"
     ],
     "RunStartup": [
       "kind",

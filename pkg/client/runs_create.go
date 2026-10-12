@@ -395,6 +395,8 @@ type PreflightResult struct {
 	// ResourcesApplied is the CPU and memory it asked for and would get.
 	Limits           *EffectiveRunLimits `json:"limits,omitempty"`
 	ResourcesApplied *AppliedResources   `json:"resources_applied,omitempty"`
+	// MainDrive is the main-drive size it asked for and would get, with its basis.
+	MainDrive *MainDriveApplied `json:"main_drive,omitempty"`
 	// LocalPlacement says per host, workspace source and component whether the
 	// person's runner can honour it. Empty until the placement lane fills it.
 	LocalPlacement []LocalPlacementFact `json:"local_placement"`

@@ -621,7 +621,7 @@ start.
 | `placement_denied` | `403`: your governance profile's `deny_placements` refuses the run's placement, at create, preflight, policy preview and source scans; audited `authz.denied` (target `runs.placement`). |
 | `runner_offline` | `422`: a `placement: "local"` run whose runner is offline or has not reported its capabilities yet, or none of your runners is online. |
 | `override_refused` | `422`: a widening, base-host removal or foreign secret the narrowing table never allows. |
-| `request_field_unavailable` | `422`: a field this server cannot honour yet. It is refused, never dropped. |
+| `request_field_unavailable` / `main_drive_unenforceable` | `422`: a field this server cannot honour yet, refused and never dropped; or a disk size the run's policy sets that the pool's runners cannot cap. |
 | `harness_not_installed` / `harness_set_no_image` / `harness_set_custom_image` / `harness_providers_conflict` | `422`: no image here carries a harness, or the harnesses together; two or more harnesses name a custom image; or two harnesses' providers share a host. `tool` names the harness. |
 | `run_mode_required` / `run_mode_invalid` / `start_folder_invalid` | `400`: a new client's mode (or a background task's workload) is unset, and is never inferred (`mode_contract: "0.9"` marks a request as a new client's even when it carries no other run-mode field); a run-mode carrier is malformed; a `start_folder` is malformed, names an attachment or a repository the run lacks, or leaves its mount. |
 | `run_mode_conflict` | `422`: run-mode carriers contradict each other, or an older field they replace (`agent`, `task`, `interactive`) rides beside them. |

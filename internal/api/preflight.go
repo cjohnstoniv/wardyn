@@ -88,6 +88,9 @@ type preflightResponse struct {
 	Limits           *types.EffectiveRunLimits   `json:"limits,omitempty"`
 	ResourcesApplied *client.AppliedResources    `json:"resources_applied,omitempty"`
 	LocalPlacement   []client.LocalPlacementFact `json:"local_placement"`
+	// MainDrive is the main-drive size the run asked for and gets, the number dispatch creates
+	// the sandbox with; the policy preview's too.
+	MainDrive *client.MainDriveApplied `json:"main_drive,omitempty"`
 	// Image is the image the run would start from and its source, absent until
 	// the image lane resolves it; AllowedImages are the organisation's allowed
 	// choices, an array that is empty until that lane fills it.
@@ -365,6 +368,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	resp.RunnerPool, resp.RunnerPools = f.place.facts()
 	resp.Image, resp.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
 	resp.Limits, resp.ResourcesApplied = f.place.sizeFacts()
+	resp.MainDrive = f.mainDrive.applied()
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred
 	}
