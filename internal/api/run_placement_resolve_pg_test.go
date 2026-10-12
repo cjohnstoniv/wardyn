@@ -440,10 +440,10 @@ func TestPlacement_SelfHostedCandidatesAreTheLaunchersOwn(t *testing.T) {
 	if strings.ReplaceAll(foreign, theirs.String(), "X") != strings.ReplaceAll(unknown, unknownID.String(), "X") || strings.Contains(foreign, "laptop") {
 		t.Errorf("a foreign pin answered %s, an unknown one %s", foreign, unknown)
 	}
-	// Their own runner, in the pool, passes the pool and meets the refusal every local run still meets.
+	// Their own runner, in the pool, is where the run goes.
 	for door, w := range e.answers(e.person, pin(mine)) {
-		if w.Code != http.StatusUnprocessableEntity || wireReason(t, w) != string(placement.ReasonPlacementUnavailable) {
-			t.Errorf("%s with their own runner = %d %s, want the unsupported-local refusal", door, w.Code, w.Body)
+		if w.Code >= http.StatusBadRequest {
+			t.Errorf("%s with their own runner = %d %s, want it admitted", door, w.Code, w.Body)
 		}
 	}
 	// And a revoked, an offline or an other-organisation runner of their own is no candidate.
