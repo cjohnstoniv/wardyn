@@ -29,8 +29,8 @@ for h in "${harnesses[@]}"; do
         || { echo "agent-run-set: harness '$h' is not installed in this image" >&2; exit 1; }
 done
 start="${WARDYN_START_HARNESS:-${harnesses[0]}}"
-[[ -x "$harness_dir/$start/agent-run" ]] \
-    || { echo "agent-run-set: start harness '$start' is not installed in this image" >&2; exit 1; }
+[[ " ${harnesses[*]} " == *" $start "* ]] \
+    || { echo "agent-run-set: start harness '$start' is not one of this run's harnesses" >&2; exit 1; }
 
 # prepare_others: --prepare-only for every harness except the start one. A failure
 # is a warning, never the end of PID 1.
