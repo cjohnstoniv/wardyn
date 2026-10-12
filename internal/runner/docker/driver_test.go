@@ -469,7 +469,7 @@ func TestCreateSandbox_ProxyExitsAtConfigLoad(t *testing.T) {
 	d := newTestDriver(f)
 	d.proxySettle = proxyStartSettle // a fake-backed driver defaults to 0; exercise the real settle window here
 	runID := testSpec().RunID
-	f.exitAfterInspects = map[string]int{proxyContainerName(runID): 2}
+	f.exitAfterInspects = map[string]int{proxyContainerName(runID): 3} // the listen lookup takes the first inspect
 	f.logs = map[string][]byte{proxyContainerName(runID): muxFrame(1, `unknown field "x"`)}
 
 	_, err := d.CreateSandbox(context.Background(), testSpec())
@@ -514,7 +514,7 @@ func TestCreateSandbox_ProxyExitsAtConfigLoad_ClockSkew(t *testing.T) {
 	runID := testSpec().RunID
 	name := proxyContainerName(runID)
 	f.startedAtOverride = map[string]time.Time{name: time.Now().Add(-5 * time.Second)}
-	f.exitAfterInspects = map[string]int{name: 1} // Running once, then exited
+	f.exitAfterInspects = map[string]int{name: 2} // the listen lookup, then Running once, then exited
 	f.logs = map[string][]byte{name: muxFrame(1, `unknown field "z"`)}
 
 	_, err := d.CreateSandbox(context.Background(), testSpec())

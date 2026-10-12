@@ -217,7 +217,7 @@ func TestReplaceProxy_NewProxyExitsAtConfigLoad(t *testing.T) {
 	// removing it — that inspect must not consume the NEW container's
 	// exitAfterInspects budget, so onCreate resets the counter the instant
 	// the NEW container is actually created.
-	f.exitAfterInspects = map[string]int{proxyContainerName(runID): 2}
+	f.exitAfterInspects = map[string]int{proxyContainerName(runID): 3} // the listen lookup takes the first inspect
 	f.logs = map[string][]byte{proxyContainerName(runID): muxFrame(1, `unknown field "y"`)}
 	f.onCreate = func(name string) {
 		if name == proxyContainerName(runID) {
