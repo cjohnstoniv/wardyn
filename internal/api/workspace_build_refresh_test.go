@@ -345,6 +345,34 @@ func TestBuildWorkspace_FailedRefreshChangesNothing(t *testing.T) {
 	}
 }
 
+// A rescan after a refresh moves the build key: the workspace is no longer done, and a plain
+// POST builds instead of short-circuiting on the refreshed image.
+func TestBuildWorkspace_RescanAfterARefreshIsNotDone(t *testing.T) {
+	ws := refreshDoneWorkspace(t)
+	f := newBuildRefreshFixture(t, ws, &refreshBuilder{pinningBuilder: *resolvingBuilder()})
+	f.b.found = true
+	f.refresh(t)
+	if got := f.get(t); got.State != "done" {
+		t.Fatalf("GET after the refresh = %+v, want done", got)
+	}
+
+	p, _ := workspaceProfile(ws)
+	oldKey := p.CacheKey()
+	p.Languages = []string{"Python"}
+	if p.CacheKey() == oldKey {
+		t.Fatal("the rescan did not move the cache key")
+	}
+	f.st.setProfile(p)
+
+	if got := f.get(t); got.State == "done" {
+		t.Errorf("GET after a rescan = %+v, want it not done", got)
+	}
+	if w := f.post(t, ""); w.Code != http.StatusAccepted {
+		t.Errorf("plain POST after a rescan = %d %s, want 202 and a build", w.Code, w.Body.String())
+	}
+	f.waitDone(t)
+}
+
 // A refresh whose swap cannot be written changed nothing: it fails and keeps no tag.
 func TestBuildWorkspace_RefreshThatCannotRecordItsImageFails(t *testing.T) {
 	ws := refreshDoneWorkspace(t)

@@ -316,15 +316,14 @@ func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) bu
 	st := s.builds.get(ws.ID)
 	// A refresh's own entry answers before the explicit-image branch below: a refreshed base
 	// has nothing the row could report while it builds, and a failed refresh would otherwise
-	// read `nothing_to_build`.
+	// read `nothing_to_build`. A finished refresh is answered by the row, like any build: its
+	// image_ref and key are what a rescan invalidates.
 	if st.Refresh {
 		switch {
 		case st.Building:
 			return buildResponse{State: "building", StartedAt: &st.StartedAt, Log: buildLog(st.Log)}
 		case st.Error != "" && st.Key == key:
 			return buildResponse{State: "failed", Detail: builderError(st.Error), Log: buildLog(st.Log)}
-		case st.Error == "" && st.Image != "" && st.Image == ws.ImageRef:
-			return buildResponse{State: "done", Image: ws.ImageRef, Log: buildLog(st.Log)}
 		}
 	}
 	wrapped := keyed && ws.ImageRef != "" && ws.BuiltProfileHash == key
