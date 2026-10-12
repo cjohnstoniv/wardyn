@@ -53,8 +53,9 @@ func TestPG_PoolRunnersAndRunnerPoolsNeverCrossPeople(t *testing.T) {
 		t.Errorf("the owner's runner lists pools %+v on the admin route", p)
 	}
 	remote := e.createPool("Provided", types.RunnerPoolRemoteProvided)
-	if w := e.call(e.person, http.MethodGet, "/api/v1/runner-pools/"+remote.ID.String()+"/runners", ""); w.Code != http.StatusNotFound {
-		t.Errorf("a member's read of a Remote Provided pool's runners = %d, want 404", w.Code)
+	// A member who may read the pool reads its runners too: a Remote Provided pool has none.
+	if rows := decodeJSON[[]types.RunnerView](t, e.call(e.person, http.MethodGet, "/api/v1/runner-pools/"+remote.ID.String()+"/runners", "")); len(rows) != 0 {
+		t.Errorf("a member's read of a Remote Provided pool's runners = %+v, want []", rows)
 	}
 	if rows := decodeJSON[[]types.RunnerView](t, e.admin(http.MethodGet, "/api/v1/runner-pools/"+remote.ID.String()+"/runners", "")); len(rows) != 0 {
 		t.Errorf("a Remote Provided pool's runners = %+v, want []", rows)

@@ -37,7 +37,7 @@ func TestLocalRuntimeRequiresLeaseAndPersistsCreation(t *testing.T) {
 	stateDir := t.TempDir()
 	sub := runnertest.NewFake()
 	ref := func(id uuid.UUID) string { return "fake-" + id.String() }
-	runtime, err := localRunnerRuntime(ctx, identity, stateDir, sub, ref, newLocalRelay(ctx, netip.Addr{}, nil, nil), placement.Capacity{})
+	runtime, err := localRunnerRuntime(ctx, identity, stateDir, sub, ref, newLocalRelay(ctx, netip.Addr{}, nil, nil), unsized)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestLocalRuntimeRequiresLeaseAndPersistsCreation(t *testing.T) {
 	if err := runtime.close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := localRunnerRuntime(context.Background(), identity, stateDir, sub, ref, newLocalRelay(context.Background(), netip.Addr{}, nil, nil), placement.Capacity{})
+	restarted, err := localRunnerRuntime(context.Background(), identity, stateDir, sub, ref, newLocalRelay(context.Background(), netip.Addr{}, nil, nil), unsized)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestRelay_RunnerNeverOpensTowardTheOrg(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime, err := localRunnerRuntime(ctx, runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key}, t.TempDir(), runnertest.NewFake(),
-		func(id uuid.UUID) string { return "fake-" + id.String() }, newLocalRelay(ctx, netip.Addr{}, nil, nil), placement.Capacity{})
+		func(id uuid.UUID) string { return "fake-" + id.String() }, newLocalRelay(ctx, netip.Addr{}, nil, nil), unsized)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,3 +161,6 @@ func TestRelay_RunnerNeverOpensTowardTheOrg(t *testing.T) {
 		}
 	}
 }
+
+// unsized is a runtime's capacity read for a runner with no engine to ask: unreported.
+func unsized(context.Context) placement.Capacity { return placement.Capacity{} }

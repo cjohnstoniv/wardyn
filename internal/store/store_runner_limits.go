@@ -18,8 +18,10 @@ import (
 // A runner's "Runs at once" (migration 0172): placement never puts more than a runner's max_runs
 // sandbox-holding runs on it. Every writer that makes a run hold a sandbox on a runner (a create, a
 // promotion, the start of a promoted run, a revive that starts an agent) takes the runner's row
-// FOR NO KEY UPDATE, counts its slot-holders and writes in the same transaction, after the pool row and
-// the deployment cap's advisory lock: the one order every writer uses.
+// FOR NO KEY UPDATE, counts its slot-holders and writes in the same transaction. Every such writer takes
+// its locks in one order, skipping those it does not need: the run's pool row (CreateRunUnderCap,
+// lockPoolForRevive, promoteAdmitted), then the deployment cap's advisory lock (lockAndCountActiveRuns),
+// then runner rows in id order (lockRunnerRooms). A promoted run's start takes runner rows only.
 
 // ErrRunnerAtCapacity is the refusal when a runner already holds max_runs sandbox-holding runs.
 var ErrRunnerAtCapacity = errors.New("store: runner is running its limit of runs at once")
@@ -104,6 +106,23 @@ func lockRunnerRooms(ctx context.Context, q Querier, ids []uuid.UUID, except uui
 		out[l.id] = runnerRoom{name: l.name, max: l.max, used: used[l.id]}
 	}
 	return out, nil
+}
+
+// admitOnFirstRunner locks the runners of candidates and returns the first, in candidates' order, whose
+// slot-holders other than except are under its max_runs; a RunnerAtCapacityError naming the first when
+// none is. q must be a pgx.Tx.
+func admitOnFirstRunner(ctx context.Context, q Querier, candidates []uuid.UUID, except uuid.UUID) (uuid.UUID, error) {
+	rooms, err := lockRunnerRooms(ctx, q, candidates, except)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	for _, id := range candidates {
+		if room, ok := rooms[id]; ok && room.free() {
+			return id, nil
+		}
+	}
+	first := rooms[candidates[0]]
+	return uuid.Nil, &RunnerAtCapacityError{Runner: first.name, Max: first.max}
 }
 
 // admitOnRunner locks one runner and refuses with a RunnerAtCapacityError when its slot-holders other
