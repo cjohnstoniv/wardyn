@@ -392,11 +392,11 @@ A `wardyn/v1` document with `kind: Run` is a draft of one run. Its `intent` hold
 
 - A `Run` document carries `api_version`, `kind` and `intent`. `name`, `coverage` and `needs_setup` are refused as `template_field_unknown`; a run title or description, at the top or in `intent`, as `template_field_excluded`.
 - A `Run` document has no coverage rules: completeness is checked when the run is reviewed.
-- A wrong `kind` is reported at path `kind` and a wrong `api_version` at `api_version`, both as `template_version_unsupported`.
+- A `kind` other than Run or RunTemplate is reported at path `kind` and a wrong `api_version` at `api_version`, both as `template_version_unsupported`. When the import request names the `kind` it expects and the document is the other valid kind, `kind` carries a sentence saying so, beside the document's other diagnostics.
 - `POST /api/v1/templates/import` (`Client.ImportTemplate`) takes `{format, source, kind?}`, where `format` is `json` or `yaml` and `kind` is `Run`, `RunTemplate` or empty for either. It answers `200` with the normalised `document` when nothing is wrong, and otherwise with `diagnostics`, each `{path, reason, message}`. It stores nothing, grants nothing and needs only a signed-in person.
 - The door holds a document to the same shape and availability checks as create, preflight and the policy preview, so a request they refuse is refused at the door with the same reason.
 
-`shape` (`agent_task`, `environment` or `application`) names the New Run choice a request was set up from. It is optional and needs `experience`. The server checks it against the run and otherwise does not use it; a request that does not fit is `422` `run_shape_conflict` at create, preflight, preview and the import door.
+`shape` (`agent_task`, `environment` or `application`) names the New Run choice a request was set up from. It is optional and needs `experience`; a value outside the three is `400` `run_mode_invalid`. The server checks it against the run and otherwise does not use it; a request that does not fit is `422` `run_shape_conflict` at create, preflight, preview and the import door.
 
 | `shape` | Requires |
 |---|---|

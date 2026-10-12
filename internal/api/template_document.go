@@ -68,8 +68,8 @@ func validateTemplateImport(src []byte, format client.TemplateFormat, kind strin
 // document of a kind other than want (when want is set) is refused at kind.
 func validateTemplateBytes(src []byte, format client.TemplateFormat, owner *types.TemplateOwner, want string) client.TemplateImportResult {
 	doc, diags := decodeTemplateDocument(src, format)
-	if len(diags) == 0 && want != "" && doc.Kind != want {
-		diags = []client.TemplateDiagnostic{{Path: "kind", Reason: reasonTemplateVersionUnsupported, Message: templateVersionUnsupportedMsg(doc.Kind)}}
+	if got := documentKindOf(src, format); want != "" && got != want && (got == client.TemplateDocumentKind || got == client.RunDocumentKind) {
+		diags = append([]client.TemplateDiagnostic{{Path: "kind", Reason: reasonTemplateVersionUnsupported, Message: templateKindMismatchMsg(want, got)}}, diags...)
 	}
 	if len(diags) == 0 {
 		diags = validateTemplateContentDecoded(doc)
@@ -147,6 +147,20 @@ func decodeTemplateDocument(src []byte, format client.TemplateFormat) (client.Te
 	return doc, d.diags
 }
 
+// documentKindOf reads the kind of a document that may not decode cleanly, so a
+// kind mismatch is reported beside the document's other problems.
+func documentKindOf(src []byte, format client.TemplateFormat) string {
+	data, err := templateSourceJSON(src, format)
+	if err != nil {
+		return ""
+	}
+	var top map[string]json.RawMessage
+	if json.Unmarshal(data, &top) != nil {
+		return ""
+	}
+	return documentKind(top)
+}
+
 // documentKind is the document's kind when it is a string, "" otherwise.
 func documentKind(top map[string]json.RawMessage) string {
 	var kind string
@@ -174,8 +188,20 @@ func (d *templateDecoder) readHeader(top map[string]json.RawMessage, kind string
 		}
 		return s
 	}
+	// unsupported reports a value this server does not read. A key that is
+	// present but not a string was already reported as the wrong type.
 	unsupported := func(path, what string) {
-		d.add(path, reasonTemplateVersionUnsupported, templateVersionUnsupportedMsg(cmp.Or(what, path+" (missing)")))
+		raw, present := top[path]
+		var s string
+		switch {
+		case !present:
+			what = path + " (missing)"
+		case json.Unmarshal(raw, &s) != nil:
+			return
+		default:
+			what = cmp.Or(what, `""`)
+		}
+		d.add(path, reasonTemplateVersionUnsupported, templateVersionUnsupportedMsg(what))
 	}
 	if version := text("api_version", 32); version != client.TemplateDocumentVersion {
 		unsupported("api_version", version)

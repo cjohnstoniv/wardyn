@@ -24,6 +24,12 @@ func templateVersionUnsupportedMsg(what string) string {
 	return fmt.Sprintf("%s is not a document this server reads. Use api_version wardyn/v1 and kind Run or RunTemplate.", what)
 }
 
+// templateKindMismatchMsg says which kind a door reads and which the document
+// is, for a document that is valid but of the other kind.
+func templateKindMismatchMsg(want, got string) string {
+	return fmt.Sprintf("This door reads a document of kind %s, and this one is kind %s. Change kind to %s.", want, got, want)
+}
+
 func templateFieldUnknownMsg(path string) string {
 	return fmt.Sprintf("%s is not a field this document can hold. Remove it, or check the spelling.", path)
 }
