@@ -235,3 +235,49 @@ func TestPG_QueueEndsAuditOnlyWhatTheyEnded(t *testing.T) {
 		t.Errorf("run.queue.start rows for a run already ended = %d, want 0", len(rows))
 	}
 }
+
+// Revoking every session and cutting only one person's browser sessions also stop a run that person
+// queued from a session: the start asks both with the moment the run was queued.
+func TestPG_QueueRevokeAllAndSessionCutStopAWaitingRun(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		revoke func(rev *pgTestRevocations, sub string) error
+	}{
+		{"revoke all", func(rev *pgTestRevocations, _ string) error { return rev.RevokeAll(context.Background()) }},
+		{"sessions only", func(rev *pgTestRevocations, sub string) error { return rev.CutSessions(context.Background(), sub) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newQueueEnv(t)
+			rev := e.revocations()
+			pool := e.cappedPool("Busy", 1)
+			waiting, occupant := e.waitingPerson(pool, "")
+			if err := tc.revoke(rev, e.personP); err != nil {
+				t.Fatal(err)
+			}
+			e.free(occupant)
+			if got := e.waitFailed(waiting.ID); got.StatusDetail != "queue: "+string(types.RunEndIdentityDeactivated) || got.SPIFFEID != "" {
+				t.Errorf("the run ended %q with spiffe %q; want identity_deactivated and nothing minted", got.StatusDetail, got.SPIFFEID)
+			}
+		})
+	}
+}
+
+// A run that names its runner and finds it busy holds only itself; an unpinned run whose runners are all
+// busy holds its owner's later runs for the pass too.
+func TestPG_QueueAdmitHoldsAPinnedRunAlone(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Busy", 1)
+	delete(e.runner.execFacts, "alpha")
+	e.runner.silent = map[string]bool{"alpha": true}
+	for _, tc := range []struct {
+		request string
+		owner   bool
+	}{{`{"agent":"claude-code"}`, true}, {`{"agent":"claude-code","runner_id":"` + uuid.NewString() + `"}`, false}} {
+		launch, _ := json.Marshal(queuedLaunch{Request: json.RawMessage(tc.request)})
+		auth, _ := json.Marshal(queueAuthority{Sub: e.personP, Role: oidc.RoleUser, UserType: types.UserTypeStandard, Groups: []string{}})
+		v, err := e.srv.queueAdmit(context.Background(), e.reread(pool), store.RunQueueEntry{RunID: uuid.New(), Owner: e.personP, Launch: launch, Authority: auth})
+		if err != nil || v.Admit || v.Wait != "runner_pool_no_runner_free" || v.Owner != tc.owner {
+			t.Errorf("%s: verdict %+v, %v; want a no_runner_free hold with owner scope %v", tc.request, v, err, tc.owner)
+		}
+	}
+}

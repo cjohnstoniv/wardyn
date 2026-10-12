@@ -79,6 +79,13 @@ func (h *queueWaitHist) write(w io.Writer) {
 	}
 }
 
+// runQueueState is the pool queue's in-process state on the Server: the promotion kicks coalesce through
+// kick, and gauges is the 15-second snapshot behind the queue gauges on /metrics.
+type runQueueState struct {
+	kick   queueKicker
+	gauges queueSnapshot
+}
+
 // queueSnapshot caches the per-pool queue depth and slots in use for fleetSnapshotTTL, shared by
 // concurrent scrapes. The zero value is ready.
 type queueSnapshot struct {
@@ -117,7 +124,7 @@ func (s *Server) writeQueueGauges(r *http.Request, w io.Writer) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), storePingTimeout)
 	defer cancel()
-	depth, slots, ok := s.queueGauges.get(ctx, qs)
+	depth, slots, ok := s.queue.gauges.get(ctx, qs)
 	if !ok {
 		return
 	}

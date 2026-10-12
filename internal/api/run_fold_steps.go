@@ -300,7 +300,7 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 				return false
 			}
 		}
-		f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, true, false)
+		f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, true, false, false)
 		grantHarnessProviders(f.harnesses, f.harnessChoices)
 		return ok
 	}
@@ -311,7 +311,7 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 	f.mpChoice = choice
 	f.modelCred = choice.modelCredential()
 	recordProviderHost(rec, choice, f.req.Agent)
-	f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, false, f.mode == foldCreate && !f.queued)
+	f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, false, f.mode == foldCreate, f.queued)
 	grantHarnessProviders(f.harnesses, f.harnessChoices)
 	if len(f.harnessChoices) > 1 {
 		f.modelCred = mostResident(f.harnessChoices).modelCredential()
@@ -322,11 +322,11 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 // judgeHarnessProviders is stepModelProvider's half for the harnesses of set
 // beside the primary (req.Agent), whose choice is primary: preview authorizes
 // the selection alone, the other doors also check the caller's own credential
-// (renew at create only, and never for a run that waits), each as its own agent with its own requested
+// (renew at create only, and never for a run that waits: queued), each as its own agent with its own requested
 // provider and no workspace pin. Then the set is held to the one-lane
 // invariant (harnessProvidersConflict). It writes its own refusal.
 func (s *Server) judgeHarnessProviders(w http.ResponseWriter, r *http.Request, req createRunRequest, spec types.RunPolicySpec,
-	set []types.RunHarness, rec *foldRecorder, primary runProviderChoice, preview, renew bool,
+	set []types.RunHarness, rec *foldRecorder, primary runProviderChoice, preview, renew, queued bool,
 ) ([]harnessChoice, bool) {
 	choices := make([]harnessChoice, 0, len(set))
 	for _, h := range set {
@@ -340,7 +340,7 @@ func (s *Server) judgeHarnessProviders(w http.ResponseWriter, r *http.Request, r
 				choice, refusal = s.authorizeRunModelProvider(r, hreq, nil, true)
 				ok = !refusal.write(s, w, r)
 			} else {
-				choice, ok = s.enforceRunModelProvider(w, r, hreq, spec, nil, renew, false)
+				choice, ok = s.enforceRunModelProvider(w, r, hreq, spec, nil, renew, queued)
 			}
 			if !ok {
 				return nil, false

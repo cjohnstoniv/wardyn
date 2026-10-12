@@ -46,6 +46,9 @@ type QueueVerdict struct {
 	Wait  string
 	// Stop says no run can be admitted this pass (the host has no room), so the rest are not judged.
 	Stop bool
+	// Owner says a held run's reason is its owner's (none of their runners can take a run), so their
+	// later runs are passed over this pass. A run held for a reason of its own holds only itself.
+	Owner bool
 }
 
 // QueueAdmit judges one waiting run before the pass takes any lock (pool-queue.md section 7 step 4), so it
@@ -76,8 +79,9 @@ func (s PG) PromoteRunQueue(ctx context.Context, pass PromotePass, admit QueueAd
 	if err != nil || room <= 0 {
 		return nil, nil, err
 	}
+	// A judging cut short still promotes what it admitted; the next pass reads on.
 	admitted, held, err := s.judgeQueue(ctx, pass, pool, room, admit)
-	if err != nil || len(admitted) == 0 {
+	if len(admitted) == 0 {
 		return nil, held, err
 	}
 	promoted, err := s.promoteAdmitted(ctx, pass, admitted)
@@ -134,9 +138,10 @@ func (s PG) setPoolQueueWait(ctx context.Context, poolID uuid.UUID, detail strin
 
 // judgeQueue reads the pool's waiting runs oldest first, a page at a time, and asks the verdict of each
 // until room runs are admitted, the queue ends, a verdict stops the pass, or half the pass's deadline is
-// spent (the rest is the promotion's). Once a run is held because its owner's runners are all busy, that
+// spent (the rest is the promotion's). Once a run is held for a reason of its owner's (Owner), that
 // owner's later runs are passed over this time, so neither a long run of one person's held heads nor a
-// fixed scan window keeps a run further back from being judged.
+// fixed scan window keeps a run further back from being judged. A read that fails, or a deadline spent,
+// part way still returns the runs already admitted, with the error.
 func (s PG) judgeQueue(ctx context.Context, pass PromotePass, pool types.RunnerPool, room int, admit QueueAdmit) ([]RunQueueEntry, []QueueHeld, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		var cancel context.CancelFunc
@@ -150,7 +155,7 @@ func (s PG) judgeQueue(ctx context.Context, pass PromotePass, pool types.RunnerP
 	for {
 		page, err := s.queuePage(ctx, pool.ID, after, pass.ScanLimit)
 		if err != nil {
-			return nil, held, err
+			return admitted, held, err
 		}
 		for i := range page {
 			e := page[i]
@@ -172,7 +177,7 @@ func (s PG) judgeQueue(ctx context.Context, pass PromotePass, pool types.RunnerP
 				}
 			default:
 				held = append(held, QueueHeld{RunID: e.RunID, Wait: v.Wait})
-				busy[e.Owner] = v.Wait == string(runnerpool.WaitNoRunnerFree)
+				busy[e.Owner] = v.Owner
 			}
 		}
 		if pass.ScanLimit <= 0 || len(page) < pass.ScanLimit {
