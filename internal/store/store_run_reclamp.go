@@ -39,7 +39,7 @@ var _ RunLimitsReclamper = PG{}
 func (s PG) ListProfiledLiveRuns(ctx context.Context) ([]types.AgentRun, error) {
 	q := `SELECT ` + runCols + ` FROM agent_runs
 		WHERE governance_profile_id IS NOT NULL AND (lost_at IS NULL OR lost_reason <> $2) AND state = ANY($1)`
-	return collect(ctx, s.Pool, "list", "profiled live runs", q, []any{nonTerminalStateNames(), string(types.LostEnded)}, scanRun)
+	return collect(ctx, s.Pool, "list", "profiled live runs", q, []any{slotHoldingStateNames(), string(types.LostEnded)}, scanRun)
 }
 
 // ReclampRunLimits — see RunLimitsReclamper. The compare on the limits read is
@@ -60,7 +60,7 @@ func (s PG) ReclampRunLimits(ctx context.Context, from types.AgentRun, toLimits 
 		WHERE id=$1 AND run_limits=$2 AND ends_at IS NOT DISTINCT FROM $3 AND wait_budget_sec=$4
 		  AND (lost_at IS NULL OR lost_reason <> $10) AND state = ANY($9)`,
 		from.ID, fromJSON, from.EndsAt, from.WaitBudgetSec, toJSON, toEnd, toWait, endTightenedAt,
-		nonTerminalStateNames(), string(types.LostEnded))
+		slotHoldingStateNames(), string(types.LostEnded))
 	if err != nil {
 		return false, fmt.Errorf("store: reclamp run limits: %w", err)
 	}

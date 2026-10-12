@@ -153,7 +153,8 @@ func zeroNil(p *int64) int64 {
 // types.NonTerminalRunStates list, never NOT IN terminal, so a new terminal state cannot be
 // counted as active) and folds it per the state table in the 0.8.6 fleet design: STARTING,
 // RUNNING and WAITING_FOR_CONFIRMATION rows with lost_at NULL hold capacity, paused ones
-// included; kept rows (lost_at set) count as Kept; PENDING rows appear only in States. A kept
+// included; kept rows (lost_at set) count as Kept; PENDING and QUEUED rows appear only in States (a
+// QUEUED run holds no slot and no reservation, but wardyn_runs_active still reports it). A kept
 // row whose agent still runs (HoldsSandboxSQL: kept after an outage, before its end) also
 // holds its agent's reservation, without the proxy that was stopped.
 func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, error) {
@@ -203,7 +204,7 @@ func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, er
 			return RunCapacity{}, fmt.Errorf("store: run capacity: scan: %w", err)
 		}
 		out.States[state]++
-		if state == string(types.RunPending) {
+		if state == string(types.RunPending) || state == string(types.RunQueued) {
 			continue
 		}
 		if lost != nil {

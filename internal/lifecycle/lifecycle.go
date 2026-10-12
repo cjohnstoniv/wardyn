@@ -60,7 +60,10 @@ const TouchDebounce = 30 * time.Second
 type RunSummary struct {
 	ID        uuid.UUID
 	CreatedAt time.Time
-	UpdatedAt time.Time
+	// AdmittedAt is when the run left the pool queue; zero for a run that never waited. The max age
+	// counts from it, so a run that waited is not aged by its wait.
+	AdmittedAt time.Time
+	UpdatedAt  time.Time
 	// PolicyAutoStopAfterSec: 0 or negative means never reap, positive is the
 	// idle timeout in seconds. Store must JOIN to the policy table; zero is
 	// intentional, not a missing join.
@@ -73,6 +76,14 @@ type RunSummary struct {
 	// limits that cap is measured from), so the max-age stop skips it. A run
 	// from before that column keeps this reaper's max-age stop.
 	HasLifetimeCap bool
+}
+
+// aged is the instant the max age counts from: admission when the run waited, else creation.
+func (s RunSummary) aged() time.Time {
+	if !s.AdmittedAt.IsZero() {
+		return s.AdmittedAt
+	}
+	return s.CreatedAt
 }
 
 // Store is the narrow persistence interface the Reaper requires; the real
@@ -247,7 +258,7 @@ func (r *Reaper) reap(ctx context.Context) error {
 
 	var stopErrs []error
 	for _, run := range runs {
-		if r.maxAge > 0 && !run.HasLifetimeCap && now.Sub(run.CreatedAt) >= r.maxAge {
+		if r.maxAge > 0 && !run.HasLifetimeCap && now.Sub(run.aged()) >= r.maxAge {
 			if err := r.stopMaxAge(ctx, run, now); err != nil {
 				stopErrs = append(stopErrs, err)
 			}
@@ -322,7 +333,7 @@ func (r *Reaper) stopMaxAge(ctx context.Context, run RunSummary, now time.Time) 
 	if !out.Applied {
 		return nil
 	}
-	r.emitMaxAgeStop(ctx, run.ID, now.Sub(run.CreatedAt))
+	r.emitMaxAgeStop(ctx, run.ID, now.Sub(run.aged()))
 	if len(out.Errors) > 0 {
 		r.emitRevokeFailure(ctx, run.ID, out.Errors)
 	}
