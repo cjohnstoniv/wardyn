@@ -24,6 +24,10 @@ type TargetFacts struct {
 	// EphemeralDiskEnforcement is what binds a run's disk_mib on this target (Capabilities.EphemeralDiskEnforcement
 	// for one executor). Empty is unknown: a caller that refuses on `none` never refuses on unknown.
 	EphemeralDiskEnforcement types.StorageEnforcement
+	// KeepsEnded: the target keeps a stopped sandbox at a run's end (runner.SandboxEnder).
+	KeepsEnded bool
+	// UserDrives: the target can bind a member's drive (Capabilities.UserDrives).
+	UserDrives bool
 }
 
 // TargetInspector answers per-target facts. The false answer means the facts are

@@ -89,6 +89,7 @@ const (
 //
 // Limits and Barriers are never filled on these doors: the list carries a
 // pool's limits and barrier_options, and preflight carries this run's.
+// MainDrive is filled on the list and on both doors.
 type RunnerPoolChoice struct {
 	ID           uuid.UUID                `json:"id"`
 	Name         string                   `json:"name"`
@@ -97,6 +98,48 @@ type RunnerPoolChoice struct {
 	Reason       RunnerPoolReason         `json:"reason,omitempty"`
 	Limits       []EffectiveRunLimits     `json:"limits,omitempty"`
 	Barriers     []types.ConfinementClass `json:"barriers,omitempty"`
+	// MainDrive is what this pool's runners do with a run's main-drive size, for the caller's own eligible
+	// targets. Absent on a pool the caller may only manage. The enforcement word reaches members only here.
+	MainDrive *MainDriveFacts `json:"main_drive,omitempty"`
+}
+
+// MainDriveEnforcement is how a pool binds a run's main-drive size. Never request or external.
+type MainDriveEnforcement string
+
+// MainDriveCoverage is how much of the sandbox the enforced size covers.
+type MainDriveCoverage string
+
+const (
+	MainDriveFilesystem MainDriveEnforcement = "filesystem"
+	MainDriveEviction   MainDriveEnforcement = "eviction"
+	MainDriveNone       MainDriveEnforcement = "none"
+	MainDriveUnknown    MainDriveEnforcement = "unknown"
+
+	// MainDriveCoverageAll is the sandbox's writable layer (Docker's /tmp is a separate in-memory tmpfs).
+	MainDriveCoverageAll MainDriveCoverage = "all"
+	// MainDriveCoverageScratch is /tmp, /home/agent/work and /home/agent/.cache only.
+	MainDriveCoverageScratch MainDriveCoverage = "scratch_paths"
+)
+
+// MainDriveFacts is what a pool's runners do with the main drive, over the caller's eligible targets.
+type MainDriveFacts struct {
+	// Enforcement is the WEAKEST word across the targets; unknown when any target's is unknown (offline,
+	// never reported, or no target at all).
+	Enforcement MainDriveEnforcement `json:"enforcement"`
+	// Basis is substrate (this deployment's executor) or runner_asserted (a self-hosted runner's own report).
+	Basis types.RunEvidenceSource `json:"basis"`
+	// Coverage is absent when enforcement is none or unknown.
+	Coverage MainDriveCoverage `json:"coverage,omitempty"`
+	// Keep is what happens to an Interactive run's sandbox at its end time.
+	Keep MainDriveKeep `json:"keep"`
+	// DriveMounts: the pool's runners can mount drives at all (false for a self-hosted pool).
+	DriveMounts bool `json:"drive_mounts"`
+}
+
+// MainDriveKeep: every target keeps a stopped sandbox and the deployment's ended-run grace is above zero.
+type MainDriveKeep struct {
+	Supported bool `json:"supported"`
+	GraceSec  int  `json:"grace_sec,omitempty"` // set only when Supported
 }
 
 // Where a pool's run types come from: its own limits, or none, which takes both.
