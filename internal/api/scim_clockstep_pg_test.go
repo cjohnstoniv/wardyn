@@ -13,7 +13,7 @@ import (
 // A session issued in the same sub-second window as a later cut-off, with the wall clock stepping back
 // between the two, is cut off like any other session issued before it.
 func TestPG_SessionCutOffOrderingUnderABackwardClockStep(t *testing.T) {
-	t.Skip("session cut-off ordering under a backward clock step: tracked privately; enabled when the ordering lands")
+	t.Skip("session cut-off ordering under a backward clock step: enabled when the ordering lands")
 	e := newSCIMEnv(t)
 	const sub, email = "sub-clockstep", "clockstep@corp.example"
 	// The issue time reads 600ms ahead of now: the clock stepped back after the session was issued.
