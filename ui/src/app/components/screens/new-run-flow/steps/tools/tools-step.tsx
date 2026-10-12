@@ -18,6 +18,7 @@ import { useDraftIdentity, useIntentChecks } from "../../draft/use-intent-checks
 import { useLocalIssues, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import { stepIssues } from "../../lenses/local-issues";
 import { flowSteps, StepShell } from "../step-shell";
+import { AddTools } from "./catalogue";
 import { AlreadyIncluded } from "./already-included";
 import { SetupNeeded } from "./setup-needed";
 import { Totals } from "./totals";
@@ -75,7 +76,7 @@ export function ToolsStep({ go }: NewRunScreenProps) {
       <AlreadyIncluded access={access} intent={draft.intent} names={names} />
       {/* Harness setup and Add tools and access mount here. */}
       <div data-tools-slot="harness-setup" />
-      <div data-tools-slot="add-tools" />
+      <AddTools access={access} intent={draft.intent} />
       <Totals access={access} answered={answered} names={names} />
       <SetupNeeded items={items} done={done} intent={draft.intent} names={names} onDone={finish} />
       <p aria-live="polite" className="sticky bottom-0 bg-background py-2 text-sm text-muted-foreground">
