@@ -9,11 +9,15 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -203,4 +207,32 @@ func slotsOfPool(t *testing.T, listBody []byte, poolID string) json.RawMessage {
 	}
 	t.Fatalf("pool %s not listed", poolID)
 	return nil
+}
+
+// failingSlotCounts is a store whose slot count fails.
+type failingSlotCounts struct{ store.PG }
+
+func (failingSlotCounts) RunnerPoolSlotCounts(context.Context, []uuid.UUID) (map[uuid.UUID]store.PoolCounts, error) {
+	return nil, errors.New("slot count unavailable")
+}
+
+// The counts are advisory: when they cannot be read, the pool list and both dry doors still answer,
+// without slots, and a launch is untouched.
+func TestSlotCountFailureNeverRefusesTheAnswer(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.bothTypesPool("Capped", 1)
+	e.srv.cfg.Store = failingSlotCounts{e.pg}
+	pin := `"runner_pool_id":"` + pool.ID.String() + `"`
+
+	list, raw := e.list(nil, "")
+	if got := entryOf(t, list, pool.ID); got.Slots != nil || strings.Contains(raw, `"slots"`) {
+		t.Fatalf("the list carries slots %+v although the count failed: %s", got.Slots, raw)
+	}
+	body := endBody("background", pin)
+	for door, path := range map[string]string{"preflight": "/api/v1/runs/preflight", "preview": policyPreviewPath} {
+		w := e.admin(http.MethodPost, path, body)
+		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "runner_pool_slots") {
+			t.Fatalf("%s = %d %s, want 200 without runner_pool_slots", door, w.Code, w.Body)
+		}
+	}
 }
