@@ -360,10 +360,11 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 	}
 	// The legacy single repo → default dest, no ref; skipped when it names one
 	// of the workspace repos (a workspace launch labels the run with its first
-	// repo), so that repo clones once, at its own target and ref.
+	// repo), so that repo clones once, at its own target and ref. Forge paths
+	// are case-insensitive, so a label differing only in case is that repo too.
 	if key, _, _, ok := repoCloneSpec(legacyRepo, ""); ok && !slices.ContainsFunc(repos, func(wr types.WorkspaceRepo) bool {
 		k, _, _, _ := repoCloneSpec(wr.Repo, "")
-		return k == key
+		return strings.EqualFold(k, key)
 	}) {
 		add(legacyRepo, "", "")
 	}

@@ -60,8 +60,9 @@ const composerWorkspaceTarget = "/home/agent/work"
 // replaces the one repository or folder it then attaches. A workspaces[] entry
 // the resolved policy already attaches adds no sources a second time; a target
 // or repos on it is 422, since the policy sets its paths. When the caller named no
-// image, every attached workspace and every one the policy attaches must agree
-// on a base image (422 image_conflict); "recommended" is no choice.
+// image, every attached workspace must agree on a base image (422
+// image_conflict; stepWorkspaces holds the policy's to it too, after the
+// authorization gate); "recommended" is no choice.
 //
 // A COMPOSED launch never sets req.WorkspaceID, so this function does not run
 // for one — compose.go's applyWorkspaces seeds the SAME mount/repo entries
@@ -144,6 +145,12 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 			return workspaceSeed{}, refusal
 		}
 		newMounts, newRepos = append(newMounts, mounts...), append(newRepos, repos...)
+		for range mounts {
+			seed.mountOwners = append(seed.mountOwners, ws)
+		}
+		for range repos {
+			seed.repoOwners = append(seed.repoOwners, ws)
+		}
 		seed.ephemeralDirs = append(seed.ephemeralDirs, dirs...)
 	}
 	spec.WorkspaceMounts = append(newMounts, spec.WorkspaceMounts...)
@@ -154,8 +161,15 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	// base_image replaces the old container-kind image resolution. An explicit
 	// user --image always wins (never silently overridden); "recommended"
 	// just means "no override", so only a real build choice sets req.Image.
+	//
+	// Only the attached workspaces are compared here: each passed the caller's
+	// launch check above, while a workspace the policy names has not been held
+	// to it yet (authorizeSpecWorkspaceSources), so naming it in a conflict
+	// would tell a member another member's workspace exists. The policy's are
+	// compared in stepWorkspaces, after that gate (imageOpen).
 	if req.Image == "" {
-		image, owner, refusal := workspacesBaseImage(append(slices.Clone(seed.attached), byPolicy...), seed.attached)
+		seed.imageOpen = true
+		image, owner, refusal := workspacesBaseImage(seed.attached, seed.attached)
 		if refusal != nil {
 			return workspaceSeed{}, refusal
 		}
@@ -186,9 +200,15 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 // workspaceSeed is what seeding the request's workspaces decided.
 type workspaceSeed struct {
 	// attached are the workspaces the request names, in order: [0] is the primary.
-	attached      []types.Workspace
-	ephemeralDirs []string
-	imageOwner    string
+	attached []types.Workspace
+	// mountOwners and repoOwners are the workspace that seeded each entry the
+	// seed prepended to spec.WorkspaceMounts and WorkspaceRepos, in order, so a
+	// source two attached workspaces carry is attributed to the right one.
+	mountOwners, repoOwners []types.Workspace
+	ephemeralDirs           []string
+	imageOwner              string
+	// imageOpen: the request named no image, so the workspaces decide it.
+	imageOpen bool
 }
 
 // attachedWorkspaceIDs is the request's attach list: workspaces[] in order, else
@@ -283,10 +303,11 @@ func seedWorkspaceSources(ws types.Workspace, sel client.WorkspaceSelection) (
 	return mounts, repos, ephemeralDirs, nil
 }
 
-// workspacesBaseImage is the one base image the run's workspaces (all: the
-// attached and the policy's) agree on: "recommended" is no choice, and two
-// different real choices are 422 image_conflict. It sets the run's image only
-// when an ATTACHED workspace carries it (a policy's alone is resolveCreateRunImage's,
+// workspacesBaseImage is the one base image workspaces all agree on:
+// "recommended" is no choice, and two different real choices are 422
+// image_conflict. Every workspace in all must already be one the caller may
+// launch, since the refusal names them. It returns the image only when an
+// ATTACHED workspace carries it (a policy's alone is resolveCreateRunImage's,
 // as before), and owner is the first member owner among those, so
 // seededImageRefusal re-checks the image whenever a member chose it.
 func workspacesBaseImage(all, attached []types.Workspace) (image, owner string, refusal *runRefusal) {

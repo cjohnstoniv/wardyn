@@ -12,11 +12,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -187,7 +189,7 @@ func TestOverlap_DriveTargetIncluded(t *testing.T) {
 	drive := legacyDriveTarget(&types.DriveMount{Target: runner.DriveTarget}, nil)
 	for _, target := range []string{runner.DriveTarget, runner.DriveTarget + "/x"} {
 		spec := types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: helloRepo, Target: target}}}
-		_, _, refusal := srv.runAttachments(createRunRequest{}, spec, []types.Workspace{ws}, []types.Workspace{ws}, drive)
+		_, _, refusal := srv.runAttachments(createRunRequest{}, spec, []types.Workspace{ws}, workspaceSeed{attached: []types.Workspace{ws}}, drive)
 		if refusal == nil || refusal.body.Reason != reasonWorkspaceTargetOverlap || !strings.Contains(refusal.body.Error, "your drive") {
 			t.Fatalf("target %s beside the drive: %+v", target, refusal)
 		}
@@ -195,7 +197,7 @@ func TestOverlap_DriveTargetIncluded(t *testing.T) {
 	// The drive's path inside a workspace's mount, the other order.
 	home := folderWS("home", "/srv/home")
 	spec := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/home", Target: "/home/agent"}}}
-	if _, _, refusal := srv.runAttachments(createRunRequest{}, spec, []types.Workspace{home}, nil, drive); refusal == nil ||
+	if _, _, refusal := srv.runAttachments(createRunRequest{}, spec, []types.Workspace{home}, workspaceSeed{}, drive); refusal == nil ||
 		refusal.body.Error != "/home/agent/drive is inside /home/agent, where home mounts. Two mounts can't nest." {
 		t.Fatalf("drive inside a workspace mount: %+v", refusal)
 	}
@@ -567,5 +569,83 @@ func TestPG_MultiWorkspace_EveryEntryAttaches(t *testing.T) {
 	got := attachmentsOf(t, w.Body.Bytes())
 	if len(got) != 2 || got[0].WorkspaceID != wss[0].ID.String() || got[1].WorkspaceID != wss[1].ID.String() {
 		t.Fatalf("attachments = %+v, want both workspaces, the primary first", got)
+	}
+}
+
+// TestImageConflictNamesNoForeignWorkspace (r1 H1): a workspace another member
+// owns, named only by a repo in the caller's inline policy, is never compared
+// for the base image before the onboarding gate holds it to the caller, so the
+// answer is the same whether or not its image differs, and never names it.
+func TestImageConflictNamesNoForeignWorkspace(t *testing.T) {
+	const caller = "sub-member"
+	mine := repoWS("mine", helloRepo)
+	mine.OwnedBy = caller
+	mine.BaseImage = &types.WorkspaceBaseImage{Kind: "custom", Image: "ghcr.io/acme/a:1"}
+	victim := func(image string) types.Workspace {
+		ws := repoWS("victim-secret-name", spoonRepo)
+		ws.OwnedBy = "sub-someone-else"
+		if image != "" {
+			ws.BaseImage = &types.WorkspaceBaseImage{Kind: "custom", Image: image}
+		}
+		return ws
+	}
+	body := `{"agent":"claude-code","task":"t","workspace_id":"` + mine.ID.String() + `","inline_policy":{"min_confinement_class":"CC2","workspace_repos":[{"repo":"` + spoonRepo + `"}]}}`
+	session := ssoSession(t, caller, "member@corp.example", oidc.RoleUser)
+	for _, door := range runDoors {
+		answer := func(image string) string {
+			srv := attachFixture(t, types.SiteConfig{}, mine, victim(image))
+			w := doSSO(t, srv, http.MethodPost, door.path, session, body)
+			return strconv.Itoa(w.Code) + " " + w.Body.String()
+		}
+		differs, same, none := answer("ghcr.io/acme/b:1"), answer("ghcr.io/acme/a:1"), answer("")
+		if differs != same || differs != none || strings.Contains(differs, "victim-secret-name") || strings.Contains(differs, reasonImageConflict) {
+			t.Fatalf("%s: a different image answered %s; the same image %s; none %s", door.name, differs, same, none)
+		}
+	}
+	// Policy-named workspaces the caller may launch are still held to one image,
+	// after the gate.
+	docs, wiki := repoWS("shared-docs", spoonRepo), repoWS("shared-wiki", "octocat/linguist")
+	docs.BaseImage = &types.WorkspaceBaseImage{Kind: "custom", Image: "ghcr.io/acme/b:1"}
+	wiki.BaseImage = &types.WorkspaceBaseImage{Kind: "custom", Image: "ghcr.io/acme/c:1"}
+	plain := repoWS("plain", helloRepo)
+	srv := attachFixture(t, types.SiteConfig{}, plain, docs, wiki)
+	policyBody := `{"agent":"claude-code","task":"t","workspace_id":"` + plain.ID.String() +
+		`","inline_policy":{"min_confinement_class":"CC2","workspace_repos":[{"repo":"` + spoonRepo + `"},{"repo":"octocat/linguist"}]}}`
+	for _, door := range runDoors {
+		w := do(t, srv, http.MethodPost, door.path, adminToken, policyBody)
+		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), imageConflictMsg("shared-docs", "shared-wiki")) {
+			t.Fatalf("%s: %d %s, want the image conflict", door.name, w.Code, w.Body.String())
+		}
+	}
+}
+
+// TestSharedRepoOwnedBySeedingWorkspace (r1 M1): a repository two attached
+// workspaces carry is the one the workspace that seeded it clones, so the mount
+// map names that workspace and its start folder resolves under it.
+func TestSharedRepoOwnedBySeedingWorkspace(t *testing.T) {
+	a, b := repoWS("payments", helloRepo, spoonRepo), repoWS("docs", helloRepo)
+	srv := attachFixture(t, types.SiteConfig{}, a, b)
+	sels := `{"workspace_id":"` + a.ID.String() + `","repos":[{"repo":"` + spoonRepo + `"}]},{"workspace_id":"` + b.ID.String() + `"}`
+	folder := `{"kind":"attachment","attachment":"` + b.ID.String() + `","repo":"` + helloRepo + `"}`
+	w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, startFolderBody(sels, folder))
+	if w.Code != http.StatusOK {
+		t.Fatalf("preflight: %d %s", w.Code, w.Body.String())
+	}
+	for _, at := range attachmentsOf(t, w.Body.Bytes()) {
+		if at.Repo == helloRepo && (at.WorkspaceID != b.ID.String() || at.Name != "docs" || !at.StartsHere) {
+			t.Fatalf("shared repo attributed as %+v, want docs's clone holding the start folder", at)
+		}
+	}
+	if _, spec := createAndDispatch(t, srv, startFolderBody(sels, folder)); spec.Env["WARDYN_START_FOLDER"] != "/home/agent/work/hello-world" {
+		t.Fatalf("WARDYN_START_FOLDER = %q", spec.Env["WARDYN_START_FOLDER"])
+	}
+}
+
+// TestLegacyRepoLabelCaseClonesOnce (r1 L1): a run's repo that names a
+// workspace repo in another case is that repo, cloned once.
+func TestLegacyRepoLabelCaseClonesOnce(t *testing.T) {
+	records, _ := buildRepoRecords("Octocat/Hello-World", []types.WorkspaceRepo{{Repo: helloRepo, Ref: "dev"}})
+	if strings.Count(records, "\n") != 0 || !strings.HasSuffix(records, "\tdev") {
+		t.Fatalf("records = %q, want the workspace repo once, at its ref", records)
 	}
 }
