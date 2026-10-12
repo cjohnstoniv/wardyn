@@ -5,6 +5,7 @@ package placement
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -148,6 +149,27 @@ func TestClassifyCredential_ResidentGrantRecordIsNeverAdmitted(t *testing.T) {
 		p := LocalPlan{Delivery: DeliveryPolicy{Classes: map[string]ClassPolicy{class: {Mode: ModeRunnerResident}}}, Posture: healthy}
 		if r := classifyCredential(Entries, "ProxyConfig.Policy.EligibleGrants", origin, p, reflect.Value{}); r == nil || r.Reason != ReasonPlacementCredential {
 			t.Errorf("%s resident grant record: %+v, want %s", class, r, ReasonPlacementCredential)
+		}
+	}
+}
+
+// ViaOrgGrant answers via_org only when the stored policy delivers the class
+// via_org: a nil from classifyCredential alone (here an allow row the table
+// does not carry today) never stands for via_org.
+func TestViaOrgGrant_RequiresTheViaOrgMode(t *testing.T) {
+	origin := CredentialOrigin{Class: ClassOperator, Delivery: ClassAPIKey, GrantKind: types.GrantAPIKey, Stored: true}
+	policy := func(m Mode) DeliveryPolicy {
+		return DeliveryPolicy{Classes: map[string]ClassPolicy{ClassAPIKey: {Mode: m}}}
+	}
+	if !ViaOrgGrant(origin, policy(ModeViaOrg)) {
+		t.Fatal("an operator api_key under a via_org policy is not via_org")
+	}
+	saved := slices.Clone(Table)
+	t.Cleanup(func() { Table = saved })
+	Table = append([]Entry{{Struct: StructGrantKind, Field: "api_key", Variant: "test allow", Class: ClassOperator, Rule: RuleAllow, Delivery: ClassAPIKey}}, saved...)
+	for _, m := range []Mode{ModeRefuse, ModeRunnerResident} {
+		if ViaOrgGrant(origin, policy(m)) {
+			t.Errorf("an admitted operator api_key under a %s policy answered via_org", m)
 		}
 	}
 }

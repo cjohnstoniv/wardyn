@@ -5,7 +5,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -111,22 +110,11 @@ func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest,
 // policy leaves every class refused.
 func (s *Server) localPlanFacts(ctx context.Context, p *placement.LocalPlan, baseline composer.Baseline, runnerID *uuid.UUID) error {
 	p.ConfinementFloor = composer.RequiredConfinementFloor(p.Spec.ProxyConfig.Policy, baseline)
-	if st, ok := s.cfg.Store.(interface {
-		GetCredentialDeliveryPolicy(context.Context) (types.CredentialDeliveryPolicyDoc, error)
-	}); ok {
-		doc, err := st.GetCredentialDeliveryPolicy(ctx)
-		if err != nil {
-			return err
-		}
-		var policy placement.DeliveryPolicy
-		if err := json.Unmarshal(doc.Policy, &policy); err != nil {
-			return err
-		}
-		if err := policy.Validate(); err != nil {
-			return err
-		}
-		p.Delivery = policy
+	policy, err := s.storedDeliveryPolicy(ctx)
+	if err != nil {
+		return err
 	}
+	p.Delivery = policy
 	st, ok := s.cfg.Store.(interface {
 		GetRunner(context.Context, uuid.UUID) (types.Runner, error)
 	})
@@ -194,11 +182,6 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 		return placement.LocalPlan{}, refusal
 	}
 	p.CredentialIntents = intents
-	policy, err := s.storedDeliveryPolicy(r.Context())
-	if err != nil {
-		return placement.LocalPlan{}, runServerError("read the credential delivery policy", err)
-	}
-	p.Delivery = policy
 	return p, nil
 }
 

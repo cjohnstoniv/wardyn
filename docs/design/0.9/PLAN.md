@@ -737,7 +737,7 @@ New governance target `local_credential_delivery`, written through the governanc
 | Writer | `isSecurityOperator`; four-eyes where enabled |
 | Default | Every class absent means `refuse` |
 | Class keys | The closed set in [§7.2](#72-per-kind-bounds); an unknown key is `400` |
-| `require_posture` | Only on `runner_resident`; fields `mdm_managed`, `disk_encrypted` (booleans) and `os_min` (per-OS minimum version) |
+| `require_posture` | Only on `runner_resident`; fields `mdm_managed`, `disk_encrypted` (booleans) and `os_min` (per-OS minimum version). At create no runner is bound yet, so a nil posture refuses every class that requires one |
 | Validation | A mode outside its class's bounds is `400`; `cloud_sts` and `oauth_subscription` are not writable |
 | Audit | `credential.delivery.write` with `before` / `after` |
 | Per run | `run.create` records `delivery: [{grant_id, class, mode, posture?}]`; grants persist `credential_grants.delivery` |
@@ -928,7 +928,7 @@ Pattern: a refusal asserts "no sandbox exists and nothing was minted", not just 
 | OD-8 classification | Closed switch at three chokepoints (create, dispatch, revive); `own` material is readable by its owner by design |
 | Spool replay | Spooled decisions are self-reported by the runner and carried on its own stream; their content is `runner_asserted` |
 | `via_org` | The developer can use an org credential for the run's life, never read it; request plaintext is visible to the laptop proxy |
-| `runner_resident` | Readable by a root developer; erase is best-effort; posture is self-reported |
+| `runner_resident` | Any process running as the runner's user can read it; erase is best-effort; posture is self-reported |
 | Offline window | Up to `1h5m` of egress on cached policy with a bounded spool; replaces #54 for local runs |
 | Revoked while offline | The sandbox runs until reconnect; tokens are denied at once |
 | Sync and bind write-back | Agent-authored content the developer later executes; mitigations in [§9.3](#93-safety-defaults); scripts such as `Makefile` remain |
