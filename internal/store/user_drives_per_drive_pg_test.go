@@ -111,7 +111,7 @@ func subjectGrants(t *testing.T, st store.PG, subject string) []types.UserDriveG
 }
 
 // TestPG_AddAndReplaceUserDriveGrants: the additive verb keeps a subject's
-// first drive beside a second (migration 0166) and updates the row it already
+// first drive beside a second (migration 0169) and updates the row it already
 // has for a drive; the replacing verb leaves the subject with exactly the drive
 // it names, repointing the earliest row and removing the rest.
 func TestPG_AddAndReplaceUserDriveGrants(t *testing.T) {
