@@ -12,13 +12,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/sizing"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
@@ -380,5 +384,103 @@ func TestCapWarningAgreesWithAppliedResources(t *testing.T) {
 				t.Errorf("run.create clamp_warnings %v carry the cap sentence = %v, resources_applied capped = %v", data.ClampWarnings, warned, tc.capped)
 			}
 		})
+	}
+}
+
+// T2, a deployment whose default policy (4000m / 8192 MiB) is above the platform default (2000m /
+// 4096 MiB): every way a member or an operator reaches an untouched size gets the deployment's own
+// size, an ask up to it is not cut or warned, a profile maximum below it does not cut it (#1949), and
+// dispatch creates the sandbox at exactly what the 201 reported.
+func TestCreateAndDispatchAgreeOnAppliedSize_DeploymentDefaultAbovePlatform(t *testing.T) {
+	t.Cleanup(func() { runner.SetDefaultLimits(0, 0) })
+	runner.SetDefaultLimits(2000, 4096)
+	for _, tc := range []struct {
+		name    string
+		profile *types.GovernanceLimits // nil: the person is unassigned
+		admin   bool
+		extra   func(e *placementEnv) string
+	}{
+		{"profiled member, inline policy with no size", &types.GovernanceLimits{}, false,
+			func(*placementEnv) string { return `"inline_policy":{"min_confinement_class":"CC2"}` }},
+		{"profiled member, stored policy with no size", &types.GovernanceLimits{}, false, func(e *placementEnv) string {
+			p, err := e.pg.CreatePolicy(context.Background(), types.RunPolicy{ID: uuid.New(), Name: "plain", Spec: types.RunPolicySpec{MinConfinementClass: types.CC2}})
+			if err != nil {
+				e.t.Fatal(err)
+			}
+			return fmt.Sprintf(`"policy_id":%q`, p.ID)
+		}},
+		{"profiled member, inline policy asking 4000", &types.GovernanceLimits{}, false,
+			func(*placementEnv) string {
+				return `"inline_policy":{"min_confinement_class":"CC2","resources":{"cpu_millis":4000}}`
+			}},
+		{"profiled member, the profile as policy", &types.GovernanceLimits{}, false, func(*placementEnv) string { return "" }},
+		{"unassigned member", nil, false, func(*placementEnv) string { return "" }},
+		{"operator", nil, true, func(*placementEnv) string { return "" }},
+		{"profile maximum 3000, inline policy with no size", &types.GovernanceLimits{MaxCPUMillis: 3000}, false,
+			func(*placementEnv) string { return `"inline_policy":{"min_confinement_class":"CC2"}` }},
+		{"profile maximum 3000, the profile as policy", &types.GovernanceLimits{MaxCPUMillis: 3000}, false,
+			func(*placementEnv) string { return "" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newPlacementEnv(t)
+			e.srv.cfg.DefaultPolicy.Resources = &types.ResourceLimits{CPUMillis: 4000, MemoryMiB: 8192}
+			remote := e.createPool("Remote", types.RunnerPoolRemoteProvided)
+			e.addExecutors(remote.ID, "alpha", "beta")
+			if tc.profile != nil {
+				e.assignSizedProfile("plain", nil, *tc.profile)
+			}
+			extra := fmt.Sprintf(`"runner_pool_id":%q`, remote.ID)
+			if x := tc.extra(e); x != "" {
+				extra += "," + x
+			}
+			var w *httptest.ResponseRecorder
+			if tc.admin {
+				w = e.admin(http.MethodPost, "/api/v1/runs", runBody(extra))
+			} else {
+				w = e.call(e.person, http.MethodPost, "/api/v1/runs", runBody(extra))
+			}
+			if w.Code != http.StatusCreated {
+				t.Fatalf("create = %d %s", w.Code, w.Body)
+			}
+			created := decodeJSON[createRunResponse](t, w)
+			got := created.ResourcesApplied
+			if got.CPUMillis.Applied != 4000 || got.MemoryMiB.Applied != 8192 || got.CPUMillis.Capped || got.MemoryMiB.Capped {
+				t.Errorf("201 = %+v, want 4000m / 8192 MiB, not capped", got)
+			}
+			if slices.Contains(created.Warnings, composer.WarnResourcesCapped) {
+				t.Errorf("201 warns %q for a size nobody cut", composer.WarnResourcesCapped)
+			}
+			res := e.dispatched()
+			if int(res.CPUMillis) != got.CPUMillis.Applied || int(res.MemoryMiB) != got.MemoryMiB.Applied {
+				t.Fatalf("DISAGREE: the 201 applied %d m / %d MiB, dispatch created %d m / %d MiB",
+					got.CPUMillis.Applied, got.MemoryMiB.Applied, res.CPUMillis, res.MemoryMiB)
+			}
+		})
+	}
+}
+
+// A self-hosted runner that advertises a size of 0 is no runner-capacity source (L-1), so its
+// placement answers the per-candidate refusal for a bound of nothing (422 placement_capability), and
+// no door answers a server error.
+func TestRunnerAdvertisingZeroCapacityIsNoServerError(t *testing.T) {
+	e := newPlacementEnv(t)
+	laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	zero := e.laptop(e.personP, 0, 0, types.CC1, types.CC2, types.CC3)
+	e.addToPool(e.person, laptops.ID, zero)
+	ctx := operatorCtx(e.personP, "person@corp.example", oidc.RoleUser)
+	ceiling, err := e.srv.effectiveCeiling(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := createRunRequest{Agent: "claude-code", Placement: types.PlacementLocal, RunnerID: zero.String(), RunnerPoolID: laptops.ID.String()}
+	_, refusal := e.srv.resolvePlacement(ctx, placementInput{req: &req, reqCCOK: true, ceiling: ceiling})
+	if refusal == nil || refusal.status != http.StatusUnprocessableEntity || refusal.body.Reason != string(placement.ReasonPlacementCapability) {
+		t.Fatalf("placement on a zero-capacity runner = %+v, want 422 placement_capability", refusal)
+	}
+	body := runBody(fmt.Sprintf(`"placement":"local","runner_id":%q,"runner_pool_id":%q,"resources":{"cpu_millis":4000}`, zero, laptops.ID))
+	for _, door := range placementDoors {
+		if w := e.call(e.person, http.MethodPost, door, body); w.Code >= http.StatusInternalServerError {
+			t.Errorf("%s = %d %s, want no server error", door, w.Code, w.Body)
+		}
 	}
 }

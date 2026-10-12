@@ -148,3 +148,31 @@ func TestResourcesProfileMaximumRaisesTheCapNotTheDefault(t *testing.T) {
 	f = resourceFold(t, srv, sizeMemberCtx(), createRunRequest{Agent: "claude-code"})
 	checkCPU(t, f, 0, 1000, false, types.LimitSourceDeployment)
 }
+
+// DR-0112 under a deployment whose default policy (4000m / 8192 MiB) is above the platform default:
+// the baseline of an inline ask is the member default, the deployment's own size, so an inline ask of
+// 4000 is the ASK and is kept, and an inline policy with no size gets that size.
+func TestResourcesDeploymentDefaultAbovePlatform(t *testing.T) {
+	t.Cleanup(func() { runner.SetDefaultLimits(0, 0) })
+	runner.SetDefaultLimits(2000, 4096)
+	cfg := baseTestConfig(newHarness(t), resourceStore{&memberBoundStore{profile: &types.GovernanceProfile{ID: uuid.New(), Name: "plain",
+		Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}}}})
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
+		Resources: &types.ResourceLimits{CPUMillis: 4000, MemoryMiB: 8192}}
+	srv := New(cfg)
+	inline := func(cpu int) *types.RunPolicySpec {
+		spec := types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
+		if cpu > 0 {
+			spec.Resources = &types.ResourceLimits{CPUMillis: cpu}
+		}
+		return &spec
+	}
+	f := resourceFold(t, srv, sizeMemberCtx(), createRunRequest{Agent: "claude-code", InlinePolicy: inline(4000)})
+	checkCPU(t, f, 4000, 4000, false, "")
+	f = resourceFold(t, srv, sizeMemberCtx(), createRunRequest{Agent: "claude-code", InlinePolicy: inline(0)})
+	checkCPU(t, f, 0, 4000, false, types.LimitSourceDeployment)
+	if m := f.place.applied.MemoryMiB; m.Applied != 8192 {
+		t.Errorf("memory = %+v, want the deployment's 8192", m)
+	}
+}

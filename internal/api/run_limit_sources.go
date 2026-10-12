@@ -58,7 +58,7 @@ func buildLimitSources(in limitSourceInput) ([]runnerpool.SourceLimits, *runnerp
 	if in.governed {
 		memberDefault := in.memberDefault
 		if memberDefault.CPUMillis < 1 || memberDefault.MemoryMiB < 1 {
-			memberDefault = composer.MemberDefault(nil)
+			memberDefault = composer.MemberDefault(types.ResourceLimits{}, nil)
 		}
 		gov, err := runnerpool.GovernanceSource(in.limits, in.ceiling, in.untouched, memberDefault)
 		if err != nil {
@@ -88,7 +88,7 @@ func (s *Server) limitSources(ctx context.Context, rt types.RunnerPoolRunType, p
 		// A negative WARDYN_RUN_MAX_AGE or run cap is off, as 0 is.
 		maxAgeSec: max(0, int(s.cfg.RunMaxAge/time.Second)), concurrentRuns: max(0, s.cfg.MaxConcurrentRuns),
 	}
-	in.ceiling, in.memberDefault = ceiling.authoredSize(), composer.MemberDefault(ceiling.Spec.Resources)
+	in.ceiling, in.memberDefault = ceiling.authoredSize(), ceiling.memberSize()
 	if d := s.inheritDeploymentResources(nil); d != nil {
 		in.deploymentDefault = types.ResourceLimits{CPUMillis: d.CPUMillis, MemoryMiB: d.MemoryMiB}
 	}

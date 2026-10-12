@@ -14,6 +14,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -76,10 +77,12 @@ type dispatchCeiling struct {
 	// authored on POLICIES (a refusal would break every stored policy the day an
 	// admin first writes a limit — internal/types/governance.go says so).
 	maxEphemeralDiskMiB int
-	// maxCPUMillis and maxMemoryMiB are GovernanceLimits.MaxCPUMillis/MaxMemoryMiB, 0 =
-	// unlimited, carried for the same reason: applySandboxSize is a dispatch phase and
-	// re-applies what create and preflight already bound, so a lane that resolved its
-	// spec some other way still cannot hand out more than the profile allows.
+	// maxCPUMillis and maxMemoryMiB are GovernanceLimits.MaxCPUMillis/MaxMemoryMiB as the
+	// member cap reads them (memberBound: never below the member default), 0 = unlimited,
+	// carried for the same reason: applySandboxSize is a dispatch phase and re-applies what
+	// create and preflight already bound, so a lane that resolved its spec some other way
+	// still cannot hand out more than the profile allows, and dispatch never cuts what the
+	// fold applied.
 	maxCPUMillis, maxMemoryMiB int
 	// adoEntra is what the autonomy gate RESOLVED about this run's per-person
 	// Azure DevOps lane at create (adoEntraGrade, runs_dispatch_ado_inject.go).
@@ -132,8 +135,8 @@ func ceilingForDispatch(c governanceCeiling, ado adoEntraGrade, bedrock bedrockC
 	return dispatchCeiling{
 		resolved: true, deny: c.Spec.DeniedDomains, profile: c.Profile.Name,
 		localSelfDefinedComponents: c.Limits.LocalSelfDefinedComponents,
-		maxEphemeralDiskMiB:        c.Limits.MaxEphemeralDiskMiB, maxCPUMillis: c.Limits.MaxCPUMillis,
-		maxMemoryMiB: c.Limits.MaxMemoryMiB, adoEntra: ado, bedrock: bedrock, adoStanding: standing,
+		maxEphemeralDiskMiB:        c.Limits.MaxEphemeralDiskMiB, maxCPUMillis: memberBound(c.Limits.MaxCPUMillis, c.memberSize().CPUMillis),
+		maxMemoryMiB: memberBound(c.Limits.MaxMemoryMiB, c.memberSize().MemoryMiB), adoEntra: ado, bedrock: bedrock, adoStanding: standing,
 		agentGuardrailLocks: c.Limits.AutonomyRubric != nil && c.Limits.AutonomyRubric.AgentGuardrailLocks,
 	}
 }
@@ -231,19 +234,29 @@ func applyEphemeralDisk(ctx context.Context, run types.AgentRun, policy *types.R
 	return false
 }
 
+// memberBound is a profile maximum as the member cap reads it (runnerpool.MemberCap with no ceiling
+// size): never below the member default; 0, no maximum, is left alone.
+func memberBound(profileMax, memberDefault int) int {
+	if profileMax <= 0 {
+		return 0
+	}
+	return runnerpool.MemberCap(0, profileMax, memberDefault)
+}
+
 // applySandboxSize is the dispatch half of the profile's CPU/memory maximums: the same
 // composer.CapResources create and preflight ran, applied once more to the policy the sandbox
-// is about to be built from. It writes a FRESH block (see CapResources), never the caller's.
+// is about to be built from. c's maximums are already the member cap (memberBound), so no further
+// floor applies. It writes a FRESH block (see CapResources), never the caller's.
 func applySandboxSize(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, c dispatchCeiling) {
 	capped, changed := composer.CapResources(policy.Resources,
-		types.GovernanceLimits{MaxCPUMillis: c.maxCPUMillis, MaxMemoryMiB: c.maxMemoryMiB})
+		types.GovernanceLimits{MaxCPUMillis: c.maxCPUMillis, MaxMemoryMiB: c.maxMemoryMiB}, types.ResourceLimits{})
 	if !changed {
 		return
 	}
 	policy.Resources = capped
 	slog.InfoContext(ctx, "wardynd: "+composer.WarnResourcesCapped,
 		slog.String("run_id", run.ID.String()), slog.Int("cpu_millis", capped.CPUMillis), slog.Int("memory_mib", capped.MemoryMiB),
-		slog.Int("profile_max_cpu_millis", c.maxCPUMillis), slog.Int("profile_max_memory_mib", c.maxMemoryMiB))
+		slog.Int("member_cap_cpu_millis", c.maxCPUMillis), slog.Int("member_cap_memory_mib", c.maxMemoryMiB))
 }
 
 // ephemeralDiskFor is §6.3's precedence, as ONE expression with TWO callers that
@@ -312,7 +325,7 @@ func (s *Server) boundResources(ctx context.Context, r *http.Request, spec *type
 	// bound is the only thing between their ceiling's own size and their sandbox. Its cut is not
 	// warned here: stepResources applies the run's ask within every limit and says when it was cut.
 	capped := false
-	if bounded, changed := composer.CapResources(spec.Resources, limits); changed {
+	if bounded, changed := composer.CapResources(spec.Resources, limits, ceiling.memberSize()); changed {
 		spec.Resources = bounded
 	}
 	if dryRun {
