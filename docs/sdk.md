@@ -352,7 +352,7 @@ A successful response contains `spec` (authorized, clamped, workspace-folded and
 - It reads no credential values, renews or mints nothing, persists no run or grant, dispatches nothing, and performs no runner, share, capacity or quota probe.
 - After the shared authentication and CSRF middleware, the handler may emit only existing dry-run `authz.denied` and `workspace.provider.admit` events, coalesced with identical preflight denials.
 - Authentication failures retain their existing middleware audit behavior.
-- Its deterministic egress includes authorized workspace declarations and clone hosts; site-config/SSH/PAT/ADO dispatch unions remain pending.
+- Its egress includes the hosts create adds after the mint from the run's own declarations: workspace declarations and clone hosts, an `ssh_key` grant's SSH-over-443 endpoint and a `git_pat` grant's Azure DevOps hosts, each only for a lane create will wire (not one the admitting provider row turns off, an `ssh_key` for Azure DevOps, or an `ssh_key` on `codex-cli`). The site-config SCM hosts, the model provider's hosts and the per-person Azure DevOps lane stay pending (`dispatch_egress`); the configured host list is never shown.
 - Custom inline runs with an authorized `github.com` HTTPS/slug clone and no surviving `github_token` also derive `github.com` and `*.githubusercontent.com`, narrowed through the caller's ceiling and personal domain capabilities before union.
 - Preflight and create use the same rule; only create audits its additions as `run.egress.add` with `kind: github_direct`.
 - Saved/default policy and authored manual-domain semantics are unchanged.
@@ -361,6 +361,20 @@ A successful response contains `spec` (authorized, clamped, workspace-folded and
 - Credentials, policies, capabilities and connections may change after it answers; create independently re-resolves every gate.
 - Clients should associate results with the request and principal, mark them stale after 60 seconds or relevant auth/config changes, and honor `Retry-After` without replacing a last good preview with an empty result.
 - Never use this read output as editable policy input.
+
+### Access
+
+Preflight (`PreflightResult.Access`) and the policy preview answer `access`, one block built by one function from the same fold, so the two agree for any request both admit.
+
+- `rows`: what brings access, inherited first (the harness, each Git provider's repositories, a command), then what the person added (components, secrets by header, allowed hosts). Each has a `status`: `ready`, `needs_setup`, `unavailable` or `refused`.
+- `hosts`: the Network total, without the site-config SCM hosts. Each host has a `verdict` against the resolved, clamped policy, never the request: `allowed`, `needs_approval` (a review mode) or `not_allowed` with `reason` `clamped`, `denied_list` or `always_deny`. A deny entry wins over everything.
+- `credentials`: the Credentials total, each with its `delivery` and what is left once the run ends (`after_end`). The repository on Wardyn's git broker lists no raw host; its credential is delivered `git_broker`.
+- An AWS sign-in follows `WARDYN_AWS_SSO_PROXY_INJECT`. On: the role credentials are in the sandbox, short-lived. Off: the session's access token is in the sandbox too, as a file. Both expire at the lifetime AWS sets.
+- `unlisted`: what happens to a host nothing lists: the effective `mode`, `allow_all`, `hold_sec` for `wait_for_review`, and `decider` (`you`, `admin` or `you_or_admin`, from your `egress_host` capability).
+- `setup`: what is still needed, as checklist rows with a `fix`: `add_secret`, `sign_in` (`target`, and `id` for a component) or `choose_model_provider` (`tool`). A model-provider sign-in names no provider id; sign in to the provider the draft chose.
+- A CLI component's row has kind `cli` and `in_image`: `yes` or `no` for a harness's own image, `unknown` for an image the run names or the operator pinned.
+- `harnesses` is empty until the tool-policy facts land.
+- Source kinds add `harness` and `posture` to the provenance set; a client shows no chip for a kind it does not know.
 
 ## Listing a repository's branches
 

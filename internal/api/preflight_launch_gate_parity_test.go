@@ -146,6 +146,7 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepHostCapacity", foldCreate | foldPreflight},
 	{"stepRunCap", foldCreate | foldPreflight},
 	{"stepRunFit", foldCreate | foldPreflight},
+	{"stepDerivedEgress", foldPreflight | foldPreview},
 }
 
 type pinnedStep struct {

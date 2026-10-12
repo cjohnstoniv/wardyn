@@ -63,6 +63,12 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	if f.adoNarrowed != "" {
 		response.Warnings = append(response.Warnings, f.adoNarrowed)
 	}
+	var err error
+	if response.Access, err = s.accessFor(r, accessInputs{req: f.req, spec: f.spec, prov: f.prov, source: f.source,
+		scmSite: f.scmSite, mpChoice: f.mpChoice, comps: f.comps, facts: response.Components}); err != nil {
+		writeServerError(w, r, "resolve capability", err)
+		return
+	}
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -115,8 +121,10 @@ func (s *Server) authorizePreviewRequest(r *http.Request, req createRunRequest) 
 	return ceiling, cc, nil
 }
 
-// Only workspace declarations and their clone hosts are safe before dispatch;
-// site-config, SSH, PAT and ADO host unions remain pending.
+// unionPreviewWorkspaceEgress is the workspace half of deriveRunEgress, unioned
+// before the requirements fold so Review grades it; stepDerivedEgress adds the
+// grant lanes after every gate. The site-config, ADO and model-provider host
+// unions remain pending.
 func unionPreviewWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.Workspace) {
 	unionWorkspaceEgress(spec, workspaces)
 	for _, ws := range workspaces {

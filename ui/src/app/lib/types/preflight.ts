@@ -9,6 +9,7 @@
 
 import type { AutonomyResolution } from "../api/governance";
 import type { ComponentFact } from "./components";
+import type { AccessFacts } from "./new-run-access";
 import type { AllowedImage, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
 import type { ProvenanceEntry } from "./policy-preview";
 import type { ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
@@ -51,7 +52,7 @@ export type SetupItemKind =
   | "workspace_integration"
   | (string & {});
 export type SetupItemStatus = "satisfied" | "missing" | "unverified" | (string & {});
-export type SetupFixAction = "add_secret" | "scan_workspace" | "none" | (string & {});
+export type SetupFixAction = "add_secret" | "scan_workspace" | "sign_in" | "choose_model_provider" | "none" | (string & {});
 
 // WHERE the credential this item concerns actually lives at run time, derived
 // from the FINAL spec's own delivery mechanism (compose_setup.go's Residency
@@ -78,6 +79,11 @@ export interface SetupFix {
   secret_name?: string;
   // A Workspace.id, NOT a source path — api.scanWorkspace takes an id.
   workspace_id?: string;
+  // sign_in: what to sign in to (model_provider, azure_cli or aws_cli) and its id.
+  target?: string;
+  id?: string;
+  // choose_model_provider: the included harness that has none.
+  tool?: string;
 }
 
 export interface SetupItem {
@@ -166,6 +172,9 @@ export interface PreflightResult {
   // whether it is available; empty until that lane fills it.
   runner_pool?: ResolvedRunnerPool;
   runner_pools?: RunnerPoolChoice[];
+  // What the run brings in (rows, hosts, credentials, the unlisted line, setup);
+  // the policy preview answers the same block. Optional so an older server still types.
+  access?: AccessFacts;
 }
 
 // Where a run's MODEL credential lands (internal/api.modelCredentialResidency).
