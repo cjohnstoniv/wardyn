@@ -105,13 +105,24 @@ func TestPG_RunTemplates_NamePerAudience(t *testing.T) {
 
 // TestPG_RunTemplates_LastSlotRace (D25-B): with one slot left in an audience,
 // sixteen creates of different names race for it. Exactly one lands, because
-// the count and the insert sit under the audience's named lock.
+// the count and the insert sit under the audience's named lock
+// (templateAudienceLockSQL).
 func TestPG_RunTemplates_LastSlotRace(t *testing.T) {
 	st, pool := templatesPG(t)
 	ctx := context.Background()
 	if _, err := pool.Exec(ctx, `INSERT INTO run_templates (id, scope, owner_id, kind, name, revision, created_at, created_by, updated_at, updated_by)
 		SELECT gen_random_uuid(), 'person', 'alice', 'template', 'seed ' || g, 1, now(), 'alice', now(), 'alice'
 		FROM generate_series(1, $1) g`, store.TemplatesMaxPerPerson-1); err != nil {
+		t.Fatal(err)
+	}
+	// Each insert waits a moment before it lands, so every racer has counted
+	// before the first one commits: without the lock they would all see the
+	// last slot free.
+	if _, err := pool.Exec(ctx, `
+		CREATE FUNCTION test_slow_template_insert() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN PERFORM pg_sleep(0.3); RETURN NEW; END $$;
+		CREATE TRIGGER test_slow_template_insert BEFORE INSERT ON run_templates
+		FOR EACH ROW EXECUTE FUNCTION test_slow_template_insert()`); err != nil {
 		t.Fatal(err)
 	}
 	const racers = 16
