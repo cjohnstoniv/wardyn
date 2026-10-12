@@ -62,4 +62,19 @@ describe("Review notices", () => {
     expect(screen.getByText(NR_REVIEW.NARROWED_BY("Platform team"))).toBeInTheDocument();
     expect(screen.getByText(NR_REVIEW.NARROWED_BY("General"))).toBeInTheDocument();
   });
+
+  it("lists the server's warnings as it wrote them, without the resources-capped line", () => {
+    const warn = ["inline_policy: allowed_domains narrowed by your ceiling", "resources capped to operator maximum"];
+    render(<Notices askedByYou={false} warnings={warn} />);
+    expect(screen.getByText(NR_REVIEW.WARNINGS_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(warn[0])).toBeInTheDocument();
+    expect(screen.queryByText(warn[1])).toBeNull();
+  });
+
+  it("shows no warnings notice when there are none, or only the resources-capped line", () => {
+    const { container, rerender } = render(<Notices askedByYou={false} warnings={[]} />);
+    expect(container).toBeEmptyDOMElement();
+    rerender(<Notices askedByYou={false} warnings={["resources capped to operator maximum"]} />);
+    expect(container).toBeEmptyDOMElement();
+  });
 });

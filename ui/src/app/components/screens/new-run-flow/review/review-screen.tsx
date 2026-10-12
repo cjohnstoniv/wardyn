@@ -142,7 +142,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       <div role="group" aria-label={NR_REVIEW.VIEW_ARIA}>
         <Segmented<"pretty" | "yaml" | "json"> value={view} options={[...VIEWS]} onChange={(v) => go({ screen: "review", view: v }, { replace: true })} />
       </div>
-      <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} />
+      <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} />
       <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} />
       {view === "pretty" ? (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
