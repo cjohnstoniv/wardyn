@@ -496,9 +496,10 @@ func (b *accessBuilder) repositoryRow(fact componentFact) {
 		b.addCredential(*cred)
 	}
 	b.addSetup(fact.Requirements...)
-	// The door grades the person's own sign-in only where it read it (see
-	// gitProviderStatus): a row that needs input is theirs to connect.
-	if fact.Provider == string(types.GitProviderAzureDevOps) && fact.Status == componentNeedsInput {
+	// Both dry doors grade whether the person has an Entra sign-in stored (see
+	// gitProviderStatus), so a missing one is theirs to connect on Tools. An
+	// ended sign-in, an own token and the console app are left to Launch's refusal.
+	if fact.Provider == string(types.GitProviderAzureDevOps) && fact.Status == componentNeedsInput && fact.signIn {
 		b.addSetup(SetupItem{Kind: "repo_credential", ID: "repo_credential:azure_devops:" + fact.Org, Label: "Sign in to Azure DevOps",
 			RequiredBy: row.Name, Status: "missing", Fix: &SetupFix{Action: fixSignIn, Target: signInAzureDevOps}})
 	}

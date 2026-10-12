@@ -59,10 +59,11 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	response.Image, response.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
 	response.Limits, response.ResourcesApplied = f.place.sizeFacts()
 	response.MainDrive = f.mainDrive.applied()
+	runRepos := append([]string{f.req.Repo, f.req.DevcontainerRepo}, repoLocatorsOf(f.spec.WorkspaceRepos)...)
 	response.Components = componentFacts(componentFactInputs{
 		req: f.req, spec: f.spec, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
 		ceiling: f.ceiling, mpChoice: f.mpChoice, pushSets: f.pushSets,
-	}, nil)
+	}, s.adoSignInPresenceFact(r.Context(), f.scmSite, oidcHumanFromContext(r.Context()), runRepos))
 	// After the facts' own warnings, which previewSafeWarnings has already filtered.
 	if f.adoNarrowed != "" {
 		response.Warnings = append(response.Warnings, f.adoNarrowed)
