@@ -75,6 +75,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   them empty.
 - Config keys that hold a secret word (for example `CLIENT_SECRET`, `SECRET_FILE`, `*_IMAGE_PULL_SECRET`) are now
   refused in templates and component config; move such values to a secret reference.
+- Migration `0162_run_queue` adds the QUEUED run state, `admitted_at` and the `run_queue` table; nothing changes
+  for existing runs.
 
 ### Added
 

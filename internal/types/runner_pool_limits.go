@@ -285,7 +285,8 @@ type EffectiveRunLimits struct {
 }
 
 // RunEndReason says why the platform ended a run. It is the audit row's `reason`
-// and the run detail's sentence; how a run carries it is the lifetime lane's.
+// and the run detail's sentence, and it rides the run's status_detail as
+// "lifetime: <reason>" when the run is KILLED at its end or its maximum.
 type RunEndReason string
 
 const (
@@ -305,6 +306,7 @@ const (
 // runEndSentences is the one sentence per end reason.
 var runEndSentences = map[RunEndReason]string{
 	RunEndMaxLifetimeReached:  "This run reached its maximum lifetime and was ended.",
+	RunEndEndReached:          "This run reached its end time and was ended.",
 	RunEndQueueTimeout:        "This run waited too long for a free slot and was not started.",
 	RunEndQueueProfileChanged: "Your governance profile changed while this run waited. Start it again.",
 	RunEndQueuePolicyChanged:  "The policy this run used changed while it waited. Start it again to review it.",
@@ -312,6 +314,10 @@ var runEndSentences = map[RunEndReason]string{
 	RunEndRunnerPoolRemoved:   "The pool this run was waiting for was removed.",
 	RunEndIdentityDeactivated: "This account's access has been removed. Sign in again, or ask your Wardyn admin.",
 }
+
+// RunEndEndReached: a Background task reached its own end time, which came
+// before its maximum lifetime, and was KILLED.
+const RunEndEndReached RunEndReason = "end_reached"
 
 // Valid reports whether r is a defined end reason.
 func (r RunEndReason) Valid() bool { _, ok := runEndSentences[r]; return ok }
