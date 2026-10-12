@@ -8,6 +8,7 @@
 // to an import. Every field is optional: absent means the server did not say,
 // and Review then shows less, never a guess.
 
+import type { MainDriveApplied as RealMainDriveApplied } from "./new-run-contract";
 import type { PreflightResult } from "./preflight";
 import type { ConfinementClass } from "./runs";
 import type { PoolSlots, RunnerPoolChoice } from "./runner-pools";
@@ -27,14 +28,8 @@ export interface MainDriveFacts {
   enforcement: "filesystem" | "eviction" | "none" | "unknown";
 }
 
-/** Seam: DS-3 §3.5 (client.MainDriveApplied). `applied_mib` 0 means no size; enforcement is under `facts`. */
-export interface MainDriveApplied {
-  requested_mib?: number;
-  applied_mib: number;
-  basis?: "request" | "policy" | "default" | "none";
-  default_source?: "pool" | "deployment";
-  clamped_by?: "pool" | "governance" | "deployment" | "policy";
-  soft?: boolean;
+/** The twin landed (new-run-contract.ts); only the pool's facts (DS-3 §3.3) are still a seam. */
+export interface MainDriveApplied extends RealMainDriveApplied {
   facts?: MainDriveFacts;
 }
 
@@ -48,7 +43,7 @@ export interface BarrierOptionFact {
 
 export type ReviewPoolChoice = RunnerPoolChoice & { my_runners?: PoolRunnerFact[] };
 
-export type ReviewPreflight = Omit<PreflightResult, "runner_pools"> & {
+export type ReviewPreflight = Omit<PreflightResult, "runner_pools" > & {
   runner_pools?: ReviewPoolChoice[];
   barrier_options?: BarrierOptionFact[];
   main_drive?: MainDriveApplied;

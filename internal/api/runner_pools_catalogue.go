@@ -63,10 +63,7 @@ func (s *Server) poolList(r *http.Request, ps store.RunnerPoolStore, rows []stor
 			usable = append(usable, row.Pool.ID)
 		}
 	}
-	var err error
-	if in.slots, err = s.slotCounts(ctx, usable); err != nil {
-		return client.RunnerPoolList{}, runServerError("count runner pool slots", err)
-	}
+	in.slots = s.slotCounts(ctx, usable)
 	for _, row := range rows {
 		if !subj.permits(row) {
 			// Listed for a manager only: they may manage it, not use it, so nothing is computed for it.

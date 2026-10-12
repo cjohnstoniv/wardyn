@@ -91,6 +91,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- A workspace image build pins its base image, devcontainer features and the Claude Code version it used; when the
+  image is later missing, Wardyn rebuilds it from those pins and fails, naming the input, if one is gone. A build that
+  could not be pinned is recorded as not reproducible (#1516).
+- Governance → Runner credentials: a security operator sets, per credential class, whether an organisation credential
+  stays in the organisation, is stored on a person's own runner (with the device posture the runner must report), or
+  is not allowed, held for a second person where that is required.
+- `GET /model-providers` also reports `entra_login_configured` and `kinds_available`; a `400` from `PUT
+  /model-providers` for an Azure provider may carry `field`, the dotted path of the request field it is about. Azure
+  Foundry stays switched off in this release.
 - The runner pool list (`GET /runner-pools`) now says, for each pool you may use, whether it is available to you and
   why not, your own active runs against your profile's cap, the pool's limits as your runs get them, its barrier
   options and your runners in it; `?run_type=` narrows it to one run type (`400 runner_pool_invalid` otherwise).
@@ -347,8 +356,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Runner pools carry limits per run type: CPU and memory (default and cap), a main-drive cap (`disk_mib`, whole GiB),
   lifetime (default, maximum or unlimited), an idle stop for interactive environments only, allowed barriers and a
   concurrent-run cap; an administrator sets them on create and replaces them on update (migration 0158). A run is
-  admitted by its pool's run types and barriers, and the pool's lifetime bounds its end; CPU, memory, the
-  main-drive cap, idle stop and the concurrent-run cap are stored and audited but not yet applied to runs.
+  admitted by its pool's run types and barriers, and the pool's lifetime bounds its end; CPU, memory, idle stop
+  and the concurrent-run cap are stored and audited but not yet applied to runs.
 - `wardyn-runnerd` ships as a release binary for Linux and macOS (amd64, arm64) with a per-user service: a systemd
   user unit or a LaunchAgent, installed by `deploy/runner/install.sh`, which registers the runner with a single-use
   token and keeps it running; the owner then claims it with `wardyn runner claim` (#1968).
@@ -396,6 +405,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   reason, and rules for its MCP tools are kept in its rule set. Rules for a harness without Wardyn's tool gate, and
   rules in an interactive run beyond its own "asks you", are refused. New Run's access facts include a tool policy for
   each included harness.
+- A run's main drive is sized from one rule at Review and at launch: `resources.disk_mib` on a request is reduced to
+  the strictest of the pool, your governance profile and this server's maximum, and the run says so. A run that asks
+  for no size gets the strictest of the pool, profile and server defaults as a soft size; a host that cannot cap
+  disk, such as overlay2 over ext4, runs a soft size uncapped. On Kubernetes this adds an ephemeral-storage limit to
+  CLI and CI runs that had none. A size the run's policy writes is a requirement that a request may only lower; when
+  the run's own pool cannot cap disk, such a run is refused with `main_drive_unenforceable` at Review, the policy
+  preview and create. The Policy tab tells a pool default from a server default, and `run.policy.resolve` records
+  `disk_mib_basis` and `disk_mib_default_source`.
 
 ### Changed
 

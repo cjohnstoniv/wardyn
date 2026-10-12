@@ -10,7 +10,7 @@
 import type { AutonomyResolution } from "../api/governance";
 import type { ComponentFact } from "./components";
 import type { AccessFacts } from "./new-run-access";
-import type { AllowedImage, AppliedResources, HarnessSetFact, ImageFact, LocalPlacementFact, RunAttachment } from "./new-run-contract";
+import type { AllowedImage, AppliedResources, HarnessSetFact, ImageFact, LocalPlacementFact, MainDriveApplied, RunAttachment } from "./new-run-contract";
 import type { ProvenanceEntry } from "./policy-preview";
 import type { BarrierOption, EffectiveRunLimits, PoolSlots, ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
 import type { ConfinementClass, RiskItem, RiskLevel } from "./runs";
@@ -161,6 +161,8 @@ export interface PreflightResult {
   // gets. Absent on an older server.
   limits?: EffectiveRunLimits;
   resources_applied?: AppliedResources;
+  // The main-drive size it asked for and gets; absent on an older server.
+  main_drive?: MainDriveApplied;
   // Whether each host, workspace source and component can run on the person's
   // runner; empty until the placement lane fills it.
   local_placement?: LocalPlacementFact[];

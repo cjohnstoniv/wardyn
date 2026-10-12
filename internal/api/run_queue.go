@@ -242,7 +242,7 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 	launch := queuedLaunch{
 		Request: q.original, ProviderID: q.f.mpChoice.provider.ID, MaxWaitSec: waitSec,
 		Repos: runRepos(types.AgentRun{Repo: q.req.Repo}, nil), LifetimeCapSec: q.f.end.capSec,
-		Resources: s.runFitSpec(ctx, q.f.spec, q.f.ceiling).Resources,
+		Resources: s.runFitSpec(q.f.spec, q.f.mainDrive).Resources,
 	}
 	launch.Repos = append(launch.Repos, repoLocatorsOf(q.f.spec.WorkspaceRepos)...)
 	if q.f.ceiling.Profile != nil {

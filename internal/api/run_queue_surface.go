@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -62,33 +63,35 @@ func defaultMaxWaitSec(rt types.RunnerPoolRunType) int {
 	return queueBackgroundWaitSec
 }
 
-// slotCounts reads the counts of poolIDs in one grouped read, outside any lock. nil for a store that
-// cannot count.
-func (s *Server) slotCounts(ctx context.Context, poolIDs []uuid.UUID) (map[uuid.UUID]store.PoolCounts, error) {
+// slotCounts reads the counts of poolIDs in one grouped read, outside any lock. The counts are advisory,
+// so a failed read is logged and the answer is served without them (nil), never refused. nil too for a
+// store that cannot count.
+func (s *Server) slotCounts(ctx context.Context, poolIDs []uuid.UUID) map[uuid.UUID]store.PoolCounts {
 	sc, ok := s.cfg.Store.(slotCounter)
 	if !ok || len(poolIDs) == 0 {
-		return nil, nil
+		return nil
 	}
-	return sc.RunnerPoolSlotCounts(ctx, poolIDs)
+	counts, err := sc.RunnerPoolSlotCounts(ctx, poolIDs)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: count runner pool slots", slog.Any("err", err))
+		return nil
+	}
+	return counts
 }
 
 // runnerPoolSlots is the resolved pool's slot answer on the dry doors, with the wait this run would
-// be given; nil for an unpooled run or a store that cannot count.
-func (s *Server) runnerPoolSlots(ctx context.Context, p runPlacement, req createRunRequest) (*client.PoolSlots, error) {
+// be given; nil for an unpooled run, a store that cannot count, or a failed count.
+func (s *Server) runnerPoolSlots(ctx context.Context, p runPlacement, req createRunRequest) *client.PoolSlots {
 	if !p.pooled {
-		return nil, nil
+		return nil
 	}
-	counts, err := s.slotCounts(ctx, []uuid.UUID{p.pool.ID})
-	if err != nil {
-		return nil, err
-	}
-	c, ok := counts[p.pool.ID]
+	c, ok := s.slotCounts(ctx, []uuid.UUID{p.pool.ID})[p.pool.ID]
 	if !ok {
-		return nil, nil
+		return nil
 	}
 	interactive := runTypeForEnd(req.Experience) == types.RunnerPoolRunInteractive || (req.Experience == "" && requestIsInteractive(req))
 	wait, _ := queueWaitSec(req, interactive)
-	return poolSlots(p.row, c, wait), nil
+	return poolSlots(p.row, c, wait)
 }
 
 // projectRunQueue fills AgentRun.queue on each QUEUED run of runs from its queue row, in one read. It is

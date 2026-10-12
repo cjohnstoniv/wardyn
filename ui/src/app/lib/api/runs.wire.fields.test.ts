@@ -188,6 +188,10 @@ const UI_NEVER_SENDS = new Set([
   "policy_overlay",
 ]);
 
+// Nested request fields the old wizard's form never sets, as "carrier.field". resources.disk_mib: the
+// new flow forwards it through the field registry. runWireBody still passes it if an input carries it.
+const UI_NEVER_SENDS_NESTED = new Set(["resources.disk_mib"]);
+
 // ui_apps used to sit on this set as a TS AgentRun key with no Go AgentRun
 // json tag (handleGetRun's anonymous wrapper struct, runs_policy.go:172-175,
 // GET /runs/{id} only) — it now lives on RunDetail instead (see the RunDetail
@@ -432,6 +436,20 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       expect(body).not.toHaveProperty(key);
     }
     for (const key of REPLACED_BY_RUN_MODE.filter((k) => k !== "model_provider")) expect(body).toHaveProperty(key);
+  });
+
+  it("every RunResources json tag is what runWireBody forwards, or is on the nested never-sends list", () => {
+    const goTags = goJSONTags(clientGo, "RunResources");
+    // Each tag, set alone, must come out of runWireBody on the wire (so a disk-only block is not dropped);
+    // a tag on the never-sends list is one the form never sets, but the body still carries it.
+    for (const tag of goTags) {
+      const body = runWireBody({ ...fullInput, resources: { [tag]: 1 } });
+      expect(body.resources, `resources.${tag} is dropped by runWireBody`).toEqual({ [tag]: 1 });
+    }
+    const set = new Set(Object.keys(fullInput.resources ?? {}));
+    const missing = goTags.filter((t) => !set.has(t) && !UI_NEVER_SENDS_NESTED.has(`resources.${t}`));
+    expect(missing).toEqual([]);
+    for (const path of UI_NEVER_SENDS_NESTED) expect(goTags, `${path} is no longer a Go field`).toContain(path.slice("resources.".length));
   });
 
   it("WorkspaceSelection: the TS wire entry's keys are exactly Go's json tags", () => {
