@@ -21,7 +21,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
-	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -191,9 +190,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// pass that read the run's lost mark before the claim cannot stop the proxy
 	// this revive starts. It is released after the settle, and after the
 	// compensation of a failed one.
-	ctx, unlockRun, err := s.lockRunOp(ctx, run.ID)
-	if err != nil {
-		return reviveResult{}, reviveRefused(http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
+	ctx, unlockRun, rerr := s.lockRevive(ctx, run)
+	if rerr != nil {
+		return reviveResult{}, rerr
 	}
 	defer unlockRun()
 	// One deadline bounds every call the revive makes to a runner while it holds the run's lock, so a
@@ -680,31 +679,6 @@ func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun) (ownerCe
 		return ownerCeiling{}, nil
 	}
 	return ownerCeiling{deny: p.Ceiling.DeniedDomains, profile: p.Name, denyPlacements: p.Limits.DenyPlacements}, nil
-}
-
-// reviveCeilingAdmitting is the owner's ceiling, once it still admits the run where it is.
-func (s *Server) reviveCeilingAdmitting(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string) (ownerCeiling, *reviveError) {
-	c, rerr := s.reviveCeiling(ctx, run)
-	if rerr == nil {
-		rerr = s.revivePlacementDenied(ctx, run, c, actorType, actor)
-	}
-	return c, rerr
-}
-
-// revivePlacementDenied refuses a revive of a run whose placement the owner's profile now denies, with
-// the create doors' reason and sentence: a profile changed after create stops the run's next revive.
-func (s *Server) revivePlacementDenied(ctx context.Context, run types.AgentRun, c ownerCeiling, actorType types.ActorType, actor string) *reviveError {
-	p := run.Placement
-	if remotePlacement(p) {
-		p = types.PlacementRemote
-	}
-	// A managed-harness sign-in (a server-set task no request can name) is exempt, as at create.
-	if run.Task == harnessLoginTask || !slices.Contains(c.denyPlacements, p) {
-		return nil
-	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
-		mustJSON(map[string]any{"subject": run.CreatedBy, "reason": placement.ReasonPlacementDenied})))
-	return reviveRefused(placement.ReasonPlacementDenied.Status(), string(placement.ReasonPlacementDenied), placementDeniedMsg(p, c.profile))
 }
 
 // reasserted is what reassertProxyCeiling changed.
