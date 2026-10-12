@@ -54,6 +54,7 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	response := policyPreviewFacts(req, f.spec, f.source, f.policyWarns, f.scmSite, f.mpChoice)
 	response.Provenance = f.prov
+	response.Attachments = f.attachments
 	response.RunnerPool, response.RunnerPools = f.place.facts()
 	response.Image, response.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
 	response.Limits, response.ResourcesApplied = f.place.sizeFacts()

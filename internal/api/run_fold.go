@@ -43,13 +43,23 @@ type runFold struct {
 	// value, so one request cannot grade on two sets.
 	baseline composer.Baseline
 
-	spec              types.RunPolicySpec
-	policyID          *uuid.UUID
-	policyWarns       []string
-	source            policySourceRecord
-	ephemeralDirs     []string
-	driveMount        *types.DriveMount
-	wsRefs            []types.Workspace
+	spec          types.RunPolicySpec
+	policyID      *uuid.UUID
+	policyWarns   []string
+	source        policySourceRecord
+	ephemeralDirs []string
+	driveMount    *types.DriveMount
+	// previewDriveReadOnly is the drive's posture at the preview, which resolves
+	// no mount: nil when the run has no drive.
+	previewDriveReadOnly *bool
+	// seed is what seeding the request's workspaces decided (attached first,
+	// the primary leading); wsRefs adds every other one the spec references.
+	seed   workspaceSeed
+	wsRefs []types.Workspace
+	// attachments is the run's mount map and startFolder its one working
+	// directory (WARDYN_START_FOLDER), both from stepWorkspaces.
+	attachments       []client.RunAttachment
+	startFolder       string
 	present           map[string]bool
 	reqEvents         []requirementAuditEntry
 	directGitHubAdded []string

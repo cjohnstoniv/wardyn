@@ -162,6 +162,9 @@ export interface WorkspaceSourceInput {
   // on a write (the server drops it), and never recomputed here: the match rule
   // has exactly one spelling, in Go.
   admitted?: boolean;
+  // SERVER-OWNED, read-only, on repo sources: the absolute path the clone lands
+  // at by default (its target, else /home/agent/work/<name>). Never sent on a write.
+  clone_target?: string;
 }
 
 export type WorkspaceBaseImageKind = "recommended" | "registry" | "custom" | "byo";
