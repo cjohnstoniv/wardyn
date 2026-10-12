@@ -4,15 +4,19 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -372,9 +376,9 @@ func TestAccessSecretRow_StatusFollowsItsHost(t *testing.T) {
 	}
 }
 
-// A person's own Azure DevOps lane that is not connected brings one sign-in
-// item that targets the existing connect door; connected, or never graded (the
-// door read no credential), it brings none.
+// A person's own Azure DevOps lane with no Entra sign-in stored brings one
+// sign-in item that targets the existing connect door; connected, never graded,
+// or missing for a cause the popup cannot fix, it brings none.
 func TestAccessRepo_ADOSignInSetupItem(t *testing.T) {
 	row := adoEntra(adoRow("ado-row", false, "https://dev.azure.com/acme"))
 	req := createRunRequest{Agent: "claude-code", Task: "t", Repo: "https://dev.azure.com/acme/project/_git/one"}
@@ -385,7 +389,10 @@ func TestAccessRepo_ADOSignInSetupItem(t *testing.T) {
 		want bool
 	}{
 		{"not connected", &SCMAccess{Kind: "azure_devops", Org: "https://dev.azure.com/acme", State: modelAccessNotConfigured}, true},
-		{"sign-in ended", &SCMAccess{Kind: "azure_devops", Org: "https://dev.azure.com/acme", State: modelAccessExpiredSignin}, true},
+		{"sign-in ended", &SCMAccess{Kind: "azure_devops", Org: "https://dev.azure.com/acme", State: modelAccessExpiredSignin, Cause: scmAccessCauseEnded}, false},
+		{"consent missing", &SCMAccess{Kind: "azure_devops", Org: "https://dev.azure.com/acme", State: modelAccessExpiredSignin, Cause: scmAccessCauseConsentNeeded}, false},
+		{"console app missing", &SCMAccess{Kind: "azure_devops", Org: "https://dev.azure.com/acme", State: modelAccessExpiredSignin, Cause: ReasonADOPATNeedsConsoleApp}, false},
+		{"own token, none added", &SCMAccess{Kind: "azure_devops", Org: "https://dev.azure.com/acme", State: modelAccessNotConfigured, TokenMode: string(types.ADOTokenModeOwnPAT)}, false},
 		{"connected", &SCMAccess{Kind: "azure_devops", Org: "https://dev.azure.com/acme", State: modelAccessLive}, false},
 		{"not graded", nil, false},
 	} {
@@ -414,18 +421,70 @@ func TestAccessRepo_ADOSignInSetupItem(t *testing.T) {
 	}
 }
 
-// Review's door carries the Azure DevOps sign-in item for a person whose own
-// sign-in is missing. The preview grades no sign-in (it must not read the
-// stored sign-in's value), so it carries none yet.
-func TestAccessFacts_ADOSignInItemAtPreflight(t *testing.T) {
-	f := newComponentFixture(t)
-	f.st.siteConfig = adoTestSiteConfig(false)
-	f.srv.cfg.ADOEntra = adoTestEntraSource
-	f.srv.cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
-		FirstUseApproval: types.FirstUseDenyWithReview}
-	access := decodeAccess(t, preflightDoor, f.ask(t, preflightDoor, map[string]any{"agent": "claude-code", "task": "access", "repo": scmTestADORepo})).Access
-	i := slices.IndexFunc(access.Setup, func(it SetupItem) bool { return it.Kind == "repo_credential" })
-	if i < 0 || access.Setup[i].Status != "missing" || access.Setup[i].Fix == nil || access.Setup[i].Fix.Target != signInAzureDevOps {
-		t.Errorf("setup = %+v, want the azure_devops sign-in item", access.Setup)
+// Both dry doors offer the Azure DevOps sign-in item only for the cause the
+// connect popup fixes: no Entra sign-in stored. The preview grades that by
+// PRESENCE alone (a names-only list of the caller's own namespace, never a Get),
+// so a stored sign-in, even one Review grades as ended, brings none there; an own
+// token and a minted_pat row without its console app bring none at either door.
+func TestAccessFacts_ADOSignInItemByCause(t *testing.T) {
+	entraRow := types.GitProvider{ID: scmTestRowID, Kind: types.GitProviderAzureDevOps, BaseURLs: []string{scmTestADOOrg},
+		Lanes: []types.GitLane{types.GitLaneEntra}, CredentialSource: types.CredentialSourcePerUser,
+		Entra: &types.ADOEntraConfig{TenantID: "tenant-1", ClientID: "client-1"}}
+	blob := func(dead bool) *adoEntraBlob {
+		b := &adoEntraBlob{RefreshToken: "rt", Scopes: scmTestBaseline(t), TenantID: "tenant-1", ClientID: "client-1", Subject: "sub-ado-op", Source: adoEntraSourceSignIn}
+		if dead {
+			b.DeadAt = time.Now()
+		}
+		return b
+	}
+	console := func(ctx context.Context) (ADOEntraConfig, bool, error) {
+		cfg, _, _ := adoTestEntraSource(ctx)
+		cfg.TokenMode, cfg.Scopes = types.ADOTokenModeMintedPAT, adoscope.MintScopes()
+		return cfg, true, nil
+	}
+	for _, tc := range []struct {
+		name            string
+		row             types.GitProvider
+		source          func(context.Context) (ADOEntraConfig, bool, error)
+		blob            *adoEntraBlob
+		preview, review bool
+		cause           string // of Review's git_credential fact, when it names one
+	}{
+		{name: "no sign-in stored", row: entraRow, preview: true, review: true},
+		{name: "sign-in stored and live", row: entraRow, blob: blob(false)},
+		{name: "sign-in stored and ended", row: entraRow, blob: blob(true), cause: scmAccessCauseEnded},
+		{name: "own token, none added", row: ownPATTestRow()},
+		{name: "minted_pat without the console app", row: entraRow, source: console, cause: ReasonADOPATNeedsConsoleApp},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, st, _ := adoRunHarness(t, true)
+			st.siteConfig = types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{tc.row}}}
+			if tc.source != nil {
+				srv.cfg.ADOEntra = tc.source
+			}
+			srv.cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
+				FirstUseApproval: types.FirstUseDenyWithReview}
+			if tc.blob != nil {
+				if err := srv.storeADOEntraBlob(context.Background(), "sub-ado-op", scmTestRowID, *tc.blob); err != nil {
+					t.Fatal(err)
+				}
+			}
+			body := `{"agent":"claude-code","task":"access","repo":"` + scmTestADORepo + `"}`
+			for door, want := range map[string]bool{previewDoor: tc.preview, preflightDoor: tc.review} {
+				w := do(t, srv, http.MethodPost, door, adoOperatorToken(st), body)
+				access := decodeAccess(t, door, w).Access
+				i := slices.IndexFunc(access.Setup, func(it SetupItem) bool { return it.Kind == "repo_credential" })
+				if !want {
+					if i >= 0 {
+						t.Errorf("%s setup = %+v, want no sign-in item", door, access.Setup)
+					}
+				} else if i < 0 || access.Setup[i].Status != "missing" || access.Setup[i].Fix == nil || access.Setup[i].Fix.Target != signInAzureDevOps {
+					t.Errorf("%s setup = %+v, want the azure_devops sign-in item", door, access.Setup)
+				}
+				if door == preflightDoor && tc.cause != "" && !strings.Contains(w.Body.String(), `"cause":"`+tc.cause+`"`) {
+					t.Errorf("preflight does not grade the cause %q: %s", tc.cause, w.Body.String())
+				}
+			}
+		})
 	}
 }

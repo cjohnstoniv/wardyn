@@ -95,7 +95,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     templateNeeds: template.needs,
     templateUnread: template.unread,
     refusal: checks.preflightError === null ? null : { text: checks.preflightError, reason: checks.preflightReason },
-    setupItems: missingSetup(pre),
+    setupItems: missingSetup(pre, checks.preview.result),
   };
   const blockers = buildBlockers({ ...inputs, stale: !gate(0) });
   const hard = blockers.filter((b) => b.kind !== "stale");
