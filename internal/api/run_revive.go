@@ -473,7 +473,8 @@ func (s *Server) revivePATNarrowing(ctx context.Context, run types.AgentRun, cfg
 // grant reading the operator's key, or a managed or subscription sentinel.
 // Every injection the strip would drop goes, audited as run.injection.drop,
 // unless its grant's snapshot names the UID of the run's own provider as it
-// stands now — the grants the provider arms author. A run left with no model
+// stands now — the grants the provider arms author — or an AWS CLI row, whose
+// portal grant names the AWS SSO sentinel without being a model credential. A run left with no model
 // credential revives without one, as dispatch leaves a run no provider serves:
 // never a fallback to the operator's. A site config or grant list that cannot
 // be read refuses the revive.
@@ -494,14 +495,28 @@ func (s *Server) stripRevivedModelInjections(ctx context.Context, run types.Agen
 		return unreadable("the run's grants", err)
 	}
 	authored := map[uuid.UUID]bool{}
-	if p, ok := modelProviderByID(siteCfg.ModelProviders, run.ModelProviderID); ok && run.ModelProviderID != "" && p.UID != "" {
-		for _, g := range grants {
-			var sc struct {
-				Snapshot providerGrantSnapshot `json:"snapshot"`
-			}
-			if json.Unmarshal(g.Spec.Scope, &sc) == nil && sc.Snapshot.ProviderUID == p.UID {
-				authored[g.ID] = true
-			}
+	p, ok := modelProviderByID(siteCfg.ModelProviders, run.ModelProviderID)
+	providerUID := ""
+	if ok && run.ModelProviderID != "" {
+		providerUID = p.UID
+	}
+	for _, g := range grants {
+		var sc struct {
+			Snapshot struct {
+				ProviderUID string `json:"provider_uid"`
+				ComponentID string `json:"component_id"`
+				Mechanism   string `json:"mechanism"`
+			} `json:"snapshot"`
+		}
+		if json.Unmarshal(g.Spec.Scope, &sc) != nil {
+			continue
+		}
+		// An AWS CLI row's portal grant is that lane's own, not a model
+		// credential: it names the AWS SSO sentinel, and every resolve re-checks
+		// the row, the run and the owner (cliSSOScopeAt).
+		cli := sc.Snapshot.ComponentID != "" && sc.Snapshot.Mechanism == cliAWSMechanism
+		if cli || (providerUID != "" && sc.Snapshot.ProviderUID == providerUID) {
+			authored[g.ID] = true
 		}
 	}
 	model := s.modelCredentialInjection(nil, s.modelServingHosts(siteCfg))
