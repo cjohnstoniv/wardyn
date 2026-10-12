@@ -165,6 +165,9 @@ func (s *Server) runStatusDetailWriter(ctx context.Context, runID uuid.UUID) (on
 func (s *Server) projectStatusDetailFor(r *http.Request, runs []types.AgentRun) {
 	projectStatusDetail(runs)
 	s.projectModelAccessQuote(r, runs)
+	if err := s.projectRunQueue(r.Context(), runs); err != nil {
+		slog.WarnContext(r.Context(), "wardynd: project run queue", slog.Any("err", err)) // the place is advisory: the run is served without it
+	}
 }
 
 // projectStatusDetail decides what a run's startup detail SAYS to a reader, on

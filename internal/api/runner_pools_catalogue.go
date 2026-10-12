@@ -43,6 +43,8 @@ type poolListInput struct {
 	executors map[string]executorRead
 	// runnerNames are the caller's runners' names, read on the first self-hosted row that needs them.
 	runnerNames map[uuid.UUID]string
+	// slots are the counts of every pool the caller may use, read once per list.
+	slots map[uuid.UUID]store.PoolCounts
 }
 
 func (s *Server) poolList(r *http.Request, ps store.RunnerPoolStore, rows []store.RunnerPoolCatalogueRow, subj callerSubjects,
@@ -55,6 +57,16 @@ func (s *Server) poolList(r *http.Request, ps store.RunnerPoolStore, rows []stor
 	}
 	out := client.RunnerPoolList{Pools: make([]client.RunnerPoolCatalogueEntry, 0, len(rows))}
 	var permitted []types.RunnerPool
+	var usable []uuid.UUID
+	for _, row := range rows {
+		if subj.permits(row) {
+			usable = append(usable, row.Pool.ID)
+		}
+	}
+	var err error
+	if in.slots, err = s.slotCounts(ctx, usable); err != nil {
+		return client.RunnerPoolList{}, runServerError("count runner pool slots", err)
+	}
 	for _, row := range rows {
 		if !subj.permits(row) {
 			// Listed for a manager only: they may manage it, not use it, so nothing is computed for it.
@@ -125,6 +137,13 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 		e.Limits = append(e.Limits, eff)
 	}
 	e.BarrierOptions = runnerpool.BarrierOptions(barrierFacts(row.Pool, targets, in.ceiling.Spec.MinConfinementClass))
+	if c, ok := in.slots[row.Pool.ID]; ok {
+		waitSec := 0
+		if in.runType != "" {
+			waitSec = defaultMaxWaitSec(in.runType)
+		}
+		e.Slots = poolSlots(row.Pool, c, waitSec)
+	}
 	if len(st.own) > 0 {
 		names, refusal := s.ownRunnerNames(r, in)
 		if refusal != nil {

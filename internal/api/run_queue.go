@@ -221,6 +221,9 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 	}
 	if created.State == types.RunQueued {
 		warnings = append(warnings, runnerpool.WaitAtCapacityMsg(pool.Name, capMax))
+		runs := []types.AgentRun{created}
+		s.projectStatusDetailFor(r, runs) // the 201 carries the same wait reason and place a GET does
+		created = runs[0]
 	}
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+created.ID.String())
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})

@@ -214,6 +214,20 @@ export interface PoolRunner {
 }
 
 /**
+ * Go: client.PoolSlots. A pool's slot counts, everyone's and never saying whose. The verdict is advisory:
+ * the launch decides. `max_wait_sec` is the wait a run of the asked type gets (86400 Background, 3600
+ * Interactive); on the pool list only with ?run_type=.
+ */
+export interface PoolSlots {
+  used: number;
+  waiting: number;
+  /** Absent: the pool has no limit. */
+  max?: number;
+  verdict: "starts_now" | "waits";
+  max_wait_sec?: number;
+}
+
+/**
  * Go: client.RunnerPoolCatalogueEntry, one row of GET /runner-pools: the dry doors' fields plus what the
  * pool offers. A row the caller may only manage (runner_pool_not_found) carries none of these.
  */
@@ -222,6 +236,7 @@ export interface RunnerPoolCatalogueEntry extends RunnerPoolChoice {
   run_types_source?: "pool" | "none";
   barrier_options: BarrierOption[];
   my_runners?: PoolRunner[];
+  slots?: PoolSlots;
 }
 
 /** Go: client.PersonAllowance. Counts only; absent for a caller outside governance. */
