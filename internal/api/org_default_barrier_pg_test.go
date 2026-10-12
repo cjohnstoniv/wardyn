@@ -168,6 +168,17 @@ func TestPersonalDefaultsRefuseBarrier(t *testing.T) {
 // scan) keeps the strongest class the runner offers, whatever the organisation set.
 func TestSourceScanKeepsStrongest(t *testing.T) {
 	srv, _ := pgHarnessWithRunner(t, &fakeRunner{})
+	// The database is shared with the rest of the package and the PUT replaces the whole document: put
+	// back what was there, or every later launch with no pool named is refused runner_pool_required.
+	before := do(t, srv, http.MethodGet, "/api/v1/runner-pool-defaults", adminToken, "")
+	if before.Code != http.StatusOK {
+		t.Fatalf("read the organisation defaults = %d %s", before.Code, before.Body)
+	}
+	t.Cleanup(func() {
+		if w := do(t, srv, http.MethodPut, "/api/v1/runner-pool-defaults", adminToken, before.Body.String()); w.Code != http.StatusOK {
+			t.Errorf("restore the organisation defaults = %d %s", w.Code, w.Body)
+		}
+	})
 	if w := do(t, srv, http.MethodPut, "/api/v1/runner-pool-defaults", adminToken, `{"barrier":"CC2"}`); w.Code != http.StatusOK {
 		t.Fatalf("set the organisation barrier = %d %s", w.Code, w.Body)
 	}
