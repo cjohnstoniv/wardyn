@@ -263,7 +263,7 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	createData := createRunAuditData(q.req, q.f.policyID, created.ConfinementClass, q.reqCC, "", q.f.policyWarns, q.f.autonomy, false, q.f.mpChoice)
 	delete(createData, "jti") // nothing is minted while the run waits
 	createData["policy_source"] = q.f.source
-	q.f.stampConfinementDefault(createData, q.reqCC)
+	stampConfinementDefault(createData, q.reqCC, q.f.confinementDefault)
 	createData["end"] = q.f.end.audit(created)
 	createData["queue"] = map[string]any{
 		"pool_id": e.PoolID, "position": position, "max_wait_sec": waitSec, "deadline_at": e.DeadlineAt, "capped": true,

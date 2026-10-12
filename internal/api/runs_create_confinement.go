@@ -68,9 +68,9 @@ func enforcedConfinement(spec types.RunPolicySpec, reqCC types.ConfinementClass,
 // stampConfinementDefault records on run.create who chose the class of a launch that named none: the
 // organisation's default barrier or the server's strongest-offered rule. A launch that named a class
 // carries nothing, as confinement_source already says so.
-func (f runFold) stampConfinementDefault(data map[string]any, reqCC types.ConfinementClass) {
-	if reqCC == "" && f.confinementDefault != "" {
-		data["confinement_default"] = f.confinementDefault
+func stampConfinementDefault(data map[string]any, reqCC types.ConfinementClass, source runnerpool.BarrierDefaultSource) {
+	if reqCC == "" && source != "" {
+		data["confinement_default"] = source
 	}
 }
 
