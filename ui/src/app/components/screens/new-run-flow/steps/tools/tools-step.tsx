@@ -20,6 +20,7 @@ import { stepIssues } from "../../lenses/local-issues";
 import { needsSetup } from "../../lenses/tools-lens";
 import { flowSteps, StepShell } from "../step-shell";
 import { AlreadyIncluded } from "./already-included";
+import { HarnessSetup } from "./harness-setup";
 import { SetupNeeded } from "./setup-needed";
 import { Totals } from "./totals";
 
@@ -76,7 +77,7 @@ export function ToolsStep({ go }: NewRunScreenProps) {
     >
       <AlreadyIncluded access={access} answered={answered} intent={draft.intent} names={names} />
       {/* Harness setup and Add tools and access mount here. */}
-      <div data-tools-slot="harness-setup" />
+      <HarnessSetup access={access} intent={draft.intent} answered={answered} names={names} onSignedIn={recheck} />
       <div data-tools-slot="add-tools" />
       <Totals access={access} answered={answered} names={names} />
       <SetupNeeded items={items} pending={pending} done={settled} intent={draft.intent} names={names} onDone={finish} />
