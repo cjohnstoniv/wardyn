@@ -9,6 +9,8 @@ import { makeWorkspace } from "../../../../test/factories";
 import { buildRunInput, type RunInputParams } from "./build-run-input";
 import { initialWizardState } from "./wizard-types";
 import { mergeRunSelections } from "./wizard-spec";
+import { minimalSpec } from "../../wardyn/policy-panel";
+import type { RunPolicySpec } from "../../../lib/types";
 
 const workspaces = [
   makeWorkspace({ id: "local", kind: "local_dir", source: "/data/local" }),
@@ -222,5 +224,64 @@ describe("buildRunInput — the run-mode wire", () => {
     expect(sent).not.toHaveProperty("mode_contract");
     expect(sent).not.toHaveProperty("experience");
     expect(sent).toHaveProperty("agent");
+  });
+
+  describe("a body the server refuses beside carriers keeps the entire older body", () => {
+    const custom = (authored: RunPolicySpec, over: Partial<ReturnType<typeof initialWizardState>>, extra: Partial<RunInputParams> = {}) => {
+      const state = initialWizardState("CC2", over);
+      return buildRunInput(input({ policyMode: "custom", state, merged: mergeRunSelections(authored, state, workspaces), ...extra }))!;
+    };
+    const batch = { mode: "batch", task: "fix the tests", modelProviderId: "bedrock-team" } as const;
+    const rule = { tool: "Bash", effect: "hold" } as const;
+    const legacyKept = (sent: object, task = "fix the tests") => {
+      expect(sent).not.toHaveProperty("mode_contract");
+      expect(sent).not.toHaveProperty("experience");
+      expect(sent).toMatchObject({ agent: "claude-code", task, interactive: false });
+    };
+
+    it("the default Custom starter (an idle stop) launching a Background task", () => {
+      const sent = custom(minimalSpec(), batch);
+      expect(sent.inline_policy?.auto_stop_after_sec).toBe(3600);
+      legacyKept(sent);
+      expect(sent).toMatchObject({ model_provider: "bedrock-team" });
+      expect(sent).not.toHaveProperty("workload");
+      expect(sent).not.toHaveProperty("tools");
+    });
+
+    it("the default Custom starter launching an Interactive environment still names its experience", () => {
+      expect(custom(minimalSpec(), {})).toMatchObject({ mode_contract: "0.9", experience: "interactive" });
+    });
+
+    it.each([
+      ["inline tool_rules", { tool_rules: [rule] }, {}],
+      ["inline push_rules", { push_rules: { hold_seconds: 60 } }, {}],
+    ] as const)("%s, on an interactive environment too", (_name, authored, over) => {
+      const sent = custom({ ...minimalSpec(), ...authored } as RunPolicySpec, over);
+      expect(sent).not.toHaveProperty("experience");
+      expect(sent).not.toHaveProperty("mode_contract");
+      expect(sent.inline_policy).toMatchObject(authored);
+      expect(sent).toMatchObject({ agent: "claude-code", interactive: true });
+    });
+
+    it("a background ui_apps policy", () => {
+      const { auto_stop_after_sec: _drop, ...noStop } = minimalSpec();
+      legacyKept(custom({ ...noStop, ui_apps: [{ name: "app", port: 3000 }] } as RunPolicySpec, batch));
+    });
+
+    it("an agent override with tool rules, on a saved policy", () => {
+      const state = initialWizardState("CC2", { ...batch, selectedPolicyId: "saved-id", contract: { runner: {}, access: { overrides: { gitPAT: [], pushRules: [], agent: { tool_rules: [rule] } } } } });
+      const sent = buildRunInput({
+        ...input({ policyMode: "saved", state, merged: null }),
+        activeSections: { agent: true, azureDevOps: false, gitPATHosts: [], pushKeys: [] },
+      })!;
+      expect(sent.overrides?.agent?.tool_rules).toEqual([rule]);
+      legacyKept(sent);
+    });
+
+    it("positive control: the same Background task with no stop and no rules is mapped", () => {
+      const { auto_stop_after_sec: _drop, ...noStop } = minimalSpec();
+      const sent = custom(noStop, batch);
+      expect(sent).toMatchObject({ mode_contract: "0.9", experience: "background", workload: { kind: "agent_task" } });
+    });
   });
 });

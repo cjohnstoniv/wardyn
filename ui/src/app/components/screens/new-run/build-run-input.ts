@@ -26,15 +26,16 @@ export interface RunInputParams {
 
 /**
  * The wizard's run shape as the 0.9 contract's carriers, with the older fields they replace
- * removed. A shape the contract cannot say, or a draft that already chose its experience, keeps
- * the older fields untouched.
+ * removed. It reads the FINAL body, policy and overrides included, because the server refuses
+ * some of those beside carriers. A shape the contract cannot say, or a draft that already chose
+ * its experience, keeps the older fields untouched.
  */
-function withRunMode(run: CreateRunInputWithComposition & RunContractWire): CreateRunInputWithComposition & RunContractWire {
-  const carriers = run.experience ? null : mapRunMode(run);
-  if (!carriers) return run;
-  const rest = { ...run };
+function withRunMode<T extends CreateRunInputWithComposition & RunContractWire>(body: T): T {
+  const carriers = body.experience ? null : mapRunMode(body);
+  if (!carriers) return body;
+  const rest: CreateRunInputWithComposition & RunContractWire = { ...body };
   for (const field of LEGACY_RUN_MODE_FIELDS) delete rest[field];
-  return { ...rest, ...carriers };
+  return { ...rest, ...carriers } as unknown as T;
 }
 
 /** Returns no request when the active policy mode cannot represent the selections. */
@@ -49,11 +50,11 @@ export function buildRunInput({
   // Same body on all three doors; none when the run carries none.
   const withComponents = state.components.length ? { ...sized, components: state.components } : sized;
   const contract = buildRunContractWire(state.contract, activeSections);
-  const run = withRunMode({ ...withComponents, ...contract });
+  const run = { ...withComponents, ...contract };
   // A saved ID may survive a mode switch; only the active mode chooses the policy.
-  if (policyMode === "custom") return merged ? { ...run, inline_policy: merged.spec } : null;
+  if (policyMode === "custom") return merged ? withRunMode({ ...run, inline_policy: merged.spec }) : null;
 
   // Preserve buildSpec's ephemeral fallback when there is no mount/repo primary.
   const referenced = { ...run, workspace_id: primaryWorkspaceId(state.workspaces, workspaces) ?? run.workspace_id };
-  return policyMode === "saved" ? { ...referenced, policy_id: state.selectedPolicyId } : referenced;
+  return withRunMode(policyMode === "saved" ? { ...referenced, policy_id: state.selectedPolicyId } : referenced);
 }
