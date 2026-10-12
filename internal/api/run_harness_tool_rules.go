@@ -14,10 +14,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// toolgateCredentialEnv is the secret env variable that carries a harness's
-// approval credential to its own wardyn-toolgate.
-const toolgateCredentialEnv = "WARDYN_TOOLGATE_CREDENTIAL"
-
 // applyHarnessToolRules lays the included harness tools' own rules onto the
 // resolved spec (whose tool_rules already are the policy's met with the
 // ceiling's by composer.Clamp). With one harness the run keeps the run-wide
@@ -133,18 +129,6 @@ func mintHarnessCredentials(sets []types.HarnessToolRules, agent string) (digest
 		}
 	}
 	return digests, agentCredential, nil
-}
-
-// stampHarnessCredential mints the harness credentials, puts the started harness's
-// plaintext into env under toolgateCredentialEnv, and returns the digests for the
-// proxy config and the secret-env keys with that variable added.
-func stampHarnessCredential(sets []types.HarnessToolRules, agent string, env map[string]string, secretKeys []string) ([]types.HarnessCredential, []string, error) {
-	digests, cred, err := mintHarnessCredentials(sets, agent)
-	if err != nil || cred == "" {
-		return digests, secretKeys, err
-	}
-	env[toolgateCredentialEnv] = cred
-	return digests, append(slices.Clone(secretKeys), toolgateCredentialEnv), nil
 }
 
 // sidecarPolicy is the policy the proxy sidecar is given: the per-entry push rule
