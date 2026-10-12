@@ -85,6 +85,8 @@ func runModeFieldSet(req createRunRequest) string {
 		return "start_folder"
 	case req.NoRepositoriesOrDrives:
 		return "no_repositories_or_drives"
+	case req.Shape != "":
+		return "shape"
 	}
 	return ""
 }

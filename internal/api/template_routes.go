@@ -4,13 +4,13 @@
 package api
 
 import (
-	"net/http"
-
 	"github.com/go-chi/chi/v5"
 )
 
 // The run template routes (0.9). A store with no template seam answers 501
-// templates_unavailable on every one; the Postgres store has it.
+// templates_unavailable on every one except POST /templates/import, which
+// validates a document and stores nothing (template_import.go); the Postgres
+// store has the seam.
 //
 //	every /templates route        member at the router; the handler then checks the
 //	                              caller against the template's scope with
@@ -28,7 +28,7 @@ import (
 func (s *Server) mountTemplateRoutes(r, operatorOnly chi.Router) {
 	r.Get("/templates", s.handleListTemplates)
 	r.Post("/templates", s.handleCreateTemplate)
-	r.Post("/templates/import", s.handleTemplatesUnavailable)
+	r.Post("/templates/import", s.handleImportTemplate)
 	r.Get("/templates/{id}", s.handleGetTemplate)
 	r.Get("/templates/{id}/revisions/{revision}", s.handleGetTemplateRevision)
 	r.Put("/templates/{id}", s.handleUpdateTemplate)
@@ -37,8 +37,4 @@ func (s *Server) mountTemplateRoutes(r, operatorOnly chi.Router) {
 	operatorOnly.Get("/admin/template-group-admins", s.handleListTemplateGroupAdmins)
 	operatorOnly.Put("/admin/template-group-admins", s.handlePutTemplateGroupAdmin)
 	operatorOnly.Delete("/admin/template-group-admins", s.handleDeleteTemplateGroupAdmin)
-}
-
-func (s *Server) handleTemplatesUnavailable(w http.ResponseWriter, _ *http.Request) {
-	writeErrorReason(w, http.StatusNotImplemented, reasonTemplatesUnavailable, templatesUnavailableMsg())
 }

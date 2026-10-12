@@ -280,7 +280,7 @@ func (s *Server) routes() chi.Router {
 			s.mountRunnerRevokeRoutes(r, securityOps)             // runner_revoke.go: the security tier, or the runner's own owner
 			s.mountRunnerPoolRoutes(r, operatorOnly, securityOps) // runner_pools.go: 501 until the pool storage lands
 			s.mountRunnerInventoryRoutes(r, operatorOnly, securityOps)
-			s.mountTemplateRoutes(r, operatorOnly) // template_routes.go: 501 until the template store lands
+			s.mountTemplateRoutes(r, operatorOnly) // template_routes.go: 501 until the template store lands, except the import door
 			r.Get("/me", s.handleMe)
 			// #1197: the shell's two nav badges in one small object, replacing
 			// the two 1000-row reads App.tsx used to poll. classMember, scoped to

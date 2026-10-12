@@ -35,6 +35,9 @@ import (
 const (
 	TemplateDocumentVersion = "wardyn/v1"
 	TemplateDocumentKind    = "RunTemplate"
+	// RunDocumentKind is a draft of one run, not a catalogue entry: it carries
+	// no name, coverage or needs_setup.
+	RunDocumentKind = "Run"
 )
 
 // TemplateScope says who a template is for.
@@ -226,7 +229,7 @@ type TemplateDocument struct {
 	Kind        string           `json:"kind"`
 	Name        string           `json:"name,omitempty"`
 	Description string           `json:"description,omitempty"`
-	Coverage    TemplateCoverage `json:"coverage"`
+	Coverage    TemplateCoverage `json:"coverage,omitempty"`
 	Intent      TemplateIntent   `json:"intent"`
 	// NeedsSetup lists what a partial template leaves for use time. A full
 	// template lists none.
@@ -336,6 +339,9 @@ type TemplateSaveRefusal struct {
 type TemplateImportRequest struct {
 	Format TemplateFormat `json:"format"`
 	Source string         `json:"source"`
+	// Kind is the document kind the caller expects: Run, RunTemplate, or empty
+	// for either. A document of the other kind is refused.
+	Kind string `json:"kind,omitempty"`
 }
 
 // TemplateDiagnostic is one problem with a document: where, why (a closed
