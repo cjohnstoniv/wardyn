@@ -103,14 +103,13 @@ func TestQueuedRunRenewsNothing(t *testing.T) {
 	}
 }
 
-// A waiting run's other harnesses renew nothing either: a Bedrock harness beside a Codex primary spends
-// its sign-in only when the run starts.
+// A waiting run's other harnesses renew nothing either: a Bedrock sign-in beside a Codex primary is
+// refused before any renewal, whether the run waits or starts.
 func TestQueuedRunsOtherHarnessesRenewNothing(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		queue bool
-		want  int32
-	}{{"waiting", true, 0}, {"starting", false, 1}} {
+	}{{"waiting", true}, {"starting", false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := createRenewalFixture(t)
 			calls := renewedOIDC(t)
@@ -120,14 +119,11 @@ func TestQueuedRunsOtherHarnessesRenewNothing(t *testing.T) {
 			w := httptest.NewRecorder()
 			f := &runFold{mode: foldCreate, queued: tc.queue, w: w, r: r, req: &req,
 				harnesses: []types.RunHarness{{Harness: "codex-cli", Starts: true}, {Harness: "claude-code", ModelProviderID: "bedrock-sso"}}}
-			if !srv.stepModelProvider(f, &foldRecorder{}) {
-				t.Fatalf("the provider check refused: %d %s", w.Code, w.Body)
+			if srv.stepModelProvider(f, &foldRecorder{}) || w.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("a sign-in on a harness the run does not start was admitted: %d %s", w.Code, w.Body)
 			}
-			if len(f.harnessChoices) != 2 {
-				t.Fatalf("harness choices = %d, want 2", len(f.harnessChoices))
-			}
-			if calls.Load() != tc.want {
-				t.Errorf("CreateToken calls = %d, want %d", calls.Load(), tc.want)
+			if calls.Load() != 0 {
+				t.Errorf("CreateToken calls = %d, want 0", calls.Load())
 			}
 		})
 	}
