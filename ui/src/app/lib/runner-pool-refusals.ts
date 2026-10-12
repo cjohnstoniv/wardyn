@@ -23,6 +23,8 @@ export const RUNNER_POOL_REASONS = [
   "runner_pools_unavailable",
   "runner_pool_run_type_not_allowed",
   "runner_pool_barrier_not_allowed",
+  "runner_pool_queue_full",
+  "runner_pool_full",
 ] as const;
 
 export type RunnerPoolReason = (typeof RUNNER_POOL_REASONS)[number];
@@ -70,6 +72,8 @@ export const RUNNER_POOL_REFUSAL = {
     const list = labels.length > 1 ? `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}` : labels.join("");
     return `${name} doesn't allow the ${BARRIER_LABEL[asked]} barrier. It allows ${list}.`;
   },
+  QUEUE_FULL: (name: string, n: number) => `You already have ${n} runs waiting for ${name}. Cancel one or wait for one to start.`,
+  FULL: (name: string, n: number) => `${name} is running its limit of ${n}, and others are waiting. Try again when one finishes.`,
 } as const;
 
 /**
@@ -78,10 +82,14 @@ export const RUNNER_POOL_REFUSAL = {
  */
 export const RUN_WAIT = {
   AT_CAPACITY: (name: string, max: number) => `${name} is running its limit of ${max}. This run starts when one finishes.`,
+  NO_RUNNER_FREE: (name: string) => `None of your runners in ${name} is online. This run starts when one is.`,
 } as const;
 
 /** The reason a waiting run carries for each RUN_WAIT sentence. */
-export const RUN_WAIT_REASON: Record<keyof typeof RUN_WAIT, string> = { AT_CAPACITY: "runner_pool_at_capacity" };
+export const RUN_WAIT_REASON: Record<keyof typeof RUN_WAIT, string> = {
+  AT_CAPACITY: "runner_pool_at_capacity",
+  NO_RUNNER_FREE: "runner_pool_no_runner_free",
+};
 
 /** The reason each sentence belongs to; the console matches on these, never on the text. */
 export const RUNNER_POOL_REFUSAL_REASON: Record<keyof typeof RUNNER_POOL_REFUSAL, RunnerPoolReason> = {
@@ -100,6 +108,8 @@ export const RUNNER_POOL_REFUSAL_REASON: Record<keyof typeof RUNNER_POOL_REFUSAL
   UNAVAILABLE_SERVER: "runner_pools_unavailable",
   RUN_TYPE_NOT_ALLOWED: "runner_pool_run_type_not_allowed",
   BARRIER_NOT_ALLOWED: "runner_pool_barrier_not_allowed",
+  QUEUE_FULL: "runner_pool_queue_full",
+  FULL: "runner_pool_full",
 };
 
 /** Every sentence function by key, for the parity test. */
@@ -120,4 +130,6 @@ export const RUNNER_POOL_REFUSAL_BY_KEY: Record<keyof typeof RUNNER_POOL_REFUSAL
   RUN_TYPE_NOT_ALLOWED: (...a) => RUNNER_POOL_REFUSAL.RUN_TYPE_NOT_ALLOWED(a[0], a[1] as keyof typeof RUN_TYPE_PLURAL),
   BARRIER_NOT_ALLOWED: (...a) =>
     RUNNER_POOL_REFUSAL.BARRIER_NOT_ALLOWED(a[0], a[1] as keyof typeof BARRIER_LABEL, a.slice(2) as (keyof typeof BARRIER_LABEL)[]),
+  QUEUE_FULL: (...a) => RUNNER_POOL_REFUSAL.QUEUE_FULL(a[0], Number(a[1])),
+  FULL: (...a) => RUNNER_POOL_REFUSAL.FULL(a[0], Number(a[1])),
 };

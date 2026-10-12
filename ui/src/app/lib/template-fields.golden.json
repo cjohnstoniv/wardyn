@@ -667,6 +667,11 @@
       "section": "run_wide"
     },
     {
+      "name": "max_wait_sec",
+      "excluded": "launch",
+      "why": "How long a run may wait for a slot in a full pool is chosen at each launch; the default wait suits a template's runs."
+    },
+    {
       "name": "no_end",
       "tab": "runner",
       "part": "runner",
