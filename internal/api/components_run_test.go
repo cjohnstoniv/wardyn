@@ -526,13 +526,13 @@ func (c componentCase) run(t *testing.T) {
 }
 
 func TestRunComponents_ShapeAndStoreRefusals(t *testing.T) {
-	nine := make([]any, 9)
-	for i := range nine {
-		nine[i] = inlineComponent([]string{"a.example"})
+	tooMany := make([]any, types.MaxComponentRefs+1)
+	for i := range tooMany {
+		tooMany[i] = inlineComponent([]string{"a.example"})
 	}
 	for _, c := range []componentCase{
-		{name: "more than eight", setup: refs(nine...), status: 400, reason: "component_ref_invalid",
-			sentence: "components: 9 entries exceeds the 8-component limit"},
+		{name: "more than sixteen", setup: refs(tooMany...), status: 400, reason: "component_ref_invalid",
+			sentence: "components: 17 entries exceeds the 16-component limit"},
 		{name: "neither id nor inline", setup: refs(map[string]any{"name": "x"}), status: 400, reason: "component_ref_invalid",
 			sentence: "components[0]: give exactly one of id and inline"},
 		{name: "both id and inline", setup: refs(map[string]any{"id": compOrgID, "inline": map[string]any{"hosts": []string{}}}),

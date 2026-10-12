@@ -55,9 +55,10 @@ func TestHarnessToolRules_ProductAfterTheCeiling(t *testing.T) {
 	}
 }
 
-// Dispatch gives the proxy digests and the started harness its plaintext, as
-// secret env: the plaintext is in no config, no audit row and no non-secret env,
-// and the run-wide tool_rules leave the sidecar's policy.
+// Dispatch gives the proxy digests and the started harness its plaintext, as an
+// agent-owned file under a reserved name: the plaintext is in no config, no audit
+// row and no env, secret or not, and the run-wide tool_rules leave the sidecar's
+// policy.
 func TestHarnessToolRules_DispatchCarriesDigestsNeverThePlaintext(t *testing.T) {
 	sets := []types.HarnessToolRules{
 		{Harness: "claude-code", Rules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}},
@@ -72,12 +73,11 @@ func TestHarnessToolRules_DispatchCarriesDigestsNeverThePlaintext(t *testing.T) 
 		HarnessToolRules: sets,
 	})
 	spec := fr.lastSpec
-	cred := spec.SecretEnv[toolgateCredentialEnv]
-	if cred == "" {
-		t.Fatalf("the started harness got no credential: %v", spec.SecretEnv)
-	}
-	if _, inEnv := spec.Env[toolgateCredentialEnv]; inEnv {
-		t.Error("the credential is in the non-secret env")
+	cred := toolgateCredentialOf(t, spec)
+	for k, v := range spec.SecretEnv {
+		if strings.Contains(v, cred) {
+			t.Errorf("secret env %s carries the plaintext credential", k)
+		}
 	}
 	sum := sha256.Sum256([]byte(cred))
 	pc := spec.ProxyConfig
@@ -110,8 +110,8 @@ func TestHarnessToolRules_DispatchCarriesDigestsNeverThePlaintext(t *testing.T) 
 	run2.Task, run2.Agent = "", "gemini-cli"
 	srv2.dispatchRun(context.Background(), run2, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "img", HarnessToolRules: sets})
-	if _, ok := fr2.lastSpec.SecretEnv[toolgateCredentialEnv]; ok || len(fr2.lastSpec.ProxyConfig.HarnessCredentials) != 2 {
-		t.Errorf("a harness the run does not start was handed a credential: %v", fr2.lastSpec.SecretEnv)
+	if len(fr2.lastSpec.ManagedFiles) != 0 || len(fr2.lastSpec.ProxyConfig.HarnessCredentials) != 2 {
+		t.Errorf("a harness the run does not start was handed a credential: %+v", fr2.lastSpec.ManagedFiles)
 	}
 }
 

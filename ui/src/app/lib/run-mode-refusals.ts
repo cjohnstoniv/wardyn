@@ -20,6 +20,8 @@ export const RUN_MODE_REASON = {
   START_FOLDER_INVALID: "start_folder_invalid",
   /** An interactive door of a background run. */
   BACKGROUND_ONLY: "run_background_only",
+  /** shape does not fit the run's experience, workload or tools. */
+  SHAPE_CONFLICT: "run_shape_conflict",
 } as const;
 
 export type RunModeReason = (typeof RUN_MODE_REASON)[keyof typeof RUN_MODE_REASON];
@@ -38,6 +40,7 @@ export const RUN_MODE_REFUSAL = {
   BACKGROUND_ONLY: (door: string) =>
     `This run is a background task, so it has no ${door}. Its logs, audit trail and status stay available.`,
   IDLE_STOP_BACKGROUND: () => "A background task ends when its work exits, so it has no idle stop. Remove it, or choose an interactive environment.",
+  RUN_SHAPE_CONFLICT: (shape: string, detail: string) => `shape ${shape} does not fit this run: ${detail}.`,
 } as const;
 
 /** Every sentence function by key, for the parity test and for callers that pick one by reason. */
@@ -52,6 +55,7 @@ export const RUN_MODE_REFUSAL_BY_KEY: Record<keyof typeof RUN_MODE_REFUSAL, (...
   FIELD_UNAVAILABLE: (...a) => RUN_MODE_REFUSAL.FIELD_UNAVAILABLE(a[0]),
   BACKGROUND_ONLY: (...a) => RUN_MODE_REFUSAL.BACKGROUND_ONLY(a[0]),
   IDLE_STOP_BACKGROUND: () => RUN_MODE_REFUSAL.IDLE_STOP_BACKGROUND(),
+  RUN_SHAPE_CONFLICT: (...a) => RUN_MODE_REFUSAL.RUN_SHAPE_CONFLICT(a[0], a[1]),
 };
 
 /**
