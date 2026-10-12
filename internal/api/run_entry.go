@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -173,24 +174,31 @@ func (s *Server) redeemAttachTicket(ctx context.Context, tok string, runID uuid.
 	if !ok || ta.authorizedAt.IsZero() {
 		return ticketActor{}, verdictInvalid, nil
 	}
+	expires, v := s.ticketAuthority(ctx, ta, runID)
+	ta.grantExpires = expires
+	return ta, v, nil
+}
+
+// ticketAuthority asks whether the authority a redeemed ticket carries still holds: the revocation cuts
+// (session-only ones included) against the ticket's own issue time and sequence, never the redemption's,
+// and the portal grant it was minted through. Redemption asks it once; an open terminal socket asks it
+// again on every authority check (attach_authority.go). It returns the grant's expiry for a ticket
+// minted through a portal.
+func (s *Server) ticketAuthority(ctx context.Context, ta ticketActor, runID uuid.UUID) (time.Time, entryVerdict) {
 	if s.cfg.SessionRevocations != nil {
-		revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(ctx, ta.principal, ta.email, ta.authorizedAt)
+		revoked, err := oidc.IsRevoked(ctx, s.cfg.SessionRevocations, ta.principal, ta.email, oidc.Issue{At: ta.authorizedAt, Seq: ta.revSeq})
 		if err != nil {
 			slog.ErrorContext(ctx, "wardynd: attach ticket revocation lookup failed", "run_id", runID, "err", err)
-			return ta, verdictRevocationUnavailable, nil
+			return time.Time{}, verdictRevocationUnavailable
 		}
 		if revoked {
-			return ta, verdictRevoked, nil
+			return time.Time{}, verdictRevoked
 		}
 	}
 	if ta.via != nil {
-		expires, v := s.delegationLive(ctx, *ta.via)
-		if v != verdictOK {
-			return ta, v, nil
-		}
-		ta.grantExpires = expires
+		return s.delegationLive(ctx, *ta.via)
 	}
-	return ta, verdictOK, nil
+	return time.Time{}, verdictOK
 }
 
 // delegationLive asks whether the portal grant a session came through still

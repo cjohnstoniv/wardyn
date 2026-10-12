@@ -51,34 +51,53 @@ type pgTestRevocations struct {
 	onLateCheck func()
 }
 
-// cutoffRevoked is the cutoff check. cuts says the browser-session cuts count too, as in the production
-// adapter: for IsSessionRevoked and for a credential that carries an epoch, not for a token or a key.
-func (r *pgTestRevocations) cutoffRevoked(ctx context.Context, sub, email string, issuedAt time.Time, cuts bool) (bool, error) {
-	return r.cutoffRevokedQ(ctx, r.pool, sub, email, issuedAt, cuts)
+var _ oidc.RevocationOrder = (*pgTestRevocations)(nil)
+
+// RevocationSeq is the ordering value a credential issued now records, as in the production adapter.
+func (r *pgTestRevocations) RevocationSeq(ctx context.Context) (int64, error) {
+	return store.ReadRevocationSeq(ctx, r.pool)
 }
 
-func (r *pgTestRevocations) cutoffRevokedQ(ctx context.Context, q store.Querier, sub, email string, issuedAt time.Time, cuts bool) (bool, error) {
+// cutoffRevoked is the cutoff check. cuts says the browser-session cuts count too, as in the production
+// adapter: for IsSessionRevoked and for a credential that carries an epoch, not for a token or a key.
+func (r *pgTestRevocations) cutoffRevoked(ctx context.Context, sub, email string, issue oidc.Issue, cuts bool) (bool, error) {
+	return r.cutoffRevokedQ(ctx, r.pool, sub, email, issue, cuts)
+}
+
+func (r *pgTestRevocations) cutoffRevokedQ(ctx context.Context, q store.Querier, sub, email string, issue oidc.Issue, cuts bool) (bool, error) {
 	var cutoff sql.NullTime
+	var cutSeq sql.NullInt64
 	var databaseAt time.Time
-	err := q.QueryRow(ctx, `SELECT MAX(revoked_at), clock_timestamp() FROM (
-			SELECT sub, revoked_at FROM oidc_session_revocations
-			UNION ALL SELECT sub, cut_at FROM oidc_session_cuts WHERE $3::boolean) r
-		WHERE sub = $1 OR lower(sub) = lower($2) OR sub = ''`, sub, email, cuts).Scan(&cutoff, &databaseAt)
+	err := q.QueryRow(ctx, `SELECT MAX(revoked_at), MAX(seq), clock_timestamp() FROM (
+			SELECT sub, revoked_at, seq FROM oidc_session_revocations
+			UNION ALL SELECT sub, cut_at, seq FROM oidc_session_cuts WHERE $3::boolean) r
+		WHERE sub = $1 OR lower(sub) = lower($2) OR sub = ''`, sub, email, cuts).Scan(&cutoff, &cutSeq, &databaseAt)
 	if err != nil || !cutoff.Valid {
 		return false, err
+	}
+	if issue.Seq > 0 {
+		return cutSeq.Int64 > issue.Seq, nil
 	}
 	appNow := time.Now()
 	if r.now != nil {
 		appNow = r.now()
 	}
 	anchor := db.AppClockAnchor{DatabaseAt: databaseAt, AppAt: appNow}
-	return issuedAt.IsZero() || !issuedAt.After(cutoff.Time) || !anchor.Translate(issuedAt).After(cutoff.Time), nil
+	return issue.At.IsZero() || !issue.At.After(cutoff.Time) || !anchor.Translate(issue.At).After(cutoff.Time), nil
 }
 
 // IsSessionRevoked is the cutoff check. After it has computed its answer, a pending onLateCheck hook runs
 // once: a request that read "not revoked" and then lost a race with a suspension is exactly this.
 func (r *pgTestRevocations) IsSessionRevoked(ctx context.Context, sub, email string, issuedAt time.Time) (bool, error) {
-	revoked, err := r.cutoffRevoked(ctx, sub, email, issuedAt, true)
+	return r.isRevoked(ctx, sub, email, oidc.Issue{At: issuedAt})
+}
+
+func (r *pgTestRevocations) IsSessionRevokedSeq(ctx context.Context, sub, email string, seq int64) (bool, error) {
+	return r.isRevoked(ctx, sub, email, oidc.Issue{Seq: seq})
+}
+
+func (r *pgTestRevocations) isRevoked(ctx context.Context, sub, email string, issue oidc.Issue) (bool, error) {
+	revoked, err := r.cutoffRevoked(ctx, sub, email, issue, true)
 	r.mu.Lock()
 	hook := r.onLateCheck
 	r.onLateCheck = nil
@@ -89,11 +108,11 @@ func (r *pgTestRevocations) IsSessionRevoked(ctx context.Context, sub, email str
 	return revoked, err
 }
 
-func (r *pgTestRevocations) SessionStatus(ctx context.Context, sub, email string, issuedAt time.Time, epoch int64) (oidc.SessionStatus, error) {
-	return r.SessionStatusQ(ctx, r.pool, sub, email, issuedAt, epoch)
+func (r *pgTestRevocations) SessionStatus(ctx context.Context, sub, email string, issue oidc.Issue, epoch int64) (oidc.SessionStatus, error) {
+	return r.SessionStatusQ(ctx, r.pool, sub, email, issue, epoch)
 }
 
-func (r *pgTestRevocations) SessionStatusQ(ctx context.Context, q store.Querier, sub, email string, issuedAt time.Time, epoch int64) (oidc.SessionStatus, error) {
+func (r *pgTestRevocations) SessionStatusQ(ctx context.Context, q store.Querier, sub, email string, issue oidc.Issue, epoch int64) (oidc.SessionStatus, error) {
 	blocked, err := store.IdentityBlockedQ(ctx, q, sub, epoch)
 	if err != nil {
 		return oidc.SessionLive, err
@@ -101,7 +120,7 @@ func (r *pgTestRevocations) SessionStatusQ(ctx context.Context, q store.Querier,
 	if blocked {
 		return oidc.SessionDeactivated, nil
 	}
-	revoked, err := r.cutoffRevokedQ(ctx, q, sub, email, issuedAt, epoch >= 0)
+	revoked, err := r.cutoffRevokedQ(ctx, q, sub, email, issue, epoch >= 0)
 	if revoked {
 		return oidc.SessionRevoked, err
 	}
@@ -115,9 +134,8 @@ func (r *pgTestRevocations) RevokeSub(ctx context.Context, sub string) error {
 	if fail {
 		return errors.New("revocation store unavailable")
 	}
-	_, err := r.pool.Exec(ctx, `INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, clock_timestamp())
+	return store.ExecRevocationCut(ctx, r.pool, `INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, clock_timestamp())
 		ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, sub)
-	return err
 }
 
 func (r *pgTestRevocations) CutSessions(ctx context.Context, sub string) error {
@@ -127,9 +145,8 @@ func (r *pgTestRevocations) CutSessions(ctx context.Context, sub string) error {
 	if fail {
 		return errors.New("revocation store unavailable")
 	}
-	_, err := r.pool.Exec(ctx, `INSERT INTO oidc_session_cuts (sub, cut_at) VALUES ($1, clock_timestamp())
+	return store.ExecRevocationCut(ctx, r.pool, `INSERT INTO oidc_session_cuts (sub, cut_at) VALUES ($1, clock_timestamp())
 		ON CONFLICT (sub) DO UPDATE SET cut_at = EXCLUDED.cut_at`, sub)
-	return err
 }
 
 func (r *pgTestRevocations) RevokeAll(ctx context.Context) error { return r.RevokeSub(ctx, "") }

@@ -222,7 +222,7 @@ func TestDenyInteractiveRefusesTheTerminalAttach(t *testing.T) {
 		return r
 	}
 	attach := func(t *testing.T, srv *Server, st *profileListStore, run types.AgentRun, principal, role string) *httptest.ResponseRecorder {
-		tok, err := mintAttachTicket(context.Background(), st, run.ID, types.ActorHuman, principal, role, time.Now())
+		tok, err := mintAttachTicket(context.Background(), st, run.ID, types.ActorHuman, principal, role, oidc.Issue{At: time.Now()})
 		if err != nil {
 			t.Fatalf("mint: %v", err)
 		}

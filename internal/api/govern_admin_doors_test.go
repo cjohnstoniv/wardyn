@@ -79,7 +79,7 @@ func TestGovernAdminRuns_TerminalAttachDoors(t *testing.T) {
 	const attached = http.StatusUpgradeRequired
 	path := func(r types.AgentRun) string { return "/api/v1/runs/" + r.ID.String() + "/attach" }
 	ticketAttach := func(t *testing.T, srv *Server, st *profileTokenStore, r types.AgentRun, principal string) *httptest.ResponseRecorder {
-		tok, err := mintAttachTicket(context.Background(), st, r.ID, types.ActorHuman, principal, oidc.RoleAdmin, time.Now())
+		tok, err := mintAttachTicket(context.Background(), st, r.ID, types.ActorHuman, principal, oidc.RoleAdmin, oidc.Issue{At: time.Now()})
 		if err != nil {
 			t.Fatalf("mint: %v", err)
 		}

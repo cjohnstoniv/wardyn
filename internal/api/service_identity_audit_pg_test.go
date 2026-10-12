@@ -21,11 +21,11 @@ type sponsorSessionUnreadable struct {
 	sub string
 }
 
-func (r sponsorSessionUnreadable) SessionStatus(ctx context.Context, sub, email string, issuedAt time.Time, epoch int64) (oidc.SessionStatus, error) {
+func (r sponsorSessionUnreadable) SessionStatus(ctx context.Context, sub, email string, issue oidc.Issue, epoch int64) (oidc.SessionStatus, error) {
 	if sub == r.sub {
 		return 0, errors.New("session store unavailable")
 	}
-	return r.pgTestRevocations.SessionStatus(ctx, sub, email, issuedAt, epoch)
+	return r.pgTestRevocations.SessionStatus(ctx, sub, email, issue, epoch)
 }
 
 func (r sponsorSessionUnreadable) IsSessionRevoked(ctx context.Context, sub, email string, issuedAt time.Time) (bool, error) {

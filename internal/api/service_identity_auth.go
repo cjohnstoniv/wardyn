@@ -116,7 +116,7 @@ func (s *Server) serviceTokenAuth(w http.ResponseWriter, r *http.Request, t type
 		reject(authFailedServiceSponsorInactive)
 		return
 	}
-	status, rerr := oidc.CheckSession(ctx, s.cfg.SessionRevocations, si.Sponsor, "", t.CreatedAt, -1)
+	status, rerr := oidc.CheckSession(ctx, s.cfg.SessionRevocations, si.Sponsor, "", oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
 	if rerr != nil {
 		unavailable("session-revocation", rerr)
 		return
@@ -241,6 +241,6 @@ func (s *Server) serviceEndedSince(r *http.Request, name, sponsor string, opened
 	if s.cfg.SessionRevocations == nil {
 		return true
 	}
-	status, err := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, sponsor, "", openedAt, -1)
+	status, err := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, sponsor, "", oidc.Issue{At: openedAt}, -1)
 	return err != nil || status != oidc.SessionLive
 }

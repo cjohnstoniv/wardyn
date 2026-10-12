@@ -79,7 +79,9 @@
 # docs/AUDIT-ACTIONS.md 43570 adds 85 (0.9 H14-api): person-owned Self-Hosted pools (owner on the pool rows, the runner_pools erasure scope).
 # docs/AUDIT-ACTIONS.md 44011 measured after H14-api merge into batch: person-owned Self-Hosted pools.
 # docs/AUDIT-ACTIONS.md 44100 adds 89 over 44011 (0.9 B-org-barrier): `confinement_default` on `run.create`, `confinement_class` and `confinement_default` on `run.queue.start`, and the default barrier in `runner_pool.default.set`.
-docs/AUDIT-ACTIONS.md=44100 share=8
+# docs/AUDIT-ACTIONS.md 41847 measured after merging batch/090 into S-revseq (its sign-out sentence and citation in the `session.revoke` row).
+# docs/AUDIT-ACTIONS.md 44127 measured after merging S-revseq into S-clockstep.
+docs/AUDIT-ACTIONS.md=44127 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
@@ -87,6 +89,7 @@ docs/AUDIT-ACTIONS.md=44100 share=8
 # docs/AUDIT-ACTIONS.md 40210 measured after merging F-1513 with H3 (the runner.revoke row and the wired connect, disconnect and switch rows).
 # Runner registration and owner claims add 99 measured audit-reference words; combined total39881.
 # Runner relay metadata adds 56 measured audit-reference words; combined total39937.
+# docs/AUDIT-ACTIONS.md 39967 adds 29 (0.9 S-revseq): the sign-out sentence and citation in the `session.revoke` row.
 # docs/AUDIT-ACTIONS.md 39950 adds 12 (0.9 G-sec-rest, #1976): the `exec.relay` target and the never-started run that writes no finalize row.
 # docs/AUDIT-ACTIONS.md 39969 adds 19 (0.9 G-sec-rest, #1978): the `partition_dropped` row names the admin-token drop as a `system` actor that is still attested.
 # docs/AUDIT-ACTIONS.md 40194 adds 256 over 39938 (0.9 F-1514e): the `recovery.rehearse.begin` and `recovery.rehearse` rows, including the interrupted-begin reading, and the `begin` and `rehearse` verbs in the Grammar list.

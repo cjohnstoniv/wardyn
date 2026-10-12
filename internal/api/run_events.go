@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -366,7 +367,7 @@ func (s *Server) sessionRevokedSince(r *http.Request, principal string, openedAt
 			return false
 		}
 	}
-	revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), principal, oidcEmailFromContext(r.Context()), openedAt)
+	revoked, err := oidc.IsRevoked(r.Context(), s.cfg.SessionRevocations, principal, oidcEmailFromContext(r.Context()), admittedIssue(r.Context(), principal, openedAt))
 	return err != nil || revoked
 }
 

@@ -387,7 +387,7 @@ func TestServiceIdentity_SponsorAttachKeepsTheDoors(t *testing.T) {
 	// The same super admin on their own run, with the same limit and the switch off, takes the exemption:
 	// the sponsor arm's refusal is the stamp, not the profile.
 	own := e.seedRun(t, "boss-sub", walled)
-	tok, err := mintAttachTicket(context.Background(), e.st, own.ID, types.ActorHuman, "boss-sub", oidc.RoleAdmin, time.Now())
+	tok, err := mintAttachTicket(context.Background(), e.st, own.ID, types.ActorHuman, "boss-sub", oidc.RoleAdmin, oidc.Issue{At: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}

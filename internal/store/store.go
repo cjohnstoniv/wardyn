@@ -159,13 +159,20 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 	if err != nil {
 		return types.AgentRun{}, err
 	}
+	g, guarded := identityGuardFrom(ctx)
+	var since int64
+	if guarded {
+		if since, err = ReadRevocationSeq(ctx, s.Pool); err != nil {
+			return types.AgentRun{}, err
+		}
+	}
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return types.AgentRun{}, err
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
-	if g, ok := identityGuardFrom(ctx); ok {
-		if err := checkIdentityGuard(ctx, tx, g); err != nil {
+	if guarded {
+		if err := checkIdentityGuard(ctx, tx, g, since); err != nil {
 			return types.AgentRun{}, err
 		}
 	}
