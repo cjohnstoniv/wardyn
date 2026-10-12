@@ -1192,11 +1192,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A Background task whose end comes before the cap is KILLED `end_reached` at its end. An Interactive run is kept at an earlier end, as always.
 - The lifecycle reaper still stops a RUNNING run older than this that carries no cap (a run from before 0.9), busy or not, and writes a `run.max_age.expire` audit row.
 - A run kept after a control-plane outage with its agent still running (before its end) is covered the same way.
-- A run kept with its agent already stopped (after its end, a reboot, or an outage past its end) is left to its files grace.
+- A run kept with its agent already stopped (after its end, a reboot, or an outage past its end) is left to the reaper's files grace.
+- The lease sweep still kills an outage-kept Background task at its end.
 - It is not `ends_at`, which a person may extend, but it bounds it: every new run records `lifetime_cap_at` (its creation plus this age).
 - A run launched from New Run or `POST /runs` that no source gives an end gets that cap as its end, and `no_end` at launch is refused with `403` naming this deployment.
 - `PATCH /runs/{id}` cannot extend past the cap or set No end, a super admin included.
-- The cap is captured when the run is created, so lowering `WARDYN_RUN_MAX_AGE` later does not reach a run that already carries one; only runs launched afterwards, and older runs with no cap, follow the new value.
+- The cap is captured at creation, so lowering `WARDYN_RUN_MAX_AGE` later reaches only runs launched afterwards and older runs with no cap.
 - On the `k8s` substrate each run's proxy pod and agent pod get `activeDeadlineSeconds` of that run's own remaining lifetime plus 10 minutes; a run with no cap has none.
 - So a run whose control plane is gone still fails both pods (releasing their resource requests) without wardynd
 - The next reconciler sweep then deletes the run's Secret and NetworkPolicies.
