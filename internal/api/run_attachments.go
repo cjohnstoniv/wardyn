@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -41,6 +40,7 @@ type runTarget struct {
 	// policy names. The owner is always one of them.
 	carriers []string
 	target   string
+	driveID  string // a drives[] entry's id
 	repo     string
 	ref      string
 	readOnly bool
@@ -51,17 +51,13 @@ func sharesCarrier(a, b []string) bool {
 	return slices.ContainsFunc(a, func(id string) bool { return slices.Contains(b, id) })
 }
 
-// runTargets lists every resolved path of a run, the drive first, then each
-// workspace's mounts, clones and scratch directories in the spec's order (the
-// seeded workspaces lead it, the primary first). drive is nil when the run has
-// none.
-//
-// ponytail: the legacy drive is the only drive; D-112-113's plural drive list
-// joins here, each drive at its own server-derived target.
-func runTargets(spec types.RunPolicySpec, wsRefs []types.Workspace, index workspaceSourceIndex, seed workspaceSeed, drive *runTarget) []runTarget {
+// runTargets lists every resolved path of a run, the drives first (driveTargets,
+// each at its own server-derived path), then each workspace's mounts, clones and
+// scratch directories in the spec's order (the seeded workspaces lead it, the
+// primary first).
+func runTargets(spec types.RunPolicySpec, wsRefs []types.Workspace, index workspaceSourceIndex, seed workspaceSeed, drives []runTarget) []runTarget {
 	var out []runTarget
-	if drive != nil {
-		d := *drive
+	for _, d := range drives {
 		d.carriers = []string{d.owner}
 		out = append(out, d)
 	}
@@ -353,7 +349,10 @@ func startFolderDir(f *client.StartFolder, targets []runTarget, wsRefs []types.W
 		return startFolderImageDefault, -1, nil
 	}
 	owner := f.Attachment
-	if owner == client.StartFolderDrive {
+	switch {
+	case f.DriveID != "":
+		owner = startFolderDriveOwner(f.DriveID)
+	case owner == client.StartFolderDrive:
 		owner = attachmentDrive
 	}
 	for i, t := range targets {
@@ -367,7 +366,7 @@ func startFolderDir(f *client.StartFolder, targets []runTarget, wsRefs []types.W
 	}
 	name := f.Repo
 	if name == "" {
-		name = f.Attachment
+		name = cmp.Or(f.Attachment, f.DriveID)
 		if j := slices.IndexFunc(wsRefs, func(ws types.Workspace) bool { return ws.ID.String() == owner }); j >= 0 {
 			name = wsRefs[j].Name
 		}
@@ -380,7 +379,7 @@ func startFolderDir(f *client.StartFolder, targets []runTarget, wsRefs []types.W
 // Azure DevOps organisation. It
 // returns the mount map and the starting folder. A method on Server for the
 // reason runContractRefusal is: the parity guard reads gates as s.<Gate>(…) calls.
-func (s *Server) runAttachments(req createRunRequest, spec types.RunPolicySpec, wsRefs []types.Workspace, carriers workspaceSourceIndex, seed workspaceSeed, drive *runTarget) (
+func (s *Server) runAttachments(req createRunRequest, spec types.RunPolicySpec, wsRefs []types.Workspace, carriers workspaceSourceIndex, seed workspaceSeed, drives []runTarget) (
 	[]client.RunAttachment, string, *runRefusal,
 ) {
 	if seed.imageOpen {
@@ -388,7 +387,7 @@ func (s *Server) runAttachments(req createRunRequest, spec types.RunPolicySpec, 
 			return nil, "", refusal
 		}
 	}
-	targets := runTargets(spec, wsRefs, carriers, seed, drive)
+	targets := runTargets(spec, wsRefs, carriers, seed, drives)
 	// The starting folder first: it decides which carrier a shared source is
 	// shown under, and the checks after it name that one.
 	dir, at, refusal := startFolderDir(req.StartFolder, targets, wsRefs)
@@ -418,22 +417,12 @@ func runAttachmentFacts(targets []runTarget, startsHere int) []client.RunAttachm
 			a.WorkspaceID, a.Repo, a.Ref = t.owner, t.repo, t.ref
 		case attachmentFolder:
 			a.WorkspaceID = t.owner
+		case attachmentDrive:
+			a.DriveID = t.driveID
 		}
 		out = append(out, a)
 	}
 	return out
-}
-
-// legacyDriveTarget is the run's drive as a target: the resolved mount at
-// create and Review, the request's narrowing over the allocation at the preview.
-func legacyDriveTarget(mount *types.DriveMount, previewReadOnly *bool) *runTarget {
-	switch {
-	case mount != nil:
-		return &runTarget{kind: attachmentDrive, owner: attachmentDrive, name: runDriveName, target: cmp.Or(mount.Target, runner.DriveTarget), readOnly: mount.ReadOnly}
-	case previewReadOnly != nil:
-		return &runTarget{kind: attachmentDrive, owner: attachmentDrive, name: runDriveName, target: runner.DriveTarget, readOnly: *previewReadOnly}
-	}
-	return nil
 }
 
 // startFolderEnv carries the run's starting folder to the sandbox as the

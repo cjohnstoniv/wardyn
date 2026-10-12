@@ -71,7 +71,7 @@ func (s *Server) runContractRefusal(req createRunRequest) *runRefusal {
 // runContractShapeChecks are the contract's shape checks, in answer order. A
 // template document is held to the same list when it is imported.
 var runContractShapeChecks = []func(createRunRequest) *runRefusal{
-	placementShapeRefusal, runnerPoolShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, runOverridesRefusal, builtinComponentsRefusal,
+	placementShapeRefusal, runnerPoolShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, driveSelectionRefusal, runOverridesRefusal, builtinComponentsRefusal,
 	runModeShapeRefusal, runShapeRefusal, runEndShapeRefusal,
 }
 

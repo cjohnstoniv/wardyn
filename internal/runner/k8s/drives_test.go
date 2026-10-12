@@ -502,8 +502,8 @@ func TestExec_EphemeralContainerMountsTheDrive(t *testing.T) {
 
 	for _, readOnly := range []bool{false, true} {
 		spec := testSandboxSpec()
-		spec.Drive = testDriveMount()
-		spec.Drive.ReadOnly = readOnly
+		spec.Drives = []types.DriveMount{*testDriveMount()}
+		spec.Drives[0].ReadOnly = readOnly
 		sb, err := d.CreateSandbox(context.Background(), spec)
 		if err != nil {
 			t.Fatalf("CreateSandbox (ro=%v): %v", readOnly, err)
@@ -528,8 +528,8 @@ func TestExec_EphemeralContainerMountsTheDrive(t *testing.T) {
 		if vol == nil || vol.PersistentVolumeClaim == nil {
 			t.Fatalf("ro=%v: no %s volume backed by a claim; volumes=%+v", readOnly, driveVolumeName, pod.Spec.Volumes)
 		}
-		if vol.PersistentVolumeClaim.ClaimName != spec.Drive.ObjectName || vol.PersistentVolumeClaim.ReadOnly != readOnly {
-			t.Errorf("ro=%v: pod volume = %+v, want claim %q readOnly=%v", readOnly, *vol.PersistentVolumeClaim, spec.Drive.ObjectName, readOnly)
+		if vol.PersistentVolumeClaim.ClaimName != spec.Drives[0].ObjectName || vol.PersistentVolumeClaim.ReadOnly != readOnly {
+			t.Errorf("ro=%v: pod volume = %+v, want claim %q readOnly=%v", readOnly, *vol.PersistentVolumeClaim, spec.Drives[0].ObjectName, readOnly)
 		}
 
 		// (2) The MAIN container's mount, by name — a sidecar is not where the
@@ -571,7 +571,7 @@ func TestExec_EphemeralContainerMountsTheDrive(t *testing.T) {
 		// The claim the whole run resolved against is still a drive, not a
 		// per-run object: teardownByRunID selects on the run label, and a drive
 		// that acquired one would be deleted with the pod that mounted it.
-		claim, err := cs.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), spec.Drive.ObjectName, metav1.GetOptions{})
+		claim, err := cs.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), spec.Drives[0].ObjectName, metav1.GetOptions{})
 		if err != nil {
 			t.Fatalf("ro=%v: get claim: %v", readOnly, err)
 		}
@@ -1080,7 +1080,7 @@ func TestApplyDriveToPod_AppendsRatherThanAssigns(t *testing.T) {
 		},
 	}
 
-	applyDriveToPod(pod, drive, "runsc")
+	applyDriveToPod(pod, drive, 0, "runsc")
 	spec := &pod.Spec
 
 	// The gVisor annotation is SET, not assigned over: a pod already carrying an
@@ -1118,7 +1118,7 @@ func TestApplyDriveToPod_AppendsRatherThanAssigns(t *testing.T) {
 	// annotation is a runsc-only request, and a nil map is the shape every
 	// drive pod had before it existed.
 	plain := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: mainContainerName}}}}
-	applyDriveToPod(plain, drive, "")
+	applyDriveToPod(plain, drive, 0, "")
 	if plain.Annotations != nil {
 		t.Errorf("annotations = %v on a pod with no RuntimeClass, want nil", plain.Annotations)
 	}
@@ -1321,7 +1321,7 @@ func TestApplyDriveToPod_FSGroupIsManagedOnly(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: mainContainerName}}}}
-			applyDriveToPod(pod, tc.drive, "")
+			applyDriveToPod(pod, tc.drive, 0, "")
 
 			// The drive is mounted either way — this is about ownership, never
 			// about whether a share is bindable.

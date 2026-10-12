@@ -751,11 +751,11 @@ func (s *Server) handleDeleteUserDrive(w http.ResponseWriter, r *http.Request) {
 type userDriveGrantRequest = client.DriveGrantRequest
 
 // handleUpsertUserDriveGrant allocates one drive to one subject, keyed on the
-// natural (subject_type, subject): re-allocating a subject REPOINTS its single
-// row rather than accumulating a second — which is also what makes "one drive
-// per principal" true in the schema and not only in the resolver's LIMIT 1.
+// natural (subject_type, subject, drive_id): writing the same subject and drive
+// again updates that row, and another drive is another allocation (migration
+// 0166). The drive behind /home/agent/drive stays the resolver's one winner.
 //
-// 201 for a genuinely new allocation, 200 when an existing one was repointed —
+// 201 for a genuinely new allocation, 200 when an existing one was updated —
 // the same created/updated signal handleUpsertGovernanceAssignment gives,
 // derived the same way (the store returns the EXISTING row's id on a conflict,
 // never the candidate's). operatorOnly (routes.go).

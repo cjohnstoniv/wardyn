@@ -180,6 +180,8 @@ const UI_NEVER_SENDS = new Set([
   "preset_version",
   // The new flow forwards it through the field registry; the old wizard never sends it.
   "shape",
+  // The plural drive carrier (GET /me/drives ids): the console's drive rows are a later slice.
+  "drives",
 ]);
 
 // ui_apps used to sit on this set as a TS AgentRun key with no Go AgentRun

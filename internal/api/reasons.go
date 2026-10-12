@@ -462,6 +462,15 @@ const (
 	driveRefusalDrivesDisabled = "drives_disabled"
 )
 
+// The drives[] carrier (run_drives.go); the sentences are drive_refusals.go's.
+const (
+	reasonDriveSelectionConflict = "drive_selection_conflict" // drive and drives were both sent
+	reasonDriveInvalid           = "drive_invalid"            // a drives[] entry is malformed or repeated, or there are too many
+	reasonDriveNotFound          = "drive_not_found"          // a drive id the caller's own grants do not reach
+	reasonDriveNotInPool         = "drive_not_in_pool"        // the run's pool cannot mount one of its drives
+	reasonDriveTargetConflict    = "drive_target_conflict"    // two attached drives derive one path
+)
+
 // git_pat narrowing (runs_dispatch_pat_scope.go): a run is refused when a
 // narrowed git_pat grant's repos, access or api could not be enforced.
 const (

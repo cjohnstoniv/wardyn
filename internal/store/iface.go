@@ -315,14 +315,15 @@ type Store interface {
 	// ListUserDrives returns every drive by name WITH its grant count — what makes the console's
 	// delete affordance honest, since a drive with grants answers 409.
 	ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, error)
-	// UpsertUserDriveGrant keys on the natural UNIQUE (subject_type, subject): re-allocating a
-	// subject REPOINTS its one row, returning the EXISTING row's id on a conflict. ErrNotFound when
+	// UpsertUserDriveGrant keys on the natural UNIQUE (subject_type, subject, drive_id): writing a
+	// subject's grant on a drive again updates that row, returning the EXISTING row's id on a
+	// conflict; another drive is another row. ErrNotFound when
 	// drive_id names no drive (FK). ErrConflict when ANOTHER subject already holds this drive with
 	// the same home_override — a directory name is one person's, and on a managed drive an override
 	// is the last way left to point two people at one object Wardyn creates.
 	//
 	// homeOverrideStated is the REQUEST's tri-state, not the row's: false means the caller never
-	// mentioned home_override, and a repoint that never mentioned it must not CLEAR one (see the
+	// mentioned home_override, and an update that never mentioned it must not CLEAR one (see the
 	// guard in PG's statement) — that same ErrConflict, distinguished from the uniqueness one purely
 	// by this argument (a stated override disables the re-home guard; an unstated one is empty).
 	UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error)

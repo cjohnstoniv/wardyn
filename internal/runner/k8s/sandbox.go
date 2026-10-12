@@ -100,8 +100,11 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err := runner.ValidateManagedFiles(spec.ManagedFiles); err != nil {
 		return runner.Sandbox{}, fmt.Errorf("k8s: %w", err)
 	}
-	if err := agentSecretsAllowDrive(spec.ManagedFiles, spec.Drive); err != nil {
+	if err := agentSecretsAllowDrive(spec.ManagedFiles, spec.Drives); err != nil {
 		return runner.Sandbox{}, fmt.Errorf("k8s: %w", err)
+	}
+	if err := validateDriveSet(spec.Drives); err != nil {
+		return runner.Sandbox{}, err
 	}
 	runtimeClassName, runtimeHandler, err := d.resolveRuntimeClassName(ctx, spec.ConfinementClass)
 	if err != nil {
@@ -115,11 +118,11 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if d.cfg.ProxyImage == "" {
 		return runner.Sandbox{}, errProxyImageUnset
 	}
-	// The user drive comes LAST in preflight since it's the only step that
-	// writes; its PVC outlives the run on purpose and carries no
+	// The drives come LAST in preflight since it's the only step that
+	// writes; their PVCs outlive the run on purpose and carry no
 	// wardyn.run-id label, so rollback can never delete the person's storage.
-	if spec.Drive != nil {
-		if err := ensureDrivePVC(ctx, d.clientset, ns, spec.Drive); err != nil {
+	for i := range spec.Drives {
+		if err := ensureDrivePVC(ctx, d.clientset, ns, &spec.Drives[i]); err != nil {
 			return runner.Sandbox{}, err
 		}
 	}
@@ -365,10 +368,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	managedVols, managedMounts := managedFileVolumes(spec.RunID, spec.ManagedFiles)
 	addMainContainerVolumes(agentPod, managedVols, managedMounts)
 	applyAgentSecretFSGroup(agentPod, spec.ManagedFiles)
-	// The drive, only when the pod has one, so a drive-less pod keeps its nil
+	// The drives, only when the pod has one, so a drive-less pod keeps its nil
 	// pod-level SecurityContext unchanged.
-	if spec.Drive != nil {
-		applyDriveToPod(agentPod, spec.Drive, runtimeHandler)
+	for i := range spec.Drives {
+		applyDriveToPod(agentPod, &spec.Drives[i], i, runtimeHandler)
 	}
 	if runtimeClassName != "" {
 		agentPod.Spec.RuntimeClassName = &runtimeClassName

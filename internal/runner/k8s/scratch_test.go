@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // wantScratch is the mount path each scratch volume must land on. Spelled here
@@ -172,7 +173,7 @@ func TestCreateSandbox_NoMountCarriesASubPath(t *testing.T) {
 
 	spec := testSandboxSpec()
 	spec.Resources.DiskMiB = 64
-	spec.Drive = testDriveMount()
+	spec.Drives = []types.DriveMount{*testDriveMount()}
 	// The managed-file mounts are the third source that reaches this walk, and
 	// they are Secret volumes rather than emptyDirs — the shape most likely to
 	// be written with a subPath, since one file in an existing directory is

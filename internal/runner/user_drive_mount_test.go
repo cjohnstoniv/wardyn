@@ -660,7 +660,7 @@ func TestRefuseUserDriveBind_SplitsTheAudience(t *testing.T) {
 // naming cmd/wardyn-runner's -spec JSON as a reachable DriveMount input.
 //
 // It is not one. fileSpec declares no drive field and loadSpec never assigns
-// SandboxSpec.Drive (cmd/wardyn-runner/main_test.go's TestSpecJSON_CannotCarryADrive
+// SandboxSpec.Drives (cmd/wardyn-runner/main_test.go's TestSpecJSON_CannotCarryADrive
 // pins that from the source), so a hand-written spec cannot deliver a drive at
 // all. The checks are right and stay; what was wrong was the only evidence a
 // reader had for keeping them, and evidence that does not survive a two-minute
