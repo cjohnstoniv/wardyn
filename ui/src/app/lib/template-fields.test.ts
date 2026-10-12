@@ -91,13 +91,13 @@ describe("template field registry", () => {
     expect(TEMPLATE_NESTED_CARRIED.LLMInspectionSpec).not.toContain("workspace_secret_values");
   });
 
-  it("keeps push rules in the SCM entry, tool rules per harness, and the pending carriers unaccepted", () => {
+  it("keeps push rules in the SCM entry, tool rules per harness, and no landed carrier pending", () => {
     expect(templateFieldRule("inline_policy.push_rules")).toMatchObject({ section: "scm_entry", keyed_by: "provider+org" });
     expect(templateFieldRule("inline_policy.tool_rules")).toMatchObject({ section: "harness", keyed_by: "harness" });
     expect(templateFieldRule("model_provider")?.section).toBe("harness");
     expect(templateFieldRule("interactive")?.omitted).toBe("unset_required");
     expect(templateFieldRule("agent")?.omitted).toBe("unset_optional");
-    expect(templateFieldRule("runner_pool_id")?.pending).toBeTruthy();
+    expect(templateFieldRule("runner_pool_id")?.pending).toBeFalsy();
     // The run-mode carriers are real request fields now: no working names, no pending flag.
     for (const name of ["experience", "workload", "tools", "startup", "start_folder", "no_repositories_or_drives"]) {
       expect(templateFieldRule(name), name).toBeDefined();

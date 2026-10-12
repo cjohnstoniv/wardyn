@@ -98,6 +98,7 @@ const (
 	reasonRunWaitBudgetNotANumber    = "run_wait_budget_not_a_number"   // wait_budget_sec was present but null
 	reasonRunEndWaitAlreadyFinished  = "run_end_wait_already_finished"  // the run is already in a terminal state
 	reasonRunEndWaitFilesGone        = "run_end_wait_files_gone"        // the run ended and its files are no longer kept
+	reasonRunEndWaitMaxLifetime      = "run_end_wait_max_lifetime"      // the run has reached its maximum lifetime and is being ended, so its end and wait cannot move
 	reasonRunEndWaitStoreUnavailable = "run_end_wait_store_unavailable" // this store cannot change a run's end
 	// reasonRunLimitsGateDenied is planRunEndWait's own shared cause: the
 	// user_changes_limits gate refused this change, for any of the 4 fields
@@ -107,6 +108,14 @@ const (
 	reasonRunEndMustBeFuture    = "run_end_must_be_future"     // ends_at is not after now
 	reasonRunWaitBudgetTooSmall = "run_wait_budget_too_small"  // wait_budget_sec is below 1
 	reasonRunEndWaitChanged     = "run_end_wait_changed"       // the run changed while the PATCH was being decided
+)
+
+// POST /runs (run_end_create.go): the create-time end. The No end refusals reuse
+// run_end_no_end_not_allowed and run_limits_gate_denied above.
+const (
+	reasonRunEndConflictingFields = "run_end_conflicting_fields" // both ends_after_sec and no_end were set
+	reasonRunEndAfterTooSmall     = "run_end_after_too_small"    // ends_after_sec is below 1
+	reasonRunEndAfterTooLarge     = "run_end_after_too_large"    // ends_after_sec is past 2147483647
 )
 
 // notFoundIf's (helpers.go) own reasons: one per resource kind its ~27

@@ -309,17 +309,11 @@ func (d *templateDecoder) checkAvailable(req createRunRequest) {
 	if req.Placement == client.PlacementLocal {
 		refuse("intent.placement")
 	}
-	if req.RunnerPoolID != "" {
-		refuse("intent.runner_pool_id")
-	}
 	if path, what := runModeUnavailable(req); what != "" {
 		refuse("intent." + path)
 	}
 	if req.AllowedImage != "" {
 		refuse("intent.allowed_image")
-	}
-	if req.Overrides != nil && len(req.Overrides.Items()) > 0 {
-		refuse("intent.overrides")
 	}
 	for i, ref := range req.Components {
 		if ref.Builtin != "" {

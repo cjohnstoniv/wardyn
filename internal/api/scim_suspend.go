@@ -50,6 +50,7 @@ type scimStore interface {
 	store.LeaverStore
 	store.PrincipalIdentityStore
 	store.ScimGroupStore
+	store.PrincipalDirectoryStore
 }
 
 // leaverForms are every form a person is known by.
@@ -57,13 +58,17 @@ type leaverForms struct {
 	// bound are the principals whose identity rows the suspension deactivates: what a sign-in
 	// bound, and the object-id people principal. Deactivation never follows an email.
 	bound []string
-	// targets are bound plus every sub the emails resolve to (when no row binds a principal) plus
-	// every email alias: the forms the cutoff, the credential sweep and the kill sweep run under.
+	// targets are bound plus every email alias that is the person's plus, when no row binds a principal,
+	// the one principal each email names: the forms the cutoff, the credential sweep and the kill sweep run under.
 	targets []string
 	// shared are the email forms of a bound person that another principal holds (store.HeldEmails). A
 	// cutoff or session cut keyed by one would reach that principal's credentials too, so none is written;
 	// the person's own are reached through bound and the identity deactivation.
 	shared []string
+	// refusal is set when the emails cannot be resolved (reasonIdentityDirectoryUnreadable, with the error)
+	// or when the emails of a person no row binds name more than one principal (reasonOwnerAmbiguous): the
+	// forms then name nobody safely, targets are bound alone, and a suspension or a purge refuses.
+	refusal string
 }
 
 // cutTargets are the forms a cutoff or a session cut is written under: targets less shared.
@@ -93,20 +98,60 @@ func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.Prin
 	}
 	emails := slices.DeleteFunc(append(aliases, strings.ToLower(ident.EmailLower), strings.ToLower(ident.ScimUserName)),
 		func(v string) bool { return !strings.Contains(v, "@") })
-	f.targets = slices.Concat(f.bound, nonEmptyForms(emails...))
-	if ident.Principal != "" {
-		if f.shared, err = st.HeldEmails(ctx, ident.ID, f.bound, emails); err != nil {
-			return f, err
-		}
-	} else {
-		subs, err := st.PrincipalsByEmail(ctx, emails)
+	// Each email is resolved as erasure resolves a name (store.PrincipalsNamed), so a principal always wins
+	// over an email claim. A bound person's email that names only other principals (a person an admin
+	// created under that address, say) is never one of their forms. A person no row binds is known by their
+	// emails, so the one principal they name joins the forms; when the person's emails name more than one
+	// principal, together or one email alone, they name nobody.
+	var own, subs []string
+	for _, e := range nonEmptyForms(emails...) {
+		named, err := st.PrincipalsNamed(ctx, e)
 		if err != nil {
+			f.refusal = reasonIdentityDirectoryUnreadable
 			return f, err
 		}
-		f.targets = append(f.targets, subs...)
+		switch {
+		case ident.Principal != "":
+			if len(named) == 0 || slices.ContainsFunc(named, func(p string) bool { return slices.Contains(f.bound, p) }) {
+				own = append(own, e)
+			}
+		case len(named) > 1:
+			f.refusal = reasonOwnerAmbiguous
+		default:
+			own, subs = append(own, e), append(subs, named...)
+		}
 	}
-	f.targets = nonEmptyForms(f.targets...)
+	if ident.Principal == "" && len(slices.DeleteFunc(nonEmptyForms(subs...), func(p string) bool { return slices.Contains(f.bound, p) })) > 1 {
+		f.refusal = reasonOwnerAmbiguous
+	}
+	if f.refusal != "" {
+		f.targets = f.bound
+		return f, nil
+	}
+	f.targets = nonEmptyForms(slices.Concat(f.bound, own, subs)...)
+	if ident.Principal != "" {
+		if f.shared, err = st.HeldEmails(ctx, ident.ID, f.bound, own); err != nil {
+			return f, err
+		}
+	}
 	return f, nil
+}
+
+// deprovisionForms is leaverForms for a suspension or a purge of kind. Forms with a refusal reach no one:
+// the step stops before it touches anything and leaves a person.deprovision row saying why, and the
+// request answers 5xx so the identity provider retries.
+func (s *Server) deprovisionForms(ctx context.Context, st scimStore, ident store.PrincipalIdentity, kind string) (leaverForms, error) {
+	forms, err := s.leaverForms(ctx, st, ident)
+	if forms.refusal == "" {
+		return forms, err
+	}
+	outcome := "failure"
+	if err == nil {
+		outcome, err = "denied", fmt.Errorf("%w: the person's emails name more than one principal", errDeprovisionIncomplete)
+	}
+	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", ident.ID.String(), outcome,
+		mustJSON(map[string]any{"kind": kind, "reason": forms.refusal})))
+	return forms, err
 }
 
 func nonEmptyForms(in ...string) []string {
@@ -167,7 +212,7 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID)
 	if err != nil {
 		return ident, leaverForms{}, nil, err
 	}
-	forms, err := s.leaverForms(ctx, st, ident)
+	forms, err := s.deprovisionForms(ctx, st, ident, store.JobKindSuspend)
 	if err != nil {
 		return ident, forms, nil, err
 	}

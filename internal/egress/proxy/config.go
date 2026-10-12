@@ -233,6 +233,11 @@ type Config struct {
 	// can never take the wrong block first. Control-plane authored; nothing sets
 	// it until the git route reads it.
 	PushRuleSets []types.PushRuleSet `json:"push_rule_sets,omitempty"`
+	// PushRuleBase is the run's push rules as the ceiling left them: what an
+	// entry with no set of its own is held to (a PAT or an App reaches more than
+	// the entries the run brought). A set only ever adds to it. Carried beside
+	// PushRuleSets and never beside Policy.PushRules.
+	PushRuleBase *types.PushRulesSpec `json:"push_rule_base,omitempty"`
 	// HarnessToolRules are the tool rules per included harness, also the product
 	// after the ceiling, and likewise exclusive of Policy.ToolRules. The approval
 	// route evaluates the set of the harness that raised the call
@@ -241,6 +246,12 @@ type Config struct {
 	// the caller, never from the request body (types.HarnessToolRules). Control-plane
 	// authored; nothing sets it until the approval route reads it.
 	HarnessToolRules []types.HarnessToolRules `json:"harness_tool_rules,omitempty"`
+	// HarnessCredentials are the SHA-256 digests of the per-harness credentials the
+	// approval route reads the caller's harness from (a Bearer token the harness's
+	// wardyn-toolgate sends). Digests only: the plaintext never enters this config,
+	// a log or an audit row. A call with no credential, or one that matches none, has
+	// no harness and is held for a human.
+	HarnessCredentials []types.HarnessCredential `json:"harness_credentials,omitempty"`
 	// ViaOrgRoutes are the destinations of this run's via_org grants (design 0.9 §7.3), on a runner's
 	// proxy only: a request for one is forwarded to the organisation, which injects the credential.
 	// Each names its grant and destination host, never the rule or a secret name.
@@ -317,6 +328,9 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 			return nil, fmt.Errorf("config: via_org_routes entry needs a grant_id and a host")
 		}
 	}
+	if c.PushRuleBase != nil && (len(c.PushRuleSets) == 0 || c.Policy.PushRules != nil) {
+		return nil, fmt.Errorf("config: push_rule_base is carried with push_rule_sets and never with policy.push_rules")
+	}
 	if len(c.PushRuleSets) > 0 && c.Policy.PushRules != nil {
 		return nil, fmt.Errorf("config: push_rule_sets and policy.push_rules are both set; rules are carried one way or the other")
 	}
@@ -327,6 +341,9 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	if err := types.ValidateHarnessToolRules(c.HarnessToolRules); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if err := types.ValidateHarnessCredentials(c.HarnessCredentials); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	if err := c.applyDefaultsAndValidate(); err != nil {

@@ -1345,6 +1345,8 @@ erases one person's retained records by explicit scope, in one audited act
 4. Map Entra's `objectId` to SCIM `externalId`.
    - Wardyn matches a leaver by that object id first, then by the `entra:<tenant id>:<object id>` person, and uses an
      email only to widen a removal; without `externalId` a suspension can miss the person.
+   - If any of its names is another principal (a person created under that address, say), nothing links, and when
+     its emails name two different people, the suspension refuses until an admin resolves it.
    - `userName` and `emails` may change (renames are accepted as a projection update and the old values are kept as
      removal aliases); `externalId` may not change on a bound identity.
 5. Check a test user: suspend them from the provisioning job, then confirm a `scim.user.deactivate` row and a
@@ -1426,8 +1428,14 @@ lose access now, do not wait for it:
     - only where the owning principal is one of the leaver's own forms,
     - never another principal's that merely carries the same address.
   - Deactivation never follows an email.
-  - A person no sign-in has bound is known only by their emails, so for them every alias is cut and every principal an
-    alias resolves to is swept as theirs.
+  - Each alias is resolved the way an erasure resolves a name, so a recorded principal wins over any email claim.
+    - For a bound person, an alias that names only other principals (a person created under that address, say) is
+      never one of their forms: nothing is cut, swept, killed or deleted under it.
+    - A person no sign-in has bound is known only by their emails, so for them every alias is cut and the one principal
+      each alias names is swept as theirs. A cutoff under such an alias also ends a session or token whose email claim
+      spells it.
+    - An alias that names more than one principal, or a directory that cannot be read, stops a suspension or purge
+      before it touches anything: the request answers 5xx and a `person.deprovision` row says why.
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
   again.
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
@@ -3726,6 +3734,8 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0157` (`0157_invitations_service_identities`) replaces the `actor_type` check on `audit_events` (`0001`'s table) so it
   admits `service`, beside its new `person_invitations`, `service_identities` and `api_token_moves` tables.
 - `0158` (`0158_runner_pool_limits`) adds `runner_pools.limits` (`0152`'s table), the pool's own limits.
+- `0159` (`0159_run_lifetime_cap`) adds `agent_runs.lifetime_cap_at` and `lifetime_cap_source` (`0001`'s table), the latest end the run's pool and `WARDYN_RUN_MAX_AGE` allow, counted from launch, and which of the two bound it; existing runs keep both empty.
+- `0160` (`0160_run_pool_binding`) adds the pool binding to `agent_runs`.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

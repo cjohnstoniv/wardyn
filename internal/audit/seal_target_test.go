@@ -248,3 +248,62 @@ func TestPersonTargetActionsKeepTheReviewedMembers(t *testing.T) {
 		t.Errorf("person.create is listed in %v, but its person has no identity row to take a subject from", got)
 	}
 }
+
+// deviceRow is ev as this organisation stores it once an enrolled device has
+// forwarded it: under the device's actor (store.FederatedActor).
+func deviceRow(ev types.AuditEvent) types.AuditEvent {
+	ev.Actor = DeviceActorPrefix + uuid.NewString() + "/" + ev.Actor
+	return ev
+}
+
+func TestUnseal_ADeviceRowsSubjectTargetReadsAsStored(t *testing.T) {
+	s, mk, dir := newFullSealer(t, "alice")
+	erasedAt := time.Now().UTC()
+	mk.destroy("alice")
+	dir.destroyed["alice"] = erasedAt
+	target := SubjectActorPrefix + dir.ids["alice"]
+	orgBefore := personTargetEvent("session.revoke", target)
+	orgBefore.Time = erasedAt.Add(-time.Minute)
+	orgAfter := personTargetEvent("session.revoke", target)
+	orgAfter.Time = erasedAt.Add(time.Minute)
+	dev := deviceRow(orgAfter)
+	back, err := s.Unseal(t.Context(), []types.AuditEvent{orgBefore, orgAfter, dev})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The organisation's own rows read as before.
+	if back[0].Target != ErasedValue || back[1].Target != "alice" {
+		t.Errorf("organisation rows read %q, %q; want %q, alice", back[0].Target, back[1].Target, ErasedValue)
+	}
+	if back[2].Target != target {
+		t.Errorf("a device row's subject target reads %q, want it as stored (%q)", back[2].Target, target)
+	}
+}
+
+func TestUnseal_ADeviceRowsSealedDataReadsAsStored(t *testing.T) {
+	s, _, _ := newFullSealer(t, "alice")
+	device, _, _ := newFullSealer(t, "bob")
+	decide := func(actor string) types.AuditEvent {
+		return types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorHuman, Actor: actor,
+			Action: "approval.decide", Target: "a1", Outcome: "success", Data: []byte(`{"reason":"ok"}`)}
+	}
+	org, _, err := s.Seal(t.Context(), decide("alice"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	onDevice, _, err := device.Seal(t.Context(), decide("bob"))
+	if err != nil || !strings.Contains(string(onDevice.Data), sealedPrefix) {
+		t.Fatalf("device seal = %s, %v; want a sealed reason", onDevice.Data, err)
+	}
+	dev := deviceRow(onDevice)
+	back, err := s.Unseal(t.Context(), []types.AuditEvent{org, dev})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(back[0].Data) != `{"reason":"ok"}` {
+		t.Errorf("an organisation row's sealed reason reads %s, want it opened", back[0].Data)
+	}
+	if string(back[1].Data) != string(dev.Data) {
+		t.Errorf("a device row's sealed reason reads %s, want it as stored (%s)", back[1].Data, dev.Data)
+	}
+}

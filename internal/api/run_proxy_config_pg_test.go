@@ -70,7 +70,7 @@ func TestPG_RunProxyConfigIsDroppedWhenTheRunGoesTerminal(t *testing.T) {
 		t.Error("a completed run's proxy config survived its terminal tail")
 	}
 
-	h.srv.killTeardownTail(ctx, killed, types.ActorSystem, "test", nil)
+	h.srv.killTeardownTail(ctx, killed, types.ActorSystem, "test", nil, false)
 	if kept(killed.ID) {
 		t.Error("a killed run's proxy config survived the kill")
 	}

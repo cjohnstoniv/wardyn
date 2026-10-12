@@ -26,6 +26,7 @@ require (
 	github.com/moby/profiles/seccomp v0.2.3
 	github.com/pkg/sftp v1.13.11
 	github.com/spf13/cobra v1.10.2
+	github.com/spf13/pflag v1.0.10
 	github.com/spiffe/go-spiffe/v2 v2.8.2
 	golang.org/x/crypto v0.57.0
 	golang.org/x/net v0.60.0
@@ -97,7 +98,6 @@ require (
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/opencontainers/runtime-spec v1.3.0 // indirect
-	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect

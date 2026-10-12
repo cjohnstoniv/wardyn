@@ -50,21 +50,46 @@ func runLimitsRefusal(l types.RunLimits) string {
 }
 
 // captureRunLimits stamps a new run with its owner's run limits, the profile
-// they came from, its end and its wait. ceiling is the OWNER's, resolved for
-// this create: an operator's carries no profile, so a super admin's run is
-// bounded by the deployment alone, while a security admin's resolves a profile
-// like any member's. Captured once and never re-resolved, so a later change to
-// the end or the wait clamps against the bounds the run launched under.
-func (s *Server) captureRunLimits(run *types.AgentRun, ceiling governanceCeiling) {
+// they came from, its end, its lifetime cap and its wait. ceiling is the OWNER's,
+// resolved for this create: an operator's carries no profile, so a super admin's
+// run is bounded by the deployment alone, while a security admin's resolves a
+// profile like any member's. Captured once and never re-resolved, so a later
+// change to the end or the wait clamps against the bounds the run launched under.
+//
+// end is the create's decision (run_end_create.go): the run's end and its
+// lifetime_cap_at, both counted from created_at. nil is a create that decides
+// none (the record path), which keeps the profile's default end, else its max.
+func (s *Server) captureRunLimits(run *types.AgentRun, ceiling governanceCeiling, end *createEnd) {
 	l := ceiling.Limits.RunLimits
 	run.RunLimits = l
 	if ceiling.Profile != nil {
 		id := ceiling.Profile.ID
 		run.GovernanceProfileID = &id
 	}
-	if end := cmp.Or(l.DefaultEndSec, l.MaxEndAheadSec); end > 0 {
-		endsAt := run.CreatedAt.Add(time.Duration(end) * time.Second)
-		run.EndsAt = &endsAt
+	if end != nil {
+		if end.endSec != nil {
+			endsAt := run.CreatedAt.Add(time.Duration(*end.endSec) * time.Second)
+			run.EndsAt = &endsAt
+		}
+		if end.capSec > 0 {
+			capAt := run.CreatedAt.Add(time.Duration(end.capSec) * time.Second)
+			run.LifetimeCapAt, run.LifetimeCapSource = &capAt, end.capSource
+		}
+	} else {
+		if sec := cmp.Or(l.DefaultEndSec, l.MaxEndAheadSec); sec > 0 {
+			endsAt := run.CreatedAt.Add(time.Duration(sec) * time.Second)
+			run.EndsAt = &endsAt
+		}
+		// These runs have no pool: the deployment's maximum age is their only cap.
+		if s.cfg.RunMaxAge > 0 {
+			capAt := run.CreatedAt.Add(s.cfg.RunMaxAge)
+			run.LifetimeCapAt, run.LifetimeCapSource = &capAt, types.LimitSourceDeployment
+		}
+	}
+	// A run never shows an end it will not reach: a profile's default end past
+	// the cap is the cap (the record path above; a create already cut its ask).
+	if run.EndsAt != nil && run.LifetimeCapAt != nil && run.EndsAt.After(*run.LifetimeCapAt) {
+		run.EndsAt = run.LifetimeCapAt
 	}
 	run.WaitBudgetSec = runWaitSec(l, s.cfg.ApprovalExpiryAfter)
 }

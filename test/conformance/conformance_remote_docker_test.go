@@ -15,6 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,6 +65,16 @@ func TestConformanceDockerThroughRemote(t *testing.T) {
 			})
 		})
 	}
+	t.Run("PlacementRouting", func(t *testing.T) {
+		local, err := docker.New(docker.Config{ProxyImage: "busybox:latest", ProxyCmd: []string{"sleep", "infinity"},
+			InternalNetwork: remoteConformanceNetwork(t)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A registered runner whose link never came up: its create answers ErrRunnerOffline.
+		down := remote.New(uuid.NewString(), &remote.Link{}, remote.Options{})
+		conformance.RunPlacementRouting(t, local, conformance.RoutingOptions{Image: "busybox:latest", Timeout: 3 * time.Minute, Offline: down})
+	})
 }
 
 func remoteConformanceNetwork(t *testing.T) string {
@@ -137,9 +148,16 @@ func remoteDockerRunner(t *testing.T, local substrate.Substrate, realWire bool) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The runner refuses attach and exec for a ref it does not hold; production wires the offline
+	// manager's HoldsSandbox, so the rig holds every ref its Created callback saw.
+	var held sync.Map
+	streams.HoldSandboxes(func(ref string) bool { _, ok := held.Load(ref); return ok })
 	dispatch, err := runneragent.New(runneragent.Config{RunnerID: row.ID.String(), Substrate: local,
-		BeforeCreate:     func(context.Context, runner.SandboxSpec) error { return nil },
-		Created:          func(context.Context, runner.SandboxSpec, string) error { return nil },
+		BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+		Created: func(_ context.Context, _ runner.SandboxSpec, ref string) error {
+			held.Store(ref, struct{}{})
+			return nil
+		},
 		CreateFailed:     func(context.Context, runner.SandboxSpec) error { return nil },
 		BeforeRefCall:    func(context.Context, string, string, uuid.UUID) error { return nil },
 		MutationFinished: func(context.Context, string, string, uuid.UUID, uuid.UUID, error) error { return nil },

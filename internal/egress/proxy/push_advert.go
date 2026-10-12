@@ -37,7 +37,7 @@ const (
 func (p *Proxy) noThinAdvert(r *http.Request, rest string) bool {
 	return rest == "info/refs" &&
 		r.URL.Query().Get("service") == "git-receive-pack" &&
-		p.policy.PushRulesSet()
+		p.anyPushRules()
 }
 
 // relayNoThinAdvert rewrites the head to add no-thin and streams the rest

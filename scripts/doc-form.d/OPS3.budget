@@ -44,7 +44,10 @@ docs/operations/custom-components.md=1184 share=35
 docs/operations/api-tokens.md=4002 share=35
 # G-1423 r1: docs/operations/denials.md 4709 adds 32 over 4677 for the audit-only delegation_scope source.
 # docs/operations/denials.md 4786 adds 77 (0.9 G-sec-rest): the exec relay rows (#1976) and the audit_retention_actor_reserved row.
-docs/operations/denials.md=4786 share=35
+# D-108-114 merge: docs/operations/denials.md 4806 adds 20 over 4786 for the runs.placement cause of governance_profile.
+# docs/operations/denials.md 4836 adds 50 over 4786 (0.9 F-1508 C2): the `service_scope` reason row.
+# docs/operations/denials.md 4856 measured after train 5 merge.
+docs/operations/denials.md=4856 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

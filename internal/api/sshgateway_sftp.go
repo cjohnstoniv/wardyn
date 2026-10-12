@@ -19,17 +19,24 @@ import (
 const sftpServerPath = "/usr/lib/openssh/sftp-server"
 
 // execSFTPServer starts the sandbox's own sftp-server (plus args) and, on a
-// launch failure, returns the message the client sees: a BYOI image without
-// the binary surfaces as a clean channel error naming the image contract
-// (never a hang), and ErrExecStreamUnsupported maps to the shared honest
-// message every primitive here uses.
+// launch failure, returns the message the client sees: an offline runner or a
+// gone sandbox is named as such, ErrExecStreamUnsupported maps to the shared
+// honest message every primitive here uses, and any other launch failure is
+// read as a BYOI image without the binary and names the image contract (never
+// a hang).
 func (s *Server) execSFTPServer(ctx context.Context, run types.AgentRun, args ...string) (*runner.ExecSession, string, error) {
 	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{Argv: append([]string{sftpServerPath, "-e"}, args...)})
 	if err == nil {
 		return sess, "", nil
 	}
 	reason := sshExecStreamErrorMessage(err)
-	if !errors.Is(err, runner.ErrExecStreamUnsupported) {
+	switch {
+	case errors.Is(err, runner.ErrExecStreamUnsupported):
+	case errors.Is(err, runner.ErrRunnerOffline):
+		reason = "sftp unavailable: the runner for this sandbox is offline; retry when it reconnects (" + err.Error() + ")"
+	case errors.Is(err, runner.ErrSandboxGone):
+		reason = "sftp unavailable: the sandbox is gone (" + err.Error() + ")"
+	default:
 		reason = "sftp unavailable: the sandbox image has no " + sftpServerPath + " (" + err.Error() + ")"
 	}
 	return nil, reason, err

@@ -169,9 +169,10 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	if isPush {
 		forge := &forgeRepo{p: p, repo: orgRepo,
 			token: func(ctx context.Context) (string, error) { return p.gitToken(ctx, grantID) }}
+		rules, entryErr := p.rulesForRemote(githubHost, orgRepo)
 		body, release, ok := p.applyPushRules(w, r, reqBody, slog.String("repo", orgRepo),
 			func(ruleSource string) { p.emitGitDecision(r, egress.Deny, ruleSource) }, forge,
-			appPushTarget(orgRepo, grantID))
+			appPushTarget(orgRepo, grantID), rules, entryErr)
 		defer release()
 		if !ok {
 			return

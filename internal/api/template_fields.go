@@ -119,8 +119,6 @@ func (r TemplateFieldRule) in(section, keyedBy string) TemplateFieldRule {
 	return r
 }
 
-func (r TemplateFieldRule) pending(lane string) TemplateFieldRule { r.Pending = lane; return r }
-
 func (r TemplateFieldRule) sensitive() TemplateFieldRule  { r.Sensitive = true; return r }
 func (r TemplateFieldRule) personOnly() TemplateFieldRule { r.PersonOnly = true; return r }
 
@@ -205,8 +203,11 @@ var templateRequestRules = []TemplateFieldRule{
 	excludedField("preset_version", templateExcludeOrigin,
 		"A preset's version only means something beside its preset."),
 	carriedField("runner_pool_id", templateTabRunner, partRunner, templateOmitBaseline, templateEmptySame,
-		"The pool resolves from the person's own default, then the organisation's, when the template is used. A default that is unavailable or refused never falls through to another pool: the person chooses. A named pool narrows where the run may go and grants nothing, and the launcher's pool-use policy is checked at use.").
-		pending("C-pools"),
+		"The pool resolves from the person's own default, then the organisation's, when the template is used. A default that is unavailable or refused never falls through to another pool: the person chooses. A named pool narrows where the run may go and grants nothing, and the launcher's pool-use policy is checked at use."),
+	carriedField("ends_after_sec", templateTabRunner, partRunner, templateOmitBaseline, templateEmptySame,
+		"The run takes the default end when the template is used, and that default can change. An end is a length of time from launch, checked again then, never a permission."),
+	carriedField("no_end", templateTabRunner, partRunner, templateOmitBaseline, templateEmptySame,
+		"The run takes the default end when the template is used. Asking for no end is checked again at launch against the pool, the deployment and the person's own limits, and is never a permission."),
 	// The run-mode carriers (run_mode.go): what a person is starting. A new client
 	// sends them in place of interactive, agent, task, task_mode and
 	// interactive_start, which stay only as the older-client mapping. What the run
@@ -267,8 +268,8 @@ var templatePolicyRules = []TemplateFieldRule{
 		"Pushes stay inside the run's own branch namespace. False is a choice to keep that.").
 		in(templateSectionSCMEntry, "provider+org"),
 	carriedField("push_rules", templateTabAccess, partRules, templateOmitOptional, templateEmptySame,
-		"Push rules exist only inside an SCM entry, one set per provider and organisation. This run-wide block is not accepted until the keyed carrier lands.").
-		in(templateSectionSCMEntry, "provider+org").pending("A-L3/A-L10"),
+		"Push rules exist only inside an SCM entry, one set per provider and organisation (overrides.push_rules).").
+		in(templateSectionSCMEntry, "provider+org"),
 	carriedField("azure_devops_capabilities", templateTabAccess, partCreds, templateOmitBaseline, templateEmptySame,
 		"The provider's default profile applies.").
 		in(templateSectionSCMEntry, "provider+org"),
@@ -296,7 +297,9 @@ var templateNestedCarried = map[string]string{
 	"PushRuleOverride":   "provider host org deny_paths require_review_paths",
 	"PushRulesSpec":      "deny_paths max_inspect_pack_mib require_review_paths hold_seconds deny_new_executables max_file_size_mib",
 	"ResourceLimits":     "cpu_millis memory_mib pids_limit disk_mib",
-	"RunOverrides":       "agent azure_devops git_pat push_rules",
+	"RunHostOverrides":   "add_allowed add_denied remove_allowed remove_denied",
+	"RunEgressOverrides": "first_use_approval allow_all_egress",
+	"RunOverrides":       "agent azure_devops git_pat push_rules hosts egress",
 	"RunResources":       "cpu_millis memory_mib",
 	"RunStartup":         "kind tool command",
 	"RunWorkload":        "kind agent task command",

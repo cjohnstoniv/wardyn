@@ -114,7 +114,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_VAULT_TRANSIT_MOUNT` | string | `transit` | mount of Vault's Transit engine (flag `-vault-transit-mount`) |
 | `WARDYN_VAULT_TRANSIT_KEY` | string | (unset) | the Transit key (type `aes256-gcm96`) that wraps data keys (flag `-vault-transit-key`); required with `WARDYN_KEK=transit`. [Details](#wardyn_vault_transit_key) |
 | `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` | string | (unset) | a second Transit key (type `aes256-gcm96`, same `WARDYN_VAULT_TRANSIT_MOUNT`) that wraps wardynd's own signing, session and SSH host keys (flag `-vault-transit-key-platform`, chart `secretStore.vault.transitKeyPlatform`). Empty = one key for both. [Details](#wardyn_vault_transit_key_platform) |
-| `WARDYN_AWS_KMS_KEY` | string | (unset) | the full ARN of the symmetric AWS KMS key that wraps data keys (flag `-aws-kms-key`). Required with `WARDYN_KEK=awskms`; an alias or a bare key id refuses boot. [Details](#wardyn_aws_kms_key) |
+| `WARDYN_AWS_KMS_KEY` | string | (unset) | the full ARN of the symmetric AWS KMS key that wraps data keys (flag `-aws-kms-key`, chart `kek.awskms.key`). Required with `WARDYN_KEK=awskms`; an alias or a bare key id refuses boot. [Details](#wardyn_aws_kms_key) |
 | `WARDYN_AZURE_KEK_KEY` | string | (unset) | the versionless id of the Key Vault RSA 3072 or 4096 key that wraps data keys (flag `-azure-kek-key`, chart `kek.azurekv.key`). Required with `WARDYN_KEK=azurekv`. [Details](#wardyn_azure_kek_key) |
 | `WARDYN_AZURE_KEK_SIGNING_KEY` | string | (unset) | the versionless id of the EC P-256 key that signs every wrap it makes (flag `-azure-kek-signing-key`, chart `kek.azurekv.signingKey`). Required whenever `WARDYN_AZURE_KEK_KEY` is set. [Details](#wardyn_azure_kek_signing_key) |
 | `WARDYN_AZURE_KEK_KEY_PLATFORM` | string | (unset) | a second Key Vault RSA 3072 or 4096 key that wraps wardynd's own signing, session and SSH host keys (flag `-azure-kek-key-platform`, chart `kek.azurekv.keyPlatform`); empty = one key pair for both. [Details](#wardyn_azure_kek_key_platform) |
@@ -228,7 +228,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_DIRECTORY_CLIENT_SECRET` 🔒 | string | (unset = reuses `WARDYN_OIDC_CLIENT_SECRET`) | Client secret of that dedicated app registration (flag `-directory-client-secret`); `WARDYN_DIRECTORY_PROVIDER=entra` is refused at boot when neither this nor `WARDYN_OIDC_CLIENT_SECRET` is set. [Details](#wardyn_directory_client_secret) |
 | `WARDYN_APPROVAL_EXPIRY_AFTER` | duration | `24h` | PENDING approvals older than this expire (flag `-approval-expiry-after`) |
 | `WARDYN_ENDED_RUN_GRACE` | duration | `168h` (7 days) | How long a run whose end has passed keeps its files; past the grace it is torn down, and `0` tears a run down at its end (flag `-ended-run-grace`). [Details](#wardyn_ended_run_grace) |
-| `WARDYN_RUN_MAX_AGE` | duration | (unset: off) | Absolute cap on a run's age since creation, separate from idleness (no flag); the lifecycle reaper stops a RUNNING run older than this. [Details](#wardyn_run_max_age) |
+| `WARDYN_RUN_MAX_AGE` | duration | (unset: off) | Absolute cap on a run's age since creation (no flag). It is every new run's lifetime cap; a run still live at it is killed. The reaper stops only older runs with no cap. [Details](#wardyn_run_max_age) |
 | `WARDYN_APPROVAL_EXPIRY_INTERVAL` | duration | `10m` | Sweep interval for stale approvals; 0 disables, which removes the only thing that bounds a PENDING request with no run-scoped wait/end (flag `-approval-expiry-interval`). [Details](#wardyn_approval_expiry_interval) |
 | `WARDYN_AUTOSTOP_INTERVAL` | duration | `1m` | lifecycle reaper scan interval; 0 disables (flag `-autostop-interval`) |
 | `WARDYN_AUDIT_COALESCE_WINDOW` | duration | `5m` | Fold identical consecutive `auth.fail` audit rows into the first row plus one new summary row; `0` disables the folding (flag `-audit-coalesce-window`). [Details](#wardyn_audit_coalesce_window) |
@@ -454,7 +454,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_AWS_KMS_KEY`
 
-- The full ARN, `arn:<partition>:kms:<region>:<account>:key/<id>`, of the symmetric AWS KMS key that wraps data keys (flag `-aws-kms-key`); the region is the ARN's. Wardyn calls `Encrypt` and `Decrypt` on it, so the identity needs `kms:Encrypt` and `kms:Decrypt` on that key only.
+- The full ARN, `arn:<partition>:kms:<region>:<account>:key/<id>`, of the symmetric AWS KMS key that wraps data keys (flag `-aws-kms-key`, chart `kek.awskms.key`); the region is the ARN's. Wardyn calls `Encrypt` and `Decrypt` on it, so the identity needs `kms:Encrypt` and `kms:Decrypt` on that key only.
 - Required with `WARDYN_KEK=awskms`; set with `WARDYN_KEK=local`, it only reads the rows sealed under it, which is how `wardynd -rewrap` moves them back to the local key.
 - An alias, a bare key id or a non-KMS ARN refuses boot: an alias can be re-pointed to another key.
 - Not together with `WARDYN_VAULT_TRANSIT_KEY*` or `WARDYN_AZURE_KEK_KEY*`, or with a platform key or `WARDYN_KEY_DOMAINS_FILE` domains: AWS KMS has neither yet.
@@ -1188,11 +1188,16 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_RUN_MAX_AGE`
 
 - Absolute cap on a run's age since creation, separate from idleness (no flag; `0`, unset or negative is off).
-- The lifecycle reaper stops a RUNNING run older than this, even one that is busy, has `auto_stop_after_sec` of `0` or has a request open
-- Or is kept after a control-plane outage with its agent still running (before its end), and writes a `run.max_age.expire` audit row
-- A run kept with its agent already stopped (after its end, a reboot, or an outage past its end) is left to its files grace
-- It is not `ends_at`, which a person may extend.
-- On the `k8s` substrate it also sets `activeDeadlineSeconds` on the proxy pod and the agent pod to this value plus 10 minutes
+- A run that carries a `lifetime_cap_at` is ended by the lease sweep at its cap: KILLED with the reason `max_lifetime_reached` (Background or Interactive), audited `run.kill` by `system`/`wardynd`.
+- A Background task whose end comes before the cap is KILLED `end_reached` at its end. An Interactive run is kept at an earlier end, as always.
+- The lifecycle reaper still stops a RUNNING run older than this that carries no cap (a run from before 0.9), busy or not, and writes a `run.max_age.expire` audit row.
+- A run kept after a control-plane outage with its agent still running (before its end) is covered the same way.
+- A run kept with its agent already stopped (after its end, a reboot, or an outage past its end) is left to its files grace.
+- It is not `ends_at`, which a person may extend, but it bounds it: every new run records `lifetime_cap_at` (its creation plus this age).
+- A run launched from New Run or `POST /runs` that no source gives an end gets that cap as its end, and `no_end` at launch is refused with `403` naming this deployment.
+- `PATCH /runs/{id}` cannot extend past the cap or set No end, a super admin included.
+- The cap is captured when the run is created, so lowering `WARDYN_RUN_MAX_AGE` later does not reach a run that already carries one; only runs launched afterwards, and older runs with no cap, follow the new value.
+- On the `k8s` substrate each run's proxy pod and agent pod get `activeDeadlineSeconds` of that run's own remaining lifetime plus 10 minutes; a run with no cap has none.
 - So a run whose control plane is gone still fails both pods (releasing their resource requests) without wardynd
 - The next reconciler sweep then deletes the run's Secret and NetworkPolicies.
 - Both run pods are also created with the agent owned by the proxy pod, so deleting the proxy pod removes the agent.
@@ -1902,6 +1907,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CODEX_BASE_URL` | string (URL) | (unset) | the base URL a `codex-cli` run's codex is pointed at: the brokered `<proxy>/wardyn/llm/openai` route plus the path the final upstream needs (`codexBaseURL`, [`internal/api/runs_dispatch_provider.go`](../internal/api/runs_dispatch_provider.go)). [Details](#wardyn_codex_base_url) |
 | `WARDYN_CODEX_MODEL` | string | (unset) | **Switched off in 0.8.6:** a provider write of the `azure_foundry` kind answers `400` "the azure_foundry kind is not available in this release", so no run sets this yet (`providerAzureLane.env`, [`internal/api/provider_azure.go`](../internal/api/provider_azure.go)). [Details](#wardyn_codex_model) |
 | `WARDYN_TOOL_APPROVALS` | string | (unset) | `hold` routes an AUTONOMOUS (non-interactive) Claude Code run's own tool calls to a Wardyn approval instead of running unsupervised; unset/`auto` is today's `--dangerously-skip-permissions` behavior. Never set for an interactive run or for codex-cli. [Details](#wardyn_tool_approvals) |
+| `WARDYN_TOOLGATE_CREDENTIAL` | secret | (unset) | The approval credential dispatch gives the started harness of a run with two or more included harnesses; `wardyn-toolgate` sends it as a Bearer token. Never set by hand |
 | `WARDYN_AUTONOMY_LEVEL` | string | (unset) | the run's RESOLVED autonomy level (`L0` attended, `L1` gated, `L2` unattended, `L3`), frozen on the run row by the launch gate. An ANNOUNCEMENT, never the mechanism. [Details](#wardyn_autonomy_level) |
 | `WARDYN_RECORDING` | bool | (unset) | `1` tells the sandbox that session recording is configured, stamped into the agent container's env by the docker driver when its Record config is on. [Details](#wardyn_recording) |
 | `WARDYN_PROBE_TO_URL` | string | (unset) | site-config test-redirect: the stored egress redirect's `to` URL the probe fetches through wardyn-proxy |
@@ -2224,6 +2230,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
   - `WARDYN_TEST_VAULT_TOKEN_FILE` (the live Vault/OpenBao case, [`internal/secretstore/vaultkv/live_test.go`](../internal/secretstore/vaultkv/live_test.go): the server's address and a file holding a token that can mount and write policies),
   - `WARDYN_TEST_VAULT_K8S_JWT_FILE` (the same file's Kubernetes-auth case: a projected service-account token with audience `vault`),
   - `WARDYN_TEST_AZURE_KV` (the live Key Vault case, [`internal/secretstore/azurekv/live_test.go`](../internal/secretstore/azurekv/live_test.go): the vault's URL; the identity comes from the Key Vault settings above),
+  - `WARDYN_TEST_AWS_KMS_KEY` (the live AWS KMS case, [`internal/secretstore/awskms/live_test.go`](../internal/secretstore/awskms/live_test.go): the key's full ARN; the identity comes from the AWS SDK's default credential chain),
   - `WARDYN_TEST_FIPS_CHILD` (set by `secretstoretest.UnderFIPSOnly` on the child it re-runs a test in under `GODEBUG=fips140=only`),
   - `WARDYN_TEST_POOL_GUARD` (set to `1` in a test binary, every pool `db.Connect` opens exits the binary when one goroutine asks the pool for a connection while it holds another; ignored outside a test binary),
   - `WARDYN_TEST_DOCKER`, `WARDYN_TEST_CACHE_REPO`, `WARDYN_TEST_TOOLS_DIR`, `WARDYN_ENVBUILD_TEST_FLOAT`, `WARDYN_ENVBUILD_TEST_INT`, `WARDYN_FAKE_MARKER`, `WARDYN_NEGCTL`,

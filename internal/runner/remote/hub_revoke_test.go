@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -91,4 +92,95 @@ func testHubRevocation(t *testing.T, otherReplica bool) {
 	if err := link.Call(ctx, "probe", nil, nil); !errors.Is(err, runner.ErrRunnerOffline) {
 		t.Fatalf("revoked dispatch: %v", err)
 	}
+}
+
+// stallConn is the org end of a link whose runner stopped reading: once
+// stalled, a write blocks until its ctx ends or the conn closes.
+type stallConn struct {
+	runnerwire.Conn
+	stalled   atomic.Bool
+	blocked   chan struct{}
+	block     sync.Once
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func (c *stallConn) WriteFrame(ctx context.Context, f runnerwire.Frame) error {
+	if !c.stalled.Load() {
+		return c.Conn.WriteFrame(ctx, f)
+	}
+	c.block.Do(func() { close(c.blocked) })
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.closed:
+		return runnerwire.ErrLinkDown
+	}
+}
+
+func (c *stallConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+// R2-0103: Revoke ends a session whose write is stalled within its one-second
+// bound, closing the link, instead of waiting behind the stalled write.
+func TestHubRevokeEndsASessionWithAStalledWrite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	row := types.Runner{ID: uuid.New(), PublicKey: pub, State: types.RunnerClaimed, OrgURLSHA256: federation.OrgURLSHA256("https://org.example")}
+	var stored atomic.Pointer[types.Runner]
+	stored.Store(&row)
+	link := &Link{}
+	sub := New(row.ID.String(), link, Options{})
+	hub := NewHub(ctx, HubConfig{OrgURL: "https://org.example", Lookup: func(context.Context, uuid.UUID) (types.Runner, error) { return *stored.Load(), nil },
+		Admit: func(context.Context, types.Runner) (Admission, error) {
+			return Admission{Substrate: sub, Link: link,
+				Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
+				BeginInventory: func(context.Context, string) error { return nil },
+				StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil },
+				Event:          func(context.Context, runnerwire.Event) error { return nil },
+			}, nil
+		},
+	})
+	defer hub.Close()
+	online, resumed := make(chan *runnerwire.Peer, 1), make(chan bool, 1)
+	conns := make(chan *stallConn, 1)
+	hubDone := make(chan error, 1)
+	var dials atomic.Int32
+	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: "https://org.example", RunnerID: row.ID.String(), PrivateKey: key, Hooks: sessionHooks(online, resumed),
+		Dial: func(context.Context) (runnerwire.Conn, error) {
+			if dials.Add(1) > 1 {
+				return nil, errors.New("one connection only")
+			}
+			org, run := runnerwire.Loopback()
+			sc := &stallConn{Conn: org, blocked: make(chan struct{}), closed: make(chan struct{})}
+			conns <- sc
+			go func() { hubDone <- hub.Serve(ctx, sc, row.ID) }()
+			return run, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = client.Run(ctx) }()
+	awaitValue(t, ctx, online)
+	waitOnline(t, ctx, link)
+	sc := awaitValue(t, ctx, conns)
+	terminal := row
+	terminal.State = types.RunnerRevoked
+	stored.Store(&terminal)
+	sc.stalled.Store(true)
+	go func() { _ = link.Call(ctx, "probe", nil, nil) }()
+	awaitValue(t, ctx, sc.blocked) // the CALL holds the write lock in a write that never moves
+	revoked := make(chan error, 1)
+	go func() { revoked <- hub.Revoke(ctx, row.ID) }()
+	select {
+	case <-revoked:
+	case <-time.After(3 * time.Second):
+		_ = sc.Close() // unblock the stalled write so the test can end
+		t.Fatal("Revoke waited behind a stalled write past its one-second bound")
+	}
+	awaitValue(t, ctx, hubDone)
 }
