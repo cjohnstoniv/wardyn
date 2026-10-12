@@ -191,13 +191,18 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// pass that read the run's lost mark before the claim cannot stop the proxy
 	// this revive starts. It is released after the settle, and after the
 	// compensation of a failed one.
-	ctx, unlockRun, err := s.lockRunOp(ctx, run.ID)
-	if err != nil {
-		return reviveResult{}, reviveRefused(http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
+	ctx, unlockRun, rerr := s.lockRevive(ctx, run)
+	if rerr != nil {
+		return reviveResult{}, rerr
 	}
 	defer unlockRun()
+	// One deadline bounds every call the revive makes to a runner while it holds the run's lock, so a
+	// runner that stops answering cannot hold the lock, or a lock connection, past it.
+	runnerDeadline := time.Now().Add(reviveRunnerTimeout)
+	ctx, endRunnerCalls := withRunnerDeadline(ctx, run, runnerDeadline)
+	defer endRunnerCalls()
 
-	c, rerr := s.reviveCeiling(ctx, run)
+	c, rerr := s.reviveCeilingAdmitting(ctx, run, actorType, actor)
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
@@ -251,6 +256,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// This is also what bounds how long the run's lock is held.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
+	// The runner calls below stay under the revive's one runner deadline; the compensation does not.
+	runnerCtx, endClaimedRunnerCalls := withRunnerDeadline(ctx, run, runnerDeadline)
+	defer endClaimedRunnerCalls()
 	data := map[string]any{
 		"subject":                 run.CreatedBy,
 		"profile_id":              run.GovernanceProfileID,
@@ -263,7 +271,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		"proxy_release":           version.Version,
 	}
 	s.stampLiveRevive(run)
-	if err := rv.ReplaceProxy(ctx, run.SandboxRef, cfgJSON); err != nil {
+	if err := s.replaceRevivedProxy(runnerCtx, rv, run, cfgJSON); err != nil {
 		data["error"] = err.Error()
 		if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
 			// The old proxy was never touched (an image that cannot be pulled, a
@@ -309,7 +317,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		}
 		// Only now, behind the new proxy. A failed start is lost (reboot) again,
 		// which stops the new proxy with the agent.
-		if err := starter.StartSandbox(ctx, run.SandboxRef); err != nil {
+		if err := s.startRevivedAgent(runnerCtx, starter, run); err != nil {
 			data["error"] = "start agent: " + err.Error()
 			return reviveResult{}, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonReviveAgentStartFailedLost,
 				"the run's agent could not be started, so the run is stopped and lost until revived: ", err)
@@ -686,30 +694,6 @@ func reviveFrom(run types.AgentRun) string {
 		return "live"
 	}
 	return string(run.LostReason)
-}
-
-// ownerCeiling is the part of the owner's profile a revive re-asserts: its
-// denies, and its name for the audit row.
-type ownerCeiling struct {
-	deny    []string
-	profile string
-}
-
-// reviveCeiling is the OWNER's current ceiling: the profile captured on the
-// run at create, as it stands now. It is not a dispatch lane's ceiling (no
-// principal is resolved; the run row names the profile). No captured profile
-// (an unassigned or super-admin owner) has no profile denies, as at dispatch.
-// A captured profile that no longer exists is refused: its walls cannot be
-// known.
-func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun) (ownerCeiling, *reviveError) {
-	p, ref := s.ownerProfile(ctx, run)
-	switch {
-	case ref != nil:
-		return ownerCeiling{}, reviveRefused(ref.status, ref.reason, ref.msg)
-	case p == nil:
-		return ownerCeiling{}, nil
-	}
-	return ownerCeiling{deny: p.Ceiling.DeniedDomains, profile: p.Name}, nil
 }
 
 // reasserted is what reassertProxyCeiling changed.

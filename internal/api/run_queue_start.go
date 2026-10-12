@@ -334,7 +334,7 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 		s.revokeKilledStart(st)
 		return nil
 	}
-	gw, _, ok := s.wireRunGrants(st.ctx, st.cw, st.r, started, s.cfg.Now().UTC(), f.spec, req, f.comps)
+	gw, _, ok := s.wireRunGrants(st.ctx, st.cw, st.r, started, s.cfg.Now().UTC(), f.spec, req, f.comps, f.localDelivery)
 	if !ok {
 		return &queueEnd{hint: createRunGrantAbortHint}
 	}

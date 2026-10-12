@@ -56,6 +56,9 @@
 # docs/sdk.md 15648 measured after train 17: DS1-S1b merge.
 # 0.9 A-L14: docs/sdk.md 15209 adds 73 over 15136 for the built-in GitHub component bullet and its two refusal reasons.
 # docs/sdk.md 15721 measured after A-L14 merge (train 18).
+# docs/sdk.md 15757 adds 36 over 15721 (0.9 local-enable fix-r3): placement_denied at revive and dispatch, run_renew_lease_busy.
+# docs/sdk.md 15773 adds 16 over 15757 (0.9 local-enable fix-r4): the probe's exemption is at create and dispatch; a revive's per-runner slot.
+# docs/sdk.md 15776 adds 3 over 15773 (0.9 local-enable fix-r5): a revive's slot is the runner owner's.
 # docs/sdk.md 15772 adds 51 over 15721 (0.9 Q-b): the run_queued and run_max_wait_invalid reasons.
 # docs/sdk.md 15798 adds 26 (0.9 Q-b fix-r3): a queued 201's resources_applied is as of the launch.
 # 0.9 A-L4: docs/sdk.md 14098 adds 77 over 14021: three multi-workspace reason rows and the widened overlap, target and start-folder rows.
@@ -70,7 +73,8 @@
 # 0.9 B-pool-catalogue: docs/sdk.md 15811 adds 12 over 15799: the pool list's availability reasons and the 400 for a bad ?run_type=.
 # docs/sdk.md 16314 measured after measured after B-pool-catalogue (train 24).
 # docs/sdk.md 16330 measured after measured after merge batch into DS3-S2.
-docs/sdk.md=16330 share=21
+# docs/sdk.md 16385 measured after local-enable merge.
+docs/sdk.md=16385 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

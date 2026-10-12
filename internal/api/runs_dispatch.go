@@ -664,7 +664,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
-	sb, err := s.createSandboxAtTarget(createCtx, run, spec)
+	// A run on a runner is leased first: its runner refuses a create no lease authorizes.
+	execution, err := s.leaseRunOnRunner(ctx, run)
+	var sb runner.Sandbox
+	if err == nil {
+		sb, err = s.createSandboxAtTarget(createCtx, run, spec)
+	}
 	endStartWait()
 	stopCreateLease()
 	if err != nil {
@@ -712,16 +717,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	stopDispatchLease := s.holdRunWatcherLease(ctx, run.ID)
 	defer stopDispatchLease()
 
-	if err := s.cfg.Store.SetSandboxRef(ctx, run.ID, sb.Ref); err != nil {
-		// A lost sandbox ref is not fatal to THIS dispatch (the run proceeds), but on a
-		// daemon restart ReconcileOnBoot finds no ref and finalizes the run FAILED while
-		// the container keeps running untracked. Log + audit the loss so the orphan is
-		// discoverable, rather than discarding the error silently.
-		slog.ErrorContext(ctx, "wardynd: SetSandboxRef failed; sandbox may be orphaned/untracked across a daemon restart",
-			slog.String("run_id", run.ID.String()), slog.String("sandbox_ref", sb.Ref), slog.Any("err", err))
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": sb.Ref, "set_sandbox_ref_error": err.Error()})))
-	}
+	s.recordSandboxRef(ctx, run.ID, sb.Ref)
 
 	// Kill-race guard: advance STARTING->RUNNING CONDITIONALLY. CreateSandbox can
 	// be slow (image pull); a concurrent POST /runs/{id}/kill may have moved the
@@ -757,7 +753,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
 
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
-	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive, auditAgentPolicy)
+	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive, execution, auditAgentPolicy)
 }
 
 // startAgentOrIdle is dispatch's final phase, after the run is RUNNING.
@@ -780,7 +776,7 @@ const mainProcessExecID = runner.MainProcessExecID
 // onAgentStarted, when non-nil, runs once the agent's Exec has succeeded: on an
 // exec-less runner that is the moment its container — and the managed files
 // delivered into it — first exists.
-func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, image string, interactive bool, onAgentStarted func()) {
+func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, image string, interactive bool, execution runnerExecution, onAgentStarted func()) {
 	byoi := strings.HasPrefix(image, "wardyn-byoi/")
 
 	if interactive {
@@ -814,7 +810,10 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 			}
 		}
 		argv := []string{"/usr/local/bin/agent-run", run.Task}
-		execID, xerr := s.cfg.Runner.Exec(ctx, ref, argv)
+		execID, xerr := s.cfg.Runner.Exec(execution.bind(ctx), ref, argv)
+		if xerr == nil {
+			xerr = s.bindRunnerExecution(ctx, execution, execID)
+		}
 		if xerr != nil {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
 				run.ID.String(), "failure", mustJSON(map[string]any{"error": xerr.Error(), "reason": "agent_start"})))
@@ -954,9 +953,10 @@ func patBrokerGrants(pat map[string]string, on bool) map[string]proxy.PATGrant {
 }
 
 // dispatchAdmitted refuses, before anything is claimed or written, a run no
-// lane may dispatch yet (a non-remote placement) and a ceiling nobody resolved.
+// lane may dispatch (a non-remote placement create bound to no runner) and a
+// ceiling nobody resolved.
 func (s *Server) dispatchAdmitted(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling) bool {
-	if s.unsupportedLocalDispatch(ctx, run) {
+	if s.unsupportedLocalDispatch(ctx, run) || s.dispatchPlacementDenied(ctx, run, ceiling) {
 		return false
 	}
 	// Fail closed on a ceiling nobody resolved. The compiler already forces a
