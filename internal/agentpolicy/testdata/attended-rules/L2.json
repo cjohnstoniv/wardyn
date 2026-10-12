@@ -1,0 +1,18 @@
+{
+  "allowManagedPermissionRulesOnly": true,
+  "permissions": {
+    "allow": [
+      "Read",
+      "mcp__github__get_issue"
+    ],
+    "ask": [
+      "WebFetch"
+    ],
+    "defaultMode": "acceptEdits",
+    "deny": [
+      "Bash",
+      "mcp__github__create_issue"
+    ],
+    "disableAutoMode": "disable"
+  }
+}

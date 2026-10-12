@@ -68,7 +68,7 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	var err error
 	if response.Access, err = s.accessFor(r, accessInputs{req: f.req, spec: f.spec, prov: f.prov, source: f.source,
-		scmSite: f.scmSite, mpChoice: f.mpChoice, comps: f.comps, facts: response.Components}); err != nil {
+		scmSite: f.scmSite, mpChoice: f.mpChoice, comps: f.comps, facts: response.Components, level: f.autonomy.Level}); err != nil {
 		writeServerError(w, r, "resolve capability", err)
 		return
 	}

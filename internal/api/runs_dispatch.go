@@ -290,7 +290,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	applyEphemeralDirsEnv(sandboxEnv, p.EphemeralDirs)
 	applyUserDriveEnv(sandboxEnv, p.Drive)
 	// The agent-side half of this run's autonomy level — see agentPolicyFor.
-	agentPolicy, apErr := s.agentPolicyFor(ctx, run, p.Harnesses, p.holdLane(), ceiling.agentGuardrailLocks)
+	agentPolicy, apErr := s.agentPolicyFor(ctx, run, p.Harnesses, p.holdLane(), ceiling.agentGuardrailLocks, p.attendedToolRules())
 	if apErr != nil {
 		// apErr wraps s.cfg.Runner.Capabilities' own error, which can carry
 		// driver/substrate text (a Docker daemon socket error, a k8s API
@@ -298,10 +298,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// as their FailureHint (the #445 class SD-4's guard exists to catch).
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": apErr.Error()})))
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, fmt.Sprintf(
-			"This run was not launched: its runner's capabilities could not be confirmed, "+
-				"so whether it can deliver this run's managed settings (%s) is unknown",
-			agentPolicyBasis(run.AutonomyLevel, p.holdLane(), ceiling.agentGuardrailLocks)))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, agentPolicyFailureHint(apErr, run.AutonomyLevel, p.holdLane(), ceiling.agentGuardrailLocks))
 		return
 	}
 	// Caller-supplied non-secret env (p.ExtraEnv): the AWS harness login's
