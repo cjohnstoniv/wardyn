@@ -124,7 +124,7 @@ func (s *Substrate) Advertised() (runner.TargetFacts, bool) {
 		return runner.TargetFacts{}, false
 	}
 	return runner.TargetFacts{Classes: slices.Clone(c.Support.Classes), CapacityAdvertised: true, CPUMillisMax: c.CPUMillisMax, MemoryMiBMax: c.MemoryMiBMax,
-		EphemeralDiskEnforcement: c.Support.EphemeralDiskEnforcement}, true
+		EphemeralDiskEnforcement: c.Support.EphemeralDiskEnforcement, KeepsEnded: true, UserDrives: c.Support.UserDrives}, true
 }
 
 // HandleEvent keeps the `caps` event and passes the rest to Options.OnEvent.

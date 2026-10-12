@@ -192,6 +192,29 @@ export interface RunnerPoolChoice {
   reason?: PoolAvailabilityReason | RunnerPoolReason;
   limits?: EffectiveRunLimits[];
   barriers?: ConfinementClass[];
+  /** What this pool's runners do with the main drive's size; absent on a pool the caller may only manage. */
+  main_drive?: MainDriveFacts;
+}
+
+/** Go: client.MainDriveEnforcement. The weakest word across the pool's targets; never request or external. */
+export type MainDriveEnforcement = "filesystem" | "eviction" | "none" | "unknown";
+
+/** Go: client.MainDriveCoverage. Absent when enforcement is none or unknown. */
+export type MainDriveCoverage = "all" | "scratch_paths";
+
+/** Go: client.MainDriveKeep. `grace_sec` is set only when supported. */
+export interface MainDriveKeep {
+  supported: boolean;
+  grace_sec?: number;
+}
+
+/** Go: client.MainDriveFacts. */
+export interface MainDriveFacts {
+  enforcement: MainDriveEnforcement;
+  basis: "substrate" | "runner_asserted";
+  coverage?: MainDriveCoverage;
+  keep: MainDriveKeep;
+  drive_mounts: boolean;
 }
 
 /** Go: runnerpool.BarrierOption. Always CC1, CC2, CC3, in that order. */
