@@ -96,7 +96,7 @@ function openSignInTab(): Window | null {
 // gate — only the answer to "does this page still belong to who signed in".
 // M-5 (#636) deleted /ssh-keys with no alias — SshKeysPane is mounted once
 // now, in /account, which already covers it.
-const MEMBER_REACHABLE_PREFIXES = ["/runs", "/approvals", "/workspaces", "/secrets", "/account"];
+const MEMBER_REACHABLE_PREFIXES = ["/runs", "/approvals", "/workspaces", "/secrets", "/account", "/templates"];
 const OPERATOR_ONLY_PREFIXES = ["/admin/providers"];
 export function roleCanReach(path: string, role: string): boolean {
   const under = (prefixes: string[]) => prefixes.some((p) => path === p || path.startsWith(`${p}/`));
@@ -221,7 +221,9 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     // before the lapse), whoever signs in is treated as someone else — the
     // same person losing a draft in that rare case is the accepted cost.
     if (!principalResolved || me.principal !== principal) {
-      reauth.reloadAs(roleCanReach(location.pathname, me.role) ? location.pathname + location.search : "/runs");
+      // New Run's query names the previous person's template or run: never replay it.
+      const page = location.pathname === "/runs/new" ? location.pathname : location.pathname + location.search;
+      reauth.reloadAs(roleCanReach(location.pathname, me.role) ? page : "/runs");
       return;
     }
     if (!roleCanReach(location.pathname, me.role)) {
