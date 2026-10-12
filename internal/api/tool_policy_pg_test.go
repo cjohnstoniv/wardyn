@@ -18,6 +18,7 @@ func createdToolGate(t *testing.T, body string) toolCallSite {
 	t.Helper()
 	fr := &fakeRunner{}
 	srv, _ := pgHarnessWithRunner(t, fr)
+	srv.cfg.AgentImages = composeAgentImages
 	w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create = %d %s", w.Code, w.Body.String())
@@ -39,6 +40,7 @@ func createdToolGate(t *testing.T, body string) toolCallSite {
 func doorToolPolicy(t *testing.T, body string) (rules []types.ToolRule, sources map[string]string, lanes []string) {
 	t.Helper()
 	h := newHarness(t)
+	h.srv.cfg.AgentImages = composeAgentImages // an image carries Claude Code, so the installed-harness check passes
 	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/policy-preview", adminToken, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("preview = %d %s", w.Code, w.Body.String())
