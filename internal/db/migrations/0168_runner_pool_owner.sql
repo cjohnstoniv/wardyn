@@ -7,8 +7,9 @@
 -- administrators keep it. A tombstoned Self-Hosted pool may lose its owner to the person's erasure.
 --
 -- The organisation no longer has a Self-Hosted default: each person's own default names their own pool,
--- and an organisation preference for Self-Hosted is cleared, so a launch that names nothing falls back to
--- the organisation's Remote Provided default rather than being refused runner_pool_required.
+-- and an organisation preference for Self-Hosted is cleared to none, never switched to Remote Provided.
+-- With no organisation preference, a launch that names no pool, from a person with no preference of
+-- their own, is refused runner_pool_required until the person or an administrator sets one.
 --
 -- Clean break: a Self-Hosted pool created before this migration has no owner, so it is removed, with
 -- its members, the organisation and personal default slots that name it, and any run still waiting for
