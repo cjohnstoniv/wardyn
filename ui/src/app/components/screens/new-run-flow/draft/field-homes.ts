@@ -40,7 +40,7 @@ export const FIELD_HOME: Record<string, FieldHome> = {
   ...homes("document", "ends_after_sec no_end image allowed_image devcontainer_repo devcontainer_ref placement runner_id " +
     "policy_id preset preset_version agent task repo workspace_id interactive task_mode interactive_start seed_auto_tools " +
     "tool_approvals integration_id model_provider"),
-  ...homes("excluded", "title description mode_contract"),
+  ...homes("excluded", "title description mode_contract max_wait_sec policy_overlay"),
   ...homes("review", policy(POLICY_REVIEW)),
   ...homes("document", policy(POLICY_DOCUMENT)),
 };
@@ -57,7 +57,7 @@ export const FIELD_HOME_OVERRIDES: Record<string, FieldHome> = {
 };
 
 export const REVIEW_GROUP_OF_FIELD: Record<string, ReviewGroupId> = {
-  ...groups("run", "shape experience workload interactive task_mode interactive_start agent task preset preset_version title description mode_contract"),
+  ...groups("run", "shape experience workload interactive task_mode interactive_start agent task preset preset_version title description mode_contract max_wait_sec policy_overlay"),
   ...groups("where", "runner_pool_id confinement_class placement runner_id image allowed_image devcontainer_repo devcontainer_ref " +
     policy("min_confinement_class")),
   ...groups("work", "workspaces drive start_folder no_repositories_or_drives repo workspace_id " + policy("workspace_mounts workspace_repos")),
@@ -86,12 +86,12 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   via_org_destination_refused: "tools", via_org_cap_exceeded: "tools",
   placement_local_path: "files",
   run_mode_required: "run", run_mode_invalid: "run", run_mode_conflict: "run", run_background_only: "run",
-  start_folder_invalid: "files",
+  start_folder_invalid: "files", main_drive_unenforceable: "files",
   run_shape_conflict: "shape",
   runner_pool_invalid: "run", runner_pool_required: "run", runner_pool_not_found: "run", runner_pool_unavailable: "run",
   runner_pool_default_unavailable: "run", runner_pool_stale: "run", runner_pool_no_eligible_member: "run",
   runner_pool_member_mismatch: "run", runner_pools_unavailable: "run", runner_pool_run_type_not_allowed: "run",
-  runner_pool_barrier_not_allowed: "run",
+  runner_pool_barrier_not_allowed: "run", runner_pool_queue_full: "run", runner_pool_full: "run",
   template_document_invalid: "document", template_version_unsupported: "document", template_field_unknown: "document",
   template_field_invalid: "document", template_field_excluded: "document", template_secret_refused: "document",
   template_run_state_refused: "document", template_metadata_in_content: "document", template_field_unavailable: "document",

@@ -148,3 +148,11 @@ the box on the compose stack. Four things ship pre-wired:
 - A New Run request's image comes from its harnesses: the agent base image for none, and a harness's own image for one. Otherwise it is the smallest image declared for the set, under a `WARDYN_AGENT_IMAGES` key that joins sorted harness ids with `+`.
 - A harness no image here carries is refused (`harness_not_installed`). On a published install Claude Code maps to the agent base image, so it is not installed.
 - Migration `0164_run_harnesses` records each run's harnesses. A split-role install grants the app role `SELECT, INSERT` on `run_harnesses`.
+
+### Offering two harnesses in one run
+
+- A published install declares no image for two harnesses, so New Run refuses Claude Code with Codex there (`harness_set_no_image`) until an operator builds and declares one.
+- Build it with `make agent-image-harnesses`: Claude Code with Codex, a local build only ([deploy/images/README.md](../../deploy/images/README.md#harness-set-image-harnesses)).
+- Declare it under the `+` key and restart wardynd: `WARDYN_AGENT_IMAGES='{"claude-code+codex-cli":"wardyn/agent-harnesses:local"}'`. On Kubernetes, push it to a registry the cluster pulls from and declare that reference.
+- `GET /api/v1/setup/status` lists each declared set in `harness_sets`. Dispatch names the run's set for the image's launcher in `WARDYN_HARNESSES` and `WARDYN_START_HARNESS` ([ENV.md](../ENV.md)).
+- An AWS sign-in provider (`bedrock_sso`) serves only a run's primary harness, the one it starts or else lists first; on any other harness the run is refused.

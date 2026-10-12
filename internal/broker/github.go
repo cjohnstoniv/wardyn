@@ -267,6 +267,39 @@ func (m *githubMinter) ListBranches(ctx context.Context, repo string, limit int)
 	}
 }
 
+// InstallationPermissions reads the App's own grant on the installation that
+// covers repo, through the App-authenticated client: GitHub reports it on the
+// installation itself.
+func (m *githubMinter) InstallationPermissions(ctx context.Context, repo string) (map[string]string, error) {
+	owner, names, err := splitRepos([]string{repo})
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, m.timeout())
+	defer cancel()
+	client, err := m.client(ctx)
+	if err != nil {
+		return nil, err
+	}
+	instID, err := m.installationID(ctx, client, owner, names[0])
+	if err != nil {
+		return nil, err
+	}
+	inst, _, err := client.Apps.GetInstallation(ctx, instID)
+	if err != nil {
+		return nil, githubRefusal(fmt.Errorf("broker: read installation for %s: %w", owner, err))
+	}
+	b, err := json.Marshal(inst.GetPermissions())
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, fmt.Errorf("broker: decode installation permissions: %w", err)
+	}
+	return out, nil
+}
+
 // githubRefusal wraps err in ErrGitHubRefused when GitHub itself answered it
 // with a refusal status; any other error passes through unchanged.
 func githubRefusal(err error) error {
@@ -355,6 +388,9 @@ func ValidateGitHubScopeShape(scope json.RawMessage) error {
 	var sc githubScope
 	if err := json.Unmarshal(scope, &sc); err != nil {
 		return fmt.Errorf("broker: decode github scope: %w", err)
+	}
+	if sc.API || len(sc.Capabilities) > 0 {
+		return errors.New("broker: api and capabilities are set only by the GitHub CLI component, never by a policy")
 	}
 	if _, _, err := splitRepos(sc.Repos); err != nil {
 		return err

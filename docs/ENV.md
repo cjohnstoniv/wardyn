@@ -1441,6 +1441,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The real access token is set on the wire as `x-amz-sso_bearer_token` at the run's own `portal.sso.<region>` host (TLS-MITM, paired injection grant).
 - And a session that lapses **mid-run HOLDS** the sandbox's next `GetRoleCredentials` call while its owner signs in again (`WARDYN_CREDENTIAL_REAUTH_TIMEOUT`, below) instead of failing the run.
 - `off`: the pre-0.7.6 behaviour — the token is written into the sandbox, no `portal.sso` MITM, no hold, no sign-in requests.
+- An AWS CLI component has no `off` lane: with the switch off, every run door refuses it (`component_cli_aws_inject_off`), and so does dispatch.
 - **`off` applies to NEW dispatches only**: the placeholder cache, the injection grant and the MITM entry are all authored at dispatch.
 - So a run already running keeps the lane it was authored with until it ends.
 - Flip it, then relaunch the runs that matter or wait them out.
@@ -1911,6 +1912,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_START_HARNESS` | string | (unset) | the one harness of `WARDYN_HARNESSES` that starts with the run; empty when none does. Set together with `WARDYN_HARNESSES` |
 | `WARDYN_CODEX_BASE_URL` | string (URL) | (unset) | the base URL a `codex-cli` run's codex is pointed at: the brokered `<proxy>/wardyn/llm/openai` route plus the path the final upstream needs (`codexBaseURL`, [`internal/api/runs_dispatch_provider.go`](../internal/api/runs_dispatch_provider.go)). [Details](#wardyn_codex_base_url) |
 | `WARDYN_CODEX_MODEL` | string | (unset) | **Switched off in 0.8.6:** a provider write of the `azure_foundry` kind answers `400` "the azure_foundry kind is not available in this release", so no run sets this yet (`providerAzureLane.env`, [`internal/api/provider_azure.go`](../internal/api/provider_azure.go)). [Details](#wardyn_codex_model) |
+| `WARDYN_MCP_SERVERS_JSON` 🔒 | string (JSON) | (unset) | a `codex-cli` run's MCP servers as `{"<server key>":"<broker URL>"}`, set only when a server is on for Codex CLI; each URL carries Codex's own broker token, so it rides the secret env (`dispatchMCP`, [`internal/api/run_mcp.go`](../internal/api/run_mcp.go)). [Details](#wardyn_mcp_servers_json) |
 | `WARDYN_TOOL_APPROVALS` | string | (unset) | `hold` routes an AUTONOMOUS (non-interactive) Claude Code run's own tool calls to a Wardyn approval instead of running unsupervised; unset/`auto` is today's `--dangerously-skip-permissions` behavior. Never set for an interactive run or for codex-cli. [Details](#wardyn_tool_approvals) |
 | `WARDYN_TOOLGATE_CREDENTIAL` | secret | (unset) | The started harness's approval credential (two or more harnesses), sent by `wardyn-toolgate` as a Bearer. Not container env: the file `/run/wardyn/secrets/wardyn-toolgate-<harness>` its launch reads; Docker 0400 agent uid, Kubernetes 0440 fsGroup 1000 from the run Secret. Never set by hand |
 | `WARDYN_AUTONOMY_LEVEL` | string | (unset) | the run's RESOLVED autonomy level (`L0` attended, `L1` gated, `L2` unattended, `L3`), frozen on the run row by the launch gate. An ANNOUNCEMENT, never the mechanism. [Details](#wardyn_autonomy_level) |
@@ -1981,6 +1983,13 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - So every other codex run is unchanged.
 - A repo config or the interactive model picker can still ask for another model; the proxy's route gate then refuses that request.
 - No real credential is in the sandbox.
+
+### `WARDYN_MCP_SERVERS_JSON`
+
+- A `codex-cli` run's remote MCP servers: `{"<server key>":"<broker URL>"}`, where each URL is `<proxy>/wardyn/mcp/<token>/<server key>` (`dispatchMCP`, [`internal/api/run_mcp.go`](../internal/api/run_mcp.go)).
+- Set by dispatch only when an MCP component's server is turned on for Codex CLI. The token is Codex's own; the proxy holds only its digest, so the variable rides the secret env.
+- The codex image's `prepare_codex_config` ([`deploy/images/codex-cli/agent-run`](../deploy/images/codex-cli/agent-run)) writes one `[mcp_servers.<key>]` table with that `url` per entry, replacing a table of the same key.
+- Never a server's own address or credential: the broker route is the only path to a server, and it decides which servers Codex reaches whatever `config.toml` says.
 
 ### `WARDYN_TOOL_APPROVALS`
 

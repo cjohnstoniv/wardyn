@@ -3,8 +3,9 @@ docs/operations/secrets-and-keys.md=10575 share=25
 # docs/operations/secrets-and-keys.md 10535 adds 1001 over 9534 (0.9 F-588 M1): the 'Key service: AWS KMS' section, AWS KMS in the key-service lists, and the custody sentence for all three key services.
 # docs/operations/secrets-and-keys.md 10434 adds 900 (0.9 F-588 M1): the 'Key service: AWS KMS' section and AWS KMS in the key-service lists.
 # docs/operations/secrets-and-keys.md 10575 adds 40 (0.9 F-588 M2): the Helm bullet in 'Key service: AWS KMS' and the TestLive_AWSKMS bullet under 'Not verified live yet'.
-docs/operations/monitoring.md=2001 share=13
+docs/operations/monitoring.md=2029 share=13
 # docs/operations/monitoring.md=2001 adds 158 (0.9 F-1513): the five wardyn_audit_delivery_* metric rows (#1513).
+# docs/operations/monitoring.md=2029 adds 28 (0.9 Q-b): the run_queue sweep row.
 docs/operations/run-lifetime.md=2007 share=21
 docs/operations/kubernetes-known-gaps.md=2060 share=15
 # docs/operations/secrets-and-keys.md 9534 adds 44 (0.9 G-sec-rest, #1977): the 'Requiring it' paragraph says the flag covers new writes only, existing local-key rows are not moved, and kek_local_rows reports them.

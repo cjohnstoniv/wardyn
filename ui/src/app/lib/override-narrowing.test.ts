@@ -59,7 +59,7 @@ describe("override narrowing table", () => {
     expect(overrideMayBeClamped("agent_host", "add")).toBe(true);
     expect(overrideMayBeClamped("agent_host", "remove")).toBe(false);
     expect(overrideOffered("agent_host_wildcard", "add")).toBe(false);
-    expect(overrideOffered("tool_rule_allow", "add")).toBe(false);
+    expect(overrideOffered("tool_rule_allow", "add")).toBe(true);
     expect(overrideOffered("tool_rule_restrict", "add")).toBe(true);
     expect(overrideOffered("push_rule_deny", "add")).toBe(true);
     expect(overrideOffered("push_rule_deny", "remove")).toBe(false);

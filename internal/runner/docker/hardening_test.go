@@ -894,7 +894,7 @@ func TestApplyDiskQuota_DriverWithoutSizeOptRunsUncapped(t *testing.T) {
 	}
 }
 
-// TestApplyDiskQuota_OrgDefaultOnUnenforceableHostRunsUncapped is S0's half of
+// TestApplyDiskQuota_SoftSizeOnUnenforceableHostRunsUncapped is S0's half of
 // the fail-closed asymmetry, and the reason runner.Resources carries a
 // provenance bit at all.
 //
@@ -904,7 +904,7 @@ func TestApplyDiskQuota_DriverWithoutSizeOptRunsUncapped(t *testing.T) {
 // desktop tier IS overlay2 over ext4, so failing closed there would brick every
 // request-less desktop run the day an admin typed a number for the Kubernetes
 // half of the estate. Nobody asked this run for a cap.
-func TestApplyDiskQuota_OrgDefaultOnUnenforceableHostRunsUncapped(t *testing.T) {
+func TestApplyDiskQuota_SoftSizeOnUnenforceableHostRunsUncapped(t *testing.T) {
 	info := system.Info{
 		Driver:       "overlay2",
 		DriverStatus: [][2]string{{"Backing Filesystem", "ext4"}},
@@ -912,15 +912,15 @@ func TestApplyDiskQuota_OrgDefaultOnUnenforceableHostRunsUncapped(t *testing.T) 
 
 	var hc *container.HostConfig
 	logged := captureSlog(t, func() {
-		hc = hardenedHostConfig("none", "", runner.Resources{DiskMiB: 2048, DiskMiBFilled: true}, info)
+		hc = hardenedHostConfig("none", "", runner.Resources{DiskMiB: 2048, DiskMiBSoft: true}, info)
 	})
 	// UNCAPPED: the size opt never reaches the daemon, so the daemon never
 	// refuses the create.
 	if _, ok := hc.StorageOpt["size"]; ok {
 		t.Errorf("StorageOpt = %v, want no size opt — a FILLED org default must degrade, not fail the run closed", hc.StorageOpt)
 	}
-	if !strings.Contains(logged, "org default not enforceable on this host") {
-		t.Errorf("the degrade is silent; want the org-default warning: %q", logged)
+	if !strings.Contains(logged, "disk size not enforceable on this host") {
+		t.Errorf("the degrade is silent; want the soft-size warning: %q", logged)
 	}
 	// The word the admin surface reads, in the line itself.
 	if !strings.Contains(logged, string(types.StorageEnforcementNone)) {
@@ -937,7 +937,7 @@ func TestApplyDiskQuota_OrgDefaultOnUnenforceableHostRunsUncapped(t *testing.T) 
 	// A host that CAN enforce ignores the bit entirely: a filled default is a
 	// real cap there, which is the whole point of setting one.
 	enforcing := system.Info{Driver: "overlay2", DriverStatus: [][2]string{{"Backing Filesystem", "xfs"}}}
-	hc = hardenedHostConfig("none", "", runner.Resources{DiskMiB: 2048, DiskMiBFilled: true}, enforcing)
+	hc = hardenedHostConfig("none", "", runner.Resources{DiskMiB: 2048, DiskMiBSoft: true}, enforcing)
 	if got := hc.StorageOpt["size"]; got != "2048m" {
 		t.Errorf("StorageOpt[size] = %q, want 2048m — a filled default is enforced where the host can enforce it", got)
 	}

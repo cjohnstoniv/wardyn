@@ -387,6 +387,11 @@ func (s *Server) handleRetireServiceIdentity(w http.ResponseWriter, r *http.Requ
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "service_identity.retire", retired.After.Principal(), "success",
 			mustJSON(map[string]any{"tokens_revoked": retired.TokensRevoked})))
 	}
+	// So do its runs waiting in a pool's queue: a retired identity's run never starts.
+	if _, err := s.cancelQueuedRunsOf(ctx, retired.After.Principal(), queueCancelServiceRetired); err != nil {
+		writeServerError(w, r, "cancel the service identity's waiting runs", err)
+		return
+	}
 	// The identity's stored credentials go with it, beside the retire row. The retire is already durable,
 	// so a failure here is recorded and answered 500, and the same DELETE run again erases them.
 	if s.cfg.Secrets != nil {

@@ -173,9 +173,31 @@ func (p *Proxy) servePATAPI(w http.ResponseWriter, r *http.Request, host string,
 		p.refusePATAPI(w, r, host, port, why)
 		return
 	}
+	p.forwardAPIDoor(w, r, host, port, apiDoor{allow: ruleSourcePATAPI, denied: ruleSourcePATAPIDenied, mintFailed: "mint git_pat",
+		credential: func(ctx context.Context) (string, string, error) {
+			token, _, err := p.patToken(ctx, grant)
+			if err != nil {
+				return "", "", err
+			}
+			name, value := patAPIForges[grant.scope().Forge].header(token)
+			return name, value, nil
+		}})
+}
+
+// apiDoor is what one API door hands forwardAPIDoor: the decision sources it
+// records under, and its credential, minted only for an admitted request.
+type apiDoor struct {
+	allow, denied string
+	mintFailed    string
+	credential    func(ctx context.Context) (header, value string, err error)
+}
+
+// forwardAPIDoor is the forward half the API doors share (servePATAPI,
+// serveGitHubAPI), for a request the door already admitted.
+func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host string, port int, d apiDoor) {
 	// The door returns before the generic forward-body scan in serveMITMRequest, so it runs the
 	// same scan here: a registered secret in an MR/PR body or query (the forge reads create params
-	// from either) must not leave with the PAT attached. Before the mint, so a refused request
+	// from either) must not leave with the credential attached. Before the mint, so a refused request
 	// never redeems a token.
 	var bodyReader io.Reader = r.Body
 	var scanSummary *egress.ScanSummary
@@ -210,18 +232,17 @@ func (p *Proxy) servePATAPI(w http.ResponseWriter, r *http.Request, host string,
 			scanSummary = p.skipSummary("skip", "uninspected_channel", contentscan.ChannelGeneric)
 		}
 	}
-	token, _, err := p.patToken(r.Context(), grant)
+	name, value, err := d.credential(r.Context())
 	if err != nil {
-		p.emitPATAPIDecision(r, host, port, egress.Deny, ruleSourcePATAPIDenied)
-		p.httpError(w, "mint git_pat", err, http.StatusBadGateway)
+		p.emitPATAPIDecision(r, host, port, egress.Deny, d.denied)
+		p.httpError(w, d.mintFailed, err, http.StatusBadGateway)
 		return
 	}
-	name, value := patAPIForges[grant.scope().Forge].header(token)
-	registerHeaderCredentialFor(p.maskKey, value) // the rendering that leaves the process, beside the raw token patToken masked
+	registerHeaderCredentialFor(p.maskKey, value) // the rendering that leaves the process, beside the raw token the mint masked
 
 	target, _, err := p.egressTarget(host, port)
 	if err != nil {
-		p.emitPATAPIDecision(r, host, port, egress.Deny, ruleSourcePATAPIDenied)
+		p.emitPATAPIDecision(r, host, port, egress.Deny, d.denied)
 		p.httpError(w, "vet forge host", err, http.StatusForbidden)
 		return
 	}
@@ -241,7 +262,7 @@ func (p *Proxy) servePATAPI(w http.ResponseWriter, r *http.Request, host string,
 	}
 	out, err := http.NewRequestWithContext(context.WithValue(r.Context(), vettedIPKey{}, target), r.Method, upstream, body)
 	if err != nil {
-		p.emitPATAPIDecision(r, host, port, egress.Deny, ruleSourcePATAPIDenied)
+		p.emitPATAPIDecision(r, host, port, egress.Deny, d.denied)
 		p.httpError(w, "build forge request", err, http.StatusBadGateway)
 		return
 	}
@@ -259,7 +280,7 @@ func (p *Proxy) servePATAPI(w http.ResponseWriter, r *http.Request, host string,
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
-	allow := decisionLog(p.reqOf(r, host, port), egress.Allow, ruleSourcePATAPI)
+	allow := decisionLog(p.reqOf(r, host, port), egress.Allow, d.allow)
 	allow.Scan = scanSummary
 	p.emitDialledAllow(allow, host)
 	relay(w, resp)

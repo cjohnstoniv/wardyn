@@ -169,6 +169,13 @@ var gates = map[string]func(LocalPlan) *Refusal{
 		}
 		return nil
 	},
+	// The organisation's App token never leaves the organisation's proxy.
+	"ProxyConfig.GitHubAPI": func(p LocalPlan) *Refusal {
+		if p.Spec.ProxyConfig.GitHubAPI != nil {
+			return refuse(ReasonPlacementCredential, "ProxyConfig.GitHubAPI", "the GitHub CLI's App token cannot be sent to a local runner")
+		}
+		return nil
+	},
 }
 
 // CredentialPaths enumerates every present value of a field the table classifies

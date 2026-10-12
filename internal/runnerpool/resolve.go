@@ -37,6 +37,9 @@ type Refusal struct {
 	RunType types.RunnerPoolRunType
 	Barrier types.ConfinementClass
 	Allowed []types.ConfinementClass
+	// Count is the number the queue reasons name: the waiting runs a person holds (ReasonQueueFull) or
+	// the pool's concurrent-run cap (ReasonFull).
+	Count int
 }
 
 func (r *Refusal) Error() string { return r.Message() }
@@ -73,6 +76,10 @@ func (r *Refusal) Message() string {
 		return RunTypeNotAllowedMsg(r.Name, r.RunType)
 	case ReasonBarrierNotAllowed:
 		return BarrierNotAllowedMsg(r.Name, r.Barrier, r.Allowed)
+	case ReasonQueueFull:
+		return QueueFullMsg(r.Name, r.Count)
+	case ReasonFull:
+		return FullMsg(r.Name, r.Count)
 	}
 	return InvalidMsg()
 }

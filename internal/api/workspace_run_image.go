@@ -286,25 +286,55 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 		return primary.ImageRef, true
 	}
 
-	// Generate a devcontainer for the detected toolchain (the standard
-	// agent-tool install rides unconditionally — gen.go) and build it.
-	files, gerr := workspacescan.GenerateDevcontainer(p)
-	if gerr != nil {
-		buildAudit("failure", map[string]any{"source": "generated-devcontainer", "error": gerr.Error()})
+	return s.buildGeneratedImage(ctx, runID, primary, p, hash, logSink, announce, buildAudit)
+}
+
+// buildGeneratedImage builds the generated devcontainer for p and records it. A fresh build
+// (nothing built, or a different key) resolves the base and features and pins what resolves.
+// When the key matches but the host lost the image and the record is current, it rebuilds from
+// the record's pins and resolves nothing (ruling Q4): an input the registry no longer has fails
+// the build naming it, and an input the record left unpinned floats and stays unpinned.
+func (s *Server) buildGeneratedImage(ctx context.Context, runID uuid.UUID, primary types.Workspace, p workspacescan.WorkspaceProfile,
+	hash string, logSink io.Writer, announce func(), buildAudit func(string, map[string]any)) (string, bool) {
+	fail := func(extra map[string]any) (string, bool) {
+		extra["source"] = "generated-devcontainer"
+		buildAudit("failure", extra)
 		return "", false
 	}
-	in, gerr := workspacescan.GeneratedInputs(p)
-	if gerr != nil {
-		buildAudit("failure", map[string]any{"source": "generated-devcontainer", "error": gerr.Error()})
-		return "", false
+	reason := imageBuildReason(primary, hash)
+	in, err := workspacescan.GeneratedInputs(p, workspacescan.Pins{})
+	if err != nil {
+		return fail(map[string]any{"error": err.Error()})
+	}
+	var pins workspacescan.Pins
+	rebuild := false
+	if reason == types.ImageBuildReasonImageMissing {
+		if rec, _, _ := s.imageBuildView(ctx, primary); rec != nil && rec.Lane == types.ImageBuildLaneGenerated {
+			rebuild, pins = true, workspacescan.PinsFromInputs(rec.Inputs)
+		}
+	}
+	if rebuild {
+		if gone := s.pinnedInputsGone(ctx, in, pins); len(gone) > 0 {
+			return fail(map[string]any{"error": pinnedInputGoneError, "difference": gone})
+		}
+	} else {
+		pins = s.resolveGeneratedPins(ctx, in)
+	}
+	files, err := workspacescan.GenerateDevcontainer(p, pins)
+	if err != nil {
+		return fail(map[string]any{"error": err.Error()})
+	}
+	if in, err = workspacescan.GeneratedInputs(p, pins); err != nil {
+		return fail(map[string]any{"error": err.Error()})
 	}
 	tag := "wardyn-workspace/" + primary.ID.String() + ":" + hash[:12] + "-" + runID.String()[:8]
-	reason := imageBuildReason(primary, hash)
 	announce()
 	built, berr := s.cfg.ImageBuilder.BuildFromDevcontainerFiles(ctx, files, tag, logSink)
 	if berr != nil {
-		buildAudit("failure", map[string]any{"source": "generated-devcontainer", "error": berr.Error()})
-		return "", false
+		return fail(map[string]any{"error": berr.Error()})
+	}
+	if !rebuild {
+		in = withObservedInstaller(in, built.PinFile)
 	}
 	rec := newImageBuild(types.ImageBuildLaneGenerated, hash, runID, reason, in, built, s.cfg.Now())
 	extra := map[string]any{"source": "generated-devcontainer"}

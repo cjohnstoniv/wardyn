@@ -21,8 +21,9 @@ type runSizingSetter interface {
 }
 
 // runSizing maps the one runner.EffectiveResources result onto the stored record. Docker
-// has no reservation concept (a hard cap only), so its request is the limit it applied.
-func runSizing(kind string, res runner.Resources) store.RunSizing {
+// has no reservation concept (a hard cap only), so its request is the limit it applied. The proxy
+// envelope is the one the drivers apply, so an Azure-gated run records runner.AzureProxyMemoryMiB.
+func runSizing(kind string, res runner.Resources, azure bool) store.RunSizing {
 	sz := runner.EffectiveResources(res)
 	z := store.RunSizing{
 		RunnerKind:            kind,
@@ -30,10 +31,11 @@ func runSizing(kind string, res runner.Resources) store.RunSizing {
 		AgentCPULimitMillis:   sz.AgentCPULimitMillis,
 		AgentMemoryRequestMiB: sz.AgentMemoryRequestMiB,
 		AgentMemoryLimitMiB:   sz.AgentMemoryLimitMiB,
-		ProxyMemoryMiB:        sz.ProxyMemoryMiB,
 	}
-	if sz.ProxyCPUMillis > 0 {
-		z.ProxyCPUMillis = &sz.ProxyCPUMillis
+	proxyCPU, proxyMem := runner.ProxyLimitsFor(azure)
+	z.ProxyMemoryMiB = proxyMem
+	if proxyCPU > 0 {
+		z.ProxyCPUMillis = &proxyCPU
 	}
 	if kind != "k8s" {
 		z.AgentCPURequestMillis, z.AgentMemoryRequestMiB = z.AgentCPULimitMillis, z.AgentMemoryLimitMiB
@@ -43,12 +45,12 @@ func runSizing(kind string, res runner.Resources) store.RunSizing {
 
 // recordRunSizing writes the dispatch-time sizing record. A failure is logged and leaves the
 // row NULL; it never blocks dispatch.
-func (s *Server) recordRunSizing(ctx context.Context, runID uuid.UUID, res runner.Resources) {
+func (s *Server) recordRunSizing(ctx context.Context, runID uuid.UUID, res runner.Resources, azure bool) {
 	setter, ok := s.cfg.Store.(runSizingSetter)
 	if !ok {
 		return
 	}
-	if err := setter.SetRunSizing(ctx, runID, runSizing(s.cfg.RunnerTarget, res)); err != nil {
+	if err := setter.SetRunSizing(ctx, runID, runSizing(s.cfg.RunnerTarget, res, azure)); err != nil {
 		slog.WarnContext(ctx, "wardynd: persist run sizing failed",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 	}

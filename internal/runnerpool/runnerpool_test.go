@@ -50,7 +50,11 @@ func TestRefusalSentencesMatchGolden(t *testing.T) {
 			}
 			return BarrierNotAllowedMsg(a[0], types.ConfinementClass(a[1]), allowed)
 		},
-		"WAIT_AT_CAPACITY": func(a []string) string { n, _ := strconv.Atoi(a[1]); return WaitAtCapacityMsg(a[0], n) },
+		"WAIT_AT_CAPACITY":    func(a []string) string { n, _ := strconv.Atoi(a[1]); return WaitAtCapacityMsg(a[0], n) },
+		"WAIT_NO_RUNNER_FREE": func(a []string) string { return WaitNoRunnerFreeMsg(a[0]) },
+		"QUEUE_FULL":          func(a []string) string { n, _ := strconv.Atoi(a[1]); return QueueFullMsg(a[0], n) },
+		"FULL":                func(a []string) string { n, _ := strconv.Atoi(a[1]); return FullMsg(a[0], n) },
+		"NO_ONLINE_RUNNER":    func(a []string) string { return NoOnlineRunnerMsg(a[0]) },
 	}
 	var golden []struct {
 		Key  string   `json:"key"`
@@ -220,6 +224,8 @@ func TestEveryReasonHasItsOwnSentence(t *testing.T) {
 		ReasonPoolsUnavailable:   {{Reason: ReasonPoolsUnavailable}},
 		ReasonRunTypeNotAllowed:  {{Reason: ReasonRunTypeNotAllowed, Name: "P", RunType: types.RunnerPoolRunBackground}},
 		ReasonBarrierNotAllowed:  {{Reason: ReasonBarrierNotAllowed, Name: "P", Barrier: types.CC1, Allowed: []types.ConfinementClass{types.CC3}}},
+		ReasonQueueFull:          {{Reason: ReasonQueueFull, Name: "P", Count: 100}},
+		ReasonFull:               {{Reason: ReasonFull, Name: "P", Count: 2}},
 	}
 	for _, reason := range Reasons() {
 		if reason == ReasonInvalid {

@@ -6,9 +6,14 @@ package api
 import "testing"
 
 func TestCLIInImage(t *testing.T) {
-	for _, key := range []string{"base", "claude-code", "codex-cli", "full", "harnesses"} {
-		if f := cliInImage(key); f == (cliImageFact{cliInImageUnknown, cliInImageUnknown, cliInImageUnknown}) {
-			t.Errorf("%s is a convention image but reads unknown", key)
+	// Each column turns yes in the change that installs its tool: aws and gh are
+	// in the four images that install them, and the multi-harness image has no
+	// recipe here.
+	gh := cliImageFact{cliInImageNo, cliInImageYes, cliInImageYes}
+	none := cliImageFact{cliInImageNo, cliInImageNo, cliInImageNo}
+	for key, want := range map[string]cliImageFact{"base": gh, "claude-code": gh, "codex-cli": gh, "full": gh, "harnesses": none} {
+		if f := cliInImage(key); f != want {
+			t.Errorf("%s = %+v, want %+v", key, f, want)
 		}
 	}
 	for _, key := range []string{"registry.example/team/app:1", "aws-sso", ""} {

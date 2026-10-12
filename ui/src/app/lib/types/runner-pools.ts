@@ -13,7 +13,7 @@
 // The UI words are "Remote Provided" (`remote_provided`) and "Self-Hosted"
 // (`self_hosted`); the run's transport value stays `placement` remote / local.
 
-import type { RunnerPoolReason } from "../runner-pool-refusals";
+import type { BarrierReason, PoolAvailabilityReason, RunnerPoolReason } from "../runner-pool-refusals";
 import type { ConfinementClass } from "./runs";
 
 export type RunnerPoolHosting = "remote_provided" | "self_hosted";
@@ -133,6 +133,8 @@ export interface RunnerPool {
   id: string;
   name: string;
   hosting_type: RunnerPoolHosting;
+  /** A Self-Hosted pool's owner (their subject); absent on a Remote Provided pool. */
+  owner?: string;
   state: RunnerPoolState;
   revision: number;
   limits?: RunnerPoolLimits;
@@ -179,26 +181,123 @@ export interface RunnerPoolUsePolicy {
   updated_by?: string;
 }
 
-/** Go: client.RunnerPoolChoice. Only pools the caller may use are ever sent. */
+/**
+ * Go: client.RunnerPoolChoice, as the preflight and the policy preview send it. Only pools the caller may
+ * use are ever sent. `limits` and `barriers` are never filled on those doors.
+ */
 export interface RunnerPoolChoice {
   id: string;
   name: string;
   hosting_type: RunnerPoolHosting;
   availability: RunnerPoolAvailability;
-  reason?: RunnerPoolReason;
+  // The server sends one of POOL_AVAILABILITY_REASONS; RunnerPoolReason stays for older fixtures.
+  reason?: PoolAvailabilityReason | RunnerPoolReason;
   limits?: EffectiveRunLimits[];
   barriers?: ConfinementClass[];
+  /** What this pool's runners do with the main drive's size; absent on a pool the caller may only manage. */
+  main_drive?: MainDriveFacts;
+}
+
+/** Go: client.MainDriveEnforcement. The weakest word across the pool's targets; never request or external. */
+export type MainDriveEnforcement = "filesystem" | "eviction" | "none" | "unknown";
+
+/** Go: client.MainDriveCoverage. Absent when enforcement is none or unknown. */
+export type MainDriveCoverage = "all" | "scratch_paths";
+
+/** Go: client.MainDriveKeep. `grace_sec` is set only when supported. */
+export interface MainDriveKeep {
+  supported: boolean;
+  grace_sec?: number;
+}
+
+/** Go: client.MainDriveFacts. */
+export interface MainDriveFacts {
+  enforcement: MainDriveEnforcement;
+  basis: "substrate" | "runner_asserted";
+  coverage?: MainDriveCoverage;
+  keep: MainDriveKeep;
+  drive_mounts: boolean;
+}
+
+/** Go: runnerpool.BarrierOption. Always CC1, CC2, CC3, in that order. */
+export interface BarrierOption {
+  class: ConfinementClass;
+  available: boolean;
+  default?: boolean;
+  /** "organisation" arrives with the organisation default barrier; Review already reads it. */
+  default_source?: "server" | "organisation";
+  reason_code?: BarrierReason;
+  reason_detail?: "kvm_missing";
+  floor?: ConfinementClass;
+}
+
+/** Go: client.PoolRunner. One of the caller's OWN runners in a self-hosted pool. */
+export interface PoolRunner {
+  id: string;
+  name: string;
+  online: boolean;
+}
+
+/**
+ * Go: client.PoolSlots. A pool's slot counts, everyone's and never saying whose. The verdict is advisory:
+ * the launch decides. `max_wait_sec` is the wait a run of the asked type gets (86400 Background, 3600
+ * Interactive); on the pool list only with ?run_type=.
+ */
+export interface PoolSlots {
+  used: number;
+  waiting: number;
+  /** Absent: the pool has no limit. */
+  max?: number;
+  verdict: "starts_now" | "waits";
+  max_wait_sec?: number;
+}
+
+/**
+ * Go: client.RunnerPoolCatalogueEntry, one row of GET /runner-pools: the dry doors' fields plus what the
+ * pool offers. A row the caller may only manage (runner_pool_not_found) carries none of these.
+ */
+export interface RunnerPoolCatalogueEntry extends RunnerPoolChoice {
+  run_types: RunnerPoolRunType[];
+  run_types_source?: "pool" | "none";
+  barrier_options: BarrierOption[];
+  /** Every one of the caller's own runners in the pool, whether or not it can take a run now. */
+  my_runners?: PoolRunner[];
+  slots?: PoolSlots;
+  /** A Self-Hosted pool's owner: the caller, or the person on an administrator's oversight row. */
+  owner?: string;
+}
+
+/** Go: client.PersonAllowance. Counts only; absent for a caller outside governance. */
+export interface PersonAllowance {
+  active: number;
+  max?: number;
+  profile_name?: string;
+}
+
+/** Go: client.PoolDefault. The pool an untouched run resolves to, or the default that no longer applies. */
+export interface PoolDefault {
+  pool_id?: string;
+  selection?: RunnerPoolSelection;
+  reason?: RunnerPoolReason;
 }
 
 /** Go: client.RunnerPoolList. */
 export interface RunnerPoolList {
-  pools: RunnerPoolChoice[];
+  pools: RunnerPoolCatalogueEntry[];
+  allowance?: PersonAllowance;
+  default?: PoolDefault;
 }
 
-/** Go: client.CreateRunnerPoolRequest. */
+/** Go: client.CreateRunnerPoolRequest: a Remote Provided pool (admin); self_hosted is refused. */
 export interface CreateRunnerPoolRequest {
   name: string;
   hosting_type: RunnerPoolHosting;
+  limits?: RunnerPoolLimits;
+}
+
+/** Go: client.CreateMyRunnerPoolRequest: a Self-Hosted pool of the caller's own. */
+export interface CreateMyRunnerPoolRequest {
+  name: string;
   limits?: RunnerPoolLimits;
 }
 

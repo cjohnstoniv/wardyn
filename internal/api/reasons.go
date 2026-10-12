@@ -158,6 +158,9 @@ const (
 	// capability neither request field can fix).
 	reasonImageDevcontainerExclusive = "image_devcontainer_exclusive" // image and devcontainer_repo were both set
 	reasonImageBuilderUnavailable    = "image_builder_unavailable"    // a custom image was requested but this control plane has no image builder wired
+	// The policy overlay (run_policy_overlay.go): a document's partial policy laid onto the caller's default.
+	reasonPolicyOverlayInvalid  = "policy_overlay_invalid"  // policy_overlay is not a non-empty object of carried policy keys with usable values
+	reasonPolicyOverlayConflict = "policy_overlay_conflict" // policy_overlay was sent beside policy_id or inline_policy
 	// The 0.9 run-mode contract (run_mode.go): what a person is starting. The
 	// sentences are run_mode_refusals.go's, with a TypeScript twin.
 	reasonRunModeRequired    = "run_mode_required"    // a new client's mode or background workload is unset, and is never inferred
@@ -165,6 +168,8 @@ const (
 	reasonRunModeConflict    = "run_mode_conflict"    // run-mode carriers contradict each other, or an older field that replaced them
 	reasonStartFolderInvalid = "start_folder_invalid" // start_folder is malformed, names an attachment the run lacks, or escapes its mount
 	reasonRunBackgroundOnly  = "run_background_only"  // a background run has no interactive door: attach, exec, SSH, UI gateway, desktop
+	// The main drive (run_main_drive.go). The sentence is mainDriveUnenforceableMsg's, with a TypeScript twin.
+	reasonMainDriveUnenforceable = "main_drive_unenforceable" // the run's policy writes a disk size the runner it lands on cannot cap
 	// The run shape (run_shape.go): New Run's choice, checked against the carriers.
 	reasonRunShapeConflict = "run_shape_conflict" // shape does not fit the run's experience, workload or tools
 	// The harness set (run_harness_set.go): the harnesses a run includes and the
@@ -201,6 +206,8 @@ const (
 	reasonIntegrationIDRetired                 = "integration_id_retired"                   // integration_id no longer chooses a model credential; a run's model provider does
 	reasonRunKillAlreadyTerminal               = "run_kill_already_terminal"                // the run is already in a terminal state other than killed
 	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run moved to another state between the read and the write
+	reasonRunMaxWaitInvalid                    = "run_max_wait_invalid"                     // max_wait_sec is below 1
+	reasonRunQueued                            = "run_queued"                               // the run is waiting for a slot in its pool: its end is set when it starts
 
 	// POST /runs/{id}/revive and each run's result in POST /admin/runs/restart
 	// (#1342): the run's substrate cannot replace a proxy in place

@@ -715,6 +715,18 @@ func driveAuditMode(readOnly bool) string {
 	return "rw"
 }
 
+// recordSandboxRef publishes the run's sandbox ref. A lost ref is not fatal to this dispatch (the run
+// proceeds), but on a daemon restart ReconcileOnBoot finds no ref and finalizes the run FAILED while the
+// container keeps running untracked, so the loss is logged and audited to keep the orphan discoverable.
+func (s *Server) recordSandboxRef(ctx context.Context, runID uuid.UUID, ref string) {
+	if err := s.cfg.Store.SetSandboxRef(ctx, runID, ref); err != nil {
+		slog.ErrorContext(ctx, "wardynd: SetSandboxRef failed; sandbox may be orphaned/untracked across a daemon restart",
+			slog.String("run_id", runID.String()), slog.String("sandbox_ref", ref), slog.Any("err", err))
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.create",
+			runID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": ref, "set_sandbox_ref_error": err.Error()})))
+	}
+}
+
 // applyHarnessSetEnv names the run's harness set for the image's launcher:
 // WARDYN_HARNESSES, the ids in set order, and WARDYN_START_HARNESS, the one that
 // starts with the run ("" when none does). Non-secret, and absent for a run

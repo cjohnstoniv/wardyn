@@ -18,18 +18,28 @@ import (
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// The administrator's half of the catalogue: pools, the executors a remote pool holds, and the
+// The administrator's half of the catalogue: Remote Provided pools, the executors they hold, and the
 // organisation's defaults. Every route is operatorOnly (routes.go). These are not governance-held
-// writes: only the pool-use policy is (runner_pools_use_policy.go).
+// writes: only the pool-use policy is (runner_pools_use_policy.go). A Self-Hosted pool is its owner's
+// alone (runner_pools_mine.go): create refuses one by name, and every other route here answers a
+// person's pool as an unknown id, though the oversight list shows it.
 
-// livePool reads a pool for an administrator's write; ok=false: the 404 or 500 is written.
+// selfHostedOwnerOnlyMsg refuses an administrator's create of a Self-Hosted pool.
+const selfHostedOwnerOnlyMsg = "a Self-Hosted pool belongs to the person whose runners it holds: each person creates their own"
+
+// noOrgSelfHostedDefaultMsg refuses an organisation default naming a Self-Hosted pool or preferring
+// Self-Hosted: the organisation's defaults are Remote Provided only.
+const noOrgSelfHostedDefaultMsg = "the organisation has no Self-Hosted default: each person chooses their own Self-Hosted pool"
+
+// livePool reads a Remote Provided pool for an administrator's write; ok=false: the 404 or 500 is
+// written. A person's Self-Hosted pool is the 404 an unknown id gets: no administrator writes one.
 func (s *Server) livePool(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore) (types.RunnerPool, bool) {
 	id, ok := parseIDParam(w, r, "id", "runner pool")
 	if !ok {
 		return types.RunnerPool{}, false
 	}
 	p, err := ps.GetRunnerPool(r.Context(), id)
-	if errors.Is(err, store.ErrNotFound) || (err == nil && p.State == types.RunnerPoolDeleted) {
+	if errors.Is(err, store.ErrNotFound) || (err == nil && (p.State == types.RunnerPoolDeleted || p.HostingType == types.RunnerPoolSelfHosted)) {
 		writePoolNotFound(w)
 		return types.RunnerPool{}, false
 	}
@@ -53,23 +63,34 @@ func (s *Server) handleCreateRunnerPool(w http.ResponseWriter, r *http.Request) 
 		writePoolInvalid(w, err.Error())
 		return
 	}
-	if !req.HostingType.Valid() {
+	switch req.HostingType {
+	case types.RunnerPoolRemoteProvided:
+	case types.RunnerPoolSelfHosted:
+		writePoolInvalid(w, selfHostedOwnerOnlyMsg)
+		return
+	default:
 		writePoolInvalid(w, "hosting_type is remote_provided or self_hosted")
 		return
 	}
-	if req.Limits != nil {
-		if err := req.Limits.Validate(); err != nil {
+	s.createPool(w, r, ps, types.RunnerPool{ID: uuid.New(), Name: req.Name, HostingType: req.HostingType, Limits: req.Limits},
+		http.StatusBadRequest, "the catalogue holds at most 200 pools")
+}
+
+// createPool validates p's limits, stores it and audits it; fullStatus and full answer a pool cap.
+func (s *Server) createPool(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore, p types.RunnerPool, fullStatus int, full string) {
+	if p.Limits != nil {
+		if err := p.Limits.Validate(); err != nil {
 			writePoolInvalid(w, err.Error())
 			return
 		}
 	}
-	p, err := ps.CreateRunnerPool(r.Context(), types.RunnerPool{ID: uuid.New(), Name: req.Name, HostingType: req.HostingType, Limits: req.Limits}, principalFromRequest(r))
+	p, err := ps.CreateRunnerPool(r.Context(), p, principalFromRequest(r))
 	switch {
 	case errors.Is(err, store.ErrConflict):
 		writePoolInvalid(w, "a pool with that name already exists")
 		return
 	case errors.Is(err, store.ErrRunnerPoolLimit):
-		writePoolInvalid(w, "the catalogue holds at most 200 pools")
+		writeErrorReason(w, fullStatus, string(runnerpool.ReasonInvalid), full)
 		return
 	case err != nil:
 		writeServerError(w, r, "create runner pool", err)
@@ -79,8 +100,16 @@ func (s *Server) handleCreateRunnerPool(w http.ResponseWriter, r *http.Request) 
 	if p.Limits != nil {
 		data["limits"] = p.Limits
 	}
-	s.auditPool(r, auditPoolCreate, p.ID.String(), data)
+	s.auditPool(r, auditPoolCreate, p.ID.String(), withPoolOwner(data, p))
 	writeJSON(w, http.StatusCreated, p)
+}
+
+// withPoolOwner adds a Self-Hosted pool's owner to its audit data.
+func withPoolOwner(data map[string]any, p types.RunnerPool) map[string]any {
+	if p.Owner != "" {
+		data["owner"] = p.Owner
+	}
+	return data
 }
 
 func (s *Server) handleUpdateRunnerPool(w http.ResponseWriter, r *http.Request) {
@@ -88,10 +117,13 @@ func (s *Server) handleUpdateRunnerPool(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	cur, ok := s.livePool(w, r, ps)
-	if !ok {
-		return
+	if cur, ok := s.livePool(w, r, ps); ok {
+		s.updatePool(w, r, ps, cur)
 	}
+}
+
+// updatePool applies an update request to cur, a live pool the caller may write.
+func (s *Server) updatePool(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore, cur types.RunnerPool) {
 	var req client.UpdateRunnerPoolRequest
 	if !decodeStrict(w, r, &req) {
 		return
@@ -135,7 +167,9 @@ func (s *Server) handleUpdateRunnerPool(w http.ResponseWriter, r *http.Request) 
 		if !reflect.DeepEqual(cur.Limits, p.Limits) {
 			data["limits_before"], data["limits"] = cur.Limits, p.Limits
 		}
-		s.auditPool(r, auditPoolUpdate, p.ID.String(), data)
+		s.auditPool(r, auditPoolUpdate, p.ID.String(), withPoolOwner(data, p))
+		// A raised cap, or a pool switched back on, may have room for a waiting run.
+		s.kickQueue()
 	}
 	writeJSON(w, http.StatusOK, p)
 }
@@ -145,10 +179,13 @@ func (s *Server) handleDeleteRunnerPool(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	cur, ok := s.livePool(w, r, ps)
-	if !ok {
-		return
+	if cur, ok := s.livePool(w, r, ps); ok {
+		s.deletePool(w, r, ps, cur)
 	}
+}
+
+// deletePool deletes cur, a live pool the caller may write.
+func (s *Server) deletePool(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore, cur types.RunnerPool) {
 	d, err := ps.DeleteRunnerPool(r.Context(), cur.ID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -161,13 +198,19 @@ func (s *Server) handleDeleteRunnerPool(w http.ResponseWriter, r *http.Request) 
 		writeServerError(w, r, "delete runner pool", err)
 		return
 	}
-	s.auditPool(r, auditPoolDelete, d.Pool.ID.String(), map[string]any{
+	s.auditPoolDeletion(r, d)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// auditPoolDeletion writes a delete's rows: the pool, the runs it ended and any organisation default it cleared.
+func (s *Server) auditPoolDeletion(r *http.Request, d store.RunnerPoolDeletion) {
+	s.auditPool(r, auditPoolDelete, d.Pool.ID.String(), withPoolOwner(map[string]any{
 		"name": d.Pool.Name, "hosting_type": d.Pool.HostingType, "revision": d.Pool.Revision,
-		"executor_ids": nonNilStrings(d.ExecutorIDs), "runner_count": d.RunnerCount})
+		"executor_ids": nonNilStrings(d.ExecutorIDs), "runner_count": d.RunnerCount}, d.Pool))
+	s.auditPoolRemovalCancels(r.Context(), d.CancelledRuns)
 	if d.OrgDefaultsBefore != nil {
 		s.auditPool(r, auditPoolDefaultSet, "organisation", map[string]any{"before": d.OrgDefaultsBefore, "after": d.OrgDefaultsAfter, "cause": "pool_deleted"})
 	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleAddRunnerPoolExecutor attaches a configured executor. Attaching an executor to a pool puts it in
@@ -184,10 +227,6 @@ func (s *Server) handleAddRunnerPoolExecutor(w http.ResponseWriter, r *http.Requ
 	}
 	executor := chi.URLParam(r, "executor")
 	if err := (types.RunnerPoolMember{PoolID: pool.ID, ExecutorID: executor}).Validate(pool.HostingType); err != nil {
-		if pool.HostingType != types.RunnerPoolRemoteProvided {
-			writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonMemberMismatch, Name: pool.Name, Hosting: pool.HostingType})
-			return
-		}
 		writePoolInvalid(w, err.Error())
 		return
 	}
@@ -378,6 +417,10 @@ func (s *Server) handlePutOrgRunnerPoolDefaults(w http.ResponseWriter, r *http.R
 	}
 	if err := d.Validate(); err != nil {
 		writePoolInvalid(w, err.Error())
+		return
+	}
+	if d.SelfHosted != nil || d.PreferredHosting == types.RunnerPoolSelfHosted {
+		writePoolInvalid(w, noOrgSelfHostedDefaultMsg)
 		return
 	}
 	rows, ok := s.poolCatalogue(w, r, ps, false)

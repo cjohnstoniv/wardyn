@@ -34,7 +34,8 @@
       "hosts",
       "secrets",
       "config",
-      "cli"
+      "cli",
+      "mcp"
     ],
     "ComponentDelivery": [
       "mode",
@@ -45,6 +46,10 @@
       "var",
       "file"
     ],
+    "ComponentMCP": [
+      "url",
+      "transport"
+    ],
     "ComponentRef": [
       "id",
       "inline",
@@ -52,7 +57,8 @@
       "builtin",
       "org",
       "repos",
-      "access"
+      "access",
+      "mcp_harnesses"
     ],
     "ComponentSecret": [
       "secret_name",
@@ -150,7 +156,8 @@
     ],
     "RunResources": [
       "cpu_millis",
-      "memory_mib"
+      "memory_mib",
+      "disk_mib"
     ],
     "RunStartup": [
       "kind",
@@ -483,6 +490,11 @@
       "section": "run_wide"
     },
     {
+      "name": "policy_overlay",
+      "excluded": "origin",
+      "why": "In a document the overlay is written under inline_policy; policy_overlay is how a client sends it."
+    },
+    {
       "name": "devcontainer_repo",
       "tab": "tools_image",
       "part": "tools_image",
@@ -678,6 +690,11 @@
       "empty": "same_as_omitted",
       "meaning": "The run takes the default end when the template is used, and that default can change. An end is a length of time from launch, checked again then, never a permission.",
       "section": "run_wide"
+    },
+    {
+      "name": "max_wait_sec",
+      "excluded": "launch",
+      "why": "How long a run may wait for a slot in a full pool is chosen at each launch; the default wait suits a template's runs."
     },
     {
       "name": "no_end",

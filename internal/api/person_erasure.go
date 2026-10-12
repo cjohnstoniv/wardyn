@@ -88,6 +88,9 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport) *erasure.
 	if s.cfg.MaskManifests != nil {
 		steps[erasure.MaskCopies] = s.eraseMaskCopies
 	}
+	if _, ok := s.cfg.Store.(store.RunnerPoolStore); ok {
+		steps[erasure.RunnerPools] = s.eraseRunnerPoolsOf
+	}
 	if s.cfg.SubjectKeys != nil {
 		steps[erasure.AuditPersonalFields] = s.eraseAuditSealKeys
 	}
@@ -162,14 +165,24 @@ func (s *Server) personErasureStore() (store.PersonErasureStore, error) {
 	return nil, fmt.Errorf("%w: the store cannot list a person's runs", erasure.ErrNotAvailable)
 }
 
-// eraseRunTasks blanks the task text of every run the person created.
+// eraseRunTasks blanks the task text of every run the person created. A run of theirs still waiting
+// in a pool's queue is cancelled first: its queue row holds the whole request, task and identity
+// snapshot included, and it would start under the very person being erased.
 func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) {
 	pe, err := s.personErasureStore()
 	if err != nil {
 		return nil, err
 	}
+	cancelled, err := s.cancelQueuedRunsOf(ctx, person, "person_erased")
+	if err != nil {
+		return nil, err
+	}
 	n, err := pe.BlankRunTasks(ctx, person)
-	return map[string]any{"runs": n}, err
+	out := map[string]any{"runs": n}
+	if cancelled > 0 {
+		out["queued_cancelled"] = cancelled
+	}
+	return out, err
 }
 
 // eraseRunOutputsOf erases the stored output of every run the person created:

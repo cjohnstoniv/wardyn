@@ -159,6 +159,9 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if p.endChanged {
+		if run.Placement == types.PlacementLocal {
+			s.renewLeaseAfterEndChange(r.Context(), run.ID)
+		}
 		data := endSetAudit(run, p.resp, exempt)
 		s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, "run.end.set", run.ID.String(),
 			"success", mustJSON(data)))
@@ -176,9 +179,11 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 // endWaitRunRefusal answers a PATCH on a run whose state no longer lets its end
 // or wait move, and reports whether it did: a finished run; a run at or past
 // its lifetime cap, which the lease sweep is ending; a run kept by its end whose
-// files are gone.
+// files are gone. A run waiting in a pool's queue has no end yet: it is set when the run starts.
 func (s *Server) endWaitRunRefusal(w http.ResponseWriter, run types.AgentRun) bool {
 	switch {
+	case run.State == types.RunQueued:
+		writeErrorReason(w, http.StatusConflict, reasonRunQueued, "this run is waiting for a slot in its pool; its end is set when it starts")
 	case isTerminalRunState(run.State):
 		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitAlreadyFinished, "run has already finished (state="+string(run.State)+")")
 	case run.LifetimeCapAt != nil && !s.cfg.Now().Before(*run.LifetimeCapAt):

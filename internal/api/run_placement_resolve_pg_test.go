@@ -230,6 +230,10 @@ func TestPG_PoolReasonsAreTheSameAtEveryDoor(t *testing.T) {
 	}
 	check("a personal default that was deleted", e.person, "", http.StatusUnprocessableEntity, runnerpool.ReasonDefaultUnavailable)
 
+	// The queue's two refusals are one door each, not the three launch doors' shared ones: a create into
+	// a person's 101st waiting run (TestPG_QueueFloodLimit) and a revive into a full pool
+	// (TestPG_QueueReviveRefusedForAFullPool).
+	handled[runnerpool.ReasonQueueFull], handled[runnerpool.ReasonFull] = true, true
 	for _, r := range runnerpool.Reasons() {
 		if !handled[r] {
 			t.Errorf("reason %s is covered at no door", r)
@@ -387,18 +391,29 @@ func TestPG_PoolMovingBeforeTheInsertRefusesTheLaunch(t *testing.T) {
 	}
 }
 
-// DONE WHEN 7: a self-hosted pool lists many people's runners and offers a person only their own. An
-// administrator, the admin token and any other person can never be given, or pin, someone else's runner.
+// DONE WHEN 7 (and H14-api "a run never lands on another person's runner"): a Self-Hosted pool is its
+// owner's and offers only the owner's runners. Even a membership row naming another person's runner,
+// which no route can write, is never a candidate; another person, an administrator and the admin token
+// can never be given, or pin, someone else's runner, and another person's launch into the pool reads
+// exactly as a launch into a pool that does not exist.
 func TestPlacement_SelfHostedCandidatesAreTheLaunchersOwn(t *testing.T) {
 	e := newPlacementEnv(t)
 	pool := e.createPool("Laptops", types.RunnerPoolSelfHosted)
 	mine := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
 	theirs := e.laptop(e.otherP, 8000, 16384, types.CC1, types.CC2, types.CC3)
 	e.addToPool(e.person, pool.ID, mine)
-	e.addToPool(e.other, pool.ID, theirs)
+	if w := e.call(e.other, http.MethodPut, addRunnerPath(pool.ID, theirs), ""); w.Code != http.StatusNotFound {
+		t.Fatalf("another person adding to the pool = %d %s, want 404", w.Code, w.Body)
+	}
+	if _, err := e.pool.Exec(context.Background(), `INSERT INTO runner_pool_members (pool_id, runner_id) VALUES ($1, $2)`, pool.ID, theirs); err != nil {
+		t.Fatal(err)
+	}
 	ps := e.srv.cfg.Store.(store.RunnerPoolStore)
-	rows, _ := e.srv.permittedPools(context.Background(), ps, true)
-	row, _ := catalogueRow(rows, pool.ID)
+	rows, _ := e.srv.permittedPools(operatorCtx(e.personP, e.personP+"@corp.example", "user"), ps, true)
+	row, found := catalogueRow(rows, pool.ID)
+	if !found {
+		t.Fatal("the owner's catalogue lacks their own pool")
+	}
 
 	candidates := func(who string) []string {
 		t.Helper()
@@ -412,19 +427,22 @@ func TestPlacement_SelfHostedCandidatesAreTheLaunchersOwn(t *testing.T) {
 	if got := candidates(e.personP); !slices.Equal(got, []string{mine.String()}) {
 		t.Errorf("person's candidates = %v, want only %s", got, mine)
 	}
-	if got := candidates(e.otherP); !slices.Equal(got, []string{theirs.String()}) {
-		t.Errorf("other's candidates = %v, want only %s", got, theirs)
-	}
-	for _, nobody := range []string{"sub-alice", "", "sub-super", "sub-stranger"} {
+	for _, nobody := range []string{e.otherP, "sub-alice", "", "sub-super", "sub-stranger"} {
 		if got := candidates(nobody); len(got) != 0 {
 			t.Errorf("%q was offered %v from a pool of other people's runners", nobody, got)
 		}
 	}
 
-	// Through the doors: the admin token is no person and is offered no runner at all. (A security admin
-	// cannot launch except in the user view, and is covered by candidates above.)
+	// Through the doors: the admin token is no person and another person is not the owner, so the pool is
+	// not theirs to choose, byte for byte as a pool id that never existed. (A security admin cannot launch
+	// except in the user view, and is covered by candidates above.)
 	body := runBody(`"runner_pool_id":"` + pool.ID.String() + `"`)
-	sameEverywhere(t, "admin token", e.answers(nil, body), http.StatusUnprocessableEntity, string(runnerpool.ReasonNoEligibleMember))
+	sameEverywhere(t, "admin token", e.answers(nil, body), http.StatusNotFound, string(runnerpool.ReasonNotFound))
+	foreignPool := sameEverywhere(t, "another person", e.answers(e.other, body), http.StatusNotFound, string(runnerpool.ReasonNotFound))
+	randomPool := sameEverywhere(t, "a random pool", e.answers(e.other, runBody(`"runner_pool_id":"`+uuid.NewString()+`"`)), http.StatusNotFound, string(runnerpool.ReasonNotFound))
+	if foreignPool != randomPool {
+		t.Errorf("another person's pool answered %s, a random id %s", foreignPool, randomPool)
+	}
 
 	// Pinning another person's runner reads exactly like pinning one that does not exist, and never names it.
 	pin := func(id uuid.UUID) string {
@@ -436,10 +454,10 @@ func TestPlacement_SelfHostedCandidatesAreTheLaunchersOwn(t *testing.T) {
 	if strings.ReplaceAll(foreign, theirs.String(), "X") != strings.ReplaceAll(unknown, unknownID.String(), "X") || strings.Contains(foreign, "laptop") {
 		t.Errorf("a foreign pin answered %s, an unknown one %s", foreign, unknown)
 	}
-	// Their own runner, in the pool, passes the pool and meets the refusal every local run still meets.
+	// Their own runner, in the pool, is where the run goes.
 	for door, w := range e.answers(e.person, pin(mine)) {
-		if w.Code != http.StatusUnprocessableEntity || wireReason(t, w) != string(placement.ReasonPlacementUnavailable) {
-			t.Errorf("%s with their own runner = %d %s, want the unsupported-local refusal", door, w.Code, w.Body)
+		if w.Code >= http.StatusBadRequest {
+			t.Errorf("%s with their own runner = %d %s, want it admitted", door, w.Code, w.Body)
 		}
 	}
 	// And a revoked, an offline or an other-organisation runner of their own is no candidate.
@@ -633,7 +651,7 @@ func TestPG_OwnOfflinePinAnswersRunnerOffline(t *testing.T) {
 	theirs := e.laptop(e.otherP, 4000, 8192, types.CC1, types.CC2)
 	e.addToPool(e.person, pool.ID, asleep)
 	e.addToPool(e.person, pool.ID, awake)
-	e.addToPool(e.other, pool.ID, theirs)
+	e.addToPool(e.other, e.createOwnPool(e.other, "Theirs").ID, theirs)
 	e.online[asleep] = false
 	pin := func(id uuid.UUID) string {
 		return runBody(`"placement":"local","runner_id":"` + id.String() + `","runner_pool_id":"` + pool.ID.String() + `"`)

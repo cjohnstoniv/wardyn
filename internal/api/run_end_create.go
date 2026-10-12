@@ -21,7 +21,7 @@ import (
 // share latestEndAhead and noEndBlock, so a finite ask is cut to the same bound at
 // both doors.
 
-// runEndShapeRefusal checks ends_after_sec and no_end's shape, before any store
+// runEndShapeRefusal checks ends_after_sec, no_end and max_wait_sec's shape, before any store
 // read: both set, below 1, or past the run-limit ceiling.
 func runEndShapeRefusal(req createRunRequest) *runRefusal {
 	switch {
@@ -31,6 +31,8 @@ func runEndShapeRefusal(req createRunRequest) *runRefusal {
 		return runError(http.StatusBadRequest, reasonRunEndAfterTooSmall, "ends_after_sec must be at least 1")
 	case req.EndsAfterSec != nil && *req.EndsAfterSec > maxRunLimitSec:
 		return runError(http.StatusBadRequest, reasonRunEndAfterTooLarge, fmt.Sprintf("ends_after_sec must be at most %d", maxRunLimitSec))
+	case req.MaxWaitSec != nil && *req.MaxWaitSec < 1:
+		return runError(http.StatusUnprocessableEntity, reasonRunMaxWaitInvalid, "max_wait_sec must be at least 1")
 	}
 	return nil
 }
@@ -81,6 +83,9 @@ func runTypeForEnd(e types.RunExperience) types.RunnerPoolRunType {
 func createEndSources(in createEndInput) ([]runnerpool.SourceLimits, error) {
 	sources, refusal, err := buildLimitSources(limitSourceInput{runType: in.runType, pool: in.pool, governed: in.governed,
 		limits: types.GovernanceLimits{RunLimits: in.gov}, maxAgeSec: in.maxAgeSec})
+	// An older-shape request (no stored experience) reads as Background here. That holds only while
+	// admission refuses that shape in every pool that sets limits (resolvePlacement's PoolSource check),
+	// so no pool's limits ever decide such a run's end.
 	if refusal != nil {
 		// Admission (the run-type check) answers this before the end is decided.
 		return nil, fmt.Errorf("pool %q does not take a %s run", in.pool.Name, in.runType)

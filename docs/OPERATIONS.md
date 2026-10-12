@@ -1201,6 +1201,7 @@ erases one person's retained records by explicit scope, in one audited act
 | `run_tasks` | the task text of the runs the person created |
 | `components` | the components the person saved, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
 | `run_setups` | the person's own run templates and every revision of them, their group template-manager grants, and their name as the author of shared templates, revisions and grants, which stay without it |
+| `runner_pools` | the person's own Self-Hosted runner pools, deleted as their own delete would, and their name on every pool row of theirs; their runners stay |
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
 | `credentials` | the person's stored credentials, their encryption key and provider connection-change records (also erased by `DELETE /people/{principal}/credentials`) |
 
@@ -1753,9 +1754,9 @@ enforces, not a re-derivation:
   row:
   - the saved policy (id, and its name and content as they read at launch), an inline policy, the default, or the governance profile the run's creator was bound to.
   - It is recorded already redacted, because the run's creator can read that row through `GET /audit`.
-- **What changed at launch** is each difference between the two, given a cause:
+- **What changed at launch** is each difference, given a cause:
   `workspace`, `source_control`, `mirror`, `model_access`, `git_broker`,
-  `profile`, `org_disk`, `restart`, `limits` or `launch`.
+  `profile`, `org_disk`, `pool_disk`, `restart`, `limits` or `launch`.
   - The launch audit rows (`run.egress.add`, `run.requirement.*`, `run.artifact.redirect`, `run.bedrock.configure`, `run.egress.confine`, `run.ceiling.reassert`, `run.revive`) name the cause first; the rest are derived; anything nothing names is `launch`. `limits` is only ever claimed for a member the governance bound applied to.
 - **Whether the saved policy has moved** (`stored_policy_now`) compares the
   saved policy today with its recorded launch content. A run from before the
@@ -3771,6 +3772,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0161` (`0161_run_human_author`) adds `agent_runs.human_author` (`0001`'s table), the principal accountable for the run at create (not proof that a person was present); existing runs keep it empty.
 - `0162` (`0162_run_queue`) widens `agent_runs`' state check with `QUEUED`, adds `agent_runs.admitted_at` and rebuilds its watcher sweep index (`0001`'s table) beside its new `run_queue` table, and re-creates `audit_retention_partitions` (as `0123` does).
 - `0163` (`0163_workspace_image_build`) adds `workspaces.image_build` (`0008`'s table), the image build record.
+- `0168` (`0168_runner_pool_owner`) adds `runner_pools.owner` and checks on `runner_pools` and `runner_pool_org_defaults` (`0152`'s tables), removes the ownerless Self-Hosted pools made before it, and clears an organisation preference for Self-Hosted.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

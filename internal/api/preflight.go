@@ -88,6 +88,9 @@ type preflightResponse struct {
 	Limits           *types.EffectiveRunLimits   `json:"limits,omitempty"`
 	ResourcesApplied *client.AppliedResources    `json:"resources_applied,omitempty"`
 	LocalPlacement   []client.LocalPlacementFact `json:"local_placement"`
+	// MainDrive is the main-drive size the run asked for and gets, the number dispatch creates
+	// the sandbox with; the policy preview's too.
+	MainDrive *client.MainDriveApplied `json:"main_drive,omitempty"`
 	// Image is the image the run would start from and its source, absent until
 	// the image lane resolves it; AllowedImages are the organisation's allowed
 	// choices, an array that is empty until that lane fills it.
@@ -102,6 +105,10 @@ type preflightResponse struct {
 	// empty until that lane fills it.
 	RunnerPool  *client.ResolvedRunnerPool `json:"runner_pool,omitempty"`
 	RunnerPools []client.RunnerPoolChoice  `json:"runner_pools"`
+	// BarrierOptions are the resolved pool's three barriers under this draft's floors; empty when unpooled.
+	BarrierOptions []client.BarrierOption `json:"barrier_options"`
+	// RunnerPoolSlots is the resolved pool's slot counts and this run's max_wait_sec; absent when unpooled. Advisory: the launch decides.
+	RunnerPoolSlots *client.PoolSlots `json:"runner_pool_slots,omitempty"`
 	// Access is what the run brings in (accessFacts), the same projection the
 	// policy preview answers for the same request.
 	Access *accessBlock `json:"access,omitempty"`
@@ -363,8 +370,11 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		Attachments:              f.attachments,
 	}
 	resp.RunnerPool, resp.RunnerPools = f.place.facts()
+	resp.BarrierOptions = f.barrierOptions
 	resp.Image, resp.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
 	resp.Limits, resp.ResourcesApplied = f.place.sizeFacts()
+	resp.RunnerPoolSlots = s.runnerPoolSlots(ctx, f.place, *f.req)
+	resp.MainDrive = f.mainDrive.applied()
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred
 	}
@@ -386,7 +396,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		credentialChecked: true, autonomyResolved: true,
 	}, resp.GitCredential)
 	access, err := s.accessFor(r, accessInputs{req: f.req, spec: f.spec, prov: f.prov, source: f.source,
-		scmSite: f.scmSite, mpChoice: f.mpChoice, comps: f.comps, facts: resp.Components})
+		scmSite: f.scmSite, mpChoice: f.mpChoice, comps: f.comps, facts: resp.Components, level: f.autonomy.Level})
 	if err != nil {
 		writeServerError(w, r, "resolve capability", err)
 		return

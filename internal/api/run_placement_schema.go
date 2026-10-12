@@ -20,7 +20,7 @@ import (
 var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[providerGrantSnapshot](): strings.Fields("ProviderUID OwnerSubject Harness"),
 	reflect.TypeFor[azureGrantSnapshot]():    strings.Fields("ProviderUID OwnerSubject Audience"),
-	reflect.TypeFor[awsSSOScopeSnapshot]():   strings.Fields("OwnerSubject CredentialSource Mechanism SSOAccountID SSORoleName Region ProviderUID"),
+	reflect.TypeFor[awsSSOScopeSnapshot]():   strings.Fields("OwnerSubject CredentialSource Mechanism SSOAccountID SSORoleName Region ProviderUID ComponentID SSOStartURL"),
 	reflect.TypeFor[adoEntraScopeSnapshot](): strings.Fields("ProviderRowID Organisation OwnerSubject CredentialSource TenantID ClientID TokenMode Capabilities"),
 
 	reflect.TypeFor[time.Time]():             nil, // opaque timestamp, not credential authority
@@ -32,10 +32,14 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[bedrockTransportAudit](): strings.Fields("region model endpoint mode detail hosts"),
 	reflect.TypeFor[chosenProvider]():        strings.Fields("provider owner"),
 	reflect.TypeFor[componentConfig]():       strings.Fields("ordinal source selfDefined env"),
-	reflect.TypeFor[componentDispatch]():     strings.Fields("HeaderHosts MITMHosts Config"),
-	reflect.TypeFor[dispatchCeiling]():       strings.Fields("localSelfDefinedComponents resolved deny profile maxEphemeralDiskMiB maxCPUMillis maxMemoryMiB adoEntra bedrock adoStanding agentGuardrailLocks"),
-	reflect.TypeFor[dispatchParams](): strings.Fields("TrustedOutput RunToken Image Policy FirstGitHubGrantID GitGrants PATBroker PATAPI GitPATGrants SSHGrants Injections Interactive TaskMode InteractiveStart SeedAutoTools ToolApprovals ApprovalExpiryAfter ExtraEnv Toolchains UserMounts EphemeralDirs Drives Components " +
+	reflect.TypeFor[componentMCP]():          strings.Fields("Ordinal Key URL Host Harnesses Credentialed"),
+	reflect.TypeFor[componentDispatch]():     strings.Fields("HeaderHosts MITMHosts Config GitHubAPI AWSCLI MCP"),
+	reflect.TypeFor[awsCLIDispatch]():        strings.Fields("ComponentID AWS"),
+	reflect.TypeFor[types.CLIAWS]():          strings.Fields("StartURL SSORegion AccountID RoleName Region"),
+	reflect.TypeFor[dispatchCeiling]():       strings.Fields("localSelfDefinedComponents resolved deny profile maxEphemeralDiskMiB maxCPUMillis maxMemoryMiB adoEntra bedrock adoStanding agentGuardrailLocks denyPlacements"),
+	reflect.TypeFor[dispatchParams](): strings.Fields("TrustedOutput RunToken Image Policy FirstGitHubGrantID GitGrants PATBroker PATAPI GitPATGrants SSHGrants Injections Interactive TaskMode InteractiveStart SeedAutoTools ToolApprovals ApprovalExpiryAfter ExtraEnv Toolchains UserMounts EphemeralDirs Drives MainDrive Components " +
 		"PolicyOverridden PushRuleSets HarnessToolRules Harnesses"),
+	reflect.TypeFor[mainDriveDecision]():    strings.Fields("MiB Soft Basis DefaultSource"),
 	reflect.TypeFor[llmTransport]():         strings.Fields("bedrock bedrockReady injectBedrockBearer injectBedrockSSO azure provider secretEnvKeys bedrockAudit"),
 	reflect.TypeFor[providerAzureLane]():    strings.Fields("provider owner harness endpoint host route audience model fast"),
 	reflect.TypeFor[toolchainNeeds]():       strings.Fields("goTools jvmTools"),

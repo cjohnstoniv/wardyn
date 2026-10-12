@@ -135,7 +135,7 @@ func fileSecretRenderings(val []byte) [][]byte {
 // here, before any value is read, as the orchestrator decides managed files
 // before routing (a driver's own refusal is the backstop, not the gate).
 func (s *Server) fileSecretRunnerDelivers(ctx context.Context, run types.AgentRun) bool {
-	caps, err := s.cfg.Runner.Capabilities(ctx)
+	caps, err := s.runCapabilities(ctx, run)
 	if err == nil && caps.ManagedFiles {
 		return true
 	}
