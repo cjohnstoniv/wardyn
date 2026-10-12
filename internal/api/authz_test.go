@@ -660,11 +660,12 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/policies":         {class: classMember},
 	"GET /api/v1/policies/default": {class: classMember},
 	"GET /api/v1/policies/{id}":    {class: classMember},
-	// Run templates (template_routes.go): 501 until the template store lands, except
-	// POST /templates/import, which validates a document and stores nothing. Every
-	// /templates route is a member route whose handler scopes by the template's own
-	// scope (types.TemplateRoutes); the grant that lets one person publish to one
-	// group is SUPER.
+	// Run templates (template_routes.go). Every /templates route is a member route
+	// whose handler scopes by the template's own scope (types.TemplateRoutes); a
+	// template the caller cannot read is the missing-id 404, probed per route, scope
+	// and caller by TestTemplateForeignIDIsTheMissingID404. POST /templates/import
+	// validates a document and stores nothing. The grant that lets one person
+	// publish to one group is SUPER.
 	"GET /api/v1/templates":                           {class: classMember},
 	"POST /api/v1/templates":                          {class: classMember},
 	"POST /api/v1/templates/import":                   {class: classMember},
