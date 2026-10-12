@@ -87,6 +87,17 @@ var NonTerminalRunStates = []RunState{RunQueued, RunPending, RunStarting, RunRun
 // deployment or host slot, and the only ones a sandbox reaper may age. A waiting run holds nothing.
 var SlotHoldingRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWaiting}
 
+// RunQueue is what a QUEUED run says about its wait: the pool, when it joined, when its wait ends,
+// how many runs are ahead of it in that pool (a count, never whose) and the wait reason token
+// (runner_pool_at_capacity or runner_pool_no_runner_free).
+type RunQueue struct {
+	PoolID     uuid.UUID `json:"pool_id"`
+	QueuedAt   time.Time `json:"queued_at"`
+	DeadlineAt time.Time `json:"deadline_at"`
+	Position   int       `json:"position"`
+	Reason     string    `json:"reason"`
+}
+
 // PauseReason says why a run's agent is frozen (AgentRun.PausedReason).
 type PauseReason string
 
@@ -137,6 +148,16 @@ type AgentRun struct {
 	// RunnerID names the runner a local run landed on. NULL for a remote run and
 	// for every run from before 0.9; omitted on the wire when NULL, never "".
 	RunnerID *uuid.UUID `json:"runner_id,omitempty"`
+	// RunnerName, RunnerOnline and RunnerLastSeenAt are read-side facts about that runner, projected on
+	// the run routes and never stored. They are absent for a remote run and when the runner could not be
+	// read. The name is the runner's current one, which equals the name at create: a runner is never
+	// renamed and a claimed row is never deleted, so a revoked runner's run keeps it. RunnerOnline is
+	// this process's live view, so a pointer: absent is unknown. false is a fact on a single replica (also
+	// when the hub cannot be asked); under WARDYN_HA it is never sent, because a replica that does not hold
+	// the runner's session cannot tell offline from connected elsewhere.
+	RunnerName       string     `json:"runner_name,omitempty"`
+	RunnerOnline     *bool      `json:"runner_online,omitempty"`
+	RunnerLastSeenAt *time.Time `json:"runner_last_seen_at,omitempty"`
 	// EvidenceSource says who can attest this run's evidence (OD-8): substrate or
 	// runner_asserted, empty for a legacy or unresolved record. Not
 	// `confinement_source`, which says who CHOSE the class.
@@ -175,7 +196,9 @@ type AgentRun struct {
 	AutonomyLevel AutonomyLevel `json:"autonomy_level,omitempty"`
 	// AdmittedAt is when a queued run was promoted out of the queue; written by promotion only, so nil for a run that never waited.
 	AdmittedAt *time.Time `json:"admitted_at,omitempty"`
-	EndsAt     *time.Time `json:"ends_at"` // run's lease end, captured once at create from RunLimits, never re-resolved
+	// Queue is a waiting run's place in its pool's queue, derived at read from the queue row and never stored on the run; absent once the run leaves QUEUED.
+	Queue  *RunQueue  `json:"queue,omitempty"`
+	EndsAt *time.Time `json:"ends_at"` // run's lease end, captured once at create from RunLimits, never re-resolved
 	// LifetimeCapAt is the latest end the pool and the deployment allow, measured from launch (created_at plus the lowest of their maximums); absent when neither bounds the lifetime or for a run from before this column. LifetimeCapSource names which one bound it (pool or deployment) and stays off the wire.
 	LifetimeCapAt     *time.Time  `json:"lifetime_cap_at,omitempty"`
 	LifetimeCapSource LimitSource `json:"-"`

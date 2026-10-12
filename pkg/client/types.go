@@ -337,6 +337,7 @@ const (
 
 // RunState values.
 const (
+	RunQueued    = types.RunQueued
 	RunPending   = types.RunPending
 	RunStarting  = types.RunStarting
 	RunRunning   = types.RunRunning

@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -46,17 +47,27 @@ func assertGolden(t *testing.T, prefix string, got map[string]string) {
 	}
 }
 
-func TestGenerateDevcontainer_Golden(t *testing.T) {
+// pinFileStatements is what the generated build's claude-code RUN appends to the
+// golden Dockerfile; the export (EmitEnvAsCode) never carries it.
+const pinFileStatements = "; \\\n    mkdir -p /usr/local/share/wardyn/inputs; \\\n" +
+	"    printf '%s %s %s\\n' \"$ver\" \"$plat\" \"$sum\" > /usr/local/share/wardyn/inputs/claude-code\n"
+
+func TestGenerateDevcontainer_ZeroPinsIsTheGoldenPlusThePinFile(t *testing.T) {
 	for name, langs := range map[string][]string{
 		"none":  nil,
 		"go":    {"Go"},
 		"multi": {"Go", "JavaScript", "Python"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			files, err := GenerateDevcontainer(goldenProfile(langs...))
+			files, err := GenerateDevcontainer(goldenProfile(langs...), Pins{})
 			if err != nil {
 				t.Fatal(err)
 			}
+			df := files[genDockerfilePath]
+			if strings.Count(df, "mkdir -p /usr/local/share/wardyn/inputs") != 1 || !strings.HasSuffix(df, pinFileStatements) {
+				t.Fatalf("the claude-code RUN must end with exactly the pin-file statements:\n%s", df)
+			}
+			files[genDockerfilePath] = strings.TrimSuffix(df, pinFileStatements) + "\n"
 			assertGolden(t, name, files)
 		})
 	}
@@ -82,11 +93,11 @@ func TestCacheKey_Golden(t *testing.T) {
 
 func TestGeneratedInputs_MatchesGeneratedFiles(t *testing.T) {
 	p := goldenProfile("Python", "Go", "JavaScript")
-	in, err := GeneratedInputs(p)
+	in, err := GeneratedInputs(p, Pins{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := GenerateDevcontainer(p)
+	files, err := GenerateDevcontainer(p, Pins{})
 	if err != nil {
 		t.Fatal(err)
 	}

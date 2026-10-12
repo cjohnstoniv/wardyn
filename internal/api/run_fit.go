@@ -47,16 +47,11 @@ func (s *Server) refuseRunFit(w http.ResponseWriter, r *http.Request, spec types
 	return v.warnings, false
 }
 
-// runFitSpec is the spec the fit check is asked about: the policy with the disk dispatch will
-// settle on (the org default filled in, the org and profile maximums applied), so a hard
-// ephemeral-storage quota is judged the same at both doors. It works on a copy: the fill must
-// never reach a launch spec (runner.Resources.DiskMiBFilled carries its provenance).
-func (s *Server) runFitSpec(ctx context.Context, spec types.RunPolicySpec, ceiling governanceCeiling) types.RunPolicySpec {
-	profileMax := 0
-	if ceiling.Profile != nil && !s.runUngoverned(ctx) {
-		profileMax = ceiling.Limits.MaxEphemeralDiskMiB
-	}
-	s.previewEphemeralDisk(ctx, &spec, profileMax)
+// runFitSpec is the spec the fit check is asked about: the policy with the main drive the run
+// gets (stepMainDrive), so a hard ephemeral-storage quota is judged the same at both doors and at
+// dispatch. It works on a copy: the number never reaches a launch spec.
+func (s *Server) runFitSpec(spec types.RunPolicySpec, md mainDrive) types.RunPolicySpec {
+	(&mainDriveDecision{MiB: md.MiB}).apply(&spec)
 	return spec
 }
 

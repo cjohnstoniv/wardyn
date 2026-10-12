@@ -43,6 +43,8 @@ type poolListInput struct {
 	executors map[string]executorRead
 	// runnerNames are the caller's runners' names, read on the first self-hosted row that needs them.
 	runnerNames map[uuid.UUID]string
+	// slots are the counts of every pool the caller may use, read once per list.
+	slots map[uuid.UUID]store.PoolCounts
 }
 
 func (s *Server) poolList(r *http.Request, ps store.RunnerPoolStore, rows []store.RunnerPoolCatalogueRow, subj callerSubjects,
@@ -55,12 +57,21 @@ func (s *Server) poolList(r *http.Request, ps store.RunnerPoolStore, rows []stor
 	}
 	out := client.RunnerPoolList{Pools: make([]client.RunnerPoolCatalogueEntry, 0, len(rows))}
 	var permitted []types.RunnerPool
+	owner := poolOwner(ctx)
+	var usable []uuid.UUID
 	for _, row := range rows {
-		if !subj.permits(row) {
-			// Listed for a manager only: they may manage it, not use it, so nothing is computed for it.
+		if subj.permits(row, owner) {
+			usable = append(usable, row.Pool.ID)
+		}
+	}
+	in.slots = s.slotCounts(ctx, usable)
+	for _, row := range rows {
+		if !subj.permits(row, owner) {
+			// Listed for a manager only: they may manage it (or, another person's Self-Hosted pool, oversee
+			// it), not use it, so nothing is computed for it.
 			out.Pools = append(out.Pools, client.RunnerPoolCatalogueEntry{
 				RunnerPoolChoice: poolState{availability: client.RunnerPoolUnavailable, reason: runnerpool.ReasonNotFound}.choice(row),
-				RunTypes:         []types.RunnerPoolRunType{}, BarrierOptions: []client.BarrierOption{},
+				RunTypes:         []types.RunnerPoolRunType{}, BarrierOptions: []client.BarrierOption{}, Owner: row.Pool.Owner,
 			})
 			continue
 		}
@@ -88,7 +99,7 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 	if refusal != nil {
 		return client.RunnerPoolCatalogueEntry{}, refusal
 	}
-	e := client.RunnerPoolCatalogueEntry{RunnerPoolChoice: st.choice(row),
+	e := client.RunnerPoolCatalogueEntry{RunnerPoolChoice: st.choice(row), Owner: row.Pool.Owner,
 		RunTypes: []types.RunnerPoolRunType{types.RunnerPoolRunBackground, types.RunnerPoolRunInteractive}, RunTypesSource: client.RunTypesSourceNone}
 	if row.Pool.Limits != nil {
 		e.RunTypes, e.RunTypesSource = row.Pool.Limits.RunTypes(), client.RunTypesSourcePool
@@ -109,6 +120,7 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 			targets, _ = executorTargets(row, s.configuredExecutors(), func(e string) (runner.TargetFacts, bool) { return in.executorFacts(ctx, s, e) })
 		}
 	}
+	e.MainDrive = s.poolMainDriveFor(row, st.own, func(x string) (runner.TargetFacts, bool) { return in.executorFacts(ctx, s, x) })
 	fit, _ := eligibleTargets(targets, placementDemand{floor: in.ceiling.Spec, reqCCOK: true})
 	for _, rt := range want {
 		sources, ref, err := s.limitSources(ctx, rt, &row.Pool, in.ceiling, in.untouched, selfHostedCapacity(row.Pool, fit, ""))
@@ -125,13 +137,22 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 		e.Limits = append(e.Limits, eff)
 	}
 	e.BarrierOptions = runnerpool.BarrierOptions(barrierFacts(row.Pool, targets, in.ceiling.Spec.MinConfinementClass))
-	if len(st.own) > 0 {
+	if c, ok := in.slots[row.Pool.ID]; ok {
+		waitSec := 0
+		if in.runType != "" {
+			waitSec = defaultMaxWaitSec(in.runType)
+		}
+		e.Slots = poolSlots(row.Pool, c, waitSec)
+	}
+	// Membership, not candidacy: every runner of the caller's in the pool, whether or not it could take a
+	// run now, so a person can read which pools each of their runners is in.
+	if len(row.OwnRunnerIDs) > 0 {
 		names, refusal := s.ownRunnerNames(r, in)
 		if refusal != nil {
 			return client.RunnerPoolCatalogueEntry{}, refusal
 		}
-		for _, t := range st.own {
-			e.MyRunners = append(e.MyRunners, client.PoolRunner{ID: *t.runnerID, Name: names[*t.runnerID], Online: s.runnerOnline(*t.runnerID)})
+		for _, id := range row.OwnRunnerIDs {
+			e.MyRunners = append(e.MyRunners, client.PoolRunner{ID: id, Name: names[id], Online: s.runnerOnline(id)})
 		}
 	}
 	return e, nil

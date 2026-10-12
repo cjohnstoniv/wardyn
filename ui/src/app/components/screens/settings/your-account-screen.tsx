@@ -5,8 +5,8 @@
 
 // Your account (M-5, #636 — the settings split, §4.3): a person's OWN
 // connections and keys, reached at /account: Your model connections (#541,
-// User view only), Azure DevOps (a personal connection, #386) and Your SSH
-// keys.
+// User view only), Azure DevOps (a personal connection, #386), My runner
+// (0.9, User view only) and Your SSH keys.
 //
 // Nothing here belongs to the deployment — Host, the admin's Model providers
 // list, Providers and User drives all stayed in Admin Settings
@@ -30,6 +30,7 @@ import { ModelConnectionsCard } from "./model-connections-card";
 import { useConsoleMode } from "../../wardyn/console-view";
 import { AdoConnectionCard } from "./ado-connection";
 import { MyComponentsCard } from "./my-components-card";
+import { MyRunnerCard } from "./my-runner-card";
 import { SshKeysPane } from "../ssh-keys";
 import { ErrorState, TableSkeleton } from "../../wardyn/states";
 
@@ -67,6 +68,9 @@ export function YourAccountScreen() {
           {/* #1914: components a person saved to reuse; absent when they may
               not define any and have none. */}
           <MyComponentsCard secretsPath={adminView ? "/admin/secrets" : "/secrets"} />
+          {/* 0.9 (M-RN-2): the person's own computer that runs their runs. User view only; renders
+              nothing while runners are off. */}
+          {!adminView && <MyRunnerCard />}
           <SshKeysPane heading="h3" />
         </div>
       )}

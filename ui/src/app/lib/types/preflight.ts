@@ -10,9 +10,9 @@
 import type { AutonomyResolution } from "../api/governance";
 import type { ComponentFact } from "./components";
 import type { AccessFacts } from "./new-run-access";
-import type { AllowedImage, AppliedResources, HarnessSetFact, ImageFact, LocalPlacementFact, RunAttachment } from "./new-run-contract";
+import type { AllowedImage, AppliedResources, HarnessSetFact, ImageFact, LocalPlacementFact, MainDriveApplied, RunAttachment } from "./new-run-contract";
 import type { ProvenanceEntry } from "./policy-preview";
-import type { BarrierOption, EffectiveRunLimits, ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
+import type { BarrierOption, EffectiveRunLimits, PoolSlots, ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
 import type { ConfinementClass, RiskItem, RiskLevel } from "./runs";
 import type { SCMAccess } from "./setup";
 
@@ -161,6 +161,8 @@ export interface PreflightResult {
   // gets. Absent on an older server.
   limits?: EffectiveRunLimits;
   resources_applied?: AppliedResources;
+  // The main-drive size it asked for and gets; absent on an older server.
+  main_drive?: MainDriveApplied;
   // Whether each host, workspace source and component can run on the person's
   // runner; empty until the placement lane fills it.
   local_placement?: LocalPlacementFact[];
@@ -177,6 +179,8 @@ export interface PreflightResult {
   runner_pools?: RunnerPoolChoice[];
   // The resolved pool's three barriers under this draft's floors; empty when unpooled.
   barrier_options?: BarrierOption[];
+  // The resolved pool's slot counts and this run's max_wait_sec; absent when unpooled. Advisory.
+  runner_pool_slots?: PoolSlots;
   // What the run brings in (rows, hosts, credentials, the unlisted line, setup);
   // the policy preview answers the same block. Optional so an older server still types.
   access?: AccessFacts;

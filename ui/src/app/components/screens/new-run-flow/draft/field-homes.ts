@@ -86,7 +86,7 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   via_org_destination_refused: "tools", via_org_cap_exceeded: "tools",
   placement_local_path: "files",
   run_mode_required: "run", run_mode_invalid: "run", run_mode_conflict: "run", run_background_only: "run",
-  start_folder_invalid: "files",
+  start_folder_invalid: "files", main_drive_unenforceable: "files",
   run_shape_conflict: "shape",
   runner_pool_invalid: "run", runner_pool_required: "run", runner_pool_not_found: "run", runner_pool_unavailable: "run",
   runner_pool_default_unavailable: "run", runner_pool_stale: "run", runner_pool_no_eligible_member: "run",

@@ -485,10 +485,14 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 						continue
 					}
 					var d struct {
-						Error string `json:"error"`
+						Error      string            `json:"error"`
+						Difference []buildDifference `json:"difference"`
 					}
 					if json.Unmarshal(ev.Data, &d) == nil && d.Error != "" {
 						detail = d.Error
+						if len(d.Difference) > 0 {
+							detail += describeDifference(d.Difference)
+						}
 					}
 					break
 				}

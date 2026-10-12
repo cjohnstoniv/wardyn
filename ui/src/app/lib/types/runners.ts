@@ -8,8 +8,16 @@
 // mirrors one Go struct and runners.wire.test.ts pins its json tags to that struct's source. Every
 // posture fact is what the runner said about itself; none of it is verified.
 
+import type { ConfinementClass } from "./runs";
+
 /** Go: types.RunnerState. */
 export type RunnerState = "unclaimed" | "claimed" | "revoked";
+
+/** Go: types.RunnerCapacity: the per-run ceiling a runner advertised. */
+export interface RunnerCapacity {
+  cpu_millis_max: number;
+  memory_mib_max: number;
+}
 
 /** Go: types.RunnerPosture. */
 export interface RunnerPosture {
@@ -45,9 +53,18 @@ export interface RunnerView {
   revoked_by?: string;
   /** `"not_mine"` when the owner revoked it as not theirs. */
   revoke_reason?: string;
+  /** Set on a person's own list: the revoker's email where Wardyn holds one. */
+  revoked_by_email?: string;
   posture?: RunnerPosture;
   posture_reported_at?: string;
   posture_source?: string;
+  /**
+   * The claimed runner's last caps event, all runner_asserted. Read from the replica that answers, so
+   * like `online` it is absent until the runner has connected there ("Not reported yet"), never zero.
+   */
+  capacity?: RunnerCapacity;
+  classes?: ConfinementClass[];
+  allowed_roots?: string[];
   runs_active: number;
 }
 
@@ -60,6 +77,33 @@ export interface RunnerRegistrationToken {
   created_at: string;
   expires_at: string;
   consumed_at?: string;
+  /** On the two mint answers only: the URL `wardyn-runnerd register --org` must match. */
+  org_url?: string;
+}
+
+/** Go: types.RunnerTokenRequest. Names the person an administrator is minting for. */
+export interface RunnerTokenRequest {
+  owner: string;
+}
+
+/** Go: types.RunnerRegistration: the claim's answer (and the register answer a runner reads). */
+export interface RunnerRegistration {
+  runner_id: string;
+  fingerprint: string;
+  state: RunnerState;
+  org_url_sha256: string;
+}
+
+/** The revoke answers' body (an inline map in internal/api/runner_revoke.go). */
+export interface RunnerRevokeAnswer {
+  id: string;
+  state: RunnerState;
+  runs_killed: number;
+}
+
+/** Go: types.RunnerClaimRequest. The fingerprint is the one the person read on their own computer. */
+export interface RunnerClaimRequest {
+  fingerprint: string;
 }
 
 /** Go: types.RunnerSettingsRequest. `enabled` is required; the answer is site.ts's RunnerSettings. */

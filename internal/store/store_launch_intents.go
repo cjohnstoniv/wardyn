@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// LaunchIntentStore reads and erases launch intents (migration 0166_run_launch_intents): the setup a
+// LaunchIntentStore reads and erases launch intents (migration 0171_run_launch_intents): the setup a
 // person launched a run with, kept as a kind Run document for Run again. It has no write method: CreateRun
 // and CreateRunUnderCap insert AgentRun.LaunchIntent in the run row's own transaction, so a run and its
 // intent are written together or not at all. Optional like ComponentStore: callers type-assert.

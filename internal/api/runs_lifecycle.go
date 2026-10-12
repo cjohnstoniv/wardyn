@@ -689,9 +689,9 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Owner-or-admin (getRunAuthorized): a member killing a run they did not
-	// create gets the same 404 a missing run would.
-	run, ok := s.getRunAuthorized(w, r, id)
+	// Owner, admin or the service identity's sponsor: a member killing a run they
+	// did not create gets the same 404 a missing run would.
+	run, ok := s.getRunAuthorizedBy(w, r, id, s.ownsRunOrSponsorOrAdmin)
 	if !ok {
 		return
 	}

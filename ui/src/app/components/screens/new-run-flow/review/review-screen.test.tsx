@@ -427,7 +427,7 @@ describe("Review provenance", () => {
 
 describe("Review Files and Limits detail", () => {
   it("reads the main drive's enforcement from facts and its size from the applied amount", async () => {
-    checks.current = answered({ ...SCENARIO_PREFLIGHT.member, main_drive: { applied_mib: 20480, facts: { enforcement: "filesystem" } } } as PreflightResult);
+    checks.current = answered({ ...SCENARIO_PREFLIGHT.member, main_drive: { applied_mib: 20480, facts: { enforcement: "filesystem" } } } as unknown as PreflightResult);
     open(AGENT);
     await ready();
     expect(group("work").getByText(NR_REVIEW.MAIN_DRIVE(20))).toBeInTheDocument();

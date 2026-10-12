@@ -252,6 +252,8 @@ export interface ModelProviders {
 // strict decode refuses it.
 export interface ModelProvidersRead extends ModelProviders {
   connected_people?: Record<string, number>;
+  entra_login_configured: boolean;
+  kinds_available: ModelProviderKind[];
 }
 
 // Closed set, server-validated.

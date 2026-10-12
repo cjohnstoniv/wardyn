@@ -333,7 +333,7 @@ func (b *accessBuilder) harnessRow(fact componentFact) {
 func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
 	req, rules := *b.in.req, b.in.spec.ToolRules
 	fact := client.ToolPolicyFact{Harness: harness, Lane: toolLaneUngated, Enforcer: toolEnforcerNone, RuleTools: "any",
-		PolicyRules: []client.LockedToolRule{}, MCPServers: []string{}}
+		PolicyRules: []client.LockedToolRule{}, MCPServers: mcpServersFor(b.in.comps, harness)}
 	for _, r := range rules {
 		fact.PolicyRules = append(fact.PolicyRules, client.LockedToolRule{Tool: r.Tool, Effect: r.Effect, Source: b.toolRuleSource(r)})
 	}
@@ -343,6 +343,10 @@ func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
 	switch {
 	case harness == codexHarness:
 		fact.RuleTools = "mcp_only"
+		// Its MCP tools' rules are enforced by the broker the servers sit behind.
+		if len(fact.MCPServers) > 0 {
+			fact.Enforcer = toolEnforcerMCPBroker
+		}
 		forDefault = map[types.ToolEffect]string{types.ToolHold: "harness_no_hold", types.ToolDeny: "harness_no_block_builtin"}
 		forRule = map[types.ToolEffect]string{types.ToolHold: "harness_no_hold"}
 	case !agentHasHoldLane(harness):
@@ -537,13 +541,21 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 	if githubCLI && !slices.Contains(row.Hosts, ghscope.APIHost) {
 		row.Hosts = append(row.Hosts, ghscope.APIHost)
 	}
+	mcp, mcpHost := attachedMCP(b.in.comps, fact.ID)
+	if mcp != nil {
+		row.Kind, row.MCP = accessKindMCP, mcp
+	}
 	b.addRow(row)
 	if githubCLI {
 		b.addHost(ghscope.APIHost, viaInjected, row.ID)
 		b.addCredential(client.AccessCredential{ID: row.ID + ":cli", Kind: credKindGitHubApp, Owner: credOwnerOrgApp, Delivery: deliveryProxy, AfterEnd: afterEndGone})
 	}
 	for _, h := range row.Hosts {
-		b.addHost(h, viaEgress, row.ID)
+		via := viaEgress
+		if d, err := types.ParseDestination(h); mcp != nil && err == nil && d.Host == mcpHost {
+			via = viaMCPBroker
+		}
+		b.addHost(h, via, row.ID)
 	}
 	if cli != nil && cli.Kind == types.CLIKindAWS && cli.AWS != nil {
 		// The portal the proxy sets the person's session on, and the role
