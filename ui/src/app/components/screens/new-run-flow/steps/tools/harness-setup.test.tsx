@@ -7,6 +7,7 @@ import * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { setField } from "../../../../../../test/set-field";
 import { SCENARIO_ACCESS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
 import {
   CLAUDE_ATTENDED, CLAUDE_GATED, CLAUDE_GATED_LOCKED, CLAUDE_UNGATED, CLAUDE_UNGATED_LOCKED, CODEX, CUSTOM, MCP_DOCS,
@@ -20,10 +21,10 @@ import { HarnessSetup } from "./harness-setup";
 import { SetupNeeded } from "./setup-needed";
 import { providerControlId } from "../../lenses/tools-lens";
 
-const h = vi.hoisted(() => ({ openDoor: vi.fn(), operator: false }));
+const h = vi.hoisted(() => ({ openDoor: vi.fn(), operator: false, answered: true, providers: null as unknown[] | null }));
 vi.mock("../../../../wardyn/model-access-context", () => ({
   useModelAccessDoor: () => ({ openDoor: h.openDoor, open: false, operator: h.operator }),
-  useShellSetupStatus: () => ({ status: { model_providers: MODEL_PROVIDERS, provider_access: PROVIDER_ACCESS }, refresh: () => {} }),
+  useShellSetupStatus: () => ({ status: { model_providers: h.providers ?? MODEL_PROVIDERS, provider_access: PROVIDER_ACCESS }, refresh: () => {} }),
 }));
 
 const NAMES = new Map([["claude-code", "Claude Code"], ["codex-cli", "Codex CLI"], ["custom", "Your own tools"]]);
@@ -44,7 +45,7 @@ function Draft() {
 }
 function Live({ access }: { access: AccessFacts | undefined }) {
   const { intent } = useNewRunDraft();
-  return <HarnessSetup access={access} intent={intent} names={NAMES} onSignedIn={onSignedIn} />;
+  return <HarnessSetup access={access} intent={intent} answered={h.answered} names={NAMES} onSignedIn={onSignedIn} />;
 }
 function show(facts: ToolPolicyFact[] | undefined, intent: RunIntent = CLAUDE, rows = [MCP_DOCS]) {
   return render(
@@ -56,7 +57,7 @@ function show(facts: ToolPolicyFact[] | undefined, intent: RunIntent = CLAUDE, r
 const draft = () => JSON.parse(screen.getByTestId("draft").textContent ?? "{}") as { tools: Record<string, unknown>[]; components: Record<string, unknown>[] };
 const card = (name: string) => within(screen.getByRole("region", { name }));
 
-beforeEach(() => { h.operator = false; });
+beforeEach(() => { h.operator = false; h.answered = true; h.providers = null; });
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe("HarnessSetup", () => {
@@ -106,6 +107,15 @@ describe("HarnessSetup", () => {
       await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_CHOOSE }));
       expect(document.activeElement).toBe(screen.getByLabelText(NR_TOOLS.PROVIDER_LABEL));
       expect(document.activeElement?.id).toBe("nr-provider-claude-code");
+    });
+
+    it("still renders the provider control, off and required, when no provider serves the harness", () => {
+      h.providers = [];
+      show([CLAUDE_UNGATED]);
+      const select = screen.getByLabelText(NR_TOOLS.PROVIDER_LABEL) as HTMLSelectElement;
+      expect(select.id).toBe("nr-provider-claude-code");
+      expect(select.disabled).toBe(true);
+      expect(screen.getByText(NR_TOOLS.PROVIDER_REQUIRED)).toBeTruthy();
     });
 
     it("gives a harness no provider picker when nothing serves it", () => {
@@ -166,12 +176,32 @@ describe("HarnessSetup", () => {
       expect(rows[1].textContent).not.toContain("Not enforced on this run");
     });
 
+    it("never shows an attended row as enforced when the server names no enforcer (R)", () => {
+      show([{ ...CLAUDE_GATED_LOCKED, lane: "attended", enforcer: "none" }]);
+      const rows = screen.getAllByRole("listitem").filter((li) => li.hasAttribute("data-locked"));
+      expect(rows.map((r) => r.textContent)).toEqual(["WebFetchBlock itNot enforced on this run", "BashAsk firstNot enforced on this run"]);
+    });
+
+    it("claims neither way while the next answer is out", () => {
+      h.answered = false;
+      show([CLAUDE_UNGATED_LOCKED]);
+      const row = screen.getAllByRole("listitem").find((li) => li.hasAttribute("data-locked")) as HTMLElement;
+      expect(row.textContent).toBe(`WebFetchBlock it${NR_TOOLS.NET_REQUESTED}`);
+    });
+
+    it("keeps the person's Run it selected while the next answer is out", async () => {
+      h.answered = false;
+      show([{ ...CLAUDE_UNGATED, default: { ...CLAUDE_UNGATED.default, effective: "hold" } }], { tools: [{ id: "claude-code", kind: "harness", default_effect: "hold" }] });
+      await userEvent.click(screen.getByRole("radio", { name: NR_TOOLS.EFFECT_ALLOW }));
+      expect((screen.getByRole("radio", { name: NR_TOOLS.EFFECT_ALLOW }) as HTMLInputElement).checked).toBe(true);
+    });
+
     it("adds a personal rule and removes it", async () => {
       show([CLAUDE_UNGATED]);
       await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.ADD_RULE }));
       const dialog = within(screen.getByRole("dialog", { name: NR_TOOLS.RULE_TITLE("Claude Code") }));
       expect(document.activeElement).toBe(dialog.getByLabelText(NR_TOOLS.RULE_TOOL));
-      await userEvent.type(dialog.getByLabelText(NR_TOOLS.RULE_TOOL), "WebFetch");
+      setField(dialog.getByLabelText(NR_TOOLS.RULE_TOOL), "WebFetch");
       await userEvent.click(dialog.getByRole("radio", { name: NR_TOOLS.EFFECT_DENY }));
       await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.RULE_CONFIRM }));
       expect(draft().tools[0]).toMatchObject({ tool_rules: [{ tool: "WebFetch", effect: "deny" }] });
@@ -203,13 +233,12 @@ describe("HarnessSetup", () => {
       show([CODEX], BOTH);
       await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.ADD_RULE }));
       const dialog = within(screen.getByRole("dialog"));
-      await userEvent.type(dialog.getByLabelText(NR_TOOLS.RULE_TOOL), "WebFetch");
+      setField(dialog.getByLabelText(NR_TOOLS.RULE_TOOL), "WebFetch");
       for (const effect of [NR_TOOLS.EFFECT_ALLOW, NR_TOOLS.EFFECT_HOLD, NR_TOOLS.EFFECT_DENY]) {
         expect((dialog.getByRole("radio", { name: effect }) as HTMLInputElement).disabled).toBe(true);
       }
       expect((dialog.getByRole("button", { name: NR_TOOLS.RULE_CONFIRM }) as HTMLButtonElement).disabled).toBe(true);
-      await userEvent.clear(dialog.getByLabelText(NR_TOOLS.RULE_TOOL));
-      await userEvent.type(dialog.getByLabelText(NR_TOOLS.RULE_TOOL), "mcp__docs__search");
+      setField(dialog.getByLabelText(NR_TOOLS.RULE_TOOL), "mcp__docs__search");
       expect((dialog.getByRole("radio", { name: NR_TOOLS.EFFECT_DENY }) as HTMLInputElement).disabled).toBe(false);
     });
 

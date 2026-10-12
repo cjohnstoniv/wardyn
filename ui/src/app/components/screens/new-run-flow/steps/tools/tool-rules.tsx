@@ -24,11 +24,13 @@ export interface ToolRulesProps {
   fact: ToolPolicyFact;
   harnessName: string;
   personal: readonly ToolRule[];
+  /** The server has answered exactly this body. Until it has, no row claims to be enforced or not. */
+  answered: boolean;
   onAdd: (rule: ToolRule) => void;
   onRemove: (tool: string) => void;
 }
 
-export function ToolRules({ fact, harnessName, personal, onAdd, onRemove }: ToolRulesProps) {
+export function ToolRules({ fact, harnessName, personal, answered, onAdd, onRemove }: ToolRulesProps) {
   const headingId = React.useId();
   const [adding, setAdding] = React.useState(false);
   const label = (tool: string) => (tool === "*" ? NR_TOOLS.DEFAULT_LABEL : tool);
@@ -42,7 +44,11 @@ export function ToolRules({ fact, harnessName, personal, onAdd, onRemove }: Tool
               <Lock aria-hidden className="size-3.5 text-muted-foreground" />
               <span className="font-mono [overflow-wrap:anywhere]">{label(r.tool)}</span>
               <span>{EFFECT_LABEL[r.effect as ToolEffect] ?? r.effect}</span>
-              {!lockedRowEnforced(fact, r as LockedRow) && <span className="text-muted-foreground">{NOT_ENFORCED}</span>}
+              {!answered ? (
+                <span className="text-muted-foreground">{NR_TOOLS.NET_REQUESTED}</span>
+              ) : (
+                !lockedRowEnforced(fact, r as LockedRow) && <span className="text-muted-foreground">{NOT_ENFORCED}</span>
+              )}
             </li>
           ))}
           {personal.map((r) => (

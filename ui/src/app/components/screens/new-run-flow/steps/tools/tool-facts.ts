@@ -80,9 +80,11 @@ export function ruleChoices(fact: ToolPolicyFact, harnessName: string, tool: str
 export type LockedRow = LockedToolRule & { enforced?: boolean };
 
 /**
- * A locked policy row reads as enforced only when the run's lane consults it
- * and the server did not mark it otherwise. An ungated, unsupported or unknown
- * lane never does, whatever the row says.
+ * A locked policy row reads as enforced only when the server names something
+ * that enforces it for this harness: Wardyn's gate, or the harness's own
+ * settings, or the MCP broker for an MCP tool. `none`, an unknown enforcer and a
+ * row the server marks `enforced:false` never do, whatever the lane.
  */
-export const lockedRowEnforced = (fact: Pick<ToolPolicyFact, "lane">, rule: LockedRow): boolean =>
-  rule.enforced !== false && (fact.lane === "gated" || fact.lane === "attended");
+export const lockedRowEnforced = (fact: Pick<ToolPolicyFact, "enforcer">, rule: LockedRow): boolean =>
+  rule.enforced !== false &&
+  (fact.enforcer === "wardyn_gate" || fact.enforcer === "harness_settings" || (fact.enforcer === "mcp_broker" && rule.tool.startsWith("mcp__")));
