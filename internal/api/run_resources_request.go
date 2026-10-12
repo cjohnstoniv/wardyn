@@ -19,16 +19,26 @@ import (
 // spec the run executes is the applied size the fold writes back.
 
 // resourceAsk is what a request asks for, per field: its own value, else its source policy's
-// authored one (stored or inline, before any clamp), else 0, which asks for the default.
-func resourceAsk(req *client.RunResources, source types.RunPolicySpec) types.ResourceLimits {
-	var out types.ResourceLimits
-	if r := source.Resources; r != nil {
-		out.CPUMillis, out.MemoryMiB = r.CPUMillis, r.MemoryMiB
-	}
+// authored one (sourceSize), else 0, which asks for the default.
+func resourceAsk(req *client.RunResources, own types.ResourceLimits) types.ResourceLimits {
+	out := own
 	if req != nil {
 		out.CPUMillis, out.MemoryMiB = cmp.Or(req.CPUMillis, out.CPUMillis), cmp.Or(req.MemoryMiB, out.MemoryMiB)
 	}
 	return out
+}
+
+// sourceSize is the run's source policy's own size, before any clamp: a stored or inline policy's,
+// or, when the run takes the caller's profile ceiling as its policy, the profile's AUTHORED size,
+// because that spec carries the deployment's size wherever the profile sets none.
+func sourceSize(source policySourceRecord, ceiling governanceCeiling) types.ResourceLimits {
+	if source.Kind == policyKindProfile {
+		return ceiling.authoredSize()
+	}
+	if r := source.Spec.Resources; r != nil {
+		return types.ResourceLimits{CPUMillis: r.CPUMillis, MemoryMiB: r.MemoryMiB}
+	}
+	return types.ResourceLimits{}
 }
 
 // resourceBaseline is governance's untouched size: the resolved spec's size after the policy step,

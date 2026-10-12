@@ -104,7 +104,7 @@ func (e *placementEnv) placeOnOwnRunner(pool types.RunnerPool, runnerID fmt.Stri
 		e.t.Fatal(err)
 	}
 	req := createRunRequest{Agent: "claude-code", Placement: types.PlacementLocal, RunnerID: runnerID.String(), RunnerPoolID: pool.ID.String(), Resources: res}
-	plan, refusal := e.srv.resolvePlacement(ctx, placementInput{req: &req, reqCCOK: true, ceiling: ceiling, ask: resourceAsk(res, types.RunPolicySpec{})})
+	plan, refusal := e.srv.resolvePlacement(ctx, placementInput{req: &req, reqCCOK: true, ceiling: ceiling, ask: resourceAsk(res, types.ResourceLimits{})})
 	if refusal != nil {
 		e.t.Fatalf("placement refused: %d %+v", refusal.status, refusal.body)
 	}
@@ -154,9 +154,8 @@ func TestCreateAndDispatchAgreeOnAppliedSize(t *testing.T) {
 			e.assignSizedProfile("max-eight", nil, types.GovernanceLimits{MaxCPUMillis: 8000})
 			return runBody(fmt.Sprintf(`"runner_pool_id":%q,"resources":{"cpu_millis":8000}`, remote.ID))
 		},
-		// The resolved ceiling inherits the deployment's size (inheritDeploymentResources), so the
-		// governance cap is that size: see the lane report's BLOCKED note on #1949's raise.
-		want: def, src: types.LimitSourceGovernance,
+		// #1949: the profile sets no size of its own, so its maximum is the size and the ask stands.
+		want: 8000, src: "",
 	}, {
 		name: "(b) a pool cap",
 		setup: func(e *placementEnv) string {
@@ -172,8 +171,8 @@ func TestCreateAndDispatchAgreeOnAppliedSize(t *testing.T) {
 			e.assignSizedProfile("under", nil, types.GovernanceLimits{MaxCPUMillis: def / 2})
 			return runBody(fmt.Sprintf(`"runner_pool_id":%q`, remote.ID))
 		},
-		// No ask: the ceiling's (inherited) size is the source policy's own, applied uncut.
-		want: def, src: "",
+		// No ask and no authored size: the deployment's default, which the maximum does not cut.
+		want: def, src: types.LimitSourceDeployment,
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newPlacementEnv(t)
@@ -234,6 +233,19 @@ func TestOverAskOnSmallRunnerIsReducedNotRefused(t *testing.T) {
 func TestPoolDefaultSizesUntouchedRun(t *testing.T) {
 	e := newPlacementEnv(t)
 	pool := e.sizedPool("Pool", types.RunnerPoolAmount{Default: 1000, Cap: 4000})
+	created := e.create(limitsBody(fmt.Sprintf(`"runner_pool_id":%q`, pool.ID)))
+	wantAmount(t, "cpu", created.ResourcesApplied.CPUMillis, 1000, false, types.LimitSourcePool, "Pool")
+	if res := e.dispatched(); res.CPUMillis != 1000 {
+		t.Errorf("dispatched %d m, want the pool default 1000", res.CPUMillis)
+	}
+}
+
+// A profiled member who asks for nothing, under a profile that sets no size of its own, gets the
+// pool's lower default: the ceiling's inherited size is not the policy's ask.
+func TestPoolDefaultSizesProfiledMemberWhoAsksNothing(t *testing.T) {
+	e := newPlacementEnv(t)
+	pool := e.sizedPool("Pool", types.RunnerPoolAmount{Default: 1000, Cap: 4000})
+	e.assignSizedProfile("max-eight", nil, types.GovernanceLimits{MaxCPUMillis: 8000})
 	created := e.create(limitsBody(fmt.Sprintf(`"runner_pool_id":%q`, pool.ID)))
 	wantAmount(t, "cpu", created.ResourcesApplied.CPUMillis, 1000, false, types.LimitSourcePool, "Pool")
 	if res := e.dispatched(); res.CPUMillis != 1000 {

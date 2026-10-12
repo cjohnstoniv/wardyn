@@ -760,6 +760,20 @@ func (s *Server) ceilingFromProfile(ctx context.Context, p *ResolvedProfile, err
 	return governanceCeiling{Spec: p.Ceiling.Clone(), Limits: p.Limits, Profile: p, Warnings: p.Warnings}, nil
 }
 
+// authoredSize is the ceiling policy's own CPU and memory as the member cap reads it (#1949): a
+// profile's AUTHORED size, zero where it inherited the deployment's, so a maximum with no size of its
+// own is the size; any other ceiling (the deployment's, an operator's) inherits nothing, so its spec
+// is its own.
+func (c governanceCeiling) authoredSize() types.ResourceLimits {
+	if c.Profile != nil {
+		return c.Profile.AuthoredResources
+	}
+	if r := c.Spec.Resources; r != nil {
+		return types.ResourceLimits{CPUMillis: r.CPUMillis, MemoryMiB: r.MemoryMiB}
+	}
+	return types.ResourceLimits{}
+}
+
 // inheritDeploymentResources fills what a profile's ceiling leaves unset (no resources block, or a
 // zero field) from the deployment: DefaultPolicy.Resources, else runner.EffectiveLimits(), the same
 // order the runners and composer.Clamp fall back in. Without it an omitted size fell through to

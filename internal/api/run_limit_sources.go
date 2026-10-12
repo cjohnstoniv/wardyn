@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"time"
 
@@ -22,9 +23,13 @@ type limitSourceInput struct {
 	// deployment and the runners still bind them.
 	governed bool
 	limits   types.GovernanceLimits
-	// ceiling is the governance ceiling policy's own size. untouched is the admin-authored resolved
-	// size after the policy step, never a raw inline value (runnerpool.GovernanceSource's contract).
-	ceiling, untouched types.ResourceLimits
+	// ceiling is the governance ceiling's AUTHORED size (governanceCeiling.authoredSize). untouched is
+	// the admin-authored resolved size after the policy step, never a raw inline value
+	// (runnerpool.GovernanceSource's contract); where it is unset the member stands at memberDefault.
+	ceiling, untouched, memberDefault types.ResourceLimits
+	// deploymentDefault is the deployment's own sandbox size (inheritDeploymentResources); a zero
+	// field is sizing.EffectiveLimits'.
+	deploymentDefault types.ResourceLimits
 	// capacity is a self-hosted run's candidates' advertised capacity; empty for any other run.
 	capacity                  []runnerpool.RunnerCapacity
 	maxAgeSec, concurrentRuns int
@@ -36,7 +41,8 @@ type limitSourceInput struct {
 // run type the pool does not take is its refusal.
 func buildLimitSources(in limitSourceInput) ([]runnerpool.SourceLimits, *runnerpool.Refusal, error) {
 	size := sizing.EffectiveLimits()
-	deploymentSize := types.ResourceLimits{CPUMillis: int(size.CPUMillis), MemoryMiB: int(size.MemoryMiB)}
+	deploymentSize := types.ResourceLimits{CPUMillis: cmp.Or(in.deploymentDefault.CPUMillis, int(size.CPUMillis)),
+		MemoryMiB: cmp.Or(in.deploymentDefault.MemoryMiB, int(size.MemoryMiB))}
 	dep, err := runnerpool.DeploymentSource(deploymentSize, in.maxAgeSec, in.concurrentRuns)
 	if err != nil {
 		return nil, nil, err
@@ -50,9 +56,11 @@ func buildLimitSources(in limitSourceInput) ([]runnerpool.SourceLimits, *runnerp
 		sources = append(sources, pool)
 	}
 	if in.governed {
-		// A member with no admin-authored size stands at the member default, which a ceiling below the
-		// deployment's size lowers, as composer.Clamp's member cap does.
-		gov, err := runnerpool.GovernanceSource(in.limits, in.ceiling, in.untouched, composer.MemberDefault(&in.ceiling))
+		memberDefault := in.memberDefault
+		if memberDefault.CPUMillis < 1 || memberDefault.MemoryMiB < 1 {
+			memberDefault = composer.MemberDefault(nil)
+		}
+		gov, err := runnerpool.GovernanceSource(in.limits, in.ceiling, in.untouched, memberDefault)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -69,7 +77,9 @@ func buildLimitSources(in limitSourceInput) ([]runnerpool.SourceLimits, *runnerp
 }
 
 // limitSources is buildLimitSources for this request's caller: governance with the caller's REAL
-// ceiling unless their runs stand outside it, and the deployment's run age and run cap.
+// ceiling unless their runs stand outside it, and the deployment's own size, run age and run cap.
+// A member with no admin-authored size stands at the member default, which the resolved ceiling
+// (the deployment's size where its profile sets none) lowers, as composer.Clamp's member cap does.
 func (s *Server) limitSources(ctx context.Context, rt types.RunnerPoolRunType, pool *types.RunnerPool,
 	ceiling governanceCeiling, untouched types.ResourceLimits, capacity []runnerpool.RunnerCapacity,
 ) ([]runnerpool.SourceLimits, *runnerpool.Refusal, error) {
@@ -78,8 +88,9 @@ func (s *Server) limitSources(ctx context.Context, rt types.RunnerPoolRunType, p
 		// A negative WARDYN_RUN_MAX_AGE or run cap is off, as 0 is.
 		maxAgeSec: max(0, int(s.cfg.RunMaxAge/time.Second)), concurrentRuns: max(0, s.cfg.MaxConcurrentRuns),
 	}
-	if ceiling.Spec.Resources != nil {
-		in.ceiling = *ceiling.Spec.Resources
+	in.ceiling, in.memberDefault = ceiling.authoredSize(), composer.MemberDefault(ceiling.Spec.Resources)
+	if d := s.inheritDeploymentResources(nil); d != nil {
+		in.deploymentDefault = types.ResourceLimits{CPUMillis: d.CPUMillis, MemoryMiB: d.MemoryMiB}
 	}
 	return buildLimitSources(in)
 }
