@@ -28,7 +28,7 @@ func toolgateCredentialOf(t *testing.T, spec runner.SandboxSpec) string {
 	for _, f := range spec.ManagedFiles {
 		if f.Path == want {
 			if !f.AgentOwned || f.Mode != runner.ComponentSecretFileMode || cred != "" {
-				t.Fatalf("credential file %+v: want one agent-owned file at mode %04o", f, runner.ComponentSecretFileMode)
+				t.Fatalf("credential file %s (agent-owned %v, mode %04o): want one agent-owned file at mode %04o", f.Path, f.AgentOwned, f.Mode, runner.ComponentSecretFileMode)
 			}
 			cred = string(f.Content)
 		}
