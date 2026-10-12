@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# /usr/local/bin/agent-run for the harnesses image (deploy/images/harnesses):
+# several harness CLIs in one sandbox, one of them started.
+#
+# Dispatch sets WARDYN_HARNESSES (space-separated ids, set order) and
+# WARDYN_START_HARNESS (the harness whose agent starts; empty when none does).
+# Each harness's own launcher lives at <harness_dir>/<id>/agent-run. The start
+# harness's launcher owns PID 1, the shared workspace prep and the boot session;
+# every OTHER harness only has its CLI configuration prepared (--prepare-only), so
+# a CLI started by hand in the attach shell is wired like the one that starts.
+#
+#   --idle                          prepare the others, then the start harness --idle
+#   --boot-seed|--continue|--revive the start harness's mode, unchanged
+#   --selftest                      every harness's selftest; fails if any fails
+#   <task>                          prepare the others, then the start (else first)
+#                                   harness runs the task, preparing itself
+set -euo pipefail
+
+harness_dir=/usr/local/lib/wardyn/harness
+: "${HOME:=/home/agent}"; export HOME
+
+if [[ -n "${WARDYN_HARNESSES:-}" ]]; then
+    read -ra harnesses <<<"$WARDYN_HARNESSES"
+else
+    harnesses=(); for d in "$harness_dir"/*/; do harnesses+=("$(basename "$d")"); done
+fi
+for h in "${harnesses[@]}"; do
+    [[ "$h" =~ ^[a-z0-9-]+$ && -x "$harness_dir/$h/agent-run" ]] \
+        || { echo "agent-run-set: harness '$h' is not installed in this image" >&2; exit 1; }
+done
+start="${WARDYN_START_HARNESS:-${harnesses[0]}}"
+[[ " ${harnesses[*]} " == *" $start "* ]] \
+    || { echo "agent-run-set: start harness '$start' is not one of this run's harnesses" >&2; exit 1; }
+
+# prepare_others: --prepare-only for every harness except the start one. A failure
+# is a warning, never the end of PID 1.
+prepare_others() {
+    local h
+    for h in "${harnesses[@]}"; do
+        [[ "$h" == "$start" ]] && continue
+        "$harness_dir/$h/agent-run" --prepare-only \
+            || echo "agent-run-set: WARNING $h --prepare-only failed; that CLI may ask to sign in" >&2
+    done
+}
+
+case "${1:-}" in
+    --selftest)
+        rc=0
+        for h in "${harnesses[@]}"; do "$harness_dir/$h/agent-run" --selftest || rc=1; done
+        exit "$rc"
+        ;;
+    --idle)
+        prepare_others
+        exec "$harness_dir/$start/agent-run" --idle
+        ;;
+    --boot-seed|--continue|--revive)
+        exec "$harness_dir/$start/agent-run" "$@"
+        ;;
+    *)
+        prepare_others
+        exec "$harness_dir/$start/agent-run" "$@"
+        ;;
+esac

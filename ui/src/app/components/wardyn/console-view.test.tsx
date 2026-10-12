@@ -58,6 +58,7 @@ describe("viewVerdict — the §2.3 table", () => {
     expect(viewVerdict("/approvals", "session-admin")).toEqual({ kind: "twin", to: "/admin/approvals" });
     expect(viewVerdict("/workspaces/w1/", "session-admin")).toEqual({ kind: "twin", to: "/admin/workspaces/w1" });
     expect(viewVerdict("/secrets", "session-admin")).toEqual({ kind: "twin", to: "/admin/secrets" });
+    expect(viewVerdict("/templates", "session-admin")).toEqual({ kind: "twin", to: "/admin/templates" });
   });
   it("an admin in the Admin view is asked into the User view for pages with no twin", () => {
     for (const p of ["/runs/new", "/account", "/setup"]) {

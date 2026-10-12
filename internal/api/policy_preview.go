@@ -54,9 +54,11 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	response := policyPreviewFacts(req, f.spec, f.source, f.policyWarns, f.scmSite, f.mpChoice)
 	response.Provenance = f.prov
+	response.Attachments = f.attachments
 	response.RunnerPool, response.RunnerPools = f.place.facts()
 	response.Image, response.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
 	response.Limits, response.ResourcesApplied = f.place.sizeFacts()
+	response.MainDrive = f.mainDrive.applied()
 	response.Components = componentFacts(componentFactInputs{
 		req: f.req, spec: f.spec, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
 		ceiling: f.ceiling, mpChoice: f.mpChoice, pushSets: f.pushSets,
@@ -67,7 +69,7 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	var err error
 	if response.Access, err = s.accessFor(r, accessInputs{req: f.req, spec: f.spec, prov: f.prov, source: f.source,
-		scmSite: f.scmSite, mpChoice: f.mpChoice, comps: f.comps, facts: response.Components}); err != nil {
+		scmSite: f.scmSite, mpChoice: f.mpChoice, comps: f.comps, facts: response.Components, level: f.autonomy.Level}); err != nil {
 		writeServerError(w, r, "resolve capability", err)
 		return
 	}

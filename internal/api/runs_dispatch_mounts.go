@@ -433,6 +433,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	if run.AutonomyLevel != "" {
 		sandboxEnv["WARDYN_AUTONOMY_LEVEL"] = string(run.AutonomyLevel)
 	}
+	applyHarnessSetEnv(sandboxEnv, p.Harnesses)
 	if p.FirstGitHubGrantID != nil {
 		sandboxEnv["WARDYN_GITHUB_GRANT_ID"] = p.FirstGitHubGrantID.String()
 	}
@@ -719,4 +720,24 @@ func (s *Server) recordSandboxRef(ctx context.Context, runID uuid.UUID, ref stri
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.create",
 			runID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": ref, "set_sandbox_ref_error": err.Error()})))
 	}
+}
+
+// applyHarnessSetEnv names the run's harness set for the image's launcher:
+// WARDYN_HARNESSES, the ids in set order, and WARDYN_START_HARNESS, the one that
+// starts with the run ("" when none does). Non-secret, and absent for a run
+// launched without the set, which an older image reads exactly as before.
+func applyHarnessSetEnv(sandboxEnv map[string]string, harnesses []types.RunHarness) {
+	if len(harnesses) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(harnesses))
+	start := ""
+	for _, h := range harnesses {
+		ids = append(ids, h.Harness)
+		if h.Starts {
+			start = h.Harness
+		}
+	}
+	sandboxEnv["WARDYN_HARNESSES"] = strings.Join(ids, " ")
+	sandboxEnv["WARDYN_START_HARNESS"] = start
 }

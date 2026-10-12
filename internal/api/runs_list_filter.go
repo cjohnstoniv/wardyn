@@ -119,6 +119,9 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 	if owner == "me" {
 		resolvedOwner = principal
 	}
+	// A person's own list, view=user included (the console always sends a view), carries the runs of the
+	// service identities they currently sponsor (design §8). A portal's delegated token gets none.
+	withSponsored := resolvedOwner != "" && !delegatedRequest(r.Context())
 
 	var statuses []string
 	seenStatus := map[string]bool{}
@@ -180,6 +183,7 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 		view: view,
 		filter: store.RunFilter{
 			Owner:         resolvedOwner,
+			WithSponsored: withSponsored,
 			Statuses:      statuses,
 			EndedWithin:   endedWithin,
 			IncludeKilled: includeKilled,

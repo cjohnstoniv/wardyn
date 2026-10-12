@@ -122,6 +122,9 @@ type Config struct {
 	// AzureGates are the run's azure_foundry route gates, one per row (azure_gate.go). Empty == off.
 	// Omitempty and set only for a run with such a row: an older proxy refuses a key it does not know.
 	AzureGates []AzureGateConfig `json:"azure_gates,omitempty"`
+	// GitHubAPI is the run's GitHub CLI grant, which drives the api.github.com
+	// door (github_api.go). Nil == off. Omitempty for the reason AzureGates is.
+	GitHubAPI *GitHubAPIGrant `json:"github_api,omitempty"`
 	// MITMLLM reports whether TLS-MITM of the BUILT-IN LLM hosts (Anthropic/OpenAI)
 	// is actually intended for this run — i.e. subscription credential injection OR
 	// intercept_tls content inspection. Dispatch also mints the per-run CA for
@@ -256,6 +259,38 @@ type Config struct {
 	// proxy only: a request for one is forwarded to the organisation, which injects the credential.
 	// Each names its grant and destination host, never the rule or a secret name.
 	ViaOrgRoutes []ViaOrgRoute `json:"via_org_routes,omitempty"`
+	// MCPServers are the run's remote MCP servers. The broker route
+	// (mcp_broker.go) is the only path to each: none is in the allowlist, a
+	// direct request to one is refused while it is attached, and its header
+	// credential is the broker's alone, never an Injection rule.
+	MCPServers []MCPServerConfig `json:"mcp_servers,omitempty"`
+	// MCPBindings bind each harness's MCP token, by SHA-256 digest, to the
+	// servers turned on for it. Digests only: the token is in that harness's
+	// configuration, never here.
+	MCPBindings []MCPBinding `json:"mcp_bindings,omitempty"`
+}
+
+// MCPServerConfig is one remote MCP server on the broker route.
+type MCPServerConfig struct {
+	// Key is the server's name in /wardyn/mcp/<token>/<key> and in its tools'
+	// names, mcp__<key>__<tool>.
+	Key string `json:"key"`
+	// URL is the https address the broker re-originates to.
+	URL string `json:"url"`
+	// GrantID is the api_key grant of the server's header credential; nil when
+	// the server takes none.
+	GrantID *uuid.UUID `json:"grant_id,omitempty"`
+	// Ordinal is the component's run_components ordinal (built-ins have no
+	// row), which a revive reads its row by.
+	Ordinal int `json:"ordinal"`
+}
+
+// MCPBinding is one harness's MCP token, as its digest, and the servers it may
+// reach.
+type MCPBinding struct {
+	Harness string   `json:"harness"`
+	SHA256  string   `json:"sha256"`
+	Servers []string `json:"servers"`
 }
 
 const (
@@ -470,6 +505,9 @@ func (c *Config) applyDefaultsAndValidate() error {
 	if err := c.validateTerminatedGates(); err != nil {
 		return err
 	}
+	if err := c.validateMCP(); err != nil {
+		return err
+	}
 	// Parse-check (but do not retain a compiled form) each configured LLM
 	// gateway base URL: api.ValidateLLMGateways already fail-fast-checked these
 	// at boot without retaining a parsed form (same "validate at load, build
@@ -495,6 +533,9 @@ func (c *Config) validateTerminatedGates() error {
 		if g.API && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
 			return fmt.Errorf("config: pat_grants[%q] sets api and requires mitm_ca_cert_pem and mitm_ca_key_pem — the forge API door runs only on a terminated connection", host)
 		}
+	}
+	if c.GitHubAPI != nil && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
+		return fmt.Errorf("config: github_api requires mitm_ca_cert_pem and mitm_ca_key_pem — the GitHub CLI door runs only on a terminated connection")
 	}
 	return c.validateAzureGates()
 }

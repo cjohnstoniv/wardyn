@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -305,7 +306,7 @@ func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.Age
 		"header":      "Authorization",
 		"format":      "Bearer %s",
 		"secret_name": providerSecretName(c.provider.UID, providerKeyPart),
-		"snapshot":    providerGrantSnapshot{ProviderUID: c.provider.UID, OwnerSubject: c.owner},
+		"snapshot":    providerGrantSnapshot{ProviderUID: c.provider.UID, OwnerSubject: c.owner, Harness: run.Agent},
 	})
 	beGrantID := uuid.New()
 	if _, gerr := s.createDispatchGrant(ctx, run, types.CredentialGrant{
@@ -391,10 +392,11 @@ type dispatchLLMPlan struct {
 	// bedrockMITMHosts is this run's per-run MITM host list beyond the built-in
 	// api.anthropic.com/api.openai.com, if any, each as "host:port" (never a
 	// bare host): the Bedrock bearer's runtime host (authorBedrockBearerInjection),
-	// the captured-SSO portal host (authorBedrockSSOInjection), and a Claude
+	// the captured-SSO portal host (authorBedrockSSOInjection), a Claude
 	// subscription provider's route-through host
 	// (authorProviderSubscriptionInjection) — all three are mutually exclusive
-	// per run, so one slice is safe.
+	// per run — and an AWS CLI row's portal host (authorAWSCLI), which refuses a
+	// run on the captured-SSO lane.
 	bedrockMITMHosts []string
 	// azure is the azure_foundry lane's share of the proxy config: its MITM entry (a fourth producer
 	// beside the artifact, Bedrock and Azure DevOps ones), its route gate and its channel host.
@@ -437,14 +439,24 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	proxyURL string, artifactPlan artifactRedirectPlan, artifactInject bool, siteCfg types.SiteConfig, siteCfgOK bool,
 	adoInject bool, bedrockGrade bedrockCredGrade,
 ) (dispatchLLMPlan, bool) {
-	// The model provider the run chose owns its model credential: that
+	// The model provider each harness chose owns its model credential: that
 	// provider, from its owner's own credential, or none (resolveProviderLane,
 	// every kind). Every other injection that would credential the model is
 	// stripped there, whoever authored it.
-	llm, injections, prov, ok := s.resolveProviderLane(ctx, run, p, policy, sandboxEnv, injections, proxyURL, siteCfg, siteCfgOK)
+	llms, pairs, injections, prov, ok := s.resolveProviderLane(ctx, run, p, policy, sandboxEnv, injections, proxyURL, siteCfg, siteCfgOK)
 	if !ok {
 		return dispatchLLMPlan{}, false
 	}
+	// Bedrock serves claude-code alone, so a run has one Bedrock lane at most:
+	// every Bedrock consumer below and after this phase reads that lane, or the
+	// run's own agent's lane when it has none.
+	llm, bedrockRun := llmTransport{}, run
+	if i := slices.IndexFunc(llms, func(l llmTransport) bool { return l.bedrockReady }); i >= 0 {
+		llm, bedrockRun = llms[i], laneRun(run, pairs[i])
+	} else if len(llms) > 0 {
+		llm = llms[0]
+	}
+	subscription := slices.ContainsFunc(llms, llmTransport.providerSubscription)
 	// A Bedrock provider's session grant, and its reauth hold, record this
 	// scope; zero on every other kind.
 	sso := llm.providerAWSScope()
@@ -460,10 +472,12 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// one), or a component's header, which the proxy can set only inside a
 	// connection it terminates. The PRIVATE key reaches ONLY the proxy sidecar (ProxyConfig below);
 	// the sandbox trusts the PUBLIC cert. See provisionDispatchMITMCA for the
-	// trust-store wiring.
+	// trust-store wiring. Once per run, whichever lanes need it.
 	mitmForInspect := llmInspectMITMEnabled(policy)
 	var mitmCACertPEM, mitmCAKeyPEM string
-	if llm.providerSubscription() || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject || llm.azureInject() || p.PATAPI || len(p.Components.MITMHosts) > 0 {
+	if subscription || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject ||
+		slices.ContainsFunc(llms, llmTransport.azureInject) || p.PATAPI || len(p.Components.MITMHosts) > 0 ||
+		p.Components.GitHubAPI != nil || p.Components.AWSCLI != nil {
 		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
 			return dispatchLLMPlan{}, false
 		}
@@ -477,46 +491,19 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// SSL_CERT_FILE can never clobber the bundle this just staged.
 	installSandboxTrustedCA(s.cfg.TrustedCAPEM, sandboxEnv)
 
-	// The subscription arm's grant: its owner's own sign-in, recording whose it
-	// is. After resolveProviderLane's strip, like every arm's grant. A failed
-	// grant write already marked the run FAILED — stop.
 	var bedrockMITMHosts []string
-	if llm.providerSubscription() {
-		if injections, bedrockMITMHosts, ok = s.authorProviderSubscriptionInjection(ctx, run, llm, policy, injections); !ok {
-			return dispatchLLMPlan{}, false
-		}
-	}
-
-	// Bedrock BEARER injection + its per-run MITM host (see
-	// authorBedrockBearerInjection). Same stop-on-failure contract; appends to
-	// the SAME MITM host list as the subscription block above — the two are
-	// mutually exclusive per run.
-	if llm.injectBedrockBearer {
-		if injections, bedrockMITMHosts, ok = s.authorBedrockBearerInjection(ctx, run, llm, injections); !ok {
-			return dispatchLLMPlan{}, false
-		}
-	}
-
-	// Captured-AWS-SSO injection + its per-run MITM host (PHASE B, see
-	// authorBedrockSSOInjection). Same stop-on-failure contract as the bearer
-	// block above, and it appends to the SAME MITM host list: a run is on one
-	// Bedrock lane or the other, never both, so the two never collide.
-	if llm.injectBedrockSSO {
-		var ssoMITMHosts []string
-		if injections, ssoMITMHosts, ok = s.authorBedrockSSOInjection(ctx, run, llm, sso, injections); !ok {
-			return dispatchLLMPlan{}, false
-		}
-		bedrockMITMHosts = append(bedrockMITMHosts, ssoMITMHosts...)
-	}
-
-	// The azure_foundry lane's grant, MITM entry, route gate and channel host. Same stop-on-failure
-	// contract; it needs the per-run CA minted above and refuses a run that has none.
 	var azure azurePlan
-	if llm.azureInject() {
-		if injections, azure, ok = s.authorAzureInjection(ctx, run, llm, mitmCACertPEM, mitmCAKeyPEM, policy, injections); !ok {
-			return dispatchLLMPlan{}, false
-		}
+	if injections, bedrockMITMHosts, azure, ok = s.authorLaneGrants(ctx, run, llms, pairs, bedrockRun, sso,
+		mitmCACertPEM, mitmCAKeyPEM, policy, injections); !ok {
+		return dispatchLLMPlan{}, false
 	}
+	// The AWS CLI row's grant and portal entry, after the Bedrock lanes it
+	// refuses to share a sandbox profile with. Same stop-on-failure contract.
+	var cliMITMHosts []string
+	if injections, cliMITMHosts, ok = s.authorAWSCLI(ctx, run, p.Components.AWSCLI, policy, sandboxEnv, injections); !ok {
+		return dispatchLLMPlan{}, false
+	}
+	bedrockMITMHosts = append(bedrockMITMHosts, cliMITMHosts...)
 
 	// Artifact-redirect token injections (authored in planArtifactRedirect, whose
 	// egress substitution already added each corp host to policy.AllowedDomains, so
@@ -537,14 +524,47 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// run.bedrock.configure row here is what keeps a run ANY later refusal
 	// takes from showing a "success" injection row for a credential it was
 	// never handed (#518).
-	s.recordBedrockTransport(ctx, run, llm)
+	s.recordBedrockTransport(ctx, bedrockRun, llm)
 
 	return dispatchLLMPlan{
 		llm: llm, injections: injections,
 		mitmCACertPEM: mitmCACertPEM, mitmCAKeyPEM: mitmCAKeyPEM,
 		bedrockMITMHosts:     bedrockMITMHosts,
 		azure:                azure,
-		mitmLLM:              llm.providerSubscription() || mitmForInspect,
+		mitmLLM:              subscription || mitmForInspect,
 		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams,
 	}, true
+}
+
+// authorLaneGrants writes the grants of every lane whose arm authors after the
+// strip, each under its own lane's run (laneRun): the subscription arm's grant,
+// the Bedrock lane's bearer or captured-SSO grant (bedrockRun is that lane's;
+// a run is on one Bedrock lane or the other, never both), and the azure_foundry
+// lane's grant, MITM entry, route gate and channel host, which needs the per-run
+// CA. The subscription, bearer and SSO arms share one per-run MITM host list.
+// ok=false: the run is already FAILED.
+func (s *Server) authorLaneGrants(ctx context.Context, run types.AgentRun, llms []llmTransport, pairs []types.RunHarness,
+	bedrockRun types.AgentRun, sso awsSSOScope, mitmCACertPEM, mitmCAKeyPEM string,
+	policy *types.RunPolicySpec, injections []runner.InjectionGrant,
+) (_ []runner.InjectionGrant, mitmHosts []string, azure azurePlan, ok bool) {
+	ok = true
+	for i, l := range llms {
+		lr := laneRun(run, pairs[i])
+		var hosts []string
+		switch {
+		case l.providerSubscription():
+			injections, hosts, ok = s.authorProviderSubscriptionInjection(ctx, lr, l, policy, injections)
+		case l.injectBedrockBearer:
+			injections, hosts, ok = s.authorBedrockBearerInjection(ctx, bedrockRun, l, injections)
+		case l.injectBedrockSSO:
+			injections, hosts, ok = s.authorBedrockSSOInjection(ctx, bedrockRun, l, sso, injections)
+		case l.azureInject():
+			injections, azure, ok = s.authorAzureInjection(ctx, lr, l, mitmCACertPEM, mitmCAKeyPEM, policy, injections)
+		}
+		if !ok {
+			return injections, nil, azurePlan{}, false
+		}
+		mitmHosts = append(mitmHosts, hosts...)
+	}
+	return injections, mitmHosts, azure, true
 }

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/agentpolicy"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -21,6 +23,15 @@ import (
 const (
 	provKindHarness = "harness" // an included harness
 	provKindPosture = "posture" // a harness's tool-lane default (the harness facts)
+
+	// ToolPolicyFact.Lane and .Enforcer.
+	toolLaneGated       = "gated"
+	toolLaneUngated     = "ungated"
+	toolLaneAttended    = "attended"
+	toolLaneUnsupported = "unsupported"
+	toolEnforcerGate    = "wardyn_gate"
+	toolEnforcerHarness = "harness_settings"
+	toolEnforcerNone    = "none"
 )
 
 // What an access row is and which chip it carries.
@@ -47,6 +58,9 @@ const (
 const (
 	viaEgress    = "egress"
 	viaModelLane = "model_lane"
+	// viaInjected is a host the proxy opens and terminates to add a credential
+	// itself (the GitHub CLI's api.github.com).
+	viaInjected = "injected"
 
 	verdictAllowed       = "allowed"
 	verdictNeedsApproval = "needs_approval"
@@ -81,7 +95,9 @@ const (
 	credKindGitPAT       = "git_pat"
 	credKindSSHKey       = "ssh_key"
 	credKindSecret       = "secret"
+	credKindAWSRole      = "aws_role"
 	signInModelProvider  = "model_provider"
+	signInAWSCLI         = "aws_cli"
 	fixSignIn            = "sign_in"
 	fixChooseProvider    = "choose_model_provider"
 	deciderYou           = "you"
@@ -127,6 +143,9 @@ type accessInputs struct {
 	ssoProxyInject bool
 	// imageKey is the convention image the run starts from (accessImageKey).
 	imageKey string
+	// level is the autonomy level the fold resolved, which picks an
+	// interactive run's managed settings (attendedDefaultReasons).
+	level types.AutonomyLevel
 }
 
 // accessFor adds the reads accessFacts needs beyond the fold and builds the
@@ -302,6 +321,114 @@ func (b *accessBuilder) harnessRow(fact componentFact) {
 		b.addCredential(c)
 	}
 	b.addSetup(setup...)
+	b.out.Harnesses = append(b.out.Harnesses, b.toolPolicyFact(agent.Agent))
+}
+
+// toolPolicyFact is one included harness's tool policy as step 5 shows it: the
+// lane its calls take and who enforces it, its default and the effects the
+// person may choose (each greyed with its reason where the policy is stricter
+// or the harness cannot honour it), and the policy's rules, locked. What it
+// offers is what the server accepts: toolRulesWithinPolicyRefusal,
+// harnessToolRulesRefusal and attendedDefaultRefusal answer the same cases.
+func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
+	req, rules := *b.in.req, b.in.spec.ToolRules
+	fact := client.ToolPolicyFact{Harness: harness, Lane: toolLaneUngated, Enforcer: toolEnforcerNone, RuleTools: "any",
+		PolicyRules: []client.LockedToolRule{}, MCPServers: mcpServersFor(b.in.comps, harness)}
+	for _, r := range rules {
+		fact.PolicyRules = append(fact.PolicyRules, client.LockedToolRule{Tool: r.Tool, Effect: r.Effect, Source: b.toolRuleSource(r)})
+	}
+	// What this harness on this lane can never take, for its default and for a
+	// rule, by effect.
+	var forDefault, forRule map[types.ToolEffect]string
+	switch {
+	case harness == codexHarness:
+		fact.RuleTools = "mcp_only"
+		// Its MCP tools' rules are enforced by the broker the servers sit behind.
+		if len(fact.MCPServers) > 0 {
+			fact.Enforcer = toolEnforcerMCPBroker
+		}
+		forDefault = map[types.ToolEffect]string{types.ToolHold: "harness_no_hold", types.ToolDeny: "harness_no_block_builtin"}
+		forRule = map[types.ToolEffect]string{types.ToolHold: "harness_no_hold"}
+	case !agentHasHoldLane(harness):
+		fact.Lane = toolLaneUnsupported
+		forDefault = map[types.ToolEffect]string{types.ToolAllow: "custom_harness_rules", types.ToolHold: "custom_harness_rules", types.ToolDeny: "custom_harness_rules"}
+		forRule = forDefault
+	case requestIsInteractive(req):
+		fact.Lane, fact.Enforcer = toolLaneAttended, toolEnforcerHarness
+		forDefault = attendedDefaultReasons(b.in.level)
+	case holdLane(false, req.ToolApprovals, req.TaskMode):
+		fact.Lane, fact.Enforcer = toolLaneGated, toolEnforcerGate
+	}
+	policyDefault := policyToolEffect(rules, toolLaneDefault(req), "*")
+	fact.Default = client.ToolDefaultFact{Effective: policyDefault, Source: b.toolRuleSource(types.ToolRule{Tool: "*", Effect: policyDefault}),
+		Options: toolEffectOptions(policyDefault, forDefault, "policy_stricter_default")}
+	if i := slices.IndexFunc(req.Tools, func(t client.IncludedTool) bool { return t.ID == harness }); i >= 0 &&
+		effectRank(req.Tools[i].DefaultEffect) > effectRank(policyDefault) {
+		fact.Default.Effective, fact.Default.Source = req.Tools[i].DefaultEffect, client.ProvenanceSource{Kind: provKindPerson}
+	}
+	if fact.Lane == toolLaneAttended {
+		// Claude Code's settings name tools (agentpolicy.WithToolRules), never "*":
+		// a tool no rule names is answered by the mode the level's document sets,
+		// whatever the policy's "*", which is therefore no locked row here.
+		fact.Default = attendedDefaultFact(b.in.level, forDefault)
+		fact.PolicyRules = slices.DeleteFunc(fact.PolicyRules, func(r client.LockedToolRule) bool { return r.Tool == "*" })
+	}
+	fact.RuleEffects = toolEffectOptions(policyDefault, forRule, "policy_stricter_tool")
+	return fact
+}
+
+// attendedSettingsAcceptEdits is the Source.ID of an interactive Claude Code
+// run's default where its level's document starts the session accepting file
+// edits (L2, locked or not): edits run without asking, every other tool asks.
+const attendedSettingsAcceptEdits = "accept_edits"
+
+// attendedDefaultFact is what an interactive Claude Code run does with a tool no
+// rule names, and what answers that: the level's managed settings asking (L0,
+// L1); the same settings, which accept file edits unasked (L2); or, at a level
+// that brings no document, the lane's own default (posture), which a
+// repository's settings or hooks may answer first.
+func attendedDefaultFact(level types.AutonomyLevel, cannot map[types.ToolEffect]string) client.ToolDefaultFact {
+	src := client.ProvenanceSource{Kind: provKindHarness}
+	switch _, doc, ok := agentpolicy.ForAgent(claudeCodeHarness, level, false, false); {
+	case !ok:
+		src = client.ProvenanceSource{Kind: provKindPosture}
+	case agentpolicy.AcceptsEdits(doc):
+		src.ID = attendedSettingsAcceptEdits
+	}
+	return client.ToolDefaultFact{Effective: types.ToolHold, Source: src, Options: toolEffectOptions(types.ToolHold, cannot, "policy_stricter_default")}
+}
+
+// toolEffectOptions is each effect a person may choose against the policy's
+// effect: the harness's own reason where it cannot take it, stricter where the
+// policy is stricter, available otherwise.
+func toolEffectOptions(policy types.ToolEffect, cannot map[types.ToolEffect]string, stricter string) []client.EffectOption {
+	var out []client.EffectOption
+	for _, e := range []types.ToolEffect{types.ToolAllow, types.ToolHold, types.ToolDeny} {
+		opt := client.EffectOption{Effect: e, Available: true}
+		switch {
+		case cannot[e] != "":
+			opt.Available, opt.Reason = false, cannot[e]
+		case effectRank(e) < effectRank(policy):
+			opt.Available, opt.Reason = false, stricter
+		}
+		out = append(out, opt)
+	}
+	return out
+}
+
+// toolRuleSource is who put a tool rule on the run, from the fold's provenance:
+// the source that added it, else the policy the run started from. A "*" that no
+// rule sets is the lane's own default.
+func (b *accessBuilder) toolRuleSource(r types.ToolRule) client.ProvenanceSource {
+	for _, p := range b.in.prov {
+		if p.Field == fieldToolRules && p.Value == r.Tool+":"+string(r.Effect) && p.Effect == provEffectAdded {
+			return client.ProvenanceSource(p.Source)
+		}
+	}
+	if !slices.Contains(b.in.spec.ToolRules, r) {
+		return client.ProvenanceSource{Kind: provKindHarness}
+	}
+	return client.ProvenanceSource(policyProvSource(b.in.source))
 }
 
 // modelCredentials is what the chosen provider hands the run. A key, token or
@@ -403,12 +530,40 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 	row := client.AccessRow{ID: fact.ID, Kind: accessKindCustom, From: accessFromAdded, Name: fact.Name,
 		Status: accessStatus(fact.Status), Hosts: slices.Clone(fact.Hosts),
 		Source: client.ProvenanceSource{Kind: provKindComponent, ID: fact.ID, Name: fact.Name}}
-	if cli := attachedCLI(b.in.comps, fact.ID); cli != nil {
+	cli := attachedCLI(b.in.comps, fact.ID)
+	githubCLI := cli != nil && cli.Kind == types.CLIKindGitHub
+	if cli != nil {
 		row.Kind, row.InImage = accessKindCLI, cliToolInImage(cliInImage(b.in.imageKey), cli.Kind)
 	}
+	if githubCLI && len(githubCLIRepos(*b.in.req, b.in.spec, b.in.scmSite)) == 0 {
+		row.Status, row.Reason, githubCLI = accessUnavailable, reasonCLINoGitHubRepo, false
+	}
+	if githubCLI && !slices.Contains(row.Hosts, ghscope.APIHost) {
+		row.Hosts = append(row.Hosts, ghscope.APIHost)
+	}
+	mcp, mcpHost := attachedMCP(b.in.comps, fact.ID)
+	if mcp != nil {
+		row.Kind, row.MCP = accessKindMCP, mcp
+	}
 	b.addRow(row)
+	if githubCLI {
+		b.addHost(ghscope.APIHost, viaInjected, row.ID)
+		b.addCredential(client.AccessCredential{ID: row.ID + ":cli", Kind: credKindGitHubApp, Owner: credOwnerOrgApp, Delivery: deliveryProxy, AfterEnd: afterEndGone})
+	}
 	for _, h := range row.Hosts {
-		b.addHost(h, viaEgress, row.ID)
+		via := viaEgress
+		if d, err := types.ParseDestination(h); mcp != nil && err == nil && d.Host == mcpHost {
+			via = viaMCPBroker
+		}
+		b.addHost(h, via, row.ID)
+	}
+	if cli != nil && cli.Kind == types.CLIKindAWS && cli.AWS != nil {
+		// The portal the proxy sets the person's session on, and the role
+		// credentials AWS issues into the sandbox there, renewed while the run
+		// lives and valid at AWS until they expire.
+		b.addHost(ssoPortalHost(cli.AWS.SSORegion, ""), viaInjected, row.ID)
+		b.addCredential(client.AccessCredential{ID: row.ID + ":aws_role", Kind: credKindAWSRole, Owner: credOwnerOwn,
+			Delivery: deliveryShortLived, Renewed: true, AfterEnd: afterEndExpires})
 	}
 	for i, sec := range fact.Secrets {
 		c := client.AccessCredential{ID: row.ID + ":secret:" + strconv.Itoa(i), Kind: credKindSecret, Owner: credOwnerOwn,

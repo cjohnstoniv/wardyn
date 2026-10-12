@@ -5,7 +5,7 @@
 
 import type { ComponentFact } from "./components";
 import type { AccessFacts } from "./new-run-access";
-import type { AllowedImage, AppliedResources, HarnessSetFact, ImageFact, LocalPlacementFact } from "./new-run-contract";
+import type { AllowedImage, AppliedResources, HarnessSetFact, ImageFact, LocalPlacementFact, MainDriveApplied, RunAttachment } from "./new-run-contract";
 import type { RunPolicySpec } from "./policy";
 import type { EffectiveRunLimits, ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
 
@@ -72,6 +72,8 @@ export interface PolicyPreviewResult {
   // The preflight's limits and applied size, with the same meaning.
   limits?: EffectiveRunLimits;
   resources_applied?: AppliedResources;
+  // The main-drive size it asked for and gets, the preflight's.
+  main_drive?: MainDriveApplied;
   // Whether each entry can run on the person's runner; the server always sends
   // the array, empty until its lane fills it (optional here so an older server still types).
   local_placement?: LocalPlacementFact[];
@@ -86,4 +88,8 @@ export interface PolicyPreviewResult {
   runner_pools?: RunnerPoolChoice[];
   // What the draft brings in, Review's same block (optional so an older server still types).
   access?: AccessFacts;
+  // The run's mount map: each repository, folder and drive at the path the run
+  // uses it at, the one holding the starting folder marked. The server always
+  // sends the array; optional here so an older server still types.
+  attachments?: RunAttachment[];
 }

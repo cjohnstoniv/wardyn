@@ -236,8 +236,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 
 	ap := newApprovalClient(cfg.ControlPlaneURL, ts, cfg.RunID, client)
 	// 0/absent for either knob keeps configureHold's built-in defaults (30s / 16).
-	ap.configureHold(cfg.Policy.FirstUseApproval.Normalize(),
-		time.Duration(cfg.Policy.FirstUseHoldSeconds)*time.Second, cfg.Policy.MaxHolds)
+	ap.configureHold(cfg.Policy.FirstUseApproval.Normalize(), time.Duration(cfg.Policy.FirstUseHoldSeconds)*time.Second, cfg.Policy.MaxHolds)
 
 	// Corporate CA trust (WARDYN_TRUSTED_CA_FILE): additive to the system
 	// roots for THIS sidecar's egress TLS. Each transport that may EDIT it
@@ -261,6 +260,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		BrokeredPATGrantIDs:  cfg.BrokeredPATGrantIDs,
 		ADOGrants:            newADOGrantsByHost(cfg.ADOGrant),
 		AzureGates:           cfg.AzureGates,
+		GitHubAPI:            cfg.GitHubAPI,
 		ControlPlaneURL:      cfg.ControlPlaneURL,
 		RunToken:             ts,
 		Upstream:             up,
@@ -278,7 +278,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ExclusionUnknown:     exclusionUnknown,
 		ViaOrgRoutes:         cfg.ViaOrgRoutes,
 	})
-	p.pushSets, p.pushBase, p.harnessRules, p.harnessCreds = cfg.PushRuleSets, compilePushRules(cfg.PushRuleBase), cfg.HarnessToolRules, cfg.HarnessCredentials
+	p.pushSets, p.pushBase, p.harnessRules, p.harnessCreds, p.mcp = cfg.PushRuleSets, compilePushRules(cfg.PushRuleBase), cfg.HarnessToolRules, cfg.HarnessCredentials, newMCPBroker(cfg.MCPServers, cfg.MCPBindings)
 	if ca != nil && len(cfg.MITMHosts) > 0 {
 		slog.InfoContext(ctx, "wardyn-proxy: TLS-MITM also enabled for operator-configured corp artifact host(s) (token injection)",
 			slog.Int("host_count", len(cfg.MITMHosts)))
@@ -343,6 +343,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.renewStop()
 		<-s.renewStopped
 	}
+	// Before http.Shutdown, which waits on open sandbox connections: the
+	// runtime's stop timeout may kill the process before anything after it.
+	s.proxy.revokeGitHubAPITokens(ctx)
 	httpErr := s.http.Shutdown(ctx)
 	// End any open credential re-auth hold: its poll loop is detached from the
 	// request that opened it (so a hung-up SDK can't end a hold its owner is

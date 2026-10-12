@@ -34,6 +34,7 @@ func registerSweepHealth(t *sweephealth.Tracker, in sweepInstall) {
 	sweeps := []sweephealth.Sweep{
 		{Name: sweephealth.RunSecret, Interval: runSecretSweepInterval},
 		{Name: sweephealth.CredentialExpiry, Interval: credentialSweepInterval},
+		{Name: sweephealth.RunQueue, Interval: runQueueSweepInterval},
 	}
 	if in.runner && in.autoStop > 0 {
 		sweeps = append(sweeps, sweephealth.Sweep{Name: sweephealth.IdleReaper, Interval: in.autoStop})

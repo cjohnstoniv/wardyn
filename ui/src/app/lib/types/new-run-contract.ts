@@ -21,12 +21,33 @@ export type PlacementValue = "remote" | "local";
 /** How an organisation-held credential reaches a local run (OD-12). */
 export type LocalDeliveryMode = "own" | "via_org" | "runner_resident" | "refuse";
 
-/** The CPU and memory a request asks for (Go: client.RunResources). A zero or absent field asks for the placement's default. */
+/** The CPU, memory and main-drive size a request asks for (Go: client.RunResources). A zero or absent field asks for the placement's default. */
 export interface RequestedResources {
   /** Milli-CPU: 2000 is two CPUs. The console works in tenths of a CPU. */
   cpu_millis?: number;
   /** Whole MiB. */
   memory_mib?: number;
+  /** The main drive in MiB, 0 to 16 TiB. A soft request: over the cap it is reduced and said so; a runner that cannot cap disk runs it uncapped. */
+  disk_mib?: number;
+}
+
+/** Where a main-drive size came from (Go: client.MainDriveBasis). */
+export type MainDriveBasis = "request" | "policy" | "default" | "none";
+
+/** What cut a main-drive size (Go: client.MainDriveClampSource). */
+export type MainDriveClampSource = "pool" | "governance" | "deployment" | "policy";
+
+/** The main-drive size a run asks for and gets, the number dispatch creates the sandbox with (Go: client.MainDriveApplied). */
+export interface MainDriveApplied {
+  requested_mib?: number;
+  /** 0 is no size: unbounded scratch. */
+  applied_mib: number;
+  basis: MainDriveBasis;
+  /** With basis "default": the limit whose default sized the run. */
+  default_source?: LimitSource;
+  clamped_by?: MainDriveClampSource;
+  /** True when a runner that cannot cap disk starts the run uncapped. A size the run's policy writes is never soft. */
+  soft: boolean;
 }
 
 /** The CPU and memory a run asked for and gets (Go: client.AppliedResources). */
@@ -290,11 +311,37 @@ export interface RunStartup {
 
 export type StartFolderKind = "image_default" | "attachment";
 
-/** The run's exactly-one starting folder; `attachment` is a workspace id or `drive`. */
+/**
+ * The run's exactly-one starting folder; `attachment` is a workspace id or `drive`.
+ * `repo` names one repository the run clones from that workspace; `drive_id` is
+ * refused until the server attaches several drives.
+ */
 export interface StartFolder {
   kind: StartFolderKind;
   attachment?: string;
+  repo?: string;
+  drive_id?: string;
   subpath?: string;
+}
+
+/** One repository a workspace selection clones (pkg/client.RepoSelection); "" ref = the source's own. */
+export interface RepoSelection {
+  repo: string;
+  ref?: string;
+}
+
+/** One entry of the run's mount map on the preflight and the policy preview (pkg/client.RunAttachment). */
+export interface RunAttachment {
+  kind: "repository" | "folder" | "drive";
+  workspace_id?: string;
+  repo?: string;
+  ref?: string;
+  drive_id?: string;
+  /** The workspace or drive name, never a host path. */
+  name: string;
+  target: string;
+  read_only: boolean;
+  starts_here: boolean;
 }
 
 /** The attachment name of the person's drive in `StartFolder.attachment`. */

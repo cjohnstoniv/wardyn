@@ -44,13 +44,23 @@ type runFold struct {
 	// value, so one request cannot grade on two sets.
 	baseline composer.Baseline
 
-	spec              types.RunPolicySpec
-	policyID          *uuid.UUID
-	policyWarns       []string
-	source            policySourceRecord
-	ephemeralDirs     []string
-	driveMount        *types.DriveMount
-	wsRefs            []types.Workspace
+	spec          types.RunPolicySpec
+	policyID      *uuid.UUID
+	policyWarns   []string
+	source        policySourceRecord
+	ephemeralDirs []string
+	driveMount    *types.DriveMount
+	// previewDriveReadOnly is the drive's posture at the preview, which resolves
+	// no mount: nil when the run has no drive.
+	previewDriveReadOnly *bool
+	// seed is what seeding the request's workspaces decided (attached first,
+	// the primary leading); wsRefs adds every other one the spec references.
+	seed   workspaceSeed
+	wsRefs []types.Workspace
+	// attachments is the run's mount map and startFolder its one working
+	// directory (WARDYN_START_FOLDER), both from stepWorkspaces.
+	attachments       []client.RunAttachment
+	startFolder       string
 	present           map[string]bool
 	reqEvents         []requirementAuditEntry
 	directGitHubAdded []string
@@ -70,6 +80,18 @@ type runFold struct {
 	pushSets          []types.PushRuleSet
 	// place is where the run goes (stepPlacement): the resolved pool and the fully eligible targets.
 	place runPlacement
+	// mainDrive is the main drive's size (stepMainDrive).
+	mainDrive mainDrive
+	// queued says the run waits for a slot (pool-queue.md section 6): its pool has a concurrent-run cap,
+	// set by stepPlacement at create and Review. A waiting run renews no credential, takes no host
+	// capacity or deployment slot, and is refused for its size only when it can never fit; promotion
+	// applies the rest when a slot frees.
+	queued bool
+	// promoted says the fold is the queue's start replaying a promoted run: promotion has already
+	// admitted it against the host, the deployment cap and the fit, so those steps stand down.
+	promoted bool
+	// barrierOptions are Review's barriers for the resolved pool under this draft's floors (stepConfinement).
+	barrierOptions []client.BarrierOption
 	// harnesses is a run-mode request's harness set and image the image that
 	// carries it (stepHarnessSet; nil when a custom image or workspace decides);
 	// harnessChoices is each harness's model-provider choice (stepModelProvider).
@@ -124,6 +146,10 @@ type runFoldStep struct {
 //     answer before the confinement floor and the provider's liveness step.
 //   - Confinement, then the model provider, then autonomy: the autonomy grade
 //     reads the enforced class and the chosen model credential.
+//   - The tool lane after autonomy, the last step that can put the run on the
+//     gated lane: a person's rule, or a policy rule that holds or blocks, puts
+//     a background run there too, and the person's allows are held to the
+//     policy with the lane's default under it.
 //   - Azure DevOps standing and PAT narrowing read autonomy's site snapshot.
 //   - The run's end reads the resolved pool, the governance ceiling and the deployment,
 //     so it sits after placement and refuses before capacity.
@@ -150,8 +176,12 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepLocalEligibility, foldAll},
 	{(*Server).stepConfinement, foldAll},
 	{(*Server).stepPlacementCapability, foldAll},
+	{(*Server).stepMainDrive, foldAll},
 	{(*Server).stepModelProvider, foldAll},
+	{(*Server).stepAWSCLIProfile, foldAll},
 	{(*Server).stepAutonomy, foldAll},
+	{(*Server).stepToolPolicy, foldAll},
+	{(*Server).stepGitHubCLIRepo, foldCreate | foldPreflight},
 	{(*Server).stepADOStanding, foldAll},
 	{(*Server).stepPATNarrowing, foldPreflight | foldPreview},
 	{(*Server).stepRunEnd, foldAll},
@@ -169,7 +199,7 @@ var runFoldSteps = []runFoldStep{
 func (s *Server) foldRunRequest(w http.ResponseWriter, r *http.Request, mode foldMode,
 	req *createRunRequest, ceiling governanceCeiling, reqCC types.ConfinementClass,
 ) (runFold, bool) {
-	f := runFold{mode: mode, w: w, r: r, req: req, ceiling: ceiling, reqCC: reqCC}
+	f := runFold{mode: mode, w: w, r: r, req: req, ceiling: ceiling, reqCC: reqCC, promoted: startingPromoted(r.Context())}
 	rec := &foldRecorder{}
 	for _, step := range runFoldSteps {
 		if step.modes&mode != 0 && !step.run(s, &f, rec) {

@@ -100,7 +100,7 @@ export interface ToolDefaultFact {
 export interface ToolPolicyFact {
   harness: string;
   lane: "gated" | "ungated" | "attended" | "unsupported" | (string & {});
-  enforcer: "wardyn_gate" | "harness_settings" | "none" | (string & {});
+  enforcer: "wardyn_gate" | "harness_settings" | "mcp_broker" | "none" | (string & {});
   default: ToolDefaultFact;
   policy_rules: LockedToolRule[];
   rule_effects: EffectOption[];

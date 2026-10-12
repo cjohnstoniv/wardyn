@@ -4,6 +4,10 @@
     "text": "In an interactive run Claude Code asks you before it acts, and this run's settings don't let it skip asking."
   },
   {
+    "key": "attended_rules_unavailable",
+    "text": "Wardyn can't set tool rules for an interactive run yet."
+  },
+  {
     "key": "cli_no_github_repo",
     "text": "GitHub CLI works only with this run's GitHub repositories. Add one on the Files step."
   },

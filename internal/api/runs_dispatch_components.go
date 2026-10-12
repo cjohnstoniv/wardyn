@@ -52,6 +52,20 @@ type componentDispatch struct {
 	// Config is each component's plain, non-secret environment, in the order
 	// the components were attached. The gate refused a key two of them share.
 	Config []componentConfig
+	// GitHubAPI is the GitHub CLI door's grant, written at create once the
+	// run's repositories are known (persistGitHubCLIGrants); nil without one.
+	GitHubAPI *proxy.GitHubAPIGrant
+	// AWSCLI is the run's AWS CLI row, nil when it attached none (authorAWSCLI).
+	AWSCLI *awsCLIDispatch
+	// MCP is each MCP server, which the broker route alone reaches (run_mcp.go).
+	MCP []componentMCP
+}
+
+// dispatchWith is dispatch with the GitHub CLI door create wrote.
+func (c runComponents) dispatchWith(githubAPI *proxy.GitHubAPIGrant) componentDispatch {
+	d := c.dispatch()
+	d.GitHubAPI = githubAPI
+	return d
 }
 
 // componentConfig is one component's plain config, and what a record about it
@@ -67,17 +81,30 @@ type componentConfig struct {
 // dispatch is the part of the gate's decision that dispatch acts on. A header
 // an organisation's component delivers over plain HTTP gets no interception
 // entry: there is no TLS to terminate, and the proxy sets it on the plain lane.
+//
+// An MCP server's header gets no interception entry either: the broker sets it
+// on the request it re-originates.
 func (c runComponents) dispatch() componentDispatch {
-	var d componentDispatch
+	d := componentDispatch{AWSCLI: c.awsCLI()}
+	keys := mcpServerKeys(c.attached)
+	row := -1 // the run_components ordinal: a built-in writes no row (persistRunComponents)
 	for i, a := range c.attached {
+		if a.builtin == nil {
+			row++
+		}
 		def := a.snapshot.Definition
+		if def.MCP != nil {
+			server, _ := types.MCPURLDestination(def.MCP.URL)
+			d.MCP = append(d.MCP, componentMCP{Ordinal: row, Key: keys[i], URL: def.MCP.URL, Host: server.Host,
+				Harnesses: a.snapshot.MCPHarnesses, Credentialed: len(def.Secrets) > 0})
+		}
 		for _, sec := range def.Secrets {
 			del := sec.Delivery
 			if del.Mode != types.ComponentDeliveryHeader {
 				continue
 			}
 			d.HeaderHosts = append(d.HeaderHosts, del.Host)
-			if !del.PlainHTTP {
+			if !del.PlainHTTP && def.MCP == nil {
 				d.MITMHosts = append(d.MITMHosts, net.JoinHostPort(del.Host, componentHeaderPort))
 			}
 		}

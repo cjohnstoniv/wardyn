@@ -187,7 +187,13 @@ func (f *azureFixture) storedNames(t *testing.T, owner string) []string {
 	return names
 }
 
-func azureErrorRedirect(reason string) string { return azureFoundrySignInErrorPath + reason }
+// The redirects every capture in this file runs against azUIDAnthropic, and
+// both name that row (azure_provider).
+func azureErrorRedirect(reason string) string {
+	return azureFoundrySignInErrorPath + reason + azureProviderParam(azUIDAnthropic)
+}
+
+var azureDoneRedirect = azureFoundrySignInDonePath + azureProviderParam(azUIDAnthropic)
 
 func cookieNamed(t *testing.T, cookies []*http.Cookie, name string) *http.Cookie {
 	t.Helper()
@@ -416,6 +422,62 @@ func TestAzureFoundrySignIn_RefusesNoSessionAndNoConsoleLogin(t *testing.T) {
 	}
 }
 
+// The start door passes Microsoft's account-picker hint through and refuses any
+// other prompt before an authority is named (the Azure DevOps door's rule).
+func TestAzureFoundrySignIn_PromptSelectAccountReachesTheAuthorizeURL(t *testing.T) {
+	f := newAzureFixture(t)
+	subject := f.fake.Subject()
+	for _, tc := range []struct {
+		query, want string
+		code        int
+	}{
+		{"&prompt=select_account", "select_account", http.StatusFound},
+		{"", "", http.StatusFound},
+		{"&prompt=none", "", http.StatusBadRequest},
+		{"&prompt=login", "", http.StatusBadRequest},
+	} {
+		r := httptest.NewRequest(http.MethodGet, azureFoundrySignInRoute+"?uid="+azUIDAnthropic+tc.query, nil)
+		r = r.WithContext(withOIDCHuman(r.Context(), subject))
+		w := httptest.NewRecorder()
+		f.srv.handleAzureFoundrySignIn(w, r)
+		if w.Code != tc.code {
+			t.Fatalf("%q: status %d, want %d (body %q)", tc.query, w.Code, tc.code, w.Body.String())
+		}
+		if tc.code != http.StatusFound {
+			if len(w.Result().Cookies()) != 0 {
+				t.Errorf("%q: a refused prompt set cookies", tc.query)
+			}
+			continue
+		}
+		u, err := url.Parse(w.Header().Get("Location"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := u.Query().Get("prompt"); got != tc.want {
+			t.Errorf("%q: authorize prompt = %q, want %q", tc.query, got, tc.want)
+		}
+	}
+}
+
+// Both outcomes name the row the cookie stamped, so the console can say which
+// provider connected or failed; a uid that needs escaping is escaped.
+func TestAzureFoundryCallback_RedirectsNameTheRow(t *testing.T) {
+	f := newAzureFixture(t)
+	subject := f.fake.Subject()
+	w := f.capture(t, subject, azUIDAnthropic)
+	if got, want := w.Header().Get("Location"), azureFoundrySignInDonePath+"&azure_provider="+azUIDAnthropic; got != want {
+		t.Errorf("done redirect = %q, want %q", got, want)
+	}
+	q, cookies, _ := f.begin(t, subject, azUIDAnthropic)
+	w = f.callback(subject, url.Values{"state": {q.Get("state")}, "code": {"not-a-real-code"}}, cookies)
+	if loc := w.Header().Get("Location"); !strings.HasSuffix(loc, "&azure_provider="+azUIDAnthropic) {
+		t.Errorf("error redirect = %q, want the row named", loc)
+	}
+	if got := azureProviderParam("a b&c"); got != "&azure_provider=a+b%26c" {
+		t.Errorf("azureProviderParam escaping = %q", got)
+	}
+}
+
 // ── capture ─────────────────────────────────────────────────────────────────
 
 func TestAzureFoundryCapture_StoresSealedUnderTheCallersNamespace(t *testing.T) {
@@ -423,7 +485,7 @@ func TestAzureFoundryCapture_StoresSealedUnderTheCallersNamespace(t *testing.T) 
 	subject := f.fake.Subject()
 
 	w := f.capture(t, subject, azUIDAnthropic)
-	if w.Code != http.StatusFound || w.Header().Get("Location") != azureFoundrySignInDonePath {
+	if w.Code != http.StatusFound || w.Header().Get("Location") != azureDoneRedirect {
 		t.Fatalf("capture: status %d location %q body %q", w.Code, w.Header().Get("Location"), w.Body.String())
 	}
 	blob, found := f.stored(t, subject, azUIDAnthropic)
@@ -511,7 +573,7 @@ func TestAzureFoundryCallback_RowIsTheCookiesNeverTheQuerys(t *testing.T) {
 	for _, key := range []string{"uid", "id", "provider", "row"} {
 		q.Set(key, azUIDOpenAI)
 	}
-	if w := f.callback(subject, q, cookies); w.Header().Get("Location") != azureFoundrySignInDonePath {
+	if w := f.callback(subject, q, cookies); w.Header().Get("Location") != azureDoneRedirect {
 		t.Fatalf("callback: status %d location %q", w.Code, w.Header().Get("Location"))
 	}
 	if _, found := f.stored(t, subject, azUIDAnthropic); !found {
