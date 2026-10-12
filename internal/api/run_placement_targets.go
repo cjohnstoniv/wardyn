@@ -199,5 +199,5 @@ func (s *Server) executorFacts(ctx context.Context, executor string) (runner.Tar
 	if err != nil {
 		return runner.TargetFacts{}, false
 	}
-	return runner.TargetFacts{Classes: caps.ConfinementClasses, DiskEnforcement: caps.EphemeralDiskEnforcement}, true
+	return runner.TargetFacts{Classes: caps.ConfinementClasses, EphemeralDiskEnforcement: caps.EphemeralDiskEnforcement}, true
 }

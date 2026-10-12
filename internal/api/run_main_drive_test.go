@@ -164,3 +164,12 @@ func TestMainDriveUnenforceableUnpooledSentence(t *testing.T) {
 		t.Errorf("body = %s, want the unpooled sentence", body)
 	}
 }
+
+// TestPreviewKeepsThePolicyCutWarning: the policy preview's warning whitelist passes the sentence a
+// request cut by the run's own policy gets, so the three doors say the same words.
+func TestPreviewKeepsThePolicyCutWarning(t *testing.T) {
+	got := previewSafeWarnings([]string{warnDiskPolicyCut, "not on the list"})
+	if len(got) != 1 || got[0] != warnDiskPolicyCut {
+		t.Errorf("previewSafeWarnings = %v, want only %q", got, warnDiskPolicyCut)
+	}
+}
