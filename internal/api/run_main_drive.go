@@ -135,16 +135,17 @@ func (c governanceCeiling) authoredDiskMiB() int {
 	return c.Spec.Resources.DiskMiB
 }
 
-// runnerCannotCapDisk reports whether the run can only land where disk is not capped. A pooled run
-// is judged by the targets it can land on (the pool's executors or runners), and is refused only
-// when every one of them reports `none`: the deployment-wide word is the WEAKEST across substrates,
-// so on a mixed estate it would refuse a run bound for the substrate that does enforce. A target
-// that reports nothing is unknown, never `none`. An unpooled run has only the deployment's word.
+// runnerCannotCapDisk reports whether the run can land where disk is not capped. A pooled run is
+// judged by its eligible targets (the pool's executors or runners): ANY target reporting `none`
+// refuses, because placement picks a target by run id and never by disk, so a hard size could bind
+// there (DS-3 section 2, the weakest word across the targets). A pool whose targets all enforce is
+// accepted even when another substrate of the deployment does not. An online target that reports no
+// word is unknown, never `none`. An unpooled run has only the deployment's word.
 // A runner that cannot answer is not asked to refuse here: the placement steps own that.
 func (s *Server) runnerCannotCapDisk(ctx context.Context, req createRunRequest, place runPlacement) bool {
 	if place.pooled && len(place.eligible) > 0 {
-		return !slices.ContainsFunc(place.eligible, func(t poolTarget) bool {
-			return t.offline || t.facts.DiskEnforcement != types.StorageEnforcementNone
+		return slices.ContainsFunc(place.eligible, func(t poolTarget) bool {
+			return t.facts.EphemeralDiskEnforcement == types.StorageEnforcementNone
 		})
 	}
 	p := requestPlacement(req)

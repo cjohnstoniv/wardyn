@@ -47,7 +47,7 @@ func (e *placementEnv) diskPool(name string, defMiB, capMiB int, executors ...st
 func (e *placementEnv) setDiskWord(w types.StorageEnforcement) {
 	e.runner.fakeRunner.capsDisk = w
 	for name, f := range e.runner.execFacts {
-		f.DiskEnforcement = w
+		f.EphemeralDiskEnforcement = w
 		e.runner.execFacts[name] = f
 	}
 }
@@ -225,25 +225,38 @@ func TestMainDriveUnenforceable(t *testing.T) {
 
 // TestMainDriveUnenforceableJudgesTheRunsOwnPool: on a mixed estate (docker over ext4 reporting
 // `none`, Kubernetes reporting `eviction`) the deployment-wide word is the weakest, `none`. A policy
-// size is refused only in a pool whose every target reports `none`: a pool of the Kubernetes
-// executor, or one holding both, is accepted.
+// size is refused in a pool with ANY `none` target, since placement picks a target by run id and
+// never by disk (a hard size must never bind to a `none` target); a pool of the Kubernetes executor
+// alone is accepted. The refused pools create no sandbox, so no hard size lands on `none`.
 func TestMainDriveUnenforceableJudgesTheRunsOwnPool(t *testing.T) {
 	e := newPlacementEnv(t)
 	e.runner.fakeRunner.capsDisk = types.StorageEnforcementNone // the orchestrator's weakest word
-	e.runner.execFacts["alpha"] = runner.TargetFacts{Classes: e.runner.execFacts["alpha"].Classes, DiskEnforcement: types.StorageEnforcementNone}
-	e.runner.execFacts["beta"] = runner.TargetFacts{Classes: e.runner.execFacts["beta"].Classes, DiskEnforcement: types.StorageEnforcementEviction}
+	e.runner.execFacts["alpha"] = runner.TargetFacts{Classes: e.runner.execFacts["alpha"].Classes, EphemeralDiskEnforcement: types.StorageEnforcementNone}
+	e.runner.execFacts["beta"] = runner.TargetFacts{Classes: e.runner.execFacts["beta"].Classes, EphemeralDiskEnforcement: types.StorageEnforcementEviction}
 	dockerPool := e.diskPool("Docker", 0, 0, "alpha")
 	k8sPool := e.diskPool("K8s", 0, 0, "beta")
 	both := e.diskPool("Both", 0, 0)
 	for _, door := range placementDoors {
-		for pool, wantRefused := range map[string]bool{dockerPool.Name: true, k8sPool.Name: false, both.Name: false} {
-			p := map[string]types.RunnerPool{dockerPool.Name: dockerPool, k8sPool.Name: k8sPool, both.Name: both}[pool]
-			w := e.call(e.person, http.MethodPost, door, diskBody(p, 0, 4096))
+		for _, tc := range []struct {
+			pool    types.RunnerPool
+			refused bool
+		}{{dockerPool, true}, {k8sPool, false}, {both, true}} {
+			w := e.call(e.person, http.MethodPost, door, diskBody(tc.pool, 0, 4096))
 			refused := w.Code == http.StatusUnprocessableEntity && errorReason(w) == reasonMainDriveUnenforceable
-			if refused != wantRefused || (!refused && w.Code >= 300) {
-				t.Errorf("%s in pool %s: %d %s, want refused=%v", door, pool, w.Code, w.Body, wantRefused)
+			if refused != tc.refused || (!refused && w.Code >= 300) {
+				t.Errorf("%s in pool %s: %d %s, want refused=%v", door, tc.pool.Name, w.Code, w.Body, tc.refused)
 			}
 		}
+	}
+	// Every create above that was accepted ran in the Kubernetes pool: none reached the `none` executor.
+	for _, ex := range e.runner.onExecutor {
+		if ex == "alpha" {
+			t.Errorf("a policy-written size was created on executor alpha, which reports none")
+		}
+	}
+	// A soft size is still fine in the mixed pool: it runs uncapped there, by design.
+	if w := e.call(e.person, http.MethodPost, "/api/v1/runs/preflight", diskBody(both, 4096, 0)); w.Code != http.StatusOK {
+		t.Errorf("a requested size in the mixed pool: %d %s", w.Code, w.Body)
 	}
 }
 
