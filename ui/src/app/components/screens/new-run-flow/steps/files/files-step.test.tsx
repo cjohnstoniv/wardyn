@@ -9,6 +9,8 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
+import { DENIED } from "../../../../../lib/permissions-copy";
+import { PROVIDERS } from "../../../../../lib/workspace-providers-copy";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { filesPreflight, limitsFor, MAIN_DRIVE_FACTS, REPO_ATTACHMENT, SCENARIO_FILES_WORKSPACES } from "../../../../../lib/new-run-fixtures/scenarios/files";
 import type { RepoBranches } from "../../../../../lib/api/repo-branches";
@@ -250,6 +252,50 @@ describe("repositories", () => {
     expect(screen.queryByText(NR_FILES.BRANCH_FALLBACK, { exact: false })).toBeNull();
     await userEvent.type(field, "v2");
     expect(screen.getByText(NR_FILES.REF_NOT_CHECKED)).toBeInTheDocument();
+  });
+});
+
+describe("repositories the person cannot launch", () => {
+  const [payments, docs] = SCENARIO_FILES_WORKSPACES.member;
+  const unlisted = { ...payments, available_to_you: false };
+  const notAdmitted = { ...docs, sources: [{ ...docs.sources![0], admitted: false }] };
+  const serve = (list: unknown[]) =>
+    wfetchMock.mockImplementation(async (path: string) => {
+      if (path.includes("/branches")) return json(LISTED);
+      if (path.startsWith("/workspaces")) return json(list);
+      throw new Error(`unexpected ${path}`);
+    });
+
+  it("(R) lists an unavailable workspace's repository disabled, with the server's sentence tied to its checkbox", async () => {
+    serve([unlisted, docs]);
+    show();
+    const box = await includeBox("payments");
+    expect(box).toBeDisabled();
+    const reason = screen.getByText(DENIED.WORKSPACE_NOT_AVAILABLE);
+    expect(box.getAttribute("aria-describedby")).toBe(reason.id);
+    expect(await includeBox("docs")).toBeEnabled();
+    await userEvent.click(box);
+    expect(drawn().workspaces).toBeUndefined();
+  });
+
+  it("(R) lists a repository off the admitted list disabled with its sentence, and only when admitted is false", async () => {
+    serve([payments, notAdmitted]);
+    show();
+    const box = await includeBox("docs");
+    expect(box).toBeDisabled();
+    expect(box.getAttribute("aria-describedby")).toBe(screen.getByText(PROVIDERS.CARD_NOT_ADMITTED).id);
+    expect(await includeBox("payments")).toBeEnabled();
+    expect(screen.getAllByText(PROVIDERS.CARD_NOT_ADMITTED)).toHaveLength(1);
+  });
+
+  it("an unavailable repository already in the draft can still be taken out", async () => {
+    serve([unlisted, docs]);
+    show({ ...INTERACTIVE, workspaces: [{ workspace_id: "ws-payments", repos: [{ repo: "github.com/acme/payments" }] }] });
+    const box = await includeBox("payments");
+    await waitFor(() => expect(box).toBeChecked());
+    expect(box).toBeEnabled();
+    await userEvent.click(box);
+    expect(drawn().workspaces ?? []).toEqual([]);
   });
 });
 

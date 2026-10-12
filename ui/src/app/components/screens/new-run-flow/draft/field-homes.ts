@@ -7,7 +7,7 @@
 // Keys are the template field registry's request names and every policy name
 // as `inline_policy.<name>`; a registry row without a home fails its test.
 
-import type { NewRunReason, PlacementReason } from "../../../../lib/new-run-refusals";
+import type { NewRunReason, PlacementReason, WorkspaceDoorReason } from "../../../../lib/new-run-refusals";
 import type { RunModeReason } from "../../../../lib/run-mode-refusals";
 import type { RunnerPoolReason } from "../../../../lib/runner-pool-refusals";
 import type { TemplateReason } from "../../../../lib/template-refusals";
@@ -67,7 +67,7 @@ export const REVIEW_GROUP_OF_FIELD: Record<string, ReviewGroupId> = {
 };
 
 /** Every reason a preflight or create refusal can carry that the console names. */
-export type KnownLaunchReason = NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | TemplateReason;
+export type KnownLaunchReason = NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | TemplateReason | WorkspaceDoorReason;
 
 /** Written out key by key, so a new reason without a home fails typecheck. */
 export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
@@ -75,6 +75,7 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   workspace_target_invalid: "files", workspace_target_overlap: "files", workspace_pin_conflict: "files",
   workspace_selection_invalid: "files", workspace_repo_unknown: "files", run_ref_invalid: "files",
   workspace_ado_org_conflict: "files",
+  workspace_repo_not_admitted: "files", capability_workspace: "files", capability_workspace_provider: "files",
   resources_invalid: "review", request_field_unavailable: "review",
   override_invalid: "tools", override_refused: "tools",
   placement_required: "run", placement_unavailable: "run", placement_denied: "run", placement_trusted_output: "run",
