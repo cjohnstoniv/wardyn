@@ -6,8 +6,10 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -447,6 +449,23 @@ func (s *Server) stepPlacementDenied(f *runFold, rec *foldRecorder) bool {
 	return !s.placementDeniedRefusal(f.r.Context(), requestPlacement(*f.req), f.ceiling).write(s, f.w, f.r)
 }
 
+// stepResources writes the size placement applied into the resolved spec, so everything after it
+// (host capacity, the quota fit, the run row, dispatch) reads what the dry doors report. A cut is
+// said once; it never refuses.
+func (s *Server) stepResources(f *runFold, rec *foldRecorder) bool {
+	a := f.place.applied
+	rl := types.ResourceLimits{}
+	if f.spec.Resources != nil {
+		rl = *f.spec.Resources
+	}
+	rl.CPUMillis, rl.MemoryMiB = a.CPUMillis.Applied, a.MemoryMiB.Applied
+	f.spec.Resources = &rl
+	if (a.CPUMillis.Capped || a.MemoryMiB.Capped) && !slices.Contains(f.policyWarns, composer.WarnResourcesCapped) {
+		f.policyWarns = append(f.policyWarns, composer.WarnResourcesCapped)
+	}
+	return true
+}
+
 // stepLocalEligibility is before confinement/provider liveness: create may
 // renew a one-use AWS credential there. No local refusal may reach that phase.
 // The admitted plan supplies specific refusals; final unsupported-local stays
@@ -463,7 +482,8 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 // stepPlacement runs after the components and before the local-eligibility step: the confinement
 // floor it reads is the policy's and the components', and the plan it gates is the one that step judges.
 func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
-	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true}
+	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
+		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling))}
 	if f.mode == foldPreflight { // preflight parses the class inside stepConfinement, after this step
 		in.reqCC, in.reqCCOK = parseConfinementClass(f.req.ConfinementClass)
 	}
