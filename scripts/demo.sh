@@ -29,6 +29,8 @@ DEMO_REPO="${WARDYN_DEMO_REPO:-octocat/Hello-World}"
 DEMO_TASK="${WARDYN_DEMO_TASK:-wardyn compose smoke demo}"
 
 source "${REPO_ROOT}/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/runner-limits.sh
+source "${REPO_ROOT}/scripts/lib/runner-limits.sh"
 
 # wardyn runs the shipped CLI inside the wardynd container with the admin token.
 wardyn() {
@@ -81,6 +83,8 @@ cmd_up() {
     sleep 2
   done
   log "wardynd is healthy"
+  # The stack's Docker runner takes no run until it has limits (scripts/lib/runner-limits.sh).
+  wardyn_ensure_runner_limits || die "the stack's runner has no limits, so the demo run cannot start"
 
   log "Control plane health:"
   wardyn runs list >/dev/null 2>&1 || true
