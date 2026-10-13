@@ -155,6 +155,8 @@ export interface RunnerPoolDefaults {
   preferred_hosting?: RunnerPoolHosting;
   remote_provided?: string;
   self_hosted?: string;
+  /** The organisation's default barrier; a person's own document never carries one (the server refuses it). */
+  barrier?: ConfinementClass;
 }
 
 /** Go: types.ResolvedRunnerPool. A label for the choice, never admission. */

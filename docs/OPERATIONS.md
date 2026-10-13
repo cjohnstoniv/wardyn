@@ -1198,9 +1198,9 @@ erases one person's retained records by explicit scope, in one audited act
 | `mask_copies` | the masking manifests of the runs the person created, after their live attaches, SSH shells and relays are fenced |
 | `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
 | `recordings` | their session recordings and `source: "recording"` output rows, with durable per-run fences against later writes; direct stdout and pane snapshots retain their independent `run_outputs` scope |
-| `run_tasks` | the task text of the runs the person created |
-| `components` | the components the person saved, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
-| `run_setups` | the person's own run templates and every revision of them, their group template-manager grants, and their name as the author of shared templates, revisions and grants, which stay without it |
+| `run_tasks` | the task text of the runs the person created, and the launch intents of those runs |
+| `components` | the components the person saved, the launch intents of their runs, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
+| `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions and grants, which stay without it |
 | `runner_pools` | the person's own Self-Hosted runner pools, deleted as their own delete would, and their name on every pool row of theirs; their runners stay |
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
 | `credentials` | the person's stored credentials, their encryption key and provider connection-change records (also erased by `DELETE /people/{principal}/credentials`) |
@@ -1212,6 +1212,13 @@ erases one person's retained records by explicit scope, in one audited act
   `person.erasure` row records a `failure` naming each scope's outcome, and a retry with the same scopes finishes the
   rest.
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
+
+- **A launch intent (a run's setup, kept for Run again) is erased with every launch whose run insert began before the erase.**
+  - A run's insert takes a per-person Postgres lock first, shared and without waiting, and writes the intent in the same transaction.
+  - An erase takes it exclusively and waits, so it deletes what earlier launches wrote.
+  - A launch that meets a running erase starts with no intent (`run.create` `launch_intent_reason` `erasure_in_progress`).
+  - A request decoded before the erase whose insert begins after it commits keeps its intent, as its run row keeps its task.
+  - Migration `0171_run_launch_intents` adds the table; a split-role install grants the app role `SELECT, INSERT, DELETE` on it.
 
 - **A credential write that began before the erase never lands behind it.**
   - The `credentials` scope advances the person's erase generation before it lists anything and again after the deletes, so a write that began between the two is refused as well.

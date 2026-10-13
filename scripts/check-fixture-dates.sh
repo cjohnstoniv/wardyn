@@ -137,6 +137,9 @@ declare -A ALLOWLIST=(
   # nothing compares it against the clock.
   ["cmd/wardyn/run_inspect_test.go"]=1
   ["cmd/wardyn/run_queue_wait_test.go"]=1
+  # New Run Launched: the wait/elapsed words are computed from a fixed reference instant passed in as now;
+  # nothing reads the real clock.
+  ["ui/src/app/components/screens/new-run-flow/launch/launched-model.test.ts"]=1
   # #541 fix review: connectionRowCopy's C5 (expiring) test pins a LITERAL
   # expected string for absoluteTime's clock-time rendering, deliberately not
   # a recomputation through absoluteTime itself (that would let the

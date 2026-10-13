@@ -41,6 +41,9 @@ type runPlacement struct {
 	eligible []poolTarget
 	// targets is every candidate with its own facts, before any demand: Review's barrier options.
 	targets []poolTarget
+	// orgBarrier is the organisation's default barrier (runner_pool_org_defaults), which an untouched
+	// launch gets when it is at or above the floor and the pool offers it.
+	orgBarrier types.ConfinementClass
 	// choices is the caller's permitted catalogue with each pool's availability, for the two dry doors.
 	choices []client.RunnerPoolChoice
 	// limits are what this run may get, pooled or not; applied is the CPU and memory it gets.
@@ -132,7 +135,7 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	// A self-hosted pool offers only the person's own runners, so no deployment-wide sentence answers a
 	// class none of them enforces: the class is held against each of them, the same at every door.
 	if pool.HostingType == types.RunnerPoolSelfHosted && f.reqCCOK {
-		if _, err := enforcedConfinement(f.floor, f.reqCC, nil, f.baseline); err == nil {
+		if _, _, err := enforcedConfinement(f.floor, f.reqCC, nil, "", f.baseline); err == nil {
 			demand.reqCCOK = true
 		}
 	}
@@ -164,7 +167,7 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 		return runPlacement{}, targetRefusal(decision.Refusal, row.Pool.Name, pool.HostingType)
 	}
 	return runPlacement{pooled: true, pool: pool, row: row.Pool, placement: decision.Placement, filled: decision.Filled,
-		eligible: pickTargets(eligible, decision.Targets), targets: targets, choices: choices, limits: limits, applied: applied}, nil
+		eligible: pickTargets(eligible, decision.Targets), targets: targets, orgBarrier: org.Barrier, choices: choices, limits: limits, applied: applied}, nil
 }
 
 // queues says a run bound for this pool waits for a slot instead of starting at once: the pool sets a
@@ -488,7 +491,9 @@ func (d placementDemand) refusal(t poolTarget) placement.Reason {
 		return placement.ReasonRunnerOffline
 	}
 	if d.reqCCOK {
-		enforced, err := enforcedConfinement(d.floor, d.reqCC, t.facts.Classes, d.baseline)
+		// No org default here: it is chosen only from the candidate's own classes, so it never changes
+		// whether the resulting class is enforced.
+		enforced, _, err := enforcedConfinement(d.floor, d.reqCC, t.facts.Classes, "", d.baseline)
 		if err != nil || (enforced != "" && !slices.Contains(t.facts.Classes, enforced)) {
 			return placement.ReasonPlacementCapability
 		}

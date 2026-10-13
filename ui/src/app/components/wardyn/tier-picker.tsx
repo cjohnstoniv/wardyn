@@ -77,7 +77,7 @@ export function pickerShape(widthPx: number): "segmented" | "dropdown" {
 /** Tracks the wrapper's own content width via ResizeObserver, when the
  *  environment has one — a stub (no callback ever fires) leaves `width` at 0,
  *  which pickerShape reads as "segmented", the safe default. */
-function useElementWidth<T extends HTMLElement>(): [React.RefObject<T>, number] {
+function useElementWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] {
   const ref = React.useRef<T>(null);
   const [width, setWidth] = React.useState(0);
   React.useEffect(() => {
