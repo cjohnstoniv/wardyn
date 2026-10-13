@@ -143,7 +143,7 @@ func newClient(cfg Config) (*client, error) {
 func sameOrigin(base *url.URL) func(*http.Request, []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
 		to := req.URL
-		if to.User != nil || to.Scheme != base.Scheme || !strings.EqualFold(to.Hostname(), base.Hostname()) || port(to) != port(base) {
+		if to.User != nil || to.Scheme != base.Scheme || !sameHost(to.Hostname(), base.Hostname()) || port(to) != port(base) {
 			return http.ErrUseLastResponse
 		}
 		// Setting CheckRedirect replaces net/http's own bound, so it is kept here.
@@ -152,6 +152,27 @@ func sameOrigin(base *url.URL) func(*http.Request, []*http.Request) error {
 		}
 		return nil
 	}
+}
+
+// sameHost compares two host names as DNS does: ASCII letters fold and nothing
+// else does. strings.EqualFold would also take a Kelvin sign for a k.
+func sameHost(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range len(a) {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
 }
 
 // port is the port u is dialled on: its own, else its scheme's.

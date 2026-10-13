@@ -80,6 +80,9 @@ func TestClient_RedirectOriginIsSchemeHostAndPort(t *testing.T) {
 		{"https://vault.example", "https://vault.example:8200/v1/y", ""},
 		{"https://vault.example:8200", "https://u:p@vault.example:8200/v1/y", ""},
 		{"https://vault.example:8200", "https://@vault.example:8200/v1/y", ""},
+		// Unicode case folding is not DNS's: a Kelvin sign is not a k, a long s not an s.
+		{"https://vault.kube.example:8200", "https://vault.\u212aube.example:8200/v1/y", ""},
+		{"https://vault.secret.example:8200", "https://vault.\u017fecret.example:8200/v1/y", ""},
 	} {
 		c := redirectClient(t, tc.addr)
 		rt := &redirector{location: tc.location}
