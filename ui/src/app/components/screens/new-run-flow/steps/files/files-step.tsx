@@ -73,7 +73,11 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
 
   const attachments = pre?.attachments ?? [];
   const src: ItemSources = { rows, folders, catalogue: drives.catalogue, attachments };
-  const items = fileItems(intent, src);
+  // Cards keep the order they were added in this visit; anything the draft already held comes first, in its own order.
+  // The order is the step's own (the run document has no field for it), so a later visit shows the draft's order.
+  const [added, setAdded] = React.useState<readonly string[]>([]);
+  const byAdded = (a: FileItem, b: FileItem) => added.indexOf(a.key) - added.indexOf(b.key);
+  const items = [...fileItems(intent, src)].sort(byAdded);
   const legacyId = legacyIdOf(drives.catalogue);
   const noExtra = intent.no_repositories_or_drives === true;
   const start = items.find((i) => i.starts);
@@ -103,6 +107,8 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
       return added ? startIn(added, legacyId)(next) : next;
     });
     if (mode === "add") setExpanded((e) => [...e, saved.key]);
+    setAdded((order) =>
+      mode === "add" ? (order.includes(saved.key) ? order : [...order, saved.key]) : order.map((k) => (k === saved.previousKey ? saved.key : k)));
     announce(mode === "add" ? NR_FILES.ADDED(saved.name) : NR_FILES.UPDATED(saved.name));
     setDialog(null);
   };
@@ -111,7 +117,7 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
       const next = removeItem(item, src)(i);
       if (!item.starts) return next;
       // The start moves to the first item left.
-      const first = fileItems(next, src)[0];
+      const first = [...fileItems(next, src)].sort(byAdded)[0];
       return first ? startIn(first, legacyId)(next) : next;
     });
     if (item.starts) setSubText("");

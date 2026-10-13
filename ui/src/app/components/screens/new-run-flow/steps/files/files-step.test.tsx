@@ -89,12 +89,12 @@ function Seed({ intent }: { intent: RunIntent }) {
 const Drawn = () => <p data-testid="intent">{JSON.stringify(useNewRunDraft().intent)}</p>;
 const drawn = (): RunIntent => JSON.parse(screen.getByTestId("intent").textContent!);
 
-function show(intent: RunIntent = INTERACTIVE) {
+function show(intent: RunIntent = INTERACTIVE, createUserDrive?: React.ComponentProps<typeof FilesStep>["createUserDrive"]) {
   render(
     <MemoryRouter>
       <NewRunDraftProvider owner="alice">
         <Seed intent={intent} />
-        <FilesStep location={{ screen: "step", step: "files" }} go={go} startFromScratch={() => {}} />
+        <FilesStep location={{ screen: "step", step: "files" }} go={go} startFromScratch={() => {}} createUserDrive={createUserDrive} />
         <Drawn />
       </NewRunDraftProvider>
     </MemoryRouter>,
@@ -325,7 +325,7 @@ describe("the list and the Add dialog", () => {
     expect(path).toHaveFocus();
     expect(path).toHaveAttribute("aria-invalid", "true");
     await userEvent.clear(path);
-    await userEvent.type(path, "/etc/docs");
+    await userEvent.type(path, "/work/docs");
     await userEvent.click(dialogButton(NR_FILES.SAVE));
     expect(within(dialog()).getByText(NR_FILES.PATH_INVALID)).toBeInTheDocument();
     await userEvent.clear(path);
@@ -394,6 +394,16 @@ describe("drives (GET /me/drives)", () => {
     expect(after.start_folder).toEqual({ kind: "attachment", drive_id: YOUR_DRIVE.id });
   });
 
+  it("renders the person-created drive seam under the user drives, and only there", async () => {
+    show(BACKGROUND, () => <p data-testid="create-seam">seam</p>);
+    await openAdd();
+    await pickType(NR_FILES.KIND_USER_DRIVE);
+    expect(await within(dialog()).findByTestId("create-seam")).toBeInTheDocument();
+    await userEvent.click(dialogButton(NR_SHARED.BACK));
+    await pickType(NR_FILES.KIND_SHARED_DRIVE);
+    expect(within(dialog()).queryByTestId("create-seam")).toBeNull();
+  });
+
   it("says why no drive can be attached when the catalogue refuses", async () => {
     catalogue = { drives: [], denied_by_profile: "Contractors", pool_checked: false };
     show(BACKGROUND);
@@ -424,6 +434,15 @@ describe("folders", () => {
     await userEvent.click(within(c).getByRole("button", { expanded: true }));
     await userEvent.click(within(c).getByRole("button", { expanded: false }));
     expect(within(c).getByTitle("/srv/datasets")).toBeInTheDocument();
+  });
+
+  it("says none are onboarded when no workspace has a folder (W-48)", async () => {
+    workspaceList = [...SCENARIO_FILES_WORKSPACES.member];
+    show(BACKGROUND);
+    await openAdd();
+    await pickType(NR_FILES.FOLDER_TITLE);
+    expect(within(dialog()).getByText(NR_FILES.FOLDERS_NONE)).toBeInTheDocument();
+    expect(within(dialog()).queryByRole("radio")).toBeNull();
   });
 
   it("is disabled with its reason when the server runs its sandboxes on Kubernetes", async () => {
@@ -526,8 +545,11 @@ describe("mount map and summary", () => {
     await add(NR_FILES.FOLDER_TITLE, "datasets");
     await add(NR_FILES.KIND_SHARED_DRIVE, "Data team share");
     expect(screen.getByTestId("nr-files-summary")).toHaveAttribute("data-tone", "done");
+    // In the order they were added, not the draft's workspaces-then-drives order.
+    expect(screen.getAllByTestId("nr-attach-card").map((c) => c.querySelector("strong")?.textContent))
+      .toEqual(["payments", "Your drive", "datasets", "Data team share"]);
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(
-      `starts in payments · ${NR_FILES.SUMMARY_KEPT_MANY("datasets, Your drive and Data team share")}`,
+      `starts in payments · ${NR_FILES.SUMMARY_KEPT_MANY("Your drive, datasets and Data team share")}`,
     ), { timeout: 3000 });
   });
 });

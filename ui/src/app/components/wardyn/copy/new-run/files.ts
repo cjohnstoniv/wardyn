@@ -161,7 +161,7 @@ export const NR_FILES = {
   ALREADY_ADDED: "Already added to this run.",
   BRANCH_LABEL: "Branch",
   MOUNT_HINT: "Where it appears in the sandbox.",
-  PATH_INVALID: "Use a path inside /home/agent, /work or /workspace.",
+  PATH_INVALID: "Use a path inside /home/agent.",
   PATH_TAKEN: (name: string | number, path: string | number) => `${name} is already mounted at ${path}.`,
   ACCESS_LABEL: "Access",
   SAVE: "Save",
@@ -172,6 +172,8 @@ export const NR_FILES = {
   START_OPTION: (name: string | number, path: string | number) => `${name} · ${path}`,
   START_MAIN: "Main drive · /home/agent",
   SUBFOLDER_LABEL: "Subfolder",
+  /** pending W-48: the recommended text until the owner answers. */
+  FOLDERS_NONE: "No folders onboarded yet. Add one in Workspaces.",
   SUBFOLDER_PLACEHOLDER: "e.g. src",
   SUBFOLDER_ERROR: (name: string | number) => `Use a folder inside ${name}.`,
   LIST_COMMA: (a: string | number, b: string | number) => `${a}, ${b}`,
