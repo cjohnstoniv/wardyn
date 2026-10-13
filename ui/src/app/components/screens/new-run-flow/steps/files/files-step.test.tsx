@@ -59,9 +59,11 @@ let branches: RepoBranches | Response;
 let workspaceList: Workspace[];
 let catalogue: MeDriveCatalogue;
 let k8s: boolean;
+let drivesDown = false;
 beforeEach(() => {
   workspaceList = [...SCENARIO_FILES_WORKSPACES.member, FOLDER_WS];
   catalogue = CATALOGUE;
+  drivesDown = false;
   k8s = false;
   checks.result = filesPreflight(MAIN_DRIVE_FACTS.filesystem);
   branches = LISTED;
@@ -71,7 +73,7 @@ beforeEach(() => {
   wfetchMock.mockImplementation(async (path: string) => {
     if (path.includes("/branches")) return branches instanceof Response ? branches : json(branches);
     if (path.startsWith("/workspaces")) return json(workspaceList);
-    if (path.startsWith("/me/drives")) return json(catalogue);
+    if (path.startsWith("/me/drives")) return drivesDown ? json({ error: "drives unavailable" }, 503) : json(catalogue);
     if (path.startsWith("/setup/status")) return json({ runner: { driver: "", confinement_classes: [], kubernetes: k8s } });
     throw new Error(`unexpected ${path}`);
   });
@@ -908,5 +910,48 @@ describe("the dialog's create form chooses a drive by its id", () => {
     await userEvent.click(dialogButton("Seam"));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(drawn().drives).toEqual([{ drive_id: SCRATCH.id }]);
+  });
+});
+
+describe("an edit while the drive list is read again", () => {
+  const ARCHIVE: MeDrive = { ...YOUR_DRIVE, id: "44444444-4444-4444-8444-444444444444", name: "Archive", target: "/home/agent/drives/archive", legacy: false };
+  const SCRATCH: MeDrive = { ...YOUR_DRIVE, id: "55555555-5555-4555-8555-555555555555", name: "Scratch", target: "/home/agent/drives/scratch", legacy: false };
+  const reread = (next: () => void) => (ctx: { choose: (id: string) => void; reload: () => void }) =>
+    <button type="button" onClick={() => { next(); ctx.reload(); }}>Read again</button>;
+
+  it("a read that fails keeps the edit open with what was changed; a read that answers without the drive closes it", async () => {
+    catalogue = { drives: [ARCHIVE, SCRATCH], pool_checked: true };
+    let reads = 0;
+    show({ ...BACKGROUND, drives: [{ drive_id: SCRATCH.id }] }, reread(() => {
+      reads += 1;
+      drivesDown = reads === 1;
+      catalogue = { drives: [ARCHIVE], pool_checked: true };
+    }));
+    await userEvent.click(await screen.findByRole("button", { name: NR_FILES.EDIT_NAMED("Scratch") }));
+    await userEvent.selectOptions(within(dialog()).getByLabelText(NR_FILES.ACCESS_LABEL), "read");
+    await userEvent.click(dialogButton(NR_SHARED.BACK));
+    await userEvent.click(dialogButton("Read again"));
+    expect(await within(dialog()).findByTestId("nr-drive-reason")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await userEvent.click(within(dialog()).getByRole("button", { name: NR_FILES.STEP_MOUNT }));
+    expect(within(dialog()).getByLabelText(NR_FILES.ACCESS_LABEL)).toHaveValue("read");
+
+    await userEvent.click(dialogButton(NR_SHARED.BACK));
+    await userEvent.click(dialogButton("Read again"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(drawn().drives).toEqual([{ drive_id: SCRATCH.id }]);
+  });
+
+  it("an item whose drive no list names can still go back and forth: its own source stays a choice", async () => {
+    const UNLISTED = "77777777-7777-4777-8777-777777777777";
+    catalogue = { drives: [ARCHIVE], pool_checked: true };
+    show({ ...BACKGROUND, drives: [{ drive_id: UNLISTED }] });
+    await userEvent.click(await screen.findByRole("button", { name: NR_FILES.EDIT_NAMED(UNLISTED) }));
+    await userEvent.click(dialogButton(NR_SHARED.BACK));
+    expect(dialogButton(/^Continue/)).toBeEnabled();
+    await userEvent.click(dialogButton(/^Continue/));
+    await userEvent.click(dialogButton(NR_FILES.SAVE));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(drawn().drives).toEqual([{ drive_id: UNLISTED }]);
   });
 });

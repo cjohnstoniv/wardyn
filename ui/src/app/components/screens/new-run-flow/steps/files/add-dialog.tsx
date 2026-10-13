@@ -150,6 +150,9 @@ export function AddDialog(props: AddDialogProps) {
 function DialogBody({ open, onClose, intent, src, items, folderReason, driveReason: catalogueReason, operator, onSave, createUserDrive, reloadDrives, foldersAdded }: AddDialogProps & { open: DialogOpen }) {
   const [s, setS] = React.useState<State>(() => initial(open, intent));
   const editing = open.mode === "edit" ? open.item : undefined;
+  // What an edit started from. It stays a choice even when no list carries it (a drive the catalogue does not
+  // name, or the older single-drive switch with no catalogue drive behind it).
+  const editedSource = editing ? (editing.driveId ?? editing.key) : undefined;
   const options = s.kind ? optionsFor(s.kind, src) : [];
   const source = options.find((o) => o.key === s.sourceKey);
   const choice: ItemChoice | null = s.kind && s.sourceKey
@@ -176,10 +179,14 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
   // A chosen source that leaves the list (the list was read again without it) is no choice: the pick and what
   // came with it go, and an edit of an item that no longer exists closes.
   const optionKeys = options.map((o) => o.key).join("\n");
+  // Drives are listed from the person's drive catalogue: while it has not answered, or its last read failed, the
+  // list is unknown, not empty, and nothing is judged against it.
+  const listKnown = (s.kind !== "userDrive" && s.kind !== "sharedDrive") || src.catalogue !== null;
   const listed = React.useRef<readonly string[]>([]);
   const latest = React.useRef({ options, choose, editing, onClose });
   latest.current = { options, choose, editing, onClose };
   React.useEffect(() => {
+    if (!listKnown) return;
     const keys = optionKeys ? optionKeys.split("\n") : [];
     const before = listed.current;
     listed.current = keys;
@@ -199,7 +206,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
       return;
     }
     setS((c) => ({ ...c, sourceKey: null, branch: undefined, branchText: "", path: "", readOnly: false, attempted: false, step: c.step > 2 ? 2 : c.step, reached: c.reached > 2 ? 2 : c.reached }));
-  }, [optionKeys, s.sourceKey]);
+  }, [optionKeys, s.sourceKey, listKnown]);
   const save = () => {
     if (!choice) return;
     if (error) {
@@ -409,7 +416,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
         <div className="flex gap-2">
           <Button type="button" variant="outline" onClick={onClose}>{NR_SHARED.CANCEL}</Button>
           {s.step === 2 && (
-            <Button type="button" disabled={!source} onClick={() => setS((c) => ({ ...c, step: 3, reached: 3 }))}>
+            <Button type="button" disabled={!source && !(editing && s.sourceKey === editedSource)} onClick={() => setS((c) => ({ ...c, step: 3, reached: 3 }))}>
               {NR_SHARED.CONTINUE} <span aria-hidden="true">→</span>
             </Button>
           )}
