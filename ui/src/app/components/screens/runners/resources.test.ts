@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { aheadByHours } from "../../../lib/test-clock";
 import type { RemoteRunnerView, RunnerPool, RunnerPoolMemberView } from "../../../lib/types/runner-pools";
 import type { RunnerLimits, RunnerUsage, RunnerView } from "../../../lib/types/runners";
 import {
@@ -28,7 +29,7 @@ const laptop = limits(3, 6, 12, 200, 2, 4, 50);
 const shared = limits(6, 24, 96, 1000, 4, 16, 100);
 const member = (id: string, kind: RunnerPoolMemberView["kind"], l: RunnerLimits | null, u: RunnerUsage): RunnerPoolMemberView => ({ kind, id, name: id, online: u.online, limits: l, usage: u });
 const pool = (over: Partial<RunnerPool> = {}): RunnerPool => ({
-  id: "p1", name: "Laptop", scope: "user", owner: "dana@example.com", state: "active", revision: 4, created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-12T00:00:00Z", ...over,
+  id: "p1", name: "Laptop", scope: "user", owner: "dana@example.com", state: "active", revision: 4, created_at: aheadByHours(-12 * 24), updated_at: aheadByHours(-24), ...over,
 });
 
 describe("a runner's resources", () => {
