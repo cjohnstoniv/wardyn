@@ -513,6 +513,25 @@ func (c *client) authed(ctx context.Context, method, u, op string, body []byte) 
 	return status, raw, tok, err
 }
 
+// sameOrigin reports whether u names the same origin as base: the same scheme,
+// host (case-insensitive) and effective port, so a link that spells out the
+// default port (https://v.vault.azure.net:443/...) still matches a base that
+// omits it. A link carrying userinfo never matches.
+func sameOrigin(base, u *url.URL) bool {
+	return u.User == nil && u.Scheme == base.Scheme && strings.EqualFold(u.Hostname(), base.Hostname()) && effectivePort(u) == effectivePort(base)
+}
+
+// effectivePort is u's port, or its scheme's default when it names none.
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	if u.Scheme == "http" {
+		return "80"
+	}
+	return "443"
+}
+
 // url resolves path against the vault, adding the API version. An absolute
 // URL (a list's nextLink) must name this vault exactly: the bearer token is
 // never sent anywhere else.
@@ -520,7 +539,7 @@ func (c *client) url(path string) (*url.URL, error) {
 	var u *url.URL
 	if strings.HasPrefix(path, "https://") || strings.HasPrefix(path, "http://") {
 		p, err := url.Parse(path)
-		if err != nil || p.Scheme != c.base.Scheme || !strings.EqualFold(p.Host, c.base.Host) || p.User != nil {
+		if err != nil || !sameOrigin(c.base, p) {
 			return nil, fmt.Errorf("key vault: refusing to follow a link off this vault (%s)", c.base.Host)
 		}
 		u = p

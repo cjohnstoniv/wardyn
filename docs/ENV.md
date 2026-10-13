@@ -1369,7 +1369,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A change nobody decides expires after `WARDYN_GOVERNANCE_CHANGE_TTL`.
 - Exempt, and applied directly: a profile update proven narrowing by its resolved effect, a rename, and a user type's name or description edit that leaves its priority alone.
 - No other target has a narrowing exemption.
-- The local credential delivery policy (`local_credential_delivery`, `PUT /governance/credential-delivery`) is held the same way.
+- The local credential delivery policy (`local_credential_delivery`, `PUT /governance/credential-delivery`), the egress baseline, a runner pool's use policy and a remote-hosted runner's people policy are held the same way.
+- So is adding a remote-hosted runner to an organization pool while another pool holds it under a use policy, or removing it from a pool with one; only a super admin approves those.
 - A service identity's create (`POST /service-identities`) and any `PATCH /service-identities/{name}` that changes its sponsor are held the same way; the PATCH is held whole, so its description or suspend part applies only with it. A description or suspend `PATCH`, unsuspend and retire apply directly.
 - A role-mapping change is approved by a super admin only (a security admin is refused `admin_surface`).
 - Distinct means a different principal AND a different mailbox (case-folded), so one person holding an SSO session and an API token is not two humans.
@@ -1444,6 +1445,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - And a session that lapses **mid-run HOLDS** the sandbox's next `GetRoleCredentials` call while its owner signs in again (`WARDYN_CREDENTIAL_REAUTH_TIMEOUT`, below) instead of failing the run.
 - `off`: the pre-0.7.6 behaviour — the token is written into the sandbox, no `portal.sso` MITM, no hold, no sign-in requests.
 - An AWS CLI component has no `off` lane: with the switch off, every run door refuses it (`component_cli_aws_inject_off`), and so does dispatch.
+- On a run whose model provider is Bedrock, the sandbox's `AWS_REGION` is the Bedrock region, and it overrides an AWS CLI component's default region for `aws`. Pass `--region` where the two differ.
 - **`off` applies to NEW dispatches only**: the placeholder cache, the injection grant and the MITM entry are all authored at dispatch.
 - So a run already running keeps the lane it was authored with until it ends.
 - Flip it, then relaunch the runs that matter or wait them out.

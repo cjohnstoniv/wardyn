@@ -13,6 +13,7 @@
 |---|---|
 | Run it locally and watch the boundary hold | [TRY-IT.md](TRY-IT.md) |
 | Use a Wardyn someone else operates (you are a member, not the admin) | [USERS.md](USERS.md) |
+| Start a run from the console: the New run steps, Review, templates and run documents | [NEW-RUN.md](NEW-RUN.md) |
 | Configure a deployment (every `WARDYN_*` variable, defaults, which binary reads it) | [ENV.md](ENV.md) |
 | Author a run policy (every `RunPolicySpec` field, defaults, legal values) | [POLICIES.md](POLICIES.md) + [examples/policies/](../examples/policies/) |
 | See where a credential is while a run works (added at the proxy, or delivered inside), and each residual | [CREDENTIALS.md](CREDENTIALS.md) |
@@ -26,6 +27,7 @@
 | Run the blessed compose stack (no-login local mode, TLS) | [../deploy/compose/README.md](../deploy/compose/README.md) |
 | Deploy to a Kubernetes cluster (Helm chart, quickstart, k8s runner substrate) | [../deploy/helm/wardyn/README.md](../deploy/helm/wardyn/README.md) |
 | Run a local daemon on each developer's managed laptop (MDM envelope, and its ceiling) | [DESKTOP.md](DESKTOP.md) + [../deploy/desktop/](../deploy/desktop/) |
+| Register a self-hosted runner on a laptop, and what it does while offline | [runner-registration.md](runner-registration.md), [runner-offline.md](runner-offline.md), [operations/hybrid-laptops.md](operations/hybrid-laptops.md) |
 | Set up SSO (Entra ID / OIDC) and admin/member RBAC on a cluster install | [operations/who-gets-in.md](operations/who-gets-in.md) + the `wardyn-k8s-setup` Claude Code skill |
 | Give each person their own Azure DevOps access | [AZURE-DEVOPS.md](AZURE-DEVOPS.md) |
 | See which writes are admin-only and which sit on the security-admin tier | [operations/admin-only-writes.md](operations/admin-only-writes.md) |

@@ -364,3 +364,36 @@ func (s PG) ServiceStillSponsored(ctx context.Context, name, sponsor string, ope
 	}
 	return si.Usable() && si.Sponsor == sponsor && !si.SponsorSince.After(anchor.Translate(openedAt)), nil
 }
+
+// EraseServiceIdentityAttributionOf clears person as the creator, suspender and retirer of every service
+// identity, and returns how many rows that changed and, by name, the identities that are not retired and
+// that person still sponsors. A sponsor is never cleared: tokens and runs are checked against it, so such an
+// identity is handed to another sponsor or retired first. A retired identity keeps its last sponsor.
+func (s PG) EraseServiceIdentityAttributionOf(ctx context.Context, person string) (cleared int, sponsored []string, err error) {
+	if person == "" {
+		return 0, nil, errors.New("store: erase service identity attribution: a person is required")
+	}
+	err = s.inTx(ctx, func(q Querier) error {
+		tag, err := q.Exec(ctx, `UPDATE service_identities
+			SET created_by = CASE WHEN created_by = $1 THEN '' ELSE created_by END,
+			    suspended_by = CASE WHEN suspended_by = $1 THEN '' ELSE suspended_by END,
+			    retired_by = CASE WHEN retired_by = $1 THEN '' ELSE retired_by END
+			WHERE created_by = $1 OR suspended_by = $1 OR retired_by = $1`, person)
+		if err != nil {
+			return err
+		}
+		cleared = int(tag.RowsAffected())
+		sponsored, err = collect(ctx, q, "list", "sponsored service identities",
+			`SELECT name FROM service_identities WHERE sponsor = $1 AND retired_at IS NULL ORDER BY name`, []any{person},
+			func(row pgx.Row) (string, error) {
+				var name string
+				err := row.Scan(&name)
+				return name, err
+			})
+		return err
+	})
+	if err != nil {
+		return 0, nil, fmt.Errorf("store: erase service identity attribution: %w", err)
+	}
+	return cleared, sponsored, nil
+}

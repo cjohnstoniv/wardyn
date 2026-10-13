@@ -523,7 +523,7 @@ wardyn run --agent claude-code --task-mode exec --task 'echo ok' \
 - The task text lives in [`ui/e2e/demo/task.ts`](../ui/e2e/demo/task.ts) (`DEMO_TASK`), with the reasoning in [`examples/workspaces/demo-node/TASK.md`](../examples/workspaces/demo-node/TASK.md).
 - **The `always` beat's second half, once the run finishes:** Workspaces → the onboarded workspace → the **Allowed hosts** card, spotlighting `example.com` now on the permanent list.
 - Then a SECOND, much smaller run against the same workspace —
-  - **New run** → **Title** (`PROOF_RUN_TITLE`) → **Terminal — a shell in the workspace dir** (interactive stays the wizard's default; only "Start with" changes) → the same workspace → **Launch run**,
+  - **New run** → **Title** (`PROOF_RUN_TITLE`) → **Terminal — a shell in the workspace dir** (an interactive Agent task; only what starts with the sandbox changes) → the same workspace → **Launch run**,
   - with Confinement and Network left untouched entirely.
 - In the attached terminal, `curl -sSI https://example.com` succeeds immediately — no hold, no approval row, just the `live-approvals-idle` hint — because the workspace's own permanent grant folds into the run automatically.
 - The driver then navigates back to the main run's URL (captured before this detour) so Act 6 recaps that run's audit trail and recording, not the proof run's.
@@ -571,7 +571,7 @@ wardyn run --agent claude-code --task-mode exec --task 'echo ok' \
 
 ## Act 5 specifics, all learned the hard way
 
-- **Run mode defaults to `interactive`** (`initialWizardState()`, wizard-types.ts), which launches an IDLE sandbox waiting for a human to type.
+- **An interactive run launches an IDLE sandbox** waiting for a human to type.
   - The agent never executes the task, so nothing reaches for `example.com` and the held approval never appears — the run just sits there.
   - Act 5 selects **Autonomous** explicitly.
   - This is STRUCTURAL as well as semantic: the Task field only exists in autonomous mode, so filling it before the **Autonomous** click targets nothing.
@@ -590,12 +590,12 @@ wardyn run --agent claude-code --task-mode exec --task 'echo ok' \
   - Act 5's `example.com` is held open at the proxy and the on-camera approval completes that same in-flight request.
   - Two consequences worth pinning: the UI renders "Sandbox is waiting" with a WAITING badge (narration must agree), and an approved hold logs **only `egress.allow`** — asserting `egress.hold` would fail a correct take.
   - `DEMO_TASK`'s retry instruction stays as belt-and-braces for a missed 30s window, not as the primary mechanic.
-- `new-run-screen.tsx` never loaded the workspace list.
+- The old New Run screen (removed in 0.9) never loaded the workspace list.
   - `useWorkspaceList` does not fetch on mount (each caller does its own load — `setup-screen.tsx` does); New Run's only call was the Add-workspace dialog's `onCreated`.
   - The Workspace select therefore offered nothing but "Ephemeral scratch", so a workspace onboarded anywhere else could not be attached to a run at all.
-- `wizard-types.ts`'s `resolvedMountReadOnly` ignored `sources[].writable`.
+- The old New Run screen's mount mirror ignored `sources[].writable`.
   - It granted write only from a `write:<path>` requirement row, which nothing creates — making the dialog's "Allow writes to this directory" checkbox a no-op for every UI-launched run.
-  - [`internal/api/workspace_run.go`](../internal/api/workspace_run.go) had always honoured `src.Writable`; the client mirror now agrees.
+  - [`internal/api/workspace_run.go`](../internal/api/workspace_run.go) had always honoured `src.Writable`; the Files step now shows a folder read-only unless its source is writable.
 
 ## Constraints worth knowing before a manual re-shoot
 

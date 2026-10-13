@@ -56,6 +56,11 @@ type HubConfig struct {
 	// Verified runs once the runner proves possession of its stored key,
 	// before any further lookup or admission. An error refuses the connection.
 	Verified func(context.Context, uuid.UUID) error
+	// Inactive, when set, says a claimed runner may hold no session now (its
+	// owner is deactivated), without revoking it. Such a connection is sent
+	// GOAWAY before admission, and the stored-row recheck ends a live session
+	// the same way, so a connection after reactivation is admitted again.
+	Inactive func(context.Context, types.Runner) (bool, error)
 }
 
 type hubSession struct {
@@ -135,6 +140,16 @@ func (h *Hub) Serve(ctx context.Context, conn runnerwire.Conn, id uuid.UUID) err
 		}
 		return runnerwire.WriteControl(ctx, conn, runnerwire.TypeGoaway, runnerwire.Reason{Reason: "runner_unclaimed"})
 	}
+	if h.cfg.Inactive != nil {
+		inactive, err := h.cfg.Inactive(ctx, current)
+		if err != nil {
+			return err
+		}
+		if inactive {
+			_ = runnerwire.WriteControl(ctx, conn, runnerwire.TypeGoaway, runnerwire.Reason{Reason: reasonOwnerInactive})
+			return errOwnerInactive
+		}
+	}
 	if h.cfg.Admit == nil {
 		return errors.New("runner hub admission is not configured")
 	}
@@ -198,7 +213,7 @@ func (h *Hub) serveClaimed(ctx context.Context, conn runnerwire.Conn, row types.
 			peer.Close()
 			live = false
 		case <-recheck.C:
-			h.recheckRevoked(ctx, row.ID)
+			h.recheck(ctx, row.ID)
 		}
 	}
 	h.ended(row.ID, s, peer)
@@ -209,16 +224,32 @@ func (h *Hub) serveClaimed(ctx context.Context, conn runnerwire.Conn, row types.
 // only a fresh session carries PENDING.
 var errFreshSessionRequired = errors.New("runner: an action was queued for this runner; a fresh session carries it")
 
-// storedRowRecheck bounds how long a session outlives a revocation committed
-// through another replica, whose Revoke cannot reach this process's sessions.
+// storedRowRecheck bounds how long a session outlives a revocation, or its
+// owner's deactivation, committed through another replica.
 var storedRowRecheck = runnerwire.PingInterval
 
-// recheckRevoked ends the session with REVOKED once the stored row says so.
-// A failed lookup is retried at the next tick: the store already refuses a
-// revoked runner's writes, so this only bounds the session's lifetime.
-func (h *Hub) recheckRevoked(ctx context.Context, id uuid.UUID) {
-	if current, err := h.cfg.Lookup(ctx, id); err == nil && current.ID == id && current.State == types.RunnerRevoked {
+// reasonOwnerInactive is the GOAWAY reason of a runner whose owner is deactivated.
+const reasonOwnerInactive = "runner_owner_inactive"
+
+var errOwnerInactive = errors.New("runner hub: the runner's owner is deactivated")
+
+// recheck ends the session with REVOKED once the stored row says so, and with
+// GOAWAY once its owner is deactivated. A failed read is retried at the next
+// tick: the store already refuses a revoked runner's writes, so this only
+// bounds the session's lifetime.
+func (h *Hub) recheck(ctx context.Context, id uuid.UUID) {
+	current, err := h.cfg.Lookup(ctx, id)
+	if err != nil || current.ID != id {
+		return
+	}
+	if current.State == types.RunnerRevoked {
 		_ = h.Revoke(ctx, id)
+		return
+	}
+	if h.cfg.Inactive != nil {
+		if inactive, err := h.cfg.Inactive(ctx, current); err == nil && inactive {
+			_ = h.Goaway(ctx, id)
+		}
 	}
 }
 
