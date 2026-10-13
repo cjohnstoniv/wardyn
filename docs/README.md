@@ -13,6 +13,7 @@
 |---|---|
 | Run it locally and watch the boundary hold | [TRY-IT.md](TRY-IT.md) |
 | Use a Wardyn someone else operates (you are a member, not the admin) | [USERS.md](USERS.md) |
+| Start a run from the console: the New run steps, Review, templates and run documents | [NEW-RUN.md](NEW-RUN.md) |
 | Configure a deployment (every `WARDYN_*` variable, defaults, which binary reads it) | [ENV.md](ENV.md) |
 | Author a run policy (every `RunPolicySpec` field, defaults, legal values) | [POLICIES.md](POLICIES.md) + [examples/policies/](../examples/policies/) |
 | See where a credential is while a run works (added at the proxy, or delivered inside), and each residual | [CREDENTIALS.md](CREDENTIALS.md) |
