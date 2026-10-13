@@ -13,7 +13,6 @@ import { Segmented } from "../../../wardyn/segmented";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
-import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import type { PreflightResult } from "../../../../lib/types/preflight";
 import type { Template, TemplateKind, TemplatePublish } from "../../../../lib/types/templates";
@@ -23,7 +22,7 @@ import type { NewRunLocation } from "../draft/new-run-url";
 import { useDraftIdentity, useIntentChecks } from "../draft/use-intent-checks";
 import { useLocalIssues, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../new-run-route";
 import { templateSource } from "../steps/shape/shape-sources";
-import { flowSteps, StepShell, useAnnounce } from "../steps/step-shell";
+import { StepShell, useAnnounce } from "../steps/step-shell";
 import { BLOCKERS_ID, BlockerList } from "./blocker-list";
 import { buildBlockers, missingSetup } from "./blockers";
 import { EffectivePolicyCard } from "./effective-policy-card";
@@ -41,9 +40,6 @@ import type { ReviewPreflight } from "./review-seams";
 import { SaveAsDialog } from "./save-as-dialog";
 import { useTemplateNeeds } from "./use-template-needs";
 
-const STEP_LABELS = {
-  shape: NR_SHARED.STEP_SHAPE, run: NR_SHARED.STEP_RUN, harnesses: NR_SHARED.STEP_HARNESSES, files: NR_SHARED.STEP_FILES, tools: NR_SHARED.STEP_TOOLS,
-};
 const VIEWS = [
   { value: "pretty", label: NR_REVIEW.VIEW_PRETTY },
   { value: "yaml", label: NR_REVIEW.VIEW_YAML },
@@ -135,8 +131,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       eyebrow={NR_REVIEW.EYEBROW}
       title={NR_REVIEW.TITLE}
       lede={NR_REVIEW.LEDE}
-      progress={{ label: NR_SHARED.PROGRESS_ARIA, steps: flowSteps(STEP_LABELS) }}
-      primary={{ label: NR_REVIEW.LAUNCH_RUN, onActivate: () => onLaunch?.(), disabled: !open, describedBy: BLOCKERS_ID }}
+      primary={{ label: NR_REVIEW.LAUNCH_RUN, onActivate: () => onLaunch?.(), disabled: !open, describedBy: BLOCKERS_ID, arrow: false }}
     >
       <div role="group" aria-label={NR_REVIEW.VIEW_ARIA}>
         <Segmented<"pretty" | "yaml" | "json"> value={view} options={[...VIEWS]} onChange={(v) => go({ screen: "review", view: v }, { replace: true })} />
