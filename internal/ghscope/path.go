@@ -92,12 +92,21 @@ func segmentHazard(seg string) string {
 	switch {
 	case seg == "." || seg == "..":
 		return "is a dot segment"
+	case isDotWithParam(seg):
+		return "is a dot segment carrying a path parameter"
 	case strings.ContainsAny(seg, `/\`):
 		return "holds a separator"
 	case strings.ContainsFunc(seg, unicode.IsControl):
 		return "holds a control character"
 	}
 	return ""
+}
+
+// isDotWithParam reports whether seg is "." or ".." followed by a path
+// parameter (";x"), which a layer that strips parameters reads as a dot segment.
+func isDotWithParam(seg string) bool {
+	head, _, found := strings.Cut(seg, ";")
+	return found && (head == "." || head == "..")
 }
 
 // maxDecodeDepth bounds hidesStructure. Nothing legitimate on this API is

@@ -57,6 +57,8 @@ type componentDispatch struct {
 	GitHubAPI *proxy.GitHubAPIGrant
 	// AWSCLI is the run's AWS CLI row, nil when it attached none (authorAWSCLI).
 	AWSCLI *awsCLIDispatch
+	// AzureCLI is the run's Azure CLI row, nil when it attached none (authorAzureCLI).
+	AzureCLI *azureCLIDispatch
 	// MCP is each MCP server, which the broker route alone reaches (run_mcp.go).
 	MCP []componentMCP
 }
@@ -85,7 +87,7 @@ type componentConfig struct {
 // An MCP server's header gets no interception entry either: the broker sets it
 // on the request it re-originates.
 func (c runComponents) dispatch() componentDispatch {
-	d := componentDispatch{AWSCLI: c.awsCLI()}
+	d := componentDispatch{AWSCLI: c.awsCLI(), AzureCLI: c.azureCLI()}
 	keys := mcpServerKeys(c.attached)
 	row := -1 // the run_components ordinal: a built-in writes no row (persistRunComponents)
 	for i, a := range c.attached {
