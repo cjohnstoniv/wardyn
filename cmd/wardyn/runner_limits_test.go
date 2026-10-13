@@ -4,10 +4,12 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -215,5 +217,78 @@ func TestRunnerPoolLimitFlagsMockLines(t *testing.T) {
 		if w := srv.wrote(); len(w) != 0 {
 			t.Errorf("%v wrote %v before refusing", tc.args, w)
 		}
+	}
+}
+
+// listRunnersServer answers `runner list`'s two reads: your own runners and the remote-hosted ones you
+// may add. remoteStatus other than 200 answers the second with that status and no body.
+func listRunnersServer(t *testing.T, own []sdk.RunnerView, remote []sdk.RemoteRunnerView, remoteStatus int) (url string, paths *[]string) {
+	t.Helper()
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/v1/me/runners":
+			_ = json.NewEncoder(w).Encode(own)
+		case r.URL.Path == "/api/v1/me/remote-runners" && remoteStatus == http.StatusOK:
+			_ = json.NewEncoder(w).Encode(remote)
+		default:
+			w.WriteHeader(cmp.Or(remoteStatus, http.StatusNotFound))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, &seen
+}
+
+// The mock's `runner list` table: your own runners then the remote-hosted ones you may add, with what
+// their runs hold over the total and the most one run may use; a runner with no limits shows "-".
+func TestRunnerListResourceColumns(t *testing.T) {
+	limits := func(runs int, tc, tm, td, rc, rm, rd int64) *sdk.RunnerLimits {
+		return &sdk.RunnerLimits{RunsAtOnce: runs, Total: sdk.RunnerAmounts{CPUMillis: tc * 1000, MemoryMiB: tm * 1024, DiskMiB: td * 1024},
+			PerRun: sdk.RunnerAmounts{CPUMillis: rc * 1000, MemoryMiB: rm * 1024, DiskMiB: rd * 1024}}
+	}
+	usage := func(runs int, c, m, d int64) sdk.RunnerUsage {
+		return sdk.RunnerUsage{InUse: sdk.RunnerTally{Runs: runs, CPUMillis: c * 1000, MemoryMiB: m * 1024, DiskMiB: d * 1024}}
+	}
+	own := []sdk.RunnerView{
+		{Name: "laptop-7", State: types.RunnerClaimed, Online: true, Limits: limits(3, 6, 12, 200, 2, 4, 50), Usage: usage(2, 4, 8, 100)},
+		{Name: "desk-2", State: types.RunnerClaimed, Limits: limits(4, 12, 48, 800, 4, 16, 100), Usage: usage(0, 0, 0, 0)},
+		{Name: "fresh", State: types.RunnerUnclaimed},
+	}
+	remote := []sdk.RemoteRunnerView{{RemoteRunner: types.RemoteRunner{Name: "shared-docker", Limits: limits(6, 24, 96, 1000, 4, 16, 100)}, Online: true, Usage: usage(1, 4, 16, 100)}}
+	wide := regexp.MustCompile(`  +`)
+	normal := func(out string) string { return wide.ReplaceAllString(strings.TrimSpace(out), "|") }
+
+	url, paths := listRunnersServer(t, own, remote, http.StatusOK)
+	out, err := execCmdCapture(t, "runner", "list", "--url", url, "--token", "t")
+	want := strings.Join([]string{
+		"NAME|KIND|STATE|RUNS|CPU (use/total, per run)|MEMORY GB|DISK GB",
+		"laptop-7|self-hosted|online|2/3|4/6, 2|8/12, 4|100/200, 50",
+		"desk-2|self-hosted|offline|0/4|0/12, 4|0/48, 16|0/800, 100",
+		"fresh|self-hosted|unclaimed|-|-|-|-",
+		"shared-docker|remote-hosted|online|1/6|4/24, 4|16/96, 16|100/1000, 100",
+	}, "\n")
+	if err != nil || normal(out) != want {
+		t.Fatalf("list = %v\n%s\nwant\n%s", err, normal(out), want)
+	}
+
+	// A server without pools answers the second read 403, 404 or 501: your own runners still list.
+	for _, status := range []int{http.StatusForbidden, http.StatusNotFound, http.StatusNotImplemented} {
+		url, _ := listRunnersServer(t, own, remote, status)
+		out, err := execCmdCapture(t, "runner", "list", "--url", url, "--token", "t")
+		if err != nil || strings.Contains(out, "remote-hosted") || !strings.Contains(out, "laptop-7") {
+			t.Errorf("status %d: %v\n%s", status, err, out)
+		}
+	}
+	failing, _ := listRunnersServer(t, own, remote, http.StatusInternalServerError)
+	if _, err := execCmdCapture(t, "runner", "list", "--url", failing, "--token", "t"); err == nil {
+		t.Error("a 500 on the remote-hosted read was hidden")
+	}
+
+	// --json prints your own runners as the server sent them and asks for nothing else.
+	*paths = nil
+	if out, err := execCmdCapture(t, "runner", "list", "--json", "--url", url, "--token", "t"); err != nil || !strings.Contains(out, `"laptop-7"`) || len(*paths) != 1 {
+		t.Errorf("--json = %v, requests %v\n%s", err, *paths, out)
 	}
 }
