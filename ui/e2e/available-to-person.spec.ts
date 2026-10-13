@@ -36,6 +36,7 @@ import {
   TOKEN_KEY,
   chooseFiles,
   chooseShape,
+  ignoreMissingRunner,
   openRepositoryPicker,
   repositoryOption,
   continueNewRun,
@@ -72,12 +73,13 @@ const NR_REPO_ORG = "https://dev.azure.com/contoso/nr/_git";
 
 async function openFilesAs(page: Page, token: string): Promise<void> {
   await page.addInitScript(([key, tok]) => localStorage.setItem(key, tok), [TOKEN_KEY, token]);
+  await ignoreMissingRunner(page);
   await gotoConsole(page);
   await navToRoute(page, "/runs/new");
   await startGuided(page);
   await chooseShape(page, "environment");
   await continueNewRun(page, NR_HARNESSES.TITLE);
-  // Registered before Continue: the Files step reads the workspace list when it mounts, and "not offered"
+  // Registered before Continue: the Files step reads the workspace list when it mounts, and "cannot be chosen"
   // only means something once that answer is in.
   const listed = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/workspaces" && r.request().method() === "GET");
   await continueNewRun(page, NR_FILES.TITLE);
@@ -286,9 +288,11 @@ test.describe("Available to — New Run's Launch button (#922)", () => {
     if (workspaceId) await request.delete(`/api/v1/workspaces/${workspaceId}`, { headers: auth });
   });
 
-  test("a caller with no allow for the workspace: its repository is not offered, so it cannot be attached", async ({ page }) => {
+  test("a caller with no allow for the workspace: its repository cannot be chosen, and says why", async ({ page }) => {
     await openFilesAs(page, seedUserTokenRaw("standard"));
-    await expect(repositoryOption(await openRepositoryPicker(page), "e2e-922-nr-workspace")).toHaveCount(0);
+    const picker = await openRepositoryPicker(page);
+    await expect(repositoryOption(picker, "e2e-922-nr-workspace")).toBeDisabled();
+    await expect(picker.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeVisible();
   });
 
   test("the listed type: the repository is offered, Launch stays enabled, the sentence never renders", async ({ page }) => {
@@ -350,9 +354,11 @@ test.describe("Available to — a workspace's own per-value restriction (#1267)"
     if (workspaceId) await request.delete(`/api/v1/workspaces/${workspaceId}`, { headers: auth });
   });
 
-  test("a member outside the restriction: the repository is not offered, so it cannot be attached", async ({ page }) => {
+  test("a member outside the restriction: the repository cannot be chosen, and says why", async ({ page }) => {
     await openFilesAs(page, seedUserTokenRaw("standard"));
-    await expect(repositoryOption(await openRepositoryPicker(page), "e2e-1267-workspace")).toHaveCount(0);
+    const picker = await openRepositoryPicker(page);
+    await expect(repositoryOption(picker, "e2e-1267-workspace")).toBeDisabled();
+    await expect(picker.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeVisible();
   });
 
   test("the listed type: the repository is offered, Launch stays enabled, the sentence never renders", async ({ page }) => {

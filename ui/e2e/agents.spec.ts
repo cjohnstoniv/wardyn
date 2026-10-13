@@ -14,6 +14,7 @@ import {
   firstHarness,
   gotoConsole,
   launchRun,
+  mockPreflightClear,
   navToRoute,
   openNewRun,
   startGuided,
@@ -253,6 +254,8 @@ test.describe("agents — a 201 carrying warnings reaches the run page", () => {
       await route.fulfill({ response, json });
     });
 
+    // The hermetic backend builds no barrier, which the real check holds Launch for.
+    await mockPreflightClear(page);
     await gotoConsole(page);
     await openNewRun(page);
     await walkGuidedToReview(page);

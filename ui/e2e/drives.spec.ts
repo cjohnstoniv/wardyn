@@ -20,9 +20,11 @@ import {
   launchRun,
   newRunHeading,
   submitLaunch,
+  fillMainDriveSize,
   mockPreflightClear,
   walkGuidedToFiles,
 } from "./fixtures";
+import { UNSAVED_GUARD } from "../src/app/components/wardyn/copy/shell";
 import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
@@ -266,6 +268,7 @@ async function addDrive(page: Page, readOnly = false): Promise<void> {
   if (readOnly) await driveAccess(dialog).selectOption("read");
   await dialog.getByRole("button", { name: NR_FILES.ADD_CONFIRM, exact: true }).click();
   await expect(dialog).toBeHidden();
+  await fillMainDriveSize(page);
 }
 
 // Reaches Review and runs the launch until the SERVER's refusal is on screen: either the preflight already
@@ -858,8 +861,10 @@ test.describe("drives — an admin's New run says none of the member's sentences
     }
     await dialog.getByRole("button", { name: NR_SHARED.CANCEL, exact: true }).click();
 
-    // …and the surfaces that ARE the admin's are live on the same session.
+    // …and the surfaces that ARE the admin's are live on the same session. The draft has a shape by now,
+    // so leaving it is confirmed.
     await navTo(page, "Workspaces");
+    await page.getByRole("alertdialog", { name: UNSAVED_GUARD.TITLE }).getByRole("button", { name: UNSAVED_GUARD.LEAVE }).click();
     await expect(page.getByRole("button", { name: DRIVES.TITLE, exact: true })).toBeVisible();
   });
 });

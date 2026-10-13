@@ -12,7 +12,7 @@
 // harness roster is spliced onto the real /setup/status. Policy preview and the
 // tools-and-access reads go to the real server.
 import type { Page } from "@playwright/test";
-import { test, expect, gotoConsole, navToRoute, sidebarLink } from "./fixtures";
+import { test, expect, fillMainDriveSize, gotoConsole, navToRoute, sidebarLink } from "./fixtures";
 import { UNSAVED_GUARD } from "../src/app/components/wardyn/copy/shell";
 import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
 import { NR_LAUNCH } from "../src/app/components/wardyn/copy/new-run/launch";
@@ -102,6 +102,7 @@ async function toHarnesses(page: Page, workload: "agent" | "environment" | "appl
 async function toReview(page: Page) {
   await next(page, NR_SHARED.STEP_FILES);
   await page.getByRole("radio", { name: NR_FILES.NO_EXTRA }).check();
+  await fillMainDriveSize(page);
   await next(page, NR_SHARED.STEP_TOOLS);
   await press(page, NR_TOOLS.REVIEW_RUN);
   await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();

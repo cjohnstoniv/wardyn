@@ -157,7 +157,7 @@ test.describe("Run detail (/runs/:id)", () => {
     await cloneBtn.click();
     // A clone opens New Run on Review, with the run's setup already in the draft (title and description
     // are not cloned).
-    await expect(page).toHaveURL(/\/runs\/new\?step=review/);
+    await expect(page).toHaveURL(/\/runs\/new\?again=[0-9a-f-]{8,}/);
     await expect(newRunHeading(page, NR_REVIEW.TITLE)).toBeVisible();
     // The draft as the document the server will be sent: the YAML view is the whole of it.
     await page.getByRole("group", { name: NR_REVIEW.VIEW_ARIA }).getByRole("button", { name: NR_REVIEW.VIEW_YAML }).click();

@@ -147,7 +147,8 @@ async function addRepo(page: Page, name: string) {
   await pick(page, NR_FILES.REPOSITORY_BADGE, name);
   await confirm(page);
 }
-const last = (sent: Body[]) => sent.at(-1)!;
+// Empty until the first check is sent: a poll then reads undefined fields and tries again.
+const last = (sent: Body[]): Body => sent.at(-1) ?? {};
 
 /** Guided to the Files step for a workload. An Application needs its command on the Run step. */
 async function toFiles(page: Page, workload: "environment" | "application" = "environment") {
@@ -220,6 +221,9 @@ test.describe("New Run, Files: repositories", () => {
     const field = dialog(page).getByRole("textbox", { name: NR_FILES.BRANCH_ARIA("web") });
     await expect(field).toHaveAttribute("placeholder", NR_FILES.BRANCH_PLACEHOLDER);
     await expect(dialog(page).getByText(NR_FILES.BRANCH_FALLBACK)).toBeVisible();
+    // The field opens on the workspace's own ref, which is as unchecked as a typed one; emptied, nothing is claimed.
+    await expect(field).toHaveValue("main");
+    await field.fill("");
     await expect(dialog(page).getByText(NR_FILES.REF_NOT_CHECKED)).toHaveCount(0);
 
     await field.fill("feature/x");
@@ -232,6 +236,7 @@ test.describe("New Run, Files: repositories", () => {
     const sent = await stub(page, { branches: ["main"] });
     await toFiles(page);
     // Nothing is added: there is nowhere to start but the main drive, and Continue stays on Add.
+    await expect(sizeInput(page)).toHaveValue("10");
     await expect(startFolder(page)).toBeDisabled();
     await next(page, NR_SHARED.STEP_TOOLS);
     await expect(page.getByRole("button", { name: NR_FILES.ADD_ARIA })).toBeFocused();

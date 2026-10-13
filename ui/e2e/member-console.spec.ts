@@ -162,7 +162,7 @@ test.describe("member why-denied (mocked /me role, real enforcement)", () => {
     await expect(page.getByText(DENIED.STALE_GROUPS)).toBeVisible();
   });
 
-  test("an ungranted workspace is not offered as a repository — availability decides what New Run lists", async ({ page, request }) => {
+  test("an ungranted workspace's repository stays LISTED, shut, and says why — visibility is not capability", async ({ page, request }) => {
     // #1267: available_to_you is computed for the REAL caller (decide's own
     // step 1 exempts an operator unconditionally), so a role SPLICE no longer
     // suffices here — mockMemberRole's request still carries the operator
@@ -170,8 +170,7 @@ test.describe("member why-denied (mocked /me role, real enforcement)", () => {
     // asRealMember is a genuine non-operator token, so the real backend's
     // real enforcement (this describe's own beforeEach) refuses it for real.
     //
-    // The Files step lists the repositories of workspaces the caller may launch and no other, so the
-    // ungranted workspace is one with a repository (a local directory is never listed there).
+    // The Files step's Add dialog lists repositories, so the ungranted workspace is one with a repository.
     const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
     const created = await request.post("/api/v1/workspaces", {
       headers: auth,
@@ -190,10 +189,10 @@ test.describe("member why-denied (mocked /me role, real enforcement)", () => {
       await continueNewRun(page, NR_FILES.TITLE);
       await listed;
 
-      await expect(repositoryOption(await openRepositoryPicker(page), "e2e-mc-ungranted")).toHaveCount(0);
-      // Nothing about it is annotated either: it is simply not on offer.
-      await expect(page.getByText(DENIED.WORKSPACE_CHIP)).toHaveCount(0);
-      await expect(page.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toHaveCount(0);
+      const picker = await openRepositoryPicker(page);
+      await expect(repositoryOption(picker, "e2e-mc-ungranted")).toBeDisabled();
+      // #922 review F5: the ONE canon sentence, on the row it is about.
+      await expect(picker.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeVisible();
     } finally {
       await request.delete(`/api/v1/workspaces/${id}`, { headers: auth });
     }

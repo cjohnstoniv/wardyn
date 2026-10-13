@@ -172,7 +172,7 @@ test.describe("governance — the member's own barrier choice obeys the floor (T
     await expect(barrier(page, NR_SHARED.BARRIER_WALL)).toBeDisabled();
     await expect(barrier(page, NR_SHARED.BARRIER_VAULT)).toBeEnabled();
     await expect(barrier(page, NR_SHARED.BARRIER_VAULT)).toBeChecked();
-    await expect(page.getByText(NR_RUN.BADGE_ORG_DEFAULT)).toBeVisible();
+    await expect(page.getByText(NR_RUN.BADGE_ORG_DEFAULT).first()).toBeVisible();
   });
 
   test("a Vault floor the host cannot build shows the requirement, never a silent fallback", async ({ page }) => {
@@ -186,7 +186,7 @@ test.describe("governance — the member's own barrier choice obeys the floor (T
     await openRunStep(page);
 
     await expect(page.getByText(NR_RUN.BARRIER_REQUIRED(NR_SHARED.BARRIER_VAULT)).first()).toBeVisible();
-    await expect(page.getByText(NR_RUN.BARRIER_NO_KVM)).toBeVisible();
+    await expect(page.getByText(NR_RUN.BARRIER_NO_KVM).first()).toBeVisible();
     // Never the false claim that Wall (the strongest tier this host DOES have) is what the member gets.
     await expect(barrier(page, NR_SHARED.BARRIER_WALL)).toBeDisabled();
     await expect(barrier(page, NR_SHARED.BARRIER_WALL)).not.toBeChecked();
@@ -206,7 +206,7 @@ test.describe("governance — the member's own barrier choice obeys the floor (T
     await expect(barrier(page, NR_SHARED.BARRIER_FENCE)).toBeEnabled();
     await expect(barrier(page, NR_SHARED.BARRIER_WALL)).toBeEnabled();
     await expect(barrier(page, NR_SHARED.BARRIER_VAULT)).toBeDisabled();
-    await expect(page.getByText(NR_RUN.BARRIER_NONE_OFFERS(NR_SHARED.BARRIER_VAULT))).toBeVisible();
+    await expect(page.getByText(NR_RUN.BARRIER_NONE_OFFERS(NR_SHARED.BARRIER_VAULT)).first()).toBeVisible();
   });
 });
 

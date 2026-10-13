@@ -272,7 +272,8 @@ test.describe("one door — keyed by provider (User view)", () => {
     await door.getByRole("button", { name: KEY_DOOR.REMOVE }).click();
     await page.getByRole("dialog", { name: "Remove your token for Corp gateway?" }).getByRole("button", { name: REMOVE_CONFIRM.CONFIRM }).click();
     await expect(page.getByText("Token removed")).toBeVisible();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+    // The door and its confirm are gone; the Name dialog the refusal opened it over stays.
+    await expect(page.getByRole("dialog", { name: /Corp gateway/ })).toHaveCount(0);
     expect(deletes).toBe(1);
   });
 });

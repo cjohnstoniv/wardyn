@@ -314,7 +314,7 @@ export async function addRepository(page: Page, repo: string): Promise<void> {
 
 /**
  * Files step: "No extra files" when `repos` is empty, otherwise each repository added through the dialog;
- * the run starts in the first. An untouched main drive size is filled, since a run with no size is not complete.
+ * the run starts in the first.
  */
 export async function chooseFiles(page: Page, repos: readonly string[] = []): Promise<void> {
   if (repos.length === 0) {
@@ -322,6 +322,11 @@ export async function chooseFiles(page: Page, repos: readonly string[] = []): Pr
   } else {
     for (const repo of repos) await addRepository(page, repo);
   }
+  await fillMainDriveSize(page);
+}
+
+/** Files step: an untouched main drive size is filled, since a run with no size is not complete. */
+export async function fillMainDriveSize(page: Page): Promise<void> {
   const size = page.locator("#nr-main-drive-size");
   if ((await size.count()) > 0 && (await size.inputValue()) === "") await size.fill("10");
 }
@@ -382,6 +387,21 @@ export async function mockPreflightClear(page: Page): Promise<void> {
   await page.route("**/api/v1/runs/preflight", (route) =>
     route.fulfill({ json: { enforced_confinement_class: "CC1", setup_items: [] } }),
   );
+}
+
+/**
+ * Sends New Run's preflight to the real server and drops the one item the hermetic backend always answers
+ * with: it runs no runner, so no barrier can be built. Everything else the server says stays, so a case
+ * still proves the server holds or frees Launch for its own reason.
+ */
+export async function ignoreMissingRunner(page: Page): Promise<void> {
+  await page.route("**/api/v1/runs/preflight", async (route) => {
+    const response = await route.fetch();
+    if (!response.ok()) return route.fulfill({ response });
+    const json = (await response.json()) as { setup_items?: { kind?: string }[] };
+    json.setup_items = (json.setup_items ?? []).filter((item) => item.kind !== "backend");
+    await route.fulfill({ response, json });
+  });
 }
 
 /** Review's Launch run, which opens the Name dialog. */
