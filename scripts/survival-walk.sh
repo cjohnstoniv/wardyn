@@ -122,6 +122,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 # shellcheck source=scripts/lib/common.sh
 source "${ROOT}/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/runner-limits.sh
+source "${ROOT}/scripts/lib/runner-limits.sh"
 
 # DEFAULT DAEMON ONLY. Deliberately NOT wardyn_pick_docker_host: on a box with
 # a second dedicated daemon at /run/wardyn-docker.sock (or the legacy
@@ -337,6 +339,12 @@ for _ in $(seq 1 60); do
 done
 [[ -n "${healthy}" ]] || { compose logs wardynd | tail -80; die "wardynd did not become healthy"; }
 pass "stack up and healthy (${BASE})"
+# The stack's Docker runner takes no run until it has limits (scripts/lib/runner-limits.sh); this
+# walk declares its own, sized for its few runs.
+# shellcheck disable=SC2317 # called by wardyn_ensure_runner_limits
+wardyn() { compose exec -T -e WARDYN_URL=http://localhost:8080 wardynd /usr/local/bin/wardyn "$@"; }
+WARDYN_SETUP_RUNNER_LIMITS="${WARDYN_SETUP_RUNNER_LIMITS:---max-runs 4 --total-cpu 8 --total-memory 16 --total-disk 80 --per-run-cpu 2 --per-run-memory 4 --per-run-disk 20}" \
+  wardyn_ensure_runner_limits </dev/null || die "could not give the survival walk's runner its limits"
 
 # ── the preconditions ────────────────────────────────────────────────────────
 step "configuring the model provider: ${PROVIDER_ID} (bedrock_sso, the fake as its Bedrock endpoint) as claude-code's default"
