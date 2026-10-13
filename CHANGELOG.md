@@ -119,6 +119,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   why not, your own active runs against your profile's cap, the pool's limits as your runs get them, its barrier
   options and your runners in it; `?run_type=` narrows it to one run type (`400 runner_pool_invalid` otherwise).
   Preflight and the policy preview answer the same facts. The Go SDK gains `ListRunnerPoolsFor(ctx, runType)`.
+  Preflight also answers `barrier_options` for the resolved pool, including `policy_floor` and `access_floor`, and
+  `wardyn runner pool list` prints each barrier's reason. A pool's availability can read `placement_denied`,
+  `placement_unavailable` or `runner_pool_no_online_runner`.
 - Interactive runs: Claude Code now enforces tool rules (Ask first, Block it, and Run it for a named tool) through its
   locked managed settings, so a policy's named tool rules apply to interactive Claude Code runs too. If the rules
   cannot be written exactly, or the runner cannot deliver managed settings (including a krun runner that cannot vouch
@@ -128,12 +131,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   credential while it waits, starts in launch order once its owner's access, role and user type are re-checked, and
   gives up after 24 hours (Background) or 1 hour (Interactive). `POST /runs` takes `max_wait_sec` (1 or more; a longer
   wait is cut to 604800 seconds, 7 days, with a warning; `0` is `422 run_max_wait_invalid`). A waiting run can be
-  cancelled, ends `FAILED queue_timeout`, and is cancelled with its pool, or when its owner's sessions are revoked. A
+  cancelled, ends `FAILED queue_timeout`, and is cancelled with its pool, or when its owner's sessions are revoked
+  or its service identity is retired. The queue sweep reports in sweep health as `run_queue`. A
   run pinned to one of your runners waits for that runner. An all-offline self-hosted pool is still refused at launch.
   New metrics: `wardyn_runner_pool_queue_depth`, `wardyn_runner_pool_slots_used`,
   `wardyn_runner_pool_queue_wait_seconds`.
 - New Run can include more than one harness in a sandbox (an interactive environment, or a command), each on its own
-  model provider, started from the image an operator declares for the set. An AWS sign-in model provider
+  model provider, started from the image an operator declares for the set (`make agent-image-harnesses` builds one,
+  as a local build only). A published install declares none, so it refuses two harnesses (`harness_set_no_image`)
+  until an operator adds one. An AWS sign-in model provider
   (`bedrock_sso`) serves only the harness a run starts, or else lists first; on any other harness it is refused with
   `request_field_unavailable`, naming the harness.
 - `POST /runs`, `/runs/preflight` and `/runs/policy-preview` accept `policy_overlay`: a document's partial policy laid
@@ -151,7 +157,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - AWS CLI signed in as you: an AWS CLI component names an IAM Identity Center portal, an account, a permission set and
   a region. Each person signs in once (`POST /api/v1/components/{id}/sign-in`); the sign-in stays with Wardyn, and the
   proxy adds it only to the portal's role-credentials call for the pinned account and role. AWS issues role
-  credentials into the sandbox, valid for the permission set's session duration. With
+  credentials into the sandbox, valid for the permission set's session duration and still valid at AWS after the
+  run ends. Erasing a person's credentials removes their sign-in. With
   `WARDYN_AWS_SSO_PROXY_INJECT=off` the component is refused. Changing or deleting the component deletes everyone's
   sign-in for it.
 - The `base`, `claude-code`, `codex-cli` and `full` images include `gh` and AWS CLI v2, each checked by digest.
@@ -245,7 +252,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   be handed to a self-hosted runner for a run's lifetime, and only to runners whose reported device posture meets the
   class's requirement. The runner keeps the value in the OS keystore (the Secret Service on Linux, which needs a
   session bus; the login Keychain on macOS, written over stdin; values up to about 3 KB). Azure DevOps minted tokens
-  can be opted in per connection. Delivery itself arrives with local runner placement; until then no run receives one.
+  can be opted in per connection. `runner_resident` values are not yet delivered to runners in 0.9.0: a run that
+  needs one is still refused.
 - Preflight (`PreflightResult.Access`) and the policy preview answer an `access` block built from one projection of the
   shared fold: what brings access (the harness, each Git provider's repositories, components, secrets, added hosts),
   each host's verdict against the resolved and clamped policy, every credential with where it is delivered and what is
@@ -343,8 +351,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   identity and its sponsor are as reviewed; otherwise `409 governance_change_stale`.
 - New Run run mode: a request chooses `experience` (background or interactive), with its workload, included tools,
   one startup choice, one starting folder and an explicit "no repositories or drives". The CLI's run-mode flags
-  mark requests `mode_contract: "0.9"`, so an unset mode is refused instead of inferred; older requests, and the
-  console until it can choose an experience, keep their documented behaviour.
+  mark requests `mode_contract: "0.9"`, so an unset mode is refused instead of inferred. The console sends the run
+  mode (`experience` and `mode_contract: "0.9"`) for every shape the contract can say, so its runs start in pools
+  that limit run types; older requests keep their documented behaviour.
 - Push rules are carried per source-control entry (provider host and canonical organisation; a remote that cannot be
   read exactly is refused) and tool rules per included harness; a request's rules can only narrow. A background task
   has no idle stop from any source, and the idle reaper skips it. Presets refuse run-mode fields until run templates
@@ -380,10 +389,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and capabilities are now checked against the runner it actually lands on, and an offline runner is refused rather
   than guessed. Create, preflight, policy preview and source scans refuse a denied placement with 403
   `placement_denied`.
-- New Run can set a run's end at launch (`ends_after_sec`, `wardyn run --ends-in`), or No end where every limit
-  allows it (`no_end`, `--no-end`). An end past a limit is cut to it and the response names the limit. An untouched
-  Interactive run now ends after 24 hours when no pool, profile or deployment names a lifetime. `GET /runs?no_end=1`
-  lists live runs with no end.
+- `POST /runs` and `wardyn run` can set a run's end at launch (`ends_after_sec`, `--ends-in`), or No end where every
+  limit allows it (`no_end`, `--no-end`). An end past a limit is cut to it and the response names the limit. An
+  untouched run whose request says `experience: interactive` (the CLI's run-mode flags, the SDK, and the console
+  where it sends the run mode) now ends after 24 hours when no pool, profile or deployment names a lifetime. A
+  request that carries no `experience` keeps today's end. `GET /runs?no_end=1` lists live runs with no end.
 - A run's CPU and memory are bounded by the strictest of its pool, the person's governance profile, the deployment
   and, on a person's own runner, the runner's advertised capacity. A larger ask is reduced to that limit, never
   refused; an own runner smaller than the ask no longer refuses the run. `POST /runs/preflight` and the policy preview
@@ -394,7 +404,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   admission and the `workspace_provider` capability, and access must be within the caller's ceiling for a
   `github_token` grant, which also sets approval and lifetime. Repository names are lowercased; a repository listed
   twice is refused. Reviving or extending such a run re-checks the owner's `workspace_provider` permission over its
-  repositories. A built-in Azure DevOps component is still refused with `request_field_unavailable`. New refusal
+  repositories. Review and the policy preview show it, `run.create` and `run.component.attach` record it, and a
+  push-rule override for its organisation applies to it. A built-in Azure DevOps component is still refused with
+  `request_field_unavailable`. New refusal
   reasons: `component_builtin_lane_off`, `component_builtin_access_above_ceiling`.
 - A run can attach several workspaces, each at its own path, and pick which repositories of a workspace it clones and
   at which branch, tag or commit (a ref git could read as an option is refused). Equal or nested paths across them,
@@ -433,7 +445,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   credential, answers a tool call the run's rules block with a JSON-RPC error, and re-originates over the same
   guarded path as the git broker, refusing redirects and any data after the JSON-RPC message. While a server is
   attached, a direct request to its host is refused. Two organisation MCP servers may not share a name (`409
-  component_name_conflict`). SSE servers are not supported yet. Migration `0166_run_component_mcp_harnesses`.
+  component_name_conflict`). SSE servers are not supported yet. Claude Code gets the servers in its managed MCP file
+  (interactive) or a second `--mcp-config` (autonomous); Codex CLI gets `[mcp_servers]` url tables. Migration
+  `0166_run_component_mcp_harnesses`.
 - A service identity's sponsor can see and stop its runs, in every runs list view; entering one needs an explicit
   `service_attach` grant, is recorded as the sponsor, and is never available over SSH. A portal's delegated token
   gets none of this. Migration `0167_service_attach_restriction` turns the grant off for everyone until an admin
@@ -445,7 +459,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   route gate; they previously recorded the 256 MiB default while the runner applied 400 MiB (#1806).
 - The pool list, preflight and the policy preview say how busy each pool you may use is (`slots`: used, waiting,
   limit, a verdict and the default wait); counts only, and if they cannot be read the answer comes without them. A
-  waiting run carries `queue` (its place, reason and deadline) on create, `GET /runs/{id}` and `GET /runs`. `wardyn
+  waiting run carries `queue` (its place, reason and deadline) on create, `GET /runs/{id}` and `GET /runs`, and
+  `wardyn run get` prints it. The Go SDK gains `RunQueued`, `AgentRun.Queue` and `PoolSlots`. `wardyn
   run --max-wait <duration>` sets how long a run may wait for a slot; with `--wait` the server is told `--timeout`
   minus 60s, so a run that waits too long fails with `queue_timeout` (exit 1) before `--timeout` gives up (exit
   124), and `--wait` prints a waiting run's place as it changes.
@@ -453,6 +468,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   organisation's current lease and execution generation; token renewals and end changes extend the lease, a runner's
   new session is leased again, and reviving such a run starts its agent under a fresh generation. A run is placed
   only on the launcher's own claimed runners, and a Self-Hosted pool is available while one of them in it is online.
+  A barrier, size or idle-pause demand that none of the person's runners meets is refused with the pool's
+  `placement_capability` sentence, and asking for another person's runner answers `runner_not_found`. Repositories
+  reach such a run only through the organisation's git broker, once an administrator delivers `github_token`
+  `via_org`; by default the grant is refused there.
   deny_placements is also held at dispatch and revive; managed-harness sign-in runs stay exempt at every door, and
   site-config probe runs at create and dispatch.
 - Self-Hosted runner pools are each person's own: a person creates, edits and deletes their pools
@@ -617,11 +636,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The Codex image supports only its pinned Codex. `OPENAI_BASE_URL` and `OPENAI_API_KEY` are still set but unused by
   Codex and deprecated; a later release removes them (#1979).
 - A recording uploaded for a run on a self-hosted runner is audited `evidence_source: runner_asserted`: a local
-  run's recording is self-reported (threat model residuals #50-#52). Masking continuity across restarts (#1512) is
+  run's recording is self-reported (threat model residual #73). Masking continuity across restarts (#1512) is
   pinned by tests for a run with no secrets and for kill and revoke without a masking corpus.
 - `WARDYN_RUN_MAX_AGE` is now every new run's lifetime cap, not only a reaper stop. A run launched from New Run or
-  `POST /runs` that no profile or pool gives an end now ends at creation plus the max age (Interactive at the
-  earlier of 24 hours and the max age). `no_end` at launch is refused naming the deployment, and `PATCH /runs/{id}`
+  `POST /runs` that no profile or pool gives an end now ends at creation plus the max age (a request that says
+  `experience: interactive` at the earlier of 24 hours and the max age). `no_end` at launch is refused naming the deployment, and `PATCH /runs/{id}`
   can no longer set No end or extend past the cap, a super admin included (a super admin still skips the profile's
   limits). Until the lease sweep honours the cap, the lease sweep keeps the run at the same moment the reaper stops
   it.
@@ -788,8 +807,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - On a registered runner, a BYOI run's output no longer ends at its image selftest. The run's output is the task's
   own, and the selftest's output goes to the runner's log.
 - SCIM deprovisioning never links a sign-in through an email that names another person, and refuses
-  (`owner_ambiguous`, shown on the SCIM status card) when a leaver's emails name two different people, until an
-  admin resolves it.
+  (`owner_ambiguous`) when a leaver's emails name two different people, until an admin resolves it. The refusal
+  shows as the denied `person.deprovision` audit row and the 5xx the identity provider receives, not on the SCIM
+  status card.
 - `wardynd -recovery-manifest` now refuses at `pool_max_conns` below 2 and names the setting, instead of hanging.
 - `wardyn sync` and sftp now say when the runner is offline or the sandbox is gone, instead of blaming the sandbox
   image for a missing sftp-server.

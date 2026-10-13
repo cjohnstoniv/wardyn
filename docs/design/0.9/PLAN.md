@@ -3,6 +3,7 @@
 Status: **Approved 2026-10-09.** It turns decisions OD-6 to OD-12 into a buildable design and does not reopen them.
 It supersedes [hybrid-0.8.md](../hybrid-0.8.md) and the #78/#79 sections of [0.8/PLAN.md](../0.8/PLAN.md).
 Where this doc departs from the release plan's wording, the row is marked **deviation** and repeated in [Open questions](#13-open-questions).
+Later changes supersede this doc's numbered details: migration numbers, audit action names and checkpoint rows below give the shipped value where one differs from the approved text.
 
 ## 1. Status and supersession
 
@@ -162,7 +163,7 @@ The pilot reply is [`docs/adoption/hybrid-09-pilot-reply.md`](../../adoption/hyb
 
 | Trigger | Org effect | Runner effect |
 |---|---|---|
-| `DELETE /api/v1/runners/{id}` (security operator) or `DELETE /api/v1/me/runners/{id}` (owner) | Row `revoked`; live stream gets `REVOKED`; every run on it marked lost `runner_revoked` with the kill cascade (token deny, broker revoke) | Durable revoked mark; stops every governed proxy locally; refuses everything after |
+| `DELETE /api/v1/runners/{id}` (security operator) or `DELETE /api/v1/me/runners/{id}` (owner) | Row `revoked`; live stream gets `REVOKED`; every unfinished run on it ends `KILLED` in the revoking transaction, then gets the kill cascade (token deny, broker revoke). Approved as "marked lost `runner_revoked`" | Durable revoked mark; stops every governed proxy locally; refuses everything after |
 | Revoked while offline | Same org effect, immediately | Learns it at the next `AUTH`, which is answered `REVOKED`, then acts as above |
 | Re-registration | A new token makes a new runner identity | Old key is discarded |
 
@@ -330,7 +331,7 @@ A dispatch whose runner drops before step 4 waits up to the dispatch timeout, th
 | `end` | Lease end or `StopSandbox` while offline | `EndSandbox` |
 | `stop_proxy` | `stopLostSandbox` while offline | `StopProxy` (usually already done by the lapse rule; idempotent) |
 
-- Stored in `runner_pending_actions`, folded into migration `0146`, which C-H already lands ([Open questions](#13-open-questions), Q5).
+- Stored in `runner_pending_actions`, which shipped in migration `0139_runner_delivery` ([Open questions](#13-open-questions), Q5).
 - Revocation is not a pending action: a revoked runner cannot authenticate, so `AUTH` answers `REVOKED`.
 - **Order on a fresh session**: `AUTH_OK` → `PENDING` → runner applies each, emitting `action_result` → `STATE` → spool replay → `READY`.
 - The runner fences each run with an unapplied action: no relay, no call. The org fences too and refuses a relay for that run with `runner_action_pending`.
@@ -474,8 +475,8 @@ Two layers, in this order:
 |---|---|---|
 | `placement` | `client.CreateRunRequest` (#116) | `local`, `remote`, or empty |
 | `runner_id` | `client.CreateRunRequest` | Optional UUID; replaces #116's `device_id` |
-| `placement`, `placement_filled`, `runner_id` | `AgentRun`, migration `0138` | Recorded once |
-| `confinement_source` | `AgentRun`, migration `0138` | `substrate` or `runner_asserted` |
+| `placement`, `placement_filled`, `runner_id` | `AgentRun`, migration `0141_run_placement` | Recorded once |
+| `evidence_source` (approved as `confinement_source`) | `AgentRun`, migration `0141_run_placement` | `substrate` or `runner_asserted` |
 | `--placement`, `--runner` | `wardyn run` (#109) | Map to `placement` and `runner_id` |
 
 ### 6.2 `placementFor`
@@ -615,8 +616,8 @@ The predicate is `reservedRunTasks` plus `source scan` plus probe runs. Refusal 
 
 | Item | Rule |
 |---|---|
-| `local_dir` workspace sources | Carry the `runner_id` they were registered for (migration `0139`); placeable only there |
-| `host_path` user drives | Carry a `runner_id` (migration `0143`, #113); placeable only there |
+| `local_dir` workspace sources | Carry the `runner_id` they were registered for; placeable only there. No shipped migration adds the column, so 0.9.0 refuses them `placement_local_path` |
+| `host_path` user drives | Carry a `runner_id` (#113); placeable only there. No shipped migration adds the column, so 0.9.0 refuses them `placement_local_path` |
 | Device-side check | The runner intersects `SandboxSpec.UserMountRoots` with its owner-set `allowed_roots` at bind |
 | Residual | The writable bind lets agent-authored content reach files the developer later executes, as sync does ([§12](#12-threat-model-deltas-audit-actions-refusal-reasons)) |
 
@@ -743,7 +744,7 @@ New governance target `local_credential_delivery`, written through the governanc
 | Per run | `run.create` records `delivery: [{grant_id, class, mode, posture?}]`; grants persist `credential_grants.delivery` |
 | Console | "Stays in your org" (`via_org`), "Stored on your runner" (`runner_resident`), "Not available on your runner" (`refuse`) |
 
-Migration `0146` (landed by C-H): the policy row, `credential_grants.delivery TEXT NOT NULL DEFAULT '' CHECK (delivery IN ('', 'own', 'via_org', 'runner_resident'))`, and `runners.posture`, `posture_reported_at`, `posture_source`.
+Migration `0139_runner_delivery` (approved as `0146`): the policy row, `credential_grants.delivery TEXT NOT NULL DEFAULT '' CHECK (delivery IN ('', 'own', 'via_org', 'runner_resident'))`, and `runners.posture`, `posture_reported_at`, `posture_source`.
 
 ## 8. P1 baseline hosts, P2 locked L2, P3 ceiling term
 
@@ -752,7 +753,7 @@ Migration `0146` (landed by C-H): the policy row, `credential_grants.delivery TE
 | Item | Exact shape |
 |---|---|
 | Document | Governance target `egress_baseline`, body `{"baseline_hosts": ["models.internal.example"]}`, surfaced as `egress.baseline_hosts` |
-| Writer | `isSecurityOperator`; four-eyes where enabled; audited `egress.baseline.write` with `before` / `after` |
+| Writer | `isSecurityOperator`; four-eyes where enabled; audited `governance.egress_baseline.write` with `before` / `after` |
 | Values | Exact hostnames only: no wildcard, no suffix, no port |
 | `internal_hosts` | `types.InternalHost` gains `Baseline bool` (`baseline,omitempty`); only those entries count, and their `host_suffix` counts as one exact host |
 | Upgrade | Existing `internal_hosts` default `baseline:false`, so no run's grade changes |
@@ -866,17 +867,18 @@ The release asset for `wardyn-runnerd` joins `release.yml`, `verify-release.sh` 
 | Checkpoint | Flag |
 |---|---|
 | CP2 | `placement: local` refuses `placement_unavailable` when no runner is registered |
-| CP3 | Site-config `runners.enabled` (default `false`, admin-only, audited) gates every runner route |
+| CP3 | Site-config `runners.enabled` (default `false`, admin-only, audited) gates registration, claim, the runner stream and a person's own runner routes. The admin inventory, token list and revoke, and the settings routes stay ungated |
 
 ### 10.5 Migrations
 
 | Number | Lane | Content |
 |---|---|---|
-| `0138` | #116 | `agent_runs.placement`, `placement_filled`, `runner_id`, `confinement_source` |
-| `0139` | H1 | `runners`, `runner_registration_tokens`, the `agent_runs.runner_id` foreign key, `runner_id` on `local_dir` workspace sources |
-| `0143` | #113 | `runner_id` on `host_path` user drives, with the placement label |
-| `0146` | C-H (H3 fills pending-action behaviour) | OD-12 policy row, `credential_grants.delivery`, `runners.posture*`, `runner_pending_actions` |
-| `0147`–`0149` | — | Stay reserved |
+| `0139_runner_delivery` | C-H (H3 fills pending-action behaviour) | `runners` with `posture*`, `runner_pending_actions`, the OD-12 policy row, `credential_grants.delivery` |
+| `0141_run_placement` | #116 | `agent_runs.placement`, `placement_filled`, `runner_id`, `evidence_source` |
+| `0142_runner_registration` | H1 | `runner_registration_tokens`, `runners.org_url_sha256` |
+| — | #113 | `runner_id` on `local_dir` workspace sources and `host_path` user drives: not shipped in 0.9.0 |
+
+These are the shipped numbers; the approved text named `0138`, `0139`, `0143` and `0146`.
 
 ## 11. Conformance
 
@@ -954,7 +956,7 @@ Names follow the closed-verb grammar. **Deviation**: the release plan's `runner.
 | `runner.posture.record` | Reported posture changed | `posture`, `posture_source` |
 | `runner.resident.erase` | Resident value erased at run end | `grant_id`, `outcome` |
 | `credential.delivery.write` | OD-12 policy written | `before`, `after` |
-| `egress.baseline.write` | P1 baseline written | `before`, `after` |
+| `governance.egress_baseline.write` | P1 baseline written | `before`, `after` |
 | `ssh.sync.transfer` | A sync session ended | `dir`, `direction`, `bytes_in`, `bytes_out` |
 
 Changed rows:
@@ -1005,7 +1007,7 @@ The owner approved every answer below on 2026-10-09; the design is written to it
 | Q2 | A headless local run whose token lapses offline: today `Server.lostRunKeepable` tears headless runs down | Keep it as lost `outage` until its end plus grace, like an interactive run. The completion watcher skips kept runs, so `agent_exit` finalizes it ([§5.4](#54-reconnect-and-reconciliation)) |
 | Q3 | Spool overflow before the lapse: proceed unaudited (today's #54 shape) or fail closed | Fail closed: refuse new egress until the spool drains. The first replayed row is a synthetic `builtin:spool-full` denial carrying the count |
 | Q4 | Audit names outside the closed verb list | `runner.enrol`, `runner.connect`, `runner.disconnect`; add one verb, `claim`. Do not alias `register` |
-| Q5 | Migration for `runner_pending_actions`, which the pre-assigned list does not name | Fold it into `0146`, which C-H already lands; keep `0148`–`0149` reserved (`0147` went to the #1826 audit-partition fix) |
+| Q5 | Migration for `runner_pending_actions`, which the pre-assigned list does not name | Shipped in `0139_runner_delivery`, with the delivery policy |
 | Q6 | Do members with no assigned profile get local placement when `runners.enabled` is on | Yes: `deny_placements` is a deny list, and absent means permitted. P3's default deny still applies |
 | Q7 | Does a runner-asserted CC3 satisfy the blast-radius floor | Yes for `own` and `via_org` credentials. No for `runner_resident`: evaluate the floor as unmet and refuse naming the posture |
 | Q8 | #924 (`UserDrive*` → `Drive*` rename) before #112/#113, or defer | Defer to after 0.9: a pure rename that collides with #112, #113 and the drive placement work |
