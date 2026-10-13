@@ -349,6 +349,31 @@ func TestMeetUIAppsMatchLeq(t *testing.T) {
 	}
 }
 
+// TestMeetUIAppsNarrowingBindsThroughClamp pins a non-empty narrowing: an overlay keeps one of the
+// base's two apps, the result is within the base, and a run under it is clamped to that one app.
+func TestMeetUIAppsNarrowingBindsThroughClamp(t *testing.T) {
+	jupyter, docs := types.UIApp{Name: "jupyter", Port: 8888}, types.UIApp{Name: "docs", Port: 8000}
+	base := Authority{Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, UIApps: []types.UIApp{jupyter, docs}}}
+	ov := overlayOf(types.CeilingOverlay{UIApps: &[]types.UIApp{docs}})
+	if err := ValidateOverlay(base, ov); err != nil {
+		t.Fatalf("ValidateOverlay: %v", err)
+	}
+	got, warns, err := ApplyOverlay(base, ov)
+	if err != nil || len(warns) != 0 {
+		t.Fatalf("ApplyOverlay: err = %v, warnings = %v", err, warns)
+	}
+	if !slices.Equal(got.Ceiling.UIApps, []types.UIApp{docs}) || got.Limits.DenyUIApps {
+		t.Fatalf("ui_apps = %+v, deny_ui_apps = %v; want only docs and no denial", got.Ceiling.UIApps, got.Limits.DenyUIApps)
+	}
+	if !Leq(got.Ceiling, base.Ceiling, got.Limits, base.Limits) {
+		t.Error("Leq(ApplyOverlay(base, ov), base) is false for a narrowing")
+	}
+	run, clampWarns := Clamp(types.RunPolicySpec{UIApps: []types.UIApp{jupyter, docs}}, got.Ceiling, got.Limits)
+	if !slices.Equal(run.UIApps, []types.UIApp{docs}) || !hasWarn(clampWarns, "dropped 1 ui_app") {
+		t.Errorf("a run under the result has ui_apps = %+v, warnings = %v; want only docs", run.UIApps, clampWarns)
+	}
+}
+
 func TestMeetLimits(t *testing.T) {
 	base := Authority{Limits: types.GovernanceLimits{
 		MaxConcurrentRuns: 4, MaxCPUMillis: 2000,
