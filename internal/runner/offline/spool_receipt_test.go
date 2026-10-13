@@ -42,7 +42,7 @@ func TestStateSpoolReceiptIsReadOnlyAcceptedPrefix(t *testing.T) {
 	if *rows[0].SpoolReceipt != empty || rows[0].SpoolDepth != 1 || rows[0].SpoolDrops != 1 {
 		t.Fatal("STATE acknowledged unaccepted event/drop")
 	}
-	if err := spool.Replay(t.Context(), func(context.Context, runnerspool.Record) error { return nil }); err != nil {
+	if err := spool.Replay(t.Context(), func(context.Context, []runnerspool.Record) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	accepted, err := spool.Receipt(t.Context())

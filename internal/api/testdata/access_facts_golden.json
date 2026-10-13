@@ -1,0 +1,191 @@
+{
+  "access": {
+    "rows": [
+      {
+        "id": "git_provider:github:direct:acme",
+        "kind": "repository",
+        "from": "repository",
+        "name": "acme",
+        "status": "ready",
+        "hosts": [
+          "github.com",
+          "*.githubusercontent.com"
+        ],
+        "credentials": [],
+        "source": {
+          "kind": "workspace"
+        }
+      },
+      {
+        "id": "agent:claude-code",
+        "kind": "harness",
+        "from": "harness",
+        "name": "claude-code",
+        "status": "needs_setup",
+        "hosts": [],
+        "credentials": [],
+        "source": {
+          "kind": "harness",
+          "name": "claude-code"
+        }
+      },
+      {
+        "id": "inline:0",
+        "kind": "custom",
+        "from": "added",
+        "name": "Person Tool",
+        "status": "ready",
+        "hosts": [
+          "person-api.example"
+        ],
+        "credentials": [],
+        "source": {
+          "kind": "component",
+          "id": "inline:0",
+          "name": "Person Tool"
+        }
+      }
+    ],
+    "hosts": [
+      {
+        "host": "github.com",
+        "via": "egress",
+        "rows": [
+          "git_provider:github:direct:acme"
+        ],
+        "verdict": "allowed",
+        "source": {
+          "kind": "policy",
+          "name": "default"
+        }
+      },
+      {
+        "host": "*.githubusercontent.com",
+        "via": "egress",
+        "rows": [
+          "git_provider:github:direct:acme"
+        ],
+        "verdict": "allowed",
+        "source": {
+          "kind": "policy",
+          "name": "default"
+        }
+      },
+      {
+        "host": "person-api.example",
+        "via": "egress",
+        "rows": [
+          "inline:0"
+        ],
+        "verdict": "allowed",
+        "source": {
+          "kind": "component",
+          "id": "inline:0",
+          "name": "Person Tool"
+        }
+      },
+      {
+        "host": "api.anthropic.com",
+        "via": "egress",
+        "rows": [
+          "policy"
+        ],
+        "verdict": "allowed",
+        "source": {
+          "kind": "policy",
+          "name": "default"
+        }
+      },
+      {
+        "host": "registry.example",
+        "via": "egress",
+        "rows": [
+          "policy"
+        ],
+        "verdict": "allowed",
+        "source": {
+          "kind": "workspace",
+          "id": "6f1c2c4e-2d1b-4c47-9a53-3a8f1f1d2e10",
+          "name": "Approved workspace"
+        }
+      }
+    ],
+    "credentials": [],
+    "unlisted": {
+      "mode": "deny_with_review",
+      "allow_all": false,
+      "decider": "you"
+    },
+    "harnesses": [
+      {
+        "harness": "claude-code",
+        "lane": "ungated",
+        "enforcer": "none",
+        "default": {
+          "effective": "allow",
+          "source": {
+            "kind": "harness"
+          },
+          "options": [
+            {
+              "effect": "allow",
+              "available": true
+            },
+            {
+              "effect": "hold",
+              "available": true
+            },
+            {
+              "effect": "deny",
+              "available": true
+            }
+          ]
+        },
+        "policy_rules": [],
+        "rule_effects": [
+          {
+            "effect": "allow",
+            "available": true
+          },
+          {
+            "effect": "hold",
+            "available": true
+          },
+          {
+            "effect": "deny",
+            "available": true
+          }
+        ],
+        "rule_tools": "any",
+        "mcp_servers": []
+      }
+    ],
+    "setup": [
+      {
+        "kind": "llm_access",
+        "id": "llm_access:claude-code",
+        "label": "Choose a model provider",
+        "required_by": "claude-code",
+        "status": "missing",
+        "fix": {
+          "action": "choose_model_provider",
+          "tool": "claude-code"
+        }
+      }
+    ]
+  },
+  "repository_push_rules": {
+    "preflight": {
+      "deny_paths": [
+        "private/**",
+        "acme-only/**"
+      ]
+    },
+    "preview": {
+      "deny_paths": [
+        "private/**",
+        "acme-only/**"
+      ]
+    }
+  }
+}

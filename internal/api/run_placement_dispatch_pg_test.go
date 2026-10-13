@@ -30,11 +30,11 @@ func (p *poolRunner) executorCalls() []string {
 func TestDispatch_ExactTargetFence(t *testing.T) {
 	e := newPlacementEnv(t)
 	ctx := context.Background()
-	pool := e.createPool("Mixed", types.RunnerPoolRemoteProvided)
+	pool := e.createPool("Mixed", types.RunnerPoolOrganization)
 	e.addExecutors(pool.ID, "alpha", "beta")
-	other := e.createPool("Elsewhere", types.RunnerPoolRemoteProvided)
+	other := e.createPool("Elsewhere", types.RunnerPoolOrganization)
 	e.addExecutors(other.ID, "alpha", "beta")
-	e.orgDefaults(fmt.Sprintf(`{"preferred_hosting":"remote_provided","remote_provided":%q}`, pool.ID))
+	e.orgDefaults(fmt.Sprintf(`{"pool_id":%q}`, pool.ID))
 
 	w := e.call(e.person, http.MethodPost, "/api/v1/runs", runBody(""))
 	if w.Code != http.StatusCreated {
@@ -60,11 +60,11 @@ func TestDispatch_ExactTargetFence(t *testing.T) {
 	}
 
 	// Everything the pool's label could change after admission, changed.
-	if w := e.admin(http.MethodDelete, "/api/v1/runner-pools/"+pool.ID.String()+"/executors/"+winner, ""); w.Code >= 300 {
+	if w := e.admin(http.MethodDelete, "/api/v1/runner-pools/"+pool.ID.String()+"/remote-runners/"+winner, ""); w.Code >= 300 {
 		t.Fatalf("remove the winner from the pool = %d %s", w.Code, w.Body)
 	}
-	e.orgDefaults(fmt.Sprintf(`{"preferred_hosting":"remote_provided","remote_provided":%q}`, other.ID))
-	e.personDefaults(e.person, fmt.Sprintf(`{"remote_provided":%q}`, other.ID))
+	e.orgDefaults(fmt.Sprintf(`{"pool_id":%q}`, other.ID))
+	e.personDefaults(e.person, fmt.Sprintf(`{"pool_id":%q}`, other.ID))
 	if w := e.admin(http.MethodPut, "/api/v1/runner-pools/"+pool.ID.String(), fmt.Sprintf(`{"revision":%d,"state":"disabled"}`, e.revision(pool.ID))); w.Code != http.StatusOK {
 		t.Fatalf("disable = %d %s", w.Code, w.Body)
 	}
@@ -105,8 +105,8 @@ func TestDispatch_ExactTargetFence(t *testing.T) {
 func TestDispatch_SelfHostedRunGoesToItsPersistedRunner(t *testing.T) {
 	e := newPlacementEnv(t)
 	ctx := context.Background()
-	bound, later := uuid.New(), uuid.New()
-	pool := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	bound, later := e.claimedRunner(e.personP), uuid.New()
+	pool := e.createPool("Laptops", types.RunnerPoolUser)
 	poolID := pool.ID
 	run := types.AgentRun{ID: uuid.New(), Placement: types.PlacementLocal, RunnerID: &bound, RunnerPoolID: &poolID}
 	for range 3 {
@@ -115,6 +115,10 @@ func TestDispatch_SelfHostedRunGoesToItsPersistedRunner(t *testing.T) {
 		}
 		if got := e.runner.fakeRunner.lastSpec.RunnerID; got != bound.String() || got == later.String() {
 			t.Fatalf("created for runner %q, the run is bound to %q", got, bound)
+		}
+		// The create carries the runner's stored runs at once, the runner's own backstop.
+		if got := e.runner.fakeRunner.lastSpec.RunnerMaxRuns; got != types.RunnerMaxRunsDefault {
+			t.Fatalf("created with RunnerMaxRuns %d, want the runner's stored %d", got, types.RunnerMaxRunsDefault)
 		}
 	}
 	// A spec that arrives naming another runner is overwritten by the persisted one.

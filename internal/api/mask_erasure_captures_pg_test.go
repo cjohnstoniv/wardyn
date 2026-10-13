@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -129,7 +130,7 @@ func TestPG_MaskErasureDelayedFoundry(t *testing.T) {
 				query, cookies, _ := f.begin(t, owner, azUIDAnthropic)
 				work = func() error {
 					w := f.callback(owner, query, cookies)
-					if strings.HasSuffix(w.Header().Get("Location"), reasonStoreError) {
+					if loc, _ := url.Parse(w.Header().Get("Location")); loc != nil && loc.Query().Get("azure_signin_error") == reasonStoreError {
 						return ErrADOEntraUnavailable
 					}
 					return errors.New("capture did not refuse erased generation")

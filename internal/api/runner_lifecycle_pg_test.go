@@ -25,11 +25,16 @@ import (
 func TestRunnerAdmissionPG_ThousandRunInventoryReachesReady(t *testing.T) {
 	f := newAdmissionFixture(t)
 	rows := []runnerwire.RunState{f.liveRow()}
+	// 1000 live runs are more than any runner's max_runs admits, so they are seeded past placement: each is
+	// recorded with no runner and then bound to this one. The test pins the inventory, not admission.
 	for range 1000 {
 		run := newFinalizeRun()
-		run.CreatedBy, run.Placement, run.RunnerID = f.rn.Owner, types.PlacementLocal, &f.rn.ID
+		run.CreatedBy, run.Placement = f.rn.Owner, types.PlacementLocal
 		run, err := f.st.CreateRun(f.ctx, run)
 		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.pool.Exec(f.ctx, `UPDATE agent_runs SET runner_id = $2 WHERE id = $1`, run.ID, f.rn.ID); err != nil {
 			t.Fatal(err)
 		}
 		if err := f.st.SetSandboxRef(f.ctx, run.ID, "runner:"+f.rn.ID.String()+"/"+run.ID.String()); err != nil {

@@ -47,6 +47,7 @@ func (t RunnerPoolRunType) Plural() string {
 const (
 	RunnerPoolCPUMillisMax = 1_000_000     // milli-CPU: a thousand CPUs
 	RunnerPoolMemoryMiBMax = 16 << 20      // MiB: 16 TiB
+	RunnerPoolDiskMiBMax   = 16 << 20      // MiB: 16 TiB, the request contract's disk bound
 	RunnerPoolSecondsMax   = math.MaxInt32 // about 68 years
 )
 
@@ -65,6 +66,23 @@ func (a RunnerPoolAmount) validate(field, unit string, bound int) error {
 		return fmt.Errorf("%s: the cap is at most %d %s", field, bound, unit)
 	case a.Default > a.Cap:
 		return fmt.Errorf("%s: the default (%d) is past the cap (%d)", field, a.Default, a.Cap)
+	}
+	return nil
+}
+
+// validateDisk is the main-drive size's check: an amount like memory's, and a
+// whole number of GiB, because the console sizes a drive in GiB. A nil size is a
+// pool that sets no main-drive bound.
+func validateDisk(runType string, a *RunnerPoolAmount) error {
+	if a == nil {
+		return nil
+	}
+	field := runType + ".disk_mib"
+	if err := a.validate(field, "MiB", RunnerPoolDiskMiBMax); err != nil {
+		return err
+	}
+	if a.Default%1024 != 0 || a.Cap%1024 != 0 {
+		return fmt.Errorf("%s: set a default and a cap in whole GiB (multiples of 1024 MiB)", field)
 	}
 	return nil
 }
@@ -105,18 +123,24 @@ func (d RunnerPoolDuration) validate(field string) error {
 // idle stop: a Background task ends when its command or agent exits, or at its
 // maximum lifetime. Decoding a body that sends `idle` here fails.
 type RunnerPoolBackgroundLimits struct {
-	CPUMillis RunnerPoolAmount   `json:"cpu_millis"`
-	MemoryMiB RunnerPoolAmount   `json:"memory_mib"`
-	Lifetime  RunnerPoolDuration `json:"lifetime"`
+	CPUMillis RunnerPoolAmount `json:"cpu_millis"`
+	MemoryMiB RunnerPoolAmount `json:"memory_mib"`
+	// DiskMiB bounds the main drive of this run type's runs: what an untouched run
+	// gets and the most a request may ask for, in MiB, each a whole number of GiB.
+	// Nil: the pool sets no main-drive bound.
+	DiskMiB  *RunnerPoolAmount  `json:"disk_mib,omitempty"`
+	Lifetime RunnerPoolDuration `json:"lifetime"`
 }
 
 // RunnerPoolInteractiveLimits are a pool's limits for Interactive environments,
 // which alone have an idle stop.
 type RunnerPoolInteractiveLimits struct {
-	CPUMillis RunnerPoolAmount   `json:"cpu_millis"`
-	MemoryMiB RunnerPoolAmount   `json:"memory_mib"`
-	Lifetime  RunnerPoolDuration `json:"lifetime"`
-	Idle      RunnerPoolDuration `json:"idle"`
+	CPUMillis RunnerPoolAmount `json:"cpu_millis"`
+	MemoryMiB RunnerPoolAmount `json:"memory_mib"`
+	// DiskMiB is the main drive's bound, as on RunnerPoolBackgroundLimits.
+	DiskMiB  *RunnerPoolAmount  `json:"disk_mib,omitempty"`
+	Lifetime RunnerPoolDuration `json:"lifetime"`
+	Idle     RunnerPoolDuration `json:"idle"`
 }
 
 // RunnerPoolLimits is everything a pool limits. A run type with limits is a run
@@ -145,6 +169,7 @@ func (l RunnerPoolLimits) Validate() error {
 		if err := errors.Join(
 			b.CPUMillis.validate("background.cpu_millis", "milli-CPU", RunnerPoolCPUMillisMax),
 			b.MemoryMiB.validate("background.memory_mib", "MiB", RunnerPoolMemoryMiBMax),
+			validateDisk("background", b.DiskMiB),
 			b.Lifetime.validate("background.lifetime"),
 		); err != nil {
 			return err
@@ -154,6 +179,7 @@ func (l RunnerPoolLimits) Validate() error {
 		if err := errors.Join(
 			i.CPUMillis.validate("interactive.cpu_millis", "milli-CPU", RunnerPoolCPUMillisMax),
 			i.MemoryMiB.validate("interactive.memory_mib", "MiB", RunnerPoolMemoryMiBMax),
+			validateDisk("interactive", i.DiskMiB),
 			i.Lifetime.validate("interactive.lifetime"),
 			i.Idle.validate("interactive.idle"),
 		); err != nil {
@@ -273,9 +299,13 @@ type ConcurrencyBound struct {
 // must allow it, and governance allows it only when its profile does, whatever
 // finite maximum it also sets.
 type EffectiveRunLimits struct {
-	RunType       RunnerPoolRunType  `json:"run_type"`
-	CPUMillis     EffectiveLimit     `json:"cpu_millis"`
-	MemoryMiB     EffectiveLimit     `json:"memory_mib"`
+	RunType   RunnerPoolRunType `json:"run_type"`
+	CPUMillis EffectiveLimit    `json:"cpu_millis"`
+	MemoryMiB EffectiveLimit    `json:"memory_mib"`
+	// DiskMiB is the main drive's size in MiB. An unlimited Default means an untouched
+	// run gets no size (its scratch is unbounded); with no default but a cap, an
+	// untouched run gets the cap (foldField's rule).
+	DiskMiB       EffectiveLimit     `json:"disk_mib"`
 	Lifetime      EffectiveLimit     `json:"lifetime_sec"`
 	LifetimeSpan  EffectiveLimit     `json:"lifetime_span_sec"`
 	LifetimeLease EffectiveLimit     `json:"lifetime_lease_sec"`
@@ -285,23 +315,45 @@ type EffectiveRunLimits struct {
 }
 
 // RunEndReason says why the platform ended a run. It is the audit row's `reason`
-// and the run detail's sentence; how a run carries it is the lifetime lane's.
+// and the run detail's sentence, and it rides the run's status_detail as
+// "lifetime: <reason>" when the run is KILLED at its end or its maximum.
 type RunEndReason string
 
-// RunEndMaxLifetimeReached: the run reached its effective maximum lifetime and
-// was KILLED.
-const RunEndMaxLifetimeReached RunEndReason = "max_lifetime_reached"
+const (
+	// RunEndMaxLifetimeReached: the run reached its effective maximum lifetime and was KILLED.
+	RunEndMaxLifetimeReached RunEndReason = "max_lifetime_reached"
+	// The five ways the pool queue ends a run that waited (docs/design/0.9/pool-queue.md section 9).
+	// A run that waited too long, or whose profile, policy or portal changed under it, is FAILED; a
+	// run whose pool was removed is KILLED. identity_deactivated is the existing token, FAILED here.
+	RunEndQueueTimeout        RunEndReason = "queue_timeout"
+	RunEndQueueProfileChanged RunEndReason = "queue_profile_changed"
+	RunEndQueuePolicyChanged  RunEndReason = "queue_policy_changed"
+	RunEndQueuePortalRevoked  RunEndReason = "queue_portal_revoked"
+	RunEndRunnerPoolRemoved   RunEndReason = "runner_pool_removed"
+	RunEndIdentityDeactivated RunEndReason = "identity_deactivated"
+)
+
+// runEndSentences is the one sentence per end reason.
+var runEndSentences = map[RunEndReason]string{
+	RunEndMaxLifetimeReached:  "This run reached its maximum lifetime and was ended.",
+	RunEndEndReached:          "This run reached its end time and was ended.",
+	RunEndQueueTimeout:        "This run waited too long for a free slot and was not started.",
+	RunEndQueueProfileChanged: "Your governance profile changed while this run waited. Start it again.",
+	RunEndQueuePolicyChanged:  "The policy this run used changed while it waited. Start it again to review it.",
+	RunEndQueuePortalRevoked:  "The portal that launched this run was removed while it waited.",
+	RunEndRunnerPoolRemoved:   "The pool this run was waiting for was removed.",
+	RunEndIdentityDeactivated: "This account's access has been removed. Sign in again, or ask your Wardyn admin.",
+}
+
+// RunEndEndReached: a Background task reached its own end time, which came
+// before its maximum lifetime, and was KILLED.
+const RunEndEndReached RunEndReason = "end_reached"
 
 // Valid reports whether r is a defined end reason.
-func (r RunEndReason) Valid() bool { return r == RunEndMaxLifetimeReached }
+func (r RunEndReason) Valid() bool { _, ok := runEndSentences[r]; return ok }
 
 // Sentence is what the run's detail page and the audit view say.
-func (r RunEndReason) Sentence() string {
-	if r == RunEndMaxLifetimeReached {
-		return "This run reached its maximum lifetime and was ended."
-	}
-	return ""
-}
+func (r RunEndReason) Sentence() string { return runEndSentences[r] }
 
 // Apply is a request's value against the limit: 0 asks for the default, a value
 // within the cap is kept, and one past it is reduced to the cap with capped set.

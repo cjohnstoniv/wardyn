@@ -64,6 +64,8 @@ func (s *Server) resolveFileSecretGrants(ctx context.Context, run types.AgentRun
 			skip = "scope invalid: " + err.Error()
 		case nameSinkReservedSecret(secretName):
 			skip = "references a reserved platform-internal secret name"
+		case reservedToolgateCredentialFile(file):
+			skip = "names a file reserved for the run's tool-approval credential"
 		case secretName == bedrockAPIKeySecret:
 			skip = "the Bedrock API key is injected proxy-side only and never written into the sandbox"
 		case s.cfg.Secrets == nil:
@@ -133,7 +135,7 @@ func fileSecretRenderings(val []byte) [][]byte {
 // here, before any value is read, as the orchestrator decides managed files
 // before routing (a driver's own refusal is the backstop, not the gate).
 func (s *Server) fileSecretRunnerDelivers(ctx context.Context, run types.AgentRun) bool {
-	caps, err := s.cfg.Runner.Capabilities(ctx)
+	caps, err := s.runCapabilities(ctx, run)
 	if err == nil && caps.ManagedFiles {
 		return true
 	}

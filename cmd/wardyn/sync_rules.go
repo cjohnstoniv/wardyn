@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -100,10 +101,21 @@ func syncEntryName(name string) error {
 		return fmt.Errorf("entry name %q", name)
 	case strings.ContainsAny(name, "/\\\x00") || !utf8.ValidString(name):
 		return fmt.Errorf("entry name %q is not a plain file name", name)
+	case strings.ContainsFunc(name, unicode.IsControl):
+		return fmt.Errorf("entry name %q holds a control character", name)
 	case syncInvisible(name):
 		return fmt.Errorf("entry name %q holds an invisible character", name)
 	}
 	return nil
+}
+
+// syncShown is p as the report prints it: unchanged when every character is
+// printable, quoted otherwise, so no name can write control codes to the terminal.
+func syncShown(p string) string {
+	if utf8.ValidString(p) && !strings.ContainsFunc(p, func(r rune) bool { return !unicode.IsGraphic(r) }) {
+		return p
+	}
+	return strconv.QuoteToGraphic(p)
 }
 
 // syncCollisions returns the paths that differ only by case or Unicode

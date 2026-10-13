@@ -30,7 +30,7 @@ func TestAPITokenMintSites_OnlyTheSelfServiceMint(t *testing.T) {
 	}
 	fset := token.NewFileSet()
 	calls := map[string]map[string]int{}
-	for _, name := range []string{"insertAPIToken", "CreateAPIToken", "ClaimInvitation", "mintGuards", "prepareMint"} {
+	for _, name := range []string{"insertAPIToken", "CreateAPIToken", "ClaimInvitation", "CreateServiceToken", "mintGuards", "prepareMint"} {
 		calls[name] = map[string]int{}
 	}
 	for _, f := range files {
@@ -72,11 +72,12 @@ func TestAPITokenMintSites_OnlyTheSelfServiceMint(t *testing.T) {
 		}
 	}
 	for name, want := range map[string][]string{
-		"insertAPIToken":  {"handleCreateAPIToken"},
-		"CreateAPIToken":  {"insertAPIToken"},
-		"ClaimInvitation": {"handleClaimInvitation"},
-		"mintGuards":      {"handleClaimInvitation", "handleCreateAPIToken"},
-		"prepareMint":     {"handleClaimInvitation", "handleCreateAPIToken"},
+		"insertAPIToken":     {"handleCreateAPIToken"},
+		"CreateAPIToken":     {"insertAPIToken"},
+		"ClaimInvitation":    {"handleClaimInvitation"},
+		"mintGuards":         {"handleClaimInvitation", "handleCreateAPIToken", "handleMintServiceToken"},
+		"CreateServiceToken": {"handleMintServiceToken"}, // the sponsor's mint of a service identity's token (#1508)
+		"prepareMint":        {"handleClaimInvitation", "handleCreateAPIToken"},
 	} {
 		got := slices.Sorted(maps.Keys(calls[name]))
 		if !slices.Equal(got, want) {

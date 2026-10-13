@@ -7,8 +7,8 @@
 // catalogue entries and the custom-component configuration schema. Every
 // interface mirrors one Go struct (pkg/client/templates.go,
 // internal/types/component_config_schema.go) and wire-parity.test.ts pins its
-// json tags to that struct's source. These shapes are the contract the server's
-// template store fills in: until it lands the routes answer 501 templates_unavailable.
+// json tags to that struct's source. A server whose store keeps no templates
+// answers 501 templates_unavailable.
 //
 // A template is content, never an admission. It carries no secret value, run
 // identity, session or claim state, and using one re-checks the launcher's own
@@ -16,6 +16,9 @@
 // title or description either: a run is named in the dialog at launch.
 
 export type TemplateScope = "person" | "org" | "group";
+
+/** A run setup, or a policy: only run-wide network, credential and access-rule keys under inline_policy. */
+export type TemplateKind = "template" | "policy";
 
 /** What a template intends to hold: a whole setup, or a mix of parts that may list what it needs set up when used. */
 export type TemplateCoverage = "full" | "partial";
@@ -51,19 +54,24 @@ export interface TemplateSetupNeed {
   reason?: string;
 }
 
-/** The import and export document. Owner, scope, group and revision are the catalogue's, never the document's. */
+/**
+ * The import and export document. Owner, scope, group and revision are the catalogue's, never the document's.
+ * A kind Run document is a draft of one run: it has no name, description, coverage or needs_setup.
+ */
 export interface TemplateDocument {
   api_version: string;
   kind: string;
   name?: string;
   description?: string;
-  coverage: TemplateCoverage;
+  coverage?: TemplateCoverage;
   intent: TemplateIntent;
   needs_setup?: TemplateSetupNeed[];
 }
 
 export const TEMPLATE_API_VERSION = "wardyn/v1";
 export const TEMPLATE_KIND = "RunTemplate";
+/** A draft of one run: `intent` is the create body. */
+export const RUN_DOCUMENT_KIND = "Run";
 
 /** Pins a revision in a new-run draft; a later edit of the template does not move it. */
 export interface TemplateRef {
@@ -78,6 +86,9 @@ export interface Template {
   owner_id?: string;
   /** The group's canonical subject, for group scope. */
   group_id?: string;
+  /** The group's display label, when an administrator set one. */
+  group_label?: string;
+  kind: TemplateKind;
   name: string;
   description?: string;
   revision: number;
@@ -87,6 +98,7 @@ export interface Template {
   writable: boolean;
   created_at: string;
   updated_at: string;
+  /** Set only for a caller who may write it: readers are not told who published it. */
   created_by?: string;
   updated_by?: string;
 }
@@ -95,18 +107,36 @@ export interface TemplateSummary {
   id: string;
   scope: TemplateScope;
   group_id?: string;
+  group_label?: string;
+  kind: TemplateKind;
   name: string;
   description?: string;
   revision: number;
   coverage: TemplateCoverage;
   includes: TemplatePart[];
+  /** The intent fields it specifies, inline_policy expanded to inline_policy.<key>, sorted. */
+  fields: string[];
   needs_setup: string[];
   writable: boolean;
   updated_at: string;
 }
 
+/**
+ * Where the caller may save: their own scope always, the organisation as an
+ * organisation administrator in the Admin view, and each group they are a
+ * verified member of and manage templates for.
+ */
+export interface TemplatePublish {
+  org: boolean;
+  groups: string[];
+  group_labels?: Record<string, string>;
+  /** The sign-in's group list is missing or incomplete: no group is offered until the person signs in again. */
+  groups_unverified: boolean;
+}
+
 export interface TemplateList {
   templates: TemplateSummary[];
+  publish: TemplatePublish;
 }
 
 export interface TemplateSaveRequest {
@@ -114,14 +144,25 @@ export interface TemplateSaveRequest {
   group_id?: string;
   name: string;
   description?: string;
+  /** template when absent. An update keeps the template's kind. */
+  kind?: TemplateKind;
   document: TemplateDocument;
   /** Set to update: the revision the caller read. Any other current revision is a conflict. */
   expected_revision?: number;
 }
 
+/** A save, update or copy the document door refused: the first diagnostic's reason and sentence, and every diagnostic. */
+export interface TemplateSaveRefusal {
+  error: string;
+  reason: string;
+  diagnostics: TemplateDiagnostic[];
+}
+
 export interface TemplateImportRequest {
   format: TemplateFormat;
   source: string;
+  /** The kind the caller expects: Run, RunTemplate, or absent for either. */
+  kind?: string;
 }
 
 /** One problem with a document: where (a JSON path), why (a closed reason) and a sentence. */
@@ -154,6 +195,8 @@ export interface TemplateGroupAdmin {
   group_id: string;
   person: string;
   granted_by?: string;
+  /** The group's display label. Display only: authority follows group_id. */
+  label?: string;
 }
 
 // The custom-component configuration schema (Go: types.ComponentConfigSchema).

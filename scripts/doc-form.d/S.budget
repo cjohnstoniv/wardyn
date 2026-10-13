@@ -22,12 +22,77 @@
 # docs/sdk.md 13288 adds 70 over 13218 (0.9 F-1508 C1): the invitation reason rows.
 # docs/sdk.md 13447 measured after F-1508 C1 merge.
 # 0.9 H5: docs/sdk.md 13556 adds 109 over 13447 for the six relay and delivery reasons internal_relay.go now publishes.
+# 0.9 H12 (#1964): docs/sdk.md 13609 adds 53 over 13556 for the via_org route reasons and credential_delivery_invalid/_unavailable.
+# 0.9 H12 r2: docs/sdk.md 13615 adds 6 over 13609: the via_org byte total is per server replica, reset on restart (owner ruling).
 # D-108-114 merge: docs/sdk.md 13595 adds 39 over 13556 for the placement_denied and runner_offline rows the docs guard derives.
 # No-end runs (#1319): the Run end section (a table and four bullets) and four wire reasons add the measured words: docs/sdk.md 13460.
 # docs/sdk.md 13849 measured after D-1319 S1 merge.
 # docs/sdk.md 13576 measured after D-117 r1 merge.
 # docs/sdk.md 13861 measured after D-117 merge.
-docs/sdk.md=13861 share=21
+# docs/sdk.md 13672 adds 116 over 13556 (0.9 F-1508 C2): the service-identity reason rows and `service_scope`.
+# docs/sdk.md 13690 adds 18 over 13672 (0.9 F-1508 C2 r1): the retired-service renew/revive and no-revocation-store answers of service_identity_inactive.
+# docs/sdk.md 13997 measured after D-1319 S2 (new PATCH reason).
+# docs/sdk.md 13995 measured after train 5 merge.
+# docs/sdk.md 13995 adds 34 (0.9 H13): the runner_posture_unmet reason row.
+# docs/sdk.md 13714 adds 24 over 13690 (0.9 F-1508 C3): the token_move_invalid row.
+# docs/sdk.md 14019 measured after merge.
+# docs/sdk.md 14021 measured after merge.
+# docs/sdk.md 14080 measured after the 0.9.0 batch merge.
+# docs/sdk.md 14113 measured after H13 merge-prep.
+# docs/sdk.md 14400 adds 320 (0.9 DS2-S1, train 11): Run documents, the import door and the shape table.
+# docs/sdk.md 14061 adds 40 (0.9 TA-8): the clis cards and the OrgComponentView category, cli and mcp views.
+# docs/sdk.md 14440 measured after train 12 TA-8 merge.
+# DS1-S1b: docs/sdk.md 14477 adds 37 over 14440 for the four harness-set reasons the docs guard derives.
+# docs/sdk.md 14265 adds 244 over 14021 (0.9 DS3-S5): the branch-list section and the workspace_repo_unknown and branch_list_rate_limited rows.
+# docs/sdk.md 14685 measured after train 13: DS3-S5 merge.
+# DS2-S3: docs/sdk.md 14759 adds 738 over 14021: 321 for DS2-S1's Run documents section (merged at b8ea1f8cf, which measures 14342 alone) and 417 for the Run templates section and the three template reason rows.
+# docs/sdk.md 15102 measured after train 13: DS2-S3 merge.
+# docs/sdk.md 14474 measured after H13 merge-prep 2.
+# docs/sdk.md 15136 measured after train 14: H13 merge.
+# docs/sdk.md 15492 (train 15): TA-1 access block beside the branch-list section.
+# docs/sdk.md 15221 adds 119: template group-admin, from-preset, import --kind and run --file.
+# docs/sdk.md 15611 measured after train 15: DS2-S5 merge.
+# docs/sdk.md 15173 measured after merge batch/090 into DS1-S1b.
+# docs/sdk.md 15648 measured after train 17: DS1-S1b merge.
+# 0.9 A-L14: docs/sdk.md 15209 adds 73 over 15136 for the built-in GitHub component bullet and its two refusal reasons.
+# docs/sdk.md 15721 measured after A-L14 merge (train 18).
+# docs/sdk.md 15757 adds 36 over 15721 (0.9 local-enable fix-r3): placement_denied at revive and dispatch, run_renew_lease_busy.
+# docs/sdk.md 15773 adds 16 over 15757 (0.9 local-enable fix-r4): the probe's exemption is at create and dispatch; a revive's per-runner slot.
+# docs/sdk.md 15776 adds 3 over 15773 (0.9 local-enable fix-r5): a revive's slot is the runner owner's.
+# docs/sdk.md 15772 adds 51 over 15721 (0.9 Q-b): the run_queued and run_max_wait_invalid reasons.
+# docs/sdk.md 15798 adds 26 (0.9 Q-b fix-r3): a queued 201's resources_applied is as of the launch.
+# 0.9 A-L4: docs/sdk.md 14098 adds 77 over 14021: three multi-workspace reason rows and the widened overlap, target and start-folder rows.
+# docs/sdk.md 15799 measured after A-L4 merge (train 19).
+# 0.9 DS3-S2: docs/sdk.md 15814 adds 15 over 15799 for the main_drive_unenforceable reason on the request_field_unavailable row.
+# 0.9 DS3-S2 fix r1: docs/sdk.md 15815 adds 1 over 15814 for the pool_disk cause.
+# docs/sdk.md 15876 measured after merge batch/090 into Q-b (fix-r3).
+# docs/sdk.md 16079 measured after Q-b.
+# 0.9 DS1-S4: docs/sdk.md 15914 adds 115 over 15799 for the several-harnesses section.
+# docs/sdk.md 16194 measured after DS1-S4.
+# docs/sdk.md 16302 measured after DS2-S2.
+# 0.9 B-pool-catalogue: docs/sdk.md 15811 adds 12 over 15799: the pool list's availability reasons and the 400 for a bad ?run_type=.
+# docs/sdk.md 16314 measured after measured after B-pool-catalogue (train 24).
+# docs/sdk.md 16330 measured after measured after merge batch into DS3-S2.
+# docs/sdk.md 16385 measured after local-enable merge.
+# docs/sdk.md 16356 adds 42 (0.9 H14-api): the person-owned Self-Hosted pool methods and refusals.
+# docs/sdk.md 16427 measured after H14-api merge into batch: person-owned Self-Hosted pools.
+# docs/sdk.md 16466 adds 39 (H15): the runner_at_capacity and runner_max_runs_invalid reasons.
+# docs/sdk.md 16466 adds 39 over 16427 (0.9 B-org-barrier): the pool-defaults PUT replaces the whole document, the default barrier included.
+# 0.9 DS2-S4: docs/sdk.md 16622 adds 195 over 16427: the Run again routes and fields, and the launch_intent_not_found row.
+# docs/sdk.md 16657 measured after train 29: B-org-barrier + DS2-S4 sdk.md combined.
+# docs/sdk.md 16851 adds 194 over 16657 (0.9 RP-1): the scope, member kind and single default pool wire, the remote-hosted runner methods and remote_runner_not_found.
+# docs/sdk.md 16466 adds 39 over 16427 (0.9 B-org-barrier): the pool-defaults PUT replaces the whole document, the default barrier included.
+# 0.9 DS2-S4: docs/sdk.md 16622 adds 195 over 16427: the Run again routes and fields, and the launch_intent_not_found row.
+# docs/sdk.md 16657 measured after train 29: B-org-barrier + DS2-S4 sdk.md combined.
+# docs/sdk.md 16781 adds 124 over 16657 (0.9 F-1508-M3): the sponsor-session and mint-guard variants of the #1508 reasons.
+# docs/sdk.md 16466 adds 39 (H15): the runner_at_capacity and runner_max_runs_invalid reasons.
+# docs/sdk.md 16699 measured after merging batch into H15: train 29 + H15 combined.
+# docs/sdk.md 16822 measured after H15: runner Runs at once (runner.update, max_runs, runner_at_capacity).
+# docs/sdk.md 16864 measured after merging H15 into RP-1: H15's runner reasons plus RP-1's pool wire.
+# docs/sdk.md 16987 measured after RP-1: organization and user pools, remote-hosted runners.
+# docs/sdk.md 16942 adds 120 over 16822 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
+# docs/sdk.md 17107 measured after G-090-cleanup slice F: docs rows that contradicted the code.
+docs/sdk.md=17107 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

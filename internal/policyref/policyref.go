@@ -70,6 +70,10 @@ type Ref struct {
 	Email       string `json:"email,omitempty"`
 	RequestURL  string `json:"request_url,omitempty"`
 	RequestText string `json:"request_text,omitempty"`
+	// Overridden says the person changed the policy for this run (the New Run
+	// cards), inside what their ceiling allows. A refusal then names the policy
+	// as changed, so the person is not sent to the owner of a policy they edited.
+	Overridden bool `json:"overridden,omitempty"`
 }
 
 // UnsafeRune is what no free-text or header-bound field may carry: C0/C1
@@ -151,6 +155,9 @@ func (r Ref) HeaderValues() (policy, request string) {
 		if r.Name != "" {
 			policy += `; name="` + url.PathEscape(r.Name) + `"`
 		}
+	}
+	if r.Overridden {
+		policy += "; overridden"
 	}
 	return policy, r.RequestRoute()
 }

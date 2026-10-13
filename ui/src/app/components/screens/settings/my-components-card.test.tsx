@@ -28,7 +28,7 @@ const A = row("11111111-1111-1111-1111-111111111111", "Acme", 1);
 const B = row("22222222-2222-2222-2222-222222222222", "Beta");
 
 const reply = (over: Partial<MyComponents> = {}): MyComponents => ({
-  may_define: true, resident_delivery_allowed: true, autonomy_cap: "", mine: [A, B], org: [], ...over,
+  may_define: true, resident_delivery_allowed: true, autonomy_cap: "", mine: [A, B], org: [], clis: [], ...over,
 });
 
 let mine: MyComponents;

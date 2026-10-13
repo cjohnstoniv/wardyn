@@ -524,13 +524,13 @@ func TestComponentFacts_GitProviderRows(t *testing.T) {
 		{name: "GitHub alone, the row refuses the broker lane", policy: withToken, lanes: []types.GitLane{types.GitLanePAT}, repos: []string{ghRepo},
 			preview: []gitFact{github("none")}, review: []gitFact{github("none")}},
 		{name: "Azure DevOps alone, not connected", policy: open, repos: []string{scmTestADORepo},
-			preview: []gitFact{ado("unknown")}, review: []gitFact{ado("needs_input")}},
+			preview: []gitFact{ado("needs_input")}, review: []gitFact{ado("needs_input")}},
 		{name: "Azure DevOps alone, connected", policy: open, repos: []string{scmTestADORepo}, connected: true,
 			preview: []gitFact{ado("unknown")}, review: []gitFact{ado("ready")}},
 		{name: "Azure DevOps alone, a caller that is no person", policy: open, repos: []string{scmTestADORepo}, mechanism: true,
 			preview: []gitFact{ado("unknown")}, review: []gitFact{ado("unavailable")}},
 		{name: "both", policy: open, repos: []string{scmTestADORepo, ghRepo},
-			preview: []gitFact{ado("unknown"), github("direct")}, review: []gitFact{ado("needs_input"), github("direct")}},
+			preview: []gitFact{ado("needs_input"), github("direct")}, review: []gitFact{ado("needs_input"), github("direct")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, st, _ := adoRunHarness(t, true)

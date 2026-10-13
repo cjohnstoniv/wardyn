@@ -61,3 +61,32 @@ func TestEvaluatorErrorControl(t *testing.T) {
 		t.Fatalf("control: example.com = %v (%s), want allow", d, decisionReason(log))
 	}
 }
+
+// unknownVerdictEvaluator answers with a verdict string the proxy does not
+// know and no error.
+type unknownVerdictEvaluator struct{}
+
+func (unknownVerdictEvaluator) Name() string { return "test:unknown-verdict" }
+func (unknownVerdictEvaluator) EvaluateHost(context.Context, egress.Request) (egress.HostVerdict, error) {
+	return egress.HostVerdict(""), nil
+}
+func (unknownVerdictEvaluator) MethodAllowed(string) bool { return true }
+
+// TestUnrecognisedVerdictFailsClosed: a nil-error verdict outside the closed
+// set must deny like an evaluator error, even under an allow-all policy.
+func TestUnrecognisedVerdictFailsClosed(t *testing.T) {
+	p := newProxy(Options{
+		RunID:     uuid.New(),
+		Policy:    CompilePolicy(types.RunPolicySpec{AllowAllEgress: true}),
+		Sink:      &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Resolver:  publicResolver{},
+		Evaluator: unknownVerdictEvaluator{},
+	})
+	d, target, log := p.evaluate(context.Background(), "example.com", 443, http.MethodConnect, "")
+	if d != egress.Deny || target != "" {
+		t.Fatalf("unrecognised verdict = %v target %q, want deny with no target", d, target)
+	}
+	if got := decisionReason(log); got != "policy:evaluator-error" {
+		t.Fatalf("rule source = %q, want policy:evaluator-error", got)
+	}
+}

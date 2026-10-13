@@ -8,6 +8,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"regexp"
 	"slices"
@@ -154,13 +155,26 @@ type ConfigIssue struct {
 	Message string `json:"message"`
 }
 
-var configSecretWordRE = regexp.MustCompile(`(?:^|[^a-z0-9])(?:pass(?:word|wd)?|secret_value|secret_key|api_?key|token|credential|private_?key|authorization|bearer|cookie)(?:[^a-z0-9]|$)`)
+var configSecretWordRE = regexp.MustCompile(`(?:^|[^a-z0-9])(?:pass(?:word|wd|phrase)?|api_?key|token|credential|private_?key|signing_?key|encryption_?key|connection_?string|authorization|bearer|cookie)(?:[^a-z0-9]|$)`)
+
+// configSecretNamesNotValues are the words after "secret" that make a key the
+// name of a stored secret (SECRET_NAME, SECRET_REF) or a pattern for finding
+// one (detect_secret_patterns) rather than its value.
+var configSecretNamesNotValues = map[string]bool{"name": true, "names": true, "ref": true, "refs": true, "id": true, "ids": true, "patterns": true,
+	"file": true, "files": true, "path": true, "paths": true, "store": true, "stores": true}
+
+// configSecretLocationWords name where a secret lives only as the key's last word: SECRET_FILE is a
+// path, SECRET_FILE_CONTENTS is the secret itself.
+var configSecretLocationWords = map[string]bool{"file": true, "files": true, "path": true, "paths": true, "store": true, "stores": true}
 
 // ConfigKeyLooksSecret reports whether a config key names a secret by one of
-// its words (GITHUB_TOKEN, apiKey, db-password). Whole words only: MAX_TOKENS
-// and BYPASS_CACHE are plain settings. A config value is plain text by
-// contract, so a key like this is refused by the schema and by a template; a
-// secret travels through a secret_ref field.
+// its words (GITHUB_TOKEN, apiKey, db-password, CLIENT_SECRET,
+// JWT_SECRET, a secret access key). Whole words only: MAX_TOKENS and BYPASS_CACHE are
+// plain settings, and so is SECRET_NAME, which names a stored secret. A config
+// value is plain text by contract, so a key like this is refused by the schema
+// and by a template; a secret travels through a secret_ref field. Only the
+// singular "secret" counts: the plural is in carried field names (add_secrets)
+// that hold names, never values.
 func ConfigKeyLooksSecret(key string) bool {
 	var b strings.Builder
 	for i, r := range key {
@@ -169,7 +183,18 @@ func ConfigKeyLooksSecret(key string) bool {
 		}
 		b.WriteRune(r)
 	}
-	return configSecretWordRE.MatchString(strings.ToLower(strings.ReplaceAll(b.String(), "-", "_")))
+	folded := strings.ToLower(strings.ReplaceAll(b.String(), "-", "_"))
+	if configSecretWordRE.MatchString(folded) {
+		return true
+	}
+	words := strings.FieldsFunc(folded, func(r rune) bool { return (r < 'a' || r > 'z') && (r < '0' || r > '9') })
+	for i, w := range words {
+		if w == "secret" && (i+1 == len(words) || !configSecretNamesNotValues[words[i+1]] ||
+			configSecretLocationWords[words[i+1]] && i+2 < len(words)) {
+			return true
+		}
+	}
+	return false
 }
 
 // DecodeComponentConfigSchema reads one schema from JSON: bounded size, one
@@ -185,7 +210,8 @@ func DecodeComponentConfigSchema(data []byte) (ComponentConfigSchema, []ConfigIs
 	if err := dec.Decode(&s); err != nil {
 		return s, []ConfigIssue{{"schema", err.Error()}}
 	}
-	if dec.More() {
+	// More reports false at a stray ] or }; only the end of the input proves nothing follows.
+	if _, err := dec.Token(); err != io.EOF {
 		return s, []ConfigIssue{{"schema", "must be exactly one JSON value"}}
 	}
 	return s, ValidateComponentConfigSchema(s)

@@ -36,13 +36,13 @@ departed person: sessions, tokens, keys, runs, credentials, workspaces and drive
   - Idempotent, so a sweep over a departing member's ids never fails halfway.
   - The row's `local_dir` sources stop being member-authored, so the member root and dotfile gates no longer bound them — they become ordinary operator mounts.
   - Treat it like creating the workspace.
-- **Offboarding a USER DRIVE is two halves, and only one of them is a product action — and the ORDER is not the obvious one.**
+- **Offboarding a USER DRIVE is two halves, only one of them a product action — and the ORDER is not the obvious one.**
   - Run `POST /drives/preview` **first, while the allocation still exists**, and write the object name down.
   - The preview answers "what does this deployment say about THIS principal" by running the ordinary resolver (`resolveUserDriveFor`, [`internal/api/user_drives_resolve.go`](../../internal/api/user_drives_resolve.go)), and the resolver matches on the **grant**:
     - delete the allocation first and the preview resolves nothing,
     - so the one call that names the object a person is about to lose stops being able to name it.
   - Paste the sign-in subject FIRST — on a `hash` drive the name keys on the first claim, and the API's `home_subject` says which claim it used (the console does not yet show it).
-  - *Then* delete the allocation (`DELETE /drives/grants/{id}`, admin-only, audited `drive.grant.delete`).
+  - *Then* delete the allocation (`DELETE /drives/grants/{id}`, admin or `security_admin`, audited `drive.grant.delete`).
   - It stops the mount at that person's next run and **deletes no data**
     - which is why the audit row carries the drive's declared `reclaim` intent (`retain` or `delete`),
     - so the log records what the operator was told to do about the directory this allocation was the last pointer to.

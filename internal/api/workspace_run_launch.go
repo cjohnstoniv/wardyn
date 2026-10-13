@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,6 +34,11 @@ func (s *Server) referencedWorkspaces(ctx context.Context, spec types.RunPolicyS
 	if err != nil {
 		return nil
 	}
+	return referencedWorkspacesIn(all, spec)
+}
+
+// referencedWorkspacesIn is referencedWorkspaces over a list already read.
+func referencedWorkspacesIn(all []types.Workspace, spec types.RunPolicySpec) []types.Workspace {
 	idx := indexWorkspacesBySource(all)
 	var out []types.Workspace
 	seen := map[uuid.UUID]bool{}
@@ -50,6 +56,20 @@ func (s *Server) referencedWorkspaces(ctx context.Context, spec types.RunPolicyS
 	for _, wr := range spec.WorkspaceRepos {
 		ws, ok := idx.repo[wr.Repo]
 		add(ws, ok)
+	}
+	return out
+}
+
+// attachedWorkspaceRefs is the run's workspaces: every one the request attaches,
+// in its order (the primary first), then each other one the resolved spec's
+// sources reference. A workspace attached with no mount or repo (scratch only)
+// is still the run's.
+func attachedWorkspaceRefs(attached, referenced []types.Workspace) []types.Workspace {
+	out := slices.Clone(attached)
+	for _, ws := range referenced {
+		if !slices.ContainsFunc(out, func(a types.Workspace) bool { return a.ID == ws.ID }) {
+			out = append(out, ws)
+		}
 	}
 	return out
 }
@@ -143,7 +163,7 @@ func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task st
 	// runIdentitySubject's, so a LocalMode X-Wardyn-Principal header cannot point
 	// a server-launched step/probe/login run at another principal's stored rows.
 	operatorOwned := operatorOwnedRequest(ctx)
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, actor), actor, internalAudience, operatorOwned)
+	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, actor), requestSponsor(ctx, actor), internalAudience, operatorOwned)
 	if err != nil {
 		return types.AgentRun{}, "", fmt.Errorf("mint run identity: %w", err)
 	}
@@ -152,7 +172,7 @@ func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task st
 		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: actor,
 		Agent: stepRunAgent, Task: task,
 		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
-		RunnerTarget: s.cfg.RunnerTarget, OperatorOwned: operatorOwned,
+		RunnerTarget: s.cfg.RunnerTarget, OperatorOwned: operatorOwned, HumanAuthor: requestSponsor(ctx, actor),
 	}
 	s.captureRunLimits(&run, gov.ceiling, nil)
 	if set != nil {

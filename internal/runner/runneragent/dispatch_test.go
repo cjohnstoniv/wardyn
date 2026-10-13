@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -148,4 +149,37 @@ func newTestDispatcher(cfg Config) (*Dispatcher, error) {
 		cfg.MutationFinished = func(context.Context, string, string, uuid.UUID, uuid.UUID, error) error { return nil }
 	}
 	return New(cfg)
+}
+
+// sweepWithSeedError lists one orphan candidate and answers with an error, as a
+// docker substrate does when a leftover drive seed would not be removed.
+type sweepWithSeedError struct {
+	*runnertest.Fake
+	candidate uuid.UUID
+}
+
+func (s sweepWithSeedError) SweepOrphanedSandboxes(_ context.Context, _ time.Duration, isOrphan func(uuid.UUID) bool) (int, error) {
+	isOrphan(s.candidate)
+	return 0, errors.New("docker: remove leftover drive seed: in use")
+}
+
+// TestDispatcherSweepListsCandidatesDespiteASeedError: the listing call still
+// hands the org its candidates when the same pass failed to remove a drive
+// seed, so one stuck seed does not stop every orphan sandbox's removal.
+func TestDispatcherSweepListsCandidatesDespiteASeedError(t *testing.T) {
+	orphan := uuid.New()
+	d, err := newTestDispatcher(Config{RunnerID: uuid.NewString(), Substrate: sweepWithSeedError{Fake: runnertest.NewFake(), candidate: orphan},
+		BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+		Created:      func(context.Context, runner.SandboxSpec, string) error { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := runnerwire.Marshal(runnerwire.SweepArgs{MinAge: time.Minute})
+	res, err := d.sweep(context.Background(), data)
+	if err != nil {
+		t.Fatalf("listing sweep = %v, want the candidates", err)
+	}
+	if got := res.(runnerwire.SweepResult).Candidates; len(got) != 1 || got[0] != orphan {
+		t.Fatalf("candidates = %v, want [%s]", got, orphan)
+	}
 }

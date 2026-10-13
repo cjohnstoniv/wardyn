@@ -183,7 +183,7 @@ func (h *runEventHub) moved(runID uuid.UUID, from, to types.RunState) {
 // substrate's error text, and this feed carries no log content.
 func failedPhase(from types.RunState) string {
 	switch from {
-	case types.RunPending:
+	case types.RunQueued, types.RunPending:
 		return client.RunFailedNotStarted
 	case types.RunStarting:
 		return client.RunFailedStartFailed
@@ -267,8 +267,8 @@ func (h *runEventHub) since(runID uuid.UUID, after uint64) ([]client.RunEvent, <
 	return append([]client.RunEvent(nil), evs...), r.wake, r.ended()
 }
 
-// handleRunEvents serves GET /api/v1/runs/{id}/events. Owner-or-admin
-// (getRunAuthorized): a caller who cannot read the run gets the same 404
+// handleRunEvents serves GET /api/v1/runs/{id}/events. Owner, admin or a service
+// identity's sponsor (ownsRunOrSponsorOrAdmin): a caller who cannot read the run gets the same 404
 // GET /runs/{id} answers. A portal's delegated token reads its person's runs
 // (delegationAllowed). One principal holds at most maxRunEventStreams at a
 // time; the next is refused 422 event_stream_cap. The stream ends after the
@@ -278,7 +278,7 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	run, ok := s.getRunAuthorized(w, r, id)
+	run, ok := s.getRunAuthorizedBy(w, r, id, s.ownsRunOrSponsorOrAdmin)
 	if !ok {
 		return
 	}
@@ -347,13 +347,20 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 // openedAt. Authentication ran once, when the stream opened; this cuts a
 // revoked session off at the next keepalive instead of at the hold. An
 // unanswerable check ends the stream too — the reconnect re-authenticates.
-// The admin token is not a session, so nothing revokes it here.
+// The admin token is not a session, so nothing revokes it here. A service
+// identity's stream ends when the identity is suspended or retired, its sponsor
+// changed after the stream opened, or its sponsor's session is no longer live.
 func (s *Server) sessionRevokedSince(r *http.Request, principal string, openedAt time.Time) bool {
+	if name, sponsor, isService := serviceIdentityFromContext(r.Context()); isService {
+		return s.serviceEndedSince(r, name, sponsor, openedAt)
+	}
 	if s.cfg.SessionRevocations == nil {
 		return false
 	}
 	// The admin token authenticated as the system with no device behind it; a
-	// device keeps the check (a revoke-all still ends its stream).
+	// device keeps the check (a revoke-all still ends its stream). Not a service
+	// identity, whose actor can read as the system under D8's fallback form and
+	// returned above.
 	if actorType, _ := actorFromRequest(r); actorType == types.ActorSystem {
 		if _, isDevice := deviceFromContext(r.Context()); !isDevice {
 			return false

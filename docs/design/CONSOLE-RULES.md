@@ -35,6 +35,7 @@ Teal is the only loud color, and it means *"press this."* Everything else is gre
 | Active nav item | `--sidebar-accent` fill + `--sidebar-primary` rail | `navLinkClass` (`app-shell.tsx#navLinkClass`) and the active rail (`app-shell.tsx#SidebarNav`) | A third active treatment — use the shipped one |
 | Barrier tier | METALS: `--fence-*` bronze, `--wall-*` silver, `--vault-*` gold | `ConfinementChip` (`primitives.tsx#ConfinementChip`), `BarrierStrengthStrip`, `tier-illustration.tsx#WASH`, the tier matrix (`setup/environment-step.tsx#TIER_NAME_TINT`) | Card borders, run state, buttons, section headers |
 | Run / approval / health state | `--success` `--warning` `--danger` `--info` `--cyan` + their `-subtle` fills | `Chip` tones (`primitives.tsx#toneClass`), shell banners (`app-shell.tsx#AppShell`), `TruncatedNote` | Decoration. Always paired with a glyph or word — never color alone |
+| File kind (New Run, Files) | `--info` repository, `--primary` user drive, `--violet` / `--violet-subtle` shared drive, `--warning` folder, `--muted-foreground` for a kind not offered yet | The kind tile, kind badge and the card's left edge (`kind-visuals.tsx#KindTile`, `kind-visuals.tsx#KindBadge`) | Run state, buttons, anything that is not a file kind. Always beside the kind's word — never color alone |
 | Agent identity | `--agent-claude` and the per-agent badge colors | `AgentBadge` monogram (`primitives.tsx#AgentBadge`) | Anything but the WHO badge |
 | Destructive | `--destructive` (= `--danger`) | `destructive` Button, delete confirmations | Deny, Cancel, or any reversible action |
 | Everything else | `--muted`, `--muted-foreground`, `--accent`, `--border`, `--border-strong`, `--surface-2` | Surfaces, rows, hairlines, secondary text | — |
@@ -72,6 +73,10 @@ Four body rungs. Nothing between them.
 Headings come from `@layer base`, used as-is: `h1` `1.5rem`/600/1.3/`-0.01em` · `h2`
 `1.125rem`/600/1.35/`-0.005em` · `h3` `1rem`/600/1.4 · `h4` `0.875rem`/500/1.4.
 
+- **One display rung, StepHeader only.** `--text-display` (`theme.css`, `@theme inline`) is
+  `clamp(1.75rem, 1.25rem + 1.5vw, 2rem)` at 600 weight and `-0.02em`, for the New Run
+  `StepHeader` `h1` and nothing else. It sits above the four body rungs; every other
+  heading keeps the `@layer base` sizes.
 - **Weights:** 400 body and inputs, 500 row titles / buttons / labels, 600 headings and
   uppercase meta labels — the three `--font-weight-*` tokens.
 - **Body tracking is `0.01em`.** `theme.css`'s `body` sets none today — add
@@ -195,6 +200,12 @@ Bind `disabled` the instant the action fires; reveal the spinner later.
 | Errors | `aria-invalid` on the control — `Input` already renders the destructive ring and border. Never hand-paint an error style |
 | Placeholder | Illustrative only, `--placeholder-foreground`. A placeholder is never a label |
 
+- **Tooltips never carry essential information.** `Tooltip` (`tooltip.tsx#Tooltip`) is a
+  label for a control that already has an accessible name. Anything the reader needs
+  goes in visible text or an `InfoTip` (`info-tip.tsx#InfoTip`), which opens on tap, click,
+  Enter and Space and closes on Esc.
+- **A disabled control says why.** The reason is visible text, or an `InfoTip` beside an
+  `aria-disabled` control that stays focusable. `title` alone is never the reason.
 - **Default focus lands on the primary field** when a form or dialog opens — not on
   Cancel, not on the first tabbable icon button.
 - **Enter submits from single-line inputs only** — in a textarea it inserts a newline,
@@ -211,6 +222,9 @@ Bind `disabled` the instant the action fires; reveal the spinner later.
 | Selected / current | `--accent` plus `aria-current` (nav) or `aria-selected` (list) — the attribute is the truth, the fill is its rendering |
 | Focus | The `--ring` ring. Focus and selection are different states and must look different |
 
+- **Unavailable rows** use `.hatch-unavailable` (`theme.css`, `@layer utilities`) plus a
+  visible reason line tied to the option by `aria-describedby`; the hatch is tokens only
+  and keeps `--muted-foreground` at AA (`theme-contrast.test.ts`).
 - **Cards** are `bg-card` + `border-border`, distinct from their parent: `SectionCard`
   (`rounded-xl`, `p-4`) is the document card, `WidgetCard` (`rounded-lg`) the pane card.
   **Never nest a card in a card** — that is a section.

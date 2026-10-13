@@ -124,6 +124,8 @@ func TestAttributionRendering(t *testing.T) {
 			`profile; name="T"`, "mailto:pat@example.com", `This run is governed by the profile "T". To request a change: mailto:pat@example.com`},
 		{"request text when there is no route", &policyref.Ref{Source: policyref.SourceDeployment, RequestText: "ask the platform desk"},
 			"deployment", "", "This run is governed by this deployment's default policy. To request a change: ask the platform desk"},
+		{"a policy the person changed says so", &policyref.Ref{Source: policyref.SourceProfile, Name: "T", Overridden: true},
+			`profile; name="T"; overridden`, "", `This run is governed by the profile "T", as changed for this run.`},
 		{"nothing to say about a route", &policyref.Ref{Source: policyref.SourceProfile, Name: "T"},
 			`profile; name="T"`, "", `This run is governed by the profile "T".`},
 	} {
@@ -287,7 +289,7 @@ func TestADOGitRefusalIsAttributed(t *testing.T) {
 	refuse := func(p *Proxy) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		r := mustLocalReq(t, http.MethodGet, "/wardyn/git/dev.azure.com/acme/proj/_git/app/info/refs", nil)
-		if p.refuseADOGit(rec, r, "dev.azure.com", nil, nil, "Wardyn refused this git request: no capability") {
+		if p.refuseADOGit(rec, r, "dev.azure.com", nil, nil, "Wardyn refused this git request: no capability", true) {
 			t.Fatal("refused request reported as forwarded")
 		}
 		return rec
@@ -321,6 +323,11 @@ func TestConfigAttributionIsReprojected(t *testing.T) {
 	p.attributeRefusal(rec)
 	if rec.Header().Get("X-Wardyn-Policy") == "" || rec.Header().Get("X-Wardyn-Policy-Request") != "" {
 		t.Errorf("headers = %v, want the policy header and no request header", rec.Header())
+	}
+
+	cfg, err = LoadConfigBytes([]byte(base + `{"source":"deployment","overridden":true}}`))
+	if err != nil || cfg.Attribution == nil || !cfg.Attribution.Overridden {
+		t.Errorf("the overridden mark did not survive the reprojection: %+v, %v", cfg.Attribution, err)
 	}
 
 	cfg, err = LoadConfigBytes([]byte(base + `{"source":"admin","name":"x"}}`))

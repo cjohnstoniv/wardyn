@@ -751,10 +751,11 @@ func (s *Server) handleDeleteUserDrive(w http.ResponseWriter, r *http.Request) {
 // all TRI-STATE pointers, lives there.
 type userDriveGrantRequest = client.DriveGrantRequest
 
-// handleUpsertUserDriveGrant allocates one drive to one subject, keyed on the
-// natural (subject_type, subject): re-allocating a subject REPOINTS its single
-// row rather than accumulating a second — which is also what makes "one drive
-// per principal" true in the schema and not only in the resolver's LIMIT 1.
+// handleUpsertUserDriveGrant allocates one drive to one subject and REPLACES
+// the subject's allocation: re-allocating repoints the subject's row rather than
+// accumulating a second, so the admin's last write decides which drive they
+// get. With `additional` the drive is allocated beside the subject's others
+// instead (writeUserDriveGrant; migration 0169 keys on subject and drive).
 //
 // 201 for a genuinely new allocation, 200 when an existing one was repointed —
 // the same created/updated signal handleUpsertGovernanceAssignment gives,
@@ -860,7 +861,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	}
 	g.ID = uuid.New()
 	g.CreatedBy = principalFromRequest(r)
-	saved, done, err := s.upsertUserDriveGrantAs(w, r, g, homeOverrideStated)
+	saved, removed, done, err := s.upsertUserDriveGrantAs(w, r, g, homeOverrideStated, req.Additional)
 	if done {
 		return
 	}
@@ -895,48 +896,54 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	// directory NAME on a corporate share, which is their username as often as
 	// not. Whether an admin pinned one is the governance fact; what they pinned
 	// it to is in the row, readable by anyone who may read the row.
+	data := map[string]any{
+		"subject_type":      saved.SubjectType,
+		"subject":           saved.Subject,
+		"drive_id":          saved.DriveID,
+		"priority":          saved.Priority,
+		"size_mib_override": saved.SizeMiBOverride,
+		"writable_override": saved.WritableOverride,
+		"home_override_set": saved.HomeOverride != "",
+		"enabled":           saved.Enabled,
+	}
+	// A replacing write that took drives away from the subject says which.
+	if len(removed) > 0 {
+		data["removed_drive_ids"] = removed
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"drive.grant.write", saved.ID.String(), "success", mustJSON(map[string]any{
-			"subject_type":      saved.SubjectType,
-			"subject":           saved.Subject,
-			"drive_id":          saved.DriveID,
-			"priority":          saved.Priority,
-			"size_mib_override": saved.SizeMiBOverride,
-			"writable_override": saved.WritableOverride,
-			"home_override_set": saved.HomeOverride != "",
-			"enabled":           saved.Enabled,
-		})))
+		"drive.grant.write", saved.ID.String(), "success", mustJSON(data)))
 	writeJSON(w, status, saved)
 }
 
-// upsertUserDriveGrantAs writes g. A super admin's write is UpsertUserDriveGrant. Anyone else
-// allocates a drive with its own posture or narrower (types.DriveGrantWidens), judged inside the
-// store's write transaction so a concurrent edit cannot land between the judgement and the write.
-// done means the response is written.
-func (s *Server) upsertUserDriveGrantAs(w http.ResponseWriter, r *http.Request, g types.UserDriveGrant, stated bool) (saved types.UserDriveGrant, done bool, err error) {
+// upsertUserDriveGrantAs writes g with either verb: replacing the subject's allocation, or with
+// additional beside its others. A super admin's write is writeUserDriveGrant. Anyone else allocates
+// a drive with its own posture or narrower (types.DriveGrantWidens), judged inside the store's
+// write transaction so a concurrent edit cannot land between the judgement and the write. removed
+// is the drives a replacing write took from the subject. done means the response is written.
+func (s *Server) upsertUserDriveGrantAs(w http.ResponseWriter, r *http.Request, g types.UserDriveGrant, stated, additional bool) (saved types.UserDriveGrant, removed []uuid.UUID, done bool, err error) {
 	if s.isOperator(r.Context()) {
-		saved, err = s.cfg.Store.UpsertUserDriveGrant(r.Context(), g, stated)
-		return saved, false, err
+		saved, removed, err = s.writeUserDriveGrant(r.Context(), g, stated, additional)
+		return saved, removed, false, err
 	}
 	tw, ok := s.cfg.Store.(store.UserDriveGrantTierWriter)
 	if !ok {
 		writeServerError(w, r, "upsert user drive grant", errors.New("the store cannot judge an allocation write"))
-		return saved, true, nil
+		return saved, nil, true, nil
 	}
-	saved, err = tw.UpsertUserDriveGrantWithinTier(r.Context(), g, stated)
+	saved, removed, err = tw.UpsertUserDriveGrantWithinTier(r.Context(), g, stated, additional)
 	var widens *store.UserDriveGrantWidensError
 	switch {
 	case errors.As(err, &widens):
 		field := widens.Field
 		s.refuse(w, r, authz.Deny(authz.ReasonAdminSurface, "drive.grant."+field, field+": only a super admin may "+
 			"set an allocation's directory name or make it more writable than its drive; allocate with the drive's own posture or read-only"))
-		return saved, true, nil
+		return saved, nil, true, nil
 	case errors.Is(err, store.ErrUserDriveGrantChanged):
 		writeErrorReason(w, http.StatusConflict, reasonUserDriveGrantConflict,
 			"this subject's allocation changed while yours was being written; read it again and re-send")
-		return saved, true, nil
+		return saved, nil, true, nil
 	}
-	return saved, false, err
+	return saved, removed, false, err
 }
 
 // handleDeleteUserDriveGrant removes one allocation by id (204), 404 when

@@ -95,11 +95,11 @@ func (s *b4BuildStore) GetSiteConfig(context.Context) (types.SiteConfig, error) 
 	return types.SiteConfig{}, nil
 }
 
-func (s *b4BuildStore) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, ref, hash string) (types.Workspace, error) {
+func (s *b4BuildStore) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, _, ref, hash string, _ *types.ImageBuild) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ws.ImageRef, s.ws.BuiltProfileHash = ref, hash
-	return s.ws, nil
+	return true, nil
 }
 
 func (s *b4BuildStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {
@@ -128,12 +128,12 @@ type blockingImageBuilder struct {
 	calls int
 }
 
-func (b *blockingImageBuilder) BuildFromDevcontainerFiles(_ context.Context, _ map[string]string, tag string, _ io.Writer) (string, error) {
+func (b *blockingImageBuilder) BuildFromDevcontainerFiles(_ context.Context, _ map[string]string, tag string, _ io.Writer) (BuiltImage, error) {
 	b.mu.Lock()
 	b.calls++
 	b.mu.Unlock()
 	<-b.gate
-	return tag, nil
+	return BuiltImage{Ref: tag}, nil
 }
 
 func (b *blockingImageBuilder) callCount() int {
@@ -147,8 +147,8 @@ func (b *blockingImageBuilder) callCount() int {
 // there, rather than seeding the tracker by hand.
 type failingImageBuilder struct{ fakeImageBuilder }
 
-func (failingImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (string, error) {
-	return "", errors.New("step 3/7 : RUN go build — exit code 2")
+func (failingImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (BuiltImage, error) {
+	return BuiltImage{}, errors.New("step 3/7 : RUN go build — exit code 2")
 }
 
 // TestWorkspaceBuild_TrackerIsSubordinateToTheRow: the in-memory buildState is this
@@ -175,7 +175,7 @@ func TestWorkspaceBuild_TrackerIsSubordinateToTheRow(t *testing.T) {
 	srv := New(baseTestConfig(h, st))
 	// What the wizard's own Build step leaves behind: a finished tracker entry
 	// carrying the build's log tail.
-	srv.builds.begin(st.ws.ID, time.Now())
+	srv.builds.begin(st.ws.ID, time.Now(), false)
 	srv.builds.appendLog(st.ws.ID, "Step 1/3 : FROM golang:1.26")
 	srv.builds.finish(st.ws.ID, built, "")
 

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -241,8 +242,8 @@ func TestSecurityAdminDrivePreviewOmitsTheHostPath(t *testing.T) {
 // "changed meanwhile" sentinel.
 type changedTierStore struct{ *driveCRUDStore }
 
-func (changedTierStore) UpsertUserDriveGrantWithinTier(context.Context, types.UserDriveGrant, bool) (types.UserDriveGrant, error) {
-	return types.UserDriveGrant{}, store.ErrUserDriveGrantChanged
+func (changedTierStore) UpsertUserDriveGrantWithinTier(context.Context, types.UserDriveGrant, bool, bool) (types.UserDriveGrant, []uuid.UUID, error) {
+	return types.UserDriveGrant{}, nil, store.ErrUserDriveGrantChanged
 }
 
 // TestSecurityAdminAllocationIsJudgedByTheStore: the security tier's write goes
@@ -273,5 +274,96 @@ func TestSecurityAdminAllocationIsJudgedByTheStore(t *testing.T) {
 	w := driveGrantAs(t, srv, driveSecurityAdminCtx(), body("sub-j"))
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "re-send") {
 		t.Errorf("changed meanwhile = %d, want 409 asking for a re-send: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestSecurityAdminAddBesideIsJudged: `additional` allocates a drive beside the subject's others,
+// and a security admin's is judged like any other write, against the subject's row for THAT drive.
+// A widening add is refused and writes nothing; a plain add is written and the other row stays.
+func TestSecurityAdminAddBesideIsJudged(t *testing.T) {
+	st := newDriveCRUDStore()
+	srv, _ := driveAdminServer(st, nil)
+	ro := *driveFixture(nil) // writable: false
+	rwDrive := *driveFixture(func(o *types.UserDrive) { o.ID, o.Name, o.Writable = uuid.New(), "Design scratch", true })
+	st.drives[ro.ID], st.drives[rwDrive.ID] = ro, rwDrive
+	held := grantFixture(ro.ID, func(g *types.UserDriveGrant) { g.Subject, g.WritableOverride = "sub-two", boolPtr(false) })
+	st.grants[held.ID] = *held
+	rows := func() (n int) {
+		for _, g := range st.grants {
+			if g.Subject == "sub-two" {
+				n++
+			}
+		}
+		return n
+	}
+
+	sec := driveSecurityAdminCtx()
+	for _, tc := range []struct{ name, field, body string }{
+		{"writable beside", "writable_override",
+			`{"subject_type":"user","subject":"sub-two","drive_id":"` + rwDrive.ID.String() + `","additional":true,"writable_override":true}`},
+		{"a directory name beside", "home_override",
+			`{"subject_type":"user","subject":"sub-two","drive_id":"` + rwDrive.ID.String() + `","additional":true,"home_override":"alice"}`},
+	} {
+		w := driveGrantAs(t, srv, sec, tc.body)
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), tc.field) {
+			t.Errorf("%s = %d, want 403 naming %s: %s", tc.name, w.Code, tc.field, w.Body.String())
+		}
+		if rows() != 1 {
+			t.Errorf("%s: the subject holds %d rows after a refused add, want 1", tc.name, rows())
+		}
+	}
+	// The read-only override on the OTHER drive is not this write's row: a plain add is the
+	// drive's own posture and is written beside it.
+	w := driveGrantAs(t, srv, sec, `{"subject_type":"user","subject":"sub-two","drive_id":"`+rwDrive.ID.String()+`","additional":true}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("plain add beside = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	if kept := st.grants[held.ID]; rows() != 2 || kept.DriveID != ro.ID || kept.WritableOverride == nil || *kept.WritableOverride {
+		t.Errorf("after the add the subject holds %d rows and the first is %+v, want 2 and the read-only row untouched", rows(), kept)
+	}
+	// A super admin's add is not judged.
+	if w := driveGrantAs(t, srv, driveSuperAdminCtx(), `{"subject_type":"user","subject":"sub-three","drive_id":"`+ro.ID.String()+`","writable_override":true}`); w.Code != http.StatusCreated {
+		t.Errorf("super admin writable allocation = %d, want 201: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestSecurityAdminReplaceOfSeveralRowsIsJudgedAgainstTheKeptRow: a subject that holds several
+// allocations is judged against the row the replace keeps (the one on the drive, else the oldest),
+// and a replace that passes still audits the drives it took away.
+func TestSecurityAdminReplaceOfSeveralRowsIsJudgedAgainstTheKeptRow(t *testing.T) {
+	st := newDriveCRUDStore()
+	srv, audit := driveAdminServer(st, nil)
+	a := *driveFixture(func(o *types.UserDrive) { o.Writable = true })
+	b := *driveFixture(func(o *types.UserDrive) { o.ID, o.Name = uuid.New(), "Design scratch" }) // writable: false
+	st.drives[a.ID], st.drives[b.ID] = a, b
+	older := grantFixture(a.ID, func(g *types.UserDriveGrant) {
+		g.Subject, g.WritableOverride, g.CreatedAt = "sub-many", boolPtr(false), time.Unix(100, 0)
+	})
+	exception := grantFixture(b.ID, func(g *types.UserDriveGrant) {
+		g.ID, g.Subject, g.WritableOverride, g.CreatedAt = uuid.New(), "sub-many", boolPtr(true), time.Unix(200, 0)
+	})
+	st.grants[older.ID], st.grants[exception.ID] = *older, *exception
+
+	sec := driveSecurityAdminCtx()
+	// Dropping the older row's read-only override by replacing with a plain allocation of its own
+	// writable drive is refused, and neither row is removed.
+	w := driveGrantAs(t, srv, sec, `{"subject_type":"user","subject":"sub-many","drive_id":"`+a.ID.String()+`"}`)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "writable_override") {
+		t.Errorf("replace dropping the kept row's read-only override = %d, want 403 naming writable_override: %s", w.Code, w.Body.String())
+	}
+	if len(st.grants) != 2 || len(audit.events) != 0 {
+		t.Fatalf("a refused replace left %d rows and %d audit rows, want 2 and 0", len(st.grants), len(audit.events))
+	}
+	// The unchanged re-send of the super admin's exception on ITS drive is judged against that
+	// row, not the older one, so it passes; the older drive is taken away and audited.
+	w = driveGrantAs(t, srv, sec, `{"subject_type":"user","subject":"sub-many","drive_id":"`+b.ID.String()+`","writable_override":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("unchanged re-send on the kept row's drive = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got, ok := st.grants[exception.ID]; len(st.grants) != 1 || !ok || got.DriveID != b.ID {
+		t.Errorf("after the replace the store holds %d rows (%+v), want the one on the kept drive", len(st.grants), st.grants)
+	}
+	if len(audit.events) != 1 || !strings.Contains(string(audit.events[0].Data), `"removed_drive_ids":["`+a.ID.String()+`"]`) {
+		t.Errorf("audit rows = %+v, want one naming the removed drive %s", audit.events, a.ID)
 	}
 }

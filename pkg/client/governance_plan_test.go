@@ -161,3 +161,43 @@ func TestPlanGovernance_AgreesWithApply(t *testing.T) {
 		t.Fatalf("plan steps %v, apply writes %v; want them to agree", planned, applied)
 	}
 }
+
+// A composed profile whose base was renamed on the server: apply creates the base
+// afresh and re-points the profile at it with a write, so the plan lists that
+// write too, and the two agree.
+func TestPlanGovernance_RenamedBaseRepointsTheComposedProfile(t *testing.T) {
+	baseID, composedID := uuid.New(), uuid.New()
+	renamed := client.GovernanceProfile{ID: baseID, Name: "platform-base", Ceiling: client.RunPolicySpec{MinConfinementClass: client.CC1}}
+	composed := client.GovernanceProfile{ID: composedID, Name: "team", BaseProfileID: &baseID}
+	current := client.GovernanceDocument{Profiles: []client.GovernanceProfile{renamed, composed}}
+	// The exported file still calls the base by its old name.
+	oldName := renamed
+	oldName.Name = "base"
+	doc := client.GovernanceDocument{Profiles: []client.GovernanceProfile{oldName, composed}}
+
+	planServer, planClient := newGovServer(t, current)
+	plan, err := planClient.PlanGovernance(context.Background(), doc, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var team *client.ApplyStep
+	for i, s := range plan.Steps {
+		if s.Kind == "profile" && s.Name == "team" {
+			team = &plan.Steps[i]
+		}
+	}
+	if team == nil || team.Op != "update" || !slices.Equal(team.Fields, []string{"base_profile_id"}) {
+		t.Fatalf("plan = %+v, want an update of team re-pointing its base", plan)
+	}
+	if plan.Unchanged != 0 || len(planServer.writes) != 0 {
+		t.Fatalf("unchanged = %d writes = %v", plan.Unchanged, planServer.writes)
+	}
+
+	applyServer, applyClient := newGovServer(t, current)
+	if _, err := applyClient.ApplyGovernanceResult(context.Background(), doc, false); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(applyServer.writes, "PUT /api/v1/governance/profiles/"+composedID.String()) {
+		t.Fatalf("apply writes = %v, want the PUT of team the plan listed", applyServer.writes)
+	}
+}

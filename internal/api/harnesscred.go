@@ -489,7 +489,9 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	if cerr != nil {
 		return types.AgentRun{}, harnessLoginDispatch{}, cerr
 	}
-	// Exempt from deny_placements on purpose: Wardyn-authored, no workspace content, and the only way to authenticate a harness.
+	// Exempt from deny_placements on purpose, at create, dispatch (dispatchCeiling.placementExempt) and
+	// revive (revivePlacementDenied): Wardyn-authored, no workspace content, and the only way to
+	// authenticate a harness.
 	// Strongest advertised at or above the floor: a ~1yr credential deserves the
 	// best available isolation, so the capture must never run weaker than the
 	// admin floor demands. ceilingFloorClass is the same admin floor
@@ -655,6 +657,9 @@ type loginRunStamp struct {
 	ModelProviderAddress string `json:"model_provider_address,omitempty"`
 	SSORegion            string `json:"sso_region,omitempty"`
 	Model                string `json:"model,omitempty"`
+	// CLIComponentID is the AWS CLI org row a sign-in through its door is for
+	// ("" on a provider's): the capture lands under that row's id.
+	CLIComponentID string `json:"cli_component_id,omitempty"`
 }
 
 // loginRunStamp also accepts a run launched before 0.8, whose row was written

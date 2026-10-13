@@ -59,6 +59,9 @@ const (
 	// ReasonDelegationScope: a portal's delegated token asked for a route
 	// outside the delegation allow-list (#1142).
 	ReasonDelegationScope Reason = "delegation_scope"
+	// ReasonServiceScope: a service identity's token asked for a route outside
+	// its fixed allow-list (#1508).
+	ReasonServiceScope Reason = "service_scope"
 	// ReasonEventStreamCap: the caller already holds the most concurrent run
 	// event streams one principal may (#1407). A limit, not a denial: not
 	// audited, like ReasonRunQuota.
@@ -72,6 +75,13 @@ const (
 	// cannot prove this run's masking corpus complete here, so it refuses with
 	// 503 instead of passing bytes through unmasked (ha-l2.0).
 	ReasonMaskStateUnavailable Reason = "mask_state_unavailable"
+	// ReasonDriveNotFound, ReasonDriveTargetConflict and ReasonDriveNotInPool:
+	// a run's drives[] names a drive the caller's own grants do not reach, two
+	// drives that derive one path, or a drive the run's pool cannot mount. 422,
+	// audited; the drive_not_found row never says whether the id exists.
+	ReasonDriveNotFound       Reason = "drive_not_found"
+	ReasonDriveTargetConflict Reason = "drive_target_conflict"
+	ReasonDriveNotInPool      Reason = "drive_not_in_pool"
 	// ReasonRoleStampStale: an API token's role and group stamp is older than
 	// WARDYN_ROLE_STAMP_TTL. Its owner signs in again to re-stamp it.
 	ReasonRoleStampStale Reason = "role_stamp_stale"
@@ -158,8 +168,12 @@ var refusals = map[Reason]Refusal{
 	ReasonAdminView:                      {Effect: EffectConflict},
 	ReasonUserViewPreview:                {Effect: EffectConflict, Audit: true},
 	ReasonDelegationScope:                {Effect: EffectDeny, Audit: true},
+	ReasonServiceScope:                   {Effect: EffectDeny, Audit: true},
 	ReasonEventStreamCap:                 {Effect: EffectUnprocessable},
 	ReasonMaskStateUnavailable:           {Effect: EffectUnavailable, Audit: true},
+	ReasonDriveNotFound:                  {Effect: EffectUnprocessable, Audit: true},
+	ReasonDriveTargetConflict:            {Effect: EffectUnprocessable, Audit: true},
+	ReasonDriveNotInPool:                 {Effect: EffectUnprocessable, Audit: true},
 	ReasonRoleStampStale:                 {Effect: EffectUnauthenticated, Audit: true, Sentence: "this token's role is out of date: its owner must sign in again to refresh it"},
 	ReasonAuditExportPartitionFilter:     {Effect: EffectBadRequest},
 	ReasonKeyDomainUnknown:               {Effect: EffectUnprocessable, Audit: true},

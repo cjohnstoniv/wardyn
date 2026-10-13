@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -22,6 +23,10 @@ import (
 // the reason, what this server cannot honour yet.
 
 var templateDocumentKeys = []string{"api_version", "kind", "name", "description", "coverage", "intent", "needs_setup"}
+
+// runDocumentKeys are the top-level keys of a kind Run document: a draft of one
+// run, which has no name, coverage or needs_setup of its own.
+var runDocumentKeys = []string{"api_version", "kind", "intent"}
 
 // templateDependencies are the edges a partial template must not cut: a field
 // and the field it only means anything beside. Either side may be an
@@ -51,16 +56,21 @@ var templateDependencies = []struct{ field, needs string }{
 // calls validateTemplateDocument and stores what it returns.
 
 // validateTemplateImport reads one document the way every door does and
-// returns it normalised, or every diagnostic. It stores nothing.
-func validateTemplateImport(src []byte, format client.TemplateFormat) client.TemplateImportResult {
-	return validateTemplateBytes(src, format, nil)
+// returns it normalised, or every diagnostic. It stores nothing. kind is the
+// document kind the caller expects, "" for either.
+func validateTemplateImport(src []byte, format client.TemplateFormat, kind string) client.TemplateImportResult {
+	return validateTemplateBytes(src, format, nil, kind)
 }
 
 // validateTemplateBytes is the one validator: decode strictly, then (when the
 // text decodes) hold the whole document and the scope it is published to
-// (owner, when given) to the rest. Every problem is reported together.
-func validateTemplateBytes(src []byte, format client.TemplateFormat, owner *types.TemplateOwner) client.TemplateImportResult {
+// (owner, when given) to the rest. Every problem is reported together. A
+// document of a kind other than want (when want is set) is refused at kind.
+func validateTemplateBytes(src []byte, format client.TemplateFormat, owner *types.TemplateOwner, want string) client.TemplateImportResult {
 	doc, diags := decodeTemplateDocument(src, format)
+	if got := documentKindOf(src, format); want != "" && got != want && (got == client.TemplateDocumentKind || got == client.RunDocumentKind) {
+		diags = append([]client.TemplateDiagnostic{{Path: "kind", Reason: reasonTemplateVersionUnsupported, Message: templateKindMismatchMsg(want, got)}}, diags...)
+	}
 	if len(diags) == 0 {
 		diags = validateTemplateContentDecoded(doc)
 		if owner != nil {
@@ -75,13 +85,14 @@ func validateTemplateBytes(src []byte, format client.TemplateFormat, owner *type
 
 // validateTemplateDocument is the save door: it holds a struct-shaped document,
 // and the scope it is published to, to everything validateTemplateImport holds
-// text to. It returns the normalised document to store.
+// text to. It returns the normalised document to store. It saves a template, so
+// a document of kind Run is refused.
 func validateTemplateDocument(doc client.TemplateDocument, owner types.TemplateOwner) (client.TemplateDocument, []client.TemplateDiagnostic) {
 	body, err := json.Marshal(doc)
 	if err != nil {
 		return doc, []client.TemplateDiagnostic{{Reason: reasonTemplateDocumentInvalid, Message: templateDocumentInvalidMsg("it cannot be written as JSON")}}
 	}
-	res := validateTemplateBytes(body, client.TemplateFormatJSON, &owner)
+	res := validateTemplateBytes(body, client.TemplateFormatJSON, &owner, client.TemplateDocumentKind)
 	if res.Document == nil {
 		return doc, res.Diagnostics
 	}
@@ -106,18 +117,28 @@ func decodeTemplateDocument(src []byte, format client.TemplateFormat) (client.Te
 		d.add("", reasonTemplateDocumentInvalid, templateDocumentInvalidMsg("it must be an object"))
 		return doc, d.diags
 	}
+	kind := documentKind(top)
+	keys := templateDocumentKeys
+	if kind == client.RunDocumentKind {
+		keys = runDocumentKeys
+	}
 	for _, key := range sortedKeys(top) {
-		if !slices.Contains(templateDocumentKeys, key) {
+		switch {
+		case key == "title" || key == "description" && kind == client.RunDocumentKind:
+			d.add(key, reasonTemplateFieldExcluded, templateFieldExcludedMsg(key))
+		case !slices.Contains(keys, key):
 			d.unknownKey("", key)
 		}
 	}
-	d.readHeader(top)
+	d.readHeader(top, kind)
 	if raw, ok := top["intent"]; ok {
 		d.walkIntent(raw, "intent")
 	} else {
 		d.invalid("intent", "is required")
 	}
-	d.readNeedsSetup(top["needs_setup"])
+	if kind != client.RunDocumentKind {
+		d.readNeedsSetup(top["needs_setup"])
+	}
 	if len(d.diags) > 0 {
 		return doc, d.diags
 	}
@@ -127,7 +148,31 @@ func decodeTemplateDocument(src []byte, format client.TemplateFormat) (client.Te
 	return doc, d.diags
 }
 
-func (d *templateDecoder) readHeader(top map[string]json.RawMessage) {
+// documentKindOf reads the kind of a document that may not decode cleanly, so a
+// kind mismatch is reported beside the document's other problems.
+func documentKindOf(src []byte, format client.TemplateFormat) string {
+	data, err := templateSourceJSON(src, format)
+	if err != nil {
+		return ""
+	}
+	var top map[string]json.RawMessage
+	if json.Unmarshal(data, &top) != nil {
+		return ""
+	}
+	return documentKind(top)
+}
+
+// documentKind is the document's kind when it is a string, "" otherwise.
+func documentKind(top map[string]json.RawMessage) string {
+	var kind string
+	_ = json.Unmarshal(top["kind"], &kind)
+	return kind
+}
+
+// readHeader reads the header keys by kind. A Run document has neither name nor
+// coverage; any other kind is read as a RunTemplate, and a kind that is neither
+// is reported at kind.
+func (d *templateDecoder) readHeader(top map[string]json.RawMessage, kind string) {
 	text := func(key string, max int) string {
 		raw, ok := top[key]
 		if !ok {
@@ -144,9 +189,30 @@ func (d *templateDecoder) readHeader(top map[string]json.RawMessage) {
 		}
 		return s
 	}
-	version, kind := text("api_version", 32), text("kind", 32)
-	if version != client.TemplateDocumentVersion || kind != client.TemplateDocumentKind {
-		d.add("api_version", reasonTemplateVersionUnsupported, templateVersionUnsupportedMsg(strings.TrimSpace(version+" "+kind)))
+	// unsupported reports a value this server does not read. A key that is
+	// present but not a string was already reported as the wrong type.
+	unsupported := func(path, what string) {
+		raw, present := top[path]
+		var s string
+		switch {
+		case !present:
+			what = path + " (missing)"
+		case json.Unmarshal(raw, &s) != nil:
+			return
+		default:
+			what = cmp.Or(what, `""`)
+		}
+		d.add(path, reasonTemplateVersionUnsupported, templateVersionUnsupportedMsg(what))
+	}
+	if version := text("api_version", 32); version != client.TemplateDocumentVersion {
+		unsupported("api_version", version)
+	}
+	text("kind", 32)
+	if kind != client.TemplateDocumentKind && kind != client.RunDocumentKind {
+		unsupported("kind", kind)
+	}
+	if kind != client.TemplateDocumentKind {
+		return
 	}
 	text("name", maxTemplateNameRunes)
 	text("description", maxTemplateDescriptionRune)
@@ -222,7 +288,7 @@ func templateSpecifies(doc client.TemplateDocument, name string) bool {
 }
 
 // validateTemplateContentDecoded holds a decoded document to what needs the
-// whole of it: coverage, dependencies, the request contract's own shape checks,
+// whole of it: coverage (a Run document is a draft and has none), dependencies, the request contract's own shape checks,
 // and what this server cannot honour yet. Only the door calls it.
 func validateTemplateContentDecoded(doc client.TemplateDocument) []client.TemplateDiagnostic {
 	d := &templateDecoder{}
@@ -231,7 +297,9 @@ func validateTemplateContentDecoded(doc client.TemplateDocument) []client.Templa
 		d.invalid("intent", "does not read as a run request: "+err.Error())
 		return d.diags
 	}
-	d.checkCoverage(doc, req)
+	if doc.Kind != client.RunDocumentKind {
+		d.checkCoverage(doc, req)
+	}
 	d.checkDependencies(doc)
 	for _, check := range append([]func(createRunRequest) *runRefusal{runModeConflictRefusal}, runContractShapeChecks...) {
 		if refusal := check(req); refusal != nil {
@@ -305,24 +373,31 @@ func (d *templateDecoder) checkDependencies(doc client.TemplateDocument) {
 // template even if its registry Pending flag is cleared early. Fields whose lane
 // has not landed are refused earlier, by the decoder, through the flag.
 func (d *templateDecoder) checkAvailable(req createRunRequest) {
-	refuse := func(path string) { d.add(path, reasonTemplateFieldUnavailable, templateFieldUnavailableMsg(path)) }
+	for _, path := range documentAvailabilityRefusal(req) {
+		d.add("intent."+path, reasonTemplateFieldUnavailable, templateFieldUnavailableMsg("intent."+path))
+	}
+}
+
+// documentAvailabilityRefusal lists the request paths a document or a preset
+// cannot hold because this server cannot honour them yet. Both doors read it,
+// and the local-enable lane lifts the local case for both at once.
+func documentAvailabilityRefusal(req createRunRequest) []string {
+	var paths []string
 	if req.Placement == client.PlacementLocal {
-		refuse("intent.placement")
+		paths = append(paths, "placement")
 	}
 	if path, what := runModeUnavailable(req); what != "" {
-		refuse("intent." + path)
+		paths = append(paths, path)
 	}
 	if req.AllowedImage != "" {
-		refuse("intent.allowed_image")
-	}
-	if req.Overrides != nil && len(req.Overrides.Items()) > 0 {
-		refuse("intent.overrides")
+		paths = append(paths, "allowed_image")
 	}
 	for i, ref := range req.Components {
-		if ref.Builtin != "" {
-			refuse(fmt.Sprintf("intent.components[%d]", i))
+		if ref.Builtin == types.ComponentBuiltinAzureDevOps {
+			paths = append(paths, fmt.Sprintf("components[%d]", i))
 		}
 	}
+	return paths
 }
 
 // validateTemplateScopeDecoded holds a decoded document to the scope it is published to.
@@ -369,20 +444,66 @@ func templateIncludes(doc client.TemplateDocument) []client.TemplatePart {
 	return sortedKeys(parts)
 }
 
+// templatePolicyKeys are the inline_policy keys a policy may hold: the
+// carried, run-wide keys of the network, credential and access-rule parts,
+// read from the registry. TestTemplatePolicyKeysArePinned holds the set.
+func templatePolicyKeys() []string {
+	var keys []string
+	for _, r := range templatePolicyRules {
+		policyPart := r.Part == client.TemplatePartEgress || r.Part == client.TemplatePartCredentials || r.Part == client.TemplatePartAccessRules
+		if policyPart && r.Section == templateSectionRunWide && r.Excluded == "" && r.Pending == "" {
+			keys = append(keys, r.Name)
+		}
+	}
+	return keys
+}
+
+// templatePolicyKindRefusals holds a door-normalised document to the policy
+// kind: its intent is inline_policy alone, holding only templatePolicyKeys, and
+// it is partial with nothing left for setup (it is laid onto the user's
+// defaults, so it never stands alone).
+func templatePolicyKindRefusals(doc client.TemplateDocument) []client.TemplateDiagnostic {
+	d := &templateDecoder{}
+	refuse := func(path string) { d.add(path, reasonTemplatePolicyFieldRefused, templatePolicyFieldRefusedMsg(path)) }
+	for _, name := range doc.Intent.Names() {
+		if name != "inline_policy" {
+			refuse("intent." + name)
+		}
+	}
+	var spec map[string]json.RawMessage
+	_ = json.Unmarshal(doc.Intent.Raw("inline_policy"), &spec)
+	allowed := templatePolicyKeys()
+	for _, key := range sortedKeys(spec) {
+		if !slices.Contains(allowed, key) {
+			refuse("intent.inline_policy." + key)
+		}
+	}
+	if len(spec) == 0 {
+		d.invalid("intent.inline_policy", "must hold at least one network, credential or access rule")
+	}
+	if doc.Coverage != client.TemplateCoveragePartial {
+		d.invalid("coverage", "must be partial: a policy is laid onto your defaults")
+	}
+	if len(doc.NeedsSetup) > 0 {
+		d.invalid("needs_setup", "must be empty for a policy")
+	}
+	return d.diags
+}
+
 // templateReasonStatus is the HTTP status of a template refusal reason. The
 // storage lane's handlers answer through it.
 func templateReasonStatus(reason string) int {
 	switch reason {
 	case reasonTemplateNotFound:
 		return http.StatusNotFound
-	case reasonTemplateRevisionConflict:
+	case reasonTemplateRevisionConflict, reasonTemplateNameTaken, reasonTemplateLimitReached:
 		return http.StatusConflict
 	case reasonTemplatesUnavailable:
 		return http.StatusNotImplemented
 	case reasonTemplateScopeForbidden, reasonTemplateGroupUnverified:
 		return http.StatusForbidden
 	case reasonTemplateFieldUnavailable, reasonTemplateVersionUnsupported, reasonTemplateDependencyMissing,
-		reasonTemplateCoverageInvalid, reasonTemplateSharedFieldRefused:
+		reasonTemplateCoverageInvalid, reasonTemplateSharedFieldRefused, reasonTemplatePolicyFieldRefused:
 		return http.StatusUnprocessableEntity
 	}
 	return http.StatusBadRequest

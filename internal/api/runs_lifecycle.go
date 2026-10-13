@@ -211,6 +211,10 @@ func (s *Server) casRunState(ctx context.Context, runID uuid.UUID, from, to type
 	}
 	if applied {
 		s.runEvents.moved(runID, from, to)
+		// A run that held a slot in its pool has freed it: a waiting run may start.
+		if to.IsTerminal() && !from.IsTerminal() && from != types.RunQueued {
+			s.kickQueue()
+		}
 	}
 	return applied, err
 }
@@ -452,7 +456,7 @@ func (s *Server) recoverAbandonedKillTail(ctx context.Context, run types.AgentRu
 	// audits run.kill as a failure and is retried by the next pass.
 	tailCtx, cancel := context.WithTimeout(ctx, killTailRecoveryTimeout)
 	defer cancel()
-	s.killTeardownTail(tailCtx, run, types.ActorSystem, "wardynd", map[string]any{"reason": "sweep_recovered_kill_tail"})
+	s.killTeardownTail(tailCtx, run, types.ActorSystem, "wardynd", map[string]any{"reason": "sweep_recovered_kill_tail"}, false)
 	return true
 }
 
@@ -591,7 +595,8 @@ func (s *Server) finalizeRunTailOrdered(ctx context.Context, runID uuid.UUID, re
 // won, so a concurrent kill that legitimately moved the run first is never
 // annotated with a failure reason it did not have. "" leaves the column empty
 // (a clean FAILED-by-nonzero-exit carries its exit code instead).
-func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.RunState, hint string) {
+// It reports whether this transition won.
+func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.RunState, hint string) bool {
 	applied, err := s.casRunState(ctx, runID, from, types.RunFailed)
 	if err != nil {
 		// "The compensator itself failed" is categorically different from
@@ -602,7 +607,7 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 			slog.String("run_id", runID.String()), slog.String("from_state", string(from)), slog.Any("err", err))
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.fail",
 			runID.String(), "failure", mustJSON(map[string]any{"from": string(from), "error": err.Error()})))
-		return
+		return false
 	}
 	if applied {
 		// The cascade is conditional on `from`, and the condition is load-bearing.
@@ -652,6 +657,7 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		}
 		s.FinishRunOutput(ctx, runID)
 	}
+	return applied
 }
 
 // runFailureHintSetter is the OPTIONAL store capability failAndRevoke uses to
@@ -683,9 +689,9 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Owner-or-admin (getRunAuthorized): a member killing a run they did not
-	// create gets the same 404 a missing run would.
-	run, ok := s.getRunAuthorized(w, r, id)
+	// Owner, admin or the service identity's sponsor: a member killing a run they
+	// did not create gets the same 404 a missing run would.
+	run, ok := s.getRunAuthorizedBy(w, r, id, s.ownsRunOrSponsorOrAdmin)
 	if !ok {
 		return
 	}
@@ -773,7 +779,7 @@ func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerT
 	if !applied {
 		return false, nil, nil
 	}
-	killData := s.killTeardownTail(ctx, run, killerType, killer, extra)
+	killData := s.killTeardownTail(ctx, run, killerType, killer, extra, false)
 	return true, killData, nil
 }
 
@@ -861,13 +867,27 @@ func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (b
 // runs this alone, on a goroutine tracked by goBackground (server.go) with its
 // own detach+bound, so the sign-in POST does not wait for it and an orderly
 // shutdown still does.
-func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any) map[string]any {
+// killTeardownTail takes one more choice from its caller: queuedOK
+// says a sandbox kill queued for an offline runner (runner.ErrPendingOnRunner)
+// is a clean teardown, applied when the runner reconnects, rather than a failed
+// step. A person's kill keeps reading it as a failure to retry; the lifetime kill
+// (killRunAtLifetime) has no person to retry it, and its run is already KILLED
+// at the org, so it records the sandbox stop as queued instead.
+func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any, queuedOK bool) map[string]any {
 	id := run.ID
+	if run.State == types.RunQueued {
+		return s.killQueuedTail(ctx, run, killerType, killer, extra)
+	}
 	killData := map[string]any{}
+	queued := false
 	// (2) Runner teardown (immediate). Idempotent on a gone sandbox.
 	if s.cfg.Runner != nil && run.SandboxRef != "" {
 		if kerr := s.cfg.Runner.KillSandbox(ctx, run.SandboxRef); kerr != nil {
-			killData["runner_error"] = kerr.Error()
+			if queuedOK && errors.Is(kerr, runner.ErrPendingOnRunner) {
+				queued = true
+			} else {
+				killData["runner_error"] = kerr.Error()
+			}
 		}
 	}
 	// (3) Identity revocation: deny every (current+future) token for the run. A
@@ -911,6 +931,9 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	data := make(map[string]any, len(killData)+len(extra))
 	maps.Copy(data, killData)
 	maps.Copy(data, extra)
+	if queued {
+		data["sandbox_stop"] = "queued"
+	}
 	s.recordAudit(ctx, s.auditEvent(&id, killerType, killer, "run.kill",
 		id.String(), outcome, mustJSON(data)))
 

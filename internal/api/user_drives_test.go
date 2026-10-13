@@ -214,23 +214,56 @@ func (s *driveCRUDStore) UpsertUserDriveGrant(_ context.Context, g types.UserDri
 	return g, nil
 }
 
-// UpsertUserDriveGrantWithinTier mirrors the store's tier-judged write: types.DriveGrantWidens
-// against the drive and the subject's row, then the ordinary upsert.
-func (s *driveCRUDStore) UpsertUserDriveGrantWithinTier(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error) {
+// UpsertUserDriveGrantWithinTier mirrors the store's tier-judged write of either verb:
+// types.DriveGrantWidens against the drive and the row the write changes (with additional the
+// row for the subject and drive, otherwise the row the replace keeps), then the write.
+func (s *driveCRUDStore) UpsertUserDriveGrantWithinTier(ctx context.Context, g types.UserDriveGrant, homeOverrideStated, additional bool) (types.UserDriveGrant, []uuid.UUID, error) {
 	d, ok := s.drives[g.DriveID]
 	if !ok {
-		return types.UserDriveGrant{}, store.ErrNotFound
+		return types.UserDriveGrant{}, nil, store.ErrNotFound
 	}
-	var prev *types.UserDriveGrant
+	var mine []types.UserDriveGrant
 	for _, existing := range s.grants {
 		if existing.SubjectType == g.SubjectType && existing.Subject == g.Subject {
-			prev = &existing
+			mine = append(mine, existing)
 		}
 	}
-	if field := types.DriveGrantWidens(d, prev, g); field != "" {
-		return types.UserDriveGrant{}, &store.UserDriveGrantWidensError{Field: field}
+	// The store's kept row: the one on this drive, else the oldest.
+	sort.Slice(mine, func(i, j int) bool {
+		if a, b := mine[i].DriveID == g.DriveID, mine[j].DriveID == g.DriveID; a != b {
+			return a
+		}
+		if !mine[i].CreatedAt.Equal(mine[j].CreatedAt) {
+			return mine[i].CreatedAt.Before(mine[j].CreatedAt)
+		}
+		return mine[i].ID.String() < mine[j].ID.String()
+	})
+	var prev *types.UserDriveGrant
+	if len(mine) > 0 && (!additional || mine[0].DriveID == g.DriveID) {
+		prev = &mine[0]
 	}
-	return s.UpsertUserDriveGrant(ctx, g, homeOverrideStated)
+	if field := types.DriveGrantWidens(d, prev, g); field != "" {
+		return types.UserDriveGrant{}, nil, &store.UserDriveGrantWidensError{Field: field}
+	}
+	if additional {
+		if prev != nil {
+			g.ID = prev.ID
+		}
+		s.grants[g.ID] = g
+		return g, nil, nil
+	}
+	var removed []uuid.UUID
+	for i, existing := range mine {
+		if i > 0 {
+			removed = append(removed, existing.DriveID)
+			delete(s.grants, existing.ID)
+		}
+	}
+	if prev != nil && prev.DriveID != g.DriveID {
+		removed = append(removed, prev.DriveID)
+	}
+	saved, err := s.UpsertUserDriveGrant(ctx, g, homeOverrideStated)
+	return saved, removed, err
 }
 
 func (s *driveCRUDStore) DeleteUserDriveGrant(_ context.Context, id uuid.UUID) (types.UserDriveGrant, error) {
@@ -1870,7 +1903,7 @@ func TestDriveTargetIsReservedOnEveryCompositionSeam(t *testing.T) {
 				spec := &types.RunPolicySpec{}
 				req := &createRunRequest{Agent: "claude-code", WorkspaceID: &wsID}
 
-				dirs, _, code, _, err := srv.seedRequestWorkspace(context.Background(), spec, req)
+				dirs, _, code, _, err := seedLegacy(srv, context.Background(), spec, req)
 				if err == nil {
 					t.Fatalf("a stored %s source at %q composed unrefused: dirs=%v mounts=%+v repos=%+v",
 						src.Type, target, dirs, spec.WorkspaceMounts, spec.WorkspaceRepos)
@@ -1896,7 +1929,7 @@ func TestDriveTargetIsReservedOnEveryCompositionSeam(t *testing.T) {
 		srv := New(baseTestConfig(h, &workspaceStoreFake{ws: ws}))
 		spec := &types.RunPolicySpec{}
 		req := &createRunRequest{Agent: "claude-code", WorkspaceID: &wsID}
-		dirs, _, code, _, err := srv.seedRequestWorkspace(context.Background(), spec, req)
+		dirs, _, code, _, err := seedLegacy(srv, context.Background(), spec, req)
 		if err != nil {
 			t.Fatalf("neighbouring target refused: %d %v", code, err)
 		}

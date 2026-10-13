@@ -59,7 +59,7 @@ describe("override narrowing table", () => {
     expect(overrideMayBeClamped("agent_host", "add")).toBe(true);
     expect(overrideMayBeClamped("agent_host", "remove")).toBe(false);
     expect(overrideOffered("agent_host_wildcard", "add")).toBe(false);
-    expect(overrideOffered("tool_rule_allow", "add")).toBe(false);
+    expect(overrideOffered("tool_rule_allow", "add")).toBe(true);
     expect(overrideOffered("tool_rule_restrict", "add")).toBe(true);
     expect(overrideOffered("push_rule_deny", "add")).toBe(true);
     expect(overrideOffered("push_rule_deny", "remove")).toBe(false);
@@ -76,5 +76,15 @@ describe("override narrowing table", () => {
     expect(kind).toBe("agent_host_wildcard");
     expect(overrideOffered(kind, op)).toBe(false);
     expect(hostOverrideKind("api.example.com")).toBe("agent_host");
+  });
+});
+
+describe("run-wide egress scalars", () => {
+  it("are widening rows the ceiling clamps, never plainly allowed or refused", () => {
+    for (const kind of ["first_use_approval", "allow_all_egress"] as const) {
+      expect(overrideRule(kind, "set")).toMatchObject({ direction: "widen", rule: "ceiling_clamped" });
+      expect(overrideOffered(kind, "set")).toBe(true);
+      expect(overrideMayBeClamped(kind, "set")).toBe(true);
+    }
   });
 });

@@ -17,6 +17,18 @@ import (
 	"github.com/google/uuid"
 )
 
+// each checks a replayed batch row by row, failing the batch at the first error.
+func each(fn func(Record) error) func(context.Context, []Record) error {
+	return func(_ context.Context, rows []Record) error {
+		for _, r := range rows {
+			if err := fn(r); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
 func testSpool(t *testing.T) (*Spool, string, uuid.UUID) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "spool")
@@ -42,13 +54,13 @@ func TestReplayCrashRetainsUnacknowledgedBatch(t *testing.T) {
 	}
 	received := map[string]int{}
 	lostACK := errors.New("crashed before durable ACK")
-	if err := s.Replay(ctx, func(_ context.Context, r Record) error {
+	if err := s.Replay(ctx, each(func(r Record) error {
 		received[r.Hash]++
 		if r.Seq == 2 {
 			return lostACK
 		}
 		return nil
-	}); !errors.Is(err, lostACK) {
+	})); !errors.Is(err, lostACK) {
 		t.Fatal(err)
 	}
 	pos, err := s.Get(ctx)
@@ -61,7 +73,7 @@ func TestReplayCrashRetainsUnacknowledgedBatch(t *testing.T) {
 	}
 	defer reopened.Close()
 	var seqs []int64
-	if err := reopened.Replay(ctx, func(_ context.Context, r Record) error { received[r.Hash]++; seqs = append(seqs, r.Seq); return nil }); err != nil {
+	if err := reopened.Replay(ctx, each(func(r Record) error { received[r.Hash]++; seqs = append(seqs, r.Seq); return nil })); err != nil {
 		t.Fatal(err)
 	}
 	if len(seqs) != 3 || seqs[0] != 1 || seqs[2] != 3 || len(received) != 3 {
@@ -70,18 +82,18 @@ func TestReplayCrashRetainsUnacknowledgedBatch(t *testing.T) {
 	if depth, b, _, err := reopened.Stats(ctx); err != nil || depth != 0 || b != 0 {
 		t.Fatalf("retained acknowledged payload: %d %d %v", depth, b, err)
 	}
-	if err := reopened.Replay(ctx, func(context.Context, Record) error { t.Fatal("replayed acknowledged row"); return nil }); err != nil {
+	if err := reopened.Replay(ctx, func(context.Context, []Record) error { t.Fatal("replayed acknowledged row"); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if err := reopened.Append(ctx, decision(id)); err != nil {
 		t.Fatal(err)
 	}
-	if err := reopened.Replay(ctx, func(_ context.Context, r Record) error {
+	if err := reopened.Replay(ctx, each(func(r Record) error {
 		if r.Seq != 4 {
 			t.Fatal(r.Seq)
 		}
 		return nil
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -109,13 +121,13 @@ func TestConcurrentProcessHandlesPreserveEveryRow(t *testing.T) {
 	}
 	wg.Wait()
 	var seq int64
-	if err := a.Replay(ctx, func(_ context.Context, r Record) error {
+	if err := a.Replay(ctx, each(func(r Record) error {
 		seq++
 		if r.Seq != seq {
 			t.Fatalf("sequence %d after %d", r.Seq, seq-1)
 		}
 		return nil
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
 	if seq != 60 {
@@ -165,13 +177,13 @@ func TestByteBoundOverflowFirstStableAndCounted(t *testing.T) {
 		t.Fatal("overflow identity changed on restart")
 	}
 	sent := 0
-	if err := reopened.Replay(ctx, func(_ context.Context, r Record) error {
+	if err := reopened.Replay(ctx, each(func(r Record) error {
 		if sent == 0 && r.Hash != first.Hash {
 			t.Fatal("overflow was not first")
 		}
 		sent++
 		return nil
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
 	if sent != count+1 {
@@ -254,12 +266,12 @@ func TestRecoveryReclaimsOnlyDurablyAcknowledgedRows(t *testing.T) {
 	if err := reopened.Append(ctx, decision(id)); err != nil {
 		t.Fatal(err)
 	}
-	if err := reopened.Replay(ctx, func(_ context.Context, r Record) error {
+	if err := reopened.Replay(ctx, each(func(r Record) error {
 		if r.Seq != 2 {
 			t.Fatal(r.Seq)
 		}
 		return nil
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -277,7 +289,7 @@ func TestSpoolRefusesCorruptionAndUnsafeState(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(dir, recordName(1)), []byte(`{"seq":1}`), 0600); err != nil {
 					t.Fatal(err)
 				}
-				if err := s.Replay(ctx, func(context.Context, Record) error { t.Fatal("corrupt row sent"); return nil }); err == nil {
+				if err := s.Replay(ctx, func(context.Context, []Record) error { t.Fatal("corrupt row sent"); return nil }); err == nil {
 					t.Fatal("corrupt row accepted")
 				}
 			case "manifest":

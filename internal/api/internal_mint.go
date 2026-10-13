@@ -377,7 +377,31 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, claims.Sponsor, internalAudience, claims.OperatorOwned)
+	// A service run renews under its identity's current sponsor, not the one its first token named.
+	sponsor := claims.Sponsor
+	if isServicePrincipal(claims.Sub) {
+		var serr error
+		sponsor, serr = s.runSponsor(r.Context(), claims.Sub)
+		if errors.Is(serr, errServiceRetired) {
+			s.auditRenewDenied(r, claims, "service_identity_retired")
+			writeErrorReason(w, http.StatusForbidden, reasonServiceIdentityInactive, "the service identity that started this run is retired")
+			return
+		}
+		if serr != nil {
+			writeServerError(w, r, "renew run identity", serr)
+			return
+		}
+	}
+	// A run on a runner takes its owner's LEASE-send slot before anything is minted or stamped: a renewal
+	// that meets another lease sender answers 503 having changed nothing, and the proxy keeps its current
+	// token and retries in a minute (renewRetry); it never tears down on a 5xx.
+	releaseLease, busy := s.renewalLeaseSlot(r.Context(), run)
+	if busy {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunRenewLeaseBusy, "the run's runner lease is being sent; retry the renewal")
+		return
+	}
+	defer releaseLease()
+	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, sponsor, internalAudience, claims.OperatorOwned)
 	if err != nil {
 		writeServerError(w, r, "renew run identity", err)
 		return
@@ -397,6 +421,20 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 			s.auditRenewDenied(r, claims, "run_lost")
 			writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunKept), "run is lost")
 			return
+		}
+		// A run on a runner is contained there when its lease lapses: the renewed stamp goes to the
+		// runner too. A runner that does not get it contains the run at the lapse window, the same
+		// outcome the organisation's own sweep reaches, so a failed send is logged, not refused. The
+		// run's lock held by another sender (errRunnerLeaseBusy) still answers 503, but by then the
+		// mint and the stamp have landed: the minted token is never handed out and expires unused,
+		// and the stamp is the one the next renewal moves again.
+		switch err := s.sendRenewedLease(r.Context(), run); {
+		case errors.Is(err, errRunnerLeaseBusy):
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunRenewLeaseBusy, "the run's runner lease is being sent; retry the renewal")
+			return
+		case err != nil:
+			slog.WarnContext(r.Context(), "wardynd: renewing a run's runner lease failed",
+				slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}
 	}
 

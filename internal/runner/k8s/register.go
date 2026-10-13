@@ -31,7 +31,6 @@ func buildConfig(d substrate.Deps) Config {
 		ProxyImage:          d.ProxyImage,
 		ImagePullSecret:     os.Getenv("WARDYN_K8S_IMAGE_PULL_SECRET"),
 		SandboxPlacement:    os.Getenv("WARDYN_K8S_SANDBOX_PLACEMENT"),
-		RunMaxAge:           cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0),
 		ReadNodes:           cliutil.EnvBool("WARDYN_K8S_READ_NODES", false),
 		Record:              d.Record,
 		ConfinementRuntimes: d.ConfinementRuntimes,

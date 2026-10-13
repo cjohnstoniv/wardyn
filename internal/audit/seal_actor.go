@@ -32,13 +32,13 @@ func (s *Sealer) sealsActor(ev types.AuditEvent) bool {
 }
 
 // ForgedSubject reports whether ev carries a subject string no Seal wrote: a
-// human actor, or the target of a person-target action, that already begins with
+// human actor, the target of a person-target action, or a sponsor field (seal_sponsor.go), that already begins with
 // SubjectActorPrefix. Unseal renders such a string as the person it names, so a
 // caller who typed one (a path segment, a request body) could read an erased
 // person's rows back; Seal refuses the row instead.
 func ForgedSubject(ev types.AuditEvent) bool {
 	return (ev.ActorType == types.ActorHuman && strings.HasPrefix(ev.Actor, SubjectActorPrefix)) ||
-		(SealsTarget(ev.Action) && strings.HasPrefix(ev.Target, SubjectActorPrefix))
+		(SealsTarget(ev.Action) && strings.HasPrefix(ev.Target, SubjectActorPrefix)) || forgedSponsor(ev)
 }
 
 // sealsTarget reports whether ev's target is stored as a subject: an action
@@ -208,39 +208,44 @@ func (s *Sealer) resealName(ctx context.Context, ev types.AuditEvent, pk []byte,
 	if err != nil {
 		return nil, "", false, fmt.Errorf("%w: the pending %s does not open under the pending key: %w", ErrPendingUnopenable, path, err)
 	}
-	name := pv.Subject
-	principal, err := s.principalOf(ctx, name)
+	name, err := s.resealedSubject(ctx, ev, pv.Subject)
 	if err != nil {
 		return nil, "", false, err
-	}
-	gone := false
-	if s.GoneSince != nil {
-		if gone, err = s.GoneSince(ctx, principal, ev.Time); err != nil {
-			return nil, "", false, err
-		}
-	}
-	var id string
-	if gone {
-		if id, ok, err = s.Subjects.AuditSubjectFor(ctx, principal); err != nil {
-			return nil, "", false, err
-		}
-		name = ErasedValue
-		if ok {
-			name = SubjectActorPrefix + id
-		}
-	} else {
-		if id, ok, err = s.actorSubject(ctx, name); err != nil {
-			return nil, "", false, err
-		}
-		if ok {
-			name = SubjectActorPrefix + id
-		}
 	}
 	delete(m, dataKey)
 	if data, err = json.Marshal(m); err != nil {
 		return nil, "", false, err
 	}
 	return data, name, true, nil
+}
+
+// resealedSubject is the value stored for the person name a pending field waited for: their subject, or
+// the subject without a fresh key (ErasedValue when there is none) for a person erased while it waited.
+func (s *Sealer) resealedSubject(ctx context.Context, ev types.AuditEvent, name string) (string, error) {
+	principal, err := s.principalOf(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	gone := false
+	if s.GoneSince != nil {
+		if gone, err = s.GoneSince(ctx, principal, ev.Time); err != nil {
+			return "", err
+		}
+	}
+	var id string
+	var ok bool
+	if gone {
+		if id, ok, err = s.Subjects.AuditSubjectFor(ctx, principal); err != nil {
+			return "", err
+		}
+		name = ErasedValue
+	} else if id, ok, err = s.actorSubject(ctx, name); err != nil {
+		return "", err
+	}
+	if ok {
+		name = SubjectActorPrefix + id
+	}
+	return name, nil
 }
 
 // renderSubject is what a reader sees for a stored subject string (an actor or

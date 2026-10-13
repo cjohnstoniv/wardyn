@@ -100,6 +100,32 @@ func TestDecodeWorkspaceRequest_DuplicateExplicitTargetsRejected(t *testing.T) {
 	}
 }
 
+// A folder with no target mounts at the one default place, so two of them (or
+// one beside a source that names that place) can never attach together.
+func TestDecodeWorkspaceRequest_TwoFoldersOnTheDefaultTargetRejected(t *testing.T) {
+	for _, body := range []string{
+		`{"name":"w","sources":[
+			{"type":"local_dir","path":"/srv/a"},
+			{"type":"local_dir","path":"/srv/b"}
+		]}`,
+		`{"name":"w","sources":[
+			{"type":"local_dir","path":"/srv/a","target":"/home/agent/work"},
+			{"type":"local_dir","path":"/srv/b"}
+		]}`,
+		`{"name":"w","sources":[
+			{"type":"repo","source":"acme/api","target":"/home/agent/work"},
+			{"type":"local_dir","path":"/srv/b"}
+		]}`,
+	} {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		_, msg := decodeWorkspaceRequest(w, r, nil)
+		if !strings.Contains(msg, "sources[1]") || !strings.Contains(msg, `"/home/agent/work" duplicates sources[0]`) {
+			t.Errorf("body=%s: message = %q, want sources[1] refused as a duplicate of sources[0] at the default target", body, msg)
+		}
+	}
+}
+
 // Distinct explicit targets, or an empty (default-derived) target repeated on
 // several sources, must NOT be rejected here — the empty case isn't resolved
 // until attach/clone time (buildRepoRecords), same as validatePolicyWorkspaces.
@@ -112,6 +138,15 @@ func TestDecodeWorkspaceRequest_DistinctOrEmptyTargetsAccepted(t *testing.T) {
 		`{"name":"w","sources":[
 			{"type":"repo","source":"acme/api"},
 			{"type":"repo","source":"other-org/api"}
+		]}`,
+		`{"name":"w","sources":[
+			{"type":"local_dir","path":"/srv/a"},
+			{"type":"local_dir","path":"/srv/b","target":"/home/agent/b"}
+		]}`,
+		// A scratch directory is not a mount: a folder on the default path beside one launches.
+		`{"name":"w","sources":[
+			{"type":"ephemeral","target":"/home/agent/work"},
+			{"type":"local_dir","path":"/srv/a"}
 		]}`,
 	} {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))

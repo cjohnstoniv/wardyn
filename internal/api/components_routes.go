@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -46,6 +47,7 @@ func (s *Server) mountComponentRoutes(r, operatorOnly chi.Router) {
 	r.Post("/me/components", s.handleSaveMyComponent)
 	r.Put("/me/components/{id}", s.handleUpdateMyComponent)
 	r.Delete("/me/components/{id}", s.handleDeleteMyComponent)
+	r.Post("/components/{id}/sign-in", s.handleCLISignIn)
 	operatorOnly.Get("/components", s.handleListComponents)
 	operatorOnly.Put("/components/{id}", s.handlePutComponent)
 	operatorOnly.Delete("/components/{id}", s.handleDeleteComponent)
@@ -359,9 +361,25 @@ func (s *Server) handlePutComponent(w http.ResponseWriter, r *http.Request) {
 		saveRefusal(w, reason, msg)
 		return
 	}
-	_, err := cs.GetComponent(r.Context(), id, "")
+	if !orgMCPKeyFree(w, r, cs, c) {
+		return
+	}
+	old, err := cs.GetComponent(r.Context(), id, "")
 	switch {
 	case err == nil:
+		// A row whose AWS sign-ins would point somewhere it no longer names takes
+		// them with it, before the write and under the lock a capture holds.
+		if cliSignInPinChanged(old.Definition, c.Definition) {
+			var unlock func()
+			if r, unlock, ok = s.lockDoor(w, r, db.SiteConfigLockClass, cliRowLockPart, id.String()); !ok {
+				return
+			}
+			defer unlock()
+			if err := s.purgeCLISignIns(r.Context(), id.String()); err != nil {
+				writeServerError(w, r, "purge cli sign-ins", err)
+				return
+			}
+		}
 		s.updateComponent(w, r, cs, c)
 	case errors.Is(err, store.ErrNotFound):
 		s.createOrgComponent(w, r, cs, c)
@@ -425,6 +443,18 @@ func (s *Server) handleDeleteComponent(w http.ResponseWriter, r *http.Request) {
 	}
 	id, ok := parseIDParam(w, r, "id", "component")
 	if !ok {
+		return
+	}
+	// Every person's sign-in for the row goes first, under the lock a capture
+	// holds, so none lands after it; a delete that then fails leaves people to
+	// sign in again, the closed side.
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass, cliRowLockPart, id.String())
+	if !ok {
+		return
+	}
+	defer unlock()
+	if err := s.purgeCLISignIns(r.Context(), id.String()); err != nil {
+		writeServerError(w, r, "purge cli sign-ins", err)
 		return
 	}
 	deleted, swept, restored, err := deleter.DeleteRestrictedComponent(r.Context(), id, capComponent, principalFromRequest(r))

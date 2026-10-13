@@ -44,20 +44,29 @@ func getPod(t *testing.T, cs *fake.Clientset, name string) *corev1.Pod {
 	return pod
 }
 
-// TestCreateSandbox_PodDeadlinesFollowMaxAge: with a max age both run pods carry
-// activeDeadlineSeconds = max age + grace, and without one neither does.
-func TestCreateSandbox_PodDeadlinesFollowMaxAge(t *testing.T) {
+// TestK8sDeadline_PerRunCapAndQuotaScope: each run's pods carry that run's OWN deadline
+// (its remaining lifetime plus the grace), two runs on one driver get two deadlines, and a run
+// with no cap carries none. The quota fit follows: a capped run is Terminating-scoped, a run
+// with no cap is NotTerminating-scoped.
+func TestK8sDeadline_PerRunCapAndQuotaScope(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		maxAge time.Duration
-		want   *int64
+		name string
+		cap  time.Duration
+		want *int64
 	}{
-		{"max age set", 2 * time.Hour, ptrInt64(int64((2*time.Hour + podDeadlineGrace) / time.Second))},
-		{"max age off", 0, nil},
+		{"capped at two hours", 2 * time.Hour, ptrInt64(int64((2*time.Hour + podDeadlineGrace) / time.Second))},
+		{"capped at ten minutes", 10 * time.Minute, ptrInt64(int64((10*time.Minute + podDeadlineGrace) / time.Second))},
+		{"no cap", 0, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d, cs := newTestDriver(t, Config{RunMaxAge: tc.maxAge})
-			spec := createdSandbox(t, d, cs)
+			d, cs := newTestDriver(t, Config{})
+			installProxyIPReactor(t, cs, "10.244.0.9")
+			installAgentRunningReactor(t, cs)
+			spec := testSandboxSpec()
+			spec.Resources.LifetimeCap = tc.cap
+			if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
+				t.Fatalf("CreateSandbox: %v", err)
+			}
 			for _, name := range []string{proxyPodName(spec.RunID), agentPodName(spec.RunID)} {
 				got := getPod(t, cs, name).Spec.ActiveDeadlineSeconds
 				switch {
@@ -68,6 +77,31 @@ func TestCreateSandbox_PodDeadlinesFollowMaxAge(t *testing.T) {
 				}
 			}
 		})
+	}
+
+	d, cs := newTestDriver(t, Config{})
+	terminating := quota("only-terminating", rl(100000, 1<<20), rl(0, 0))
+	terminating.Spec.Scopes = []corev1.ResourceQuotaScope{corev1.ResourceQuotaScopeTerminating}
+	notTerminating := quota("only-not-terminating", rl(100000, 1<<20), rl(0, 0))
+	notTerminating.Spec.Scopes = []corev1.ResourceQuotaScope{corev1.ResourceQuotaScopeNotTerminating}
+	seed(t, cs, terminating, notTerminating)
+	for _, tc := range []struct {
+		name string
+		cap  time.Duration
+		want string
+	}{
+		{"capped run", time.Hour, "only-terminating"},
+		{"run with no cap", 0, "only-not-terminating"},
+	} {
+		res := fitRes
+		res.LifetimeCap = tc.cap
+		fit, err := d.CheckFit(context.Background(), res)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(fit.Quota) != 1 || fit.Quota[0].Name != tc.want {
+			t.Errorf("%s: applicable quotas = %+v, want only %s", tc.name, fit.Quota, tc.want)
+		}
 	}
 }
 
@@ -107,7 +141,7 @@ func TestCreateSandbox_AgentIsOwnedByTheProxyPod(t *testing.T) {
 // from that verdict (StopSandbox, which finalizing a run calls) removes the Secret and both
 // NetworkPolicies as well as the pods. activeDeadlineSeconds deletes nothing itself.
 func TestDeadlineExceededRunIsReclaimedByTheReaper(t *testing.T) {
-	d, cs := newTestDriver(t, Config{RunMaxAge: time.Hour})
+	d, cs := newTestDriver(t, Config{})
 	spec := createdSandbox(t, d, cs)
 	ref := agentPodName(spec.RunID)
 	execID, err := d.Exec(context.Background(), ref, []string{"agent-run", "task"})
@@ -143,7 +177,7 @@ func TestDeadlineExceededRunIsReclaimedByTheReaper(t *testing.T) {
 // before the agent pod does, so no rollback runs. The proxy pod already carries its deadline,
 // and the orphan sweep reclaims it with the Secret and both NetworkPolicies.
 func TestACrashBetweenProxyAndAgentCreateIsReclaimed(t *testing.T) {
-	d, cs := newTestDriver(t, Config{RunMaxAge: time.Hour})
+	d, cs := newTestDriver(t, Config{})
 	installProxyIPReactor(t, cs, "10.244.0.9")
 	crashed := true
 	cs.PrependReactor("create", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
@@ -165,6 +199,7 @@ func TestACrashBetweenProxyAndAgentCreateIsReclaimed(t *testing.T) {
 	})
 
 	spec := testSandboxSpec()
+	spec.Resources.LifetimeCap = time.Hour
 	spec.SecretEnv = map[string]string{"GIT_TOKEN": "ghp_secret"}
 	if _, err := d.CreateSandbox(context.Background(), spec); err == nil {
 		t.Fatal("CreateSandbox succeeded though the agent pod create failed")

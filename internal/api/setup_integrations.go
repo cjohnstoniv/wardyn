@@ -489,6 +489,15 @@ type SetupHarnessTool struct {
 	// already narrowed to granted providers before the wire, so without this
 	// fact the two states were indistinguishable to the console.
 	ProvidersUngranted bool `json:"providers_ungranted,omitempty"`
+	// Installed: a sandbox image this server launches carries this harness's
+	// CLI: Wardyn's own published image for it, an image the operator named for
+	// it, or a declared harness-set image (harnessInstalled). False when the only
+	// image is Wardyn's agent base, which ships no vendor CLI, or none resolves.
+	Installed bool `json:"installed"`
+	// ApprovalHold: Wardyn can hold this harness's tool calls for approval when it
+	// starts the harness on an autonomous run (an external tool-approval contract).
+	// False for codex-cli, "Your own tools" and custom agents.
+	ApprovalHold bool `json:"approval_hold"`
 }
 
 // setupHarnessTools projects the static harness catalog for SetupStatus, folded
@@ -558,6 +567,8 @@ func setupHarnessTools(sc types.SiteConfig, agentImages map[string]string, grant
 			NoManagedAuth:      d.NoManagedAuth,
 			Enabled:            true,
 			ProvidersUngranted: serving[d.ID] && !grantedFor[d.ID],
+			Installed:          harnessInstalled(d.ID, agentImages),
+			ApprovalHold:       d.ApprovalHold,
 		}
 		if configured {
 			row, ok := agentProviderFor(sc, d.ID)
@@ -574,6 +585,7 @@ func setupHarnessTools(sc types.SiteConfig, agentImages map[string]string, grant
 				ID: row.ID, Display: row.ID, NoManagedAuth: true,
 				Enabled:            !row.Disabled,
 				ProvidersUngranted: serving[row.ID] && !grantedFor[row.ID],
+				Installed:          harnessInstalled(row.ID, agentImages),
 			})
 		}
 	}

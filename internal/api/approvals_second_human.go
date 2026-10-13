@@ -231,7 +231,19 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 			return "", false
 		}
 	}
-	if run.CreatedBy == "" || run.CreatedBy != principal {
+	authored, aerr := s.runAuthoredBy(r.Context(), run, principal)
+	if errors.Is(aerr, errRunAuthorUnrecorded) {
+		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+
+			" is set: this run has no recorded human author, so no decision on it can be verified as a second human's").
+			OnRun(ap.RunID))
+		return "", false
+	}
+	if aerr != nil {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunUnreadable,
+			sw+" is set, but the service identity that created this run could not be read to verify a second human decided it")
+		return "", false
+	}
+	if !authored {
 		return "", true
 	}
 	if sw == envCapabilitySecondHuman {
