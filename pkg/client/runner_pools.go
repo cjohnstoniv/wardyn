@@ -476,3 +476,33 @@ func (c *Client) ListRunnerPoolMembers(ctx context.Context, poolID uuid.UUID) ([
 	err := c.do(ctx, http.MethodGet, "/api/v1/runner-pools/"+poolID.String()+"/members", nil, &out)
 	return out, err
 }
+
+// RunnerPoolUsePolicyRequest sets who may use an organization pool. Revision, when given, is the pool
+// revision the caller read: a pool changed since then is refused as stale.
+type RunnerPoolUsePolicyRequest struct {
+	Revision *int64              `json:"revision,omitempty"`
+	Subjects []RunnerPoolSubject `json:"subjects"`
+}
+
+// GetRunnerPoolUsePolicy reads an organization pool's use policy (admin or security admin). A pool with
+// no policy answers with no subjects and a zero UpdatedAt; Revision is the pool's current revision, the
+// one a set names. A user pool has none and is refused.
+func (c *Client) GetRunnerPoolUsePolicy(ctx context.Context, poolID uuid.UUID) (RunnerPoolUsePolicy, error) {
+	var out RunnerPoolUsePolicy
+	err := c.do(ctx, http.MethodGet, "/api/v1/runner-pools/"+poolID.String()+"/use-policy", nil, &out)
+	return out, err
+}
+
+// SetRunnerPoolUsePolicy replaces who may use an organization pool (admin or security admin). A held
+// write returns a *PendingApprovalError naming the change.
+func (c *Client) SetRunnerPoolUsePolicy(ctx context.Context, poolID uuid.UUID, req RunnerPoolUsePolicyRequest) (RunnerPoolUsePolicy, error) {
+	var out RunnerPoolUsePolicy
+	err := c.do(ctx, http.MethodPut, "/api/v1/runner-pools/"+poolID.String()+"/use-policy", req, &out)
+	return out, err
+}
+
+// ClearRunnerPoolUsePolicy removes the use policy, so everyone who may launch on organization pools may
+// use the pool again. Held like a set.
+func (c *Client) ClearRunnerPoolUsePolicy(ctx context.Context, poolID uuid.UUID) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/runner-pools/"+poolID.String()+"/use-policy", nil, nil)
+}
