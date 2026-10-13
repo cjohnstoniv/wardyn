@@ -246,6 +246,6 @@ func (s *Server) ActionResultFromRunner(ctx context.Context, runnerID uuid.UUID,
 	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return store.ErrRunnerActionRefused
 	}
-	_, _, err := st.RecordRunnerActionResult(ctx, runnerID, *event.RunID, result.ID, result.Outcome, result.ObservedAt, s.cfg.RunnerAuditPrepare)
+	_, _, err := st.RecordRunnerActionResult(ctx, runnerID, *event.RunID, result.ID, result.Outcome, result.Reason, result.ObservedAt, s.cfg.RunnerAuditPrepare)
 	return err
 }

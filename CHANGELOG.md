@@ -103,6 +103,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `wardyn runner pool org-default set` (it reads first) or GET then PUT.
 - Runners registered before this release get Runs at once 2 (migration `0172_runner_max_runs`); a runner's owner
   raises it with `wardyn runner set --max-runs N <runner-id>`.
+- A pending runner action can now end `refused` (migration `0175_runner_action_refused` widens the action outcome
+  check): the runner answers an action it can never apply, such as a stop or kill naming a container it cannot prove
+  it created, instead of failing its session on every reconnect. The action closes and `runner.action.refuse` is
+  recorded.
 
 ### Added
 

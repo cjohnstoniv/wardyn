@@ -297,17 +297,20 @@ func (s PG) RunHeldContainedOnRunner(ctx context.Context, runID uuid.UUID) (bool
 
 // RecordRunnerActionResult records an authenticated action_result: runnerID is
 // the stream's stored identity and runID the event's run; both must be the
-// action's own. Only success and deferred are outcomes, observedAt is the
+// action's own. The outcomes are success, deferred and refused; only refused
+// carries a reason, and its first receipt closes the action and writes
+// runner.action.refuse in the same transaction. observedAt is the
 // runner's assertion and applied_at is the org clock. The first receipt
 // rechecks the owner, ref and execution generation the action was bound to;
 // a stop_proxy success on the still-kept loss records late containment in the
 // same transaction, so the receipt and its audit commit or roll back together.
 // An identical repeat returns first=false with no further effect; a changed
 // one is ErrConflict.
-func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actionID uuid.UUID, outcome string, observedAt time.Time,
+func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actionID uuid.UUID, outcome, reason string, observedAt time.Time,
 	prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (types.RunnerPendingAction, bool, error) {
 	if runnerID == uuid.Nil || runID == uuid.Nil || actionID == uuid.Nil || observedAt.IsZero() || prepare == nil ||
-		(outcome != types.RunnerActionSuccess && outcome != types.RunnerActionDeferred) {
+		(outcome != types.RunnerActionSuccess && outcome != types.RunnerActionDeferred && outcome != types.RunnerActionRefused) ||
+		(outcome == types.RunnerActionRefused) != (reason != "") || len(reason) > maxRunnerRefusalReason {
 		return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
 	}
 	observedAt = observedAt.UTC().Truncate(time.Microsecond)
@@ -323,7 +326,7 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 		return types.RunnerPendingAction{}, false, err
 	}
 	if asserted {
-		return recordAssertedActionResultTx(ctx, tx, runnerID, runID, actionID, outcome, observedAt)
+		return recordAssertedActionResultTx(ctx, tx, runnerID, runID, actionID, outcome, reason, observedAt, prepare)
 	}
 	owner, run, generation, err := lockRunnerActionRun(ctx, tx, runnerID, runID)
 	if err != nil {
@@ -342,13 +345,20 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 		}
 		return a, false, tx.Commit(ctx)
 	}
-	if run.SandboxRef != a.Ref || generation != a.Generation {
+	// A refusal changed nothing on the runner, so it closes the action even
+	// when the run has since moved on.
+	if outcome != types.RunnerActionRefused && (run.SandboxRef != a.Ref || generation != a.Generation) {
 		return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
 	}
 	a, err = scanAction(tx.QueryRow(ctx, `UPDATE runner_pending_actions SET applied_at = clock_timestamp(), outcome = $2, observed_at = $3
 		WHERE id = $1 AND applied_at IS NULL RETURNING `+actionCols, actionID, outcome, observedAt))
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
+	}
+	if outcome == types.RunnerActionRefused {
+		if err := recordRunnerActionRefusalTx(ctx, tx, a, &runID, reason, prepare); err != nil {
+			return types.RunnerPendingAction{}, false, err
+		}
 	}
 	// A run that has since left the kept loss (killed, ended) has its own
 	// teardown record; the receipt still settles this exact action.
