@@ -6,7 +6,10 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -84,6 +87,31 @@ func (s *Server) createSandboxAtTarget(ctx context.Context, run types.AgentRun, 
 		if s.cfg.Runner.Name() != run.RunnerPoolExecutor {
 			return runner.Sandbox{}, fmt.Errorf("%w: %q is not an executor of this deployment", runner.ErrExecutorUnavailable, run.RunnerPoolExecutor)
 		}
+	default:
+		s.stampServerRun(ctx, run, spec)
 	}
 	return s.cfg.Runner.CreateSandbox(ctx, spec)
+}
+
+// serverRunStamper records where a run Wardyn launched itself goes (store.PG.StampServerRun).
+type serverRunStamper interface {
+	StampServerRun(ctx context.Context, id uuid.UUID, remote string, reserved types.RunnerAmounts) error
+}
+
+// stampServerRun counts a run Wardyn launched itself (a sign-in, a probe, a source scan), which no pool
+// placed, in the In use of the remote-hosted runner it goes to: the one substrate CreateSandbox picks
+// when this deployment runs exactly one. It is exempt from that runner's limits, as it is from
+// deny_placements, but never uncounted, so people's runs there are not over-admitted beside it. A
+// failed write is logged: the run is not refused for its own accounting.
+func (s *Server) stampServerRun(ctx context.Context, run types.AgentRun, spec runner.SandboxSpec) {
+	st, ok := s.cfg.Store.(serverRunStamper)
+	remote := s.cfg.Runner.Name()
+	if !ok || !types.ValidRemoteRunnerID(remote) || !s.remoteRunnerConfigured(remote) {
+		return
+	}
+	size := runner.EffectiveResources(spec.Resources)
+	reserved := types.RunnerAmounts{CPUMillis: size.AgentCPULimitMillis, MemoryMiB: size.AgentMemoryLimitMiB, DiskMiB: max(0, spec.Resources.DiskMiB)}
+	if err := st.StampServerRun(ctx, run.ID, remote, reserved); err != nil {
+		slog.WarnContext(ctx, "wardynd: count a server run on its remote-hosted runner", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+	}
 }

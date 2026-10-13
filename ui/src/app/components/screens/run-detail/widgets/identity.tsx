@@ -50,7 +50,7 @@ export function IdentityWidget({
       ? RUN_PLACEMENT.MINE(runnerLabel(run))
       : RUN_PLACEMENT.OTHERS(runnerLabel(run), run.created_by)
     : run.placement_filled
-      ? RUN_PLACEMENT.ORG
+      ? RUN_PLACEMENT.REMOTE
       : null;
 
   return (

@@ -39,11 +39,11 @@ const stripQuotes = (s: string): string => s.replace(/^"(.*)"$/, "$1");
 const rawDoc = parseFrozenTables(DOC, /^## Frozen strings/);
 const doc = new Map([...rawDoc].map(([key, value]) => [stripKeyNote(key), stripQuotes(value)]));
 
-// #497's preflight fallback is an inline literal in use-intent-checks.ts with no
-// exported constant, so it is read out of the source text, anchored on the
-// preflightError it feeds.
-const PREFLIGHT_FALLBACK =
-  /preflightError: [^\n]*getErrorMessage\(error\) \|\| "([^"]*)"/.exec(
+// #497's check-error fallback is an inline literal inside checkFailureText in use-intent-checks.ts
+// (the preflight blocker and the Tools step's failed-preview alert both call it), so it is read out
+// of the source text, anchored on that function.
+const CHECK_FALLBACK =
+  /checkFailureText = [^\n]*getErrorMessage\(error\) \|\| "([^"]*)"/.exec(
     readFileSync(resolve(process.cwd(), "src/app/components/screens/new-run-flow/draft/use-intent-checks.ts"), "utf8"),
   )?.[1] ?? "";
 
@@ -54,7 +54,7 @@ const rendered: Record<string, string> = {
   "RECORDINGS.EMPTY_BODY": RECORDINGS.EMPTY_BODY,
   RECORDING_DISABLED_TITLE: RECORDING_DISABLED_TITLE,
   "AUDIT.MEMBER_FEED_TITLE": AUDIT.MEMBER_FEED_TITLE,
-  "Preflight error fallback": PREFLIGHT_FALLBACK,
+  "Check error fallback": CHECK_FALLBACK,
 };
 
 describe("announced-failures-copy — announced-failures-canon.md, #490", () => {

@@ -113,8 +113,22 @@ func TestMissingIdentityRejectsForeignOrExecutableAction(t *testing.T) {
 			case "recover":
 				a.Kind = types.RunnerActionRecoverMutation
 			}
-			if _, err := m.apply(t.Context(), a); err == nil || len(m.state.Runs) != 0 || sub.stops+sub.kills != 0 {
+			result, err := m.apply(t.Context(), a)
+			if len(m.state.Runs) != 0 || sub.stops+sub.kills != 0 {
 				t.Fatal("untrusted identity/action acquired local authority")
+			}
+			if variant == "nil-run" {
+				if err == nil {
+					t.Fatal("an action with no run was answered")
+				}
+				return
+			}
+			// Every other action is one this runner can never apply: it ends refused, durably.
+			if err != nil || result.Outcome != types.RunnerActionRefused || result.Reason == "" || result.ID != a.ID {
+				t.Fatalf("foreign action: %+v %v", result, err)
+			}
+			if replay, err := m.apply(t.Context(), a); err != nil || replay != result {
+				t.Fatalf("refusal replay: %+v %v", replay, err)
 			}
 		})
 	}

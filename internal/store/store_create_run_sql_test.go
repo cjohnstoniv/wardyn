@@ -16,7 +16,7 @@ import (
 // placeholder short — Postgres then refuses every run create. Train 17 merged
 // exactly that (model_provider_id and user_type, both at $29).
 func TestCreateRunBindsEveryInsertColumn(t *testing.T) {
-	cols := strings.Count(runInsertCols, ",") + 1
+	cols := strings.Count(runInsertCols+", "+runReservedCols, ",") + 1
 	values := createRunSQL[strings.Index(createRunSQL, "VALUES"):strings.Index(createRunSQL, "RETURNING")]
 	seen := map[string]bool{}
 	for _, p := range regexp.MustCompile(`\$\d+`).FindAllString(values, -1) {
