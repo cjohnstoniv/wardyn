@@ -296,8 +296,9 @@ func (s *Store) applyRow(ctx context.Context, r row, keys map[keyID][]byte) erro
 		s.sync.mu.Lock()
 		delete(s.sync.rows, r.id)
 		s.sync.mu.Unlock()
-		if r.retiredAt != nil && rf.current && rf.bucket == bucketGlobal {
+		if r.retiredAt != nil && rf.bucket == bucketGlobal {
 			// The registry keeps its own copy through the grace; this one is done.
+			// A row already retired there keeps the retirement it has.
 			s.reg.RetireGlobalValue(rf.id, *r.retiredAt)
 			clear(rf.value)
 			return nil

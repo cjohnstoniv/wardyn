@@ -180,6 +180,20 @@ func TestRows_AThirdRegistrationAndAnEvictionEachEndOnTheirOwn(t *testing.T) {
 	f.wantMasked("past the evicted row's grace", false)
 }
 
+// An eviction tombstone for a row this replica already holds as retired leaves
+// the row the grace it has: the value is let go at the row's own retirement.
+func TestRows_AnEvictionTombstoneLeavesARetiredRowItsOwnGrace(t *testing.T) {
+	f := newRowsFixture(t)
+	t0, t1 := w4CovT0, w4CovT0.Add(30*time.Minute)
+	f.read(false, f.row(w4CovRowA, 1, "cred", 1, nil, &t0))
+	held := f.ref(w4CovRowA).value
+	f.read(false, rowsTomb(w4CovRowA, 2, &t1))
+	f.wantMasked("after the eviction tombstone", true)
+	f.wantGone("the evicted row", w4CovRowA, held)
+	f.reg.SweepGlobals(t0.Add(time.Second))
+	f.wantMasked("past the row's own retirement", false)
+}
+
 // A full reload drops the rows the table no longer has, one row at a time.
 func TestRows_AFullReloadDropsOnlyTheRowsThatAreGone(t *testing.T) {
 	f := newRowsFixture(t)
@@ -300,10 +314,9 @@ func TestRows_RandomRowHistoriesMatchAPerRowModel(t *testing.T) {
 				at := clock
 				f.read(false, rowsTomb(id, gen, &at))
 				if m != nil && m.hasRef {
+					m.hasRef = false // the registry keeps it through its grace
 					if m.retiredAt.IsZero() {
-						m.hasRef, m.retiredAt = false, at // the registry keeps it through its grace
-					} else {
-						m.hasRef, m.inReg = false, false // the existing rule: an already-retired ref is dropped
+						m.retiredAt = at
 					}
 				}
 				check(fmt.Sprintf("evict(%s)", id.String()[35:]))

@@ -161,8 +161,8 @@ func TestW4CovApplyTombstoneOfAKnownRow(t *testing.T) {
 			ref{bucket: bucketGlobal, current: true}, &retired, true, true},
 		{"a global with no retire time is dropped",
 			ref{bucket: bucketGlobal, current: true}, nil, false, false},
-		{"an already-retired global is dropped",
-			ref{bucket: bucketGlobal, current: false}, &retired, false, false},
+		{"an already-retired global stays masked through its own grace",
+			ref{bucket: bucketGlobal, current: false}, &retired, true, true},
 		{"a per-run value is dropped",
 			ref{bucket: bucketRun, current: true}, &retired, false, false},
 	}
