@@ -312,6 +312,7 @@ func TestGovCovProfileWriteExempt(t *testing.T) {
 	}{
 		{"a metadata-only rename applies", `{"name":"renamed","ceiling":{"allowed_domains":["pypi.org","github.com"],"min_confinement_class":"CC2"}}`, all, true},
 		{"a narrowing write applies", govCovProfileBody("p", "pypi.org"), all, true},
+		{"an added inspection naming a detector sidecar is held", `{"name":"p","ceiling":{"allowed_domains":["pypi.org","github.com"],"min_confinement_class":"CC2","llm_inspection":{"mode":"block","detect_secrets":true,"detector_sidecar_url":"https://github.com/scan"}}}`, all, false},
 		{"an added local inspection applies", `{"name":"p","ceiling":{"allowed_domains":["pypi.org","github.com"],"min_confinement_class":"CC2","llm_inspection":{"mode":"block","detect_secrets":true}}}`, all, true},
 		{"a widening write is held", govCovProfileBody("p", "pypi.org", "github.com", "api.anthropic.com"), all, false},
 		{"a contact change is held even when the ceiling narrows", `{"name":"p","contact":{"owner":"elsewhere"},"ceiling":{"allowed_domains":["pypi.org"],"min_confinement_class":"CC2"}}`, all, false},

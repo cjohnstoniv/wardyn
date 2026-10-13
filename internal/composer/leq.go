@@ -167,11 +167,13 @@ func leqWorkspaceRepos(a, b []types.WorkspaceRepo) bool {
 
 // leqLLMInspection holds when a inspects wherever b does and does so in the
 // same way: dropping an inspection b names is a loosening, and two differing
-// inspections are not comparable.
+// inspections are not comparable. Adding one where b has none narrows only
+// while it names no detector sidecar: a sidecar is a host the proxy posts
+// spans of model traffic to, so adding one is never proven narrower.
 func leqLLMInspection(a, b *types.LLMInspectionSpec) bool {
 	switch {
 	case b == nil:
-		return true
+		return a == nil || strings.TrimSpace(a.DetectorSidecarURL) == ""
 	case a == nil:
 		return false
 	}

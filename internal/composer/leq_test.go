@@ -258,6 +258,9 @@ func TestLeqIsFalseForEveryWidening(t *testing.T) {
 		}, wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.LLMInspection = &types.LLMInspectionSpec{Mode: "warn"}
 		}},
+		{name: "an added inspection naming a detector sidecar", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
+			c.LLMInspection = &types.LLMInspectionSpec{Mode: "block", DetectorSidecarURL: " https://detector.corp.example/scan "}
+		}},
 		{name: "an added ui app", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.UIApps = append(slices.Clone(c.UIApps), types.UIApp{Name: "jupyter", Port: 8888})
 		}},
@@ -446,6 +449,9 @@ func TestLeqIsTrueForNarrowings(t *testing.T) {
 		}},
 		{"an added llm inspection", func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.LLMInspection = &types.LLMInspectionSpec{Mode: "block"}
+		}},
+		{"an added llm inspection with a blank sidecar", func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
+			c.LLMInspection = &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, DetectorSidecarURL: "  "}
 		}},
 		{"a shorter grant ttl", func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.EligibleGrants = slices.Clone(c.EligibleGrants)

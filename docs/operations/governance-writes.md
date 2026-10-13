@@ -66,6 +66,7 @@ an operator follows to turn one on and run the queue.
     - an availability `PUT` that leaves the restricted bit as it is,
     - and a user type's name or description edit that leaves its priority alone.
   - A profile update that changes the contact is held even when it narrows.
+  - So is one that adds an `llm_inspection` naming a `detector_sidecar_url` where the profile had none: the sidecar receives spans of the model traffic of everyone under the profile. An added inspection without one narrows.
   - Everything else is held, deletes and every assignment write included: deleting an assignment widens its subjects back to the deployment ceiling.
   - No grant, enforcement, availability, priority or role-mapping write has a narrowing exemption, because each can widen:
     - deleting a deny grant,

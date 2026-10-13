@@ -47,7 +47,7 @@ docs/operations/ownership-and-offboarding.md=2370 share=35
 # 0.9 F-1515: governance-writes.md 2754 adds 28 over 2726 for the `governance plan` bullet and example.
 # docs/operations/governance-writes.md 2888 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # docs/operations/governance-writes.md 2978 adds 90 over 2888: 0.9 final docs pass 3, measured: the six 0.9 rows of the held-writes table and the super-admin approvals.
-docs/operations/governance-writes.md=2978 share=35
+docs/operations/governance-writes.md=3012 share=35
 docs/operations/member-runs.md=1044 share=35
 docs/operations/user-drives.md=4804 share=35
 docs/operations/capabilities.md=3999 share=35
@@ -85,3 +85,4 @@ docs/operations/denials.md=4889 share=35
 # F-1508 C4: docs/operations/capabilities.md 3963 adds 102 over 3861 for the service_attach value.
 # docs/operations/capabilities.md 3999 adds 36 over 3963, measured: an egress_host grant is not authority for a private address.
 # docs/operations/three-roles.md 4113 adds 50 over 4063, measured: emptying ui_apps is not a narrowing, and an overlay that leaves none is refused.
+# docs/operations/governance-writes.md 3012 adds 34 over 2978, measured: an added inspection naming a detector sidecar is held for a second approver.
