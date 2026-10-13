@@ -93,7 +93,12 @@
 # docs/sdk.md 16942 adds 120 over 16822 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/sdk.md 17107 measured after G-090-cleanup slice F: docs rows that contradicted the code.
 # docs/sdk.md 17230 adds 123 over 17107 (the Azure CLI component): measured at merge.
+# docs/sdk.md 17189 adds 82 over 17107 (0.9 RP-3): runner_limits_invalid/required/unset and the runner_at_capacity row (revive, and a launch that loses the last room).
+# docs/sdk.md 17317 measured at merge: the Azure CLI component and runner limits together.
+# docs/sdk.md 17317 measured after merging the runner limits lane (17189 alone: runner_limits_invalid/required/unset and the runner_at_capacity row) with the Azure CLI component (17230 alone); their common base measures 17102, so the two add 87 and 128.
+# docs/sdk.md 17317 measured after merging the runner limits lane (above) over the Azure CLI component's 17230.
 # docs/sdk.md 17473 adds 243 over 17230 (0.9 member drives): the member drive calls and types; measured at merge.
+# docs/sdk.md 17560 adds 87 over 17473 (0.9 DS4-M5, after merging lane/090-RS-7); measured at merge.
 # docs/sdk.md 17560 measured after merging the Files-step seam lane (RP-3 runner limits reasons) into E6b-pdc over the member drives chain's 17473.
 docs/sdk.md=17560 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
