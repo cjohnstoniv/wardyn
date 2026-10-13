@@ -4487,7 +4487,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 
 - Turning on `drives.reclaim.enabled` lets a compromised wardynd delete any claim in the runs namespace.
 - That is already true of the admin reclaim verb. Read the chart's `drives.reclaim` comment first.
-- A self-hosted pool never mounts a member drive. The volume would sit on a person's laptop, out of the server's reach.
+- A person's own runner never mounts a member drive. The volume would sit on that person's laptop, out of the server's reach.
 
 **List and delete as an admin** (super admin).
 
