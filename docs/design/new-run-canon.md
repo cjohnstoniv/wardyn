@@ -457,6 +457,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MCP_CARD_TITLE` | mock | Add an MCP server |
 | `MCP_CARD_BODY` | mock | Connect a remote MCP server by URL. Its token stays with the proxy. |
 | `MCP_CARD_BUTTON` | mock | Add MCP server |
+| `CLI_GITHUB_BODY` | deviation (owner 2026-10-13, T9) | Actions and the REST API with gh; issue and pull request lists aren't supported yet. |
 | `CARD_ADDED(name)` | mock | {name} added. Its hosts and credential are included. |
 | `COMPONENT_ADDED` | mock | Added to this run. |
 | `COMPONENT_ADDED_NAMED(name)` | mock | {name} added to this run. |
