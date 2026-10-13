@@ -19,6 +19,7 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import type { RunIntent } from "../../draft/run-intent";
+import { checkFailureText } from "../../draft/use-intent-checks";
 import { ToolsStep } from "./tools-step";
 
 const h = vi.hoisted(() => ({
@@ -126,6 +127,13 @@ describe("Tools and access step", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(SENTENCE);
     expect(screen.queryByText(NR_TOOLS.STICKY_DONE)).toBeNull();
     expect(screen.queryByText(NR_TOOLS.SETUP_ALL_SET)).toBeNull();
+  });
+
+  it("a failure with no sentence uses the shared fallback", () => {
+    h.checks.preview = { result: undefined, current: false, error: new Error(""), busy: false, retry: vi.fn() } as never;
+    render(tree());
+    expect(screen.getByRole("alert")).toHaveTextContent(checkFailureText(new Error("")));
+    expect(screen.getByRole("alert")).toHaveTextContent("No reason was given.");
   });
 
   it("before the first answer there is no \"Nothing else to set up\"", () => {
