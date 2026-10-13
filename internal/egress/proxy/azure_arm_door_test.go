@@ -306,19 +306,28 @@ func TestAzureARM_ConfigValidation(t *testing.T) {
 	if err := (&Config{}).validateAzureARM(); err != nil {
 		t.Fatalf("no grant = %v", err)
 	}
+	// The rule without its door: the plain forward lane would credential it ungated.
+	if err := (&Config{Injection: []InjectionConfig{rule(armscope.Host, nil)}}).validateAzureARM(); err == nil {
+		t.Error("a CLI sign-in rule with no azure_arm was accepted")
+	}
+	other := egress.InjectionRule{Host: armscope.Host, Header: "Authorization", SecretName: "my-own-token"}
+	if err := (&Config{Injection: []InjectionConfig{{InjectionRule: other, GrantID: uuid.New()}}}).validateAzureARM(); err != nil {
+		t.Errorf("a policy's own credential for the host, with no Azure CLI row = %v, want accepted", err)
+	}
 	for name, mutate := range map[string]func(*Config){
-		"no CA":                    func(c *Config) { c.MITMCAKeyPEM = "" },
-		"no tenant":                func(c *Config) { c.AzureARM.TenantID = "" },
-		"a tenant with a slash":    func(c *Config) { c.AzureARM.TenantID = "a/b" },
-		"no subscription":          func(c *Config) { c.AzureARM.Subscriptions = nil },
-		"an uppercase id":          func(c *Config) { c.AzureARM.Subscriptions = []string{strings.ToUpper(armSub)} },
-		"an id twice":              func(c *Config) { c.AzureARM.Subscriptions = []string{armSub, armSub} },
-		"not a GUID":               func(c *Config) { c.AzureARM.Subscriptions = []string{"nope"} },
-		"no rule":                  func(c *Config) { c.Injection = nil },
-		"two rules":                func(c *Config) { c.Injection = append(c.Injection, rule("Management.Azure.com.", nil)) },
-		"a rule without TLS":       func(c *Config) { c.Injection[0].RequireTLS = false },
-		"a pinned rule":            func(c *Config) { c.Injection[0].PinPath = "/subscriptions" },
-		"a rule on the Entra host": func(c *Config) { c.Injection = append(c.Injection, rule(AzureLoginHost, nil)) },
+		"no CA":                       func(c *Config) { c.MITMCAKeyPEM = "" },
+		"no tenant":                   func(c *Config) { c.AzureARM.TenantID = "" },
+		"a tenant with a slash":       func(c *Config) { c.AzureARM.TenantID = "a/b" },
+		"no subscription":             func(c *Config) { c.AzureARM.Subscriptions = nil },
+		"an uppercase id":             func(c *Config) { c.AzureARM.Subscriptions = []string{strings.ToUpper(armSub)} },
+		"an id twice":                 func(c *Config) { c.AzureARM.Subscriptions = []string{armSub, armSub} },
+		"not a GUID":                  func(c *Config) { c.AzureARM.Subscriptions = []string{"nope"} },
+		"no rule":                     func(c *Config) { c.Injection = nil },
+		"two rules":                   func(c *Config) { c.Injection = append(c.Injection, rule("Management.Azure.com.", nil)) },
+		"a rule without TLS":          func(c *Config) { c.Injection[0].RequireTLS = false },
+		"a pinned rule":               func(c *Config) { c.Injection[0].PinPath = "/subscriptions" },
+		"a rule on the Entra host":    func(c *Config) { c.Injection = append(c.Injection, rule(AzureLoginHost, nil)) },
+		"the sign-in on another host": func(c *Config) { c.Injection = append(c.Injection, rule("graph.microsoft.com", nil)) },
 	} {
 		c := good()
 		mutate(c)

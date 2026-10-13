@@ -578,6 +578,10 @@ const (
 	CLIKindGitHub = "github"
 )
 
+// CLISecretPrefix starts every person's CLI sign-in capture:
+// wardyn-cli-<component id>-{sso,entra}.
+const CLISecretPrefix = "wardyn-cli-"
+
 // MaxCLIAzureSubscriptions bounds the subscriptions one Azure CLI row pins.
 const MaxCLIAzureSubscriptions = 16
 
