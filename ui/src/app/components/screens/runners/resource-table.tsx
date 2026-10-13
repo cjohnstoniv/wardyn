@@ -36,7 +36,7 @@ export function ResourceTable({ view, pool = false }: { view: ResView; pool?: bo
           <th className={`${HEAD} w-16`} />
           <th className={HEAD}>{RES.TOTAL}</th>
           <th className={HEAD}>{perRun}</th>
-          <th className={`${HEAD} w-[30%]`}>{RES.IN_USE}</th>
+          <th className={HEAD}>{RES.IN_USE}</th>
           <th className={HEAD}>{RES.AVAILABLE}</th>
         </tr>
       </thead>

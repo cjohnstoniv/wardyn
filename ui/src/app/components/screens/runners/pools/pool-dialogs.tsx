@@ -40,6 +40,7 @@ export function DeletePoolDialog({
   pool,
   mine,
   isDefault,
+  hasPolicy = false,
   waiting,
   onOpenChange,
   onDeleted,
@@ -48,7 +49,7 @@ export function DeletePoolDialog({
   /** The caller owns the pool: it goes through their own route and the wording is about their runners. */
   mine: boolean;
   isDefault: boolean;
-  /** Accepted for the contract. The server, not the console, refuses a delete while a use policy is set. */
+  /** The pool has a use policy: the server refuses the delete until it is cleared, so the dialog says so first. */
   hasPolicy?: boolean;
   /** Runs waiting for the pool, when its slot counts are known. */
   waiting?: number;
@@ -94,9 +95,9 @@ export function DeletePoolDialog({
             </div>
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {error && (
+        {(error || hasPolicy) && (
           <div role="alert" className="rounded-lg border border-danger bg-danger-subtle p-3 text-body text-foreground">
-            {error}
+            {error || POOL_DIALOG.DELETE_BLOCKED}
           </div>
         )}
         <AlertDialogFooter>
@@ -105,7 +106,7 @@ export function DeletePoolDialog({
               {POOL_DRAWER.CANCEL}
             </Button>
           </AlertDialogCancel>
-          <Button variant="destructive" disabled={busy} onClick={() => void run()}>
+          <Button variant="destructive" disabled={busy || hasPolicy} onClick={() => void run()}>
             {busy && <Loader2 className="size-3.5 animate-spin" />}
             {POOL_DIALOG.DELETE_CONFIRM}
           </Button>

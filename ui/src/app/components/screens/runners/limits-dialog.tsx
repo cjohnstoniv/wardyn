@@ -85,7 +85,7 @@ function Num({ id, label, vals, errs, reported, onChange }: { id: FieldId; label
   const err = errs[id];
   return (
     <div className="min-w-0 space-y-1">
-      <label htmlFor={`lm-${id}`} className="block text-meta font-normal text-muted-foreground">
+      <label htmlFor={`lm-${id}`} className="block text-xs font-medium text-foreground">
         {label}
       </label>
       <Input

@@ -164,7 +164,7 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
   const topError = top || Object.values(errors)[0];
   return (
     <div className={wrap}>
-      <PageHeader title={title} description={POOL_FORM.LEDE} />
+      <PageHeader title={title} description={<span className="block max-w-[68ch]">{POOL_FORM.LEDE}</span>} />
       <div className="mb-3">{backButton}</div>
       {topError && (
         <div role="alert" id="f-top" className="mb-3 rounded-lg border border-danger bg-danger-subtle p-3 text-body">

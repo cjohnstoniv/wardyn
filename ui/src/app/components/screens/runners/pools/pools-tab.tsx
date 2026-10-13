@@ -11,7 +11,6 @@
 import * as React from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { AlertTriangle } from "lucide-react";
 import { runnerPools } from "../../../../lib/api/runner-pools";
 import { getErrorMessage } from "../../../../lib/format";
 import type { RemoteRunnerView, RunnerKind, RunnerPool, RunnerPoolMemberView } from "../../../../lib/types/runner-pools";
@@ -28,7 +27,7 @@ import { usePoolsData, type PoolEntry } from "./use-pools-data";
 
 const GRID_ORG = "grid-cols-[minmax(150px,1.2fr)_minmax(130px,1fr)_minmax(190px,1.6fr)_minmax(120px,.9fr)_minmax(104px,.8fr)]";
 const GRID_USER = "grid-cols-[minmax(120px,1fr)_minmax(150px,1.3fr)_minmax(130px,1fr)_minmax(110px,.8fr)_minmax(130px,1.2fr)]";
-const ROW = "grid items-center gap-x-3.5 gap-y-1.5 px-1 max-[860px]:grid-cols-2";
+const ROW = "grid items-center gap-x-3.5 gap-y-1.5 px-1 text-body max-[860px]:grid-cols-2";
 // The column name over a cell, only where the grid has folded (the header row is hidden there).
 const CELL =
   "min-w-0 break-words max-[860px]:before:block max-[860px]:before:text-meta max-[860px]:before:font-semibold max-[860px]:before:uppercase max-[860px]:before:tracking-[0.06em] max-[860px]:before:text-muted-foreground max-[860px]:before:content-[attr(data-col)]";
@@ -220,18 +219,15 @@ export function PoolsTab({
   }
   if (status === "error") {
     return (
-      <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
-        <div className="flex size-12 items-center justify-center rounded-xl border border-danger/30 bg-danger-subtle text-danger">
-          <AlertTriangle className="size-5" />
-        </div>
-        <div className="space-y-1">
-          <h2 className="text-foreground">{POOLS.ERROR_TITLE}</h2>
-          <p className="max-w-sm text-sm text-muted-foreground">{POOLS.ERROR_BODY}</p>
-        </div>
-        <Button variant="outline" size="sm" onClick={retry}>
-          {STATES.RETRY}
-        </Button>
-      </div>
+      <Card
+        title={POOLS.ERROR_TITLE}
+        body={POOLS.ERROR_BODY}
+        action={
+          <Button variant="outline" size="sm" onClick={retry}>
+            {STATES.RETRY}
+          </Button>
+        }
+      />
     );
   }
 

@@ -410,7 +410,7 @@ export function MyRunnerCard() {
                   {note.text}
                 </p>
               )}
-              {live.length === 0 && !showToken && (
+              {live.length === 0 && (
                 <>
                   <p className="text-body text-foreground">{MY_RUNNER.NO_RUNNER}</p>
                   <p className="text-body text-muted-foreground">{MY_POOLS.NO_RUNNER_NEXT}</p>
