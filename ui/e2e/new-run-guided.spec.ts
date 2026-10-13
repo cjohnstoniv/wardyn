@@ -52,7 +52,7 @@ async function stubFlow(page: Page, roster: { harnesses?: SetupHarnessTool[]; se
     };
     await route.fulfill({ json: status });
   });
-  const pools = SCENARIO_POOLS.member.map((p) => ({
+  const pools = SCENARIO_POOLS.member.pools.map((p) => ({
     ...p,
     run_types: ["background", "interactive"],
     run_types_source: "pool",

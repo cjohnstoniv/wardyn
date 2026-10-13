@@ -27,7 +27,7 @@ import { HOSTING_LABEL, POOL_OFFLINE, RUN_WAIT, RUN_WAIT_REASON } from "../src/a
 
 const RUN_ID = "c3333333-3333-4333-8333-333333333333";
 const FULL = SCENARIO_PREFLIGHT.full;
-const [SHARED, LAPTOPS] = SCENARIO_POOLS.admin;
+const [SHARED, LAPTOPS] = SCENARIO_POOLS.admin.pools;
 const DOCUMENT = "api_version: wardyn/v1\nkind: Run\nintent:\n  shape: environment\n  experience: interactive\n  no_repositories_or_drives: true\n";
 
 const press = (page: Page, name: string) => page.getByRole("button", { name, exact: true }).click();
@@ -42,7 +42,7 @@ interface Seen {
 /** Pools, status and the run endpoints; a Waiting run when `queued`. */
 async function stub(page: Page, opts: { preflight: object | { status: number; body: object }; queued?: boolean }): Promise<Seen> {
   const seen: Seen = { preflight: [], create: [], killed: [] };
-  const pools = SCENARIO_POOLS.admin.map((p) => ({
+  const pools = SCENARIO_POOLS.admin.pools.map((p) => ({
     ...p,
     run_types: ["background", "interactive"],
     run_types_source: "pool",
