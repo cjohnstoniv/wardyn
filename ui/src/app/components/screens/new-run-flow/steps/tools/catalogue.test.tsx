@@ -74,6 +74,8 @@ describe("catalogue", () => {
       expect(card(CLI_CARD[kind].name).queryByRole("button")).toBeNull();
     }
     expect(card(CLI_CARD.azure.name).queryByRole("button")).toBeNull();
+    // The owner's wording (T9): gh reaches Actions and the REST API, not issue or pull request lists.
+    expect(card(CLI_CARD.github.name).getByText(NR_TOOLS.CLI_GITHUB_BODY)).toBeTruthy();
     expect(screen.queryByText("Ungranted")).toBeNull();
   });
 
