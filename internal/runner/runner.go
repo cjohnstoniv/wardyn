@@ -558,3 +558,17 @@ type DriveReclaimer interface {
 	// answers to the name.
 	ReclaimDrive(ctx context.Context, mount types.DriveMount) (DriveReclaimOutcome, error)
 }
+
+// ErrDriveLifecycleUnavailable is the sentinel a DriveLifecycleChecker returns
+// (and the orchestrator returns when no substrate can check) when this
+// deployment could not later destroy a drive it created.
+var ErrDriveLifecycleUnavailable = errors.New("runner: this substrate cannot delete the drives it would create")
+
+// DriveLifecycleChecker is an OPTIONAL Runner capability beside DriveReclaimer:
+// whether this substrate can both create and destroy a managed drive object of
+// its own backend. nil means yes. Member drive creation asks it first, so no
+// object is ever created that DriveReclaimer couldn't remove. Any other answer
+// wraps ErrDriveLifecycleUnavailable.
+type DriveLifecycleChecker interface {
+	CanManageDrives(ctx context.Context) error
+}
