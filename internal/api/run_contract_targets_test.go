@@ -262,7 +262,7 @@ func TestTargetOverlapSharedChainIsBounded(t *testing.T) {
 	}
 	elapsed := time.Since(start)
 	t.Logf("a chain of %d shared targets took %v", depth, elapsed)
-	if elapsed > time.Second {
+	if elapsed > raceSlowdown*time.Second {
 		t.Fatalf("a chain of %d shared targets took %v", depth, elapsed)
 	}
 }
