@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -181,46 +180,4 @@ func TestPG_RequirementWrite_OperatorOwnWriteAdmitted(t *testing.T) {
 	if mnt := mountFor(t, h.fr.lastSpec, composerWorkspaceTarget); mnt.ReadOnly || !strings.HasSuffix(mnt.Source, "/app") {
 		t.Errorf("bind %q read-only=%v; the operator workspace's own write must reach the driver", mnt.Source, mnt.ReadOnly)
 	}
-}
-
-// TestPG_RequirementWrite_OperatorSupplierGrantsBesideAMemberSupplier: an
-// operator workspace O requires its own write on P, and an older member
-// workspace M on P requires one too, outside the member's writable roots. The
-// index pulls M in and both rows grant the mount; O's row alone grants it, so
-// the run is admitted writable at every door, launched by the member or by an
-// operator. M's refusal is the answer only when M is the sole supplier.
-func TestPG_RequirementWrite_OperatorSupplierGrantsBesideAMemberSupplier(t *testing.T) {
-	root, project := memberProjectRoot(t)
-	h := newSupplierPG(t, root)
-	required := map[string]string{"write:" + project: types.OverrideRequired}
-	h.workspace(t, true, "m-"+uuid.NewString()[:8], project, required)
-	o := h.workspace(t, false, "o-"+uuid.NewString()[:8], project, required)
-
-	for n, member := range []bool{true, false} {
-		for door, want := range doorSuccess {
-			if w := h.send(t, member, http.MethodPost, door, launch(o, false)); w.Code != want {
-				t.Fatalf("member=%v %s: code = %d, want %d; body=%s", member, door, w.Code, want, w.Body.String())
-			}
-		}
-		deadline := time.Now().Add(5 * time.Second)
-		for h.fr.creates() <= n && time.Now().Before(deadline) {
-			time.Sleep(2 * time.Millisecond)
-		}
-		if mnt := mountFor(t, h.fr.spec(), composerWorkspaceTarget); mnt.ReadOnly {
-			t.Errorf("member=%v: bind %q is read-only; the operator workspace's own write must reach the driver", member, mnt.Source)
-		}
-	}
-}
-
-// creates and spec read the runner's counters under its lock.
-func (f *fakeRunner) creates() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.createCalls
-}
-
-func (f *fakeRunner) spec() runner.SandboxSpec {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.lastSpec
 }

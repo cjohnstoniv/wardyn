@@ -147,13 +147,11 @@ func (e *sourceRefusal) Error() string { return "workspace: " + e.err.Error() }
 // every stored holder, and there a directory no workspace holds, or a list
 // that cannot be read, refuses, since no owner can be named.
 //
-// The workspaces whose rows made the mount writable are held as well, whether
-// or not they are attached: a workspace pulled into the run because it holds
-// the same directory (referencedWorkspacesIn's index keeps one holder per
-// directory) can carry a required write row its member owner set, and the
-// attached holders alone would not answer for that member. One supplier whose
-// owner may write the mount is enough, since its row alone grants it; the
-// mount is refused only when none may.
+// The workspace whose row made the mount writable is held as well, whether or
+// not it is attached: a workspace pulled into the run because it holds the same
+// directory (referencedWorkspacesIn's index keeps one holder per directory) can
+// carry a required write row its member owner set, and the attached holders
+// alone would not answer for that member.
 // wasReadOnly is each mount's state before the fold, and suppliers the
 // workspaces whose write rows granted it, both by index.
 func (s *Server) requirementWriteRefusal(ctx context.Context, attached []types.Workspace, mounts []types.WorkspaceMount, wasReadOnly []bool, suppliers map[int][]types.Workspace) *sourceRefusal {
@@ -173,8 +171,10 @@ func (s *Server) requirementWriteRefusal(ctx context.Context, attached []types.W
 	}
 	var stored []types.Workspace // read once, and only for a mount no attached workspace holds
 	for k, wm := range widened {
-		if err := anySupplierAllowed(s.cfg.UserMounts, supplied[k], wm); err != nil {
-			return refuse(reasonWorkspaceSourceMountNotAllowed, err)
+		for _, ws := range supplied[k] {
+			if err := userMountAllowed(s.cfg.UserMounts, ws.OwnedBy, wm); err != nil {
+				return refuse(reasonWorkspaceSourceMountNotAllowed, err)
+			}
 		}
 		holders := localDirHolders(attached, wm.Source)
 		if len(holders) == 0 {
@@ -200,22 +200,6 @@ func (s *Server) requirementWriteRefusal(ctx context.Context, attached []types.W
 		}
 	}
 	return nil
-}
-
-// anySupplierAllowed is nil when one of suppliers' owners may write wm (none
-// recorded, also nil), else the first refusal.
-func anySupplierAllowed(policy runner.UserMountPolicy, suppliers []types.Workspace, wm types.WorkspaceMount) error {
-	var first error
-	for _, ws := range suppliers {
-		err := userMountAllowed(policy, ws.OwnedBy, wm)
-		if err == nil {
-			return nil
-		}
-		if first == nil {
-			first = err
-		}
-	}
-	return first
 }
 
 // localDirHolders is the workspaces of list that carry path as a local_dir source.
