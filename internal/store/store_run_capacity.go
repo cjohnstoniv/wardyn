@@ -91,11 +91,13 @@ type RunCapacity struct {
 
 // RunCapacityOpts parameterises RunCapacity. CurrentKind is the deployment's runner kind; Totals
 // carries only that kind's entry; other kinds appear only under ByRunner. UnschedulableReason maps a status_detail to its capacity-blocker
-// reason, or "" when it is not one.
+// reason, or "" when it is not one. LocalExecutor says whether a run's bound executor is one of this
+// deployment's own substrates; nil treats every executor as one.
 type RunCapacityOpts struct {
 	Now                 time.Time
 	CurrentKind         string
 	UnschedulableReason func(detail string) string
+	LocalExecutor       func(executor string) bool
 }
 
 var capacityAgeBounds = []struct {
@@ -156,14 +158,17 @@ func zeroNil(p *int64) int64 {
 // included; kept rows (lost_at set) count as Kept; PENDING and QUEUED rows appear only in States (a
 // QUEUED run holds no slot and no reservation, but wardyn_runs_active still reports it). A kept
 // row whose agent still runs (HoldsSandboxSQL: kept after an outage, before its end) also
-// holds its agent's reservation, without the proxy that was stopped.
+// holds its agent's reservation, without the proxy that was stopped. A run bound to a placement
+// outside this deployment (a registered runner, or an executor it does not run) is counted in States
+// and Kept only: its sizing, whatever runner_kind it was stamped with and even when unstamped, is not
+// this deployment's.
 func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, error) {
 	states := make([]string, 0, len(types.NonTerminalRunStates))
 	for _, st := range types.NonTerminalRunStates {
 		states = append(states, string(st))
 	}
 	rows, err := s.Pool.Query(ctx, `SELECT id, created_by, state, created_at, paused_at, lost_at, status_detail,
-		   runner_target, runner_kind, agent_cpu_request_millis, agent_cpu_limit_millis,
+		   runner_target, runner_kind, runner_id, placement, runner_pool_executor, agent_cpu_request_millis, agent_cpu_limit_millis,
 		   agent_memory_request_mib, agent_memory_limit_mib, proxy_cpu_millis, proxy_memory_mib,
 		   `+HoldsSandboxSQL+`
 		 FROM agent_runs WHERE state = ANY($1)`, states)
@@ -193,6 +198,8 @@ func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, er
 		var (
 			id                         uuid.UUID
 			owner, state, detail, rtgt string
+			placed, executor           string
+			runnerID                   *uuid.UUID
 			created                    time.Time
 			paused, lost               *time.Time
 			kind                       *string
@@ -200,7 +207,7 @@ func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, er
 			holds                      bool
 		)
 		if err := rows.Scan(&id, &owner, &state, &created, &paused, &lost, &detail, &rtgt, &kind,
-			&c, &cl, &m, &ml, &pc, &pm, &holds); err != nil {
+			&runnerID, &placed, &executor, &c, &cl, &m, &ml, &pc, &pm, &holds); err != nil {
 			return RunCapacity{}, fmt.Errorf("store: run capacity: scan: %w", err)
 		}
 		out.States[state]++
@@ -213,6 +220,10 @@ func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, er
 				continue
 			}
 			pc, pm = new(int64), new(int64) // its proxy was stopped
+		}
+		if runnerID != nil || placed == string(types.PlacementLocal) ||
+			(executor != "" && o.LocalExecutor != nil && !o.LocalExecutor(executor)) {
+			continue
 		}
 		if paused != nil {
 			out.Paused++

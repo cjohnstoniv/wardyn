@@ -426,7 +426,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	applySandboxSize(ctx, run, &policy, ceiling)
 	s.recordRunDiskCap(ctx, run.ID, policy.Resources)
 	// Record the reservation the driver will apply (best-effort, like the disk cap above).
-	s.recordRunSizing(ctx, run.ID, resourceLimitsToRunner(policy.Resources), len(plan.azure.gates) > 0)
+	if s.runOnDeployment(run) {
+		s.recordRunSizing(ctx, run.ID, resourceLimitsToRunner(policy.Resources), len(plan.azure.gates) > 0)
+	}
 	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
 	plan.azureCLI.closeWithheld(&policy, injections) // a door the ceiling withheld takes the hosts it opened with it
 
