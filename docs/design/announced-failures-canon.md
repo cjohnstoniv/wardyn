@@ -38,7 +38,7 @@ only as a duplicate of the now-visible text, never as the sole explanation.
 
 | Key | Status | String |
 |---|---|---|
-| Preflight error fallback (inline literal, `new-run-flow/draft/use-intent-checks.ts`) | Changed (#497) — was "Preflight failed.", spoken twice after the prefix | "No reason was given." |
+| Check error fallback (`checkFailureText`, `new-run-flow/draft/use-intent-checks.ts`; the preflight blocker and the Tools step's failed-preview alert both use it) | Changed (#497) — was "Preflight failed.", spoken twice after the prefix | "No reason was given." |
 | `OPERATOR_ONLY_REASON` (`wardyn/copy.ts`) | Reused | "Requires the admin role." |
 | `RECORDINGS.SEARCH_DISABLED_HINT` (`recording-copy.ts`) | New | "Session recording is disabled on this deployment — there is nothing to search." |
 | `RECORDINGS.EMPTY_TITLE` (`recording-copy.ts`) | Reused (mock naming) | "No recordings yet" |

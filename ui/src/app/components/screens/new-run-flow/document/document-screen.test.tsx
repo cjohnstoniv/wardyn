@@ -162,6 +162,15 @@ describe("run document editor", () => {
     expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).not.toHaveAttribute("aria-describedby");
   });
 
+  it("announces one error in the singular", async () => {
+    open({}, "/runs/new?step=document&format=json");
+    await screen.findByRole("textbox");
+    type('{"api_version":"wardyn/v1","kind":"Run","intent":{');
+    press(C.VALIDATE);
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("1 error found."));
+    expect(screen.getByText("1 issue must be fixed")).toBeInTheDocument();
+  });
+
   it("Validate alone marks a clean document valid, announces it, and stays put", async () => {
     open();
     await screen.findByRole("textbox");

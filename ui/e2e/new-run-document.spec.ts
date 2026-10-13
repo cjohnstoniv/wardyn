@@ -50,7 +50,7 @@ test.describe("New Run, the run document", () => {
     await editor(page).fill("shape: [agent_task");
     await press(page, NR_DOCUMENT.VALIDATE);
     await expect(panel(page)).toHaveAttribute("data-status", "issues");
-    await expect(panel(page).getByText(NR_DOCUMENT.ISSUES(1))).toBeVisible();
+    await expect(panel(page).getByText(NR_DOCUMENT.ISSUES_ONE)).toBeVisible();
     await expect(panel(page).getByText(NR_DOCUMENT.YAML_INVALID)).toBeVisible();
     expect(asked).toBe(false);
 
@@ -70,7 +70,7 @@ test.describe("New Run, the run document", () => {
     await openDocument(page);
     await editor(page).fill("api_version: wardyn/v1\nkind: Run\nintent:\n  shape: nonsense\n");
     await press(page, NR_DOCUMENT.VALIDATE);
-    await expect(panel(page).getByText(NR_DOCUMENT.ISSUES(1))).toBeVisible();
+    await expect(panel(page).getByText(NR_DOCUMENT.ISSUES_ONE)).toBeVisible();
     await expect(page.getByText(message)).toBeVisible();
 
     await press(page, NR_DOCUMENT.CONTINUE_REVIEW);
