@@ -307,7 +307,7 @@ func TestEnforcedConfinementFloorFollowsTheBaseline(t *testing.T) {
 		{"marked internal host", types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.example", Baseline: true}}}, types.CC2},
 		{"declared host", types.SiteConfig{Egress: &types.SiteEgress{BaselineHosts: []string{"llm.corp.example"}}}, types.CC2},
 	} {
-		got, err := enforcedConfinement(spec, types.CC2, nil, egressBaselineOf(tc.sc))
+		got, _, err := enforcedConfinement(spec, types.CC2, nil, "", egressBaselineOf(tc.sc))
 		if err != nil || got != tc.want {
 			t.Errorf("%s: enforced = %q, %v; want %q", tc.name, got, err, tc.want)
 		}

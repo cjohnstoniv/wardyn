@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -34,8 +35,11 @@ type runFitVerdict struct {
 // reserved, so a concurrent run can still take the room (the quota's own admission then refuses
 // the pod, and the run fails to start); and the node-size advisory compares requests to node
 // size, never to free capacity, because other namespaces' pods are invisible to this role.
-func (s *Server) refuseRunFit(w http.ResponseWriter, r *http.Request, spec types.RunPolicySpec) (warnings []string, refused bool) {
-	v := s.runFit(r.Context(), spec)
+//
+// A run that waits for a slot (waits) is refused only when a quota could never hold it, whatever is
+// left: it may fit once other runs finish. Promotion asks again with the room left at that time.
+func (s *Server) refuseRunFit(w http.ResponseWriter, r *http.Request, spec types.RunPolicySpec, lifetimeCap time.Duration, waits bool) (warnings []string, refused bool) {
+	v := s.runFit(r.Context(), spec, lifetimeCap, waits)
 	if v.refusal != "" {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonNamespaceQuotaExceeded, v.refusal)
 		return nil, true
@@ -43,42 +47,43 @@ func (s *Server) refuseRunFit(w http.ResponseWriter, r *http.Request, spec types
 	return v.warnings, false
 }
 
-// runFitSpec is the spec the fit check is asked about: the policy with the disk dispatch will
-// settle on (the org default filled in, the org and profile maximums applied), so a hard
-// ephemeral-storage quota is judged the same at both doors. It works on a copy: the fill must
-// never reach a launch spec (runner.Resources.DiskMiBFilled carries its provenance).
-func (s *Server) runFitSpec(ctx context.Context, spec types.RunPolicySpec, ceiling governanceCeiling) types.RunPolicySpec {
-	profileMax := 0
-	if ceiling.Profile != nil && !s.runUngoverned(ctx) {
-		profileMax = ceiling.Limits.MaxEphemeralDiskMiB
-	}
-	s.previewEphemeralDisk(ctx, &spec, profileMax)
+// runFitSpec is the spec the fit check is asked about: the policy with the main drive the run
+// gets (stepMainDrive), so a hard ephemeral-storage quota is judged the same at both doors and at
+// dispatch. It works on a copy: the number never reaches a launch spec.
+func (s *Server) runFitSpec(spec types.RunPolicySpec, md mainDrive) types.RunPolicySpec {
+	(&mainDriveDecision{MiB: md.MiB}).apply(&spec)
 	return spec
 }
 
 // runFit asks the substrate whether a run of the spec's size fits. A deployment whose runner has no
 // fit to check (docker, or no runner) has nothing to say. A check that errors is reported as an
-// unreadable quota: the quota is enforced when the run starts either way.
-func (s *Server) runFit(ctx context.Context, spec types.RunPolicySpec) runFitVerdict {
+// unreadable quota: the quota is enforced when the run starts either way. lifetimeCap is the run's
+// own cap (zero for none): a run with a cap carries a pod deadline, which selects the Terminating
+// quota scope, so the fit answers for the scope the pods will land in.
+func (s *Server) runFit(ctx context.Context, spec types.RunPolicySpec, lifetimeCap time.Duration, waits bool) runFitVerdict {
 	fc, ok := s.cfg.Runner.(runner.FitChecker)
 	if !ok {
 		return runFitVerdict{}
 	}
-	fit, err := fc.CheckFit(ctx, resourceLimitsToRunner(spec.Resources))
+	res := resourceLimitsToRunner(spec.Resources)
+	res.LifetimeCap = lifetimeCap
+	fit, err := fc.CheckFit(ctx, res)
 	if errors.Is(err, runner.ErrFitUnsupported) {
 		return runFitVerdict{}
 	}
 	if err != nil {
 		fit = runner.Fit{Quotas: runner.ReadUnavailable, Nodes: runner.ReadSkipped}
 	}
-	return judgeFit(fit)
+	return judgeFit(fit, waits)
 }
 
 // judgeFit turns a fit answer into sentences. The first quota that cannot hold the run decides
 // the refusal; with none, every quota the run nearly fills and every unreadable read is an
 // advisory. Empty, forbidden and unavailable stay three different results: an empty list says
-// nothing, the other two each say why the quotas were not checked.
-func judgeFit(fit runner.Fit) runFitVerdict {
+// nothing, the other two each say why the quotas were not checked. A run that waits for a slot
+// (waits) is refused only by a quota whose hard limit is below what the run needs, a run that can
+// never fit; one that merely exceeds what is left waits.
+func judgeFit(fit runner.Fit, waits bool) runFitVerdict {
 	var v runFitVerdict
 	switch fit.Quotas {
 	case runner.ReadForbidden:
@@ -87,7 +92,7 @@ func judgeFit(fit runner.Fit) runFitVerdict {
 		v.warnings = append(v.warnings, quotaUnreadableWarning("unavailable"))
 	}
 	for _, q := range fit.Quota {
-		if short := breachedAxes(q.Axes); len(short) > 0 {
+		if short := breachedAxes(q.Axes, waits); len(short) > 0 {
 			v.refusal = quotaExceededReason(q.Name, short)
 			return v
 		}
@@ -107,11 +112,12 @@ func judgeFit(fit runner.Fit) runFitVerdict {
 	return v
 }
 
-// breachedAxes are the quota's limits the run asks more of than is left.
-func breachedAxes(axes []runner.QuotaAxis) []runner.QuotaAxis {
+// breachedAxes are the quota's limits the run asks more of than is left, or, for a run that waits for
+// a slot (neverFits), more than the quota's hard limit could ever hold.
+func breachedAxes(axes []runner.QuotaAxis, neverFits bool) []runner.QuotaAxis {
 	var out []runner.QuotaAxis
 	for _, a := range axes {
-		if a.Need > a.Left {
+		if (neverFits && a.Hard > 0 && a.Need > a.Hard) || (!neverFits && a.Need > a.Left) {
 			out = append(out, a)
 		}
 	}

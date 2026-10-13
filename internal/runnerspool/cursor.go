@@ -163,28 +163,37 @@ func (s *Spool) AckOverflow(ctx context.Context, row Record) error {
 }
 
 type delivery struct {
-	send func(context.Context, Record) error
+	send func(context.Context, []Record) error
 }
 
+// Deliver sends the whole batch before waiting, so a batch costs one round trip.
 func (d delivery) Deliver(ctx context.Context, rows []Record) (int64, error) {
-	var seq int64
-	for _, row := range rows {
-		if err := d.send(ctx, row); err != nil {
-			return seq, err
-		}
-		seq = row.Seq
+	if len(rows) == 0 {
+		return 0, nil
 	}
-	return seq, nil
+	if err := d.send(ctx, rows); err != nil {
+		return 0, err
+	}
+	return rows[len(rows)-1].Seq, nil
 }
 
-// Replay uses the shared acknowledgement cursor. send must return nil only
-// after durable checked org ingestion (H2 Peer.EventAck), not after a write.
-func (s *Spool) Replay(ctx context.Context, send func(context.Context, Record) error) error {
+// Replay uses the shared acknowledgement cursor. send gets each batch in seq
+// order and must return nil only after durable checked org ingestion of every
+// row in it (H2 Peer.EventsAck), not after a write.
+//
+// Replay ends once it has delivered the head (rows and refused attempts) seen
+// when it started. Rows a live proxy appends meanwhile wait for the next call,
+// so a producer faster than the drain cannot keep Replay running.
+func (s *Spool) Replay(ctx context.Context, send func(context.Context, []Record) error) error {
 	if send == nil {
 		return errors.New("spool replay needs a durable acknowledgement")
 	}
 	c := ackcursor.Cursor[Record]{Source: s, Sink: delivery{send: send}, Store: s, Key: Record.Position, Batch: ReplayBatch}
 	if err := c.Load(ctx); err != nil {
+		return err
+	}
+	var head manifest
+	if err := s.locked(ctx, func() (e error) { head, e = s.readManifest(); return }); err != nil {
 		return err
 	}
 	for {
@@ -196,29 +205,23 @@ func (s *Spool) Replay(ctx context.Context, send func(context.Context, Record) e
 			return err
 		}
 		if overflow != nil {
-			if err := send(ctx, *overflow); err != nil {
+			if err := send(ctx, []Record{*overflow}); err != nil {
 				return err
 			}
 			if err := s.AckOverflow(ctx, *overflow); err != nil {
 				return err
 			}
 		}
-		more, err := c.Step(ctx)
-		if err != nil {
+		if _, err := c.Step(ctx); err != nil {
 			return err
 		}
-		if more {
-			continue
-		}
-		// A proxy can append while a batch is in flight. Check the durable tail,
-		// including newly refused attempts, before declaring replay caught up.
 		done := false
 		err = s.locked(ctx, func() error {
 			m, e := s.readManifest()
 			if e != nil {
 				return e
 			}
-			done = m.Ack.Seq == m.Last && m.Drops == m.Reported
+			done = m.Ack.Seq >= head.Last && m.Reported >= head.Drops
 			return nil
 		})
 		if err != nil {
@@ -228,7 +231,6 @@ func (s *Spool) Replay(ctx context.Context, send func(context.Context, Record) e
 			return nil
 		}
 	}
-
 }
 
 // Marshal is the bounded EVENT.spool payload; no run token authenticates replay.

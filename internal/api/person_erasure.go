@@ -56,8 +56,10 @@ type erasureIncompleteBody struct {
 // when that scope fails part way. want, when non-nil, is the person's names the
 // caller proved before anything ran (erasureNamesOf); the steps act on no others.
 func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport, want *erasureNames) *erasure.Orchestrator {
+	// Launch intents hold task text and inline component definitions, so the
+	// run_tasks and components steps erase them too, and so does run_setups.
 	steps := map[erasure.Scope]erasure.Step{
-		erasure.RunTasks:   s.eraseRunTasks,
+		erasure.RunTasks:   s.alsoEraseLaunchIntents(s.eraseRunTasks),
 		erasure.RunOutputs: s.eraseRunOutputsOf,
 		erasure.Recordings: s.eraseRecordingsOf,
 	}
@@ -76,10 +78,21 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport, want *era
 		}
 	}
 	if _, ok := s.cfg.Store.(store.ComponentStore); ok {
-		steps[erasure.Components] = s.eraseComponentsOf
+		steps[erasure.Components] = s.alsoEraseLaunchIntents(s.eraseComponentsOf)
+	}
+	if ts, ok := s.cfg.Store.(store.TemplateStore); ok {
+		// run_setups: the person's own templates, their grants, and their name on
+		// shared templates. The person is matched in the canonical form every
+		// template row stores.
+		steps[erasure.RunSetups] = s.alsoEraseLaunchIntents(func(ctx context.Context, person string) (any, error) {
+			return ts.EraseRunSetupsOf(ctx, types.CanonicalUserSubject(person))
+		})
 	}
 	if s.cfg.MaskManifests != nil {
 		steps[erasure.MaskCopies] = s.eraseMaskCopies
+	}
+	if _, ok := s.cfg.Store.(store.RunnerPoolStore); ok {
+		steps[erasure.RunnerPools] = s.eraseRunnerPoolsOf
 	}
 	if s.cfg.SubjectKeys != nil {
 		steps[erasure.AuditPersonalFields] = func(ctx context.Context, person string) (any, error) {
@@ -150,6 +163,29 @@ func (s *Server) eraseCredentialsScope(ctx context.Context, owner string, want *
 	return len(runs), s.eraseLocked(ctx, owner, rowID, want, rep)
 }
 
+// alsoEraseLaunchIntents runs step, then erases the person's launch intents and
+// counts them in the step's detail. The intents are matched on the runs'
+// created_by, as run_tasks matches the runs. A store that keeps no intents has
+// none to erase.
+func (s *Server) alsoEraseLaunchIntents(step erasure.Step) erasure.Step {
+	return func(ctx context.Context, person string) (any, error) {
+		detail, err := step(ctx, person)
+		ls, ok := s.cfg.Store.(store.LaunchIntentStore)
+		if err != nil || !ok {
+			return detail, err
+		}
+		n, err := ls.DeleteLaunchIntentsCreatedBy(ctx, person)
+		switch d := detail.(type) {
+		case map[string]any:
+			d["launch_intents"] = n
+		case store.RunSetupsErased:
+			d.LaunchIntents = n
+			detail = d
+		}
+		return detail, err
+	}
+}
+
 func (s *Server) personErasureStore() (store.PersonErasureStore, error) {
 	if pe, ok := s.cfg.Store.(store.PersonErasureStore); ok {
 		return pe, nil
@@ -157,14 +193,24 @@ func (s *Server) personErasureStore() (store.PersonErasureStore, error) {
 	return nil, fmt.Errorf("%w: the store cannot list a person's runs", erasure.ErrNotAvailable)
 }
 
-// eraseRunTasks blanks the task text of every run the person created.
+// eraseRunTasks blanks the task text of every run the person created. A run of theirs still waiting
+// in a pool's queue is cancelled first: its queue row holds the whole request, task and identity
+// snapshot included, and it would start under the very person being erased.
 func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) {
 	pe, err := s.personErasureStore()
 	if err != nil {
 		return nil, err
 	}
+	cancelled, err := s.cancelQueuedRunsOf(ctx, person, "person_erased")
+	if err != nil {
+		return nil, err
+	}
 	n, err := pe.BlankRunTasks(ctx, person)
-	return map[string]any{"runs": n}, err
+	out := map[string]any{"runs": n}
+	if cancelled > 0 {
+		out["queued_cancelled"] = cancelled
+	}
+	return out, err
 }
 
 // eraseRunOutputsOf erases the stored output of every run the person created:

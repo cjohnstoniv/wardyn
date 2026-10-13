@@ -28,13 +28,24 @@ export const NEW_RUN_REASON = {
   OVERRIDE_REFUSED: "override_refused",
   /** A field that changes the run's posture, which the server cannot honour yet: refused, never dropped. */
   REQUEST_FIELD_UNAVAILABLE: "request_field_unavailable",
+  WORKSPACE_SELECTION_INVALID: "workspace_selection_invalid",
+  WORKSPACE_REPO_UNKNOWN: "workspace_repo_unknown",
+  RUN_REF_INVALID: "run_ref_invalid",
 } as const;
 
 export type NewRunReason = (typeof NEW_RUN_REASON)[keyof typeof NEW_RUN_REASON];
 
+/**
+ * The workspace-door reasons a launch answers with that the Files step owns (internal/api/reasons.go,
+ * reasons_routes.go): a repository off the admitted list, and a workspace or its provider the caller's
+ * capabilities no longer open.
+ */
+export const WORKSPACE_DOOR_REASONS = ["workspace_repo_not_admitted", "capability_workspace", "capability_workspace_provider"] as const;
+
+export type WorkspaceDoorReason = (typeof WORKSPACE_DOOR_REASONS)[number];
+
 /** The closed set of placement and runner-link refusal reasons (internal/placement/reasons.go). */
 export const PLACEMENT_REASONS = [
-  "placement_required",
   "placement_unavailable",
   "placement_denied",
   "placement_credential",
@@ -43,6 +54,7 @@ export const PLACEMENT_REASONS = [
   "placement_capability",
   "placement_local_path",
   "runner_offline",
+  "runner_at_capacity",
   "runner_ambiguous",
   "runner_not_found",
   "runner_unclaimed",
@@ -75,6 +87,7 @@ export const WORKSPACE_REFUSAL = {
   IMAGE_CONFLICT: (a: string, b: string) => `${a} and ${b} use different base images. A run uses one image, so remove one of them.`,
   ADO_ORG_CONFLICT: (a: string, orgA: string, b: string, orgB: string) =>
     `${a} uses Azure DevOps organisation ${orgA} and ${b} uses ${orgB}. A run signs in to one Azure DevOps organisation, so remove one of them.`,
+  REPO_UNKNOWN: (repo: string, workspace: string) => `${repo} is not a repository of workspace ${workspace}.`,
 } as const;
 
 /** The reason a refusal belongs to, for the sentences above; the console matches on these, never on the text. */
@@ -85,6 +98,7 @@ export const WORKSPACE_REFUSAL_REASON = {
   PIN_CONFLICT: NEW_RUN_REASON.WORKSPACE_PIN_CONFLICT,
   IMAGE_CONFLICT: NEW_RUN_REASON.IMAGE_CONFLICT,
   ADO_ORG_CONFLICT: NEW_RUN_REASON.WORKSPACE_ADO_ORG_CONFLICT,
+  REPO_UNKNOWN: NEW_RUN_REASON.WORKSPACE_REPO_UNKNOWN,
 } as const;
 
 /** Every sentence function by key, for the parity test and for callers that pick one by reason. */
@@ -95,6 +109,7 @@ export const WORKSPACE_REFUSAL_BY_KEY: Record<keyof typeof WORKSPACE_REFUSAL, (.
   PIN_CONFLICT: (...a) => WORKSPACE_REFUSAL.PIN_CONFLICT(a[0], a[1], a[2], a[3]),
   IMAGE_CONFLICT: (...a) => WORKSPACE_REFUSAL.IMAGE_CONFLICT(a[0], a[1]),
   ADO_ORG_CONFLICT: (...a) => WORKSPACE_REFUSAL.ADO_ORG_CONFLICT(a[0], a[1], a[2], a[3]),
+  REPO_UNKNOWN: (...a) => WORKSPACE_REFUSAL.REPO_UNKNOWN(a[0], a[1]),
 };
 
 /**

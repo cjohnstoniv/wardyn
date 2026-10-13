@@ -9,7 +9,7 @@ This page is the service-identity half of the [#1508 design](invitations-service
 - `service:<name>`, `name` matching `^[a-z][a-z0-9-]{2,62}$`, so it is already in `CanonicalUserSubject` form.
 - `isReservedPrincipal` gains the `service:` prefix, so no sign-in, cookie, portal exchange or `POST /people` can become one.
 - A name is never reused and never renamed: a retired row stays, so no later identity inherits its grants, ceiling or audit history.
-- `POST /service-identities` refuses a name any principal-keyed table already holds (`409` `service_identity_name_taken`); the tables are listed in [Schema 0196](invitations-service-identities.md#61-schema-0196).
+- `POST /service-identities` refuses a name any principal-keyed table already holds (`409` `service_identity_name_taken`); the tables are listed in [Schema 0157](invitations-service-identities.md#61-schema-0157).
 
 ## 2. Record
 
@@ -118,7 +118,7 @@ The amended D11, with the re-rulings on review findings F3, F6 and F7.
 The carrier is the existing capability kind `capFeature`, with one new value in its closed set `featureValues`:
 
 - `service_attach`: "may enter the runs of service identities I sponsor". `capAllowed`, the one grant resolver, answers it at the sponsor arm.
-- Default off: migration 0196 writes a `capability_restrictions` row for (`feature`, `service_attach`). A restricted value admits only an allow naming it, so a `*` allow grants nobody.
+- Default off: migration `0167_service_attach_restriction` writes a `capability_restrictions` row for (`feature`, `service_attach`). A restricted value admits only an allow naming it, so a `*` allow grants nobody.
 - Admins turn it on per person, group or user type with an ordinary grant: `POST /permissions/grants`, kind `feature`, value `service_attach`.
 - That write is security tier, audited `capability.grant.create`, and held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`. A user-type deny blocks it as for any value.
 - That restriction is what "always needs the explicit grant" means; opening it to every sponsor is a deliberate `PUT /permissions/availability/feature/service_attach` back to Everyone, audited `capability.availability.write`.

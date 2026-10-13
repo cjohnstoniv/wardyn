@@ -41,6 +41,14 @@ describe("credentials.listAdminMintedTokens", () => {
     respond(403, { error: "no" });
     await expect(credentials.listAdminMintedTokens()).rejects.toMatchObject({ status: 403 });
   });
+  // #1508: the State column's toggle. The flag goes to the server and the client then keeps revoked rows.
+  it("sends include_revoked=true and keeps the revoked rows when asked", async () => {
+    const live = { id: "t-1", principal: "p", name: "ci", minted_by: "a", created_at: aheadByHours(-300), disposition: "needs_decision" };
+    const gone = { ...live, id: "t-2", revoked_at: aheadByHours(-1), disposition: "revoked" };
+    const spy = respond(200, [live, gone, { ...live, id: "t-3", minted_by: "p" }]);
+    await expect(credentials.listAdminMintedTokens(true)).resolves.toEqual([live, gone]);
+    expect(String(spy.mock.calls[0][0])).toMatch(/\/api\/v1\/tokens\?minted_for_others=true&include_revoked=true$/);
+  });
 });
 
 describe("credentials.revokeToken", () => {

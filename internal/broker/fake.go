@@ -46,6 +46,35 @@ type FakeGitHubMinter struct {
 	// RevokeErr, if set, is returned by Revoke; a failed revoke must not
 	// change the caller's own error (best-effort contract).
 	RevokeErr error
+
+	// Branches/DefaultBranch/BranchesTruncated/BranchesErr drive ListBranches;
+	// LastListedRepos records every repo it was asked about.
+	Branches          []string
+	DefaultBranch     string
+	BranchesTruncated bool
+	BranchesErr       error
+	LastListedRepos   []string
+
+	// AppPermissions is the App's own grant InstallationPermissions answers
+	// with; AppPermissionsErr, if set, is returned instead.
+	AppPermissions    map[string]string
+	AppPermissionsErr error
+}
+
+func (f *FakeGitHubMinter) InstallationPermissions(_ context.Context, _ string) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.AppPermissions, f.AppPermissionsErr
+}
+
+func (f *FakeGitHubMinter) ListBranches(_ context.Context, repo string, _ int) ([]string, string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.LastListedRepos = append(f.LastListedRepos, repo)
+	if f.BranchesErr != nil {
+		return nil, "", false, f.BranchesErr
+	}
+	return f.Branches, f.DefaultBranch, f.BranchesTruncated, nil
 }
 
 func (f *FakeGitHubMinter) MintInstallationToken(_ context.Context, repos []string, permissions map[string]string, ttl time.Duration) (string, time.Time, error) {

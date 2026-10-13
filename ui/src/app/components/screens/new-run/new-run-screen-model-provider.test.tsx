@@ -128,7 +128,7 @@ describe("NewRunScreen — R1: the sole candidate is sent even with no picker", 
     await waitFor(() => expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(bedrock.id));
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
-    expect(createRunMock.mock.calls[0][0].model_provider).toBe(bedrock.id);
+    expect(createRunMock.mock.calls[0][0].tools?.[0]?.model_provider).toBe(bedrock.id);
   });
 });
 
@@ -145,7 +145,7 @@ describe("NewRunScreen — R2: the admin default is preselected among several ca
     await waitFor(() => expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(gateway.id));
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
-    expect(createRunMock.mock.calls[0][0].model_provider).toBe(gateway.id);
+    expect(createRunMock.mock.calls[0][0].tools?.[0]?.model_provider).toBe(gateway.id);
   });
 });
 
@@ -172,7 +172,7 @@ describe("NewRunScreen — F2 (#612): the primary workspace's pin beats the rost
     await waitFor(() => expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(claude.id));
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
-    expect(createRunMock.mock.calls[0][0].model_provider).toBe(claude.id);
+    expect(createRunMock.mock.calls[0][0].tools?.[0]?.model_provider).toBe(claude.id);
   });
 
   // Opus review round 2 (F2) — the ORIGINAL bug, reproduced with a REAL race:
@@ -217,7 +217,7 @@ describe("NewRunScreen — F2 (#612): the primary workspace's pin beats the rost
     setField(await screen.findByLabelText("Title"), "Refund flow");
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
-    expect(createRunMock.mock.calls[0][0].model_provider).toBe(claude.id);
+    expect(createRunMock.mock.calls[0][0].tools?.[0]?.model_provider).toBe(claude.id);
   });
 
   // Conductor follow-up (train 21 gap) — `explicitPick.current = true` in
@@ -277,7 +277,7 @@ describe("NewRunScreen — F2 (#612): the primary workspace's pin beats the rost
     expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(claude.id);
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
-    expect(createRunMock.mock.calls[0][0].model_provider).toBe(claude.id);
+    expect(createRunMock.mock.calls[0][0].tools?.[0]?.model_provider).toBe(claude.id);
   });
 });
 
@@ -302,7 +302,7 @@ describe("NewRunScreen — R6 (QC-4): no default among several candidates — La
     expect(screen.getByRole("button", { name: /Launch run/ })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
-    expect(createRunMock.mock.calls[0][0].model_provider).toBe(anthropicKey.id);
+    expect(createRunMock.mock.calls[0][0].tools?.[0]?.model_provider).toBe(anthropicKey.id);
   });
 });
 
@@ -446,7 +446,7 @@ describe("NewRunScreen — a command run never carries a model provider", () => 
     setField(screen.getByLabelText("Command"), "echo hi");
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
-    expect(createRunMock.mock.calls[0][0].model_provider).toBeUndefined();
+    expect(createRunMock.mock.calls[0][0].tools?.[0]?.model_provider).toBeUndefined();
   });
 });
 
@@ -460,6 +460,6 @@ describe("NewRunScreen — a legacy install's absent model_providers", () => {
     setField(await screen.findByLabelText("Title"), "Legacy null block");
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
-    expect(createRunMock.mock.calls[0][0].model_provider).toBeUndefined();
+    expect(createRunMock.mock.calls[0][0].tools?.[0]?.model_provider).toBeUndefined();
   });
 });

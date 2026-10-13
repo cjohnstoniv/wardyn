@@ -53,24 +53,24 @@ func (s *buildEventStore) SetRunStatusDetail(_ context.Context, _ uuid.UUID, det
 	return nil
 }
 func (s *buildEventStore) SetRunImage(context.Context, uuid.UUID, string) error { return nil }
-func (s *buildEventStore) SetWorkspaceBuiltImage(context.Context, uuid.UUID, string, string) (types.Workspace, error) {
-	return types.Workspace{}, nil
+func (s *buildEventStore) SetWorkspaceBuiltImage(context.Context, uuid.UUID, string, string, string, *types.ImageBuild) (bool, error) {
+	return true, nil
 }
 
 // buildEventBuilder records which builder method ran into the same log.
 type buildEventBuilder struct{ log *buildEventLog }
 
-func (b buildEventBuilder) FinalizeBase(_ context.Context, _, tag string, _ io.Writer) (string, error) {
+func (b buildEventBuilder) FinalizeBase(_ context.Context, _, tag string, _ io.Writer, _ bool) (BuiltImage, error) {
 	b.log.add("build:FinalizeBase")
-	return tag, nil
+	return BuiltImage{Ref: tag}, nil
 }
-func (b buildEventBuilder) BuildDevcontainer(_ context.Context, _, _, tag string, _ io.Writer) (string, error) {
+func (b buildEventBuilder) BuildDevcontainer(_ context.Context, _, _, tag string, _ io.Writer) (BuiltImage, error) {
 	b.log.add("build:BuildDevcontainer")
-	return tag, nil
+	return BuiltImage{Ref: tag}, nil
 }
-func (b buildEventBuilder) BuildFromDevcontainerFiles(_ context.Context, _ map[string]string, tag string, _ io.Writer) (string, error) {
+func (b buildEventBuilder) BuildFromDevcontainerFiles(_ context.Context, _ map[string]string, tag string, _ io.Writer) (BuiltImage, error) {
 	b.log.add("build:BuildFromDevcontainerFiles")
-	return tag, nil
+	return BuiltImage{Ref: tag}, nil
 }
 
 const buildingLine = "detail:" + statusDetailBuilding
@@ -262,7 +262,7 @@ func TestBuildAnnounce_WorkspaceBuildPassesNoAnnounce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(src), "s.resolveWorkspaceImage(ctx, buildID, ws, logSink, nil)") {
-		t.Error("workspace_build.go must call resolveWorkspaceImage with a nil announce")
+	if !strings.Contains(string(src), "s.resolveWorkspaceImageWith(ctx, buildID, ws, logSink, nil,") {
+		t.Error("workspace_build.go must call resolveWorkspaceImageWith with a nil announce")
 	}
 }

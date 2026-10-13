@@ -556,8 +556,10 @@ func TestAttachPromotion_SSHObserverPromoted(t *testing.T) {
 	})
 	waitFor(t, "the ssh observer's session to open", func() bool { return fr.session(1) != nil })
 	observed := fr.session(1)
-	if n := observed.resizeCount(); n != 0 {
-		t.Fatalf("the ssh observer resized the shared tmux window (%d resizes) before it held anything", n)
+	// An observer follows the writer: the writer's own attach may still be fanning its 80x24 out to the
+	// queued observer when this runs, so that size is allowed; the observer's own 120x40 never is.
+	if other := observed.resizedOtherThan([2]uint16{80, 24}); len(other) != 0 {
+		t.Fatalf("the ssh observer resized the shared tmux window to %v before it held anything", other)
 	}
 	if o := fr.attachOpts(1); !o.Observer || o.Cols != 80 || o.Rows != 24 {
 		t.Fatalf("the ssh observer attach options = %+v, want an observer seeded at the web writer's 80x24", o)

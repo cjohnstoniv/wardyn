@@ -286,7 +286,11 @@ func (s *Server) handleSCIMCreateUser(w http.ResponseWriter, r *http.Request) {
 			s.scimServerError(w, r, "suspend the user", err)
 			return
 		}
-		ident, _ = st.GetIdentity(ctx, ident.ID)
+		var rerr error
+		if ident, rerr = st.GetIdentity(ctx, ident.ID); rerr != nil {
+			s.scimServerError(w, r, "read the suspended user", rerr)
+			return
+		}
 	}
 	writeSCIM(w, http.StatusCreated, scimResource(ident))
 }
@@ -348,9 +352,11 @@ func (s *Server) handleSCIMPutUser(w http.ResponseWriter, r *http.Request) {
 		writeSCIMError(w, perr)
 		return
 	}
-	s.applySCIMChange(w, r, st, ident, scimChange{
-		active: &u.Active, userName: u.UserName, emails: emailValues(u.Emails), externalID: u.ExternalID,
-	})
+	ch := scimChange{userName: u.UserName, emails: emailValues(u.Emails), externalID: u.ExternalID}
+	if u.ActiveSet {
+		ch.active = &u.Active
+	}
+	s.applySCIMChange(w, r, st, ident, ch)
 }
 
 // scimChange is what a PATCH or a PUT asks of one identity: the attributes Wardyn acts on.
@@ -433,7 +439,10 @@ func (s *Server) applySCIMChange(w http.ResponseWriter, r *http.Request, st scim
 			s.scimServerError(w, r, "suspend the user", err)
 			return
 		}
-		updated, _ = st.GetIdentity(ctx, ident.ID)
+		if updated, err = st.GetIdentity(ctx, ident.ID); err != nil {
+			s.scimServerError(w, r, "read the suspended user", err)
+			return
+		}
 	}
 	writeSCIM(w, http.StatusOK, scimResource(updated))
 }

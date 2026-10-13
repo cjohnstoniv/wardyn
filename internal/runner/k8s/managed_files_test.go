@@ -415,8 +415,8 @@ func TestCreateSandbox_ASecretFileIsRefusedBesideAShareDrive(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	cs.ClearActions()
 	spec := secretSandboxSpec()
-	spec.Drive = testDriveMount()
-	spec.Drive.Backend = types.DriveBackendK8sPVCStatic
+	spec.Drives = []types.DriveMount{*testDriveMount()}
+	spec.Drives[0].Backend = types.DriveBackendK8sPVCStatic
 	if _, err := d.CreateSandbox(context.Background(), spec); !errors.Is(err, errAgentSecretBesideShare) {
 		t.Fatalf("err = %v, want errAgentSecretBesideShare", err)
 	}
@@ -426,15 +426,15 @@ func TestCreateSandbox_ASecretFileIsRefusedBesideAShareDrive(t *testing.T) {
 		}
 	}
 
-	if err := agentSecretsAllowDrive(spec.ManagedFiles, testDriveMount()); err != nil {
+	if err := agentSecretsAllowDrive(spec.ManagedFiles, []types.DriveMount{*testDriveMount()}); err != nil {
 		t.Errorf("a managed drive beside a secret = %v, want allowed", err)
 	}
-	if err := agentSecretsAllowDrive(managedSandboxSpec().ManagedFiles, spec.Drive); err != nil {
+	if err := agentSecretsAllowDrive(managedSandboxSpec().ManagedFiles, spec.Drives); err != nil {
 		t.Errorf("a share drive beside a ceiling alone = %v, want allowed (today's behaviour)", err)
 	}
 	pod := &corev1.Pod{}
 	applyAgentSecretFSGroup(pod, spec.ManagedFiles)
-	applyDriveToPod(pod, testDriveMount(), "")
+	applyDriveToPod(pod, testDriveMount(), 0, "")
 	if agentFSGroup != driveFSGroup {
 		t.Fatalf("agentFSGroup %d != driveFSGroup %d: a pod with a secret and a managed drive would ask for two fsGroups", agentFSGroup, driveFSGroup)
 	}

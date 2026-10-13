@@ -30,8 +30,7 @@ func uiFile(t *testing.T, name string) []byte {
 func TestRefusalSentencesMatchGolden(t *testing.T) {
 	sentences := map[string]func(a []string) string{
 		"INVALID":                      func([]string) string { return InvalidMsg() },
-		"REQUIRED":                     func(a []string) string { return RequiredMsg(a[0]) },
-		"REQUIRED_ANY":                 func([]string) string { return RequiredMsg("") },
+		"REQUIRED":                     func([]string) string { return RequiredMsg() },
 		"NOT_FOUND":                    func([]string) string { return NotFoundMsg() },
 		"UNAVAILABLE":                  func(a []string) string { return UnavailableMsg(a[0]) },
 		"DEFAULT_UNAVAILABLE_PERSONAL": func([]string) string { return DefaultUnavailablePersonalMsg() },
@@ -40,7 +39,10 @@ func TestRefusalSentencesMatchGolden(t *testing.T) {
 		"NO_ELIGIBLE_MEMBER":           func(a []string) string { return NoEligibleMemberMsg(a[0]) },
 		"NO_OWN_RUNNER":                func(a []string) string { return NoOwnRunnerMsg(a[0]) },
 		"MEMBER_MISMATCH":              func(a []string) string { return MemberMismatchMsg(a[0], a[1]) },
-		"HOSTING_MISMATCH":             func(a []string) string { return HostingMismatchMsg(a[0], a[1]) },
+		"KIND_MISMATCH":                func(a []string) string { return KindMismatchMsg(a[0]) },
+		"ORG_POOL_SELF_HOSTED":         func([]string) string { return OrgPoolSelfHostedMsg() },
+		"REMOTE_NOT_CONFIGURED":        func(a []string) string { return RemoteNotConfiguredMsg(a[0]) },
+		"REMOTE_NOT_AVAILABLE":         func(a []string) string { return RemoteNotAvailableMsg(a[0]) },
 		"UNAVAILABLE_SERVER":           func([]string) string { return UnavailableServerMsg() },
 		"RUN_TYPE_NOT_ALLOWED":         func(a []string) string { return RunTypeNotAllowedMsg(a[0], types.RunnerPoolRunType(a[1])) },
 		"BARRIER_NOT_ALLOWED": func(a []string) string {
@@ -50,7 +52,13 @@ func TestRefusalSentencesMatchGolden(t *testing.T) {
 			}
 			return BarrierNotAllowedMsg(a[0], types.ConfinementClass(a[1]), allowed)
 		},
-		"WAIT_AT_CAPACITY": func(a []string) string { n, _ := strconv.Atoi(a[1]); return WaitAtCapacityMsg(a[0], n) },
+		"WAIT_AT_CAPACITY":         func(a []string) string { n, _ := strconv.Atoi(a[1]); return WaitAtCapacityMsg(a[0], n) },
+		"WAIT_NO_RUNNER_FREE":      func(a []string) string { return WaitNoRunnerFreeMsg(a[0]) },
+		"QUEUE_FULL":               func(a []string) string { n, _ := strconv.Atoi(a[1]); return QueueFullMsg(a[0], n) },
+		"FULL":                     func(a []string) string { n, _ := strconv.Atoi(a[1]); return FullMsg(a[0], n) },
+		"NO_ONLINE_RUNNER":         func(a []string) string { return NoOnlineRunnerMsg(a[0]) },
+		"RUNNER_AT_CAPACITY":       func(a []string) string { return RunnerAtCapacityMsg(a[0]) },
+		"WAIT_RUNNERS_AT_CAPACITY": func(a []string) string { return WaitRunnersAtCapacityMsg(a[0]) },
 	}
 	var golden []struct {
 		Key  string   `json:"key"`
@@ -104,20 +112,21 @@ func TestReasonsAreTheTypeScriptOnes(t *testing.T) {
 	}
 }
 
-func pool(name string, h types.RunnerPoolHosting, st types.RunnerPoolState) types.RunnerPool {
-	return types.RunnerPool{ID: uuid.New(), Name: name, HostingType: h, State: st, Revision: 3}
+func pool(name string, h types.RunnerPoolScope, st types.RunnerPoolState) types.RunnerPool {
+	return types.RunnerPool{ID: uuid.New(), Name: name, Scope: h, State: st, Revision: 3}
 }
 
 func idp(p types.RunnerPool) *uuid.UUID { return &p.ID }
 
 func TestResolvePrecedence(t *testing.T) {
-	remoteA := pool("A", types.RunnerPoolRemoteProvided, types.RunnerPoolActive)
-	remoteB := pool("B", types.RunnerPoolRemoteProvided, types.RunnerPoolActive)
-	selfC := pool("C", types.RunnerPoolSelfHosted, types.RunnerPoolActive)
-	selfOff := pool("Off", types.RunnerPoolSelfHosted, types.RunnerPoolDisabled)
-	gone := pool("Gone", types.RunnerPoolRemoteProvided, types.RunnerPoolDeleted)
+	remoteA := pool("A", types.RunnerPoolOrganization, types.RunnerPoolActive)
+	remoteB := pool("B", types.RunnerPoolOrganization, types.RunnerPoolActive)
+	selfC := pool("C", types.RunnerPoolUser, types.RunnerPoolActive)
+	selfOff := pool("Off", types.RunnerPoolUser, types.RunnerPoolDisabled)
+	gone := pool("Gone", types.RunnerPoolOrganization, types.RunnerPoolDeleted)
 	all := []types.RunnerPool{remoteA, remoteB, selfC, selfOff, gone}
-	org := types.RunnerPoolDefaults{PreferredHosting: types.RunnerPoolRemoteProvided, RemoteProvided: idp(remoteA), SelfHosted: idp(selfC)}
+	org := types.RunnerPoolDefaults{PoolID: idp(remoteA)}
+	pd := func(p types.RunnerPool) types.RunnerPoolDefaults { return types.RunnerPoolDefaults{PoolID: idp(p)} }
 
 	cases := []struct {
 		name     string
@@ -131,21 +140,21 @@ func TestResolvePrecedence(t *testing.T) {
 		msg      string
 	}{
 		{name: "organisation default seeds the choice", org: org, pool: &remoteA, sel: types.RunnerPoolSelectedOrg},
-		{name: "a person's default beats the organisation's", personal: types.RunnerPoolDefaults{RemoteProvided: idp(remoteB)}, org: org, pool: &remoteB, sel: types.RunnerPoolSelectedPersonal},
-		{name: "explicit pool beats both", choice: Choice{PoolID: idp(remoteB)}, personal: types.RunnerPoolDefaults{RemoteProvided: idp(remoteA)}, org: org, pool: &remoteB, sel: types.RunnerPoolSelectedExplicit},
-		{name: "personal preferred hosting beats the organisation's", personal: types.RunnerPoolDefaults{PreferredHosting: types.RunnerPoolSelfHosted}, org: org, pool: &selfC, sel: types.RunnerPoolSelectedOrg},
-		{name: "explicit hosting beats the personal preference", choice: Choice{Hosting: types.RunnerPoolRemoteProvided}, personal: types.RunnerPoolDefaults{PreferredHosting: types.RunnerPoolSelfHosted}, org: org, pool: &remoteA, sel: types.RunnerPoolSelectedOrg},
-		{name: "a refused personal default never falls through to the organisation's", personal: types.RunnerPoolDefaults{RemoteProvided: idp(gone)}, org: org, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedPersonal, msg: DefaultUnavailablePersonalMsg()},
-		{name: "a disabled personal default is refused", choice: Choice{Hosting: types.RunnerPoolSelfHosted}, personal: types.RunnerPoolDefaults{SelfHosted: idp(selfOff)}, org: org, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedPersonal, msg: DefaultUnavailablePersonalMsg()},
-		{name: "an unknown organisation default is refused", org: types.RunnerPoolDefaults{RemoteProvided: &uuid.UUID{1}, PreferredHosting: types.RunnerPoolRemoteProvided}, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedOrg, msg: DefaultUnavailableOrgMsg()},
-		{name: "a wrong-kind default is refused, not flipped to the other type", org: types.RunnerPoolDefaults{PreferredHosting: types.RunnerPoolRemoteProvided, RemoteProvided: idp(selfC)}, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedOrg, msg: DefaultUnavailableOrgMsg()},
-		{name: "no default at all asks for a choice", org: types.RunnerPoolDefaults{PreferredHosting: types.RunnerPoolSelfHosted}, reason: ReasonRequired, msg: RequiredMsg("Self-Hosted")},
-		{name: "no hosting type asks for a choice", reason: ReasonRequired, msg: RequiredMsg("")},
+		{name: "a person's default beats the organisation's", personal: pd(remoteB), org: org, pool: &remoteB, sel: types.RunnerPoolSelectedPersonal},
+		{name: "a person's own user pool default beats the organisation's", personal: pd(selfC), org: org, pool: &selfC, sel: types.RunnerPoolSelectedPersonal},
+		{name: "explicit pool beats both", choice: Choice{PoolID: idp(remoteB)}, personal: pd(remoteA), org: org, pool: &remoteB, sel: types.RunnerPoolSelectedExplicit},
+		{name: "a placement the default pool serves keeps it", choice: Choice{Placement: types.PlacementLocal}, personal: pd(selfC), org: org, pool: &selfC, sel: types.RunnerPoolSelectedPersonal},
+		{name: "a placement the default pool has no runner for is refused, never switched to another pool", choice: Choice{Placement: types.PlacementLocal}, org: org, reason: ReasonMemberMismatch, msg: KindMismatchMsg("A")},
+		{name: "a refused personal default never falls through to the organisation's", personal: pd(gone), org: org, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedPersonal, msg: DefaultUnavailablePersonalMsg()},
+		{name: "a disabled personal default is refused", personal: pd(selfOff), org: org, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedPersonal, msg: DefaultUnavailablePersonalMsg()},
+		{name: "an unknown organisation default is refused", org: types.RunnerPoolDefaults{PoolID: &uuid.UUID{1}}, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedOrg, msg: DefaultUnavailableOrgMsg()},
+		{name: "no default at all asks for a choice", reason: ReasonRequired, msg: RequiredMsg()},
+		{name: "a placement alone does not choose a pool", choice: Choice{Placement: types.PlacementRemote}, reason: ReasonRequired, msg: RequiredMsg()},
 		{name: "an inaccessible explicit pool is not found", choice: Choice{PoolID: &uuid.UUID{9}}, org: org, reason: ReasonNotFound, msg: NotFoundMsg()},
 		{name: "a deleted explicit pool is not found", choice: Choice{PoolID: idp(gone)}, org: org, reason: ReasonNotFound, msg: NotFoundMsg()},
 		{name: "a disabled explicit pool is unavailable", choice: Choice{PoolID: idp(selfOff)}, org: org, reason: ReasonUnavailable, msg: UnavailableMsg("Off")},
-		{name: "an explicit pool contradicting the hosting choice is a mismatch", choice: Choice{PoolID: idp(selfC), Hosting: types.RunnerPoolRemoteProvided}, org: org, reason: ReasonMemberMismatch, msg: HostingMismatchMsg("C", "Self-Hosted")},
-		{name: "a garbage hosting choice is invalid", choice: Choice{Hosting: "cloud"}, org: org, reason: ReasonInvalid, msg: InvalidMsg()},
+		{name: "an explicit pool with no runner of the asked placement is a mismatch", choice: Choice{PoolID: idp(selfC), Placement: types.PlacementRemote}, org: org, reason: ReasonMemberMismatch, msg: KindMismatchMsg("C")},
+		{name: "a garbage placement is invalid", choice: Choice{Placement: "cloud"}, org: org, reason: ReasonInvalid, msg: InvalidMsg()},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -159,7 +168,7 @@ func TestResolvePrecedence(t *testing.T) {
 				}
 				return
 			}
-			if refusal != nil || got.ID != tc.pool.ID || got.Selection != tc.sel || got.Revision != 3 || got.HostingType != tc.pool.HostingType {
+			if refusal != nil || got.ID != tc.pool.ID || got.Selection != tc.sel || got.Revision != 3 || got.Scope != tc.pool.Scope {
 				t.Fatalf("got %+v %+v, want pool %s via %s", got, refusal, tc.pool.Name, tc.sel)
 			}
 		})
@@ -167,8 +176,8 @@ func TestResolvePrecedence(t *testing.T) {
 }
 
 func TestResolveNeverPicksTheOnlyOrFirstPool(t *testing.T) {
-	only := pool("Only", types.RunnerPoolRemoteProvided, types.RunnerPoolActive)
-	if got, refusal := Resolve([]types.RunnerPool{only}, Choice{Hosting: types.RunnerPoolRemoteProvided}, types.RunnerPoolDefaults{}, types.RunnerPoolDefaults{}); refusal == nil || refusal.Reason != ReasonRequired {
+	only := pool("Only", types.RunnerPoolOrganization, types.RunnerPoolActive)
+	if got, refusal := Resolve([]types.RunnerPool{only}, Choice{Placement: types.PlacementRemote}, types.RunnerPoolDefaults{}, types.RunnerPoolDefaults{}); refusal == nil || refusal.Reason != ReasonRequired {
 		t.Fatalf("a sole pool was chosen for a request with no default: %+v", got)
 	}
 }
@@ -184,7 +193,7 @@ func TestOwnRunnerCandidatesAreOnlyThePersonsOwn(t *testing.T) {
 		{ID: notMember, Owner: "alice", State: types.RunnerClaimed},
 	}
 	member := func(id uuid.UUID) types.RunnerPoolMember { return types.RunnerPoolMember{RunnerID: &id} }
-	members := []types.RunnerPoolMember{member(theirs), member(mine2), member(unclaimed), member(mine1), member(revoked), member(mine1), {ExecutorID: "exec-1"}, member(uuid.New())}
+	members := []types.RunnerPoolMember{member(theirs), member(mine2), member(unclaimed), member(mine1), member(revoked), member(mine1), {RemoteRunnerID: "exec-1"}, member(uuid.New())}
 
 	got := OwnRunnerCandidates("alice", members, runners)
 	want := []uuid.UUID{mine1, mine2}
@@ -210,16 +219,18 @@ func TestOwnRunnerCandidatesAreOnlyThePersonsOwn(t *testing.T) {
 // "invalid" sentence, so a D-117 refusal built from any reason says its own words.
 func TestEveryReasonHasItsOwnSentence(t *testing.T) {
 	variants := map[Reason][]*Refusal{
-		ReasonRequired:           {{Reason: ReasonRequired, Hosting: types.RunnerPoolSelfHosted}},
+		ReasonRequired:           {{Reason: ReasonRequired}},
 		ReasonNotFound:           {{Reason: ReasonNotFound}},
 		ReasonUnavailable:        {{Reason: ReasonUnavailable, Name: "Build farm"}},
 		ReasonDefaultUnavailable: {{Reason: ReasonDefaultUnavailable}, {Reason: ReasonDefaultUnavailable, Source: types.RunnerPoolSelectedOrg}},
 		ReasonStale:              {{Reason: ReasonStale, Name: "Build farm"}},
-		ReasonNoEligibleMember:   {{Reason: ReasonNoEligibleMember, Name: "P"}, {Reason: ReasonNoEligibleMember, Name: "P", Hosting: types.RunnerPoolSelfHosted}},
-		ReasonMemberMismatch:     {{Reason: ReasonMemberMismatch, Name: "P", Hosting: types.RunnerPoolSelfHosted}, {Reason: ReasonMemberMismatch, Name: "P", Runner: "desk-1"}},
+		ReasonNoEligibleMember:   {{Reason: ReasonNoEligibleMember, Name: "P"}, {Reason: ReasonNoEligibleMember, Name: "P", Scope: types.RunnerPoolUser}},
+		ReasonMemberMismatch:     {{Reason: ReasonMemberMismatch, Name: "P", Scope: types.RunnerPoolUser}, {Reason: ReasonMemberMismatch, Name: "P", Runner: "desk-1"}},
 		ReasonPoolsUnavailable:   {{Reason: ReasonPoolsUnavailable}},
 		ReasonRunTypeNotAllowed:  {{Reason: ReasonRunTypeNotAllowed, Name: "P", RunType: types.RunnerPoolRunBackground}},
 		ReasonBarrierNotAllowed:  {{Reason: ReasonBarrierNotAllowed, Name: "P", Barrier: types.CC1, Allowed: []types.ConfinementClass{types.CC3}}},
+		ReasonQueueFull:          {{Reason: ReasonQueueFull, Name: "P", Count: 100}},
+		ReasonFull:               {{Reason: ReasonFull, Name: "P", Count: 2}},
 	}
 	for _, reason := range Reasons() {
 		if reason == ReasonInvalid {
@@ -240,9 +251,9 @@ func TestEveryReasonHasItsOwnSentence(t *testing.T) {
 		want string
 	}{
 		{&Refusal{Reason: ReasonMemberMismatch, Name: "Team laptops", Runner: "desk-1"}, MemberMismatchMsg("desk-1", "Team laptops")},
-		{&Refusal{Reason: ReasonMemberMismatch, Name: "Team laptops", Hosting: types.RunnerPoolSelfHosted}, HostingMismatchMsg("Team laptops", "Self-Hosted")},
-		{&Refusal{Reason: ReasonNoEligibleMember, Name: "Team laptops", Hosting: types.RunnerPoolSelfHosted}, NoOwnRunnerMsg("Team laptops")},
-		{&Refusal{Reason: ReasonNoEligibleMember, Name: "Build farm", Hosting: types.RunnerPoolRemoteProvided}, NoEligibleMemberMsg("Build farm")},
+		{&Refusal{Reason: ReasonMemberMismatch, Name: "Team laptops", Scope: types.RunnerPoolUser}, KindMismatchMsg("Team laptops")},
+		{&Refusal{Reason: ReasonNoEligibleMember, Name: "Team laptops", Scope: types.RunnerPoolUser}, NoOwnRunnerMsg("Team laptops")},
+		{&Refusal{Reason: ReasonNoEligibleMember, Name: "Build farm", Scope: types.RunnerPoolOrganization}, NoEligibleMemberMsg("Build farm")},
 		{&Refusal{Reason: ReasonPoolsUnavailable}, UnavailableServerMsg()},
 	} {
 		if got := c.r.Message(); got != c.want {

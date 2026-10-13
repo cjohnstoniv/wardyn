@@ -155,7 +155,7 @@ func newEventSinkWithSource(controlPlaneURL string, src tokenSource, bufferSize,
 		src = func() (string, error) { return "", nil }
 	}
 	s := &eventSink{
-		endpoint:       controlPlaneURL + "/api/v1/internal/groundtruth",
+		endpoint:       strings.TrimRight(controlPlaneURL, "/") + "/api/v1/internal/groundtruth",
 		tokSrc:         src,
 		client:         client,
 		ch:             make(chan types.AuditEvent, bufferSize),

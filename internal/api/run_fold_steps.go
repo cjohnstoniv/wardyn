@@ -6,8 +6,13 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"slices"
+	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // The steps of runFoldSteps, in its order. Each writes its own refusal and
@@ -56,43 +61,79 @@ func (s *Server) stepPolicy(f *runFold, rec *foldRecorder) bool {
 // reads no credential at all. ephemeralDirs is create's (WARDYN_EPHEMERAL_DIRS).
 func (s *Server) stepSeedWorkspace(f *runFold, rec *foldRecorder) bool {
 	ctx := f.r.Context()
+	var seed workspaceSeed
 	if f.mode == foldPreview {
 		var refusal *runRefusal
-		f.ephemeralDirs, refusal = s.seedAuthorizedWorkspace(ctx, f.r, &f.spec, f.req)
+		seed, refusal = s.seedAuthorizedWorkspace(ctx, f.r, &f.spec, f.req)
+		f.ephemeralDirs, f.seed = seed.ephemeralDirs, seed
 		return !refusal.write(s, f.w, f.r)
 	}
 	var ok bool
-	f.ephemeralDirs, ok = s.seedAndAdmitWorkspace(ctx, f.w, f.r, &f.spec, f.req, f.mode == foldCreate)
+	seed, ok = s.seedAndAdmitWorkspace(ctx, f.w, f.r, &f.spec, f.req, f.mode == foldCreate)
+	f.ephemeralDirs, f.seed = seed.ephemeralDirs, seed
 	return ok
 }
 
-// stepDrive resolves the run's user drive, after the onboarding gate: the
-// drive is per-principal and never appears in the spec, so it does not pass
-// through validateWorkspaceSources, but it must not answer before that gate
-// either. The refusals are the point at every door; the mount is create's.
-// The preview checks the read-only narrowing and leaves runner and share
-// readiness pending. No drive flag is a provable no-op: no store read at all.
+// stepDrive resolves the run's drives, after the onboarding gate: a drive is
+// per-principal and never appears in the spec, so it does not pass through
+// validateWorkspaceSources, but it must not answer before that gate either.
+// The refusals are the point at every door; the mounts are create's and
+// preflight's (seedRequestDrives). The preview checks the read-only narrowing
+// and leaves runner and share readiness pending.
 func (s *Server) stepDrive(f *runFold, rec *foldRecorder) bool {
 	if f.mode == foldPreview {
-		drive, refusal := s.authorizeRequestDrive(f.r, *f.req, f.ceiling)
+		drives, refusal := s.authorizeRequestDrives(f.r, *f.req, f.ceiling)
 		if refusal.write(s, f.w, f.r) {
 			return false
 		}
-		return drive == nil || !driveReadOnlyRefusal(*f.req, *drive).write(s, f.w, f.r)
+		for _, d := range drives {
+			if driveReadOnlyRefusal(d.narrow, d.resolved).write(s, f.w, f.r) {
+				return false
+			}
+		}
+		f.drives = drives
+		return true
 	}
 	var ok bool
-	f.driveMount, ok = s.seedRequestDrive(f.w, f.r, *f.req, f.ceiling)
+	f.drives, f.driveMounts, ok = s.seedRequestDrives(f.w, f.r, *f.req, f.ceiling)
 	return ok
 }
 
-// stepWorkspaces reads the workspaces the seeded spec references. Nothing after
-// this step changes the spec's mounts or repos, so the list stays valid for the
-// requirements fold, the egress unions and image resolution.
+// stepWorkspaces reads the run's workspaces: the attached ones, then each other
+// one the seeded spec references. Nothing after this step changes the spec's
+// mounts or repos, so the list stays valid for the requirements fold, the
+// egress unions and image resolution. Over every resolved target, the drive's
+// included, it refuses an overlap, a second Azure DevOps organisation or (when
+// the workspaces decide the image) a second base image, and resolves the one
+// starting folder, before anything is granted. It runs after the onboarding
+// gate, so every workspace a refusal names is one the caller may launch.
 func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
-	f.wsRefs = s.referencedWorkspaces(f.r.Context(), f.spec)
+	// One read serves the referenced workspaces and the index the onboarding
+	// gate held each policy source to; a failed read references none, as
+	// referencedWorkspaces does.
+	var all []types.Workspace
+	if s.cfg.Store != nil {
+		all, _ = s.cfg.Store.ListWorkspaces(f.r.Context())
+	}
+	f.wsRefs = attachedWorkspaceRefs(f.seed.attached, referencedWorkspacesIn(all, f.spec))
 	for _, ws := range f.wsRefs {
 		recordWorkspaceSources(rec, f.spec, ws)
 	}
+	var refusal *runRefusal
+	f.attachments, f.startFolder, refusal = s.runAttachments(*f.req, f.spec, f.wsRefs, indexWorkspacesBySource(all), f.seed,
+		driveTargets(f.drives))
+	return !refusal.write(s, f.w, f.r)
+}
+
+// stepHarnessSet holds every harness a run-mode request includes to the agent
+// capability, the org roster and the installed gate, and resolves the image
+// that carries the set (run_harness_set.go). Older clients pass untouched.
+func (s *Server) stepHarnessSet(f *runFold, rec *foldRecorder) bool {
+	set, image, refusal := s.harnessSetRefusalFor(f.r, *f.req, f.wsRefs)
+	if refusal.write(s, f.w, f.r) {
+		return false
+	}
+	f.harnesses, f.image = set, image
 	return true
 }
 
@@ -129,6 +170,25 @@ func (s *Server) stepPreviewEgress(f *runFold, rec *foldRecorder) bool {
 		recordSpecAdds(rec, types.RunPolicySpec{}, contributed, workspaceProvSource(ws))
 	}
 	unionPreviewWorkspaceEgress(&f.spec, f.wsRefs)
+	return true
+}
+
+// stepDerivedEgress gives the dry doors the hosts create's unionRunEgress adds
+// after the mint, from the same deriveRunEgress, so the preview's spec and
+// Review's access facts name what dispatch will allow. Last of the fold: no
+// gate or grade above it reads these hosts at create, so none reads them here.
+//
+// Only the lanes create would wire add hosts (lanesWiredFor). The site-config
+// SCM hosts stay create's: they are the operator's configured host list, which
+// no dry-door reader may see, so that lane is still pending.
+func (s *Server) stepDerivedEgress(f *runFold, rec *foldRecorder) bool {
+	policy := policyProvSource(f.source)
+	wired := lanesWiredFor(f.scmSite, f.req.Agent, repoLocatorsOf(f.spec.WorkspaceRepos), f.spec.EligibleGrants)
+	for _, d := range deriveRunEgress(&f.spec, f.wsRefs, f.req.Repo, types.SiteConfig{}, wired) {
+		for _, host := range d.added {
+			rec.add(fieldAllowed, host, derivedEgressSource(rec, f.spec.EligibleGrants, d.kind, host, policy), provEffectAdded)
+		}
+	}
 	return true
 }
 
@@ -203,7 +263,7 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 	floor := confinementFloorSpec(f.spec, f.comps)
 	if f.mode == foldCreate {
 		var ok bool
-		f.enforced, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, requestPlacement(*f.req), requestRunnerID(*f.req), floor, f.reqCC, f.baseline, f.place.offeredClasses())
+		f.enforced, f.confinementDefault, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, requestPlacement(*f.req), requestRunnerID(*f.req), floor, f.reqCC, f.baseline, f.place)
 		return ok && !f.place.barrierRefusal(f.enforced).write(s, f.w, f.r)
 	}
 	var advertised []types.ConfinementClass
@@ -221,12 +281,15 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 	if offered := f.place.offeredClasses(); offered != nil {
 		advertised = offered
 	}
-	enforced, err := enforcedConfinement(floor, f.reqCC, advertised, f.baseline)
+	enforced, source, err := enforcedConfinement(floor, f.reqCC, advertised, f.place.orgBarrier, f.baseline)
 	if err != nil {
 		writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return false
 	}
-	f.enforced = enforced
+	f.enforced, f.confinementDefault = enforced, source
+	if f.mode == foldPreflight {
+		f.barrierOptions = draftBarrierOptions(f.place, f.ceiling, floor, f.baseline)
+	}
 	return !f.place.barrierRefusal(enforced).write(s, f.w, f.r)
 }
 
@@ -236,7 +299,7 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 // runner_offline. The remote placement is the deployment's own executor and is
 // not asked.
 func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
-	return !s.placementCapabilityRefusal(f.r.Context(), *f.req, f.ceiling).write(s, f.w, f.r)
+	return !s.placementCapabilityRefusal(f.r.Context(), *f.req, f.place, f.ceiling).write(s, f.w, f.r)
 }
 
 // stepModelProvider makes the model-provider choice and refuses one whose
@@ -244,7 +307,14 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 // before autonomy because that gate grades this credential (#504). Only create
 // renews an expired AWS sign-in; the preview authorizes the selection without
 // reading any credential and leaves the choice pending when nothing pins it.
+//
+// Every other harness a run-mode request includes is judged the same way, as
+// its own agent with its own requested provider and no workspace pin (only the
+// primary inherits the pin), then the set is held to the one-lane invariant
+// (harnessProvidersConflict). modelCred is the most resident choice, so
+// autonomy grades the deepest credential the sandbox gets.
 func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
+	var ok bool
 	if f.mode == foldPreview {
 		choice, refusal := s.authorizeRunModelProvider(f.r, *f.req, f.wsRefs, true)
 		if refusal.write(s, f.w, f.r) {
@@ -259,16 +329,77 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 				return false
 			}
 		}
-		return true
+		f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, true, false, false)
+		grantHarnessProviders(f.harnesses, f.harnessChoices)
+		return ok
 	}
-	choice, ok := s.enforceRunModelProvider(f.w, f.r, *f.req, f.spec, f.wsRefs, f.mode == foldCreate)
-	if !ok {
+	var choice runProviderChoice
+	if choice, ok = s.enforceRunModelProvider(f.w, f.r, *f.req, f.spec, f.wsRefs, f.mode == foldCreate, f.queued); !ok {
 		return false
 	}
 	f.mpChoice = choice
 	f.modelCred = choice.modelCredential()
 	recordProviderHost(rec, choice, f.req.Agent)
-	return true
+	f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, false, f.mode == foldCreate, f.queued)
+	grantHarnessProviders(f.harnesses, f.harnessChoices)
+	if len(f.harnessChoices) > 1 {
+		f.modelCred = mostResident(f.harnessChoices).modelCredential()
+	}
+	return ok
+}
+
+// stepAWSCLIProfile refuses an AWS CLI component on a run whose model, or any
+// included harness's, comes through an AWS sign-in: a sandbox holds one AWS
+// profile. Dispatch refuses it too (authorAWSCLI); this is the doors' answer.
+func (s *Server) stepAWSCLIProfile(f *runFold, _ *foldRecorder) bool {
+	if f.comps.awsCLI() == nil || !runUsesAWSSignIn(f.mpChoice, f.harnessChoices) {
+		return true
+	}
+	writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonComponentCLIAWSWithBedrockSignIn, cliAWSWithBedrockSSORefusal)
+	return false
+}
+
+// judgeHarnessProviders is stepModelProvider's half for the harnesses of set
+// beside the primary (req.Agent), whose choice is primary: preview authorizes
+// the selection alone, the other doors also check the caller's own credential
+// (renew at create only, and never for a run that waits: queued), each as its own agent with its own requested
+// provider and no workspace pin; an AWS sign-in serves the primary alone
+// (harnessProviderNeedsPrimary). Then the set is held to the one-lane
+// invariant (harnessProvidersConflict). It writes its own refusal.
+func (s *Server) judgeHarnessProviders(w http.ResponseWriter, r *http.Request, req createRunRequest, spec types.RunPolicySpec,
+	set []types.RunHarness, rec *foldRecorder, primary runProviderChoice, preview, renew, queued bool,
+) ([]harnessChoice, bool) {
+	choices := make([]harnessChoice, 0, len(set))
+	for _, h := range set {
+		choice := primary
+		if h.Harness != req.Agent {
+			hreq := req
+			hreq.Agent, hreq.ModelProvider = h.Harness, h.ModelProviderID
+			var refusal *runRefusal
+			if choice, refusal = s.authorizeRunModelProvider(r, hreq, nil, preview); refusal.write(s, w, r) {
+				return nil, false
+			}
+			// Before the credential read, so the reason is this and never a sign-in.
+			if choice.chosen && harnessProviderNeedsPrimary(choice.provider) {
+				runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
+					harnessSignInNotPrimaryMsg(harnessName(h.Harness), choice.provider.ID)).forTool(h.Harness).write(s, w, r)
+				return nil, false
+			}
+			if !preview {
+				var ok bool
+				if choice, ok = s.enforceChosenModelProvider(w, r, hreq, spec, choice, renew, queued); !ok {
+					return nil, false
+				}
+			}
+			recordProviderHost(rec, choice, h.Harness)
+		}
+		choices = append(choices, harnessChoice{harness: h.Harness, choice: choice})
+	}
+	if a, b, conflict := harnessProvidersConflict(choices); conflict {
+		runError(http.StatusUnprocessableEntity, reasonHarnessProvidersConflict, harnessProvidersConflictMsg(harnessName(a), harnessName(b))).forTool(b).write(s, w, r)
+		return nil, false
+	}
+	return choices, true
 }
 
 // stepAutonomy is the posture-gated autonomy, resolved once and enforced at
@@ -291,6 +422,31 @@ func (s *Server) stepAutonomy(f *runFold, rec *foldRecorder) bool {
 	var ok bool
 	f.autonomy, f.autonomyWarns, f.scmSite, f.adoGrade, f.bedrockGrade, ok = s.resolveRunAutonomy(f.w, f.r, f.req, f.spec, f.wsRefs, f.enforced, f.ceiling, f.modelCred, f.comps, f.baseline)
 	return ok
+}
+
+// stepToolPolicy settles the tool lane and holds a person's tool rules to the
+// policy, after autonomy so every step that can put the run on the gated lane
+// has: a person's rule or default, or a policy rule that holds or blocks, puts
+// a background run of a gated harness there with "*: allow" under the person's
+// layer (applyToolPosture), and each
+// allow they send stands only where the policy, with the lane's default under
+// it, already allows the tool. An interactive Claude Code run's default, and
+// every tool name it carries, is held to what its managed settings can say
+// first, as step 5 greys it.
+func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
+	before := f.spec
+	s.applyToolPosture(f.req, &f.spec)
+	recordSpecAdds(rec, before, f.spec, provSource{Kind: provKindPosture})
+	if attendedDefaultRefusal(*f.req, f.autonomy.Level).write(s, f.w, f.r) || attendedToolNamesRefusal(*f.req, f.spec).write(s, f.w, f.r) {
+		return false
+	}
+	return !s.toolRulesWithinPolicyRefusal(*f.req, f.spec).write(s, f.w, f.r)
+}
+
+// stepGitHubCLIRepo is githubCLIRepoRefusal (runs_cli_github.go) at the doors that launch and
+// review. The preview shows the same fact as the card's reason instead.
+func (s *Server) stepGitHubCLIRepo(f *runFold, _ *foldRecorder) bool {
+	return !githubCLIRepoRefusal(f.comps, *f.req, f.spec, f.scmSite).write(s, f.w, f.r)
 }
 
 // stepRunEnd decides the run's end and its lifetime cap against the pool,
@@ -336,6 +492,9 @@ func (s *Server) stepPATNarrowing(f *runFold, rec *foldRecorder) bool {
 // stepHostCapacity is the same 503, reason and Retry-After at create and
 // Review; only create writes the audit row.
 func (s *Server) stepHostCapacity(f *runFold, rec *foldRecorder) bool {
+	if f.queued || f.promoted { // the run waits for them, or promotion has applied them
+		return true
+	}
 	return !writeHostCapacityRefusal(f.w, f.r, s.admitHostCapacity(f.r.Context(), principalFromRequest(f.r), "runs", f.mode == foldCreate))
 }
 
@@ -343,44 +502,98 @@ func (s *Server) stepHostCapacity(f *runFold, rec *foldRecorder) bool {
 // and no live token for a run that gets no row. CreateRunUnderCap still
 // decides a race at the cap.
 func (s *Server) stepRunCap(f *runFold, rec *foldRecorder) bool {
+	if f.queued || f.promoted { // the run waits for them, or promotion has applied them
+		return true
+	}
 	return !s.refuseRunCapFull(f.w, f.r)
 }
 
 // stepRunFit refuses a run the runs namespace's ResourceQuota cannot hold; its
 // advisories join the door's warnings. The quota's own admission stays the
-// authority on a race.
+// authority on a race. A run that waits for a slot is refused only when no quota
+// could ever hold it: it may fit once other runs finish, and promotion asks again.
 func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
+	if f.promoted {
+		return true
+	}
 	var refused bool
-	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.r.Context(), f.spec, f.ceiling))
+	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.spec, f.mainDrive), time.Duration(f.end.capSec)*time.Second, f.queued)
 	return !refused
 }
 
-// stepPlacementDenied is the deny_placements door: a request whose placement the
-// caller's governance profile denies is refused 403 placement_denied, naming
-// the profile, before any local-eligibility work. An unassigned member has no
-// profile and an operator's runs stand outside governance, so for both the list
-// is absent and every placement is permitted.
+// stepPlacementDenied is the deny_placements door for an unpooled request: one
+// whose placement the caller's governance profile denies is refused 403
+// placement_denied, naming the profile, before any local-eligibility work. Where
+// pools place runs, the request's placement is not the run's: resolvePlacement
+// holds the list against each kind of runner in the pool and asks the same door
+// when it leaves none (kindTargets). An unassigned member
+// has no profile and an operator's runs stand outside governance, so for both
+// the list is absent and every placement is permitted.
 func (s *Server) stepPlacementDenied(f *runFold, rec *foldRecorder) bool {
+	if s.poolsPlaceRuns() {
+		return true
+	}
 	return !s.placementDeniedRefusal(f.r.Context(), requestPlacement(*f.req), f.ceiling).write(s, f.w, f.r)
+}
+
+// stepResources writes the size placement applied into the resolved spec, so everything after it
+// (host capacity, the quota fit, the run row, dispatch) reads what the dry doors report. A cut is
+// said once; it never refuses.
+func (s *Server) stepResources(f *runFold, rec *foldRecorder) bool {
+	a := f.place.applied
+	rl := types.ResourceLimits{}
+	if f.spec.Resources != nil {
+		rl = *f.spec.Resources
+	}
+	rl.CPUMillis, rl.MemoryMiB = a.CPUMillis.Applied, a.MemoryMiB.Applied
+	f.spec.Resources = &rl
+	if (a.CPUMillis.Capped || a.MemoryMiB.Capped) && !slices.Contains(f.policyWarns, composer.WarnResourcesCapped) {
+		f.policyWarns = append(f.policyWarns, composer.WarnResourcesCapped)
+	}
+	return true
 }
 
 // stepLocalEligibility is before confinement/provider liveness: create may
 // renew a one-use AWS credential there. No local refusal may reach that phase.
-// The admitted plan supplies specific refusals; final unsupported-local stays
-// before mint/persistence until the resolver and runner route are implemented.
+// The admitted plan supplies specific refusals; an unpooled local request has
+// no runner to go to and is refused before mint/persistence. A pooled run is
+// judged at the placement stepPlacement decided, and is never moved to the
+// other kind when it is refused: where the pool chose the person's own runner
+// and a remote-hosted one could also have taken it, the sentence says how.
 func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
-	// A self-hosted pool decides the placement when the request left it out.
 	req := *f.req
 	if f.place.pooled {
 		req.Placement = f.place.placement
 	}
-	return !s.localPlacementRefusal(f.r, req, f.spec, f.ceiling, f.comps, f.driveMount, f.wsRefs).write(s, f.w, f.r)
+	var refusal *runRefusal
+	f.localDelivery, refusal = s.localPlacementRefusal(f.r, req, f.place.pooled, f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
+	if refusal != nil && refusal.status < http.StatusInternalServerError && f.place.remoteOffered {
+		refusal.body.Error += " " + remoteInsteadMsg(f.place.pool.Name)
+	}
+	return !refusal.write(s, f.w, f.r)
+}
+
+// stepDriveEligibility holds the run's drives to the kind of runner it got: no
+// drive mounts on a person's own runner, so a run stepPlacement left on one (its
+// pool has no remote-hosted runner for it, or the request asked for its own
+// runner) is refused, named, before anything is sized or minted.
+func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
+	if len(f.drives) == 0 || !f.place.pooled || f.place.placement != types.PlacementLocal {
+		return true
+	}
+	msg := driveNotInPoolMsg(f.drives[0].resolved.Drive.Name)
+	return !driveDenied(authz.Deny(authz.ReasonDriveNotInPool, "runs.drive", msg), msg).write(s, f.w, f.r)
 }
 
 // stepPlacement runs after the components and before the local-eligibility step: the confinement
 // floor it reads is the policy's and the components', and the plan it gates is the one that step judges.
 func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
-	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true}
+	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
+		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling)),
+		promoted: f.promoted, drives: len(f.drives) > 0}
+	if f.mode != foldCreate {
+		in.dryDoor = true
+	}
 	if f.mode == foldPreflight { // preflight parses the class inside stepConfinement, after this step
 		in.reqCC, in.reqCCOK = parseConfinementClass(f.req.ConfinementClass)
 	}
@@ -389,5 +602,45 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 		return false
 	}
 	f.place = plan
+	// A run bound for a capped pool waits for a slot instead of failing (the dry doors answer the same).
+	// The queue's own start replays the fold as promoted, and must not queue again.
+	if f.mode != foldPreview {
+		f.queued = plan.queues() && !f.promoted
+	}
+	return true
+}
+
+// stepMainDrive sizes the main drive after placement, which resolved the effective limits, and
+// refuses a size the run's policy writes on a runner that cannot cap disk. The dry doors write the
+// number into their answered spec, so spec.resources.disk_mib keeps showing what the run gets;
+// create writes nothing into the launch spec and hands dispatch the decision instead.
+func (s *Server) stepMainDrive(f *runFold, rec *foldRecorder) bool {
+	policyMiB, requestMiB := 0, 0
+	if f.spec.Resources != nil {
+		policyMiB = f.spec.Resources.DiskMiB
+	}
+	if f.req.Resources != nil {
+		requestMiB = f.req.Resources.DiskMiB
+	}
+	md := mainDriveFor(policyMiB, requestMiB, f.place.limits.DiskMiB)
+	if !md.Soft && md.MiB > 0 && s.runnerCannotCapDisk(f.r.Context(), *f.req, f.place) {
+		msg := mainDriveUnenforceableMsg()
+		if !f.place.pooled {
+			msg = mainDriveUnenforceableUnpooledMsg()
+		}
+		runError(http.StatusUnprocessableEntity, reasonMainDriveUnenforceable, msg).write(s, f.w, f.r)
+		return false
+	}
+	f.mainDrive = md
+	warn := composer.WarnResourcesCapped
+	if md.ClampedBy == client.MainDriveClampPolicy {
+		warn = warnDiskPolicyCut
+	}
+	if md.ClampedBy != "" && !slices.Contains(f.policyWarns, warn) {
+		f.policyWarns = append(f.policyWarns, warn)
+	}
+	if f.mode != foldCreate {
+		(&mainDriveDecision{MiB: md.MiB}).apply(&f.spec)
+	}
 	return true
 }

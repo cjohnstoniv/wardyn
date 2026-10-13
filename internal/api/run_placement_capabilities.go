@@ -13,6 +13,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -58,11 +59,9 @@ func (s *Server) placementCapabilities(ctx context.Context, p types.Placement, r
 	return placementCaps{Capabilities: caps, Source: types.RunEvidenceSubstrate}, nil
 }
 
-// requestCapabilities answers for the placement a request names, or, while it
-// names none, the intersection over every eligible placement. Only the remote
-// placement is eligible today: a local request is refused before any run is
-// placed (stepLocalEligibility), and D-117's resolver adds the local candidates
-// it admits to this list.
+// requestCapabilities answers for the placement a request names (a local one
+// for the runner it pins), or, while it names none, for the remote placement.
+// A pooled run's own candidates answer for it through runPlacement instead.
 func (s *Server) requestCapabilities(ctx context.Context, req createRunRequest) (placementCaps, error) {
 	if req.Placement != "" {
 		return s.placementCapabilities(ctx, req.Placement, requestRunnerID(req))
@@ -75,6 +74,25 @@ func (s *Server) requestCapabilities(ctx context.Context, req createRunRequest) 
 }
 
 func (s *Server) localRunnerCapabilities(ctx context.Context, id uuid.UUID) (placementCaps, error) {
+	if err := s.callerOwnsRunner(ctx, id); err != nil {
+		return placementCaps{}, err
+	}
+	return s.runnerStreamCapabilities(ctx, id)
+}
+
+// runCapabilities is what the substrate a dispatched run lands on can enforce: its bound runner's own
+// report for a run on a runner, else the deployment's executor. Create bound the run to its owner's own
+// runner (runPlacement.apply), so dispatch asks that runner and no request owner.
+func (s *Server) runCapabilities(ctx context.Context, run types.AgentRun) (runner.Capabilities, error) {
+	if run.RunnerID == nil {
+		return s.cfg.Runner.Capabilities(ctx)
+	}
+	pc, err := s.runnerStreamCapabilities(ctx, *run.RunnerID)
+	return pc.Capabilities, err
+}
+
+// runnerStreamCapabilities is the runner's last `caps` event; offline or silent is runner_offline.
+func (s *Server) runnerStreamCapabilities(ctx context.Context, id uuid.UUID) (placementCaps, error) {
 	offline := &placement.Refusal{Reason: placement.ReasonRunnerOffline, Field: "runner_id",
 		Detail: "your runner is offline or has not reported its capabilities yet"}
 	s.runnerStreams.subsMu.Lock()
@@ -105,6 +123,30 @@ func (s *Server) localRunnerCapabilities(ctx context.Context, id uuid.UUID) (pla
 		},
 		Source: types.RunEvidenceRunnerAsserted, Capacity: reported.Capacity, AllowedRoots: reported.AllowedRoots, impl: ep.sub,
 	}, nil
+}
+
+// callerOwnsRunner is nil when id is a claimed runner of the signed-in person, else runner_not_found:
+// another person's runner, a revoked or unclaimed one and an unknown id answer alike, before anything is
+// read from its stream, so no answer says whether it exists or is online.
+func (s *Server) callerOwnsRunner(ctx context.Context, id uuid.UUID) error {
+	notFound := &placement.Refusal{Reason: placement.ReasonRunnerNotFound, Field: "runner_id", Detail: "you have no runner with that id"}
+	owner := poolOwner(ctx)
+	st, ok := s.cfg.Store.(interface {
+		GetRunner(context.Context, uuid.UUID) (types.Runner, error)
+	})
+	if owner == "" || !ok || id == uuid.Nil {
+		return notFound
+	}
+	rn, err := st.GetRunner(ctx, id)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return notFound
+	case err != nil:
+		return err
+	case rn.Owner != owner || rn.State != types.RunnerClaimed:
+		return notFound
+	}
+	return nil
 }
 
 // intersectCapabilities is what a run can count on while its placement is still
@@ -193,22 +235,32 @@ func (c placementCaps) unsupportedDemand(d placementDemands) *placement.Refusal 
 }
 
 // placementCapabilityRefusal is stepPlacementCapability's answer: nil unless the
-// request lands on a runner that cannot answer or cannot meet a demand.
-func (s *Server) placementCapabilityRefusal(ctx context.Context, req createRunRequest, ceiling governanceCeiling) *runRefusal {
-	if requestPlacement(req) != types.PlacementLocal {
+// run lands on a runner that cannot answer or cannot meet a demand. A pooled run
+// lands on the placement its pool decided and on one of its eligible runners, so
+// every one of them must meet the demand; an unpooled one on the runner it names.
+func (s *Server) placementCapabilityRefusal(ctx context.Context, req createRunRequest, place runPlacement, ceiling governanceCeiling) *runRefusal {
+	runners := []uuid.UUID{requestRunnerID(req)}
+	p := requestPlacement(req)
+	if place.pooled {
+		p, runners = place.placement, place.eligibleRunners()
+	}
+	demands := requestDemands(ceiling)
+	if p != types.PlacementLocal || !demands.IdlePause {
 		return nil
 	}
-	pc, err := s.placementCapabilities(ctx, types.PlacementLocal, requestRunnerID(req))
-	var ref *placement.Refusal
-	switch {
-	case errors.As(err, &ref):
-	case err != nil:
-		return runServerError("read runner capabilities", err)
-	default:
-		ref = pc.unsupportedDemand(requestDemands(ceiling))
+	for _, id := range runners {
+		pc, err := s.placementCapabilities(ctx, types.PlacementLocal, id)
+		var ref *placement.Refusal
+		switch {
+		case errors.As(err, &ref):
+		case err != nil:
+			return runServerError("read runner capabilities", err)
+		default:
+			ref = pc.unsupportedDemand(demands)
+		}
+		if ref != nil {
+			return runError(ref.Reason.Status(), string(ref.Reason), ref.Error())
+		}
 	}
-	if ref == nil {
-		return nil
-	}
-	return runError(ref.Reason.Status(), string(ref.Reason), ref.Error())
+	return nil
 }

@@ -6,6 +6,7 @@ package types
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 )
 
 // ComponentKind names a thing a run can be given access to. Every kind but
@@ -60,7 +62,7 @@ const (
 	MaxComponentConfigKeys       = 32
 	MaxComponentConfigValueBytes = 4096
 	MaxComponentNameRunes        = 64
-	MaxComponentRefs             = 8
+	MaxComponentRefs             = 16
 	// MaxComponentEnvNameBytes bounds an env var or config key name;
 	// MaxComponentHeaderFormatBytes the header value template, which the
 	// proxy writes onto every injected request.
@@ -75,6 +77,11 @@ type ComponentDefinition struct {
 	Hosts   []string          `json:"hosts"`
 	Secrets []ComponentSecret `json:"secrets,omitempty"`
 	Config  map[string]string `json:"config,omitempty"`
+	// CLI marks an org row as a CLI credential card (azure, aws or github).
+	CLI *ComponentCLI `json:"cli,omitempty"`
+	// MCP makes the component a remote MCP server, which a run's harnesses
+	// reach only through the proxy's broker route (component_mcp.go).
+	MCP *ComponentMCP `json:"mcp,omitempty"`
 }
 
 // ComponentSecret is one secret a component carries.
@@ -142,6 +149,9 @@ type ComponentRef struct {
 	Repos []string `json:"repos,omitempty"`
 	// Access is read or write; empty reads as read.
 	Access string `json:"access,omitempty"`
+	// MCPHarnesses are the included harnesses (tools[].id) an MCP component's
+	// server is turned on for. Absent means every harness that can take it.
+	MCPHarnesses []string `json:"mcp_harnesses,omitempty"`
 }
 
 // The built-in Git provider components a ComponentRef may name.
@@ -183,6 +193,10 @@ type RunComponent struct {
 	// Version is the stored component's version at launch; 0 for inline.
 	Version    int                 `json:"version"`
 	Definition ComponentDefinition `json:"definition"`
+	// MCPHarnesses are the harnesses an MCP component's server was turned on
+	// for at launch. Not personal data: it survives an erasure, so a revive
+	// still knows which harness reached which server.
+	MCPHarnesses []string `json:"mcp_harnesses,omitempty"`
 }
 
 var (
@@ -210,6 +224,12 @@ func (d ComponentDefinition) Validate(validHost func(string) error, personDefine
 		return err
 	}
 	if err := validateComponentConfig(d.Config); err != nil {
+		return err
+	}
+	if err := d.validateCLI(personDefined); err != nil {
+		return err
+	}
+	if err := d.validateMCP(); err != nil {
 		return err
 	}
 	if len(d.Secrets) > MaxComponentSecrets {
@@ -468,7 +488,11 @@ func (r ComponentRef) Validate(validHost func(string) error) error {
 		return errors.New("org, repos and access: scope a builtin component only")
 	case (r.ID == nil) == (r.Inline == nil):
 		return errors.New("give exactly one of id and inline")
-	case r.ID != nil:
+	}
+	if err := validMCPHarnesses(r.MCPHarnesses); err != nil {
+		return err
+	}
+	if r.ID != nil {
 		if r.Name != "" {
 			return errors.New("name: labels an inline component only")
 		}
@@ -494,8 +518,8 @@ const (
 // validateBuiltin checks a built-in Git provider reference's shape. That the
 // person may attach it, and what it grants, is the caller's.
 func (r ComponentRef) validateBuiltin() error {
-	if r.ID != nil || r.Inline != nil || r.Name != "" {
-		return errors.New("builtin: give it alone, without id, inline or name")
+	if r.ID != nil || r.Inline != nil || r.Name != "" || r.MCPHarnesses != nil {
+		return errors.New("builtin: give it alone, without id, inline, name or mcp_harnesses")
 	}
 	if r.Builtin != ComponentBuiltinGitHub && r.Builtin != ComponentBuiltinAzureDevOps {
 		return fmt.Errorf("builtin: %q is not one of %s, %s", r.Builtin, ComponentBuiltinGitHub, ComponentBuiltinAzureDevOps)
@@ -544,4 +568,269 @@ func ValidateComponentRefs(refs []ComponentRef, validHost func(string) error) er
 // characters, which excludes line breaks and every other control character.
 func printable(s string) bool {
 	return utf8.ValidString(s) && strings.IndexFunc(s, func(r rune) bool { return !unicode.IsPrint(r) }) < 0
+}
+
+// CLI kinds a component row can carry. gcloud and kubectl are not built.
+const (
+	CLIKindAzure  = "azure"
+	CLIKindAWS    = "aws"
+	CLIKindGitHub = "github"
+)
+
+// MaxCLIAzureSubscriptions bounds the subscriptions one Azure CLI row pins.
+const MaxCLIAzureSubscriptions = 16
+
+// ComponentCLI is the credential an org row gives a run's command-line tool.
+// Kind names which of the three arms is set, and only that one is.
+type ComponentCLI struct {
+	Kind   string     `json:"kind"` // azure | aws | github
+	Azure  *CLIAzure  `json:"azure,omitempty"`
+	AWS    *CLIAWS    `json:"aws,omitempty"`
+	GitHub *CLIGitHub `json:"github,omitempty"`
+}
+
+// CLIGitHub scopes the GitHub CLI to the run's repositories by capability.
+type CLIGitHub struct {
+	Capabilities []ghscope.Capability `json:"capabilities"`
+}
+
+// CLIGitHubRefused is the closed list of grantable capabilities a GitHub CLI
+// row never carries: each changes a repository's or an organisation's
+// settings, deletes packages, or administers Actions, and the CLI's token
+// acts as the organisation's App rather than as the person.
+var CLIGitHubRefused = []ghscope.Capability{ghscope.CapRepoAdmin, ghscope.CapOrgAdmin, ghscope.CapPackagesWrite, ghscope.CapActionsAdmin}
+
+// CLIGitHubCapabilities is caps without anything a GitHub CLI token may not
+// hold: a capability that is not grantable, or one CLIGitHubRefused names.
+func CLIGitHubCapabilities(caps []ghscope.Capability) []ghscope.Capability {
+	return slices.DeleteFunc(slices.Clone(caps), func(c ghscope.Capability) bool {
+		return !c.Grantable() || slices.Contains(CLIGitHubRefused, c)
+	})
+}
+
+// CLIAWS pins one IAM Identity Center account and permission set.
+type CLIAWS struct {
+	StartURL  string `json:"start_url"`  // the access portal, https
+	SSORegion string `json:"sso_region"` // where the portal lives
+	AccountID string `json:"account_id"` // 12 digits
+	RoleName  string `json:"role_name"`  // the permission set name
+	Region    string `json:"region"`     // the CLI's default region
+}
+
+// CLIAzure pins subscriptions and whether the CLI may change them.
+type CLIAzure struct {
+	Subscriptions []string `json:"subscriptions"` // 1..MaxCLIAzureSubscriptions GUIDs
+	Access        string   `json:"access"`        // read (GET and HEAD only) | write
+}
+
+var (
+	cliAWSAccountRE = regexp.MustCompile(`^[0-9]{12}$`)
+	cliAWSRegionRE  = regexp.MustCompile(`^[a-z]{2}(-[a-z0-9]+)+-[0-9]$`)
+	cliAWSRoleRE    = regexp.MustCompile(`^[A-Za-z0-9+=,.@_-]{1,64}$`)
+)
+
+// validateCLI checks the cli block: an org row only, carrying no secrets, with
+// its own kind's arm and no other.
+func (d ComponentDefinition) validateCLI(personDefined bool) error {
+	c := d.CLI
+	if c == nil {
+		return nil
+	}
+	if personDefined {
+		return errors.New("cli: only an organisation component can carry a CLI credential")
+	}
+	if len(d.Secrets) > 0 {
+		return errors.New("cli: a CLI row carries no secrets; its credential is the run's")
+	}
+	arms := map[string]bool{CLIKindAzure: c.Azure != nil, CLIKindAWS: c.AWS != nil, CLIKindGitHub: c.GitHub != nil}
+	have, ok := arms[c.Kind]
+	if !ok {
+		return fmt.Errorf("cli.kind: %q is not azure, aws or github", c.Kind)
+	}
+	if !have {
+		return fmt.Errorf("cli.%s: required for kind %q", c.Kind, c.Kind)
+	}
+	for kind, set := range arms {
+		if set && kind != c.Kind {
+			return fmt.Errorf("cli.%s: not allowed for kind %q", kind, c.Kind)
+		}
+	}
+	switch c.Kind {
+	case CLIKindAzure:
+		return c.Azure.validate()
+	case CLIKindAWS:
+		return c.AWS.validate()
+	}
+	return c.GitHub.validate()
+}
+
+func (g *CLIGitHub) validate() error {
+	if len(g.Capabilities) == 0 {
+		return errors.New("cli.github.capabilities: at least one is required")
+	}
+	for i, cp := range g.Capabilities {
+		if !cp.Grantable() {
+			return fmt.Errorf("cli.github.capabilities[%d]: %q is not grantable; want one of: %s", i, cp, ghscope.GrantableCapabilityList())
+		}
+		if slices.Contains(CLIGitHubRefused, cp) {
+			return fmt.Errorf("cli.github.capabilities[%d]: %q is not available to the GitHub CLI", i, cp)
+		}
+		if slices.Contains(g.Capabilities[:i], cp) {
+			return fmt.Errorf("cli.github.capabilities[%d]: %q is listed twice", i, cp)
+		}
+	}
+	return nil
+}
+
+// cliAWSPortalDomain is the AWS access portal's domain. The start URL is
+// written into the sandbox's ~/.aws/config and the person signs in at it, so a
+// row may name only an IAM Identity Center portal, never any https host.
+const cliAWSPortalDomain = ".awsapps.com"
+
+func (a *CLIAWS) validate() error {
+	u, err := url.Parse(a.StartURL)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Port() != "" ||
+		!strings.HasSuffix(u.Hostname(), cliAWSPortalDomain) || len(u.Hostname()) == len(cliAWSPortalDomain) ||
+		strings.ContainsAny(a.StartURL, " \t\r\n") {
+		return errors.New("cli.aws.start_url: must be your AWS access portal URL, https://<name>.awsapps.com/start")
+	}
+	switch {
+	case !cliAWSRegionRE.MatchString(a.SSORegion):
+		return fmt.Errorf("cli.aws.sso_region: %q is not a region", a.SSORegion)
+	case !cliAWSAccountRE.MatchString(a.AccountID):
+		return errors.New("cli.aws.account_id: must be 12 digits")
+	case !cliAWSRoleRE.MatchString(a.RoleName):
+		return fmt.Errorf("cli.aws.role_name: %q is not a permission set name", a.RoleName)
+	case !cliAWSRegionRE.MatchString(a.Region):
+		return fmt.Errorf("cli.aws.region: %q is not a region", a.Region)
+	}
+	return nil
+}
+
+func (a *CLIAzure) validate() error {
+	if n := len(a.Subscriptions); n == 0 || n > MaxCLIAzureSubscriptions {
+		return fmt.Errorf("cli.azure.subscriptions: must list 1 to %d subscriptions", MaxCLIAzureSubscriptions)
+	}
+	for i, sub := range a.Subscriptions {
+		if _, err := uuid.Parse(sub); err != nil || len(sub) != 36 {
+			return fmt.Errorf("cli.azure.subscriptions[%d]: %q is not a subscription GUID", i, sub)
+		}
+		if slices.Contains(a.Subscriptions[:i], sub) {
+			return fmt.Errorf("cli.azure.subscriptions[%d]: %q is listed twice", i, sub)
+		}
+	}
+	if a.Access != ComponentAccessRead && a.Access != ComponentAccessWrite {
+		return fmt.Errorf("cli.azure.access: %q is not read or write", a.Access)
+	}
+	return nil
+}
+
+// ComponentMCPTransportHTTP is the one MCP transport a component may use:
+// streamable HTTP.
+const ComponentMCPTransportHTTP = "http"
+
+// Bounds on an MCP component and on what one reference turns it on for.
+const (
+	MaxComponentMCPURLBytes  = 2048
+	MaxComponentMCPHarnesses = 8
+)
+
+// ComponentMCP is a remote MCP server. The run's harnesses never reach URL
+// itself: each is configured with the proxy's broker route, which adds the
+// server's header credential, applies the run's tool rules to its tools and is
+// the only network path to the server.
+type ComponentMCP struct {
+	// URL is the server's streamable HTTP address: https, no userinfo, its
+	// host one of the component's hosts.
+	URL       string `json:"url"`
+	Transport string `json:"transport"` // http
+}
+
+// harnessIDRE is a harness id as tools[].id names one.
+var harnessIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+
+// validateMCP checks the mcp block. Its credential goes to the server and never
+// into the sandbox, so its only secret mode is a header to the server's own
+// host, over TLS.
+func (d ComponentDefinition) validateMCP() error {
+	m := d.MCP
+	if m == nil {
+		return nil
+	}
+	if d.CLI != nil {
+		return errors.New("mcp: a component is an MCP server or a CLI credential, not both")
+	}
+	switch m.Transport {
+	case ComponentMCPTransportHTTP:
+	case "sse":
+		return errors.New("mcp.transport: servers that use SSE are not supported yet; use the server's streamable HTTP address")
+	default:
+		return fmt.Errorf("mcp.transport: %q is not http", m.Transport)
+	}
+	host, err := MCPURLDestination(m.URL)
+	if err != nil {
+		return fmt.Errorf("mcp.url: %w", err)
+	}
+	if !slices.ContainsFunc(d.Hosts, func(h string) bool { return mcpHostAdmits(h, host) }) {
+		return fmt.Errorf("mcp.url: its host %q must be one of this component's hosts", host.String())
+	}
+	for i, s := range d.Secrets {
+		del := s.Delivery
+		switch {
+		case del.Mode != ComponentDeliveryHeader:
+			return fmt.Errorf("secrets[%d].delivery.mode: an MCP server's secret is sent to the server as a header, never into the sandbox", i)
+		case del.Host != host.Host:
+			return fmt.Errorf("secrets[%d].delivery.host: an MCP server's secret goes to the server's host %q", i, host.Host)
+		case del.PlainHTTP:
+			return fmt.Errorf("secrets[%d].delivery.plain_http: an MCP server's secret is only ever sent over TLS", i)
+		}
+	}
+	return nil
+}
+
+// MCPURLDestination checks an MCP server URL and returns its host and port as
+// a destination (Port 0 for the standard https port).
+func MCPURLDestination(raw string) (Destination, error) {
+	if len(raw) > MaxComponentMCPURLBytes || !printable(raw) {
+		return Destination{}, fmt.Errorf("must be printable text of at most %d bytes", MaxComponentMCPURLBytes)
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" || u.Opaque != "" {
+		return Destination{}, errors.New("must be an https URL with a host, and no credentials or fragment")
+	}
+	d, err := ParseDestination(u.Host)
+	if err != nil || d.Wildcard {
+		return Destination{}, fmt.Errorf("%q is not one host", u.Host)
+	}
+	if d.Port == 443 {
+		d.Port = 0
+	}
+	return d, nil
+}
+
+// mcpHostAdmits reports whether a component host entry names the MCP URL's
+// host on its port, the standard port written bare or as :443.
+func mcpHostAdmits(entry string, url Destination) bool {
+	e, err := ParseDestination(entry)
+	if err != nil || e.Wildcard || e.Host != url.Host {
+		return false
+	}
+	return e.Port == url.Port || (url.Port == 0 && e.Port == 443)
+}
+
+// validMCPHarnesses checks the harness list of one reference: harness ids,
+// each once.
+func validMCPHarnesses(ids []string) error {
+	if len(ids) > MaxComponentMCPHarnesses {
+		return fmt.Errorf("mcp_harnesses: %d entries exceeds the %d-harness limit", len(ids), MaxComponentMCPHarnesses)
+	}
+	for i, id := range ids {
+		if !harnessIDRE.MatchString(id) {
+			return fmt.Errorf("mcp_harnesses[%d]: %q is not a harness id", i, id)
+		}
+		if slices.Contains(ids[:i], id) {
+			return fmt.Errorf("mcp_harnesses[%d]: %q is listed twice", i, id)
+		}
+	}
+	return nil
 }

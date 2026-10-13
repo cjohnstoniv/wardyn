@@ -32,6 +32,7 @@ import { createPortal } from "react-dom";
 import { Minimize2, PanelRightClose } from "lucide-react";
 import { cn } from "../../ui/utils";
 import { ConfinementChip } from "../../wardyn/primitives";
+import { RUN_PLACEMENT, runnerLabel } from "../../wardyn/copy/runners";
 import { Kbd, MOD } from "../../wardyn/kbd";
 import { RUN_WIDGETS, WIDGET_IDS, type WidgetContext, type WidgetId } from "./widget-registry";
 import { WidgetSlot } from "./widget-slot";
@@ -259,7 +260,10 @@ function Strip({ ctx }: { ctx: WidgetContext }) {
           console. */}
       <span className="flex items-center gap-2">
         <ConfinementChip value={ctx.run.confinement_class} />
-        <span className="text-muted-foreground">{ctx.run.runner_target}</span>
+        {/* A local run names its computer where the bare substrate word was. */}
+        <span className="text-muted-foreground">
+          {ctx.run.placement === "local" ? RUN_PLACEMENT.CHIP(runnerLabel(ctx.run)) : ctx.run.runner_target}
+        </span>
       </span>
       {/* M3: two labelled key chips instead of one run of text — the chord is
           drawn by Kbd, which spells the modifier for the platform, so a Windows

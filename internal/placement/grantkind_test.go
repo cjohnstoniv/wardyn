@@ -17,6 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/google/uuid"
 )
 
 // grantKindFixture is the expected local outcome per grant kind. A new kind
@@ -142,10 +143,18 @@ func TestLocalEligibilityClassifiesEveryGrantKind(t *testing.T) {
 		for _, class := range []Class{ClassOperator, ClassBrokered, ClassPlatform} {
 			refuses("class "+string(class), grantPlan(kind, true, CredentialOrigin{Class: class, Delivery: want.delivery, GrantKind: kind, Stored: true, OwnNamespace: true, OwnerOnly: true}))
 		}
-		// An org-held class stays refused whatever delivery the org configures.
+		// An org-held grant record stays refused whatever delivery the org
+		// configures (it carries no value a placeholder could stand in for),
+		// except via_org on the one operator kind of the via_org shape (H12).
 		for _, mode := range []Mode{ModeViaOrg, ModeRunnerResident} {
 			p := grantPlan(kind, true, CredentialOrigin{Class: ClassOperator, Delivery: want.delivery, GrantKind: kind, Stored: true})
 			p.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{want.delivery: {Mode: mode}}}
+			if mode == ModeViaOrg && kind == types.GrantAPIKey {
+				if _, r := LocalEligibility(p); r != nil {
+					t.Errorf("%s/operator delivery via_org: %v, want admitted", kind, r)
+				}
+				continue
+			}
 			refuses("operator delivery "+string(mode), p)
 		}
 		refuses("unknown provenance", grantPlan(kind, true, CredentialOrigin{GrantKind: kind}))
@@ -207,13 +216,20 @@ func TestLocalEligibilityMountsAndDriveStayBoundToTheRunner(t *testing.T) {
 	if _, r := LocalEligibility(bound); r != nil {
 		t.Fatal(r)
 	}
-	drive := LocalPlan{Spec: runner.SandboxSpec{Drive: &types.DriveMount{Backend: types.DriveBackendK8sPVC}}}
+	drive := LocalPlan{Spec: runner.SandboxSpec{Drives: []types.DriveMount{{Backend: types.DriveBackendK8sPVC}}}}
 	if _, r := LocalEligibility(drive); r == nil || r.Reason != ReasonPlacementCapability {
 		t.Fatalf("org drive: %v", r)
 	}
-	drive.Spec.Drive.Backend = types.DriveBackendHostPath
+	drive.Spec.Drives[0].Backend = types.DriveBackendHostPath
 	if _, r := LocalEligibility(drive); r == nil || r.Reason != ReasonPlacementLocalPath {
 		t.Fatalf("unbound host drive: %v", r)
+	}
+	// Every drive is held, not the first: a bound first drive leaves the
+	// second's refusal standing.
+	drive.VerifiedLocalPaths = map[string]bool{"SandboxSpec.Drives[0]": true}
+	drive.Spec.Drives = append(drive.Spec.Drives, types.DriveMount{Backend: types.DriveBackendDockerVolume})
+	if _, r := LocalEligibility(drive); r == nil || r.Reason != ReasonPlacementCapability || r.Field != "SandboxSpec.Drives[1]" {
+		t.Fatalf("second drive: %+v", r)
 	}
 }
 
@@ -252,11 +268,14 @@ func TestGrantKindLiteralReaderSeesBothConstForms(t *testing.T) {
 func TestLocalEligibilityOwnBedrockRoleCredentialsAreDeliveryOrRefuse(t *testing.T) {
 	path := "SandboxSpec.SecretEnv[ROLE_SIGNING_KEY]"
 	own := CredentialOrigin{Class: ClassOwn, Delivery: ClassBedrockRoleCreds, Stored: true, OwnNamespace: true, OwnerOnly: true}
-	for _, mode := range []Mode{ModeRefuse, ModeRunnerResident} {
-		p := LocalPlan{Spec: runner.SandboxSpec{SecretEnv: map[string]string{"ROLE_SIGNING_KEY": "v"}}, Origins: map[string]CredentialOrigin{path: own},
-			Delivery: DeliveryPolicy{Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: mode}}}}
-		if _, r := LocalEligibility(p); r == nil || r.Field != path || r.Reason != ReasonPlacementCredential || !strings.Contains(r.Detail, ClassBedrockRoleCreds) {
-			t.Fatalf("mode %s: %v", mode, r)
-		}
+	p := LocalPlan{Spec: runner.SandboxSpec{SecretEnv: map[string]string{"ROLE_SIGNING_KEY": "v"}}, Origins: map[string]CredentialOrigin{path: own},
+		Delivery: DeliveryPolicy{Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: ModeRefuse}}}}
+	if _, r := LocalEligibility(p); r == nil || r.Field != path || r.Reason != ReasonPlacementCredential || !strings.Contains(r.Detail, ClassBedrockRoleCreds) {
+		t.Fatalf("mode refuse: %v", r)
+	}
+	p.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: ModeRunnerResident}}}
+	p.Spec.SecretEnv = map[string]string{"ROLE_SIGNING_KEY": ResidentPlaceholder(uuid.New())}
+	if _, r := LocalEligibility(p); r != nil {
+		t.Fatalf("mode runner_resident: %v", r)
 	}
 }

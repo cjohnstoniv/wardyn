@@ -4,21 +4,29 @@
     "args": [
       "it has the key \"agent\" twice"
     ],
-    "text": "This is not a template document: it has the key \"agent\" twice."
+    "text": "This document cannot be read: it has the key \"agent\" twice."
   },
   {
     "key": "VERSION_UNSUPPORTED",
     "args": [
       "wardyn/v2 RunTemplate"
     ],
-    "text": "wardyn/v2 RunTemplate is not a template format this server reads. Use api_version wardyn/v1 and kind RunTemplate."
+    "text": "wardyn/v2 RunTemplate is not a document this server reads. Use api_version wardyn/v1 and kind Run or RunTemplate."
+  },
+  {
+    "key": "KIND_MISMATCH",
+    "args": [
+      "Run",
+      "RunTemplate"
+    ],
+    "text": "This door reads a document of kind Run, and this one is kind RunTemplate. Change kind to Run."
   },
   {
     "key": "FIELD_UNKNOWN",
     "args": [
       "intent.agnet"
     ],
-    "text": "intent.agnet is not a template field. Remove it, or check the spelling."
+    "text": "intent.agnet is not a field this document can hold. Remove it, or check the spelling."
   },
   {
     "key": "FIELD_INVALID",
@@ -61,7 +69,7 @@
     "args": [
       "intent.overrides"
     ],
-    "text": "intent.overrides cannot be used in a template on this server yet. Remove it for now: nothing was dropped."
+    "text": "intent.overrides cannot be used in a document on this server yet. Remove it for now: nothing was dropped."
   },
   {
     "key": "DEPENDENCY_MISSING",
@@ -98,7 +106,7 @@
     "args": [
       "group"
     ],
-    "text": "Only an administrator of that group can publish templates to it."
+    "text": "Only the template managers of that group can publish templates to it."
   },
   {
     "key": "SCOPE_FORBIDDEN_PERSON",
@@ -128,5 +136,24 @@
     "key": "TEMPLATES_UNAVAILABLE",
     "args": [],
     "text": "Templates are not available on this server yet."
+  },
+  {
+    "key": "NAME_TAKEN",
+    "args": [],
+    "text": "Another template available to the same people already uses this name."
+  },
+  {
+    "key": "LIMIT_REACHED",
+    "args": [
+      "200"
+    ],
+    "text": "This scope already holds 200 templates, the most it can. Delete one first."
+  },
+  {
+    "key": "POLICY_FIELD_REFUSED",
+    "args": [
+      "intent.agent"
+    ],
+    "text": "intent.agent is not a network, credential or access rule. A policy holds only those; save a template instead."
   }
 ]

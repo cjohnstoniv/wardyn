@@ -138,6 +138,13 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run is terminal")
 		return nil, false
 	}
+	// A run waiting in its pool's queue has minted nothing, so no token names it: refuse by state anyway,
+	// so a credential that somehow did would not reach a door.
+	if run.State == types.RunQueued {
+		s.auditInternalDenied(r, claims, authz.ReasonRunNotFound, "run_state", string(run.State))
+		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunNotFound), "run has not started")
+		return nil, false
+	}
 	if !runIsKept(run) {
 		return &run, true
 	}
@@ -232,7 +239,12 @@ func (s *Server) auditInternalDenied(r *http.Request, claims *identity.Claims, r
 // match rather than a chi route pattern because this runs as middleware, before
 // the sub-router has bound one; the segments all carry their surrounding
 // slashes so "/internal/recordings/" cannot match a suffix of some other route.
+// Only the door itself is matched: the via_org route carries the sandbox's own
+// request path after its grant id, and no sandbox path may name a door here.
 func pathHasAny(path string, segments []string) bool {
+	if i := strings.Index(path, viaOrgDoor); i >= 0 {
+		path = path[:i+len(viaOrgDoor)]
+	}
 	for _, seg := range segments {
 		if strings.Contains(path, seg) {
 			return true

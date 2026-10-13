@@ -21,6 +21,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
+	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -118,6 +122,27 @@ func (f *runnerRegistrationFake) CountActiveRunsByRunner(_ context.Context, ids 
 		}
 	}
 	return out, nil
+}
+
+func (f *runnerRegistrationFake) RunnerSlotHolders(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]int, error) {
+	return f.CountActiveRunsByRunner(ctx, ids)
+}
+
+func (f *runnerRegistrationFake) RunnerPoolsOf(context.Context, []uuid.UUID) (map[uuid.UUID][]types.RunnerPoolRef, error) {
+	return map[uuid.UUID][]types.RunnerPoolRef{}, nil
+}
+
+func (f *runnerRegistrationFake) UpdateRunnerMaxRuns(_ context.Context, id uuid.UUID, owner string, maxRuns int) (int, types.Runner, error) {
+	f.lock.Lock()
+	defer f.lock.Unlock()
+	row, ok := f.rows[id]
+	if !ok || row.Owner != owner || row.State == types.RunnerRevoked {
+		return 0, types.Runner{}, store.ErrNotFound
+	}
+	before := row.MaxRuns
+	row.MaxRuns = maxRuns
+	f.rows[id] = row
+	return before, row, nil
 }
 
 // PutSiteConfig persists, unlike the matrix double it embeds, so a test reads back what a door wrote.
@@ -613,12 +638,86 @@ func TestRunnerViewNamesWhoRevokedAndWhy(t *testing.T) {
 	srv, _, _ := newRunnerRegistrationServer(t)
 	row := types.Runner{ID: uuid.New(), State: types.RunnerRevoked, RevokedBy: "alice", RevokeReason: types.RunnerRevokeNotMine}
 	for _, admin := range []bool{true, false} {
-		b, err := json.Marshal(srv.runnerView(row, 0, admin))
+		b, err := json.Marshal(srv.runnerView(row, 0, 0, admin))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(string(b), `"revoked_by":"alice"`) || !strings.Contains(string(b), `"revoke_reason":"not_mine"`) {
 			t.Fatalf("admin=%v view = %s, want revoked_by and revoke_reason", admin, b)
 		}
+	}
+}
+
+func TestRunnerViewCarriesWhatTheRunnerReportedAndNothingWithoutIt(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	reported := f.addRunner(srv, "alice", "laptop", types.RunnerClaimed, time.Hour)
+	silent := f.addRunner(srv, "alice", "desk", types.RunnerClaimed, time.Hour)
+	waiting := f.addRunner(srv, "alice", "waiting", types.RunnerUnclaimed, time.Hour)
+	caps := runnerwire.Caps{
+		Support:      substrate.ClassSupport{Classes: []types.ConfinementClass{types.ConfinementClass("CC1"), types.ConfinementClass("CC2")}},
+		Capacity:     placement.Capacity{CPUMillisMax: 4000, MemoryMiBMax: 8192},
+		AllowedRoots: []string{"/Users/alice/src"},
+	}
+	data, err := json.Marshal(caps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// `silent` has no endpoint in this process at all; the waiting runner has one with caps but is not claimed.
+	srv.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{}
+	for _, id := range []uuid.UUID{reported.ID, waiting.ID} {
+		sub := remote.New(id.String(), &capsTransport{online: true}, remote.Options{})
+		sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+		srv.runnerStreams.subs[id] = runnerEndpoint{sub: sub, link: &remote.Link{}}
+	}
+	sec := memberModeSSOSession(t, "sam", "sam@example.com", oidc.RoleSecurityAdmin, false)
+	got := viewIDs(runnerViewsOf(t, doSSO(t, srv, http.MethodGet, "/api/v1/runners?state=all", sec, "")))
+	v := got[reported.ID]
+	if v.Capacity == nil || v.Capacity.CPUMillisMax != 4000 || v.Capacity.MemoryMiBMax != 8192 ||
+		!slices.Equal(v.Classes, caps.Support.Classes) || !slices.Equal(v.AllowedRoots, caps.AllowedRoots) {
+		t.Fatalf("a runner that reported must show its capacity, classes and roots: %+v", v)
+	}
+	for name, id := range map[string]uuid.UUID{"no endpoint": silent.ID, "unclaimed": waiting.ID} {
+		if w := got[id]; w.Capacity != nil || w.Classes != nil || w.AllowedRoots != nil {
+			t.Fatalf("%s must carry nothing reported: %+v", name, w)
+		}
+	}
+	if _, made := srv.runnerStreams.subs[silent.ID]; made {
+		t.Fatal("reading a runner created an endpoint for it")
+	}
+}
+
+func TestMeRunnersKeepARunnerSomeoneElseRevokedForAWeek(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	now := time.Now().UTC()
+	revoke := func(name, by string, ago time.Duration) types.Runner {
+		row := f.addRunner(srv, "alice", name, types.RunnerRevoked, 30*24*time.Hour)
+		at := now.Add(-ago)
+		row.RevokedAt, row.RevokedBy = &at, by
+		f.rows[row.ID] = row
+		return row
+	}
+	byAdmin := revoke("by-admin", "carol", 24*time.Hour)
+	byOwner := revoke("by-owner", "alice", time.Hour)
+	tooOld := revoke("too-old", "carol", 8*24*time.Hour)
+	f.emails = map[string]string{"carol": "carol@example.com"}
+	alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
+
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/me/runners", alice, "")
+	got := viewIDs(runnerViewsOf(t, w))
+	if len(got) != 1 {
+		t.Fatalf("alice sees %d runners, want only the one an administrator revoked this week: %s", len(got), w.Body.String())
+	}
+	if v := got[byAdmin.ID]; v.State != types.RunnerRevoked || v.RevokedBy != "carol" || v.RevokedByEmail != "carol@example.com" || v.RevokedAt == nil {
+		t.Fatalf("the revoked row must say who and when: %+v", v)
+	}
+	for _, hidden := range []types.Runner{byOwner, tooOld} {
+		if _, leaked := got[hidden.ID]; leaked {
+			t.Fatalf("alice's list holds %s", hidden.Name)
+		}
+	}
+	// Detail stays the absent-id bytes for a revoked runner: only the list shows the notice.
+	absent := doSSO(t, srv, http.MethodGet, "/api/v1/me/runners/"+uuid.NewString(), alice, "")
+	if w := doSSO(t, srv, http.MethodGet, "/api/v1/me/runners/"+byAdmin.ID.String(), alice, ""); w.Code != http.StatusNotFound || w.Body.String() != absent.Body.String() {
+		t.Fatalf("detail of a revoked runner = %d", w.Code)
 	}
 }

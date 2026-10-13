@@ -149,8 +149,8 @@ func TestProviderSubscriptionDispatch(t *testing.T) {
 			Snapshot providerGrantSnapshot `json:"snapshot"`
 		}
 		_ = json.Unmarshal(st.grants[0].Spec.Scope, &scope)
-		if scope.Snapshot != (providerGrantSnapshot{ProviderUID: p.UID, OwnerSubject: subOwner}) {
-			t.Errorf("snapshot = %+v, want {%s %s}", scope.Snapshot, p.UID, subOwner)
+		if scope.Snapshot != (providerGrantSnapshot{ProviderUID: p.UID, OwnerSubject: subOwner, Harness: "claude-code"}) {
+			t.Errorf("snapshot = %+v, want {%s %s claude-code}", scope.Snapshot, p.UID, subOwner)
 		}
 		if len(policy.WorkspaceMounts) != 0 {
 			t.Errorf("the operator's ~/.claude mount survived: %+v", policy.WorkspaceMounts)

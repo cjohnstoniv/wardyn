@@ -35,6 +35,11 @@
     "sentence": "\"run not found\""
   },
   {
+    "reason": "attach_ticket_foreign_run",
+    "target": "run.ID.String()",
+    "sentence": "\"run not found\""
+  },
+  {
     "reason": "audit_export_partition_filter",
     "target": "\"audit.export\"",
     "sentence": "\"a partition export covers the whole partition; remove the other filter parameters\""
@@ -93,6 +98,11 @@
     "reason": "capKinds[capAgent].reason",
     "target": "\"runs.agent\"",
     "sentence": "\"you are not granted agent \" + req.Agent + \" — ask an admin to grant it, or launch one you hold\""
+  },
+  {
+    "reason": "capKinds[capAgent].reason",
+    "target": "\"runs.tools\"",
+    "sentence": "\"you are not granted agent \" + h.Harness + \" — ask an admin to grant it, or remove it from the run\""
   },
   {
     "reason": "capKinds[capComponent].reason",
@@ -155,6 +165,11 @@
     "sentence": "\"you are not granted egress host \" + host + \" — an admin decides this one, or can grant it to you\""
   },
   {
+    "reason": "capability_feature",
+    "target": "run.ID.String()",
+    "sentence": "\"run not found\""
+  },
+  {
     "reason": "capability_model_provider",
     "target": "\"runs.model_provider\"",
     "sentence": "choice.refusal"
@@ -175,6 +190,11 @@
     "sentence": "\"you are not granted workspace \" + refused.wsID + \" — ask an admin for access, or launch without a workspace\""
   },
   {
+    "reason": "capability_workspace",
+    "target": "ws.ID.String()",
+    "sentence": "\"workspace not found\""
+  },
+  {
     "reason": "delegation_scope",
     "target": "id.String()",
     "sentence": "(audit only)"
@@ -188,6 +208,21 @@
     "reason": "delegation_scope",
     "target": "r.URL.Path",
     "sentence": "delegationRefusal"
+  },
+  {
+    "reason": "drive_not_found",
+    "target": "\"runs.drive\"",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "drive_not_in_pool",
+    "target": "\"runs.drive\"",
+    "sentence": "msg"
+  },
+  {
+    "reason": "drive_target_conflict",
+    "target": "\"runs.drive\"",
+    "sentence": "msg"
   },
   {
     "reason": "event_stream_cap",
@@ -246,12 +281,22 @@
   },
   {
     "reason": "governance_profile",
+    "target": "\"runs.tools\"",
+    "sentence": "fmt.Sprintf(\"A harness your command can start is not allowed under your governance profile %q: its tool rules hold or deny, and nothing can pause a harness a command starts. Remove the harness, or choose an interactive environment.\", name)"
+  },
+  {
+    "reason": "governance_profile",
     "target": "\"runs.ui_apps\"",
     "sentence": "fmt.Sprintf(\"UI apps are not allowed under the governance profile %q this run was launched under.\", p.Name)"
   },
   {
     "reason": "groups_snapshot_stale",
     "target": "\"governance.ceiling\"",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "groups_snapshot_stale",
+    "target": "\"runs.drive\"",
     "sentence": "(audit only)"
   },
   {
@@ -297,12 +342,12 @@
   {
     "reason": "model_provider_unavailable",
     "target": "\"runs.model_provider\"",
-    "sentence": "msg"
+    "sentence": "d.msg"
   },
   {
-    "reason": "model_provider_unavailable (credential: d.credential)",
-    "target": "choice.provider.ID",
-    "sentence": "d.msg"
+    "reason": "model_provider_unavailable",
+    "target": "\"runs.model_provider\"",
+    "sentence": "msg"
   },
   {
     "reason": "model_provider_unavailable (credential: false)",
@@ -388,6 +433,11 @@
     "reason": "second_human_required",
     "target": "id.String()",
     "sentence": "sw + \" is set: a second human must decide this — you created this run, so someone else approves or denies its egress\""
+  },
+  {
+    "reason": "second_human_required",
+    "target": "id.String()",
+    "sentence": "sw + \" is set: this run has no recorded human author, so no decision on it can be verified as a second human's\""
   },
   {
     "reason": "security_admin_surface",

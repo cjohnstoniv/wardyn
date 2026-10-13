@@ -20,7 +20,7 @@ chart/console/IdP split, and the derivation rules behind a signed cookie.
 
 - A console-added row keys on this exact same table:
   - adding the deployment's *first* row (with the chart map also unset) or removing its *last* one moves the map from empty to non-empty or back, exactly like setting or clearing `WARDYN_OIDC_ROLE_MAP` itself,
-  - which is what `POST`/`DELETE /access/mappings`' posture-flip guard warns an admin about before they trip it (see "Managing them" below).
+  - which is what `POST`/`DELETE /access/mappings`' posture-flip guard warns an admin about before they trip it (see "Managing them" in [Capabilities](capabilities.md)).
 - The admin token and local mode are **always admin** — a single shared credential with no per-human identity to key a role off (the token *is* the admin).
 - That is the documented ceiling of the whole gate (`requireOperator`/`isOperator`, [`internal/api/http.go`](../../internal/api/http.go)), not an oversight.
 ## Who decides who gets in: chart vs console vs IdP
@@ -32,7 +32,7 @@ Three surfaces share this decision, and only one of them is live without a resta
 | **What lives here** | People and groups exist here; Entra App Roles and their assignment; the app registration's "Assignment required" switch | `WARDYN_OIDC_ISSUER`/client config; `WARDYN_OIDC_ROLE_MAP` (the bootstrap layer — always wins a duplicate key against a console row); `WARDYN_OIDC_OPERATOR_EMAILS` (top-precedence admin allowlist, also the boot posture floor); `WARDYN_OIDC_DEFAULT_ROLE`; `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` | `/access` role mappings (`GET /access`, `POST /access/mappings`, `DELETE /access/mappings/{id}`), a **disjoint union** with the chart map — the console never edits `WARDYN_OIDC_ROLE_MAP` itself, only its own rows |
 | **Wins a collision** | "Assignment required" stops an unassigned user **before Wardyn's callback ever sees a `roles` claim** — a gate Wardyn cannot see through or override | The chart entry, always; see [below](#wins-a-collision-chart--env) | Nothing — a console row only ever fills a gap the chart and the allowlist leave open |
 | **Takes effect** | Immediately for Entra's own gate | At boot (a `wardynd` restart/upgrade) | At the affected human's **next sign-in** — canonicalized (trimmed, lowercased) on write; never retroactive, so a person already signed in keeps the role stamped into their current session cookie |
-| **Recovery path** | n/a | The admin bearer token — one shared credential with no per-human identity to demote, so it is the ONE caller the console's lockout guard (below) never binds | n/a — the console surface is the thing that *can* lock an admin out, not a way back from it |
+| **Recovery path** | n/a | The admin bearer token — one shared credential with no per-human identity to demote, so it is the ONE caller [the console's lockout guard](#who-decides-who-gets-in-chart-vs-console-vs-idp) never binds | n/a — the console surface is the thing that *can* lock an admin out, not a way back from it |
 
 A few things that don't fit the grid:
 
@@ -61,7 +61,7 @@ A few things that don't fit the grid:
   - On an Entra ID issuer a `sub` starting with `entra:`, in any case, is refused the same way:
     - that namespace belongs to people set up by object id (see "[Tokens for a person who never signs in](api-tokens.md#tokens-for-a-person-who-never-signs-in)").
 - **The same claim values do double duty.**
-  - The `roles`/`groups` values a role mapping matches are the exact same login-time snapshot a `/permissions` capability grant's `subject_type=group` matches against (see "Subjects, and the group snapshot's ceiling" below).
+  - The `roles`/`groups` values a role mapping matches are the exact same login-time snapshot a `/permissions` capability grant's `subject_type=group` matches against (see "Subjects, and the group snapshot's ceiling" in [Capabilities](capabilities.md)).
   - Two levels reading one snapshot, not two systems that happen to agree.
 - **Fail-closed on a wired store error.**
   - If the console's role-mapping store can't be read, a login in progress is **denied** (`auth_error= role_check_unavailable`) rather than silently falling back to the chart-only map.

@@ -65,6 +65,10 @@ func serverJSONTags(t *testing.T, relPath, typeName string) []string {
 		}
 		found = true
 		for _, fld := range st.Fields.List {
+			// encoding/json never writes an unexported field, so it is not on the wire.
+			if len(fld.Names) > 0 && !fld.Names[0].IsExported() {
+				continue
+			}
 			if fld.Tag == nil {
 				tags = append(tags, "<no tag>")
 				continue
@@ -117,6 +121,8 @@ func TestResponseDTOs_MatchTheServersWireTags(t *testing.T) {
 		{"ProvenanceSource", "internal/api/run_fold_provenance.go", "provSource", client.ProvenanceSource{}},
 		{"ComponentFact", "internal/api/components_facts.go", "componentFact", client.ComponentFact{}},
 		{"ComponentSecretFact", "internal/api/components_facts.go", "componentSecretFact", client.ComponentSecretFact{}},
+		{"AccessFacts", "internal/api/run_access_facts.go", "accessBlock", client.AccessFacts{}},
+		{"WorkspaceBuild", "internal/api/workspace_build.go", "buildResponse", client.WorkspaceBuild{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			want := serverJSONTags(t, tc.file, tc.server)

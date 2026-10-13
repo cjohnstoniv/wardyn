@@ -8,10 +8,12 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,7 +52,10 @@ var _ RunnerStore = PG{}
 var ErrRunnerClaimMismatch = errors.New("store: runner claim does not match the owner or key fingerprint")
 
 const runnerCols = `id, owner, name, public_key, key_fingerprint, state, version, created_at, claimed_at,
-	last_seen_at, revoked_at, posture, posture_reported_at, posture_source, org_url_sha256, minted_by, revoked_by, revoke_reason`
+	last_seen_at, revoked_at, posture, posture_reported_at, posture_source, org_url_sha256, minted_by, revoked_by, revoke_reason, max_runs, machine_name`
+
+// prefixedRunnerCols is runnerCols on a query that names the runners table r.
+var prefixedRunnerCols = "r." + strings.ReplaceAll(strings.Join(strings.Fields(runnerCols), " "), ", ", ", r.")
 
 func scanRunner(row pgx.Row) (types.Runner, error) {
 	var r types.Runner
@@ -58,7 +63,7 @@ func scanRunner(row pgx.Row) (types.Runner, error) {
 	var posture []byte
 	err := row.Scan(&r.ID, &r.Owner, &r.Name, &r.PublicKey, &r.KeyFingerprint, &state, &r.Version, &r.CreatedAt,
 		&r.ClaimedAt, &r.LastSeenAt, &r.RevokedAt, &posture, &r.PostureReportedAt, &r.PostureSource, &r.OrgURLSHA256,
-		&r.MintedBy, &r.RevokedBy, &r.RevokeReason)
+		&r.MintedBy, &r.RevokedBy, &r.RevokeReason, &r.MaxRuns, &r.MachineName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Runner{}, ErrNotFound
 	}
@@ -73,13 +78,15 @@ func scanRunner(row pgx.Row) (types.Runner, error) {
 }
 
 // CreateRunner inserts an unclaimed runner: state, claim and posture on r are ignored, since every
-// registration starts unclaimed. ErrConflict on a key fingerprint already registered.
+// registration starts unclaimed. ErrConflict on a key fingerprint already registered. r.MaxRuns 0 is
+// types.RunnerMaxRunsDefault.
 func (s PG) CreateRunner(ctx context.Context, r types.Runner) (types.Runner, error) {
 	const q = `
-		INSERT INTO runners (id, owner, name, public_key, key_fingerprint, version, org_url_sha256, minted_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		INSERT INTO runners (id, owner, name, public_key, key_fingerprint, version, org_url_sha256, minted_by, max_runs, machine_name)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		RETURNING ` + runnerCols
-	out, err := scanRunner(s.Pool.QueryRow(ctx, q, r.ID, r.Owner, r.Name, r.PublicKey, r.KeyFingerprint, r.Version, r.OrgURLSHA256, r.MintedBy))
+	maxRuns := cmp.Or(r.MaxRuns, types.RunnerMaxRunsDefault)
+	out, err := scanRunner(s.Pool.QueryRow(ctx, q, r.ID, r.Owner, r.Name, r.PublicKey, r.KeyFingerprint, r.Version, r.OrgURLSHA256, r.MintedBy, maxRuns, r.MachineName))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return types.Runner{}, ErrConflict
@@ -190,7 +197,7 @@ func (s PG) RevokeRunner(ctx context.Context, id uuid.UUID, now time.Time, by, r
 	out.Killed, err = collect(ctx, tx, "kill", "revoked runner's runs", `WITH live AS (
 			SELECT id, state FROM agent_runs WHERE runner_id = $1 AND state = ANY($3) ORDER BY id FOR UPDATE)
 		UPDATE agent_runs a SET state = $2, updated_at = now(), ended_at = now() FROM live
-		WHERE a.id = live.id RETURNING a.id, live.state`, []any{id, string(types.RunKilled), nonTerminalStateStrings()},
+		WHERE a.id = live.id RETURNING a.id, live.state`, []any{id, string(types.RunKilled), slotHoldingStateNames()},
 		func(row pgx.Row) (RunnerKilledRun, error) {
 			var k RunnerKilledRun
 			err := row.Scan(&k.ID, &k.From)
@@ -222,9 +229,14 @@ func (s PG) ExpireUnclaimedRunners(ctx context.Context, createdBefore time.Time)
 // GetCredentialDeliveryPolicy reads the local_credential_delivery document: an empty one (every class
 // refuses) when none was written.
 func (s PG) GetCredentialDeliveryPolicy(ctx context.Context) (types.CredentialDeliveryPolicyDoc, error) {
+	return GetCredentialDeliveryPolicyQ(ctx, s.Pool)
+}
+
+// GetCredentialDeliveryPolicyQ is GetCredentialDeliveryPolicy on q (a governance decision's transaction).
+func GetCredentialDeliveryPolicyQ(ctx context.Context, q Querier) (types.CredentialDeliveryPolicyDoc, error) {
 	var d types.CredentialDeliveryPolicyDoc
 	var policy []byte
-	err := s.Pool.QueryRow(ctx, `SELECT policy, updated_at, updated_by FROM credential_delivery_policy WHERE singleton`).Scan(&policy, &d.UpdatedAt, &d.UpdatedBy)
+	err := q.QueryRow(ctx, `SELECT policy, updated_at, updated_by FROM credential_delivery_policy WHERE singleton`).Scan(&policy, &d.UpdatedAt, &d.UpdatedBy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.CredentialDeliveryPolicyDoc{Policy: json.RawMessage(`{"classes":{}}`)}, nil
 	}
@@ -237,14 +249,19 @@ func (s PG) GetCredentialDeliveryPolicy(ctx context.Context) (types.CredentialDe
 
 // PutCredentialDeliveryPolicy upserts the document. The caller has validated it (placement.DeliveryPolicy.Validate).
 func (s PG) PutCredentialDeliveryPolicy(ctx context.Context, policy json.RawMessage, by string, now time.Time) (types.CredentialDeliveryPolicyDoc, error) {
-	const q = `
+	return PutCredentialDeliveryPolicyQ(ctx, s.Pool, policy, by, now)
+}
+
+// PutCredentialDeliveryPolicyQ is PutCredentialDeliveryPolicy on q.
+func PutCredentialDeliveryPolicyQ(ctx context.Context, q Querier, policy json.RawMessage, by string, now time.Time) (types.CredentialDeliveryPolicyDoc, error) {
+	const sql = `
 		INSERT INTO credential_delivery_policy (singleton, policy, updated_at, updated_by)
 		VALUES (true, $1, $2, $3)
 		ON CONFLICT (singleton) DO UPDATE SET policy = EXCLUDED.policy, updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by
 		RETURNING policy, updated_at, updated_by`
 	var d types.CredentialDeliveryPolicyDoc
 	var out []byte
-	if err := s.Pool.QueryRow(ctx, q, []byte(policy), now, by).Scan(&out, &d.UpdatedAt, &d.UpdatedBy); err != nil {
+	if err := q.QueryRow(ctx, sql, []byte(policy), now, by).Scan(&out, &d.UpdatedAt, &d.UpdatedBy); err != nil {
 		return types.CredentialDeliveryPolicyDoc{}, fmt.Errorf("store: put credential delivery policy: %w", err)
 	}
 	d.Policy = out

@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -37,6 +39,8 @@ const (
 	createRunGrantAbortHint = "the run's credential grants could not be recorded, so it was never started"
 	// createRunComponentsAbortHint is the same for the run's component snapshot.
 	createRunComponentsAbortHint = "the run's components could not be recorded, so it was never started"
+	// createRunHarnessesAbortHint is the same for the run's harness set.
+	createRunHarnessesAbortHint = "the run's harnesses could not be recorded, so it was never started"
 	// devcontainerNoBuilderWarning is the 201 warning for a devcontainer_repo run
 	// on a deployment with no image builder wired: the build silently fell
 	// through to the convention image, which is a different sandbox from the one
@@ -156,6 +160,8 @@ func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, worksp
 // Without a runner the run stays PENDING with a clear status message (headless
 // API-only operation is allowed for v0).
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
+	var asked []byte // the request as asked, for the launch intent (launch_intent.go)
+	r = withAskedRequest(r, &asked)
 	ctx := r.Context()
 	if s.refuseAdminViewLaunch(w, r) {
 		return
@@ -164,6 +170,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// The request as the fold first sees it, kept for a launch that waits: the start folds it afresh.
+	// Marshalled now because the fold may rewrite parts of what the request points at.
+	original, _ := json.Marshal(req) //nolint:errcheck // a request that just decoded marshals
 
 	// Every gate between the decoded request and the mint is the shared fold's
 	// (runFoldSteps), the same sequence Review and the policy preview run. It
@@ -195,6 +204,18 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if f.place.apply(&placed, enforced).write(s, w, r) {
 		return
 	}
+	intent := launchIntentFor(asked)
+	// A run bound for a capped pool waits for a slot instead of starting: nothing is minted, renewed or
+	// delivered for it, and the start does all of that when the pool has room.
+	if f.queued {
+		now := s.cfg.Now().UTC()
+		row := newRunRow(ctx, runRowInput{runID: runID, now: now, createdBy: createdBy, req: req, f: f, placed: placed,
+			enforced: enforced, workspacePath: workspacePath, runnerTarget: s.cfg.RunnerTarget})
+		row.LaunchIntent = intent.doc
+		queuedCreate{run: row, req: req, original: original, f: f, reqCC: reqCC, createdByType: createdByType,
+			taskWarning: taskWarning, workspacePath: workspacePath, intent: intent}.answer(s, w, r)
+		return
+	}
 	// Subject vs attribution: createdBy is the ATTRIBUTION — the run row's
 	// CreatedBy, the sponsor claim, every audit actor — and in LocalMode it may be
 	// the DEV-ONLY X-Wardyn-Principal header. The SUBJECT is what selects the
@@ -209,51 +230,21 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := s.cfg.Now().UTC()
-	run := types.AgentRun{
-		ID:               runID,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-		CreatedBy:        createdBy,
-		Agent:            req.Agent,
-		Repo:             req.Repo,
-		Task:             req.Task,
-		Title:            strings.TrimSpace(req.Title),
-		Description:      strings.TrimSpace(req.Description),
-		PolicyID:         f.policyID,
-		ConfinementClass: enforced,
-		State:            types.RunPending,
-		SPIFFEID:         id.SPIFFEID,
-		RunnerTarget:     s.cfg.RunnerTarget,
-		Interactive:      req.Interactive,
-		Experience:       req.Experience,
-		WorkspacePath:    workspacePath,
-		WorkspaceIDs:     workspaceIDsOf(wsRefs), // referencedWorkspaces above, same spec as WorkspacePath
-		AutoStopAfterSec: spec.AutoStopAfterSec,
-		// The LEVEL only. The posture and the bound field are provenance and
-		// live on the create audit row (AgentRun.AutonomyLevel's own doc);
-		// freezing them on the row would mirror a computation into a column
-		// nothing reads back.
-		AutonomyLevel: autonomy.Level,
-		// The id alone — mpChoice.provider.Kind rides on the audit snapshot
-		// below instead (AgentRun.ModelProviderID's own doc explains why).
-		// mpChoice.provider.ID is "" when mpChoice.chosen is false.
-		ModelProviderID: mpChoice.provider.ID,
-		UserType:        runCreatorUserType(ctx),
-		Preset:          req.Preset,
-		PresetVersion:   req.PresetVersion,
-		OperatorOwned:   operatorOwned,
-		CreatedVia:      createdVia(ctx),
-		// The pool binding is the run's own admission record: dispatch routes to exactly this target.
-		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID, EvidenceSource: placed.EvidenceSource,
-		RunnerPoolID: placed.RunnerPoolID, RunnerPoolRevision: placed.RunnerPoolRevision,
-		RunnerPoolSelection: placed.RunnerPoolSelection, RunnerPoolExecutor: placed.RunnerPoolExecutor,
-	}
+	run := newRunRow(ctx, runRowInput{runID: runID, now: now, createdBy: createdBy, req: req, f: f, placed: placed,
+		enforced: enforced, workspacePath: workspacePath, runnerTarget: s.cfg.RunnerTarget})
+	run.State, run.SPIFFEID = types.RunPending, id.SPIFFEID
 	s.captureRunLimits(&run, ceiling, &f.end)
+	run.LaunchIntent = intent.doc
 	created, err := s.createRun(ctx, run)
 	if err != nil {
 		s.cfg.Identity.RevokeRun(context.WithoutCancel(ctx), runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
 		if errors.Is(err, store.ErrRunnerPoolStale) {
 			writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: f.place.pool.Name})
+			return
+		}
+		// Another launch took the runner's last place after placement read it.
+		if errors.Is(err, store.ErrRunnerAtCapacity) {
+			targetRefusal(placement.ReasonRunnerAtCapacity, f.place.pool.Name, f.place.pool.Scope).write(s, w, r)
 			return
 		}
 		writeServerError(w, r, "create run", err)
@@ -286,6 +277,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "record run components", err)
 		return
 	}
+	// The same for the harness set: it is the run's authorisation record of
+	// every harness and the provider each was granted.
+	if err := s.persistRunHarnesses(ctx, runID, f.harnesses); err != nil {
+		abort(createRunHarnessesAbortHint)
+		writeServerError(w, r, "record run harnesses", err)
+		return
+	}
 
 	// resolveRunPolicy's own notes come FIRST: they are the ones that say the
 	// run is narrower than what the caller asked for, and launch is the ONLY
@@ -314,24 +312,12 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Persist the eligibility records + derive the non-secret sandbox wiring
 	// (github/git_pat/ssh grant ids, api_key proxy injections, SCM egress) —
 	// see persistRunGrants. A grant write failure has already answered 500.
-	gw, ok := s.persistRunGrants(ctx, w, r, runID, now, spec, run.Placement)
+	gw, grantWarnings, ok := s.wireRunGrants(ctx, w, r, run, now, spec, req, comps, f.localDelivery)
 	if !ok {
 		abort(createRunGrantAbortHint)
 		return
 	}
-	// Provider-lane honesty, the same shape one line earlier in the pipeline: a
-	// credential lane the deployment's provider row does not permit was not wired,
-	// and the 201 says so (persistRunGrants collected the sentences as it declined
-	// each one).
-	warnings = append(warnings, gw.warnings...)
-	// SSH-lane honesty: drop the wiring for agents with no SSH clone lane
-	// (codex-cli) and advise BYOI images about the required tools.
-	warnings = append(warnings, s.applySSHLaneWarnings(ctx, req, runID, &gw)...)
-
-	// Git-broker: map the run's declared GitHub clone set to its github grant so the
-	// proxy's /wardyn/gh/ route serves exactly these repos (github.com is dropped
-	// from egress; an un-granted github repo is denied).
-	gw.augmentGitBrokerGrants(req.Repo, spec.WorkspaceRepos)
+	warnings = append(warnings, grantWarnings...)
 
 	// credentialConfinementAdvisory (#150): a run whose model credential just
 	// graded as the captured-AWS-SSO lane (f.modelCred.Kind, stepModelProvider) but
@@ -342,8 +328,14 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, f.modelCred.Kind)
 
 	createData := createRunAuditData(req, f.policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
-	createData["policy_source"] = f.source
-	createData["end"] = f.end.audit(run)
+	createData["policy_source"], createData["end"] = f.source, f.end.audit(run)
+	stampConfinementDefault(createData, reqCC, f.confinementDefault)
+	if len(gw.delivery) > 0 {
+		createData["delivery"] = gw.delivery
+	}
+	stampDriveAudit(createData, f.drives)
+	intent.stamp(createData, created.LaunchIntent != nil)
+	stampHarnessSet(createData, f.harnesses, f.image)
 	comps.stampRunCreate(createData)
 	maps.Copy(createData, f.place.auditFields(created))
 	s.markGovernanceExempt(ctx, createData)
@@ -386,15 +378,97 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Nothing below can become a 4xx, so the caller gets its run now and the
 	// image build + dispatch continue server-side (runs_create_launch.go).
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+runID.String())
-	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
-	spec, harnessRules := applyHarnessToolRules(spec, req.Tools)
+	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings, ResourcesApplied: &f.place.applied})
+	spec, harnessRules := applyHarnessToolRules(spec, req.Tools, toolLaneDefault(req))
 	launch := createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
-		wsRefs: wsRefs, driveMount: f.driveMount, ephemeralDirs: f.ephemeralDirs,
-		runToken: id.Token, created: created, comps: comps, overridden: f.source.OverridesDiff != nil, pushSets: f.pushSets, harnessRules: harnessRules,
+		wsRefs: wsRefs, driveMounts: f.driveMounts, ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
+		runToken: id.Token, created: created, comps: comps, overridden: f.source.overridden(), pushSets: f.pushSets, harnessRules: harnessRules,
+		harnesses: f.harnesses, mainDrive: f.mainDrive.decision(),
 	}
 	launchCtx := context.WithoutCancel(ctx)
 	s.goBackground(func() { s.finishCreateRunLaunch(launchCtx, launch) })
+}
+
+// wireRunGrants persists the run's eligibility records and derives the non-secret sandbox wiring
+// (persistRunGrants), then applies the lanes' honesty rules: a credential lane the deployment's
+// provider row does not permit was not wired, and the sentences say so; the SSH lane is dropped for
+// agents with no SSH clone lane (codex-cli) and BYOI images are advised about the required tools; and
+// the run's declared GitHub clone set is mapped to its github grant so the proxy's /wardyn/gh/ route
+// serves exactly these repos (github.com is dropped from egress; an un-granted github repo is denied).
+// Create and the pool queue's start wire a run the same way. A grant write failure has already
+// answered 500 (ok is false).
+func (s *Server) wireRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, run types.AgentRun, now time.Time, spec types.RunPolicySpec,
+	req createRunRequest, comps runComponents, delivery placement.DeliveryPolicy,
+) (grantWiring, []string, bool) {
+	gw, ok := s.persistRunGrants(ctx, w, r, run.ID, now, spec, run.Placement, delivery)
+	// The git broker's repositories, then the GitHub CLI's grants over them.
+	if !ok || !s.persistGitHubCLIGrants(ctx, w, r, run.ID, now, req.Repo, spec.WorkspaceRepos, comps, &gw) {
+		return grantWiring{}, nil, false
+	}
+	warnings := append([]string(nil), gw.warnings...)
+	warnings = append(warnings, s.applySSHLaneWarnings(ctx, req, run.ID, &gw)...)
+	return gw, warnings, true
+}
+
+// runRowInput is what newRunRow reads: the fold's outputs and the door's own facts.
+type runRowInput struct {
+	runID         uuid.UUID
+	now           time.Time
+	createdBy     string
+	req           createRunRequest
+	f             runFold
+	placed        types.AgentRun
+	enforced      types.ConfinementClass
+	workspacePath string
+	runnerTarget  string
+}
+
+// newRunRow is the run row a launch inserts, without its state, its identity and the limits it
+// captures: create sets them (PENDING, the minted SPIFFE ID, captureRunLimits) and the pool queue
+// leaves them to the start (QUEUED, no identity, nothing captured). One literal for both doors, so a
+// waiting run carries exactly the facts a running one does.
+func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
+	req, f, placed := in.req, in.f, in.placed
+	operatorOwned := operatorOwnedRequest(ctx)
+	return types.AgentRun{
+		ID:               in.runID,
+		CreatedAt:        in.now,
+		UpdatedAt:        in.now,
+		CreatedBy:        in.createdBy,
+		HumanAuthor:      requestSponsor(ctx, in.createdBy),
+		Agent:            req.Agent,
+		Repo:             req.Repo,
+		Task:             req.Task,
+		Title:            strings.TrimSpace(req.Title),
+		Description:      strings.TrimSpace(req.Description),
+		PolicyID:         f.policyID,
+		ConfinementClass: in.enforced,
+		RunnerTarget:     in.runnerTarget,
+		Interactive:      req.Interactive,
+		Experience:       req.Experience,
+		WorkspacePath:    in.workspacePath,
+		WorkspaceIDs:     workspaceIDsOf(f.wsRefs), // referencedWorkspaces above, same spec as WorkspacePath
+		AutoStopAfterSec: f.spec.AutoStopAfterSec,
+		// The LEVEL only. The posture and the bound field are provenance and
+		// live on the create audit row (AgentRun.AutonomyLevel's own doc);
+		// freezing them on the row would mirror a computation into a column
+		// nothing reads back.
+		AutonomyLevel: f.autonomy.Level,
+		// The id alone — mpChoice.provider.Kind rides on the audit snapshot
+		// instead (AgentRun.ModelProviderID's own doc explains why).
+		// provider.ID is "" when mpChoice.chosen is false.
+		ModelProviderID: f.mpChoice.provider.ID,
+		UserType:        runCreatorUserType(ctx),
+		Preset:          req.Preset,
+		PresetVersion:   req.PresetVersion,
+		OperatorOwned:   operatorOwned,
+		CreatedVia:      createdVia(ctx),
+		// The pool binding is the run's own admission record: dispatch routes to exactly this target.
+		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID, EvidenceSource: placed.EvidenceSource,
+		RunnerPoolID: placed.RunnerPoolID, RunnerPoolRevision: placed.RunnerPoolRevision,
+		RunnerPoolSelection: placed.RunnerPoolSelection, RunnerPoolExecutor: placed.RunnerPoolExecutor,
+	}
 }
 
 // seedAndAdmitWorkspace folds a named workspace onto the resolved spec and then
@@ -417,15 +491,15 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // fold into, which requestRepoProviderRefusals' two free-text fields alone
 // never see. Review (foldPreflight) passes false: see that gate's own doc
 // comment.
-func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWriter, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest, gate bool) ([]string, bool) {
-	dirs, refusal := s.seedAuthorizedWorkspace(ctx, r, spec, req)
+func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWriter, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest, gate bool) (workspaceSeed, bool) {
+	seed, refusal := s.seedAuthorizedWorkspace(ctx, r, spec, req)
 	if refusal.write(s, w, r) {
-		return nil, false
+		return workspaceSeed{}, false
 	}
 	if gate && s.gitCredentialRefusal(w, r, repoLocatorsOf(spec.WorkspaceRepos)...) {
-		return nil, false
+		return workspaceSeed{}, false
 	}
-	return dirs, true
+	return seed, true
 }
 
 // repoSourceWarnings is the pair of 201 sentences provider admission cannot
@@ -506,6 +580,11 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		"agent": req.Agent, "repo": req.Repo, "policy_id": policyID,
 		"confinement_class": enforced, "confinement_source": confinementSource, "jti": jti,
 		"inline_policy": req.InlinePolicy != nil,
+	}
+	if keys := policyOverlayKeys(req.PolicyOverlay); len(keys) > 0 {
+		// The keys the run's policy_overlay laid onto its default, never their
+		// values: binds policy.overlay.apply, which has no run id, to this run.
+		data["policy_overlay"] = keys
 	}
 	if req.Preset != "" {
 		// The preset stamp is also on the run row, but the chained audit row
@@ -591,6 +670,8 @@ type grantChecker interface {
 type createRunResponse struct {
 	types.AgentRun
 	Warnings []string `json:"warnings,omitempty"`
+	// ResourcesApplied is the CPU and memory the run asked for and got (stepResources).
+	ResourcesApplied *client.AppliedResources `json:"resources_applied,omitempty"`
 }
 
 // runLLMAccess is the deterministic model-access verdict for a run request —

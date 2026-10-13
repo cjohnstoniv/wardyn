@@ -43,7 +43,7 @@ scripts/ci-run.sh
 | `WARDYN_CI_REPO` | `org/name` cloned into the workspace (needs egress + creds, see below) | unset (ephemeral scratch) |
 | `WARDYN_CI_POLICY_FILE` | `RunPolicySpec` JSON | [`examples/policies/ci.json`](../examples/policies/ci.json) |
 | `WARDYN_URL` | an existing control plane to launch on, instead of a throwaway stack (see "[CI's identity](#cis-identity)" below) | unset (throwaway stack) |
-| `WARDYN_CI_TOKEN` | with `WARDYN_URL`: the CI principal's own `wdn_` token — every `wardyn` call authenticates as it | **required** with `WARDYN_URL` |
+| `WARDYN_CI_TOKEN` | with `WARDYN_URL`: the CI [service identity](operations/api-tokens.md#service-identities)'s `wdn_` token — every `wardyn` call authenticates as it | **required** with `WARDYN_URL` |
 | `WARDYN_CI_MODEL_PROVIDER` | with `WARDYN_URL`, harness mode: the model provider the run uses, checked before launch | **required** there |
 | `WARDYN_CI_TIMEOUT` | `wardyn run --wait` bound | `30m` |
 | `WARDYN_CI_OUT` | artifact dir (`run.json`, `audit.json`, `run.log`, `session.cast` — the run's terminal recording, when it has one) | `./ci-artifacts` |
@@ -71,13 +71,20 @@ A run's model credential is its owner's, and CI is no exception. So `ci-run.sh` 
   - Nobody is signed in to it, so nobody's model credential is there: it runs **`exec` mode only**, and refuses a harness run up front.
 - **An existing control plane** (`WARDYN_URL` set).
   - No stack, no build; the `wardyn` CLI must be on `PATH`.
-  - Every call authenticates as `WARDYN_CI_TOKEN` — a **dedicated CI principal**'s own `wdn_` token — and `WARDYN_ADMIN_TOKEN` is cleared for those calls, since the CLI would otherwise try it first.
+  - Every call authenticates as `WARDYN_CI_TOKEN` — a **dedicated CI service identity**'s `wdn_` token, never a person's — and `WARDYN_ADMIN_TOKEN` is cleared for those calls, since the CLI would otherwise try it first.
   - A harness run needs `WARDYN_CI_MODEL_PROVIDER`: `ci-run.sh` reads that identity's `provider_access` (`wardyn setup status --json`), stores nothing, and fails naming the provider unless its credential is `live` or `expiring` (it warns on `expiring`).
   - It then launches on exactly that provider (`--model-provider`).
 
-* The CI principal is a user in your IdP (or a local user) who signs in once, mints their own token (`POST /api/v1/me/tokens`, or the console),
-  * and stores their model-provider credential once (`PUT /model-providers/{id}/credential`, or the console) — see "[Provisioning the CI principal](#driving-an-existing-control-plane-instead)" below.
-* Its audit trail then says "CI", and it can be scoped with `capModelProvider`/`capAgent` like any other person, rather than one human's token paying for and being blamed for every pipeline run.
+* The CI principal is a **service identity**, `service:<name>`: automation that runs under its own name, with a named person as its sponsor.
+  * An admin creates it (`wardyn service-identity create --name ci --sponsor <principal>`); the sponsor mints its token in the console (Account, "Service identities I sponsor"), shown once, with an expiry of at most `90d`.
+  * It stores its own model-provider credential once (`PUT /model-providers/{id}/credential`, with its own token) — see "[Provisioning the CI principal](#driving-an-existing-control-plane-instead)" below.
+* Its audit trail says "CI" and names its sponsor on every row, rather than one human's token paying for and being blamed for every pipeline run.
+  * Scope it with `capModelProvider`/`capAgent` through the `user` subject `service:<name>`.
+* A person's token is not the CI credential: it acts as that person, and leaves with them when they leave.
+* A service token reaches only what a pipeline needs: launch and dry-run, read, `PATCH` and kill its own runs, `GET /me`, `GET /setup/status` and its model-provider credential. Anything else answers `403` `service_scope`.
+  * It has no audit read, so `run --wait` reports a `FAILED` run as exit `1` and not the task's own code, and `ci-run.sh` writes an empty `audit.json` (`[]`) and collects no `session.cast`.
+  * Read those as the sponsor or an admin in the console.
+* When the sponsor leaves, is suspended or is replaced, the identity's tokens stop and its live runs continue: change the sponsor (`wardyn service-identity update <name> --sponsor <principal>`) and mint a new token.
 * The deployment's admin token is no substitute: under OIDC it holds no model credential, and `ci-run.sh` says so if it is handed one.
 * Do not use the Claude subscription kind for CI ([below](#model-access-for-harness-mode-running-a-real-agent)).
 
@@ -287,6 +294,7 @@ Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request 
 - `push:` stays narrow to `main`, `master` and `feature/**`, since every other commit already gets a run from its own PR.
 - It has no `release/**`: `release.yml` accepts CI by tree (#1461), and [`release-branch-checks.yml`](../.github/workflows/release-branch-checks.yml) runs only DCO and gitleaks there (#1466).
 - The push-gate DCO exemption for GitHub-made merges needs gpg and GitHub's web-flow key id `B5690EEEBB952194`; if GitHub rotates that key, update the id in the Makefile's `dco` recipe.
+- [`scripts/ci-parity-local.sh`](../scripts/ci-parity-local.sh) runs changed packages under `-race`, then against a throwaway Postgres with the pool guard and a `localhost` DSN.
 
 Image-script tests set `WARDYN_MITM_CA_DIR` to a private temporary directory to isolate generated CA files.
 The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
@@ -539,7 +547,8 @@ So:
 ## Driving an existing control plane instead
 
 - If you already run wardynd somewhere, set `WARDYN_URL` + `WARDYN_CI_TOKEN` and `ci-run.sh` launches there (see "[CI's identity](#cis-identity)" above).
-- Or use the CLI directly — it is fully non-interactive with `WARDYN_URL` + `WARDYN_TOKEN`, the CI principal's own `wdn_` token (not the shared `WARDYN_ADMIN_TOKEN`, which under OIDC holds no model credential to launch a model run with):
+- Or use the CLI directly — it is fully non-interactive with `WARDYN_URL` + `WARDYN_TOKEN`, the CI service identity's `wdn_` token, not a person's.
+  - The shared `WARDYN_ADMIN_TOKEN` is no substitute: under OIDC it holds no model credential to launch a model run with.
 - `--task-mode exec` runs the task as a plain shell command, so **no `--agent` is needed** — the image is what the run needs, and naming an agent it never invokes was a formality this documentation used to demonstrate.
 
 ```sh
@@ -548,21 +557,23 @@ wardyn run --image ubuntu:24.04 --task-mode exec \
 wardyn run --image ubuntu:24.04 --task-mode exec \
   --task 'make test' --policy-file ci.json --wait --timeout 30m
 wardyn run get <id> --json     # final state, resolved image
-wardyn run grants <id>         # what the run was ELIGIBLE for
-wardyn audit <id> --json
+wardyn run grants <id>         # what the run was ELIGIBLE for (not a service token: 403 service_scope)
+wardyn audit <id> --json       # likewise
 ```
 
 - `--dry-run` posts the same body to `POST /api/v1/runs/preflight`, a dry-run of launch resolution that mints nothing and prints the `setup_items` blockers plus the confinement class that would be enforced.
-- `--placement remote|local` chooses where the run's sandbox lives, and `--runner <id>` names the runner for a local run when more than one of yours is online. Unset, the server fills the placement only when exactly one is eligible. The CLI passes both through; the server refuses with a reason such as `placement_required`, `placement_unavailable` or `runner_offline`.
+- `--placement remote|local` chooses where the sandbox lives. A local run goes to your own runners through `--pool <id>` or your default pool, else is refused `runner_pool_required`. `--runner <id>` pins one of your runners in that pool; unset, the pool picks an online one with room. Other refusals include `runner_offline` and `runner_at_capacity`.
 - `ci-run.sh` calls the same endpoint before launching.
 
 **Provisioning the CI principal, once, against this deployment:**
 
 ```sh
-# 1. Sign in to the console once as the CI principal and create its own token
-#    from Account (POST /api/v1/me/tokens behind it) — shown exactly once.
-#    Store it as the pipeline secret WARDYN_CI_TOKEN; export it as WARDYN_TOKEN
-#    for the calls below.
+# 1. An admin creates the service identity, naming its sponsor:
+#      wardyn service-identity create --name ci --sponsor <principal>
+#    The sponsor signs in to the console and mints its token from Account,
+#    "Service identities I sponsor" — shown exactly once. Store it as the
+#    pipeline secret WARDYN_CI_TOKEN; export it as WARDYN_TOKEN for the calls
+#    below.
 
 # 2. Store its model-provider credential once (repeat per provider CI needs):
 curl -sS -X PUT "$WARDYN_URL/api/v1/model-providers/$PROVIDER_ID/credential" \

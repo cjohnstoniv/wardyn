@@ -31,19 +31,30 @@ type policyPreviewResponse struct {
 	Components []componentFact `json:"components,omitempty"`
 	// Provenance says why each entry of the spec is there (runFold.prov); never null.
 	Provenance []provenanceRow `json:"provenance"`
-	// Resources is what each placement offers the draft and LocalPlacement
-	// whether each entry can run on the person's runner; both are always an
-	// array, empty until the lane that fills them lands.
-	Resources      []client.PlacementResources `json:"resources"`
-	LocalPlacement []client.LocalPlacementFact `json:"local_placement"`
+	// Limits and ResourcesApplied are the preflight's, with the same meaning.
+	// LocalPlacement says whether each entry can run on the person's runner:
+	// always an array, empty until the lane that fills it lands.
+	Limits           *types.EffectiveRunLimits   `json:"limits,omitempty"`
+	ResourcesApplied *client.AppliedResources    `json:"resources_applied,omitempty"`
+	MainDrive        *client.MainDriveApplied    `json:"main_drive,omitempty"`
+	LocalPlacement   []client.LocalPlacementFact `json:"local_placement"`
 	// Image is the image the run would start from and its source, absent until
 	// the image lane resolves it; AllowedImages are the organisation's allowed
 	// choices, an array that is empty until that lane fills it.
 	Image         *client.ImageFact     `json:"image,omitempty"`
 	AllowedImages []client.AllowedImage `json:"allowed_images"`
+	// HarnessSet is the preflight's, with the same meaning.
+	HarnessSet *client.HarnessSetFact `json:"harness_set,omitempty"`
 	// RunnerPool and RunnerPools are the preflight's, with the same meaning.
 	RunnerPool  *client.ResolvedRunnerPool `json:"runner_pool,omitempty"`
 	RunnerPools []client.RunnerPoolChoice  `json:"runner_pools"`
+	// RunnerPoolSlots is the preflight's, with the same meaning.
+	RunnerPoolSlots *client.PoolSlots `json:"runner_pool_slots,omitempty"`
+	// Access is what the draft brings in (accessFacts), the same projection
+	// Review answers.
+	Access *accessBlock `json:"access,omitempty"`
+	// Attachments is the preflight's, with the same meaning.
+	Attachments []client.RunAttachment `json:"attachments"`
 }
 
 type policyPreviewPending string
@@ -91,7 +102,7 @@ func policyPreviewFacts(req createRunRequest, spec types.RunPolicySpec, source p
 		Warnings: previewSafeWarnings(warnings), Pending: previewPending(req, choice),
 		RepositoryAccess: previewRepositoryAccess(req, out, site),
 		Provenance:       []provenanceRow{},
-		Resources:        []client.PlacementResources{}, LocalPlacement: []client.LocalPlacementFact{}, AllowedImages: []client.AllowedImage{},
+		LocalPlacement:   []client.LocalPlacementFact{}, AllowedImages: []client.AllowedImage{},
 		RunnerPools: []client.RunnerPoolChoice{},
 	}
 }
@@ -108,7 +119,7 @@ var previewSafeWarning = regexp.MustCompile(`^(confinement raised from "(CC[1-3]
 func previewSafeWarnings(warnings []string) []string {
 	out := []string{}
 	for _, warning := range warnings {
-		if warning == composer.WarnResourcesCapped || warning == "push_rules inherited from the operator's policy" ||
+		if warning == composer.WarnResourcesCapped || warning == warnDiskPolicyCut || warning == "push_rules inherited from the operator's policy" ||
 			warning == "allow_all_egress disabled: operator policy does not permit allow-all egress" ||
 			warning == "git_push_any_branch disabled: operator policy keeps push branch-namespace confinement on" || previewSafeWarning.MatchString(warning) {
 			out = append(out, warning)

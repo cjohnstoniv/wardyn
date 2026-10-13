@@ -22,7 +22,7 @@ import (
 // calls to a nil interface. The api layer type-asserts and runs no lease sweep
 // when a store lacks it; production is always PG.
 type RunLeaser interface {
-	// ListLeasedRuns returns every RUNNING run that has an end or is kept.
+	// ListLeasedRuns returns every RUNNING run that has an end, a lifetime cap or is kept.
 	ListLeasedRuns(ctx context.Context) ([]types.AgentRun, error)
 	// MarkRunEnded marks run id kept-and-ended at now, only while still
 	// RUNNING, not already kept, and its end is at or before now; clears a
@@ -92,7 +92,7 @@ var _ RunLeaser = PG{}
 // terminal run has nothing left to end.
 func (s PG) ListLeasedRuns(ctx context.Context) ([]types.AgentRun, error) {
 	q := `SELECT ` + runCols + ` FROM agent_runs
-		WHERE state = $1 AND (ends_at IS NOT NULL OR lost_at IS NOT NULL)`
+		WHERE state = $1 AND (ends_at IS NOT NULL OR lost_at IS NOT NULL OR lifetime_cap_at IS NOT NULL)`
 	return collect(ctx, s.Pool, "list", "leased runs", q, []any{string(types.RunRunning)}, scanRun)
 }
 
@@ -139,9 +139,43 @@ func (s PG) SetRunEndAndWait(ctx context.Context, id uuid.UUID, fromLimits types
 		  AND run_limits = $10
 		  AND CASE WHEN $8::timestamptz IS NULL THEN lost_at IS NULL OR lost_reason <> $7
 		           ELSE lost_reason = $7 AND lost_at = $8 AND lost_at > $9::timestamptz END`,
-		id, fromEnd, fromWait, toEnd, toWait, nonTerminalStateNames(), string(types.LostEnded), lostAt, keptAfter, limitsJSON)
+		id, fromEnd, fromWait, toEnd, toWait, slotHoldingStateNames(), string(types.LostEnded), lostAt, keptAfter, limitsJSON)
 	if err != nil {
 		return false, fmt.Errorf("store: set run end and wait: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// KillRunAtLifetimeIf moves a RUNNING run to KILLED and writes its status_detail in
+// the one statement, but only while the reason still holds on the row as it stands
+// at now: the lease sweep decides from a row it listed earlier, and a person may
+// have moved the end, or another replica kept the run at its end, since. The
+// conditions are the reason's own, as MarkRunEnded's are for the keep:
+//   - "end_reached": a Background run whose end is at or before now and before its
+//     lifetime cap (an end at the cap is the maximum);
+//   - "max_lifetime_reached": the lifetime cap is at or before now, and the run is
+//     not a Background run whose end came first (that run is end_reached).
+//
+// Both refuse a run its own end already kept (lost_reason 'ended'): a kept run
+// keeps its files grace. False with a nil error is a no-op for the caller: no kill,
+// no audit row. detail is what status_detail becomes ("lifetime: <reason>").
+func (s PG) KillRunAtLifetimeIf(ctx context.Context, id uuid.UUID, reason types.RunEndReason, detail string, now time.Time) (bool, error) {
+	var cond string
+	switch reason {
+	case types.RunEndEndReached:
+		cond = `experience = 'background' AND ends_at <= $3 AND (lifetime_cap_at IS NULL OR ends_at < lifetime_cap_at)`
+	case types.RunEndMaxLifetimeReached:
+		cond = `lifetime_cap_at <= $3 AND NOT (experience = 'background' AND COALESCE(ends_at < lifetime_cap_at, false))`
+	default:
+		return false, fmt.Errorf("store: kill run at lifetime: unknown reason %q", reason)
+	}
+	tag, err := s.Pool.Exec(ctx,
+		`UPDATE agent_runs SET state='KILLED', status_detail=$2, updated_at=now(), ended_at=now()
+		 WHERE id=$1 AND state='RUNNING' AND NOT (lost_at IS NOT NULL AND lost_reason = 'ended') AND `+cond,
+		id, detail, now,
+	)
+	if err != nil {
+		return false, fmt.Errorf("store: kill run at lifetime: %w", err)
 	}
 	return tag.RowsAffected() > 0, nil
 }
@@ -161,9 +195,16 @@ func (s PG) StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, 
 
 // nonTerminalStateNames is types.NonTerminalRunStates as the text[] a
 // `state = ANY($n)` parameter takes.
-func nonTerminalStateNames() []string {
-	states := make([]string, 0, len(types.NonTerminalRunStates))
-	for _, st := range types.NonTerminalRunStates {
+func nonTerminalStateNames() []string { return stateNames(types.NonTerminalRunStates) }
+
+// slotHoldingStateNames is types.SlotHoldingRunStates in the same form: the states a pool,
+// deployment or host slot is counted over, and the ones a run's end, limits or age are written to.
+// A QUEUED run is in neither.
+func slotHoldingStateNames() []string { return stateNames(types.SlotHoldingRunStates) }
+
+func stateNames(in []types.RunState) []string {
+	states := make([]string, 0, len(in))
+	for _, st := range in {
 		states = append(states, string(st))
 	}
 	return states

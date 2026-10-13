@@ -4,9 +4,10 @@
  */
 
 // Your account (M-5, #636 — the settings split, §4.3): a person's OWN
-// connections and keys, reached at /account: Your model connections (#541,
-// User view only), Azure DevOps (a personal connection, #386) and Your SSH
-// keys.
+// connections and keys, reached at /account: Invitations to create a token
+// (#1508), Your model connections (#541, User view only), Azure DevOps (a
+// personal connection, #386), My runner (0.9, User view only), Your SSH keys
+// and the service identities they sponsor (#1508).
 //
 // Nothing here belongs to the deployment — Host, the admin's Model providers
 // list, Providers and User drives all stayed in Admin Settings
@@ -30,6 +31,9 @@ import { ModelConnectionsCard } from "./model-connections-card";
 import { useConsoleMode } from "../../wardyn/console-view";
 import { AdoConnectionCard } from "./ado-connection";
 import { MyComponentsCard } from "./my-components-card";
+import { MyRunnerCard } from "./my-runner-card";
+import { InvitationsCard } from "./invitations-card";
+import { ServiceIdentitiesCard } from "./service-identities-card";
 import { SshKeysPane } from "../ssh-keys";
 import { ErrorState, TableSkeleton } from "../../wardyn/states";
 
@@ -57,6 +61,8 @@ export function YourAccountScreen() {
       {state === "error" && <ErrorState onRetry={load} />}
       {state === "ready" && status && (
         <div className="space-y-2">
+          {/* #1508: an admin's invitation to create an API token. Renders nothing while none is waiting. */}
+          <InvitationsCard />
           {/* #541 (§5.4, packet MP-D): every person's own model-provider
               credentials, User view only — an admin reaches it by switching
               to Member view. Renders nothing with no provider block. */}
@@ -67,7 +73,13 @@ export function YourAccountScreen() {
           {/* #1914: components a person saved to reuse; absent when they may
               not define any and have none. */}
           <MyComponentsCard secretsPath={adminView ? "/admin/secrets" : "/secrets"} />
+          {/* 0.9 (M-RN-2): the person's own computer that runs their runs. User view only; renders
+              nothing while runners are off. */}
+          {!adminView && <MyRunnerCard />}
           <SshKeysPane heading="h3" />
+          {/* #1508: the service identities this person sponsors, and their tokens. Renders nothing for a
+              person who sponsors none. */}
+          <ServiceIdentitiesCard />
         </div>
       )}
     </div>

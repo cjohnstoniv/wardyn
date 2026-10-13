@@ -38,12 +38,7 @@ func (s *Server) pushRuleSetsFor(spec types.RunPolicySpec, req *createRunRequest
 		if cloneURL == "" {
 			continue // admission refuses an unreadable locator; nothing is pushed there
 		}
-		provider, basePath := pushRuleProvider(sc, cloneURL)
-		host, org, err := types.PushRuleEntryOfServerRemote(provider, cloneURL, basePath)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%s: %w", repo, err)
-		}
-		key, err := types.PushRuleKey(provider, host, org)
+		entry, key, err := pushRuleEntryOf(sc, cloneURL)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", repo, err)
 		}
@@ -71,7 +66,8 @@ func (s *Server) pushRuleSetsFor(spec types.RunPolicySpec, req *createRunRequest
 			}
 		}
 		if rules.IsSet() {
-			sets = append(sets, types.PushRuleSet{Provider: provider, Host: host, Org: org, BasePath: basePath, Rules: rules})
+			entry.Rules = rules
+			sets = append(sets, entry)
 		}
 	}
 	if err := types.ValidatePushRuleSets(sets); err != nil {
@@ -80,16 +76,35 @@ func (s *Server) pushRuleSetsFor(spec types.RunPolicySpec, req *createRunRequest
 	return sets, applied, nil
 }
 
-// pushRuleRemotes are the repositories a run brings: the request's own and every
-// one its policy clones.
+// pushRuleEntryOf is the SCM entry a remote's push rules are filed under: its
+// identity (no rules yet) and canonical key, the one the dispatch plan and the
+// component facts both derive.
+func pushRuleEntryOf(sc types.SiteConfig, cloneURL string) (entry types.PushRuleSet, key string, err error) {
+	provider, basePath := pushRuleProvider(sc, cloneURL)
+	host, org, err := types.PushRuleEntryOfServerRemote(provider, cloneURL, basePath)
+	if err != nil {
+		return types.PushRuleSet{}, "", err
+	}
+	if key, err = types.PushRuleKey(provider, host, org); err != nil {
+		return types.PushRuleSet{}, "", err
+	}
+	return types.PushRuleSet{Provider: provider, Host: host, Org: org, BasePath: basePath}, key, nil
+}
+
+// pushRuleRemotes are the repositories a run brings: the request's own, every
+// one its policy clones and every one a built-in GitHub component reaches.
 func pushRuleRemotes(spec types.RunPolicySpec, req *createRunRequest) []string {
 	var out []string
 	if req != nil && req.Repo != "" {
 		out = append(out, req.Repo)
 	}
-	for _, r := range spec.WorkspaceRepos {
-		if !slices.Contains(out, r.Repo) {
-			out = append(out, r.Repo)
+	remotes := repoLocatorsOf(spec.WorkspaceRepos)
+	if req != nil {
+		remotes = append(remotes, builtinGitHubRemotes(req.Components)...)
+	}
+	for _, r := range remotes {
+		if !slices.Contains(out, r) {
+			out = append(out, r)
 		}
 	}
 	return out
