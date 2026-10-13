@@ -12,7 +12,7 @@ import { ADO } from "../../../../lib/ado-entra-copy";
 import { PEOPLE } from "../../../../lib/people-access-copy";
 import { Button, buttonVariants } from "../../../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../ui/dialog";
-import type { useAdoLaunchDoor } from "../../new-run/use-ado-launch-door";
+import type { useAdoLaunchDoor } from "../checks/use-ado-launch-door";
 
 export function AdoLaunchDialog({ dialog }: { dialog: ReturnType<typeof useAdoLaunchDoor>["dialog"] }) {
   return (

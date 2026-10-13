@@ -6,7 +6,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { previewRunPolicy } from "./policy-preview";
 import { runs } from "./runs";
 import type { ComponentFact } from "../types/components";
 
@@ -22,7 +21,7 @@ describe("resolved component facts at the dry-run clients", () => {
           status: 200, headers: { "content-type": "application/json" },
         })));
         const input = { agent: fact.agent?.agent ?? "claude-code", task: "facts" };
-        const result = door === "preflight" ? await runs.preflightRun(input) : await previewRunPolicy(input);
+        const result = door === "preflight" ? await runs.preflightRunWire(input) : await runs.previewRunPolicyWire(input);
         expect(result.components).toEqual([fact]);
         const received = result.components![0];
         expect(received.requirements).toBeInstanceOf(Array);
