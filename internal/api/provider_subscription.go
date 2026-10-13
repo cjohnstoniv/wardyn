@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -178,6 +179,37 @@ func (s *Server) authorProviderSubscriptionInjection(ctx context.Context, run ty
 		snapshot: providerGrantSnapshot{ProviderUID: c.provider.UID, OwnerSubject: c.owner, Harness: run.Agent},
 	})
 	return injections, mitmHosts, ok
+}
+
+// providerSubscriptionChannelHosts is channels (the azure_foundry lane's
+// entries, never mutated) plus every Claude subscription lane's route-through
+// host, each under the Anthropic request schema: ProxyConfig.LLMChannelHosts.
+// The gateway relays the Messages API the vendor host serves, and the MITM
+// entry authorProviderSubscriptionInjection returns only terminates the host
+// for the credential; without the entry here the proxy reads its bodies as no
+// schema at all and content inspection scans none of them. A lane that dials
+// the vendor host adds nothing, since the proxy knows that host already.
+//
+// No entry can collide with another lane's: two providers that share a host
+// are refused before anything is authored (laneConflict). An IPv6-literal
+// host is left out, because the proxy refuses a channel key that holds a
+// colon (validateChannelHosts) and the entry would fail the whole run.
+func providerSubscriptionChannelHosts(llms []llmTransport, channels map[string]string) map[string]string {
+	for _, l := range llms {
+		if !l.providerSubscription() || l.provider.provider.BaseURL == "" {
+			continue
+		}
+		host := gatewayHost(providerSubscriptionBase(l.provider.provider))
+		if host == "" || strings.Contains(host, ":") {
+			continue
+		}
+		channels = maps.Clone(channels)
+		if channels == nil {
+			channels = map[string]string{}
+		}
+		channels[host] = subscriptionInjectionHost
+	}
+	return channels
 }
 
 // providerOAuthUID returns the provider UID a wardyn-provider-<uid>-oauth

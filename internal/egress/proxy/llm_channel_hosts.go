@@ -10,8 +10,9 @@ import (
 
 // Channel hosts are model hosts the proxy inspects as one vendor's request schema without ever
 // treating them as a gateway for that vendor: an azure_foundry endpoint speaks the Anthropic or
-// OpenAI dialect, and its request bodies belong to the content scanner, but it is not a place the
-// brokered /wardyn/llm/* routes may dial. So the map feeds isLLMHost and channelForHost and nothing
+// OpenAI dialect, and a Claude subscription provider's route-through host speaks the Anthropic one.
+// Their request bodies belong to the content scanner, but neither is a place the brokered
+// /wardyn/llm/* routes may dial. So the map feeds isLLMHost and channelForHost and nothing
 // else: never gatewayVendor (which enrols a host in the relaxed private-address vet) and never
 // llmUpstreams (which would make /wardyn/llm/* forward to the host with no route gate).
 

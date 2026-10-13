@@ -78,6 +78,53 @@ func TestMITMGenericChannelBodyIsScannedWhateverTheHostClassification(t *testing
 	}
 }
 
+// TestMITM_SubscriptionRouteThroughHostIsScannedAsAnthropic: a Claude
+// subscription provider's route-through host reaches the proxy as a MITM entry
+// (for the credential) and a channel host (for the schema). With both, a
+// Messages body is scanned and a secret in it is refused before the gateway
+// sees it. The MITM entry alone terminates the host and scans nothing, which
+// is why dispatch sends the pair
+// (TestDispatch_SubscriptionRouteThroughIsInspectedAsAnthropic, internal/api).
+func TestMITM_SubscriptionRouteThroughHostIsScannedAsAnthropic(t *testing.T) {
+	const gateway = "llm.corp.example"
+	for _, tc := range []struct {
+		name     string
+		channels map[string]string
+		want     int
+	}{
+		{"terminated and named as an Anthropic host", map[string]string{gateway: anthropicHost}, http.StatusForbidden},
+		{"terminated only", nil, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cu := captureUpstream(t, true, "upstream-ok")
+			certPEM, keyPEM := genTestCA(t)
+			ca, err := newCertAuthority(certPEM, keyPEM)
+			if err != nil {
+				t.Fatalf("newCertAuthority: %v", err)
+			}
+			p := newProxy(Options{
+				RunID:           uuid.New(),
+				Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{gateway}}),
+				Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+				Scanner:         scanEngine(t, "block", scanTestSecret),
+				CA:              ca,
+				MITMHosts:       []string{gateway + ":443"},
+				LLMChannelHosts: tc.channels,
+				Resolver:        publicResolver{},
+				TLSClientConfig: testInsecureTLSConfig,
+				Dial:            redirectDial(upstreamAddr(cu.srv)),
+			})
+			proxySrv := httptest.NewServer(p)
+			defer proxySrv.Close()
+
+			resp := mitmPost(t, proxySrv.URL, certPEM, gateway, "/anthropic/v1/messages", anthropicMessagesBody("leak "+scanTestSecret))
+			if resp.StatusCode != tc.want || cu.reached != (tc.want == http.StatusOK) {
+				t.Fatalf("status = %d, reached the gateway = %v; want %d", resp.StatusCode, cu.reached, tc.want)
+			}
+		})
+	}
+}
+
 // mitmPost drives a real CONNECT + TLS + POST through the proxy's MITM tunnel
 // and returns the response the sandbox sees.
 func mitmPost(t *testing.T, proxyURL string, caPEM []byte, host, path, body string) *http.Response {
