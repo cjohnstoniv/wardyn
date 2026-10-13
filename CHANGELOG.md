@@ -90,19 +90,57 @@ and does not yet follow semantic versioning (interfaces are not stable).
   for existing runs.
 - Migration `0165_run_templates` adds `run_templates`, `run_template_revisions`, `template_group_admins` and
   `template_group_labels`; nothing changes for existing data.
-- Migration `0168_runner_pool_owner` removes every Self-Hosted pool made before it (they have no owner), with its
-  members, the default slots naming it and any run waiting for it; those runs end `KILLED` with
+- Migration `0168_runner_pool_owner` removes every pool of self-hosted runners made before it (they have no owner),
+  with its members, the default slots naming it and any run waiting for it; those runs end `KILLED` with
   `runner_pool_removed` and get no `run.kill` audit row. A pool a finished run is bound to stays as a deleted
-  tombstone. An organisation Self-Hosted default slot or preferred hosting type is cleared to none, never switched
-  to Remote Provided, and is now refused on write; until a person or an administrator sets a preference, a launch
-  that names no pool is refused `runner_pool_required`.
+  tombstone. An organization default or preferred pool type that named self-hosted runners is cleared to none, never
+  switched to an organization pool, and is now refused on write; until a person or an administrator sets a default,
+  a launch that names no pool is refused `runner_pool_required`.
+- Runner pools are now organization pools and user pools. The former Remote Provided pools become organization pools
+  and keep their runners; the former Self-Hosted pools become user pools and keep their owners and runners. Migration
+  `0173_runner_pool_scope` replaces `hosting_type` with `scope`, renames a first-boot pool called "Remote Provided" to
+  "Organization", and keeps each saved default as the one pool it resolved to.
+- A person no longer has a preferred runner type. A launch that names no pool uses the person's default pool, then the
+  organization's; otherwise it is refused `runner_pool_required`. A launch's `placement` no longer picks a pool: a
+  pool with no runner of that kind refuses the launch, `runner_pool_member_mismatch`. A saved default keeps the pool it
+  resolved to; a default for the runner type you did not prefer, which `--placement` could pick, is dropped, and
+  you then run `wardyn runner pool default set <pool>` before a launch with no pool is accepted.
+- The server's Docker host or Kubernetes cluster is now a remote-hosted runner, with a name and an "Available to
+  people's pools" setting (off by default). A person can add it to their own user pools only when an admin makes it
+  available to everyone or to listed people, groups or roles. That setting is held for a second human under
+  `WARDYN_GOVERNANCE_SECOND_HUMAN`.
+- API, SDK and CLI clients move to `scope`; a member `kind` with `runner_id` or `remote_runner_id`; `pool_id` for
+  defaults; the routes `/remote-runners`, `/me/remote-runners`, `/runner-pools/{id}/remote-runners/{rid}`,
+  `/me/runner-pools/{id}/remote-runners/{rid}` and `/runner-pools/{id}/members`; and the run field
+  `remote_runner_id`. The old fields and the `/executors/` routes are refused. Migration `0173` renames a key the
+  held changes carry, so every pending pool change waiting for a second human (a use policy set or cleared, a
+  runner added or removed) goes stale and must be proposed again.
 - `wardyn drive set` now adds every grant in its file and never removes an allocation, so `drive get` then `drive
   set` changes nothing. In 0.8 a file that changed a subject's `drive_id` moved the subject; in 0.9 it adds the new
   drive beside the old one. Remove the old allocation with `DELETE /drives/grants/{id}` or in the console.
 - `PUT /api/v1/runner-pool-defaults` replaces the whole document, so a PUT that leaves `barrier` out clears it; use
   `wardyn runner pool org-default set` (it reads first) or GET then PUT.
-- Runners registered before this release get Runs at once 2 (migration `0172_runner_max_runs`); a runner's owner
-  raises it with `wardyn runner set --max-runs N <runner-id>`.
+- Every runner now declares its limits: Runs at once, a total all its runs may hold at once, and what one run may
+  hold, each in CPU, memory and disk. A self-hosted runner registered before this release gets Runs at once 2
+  (migration `0172_runner_max_runs`) and no other limit (migration `0174_runner_limits`), so it takes no run, and a
+  launch that could only go there is refused `422 runner_limits_unset`, until its owner sets them all: `wardyn runner
+  set <runner> --max-runs N --total-cpu N --total-memory GB --total-disk GB --per-run-cpu N --per-run-memory GB
+  --per-run-disk GB`. Register new runners with this release's `wardyn-runnerd`: it measures the computer and
+  proposes half of it, and the server refuses a registration that declares no limits (`runner_limits_required`).
+  Runs already going keep running and are counted.
+- The server's Docker host or Kubernetes cluster gets its limits measured at the first boot. When an amount cannot
+  be measured (often disk: on Docker Desktop, or when `wardynd` runs in a container) none is set, and runs there are
+  refused `runner_limits_unset` until an admin sets them all with `wardyn runner set <id> …`. Read them with
+  `wardyn runner remote show <id> --json`.
+- A launch can now wait. One whose pool is running its Runs at once, or whose runners are all at their limits, is
+  stored `QUEUED` (`201`, wait reason `runner_pool_at_capacity` or `runner_pool_runners_at_capacity`) in every
+  pool. A create that loses a runner's last room to another launch as it is stored is refused
+  `422 runner_at_capacity`. API clients and scripts that create runs must handle a waiting run; `max_wait_sec`
+  (`wardyn run --max-wait`) bounds the wait.
+- Runners and pools on the wire: a runner view carries `kind`, `limits` and `usage`. `PUT /me/runners/{id}` takes
+  `{"limits": {…}}`, the whole set, and refuses a bad one `runner_limits_invalid`. A limit that a runner bounds names
+  the source `runner`. Each limit of a pool is optional, and one left out is set by the pool's runners; an empty
+  `barriers` list allows every barrier they offer.
 - A pending runner action can now end `refused` (migration `0175_runner_action_refused` widens the action outcome
   check): the runner answers an action it can never apply, such as a stop or kill naming a container it cannot prove
   it created, instead of failing its session on every reconnect. The action closes and `runner.action.refuse` is
@@ -128,12 +166,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   cannot be written exactly, or the runner cannot deliver managed settings (including a krun runner that cannot vouch
   for them), the run is refused, never launched without them. A default of "Run it" or "Block it" is still refused in
   interactive runs. A policy's default for unnamed tools (`*`) does not apply there; Claude Code asks.
-- A launch into a runner pool at its concurrent-run limit now waits for a slot instead of failing. It holds no
-  credential while it waits, starts in launch order once its owner's access, role and user type are re-checked, and
-  gives up after 24 hours (Background) or 1 hour (Interactive). `POST /runs` takes `max_wait_sec` (1 or more; a longer
-  wait is cut to 604800 seconds, 7 days, with a warning; `0` is `422 run_max_wait_invalid`). A waiting run can be
-  cancelled, ends `FAILED queue_timeout`, and is cancelled with its pool, or when its owner's sessions are revoked. A
-  run pinned to one of your runners waits for that runner. An all-offline self-hosted pool is still refused at launch.
+- A launch into a runner pool that is running its Runs at once, or whose runners are all at their limits, now waits
+  instead of failing. It holds no credential while it waits. The oldest waiting run that can be placed starts first,
+  once its owner's access, role and user type are re-checked, and only on a runner its launch could have used: one
+  that enforces its barrier, takes its drives and is a kind it can run on. A run that cannot run on your own runner
+  waits for the remote-hosted one. A run that has started no longer shows the wait reason. It gives up after 24
+  hours (Background) or 1 hour (Interactive). `POST /runs` takes
+  `max_wait_sec` (1 or more; a longer wait is cut to 604800 seconds, 7 days, with a warning; `0` is `422
+  run_max_wait_invalid`). A waiting run can be cancelled, ends `FAILED queue_timeout`, and is cancelled with its
+  pool, or when its owner's sessions are revoked. A run pinned to one of your runners waits for that runner. A pool
+  with no runner online that can take the run is still refused at launch.
   New metrics: `wardyn_runner_pool_queue_depth`, `wardyn_runner_pool_slots_used`,
   `wardyn_runner_pool_queue_wait_seconds`.
 - New Run can include more than one harness in a sandbox (an interactive environment, or a command), each on its own
@@ -220,9 +262,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the run fenced (migration `0150_runner_action_binding`).
 - A reconnecting runner's pending actions, state report pages and action results are recorded before it is marked
   ready, and teardowns issued while a runner is offline are queued for it (migration `0149_runner_inventories`).
-- `wardyn run --placement remote|local` and `--runner <id>` choose where a run's sandbox lives. Both are passed to the
-  server unchanged, so its placement refusals reach the CLI as they are. `--pool` is accepted and refused at run create
-  until runner-pool selection lands (#109).
+- `wardyn run --placement remote|local` and `--runner <id>` choose the kind of runner a run's sandbox lives on:
+  remote-hosted, or one of your own self-hosted runners. Both are passed to the
+  server unchanged, so its placement refusals reach the CLI as they are. `--pool <id>` names the runner pool.
 - Model connections say why they became unavailable: never connected, removed because an admin changed the provider's
   address or kind (with the new destination host to review before reconnecting), or the credential store could not be
   read ("could not check"; the credential may still be there). The record is owner-scoped and holds no secret; it is
@@ -283,8 +325,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the preview return `runner_pools`. `wardyn run --pool` and `wardyn runner pool list|default get|set|clear` are
   added.
 - A run now lands in a runner pool: the request's pool, or the person's or the organisation's default; a missing or
-  stale default is refused, never guessed, and self-hosted pools only ever run on the launching person's own
-  runners. A run is created on, and every retry stays on, the target it was admitted against. Migration
+  stale default is refused, never guessed, and a user pool only ever runs on the launching person's own runners and
+  the remote-hosted runners made available to them. A run is created on, and every retry stays on, the target it
+  was admitted against. Migration
   `0160_run_pool_binding` adds the pool binding to `agent_runs`; existing runs keep none. A request with no run type
   (`wardyn run` without `--experience`, or an older client) is refused `runner_pool_run_type_not_allowed` by any
   pool that has limits.
@@ -327,16 +370,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `recovery.rehearse` audit rows and exits 0 (pass), 3 (refused), 4 (fail) or 5 (incomplete). See
   docs/operations/recovery-rehearsal.md.
 - Runner pool catalogue (migration `0152_runner_pools`). Admins create, rename, switch off and delete pools
-  (`/runner-pools`), add configured executors to Remote Provided pools, and set the organisation default (`/runner-
-  pool-defaults`). A person adds only their own claimed runner to a Self-Hosted pool (`/me/runner-
+  (`/runner-pools`), add remote-hosted runners to organization pools, and set the organization default (`/runner-
+  pool-defaults`). A person adds only their own claimed runner to a user pool (`/me/runner-
   pools/{id}/runners/{runner}`) and sets their own defaults (`/me/runner-pool-defaults`). `GET /runner-pools` lists
   only the pools the caller may use, with availability and reason; a pool the caller may not use is a 404 like an
-  unknown one. On the first boot after the upgrade, a deployment with configured executors gets one Remote Provided
-  pool holding them as the organisation's remote default; it grants nobody a new executor or launch right.
-- Pool-use policy: `PUT|DELETE /runner-pools/{id}/use-policy` (security admin or admin) narrows who may use a Remote
-  Provided pool, held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN` (governance change kind
+  unknown one. On the first boot after the upgrade, a deployment with remote-hosted runners gets one organization pool,
+  named "Organization", holding them as the organization's default; it grants nobody a new runner or launch right.
+- Pool-use policy: `PUT|DELETE /runner-pools/{id}/use-policy` (security admin or admin) narrows who may use an
+  organization pool, held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN` (governance change kind
   `runner_pool_use_policy`). Deleting a pool that has a use policy is refused until the policy is cleared; attaching
-  or detaching an executor that a pool holds under a use policy is held for a second human; a leaver's identity is
+  or detaching a remote-hosted runner that a pool holds under a use policy is held for a second human; a leaver's
+  identity is
   removed from every use policy (an emptied policy permits nobody); deleting a pool clears the organisation default
   that named it. Audit actions
   `runner_pool.*`, `person.runner_pool_default.set|delete`.
@@ -373,14 +417,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   mints is shown once, to them alone. Invitations can be listed and revoked before they are claimed, and each one
   expires.
 - Runner pools carry limits per run type: CPU and memory (default and cap), a main-drive cap (`disk_mib`, whole GiB),
-  lifetime (default, maximum or unlimited), an idle stop for interactive environments only, allowed barriers and a
-  concurrent-run cap; an administrator sets them on create and replaces them on update (migration 0158). A run is
-  admitted by its pool's run types and barriers, the pool's CPU, memory and lifetime size it, and a launch waits at the
-  concurrent-run cap; the idle stop is stored and audited but not yet applied to runs.
+  lifetime (default, maximum or unlimited), an idle stop for interactive environments only, allowed barriers and
+  Runs at once across the pool (`max_concurrent_runs`); an administrator sets them on an organization pool, a
+  person on their own user pool (migration 0158). Each one is optional: a pool only narrows its runners, and a limit
+  it leaves out is set by its runners. A run is admitted by its pool's run types and barriers, the pool's CPU,
+  memory and lifetime size it, and a launch waits at the pool's Runs at once; the idle stop is stored and audited
+  but not yet applied to runs.
 - `wardyn-runnerd` ships as a release binary for Linux and macOS (amd64, arm64) with a per-user service: a systemd
   user unit or a LaunchAgent, installed by `deploy/runner/install.sh`, which registers the runner with a single-use
   token and keeps it running; the owner then claims it with `wardyn runner claim` (#1968).
-- Governance profiles can deny runs on self-hosted or remote-provided runners (`deny_placements`); a run's barrier
+- Governance profiles can deny runs on self-hosted or remote-hosted runners (`deny_placements`); a run's barrier
   and capabilities are now checked against the runner it actually lands on, and an offline runner is refused rather
   than guessed. Create, preflight, policy preview and source scans refuse a denied placement with 403
   `placement_denied`.
@@ -389,10 +435,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Interactive run now ends after 24 hours when no pool, profile or deployment names a lifetime. `GET /runs?no_end=1`
   lists live runs with no end.
 - A run's CPU and memory are bounded by the strictest of its pool, the person's governance profile, the deployment
-  and, on a person's own runner, the runner's advertised capacity. A larger ask is reduced to that limit, never
-  refused; an own runner smaller than the ask no longer refuses the run. `POST /runs/preflight` and the policy preview
-  return `limits` and `resources_applied` (requested, applied, capped, and the limit that bound it with its name); the
-  create response and the `run.create` audit row carry `resources_applied`.
+  and the per-run limit one of its pool's runners declares: a runner that takes the whole ask, else the largest. A
+  larger ask is reduced to a size that runner takes whole, never refused; a runner smaller than the ask no longer
+  refuses the run. `POST /runs/preflight` and the policy preview return `limits` and `resources_applied` (requested,
+  applied, capped, and the limit that bound it with its name); the create response and the `run.create` audit row
+  carry `resources_applied`.
 - A run can carry a built-in GitHub component, `components[]{builtin: "github", org, repos, access}`, without a
   workspace. It reaches only the listed repositories, through Wardyn's git broker. Each repository must pass workspace
   admission and the `workspace_provider` capability, and access must be within the caller's ceiling for a
@@ -455,15 +502,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   124), and `--wait` prints a waiting run's place as it changes.
 - Runs on a self-hosted runner are leased to it: the runner refuses to create or execute a run without the
   organisation's current lease and execution generation; token renewals and end changes extend the lease, a runner's
-  new session is leased again, and reviving such a run starts its agent under a fresh generation. A run is placed
-  only on the launcher's own claimed runners, and a Self-Hosted pool is available while one of them in it is online.
+  new session is leased again, and reviving such a run starts its agent under a fresh generation. A self-hosted
+  runner takes only its owner's runs, and a user pool of them is available while one of them is online.
   deny_placements is also held at dispatch and revive; managed-harness sign-in runs stay exempt at every door, and
   site-config probe runs at create and dispatch.
-- Self-Hosted runner pools are each person's own: a person creates, edits and deletes their pools
+- User pools are each person's own: a person creates, edits and deletes their pools
   (`/api/v1/me/runner-pools`, `wardyn runner pool create|update|delete|show`), up to 10, with names unique per
   person, and puts their own claimed runners in them (`wardyn runner pool add|remove <pool-id> <runner-id>`). Only
   the owner sees or uses one; anyone else gets the unknown-id `404`. Administrators list every pool read-only with
-  its `owner`, create Remote Provided pools only, and the organisation default names a Remote Provided pool only. A
+  its `owner`, create organization pools only, and the organization default names an organization pool only. A
   new erasure scope, `runner_pools`, also runs in the SCIM purge.
 - Console: Admin gains a Runners page (every registered computer with its state, last seen and what it reported,
   revoke, unused registration tokens, a mint for a named person, the runners switch), and Your account gains a My
@@ -490,7 +537,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   server's preflight warnings in one notice and shows a read-only Recording row under Where it runs.
 - An administrator can set the organisation's default barrier (`wardyn runner pool org-default set --barrier CC2`,
   or `PUT /api/v1/runner-pool-defaults` with `barrier`). A launch that names no barrier gets it when it is at or
-  above the caller's floor and the pool offers it; otherwise the strongest barrier offered at or above the floor
+  above the caller's floor, the pool allows it and its runners offer it; otherwise the strongest barrier offered at
+  or above the floor
   applies, as before. The pool list's default says who chose it (`default_source`), `run.create` records
   `confinement_default`, and a run that waits for a pool slot keeps the barrier its create resolved
   (`run.queue.start` records it). A person's own pool defaults cannot set a barrier (400). Server-originated
@@ -526,12 +574,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - `wardyn workspace build <workspace-id>` starts a workspace's image build, rebuilds it from fresh inputs with
   `--refresh`, and prints the current state with `--status` (`--json` for the raw view, including whether the image
   is reproducible). The Go SDK adds `BuildWorkspace` and `GetWorkspaceBuild`.
-- Runners: each runner has Runs at once (`max_runs`, 1–64), set with `wardyn-runnerd register --max-runs` (default
-  half the host's CPU cores) and changed only by its owner (`wardyn runner set --max-runs`, `PUT /me/runners/{id}`,
-  audited `runner.update`). Placement never exceeds it: a full runner refuses `runner_at_capacity`, and in a capped
-  pool the run waits with `runner_pool_runners_at_capacity`, then starts on whichever of its runners has room.
-  Runners report their machine name, runner views list their pools, and `GET /runner-pools/{id}/runners` lists a
-  pool's runners. Migration `0172_runner_max_runs`.
+- Runner limits: every runner, self-hosted or remote-hosted, declares Runs at once (1–64 on a self-hosted runner),
+  a total and a per-run CPU, memory and disk. `wardyn-runnerd register` measures the computer and proposes half of
+  it (`--max-runs`, `--total-*` and `--per-run-*` override). Only its owner changes a self-hosted runner's (`wardyn
+  runner set`, `PUT /me/runners/{id}`, audited `runner.update`), and an admin a remote-hosted runner's (`wardyn
+  runner set`, `PUT /remote-runners/{id}`, audited `remote_runner.update`). Placement never passes a limit: a run
+  whose runners are all at theirs waits with `runner_pool_runners_at_capacity`, then starts on a runner it could
+  have been launched on that has room, at the size it would start with there,
+  and a revive onto a full runner is refused `runner_at_capacity`. Runner, remote-runner, pool-member and pool reads
+  carry the limits and `usage` (in use, available, reported, `disk_capped`), and a pool row adds up its runners as
+  `capacity`. Runs the server launches itself (sign-ins, probes, scans) count on the remote-hosted runner when the
+  deployment has exactly one, and are not held to its limits.
+  Runners report their machine name, runner views list their pools, and `GET /runner-pools/{id}/members` lists a
+  pool's runners. `wardyn runner pool create|update` take `--run-type`, `--barrier`, `--max-runs`,
+  `--<run type>-cpu|-memory|-disk|-lifetime DEFAULT:MAX`, `--interactive-idle` and `--limits-file`. Migrations
+  `0172_runner_max_runs` and `0174_runner_limits`.
 - A user pool can mix your own runners with remote-hosted runners your admin made available to people's pools. A run
   that names no placement goes to one of your own runners when one has room, otherwise to a remote-hosted runner;
   `placement: local` or `placement: remote` (or a `runner_id`) fixes the kind, and a pool with no runner of that
@@ -611,7 +668,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Own-runner (local) eligibility classifies the complete dispatch plan: own credentials are separated from operator,
   brokered and platform-minted material, every unclassified or unknown field refuses, own stored grants are persisted
   owner-only after the owner's namespace is proven, and a self-defined component on a local run needs
-  `local_self_defined_components` (default deny). A local run is placed through a Self-Hosted pool of the launcher's
+  `local_self_defined_components` (default deny). A local run is placed through a user pool of the launcher's
   own; one with no pool is refused `placement_unavailable`.
 - Run detail and `wardyn run policy` identify organisation-component egress as
   "Added for an attached component"; direct GitHub clone hosts are attributed to source control.
@@ -661,8 +718,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   base image digests and the console's minor and patch dependencies move to their latest releases.
 - A run that waits for a pool slot keeps the barrier its create resolved when the organisation lowers its default
   barrier. When the organisation raises the default while the run waits, the run starts under the stronger class if
-  the pool offers it, and `run.queue.start` records `confinement_default_raised`. The `run.create` row of a launch
-  that waits now records the drives and the harness set it attaches, as a direct create does.
+  the pool allows it and its runners offer it, and `run.queue.start` records `confinement_default_raised`. The
+  `run.create` row of a launch that waits now records the drives and the harness set it attaches, as a direct create
+  does.
 - Each workspace image build records what it built from and the image it produced. `GET
   /api/v1/workspaces/{id}/build` shows the record, its SHA-256 and whether the build is reproducible while the
   record is current; the `run.build` audit row carries the record and its hash, and a workspace-image cache hit now
@@ -709,7 +767,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   observation that finishes after the quarantine no longer restores the exit or recreates the spool directory.
 - `wardyn sync --pull` refuses a sandbox file name holding a control character, and every path or gateway message it
   reports is quoted when it holds a non-printable character, so sandbox text cannot drive the terminal.
-- A held runner pool executor attach or detach is listed to, read by and decided by a super admin only, the tier it
+- A held runner pool remote-hosted runner attach or detach is listed to, read by and decided by a super admin only, the tier it
   was written on; a security admin no longer sees or approves it.
 - An open sign-in or key door stays in place when a background status refresh briefly cannot read the secret store.
 - Review and policy preview report the managed-settings fact that launch delivers when governance holds tool
@@ -855,6 +913,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   boot transport.
 - remove_secrets now decides whether the caller is an operator by the operator check itself rather than by an empty
   owner name (defence in depth; no known caller reached the old gap).
+- As root on rootful Docker, `wardyn-runnerd` no longer runs a run's egress proxy as root: the proxy keeps its
+  image's non-root user, and its spool directory is handed to that user.
 - A recording's review no longer files a host that only ends in a model provider's name (for example
   notanthropic.com) as provider traffic; it now shows on the list you approve, as the server already treated it.
 - Adding a workspace refuses a folder with no mount path beside another such folder, or beside a folder or

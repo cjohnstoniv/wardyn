@@ -98,7 +98,10 @@
 # docs/AUDIT-ACTIONS.md 45424 measured at merge: the Azure CLI component and runner limits together.
 # docs/AUDIT-ACTIONS.md 45424 measured after merging the runner limits lane (adds 80: runner limits in runner.enrol/update, remote_runner.create/update and run.create `reserved`) with the Azure CLI component (adds 355), both over 44989.
 # docs/AUDIT-ACTIONS.md 45531 measured at merge: runner limits, the dispatch verbs' refusal and the self-hosted pool console together.
-docs/AUDIT-ACTIONS.md=45531 share=8
+# docs/AUDIT-ACTIONS.md 45083 adds 14 over 45069 (0.9 RP-4): run.queue.start says when a launch waits (the pool's Runs at once, or its runners' limits) and who offers a raised barrier.
+# docs/AUDIT-ACTIONS.md 45438 measured after merging the runner limits and pool words lanes (80 and 14, above) over the Azure CLI component's 45344.
+# docs/AUDIT-ACTIONS.md 45545 measured at merge: the runner and pool words pass over runner limits and the pool console.
+docs/AUDIT-ACTIONS.md=45545 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

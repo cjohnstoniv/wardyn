@@ -187,7 +187,7 @@ describe("Run step: pool summary", () => {
   it("with no pool maximum, shows the running count as text and no meter", async () => {
     show(AGENT, list([{ ...SHARED, slots: { used: 4, waiting: 0, verdict: "starts_now" } }]));
     expect(await screen.findByText(NR_RUN.RUNNING_ONLY(4))).toBeInTheDocument();
-    expect(screen.getByText(NR_RUN.NO_POOL_LIMIT)).toBeInTheDocument();
+    expect(screen.getByText(NR_RUN.POOL_LIMIT_FROM_RUNNERS)).toBeInTheDocument();
     expect(screen.queryByRole("meter", { name: NR_RUN.CAPACITY_LABEL })).not.toBeInTheDocument();
   });
 
