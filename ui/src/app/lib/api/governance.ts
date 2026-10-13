@@ -22,6 +22,7 @@ import type {
   RunPolicySpec,
 } from "../types";
 import type { PlacementValue } from "../types/new-run-contract";
+import { USER_TYPE_STANDARD } from "../types/user-types";
 import { asJson, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
 
 // types.GovernanceLimits. ALL are `omitempty` on the wire, so an unrestricted
@@ -274,6 +275,9 @@ export interface GovernanceAssignmentInput {
 export interface GovernancePreviewInput {
   user_subjects: string[];
   groups: string[];
+  // The ordinary human type id both previews send. An empty value means "no type tier" to the
+  // server, which is not what a signed-in person's run is given.
+  user_type: string;
 }
 
 // One kind-LESS claims textarea onto the two typed wire lists both previews
@@ -296,6 +300,7 @@ export function previewClaims(claims: string): GovernancePreviewInput {
   return {
     user_subjects: [...lines].sort((a, b) => Number(a.includes("@")) - Number(b.includes("@"))),
     groups: lines,
+    user_type: USER_TYPE_STANDARD,
   };
 }
 
