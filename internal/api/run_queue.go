@@ -274,6 +274,8 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	stampConfinementDefault(createData, q.reqCC, q.f.confinementDefault)
 	createData["end"] = q.f.end.audit(created)
 	q.intent.stamp(createData, created.LaunchIntent != nil)
+	stampDriveAudit(createData, q.f.drives)
+	stampHarnessSet(createData, q.f.harnesses, q.f.image)
 	createData["queue"] = map[string]any{
 		"pool_id": e.PoolID, "position": position, "max_wait_sec": waitSec, "deadline_at": e.DeadlineAt, "capped": true,
 		"reason": string(runnerpool.WaitAtCapacity),
