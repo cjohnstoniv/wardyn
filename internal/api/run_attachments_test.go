@@ -397,7 +397,6 @@ func TestStartFolderRepoAndDrive(t *testing.T) {
 func TestRepoSelectionSubsetAndRef(t *testing.T) {
 	ws := repoWS("payments", helloRepo, spoonRepo)
 	ws.Sources[1].Ref = "stable"
-	srv := attachFixture(t, types.SiteConfig{}, ws)
 	body := func(repos string) string {
 		return `{"agent":"claude-code","task":"t","workspaces":[{"workspace_id":"` + ws.ID.String() + `","repos":` + repos + `}]}`
 	}
@@ -407,12 +406,12 @@ func TestRepoSelectionSubsetAndRef(t *testing.T) {
 		{`[{"repo":"` + spoonRepo + `"}]`, spoonRecord + "stable"},
 		{`[]`, ""},
 	} {
-		srv.cfg.Runner = &fakeRunner{}
-		if _, spec := createAndDispatch(t, srv, body(tc.repos)); spec.Env["WARDYN_REPOS"] != tc.want {
+		// A fixture per case: a run's detached watcher still reads srv.cfg.Runner.
+		if _, spec := createAndDispatch(t, attachFixture(t, types.SiteConfig{}, ws), body(tc.repos)); spec.Env["WARDYN_REPOS"] != tc.want {
 			t.Fatalf("repos %s: WARDYN_REPOS = %q, want %q", tc.repos, spec.Env["WARDYN_REPOS"], tc.want)
 		}
 	}
-	w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body(`[{"repo":"octocat/other"}]`))
+	w := do(t, attachFixture(t, types.SiteConfig{}, ws), http.MethodPost, "/api/v1/runs/preflight", adminToken, body(`[{"repo":"octocat/other"}]`))
 	var refusal errorBody
 	_ = json.Unmarshal(w.Body.Bytes(), &refusal)
 	if w.Code != http.StatusUnprocessableEntity || refusal.Reason != reasonWorkspaceRepoUnknown || refusal.Error != workspaceRepoUnknownMsg("octocat/other", "payments") {

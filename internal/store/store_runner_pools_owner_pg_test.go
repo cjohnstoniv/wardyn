@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -95,7 +96,13 @@ func TestPG_DeleteRunnerPoolsByOwnerWaitsForCreates(t *testing.T) {
 	pg := store.NewPG(pool)
 	ctx := context.Background()
 	ownPool(t, pg, "sub-leaver", "Laptop")
-	tx, err := pool.Begin(ctx)
+	// The hold is on a pool of its own: the erasure asks pool for a connection on this goroutine (WARDYN_TEST_POOL_GUARD).
+	holder, err := pgxpool.New(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	tx, err := holder.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
