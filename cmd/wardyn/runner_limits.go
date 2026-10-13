@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -229,6 +231,31 @@ func setPeoplePools(cmd *cobra.Command, c *sdk.Client, ref runnerRef, arg string
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), msg, arg)
 	return err
+}
+
+// proposedLimitFlags is the limit set setup proposes for a runner that reports reported, as the flags
+// `wardyn runner set` takes: registration's rule (types.ProposeRunnerLimits with
+// types.SuggestedRunnerMaxRuns), in whole GB. freeDiskGB, when given, is the runner's free disk in place
+// of its report. An amount nobody measured is an error, never a guess.
+func proposedLimitFlags(reported *sdk.RunnerAmounts, freeDiskGB int64) (string, error) {
+	var m sdk.RunnerAmounts
+	if reported != nil {
+		m = *reported
+	}
+	if freeDiskGB > 0 {
+		m.DiskMiB = freeDiskGB * 1024
+	}
+	switch {
+	case m.CPUMillis <= 0 || m.MemoryMiB <= 0:
+		return "", errors.New("the runner reports no CPU or memory to propose from: set its limits with `wardyn runner set`")
+	case m.DiskMiB <= 0:
+		return "", errors.New("the runner does not report its free disk: pass --free-disk with the GB free for runs on its host")
+	}
+	l := types.ProposeRunnerLimits(m, types.SuggestedRunnerMaxRuns(int(m.CPUMillis/1000)))
+	gb := func(mib int64) int64 { return max(1, mib/1024) }
+	cpus := func(millis int64) string { return strconv.FormatFloat(float64(millis)/1000, 'f', -1, 64) }
+	return fmt.Sprintf("--max-runs %d --total-cpu %s --total-memory %d --total-disk %d --per-run-cpu %s --per-run-memory %d --per-run-disk %d",
+		l.RunsAtOnce, cpus(l.Total.CPUMillis), gb(l.Total.MemoryMiB), gb(l.Total.DiskMiB), cpus(l.PerRun.CPUMillis), gb(l.PerRun.MemoryMiB), gb(l.PerRun.DiskMiB)), nil
 }
 
 // roomyLimits is a limit set no flag can be refused against for being past it: the flags' own checks
