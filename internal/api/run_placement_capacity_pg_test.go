@@ -19,10 +19,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// A runner at its runs at once takes no further run: in a pool with no cap the launch and the dry doors
-// refuse runner_at_capacity, and a run waiting in a pool's queue is held with its own wait reason.
-// Raising the limit lets the next run in.
-func TestPG_RunnerAtItsMaxRunsRefusesOrWaits(t *testing.T) {
+// A runner at its runs at once takes no further run: in a pool with no cap of its own the launch waits in
+// the pool's queue (every pool can queue) and the dry doors say it waits, held with the runners' wait
+// reason. Raising the limit lets the next run in.
+func TestPG_RunnerAtItsMaxRunsWaits(t *testing.T) {
 	e := newPlacementEnv(t)
 	laptops := e.createPool("Laptops", types.RunnerPoolUser)
 	awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
@@ -37,12 +37,16 @@ func TestPG_RunnerAtItsMaxRunsRefusesOrWaits(t *testing.T) {
 	if first.RunnerID == nil || *first.RunnerID != awake {
 		t.Fatalf("first run bound to %v, want %s", first.RunnerID, awake)
 	}
-	for _, door := range []string{"/api/v1/runs", "/api/v1/runs/preflight"} {
-		w := e.call(e.person, http.MethodPost, door, runBody(""))
-		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `"reason":"`+string(placement.ReasonRunnerAtCapacity)+`"`) ||
-			!strings.Contains(w.Body.String(), runnerpool.RunnerAtCapacityMsg("Laptops")) {
-			t.Fatalf("%s on a full runner = %d %s, want 422 runner_at_capacity", door, w.Code, w.Body)
-		}
+	if w := e.call(e.person, http.MethodPost, "/api/v1/runs/preflight", runBody("")); w.Code != http.StatusOK ||
+		!strings.Contains(w.Body.String(), `"verdict":"waits"`) {
+		t.Fatalf("preflight on a full runner = %d %s, want 200 and a wait", w.Code, w.Body)
+	}
+	w := e.call(e.person, http.MethodPost, "/api/v1/runs", runBody(""))
+	if w.Code != http.StatusCreated || decodeJSON[types.AgentRun](t, w).State != types.RunQueued {
+		t.Fatalf("launch on a full runner = %d %s, want 201 QUEUED, never runner_at_capacity", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), string(placement.ReasonRunnerAtCapacity)) {
+		t.Fatalf("a waiting launch answered %s", w.Body)
 	}
 
 	room, err := e.srv.queueRunnerFree(withOIDCHuman(context.Background(), e.personP), laptops, queuedLaunch{Request: []byte(runBody(""))})
@@ -50,7 +54,7 @@ func TestPG_RunnerAtItsMaxRunsRefusesOrWaits(t *testing.T) {
 		t.Fatalf("the queue's verdict on a full runner = %+v, %v; want it held for runners_at_capacity", room, err)
 	}
 
-	if w := e.call(e.person, http.MethodPut, "/api/v1/me/runners/"+awake.String(), roomyLimitsBody(2)); w.Code != http.StatusOK {
+	if w := e.call(e.person, http.MethodPut, "/api/v1/me/runners/"+awake.String(), roomyLimitsBody(3)); w.Code != http.StatusOK {
 		t.Fatalf("owner raise = %d %s", w.Code, w.Body)
 	}
 	if second := e.localCreate(runBody("")); second.RunnerID == nil || *second.RunnerID != awake {

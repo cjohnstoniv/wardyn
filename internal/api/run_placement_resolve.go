@@ -22,10 +22,11 @@ import (
 
 // Where a run goes (0.9 runner pools). stepPlacement is the one fold step that decides it, the same at
 // create, Review and the policy preview: resolve the pool (runnerpool.Resolve), take that pool's own
-// candidate set, intersect it with fresh facts PER CANDIDATE, and leave the fully eligible set on the
-// fold. Create alone then picks one target (runPlacement.apply, once the run id exists) and stamps it on
-// the run row; dispatch routes to exactly that target. A pool is a label for a choice and never
-// admission, and a self-hosted pool never makes another person's runner a candidate.
+// candidate set of both kinds, intersect it with fresh facts PER CANDIDATE, decide the kind (the
+// person's own runners or the remote-hosted ones), and leave that kind's fully eligible set on the fold.
+// Create alone then picks one target (runPlacement.apply, once the run id exists) and stamps it on the
+// run row; dispatch routes to exactly that target. A pool is a label for a choice and never admission,
+// and a user pool never makes another person's runner a candidate.
 
 // runPlacement is stepPlacement's answer. The zero value is an unpooled run: a store that cannot hold
 // pools keeps today's behaviour, and a server-originated launcher never reaches the fold at all.
@@ -37,9 +38,14 @@ type runPlacement struct {
 	placement types.Placement
 	// filled: the pool, not the request, decided the placement.
 	filled bool
-	// eligible is every candidate that survived the intersection, by target id, never empty once pooled.
+	// remoteOffered: the pool decided on the person's own runner while a remote-hosted runner could also
+	// have taken the run, so a local refusal can say how to run it there.
+	remoteOffered bool
+	// eligible is every candidate of the decided kind that survived the intersection, by target id,
+	// never empty once pooled.
 	eligible []poolTarget
-	// targets is every candidate with its own facts, before any demand: Review's barrier options.
+	// targets is every candidate of the decided kind with its own facts, before any demand: Review's
+	// barrier options.
 	targets []poolTarget
 	// orgBarrier is the organisation's default barrier (runner_pool_org_defaults), which an untouched
 	// launch gets when it is at or above the floor and the pool offers it.
@@ -52,6 +58,9 @@ type runPlacement struct {
 	// runnersFull: the run would wait in the pool's queue, and every runner that could take it already
 	// holds its max_runs, so the dry doors answer that it waits.
 	runnersFull bool
+	// waitsForRoom: no runner of the pool that could take the run has room for it now (its Runs at once
+	// or a total), so the run waits in the pool's queue rather than being refused.
+	waitsForRoom bool
 }
 
 // placementInput is what the fold knows of the run when it resolves where it goes.
@@ -71,6 +80,8 @@ type placementInput struct {
 	dryDoor bool
 	// promoted: the queue's start of a promoted run, whose runner the promotion already found room on.
 	promoted bool
+	// drives: the run mounts drives, which no person's own runner does.
+	drives bool
 }
 
 // poolsPlaceRuns reports whether runner pools decide where this deployment's runs go: a store that holds
@@ -105,7 +116,9 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	if err != nil {
 		return runPlacement{}, runServerError("read runner pool defaults", err)
 	}
-	choice := runnerpool.Choice{Placement: f.req.Placement}
+	// The request's placement no longer chooses a pool: it narrows the pool's runners to one kind
+	// (kindTargets), after the pool is resolved.
+	var choice runnerpool.Choice
 	if f.req.RunnerPoolID != "" {
 		id, _ := uuid.Parse(f.req.RunnerPoolID) // the contract step already refused a malformed id
 		choice.PoolID = &id
@@ -118,52 +131,44 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	if ref != nil {
 		return runPlacement{}, poolRefusal(ref)
 	}
-	// deny_placements holds the placement the pool decides, not the request's: a member who denies remote
-	// launches is refused an organization pool, and one who denies local launches a user pool, whether
-	// the pool was named or came from a default.
-	if refusal := s.placementDeniedRefusal(ctx, pool.Scope.Placement(), f.ceiling); refusal != nil {
+	row, _ := catalogueRow(rows, pool.ID)
+	targets, refusal := s.poolTargets(ctx, f.req, ps, row)
+	if refusal != nil {
 		return runPlacement{}, refusal
 	}
-	row, _ := catalogueRow(rows, pool.ID)
+	kinds, refusal := s.kindTargets(ctx, f, row.Pool, targets)
+	if refusal != nil {
+		return runPlacement{}, refusal
+	}
 	// The pool's own limits admit by the run's STORED run type. A request that names none (an older
 	// client) never satisfies a pool that sets limits, and is refused here at every door.
 	if _, ref := runnerpool.PoolSource(row.Pool, types.RunnerPoolRunType(f.req.Experience)); ref != nil {
 		return runPlacement{}, poolRefusal(ref)
 	}
-	targets, refusal := s.poolTargets(ctx, f.req, ps, row)
-	if refusal != nil {
-		return runPlacement{}, refusal
-	}
-	// The size is bounded before any candidate is held to it: the candidates that are online and can
-	// enforce the barrier give the runner capacity, the ask is applied, and only the APPLIED size is
-	// held per candidate, so an over-ask is reduced, never refused.
-	demand := s.placementDemand(ctx, f)
-	// A run that starts at once is held to each runner's max_runs here; a run that waits in the pool's
-	// queue is not (the promotion holds it), and neither is a promoted run's start.
+	// A run that starts at once is held to each runner's room here, so it lands on one that has room; a
+	// run that waits in the pool's queue is not (the promotion holds it), and neither is a promoted run's
+	// start. When no runner of any kind has room, the run waits in the pool's queue, whatever the pool's
+	// own cap (every pool can queue).
 	capped := row.Pool.Limits != nil && row.Pool.Limits.MaxConcurrentRuns != nil
+	demand := s.placementDemand(ctx, f)
 	demand.holdRunnerCapacity = !capped && !f.promoted
-	// A self-hosted pool offers only the person's own runners, so no deployment-wide sentence answers a
-	// class none of them enforces: the class is held against each of them, the same at every door.
-	if pool.Scope == types.RunnerPoolUser && f.reqCCOK {
-		if _, _, err := enforcedConfinement(f.floor, f.reqCC, nil, "", f.baseline); err == nil {
-			demand.reqCCOK = true
-		}
-	}
-	fit, _ := eligibleTargets(targets, demand)
-	limits, applied, refusal := s.runSize(ctx, f, &row.Pool, selfHostedCapacity(row.Pool, fit, f.req.RunnerID))
+	offered, offers, refusal := s.offerKinds(ctx, f, row.Pool, kinds, demand)
 	if refusal != nil {
 		return runPlacement{}, refusal
 	}
-	demand.cpu, demand.mem = int64(applied.CPUMillis.Applied), int64(applied.MemoryMiB.Applied)
-	eligible, reason := eligibleTargets(targets, demand)
-	// A pin names one of the caller's own candidates (pinRefusal has refused every other id), so when that
-	// candidate fails the demand the answer is ITS reason, not "no such runner" because another is fine.
-	if pin := f.req.RunnerID; pin != "" {
-		if i := slices.IndexFunc(targets, func(t poolTarget) bool { return t.id == pin }); i >= 0 {
-			if why := demand.refusal(targets[i]); why != "" {
-				return runPlacement{}, targetRefusal(why, row.Pool.Name, pool.Scope)
-			}
+	// The kind is decided here, once, before local eligibility judges a run bound for the person's own
+	// runner: nothing after this step moves a run to the other kind.
+	decision := placementFor(f.req.PlacementRequest(), offers, s.deniedPlacements(ctx, f.ceiling))
+	waits := false
+	if decision.Refusal == placement.ReasonRunnerAtCapacity && demand.holdRunnerCapacity {
+		demand.holdRunnerCapacity, waits = false, true
+		if offered, offers, refusal = s.offerKinds(ctx, f, row.Pool, kinds, demand); refusal != nil {
+			return runPlacement{}, refusal
 		}
+		decision = placementFor(f.req.PlacementRequest(), offers, s.deniedPlacements(ctx, f.ceiling))
+	}
+	if decision.Refusal != "" {
+		return runPlacement{}, targetRefusal(decision.Refusal, row.Pool.Name, pool.Scope)
 	}
 	var choices []client.RunnerPoolChoice
 	if f.dryDoor {
@@ -171,21 +176,120 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 			return runPlacement{}, refusal
 		}
 	}
-	offers := map[types.Placement]placementOffer{pool.Scope.Placement(): offerOf(eligible, reason)}
-	decision := placementFor(f.req.PlacementRequest(), offers, s.deniedPlacements(ctx, f.ceiling))
-	if decision.Refusal != "" {
-		return runPlacement{}, targetRefusal(decision.Refusal, row.Pool.Name, pool.Scope)
+	chosen := offered[decision.Placement]
+	picked := pickTargets(chosen.eligible, decision.Targets)
+	remoteOffered := decision.Filled && decision.Placement == types.PlacementLocal && len(offers[types.PlacementRemote].Targets) > 0
+	return runPlacement{pooled: true, pool: pool, row: row.Pool, placement: decision.Placement, filled: decision.Filled, remoteOffered: remoteOffered,
+		eligible: picked, targets: chosen.targets, orgBarrier: org.Barrier, choices: choices, limits: chosen.limits, applied: chosen.applied,
+		waitsForRoom: waits, runnersFull: (capped || waits) && len(picked) > 0 && !slices.ContainsFunc(picked, func(t poolTarget) bool { return !t.full })}, nil
+}
+
+// offerKinds is offerKind for each kind the run may use, in kindOrder.
+func (s *Server) offerKinds(ctx context.Context, f placementInput, pool types.RunnerPool, kinds map[types.Placement][]poolTarget, demand placementDemand,
+) (map[types.Placement]kindOffer, map[types.Placement]placementOffer, *runRefusal) {
+	offered := map[types.Placement]kindOffer{}
+	offers := map[types.Placement]placementOffer{}
+	for _, kind := range kindOrder {
+		ts, ok := kinds[kind]
+		if !ok {
+			continue
+		}
+		o, refusal := s.offerKind(ctx, f, pool, kind, ts, demand)
+		if refusal != nil {
+			return nil, nil, refusal
+		}
+		offered[kind], offers[kind] = o, offerOf(o.eligible, o.reason)
 	}
-	picked := pickTargets(eligible, decision.Targets)
-	return runPlacement{pooled: true, pool: pool, row: row.Pool, placement: decision.Placement, filled: decision.Filled,
-		eligible: picked, targets: targets, orgBarrier: org.Barrier, choices: choices, limits: limits, applied: applied,
-		runnersFull: capped && len(picked) > 0 && !slices.ContainsFunc(picked, func(t poolTarget) bool { return !t.full })}, nil
+	return offered, offers, nil
+}
+
+// kindTargets splits the pool's candidates by kind and keeps the kinds this run may use: the one its
+// request asks for (a pin asks for local), then none its owner's profile denies, since deny_placements
+// holds each kind, not the pool. A run with drives keeps only the remote-hosted kind when the pool has
+// it, as no drive mounts on a person's own runner; with none it stays on the person's own runners for
+// the drive step to refuse. A kind the pool has no runner of is the kind mismatch, and a pool whose
+// every kind is denied is the deny sentence for the first of them.
+func (s *Server) kindTargets(ctx context.Context, f placementInput, pool types.RunnerPool, targets []poolTarget) (map[types.Placement][]poolTarget, *runRefusal) {
+	kinds := map[types.Placement][]poolTarget{}
+	for _, t := range targets {
+		kinds[t.placement()] = append(kinds[t.placement()], t)
+	}
+	if asked := f.req.Placement; asked != "" {
+		if len(kinds[asked]) == 0 {
+			return nil, poolRefusal(&runnerpool.Refusal{Reason: runnerpool.ReasonMemberMismatch, Name: pool.Name, Scope: pool.Scope})
+		}
+		kinds = map[types.Placement][]poolTarget{asked: kinds[asked]}
+	}
+	var refused types.Placement
+	for _, kind := range kindOrder {
+		if _, ok := kinds[kind]; ok && slices.Contains(s.deniedPlacements(ctx, f.ceiling), kind) {
+			refused = cmp.Or(refused, kind)
+			delete(kinds, kind)
+		}
+	}
+	if len(kinds) == 0 {
+		return nil, s.placementDeniedRefusal(ctx, refused, f.ceiling)
+	}
+	if _, remote := kinds[types.PlacementRemote]; remote && f.drives {
+		delete(kinds, types.PlacementLocal)
+	}
+	return kinds, nil
+}
+
+// kindOrder is the order the pool offers its kinds in: the person's own runners first, which spend no
+// shared capacity, then the remote-hosted ones.
+var kindOrder = []types.Placement{types.PlacementLocal, types.PlacementRemote}
+
+// kindOffer is what one kind of the pool's runners gives this run: its candidates before any demand,
+// the ones that meet every demand at the size this kind gives, the first refusal when none does, and
+// that size.
+type kindOffer struct {
+	targets, eligible []poolTarget
+	reason            placement.Reason
+	limits            types.EffectiveRunLimits
+	applied           client.AppliedResources
+}
+
+// offerKind holds one kind's candidates to the run's demand. The size is bounded before any candidate
+// is held to it: the kind's candidates that are online and can enforce the barrier give the runner
+// capacity, the ask is applied, and only the APPLIED size is held per candidate, so an over-ask is
+// reduced, never refused.
+func (s *Server) offerKind(ctx context.Context, f placementInput, pool types.RunnerPool, kind types.Placement, targets []poolTarget, demand placementDemand) (kindOffer, *runRefusal) {
+	// The person's own runners answer for themselves, so no deployment-wide sentence answers a class none
+	// of them enforces: the class is held against each of them, the same at every door.
+	if kind == types.PlacementLocal && f.reqCCOK {
+		if _, _, err := enforcedConfinement(f.floor, f.reqCC, nil, "", f.baseline); err == nil {
+			demand.reqCCOK = true
+		}
+	}
+	fit, _ := eligibleTargets(targets, demand)
+	limits, applied, refusal := s.runSize(ctx, f, &pool, selfHostedCapacity(pool, fit, f.req.RunnerID))
+	if refusal != nil {
+		return kindOffer{}, refusal
+	}
+	demand.cpu, demand.mem = int64(applied.CPUMillis.Applied), int64(applied.MemoryMiB.Applied)
+	eligible, reason := eligibleTargets(targets, demand)
+	// A pin names one of the caller's own candidates (pinRefusal has refused every other id), so when that
+	// candidate fails the demand the answer is ITS reason, not "no such runner" because another is fine.
+	// A pinned runner with no room now is no refusal: the run waits for it (resolvePlacement).
+	if pin := f.req.RunnerID; pin != "" {
+		if i := slices.IndexFunc(targets, func(t poolTarget) bool { return t.id == pin }); i >= 0 {
+			switch why := demand.refusal(targets[i]); {
+			case why == placement.ReasonRunnerAtCapacity:
+				return kindOffer{targets: targets, reason: why, limits: limits, applied: applied}, nil
+			case why != "":
+				return kindOffer{}, targetRefusal(why, pool.Name, pool.Scope)
+			}
+		}
+	}
+	return kindOffer{targets: targets, eligible: eligible, reason: reason, limits: limits, applied: applied}, nil
 }
 
 // queues says a run bound for this pool waits for a slot instead of starting at once: the pool sets a
-// concurrent-run cap. A pool with no cap never has a queue, and neither does an unpooled run.
+// concurrent-run cap, or no runner that could take the run has room for it now. An unpooled run never
+// queues.
 func (p runPlacement) queues() bool {
-	return p.pooled && p.row.Limits != nil && p.row.Limits.MaxConcurrentRuns != nil
+	return p.pooled && (p.waitsForRoom || (p.row.Limits != nil && p.row.Limits.MaxConcurrentRuns != nil))
 }
 
 func poolRefusal(ref *runnerpool.Refusal) *runRefusal {
@@ -211,10 +315,11 @@ func (s *Server) poolChoices(ctx context.Context, ps store.RunnerPoolStore, rows
 }
 
 // placementOffer is what one placement can give this run: the fully eligible targets, or the reason
-// there are none.
+// there are none. Room: one of the targets holds fewer runs than its max_runs, as last read.
 type placementOffer struct {
 	Targets []string
 	Refusal placement.Reason
+	Room    bool
 }
 
 func offerOf(eligible []poolTarget, reason placement.Reason) placementOffer {
@@ -225,7 +330,7 @@ func offerOf(eligible []poolTarget, reason placement.Reason) placementOffer {
 	for i, t := range eligible {
 		ids[i] = t.id
 	}
-	return placementOffer{Targets: ids}
+	return placementOffer{Targets: ids, Room: slices.ContainsFunc(eligible, func(t poolTarget) bool { return !t.full })}
 }
 
 // placementDecision is placementFor's answer. Targets is the set the pool's deterministic selection
@@ -239,7 +344,7 @@ type placementDecision struct {
 
 // placementFor is the pure placement table (design §6.2). requested is the request's placement and
 // runner pin; eligible is what each placement can offer; denied lists placements a ceiling denies.
-// With pools the table is run for the one placement the selected pool serves, and the "more than one
+// With pools the table is run for the kinds of runner the selected pool holds, and the "more than one
 // runner online" row, runner_ambiguous, is answered by the pool's deterministic selection instead of a
 // refusal: there is no ambiguity once a pool is chosen, and nothing is ever picked by list order.
 func placementFor(requested placement.Request, eligible map[types.Placement]placementOffer, denied []types.Placement) placementDecision {
@@ -264,12 +369,14 @@ func placementFor(requested placement.Request, eligible map[types.Placement]plac
 	return placementDecision{Placement: asked, Targets: targets}
 }
 
-// placementForUnasked: no placement was asked for, so exactly one eligible placement is filled in, two
-// are placement_required, and none answers with the first refusal in placement order (remote, local).
+// placementForUnasked: no placement was asked for, so the pool decides among the open placements. The
+// person's own runners come first when one of them has room, else the remote-hosted runners: the person
+// put their own computer in the pool to use it, and it spends no shared capacity. None open answers with
+// the first refusal in that order (local, remote).
 func placementForUnasked(eligible map[types.Placement]placementOffer, denied []types.Placement) placementDecision {
 	var open []types.Placement
 	var first placement.Reason
-	for _, p := range []types.Placement{types.PlacementRemote, types.PlacementLocal} {
+	for _, p := range kindOrder {
 		offer, ok := eligible[p]
 		switch {
 		case slices.Contains(denied, p):
@@ -280,13 +387,14 @@ func placementForUnasked(eligible map[types.Placement]placementOffer, denied []t
 			first = cmp.Or(first, offer.Refusal)
 		}
 	}
-	switch len(open) {
-	case 0:
+	if len(open) == 0 {
 		return placementDecision{Refusal: cmp.Or(first, placement.ReasonPlacementUnavailable)}
-	case 1:
-		return placementDecision{Placement: open[0], Filled: true, Targets: eligible[open[0]].Targets}
 	}
-	return placementDecision{Refusal: placement.ReasonPlacementRequired}
+	chosen := open[0]
+	if len(open) > 1 && !eligible[chosen].Room {
+		chosen = open[1]
+	}
+	return placementDecision{Placement: chosen, Filled: true, Targets: eligible[chosen].Targets}
 }
 
 // pickTargets keeps the eligible targets the decision names, in the decision's order.

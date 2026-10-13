@@ -236,21 +236,22 @@ func TestSeedRequestDrives_PerAttachmentModeAndOneFailureRefusesAll(t *testing.T
 	}
 }
 
-// TestStepDriveEligibility_SelfHostedPool: no drive mounts on a self-hosted
-// pool's runners, so a run with one is refused there, named.
-func TestStepDriveEligibility_SelfHostedPool(t *testing.T) {
+// TestStepDriveEligibility_PersonsOwnRunner: no drive mounts on a person's own
+// runner, so a run placement left on one is refused, named; a run placed on a
+// remote-hosted runner is not.
+func TestStepDriveEligibility_PersonsOwnRunner(t *testing.T) {
 	ds := newDriveSet()
 	drive := runDrive{resolved: types.ResolvedDrive{Drive: ds.team.Drive}, target: runner.DrivesRoot + "/team-data"}
-	for hosting, want := range map[types.RunnerPoolScope]bool{types.RunnerPoolUser: false, types.RunnerPoolOrganization: true} {
+	for kind, want := range map[types.Placement]bool{types.PlacementLocal: false, types.PlacementRemote: true} {
 		w := httptest.NewRecorder()
 		f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), drives: []runDrive{drive},
-			place: runPlacement{pooled: true, row: types.RunnerPool{Scope: hosting}}}
+			place: runPlacement{pooled: true, placement: kind, row: types.RunnerPool{Scope: types.RunnerPoolUser}}}
 		if got := (&Server{}).stepDriveEligibility(f, &foldRecorder{}); got != want {
-			t.Fatalf("%s: step = %v, want %v (%s)", hosting, got, want, w.Body)
+			t.Fatalf("%s: step = %v, want %v (%s)", kind, got, want, w.Body)
 		}
 		if !want && (w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), string(authz.ReasonDriveNotInPool)) ||
 			!strings.Contains(w.Body.String(), "Team Data: not available in this pool's runners.")) {
-			t.Errorf("%s refusal = %d %s", hosting, w.Code, w.Body)
+			t.Errorf("%s refusal = %d %s", kind, w.Code, w.Body)
 		}
 	}
 }
@@ -470,7 +471,7 @@ func TestDriveDenialsAreAudited(t *testing.T) {
 	w := httptest.NewRecorder()
 	f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx),
 		drives: []runDrive{{resolved: types.ResolvedDrive{Drive: ds.share.Drive}}},
-		place:  runPlacement{pooled: true, row: types.RunnerPool{Scope: types.RunnerPoolUser}}}
+		place:  runPlacement{pooled: true, placement: types.PlacementLocal, row: types.RunnerPool{Scope: types.RunnerPoolUser}}}
 	if srv.stepDriveEligibility(f, &foldRecorder{}) || len(audit.events) != 1 || !strings.Contains(string(audit.events[0].Data), string(authz.ReasonDriveNotInPool)) {
 		t.Errorf("not_in_pool events = %+v", audit.events)
 	}

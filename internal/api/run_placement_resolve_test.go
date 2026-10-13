@@ -4,8 +4,11 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -147,7 +150,7 @@ func TestPlacement_OfflineCandidateRefuses(t *testing.T) {
 	}
 }
 
-// §6.2, with pools: one placement is on offer, so the table is run for it.
+// §6.2, with pools: the table is run for the kinds of runner the pool holds.
 func TestPlacementForTable(t *testing.T) {
 	two := []string{"a", "b"}
 	offers := func(remote, local placementOffer) map[types.Placement]placementOffer {
@@ -165,10 +168,8 @@ func TestPlacementForTable(t *testing.T) {
 			placementDecision{Placement: types.PlacementRemote, Filled: true, Targets: two}},
 		{"empty, only local", placement.Request{}, offers(none(""), placementOffer{Targets: two}), nil,
 			placementDecision{Placement: types.PlacementLocal, Filled: true, Targets: two}},
-		{"empty, both", placement.Request{}, offers(placementOffer{Targets: two}, placementOffer{Targets: two}), nil,
-			placementDecision{Refusal: placement.ReasonPlacementRequired}},
-		{"empty, none names the first refusal", placement.Request{}, offers(none(placement.ReasonRunnerOffline), none(placement.ReasonPlacementCapability)), nil,
-			placementDecision{Refusal: placement.ReasonRunnerOffline}},
+		{"empty, none names the first refusal, the person's own runners first", placement.Request{}, offers(none(placement.ReasonRunnerOffline), none(placement.ReasonPlacementCapability)), nil,
+			placementDecision{Refusal: placement.ReasonPlacementCapability}},
 		{"empty, none and no reason", placement.Request{}, map[types.Placement]placementOffer{}, nil,
 			placementDecision{Refusal: placement.ReasonPlacementUnavailable}},
 		{"remote not eligible", placement.Request{Placement: types.PlacementRemote}, offers(none(""), placementOffer{Targets: two}), nil,
@@ -191,6 +192,87 @@ func TestPlacementForTable(t *testing.T) {
 		b, _ := json.Marshal(tc.want)
 		if string(a) != string(b) {
 			t.Errorf("%s: %s, want %s", tc.name, a, b)
+		}
+	}
+}
+
+// RP-2 DONE 5: a mixed pool puts an unasked run on the person's own runner when one of them has room, and
+// on a remote-hosted runner otherwise; a placement the request asks for, or a pin, fixes the kind whatever
+// the room, and a denied kind is never chosen.
+func TestPlacementForUnasked_SelfHostedFirstThenRemote(t *testing.T) {
+	own, remote := []string{"laptop"}, []string{"alpha"}
+	mixed := func(ownRoom bool) map[types.Placement]placementOffer {
+		return map[types.Placement]placementOffer{
+			types.PlacementLocal:  {Targets: own, Room: ownRoom},
+			types.PlacementRemote: {Targets: remote, Room: true},
+		}
+	}
+	onlyOwn := map[types.Placement]placementOffer{types.PlacementLocal: {Targets: own}}
+	for _, tc := range []struct {
+		name   string
+		req    placement.Request
+		offers map[types.Placement]placementOffer
+		denied []types.Placement
+		want   placementDecision
+	}{
+		{"own runner has room", placement.Request{}, mixed(true), nil,
+			placementDecision{Placement: types.PlacementLocal, Filled: true, Targets: own}},
+		{"own runners have no room", placement.Request{}, mixed(false), nil,
+			placementDecision{Placement: types.PlacementRemote, Filled: true, Targets: remote}},
+		{"own runners only, no room: they are still the kind, the run waits for one", placement.Request{}, onlyOwn, nil,
+			placementDecision{Placement: types.PlacementLocal, Filled: true, Targets: own}},
+		{"own runner has room, local denied", placement.Request{}, mixed(true), []types.Placement{types.PlacementLocal},
+			placementDecision{Placement: types.PlacementRemote, Filled: true, Targets: remote}},
+		{"own runners have no room, remote denied", placement.Request{}, mixed(false), []types.Placement{types.PlacementRemote},
+			placementDecision{Placement: types.PlacementLocal, Filled: true, Targets: own}},
+		{"asked remote while an own runner has room", placement.Request{Placement: types.PlacementRemote}, mixed(true), nil,
+			placementDecision{Placement: types.PlacementRemote, Targets: remote}},
+		{"asked local while no own runner has room", placement.Request{Placement: types.PlacementLocal}, mixed(false), nil,
+			placementDecision{Placement: types.PlacementLocal, Targets: own}},
+		{"a pin fixes the kind and the runner", placement.Request{Placement: types.PlacementLocal, RunnerID: "laptop"}, mixed(false), nil,
+			placementDecision{Placement: types.PlacementLocal, Targets: own}},
+	} {
+		got := placementFor(tc.req, tc.offers, tc.denied)
+		a, _ := json.Marshal(got)
+		b, _ := json.Marshal(tc.want)
+		if string(a) != string(b) {
+			t.Errorf("%s: %s, want %s", tc.name, a, b)
+		}
+	}
+	if o := offerOf([]poolTarget{{id: "a", full: true}, {id: "b"}}, ""); !o.Room {
+		t.Error("an offer with one runner below its max_runs has room")
+	}
+	if o := offerOf([]poolTarget{{id: "a", full: true}}, ""); o.Room {
+		t.Error("an offer whose every runner holds its max_runs has no room")
+	}
+}
+
+// A run with drives goes to the pool's remote-hosted runners when it has some, as no drive mounts on a
+// person's own runner; a pool with none keeps the person's own runners for the drive step to refuse,
+// as does a request that asks for its own runner.
+func TestKindTargets_DrivesKeepRemoteWhenThePoolHasIt(t *testing.T) {
+	s := &Server{}
+	laptop := uuid.New()
+	own := poolTarget{id: laptop.String(), runnerID: &laptop}
+	remote := poolTarget{id: "alpha", executor: "alpha"}
+	pool := types.RunnerPool{Name: "Mixed", Scope: types.RunnerPoolUser}
+	for _, tc := range []struct {
+		name    string
+		asked   types.Placement
+		targets []poolTarget
+		want    []types.Placement
+	}{
+		{"mixed pool", "", []poolTarget{own, remote}, []types.Placement{types.PlacementRemote}},
+		{"own runners only", "", []poolTarget{own}, []types.Placement{types.PlacementLocal}},
+		{"asked for its own runner", types.PlacementLocal, []poolTarget{own, remote}, []types.Placement{types.PlacementLocal}},
+	} {
+		kinds, refusal := s.kindTargets(context.Background(), placementInput{req: &createRunRequest{Placement: tc.asked}, drives: true}, pool, tc.targets)
+		if refusal != nil {
+			t.Fatalf("%s: %+v", tc.name, refusal)
+		}
+		got := slices.Sorted(maps.Keys(kinds))
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: kinds %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }
