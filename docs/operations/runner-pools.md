@@ -15,7 +15,7 @@
 | Organization pool | Remote-hosted runners only. Everyone who may launch remote runs may use it until a use policy narrows it. | Admins |
 | User pool | One person's pool: their own runners, and the remote-hosted runners made available to them. Only its owner uses it. | Its owner, up to `10` pools |
 
-- A pool never claims or transfers a runner, and a user pool never makes another person's runner a candidate (`stepPlacement`, [`internal/api/run_placement_resolve.go`](../../internal/api/run_placement_resolve.go)).
+- A pool never claims or transfers a runner, and a user pool never makes another person's runner a candidate (`stepPlacement`, [`internal/api/run_fold_steps.go`](../../internal/api/run_fold_steps.go)).
 - A remote-hosted runner joins a person's user pool only while its "Available to people's pools" setting admits them: off (the default), everyone, or listed people, groups and roles (`wardyn runner remote people set`).
 - A use policy and a people policy are held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`; see [admin-only writes](admin-only-writes.md).
 - On its first boot with pools, a deployment gets one organization pool, named "Organization", that holds its remote-hosted runners and is the organization's default.

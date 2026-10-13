@@ -131,16 +131,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The server's Docker host or Kubernetes cluster gets its limits measured at the first boot. When an amount cannot
   be measured (often disk, when `wardynd` runs in a container) none is set, and runs there are refused
   `runner_limits_unset` until an admin sets them all with `wardyn runner set <id> …`. Read them with `wardyn runner
-  remote show <id>`.
+  remote show <id> --json`.
 - A launch can now wait. One whose pool is running its Runs at once, or whose runners are all at their limits, is
-  stored `QUEUED` (`201`, wait reason `runner_pool_at_capacity` or `runner_pool_runners_at_capacity`) in every pool
-  instead of being refused `422 runner_at_capacity`. API clients and scripts that create runs must handle a waiting
-  run; `max_wait_sec` (`wardyn run --max-wait`) bounds the wait.
-- Runner and pool wire changes: a runner view drops `runs_active`, `running` and `max_runs` and gains `kind`,
-  `limits` and `usage`. `PUT /me/runners/{id}` takes `{"limits": {…}}`, the whole set, and `runner_max_runs_invalid`
-  is now `runner_limits_invalid`. The limit source `runner_capacity` is now `runner`. Each limit of a pool is
-  optional, and one left out is set by the pool's runners; an empty `barriers` list allows every barrier they offer.
-  `GET /runner-pools/{id}/runners` is now `GET /runner-pools/{id}/members`.
+  stored `QUEUED` (`201`, wait reason `runner_pool_at_capacity` or `runner_pool_runners_at_capacity`) in every
+  pool. A create that loses a runner's last room to another launch as it is stored is refused
+  `422 runner_at_capacity`. API clients and scripts that create runs must handle a waiting run; `max_wait_sec`
+  (`wardyn run --max-wait`) bounds the wait.
+- Runners and pools on the wire: a runner view carries `kind`, `limits` and `usage`. `PUT /me/runners/{id}` takes
+  `{"limits": {…}}`, the whole set, and refuses a bad one `runner_limits_invalid`. A limit that a runner bounds names
+  the source `runner`. Each limit of a pool is optional, and one left out is set by the pool's runners; an empty
+  `barriers` list allows every barrier they offer.
 
 ### Added
 
@@ -163,13 +163,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   for them), the run is refused, never launched without them. A default of "Run it" or "Block it" is still refused in
   interactive runs. A policy's default for unnamed tools (`*`) does not apply there; Claude Code asks.
 - A launch into a runner pool that is running its Runs at once, or whose runners are all at their limits, now waits
-  instead of failing. It holds no
-  credential while it waits, starts in launch order once its owner's access, role and user type are re-checked, and
-  gives up after 24 hours (Background) or 1 hour (Interactive). `POST /runs` takes `max_wait_sec` (1 or more; a longer
-  wait is cut to 604800 seconds, 7 days, with a warning; `0` is `422 run_max_wait_invalid`). A waiting run can be
-  cancelled, ends `FAILED queue_timeout`, and is cancelled with its pool, or when its owner's sessions are revoked. A
-  run pinned to one of your runners waits for that runner. A pool with no runner online that can take the run is
-  still refused at launch.
+  instead of failing. It holds no credential while it waits, starts in launch order once its owner's access, role
+  and user type are re-checked, and gives up after 24 hours (Background) or 1 hour (Interactive). `POST /runs` takes
+  `max_wait_sec` (1 or more; a longer wait is cut to 604800 seconds, 7 days, with a warning; `0` is `422
+  run_max_wait_invalid`). A waiting run can be cancelled, ends `FAILED queue_timeout`, and is cancelled with its
+  pool, or when its owner's sessions are revoked. A run pinned to one of your runners waits for that runner. A pool
+  with no runner online that can take the run is still refused at launch.
   New metrics: `wardyn_runner_pool_queue_depth`, `wardyn_runner_pool_slots_used`,
   `wardyn_runner_pool_queue_wait_seconds`.
 - New Run can include more than one harness in a sandbox (an interactive environment, or a command), each on its own
