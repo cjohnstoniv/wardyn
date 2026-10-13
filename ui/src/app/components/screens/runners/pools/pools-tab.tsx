@@ -177,7 +177,7 @@ export function PoolsTab({
 }) {
   const superAdmin = useOperator();
   const navigate = useNavigate();
-  const { status, message, entries, defaultId, reload, retry } = usePoolsData();
+  const { status, message, entries, defaultId, reload, retry } = usePoolsData(openPoolId);
   const [defaultsError, setDefaultsError] = React.useState("");
 
   // Both the row button and the sheet write the default. A refusal throws; each caller shows the server's sentence.

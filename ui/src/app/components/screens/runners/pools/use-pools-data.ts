@@ -5,10 +5,16 @@
 
 // What the Admin -> Runners Pools tab shows: every live pool (an administrator's list carries each person's
 // user pools too), each read once more for its own raw limits, state and revision (a row the administrator
-// may not USE carries only its id, name, scope and owner), and the organization default. Re-read silently
-// every 30 s while the tab is visible and when it becomes visible again; a failed silent read keeps what the
-// tab already shows. A 501 is its own state: the server says it has no pool storage and the tab shows that
-// sentence, never an empty list.
+// may not USE carries only its id, name, scope and owner), and the organization default.
+//
+// The per-pool reads are bounded, because the list grows with people: the first load and a Retry read every
+// pool, four at a time; the silent re-read (every 30 s while the tab is visible, and after a write) asks only
+// for the list, the default, any pool it has not read yet and the pool whose details are open. So a poll is
+// two or three requests however many pools there are, and another administrator's change to a pool that is
+// not open shows when the tab is next opened. A failed silent read keeps what the tab already shows. A 501
+// is its own state: the server says it has no pool storage and the tab shows that sentence, never an empty
+// list.
+// ponytail: the list itself should carry state, revision and limits for oversight rows; then no per-pool read.
 import * as React from "react";
 import { HttpError } from "../../../../lib/api/core";
 import { runnerPools } from "../../../../lib/api/runner-pools";
@@ -36,26 +42,47 @@ export interface PoolsData {
 
 const EMPTY: PoolsData = { status: "loading", message: "", entries: [], defaultId: undefined };
 
-async function readAll(): Promise<Pick<PoolsData, "entries" | "defaultId">> {
+/** How many per-pool reads run at once on a full load. */
+const WIDE = 4;
+
+/** Runs task over items, at most WIDE at a time, keeping their order. */
+async function bounded<T, R>(items: T[], task: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    for (let i = next++; i < items.length; i = next++) out[i] = await task(items[i]);
+  };
+  await Promise.all(Array.from({ length: Math.min(WIDE, items.length) }, worker));
+  return out;
+}
+
+/**
+ * Reads the list and the default, and each pool's own record: all of them when `known` is undefined (a full
+ * load), otherwise only a pool not in `known` and the one named `open`.
+ */
+async function readAll(known: Map<string, RunnerPool> | undefined, open: string | null): Promise<Pick<PoolsData, "entries" | "defaultId">> {
   const [list, defaults] = await Promise.all([runnerPools.list(), runnerPools.orgDefaults()]);
   // A pool deleted between the list and its own read is gone, not an error.
-  const read = await Promise.all(
-    list.pools.map((entry) =>
-      runnerPools.get(entry.id).then(
-        (pool): PoolEntry => ({ entry, pool }),
-        (e: unknown) => {
-          if (e instanceof HttpError && e.status === 404) return null;
-          throw e;
-        },
-      ),
-    ),
-  );
+  const read = await bounded(list.pools, async (entry): Promise<PoolEntry | null> => {
+    const have = known?.get(entry.id);
+    if (have && entry.id !== open) return { entry, pool: have };
+    try {
+      return { entry, pool: await runnerPools.get(entry.id) };
+    } catch (e) {
+      if (e instanceof HttpError && e.status === 404) return null;
+      throw e;
+    }
+  });
   return { entries: read.filter((r): r is PoolEntry => r !== null), defaultId: defaults.pool_id };
 }
 
-export function usePoolsData(): PoolsData & { reload: () => void; retry: () => void } {
+export function usePoolsData(openPoolId: string | null): PoolsData & { reload: () => void; retry: () => void } {
   const [data, setData] = React.useState<PoolsData>(EMPTY);
   const seq = React.useRef(0);
+  // What the last read knew, and the open pool, as the next silent read sees them.
+  const known = React.useRef(new Map<string, RunnerPool>());
+  const open = React.useRef(openPoolId);
+  open.current = openPoolId;
 
   // A read that was in flight when the tab went away must not set state.
   const abandon = React.useCallback(() => {
@@ -65,9 +92,11 @@ export function usePoolsData(): PoolsData & { reload: () => void; retry: () => v
   const read = React.useCallback((silent: boolean) => {
     const mine = ++seq.current;
     if (!silent) setData((d) => ({ ...d, status: "loading" }));
-    readAll()
+    readAll(silent ? known.current : undefined, open.current)
       .then((r) => {
-        if (mine === seq.current) setData({ status: "ready", message: "", ...r });
+        if (mine !== seq.current) return;
+        known.current = new Map(r.entries.map((e) => [e.pool.id, e.pool]));
+        setData({ status: "ready", message: "", ...r });
       })
       .catch((e: unknown) => {
         if (mine !== seq.current || silent) return;

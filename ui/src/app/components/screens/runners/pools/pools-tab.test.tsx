@@ -6,7 +6,7 @@
 // The Admin -> Runners Pools tab (mock M-POOLS v6 A1, A8, A9). The strings are written out, not read from the
 // copy module, so a drift in copy/runner-pools.ts fails this suite.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { RunnerPool } from "../../../../lib/types/runner-pools";
@@ -64,7 +64,7 @@ beforeEach(() => {
   getMock.mockImplementation((id: string) => Promise.resolve(ALL.find((p) => p.id === id) as RunnerPool));
   orgDefaultsMock.mockResolvedValue({ pool_id: "p-gen", barrier: "CC2" });
   setOrgDefaultsMock.mockResolvedValue({});
-  usePolicyMock.mockResolvedValue({ pool_id: "p-ci", subjects: [], revision: 1, updated_at: "" });
+  usePolicyMock.mockResolvedValue({ pool_id: "p-ci", subjects: [], revision: 1, updated_at: "0001-01-01T00:00:00Z" });
 });
 afterEach(() => cleanup());
 
@@ -176,5 +176,51 @@ describe("Pools tab", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await userEvent.click(within(orgTable()).getByRole("button", { name: "General" }));
     expect(await screen.findByRole("dialog")).toHaveTextContent("This is the organization default.");
+  });
+
+  // The list grows with people, so the per-pool reads are bounded: every pool once when the tab opens, and
+  // after that a re-read asks only for the list, the default and the pool whose details are open.
+  it("reads every pool once, then re-reads only the list and the open pool", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      renderTab();
+      await screen.findByRole("table", { name: "Organization pools" });
+      expect(getMock.mock.calls.map(([id]) => id).sort()).toEqual(ALL.map((p) => p.id).sort());
+      const tick = async () => {
+        const lists = listMock.mock.calls.length;
+        await act(async () => {
+          vi.advanceTimersByTime(30_000);
+        });
+        await waitFor(() => expect(listMock.mock.calls.length).toBe(lists + 1));
+      };
+      await tick();
+      expect(getMock).toHaveBeenCalledTimes(ALL.length);
+      // With a pool's details open, that pool alone is read again, so a change to it shows.
+      getMock.mockImplementation((id: string) => Promise.resolve({ ...(ALL.find((p) => p.id === id) as RunnerPool), state: "disabled" }));
+      await userEvent.click(screen.getByRole("button", { name: "Details of CI jobs" }));
+      await tick();
+      expect(getMock).toHaveBeenCalledTimes(ALL.length + 1);
+      expect(getMock).toHaveBeenLastCalledWith("p-ci");
+      expect(await within(screen.getByRole("dialog")).findByText("Switched off")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads a long list four pools at a time", async () => {
+    const many = Array.from({ length: 10 }, (_, i) => pool({ id: `p-${i}`, name: `Pool ${i}` }));
+    listMock.mockResolvedValue({ pools: many.map((p) => entry(p)) });
+    let inFlight = 0;
+    let widest = 0;
+    getMock.mockImplementation(async (id: string) => {
+      widest = Math.max(widest, ++inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      return many.find((p) => p.id === id) as RunnerPool;
+    });
+    renderTab();
+    expect(await within(await screen.findByRole("table", { name: "Organization pools" })).findAllByRole("row")).toHaveLength(11);
+    expect(getMock).toHaveBeenCalledTimes(10);
+    expect(widest).toBe(4);
   });
 });
