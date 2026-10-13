@@ -152,7 +152,7 @@ For incident response or offboarding:
 
 ## 2. Connect
 
-- A background task has no SSH access: authentication and every channel answer with the background-task refusal.
+- A background task has no SSH access. The SSH client sees only `Permission denied (publickey)`; the background-task reason (`run_background_only`) is in the failed `ssh.authenticate` audit row (the gateway writes no server-log line for it). A channel opened on an already-open connection answers with the background-task refusal text.
 
 - The run detail page's "Attach from your terminal" card shows the exact
   command for a run you own while it is RUNNING:
