@@ -12,7 +12,7 @@ import { DocumentEditor, type DocumentDiagnostic } from "./document-editor";
 const YAML = "# who may reach what\nmin_confinement_class: CC2\nallowed_domains:\n  - api.example.com\n";
 
 const seen: { value: string }[] = [];
-function Editor({ initial = YAML, diagnostics = [] }: { initial?: string; diagnostics?: DocumentDiagnostic[] }) {
+function Editor({ initial = YAML, diagnostics = [], invalid }: { initial?: string; diagnostics?: DocumentDiagnostic[]; invalid?: boolean }) {
   const [value, setValue] = React.useState(initial);
   seen.push({ value });
   return (
@@ -22,6 +22,7 @@ function Editor({ initial = YAML, diagnostics = [] }: { initial?: string; diagno
       format="yaml"
       onChange={setValue}
       diagnostics={diagnostics}
+      invalid={invalid}
       label="Run document"
       describedBy="doc-help"
     />
@@ -50,9 +51,16 @@ describe("DocumentEditor — gutter and error marks", () => {
     expect(marked).toHaveLength(1);
     expect(marked[0]).toHaveAttribute("data-line", "2");
     expect(box()).toHaveAttribute("aria-invalid", "true");
-    expect(box()).toHaveAttribute("aria-describedby", "doc-help doc-diagnostics");
-    expect(screen.getByText("Unknown field")).toBeInTheDocument();
-    expect(screen.getByText("Line 2, column 5")).toBeInTheDocument();
+    expect(box()).toHaveAttribute("aria-describedby", "doc-help");
+    // the words are the caller's to list
+    expect(screen.queryByText("Unknown field")).toBeNull();
+  });
+
+  it("marks the box invalid for a problem with no line, without marking a line", () => {
+    seen.length = 0;
+    render(<Editor invalid />);
+    expect(box()).toHaveAttribute("aria-invalid", "true");
+    expect(gutter().querySelector("[data-error]")).toBeNull();
   });
 
   it("sizes the box from the textarea's rows, never from the gutter", () => {
