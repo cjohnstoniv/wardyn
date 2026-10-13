@@ -343,7 +343,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `NO_EXTRA` | mock | No extra files — only the main drive |
 | `NO_EXTRA_DELETED` | mock | Only the main drive. Nothing from this run is kept. |
 | `NO_EXTRA_KEPT(grace)` | pending (W-12) | Only the main drive. It is deleted {grace} after the run's end time. |
-| `CHOOSE_FILES` | mock | Choose what it needs, or choose Nothing. |
+| `CHOOSE_FILES` | deviation (owner-approved Files prototype 2026-10-13) | Add what it needs, or choose No extra files. |
 | `MOUNT_TITLE` | mock | Mount map |
 | `MOUNT_BODY` | mock | Read-only view of where files appear in the sandbox. |
 | `MOUNT_MAIN(n)` | mock | Main drive · {n} GiB |
@@ -358,6 +358,51 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SUMMARY_KEPT(grace)` | pending (W-12) | the main drive is kept {grace} after its end time |
 | `SUMMARY_NO_END` | pending (W-12) | the main drive is kept until you end the run |
 | `SUMMARY_NO_EXTRA(n, life)` | mock | Main drive {n} GiB · no extra files · {life}. |
+| `ATTACH_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Repositories, drives and folders |
+| `ATTACH_BODY` | deviation (owner-approved Files prototype 2026-10-13) | Each one appears in the sandbox at its mount path. |
+| `ADD` | deviation (owner-approved Files prototype 2026-10-13) | + Add |
+| `ADD_ARIA` | deviation (owner-approved Files prototype 2026-10-13) | Add a repository, drive or folder |
+| `KIND_USER_DRIVE` | deviation (owner-approved Files prototype 2026-10-13) | User drive |
+| `KIND_SHARED_DRIVE` | deviation (owner-approved Files prototype 2026-10-13) | Shared drive |
+| `KIND_FOLDER` | deviation (owner-approved Files prototype 2026-10-13) | Folder |
+| `FOLDER_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Folder on this machine |
+| `FOLDER_BODY` | deviation (owner-approved Files prototype 2026-10-13) | A folder on the computer running Wardyn. |
+| `SHARED_SUB` | deviation (owner-approved Files prototype 2026-10-13) | Provided by your admin. You get your own folder on it. |
+| `FOLDER_REMOTE` | deviation (owner-approved Files prototype 2026-10-13) | Wardyn runs on a remote server, so it can't open folders on this machine. |
+| `EDIT` | deviation (owner-approved Files prototype 2026-10-13) | Edit |
+| `EDIT_NAMED(name)` | deviation (owner-approved Files prototype 2026-10-13) | Edit {name} |
+| `REMOVE_NAMED(name)` | deviation (owner-approved Files prototype 2026-10-13) | Remove {name} |
+| `STORED_ON` | deviation (owner-approved Files prototype 2026-10-13) | Stored on |
+| `ADDED(name)` | deviation (owner-approved Files prototype 2026-10-13) | {name} added. |
+| `UPDATED(name)` | deviation (owner-approved Files prototype 2026-10-13) | {name} updated. |
+| `REMOVED(name)` | deviation (owner-approved Files prototype 2026-10-13) | {name} removed. |
+| `DIALOG_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Add to this run |
+| `ADD_REPO_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Add repository |
+| `ADD_USER_DRIVE_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Add user drive |
+| `ADD_SHARED_DRIVE_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Add shared drive |
+| `ADD_FOLDER_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Add folder |
+| `STEPS_ARIA` | deviation (owner-approved Files prototype 2026-10-13) | Steps |
+| `STEP_TYPE` | deviation (owner-approved Files prototype 2026-10-13) | Type |
+| `STEP_CHOOSE` | deviation (owner-approved Files prototype 2026-10-13) | Choose |
+| `STEP_MOUNT` | deviation (owner-approved Files prototype 2026-10-13) | Mount path |
+| `ALREADY_ADDED` | deviation (owner-approved Files prototype 2026-10-13) | Already added to this run. |
+| `BRANCH_LABEL` | deviation (owner-approved Files prototype 2026-10-13) | Branch |
+| `MOUNT_HINT` | deviation (owner-approved Files prototype 2026-10-13) | Where it appears in the sandbox. |
+| `PATH_INVALID` | deviation (owner-approved Files prototype 2026-10-13) | Use a path inside /home/agent, /work or /workspace. |
+| `PATH_TAKEN(name, path)` | deviation (owner-approved Files prototype 2026-10-13) | {name} is already mounted at {path}. |
+| `ACCESS_LABEL` | deviation (owner-approved Files prototype 2026-10-13) | Access |
+| `SAVE` | deviation (owner-approved Files prototype 2026-10-13) | Save |
+| `ADD_CONFIRM` | deviation (owner-approved Files prototype 2026-10-13) | Add |
+| `START_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Starting folder |
+| `START_BODY` | deviation (owner-approved Files prototype 2026-10-13) | Where it starts. Choose from what you added above. |
+| `START_FOLDER_LABEL` | deviation (owner-approved Files prototype 2026-10-13) | Folder |
+| `START_OPTION(name, path)` | deviation (owner-approved Files prototype 2026-10-13) | {name} · {path} |
+| `START_MAIN` | deviation (owner-approved Files prototype 2026-10-13) | Main drive · /home/agent |
+| `SUBFOLDER_LABEL` | deviation (owner-approved Files prototype 2026-10-13) | Subfolder |
+| `SUBFOLDER_PLACEHOLDER` | deviation (owner-approved Files prototype 2026-10-13) | e.g. src |
+| `SUBFOLDER_ERROR(name)` | deviation (owner-approved Files prototype 2026-10-13) | Use a folder inside {name}. |
+| `LIST_COMMA(a, b)` | deviation (owner-approved Files prototype 2026-10-13) | {a}, {b} |
+| `LIST_AND(a, b)` | deviation (owner-approved Files prototype 2026-10-13) | {a} and {b} |
 
 ### 7.6 Tools and access
 
