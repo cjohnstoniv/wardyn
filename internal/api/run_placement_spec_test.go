@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -91,29 +92,82 @@ func TestLocalReviveRefusesBeforeOperatorSecretReadsAndStripsCopy(t *testing.T) 
 
 // A revive classifies the stored identity credentials from the run and today's
 // site configuration, as dispatch does: the owner's own-PAT Azure DevOps lane and
-// own Azure Foundry sign-in revive.
+// own Azure Foundry sign-in revive with the same authority, and a revive whose
+// owner, provider, delivery or capabilities drifted since dispatch is refused.
 func TestLocalReviveClassifiesOwnADOAndAzureLanesAsDispatchDoes(t *testing.T) {
-	f := newComponentFixture(t)
-	f.srv.cfg.Store = localPlanTestStore{f.st}
-	foundry := types.ModelProvider{ID: "foundry", UID: "uid-foundry", Kind: types.ModelProviderAzureFoundry,
-		Azure:     &types.AzureSettings{Endpoint: "https://res.services.ai.azure.com", Route: types.AzureRouteAnthropic},
-		Harnesses: []types.ProviderHarness{{Harness: azureMessagesHarness, Model: "deploy-1"}}}
-	f.st.siteConfig = adoSite(ownPATTestRow())
-	f.st.siteConfig.ModelProviders = &types.ModelProviders{Providers: []types.ModelProvider{foundry}}
-	owned := f.srv.cfg.Secrets.(*memSecrets).owned[capSub]
-	owned[adoOwnPATSecretName(ownPATRowID)] = []byte("pat")
-	owned[providerSecretName(foundry.UID, providerEntraPart)] = []byte("sign-in")
-	run := types.AgentRun{ID: uuid.New(), CreatedBy: capSub, Placement: types.PlacementLocal, Agent: azureMessagesHarness, ModelProviderID: foundry.ID}
-	for name, cfg := range map[string]proxy.Config{
-		"own-PAT Azure DevOps lane": {RunID: run.ID,
+	foundry := func() types.ModelProvider {
+		return types.ModelProvider{ID: "foundry", UID: "uid-foundry", Kind: types.ModelProviderAzureFoundry,
+			Azure:     &types.AzureSettings{Endpoint: "https://res.services.ai.azure.com", Route: types.AzureRouteAnthropic},
+			Harnesses: []types.ProviderHarness{{Harness: azureMessagesHarness, Model: "deploy-1"}}}
+	}
+	adoCfg := func(id uuid.UUID) proxy.Config {
+		return proxy.Config{RunID: id,
 			Policy:   types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: ownPATOrgKey + "/proj/_git/repo"}}},
-			ADOGrant: &proxy.ADOGrantConfig{Organization: "contoso", Hosts: []string{"dev.azure.com"}}},
-		"Azure Foundry gate": {RunID: run.ID,
-			AzureGates: []proxy.AzureGateConfig{{Host: "res.services.ai.azure.com", Route: types.AzureRouteAnthropic, Models: []string{"deploy-1"}}}},
+			ADOGrant: &proxy.ADOGrantConfig{Organization: "contoso", Capabilities: []adoscope.Capability{adoscope.CapCodeRead}, Hosts: []string{"dev.azure.com"}}}
+	}
+	azureCfg := func(id uuid.UUID) proxy.Config {
+		return proxy.Config{RunID: id, AzureGates: []proxy.AzureGateConfig{{Host: "res.services.ai.azure.com", Route: types.AzureRouteAnthropic, Models: []string{"deploy-1"}}}}
+	}
+	for _, tc := range []struct {
+		name  string
+		cfg   func(uuid.UUID) proxy.Config
+		drift func(sc *types.SiteConfig, owned map[string][]byte, other map[string][]byte)
+		admit bool
+	}{
+		{"own-PAT Azure DevOps lane", adoCfg, nil, true},
+		{"Azure Foundry gate", azureCfg, nil, true},
+		{"owner drift: the PAT is another person's", adoCfg, func(_ *types.SiteConfig, owned, other map[string][]byte) {
+			delete(owned, adoOwnPATSecretName(ownPATRowID))
+			other[adoOwnPATSecretName(ownPATRowID)] = []byte("pat")
+		}, false},
+		{"owner drift: the sign-in is another person's", azureCfg, func(_ *types.SiteConfig, owned, other map[string][]byte) {
+			delete(owned, providerSecretName("uid-foundry", providerEntraPart))
+			other[providerSecretName("uid-foundry", providerEntraPart)] = []byte("sign-in")
+		}, false},
+		{"provider drift: the endpoint moved", azureCfg, func(sc *types.SiteConfig, _, _ map[string][]byte) {
+			sc.ModelProviders.Providers[0].Azure.Endpoint = "https://other.services.ai.azure.com"
+		}, false},
+		{"provider drift: the provider is gone", azureCfg, func(sc *types.SiteConfig, _, _ map[string][]byte) {
+			sc.ModelProviders = nil
+		}, false},
+		{"provider drift: the grant names another organisation", func(id uuid.UUID) proxy.Config {
+			c := adoCfg(id)
+			c.ADOGrant.Organization = "fabrikam"
+			return c
+		}, nil, false},
+		{"delivery drift: the row now mints tokens", adoCfg, func(sc *types.SiteConfig, _, _ map[string][]byte) {
+			sc.WorkspaceProviders.Git[0].Entra.TokenMode = types.ADOTokenModeBearer
+		}, false},
+		{"capability drift: the ceiling narrowed", adoCfg, func(sc *types.SiteConfig, _, _ map[string][]byte) {
+			sc.WorkspaceProviders.Git[0].Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapProjectRead}
+		}, false},
+		{"capability drift: the deployment changed", azureCfg, func(sc *types.SiteConfig, _, _ map[string][]byte) {
+			sc.ModelProviders.Providers[0].Harnesses[0].Model = "deploy-2"
+		}, false},
 	} {
-		if ref := f.srv.reviveOwnerRecheck(context.Background(), run, &cfg, types.ActorSystem, "wardynd"); ref != nil {
-			t.Errorf("%s: revive = %+v, want it admitted", name, ref)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			f := newComponentFixture(t)
+			f.srv.cfg.Store = localPlanTestStore{f.st}
+			f.st.siteConfig = adoSite(ownPATTestRow())
+			f.st.siteConfig.ModelProviders = &types.ModelProviders{Providers: []types.ModelProvider{foundry()}}
+			secrets := f.srv.cfg.Secrets.(*memSecrets)
+			owned, other := secrets.owned[capSub], map[string][]byte{}
+			secrets.owned["someone-else"] = other
+			owned[adoOwnPATSecretName(ownPATRowID)] = []byte("pat")
+			owned[providerSecretName("uid-foundry", providerEntraPart)] = []byte("sign-in")
+			if tc.drift != nil {
+				tc.drift(&f.st.siteConfig, owned, other)
+			}
+			run := types.AgentRun{ID: uuid.New(), CreatedBy: capSub, Placement: types.PlacementLocal, Agent: azureMessagesHarness, ModelProviderID: "foundry"}
+			cfg := tc.cfg(run.ID)
+			ref := f.srv.reviveOwnerRecheck(context.Background(), run, &cfg, types.ActorSystem, "wardynd")
+			if tc.admit && ref != nil {
+				t.Fatalf("revive = %+v, want it admitted", ref)
+			}
+			if !tc.admit && (ref == nil || ref.reason != string(placement.ReasonPlacementCredential)) {
+				t.Fatalf("revive = %+v, want %s", ref, placement.ReasonPlacementCredential)
+			}
+		})
 	}
 }
 
