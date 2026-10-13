@@ -22,13 +22,9 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 		if err != nil {
 			return Minted{}, err
 		}
-		var minted Minted
-		if before.grantSpec.Kind == types.GrantGitPAT || before.grantSpec.Kind == types.GrantSSHKey {
-			minted, err = b.mintKind(ctx, caller, before.grantSpec)
-			if err != nil {
-				b.auditMint(ctx, caller, grantID, before.approvalID, "", before.grantSpec.Scope, "failure")
-				return Minted{}, err
-			}
+		minted, err := b.prepareMint(ctx, caller, grantID, before)
+		if err != nil {
+			return Minted{}, err
 		}
 		out, err := b.commitMint(ctx, caller, grantID, approvalHint, before, minted)
 		if !errors.Is(err, errMintChanged) {
@@ -36,6 +32,27 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 		}
 	}
 	return Minted{}, errMintChanged
+}
+
+// prepareMint issues the credential and puts every value it carries on the
+// masking record before the transaction that burns the approval opens: a value
+// that cannot be recorded is never handed out, so its approval must stay
+// unburnt. Recording here, not under that transaction, keeps the mask store's
+// own pool connection from waiting behind the one the transaction holds. A
+// value recorded for a preparation that is later abandoned stays recorded;
+// masking an undelivered value costs nothing and the value may be shared.
+func (b *Broker) prepareMint(ctx context.Context, caller *identity.Claims, grantID uuid.UUID, before grantApprovalRow) (Minted, error) {
+	minted, err := b.mintKind(ctx, caller, before.grantSpec)
+	if err == nil {
+		if err = b.maskMinted(caller.RunID, minted); err != nil {
+			b.discardMinted(ctx, minted)
+		}
+	}
+	if err != nil {
+		b.auditMint(ctx, caller, grantID, before.approvalID, "", before.grantSpec.Scope, "failure")
+		return Minted{}, err
+	}
+	return minted, nil
 }
 
 func (b *Broker) mintSnapshot(ctx context.Context, caller *identity.Claims, grantID, approvalHint uuid.UUID) (grantApprovalRow, error) {
