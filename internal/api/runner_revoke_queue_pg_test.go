@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -134,5 +135,40 @@ func TestPG_QueueSweepEndsTheWaitingRunOfARevokeThatNeverFinished(t *testing.T) 
 	e.endedForRevokedRunner(orphan.ID)
 	if got := e.run(keeps.ID); got.State != types.RunQueued {
 		t.Errorf("the run waiting for a runner that is not revoked is %s, want QUEUED", got.State)
+	}
+}
+
+// Several sweeps at once and the revoke's own pass end each waiting run exactly once: one run.kill row,
+// no queue row. A run another exit already ended is left as it is: one its deadline ended stays FAILED.
+func TestPG_ARunWaitingForARevokedRunnerIsEndedOnce(t *testing.T) {
+	e := newQueueEnv(t)
+	p, a, _ := cappedLaptops(e, 1)
+	occupyRunner(e, p, a)
+	pinned := `,"placement":"local","runner_id":"` + a.String() + `"`
+	var ids []uuid.UUID
+	for range 4 {
+		ids = append(ids, e.queuedLaunch(e.person, p, pinned).ID)
+	}
+	expired := e.queuedLaunch(e.person, p, pinned).ID
+	ctx := context.Background()
+	if _, err := e.pg.RevokeRunner(ctx, a, time.Now().UTC(), e.personP, ""); err != nil {
+		t.Fatal(err)
+	}
+	if !e.srv.exitQueued(ctx, expired, types.RunFailed, statusDetailQueuePrefix+string(types.RunEndQueueTimeout), "its wait ran out") {
+		t.Fatal("could not end the run as its deadline step does")
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() { e.srv.endQueuedRunsOfRevokedRunners(ctx) })
+	}
+	wg.Go(func() { _, _ = e.srv.endQueuedRunsPinnedTo(ctx, e.personP, a) })
+	wg.Wait()
+	if applied, err := e.srv.endRunQueuedForRevokedRunner(ctx, expired); applied || err != nil || e.run(expired).State != types.RunFailed {
+		t.Errorf("the run its deadline ended was ended again (applied %v, %v): now %s", applied, err, e.run(expired).State)
+	}
+	for _, id := range ids {
+		if got, kills := e.run(id), e.audits(id, "run.kill"); got.State != types.RunKilled || len(kills) != 1 || e.queueRows(id) != 0 {
+			t.Errorf("run %s: %s with %d run.kill rows and %d queue rows, want KILLED, one row, none", id, got.State, len(kills), e.queueRows(id))
+		}
 	}
 }
