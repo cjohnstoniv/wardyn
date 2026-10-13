@@ -31,7 +31,7 @@ func (e *poolEnv) rawRunner(owner, orgURL string, claim bool) uuid.UUID {
 	id := uuid.New()
 	fp := "fp-" + id.String()
 	if _, err := e.pg.CreateRunner(ctx, types.Runner{ID: id, Owner: owner, Name: "laptop", PublicKey: append(id[:], id[:]...), KeyFingerprint: fp,
-		OrgURLSHA256: federation.OrgURLSHA256(orgURL)}); err != nil {
+		OrgURLSHA256: federation.OrgURLSHA256(orgURL), Limits: roomyRunnerLimits()}); err != nil {
 		e.t.Fatal(err)
 	}
 	if claim {

@@ -123,6 +123,12 @@ func TestRunnerPoolMethodsHitTheirRoutes(t *testing.T) {
 		{"PUT", "/api/v1/me/runner-pools/" + pool.String() + "/remote-runners/docker", func() error { _, err := c.AddMyPoolRemoteRunner(ctx, pool, "docker"); return err }},
 		{"DELETE", "/api/v1/me/runner-pools/" + pool.String() + "/remote-runners/docker", func() error { return c.RemoveMyPoolRemoteRunner(ctx, pool, "docker") }},
 		{"GET", "/api/v1/runner-pools/" + pool.String() + "/members", func() error { _, err := c.ListRunnerPoolMembers(ctx, pool); return err }},
+		{"GET", "/api/v1/runner-pools/" + pool.String() + "/use-policy", func() error { _, err := c.GetRunnerPoolUsePolicy(ctx, pool); return err }},
+		{"PUT", "/api/v1/runner-pools/" + pool.String() + "/use-policy", func() error {
+			_, err := c.SetRunnerPoolUsePolicy(ctx, pool, client.RunnerPoolUsePolicyRequest{Subjects: []client.RunnerPoolSubject{{SubjectType: "group", Subject: "platform-eng"}}})
+			return err
+		}},
+		{"DELETE", "/api/v1/runner-pools/" + pool.String() + "/use-policy", func() error { return c.ClearRunnerPoolUsePolicy(ctx, pool) }},
 		{"GET", "/api/v1/remote-runners", func() error { _, err := c.ListRemoteRunners(ctx); return err }},
 		{"GET", "/api/v1/remote-runners/docker", func() error { _, err := c.GetRemoteRunner(ctx, "docker"); return err }},
 		{"PUT", "/api/v1/remote-runners/docker", func() error {
@@ -150,9 +156,9 @@ func TestRunnerPoolMethodsHitTheirRoutes(t *testing.T) {
 func poolLimits() *client.RunnerPoolLimits {
 	return &client.RunnerPoolLimits{
 		Background: &client.RunnerPoolBackgroundLimits{
-			CPUMillis: client.RunnerPoolAmount{Default: 1000, Cap: 2000},
-			MemoryMiB: client.RunnerPoolAmount{Default: 1024, Cap: 2048},
-			Lifetime:  client.RunnerPoolDuration{Unlimited: true},
+			CPUMillis: &client.RunnerPoolAmount{Default: 1000, Cap: 2000},
+			MemoryMiB: &client.RunnerPoolAmount{Default: 1024, Cap: 2048},
+			Lifetime:  &client.RunnerPoolDuration{Unlimited: true},
 		},
 		Barriers: []types.ConfinementClass{types.CC2},
 	}
@@ -161,7 +167,7 @@ func poolLimits() *client.RunnerPoolLimits {
 func TestPoolRequestsValidateTheirLimits(t *testing.T) {
 	name := "Build farm"
 	bad := poolLimits()
-	bad.Barriers = nil
+	bad.Barriers = []types.ConfinementClass{"CC9"}
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -223,8 +229,8 @@ func TestAbsentLimitsLeaveThePoolsLimitsAlone(t *testing.T) {
 	one := 1
 	withBlock := client.UpdateRunnerPoolRequest{Revision: 2, Limits: &client.RunnerPoolLimits{
 		Background: &client.RunnerPoolBackgroundLimits{
-			CPUMillis: client.RunnerPoolAmount{Default: 1, Cap: 2}, MemoryMiB: client.RunnerPoolAmount{Default: 1, Cap: 2},
-			Lifetime: client.RunnerPoolDuration{DefaultSec: 1, MaxSec: 2}},
+			CPUMillis: &client.RunnerPoolAmount{Default: 1, Cap: 2}, MemoryMiB: &client.RunnerPoolAmount{Default: 1, Cap: 2},
+			Lifetime: &client.RunnerPoolDuration{DefaultSec: 1, MaxSec: 2}},
 		Barriers: []types.ConfinementClass{types.CC1}, MaxConcurrentRuns: &one,
 	}}
 	raw, _ = json.Marshal(withBlock)

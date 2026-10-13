@@ -58,6 +58,7 @@ interface PickOption {
 }
 
 export const DIALOG_PATH_ID = "nr-mount-path";
+const EDIT_SAVE_ID = "nr-mount-save";
 
 const ADD_TITLE: Record<AttachKind, string> = {
   repo: NR_FILES.ADD_REPO_TITLE,
@@ -127,7 +128,18 @@ export function AddDialog(props: AddDialogProps) {
   return (
     <Dialog open={props.open !== null} onOpenChange={(o) => !o && props.onClose()}>
       {props.open && (
-        <DialogContent className="sm:max-w-[640px]" aria-describedby={undefined}>
+        <DialogContent
+          className="sm:max-w-[640px]"
+          aria-describedby={undefined}
+          onOpenAutoFocus={(e) => {
+            // Edit opens on Mount path, so focus starts in that step, not on the step list's first button.
+            if (props.open?.mode !== "edit") return;
+            const first = (e.currentTarget as HTMLElement).querySelector<HTMLElement>(`input#${DIALOG_PATH_ID}, #nr-mount-access, #${EDIT_SAVE_ID}`);
+            if (!first) return;
+            e.preventDefault();
+            first.focus();
+          }}
+        >
           <DialogBody {...props} open={props.open} />
         </DialogContent>
       )}
@@ -366,7 +378,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
               {NR_SHARED.CONTINUE} <span aria-hidden="true">→</span>
             </Button>
           )}
-          {s.step === 3 && <Button type="button" onClick={save}>{editing ? NR_FILES.SAVE : NR_FILES.ADD_CONFIRM}</Button>}
+          {s.step === 3 && <Button id={EDIT_SAVE_ID} type="button" onClick={save}>{editing ? NR_FILES.SAVE : NR_FILES.ADD_CONFIRM}</Button>}
         </div>
       </div>
     </>

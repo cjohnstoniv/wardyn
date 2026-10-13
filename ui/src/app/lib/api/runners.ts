@@ -12,9 +12,11 @@ import type {
   RunnerFilter,
   RunnerRegistration,
   RunnerRegistrationToken,
+  RunnerLimits,
   RunnerRevokeAnswer,
   RunnerSettingsRequest,
   RunnerTokenRequest,
+  RunnerUpdateRequest,
   RunnerView,
 } from "../types/runners";
 import type { RunnerSettings } from "../types/site";
@@ -53,6 +55,11 @@ export const runners = {
   /** POST /me/runners/{id}/claim: `fingerprint` is the one read on the person's own computer. */
   claim: (id: string, fingerprint: string) =>
     post<RunnerRegistration>(`/me/runners/${seg(id)}/claim`, { fingerprint } satisfies RunnerClaimRequest),
+  /** PUT /me/runners/{id}: the owner declares its limits; a total past what the computer reports is refused 422. */
+  updateMine: (id: string, limits: RunnerLimits) =>
+    wfetch(`/me/runners/${seg(id)}`, { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify({ limits } satisfies RunnerUpdateRequest) }).then((r) =>
+      asJson<RunnerView>(r),
+    ),
   /** DELETE /runners/{id} (security tier). */
   revoke: (id: string) => wfetch(`/runners/${seg(id)}`, { method: "DELETE" }).then((r) => asJson<RunnerRevokeAnswer>(r)),
   /** DELETE /me/runners/{id}; `notMine` marks a runner the person did not register, so security tooling can tell it apart. */

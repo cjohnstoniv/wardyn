@@ -37,6 +37,8 @@ type Manager struct {
 	eraseOutput   func(uuid.UUID) error
 	releaseOutput func(uuid.UUID, string) error
 	stopper       runner.ProxyStopper
+	// proofTimeout bounds the engine inspect behind a lost-identity proof.
+	proofTimeout  time.Duration
 	clock         *Clock
 	now           func() time.Time
 	since         func(time.Time) time.Duration
@@ -103,7 +105,7 @@ func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedR
 		root.Close()
 		return nil, errors.New("runner lifecycle directory is already active")
 	}
-	m := &Manager{lock: lock, runnerID: runnerID, dir: stateDir, root: root, sub: sub, expectedRef: expectedRef, outputSettled: outputSettled, eraseOutput: eraseOutput, stopper: stopper, clock: NewClock(nil), now: time.Now, since: time.Since, deadlines: map[uuid.UUID]deadline{}, pending: map[uuid.UUID]runnerwire.Lease{}}
+	m := &Manager{lock: lock, runnerID: runnerID, dir: stateDir, root: root, sub: sub, expectedRef: expectedRef, outputSettled: outputSettled, eraseOutput: eraseOutput, stopper: stopper, proofTimeout: 5 * time.Second, clock: NewClock(nil), now: time.Now, since: time.Since, deadlines: map[uuid.UUID]deadline{}, pending: map[uuid.UUID]runnerwire.Lease{}}
 	if err := m.load(); err != nil {
 		lock.Close()
 		root.Close()

@@ -37,7 +37,7 @@ function narrowing(amount: AppliedAmount, poolName: string | undefined): Narrowi
     }
     case "governance": return { key, by: amount.source_name, tail: NR_REVIEW.NARROWED_TAIL_CEILING };
     case "deployment": return { key, tail: NR_REVIEW.NARROWED_TAIL_SERVER };
-    case "runner_capacity": return { key, tail: NR_REVIEW.NARROWED_TAIL_RUNNERS };
+    case "runner": return { key, tail: NR_REVIEW.NARROWED_TAIL_RUNNERS };
   }
 }
 

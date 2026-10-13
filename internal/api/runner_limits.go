@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -48,11 +49,12 @@ func (s *Server) capsFromRunner(ctx context.Context, runnerID uuid.UUID, ev runn
 	}
 }
 
-// handleUpdateMyRunner is PUT /api/v1/me/runners/{id}: a person changes their own runner's "Runs at
-// once" (max_runs). Only the owner may: the machine is theirs, so administrators read max_runs on
-// /runners and have no route that changes it. Another person's runner, a revoked one, a lapsed unclaimed
-// one and an absent id answer alike. A raised limit lets waiting runs start at once; a lowered one ends
-// no run.
+// handleUpdateMyRunner is PUT /api/v1/me/runners/{id}: a person declares their own runner's limits,
+// the whole set (Runs at once, the total and the per-run CPU, memory and disk). Only the owner may: the
+// machine is theirs and its limits only ever bound the owner's own runs, so administrators read them on
+// /runners and have no route that changes them. Another person's runner, a revoked one, a lapsed
+// unclaimed one and an absent id answer alike. Waiting runs are looked at again at once; a lowered
+// limit ends no run.
 func (s *Server) handleUpdateMyRunner(w http.ResponseWriter, r *http.Request) {
 	if !s.requireRunnersEnabled(w, r) {
 		return
@@ -73,18 +75,27 @@ func (s *Server) handleUpdateMyRunner(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	if req.MaxRuns == nil || !types.ValidRunnerMaxRuns(*req.MaxRuns) {
-		writeErrorReason(w, http.StatusBadRequest, reasonRunnerMaxRunsInvalid,
-			"max_runs must be a whole number from 1 to "+strconv.Itoa(types.RunnerMaxRunsCeiling))
+	if req.Limits == nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonRunnerLimitsInvalid, "limits are required: runs at once, total and per run")
+		return
+	}
+	if err := req.Limits.Validate(types.RunnerMaxRunsCeiling); err != nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonRunnerLimitsInvalid, err.Error())
 		return
 	}
 	row, err := rs.GetRunner(r.Context(), id)
 	if err == nil && (row.Owner != owner || runnerLapsed(row, s.cfg.Now().UTC())) {
 		err = store.ErrNotFound
 	}
-	var before int
 	if err == nil {
-		before, row, err = rs.UpdateRunnerMaxRuns(r.Context(), id, owner, *req.MaxRuns)
+		if msg := s.pastReported(row, *req.Limits); msg != "" {
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerLimitsInvalid, msg)
+			return
+		}
+	}
+	var before *types.RunnerLimits
+	if err == nil {
+		before, row, err = rs.UpdateRunnerLimits(r.Context(), id, owner, *req.Limits)
 	}
 	if errors.Is(err, store.ErrNotFound) {
 		writeErrorReason(w, http.StatusNotFound, reasonRunnerNotFound, "runner not found")
@@ -95,11 +106,24 @@ func (s *Server) handleUpdateMyRunner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), owner, placement.ActionRunnerUpdate, id.String(), "success",
-		mustJSON(map[string]any{"max_runs": map[string]int{"before": before, "after": row.MaxRuns}})))
-	if row.MaxRuns > before {
-		s.kickQueue()
-	}
+		mustJSON(map[string]any{"limits": map[string]*types.RunnerLimits{"before": before, "after": row.Limits}})))
+	s.kickQueue()
 	if views, ok := s.runnerViews(w, r, rs, []types.Runner{row}, false); ok {
 		writeJSON(w, http.StatusOK, views[0])
 	}
+}
+
+// pastReported refuses a total past what the runner last reported it has, where this replica holds its
+// report: a runner never offers more than its computer has. "" when the totals fit or nothing is known.
+func (s *Server) pastReported(row types.Runner, l types.RunnerLimits) string {
+	caps, _, _ := s.runnerReportedCaps(row.ID)
+	switch {
+	case caps == nil:
+		return ""
+	case l.Total.CPUMillis > caps.CPUMillisMax:
+		return fmt.Sprintf("Not allowed: %s reports %s CPUs, so its total can't be higher.", row.Name, strconv.FormatFloat(float64(caps.CPUMillisMax)/1000, 'f', -1, 64))
+	case l.Total.MemoryMiB > caps.MemoryMiBMax:
+		return fmt.Sprintf("Not allowed: %s reports %s GB memory, so its total can't be higher.", row.Name, strings.TrimSuffix(strconv.FormatFloat(float64(caps.MemoryMiBMax)/1024, 'f', 1, 64), ".0"))
+	}
+	return ""
 }

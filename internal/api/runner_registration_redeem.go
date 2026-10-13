@@ -4,11 +4,9 @@
 package api
 
 import (
-	"cmp"
 	"crypto/ed25519"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -43,15 +41,21 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerRegistrationInvalid, "registration requires an Ed25519 public key and a name of at most 200 bytes without control characters")
 		return
 	}
-	// An older wardyn-runnerd sends no max_runs; the runner gets the default its owner can change.
-	maxRuns := cmp.Or(req.MaxRuns, types.RunnerMaxRunsDefault)
+	// Every runner declares its limits at registration (wardyn-runnerd measures the host and proposes
+	// them): a register without them, an older wardyn-runnerd's included, is refused before the token
+	// is spent, so the person can register again with this release's runner.
+	if req.Limits == nil {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerLimitsRequired,
+			"registration requires the runner's limits: runs at once, total and per run. Register with this release's wardyn-runnerd.")
+		return
+	}
+	if err := req.Limits.Validate(types.RunnerMaxRunsCeiling); err != nil {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerLimitsRequired, "runner limits: "+err.Error())
+		return
+	}
 	req.MachineName = strings.TrimSpace(req.MachineName)
 	if !types.ValidMachineName(req.MachineName) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerRegistrationInvalid, "machine_name must be at most 253 bytes of printable characters")
-		return
-	}
-	if !types.ValidRunnerMaxRuns(maxRuns) {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerRegistrationInvalid, "max_runs must be a whole number from 1 to "+strconv.Itoa(types.RunnerMaxRunsCeiling))
 		return
 	}
 	orgHash := federation.OrgURLSHA256(s.cfg.RunnerOrgURL)
@@ -67,7 +71,7 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	registered, err := rs.CreateRunner(r.Context(), types.Runner{ID: uuid.New(), Owner: token.Owner,
 		Name: req.Name, PublicKey: req.PublicKey, KeyFingerprint: runnerwire.Fingerprint(req.PublicKey), OrgURLSHA256: orgHash, MintedBy: token.MintedBy,
-		MaxRuns: maxRuns, MachineName: req.MachineName})
+		Limits: req.Limits, MachineName: req.MachineName})
 	if errors.Is(err, store.ErrConflict) {
 		writeErrorReason(w, http.StatusConflict, reasonRunnerKeyAlreadyRegistered, "this key was already registered; generate a new identity and registration token")
 		return
@@ -77,6 +81,6 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, types.ActorSystem, "runner:"+registered.ID.String(),
-		placement.ActionRunnerEnrol, registered.ID.String(), "success", mustJSON(map[string]any{"token_id": token.ID, "fingerprint": registered.KeyFingerprint, "max_runs": registered.MaxRuns})))
-	writeJSON(w, http.StatusCreated, types.RunnerRegistration{RunnerID: registered.ID, Fingerprint: registered.KeyFingerprint, State: registered.State, OrgURLSHA256: orgHash, MaxRuns: registered.MaxRuns})
+		placement.ActionRunnerEnrol, registered.ID.String(), "success", mustJSON(map[string]any{"token_id": token.ID, "fingerprint": registered.KeyFingerprint, "limits": registered.Limits})))
+	writeJSON(w, http.StatusCreated, types.RunnerRegistration{RunnerID: registered.ID, Fingerprint: registered.KeyFingerprint, State: registered.State, OrgURLSHA256: orgHash, Limits: registered.Limits})
 }

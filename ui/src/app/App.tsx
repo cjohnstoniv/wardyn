@@ -147,6 +147,12 @@ const RunnersScreen = React.lazy(() =>
     default: m.RunnersScreen,
   })),
 );
+// A pool's form: an organization pool's edit (super admin) and a person's own user pool, new or edited.
+const PoolFormScreen = React.lazy(() =>
+  import("./components/screens/runners/pools/pool-form").then((m) => ({
+    default: m.PoolFormScreen,
+  })),
+);
 const SecretsScreen = React.lazy(() =>
   import("./components/screens/secrets").then((m) => ({
     default: m.SecretsScreen,
@@ -730,6 +736,7 @@ export default function App() {
             <Route path="/admin/approvals" element={suspend(<ApprovalsScreen onChanged={refreshBadges} />)} />
             <Route path="/admin/people" element={suspend(<PeopleScreen />)} />
             <Route path="/admin/runners" element={suspend(<RunnersScreen />)} />
+            <Route path="/admin/runners/pools/:id/edit" element={suspend(<PoolFormScreen scope="admin" />)} />
             <Route path="/admin/workspaces" element={suspend(<WorkspacesScreen />)} />
             <Route path="/admin/workspaces/:id" element={suspend(<WorkspaceDetailScreen />)} />
             <Route path="/admin/policies" element={suspend(<PoliciesScreen />)} />
@@ -747,6 +754,8 @@ export default function App() {
             <Route path="/admin/components" element={suspend(<ComponentsScreen />)} />
             <Route path="/admin/*" element={<Navigate to="/admin/runs" replace />} />
             <Route path="/account" element={suspend(<YourAccountScreen />)} />
+            <Route path="/account/pools/new" element={suspend(<PoolFormScreen scope="mine" />)} />
+            <Route path="/account/pools/:id/edit" element={suspend(<PoolFormScreen scope="mine" />)} />
             <Route path="/runs" element={<RunsScreen />} />
             {/* Ahead of /runs/:id so "new" is never read as a run id. */}
             <Route

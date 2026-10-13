@@ -270,6 +270,9 @@ test.describe("New Run, Guided setup: leaving", () => {
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: UNSAVED_GUARD.LEAVE }).click();
     await expect(page).toHaveURL(/\/runs$/);
+    // The address changes before the Runs screen replaces New Run (a route change renders a moment later),
+    // and the draft goes with the screen. Coming back inside that moment would find New Run never left.
+    await expect(page.getByRole("heading", { name: "Runs", level: 1 })).toBeVisible();
 
     // Untouched: opening Start and choosing Guided setup changes nothing, so Esc just leaves.
     await navToRoute(page, "/runs/new");
