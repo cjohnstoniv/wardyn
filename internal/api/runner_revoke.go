@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -156,7 +157,7 @@ func (s *Server) endQueuedRunsPinnedTo(ctx context.Context, owner string, id uui
 	for _, e := range entries {
 		var launch queuedLaunch
 		var req createRunRequest
-		if json.Unmarshal(e.Launch, &launch) != nil || json.Unmarshal(launch.Request, &req) != nil || req.RunnerID != id.String() {
+		if json.Unmarshal(e.Launch, &launch) != nil || json.Unmarshal(launch.Request, &req) != nil || !strings.EqualFold(req.RunnerID, id.String()) {
 			continue
 		}
 		applied, err := s.endRunQueuedForRevokedRunner(ctx, e.RunID)
@@ -172,10 +173,12 @@ func (s *Server) endQueuedRunsPinnedTo(ctx context.Context, owner string, id uui
 }
 
 // endRunQueuedForRevokedRunner ends one waiting run, as the system, with reason runner_revoked on its
-// run.kill row, and reports whether this call ended it.
+// run.kill row, and reports whether this call ended it. A run another exit already ended (a kill, its
+// deadline, a second sweep or the revoke's own pass) is left as it is: the end's state CAS starts from
+// the state read here, so only one that is still QUEUED may start it.
 func (s *Server) endRunQueuedForRevokedRunner(ctx context.Context, runID uuid.UUID) (bool, error) {
 	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err != nil {
+	if err != nil || run.State != types.RunQueued {
 		return false, err
 	}
 	applied, _, err := s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": queueCancelRunnerRevoked})
