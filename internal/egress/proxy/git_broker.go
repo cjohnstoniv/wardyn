@@ -732,7 +732,7 @@ func readReceivePackCommands(body io.Reader, prefix string) ([]byte, error) {
 			return nil, fmt.Errorf("unreadable pkt-line length: %w", err)
 		}
 		buf.Write(hdr)
-		n, err := strconv.ParseUint(string(hdr), 16, 32)
+		n, err := strconv.ParseUint(string(hdr), 16, 16)
 		if err != nil {
 			return nil, fmt.Errorf("malformed pkt-line length %q", hdr)
 		}

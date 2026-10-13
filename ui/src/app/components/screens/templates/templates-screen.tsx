@@ -179,7 +179,9 @@ export function TemplatesScreen() {
     );
 
   return (
-    <div className="mx-auto max-w-[1120px] space-y-5 px-6 py-6">
+    // The prototype's page column (proto wardyn-templates.html:56, 120): 1120 px, 24 px sides (16 px below 760 px),
+    // 32 px above and 96 px below.
+    <div className="mx-auto max-w-[1120px] space-y-5 px-6 pt-8 pb-24 max-[760px]:px-4 max-[760px]:pt-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="space-y-1">
           <div className="label-eyebrow">{T.EYEBROW}</div>

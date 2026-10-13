@@ -209,8 +209,8 @@ var routeMatrix = map[string]classifiedRoute{
 	// which the shipped image does (ENV WARDYN_UI_DIR=/srv/ui). Anonymous by
 	// necessity: the console shell has to load before anyone can sign in. It is
 	// mounted on the TOP-LEVEL router, outside every auth group and after the
-	// whole /api/v1 tree, so it can shadow nothing; mountUI's own withinDir
-	// check is what keeps it from serving outside the directory.
+	// whole /api/v1 tree, so it can shadow nothing; mountUI's rooted clean of
+	// the path is what keeps it from serving outside the directory.
 	"GET /*":             {class: classAnonymous},
 	"GET /healthz":       {class: classAnonymous},
 	"GET /readyz":        {class: classAnonymous},
@@ -641,6 +641,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// The Azure Foundry capture's start door (azure_foundry_entra.go): the same
 	// self-service shape. Its callback is the Azure DevOps callback above.
 	"GET /api/v1/model-providers-entra/signin": {class: classMember},
+	// The Azure CLI component's capture (cli_azure_signin.go): the same
+	// self-service shape and the same shared callback. A component the caller
+	// may not attach answers as the run doors answer it.
+	"GET /api/v1/components-entra/signin": {class: classMember},
 	// The member's disconnect (ado_pat_console.go): the same self-service
 	// shape. It revokes and forgets the CALLER's own tokens and sign-in only,
 	// and a row the caller may not use answers as no row (D-6).

@@ -284,7 +284,7 @@ export interface Workspace {
   // Computed fresh at every GET /workspaces{,/{id}} read, never stored.
   // Always true for an operator. Optional so an OLDER server (the field
   // absent entirely, not `false`) falls back to the pre-#1267 client-only
-  // check — see workspaceUnavailableToCaller (new-run/wizard-types.ts).
+  // check — see workspaceUnavailableToCaller (new-run-flow/checks/workspace-availability.ts).
   available_to_you?: boolean;
 }
 
@@ -299,7 +299,7 @@ export type WorkspaceWriteResult = Workspace & { warnings?: string[] };
 // A run-creation-time selection of an onboarded workspace: WHICH workspace,
 // plus an optional per-run target/read-only override. The wizard resolves
 // workspaceId -> the onboarded Workspace's kind/source when composing the wire
-// spec (see buildSpec in new-run/wizard-types.ts) — this type intentionally
+// spec (the run document's workspaces carrier) — this type intentionally
 // carries only the operator's per-attachment choices, not a duplicated copy of
 // the workspace record.
 export interface WorkspaceSelection {

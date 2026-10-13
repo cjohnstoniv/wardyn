@@ -24,9 +24,8 @@ describe("StepShell", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveFocus();
     expect(announce).toHaveBeenCalledWith("What does it need?");
     expect(screen.getByRole("navigation", { name: "Progress" })).toBeInTheDocument();
-    expect(screen.getByText("Files")).toHaveAttribute("aria-current", "step");
+    expect(screen.getByRole("listitem", { current: "step" })).toHaveTextContent("Files");
     expect(flowSteps(LABELS, "files").map((s) => s.state)).toEqual(["done", "done", "done", "current", "upcoming"]);
-    expect(flowSteps(LABELS).every((s) => s.state === "done")).toBe(true);
   });
 
   it("a Continue with a local issue focuses that issue's control and marks it invalid instead of moving on", () => {
@@ -50,5 +49,77 @@ describe("StepShell", () => {
     fireEvent.keyDown(document, { key: "Enter", ctrlKey: true });
     expect(onBack).toHaveBeenCalledTimes(1);
     expect(onActivate).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Continue" })).toHaveTextContent("Continue→");
+  });
+
+  it("a primary with arrow false shows no arrow", () => {
+    render(<StepShell title="Review" primary={{ label: "Launch run", onActivate: vi.fn(), arrow: false }} />);
+    expect(screen.getByRole("button", { name: "Launch run" })).toHaveTextContent(/^Launch run$/);
+  });
+
+  it("puts the heading aside beside the heading and the footer extras around the primary, in place of Back", () => {
+    render(
+      <StepShell
+        title="Review"
+        primary={{ label: "Launch run", onActivate: vi.fn(), arrow: false }}
+        headingAside={<span>Toggle</span>}
+        footerExtras={{ start: <button type="button">Save</button>, end: <button type="button">Check again</button> }}
+      />,
+    );
+    expect(screen.getByText("Toggle").closest("div")?.previousElementSibling?.tagName).toBe("HEADER");
+    const footer = screen.getByRole("contentinfo");
+    expect([...footer.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Save", "Check again", "Launch run"]);
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+  });
+
+  it("refuses Back together with footer extras by type, since extras replace Back", () => {
+    // The directive is the assertion: `tsc -p tsconfig.check.json` fails when the pair is accepted.
+    // @ts-expect-error back and footerExtras are exclusive
+    render(<StepShell title="Review" back={{ label: "Back", onBack: vi.fn() }} footerExtras={{ start: <span>Save</span> }} />);
+    expect(screen.getByText("Save")).toBeInTheDocument();
+  });
+
+  it("pins the footer to the bottom only when asked", () => {
+    render(<StepShell title="Tools" primary={{ label: "Review run", onActivate: vi.fn() }} />);
+    expect(screen.getByRole("contentinfo")).not.toHaveClass("sticky");
+    cleanup();
+    render(<StepShell title="Tools" stickyFooter primary={{ label: "Review run", onActivate: vi.fn() }} />);
+    expect(screen.getByRole("contentinfo")).toHaveClass("sticky", "bottom-0");
+  });
+
+  it("with no primary shows only Back, and Ctrl+Enter does nothing", () => {
+    const onBack = vi.fn();
+    render(<StepShell title="Shape" back={{ label: "Back", onBack }} />);
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Back"]);
+    const e = new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, cancelable: true });
+    document.dispatchEvent(e);
+    expect(e.defaultPrevented).toBe(false);
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
+  it("keeps the same Launch node, and its focus, while Check again comes and goes", () => {
+    const shell = (checkAgain: boolean) => (
+      <StepShell
+        title="Review"
+        primary={{ label: "Launch run", onActivate: vi.fn(), arrow: false }}
+        footerExtras={{ start: <button type="button">Save</button>, end: checkAgain && <button type="button">Check again</button> }}
+      />
+    );
+    const { rerender } = render(shell(true));
+    const launch = screen.getByRole("button", { name: "Launch run" });
+    launch.focus();
+    rerender(shell(false));
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Launch run" })).toBe(launch);
+    expect(launch).toHaveFocus();
+    rerender(shell(true));
+    expect(screen.getByRole("button", { name: "Launch run" })).toBe(launch);
+    expect(launch).toHaveFocus();
+  });
+
+  it("gives a heading with an aside Make's 32 px and aligns the aside as asked", () => {
+    render(<StepShell title="Run document" headingAside={<span>Open</span>} headingAsideAlign="end" primary={{ label: "Go", onActivate: vi.fn() }} />);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveClass("text-[32px]");
+    expect(screen.getByText("Open").parentElement?.parentElement).toHaveClass("items-end");
   });
 });

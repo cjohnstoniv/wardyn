@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { runnerPools } from "../../../../lib/api/runner-pools";
 import { runs } from "../../../../lib/api/runs";
+import { shortTime } from "../../../../lib/format";
 import type { RunnerPoolList } from "../../../../lib/types/runner-pools";
 import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
 import { OperatorProvider } from "../../../wardyn/operator-context";
@@ -87,13 +88,14 @@ describe("Launched: Waiting (U13)", () => {
   });
 
   it("shows since, when it gives up from deadline_at, and why it waits in the pool's own words", async () => {
+    const queuedAt = new Date(Date.now() - 5 * 60_000).toISOString();
     getRun.mockResolvedValue(run({
       state: "QUEUED",
-      queue: queue({ queued_at: new Date(Date.now() - 5 * 60_000).toISOString(), deadline_at: new Date(Date.now() + 100 * 60_000).toISOString() }),
+      queue: queue({ queued_at: queuedAt, deadline_at: new Date(Date.now() + 100 * 60_000).toISOString() }),
     }));
     open();
     expect(await screen.findByText(NR_LAUNCH.WAITING_SINCE)).toBeInTheDocument();
-    expect(screen.getByText("5 minutes ago")).toBeInTheDocument();
+    expect(screen.getByText(shortTime(queuedAt))).toBeInTheDocument();
     expect(screen.getByText(NR_LAUNCH.GIVES_UP)).toBeInTheDocument();
     expect(screen.getByText("In 2 hours")).toBeInTheDocument();
     expect(await screen.findByText(NR_LAUNCH.WAITING_BODY("CI jobs", 40))).toBeInTheDocument();

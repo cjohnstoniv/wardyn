@@ -37,11 +37,14 @@ echo ">> running suite '$SUITE': go test -json ${PKGS[*]}"
 # The live-substrate suites (conformance, envbuild) turn coverage off: nobody
 # reads their profile, and instrumenting the whole module is compile time spent
 # inside the CI job's own timeout.
+# -timeout 40m, not go's 10m per-package default: internal/api's PG suite alone runs about 10 minutes
+# on a hosted runner, and a -timeout expiry is a panic that discards every verdict already produced.
+# The job's timeout-minutes is the real bound; a suite's own -timeout in PKGS comes later and wins.
 if [ "${WARDYN_TEST_REPORT_COVER:-1}" = "0" ]; then
   rm -f "$OUT/cover.out" "$OUT/coverage.html" "$OUT/coverage-func.txt"
-  go test -json "${PKGS[@]}" > "$OUT/test-output.json"
+  go test -json -timeout 40m "${PKGS[@]}" > "$OUT/test-output.json"
 else
-  go test -json -covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... "${PKGS[@]}" > "$OUT/test-output.json"
+  go test -json -timeout 40m -covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... "${PKGS[@]}" > "$OUT/test-output.json"
 fi
 GO_EXIT=$?
 

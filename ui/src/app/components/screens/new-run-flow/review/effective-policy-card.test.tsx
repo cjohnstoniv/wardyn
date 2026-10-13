@@ -6,12 +6,21 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { ADO_ACCESS, adoCapName } from "../../../../lib/ado-access-copy";
+import { ADO_ENTRA_EDITOR } from "../../../../lib/workspace-providers-copy";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
+import { PUSH } from "../../../wardyn/copy/push";
+import { preview } from "../../../../lib/new-run-fixtures/base";
+import type { PushRulesSpec } from "../../../../lib/types/policy";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
 import { initialDraft, type NewRunDraft, type RunIntent } from "../draft/run-intent";
 import { EffectivePolicyCard } from "./effective-policy-card";
+import { AccessGroup } from "./groups/access-group";
+import { SCENARIO_ACCESS } from "../../../../lib/new-run-fixtures/scenarios/tools";
+import type { ReviewPreflight } from "./review-seams";
 import { changedRows } from "./policy-rows";
+import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
 
 afterEach(cleanup);
 
@@ -65,9 +74,52 @@ describe("Effective policy card", () => {
     expect([...changedRows(BASE, BASE)]).toEqual([]);
   });
 
+  it.each([
+    ["an unattended run with a review rule", "background", { require_review_paths: ["infra/**"] }, true],
+    ["an interactive run with a review rule", "interactive", { require_review_paths: ["infra/**"] }, false],
+    ["an unattended run with only a deny rule", "background", { deny_paths: ["secrets/**"] }, false],
+    ["an unattended run with no push rules", "background", undefined, false],
+  ] as [string, RunIntent["experience"], PushRulesSpec | undefined, boolean][])("says a held push is refused for %s only when nobody can answer it", (_name, experience, pushRules, shown) => {
+    const spec = { ...preview().spec, push_rules: pushRules };
+    render(<EffectivePolicyCard draft={draftOf({ ...BASE, experience })} pre={null} preview={preview({ spec })} />);
+    expect(screen.queryByText(PUSH.RAIL_UNATTENDED) !== null).toBe(shown);
+  });
+
+  it("says in one line what the run's policy grants on Azure DevOps, and nothing for a policy that names none", () => {
+    const spec = { ...preview().spec, azure_devops_capabilities: ["code_read", "policy_admin"] };
+    const view = render(<EffectivePolicyCard draft={draftOf(BASE)} pre={null} preview={preview({ spec })} />);
+    const line = within(screen.getByRole("complementary", { name: NR_REVIEW.POLICY_TITLE })).getByTestId("ado-access-summary");
+    expect(line).toHaveTextContent(`${ADO_ACCESS.SUMMARY_PREFIX} ${adoCapName("code_read")} · ${adoCapName("policy_admin")}`);
+    expect(within(line).getByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE)).toBeInTheDocument();
+    view.rerender(<EffectivePolicyCard draft={draftOf(BASE)} pre={null} preview={preview()} />);
+    expect(screen.queryByTestId("ado-access-summary")).not.toBeInTheDocument();
+  });
+
   it("reads a held tool default as Hold for approval", () => {
     render(<EffectivePolicyCard draft={draftOf({ ...BASE, tool_approvals: "hold" })} pre={null} preview={null} />);
     expect(screen.getByText(NR_REVIEW.POLICY_HOLD)).toBeInTheDocument();
     expect(screen.queryByText(NR_REVIEW.POLICY_AUTOMATIC)).toBeNull();
+  });
+
+  it.each([[["pypi.org"], NR_REVIEW.POLICY_HOST_ONE], [["pypi.org", "registry.npmjs.org"], NR_REVIEW.POLICY_HOSTS(2)]])(
+    "counts the allowed hosts with a singular for one (%j)", (hosts, text) => {
+      const preview = { spec: { allowed_domains: hosts }, source: { name: "Source" } } as unknown as PolicyPreviewResult;
+      render(<EffectivePolicyCard draft={draftOf(BASE)} pre={null} preview={preview} />);
+      expect(screen.getByText(text)).toBeInTheDocument();
+    },
+  );
+
+  it("shows Network and the Access value whenever the server's access facts carry hosts, and the barrier with its strength word", () => {
+    const one = SCENARIO_ACCESS.member.hosts[0];
+    const access = { ...SCENARIO_ACCESS.member, hosts: [one, { ...one, host: "pypi.org" }] };
+    const pre = { ...SCENARIO_PREFLIGHT.member, access } as ReviewPreflight;
+    render(<EffectivePolicyCard draft={draftOf(BASE)} pre={pre} preview={null} />);
+    const network = document.querySelector('[data-policy-row="network"]') as HTMLElement;
+    expect(within(network).getByText(NR_REVIEW.POLICY_HOSTS(2))).toBeInTheDocument();
+    const barrier = document.querySelector('[data-policy-row="barrier"]') as HTMLElement;
+    expect(within(barrier).getByText(NR_RUN.TAGLINE_WALL)).toBeInTheDocument();
+    cleanup();
+    render(<AccessGroup draft={draftOf(BASE)} pre={pre} preview={null} docRows={[]} go={() => {}} dispatch={() => {}} />);
+    expect(screen.getByText(NR_REVIEW.POLICY_HOSTS(2))).toBeInTheDocument();
   });
 });
