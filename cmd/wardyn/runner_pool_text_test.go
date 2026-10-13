@@ -39,7 +39,7 @@ func TestRunnerPoolSuccessText(t *testing.T) {
 		want string
 	}{
 		{[]string{"create", "--name", "Home server"}, "created user pool Home server (" + id.String() + "), yours, revision 1\n" +
-			"  limits: it follows its runners; it has none yet. Put a runner in it: wardyn runner pool add \"Home server\" <runner>\n"},
+			"  limits: it follows its runners; it has none yet. Put a runner in it: wardyn runner pool add " + id.String() + " <runner>\n"},
 		{[]string{"create", "--name", "General", "--scope", "organization"}, "created organization pool General (" + id.String() + "), revision 1\n"},
 		{[]string{"update", id.String(), "--max-runs", "6"}, "updated pool Laptop, revision 5\n"},
 		{[]string{"delete", id.String(), "--yes"}, "pool Laptop (" + id.String() + ") deleted\n" +
@@ -230,8 +230,73 @@ func TestPoolLimitsTextSaysWhatThePoolSets(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "created user pool Home server (" + id.String() + "), yours, revision 1\n" +
-		"  limits: memory per run set by this pool; 2 runs maximum in this pool; it has no runners yet. Put a runner in it: wardyn runner pool add \"Home server\" <runner>\n"
+		"  limits: memory per run set by this pool; 2 runs maximum in this pool; it has no runners yet. Put a runner in it: wardyn runner pool add " + id.String() + " <runner>\n"
 	if sb.String() != want {
 		t.Errorf("create with its own limits:\n%q\nwant\n%q", sb.String(), want)
+	}
+}
+
+// The biggest run is what one runner can take: CPU from one runner and memory from another is a run
+// no runner starts.
+func TestBiggestRunComesFromOneRunner(t *testing.T) {
+	amounts := func(c, m, d int64) types.RunnerAmounts {
+		return types.RunnerAmounts{CPUMillis: c * 1000, MemoryMiB: m << 10, DiskMiB: d << 10}
+	}
+	member := func(name string, perRun types.RunnerAmounts) sdk.RunnerPoolMemberView {
+		return sdk.RunnerPoolMemberView{Kind: sdk.RunnerKindSelfHosted, ID: name, Name: name, Online: true,
+			Limits: &types.RunnerLimits{RunsAtOnce: 2, Total: amounts(16, 64, 1000), PerRun: perRun}}
+	}
+	wide, deep := member("wide", amounts(8, 4, 50)), member("deep", amounts(2, 16, 100))
+	for _, tc := range []struct {
+		name    string
+		members []sdk.RunnerPoolMemberView
+		caps    types.RunnerAmounts
+		want    types.RunnerAmounts
+	}{
+		{"neither allows the most of everything: the one with the most CPU", []sdk.RunnerPoolMemberView{deep, wide}, types.RunnerAmounts{}, amounts(8, 4, 50)},
+		{"the pool's caps first, then the one with the most CPU", []sdk.RunnerPoolMemberView{wide, deep}, types.RunnerAmounts{CPUMillis: 2000}, amounts(2, 16, 100)},
+		{"one runner allows the most of everything", []sdk.RunnerPoolMemberView{deep, member("big", amounts(8, 32, 200))}, types.RunnerAmounts{}, amounts(8, 32, 200)},
+		{"no runner with limits", []sdk.RunnerPoolMemberView{{Name: "fresh"}}, types.RunnerAmounts{}, types.RunnerAmounts{}},
+	} {
+		if got := biggestRun(tc.members, tc.caps); got != tc.want {
+			t.Errorf("%s: %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A lifetime or idle stop is the pool's own limit: its runners set none. A pool that sets only those
+// does not "follow its runners".
+func TestPoolLimitsTextSaysTheLifetimesThePoolSets(t *testing.T) {
+	dur := func(def, maxSec int, open bool) *types.RunnerPoolDuration {
+		return &types.RunnerPoolDuration{DefaultSec: def, MaxSec: maxSec, Unlimited: open}
+	}
+	for _, tc := range []struct {
+		name   string
+		limits *sdk.RunnerPoolLimits
+		want   string
+	}{
+		{"a background lifetime", &sdk.RunnerPoolLimits{Background: &types.RunnerPoolBackgroundLimits{Lifetime: dur(3600, 86400, false)}},
+			"background lifetime default 1 hour, up to 1 day"},
+		{"no end", &sdk.RunnerPoolLimits{Background: &types.RunnerPoolBackgroundLimits{Lifetime: dur(0, 0, true)}}, "background lifetime no maximum"},
+		{"interactive", &sdk.RunnerPoolLimits{Interactive: &types.RunnerPoolInteractiveLimits{Lifetime: dur(8*3600, 86400, false), Idle: dur(1800, 0, true)}},
+			"interactive lifetime default 8 hours, up to 1 day; interactive idle stop default 30 minutes, never"},
+	} {
+		if got := poolLimitsText(sdk.RunnerPool{Limits: tc.limits}, types.RunnerAmounts{}); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The next step create prints names the pool by its id: a name with a dollar sign or a quote pasted
+// into a shell would run or break.
+func TestPoolCreatedNamesThePoolByItsIDInTheCommand(t *testing.T) {
+	id := uuid.New()
+	var sb strings.Builder
+	if err := printPoolCreated(&sb, sdk.RunnerPool{ID: id, Name: `$(touch x) "dana's"`, Scope: sdk.RunnerPoolUser, Revision: 1}, false, false); err != nil {
+		t.Fatal(err)
+	}
+	_, cmd, _ := strings.Cut(sb.String(), "Put a runner in it: ")
+	if want := "wardyn runner pool add " + id.String() + " <runner>\n"; cmd != want {
+		t.Errorf("next step = %q, want %q", cmd, want)
 	}
 }
