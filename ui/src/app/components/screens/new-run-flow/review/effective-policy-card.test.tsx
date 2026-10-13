@@ -8,6 +8,9 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
+import { PUSH } from "../../../wardyn/copy/push";
+import { preview } from "../../../../lib/new-run-fixtures/base";
+import type { PushRulesSpec } from "../../../../lib/types/policy";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
 import { initialDraft, type NewRunDraft, type RunIntent } from "../draft/run-intent";
 import { EffectivePolicyCard } from "./effective-policy-card";
@@ -63,6 +66,17 @@ describe("Effective policy card", () => {
     expect([...changedRows(withTool({ model_provider: "bedrock" }), BASE)]).toEqual(["credentials"]);
     expect([...changedRows(withTool({ default_effect: "hold" }), BASE)]).toEqual(["tools"]);
     expect([...changedRows(BASE, BASE)]).toEqual([]);
+  });
+
+  it.each([
+    ["an unattended run with a review rule", "background", { require_review_paths: ["infra/**"] }, true],
+    ["an interactive run with a review rule", "interactive", { require_review_paths: ["infra/**"] }, false],
+    ["an unattended run with only a deny rule", "background", { deny_paths: ["secrets/**"] }, false],
+    ["an unattended run with no push rules", "background", undefined, false],
+  ] as [string, RunIntent["experience"], PushRulesSpec | undefined, boolean][])("says a held push is refused for %s only when nobody can answer it", (_name, experience, pushRules, shown) => {
+    const spec = { ...preview().spec, push_rules: pushRules };
+    render(<EffectivePolicyCard draft={draftOf({ ...BASE, experience })} pre={null} preview={preview({ spec })} />);
+    expect(screen.queryByText(PUSH.RAIL_UNATTENDED) !== null).toBe(shown);
   });
 
   it("reads a held tool default as Hold for approval", () => {

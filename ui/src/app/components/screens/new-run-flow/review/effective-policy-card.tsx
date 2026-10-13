@@ -8,6 +8,7 @@ import { Button } from "../../../ui/button";
 import { BarrierMark } from "../../../wardyn/barrier-mark";
 import { Switch } from "../../../wardyn/form-primitives";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
+import { PUSH } from "../../../wardyn/copy/push";
 import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
 import type { NewRunDraft } from "../draft/run-intent";
 import { changedRows, policyRows } from "./policy-rows";
@@ -18,6 +19,8 @@ export function EffectivePolicyCard({ draft, pre, preview }: { draft: NewRunDraf
   const changed = changedRows(draft.intent, draft.base);
   const all = policyRows(draft, pre, preview);
   const rows = onlyChanged ? all.filter((r) => changed.has(r.id)) : all;
+  // Only a review rule holds a push; a deny rule refuses it attended or not, so the note needs one.
+  const unattendedPush = draft.intent.experience === "background" && !!preview?.spec.push_rules?.require_review_paths?.length;
   return (
     <aside aria-label={NR_REVIEW.POLICY_TITLE} className="flex flex-col gap-3 rounded-lg border border-border p-4">
       <div>
@@ -47,6 +50,7 @@ export function EffectivePolicyCard({ draft, pre, preview }: { draft: NewRunDraf
           ))}
         </dl>
       )}
+      {unattendedPush && <p className="text-sm text-muted-foreground">{PUSH.RAIL_UNATTENDED}</p>}
     </aside>
   );
 }
