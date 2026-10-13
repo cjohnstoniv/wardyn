@@ -606,6 +606,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   subscriptions, or deleting it, deletes everyone's sign-in for it.
 - The `full` and `harnesses` images include the Azure CLI (`az` 2.91.0), from Microsoft's apt repository with its
   signing key checked by fingerprint and the version pinned.
+- Runners and pools in the console: Settings, Runners lists every runner with its limits and what is in use; the
+  Pools tab lets an admin create, edit and delete organization pools, set who may use one and choose the
+  organization default, and shows each pool's runners and limits. Your account shows your own runner with its limits
+  and pools, and My pools creates and manages your own user pools and adds your runner to them. `wardyn runner pool
+  use-policy get|set|clear` does the same from the CLI, and `wardyn runner pool show` prints who may use a pool and
+  the limits it sets.
 
 ### Changed
 
@@ -930,6 +936,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - When a governance profile denies Azure Resource Manager, a run with the Azure CLI no longer keeps the Entra
   sign-in host open: the hosts the Azure CLI added for its door are removed with the door, and hosts the run's own
   policy listed are untouched.
+- A dispatched stop or kill that names a container the runner cannot prove it created is refused by the runner and
+  closed (`runner.action.refuse`), instead of failing the runner's session on every reconnect.
 
 
 ## [0.8.9] — 2026-10-09
