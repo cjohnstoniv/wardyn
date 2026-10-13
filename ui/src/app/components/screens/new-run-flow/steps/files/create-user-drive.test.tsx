@@ -371,3 +371,76 @@ describe("delete: Escape and focus", () => {
     await waitFor(() => expect(focused()).toHaveTextContent(NR_SHARED.BACK));
   });
 });
+
+describe("with the public step's fixes", () => {
+  const next = () => within(top()).getByRole("button", { name: new RegExp(`^${NR_SHARED.CONTINUE}`) });
+  const radio = (name: string) => within(top()).getByRole("radio", { name: new RegExp(`^${name}`) });
+
+  describe.each<[string, RunIntent]>([
+    ["an agent task", { shape: "agent_task", experience: "background" }],
+    ["an environment", INTERACTIVE],
+  ])("deleting the drive the run starts in (%s)", (_, base) => {
+    it("leaves no subfolder behind once another item becomes the start", async () => {
+      drives = [DRIVE_OWNED, DRIVE_LOCKED];
+      show({ ...base, drives: [{ drive_id: DRIVE_OWNED.id }], start_folder: { kind: "attachment", drive_id: DRIVE_OWNED.id, subpath: "src" } });
+      const sub = await screen.findByPlaceholderText(NR_FILES.SUBFOLDER_PLACEHOLDER);
+      await waitFor(() => expect(sub).toHaveValue("src"));
+      await userEvent.click(screen.getByRole("button", { name: NR_FILES.ADD_ARIA }));
+      await userEvent.click(within(top()).getByRole("button", { name: new RegExp(`^${NR_FILES.KIND_USER_DRIVE}`) }));
+      await userEvent.click(await screen.findByRole("button", { name: NR_FILES.DELETE_DRIVE }));
+      await userEvent.click(within(top()).getByRole("button", { name: NR_FILES.DELETE_DRIVE }));
+      await waitFor(() => expect(dialogs()).toHaveLength(1));
+      await userEvent.click(radio(DRIVE_LOCKED.name));
+      await userEvent.click(next());
+      await userEvent.click(within(top()).getByRole("button", { name: NR_FILES.ADD_CONFIRM }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(drawn().start_folder).toEqual({ kind: "attachment", drive_id: DRIVE_LOCKED.id });
+      expect(sub).toHaveValue("");
+      const line = screen.getAllByText(NR_FILES.STARTS_HERE).find((e) => e.parentElement?.tagName === "P")!.parentElement!;
+      expect(line).not.toHaveTextContent("src");
+    });
+  });
+
+  it("attaches a drive created after a read-only option was selected with edit access", async () => {
+    await openChoose();
+    await userEvent.click(radio(DRIVE_LOCKED.name));
+    await userEvent.click(createLink());
+    await userEvent.type(within(top()).getByLabelText(NR_FILES.DRIVE_NAME), "Case notes{Enter}");
+    expect(await within(top()).findByRole("radio", { name: /^Case notes/ })).toBeChecked();
+    await userEvent.click(next());
+    expect(within(top()).getByLabelText(NR_FILES.ACCESS_LABEL)).toHaveValue("edit");
+    await userEvent.click(within(top()).getByRole("button", { name: NR_FILES.ADD_CONFIRM }));
+    await waitFor(() => expect(drawn().drives).toContainEqual({ drive_id: NEW_DRIVE.id }));
+  });
+
+  it("holds Continue while the create form is open and puts the pick back on Cancel", async () => {
+    await openChoose();
+    await userEvent.click(radio(DRIVE_OWNED.name));
+    expect(next()).toBeEnabled();
+    await userEvent.click(createLink());
+    expect(next()).toBeDisabled();
+    expect(radio(DRIVE_OWNED.name)).not.toBeChecked();
+    await userEvent.click(within(within(top()).getByLabelText(NR_FILES.DRIVE_NAME).closest("form")!).getByRole("button", { name: NR_SHARED.CANCEL }));
+    expect(radio(DRIVE_OWNED.name)).toBeChecked();
+    expect(next()).toBeEnabled();
+  });
+
+  it("leaves a pick the person made while the form is open when they cancel", async () => {
+    await openChoose();
+    await userEvent.click(radio(DRIVE_OWNED.name));
+    await userEvent.click(createLink());
+    await userEvent.click(radio(DRIVE_LOCKED.name));
+    await userEvent.click(within(within(top()).getByLabelText(NR_FILES.DRIVE_NAME).closest("form")!).getByRole("button", { name: NR_SHARED.CANCEL }));
+    expect(radio(DRIVE_LOCKED.name)).toBeChecked();
+  });
+
+  it("leaves Continue live when the picked drive cannot be told from another of the same name", async () => {
+    drives = [DRIVE_OWNED, { ...DRIVE_LOCKED, name: DRIVE_OWNED.name }];
+    show();
+    await userEvent.click(await screen.findByRole("button", { name: NR_FILES.ADD_ARIA }));
+    await userEvent.click(within(top()).getByRole("button", { name: new RegExp(`^${NR_FILES.KIND_USER_DRIVE}`) }));
+    await userEvent.click((await within(top()).findAllByRole("radio"))[0]);
+    await userEvent.click(createLink());
+    expect(next()).toBeEnabled();
+  });
+});

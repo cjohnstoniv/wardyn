@@ -79,6 +79,26 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
     refocus.current = true;
     setCreating(false);
   }, []);
+  // The prototype holds Continue while the form is open, and the seam can only clear a pick, so the pick is
+  // read back off the list (the one checked option, found by its unique name) and put back on Cancel.
+  const held = React.useRef<string | null>(null);
+  const dialogRoot = React.useRef<HTMLElement | null>(null);
+  const openCard = () => {
+    const root = (dialogRoot.current = link.current?.closest<HTMLElement>('[role="dialog"]') ?? null);
+    const name = root?.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.closest("label")?.querySelector("strong")?.textContent;
+    const same = (catalogue?.drives ?? []).filter((d) => d.section === "user" && d.name === name);
+    // A pick that cannot be named once is left alone, and Continue stays live.
+    if (name && same.length !== 1) return setCreating(true);
+    held.current = same[0]?.id ?? null;
+    choose("");
+    setCreating(true);
+  };
+  const cancelCard = React.useCallback(() => {
+    const root = dialogRoot.current;
+    if (held.current && !root?.querySelector('input[type="radio"]:checked')) choose(held.current);
+    held.current = null;
+    closeCard();
+  }, [choose, closeCard]);
 
   const door = catalogue?.create;
   // No door: not a person. Disabled: the switch is off, which is the default.
@@ -94,7 +114,7 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
   return (
     <>
       {offersCreate && !creating && (door.allowed ? (
-        <button ref={link} type="button" className={FILES_LINK} onClick={() => setCreating(true)}>{NR_FILES.CREATE_USER_DRIVE}</button>
+        <button ref={link} type="button" className={FILES_LINK} onClick={openCard}>{NR_FILES.CREATE_USER_DRIVE}</button>
       ) : (
         <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
           <button type="button" disabled aria-describedby={reasonText ? reasonId : undefined} className={CLOSED_LINK}>{NR_FILES.CREATE_USER_DRIVE}</button>
@@ -104,8 +124,9 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
       {creating && (
         <CreateDriveCard
           create={createMyDrive}
-          onClose={closeCard}
+          onClose={cancelCard}
           onCreated={(drive) => {
+            held.current = null;
             refresh();
             choose(drive.id);
             announce(NR_FILES.DRIVE_CREATED(drive.name));
@@ -146,9 +167,6 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
             refresh();
             // A drive already attached to this run goes with it, and so does a start on it.
             dispatch({ type: "edit", apply: (i) => detachDrive(i, deleting.drive.id, legacyId) });
-            // The dialog keeps its selection by id and does not drop one that left the list; clearing it holds
-            // Continue until the person picks again.
-            choose("");
             announce(NR_FILES.DRIVE_DELETED(deleting.drive.name));
           }}
         />
