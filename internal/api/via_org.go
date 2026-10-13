@@ -348,7 +348,7 @@ func (s *Server) viaOrgEngineConfig(ctx context.Context, runID uuid.UUID) (*prox
 		return nil, scErr
 	}
 	cfg.GitGrants, cfg.ViaOrgRoutes = git, routes
-	cfg.PATGrants, cfg.BrokeredPATGrantIDs, cfg.ADOGrant, cfg.AzureGates, cfg.GitHubAPI = nil, nil, nil, nil, nil
+	cfg.PATGrants, cfg.BrokeredPATGrantIDs, cfg.ADOGrant, cfg.AzureGates, cfg.GitHubAPI, cfg.AzureARM = nil, nil, nil, nil, nil, nil
 	cfg.MITMHosts, cfg.MITMLLM, cfg.MITMCACertPEM, cfg.MITMCAKeyPEM = slices.Compact(slices.Sorted(slices.Values(hosts))), false, "", ""
 	cfg.DecisionSpoolDir, cfg.LLMUpstreams = "", nil
 	cfg.InternalHosts = viaOrgInternalHosts(proxyInternalHosts(sc.InternalHosts), hosts)

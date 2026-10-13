@@ -109,6 +109,8 @@
 //   - /api/v1/model-providers-entra — the per-row Azure Foundry sign-in door (0.8.6):
 //     a browser redirect dance whose callback is the /api/v1/scm one above.
 //     Unwrapped for the same reason.
+//   - /api/v1/components-entra — the Azure CLI component's sign-in door: the
+//     same redirect dance and the same callback. Unwrapped for the same reason.
 //   - the attach lane under /api/v1/runs/{id} — attach, attach/ticket,
 //     attach/holder, attach/takeover, resources. A WebSocket and its ticket.
 //   - /scim/v2/Users, /scim/v2/Users/{id}, /scim/v2/Groups, /scim/v2/Groups/{id} — the

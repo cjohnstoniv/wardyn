@@ -235,6 +235,7 @@ if [[ "${1:-}" == "--idle" || "${1:-}" == "--revive" ]]; then
     prepare_claude_config_dir  # no-op unless CLAUDE_CONFIG_DIR is set (RO cred mount)
     install_artifact_config
     materialize_aws_sso_config
+    materialize_azure_cli_config
     prepare_codex_config
     provision_git_helper_secret
     workdir="${HOME}/work"
@@ -375,6 +376,7 @@ prepare_claude_config_dir  # no-op unless CLAUDE_CONFIG_DIR is set (RO cred moun
 # unless WARDYN_ARTIFACT_CONFIG_B64 is set) before clone/install.
 install_artifact_config
 materialize_aws_sso_config
+materialize_azure_cli_config
 prepare_codex_config
 
 # Provision the git credential helper caller-auth secret BEFORE any git runs
