@@ -12,10 +12,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -122,10 +125,11 @@ func (s *Server) sandboxCreateAdmitted(ctx context.Context, run types.AgentRun, 
 		s.memberDrivesStillThere(ctx, run, p.MemberDrives)
 }
 
-// memberDrivesStillThere re-reads each member drive the run attaches, under its
-// owner, right before the sandbox is created. One that is gone or being
-// deleted fails the run as drive_not_found, so nothing mounts it and no volume
-// or claim is made for it.
+// memberDrivesStillThere re-reads each member drive the run attaches, under the
+// run's owner, right before the sandbox is created. One that is gone, being
+// deleted, or not the run owner's fails the run as drive_not_found, so nothing
+// mounts it and no volume or claim is made for it. A store that cannot answer
+// fails it too.
 func (s *Server) memberDrivesStillThere(ctx context.Context, run types.AgentRun, owners map[uuid.UUID]string) bool {
 	if len(owners) == 0 {
 		return true
@@ -133,15 +137,16 @@ func (s *Server) memberDrivesStillThere(ctx context.Context, run types.AgentRun,
 	ms, _ := s.cfg.Store.(interface {
 		GetMemberDriveOf(ctx context.Context, owner string, id uuid.UUID) (types.UserDrive, error)
 	})
+	runOwner := types.CanonicalUserSubject(run.CreatedBy)
 	for id, owner := range owners {
-		if ms != nil {
-			d, err := ms.GetMemberDriveOf(ctx, owner, id)
+		if ms != nil && owner == runOwner {
+			d, err := ms.GetMemberDriveOf(ctx, runOwner, id)
 			if err == nil && d.DeleteStartedAt == nil {
 				continue
 			}
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"reason": "drive_not_found"})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"reason": string(authz.ReasonDriveNotFound)})))
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, driveNotFoundMsg(id.String()))
 		return false
 	}
@@ -149,21 +154,34 @@ func (s *Server) memberDrivesStillThere(ctx context.Context, run types.AgentRun,
 }
 
 // templateMemberDrivesRefused refuses a person's own drive in an organisation
-// or group template, writing the answer: the people it is offered to cannot
-// attach it, and the template would disclose it. The diagnostic names the
-// path, never the drive.
+// or group template, in drives[] or as the start folder's drive, writing the
+// answer: the people it is offered to cannot attach it, and the template would
+// disclose it. The diagnostic names the path, never the drive.
 func (s *Server) templateMemberDrivesRefused(w http.ResponseWriter, r *http.Request, t types.RunTemplate) bool {
 	var doc client.TemplateDocument
-	var drives []client.DriveAttachment
-	if t.Owner.Scope == types.TemplateScopePerson || s.cfg.Store == nil ||
-		json.Unmarshal(t.Document, &doc) != nil || json.Unmarshal(doc.Intent.Raw("drives"), &drives) != nil {
+	if t.Owner.Scope == types.TemplateScopePerson || json.Unmarshal(t.Document, &doc) != nil {
 		return false
 	}
+	var drives []client.DriveAttachment
+	var start client.StartFolder
+	paths := map[string]string{}
+	if json.Unmarshal(doc.Intent.Raw("drives"), &drives) == nil {
+		for i, a := range drives {
+			paths[fmt.Sprintf("intent.drives[%d]", i)] = a.DriveID
+		}
+	}
+	if json.Unmarshal(doc.Intent.Raw("start_folder"), &start) == nil && start.DriveID != "" {
+		paths["intent.start_folder.drive_id"] = start.DriveID
+	}
 	var diags []client.TemplateDiagnostic
-	for i, a := range drives {
-		id, err := uuid.Parse(a.DriveID)
+	for _, path := range slices.Sorted(maps.Keys(paths)) {
+		id, err := uuid.Parse(paths[path])
 		if err != nil {
 			continue
+		}
+		if s.cfg.Store == nil {
+			writeServerError(w, r, "read a template's drive", errors.New("api: no store"))
+			return true
 		}
 		d, err := s.cfg.Store.GetUserDrive(r.Context(), id)
 		switch {
@@ -173,7 +191,6 @@ func (s *Server) templateMemberDrivesRefused(w http.ResponseWriter, r *http.Requ
 			writeServerError(w, r, "read a template's drive", err)
 			return true
 		}
-		path := fmt.Sprintf("intent.drives[%d]", i)
 		diags = append(diags, client.TemplateDiagnostic{Path: path, Reason: reasonTemplateSharedFieldRefused, Message: templateSharedFieldRefusedMsg(path, string(t.Owner.Scope))})
 	}
 	if len(diags) == 0 {

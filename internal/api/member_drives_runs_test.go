@@ -161,8 +161,8 @@ func TestMemberDriveNeverOnSelfHosted(t *testing.T) {
 	admin.OwnerSubject = ""
 	self := types.RunnerPool{HostingType: types.RunnerPoolSelfHosted}
 	remote := types.RunnerPool{HostingType: types.RunnerPoolRemoteProvided}
-	if !memberDriveNeverOnPool(self, member) || memberDriveNeverOnPool(remote, member) || memberDriveNeverOnPool(self, admin) {
-		t.Fatal("the permanent rule must hold a person's own drive, and only it, off a self-hosted pool")
+	if !driveNotInPool(self, member) || driveNotInPool(remote, member) {
+		t.Error("driveNotInPool must hold a person's own drive off a self-hosted pool, and only there")
 	}
 
 	srv, _ := multiDriveServer()
@@ -189,6 +189,9 @@ func TestMemberDriveNeverOnSelfHosted(t *testing.T) {
 	if _, ref := placement.LocalEligibility(plan); ref == nil || ref.Field != "SandboxSpec.Drives[0]" {
 		t.Errorf("a local runner with the path verified = %+v, want the drive refused", ref)
 	}
+	if !memberDriveNeverOnPool(self, member) || memberDriveNeverOnPool(remote, member) || memberDriveNeverOnPool(self, admin) {
+		t.Error("the permanent rule must hold a person's own drive, and only it, off a self-hosted pool")
+	}
 }
 
 // memberRecheckStore answers dispatch's re-read of a member drive.
@@ -204,10 +207,10 @@ func (s *memberRecheckStore) GetMemberDriveOf(_ context.Context, owner string, i
 	return types.UserDrive{}, store.ErrNotFound
 }
 
-// TestMemberDriveDispatchRecheck: dispatch re-reads each member drive under its
-// owner right before CreateSandbox. Deleted, being deleted or no longer that
-// owner's fails the run drive_not_found with no CreateSandbox call; present
-// mounts it.
+// TestMemberDriveDispatchRecheck: dispatch re-reads each member drive under the
+// run's owner right before CreateSandbox. Deleted, being deleted, not the run
+// owner's, or a store that cannot re-read fails the run drive_not_found with no
+// CreateSandbox call; present mounts it.
 func TestMemberDriveDispatchRecheck(t *testing.T) {
 	id := uuid.New()
 	row := types.UserDrive{ID: id, Name: "Mine", Backend: types.DriveBackendDockerVolume, OwnerSubject: aliceSub}
@@ -215,22 +218,27 @@ func TestMemberDriveDispatchRecheck(t *testing.T) {
 	tomb := row
 	tomb.DeleteStartedAt = &at
 	cases := []struct {
-		name   string
-		drives map[uuid.UUID]types.UserDrive
-		owner  string
-		mounts bool
+		name     string
+		drives   map[uuid.UUID]types.UserDrive // nil: the store cannot re-read
+		owner    string
+		runOwner string
+		mounts   bool
 	}{
-		{"present", map[uuid.UUID]types.UserDrive{id: row}, aliceSub, true},
-		{"deleted", map[uuid.UUID]types.UserDrive{}, aliceSub, false},
-		{"being deleted", map[uuid.UUID]types.UserDrive{id: tomb}, aliceSub, false},
-		{"another owner", map[uuid.UUID]types.UserDrive{id: row}, bobSub, false},
+		{"present", map[uuid.UUID]types.UserDrive{id: row}, aliceSub, aliceSub, true},
+		{"deleted", map[uuid.UUID]types.UserDrive{}, aliceSub, aliceSub, false},
+		{"being deleted", map[uuid.UUID]types.UserDrive{id: tomb}, aliceSub, aliceSub, false},
+		{"another owner", map[uuid.UUID]types.UserDrive{id: row}, bobSub, aliceSub, false},
+		{"another person's run", map[uuid.UUID]types.UserDrive{id: row}, aliceSub, bobSub, false},
+		{"store cannot re-read", nil, aliceSub, aliceSub, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fr := &fakeRunner{}
 			srv, st, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
-			srv.cfg.Store = &memberRecheckStore{dispatchTestStore: st, drives: tc.drives}
-			run.Task = ""
+			if tc.drives != nil {
+				srv.cfg.Store = &memberRecheckStore{dispatchTestStore: st, drives: tc.drives}
+			}
+			run.Task, run.CreatedBy, st.run.CreatedBy = "", tc.runOwner, tc.runOwner
 			mount := types.DriveMount{DriveID: id, Backend: types.DriveBackendDockerVolume, ObjectName: "wardyn-drive-x", DriveName: "Mine",
 				HomeName: "d-x", Target: runner.DrivesRoot + "/mine", Enforcement: types.StorageEnforcementNone}
 			srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
@@ -270,7 +278,8 @@ func TestTemplateRefusesMemberDriveInSharedScope(t *testing.T) {
 	mine := types.UserDrive{ID: uuid.New(), Name: "Alice private notes", Backend: types.DriveBackendDockerVolume, OwnerSubject: aliceSub}
 	team := types.UserDrive{ID: uuid.New(), Name: "Team data", Backend: types.DriveBackendDockerVolume}
 	st.drives[mine.ID], st.drives[team.ID] = mine, team
-	doc := []byte(`{"intent":{"drives":[{"drive_id":"` + team.ID.String() + `"},{"drive_id":"` + mine.ID.String() + `"}]}}`)
+	doc := []byte(`{"intent":{"drives":[{"drive_id":"` + team.ID.String() + `"},{"drive_id":"` + mine.ID.String() + `"}],` +
+		`"start_folder":{"kind":"attachment","drive_id":"` + mine.ID.String() + `"}}}`)
 	for scope, refused := range map[types.TemplateOwner]bool{
 		{Scope: types.TemplateScopeGroup, Group: "eng"}:      true,
 		{Scope: types.TemplateScopeOrg}:                      true,
@@ -287,12 +296,89 @@ func TestTemplateRefusesMemberDriveInSharedScope(t *testing.T) {
 			continue
 		}
 		var body client.TemplateSaveRefusal
-		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || len(body.Diagnostics) != 1 ||
-			body.Diagnostics[0].Path != "intent.drives[1]" || body.Reason != reasonTemplateSharedFieldRefused {
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || len(body.Diagnostics) != 2 || body.Reason != reasonTemplateSharedFieldRefused ||
+			body.Diagnostics[0].Path != "intent.drives[1]" || body.Diagnostics[1].Path != "intent.start_folder.drive_id" {
 			t.Errorf("%s: refusal = %s", scope.Scope, w.Body)
 		}
 		if strings.Contains(w.Body.String(), mine.Name) {
 			t.Errorf("%s: the refusal names the person's drive: %s", scope.Scope, w.Body)
 		}
+	}
+	srv.cfg.Store = nil
+	w := httptest.NewRecorder()
+	if !srv.templateMemberDrivesRefused(w, httptest.NewRequest(http.MethodPost, "/api/v1/templates", nil),
+		types.RunTemplate{Owner: types.TemplateOwner{Scope: types.TemplateScopeOrg}, Document: doc}) || w.Code != http.StatusInternalServerError {
+		t.Errorf("no store: %d %s, want the save refused", w.Code, w.Body)
+	}
+}
+
+// cancellingReclaim cancels the delete request while the substrate works, then
+// answers outcome and err.
+type cancellingReclaim struct {
+	*memberDriveRunner
+	cancel  context.CancelFunc
+	outcome runner.DriveReclaimOutcome
+	err     error
+}
+
+func (r *cancellingReclaim) ReclaimDrive(context.Context, types.DriveMount) (runner.DriveReclaimOutcome, error) {
+	r.cancel()
+	return r.outcome, r.err
+}
+
+// ctxMemberDriveStore finishes and aborts a delete only on a live context, as
+// a database call would.
+type ctxMemberDriveStore struct{ *memberDriveStore }
+
+func (s ctxMemberDriveStore) FinishMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.memberDriveStore.FinishMemberDriveDelete(ctx, id, started)
+}
+
+func (s ctxMemberDriveStore) AbortMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.memberDriveStore.AbortMemberDriveDelete(ctx, id, started)
+}
+
+// TestMemberDriveDeleteOutlivesTheRequest: a delete whose caller goes away
+// mid-reclaim still finishes. A failed reclaim clears the tombstone, so the
+// drive is the owner's again; a successful one removes the row.
+func TestMemberDriveDeleteOutlivesTheRequest(t *testing.T) {
+	for name, tc := range map[string]struct {
+		outcome runner.DriveReclaimOutcome
+		err     error
+		kept    bool
+	}{
+		"reclaim fails": {err: context.Canceled, kept: true},
+		"reclaim works": {outcome: runner.DriveReclaimDeleted},
+	} {
+		t.Run(name, func(t *testing.T) {
+			st := newMemberDriveStore()
+			rn := &cancellingReclaim{memberDriveRunner: catalogueRunner(), outcome: tc.outcome, err: tc.err}
+			srv, _ := memberDriveServer(st, rn, "docker")
+			srv.cfg.Store = ctxMemberDriveStore{st}
+			alice := personCtx(aliceSub)
+			var made client.MeDrive
+			if w := createMemberDrive(srv, alice, "Notes"); w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &made) != nil {
+				t.Fatalf("create = %d %s", w.Code, w.Body)
+			}
+			ctx, cancel := context.WithCancel(alice)
+			defer cancel()
+			rn.cancel = cancel
+			memberCall(ctx, srv.handleDeleteMyDrive, http.MethodDelete, "/api/v1/me/drives/"+made.ID, "", map[string]string{"id": made.ID})
+			d, ok := st.drives[uuid.MustParse(made.ID)]
+			switch {
+			case ok != tc.kept:
+				t.Fatalf("row kept = %v, want %v", ok, tc.kept)
+			case tc.kept && d.DeleteStartedAt != nil:
+				t.Fatal("the tombstone stayed set after the caller went away")
+			case tc.kept && len(meDrivesOf(t, srv, alice).Drives) != 1:
+				t.Error("the kept drive is not back in its owner's catalogue")
+			}
+		})
 	}
 }

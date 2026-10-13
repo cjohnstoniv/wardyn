@@ -171,15 +171,18 @@ func (s *Server) driveUnavailableHere(ctx context.Context, d reachableDrive, poo
 }
 
 // driveNotInPool is the pool half of a drive's availability: a person's own
-// drive never mounts on a self-hosted pool (memberDriveNeverOnPool), and no
-// drive does today, since those runners' substrates hold no organisation
-// storage.
+// drive by its permanent rule (memberDriveNeverOnPool), and an organisation
+// drive never on a self-hosted pool today, since those runners' substrates
+// hold no organisation storage.
 //
 // ponytail: a remote-provided pool whose executors cannot mount drives waits
 // for per-executor pool facts; until then the deployment-wide runner
 // capability decides it, as unmountable.
 func driveNotInPool(pool types.RunnerPool, d types.UserDrive) bool {
-	return memberDriveNeverOnPool(pool, d) || pool.HostingType == types.RunnerPoolSelfHosted
+	if d.OwnerSubject != "" {
+		return memberDriveNeverOnPool(pool, d)
+	}
+	return pool.HostingType == types.RunnerPoolSelfHosted
 }
 
 // catalogueDrivePool resolves runner_pool_id to a pool the caller may use, or

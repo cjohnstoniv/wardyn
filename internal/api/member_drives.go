@@ -359,6 +359,9 @@ type memberDriveDeletion struct {
 // substrate said deleted or already_absent; every other outcome clears the
 // tombstone and keeps the drive. Every attempt is audited.
 func (s *Server) deleteMemberDrive(r *http.Request, ms store.MemberDriveStore, d types.UserDrive, started time.Time, by string) memberDriveDeletion {
+	// Past the tombstone the delete finishes even if the caller goes away, so
+	// the row is always removed or restored and the attempt audited.
+	r = r.WithContext(context.WithoutCancel(r.Context()))
 	ctx := r.Context()
 	mount, err := memberDriveMount(d)
 	res := memberDriveDeletion{object: mount.ObjectName}
