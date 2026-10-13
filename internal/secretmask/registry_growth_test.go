@@ -61,49 +61,68 @@ func TestRegistryAddDeduplicates(t *testing.T) {
 }
 
 // A run that was handed a credential value still holds it after the credential
-// is replaced, so the run keeps masking it once the process-wide copy is swept,
-// whether the run's copy was registered here (Add) or read from another
-// replica's commit (AddLocal).
+// lets it go, so the run keeps masking the bare value once the process-wide
+// copy is swept. The process-wide value is registered FIRST: only that order
+// meets a value the global set already holds. The run's copy is registered here
+// (Add) or read from another replica's commit (AddLocal); the process-wide copy
+// ends by replacement or by its own expiry, on the rules it always had.
 func TestRegistry_ARunValueOutlivesTheGlobalCopyOfTheSameBytes(t *testing.T) {
 	v := []byte(`a-credential-"handed"-to-a-run`)
 	quoted, _ := json.Marshal(string(v))
-	for name, add := range map[string]func(*Registry, uuid.UUID) error{
+	now := time.Now()
+	adds := map[string]func(*Registry, uuid.UUID) error{
 		"Add":      func(r *Registry, run uuid.UUID) error { return r.Add(run, v) },
 		"AddLocal": func(r *Registry, run uuid.UUID) error { r.AddLocal(run, v); return nil },
-	} {
-		t.Run(name, func(t *testing.T) {
-			r := NewRegistry()
-			run, now := uuid.New(), time.Now()
-			if err := r.AddGlobal(0, "alice", "cred", now, v); err != nil {
-				t.Fatal(err)
-			}
-			for range 2 {
-				if err := add(r, run); err != nil {
+	}
+	// Each end registers the process-wide value, and returns how it is let go
+	// and the time it is retired at.
+	ends := map[string]func(*Registry) (func() error, time.Time){
+		"replaced": func(r *Registry) (func() error, time.Time) {
+			_ = r.AddGlobal(0, "alice", "cred", now, v)
+			return func() error { return r.AddGlobal(0, "alice", "cred", now, []byte("the-replacement-value")) }, now
+		},
+		"expired": func(r *Registry) (func() error, time.Time) {
+			_ = r.AddGlobalUntil(0, "alice", "cred", now, now.Add(time.Hour), v)
+			return func() error { return nil }, now.Add(time.Hour)
+		},
+	}
+	for addName, add := range adds {
+		for endName, end := range ends {
+			t.Run(addName+"/"+endName, func(t *testing.T) {
+				r := NewRegistry()
+				run := uuid.New()
+				letGo, at := end(r)
+				for range 2 {
+					if err := add(r, run); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if n := len(r.Snapshot(run)); n != 1 {
+					t.Errorf("the run's corpus holds the value %d times, want once", n)
+				}
+				if err := letGo(); err != nil {
 					t.Fatal(err)
 				}
-			}
-			if n := len(r.Snapshot(run)); n != 1 {
-				t.Errorf("the run's corpus holds the value %d times, want once", n)
-			}
-			if err := r.AddGlobal(0, "alice", "cred", now, []byte("the-replacement-value")); err != nil {
-				t.Fatal(err)
-			}
-			if n := r.SweepGlobals(now.Add(time.Second)); n != 1 {
-				t.Fatalf("the sweep dropped %d values, want the replaced one", n)
-			}
-			if bytes.Contains(r.Masker(run).Mask([]byte("out "+string(v)+" end")), v) {
-				t.Error("the run's plain output no longer masks the value it was handed")
-			}
-			if bytes.Contains(r.JSONVariantMasker(run).Mask(quoted), quoted[1:len(quoted)-1]) {
-				t.Error("the run's JSON data no longer masks the value it was handed")
-			}
-			if masksValue(r, uuid.New(), string(v)) {
-				t.Error("a run that was never handed the value still masks it after the sweep")
-			}
-			r.Evict(run)
-			if masksValue(r, run, string(v)) {
-				t.Error("evicting the run left its copy of the value masked")
-			}
-		})
+				if n := r.SweepGlobals(at); n != 0 || !masksValue(r, uuid.New(), string(v)) {
+					t.Errorf("a sweep inside the process-wide copy's grace dropped %d values", n)
+				}
+				if n := r.SweepGlobals(at.Add(time.Second)); n != 1 {
+					t.Fatalf("the sweep past the grace dropped %d values, want the process-wide copy", n)
+				}
+				if masksValue(r, uuid.New(), string(v)) {
+					t.Error("a run that was never handed the value still masks it after the sweep")
+				}
+				if bytes.Contains(r.Masker(run).Mask([]byte("out "+string(v)+" end")), v) {
+					t.Error("the run's plain output no longer masks the bare value it was handed")
+				}
+				if bytes.Contains(r.JSONVariantMasker(run).Mask(quoted), quoted[1:len(quoted)-1]) {
+					t.Error("the run's JSON data no longer masks the bare value it was handed")
+				}
+				r.Evict(run)
+				if masksValue(r, run, string(v)) {
+					t.Error("evicting the run left its copy of the value masked")
+				}
+			})
+		}
 	}
 }

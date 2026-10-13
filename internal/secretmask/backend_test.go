@@ -257,6 +257,16 @@ func TestBackend_ARunValueIsCommittedWhileItIsAlsoGlobal(t *testing.T) {
 	if n := len(r.Snapshot(run)); n != 1 {
 		t.Errorf("the run's corpus holds the value %d times, want once", n)
 	}
+	// AddLocal caches the same value for another run and commits nothing.
+	other := uuid.New()
+	r.AddLocal(other, v)
+	if b.runs != 1 || b.globals != 1 {
+		t.Errorf("AddLocal wrote to the backend: %d run commits, %d credential commits", b.runs, b.globals)
+	}
+	r.DropGlobalValue(uuid.NewSHA1(uuid.Nil, []byte("alice\x00cred\x00"+string(v))))
+	if !masksValue(r, other, string(v)) || !masksValue(r, run, string(v)) {
+		t.Error("a run stopped masking its own copy when the process-wide row was dropped")
+	}
 }
 
 // The replica that evicts an expiring credential retires its row at the expiry.
