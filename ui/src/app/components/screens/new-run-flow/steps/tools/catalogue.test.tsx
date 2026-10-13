@@ -378,7 +378,7 @@ describe("Added to this run", () => {
         ...BASE.rows,
         row({ id: "host:pypi.org", kind: "host", name: "pypi.org" }),
         row({ id: "secret:linear-token", kind: "secret", name: "linear-token" }),
-        row({ id: "inline-1", kind: "custom", name: "Billing" }),
+        row({ id: "inline:0", kind: "custom", name: "Billing" }),
       ],
     };
     await show({
@@ -391,5 +391,16 @@ describe("Added to this run", () => {
     expect(draft().overrides).toEqual({ hosts: { add_allowed: [] }, agent: {} });
     await userEvent.click(screen.getByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} Billing` }));
     expect(draft().components).toBeUndefined();
+  });
+
+  it("removes an inline component added without a name, and only that one", async () => {
+    const access: AccessFacts = {
+      ...BASE,
+      rows: [...BASE.rows, row({ id: "inline:0", kind: "custom", name: "" }), row({ id: "inline:1", kind: "custom", name: "Billing" })],
+    };
+    await show({ components: [{ inline: { hosts: ["api.example.com"] } }, { name: "Billing", inline: { hosts: ["b.example"] } }] }, access);
+    const unnamed = (await screen.findAllByRole("button", { name: NR_TOOLS.ROW_REMOVE })).find((b) => b.getAttribute("aria-label")?.trim() === NR_TOOLS.ROW_REMOVE);
+    await userEvent.click(unnamed!);
+    expect(draft().components).toEqual([{ name: "Billing", inline: { hosts: ["b.example"] } }]);
   });
 });

@@ -233,7 +233,7 @@ export function AddTools({ access, answered, intent }: AddToolsProps) {
   const removeAdded = (row: AccessRow) => {
     if (row.id.startsWith("host:")) edit((i) => removeAllowedHost(i, row.name));
     else if (row.id.startsWith("secret:")) edit((i) => removeHeaderSecret(i, row.id.slice("secret:".length)));
-    else edit((i) => detachComponent(i, row.id, row.name));
+    else edit((i) => detachComponent(i, row.id));
     announce(NR_TOOLS.COMPONENT_REMOVED);
   };
   const addedRows = access?.rows.filter((r) => r.from === "added") ?? [];
