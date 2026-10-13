@@ -184,6 +184,8 @@
 - But under `allow_all_egress` a literal public IP is allowed (private, loopback, link-local and metadata ranges are denied regardless of policy).
 - There is one operator-authored exception: a private-range literal named EXACTLY in `allowed_domains`, which is what an `egress_redirects` `to` on a private endpoint adds for the runs it covers, is reachable and audited as `rule_source: site-config:egress-redirect`.
 - A wildcard never qualifies and a deny still wins.
+- A member's own entry does not create that exception under an `allow_all_egress` ceiling: run create drops it, with a `clamp_warnings` line, unless the ceiling lists the same address for every port the entry names.
+- The ceiling's `allow_all_egress`, a wildcard, a name that resolves there and an `egress_host` grant do not count as listing it; a member's public literal is kept.
 - Under `deny_with_review` / `wait_for_review` it becomes an approvable unknown.
 - If you run a brokered policy with `allow_all_egress`, the broker route is the only *convenient* route, not the only one.
 - It is what git itself uses, since a clone/push URL carries a name, never a bare IP.

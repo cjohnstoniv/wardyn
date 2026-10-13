@@ -455,6 +455,12 @@ func (s *Server) boundOverrideAdds(ctx context.Context, r *http.Request, spec ty
 			return d.reason == authz.ReasonCapabilityEgressHost && !slices.ContainsFunc(e.addedHosts, func(h string) bool { return hostEqual(h, d.detail) })
 		}))
 	}
+	// The probe also carries the policy's own hosts, which stay: a warning about one is not the person's.
+	warns = slices.DeleteFunc(warns, func(w string) bool {
+		return slices.ContainsFunc(spec.AllowedDomains, func(d string) bool {
+			return w == privateLiteralDropWarning(d) && !slices.ContainsFunc(e.addedHosts, func(h string) bool { return hostEqual(h, d) })
+		})
+	})
 	spec = spec.Clone()
 	if e.setAllowAll && !bounded.AllowAllEgress {
 		spec.AllowAllEgress = e.prevAllowAll

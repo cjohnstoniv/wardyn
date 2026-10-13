@@ -90,6 +90,10 @@ func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits,
 
 	// Allowed domains: intersect to the ceiling's allowlist unless it allows all. An empty ceiling
 	// allowlist means default-deny — don't skip this block when empty, or the strictest posture leaks.
+	// Under an allow-all ceiling the proposal's entries are kept as authored. An exact entry still
+	// carries what allow-all never gives (the proxy's trust of a private-range literal address), and
+	// that is bounded by the member path before it calls here (internal/api's
+	// dropUncoveredPrivateLiterals), not by this function.
 	if !ceiling.AllowAllEgress {
 		allowed := toSet(ceiling.AllowedDomains)
 		kept, dropped := partition(out.AllowedDomains, func(d string) bool { return allowed[strings.ToLower(strings.TrimSpace(d))] })
