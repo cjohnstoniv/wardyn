@@ -3,33 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// ponytail: RAIL, RAIL_CREDENTIAL and RAIL_RECORDING_ON have only e2e readers now that the rail is gone;
-// delete them with the old New Run specs.
-//
-// The retired New Run rail's TRUTH block.
-// Appendix A finding 1: the rail rendered two unconditional security claims —
-// "Minted at launch, injected by the proxy. Never written into the sandbox." and
-// "Every keystroke and every outbound connection." — neither of which consulted
-// anything. The first is a FALSE ASSURANCE on a bedrock_sso deployment, read at
-// the moment someone decides whether a per-user AWS credential may sit inside a
-// CC1 container; the second promises recording that a stock Helm install
-// (persistence.enabled=false) never captures.
-//
-// So every sentence below is SCOPED to the model credential and selected by what
-// the SERVER resolved (SetupHarnessTool.credential_residency, overridden by
-// preflight's model_credential). There is deliberately no default: an unresolved
-// lane renders RESOLVED_AT_LAUNCH, never the proxy sentence.
-
-// #459 — the launch and preflight failure lines already show the server's own
-// sentence, unchanged and visible; a screen reader arriving on the rail heard
-// neither, since both were a bare <p> with no role="alert". These sr-only
-// prefixes are spoken FIRST (Q459-1), so "what failed" precedes "why", and are
-// never rendered visibly — the visible text stays exactly the server's sentence.
-export const RAIL = {
-  LAUNCH_ERROR_LABEL: "Launch failed",
-  PREFLIGHT_ERROR_LABEL: "Preflight failed",
-} as const;
-
 // M1 (approved 2026-10-03) — the automatic check's states and its manual button.
 export const RAIL_CHECK = {
   CHECKING: "Checking this run…",
@@ -38,31 +11,10 @@ export const RAIL_CHECK = {
   HINT: "Checked as you edit. A refusal holds Launch for up to a minute.",
 } as const;
 
-export const RAIL_CREDENTIAL = {
-  // residency "proxy": late-bound, swapped onto the wire, never resident.
-  // U-15: "minted" was true of the Bedrock exchange this lane is NOT — a static
-  // API key or a stored bearer is injected as it stands, nothing is minted for
-  // it. What every proxy lane shares is where the credential goes and where it
-  // does not.
-  PROXY: "Model credential — injected by the proxy at launch; never written into the sandbox.",
-  // residency "sandbox", Bedrock family. The operator's own sentence.
-  SANDBOX_BEDROCK:
-    "Model credential — AWS credentials sign inside the sandbox, so this run holds them for its lifetime.",
-  // Nothing resolved: the rail states no residency it was not given. Only a
-  // dry run of this exact body can settle it.
-  RESOLVED_AT_LAUNCH: "Resolved at launch.",
-  // …and therefore the way to find out, said where the absence is. Without it
-  // "Resolved at launch." reads as "nothing to see", when the precise answer is
-  // one click away on the panel directly to the left.
-  RUN_PREFLIGHT_HINT: "Press Check again to see where this run's model credential will live.",
-} as const;
-
 // #542 (design §5.6, packet MP-C — approved as drawn 2026-09-25) — the New Run
 // rail's provider picker: which of THIS PERSON's own credentials a run
 // authenticates with, known from the chosen provider's kind before launch
-// rather than resolved only by a dry run. RAIL_CREDENTIAL above still carries
-// the residency sentence every kind reuses; these are new to the picker
-// itself. R5's states (a disabled or wholly ungranted default) were excluded
+// rather than resolved only by a dry run. R5's states (a disabled or wholly ungranted default) were excluded
 // from PR #1036's build (owner ruling) and R5c is now drawn by the rail-gap
 // packet below (owner-approved 2026-09-25, docs/design/542-rail-gaps-mock/canon.md) —
 // DEFAULT_OFF/DEFAULT_OFF_ONLY.
@@ -99,12 +51,3 @@ export const RAIL_PROVIDER = {
   DEFAULT_OFF_ONLY: (name: string, harness: string) =>
     `${name}, the default for ${harness}, is turned off. Ask your admin.`,
 } as const;
-
-// U-15: the New Run rail's "recording is on"
-// sentence. It was an inline literal in the rail and re-typed in its vitest and
-// in ui/e2e/new-run.spec.ts, while its DISABLED twin
-// (RECORDING_DISABLED_TITLE, right above) was already a shared constant — so a
-// reworded promise would have moved on screen while three copies of the old one
-// went on passing. Beside RAIL_CREDENTIAL rather than inside it: the rail's
-// Recording section is not a credential fact.
-export const RAIL_RECORDING_ON = "Every keystroke and every outbound connection.";
