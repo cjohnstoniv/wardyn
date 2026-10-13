@@ -24,6 +24,7 @@ The equivalent API body (POST `/api/v1/runs`):
   - So a bare slug like `org/env-repo` fails at build time with "RepoURL scheme not allowed", not a silent fallback.
   - This is a real gap from `--repo`'s own slug-expansion (`repoCloneURL`); pass the full URL until it closes.
 - `--devcontainer-repo` is mutually exclusive with `--image` (BYOI), which the server enforces with a 400.
+- To build a workspace's image ahead of a run, use `wardyn workspace build <workspace-id>`; `--refresh` rebuilds it ([The build record](#the-build-record)).
 
 > [!WARNING]
 > **With NO builder wired the run does not fail — it silently falls back to the convention image.**
@@ -61,6 +62,95 @@ no envbuilder stage at all.
 - Without this, a workspace-B push landing between workspace A's envbuilder push and finalize pull would get silently pulled and permanently tagged as workspace A's image.
   - (confinement bypass; finalizeImage's fetch-fresh pull has no re-validation step to catch the swap).
 - No serialization is needed — each build's destination is unambiguous by construction — so this preserves full build concurrency.
+
+## The build record
+
+Each workspace image build records what it built from and the image it produced. Per-run builds (`--image`, `--devcontainer-repo`) write only the `run.build` audit row.
+
+- A record is current only while the workspace row still names the same image and cache key, and the image's local ID still matches (`imageBuildView`).
+- A pre-0.9 image, or one whose tag moved, reads as unrecorded. Nothing is back-filled.
+
+| Lane | Pinned when it builds | Recorded | Reads "reproducible" when |
+|---|---|---|---|
+| Generated devcontainer | Base and each feature by digest. claude-code is fetched at build time and its version and checksum recorded; a rebuild pins them | Base, features with options, installers, the generator salt and the hash of each generated file | The base, every feature and every installer carry a digest, or a version and checksum (`imageBuildResolved`) |
+| Registry or BYOI base | The wrap builds FROM the base's repository digest when the host has one | Base ref and digest | The digest is present |
+| Repo's own devcontainer | Nothing; built verbatim at its ref | Clone URL without credentials, and ref | Never |
+
+- Every record also carries the lane, cache key, build ID, `reason` (`cache_miss`, `image_missing` or `refresh`), build time, Wardyn version, and the image's ref and ID.
+- An input that cannot be resolved is recorded unpinned (empty digest) and the build still succeeds. A lookup that fails or takes longer than `10s` leaves that one input unpinned (`remoteDigestTimeout`).
+
+### Where to read it
+
+- `GET /api/v1/workspaces/{id}/build` returns `record`, `record_sha256` and `reproducible` on a `done` answer, only while the record is current (`withBuildRecord`).
+- Below the full read tier, a BYOI record's base ref and digest are blanked (`projectImageBuild`). The image ref stays.
+- `wardyn workspace build <id> --status` prints the state, the image and the record hash with "reproducible" or "not reproducible". Add `--json` for the full body.
+- Every workspace-image build writes a `run.build` success row carrying the full record and its hash. A cache hit writes a row too, naming the image ID.
+- Comparing a workspace's `record_sha256` with the `run.build` row detects a database edit. The comparison is manual in 0.9, and a row with `cache_warn` has no match to find ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
+
+### What "reproducible" promises
+
+> A pinned build's rebuild reproduces its recorded inputs or fails naming the input; a build that could not be pinned is recorded and labelled not reproducible.
+
+- Reproducible means the same inputs, not the same bytes: feature scripts and package managers fetch at build time, so a rebuilt image has a new image ID. Toolchain versions are not pinned.
+- Nothing signs the record. The first digest is whatever the daemon's registry path returned, and the installer fields are what the build reported about itself.
+- Wardyn's envbuilder image and the runner tools are not pinned; the record keeps only `wardyn_version`.
+
+### Rebuild from a record
+
+A rebuild happens when the cache key matches but the image is gone from the host (`image_missing`).
+
+| Condition | Outcome |
+|---|---|
+| Generated lane, record current | Rebuilds from the record's pins and resolves nothing again (`buildGeneratedImage`) |
+| A pinned base or feature no longer exists in its registry | No build. The `run.build` failure carries `difference`, and `GET …/build` reports `failed` |
+| An input the record left unpinned | Floats on the rebuild; the new record stays not reproducible |
+| BYOI or repo lane, or no current record | A fresh build. The BYOI wrap uses whichever base the host holds or pulls, and records its digest; it does not reuse the recorded one |
+
+- Before rebuilding, each pinned base and feature is looked up as `<repository>@<digest>`. A registry that does not answer is not a difference; the build runs pinned and the build network decides (`pinnedInputsGone`).
+- The failure Detail is the `run.build` error followed by one `: <input> (want <digest>, got not_found)` per difference, joined by `; `:
+
+```text
+a pinned input is no longer available; refresh the image to resolve it again: feature:ghcr.io/devcontainers/features/go:1 (want sha256:…, got not_found)
+```
+
+- A rebuild never retries with fresh resolution. The fix is a refresh.
+
+### Refresh
+
+A refresh rebuilds from fresh inputs on purpose and replaces the kept image.
+
+```sh
+wardyn workspace build <workspace-id> --refresh
+```
+
+- The API form is `POST /api/v1/workspaces/{id}/build` with `{"refresh": true}`; an empty body or `{}` is the plain build, and any other field is `400` (`readBuildRefresh`).
+- Who: the workspace owner or an admin (`getWorkspaceAuthorized`), with the same provider and credential checks as a plain build. Anyone else gets the answer a plain build gives.
+- It answers `202` with `building`; read the outcome with `--status` or `GET …/build`. The SDK has `BuildWorkspace` and `GetWorkspaceBuild`.
+
+| Lane | What a refresh does |
+|---|---|
+| Generated | Resolves the base and features again, and fetches claude-code's current release. No earlier layer is replayed |
+| Registry or BYOI base | Pulls the base again (`FinalizeBase` with `forcePull`) and wraps it by digest. A pull failure fails the refresh and the kept image stays. The previous base stays on the host |
+| Repo's own devcontainer | Rebuilds the repository at its ref |
+
+- **Build, then swap.** The new image builds under its own tag. The workspace row moves to it only if it still names the image the requester saw (a compare-and-swap in `commitBuiltImage`).
+- **Swap applied.** The old image is removed (`removeStaleImage`).
+- **Swap lost.** Another build replaced the image first. The refresh removes its own tag and reports `failed`, with Detail `superseded: another build replaced this workspace's image while the refresh ran` (`supersededDetail`). A plain build from the build button that loses the swap does the same.
+- **Build failure.** The kept image and its record stay, and `GET …/build` reports `failed`.
+- Each finished refresh writes one `workspace.image.refresh` audit row naming the requester, the lane, both image IDs and record hashes, and `changed`, the inputs whose digest or version moved. A failed one carries `reason` `superseded` or `build_failed` ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
+
+### Offline and mirrors
+
+| Condition | Fresh build or refresh | Rebuild from a record |
+|---|---|---|
+| The daemon cannot resolve a base or feature | That input builds unpinned and the record reads not reproducible; the build still runs | The pre-check is inconclusive; the build runs pinned |
+| A pull-through cache answers the upstream names | Pins pass through unchanged | Same |
+| Air-gapped, upstream unreachable, no mirror | Fails, as it did before 0.9 | Fails; the builder error names the pinned ref |
+| The daemon resolves a digest the build network cannot fetch | Fails like any build | Fails |
+| A BYOI base pre-pulled and local only | Wraps by ref; no digest, so not reproducible | Wraps the ref as written |
+| No builder wired | No build and no record; `GET …/build` answers `none` | Not applicable |
+
+- The daemon's `registry-mirrors` setting covers `docker.io` only. For `mcr.microsoft.com` and `ghcr.io` a private mirror works only by answering those names, as a pull-through cache or a network redirect.
 
 ## Wrap-only (why FINALIZE can run unsandboxed)
 
@@ -155,11 +245,12 @@ still execute inside the build container's namespaces. Two gaps remain:
 - A CacheRepo (writable OCI registry repository) is REQUIRED. envbuilder pushes the built image there and the finalize stage layers Wardyn's runner tools on top; with no registry there is no delivery path and Build fails closed. There is no local-daemon-commit path.
 - The FINAL image ref envbuilder pushes to is under Wardyn's control (a random per-build tag on CacheRepo).
   - See "Concurrent builds get their own push ref" above.
-  - But envbuilder's own kaniko-style LAYER cache within that same repo is content-addressed and outside Wardyn's naming.
   - If a registry ever fails to expose the final push at the exact ref Wardyn told envbuilder to use, WARDYN_ENVBUILD_PUSHED_REF overrides the REPOSITORY ADDRESS the finalize stage pulls from
   - (e.g. a host-loopback path to a registry the build container reaches by service name — the compose stack's own use).
   - The per-build tag is still appended on top of that override, so it never reintroduces one shared ref across builds.
   - See Builder.pushedBaseRef.
   - A real-registry TestBuild_SmokeDockerd validates the exact ref.
+- envbuilder's layer cache is not used. Each build pushes under its own tag (`<CacheRepo>:<build-uuid>`), which kaniko cannot use as a cache repository, so every build logs a non-fatal cache-upload error per layer and resolves every input fresh.
+  - A shared cache would let one build replace the layers every other build replays, and the build registry is unauthenticated, so Wardyn does not share one.
 - Build logs are streamed to the io.Writer supplied in BuildSpec.LogSink. If LogSink is nil, the Builder's DefaultLogSink takes over; only when both are nil is build output discarded.
 - The build container itself is always removed on completion or timeout, regardless of success or failure (fail closed on orphaned containers).
