@@ -1594,4 +1594,17 @@ func TestSSHAuditAuthFailure_IsRateBounded(t *testing.T) {
 	if want := int64(attempts - int(authFailedBurst)); suppressed != want {
 		t.Errorf("wardyn_auth_failed_suppressed_total = %d, want %d", suppressed, want)
 	}
+	// The bucket is empty now: a refusal that names a registered key's principal is still recorded, and
+	// is not counted as suppressed.
+	before := len(audit.snapshot())
+	srv.sshAuditAuthFailure(context.Background(), sshPeer{}, nil, "alice@example.com", "SHA256:alice", "not the run owner")
+	evs := audit.snapshot()
+	if len(evs) != before+1 || evs[len(evs)-1].Actor != "alice@example.com" {
+		t.Errorf("attributed refusal with the limiter drained wrote %d rows, want 1 naming the principal", len(evs)-before)
+	}
+	srv.metrics.mu.Lock()
+	defer srv.metrics.mu.Unlock()
+	if srv.metrics.authFailedSuppressed != suppressed {
+		t.Errorf("an attributed refusal moved the suppressed counter to %d from %d", srv.metrics.authFailedSuppressed, suppressed)
+	}
 }
