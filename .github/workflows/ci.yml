@@ -935,6 +935,15 @@ jobs:
           for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && exit 0; sleep 2; done
           docker compose -p wardyn-desk-ci logs wardynd
           echo "::error::wardynd did not become healthy"; exit 1
+      - name: Give the stack's runner its limits
+        # A runner takes no run, and no preflight passes, until it has limits. In a container wardynd cannot
+        # see this host's Docker disk, so the shared setup step declares them, sized for this job's one run
+        # (a hosted runner's free disk is not assumed).
+        run: |
+          wardyn() { docker compose -p wardyn-desk-ci exec -T -e WARDYN_URL=http://localhost:8080 wardynd /usr/local/bin/wardyn "$@"; }
+          . scripts/lib/runner-limits.sh
+          WARDYN_SETUP_RUNNER_LIMITS="--max-runs 4 --total-cpu 2 --total-memory 4 --total-disk 20 --per-run-cpu 1 --per-run-memory 2 --per-run-disk 10" \
+            wardyn_ensure_runner_limits </dev/null
       - name: Assert /policies/default equals the managed file
         run: |
           # handleGetDefaultPolicy re-marshals types.RunPolicySpec, whose

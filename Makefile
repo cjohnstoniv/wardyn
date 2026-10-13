@@ -208,7 +208,7 @@ test-race: cover-check ## Alias: race coverage now rides along inside the test-r
 test-race-pg: ## Race-detector pass over the Postgres-gated concurrency proofs (needs WARDYN_TEST_PG)
 	@echo "Running the Postgres-gated concurrency proofs under the race detector (requires WARDYN_TEST_PG)..."
 	go test -race -p 1 -count=1 -run 'TestPG_|TestGeneration_' ./internal/maskstore/... ./internal/secretmask/... ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
-	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)|TestPG_WriteBegunBeforeAnErase|TestPG_CreateWait_|TestPG_MaskErasure|TestRecordingOutputPG_|TestPG_TokenEventStreamOutlivesABrowserSignOutAndEndsOnARevoke|TestPG_ServiceTokenEventStreamEndsOnItsSponsorsRevokeUnderABackwardClockStep' ./internal/api/...
+	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)|TestPG_WriteBegunBeforeAnErase|TestPG_CreateWait_|TestPG_MaskErasure|TestRecordingOutputPG_|TestPG_TokenEventStreamOutlivesABrowserSignOutAndEndsOnARevoke|TestPG_ServiceTokenEventStreamEndsOnItsSponsorsRevokeUnderABackwardClockStep|TestPG_ServiceTokenMintBehindAnInFlightRevokeOfItsSponsorIsRefused' ./internal/api/...
 	go test -race -p 1 -count=1 -run 'TestPG_AuditPartition_.*Contiguous' ./internal/db/...
 	go test -race -p 1 -count=1 -run 'TestPG_RevocationBeforeCookiePoolWaitDoesNotLoseCutoff|TestPG_Issue(Waits|Racing)' ./cmd/wardynd/...
 
@@ -636,6 +636,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-dco.sh
 	./scripts/test-desktop-profile.sh
 	./scripts/test-runner-units.sh
+	./scripts/test-runner-limits.sh
 	./scripts/test-doc-form.sh
 	./scripts/test-doc-links.sh
 	./scripts/test-e2e-harness.sh
