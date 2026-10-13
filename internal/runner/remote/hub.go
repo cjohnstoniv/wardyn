@@ -380,13 +380,15 @@ func configureAdmission(ctx context.Context, cfg *runnerwire.PeerConfig, resumed
 			if err != nil {
 				return err
 			}
+			// Marked before the final page is judged, not after: a teardown queued while it is judged, past
+			// the page's own look at the queue, then ends this session itself (Link.requireFresh).
+			if next.Complete && a.Link != nil {
+				a.Link.stateFinal(peer())
+			}
 			if err := a.StatePage(ctx, sessionID, page); err != nil {
 				return err
 			}
 			inventory, state = next, next.Complete
-			if state && a.Link != nil {
-				a.Link.stateAccepted(peer())
-			}
 		case runnerwire.TypeReady:
 			if !state || ready || len(f.Payload) != 0 {
 				return fmt.Errorf("%w: unexpected READY", runnerwire.ErrBadFrame)

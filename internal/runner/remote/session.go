@@ -69,9 +69,9 @@ func (l *Link) Close() {
 	}
 }
 
-// stateAccepted records that peer's final STATE page was accepted: the org's last look at the queue
-// before READY.
-func (l *Link) stateAccepted(peer *runnerwire.Peer) {
+// stateFinal records that peer's final STATE page reached the org: judging it is the org's last look at
+// the queue in this session.
+func (l *Link) stateFinal(peer *runnerwire.Peer) {
 	l.mu.Lock()
 	if l.peer == peer {
 		l.stated = true
@@ -79,17 +79,19 @@ func (l *Link) stateAccepted(peer *runnerwire.Peer) {
 	l.mu.Unlock()
 }
 
-// requireFresh ends a session whose final STATE page was accepted but which is not yet READY. The
-// runner learns of a queued action only from a fresh session's PENDING, sent once at the session's
-// start, and the final STATE page is the last time the org refuses a session for an open action; an
-// action queued after it, while the runner replays and gets ready, would otherwise wait for the next
-// reconnect, however far off. Before that page, the page itself is refused; a link with no live peer has
-// nothing to end, as its next session reads the queue.
+// requireFresh ends a session past its final STATE page (stateFinal), after a teardown was queued.
+// The runner learns of a queued action only from a fresh session's PENDING, sent once at the session's
+// start, and judging the final STATE page is the last time the org refuses a session for an open
+// action; one queued after that look would otherwise wait for the next reconnect, however far off.
+// That holds once the session is READY too: the teardown was queued because its call found the link
+// not ready, and nothing in a session that became ready meanwhile carries it. Before the final page,
+// the page itself is refused; a link with no live peer has nothing to end, as its next session reads
+// the queue.
 func (l *Link) requireFresh(ctx context.Context) {
 	l.mu.Lock()
-	p, ready, stated := l.peer, l.ready, l.stated
+	p, stated := l.peer, l.stated
 	l.mu.Unlock()
-	if p == nil || ready || !stated || !p.Online() {
+	if p == nil || !stated || !p.Online() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Second)

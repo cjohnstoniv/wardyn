@@ -37,8 +37,8 @@ type Link struct {
 	peer  *runnerwire.Peer
 	h     Handler
 	ready bool
-	// stated: the attached session's final STATE page was accepted. After it the org checks the queue no
-	// more before READY (requireFresh).
+	// stated: the attached session's final STATE page reached the org. Past judging it the org checks the
+	// queue no more (requireFresh).
 	stated bool
 }
 
