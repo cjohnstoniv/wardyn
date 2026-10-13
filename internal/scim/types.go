@@ -43,7 +43,9 @@ type User struct {
 	DisplayName string   `json:"displayName,omitempty"`
 	Emails      []Email  `json:"emails,omitempty"`
 	Active      bool     `json:"active"`
-	Meta        *Meta    `json:"meta,omitempty"`
+	// ActiveSet is whether the body named active at all; a PUT that omits it leaves the identity as it is.
+	ActiveSet bool  `json:"-"`
+	Meta      *Meta `json:"meta,omitempty"`
 }
 
 // Member is one entry of a Group's members or of a members PatchOp value. Ref is `$ref`, which Entra
