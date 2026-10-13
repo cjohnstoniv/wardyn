@@ -44,3 +44,26 @@ func TestPG_RevokingARunnerEndsTheRunsWaitingForIt(t *testing.T) {
 		t.Errorf("run.kill data %s, want reason %s", kills[0].Data, queueCancelRunnerRevoked)
 	}
 }
+
+// A waiting run that cannot be ended does not keep the next one waiting for the revoked runner: the
+// revoke goes on to it, and answers that it did not complete.
+func TestPG_RevokingARunnerEndsEachWaitingRunDespiteAFailedOne(t *testing.T) {
+	e := newQueueEnv(t)
+	p, a, _ := cappedLaptops(e, 1)
+	occupyRunner(e, p, a)
+	pinned := `,"placement":"local","runner_id":"` + a.String() + `"`
+	stuck, next := e.queuedLaunch(e.person, p, pinned), e.queuedLaunch(e.person, p, pinned)
+	e.exec(`CREATE FUNCTION refuse_end() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'refused'; END $$`)
+	e.exec(`CREATE TRIGGER refuse_end BEFORE UPDATE ON agent_runs FOR EACH ROW WHEN (OLD.id = '` + stuck.ID.String() + `') EXECUTE FUNCTION refuse_end()`)
+
+	w := e.call(e.person, http.MethodDelete, "/api/v1/me/runners/"+a.String(), "")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("revoke with a run that cannot be ended = %d %s, want 500", w.Code, w.Body)
+	}
+	if got := e.run(stuck.ID); got.State != types.RunQueued {
+		t.Fatalf("the run whose end was refused is %s, want it still QUEUED", got.State)
+	}
+	if got := e.run(next.ID); got.State != types.RunKilled {
+		t.Errorf("the run queued behind a failed end is %s, want KILLED", got.State)
+	}
+}

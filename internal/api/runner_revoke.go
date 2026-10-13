@@ -132,7 +132,8 @@ func (s *Server) revokeRunner(ctx context.Context, id uuid.UUID, actorType types
 // endQueuedRunsPinnedTo ends, as the system, each run owner has waiting in a pool's queue that names
 // runner id (runner_id), which can never start once id is revoked, with reason runner_revoked on its
 // run.kill row, and returns how many it ended. The owner's other waiting runs are judged again at once,
-// without the runner. A run another exit takes first is not counted.
+// without the runner. A run another exit takes first is not counted. One that cannot be read or ended
+// does not keep the rest waiting: its error is returned with the others'.
 func (s *Server) endQueuedRunsPinnedTo(ctx context.Context, owner string, id uuid.UUID) (int, error) {
 	qs, ok := s.queueStore()
 	if !ok {
@@ -144,6 +145,7 @@ func (s *Server) endQueuedRunsPinnedTo(ctx context.Context, owner string, id uui
 	}
 	defer s.kickQueue()
 	n := 0
+	var errs []error
 	for _, e := range entries {
 		var launch queuedLaunch
 		var req createRunRequest
@@ -152,17 +154,19 @@ func (s *Server) endQueuedRunsPinnedTo(ctx context.Context, owner string, id uui
 		}
 		run, err := s.cfg.Store.GetRun(ctx, e.RunID)
 		if err != nil {
-			return n, err
+			errs = append(errs, err)
+			continue
 		}
 		applied, _, err := s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": queueCancelRunnerRevoked})
 		if err != nil {
-			return n, err
+			errs = append(errs, err)
+			continue
 		}
 		if applied {
 			n++
 		}
 	}
-	return n, nil
+	return n, errors.Join(errs...)
 }
 
 // revokedRunKillTail is the kill cascade of a run its runner's revocation
