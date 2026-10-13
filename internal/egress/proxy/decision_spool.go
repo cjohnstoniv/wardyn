@@ -54,13 +54,34 @@ func newLocalDecisionSink(dir string, id uuid.UUID, out io.Writer) (*decisionSin
 		spool.Close()
 		return nil, err
 	}
-	return &decisionSink{local: spool, writerLock: lock, out: out, activityDir: dir, reservations: map[uuid.UUID]uuid.UUID{}}, nil
+	return &decisionSink{local: spool, writerLock: lock, out: out, activityDir: dir, reservations: map[uuid.UUID]spoolReservation{}}, nil
 }
 
-// Reserve the largest wire record before forwarding. The mutex covers both
+// spoolReservation is one admitted request's hold on the spool: the activity
+// epoch it was admitted under and the bytes its final decision may take.
+type spoolReservation struct {
+	epoch uuid.UUID
+	bytes int64
+}
+
+// spoolRecordEnvelope is what a decision record holds beyond its request's own
+// strings: identifiers, times, the rule source, a cause sentence and a scan
+// summary.
+const spoolRecordEnvelope = 64 << 10
+
+// spoolReservationBytes is the most a request's final decision record may take:
+// its target escaped twice over (JSON can expand one byte into six, and a cause
+// sentence can name the target again) plus the record's envelope, never more
+// than the largest wire record. Reserving every request at the wire maximum
+// held a 32 MiB spool to 32 requests in flight.
+func spoolReservationBytes(r *http.Request) int64 {
+	return min(int64(2*6*(len(r.URL.String())+len(r.Host)+len(r.Method))+spoolRecordEnvelope), runnerspool.MaxRecordBytes)
+}
+
+// Reserve the request's own record bound before forwarding. The mutex covers both
 // reservation and append accounting; a burst cannot all observe the same free
 // slot and then forward requests whose final decision has nowhere to land.
-func (s *decisionSink) reserve(ctx context.Context) (uuid.UUID, error) {
+func (s *decisionSink) reserve(ctx context.Context, need int64) (uuid.UUID, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.localErr != nil {
@@ -76,15 +97,22 @@ func (s *decisionSink) reserve(ctx context.Context) (uuid.UUID, error) {
 	if err != nil {
 		return uuid.Nil, err
 	}
-	held := len(s.reservations)
-	if depth+held >= runnerspool.MaxRecords || bytes+int64(held+1)*runnerspool.MaxRecordBytes > runnerspool.MaxBytes {
+	if depth+len(s.reservations) >= runnerspool.MaxRecords || bytes+s.heldBytes+need > runnerspool.MaxBytes {
 		return uuid.Nil, errors.Join(runnerspool.ErrFull, s.local.Refuse(ctx))
 	}
 	id := uuid.New()
-	s.reservations[id] = runneractivity.Capture(s.activityDir)
+	s.reservations[id] = spoolReservation{epoch: runneractivity.Capture(s.activityDir), bytes: need}
+	s.heldBytes += need
 	return id, nil
 }
-func (s *decisionSink) release(id uuid.UUID) { s.mu.Lock(); delete(s.reservations, id); s.mu.Unlock() }
+
+// drop ends a reservation; the caller holds s.mu.
+func (s *decisionSink) drop(id uuid.UUID) {
+	s.heldBytes -= s.reservations[id].bytes
+	delete(s.reservations, id)
+}
+
+func (s *decisionSink) release(id uuid.UUID) { s.mu.Lock(); s.drop(id); s.mu.Unlock() }
 
 func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request) (*http.Request, func()) {
 	if p.sink == nil || p.sink.local == nil {
@@ -98,7 +126,7 @@ func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request) (*http.Re
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	id, err := p.sink.reserve(ctx)
+	id, err := p.sink.reserve(ctx, spoolReservationBytes(r))
 	if err != nil {
 		http.Error(w, "egress audit spool unavailable", http.StatusServiceUnavailable)
 		return nil, nil
@@ -113,7 +141,8 @@ func (s *decisionSink) emitLocal(log egress.DecisionLog) {
 		return
 	}
 	id := log.Request.AuditReservation
-	epoch, admitted := s.reservations[id]
+	held, admitted := s.reservations[id]
+	epoch := held.epoch
 	admitted = admitted && log.Decision != egress.Pending
 	b, err := json.Marshal(log)
 	if err == nil {
@@ -123,13 +152,13 @@ func (s *decisionSink) emitLocal(log egress.DecisionLog) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err == nil && admitted {
-		delete(s.reservations, id)
+		s.drop(id)
 		err = s.local.AppendAdmitted(ctx, log)
 	} else if err == nil {
 		depth, bytes, _, statErr := s.local.Stats(ctx)
 		if statErr != nil {
 			err = statErr
-		} else if depth+len(s.reservations) >= runnerspool.MaxRecords || bytes+int64(len(s.reservations))*runnerspool.MaxRecordBytes+int64(len(b))+1024 > runnerspool.MaxBytes {
+		} else if depth+len(s.reservations) >= runnerspool.MaxRecords || bytes+s.heldBytes+int64(len(b))+1024 > runnerspool.MaxBytes {
 			err = errors.Join(runnerspool.ErrFull, s.local.Refuse(ctx))
 		} else {
 			err = s.local.Append(ctx, log)

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -28,6 +29,32 @@ func eachRow(fn func(runnerspool.Record) error) func(context.Context, []runnersp
 			}
 		}
 		return nil
+	}
+}
+
+// maxReservationPath is a path long enough that its request reserves the
+// largest wire record, so the two tests below still fill the spool.
+var maxReservationPath = strings.Repeat("x", 100_000)
+
+// An ordinary request reserves its own record's bound, not the largest wire
+// record: more than 32 in flight at once are all admitted, and nothing is
+// counted as dropped.
+func TestLocalSpoolAdmitsMoreThan32OrdinaryRequestsInFlight(t *testing.T) {
+	ctx := context.Background()
+	s, err := newLocalDecisionSink(filepath.Join(t.TempDir(), "spool"), uuid.New(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close(ctx)
+	p := &Proxy{sink: s}
+	for i := range 64 {
+		w := httptest.NewRecorder()
+		if admitted, _ := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/x", nil)); admitted == nil {
+			t.Fatalf("request %d of 64 in flight refused: %d", i+1, w.Code)
+		}
+	}
+	if _, _, drops, err := s.local.Stats(ctx); err != nil || drops != 0 {
+		t.Fatalf("drops %d %v", drops, err)
 	}
 }
 
@@ -51,7 +78,7 @@ func TestLocalSpoolReservationsBoundConcurrentForwarding(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest("GET", "http://allowed.test/x", nil)
+			r := httptest.NewRequest("GET", "http://allowed.test/"+maxReservationPath, nil)
 			admitted, release := p.admitSpoolHTTP(w, r)
 			mu.Lock()
 			defer mu.Unlock()
@@ -157,7 +184,7 @@ func TestLocalSpoolOverflowStopsActualUpstreamAndDrains(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			w := httptest.NewRecorder()
-			p.ServeHTTP(w, httptest.NewRequest("GET", "http://allowed.test/path", nil).WithContext(ctx))
+			p.ServeHTTP(w, httptest.NewRequest("GET", "http://allowed.test/"+maxReservationPath, nil).WithContext(ctx))
 			if w.Code == 503 {
 				arrived <- false
 			} else if w.Code != 200 {

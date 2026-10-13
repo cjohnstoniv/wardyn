@@ -31,7 +31,8 @@ import (
 type decisionSink struct {
 	writerLock   *os.File
 	local        *runnerspool.Spool
-	reservations map[uuid.UUID]uuid.UUID
+	reservations map[uuid.UUID]spoolReservation
+	heldBytes    int64 // the sum of the reservations' bytes
 	activityDir  string
 	localErr     error
 	endpoint     string
