@@ -56,7 +56,10 @@ type SandboxSpec struct {
 	// RunnerID, when set, routes the create to the substrate of that registered
 	// runner (named "runner:<id>"); empty means the cluster. It is a routing
 	// carrier for the orchestrator, not something a substrate reads.
-	RunnerID         string
+	RunnerID string
+	// RunnerMaxRuns is that runner's max_runs when the create was sent: the runner refuses a create past
+	// it, a backstop to the control plane's own count. 0 sets no bound.
+	RunnerMaxRuns    int
 	Image            string // resolved agent/workspace OCI image
 	ConfinementClass types.ConfinementClass
 	// Env is non-secret environment. Credential material NEVER passes through

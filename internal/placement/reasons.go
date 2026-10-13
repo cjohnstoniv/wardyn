@@ -19,6 +19,7 @@ const (
 	ReasonPlacementCapability          Reason = "placement_capability"
 	ReasonPlacementLocalPath           Reason = "placement_local_path"
 	ReasonRunnerOffline                Reason = "runner_offline"
+	ReasonRunnerAtCapacity             Reason = "runner_at_capacity"
 	ReasonRunnerAmbiguous              Reason = "runner_ambiguous"
 	ReasonRunnerNotFound               Reason = "runner_not_found"
 	ReasonRunnerUnclaimed              Reason = "runner_unclaimed"
@@ -49,6 +50,7 @@ var reasonStatus = map[Reason]int{
 	ReasonPlacementCapability:          http.StatusUnprocessableEntity,
 	ReasonPlacementLocalPath:           http.StatusUnprocessableEntity,
 	ReasonRunnerOffline:                http.StatusUnprocessableEntity,
+	ReasonRunnerAtCapacity:             http.StatusUnprocessableEntity,
 	ReasonRunnerAmbiguous:              http.StatusUnprocessableEntity,
 	ReasonRunnerNotFound:               http.StatusNotFound,
 	ReasonRunnerUnclaimed:              http.StatusConflict,

@@ -49,6 +49,9 @@ type runPlacement struct {
 	// limits are what this run may get, pooled or not; applied is the CPU and memory it gets.
 	limits  types.EffectiveRunLimits
 	applied client.AppliedResources
+	// runnersFull: the run would wait in the pool's queue, and every runner that could take it already
+	// holds its max_runs, so the dry doors answer that it waits.
+	runnersFull bool
 }
 
 // placementInput is what the fold knows of the run when it resolves where it goes.
@@ -66,6 +69,8 @@ type placementInput struct {
 	// dryDoor: the run is a preflight or policy preview, which answer the caller's pool choices; create
 	// never reads them, so a pool the run is not using cannot fail it.
 	dryDoor bool
+	// promoted: the queue's start of a promoted run, whose runner the promotion already found room on.
+	promoted bool
 }
 
 // poolsPlaceRuns reports whether runner pools decide where this deployment's runs go: a store that holds
@@ -132,6 +137,10 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	// enforce the barrier give the runner capacity, the ask is applied, and only the APPLIED size is
 	// held per candidate, so an over-ask is reduced, never refused.
 	demand := s.placementDemand(ctx, f)
+	// A run that starts at once is held to each runner's max_runs here; a run that waits in the pool's
+	// queue is not (the promotion holds it), and neither is a promoted run's start.
+	capped := row.Pool.Limits != nil && row.Pool.Limits.MaxConcurrentRuns != nil
+	demand.holdRunnerCapacity = !capped && !f.promoted
 	// A self-hosted pool offers only the person's own runners, so no deployment-wide sentence answers a
 	// class none of them enforces: the class is held against each of them, the same at every door.
 	if pool.HostingType == types.RunnerPoolSelfHosted && f.reqCCOK {
@@ -166,8 +175,10 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	if decision.Refusal != "" {
 		return runPlacement{}, targetRefusal(decision.Refusal, row.Pool.Name, pool.HostingType)
 	}
+	picked := pickTargets(eligible, decision.Targets)
 	return runPlacement{pooled: true, pool: pool, row: row.Pool, placement: decision.Placement, filled: decision.Filled,
-		eligible: pickTargets(eligible, decision.Targets), targets: targets, orgBarrier: org.Barrier, choices: choices, limits: limits, applied: applied}, nil
+		eligible: picked, targets: targets, orgBarrier: org.Barrier, choices: choices, limits: limits, applied: applied,
+		runnersFull: capped && len(picked) > 0 && !slices.ContainsFunc(picked, func(t poolTarget) bool { return !t.full })}, nil
 }
 
 // queues says a run bound for this pool waits for a slot instead of starting at once: the pool sets a
@@ -308,24 +319,46 @@ type poolBinding struct {
 // bind picks the run's one target among the eligible ones that can also enforce the class the run
 // ended up at, by the deterministic selection over the run id. The class check is the last
 // intersection: the enforced class is known only after the confinement step. An empty set refuses; it
-// never falls back to a candidate that cannot.
-func (p runPlacement) bind(runID uuid.UUID, enforced types.ConfinementClass) (poolBinding, *runRefusal) {
-	var able []poolTarget
-	for _, t := range p.eligible {
-		if enforced == "" || slices.Contains(t.facts.Classes, enforced) {
-			able = append(able, t)
-		}
-	}
+// never falls back to a candidate that cannot. prefer, when one of them, is kept: the runner a
+// promotion bound the run to and found room on.
+func (p runPlacement) bind(runID uuid.UUID, enforced types.ConfinementClass, prefer *uuid.UUID) (poolBinding, *runRefusal) {
+	able := p.able(enforced)
 	ids := make([]string, len(able))
 	for i, t := range able {
 		ids[i] = t.id
 	}
 	chosen := runnerpool.Select(p.pool.ID, runID, runnerpool.SortedUnique(ids))
+	if prefer != nil && slices.Contains(ids, prefer.String()) {
+		chosen = prefer.String()
+	}
 	i := slices.IndexFunc(able, func(t poolTarget) bool { return t.id == chosen })
 	if i < 0 {
 		return poolBinding{}, targetRefusal(placement.ReasonPlacementCapability, p.pool.Name, p.pool.HostingType)
 	}
 	return poolBinding{runnerID: able[i].runnerID, executor: able[i].executor}, nil
+}
+
+// able is the eligible targets that enforce the class the run ended up at ("" for any).
+func (p runPlacement) able(enforced types.ConfinementClass) []poolTarget {
+	var out []poolTarget
+	for _, t := range p.eligible {
+		if enforced == "" || slices.Contains(t.facts.Classes, enforced) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// otherRunners is the registered runners the run could be bound to in place of chosen: the ones its
+// start may fall back to when chosen has no room under its lock.
+func (p runPlacement) otherRunners(enforced types.ConfinementClass, chosen *uuid.UUID) []uuid.UUID {
+	var out []uuid.UUID
+	for _, t := range p.able(enforced) {
+		if t.runnerID != nil && (chosen == nil || *t.runnerID != *chosen) {
+			out = append(out, *t.runnerID)
+		}
+	}
+	return out
 }
 
 // eligibleRunners is the registered runners among the run's eligible targets: the person's own runners
@@ -392,12 +425,13 @@ func (p runPlacement) offeredClasses() []types.ConfinementClass {
 }
 
 // apply stamps the placement, the evidence source and the pool binding on the run row, once, before
-// the row is inserted. An unpooled run is left exactly as it was.
+// the row is inserted. An unpooled run is left exactly as it was. A runner already on run is kept when
+// it is still one the run can be bound to.
 func (p runPlacement) apply(run *types.AgentRun, enforced types.ConfinementClass) *runRefusal {
 	if !p.pooled {
 		return nil
 	}
-	b, refusal := p.bind(run.ID, enforced)
+	b, refusal := p.bind(run.ID, enforced, run.RunnerID)
 	if refusal != nil {
 		return refusal
 	}
@@ -455,6 +489,8 @@ func targetRefusal(reason placement.Reason, pool string, hosting types.RunnerPoo
 		return runError(reason.Status(), string(reason), "No runner in "+pool+" offers the barrier or size this run needs. Choose another pool, or ask for less.")
 	case placement.ReasonPlacementUnavailable:
 		return runError(http.StatusUnprocessableEntity, string(reason), "Your own runner is not available: runners are switched off on this server.")
+	case placement.ReasonRunnerAtCapacity:
+		return runError(reason.Status(), string(reason), runnerpool.RunnerAtCapacityMsg(pool))
 	}
 	return runError(reason.Status(), string(reason), "This run cannot be placed in "+pool+".")
 }
@@ -466,12 +502,16 @@ type placementDemand struct {
 	reqCCOK  bool // false: the request's class did not parse, and the confinement step answers it
 	baseline composer.Baseline
 	cpu, mem int64
+	// holdRunnerCapacity refuses a runner that already holds its max_runs (poolTarget.full).
+	holdRunnerCapacity bool
 }
 
 // eligibleTargets keeps the candidates that meet EVERY demand on their OWN facts and answers the first
 // refusing candidate's reason when none does. It is an intersection over each candidate and never a
 // union: a pool's strongest barrier and its largest machine are not summed into a target that does not
 // exist. A candidate whose facts are unknown is refused as offline, never read as zero or as everything.
+// A runner refused only for being at its max_runs could take the run once one of its runs ends, so that
+// is the answer whenever one candidate was refused for it alone.
 func eligibleTargets(targets []poolTarget, d placementDemand) ([]poolTarget, placement.Reason) {
 	var out []poolTarget
 	var first placement.Reason
@@ -480,6 +520,9 @@ func eligibleTargets(targets []poolTarget, d placementDemand) ([]poolTarget, pla
 		if reason == "" {
 			out = append(out, t)
 			continue
+		}
+		if reason == placement.ReasonRunnerAtCapacity {
+			first = reason
 		}
 		first = cmp.Or(first, reason)
 	}
@@ -500,6 +543,9 @@ func (d placementDemand) refusal(t poolTarget) placement.Reason {
 	}
 	if t.facts.CapacityAdvertised && !(placement.Capacity{CPUMillisMax: t.facts.CPUMillisMax, MemoryMiBMax: t.facts.MemoryMiBMax}).Fits(d.cpu, d.mem) {
 		return placement.ReasonPlacementCapability
+	}
+	if d.holdRunnerCapacity && t.full {
+		return placement.ReasonRunnerAtCapacity
 	}
 	return ""
 }

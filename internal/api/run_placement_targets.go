@@ -30,6 +30,9 @@ type poolTarget struct {
 	facts    runner.TargetFacts
 	// offline: not connected, or it has advertised nothing, so its facts are unknown.
 	offline bool
+	// full: a registered runner already holding its max_runs of sandbox-holding runs, as last read
+	// without a lock. The insert, the promotion and the start count again under the runner's row lock.
+	full bool
 }
 
 // personalPoolDefaults is the signed-in person's own saved defaults: empty for a caller who is no
@@ -147,14 +150,30 @@ func (s *Server) ownRunnerTargets(ctx context.Context, req *createRunRequest, ps
 	if len(ids) == 0 {
 		return nil, none()
 	}
+	held, err := s.runnerSlotHolders(ctx, ids)
+	if err != nil {
+		return nil, runServerError("count runs by runner", err)
+	}
 	out := make([]poolTarget, 0, len(ids))
 	for _, id := range ids {
 		id := id
 		facts, known := s.runnerFacts(id)
-		out = append(out, poolTarget{id: id.String(), runnerID: &id, facts: facts, offline: !known || !s.runnerOnline(id)})
+		i := slices.IndexFunc(runners, func(r types.Runner) bool { return r.ID == id })
+		full := i >= 0 && runners[i].MaxRuns > 0 && held[id] >= runners[i].MaxRuns
+		out = append(out, poolTarget{id: id.String(), runnerID: &id, facts: facts, offline: !known || !s.runnerOnline(id), full: full})
 	}
 	slices.SortFunc(out, func(a, b poolTarget) int { return cmp.Compare(a.id, b.id) })
 	return out, nil
+}
+
+// runnerSlotHolders is the number of sandbox-holding runs on each runner, read without a lock; nil from
+// a store that cannot count, whose runners are then never read as full.
+func (s *Server) runnerSlotHolders(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]int, error) {
+	rs, ok := s.cfg.Store.(store.RunnerInventoryStore)
+	if !ok {
+		return nil, nil
+	}
+	return rs.RunnerSlotHolders(ctx, ids)
 }
 
 // pinRefusal refuses a runner_id that is not one of the caller's own candidates in this pool. The
