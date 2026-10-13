@@ -41,7 +41,6 @@ import type {
 } from "../types/new-run-contract";
 import {
   asJson,
-  ccRank,
   errText,
   HttpError,
   LAUNCH_DEADLINE_MS,
@@ -126,10 +125,10 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   resources?: RequestedResources;
   overrides?: RunOverrides;
   // The run-mode contract (pkg/client/runs_mode.go). A request with the marker or
-  // an experience is a new client's: runWireBody then omits the older agent, task, interactive,
+  // an experience is a new client's: the older agent, task, interactive,
   // task_mode, interactive_start, seed_auto_tools, tool_approvals and
-  // model_provider, which the carriers replace and the server refuses beside them.
-  // The contract marker (pkg/client.RunModeContractV09): the New Run wizard always
+  // model_provider are then omitted: the carriers replace them and the server refuses both.
+  // The contract marker (pkg/client.RunModeContractV09): New Run always
   // sends it, so a request whose mode is unset is refused by the server and never
   // read as an older client's.
   mode_contract?: "0.9";
@@ -140,81 +139,6 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   start_folder?: StartFolder;
   no_repositories_or_drives?: boolean;
 };
-
-// The ONE projection from wizard input to the POST /runs wire body. createRun
-// preflightRun and policy preview all send this projection.
-// (They used to be two hand-built whitelists; preflight's lagged by five fields.)
-/** The shared request projection for create, preflight and policy preview. */
-export function runWireBody(input: RunWireInput): Record<string, unknown> {
-  // The run-mode carriers replace the older mode fields; a request never mixes the two.
-  const newClient = Boolean(input.mode_contract || input.experience);
-  const body: Record<string, unknown> = { repo: input.repo };
-  if (!newClient) {
-    body.agent = input.agent;
-    body.task = input.task;
-  }
-  if (input.policy_id) body.policy_id = input.policy_id;
-  // A run may request an equal-or-STRONGER tier than its policy floor, never a
-  // weaker one (the server 422s "confinement_class X is weaker than the policy
-  // minimum Y"). Defensively raise a requested class UP to the inline policy's
-  // floor so a stale/edited selection can never produce that rejection — clamping
-  // up only ever strengthens confinement, so it is always safe.
-  let cc = input.confinement_class;
-  const floor = input.inline_policy?.min_confinement_class;
-  if (cc && floor && ccRank(cc) < ccRank(floor)) cc = floor;
-  if (cc) body.confinement_class = cc;
-  if (input.interactive && !newClient) body.interactive = true;
-  if (input.inline_policy) body.inline_policy = input.inline_policy;
-  // BYOI + governed-command pass-through — previously dropped on the floor here.
-  if (input.image) body.image = input.image;
-  if ("task_mode" in input && input.task_mode && !newClient) body.task_mode = input.task_mode;
-  // The run's name/note and the interactive start choice — same lesson as the
-  // two above: this whitelist is hand-built, so an unlisted field is discarded
-  // between the form and the wire with no error anywhere. The title the
-  // operator typed would simply never exist.
-  if ("title" in input && input.title) body.title = input.title;
-  if ("description" in input && input.description) body.description = input.description;
-  if ("interactive_start" in input && input.interactive_start && !newClient) {
-    body.interactive_start = input.interactive_start;
-  }
-  // The boot-seed opt-in and the autonomous tool-approval posture — same
-  // hand-built-whitelist trap as everything else on this list: an unlisted
-  // field is silently discarded between the form and the wire.
-  if ("seed_auto_tools" in input && input.seed_auto_tools && !newClient) body.seed_auto_tools = true;
-  if ("tool_approvals" in input && input.tool_approvals && !newClient) body.tool_approvals = input.tool_approvals;
-  // Composition-model pass-through. This whitelist has dropped a wizard field
-  // on the floor once before (image/task_mode, above) — a selection the
-  // operator made, silently discarded between the form and the wire. These
-  // two carry the per-run half of the requirements contract (which optional
-  // requirements this run enables, and any read-only narrowing) and the
-  // explicit model-access override, so dropping them would launch a run the
-  // Review screen did not describe.
-  if (input.workspaces?.length) body.workspaces = input.workspaces;
-  if (input.workspace_id) body.workspace_id = input.workspace_id;
-  if (input.integration_id) body.integration_id = input.integration_id;
-  // The member's drive request. Forwarded VERBATIM rather than re-derived: an
-  // absent `drive` is "mount nothing", byte for byte what every run sent
-  // before the field existed, and buildSpec is the one place that decides
-  // whether the member asked for it. A whitelist that re-decided would be the
-  // second answer to that question.
-  if (input.drive) body.drive = input.drive;
-  if (input.model_provider && !newClient) body.model_provider = input.model_provider;
-  if (input.components?.length) body.components = input.components;
-  if (input.placement) body.placement = input.placement;
-  if (input.runner_id) body.runner_id = input.runner_id;
-  if (input.runner_pool_id) body.runner_pool_id = input.runner_pool_id;
-  if (input.allowed_image) body.allowed_image = input.allowed_image;
-  if (input.resources && (input.resources.cpu_millis || input.resources.memory_mib || input.resources.disk_mib)) body.resources = input.resources;
-  if (input.overrides) body.overrides = input.overrides;
-  if (input.mode_contract) body.mode_contract = input.mode_contract;
-  if (input.experience) body.experience = input.experience;
-  if (input.workload) body.workload = input.workload;
-  if (input.tools?.length) body.tools = input.tools;
-  if (input.startup) body.startup = input.startup;
-  if (input.start_folder) body.start_folder = input.start_folder;
-  if (input.no_repositories_or_drives) body.no_repositories_or_drives = true;
-  return body;
-}
 
 // The create-time model-credential refusal — writeProviderRefusal's 422
 // carrying reason `model_credential`, the failure audit row's own word. It is
@@ -360,59 +284,20 @@ export const runs = {
     return body.ticket;
   },
 
-  // POST /api/v1/runs  { agent, repo, task, policy_id?, confinement_class?,
-  //   interactive?, inline_policy? }
-  // interactive=true brings the sandbox up idle (no agent task) so a human can
-  // attach to it; pair with a never-reap policy (auto_stop_after_sec < 0).
-  // inline_policy carries a RunPolicySpec inline; it is MUTUALLY EXCLUSIVE with
-  // policy_id (XOR) — the wizard sends exactly one, never both. Neither set =>
-  // the configured default policy (unchanged behavior).
-  // The response is the created run's fields PLUS an optional advisory
-  // `warnings: string[]` (e.g. a workspace-directory collision with another
-  // active run) — the run still launched; callers surface warnings without
-  // blocking. CreateRunResult is structurally an AgentRun, so existing onCreated
-  // callbacks keep working.
+  // New Run's three requests. Each sends the body intentToWire built, byte for byte, so
+  // preflight, policy preview and create judge the same request.
   //
-  // #125/#121: the default deadline, not LAUNCH_DEADLINE_MS — POST /runs is
-  // async now (dispatch happens after this call answers), so this no longer
-  // blocks through CreateSandbox server-side the way the constant's own note
-  // describes. preflightRun below still runs that resolution synchronously and
-  // keeps the longer deadline.
-  async createRun(input: RunWireInput): Promise<CreateRunResult> {
-    const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(runWireBody(input)) });
-    return asJson<CreateRunResult>(res);
-  },
-
-  // POST /api/v1/runs/preflight — a DRY-RUN of createRun's resolution + gating:
-  // mints/persists/dispatches NOTHING, just returns the deterministic setup
-  // checklist and the enforced confinement class (post floor + blast-radius
-  // raise). New Run fires this as the body settles, sending the
-  // SAME body createRun would, so the checklist and any 4xx (unknown-secret 422,
-  // XOR, invalid spec) are the real launch verdicts. Callers show an error as
-  // a danger alert beside Launch (the server's own sentence). A fresh 4xx, or a
-  // `missing` backend or llm_access row, holds Launch (use-launch.ts's
-  // preflightBlock); every other row is advisory.
-  async preflightRun(input: RunWireInput, signal?: AbortSignal): Promise<PreflightResult> {
-    // LAUNCH_DEADLINE_MS, not the default: this runs the SAME resolution
-    // (mounts, grants, the blast-radius raise) against the same store that
-    // createRun's own dispatch does — createRun itself dropped this deadline
-    // once POST /runs became async (#125/#121), but preflight's own work here
-    // is still synchronous, so a deployment slow enough to need the longer
-    // bound on a real launch needs it on the dry run too.
-    const res = await wfetch(
-      "/runs/preflight",
-      { method: "POST", body: JSON.stringify(runWireBody(input)), signal },
-      LAUNCH_DEADLINE_MS,
-    );
-    return asJson<PreflightResult>(res);
-  },
-
-  // The new New Run's three requests. Each sends the body its serializer built,
-  // byte for byte, so preflight, policy preview and create judge the same request.
+  // POST /api/v1/runs. The response is the created run's fields PLUS an optional advisory
+  // `warnings: string[]` (e.g. a workspace-directory collision with another active run): the run
+  // still launched, and callers surface warnings without blocking. CreateRunResult is
+  // structurally an AgentRun. #125/#121: the default deadline, not LAUNCH_DEADLINE_MS, because
+  // POST /runs dispatches asynchronously and no longer blocks through CreateSandbox.
   async createRunWire(body: object): Promise<CreateRunResult> {
     const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(body) });
     return asJson<CreateRunResult>(res);
   },
+  // Preflight (POST /runs/preflight) is a dry run of create's resolution and gating. It keeps
+  // LAUNCH_DEADLINE_MS because that resolution (mounts, grants, the blast-radius raise) is synchronous.
   async preflightRunWire(body: object, signal?: AbortSignal): Promise<PreflightResult> {
     const res = await wfetch("/runs/preflight", { method: "POST", body: JSON.stringify(body), signal }, LAUNCH_DEADLINE_MS);
     return asJson<PreflightResult>(res);

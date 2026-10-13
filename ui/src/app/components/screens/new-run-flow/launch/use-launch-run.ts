@@ -4,12 +4,12 @@
  */
 
 // Create from the Name dialog: one request, held to the person who pressed
-// Launch. A refusal comes back as its sentence for the dialog to show, and goes
-// to `onRefused` so the credential doors can open; the dialog and its typed text
-// stay as they were.
+// Launch. A refusal comes back as its sentence, with the policy it names when it
+// names one, for the dialog to show, and goes to `onRefused` so the credential
+// doors can open; the dialog and its typed text stay as they were.
 
 import * as React from "react";
-import { getAuthGeneration, isSignedOutHold } from "../../../../lib/api/core";
+import { getAuthGeneration, HttpError, isSignedOutHold } from "../../../../lib/api/core";
 import { runs } from "../../../../lib/api/runs";
 import { getErrorMessage } from "../../../../lib/format";
 import type { CreateRunResult } from "../../../../lib/types/run-create";
@@ -20,6 +20,7 @@ import type { CreateRunWire } from "../draft/intent-to-wire";
 export function useLaunchRun(identity: DraftIdentity, onCreated: (created: CreateRunResult) => void, onRefused: (e: unknown) => void) {
   const [creating, setCreating] = React.useState(false);
   const [refusal, setRefusal] = React.useState<string | null>(null);
+  const [policy, setPolicy] = React.useState<HttpError["policy"]>();
   const { showSpinner: spinning } = useDeferredBusy(creating);
   const latest = React.useRef({ identity, onCreated, onRefused });
   latest.current = { identity, onCreated, onRefused };
@@ -39,6 +40,7 @@ export function useLaunchRun(identity: DraftIdentity, onCreated: (created: Creat
     const still = () => latest.current.identity.principal === principal && auth === getAuthGeneration();
     inFlight.current = true;
     setRefusal(null);
+    setPolicy(undefined);
     setCreating(true);
     try {
       const created = await runs.createRunWire(body);
@@ -47,6 +49,7 @@ export function useLaunchRun(identity: DraftIdentity, onCreated: (created: Creat
     } catch (e) {
       if (!still() || !mounted.current) return;
       setRefusal(getErrorMessage(e));
+      setPolicy(e instanceof HttpError ? e.policy : undefined);
       latest.current.onRefused(e);
     } finally {
       inFlight.current = false;
@@ -54,5 +57,5 @@ export function useLaunchRun(identity: DraftIdentity, onCreated: (created: Creat
     }
   };
 
-  return { launch, creating, spinning, refusal };
+  return { launch, creating, spinning, refusal, policy };
 }
