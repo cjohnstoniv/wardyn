@@ -55,6 +55,7 @@ export const PLACEMENT_REASONS = [
   "placement_capability",
   "placement_local_path",
   "runner_offline",
+  "runner_at_capacity",
   "runner_ambiguous",
   "runner_not_found",
   "runner_unclaimed",

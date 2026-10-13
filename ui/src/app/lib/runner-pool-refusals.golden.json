@@ -18,5 +18,7 @@
   { "key": "WAIT_NO_RUNNER_FREE", "args": ["Team laptops"], "text": "None of your runners in Team laptops is online. This run starts when one is." },
   { "key": "QUEUE_FULL", "args": ["Build farm", "100"], "text": "You already have 100 runs waiting for Build farm. Cancel one or wait for one to start." },
   { "key": "FULL", "args": ["Build farm", "4"], "text": "Build farm is running its limit of 4, and others are waiting. Try again when one finishes." },
-  { "key": "NO_ONLINE_RUNNER", "args": ["Home server"], "text": "None of your runners in Home server is online." }
+  { "key": "NO_ONLINE_RUNNER", "args": ["Home server"], "text": "None of your runners in Home server is online." },
+  { "key": "RUNNER_AT_CAPACITY", "args": ["Home server"], "text": "Your runners in Home server are all running as many runs as they allow at once. Try again when one finishes, or raise Runs at once on your runner." },
+  { "key": "WAIT_RUNNERS_AT_CAPACITY", "args": ["Home server"], "text": "Your runners in Home server are all running as many runs as they allow at once. This run starts when one has room." }
 ]

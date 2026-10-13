@@ -101,6 +101,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   drive beside the old one. Remove the old allocation with `DELETE /drives/grants/{id}` or in the console.
 - `PUT /api/v1/runner-pool-defaults` replaces the whole document, so a PUT that leaves `barrier` out clears it; use
   `wardyn runner pool org-default set` (it reads first) or GET then PUT.
+- Runners registered before this release get Runs at once 2 (migration `0172_runner_max_runs`); a runner's owner
+  raises it with `wardyn runner set --max-runs N <runner-id>`.
 
 ### Added
 
@@ -520,6 +522,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - `wardyn workspace build <workspace-id>` starts a workspace's image build, rebuilds it from fresh inputs with
   `--refresh`, and prints the current state with `--status` (`--json` for the raw view, including whether the image
   is reproducible). The Go SDK adds `BuildWorkspace` and `GetWorkspaceBuild`.
+- Runners: each runner has Runs at once (`max_runs`, 1–64), set with `wardyn-runnerd register --max-runs` (default
+  half the host's CPU cores) and changed only by its owner (`wardyn runner set --max-runs`, `PUT /me/runners/{id}`,
+  audited `runner.update`). Placement never exceeds it: a full runner refuses `runner_at_capacity`, and in a capped
+  pool the run waits with `runner_pool_runners_at_capacity`, then starts on whichever of its runners has room.
+  Runners report their machine name, runner views list their pools, and `GET /runner-pools/{id}/runners` lists a
+  pool's runners. Migration `0172_runner_max_runs`.
 
 ### Changed
 
@@ -634,6 +642,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   barrier. When the organisation raises the default while the run waits, the run starts under the stronger class if
   the pool offers it, and `run.queue.start` records `confinement_default_raised`. The `run.create` row of a launch
   that waits now records the drives and the harness set it attaches, as a direct create does.
+- Each workspace image build records what it built from and the image it produced. `GET
+  /api/v1/workspaces/{id}/build` shows the record, its SHA-256 and whether the build is reproducible while the
+  record is current; the `run.build` audit row carries the record and its hash, and a workspace-image cache hit now
+  writes a `run.build` row too. Workspace image builds do not share an envbuilder layer cache: each build pushes
+  under its own tag and fetches every layer fresh.
 
 ### Removed
 
@@ -765,6 +778,35 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - `wardynd -recovery-manifest` now refuses at `pool_max_conns` below 2 and names the setting, instead of hanging.
 - `wardyn sync` and sftp now say when the runner is offline or the sandbox is gone, instead of blaming the sandbox
   image for a missing sftp-server.
+- A production runner advertised no capacity, so placement refused every sized run on it.
+- SCIM: a user create or update whose suspension cannot be read back answers 5xx so the identity provider retries,
+  instead of a 2xx with an empty identity; a PUT that omits `active` no longer reactivates a suspended user.
+- Sign-in: the session cookie's group budget counts the JSON escaping of `&`, `<` and `>`, so a group list full of
+  them cannot outgrow the cookie.
+- Directory: a failed token request no longer switches off App Role suggestions for the rest of the process.
+- People: creating a person answers 500 when the directory of known principals cannot be read, instead of skipping
+  the collision check.
+- Audit: an audit row the sealer refuses is logged by action and a fixed reason word. The webhook sink refuses a URL
+  with no scheme or host, or a scheme other than http or https, at start-up, and does not follow an https
+  collector's redirect to plain http (the batch counts as a failed delivery).
+- AWS KMS: a refused Decrypt answer (wrong key or wrong length) has its plaintext zeroed before the error returns.
+  The local-key refusal names `WARDYN_KEK=transit, azurekv or awskms`.
+- Setup: the "local-key rows remain" row appears again; it never showed in production because the store arrives
+  audit-wrapped.
+- Component config schemas refuse data after the single JSON value. Config-key secret detection also catches
+  `signing_key`, `encryption_key` and `connection_string`, and `SECRET_FILE`, `SECRET_PATH` and `SECRET_STORE` read
+  as plain settings.
+- Egress proxy: a host verdict the proxy does not recognise is denied as `policy:evaluator-error` instead of falling
+  through.
+- SSRF guard: the IANA non-globally-reachable IPv6 blocks (`2001::/32`, `2001:2::/48`, `2001:10::/28`,
+  `2001:db8::/32`, `3fff::/20`, `5f00::/16`, `100::/64`) are denied. The AWS IPv6 metadata block `fd00:ec2::/64` and
+  `100.100.100.200` are never liftable by `internal_hosts`, and the daemon proxy bypasses `fd00:ec2::254` too.
+- Egress denial text: a non-canonical literal IP (`10.1`, `127.1`, a zoned IPv6) gets the "denied unconditionally"
+  sentence, not the `internal_hosts` remedy.
+- Azure DevOps git refusals name the governing policy only when policy decided them, and a request whose client
+  hangs up mid-hold no longer records a denial.
+- Proxy shutdown keeps part of its deadline for the audit drain and survives a cancelled caller, so the last
+  decision rows reach the control plane; it returns both the HTTP and the sink errors.
 
 
 ## [0.8.9] — 2026-10-09

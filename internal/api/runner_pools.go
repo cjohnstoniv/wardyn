@@ -37,6 +37,7 @@ import (
 func (s *Server) mountRunnerPoolRoutes(r, operatorOnly, securityOps chi.Router) {
 	r.Get("/runner-pools", s.handleListRunnerPools)
 	r.Get("/runner-pools/{id}", s.handleGetRunnerPool)
+	r.Get("/runner-pools/{id}/runners", s.handleListRunnerPoolRunners)
 	operatorOnly.Post("/runner-pools", s.handleCreateRunnerPool)
 	operatorOnly.Put("/runner-pools/{id}", s.handleUpdateRunnerPool)
 	operatorOnly.Delete("/runner-pools/{id}", s.handleDeleteRunnerPool)

@@ -84,9 +84,10 @@ func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostRea
 	return markRunRevived(ctx, s.Pool, id, from, ended)
 }
 
-// markRunRevivedUnderCap is the claim of a revive that starts an agent, under the run's pool cap and
-// the deployment cap. A pooled run takes its pool row first (FOR NO KEY UPDATE, the lock an enqueue and
-// a promotion take) and the deployment advisory lock second, the one order everything uses. The count
+// markRunRevivedUnderCap is the claim of a revive that starts an agent, under the run's pool cap, the
+// deployment cap and its runner's max_runs. A pooled run takes its pool row first (FOR NO KEY UPDATE, the
+// lock an enqueue and a promotion take), the deployment advisory lock second and its runner's row last,
+// the one order everything uses. The count
 // and the claim share CreateRunUnderCap's transaction-scoped advisory lock and its counting predicate,
 // so a revive and a create racing at the cap admit exactly the cap. It counts the OTHER runs in one statement: the run's own
 // row is never read for admission, so an extension of it landing mid-claim (which
@@ -107,6 +108,15 @@ func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types
 			}
 			if others >= limit {
 				return ErrRunCapReached
+			}
+		}
+		var runner *uuid.UUID
+		if err := q.QueryRow(ctx, `SELECT runner_id FROM agent_runs WHERE id = $1`, id).Scan(&runner); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("store: read revive runner: %w", err)
+		}
+		if runner != nil {
+			if err := admitOnRunner(ctx, q, *runner, id); err != nil {
+				return err
 			}
 		}
 		var err error

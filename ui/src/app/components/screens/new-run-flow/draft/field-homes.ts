@@ -79,7 +79,7 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   resources_invalid: "review", request_field_unavailable: "review",
   override_invalid: "tools", override_refused: "tools",
   placement_required: "run", placement_unavailable: "run", placement_denied: "run", placement_trusted_output: "run",
-  runner_offline: "run", runner_ambiguous: "run", runner_not_found: "run", runner_unclaimed: "run", runner_revoked: "run",
+  runner_offline: "run", runner_at_capacity: "run", runner_ambiguous: "run", runner_not_found: "run", runner_unclaimed: "run", runner_revoked: "run",
   runner_token_invalid: "run", runner_claim_mismatch: "run", runner_posture_unmet: "run", runner_keystore_unavailable: "run",
   runner_action_pending: "run", relay_runner_mismatch: "run", relay_required: "run", relay_route_refused: "run",
   placement_credential: "tools", placement_component_self_defined: "tools", placement_capability: "tools",
