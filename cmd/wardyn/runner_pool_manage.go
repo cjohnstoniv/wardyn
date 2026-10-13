@@ -114,10 +114,17 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 		if err != nil {
 			return err
 		}
-		if add && ref.unclaimed {
-			return fmt.Errorf("%s is not claimed yet; claim it first with `wardyn runner claim`", ref.name)
-		}
 		refs = append(refs, ref)
+	}
+	if add {
+		if err := readClaims(cmd, c, refs); err != nil {
+			return err
+		}
+		for _, ref := range refs {
+			if ref.unclaimed {
+				return fmt.Errorf("%s is not claimed yet; claim it first with `wardyn runner claim`", ref.name)
+			}
+		}
 	}
 	var done []string
 	for _, ref := range refs {

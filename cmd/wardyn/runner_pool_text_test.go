@@ -131,7 +131,7 @@ func TestRunnerPoolShowAddsUpTheMembers(t *testing.T) {
 	// active offers nothing; no runners and no limits of its own.
 	bare := sdk.RunnerPool{ID: id, Name: "Laptop", Scope: sdk.RunnerPoolUser, Owner: "alice@example.com", State: types.RunnerPoolDisabled}
 	var sb strings.Builder
-	if err := printPool(&sb, bare, nil, "dana@example.com"); err != nil {
+	if err := printPool(&sb, bare, nil, "dana@example.com", ""); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"OWNER|alice@example.com", "RUNNERS|none yet", "TOTAL|CPU 0 · memory 0 GB · disk 0 GB · runs 0", "POOL LIMITS|none of its own: it follows its runners", "WHO MAY USE|only alice@example.com"} {
@@ -171,6 +171,10 @@ func TestRunnerPoolAddKnowsWhatIsAlreadyThere(t *testing.T) {
 	_, err := run("mbp-ben")
 	if err == nil || err.Error() != "mbp-ben is not claimed yet; claim it first with `wardyn runner claim`" {
 		t.Fatalf("unclaimed = %v", err)
+	}
+	// Named by its id it is the same runner, refused the same way.
+	if _, err := run(fresh.String()); err == nil || err.Error() != fresh.String()+" is not claimed yet; claim it first with `wardyn runner claim`" {
+		t.Fatalf("unclaimed by id = %v", err)
 	}
 	for _, r := range srv.reqs[before:] {
 		if r.method == http.MethodPut {
