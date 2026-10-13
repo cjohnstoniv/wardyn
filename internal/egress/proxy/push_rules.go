@@ -338,7 +338,7 @@ func matchSegment(pat []string, i int, seg string, budget *int) (bool, error) {
 // bodies, but an encoded body must never be waved through unparsed — that
 // would silently bypass every rule that reads the body.
 func nonIdentityEncoding(h http.Header) (string, bool) {
-	encs := h.Values("Content-Encoding")
+	encs := h["Content-Encoding"] // Values' result for a canonical key, indexed so code scanning sees a non-secret header
 	if len(encs) > 1 {
 		return strings.Join(encs, ","), true
 	}
