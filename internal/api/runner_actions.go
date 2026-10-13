@@ -199,7 +199,10 @@ func (s *Server) EventFromRunner(ctx context.Context, runnerID uuid.UUID, ev run
 		return s.PostureFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventResidentErase:
 		return s.ResidentEraseFromRunner(ctx, runnerID, ev)
-	case runnerwire.EventCaps, runnerwire.EventWaiting:
+	case runnerwire.EventCaps:
+		s.capsFromRunner(ctx, runnerID, ev)
+		return nil
+	case runnerwire.EventWaiting:
 		return nil
 	default:
 		return fmt.Errorf("%w: %s", errRunnerEventUnsupported, ev.Kind)

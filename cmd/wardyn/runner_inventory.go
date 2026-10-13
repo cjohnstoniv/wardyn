@@ -4,6 +4,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"time"
@@ -18,6 +19,7 @@ import (
 //
 //	wardyn runner list [--all [--state active|revoked|all]]   your own runners; --all is every person's (admin)
 //	wardyn runner tokens list [--owner P] | revoke <id>        the unused registration tokens (admin)
+//	wardyn runner set --max-runs N <id>                        your own runner's runs at once
 
 func runnerListCmd(client clientFn) *cobra.Command {
 	var all, asJSON bool
@@ -67,9 +69,9 @@ func runnerStateWord(r sdk.RunnerView) string {
 
 func printRunners(w io.Writer, rows []sdk.RunnerView, admin bool) error {
 	tw := newTab(w)
-	head := "ID\tNAME\tSTATE\tLAST SEEN\tRUNS\tFINGERPRINT"
+	head := "ID\tNAME\tMACHINE\tSTATE\tLAST SEEN\tRUNS\tAT ONCE\tFINGERPRINT"
 	if admin {
-		head = "ID\tOWNER\tNAME\tSTATE\tLAST SEEN\tRUNS\tFINGERPRINT"
+		head = "ID\tOWNER\tNAME\tMACHINE\tSTATE\tLAST SEEN\tRUNS\tAT ONCE\tFINGERPRINT"
 	}
 	fmt.Fprintln(tw, head)
 	for _, r := range rows {
@@ -77,13 +79,38 @@ func printRunners(w io.Writer, rows []sdk.RunnerView, admin bool) error {
 		if r.LastSeenAt != nil {
 			lastSeen = r.LastSeenAt.Format(time.RFC3339)
 		}
+		atOnce := fmt.Sprintf("%d/%d", r.Running, r.MaxRuns)
+		machine := cmp.Or(r.MachineName, "-")
 		if admin {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n", r.ID, r.Owner, r.Name, runnerStateWord(r), lastSeen, r.RunsActive, r.KeyFingerprint)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", r.ID, r.Owner, r.Name, machine, runnerStateWord(r), lastSeen, r.RunsActive, atOnce, r.KeyFingerprint)
 		} else {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n", r.ID, r.Name, runnerStateWord(r), lastSeen, r.RunsActive, r.KeyFingerprint)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", r.ID, r.Name, machine, runnerStateWord(r), lastSeen, r.RunsActive, atOnce, r.KeyFingerprint)
 		}
 	}
 	return tw.Flush()
+}
+
+// runnerSetCmd changes the caller's own runner. Only the owner may: an administrator's token is refused
+// by the server, since the runner is the person's machine.
+func runnerSetCmd(client clientFn) *cobra.Command {
+	var maxRuns int
+	cmd := &cobra.Command{Use: "set <runner-id>", Short: "Change your own runner's runs at once", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		id, err := uuid.Parse(args[0])
+		if err != nil {
+			return fmt.Errorf("runner id: %w", err)
+		}
+		if !cmd.Flags().Changed("max-runs") {
+			return fmt.Errorf("nothing to change: pass --max-runs")
+		}
+		v, err := client().SetMyRunnerMaxRuns(cmd.Context(), id, maxRuns)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "runner %s now runs at most %d at once (%d running)\n", v.Name, v.MaxRuns, v.Running)
+		return nil
+	}}
+	cmd.Flags().IntVar(&maxRuns, "max-runs", 0, "how many runs the runner may hold at once, 1 to 64")
+	return cmd
 }
 
 func runnerTokensCmd(client clientFn) *cobra.Command {
