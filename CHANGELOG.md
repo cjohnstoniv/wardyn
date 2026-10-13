@@ -131,7 +131,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The server's Docker host or Kubernetes cluster gets its limits measured at the first boot. When an amount cannot
   be measured (often disk: on Docker Desktop, or when `wardynd` runs in a container) none is set, and runs there are
   refused `runner_limits_unset` until an admin sets them all with `wardyn runner set <id> …`. Read them with
-  `wardyn runner remote show <id> --json`.
+  `wardyn runner remote show <id> --json`. A stack brought up with `make setup` is given its limits by setup; any
+  other install sets them once: `wardyn runner remote list --no-limits`, then `wardyn runner remote propose <id>` and
+  `wardyn runner set <id>` (or Runners → the runner → Edit limits).
 - A launch can now wait. One whose pool is running its Runs at once, or whose runners are all at their limits, is
   stored `QUEUED` (`201`, wait reason `runner_pool_at_capacity` or `runner_pool_runners_at_capacity`) in every
   pool. A create that loses a runner's last room to another launch as it is stored is refused
