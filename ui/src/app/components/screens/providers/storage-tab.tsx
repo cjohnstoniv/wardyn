@@ -9,7 +9,7 @@
 import { nonNegativeInt } from "../../../lib/format";
 import type { StorageProviders } from "../../../lib/api/providers";
 import type { StorageEnforcement } from "../../../lib/api/drives";
-import { PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { MEMBER_DRIVES, PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { Field, Switch } from "../../wardyn/form-primitives";
 import { Input } from "../../ui/input";
 import { UserDrivesCard } from "../setup/user-drives-card";
@@ -44,6 +44,11 @@ export function StorageTab({
 
   const setEphemeral = (patch: Partial<typeof ephemeral>) => onChange({ ...storage, ephemeral: { ...ephemeral, ...patch } });
   const setUserDrive = (patch: Partial<typeof userDrive>) => onChange({ ...storage, user_drive: { ...userDrive, ...patch } });
+  const memberCreate = userDrive.member_create ?? {};
+  // Keeps the policy's other fields (size_mib, storage_class) as the API set them.
+  // Switching on seeds the smallest valid count, since the server refuses an
+  // enabled switch with none.
+  const setMemberCreate = (patch: Partial<typeof memberCreate>) => setUserDrive({ member_create: { ...memberCreate, ...patch } });
 
   return (
     <div className="space-y-6">
@@ -101,6 +106,28 @@ export function StorageTab({
               disabled={!operator}
               value={numberField(userDrive.max_size_mib)}
               onChange={(e) => setUserDrive({ max_size_mib: nonNegativeInt(e.target.value) })}
+            />
+          </Field>
+        </div>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <Field label={MEMBER_DRIVES.FIELD_ENABLED}>
+            <Switch
+              checked={!!memberCreate.enabled}
+              disabled={!operator}
+              label={MEMBER_DRIVES.FIELD_ENABLED}
+              onChange={(checked) => setMemberCreate({ enabled: checked, ...(checked && !memberCreate.max_per_person ? { max_per_person: 1 } : {}) })}
+            />
+          </Field>
+          <Field label={MEMBER_DRIVES.FIELD_MAX} htmlFor="provider-member-drives-max">
+            <Input
+              id="provider-member-drives-max"
+              type="number"
+              min={1}
+              max={20}
+              className="font-mono"
+              disabled={!operator || !memberCreate.enabled}
+              value={numberField(memberCreate.max_per_person)}
+              onChange={(e) => setMemberCreate({ max_per_person: nonNegativeInt(e.target.value) })}
             />
           </Field>
         </div>

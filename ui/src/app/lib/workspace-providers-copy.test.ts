@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import * as WorkspaceProvidersCopy from "./workspace-providers-copy";
-import { ADO_CAP_COPY, ADO_GROUP_COPY, AGENTS, PROVIDER_MEMBER, PROVIDERS } from "./workspace-providers-copy";
+import { ADO_CAP_COPY, ADO_GROUP_COPY, AGENTS, MEMBER_DRIVES, PROVIDER_MEMBER, PROVIDERS } from "./workspace-providers-copy";
 import { ADO_CAPABILITY_GROUPS } from "./ado-capabilities";
 import { MEMBER } from "./governance-copy";
 import { DRIVES, DRIVE_MEMBER, DRIVE_RUN } from "./user-drives-copy";
@@ -207,5 +207,13 @@ describe("ADO_CAP_COPY — one name and consequence per grantable capability", (
 
   it("gives every capability group a name and a lead", () => {
     expect(Object.keys(ADO_GROUP_COPY).sort()).toEqual(ADO_CAPABILITY_GROUPS.map((g) => g.id).sort());
+  });
+});
+
+// The two member-drive Storage controls sit outside the doc tables, so their
+// words are pinned here.
+describe("MEMBER_DRIVES — the Storage tab's member-drive controls", () => {
+  it("carries the two labels as the design gives them", () => {
+    expect(MEMBER_DRIVES).toEqual({ FIELD_ENABLED: "Let people create their own drives", FIELD_MAX: "Drives per person" });
   });
 });

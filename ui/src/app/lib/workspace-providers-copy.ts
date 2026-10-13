@@ -350,6 +350,14 @@ export const PROVIDERS_EXTRA = {
     `Saved, but ${refs.length === 1 ? "this secret isn't" : "these secrets aren't"} stored: ${refs.join(", ")}.`,
 } as const;
 
+// MEMBER_DRIVES — the two Storage controls for people creating their own drives
+// (site config storage.user_drive.member_create). Not in the frozen §7 doc
+// tables, so a separate export beside them, as PROVIDERS_EXTRA is.
+export const MEMBER_DRIVES = {
+  FIELD_ENABLED: "Let people create their own drives",
+  FIELD_MAX: "Drives per person",
+} as const;
+
 // ADO_ENTRA_EDITOR / ADO_GROUP_COPY / ADO_CAP_COPY — the Azure DevOps row's
 // Entra section (entra-editor.tsx), transcribed from the approved G1 mock's
 // strings table. Not in the frozen §7 doc tables, so separate exports, the

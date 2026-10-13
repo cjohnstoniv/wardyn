@@ -15,6 +15,7 @@ import {
   foldAutonomyRubric,
   GOVERNANCE,
   LIMITS_CHIP,
+  MEMBER_DRIVE_DOOR,
   MEMBER,
   POSITIONING,
   RUBRIC,
@@ -573,3 +574,10 @@ describe("DELIVERY — §7.14", () => {
 function resolve0(rel: string): string {
   return resolve(process.cwd(), "src/app", rel);
 }
+
+// The member-drive door sits outside the doc tables, so its label is pinned here.
+describe("MEMBER_DRIVE_DOOR", () => {
+  it("is the design's label", () => {
+    expect(MEMBER_DRIVE_DOOR.LABEL).toBe("Can't create drives");
+  });
+});
