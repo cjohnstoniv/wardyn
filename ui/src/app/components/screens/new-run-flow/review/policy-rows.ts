@@ -72,7 +72,7 @@ export function policyRows(draft: NewRunDraft, pre: ReviewPreflight | null, prev
 
   const hosts = access?.hosts.length ?? preview?.spec.allowed_domains?.length;
   if (hosts !== undefined) {
-    rows.push({ id: "network", label: NR_REVIEW.POLICY_NETWORK, value: NR_REVIEW.POLICY_HOSTS(hosts), detail: joined(NR_REVIEW.PROV_SOURCE_POLICY, preview?.source.name) });
+    rows.push({ id: "network", label: NR_REVIEW.POLICY_NETWORK, value: hosts === 1 ? NR_REVIEW.POLICY_HOST_ONE : NR_REVIEW.POLICY_HOSTS(hosts), detail: joined(NR_REVIEW.PROV_SOURCE_POLICY, preview?.source.name) });
   }
 
   const kinds = (access?.credentials ?? []).map((c) => access?.rows.find((r) => r.id === c.row)?.name).filter((n): n is string => !!n);
