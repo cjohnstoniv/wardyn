@@ -327,8 +327,9 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	// read for the whole page: the console renders "not an enabled git provider"
 	// from the server's answer rather than re-implementing the match rule (it
 	// mirrors only the host union, and a second spelling of admission is exactly
-	// how a UI comes to claim a repo is fine while every run refuses it). nil in
-	// legacy open mode, where the key is absent from every row.
+	// how a UI comes to claim a repo is fine while every run refuses it). In
+	// legacy open mode the stamp sets clone_target alone, and `admitted` is
+	// absent from every row.
 	stamp := s.admissionStamper(r.Context())
 	// #1267: one availability stamper for the whole page — the same shared
 	// capBatch every row's call asks through, installed by withCapBatch above.
