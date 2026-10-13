@@ -98,10 +98,12 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
     setSource(specToSource(parsed.value as Record<string, unknown>, as), as);
   };
 
+  const errorsFound = (n: number) => (n === 1 ? copy.ANNOUNCE_ERRORS_ONE : copy.ANNOUNCE_ERRORS(n));
+
   const refuse = (id: number, reasons: string[]) => {
     if (id !== check.current.id) return;
     setLines(reasons);
-    announce(copy.ANNOUNCE_ERRORS(reasons.length));
+    announce(errorsFound(reasons.length));
   };
 
   /** Checks the text through the server's door; the document it accepted, or undefined. */
@@ -120,7 +122,7 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
       if (answer.diagnostics.length > 0) {
         const placed = placeDiagnostics(source, as, answer.diagnostics);
         dispatch({ type: "doc", doc: { format: as, text: source, diagnostics: placed, validated: false } });
-        announce(copy.ANNOUNCE_ERRORS(new Set(placed.map((d) => d.text)).size));
+        announce(errorsFound(new Set(placed.map((d) => d.text)).size));
         return undefined;
       }
       dispatch({ type: "doc", doc: buffer(source, as, { diagnostics: [], validated: true }) });

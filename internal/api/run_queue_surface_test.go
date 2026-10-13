@@ -7,7 +7,10 @@ import (
 	"encoding/json"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -81,5 +84,48 @@ func TestPoolSlotsWireIsCountsOnly(t *testing.T) {
 				t.Fatalf("slots.%s = %T %v, want a number", k, v, v)
 			}
 		}
+	}
+}
+
+// A pool's capacity is numbers only, and never says whose runs they are: the field set is fixed, and
+// every value under it is a number.
+func TestPoolCapacityWireIsCountsOnly(t *testing.T) {
+	l := &types.RunnerLimits{RunsAtOnce: 2, Total: types.RunnerAmounts{CPUMillis: 4000, MemoryMiB: 8192, DiskMiB: 10240},
+		PerRun: types.RunnerAmounts{CPUMillis: 2000, MemoryMiB: 4096, DiskMiB: 5120}}
+	id := uuid.New()
+	row := store.RunnerPoolCatalogueRow{Pool: types.RunnerPool{State: types.RunnerPoolActive}, ExecutorIDs: []string{"docker"}, OwnRunnerIDs: []uuid.UUID{id}}
+	fits := map[string]runnerFit{"docker": {limits: l, used: types.RunnerTally{Runs: 1, CPUMillis: 2000}}, id.String(): {limits: l}}
+	raw, err := json.Marshal((&Server{}).poolCapacity(row, fits, func(string) bool { return true }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys map[string]any
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for k, v := range keys {
+		got = append(got, k)
+		var nums []any
+		switch v := v.(type) {
+		case map[string]any:
+			for _, n := range v {
+				nums = append(nums, n)
+			}
+		default:
+			nums = append(nums, v)
+		}
+		for _, n := range nums {
+			if _, ok := n.(float64); !ok {
+				t.Fatalf("capacity.%s holds %T %v, want numbers only", k, n, n)
+			}
+		}
+	}
+	slices.Sort(got)
+	if want := []string{"available", "in_use", "largest_per_run", "runners", "runners_online", "total"}; !slices.Equal(got, want) {
+		t.Fatalf("capacity fields = %v, want %v", got, want)
+	}
+	if !strings.Contains(string(raw), `"in_use":{"runs":1,"cpu_millis":2000`) || !strings.Contains(string(raw), `"total":{"runs":4,"cpu_millis":8000`) {
+		t.Fatalf("capacity = %s, want both runners summed", raw)
 	}
 }

@@ -151,7 +151,7 @@ func TestPoolListNeverNamesAnotherPersonsRunner(t *testing.T) {
 		}
 	}
 	for _, l := range got.Limits {
-		if l.CPUMillis.CapSource == types.LimitSourceRunnerCapacity {
+		if l.CPUMillis.CapSource == types.LimitSourceRunner {
 			t.Errorf("another person's runner is counted as capacity: %+v", l.CPUMillis)
 		}
 	}
@@ -160,13 +160,16 @@ func TestPoolListNeverNamesAnotherPersonsRunner(t *testing.T) {
 	e.online[mine] = true
 	e.runner.runnerFacts[mine.String()] = runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1, types.CC2},
 		CapacityAdvertised: true, CPUMillisMax: 1000, MemoryMiBMax: 2048}
+	if _, err := e.pool.Exec(context.Background(), `UPDATE runners SET run_cpu_millis = 1000, run_memory_mib = 2048 WHERE id = $1`, mine); err != nil {
+		t.Fatal(err)
+	}
 	list, _ = e.list(e.person, "")
 	got = entryOf(t, list, home.ID)
 	if got.Availability != client.RunnerPoolAvailable || len(got.MyRunners) != 1 || !got.MyRunners[0].Online {
 		t.Fatalf("with the caller's runner online: %+v", got)
 	}
 	for _, l := range got.Limits {
-		if l.CPUMillis.Cap.Value != 1000 || l.CPUMillis.CapSource != types.LimitSourceRunnerCapacity {
+		if l.CPUMillis.Cap.Value != 1000 || l.CPUMillis.CapSource != types.LimitSourceRunner {
 			t.Errorf("%s cpu = %+v, want the caller's own 1000 from runner_capacity", l.RunType, l.CPUMillis)
 		}
 	}

@@ -34,7 +34,7 @@ export function WardynWordmark({
         <span
           className={cn(
             "text-base font-semibold tracking-tight text-foreground",
-            compact === "sm" && "hidden sm:inline",
+            compact === "sm" && "sr-only sm:not-sr-only",
           )}
         >
           Wardyn

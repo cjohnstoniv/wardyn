@@ -53,5 +53,5 @@ func (s *Server) handleRunnerClaim(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), owner, placement.ActionRunnerClaim,
 		claimed.ID.String(), "success", mustJSON(map[string]any{"fingerprint": claimed.KeyFingerprint})))
-	writeJSON(w, http.StatusOK, types.RunnerRegistration{RunnerID: claimed.ID, Fingerprint: claimed.KeyFingerprint, State: claimed.State, OrgURLSHA256: claimed.OrgURLSHA256, MaxRuns: claimed.MaxRuns})
+	writeJSON(w, http.StatusOK, types.RunnerRegistration{RunnerID: claimed.ID, Fingerprint: claimed.KeyFingerprint, State: claimed.State, OrgURLSHA256: claimed.OrgURLSHA256, Limits: claimed.Limits})
 }
