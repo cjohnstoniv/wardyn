@@ -817,6 +817,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Recovery verbs: manifest and cast reads refuse FIFOs without hanging, refusals name the verb that refused, source
   ports outside 1 to 65535 are refused, the recorded host is lower case, and `-recovery-rehearse` runs behind the
   boot transport.
+- remove_secrets now decides whether the caller is an operator by the operator check itself rather than by an empty
+  owner name (defence in depth; no known caller reached the old gap).
 
 
 ## [0.8.9] — 2026-10-09
