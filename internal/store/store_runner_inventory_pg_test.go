@@ -272,16 +272,22 @@ func TestPG_LapsedUnclaimedRunnerIsDeletedAndItsKeyRegistersAgain(t *testing.T) 
 	}
 }
 
+// inventoryRun is a live run on rn, seeded past placement's runs-at-once admission: the inventory tests
+// pin what a runner reports, up to 1001 runs, more than max_runs allows on one runner.
 func inventoryRun(t *testing.T, st store.PG, rn types.Runner) types.AgentRun {
 	t.Helper()
 	r := newRun(types.RunRunning)
-	r.CreatedBy, r.Placement, r.RunnerID = rn.Owner, types.PlacementLocal, &rn.ID
+	r.CreatedBy, r.Placement = rn.Owner, types.PlacementLocal
 	r.SandboxRef = "runner:" + rn.ID.String() + "/" + r.ID.String()
 	r.EvidenceSource = types.RunEvidenceRunnerAsserted
 	r, err := st.CreateRun(t.Context(), r)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.Pool.Exec(t.Context(), `UPDATE agent_runs SET runner_id = $2 WHERE id = $1`, r.ID, rn.ID); err != nil {
+		t.Fatal(err)
+	}
+	r.RunnerID = &rn.ID
 	return r
 }
 
