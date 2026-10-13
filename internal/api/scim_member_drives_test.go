@@ -138,3 +138,26 @@ func TestSCIMStatusKeepsALiveMemberDriveAfterTheAdminDriveIsReclaimed(t *testing
 		t.Errorf("drives = %+v, want Pat's created Notes still listed once the granted one is reclaimed", body.Drives)
 	}
 }
+
+// TestSCIMPurgeRecordsAnEmptyGrantedListAsEmptyNotNull: a person who only created
+// drives has no allocated ones. The row must say so with [], because the status
+// reads a missing or null granted_drives as a row from before the field existed
+// and would then take the created drive's name for an allocated one.
+func TestSCIMPurgeRecordsAnEmptyGrantedListAsEmptyNotNull(t *testing.T) {
+	st := newSCIMCovStore()
+	l := scimCovSeedPurgee(st)
+	mine := scimMemberDrive("sub-pat", "Notes")
+	st.drives, st.grants = []types.UserDriveListItem{mine}, nil
+	e := newSCIMCovEnv(t, st)
+
+	if w := e.scim(http.MethodDelete, "/scim/v2/Users/"+l.id.String(), ""); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE = %d %s, want 204", w.Code, w.Body.String())
+	}
+	d := e.auditData(e.purgeRow())
+	if granted, ok := d["granted_drives"].([]any); !ok || len(granted) != 0 {
+		t.Errorf("granted_drives = %#v, want [] (present and empty, never null)", d["granted_drives"])
+	}
+	if got := fmt.Sprint(d["drives"]); got != "[Notes]" {
+		t.Errorf("drives = %s, want the created drive's name", got)
+	}
+}

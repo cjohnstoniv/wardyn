@@ -79,6 +79,9 @@ func (s *memberDriveStore) CreateMemberDrive(_ context.Context, d types.UserDriv
 }
 
 func (s *memberDriveStore) ListMemberDrivesOf(_ context.Context, owner string) ([]types.UserDrive, error) {
+	if owner == "" {
+		return nil, errors.New("store: a member drive needs an owner") // as the store refuses it
+	}
 	return s.owned(owner), nil
 }
 
