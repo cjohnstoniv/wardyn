@@ -90,6 +90,46 @@ func TestPGUploadRecording_ReadDeadlineEndsTricklingUpload(t *testing.T) {
 	}
 }
 
+// The read window is one window from admission, not one per Read: a body that
+// keeps trickling a byte every 100 ms still fails at the 200 ms deadline and
+// stores nothing.
+func TestPGUploadRecording_ReadDeadlineEndsSlowTrickle(t *testing.T) {
+	shortenUploadWindow(t)
+	store := recording.NewPGStore(throwawayPGPool(t))
+	h := newRecordingHarness(t, store, nil)
+	srv := httptest.NewServer(h.srv.Handler())
+	defer srv.Close()
+	run := uuid.New()
+	body, writer := io.Pipe()
+	stop := make(chan struct{})
+	trickled := make(chan struct{})
+	go func() {
+		defer close(trickled)
+		tick := time.NewTicker(100 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				if _, err := writer.Write([]byte("x")); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	code := boundedPut(t, http.DefaultClient, srv.URL+"/api/v1/internal/recordings/"+run.String(), h.mintRunToken(t, run), body, 1<<20)
+	close(stop)
+	_ = writer.Close()
+	<-trickled
+	if code != http.StatusInternalServerError {
+		t.Fatalf("trickling upload = %d, want the read-error 500", code)
+	}
+	if _, err := store.OpenCast(t.Context(), run.String()); !errors.Is(err, recording.ErrNotFound) {
+		t.Fatalf("trickling upload stored a cast: %v", err)
+	}
+}
+
 // readingStore reports each upload once the store has admitted it and starts
 // reading its body.
 type readingStore struct {
