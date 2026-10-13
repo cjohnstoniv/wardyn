@@ -517,6 +517,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   pool's capacity, your allowance, waiting, run types and per-run limits (with where each limit comes from), and the
   three barriers with the reason one is unavailable. Schedule For Later and Application / server are marked Coming
   soon.
+- `wardyn workspace build <workspace-id>` starts a workspace's image build, rebuilds it from fresh inputs with
+  `--refresh`, and prints the current state with `--status` (`--json` for the raw view, including whether the image
+  is reproducible). The Go SDK adds `BuildWorkspace` and `GetWorkspaceBuild`.
 
 ### Changed
 
