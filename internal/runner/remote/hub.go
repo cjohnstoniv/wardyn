@@ -205,6 +205,10 @@ func (h *Hub) serveClaimed(ctx context.Context, conn runnerwire.Conn, row types.
 	return peer.Err()
 }
 
+// errFreshSessionRequired ends a resumed session that an action was queued for after its PENDING read:
+// only a fresh session carries PENDING.
+var errFreshSessionRequired = errors.New("runner: an action was queued for this runner; a fresh session carries it")
+
 // storedRowRecheck bounds how long a session outlives a revocation committed
 // through another replica, whose Revoke cannot reach this process's sessions.
 var storedRowRecheck = runnerwire.PingInterval
@@ -288,7 +292,15 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 		return peer, err
 	}
 	if resumed {
-		if err = a.Link.Ready(peer); err == nil && a.Ready != nil {
+		err = a.Link.Ready(peer)
+		// An action queued after the PENDING read above is not carried by a resumed session: end it, so
+		// the runner's next one is fresh and delivers it.
+		if err == nil {
+			if open, perr := a.Pending(ctx); perr != nil || len(open) != 0 {
+				err = errors.Join(errFreshSessionRequired, perr)
+			}
+		}
+		if err == nil && a.Ready != nil {
 			a.Ready()
 		}
 	} else {

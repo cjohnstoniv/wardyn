@@ -299,6 +299,9 @@ func (s *Substrate) teardown(ctx context.Context, method string, kind types.Runn
 	if qerr := s.opts.Queue(ctx, kind, ref); qerr != nil {
 		return errors.Join(err, qerr)
 	}
+	if l, ok := s.t.(*Link); ok {
+		l.requireFresh(ctx)
+	}
 	return runner.ErrPendingOnRunner
 }
 

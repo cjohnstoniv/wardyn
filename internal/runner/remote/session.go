@@ -6,6 +6,7 @@ package remote
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
@@ -65,6 +66,25 @@ func (l *Link) Close() {
 	l.mu.Unlock()
 	if p != nil {
 		p.Close()
+	}
+}
+
+// requireFresh ends a session that is up but not yet READY. The runner learns of a queued action only
+// from a fresh session's PENDING, sent once at the session's start, so an action queued while the
+// session finishes its inventory and replay would otherwise wait for the next reconnect, however far
+// off. A link with no live peer has nothing to end: its next session reads the queue.
+func (l *Link) requireFresh(ctx context.Context) {
+	l.mu.Lock()
+	p, ready := l.peer, l.ready
+	l.mu.Unlock()
+	if p == nil || ready || !p.Online() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	defer p.Close()
+	if payload, err := runnerwire.Marshal(runnerwire.Reason{Reason: "fresh_session_required"}); err == nil {
+		_ = p.Send(ctx, runnerwire.Frame{Type: runnerwire.TypeGoaway, Payload: payload})
 	}
 }
 
