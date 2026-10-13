@@ -16,7 +16,7 @@ export type DocumentStatus =
   | { kind: "valid" }
   | { kind: "issues"; count: number; lines: readonly string[] };
 
-export function ValidationPanel({ id, status, copy }: { id: string; status: DocumentStatus; copy: Pick<typeof NR_DOCUMENT, "READY" | "VALID" | "ISSUES"> }) {
+export function ValidationPanel({ id, status, copy }: { id: string; status: DocumentStatus; copy: Pick<typeof NR_DOCUMENT, "READY" | "VALID" | "ISSUES" | "ISSUES_ONE"> }) {
   // Make's .validation-panel (snapshot index.css:397-402): a bordered box, a check on the ready line, an alert on the count.
   return (
     <div id={id} data-testid="validation-panel" data-status={status.kind} className="flex flex-col gap-1.5 rounded-lg border border-border bg-card px-3.5 py-3 text-xs">
