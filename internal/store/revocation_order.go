@@ -28,7 +28,7 @@ type batcher interface {
 func ReadRevocationSeq(ctx context.Context, q batcher) (int64, error) {
 	b := &pgx.Batch{}
 	b.Queue(`SELECT pg_advisory_xact_lock_shared($1, 0)`, db.RevocationOrderLockClass)
-	b.Queue(`SELECT last_value FROM oidc_revocation_seq`)
+	b.Queue(`SELECT oidc_revocation_position()`) // SECURITY DEFINER (0194): an app role holds no privilege on the sequence
 	br := q.SendBatch(ctx, b)
 	defer br.Close()
 	if _, err := br.Exec(); err != nil {

@@ -59,12 +59,48 @@ UPDATE ssh_public_keys t SET rev_seq = COALESCE((SELECT max(r.seq) FROM oidc_ses
 -- through a rolling upgrade, still orders its cut. Writers that know about it also take the advisory
 -- lock (RevocationOrderLockClass) before the statement; this trigger is what makes the draw
 -- impossible to forget.
-CREATE OR REPLACE FUNCTION oidc_revocation_stamp() RETURNS trigger LANGUAGE plpgsql AS $$
+--
+-- Both functions run as their OWNER, the role that ran this migration and owns the sequence, as
+-- audit_append does (0057, 0111): a split-role install's app role holds table and function privileges
+-- (docs/OPERATIONS.md) and nothing on sequences, and nextval() or a read of last_value in an ordinary
+-- function is checked against the caller. Neither widens what the caller may do: the trigger function
+-- runs only as a trigger, on a write the caller's own table privileges allowed, and
+-- oidc_revocation_position() returns the one number every issuer records anyway. The position function
+-- keeps PostgreSQL's default EXECUTE for PUBLIC, so an app role created at any time can call it with no
+-- grant of its own. search_path is pinned to the schema the tables are in, then pg_temp last, so no
+-- caller's schema can shadow the sequence.
+DO $mig$
+DECLARE
+    ns text;
+BEGIN
+    SELECT n.nspname INTO ns
+      FROM pg_catalog.pg_class c
+      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     WHERE c.oid = 'oidc_session_revocations'::regclass;
+
+    EXECUTE format($fn$
+CREATE OR REPLACE FUNCTION %1$I.oidc_revocation_stamp() RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, %1$I, pg_temp
+AS $body$
 BEGIN
     NEW.seq := nextval('oidc_revocation_seq');
     RETURN NEW;
 END;
-$$;
+$body$
+$fn$, ns);
+
+    -- The position a credential issued now records (store.ReadRevocationSeq).
+    EXECUTE format($fn$
+CREATE OR REPLACE FUNCTION %1$I.oidc_revocation_position() RETURNS bigint
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, %1$I, pg_temp
+AS $body$ SELECT last_value FROM oidc_revocation_seq $body$
+$fn$, ns);
+END
+$mig$;
 
 DROP TRIGGER IF EXISTS oidc_session_revocations_stamp ON oidc_session_revocations;
 CREATE TRIGGER oidc_session_revocations_stamp BEFORE INSERT OR UPDATE ON oidc_session_revocations

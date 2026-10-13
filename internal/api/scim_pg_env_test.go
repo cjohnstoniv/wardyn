@@ -260,7 +260,12 @@ type scimEnv struct {
 // before it is built.
 func newSCIMEnv(t *testing.T, shape ...func(*Config)) *scimEnv {
 	t.Helper()
-	pool := throwawayPGPool(t)
+	return newSCIMEnvOn(t, throwawayPGPool(t), shape...)
+}
+
+// newSCIMEnvOn is newSCIMEnv over pool, a migrated database the instances serve from.
+func newSCIMEnvOn(t *testing.T, pool *pgxpool.Pool, shape ...func(*Config)) *scimEnv {
+	t.Helper()
 	id, err := age.GenerateX25519Identity()
 	if err != nil {
 		t.Fatal(err)
