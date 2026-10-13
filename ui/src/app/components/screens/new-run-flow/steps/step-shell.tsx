@@ -7,6 +7,9 @@
 // eyebrow, heading, lede, Back on the left, the one primary action on the right,
 // and Ctrl/Cmd+Enter for that action. Strings come from the caller's copy module.
 // The page column (width and top padding) is the route's; see new-run-route.tsx.
+// Geometry follows Make (snapshot index.css): rail 50 px above the header, 32 px at
+// <=520 px (:124, :528); teal eyebrow (:91); h1 clamp(28px, 4vw, 42px) at regular
+// weight (:69), its own size so --text-display elsewhere stays put; footer rule as .sticky-actions (:383).
 
 import * as React from "react";
 import { modalLayerOpen } from "../../../../lib/modal-layer-open";
@@ -77,14 +80,14 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
 
   return (
     <section className="flex flex-col gap-6">
-      {progress && <div className="mb-[26px]"><FlowProgress steps={progress.steps} label={progress.label} /></div>}
+      {progress && <div className="mb-[26px] max-[520px]:mb-2"><FlowProgress steps={progress.steps} label={progress.label} /></div>}
       <header className="flex max-w-[680px] flex-col gap-2.5">
-        {eyebrow && <p className="label-eyebrow mb-1">{eyebrow}</p>}
-        <h1 ref={heading} tabIndex={-1} className="text-display font-semibold tracking-[-0.02em] outline-none">{title}</h1>
+        {eyebrow && <p className="mb-1 text-meta font-semibold uppercase tracking-[0.12em] text-primary">{eyebrow}</p>}
+        <h1 ref={heading} tabIndex={-1} className="text-[clamp(28px,4vw,42px)] leading-[1.08] font-normal tracking-[-0.04em] outline-none">{title}</h1>
         {lede && <p className="max-w-[620px] text-muted-foreground">{lede}</p>}
       </header>
       {children}
-      <footer className="flex items-center justify-between gap-3">
+      <footer className="mt-1 flex items-center justify-between gap-3 border-t border-border pt-[18px]">
         {back ? <Button type="button" variant="ghost" onClick={back.onBack}>{back.label}</Button> : <span />}
         <Button type="button" disabled={primary.disabled} aria-describedby={primary.describedBy} onClick={() => activate.current()}>
           {primary.label}
