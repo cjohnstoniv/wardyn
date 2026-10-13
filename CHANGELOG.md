@@ -945,6 +945,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Tools and access no longer shows "Nothing else to set up" when the policy preview failed or has not answered: it
   shows the server's sentence with "Check again". A run with no harness no longer gets a blank harness row there.
   The run document says "1 issue" in the singular.
+- New Run, Files: the Subfolder field and the "Starts here" line no longer keep a subfolder typed for an earlier
+  start after that start was replaced or removed; the next start begins at its own top, as the run is sent. A drive
+  list that fails to load no longer closes an edit in progress.
 
 
 ## [0.8.9] — 2026-10-09
