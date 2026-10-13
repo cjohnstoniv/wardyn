@@ -650,9 +650,11 @@ func (s *Server) laneVetoedForLauncher(ctx context.Context, runID uuid.UUID,
 }
 
 // admissionStamper is the per-request projection that fills WorkspaceSource's
-// server-owned `admitted` flag, or nil in legacy open mode — where the key is
-// ABSENT from every response, which is what keeps an upgraded install's
-// workspace documents byte-identical.
+// server-owned `admitted` flag and `clone_target`. In legacy open mode it
+// fills `clone_target` alone: `admitted` stays ABSENT from every response
+// there, which is what keeps an upgraded install's provider reading as it was,
+// while where a clone lands is a fact of the locator and needs no provider row
+// (New Run's Files step shows it as the mount path).
 //
 // Fed by the server, never mirrored by the console: the match rule has exactly
 // one spelling (admitRepoURL) and the UI already mirrors only the host union.
@@ -663,17 +665,23 @@ func (s *Server) admissionStamper(ctx context.Context) func(types.Workspace) typ
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil || !providersConfigured(sc) {
-		return nil
+		return func(ws types.Workspace) types.Workspace { return stampSources(nil, ws) }
 	}
 	return func(ws types.Workspace) types.Workspace { return stampSourceAdmission(sc, ws) }
 }
 
 // stampSourceAdmission sets `admitted` and `clone_target` on every REPO source
 // of one workspace.
+func stampSourceAdmission(sc types.SiteConfig, ws types.Workspace) types.Workspace {
+	return stampSources(&sc, ws)
+}
+
+// stampSources sets `clone_target` on every REPO source of one workspace, and
+// `admitted` too when sc is given.
 // local_dir and ephemeral sources are left alone: they clone nothing, and a
 // flag on them would invite the console to render a provider state for a
 // directory.
-func stampSourceAdmission(sc types.SiteConfig, ws types.Workspace) types.Workspace {
+func stampSources(sc *types.SiteConfig, ws types.Workspace) types.Workspace {
 	// Clone before mutating, redactWorkspaceForRead's rule and for its reason:
 	// the store's row shares its slices with everything else that read it in
 	// this request.
@@ -682,8 +690,10 @@ func stampSourceAdmission(sc types.SiteConfig, ws types.Workspace) types.Workspa
 		if ws.Sources[i].Type != types.WorkspaceSourceTypeRepo {
 			continue
 		}
-		_, admitted := providerFor(sc, repoCloneURL(ws.Sources[i].Source))
-		ws.Sources[i].Admitted = &admitted
+		if sc != nil {
+			_, admitted := providerFor(*sc, repoCloneURL(ws.Sources[i].Source))
+			ws.Sources[i].Admitted = &admitted
+		}
 		ws.Sources[i].CloneTarget, _ = repoCloneTarget(types.WorkspaceRepo{Repo: ws.Sources[i].Source, Target: ws.Sources[i].Target})
 	}
 	return ws

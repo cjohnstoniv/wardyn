@@ -16,7 +16,7 @@ vi.mock("../../../lib/use-workspace-list", () => ({
 }));
 
 import { RunsComposer } from "./runs-composer";
-import type { RunPrefill } from "../new-run/wizard-types";
+import type { RunPrefill } from "../new-run-flow/draft/clone-prefill";
 
 function LocationProbe() {
   const state = useLocation().state as { prefill?: RunPrefill } | null;

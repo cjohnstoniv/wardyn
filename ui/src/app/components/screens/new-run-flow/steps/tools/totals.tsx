@@ -7,8 +7,10 @@
 // server's `access` block. A host is Requested until the server has answered
 // this exact body; only then does its verdict show.
 
+import { AdoLaunchNote, AdoRunTokenLine, adoLaunchNoteKind } from "../../../../wardyn/ado-run-token-line";
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
+import type { SCMAccessPAT } from "../../../../../lib/types/ado-pat";
 import type { AccessCredential, AccessFacts, AccessUnlisted } from "../../../../../lib/types/new-run-access";
 import { hostBadge, rowLabel, type HarnessNames, type HostBadge } from "../../lenses/tools-lens";
 
@@ -66,9 +68,29 @@ export function unlistedSentences(u: AccessUnlisted, answered: boolean): string[
 export const renewalHolds = (credentials: readonly AccessCredential[]): boolean =>
   !credentials.some((c) => c.delivery === "sandbox_short_lived" && !c.renewed);
 
-export function Totals({ access, answered, names: harnessNames, providers }: { access: AccessFacts | undefined; answered: boolean; names?: HarnessNames; providers?: ReadonlyMap<string, string> }) {
+/** The credential a repository on the Azure DevOps sign-in lane brings (the server's kind for it). */
+const ADO_SIGN_IN = "ado_signin";
+
+/**
+ * What the Credentials total says of this run's Azure DevOps credential when the person's row creates a
+ * token for each run: what that token carries, and the door when they have yet to connect.
+ */
+export interface AdoTokenFacts {
+  /** The caller's own Azure DevOps answer (the shell's setup status). */
+  access: SCMAccessPAT | undefined;
+  /** The run's policy capabilities; the row's default profile stands in when it names none. */
+  policyCaps: unknown;
+  connecting: boolean;
+  onConnect: () => void;
+  blockedUrl?: string | null;
+  onFallbackClick?: () => void;
+}
+
+export function Totals({ access, answered, names: harnessNames, providers, ado }: { access: AccessFacts | undefined; answered: boolean; names?: HarnessNames; providers?: ReadonlyMap<string, string>; ado?: AdoTokenFacts }) {
   const names = new Map((access?.rows ?? []).map((r) => [r.id, rowLabel(r, harnessNames)]));
   const rowName = new Map((access?.rows ?? []).map((r) => [r.id, r.name]));
+  // Only a run that carries the Azure DevOps credential gets a token, so only its row says so.
+  const adoToken = ado?.access?.token_mode === "minted_pat" && !!access?.credentials.some((c) => c.kind === ADO_SIGN_IN) ? ado : undefined;
   return (
     <section aria-label={NR_TOOLS.TOTALS_ARIA} className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))]">
       <div className={TOTAL_CLASS}>
@@ -104,9 +126,17 @@ export function Totals({ access, answered, names: harnessNames, providers }: { a
                   {names.has(c.row) && <span className="text-sm text-muted-foreground">{NR_TOOLS.FOR_ROW(names.get(c.row) ?? "")}</span>}
                 </span>
                 {delivery && <Chip className="whitespace-normal">{delivery}</Chip>}
+                {adoToken && c.kind === ADO_SIGN_IN && (
+                  <AdoRunTokenLine className="basis-full text-sm text-muted-foreground" policyCaps={adoToken.policyCaps} defaults={adoToken.access?.default_profile} />
+                )}
               </li>
             );
           })}
+          {adoToken && adoLaunchNoteKind(adoToken.access) && (
+            <li>
+              <AdoLaunchNote access={adoToken.access} connecting={adoToken.connecting} onConnect={adoToken.onConnect} blockedUrl={adoToken.blockedUrl} onFallbackClick={adoToken.onFallbackClick} />
+            </li>
+          )}
           {answered && access?.credentials.length === 0 && <li className="text-sm text-muted-foreground">{NR_TOOLS.NO_CREDENTIALS}</li>}
         </ul>
         {access && renewalHolds(access.credentials) && <p className={POLICY_CLASS}>{NR_TOOLS.CREDENTIALS_POLICY}</p>}

@@ -166,7 +166,7 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
         // internal/api/runs_dispatch_llm.go), silently widening egress to
         // the model host and injecting a live credential proxy-side. Only the
         // harness demo (needsModel) actually wants a model call.
-        const run = await api.createRun({
+        const run = await api.createRunWire({
           agent: "claude-code",
           interactive: true,
           inline_policy: demo.policy,
