@@ -8,6 +8,7 @@ package docker
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
@@ -48,6 +49,43 @@ func TestProveRunnerSandboxAcceptsOnlyThisRunnersWardynContainers(t *testing.T) 
 			err := newTestDriver(f).ProveRunnerSandbox(t.Context(), tc.ref, runnerID)
 			if (err == nil) != tc.ok {
 				t.Fatalf("proof = %v, want ok = %v", err, tc.ok)
+			}
+		})
+	}
+}
+
+func TestSweepOrphanedSandboxesRemovesOnlyThisRunnersSandboxes(t *testing.T) {
+	runnerID := uuid.NewString()
+	mine, theirs, unlabelled := uuid.New(), uuid.New(), uuid.New()
+	old := time.Now().Add(-time.Hour).Unix()
+	items := []container.Summary{
+		{ID: agentContainerName(mine), Created: old, Labels: wardynLabels(mine, componentAgent, map[string]string{runner.LabelRunnerID: runnerID})},
+		{ID: agentContainerName(theirs), Created: old, Labels: wardynLabels(theirs, componentAgent, map[string]string{runner.LabelRunnerID: uuid.NewString()})},
+		{ID: agentContainerName(unlabelled), Created: old, Labels: wardynLabels(unlabelled, componentAgent, nil)},
+	}
+	for _, tc := range []struct {
+		name     string
+		runnerID string
+		swept    uuid.UUID
+	}{
+		{name: "runner", runnerID: runnerID, swept: mine},
+		{name: "local install", runnerID: "", swept: unlabelled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeDocker()
+			for _, id := range []uuid.UUID{mine, theirs, unlabelled} {
+				seedSandbox(f, id)
+			}
+			f.listItems = items
+			d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev", RunnerID: tc.runnerID})
+			n, err := d.SweepOrphanedSandboxes(t.Context(), 10*time.Minute, func(uuid.UUID) bool { return true })
+			if err != nil || n != 1 {
+				t.Fatalf("swept %d: %v", n, err)
+			}
+			for _, id := range []uuid.UUID{mine, theirs, unlabelled} {
+				if c := f.containers[agentContainerName(id)]; (c != nil && c.removed) != (id == tc.swept) {
+					t.Fatalf("run %s removed = %v", id, c != nil && c.removed)
+				}
 			}
 		})
 	}

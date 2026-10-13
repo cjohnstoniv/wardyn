@@ -57,7 +57,7 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 			return old.Result, m.save()
 		}
 	}
-	r, err := m.pendingRun(a)
+	r, err := m.pendingRun(ctx, a)
 	if err != nil {
 		return runnerwire.ActionResult{}, err
 	}
