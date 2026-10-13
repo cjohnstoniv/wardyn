@@ -59,6 +59,16 @@ func (l *authFailedLimiter) allow(now time.Time) bool {
 	return true
 }
 
+// authFailedAllowed charges one refusal's audit row, written before any caller has proved who it is, to
+// authFailedLimiter, and counts a dropped row in the same suppressed series as every other drop.
+func (s *Server) authFailedAllowed() bool {
+	if s.authFailedLimiter.allow(s.cfg.Now()) {
+		return true
+	}
+	s.metrics.authFailedSuppressedInc()
+	return false
+}
+
 // authFailedKey is what makes two auth.fail rows "identical" for coalescing:
 // the boundary that refused, its bounded reason, and the request path.
 //

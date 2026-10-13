@@ -382,6 +382,9 @@ func sshRoleFresh(checkedAt *time.Time, now time.Time, ttl time.Duration) bool {
 }
 
 func (s *Server) sshAuditAuthFailure(ctx context.Context, conn ssh.ConnMetadata, runID *uuid.UUID, actor, fingerprint, reason string) {
+	if !s.authFailedAllowed() {
+		return
+	}
 	ev := s.auditEvent(runID, types.ActorHuman, actor, "ssh.authenticate", fingerprint, "failure",
 		mustJSON(map[string]any{"reason": reason}))
 	ev.SourceIP = conn.RemoteAddr().String()

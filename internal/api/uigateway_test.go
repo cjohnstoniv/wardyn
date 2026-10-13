@@ -1315,3 +1315,53 @@ func TestUIGateway_SessionCookieIsSignedAndBounded(t *testing.T) {
 		t.Fatal("a cookie signed under another key was accepted")
 	}
 }
+
+// TestUIGateway_UnauthenticatedRefusalsAreRateBounded: the refusals that happen before any ticket
+// proves who is asking (a ticket that does not resolve, one with no binding cookie, an enter on the
+// wrong host) write their ui.authorize/denied row only within the shared auth-failure burst, and the
+// drops are counted in wardyn_auth_failed_suppressed_total. The harness clock is not advanced.
+func TestUIGateway_UnauthenticatedRefusalsAreRateBounded(t *testing.T) {
+	const probes = 20
+	for name, probe := range map[string]func(h *uiHarness){
+		"invalid ticket": func(h *uiHarness) {
+			h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {"deadbeef"}})
+		},
+		"ticket not bound": func(h *uiHarness) {
+			q := url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {"deadbeef"}}
+			h.gateway.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil))
+		},
+		"wrong host": func(h *uiHarness) {
+			q := url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {"deadbeef"}}
+			req := h.bound(httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil), q)
+			req.Host = "run-" + uuid.New().String() + ".ui.example.com"
+			h.gateway.ServeHTTP(httptest.NewRecorder(), req)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newUIHarness(t, okBackend())
+			if name == "wrong host" {
+				h.srv.cfg.UIOriginTemplate = "https://run-{run}.ui.example.com"
+			}
+			for range probes {
+				probe(h)
+			}
+			rows := 0
+			h.audit.mu.Lock()
+			for _, ev := range h.audit.events {
+				if ev.Action == "ui.authorize" && ev.Outcome == "denied" {
+					rows++
+				}
+			}
+			h.audit.mu.Unlock()
+			if rows != int(authFailedBurst) {
+				t.Errorf("%d refusals wrote %d ui.authorize/denied rows, want the burst of %d", probes, rows, int(authFailedBurst))
+			}
+			h.srv.metrics.mu.Lock()
+			suppressed := h.srv.metrics.authFailedSuppressed
+			h.srv.metrics.mu.Unlock()
+			if want := int64(probes - int(authFailedBurst)); suppressed != want {
+				t.Errorf("wardyn_auth_failed_suppressed_total = %d, want %d", suppressed, want)
+			}
+		})
+	}
+}
