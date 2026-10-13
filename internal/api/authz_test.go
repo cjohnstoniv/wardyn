@@ -209,8 +209,8 @@ var routeMatrix = map[string]classifiedRoute{
 	// which the shipped image does (ENV WARDYN_UI_DIR=/srv/ui). Anonymous by
 	// necessity: the console shell has to load before anyone can sign in. It is
 	// mounted on the TOP-LEVEL router, outside every auth group and after the
-	// whole /api/v1 tree, so it can shadow nothing; mountUI's own withinDir
-	// check is what keeps it from serving outside the directory.
+	// whole /api/v1 tree, so it can shadow nothing; mountUI's rooted clean of
+	// the path is what keeps it from serving outside the directory.
 	"GET /*":             {class: classAnonymous},
 	"GET /healthz":       {class: classAnonymous},
 	"GET /readyz":        {class: classAnonymous},
