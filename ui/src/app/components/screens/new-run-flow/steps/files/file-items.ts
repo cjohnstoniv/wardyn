@@ -238,8 +238,8 @@ export function removeItem(item: FileItem, src: ItemSources): Apply {
   };
 }
 
-/** The paths the request may hold: under /home/agent, /work or /workspace, with no "..". */
-export const PATH_SHAPE = /^\/(home\/agent|work|workspace)\/[^/]/;
+/** The paths the request may hold: under /home/agent (the server refuses anything else), with no "..". */
+export const PATH_SHAPE = /^\/home\/agent\/[^/]/;
 
 /** Why a path cannot be saved, against the other items' paths; "" when it can. */
 export function pathError(path: string, items: readonly FileItem[], selfKey?: string): string {

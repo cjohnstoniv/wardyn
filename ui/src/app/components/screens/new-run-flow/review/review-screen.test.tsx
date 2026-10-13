@@ -240,6 +240,34 @@ describe("Review groups", () => {
     expect(group("limits").getByText(NR_SHARED.JOIN(NR_SHARED.CPU("2"), NR_SHARED.MIB("4,096")))).toBeInTheDocument();
   });
 
+  it("shows attached drives (drives[]) by name, path and access, counts them before the server answers, and lists them as kept", async () => {
+    const DRIVE = "11111111-1111-4111-8111-111111111111";
+    const SHARE = "22222222-2222-4222-8222-222222222222";
+    const withDrives: RunIntent = {
+      ...AGENT, no_repositories_or_drives: undefined, drives: [{ drive_id: DRIVE }, { drive_id: SHARE }],
+      start_folder: { kind: "attachment", drive_id: DRIVE },
+    };
+    checks.current = answered({
+      ...SCENARIO_PREFLIGHT.member,
+      attachments: [
+        { kind: "drive", drive_id: DRIVE, name: "Your drive", target: "/home/agent/drive", read_only: false, starts_here: true },
+        { kind: "drive", drive_id: SHARE, name: "Data team share", target: "/home/agent/shared/data-team-share", read_only: true, starts_here: false },
+      ],
+    } as unknown as PreflightResult);
+    open(withDrives);
+    await ready();
+    const work = group("work");
+    expect(work.getByText(NR_REVIEW.WORK_ITEMS(2))).toBeInTheDocument();
+    expect(work.getByText("Data team share")).toBeInTheDocument();
+    expect(work.getByText("/home/agent/shared/data-team-share")).toBeInTheDocument();
+    expect(work.getByText(NR_FILES.ACCESS_READ)).toBeInTheDocument();
+    cleanup();
+    checks.current = answered(null);
+    open(withDrives);
+    await screen.findAllByText(NR_REVIEW.GROUP_WORK);
+    await waitFor(() => expect(group("work").getByText(NR_REVIEW.WORK_ITEMS(2))).toBeInTheDocument());
+  });
+
   it("shows a document-only field as a read-only row with its Run document chip, no Change on the row", async () => {
     open({ ...AGENT, image: "example/base:1", ends_after_sec: 3600 });
     await ready();

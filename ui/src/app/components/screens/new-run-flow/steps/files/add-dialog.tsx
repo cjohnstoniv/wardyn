@@ -83,7 +83,8 @@ export interface AddDialogProps {
   driveReason?: string;
   /** The person may manage drives (Manage drives →). */
   operator: boolean;
-  onSave: (apply: (intent: RunIntent) => RunIntent, item: { name: string; key: string }, mode: "add" | "edit") => void;
+  /** `previousKey`: the card an edit replaced, when it now names another source. */
+  onSave: (apply: (intent: RunIntent) => RunIntent, item: { name: string; key: string; previousKey?: string }, mode: "add" | "edit") => void;
   /**
    * Seam for person-created drives: rendered under the user drives of the Choose step. `choose` selects a
    * drive by id once it is in the catalogue (`reload` re-reads it). Absent: nothing is offered.
@@ -153,7 +154,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
       document.getElementById(DIALOG_PATH_ID)?.focus();
       return;
     }
-    onSave(saveChoice(choice, src, editing), { name: source?.name ?? editing?.name ?? "", key: choiceKey(choice) }, editing ? "edit" : "add");
+    onSave(saveChoice(choice, src, editing), { name: source?.name ?? editing?.name ?? "", key: choiceKey(choice), previousKey: editing?.key }, editing ? "edit" : "add");
   };
   const title = editing ? NR_FILES.EDIT_NAMED(editing.name) : s.kind && s.step > 1 ? ADD_TITLE[s.kind] : NR_FILES.DIALOG_TITLE;
   const taken = (key: string) => items.some((x) => x.key === key && x.key !== editing?.key);
@@ -238,6 +239,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
           {(s.kind === "userDrive" || s.kind === "sharedDrive") && catalogueReason && (
             <p data-testid="nr-drive-reason" className="mb-3 text-sm text-muted-foreground">{catalogueReason}</p>
           )}
+          {s.kind === "folder" && options.length === 0 && <p className="text-sm text-muted-foreground">{NR_FILES.FOLDERS_NONE}</p>}
           {options.length > 0 && (
             <div role="radiogroup" aria-label={KIND_INFO[s.kind].title} className="grid overflow-hidden rounded-[9px] border border-border">
               {options.map((o) => {
