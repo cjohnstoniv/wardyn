@@ -7,6 +7,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -168,6 +170,37 @@ func TestCreateRun_MemberSourceOutsideRootsIs422(t *testing.T) {
 	}
 	if fr.createCalls != 0 {
 		t.Errorf("CreateSandbox calls = %d, want 0 — the refusal must happen before dispatch", fr.createCalls)
+	}
+}
+
+// TestCreateRun_MemberWritableSourceContainingDenyPathIs422 is the same
+// re-check for the writable carve-out: a member's stored workspace mounts its
+// directory writable, the operator has since denied a path inside it
+// (WARDYN_USER_WRITABLE_DENY), and the next run is refused at the door with
+// the sentence that names the path. Read-only, the same directory launches.
+func TestCreateRun_MemberWritableSourceContainingDenyPathIs422(t *testing.T) {
+	root, project := memberProjectRoot(t)
+	denied := filepath.Join(project, "vendor")
+	if err := os.MkdirAll(denied, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}, WritableRoots: []string{root}, WritableDeny: []string{denied}})
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
+	wsID := st.put(types.Workspace{OwnedBy: ownerMemberSub, Status: types.WorkspaceScanned,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: project, Writable: true}}})
+
+	body := `{"agent":"claude-code","task":"do the thing","workspace_id":"` + wsID.String() + `"}`
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member, body)
+	if w.Code != http.StatusUnprocessableEntity || reasonOf(t, w) != reasonWorkspaceSourceMountNotAllowed ||
+		!strings.Contains(w.Body.String(), "contains the member writable-deny path") {
+		t.Fatalf("writable run on a directory containing a denied path: code = %d, want 422 %s naming the path; body=%s",
+			w.Code, reasonWorkspaceSourceMountNotAllowed, w.Body.String())
+	}
+	if fr.createCalls != 0 {
+		t.Errorf("CreateSandbox calls = %d, want 0: the refusal must happen before dispatch", fr.createCalls)
+	}
+	if spec := createMemberRun(t, srv, fr, member, memberOwnedWorkspace(st, ownerMemberSub, project)); !mountFor(t, spec, composerWorkspaceTarget).ReadOnly {
+		t.Error("the read-only workspace on the same directory was bound writable")
 	}
 }
 

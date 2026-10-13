@@ -29,4 +29,5 @@
 # docs/ENV.md 36676 adds 34 over 36642 (the Azure CLI component): measured at merge.
 # docs/ENV.md 36761 adds 85 over 36676 (setup sets the server runner's limits): the two setup runner-limit variables; measured.
 # docs/ENV.md 36791 adds 30 over 36761 (setup-limits round 1): WARDYN_K8S_READ_NODES also lets boot measure the cluster; measured.
-docs/ENV.md=36791 share=5
+# docs/ENV.md 36804 adds 13 over 36791 (WARDYN_USER_WRITABLE_DENY): a writable mount may not contain a denied path; measured.
+docs/ENV.md=36804 share=5
