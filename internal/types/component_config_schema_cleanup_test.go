@@ -34,7 +34,8 @@ func TestDecodeComponentConfigSchemaRefusesAnythingAfterTheValue(t *testing.T) {
 }
 
 func TestConfigKeyLooksSecretClosedGaps(t *testing.T) {
-	for _, key := range []string{"JWT_SIGNING_KEY", "ENCRYPTION_KEY", "DB_CONNECTION_STRING", "connectionString", "IMAGE_PULL_SECRET"} {
+	for _, key := range []string{"JWT_SIGNING_KEY", "ENCRYPTION_KEY", "DB_CONNECTION_STRING", "connectionString", "IMAGE_PULL_SECRET",
+		"SECRET_FILE_CONTENTS", "secretFileData", "SECRET_PATH_VALUE"} {
 		if !ConfigKeyLooksSecret(key) {
 			t.Errorf("ConfigKeyLooksSecret(%q) = false, want it read as a secret", key)
 		}
