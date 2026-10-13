@@ -16,9 +16,10 @@ import type { SetupStatus } from "../../../../../lib/types/setup";
 import { Button } from "../../../../ui/button";
 import { Label } from "../../../../ui/label";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
+import { Chip } from "../../../../wardyn/primitives";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import type { RunIntent } from "../../draft/run-intent";
-import { providerControlId, setModelProvider, type HarnessNames } from "../../lenses/tools-lens";
+import { providerControlId, setModelProvider, startsWithRun, type HarnessNames } from "../../lenses/tools-lens";
 import { useNewRunDispatch } from "../../new-run-route";
 import { useAnnounce } from "../step-shell";
 import { EffectChoice } from "./effect-choice";
@@ -42,6 +43,12 @@ export interface HarnessSetupProps {
   names?: HarnessNames;
   /** A provider sign-in finished: the server is asked again. */
   onSignedIn: () => void;
+}
+
+/** The provider a harness's model credential comes from, by name: the person's pick, else the server's own choice. */
+export function providerNameFor(harness: string, intent: RunIntent, harnessSet: HarnessSetFact | undefined, status: SetupStatus | null): string | undefined {
+  const id = (intent.tools ?? []).find((t) => t.id === harness)?.model_provider || harnessSet?.harnesses.find((h) => h.id === harness)?.model_credential?.provider;
+  return id ? (status?.model_providers?.find((p) => p.id === id)?.name ?? id) : undefined;
 }
 
 function ProviderPicker({ fact, access, harnessSet, intent, status, onSignedIn }: { fact: ToolPolicyFact; access: AccessFacts; harnessSet?: HarnessSetFact; intent: RunIntent; status: SetupStatus | null; onSignedIn: () => void }) {
@@ -128,14 +135,14 @@ function HarnessCard({ fact, access, harnessSet, intent, name, answered, status,
   };
 
   return (
-    <section aria-label={name} className="flex flex-col gap-4 border-t border-border pt-4">
-      <h3 className="font-medium">{name}</h3>
-      <ProviderPicker fact={fact} access={access} harnessSet={harnessSet} intent={intent} status={status} onSignedIn={onSignedIn} />
-      {unsupported ? (
-        <p className="text-sm text-muted-foreground">{reasonText(fact.default.options[0]?.reason ?? "custom_harness_rules", { harness: name })}</p>
-      ) : (
-        <>
-          {fact.rule_tools === "mcp_only" && <p className="text-sm text-muted-foreground">{NR_TOOLS.CODEX_NOTE}</p>}
+    <section aria-label={name} className="flex flex-col gap-3.5 rounded-lg border border-border bg-surface-2 p-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-2.5">
+        <h3 className="font-medium">{name}</h3>
+        <Chip>{startsWithRun(intent, fact.harness) ? NR_TOOLS.SUB_STARTS : NR_TOOLS.SUB_AVAILABLE}</Chip>
+      </div>
+      <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(230px,1fr))]">
+        <ProviderPicker fact={fact} access={access} harnessSet={harnessSet} intent={intent} status={status} onSignedIn={onSignedIn} />
+        {!unsupported && (
           <div className="flex flex-col gap-2">
             <span id={labelId} className="text-sm font-medium">{NR_TOOLS.DEFAULT_LABEL}</span>
             <EffectChoice
@@ -146,16 +153,20 @@ function HarnessCard({ fact, access, harnessSet, intent, name, answered, status,
               onChange={(effect) => { setPicked(effect); edit((i) => setDefaultEffect(i, fact.harness, effect)); }}
             />
             <p className="text-sm text-muted-foreground">{help}</p>
+            {fact.rule_tools === "mcp_only" && <p className="text-sm text-muted-foreground">{NR_TOOLS.CODEX_NOTE}</p>}
           </div>
-          <ToolRules
-            fact={fact}
-            harnessName={name}
-            personal={personalRules(intent, fact.harness)}
-            answered={answered}
-            onAdd={(rule) => { edit((i) => addToolRule(i, fact.harness, rule)); announce(NR_TOOLS.RULE_ADDED); }}
-            onRemove={(t) => edit((i) => removeToolRule(i, fact.harness, t))}
-          />
-        </>
+        )}
+      </div>
+      {unsupported ? (
+        <p className="text-sm text-muted-foreground">{reasonText(fact.default.options[0]?.reason ?? "custom_harness_rules", { harness: name })}</p>
+      ) : (
+        <ToolRules
+          fact={fact}
+          harnessName={name}
+          personal={personalRules(intent, fact.harness)}
+          onAdd={(rule) => { edit((i) => addToolRule(i, fact.harness, rule)); announce(NR_TOOLS.RULE_ADDED); }}
+          onRemove={(t) => edit((i) => removeToolRule(i, fact.harness, t))}
+        />
       )}
       <McpToggles fact={fact} harnessName={name} servers={servers} isOn={(s) => harnessesOf(s).includes(fact.harness)} onToggle={toggle} />
     </section>
@@ -167,7 +178,7 @@ export function HarnessSetup({ access, harnessSet, intent, answered, names, onSi
   const { status } = useShellSetupStatus();
   if (!access) return null;
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-3">
+    <section aria-labelledby={headingId} className="flex flex-col gap-3.5 rounded-xl border border-border bg-card p-[18px]">
       <div>
         <h2 id={headingId} className="font-semibold">{NR_TOOLS.HARNESS_SETUP_TITLE}</h2>
         <p className="text-sm text-muted-foreground">{NR_TOOLS.HARNESS_SETUP_BODY}</p>

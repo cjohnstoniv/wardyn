@@ -117,6 +117,15 @@ describe("Credentials total", () => {
     expect(credentials().getByText(NR_TOOLS.CREDENTIALS_POLICY)).toBeInTheDocument();
   });
 
+  it("names a model credential's provider once known, and says Model provider until then", () => {
+    render(<Totals names={HARNESS_NAMES} access={MEMBER} answered />);
+    expect(credentials().getByText(NR_TOOLS.PROVIDER_LABEL, { exact: false })).toBeInTheDocument();
+    cleanup();
+    render(<Totals names={HARNESS_NAMES} access={MEMBER} answered providers={new Map([["claude-code", "Bedrock (team)"]])} />);
+    expect(credentials().getByText("Bedrock (team)", { exact: false })).toBeInTheDocument();
+    expect(credentials().queryByText(NR_TOOLS.PROVIDER_LABEL, { exact: false })).toBeNull();
+  });
+
   it("shows no row name for a credential whose row is unknown, never its id", () => {
     const orphan: AccessFacts = { ...MEMBER, credentials: [{ ...MEMBER.credentials[0], row: "agent:unlisted" }] };
     render(<Totals names={HARNESS_NAMES} access={orphan} answered />);
