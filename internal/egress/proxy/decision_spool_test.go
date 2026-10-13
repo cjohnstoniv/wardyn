@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -55,6 +56,30 @@ func TestLocalSpoolAdmitsMoreThan32OrdinaryRequestsInFlight(t *testing.T) {
 	}
 	if _, _, drops, err := s.local.Stats(ctx); err != nil || drops != 0 {
 		t.Fatalf("drops %d %v", drops, err)
+	}
+}
+
+// A request that may be content-scanned reserves room for its scanned record:
+// 500 findings, each with a 256-byte field path, fit the reservation of an
+// inspected LLM call.
+func TestScannedRecordFitsItsReservation(t *testing.T) {
+	p := &Proxy{scanner: scanEngine(t, "alert", scanTestSecret)}
+	r := httptest.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/messages", nil)
+	findings := make([]egress.ScanFinding, 500)
+	for i := range findings {
+		findings[i] = egress.ScanFinding{Detector: "corpus", Category: "secret", FieldPath: strings.Repeat("p", 256), Offset: i, Length: 32, Severity: "high", Sample: "[REDACTED]"}
+	}
+	rec := runnerspool.Record{SpoolID: uuid.New(), Seq: 1, Hash: strings.Repeat("0", 64), Decision: egress.DecisionLog{
+		Request:  egress.Request{RunID: uuid.New(), Host: "api.anthropic.com", Port: 443, Method: r.Method, Path: r.URL.Path, Time: time.Now()},
+		Decision: egress.Allow, RuleSource: "scan:mitm",
+		Scan: &egress.ScanSummary{Scanned: true, Coverage: "inspectable", Mode: "alert", Action: "alert", Channel: "anthropic.messages", Findings: findings, FindingsTotal: 500},
+	}}
+	b, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.spoolReservationBytes(r); int64(len(b)) > got {
+		t.Fatalf("a scanned record of %d bytes overruns its reservation of %d", len(b), got)
 	}
 }
 
