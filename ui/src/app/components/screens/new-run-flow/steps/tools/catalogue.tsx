@@ -241,7 +241,11 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
   const removeAdded = (row: AccessRow) => {
     if (row.id.startsWith("host:")) edit((i) => removeAllowedHost(i, row.name));
     else if (row.id.startsWith("secret:")) edit((i) => removeHeaderSecret(i, row.id.slice("secret:".length)));
-    else edit((i) => detachComponent(i, row.id, answeredFor));
+    else {
+      // A stale or repeated press removes nothing, so it says nothing either.
+      if (detachComponent(intent, row.id, answeredFor) === intent) return;
+      edit((i) => detachComponent(i, row.id, answeredFor));
+    }
     announce(NR_TOOLS.COMPONENT_REMOVED);
   };
   const addedRows = access?.rows.filter((r) => r.from === "added") ?? [];
