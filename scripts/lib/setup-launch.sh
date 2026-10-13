@@ -1,5 +1,6 @@
 # Copyright 2025 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
+# shellcheck shell=bash
 
 # scripts/lib/setup-launch.sh — host-mode wardynd launch helpers shared by
 # scripts/setup.sh. A separate file (not inline in setup.sh) because setup.sh
@@ -29,4 +30,19 @@ finish_unhealthy_launch() {
   tail -n 15 "${_ful_logfile}" 2>/dev/null | sed 's/^/    /'
   warn "Full log: ${_ful_logfile}"
   unset _ful_pidfile _ful_wpid _ful_logfile
+}
+
+# host_runner_limits URL — gives the host-mode server's runner its limits
+# (scripts/lib/runner-limits.sh, sourced by setup.sh before this is called).
+# setup.sh calls it after a launch AND on its already-running branch, so a
+# re-run with WARDYN_SETUP_RUNNER_DISK_GB set finishes what a first run
+# stopped at; a runner that already has limits is left alone.
+host_runner_limits() {
+  _hrl_url=$1
+  # shellcheck disable=SC2317 # called by wardyn_ensure_runner_limits
+  wardyn() { WARDYN_URL="${_hrl_url}" ./bin/wardyn "$@"; }
+  wardyn_ensure_runner_limits \
+    || die "the server's runner has no limits, so no run can start — set WARDYN_SETUP_RUNNER_DISK_GB and run make setup again, or set them by hand (docs/operations/runner-pools.md#a-remote-hosted-runners-limits); wardynd keeps running (make stop-host)"
+  unset -f wardyn
+  unset _hrl_url
 }
