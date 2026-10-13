@@ -25,7 +25,7 @@ import (
 // oversight list shows it.
 
 // noOrgUserPoolDefaultMsg refuses an organisation default naming a user pool.
-const noOrgUserPoolDefaultMsg = "The organization default is an organization pool. Each person chooses their own user pool as their default."
+const noOrgUserPoolDefaultMsg = "There is no organization default for user pools; people choose their own."
 
 // personalBarrierDefaultMsg refuses a person's own defaults naming a barrier.
 const personalBarrierDefaultMsg = "barrier is an organisation setting; an admin sets it"

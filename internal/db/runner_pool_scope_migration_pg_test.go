@@ -107,9 +107,9 @@ func TestMigration0173_HostingBecomesScope(t *testing.T) {
 	}
 
 	refused := map[string]string{
-		"an owned organization pool":        `INSERT INTO runner_pools (id, name, scope, owner) VALUES (gen_random_uuid(), 'y', 'organization', 'sub-a')`,
-		"a live ownerless user pool":        `INSERT INTO runner_pools (id, name, scope) VALUES (gen_random_uuid(), 'x', 'user')`,
-		"a scope outside the two":           `INSERT INTO runner_pools (id, name, scope) VALUES (gen_random_uuid(), 'w', 'shared')`,
+		"an owned organization pool":         `INSERT INTO runner_pools (id, name, scope, owner) VALUES (gen_random_uuid(), 'y', 'organization', 'sub-a')`,
+		"a live ownerless user pool":         `INSERT INTO runner_pools (id, name, scope) VALUES (gen_random_uuid(), 'x', 'user')`,
+		"a scope outside the two":            `INSERT INTO runner_pools (id, name, scope) VALUES (gen_random_uuid(), 'w', 'shared')`,
 		"a member with no remote runner row": `INSERT INTO runner_pool_members (pool_id, remote_runner_id) VALUES ('` + other.String() + `', 'nomad')`,
 		"a remote runner id that is a UUID":  `INSERT INTO remote_runners (id, name) VALUES ('` + uuid.NewString() + `', 'u')`,
 		"listed people with no list":         `INSERT INTO remote_runners (id, name, people_pools) VALUES ('nomad', 'n', 'listed')`,
