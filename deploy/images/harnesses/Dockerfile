@@ -58,26 +58,28 @@ RUN set -eu; \
 # build. signed-by makes the key vouch for this repository alone, and the
 # version is pinned: a bump moves AZURE_CLI_VERSION here and in every other
 # image that carries this block (scripts/test-image-recipes.py fails when the
-# copies drift). gnupg and wget are removed again unless the image already had
-# them. az gets no Azure credential here or at run time: a run with an Azure
-# CLI component gets a profile and an inert token cache, and wardyn-proxy adds
-# the token to each request it lets through.
+# copies drift). The suite is bookworm on this trixie base: Microsoft publishes
+# azure-cli for bookworm and for no later Debian release, and the package
+# carries its own Python, so it installs and runs here unchanged. gnupg and
+# wget are removed again unless the image already had them. az gets no Azure
+# credential here or at run time: a run with an Azure CLI component gets a
+# profile and an inert token cache, and wardyn-proxy adds the token to each
+# request it lets through.
 ARG AZURE_CLI_VERSION=2.91.0
 RUN set -eu; \
     had_gpg=1; command -v gpg >/dev/null || had_gpg=0; \
     had_wget=1; command -v wget >/dev/null || had_wget=0; \
-    apt-get update; apt-get install -y --no-install-recommends gnupg wget; \
-    install -d /etc/apt/keyrings; \
+    apt-get update; apt-get install -y --no-install-recommends ca-certificates gnupg wget; \
+    install -d /etc/apt/keyrings; export GNUPGHOME=/tmp/az-gnupg; install -d -m 0700 "$GNUPGHOME"; \
     wget -qO /tmp/microsoft.asc https://packages.microsoft.com/keys/microsoft.asc; \
     keys="$(gpg --show-keys --with-colons /tmp/microsoft.asc)"; \
     [ "$(printf '%s\n' "$keys" | grep -c '^pub:')" = 1 ] || { echo "Microsoft's package signing key file does not hold exactly one key" >&2; exit 1; }; \
     fpr="$(printf '%s\n' "$keys" | awk -F: '$1 == "fpr" { print $10; exit }')"; \
     [ "$fpr" = "BC528686B50D79E339D3721CEB3E94ADBE1229CF" ] || { echo "Microsoft's package signing key is not the pinned one: $fpr" >&2; exit 1; }; \
     gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg /tmp/microsoft.asc; \
-    rm -f /tmp/microsoft.asc; \
-    . /etc/os-release; \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ ${VERSION_CODENAME} main" > /etc/apt/sources.list.d/azure-cli.list; \
-    apt-get update; apt-get install -y --no-install-recommends "azure-cli=${AZURE_CLI_VERSION}-1~${VERSION_CODENAME}"; \
+    rm -rf /tmp/microsoft.asc "$GNUPGHOME"; \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ bookworm main" > /etc/apt/sources.list.d/azure-cli.list; \
+    apt-get update; apt-get install -y --no-install-recommends "azure-cli=${AZURE_CLI_VERSION}-1~bookworm"; \
     [ "$had_gpg" = 1 ] || apt-get purge -y --auto-remove gnupg; \
     [ "$had_wget" = 1 ] || apt-get purge -y --auto-remove wget; \
     rm -rf /var/lib/apt/lists/*; \
