@@ -239,7 +239,7 @@ func readCommandSection(body []byte) (cmds []Command, caps string, rest []byte, 
 		if len(body) < 4 {
 			return nil, "", nil, errors.New("gitpack: truncated pkt-line length")
 		}
-		n, err := strconv.ParseUint(string(body[:4]), 16, 32)
+		n, err := strconv.ParseUint(string(body[:4]), 16, 16)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("gitpack: malformed pkt-line length %q", body[:4])
 		}
@@ -290,7 +290,7 @@ func skipPktSection(body []byte) ([]byte, error) {
 		if len(body) < 4 {
 			return nil, errors.New("truncated pkt-line length")
 		}
-		n, err := strconv.ParseUint(string(body[:4]), 16, 32)
+		n, err := strconv.ParseUint(string(body[:4]), 16, 16)
 		if err != nil {
 			return nil, fmt.Errorf("malformed pkt-line length %q", body[:4])
 		}
