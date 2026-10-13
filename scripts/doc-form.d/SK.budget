@@ -1,6 +1,7 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words of the rewrite, so growth fails.
 # docs/operations/secrets-and-keys.md 10605 adds 30 over 10575 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
-docs/operations/secrets-and-keys.md=10605 share=25
+# docs/operations/secrets-and-keys.md 10697 adds 92 over 10605 (0.9 R1-0088): "Offboarding a key domain" tells the credential key from the audit-seal key, and leads with keeping the domain.
+docs/operations/secrets-and-keys.md=10697 share=25
 # docs/operations/secrets-and-keys.md 10535 adds 1001 over 9534 (0.9 F-588 M1): the 'Key service: AWS KMS' section, AWS KMS in the key-service lists, and the custody sentence for all three key services.
 # docs/operations/secrets-and-keys.md 10434 adds 900 (0.9 F-588 M1): the 'Key service: AWS KMS' section and AWS KMS in the key-service lists.
 # docs/operations/secrets-and-keys.md 10575 adds 40 (0.9 F-588 M2): the Helm bullet in 'Key service: AWS KMS' and the TestLive_AWSKMS bullet under 'Not verified live yet'.

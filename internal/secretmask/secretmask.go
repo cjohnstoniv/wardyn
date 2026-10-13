@@ -439,7 +439,7 @@ func (r *Registry) Masker(runID uuid.UUID) Masker {
 // JSONEscapedVariants, the set the audit recorder needs since ev.Data is JSON
 // and a secret bearing a newline or quote lands there escaped. Cached on the
 // same generation as Masker, built lazily since the expansion triples the
-// set and is O(n^2), so the PTY lane never pays for it.
+// set, so the PTY lane never pays for it.
 func (r *Registry) JSONVariantMasker(runID uuid.UUID) Masker {
 	if r == nil {
 		return Masker{}
@@ -548,16 +548,27 @@ func (r *Registry) RunIDs() []uuid.UUID {
 // (asciinema). No variant for a secret with no JSON-special bytes;
 // duplicates dropped.
 //
-// ponytail: O(n²) de-dup over the snapshot (a handful of secrets per run);
-// switch to a set only if a run ever registers thousands.
+// The de-dup is a set seeded from the originals, not a scan of the output: a
+// run's corpus carries every person's global values, so it grows with the
+// organisation, not the run.
 func JSONEscapedVariants(snap [][]byte) [][]byte {
 	out := make([][]byte, len(snap), len(snap)*3)
 	copy(out, snap)
+	seen := make(map[string]struct{}, len(snap)*3)
+	for _, s := range snap {
+		seen[string(s)] = struct{}{}
+	}
 	for _, s := range snap {
 		for _, escapeHTML := range [...]bool{false, true} {
-			if esc, ok := jsonStringEscape(s, escapeHTML); ok && !containsSlice(out, esc) {
-				out = append(out, esc)
+			esc, ok := jsonStringEscape(s, escapeHTML)
+			if !ok {
+				continue
 			}
+			if _, dup := seen[string(esc)]; dup {
+				continue
+			}
+			seen[string(esc)] = struct{}{}
+			out = append(out, esc)
 		}
 	}
 	return out
@@ -581,7 +592,15 @@ func jsonStringEscape(s []byte, escapeHTML bool) ([]byte, bool) {
 	return bytes.Clone(b[1 : len(b)-1]), true // strip surrounding quotes
 }
 
+// scanned, when a test points it somewhere, adds up the sizes of the sets
+// containsSlice is asked to search: how a test shows a caller does not scan a
+// set once per element. Nil outside tests.
+var scanned *int
+
 func containsSlice(set [][]byte, v []byte) bool {
+	if scanned != nil {
+		*scanned += len(set)
+	}
 	for _, s := range set {
 		if bytes.Equal(s, v) {
 			return true

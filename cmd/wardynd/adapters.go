@@ -423,8 +423,8 @@ func (m maskingRecorder) prepare(ev types.AuditEvent) types.AuditEvent {
 		// bodies.
 		//
 		// JSONVariantMasker, not NewMasker(JSONEscapedVariants(Snapshot(...))):
-		// that chain clones the corpus, triples it through a documented O(n^2)
-		// de-dup, and sorts the result — on EVERY audit event (F076). The registry
+		// that chain clones the corpus, triples it through a de-dup, and sorts
+		// the result — on EVERY audit event (F076). The registry
 		// now derives it once per generation and hands back the same immutable
 		// masker until something is registered or evicted.
 		masker := m.reg.JSONVariantMasker(runID)

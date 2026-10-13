@@ -100,7 +100,9 @@
 # docs/sdk.md 17317 measured after merging the runner limits lane (above) over the Azure CLI component's 17230.
 # docs/sdk.md 17364 measured at merge: the final docs pass over the runner limits, pool words and Azure CLI lanes.
 # docs/sdk.md 17366 adds 2 over 17364: the revive_ceiling_denies_azure_cli reason in the revive row, measured.
-docs/sdk.md=17366 share=21
+# docs/sdk.md 17380 adds 16 (0.9 R1-0082): the same DELETE refusal in the key_domain_ambiguous_membership row.
+# docs/sdk.md 17382 measured at merge: secrets merge: the key-domain delete refusal row beside the revive reason.
+docs/sdk.md=17382 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.
