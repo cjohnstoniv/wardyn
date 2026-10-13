@@ -55,6 +55,9 @@ const answered = (pre: PreflightResult | null, age = 1000, over: Record<string, 
   ...over,
 });
 
+// Every screen but Review stays out of the way: Change links move the URL and nothing mounts.
+const INERT = Object.fromEntries(Object.keys(NEW_RUN_SCREENS).map((name) => [name, () => null])) as unknown as typeof NEW_RUN_SCREENS;
+
 const AGENT: RunIntent = {
   shape: "agent_task", experience: "interactive", runner_pool_id: "pool-general", no_repositories_or_drives: true,
   workload: { kind: "agent_task", agent: "claude-code" },
@@ -100,7 +103,7 @@ function open(intent: RunIntent, o: Open = {}) {
         <Routes>
           <Route
             path="/runs/new"
-            element={<><NewRunRoute loaders={loaders} screens={{ ...NEW_RUN_SCREENS, review: (p) => <><ReviewScreen {...p} onLaunch={o.onLaunch} /><Probe /></> }} /><Where /></>}
+            element={<><NewRunRoute loaders={loaders} screens={{ ...INERT, review: (p) => <><ReviewScreen {...p} onLaunch={o.onLaunch} /><Probe /></> }} /><Where /></>}
           />
         </Routes>
       </OperatorProvider>

@@ -19,7 +19,7 @@ const killRunMock = vi.fn();
 const getGrantsMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
   runs: {
-    createRun: (...a: unknown[]) => createRunMock(...a),
+    createRunWire: (...a: unknown[]) => createRunMock(...a),
     getRun: (...a: unknown[]) => getRunMock(...a),
     killRun: (...a: unknown[]) => killRunMock(...a),
     getGrants: (...a: unknown[]) => getGrantsMock(...a),
