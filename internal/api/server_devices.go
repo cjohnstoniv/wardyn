@@ -27,3 +27,12 @@ type deviceRouteState struct {
 	// the limiters above; an entry lives only as long as its request.
 	ingestInFlight sync.Map
 }
+
+// newDeviceRouteState is the anonymous device and runner doors' limiters, as New configures them.
+func newDeviceRouteState() deviceRouteState {
+	return deviceRouteState{
+		enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
+		registerLimiter:      principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
+		ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
+	}
+}
