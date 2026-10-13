@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"testing"
@@ -41,6 +42,17 @@ func (e *queueEnv) endOccupant(runner string) {
 	if ok, err := e.srv.casRunState(ctx, id, types.RunRunning, types.RunCompleted); err != nil || !ok {
 		e.t.Fatalf("end the occupant of %s: %v %v", runner, ok, err)
 	}
+}
+
+// waitingLaunch is the run_queue launch stored for a waiting run.
+func (e *queueEnv) waitingLaunch(id uuid.UUID) queuedLaunch {
+	e.t.Helper()
+	var raw json.RawMessage
+	var launch queuedLaunch
+	if err := e.pool.QueryRow(context.Background(), `SELECT launch FROM run_queue WHERE run_id = $1`, id).Scan(&raw); err != nil || json.Unmarshal(raw, &launch) != nil {
+		e.t.Fatalf("the queued launch of %s: %v %s", id, err, raw)
+	}
+	return launch
 }
 
 // waitsFor launches body, which must wait, and returns the run still QUEUED for its runners after a sweep.
@@ -82,6 +94,23 @@ func TestPG_WaitingRunIsNotEndedForARunnerThatCannotEnforceItsBarrier(t *testing
 	e := newQueueEnv(t)
 	laptops, a, _ := wallAndFence(e)
 	waiting := e.waitsFor(runBody(fmt.Sprintf(`"confinement_class":"CC2","runner_pool_id":%q`, laptops.ID)), "a is the only runner that enforces Wall")
+	e.endOccupant(a.String())
+	if got := e.settles(waiting.ID); got.State != types.RunRunning || got.RunnerID == nil || *got.RunnerID != a || got.ConfinementClass != types.CC2 {
+		t.Fatalf("once a has room the run is %s on %v at %s (%s); want it RUNNING on a at CC2", got.State, got.RunnerID, got.ConfinementClass, got.StatusDetail)
+	}
+}
+
+// The barrier the queue holds a runner to is the one the run was queued at, not the one its request
+// names: a launch that names no barrier under a policy whose floor is Wall records Wall, waits for a, and
+// is never promoted onto b.
+func TestPG_WaitingRunThatNamesNoBarrierWaitsForItsPolicyFloor(t *testing.T) {
+	e := newQueueEnv(t)
+	laptops, a, _ := wallAndFence(e)
+	waiting := e.waitsFor(runBody(fmt.Sprintf(`"inline_policy":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"]},"runner_pool_id":%q`, laptops.ID)),
+		"a is the only runner that enforces the policy's Wall floor")
+	if launch := e.waitingLaunch(waiting.ID); launch.Barrier != types.CC2 || launch.ConfinementDefault == "" {
+		t.Fatalf("the launch records barrier %q (default %q), want the Wall it was queued at, chosen for it", launch.Barrier, launch.ConfinementDefault)
+	}
 	e.endOccupant(a.String())
 	if got := e.settles(waiting.ID); got.State != types.RunRunning || got.RunnerID == nil || *got.RunnerID != a || got.ConfinementClass != types.CC2 {
 		t.Fatalf("once a has room the run is %s on %v at %s (%s); want it RUNNING on a at CC2", got.State, got.RunnerID, got.ConfinementClass, got.StatusDetail)
