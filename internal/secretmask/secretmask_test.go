@@ -545,22 +545,21 @@ func TestJSONEscapedVariants_DedupKeepsOriginalsAndOrder(t *testing.T) {
 
 // The de-dup is a set lookup, not a scan of everything built so far: the
 // corpus holds every person's global values, so its cost must follow the
-// corpus size. A scan takes minutes over this many secrets; a set, a fraction
-// of a second.
+// corpus size. Scanning the output for each variant searches about 4n*n
+// entries over n secrets; the whole expansion may search no more than it
+// returns.
 func TestJSONEscapedVariants_CostFollowsCorpusSize(t *testing.T) {
-	const n = 100_000
+	const n = 500
 	snap := make([][]byte, n)
 	for i := range snap {
 		snap[i] = fmt.Appendf(nil, "secret-%06d\n<tail>", i) // two distinct variants each
 	}
-	done := make(chan int, 1)
-	go func() { done <- len(secretmask.JSONEscapedVariants(snap)) }()
-	select {
-	case got := <-done:
-		if got != 3*n {
-			t.Fatalf("%d secrets gave %d entries, want %d", n, got, 3*n)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatalf("%d secrets were not expanded within 10s: the de-dup is scanning its own output", n)
+	scanned := secretmask.CountScanned(t)
+	got := secretmask.JSONEscapedVariants(snap)
+	if len(got) != 3*n {
+		t.Fatalf("%d secrets gave %d entries, want %d", n, len(got), 3*n)
+	}
+	if *scanned > len(got) {
+		t.Fatalf("expanding %d secrets searched %d entries for duplicates, want at most %d: the de-dup is scanning its own output", n, *scanned, len(got))
 	}
 }
