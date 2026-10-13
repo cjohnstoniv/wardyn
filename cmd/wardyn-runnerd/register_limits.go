@@ -119,6 +119,7 @@ func (f *registerLimits) limits(cmd *cobra.Command, measured types.RunnerAmounts
 		return l, errors.New("this computer's free disk for Docker could not be measured: pass --total-disk (and --per-run-disk if you like) in GB")
 	}
 	if measured.CPUMillis <= 0 && !set("total-cpu") || measured.MemoryMiB <= 0 && !set("total-memory") {
+		//lint:ignore ST1005 the sentence the person registering reads; it opens with the product name Docker
 		return l, errors.New("Docker did not report this computer's CPUs and memory: pass --total-cpu and --total-memory")
 	}
 	return l, l.Validate(types.RunnerMaxRunsCeiling)
