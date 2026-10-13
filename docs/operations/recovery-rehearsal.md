@@ -115,7 +115,7 @@ spec:
       persistentVolumeClaim: {claimName: restored-recovery-set, readOnly: true}
 ```
 
-- `WARDYN_PG_DSN` is the live database: the target checks probe it, and the two audit rows are written to it. Both `secretKeyRef` entries name the chart's DSN Secret, under `postgres.dsn.key` for the DSN and `age-key` for the age key; point `WARDYN_AGE_KEY` at the Secret in `secrets.ageKeySecretRef` instead if your install sets one.
+- `WARDYN_PG_DSN` is the live database: the target checks probe it, and the two audit rows are written to it. Both `secretKeyRef` entries name the DSN Secret, under `postgres.dsn.key` and `age-key`; an external DSN Secret holds `age-key` only with `secrets.ageKeyFromSecret`, so use the `secrets.ageKeySecretRef` Secret for `WARDYN_AGE_KEY` if you set one.
 - Delete the pod and the scratch database when the report is saved.
 
 ## What a pass proves

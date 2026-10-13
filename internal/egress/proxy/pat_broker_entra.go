@@ -231,6 +231,9 @@ func (p *Proxy) refuseADOGit(w http.ResponseWriter, r *http.Request, host string
 		if ok, msg = p.awaitADOCapability(r.Context(), host, *held, adoGitAsk(r), msg); ok {
 			return true
 		}
+		if r.Context().Err() != nil {
+			return false // the client hung up mid-hold; it was never refused, so no row and no body
+		}
 	}
 	p.emitPATDecision(r, host, egress.Deny, ruleSourceADOGitDenied)
 	if push != nil {
