@@ -253,7 +253,8 @@ func caseInsensitiveForge(cloneURL string) bool {
 // clone takes.
 func repoCloneTarget(r types.WorkspaceRepo) (string, bool) {
 	_, _, dest, ok := repoCloneSpec(r.Repo, r.Target)
-	return dest, ok
+	// A target or ref that cannot ride the clone record is a clone buildRepoRecords drops.
+	return dest, ok && repoFieldSafe(dest) && repoFieldSafe(strings.TrimSpace(r.Ref))
 }
 
 // repoCloneSpec is the clone slug, URL and destination of one repo locator.
@@ -310,16 +311,19 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 	add := func(slug, dest, ref string) {
 		ref = strings.TrimSpace(ref)
 		if ref != "" && !repoFieldSafe(ref) {
+			slog.Warn("wardynd: repo ref is not a safe clone field; dropping the repo",
+				slog.String("slug", slug), slog.String("err", fmt.Sprintf(repoField400Charset, "ref")))
 			return
 		}
 		slug, url, dest, ok := repoCloneSpec(slug, dest)
 		if !ok {
 			return
 		}
+		terr := runner.ValidateAuthoredTarget(dest)
 		if !repoFieldSafe(dest) {
-			return
+			terr = fmt.Errorf(repoField400Charset, "target")
 		}
-		if terr := runner.ValidateAuthoredTarget(dest); terr != nil {
+		if terr != nil {
 			// Loud, for the same reason the dest-collision skip below is, and one
 			// the write door cannot cover: the reserved-target rule sits on POST
 			// /policies only (validatePolicySpec → 400), and resolvePolicy hands
@@ -374,16 +378,25 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 	// repo), so that repo clones once, at its own target and ref. On a forge
 	// whose paths are case-insensitive a label differing only in case is that
 	// repo too; elsewhere case makes a different repository.
-	if key, url, _, ok := repoCloneSpec(legacyRepo, ""); ok && !slices.ContainsFunc(repos, func(wr types.WorkspaceRepo) bool {
-		k, _, _, _ := repoCloneSpec(wr.Repo, "")
-		return k == key || caseInsensitiveForge(url) && strings.EqualFold(k, key)
-	}) {
+	if _, _, _, ok := repoCloneSpec(legacyRepo, ""); ok && !legacyRepoNamed(legacyRepo, repos) {
 		add(legacyRepo, "", "")
 	}
 	for _, wr := range repos {
 		add(wr.Repo, wr.Target, wr.Ref)
 	}
 	return b.String(), warnings
+}
+
+// legacyRepoNamed reports whether a structured workspace repo names the run's
+// own repo, so that record's target and ref govern its clone. On a forge whose
+// paths are case-insensitive a label differing only in case is that repo too;
+// elsewhere case makes a different repository.
+func legacyRepoNamed(legacyRepo string, repos []types.WorkspaceRepo) bool {
+	key, url, _, ok := repoCloneSpec(legacyRepo, "")
+	return ok && slices.ContainsFunc(repos, func(wr types.WorkspaceRepo) bool {
+		k, _, _, _ := repoCloneSpec(wr.Repo, "")
+		return k == key || caseInsensitiveForge(url) && strings.EqualFold(k, key)
+	})
 }
 
 // injectionRuleFromScope decodes an api_key grant scope into its proxy-side
