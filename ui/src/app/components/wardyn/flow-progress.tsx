@@ -9,39 +9,32 @@ import { cn } from "../ui/utils";
 export type FlowStep = { id: string; label: string; state: "done" | "current" | "upcoming" };
 
 /**
- * Where you are in a short flow. Not interactive. Labels stay in the accessibility tree
- * below the sm breakpoint (visually hidden) so a screen reader never hears just "1 2 3 4".
+ * Where you are in a short flow, as Make draws it: "✓ Shape —— 2 Run —— 3 …" in small type, a green
+ * check on finished steps, a number on the rest, hairline connectors between. Not interactive. Labels
+ * stay in the accessibility tree below the sm breakpoint (visually hidden) so a screen reader never
+ * hears just "1 2 3 4".
  */
 export function FlowProgress({ steps, label }: { steps: FlowStep[]; label: string }) {
   return (
-    <nav aria-label={label}>
-      <ol className="flex items-center gap-2">
+    <nav aria-label={label} className="max-w-[600px]">
+      <ol className="flex items-center gap-2.5 text-meta text-muted-foreground">
         {steps.map((s, i) => (
           <li
             key={s.id}
             aria-current={s.state === "current" ? "step" : undefined}
-            className="flex items-center gap-2"
+            className={cn("flex items-center gap-2.5", i < steps.length - 1 && "flex-1")}
           >
             <span
-              aria-hidden="true"
               className={cn(
-                "flex size-6 items-center justify-center rounded-full border text-xs font-medium",
-                s.state === "current" && "border-primary bg-primary/10 text-foreground",
-                s.state === "done" && "border-border-strong bg-muted text-foreground",
-                s.state === "upcoming" && "border-border text-muted-foreground",
+                "flex items-center gap-1.5 whitespace-nowrap",
+                s.state === "current" && "text-foreground",
+                s.state === "done" && "text-success",
               )}
             >
-              {s.state === "done" ? <Check className="size-3.5" /> : i + 1}
+              <span aria-hidden="true">{s.state === "done" ? <Check className="size-3.5" /> : i + 1}</span>
+              <span className="sr-only font-semibold sm:not-sr-only">{s.label}</span>
             </span>
-            <span
-              className={cn(
-                "sr-only sm:not-sr-only text-sm",
-                s.state === "current" ? "font-medium text-foreground" : "text-muted-foreground",
-              )}
-            >
-              {s.label}
-            </span>
-            {i < steps.length - 1 && <span aria-hidden="true" className="hidden h-px w-6 bg-border sm:block" />}
+            {i < steps.length - 1 && <span aria-hidden="true" className="h-px flex-1 bg-border" />}
           </li>
         ))}
       </ol>

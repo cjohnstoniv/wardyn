@@ -3,42 +3,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The frame every Guided step and Review share: progress, eyebrow, heading,
-// lede, Back on the left, the one primary action on the right, and
-// Ctrl/Cmd+Enter for that action. Strings come from the caller's copy module.
+// The frame every Guided step, the document editor and Review share: progress,
+// eyebrow, heading, lede, Back on the left, the one primary action on the right,
+// and Ctrl/Cmd+Enter for that action. Strings come from the caller's copy module.
+// The page column (width and top padding) is the route's; see new-run-route.tsx.
 
 import * as React from "react";
 import { modalLayerOpen } from "../../../../lib/modal-layer-open";
 import { Button } from "../../../ui/button";
+import { FlowProgress, type FlowStep } from "../../../wardyn/flow-progress";
 import { NEW_RUN_STEPS, type NewRunStep, type StepIssue } from "../lenses/step-issues";
 
-export interface FlowStep {
-  id: string;
-  label: string;
-  state: "done" | "current" | "upcoming";
-}
-
-/** The progress states with `current` on screen; Review passes no step and shows every step done. */
-export const flowSteps = (labels: Record<NewRunStep, string>, current?: NewRunStep): FlowStep[] => {
-  const at = current ? NEW_RUN_STEPS.indexOf(current) : NEW_RUN_STEPS.length;
+/** The progress states with `current` on screen. */
+export const flowSteps = (labels: Record<NewRunStep, string>, current: NewRunStep): FlowStep[] => {
+  const at = NEW_RUN_STEPS.indexOf(current);
   return NEW_RUN_STEPS.map((id, i) => ({ id, label: labels[id], state: i < at ? "done" : i === at ? "current" : "upcoming" }));
 };
-
-// Seam: stands in for the shared FlowProgress primitive (same props) until it
-// lands in the pattern layer; swap the import then.
-function FlowProgress({ steps, label }: { steps: FlowStep[]; label: string }) {
-  return (
-    <nav aria-label={label}>
-      <ol className="flex gap-2 text-sm text-muted-foreground">
-        {steps.map((s) => (
-          <li key={s.id} aria-current={s.state === "current" ? "step" : undefined} className={s.state === "current" ? "text-foreground" : undefined}>
-            {s.label}
-          </li>
-        ))}
-      </ol>
-    </nav>
-  );
-}
 
 /** The route's polite announcer; a shell outside the route announces nothing. */
 export const AnnounceContext = React.createContext<(message: string) => void>(() => {});
@@ -50,6 +30,8 @@ export interface StepShellPrimary {
   disabled?: boolean;
   /** The id of the element that says why the action is held (Review: the blocker list). */
   describedBy?: string;
+  /** Make's trailing arrow, shown to sight only. On unless set false (Review's Launch run has none). */
+  arrow?: boolean;
 }
 
 export interface StepShellProps {
@@ -95,17 +77,18 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
 
   return (
     <section className="flex flex-col gap-6">
-      {progress && <FlowProgress steps={progress.steps} label={progress.label} />}
-      <header className="flex flex-col gap-2">
-        {eyebrow && <p className="label-eyebrow">{eyebrow}</p>}
-        <h1 ref={heading} tabIndex={-1} className="font-semibold tracking-tight outline-none">{title}</h1>
-        {lede && <p className="text-muted-foreground">{lede}</p>}
+      {progress && <div className="mb-[26px]"><FlowProgress steps={progress.steps} label={progress.label} /></div>}
+      <header className="flex max-w-[680px] flex-col gap-2.5">
+        {eyebrow && <p className="label-eyebrow mb-1">{eyebrow}</p>}
+        <h1 ref={heading} tabIndex={-1} className="text-display font-semibold tracking-[-0.02em] outline-none">{title}</h1>
+        {lede && <p className="max-w-[620px] text-muted-foreground">{lede}</p>}
       </header>
       {children}
       <footer className="flex items-center justify-between gap-3">
         {back ? <Button type="button" variant="ghost" onClick={back.onBack}>{back.label}</Button> : <span />}
         <Button type="button" disabled={primary.disabled} aria-describedby={primary.describedBy} onClick={() => activate.current()}>
           {primary.label}
+          {primary.arrow !== false && <span aria-hidden="true">→</span>}
         </Button>
       </footer>
     </section>
