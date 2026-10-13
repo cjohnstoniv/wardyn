@@ -336,6 +336,9 @@ func (s *Server) ListenAndServe() error {
 	return nil
 }
 
+// shutdownDrainReserve is the most of Shutdown's deadline held back for the sink drain.
+const shutdownDrainReserve = 2 * time.Second
+
 // Shutdown gracefully stops the HTTP server, stops the token renewer, and drains
 // the decision sink.
 func (s *Server) Shutdown(ctx context.Context) error {
@@ -346,7 +349,19 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// Before http.Shutdown, which waits on open sandbox connections: the
 	// runtime's stop timeout may kill the process before anything after it.
 	s.proxy.revokeGitHubAPITokens(ctx)
-	httpErr := s.http.Shutdown(ctx)
+	// http.Shutdown waits on open sandbox connections for as long as it is allowed, so it gets only
+	// part of a deadline: the rest is the drain reserve, which the final rows (the memo flush
+	// below among them) need to reach the control plane. The drain context also outlives a
+	// cancelled ctx, so a signal that cancels the caller does not discard the audit tail.
+	reserve := shutdownDrainReserve
+	httpCtx := ctx
+	if dl, ok := ctx.Deadline(); ok {
+		reserve = min(max(time.Until(dl), 0)/4, shutdownDrainReserve)
+		var cancel context.CancelFunc
+		httpCtx, cancel = context.WithDeadline(ctx, dl.Add(-reserve))
+		defer cancel()
+	}
+	httpErr := s.http.Shutdown(httpCtx)
 	// End any open credential re-auth hold: its poll loop is detached from the
 	// request that opened it (so a hung-up SDK can't end a hold its owner is
 	// still signing in for), which also means nothing else would stop it
@@ -355,7 +370,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// Run end closes every open private-ip streak BEFORE the sink drains, so
 	// a repeat count that never hit the eviction path is still recorded.
 	s.proxy.flushPrivateIPMemo()
-	sinkErr := s.sink.close(ctx)
+	drainCtx, cancelDrain := context.WithTimeout(context.WithoutCancel(ctx), reserve)
+	defer cancelDrain()
+	sinkErr := s.sink.close(drainCtx)
 	// An engine's own secrets leave with it, after its last row is masked: a
 	// close that gave up waiting leaves the sink's worker posting its queue, so
 	// the key is evicted only once that worker has finished. A sidecar's
@@ -366,10 +383,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			procRegistry.Evict(key)
 		}()
 	}
-	if httpErr != nil {
-		return httpErr
-	}
-	return sinkErr
+	return errors.Join(httpErr, sinkErr)
 }
 
 // Addr returns the configured listen address.
