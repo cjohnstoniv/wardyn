@@ -27,6 +27,7 @@ import { AddTools } from "./catalogue";
 import { AlreadyIncluded } from "./already-included";
 import { HarnessSetup, providerNameFor } from "./harness-setup";
 import { SetupNeeded } from "./setup-needed";
+import { withoutNamelessHarness } from "./tool-facts";
 import { Totals } from "./totals";
 
 const STEP_LABELS = {
@@ -47,7 +48,8 @@ function useAccess() {
   });
   // While the next answer is out, the last one stays on screen with every host back at Requested.
   const last = React.useRef<{ access: AccessFacts; harnessSet?: HarnessSetFact } | undefined>(undefined);
-  const current = checks.preview.result?.access;
+  const answer = checks.preview.result?.access;
+  const current = answer && withoutNamelessHarness(answer);
   if (current) last.current = { access: current, harnessSet: checks.preview.result?.harness_set };
   return {
     access: current ?? last.current?.access, harnessSet: last.current?.harnessSet, answered: checks.preview.current && !!current, recheck: checks.invalidateChecks,

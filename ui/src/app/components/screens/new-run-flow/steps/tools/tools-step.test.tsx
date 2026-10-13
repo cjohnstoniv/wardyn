@@ -86,6 +86,16 @@ afterEach(() => {
 });
 
 describe("Tools and access step", () => {
+  it("shows no harness row, tool-rules card or MCP card for a harness the run does not have", () => {
+    const NAMELESS_ROW = { id: "agent:", kind: "harness", from: "harness", name: "", status: "ready", hosts: [], credentials: [], source: { kind: "harness", name: "" } } as unknown as AccessFacts["rows"][number];
+    answer(withFacts(SCENARIO_ACCESS.app, [{ ...CLAUDE_UNGATED, harness: "" }], [NAMELESS_ROW]), true);
+    show({ shape: "environment", experience: "interactive", no_repositories_or_drives: true });
+    expect(screen.queryByText(NR_TOOLS.FROM_HARNESS)).toBeNull();
+    expect(screen.queryByRole("heading", { name: NR_TOOLS.HARNESS_SETUP_TITLE })).not.toBeNull();
+    expect(screen.queryByText(NR_TOOLS.MCP_FOR_HARNESS)).toBeNull();
+    expect(document.body.textContent).not.toMatch(/for \./);
+  });
+
   it("frames step 5 of 5, with Review run as the one primary action and Back to Files", async () => {
     show();
     expect(await screen.findByRole("heading", { level: 1, name: NR_TOOLS.TITLE })).toHaveFocus();
