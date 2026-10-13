@@ -656,6 +656,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   can use a mixed pool's remote-hosted runners, and one denied remote launches only their own runners. Pool lists
   and preflight judge availability the same way. A remote-hosted runner stops taking your runs as soon as its people
   policy no longer admits you. `placement_required` is no longer returned.
+- New Run's screens follow the approved design: each screen sits in its own centred column with a numbered step
+  rail; Shape's workload choices go straight to Run; Run groups its questions with the pool's capacity and limits
+  and a barrier comparison; Review puts the view toggle beside its heading and Save, Check again and Launch in one
+  row; the run document's YAML/JSON switch changes format at once (text that does not parse stays in its format).
+  The "Recording" line, the "Before you launch" heading and relative waiting times are gone; server warnings show as
+  notices above the blockers. The GitHub CLI card says what works today: Actions and the REST API.
 
 ### Removed
 
