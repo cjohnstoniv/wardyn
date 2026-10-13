@@ -305,7 +305,7 @@ With `WARDYN_KEK=transit`, each stored credential is still sealed in Postgres (A
 
 - The data key is wrapped by your Vault's Transit engine instead of a key derived from `WARDYN_AGE_KEY`.
 - The key-encryption key never leaves Vault, and every unwrap is one Transit `decrypt` in your Vault audit device.
-- The database alone decrypts nothing. The database plus the Vault token wardynd uses for Transit `decrypt` does, while that token is valid.
+- The database alone decrypts nothing. The database plus the Vault token wardynd uses for Transit `decrypt` does. Kubernetes authentication logs in again with the pod's service-account token when a token is refused, so access lasts while the pod's identity does, not for one token's lifetime.
 - Once no row is sealed under the age key and `WARDYN_AGE_KEY` is unset, that token is the only other thing needed.
 - Wardyn's boot keys are wrapped by Vault too: under the same Transit key by default, or under their own key and role when `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` is set (see the platform split below).
 - (If your organisation wants Vault to hold the values themselves, not a key, that is store mode, below.)
@@ -493,7 +493,7 @@ A row still wrapped under a disabled wrapping version is refused, naming the row
 With `WARDYN_KEK=awskms`, each stored credential is still sealed in Postgres (AES-256-GCM under its own data key). One AWS KMS key protects the data key, and it never leaves AWS.
 
 - **What KMS does.** `Encrypt` wraps the 32-byte data key. `Decrypt`, with `KeyId` pinned to the configured ARN, unwraps it. Wardyn never calls `GenerateDataKey`.
-- The database alone decrypts nothing. The database plus the wardynd role's AWS credentials does: while a role's temporary credentials (IRSA, EKS Pod Identity) are valid, or until a long-lived access key is revoked.
+- The database alone decrypts nothing. The database plus the wardynd role's AWS credentials does: while the pod's identity holds the role (IRSA and EKS Pod Identity mint fresh temporary credentials from it), or until a long-lived access key is revoked.
 - Once no row is sealed under the age key and `WARDYN_AGE_KEY` is unset, those credentials are the only other thing needed.
 - Wardyn's boot keys are wrapped the same way, under the same key.
 
