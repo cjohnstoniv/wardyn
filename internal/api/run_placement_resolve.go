@@ -82,6 +82,9 @@ type placementInput struct {
 	promoted bool
 	// drives: the run mounts drives, which no person's own runner does.
 	drives bool
+	// policyDiskMiB is the main-drive size the run's policy writes (spec.resources.disk_mib), 0 for none:
+	// with the request's own it sizes the disk each candidate is held to.
+	policyDiskMiB int
 }
 
 // poolsPlaceRuns reports whether runner pools decide where this deployment's runs go: a store that holds
@@ -267,7 +270,15 @@ func (s *Server) offerKind(ctx context.Context, f placementInput, pool types.Run
 	if refusal != nil {
 		return kindOffer{}, refusal
 	}
+	// The main drive is sized here as stepMainDrive sizes it (mainDriveFor on this kind's disk limit), so
+	// each candidate is held to the disk the run reserves: one whose per-run disk is under it is passed
+	// over, and one whose disk total is spent has no room, as for CPU and memory.
+	requestDisk := 0
+	if f.req.Resources != nil {
+		requestDisk = f.req.Resources.DiskMiB
+	}
 	demand.cpu, demand.mem = int64(applied.CPUMillis.Applied), int64(applied.MemoryMiB.Applied)
+	demand.disk = int64(mainDriveFor(f.policyDiskMiB, requestDisk, limits.DiskMiB).MiB)
 	eligible, reason := eligibleTargets(targets, demand)
 	// A pin names one of the caller's own candidates (pinRefusal has refused every other id), so when that
 	// candidate fails the demand the answer is ITS reason, not "no such runner" because another is fine.

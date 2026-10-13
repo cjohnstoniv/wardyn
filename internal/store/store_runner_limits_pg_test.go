@@ -388,8 +388,52 @@ func TestPG_RunnerTotalsHoldUnderRace(t *testing.T) {
 	// A run larger than the runner's per-run limit never lands there, room or not.
 	big := sized(onRunner(p, runner, types.RunPending))
 	big.Reserved.MemoryMiB++
-	if _, err := pg.CreateRun(ctx, big); !errors.Is(err, store.ErrRunnerAtCapacity) {
-		t.Fatalf("a run past the per-run limit = %v, want refused", err)
+	var never *store.RunnerAtCapacityError
+	if _, err := pg.CreateRun(ctx, big); !errors.As(err, &never) || !never.NeverFits {
+		t.Fatalf("a run past the per-run limit = %v, want refused as one that never fits there", err)
+	}
+	// A run within the per-run limit refused for room alone is not one that never fits.
+	var full *store.RunnerAtCapacityError
+	if _, err := pg.CreateRun(ctx, sized(onRunner(p, runner, types.RunPending))); !errors.As(err, &full) || full.NeverFits {
+		t.Fatalf("a run with no room = %v, want refused for room, not for size", err)
+	}
+}
+
+// A run the server launched itself is counted on its remote-hosted runner and never held to its limits:
+// its revive is claimed on a runner that is full, where a pooled run's revive is refused.
+func TestPG_ServerRunReviveIsExemptFromRunnerLimits(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	p := queuePool(t, pg)
+	remote := "rp3-server"
+	remoteRunner(t, pg, remote, sizedLimits(1, 1))
+	server, err := pg.CreateRun(ctx, newRun(types.RunRunning))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.StampServerRun(ctx, server.ID, remote, oneRun()); err != nil {
+		t.Fatal(err)
+	}
+	pooled := poolRun(p, types.RunRunning, "alice")
+	pooled.RunnerPoolExecutor, pooled.Reserved = remote, oneRun()
+	if _, err := pg.CreateRun(ctx, pooled); !errors.Is(err, store.ErrRunnerAtCapacity) {
+		t.Fatalf("a pooled run beside the counted server run = %v, want refused: the runner takes one", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at=now(), lost_reason='reboot' WHERE id=$1`, server.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.CreateRun(ctx, pooled); err != nil {
+		t.Fatalf("a pooled run once the server run is kept = %v, want admitted", err)
+	}
+	if claimed, err := pg.MarkRunRevived(ctx, server.ID, types.LostReboot, nil, 0, true); err != nil || !claimed {
+		t.Fatalf("the server run's revive onto the full runner = %v, %v; want claimed", claimed, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at=now(), lost_reason='reboot' WHERE id=$1`, pooled.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.MarkRunRevived(ctx, pooled.ID, types.LostReboot, nil, 0, true); !errors.Is(err, store.ErrRunnerAtCapacity) {
+		t.Fatalf("a pooled run's revive onto the full runner = %v, want refused", err)
 	}
 }
 
