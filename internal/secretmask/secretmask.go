@@ -592,7 +592,15 @@ func jsonStringEscape(s []byte, escapeHTML bool) ([]byte, bool) {
 	return bytes.Clone(b[1 : len(b)-1]), true // strip surrounding quotes
 }
 
+// scanned, when a test points it somewhere, adds up the sizes of the sets
+// containsSlice is asked to search: how a test shows a caller does not scan a
+// set once per element. Nil outside tests.
+var scanned *int
+
 func containsSlice(set [][]byte, v []byte) bool {
+	if scanned != nil {
+		*scanned += len(set)
+	}
 	for _, s := range set {
 		if bytes.Equal(s, v) {
 			return true
