@@ -835,6 +835,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- `WARDYN_RECORDING_RETENTION_DAYS` above 106,751 is now refused at startup; a larger value overflowed and the retention sweep could delete recent recordings. Use 0 to keep recordings forever.
+- The governance and drive previews now send the standard user type, so a profile assigned to that type shows in the preview as it applies to a run. A preview for another user type is not offered yet.
 - A refused attach or UI-gateway ticket, a UI enter on the wrong host and a refused SSH key are audited at a bounded
   rate, sharing the authentication-failure limit; rows past the burst are counted in
   `wardyn_auth_failed_suppressed_total`.
@@ -1049,7 +1051,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - A run that is stopped but kept no longer answers 500 to the console's Files and Resources polls or writes a
   `run.files.fail` audit row each time: both reads answer 409 `run_inspect_agent_stopped`. A failed run that had
   waited in a queue no longer shows the queue's wait reason as its status reason. A bulk restart with current limits
-  is sent in batches of five, so a long list no longer outlives the browser's request deadline.
+  is sent in batches of five, each with a deadline of 3.5 minutes per run (the server's bound on one revive plus a
+  margin) and never under 60 seconds. A request that still exceeds its budget is aborted, its per-run results are lost
+  and the listing is refreshed.
 - Review and policy preview refuse a narrowed github.com `git_pat` exactly when launch would, including a run whose
   only GitHub access is a declared clone beside a GitHub App grant. A model provider or Git API host given as an
   IPv6 literal on port 443 is reached; before, every request to it failed with 502.

@@ -531,6 +531,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Delete stored session recordings older than N days; `0` (the default) keeps them forever.
 - A recording is governance evidence, so nothing is deleted unless you set a window; each sweep that removes anything emits a `recording.retention.sweep` audit event.
 - fs and pg stores (flag `-recording-retention-days`).
+- At most `106751` days; a larger value is refused at startup (use `0` to keep recordings forever).
 
 ### `WARDYN_AUDIT_RETENTION_DAYS`
 

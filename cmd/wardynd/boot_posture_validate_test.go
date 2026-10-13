@@ -39,6 +39,7 @@ func TestValidateBootPosture(t *testing.T) {
 				auditSeal:            &seal,
 				runOutputTailBytes:   &tail,
 				runOutputRetention:   &retention,
+				recordingRetention:   new(int),
 				preflightRatePerMin:  &rate,
 				basePath:             &tc.basePath,
 				oidcIssuer:           &oidcIssuer,
@@ -113,6 +114,27 @@ func TestValidateOIDCSessionTTL(t *testing.T) {
 	for _, d := range []time.Duration{-time.Second, 24*time.Hour + time.Second, 48 * time.Hour} {
 		if err := validateOIDCSessionTTL(d); err == nil || !strings.Contains(err.Error(), "WARDYN_OIDC_SESSION_TTL") {
 			t.Fatalf("%s: error %v does not name the variable", d, err)
+		}
+	}
+}
+
+// TestValidateRecordingRetentionDays: 0 (keep forever) and up to 106751 days boot; a window whose duration
+// overflows (106752 wraps negative, 213505 wraps to about a day) is refused through the boot path, naming
+// the variable and 0.
+func TestValidateRecordingRetentionDays(t *testing.T) {
+	boot := func(days string) error {
+		t.Setenv("WARDYN_RECORDING_RETENTION_DAYS", days)
+		resetFlags(t)
+		return validateBootPosture(parseBootFlags(), tlsPosture{})
+	}
+	for _, ok := range []string{"0", "106751"} {
+		if err := boot(ok); err != nil {
+			t.Errorf("%s days refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"106752", "213505", "1000000"} {
+		if err := boot(bad); err == nil || !strings.Contains(err.Error(), "WARDYN_RECORDING_RETENTION_DAYS") || !strings.Contains(err.Error(), "use 0") {
+			t.Errorf("%s days: error = %v, want a refusal naming the variable and 0", bad, err)
 		}
 	}
 }
