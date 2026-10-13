@@ -46,8 +46,9 @@ func identityGuardFrom(ctx context.Context) (IdentityGuard, bool) {
 }
 
 // checkIdentityGuard locks every identity row bound to g.Principal FOR SHARE and refuses when one
-// is deactivated, purged, past g.Epoch, or revoked after this transaction began.
-func checkIdentityGuard(ctx context.Context, tx pgx.Tx, g IdentityGuard) error {
+// is deactivated, purged, past g.Epoch, or when g.Principal was cut after since, the revocation
+// sequence (ReadRevocationSeq) read before this transaction began.
+func checkIdentityGuard(ctx context.Context, tx pgx.Tx, g IdentityGuard, since int64) error {
 	rows, err := tx.Query(ctx, `
 		SELECT deactivated_at IS NOT NULL OR purged_at IS NOT NULL, authority_epoch
 		  FROM principal_identities WHERE principal = $1 FOR SHARE`, g.Principal)
@@ -72,9 +73,10 @@ func checkIdentityGuard(ctx context.Context, tx pgx.Tx, g IdentityGuard) error {
 	}
 	// An unbind releases the principal while this guard waits for its row lock.
 	// The row no longer matches, so its revocation cutoff must refuse the queued write.
+	// The cutoff is ordered by sequence, not by clock: a step of the clock must not hide it.
 	var cut bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM oidc_session_revocations
-		WHERE sub = $1 AND revoked_at > transaction_timestamp())`, g.Principal).Scan(&cut); err != nil {
+		WHERE sub = $1 AND seq > $2)`, g.Principal, since).Scan(&cut); err != nil {
 		return fmt.Errorf("store: identity guard: %w", err)
 	}
 	if cut {
@@ -94,12 +96,16 @@ func (s PG) guarded(ctx context.Context, fn func(q queryRower) error) error {
 	if !ok {
 		return fn(s.Pool)
 	}
+	since, err := ReadRevocationSeq(ctx, s.Pool)
+	if err != nil {
+		return err
+	}
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return fmt.Errorf("store: begin guarded write: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	if err := checkIdentityGuard(ctx, tx, g); err != nil {
+	if err := checkIdentityGuard(ctx, tx, g, since); err != nil {
 		return err
 	}
 	if err := fn(tx); err != nil {
@@ -140,11 +146,15 @@ func (s PG) WithIdentityShared(ctx context.Context, g IdentityGuard, fn func() e
 		defer cancel()
 		_ = conn.Close(bg)
 	}()
+	since, err := ReadRevocationSeq(ctx, conn)
+	if err != nil {
+		return err
+	}
 	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return fmt.Errorf("store: begin guarded write: %w", err)
 	}
-	if err := checkIdentityGuard(ctx, tx, g); err != nil {
+	if err := checkIdentityGuard(ctx, tx, g, since); err != nil {
 		return err
 	}
 	if err := fn(); err != nil {
@@ -174,6 +184,10 @@ func guardDialSlots(pool *pgxpool.Pool) chan struct{} {
 // session would carry neither that identity's deactivation nor its epoch. A refused sign-in
 // writes nothing.
 func (s PG) IssueLoginIdentity(ctx context.Context, in LoginIdentity, now time.Time) (epoch int64, err error) {
+	since, err := ReadRevocationSeq(ctx, s.Pool)
+	if err != nil {
+		return 0, err
+	}
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return 0, fmt.Errorf("store: issue login identity: %w", err)
@@ -186,7 +200,7 @@ func (s PG) IssueLoginIdentity(ctx context.Context, in LoginIdentity, now time.T
 	if row.DeactivatedAt != nil || row.PurgedAt != nil {
 		return 0, ErrIdentityDeactivated
 	}
-	if err = checkIdentityGuard(ctx, tx, IdentityGuard{Principal: in.Principal, Epoch: -1}); err != nil {
+	if err = checkIdentityGuard(ctx, tx, IdentityGuard{Principal: in.Principal, Epoch: -1}, since); err != nil {
 		return 0, err
 	}
 	epoch = row.AuthorityEpoch

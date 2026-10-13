@@ -263,7 +263,7 @@ func TestMaskManifest_IncompleteManifestIsRefusedAtAllFiveDoors(t *testing.T) {
 			}
 
 			// 2. the live attach (refused before the WebSocket upgrade)
-			tok, err := mintAttachTicket(ctx, rp.srv.cfg.Store, run.ID, types.ActorHuman, maskOwner, oidc.RoleAdmin, time.Now())
+			tok, err := mintAttachTicket(ctx, rp.srv.cfg.Store, run.ID, types.ActorHuman, maskOwner, oidc.RoleAdmin, oidc.Issue{At: time.Now()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -356,7 +356,7 @@ func TestMaskManifest_FenceOnBEndsAnAttachHeldOnA(t *testing.T) {
 	}
 
 	// And a new attach on A is refused.
-	tok, err := mintAttachTicket(context.Background(), a.srv.cfg.Store, run.ID, types.ActorHuman, maskOwner, oidc.RoleAdmin, time.Now())
+	tok, err := mintAttachTicket(context.Background(), a.srv.cfg.Store, run.ID, types.ActorHuman, maskOwner, oidc.RoleAdmin, oidc.Issue{At: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}

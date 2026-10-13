@@ -124,7 +124,7 @@ func TestEntryRunner_MintAndTakeover(t *testing.T) {
 
 func attachDial(t *testing.T, ts *httptest.Server, run types.AgentRun, principal, role string, srv *Server) (*websocket.Conn, *http.Response, error) {
 	t.Helper()
-	tok, err := mintAttachTicket(context.Background(), srv.cfg.Store, run.ID, types.ActorHuman, principal, role, time.Now())
+	tok, err := mintAttachTicket(context.Background(), srv.cfg.Store, run.ID, types.ActorHuman, principal, role, oidc.Issue{At: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}

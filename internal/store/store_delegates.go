@@ -110,13 +110,13 @@ func (s PG) RevokeDelegate(ctx context.Context, id uuid.UUID, now time.Time) (ty
 	return scanDelegate(s.Pool.QueryRow(ctx, q, id, now))
 }
 
-const delegatedTokenCols = `t.id, t.delegate_id, t.principal, t.email, t.user_type, t.groups, t.groups_truncated, t.created_at, t.expires_at`
+const delegatedTokenCols = `t.id, t.delegate_id, t.principal, t.email, t.user_type, t.groups, t.groups_truncated, t.created_at, t.expires_at, t.rev_seq`
 
 func scanDelegatedToken(row pgx.Row) (types.DelegatedToken, error) {
 	var t types.DelegatedToken
 	var groups []byte
 	err := row.Scan(&t.ID, &t.DelegateID, &t.Principal, &t.Email, &t.UserType, &groups, &t.GroupsTruncated,
-		&t.CreatedAt, &t.ExpiresAt)
+		&t.CreatedAt, &t.ExpiresAt, &t.RevSeq)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.DelegatedToken{}, ErrNotFound
 	}
@@ -152,11 +152,11 @@ func (s PG) MintDelegatedToken(ctx context.Context, t types.DelegatedToken, raw 
 	const q = `
 		WITH swept AS (DELETE FROM delegated_tokens WHERE expires_at <= $11),
 		     touched AS (UPDATE delegates SET last_used_at = $11 WHERE id = $2)
-		INSERT INTO delegated_tokens AS t (id, delegate_id, token_sha256, principal, email, user_type, groups, groups_truncated, created_at, expires_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		INSERT INTO delegated_tokens AS t (id, delegate_id, token_sha256, principal, email, user_type, groups, groups_truncated, created_at, expires_at, rev_seq)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$12)
 		RETURNING ` + delegatedTokenCols
 	return scanDelegatedToken(s.Pool.QueryRow(ctx, q, t.ID, t.DelegateID, hashToken(raw), t.Principal, t.Email,
-		t.UserType, groups, t.GroupsTruncated, createdAt, t.ExpiresAt, now))
+		t.UserType, groups, t.GroupsTruncated, createdAt, t.ExpiresAt, now, t.RevSeq))
 }
 
 // GetDelegatedTokenByRaw is the delegated lane's auth lookup: the token must
