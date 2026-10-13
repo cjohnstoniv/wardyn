@@ -22,7 +22,7 @@ const ENFORCEMENT: Record<MainDriveFacts["enforcement"], string | undefined> = {
   filesystem: NR_FILES.ENFORCED, eviction: NR_FILES.ENFORCED_BY_STOP, none: NR_FILES.NOT_ENFORCED, unknown: undefined,
 };
 
-const FILE_PATHS = ["workspaces", "drive", "start_folder", "no_repositories_or_drives", "resources.disk_mib"];
+const FILE_PATHS = ["workspaces", "drive", "drives", "start_folder", "no_repositories_or_drives", "resources.disk_mib"];
 
 function AttachmentRow({ a }: { a: RunAttachment }) {
   return (
@@ -41,7 +41,7 @@ function AttachmentRow({ a }: { a: RunAttachment }) {
 export function WorkGroup({ draft, pre, preview, docRows, go }: GroupProps) {
   const { intent } = draft;
   const attachments = pre?.attachments ?? [];
-  const count = pre?.attachments ? attachments.length : (intent.workspaces?.length ?? 0) + (intent.drive?.enabled ? 1 : 0);
+  const count = pre?.attachments ? attachments.length : (intent.workspaces?.length ?? 0) + (intent.drive?.enabled ? 1 : 0) + (intent.drives?.length ?? 0);
   // The server's applied size when it sized one (0 means none); the request until it answers.
   const mib = pre?.main_drive?.applied_mib || mainDriveMiB(intent);
   const size = mib === undefined ? undefined : mibToGibText(mib);
@@ -56,7 +56,8 @@ export function WorkGroup({ draft, pre, preview, docRows, go }: GroupProps) {
       noExtra: intent.no_repositories_or_drives === true,
       chosen: count > 0,
       startsName: attachments.find((a) => a.starts_here)?.name,
-      keptDrives: attachments.filter((a) => a.kind === "drive").map((a) => a.name),
+      // As on the Files step: drives and folders are live storage, so their changes are kept.
+      keptDrives: attachments.filter((a) => a.kind !== "repository").map((a) => a.name),
       life,
     })
     : attachments.map((a) => a.name).reduce<string | undefined>((all, n) => (all ? NR_SHARED.JOIN(all, n) : n), undefined);

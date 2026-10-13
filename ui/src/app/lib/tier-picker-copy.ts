@@ -45,7 +45,7 @@ export const TIER_PICKER = {
   REQUIREMENT_TITLE: "No sandbox runner — runs can't launch.",
   // Generic on purpose: the floor a caller passes in may come from an admin's
   // governance ceiling, this run's own authored policy, or whichever of the
-  // two ranks higher (combineFloors, new-run/policy-lane.ts) — the sentence
+  // two ranks higher — the sentence
   // must be true under all three, so it never claims a specific source.
   REQUIREMENT_LINE: (tierLabel: string, reason: string) =>
     `This run's floor requires ${tierLabel}, and this host can't run it: ${reason}`,

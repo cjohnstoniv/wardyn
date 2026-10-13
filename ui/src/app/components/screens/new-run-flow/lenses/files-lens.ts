@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Owns workspaces, drive, start_folder, no_repositories_or_drives and the main
-// drive's size (resources.disk_mib).
+// Owns workspaces, drive, drives, start_folder, no_repositories_or_drives and
+// the main drive's size (resources.disk_mib).
 
-import type { RequestedResources } from "../../../../lib/types/new-run-contract";
+import { START_FOLDER_DRIVE, type DriveAttachment, type RequestedResources } from "../../../../lib/types/new-run-contract";
 import type { RunIntent } from "../draft/run-intent";
 import { withKeys } from "./lens-keys";
 import { issue, type StepIssue, type StepValidator } from "./step-issues";
@@ -15,7 +15,8 @@ import { issue, type StepIssue, type StepValidator } from "./step-issues";
 export type SizedResources = RequestedResources & { disk_mib?: number };
 type WorkspaceEntry = NonNullable<RunIntent["workspaces"]>[number];
 
-const attachmentCount = (intent: RunIntent): number => (intent.workspaces?.length ?? 0) + (intent.drive?.enabled ? 1 : 0);
+const attachmentCount = (intent: RunIntent): number =>
+  (intent.workspaces?.length ?? 0) + (intent.drive?.enabled ? 1 : 0) + (intent.drives?.length ?? 0);
 
 export function attachWorkspace(intent: RunIntent, workspaceId: string): RunIntent {
   if (intent.workspaces?.some((w) => w.workspace_id === workspaceId)) return intent;
@@ -117,7 +118,90 @@ export function commitSize(text: string, capMib: number | undefined): { mib?: nu
 }
 
 export const chooseNothing = (intent: RunIntent): RunIntent =>
-  withKeys(intent, { no_repositories_or_drives: true, workspaces: undefined, drive: undefined, start_folder: undefined });
+  withKeys(intent, { no_repositories_or_drives: true, workspaces: undefined, drive: undefined, drives: undefined, start_folder: undefined });
+
+/**
+ * Moves an older `drive: {enabled}` into `drives[]` as the catalogue's legacy drive, so the request never
+ * carries both (400 drive_selection_conflict). A start on the legacy drive moves with it. With no legacy
+ * drive in the catalogue the flag asks for a drive the server does not have, and it is dropped.
+ */
+export function liftLegacyDrive(intent: RunIntent, legacyId: string | undefined): RunIntent {
+  if (!intent.drive) return intent;
+  const entry: DriveAttachment | undefined = intent.drive.enabled && legacyId
+    ? { drive_id: legacyId, ...(intent.drive.read_only ? { read_only: true } : {}) } : undefined;
+  const drives = [...(intent.drives ?? []).filter((d) => d.drive_id !== legacyId), ...(entry ? [entry] : [])];
+  const f = intent.start_folder;
+  const startsLegacy = f?.kind === "attachment" && f.attachment === START_FOLDER_DRIVE;
+  const start_folder = startsLegacy
+    ? entry ? { kind: "attachment" as const, drive_id: entry.drive_id, ...(f.subpath ? { subpath: f.subpath } : {}) } : undefined
+    : f;
+  return withKeys(intent, { drive: undefined, drives: drives.length ? drives : undefined, start_folder });
+}
+
+/** Attaches one catalogue drive by id. Never touches the starting folder. */
+export function attachDrive(intent: RunIntent, driveId: string, legacyId: string | undefined, readOnly = false): RunIntent {
+  const lifted = liftLegacyDrive(intent, legacyId);
+  const rest = (lifted.drives ?? []).filter((d) => d.drive_id !== driveId);
+  return withKeys(lifted, { drives: [...rest, readOnly ? { drive_id: driveId, read_only: true } : { drive_id: driveId }], no_repositories_or_drives: undefined });
+}
+
+/** Detaches one drive; a start on it is cleared. */
+export function detachDrive(intent: RunIntent, driveId: string, legacyId: string | undefined): RunIntent {
+  const lifted = liftLegacyDrive(intent, legacyId);
+  const drives = (lifted.drives ?? []).filter((d) => d.drive_id !== driveId);
+  const startsThere = lifted.start_folder?.kind === "attachment" && lifted.start_folder.drive_id === driveId;
+  return withKeys(lifted, { drives: drives.length ? drives : undefined, start_folder: startsThere ? undefined : lifted.start_folder });
+}
+
+/** Narrows an attached drive to read-only for this run, or takes the narrowing off. */
+export function setDriveReadOnly(intent: RunIntent, driveId: string, readOnly: boolean, legacyId: string | undefined): RunIntent {
+  const lifted = liftLegacyDrive(intent, legacyId);
+  if (!lifted.drives?.some((d) => d.drive_id === driveId)) return lifted;
+  return withKeys(lifted, { drives: lifted.drives.map((d) => (d.drive_id === driveId ? (readOnly ? { drive_id: driveId, read_only: true } : { drive_id: driveId }) : d)) });
+}
+
+/** The run starts in one attached drive. Never attaches it. */
+export const setStartsAtDrive = (intent: RunIntent, driveId: string, legacyId: string | undefined): RunIntent =>
+  withKeys(liftLegacyDrive(intent, legacyId), { start_folder: { kind: "attachment", drive_id: driveId } });
+
+/**
+ * Attaches one workspace for its folders only: `repos: []` clones none of its repositories, and `target`
+ * (a workspace with exactly one folder) places it. Never touches the starting folder.
+ */
+export function attachFolder(intent: RunIntent, workspaceId: string, target?: string): RunIntent {
+  if (intent.workspaces?.some((w) => w.workspace_id === workspaceId)) return intent;
+  return withKeys(intent, {
+    workspaces: [...(intent.workspaces ?? []), { workspace_id: workspaceId, repos: [], ...(target ? { target } : {}) }],
+    no_repositories_or_drives: undefined,
+  });
+}
+
+/** Sets or clears where one attached workspace appears (its one repository or folder). */
+export function setWorkspaceTarget(intent: RunIntent, workspaceId: string, target: string | undefined): RunIntent {
+  const entry = entryOf(intent, workspaceId);
+  if (!entry) return intent;
+  const next = { ...entry, target };
+  if (!target) delete next.target;
+  return replaceEntry(intent, next);
+}
+
+/** Narrows one attached workspace to read-only for this run, or takes the narrowing off. */
+export function setWorkspaceReadOnly(intent: RunIntent, workspaceId: string, readOnly: boolean): RunIntent {
+  const entry = entryOf(intent, workspaceId);
+  if (!entry) return intent;
+  const next = { ...entry, read_only: true };
+  if (!readOnly) delete (next as { read_only?: boolean }).read_only;
+  return replaceEntry(intent, next);
+}
+
+/** Sets or clears the starting folder's subpath, keeping where it starts. */
+export function setStartSubpath(intent: RunIntent, subpath: string | undefined): RunIntent {
+  const f = intent.start_folder;
+  if (f?.kind !== "attachment") return intent;
+  const next = { ...f, subpath };
+  if (!subpath) delete next.subpath;
+  return withKeys(intent, { start_folder: next });
+}
 
 export const filesIssues: StepValidator = (intent) => {
   const out: StepIssue[] = [];

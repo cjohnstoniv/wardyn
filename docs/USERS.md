@@ -228,7 +228,7 @@ resolves your drive the same way, in a dry run too:
 
 - If your deployment sets `WARDYN_GOVERNANCE_SECOND_HUMAN`, an administrator's change to who may do what:
   - a governance profile or assignment, a capability grant, the enforcement map,
-  - a value's availability, a user type's priority, a role mapping or a key-domain assignment,
+  - a value's availability, a user type's priority, a role mapping, a key-domain assignment,
   - the egress baseline, a service identity's create or sponsor change, or the local credential delivery policy,
 - It is held as a pending change until a second administrator approves it.
 - Members propose and approve nothing here; these tiers do:
