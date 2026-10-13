@@ -383,6 +383,11 @@ type RunnerSandboxProver interface {
 	ProveRunnerSandbox(ctx context.Context, ref, runnerID string) error
 }
 
+// ErrNotRunnerSandbox is a RunnerSandboxProver's negative answer: ref is not a
+// sandbox this runner created. Any other error means the substrate could not
+// answer, so the caller retries rather than refusing for good.
+var ErrNotRunnerSandbox = errors.New("runner: not a sandbox this runner created")
+
 // ProxyReviver is an OPTIONAL Runner capability: replace a sandbox's proxy
 // sidecar, running or stopped, with a new one while the agent keeps running.
 // The control plane reads the run's stored config (#1176), rewrites its token

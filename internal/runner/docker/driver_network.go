@@ -542,7 +542,8 @@ func (d *Driver) sweepDriveSeeds(ctx context.Context, lister containerListerAPI,
 	var swept int
 	var errs []error
 	for _, c := range res.Items {
-		if c.Labels[labelComponent] != componentDriveSeed || c.Labels[labelManaged] != "true" || time.Unix(c.Created, 0).After(cutoff) {
+		if c.Labels[labelComponent] != componentDriveSeed || c.Labels[labelManaged] != "true" || c.Labels[runner.LabelRunnerID] != d.cfg.RunnerID ||
+			time.Unix(c.Created, 0).After(cutoff) {
 			continue
 		}
 		if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {

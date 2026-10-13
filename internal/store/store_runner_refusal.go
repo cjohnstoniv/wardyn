@@ -12,11 +12,13 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// maxRunnerRefusalReason bounds the reason a refused action_result carries.
-const maxRunnerRefusalReason = 1024
+// maxRunnerRefusalReason bounds the reason a refused action_result carries,
+// as the runner bounds it.
+const maxRunnerRefusalReason = runnerwire.MaxRefusalReason
 
 // validRunnerActionResult reports whether a result names its runner, run,
 // action and observed time, its outcome is in the closed set, and a reason

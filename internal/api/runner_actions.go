@@ -21,7 +21,7 @@ import (
 )
 
 // maxActionResultBytes bounds one action_result event body.
-const maxActionResultBytes = 1024
+const maxActionResultBytes = runnerwire.MaxActionResultBytes
 
 var errRunnerEventUnsupported = errors.New("runner event kind has no org ingestion")
 

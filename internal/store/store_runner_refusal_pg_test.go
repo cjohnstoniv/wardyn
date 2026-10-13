@@ -60,3 +60,24 @@ func TestPG_RunnerActions_RefusedClosesTheActionAndAudits(t *testing.T) {
 		t.Fatalf("an outcome outside the closed set = %v, want the binding CHECK", err)
 	}
 }
+
+// A refused asserted subject's action is audited too: no run row exists, so
+// the row has no run id and names the asserted run in its data.
+func TestPG_RunnerAssertedRefusalIsAudited(t *testing.T) {
+	pool, st, rn, _, _ := spoolPGFixture(t)
+	ctx := t.Context()
+	asserted, id := uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO runner_pending_actions (id, runner_id, subject, asserted_run_id, kind, ref, binding_version, owner)
+		VALUES ($1,$2,'asserted',$3,'kill',$4,1,'')`, id, rn.ID, asserted, "runner:"+rn.ID.String()+"/local"); err != nil {
+		t.Fatal(err)
+	}
+	const reason = "pending action does not match a local run"
+	if _, first, err := st.RecordRunnerActionResult(ctx, rn.ID, asserted, id, types.RunnerActionRefused, reason, time.Now(), prepareSpoolTest); err != nil || !first {
+		t.Fatalf("asserted refusal: first=%v err=%v", first, err)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE action = 'runner.action.refuse' AND run_id IS NULL AND target = $1
+		AND data->>'run_id' = $2 AND data->>'reason' = $3`, id.String(), asserted.String(), reason).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("%d asserted refusal audit rows, want one (%v)", n, err)
+	}
+}

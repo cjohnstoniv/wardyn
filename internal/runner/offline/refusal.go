@@ -5,15 +5,13 @@ package offline
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
-
-// maxRefusalReason bounds the reason a refused result carries to the org.
-const maxRefusalReason = 512
 
 // actionRefusal marks a pending action this runner can never apply. It is
 // answered with a terminal refused result, so the org closes it and the
@@ -28,15 +26,33 @@ func refusal(err error) error { return actionRefusal{err} }
 // refuseAction durably records a's refused result, so a lost ACK replays the
 // same receipt. The caller holds m.mu.
 func (m *Manager) refuseAction(ctx context.Context, a runnerwire.PendingAction, cause error) (runnerwire.ActionResult, error) {
-	reason := cause.Error()
-	if len(reason) > maxRefusalReason {
-		reason = strings.ToValidUTF8(reason[:maxRefusalReason], "")
-	}
-	slog.WarnContext(ctx, "runner: refused a pending action", slog.String("action", a.ID.String()), slog.String("reason", reason))
-	result := runnerwire.ActionResult{ID: a.ID, Outcome: types.RunnerActionRefused, Reason: reason, ObservedAt: m.now().UTC()}
+	result := runnerwire.ActionResult{ID: a.ID, Outcome: types.RunnerActionRefused, Reason: cause.Error(), ObservedAt: m.now().UTC()}
+	fitRefusalReason(&result)
+	slog.WarnContext(ctx, "runner: refused a pending action", slog.String("action", a.ID.String()), slog.String("reason", result.Reason))
 	m.state.Actions[a.ID] = appliedAction{Action: a, Result: result}
 	if err := m.save(); err != nil {
 		return runnerwire.ActionResult{}, err
 	}
 	return result, nil
+}
+
+// fitRefusalReason trims r's reason to MaxRefusalReason bytes and then until
+// the encoded result fits the org's bound: JSON escaping can grow a byte to
+// six, and a result the org refuses would replay on every reconnect.
+func fitRefusalReason(r *runnerwire.ActionResult) {
+	if len(r.Reason) > runnerwire.MaxRefusalReason {
+		r.Reason = strings.ToValidUTF8(r.Reason[:runnerwire.MaxRefusalReason], "")
+	}
+	for {
+		b, err := json.Marshal(r)
+		if err != nil || len(b) <= runnerwire.MaxActionResultBytes || r.Reason == "" {
+			break
+		}
+		// Each byte cut shrinks the encoding by at least one byte.
+		over := min(len(b)-runnerwire.MaxActionResultBytes, len(r.Reason))
+		r.Reason = strings.ToValidUTF8(r.Reason[:len(r.Reason)-over], "")
+	}
+	if r.Reason == "" {
+		r.Reason = "refused"
+	}
 }
