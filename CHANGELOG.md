@@ -101,6 +101,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   drive beside the old one. Remove the old allocation with `DELETE /drives/grants/{id}` or in the console.
 - `PUT /api/v1/runner-pool-defaults` replaces the whole document, so a PUT that leaves `barrier` out clears it; use
   `wardyn runner pool org-default set` (it reads first) or GET then PUT.
+- Runners registered before this release get Runs at once 2 (migration `0172_runner_max_runs`); a runner's owner
+  raises it with `wardyn runner set --max-runs N <runner-id>`.
 
 ### Added
 
@@ -520,6 +522,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - `wardyn workspace build <workspace-id>` starts a workspace's image build, rebuilds it from fresh inputs with
   `--refresh`, and prints the current state with `--status` (`--json` for the raw view, including whether the image
   is reproducible). The Go SDK adds `BuildWorkspace` and `GetWorkspaceBuild`.
+- Runners: each runner has Runs at once (`max_runs`, 1–64), set with `wardyn-runnerd register --max-runs` (default
+  half the host's CPU cores) and changed only by its owner (`wardyn runner set --max-runs`, `PUT /me/runners/{id}`,
+  audited `runner.update`). Placement never exceeds it: a full runner refuses `runner_at_capacity`, and in a capped
+  pool the run waits with `runner_pool_runners_at_capacity`, then starts on whichever of its runners has room.
+  Runners report their machine name, runner views list their pools, and `GET /runner-pools/{id}/runners` lists a
+  pool's runners. Migration `0172_runner_max_runs`.
 
 ### Changed
 
@@ -634,6 +642,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   barrier. When the organisation raises the default while the run waits, the run starts under the stronger class if
   the pool offers it, and `run.queue.start` records `confinement_default_raised`. The `run.create` row of a launch
   that waits now records the drives and the harness set it attaches, as a direct create does.
+- Each workspace image build records what it built from and the image it produced. `GET
+  /api/v1/workspaces/{id}/build` shows the record, its SHA-256 and whether the build is reproducible while the
+  record is current; the `run.build` audit row carries the record and its hash, and a workspace-image cache hit now
+  writes a `run.build` row too. Workspace image builds do not share an envbuilder layer cache: each build pushes
+  under its own tag and fetches every layer fresh.
 
 ### Removed
 
@@ -765,6 +778,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - `wardynd -recovery-manifest` now refuses at `pool_max_conns` below 2 and names the setting, instead of hanging.
 - `wardyn sync` and sftp now say when the runner is offline or the sandbox is gone, instead of blaming the sandbox
   image for a missing sftp-server.
+- A production runner advertised no capacity, so placement refused every sized run on it.
 
 
 ## [0.8.9] — 2026-10-09
