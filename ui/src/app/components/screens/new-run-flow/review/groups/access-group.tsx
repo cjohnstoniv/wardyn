@@ -19,7 +19,7 @@ export function AccessGroup({ pre, preview, docRows, go }: GroupProps) {
     <ReviewGroup
       id="access"
       label={NR_REVIEW.GROUP_ACCESS}
-      value={access && NR_REVIEW.POLICY_HOSTS(hosts.length)}
+      value={access && (hosts.length === 1 ? NR_REVIEW.POLICY_HOST_ONE : NR_REVIEW.POLICY_HOSTS(hosts.length))}
       provenance={source ? NR_SHARED.JOIN(NR_REVIEW.PROV_SOURCE_POLICY, source) : NR_REVIEW.PROV_SOURCE_POLICY}
       docRows={docRows}
       editor={(close) => (

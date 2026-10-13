@@ -32,20 +32,6 @@ export const NR_LAUNCH = {
   JUST_NOW: "Just now",
   GIVES_UP: "Gives up",
   GIVES_UP_IN: (wait: string | number) => `In ${wait}`,
-  /** pending W-47: the recommended text until the owner answers. */
-  SINCE_MINUTE_ONE: "1 minute ago",
-  /** pending W-47: the recommended text until the owner answers. */
-  SINCE_MINUTES: (n: string | number) => `${n} minutes ago`,
-  /** pending W-47: the recommended text until the owner answers. */
-  SINCE_HOUR_ONE: "1 hour ago",
-  /** pending W-47: the recommended text until the owner answers. */
-  SINCE_HOURS: (n: string | number) => `${n} hours ago`,
-  /** pending W-47: the recommended text until the owner answers. */
-  SINCE_DAYS: (n: string | number) => `${n} days ago`,
-  /** pending W-47: the recommended text until the owner answers. */
-  MINUTE_ONE: "1 minute",
-  /** pending W-47: the recommended text until the owner answers. */
-  MINUTES: (n: string | number) => `${n} minutes`,
   CANCEL_RUN: "Cancel run",
   START_ANOTHER: "Start another run",
   VIEW_RUN: "View run",
