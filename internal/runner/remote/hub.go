@@ -282,6 +282,10 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 	configureAdmission(ctx, &cfg, resumed, pending, a, s, s.id, func() *runnerwire.Peer { return peer })
 	h.configureActivity(ctx, &cfg, row, a, s, func() *runnerwire.Peer { return peer })
 	peer = a.Link.AttachSession(conn, cfg)
+	if resumed {
+		// A resumed session sends no STATE page: it is past the org's page check from its start.
+		a.Link.stateFinal(peer)
+	}
 	s.peer, s.link, s.ended = peer, a.Link, time.Time{}
 	last := uint64(0)
 	if resumed {
