@@ -18,7 +18,8 @@ import { NEW_RUN_PATH } from "../new-run-flow/draft/new-run-url";
 import { includedGroups, needsSetupLabel, ownerLine, scopeLabel, whyReadOnly } from "./template-display";
 
 // The five columns of the list at md and up; below that the cells stack, each under its own label.
-export const ROW_GRID = "md:grid-cols-[minmax(0,2.2fr)_minmax(0,1.2fr)_minmax(0,1.6fr)_minmax(0,1fr)_auto]";
+// The actions column is fixed so a row with a reason tip lines up with one without, and with the header.
+export const ROW_GRID = "md:grid-cols-[minmax(0,2.2fr)_minmax(0,1.2fr)_minmax(0,1.6fr)_minmax(0,1fr)_15rem]";
 
 const startHref = (t: TemplateSummary) =>
   `${NEW_RUN_PATH}?${new URLSearchParams({ template: t.id, rev: String(t.revision) })}`;
