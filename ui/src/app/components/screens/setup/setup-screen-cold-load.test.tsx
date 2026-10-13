@@ -66,7 +66,7 @@ vi.mock("../../../lib/api/providers", () => ({
   providers: { getWorkspaceProviders: (...a: unknown[]) => getWorkspaceProvidersMock(...a) },
 }));
 vi.mock("../../../lib/api/runs", () => ({
-  runs: { createRun: vi.fn(), getRun: vi.fn(), killRun: vi.fn() },
+  runs: { createRunWire: vi.fn(), getRun: vi.fn(), killRun: vi.fn() },
 }));
 vi.mock("../../attach-terminal", () => ({
   AttachTerminal: () => null,

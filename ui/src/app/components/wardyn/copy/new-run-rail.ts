@@ -3,7 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The New Run rail's TRUTH block.
+// ponytail: RAIL, RAIL_CREDENTIAL and RAIL_RECORDING_ON have only e2e readers now that the rail is gone;
+// delete them with the old New Run specs.
+//
+// The retired New Run rail's TRUTH block.
 // Appendix A finding 1: the rail rendered two unconditional security claims —
 // "Minted at launch, injected by the proxy. Never written into the sandbox." and
 // "Every keystroke and every outbound connection." — neither of which consulted
@@ -17,17 +20,6 @@
 // preflight's model_credential). There is deliberately no default: an unresolved
 // lane renders RESOLVED_AT_LAUNCH, never the proxy sentence.
 
-// Recording, deduplicated: the same two facts were spelled three times
-// (recording.tsx's local consts, run-detail.tsx's inline EmptyState literals)
-// and had already drifted — "will ever produce one" vs "captures one". One
-// spelling, and the rail reads it too.
-export const RECORDING_DISABLED_TITLE = "Session recording is disabled on this deployment";
-// The switch is WARDYN_RECORDING_STORE, not WARDYN_RECORDING_DIR: the DIR only
-// moves the `fs` store's path and turns nothing on (docs/ENV.md), while the
-// chart renders STORE=off whenever persistence.enabled=false.
-export const RECORDING_DISABLED_DESC =
-  "No run on this server will ever produce one — set persistence.enabled (Helm) or WARDYN_RECORDING_STORE=pg to turn it on.";
-
 // #459 — the launch and preflight failure lines already show the server's own
 // sentence, unchanged and visible; a screen reader arriving on the rail heard
 // neither, since both were a bare <p> with no role="alert". These sr-only
@@ -36,14 +28,6 @@ export const RECORDING_DISABLED_DESC =
 export const RAIL = {
   LAUNCH_ERROR_LABEL: "Launch failed",
   PREFLIGHT_ERROR_LABEL: "Preflight failed",
-} as const;
-
-// M1 (approved 2026-10-03) — preflight's setup rows. The row text is the
-// server's own (the same label and detail `wardyn run --dry-run` prints), so
-// only the heading and the Launch reason are written here.
-export const RAIL_SETUP = {
-  HEADING: "Setup",
-  BACKEND_BLOCK: "This host can't build the barrier this run needs.",
 } as const;
 
 // M1 (approved 2026-10-03) — the automatic check's states and its manual button.

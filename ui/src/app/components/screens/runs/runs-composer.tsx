@@ -6,14 +6,14 @@
 // #1197 L3 — "Start a run" (design.md §1/§2.1). User view only; the Admin
 // view has no launch door (M-7). Submitting reuses the SAME clone-prefill
 // channel the run header's "Start a run like this one" already rides
-// (RunPrefill via route state — wizard-types.ts) rather than a new one: task
+// (RunPrefill via route state — clone-prefill.ts) rather than a new one: task
 // and workspace arrive exactly as a clone's would, with no policy/state
 // overlay beyond them. This is not a clone (no source run), so
 // the prefill carries `source: "composer"`, which New run reads to skip its
 // clone banner (the only change this needed there).
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
-import type { RunPrefill } from "../new-run/wizard-types";
+import type { RunPrefill } from "../new-run-flow/draft/clone-prefill";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { Button } from "../../ui/button";
 import { Textarea } from "../../ui/textarea";
