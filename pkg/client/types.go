@@ -134,6 +134,10 @@ type (
 	// ListWorkspaces, GetWorkspace, CreateWorkspace, and UpdateWorkspace.
 	Workspace = types.Workspace
 
+	// ImageBuild is a workspace's image-build record: the inputs and the image it produced.
+	// Carried by WorkspaceBuild.Record.
+	ImageBuild = types.ImageBuild
+
 	// WorkspaceLLMCred is the operator-owned model binding carried in
 	// WorkspaceRequest.LLMCred: ProviderRef pins the workspace's runs to one
 	// model provider. "" (or a nil WorkspaceLLMCred) means no pin. On a read,
