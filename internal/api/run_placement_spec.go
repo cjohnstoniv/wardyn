@@ -258,15 +258,20 @@ func localIdentityLanes(run types.AgentRun, sc types.SiteConfig, spec runner.San
 	return ado, &lane
 }
 
+// localIdentityOrigins stamps an identity credential only where the lane resolved today still authored
+// it: the same organisation, capabilities within the row's ceiling and hosts within the lane for Azure
+// DevOps; the same endpoint host, route and deployments for an Azure Foundry gate. Anything else (the
+// lane gone, or the provider or its row changed since dispatch) is left without an origin, which refuses.
 func (s *Server) localIdentityOrigins(ctx context.Context, owner string, ado adoEntraRun, azure *providerAzureLane, p *placement.LocalPlan) {
 	spec := p.Spec
-	if spec.ProxyConfig.ADOGrant != nil {
+	if g := spec.ProxyConfig.ADOGrant; g != nil && ado.rowID != "" && g.Organization == ado.org &&
+		subsetOf(g.Capabilities, ado.ceiling) && subsetOf(g.Hosts, ado.laneHosts()) {
 		p.Origins["ProxyConfig.ADOGrant"] = s.localADOOrigin(ctx, owner, ado)
 	}
 	if azure != nil && azure.owner == owner {
 		own := s.ownsSecretMemoized(ctx, owner, providerSecretName(azure.provider.UID, providerEntraPart))
 		for i, g := range spec.ProxyConfig.AzureGates {
-			if g.Host == azure.host && g.Route == azure.route {
+			if g.Host == azure.host && g.Route == azure.route && subsetOf(g.Models, azure.models()) {
 				p.Origins[placementCredentialIndex("ProxyConfig.AzureGates", i)] = placement.CredentialOrigin{Class: placement.ClassOwn, Stored: true, OwnNamespace: own, OwnerOnly: own}
 			}
 		}
