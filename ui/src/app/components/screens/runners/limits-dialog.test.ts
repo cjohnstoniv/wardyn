@@ -47,3 +47,30 @@ describe("what a save sends", () => {
     expect(limitsToSave({ ...shown, pm: "2" }, { vals: shown, limits: LOADED }).per_run).toEqual({ cpu_millis: 1250, memory_mib: 2048, disk_mib: 51200 });
   });
 });
+
+// An unchanged amount is checked at its exact loaded value, not the rounded display: 32 MiB shows as 0 GB.
+describe("what a save validates", () => {
+  const LOADED = { runs_at_once: 3, total: { cpu_millis: 6000, memory_mib: 32, disk_mib: 204800 }, per_run: { cpu_millis: 1250, memory_mib: 32, disk_mib: 51200 } };
+  const shown = vals({ tm: "0", pm: "0", pc: "1.3" });
+  const loaded = { vals: shown, limits: LOADED };
+
+  it("takes an unchanged 32 MiB shown as 0 GB, and still refuses a typed 0", () => {
+    expect(validateLimits(shown, undefined, loaded)).toEqual({});
+    expect(validateLimits({ ...shown, rn: "2" }, undefined, loaded)).toEqual({});
+    expect(validateLimits({ ...shown, tm: "0", pm: "0.0" }, undefined, loaded)).toEqual({ pm: "Set a number above 0." });
+  });
+
+  it("still checks an unchanged field against the others at its exact value", () => {
+    expect(validateLimits({ ...shown, tm: "0.01" }, undefined, loaded)).toEqual({ pm: "Per run can't be more than the total." });
+  });
+});
+
+// The reported amount is compared exactly, as the server does; only its words round.
+describe("what a save checks against the reported amount", () => {
+  it("takes an unchanged total equal to the reported MiB when only Runs at once is edited", () => {
+    const loaded = { vals: vals({ tm: "15.5", pm: "2" }), limits: { runs_at_once: 3, total: { cpu_millis: 6000, memory_mib: 15900, disk_mib: 204800 }, per_run: { cpu_millis: 2000, memory_mib: 2048, disk_mib: 51200 } } };
+    const rep = { cpu_millis: 8000, memory_mib: 15900, disk_mib: 500 * 1024 };
+    expect(validateLimits({ ...loaded.vals, rn: "2" }, rep, loaded)).toEqual({});
+    expect(validateLimits({ ...loaded.vals, rn: "2", tm: "15.6" }, rep, loaded)).toEqual({ tm: "Not allowed: this computer reports 15.5 GB memory." });
+  });
+});
