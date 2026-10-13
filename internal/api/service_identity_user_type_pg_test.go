@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -98,10 +99,12 @@ func TestServiceIdentity_UserTypeCreateDeleteOrdered(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// open begins the other side's transaction: it takes the same lock the store does, then writes.
+	// open begins the other side's transaction: it takes the same lock the store does, then writes. The
+	// transaction is on a session of its own: the test then probes e.pool on this goroutine, and holding
+	// a connection of that pool while asking it for another is what WARDYN_TEST_POOL_GUARD refuses.
 	open := func(t *testing.T, typeID, write string, args ...any) pgx.Tx {
 		t.Helper()
-		tx, err := e.pool.Begin(ctx)
+		tx, err := testutil.PGConn(t, e.pool).Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -170,7 +173,8 @@ func TestServiceIdentity_UserTypeCreateDeleteRace(t *testing.T) {
 		if _, err := e.st.CreateUserType(ctx, types.UserType{ID: typeID, Name: "Type " + typeID, Priority: 3, CreatedBy: "sec"}); err != nil {
 			t.Fatal(err)
 		}
-		tx, err := e.pool.Begin(ctx)
+		// A session of its own, as in open: the probes below ask e.pool on this goroutine.
+		tx, err := testutil.PGConn(t, e.pool).Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
