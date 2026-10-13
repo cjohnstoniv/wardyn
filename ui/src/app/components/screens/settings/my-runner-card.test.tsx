@@ -117,10 +117,10 @@ const TOKEN: RunnerRegistrationToken = {
   org_url: "https://org.example.com",
 };
 
-function renderCard(hash = "") {
+function renderCard(hash = "", admin = false) {
   return render(
     <MemoryRouter initialEntries={[`/account${hash}`]}>
-      <OperatorProvider operator={false} securityOperator={false} operatorResolved principal="alice">
+      <OperatorProvider operator={admin} securityOperator={admin} operatorResolved principal="alice">
         <MyRunnerCard />
       </OperatorProvider>
     </MemoryRouter>,
@@ -368,6 +368,10 @@ describe("My runner card: registering and the 5 second poll", () => {
     expect(screen.getByText("Shown once. It works once, for 1 hour.")).toBeInTheDocument();
     expect(screen.getByText("wardyn-runnerd register --org https://org.example.com --token-file ~/wardyn-runner-token")).toBeInTheDocument();
     expect(screen.getByText("Registration token")).toHaveFocus();
+    // With nothing registered yet the two sentences stay, above the token.
+    const follows = (a: HTMLElement, b: HTMLElement) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(screen.getByText("You haven't registered a runner."), screen.getByText("Registration token"))).toBe(true);
+    expect(follows(screen.getByText("Register one, then put it in one of your pools. You can create a pool first."), screen.getByText("Registration token"))).toBe(true);
     expect(screen.getByRole("button", { name: "Copy token" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Register a runner" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Done" }));
@@ -574,6 +578,23 @@ describe("My pools", () => {
     expect(navigateMock).toHaveBeenLastCalledWith("/account/pools/new");
     await user.click(screen.getByRole("button", { name: "Edit Laptop" }));
     expect(navigateMock).toHaveBeenLastCalledWith("/account/pools/p-laptop/edit");
+  });
+
+  it("an administrator's own account lists only their own pools, though their pool list carries everyone's", async () => {
+    withPools();
+    const bobs = { ...ENTRY(POOL("p-bob", "Build box")), owner: "bob" };
+    pools.list.mockResolvedValue({ pools: [ENTRY(LAPTOP_POOL), bobs] });
+    const user = userEvent.setup();
+    renderCard("", true);
+    await expand(user);
+    const mine = (await screen.findByText("My pools")).closest("section") as HTMLElement;
+    expect(await within(mine).findByRole("button", { name: "Laptop" })).toBeInTheDocument();
+    expect(within(mine).queryByRole("button", { name: "Build box" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit Build box" })).toBeNull();
+    // Nothing of another person's pool is read for this card.
+    expect(pools.get).not.toHaveBeenCalledWith("p-bob");
+    expect(pools.members).not.toHaveBeenCalledWith("p-bob");
+    expect(screen.getByText("In 1 of 1")).toBeInTheDocument();
   });
 
   it("says a default that no longer applies is gone, that a runner in no pool runs nothing, and that an unclaimed one is claimed first", async () => {

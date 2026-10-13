@@ -404,17 +404,17 @@ export function MyRunnerCard() {
             </div>
           ) : (
             <>
-              {showToken && <TokenBlock token={token} expired={expired} onDone={done} />}
-              {note && (
-                <p role="status" className="text-body text-foreground">
-                  {note.text}
-                </p>
-              )}
               {live.length === 0 && (
                 <>
                   <p className="text-body text-foreground">{MY_RUNNER.NO_RUNNER}</p>
                   <p className="text-body text-muted-foreground">{MY_POOLS.NO_RUNNER_NEXT}</p>
                 </>
+              )}
+              {showToken && <TokenBlock token={token} expired={expired} onDone={done} />}
+              {note && (
+                <p role="status" className="text-body text-foreground">
+                  {note.text}
+                </p>
               )}
               {sorted.length > 0 && (
                 <ul>
