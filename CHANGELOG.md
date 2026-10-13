@@ -1094,6 +1094,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   nobody else took the lapsed lease, the writer takes it back and keeps typing, with input held until the lease is
   proven; only another live holder or a take-over ends it. A newly attached or promoted writer is no longer evicted
   by a renewal that lands before it has taken its lease.
+- The Azure CLI sign-in's resolve door no longer hands a run its bearer token when the token could not be recorded
+  for output masking: it answers 503 `mask_state_unavailable` and audits the refusal, as the other credential doors
+  do.
 
 
 ## [0.8.9] — 2026-10-09
