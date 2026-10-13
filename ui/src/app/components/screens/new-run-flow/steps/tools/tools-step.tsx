@@ -12,7 +12,9 @@ import * as React from "react";
 import { Button } from "../../../../ui/button";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
+import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
+import { getErrorMessage } from "../../../../../lib/format";
 import { useAdoConnect } from "../../../../../lib/hooks/use-ado-connect";
 import type { SCMAccessPAT } from "../../../../../lib/types/ado-pat";
 import type { AccessFacts } from "../../../../../lib/types/new-run-access";
@@ -53,6 +55,9 @@ function useAccess() {
   if (current) last.current = { access: current, harnessSet: checks.preview.result?.harness_set };
   return {
     access: current ?? last.current?.access, harnessSet: last.current?.harnessSet, answered: checks.preview.current && !!current, recheck: checks.invalidateChecks,
+    // The server refused or could not answer this body: the step has nothing true to list, and says so.
+    failure: !current && !checks.preview.busy && checks.preview.error ? getErrorMessage(checks.preview.error) || "No reason was given." : null,
+    retry: checks.preview.retry,
     // The run's own Azure DevOps capabilities, as its policy resolves them.
     adoCaps: checks.preview.result?.spec?.azure_devops_capabilities,
   };
@@ -60,7 +65,7 @@ function useAccess() {
 
 export function ToolsStep({ go }: NewRunScreenProps) {
   const draft = useNewRunDraft();
-  const { access, harnessSet, answered, recheck, adoCaps } = useAccess();
+  const { access, harnessSet, answered, recheck, adoCaps, failure, retry } = useAccess();
   const { status } = useShellSetupStatus();
   const door = useModelAccessDoor();
   const ado = useAdoConnect();
@@ -108,24 +113,37 @@ export function ToolsStep({ go }: NewRunScreenProps) {
         ),
       }}
     >
-      <AlreadyIncluded access={access} answered={answered} intent={draft.intent} names={names} providers={providers} />
-      <HarnessSetup access={access} harnessSet={harnessSet} intent={draft.intent} answered={answered} names={names} onSignedIn={recheck} />
+      {failure === null ? (
+        <>
+          <AlreadyIncluded access={access} answered={answered} intent={draft.intent} names={names} providers={providers} />
+          <HarnessSetup access={access} harnessSet={harnessSet} intent={draft.intent} answered={answered} names={names} onSignedIn={recheck} />
+        </>
+      ) : (
+        <div role="alert" className="flex flex-col items-start gap-2 rounded-lg border border-danger/40 bg-danger-subtle p-4 text-sm text-danger">
+          <p>{failure}</p>
+          <Button type="button" variant="outline" onClick={() => void retry()}>{NR_REVIEW.CHECK_AGAIN}</Button>
+        </div>
+      )}
       <AddTools access={access} answered={answered} intent={draft.intent} />
-      <Totals
-        access={access}
-        answered={answered}
-        names={names}
-        providers={providers}
-        ado={{
-          access: status?.unreachable ? undefined : (status?.scm_access as SCMAccessPAT | undefined),
-          policyCaps: adoCaps,
-          connecting: ado.connecting,
-          onConnect: () => void connectAdo(ado.connect),
-          blockedUrl: ado.blockedUrl,
-          onFallbackClick: () => void connectAdo(ado.connectFallback),
-        }}
-      />
-      <SetupNeeded items={items} pending={pending} done={settled} intent={draft.intent} names={names} onDone={finish} />
+      {failure === null && (
+        <>
+          <Totals
+            access={access}
+            answered={answered}
+            names={names}
+            providers={providers}
+            ado={{
+              access: status?.unreachable ? undefined : (status?.scm_access as SCMAccessPAT | undefined),
+              policyCaps: adoCaps,
+              connecting: ado.connecting,
+              onConnect: () => void connectAdo(ado.connect),
+              blockedUrl: ado.blockedUrl,
+              onFallbackClick: () => void connectAdo(ado.connectFallback),
+            }}
+          />
+          <SetupNeeded items={items} pending={pending} done={settled} intent={draft.intent} names={names} onDone={finish} />
+        </>
+      )}
     </StepShell>
   );
 }
