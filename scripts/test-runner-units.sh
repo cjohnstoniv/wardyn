@@ -46,7 +46,7 @@ BIN="$WORK/bin"
 mkdir -p "$BIN"
 stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" >"$BIN/$1"; chmod +x "$BIN/$1"; }
 stub docker 'exit 0'
-stub systemctl 'echo "$*" >>"$STUB_LOG"'
+stub systemctl 'echo "$*" >>"$STUB_LOG"; case "$*" in *UnitPath*) echo "${STUB_UNITPATH-$HOME/.config/systemd/user /etc/systemd/user}" ;; esac'
 stub launchctl 'echo "$*" >>"$STUB_LOG"'
 
 # A runner binary that reports STUB_VERSION and "registers" by writing runner.json.
@@ -54,7 +54,11 @@ cat >"$WORK/wardyn-runnerd" <<'STUB'
 #!/usr/bin/env bash
 case "$1" in
   --version) echo "wardyn-runnerd version ${STUB_VERSION:-0.9.0}" ;;
-  register) echo registered >>"$STUB_LOG"; d="${STUB_STATE:-${XDG_CONFIG_HOME:-$HOME/.config}/wardyn/runner}"; mkdir -p "$d"; : >"$d/runner.json" ;;
+  register)
+    shift; echo registered >>"$STUB_LOG"; echo "register $*" >>"$STUB_LOG"
+    d="${STUB_STATE:-${XDG_CONFIG_HOME:-$HOME/.config}/wardyn/runner}"; prev=""
+    for a in "$@"; do [ "$prev" = --state-dir ] && d="$a"; prev="$a"; done
+    mkdir -p "$d"; : >"$d/runner.json" ;;
 esac
 STUB
 chmod +x "$WORK/wardyn-runnerd"
@@ -120,15 +124,34 @@ for gone in "$RENDERED" "$H/.config/wardyn/runnerd.env" "$H/.local/share/wardyn/
 done
 [ -e "$H/.config/wardyn/runner/runner.json" ] || fail "uninstall removed the runner identity"
 
-# A login shell that sets XDG_CONFIG_HOME must not split the unit and the identity from where the
-# service manager and `serve` look: both stay under $HOME/.config. (A stub register that follows
-# XDG_CONFIG_HOME, as the real one does through os.UserConfigDir, writes where it is told.)
+# A login shell that sets XDG_CONFIG_HOME: register and serve get the same explicit --state-dir,
+# the unit stays where the user manager (which never sees that variable) looks, and nothing lands
+# under the XDG directory.
 XH="$WORK/home-xdgcfg"
 XDG_CFG="$XH/cfg" STUB_STATE='' run_install xdgcfg --org https://wardyn.example --binary "$WORK/wardyn-runnerd" --token-file "$WORK/token"
 [ "$RC" -eq 0 ] || fail "an install with XDG_CONFIG_HOME set failed (rc=$RC): $OUT"
-[ -f "$XH/.config/systemd/user/wardyn-runnerd.service" ] || fail "XDG_CONFIG_HOME moved the unit out of ~/.config"
-[ -f "$XH/.config/wardyn/runner/runner.json" ] || fail "XDG_CONFIG_HOME moved the runner identity out of ~/.config"
+XSTATE="$XH/.config/wardyn/runner"
+grep -qx "register --org https://wardyn.example --token-file $WORK/token --state-dir $XSTATE" "$XH/stub.log" || fail "register did not get --state-dir $XSTATE: $(cat "$XH/stub.log")"
+grep -qx "WARDYN_RUNNER_STATE_DIR=$XSTATE" "$XH/.config/wardyn/runnerd.env" || fail "the env file does not carry the state dir serve gets"
+grep -q '^ExecStart=.* serve --org ${WARDYN_RUNNER_ORG_URL} --state-dir ${WARDYN_RUNNER_STATE_DIR}$' "$XH/.config/systemd/user/wardyn-runnerd.service" || fail "the unit does not pass --state-dir to serve"
+[ -f "$XSTATE/runner.json" ] || fail "the identity is not in the state dir"
 [ ! -e "$XH/cfg" ] || fail "XDG_CONFIG_HOME split the install: $(find "$XH/cfg" -type f)"
+
+# An upgrade: the identity an earlier install registered under XDG_CONFIG_HOME is kept in place,
+# passed to serve, and not registered again.
+UH="$WORK/home-xdgup"
+mkdir -p "$UH/cfg/wardyn/runner"; : >"$UH/cfg/wardyn/runner/runner.json"
+XDG_CFG="$UH/cfg" STUB_STATE='' run_install xdgup --org https://wardyn.example --binary "$WORK/wardyn-runnerd"
+[ "$RC" -eq 0 ] || fail "an upgrade with the identity under XDG_CONFIG_HOME failed (rc=$RC): $OUT"
+! grep -q '^registered$' "$UH/stub.log" || fail "an upgrade registered again"
+grep -qx "WARDYN_RUNNER_STATE_DIR=$UH/cfg/wardyn/runner" "$UH/.config/wardyn/runnerd.env" || fail "the upgrade did not keep the identity directory"
+[ ! -e "$UH/.config/wardyn/runner" ] || fail "the upgrade reset the identity to a new root"
+
+# The user manager cannot find the unit: refuse before register spends the token.
+DH="$WORK/home-nodiscover"
+STUB_UNITPATH=/etc/systemd/user STUB_STATE='' run_install nodiscover --org https://wardyn.example --binary "$WORK/wardyn-runnerd" --token-file "$WORK/token"
+[ "$RC" -ne 0 ] && grep -q 'no token was spent' <<<"$OUT" || fail "an undiscoverable unit did not refuse (rc=$RC): $OUT"
+! grep -q '^registered$' "$DH/stub.log" || fail "register ran although the unit could not be found"
 
 # A release download has no exec bit: a readable --binary still installs, executable in place.
 cp "$WORK/wardyn-runnerd" "$WORK/wardyn-runnerd-linux-amd64"
