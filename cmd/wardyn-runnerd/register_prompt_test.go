@@ -4,6 +4,9 @@
 package main
 
 import (
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -100,5 +103,38 @@ func TestRegisterAsksNothingWithoutATerminal(t *testing.T) {
 	sent, _, out, err := registerWith(t)
 	if err != nil || sent.Limits == nil || strings.Contains(out, "limits for this runner") {
 		t.Fatalf("no terminal: %+v, %v\n%s", sent.Limits, err, out)
+	}
+}
+
+// register asks only where both its input and its output are a terminal. With the output sent to a file
+// the questions would land in the file while the command waited unseen, so nothing is asked then.
+func TestRegisterAsksOnlyWhenTheAnswersAndTheQuestionsAreBothAtATerminal(t *testing.T) {
+	// A pseudo-terminal's controlling end is a terminal to the same check a real one passes.
+	tty, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+	if err != nil {
+		t.Skipf("no pseudo-terminal on this host: %v", err)
+	}
+	defer tty.Close()
+	file, err := os.Create(filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	for _, tc := range []struct {
+		name string
+		in   io.Reader
+		out  io.Writer
+		want bool
+	}{
+		{"both at a terminal", tty, tty, true},
+		{"output sent to a file", tty, file, false},
+		{"output captured", tty, &strings.Builder{}, false},
+		{"input from a file", file, tty, false},
+		{"input piped", strings.NewReader(""), tty, false},
+		{"no terminal", strings.NewReader(""), &strings.Builder{}, false},
+	} {
+		if got := asksAt(tc.in, tc.out); got != tc.want {
+			t.Errorf("%s: asks = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

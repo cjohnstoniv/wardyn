@@ -163,6 +163,9 @@ mv -f "$INSTALLED.new" "$INSTALLED"
 echo "Installed $INSTALLED"
 
 if [ "$HAVE_IDENTITY" = 0 ]; then
+  # register asks only when both its input and output are a terminal; say so first, so a person watching
+  # knows the questions are coming and a log shows why none were asked.
+  echo "Registering this computer. At a terminal it asks for the runner's limits (Enter takes each suggestion); otherwise it registers with the limits it suggests."
   "$INSTALLED" register --org "$ORG" --token-file "$TOKEN_FILE"
 fi
 

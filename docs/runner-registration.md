@@ -49,7 +49,7 @@ Both lists are paged and set `X-Wardyn-Truncated` when more exist. An unclaimed 
 
 Every runner declares its limits: Runs at once (`runs_at_once`, 1 to 64 for a self-hosted runner), a total all its runs at once may use (`total`) and what one run may use (`per_run`), each in CPU (`cpu_millis`, at least one CPU), memory (`memory_mib`) and disk (`disk_mib`, whole GiB). No per-run amount is past its total. A runner with none declared takes no run: a launch that could only go there is refused `runner_limits_unset`. Migration `0174_runner_limits` gives a runner registered before it none, so its owner sets them.
 
-`wardyn-runnerd register` measures the computer: the CPUs and memory Docker reports, and the free disk of Docker's data root when the engine is local (not Docker Desktop). It proposes half of each as the total, and per run the total divided by Runs at once, at least 1 CPU and 1 GB. Runs at once defaults to half the CPUs. `--max-runs`, `--total-cpu`, `--total-memory`, `--total-disk`, `--per-run-cpu`, `--per-run-memory` and `--per-run-disk` (CPUs and GB) override any of it. A total past what the computer reports is refused, and a disk it cannot measure must be given, before the token is spent. The server refuses a registration without limits (`runner_limits_required`).
+`wardyn-runnerd register` measures the computer: the CPUs and memory Docker reports, and the free disk of Docker's data root when the engine is local (not Docker Desktop). It proposes half of each as the total, and per run the total divided by Runs at once, at least 1 CPU and 1 GB. Runs at once defaults to half the CPUs. `--max-runs`, `--total-cpu`, `--total-memory`, `--total-disk`, `--per-run-cpu`, `--per-run-memory` and `--per-run-disk` (CPUs and GB) override any of it. A total past what the computer reports is refused, and a disk it cannot measure must be given, before the token is spent. At a terminal, `register` asks for each limit not given as a flag and offers the proposal, which Enter accepts; when its input or its output is not a terminal it asks nothing and registers with the proposal. The server refuses a registration without limits (`runner_limits_required`).
 
 | Who | Can |
 |---|---|
@@ -98,7 +98,7 @@ The installer does these steps in order and stops at the first refusal:
 - It copies the binary to `~/.local/share/wardyn/bin` on Linux or `~/Library/Application Support/wardyn/bin` on macOS.
 - It sets the proxy image to `ghcr.io/cjohnstoniv/wardyn-proxy:<version>` for a release binary. A development build refuses unless `--proxy-image` is given.
 - It creates the `wardyn-internal` bridge, or the one named by `--internal-network`, when it is missing.
-- It registers the runner with `--token-file` when no identity exists, and never registers an existing identity again.
+- It registers the runner with `--token-file` when no identity exists, and never registers an existing identity again. Run at a terminal, that step asks for the runner's limits; with the output sent to a file it asks nothing.
 - It installs and starts the service.
 
 | System | Service | Settings | Logs |
