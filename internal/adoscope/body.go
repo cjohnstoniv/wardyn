@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // MaxBodyPeek bounds what the classifier will look at. Far above any of the
@@ -86,8 +87,9 @@ func declaredLength(h http.Header) (int, bool, error) {
 // Azure DevOps' parser is last-key-wins, and so is Go's, but they need not
 // agree which key is last, so `{"bypassPolicy":false,…,"bypassPolicy":true}`
 // could show a classifier "false" while the server acts on "true". Refusing
-// the body is the only answer immune to key order. The comparison FOLDS CASE,
-// since the server's binding does too.
+// the body is the only answer immune to key order. Keys compare under
+// foldKey, the fold json.Unmarshal binds keys to fields with, so every pair of
+// keys that would land in one field is a duplicate here.
 func decodeUnique(body []byte, v any) error {
 	if err := uniqueKeys(body); err != nil {
 		return err
@@ -154,7 +156,7 @@ func walkObject(dec *json.Decoder, depth int) error {
 		if !ok {
 			return fmt.Errorf("adoscope: body has a non-string object key")
 		}
-		folded := strings.ToLower(name)
+		folded := foldKey(name)
 		if seen[folded] {
 			return fmt.Errorf("adoscope: body repeats the key %q — which value the server acts on is not knowable", name)
 		}
@@ -165,6 +167,21 @@ func walkObject(dec *json.Decoder, depth int) error {
 	}
 	_, err := dec.Token()
 	return err
+}
+
+// foldKey is encoding/json's key fold (its foldName): each rune becomes the
+// least rune of its Unicode simple-fold orbit. strings.ToLower is not the same
+// fold: it leaves U+017F (long s) as is, which the decoder matches to "s".
+func foldKey(name string) string {
+	return strings.Map(func(r rune) rune {
+		for {
+			f := unicode.SimpleFold(r)
+			if f <= r {
+				return f
+			}
+			r = f
+		}
+	}, name)
 }
 
 // pullRequestWrite classifies a pull-request write, promoting it to
