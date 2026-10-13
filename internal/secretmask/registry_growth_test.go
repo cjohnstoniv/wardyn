@@ -44,12 +44,28 @@ func TestRegistryAddDeduplicates(t *testing.T) {
 		t.Errorf("Snapshot after 5 distinct Add() = %d entries, want 6 — dedup must not drop distinct secrets", n)
 	}
 
-	// A value also registered process-globally is in the run's corpus once.
+	// A value also registered process-globally becomes the run's own as well,
+	// and is still in the run's corpus and its maskers once: the set does not
+	// double.
 	glob := []byte("a-process-global-subscription-blob")
-	r.AddGlobal(0, "", "test-credential", time.Now(), glob)
+	now := time.Now()
+	r.AddGlobal(0, "", "test-credential", now, glob)
 	r.Add(runID, glob)
 	if n := len(r.Snapshot(runID)); n != 7 {
 		t.Errorf("Snapshot after re-adding a global per-run = %d entries, want 7", n)
+	}
+	if n, nj := len(r.Masker(runID).Secrets()), len(r.JSONVariantMasker(runID).Secrets()); n != 7 || nj != 7 {
+		t.Errorf("the run's maskers hold %d and %d values, want 7 each", n, nj)
+	}
+	// The run's copy is its own: it stays when the process-global one is let go.
+	if err := r.EvictGlobal("", "test-credential", now); err != nil {
+		t.Fatal(err)
+	}
+	if swept := r.SweepGlobals(now.Add(time.Second)); swept != 1 {
+		t.Errorf("the sweep dropped %d process-global values, want 1", swept)
+	}
+	if n := len(r.Snapshot(runID)); n != 7 {
+		t.Errorf("Snapshot after the process-global copy was swept = %d entries, want the run's own 7", n)
 	}
 
 	// The whole corpus is still masked.
