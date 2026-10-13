@@ -195,8 +195,11 @@ describe("barrier art ships as files, never inlined", () => {
   }, 180_000);
 
   it("emits all six barrier PNGs as asset files once a screen imports the art", async () => {
-    const emitted = (await buildOnce()).filter((o) => o.type === "asset" && /barrier-(fence|wall|vault)-(128|256)-.*\.png$/.test(o.fileName));
-    const wired = appImports(BARRIER_ART_IMPORT, /barrier-(art|compare-table)\.tsx$/);
+    const build = await buildOnce();
+    const emitted = build.filter((o) => o.type === "asset" && /barrier-(fence|wall|vault)-(128|256)-.*\.png$/.test(o.fileName));
+    // Wired once the art is in the built graph: an importer the app itself never reaches (New Run steps
+    // before the route cutover) leaves it out of the build.
+    const wired = appImports(BARRIER_ART_IMPORT, /barrier-(art|compare-table)\.tsx$/) && modulesOf(chunksOf(build)).some((m) => /barrier-art\.tsx$/.test(m));
     expect(emitted.length).toBe(wired ? 6 : 0);
   }, 180_000);
 
