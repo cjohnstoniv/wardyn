@@ -236,4 +236,27 @@ func TestBackend_RowsOfOneValueEndOnTheirOwn(t *testing.T) {
 	}
 }
 
+// A value a credential already holds process-wide is still committed as the
+// run's own, once: the run's copy must outlive the credential's.
+func TestBackend_ARunValueIsCommittedWhileItIsAlsoGlobal(t *testing.T) {
+	r := NewRegistry()
+	b := &fakeBackend{reg: r}
+	r.SetBackend(b)
+	run, v := uuid.New(), []byte("a-value-held-both-ways")
+	if err := r.AddGlobal(0, "alice", "cred", time.Now(), v); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := r.Add(run, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if b.runs != 1 {
+		t.Errorf("the run's value was committed %d times, want once", b.runs)
+	}
+	if n := len(r.Snapshot(run)); n != 1 {
+		t.Errorf("the run's corpus holds the value %d times, want once", n)
+	}
+}
+
 func (b *fakeBackend) GlobalGeneration(context.Context) (int64, error) { return 0, nil }

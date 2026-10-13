@@ -133,13 +133,15 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) error {
 	if r == nil || len(value) < MinLen {
 		return nil
 	}
-	// Re-registering an already-known value (per-run or global) is a no-op:
-	// masking is exact-match over a set, so a duplicate could never mask
-	// anything new. There is deliberately no CAP here: dropping a registered
-	// secret past a ceiling would fail OPEN and emit it unmasked, the one
-	// thing this package exists to prevent.
+	// Re-registering a value the run already has is a no-op: masking is
+	// exact-match over a set, so a duplicate could never mask anything new. A
+	// value that is only in the global set is NOT known: a global is let go
+	// when its credential is replaced or deleted, and a run that was handed
+	// the value before then still holds it. There is deliberately no CAP
+	// here: dropping a registered secret past a ceiling would fail OPEN and
+	// emit it unmasked, the one thing this package exists to prevent.
 	r.mu.RLock()
-	known := containsSlice(r.perRun[runID], value) || containsSlice(r.globals, value)
+	known := containsSlice(r.perRun[runID], value)
 	b := r.backend
 	r.mu.RUnlock()
 	if known {
@@ -165,7 +167,7 @@ func (r *Registry) AddLocal(runID uuid.UUID, value []byte) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if containsSlice(r.perRun[runID], value) || containsSlice(r.globals, value) {
+	if containsSlice(r.perRun[runID], value) {
 		return
 	}
 	r.perRun[runID] = append(r.perRun[runID], bytes.Clone(value))
@@ -453,7 +455,9 @@ func (r *Registry) Snapshot(runID uuid.UUID) [][]byte {
 		out = append(out, bytes.Clone(v))
 	}
 	for _, v := range globals {
-		out = append(out, bytes.Clone(v))
+		if !containsSlice(perRun, v) { // a value the run also holds is in the set once
+			out = append(out, bytes.Clone(v))
+		}
 	}
 	return out
 }
@@ -527,7 +531,9 @@ func (r *Registry) snapshotLocked(runID uuid.UUID) [][]byte {
 		out = append(out, bytes.Clone(v))
 	}
 	for _, v := range globals {
-		out = append(out, bytes.Clone(v))
+		if !containsSlice(perRun, v) { // a value the run also holds is in the set once
+			out = append(out, bytes.Clone(v))
+		}
 	}
 	return out
 }

@@ -5,6 +5,7 @@ package secretmask
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -43,7 +44,7 @@ func TestRegistryAddDeduplicates(t *testing.T) {
 		t.Errorf("Snapshot after 5 distinct Add() = %d entries, want 6 — dedup must not drop distinct secrets", n)
 	}
 
-	// A value already registered process-globally is not re-added per-run.
+	// A value also registered process-globally is in the run's corpus once.
 	glob := []byte("a-process-global-subscription-blob")
 	r.AddGlobal(0, "", "test-credential", time.Now(), glob)
 	r.Add(runID, glob)
@@ -56,5 +57,53 @@ func TestRegistryAddDeduplicates(t *testing.T) {
 	if bytes.Contains(masked, pat) || bytes.Contains(masked, glob) ||
 		bytes.Contains(masked, []byte("a-distinct-secret-value-03")) {
 		t.Errorf("de-duplicated corpus stopped masking a registered secret: %q", masked)
+	}
+}
+
+// A run that was handed a credential value still holds it after the credential
+// is replaced, so the run keeps masking it once the process-wide copy is swept,
+// whether the run's copy was registered here (Add) or read from another
+// replica's commit (AddLocal).
+func TestRegistry_ARunValueOutlivesTheGlobalCopyOfTheSameBytes(t *testing.T) {
+	v := []byte(`a-credential-"handed"-to-a-run`)
+	quoted, _ := json.Marshal(string(v))
+	for name, add := range map[string]func(*Registry, uuid.UUID) error{
+		"Add":      func(r *Registry, run uuid.UUID) error { return r.Add(run, v) },
+		"AddLocal": func(r *Registry, run uuid.UUID) error { r.AddLocal(run, v); return nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := NewRegistry()
+			run, now := uuid.New(), time.Now()
+			if err := r.AddGlobal(0, "alice", "cred", now, v); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if err := add(r, run); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if n := len(r.Snapshot(run)); n != 1 {
+				t.Errorf("the run's corpus holds the value %d times, want once", n)
+			}
+			if err := r.AddGlobal(0, "alice", "cred", now, []byte("the-replacement-value")); err != nil {
+				t.Fatal(err)
+			}
+			if n := r.SweepGlobals(now.Add(time.Second)); n != 1 {
+				t.Fatalf("the sweep dropped %d values, want the replaced one", n)
+			}
+			if bytes.Contains(r.Masker(run).Mask([]byte("out "+string(v)+" end")), v) {
+				t.Error("the run's plain output no longer masks the value it was handed")
+			}
+			if bytes.Contains(r.JSONVariantMasker(run).Mask(quoted), quoted[1:len(quoted)-1]) {
+				t.Error("the run's JSON data no longer masks the value it was handed")
+			}
+			if masksValue(r, uuid.New(), string(v)) {
+				t.Error("a run that was never handed the value still masks it after the sweep")
+			}
+			r.Evict(run)
+			if masksValue(r, run, string(v)) {
+				t.Error("evicting the run left its copy of the value masked")
+			}
+		})
 	}
 }
