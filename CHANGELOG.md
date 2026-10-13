@@ -662,6 +662,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   row; the run document's YAML/JSON switch changes format at once (text that does not parse stays in its format).
   The "Recording" line, the "Before you launch" heading and relative waiting times are gone; server warnings show as
   notices above the blockers. The GitHub CLI card says what works today: Actions and the REST API.
+- New Run's Files step follows its approved design: a main drive section (size, what happens to it), one card per
+  repository, drive and folder with its mount path and access, a starting folder picker and a read-only mount map. A
+  workspace's folders show as cards of their own and leave with its repositories. A run starts in the repository you
+  name, or in its workspace's first folder when none is named. A drive's mount path is read-only; a path outside
+  /home/agent is refused with "Use a path inside /home/agent."
 
 ### Removed
 
