@@ -315,6 +315,11 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 				slog.String("slug", slug), slog.String("err", fmt.Sprintf(repoField400Charset, "ref")))
 			return
 		}
+		if t := strings.TrimSpace(slug); t != "" && !repoFieldSafe(t) {
+			slog.Warn("wardynd: repo locator is not a safe clone field; dropping the repo",
+				slog.String("err", fmt.Sprintf(repoField400Charset, "repo")))
+			return
+		}
 		slug, url, dest, ok := repoCloneSpec(slug, dest)
 		if !ok {
 			return

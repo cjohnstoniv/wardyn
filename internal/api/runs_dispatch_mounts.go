@@ -510,19 +510,24 @@ func addGitBrokerHosts(sandboxEnv map[string]string, entries ...string) {
 // branch here changes control flow. See buildRepoRecords for the validation
 // (repoFieldSafe, allowed-prefix targets, dedup) it relies on.
 func applyRepoCloneEnv(sandboxEnv map[string]string, run types.AgentRun, policy types.RunPolicySpec) {
-	// The legacy single-repo fallback is for a repo no structured record names:
-	// agent-run clones it at the default target and ref, so one whose record was
-	// dropped (a target or ref that cannot ride it) must not come back that way.
-	if slug := strings.TrimSpace(run.Repo); slug != "" && repoFieldSafe(slug) && !legacyRepoNamed(run.Repo, policy.WorkspaceRepos) {
+	// The drop sentences are create's to surface (they ride the 201); here the
+	// slog.Warn inside buildRepoRecords is the whole record.
+	repos, _ := buildRepoRecords(run.Repo, policy.WorkspaceRepos)
+	if repos != "" {
+		sandboxEnv["WARDYN_REPOS"] = repos
+	}
+	// The legacy single-repo pair stays for every run that clones something. When
+	// every record was dropped while one names the run's repo, agent-run's legacy
+	// fallback would clone it at the default target and ref in the dropped
+	// record's place, so the pair is withheld.
+	if repos == "" && legacyRepoNamed(run.Repo, policy.WorkspaceRepos) {
+		return
+	}
+	if slug := strings.TrimSpace(run.Repo); slug != "" && repoFieldSafe(slug) {
 		sandboxEnv["WARDYN_REPO_SLUG"] = slug
 		if url := repoCloneURL(slug); url != "" {
 			sandboxEnv["WARDYN_REPO_URL"] = url
 		}
-	}
-	// The drop sentences are create's to surface (they ride the 201); here the
-	// slog.Warn inside buildRepoRecords is the whole record.
-	if repos, _ := buildRepoRecords(run.Repo, policy.WorkspaceRepos); repos != "" {
-		sandboxEnv["WARDYN_REPOS"] = repos
 	}
 }
 
