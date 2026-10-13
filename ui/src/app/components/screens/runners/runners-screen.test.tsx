@@ -41,6 +41,7 @@ import { aheadByHours } from "../../../lib/test-clock";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RunnersScreen } from "./runners-screen";
 import { setField } from "../../../../test/set-field";
+import { holdExitAnimation } from "../../../../test/exit-animation";
 
 const ORG = "https://org.example.com";
 const NOW_ISO = () => aheadByHours(0);
@@ -300,6 +301,33 @@ describe("Admin -> Runners drawer and revoke", () => {
     expect(within(drawer).queryByRole("button", { name: /copy/i })).toBeNull();
     expect(within(drawer).getByRole("button", { name: "Revoke" })).toBeInTheDocument();
     expect(within(drawer).getByText("laptop-7")).toHaveFocus();
+  });
+
+  // The confirm closes after a 200 ms exit animation. The drawer puts focus on its title when Revoke is gone;
+  // the confirm's own focus restore must not pull it back to the Revoke button that the re-read then removes.
+  it("after a revoke the drawer's title keeps focus while the confirm leaves and the re-read lands late", async () => {
+    const hold = holdExitAnimation();
+    try {
+      const user = userEvent.setup();
+      revokeMock.mockResolvedValue({ id: "r-laptop", state: "revoked", runs_killed: 2 });
+      renderScreen();
+      await user.click(await screen.findByRole("button", { name: "laptop-7" }));
+      const drawer = await screen.findByRole("dialog");
+      await user.click(within(drawer).getByRole("button", { name: "Revoke" }));
+      let landRead!: (r: RunnerView) => void;
+      getMock.mockImplementation(() => new Promise<RunnerView>((r) => { landRead = r; }));
+      await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Revoke runner" }));
+      await waitFor(() => expect(revokeMock).toHaveBeenCalledWith("r-laptop"));
+      await act(async () => { await new Promise((r) => requestAnimationFrame(() => r(undefined))); });
+      expect(document.activeElement).toHaveTextContent("laptop-7");
+      await hold.finish();
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(document.activeElement).toHaveTextContent("laptop-7");
+      await act(async () => landRead({ ...LAPTOP, state: "revoked" }));
+      expect(document.activeElement).toHaveTextContent("laptop-7");
+    } finally {
+      hold.release();
+    }
   });
 
   it("a claimed runner that has not reported shows Not reported yet, never a guess", async () => {
