@@ -378,13 +378,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// image build + dispatch continue server-side (runs_create_launch.go).
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+runID.String())
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings, ResourcesApplied: &f.place.applied})
-	spec, harnessRules := applyHarnessToolRules(spec, req.Tools, toolLaneDefault(req))
-	launch := createRunLaunch{
-		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
-		wsRefs: wsRefs, driveMounts: f.driveMounts, ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
-		runToken: id.Token, created: created, comps: comps, overridden: f.source.overridden(), pushSets: f.pushSets, harnessRules: harnessRules,
-		harnesses: f.harnesses, mainDrive: f.mainDrive.decision(),
-	}
+	launch := f.launch(req, spec, ceiling, gw, id.Token, created)
 	launchCtx := context.WithoutCancel(ctx)
 	s.goBackground(func() { s.finishCreateRunLaunch(launchCtx, launch) })
 }
