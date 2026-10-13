@@ -234,14 +234,15 @@ func TestPlacement_DenyPlacementsFilterPerKind(t *testing.T) {
 			if tc.deny != types.PlacementRemote {
 				return
 			}
-			// Their own runner full: the run is not moved onto the remote-hosted runner the profile denies.
+			// Their own runner full: the run is not moved onto the remote-hosted runner the profile denies; it
+			// waits for its own runner in the pool's queue.
 			if _, err := e.pool.Exec(context.Background(), `UPDATE agent_runs SET state = 'COMPLETED'`); err != nil {
 				t.Fatal(err)
 			}
 			e.maxRuns(laptop, e.personP, 1)
 			e.occupyRunner(pool, laptop, e.personP)
-			if _, code, refused := e.launchStored(body); code != http.StatusUnprocessableEntity || !strings.Contains(refused, string(placement.ReasonRunnerAtCapacity)) {
-				t.Errorf("own runner full, remote denied = %d %s, want runner_at_capacity", code, refused)
+			if run, code, refused := e.launchStored(body); code != http.StatusCreated || run.State != types.RunQueued || run.RunnerPoolExecutor != "" {
+				t.Errorf("own runner full, remote denied = %d %s %+v, want it waiting, never on the remote-hosted runner", code, refused, run)
 			}
 		})
 	}
