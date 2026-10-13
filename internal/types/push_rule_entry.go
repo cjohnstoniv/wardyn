@@ -10,8 +10,11 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
+
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 )
 
 // The identity of an SCM entry for push rules: the provider's HOST and the
@@ -64,6 +67,40 @@ func CanonicalPushOrg(org string) (string, error) {
 		return "", errors.New("organisation uses letters, digits, '.', '_' and '-' and starts with a letter or digit")
 	}
 	return n, nil
+}
+
+const maxPushCollectionLen = 64
+
+// pushCollectionReserved is what Azure DevOps Server refuses in a collection
+// name, and "%", which only a second encoding could leave.
+const pushCollectionReserved = `\/:*?"<>|;#${},+=[]%`
+
+// CanonicalPushCollection is an Azure DevOps Server collection's canonical
+// spelling: Unicode NFKC, then lower case, as Azure DevOps Server compares
+// collection names without regard to case. Unlike a hosted organisation it may
+// hold a space and letters outside ASCII. It refuses what Azure DevOps Server
+// refuses in one (its reserved characters, a leading "_", a trailing dot, more
+// than 64 characters), a leading or trailing space, any other white space, a
+// control or zero-width character, and the two letters Go and JavaScript
+// lower-case differently (U+0130 and U+03A3), so both file one collection under
+// one key.
+func CanonicalPushCollection(name string) (string, error) {
+	n := norm.NFKC.String(name)
+	switch {
+	case n == "":
+		return "", errors.New("name the collection")
+	case utf8.RuneCountInString(n) > maxPushCollectionLen:
+		return "", fmt.Errorf("collection is longer than %d characters", maxPushCollectionLen)
+	case strings.HasPrefix(n, "_") || strings.HasPrefix(n, " ") || strings.HasSuffix(n, ".") || strings.HasSuffix(n, " "):
+		return "", errors.New("collection starts with '_' or a space, or ends with a dot or a space")
+	}
+	for _, r := range n {
+		if (r != ' ' && unicode.IsSpace(r)) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) ||
+			strings.ContainsRune(pushCollectionReserved, r) || r == '\u0130' || r == '\u03a3' || r == utf8.RuneError {
+			return "", errors.New("collection holds white space other than a space, a control or zero-width character, or one of \\ / : * ? \" < > | ; # $ { } , + = [ ] %")
+		}
+	}
+	return strings.ToLower(n), nil
 }
 
 // CanonicalPushHost is the provider host's canonical spelling: ASCII lower case,
@@ -132,7 +169,12 @@ func canonicalPushPair(provider, host, org string) (h, o string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	if o, err = CanonicalPushOrg(org); err != nil {
+	// Any Azure DevOps host but the service's is an Azure DevOps Server, whose entry is a collection.
+	canonical := CanonicalPushOrg
+	if provider == string(GitProviderAzureDevOps) && h != PublicAzureDevOpsHost {
+		canonical = CanonicalPushCollection
+	}
+	if o, err = canonical(org); err != nil {
 		return "", "", err
 	}
 	if hostOrg != "" && hostOrg != o {
@@ -216,9 +258,9 @@ func PushRuleEntryOfRemoteAt(provider, remote, basePath string) (host, org strin
 // azureServerCollection reads the collection out of an Azure DevOps Server path,
 // whose layout is [basePath/]Collection[/Project]/_git/Repo.
 func azureServerCollection(remote string, segs []string, basePath string) (string, error) {
-	var base []string
-	if bp := strings.Trim(basePath, "/"); bp != "" {
-		base = strings.Split(bp, "/")
+	segs, base, err := serverPathNames(remote, segs, basePath)
+	if err != nil {
+		return "", err
 	}
 	gi := -1
 	for i, s := range segs {
@@ -239,6 +281,30 @@ func azureServerCollection(remote string, segs []string, basePath string) (strin
 		}
 	}
 	return segs[len(base)], nil
+}
+
+// serverPathNames is an Azure DevOps Server remote's path segments and the row's
+// base path, each decoded once by Azure DevOps's name rule (adoscope.UnescapeName),
+// so a collection reads as its name ("Fabrikam Collection", not
+// "Fabrikam%20Collection") and a segment that decodes to a separator is refused.
+func serverPathNames(remote string, segs []string, basePath string) (names, base []string, err error) {
+	for _, seg := range segs {
+		name, err := adoscope.UnescapeName(seg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("remote %q: %w", remote, err)
+		}
+		names = append(names, name)
+	}
+	if bp := strings.Trim(basePath, "/"); bp != "" {
+		for _, seg := range strings.Split(bp, "/") {
+			name, err := adoscope.UnescapeName(seg)
+			if err != nil {
+				return nil, nil, fmt.Errorf("Azure DevOps Server base path %q: %w", basePath, err)
+			}
+			base = append(base, name)
+		}
+	}
+	return names, base, nil
 }
 
 // remoteSegments splits a remote's path into segments, refusing any that git or
