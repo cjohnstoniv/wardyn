@@ -20,11 +20,18 @@ package api
 //     redemption would fail its consent check. The ceiling is therefore a
 //     RESOURCE: a capture is usable when the grant holds at least one scope
 //     under it.
+//   - azure_arm is an Azure CLI row's capture, for Azure Resource Manager: the
+//     same one-resource policy as azure_foundry, under the one audience below,
+//     stored under the row's own name in the CLI sign-in namespace.
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
+	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -35,7 +42,14 @@ type entraKind string
 const (
 	entraKindADO          entraKind = "azure_devops"
 	entraKindAzureFoundry entraKind = "azure_foundry"
+	entraKindAzureARM     entraKind = "azure_arm"
 )
+
+// azureARMAudience is the one audience an Azure CLI row's sign-in is captured
+// for: Azure Resource Manager. It is not in azureAudienceClosed, so a model
+// provider's grant can never be pointed at it, and an Azure CLI capture names
+// no other.
+const azureARMAudience = "https://management.azure.com/.default"
 
 // The two audiences an azure_foundry sign-in may be captured for, as the
 // `<resource>/.default` literal Entra is asked for. The Foundry route's
@@ -121,10 +135,34 @@ func azureFoundryCapture(uid, audience string) (entraCapture, error) {
 	}, nil
 }
 
+// azureARMCapture is the capture an Azure CLI row serves, keyed by the row's
+// id. It refuses an id that is not usable as a store name.
+func azureARMCapture(componentID string) (entraCapture, error) {
+	if !adoEntraValidRowID(componentID) {
+		return entraCapture{}, fmt.Errorf("azure cli sign-in: component id %q is not usable as a store name", componentID)
+	}
+	return entraCapture{
+		kind:       entraKindAzureARM,
+		scopes:     []string{azureARMAudience},
+		secretName: cliSecretName(componentID, providerEntraPart),
+		donePath:   azureCLISignInDonePath,
+		rowUID:     componentID,
+	}, nil
+}
+
+// oneResource reports whether this kind's ceiling is one resource asked for as
+// `<resource>/.default`, rather than Azure DevOps' exact scope literals.
+func (c entraCapture) oneResource() bool {
+	return c.kind == entraKindAzureFoundry || c.kind == entraKindAzureARM
+}
+
 // label is the lower-case name this kind's errors and logs use.
 func (c entraCapture) label() string {
-	if c.kind == entraKindAzureFoundry {
+	switch c.kind {
+	case entraKindAzureFoundry:
 		return "azure foundry"
+	case entraKindAzureARM:
+		return "azure cli"
 	}
 	return "azure devops"
 }
@@ -134,8 +172,8 @@ func (c entraCapture) logRow() string { return c.rowUID }
 
 // auditProvider is the `provider` label this kind's audit and mask rows carry.
 func (c entraCapture) auditProvider() string {
-	if c.kind == entraKindAzureFoundry {
-		return string(entraKindAzureFoundry)
+	if c.oneResource() {
+		return string(c.kind)
 	}
 	return adoEntraProviderPrefix
 }
@@ -143,7 +181,7 @@ func (c entraCapture) auditProvider() string {
 // checkRequested holds a requested scope set to this kind's policy. It runs at
 // validation, at login-request parsing (Azure DevOps) and at every redemption.
 func (c entraCapture) checkRequested(scopes []string) error {
-	if c.kind != entraKindAzureFoundry {
+	if !c.oneResource() {
 		return adoEntraCheckRequestedScopes(scopes)
 	}
 	return azureCheckRequestedScopes(c.scopes, scopes)
@@ -177,10 +215,10 @@ func azureCheckRequestedScopes(ceiling, scopes []string) error {
 
 // capturedScopes is what a capture stores from a token response's granted
 // scope string. Azure DevOps keeps the exact-literal intersect with the
-// ceiling. azure_foundry keeps the granted entries under the audience's
+// ceiling. A one-resource kind keeps the granted entries under the audience's
 // resource, never the `.default` literal; none means the grant is unusable.
 func (c entraCapture) capturedScopes(granted string) []string {
-	if c.kind != entraKindAzureFoundry {
+	if !c.oneResource() {
 		return adoCaptureScopes(granted, c.scopes)
 	}
 	prefix := azureAudienceResource(c.scopes[0]) + "/"
@@ -194,10 +232,10 @@ func (c entraCapture) capturedScopes(granted string) []string {
 }
 
 // consentCovers reports the first wanted scope the stored consent does not
-// cover. Azure DevOps wants each literal in the blob. azure_foundry wants the
-// blob to hold at least one scope under the audience's resource.
+// cover. Azure DevOps wants each literal in the blob. A one-resource kind wants
+// the blob to hold at least one scope under the audience's resource.
 func (c entraCapture) consentCovers(blobScopes, wanted []string) (string, bool) {
-	if c.kind != entraKindAzureFoundry {
+	if !c.oneResource() {
 		for _, want := range wanted {
 			if !slices.Contains(blobScopes, want) {
 				return want, false
@@ -210,4 +248,72 @@ func (c entraCapture) consentCovers(blobScopes, wanted []string) (string, bool) 
 		return c.scopes[0], false
 	}
 	return "", true
+}
+
+// entraCodeGrant is an authorization code redeemed into a blob that is ready to
+// store, with what the masking that follows the store needs.
+type entraCodeGrant struct {
+	blob       adoEntraBlob
+	generation int64
+	access     string
+}
+
+// redeemEntraCode is the middle of a row-keyed capture's callback, between its
+// own checks of the row and its own store. In this order: it exchanges the
+// code, puts both tokens on record for masking before anything can log them,
+// binds the id_token to the session's subject, and keeps the scopes ec's policy
+// admits. A non-empty reason is a refusal with that fixed code, and nothing is
+// stored either way.
+func (s *Server) redeemEntraCode(ctx context.Context, cfg ADOEntraConfig, ec entraCapture, subject, code, verifier, nonce string) (entraCodeGrant, string) {
+	generation, err := s.cfg.MaskRegistry.GlobalGeneration(ctx)
+	if err != nil {
+		return entraCodeGrant{}, reasonStoreError
+	}
+	resp, err := s.postADOEntraToken(ctx, cfg, url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"code_verifier": {verifier},
+		"redirect_uri":  {cfg.RedirectURL},
+	})
+	if err != nil {
+		reason := adoCaptureErrorCode(err)
+		slog.WarnContext(ctx, "wardynd: the azure sign-in code exchange failed",
+			slog.String("row", ec.rowUID), slog.String("reason", reason), slog.Any("err", err))
+		return entraCodeGrant{}, reason
+	}
+	now := s.cfg.Now()
+	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
+	if err := s.cfg.MaskRegistry.MergeGlobalUntil(generation, subject, ec.secretName, accessExpiry, []byte(resp.AccessToken), []byte(resp.RefreshToken)); err != nil {
+		slog.ErrorContext(ctx, "wardynd: the Azure sign-in tokens could not be recorded for masking",
+			slog.String("row", ec.rowUID), slog.Any("err", err))
+		return entraCodeGrant{}, reasonStoreError
+	}
+	if reason, ok := s.bindADOEntraIdentity(ctx, cfg, resp.IDToken, nonce, subject); !ok {
+		slog.WarnContext(ctx, "wardynd: azure sign-in identity binding failed",
+			slog.String("row", ec.rowUID), slog.String("reason", reason))
+		return entraCodeGrant{}, reasonADOCallbackIdentityBinding
+	}
+	granted := ec.capturedScopes(resp.Scope)
+	if resp.RefreshToken == "" || len(granted) == 0 {
+		return entraCodeGrant{}, reasonADOCallbackUnusableGrant
+	}
+	return entraCodeGrant{generation: generation, access: resp.AccessToken, blob: adoEntraBlob{
+		RefreshToken: resp.RefreshToken,
+		Scopes:       granted,
+		ExpiresAt:    accessExpiry,
+		TenantID:     cfg.TenantID,
+		ClientID:     cfg.ClientID,
+		Subject:      subject,
+		CapturedAt:   now.UTC(),
+		Source:       adoEntraSourceSignIn,
+	}}, ""
+}
+
+// retireReplacedEntraTokens runs once a capture's blob is stored. The exchange
+// already put both tokens on record; this retires what the sign-in replaced,
+// and a failure leaves the old values masked longer.
+func (s *Server) retireReplacedEntraTokens(ctx context.Context, subject string, ec entraCapture, g entraCodeGrant) {
+	if err := s.cfg.MaskRegistry.AddGlobalUntil(g.generation, subject, ec.secretName, s.cfg.Now(), g.blob.ExpiresAt, []byte(g.access), []byte(g.blob.RefreshToken)); err != nil {
+		slog.WarnContext(ctx, "wardynd: the replaced Azure sign-in tokens could not be retired", slog.String("row", ec.rowUID), slog.Any("err", err))
+	}
 }

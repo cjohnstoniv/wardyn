@@ -174,7 +174,11 @@ func (s *Server) resolveAzureFoundryInjection(w http.ResponseWriter, r *http.Req
 	}
 	access, err := s.RedeemAzureFoundryAccess(ctx, cfg, sn.OwnerSubject, uid, sn.Audience)
 	if err != nil {
-		return s.answerAzureRedeemFailure(w, r, claims, sn, err, fail)
+		return s.answerEntraRedeemFailure(w, r, claims, entraRedeemLane{
+			lane: azureApprovalLane, owner: sn.OwnerSubject, rowID: sn.ProviderUID,
+			notCaptured: azureResolveNotCaptured, dead: azureResolveDead, consent: azureResolveConsent, raisedNote: azureSignInRaisedNote,
+			closed: azureSignInClosedRefusal, tooMany: azureSignInTooManyRefusal, raiseFailed: azureSignInRaiseFailedBody,
+		}, err, fail)
 	}
 	// The ONE wire shape, forced whatever the grant authored.
 	value := formatInjectionValue("Bearer %s", []byte(access.AccessToken))
@@ -214,16 +218,28 @@ func azureDrift(sn azureGrantSnapshot, p types.ModelProvider, found bool, lane p
 	return ""
 }
 
-// answerAzureRedeemFailure answers a redemption failure by class. Each class has a different remedy:
-// the two a new sign-in fixes are a hold mid-run (423) and a failure hint at boot, the rest a refusal.
-func (s *Server) answerAzureRedeemFailure(w http.ResponseWriter, r *http.Request, claims *identity.Claims,
-	sn azureGrantSnapshot, err error, fail func(int, string, string, map[string]any) bool,
+// entraRedeemLane is one Azure sign-in lane's side of a redemption failure:
+// the approval lane its sign-in holds are raised and matched under, whose
+// sign-in for which row answers them, and the sentences that differ by lane.
+type entraRedeemLane struct {
+	lane, owner, rowID         string
+	notCaptured, dead, consent string
+	raisedNote                 string
+	closed, tooMany            string
+	raiseFailed                string
+}
+
+// answerEntraRedeemFailure answers a redemption failure by class, for a model provider's Azure sign-in
+// and an Azure CLI row's alike. Each class has a different remedy: the two a new sign-in fixes are a
+// hold mid-run (423) and a failure hint at boot, the rest a refusal.
+func (s *Server) answerEntraRedeemFailure(w http.ResponseWriter, r *http.Request, claims *identity.Claims,
+	l entraRedeemLane, err error, fail func(int, string, string, map[string]any) bool,
 ) bool {
 	class := ADOEntraClassify(err)
-	extra := map[string]any{"owner": sn.OwnerSubject}
+	extra := map[string]any{"owner": l.owner}
 	boot := r.URL.Query().Get(adoResolvePhase) == adoResolvePhaseBoot
 	held := func() bool {
-		return s.stillHeldForSignIn(r.Context(), w, claims, azureApprovalLane, sn.OwnerSubject, sn.ProviderUID)
+		return s.stillHeldForSignIn(r.Context(), w, claims, l.lane, l.owner, l.rowID)
 	}
 	switch class {
 	case ADOEntraFailureNotCaptured:
@@ -232,9 +248,9 @@ func (s *Server) answerAzureRedeemFailure(w http.ResponseWriter, r *http.Request
 		if !boot && s.cfg.Approvals != nil && held() {
 			return true
 		}
-		return fail(http.StatusForbidden, string(class), azureResolveNotCaptured, extra)
+		return fail(http.StatusForbidden, string(class), l.notCaptured, extra)
 	case ADOEntraFailureDeadCredential, ADOEntraFailureInteractionRequired:
-		body, note := azureResolveDead, azureSignInRaisedNote
+		body, note := l.dead, l.raisedNote
 		if class == ADOEntraFailureInteractionRequired {
 			body = fmt.Sprintf(azureResolveInteraction, azureConditionalAccessClass(err))
 			note = body
@@ -247,11 +263,11 @@ func (s *Server) answerAzureRedeemFailure(w http.ResponseWriter, r *http.Request
 			return fail(http.StatusForbidden, string(class), body, extra)
 		}
 		return s.holdForSignIn(w, r, claims, signInHold{
-			lane: azureApprovalLane, owner: sn.OwnerSubject, providerID: sn.ProviderUID, reason: adoSignInReason, detail: note,
-			closed: azureSignInClosedRefusal, tooMany: azureSignInTooManyRefusal, raiseFailed: azureSignInRaiseFailedBody,
+			lane: l.lane, owner: l.owner, providerID: l.rowID, reason: adoSignInReason, detail: note,
+			closed: l.closed, tooMany: l.tooMany, raiseFailed: l.raiseFailed,
 		}, class, fail)
 	case ADOEntraFailureConsentRequired:
-		return fail(http.StatusForbidden, string(class), azureResolveConsent, extra)
+		return fail(http.StatusForbidden, string(class), l.consent, extra)
 	case ADOEntraFailureStoreRefused:
 		return fail(http.StatusForbidden, string(class), azureResolveStoreRefuse, extra)
 	}
@@ -274,24 +290,15 @@ func (s *Server) reconcileAzureReauthOnRead(ctx context.Context, ap types.Approv
 // reports that this call resolved the request, so a caller holding the sign-in lock can resume once it has
 // released it.
 func (s *Server) reconcileAzureReauth(ctx context.Context, ap types.ApprovalRequest) (_ types.ApprovalRequest, closed bool) {
-	sc, ok := signInScopeFor(ap, azureApprovalLane)
-	if !ok || ap.State != types.ApprovalPending || s.cfg.Approvals == nil || s.cfg.Store == nil {
+	if ap.State != types.ApprovalPending || s.cfg.Approvals == nil || s.cfg.Store == nil {
+		return ap, false
+	}
+	sc, ec, lane, ok := s.azureReauthCapture(ctx, ap)
+	if !ok {
 		return ap, false
 	}
 	resolver, ok := s.cfg.Store.(reauthResolver)
 	if !ok {
-		return ap, false
-	}
-	site, err := s.cfg.Store.GetSiteConfig(ctx)
-	if err != nil {
-		return ap, false
-	}
-	facts, ok := azureFoundryRowFor(site, sc.ProviderID)
-	if !ok {
-		return ap, false
-	}
-	ec, err := azureFoundryCapture(sc.ProviderID, facts.audience)
-	if err != nil {
 		return ap, false
 	}
 	// Generation: only a sign-in captured AFTER the raise answers it, and only one no renewal has since found ended.
@@ -301,7 +308,7 @@ func (s *Server) reconcileAzureReauth(ctx context.Context, ap types.ApprovalRequ
 	}
 	ev := s.auditEvent(&ap.RunID, types.ActorHuman, sc.Owner, "credential.reauth.resolve", ap.ID.String(), "success",
 		mustJSON(map[string]any{
-			"approval_id": ap.ID, "owner": sc.Owner, "resolved_by": sc.Owner, "provider": azureApprovalLane,
+			"approval_id": ap.ID, "owner": sc.Owner, "resolved_by": sc.Owner, "provider": lane,
 		}))
 	if _, err := resolver.ResolveReauthApproval(ctx, ap.ID, types.ApprovalDecision{
 		State: types.ApprovalApproved, DecidedBy: sc.Owner, Reason: "signed in again",
@@ -314,12 +321,36 @@ func (s *Server) reconcileAzureReauth(ctx context.Context, ap types.ApprovalRequ
 	return ap, true
 }
 
+// azureReauthCapture is the capture that answers an Azure sign-in request, and the lane it was raised
+// under: a model provider's (its row read from the site config, for its audience) or an Azure CLI row's.
+// ok=false for any other request, and for one whose row is gone.
+func (s *Server) azureReauthCapture(ctx context.Context, ap types.ApprovalRequest) (adoSignInScopeBody, entraCapture, string, bool) {
+	if sc, ok := signInScopeFor(ap, azureCLIMechanism); ok {
+		ec, err := azureARMCapture(sc.ProviderID)
+		return sc, ec, azureCLIMechanism, err == nil
+	}
+	sc, ok := signInScopeFor(ap, azureApprovalLane)
+	if !ok {
+		return adoSignInScopeBody{}, entraCapture{}, "", false
+	}
+	site, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return adoSignInScopeBody{}, entraCapture{}, "", false
+	}
+	facts, ok := azureFoundryRowFor(site, sc.ProviderID)
+	if !ok {
+		return adoSignInScopeBody{}, entraCapture{}, "", false
+	}
+	ec, err := azureFoundryCapture(sc.ProviderID, facts.audience)
+	return sc, ec, azureApprovalLane, err == nil
+}
+
 // resolvePendingAzureReauth resolves every PENDING Azure sign-in request this capture answers: the
 // eager path, called by the capture callback AFTER its own audit row (captured -> resolved -> retry).
 // Best-effort: a resolution that does not land here is written by reconcileAzureReauthOnRead on the
 // proxy's next poll, through the same checks. It runs under the sign-in lock, so it returns the runs whose
 // requests it resolved for the caller to resume (approvalsClosed) once the lock is released.
-func (s *Server) resolvePendingAzureReauth(ctx context.Context, owner, providerUID string) (closed []uuid.UUID) {
+func (s *Server) resolvePendingAzureReauth(ctx context.Context, lane, owner, rowID string) (closed []uuid.UUID) {
 	if s.cfg.Approvals == nil {
 		return nil
 	}
@@ -330,7 +361,7 @@ func (s *Server) resolvePendingAzureReauth(ctx context.Context, owner, providerU
 		return nil
 	}
 	for _, ap := range rows {
-		if sc, ok := signInScopeFor(ap, azureApprovalLane); ok && sc.Owner == owner && sc.ProviderID == providerUID {
+		if sc, ok := signInScopeFor(ap, lane); ok && sc.Owner == owner && sc.ProviderID == rowID {
 			if _, ok := s.reconcileAzureReauth(ctx, ap); ok {
 				closed = append(closed, ap.RunID)
 			}

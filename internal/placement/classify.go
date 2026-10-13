@@ -127,6 +127,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "AzureGates", Variant: "Azure Foundry, the person's own Entra sign-in", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "AzureGates", Variant: "Azure Foundry, any shared capture", Class: ClassBrokered, Rule: RuleDelivery, Delivery: ClassAzureFoundryToken, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "GitHubAPI", Variant: "the organisation's GitHub App installation token, for the GitHub CLI", Class: ClassBrokered, Rule: RuleRefuse, Reason: ReasonPlacementCredential},
+	{Struct: StructProxyConfig, Field: "AzureARM", Variant: "the Azure CLI's Resource Manager token, redeemed by the organisation from the person's Entra sign-in", Class: ClassBrokered, Rule: RuleRefuse, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "UpstreamProxyURL", Class: ClassOperator, Rule: RuleNotSent, Variant: "the runner's own upstream-proxy config applies"},
 	{Struct: StructProxyConfig, Field: "TrustedCAPEM", Class: ClassOperator, Rule: RuleNotSent, Variant: "org network; destinations needing it take via_org"},
 	{Struct: StructProxyConfig, Field: "InternalHosts", Class: ClassOperator, Rule: RuleNotSent, Variant: "org network"},

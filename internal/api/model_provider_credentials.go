@@ -63,7 +63,7 @@ func providerSignInSecret(name string) bool {
 // wardyn-cli-<component id>-sso for an AWS CLI row, -entra for an Azure one.
 // Keyed by the org row's server-minted id, so a row deleted and re-added
 // starts with nobody's sign-in.
-const cliSecretPrefix = "wardyn-cli-"
+const cliSecretPrefix = types.CLISecretPrefix
 
 func cliSecretName(componentID, part string) string {
 	return cliSecretPrefix + componentID + "-" + part
