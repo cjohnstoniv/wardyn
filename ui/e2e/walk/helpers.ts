@@ -311,20 +311,20 @@ export async function walkNewRunToReview(page: Page, plan: GuidedPlan = {}): Pro
   await expect(heading(page, NR_START.TITLE)).toBeVisible({ timeout: 60_000 });
   await page.getByRole("button", { name: NR_START.GUIDED_FOOT }).click();
   await expect(heading(page, NR_SHAPE.TITLE)).toBeVisible();
-  await page.getByRole("radio", { name: startsWith(shape === "agent_task" ? NR_SHAPE.AGENT_TITLE : NR_SHAPE.ENV_TITLE) }).click();
-  await continueTo(page, shape === "agent_task" ? NR_RUN.TITLE_AGENT : NR_RUN.TITLE_ENV);
+  // A workload button writes the shape and opens Run.
+  await page.getByRole("button", { name: shape === "agent_task" ? NR_SHAPE.AGENT_TITLE : NR_SHAPE.ENV_TITLE, exact: true }).click();
+  await expect(heading(page, shape === "agent_task" ? NR_RUN.TITLE_AGENT : NR_RUN.TITLE_ENV)).toBeVisible({ timeout: 60_000 });
   if (shape === "agent_task") {
     await page.getByRole("radio", { name: startsWith(mode === "autonomous" ? NR_RUN.MODE_AUTONOMOUS : NR_RUN.MODE_INTERACTIVE) }).click();
   }
   await continueTo(page, NR_HARNESSES.TITLE);
   if (shape === "agent_task") {
-    await page.getByRole("button", { name: NR_HARNESSES.ADD_HARNESS, exact: true }).click();
+    // A new agent task opens with the roster's first harness added; an Interactive one starts the run in it.
+    await expect(page.locator("#nr-harness-0")).toBeVisible({ timeout: 60_000 });
     await page.locator("#nr-harness-0").selectOption("claude-code");
     if (mode === "autonomous") await page.locator("#nr-task").fill(plan.task ?? "Reply with the single word: ready.");
-    else if (plan.startsWithRun ?? plan.task !== undefined) {
-      await page.getByRole("switch", { name: NR_HARNESSES.START_IN_HARNESS }).click();
-      if (plan.task !== undefined) await page.locator("#nr-text-0").fill(plan.task);
-    }
+    else if (!(plan.startsWithRun ?? plan.task !== undefined)) await page.getByRole("switch", { name: NR_HARNESSES.START_IN_HARNESS }).click();
+    else if (plan.task !== undefined) await page.locator("#nr-text-0").fill(plan.task);
   }
   await continueTo(page, NR_FILES.TITLE);
   await page.getByRole("radio", { name: startsWith(NR_FILES.NO_EXTRA) }).check();

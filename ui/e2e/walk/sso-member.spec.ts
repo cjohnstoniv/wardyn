@@ -109,11 +109,14 @@ async function walkNewRunToTools(page: Page, shape: "agent_task" | "environment"
   await expect(heading(page, NR_START.TITLE)).toBeVisible({ timeout: 60_000 });
   await page.getByRole("button", { name: NR_START.GUIDED_FOOT }).click();
   await expect(heading(page, NR_SHAPE.TITLE)).toBeVisible();
-  await page.getByRole("radio", { name: startsWith(shape === "agent_task" ? NR_SHAPE.AGENT_TITLE : NR_SHAPE.ENV_TITLE) }).click();
-  await next(shape === "agent_task" ? NR_RUN.TITLE_AGENT : NR_RUN.TITLE_ENV);
+  // A workload button writes the shape and opens Run.
+  await page.getByRole("button", { name: shape === "agent_task" ? NR_SHAPE.AGENT_TITLE : NR_SHAPE.ENV_TITLE, exact: true }).click();
+  await expect(heading(page, shape === "agent_task" ? NR_RUN.TITLE_AGENT : NR_RUN.TITLE_ENV)).toBeVisible({ timeout: 60_000 });
   if (shape === "agent_task") await page.getByRole("radio", { name: startsWith(NR_RUN.MODE_AUTONOMOUS) }).click();
   await next(NR_HARNESSES.TITLE);
-  await page.getByRole("button", { name: NR_HARNESSES.ADD_HARNESS, exact: true }).click();
+  // A new agent task opens with its first harness; an environment adds one.
+  if (shape === "agent_task") await expect(page.locator("#nr-harness-0")).toBeVisible({ timeout: 60_000 });
+  else await page.getByRole("button", { name: NR_HARNESSES.ADD_HARNESS, exact: true }).click();
   await page.locator("#nr-harness-0").selectOption("claude-code");
   if (shape === "agent_task") await page.locator("#nr-task").fill("Reply with the single word: ready.");
   await next(NR_FILES.TITLE);

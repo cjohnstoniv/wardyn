@@ -70,7 +70,8 @@ import { act, beat, caption, centerInFrame, chapter, ffwdEnd, ffwdStart, PACE, s
 import { stage } from "./stage";
 import { clearWorkspace, decide } from "./funnel";
 import {
-  addHarnessButton,
+  addRepository,
+  chooseShape,
   confirmLaunchButton,
   harnessPicker,
   launchRunButton,
@@ -80,12 +81,9 @@ import {
   newRunHeading,
   openNameDialog,
   providerPicker,
-  repoCheckbox,
   runDescriptionField,
   runTitleField,
-  shapeCard,
   startGuided,
-  startsHere,
   taskField,
   viewRunButton,
 } from "./new-run";
@@ -314,8 +312,7 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   await beat(page, BEAT_SHORT + 400);
 
   // --- B2 What to run -----------------------------------------------------
-  await act(page, shapeCard(page, "agent_task"), "Agent task.");
-  await nextStep(page, NEW_RUN_HEADING.runAgent);
+  await chooseShape(page, "agent_task", "Agent task.");
 
   // ORDER IS LOAD-BEARING. The mode defaults to Interactive, which launches an
   // IDLE sandbox waiting for a human to type: the agent never executes the
@@ -334,7 +331,7 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // OPEN: the flow orders the mode (Run) ahead of the harness (Harnesses), so
   // "Claude Code will do the work." now plays after the Autonomous lines, not
   // before them. Lead: confirm the order, or reword the line.
-  await act(page, addHarnessButton(page));
+  await expect(harnessPicker(page)).toBeVisible();
   await harnessPicker(page).selectOption("claude-code");
   await spotlight(page, harnessPicker(page));
   await caption(page, "Claude Code will do the work.");
@@ -368,8 +365,7 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // OPEN: slugify is a local-directory workspace, and Files lists only
   // repositories (a local directory is never offered). Lead: where does a
   // local-directory workspace attach in the guided flow?
-  await act(page, repoCheckbox(page, WORKSPACE_NAME), "Attach the workspace.");
-  await act(page, startsHere(page, WORKSPACE_NAME));
+  await addRepository(page, WORKSPACE_NAME, "Attach the workspace.");
   await caption(page, "Same workspace as before — real code, writable because we granted it.");
   await beat(page, PACE.read + 400);
   // The main drive's size is prefilled only when the pool offers a default.

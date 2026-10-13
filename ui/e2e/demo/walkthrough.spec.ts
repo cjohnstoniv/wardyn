@@ -50,7 +50,8 @@ import { act, beat, caption, chapter, PACE, spotlight, typeInTerminal } from "./
 import { stage } from "./stage";
 import { advance, APPROVAL_APPEARS, clearWorkspace, decide } from "./funnel";
 import {
-  addHarnessButton,
+  addRepository,
+  chooseShape,
   commandField,
   confirmLaunchButton,
   harnessPicker,
@@ -61,11 +62,8 @@ import {
   nextStep,
   openNameDialog,
   providerPicker,
-  repoCheckbox,
   runTitleField,
-  shapeCard,
   startGuided,
-  startsHere,
   taskField,
   viewRunButton,
 } from "./new-run";
@@ -413,12 +411,11 @@ test("act 5 — a real run", async () => {
   // Wardyn's whole claim is that it governs ANY workload, so this is a true
   // demo, not a degraded one; it just does not show a coding agent writing code.
   if (SHELL_ACT5) {
-    await act(
+    await chooseShape(
       page,
-      shapeCard(page, "application"),
+      "application",
       "A run does not have to be an agent — Wardyn governs any workload. This one is a plain shell command.",
     );
-    await nextStep(page, NEW_RUN_HEADING.runApplication);
     const cmdBox = commandField(page);
     await spotlight(page, cmdBox);
     await cmdBox.fill(DEMO_COMMAND);
@@ -427,8 +424,7 @@ test("act 5 — a real run", async () => {
     await beat(page, PACE.read + 1400);
     await nextStep(page, NEW_RUN_HEADING.harnesses);
   } else {
-    await act(page, shapeCard(page, "agent_task"));
-    await nextStep(page, NEW_RUN_HEADING.runAgent);
+    await chooseShape(page, "agent_task");
 
     // ORDER IS LOAD-BEARING.
     //
@@ -446,7 +442,7 @@ test("act 5 — a real run", async () => {
     );
     await nextStep(page, NEW_RUN_HEADING.harnesses);
 
-    await act(page, addHarnessButton(page));
+    await expect(harnessPicker(page)).toBeVisible();
     await harnessPicker(page).selectOption("claude-code");
     const taskBox = taskField(page);
     await spotlight(page, taskBox);
@@ -459,10 +455,8 @@ test("act 5 — a real run", async () => {
 
   // OPEN: the workspace is a local directory, and Files lists only repository
   // sources, never local-directory workspaces. This addresses it as the
-  // repository row the approved flow would give it: "Include <name>" and
-  // "Starts here".
-  await act(page, repoCheckbox(page, WORKSPACE_NAME), "Attach the workspace we just onboarded.");
-  await act(page, startsHere(page, WORKSPACE_NAME));
+  // repository the approved flow would give it, added through the Add dialog.
+  await addRepository(page, WORKSPACE_NAME, "Attach the workspace we just onboarded.");
   await sizeMainDrive(page);
   await nextStep(page, NEW_RUN_HEADING.tools);
 
@@ -639,17 +633,15 @@ test("act 5 — a real run", async () => {
   // An Environment sandbox is the interactive run with no agent: a bare shell
   // is all this needs, not the agent CLI. Run and Harnesses are left on their
   // defaults.
-  await act(
+  await chooseShape(
     page,
-    shapeCard(page, "environment"),
+    "environment",
     "A bare shell this time. No agent, no task — just prove the point.",
   );
-  await nextStep(page, NEW_RUN_HEADING.runEnvironment);
   await nextStep(page, NEW_RUN_HEADING.harnesses);
   await nextStep(page, NEW_RUN_HEADING.files);
   // OPEN: same as act 5's Files step: a local-directory workspace has no row on Files.
-  await act(page, repoCheckbox(page, WORKSPACE_NAME), "The same workspace again.");
-  await act(page, startsHere(page, WORKSPACE_NAME));
+  await addRepository(page, WORKSPACE_NAME, "The same workspace again.");
   await sizeMainDrive(page);
   // Confined stays the default; Tools and access stays untouched — that omission IS
   // the point: nothing to configure, the workspace already vouches for it.

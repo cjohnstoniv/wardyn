@@ -27,6 +27,7 @@ import { NR_REVIEW } from "../../src/app/components/wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../src/app/components/wardyn/copy/new-run/shared";
 import { act, beat, caption, chapter, PACE, spotlight } from "./overlay";
 import {
+  chooseShape,
   confirmLaunchButton,
   NEW_RUN_HEADING,
   newRunHeading,
@@ -34,7 +35,6 @@ import {
   noExtraFiles,
   openNameDialog,
   runTitleField,
-  shapeCard,
   startGuided,
   viewRunButton,
 } from "./new-run";
@@ -170,8 +170,7 @@ test("V04c act 3 — the member's view of the same install", async () => {
   await page.goto("/runs/new");
   await expect(newRunHeading(page, NEW_RUN_HEADING.start)).toBeVisible({ timeout: 30_000 });
   await startGuided(page);
-  await act(page, shapeCard(page, "environment"), "Their own run — a terminal, nothing mounted.");
-  await nextStep(page, NEW_RUN_HEADING.runEnvironment);
+  await chooseShape(page, "environment", "Their own run — a terminal, nothing mounted.");
   await caption(page, "And lowered to Fence — the one barrier this cluster has. The floor is the member's to set; the admin's ceiling still caps it.");
   await beat(page, PACE.read);
   await act(page, page.getByRole("radio", { name: new RegExp(`^${NR_SHARED.BARRIER_FENCE}`) }), undefined);

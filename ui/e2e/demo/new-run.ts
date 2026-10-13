@@ -51,8 +51,20 @@ const SHAPE_TITLE: Record<NewRunShape, string> = {
   application: NR_SHAPE.APP_TITLE,
 };
 
-/** Step 1's workload cards (radios). */
-export const shapeCard = (page: Page, shape: NewRunShape): Locator => page.getByRole("radio", { name: startsWith(SHAPE_TITLE[shape]) });
+const RUN_HEADING: Record<NewRunShape, string> = {
+  agent_task: NR_RUN.TITLE_AGENT,
+  environment: NR_RUN.TITLE_ENV,
+  application: NR_RUN.TITLE_APP,
+};
+
+/** Step 1's workload buttons: each is named by its title, and choosing one opens the Run step. */
+export const shapeCard = (page: Page, shape: NewRunShape): Locator => page.getByRole("button", { name: SHAPE_TITLE[shape], exact: true });
+
+/** A workload button, filmed, then the Run step's heading as the arrived signal. */
+export async function chooseShape(page: Page, shape: NewRunShape, text?: string): Promise<void> {
+  await act(page, shapeCard(page, shape), text);
+  await expect(newRunHeading(page, RUN_HEADING[shape])).toBeVisible();
+}
 
 /** Step 2's mode cards (radios), for an agent task. */
 export const modeCard = (page: Page, mode: NewRunMode): Locator =>
@@ -61,19 +73,38 @@ export const modeCard = (page: Page, mode: NewRunMode): Locator =>
 /** Step 2's command field, for an Application sandbox. */
 export const commandField = (page: Page): Locator => page.getByLabel(NR_RUN.COMMAND_LABEL);
 
-/** Step 3: the Nth harness card's picker, and the control that adds one. */
+/** Step 3: the Nth harness card's picker. */
 export const harnessPicker = (page: Page, index = 0): Locator => page.locator(`#nr-harness-${index}`);
-export const addHarnessButton = (page: Page): Locator => page.getByRole("button", { name: NR_HARNESSES.ADD_HARNESS, exact: true });
 /** An Autonomous run's task, and an Interactive run's starting prompt (after "Start the run in this harness"). */
 export const taskField = (page: Page): Locator => page.locator("#nr-task");
 export const startInHarness = (page: Page): Locator => page.getByRole("switch", { name: NR_HARNESSES.START_IN_HARNESS });
 export const startingPrompt = (page: Page, index = 0): Locator => page.locator(`#nr-text-${index}`);
 
-/** Step 4: "No extra files", one repository's checkbox and its "Starts here" radio. */
+/** Step 4: "No extra files", and the Add dialog: the Add button, a type, a source, Continue and Add. */
 export const noExtraFiles = (page: Page): Locator => page.getByRole("radio", { name: startsWith(NR_FILES.NO_EXTRA) });
-export const repoCheckbox = (page: Page, name: string): Locator => page.getByRole("checkbox", { name: NR_FILES.INCLUDE_ARIA(name) });
-export const startsHere = (page: Page, name: string): Locator =>
-  page.getByRole("radio", { name: new RegExp(`${escapeRe(name)}.*${escapeRe(NR_FILES.STARTS_HERE)}`) });
+export const addFilesButton = (page: Page): Locator => page.getByRole("button", { name: NR_FILES.ADD_ARIA });
+export const addDialog = (page: Page): Locator => page.getByRole("dialog");
+export const sourceTypeButton = (page: Page, type: string): Locator => addDialog(page).getByRole("button", { name: startsWith(type) });
+export const sourceRadio = (page: Page, name: string): Locator => addDialog(page).getByRole("radio", { name: new RegExp(`^${escapeRe(name)}(\\s|$)`) });
+export const dialogContinue = (page: Page): Locator => addDialog(page).getByRole("button", { name: NR_SHARED.CONTINUE, exact: true });
+export const dialogAdd = (page: Page): Locator => addDialog(page).getByRole("button", { name: NR_FILES.ADD_CONFIRM, exact: true });
+/** A drive's access select on the Mount path step: "edit" or "read". */
+export const mountAccess = (page: Page): Locator => addDialog(page).locator("#nr-mount-access");
+/** An attached item's card, optionally the one whose text holds `name`. */
+export const attachCard = (page: Page, name?: string): Locator => {
+  const cards = page.getByTestId("nr-attach-card");
+  return name === undefined ? cards : cards.filter({ hasText: name });
+};
+
+/** Adds one repository through the dialog, filmed: Add (with `text`), the type, the repository, Continue, Add. The first thing added is where the run starts. */
+export async function addRepository(page: Page, name: string, text?: string): Promise<void> {
+  await act(page, addFilesButton(page), text);
+  await act(page, sourceTypeButton(page, NR_FILES.REPOSITORY_BADGE));
+  await act(page, sourceRadio(page, name));
+  await act(page, dialogContinue(page));
+  await act(page, dialogAdd(page));
+  await expect(addDialog(page)).toBeHidden();
+}
 
 /** Step 5: a harness's model-provider picker. */
 export const providerPicker = (page: Page, harness: string): Locator => page.locator(`#nr-provider-${harness}`);
