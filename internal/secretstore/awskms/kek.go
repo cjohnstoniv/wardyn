@@ -286,9 +286,11 @@ func (k *KEK) Unwrap(ctx context.Context, wrapped []byte, bind map[string]string
 		return nil, k.serviceErr(err)
 	}
 	if aws.ToString(out.KeyId) != k.arn {
+		clear(out.Plaintext)
 		return nil, k.answerErr(fmt.Errorf("KMS Decrypt answered for key %q, not the configured key", aws.ToString(out.KeyId)))
 	}
 	if len(out.Plaintext) != kek.DEKSize {
+		clear(out.Plaintext)
 		return nil, k.answerErr(fmt.Errorf("KMS Decrypt did not answer a %d-byte data key", kek.DEKSize))
 	}
 	return out.Plaintext, nil
