@@ -684,7 +684,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   writing a `runner_pool.update` audit row for a change that did not happen.
 - Per-run overrides: a narrowing edit on a run with no chosen policy keeps the default's workspace mounts and
   onboarded repositories. The Azure DevOps card narrows within the provider's default profile when the policy
-  names no capabilities. `remove_secrets` accepts only your own stored secrets and refuses any other name the
+  names no capabilities and the run names its repository itself; a run whose only Azure DevOps repository comes from
+  a selected workspace is still refused (`override_refused`). `remove_secrets` accepts only your own stored secrets and refuses any other name the
   same way. A launch audits the additions your egress capability drops. Git component facts show a push rule you
   added for an organisation.
 - `wardyn governance plan` now lists the write `set` makes when a composed profile's base was renamed on the
@@ -806,6 +807,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   from the rest, and clears them as creator, suspender or retirer of service identities. A purge stays pending (`GET
   /scim/status` names the identities) while the person still sponsors a service identity that is not retired: hand
   it to another sponsor or retire it.
+- A run that cannot pause a tool call is refused when its policy holds a tool of an MCP server the run binds. That
+  covers a background Codex CLI run and any command workload (`task_mode: exec`), at create, preflight and policy
+  preview (`request_field_unavailable`). An explicit `*: hold` rule counts, whatever single tools the policy allows;
+  a policy with no rule for the tool does not. Before, such a run started and the held tool ran without anyone being
+  asked. Tool rules set on a harness inside a background command are refused the same way.
 
 ### Removed
 
