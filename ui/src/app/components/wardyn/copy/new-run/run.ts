@@ -55,14 +55,15 @@ export const NR_RUN = {
   /** pending W-03: the recommended text until the owner answers. */
   REASON_RUNNERS_OFF: "Runners are switched off",
   /** pending W-03: the recommended text until the owner answers. */
-  PLACEMENT_DENIED: (profile: string | number, hosting: string | number) =>
-    `${profile} doesn't allow runs on ${hosting} pools.`,
+  PLACEMENT_DENIED: (profile: string | number, kind: string | number) =>
+    `${profile} doesn't allow runs on ${kind} pools.`,
   CAPACITY_LABEL: "Total pool capacity",
   CAPACITY_ARIA: "Total pool capacity used",
   USED_OF_MAX: (used: string | number, max: string | number) => `${used} of ${max} running`,
   RUNNING_ONLY: (used: string | number) => `${used} running`,
   MAX_RUNS: (max: string | number) => `${max} runs maximum in this pool`,
-  NO_POOL_LIMIT: "No pool limit",
+  /** pending W-50: the recommended text until the owner answers. */
+  POOL_LIMIT_FROM_RUNNERS: "Set by its runners",
   ALLOWANCE_LABEL: "Your allowance",
   ALLOWANCE_ARIA: "Your allowance used",
   ALLOWANCE_USED: (active: string | number, max: string | number) =>

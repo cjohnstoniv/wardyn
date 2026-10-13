@@ -75,7 +75,7 @@ export interface RunnerView {
   usage: RunnerUsage;
   /** The host name the runner last reported (registration, then each connect): runner-reported, never an identity. */
   machine_name?: string;
-  /** The owner's live self-hosted pools this runner is a member of; [] for none. */
+  /** The owner's live user pools this runner is a member of; [] for none. */
   pools: RunnerPoolRef[];
 }
 
