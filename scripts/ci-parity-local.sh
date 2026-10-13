@@ -21,6 +21,7 @@ mapfile -t pkgs < <( { git diff --name-only --diff-filter=d "${base}"; git ls-fi
   grep '\.go$' | xargs -r -n1 dirname | sort -u | sed 's#^#./#' || true)
 [ "${#pkgs[@]}" -gt 0 ] || { log "no changed Go packages"; exit 0; }
 mapfile -t pkgs < <(go list -e -f '{{if or .GoFiles .CgoFiles .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' "${pkgs[@]}")
+[ "${#pkgs[@]}" -gt 0 ] || { log "no changed Go packages"; exit 0; }
 
 log "1/2 go test -race ${pkgs[*]} (WARDYN_TEST_PG unset, as the go jobs)"
 WARDYN_TEST_PG='' go test -race -count=1 "${pkgs[@]}"

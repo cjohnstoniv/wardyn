@@ -109,7 +109,9 @@ function renderRail() {
 
 afterEach(() => window.history.pushState({}, "", "/"));
 
-const pane = () => screen.findByRole("button", { name: "fake pane" });
+// The pane is lazy-loaded: whichever test runs first pays the cold import, which on a loaded runner
+// outlasts findBy's 1 s default.
+const pane = () => screen.findByRole("button", { name: "fake pane" }, { timeout: 5000 });
 
 const launchButton = () => screen.getByRole("button", { name: "Launch run" });
 const settle = () => act(() => new Promise((r) => setTimeout(r, 30)));
@@ -117,12 +119,8 @@ const settle = () => act(() => new Promise((r) => setTimeout(r, 30)));
 describe("a preflight-origin sign-in re-checks and never launches", () => {
   it("a background preflight (driven from a timer) refused, then sign-in: no launch, one re-check", async () => {
     const { onLaunch, onPreflight, h } = renderRail();
-    // A later automatic preflight's shape: nobody clicked anything; the refusal lands from a later task, not a
-    // 10 ms timer racing the pane lookup's own timeout on a loaded runner.
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 0));
-      h().refusePreflight();
-    });
+    // A later automatic preflight's shape: nobody clicked anything; a timer lands the refusal.
+    setTimeout(() => act(() => h().refusePreflight()), 10);
     await userEvent.click(await pane());
     expect(onPreflight).toHaveBeenCalledTimes(1);
     expect(onLaunch).not.toHaveBeenCalled();
