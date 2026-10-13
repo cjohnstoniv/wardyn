@@ -24,6 +24,9 @@ var ErrServiceNameTaken = errors.New("store: that service identity name is alrea
 // non-deactivated identity.
 var ErrServiceSponsorInvalid = errors.New("store: the sponsor is not a bound, active identity")
 
+// ErrServiceUserTypeUnknown is CreateServiceIdentity's refusal for a user type with no user_types row.
+var ErrServiceUserTypeUnknown = errors.New("store: no such user type")
+
 // ErrServiceTokenCap is CreateServiceToken's refusal when the identity already holds the most live tokens.
 var ErrServiceTokenCap = errors.New("store: the service identity holds the maximum number of live tokens")
 
@@ -106,7 +109,7 @@ var servicePrincipalProbes = [][3]string{
 
 // sponsorBound locks the sponsor's identity row FOR SHARE, so the unbind that would release it waits for
 // this transaction, and reports whether a bound, non-deactivated, non-purged identity holds it exactly.
-func sponsorBound(ctx context.Context, tx pgx.Tx, sponsor string) (bool, error) {
+func sponsorBound(ctx context.Context, tx Querier, sponsor string) (bool, error) {
 	var one int
 	err := tx.QueryRow(ctx, `SELECT 1 FROM principal_identities
 		WHERE principal = $1 AND deactivated_at IS NULL AND purged_at IS NULL LIMIT 1 FOR SHARE`, sponsor).Scan(&one)
@@ -125,6 +128,19 @@ func (s PG) CreateServiceIdentity(ctx context.Context, si types.ServiceIdentity)
 		return types.ServiceIdentity{}, fmt.Errorf("store: create service identity: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	out, err := CreateServiceIdentityQ(ctx, tx, si)
+	if err != nil {
+		return types.ServiceIdentity{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.ServiceIdentity{}, fmt.Errorf("store: commit service identity: %w", err)
+	}
+	return out, nil
+}
+
+// CreateServiceIdentityQ is CreateServiceIdentity's statements on tx (a pgx.Tx), which a held governance
+// change applies inside the decision transaction.
+func CreateServiceIdentityQ(ctx context.Context, tx Querier, si types.ServiceIdentity) (types.ServiceIdentity, error) {
 	principal := si.Principal()
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('service_identities:' || $1, 0))`, si.Name); err != nil {
 		return types.ServiceIdentity{}, fmt.Errorf("store: create service identity: %w", err)
@@ -139,10 +155,30 @@ func (s PG) CreateServiceIdentity(ctx context.Context, si types.ServiceIdentity)
 			return types.ServiceIdentity{}, ErrServiceNameTaken
 		}
 	}
+	// Checked before the INSERT so a taken name is a plain refusal, not a failed statement that would end tx.
+	var taken bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM service_identities WHERE name = $1)`, si.Name).Scan(&taken); err != nil {
+		return types.ServiceIdentity{}, fmt.Errorf("store: create service identity: %w", err)
+	}
+	if taken {
+		return types.ServiceIdentity{}, ErrServiceNameTaken
+	}
 	if ok, err := sponsorBound(ctx, tx, si.Sponsor); err != nil {
 		return types.ServiceIdentity{}, err
 	} else if !ok {
 		return types.ServiceIdentity{}, ErrServiceSponsorInvalid
+	}
+	// user_type has no foreign key: the lock orders this create against DeleteUserType, and the type is
+	// read after it.
+	var typeKnown bool
+	if _, err := tx.Exec(ctx, userTypeWriteLock, si.UserType); err != nil {
+		return types.ServiceIdentity{}, fmt.Errorf("store: create service identity: %w", err)
+	}
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM user_types WHERE id = $1)`, si.UserType).Scan(&typeKnown); err != nil {
+		return types.ServiceIdentity{}, fmt.Errorf("store: create service identity: %w", err)
+	}
+	if !typeKnown {
+		return types.ServiceIdentity{}, ErrServiceUserTypeUnknown
 	}
 	out, err := scanServiceIdentity(tx.QueryRow(ctx, `
 		INSERT INTO service_identities (name, description, sponsor, sponsor_since, user_type, created_by, created_at)
@@ -155,10 +191,13 @@ func (s PG) CreateServiceIdentity(ctx context.Context, si types.ServiceIdentity)
 	if err != nil {
 		return types.ServiceIdentity{}, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return types.ServiceIdentity{}, fmt.Errorf("store: commit service identity: %w", err)
-	}
 	return out, nil
+}
+
+// GetServiceIdentityForUpdateQ reads name FOR UPDATE on tx (a pgx.Tx), retired or not; ErrNotFound when
+// missing.
+func GetServiceIdentityForUpdateQ(ctx context.Context, tx Querier, name string) (types.ServiceIdentity, error) {
+	return scanServiceIdentity(tx.QueryRow(ctx, `SELECT `+serviceIdentityCols+` FROM service_identities WHERE name = $1 FOR UPDATE`, name))
 }
 
 func (s PG) GetServiceIdentity(ctx context.Context, name string) (types.ServiceIdentity, error) {
@@ -171,7 +210,7 @@ func (s PG) ListServiceIdentities(ctx context.Context, sponsor string, p Page) (
 }
 
 // lockServiceIdentity reads name FOR UPDATE inside tx: ErrNotFound, or ErrServiceIdentityInactive when retired.
-func lockServiceIdentity(ctx context.Context, tx pgx.Tx, name string) (types.ServiceIdentity, error) {
+func lockServiceIdentity(ctx context.Context, tx Querier, name string) (types.ServiceIdentity, error) {
 	si, err := scanServiceIdentity(tx.QueryRow(ctx, `SELECT `+serviceIdentityCols+` FROM service_identities WHERE name = $1 FOR UPDATE`, name))
 	if err != nil {
 		return types.ServiceIdentity{}, err
@@ -184,7 +223,7 @@ func lockServiceIdentity(ctx context.Context, tx pgx.Tx, name string) (types.Ser
 
 // revokeServiceTokens revokes every live token of service:<name>, returning how many. Every stamp here
 // is on the database clock, the clock a token's created_at is translated onto.
-func revokeServiceTokens(ctx context.Context, tx pgx.Tx, name string) (int, error) {
+func revokeServiceTokens(ctx context.Context, tx Querier, name string) (int, error) {
 	tag, err := tx.Exec(ctx, `UPDATE api_tokens SET revoked_at = clock_timestamp() WHERE principal = $1 AND revoked_at IS NULL`,
 		types.ServicePrincipalPrefix+name)
 	if err != nil {
@@ -199,22 +238,39 @@ func (s PG) UpdateServiceIdentity(ctx context.Context, name string, ch ServiceId
 		return ServiceIdentityChanged{}, fmt.Errorf("store: update service identity: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	out, err := UpdateServiceIdentityQ(ctx, tx, name, ch)
+	if err != nil {
+		return ServiceIdentityChanged{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ServiceIdentityChanged{}, fmt.Errorf("store: commit service identity update: %w", err)
+	}
+	return out, nil
+}
+
+// UpdateServiceIdentityQ is UpdateServiceIdentity's statements on tx (a pgx.Tx), which a held governance
+// change applies inside the decision transaction.
+func UpdateServiceIdentityQ(ctx context.Context, tx Querier, name string, ch ServiceIdentityChange) (ServiceIdentityChanged, error) {
 	before, err := lockServiceIdentity(ctx, tx, name)
 	if err != nil {
 		return ServiceIdentityChanged{}, err
 	}
 	out := ServiceIdentityChanged{Before: before}
-	if ch.Description != nil {
-		if _, err = tx.Exec(ctx, `UPDATE service_identities SET description = $2 WHERE name = $1`, name, *ch.Description); err != nil {
-			return ServiceIdentityChanged{}, fmt.Errorf("store: update service identity: %w", err)
-		}
-	}
-	if ch.Sponsor != nil && *ch.Sponsor != before.Sponsor {
+	// Every refusal comes before the first write, so a refused change has written nothing in tx.
+	moving := ch.Sponsor != nil && *ch.Sponsor != before.Sponsor
+	if moving {
 		if ok, err := sponsorBound(ctx, tx, *ch.Sponsor); err != nil {
 			return ServiceIdentityChanged{}, err
 		} else if !ok {
 			return ServiceIdentityChanged{}, ErrServiceSponsorInvalid
 		}
+	}
+	if ch.Description != nil {
+		if _, err = tx.Exec(ctx, `UPDATE service_identities SET description = $2 WHERE name = $1`, name, *ch.Description); err != nil {
+			return ServiceIdentityChanged{}, fmt.Errorf("store: update service identity: %w", err)
+		}
+	}
+	if moving {
 		// The cutoff is set in the same transaction as the revoke, so a mint whose row commits after the
 		// revoke's snapshot still carries a created_at at or before it and never authenticates.
 		if _, err = tx.Exec(ctx, `UPDATE service_identities SET sponsor = $2, sponsor_since = clock_timestamp() WHERE name = $1`, name, *ch.Sponsor); err != nil {
@@ -235,9 +291,6 @@ func (s PG) UpdateServiceIdentity(ctx context.Context, name string, ch ServiceId
 	}
 	if out.After, err = scanServiceIdentity(tx.QueryRow(ctx, `SELECT `+serviceIdentityCols+` FROM service_identities WHERE name = $1`, name)); err != nil {
 		return ServiceIdentityChanged{}, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return ServiceIdentityChanged{}, fmt.Errorf("store: commit service identity update: %w", err)
 	}
 	return out, nil
 }

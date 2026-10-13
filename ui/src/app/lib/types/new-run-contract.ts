@@ -14,33 +14,57 @@
 import type { PlacementReason } from "../new-run-refusals";
 import type { ToolRule } from "./policy";
 import type { ComponentRef } from "./components";
+import type { LimitSource } from "./runner-pools";
 
 export type PlacementValue = "remote" | "local";
 
 /** How an organisation-held credential reaches a local run (OD-12). */
 export type LocalDeliveryMode = "own" | "via_org" | "runner_resident" | "refuse";
 
-/** The CPU and memory a request asks for (Go: client.RunResources). A zero or absent field asks for the placement's default. */
+/** The CPU, memory and main-drive size a request asks for (Go: client.RunResources). A zero or absent field asks for the placement's default. */
 export interface RequestedResources {
   /** Milli-CPU: 2000 is two CPUs. The console works in tenths of a CPU. */
   cpu_millis?: number;
   /** Whole MiB. */
   memory_mib?: number;
+  /** The main drive in MiB, 0 to 16 TiB. A soft request: over the cap it is reduced and said so; a runner that cannot cap disk runs it uncapped. */
+  disk_mib?: number;
 }
 
-/** A CPU and memory pair in a dry-run answer, where zero is a value. */
-export interface ResourceAmounts {
-  cpu_millis: number;
-  memory_mib: number;
+/** Where a main-drive size came from (Go: client.MainDriveBasis). */
+export type MainDriveBasis = "request" | "policy" | "default" | "none";
+
+/** What cut a main-drive size (Go: client.MainDriveClampSource). */
+export type MainDriveClampSource = "pool" | "governance" | "deployment" | "policy";
+
+/** The main-drive size a run asks for and gets, the number dispatch creates the sandbox with (Go: client.MainDriveApplied). */
+export interface MainDriveApplied {
+  requested_mib?: number;
+  /** 0 is no size: unbounded scratch. */
+  applied_mib: number;
+  basis: MainDriveBasis;
+  /** With basis "default": the limit whose default sized the run. */
+  default_source?: LimitSource;
+  clamped_by?: MainDriveClampSource;
+  /** True when a runner that cannot cap disk starts the run uncapped. A size the run's policy writes is never soft. */
+  soft: boolean;
 }
 
-/** What one placement offers: `defaults` is what an untouched run receives there, `caps` the most a request may ask for. */
-export interface PlacementResources {
-  placement: PlacementValue;
-  /** Set when `placement` is local. */
-  runner_id?: string;
-  defaults: ResourceAmounts;
-  caps: ResourceAmounts;
+/** The CPU and memory a run asked for and gets (Go: client.AppliedResources). */
+export interface AppliedResources {
+  cpu_millis: AppliedAmount;
+  memory_mib: AppliedAmount;
+}
+
+/** One field of AppliedResources (Go: client.AppliedAmount). `source` names the limit that cut an over-ask when `capped`, else the one whose default an ask of 0 got; `source_name` is the pool's or the profile's name. */
+export interface AppliedAmount {
+  /** The request's value, else its source policy's; 0 asks for the default. */
+  requested: number;
+  /** What the sandbox gets. */
+  applied: number;
+  capped?: boolean;
+  source?: LimitSource;
+  source_name?: string;
 }
 
 export interface SecretOverride {
@@ -199,9 +223,9 @@ export interface PlacementRunner {
   last_seen?: string;
 }
 
-export type ImageSourceKind = "agent" | "workspace" | "build" | "org_allowed";
+export type ImageSourceKind = "base" | "agent" | "harness_set" | "workspace" | "build" | "org_allowed";
 
-/** Where the resolved image comes from: the Runner tab's Image section says "from {source}". Name is empty for the agent. */
+/** Where the resolved image comes from: the Runner tab's Image section says "from {source}". Name is the harness for agent and the set key for harness_set; empty for base. */
 export interface ImageSource {
   kind: ImageSourceKind;
   name?: string;
@@ -211,6 +235,26 @@ export interface ImageSource {
 export interface ImageFact {
   ref: string;
   source: ImageSource;
+}
+
+/** One included harness's model credential: provider, kind, and where it lands. */
+export interface HarnessModelCredential {
+  provider: string;
+  kind: string;
+  residency: string;
+}
+
+/** One included harness: whether it starts with the run, and its model credential (absent when it takes none or the choice is open). */
+export interface HarnessFact {
+  id: string;
+  starts: boolean;
+  model_credential?: HarnessModelCredential;
+}
+
+/** The run's included harnesses as the door resolved them. `shared_model_access`: two or more carry a model credential, which any process in the sandbox can use. */
+export interface HarnessSetFact {
+  harnesses: HarnessFact[];
+  shared_model_access: boolean;
 }
 
 /** One image the organisation lets a person choose for a run (`allowed_image` on the request). */
@@ -261,15 +305,49 @@ export interface RunStartup {
   kind: StartupKind;
   tool?: string;
   command?: string;
+  /** The started harness's first message; a harness startup only. */
+  prompt?: string;
 }
 
 export type StartFolderKind = "image_default" | "attachment";
 
-/** The run's exactly-one starting folder; `attachment` is a workspace id or `drive`. */
+/**
+ * The run's exactly-one starting folder; `attachment` is a workspace id or `drive`.
+ * `repo` names one repository the run clones from that workspace; `drive_id` names
+ * one entry of the request's `drives`, exclusive with `attachment`.
+ */
 export interface StartFolder {
   kind: StartFolderKind;
   attachment?: string;
+  repo?: string;
+  drive_id?: string;
   subpath?: string;
+}
+
+/** One drive the run attaches from GET /me/drives (pkg/client.DriveAttachment); `read_only` narrows only. */
+export interface DriveAttachment {
+  drive_id: string;
+  read_only?: boolean;
+}
+
+/** One repository a workspace selection clones (pkg/client.RepoSelection); "" ref = the source's own. */
+export interface RepoSelection {
+  repo: string;
+  ref?: string;
+}
+
+/** One entry of the run's mount map on the preflight and the policy preview (pkg/client.RunAttachment). */
+export interface RunAttachment {
+  kind: "repository" | "folder" | "drive";
+  workspace_id?: string;
+  repo?: string;
+  ref?: string;
+  drive_id?: string;
+  /** The workspace or drive name, never a host path. */
+  name: string;
+  target: string;
+  read_only: boolean;
+  starts_here: boolean;
 }
 
 /** The attachment name of the person's drive in `StartFolder.attachment`. */

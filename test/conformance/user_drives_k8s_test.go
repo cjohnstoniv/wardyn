@@ -43,13 +43,18 @@ func k8sDriveFixture(t *testing.T, cs kubernetes.Interface, ns, image string) *c
 	// Both names: the refused one only exists if the refusal regressed. The
 	// driver never deletes a drive's claim (it outlives every run), so the
 	// fixture does; registered before any sandbox, it runs after their stops.
+	second := "wardyn-conformance-drive2-" + suffix
 	t.Cleanup(func() {
-		for _, n := range []string{claim, hostPathName} {
+		for _, n := range []string{claim, hostPathName, second} {
 			_ = cs.CoreV1().PersistentVolumeClaims(ns).Delete(context.Background(), n, metav1.DeleteOptions{})
 		}
 	})
 	home := "conf-" + suffix
 	return &conformance.UserDriveFixture{
+		Also: &types.DriveMount{
+			DriveID: uuid.New(), Backend: types.DriveBackendK8sPVC, ObjectName: second,
+			DriveName: "conformance-second", HomeName: home, Target: runner.DrivesRoot + "/conformance-second", SizeMiB: 64,
+		},
 		Mount: types.DriveMount{
 			DriveID:    uuid.New(),
 			Backend:    types.DriveBackendK8sPVC,

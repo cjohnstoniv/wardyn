@@ -93,8 +93,8 @@ type dispatchParams struct {
 	// site and three of five lanes had opted out. See dispatchCeiling
 	// (runs_dispatch_ceiling.go).
 	//
-	// Drive is the acting principal's USER DRIVE, resolved and narrowed at
-	// create time by seedRequestDrive (migration 0054). NIL for every run that
+	// Drives are the acting principal's drives, resolved and narrowed at create
+	// time by stepDrive (migrations 0054, 0169). EMPTY for every run that
 	// did not ask for one — which is every run on a deployment that has
 	// allocated no drives, and every scan/probe/harness lane, none of which
 	// carries a member principal to resolve a drive for.
@@ -105,7 +105,10 @@ type dispatchParams struct {
 	// exactly the constraint dispatchCeiling is a snapshot for. dispatchRun
 	// runs inline in the create request, so the snapshot has no staleness window
 	// to be stale in. See user_drives_run.go.
-	Drive *types.DriveMount
+	Drives []types.DriveMount
+	// MainDrive is the main drive create's fold decided (stepMainDrive): its size and whether it
+	// is soft. NIL for every lane that has no fold decision (scans, record, verify, logins, probes).
+	MainDrive *mainDriveDecision
 	// Components is the dispatch half of the run's components, from the gate's
 	// decision at create (runs_dispatch_components.go). Zero for every other lane.
 	Components componentDispatch
@@ -121,6 +124,9 @@ type dispatchParams struct {
 	// (harnessToolRulesFor). When set, the proxy carries them, and a credential
 	// per harness, INSTEAD of the policy's run-wide tool_rules.
 	HarnessToolRules []types.HarnessToolRules
+	// Harnesses are the run's run_harnesses rows, nil without the harness set;
+	// each that names a provider gets its own model credential lane.
+	Harnesses []types.RunHarness
 }
 
 // dispatchRun launches the sandbox via the runner and advances run state. On any
@@ -285,9 +291,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			"Drop the github_token grant to push with your own PAT instead")
 	applyRepoCloneEnv(sandboxEnv, run, policy)
 	applyEphemeralDirsEnv(sandboxEnv, p.EphemeralDirs)
-	applyUserDriveEnv(sandboxEnv, p.Drive)
+	applyUserDriveEnv(sandboxEnv, p.Drives)
 	// The agent-side half of this run's autonomy level — see agentPolicyFor.
-	agentPolicy, apErr := s.agentPolicyFor(ctx, run, p.holdLane(), ceiling.agentGuardrailLocks)
+	agentPolicy, apErr := s.agentPolicyFor(ctx, run, p.Harnesses, p.holdLane(), ceiling.agentGuardrailLocks, p.attendedToolRules())
 	if apErr != nil {
 		// apErr wraps s.cfg.Runner.Capabilities' own error, which can carry
 		// driver/substrate text (a Docker daemon socket error, a k8s API
@@ -295,10 +301,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// as their FailureHint (the #445 class SD-4's guard exists to catch).
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": apErr.Error()})))
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, fmt.Sprintf(
-			"This run was not launched: its runner's capabilities could not be confirmed, "+
-				"so whether it can deliver this run's managed settings (%s) is unknown",
-			agentPolicyBasis(run.AutonomyLevel, p.holdLane(), ceiling.agentGuardrailLocks)))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, agentPolicyFailureHint(apErr, run.AutonomyLevel, p.holdLane(), ceiling.agentGuardrailLocks))
 		return
 	}
 	// Caller-supplied non-secret env (p.ExtraEnv): the AWS harness login's
@@ -396,7 +399,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// phases so nothing above can re-add a managed host. See
 	// confineGitBrokerEgress; the run.policy.resolve audit below records the
 	// narrowed envelope, so the removal is disclosed, not silent.
-	if confined := confineGitBrokerEgress(&policy, p.GitGrants); len(confined) > 0 {
+	if confined := confineBrokerEgress(&policy, p, sandboxEnv); len(confined) > 0 {
 		slog.InfoContext(ctx, "wardynd: git-broker run — broker-managed hosts confined to the /wardyn/gh/ route",
 			slog.String("run_id", run.ID.String()), slog.Any("hosts", confined))
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.egress.confine",
@@ -418,16 +421,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// bind-mount all survived a profile that walls off Bedrock. Narrowed
 	// here, before buildRunMounts and splitSecretEnv read them below.
 	//
-	// Ephemeral disk — the ONE fill + clamp, immediately above the re-assertion so
-	// the row that phase writes carries the effective size. See applyEphemeralDisk:
-	// the policy's own disk_mib, else the org's default_disk_mib, clamped to
-	// min(provider maximum, this profile's maximum). Never a refusal, and a zero
-	// request with no org default stays unbounded.
-	diskFilled := applyEphemeralDisk(ctx, run, &policy, siteCfg, ceiling)
+	// Ephemeral disk, above the re-assertion so its row carries the effective size.
+	diskSoft := settleMainDrive(ctx, run, &policy, siteCfg, ceiling, p.MainDrive)
 	applySandboxSize(ctx, run, &policy, ceiling)
 	s.recordRunDiskCap(ctx, run.ID, policy.Resources)
 	// Record the reservation the driver will apply (best-effort, like the disk cap above).
-	s.recordRunSizing(ctx, run.ID, resourceLimitsToRunner(policy.Resources))
+	s.recordRunSizing(ctx, run.ID, resourceLimitsToRunner(policy.Resources), len(plan.azure.gates) > 0)
 	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
@@ -457,16 +456,19 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// halves — after EVERY writer above, so the "already set" guards each of them
 	// runs saw the whole map. See splitSecretEnv (it moves, never copies).
 	// Per-harness approval credentials: digests to the proxy config below, the
-	// started harness's plaintext to its own process as secret env, nowhere else.
-	harnessCreds, extraSecretKeys, merr := stampHarnessCredential(p.HarnessToolRules, run.Agent, sandboxEnv, llm.secretEnvKeys)
+	// started harness's plaintext as a file only its own launch reads, never env.
+	// MCP servers: their credentials move to the broker and each harness's
+	// token goes into its own configuration (run_mcp.go).
+	mcp := dispatchMCP(p.Components.MCP, &injections, proxyURL, p.Interactive, sandboxEnv)
+	harnessCreds, credFiles, merr := s.holdLaneHarnessCredentials(ctx, run, p)
 	if merr != nil {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's tool-approval credential could not be made")
 		return
 	}
-	secretEnv := splitSecretEnv(sandboxEnv, append(secretEnvKeys, extraSecretKeys...))
+	secretEnv := splitSecretEnv(sandboxEnv, slices.Concat(secretEnvKeys, llm.secretEnvKeys, []string{codexMCPEnv}))
 
 	resources := resourceLimitsToRunner(policy.Resources)
-	resources.DiskMiBFilled = diskFilled
+	resources.DiskMiBSoft = diskSoft
 	if run.LifetimeCapAt != nil {
 		// The run pods' deadline follows this run's own cap, not a driver-wide one.
 		resources.LifetimeCap = max(run.LifetimeCapAt.Sub(s.cfg.Now()), time.Second)
@@ -493,10 +495,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// Bedrock credential, which is most of them.
 		SecretEnv: secretEnv,
 		Mounts:    mounts,
-		Drive:     p.Drive,
-		// The managed settings this run's autonomy level generates; nil for a
-		// run with none, or on a runner that cannot deliver them root-owned.
-		ManagedFiles: agentPolicy.files,
+		Drives:    p.Drives,
+		// The managed settings this run's autonomy level generates and the
+		// started harness's approval credential; nil for a run with neither, or
+		// on a runner that cannot deliver them.
+		ManagedFiles: slices.Concat(agentPolicy.files, credFiles, mcp.files),
 		// nil for an operator run (the driver then behaves exactly as it does
 		// today); non-nil marks a member-owned-workspace run whose MEMBER-AUTHORED
 		// binds (stamped above by buildRunMounts) the driver re-checks against
@@ -547,7 +550,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			BrokeredPATGrantIDs: brokeredPATIDs,
 			// The per-person Azure DevOps REST gate's grant (runs_dispatch_ado_inject.go).
 			// Nil for every run not on that lane, which leaves the gate off.
-			ADOGrant: ado.gate,
+			ADOGrant:  ado.gate,
+			GitHubAPI: p.Components.GitHubAPI,
 			// The azure_foundry lane's route gate and channel host (provider_azure.go). Empty for every
 			// run not on that lane, which leaves both off.
 			AzureGates:      plan.azure.gates,
@@ -580,6 +584,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			PushRuleBase:       pushRuleBase(policy, p.PushRuleSets),
 			HarnessToolRules:   p.HarnessToolRules,
 			HarnessCredentials: harnessCreds,
+			MCPServers:         mcp.servers, MCPBindings: mcp.bindings,
 			// The policy a refusal names (runs_dispatch_attribution.go); nil when
 			// the run has no profile and the site sets no policy_help, because an
 			// older proxy refuses the key.
@@ -590,9 +595,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// PID capped even when the policy sets nothing — a fleet of independent
 		// agents must not be able to OOM-kill, fork-bomb, or disk-fill the host or
 		// each other (C5). DiskMiB is whatever applyEphemeralDisk above settled on,
-		// and DiskMiBFilled is its provenance: a driver that cannot enforce a cap
-		// refuses a run that ASKED for one and degrades one that merely inherited
-		// the org default (runner.Resources.DiskMiBFilled).
+		// and DiskMiBSoft is its provenance: a driver that cannot enforce a cap
+		// refuses a size the run's policy wrote and degrades one a request or a
+		// default sized (runner.Resources.DiskMiBSoft).
 		Resources: resources,
 		Labels: map[string]string{
 			"wardyn.run":   run.ID.String(),
@@ -617,7 +622,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// snapshot below references still carries the real values.
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
 		run.ID.String(), "success", mustJSON(effectivePolicyDatum{
-			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskFilled,
+			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskSoft, DiskMiBBasis: p.MainDrive.basis(), DiskMiBDefaultSource: p.MainDrive.defaultSource(),
 		})))
 
 	// Held BEFORE CreateSandbox, not after: the row still carries the
@@ -659,7 +664,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
-	sb, err := s.createSandboxAtTarget(createCtx, run, spec)
+	// A run on a runner is leased first: its runner refuses a create no lease authorizes.
+	execution, err := s.leaseRunOnRunner(ctx, run)
+	var sb runner.Sandbox
+	if err == nil {
+		sb, err = s.createSandboxAtTarget(createCtx, run, spec)
+	}
 	endStartWait()
 	stopCreateLease()
 	if err != nil {
@@ -672,8 +682,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 
-	// User drive attached — a no-op for the runs (most of them) that carry
-	// none. See auditDriveMount.
+	// Drives attached — a no-op for the runs (most of them) that carry none.
+	// See auditDriveMount.
 	//
 	// AFTER CreateSandbox, not beside the spec that carries the drive: the
 	// driver has the last word on whether the drive is actually bound (the
@@ -683,7 +693,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// that the very next event — `run.create` `failure` — contradicted. Nothing
 	// downstream of here can refuse the drive, so this row is now true when it
 	// is written.
-	s.auditDriveMount(ctx, run.ID, p.Drive)
+	s.auditDriveMount(ctx, run.ID, p.Drives)
 	auditAgentPolicy := func() { s.auditAgentPolicy(ctx, run, agentPolicy, spec) }
 	if !agentPolicy.execLess {
 		auditAgentPolicy()
@@ -707,16 +717,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	stopDispatchLease := s.holdRunWatcherLease(ctx, run.ID)
 	defer stopDispatchLease()
 
-	if err := s.cfg.Store.SetSandboxRef(ctx, run.ID, sb.Ref); err != nil {
-		// A lost sandbox ref is not fatal to THIS dispatch (the run proceeds), but on a
-		// daemon restart ReconcileOnBoot finds no ref and finalizes the run FAILED while
-		// the container keeps running untracked. Log + audit the loss so the orphan is
-		// discoverable, rather than discarding the error silently.
-		slog.ErrorContext(ctx, "wardynd: SetSandboxRef failed; sandbox may be orphaned/untracked across a daemon restart",
-			slog.String("run_id", run.ID.String()), slog.String("sandbox_ref", sb.Ref), slog.Any("err", err))
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": sb.Ref, "set_sandbox_ref_error": err.Error()})))
-	}
+	s.recordSandboxRef(ctx, run.ID, sb.Ref)
 
 	// Kill-race guard: advance STARTING->RUNNING CONDITIONALLY. CreateSandbox can
 	// be slow (image pull); a concurrent POST /runs/{id}/kill may have moved the
@@ -752,7 +753,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
 
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
-	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive, auditAgentPolicy)
+	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive, execution, auditAgentPolicy)
 }
 
 // startAgentOrIdle is dispatch's final phase, after the run is RUNNING.
@@ -775,7 +776,7 @@ const mainProcessExecID = runner.MainProcessExecID
 // onAgentStarted, when non-nil, runs once the agent's Exec has succeeded: on an
 // exec-less runner that is the moment its container — and the managed files
 // delivered into it — first exists.
-func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, image string, interactive bool, onAgentStarted func()) {
+func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, image string, interactive bool, execution runnerExecution, onAgentStarted func()) {
 	byoi := strings.HasPrefix(image, "wardyn-byoi/")
 
 	if interactive {
@@ -809,7 +810,10 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 			}
 		}
 		argv := []string{"/usr/local/bin/agent-run", run.Task}
-		execID, xerr := s.cfg.Runner.Exec(ctx, ref, argv)
+		execID, xerr := s.cfg.Runner.Exec(execution.bind(ctx), ref, argv)
+		if xerr == nil {
+			xerr = s.bindRunnerExecution(ctx, execution, execID)
+		}
 		if xerr != nil {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
 				run.ID.String(), "failure", mustJSON(map[string]any{"error": xerr.Error(), "reason": "agent_start"})))
@@ -949,9 +953,10 @@ func patBrokerGrants(pat map[string]string, on bool) map[string]proxy.PATGrant {
 }
 
 // dispatchAdmitted refuses, before anything is claimed or written, a run no
-// lane may dispatch yet (a non-remote placement) and a ceiling nobody resolved.
+// lane may dispatch (a non-remote placement create bound to no runner) and a
+// ceiling nobody resolved.
 func (s *Server) dispatchAdmitted(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling) bool {
-	if s.unsupportedLocalDispatch(ctx, run) {
+	if s.unsupportedLocalDispatch(ctx, run) || s.dispatchPlacementDenied(ctx, run, ceiling) {
 		return false
 	}
 	// Fail closed on a ceiling nobody resolved. The compiler already forces a

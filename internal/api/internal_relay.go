@@ -47,6 +47,13 @@ var relayedInternalRoutes = map[string]bool{
 	"POST /api/v1/internal/credentials/mint":               true, // delivery = own only: refuseRelayedDelivery
 	"PUT /api/v1/internal/recordings/{runID}":              true,
 	"PUT /api/v1/internal/recordings/{runID}/parts/{part}": true,
+	"GET /api/v1/internal/via-org/{grantID}/*":             true, // delivery = via_org only: handleViaOrg
+	"HEAD /api/v1/internal/via-org/{grantID}/*":            true,
+	"POST /api/v1/internal/via-org/{grantID}/*":            true,
+	"PUT /api/v1/internal/via-org/{grantID}/*":             true,
+	"PATCH /api/v1/internal/via-org/{grantID}/*":           true,
+	"DELETE /api/v1/internal/via-org/{grantID}/*":          true,
+	"OPTIONS /api/v1/internal/via-org/{grantID}/*":         true,
 	"PUT /api/v1/internal/scan-results/{runID}":            false, // trusted output is cluster-only
 	"PUT /api/v1/internal/sso-token/{runID}":               false, // container login is cluster-only
 	"POST /api/v1/internal/groundtruth":                    false, // no host sensor on a laptop
@@ -253,8 +260,9 @@ func (s *Server) refuseRelayBinding(w http.ResponseWriter, r *http.Request, clai
 
 // refuseRelayedDelivery is the relayed injection and mint rule: only a grant
 // delivered `own` is served through a relay. A via_org grant is used at the
-// org and a runner_resident one already lives on the runner; a grant with no
-// recorded delivery fails closed. Unrelayed requests are unchanged.
+// org (only its in-process engine is served it) and a runner_resident one
+// already lives on the runner; a grant with no recorded delivery fails closed.
+// Unrelayed requests are unchanged.
 func (s *Server) refuseRelayedDelivery(w http.ResponseWriter, r *http.Request, claims *identity.Claims, grantID uuid.UUID) bool {
 	runner, relayed := relayRunner(r.Context())
 	if !relayed {
@@ -272,6 +280,14 @@ func (s *Server) refuseRelayedDelivery(w http.ResponseWriter, r *http.Request, c
 				delivery = g.Delivery
 			}
 		}
+	}
+	// The organisation's own via_org engine (viaOrgTransport) is served a
+	// via_org grant and nothing else; no relayed request can carry its mark.
+	if viaOrgCall(r.Context()) {
+		if delivery == types.GrantDeliveryViaOrg {
+			return false
+		}
+		return s.denyRelayed(w, r, claims, placement.ReasonDeliveryNotViaOrg, runner.String())
 	}
 	reason := placement.ReasonRelayRouteRefused
 	switch delivery {

@@ -19,7 +19,7 @@ import (
 )
 
 // The dispatch half of a USER DRIVE (migration 0054): dispatchRun consumes the
-// already-resolved types.DriveMount seedRequestDrive put on dispatchParams, and
+// already-resolved types.DriveMount seedRequestDrives put on dispatchParams, and
 // does exactly three things with it — puts it on the SandboxSpec for the
 // driver, announces it to the sandbox as WARDYN_USER_DRIVE, and audits
 // run.drive.mount. Nothing here resolves, derives or re-checks anything: the
@@ -61,13 +61,13 @@ func runDriveDispatchWith(t *testing.T, fr *fakeRunner, drive *types.DriveMount)
 	// composition, not governance.
 	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
-		Drive: drive,
+		Drives: driveList(drive),
 	})
 	return fr.lastSpec, audit.events
 }
 
 // TestDispatch_DriveReachesSpecEnvAndAudit is the whole dispatch contract in
-// one pass: the drive rides SandboxSpec.Drive (never spec.Mounts — a drive is
+// one pass: the drive rides SandboxSpec.Drives (never spec.Mounts — a drive is
 // not a workspace mount and must not become one), the sandbox is told where it
 // is and in which mode, and the attachment is on the audit feed with the five
 // fields an operator reclaiming months later needs.
@@ -75,11 +75,11 @@ func TestDispatch_DriveReachesSpecEnvAndAudit(t *testing.T) {
 	drive := dispatchDrive(true)
 	spec, events := runDriveDispatch(t, drive)
 
-	if spec.Drive == nil {
-		t.Fatal("SandboxSpec.Drive is nil — the runner was handed no drive to mount")
+	if len(spec.Drives) != 1 {
+		t.Fatalf("SandboxSpec.Drives = %+v — the runner was handed no drive to mount", spec.Drives)
 	}
-	if spec.Drive.ObjectName != drive.ObjectName || spec.Drive.Target != runner.DriveTarget {
-		t.Errorf("SandboxSpec.Drive = %+v, want the resolved drive verbatim", *spec.Drive)
+	if spec.Drives[0].ObjectName != drive.ObjectName || spec.Drives[0].Target != runner.DriveTarget {
+		t.Errorf("SandboxSpec.Drives[0] = %+v, want the resolved drive verbatim", spec.Drives[0])
 	}
 	for _, m := range spec.Mounts {
 		if m.Target == runner.DriveTarget {
@@ -132,6 +132,8 @@ func TestDispatch_DriveReachesSpecEnvAndAudit(t *testing.T) {
 		"enforcement": "external",
 		"mode":        "ro",
 		"object":      "nas/alice",
+		"drive_id":    drive.DriveID.String(),
+		"target":      runner.DriveTarget,
 	}
 	for k, v := range want {
 		if data[k] != v {
@@ -140,7 +142,7 @@ func TestDispatch_DriveReachesSpecEnvAndAudit(t *testing.T) {
 	}
 	for k := range data {
 		if _, ok := want[k]; !ok {
-			t.Errorf("run.drive.mount payload carries an undocumented field %q — docs/AUDIT-ACTIONS.md lists five", k)
+			t.Errorf("run.drive.mount payload carries an undocumented field %q — docs/AUDIT-ACTIONS.md lists seven", k)
 		}
 	}
 	// The whole row, not one field of it: nothing a member can fetch may spell
@@ -176,8 +178,8 @@ func TestDispatch_WritableDriveAnnouncesRW(t *testing.T) {
 // operator learns to skip past.
 func TestDispatch_NoDriveIsSilent(t *testing.T) {
 	spec, events := runDriveDispatch(t, nil)
-	if spec.Drive != nil {
-		t.Errorf("SandboxSpec.Drive = %+v, want nil", *spec.Drive)
+	if len(spec.Drives) != 0 {
+		t.Errorf("SandboxSpec.Drives = %+v, want none", spec.Drives)
 	}
 	if v, ok := spec.Env["WARDYN_USER_DRIVE"]; ok {
 		t.Errorf("WARDYN_USER_DRIVE = %q on a run with no drive, want absent", v)
@@ -207,7 +209,7 @@ func TestApplyUserDriveEnv(t *testing.T) {
 	}
 
 	drive := dispatchDrive(true)
-	applyUserDriveEnv(env, drive)
+	applyUserDriveEnv(env, []types.DriveMount{*drive})
 	if got, want := env["WARDYN_USER_DRIVE"], runner.DriveTarget+":ro"; got != want {
 		t.Fatalf("WARDYN_USER_DRIVE = %q, want %q", got, want)
 	}
@@ -228,7 +230,7 @@ func TestApplyUserDriveEnv(t *testing.T) {
 		// A pre-existing key, so "adds exactly one" is a statement about this
 		// function rather than about the map it was handed.
 		got := map[string]string{"KEEP": "1"}
-		applyUserDriveEnv(got, d)
+		applyUserDriveEnv(got, []types.DriveMount{*d})
 		if len(got) != 2 {
 			t.Errorf("%s: env = %v, want exactly one drive key beside KEEP", backend, got)
 			continue
@@ -341,7 +343,7 @@ func TestDispatch_DriveIsNotAuditedWhenTheSandboxFails(t *testing.T) {
 	fr := &fakeRunner{createErr: errors.New("denied user drive mount: outside every configured root")}
 	spec, events := runDriveDispatchWith(t, fr, dispatchDrive(false))
 
-	if spec.Drive == nil {
+	if len(spec.Drives) == 0 {
 		t.Fatal("the drive never reached SandboxSpec — this test would then pass for the wrong reason")
 	}
 	if ev := findAudit(events, spec.RunID, "run.drive.mount", "success"); ev != nil {
@@ -383,5 +385,46 @@ func TestDispatch_ManagedDriveAuditsTheObjectName(t *testing.T) {
 	}
 	if data["object"] != "wardyn-drive-alice" {
 		t.Errorf("run.drive.mount payload[object] = %v, want the managed object verbatim (full payload: %s)", data["object"], ev.Data)
+	}
+}
+
+// driveList is the dispatch's drive list for one drive, or none for nil.
+func driveList(drive *types.DriveMount) []types.DriveMount {
+	if drive == nil {
+		return nil
+	}
+	return []types.DriveMount{*drive}
+}
+
+// TestDispatch_EveryDriveIsMountedAndAudited: a run with several drives hands
+// the runner every one and writes one run.drive.mount per drive, each naming
+// the drive and the path it went to.
+func TestDispatch_EveryDriveIsMountedAndAudited(t *testing.T) {
+	fr := &fakeRunner{}
+	srv, _, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
+	run.Task = ""
+	first, second := dispatchDrive(false), dispatchDrive(true)
+	first.DriveID, second.DriveID = uuid.New(), uuid.New()
+	second.Target, second.HomeName = runner.SharedRoot+"/nas", "alice-2"
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+		RunToken: "run-token", Image: "wardyn/claude-code:latest", Drives: []types.DriveMount{*first, *second},
+	})
+	if len(fr.lastSpec.Drives) != 2 {
+		t.Fatalf("SandboxSpec.Drives = %+v, want both drives", fr.lastSpec.Drives)
+	}
+	got := map[string]string{}
+	for _, ev := range audit.events {
+		if ev.Action != "run.drive.mount" {
+			continue
+		}
+		var data map[string]any
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		got[data["drive_id"].(string)] = data["target"].(string)
+	}
+	want := map[string]string{first.DriveID.String(): runner.DriveTarget, second.DriveID.String(): runner.SharedRoot + "/nas"}
+	if len(got) != len(want) || got[first.DriveID.String()] != want[first.DriveID.String()] || got[second.DriveID.String()] != want[second.DriveID.String()] {
+		t.Errorf("run.drive.mount rows = %v, want %v", got, want)
 	}
 }

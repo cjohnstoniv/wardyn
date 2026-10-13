@@ -515,7 +515,7 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	// there are no rows to measure, so there is nothing for it to be wrong about,
 	// and a second round trip to fetch a clock nobody would use is not worth it.
 	const q = `
-		SELECT id, created_at, updated_at,
+		SELECT id, created_at, admitted_at, updated_at,
 		       CASE WHEN experience = 'background' THEN 0 ELSE auto_stop_after_sec END,
 		       lost_at IS NOT NULL, lifetime_cap_at IS NOT NULL, now()
 		FROM agent_runs
@@ -530,8 +530,12 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	var dbNow time.Time
 	for rows.Next() {
 		var s lifecycle.RunSummary
-		if err := rows.Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt, &s.PolicyAutoStopAfterSec, &s.Kept, &s.HasLifetimeCap, &dbNow); err != nil {
+		var admitted *time.Time
+		if err := rows.Scan(&s.ID, &s.CreatedAt, &admitted, &s.UpdatedAt, &s.PolicyAutoStopAfterSec, &s.Kept, &s.HasLifetimeCap, &dbNow); err != nil {
 			return nil, time.Time{}, fmt.Errorf("wardynd: scan run summary: %w", err)
+		}
+		if admitted != nil {
+			s.AdmittedAt = *admitted
 		}
 		out = append(out, s)
 	}

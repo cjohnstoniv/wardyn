@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // Mode is how an org-held credential reaches a local run (OD-12).
@@ -57,7 +60,7 @@ var classModes = map[string][]Mode{
 	ClassGitPATBroker:      viaOrgResidentRefuse,
 	ClassGitPATHelper:      {ModeRunnerResident, ModeRefuse},
 	ClassGitHubToken:       {ModeViaOrg, ModeRefuse},
-	ClassADOMintedPAT:      {ModeViaOrg, ModeRefuse},
+	ClassADOMintedPAT:      viaOrgResidentRefuse, // resident only per connection (ADOEntraConfig.RunnerResident)
 	ClassCloudSTS:          {ModeRefuse},
 }
 
@@ -90,6 +93,53 @@ type PostureRequirement struct {
 	MDMManaged    bool              `json:"mdm_managed,omitempty"`
 	DiskEncrypted bool              `json:"disk_encrypted,omitempty"`
 	OSMin         map[string]string `json:"os_min,omitempty"` // per-OS minimum version
+}
+
+// PostureUnmet names the first field of req that p does not meet; "" when p
+// meets it. A runner that never reported posture meets no requirement, and an
+// os_min names every OS a runner may run: an unlisted OS does not meet it.
+func PostureUnmet(req *PostureRequirement, p *types.RunnerPosture) string {
+	switch {
+	case req == nil:
+		return ""
+	case p == nil:
+		return "posture"
+	case req.MDMManaged && !p.MDMManaged:
+		return "mdm_managed"
+	case req.DiskEncrypted && !p.DiskEncrypted:
+		return "disk_encrypted"
+	}
+	if len(req.OSMin) == 0 {
+		return ""
+	}
+	if min, ok := req.OSMin[p.OS]; !ok || !versionAtLeast(p.OSVersion, min) {
+		return "os_min"
+	}
+	return ""
+}
+
+// versionAtLeast compares dot-separated numeric versions; a part that is not a
+// number is not at least anything.
+func versionAtLeast(v, min string) bool {
+	a, b := strings.Split(v, "."), strings.Split(min, ".")
+	for i := range max(len(a), len(b)) {
+		x, y := 0, 0
+		var err error
+		if i < len(a) {
+			if x, err = strconv.Atoi(a[i]); err != nil {
+				return false
+			}
+		}
+		if i < len(b) {
+			if y, err = strconv.Atoi(b[i]); err != nil {
+				return false
+			}
+		}
+		if x != y {
+			return x > y
+		}
+	}
+	return true
 }
 
 // ClassPolicy is one class's configured mode.

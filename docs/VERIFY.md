@@ -123,7 +123,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "${WARDYN_
 
 ```sh
 gh release download "v${WARDYN_VERSION}" --repo cjohnstoniv/wardyn
-sha256sum -c SHA256SUMS
+sha256sum -c SHA256SUMS   # macOS: shasum -a 256 -c SHA256SUMS
 cosign verify-blob \
   --certificate SHA256SUMS.pem --signature SHA256SUMS.sig \
   --certificate-identity "https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v${WARDYN_VERSION}" \

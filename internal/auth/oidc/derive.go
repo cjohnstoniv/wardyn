@@ -459,8 +459,10 @@ func sessionGroups(rolesClaim, groupsClaim []string, claimNames map[string]any) 
 	out := make([]string, 0, len(uniq))
 	used := 0
 	for _, g := range uniq {
-		// Exact JSON cost: two quotes, a comma, and one extra byte per escaped character.
-		cost := len(g) + 3 + strings.Count(g, `"`) + strings.Count(g, `\`)
+		// Exact JSON cost: two quotes, a comma, one extra byte per escaped quote or backslash, and five
+		// per & < > which json.Marshal writes as \u00XX.
+		cost := len(g) + 3 + strings.Count(g, `"`) + strings.Count(g, `\`) +
+			5*(strings.Count(g, "&")+strings.Count(g, "<")+strings.Count(g, ">"))
 		if used+cost > maxSessionGroupsBytes {
 			break
 		}

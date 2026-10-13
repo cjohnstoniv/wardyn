@@ -156,6 +156,12 @@ describe("light-theme WCAG AA contrast", () => {
     });
   }
 
+  // The shared-drive kind colour (Files step): 10px badge text on its opaque -subtle fill, and on white.
+  it("--violet text is >= 4.5:1 on white and on --violet-subtle", () => {
+    expect(ratio(token("violet"), WHITE)).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(token("violet"), token("violet-subtle"))).toBeGreaterThanOrEqual(4.5);
+  });
+
   // F7-F1: the old #737373 measured 4.7417:1 on white — why this test alone
   // stayed green — but 4.3139:1 on --muted/--surface-2 (#f4f4f5), the ground
   // the real sites (the neutral Chip, 93 call sites, + both Notes) actually
@@ -235,6 +241,10 @@ describe("light-theme WCAG AA contrast", () => {
         expect(ratio(dtoken(t), dsubtleOverCard(t))).toBeGreaterThanOrEqual(4.5);
       });
     }
+    it("dark --violet text is >= 4.5:1 on --background and on --violet-subtle", () => {
+      expect(ratio(dtoken("violet"), dtoken("background"))).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(dtoken("violet"), dtoken("violet-subtle"))).toBeGreaterThanOrEqual(4.5);
+    });
     it("dark --danger-foreground on the --danger fill is >= 4.5:1 (kill/delete buttons)", () => {
       expect(ratio(dtoken("danger-foreground"), dtoken("danger"))).toBeGreaterThanOrEqual(4.5);
     });
@@ -471,4 +481,43 @@ describe("prefers-reduced-motion — one global guard", () => {
     expect(body).toMatch(/animation-duration:\s*0\.01ms/);
     expect(body).toMatch(/transition-duration:\s*0\.01ms/);
   });
+});
+
+// U18: an unavailable row's reason is --muted-foreground text sitting on the hatch. The
+// hatch line is the worst pixel (a 1px stripe of --border at the rule's mix percentage),
+// so the text must clear AA against that blend over --card in BOTH themes. The percentage
+// is read from the rule, so a hatch drawn at full --border (4.25:1 in light) fails here.
+describe(".hatch-unavailable keeps the reason text at AA", () => {
+  const rule = /\.hatch-unavailable\s*\{([^}]*)\}/.exec(css);
+  const mix = rule && /color-mix\(in srgb,\s*var\(--border\)\s+(\d+)%,\s*transparent\)/.exec(rule[1]);
+
+  it("is tokens only: one --border color-mix and no literal colour", () => {
+    expect(rule, ".hatch-unavailable not found in theme.css").not.toBeNull();
+    expect(mix, "hatch must be color-mix(in srgb, var(--border) N%, transparent)").not.toBeNull();
+    expect(rule![1]).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(/);
+  });
+
+  const darkStart = css.indexOf(".dark {");
+  const blocks: [string, string][] = [
+    ["light", root],
+    ["dark", css.slice(darkStart, css.indexOf("\n}", darkStart))],
+  ];
+  for (const [theme, block] of blocks) {
+    it(`${theme}: --muted-foreground on the hatch blend over --card is >= 4.5:1`, () => {
+      const hex = (name: string): string => {
+        const m = block.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`));
+        if (!m) throw new Error(`--${name} not found in ${theme}`);
+        return m[1];
+      };
+      const a = +mix![1] / 100;
+      const [border, card] = [hex("border"), hex("card")];
+      const blend =
+        "#" +
+        [1, 3, 5]
+          .map((i) => Math.round(a * parseInt(border.slice(i, i + 2), 16) + (1 - a) * parseInt(card.slice(i, i + 2), 16)))
+          .map((v) => v.toString(16).padStart(2, "0"))
+          .join("");
+      expect(ratio(hex("muted-foreground"), blend)).toBeGreaterThanOrEqual(4.5);
+    });
+  }
 });

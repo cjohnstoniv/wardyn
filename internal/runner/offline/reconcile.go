@@ -188,12 +188,16 @@ func (m *Manager) Replay(ctx context.Context, peer *runnerwire.Peer) error {
 		if err != nil {
 			return err
 		}
-		err = spool.Replay(ctx, func(ctx context.Context, row runnerspool.Record) error {
-			b, err := row.Marshal()
-			if err != nil {
-				return err
+		err = spool.Replay(ctx, func(ctx context.Context, rows []runnerspool.Record) error {
+			evs := make([]runnerwire.Event, len(rows))
+			for i, row := range rows {
+				b, err := row.Marshal()
+				if err != nil {
+					return err
+				}
+				evs[i] = runnerwire.Event{Kind: runnerwire.EventSpool, RunID: &id, Data: b}
 			}
-			return peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventSpool, RunID: &id, Data: b})
+			return peer.EventsAck(ctx, evs)
 		})
 		closeErr := spool.Close()
 		if err := errors.Join(err, closeErr); err != nil {

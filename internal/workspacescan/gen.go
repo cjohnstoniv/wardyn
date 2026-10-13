@@ -103,21 +103,50 @@ func featuresFor(langs []string) map[string]map[string]any {
 // RUN gets no environment replacement from the builder, so the $plat/$ver/$sum
 // shell variables below reach /bin/sh verbatim.
 var genAgentToolInstalls = map[string]string{
-	"claude-code": `case "$(dpkg --print-architecture)" in \
+	"claude-code": claudeInstall(nil, false),
+}
+
+// claudeInstall is the claude-code RUN body. pin, when non-nil, replaces the `/stable` and
+// manifest fetch with a fixed version and checksum; pinFile makes the RUN end by writing
+// what it installed to claudePinFile (the generated build reads it back; the committable
+// export never writes it).
+func claudeInstall(pin *InstallerPin, pinFile bool) string {
+	resolve := claudeResolve
+	verify := claudeVerify
+	if pin != nil {
+		resolve = "    ver=" + pin.Version + "; sum=" + pin.SHA256 + "; \\\n"
+		verify = `    echo "$sum  /usr/local/bin/claude" | sha256sum -c - || { echo "pinned claude-code $ver: checksum mismatch" >&2; exit 1; }; \` + "\n"
+	}
+	body := claudeArch + resolve + claudeFetch + verify + claudeFinish
+	if pinFile {
+		body += "; \\\n    mkdir -p /usr/local/share/wardyn/inputs; \\\n" +
+			`    printf '%s %s %s\n' "$ver" "$plat" "$sum" > ` + claudePinFile
+	}
+	return body
+}
+
+const (
+	claudePinFile = "/usr/local/share/wardyn/inputs/claude-code"
+
+	claudeArch = `case "$(dpkg --print-architecture)" in \
       amd64) plat=linux-x64 ;; \
       arm64) plat=linux-arm64 ;; \
       *) echo "unsupported architecture for native claude-code install" >&2; exit 1 ;; \
     esac; \
     base=https://downloads.claude.ai/claude-code-releases; \
-    ver="$(curl -fsSL "$base/stable")"; \
+`
+	claudeResolve = `    ver="$(curl -fsSL "$base/stable")"; \
     curl -fsSL "$base/$ver/manifest.json" -o /tmp/claude-manifest.json; \
     sum="$(grep -A3 "\"$plat\"" /tmp/claude-manifest.json | grep -oiE '[a-f0-9]{64}' | head -1)"; \
     [ -n "$sum" ] || { echo "no sha256 for $plat in $ver manifest" >&2; exit 1; }; \
-    curl -fsSL "$base/$ver/$plat/claude" -o /usr/local/bin/claude; \
-    echo "$sum  /usr/local/bin/claude" | sha256sum -c -; \
-    chmod 0755 /usr/local/bin/claude; \
-    rm -f /tmp/claude-manifest.json`,
-}
+`
+	claudeFetch = `    curl -fsSL "$base/$ver/$plat/claude" -o /usr/local/bin/claude; \
+`
+	claudeVerify = `    echo "$sum  /usr/local/bin/claude" | sha256sum -c -; \
+`
+	claudeFinish = `    chmod 0755 /usr/local/bin/claude; \
+    rm -f /tmp/claude-manifest.json`
+)
 
 // genStandardTools is the standard agent-tool set baked into EVERY generated
 // devcontainer unconditionally, regardless of which integrations a workspace
@@ -129,20 +158,48 @@ var genStandardTools = []string{"claude-code"}
 // devcontainer.json on the plain `image` base). baseImage is the FROM line;
 // "" falls back to genBaseImage. Every RUN leads with "set -eu" so a failed
 // install fails the build rather than shipping an image missing a tool.
-func genAgentToolDockerfile(tools []string, baseImage string) string {
+//
+// pins nil is the committable export: nothing pinned, no pin file. Non-nil is the
+// generated build: Wardyn's own base and the installers are pinned where pins say so,
+// and the claude-code RUN writes the pin file (see claudeInstall).
+func genAgentToolDockerfile(tools []string, baseImage string, pins *Pins) string {
 	var b strings.Builder
 	for _, t := range tools {
-		if body, ok := genAgentToolInstalls[t]; ok {
+		if body, ok := genAgentToolBody(t, pins); ok {
 			b.WriteString("RUN set -eu; \\\n    " + body + "\n")
 		}
 	}
 	if b.Len() == 0 {
 		return ""
 	}
-	if baseImage == "" {
-		baseImage = genBaseImage
+	return "FROM " + baseRefOf(baseImage, pins) + "\n\n" + b.String()
+}
+
+// genAgentToolBody is tool's RUN body for the export (pins nil) or for the build.
+func genAgentToolBody(tool string, pins *Pins) (string, bool) {
+	body, ok := genAgentToolInstalls[tool]
+	if ok && pins != nil && tool == "claude-code" {
+		var pin *InstallerPin
+		if p, ok := pins.installer(tool); ok {
+			pin = &p
+		}
+		return claudeInstall(pin, true), true
 	}
-	return "FROM " + baseImage + "\n\n" + b.String()
+	return body, ok
+}
+
+// baseRefOf is the FROM ref: baseImage, or Wardyn's own base (genBaseImage) when empty,
+// which is the only base a pin applies to.
+func baseRefOf(baseImage string, pins *Pins) string {
+	if baseImage != "" {
+		return baseImage
+	}
+	if pins != nil {
+		if d := pins.base(); d != "" {
+			return genBaseImage + "@" + d
+		}
+	}
+	return genBaseImage
 }
 
 // genDevcontainer is the minimal devcontainer.json shape emitted. Struct field
@@ -177,14 +234,12 @@ type genBuild struct {
 // ("" for "recommended"/nil, keeping genBaseImage) — without it EmitEnvAsCode
 // would describe the generic base regardless of what Wardyn actually boots
 // (WSPIPE-9). GenerateDevcontainer always passes "". Shared so the
-// committable export and the built image can never drift.
-func baseOrBuild(dc *genDevcontainer, baseRef string) map[string]string {
-	dockerfile := genAgentToolDockerfile(genStandardTools, baseRef)
+// committable export and the built image can never drift; pins is nil for the
+// export (see genAgentToolDockerfile).
+func baseOrBuild(dc *genDevcontainer, baseRef string, pins *Pins) map[string]string {
+	dockerfile := genAgentToolDockerfile(genStandardTools, baseRef, pins)
 	if dockerfile == "" {
-		dc.Image = baseRef
-		if dc.Image == "" {
-			dc.Image = genBaseImage
-		}
+		dc.Image = baseRefOf(baseRef, pins)
 		return nil
 	}
 	dc.Build = &genBuild{Dockerfile: "Dockerfile"}
@@ -204,7 +259,7 @@ func baseOrBuild(dc *genDevcontainer, baseRef string) map[string]string {
 // baseRef is the workspace's own resolved base-image ref, or "" — see baseOrBuild.
 func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string, baseRef string) (map[string]string, error) {
 	var dc genDevcontainer
-	extra := baseOrBuild(&dc, baseRef)
+	extra := baseOrBuild(&dc, baseRef, nil)
 	if features := featuresFor(p.Languages); len(features) > 0 {
 		dc.Features = features
 	}
@@ -295,15 +350,19 @@ func genAgentsMD(p WorkspaceProfile) string {
 // Returned map is path -> content, safe to feed straight to the envbuilder
 // local-context build.
 //
+// pins fixes the base, the features and the claude-code installer to what a
+// registry or a record said; the zero Pins reproduces the unpinned files. The
+// claude-code RUN also writes the pin file the builder reads back.
+//
 // Pure: no I/O, no clock, no randomness. p.Languages is already sorted+deduped
 // by DeriveProfile, so output bytes are identical for identical profiles.
-func GenerateDevcontainer(p WorkspaceProfile) (files map[string]string, err error) {
+func GenerateDevcontainer(p WorkspaceProfile, pins Pins) (files map[string]string, err error) {
 	var dc genDevcontainer
 	// Always "": reached only for the recommended/derived build, which has no
 	// other base to resolve.
-	out := baseOrBuild(&dc, "")
+	out := baseOrBuild(&dc, "", &pins)
 	if features := featuresFor(p.Languages); len(features) > 0 {
-		dc.Features = features
+		dc.Features = pinFeatures(features, pins)
 	}
 
 	b, err := json.MarshalIndent(dc, "", "  ")
@@ -317,4 +376,17 @@ func GenerateDevcontainer(p WorkspaceProfile) (files map[string]string, err erro
 	}
 	out[genDevcontainerPath] = string(b)
 	return out, nil
+}
+
+// pinFeatures keys each feature with a digest by "<ref>@<digest>": the ref keeps its tag
+// (devcontainer's feature id accepts that form), the options are unchanged.
+func pinFeatures(features map[string]map[string]any, pins Pins) map[string]map[string]any {
+	out := make(map[string]map[string]any, len(features))
+	for ref, opts := range features {
+		if d := pins.feature(ref); d != "" {
+			ref += "@" + d
+		}
+		out[ref] = opts
+	}
+	return out
 }

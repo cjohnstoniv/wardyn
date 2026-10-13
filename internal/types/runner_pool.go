@@ -14,45 +14,51 @@ import (
 	"github.com/google/uuid"
 )
 
-// The runner pool contract (0.9). A pool is a stable, organisation-defined set
-// of execution targets. Choosing one constrains where a run may go; it never
-// grants a runner, a credential, a drive or a confinement class, and it never
-// makes another person's runner a candidate: a self-hosted pool lists many
-// people's runners, but a person's run only ever considers their own.
-//
-// Nothing here is stored yet. These are the shapes the storage, the admission
-// resolver and the console build on, and the wire the server refuses to honour
-// until they do (internal/api's stepRunContract).
+// The runner pool contract (0.9). A pool is a stable set of runners: an
+// organization pool of remote-hosted runners, or one person's own user pool of
+// their own claimed self-hosted runners and the remote-hosted runners an
+// administrator made available to people's pools. Choosing one constrains where
+// a run may go; it never grants a runner, a credential, a drive or a
+// confinement class, and it never makes another person's runner a candidate.
 
-// RunnerPoolHosting says what kind of target a pool holds. It is fixed for the
-// life of a pool and is the console's "Remote Provided" / "Self-Hosted" choice.
-// Placement is the transport value a run records; hosting is the vocabulary a
-// person sees, and each hosting type has exactly one placement.
-type RunnerPoolHosting string
+// RunnerPoolScope says whose a pool is. It is fixed for the life of a pool:
+// an organization pool is the administrators', a user pool its owner's.
+type RunnerPoolScope string
 
 const (
-	// RunnerPoolRemoteProvided pools hold executors the organisation configures.
-	RunnerPoolRemoteProvided RunnerPoolHosting = "remote_provided"
-	// RunnerPoolSelfHosted pools hold personally claimed runners (H1).
-	RunnerPoolSelfHosted RunnerPoolHosting = "self_hosted"
+	// RunnerPoolOrganization pools hold remote-hosted runners only, and have no owner.
+	RunnerPoolOrganization RunnerPoolScope = "organization"
+	// RunnerPoolUser pools belong to one person.
+	RunnerPoolUser RunnerPoolScope = "user"
 )
 
-// Valid reports whether h is one of the two hosting types.
-func (h RunnerPoolHosting) Valid() bool {
-	return h == RunnerPoolRemoteProvided || h == RunnerPoolSelfHosted
+// Valid reports whether s is one of the two scopes.
+func (s RunnerPoolScope) Valid() bool {
+	return s == RunnerPoolOrganization || s == RunnerPoolUser
 }
 
-// Placement is the run placement a pool of this hosting type serves; empty for
-// a value outside the set.
-func (h RunnerPoolHosting) Placement() Placement {
-	switch h {
-	case RunnerPoolRemoteProvided:
+// Placement is the run placement a pool of this scope serves today: an
+// organization pool places on its remote-hosted runners, a user pool on its
+// owner's own self-hosted runners (a user pool's remote-hosted members are
+// listed but not yet candidates). Empty for a value outside the set.
+func (s RunnerPoolScope) Placement() Placement {
+	switch s {
+	case RunnerPoolOrganization:
 		return PlacementRemote
-	case RunnerPoolSelfHosted:
+	case RunnerPoolUser:
 		return PlacementLocal
 	}
 	return ""
 }
+
+// RunnerKind is the kind of a runner: a person's registered computer, or a
+// Docker host or Kubernetes cluster this server is set up with.
+type RunnerKind string
+
+const (
+	RunnerKindSelfHosted   RunnerKind = "self_hosted"
+	RunnerKindRemoteHosted RunnerKind = "remote_hosted"
+)
 
 // RunnerPoolState is a pool's lifecycle. A deleted pool is a tombstone: runs
 // that were bound to it keep their history, and nothing new can choose it.
@@ -69,14 +75,19 @@ func (s RunnerPoolState) Valid() bool {
 	return s == RunnerPoolActive || s == RunnerPoolDisabled || s == RunnerPoolDeleted
 }
 
-// RunnerPool is one pool of the organisation's catalogue.
+// RunnerPool is one pool of the catalogue: an organization pool or one person's
+// own user pool.
 type RunnerPool struct {
 	ID uuid.UUID `json:"id"`
 	// Name is a display label a pool's administrator may change. It is never an
 	// identity: every reference is by ID.
-	Name        string            `json:"name"`
-	HostingType RunnerPoolHosting `json:"hosting_type"`
-	State       RunnerPoolState   `json:"state"`
+	Name  string          `json:"name"`
+	Scope RunnerPoolScope `json:"scope"`
+	// Owner is the person a user pool belongs to (their subject, as runner
+	// ownership names them): only they change it or put runners in it, and only
+	// they use it. An organization pool has none: administrators keep it.
+	Owner string          `json:"owner,omitempty"`
+	State RunnerPoolState `json:"state"`
 	// Revision starts at 1 and increases by one on every change to the pool, its
 	// membership or its use policy. A run records the revision it was admitted
 	// against, and a writer that names a stale revision is refused.
@@ -109,79 +120,81 @@ func ValidateRunnerPoolName(name string) error {
 	return nil
 }
 
-// executorIDRE is a configured executor's stable ID: a short lowercase token,
-// never a host, a socket path or a URL.
-var executorIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,62}$`)
+// remoteRunnerIDRE is a remote-hosted runner's stable ID, the name of the
+// substrate it is configured as: a short lowercase token, never a host, a socket
+// path or a URL. remoteRunnerUUIDRE refuses one that reads as a UUID, so a
+// self-hosted runner's id and a remote-hosted runner's never collide.
+var (
+	remoteRunnerIDRE   = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,62}$`)
+	remoteRunnerUUIDRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+)
 
-// RunnerPoolMember is one target of a pool. Exactly one of RunnerID and
-// ExecutorID is set, and it must be the kind the pool's hosting type holds.
-// A self-hosted membership is added by the runner's own owner and never by
-// anyone on their behalf; the pool only records it.
-type RunnerPoolMember struct {
-	PoolID uuid.UUID `json:"pool_id"`
-	// RunnerID is a claimed runner (self_hosted pools).
-	RunnerID *uuid.UUID `json:"runner_id,omitempty"`
-	// ExecutorID is a server-configured executor (remote_provided pools).
-	ExecutorID string    `json:"executor_id,omitempty"`
-	AddedAt    time.Time `json:"added_at"`
+// ValidRemoteRunnerID reports whether id can name a remote-hosted runner.
+func ValidRemoteRunnerID(id string) bool {
+	return remoteRunnerIDRE.MatchString(id) && !remoteRunnerUUIDRE.MatchString(id)
 }
 
-// Validate refuses a member that names no target, two targets, or a target of
-// the wrong kind for hosting. Mixed kinds are never stored.
-func (m RunnerPoolMember) Validate(hosting RunnerPoolHosting) error {
-	hasRunner, hasExecutor := m.RunnerID != nil, m.ExecutorID != ""
+// OrgPoolSelfHostedMsg refuses a self-hosted runner in an organization pool.
+const OrgPoolSelfHostedMsg = "Organization pools take remote-hosted runners only. A self-hosted runner can join its owner's user pools."
+
+// RunnerPoolMember is one runner of a pool: exactly one of RunnerID (a
+// self-hosted runner) and RemoteRunnerID (a remote-hosted runner) is set, and
+// Kind says which. A self-hosted membership is added by the runner's own owner
+// into their own user pool and never by anyone on their behalf.
+type RunnerPoolMember struct {
+	PoolID uuid.UUID  `json:"pool_id"`
+	Kind   RunnerKind `json:"kind"`
+	// RunnerID is a claimed self-hosted runner (user pools only).
+	RunnerID *uuid.UUID `json:"runner_id,omitempty"`
+	// RemoteRunnerID is a remote-hosted runner (either scope).
+	RemoteRunnerID string    `json:"remote_runner_id,omitempty"`
+	AddedAt        time.Time `json:"added_at"`
+}
+
+// Validate refuses a member that names no runner, two runners, or a
+// self-hosted runner in an organization pool.
+func (m RunnerPoolMember) Validate(scope RunnerPoolScope) error {
+	hasRunner, hasRemote := m.RunnerID != nil, m.RemoteRunnerID != ""
 	switch {
-	case hasRunner == hasExecutor:
-		return errors.New("a pool member names one runner or one executor")
-	case hasRunner && hosting != RunnerPoolSelfHosted:
-		return errors.New("only a self-hosted pool holds runners")
-	case hasExecutor && hosting != RunnerPoolRemoteProvided:
-		return errors.New("only a remote-provided pool holds executors")
+	case hasRunner == hasRemote:
+		return errors.New("a pool member names one runner")
+	case hasRunner && scope != RunnerPoolUser:
+		//lint:ignore ST1005 the sentence the refused person reads, as the pool editor shows it
+		return errors.New(OrgPoolSelfHostedMsg)
 	case hasRunner && *m.RunnerID == uuid.Nil:
 		return errors.New("runner_id is not a runner id")
-	case hasExecutor && !executorIDRE.MatchString(m.ExecutorID):
-		return errors.New("executor_id is not a configured executor id")
+	case hasRemote && !ValidRemoteRunnerID(m.RemoteRunnerID):
+		return errors.New("remote_runner_id is not a remote-hosted runner id")
 	}
 	return nil
 }
 
-// RunnerPoolDefaultsPrefKey is the principal_prefs key of a person's own pool
-// defaults. A person's document sits under their authenticated principal only.
-const RunnerPoolDefaultsPrefKey = "runner_pool_defaults.v1"
+// RunnerPoolDefaultPrefKey is the principal_prefs key of a person's own default
+// pool. A person's document sits under their authenticated principal only.
+const RunnerPoolDefaultPrefKey = "runner_pool_default.v2"
 
-// RunnerPoolDefaults is the same shape for a person and for the organisation:
-// which hosting type a run starts on and which pool each type starts on. An
-// absent field inherits (a person's from the organisation's, the organisation's
-// from nothing); it is never a way to widen what a person may use, because a
-// default only ever seeds a choice the catalogue must still permit.
+// RunnerPoolDefaults is the default pool, for a person or for the organization:
+// the pool a run that names none starts on. A person's own wins over the
+// organization's; it is never a way to widen what a person may use, because a
+// default only ever seeds a choice the catalogue must still permit. The
+// organization's names an organization pool only.
+//
+// Barrier is the organisation's alone: the class an untouched launch gets when it is at or above the
+// floor and the pool offers it. A person's own document never carries one.
 type RunnerPoolDefaults struct {
-	PreferredHosting RunnerPoolHosting `json:"preferred_hosting,omitempty"`
-	RemoteProvided   *uuid.UUID        `json:"remote_provided,omitempty"`
-	SelfHosted       *uuid.UUID        `json:"self_hosted,omitempty"`
+	PoolID  *uuid.UUID       `json:"pool_id,omitempty"`
+	Barrier ConfinementClass `json:"barrier,omitempty"`
 }
 
-// PoolFor is the default pool for a hosting type, nil when none is set.
-func (d RunnerPoolDefaults) PoolFor(h RunnerPoolHosting) *uuid.UUID {
-	switch h {
-	case RunnerPoolRemoteProvided:
-		return d.RemoteProvided
-	case RunnerPoolSelfHosted:
-		return d.SelfHosted
-	}
-	return nil
-}
-
-// Validate checks the document's shape. Whether each pool exists, is permitted
-// and has the right hosting type is the writer's and the resolver's, against
+// Validate checks the document's shape. Whether the pool exists, is permitted
+// and may be this kind of default is the writer's and the resolver's, against
 // the live catalogue.
 func (d RunnerPoolDefaults) Validate() error {
-	if d.PreferredHosting != "" && !d.PreferredHosting.Valid() {
-		return fmt.Errorf("preferred_hosting %q is not remote_provided or self_hosted", d.PreferredHosting)
+	if d.PoolID != nil && *d.PoolID == uuid.Nil {
+		return errors.New("a default pool is a pool id")
 	}
-	for _, id := range []*uuid.UUID{d.RemoteProvided, d.SelfHosted} {
-		if id != nil && *id == uuid.Nil {
-			return errors.New("a default pool is a pool id")
-		}
+	if d.Barrier != "" && d.Barrier.Rank() == 0 {
+		return fmt.Errorf("barrier %q is not CC1, CC2 or CC3", d.Barrier)
 	}
 	return nil
 }
@@ -207,11 +220,11 @@ func (s RunnerPoolSelection) Valid() bool {
 // it was read at and how it was chosen. It is a label for the choice and never
 // admission: a run is admitted against the persisted pool and the exact target.
 type ResolvedRunnerPool struct {
-	ID          uuid.UUID           `json:"id"`
-	Name        string              `json:"name"`
-	HostingType RunnerPoolHosting   `json:"hosting_type"`
-	Revision    int64               `json:"revision"`
-	Selection   RunnerPoolSelection `json:"selection"`
+	ID        uuid.UUID           `json:"id"`
+	Name      string              `json:"name"`
+	Scope     RunnerPoolScope     `json:"scope"`
+	Revision  int64               `json:"revision"`
+	Selection RunnerPoolSelection `json:"selection"`
 }
 
 // RunnerPoolSubject is one person, group or role a pool-use policy admits.
@@ -222,7 +235,7 @@ type RunnerPoolSubject struct {
 	Subject     string                `json:"subject"`
 }
 
-// RunnerPoolUsePolicy narrows who may use one remote-provided pool. With no
+// RunnerPoolUsePolicy narrows who may use one organization pool. With no
 // policy, everyone who may launch remote runs may use the pool; with one, only
 // the listed subjects may. It never grants launch rights, so it can only narrow.
 // A policy with no subjects is refused rather than stored: "nobody" and
@@ -237,12 +250,12 @@ type RunnerPoolUsePolicy struct {
 }
 
 // Validate checks a policy before it is stored against the pool it narrows: a
-// use policy narrows a Remote Provided pool only. On a Self-Hosted pool it would
-// either be stored and ignored, reading as a restriction that does not exist, or
-// become a sharing ACL over people's own runners, which 0.9 does not have.
-func (p RunnerPoolUsePolicy) Validate(hosting RunnerPoolHosting) error {
-	if hosting != RunnerPoolRemoteProvided {
-		return errors.New("a use policy narrows a Remote Provided pool only")
+// use policy narrows an organization pool only. On a user pool it would either
+// be stored and ignored, reading as a restriction that does not exist, or become
+// a sharing ACL over people's own runners, which 0.9 does not have.
+func (p RunnerPoolUsePolicy) Validate(scope RunnerPoolScope) error {
+	if scope != RunnerPoolOrganization {
+		return errors.New("a use policy narrows an organization pool only")
 	}
 	return ValidateRunnerPoolUseSubjects(p.Subjects)
 }

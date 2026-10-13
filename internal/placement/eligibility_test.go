@@ -44,7 +44,7 @@ func TestLocalEligibilityOwnNamespaceAndLateCredential(t *testing.T) {
 }
 
 func TestLocalEligibilityUnimplementedDeliveryCannotAuthorize(t *testing.T) {
-	for _, mode := range []Mode{ModeRefuse, ModeViaOrg, ModeRunnerResident} {
+	for _, mode := range []Mode{ModeRefuse, ModeViaOrg} {
 		p := LocalPlan{Spec: runner.SandboxSpec{SecretEnv: map[string]string{"TOKEN": "value"}}, Origins: map[string]CredentialOrigin{"SandboxSpec.SecretEnv[TOKEN]": {Class: ClassOperator, Delivery: ClassEnvSecret}}, Delivery: DeliveryPolicy{Classes: map[string]ClassPolicy{ClassEnvSecret: {Mode: mode}}}}
 		if _, r := LocalEligibility(p); r == nil || r.Reason != ReasonPlacementCredential {
 			t.Fatalf("mode %s: %v", mode, r)

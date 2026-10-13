@@ -60,9 +60,15 @@ type SetupItem struct {
 // not here — this stays a fast, pure read of already-stored state, no live
 // probe and no new injection surface.
 type SetupFix struct {
-	Action      string `json:"action"` // "add_secret" | "scan_workspace" | "none"
+	Action      string `json:"action"` // "add_secret" | "scan_workspace" | "sign_in" | "choose_model_provider" | "none"
 	SecretName  string `json:"secret_name,omitempty"`
 	WorkspaceID string `json:"workspace_id,omitempty"` // ID, not source — api.scanWorkspace takes an id
+	// sign_in: what to sign in to (model_provider, azure_cli or aws_cli) and its
+	// id (a model provider's id, or a component's).
+	Target string `json:"target,omitempty"`
+	ID     string `json:"id,omitempty"`
+	// choose_model_provider: the included harness (tools[].id) that has none.
+	Tool string `json:"tool,omitempty"`
 }
 
 // deriveSetupItems computes the composed run's setup checklist from the FINAL
@@ -71,6 +77,18 @@ type SetupFix struct {
 // (runComposePipeline). Non-blocking: items never gate the proposal, they only
 // inform the review panel.
 func (s *Server) deriveSetupItems(ctx context.Context, owner string, run composer.RunInput, spec types.RunPolicySpec, presentSecrets map[string]bool, llmAccess *composeLLMAccess) []SetupItem {
+	// applyWorkspaces (compose.go) now puts EVERY git repo, the primary included,
+	// into spec.WorkspaceRepos — so referencedWorkspaces alone resolves it; no
+	// separate run.Repo-keyed lookup needed here.
+	return s.deriveRunSetupItems(ctx, owner, run, spec, presentSecrets, llmAccess, s.referencedWorkspaces(ctx, spec))
+}
+
+// deriveRunSetupItems is deriveSetupItems over the workspaces a run attaches
+// (runFold.wsRefs), so Review names the workspace each requirement row comes
+// from, a workspace with no mount or repo of its own included.
+func (s *Server) deriveRunSetupItems(ctx context.Context, owner string, run composer.RunInput, spec types.RunPolicySpec,
+	presentSecrets map[string]bool, llmAccess *composeLLMAccess, workspaces []types.Workspace,
+) []SetupItem {
 	var items []SetupItem
 
 	if it, ok := s.setupBackendItem(ctx, run, spec); ok {
@@ -81,11 +99,6 @@ func (s *Server) deriveSetupItems(ctx context.Context, owner string, run compose
 	}
 	items = append(items, setupSecretItems(spec, presentSecrets)...)
 
-	// applyWorkspaces (compose.go) now puts EVERY git repo, the primary included,
-	// into spec.WorkspaceRepos — so referencedWorkspaces alone resolves it; no
-	// separate run.Repo-keyed lookup needed here. One derivation, shared with
-	// the real create-run path's own wsRefs (runs.go).
-	workspaces := s.referencedWorkspaces(ctx, spec)
 	items = append(items, setupWorkspaceItems(workspaces)...)
 	items = append(items, setupWorkspaceSecretItems(workspaces, presentSecrets)...)
 	items = append(items, s.setupWorkspaceIntegrationItems(ctx, owner, workspaces, presentSecrets)...)

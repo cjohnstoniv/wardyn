@@ -84,6 +84,60 @@ func TestRunnerPoolLimitsValidate(t *testing.T) {
 	}
 }
 
+func TestRunnerPoolLimitsValidateDisk(t *testing.T) {
+	disk := func(def, cap int) *RunnerPoolAmount { return &RunnerPoolAmount{Default: def, Cap: cap} }
+	const gib = 1024
+	for _, tc := range []struct {
+		name   string
+		mutate func(*RunnerPoolLimits)
+		want   string // "" is valid
+	}{
+		{"no disk bound", func(*RunnerPoolLimits) {}, ""},
+		{"whole GiB, default below cap", func(l *RunnerPoolLimits) { l.Background.DiskMiB = disk(10*gib, 50*gib) }, ""},
+		{"default equal to cap", func(l *RunnerPoolLimits) { l.Interactive.DiskMiB = disk(5*gib, 5*gib) }, ""},
+		{"the 16 TiB bound", func(l *RunnerPoolLimits) { l.Background.DiskMiB = disk(gib, RunnerPoolDiskMiBMax) }, ""},
+		{"over 16 TiB", func(l *RunnerPoolLimits) { l.Background.DiskMiB = disk(gib, RunnerPoolDiskMiBMax+gib) }, "background.disk_mib: the cap is at most"},
+		{"cap not whole GiB", func(l *RunnerPoolLimits) { l.Background.DiskMiB = disk(gib, 1536) }, "background.disk_mib: set a default and a cap in whole GiB (multiples of 1024 MiB)"},
+		{"default not whole GiB", func(l *RunnerPoolLimits) { l.Interactive.DiskMiB = disk(512, 2*gib) }, "interactive.disk_mib: set a default and a cap in whole GiB (multiples of 1024 MiB)"},
+		{"default past cap", func(l *RunnerPoolLimits) { l.Interactive.DiskMiB = disk(4*gib, 2*gib) }, "interactive.disk_mib: the default"},
+		{"zero amount", func(l *RunnerPoolLimits) { l.Background.DiskMiB = disk(0, 0) }, "at least 1 MiB"},
+	} {
+		l := limitsFixture()
+		tc.mutate(&l)
+		err := l.Validate()
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: refused: %v", tc.name, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%s: err = %v, want it to say %q", tc.name, err, tc.want)
+		}
+	}
+}
+
+// TestRunnerPoolDiskWireRoundTrip: disk_mib survives the JSONB form on both run
+// types, and an absent one stays absent (a pool written before it has no bound).
+func TestRunnerPoolDiskWireRoundTrip(t *testing.T) {
+	l := limitsFixture()
+	l.Background.DiskMiB = &RunnerPoolAmount{Default: 10240, Cap: 51200}
+	l.Interactive.DiskMiB = &RunnerPoolAmount{Default: 2048, Cap: 4096}
+	raw, err := json.Marshal(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got RunnerPoolLimits
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Background.DiskMiB == nil || *got.Background.DiskMiB != *l.Background.DiskMiB ||
+		got.Interactive.DiskMiB == nil || *got.Interactive.DiskMiB != *l.Interactive.DiskMiB {
+		t.Fatalf("disk_mib lost in %s", raw)
+	}
+	old, _ := json.Marshal(limitsFixture())
+	if strings.Contains(string(old), "disk_mib") {
+		t.Fatalf("an unset disk_mib is encoded: %s", old)
+	}
+}
+
 // TestBackgroundLimitsHaveNoIdle: the idle stop is Interactive-only, so a Background
 // body that sends one never decodes, and the encoded form carries none.
 func TestBackgroundLimitsHaveNoIdle(t *testing.T) {
@@ -176,6 +230,11 @@ func TestRunEndReason(t *testing.T) {
 	}
 	if RunEndReason("x").Sentence() != "" {
 		t.Fatal("an unknown reason has no sentence")
+	}
+	for _, r := range []RunEndReason{RunEndQueueTimeout, RunEndQueueProfileChanged, RunEndQueuePolicyChanged, RunEndQueuePortalRevoked, RunEndRunnerPoolRemoved, RunEndIdentityDeactivated} {
+		if !r.Valid() || r.Sentence() == "" {
+			t.Errorf("queue end reason %q must be valid and have a sentence", r)
+		}
 	}
 }
 

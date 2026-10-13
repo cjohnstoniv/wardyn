@@ -46,6 +46,7 @@ type endCreate struct {
 func createWithEnd(t *testing.T, profile *types.GovernanceProfile, maxAge time.Duration, body string) endCreate {
 	t.Helper()
 	srv, st := runLimitsFixture(t, assignedStore(profile))
+	srv.cfg.AgentImages = composeAgentImages
 	srv.cfg.RunMaxAge = maxAge
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", govSession(t, govMemberSub, []string{"eng"}, false), body)
 	out := endCreate{code: w.Code, reason: errorReason(w)}
@@ -262,6 +263,7 @@ func endAtEveryDoor(t *testing.T, profile *types.GovernanceProfile, maxAge time.
 	codes := map[string]int{}
 	for _, door := range []string{"/api/v1/runs/preflight", "/api/v1/runs/policy-preview"} {
 		srv, _ := runLimitsFixture(t, assignedStore(profile))
+		srv.cfg.AgentImages = composeAgentImages
 		srv.cfg.RunMaxAge = maxAge
 		codes[door] = doSSO(t, srv, http.MethodPost, door, govSession(t, govMemberSub, []string{"eng"}, false), body).Code
 	}

@@ -18,14 +18,14 @@ import (
 // s.cfg.ImageBuilder non-nil for the "builder wired" case.
 type fakeImageBuilder struct{}
 
-func (fakeImageBuilder) BuildDevcontainer(context.Context, string, string, string, io.Writer) (string, error) {
-	return "", nil
+func (fakeImageBuilder) BuildDevcontainer(context.Context, string, string, string, io.Writer) (BuiltImage, error) {
+	return BuiltImage{}, nil
 }
-func (fakeImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (string, error) {
-	return "", nil
+func (fakeImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (BuiltImage, error) {
+	return BuiltImage{}, nil
 }
-func (fakeImageBuilder) FinalizeBase(context.Context, string, string, io.Writer) (string, error) {
-	return "", nil
+func (fakeImageBuilder) FinalizeBase(context.Context, string, string, io.Writer, bool) (BuiltImage, error) {
+	return BuiltImage{}, nil
 }
 
 // TestBYOI_ImageAndDevcontainerAreMutuallyExclusive asserts the HTTP-layer XOR

@@ -64,8 +64,8 @@ func (s *Server) workspaceProvidersRefusal(r *http.Request, target string, repos
 	return nil
 }
 
-func (s *Server) seedAuthorizedWorkspace(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest) ([]string, *runRefusal) {
-	// First, before a single source is folded: authorize the SELECTION against
+func (s *Server) seedAuthorizedWorkspace(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest) (workspaceSeed, *runRefusal) {
+	// First, before a single source is folded: authorize EVERY selection against
 	// the CALLER. Everything below this line reasons about host paths that are
 	// about to become binds, and until now nothing on the path asked whose
 	// workspace they came from — the only member-mount check downstream is
@@ -74,23 +74,26 @@ func (s *Server) seedAuthorizedWorkspace(ctx context.Context, r *http.Request, s
 	// member's workspace id and get their directory bound inside a sandbox they
 	// control. The store-less case is left to seedRequestWorkspace, which
 	// answers it with its own 422.
-	if req.WorkspaceID != nil && s.cfg.Store != nil {
-		if _, refusal := s.workspaceLaunchSelection(r, *req.WorkspaceID); refusal != nil {
-			return nil, refusal
+	if s.cfg.Store != nil {
+		for _, id := range attachedWorkspaceIDs(*req) {
+			if _, refusal := s.workspaceLaunchSelection(r, id); refusal != nil {
+				return workspaceSeed{}, refusal
+			}
 		}
 	}
-	ephemeralDirs, seededImageOwner, code, seedReason, seedErr := s.seedRequestWorkspace(ctx, spec, req)
-	if seedErr != nil {
-		return nil, runError(code, seedReason, "workspace_id: "+seedErr.Error())
+	seed, refusal := s.seedRequestWorkspace(ctx, spec, req)
+	if refusal != nil {
+		return workspaceSeed{}, refusal
 	}
+	seededImageOwner := seed.imageOwner
 	if refusal := s.seededImageRefusal(r, seededImageOwner, req.Image); refusal != nil {
-		return nil, refusal
+		return workspaceSeed{}, refusal
 	}
 	if msg, reason := s.validateImageBuildRequest(*req); msg != "" {
-		return nil, runError(http.StatusBadRequest, reason, msg)
+		return workspaceSeed{}, runError(http.StatusBadRequest, reason, msg)
 	}
 	if code, reason, err := s.validateWorkspaceSources(ctx, *spec); err != nil {
-		return nil, runError(code, reason, "workspace: "+err.Error())
+		return workspaceSeed{}, runError(code, reason, "workspace: "+err.Error())
 	}
 	// The caller-scoped twin of the onboarding gate above: onboarded is not the
 	// same question as "onboarded BY SOMEONE THIS CALLER MAY LAUNCH AS", and a
@@ -104,7 +107,7 @@ func (s *Server) seedAuthorizedWorkspace(ctx context.Context, r *http.Request, s
 	// doc comment): a distinguishable reason would reopen exactly what the shared
 	// sentence closes.
 	if code, reason, err := s.authorizeSpecWorkspaceSources(ctx, r, *spec); err != nil {
-		return nil, runError(code, reason, "workspace: "+err.Error())
+		return workspaceSeed{}, runError(code, reason, "workspace: "+err.Error())
 	}
 	// Both provider gates sit at this chokepoint, over the RESOLVED spec's repos
 	// — the un-bypassable one, reached alike by workspace_id, a stored policy and
@@ -119,12 +122,12 @@ func (s *Server) seedAuthorizedWorkspace(ctx context.Context, r *http.Request, s
 	// are the POLICY write doors (policies.go), where nothing clones.
 	repos := repoLocatorsOf(spec.WorkspaceRepos)
 	if refusal := s.repoAdmissionRefusal(r, repos...); refusal != nil {
-		return nil, refusal
+		return workspaceSeed{}, refusal
 	}
 	if refusal := s.workspaceProvidersRefusal(r, "runs.workspace_provider", repos...); refusal != nil {
-		return nil, refusal
+		return workspaceSeed{}, refusal
 	}
-	return ephemeralDirs, nil
+	return seed, nil
 }
 
 // Missing and foreign selections share a 404 before seeding; the seed helper

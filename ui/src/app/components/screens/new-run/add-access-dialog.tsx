@@ -25,7 +25,7 @@ const CustomComponentDialog = React.lazy(() =>
 );
 
 /** types.MaxComponentRefs: the most one run carries. */
-export const MAX_COMPONENT_REFS = 8;
+export const MAX_COMPONENT_REFS = 16;
 
 export interface AddAccessDialogProps {
   /** What the run carries now. */

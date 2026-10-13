@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"slices"
 
 	"github.com/google/uuid"
@@ -30,6 +31,9 @@ type poolTarget struct {
 	facts    runner.TargetFacts
 	// offline: not connected, or it has advertised nothing, so its facts are unknown.
 	offline bool
+	// full: a registered runner already holding its max_runs of sandbox-holding runs, as last read
+	// without a lock. The insert, the promotion and the start count again under the runner's row lock.
+	full bool
 }
 
 // personalPoolDefaults is the signed-in person's own saved defaults: empty for a caller who is no
@@ -42,7 +46,7 @@ func (s *Server) personalPoolDefaults(ctx context.Context) (types.RunnerPoolDefa
 	if owner == "" || !ok {
 		return d, nil
 	}
-	raw, err := prefs.GetPrincipalPref(ctx, owner, types.RunnerPoolDefaultsPrefKey)
+	raw, err := prefs.GetPrincipalPref(ctx, owner, types.RunnerPoolDefaultPrefKey)
 	if errors.Is(err, store.ErrNotFound) {
 		return d, nil
 	}
@@ -67,66 +71,119 @@ func poolOwner(ctx context.Context) string {
 	return oidcHumanFromContext(ctx)
 }
 
-// placementDemand reads what the fold knows of the run's needs: the barrier its policy floor and its
-// request ask for and the size it asks for. The size the run gets when it asks for none is the
-// resources lane's (A-L5), which clamps per candidate when it lands. A class no executor and no runner
-// of the deployment enforces at all is left to the confinement step, whose sentence is the long-standing
-// one for it; only a class SOME target enforces is held against each candidate here.
+// placementDemand reads the barrier the run's policy floor and its request ask for. Its size starts
+// at none: resolvePlacement sets the APPLIED size once runSize has bounded the ask, never the request's
+// own. A class no executor and no runner of the deployment enforces at all is left to the confinement
+// step, whose sentence is the long-standing one for it; only a class SOME target enforces is held
+// against each candidate here.
 func (s *Server) placementDemand(ctx context.Context, in placementInput) placementDemand {
 	d := placementDemand{floor: in.floor, reqCC: in.reqCC, reqCCOK: in.reqCCOK, baseline: in.baseline}
 	advertised := s.advertisedConfinement(ctx, *in.req)
-	if enforced, err := enforcedConfinement(in.floor, in.reqCC, advertised, in.baseline); err != nil ||
+	// The org default barrier is left out ("") on purpose: it is chosen only from the advertised set,
+	// so it never changes whether the resulting class is enforced.
+	if enforced, _, err := enforcedConfinement(in.floor, in.reqCC, advertised, "", in.baseline); err != nil ||
 		(enforced != "" && !slices.Contains(advertised, enforced)) {
 		d.reqCCOK = false
-	}
-	if r := in.req.Resources; r != nil {
-		d.cpu, d.mem = int64(r.CPUMillis), int64(r.MemoryMiB)
 	}
 	return d
 }
 
-// poolTargets is the resolved pool's candidate set with each candidate's own facts, before any demand
-// is held against them. A self-hosted pool yields only the launching person's own claimed runners that
-// are bound to this organisation (the claim path's check); a remote-provided pool yields its
-// configured executors that this deployment runs. The pool-use policy already narrowed who may reach a
-// remote pool. A pinned runner must be one of the candidates; one that is not is answered like an
-// unknown id and a runner that is not the caller's is never named.
+// poolTargets is the resolved pool's candidate set of both kinds, each candidate with its own facts,
+// before any demand is held against them. An organization pool yields its configured remote-hosted
+// runners, whom its use policy already admitted the person to. A user pool yields the launching person's
+// own claimed runners that are bound to this organisation (the claim path's check), and its configured
+// remote-hosted runners whose people policy admits the person now (admittedRemoteMembers). When none of
+// the person's own runners can be offered, the pool's remote-hosted ones still are, unless the request
+// asks for the person's own runner (a placement of local or a pin), whose refusal is then the answer. A
+// pinned runner must be one of the candidates; one that is not is answered like an unknown id and a
+// runner that is not the caller's is never named.
 func (s *Server) poolTargets(ctx context.Context, req *createRunRequest, ps store.RunnerPoolStore, row store.RunnerPoolCatalogueRow) ([]poolTarget, *runRefusal) {
-	if row.Pool.HostingType == types.RunnerPoolRemoteProvided {
-		return s.executorTargets(ctx, row)
+	read := func(e string) (runner.TargetFacts, bool) { return s.executorFacts(ctx, e) }
+	if row.Pool.Scope == types.RunnerPoolOrganization {
+		return executorTargets(row, s.configuredExecutors(), read)
 	}
-	return s.ownRunnerTargets(ctx, req, ps, row)
+	admitted, refusal := s.admittedRemoteMembers(ctx, row)
+	if refusal != nil {
+		return nil, refusal
+	}
+	remote, _ := executorTargets(admitted, s.configuredExecutors(), read)
+	own, refusal := s.ownRunnerTargets(ctx, req, ps, row)
+	if refusal != nil && (len(remote) == 0 || req.Placement == placement.Local || refusal.status >= http.StatusInternalServerError) {
+		return nil, refusal
+	}
+	return append(own, remote...), nil
 }
 
-func (s *Server) executorTargets(ctx context.Context, row store.RunnerPoolCatalogueRow) ([]poolTarget, *runRefusal) {
-	configured := s.configuredExecutors()
+// admittedRemoteMembers is a user pool's row narrowed to the remote-hosted members whose people policy
+// admits the launching person. The policy was checked when the person added the runner and is checked
+// again here at every launch, so a narrowed policy drops the runner from their candidates while the
+// membership row stays. A store that cannot read remote runners admits none.
+func (s *Server) admittedRemoteMembers(ctx context.Context, row store.RunnerPoolCatalogueRow) (store.RunnerPoolCatalogueRow, *runRefusal) {
+	out := row
+	out.ExecutorIDs = nil
+	rs, ok := s.cfg.Store.(store.RemoteRunnerStore)
+	if len(row.ExecutorIDs) == 0 || !ok {
+		return out, nil
+	}
+	subj, err := s.callerSubjects(ctx)
+	if err != nil {
+		return out, ceilingRunRefusal(err)
+	}
+	for _, id := range row.ExecutorIDs {
+		rr, err := rs.GetRemoteRunner(ctx, id)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			continue
+		case err != nil:
+			return out, runServerError("read remote runner", err)
+		}
+		if subj.admitsPeople(rr.Runner) {
+			out.ExecutorIDs = append(out.ExecutorIDs, id)
+		}
+	}
+	return out, nil
+}
+
+// placement is the placement a candidate's kind runs at: local on one of the person's own runners,
+// remote on a remote-hosted runner.
+func (t poolTarget) placement() types.Placement {
+	if t.runnerID != nil {
+		return types.PlacementLocal
+	}
+	return types.PlacementRemote
+}
+
+// executorTargets is a remote pool's configured executors, each with the facts read reports for it.
+func executorTargets(row store.RunnerPoolCatalogueRow, configured []string, read func(executor string) (runner.TargetFacts, bool)) ([]poolTarget, *runRefusal) {
 	var out []poolTarget
 	for _, e := range runnerpool.SortedUnique(row.ExecutorIDs) {
 		if !slices.Contains(configured, e) {
 			continue
 		}
-		facts, known := s.executorFacts(ctx, e)
+		facts, known := read(e)
 		out = append(out, poolTarget{id: e, executor: e, facts: facts, offline: !known})
 	}
 	if len(out) == 0 {
-		return nil, poolRefusal(&runnerpool.Refusal{Reason: runnerpool.ReasonNoEligibleMember, Name: row.Pool.Name, Hosting: row.Pool.HostingType})
+		return nil, poolRefusal(&runnerpool.Refusal{Reason: runnerpool.ReasonNoEligibleMember, Name: row.Pool.Name, Scope: row.Pool.Scope})
 	}
 	return out, nil
 }
 
 func (s *Server) ownRunnerTargets(ctx context.Context, req *createRunRequest, ps store.RunnerPoolStore, row store.RunnerPoolCatalogueRow) ([]poolTarget, *runRefusal) {
 	none := func() *runRefusal {
-		return poolRefusal(&runnerpool.Refusal{Reason: runnerpool.ReasonNoEligibleMember, Name: row.Pool.Name, Hosting: row.Pool.HostingType})
+		return poolRefusal(&runnerpool.Refusal{Reason: runnerpool.ReasonNoEligibleMember, Name: row.Pool.Name, Scope: row.Pool.Scope})
 	}
 	switch err := s.runnersEnabled(ctx); {
 	case errors.Is(err, errRunnersDisabled):
-		return nil, targetRefusal(placement.ReasonPlacementUnavailable, row.Pool.Name, row.Pool.HostingType)
+		return nil, targetRefusal(placement.ReasonPlacementUnavailable, row.Pool.Name, row.Pool.Scope)
 	case err != nil:
 		return nil, runError(503, reasonRunnersConfigUnavailable, "runner configuration is unavailable; retry later")
 	}
 	owner := poolOwner(ctx)
 	rs, ok := s.cfg.Store.(store.RunnerStore)
-	if owner == "" || !ok {
+	// The catalogue offers a person only their own Self-Hosted pools; this holds again here, so a pool
+	// that is not the launcher's yields no candidate even if one reached this far.
+	if owner == "" || !ok || row.Pool.Owner != owner {
 		return nil, none()
 	}
 	members, err := ps.ListRunnerPoolMembers(ctx, row.Pool.ID)
@@ -146,14 +203,35 @@ func (s *Server) ownRunnerTargets(ctx context.Context, req *createRunRequest, ps
 	if len(ids) == 0 {
 		return nil, none()
 	}
+	held, err := s.runnerSlotHolders(ctx, ids)
+	if err != nil {
+		return nil, runServerError("count runs by runner", err)
+	}
+	// A promoted run's start finds the run itself holding the place its promotion took on its runner:
+	// that place is this run's, so the runner is not full for it.
+	if bound := promotedRunner(ctx); bound != nil && held[*bound] > 0 {
+		held[*bound]--
+	}
 	out := make([]poolTarget, 0, len(ids))
 	for _, id := range ids {
 		id := id
 		facts, known := s.runnerFacts(id)
-		out = append(out, poolTarget{id: id.String(), runnerID: &id, facts: facts, offline: !known || !s.runnerOnline(id)})
+		i := slices.IndexFunc(runners, func(r types.Runner) bool { return r.ID == id })
+		full := i >= 0 && runners[i].MaxRuns > 0 && held[id] >= runners[i].MaxRuns
+		out = append(out, poolTarget{id: id.String(), runnerID: &id, facts: facts, offline: !known || !s.runnerOnline(id), full: full})
 	}
 	slices.SortFunc(out, func(a, b poolTarget) int { return cmp.Compare(a.id, b.id) })
 	return out, nil
+}
+
+// runnerSlotHolders is the number of sandbox-holding runs on each runner, read without a lock; nil from
+// a store that cannot count, whose runners are then never read as full.
+func (s *Server) runnerSlotHolders(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]int, error) {
+	rs, ok := s.cfg.Store.(store.RunnerInventoryStore)
+	if !ok {
+		return nil, nil
+	}
+	return rs.RunnerSlotHolders(ctx, ids)
 }
 
 // pinRefusal refuses a runner_id that is not one of the caller's own candidates in this pool. The
@@ -202,5 +280,7 @@ func (s *Server) executorFacts(ctx context.Context, executor string) (runner.Tar
 	if err != nil {
 		return runner.TargetFacts{}, false
 	}
-	return runner.TargetFacts{Classes: caps.ConfinementClasses}, true
+	_, keeps := s.cfg.Runner.(runner.SandboxEnder)
+	return runner.TargetFacts{Classes: caps.ConfinementClasses, EphemeralDiskEnforcement: caps.EphemeralDiskEnforcement,
+		KeepsEnded: keeps, UserDrives: caps.UserDrives}, true
 }

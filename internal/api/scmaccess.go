@@ -287,7 +287,7 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 	}
 	isMechanism := subject == ""
 	minted := cmpTokenMode(pr.cfg.TokenMode) == types.ADOTokenModeMintedPAT
-	unusable := minted && !isMechanism && errors.Is(pr.cfg.validate(), ErrADOMintNeedsSecret)
+	unusable := !isMechanism && pr.mintUnusable()
 	var blob adoEntraBlob
 	var found bool
 	if !isMechanism && !unusable {
@@ -318,6 +318,12 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 		out.Source = scmAccessSourceFor(blob.Source)
 	}
 	return out, nil
+}
+
+// mintUnusable: a minted_pat row S1 refuses (ErrADOMintNeedsSecret), which only
+// an administrator can fix.
+func (pr perUserADORow) mintUnusable() bool {
+	return cmpTokenMode(pr.cfg.TokenMode) == types.ADOTokenModeMintedPAT && errors.Is(pr.cfg.validate(), ErrADOMintNeedsSecret)
 }
 
 // scmAccessForOwnPAT grades an own_pat row for subject from their own stored
@@ -470,6 +476,37 @@ func (s *Server) gitCredentialFactForRepos(ctx context.Context, subject string, 
 	return &out
 }
 
+// adoSignInPresenceFact is the policy preview's counterpart of
+// gitCredentialFactForRepos: the same row (perUserADORowsAdmitting, first), but
+// graded by PRESENCE alone. It lists the names in the caller's own namespace and
+// never Gets, so the preview reads no credential value. A sign-in that is
+// absent is not_configured (the draft needs input; TokenMode own_pat for an
+// own-token row, whose fix is a pasted token); one that is present, a caller
+// that is no person, a minted_pat row without its console app (an administrator's
+// to fix) and a store that cannot list all return nil, which reads "unknown":
+// whether the stored sign-in has ended or lacks consent is Review's to say.
+func (s *Server) adoSignInPresenceFact(ctx context.Context, sc types.SiteConfig, subject string, repos []string) *SCMAccess {
+	if s.cfg.Secrets == nil || s.providerAccessMechanism(subject) || !providersConfigured(sc) {
+		return nil
+	}
+	rows, err := s.perUserADORowsAdmitting(ctx, sc, repos)
+	if err != nil || len(rows) == 0 || !adoEntraValidRowID(rows[0].row.ID) {
+		return nil
+	}
+	row := rows[0].row
+	name, mode := adoEntraSecretName(row.ID), ""
+	if isADOOwnTokenRow(row) {
+		name, mode = adoOwnPATSecretName(row.ID), string(types.ADOTokenModeOwnPAT)
+	}
+	if rows[0].mintUnusable() {
+		return nil
+	}
+	if stored, err := s.secretPresentIn(ctx, []string{subject}, name); err != nil || stored {
+		return nil
+	}
+	return &SCMAccess{State: modelAccessNotConfigured, Org: adoOrgDisplay(row), Kind: string(row.Kind), TokenMode: mode}
+}
+
 // gitCredentialErrorBody is the git_credential 422's body: the frozen
 // sentence + reason, plus the org the LAUNCH DOOR names in its dialog before
 // any preflight verdict exists — a 422 can be the very FIRST thing this
@@ -557,6 +594,11 @@ func writeGitCredentialUnreadable(w http.ResponseWriter, r *http.Request, err er
 	})
 }
 
+// gitCredentialNoPersonRefusal answers a DEVICE caller (a laptop's wdd_
+// credential) whose run would need a per-person Azure DevOps credential. Not UI
+// canon: no console renders it, since a device has no console session.
+const gitCredentialNoPersonRefusal = "this run needs a person's own Azure DevOps connection, and a device submitted it with no person — submit it as the person"
+
 // gitCredentialRefusalForLauncher is the git_credential launch GATE for a
 // caller with no ResponseWriter — a SERVER-SIDE launcher
 // (recordLaunchRefusals, called from launchRecordRun). nil when admitted; a *gitCredentialRefusalError
@@ -568,12 +610,22 @@ func writeGitCredentialUnreadable(w http.ResponseWriter, r *http.Request, err er
 // subject == "" (no OIDC human — an admin-token or local-mode caller) never
 // refuses: no sign-in it could complete, the same rule the HTTP-facing
 // gitCredentialRefusal follows for the identical reason.
+//
+// A DEVICE caller with no human is the exception, and it fails closed: a
+// device context carries no OIDC human, so it would otherwise read as the
+// admin token, skip this gate, and fail at dispatch with no credential stored
+// under any person.
 func (s *Server) gitCredentialRefusalForLauncher(ctx context.Context, subject string, repos ...string) error {
 	repos = presentRepos(repos)
-	if len(repos) == 0 || s.cfg.Store == nil || subject == "" {
+	_, isDevice := deviceFromContext(ctx)
+	noPerson := isDevice && subject == ""
+	if len(repos) == 0 || s.cfg.Store == nil || (subject == "" && !noPerson) {
 		return nil
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil && noPerson {
+		return &gitCredentialRefusalError{Sentence: gitCredentialNoPersonRefusal}
+	}
 	if err != nil {
 		return fmt.Errorf("%w: read site config: %w", errGitCredentialUnreadable, err)
 	}
@@ -585,6 +637,9 @@ func (s *Server) gitCredentialRefusalForLauncher(ctx context.Context, subject st
 		return fmt.Errorf("%w: %w", errGitCredentialUnreadable, err)
 	}
 	for _, row := range rows {
+		if noPerson {
+			return &gitCredentialRefusalError{Org: adoOrgDisplay(row.row), Sentence: gitCredentialNoPersonRefusal}
+		}
 		access, err := s.scmAccessForRow(ctx, row, subject)
 		if err != nil {
 			return fmt.Errorf("%w: %w", errGitCredentialUnreadable, err)

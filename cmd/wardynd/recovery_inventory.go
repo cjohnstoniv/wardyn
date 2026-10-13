@@ -37,7 +37,7 @@ func recoveryMode(f *bootFlags) (bool, error) {
 		return true, writeRecoveryInventory(os.Stdout, f, os.Getenv("WARDYN_MANAGED_DIR"))
 	}
 	if *f.recoveryRehearse {
-		return true, recoveryRehearseMode(f)
+		return true, withBootTransport(f, recoveryRehearseMode)
 	}
 	return true, recoveryManifestMode(f, *f.recoveryVerify)
 }

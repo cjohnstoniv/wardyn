@@ -54,7 +54,9 @@ func createWithDrive(t *testing.T, drive *types.DriveMount, hostRoots []string) 
 	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev", UserDriveHostRoots: hostRoots})
 
 	spec := testSpec()
-	spec.Drive = drive
+	if drive != nil {
+		spec.Drives = []types.DriveMount{*drive}
+	}
 	_, err := d.CreateSandbox(context.Background(), spec)
 	if err != nil {
 		return f, nil, err
@@ -164,7 +166,7 @@ func TestDriveMount_ManagedIsExactlyOneMount(t *testing.T) {
 	d := newWithClient(newFakeDocker(), Config{ProxyImage: "wardyn-proxy:dev"})
 	drive := dockerVolumeDrive()
 
-	got, err := d.driveMount(context.Background(), drive, true)
+	got, err := d.driveMount(context.Background(), drive, uuid.Nil, "busybox:latest", true)
 	if err != nil {
 		t.Fatalf("driveMount for a managed drive: %v", err)
 	}
@@ -589,7 +591,7 @@ func TestCreateSandbox_DriveVolumeCreateFailureAbortsSandbox(t *testing.T) {
 	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
 
 	spec := testSpec()
-	spec.Drive = dockerVolumeDrive()
+	spec.Drives = []types.DriveMount{*dockerVolumeDrive()}
 	if _, err := d.CreateSandbox(context.Background(), spec); err == nil {
 		t.Fatal("CreateSandbox must fail closed when the drive volume cannot be created, got nil")
 	}

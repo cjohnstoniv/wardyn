@@ -60,6 +60,25 @@ const (
 	statusDetailBuilding = "image: " + statusReasonBuilding
 )
 
+// statusDetailQueuePrefix opens the status_detail the pool queue writes (pool-queue.md section 9):
+// "queue: <token>", the wait reason while the run is QUEUED and the end reason once it ends.
+const statusDetailQueuePrefix = "queue: "
+
+// queueToken is the reason token of a "queue: <token>" detail, or "" when the detail is not that
+// shape. A token is lower-case snake_case, as every reason this system speaks.
+func queueToken(detail string) string {
+	token, ok := strings.CutPrefix(detail, statusDetailQueuePrefix)
+	if !ok || token == "" {
+		return ""
+	}
+	for _, c := range token {
+		if c != '_' && (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+			return ""
+		}
+	}
+	return token
+}
+
 // persistRunStatusDetail is the one bounded, failure-swallowing status_detail
 // write: statusDetailWriteTimeout, and a debug log rather than an error, because
 // a lost status line is a lost sentence on a screen, never a reason to fail a
@@ -146,6 +165,9 @@ func (s *Server) runStatusDetailWriter(ctx context.Context, runID uuid.UUID) (on
 func (s *Server) projectStatusDetailFor(r *http.Request, runs []types.AgentRun) {
 	projectStatusDetail(runs)
 	s.projectModelAccessQuote(r, runs)
+	if err := s.projectRunQueue(r.Context(), runs); err != nil {
+		slog.WarnContext(r.Context(), "wardynd: project run queue", slog.Any("err", err)) // the place is advisory: the run is served without it
+	}
 }
 
 // projectStatusDetail decides what a run's startup detail SAYS to a reader, on
@@ -162,6 +184,9 @@ func (s *Server) projectStatusDetailFor(r *http.Request, runs []types.AgentRun) 
 //     polls, and a reader who never saw STARTING would lose the reason that names
 //     the fix. It comes from the detail or, when that never landed, from the
 //     canary's "container stuck waiting (<Reason>)" sentence in failure_hint.
+//   - QUEUED: the "queue: <token>" wait reason, as stored, plus its token (the queue's own line).
+//   - FAILED with a "queue: <token>" end reason, or KILLED with "queue: runner_pool_removed": kept,
+//     plus its token. The queue writes these; the substrate-wait rules below do not apply to them.
 //   - KILLED with a lifetime end reason ("lifetime: end_reached" or
 //     "lifetime: max_lifetime_reached", types.RunEndReason): kept, plus its token.
 //     Any other detail on a KILLED run is blanked.
@@ -173,7 +198,11 @@ func projectStatusDetail(runs []types.AgentRun) {
 	for i := range runs {
 		r := &runs[i]
 		reason := statusDetailReason(r.StatusDetail)
+		queue := queueToken(r.StatusDetail)
 		switch {
+		case queue != "" && (r.State == types.RunQueued || r.State == types.RunFailed ||
+			(r.State == types.RunKilled && types.RunEndReason(queue) == types.RunEndRunnerPoolRemoved)):
+			r.StatusReason = queue
 		case r.State == types.RunPending && reason == statusReasonBuilding:
 			r.StatusReason = reason
 		case r.State == types.RunStarting && reason == statusReasonBuilding:
@@ -183,7 +212,7 @@ func projectStatusDetail(runs []types.AgentRun) {
 		case r.State == types.RunKilled:
 			// Only a lifetime end reason survives a kill (killRunAtLifetime writes
 			// it with the state); a kill's stale substrate wait is blanked.
-			if types.RunEndReason(reason).Valid() {
+			if end := types.RunEndReason(reason); end == types.RunEndMaxLifetimeReached || end == types.RunEndEndReached {
 				r.StatusReason = reason
 			} else {
 				r.StatusDetail = ""

@@ -881,6 +881,79 @@ dimensions with "and", details with ";" so a detail's own comma (confinement's "
 confinement class CC1") never reads as a fourth tied cause — is behaviour, not copy, and is not
 re-frozen here.
 
+### 7.14 `DELIVERY` — the Runner credentials tab (M-RN-4 DP1/DP2, #1649)
+
+The Governance → Runner credentials tab: per credential class, how an organisation-held credential
+may reach a run on a person's own runner. Strings approved with the D-UI-b round (RN-Q16–Q20 as
+recommended) and D-UI-a's `LOCAL_DELIVERY` words. Not frozen here, and not in the table: the
+pending strings `DELIVERY.ADO_RESIDENT_HINT`, `DELIVERY.OS_MIN_HINT` (which replaces "Leave empty for no
+minimum.") and `DELIVERY.OS_MIN_INVALID`, each marked pending in `governance-copy.ts`; and no
+`BOUND_NO_RESIDENT_ADO`, because an organisation's Azure DevOps tokens may be stored on a runner
+(owner ruling 2026-10-10), opted in per Azure DevOps connection.
+
+| Key | String |
+|---|---|
+| `DELIVERY.TAB` | Runner credentials |
+| `DELIVERY.LEAD` | How a credential your organisation holds can reach a run on a person's own runner. Anything not allowed here can't go to a runner, and runs that need it run on your organisation's runners. A person's own key or sign-in always works on their runner. |
+| `DELIVERY.MODE.via_org` | Keep in the organisation |
+| `DELIVERY.MODE_HINT.via_org` | The runner sends this traffic to Wardyn, which adds the credential. The person can use it during the run but never sees it. |
+| `DELIVERY.MODE.runner_resident` | Store on the runner |
+| `DELIVERY.MODE_HINT.runner_resident` | Wardyn hands it to the runner's system keychain for the run. The person can read it. |
+| `DELIVERY.MODE.refuse` | Don't allow |
+| `DELIVERY.MODE_HINT.refuse` | Runs that need it run on your organisation's runners. |
+| `DELIVERY.LOCAL_DELIVERY.via_org` | Stays in your org |
+| `DELIVERY.LOCAL_DELIVERY.runner_resident` | Stored on your runner |
+| `DELIVERY.LOCAL_DELIVERY.refuse` | Not available on your runner |
+| `DELIVERY.PEOPLE_SEE(label)` | People see: {label} |
+| `DELIVERY.POSTURE_TITLE` | Require on the runner |
+| `DELIVERY.POSTURE_MDM` | Managed by MDM |
+| `DELIVERY.POSTURE_DISK` | Disk encrypted |
+| `DELIVERY.OS_MIN(os)` | Lowest {os} |
+| `DELIVERY.OS_NAME.darwin` | macOS |
+| `DELIVERY.OS_NAME.windows` | Windows |
+| `DELIVERY.OS_NAME.linux` | Linux |
+| `DELIVERY.POSTURE_REPORTED` | Reported by each runner, not verified. |
+| `DELIVERY.RESIDENT_HONESTY` | A person who administers their own computer can read a credential stored on it. Pair this with short-lived or rotated secrets. |
+| `DELIVERY.RESIDENT_FLOOR` | A run whose barrier floor covers this credential still can't use it on a runner: a runner's barrier is reported, not verified. |
+| `DELIVERY.NOT_IN_RELEASE` | Not used in this release |
+| `DELIVERY.RUNNERS_OFF_NOTE` | Runners are off, so nothing here applies yet. You can set it now; it takes effect when runners are turned on. |
+| `DELIVERY.CLASS.api_key` | Header API keys |
+| `DELIVERY.CLASS_HINT.api_key` | Model and service keys sent in a header. |
+| `DELIVERY.CLASS.bedrock_bearer` | Shared Amazon Bedrock API keys |
+| `DELIVERY.CLASS_HINT.bedrock_bearer` | A Bedrock API key your organisation holds. |
+| `DELIVERY.CLASS.aws_sso_bearer` | Shared AWS sign-ins |
+| `DELIVERY.CLASS_HINT.aws_sso_bearer` | An AWS sign-in captured once for everyone. |
+| `DELIVERY.CLASS.azure_foundry_token` | Shared Azure Foundry sign-ins |
+| `DELIVERY.CLASS_HINT.azure_foundry_token` | An Azure sign-in captured once for everyone. Each person's own Azure Foundry sign-in isn't this. |
+| `DELIVERY.CLASS.bedrock_role_credentials` | AWS role credentials |
+| `DELIVERY.CLASS_HINT.bedrock_role_credentials` | Credentials the agent signs requests with itself. |
+| `DELIVERY.CLASS.env_secret` | Secrets as environment variables |
+| `DELIVERY.CLASS_HINT.env_secret` | Organisation secrets set in the sandbox's environment. |
+| `DELIVERY.CLASS.file_secret` | Secrets as files |
+| `DELIVERY.CLASS_HINT.file_secret` | Organisation secrets written into the sandbox as files. |
+| `DELIVERY.CLASS.ssh_key` | Organisation SSH keys |
+| `DELIVERY.CLASS_HINT.ssh_key` | Keys the run uses for Git over SSH. |
+| `DELIVERY.CLASS.git_pat_broker` | Git tokens through the Git broker |
+| `DELIVERY.CLASS_HINT.git_pat_broker` | Tokens Wardyn's Git route adds to requests. |
+| `DELIVERY.CLASS.git_pat_helper` | Git tokens through the credential helper |
+| `DELIVERY.CLASS_HINT.git_pat_helper` | Tokens handed to git inside the sandbox. |
+| `DELIVERY.CLASS.github_token` | GitHub App tokens |
+| `DELIVERY.CLASS_HINT.github_token` | Installation tokens Wardyn mints for a run. |
+| `DELIVERY.CLASS.ado_minted_pat` | Azure DevOps tokens Wardyn mints |
+| `DELIVERY.CLASS_HINT.ado_minted_pat` | Tokens minted from a person's Azure DevOps sign-in. |
+| `DELIVERY.CLASS.oauth_subscription` | Claude subscriptions |
+| `DELIVERY.FIXED_OWN` | Always the person's own |
+| `DELIVERY.CLASS.cloud_sts` | Cloud credentials (STS) |
+| `DELIVERY.FIXED_CLOUD_STS` | Never on a runner: needs attestation a laptop sandbox doesn't have. |
+| `DELIVERY.BOUND_NO_VIA_ORG` | Can't stay in the organisation: the run reads it inside the sandbox. |
+| `DELIVERY.BOUND_NO_RESIDENT_GITHUB` | Can't be stored on a runner: it would skip branch rules and push review. |
+| `DELIVERY.SAVE` | Save |
+| `DELIVERY.SAVED` | Saved. New runs use this; runs already going keep what they started with. |
+| `DELIVERY.REFUSED_TITLE` | This can't be saved as written |
+| `DELIVERY.CHANGE_KIND` | Runner credentials |
+| `DELIVERY.FETCH_FAILED_TITLE` | Couldn't load runner credentials |
+| `DELIVERY.FETCH_FAILED_BODY` | Something went wrong reaching the server. The policy already saved still applies — this page just can't show it right now. |
+
 ## 8. Where to apply (once implemented, out of scope this round)
 
 - **`/governance`** — the whole screen: profiles block, assignments block, resolved preview

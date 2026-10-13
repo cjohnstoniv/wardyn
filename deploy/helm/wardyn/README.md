@@ -67,7 +67,7 @@ Platform requirements, in one breath: **Kubernetes 1.20+, Helm 3, a NetworkPolic
 - A wardynd image:
   - the chart's default pulls the CI-published one for a released version (see the callout at the top), or **build and push your own** (see below) for a fork, a private registry, or an unreleased change.
   - Each release also publishes `ghcr.io/cjohnstoniv/wardynd-fips`, the same daemon built against a pinned Go cryptographic module snapshot:
-      - set `image.repository` to it, give it non-age key custody (`kek.provider` `transit`, `azurekv` or `awskms`, or store mode), and see [Secrets and keys](../../../docs/operations/secrets-and-keys.md) for what it does and does not claim.
+      - set `image.repository` to it, give it non-age key custody: a key service (`kek.provider` `transit`, `azurekv` or `awskms`), alone or with store mode, and see [Secrets and keys](../../../docs/operations/secrets-and-keys.md) for what it does and does not claim.
 - Optional: **RuntimeClasses** delivering gVisor/Kata isolation, pinned via `k8s.runtimeClasses.CC2`/`.CC3`, to advertise the stronger confinement tiers — CC1 works out of the box.
 - An **OIDC issuer** for SSO and admin/member RBAC (see [Multi-user](#multi-user-adminmember-rbac)).
 
@@ -1059,7 +1059,7 @@ spec:
   - It also refuses a hand-set `WARDYN_HA` in `env` or `extraEnv`.
   - wardynd itself refuses `WARDYN_HA` unless the runner is Kubernetes (`k8s.enabled`) and the store is `pg` or `off`, which is the half that still holds after a `kubectl scale`.
   - The strategy stays `Recreate`: this is node-failure tolerance, not zero-downtime upgrades.
-  - Per-replica limits (connection caps, rate limiters) add up across replicas.
+  - Per-replica limits (connection caps, rate limiters, the `via_org` byte total of a local run) add up across replicas.
   - See [docs/OPERATIONS.md#high-availability](../../../docs/OPERATIONS.md#high-availability).
 
 Where this chart is headed: [ROADMAP.md](../../../ROADMAP.md).

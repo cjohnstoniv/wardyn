@@ -143,7 +143,7 @@ func TestMePollsAreNotDenials(t *testing.T) {
 	//
 	// One row per refused request, not two, and that is a property of the order
 	// rather than of the mark: handleCreateRun resolves the ceiling (resolveRunPolicy, in handleCreateRun)
-	// BEFORE it reaches the drive seam (seedRequestDrive, later in the same handler), so on a deployment where
+	// BEFORE it reaches the drive seam (seedRequestDrives, later in the same handler), so on a deployment where
 	// both group-tier reads are true the ceiling refuses first and the drive
 	// resolver is never asked. Which site speaks is therefore decided by the
 	// deployment shape, and both are asserted below rather than assumed.

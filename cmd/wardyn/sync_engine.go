@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/pkg/sftp"
@@ -22,6 +23,10 @@ import (
 const (
 	// maxSyncEntries bounds one side's listing: the sandbox chooses what is in it.
 	maxSyncEntries = 200_000
+	// maxSyncListBytes bounds the sftp bytes one remote directory listing may
+	// read. The sftp client holds a whole directory in memory before the entry
+	// cap above can apply, so the budget is what bounds that memory.
+	maxSyncListBytes = 64 << 20
 	// maxPullFile is the largest single file a pull accepts.
 	maxPullFile = 256 << 20
 	// defaultMaxPullBytes is --max-pull-bytes: what one pass may pull in total.
@@ -70,10 +75,55 @@ type syncOptions struct {
 // outside it.
 type syncer struct {
 	c         *sftp.Client
+	meter     *listMeter // the byte count on c's input; nil leaves a listing unbounded
 	root      *os.Root
 	o         syncOptions
 	st        *syncState
 	stateFile string
+}
+
+// listMeter counts the bytes the sftp client reads while a directory listing
+// is armed, and cancels the listing once it passes maxSyncListBytes.
+type listMeter struct {
+	r      io.Reader
+	mu     sync.Mutex
+	n      int64
+	over   bool
+	cancel context.CancelFunc
+}
+
+func (m *listMeter) Read(p []byte) (int, error) {
+	n, err := m.r.Read(p)
+	m.mu.Lock()
+	if m.cancel != nil {
+		if m.n += int64(n); m.n > maxSyncListBytes && !m.over {
+			m.over = true
+			m.cancel()
+		}
+	}
+	m.mu.Unlock()
+	return n, err
+}
+
+// arm starts counting for one listing; cancel ends that listing.
+func (m *listMeter) arm(cancel context.CancelFunc) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.n, m.over, m.cancel = 0, false, cancel
+	m.mu.Unlock()
+}
+
+// disarm stops counting and reports whether the budget was passed.
+func (m *listMeter) disarm() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cancel = nil
+	return m.over
 }
 
 type syncFile struct {
@@ -272,7 +322,14 @@ func (sy *syncer) walkRemote(ctx context.Context, rep *syncReport) (*remoteView,
 	count := 0
 	var walk func(abs, rel string) error
 	walk = func(abs, rel string) error {
-		entries, err := sy.c.ReadDirContext(ctx, abs)
+		lctx, cancel := context.WithCancel(ctx)
+		sy.meter.arm(cancel)
+		entries, err := sy.c.ReadDirContext(lctx, abs)
+		over := sy.meter.disarm()
+		cancel()
+		if over {
+			return fmt.Errorf("list %s in the sandbox: the listing is larger than %d MiB", abs, maxSyncListBytes>>20)
+		}
 		if err != nil {
 			if rel != "" && !syncAbort(ctx, err) {
 				rep.refuse(rel, "unreadable: "+err.Error())

@@ -103,6 +103,11 @@ type Proxy struct {
 	// trust for the /wardyn/gh/ route — a repo absent here is 403. Empty/nil ==
 	// no repo brokered (the route always 403s). See git_broker.go.
 	gitGrants map[string]uuid.UUID
+	// viaOrgRoutes are the destinations forwarded to the organisation (via_org.go).
+	viaOrgRoutes []ViaOrgRoute
+	// maskKey files the secrets this proxy learns in procRegistry: uuid.Nil in a
+	// sidecar, a ViaOrgEngine's own key at the organisation (procMaskFor).
+	maskKey uuid.UUID
 	// patGrants is the per-run git_pat broker allowlist: lowercased host -> the
 	// grant to mint from. Empty/nil == no host brokered (the route always 403s),
 	// which is also what a deployment with the lane switched off looks like.
@@ -118,6 +123,8 @@ type Proxy struct {
 	// patAPI is the run's git_pat grants with api: true, by host (pat_api.go): each host's
 	// connection on 443 is terminated and every request judged by its forge's operation table.
 	patAPI map[string]PATGrant
+	// ghAPI is the run's GitHub CLI door (github_api.go). Nil == no door.
+	ghAPI *GitHubAPIGrant
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -224,6 +231,9 @@ type Proxy struct {
 	// (tool_rules.go); empty means the older run-wide policy.ToolRules.
 	harnessRules []types.HarnessToolRules
 	harnessCreds []types.HarnessCredential
+	// mcp is the run's MCP servers and harness bindings (mcp_broker.go); nil
+	// for a run with none.
+	mcp *mcpBroker
 	// gatewayVendor is the REVERSE of llmUpstreams (gateway host -> vendor
 	// public host), feeding isLLMHost/channelForHost so gateway traffic is
 	// recognised as LLM traffic (coverage/classification only — the SSRF vet
@@ -287,6 +297,8 @@ type Options struct {
 	ADOGrants adoGrantsByHost
 	// AzureGates backs the Azure route gate (azure_gate.go). Empty == off.
 	AzureGates []AzureGateConfig
+	// GitHubAPI backs the GitHub CLI door (github_api.go). Nil == off.
+	GitHubAPI *GitHubAPIGrant
 	// ControlPlaneURL and RunToken back the local brokered routes. The run
 	// token is injected only toward the control plane and never reaches the
 	// sandbox or any LLM upstream.
@@ -338,6 +350,8 @@ type Options struct {
 	// Dial overrides the connection dialer (tests). Production leaves it nil
 	// and a net.Dialer is used.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// ViaOrgRoutes are a runner proxy's via_org destinations (via_org.go).
+	ViaOrgRoutes []ViaOrgRoute
 	// TLSClientConfig is the EGRESS transport's TLS config. Production sets it
 	// from Config.TrustedCAPEM (system roots plus the operator's corporate CA
 	// bundle — see NewServer); nil means system roots alone. Tests use it to
@@ -438,6 +452,7 @@ func newProxy(opts Options) *Proxy {
 		adoGrants:            opts.ADOGrants,
 		azure:                newAzureGates(opts.AzureGates),
 		patAPI:               patAPI,
+		ghAPI:                newGitHubAPIDoor(opts.GitHubAPI, mitmHosts, mitmPorts),
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      controlPlaneEndpoint(opts.ControlPlaneURL, ""),
 		runToken:             opts.RunToken,
@@ -456,6 +471,7 @@ func newProxy(opts Options) *Proxy {
 		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),
 		dial:                 dial,
 		now:                  now,
+		viaOrgRoutes:         opts.ViaOrgRoutes,
 	}
 
 	// directDial dials the vetted IP carried on the request context and never
@@ -566,6 +582,12 @@ func newProxy(opts Options) *Proxy {
 // route. This makes the run token unreachable by anything the sandbox can
 // route through the forward proxy.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// A via_org destination is the organisation's to decide: no spool row, no
+	// hold and no decision here (design 0.9 §7.3).
+	if route, authority, ok := p.viaOrgRouteFor(r); ok {
+		p.serveViaOrg(w, r, route, authority)
+		return
+	}
 	var release func()
 	r, release = p.admitSpoolHTTP(w, r)
 	if r == nil {
@@ -624,6 +646,11 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	trustedLiteralIP, denied := p.literalIPGuard(req, host, port)
 	if denied != nil {
 		return egress.Deny, "", denied
+	}
+	// An attached MCP server's host is the broker's alone, above every allow.
+	if p.mcp.mcpDirectOrigin(host) {
+		log := decisionLog(req, egress.Deny, ruleSourceMCPDirect)
+		return egress.Deny, "", &log
 	}
 
 	// 1. Policy host verdict (deny beats allow, default-deny) — delegated to the
@@ -718,6 +745,11 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		}
 	case egress.VerdictAllow:
 		// fall through.
+	default:
+		// A verdict the proxy does not recognise is as unevaluatable as an
+		// error: fail closed under the same rule source.
+		log := decisionLog(req, egress.Deny, "policy:evaluator-error")
+		return egress.Deny, "", &log
 	}
 
 	// 4. IP vetting (unconditional private/loopback/link-local/metadata deny).
@@ -853,7 +885,8 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Never a blind tunnel to an Azure DevOps grant host (refuseADOTunnel).
-	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) {
+	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
+		p.refuseGitHubAPITunnel(w, r, host, port) {
 		return
 	}
 
