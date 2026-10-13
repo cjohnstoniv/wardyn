@@ -35,11 +35,15 @@ func runnerPoolShowCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			me := ""
+			me, who := "", ""
 			if p.Scope == sdk.RunnerPoolUser {
 				me = callerPrincipal(cmd.Context(), c)
+			} else if text, ok, err := whoMayUse(cmd, c, p); err != nil {
+				return err
+			} else if ok {
+				who = text
 			}
-			return printPool(cmd.OutOrStdout(), p, members, me)
+			return printPool(cmd.OutOrStdout(), p, members, me, who)
 		}}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	return cmd
@@ -197,9 +201,9 @@ func tallyText(t sdk.RunnerTally) string {
 }
 
 // printPool is the pool as `show` prints it. me is the caller's principal ("" when not known): the
-// owner is marked "(you)" only when it is the caller. An organization pool has no WHO MAY USE row here:
-// its use policy is not readable through the client.
-func printPool(w io.Writer, p sdk.RunnerPool, members []sdk.RunnerPoolMemberView, me string) error {
+// owner is marked "(you)" only when it is the caller. orgWho is an organization pool's WHO MAY USE row,
+// "" when the caller may not read its use policy.
+func printPool(w io.Writer, p sdk.RunnerPool, members []sdk.RunnerPoolMemberView, me, orgWho string) error {
 	s := sumMembers(p, members)
 	biggest := s.biggest
 	caps := poolCaps(p.Limits)
@@ -229,7 +233,10 @@ func printPool(w io.Writer, p sdk.RunnerPool, members []sdk.RunnerPoolMemberView
 		[2]string{"AVAILABLE", tallyText(s.available)},
 		[2]string{"BIGGEST RUN", amountsText(biggest) + "             (the biggest run this pool can take)"},
 		[2]string{"POOL LIMITS", poolLimitsText(p, s.biggest)})
-	if user {
+	if !user {
+		who = orgWho
+	}
+	if who != "" {
 		rows = append(rows, [2]string{"WHO MAY USE", who})
 	}
 	tw := newTab(w)

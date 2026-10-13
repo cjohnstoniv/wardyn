@@ -51,7 +51,7 @@ func runnerPoolCmd(client clientFn) *cobra.Command {
 	}}
 	list.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	list.Flags().BoolVar(&all, "all", false, "every row the server returned, with the owner of each user pool (an operator or security admin sees every person's)")
-	cmd.AddCommand(list, runnerPoolDefaultCmd(client), runnerPoolOrgDefaultCmd(client))
+	cmd.AddCommand(list, runnerPoolDefaultCmd(client), runnerPoolOrgDefaultCmd(client), runnerPoolUsePolicyCmd(client))
 	cmd.AddCommand(runnerPoolManageCmds(client)...)
 	return subcommandGroup(cmd)
 }
