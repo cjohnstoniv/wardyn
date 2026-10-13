@@ -19,4 +19,5 @@
 # threatmodel/THREAT-MODEL.md 52492 measured after train 10 F-1508-author merge.
 # threatmodel/THREAT-MODEL.md 52620 adds 128 (0.9 DS1-S2a, train 12): the per-harness credential same-uid residual.
 # threatmodel/THREAT-MODEL.md 57529 adds 4909 over 52620: 0.9 final docs pass, measured: the runner host boundary and residuals 66-84 (egress baseline, multi-workspace runs, sync, client mode, service identities, launch intents, harness sets, the pool queue, run templates, branch listing, member-visible facts), the GitHub CLI, AWS CLI, MCP and built-in GitHub component lanes, the organisation default barrier, the build record, tool-gate routing and interactive tool rules, less three trims.
-threatmodel/THREAT-MODEL.md=57529
+# threatmodel/THREAT-MODEL.md 58394 adds 865 over 57529: 0.9 final docs pass 2, measured: residuals 85-87 (runner limits, the Azure CLI lane and what it leaves open), the spool owner rule and the organisation default barrier's reason.
+threatmodel/THREAT-MODEL.md=58394

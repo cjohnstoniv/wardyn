@@ -2507,7 +2507,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Rows the organisation writes from its own acts — create, mint, approvals, `via_org` decisions — stay authoritative.
     - No ground truth exists for a local run: the relay refuses `/internal/groundtruth` and no host sensor runs on a laptop. Of §8's three audit streams, one is authoritative, one self-reported and one absent.
     - A runner's `machine_name` is its own report, bounded to `253` bytes and never used for admission.
-    - `max_runs` is owner-set and enforced by the organisation under the runner row lock. The runner's own refusal backs up a wrong count; a killed run's sandbox counts until its kill action applies.
+    - A self-hosted runner's limits, `max_runs` among them, are owner-set and enforced by the organisation under the runner row lock (#85). The runner's own refusal backs up a wrong count; a killed run's sandbox counts until its kill action applies.
     - This replaces #50–#52 for client mode: one writer re-chains nothing, and the open question is what the runner chose to send.
 
 74. **A runner's confinement class is runner-asserted, and it never satisfies the floor for an org credential held on the laptop [0.9, client mode].**
@@ -2535,6 +2535,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - No governed run is created while a runner's link is down (`runner_offline`), and a run in flight is never torn down by a drop.
     - The laptop proxy enforces its cached policy and raises nothing, so a first-use host is denied. Every decision goes to a durable per-run spool ([design §5.3](../docs/design/0.9/PLAN.md#53-spool-bound)).
     - Past `runTokenLapseAfter` (`1h5m`), timed on the runner's monotonic clock from the last lease, the runner stops the proxy and keeps the agent and its files. It never grants, approves or mints offline.
+    - On a runner that runs as root beside the non-root proxy, every spool file is handed to the spool directory's owner through its open handle, and a file with more than one link is refused (`spoolowner.Keep`).
     - The spool holds `50,000` records or `32 MiB` per run. On overflow the proxy refuses new egress until it drains, and replay starts with an `egress.deny` (`builtin:spool-full`) carrying the count.
     - After pending actions, retained audit history replays before READY, chained in arrival order with `data.observed_at` and `data.spooled`; its content is self-reported (#73).
     - A verified owning, claimed, non-revoked runner may replay a killed run's retained audit history (`IngestRunnerDecision`). This is audit only: it cannot revive the run or restore credentials.
@@ -2598,6 +2599,30 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The catalogue's CLI card state comes only from the caller's granted rows, so an ungranted row reads as none. It omits the SSO portal URL and subscription ids.
     - **Disk sizes.** A size the run's policy writes is a requirement, and a runner that cannot cap disk refuses it (`main_drive_unenforceable`). A requested or defaulted size is soft: such a runner runs it uncapped, and the run says so.
     - A profile's CPU or memory maximum below the deployment default no longer shrinks a member's sandbox below that default. Lower the deployment default, or set a smaller ceiling size, to bound it. A disk maximum still cuts.
+
+85. **A runner's limits are admission accounting set by its owner or an administrator, and a few late changes still end a promoted run [0.9].**
+    - A remote-hosted runner's limits bound every run on it from every pool, and only a super admin sets them (`PUT /remote-runners/{rid}`). A self-hosted runner's limits are its owner's and bound only that owner's runs; a total above what the runner last reported is refused where this replica holds its report.
+    - Every writer that makes a run hold a sandbox on a runner sums what that runner's runs reserve under its row lock, in one predicate shared with every read, so concurrent creates cannot over-admit.
+    - Where a runner cannot cap disk (`disk_capped: false`), disk limits are accounting, not enforcement. Usage figures are numbers only; a remote-hosted runner's cover every run on it.
+    - A queued run is promoted, reserved and started at the size it would start with on the runner that takes it. It can still end `runner_at_capacity` at its start when limits or policy are edited between promotion and start, or when the promoted runner stops being a candidate in that window and no other has room.
+    - A create that loses the last room between placement and its insert is refused `runner_at_capacity`, not queued. A run that asks for no disk, in a pool with no disk default, is sized by the largest-disk runner, so such runs go there first.
+    - `make setup` and the demo scripts propose half of what they measure on the host and ask for a free disk nothing measured, with no default; without a terminal they take the disk from a named variable or stop.
+    - `k8s.readNodes`, which the kind quickstart sets, adds a cluster-scoped `list` on nodes to wardynd's ClusterRole; off by default, it lets boot measure the cluster and preflight warn of a node too small for a run.
+
+86. **The Azure CLI component gives a run a person's whole Azure Resource Manager reach, held to the component's subscriptions by the proxy's door alone [0.9].**
+    - The sandbox holds an `~/.azure` profile and a token cache whose one Resource Manager token is an inert placeholder, with no refresh or id token. Dispatch redeems nothing; the proxy adds the person's own token on `management.azure.com`.
+    - The sign-in is stored sealed in the person's namespace as `wardyn-cli-<component id>-entra`, a name the secrets API, the broker and the injection sink reserve. Each resolve re-checks the run's owner, that the run still carries the component, and that the live row pins the same subscriptions, access and tenant.
+    - The door judges method and path, never the query or the body: a path under one of the component's subscriptions, or one of three tenant-level reads; `read` admits GET and HEAD only. A segment holding `;`, `?`, `#` or `%` is refused, and so is a method-override header.
+    - Only `login.microsoftonline.com` is terminated, to answer the tenant's public OpenID document; Entra's other hosts stay governed by the run's policy alone. A long-running operation whose polling address is another host is refused there, so a write can read as failed while it runs.
+    - The sign-in starts at `GET /api/v1/components-entra/signin?component=<id>`, a navigable link, so a cross-site page can start a capture for the signed-in person, bound to that person. No console door starts it.
+
+87. **What the Azure CLI door leaves open [0.9].**
+    - The token carries every role assignment the person holds. A body naming another subscription, and a query an Azure API reads across scopes, are Azure's role check to refuse; a `read` GET can carry such a query.
+    - Under `write` the run can use every privilege action the person holds inside a subscription: role assignments, policy exemptions, Key Vault access policies, deployments, and running code as a managed identity, which can outlast the run and reach other subscriptions. POSTs that return secrets are refused under `read` only.
+    - The proxy re-resolves about every `5` minutes. A row edit or a refusal drops the token at its next resolve; while the control plane is unreachable the last token serves at most `15` minutes past its lease. A backward clock step on the proxy host delays the re-resolve by the step.
+    - Withdrawing a person's grant for the component does not end a running run's lane. A purge or erasure is not seen by a running proxy until its next resolve, and Entra has no per-token revoke: an issued token lapses within `60` to `90` minutes.
+    - Azure's logs attribute every operation to the person, nothing marks it as an agent's, and the sign-in location is the control plane's address. There is no per-person disconnect: a sign-in leaves by row purge, erasure, or revocation at Entra.
+    - The token is kept out of the sandbox's configuration, not out of responses. A local runner is refused the lane. `az` is pinned by version and by its repository key's fingerprint, not by a package digest.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
@@ -3505,7 +3530,7 @@ flowchart TB
 - Policy sets a floor and the control plane refuses to schedule below it.
 - A class a runner advertises for a local run is `runner_asserted`: the floor is checked against the claim, not the host (residual #74).
 - **Organisation default barrier (0.9).** An administrator's default lowers a launch that names no barrier from the strongest class offered to the chosen class, never below the caller's floor and never to a class the pool does not offer.
-  - Only the super-admin route `PUT /runner-pool-defaults` writes it; a person's own pool defaults refuse it. No second-human hold applies, as for pool barrier limits: it narrows nothing and grants nothing.
+  - Only the super-admin route `PUT /runner-pool-defaults` writes it; a person's own pool defaults refuse it. No second-human hold applies: it lowers isolation for untouched runs, within the caller's floor and the pool's offered classes, at the same tier and reach as pool barrier limits, which are also unheld.
   - It applies on every pool and is recorded in `runner_pool.default.set` and per run as `confinement_default` on `run.create` (`organisation` or `server`). The blast-radius raise to CC3 still applies and reads `server`.
   - A later change never weakens a run that already waits in a queue. A default raised while it waited starts the run under the stronger class, and `run.queue.start` records it.
 
@@ -3829,5 +3854,5 @@ The **explicit kill** path (`handleKillRun`) runs this fixed order:
   `sweepOrphanedSandboxes` ([`internal/api/reconcile.go`](../internal/api/reconcile.go)).
 - **Verification note (2026-07-06).** The "egress enforced outside the sandbox" and "env-var proxy bypass defended" rows rest on topology, never an iptables `REDIRECT`/TPROXY rule, which gVisor's netstack could not run.
   - The per-run Docker network is `Internal: true` and the agent joins only it (`CreateSandbox`, [`internal/runner/docker/driver_network.go`](../internal/runner/docker/driver_network.go)); `HTTP_PROXY`/`HTTPS_PROXY` are a convenience, not the boundary.
-  - Under CC2, Docker's embedded resolver is unreachable from the sandbox, so the `wardyn-proxy` alias is a static `ExtraHosts` entry, not a NAT rule.
+  - Under CC2, Docker's embedded resolver is unreachable from the sandbox, so `agentHost.ExtraHosts` gets `wardyn-proxy:<proxy IP>`, a static hosts-file entry, not a NAT rule.
   - `TestCreateSandbox_TopologyPreservesL0` and `TestCreateSandbox_TopologyPreservesL0UnderGVisor` ([`internal/runner/docker/driver_test.go`](../internal/runner/docker/driver_test.go)) pin both shapes.

@@ -17,4 +17,5 @@ docs/SSH.md=5633 share=35
 # docs/UI-SANDBOXES.md 5341 measured after C-mode-doors merge.
 docs/UI-SANDBOXES.md=5341 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
-docs/NEW-RUN.md=2905 share=35
+# docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
+docs/NEW-RUN.md=2914 share=35

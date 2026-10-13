@@ -1,5 +1,6 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words, so growth fails.
-docs/operations/integrations.md=2609 share=30
+# docs/operations/integrations.md 2683 adds 74 over 2609: 0.9 final docs pass 2, measured: signing in for an AWS or Azure CLI component.
+docs/operations/integrations.md=2683 share=30
 docs/operations/launch-presets.md=390 share=35
 docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 597 adds 48: the page now leads with the client-mode claim flow and offline table; legacy enrolment is condensed under it.

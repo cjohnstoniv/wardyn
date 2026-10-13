@@ -2472,7 +2472,7 @@ The residuals an operator should plan for:
   - The remedy is raising `max_inspect_pack_mib` (bounded 0..64 at write time), never a console approval, because holding would ask a person to approve a push nobody inspected.
 - **`ssh_key` is ungovernable by construction.**
   - git's own SSH transport has no broker seam, so `push_rules` cannot be enforced on it.
-  - A policy that sets `push_rules` while `ssh_key` is the run's only git-capable grant is legal but graded a medium-risk item on the Review rail rather than blocked.
+  - A policy that sets `push_rules` while `ssh_key` is the run's only git-capable grant is legal but graded a medium-risk item in the policy's risk grade (the Policies screen's safety meter, and preflight's `risk_assessment`) rather than blocked.
 - **On `git_pat`, only WHERE is behind a switch.**
   - Branch-namespace confinement on the `git_pat` lane is off by default and needs the `pat` scope of `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`; `push_rules` applies to every `git_pat` push whatever that scope is set to.
   - Neither changes the PAT itself: it keeps whatever scope the operator issued it with.
