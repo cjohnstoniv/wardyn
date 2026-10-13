@@ -91,15 +91,24 @@ test.describe("New Run, the run document", () => {
     await expect(page.getByText(NR_REVIEW.SETUP_AGENT_INTERACTIVE)).toBeVisible();
   });
 
-  test("Open in Guided setup carries the valid document into the Shape step", async ({ page }) => {
+  test("Open in Guided setup carries the document through the workload press: its harness and its prompt", async ({ page }) => {
+    // Not what a new agent task opens with (the roster's first harness, no prompt): the document's own.
+    const carried = [
+      "api_version: wardyn/v1", "kind: Run", "intent:", "  shape: agent_task", "  experience: interactive",
+      "  tools:", "    - id: codex-cli", "      kind: harness",
+      "  startup:", "    kind: harness", "    tool: codex-cli", "    prompt: Carry this prompt", "",
+    ].join("\n");
     await openDocument(page);
-    await press(page, NR_DOCUMENT.LOAD_EXAMPLE);
+    await editor(page).fill(carried);
     await press(page, NR_DOCUMENT.OPEN_IN_GUIDED);
     await expect(page.getByRole("heading", { name: NR_SHAPE.TITLE })).toBeVisible();
-    // A workload button shows no state, so the document's harness is read two steps on.
     await press(page, NR_SHAPE.AGENT_TITLE);
     await press(page, NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES));
-    await expect(page.getByRole("region", { name: NR_HARNESSES.EYEBROW(1) })).toBeVisible();
+    await expect(page.getByRole("heading", { name: NR_HARNESSES.TITLE })).toBeVisible();
+    await expect(page.locator("#nr-harness-0")).toHaveValue("codex-cli");
+    await expect(page.locator("#nr-harness-1")).toHaveCount(0);
+    await expect(page.getByRole("switch", { name: NR_HARNESSES.START_IN_HARNESS })).toBeChecked();
+    await expect(page.getByLabel(NR_HARNESSES.STARTING_PROMPT)).toHaveValue("Carry this prompt");
   });
 
   test("Import file loads a document and takes its format from the file name", async ({ page }) => {
