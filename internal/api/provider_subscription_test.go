@@ -199,7 +199,10 @@ func TestProviderSubscriptionDispatch(t *testing.T) {
 		zoned.BaseURL = "https://[fe80::1%25eth0]/anthropic" // a key the proxy refuses, so none is sent
 		lane := func(p types.ModelProvider) llmTransport { return llmTransport{provider: &chosenProvider{provider: p}} }
 		azure := map[string]string{"foundry.test": "api.openai.com"}
-		got := providerSubscriptionChannelHosts([]llmTransport{lane(direct), lane(v6), {}, lane(zoned), lane(gw)}, azure)
+		// An API-key lane routed to its own base URL is no subscription lane: it adds nothing here.
+		key := subProvider("key")
+		key.Kind, key.BaseURL = types.ModelProviderAnthropicAPIKey, "https://key-gw.corp.example/anthropic"
+		got := providerSubscriptionChannelHosts([]llmTransport{lane(direct), lane(v6), {}, lane(zoned), lane(key), lane(gw)}, azure)
 		// The literal keeps the base URL's own spelling, brackets off, as its MITM entry does; the proxy lower-cases both.
 		want := map[string]string{"foundry.test": "api.openai.com", "llm.corp.example": "api.anthropic.com", "FD00::10": "api.anthropic.com"}
 		if !maps.Equal(got, want) {
