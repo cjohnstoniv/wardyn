@@ -29,8 +29,11 @@ const TYPES: SubjectType[] = ["user", "group", "user_type"];
 const SELECT =
   "h-9 w-full rounded-md border border-input bg-input-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring dark:bg-input/30";
 
-/** A policy that was never set has no updated_at; one set to nobody has it and no subjects. */
-const hasPolicy = (p: RunnerPoolUsePolicy | null) => !!p?.updated_at;
+/**
+ * A pool with no policy answers with no subjects and the zero time for updated_at (the server always
+ * sends the field); one set, then emptied because its people left, has a real time and no subjects.
+ */
+const hasPolicy = (p: RunnerPoolUsePolicy | null) => !!p?.updated_at && !p.updated_at.startsWith("0001-01-01");
 
 function SubjectList({ subjects, onRemove }: { subjects: RunnerPoolSubject[]; onRemove?: (i: number) => void }) {
   return (
