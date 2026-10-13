@@ -973,3 +973,8 @@ const (
 	// reasonRunnerRevokeReasonInvalid: an owner's revoke names a reason other than not_mine.
 	reasonRunnerRevokeReasonInvalid = "runner_revoke_reason_invalid"
 )
+
+// GET /runs/{id}/launch-intent (launch_intent.go).
+const (
+	reasonLaunchIntentNotFound = "launch_intent_not_found" // the run kept no setup, or the caller may not see it
+)

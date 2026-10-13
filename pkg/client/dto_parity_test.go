@@ -69,6 +69,14 @@ func TestRequestDTOs_ZeroValueOmitOptionals(t *testing.T) {
 		// natural key plus the one non-pointer override, which has no "unset"
 		// value of its own (0 already means "no override").
 		{"DriveGrantRequest", client.DriveGrantRequest{}, []string{"drive_id", "priority", "subject", "subject_type"}},
+		// An invitation's four fields are all optional; a PATCH names only what it changes; the claim and
+		// the mint always send the token's name (the server falls back, or refuses, on an empty one).
+		{"CreateInvitationRequest", client.CreateInvitationRequest{}, []string{}},
+		{"ClaimInvitationRequest", client.ClaimInvitationRequest{}, []string{"name"}},
+		{"CreateServiceIdentityRequest", client.CreateServiceIdentityRequest{}, []string{"description", "name", "sponsor", "user_type"}},
+		{"UpdateServiceIdentityRequest", client.UpdateServiceIdentityRequest{}, []string{}},
+		{"MintServiceTokenRequest", client.MintServiceTokenRequest{}, []string{"name"}},
+		{"MoveTokenRequest", client.MoveTokenRequest{}, []string{"service_identity"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, err := json.Marshal(tc.req)

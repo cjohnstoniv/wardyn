@@ -7,6 +7,7 @@
 // CS-6 PR #1164 — internal/api/credential_inventory.go) and erasing a
 // person's whole namespace (CS-5, design F-5/F-6 — internal/api/credential_erase.go).
 // Both admin tiers read/act (K5-A); a member is refused at the route.
+import type { TokenDisposition } from "../types/service-identities";
 import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 
 export interface CredentialRow {
@@ -50,6 +51,10 @@ export interface AdminMintedToken {
   revoked_at?: string;
   /** When the token stops authenticating; absent when it never expires. */
   expires_at?: string;
+  /** Where the token stands (#1508); absent from a daemon that predates the field. */
+  disposition?: TokenDisposition;
+  /** The service identity the token was linked to, set on a moved token. */
+  service_identity?: string;
 }
 
 export interface EraseResult {
@@ -108,15 +113,17 @@ export const credentials = {
 
   // GET /api/v1/tokens?minted_for_others=true (#1477): the unrevoked tokens an
   // admin created for someone else, metadata only — the response never carries
-  // a token value. Both admin tiers read it. The filter is the server's, and is
+  // a token value. Both admin tiers read it. With includeRevoked it also sends
+  // &include_revoked=true (#1508), so a finished claim or move stays visible;
+  // each row carries its `disposition`. The filter is the server's, and is
   // applied again here: a daemon that predates the parameter answers with EVERY
   // token, and the console must never call a person's own token one an admin
   // created for them.
-  async listAdminMintedTokens(): Promise<AdminMintedToken[]> {
-    const res = await wfetch("/tokens?minted_for_others=true", { method: "GET" });
+  async listAdminMintedTokens(includeRevoked = false): Promise<AdminMintedToken[]> {
+    const res = await wfetch(`/tokens?minted_for_others=true${includeRevoked ? "&include_revoked=true" : ""}`, { method: "GET" });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
     return unwrapList<AdminMintedToken>(await asJson<unknown>(res)).filter(
-      (t) => !!t.minted_by && t.minted_by !== t.principal && !t.revoked_at,
+      (t) => !!t.minted_by && t.minted_by !== t.principal && (includeRevoked || !t.revoked_at),
     );
   },
 

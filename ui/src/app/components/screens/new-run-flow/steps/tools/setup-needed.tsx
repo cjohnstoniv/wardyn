@@ -9,7 +9,10 @@
 
 import * as React from "react";
 import { Check, TriangleAlert } from "lucide-react";
+import { ADO } from "../../../../../lib/ado-entra-copy";
+import { ADO_PAT } from "../../../../../lib/ado-pat-copy";
 import { secrets } from "../../../../../lib/api/secrets";
+import { useAdoConnect } from "../../../../../lib/hooks/use-ado-connect";
 import { getErrorMessage } from "../../../../../lib/format";
 import type { SetupItem } from "../../../../../lib/types/preflight";
 import { Button } from "../../../../ui/button";
@@ -24,7 +27,7 @@ import type { RunIntent } from "../../draft/run-intent";
 import { providerControlId, setupDoor, setupRowId, signInProvider, type HarnessNames, type SetupDoor } from "../../lenses/tools-lens";
 import { useAnnounce } from "../step-shell";
 
-const DOOR_LABEL: Record<SetupDoor, string> = { sign_in: NR_TOOLS.SETUP_SIGN_IN, choose: NR_TOOLS.SETUP_CHOOSE, add: NR_TOOLS.SETUP_ADD };
+const DOOR_LABEL: Record<SetupDoor, string> = { sign_in: NR_TOOLS.SETUP_SIGN_IN, choose: NR_TOOLS.SETUP_CHOOSE, add: NR_TOOLS.SETUP_ADD, connect: ADO_PAT.MEMBER_CONNECT };
 
 /** One saved secret's value, pasted once. The value is write-only: nothing is shown back. */
 function AddTokenDialog({ item, onClose, onSaved }: { item: SetupItem; onClose: () => void; onSaved: () => void }) {
@@ -93,6 +96,7 @@ export function SetupNeeded({ items, pending, done, intent, names, onDone }: Set
   const door = useModelAccessDoor();
   const { status } = useShellSetupStatus();
   const [adding, setAdding] = React.useState<SetupItem | null>(null);
+  const ado = useAdoConnect();
 
   const providerName = (id: string) => status?.model_providers?.find((p) => p.id === id)?.name;
   const sentence = (item: SetupItem): string => {
@@ -104,9 +108,15 @@ export function SetupNeeded({ items, pending, done, intent, names, onDone }: Set
   // The server names a harness's setup by its id until the shell's names load: say nothing rather than the id.
   const requiredBy = (item: SetupItem): string | undefined => names?.get(item.required_by) ?? (item.kind === "llm_access" ? undefined : item.required_by);
 
+  // The connect popup resolves true once the person's own state reads live; a blocked popup (null) leaves the fallback link.
+  const connectAdo = async (id: string, connect = ado.connect) => {
+    if (await connect()) { announce(NR_TOOLS.SIGNED_IN); onDone(id); }
+  };
+
   const open = (item: SetupItem, kind: SetupDoor, trigger: HTMLElement) => {
     if (kind === "add") setAdding(item);
     else if (kind === "choose") document.getElementById(providerControlId(item.fix?.tool ?? ""))?.focus();
+    else if (kind === "connect") void connectAdo(item.id);
     else {
       const provider = signInProvider(intent, item);
       if (provider) {
@@ -137,7 +147,13 @@ export function SetupNeeded({ items, pending, done, intent, names, onDone }: Set
                   <span className="text-sm text-muted-foreground">{requiredBy(item)}</span>
                 </span>
                 {finished ? <Chip tone="success">{NR_TOOLS.SETUP_DONE}</Chip> : kind && (
-                  <Button type="button" variant="outline" size="sm" onClick={(e) => open(item, kind, e.currentTarget)}>{DOOR_LABEL[kind]}</Button>
+                  <Button type="button" variant="outline" size="sm" disabled={kind === "connect" && ado.connecting} onClick={(e) => open(item, kind, e.currentTarget)}>{DOOR_LABEL[kind]}</Button>
+                )}
+                {!finished && kind === "connect" && ado.blockedUrl && (
+                  <p className="basis-full text-sm text-muted-foreground">
+                    {ADO.CONNECT_POPUP_BLOCKED}{" "}
+                    <a href={ado.blockedUrl} target="_blank" rel="noopener noreferrer" className="underline" onClick={() => void connectAdo(item.id, ado.connectFallback)}>{ADO.CONNECT_POPUP_OPEN}</a>
+                  </p>
                 )}
               </li>
             );

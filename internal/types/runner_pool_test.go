@@ -51,7 +51,12 @@ func TestRunnerPoolDefaultsValidateAndWireShape(t *testing.T) {
 	if err := (RunnerPoolDefaults{PreferredHosting: RunnerPoolSelfHosted, RemoteProvided: &id}).Validate(); err != nil {
 		t.Fatal(err)
 	}
-	for _, bad := range []RunnerPoolDefaults{{PreferredHosting: "cloud"}, {SelfHosted: &uuid.UUID{}}} {
+	for _, ok := range []ConfinementClass{"", CC1, CC2, CC3} {
+		if err := (RunnerPoolDefaults{Barrier: ok}).Validate(); err != nil {
+			t.Errorf("barrier %q refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []RunnerPoolDefaults{{PreferredHosting: "cloud"}, {SelfHosted: &uuid.UUID{}}, {Barrier: "CC9"}, {Barrier: "cc2"}} {
 		if bad.Validate() == nil {
 			t.Errorf("%+v should be refused", bad)
 		}
