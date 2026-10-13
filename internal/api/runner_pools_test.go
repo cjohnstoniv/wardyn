@@ -16,15 +16,16 @@ import (
 // on a store that has no pool storage: 501, the reason and the sentence, never
 // an empty catalogue.
 func TestRunnerPoolRoutesAnswerWithoutPoolStorage(t *testing.T) {
-	fill := strings.NewReplacer("{id}", "11111111-1111-1111-1111-111111111111", "{runner}", "22222222-2222-2222-2222-222222222222", "{executor}", "build-1")
+	fill := strings.NewReplacer("{id}", "11111111-1111-1111-1111-111111111111", "{runner}", "22222222-2222-2222-2222-222222222222", "{rid}", "build-1")
 	var routes []string
 	for key := range routeMatrix {
-		if _, path, _ := strings.Cut(key, " "); strings.HasPrefix(path, "/api/v1/runner-pool") || strings.HasPrefix(path, "/api/v1/me/runner-pool") {
+		if _, path, _ := strings.Cut(key, " "); strings.HasPrefix(path, "/api/v1/runner-pool") || strings.HasPrefix(path, "/api/v1/me/runner-pool") ||
+			strings.HasPrefix(path, "/api/v1/remote-runners") || strings.HasPrefix(path, "/api/v1/me/remote-runners") {
 			routes = append(routes, key)
 		}
 	}
-	if len(routes) != 20 {
-		t.Fatalf("%d pool routes are classified, want 20", len(routes))
+	if len(routes) != 29 {
+		t.Fatalf("%d pool and remote-hosted runner routes are classified, want 29", len(routes))
 	}
 	h := newHarness(t)
 	for _, key := range routes {
