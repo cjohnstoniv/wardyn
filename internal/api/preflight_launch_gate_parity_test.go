@@ -307,6 +307,9 @@ func checkFoldShape(t *testing.T, fset *token.FileSet, steps []foldStepDecl) {
 		t.Errorf("foldRunRequest has %d returns, want exactly 2 (a step answered; every step ran)", returns)
 	}
 
+	if len(foldReaders) > 1 {
+		t.Errorf("foldReaders excuses %d functions, want at most 1: a gate belongs in runFoldSteps", len(foldReaders))
+	}
 	names := []string{"foldRunRequest"}
 	for _, st := range steps {
 		names = append(names, st.name)
@@ -325,12 +328,23 @@ func checkFoldShape(t *testing.T, fset *token.FileSet, steps []foldStepDecl) {
 		}
 		for _, d := range f.Decls {
 			fn, ok := d.(*ast.FuncDecl)
-			// One that never reads a mode (runFold.launch, what both doors dispatch) has no mode branch to miss.
-			if ok && takesFold(fn) && !slices.Contains(names, fn.Name.Name) && readsMode(fn) {
+			if !ok || !takesFold(fn) || slices.Contains(names, fn.Name.Name) {
+				continue
+			}
+			if _, reader := foldReaders[fn.Name.Name]; !reader {
 				t.Errorf("%s: %s takes a runFold or a foldMode but is not a runFoldSteps step: a mode branch there is invisible to this guard", file, fn.Name.Name)
+			} else if readsMode(fn) {
+				t.Errorf("%s: %s is excused as a fold reader but reads a mode: a door-specific branch belongs in a runFoldSteps step", file, fn.Name.Name)
 			}
 		}
 	}
+}
+
+// foldReaders are the only functions outside runFoldSteps that may take the fold, each with why it is
+// not a gate. Anything else that takes it is refused: a gate written as a fold method and called from
+// one door would refuse there alone, where this guard cannot see it.
+var foldReaders = map[string]string{
+	"launch": "builds what the create door and the queued start dispatch from a finished fold; refuses nothing",
 }
 
 func takesFold(fn *ast.FuncDecl) bool {
