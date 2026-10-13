@@ -68,25 +68,31 @@ export interface RunnerPoolDuration {
   unlimited?: boolean;
 }
 
-/** Go: types.RunnerPoolBackgroundLimits. A Background task has no idle stop; a body that sends one is refused. */
+/**
+ * Go: types.RunnerPoolBackgroundLimits. A Background task has no idle stop; a body that sends one is refused.
+ * Every field is optional: one left out is set by the pool's runners, never "no limit".
+ */
 export interface RunnerPoolBackgroundLimits {
-  cpu_millis: RunnerPoolAmount;
-  memory_mib: RunnerPoolAmount;
-  /** The main drive's default and cap in MiB, each a whole number of GiB. Absent: the pool sets no main-drive bound. */
+  cpu_millis?: RunnerPoolAmount;
+  memory_mib?: RunnerPoolAmount;
+  /** The main drive's default and cap in MiB, each a whole number of GiB. */
   disk_mib?: RunnerPoolAmount;
-  lifetime: RunnerPoolDuration;
+  lifetime?: RunnerPoolDuration;
 }
 
-/** Go: types.RunnerPoolInteractiveLimits. */
+/** Go: types.RunnerPoolInteractiveLimits. Every field is optional, as on the Background block. */
 export interface RunnerPoolInteractiveLimits {
-  cpu_millis: RunnerPoolAmount;
-  memory_mib: RunnerPoolAmount;
+  cpu_millis?: RunnerPoolAmount;
+  memory_mib?: RunnerPoolAmount;
   disk_mib?: RunnerPoolAmount;
-  lifetime: RunnerPoolDuration;
-  idle: RunnerPoolDuration;
+  lifetime?: RunnerPoolDuration;
+  idle?: RunnerPoolDuration;
 }
 
-/** Go: types.RunnerPoolLimits. A run type with limits is a run type the pool allows; the others are refused. */
+/**
+ * Go: types.RunnerPoolLimits. A run type with limits is a run type the pool allows; the others are refused.
+ * An empty `barriers` allows every barrier the pool's runners offer.
+ */
 export interface RunnerPoolLimits {
   background?: RunnerPoolBackgroundLimits;
   interactive?: RunnerPoolInteractiveLimits;

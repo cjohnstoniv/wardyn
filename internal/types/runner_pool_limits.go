@@ -122,25 +122,28 @@ func (d RunnerPoolDuration) validate(field string) error {
 // RunnerPoolBackgroundLimits are a pool's limits for Background tasks. It has no
 // idle stop: a Background task ends when its command or agent exits, or at its
 // maximum lifetime. Decoding a body that sends `idle` here fails.
+//
+// Every field is optional: one left out is set by the pool's runners (their per-run limits, and
+// governance and the deployment for time), never "no limit".
 type RunnerPoolBackgroundLimits struct {
-	CPUMillis RunnerPoolAmount `json:"cpu_millis"`
-	MemoryMiB RunnerPoolAmount `json:"memory_mib"`
+	CPUMillis *RunnerPoolAmount `json:"cpu_millis,omitempty"`
+	MemoryMiB *RunnerPoolAmount `json:"memory_mib,omitempty"`
 	// DiskMiB bounds the main drive of this run type's runs: what an untouched run
 	// gets and the most a request may ask for, in MiB, each a whole number of GiB.
 	// Nil: the pool sets no main-drive bound.
-	DiskMiB  *RunnerPoolAmount  `json:"disk_mib,omitempty"`
-	Lifetime RunnerPoolDuration `json:"lifetime"`
+	DiskMiB  *RunnerPoolAmount   `json:"disk_mib,omitempty"`
+	Lifetime *RunnerPoolDuration `json:"lifetime,omitempty"`
 }
 
 // RunnerPoolInteractiveLimits are a pool's limits for Interactive environments,
-// which alone have an idle stop.
+// which alone have an idle stop. Every field is optional, as on RunnerPoolBackgroundLimits.
 type RunnerPoolInteractiveLimits struct {
-	CPUMillis RunnerPoolAmount `json:"cpu_millis"`
-	MemoryMiB RunnerPoolAmount `json:"memory_mib"`
+	CPUMillis *RunnerPoolAmount `json:"cpu_millis,omitempty"`
+	MemoryMiB *RunnerPoolAmount `json:"memory_mib,omitempty"`
 	// DiskMiB is the main drive's bound, as on RunnerPoolBackgroundLimits.
-	DiskMiB  *RunnerPoolAmount  `json:"disk_mib,omitempty"`
-	Lifetime RunnerPoolDuration `json:"lifetime"`
-	Idle     RunnerPoolDuration `json:"idle"`
+	DiskMiB  *RunnerPoolAmount   `json:"disk_mib,omitempty"`
+	Lifetime *RunnerPoolDuration `json:"lifetime,omitempty"`
+	Idle     *RunnerPoolDuration `json:"idle,omitempty"`
 }
 
 // RunnerPoolLimits is everything a pool limits. A run type with limits is a run
@@ -151,7 +154,8 @@ type RunnerPoolLimits struct {
 	Background  *RunnerPoolBackgroundLimits  `json:"background,omitempty"`
 	Interactive *RunnerPoolInteractiveLimits `json:"interactive,omitempty"`
 	// Barriers are the confinement classes (Fence CC1, Wall CC2, Vault CC3) the
-	// pool allows. A run on any other is refused.
+	// pool allows. A run on any other is refused. None listed: every barrier its
+	// runners offer.
 	Barriers []ConfinementClass `json:"barriers"`
 	// MaxConcurrentRuns caps the pool's non-terminal runs, across everyone. Unset
 	// is no pool cap; a person's own cap is the governance profile's.
@@ -167,33 +171,30 @@ func (l RunnerPoolLimits) Validate() error {
 	}
 	if b := l.Background; b != nil {
 		if err := errors.Join(
-			b.CPUMillis.validate("background.cpu_millis", "milli-CPU", RunnerPoolCPUMillisMax),
-			b.MemoryMiB.validate("background.memory_mib", "MiB", RunnerPoolMemoryMiBMax),
+			b.CPUMillis.validateSet("background.cpu_millis", "milli-CPU", RunnerPoolCPUMillisMax),
+			b.MemoryMiB.validateSet("background.memory_mib", "MiB", RunnerPoolMemoryMiBMax),
 			validateDisk("background", b.DiskMiB),
-			b.Lifetime.validate("background.lifetime"),
+			b.Lifetime.validateSet("background.lifetime"),
 		); err != nil {
 			return err
 		}
 	}
 	if i := l.Interactive; i != nil {
 		if err := errors.Join(
-			i.CPUMillis.validate("interactive.cpu_millis", "milli-CPU", RunnerPoolCPUMillisMax),
-			i.MemoryMiB.validate("interactive.memory_mib", "MiB", RunnerPoolMemoryMiBMax),
+			i.CPUMillis.validateSet("interactive.cpu_millis", "milli-CPU", RunnerPoolCPUMillisMax),
+			i.MemoryMiB.validateSet("interactive.memory_mib", "MiB", RunnerPoolMemoryMiBMax),
 			validateDisk("interactive", i.DiskMiB),
-			i.Lifetime.validate("interactive.lifetime"),
-			i.Idle.validate("interactive.idle"),
+			i.Lifetime.validateSet("interactive.lifetime"),
+			i.Idle.validateSet("interactive.idle"),
 		); err != nil {
 			return err
 		}
 		// An Interactive environment is never left to run with no end by default:
 		// No end is chosen per run, so an unlimited lifetime still names a finite
 		// default. A Background task may default to No end.
-		if i.Lifetime.Unlimited && i.Lifetime.DefaultSec < 1 {
+		if i.Lifetime != nil && i.Lifetime.Unlimited && i.Lifetime.DefaultSec < 1 {
 			return errors.New("interactive.lifetime: an unlimited lifetime still needs a finite default of at least 1 second; No end is chosen per run")
 		}
-	}
-	if len(l.Barriers) == 0 {
-		return errors.New("barriers: a pool allows at least one barrier")
 	}
 	for i, c := range l.Barriers {
 		if c.Rank() == 0 {
@@ -233,7 +234,23 @@ func (l RunnerPoolLimits) RunTypes() []RunnerPoolRunType {
 
 // AllowsBarrier reports whether the pool allows runs on confinement class c.
 func (l RunnerPoolLimits) AllowsBarrier(c ConfinementClass) bool {
-	return slices.Contains(l.Barriers, c)
+	return len(l.Barriers) == 0 || slices.Contains(l.Barriers, c)
+}
+
+// validateSet is validate for an amount the pool sets; nil is set by its runners.
+func (a *RunnerPoolAmount) validateSet(field, unit string, bound int) error {
+	if a == nil {
+		return nil
+	}
+	return a.validate(field, unit, bound)
+}
+
+// validateSet is validate for a duration the pool sets; nil is set elsewhere.
+func (d *RunnerPoolDuration) validateSet(field string) error {
+	if d == nil {
+		return nil
+	}
+	return d.validate(field)
 }
 
 // BarrierLabel is the console's name for a confinement class.

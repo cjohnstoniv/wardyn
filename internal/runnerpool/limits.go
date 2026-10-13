@@ -249,9 +249,18 @@ func PoolSource(p types.RunnerPool, runType types.RunnerPoolRunType) (SourceLimi
 	if !l.AllowsRunType(runType) {
 		return out, &Refusal{Reason: ReasonRunTypeNotAllowed, Name: p.Name, RunType: runType}
 	}
-	amount := func(a types.RunnerPoolAmount) Bound { return Bound{Max: Int(a.Cap), Default: Int(a.Default)} }
-	duration := func(d types.RunnerPoolDuration) Bound {
+	// A field the pool leaves out is no bound of the pool's: its runners, governance and the deployment set it.
+	amount := func(a *types.RunnerPoolAmount) Bound {
+		if a == nil {
+			return Bound{}
+		}
+		return Bound{Max: Int(a.Cap), Default: Int(a.Default)}
+	}
+	duration := func(d *types.RunnerPoolDuration) Bound {
 		var b Bound
+		if d == nil {
+			return b
+		}
 		if !d.Unlimited {
 			b.Max = Int(d.MaxSec)
 		}
@@ -264,15 +273,11 @@ func PoolSource(p types.RunnerPool, runType types.RunnerPoolRunType) (SourceLimi
 	case types.RunnerPoolRunBackground:
 		b := l.Background
 		out.CPUMillis, out.MemoryMiB, out.LifetimeSec = amount(b.CPUMillis), amount(b.MemoryMiB), duration(b.Lifetime)
-		if b.DiskMiB != nil {
-			out.DiskMiB = amount(*b.DiskMiB)
-		}
+		out.DiskMiB = amount(b.DiskMiB)
 	case types.RunnerPoolRunInteractive:
 		i := l.Interactive
 		out.CPUMillis, out.MemoryMiB, out.LifetimeSec = amount(i.CPUMillis), amount(i.MemoryMiB), duration(i.Lifetime)
-		if i.DiskMiB != nil {
-			out.DiskMiB = amount(*i.DiskMiB)
-		}
+		out.DiskMiB = amount(i.DiskMiB)
 		out.IdleSec = duration(i.Idle)
 	}
 	out.ConcurrentRuns = l.MaxConcurrentRuns

@@ -278,15 +278,15 @@ func testPool(l *types.RunnerPoolLimits) types.RunnerPool {
 func appServerPool() types.RunnerPoolLimits {
 	return types.RunnerPoolLimits{
 		Background: &types.RunnerPoolBackgroundLimits{
-			CPUMillis: types.RunnerPoolAmount{Default: 2000, Cap: 8000},
-			MemoryMiB: types.RunnerPoolAmount{Default: 4096, Cap: 16384},
-			Lifetime:  types.RunnerPoolDuration{Unlimited: true},
+			CPUMillis: &types.RunnerPoolAmount{Default: 2000, Cap: 8000},
+			MemoryMiB: &types.RunnerPoolAmount{Default: 4096, Cap: 16384},
+			Lifetime:  &types.RunnerPoolDuration{Unlimited: true},
 		},
 		Interactive: &types.RunnerPoolInteractiveLimits{
-			CPUMillis: types.RunnerPoolAmount{Default: 1000, Cap: 4000},
-			MemoryMiB: types.RunnerPoolAmount{Default: 2048, Cap: 8192},
-			Lifetime:  types.RunnerPoolDuration{DefaultSec: 28800, MaxSec: 86400},
-			Idle:      types.RunnerPoolDuration{DefaultSec: 1800, MaxSec: 7200},
+			CPUMillis: &types.RunnerPoolAmount{Default: 1000, Cap: 4000},
+			MemoryMiB: &types.RunnerPoolAmount{Default: 2048, Cap: 8192},
+			Lifetime:  &types.RunnerPoolDuration{DefaultSec: 28800, MaxSec: 86400},
+			Idle:      &types.RunnerPoolDuration{DefaultSec: 1800, MaxSec: 7200},
 		},
 		Barriers: []types.ConfinementClass{types.CC2, types.CC3},
 	}
@@ -313,7 +313,7 @@ func TestPoolSource(t *testing.T) {
 	}
 
 	// "never" is Unlimited: no maximum, and a default of 0 is no default
-	l.Interactive.Idle = types.RunnerPoolDuration{Unlimited: true}
+	l.Interactive.Idle = &types.RunnerPoolDuration{Unlimited: true}
 	if s, _ = PoolSource(p, ia); s.IdleSec != (Bound{}) {
 		t.Fatalf("never-idle names no bound: %+v", s.IdleSec)
 	}
@@ -699,9 +699,9 @@ func TestEffectiveDeploymentDefaultIsTheFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	big := types.RunnerPoolLimits{Background: &types.RunnerPoolBackgroundLimits{
-		CPUMillis: types.RunnerPoolAmount{Default: 8000, Cap: 16000},
-		MemoryMiB: types.RunnerPoolAmount{Default: 16384, Cap: 32768},
-		Lifetime:  types.RunnerPoolDuration{Unlimited: true},
+		CPUMillis: &types.RunnerPoolAmount{Default: 8000, Cap: 16000},
+		MemoryMiB: &types.RunnerPoolAmount{Default: 16384, Cap: 32768},
+		Lifetime:  &types.RunnerPoolDuration{Unlimited: true},
 	}}
 	pool, refusal := PoolSource(testPool(&big), types.RunnerPoolRunBackground)
 	if refusal != nil {
