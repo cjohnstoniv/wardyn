@@ -234,8 +234,8 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 
 	// D28: re-apply decided `always`-scoped egress decisions onto their
 	// workspaces, healing any allow/deny the non-atomic post-Decide write-back
-	// dropped on a PG blip. In a goroutine — it reads all decided egress
-	// approvals, which need not gate serving.
+	// dropped on a PG blip. In a goroutine — it walks the decided always-egress
+	// verdicts in bounded pages, which need not gate serving.
 	leaderGo(rootCtx, leader, "egress.reconcile", func(ctx context.Context) {
 		if n, rerr := srv.ReconcileWorkspaceEgressDecisions(ctx); rerr != nil {
 			slog.WarnContext(ctx, "wardynd: always-egress reconcile deferred", slog.Any("err", rerr))
