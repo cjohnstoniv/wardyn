@@ -428,6 +428,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// Record the reservation the driver will apply (best-effort, like the disk cap above).
 	s.recordRunSizing(ctx, run.ID, resourceLimitsToRunner(policy.Resources), len(plan.azure.gates) > 0)
 	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
+	plan.azureCLI.closeWithheld(&policy, injections) // a door the ceiling withheld takes the hosts it opened with it
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
