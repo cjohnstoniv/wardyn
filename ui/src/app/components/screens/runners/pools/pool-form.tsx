@@ -112,7 +112,7 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
     ev.preventDefault();
     setTop("");
     setStale(false);
-    const found = validate(values);
+    const found = validate(values, pool?.limits);
     setErrors(found);
     if (Object.keys(found).length) {
       // The invalid control takes focus once the errors have rendered.
