@@ -30,13 +30,16 @@ export function CreateDriveCard({ create, onCreated, onClose }: {
   const [failure, setFailure] = React.useState("");
   const card = React.useRef<HTMLFormElement>(null);
   const errorId = React.useId();
-  useEscapeClosesThis(onClose, card);
+  // The create cannot be recalled once sent, so nothing here pretends to cancel it: the key is taken and ignored.
+  useEscapeClosesThis(React.useCallback(() => !busy && onClose(), [busy, onClose]), card);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || busy) return;
     setBusy(true);
     setFailure("");
+    // The buttons are disabled while it runs; focus stays on the field so a key press still lands in the card.
+    document.getElementById(NAME_ID)?.focus();
     try {
       onCreated(await create(name.trim()));
     } catch (error) {
@@ -58,6 +61,7 @@ export function CreateDriveCard({ create, onCreated, onClose }: {
           autoFocus
           value={name}
           placeholder={NR_FILES.DRIVE_NAME_PLACEHOLDER}
+          aria-required="true"
           aria-invalid={failure ? true : undefined}
           aria-describedby={failure ? errorId : undefined}
           onChange={(e) => setName(e.target.value)}
@@ -65,7 +69,7 @@ export function CreateDriveCard({ create, onCreated, onClose }: {
         {failure && <p id={errorId} role="alert" className="text-sm text-danger">{failure}</p>}
       </div>
       <div className="flex justify-end gap-2">
-        <Button type="button" variant="outline" onClick={onClose}>{NR_SHARED.CANCEL}</Button>
+        <Button type="button" variant="outline" disabled={busy} onClick={onClose}>{NR_SHARED.CANCEL}</Button>
         <Button type="submit" disabled={!name.trim() || busy}>{NR_FILES.CREATE_CONFIRM}</Button>
       </div>
     </form>

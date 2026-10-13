@@ -15,6 +15,7 @@ import { createMyDrive, deleteMyDrive, type MeDrive, type MemberDriveCreate, typ
 import { MEMBER } from "../../../../../lib/governance-copy";
 import { DRIVE_MEMBER } from "../../../../../lib/user-drives-copy";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
+import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { detachDrive } from "../../lenses/files-lens";
 import { useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import { useAnnounce } from "../step-shell";
@@ -52,7 +53,9 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
   const link = React.useRef<HTMLButtonElement>(null);
   // Focus goes back to the create control when the card closes, and when a delete leaves no row to return to.
   const refocus = React.useRef(false);
+  // A delete just finished: where focus goes once the drive has left the lists.
   const deleted = React.useRef(false);
+  const [afterDelete, setAfterDelete] = React.useState<{ id: string; name: string; dialog: HTMLElement | null } | null>(null);
   const reasonId = React.useId();
   const legacyId = legacyIdOf(catalogue);
   React.useEffect(() => {
@@ -61,6 +64,17 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
       link.current?.focus();
     }
   }, [creating]);
+  React.useEffect(() => {
+    if (!afterDelete || deleting || catalogue?.drives.some((d) => d.id === afterDelete.id)) return;
+    setAfterDelete(null);
+    if (link.current) return link.current.focus();
+    // No create link on screen: the next own drive's Delete, else the first option, else Back; never the dialog itself.
+    const root = afterDelete.dialog;
+    const radio = Array.from(root?.querySelectorAll<HTMLInputElement>('input[type="radio"]:not(:disabled)') ?? [])
+      .find((r) => !r.closest("label")?.textContent?.startsWith(afterDelete.name));
+    const back = Array.from(root?.querySelectorAll<HTMLButtonElement>("button") ?? []).find((b) => b.textContent === NR_SHARED.BACK);
+    (root?.querySelector<HTMLElement>("[data-own-delete]") ?? radio ?? back)?.focus();
+  }, [afterDelete, deleting, catalogue]);
   const closeCard = React.useCallback(() => {
     refocus.current = true;
     setCreating(false);
@@ -108,6 +122,7 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
                 type="button"
                 className="font-semibold text-primary hover:underline"
                 aria-describedby={`nr-own-drive-${d.id}`}
+                data-own-delete={d.id}
                 onClick={(e) => {
                   deleted.current = false;
                   setDeleting({ drive: d, opener: e.currentTarget });
@@ -123,10 +138,11 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
         <DeleteDriveConfirm
           name={deleting.drive.name}
           remove={() => deleteMyDrive(deleting.drive.id)}
-          returnFocusTo={() => (deleted.current ? link.current : deleting.opener)}
+          returnFocusTo={() => (deleted.current ? null : deleting.opener)}
           onClose={() => setDeleting(null)}
           onDeleted={() => {
             deleted.current = true;
+            setAfterDelete({ id: deleting.drive.id, name: deleting.drive.name, dialog: deleting.opener.closest<HTMLElement>('[role="dialog"]') });
             refresh();
             // A drive already attached to this run goes with it, and so does a start on it.
             dispatch({ type: "edit", apply: (i) => detachDrive(i, deleting.drive.id, legacyId) });

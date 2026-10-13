@@ -29,7 +29,10 @@ export function DeleteDriveConfirm({ name, remove, onDeleted, onClose, returnFoc
   const cancelRef = React.useRef<HTMLButtonElement>(null);
   const [busy, setBusy] = React.useState(false);
   const [failure, setFailure] = React.useState("");
-  useEscapeClosesThis(React.useCallback(() => !busy && onClose(), [busy, onClose]));
+  const content = React.useRef<HTMLDivElement>(null);
+  // Only a key pressed inside the confirm: a dialog opened above it (a sign-in prompt) keeps its own Escape.
+  // While the delete is in flight the key is taken and does nothing, as the buttons do.
+  useEscapeClosesThis(React.useCallback(() => !busy && onClose(), [busy, onClose]), content);
 
   const confirm = async () => {
     setBusy(true);
@@ -47,6 +50,7 @@ export function DeleteDriveConfirm({ name, remove, onDeleted, onClose, returnFoc
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
       <DialogContent
+        ref={content}
         aria-describedby={undefined}
         onOpenAutoFocus={(e) => {
           e.preventDefault();
