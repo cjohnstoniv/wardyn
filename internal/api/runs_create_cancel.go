@@ -38,3 +38,27 @@ func (c *inflightCreates) cancel(runID uuid.UUID) {
 		f.(context.CancelFunc)()
 	}
 }
+
+// trackRunBuild registers runID's image build so a kill stops it (cancelCreate). The registration is
+// its own (runBuilds): it can neither replace nor remove the one the run's queue start or dispatch
+// holds in creates. The returned context is for the builder alone and carries the build's usual
+// deadline; recording and compensating the build stay on ctx. The run is re-read after the
+// registration, because a kill that landed before it found nothing to cancel: live is false for a
+// run that is already terminal, whose build must not start. Cancelling asks the builder to stop;
+// what a stopped build left on the host is the builder's and the image sweep's to remove.
+func (s *Server) trackRunBuild(ctx context.Context, runID uuid.UUID) (buildCtx context.Context, end func(), live bool) {
+	tracked, untrack := s.runBuilds.track(ctx, runID)
+	buildCtx, cancel := context.WithTimeout(tracked, imageBuildTimeout)
+	end = func() {
+		cancel()
+		untrack()
+	}
+	if s.cfg.ImageBuilder == nil {
+		return buildCtx, end, true // nothing can build, so there is no stale work to refuse
+	}
+	if run, err := s.cfg.Store.GetRun(ctx, runID); err == nil && isTerminalRunState(run.State) {
+		end()
+		return buildCtx, end, false
+	}
+	return buildCtx, end, true
+}

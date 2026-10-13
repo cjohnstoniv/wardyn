@@ -209,6 +209,10 @@ func (s *Server) resolveWorkspaceImageWith(ctx context.Context, runID uuid.UUID,
 	fail := imageResolveResult{}
 	reasonFor := func(key string) string { return opts.reason(primary, key) }
 	buildAudit := func(outcome string, extra map[string]any) {
+		// Bounded, and not on ctx: a build's row is written even when a kill of its run, or the
+		// build's deadline, has ended the context the build ran on.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+		defer cancel()
 		extra["workspace_id"] = primary.ID.String()
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
 			runID.String(), outcome, mustJSON(extra)))
@@ -463,8 +467,12 @@ func (s *Server) workspaceRunImage(ctx context.Context, runID uuid.UUID, ws type
 	// so without its OWN deadline this build could run indefinitely, holding
 	// the workspace's serial import-step claim well past the reaper's grace
 	// (undispatchedGrace = 2*imageBuildTimeout).
-	buildCtx, cancel := context.WithTimeout(ctx, imageBuildTimeout)
-	defer cancel()
+	// A kill of the run stops the build too (trackRunBuild); a run already terminal builds nothing.
+	buildCtx, endBuild, live := s.trackRunBuild(ctx, runID)
+	defer endBuild()
+	if !live {
+		return agentImage("claude-code", s.cfg.AgentImages)
+	}
 	if built, ok := s.resolveWorkspaceImage(buildCtx, runID, ws, nil, s.announceImageBuild(ctx, runID)); ok {
 		return built
 	}
