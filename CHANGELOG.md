@@ -938,6 +938,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   policy listed are untouched.
 - A dispatched stop or kill that names a container the runner cannot prove it created is refused by the runner and
   closed (`runner.action.refuse`), instead of failing the runner's session on every reconnect.
+- New Run and the console, keyboard and phone use: closing a dialog returns focus to the control that opened it,
+  unless the page has already placed focus elsewhere; "Add another harness" moves focus to the new harness; the
+  Files Edit dialog opens with focus in its Mount path step. At 320 px Review's file and harness rows no longer
+  clip, and the header's home link keeps its name below 640 px.
+- Tools and access no longer shows "Nothing else to set up" when the policy preview failed or has not answered: it
+  shows the server's sentence with "Check again". A run with no harness no longer gets a blank harness row there.
+  The run document says "1 issue" in the singular.
 
 
 ## [0.8.9] — 2026-10-09
