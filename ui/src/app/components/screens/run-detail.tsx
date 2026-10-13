@@ -50,6 +50,7 @@ import {
   toolRuleDecision,
 } from "../wardyn/audit-decision";
 import { PolicyRemedy } from "../wardyn/policy-remedy";
+import { newRunHref } from "./new-run-flow/draft/new-run-url";
 import { AUDIT } from "./audit-copy";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { isHeld } from "../wardyn/live-approvals";
@@ -158,7 +159,7 @@ function RunDetailPage({ id }: { id: string }) {
     if (!run) return;
     try {
       await launchIntentSource.read(run.id);
-      void navigate(`/runs/new?again=${encodeURIComponent(run.id)}`);
+      void navigate(newRunHref({ screen: "review", view: "pretty" }, { again: run.id }));
       return;
     } catch {
       // Kept no setup, or it could not be read: the audit trail answers below.
