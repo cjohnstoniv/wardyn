@@ -142,6 +142,7 @@ func postureFlags(issuer, advertise string, set func(*bootFlags)) *bootFlags {
 		auditSeal:           &seal,
 		runOutputTailBytes:  &tail,
 		runOutputRetention:  &retention,
+		recordingRetention:  new(int),
 		preflightRatePerMin: &rate,
 		basePath:            &base, oidcIssuer: &issuer, oidcInternalIss: &internal, oidcRedirectURL: &redirect, controlURL: &control,
 		listen: &listen, uiListen: &ui, uiAdvertise: &advertise, sshListen: &ssh, sshProxyCommand: &tmpl, uiOriginTemplate: &tmpl, uiStripCookies: &strip,
