@@ -20,6 +20,7 @@ import {
   continueNewRun,
   expandCard,
   gotoConsole,
+  mockPreflightClear,
   navToRoute,
   openNewRun,
   sql,
@@ -292,15 +293,30 @@ test.describe("the person's Azure DevOps card, a row where each person adds thei
   });
 });
 
-// OPEN QUESTION FOR THE LEAD: the guided flow draws neither `ado-run-token-line` nor `ado-launch-note`
-// (the old Access panel's two Azure DevOps lines). Step 5's "Setup still needed" is the primary path for a
-// sign-in and the Name dialog's door is the backstop at Launch, and neither mounts those two shared
-// components yet. The cases below keep every assertion and look for the lines where the approved flow puts
-// them (the token line and the not-connected note on step 5; the refusal notes in the Name dialog), and
-// stay fixme until the app mounts them or the lead retires the cases in favour of ado-launch-door.spec.ts.
+// New Run's two Azure DevOps lines for a row that creates a token for each run. A token is created only for
+// a run that carries an Azure DevOps repository, so Tools and access says what it carries, and asks the
+// person to connect, on that repository's own credential row; a launch the token refuses says why in the
+// Name dialog. The hermetic backend has no such repository, so its row and credential are spliced onto the
+// real policy preview, as the server lists them (a repository row and its `ado_signin` credential).
+async function spliceAdoRepository(page: Page): Promise<void> {
+  await page.route("**/api/v1/runs/policy-preview", async (route) => {
+    const response = await route.fetch();
+    if (!response.ok()) return route.fulfill({ response });
+    const json = (await response.json()) as { access?: { rows?: object[]; credentials?: object[] } };
+    const access = json.access ?? {};
+    json.access = {
+      ...access,
+      rows: [...(access.rows ?? []), { id: "repo:ado", kind: "repository", from: "repository", name: "wardyn-e2e", status: "ready", hosts: [], credentials: ["repo:ado:credential"], source: { kind: "workspace" } }],
+      credentials: [...(access.credentials ?? []), { id: "repo:ado:credential", row: "repo:ado", kind: "ado_signin", owner: "own", delivery: "proxy", after_end: "gone" }],
+    };
+    await route.fulfill({ response, json });
+  });
+}
+
 test.describe("New Run, a row that creates a token for each run", () => {
   // Step 5 is where the token line and the not-connected note sit; a launch needs the whole way to Review.
   async function openToolsStep(page: Page): Promise<void> {
+    await spliceAdoRepository(page);
     await gotoConsole(page);
     await openNewRun(page);
     await walkGuidedToFiles(page);
@@ -308,7 +324,7 @@ test.describe("New Run, a row that creates a token for each run", () => {
     await continueNewRun(page, NR_TOOLS.TITLE);
   }
 
-  test.fixme("the run's token line names the row's default access, and not connected says to connect first", async ({ page, context }) => {
+  test("the run's token line names the row's default access, and not connected says to connect first", async ({ page, context }) => {
     let access: Record<string, unknown> = { token_mode: "minted_pat", state: "not_configured", default_profile: ["code_read"] };
     await spliceAccess(page, () => access);
     await page.route("**/api/v1/me/scm-access", (route) =>
@@ -326,12 +342,13 @@ test.describe("New Run, a row that creates a token for each run", () => {
     await popup.waitForEvent("close");
   });
 
-  test.fixme("a launch the organisation refuses on its token policy raises the blocked note", async ({ page }) => {
+  test("a launch the organisation refuses on its token policy raises the blocked note", async ({ page }) => {
     await spliceAccess(page, () => ({ token_mode: "minted_pat", state: "live", source: "org", default_profile: ["code_read"] }));
     await page.route("**/api/v1/runs", async (route) => {
       if (route.request().method() !== "POST") return route.fallback();
       await route.fulfill({ status: 403, json: { error: ADO_PAT.LAUNCH_POLICY_REFUSED, reason: "ado_pat_policy_blocked" } });
     });
+    await mockPreflightClear(page);
     await gotoConsole(page);
     await openNewRun(page);
     await walkGuidedToReview(page);
@@ -340,12 +357,13 @@ test.describe("New Run, a row that creates a token for each run", () => {
     await expect(naming.getByTestId("ado-launch-note")).toHaveText(ADO_PAT.LAUNCH_POLICY_REFUSED);
   });
 
-  test.fixme("a launch refused for want of a usable sign-in asks to connect again", async ({ page }) => {
+  test("a launch refused for want of a usable sign-in asks to connect again", async ({ page }) => {
     await spliceAccess(page, () => ({ token_mode: "minted_pat", state: "live", source: "org", default_profile: ["code_read"] }));
     await page.route("**/api/v1/runs", async (route) => {
       if (route.request().method() !== "POST") return route.fallback();
       await route.fulfill({ status: 403, json: { error: "cannot create a token", reason: "ado_pat_consent_needed" } });
     });
+    await mockPreflightClear(page);
     await gotoConsole(page);
     await openNewRun(page);
     await walkGuidedToReview(page);
@@ -353,7 +371,7 @@ test.describe("New Run, a row that creates a token for each run", () => {
     await expect(naming.getByTestId("ado-launch-note").getByText(ADO_PAT.LAUNCH_NOT_CONNECTED)).toBeVisible();
   });
 
-  test.fixme("a row on the Entra sign-in lane draws neither line", async ({ page }) => {
+  test("a row on the Entra sign-in lane draws neither line", async ({ page }) => {
     await spliceAccess(page, () => ({ token_mode: "bearer", state: "live", source: "org" }));
     await openToolsStep(page);
     await expect(page.getByTestId("ado-run-token-line")).toHaveCount(0);
@@ -491,10 +509,9 @@ test.describe("no horizontal scroll at 390px", () => {
     clearRunTokens(runId);
   });
 
-  // The not-connected note is the one New Run element of the case above that waits on the lead's question
-  // (see the New Run describe): step 5 is where the approved flow would draw it.
-  test.fixme("the not-connected note on step 5 fits the screen", async ({ page }) => {
+  test("the not-connected note on step 5 fits the screen", async ({ page }) => {
     await spliceAccess(page, () => ({ token_mode: "minted_pat", state: "not_configured" }));
+    await spliceAdoRepository(page);
     await page.goto("/runs/new");
     await expect(page.getByRole("heading", { name: NR_START.TITLE })).toBeVisible();
     await walkGuidedToFiles(page);

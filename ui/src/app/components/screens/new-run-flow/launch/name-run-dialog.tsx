@@ -13,6 +13,7 @@ import * as React from "react";
 import { Check, Loader2 } from "lucide-react";
 import { HttpError } from "../../../../lib/api/core";
 import { isCredentialRefusal } from "../../../../lib/api/runs";
+import type { SCMAccessPAT } from "../../../../lib/types/ado-pat";
 import type { CreateRunResult } from "../../../../lib/types/run-create";
 import { Button } from "../../../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "../../../ui/dialog";
@@ -22,7 +23,8 @@ import { Textarea } from "../../../ui/textarea";
 import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
-import { useModelAccessDoor } from "../../../wardyn/model-access-context";
+import { AdoLaunchNote } from "../../../wardyn/ado-run-token-line";
+import { useModelAccessDoor, useShellSetupStatus } from "../../../wardyn/model-access-context";
 import { PolicyRemedy } from "../../../wardyn/policy-remedy";
 import { useAdoLaunchDoor } from "../checks/use-ado-launch-door";
 import { intentToWire } from "../draft/intent-to-wire";
@@ -103,12 +105,15 @@ function NameRunForm({ onOpenChange, onCreated }: Pick<NameRunDialogProps, "onOp
   React.useEffect(() => {
     void check();
   }, [check]);
-  const adoOpen = adoDoor.dialog.open;
-  const wasAdoOpen = React.useRef(false);
+  // The Azure DevOps door, from its own dialog or from the note under a refusal: once it is done, ask again.
+  const adoBusy = adoDoor.dialog.open || adoDoor.dialog.connecting;
+  const wasAdoBusy = React.useRef(false);
   React.useEffect(() => {
-    if (wasAdoOpen.current && !adoOpen) void check();
-    wasAdoOpen.current = adoOpen;
-  }, [adoOpen, check]);
+    if (wasAdoBusy.current && !adoBusy) void check();
+    wasAdoBusy.current = adoBusy;
+  }, [adoBusy, check]);
+  const { status } = useShellSetupStatus();
+  const adoAccess = status?.unreachable ? undefined : (status?.scm_access as SCMAccessPAT | undefined);
 
   const refused = (e: unknown) => {
     adoDoor.notifyLaunchError(e);
@@ -198,6 +203,17 @@ function NameRunForm({ onOpenChange, onCreated }: Pick<NameRunDialogProps, "onOp
             {sentence}
             {create.refusal && <PolicyRemedy policy={create.policy} className="mt-1 block" />}
           </p>
+        )}
+        {/* A launch the run's Azure DevOps token refused: the organisation blocks it, or the person connects again. */}
+        {create.refusal && adoDoor.refusal && (
+          <AdoLaunchNote
+            access={adoAccess}
+            refusal={adoDoor.refusal}
+            connecting={adoDoor.dialog.connecting}
+            onConnect={adoDoor.dialog.onConfirm}
+            blockedUrl={adoDoor.dialog.open ? null : adoDoor.dialog.blockedUrl}
+            onFallbackClick={adoDoor.dialog.onFallbackClick}
+          />
         )}
 
         <DialogFooter>
