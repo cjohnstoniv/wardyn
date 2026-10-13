@@ -758,8 +758,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   can no longer set No end or extend past the cap, a super admin included (a super admin still skips the profile's
   limits). Until the lease sweep honours the cap, the lease sweep keeps the run at the same moment the reaper stops
   it.
-- The template decoder and the component config schema refuse secret-named config keys such as `CLIENT_SECRET`,
-  `JWT_SECRET` and `*_PASSPHRASE` (`SECRET_NAME`/`SECRET_REF` stay plain).
+- The template decoder refuses secret-named config keys such as `CLIENT_SECRET`, `JWT_SECRET` and `*_PASSPHRASE`
+  (`SECRET_NAME`/`SECRET_REF` stay plain).
 - Naming a person by a typed `entra:<tenant>:<object>` (erasure, secret owner) is now refused as ambiguous when that
   tenant and object id also signed in under another issuer, instead of resolving to one principal and leaving the
   other's data.
@@ -838,8 +838,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - `WARDYN_RECORDING_RETENTION_DAYS` above 106,751 is now refused at startup; a larger value overflowed and the retention sweep could delete recent recordings. Use 0 to keep recordings forever.
 - The governance and drive previews now send the standard user type, so a profile assigned to that type shows in the preview as it applies to a run. A preview for another user type is not offered yet.
 - A refused attach or UI-gateway ticket, a UI enter on the wrong host and a refused SSH key are audited at a bounded
-  rate, sharing the authentication-failure limit; rows past the burst are counted in
-  `wardyn_auth_failed_suppressed_total`.
+  rate, sharing the authentication-failure limit; rows past the burst for an invalid attach or UI-gateway ticket are
+  counted in `wardyn_auth_failed_suppressed_total`.
 - `wardyn template save -` reads stdin again: `template save` takes `--format`.
 - A run a laptop submits with a device credential and no person is refused at launch when a per-person Azure DevOps
   connection covers one of its repositories (#731).
@@ -1046,7 +1046,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and the offboarding guide now say which call destroys which key: `DELETE /people/{principal}/credentials` destroys
   the credential key only, and the audit-seal key is destroyed only by the irreversible `audit_personal_fields`
   erasure scope.
-- A guarded secret delete (`If-Match` revision) no longer removes a row that was replaced while the delete waited.
+- An internal guarded delete of a stored credential (the AWS sign-in refresh's) no longer removes a row that was
+  replaced while the delete waited.
   Building a run's masker no longer slows with the square of the number of stored credential values.
 - A run that is stopped but kept no longer answers 500 to the console's Files and Resources polls or writes a
   `run.files.fail` audit row each time: both reads answer 409 `run_inspect_agent_stopped`. A failed run that had
@@ -1072,8 +1073,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Revoking a self-hosted runner ends the runs still waiting for it even when the revoke's own pass could not finish:
   the queue sweep retries from the runner's revoked state.
 - A push refused under push content rules because a ref points at a commit the request does not carry (for example a
-  branch created at a commit the forge already has) now names each such ref and no longer advises `git fetch
-  --unshallow`, which did not help; it is still refused.
+  branch created at a commit the forge already has) now names the refs (up to ten, and counts the rest) and no
+  longer advises `git fetch --unshallow`, which did not help; it is still refused.
 - A credential mint whose value cannot be recorded for output masking now fails without using up its single-use
   approval, and a GitHub token minted for it is revoked. Before, the approval was spent and nothing was delivered.
 - SSH: a refusal that names a registered key (not the run's owner, a revoked key, a profile that denies it) is now
