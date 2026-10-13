@@ -643,7 +643,6 @@ start.
 | `workspace_repo_unknown` | `422`: a `repos` entry the workspace does not carry, or the `repo` of `GET /workspaces/{id}/branches` is not one of its repository sources. |
 | `placement_unavailable` / `placement_credential` / `placement_capability` / `placement_local_path` / `placement_trusted_output` | `422`: a `placement: "local"` run with no user pool of yours, or one carrying a credential, mount, storage, path or trusted-output operation a runner cannot take. |
 | `runner_posture_unmet` | `422`: a `runner_resident` credential the runner's reported posture does not meet (the detail names the field), or a run with a CC3 floor, which a runner-asserted class never meets for a resident credential. |
-| `placement_required` | `422`: no placement chosen. |
 | `placement_denied` | `403`: your governance profile's `deny_placements` refuses the run's placement, at create, preflight, policy preview and source scans; audited `authz.denied` (target `runs.placement`). At revive the same `403` is audited `run.revive` denied; at dispatch the run fails and is audited `run.dispatch` failure with this `reason`. A managed-harness sign-in is exempt at every door; a site-config probe at create and dispatch. |
 | `runner_offline` | `422`: a `placement: "local"` run whose runner is offline or has not reported its capabilities yet, or none of your runners is online. |
 | `runner_at_capacity` | `422`: a revive onto a runner at one of its limits (Runs at once, or a total). A launch whose runners are all at their limits waits in the pool's queue instead. |
