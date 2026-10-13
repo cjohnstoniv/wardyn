@@ -23,6 +23,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 const (
@@ -89,13 +90,8 @@ func (s *Server) withServiceState(r *http.Request, sis ...*types.ServiceIdentity
 	return nil
 }
 
-// serviceIdentityRequest is the POST /service-identities body.
-type serviceIdentityRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Sponsor     string `json:"sponsor"`
-	UserType    string `json:"user_type"`
-}
+// serviceIdentityRequest IS the SDK's body (dto_alias_test.go pins it).
+type serviceIdentityRequest = client.CreateServiceIdentityRequest
 
 func (s *Server) handleCreateServiceIdentity(w http.ResponseWriter, r *http.Request) {
 	ss, ok := s.serviceStoreOr409(w)
@@ -250,12 +246,8 @@ func (s *Server) handleGetServiceIdentity(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, si)
 }
 
-// updateServiceIdentityRequest is the PATCH body: the fields present change.
-type updateServiceIdentityRequest struct {
-	Description *string `json:"description"`
-	Sponsor     *string `json:"sponsor"`
-	Suspended   *bool   `json:"suspended"`
-}
+// updateServiceIdentityRequest IS the SDK's body (dto_alias_test.go pins it): the fields present change.
+type updateServiceIdentityRequest = client.UpdateServiceIdentityRequest
 
 func (s *Server) handleUpdateServiceIdentity(w http.ResponseWriter, r *http.Request) {
 	ss, ok := s.serviceStoreOr409(w)
@@ -387,6 +379,11 @@ func (s *Server) handleRetireServiceIdentity(w http.ResponseWriter, r *http.Requ
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "service_identity.retire", retired.After.Principal(), "success",
 			mustJSON(map[string]any{"tokens_revoked": retired.TokensRevoked})))
 	}
+	// So do its runs waiting in a pool's queue: a retired identity's run never starts.
+	if _, err := s.cancelQueuedRunsOf(ctx, retired.After.Principal(), queueCancelServiceRetired); err != nil {
+		writeServerError(w, r, "cancel the service identity's waiting runs", err)
+		return
+	}
 	// The identity's stored credentials go with it, beside the retire row. The retire is already durable,
 	// so a failure here is recorded and answered 500, and the same DELETE run again erases them.
 	if s.cfg.Secrets != nil {
@@ -429,11 +426,8 @@ func (s *Server) sponsoredIdentity(w http.ResponseWriter, r *http.Request, sub s
 	return ss, si, true
 }
 
-// serviceTokenRequest is the POST /me/service-identities/{name}/tokens body.
-type serviceTokenRequest struct {
-	Name       string `json:"name"`
-	TTLSeconds int64  `json:"ttl_seconds,omitempty"`
-}
+// serviceTokenRequest IS the SDK's body (dto_alias_test.go pins it).
+type serviceTokenRequest = client.MintServiceTokenRequest
 
 // handleMintServiceToken is POST /api/v1/me/service-identities/{name}/tokens: the sponsor, signed in,
 // mints a token of the service identity and gets the plaintext once (D4). It shares the self-mint's
@@ -469,6 +463,16 @@ func (s *Server) handleMintServiceToken(w http.ResponseWriter, r *http.Request) 
 	// never authenticate (serviceTokenAuth refuses it), so the mint is refused rather than handed out dead.
 	if s.cfg.SessionRevocations == nil {
 		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityInactive, "this deployment cannot check the sponsor's session, so a service token would never authenticate")
+		return
+	}
+	// An active record whose sponsor session is not live is sponsor_inactive: its tokens would be refused
+	// at once, so the mint is refused the way a suspended or retired identity's is.
+	if err := s.withServiceState(r, &si); err != nil {
+		writeServerError(w, r, "read the sponsor's session", err)
+		return
+	}
+	if si.State == types.ServiceIdentitySponsorInactive {
+		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityInactive, "this service identity's sponsor is not active; its tokens cannot be minted")
 		return
 	}
 	if !s.mintSessionLive(w, r, sub, authorizedAt) {

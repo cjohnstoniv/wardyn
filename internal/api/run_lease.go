@@ -250,6 +250,8 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 	if !applied {
 		return
 	}
+	// A run kept after its end no longer holds its pool's slot: a waiting run may start.
+	s.kickQueue()
 	// The mark just landed in the store, at now — set it on our copy too (as
 	// run_lost.go's loseRun already does at its own claim), so a fall-through to
 	// stopKeptRun below compares StopKeptRunIf against the SAME mark the row now

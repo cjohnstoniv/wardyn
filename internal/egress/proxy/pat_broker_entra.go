@@ -64,19 +64,19 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 	keys, ok := adoGitKeys(r)
 	if !ok {
 		p.refuseADOGit(w, r, host, nil, nil,
-			"Wardyn refused this git request: its path spells a project or repository name Azure DevOps would read as another.")
+			"Wardyn refused this git request: its path spells a project or repository name Azure DevOps would read as another.", false)
 		return
 	}
 	if !adoOrgMatches(host, rest, grant.Organization) {
 		p.refuseADOGit(w, r, host, nil, nil, fmt.Sprintf(
-			"Wardyn refused this git request: this run is granted the %q Azure DevOps organisation only.", grant.Organization))
+			"Wardyn refused this git request: this run is granted the %q Azure DevOps organisation only.", grant.Organization), true)
 		return
 	}
 	// adoGitKeys drops empty segments but the forward sends rest as written, so an inner "//" is refused here.
 	if !adoHostedHost(host) && (strings.Contains(strings.Trim(rest, "/"), "//") || !adoServerGitPath(keys, grant.Organization)) {
 		p.refuseADOGit(w, r, host, nil, nil, fmt.Sprintf(
 			"Wardyn refused this git request: on Azure DevOps Server this run reaches git only at %s/<project>/_git/<repository>.",
-			strings.Trim(grant.Organization, "/")))
+			strings.Trim(grant.Organization, "/")), true)
 		return
 	}
 
@@ -86,14 +86,14 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 	if verb == "git-receive-pack" {
 		head, pp, msg := readADOGitPush(r)
 		if msg != "" {
-			p.refuseADOGit(w, r, host, nil, pp, msg)
+			p.refuseADOGit(w, r, host, nil, pp, msg, false)
 			return
 		}
 		push, body = pp, io.MultiReader(bytes.NewReader(head), r.Body)
 		// The run's branch rule first (adoRunBranchRule, the REST gate's too): a ref outside the run's own
 		// branch is refused outright, never held for a capability.
 		if msg := p.adoRunBranchRule(push.refs); msg != "" {
-			p.refuseADOGit(w, r, host, nil, push, msg)
+			p.refuseADOGit(w, r, host, nil, push, msg, true)
 			return
 		}
 		// Content rules run BEFORE the capability check: nobody is asked to approve code_write for a
@@ -118,7 +118,7 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 	if v := adoGitVerdict(need, push); !adoscope.Permits(grant.Capabilities, v) &&
 		!p.refuseADOGit(w, r, host, &v, push, fmt.Sprintf(
 			"Wardyn refused this git request: it needs %q (%s), and this run was not granted it.",
-			adoscope.Label(need), need)) {
+			adoscope.Label(need), need), true) {
 		return
 	}
 	// A push forwarded under git_push_any_branch is marked as the App lane
@@ -223,12 +223,16 @@ func adoGitReplayBody(r *http.Request, verb string, body io.Reader) (io.Reader, 
 // refuseADOGit is the ONE refusal point for git on the Azure DevOps Entra lane, and its hold point. held
 // is non-nil only for a capability the run doesn't hold; that request is escalated (awaitADOCapability)
 // and, if approved in time, refuseADOGit reports true and the caller forwards. Every other refusal is
-// answered here in git's own terms.
-func (p *Proxy) refuseADOGit(w http.ResponseWriter, r *http.Request, host string, held *adoscope.Verdict, push *adoGitPush, msg string) bool {
+// answered here in git's own terms. policyDecided is false for a refusal that is the proxy's own inability
+// to read the request (an encoded or malformed push, a path spelling), which names no policy.
+func (p *Proxy) refuseADOGit(w http.ResponseWriter, r *http.Request, host string, held *adoscope.Verdict, push *adoGitPush, msg string, policyDecided bool) bool {
 	if held != nil {
 		var ok bool
 		if ok, msg = p.awaitADOCapability(r.Context(), host, *held, adoGitAsk(r), msg); ok {
 			return true
+		}
+		if r.Context().Err() != nil {
+			return false // the client hung up mid-hold; it was never refused, so no row and no body
 		}
 	}
 	p.emitPATDecision(r, host, egress.Deny, ruleSourceADOGitDenied)
@@ -236,8 +240,10 @@ func (p *Proxy) refuseADOGit(w http.ResponseWriter, r *http.Request, host string
 		// Pack still on the wire: read it so git gets the answer rather than a reset connection.
 		_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, adoGitDrainLimit))
 	}
-	if line := p.attributeRefusal(w); line != "" {
-		msg += " " + line
+	if policyDecided {
+		if line := p.attributeRefusal(w); line != "" {
+			msg += " " + line
+		}
 	}
 	writeADOGitRefusal(w, push, msg)
 	return false
@@ -378,7 +384,7 @@ func readADOGitPush(r *http.Request) (head []byte, push *adoGitPush, msg string)
 	head, err := readReceivePackCommands(io.TeeReader(r.Body, &seen), "")
 	push = &adoGitPush{}
 	for b := seen.Bytes(); len(b) >= 4; {
-		n, perr := strconv.ParseUint(string(b[:4]), 16, 32)
+		n, perr := strconv.ParseUint(string(b[:4]), 16, 16)
 		if perr != nil || n < 5 || int(n) > len(b) {
 			break
 		}

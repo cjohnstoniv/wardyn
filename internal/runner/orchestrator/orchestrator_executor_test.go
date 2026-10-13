@@ -70,3 +70,24 @@ func TestOrchestrator_TargetFactsArePerTarget(t *testing.T) {
 		t.Error("an unregistered runner reported facts")
 	}
 }
+
+// An executor's facts carry its disk word and whether it can keep an ended sandbox: the pool says only
+// what every target does.
+func TestExecutorFactsCarryDiskWordAndKeep(t *testing.T) {
+	ender := &endingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1},
+		diskEnf: types.StorageEnforcementFilesystem, drives: true}}
+	plain := &fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}, diskEnf: types.StorageEnforcementEviction}
+	o := New(ender, plain)
+	ctx := context.Background()
+	fd, okd := o.ExecutorFacts(ctx, "docker")
+	fk, okk := o.ExecutorFacts(ctx, "k8s")
+	if !okd || !okk {
+		t.Fatalf("executor facts unknown: docker=%v k8s=%v", okd, okk)
+	}
+	if fd.EphemeralDiskEnforcement != types.StorageEnforcementFilesystem || !fd.KeepsEnded || !fd.UserDrives {
+		t.Errorf("docker facts %+v, want filesystem, keeps, drives", fd)
+	}
+	if fk.EphemeralDiskEnforcement != types.StorageEnforcementEviction || fk.KeepsEnded || fk.UserDrives {
+		t.Errorf("k8s facts %+v, want eviction, no keep, no drives", fk)
+	}
+}

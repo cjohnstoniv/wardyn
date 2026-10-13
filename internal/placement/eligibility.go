@@ -5,6 +5,7 @@ package placement
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,6 +24,9 @@ type CredentialOrigin struct {
 	Stored       bool
 	OwnNamespace bool
 	OwnerOnly    bool
+	// ResidentOptIn is an Azure DevOps connection's admin opt-in to
+	// runner_resident (types.ADOEntraConfig.RunnerResident); off by default.
+	ResidentOptIn bool
 }
 
 // CredentialIntent records a resolved credential-producing configuration before mint.
@@ -46,6 +50,12 @@ type LocalPlan struct {
 	SelfDefinedComponents      []string
 	LocalSelfDefinedComponents bool
 	Delivery                   DeliveryPolicy
+	// Posture is the candidate runner's stored, self-reported posture; nil when
+	// it never reported one.
+	Posture *types.RunnerPosture
+	// ConfinementFloor is the run's blast-radius floor
+	// (composer.RequiredConfinementFloor); "" when there is none.
+	ConfinementFloor types.ConfinementClass
 }
 
 // Refusal names the actual field that makes local execution ineligible.
@@ -84,12 +94,12 @@ func LocalEligibility(p LocalPlan) (runner.SandboxSpec, *Refusal) {
 		}
 	}
 	for _, path := range CredentialPaths(p.Spec) {
-		if r := classifyCredential(Entries, path, p.Origins[path], p.Delivery); r != nil {
+		if r := classifyCredential(Entries, path, p.Origins[path], p, credentialElement(p.Spec, path)); r != nil {
 			return runner.SandboxSpec{}, r
 		}
 	}
 	for _, intent := range p.CredentialIntents {
-		if r := classifyCredential(Entries, intent.Field, intent.Origin, p.Delivery); r != nil {
+		if r := classifyCredential(Entries, intent.Field, intent.Origin, p, reflect.Value{}); r != nil {
 			return runner.SandboxSpec{}, r
 		}
 	}
@@ -113,7 +123,8 @@ func viaOrgAdmits(row Entry, mode Mode) bool {
 // under policy: the same table rows and gate LocalEligibility applies to it.
 func ViaOrgGrant(origin CredentialOrigin, policy DeliveryPolicy) bool {
 	return origin.Class != ClassOwn && origin.Class != "" &&
-		classifyCredential(Entries, "ProxyConfig.Policy.EligibleGrants", origin, policy) == nil
+		classifyCredential(Entries, "ProxyConfig.Policy.EligibleGrants", origin, LocalPlan{Delivery: policy}, reflect.Value{}) == nil &&
+		policy.For(origin.Delivery).Mode == ModeViaOrg
 }
 
 // viaOrgPath reports whether the admitted credential at path is delivered
@@ -142,7 +153,9 @@ func matchingRows(rows []Entry, origin CredentialOrigin) []Entry {
 	return append(exact, general...)
 }
 
-func classifyCredential(entries entrySource, path string, origin CredentialOrigin, delivery DeliveryPolicy) *Refusal {
+// classifyCredential judges one credential. leaf is the dispatched value at
+// path; it is invalid for an intent, which has no value yet.
+func classifyCredential(entries entrySource, path string, origin CredentialOrigin, p LocalPlan, leaf reflect.Value) *Refusal {
 	if origin.Class == "" {
 		return refuse(ReasonPlacementCredential, path, "credential provenance is unknown")
 	}
@@ -170,9 +183,18 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 			}
 			return nil
 		case RuleDelivery, RuleViaOrgRefuse, RuleNotConfigured:
-			mode := delivery.For(row.Delivery).Mode
+			mode := p.Delivery.For(row.Delivery).Mode
 			if viaOrgAdmits(row, mode) {
 				return nil
+			}
+			if mode == ModeRunnerResident && row.Rule == RuleDelivery {
+				if r := residentRefusal(p, path, origin, row.Delivery); r != nil {
+					return r
+				}
+				if st == StructGrantKind {
+					leaf = reflect.Value{} // grant eligibility names a scope, never a value
+				}
+				return residentValueRefusal(path, leaf)
 			}
 			return refuse(ReasonPlacementCredential, path, fmt.Sprintf("%s credential is unavailable on a local runner (delivery %s has no implemented authority)", row.Delivery, mode))
 		default:
@@ -180,4 +202,96 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 		}
 	}
 	return refuse(ReasonPlacementCredential, path, "credential variant has no permitted local rule")
+}
+
+// residentRefusal is the runner_resident gate (OD-12, design §7.4, Q7): the
+// class may be resident, an Azure DevOps connection opted in, the run has no
+// blast-radius floor (a runner-asserted class never satisfies one for a value
+// the runner holds), and the runner's posture meets the class's requirement.
+func residentRefusal(p LocalPlan, path string, origin CredentialOrigin, class string) *Refusal {
+	switch {
+	case !slices.Contains(classModes[class], ModeRunnerResident):
+		return refuse(ReasonPlacementCredential, path, class+" credential is never runner_resident")
+	case class == ClassADOMintedPAT && !origin.ResidentOptIn:
+		return refuse(ReasonPlacementCredential, path, "the Azure DevOps connection has not opted in to runner_resident")
+	case p.ConfinementFloor != "":
+		return refuse(ReasonRunnerPostureUnmet, path, "confinement_class: a runner-asserted class never meets the "+string(p.ConfinementFloor)+" floor for a runner_resident credential")
+	}
+	if field := PostureUnmet(p.Delivery.For(class).RequirePosture, p.Posture); field != "" {
+		return refuse(ReasonRunnerPostureUnmet, path, field+": the runner's reported posture does not meet "+class+"'s requirement")
+	}
+	return nil
+}
+
+// residentValueRefusal keeps an admitted runner_resident value off every
+// channel but DeliverResident: the dispatched leaf must already be its
+// placeholder. An intent (Azure DevOps) and a grant's eligibility record have
+// no dispatched value to replace, so they stay refused until the org's deliver
+// step authors one; classifyCredential therefore never admits a resident grant
+// record, whatever the caller (via_org admission included) concludes from nil.
+func residentValueRefusal(path string, leaf reflect.Value) *Refusal {
+	if !leaf.IsValid() {
+		return refuse(ReasonPlacementCredential, path, "runner_resident delivery of this credential is not built yet")
+	}
+	if !residentPlaceholderLeaf(leaf) {
+		return refuse(ReasonPlacementCredential, path, "a runner_resident value is dispatched only as its placeholder, never inline")
+	}
+	return nil
+}
+
+// residentPlaceholderLeaf reports whether v is a placeholder: a string, a byte
+// slice, or a managed file whose Content is one.
+func residentPlaceholderLeaf(v reflect.Value) bool {
+	for v.Kind() == reflect.Pointer && !v.IsNil() {
+		v = v.Elem()
+	}
+	switch {
+	case v.Kind() == reflect.String:
+		_, ok := ResidentGrantID(v.String())
+		return ok
+	case v.Kind() == reflect.Slice && v.Type().Elem().Kind() == reflect.Uint8:
+		_, ok := ResidentGrantID(string(v.Bytes()))
+		return ok
+	case v.Kind() == reflect.Struct && v.Type() == reflect.TypeFor[runner.ManagedFile]():
+		return residentPlaceholderLeaf(v.FieldByName("Content"))
+	}
+	return false
+}
+
+// credentialElement is the value at a CredentialPaths path; invalid when the
+// path names nothing in s.
+func credentialElement(s runner.SandboxSpec, path string) reflect.Value {
+	root := reflect.ValueOf(s)
+	rest, ok := strings.CutPrefix(path, "SandboxSpec.")
+	if !ok {
+		if rest, ok = strings.CutPrefix(path, "ProxyConfig."); !ok {
+			return reflect.Value{}
+		}
+		root = root.FieldByName("ProxyConfig")
+	}
+	field, key, indexed := strings.Cut(rest, "[")
+	v := root.FieldByName(field)
+	if !v.IsValid() || !indexed {
+		return v
+	}
+	key = strings.TrimSuffix(key, "]")
+	switch v.Kind() {
+	case reflect.Map:
+		for _, k := range v.MapKeys() {
+			if fmt.Sprint(k.Interface()) == key {
+				return v.MapIndex(k)
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		if i, err := strconv.Atoi(key); err == nil && i >= 0 && i < v.Len() {
+			return v.Index(i)
+		}
+	}
+	return reflect.Value{}
+}
+
+// CredentialProxyField reports whether the table classifies a ProxyConfig field
+// as credential-bearing: the only fields a runner fills a resident value into.
+func CredentialProxyField(field string) bool {
+	return rulesOf(Entries(StructProxyConfig, field)).credential
 }

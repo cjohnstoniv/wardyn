@@ -95,6 +95,10 @@ type SetupStatus struct {
 	// wire each one a managed model credential or a container-login
 	// subscription. ADDITIVE field; omitted when empty.
 	Harnesses []SetupHarnessTool `json:"harnesses,omitempty"`
+	// HarnessSets is each combination of two or more harnesses one declared
+	// sandbox image carries, as sorted ids: only combinations whose every
+	// harness is in Harnesses (this caller may use it). Never null.
+	HarnessSets [][]string `json:"harness_sets"`
 	// LLMReady is the server-computed "does SOME run's LLM access path exist"
 	// verdict (HIGH-4 review fix): at least one enabled model provider serves an
 	// agent (llmPathExists). A DEPLOYMENT fact — whether THIS person can use one
@@ -422,6 +426,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
 	}
+	resp.HarnessSets = visibleHarnessSets(s.cfg.AgentImages, resp.Harnesses)
 	// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's
 	// RoleSecurityAdmin): what this redaction drops is the DEPLOYER's funnel —
 	// the environment/credential checklist, resident-CLI login detection,

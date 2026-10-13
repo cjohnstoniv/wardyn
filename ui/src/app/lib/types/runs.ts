@@ -77,6 +77,16 @@ export type RunState =
   // neutral badge instead of crashing the console (see primitives.tsx).
   | (string & {});
 
+/** Go: types.RunQueue. `position` is how many runs wait ahead in the pool, never whose. */
+export interface RunQueue {
+  pool_id: string;
+  queued_at: string;
+  deadline_at: string;
+  position: number;
+  /** runner_pool_at_capacity, runner_pool_no_runner_free or runner_pool_runners_at_capacity (RUN_WAIT_REASON). */
+  reason: string;
+}
+
 export interface AgentRun {
   id: string;
   created_at: string;
@@ -111,19 +121,27 @@ export interface AgentRun {
   // The runner a local run landed on. Absent for a remote run and for a
   // pre-0.9 row; the Go side omits the key on NULL, never sends "".
   runner_id?: string;
+  // Read-side facts about that runner, on a local run only (Go: AgentRun.RunnerName and the next two):
+  // its name, whether this process has it connected, and when it last was. Never stored. The name is
+  // the one the run was created under (a runner is never renamed), so a revoked runner's run keeps it.
+  // All three are absent when the runner could not be read, which is not the same as offline:
+  // runner_online false is a fact, absent is "unknown".
+  runner_name?: string;
+  runner_online?: boolean;
+  runner_last_seen_at?: string;
   // Who can attest this run's evidence: "substrate" (the organisation's own) or
   // "runner_asserted" (a runner said so, nobody can verify). Empty only for a
   // legacy or unresolved record, hence optional here.
   evidence_source?: RunEvidenceSource;
   // The runner pool the run was admitted into, and how it was chosen (Go:
   // AgentRun.RunnerPool*), written once at create. A pool is a label, never
-  // admission: the run goes to the exact target in runner_id (self-hosted) or
-  // runner_pool_executor (remote-provided). All absent for a run from before
+  // admission: the run goes to the exact runner in runner_id (self-hosted) or
+  // remote_runner_id (remote-hosted). All absent for a run from before
   // pools and for a server-originated run that names none.
   runner_pool_id?: string;
   runner_pool_revision?: number;
   runner_pool_selection?: RunnerPoolSelection;
-  runner_pool_executor?: string;
+  remote_runner_id?: string;
   sandbox_ref?: string;
   // interactive runs come up idle (no agent task) so a human attaches and drives
   // them via the WS PTY; the runs board badges these as "awaiting attach".
@@ -248,6 +266,8 @@ export interface AgentRun {
   lifetime_cap_at?: string;
   // When the run left the pool queue (migration 0162); absent for a run that never waited.
   admitted_at?: string;
+  // A waiting run's place in its pool's queue; present only while the run is QUEUED.
+  queue?: RunQueue;
   wait_budget_sec?: number;
   run_limits?: RunLimits;
   governance_profile_id?: string;
@@ -485,8 +505,10 @@ export type RunPolicyCause =
   | "mirror"
   | "model_access"
   | "git_broker"
+  | "overlay"
   | "profile"
   | "org_disk"
+  | "pool_disk"
   | "restart"
   | "limits"
   | "launch";

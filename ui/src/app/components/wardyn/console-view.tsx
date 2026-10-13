@@ -66,7 +66,7 @@ export function useViewAccess(): ViewAccess {
 // The User-view pages the rules act on (§2.3). Every other user-side path was
 // a pre-split route; M-1b deleted them, so it now falls to the ordinary
 // catch-all like any other unmatched path.
-const TWIN = /^\/(runs(\/(?!new$)[^/]+)?|approvals|workspaces(\/[^/]+)?|secrets)$/;
+const TWIN = /^\/(runs(\/(?!new$)[^/]+)?|approvals|workspaces(\/[^/]+)?|secrets|templates)$/;
 const USER_ONLY = /^\/(runs\/new|account|setup)$/;
 
 export type ViewVerdict =

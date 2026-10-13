@@ -24,13 +24,14 @@ import (
 // (internal/api/user_drives.go) to make a round trip through it MEAN
 // something: POST /drives refuses a name another drive already holds (409,
 // the real UNIQUE(name) behavior) rather than silently accepting a second
-// row, and POST /drives/grants upserts by the natural key (subject_type,
-// subject) rather than accumulating a row per call. A test that only echoed
+// row, and POST /drives/grants keys on (subject_type, subject, drive_id):
+// with `additional` it upserts that one row, without it it REPLACES the
+// subject's allocations with this one, as the real server does. A test that only echoed
 // back whatever it received would pass even if ApplyDrives sent POST twice
 // for an already-created drive; this one would 409.
 type fakeDriveServer struct {
 	drives map[uuid.UUID]sdk.UserDrive
-	grants map[string]sdk.UserDriveGrant // key: subject_type+"\x00"+subject
+	grants map[string]sdk.UserDriveGrant // key: subject_type+"\x00"+subject+"\x00"+drive_id
 }
 
 func newFakeDriveServer() *fakeDriveServer {
@@ -40,8 +41,8 @@ func newFakeDriveServer() *fakeDriveServer {
 	}
 }
 
-func (f *fakeDriveServer) grantKey(subjectType sdk.CapabilitySubjectType, subject string) string {
-	return string(subjectType) + "\x00" + subject
+func (f *fakeDriveServer) grantKey(subjectType sdk.CapabilitySubjectType, subject string, driveID uuid.UUID) string {
+	return string(subjectType) + "\x00" + subject + "\x00" + driveID.String()
 }
 
 func (f *fakeDriveServer) document() sdk.DrivesDocument {
@@ -76,7 +77,7 @@ func sortDrives(d []sdk.UserDriveListItem) {
 
 func sortGrants(g []sdk.UserDriveGrant) {
 	for i := 1; i < len(g); i++ {
-		for j := i; j > 0 && g[j].Subject < g[j-1].Subject; j-- {
+		for j := i; j > 0 && (g[j].Subject < g[j-1].Subject || g[j].Subject == g[j-1].Subject && g[j].DriveID.String() < g[j-1].DriveID.String()); j-- {
 			g[j], g[j-1] = g[j-1], g[j]
 		}
 	}
@@ -135,8 +136,19 @@ func (f *fakeDriveServer) handler() http.HandlerFunc {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/drives/grants":
 			var req sdk.DriveGrantRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			key := f.grantKey(req.SubjectType, req.Subject)
+			key := f.grantKey(req.SubjectType, req.Subject, req.DriveID)
 			existing, had := f.grants[key]
+			if !req.Additional {
+				// Replace: the subject ends with exactly this drive.
+				for k, other := range f.grants {
+					if other.SubjectType == req.SubjectType && other.Subject == req.Subject && k != key {
+						if !had {
+							existing, had = other, true
+						}
+						delete(f.grants, k)
+					}
+				}
+			}
 			g := sdk.UserDriveGrant{
 				SubjectType: req.SubjectType, Subject: req.Subject, DriveID: req.DriveID,
 				Priority: req.Priority, SizeMiBOverride: req.SizeMiBOverride,
@@ -308,6 +320,46 @@ func TestDriveApply_GetApplyRoundTripIsANoOp(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before, after) {
 		t.Errorf("get before apply(get()) != get after — the round trip changed something.\nbefore: %+v\nafter:  %+v", before, after)
+	}
+}
+
+// TestDriveApply_RoundTripKeepsASubjectsSeveralDrives: a subject granted two
+// drives still holds both after `set` and after get followed by set. A grant
+// POSTed without `additional` would replace the subject's other drive.
+func TestDriveApply_RoundTripKeepsASubjectsSeveralDrives(t *testing.T) {
+	fake := newFakeDriveServer()
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+	if _, err := runDriveApply(t, srv.URL, sdk.DrivesDocument{Drives: seedDrives()}); err != nil {
+		t.Fatalf("bootstrap drives: %v", err)
+	}
+	var ids []uuid.UUID
+	for id := range fake.drives {
+		ids = append(ids, id)
+	}
+	grants := []sdk.UserDriveGrant{
+		{SubjectType: sdk.CapabilitySubjectUser, Subject: "alice", DriveID: ids[0], Enabled: true},
+		{SubjectType: sdk.CapabilitySubjectUser, Subject: "alice", DriveID: ids[1], Enabled: true},
+	}
+	if _, err := runDriveApply(t, srv.URL, sdk.DrivesDocument{Grants: grants}); err != nil {
+		t.Fatalf("bootstrap grants: %v", err)
+	}
+	if len(fake.grants) != 2 {
+		t.Fatalf("set left alice %d allocations, want both", len(fake.grants))
+	}
+	getOut, err := runDriveGet(t, srv.URL)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	var doc sdk.DrivesDocument
+	if err := json.Unmarshal([]byte(getOut), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runDriveApply(t, srv.URL, doc); err != nil {
+		t.Fatalf("round-trip apply: %v", err)
+	}
+	if len(fake.grants) != 2 {
+		t.Fatalf("get then set left alice %d allocations, want both", len(fake.grants))
 	}
 }
 

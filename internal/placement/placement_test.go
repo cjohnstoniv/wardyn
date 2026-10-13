@@ -132,7 +132,7 @@ func TestEveryClassHasARowOrIsNotSent(t *testing.T) {
 
 func TestReasonsMatchDesign(t *testing.T) {
 	want := map[Reason]int{
-		"placement_required": 422, "placement_unavailable": 422, "placement_denied": 403, "placement_credential": 422,
+		"placement_unavailable": 422, "placement_denied": 403, "placement_credential": 422,
 		"placement_trusted_output": 422, "placement_component_self_defined": 403, "placement_capability": 422,
 		"placement_local_path": 422, "runner_offline": 422, "runner_ambiguous": 422, "runner_not_found": 404,
 		"runner_unclaimed": 409, "runner_revoked": 401, "runner_token_invalid": 401, "runner_claim_mismatch": 403,
@@ -140,9 +140,11 @@ func TestReasonsMatchDesign(t *testing.T) {
 		"relay_runner_mismatch": 403, "relay_required": 403, "relay_route_refused": 403, "delivery_via_org": 403,
 		"delivery_runner_resident": 403, "delivery_not_via_org": 403, "via_org_destination_refused": 403,
 		"via_org_cap_exceeded": http.StatusTooManyRequests,
+		// runner_at_capacity is the runner's runs at once (migration 0172), after the design.
+		"runner_at_capacity": 422,
 	}
 	if got := Reasons(); len(got) != len(want) {
-		t.Fatalf("%d reasons, design §12.3 lists %d", len(got), len(want))
+		t.Fatalf("%d reasons, design §12.3 lists %d plus runner_at_capacity", len(got), len(want)-1)
 	}
 	for r, status := range want {
 		if r.Status() != status || !r.Valid() {
@@ -244,7 +246,6 @@ func TestDeliveryPolicyValidate(t *testing.T) {
 		"oauth_subscription fixed": {Classes: map[string]ClassPolicy{"oauth_subscription": {Mode: ModeOwn}}},
 		"cloud_sts fixed":          {Classes: map[string]ClassPolicy{"cloud_sts": {Mode: ModeRefuse}}},
 		"github_token resident":    {Classes: map[string]ClassPolicy{"github_token": {Mode: ModeRunnerResident}}},
-		"ado_minted_pat resident":  {Classes: map[string]ClassPolicy{"ado_minted_pat": {Mode: ModeRunnerResident}}},
 		"env_secret via_org":       {Classes: map[string]ClassPolicy{"env_secret": {Mode: ModeViaOrg}}},
 		"bedrock role via_org":     {Classes: map[string]ClassPolicy{"bedrock_role_credentials": {Mode: ModeViaOrg}}},
 		"posture on via_org":       {Classes: map[string]ClassPolicy{"api_key": {Mode: ModeViaOrg, RequirePosture: posture}}},
@@ -271,8 +272,9 @@ func TestDeliveryClassesMatchDesign(t *testing.T) {
 	if got := DeliveryClasses(); !slices.Equal(got, want) {
 		t.Fatalf("classes = %v", got)
 	}
-	// OD-12 bars runner_resident for github_token, ado_minted_pat and cloud_sts; oauth_subscription is own only.
-	barred := map[string]bool{"github_token": true, "ado_minted_pat": true, "cloud_sts": true, "oauth_subscription": true}
+	// OD-12 bars runner_resident for github_token and cloud_sts; oauth_subscription is own only. The
+	// 2026-10-10 ruling lets ado_minted_pat be resident, per connection (residentRefusal).
+	barred := map[string]bool{"github_token": true, "cloud_sts": true, "oauth_subscription": true}
 	for _, c := range DeliveryClasses() {
 		if resident := slices.Contains(AllowedModes(c), ModeRunnerResident); resident == barred[c] {
 			t.Errorf("%s: runner_resident allowed=%v", c, resident)

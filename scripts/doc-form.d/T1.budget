@@ -17,4 +17,5 @@
 # threatmodel/THREAT-MODEL.md 52303 measured after R2-runner-2 merge.
 # threatmodel/THREAT-MODEL.md 52431 after the via_org B6 bullet (H12, train 10).
 # threatmodel/THREAT-MODEL.md 52492 measured after train 10 F-1508-author merge.
-threatmodel/THREAT-MODEL.md=52492
+# threatmodel/THREAT-MODEL.md 52620 adds 128 (0.9 DS1-S2a, train 12): the per-harness credential same-uid residual.
+threatmodel/THREAT-MODEL.md=52620

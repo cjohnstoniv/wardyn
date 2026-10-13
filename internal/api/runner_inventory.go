@@ -21,6 +21,7 @@ import (
 //	DELETE /runners/tokens/{id}                                        security
 //	PUT /runners/settings                                              admin (SUPER)
 //	GET /me/runners, /me/runners/{id}                                  the caller's own runners only
+//	PUT /me/runners/{id}                                               the runner's owner (runner_limits.go)
 func (s *Server) mountRunnerInventoryRoutes(r, operatorOnly, securityOps chi.Router) {
 	securityOps.Get("/runners", s.handleListRunners)
 	securityOps.Get("/runners/tokens", s.handleListRunnerTokens)
@@ -30,6 +31,7 @@ func (s *Server) mountRunnerInventoryRoutes(r, operatorOnly, securityOps chi.Rou
 	securityOps.Get("/runners/{id}", s.handleGetRunner)
 	r.Get("/me/runners", s.handleListMyRunners)
 	r.Get("/me/runners/{id}", s.handleGetMyRunner)
+	r.Put("/me/runners/{id}", s.handleUpdateMyRunner)
 }
 
 func (s *Server) runnerInventoryStore(w http.ResponseWriter) (store.RunnerInventoryStore, bool) {
@@ -55,14 +57,15 @@ func runnerLapsed(row types.Runner, now time.Time) bool {
 // runnerView is the row as a reader sees it. admin is the administrators' view: the owner is named
 // and the fingerprint is whole. On an owner's own route an unclaimed runner's fingerprint is
 // abbreviated, so the console cannot be the place it is copied from into the claim.
-func (s *Server) runnerView(row types.Runner, runs int, admin bool) types.RunnerView {
+func (s *Server) runnerView(row types.Runner, runs, running int, admin bool) types.RunnerView {
 	v := types.RunnerView{
 		ID: row.ID, Name: row.Name, State: row.State, MintedBy: row.MintedBy,
 		Online:         row.State == types.RunnerClaimed && s.runnerOnline(row.ID),
 		KeyFingerprint: row.KeyFingerprint, Version: row.Version, CreatedAt: row.CreatedAt,
 		ClaimedAt: row.ClaimedAt, LastSeenAt: row.LastSeenAt, RevokedAt: row.RevokedAt,
 		RevokedBy: row.RevokedBy, RevokeReason: row.RevokeReason,
-		PostureSource: row.PostureSource, RunsActive: runs,
+		PostureSource: row.PostureSource, RunsActive: runs, MaxRuns: row.MaxRuns, Running: running,
+		MachineName: row.MachineName,
 	}
 	if admin {
 		v.Owner = row.Owner
@@ -77,7 +80,30 @@ func (s *Server) runnerView(row types.Runner, runs int, admin bool) types.Runner
 		posture := row.Posture
 		v.Posture, v.PostureReportedAt = &posture, row.PostureReportedAt
 	}
+	if row.State == types.RunnerClaimed {
+		v.Capacity, v.Classes, v.AllowedRoots = s.runnerReportedCaps(row.ID)
+	}
 	return v
+}
+
+// runnerReportedCaps is the runner's last caps event as this process holds it. It reads the endpoint
+// map and never creates one (runnerEndpoint would): a runner that has not connected here reports nothing.
+func (s *Server) runnerReportedCaps(id uuid.UUID) (*types.RunnerCapacity, []types.ConfinementClass, []string) {
+	s.runnerStreams.subsMu.Lock()
+	ep, ok := s.runnerStreams.subs[id]
+	s.runnerStreams.subsMu.Unlock()
+	if !ok {
+		return nil, nil, nil
+	}
+	caps, ok := ep.sub.Caps()
+	if !ok {
+		return nil, nil, nil
+	}
+	var capacity *types.RunnerCapacity
+	if caps.CPUMillisMax > 0 && caps.MemoryMiBMax > 0 {
+		capacity = &types.RunnerCapacity{CPUMillisMax: caps.CPUMillisMax, MemoryMiBMax: caps.MemoryMiBMax}
+	}
+	return capacity, slices.Clone(caps.Support.Classes), slices.Clone(caps.AllowedRoots)
 }
 
 const (
@@ -92,7 +118,7 @@ func abbreviateFingerprint(fp string) (string, bool) {
 	return fp[:fingerprintHead] + "…" + fp[len(fp)-fingerprintTail:], true
 }
 
-// runnerViews is rows as views, each with its count of runs.
+// runnerViews is rows as views, each with its counts of runs.
 func (s *Server) runnerViews(w http.ResponseWriter, r *http.Request, rs store.RunnerInventoryStore, rows []types.Runner, admin bool) ([]types.RunnerView, bool) {
 	ids := make([]uuid.UUID, len(rows))
 	for i, row := range rows {
@@ -103,20 +129,39 @@ func (s *Server) runnerViews(w http.ResponseWriter, r *http.Request, rs store.Ru
 		writeServerError(w, r, "count runs by runner", err)
 		return nil, false
 	}
+	running, err := rs.RunnerSlotHolders(r.Context(), ids)
+	if err != nil {
+		writeServerError(w, r, "count sandbox-holding runs by runner", err)
+		return nil, false
+	}
+	pools, err := rs.RunnerPoolsOf(r.Context(), ids)
+	if err != nil {
+		writeServerError(w, r, "list runner pool memberships", err)
+		return nil, false
+	}
 	out := make([]types.RunnerView, len(rows))
 	emails := map[string]string{}
+	// A name is a courtesy: a failed lookup leaves the opaque subject, never fails the read.
+	emailOf := func(principal string) string {
+		email, seen := emails[principal]
+		if !seen {
+			email, _ = s.principalEmail(r.Context(), principal)
+			emails[principal] = email
+		}
+		return email
+	}
 	for i, row := range rows {
-		out[i] = s.runnerView(row, runs[row.ID], admin)
-		if admin || row.MintedBy == "" || row.MintedBy == row.Owner {
+		out[i] = s.runnerView(row, runs[row.ID], running[row.ID], admin)
+		out[i].Pools = append([]types.RunnerPoolRef{}, pools[row.ID]...)
+		if admin {
 			continue
 		}
-		email, seen := emails[row.MintedBy]
-		if !seen {
-			// A name is a courtesy: a failed lookup leaves the opaque subject, never fails the read.
-			email, _ = s.principalEmail(r.Context(), row.MintedBy)
-			emails[row.MintedBy] = email
+		if row.MintedBy != "" && row.MintedBy != row.Owner {
+			out[i].MintedByEmail = emailOf(row.MintedBy)
 		}
-		out[i].MintedByEmail = email
+		if row.RevokedBy != "" {
+			out[i].RevokedByEmail = emailOf(row.RevokedBy)
+		}
 	}
 	return out, true
 }
@@ -163,7 +208,24 @@ func (s *Server) handleGetRunner(w http.ResponseWriter, r *http.Request) {
 	s.getRunnerView(w, r, "", true)
 }
 
-// handleListMyRunners is GET /api/v1/me/runners: the caller's own unclaimed and claimed runners.
+// myRunnerRevokedShown is how long a runner someone else revoked stays on its owner's list, so the
+// owner learns it happened.
+const myRunnerRevokedShown = 7 * 24 * time.Hour
+
+// myRunnerHidden reports a row the owner's own list leaves out: another person's, a lapsed unclaimed
+// one, and a revoked one unless someone other than the owner revoked it within myRunnerRevokedShown.
+func myRunnerHidden(row types.Runner, owner string, now time.Time) bool {
+	if row.Owner != owner || runnerLapsed(row, now) {
+		return true
+	}
+	if row.State != types.RunnerRevoked {
+		return false
+	}
+	return row.RevokedAt == nil || row.RevokedBy == owner || row.RevokedAt.Before(now.Add(-myRunnerRevokedShown))
+}
+
+// handleListMyRunners is GET /api/v1/me/runners: the caller's own unclaimed and claimed runners, and
+// any a different person revoked in the last week.
 func (s *Server) handleListMyRunners(w http.ResponseWriter, r *http.Request) {
 	if !s.requireRunnersEnabled(w, r) {
 		return
@@ -182,9 +244,7 @@ func (s *Server) handleListMyRunners(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.cfg.Now().UTC()
-	rows = slices.DeleteFunc(rows, func(row types.Runner) bool {
-		return row.Owner != owner || row.State == types.RunnerRevoked || runnerLapsed(row, now)
-	})
+	rows = slices.DeleteFunc(rows, func(row types.Runner) bool { return myRunnerHidden(row, owner, now) })
 	if views, ok := s.runnerViews(w, r, rs, rows, false); ok {
 		writeJSON(w, http.StatusOK, views)
 	}

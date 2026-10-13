@@ -547,7 +547,7 @@ Two layers, in this order:
 | `PATGrants` (`per_user` stored PAT) | `own` | Allowed |
 | `PATGrants` (`shared` `CredentialSource`) | `operator` | `via_org` (broker-route shape) or refuse |
 | `BrokeredPATGrantIDs` | follows `PATGrants` | Same as its grant |
-| `ADOGrant` (minted PAT from a captured Entra sign-in) | `brokered` | `via_org` or refuse |
+| `ADOGrant` (minted PAT or bearer from a captured Entra sign-in) | `brokered` | `via_org`, `runner_resident` on a connection that opted in, or refuse |
 | `ADOGrant` (`own_pat` token mode) | `own` | Allowed |
 | `AzureGates` (Azure Foundry, the person's own Entra sign-in) | `own` | Allowed |
 | `AzureGates` (Azure Foundry, any shared capture) | `brokered` | Per OD-12 ([§7.2](#72-per-kind-bounds)) |
@@ -659,11 +659,12 @@ Run detail and the header show `placement`, the runner's name, `placement_filled
 | `git_pat_broker` | `git_pat` broker route (`/wardyn/git/<host>/`) | `via_org`, `runner_resident`, `refuse` | The route shape can be relayed |
 | `git_pat_helper` | `git_pat` credential-helper shape | `runner_resident`, `refuse` | The helper hands it to git |
 | `github_token` | Brokered GitHub App installation token | `via_org`, `refuse` | Resident would bypass branch namespace and push-content review |
-| `ado_minted_pat` | Azure DevOps minted PAT | `via_org`, `refuse` | Resident would bypass the ADO REST gate and capability hold |
+| `ado_minted_pat` | Azure DevOps minted PAT or bearer | `via_org`, `runner_resident` (per connection, opt-in), `refuse` | Resident sits in the runner's own proxy, which keeps the ADO REST gate and capability hold |
 | `cloud_sts` | `cloud_sts` | `refuse`, not configurable | Needs SPIRE attestation no laptop sandbox has |
 | — | `upstream_proxy_secret_ref` | not a class | The runner's own upstream config applies (OD-8) |
 
-- OD-12 bars `runner_resident` only for `github_token`, `ado_minted_pat` and `cloud_sts`. The header-shaped classes keep it.
+- OD-12 bars `runner_resident` only for `github_token` and `cloud_sts`. The header-shaped classes keep it.
+- Owner ruling 2026-10-10: `ado_minted_pat` may be `runner_resident`, off by default. A super admin opts in per Azure DevOps connection (`entra.runner_resident`), and a second opt-in (`entra.runner_resident_sandbox`) also puts it in the sandbox.
 - A resident value is static for the run, so a short-lived token stops working at its expiry. Re-delivery is a follow-on.
 - H7 rule: a class is eligible when its best allowed mode is available for this runner. Otherwise local placement is refused, naming the credential and the missing mode or posture.
 - #475 (per-person Azure DevOps), rewritten: the human creates runs at the org; ADO capture stays org-side; brokered ADO is `via_org` or `refuse`.
@@ -736,7 +737,7 @@ New governance target `local_credential_delivery`, written through the governanc
 | Writer | `isSecurityOperator`; four-eyes where enabled |
 | Default | Every class absent means `refuse` |
 | Class keys | The closed set in [§7.2](#72-per-kind-bounds); an unknown key is `400` |
-| `require_posture` | Only on `runner_resident`; fields `mdm_managed`, `disk_encrypted` (booleans) and `os_min` (per-OS minimum version) |
+| `require_posture` | Only on `runner_resident`; fields `mdm_managed`, `disk_encrypted` (booleans) and `os_min` (per-OS minimum version). At create no runner is bound yet, so a nil posture refuses every class that requires one |
 | Validation | A mode outside its class's bounds is `400`; `cloud_sts` and `oauth_subscription` are not writable |
 | Audit | `credential.delivery.write` with `before` / `after` |
 | Per run | `run.create` records `delivery: [{grant_id, class, mode, posture?}]`; grants persist `credential_grants.delivery` |
@@ -927,7 +928,7 @@ Pattern: a refusal asserts "no sandbox exists and nothing was minted", not just 
 | OD-8 classification | Closed switch at three chokepoints (create, dispatch, revive); `own` material is readable by its owner by design |
 | Spool replay | Spooled decisions are self-reported by the runner and carried on its own stream; their content is `runner_asserted` |
 | `via_org` | The developer can use an org credential for the run's life, never read it; request plaintext is visible to the laptop proxy |
-| `runner_resident` | Readable by a root developer; erase is best-effort; posture is self-reported |
+| `runner_resident` | Any process running as the runner's user can read it; erase is best-effort; posture is self-reported |
 | Offline window | Up to `1h5m` of egress on cached policy with a bounded spool; replaces #54 for local runs |
 | Revoked while offline | The sandbox runs until reconnect; tokens are denied at once |
 | Sync and bind write-back | Agent-authored content the developer later executes; mitigations in [§9.3](#93-safety-defaults); scripts such as `Makefile` remain |

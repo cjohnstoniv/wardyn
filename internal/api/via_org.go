@@ -20,6 +20,8 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -97,6 +99,25 @@ func (s *Server) handleViaOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer run.release(st)
+	// A cancelled stream (run end, release, idle) must return even while its Write is blocked on a
+	// peer that stopped reading: the server sets no write timeout (streams are long), so the
+	// deadline is set here. The stop does not wait for a callback already running, so the handler's
+	// return is fenced under mu: a deadline is never set on a writer ServeHTTP has handed back.
+	var mu sync.Mutex
+	returned := false
+	stopWriteDeadline := context.AfterFunc(st.ctx, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if !returned {
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now())
+		}
+	})
+	defer func() {
+		stopWriteDeadline()
+		mu.Lock()
+		returned = true
+		mu.Unlock()
+	}()
 	out := viaOrgEngineRequest(r.WithContext(st.ctx), rest, restEsc, dest, st)
 	cw := &viaOrgCountingWriter{ResponseWriter: w, st: st}
 	if dest.broker {
@@ -327,7 +348,7 @@ func (s *Server) viaOrgEngineConfig(ctx context.Context, runID uuid.UUID) (*prox
 		return nil, scErr
 	}
 	cfg.GitGrants, cfg.ViaOrgRoutes = git, routes
-	cfg.PATGrants, cfg.BrokeredPATGrantIDs, cfg.ADOGrant, cfg.AzureGates = nil, nil, nil, nil
+	cfg.PATGrants, cfg.BrokeredPATGrantIDs, cfg.ADOGrant, cfg.AzureGates, cfg.GitHubAPI = nil, nil, nil, nil, nil
 	cfg.MITMHosts, cfg.MITMLLM, cfg.MITMCACertPEM, cfg.MITMCAKeyPEM = slices.Compact(slices.Sorted(slices.Values(hosts))), false, "", ""
 	cfg.DecisionSpoolDir, cfg.LLMUpstreams = "", nil
 	cfg.InternalHosts = viaOrgInternalHosts(proxyInternalHosts(sc.InternalHosts), hosts)

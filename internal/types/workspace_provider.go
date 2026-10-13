@@ -208,6 +208,15 @@ type ADOEntraConfig struct {
 	// RESTAPI: brokered REST calls, or only git traffic. Default true; read
 	// via RESTAPIEnabled, never directly.
 	RESTAPI *bool `json:"rest_api,omitempty"`
+	// RunnerResident opts this connection's minted tokens in to runner_resident
+	// delivery: held in a self-hosted runner's OS keystore for the run and
+	// injected by the runner's own proxy, where the class's delivery policy and
+	// posture requirement allow it. Off by default.
+	RunnerResident bool `json:"runner_resident,omitempty"`
+	// RunnerResidentSandbox also hands that token into the sandbox, where the
+	// agent can use it past the REST gate and capability holds. Requires
+	// RunnerResident.
+	RunnerResidentSandbox bool `json:"runner_resident_sandbox,omitempty"`
 }
 
 // RESTAPIEnabled: the rest_api default (unset or nil receiver) is enabled.

@@ -6,14 +6,16 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { PLACEMENT_REASONS } from "./new-run-refusals";
 import golden from "./runner-pool-refusals.golden.json";
 import {
   BARRIER_LABEL,
-  HOSTING_LABEL,
+  POOL_OFFLINE,
   RUN_END_REASON_SENTENCE,
   RUN_WAIT,
   RUN_WAIT_REASON,
   RUN_TYPE_PLURAL,
+  RUNNER_CAPACITY,
   RUNNER_POOL_REASONS,
   RUNNER_POOL_REFUSAL,
   RUNNER_POOL_REFUSAL_BY_KEY,
@@ -33,8 +35,9 @@ const root = repoRoot();
 
 describe("runner pool refusal sentences", () => {
   it("are the golden bytes the server's twin is pinned to", () => {
-    expect(golden.map((g) => g.key).sort()).toEqual([...Object.keys(RUNNER_POOL_REFUSAL), "WAIT_AT_CAPACITY"].sort());
-    for (const g of golden.filter((x) => x.key !== "WAIT_AT_CAPACITY")) {
+    const waits = ["WAIT_AT_CAPACITY", "WAIT_NO_RUNNER_FREE", "WAIT_RUNNERS_AT_CAPACITY", "NO_ONLINE_RUNNER", "RUNNER_AT_CAPACITY"];
+    expect(golden.map((g) => g.key).sort()).toEqual([...Object.keys(RUNNER_POOL_REFUSAL), ...waits].sort());
+    for (const g of golden.filter((x) => !waits.includes(x.key))) {
       expect(RUNNER_POOL_REFUSAL_BY_KEY[g.key as keyof typeof RUNNER_POOL_REFUSAL](...g.args), g.key).toBe(g.text);
     }
   });
@@ -53,13 +56,28 @@ describe("runner pool refusal sentences", () => {
     expect(readFileSync(join(root, "internal/runnerpool/wait.go"), "utf8")).toContain(`WaitReason = "${RUN_WAIT_REASON.AT_CAPACITY}"`);
   });
 
-  it("names the hosting types as the server does", () => {
-    const go = readFileSync(join(root, "internal/runnerpool/reasons.go"), "utf8");
-    for (const [wire, label] of Object.entries(HOSTING_LABEL)) {
-      expect(go, wire).toContain(`return "${label}"`);
-    }
-    expect(RUNNER_POOL_REFUSAL.REQUIRED(""), "no hosting type known").toBe(RUNNER_POOL_REFUSAL.REQUIRED_ANY());
+  it("says a run no runner can take yet as a wait too, never as a refusal", () => {
+    const g = golden.find((x) => x.key === "WAIT_NO_RUNNER_FREE")!;
+    expect(RUN_WAIT.NO_RUNNER_FREE(g.args[0])).toBe(g.text);
+    expect(RUNNER_POOL_REASONS as readonly string[]).not.toContain(RUN_WAIT_REASON.NO_RUNNER_FREE);
+    expect(readFileSync(join(root, "internal/runnerpool/wait.go"), "utf8")).toContain(`WaitReason = "${RUN_WAIT_REASON.NO_RUNNER_FREE}"`);
   });
+
+  it("says a run whose runners are all at their runs at once as a wait when queued, a refusal when not", () => {
+    const w = golden.find((x) => x.key === "WAIT_RUNNERS_AT_CAPACITY")!;
+    expect(RUN_WAIT.RUNNERS_AT_CAPACITY(w.args[0])).toBe(w.text);
+    expect(RUNNER_POOL_REASONS as readonly string[]).not.toContain(RUN_WAIT_REASON.RUNNERS_AT_CAPACITY);
+    expect(readFileSync(join(root, "internal/runnerpool/wait.go"), "utf8")).toContain(`WaitReason = "${RUN_WAIT_REASON.RUNNERS_AT_CAPACITY}"`);
+    const g = golden.find((x) => x.key === "RUNNER_AT_CAPACITY")!;
+    expect(RUNNER_CAPACITY.RUNNER_AT_CAPACITY(g.args[0])).toBe(g.text);
+    expect(PLACEMENT_REASONS).toContain("runner_at_capacity");
+  });
+
+  it("says a pool with no online runner of yours in the server's sentence", () => {
+    const g = golden.find((x) => x.key === "NO_ONLINE_RUNNER")!;
+    expect(POOL_OFFLINE.NO_ONLINE_RUNNER(g.args[0])).toBe(g.text);
+  });
+
 });
 
 describe("pool limit wording", () => {
@@ -78,6 +96,12 @@ describe("pool limit wording", () => {
     }
   });
 
+  it("has a sentence for every end reason the server records, and no other", () => {
+    const goReasons = [...goLimits.matchAll(/\bRunEnd\w+\s+RunEndReason = "([a-z_]+)"/g)].map((m) => m[1]);
+    expect(goReasons.length).toBeGreaterThanOrEqual(8);
+    expect(Object.keys(RUN_END_REASON_SENTENCE).sort()).toEqual([...goReasons].sort());
+  });
+
   it("lists one, two and three allowed barriers the way the server does", () => {
     expect(RUNNER_POOL_REFUSAL.BARRIER_NOT_ALLOWED("P", "CC3", ["CC1"])).toBe("P doesn't allow the Vault barrier. It allows Fence.");
     expect(RUNNER_POOL_REFUSAL.BARRIER_NOT_ALLOWED("P", "CC1", ["CC2", "CC3"])).toBe("P doesn't allow the Fence barrier. It allows Wall and Vault.");
@@ -92,7 +116,7 @@ describe("reasons", () => {
   it("are the Go closed set of internal/runnerpool/reasons.go", () => {
     const go = readFileSync(join(root, "internal/runnerpool/reasons.go"), "utf8");
     const goReasons = [...go.matchAll(/\bReason\w+\s+Reason = "([a-z_]+)"/g)].map((m) => m[1]);
-    expect(goReasons).toHaveLength(11);
+    expect(goReasons).toHaveLength(13);
     expect(new Set(RUNNER_POOL_REASONS)).toEqual(new Set(goReasons));
   });
 });

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -291,7 +292,7 @@ func TestValidateComponentRefs(t *testing.T) {
 		"an invalid inline definition": {
 			[]types.ComponentRef{{Inline: &types.ComponentDefinition{Hosts: []string{"https://x"}}}}, "components[0]: inline.hosts[0]: ",
 		},
-		"too many": {make([]types.ComponentRef, types.MaxComponentRefs+1), "components: 9 entries exceeds the 8-component limit"},
+		"too many": {make([]types.ComponentRef, types.MaxComponentRefs+1), "components: 17 entries exceeds the 16-component limit"},
 	} {
 		err := types.ValidateComponentRefs(tc.refs, proxy.ValidDomainEntry)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -606,5 +607,76 @@ func TestComponentDefinitionValidate_HeaderHostIsBare(t *testing.T) {
 	}
 	if err := org.Validate(proxy.ValidDomainEntry, true); err == nil || !strings.Contains(err.Error(), "hosts[0]: ") {
 		t.Errorf("person row, header to an address: Validate = %v, want the host refused", err)
+	}
+}
+
+func cliDef(c *types.ComponentCLI) types.ComponentDefinition {
+	return types.ComponentDefinition{Hosts: []string{"api.example.com"}, CLI: c}
+}
+
+// TestComponentCLI_PersonDefinedRefused: a person's own definition, inline or
+// stored, never carries a cli block; the same block on an org row is fine.
+func TestComponentCLI_PersonDefinedRefused(t *testing.T) {
+	d := cliDef(&types.ComponentCLI{Kind: "github", GitHub: &types.CLIGitHub{Capabilities: []ghscope.Capability{ghscope.CapIssuesRead}}})
+	if err := d.Validate(proxy.ValidDomainEntry, false); err != nil {
+		t.Fatalf("org row refused: %v", err)
+	}
+	err := d.Validate(proxy.ValidDomainEntry, true)
+	if err == nil || !strings.Contains(err.Error(), "cli: only an organisation component") {
+		t.Fatalf("person-defined cli = %v, want the org-only refusal", err)
+	}
+}
+
+func TestComponentCLI_Shape(t *testing.T) {
+	gh := &types.CLIGitHub{Capabilities: []ghscope.Capability{ghscope.CapIssuesRead}}
+	aws := types.CLIAWS{StartURL: "https://acme.awsapps.com/start", SSORegion: "eu-west-1", AccountID: "123456789012", RoleName: "ReadOnly", Region: "eu-west-2"}
+	az := types.CLIAzure{Subscriptions: []string{"11111111-2222-3333-4444-555555555555"}, Access: "read"}
+	withSecret := cliDef(&types.ComponentCLI{Kind: "github", GitHub: gh})
+	withSecret.Secrets = []types.ComponentSecret{{SecretName: "k", Delivery: types.ComponentDelivery{Mode: "env", Var: "K"}}}
+	badAWS := func(f func(*types.CLIAWS)) *types.ComponentCLI {
+		a := aws
+		f(&a)
+		return &types.ComponentCLI{Kind: "aws", AWS: &a}
+	}
+	badAz := func(f func(*types.CLIAzure)) *types.ComponentCLI {
+		a := az
+		f(&a)
+		return &types.ComponentCLI{Kind: "azure", Azure: &a}
+	}
+	cases := map[string]struct {
+		def  types.ComponentDefinition
+		want string // "" = valid
+	}{
+		"aws ok":               {cliDef(&types.ComponentCLI{Kind: "aws", AWS: &aws}), ""},
+		"azure ok":             {cliDef(&types.ComponentCLI{Kind: "azure", Azure: &az}), ""},
+		"secrets refused":      {withSecret, "carries no secrets"},
+		"unknown kind":         {cliDef(&types.ComponentCLI{Kind: "gcloud"}), "is not azure, aws or github"},
+		"arm missing":          {cliDef(&types.ComponentCLI{Kind: "aws"}), "cli.aws: required"},
+		"other arm set":        {cliDef(&types.ComponentCLI{Kind: "aws", AWS: &aws, GitHub: gh}), "cli.github: not allowed"},
+		"github no caps":       {cliDef(&types.ComponentCLI{Kind: "github", GitHub: &types.CLIGitHub{}}), "at least one"},
+		"github not grantable": {cliDef(&types.ComponentCLI{Kind: "github", GitHub: &types.CLIGitHub{Capabilities: []ghscope.Capability{"nope"}}}), "not grantable"},
+		"github refused":       {cliDef(&types.ComponentCLI{Kind: "github", GitHub: &types.CLIGitHub{Capabilities: []ghscope.Capability{ghscope.CapIssuesRead, ghscope.CapOrgAdmin}}}), "not available to the GitHub CLI"},
+		"aws http":             {cliDef(badAWS(func(a *types.CLIAWS) { a.StartURL = "http://acme.awsapps.com/start" })), "start_url"},
+		"aws not portal":       {cliDef(badAWS(func(a *types.CLIAWS) { a.StartURL = "https://p.example/start" })), "start_url"},
+		"aws portal lookalike": {cliDef(badAWS(func(a *types.CLIAWS) { a.StartURL = "https://acme.awsapps.com.example/start" })), "start_url"},
+		"aws bare domain":      {cliDef(badAWS(func(a *types.CLIAWS) { a.StartURL = "https://awsapps.com/start" })), "start_url"},
+		"aws port":             {cliDef(badAWS(func(a *types.CLIAWS) { a.StartURL = "https://acme.awsapps.com:8443/start" })), "start_url"},
+		"aws account":          {cliDef(badAWS(func(a *types.CLIAWS) { a.AccountID = "12" })), "account_id"},
+		"aws role":             {cliDef(badAWS(func(a *types.CLIAWS) { a.RoleName = "a b" })), "role_name"},
+		"aws region":           {cliDef(badAWS(func(a *types.CLIAWS) { a.Region = "" })), "region"},
+		"azure none":           {cliDef(badAz(func(a *types.CLIAzure) { a.Subscriptions = nil })), "1 to 16"},
+		"azure guid":           {cliDef(badAz(func(a *types.CLIAzure) { a.Subscriptions = []string{"nope"} })), "GUID"},
+		"azure access":         {cliDef(badAz(func(a *types.CLIAzure) { a.Access = "admin" })), "read or write"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := c.def.Validate(proxy.ValidDomainEntry, false)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("refused: %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("err = %v, want it to contain %q", err, c.want)
+			}
+		})
 	}
 }

@@ -24,7 +24,7 @@
 // /dev/kvm reason) and the PICK_WHEN / NOT_DETECTED copy live only here — this
 // step is the sole barrier picker in Getting started.
 import * as React from "react";
-import { Check, X, AlertTriangle, Info, AlertOctagon, Terminal } from "lucide-react";
+import { Check, Info, AlertOctagon, Terminal } from "lucide-react";
 import { Button } from "../../ui/button";
 import { cn } from "../../ui/utils";
 import { StatusChip } from "../../wardyn/status-chip";
@@ -36,10 +36,10 @@ import {
   CC_MATRIX_ROWS,
   CC_MATRIX_WHERE,
   CONFINEMENT_CONSTANT_NOTE,
-  type CCMark,
 } from "../../wardyn/cc-meta";
 import { RESIDUAL_PREFIX, BTN, type StatusKind } from "../../wardyn/copy";
 import { Mono } from "../../wardyn/code-block";
+import { MarkCell } from "../../wardyn/mark-cell";
 import { TIER_GUIDES, K8S_TIER_GUIDES, type SetupGuide } from "./setup-guide";
 import { CopyButton } from "../../wardyn/copy-button";
 import { CC_ORDER, type ConfinementClass, type SetupCheck, type SetupStatus } from "../../../lib/types";
@@ -460,7 +460,7 @@ export function EnvironmentStep({
 
             {CC_MATRIX_ROWS.map((row) => (
               <RowLabelled key={row.label} label={row.label} col={col} center onCellClick={selectCell}>
-                {(cc) => <MatrixCell mark={row.cells[cc]} cc={cc} />}
+                {(cc) => <MarkCell mark={row.cells[cc]} cc={cc} />}
               </RowLabelled>
             ))}
 
@@ -565,23 +565,6 @@ function RowLabelled({
         </td>
       ))}
     </tr>
-  );
-}
-
-// ✓ / ⚠ / ✗ cell. A caveat isn't a bare "partly" — its native title names the
-// residual risk, reusing RESIDUAL_PREFIX + the tier's doesntProtect line verbatim.
-function MatrixCell({ mark, cc }: { mark: CCMark; cc: ConfinementClass }) {
-  if (mark === "yes") return <Check className="mx-auto size-5 text-success" aria-label="Yes" />;
-  if (mark === "no") return <X className="mx-auto size-5 text-danger" aria-label="No" />;
-  const label = `${RESIDUAL_PREFIX} ${CC_META[cc].doesntProtect}`;
-  return (
-    <span
-      title={label}
-      aria-label="Yes, with caveat"
-      className="mx-auto inline-flex text-warning"
-    >
-      <AlertTriangle className="size-5" aria-hidden />
-    </span>
   );
 }
 

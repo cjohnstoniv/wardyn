@@ -19,20 +19,7 @@ func (s *Server) authorizeRequestDrive(r *http.Request,
 	if req.Drive == nil || !req.Drive.Enabled {
 		return nil, nil
 	}
-	// The org switch first, and the order is the argument: storage.user_drive's
-	// `disabled` and a profile's DenyUserDrive answer two different questions, and
-	// only the second one is about this member. With drives off deployment-wide
-	// nobody was DENIED — there is nothing here to mount — so it is a 422 in the
-	// REFUSED_BACKEND family and never the door's 403 with its authz.denied row.
-	provider, perr := s.userDriveProvider(r.Context())
-	if perr != nil {
-		return nil, runServerError("get site config", perr)
-	}
-	if provider.Disabled {
-		return nil, runDriveRefusal(http.StatusUnprocessableEntity, driveRefusalDrivesDisabled,
-			fmt.Sprintf(driveRefusedBackendMsg, driveDisabledMsg))
-	}
-	if refusal := s.userDriveDoorRefusal(r, ceiling); refusal != nil {
+	if refusal := s.driveDoorsRefusal(r, ceiling); refusal != nil {
 		return nil, refusal
 	}
 	// The SAME resolver /me and the admin preview run. A store failure is an
@@ -48,11 +35,34 @@ func (s *Server) authorizeRequestDrive(r *http.Request,
 			"no user drive is allocated to you — ask an admin for an allocation")
 	}
 	if resolved.Paused {
-		return nil, runDriveRefusal(http.StatusUnprocessableEntity, driveRefusalPaused,
-			"your allocation is paused by an admin",
-			slog.String("drive", resolved.Drive.Name))
+		return nil, drivePausedRefusal(resolved.Drive.Name)
 	}
 	return resolved, nil
+}
+
+// drivePausedRefusal refuses a drive whose winning grant an admin disabled.
+func drivePausedRefusal(name string) *runRefusal {
+	return runDriveRefusal(http.StatusUnprocessableEntity, driveRefusalPaused,
+		"your allocation is paused by an admin", slog.String("drive", name))
+}
+
+// driveDoorsRefusal is the two doors every drive request meets before a grant
+// is read: the org switch, then the caller's profile door.
+func (s *Server) driveDoorsRefusal(r *http.Request, ceiling governanceCeiling) *runRefusal {
+	// The org switch first, and the order is the argument: storage.user_drive's
+	// `disabled` and a profile's DenyUserDrive answer two different questions, and
+	// only the second one is about this member. With drives off deployment-wide
+	// nobody was DENIED — there is nothing here to mount — so it is a 422 in the
+	// REFUSED_BACKEND family and never the door's 403 with its authz.denied row.
+	provider, perr := s.userDriveProvider(r.Context())
+	if perr != nil {
+		return runServerError("get site config", perr)
+	}
+	if provider.Disabled {
+		return runDriveRefusal(http.StatusUnprocessableEntity, driveRefusalDrivesDisabled,
+			fmt.Sprintf(driveRefusedBackendMsg, driveDisabledMsg))
+	}
+	return s.userDriveDoorRefusal(r, ceiling)
 }
 
 func (s *Server) userDriveDoorRefusal(r *http.Request, ceiling governanceCeiling) *runRefusal {
@@ -84,8 +94,8 @@ func driveRunError(err error) *runRefusal {
 	}
 }
 
-func driveReadOnlyRefusal(req createRunRequest, resolved types.ResolvedDrive) *runRefusal {
-	if req.Drive.ReadOnly != nil && !*req.Drive.ReadOnly && !resolved.Writable {
+func driveReadOnlyRefusal(narrow *bool, resolved types.ResolvedDrive) *runRefusal {
+	if narrow != nil && !*narrow && !resolved.Writable {
 		return runDriveRefusal(http.StatusUnprocessableEntity, driveRefusalReadOnly,
 			"your allocation is read-only; read_only:false cannot widen it", slog.String("drive", resolved.Drive.Name))
 	}

@@ -91,16 +91,20 @@ func pushRuleEntryOf(sc types.SiteConfig, cloneURL string) (entry types.PushRule
 	return types.PushRuleSet{Provider: provider, Host: host, Org: org, BasePath: basePath}, key, nil
 }
 
-// pushRuleRemotes are the repositories a run brings: the request's own and every
-// one its policy clones.
+// pushRuleRemotes are the repositories a run brings: the request's own, every
+// one its policy clones and every one a built-in GitHub component reaches.
 func pushRuleRemotes(spec types.RunPolicySpec, req *createRunRequest) []string {
 	var out []string
 	if req != nil && req.Repo != "" {
 		out = append(out, req.Repo)
 	}
-	for _, r := range spec.WorkspaceRepos {
-		if !slices.Contains(out, r.Repo) {
-			out = append(out, r.Repo)
+	remotes := repoLocatorsOf(spec.WorkspaceRepos)
+	if req != nil {
+		remotes = append(remotes, builtinGitHubRemotes(req.Components)...)
+	}
+	for _, r := range remotes {
+		if !slices.Contains(out, r) {
+			out = append(out, r)
 		}
 	}
 	return out

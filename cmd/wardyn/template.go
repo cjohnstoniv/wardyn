@@ -22,24 +22,24 @@ import (
 //
 //	wardyn template list
 //	wardyn template show <id> [--revision N]
-//	wardyn template save <file> --scope person|org|group [--group ID]
-//	wardyn template import <file> [--format json|yaml]
+//	wardyn template save <file> --scope person|org|group [--group ID] [--format json|yaml]
+//	wardyn template import <file> [--format json|yaml] [--kind Run|RunTemplate]
+//	wardyn template group-admin list|grant|revoke      (template_admin.go)
+//	wardyn template from-preset <name> [--everyone]    (template_admin.go)
 //
-// Flags and files are checked here, then the SDK makes the real call. Until the
-// server's template store lands, the server answers 501 templates_unavailable.
+// Flags and files are checked here, then the SDK makes the real call.
 func templateCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "template",
-		Short: "List, show, save and import run templates",
+		Short: "List, show, save and import run templates, and manage who publishes them",
 		Long: "Run templates are reusable run setups: a whole run or a mix of parts such as an\n" +
 			"egress allowlist, drives, repositories or component settings. A template is\n" +
 			"personal, published to the organisation by an administrator, or published to a\n" +
 			"group by that group's administrator. Using one never grants access: the run\n" +
-			"still resolves your own policy, credentials, components, pools and drives.\n\n" +
-			"Until the server's template store lands, it answers that templates are not\n" +
-			"available yet.",
+			"still resolves your own policy, credentials, components, pools and drives.",
 	}
-	cmd.AddCommand(templateListCmd(client), templateShowCmd(client), templateSaveCmd(client), templateImportCmd(client))
+	cmd.AddCommand(templateListCmd(client), templateShowCmd(client), templateSaveCmd(client), templateImportCmd(client),
+		templateGroupAdminCmd(client), templateFromPresetCmd(client))
 	return subcommandGroup(cmd)
 }
 
@@ -84,14 +84,14 @@ func templateShowCmd(client clientFn) *cobra.Command {
 }
 
 func templateSaveCmd(client clientFn) *cobra.Command {
-	var scope, groupID, name, description, update string
+	var scope, groupID, name, description, update, format string
 	var expected int
 	cmd := &cobra.Command{
 		Use:   "save <file>",
 		Short: "Save a template document (a JSON or YAML file, or '-' for stdin) to a scope",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			req, id, err := templateSaveRequest(cmd, args[0], scope, groupID, name, description, update, expected)
+			req, id, err := templateSaveRequest(cmd, args[0], scope, groupID, name, description, update, format, expected)
 			if err != nil {
 				return err
 			}
@@ -108,12 +108,13 @@ func templateSaveCmd(client clientFn) *cobra.Command {
 	f.StringVar(&name, "name", "", "the template's name (default: the document's own name)")
 	f.StringVar(&description, "description", "", "the template's description")
 	f.StringVar(&update, "update", "", "update this template id instead of creating a new one; needs --expected-revision")
+	f.StringVar(&format, "format", "", "json or yaml (default: from the file extension; required for stdin)")
 	f.IntVar(&expected, "expected-revision", 0, "the revision you read; the update is refused if the template has moved on")
 	return cmd
 }
 
 // templateSaveRequest checks the flags and the document and builds the request.
-func templateSaveRequest(cmd *cobra.Command, file, scope, groupID, name, description, update string, expected int) (sdk.TemplateSaveRequest, uuid.UUID, error) {
+func templateSaveRequest(cmd *cobra.Command, file, scope, groupID, name, description, update, format string, expected int) (sdk.TemplateSaveRequest, uuid.UUID, error) {
 	var req sdk.TemplateSaveRequest
 	switch sdk.TemplateScope(scope) {
 	case sdk.TemplateScopePerson, sdk.TemplateScopeOrg:
@@ -140,12 +141,12 @@ func templateSaveRequest(cmd *cobra.Command, file, scope, groupID, name, descrip
 	} else if expected != 0 {
 		return req, id, fmt.Errorf("--expected-revision only applies with --update")
 	}
-	raw, format, err := readTemplateInput(cmd, file, "")
+	raw, docFormat, err := readTemplateInput(cmd, file, format)
 	if err != nil {
 		return req, id, err
 	}
 	jsonDoc := raw
-	if format == sdk.TemplateFormatYAML {
+	if docFormat == sdk.TemplateFormatYAML {
 		if jsonDoc, err = policyToJSON(raw); err != nil {
 			return req, id, fmt.Errorf("parse template YAML: %w", err)
 		}
@@ -164,20 +165,24 @@ func templateSaveRequest(cmd *cobra.Command, file, scope, groupID, name, descrip
 }
 
 func templateImportCmd(client clientFn) *cobra.Command {
-	var format string
+	var format, kind string
 	cmd := &cobra.Command{
 		Use:   "import <file>",
 		Short: "Check a template document (JSON or YAML, or '-' for stdin) and print it normalised",
 		Long: "Ask the server to read a template document and say whether it can become a\n" +
 			"draft. Nothing is stored. Every problem is listed with its path and reason, and\n" +
-			"the exit status is non-zero when there is one.",
+			"the exit status is non-zero when there is one. --kind says which document you\n" +
+			"expect, Run or RunTemplate; a valid document of the other kind is refused.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if kind != "" && kind != sdk.RunDocumentKind && kind != sdk.TemplateDocumentKind {
+				return fmt.Errorf("--kind %q is not %s or %s", kind, sdk.RunDocumentKind, sdk.TemplateDocumentKind)
+			}
 			raw, f, err := readTemplateInput(cmd, args[0], format)
 			if err != nil {
 				return err
 			}
-			res, err := client().ImportTemplate(cmd.Context(), sdk.TemplateImportRequest{Format: f, Source: string(raw)})
+			res, err := client().ImportTemplate(cmd.Context(), sdk.TemplateImportRequest{Format: f, Source: string(raw), Kind: kind})
 			if err != nil {
 				return err
 			}
@@ -185,6 +190,7 @@ func templateImportCmd(client clientFn) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "", "json or yaml (default: from the file extension; required for stdin)")
+	cmd.Flags().StringVar(&kind, "kind", "", "the document kind you expect: Run or RunTemplate (default: either)")
 	return cmd
 }
 

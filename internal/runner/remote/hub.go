@@ -39,6 +39,9 @@ type Admission struct {
 	// Activity checks current run ownership/lifecycle in its database transaction.
 	// Nil refuses live activity; historical EVENT ingestion never calls it.
 	Activity func(context.Context, uuid.UUID) error
+	// Ready, when set, is told once the session is READY, the first moment the runner accepts a LEASE. It
+	// runs on the peer read loop for a fresh session, so it must not block or call this runner.
+	Ready func()
 }
 
 // HubConfig binds proof of possession to stored identity and org admission.
@@ -285,7 +288,9 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 		return peer, err
 	}
 	if resumed {
-		err = a.Link.Ready(peer)
+		if err = a.Link.Ready(peer); err == nil && a.Ready != nil {
+			a.Ready()
+		}
 	} else {
 		if h.cfg.Connected != nil {
 			err = h.cfg.Connected(ctx, id)
@@ -373,6 +378,9 @@ func configureAdmission(ctx context.Context, cfg *runnerwire.PeerConfig, resumed
 			}
 			if err := a.Link.Ready(peer()); err != nil {
 				return err
+			}
+			if a.Ready != nil {
+				a.Ready()
 			}
 			ready = true
 			session.readyID.Store(&sessionID)

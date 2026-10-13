@@ -30,7 +30,7 @@ vi.mock("../../../lib/api/governance", async () => {
 });
 
 import { HttpError } from "../../../lib/api/core";
-import { CHANGES } from "../../../lib/governance-copy";
+import { CHANGES, DELIVERY } from "../../../lib/governance-copy";
 import type { GovernanceChange } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { aheadByHours } from "../../../lib/test-clock";
@@ -82,6 +82,12 @@ describe("the Changes tab", () => {
     expect(screen.getByText("ana@example.com")).toBeInTheDocument();
     expect(screen.getByText("2h ago")).toBeInTheDocument();
     expect(screen.getByText("in 20h")).toBeInTheDocument();
+  });
+
+  it("lists a credential delivery write as Runner credentials, under its natural key", () => {
+    renderTab([change({ target_kind: "local_credential_delivery", op: "replace", target_key: "local_credential_delivery", diff: { changed: [] } })]);
+    expect(screen.getByRole("button", { name: `${DELIVERY.CHANGE_KIND} · ${CHANGES.OP.replace}` })).toBeInTheDocument();
+    expect(screen.getByText("local_credential_delivery")).toBeInTheDocument();
   });
 
   it("names a kind and an op this console predates by their raw names", () => {
