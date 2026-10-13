@@ -14,6 +14,7 @@ import { SCENARIO_ACCESS, SETUP_ITEMS } from "../../../../../lib/new-run-fixture
 import { CLAUDE_UNGATED, withFacts } from "../../../../../lib/new-run-fixtures/scenarios/tools-harness";
 import type { AccessFacts } from "../../../../../lib/types/new-run-access";
 import type { HarnessSetFact } from "../../../../../lib/types/new-run-contract";
+import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
@@ -86,6 +87,18 @@ afterEach(() => {
 });
 
 describe("Tools and access step", () => {
+  it("a refused or failed preview shows the server's sentence and a way to ask again, never an all-clear", async () => {
+    const retry = vi.fn().mockResolvedValue(undefined);
+    const sentence = "No sandbox image on this server includes Claude Code and Codex CLI together, so the run was not created.";
+    h.checks.preview = { result: undefined, current: false, error: new Error(sentence), busy: false, retry } as never;
+    show();
+    expect(screen.getByRole("alert")).toHaveTextContent(sentence);
+    expect(screen.queryByText(NR_TOOLS.SETUP_ALL_SET)).toBeNull();
+    expect(screen.queryByRole("heading", { name: NR_TOOLS.INCLUDED_TITLE })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: NR_REVIEW.CHECK_AGAIN }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
   it("shows no harness row, tool-rules card or MCP card for a harness the run does not have", () => {
     const NAMELESS_ROW = { id: "agent:", kind: "harness", from: "harness", name: "", status: "ready", hosts: [], credentials: [], source: { kind: "harness", name: "" } } as unknown as AccessFacts["rows"][number];
     answer(withFacts(SCENARIO_ACCESS.app, [{ ...CLAUDE_UNGATED, harness: "" }], [NAMELESS_ROW]), true);
