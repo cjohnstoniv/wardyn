@@ -92,6 +92,21 @@ afterEach(() => {
 
 describe("Tools and access step", () => {
   const SENTENCE = "This tool cannot be added to this run.";
+
+  it("an added inline component's row removes that component through the answer it came from", async () => {
+    const B = { name: "Beta", inline: { hosts: ["b.example"] } };
+    const C = { name: "Gamma", inline: { hosts: ["c.example"] } };
+    const added = (id: string, name: string) => ({ id, kind: "custom" as const, from: "added" as const, name, status: "ready", hosts: [], credentials: [], source: { kind: "component" as const } });
+    answer({ ...SCENARIO_ACCESS.member, rows: [...SCENARIO_ACCESS.member.rows, added("inline:0", "Beta"), added("inline:1", "Gamma")] }, true);
+    const Components = () => <p data-testid="components">{JSON.stringify(useNewRunDraft().intent.components ?? null)}</p>;
+    render(
+      <NewRunDraftProvider owner="alice">
+        <Seed intent={{ ...READY, components: [B, C] }}><ToolsStep {...props} /><Components /></Seed>
+      </NewRunDraftProvider>,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} Gamma` }));
+    expect(JSON.parse(screen.getByTestId("components").textContent!)).toEqual([B]);
+  });
   // A fresh element each time, so a rerender is not skipped as identical.
   const tree = () => (
     <NewRunDraftProvider owner="alice">
