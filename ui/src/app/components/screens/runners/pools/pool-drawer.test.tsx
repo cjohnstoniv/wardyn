@@ -31,6 +31,7 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 import { HttpError, PendingChangeError } from "../../../../lib/api/core";
 import { OperatorProvider } from "../../../wardyn/operator-context";
 import { setField } from "../../../../../test/set-field";
+import { aheadByHours } from "../../../../lib/test-clock";
 import { PoolDrawer } from "./pool-drawer";
 import { member, pool, remoteRunner, selfRunner } from "./pool-test-fixtures";
 
@@ -135,7 +136,7 @@ describe("user pool", () => {
   });
 
   it("says a pool with a use policy can't be deleted before the server is asked", async () => {
-    usePolicyMock.mockResolvedValue({ pool_id: "p-ci", subjects: [{ subject_type: "group", subject: "platform-eng" }], revision: 9, updated_at: "2026-10-09T10:00:00Z" });
+    usePolicyMock.mockResolvedValue({ pool_id: "p-ci", subjects: [{ subject_type: "group", subject: "platform-eng" }], revision: 9, updated_at: aheadByHours(-72) });
     renderDrawer(pool({ id: "p-ci", name: "CI jobs" }), { waiting: 3 });
     const sheet = await screen.findByRole("dialog");
     await within(sheet).findByText("platform-eng");
@@ -223,7 +224,7 @@ describe("switched-off pool", () => {
 });
 
 describe("who may use it", () => {
-  const POLICY = { pool_id: "p-ci", subjects: [{ subject_type: "group", subject: "platform-eng" }], revision: 3, updated_at: "2026-10-10T10:00:00Z" };
+  const POLICY = { pool_id: "p-ci", subjects: [{ subject_type: "group", subject: "platform-eng" }], revision: 3, updated_at: aheadByHours(-48) };
 
   it("says everyone may use a pool with no policy, and nobody when its people have left", async () => {
     const { unmount } = renderDrawer(pool());
