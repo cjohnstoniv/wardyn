@@ -102,11 +102,13 @@ describe("Launched: Waiting (U13)", () => {
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
-  it("Cancel run cancels at once and kills only the run it names", async () => {
+  it("Cancel run goes through the kill dialog and kills only the run it names", async () => {
     getRun.mockResolvedValue(run({ state: "QUEUED", queue: queue() }));
     open();
     await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    const confirm = await screen.findByRole("alertdialog", { name: `Kill ${ID}?` });
+    expect(killRun).not.toHaveBeenCalled();
+    await userEvent.click(confirm.querySelector("button:last-of-type") as HTMLElement);
     await waitFor(() => expect(killRun).toHaveBeenCalledWith(ID));
   });
 });
@@ -167,6 +169,8 @@ describe("Launched: reload and identity", () => {
     getRun.mockResolvedValueOnce(run({ state: "QUEUED", queue: queue() })).mockResolvedValue(run({ state: "KILLED" }));
     open();
     await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
+    const confirm = await screen.findByRole("alertdialog", { name: `Kill ${ID}?` });
+    await userEvent.click(confirm.querySelector("button:last-of-type") as HTMLElement);
     await waitFor(() => expect(screen.queryByRole("button", { name: NR_LAUNCH.CANCEL_RUN })).not.toBeInTheDocument());
     await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "nightly build" })).toHaveFocus());
   });
