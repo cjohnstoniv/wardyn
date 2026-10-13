@@ -509,6 +509,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   after the dialog closes. Admin > Credentials gains a State column for tokens an admin created for someone else and
   a toggle that adds the revoked ones. A moved token's row names its service identity, and minting a token for a
   service identity whose sponsor is not active is refused like a suspended one.
+- `POST /api/v1/workspaces/{id}/build` with `{"refresh": true}` rebuilds a workspace's image from fresh inputs,
+  pulling a wrapped base image again, and swaps it in only if no other build replaced it meanwhile. The
+  `workspace.image.refresh` audit row names who asked and what changed. A build started from the build door that
+  loses that race removes its own image and reports `superseded`.
+- New Run step 2 (Run) shows the pools you can use for the run type, each unavailable pool with its reason, the
+  pool's capacity, your allowance, waiting, run types and per-run limits (with where each limit comes from), and the
+  three barriers with the reason one is unavailable. Schedule For Later and Application / server are marked Coming
+  soon.
 
 ### Changed
 
@@ -619,6 +627,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   refused at the proxy. The shipped default policy names no tools, so only policies that name tools change behaviour.
 - The console runs on React 19.3. Go modules (the Docker API client, go-spiffe, Kubernetes client libraries), the
   base image digests and the console's minor and patch dependencies move to their latest releases.
+- A run that waits for a pool slot keeps the barrier its create resolved when the organisation lowers its default
+  barrier. When the organisation raises the default while the run waits, the run starts under the stronger class if
+  the pool offers it, and `run.queue.start` records `confinement_default_raised`. The `run.create` row of a launch
+  that waits now records the drives and the harness set it attaches, as a direct create does.
 
 ### Removed
 
