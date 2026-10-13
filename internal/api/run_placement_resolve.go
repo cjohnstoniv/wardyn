@@ -61,6 +61,12 @@ type runPlacement struct {
 	// waitsForRoom: no runner of the pool that could take the run has room for it now (its Runs at once
 	// or a total), so the run waits in the pool's queue rather than being refused.
 	waitsForRoom bool
+	// unbound is the size the run gets before a runner's per-run limit bounds it (a disk of 0: its
+	// runner's per-run disk), set by stepPlacement on a launch that waits.
+	unbound *types.RunnerAmounts
+	// noLocal: the run waits on the pool's remote-hosted runners and the local-eligibility step refuses
+	// it on the person's own (stepLocalEligibility records it on a launch that waits).
+	noLocal bool
 }
 
 // placementInput is what the fold knows of the run when it resolves where it goes.
@@ -82,6 +88,9 @@ type placementInput struct {
 	promoted bool
 	// drives: the run mounts drives, which no person's own runner does.
 	drives bool
+	// noLocal: a waiting run the local-eligibility step refused on the person's own runners
+	// (queuedLaunch.NoLocal); set by the queue's verdict and by a promoted run's start, never by a launch.
+	noLocal bool
 	// policyDiskMiB is the main-drive size the run's policy writes (spec.resources.disk_mib), 0 for none:
 	// with the request's own it sizes the disk each candidate is held to.
 	policyDiskMiB int
@@ -222,8 +231,9 @@ func (s *Server) offerKinds(ctx context.Context, f placementInput, pool types.Ru
 // request asks for (a pin asks for local), then none its owner's profile denies, since deny_placements
 // holds each kind, not the pool. A run with drives keeps only the remote-hosted kind when the pool has
 // it, as no drive mounts on a person's own runner; with none it stays on the person's own runners for
-// the drive step to refuse. A kind the pool has no runner of is the kind mismatch, and a pool whose
-// every kind is denied is the deny sentence for the first of them.
+// the drive step to refuse. A waiting run the local-eligibility step refused on the person's own runners
+// (noLocal) keeps only the remote-hosted kind the same way. A kind the pool has no runner of is the kind
+// mismatch, and a pool whose every kind is denied is the deny sentence for the first of them.
 func (s *Server) kindTargets(ctx context.Context, f placementInput, pool types.RunnerPool, targets []poolTarget) (map[types.Placement][]poolTarget, *runRefusal) {
 	kinds := map[types.Placement][]poolTarget{}
 	for _, t := range targets {
@@ -245,7 +255,7 @@ func (s *Server) kindTargets(ctx context.Context, f placementInput, pool types.R
 	if len(kinds) == 0 {
 		return nil, s.placementDeniedRefusal(ctx, refused, f.ceiling)
 	}
-	if _, remote := kinds[types.PlacementRemote]; remote && f.drives {
+	if _, remote := kinds[types.PlacementRemote]; remote && (f.drives || f.noLocal) {
 		delete(kinds, types.PlacementLocal)
 	}
 	return kinds, nil
@@ -284,7 +294,13 @@ func (s *Server) offerKind(ctx context.Context, f placementInput, pool types.Run
 	}
 	ask := types.RunnerAmounts{CPUMillis: int64(f.ask.CPUMillis), MemoryMiB: int64(f.ask.MemoryMiB), DiskMiB: int64(cmp.Or(requestDisk, f.policyDiskMiB))}
 	fit, _ := eligibleTargets(targets, demand)
-	limits, applied, refusal := s.runSize(ctx, f, &pool, runnerSource(fit, f.req.RunnerID, ask))
+	// A promoted run's start is sized by the runner its promotion found room on, the size the promotion
+	// admitted it at, so the start and the promotion agree.
+	source := f.req.RunnerID
+	if bound := promotedTarget(ctx); source == "" && slices.ContainsFunc(fit, func(t poolTarget) bool { return t.id == bound }) {
+		source = bound
+	}
+	limits, applied, refusal := s.runSize(ctx, f, &pool, runnerSource(fit, source, ask))
 	if refusal != nil {
 		return kindOffer{}, refusal
 	}

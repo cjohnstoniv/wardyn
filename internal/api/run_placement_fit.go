@@ -136,6 +136,39 @@ func runnerSource(fit []poolTarget, pin string, ask types.RunnerAmounts) []runne
 	return all
 }
 
+// unboundSize is the size the run gets with no runner source in the fold: what the deployment, the pool,
+// governance and its own ask give it. Its disk is 0 when nothing but a runner sizes the main drive. Only
+// a launch that waits (queued) has one.
+func (s *Server) unboundSize(ctx context.Context, in placementInput, pool types.RunnerPool, queued bool) (*types.RunnerAmounts, *runRefusal) {
+	if !queued {
+		return nil, nil
+	}
+	limits, applied, refusal := s.runSize(ctx, in, &pool, nil)
+	if refusal != nil {
+		return nil, refusal
+	}
+	requestDisk := 0
+	if in.req.Resources != nil {
+		requestDisk = in.req.Resources.DiskMiB
+	}
+	return &types.RunnerAmounts{CPUMillis: int64(applied.CPUMillis.Applied), MemoryMiB: int64(applied.MemoryMiB.Applied),
+		DiskMiB: int64(mainDriveFor(in.policyDiskMiB, requestDisk, limits.DiskMiB).MiB)}, nil
+}
+
+// startSizeOn is the size a run of unbound size starts with on a runner with limits l: each amount cut
+// to the runner's per-run limit, as the fold cuts it when that runner is the run's source, and an
+// amount nothing else sizes (0) is the runner's per-run limit.
+func startSizeOn(unbound types.RunnerAmounts, l *types.RunnerLimits) types.RunnerAmounts {
+	cut := func(v, limit int64) int64 {
+		if v == 0 {
+			return limit
+		}
+		return min(v, limit)
+	}
+	return types.RunnerAmounts{CPUMillis: cut(unbound.CPUMillis, l.PerRun.CPUMillis), MemoryMiB: cut(unbound.MemoryMiB, l.PerRun.MemoryMiB),
+		DiskMiB: cut(unbound.DiskMiB, l.PerRun.DiskMiB)}
+}
+
 // insertRoomRefusal answers the insert's own refusal under the runner's row lock, nil for any other
 // error: another launch took the runner's last room after placement read it (runner_at_capacity), or
 // the runner's limits were lowered under the run's size since, so it could never take it
