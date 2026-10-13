@@ -627,6 +627,28 @@ func TestComponentCLI_PersonDefinedRefused(t *testing.T) {
 	}
 }
 
+// Azure compares a subscription id without regard to case: an uppercase id is
+// accepted, and the same id in two spellings is one subscription listed twice.
+func TestComponentCLI_AzureSubscriptionsCompareWithoutCase(t *testing.T) {
+	const lower, upper = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+	row := func(subs ...string) types.ComponentDefinition {
+		return cliDef(&types.ComponentCLI{Kind: "azure", Azure: &types.CLIAzure{Subscriptions: subs, Access: "read"}})
+	}
+	if err := row(upper).Validate(proxy.ValidDomainEntry, false); err != nil {
+		t.Fatalf("an uppercase subscription id = %v, want accepted", err)
+	}
+	for _, subs := range [][]string{{lower, upper}, {upper, lower}, {"AaAaAaAa-bbbb-cccc-dddd-eeeeeeeeeeee", lower}} {
+		err := row(subs...).Validate(proxy.ValidDomainEntry, false)
+		if err == nil || !strings.Contains(err.Error(), "listed twice") {
+			t.Errorf("%v = %v, want the listed-twice refusal", subs, err)
+		}
+	}
+	got := types.CLIAzure{Subscriptions: []string{upper, "nope"}}.SubscriptionIDs()
+	if len(got) != 2 || got[0] != lower || got[1] != "" {
+		t.Errorf("SubscriptionIDs = %q, want [%q \"\"]", got, lower)
+	}
+}
+
 func TestComponentCLI_Shape(t *testing.T) {
 	gh := &types.CLIGitHub{Capabilities: []ghscope.Capability{ghscope.CapIssuesRead}}
 	aws := types.CLIAWS{StartURL: "https://acme.awsapps.com/start", SSORegion: "eu-west-1", AccountID: "123456789012", RoleName: "ReadOnly", Region: "eu-west-2"}

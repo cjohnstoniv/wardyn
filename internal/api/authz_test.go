@@ -641,6 +641,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// The Azure Foundry capture's start door (azure_foundry_entra.go): the same
 	// self-service shape. Its callback is the Azure DevOps callback above.
 	"GET /api/v1/model-providers-entra/signin": {class: classMember},
+	// The Azure CLI component's capture (cli_azure_signin.go): the same
+	// self-service shape and the same shared callback. A component the caller
+	// may not attach answers as the run doors answer it.
+	"GET /api/v1/components-entra/signin": {class: classMember},
 	// The member's disconnect (ado_pat_console.go): the same self-service
 	// shape. It revokes and forgets the CALLER's own tokens and sign-in only,
 	// and a row the caller may not use answers as no row (D-6).
