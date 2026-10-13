@@ -9,4 +9,5 @@ ARCHITECTURE.md=5386 share=35
 SECURITY.md=999 share=35
 PROVENANCE.md=798 share=35
 docs/DATA-FLOW.md=1200 share=35
-threatmodel/AGENT-THREAT-MODEL.md=2274 share=35
+# threatmodel/AGENT-THREAT-MODEL.md 2305 adds 31 over 2274: 0.9 final docs pass, measured: the ownership row for a developer's own runner.
+threatmodel/AGENT-THREAT-MODEL.md=2305 share=35

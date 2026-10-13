@@ -6,4 +6,5 @@
 # threatmodel/THREAT-MODEL.md 52364 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # threatmodel/THREAT-MODEL.md 52492 measured after train 10 F-1508-author merge.
 # threatmodel/THREAT-MODEL.md 52620 adds 128 (0.9 DS1-S2a, train 12): the per-harness credential same-uid residual.
-threatmodel/THREAT-MODEL.md=52620 share=20
+# threatmodel/THREAT-MODEL.md 57317 adds 4697 over 52620: 0.9 final docs pass, measured: the runner host boundary and residuals 66-84 (egress baseline, multi-workspace runs, sync, client mode, service identities, launch intents, harness sets, the pool queue, run templates, branch listing, member-visible facts), the GitHub CLI, AWS CLI, MCP and built-in GitHub component lanes, the organisation default barrier, the build record, tool-gate routing and interactive tool rules, less three trims.
+threatmodel/THREAT-MODEL.md=57317 share=20
