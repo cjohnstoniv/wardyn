@@ -13,7 +13,6 @@ import { Segmented } from "../../../wardyn/segmented";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
-import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import type { PreflightResult } from "../../../../lib/types/preflight";
 import type { Template, TemplateKind, TemplatePublish } from "../../../../lib/types/templates";
@@ -132,18 +131,28 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       eyebrow={NR_REVIEW.EYEBROW}
       title={NR_REVIEW.TITLE}
       lede={NR_REVIEW.LEDE}
-      back={{ label: NR_SHARED.BACK, onBack: () => go({ screen: "step", step: "tools" }) }}
       primary={{ label: NR_REVIEW.LAUNCH_RUN, onActivate: () => onLaunch?.(), disabled: !open, describedBy: BLOCKERS_ID, arrow: false }}
+      headingAside={
+        <div role="group" aria-label={NR_REVIEW.VIEW_ARIA}>
+          <Segmented<"pretty" | "yaml" | "json"> value={view} options={[...VIEWS]} onChange={(v) => go({ screen: "review", view: v }, { replace: true })} />
+        </div>
+      }
+      footerExtras={{
+        start: (
+          <>
+            <Button type="button" variant="outline" onClick={() => openSave("template")}>{NR_REVIEW.SAVE_TEMPLATE}</Button>
+            <Button type="button" variant="outline" onClick={() => openSave("policy")}>{NR_REVIEW.SAVE_POLICY}</Button>
+          </>
+        ),
+        end: !open && !issues.length && <Button type="button" variant="outline" onClick={checkAgain}>{NR_REVIEW.CHECK_AGAIN}</Button>,
+      }}
     >
-      <div role="group" aria-label={NR_REVIEW.VIEW_ARIA}>
-        <Segmented<"pretty" | "yaml" | "json"> value={view} options={[...VIEWS]} onChange={(v) => go({ screen: "review", view: v }, { replace: true })} />
-      </div>
       <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} />
       <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} />
       {view === "pretty" ? (
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-          <section className="flex flex-col rounded-lg border border-border p-4">
-            <header className="flex items-start justify-between gap-3 pb-2">
+        <div className="grid items-start gap-3.5 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
+          <section className="flex flex-col overflow-hidden rounded-xl border border-border bg-card">
+            <header className="flex min-h-[78px] items-start justify-between gap-3 border-b border-border px-5 py-[18px]">
               <div>
                 <h2 className="font-medium">{NR_REVIEW.SETUP_TITLE}</h2>
                 <p className="text-sm text-muted-foreground">{setupTitle(draft.intent)}</p>
@@ -162,13 +171,6 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       ) : (
         <RawView intent={draft.intent} format={view} go={go} />
       )}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex gap-2">
-          <Button type="button" variant="outline" onClick={() => openSave("template")}>{NR_REVIEW.SAVE_TEMPLATE}</Button>
-          <Button type="button" variant="outline" onClick={() => openSave("policy")}>{NR_REVIEW.SAVE_POLICY}</Button>
-        </div>
-        {!open && !issues.length && <Button type="button" variant="outline" onClick={checkAgain}>{NR_REVIEW.CHECK_AGAIN}</Button>}
-      </div>
       {saveKind && publish && (
         <SaveAsDialog
           open
