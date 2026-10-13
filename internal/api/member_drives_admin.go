@@ -115,7 +115,7 @@ func (s *Server) handleDeleteMemberDriveAdmin(w http.ResponseWriter, r *http.Req
 		writeServerError(w, r, "begin member drive delete", err)
 		return
 	}
-	res := s.deleteMemberDrive(r, ms, d, started, memberDriveByAdmin)
+	res := s.deleteMemberDrive(withRequestActor(r), ms, d, started, memberDriveByAdmin)
 	switch {
 	case res.err != nil:
 		writeServerError(w, r, "finish member drive delete", res.err)

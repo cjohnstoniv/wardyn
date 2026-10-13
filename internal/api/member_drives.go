@@ -324,7 +324,7 @@ func (s *Server) handleDeleteMyDrive(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "begin member drive delete", err)
 		return
 	}
-	res := s.deleteMemberDrive(r, ms, d, started, memberDriveByOwner)
+	res := s.deleteMemberDrive(withRequestActor(r), ms, d, started, memberDriveByOwner)
 	switch {
 	case res.err != nil:
 		writeServerError(w, r, "finish member drive delete", res.err)
@@ -358,13 +358,12 @@ type memberDriveDeletion struct {
 // only, so the object is the one dispatch mounted. The row goes only when the
 // substrate said deleted or already_absent; every other outcome clears the
 // tombstone and keeps the drive. Every attempt is audited.
-func (s *Server) deleteMemberDrive(r *http.Request, ms store.MemberDriveStore, d types.UserDrive, started time.Time, by string) memberDriveDeletion {
+func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive, started time.Time, by string) memberDriveDeletion {
 	// Past the tombstone the delete finishes even if the caller goes away, so
 	// the row is always removed or restored and the attempt audited.
 	// The substrate work after it (the lifecycle check and the reclaim) is
 	// bounded by driveReclaimTimeout; running out aborts and keeps the drive.
-	r = r.WithContext(context.WithoutCancel(r.Context()))
-	ctx := r.Context()
+	ctx = context.WithoutCancel(ctx)
 	sctx, cancel := context.WithTimeout(ctx, driveReclaimTimeout)
 	defer cancel()
 	mount, err := memberDriveMount(d)
@@ -396,7 +395,7 @@ func (s *Server) deleteMemberDrive(r *http.Request, ms store.MemberDriveStore, d
 		slog.ErrorContext(ctx, "api: clear a member drive's delete tombstone",
 			slog.String("drive_id", d.ID.String()), slog.String("error", aerr.Error()))
 	}
-	s.auditMemberDriveDelete(r, d, res, by)
+	s.auditMemberDriveDelete(ctx, d, res, by)
 	return res
 }
 
@@ -416,12 +415,13 @@ func memberDriveMount(d types.UserDrive) (types.DriveMount, error) {
 
 // auditMemberDriveDelete writes drive.member.delete for one attempt: deleted
 // and already_absent are successes; refused and failed are failures.
-func (s *Server) auditMemberDriveDelete(r *http.Request, d types.UserDrive, res memberDriveDeletion, by string) {
+func (s *Server) auditMemberDriveDelete(ctx context.Context, d types.UserDrive, res memberDriveDeletion, by string) {
 	result := "failure"
 	if res.reason == "" {
 		result = "success"
 	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+	actorType, actor := auditActorFromContext(ctx)
+	s.recordAudit(ctx, s.auditEvent(nil, actorType, actor,
 		"drive.member.delete", d.ID.String(), result, mustJSON(map[string]any{
 			"backend": d.Backend, "by": by, "drive": d.Name, "drive_id": d.ID,
 			"object": res.object, "outcome": res.outcome, "owner": d.OwnerSubject,

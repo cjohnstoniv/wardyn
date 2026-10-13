@@ -203,8 +203,8 @@ func (s *Server) reassignWorkspaces(ctx context.Context, targets []string) (map[
 	return map[string]int{"workspaces_reassigned": n}, nil
 }
 
-// personDrives is the names of the drives allocated to any of subjects as a user, sorted. They are
-// listed in the purge's audit row and never reclaimed.
+// personDrives is the names of the drives allocated to any of subjects as a user, and of the drives any of
+// them created (member drives), sorted. They are listed in the purge's audit row and never reclaimed.
 func (s *Server) personDrives(ctx context.Context, subjects []string) ([]string, error) {
 	grants, err := s.cfg.Store.ListUserDriveGrants(ctx)
 	if err != nil {
@@ -223,8 +223,35 @@ func (s *Server) personDrives(ctx context.Context, subjects []string) ([]string,
 			names = append(names, drives[i].Name)
 		}
 	}
+	for _, d := range memberDrivesOf(drives, subjects) {
+		if !slices.Contains(names, d.Name) {
+			names = append(names, d.Name)
+		}
+	}
 	slices.Sort(names)
 	return names, nil
+}
+
+// personMemberDriveIDs is the ids of the drives any of subjects created, sorted. A member drive's name is
+// unique only among its owner's, so the purge row also records ids and the status read follows those.
+func (s *Server) personMemberDriveIDs(ctx context.Context, subjects []string) ([]string, error) {
+	drives, err := s.cfg.Store.ListUserDrives(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	for _, d := range memberDrivesOf(drives, subjects) {
+		ids = append(ids, d.ID.String())
+	}
+	slices.Sort(ids)
+	return ids, nil
+}
+
+// memberDrivesOf is the member drives in drives whose owner is any of subjects, tombstoned ones included.
+func memberDrivesOf(drives []types.UserDriveListItem, subjects []string) []types.UserDriveListItem {
+	return slices.DeleteFunc(slices.Clone(drives), func(d types.UserDriveListItem) bool {
+		return d.OwnerSubject == "" || !slices.ContainsFunc(subjects, func(t string) bool { return strings.EqualFold(t, d.OwnerSubject) })
+	})
 }
 
 // auditPurge writes the person.deprovision row of a purge, once, after every other step is done. A
@@ -247,11 +274,18 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, sub
 	if err != nil {
 		return err
 	}
+	memberIDs, err := s.personMemberDriveIDs(ctx, subjects)
+	if err != nil {
+		return err
+	}
 	key := store.JobKey{Step: store.JobStepAuditDeprovision}
 	data := map[string]any{
 		"kind": store.JobKindPurge, "credentials_erased": counts["credentials_erased"], "masks_fenced": counts["masks_fenced"], "components_erased": counts["components_erased"],
 		"templates_erased": counts["templates_erased"], "workspaces_reassigned": counts["workspaces_reassigned"], "grants_deleted": counts["grants_deleted"],
 		"assignments_deleted": counts["assignments_deleted"], "email_rows_kept": counts["email_rows_kept"], "drives": drives,
+	}
+	if len(memberIDs) > 0 {
+		data["member_drive_ids"] = memberIDs
 	}
 	ev := s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", id.String(), "success", mustJSON(data))
 	if err := s.recordAuditStrict(ctx, ev); err != nil {

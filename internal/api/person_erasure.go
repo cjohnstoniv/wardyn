@@ -93,6 +93,9 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport) *erasure.
 	if _, ok := s.cfg.Store.(store.RunnerPoolStore); ok {
 		steps[erasure.RunnerPools] = s.eraseRunnerPoolsOf
 	}
+	if _, ok := s.cfg.Store.(store.MemberDriveStore); ok {
+		steps[erasure.MemberDrives] = s.eraseMemberDrivesOf
+	}
 	if s.cfg.SubjectKeys != nil {
 		steps[erasure.AuditPersonalFields] = s.eraseAuditSealKeys
 	}

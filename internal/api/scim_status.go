@@ -187,7 +187,8 @@ func (s *Server) scimLastTokenSlot(ctx context.Context) (string, error) {
 // scimDrivesToReclaim is the drives the purges listed that still need their purged person's storage
 // reclaimed, newest purge first. A purge lists a person's drives in its person.deprovision row and leaves
 // them in place; a drive leaves the list when it is deleted or when a drive.reclaim succeeded for that
-// person after the purge.
+// person after the purge. A drive the person created leaves it when it is deleted, which is the only
+// way: DELETE /drives/member/{id}.
 func (s *Server) scimDrivesToReclaim(ctx context.Context, st scimStore, label func(uuid.UUID) (string, error)) ([]scimStatusDrive, error) {
 	out := []scimStatusDrive{}
 	rows, err := s.scimAuditRows(ctx, store.AuditFilter{
@@ -212,33 +213,54 @@ func (s *Server) scimDrivesToReclaim(ctx context.Context, st scimStore, label fu
 	}
 	for _, ev := range rows {
 		var d struct {
-			Drives []string `json:"drives"`
+			Drives         []string `json:"drives"`
+			MemberDriveIDs []string `json:"member_drive_ids"`
 		}
 		id, perr := uuid.Parse(ev.Target)
 		if perr != nil || json.Unmarshal(ev.Data, &d) != nil {
 			continue
 		}
-		var person string
-		var ident store.PrincipalIdentity
-		for _, name := range d.Drives {
-			if !slices.ContainsFunc(live, func(l types.UserDriveListItem) bool { return l.Name == name }) {
-				continue
+		granted, created := scimLiveDrives(live, d.Drives, d.MemberDriveIDs)
+		if len(granted)+len(created) == 0 {
+			continue
+		}
+		person, err := label(id)
+		if err != nil {
+			return nil, err
+		}
+		ident, err := st.GetIdentity(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		for _, name := range granted {
+			if !scimReclaimedSince(reclaims, ev.Time, name, ident) {
+				out = append(out, scimStatusDrive{Person: person, Drive: name, PurgedAt: ev.Time.UTC()})
 			}
-			if person == "" {
-				if person, err = label(id); err != nil {
-					return nil, err
-				}
-				if ident, err = st.GetIdentity(ctx, id); err != nil {
-					return nil, err
-				}
+		}
+		for _, name := range created {
+			if !slices.Contains(granted, name) {
+				out = append(out, scimStatusDrive{Person: person, Drive: name, PurgedAt: ev.Time.UTC()})
 			}
-			if scimReclaimedSince(reclaims, ev.Time, name, ident) {
-				continue
-			}
-			out = append(out, scimStatusDrive{Person: person, Drive: name, PurgedAt: ev.Time.UTC()})
 		}
 	}
 	return out, nil
+}
+
+// scimLiveDrives is what one purge row lists that still exists: the names of admin drives it listed, and
+// the names of the member drives whose ids it recorded. A member drive is followed by id, since its name
+// is unique only among its owner's.
+func scimLiveDrives(live []types.UserDriveListItem, names, memberIDs []string) (granted, created []string) {
+	for _, name := range names {
+		if slices.ContainsFunc(live, func(l types.UserDriveListItem) bool { return l.OwnerSubject == "" && l.Name == name }) {
+			granted = append(granted, name)
+		}
+	}
+	for _, l := range live {
+		if l.OwnerSubject != "" && slices.Contains(memberIDs, l.ID.String()) {
+			created = append(created, l.Name)
+		}
+	}
+	return granted, created
 }
 
 // scimReclaimedSince reports whether a successful drive.reclaim of drive for ident's user grant is
