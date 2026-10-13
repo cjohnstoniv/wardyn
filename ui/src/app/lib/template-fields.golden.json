@@ -221,7 +221,6 @@
   "policy": [
     {
       "name": "allowed_domains",
-      "tab": "access",
       "part": "egress",
       "omitted": "baseline",
       "empty": "value",
@@ -230,7 +229,6 @@
     },
     {
       "name": "denied_domains",
-      "tab": "access",
       "part": "egress",
       "omitted": "baseline",
       "empty": "value",
@@ -239,7 +237,6 @@
     },
     {
       "name": "allow_all_egress",
-      "tab": "access",
       "part": "egress",
       "omitted": "baseline",
       "empty": "value",
@@ -248,7 +245,6 @@
     },
     {
       "name": "first_use_approval",
-      "tab": "access",
       "part": "egress",
       "omitted": "baseline",
       "empty": "same_as_omitted",
@@ -257,7 +253,6 @@
     },
     {
       "name": "first_use_hold_seconds",
-      "tab": "access",
       "part": "egress",
       "omitted": "baseline",
       "empty": "same_as_omitted",
@@ -266,7 +261,6 @@
     },
     {
       "name": "max_holds",
-      "tab": "access",
       "part": "egress",
       "omitted": "baseline",
       "empty": "same_as_omitted",
@@ -275,7 +269,6 @@
     },
     {
       "name": "allowed_methods",
-      "tab": "access",
       "part": "egress",
       "omitted": "baseline",
       "empty": "all",
@@ -284,7 +277,6 @@
     },
     {
       "name": "min_confinement_class",
-      "tab": "runner",
       "part": "runner",
       "omitted": "baseline",
       "empty": "same_as_omitted",
@@ -293,7 +285,6 @@
     },
     {
       "name": "eligible_grants",
-      "tab": "access",
       "part": "credentials",
       "omitted": "unset_optional",
       "empty": "value",
@@ -302,7 +293,6 @@
     },
     {
       "name": "auto_stop_after_sec",
-      "tab": "runner",
       "part": "resources",
       "omitted": "baseline",
       "empty": "never",
@@ -311,7 +301,6 @@
     },
     {
       "name": "workspace_mounts",
-      "tab": "repositories_drives",
       "part": "repositories",
       "omitted": "unset_optional",
       "empty": "value",
@@ -320,7 +309,6 @@
     },
     {
       "name": "workspace_repos",
-      "tab": "repositories_drives",
       "part": "repositories",
       "omitted": "unset_optional",
       "empty": "value",
@@ -329,7 +317,6 @@
     },
     {
       "name": "llm_inspection",
-      "tab": "access",
       "part": "access_rules",
       "omitted": "baseline",
       "empty": "value",
@@ -338,7 +325,6 @@
     },
     {
       "name": "ui_apps",
-      "tab": "tools_image",
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "value",
@@ -347,7 +333,6 @@
     },
     {
       "name": "resources",
-      "tab": "runner",
       "part": "resources",
       "omitted": "baseline",
       "empty": "same_as_omitted",
@@ -356,7 +341,6 @@
     },
     {
       "name": "tool_rules",
-      "tab": "access",
       "part": "access_rules",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
@@ -366,7 +350,6 @@
     },
     {
       "name": "git_push_any_branch",
-      "tab": "access",
       "part": "access_rules",
       "omitted": "baseline",
       "empty": "value",
@@ -376,7 +359,6 @@
     },
     {
       "name": "push_rules",
-      "tab": "access",
       "part": "access_rules",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
@@ -386,7 +368,6 @@
     },
     {
       "name": "azure_devops_capabilities",
-      "tab": "access",
       "part": "credentials",
       "omitted": "baseline",
       "empty": "same_as_omitted",
@@ -396,7 +377,6 @@
     },
     {
       "name": "github_capabilities",
-      "tab": "access",
       "part": "credentials",
       "omitted": "baseline",
       "empty": "same_as_omitted",
@@ -408,7 +388,6 @@
   "request": [
     {
       "name": "agent",
-      "tab": "tools_image",
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
@@ -418,7 +397,6 @@
     },
     {
       "name": "repo",
-      "tab": "repositories_drives",
       "part": "repositories",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
@@ -427,7 +405,6 @@
     },
     {
       "name": "task",
-      "tab": "tools_image",
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
@@ -447,7 +424,6 @@
     },
     {
       "name": "policy_id",
-      "tab": "access",
       "part": "policy_ref",
       "omitted": "baseline",
       "empty": "same_as_omitted",
@@ -456,7 +432,6 @@
     },
     {
       "name": "confinement_class",
-      "tab": "runner",
       "part": "runner",
       "omitted": "baseline",
       "empty": "same_as_omitted",
@@ -465,7 +440,6 @@
     },
     {
       "name": "interactive",
-      "tab": "runner",
       "part": "runner",
       "omitted": "unset_required",
       "empty": "value",
@@ -474,7 +448,6 @@
     },
     {
       "name": "workspace_id",
-      "tab": "repositories_drives",
       "part": "repositories",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
@@ -483,7 +456,6 @@
     },
     {
       "name": "inline_policy",
-      "tab": "access",
       "omitted": "baseline",
       "empty": "value",
       "meaning": "No policy field is set by the template. Only the policy keys it names are laid onto the source policy; a key it leaves out keeps the source's value.",
@@ -496,7 +468,6 @@
     },
     {
       "name": "devcontainer_repo",
-      "tab": "tools_image",
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
@@ -505,7 +476,6 @@
     },
     {
       "name": "devcontainer_ref",
-      "tab": "tools_image",
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
@@ -514,7 +484,6 @@
     },
     {
       "name": "image",
-      "tab": "tools_image",
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
@@ -523,7 +492,6 @@
     },
     {
       "name": "task_mode",
-      "tab": "tools_image",
       "part": "tools_image",
       "omitted": "unset_required",
       "empty": "same_as_omitted",
@@ -532,7 +500,6 @@
     },
     {
       "name": "interactive_start",
-      "tab": "tools_image",
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
@@ -541,7 +508,6 @@
     },
     {
       "name": "seed_auto_tools",
-      "tab": "access",
       "part": "access_rules",
       "omitted": "baseline",
       "empty": "value",
@@ -551,7 +517,6 @@
     },
     {
       "name": "tool_approvals",
-      "tab": "access",
       "part": "access_rules",
       "omitted": "baseline",
       "empty": "same_as_omitted",
@@ -561,7 +526,6 @@
     },
     {
       "name": "workspaces",
-      "tab": "repositories_drives",
       "part": "repositories",
       "omitted": "unset_optional",
       "empty": "value",
@@ -575,7 +539,6 @@
     },
     {
       "name": "model_provider",
-      "tab": "access",
       "part": "credentials",
       "omitted": "baseline",
       "empty": "same_as_omitted",
@@ -585,7 +548,6 @@
     },
     {
       "name": "drive",
-      "tab": "repositories_drives",
       "part": "drives",
       "omitted": "unset_optional",
       "empty": "value",
@@ -594,7 +556,6 @@
     },
     {
       "name": "drives",
-      "tab": "repositories_drives",
       "part": "drives",
       "omitted": "unset_optional",
       "empty": "value",
@@ -603,7 +564,6 @@
     },
     {
       "name": "components",
-      "tab": "access",
       "part": "components",
       "omitted": "unset_optional",
       "empty": "value",
@@ -613,7 +573,6 @@
     },
     {
       "name": "allowed_image",
-      "tab": "tools_image",
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
@@ -622,7 +581,6 @@
     },
     {
       "name": "placement",
-      "tab": "runner",
       "part": "runner",
       "omitted": "baseline",
       "empty": "same_as_omitted",
@@ -631,7 +589,6 @@
     },
     {
       "name": "runner_id",
-      "tab": "runner",
       "part": "runner",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
@@ -641,7 +598,6 @@
     },
     {
       "name": "resources",
-      "tab": "runner",
       "part": "resources",
       "omitted": "baseline",
       "empty": "same_as_omitted",
@@ -650,7 +606,6 @@
     },
     {
       "name": "overrides",
-      "tab": "access",
       "part": "components",
       "omitted": "unset_optional",
       "empty": "value",
@@ -675,7 +630,6 @@
     },
     {
       "name": "runner_pool_id",
-      "tab": "runner",
       "part": "runner",
       "omitted": "baseline",
       "empty": "same_as_omitted",
@@ -684,7 +638,6 @@
     },
     {
       "name": "ends_after_sec",
-      "tab": "runner",
       "part": "runner",
       "omitted": "baseline",
       "empty": "same_as_omitted",
@@ -698,7 +651,6 @@
     },
     {
       "name": "no_end",
-      "tab": "runner",
       "part": "runner",
       "omitted": "baseline",
       "empty": "same_as_omitted",
@@ -707,7 +659,6 @@
     },
     {
       "name": "experience",
-      "tab": "runner",
       "part": "runner",
       "omitted": "unset_required",
       "empty": "same_as_omitted",
@@ -716,7 +667,6 @@
     },
     {
       "name": "shape",
-      "tab": "runner",
       "part": "runner",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
@@ -725,7 +675,6 @@
     },
     {
       "name": "workload",
-      "tab": "tools_image",
       "part": "tools_image",
       "omitted": "unset_required",
       "empty": "same_as_omitted",
@@ -735,7 +684,6 @@
     },
     {
       "name": "tools",
-      "tab": "tools_image",
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "value",
@@ -745,7 +693,6 @@
     },
     {
       "name": "startup",
-      "tab": "tools_image",
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
@@ -755,7 +702,6 @@
     },
     {
       "name": "start_folder",
-      "tab": "repositories_drives",
       "part": "repositories",
       "omitted": "baseline",
       "empty": "same_as_omitted",
@@ -764,7 +710,6 @@
     },
     {
       "name": "no_repositories_or_drives",
-      "tab": "repositories_drives",
       "part": "repositories",
       "omitted": "unset_required",
       "empty": "same_as_omitted",

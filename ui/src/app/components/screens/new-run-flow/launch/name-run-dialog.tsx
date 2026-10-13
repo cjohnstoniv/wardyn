@@ -24,7 +24,7 @@ import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { BarrierMark } from "../../../wardyn/barrier-mark";
 import { useModelAccessDoor } from "../../../wardyn/model-access-context";
-import { useAdoLaunchDoor } from "../../new-run/use-ado-launch-door";
+import { useAdoLaunchDoor } from "../checks/use-ado-launch-door";
 import { intentToWire } from "../draft/intent-to-wire";
 import type { RunIntent } from "../draft/run-intent";
 import { useDraftIdentity, useIntentChecks } from "../draft/use-intent-checks";

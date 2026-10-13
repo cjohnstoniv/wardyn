@@ -135,8 +135,9 @@ or approved changes.
   (`RuleSourceChip`) — the sidecar logs no per-push cause text for this
   source, so the canned sentence is the whole explanation.
 
-The rail's "Push rules" section (`ui/src/app/components/screens/new-run/new-run-rail.tsx`)
-renders only when `pushRulesIsSet(spec.push_rules)` — mirroring Go's
-`PushRulesSpec.IsSet()` exactly, so a stored `{}` reads as no section, not
-"0 paths denied · 0 paths held for review". An unattended run adds
-`PUSH.RAIL_UNATTENDED`.
+The old New Run rail's "Push rules" section is retired with the rail. It rendered only when
+`pushRulesIsSet(spec.push_rules)` held, mirroring Go's `PushRulesSpec.IsSet()`, so a stored `{}` read
+as no section, not "0 paths denied · 0 paths held for review"; an unattended run added
+`PUSH.RAIL_UNATTENDED`. New Run's Review shows the push rules in the effective policy it reads back
+(`new-run-flow/review/policy-rows.ts`), and the string `PUSH.RAIL_UNATTENDED` has no reader until a
+screen takes it up.
