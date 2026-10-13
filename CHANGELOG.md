@@ -1059,6 +1059,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - A kill recovered by the sweep now settles for a run on an offline or revoked self-hosted runner; its `run.kill`
   row carries `sandbox_stop` = `queued` or `runner_revoked`, and neither says the sandbox is gone.
 - A resumed run restarts its quiet clock, so the idle-pause sweep no longer freezes it again straight away.
+- On a wrapped (bring-your-own) image with recording on, the task now runs after the image selftest; before, the
+  recorder refused to overwrite the selftest's recording, the task did not run and the run ended COMPLETED.
 
 
 ## [0.8.9] — 2026-10-09
