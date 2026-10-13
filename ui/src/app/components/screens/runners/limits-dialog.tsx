@@ -53,9 +53,9 @@ function initial(t: LimitsTarget): Vals {
 const share = (v: Vals) => perRunShare({ cpu: Number(v.tc), mem: Number(v.tm), disk: Number(v.td) }, Number(v.rn));
 
 const PAIRS: { total: FieldId; per: FieldId; reported: (a: RunnerAmounts) => number; unit: (n: number) => string }[] = [
-  { total: "tc", per: "pc", reported: (a) => cpus(a.cpu_millis), unit: (n) => RES.CPUS(n) },
-  { total: "tm", per: "pm", reported: (a) => gb(a.memory_mib), unit: (n) => `${n} GB memory` },
-  { total: "td", per: "pd", reported: (a) => gb(a.disk_mib), unit: (n) => `${n} GB disk` },
+  { total: "tc", per: "pc", reported: (a) => a.cpu_millis / 1000, unit: (n) => RES.CPUS(cpus(n * 1000)) },
+  { total: "tm", per: "pm", reported: (a) => a.memory_mib / 1024, unit: (n) => `${gb(n * 1024)} GB memory` },
+  { total: "td", per: "pd", reported: (a) => a.disk_mib / 1024, unit: (n) => `${gb(n * 1024)} GB disk` },
 ];
 
 /** The amount each field will send, in the dialog's units: a field still showing what it loaded is its exact loaded value, not the rounded display. */
