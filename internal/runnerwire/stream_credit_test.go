@@ -63,8 +63,9 @@ func connWindowWithin(t *testing.T, r *rawPeer, want int64, limit time.Duration)
 }
 
 // Characterization: a live stream returns credit in StreamWindow/4 grants and
-// the connection's in ConnWindow/4 batches. What is not yet returned sits in the
-// reader's unacked tally or the peer's connPend; none of it is lost.
+// the connection's in ConnWindow/4 batches of every byte read. What is not yet
+// returned sits in the reader's unacked tally (stream) or the peer's connPend
+// (connection); none of it is lost.
 func TestStreamCreditLiveStreamAccounting(t *testing.T) {
 	accepted := make(chan *Stream, 1)
 	p := newPair(t, PeerConfig{}, PeerConfig{OnOpen: func(s *Stream, o Open) error { accepted <- s; return nil }})
@@ -74,7 +75,8 @@ func TestStreamCreditLiveStreamAccounting(t *testing.T) {
 	}
 	run := <-accepted
 	// Reads in 4 KiB blocks make every stream grant exactly StreamWindow/4: 18
-	// grants (one connection batch of 16 sent, 2 pending) and 5 blocks unacked.
+	// grants and 5 blocks unacked. The connection counts all of it: one batch of
+	// ConnWindow/4 sent, 2 grants and the 5 blocks pending.
 	const block = 4 << 10
 	const total = 18*StreamWindow/4 + 5*block
 	go func() { _, _ = run.Write(make([]byte, total)) }()
@@ -91,14 +93,62 @@ func TestStreamCreditLiveStreamAccounting(t *testing.T) {
 		p.org.mu.Lock()
 		pend = p.org.connPend
 		p.org.mu.Unlock()
-		return avail(run.send)+unacked == StreamWindow && avail(p.run.connSend)+pend+unacked == ConnWindow
+		return avail(run.send)+unacked == StreamWindow && avail(p.run.connSend)+pend == ConnWindow
 	})
-	if unacked != 5*block || pend != 2*StreamWindow/4 {
-		t.Fatalf("unacked = %d, connPend = %d; want %d and %d", unacked, pend, 5*block, 2*StreamWindow/4)
+	if unacked != 5*block || pend != 2*StreamWindow/4+5*block {
+		t.Fatalf("unacked = %d, connPend = %d; want %d and %d", unacked, pend, 5*block, 2*StreamWindow/4+5*block)
 	}
 	go func() { _, _ = run.Write([]byte("x")) }()
 	if _, err := io.ReadFull(s, make([]byte, 1)); err != nil {
 		t.Fatalf("the live stream stopped: %v", err)
+	}
+}
+
+// Many live streams, each read below its StreamWindow/4 grant threshold, still
+// return connection credit: 128 streams x 32 KiB fill the connection window,
+// the far side reads them all, and a further write must not wait for any
+// stream to end.
+func TestStreamCreditReturnedUnderManyLiveStreams(t *testing.T) {
+	const streams, size = 128, 32 << 10
+	if streams*size < ConnWindow || size >= StreamWindow/4 || streams > MaxStreams {
+		t.Fatalf("%d streams x %d bytes no longer fills the connection window below the stream grant", streams, size)
+	}
+	accepted := make(chan *Stream, streams)
+	p := newPair(t, PeerConfig{}, PeerConfig{OnOpen: func(s *Stream, o Open) error { accepted <- s; return nil }})
+	org := make([]*Stream, streams)
+	run := make([]*Stream, streams)
+	for i := range streams {
+		s, err := p.org.Open(ctxT(t), Open{Kind: KindPTY})
+		if err != nil {
+			t.Fatalf("stream %d: open: %v", i, err)
+		}
+		org[i], run[i] = s, <-accepted
+	}
+	for i, s := range run {
+		if _, err := s.Write(make([]byte, size)); err != nil {
+			t.Fatalf("stream %d: write: %v", i, err)
+		}
+	}
+	for i, s := range org {
+		if _, err := io.ReadFull(s, make([]byte, size)); err != nil {
+			t.Fatalf("stream %d: read: %v", i, err)
+		}
+	}
+	werr := make(chan error, 1)
+	go func() { _, err := run[0].Write([]byte("x")); werr <- err }()
+	select {
+	case err := <-werr:
+		if err != nil {
+			t.Fatalf("further write: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("a further write waited on connection credit the reads never returned")
+	}
+	if _, err := io.ReadFull(org[0], make([]byte, 1)); err != nil {
+		t.Fatalf("the further byte did not arrive: %v", err)
+	}
+	if !p.org.Online() || !p.run.Online() {
+		t.Fatal("the connection closed")
 	}
 }
 

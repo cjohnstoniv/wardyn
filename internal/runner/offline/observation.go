@@ -88,6 +88,14 @@ func (m *Manager) observeRun(ctx context.Context, id uuid.UUID) (*runnerwire.Run
 			return nil, err
 		}
 	}
+	// A quarantine that arrived meanwhile owns the evidence: do not reopen (and
+	// so recreate) a spool erasure may be about to delete.
+	m.mu.Lock()
+	current := m.state.Runs[id]
+	m.mu.Unlock()
+	if current.Quarantine != nil || current.EvidenceErased {
+		return nil, nil
+	}
 	spool, err := runnerspool.Open(filepath.Join(m.dir, "spools", id.String()), id)
 	if err != nil {
 		return nil, err
@@ -118,7 +126,7 @@ func (m *Manager) observeAgent(ctx context.Context, id uuid.UUID, r localRun, ro
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	current := m.state.Runs[id]
-	if current.Generation != r.Generation || current.ExecID != r.ExecID || current.Ref != r.Ref || current.Exit != nil {
+	if current.Generation != r.Generation || current.ExecID != r.ExecID || current.Ref != r.Ref || current.Exit != nil || current.Quarantine != nil || current.EvidenceErased {
 		return nil
 	}
 	current.Exit = &runnerwire.AgentExit{Generation: r.Generation, ExecID: r.ExecID, Ref: placement.RunnerRefPrefix(m.runnerID.String()) + r.Ref, Code: *agent.ExitCode, ObservedAt: m.now().UTC()}

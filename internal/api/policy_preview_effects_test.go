@@ -57,13 +57,3 @@ func (s previewQuotaSpy) CreateGrant(context.Context, types.CredentialGrant) (ty
 	s.t.Fatal("preview persisted a grant")
 	return types.CredentialGrant{}, nil
 }
-
-type previewWorkspaceLookupSpy struct {
-	*ownerStore
-	t *testing.T
-}
-
-func (s previewWorkspaceLookupSpy) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
-	s.t.Fatal("preview looked up an unattached workspace override")
-	return types.Workspace{}, nil
-}

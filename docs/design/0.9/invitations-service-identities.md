@@ -130,9 +130,9 @@ The mechanism is on [service-identities.md](service-identities.md). In short:
 
 ## 6. Migration
 
-### 6.1 Schema 0196
+### 6.1 Schema 0157
 
-- One file, `0196_invitations_service_identities.sql`, provisional and renumbered at merge.
+- One file, `0157_invitations_service_identities.sql`, merged under that number.
 - `person_invitations` ([§3.1](#31-record)) and `service_identities` ([record](service-identities.md#2-record)).
 - `api_token_moves (token_id PK → api_tokens, service_identity → service_identities, linked_by, linked_at)`.
 - The `actor_type` check on the partitioned `audit_events` parent widened to add `service`.
@@ -166,7 +166,7 @@ Each row of `?minted_for_others=true` gains `disposition`, derived at read. Revo
 | Admin-token runs are operator-owned and read the operator namespace | `TestOwnerOnlyGrant_OperatorOwnedRunReadsTheOperatorRow`, `TestRunComponents_OperatorOwnedRunReadsTheOperatorNamespace` |
 | The admin token still authenticates | `TestAPITokenAuth_AdminTokenStillWorks` |
 | A CI principal that is an IdP user keeps its own token | `TestAPITokens_CreateListRevoke` |
-| Local mode, with no sign-in, is unchanged; both new families answer `409` `needs_sso` there | `TestServiceIdentity_LocalModeRefusesAndRunsStillLaunch` (new) |
+| Local mode is unchanged; service identities answer `409` `needs_sso` there, invitation claims per [§3.4](#34-who-gets-what) | `TestServiceIdentity_LocalModeRefusesAndRunsStillLaunch` (new) |
 | The upgrade itself changes no token | `TestMigration0196_TokensAndRunsUnchanged` (new): seeded 0195 database, every `api_tokens` and `agent_runs` row byte-identical after |
 
 ## 7. Wire
@@ -258,9 +258,9 @@ The docs lane places these as new numbered residuals. [`ARCHITECTURE.md`](../../
 
 | Slice | Executor | Content | After |
 |---|---|---|---|
-| C1 | core, Sonnet high | Migration 0196; invitation store and routes; the shared mint core; claim; mint-site pin | owner decisions |
+| C1 | core, Sonnet high | Migration 0157; invitation store and routes; the shared mint core; claim; mint-site pin | owner decisions |
 | C2 | core, Sonnet high | Service identity store, routes and auth branch; `ActorService`; allow-list; sponsor checks; run sponsor; actor-type call-site review | C1 |
-| C4 | core, Sonnet high | `ownsRunOrSponsorOrAdmin` on the read and kill routes only; the `service_attach` value and its 0196 restriction row; the sponsor arm of `mayEnterRun`; the sponsor ticket stamp ([sponsor reach](service-identities.md#8-sponsor-reach-over-the-services-runs)) | C2 |
+| C4 | core, Sonnet high | `ownsRunOrSponsorOrAdmin` on the read and kill routes only; the `service_attach` value and its restriction row (`0167_service_attach_restriction`); the sponsor arm of `mayEnterRun`; the sponsor ticket stamp ([sponsor reach](service-identities.md#8-sponsor-reach-over-the-services-runs)) | C2 |
 | C3 | core, Sonnet high | Dispositions; `POST /tokens/{id}/move`; sponsored-token sweep in `revokePersonCredentials`; directory exclusions | C1, C2 |
 | U1 | Sonnet, console | One mock round, then the Account claim card, the sponsor's mint card and the disposition column | C1–C3 |
 | M1 | free or Haiku | `pkg/client` methods, CLI verbs, TS mirror (the `service_attach` feature label included), wire-parity tests | C1–C4 |
@@ -311,3 +311,7 @@ The owner accepted every recommendation except D11, amended, and re-ruled four r
 | D15 | Names as in [§7](#7-wire); audit verb `claim`; console noun "Service identities" |
 | D16 | **Amended.** Console: the claim card, the sponsor's service-token mint card and the token-state column, in one mock round. Create, suspend and retire stay API and CLI only; the CLI has no token mint |
 | D17 | Create, suspend and retire on the security tier, as `POST /people` |
+
+**Four-eyes on create and sponsor change (owner ruling, 2026-10-11, extends D10 and D17).** A service identity takes any existing user type directly, and its ceiling is not bounded by the sponsor's (D10).
+
+With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, a create and any `PATCH` that changes the sponsor are therefore held as governance change kind `service_identity` and need a distinct human on the security tier; the `PATCH` is held whole. Description, suspend, unsuspend and retire stay direct (D17). An approval applies only against the reviewed state, otherwise `409 governance_change_stale`. No migration: `governance_changes.target_kind` has no CHECK. See [governance writes](../../operations/governance-writes.md).

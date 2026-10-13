@@ -155,16 +155,16 @@ func newWithClient(cli envbuilderDockerAPI, envbuilderImage, cacheRepo string) *
 }
 
 // Build runs envbuilder for the given spec, then finalizes the pushed base image with Wardyn's
-// runner tools, returning spec.OutputImageTag on success. Fails closed with no CacheRepo or a
+// runner tools, returning the built image (Ref = spec.OutputImageTag) on success. Fails closed with no CacheRepo or a
 // non-zero exit code; the build container is always force-removed on exit, including on cancellation/timeout.
-func (b *Builder) Build(ctx context.Context, spec BuildSpec) (imageRef string, err error) {
+func (b *Builder) Build(ctx context.Context, spec BuildSpec) (Built, error) {
 	if spec.OutputImageTag == "" {
-		return "", fmt.Errorf("envbuild: BuildSpec.OutputImageTag is required")
+		return Built{}, fmt.Errorf("envbuild: BuildSpec.OutputImageTag is required")
 	}
 	// Without a scheme allowlist, file://, ssh://, or ext::<cmd> transports
 	// enable host file disclosure or RCE in the build container.
 	if err := validateBuildInput(spec); err != nil {
-		return "", err
+		return Built{}, err
 	}
 
 	pushRepo, buildTag := b.newPushRef()
@@ -176,19 +176,19 @@ func (b *Builder) Build(ctx context.Context, spec BuildSpec) (imageRef string, e
 // contextTar, when non-nil, is streamed into the container at contextTarDest before start (a bind
 // mount cannot carry it). buildTag is this build's per-build push tag, pulled back via pushedBaseRef
 // so concurrent builds on one CacheRepo never collide.
-func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBinds []string, contextTar io.Reader, contextTarDest string, logSink io.Writer, outputTag, buildTag string) (string, error) {
+func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBinds []string, contextTar io.Reader, contextTarDest string, logSink io.Writer, outputTag, buildTag string) (Built, error) {
 	// Registry PUSH is the only delivery path; fail closed with no registry set.
 	if err := b.requireCacheRepo(); err != nil {
-		return "", err
+		return Built{}, err
 	}
 	// Preflight the finalize tool sources so a doomed build fails fast, not after minutes of building.
 	toolsDir, err := b.validateToolsDir()
 	if err != nil {
-		return "", err
+		return Built{}, err
 	}
 	insecure, err := b.effectiveRegistryInsecure()
 	if err != nil {
-		return "", err
+		return Built{}, err
 	}
 	if insecure {
 		env = append(env, "ENVBUILDER_INSECURE=true")
@@ -203,7 +203,7 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 
 	// Ensure envbuilder image is present; fail closed if the pull fails.
 	if err := b.ensureImage(ctx, b.EnvbuilderImage); err != nil {
-		return "", err
+		return Built{}, err
 	}
 
 	cfg := &container.Config{
@@ -214,13 +214,13 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 	}
 	hostCfg, err := b.hardenedHostConfig()
 	if err != nil {
-		return "", err
+		return Built{}, err
 	}
 	hostCfg.Binds = append(hostCfg.Binds, extraBinds...)
 
 	created, err := b.cli.ContainerCreate(ctx, client.ContainerCreateOptions{Config: cfg, HostConfig: hostCfg})
 	if err != nil {
-		return "", fmt.Errorf("envbuild: create build container: %w", err)
+		return Built{}, fmt.Errorf("envbuild: create build container: %w", err)
 	}
 	containerID := created.ID
 	defer b.liveBuilds.track(containerID)() // see reaper.go
@@ -230,7 +230,7 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 		rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer rmCancel()
 		_, _ = b.cli.ContainerRemove(rmCtx, containerID, client.ContainerRemoveOptions{Force: true})
-		return "", fmt.Errorf("environment build refused: the Docker daemon discarded %s; builds always run with their caps: %w",
+		return Built{}, fmt.Errorf("environment build refused: the Docker daemon discarded %s; builds always run with their caps: %w",
 			strings.Join(lims, "; "), dockerutil.ErrCapsDiscarded)
 	}
 	if contextTar != nil {
@@ -240,7 +240,7 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 			rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer rmCancel()
 			_, _ = b.cli.ContainerRemove(rmCtx, containerID, client.ContainerRemoveOptions{Force: true})
-			return "", fmt.Errorf("envbuild: stage build context: %w", err)
+			return Built{}, fmt.Errorf("envbuild: stage build context: %w", err)
 		}
 	}
 
@@ -253,7 +253,7 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 	}()
 
 	if _, err := b.cli.ContainerStart(ctx, containerID, client.ContainerStartOptions{}); err != nil {
-		return "", fmt.Errorf("envbuild: start build container: %w", err)
+		return Built{}, fmt.Errorf("envbuild: start build container: %w", err)
 	}
 
 	// Stream build logs concurrently while waiting for the container to finish.
@@ -277,17 +277,17 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 	select {
 	case <-ctx.Done():
 		// Timeout or cancellation: the defer above removes the container.
-		return "", fmt.Errorf("envbuild: build cancelled or timed out: %w", ctx.Err())
+		return Built{}, fmt.Errorf("envbuild: build cancelled or timed out: %w", ctx.Err())
 
 	case waitErr := <-wait.Error:
-		return "", fmt.Errorf("envbuild: waiting for build container: %w", waitErr)
+		return Built{}, fmt.Errorf("envbuild: waiting for build container: %w", waitErr)
 
 	case resp := <-wait.Result:
 		if resp.Error != nil {
-			return "", fmt.Errorf("envbuild: build container error: %s", resp.Error.Message)
+			return Built{}, fmt.Errorf("envbuild: build container error: %s", resp.Error.Message)
 		}
 		if resp.StatusCode != 0 {
-			return "", fmt.Errorf("envbuild: build failed with exit code %d", resp.StatusCode)
+			return Built{}, fmt.Errorf("envbuild: build failed with exit code %d", resp.StatusCode)
 		}
 	}
 
@@ -326,10 +326,11 @@ const perBuildBaseUntagTimeout = 30 * time.Second
 // Wardyn's runner tools, with no untrusted-code build container and no registry push — just a
 // host-side FROM+COPY, so it is wrap-only (assertWrapSafeBase refuses ONBUILD triggers). The base is
 // pulled only if absent; baseRef may be a mutable tag or digest-pinned (pinning honored, not enforced).
-func (b *Builder) FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer) (string, error) {
+// forcePull pulls the base again even when it is present (a refresh): a pull failure fails the wrap.
+func (b *Builder) FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer, forcePull bool) (Built, error) {
 	toolsDir, err := b.validateToolsDir()
 	if err != nil {
-		return "", err
+		return Built{}, err
 	}
 	// Same timeout ceiling as runBuildAndFinalize, needed since a caller may detach from request cancellation.
 	timeout := b.BuildTimeout
@@ -338,14 +339,18 @@ func (b *Builder) FinalizeBase(ctx context.Context, baseRef, outputTag string, l
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	if err := b.ensureImage(ctx, baseRef); err != nil {
-		return "", fmt.Errorf("envbuild: BYOI base image %q not pullable/present: %w "+
+	ensure := b.ensureImage
+	if forcePull {
+		ensure = func(ctx context.Context, ref string) error { return dockerutil.PullImage(ctx, b.cli, ref, "envbuild") }
+	}
+	if err := ensure(ctx, baseRef); err != nil {
+		return Built{}, fmt.Errorf("envbuild: BYOI base image %q not pullable/present: %w "+
 			"(pre-pull a private image on the host with `docker pull`)", baseRef, err)
 	}
 	if logSink == nil {
 		logSink = b.DefaultLogSink
 	}
-	// pullParent=false: ensureImage already made the base present locally; a registry pull here would fail for a local-only or digest-pinned user image.
+	// pullParent=false: the base is already present locally (ensured or force-pulled above); a registry pull here would fail for a local-only or digest-pinned user image.
 	return b.finalizeImage(ctx, baseRef, outputTag, toolsDir, logSink, false)
 }
 
@@ -702,22 +707,30 @@ func (b *Builder) pushedBaseRef(buildTag string) string {
 // finalizeImage runs the second-stage build: FROM the pushed image, COPY Wardyn's runner tools onto
 // PATH, tag as outputTag. Only FROM+COPY on the host daemon — no untrusted RUN — so it needs no build
 // sandbox. pullBase pulls fresh before the wrap; BYOI passes false since ensureImage already made the base present.
-func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDir string, logSink io.Writer, pullBase bool) (string, error) {
+func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDir string, logSink io.Writer, pullBase bool) (Built, error) {
 	if strings.ContainsAny(baseRef, " \t\r\n\x00") {
-		return "", fmt.Errorf("envbuild: finalize base ref %q contains illegal whitespace/control characters", baseRef)
+		return Built{}, fmt.Errorf("envbuild: finalize base ref %q contains illegal whitespace/control characters", baseRef)
 	}
 	// Pull here (not via ImageBuild's PullParent) so the ONBUILD preflight below inspects the exact image the wrap build resolves as FROM (avoids TOCTOU).
 	if pullBase {
 		if err := dockerutil.PullImage(ctx, b.cli, baseRef, "envbuild"); err != nil {
-			return "", err
+			return Built{}, err
 		}
 	}
-	if err := b.assertWrapSafeBase(ctx, baseRef); err != nil {
-		return "", err
-	}
-	tarCtx, err := buildFinalizeContext(baseRef, toolsDir)
+	digestRef, err := b.assertWrapSafeBase(ctx, baseRef)
 	if err != nil {
-		return "", err
+		return Built{}, err
+	}
+	// A BYOI wrap (pullBase=false) builds FROM the digest the inspected image was pulled as, so the record names what was
+	// wrapped; the stage-1 base is this build's own per-build push ref and keeps its tag.
+	from, baseDigest := baseRef, ""
+	if !pullBase && digestRef != "" {
+		from = digestRef
+		baseDigest = digestRef[strings.LastIndex(digestRef, "@")+1:]
+	}
+	tarCtx, err := buildFinalizeContext(from, toolsDir)
+	if err != nil {
+		return Built{}, err
 	}
 	resp, err := b.cli.ImageBuild(ctx, tarCtx, client.ImageBuildOptions{
 		Tags:        []string{outputTag},
@@ -728,14 +741,15 @@ func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDi
 		PullParent: false,
 	})
 	if err != nil {
-		return "", fmt.Errorf("envbuild: finalize image build (COPY runner tools): %w", err)
+		return Built{}, fmt.Errorf("envbuild: finalize image build (COPY runner tools): %w", err)
 	}
 	defer resp.Body.Close()
 	// ImageBuild returns nil even on failure; the error arrives as {"error":...} in the response stream, so draining it is how failure is detected.
-	if err := drainBuildResponse(resp.Body, logSink); err != nil {
-		return "", fmt.Errorf("envbuild: finalize image build failed: %w", err)
+	id, err := drainBuildResponse(resp.Body, logSink)
+	if err != nil {
+		return Built{}, fmt.Errorf("envbuild: finalize image build failed: %w", err)
 	}
-	return outputTag, nil
+	return Built{Ref: outputTag, ID: id, BaseDigest: baseDigest}, nil
 }
 
 // assertWrapSafeBase enforces the wrap-only contract: wrapping adds layers, it never executes
@@ -743,25 +757,26 @@ func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDi
 // as a FROM, so a hostile BYOI base with `ONBUILD RUN curl … | sh` is build-time RCE; Docker cannot
 // suppress or report triggers, so refusing the base is the only fail-closed move. Checking only the
 // direct base suffices: ONBUILD fires one level down and children don't inherit it.
-func (b *Builder) assertWrapSafeBase(ctx context.Context, baseRef string) error {
+func (b *Builder) assertWrapSafeBase(ctx context.Context, baseRef string) (digestRef string, err error) {
 	res, err := b.cli.ImageInspect(ctx, baseRef)
 	if err != nil {
-		return fmt.Errorf("envbuild: inspect base image %q before wrapping: %w", baseRef, err)
+		return "", fmt.Errorf("envbuild: inspect base image %q before wrapping: %w", baseRef, err)
 	}
-	if res.Config == nil || len(res.Config.OnBuild) == 0 {
-		return nil
+	if res.Config != nil && len(res.Config.OnBuild) > 0 {
+		return "", fmt.Errorf("envbuild: refusing to wrap base image %q: it declares %d ONBUILD trigger(s) "+
+			"(first: %q). ONBUILD instructions execute on the HOST Docker daemon during the wrap "+
+			"build — outside every confinement tier — so wrapping such a base would run "+
+			"image-controlled code on the host. Resolve the triggers in an image you build "+
+			"yourself (a Dockerfile with `FROM %s` fires them at YOUR build time) and pass that "+
+			"image instead", baseRef, len(res.Config.OnBuild), res.Config.OnBuild[0], baseRef)
 	}
-	return fmt.Errorf("envbuild: refusing to wrap base image %q: it declares %d ONBUILD trigger(s) "+
-		"(first: %q). ONBUILD instructions execute on the HOST Docker daemon during the wrap "+
-		"build — outside every confinement tier — so wrapping such a base would run "+
-		"image-controlled code on the host. Resolve the triggers in an image you build "+
-		"yourself (a Dockerfile with `FROM %s` fires them at YOUR build time) and pass that "+
-		"image instead", baseRef, len(res.Config.OnBuild), res.Config.OnBuild[0], baseRef)
+	return repoDigestFor(baseRef, res.RepoDigests), nil
 }
 
 // drainBuildResponse consumes the daemon's JSON build-output stream, forwarding human-readable
-// "stream" text to logSink (if any) and returning the first build error reported in the stream.
-func drainBuildResponse(body io.Reader, logSink io.Writer) error {
+// "stream" text to logSink (if any) and returning the first build error reported in the stream, else the
+// image ID of the last {"aux":{"ID":...}} message ("" when the stream carried none).
+func drainBuildResponse(body io.Reader, logSink io.Writer) (id string, err error) {
 	dec := json.NewDecoder(body)
 	for {
 		var msg struct {
@@ -770,21 +785,27 @@ func drainBuildResponse(body io.Reader, logSink io.Writer) error {
 			ErrorDetail struct {
 				Message string `json:"message"`
 			} `json:"errorDetail"`
+			Aux struct {
+				ID string `json:"ID"`
+			} `json:"aux"`
 		}
 		if err := dec.Decode(&msg); err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil
+				return id, nil
 			}
-			return fmt.Errorf("decode build stream: %w", err)
+			return "", fmt.Errorf("decode build stream: %w", err)
 		}
 		if logSink != nil && msg.Stream != "" {
 			_, _ = io.WriteString(logSink, msg.Stream)
 		}
 		if msg.Error != "" {
-			return errors.New(msg.Error)
+			return "", errors.New(msg.Error)
 		}
 		if msg.ErrorDetail.Message != "" {
-			return errors.New(msg.ErrorDetail.Message)
+			return "", errors.New(msg.ErrorDetail.Message)
+		}
+		if msg.Aux.ID != "" {
+			id = msg.Aux.ID
 		}
 	}
 }

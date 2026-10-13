@@ -31,16 +31,24 @@ export const TEMPLATE_REASON = {
   REVISION_CONFLICT: "template_revision_conflict",
   /** 501: the template store is not available on this server yet. */
   TEMPLATES_UNAVAILABLE: "templates_unavailable",
+  /** 409: another template of the same audience already uses the name. */
+  NAME_TAKEN: "template_name_taken",
+  /** 409: the audience already holds the most templates it may. */
+  LIMIT_REACHED: "template_limit_reached",
+  /** 422: a policy holds only run-wide network, credential and access-rule keys. */
+  POLICY_FIELD_REFUSED: "template_policy_field_refused",
 } as const;
 
 export type TemplateReason = (typeof TEMPLATE_REASON)[keyof typeof TEMPLATE_REASON];
 
 /** The sentences, byte for byte what internal/api/template_refusals.go says. */
 export const TEMPLATE_REFUSAL = {
-  DOCUMENT_INVALID: (detail: string) => `This is not a template document: ${detail}.`,
+  DOCUMENT_INVALID: (detail: string) => `This document cannot be read: ${detail}.`,
   VERSION_UNSUPPORTED: (what: string) =>
-    `${what} is not a template format this server reads. Use api_version wardyn/v1 and kind RunTemplate.`,
-  FIELD_UNKNOWN: (path: string) => `${path} is not a template field. Remove it, or check the spelling.`,
+    `${what} is not a document this server reads. Use api_version wardyn/v1 and kind Run or RunTemplate.`,
+  KIND_MISMATCH: (want: string, got: string) =>
+    `This door reads a document of kind ${want}, and this one is kind ${got}. Change kind to ${want}.`,
+  FIELD_UNKNOWN: (path: string) => `${path} is not a field this document can hold. Remove it, or check the spelling.`,
   FIELD_INVALID: (path: string, detail: string) => `${path} ${detail}.`,
   FIELD_EXCLUDED: (path: string) => `${path} is never part of a template: it belongs to one launch, or it is retired.`,
   SECRET_REFUSED: (path: string) =>
@@ -48,25 +56,30 @@ export const TEMPLATE_REFUSAL = {
   RUN_STATE_REFUSED: (path: string) =>
     `${path} is state of one run. A template holds reusable choices, not a run's history or authority.`,
   METADATA_IN_CONTENT: (path: string) => `${path} is set by the server from who saves the template. Remove it from the document.`,
-  FIELD_UNAVAILABLE: (path: string) => `${path} cannot be used in a template on this server yet. Remove it for now: nothing was dropped.`,
+  FIELD_UNAVAILABLE: (path: string) => `${path} cannot be used in a document on this server yet. Remove it for now: nothing was dropped.`,
   DEPENDENCY_MISSING: (path: string, needs: string) => `${path} needs ${needs}. Include it, or list it under needs_setup.`,
   COVERAGE_INVALID: (detail: string) => `The template's coverage does not fit its content: ${detail}.`,
   SHARED_FIELD_REFUSED: (path: string, scope: string) =>
     `${path} names something only one person has, so it cannot be in a ${scope} template.`,
   SCOPE_FORBIDDEN_ORG: () => "Only an organisation administrator can publish templates for the organisation.",
-  SCOPE_FORBIDDEN_GROUP: () => "Only an administrator of that group can publish templates to it.",
+  SCOPE_FORBIDDEN_GROUP: () => "Only the template managers of that group can publish templates to it.",
   SCOPE_FORBIDDEN_PERSON: () => "A personal template belongs to the person who owns it.",
   GROUP_UNVERIFIED: () => "Your group membership cannot be checked from this sign-in. Sign in again, then retry.",
   NOT_FOUND: () => "That template does not exist, or you cannot see it.",
   REVISION_CONFLICT: (current: string) =>
     `This template changed to revision ${current} since you opened it. Reload it, then apply your edit again.`,
   TEMPLATES_UNAVAILABLE: () => "Templates are not available on this server yet.",
+  NAME_TAKEN: () => "Another template available to the same people already uses this name.",
+  LIMIT_REACHED: (limit: string) => `This scope already holds ${limit} templates, the most it can. Delete one first.`,
+  POLICY_FIELD_REFUSED: (path: string) =>
+    `${path} is not a network, credential or access rule. A policy holds only those; save a template instead.`,
 } as const;
 
 /** Every sentence function by key, for the parity test and for callers that pick one by reason. */
 export const TEMPLATE_REFUSAL_BY_KEY: Record<keyof typeof TEMPLATE_REFUSAL, (...args: string[]) => string> = {
   DOCUMENT_INVALID: (...a) => TEMPLATE_REFUSAL.DOCUMENT_INVALID(a[0]),
   VERSION_UNSUPPORTED: (...a) => TEMPLATE_REFUSAL.VERSION_UNSUPPORTED(a[0]),
+  KIND_MISMATCH: (...a) => TEMPLATE_REFUSAL.KIND_MISMATCH(a[0], a[1]),
   FIELD_UNKNOWN: (...a) => TEMPLATE_REFUSAL.FIELD_UNKNOWN(a[0]),
   FIELD_INVALID: (...a) => TEMPLATE_REFUSAL.FIELD_INVALID(a[0], a[1]),
   FIELD_EXCLUDED: (...a) => TEMPLATE_REFUSAL.FIELD_EXCLUDED(a[0]),
@@ -84,12 +97,16 @@ export const TEMPLATE_REFUSAL_BY_KEY: Record<keyof typeof TEMPLATE_REFUSAL, (...
   NOT_FOUND: () => TEMPLATE_REFUSAL.NOT_FOUND(),
   REVISION_CONFLICT: (...a) => TEMPLATE_REFUSAL.REVISION_CONFLICT(a[0]),
   TEMPLATES_UNAVAILABLE: () => TEMPLATE_REFUSAL.TEMPLATES_UNAVAILABLE(),
+  NAME_TAKEN: () => TEMPLATE_REFUSAL.NAME_TAKEN(),
+  LIMIT_REACHED: (...a) => TEMPLATE_REFUSAL.LIMIT_REACHED(a[0]),
+  POLICY_FIELD_REFUSED: (...a) => TEMPLATE_REFUSAL.POLICY_FIELD_REFUSED(a[0]),
 };
 
 /** The reason each sentence belongs to. */
 export const TEMPLATE_REFUSAL_REASON: Record<keyof typeof TEMPLATE_REFUSAL, TemplateReason> = {
   DOCUMENT_INVALID: TEMPLATE_REASON.DOCUMENT_INVALID,
   VERSION_UNSUPPORTED: TEMPLATE_REASON.VERSION_UNSUPPORTED,
+  KIND_MISMATCH: TEMPLATE_REASON.VERSION_UNSUPPORTED,
   FIELD_UNKNOWN: TEMPLATE_REASON.FIELD_UNKNOWN,
   FIELD_INVALID: TEMPLATE_REASON.FIELD_INVALID,
   FIELD_EXCLUDED: TEMPLATE_REASON.FIELD_EXCLUDED,
@@ -107,4 +124,7 @@ export const TEMPLATE_REFUSAL_REASON: Record<keyof typeof TEMPLATE_REFUSAL, Temp
   NOT_FOUND: TEMPLATE_REASON.NOT_FOUND,
   REVISION_CONFLICT: TEMPLATE_REASON.REVISION_CONFLICT,
   TEMPLATES_UNAVAILABLE: TEMPLATE_REASON.TEMPLATES_UNAVAILABLE,
+  NAME_TAKEN: TEMPLATE_REASON.NAME_TAKEN,
+  LIMIT_REACHED: TEMPLATE_REASON.LIMIT_REACHED,
+  POLICY_FIELD_REFUSED: TEMPLATE_REASON.POLICY_FIELD_REFUSED,
 };

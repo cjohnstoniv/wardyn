@@ -17,16 +17,16 @@ import (
 // be WIRED.
 type fakeDevcontainerBuilder struct{ tag string }
 
-func (b fakeDevcontainerBuilder) FinalizeBase(context.Context, string, string, io.Writer) (string, error) {
-	return b.tag, nil
+func (b fakeDevcontainerBuilder) FinalizeBase(context.Context, string, string, io.Writer, bool) (BuiltImage, error) {
+	return BuiltImage{Ref: b.tag}, nil
 }
 
-func (b fakeDevcontainerBuilder) BuildDevcontainer(context.Context, string, string, string, io.Writer) (string, error) {
-	return b.tag, nil
+func (b fakeDevcontainerBuilder) BuildDevcontainer(context.Context, string, string, string, io.Writer) (BuiltImage, error) {
+	return BuiltImage{Ref: b.tag}, nil
 }
 
-func (b fakeDevcontainerBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (string, error) {
-	return b.tag, nil
+func (b fakeDevcontainerBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (BuiltImage, error) {
+	return BuiltImage{Ref: b.tag}, nil
 }
 
 // resolveCreateRunImage fails a workspace base_image CLOSED when no

@@ -154,7 +154,7 @@ func TestPG_SetRunEndAndWait(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name     string
+		name       string
 		id         uuid.UUID
 		fromLimits types.RunLimits
 		fromEnd    *time.Time

@@ -1,0 +1,46 @@
+/**
+ * Copyright 2026 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// GET /api/v1/me/drives — the drive catalogue New Run attaches from. Mirrors
+// pkg/client/me_drives.go (wire-parity.test.ts pins the keys). Nothing here
+// names a host path, a storage object or another person.
+import type { DriveBackend, StorageEnforcement } from "./drives";
+import { asJson, unwrapList, wfetch } from "./core";
+
+export type MeDriveSection = "user" | "shared";
+export type MeDriveSource = "personal" | "team" | "organisation";
+export type MeDriveUnavailableReason = "paused" | "unmountable" | "not_in_pool";
+
+/** One drive of the caller's catalogue (pkg/client.MeDrive). */
+export interface MeDrive {
+  id: string;
+  name: string;
+  section: MeDriveSection;
+  source: MeDriveSource;
+  backend: DriveBackend;
+  /** Where the drive mounts, derived by the server. */
+  target: string;
+  writable: boolean;
+  size_mib?: number;
+  enforcement: StorageEnforcement;
+  /** The drive `drive.enabled` mounts at /home/agent/drive. */
+  legacy: boolean;
+  unavailable_reason?: MeDriveUnavailableReason;
+}
+
+/** GET /me/drives (pkg/client.MeDriveCatalogue). */
+export interface MeDriveCatalogue {
+  drives: MeDrive[];
+  denied_by_profile?: string;
+  unavailable?: string;
+  pool_checked: boolean;
+}
+
+/** Reads the caller's drive catalogue, checked against runnerPoolId when given. */
+export async function myDrives(runnerPoolId?: string): Promise<MeDriveCatalogue> {
+  const qs = runnerPoolId ? `?runner_pool_id=${encodeURIComponent(runnerPoolId)}` : "";
+  const body = await asJson<MeDriveCatalogue>(await wfetch(`/me/drives${qs}`, { method: "GET" }));
+  return { ...body, drives: unwrapList<MeDrive>(body.drives), pool_checked: !!body.pool_checked };
+}

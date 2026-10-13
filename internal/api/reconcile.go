@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -354,9 +355,10 @@ func (s *Server) orphanedBuildSweeper(ctx context.Context, every time.Duration) 
 // being early FAILS a healthy run mid-dispatch and tears its sandbox down.
 const undispatchedGrace = 2 * imageBuildTimeout
 
-// finalizeUndispatchedRuns finalizes every non-terminal run that never got a
-// sandbox ref: the dispatch goroutine that would have provisioned it died with
-// the previous process, so nothing will ever start it — FAILED + revoke.
+// finalizeUndispatchedRuns finalizes every slot-holding run (types.SlotHoldingRunStates) that never got
+// a sandbox ref: the dispatch goroutine that would have provisioned it died with
+// the previous process, so nothing will ever start it — FAILED + revoke. A QUEUED run is never
+// here: it has no sandbox and waits past the grace by design.
 //
 // The age gate is what makes this safe to run PERIODICALLY as well as at boot,
 // and it has to be run periodically: this is the ONLY reaper of a sandbox-less
@@ -381,10 +383,15 @@ func (s *Server) finalizeUndispatchedRuns(ctx context.Context) error {
 	leaser, hasLease := s.cfg.Store.(store.RunWatcherLeaser)
 	var finalized int
 	for _, run := range runs {
-		if isTerminalRunState(run.State) || run.SandboxRef != "" {
+		if !slices.Contains(types.SlotHoldingRunStates, run.State) || run.SandboxRef != "" {
 			continue
 		}
-		if now.Sub(run.CreatedAt) < undispatchedGrace {
+		// A promoted run's dispatch window starts when it left the queue, not when it was requested.
+		started := run.CreatedAt
+		if run.AdmittedAt != nil {
+			started = *run.AdmittedAt
+		}
+		if now.Sub(started) < undispatchedGrace {
 			continue // still inside its own dispatch window; not abandoned
 		}
 		// A FRESH watcher lease means a LIVE process is responsible for this run:

@@ -6,10 +6,12 @@ package main
 import (
 	"crypto/ed25519"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -132,5 +134,50 @@ func TestRegisterSurfacesRefusalAndAdvisesFreshTokenOnlyWhenSpent(t *testing.T) 
 				t.Fatalf("token advice wrong (spent=%v): %s", tc.spent, msg)
 			}
 		})
+	}
+}
+
+// Registration sends the runner's runs at once: --max-runs when given, else half the host's cores.
+func TestRegisterSendsMaxRunsExplicitOrSuggested(t *testing.T) {
+	token := "wdr_" + strings.Repeat("b", 64)
+	for _, tc := range []struct {
+		args []string
+		want int
+	}{
+		{[]string{"--max-runs", "5"}, 5},
+		{nil, types.SuggestedRunnerMaxRuns(runtime.NumCPU())},
+	} {
+		var org string
+		var sent int
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req types.RunnerRegisterRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Error(err)
+			}
+			sent = req.MaxRuns
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(types.RunnerRegistration{RunnerID: uuid.New(), Fingerprint: runnerwire.Fingerprint(req.PublicKey),
+				State: types.RunnerUnclaimed, OrgURLSHA256: federation.OrgURLSHA256(org), MaxRuns: req.MaxRuns})
+		}))
+		org = srv.URL
+		root := t.TempDir()
+		tokenFile := filepath.Join(root, "token")
+		if err := os.WriteFile(tokenFile, []byte(token), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cmd := newRegisterCommand()
+		var out strings.Builder
+		cmd.SetOut(&out)
+		cmd.SetArgs(append([]string{"--org", org, "--token-file", tokenFile, "--state-dir", filepath.Join(root, "identity")}, tc.args...))
+		err := cmd.Execute()
+		srv.Close()
+		if err != nil || sent != tc.want || !strings.Contains(out.String(), fmt.Sprintf("Runs at once: %d", tc.want)) {
+			t.Fatalf("args %v: sent max_runs %d, want %d (err %v)\n%s", tc.args, sent, tc.want, err, out.String())
+		}
+	}
+	cmd := newRegisterCommand()
+	cmd.SetArgs([]string{"--org", "https://wardyn.example", "--token-file", "unused", "--max-runs", "65"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "--max-runs") {
+		t.Fatalf("--max-runs 65 = %v, want a refusal before anything is sent", err)
 	}
 }

@@ -38,6 +38,7 @@ func adminTokenMention(tok token.Token, lit string) bool {
 // (#1162). A grant must read what authenticated the request
 // (actorFromRequest's ActorSystem, AgentRun.OperatorOwned) instead.
 var adminTokenCompareAllowed = map[string]string{
+	"internal/api/http.go|if h := localPrincipalOverride(r); h != \"\" && s.isReservedPrincipal(h) && !strings.HasPrefix(strings.ToLower(h), \"local:\") {":         "refuses the local-mode attribution override naming a reserved mechanism principal",
 	"internal/api/invitations.go|if !validSubject(target) || s.isReservedPrincipal(target) || strings.HasPrefix(strings.ToLower(target), servicePrincipalPrefix) {": "refuses an invitation naming a reserved mechanism principal",
 	"internal/api/runner_registration.go|if owner == \"\" || len(owner) > 512 || !controlCharFree(owner) || s.isReservedPrincipal(owner) {":                         "refuses minting a runner registration for a reserved mechanism principal",
 	"internal/api/reserved_principal.go|return p == adminTokenPrincipal || (op != \"\" && p == op) ||":                                                              "the reserved set itself",

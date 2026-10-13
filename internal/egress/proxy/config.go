@@ -122,6 +122,9 @@ type Config struct {
 	// AzureGates are the run's azure_foundry route gates, one per row (azure_gate.go). Empty == off.
 	// Omitempty and set only for a run with such a row: an older proxy refuses a key it does not know.
 	AzureGates []AzureGateConfig `json:"azure_gates,omitempty"`
+	// GitHubAPI is the run's GitHub CLI grant, which drives the api.github.com
+	// door (github_api.go). Nil == off. Omitempty for the reason AzureGates is.
+	GitHubAPI *GitHubAPIGrant `json:"github_api,omitempty"`
 	// MITMLLM reports whether TLS-MITM of the BUILT-IN LLM hosts (Anthropic/OpenAI)
 	// is actually intended for this run — i.e. subscription credential injection OR
 	// intercept_tls content inspection. Dispatch also mints the per-run CA for
@@ -233,6 +236,11 @@ type Config struct {
 	// can never take the wrong block first. Control-plane authored; nothing sets
 	// it until the git route reads it.
 	PushRuleSets []types.PushRuleSet `json:"push_rule_sets,omitempty"`
+	// PushRuleBase is the run's push rules as the ceiling left them: what an
+	// entry with no set of its own is held to (a PAT or an App reaches more than
+	// the entries the run brought). A set only ever adds to it. Carried beside
+	// PushRuleSets and never beside Policy.PushRules.
+	PushRuleBase *types.PushRulesSpec `json:"push_rule_base,omitempty"`
 	// HarnessToolRules are the tool rules per included harness, also the product
 	// after the ceiling, and likewise exclusive of Policy.ToolRules. The approval
 	// route evaluates the set of the harness that raised the call
@@ -241,6 +249,48 @@ type Config struct {
 	// the caller, never from the request body (types.HarnessToolRules). Control-plane
 	// authored; nothing sets it until the approval route reads it.
 	HarnessToolRules []types.HarnessToolRules `json:"harness_tool_rules,omitempty"`
+	// HarnessCredentials are the SHA-256 digests of the per-harness credentials the
+	// approval route reads the caller's harness from (a Bearer token the harness's
+	// wardyn-toolgate sends). Digests only: the plaintext never enters this config,
+	// a log or an audit row. A call with no credential, or one that matches none, has
+	// no harness and is held for a human.
+	HarnessCredentials []types.HarnessCredential `json:"harness_credentials,omitempty"`
+	// ViaOrgRoutes are the destinations of this run's via_org grants (design 0.9 §7.3), on a runner's
+	// proxy only: a request for one is forwarded to the organisation, which injects the credential.
+	// Each names its grant and destination host, never the rule or a secret name.
+	ViaOrgRoutes []ViaOrgRoute `json:"via_org_routes,omitempty"`
+	// MCPServers are the run's remote MCP servers. The broker route
+	// (mcp_broker.go) is the only path to each: none is in the allowlist, a
+	// direct request to one is refused while it is attached, and its header
+	// credential is the broker's alone, never an Injection rule.
+	MCPServers []MCPServerConfig `json:"mcp_servers,omitempty"`
+	// MCPBindings bind each harness's MCP token, by SHA-256 digest, to the
+	// servers turned on for it. Digests only: the token is in that harness's
+	// configuration, never here.
+	MCPBindings []MCPBinding `json:"mcp_bindings,omitempty"`
+}
+
+// MCPServerConfig is one remote MCP server on the broker route.
+type MCPServerConfig struct {
+	// Key is the server's name in /wardyn/mcp/<token>/<key> and in its tools'
+	// names, mcp__<key>__<tool>.
+	Key string `json:"key"`
+	// URL is the https address the broker re-originates to.
+	URL string `json:"url"`
+	// GrantID is the api_key grant of the server's header credential; nil when
+	// the server takes none.
+	GrantID *uuid.UUID `json:"grant_id,omitempty"`
+	// Ordinal is the component's run_components ordinal (built-ins have no
+	// row), which a revive reads its row by.
+	Ordinal int `json:"ordinal"`
+}
+
+// MCPBinding is one harness's MCP token, as its digest, and the servers it may
+// reach.
+type MCPBinding struct {
+	Harness string   `json:"harness"`
+	SHA256  string   `json:"sha256"`
+	Servers []string `json:"servers"`
 }
 
 const (
@@ -308,6 +358,14 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	if err := validPATGrants(c.PATGrants); err != nil {
 		return nil, err
 	}
+	for _, r := range c.ViaOrgRoutes {
+		if r.GrantID == uuid.Nil || r.Host == "" {
+			return nil, fmt.Errorf("config: via_org_routes entry needs a grant_id and a host")
+		}
+	}
+	if c.PushRuleBase != nil && (len(c.PushRuleSets) == 0 || c.Policy.PushRules != nil) {
+		return nil, fmt.Errorf("config: push_rule_base is carried with push_rule_sets and never with policy.push_rules")
+	}
 	if len(c.PushRuleSets) > 0 && c.Policy.PushRules != nil {
 		return nil, fmt.Errorf("config: push_rule_sets and policy.push_rules are both set; rules are carried one way or the other")
 	}
@@ -318,6 +376,9 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	if err := types.ValidateHarnessToolRules(c.HarnessToolRules); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if err := types.ValidateHarnessCredentials(c.HarnessCredentials); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	if err := c.applyDefaultsAndValidate(); err != nil {
@@ -444,6 +505,9 @@ func (c *Config) applyDefaultsAndValidate() error {
 	if err := c.validateTerminatedGates(); err != nil {
 		return err
 	}
+	if err := c.validateMCP(); err != nil {
+		return err
+	}
 	// Parse-check (but do not retain a compiled form) each configured LLM
 	// gateway base URL: api.ValidateLLMGateways already fail-fast-checked these
 	// at boot without retaining a parsed form (same "validate at load, build
@@ -469,6 +533,9 @@ func (c *Config) validateTerminatedGates() error {
 		if g.API && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
 			return fmt.Errorf("config: pat_grants[%q] sets api and requires mitm_ca_cert_pem and mitm_ca_key_pem — the forge API door runs only on a terminated connection", host)
 		}
+	}
+	if c.GitHubAPI != nil && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
+		return fmt.Errorf("config: github_api requires mitm_ca_cert_pem and mitm_ca_key_pem — the GitHub CLI door runs only on a terminated connection")
 	}
 	return c.validateAzureGates()
 }

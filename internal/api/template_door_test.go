@@ -279,7 +279,7 @@ func TestTemplateDependencyEdges(t *testing.T) {
 func TestTemplateFullCoverage(t *testing.T) {
 	const head = `"api_version":"wardyn/v1","kind":"RunTemplate","coverage":"full","intent":`
 	check := func(intent string) []string {
-		return diagReasons(validateTemplateImport([]byte(`{`+head+intent+`}`), client.TemplateFormatJSON).Diagnostics)
+		return diagReasons(validateTemplateImport([]byte(`{`+head+intent+`}`), client.TemplateFormatJSON, "").Diagnostics)
 	}
 	gap := reasonTemplateCoverageInvalid + "@intent"
 	cases := []struct {

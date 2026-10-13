@@ -30,32 +30,80 @@ func (r CreateRunRequest) PlacementRequest() placement.Request {
 	return placement.Request{Placement: r.Placement, RunnerID: r.RunnerID}
 }
 
-// RunResources is the CPU and memory a request asks for. A zero field asks for
-// the placement's default. The server clamps what it is given to the caps of
-// the placement the run lands on; a value over the cap is reduced, not refused.
+// RunResources is the CPU, memory and main-drive size a request asks for. A zero
+// field asks for what the run's source policy sets, else the default. The server
+// applies what it is given within the strictest of the pool's, the person's
+// governance, the deployment's and (on their own runner) the runner's limits: a
+// value over that cap is reduced to it, never refused, and the dry runs and the
+// 201 say what was applied (AppliedResources, MainDriveApplied).
 type RunResources struct {
 	// CPUMillis is milli-CPU: 2000 is two CPUs. The console works in tenths of a CPU.
 	CPUMillis int `json:"cpu_millis,omitempty"`
 	// MemoryMiB is whole MiB.
 	MemoryMiB int `json:"memory_mib,omitempty"`
+	// DiskMiB is the main drive's size in MiB, 0 to 16 TiB. It is a request: over the
+	// effective cap it is reduced and said so, never refused, and a runner that cannot
+	// cap disk starts the run uncapped. A size the run's policy writes stays a
+	// requirement, and a request may only lower it.
+	DiskMiB int `json:"disk_mib,omitempty"`
 }
 
-// ResourceAmounts is a CPU and memory pair in a dry-run answer, where zero is a
-// value and never "unset".
-type ResourceAmounts struct {
-	CPUMillis int `json:"cpu_millis"`
-	MemoryMiB int `json:"memory_mib"`
+// MainDriveBasis says where a run's main-drive size came from.
+type MainDriveBasis string
+
+// The bases of MainDriveApplied.
+const (
+	MainDriveBasisRequest MainDriveBasis = "request" // the run's own request
+	MainDriveBasisPolicy  MainDriveBasis = "policy"  // a size the run's policy writes
+	MainDriveBasisDefault MainDriveBasis = "default" // the pool's or the server's default
+	MainDriveBasisNone    MainDriveBasis = "none"    // no size: unbounded scratch
+)
+
+// MainDriveClampSource says what cut a main-drive size.
+type MainDriveClampSource string
+
+// The clamp sources of MainDriveApplied.
+const (
+	MainDriveClampPool       MainDriveClampSource = "pool"
+	MainDriveClampGovernance MainDriveClampSource = "governance"
+	MainDriveClampDeployment MainDriveClampSource = "deployment"
+	MainDriveClampPolicy     MainDriveClampSource = "policy"
+)
+
+// MainDriveApplied is the main-drive size the dry doors say a run gets: the same
+// number dispatch creates the sandbox with.
+type MainDriveApplied struct {
+	// RequestedMiB is the request's own size; absent when it sent none.
+	RequestedMiB int `json:"requested_mib,omitempty"`
+	// AppliedMiB is what the run gets; 0 is no size, unbounded scratch.
+	AppliedMiB int            `json:"applied_mib"`
+	Basis      MainDriveBasis `json:"basis"`
+	// DefaultSource names the limit whose default sized the run, with basis default.
+	DefaultSource LimitSource `json:"default_source,omitempty"`
+	// ClampedBy names what cut the size, when something did.
+	ClampedBy MainDriveClampSource `json:"clamped_by,omitempty"`
+	// Soft is true when a runner that cannot cap disk starts the run uncapped. A size
+	// the run's policy writes is never soft.
+	Soft bool `json:"soft"`
 }
 
-// PlacementResources is what one placement offers: Defaults is what an
-// untouched run receives there (the source policy's own resources folded in),
-// Caps what a request may ask for at most. RunnerID names the runner when
-// Placement is local; a run on the organisation's runners carries none.
-type PlacementResources struct {
-	Placement Placement       `json:"placement"`
-	RunnerID  string          `json:"runner_id,omitempty"`
-	Defaults  ResourceAmounts `json:"defaults"`
-	Caps      ResourceAmounts `json:"caps"`
+// AppliedResources is what a run's CPU and memory asked for and what it gets,
+// on preflight, the policy preview, the 201 and the run.create audit row.
+type AppliedResources struct {
+	CPUMillis AppliedAmount `json:"cpu_millis"`
+	MemoryMiB AppliedAmount `json:"memory_mib"`
+}
+
+// AppliedAmount is one field of AppliedResources. Source names the limit that
+// cut an over-ask when Capped, else the one whose default an ask of 0 got;
+// SourceName is the pool's name (pool) or the governance profile's name
+// (governance), and empty for the deployment and the runner's capacity.
+type AppliedAmount struct {
+	Requested  int         `json:"requested"` // the request's value, else its source policy's; 0 asks for the default
+	Applied    int         `json:"applied"`   // what the sandbox gets
+	Capped     bool        `json:"capped,omitempty"`
+	Source     LimitSource `json:"source,omitempty"`
+	SourceName string      `json:"source_name,omitempty"`
 }
 
 // RunOverrides carries the edits a person made on the New Run cards, one block
@@ -80,6 +128,37 @@ type RunOverrides struct {
 	// each Git section edits its own set and the proxy's git route applies the
 	// set matching the repository's provider and organisation.
 	PushRules []PushRuleOverride `json:"push_rules,omitempty"`
+	// Hosts adds to the run-wide allowed and denied lists on top of the chosen
+	// base policy. The base's own hosts are read-only.
+	Hosts *RunHostOverrides `json:"hosts,omitempty"`
+	// Egress sets the run-wide egress scalars on top of the chosen base policy.
+	Egress *RunEgressOverrides `json:"egress,omitempty"`
+}
+
+// RunEgressOverrides are the run-wide egress choices a person makes beside the
+// base policy's own. Both are bounded by the ceiling like any host they add.
+type RunEgressOverrides struct {
+	// FirstUseApproval is how a destination no list names is handled:
+	// always_deny, deny_with_review or wait_for_review.
+	FirstUseApproval types.FirstUseMode `json:"first_use_approval,omitempty"`
+	// AllowAllEgress true requests every other public destination (the deny
+	// list still wins). False is not an edit: omit it.
+	AllowAllEgress *bool `json:"allow_all_egress,omitempty"`
+}
+
+// RunHostOverrides are the hosts a person adds to the run as a whole, beside the
+// chosen base policy's own (the agent component's hosts are AgentOverrides').
+type RunHostOverrides struct {
+	// AddAllowed are destinations to reach. Bare DNS names only; the ceiling
+	// still bounds them, and the preview shows the ones it dropped.
+	AddAllowed []string `json:"add_allowed,omitempty"`
+	// AddDenied are destinations to refuse. A host or a wildcard; a deny wins
+	// over every allow, so it only takes reach away.
+	AddDenied []string `json:"add_denied,omitempty"`
+	// RemoveAllowed and RemoveDenied would drop a host of the base policy. They
+	// are always refused (override_refused): the base is read-only on a run.
+	RemoveAllowed []string `json:"remove_allowed,omitempty"`
+	RemoveDenied  []string `json:"remove_denied,omitempty"`
 }
 
 // AgentOverrides are the edits on the agent component.
@@ -206,8 +285,46 @@ func (o RunOverrides) Items() []OverrideItem {
 			out = append(out, OverrideItem{types.OverridePushReview, types.OverrideAdd, p.PushRuleKey() + " " + path})
 		}
 	}
+	if h := o.Hosts; h != nil {
+		for _, host := range h.AddAllowed {
+			kind := types.OverrideRunHostAllow
+			if types.IsWildcardHost(host) {
+				kind = types.OverrideRunHostWildcard
+			}
+			out = append(out, OverrideItem{kind, types.OverrideAdd, host})
+		}
+		for _, host := range h.AddDenied {
+			out = append(out, OverrideItem{types.OverrideRunHostDeny, types.OverrideAdd, host})
+		}
+	}
+	if e := o.Egress; e != nil {
+		if e.FirstUseApproval != "" {
+			out = append(out, OverrideItem{types.OverrideFirstUseApproval, types.OverrideSet, string(e.FirstUseApproval)})
+		}
+		if e.AllowAllEgress != nil {
+			out = append(out, OverrideItem{types.OverrideAllowAllEgress, types.OverrideSet, "allow_all_egress"})
+		}
+	}
 	return out
 }
+
+// Pruned is o with every block that holds no edit dropped, so a record of what
+// took effect carries no empty shell.
+func (o RunOverrides) Pruned() RunOverrides {
+	if a := o.Agent; a != nil && len(a.AddHosts)+len(a.RemoveHosts)+len(a.AddSecrets)+len(a.RemoveSecrets)+len(a.ToolRules) == 0 {
+		o.Agent = nil
+	}
+	if h := o.Hosts; h != nil && len(h.AddAllowed)+len(h.AddDenied)+len(h.RemoveAllowed)+len(h.RemoveDenied) == 0 {
+		o.Hosts = nil
+	}
+	if e := o.Egress; e != nil && e.FirstUseApproval == "" && e.AllowAllEgress == nil {
+		o.Egress = nil
+	}
+	return o
+}
+
+// Empty reports whether a recorded diff holds no edit and no clamped edit.
+func (d RunOverridesDiff) Empty() bool { return len(d.Pruned().Items()) == 0 && len(d.Clamped) == 0 }
 
 // The kinds a LocalPlacementFact is about.
 const (
@@ -360,15 +477,17 @@ type ComponentFact struct {
 
 // The kinds of source a run's resolved image comes from.
 const (
+	ImageSourceBase       = "base"        // the agent base image, for a run with no harness CLI
 	ImageSourceAgent      = "agent"       // the agent's own convention image
+	ImageSourceHarnessSet = "harness_set" // an image the operator declared for several harnesses; Name is its key
 	ImageSourceWorkspace  = "workspace"   // a workspace's base image; Name is the workspace
 	ImageSourceBuild      = "build"       // the person's own build (a custom image or devcontainer)
 	ImageSourceOrgAllowed = "org_allowed" // one of the images the organisation allows, chosen by the person
 )
 
 // ImageSource says where the resolved image comes from, so the Runner tab can
-// say "from {source}". Name is the workspace, the build or the allowed entry;
-// it is empty for the agent.
+// say "from {source}". Name is the workspace, the build, the allowed entry, the
+// harness (agent) or the declared set's key (harness_set); it is empty for base.
 type ImageSource struct {
 	Kind string `json:"kind"`
 	Name string `json:"name,omitempty"`
@@ -379,6 +498,34 @@ type ImageSource struct {
 type ImageFact struct {
 	Ref    string      `json:"ref"`
 	Source ImageSource `json:"source"`
+}
+
+// HarnessSetFact is the run's included harnesses as this door resolved them.
+// Absent for an older client's request and for a run with no harness.
+type HarnessSetFact struct {
+	Harnesses []HarnessFact `json:"harnesses"`
+	// SharedModelAccess: two or more harnesses carry a model credential. The
+	// proxy injects each by destination host, so any process in the sandbox can
+	// use each one.
+	SharedModelAccess bool `json:"shared_model_access"`
+}
+
+// HarnessFact is one included harness: whether it starts with the run, and the
+// model credential it gets.
+type HarnessFact struct {
+	ID     string `json:"id"`
+	Starts bool   `json:"starts"`
+	// ModelCredential is this harness's provider, kind and residency; absent when
+	// the harness takes none or its choice is still open.
+	ModelCredential *HarnessModelCredential `json:"model_credential,omitempty"`
+}
+
+// HarnessModelCredential is one harness's model credential: its provider, the
+// provider's kind, and where the credential lands (proxy or sandbox).
+type HarnessModelCredential struct {
+	Provider  string `json:"provider"`
+	Kind      string `json:"kind"`
+	Residency string `json:"residency"`
 }
 
 // AllowedImage is one image the organisation lets a person choose for a run

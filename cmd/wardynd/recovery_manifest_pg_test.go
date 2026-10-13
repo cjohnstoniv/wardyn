@@ -5,11 +5,13 @@ package main
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 )
@@ -102,7 +104,7 @@ func TestRecoveryManifest_DisabledSpoolCreatesAndVerifies(t *testing.T) {
 	if err := createRecoveryManifest(ctx, in); err != nil {
 		t.Fatalf("create with the spool disabled: %v", err)
 	}
-	m, err := readRecoveryManifest(set)
+	m, err := readRecoveryManifest(set, "verify the set")
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -120,8 +122,36 @@ func TestRecoveryManifest_ReadRefusesASpoolPath(t *testing.T) {
 		set := t.TempDir()
 		body := `{"manifest":` + strconv.Itoa(recoveryManifestVersion) + `,"audit_spool":{"basename":` + strconv.Quote(base) + `}}`
 		writeFixtureFile(t, filepath.Join(set, recoveryManifestFile), body)
-		if _, err := readRecoveryManifest(set); err == nil || !strings.Contains(err.Error(), "plain file name") {
+		if _, err := readRecoveryManifest(set, "verify the set"); err == nil || !strings.Contains(err.Error(), "plain file name") {
 			t.Errorf("basename %q: err = %v, want a refusal", base, err)
 		}
+	}
+}
+
+// At pool_max_conns=1 the lock connection leaves stageFiles no second connection, so create used to hang.
+// The deadline turns a regression back into a failure instead of a stuck test.
+func TestRecoveryManifest_CreateRefusesAOneConnectionPool(t *testing.T) {
+	dsn := emptyDatabase(t)
+	pool, err := db.Connect(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	if err := db.Migrate(context.Background(), pool); err != nil {
+		pool.Close()
+		t.Fatalf("migrate: %v", err)
+	}
+	pool.Close()
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	q.Set("pool_max_conns", "1")
+	u.RawQuery = q.Encode()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err = createRecoveryManifest(ctx, manifestSources{DSN: u.String(), Set: t.TempDir(), SpoolBase: "", KEKMode: "local", RecordingStore: "pg"})
+	if err == nil || !strings.Contains(err.Error(), "pool_max_conns") {
+		t.Fatalf("create at pool_max_conns=1: err = %v, want a refusal naming pool_max_conns", err)
 	}
 }

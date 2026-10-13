@@ -1,0 +1,116 @@
+[
+  {
+    "name": "no rule on the gated lane is held",
+    "policy_rules": [],
+    "lane_default": "hold",
+    "tool": "Bash",
+    "effect": "hold"
+  },
+  {
+    "name": "no rule on an ungated lane runs",
+    "policy_rules": [],
+    "lane_default": "allow",
+    "tool": "Bash",
+    "effect": "allow"
+  },
+  {
+    "name": "the exact rule wins over the default",
+    "policy_rules": [
+      {
+        "tool": "*",
+        "effect": "deny"
+      },
+      {
+        "tool": "Read",
+        "effect": "allow"
+      }
+    ],
+    "lane_default": "hold",
+    "tool": "Read",
+    "effect": "allow"
+  },
+  {
+    "name": "the policy's default wins over the lane's",
+    "policy_rules": [
+      {
+        "tool": "Read",
+        "effect": "allow"
+      },
+      {
+        "tool": "*",
+        "effect": "deny"
+      }
+    ],
+    "lane_default": "allow",
+    "tool": "Bash",
+    "effect": "deny"
+  },
+  {
+    "name": "the posture's allow under the person's layer",
+    "policy_rules": [
+      {
+        "tool": "WebFetch",
+        "effect": "hold"
+      },
+      {
+        "tool": "*",
+        "effect": "allow"
+      }
+    ],
+    "lane_default": "hold",
+    "tool": "Bash",
+    "effect": "allow"
+  },
+  {
+    "name": "a held tool under the posture",
+    "policy_rules": [
+      {
+        "tool": "WebFetch",
+        "effect": "hold"
+      },
+      {
+        "tool": "*",
+        "effect": "allow"
+      }
+    ],
+    "lane_default": "hold",
+    "tool": "WebFetch",
+    "effect": "hold"
+  },
+  {
+    "name": "names match exactly and by case",
+    "policy_rules": [
+      {
+        "tool": "bash",
+        "effect": "allow"
+      }
+    ],
+    "lane_default": "hold",
+    "tool": "Bash",
+    "effect": "hold"
+  },
+  {
+    "name": "an MCP tool by its full name",
+    "policy_rules": [
+      {
+        "tool": "mcp__github__create_issue",
+        "effect": "deny"
+      }
+    ],
+    "lane_default": "allow",
+    "tool": "mcp__github__create_issue",
+    "effect": "deny"
+  },
+  {
+    "name": "the default itself",
+    "policy_rules": [
+      {
+        "tool": "*",
+        "effect": "hold"
+      }
+    ],
+    "lane_default": "allow",
+    "tool": "*",
+    "effect": "hold"
+  }
+]

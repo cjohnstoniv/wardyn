@@ -503,13 +503,38 @@ dispatch_repo_clones() {
     fi
 }
 
-# resolve_workdir — prefer a cloned/discovered repo workspace if one exists
-# below the caller's `workdir` global, else leave it as-is. Matches both a repo
-# cloned into workdir/<reponame> (its .git is one level down) and a
-# pre-populated workdir that is itself a repo (.git directly under it).
+# resolve_workdir — the ONE place a start path's working directory is chosen.
+# WARDYN_START_FOLDER is the run's starting folder, resolved by the server:
+#   - "image_default": keep the caller's `workdir`, the image's own directory,
+#     even after a clone;
+#   - an absolute path: that folder inside one attachment. It must exist and be
+#     reached through no symlink (its real path is itself), so a link inside a
+#     repo cannot move the start out of its mount; otherwise the start fails
+#     rather than landing somewhere else;
+#   - unset: prefer a cloned/discovered repo workspace if one exists below
+#     `workdir`, else leave it as-is. Matches both a repo cloned into
+#     workdir/<reponame> (its .git is one level down) and a pre-populated
+#     workdir that is itself a repo (.git directly under it).
 # MUST be called directly (not in a subshell) so the `workdir` reassignment
 # survives for the caller.
 resolve_workdir() {
+    case "${WARDYN_START_FOLDER:-}" in
+        "") ;;
+        image_default) return 0 ;;
+        /*)
+            local real
+            real="$(cd -P -- "$WARDYN_START_FOLDER" 2>/dev/null && pwd -P || true)"
+            if [[ "$real" != "$WARDYN_START_FOLDER" ]]; then
+                echo "agent-run: the starting folder $WARDYN_START_FOLDER is missing or not a plain folder; not starting elsewhere" >&2
+                return 1
+            fi
+            workdir="$real"
+            git config --global --add safe.directory "$real" 2>/dev/null || true
+            return 0 ;;
+        *)
+            echo "agent-run: WARDYN_START_FOLDER must be image_default or an absolute path" >&2
+            return 1 ;;
+    esac
     if [[ -d "$workdir" ]]; then
         local repo
         repo="$(find "$workdir" -maxdepth 2 -mindepth 1 -type d -name ".git" \

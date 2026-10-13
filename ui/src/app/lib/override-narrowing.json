@@ -39,7 +39,7 @@
     "kind": "tool_rule_allow",
     "op": "add",
     "direction": "widen",
-    "rule": "refused"
+    "rule": "within_policy"
   },
   {
     "kind": "ado_capability",
@@ -88,5 +88,35 @@
     "op": "remove",
     "direction": "widen",
     "rule": "refused"
+  },
+  {
+    "kind": "run_host_allow",
+    "op": "add",
+    "direction": "widen",
+    "rule": "ceiling_clamped"
+  },
+  {
+    "kind": "run_host_wildcard",
+    "op": "add",
+    "direction": "widen",
+    "rule": "refused"
+  },
+  {
+    "kind": "run_host_deny",
+    "op": "add",
+    "direction": "tighten",
+    "rule": "allowed"
+  },
+  {
+    "kind": "first_use_approval",
+    "op": "set",
+    "direction": "widen",
+    "rule": "ceiling_clamped"
+  },
+  {
+    "kind": "allow_all_egress",
+    "op": "set",
+    "direction": "widen",
+    "rule": "ceiling_clamped"
   }
 ]

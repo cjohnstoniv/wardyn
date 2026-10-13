@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -189,12 +190,15 @@ type personRevocation struct {
 	Refusal       string
 	KeyReason     string
 	KeyUnresolved bool
+	// KeyPrincipal is the principal the SSH key owner resolver named, which is the subject when the
+	// caller named an email.
+	KeyPrincipal string
 }
 
 // revokePersonCredentials is the credential sequence POST /sessions/revoke runs
 // for one person, callable without a request: the session cutoff, then the
 // person's API tokens, then their SSH keys, then the cutoff again under the
-// principal the keys resolved to. Audit rows name the actor withActor attached
+// principal the keys resolved to, and the runs they have waiting in a queue. Audit rows name the actor withActor attached
 // to ctx.
 //
 // An empty principal is refused and changes nothing: the helpers below read ""
@@ -214,7 +218,44 @@ func (s *Server) revokePersonCredentials(ctx context.Context, principal string) 
 	}
 	res, err := s.revokeCredentials(ctx, principal)
 	res.Stamped = true
-	return res, err
+	// A sponsor is stored by subject, so an email-form revoke sweeps under the subject the key resolver found too.
+	n, serr := s.revokeSponsoredTokens(ctx, principal)
+	res.Tokens += n
+	// A run waiting in a pool's queue holds the person's authority as of its launch; it goes with the rest.
+	_, qerr := s.cancelQueuedRunsOf(ctx, principal, queueCancelSessionRevoked)
+	if res.KeyPrincipal != "" && res.KeyPrincipal != principal {
+		n, kerr := s.revokeSponsoredTokens(ctx, res.KeyPrincipal)
+		res.Tokens += n
+		_, kqerr := s.cancelQueuedRunsOf(ctx, res.KeyPrincipal, queueCancelSessionRevoked)
+		serr = errors.Join(serr, kerr, kqerr)
+	}
+	return res, errors.Join(err, serr, qerr)
+}
+
+// revokeSponsoredTokens revokes every live token of each non-retired service identity principal sponsors
+// (#1508). Those tokens already stop at authentication once the session cutoff is stamped, because a service
+// token is honoured only while its sponsor's session is live; the sweep makes GET /tokens show them revoked.
+// A retired identity's tokens were revoked with it.
+func (s *Server) revokeSponsoredTokens(ctx context.Context, principal string) (int, error) {
+	ss, ok := s.cfg.Store.(store.ServiceIdentityStore)
+	if !ok {
+		return 0, nil
+	}
+	identities, err := ss.ListServiceIdentities(ctx, principal, store.Page{})
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	var errs []error
+	for _, si := range identities {
+		if si.RetiredAt != nil {
+			continue
+		}
+		revoked, err := s.revokeAPITokensFor(ctx, si.Principal())
+		n += revoked
+		errs = append(errs, err)
+	}
+	return n, errors.Join(errs...)
 }
 
 // revokeCredentials sweeps tokens and keys for principal ("" is everyone). Each
@@ -227,6 +268,7 @@ func (s *Server) revokeCredentials(ctx context.Context, principal string) (perso
 	var keyPrincipal string
 	var keyErr error
 	res.Keys, keyPrincipal, res.Refusal, res.KeyReason, keyErr = s.deleteSSHKeysFor(ctx, principal, true)
+	res.KeyPrincipal = keyPrincipal
 	// SSH keys have no email column. Preserve the named cutoff for sessions and
 	// tokens, and stamp the resolved subject to catch registrations the DELETE missed.
 	if principal != "" && keyPrincipal != "" && keyPrincipal != principal {

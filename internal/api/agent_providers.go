@@ -41,6 +41,7 @@ import (
 const (
 	agent400Unknown = "agents: %q names no agent this deployment can run — a catalog id or a WARDYN_AGENT_IMAGES key"
 	agent400DupID   = "agents: id %q is not unique"
+	agent400SetKey  = "agents: %q joins harness ids with +, which names a harness-set image, not an agent"
 	agent412Stale   = "agents changed since you loaded them — reload and retry"
 
 	// The default model provider. A turned-off provider is still a valid
@@ -53,6 +54,7 @@ const (
 	// MEMBER ever reads. It names the agent and nothing else: no base URL, no
 	// secret name, no mechanism, no start URL.
 	agent422NotEnabled = "agent: %q is not an enabled agent on this deployment — ask an admin"
+	agent422SetKey     = "agent: %q names an image for several harnesses, not an agent — name one agent, or include each harness in tools"
 )
 
 // errAgentNotEnabled marks a step-run launch refused by the agent roster, so the
@@ -134,6 +136,11 @@ func agentEnabled(sc types.SiteConfig, agentID string) bool {
 // admitting on a database hiccup would silently reopen the roster, and refusing
 // would blame the caller for an outage.
 func (s *Server) agentRosterRefusal(ctx context.Context, agent string) (string, error) {
+	// A harness-set key is in WARDYN_AGENT_IMAGES but is never an agent, roster
+	// or not: launched as one, it would start the set image with no harness.
+	if strings.Contains(agent, harnessSetSeparator) {
+		return fmt.Sprintf(agent422SetKey, agent), nil
+	}
 	if agent == "" || s.cfg.Store == nil {
 		return "", nil
 	}
@@ -210,6 +217,9 @@ func validateAgentProviders(p *types.AgentProviders, images map[string]string) e
 			return fmt.Errorf(agent400DupID, row.ID)
 		}
 		seen[row.ID] = true
+		if strings.Contains(row.ID, harnessSetSeparator) {
+			return fmt.Errorf(agent400SetKey, row.ID)
+		}
 		if _, inCatalog := harnessByID(row.ID); !inCatalog {
 			if _, known := images[row.ID]; !known {
 				return fmt.Errorf(agent400Unknown, row.ID)

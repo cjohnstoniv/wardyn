@@ -300,13 +300,14 @@ var hostRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
 // (a header-injection vector), or a setting that belongs to another type. Errors name the channel id
 // and the field, never its value.
 func (ch *Channel) validateSMTP() error {
-	fields := [][2]string{{"host", ch.Host}, {"from", ch.From}, {"username", ch.Username}, {"password", ch.Password}}
+	type field struct{ name, value string }
+	fields := []field{{"host", ch.Host}, {"from", ch.From}, {"username", ch.Username}, {"password", ch.Password}}
 	for i, to := range ch.To {
-		fields = append(fields, [2]string{"to #" + strconv.Itoa(i+1), to})
+		fields = append(fields, field{"to #" + strconv.Itoa(i+1), to})
 	}
 	for _, f := range fields {
-		if strings.ContainsAny(f[1], "\r\n") {
-			return fmt.Errorf("approval notify config: channel %q: smtp %s contains a CR or LF", ch.ID, f[0])
+		if strings.ContainsAny(f.value, "\r\n") {
+			return fmt.Errorf("approval notify config: channel %q: smtp %s contains a CR or LF", ch.ID, f.name)
 		}
 	}
 	if ch.URL != "" || ch.HMACSecret != "" || ch.BearerToken != "" {

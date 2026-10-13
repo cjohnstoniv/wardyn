@@ -601,6 +601,7 @@ describe("Governance components render no copy of their own", () => {
     "profile-overlay.tsx",
     "assignments.tsx",
     "display.tsx",
+    "runner-credentials.tsx",
   ]);
 });
 

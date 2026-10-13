@@ -329,7 +329,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// runs humanOrAdminAuth, so the ticket's stamped role/principal is the only
 	// authorization signal, exactly as in handleAttachWS.
 	superAdmin := ta.role == oidc.RoleAdmin
-	if !mayEnterRun(run, ta.principal, superAdmin) {
+	if !s.mayEnterRunOrSponsor(r.Context(), run, ta.principal, superAdmin, ta.authorizedAt) {
 		if superAdmin {
 			s.refuseRunOwnerOnly(w, r.WithContext(withTicketActor(r.Context(), ta)), run)
 			return
@@ -387,7 +387,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	sess := uiSession{
 		Run: runID, App: declared.Name, Port: declared.Port,
 		Principal: ta.principal, Role: ta.role, Email: ta.email,
-		Expires: expires.Unix(), IssuedAt: now.Unix(), AuthorizedAt: ta.authorizedAt.Unix(), Via: ta.via,
+		Expires: expires.Unix(), IssuedAt: now.Unix(), AuthorizedAt: ta.authorizedAt.Unix(), Via: ta.via, Service: sponsoredService(run),
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     uiCookieName,
@@ -399,7 +399,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		Expires:  expires,
 	})
 	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", declared.Name, "success",
-		ta.withVia(map[string]any{"app": declared.Name, "port": declared.Port}))
+		ta.withVia(withSponsorEntry(run, map[string]any{"app": declared.Name, "port": declared.Port})))
 	http.Redirect(w, r, s.uiBasePath()+uiRelayPrefix(runID, declared.Name)+declared.PathOrRoot(), redirectStatus)
 }
 

@@ -27,7 +27,7 @@ describe("runner pool calls", () => {
     await runnerPools.addMyRunner("p1", "r1");
     await runnerPools.orgDefaults();
     await runnerPools.myDefaults();
-    await runnerPools.setMyDefaults({ preferred_hosting: "self_hosted", self_hosted: "p1" });
+    await runnerPools.setMyDefaults({ pool_id: "p1" });
     const seen = wfetchMock.mock.calls.map(([path, init]) => `${init.method} ${path}`);
     expect(seen).toEqual([
       "GET /runner-pools",
@@ -37,7 +37,7 @@ describe("runner pool calls", () => {
       "GET /me/runner-pool-defaults",
       "PUT /me/runner-pool-defaults",
     ]);
-    expect(JSON.parse(wfetchMock.mock.calls[5][1].body)).toEqual({ preferred_hosting: "self_hosted", self_hosted: "p1" });
+    expect(JSON.parse(wfetchMock.mock.calls[5][1].body)).toEqual({ pool_id: "p1" });
   });
 
   it("deletes answer 204 with no body", async () => {

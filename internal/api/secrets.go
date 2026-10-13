@@ -79,7 +79,7 @@ func reservedSecret(name string) bool {
 		return true
 	}
 	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth") ||
-		providerSignInSecret(name)
+		providerSignInSecret(name) || cliSignInSecret(name)
 }
 
 // ReservedPlatformSecret reports whether name is one of this package's
@@ -136,7 +136,8 @@ func sinkReservedSecret(name string) bool {
 // nameSinkReservedSecret is sinkReservedSecret for the two lanes that resolve
 // an AUTHORED secret name to plaintext through the owner-then-operator read —
 // env_secret (into the sandbox env) and llm_inspection (onto the proxy's policy
-// copy) — PLUS every per-person model-provider name, whatever its suffix. A
+// copy) — PLUS every per-person model-provider name, whatever its suffix (a CLI
+// sign-in name, whatever its part, is already in reservedSecret). A
 // model credential reaches a run only through its provider's own lane, read
 // strictly from its owner's namespace; either of these lanes naming one would
 // hand the key (the operator's, through the fallback) to the run as a value.
@@ -162,7 +163,8 @@ func nameSinkReservedSecret(name string) bool {
 // Every per-person model-provider name (providerSecretPrefix) is here too, the
 // -key included: those rows are written only by PUT /model-providers/{id}/credential,
 // into the caller's own namespace, and an operator Put under one would plant a
-// row the strict read never consults while every door reported it stored.
+// row the strict read never consults while every door reported it stored. Every
+// CLI sign-in name is here through reservedSecret (cliSignInSecret).
 func secretsAPIReserved(name string) bool {
 	return reservedSecret(name) || strings.HasPrefix(name, providerSecretPrefix) || name == types.SubscriptionOAuthSecret ||
 		name == types.ManagedOAuthSecret || name == types.AWSSSOAccessTokenSecret ||
@@ -505,7 +507,7 @@ const secretOwnerUnresolvedMsg = "?owner= names an email address that no princip
 // deployment may legitimately hold two that differ only by case; guessing which
 // one an admin meant would write a credential into the wrong human's namespace,
 // which is worse than the miss this file already tracks via owner_known:false.
-const secretOwnerAmbiguousMsg = "?owner= matches more than one known principal; name the subject exactly"
+const secretOwnerAmbiguousMsg = "?owner= matches more than one known principal; name the subject exactly, as the Audit log shows it"
 
 // principalIdentity pairs a stored namespace key (the principal exactly as that
 // human's own writes stamp it) with the email their IdP sent alongside it.
@@ -522,6 +524,9 @@ type principalIdentity struct{ principal, email string }
 // workspaces.owned_by adds the principals an operator has already acted for,
 // subject-form only.
 //
+// A service identity (service:<name>, #1508) is no person: its tokens and anything it owns never enter
+// the directory, so no name resolves onto one and no email pairs with one.
+//
 // DELIBERATELY NOT capability-grant or governance-assignment subjects: those are
 // matched at read time against a caller's sub AND email (capabilitySubjects), so
 // a `user` row may hold either form with nothing to pair it to — admitting one
@@ -536,13 +541,13 @@ func (s *Server) knownPrincipals(ctx context.Context) ([]principalIdentity, erro
 	var out []principalIdentity
 	toks, tokErr := s.cfg.Store.ListAPITokens(ctx)
 	for _, t := range toks {
-		if t.Principal != "" {
+		if t.Principal != "" && !isServicePrincipal(t.Principal) {
 			out = append(out, principalIdentity{principal: t.Principal, email: t.Email})
 		}
 	}
 	wss, wsErr := s.cfg.Store.ListWorkspaces(ctx)
 	for _, ws := range wss {
-		if ws.OwnedBy != "" {
+		if ws.OwnedBy != "" && !isServicePrincipal(ws.OwnedBy) {
 			out = append(out, principalIdentity{principal: ws.OwnedBy})
 		}
 	}

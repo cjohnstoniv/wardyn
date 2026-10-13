@@ -5,7 +5,7 @@
 
 // M-NR-3: the Policy panel as the review (/m-nr/policy/…). Each frame is a
 // resolved preview plus the provenance rows the chips are drawn from.
-import { adoComponent, agentComponent, emptySpec, preview, RESOURCES_ORG, type FixtureProvenance, type FixtureBody } from "./base";
+import { adoComponent, agentComponent, emptySpec, preview, APPLIED_ORG, type FixtureProvenance, type FixtureBody } from "./base";
 
 const row = (field: string, value: string, source: FixtureProvenance["source"], effect: FixtureProvenance["effect"] = "added"): FixtureProvenance => ({ field, value, source, effect });
 const sourcePolicy = { kind: "policy" as const, name: "Team default" };
@@ -16,7 +16,7 @@ const resolved = preview({
   spec: emptySpec({ allowed_domains: ["api.anthropic.com", "registry.npmjs.org", "api.stripe.com"], denied_domains: ["corp.internal"] }),
   source: { kind: "stored", name: "Team default", policy_id: "55555555-5555-4555-8555-555555555555" },
   components: [agentComponent()],
-  resources: [RESOURCES_ORG],
+  resources_applied: APPLIED_ORG,
 });
 
 const standard: FixtureProvenance[] = [

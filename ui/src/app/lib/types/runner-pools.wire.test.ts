@@ -41,6 +41,9 @@ const ts = read("ui/src/app/lib/types/runner-pools.ts");
 const typesGo = read("internal/types/runner_pool.go");
 const clientGo = read("pkg/client/runner_pools.go");
 const limitsGo = read("internal/types/runner_pool_limits.go");
+const barrierGo = read("internal/runnerpool/barrier.go");
+const remoteGo = read("internal/types/remote_runner.go");
+const remoteClientGo = read("pkg/client/remote_runners.go");
 
 describe("runner pool carriers", () => {
   it.each([
@@ -61,8 +64,22 @@ describe("runner pool carriers", () => {
     [limitsGo, "EffectiveRunLimits", "EffectiveRunLimits"],
     [clientGo, "RunnerPoolChoice", "RunnerPoolChoice"],
     [clientGo, "RunnerPoolList", "RunnerPoolList"],
+    [clientGo, "RunnerPoolCatalogueEntry", "RunnerPoolCatalogueEntry"],
+    [clientGo, "PoolRunner", "PoolRunner"],
+    [clientGo, "MainDriveFacts", "MainDriveFacts"],
+    [clientGo, "MainDriveKeep", "MainDriveKeep"],
+    [clientGo, "PersonAllowance", "PersonAllowance"],
+    [clientGo, "PoolDefault", "PoolDefault"],
+    [barrierGo, "BarrierOption", "BarrierOption"],
     [clientGo, "CreateRunnerPoolRequest", "CreateRunnerPoolRequest"],
+    [clientGo, "CreateMyRunnerPoolRequest", "CreateMyRunnerPoolRequest"],
     [clientGo, "UpdateRunnerPoolRequest", "UpdateRunnerPoolRequest"],
+    [remoteGo, "RemoteRunner", "RemoteRunner"],
+    [remoteGo, "RemoteRunnerPoolRef", "RemoteRunnerPoolRef"],
+    [remoteClientGo, "RemoteRunnerView", "RemoteRunnerView"],
+    [remoteClientGo, "UpdateRemoteRunnerRequest", "UpdateRemoteRunnerRequest"],
+    [remoteClientGo, "RemoteRunnerPeoplePolicyRequest", "RemoteRunnerPeoplePolicyRequest"],
+    [remoteClientGo, "RunnerPoolMemberView", "RunnerPoolMemberView"],
   ])("%#: %s has full parity with its TS mirror", (go, goName, tsName) => {
     const tags = goJSONTags(go, goName);
     expect(tags.length).toBeGreaterThanOrEqual(1);
@@ -70,14 +87,14 @@ describe("runner pool carriers", () => {
   });
 
   it("the dry-run answers carry the pool facts under the Go names", () => {
-    const run = read("ui/src/app/lib/types/runs.ts");
+    const run = read("ui/src/app/lib/types/preflight.ts");
     const preview = read("ui/src/app/lib/types/policy-preview.ts");
     for (const [src, goSrc, goName] of [
       [run, read("pkg/client/runs_create.go"), "PreflightResult"],
       [preview, read("internal/api/policy_preview_facts.go"), "policyPreviewResponse"],
     ] as const) {
       const tags = goJSONTags(goSrc, goName).filter((t) => t.startsWith("runner_pool"));
-      expect(tags.sort()).toEqual(["runner_pool", "runner_pools"]);
+      expect(tags.sort()).toEqual(["runner_pool", "runner_pool_slots", "runner_pools"]);
       for (const t of tags) expect(stripComments(src), t).toContain(`${t}?:`);
     }
     expect(goJSONTags(read("pkg/client/runs_create.go"), "CreateRunRequest")).toContain("runner_pool_id");
@@ -90,14 +107,21 @@ describe("runner pool carriers", () => {
       return new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]));
     };
     const consts = (src: string, pattern: string) => new Set([...src.matchAll(new RegExp(pattern, "g"))].map((m) => m[1]));
-    expect(union("RunnerPoolHosting")).toEqual(consts(typesGo, '\\bRunnerPool\\w+\\s+RunnerPoolHosting = "([a-z_]+)"'));
+    expect(union("RunnerPoolScope")).toEqual(consts(typesGo, '\\bRunnerPool\\w+\\s+RunnerPoolScope = "([a-z_]+)"'));
+    expect(union("RunnerKind")).toEqual(consts(typesGo, '\\bRunnerKind\\w+\\s+RunnerKind = "([a-z_]+)"'));
+    expect(union("RemoteRunnerPeoplePools")).toEqual(consts(remoteGo, '\\bPeoplePools\\w+\\s+RemoteRunnerPeoplePools = "([a-z_]+)"'));
+    expect(union("RunnerKind").size).toBe(2);
+    expect(union("RemoteRunnerPeoplePools").size).toBe(3);
     expect(union("RunnerPoolState")).toEqual(consts(typesGo, '\\bRunnerPool\\w+\\s+RunnerPoolState = "([a-z_]+)"'));
     expect(union("RunnerPoolSelection")).toEqual(consts(typesGo, '\\bRunnerPoolSelected\\w+\\s+RunnerPoolSelection = "([a-z_]+)"'));
     expect(union("RunnerPoolAvailability")).toEqual(consts(clientGo, '\\bRunnerPool(?:Available|Unavailable|Unknown)\\s*=\\s*"([a-z_]+)"'));
-    expect(union("RunnerPoolHosting").size).toBe(2);
+    expect(union("RunnerPoolScope").size).toBe(2);
     expect(union("RunnerPoolState").size).toBe(3);
     expect(union("RunnerPoolSelection").size).toBe(3);
     expect(union("RunnerPoolAvailability").size).toBe(3);
+    expect(union("MainDriveEnforcement")).toEqual(consts(clientGo, '\\bMainDrive\\w+\\s+MainDriveEnforcement = "([a-z_]+)"'));
+    expect(union("MainDriveCoverage")).toEqual(consts(clientGo, '\\bMainDriveCoverage\\w+\\s+MainDriveCoverage = "([a-z_]+)"'));
+    expect(union("MainDriveEnforcement").size).toBe(4);
     expect(union("RunnerPoolSwitch")).toEqual(consts(clientGo, '\\bRunnerPoolSwitch\\w+\\s+RunnerPoolSwitch = "([a-z_]+)"'));
     expect(union("RunnerPoolSwitch")).toEqual(new Set(["active", "disabled"]));
     expect(union("RunnerPoolRunType")).toEqual(consts(limitsGo, '\\bRunnerPoolRun\\w+\\s+RunnerPoolRunType = "([a-z_]+)"'));

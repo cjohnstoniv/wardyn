@@ -36,3 +36,7 @@ func imageConflictMsg(a, b string) string {
 func workspaceADOOrgConflictMsg(a, orgA, b, orgB string) string {
 	return fmt.Sprintf("%s uses Azure DevOps organisation %s and %s uses %s. A run signs in to one Azure DevOps organisation, so remove one of them.", a, orgA, b, orgB)
 }
+
+func workspaceRepoUnknownMsg(repo, workspace string) string {
+	return fmt.Sprintf("%s is not a repository of workspace %s.", repo, workspace)
+}

@@ -130,6 +130,10 @@ func createRecoveryManifest(ctx context.Context, in manifestSources) error {
 		return err
 	}
 	defer s.close()
+	// The session's lock connection stays checked out while stageFiles takes a second one from the pool.
+	if n := s.pool.Config().MaxConns; n < 2 {
+		return refusedTo("write the manifest", "pool_max_conns is %d; the manifest needs at least 2 connections (the single-instance lock holds one). Raise pool_max_conns in the database URL", n)
+	}
 
 	snap, err := readRecoverySnapshot(ctx, s.conn)
 	if err != nil {
@@ -174,7 +178,7 @@ func createRecoveryManifest(ctx context.Context, in manifestSources) error {
 // staged spool file hashes to its manifest entry. A refusal names what differs: "audit head" for the database,
 // the file's name for a sidecar.
 func verifyRecoveryManifest(ctx context.Context, dsn, set string) error {
-	m, err := readRecoveryManifest(set)
+	m, err := readRecoveryManifest(set, "verify the set")
 	if err != nil {
 		return err
 	}
@@ -222,15 +226,29 @@ func pairSpool(verb string, want, got recoverySpool) error {
 	return nil
 }
 
-// readRecoveryManifest reads and checks the manifest of the set at dir, through the set's own root.
-func readRecoveryManifest(dir string) (recoveryManifest, error) {
+// recoveryManifestMaxBytes bounds how much of the manifest is read: it holds no secret and a few hundred
+// bytes per drive, so a file past this is not one this binary wrote.
+const recoveryManifestMaxBytes = 16 << 20
+
+// readRecoveryManifest reads and checks the manifest of the set at dir, through the set's own root. verb is
+// what the caller was about to do ("verify the set", "rehearse"), so a refusal names the verb that refused.
+// The open is non-blocking and only a regular file is read: a FIFO named manifest.json is refused, not waited on.
+func readRecoveryManifest(dir, verb string) (recoveryManifest, error) {
 	var m recoveryManifest
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return m, fmt.Errorf("open the set: %w", err)
 	}
 	defer root.Close()
-	body, err := root.ReadFile(recoveryManifestFile)
+	f, err := root.OpenFile(recoveryManifestFile, os.O_RDONLY|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return m, fmt.Errorf("read %s: %w", recoveryManifestFile, err)
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return m, refusedTo(verb, "%s is not a regular file", recoveryManifestFile)
+	}
+	body, err := io.ReadAll(io.LimitReader(f, recoveryManifestMaxBytes))
 	if err != nil {
 		return m, fmt.Errorf("read %s: %w", recoveryManifestFile, err)
 	}
@@ -238,10 +256,10 @@ func readRecoveryManifest(dir string) (recoveryManifest, error) {
 		return m, fmt.Errorf("parse %s: %w", recoveryManifestFile, err)
 	}
 	if m.Manifest != recoveryManifestVersion {
-		return m, refusedTo("verify the set", "%s is manifest version %d; this binary reads version %d", recoveryManifestFile, m.Manifest, recoveryManifestVersion)
+		return m, refusedTo(verb, "%s is manifest version %d; this binary reads version %d", recoveryManifestFile, m.Manifest, recoveryManifestVersion)
 	}
 	if b := m.AuditSpool.Basename; b != "" && (b == "." || b != filepath.Base(b)) {
-		return m, refusedTo("verify the set", "%s names no spool file: audit_spool.basename must be a plain file name, or empty when the spool is disabled", recoveryManifestFile)
+		return m, refusedTo(verb, "%s names no spool file: audit_spool.basename must be a plain file name, or empty when the spool is disabled", recoveryManifestFile)
 	}
 	return m, nil
 }
@@ -282,7 +300,7 @@ func recoverySourceOf(dsn string) (recoverySource, error) {
 	if err != nil {
 		return recoverySource{}, errors.New("WARDYN_PG_DSN does not parse")
 	}
-	return recoverySource{Host: cfg.Host, Port: int(cfg.Port), Database: cfg.Database}, nil
+	return recoverySource{Host: strings.ToLower(cfg.Host), Port: int(cfg.Port), Database: cfg.Database}, nil
 }
 
 // stageSpoolFiles hashes audit/<base>, its .consumed and its .quarantine in the set. An absent file is

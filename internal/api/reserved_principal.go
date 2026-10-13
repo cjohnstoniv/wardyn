@@ -8,10 +8,11 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // isReservedPrincipal reports whether p names an identity that is not a
-// person: the admin token, the local-mode operator (the configured seat, or any
+// person: a service identity ("service:<name>", which authenticates only by its own tokens), the admin token, the local-mode operator (the configured seat, or any
 // "local:" name — the default seat is "local:<os-user>", and a run it created
 // outlives a later switch to SSO), a device, a registered portal, or a person's
 // audit subject ("subject:<id>", the actor WARDYN_AUDIT_SEAL=full stores, refused
@@ -27,6 +28,9 @@ import (
 // one keeps that true if a comparison ever folds.
 func (s *Server) isReservedPrincipal(p string) bool {
 	p = strings.ToLower(strings.TrimSpace(p))
+	if strings.HasPrefix(p, types.ServicePrincipalPrefix) { // a service identity (#1508): authenticates only by its own tokens
+		return true
+	}
 	op := strings.ToLower(strings.TrimSpace(s.cfg.LocalOperator))
 	return p == adminTokenPrincipal || (op != "" && p == op) ||
 		strings.HasPrefix(p, "local:") || strings.HasPrefix(p, "device:") || strings.HasPrefix(p, delegateActorPrefix) ||

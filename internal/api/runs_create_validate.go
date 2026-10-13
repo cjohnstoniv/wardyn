@@ -95,7 +95,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		writeServerError(w, r, "get site config", err)
 		return req, noCeiling, "", "", false
 	} else if msg != "" {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg)
+		runError(http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg).forTool(harnessRefusalTool(req)).write(s, w, r)
 		return req, noCeiling, "", "", false
 	}
 
@@ -297,9 +297,11 @@ func effectiveToolApprovals(req createRunRequest, ceiling governanceCeiling) str
 //
 // So: require an image the run can actually start from, and keep the 400
 // otherwise, naming what is missing. Harness mode is unchanged — a harness run
-// with no agent is a sandbox that comes up and runs no agent.
+// with no agent is a sandbox that comes up and runs no agent. A run-mode
+// request names no agent when it includes no harness: its image comes from the
+// harness set (harnessSetImage), the agent base image for none.
 func agentRequirementError(req createRunRequest) string {
-	if req.Agent != "" {
+	if req.Agent != "" || req.UsesRunMode() {
 		return ""
 	}
 	if req.TaskMode != "exec" {

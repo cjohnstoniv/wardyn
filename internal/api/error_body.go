@@ -20,6 +20,13 @@ type errorBody struct {
 	// provider is known — never on an unrelated 4xx.
 	Provider string `json:"provider,omitempty"`
 	Kind     string `json:"kind,omitempty"`
+	// Tool is the included tool (tools[].id) a run refusal is ABOUT, so the
+	// console can attach the blocker to that harness. Present only on a refusal
+	// of one included harness.
+	Tool string `json:"tool,omitempty"`
+	// Field names the request field a 400 is ABOUT (a dotted path into the body, e.g. azure.endpoint),
+	// so the console can put the sentence under that field. Present only on a refusal that names one.
+	Field string `json:"field,omitempty"`
 	// Policy (deny-f2) names the policy whose ceiling refused the request and how
 	// to ask for a change. Present only on a ceiling refusal that carries one.
 	Policy *policyref.Ref `json:"policy,omitempty"`
@@ -30,6 +37,12 @@ type errorBody struct {
 	// proposal (same op, same payload), so a repeat apply can report it as still pending; false when
 	// it is another change, which the repeat must fail on rather than report as its own.
 	PendingChangeMatches *bool `json:"pending_change_matches,omitempty"`
+}
+
+// writeErrorReasonField is writeErrorReason for a refusal about one request field (empty field: the
+// body writeErrorReason would write).
+func writeErrorReasonField(w http.ResponseWriter, status int, reason, msg, field string) {
+	writeJSON(w, status, errorBody{Error: msg, Reason: reason, Field: field})
 }
 
 // writeErrorReasonPolicy is writeErrorReason for a ceiling refusal that names the
