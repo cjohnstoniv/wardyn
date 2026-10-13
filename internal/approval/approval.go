@@ -36,6 +36,9 @@ type Store interface {
 	GetApproval(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error)
 	// ListApprovals returns approvals filtered by state (empty = all).
 	ListApprovals(ctx context.Context, stateFilter types.ApprovalState) ([]types.ApprovalRequest, error)
+	// ListPendingApprovalsForRuns returns the PENDING approvals of the given
+	// runs only, so a per-run dedup or cancel never reads the fleet.
+	ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error)
 	// DecideApproval transitions PENDING to decision.State; returns
 	// ErrAlreadyDecided if not PENDING.
 	DecideApproval(ctx context.Context, id uuid.UUID, decision types.ApprovalDecision) (types.ApprovalRequest, error)
@@ -88,7 +91,7 @@ func RequestApproval(ctx context.Context, st Store, req types.ApprovalRequest) (
 // run+kind+scope hash, if any. Shared by the pre-insert dedup scan and the
 // post-unique-violation re-read.
 func findPendingDup(ctx context.Context, st Store, req types.ApprovalRequest, hash string) (types.ApprovalRequest, bool, error) {
-	pending, err := st.ListApprovals(ctx, types.ApprovalPending)
+	pending, err := st.ListPendingApprovalsForRuns(ctx, []uuid.UUID{req.RunID})
 	if err != nil {
 		return types.ApprovalRequest{}, false, fmt.Errorf("approval: list pending for dedup: %w", err)
 	}
@@ -353,7 +356,7 @@ func TallyKey(ap types.ApprovalRequest) string {
 // Emitted on the failure path too, with however many rows DID move plus the
 // error, so a partial cancel never leaves CANCELLED rows with no trail.
 func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string) (map[string]int, error) {
-	pending, err := st.ListApprovals(ctx, types.ApprovalPending)
+	pending, err := st.ListPendingApprovalsForRuns(ctx, []uuid.UUID{runID})
 	if err != nil {
 		return nil, fmt.Errorf("approval: list for cancel: %w", err)
 	}

@@ -96,6 +96,24 @@ func (s *evictionApprovalStore) ListApprovals(_ context.Context, state types.App
 	return out, nil
 }
 
+func (s *evictionApprovalStore) ListPendingApprovalsForRuns(_ context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]types.ApprovalRequest, 0, len(s.rows))
+	for _, ap := range s.rows {
+		if ap.State != types.ApprovalPending {
+			continue
+		}
+		for _, id := range runIDs {
+			if ap.RunID == id {
+				out = append(out, ap)
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
 func (s *evictionApprovalStore) DecideApproval(_ context.Context, id uuid.UUID, d types.ApprovalDecision) (types.ApprovalRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
