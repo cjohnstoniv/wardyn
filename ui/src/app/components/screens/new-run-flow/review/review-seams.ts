@@ -9,7 +9,7 @@ import type { RequestedResources } from "../../../../lib/types/new-run-contract"
 import type { ReviewPreflight } from "../../../../lib/types/new-run-review";
 import type { RunIntent } from "../draft/run-intent";
 
-export type { BarrierOptionFact, MainDriveApplied, MainDriveFacts, PoolRunnerFact, PoolSlotsFact, ReviewPoolChoice, ReviewPreflight } from "../../../../lib/types/new-run-review";
+export type { BarrierOptionFact, PoolRunnerFact, PoolSlotsFact, ReviewPoolChoice, ReviewPreflight } from "../../../../lib/types/new-run-review";
 
 /** Seam: DS-3. The main drive's size in whole GiB, written by the Files step as `resources.disk_mib`. */
 export const mainDriveGiB = (intent: RunIntent): number | undefined => {
