@@ -425,6 +425,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Templates screen: `/templates` (User view) and `/admin/templates` (Admin view) list saved starting points with
   who-it-is-for, kind and name filters. Use opens New Run on the pinned revision; Rename and Delete follow who may
   change each row; organisation admins publish a template to the organisation from the Admin view.
+- New Run's Harnesses step lists the server's harnesses with their real state: installed, enabled, their model
+  provider, and which combinations an image carries. An interactive run starts in at most one harness with an
+  optional starting prompt, an autonomous run holds one harness and its task, and an environment or application can
+  include optional harnesses.
+- New Run's Files step sizes the main drive in GiB against the pool's cap and says what enforces it, picks a branch
+  for each repository, and attaches a drive of yours, read-only if you wish. An Environment sandbox opens with your
+  drive attached when it can be.
+- New Run's Tools and access step lists what your harness, repositories and drives bring, and the hosts and
+  credentials the run can reach; hosts read "Requested" until the server has checked them. You finish setup in
+  place: choose a model provider, sign in, or add a token. Setup left unfinished is a blocker at Review.
+  - Harness setup: each harness's model provider, what happens to a tool with no rule, rules for named tools, and
+    MCP servers per harness. Choices your policy or the harness rules out are greyed with the reason.
+  - Add tools and access: the CLIs, MCP servers and APIs your organisation grants you, one of your saved secrets (as
+    a request header, an environment variable or a file), one more host, a remote MCP server by URL, or a custom
+    component.
+- New Run: Launch opens a "Name this run" dialog that checks the setup again when it opens; a refusal shows in the
+  dialog and keeps what you typed. A launched run lands on a screen that survives a reload and shows Starting, or
+  its place in line, when it gives up, and Cancel run while it waits.
 - A person's tool rules and default on a New Run combine with the policy's as the stricter of the two for each tool.
   "Run it" is offered where the policy allows the tool and greyed with the reason where it does not; a rule can be an
   exception to the person's own default, never to the policy. Tool rules name one tool exactly (`Bash`, `WebFetch`,
@@ -687,9 +705,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   workspace's folders show as cards of their own and leave with its repositories. A run starts in the repository you
   name, or in its workspace's first folder when none is named. A drive's mount path is read-only; a path outside
   /home/agent is refused with "Use a path inside /home/agent."
+- **Breaking:** New Run at `/runs/new` is the new guided flow: Start, then Shape, Run, Harnesses, Files, Tools and
+  access, and Review, with a Name dialog at Launch and a Launched screen. It replaces the old wizard and its rail
+  (see Removed). [docs/NEW-RUN.md](docs/NEW-RUN.md) is the guide.
+- "Start a run like this one" opens Run again on Review when the run kept its setup. Otherwise it prefills Review
+  from the run's row and audit trail, without the title. A template or Run again link that cannot be read shows
+  the server's sentence and a way back to an empty draft.
 
 ### Removed
 
+- The old New Run wizard and its side rail. `/runs/new` opens the guided flow (see Changed).
 - The `member` role value: `WARDYN_OIDC_ROLE_MAP` entries ending `=member` and
   `WARDYN_OIDC_DEFAULT_ROLE=member` refuse boot with `invalid role "member"`, naming the entry (#623).
 - The `auth.member_mode` audit action, dual-emitted beside `auth.user_view.set` since 0.8 (#623).
@@ -866,6 +891,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   repository placed at /home/agent/work: both would mount there, and every launch with that workspace failed. New
   Run's Files step shows a folder that shares its workspace at the path the server mounts it, and shows a folder
   read-only unless its source is writable.
+- A workspace read says where each repository clones to (`clone_target`) even with no git provider configured, so
+  New Run's Files step offers the repository's mount path on a stock install instead of an empty one.
+- New Run: pressing the workload a draft already has on the Shape step keeps its starter, prompt and task.
 - An Azure DevOps git push held for approval no longer records a denied decision when the client hangs up before the
   approval is decided; the hold just ends, as it already did for the Azure DevOps REST lane.
 
