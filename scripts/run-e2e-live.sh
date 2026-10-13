@@ -25,6 +25,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 source "${ROOT}/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/runner-limits.sh
+source "${ROOT}/scripts/lib/runner-limits.sh"
 
 if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
   skip_lane "run-e2e-live: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent live e2e (skipping)."
@@ -76,6 +78,13 @@ else
   STARTED_WARDYND=$!
   wait_healthy "${BASE}" 30 || { tail -20 "${WARDYND_LOG}"; die "wardynd did not become healthy"; }
 fi
+
+# The server's Docker runner takes no run until it has limits (scripts/lib/runner-limits.sh); this walk
+# declares its own when the server has none, sized for its runs.
+# shellcheck disable=SC2317 # called by wardyn_ensure_runner_limits
+wardyn() { WARDYN_URL="${BASE}" ./bin/wardyn "$@"; }
+WARDYN_SETUP_RUNNER_LIMITS="${WARDYN_SETUP_RUNNER_LIMITS:---max-runs 4 --total-cpu 8 --total-memory 16 --total-disk 80 --per-run-cpu 2 --per-run-memory 4 --per-run-disk 20}" \
+  wardyn_ensure_runner_limits </dev/null || die "could not give the live walk's runner its limits"
 
 log "confinement classes: $(curl -s "${BASE}/healthz" | sed -n 's/.*"confinement_classes":\(\[[^]]*\]\).*/\1/p')"
 

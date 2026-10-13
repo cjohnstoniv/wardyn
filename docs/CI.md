@@ -49,6 +49,8 @@ scripts/ci-run.sh
 | `WARDYN_CI_OUT` | artifact dir (`run.json`, `audit.json`, `run.log`, `session.cast` — the run's terminal recording, when it has one) | `./ci-artifacts` |
 | `WARDYN_CI_KEEP` | throwaway stack: `1` = leave it up for debugging | unset |
 | `WARDYN_CI_SKIP_BUILD` | throwaway stack: `1` = reuse existing local images | unset |
+| `WARDYN_SETUP_RUNNER_DISK_GB` | throwaway stack: GB of disk free for runs, where this host cannot see Docker's data root (Docker Desktop); the stack's runner takes no run without it there | measured on this host |
+| `WARDYN_SETUP_RUNNER_LIMITS` | throwaway stack: the runner's whole limit set as `wardyn runner set` flags, instead of half this host | unset |
 | `WARDYN_DOCKER_SOCK` | throwaway stack: which host Docker socket the job drives (two-daemon hosts: pick the daemon with the runtimes you need) | `/var/run/docker.sock` |
 | `WARDYN_ADMIN_TOKEN` | throwaway stack: its own bootstrap bearer, gone with the stack; never sent to `WARDYN_URL` | `demo-admin-token` |
 
