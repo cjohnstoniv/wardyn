@@ -426,6 +426,13 @@ start_capture() {
 
 # --- act 0: cold start ------------------------------------------------------
 
+# make setup gives the stack's runner its limits, and on Docker Desktop it cannot measure the disk; a take
+# cannot stop to ask. Required up front, before anything is torn down; never defaulted.
+if [[ "${STACKLESS}" != 1 && -z "${WARDYN_SETUP_RUNNER_DISK_GB:-}${WARDYN_SETUP_RUNNER_LIMITS:-}" ]] &&
+  { [[ "${DO_RESET}" == 1 ]] || ! curl -fsS --max-time 5 "http://localhost:${WARDYN_UP_PORT:-8080}/healthz" >/dev/null 2>&1; }; then
+  die "this take runs make setup, which gives the stack's runner its limits: set WARDYN_SETUP_RUNNER_DISK_GB to the GB of disk free for runs on this host (or WARDYN_SETUP_RUNNER_LIMITS to the whole set)"
+fi
+
 if [[ "${DO_RESET}" == 1 ]]; then
   step "Act 0 · Clean slate"
   log "wiping the stack (volumes, sandboxes, the wardyn-internal network, compose .env)"

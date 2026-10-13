@@ -38,6 +38,8 @@ ENV_FILE="${REPO_ROOT}/deploy/compose/.env"
 ENV_EXAMPLE="${REPO_ROOT}/deploy/compose/.env.example"
 
 . "${REPO_ROOT}/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/runner-limits.sh
+. "${REPO_ROOT}/scripts/lib/runner-limits.sh"
 # reset / reset-all machinery — split into its own sourced sibling to keep
 # this file under the file-size gate (scripts/check-file-size.sh); see
 # scripts/up-reset.sh for why it's safe to source before REPO_ROOT's other
@@ -706,6 +708,14 @@ cmd_up() {
     [ -n "${_cid}" ] || _cid=$(compose ps -q wardynd 2>/dev/null || true)
   done
   log "wardynd is healthy"
+
+  # The server's Docker runner takes no run until it has limits, and the server sets them at boot only when
+  # it measured every amount; in a container it cannot see the disk (scripts/lib/runner-limits.sh).
+  # shellcheck disable=SC2317 # called by wardyn_ensure_runner_limits
+  wardyn() { compose exec -T -e WARDYN_URL=http://localhost:8080 wardynd /usr/local/bin/wardyn "$@"; }
+  wardyn_ensure_runner_limits \
+    || die "the server's runner has no limits, so no run can start — set WARDYN_SETUP_RUNNER_DISK_GB and run make setup again, or set them by hand (docs/operations/runner-pools.md#a-remote-hosted-runners-limits)"
+  unset -f wardyn
 
   # W1-S1-3: the pick above ran BEFORE wardynd existed — host_llm_key_present can
   # only see THIS process's env (*_API_KEY), never a
