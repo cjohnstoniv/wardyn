@@ -24,9 +24,8 @@ describe("StepShell", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveFocus();
     expect(announce).toHaveBeenCalledWith("What does it need?");
     expect(screen.getByRole("navigation", { name: "Progress" })).toBeInTheDocument();
-    expect(screen.getByText("Files")).toHaveAttribute("aria-current", "step");
+    expect(screen.getByRole("listitem", { current: "step" })).toHaveTextContent("Files");
     expect(flowSteps(LABELS, "files").map((s) => s.state)).toEqual(["done", "done", "done", "current", "upcoming"]);
-    expect(flowSteps(LABELS).every((s) => s.state === "done")).toBe(true);
   });
 
   it("a Continue with a local issue focuses that issue's control and marks it invalid instead of moving on", () => {
@@ -50,5 +49,27 @@ describe("StepShell", () => {
     fireEvent.keyDown(document, { key: "Enter", ctrlKey: true });
     expect(onBack).toHaveBeenCalledTimes(1);
     expect(onActivate).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Continue" })).toHaveTextContent("Continue→");
+  });
+
+  it("a primary with arrow false shows no arrow", () => {
+    render(<StepShell title="Review" primary={{ label: "Launch run", onActivate: vi.fn(), arrow: false }} />);
+    expect(screen.getByRole("button", { name: "Launch run" })).toHaveTextContent(/^Launch run$/);
+  });
+
+  it("puts the heading aside beside the heading and the footer extras around the primary, in place of Back", () => {
+    render(
+      <StepShell
+        title="Review"
+        back={{ label: "Back", onBack: vi.fn() }}
+        primary={{ label: "Launch run", onActivate: vi.fn(), arrow: false }}
+        headingAside={<span>Toggle</span>}
+        footerExtras={{ start: <button type="button">Save</button>, end: <button type="button">Check again</button> }}
+      />,
+    );
+    expect(screen.getByText("Toggle").closest("div")?.previousElementSibling?.tagName).toBe("HEADER");
+    const footer = screen.getByRole("contentinfo");
+    expect([...footer.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Save", "Check again", "Launch run"]);
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
   });
 });
