@@ -14,6 +14,8 @@ import type { SetupHarnessTool } from "../../../../lib/types/setup";
 import type { TemplateDocument } from "../../../../lib/types/templates";
 import { Button } from "../../../ui/button";
 import { DocumentEditor, type DocumentDiagnostic } from "../../../wardyn/policy-document/document-editor";
+import { specToSource } from "../../../wardyn/policy-document/policy-source";
+import { Segmented } from "../../../wardyn/segmented";
 import type { NewRunLocation } from "../draft/new-run-url";
 import type { DocBuffer, RunIntent } from "../draft/run-intent";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../new-run-route";
@@ -85,6 +87,17 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
     if (as !== format) go({ screen: "document", format: as }, { replace: true });
   };
 
+  /** Make's switch: immediate, no confirm. Text that does not parse stays put and says why. */
+  const switchFormat = (as: DocumentFormat) => {
+    if (as === format) return;
+    const parsed = parsePolicySource(text, format);
+    if (!parsed.ok) {
+      supersede();
+      return refuse(check.current.id, [format === "json" ? copy.JSON_INVALID : copy.YAML_INVALID]);
+    }
+    setSource(specToSource(parsed.value as Record<string, unknown>, as), as);
+  };
+
   const refuse = (id: number, reasons: string[]) => {
     if (id !== check.current.id) return;
     setLines(reasons);
@@ -107,7 +120,7 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
       if (answer.diagnostics.length > 0) {
         const placed = placeDiagnostics(source, as, answer.diagnostics);
         dispatch({ type: "doc", doc: { format: as, text: source, diagnostics: placed, validated: false } });
-        announce(copy.ANNOUNCE_ERRORS(placed.length));
+        announce(copy.ANNOUNCE_ERRORS(new Set(placed.map((d) => d.text)).size));
         return undefined;
       }
       dispatch({ type: "doc", doc: buffer(source, as, { diagnostics: [], validated: true }) });
@@ -142,40 +155,53 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
   };
 
   const diagnostics: DocumentDiagnostic[] = (draft.doc?.diagnostics ?? []).map((d) => ({ line: d.line ?? 1, column: d.column ?? 1, text: d.text }));
-  const count = diagnostics.length + lines.length;
-  const status: DocumentStatus = count > 0 ? { kind: "issues", count, lines } : valid ? { kind: "valid" } : { kind: "ready" };
+  // Make lists every problem once in the panel; a problem marked on two lines (the end conflict) is still one.
+  const problems = [...new Set(diagnostics.map((d) => d.text)), ...lines];
+  const status: DocumentStatus = problems.length > 0 ? { kind: "issues", count: problems.length, lines: problems } : valid ? { kind: "valid" } : { kind: "ready" };
 
   return (
     <StepShell
       eyebrow={copy.EYEBROW}
       title={copy.TITLE}
       lede={copy.LEDE}
-      back={{ label: NR_SHARED.BACK, onBack: () => go({ screen: "start" }) }}
+      headingAside={<Button type="button" variant="outline" disabled={busy} onClick={() => void proceed({ screen: "step", step: "shape" })}>{copy.OPEN_IN_GUIDED}</Button>}
+      footerExtras={{
+        // With extras StepShell's own Back is replaced, so Back comes here: Make's order is Back · Validate + Continue.
+        start: <Button type="button" variant="ghost" onClick={() => go({ screen: "start" })}>{NR_SHARED.BACK}</Button>,
+        end: <Button type="button" variant="outline" disabled={busy} onClick={() => void validate()}>{copy.VALIDATE}</Button>,
+      }}
       primary={{ label: copy.CONTINUE_REVIEW, onActivate: () => void proceed({ screen: "review", view: "pretty" }), disabled: busy }}
     >
       <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="outline" onClick={() => fileInput.current?.click()}>{copy.IMPORT_FILE}</Button>
-          <input
-            ref={fileInput}
-            type="file"
-            accept=".yaml,.yml,.json"
-            data-testid="document-file"
-            aria-label={copy.IMPORT_FILE}
-            tabIndex={-1}
-            className="sr-only"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              e.target.value = "";
-              importFile(file);
-            }}
-          />
-          <Button type="button" variant="outline" disabled={!harness} aria-describedby={harness === null && MISSING_COPY.NO_HARNESS ? NO_HARNESS_ID : undefined}
-            onClick={() => harness && setSource(exampleDocumentText(harness, format), format)}>
-            {copy.LOAD_EXAMPLE}
-          </Button>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => void validate()}>{copy.VALIDATE}</Button>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => void proceed({ screen: "step", step: "shape" })}>{copy.OPEN_IN_GUIDED}</Button>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div role="group" aria-label={copy.FORMAT_ARIA}>
+            <Segmented
+              value={format}
+              options={[{ value: "yaml", label: copy.FORMAT_YAML }, { value: "json", label: copy.FORMAT_JSON }]}
+              onChange={switchFormat}
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" onClick={() => fileInput.current?.click()}>{copy.IMPORT_FILE}</Button>
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".yaml,.yml,.json"
+              data-testid="document-file"
+              aria-label={copy.IMPORT_FILE}
+              tabIndex={-1}
+              className="sr-only"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                importFile(file);
+              }}
+            />
+            <Button type="button" variant="outline" disabled={!harness} aria-describedby={harness === null && MISSING_COPY.NO_HARNESS ? NO_HARNESS_ID : undefined}
+              onClick={() => harness && setSource(exampleDocumentText(harness, format), format)}>
+              {copy.LOAD_EXAMPLE}
+            </Button>
+          </div>
         </div>
         {harness === null && MISSING_COPY.NO_HARNESS && <p id={NO_HARNESS_ID} className="text-xs text-muted-foreground">{MISSING_COPY.NO_HARNESS}</p>}
         <DocumentEditor
@@ -183,11 +209,11 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
           value={text}
           format={format}
           onChange={(next) => setSource(next, format)}
-          onFormatChange={(as, next) => setSource(next, as)}
           diagnostics={diagnostics}
+          invalid={problems.length > 0}
           label={copy.EDITOR_ARIA(format.toUpperCase())}
           describedBy={STATUS_ID}
-          rows={16}
+          rows={23}
         />
         <ValidationPanel id={STATUS_ID} status={status} copy={copy} />
       </div>
