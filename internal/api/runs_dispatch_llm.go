@@ -401,6 +401,8 @@ type dispatchLLMPlan struct {
 	// azure is the azure_foundry lane's share of the proxy config: its MITM entry (a fourth producer
 	// beside the artifact, Bedrock and Azure DevOps ones), its route gate and its channel host.
 	azure azurePlan
+	// azureCLI is the Azure CLI row's share of the proxy config: its door's grant.
+	azureCLI azureCLIPlan
 	// llmUnavailableDetail is the self-explaining detail the proxy's brokered-LLM
 	// 404 renders when this run reaches that route with no credential behind it
 	// (mpNoProviderDetail). Empty => the route's own generic detail.
@@ -477,7 +479,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	var mitmCACertPEM, mitmCAKeyPEM string
 	if subscription || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject ||
 		slices.ContainsFunc(llms, llmTransport.azureInject) || p.PATAPI || len(p.Components.MITMHosts) > 0 ||
-		p.Components.GitHubAPI != nil || p.Components.AWSCLI != nil {
+		p.Components.GitHubAPI != nil || p.Components.AWSCLI != nil || p.Components.AzureCLI != nil {
 		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
 			return dispatchLLMPlan{}, false
 		}
@@ -504,6 +506,11 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		return dispatchLLMPlan{}, false
 	}
 	bedrockMITMHosts = append(bedrockMITMHosts, cliMITMHosts...)
+	// The Azure CLI row's grant, door and the two hosts it opens. Same contract.
+	var azureCLI azureCLIPlan
+	if injections, azureCLI, ok = s.authorAzureCLI(ctx, run, p.Components.AzureCLI, mitmCACertPEM, mitmCAKeyPEM, policy, sandboxEnv, injections); !ok {
+		return dispatchLLMPlan{}, false
+	}
 
 	// Artifact-redirect token injections (authored in planArtifactRedirect, whose
 	// egress substitution already added each corp host to policy.AllowedDomains, so
@@ -531,6 +538,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		mitmCACertPEM: mitmCACertPEM, mitmCAKeyPEM: mitmCAKeyPEM,
 		bedrockMITMHosts:     bedrockMITMHosts,
 		azure:                azure,
+		azureCLI:             azureCLI,
 		mitmLLM:              subscription || mitmForInspect,
 		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams,
 	}, true

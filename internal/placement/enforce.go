@@ -176,6 +176,13 @@ var gates = map[string]func(LocalPlan) *Refusal{
 		}
 		return nil
 	},
+	// The Resource Manager token is redeemed and held on the organisation's side.
+	"ProxyConfig.AzureARM": func(p LocalPlan) *Refusal {
+		if p.Spec.ProxyConfig.AzureARM != nil {
+			return refuse(ReasonPlacementCredential, "ProxyConfig.AzureARM", "the Azure CLI's token cannot be sent to a local runner")
+		}
+		return nil
+	},
 }
 
 // CredentialPaths enumerates every present value of a field the table classifies
