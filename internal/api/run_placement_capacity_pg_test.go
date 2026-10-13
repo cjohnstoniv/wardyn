@@ -165,10 +165,12 @@ func TestPG_QueuedRunStartsOnTheRunnerItsPromotionChose(t *testing.T) {
 	}
 }
 
-// roomyLimitsBody is an owner's runner update declaring roomy limits with runs at once.
+// roomyLimitsBody is an owner's runner update declaring runs at once, within what a laptop() of 4 CPUs
+// and 8 GiB reports, with a roomy disk.
 func roomyLimitsBody(runs int) string {
 	l := roomyRunnerLimits()
 	l.RunsAtOnce = runs
+	l.Total.CPUMillis, l.Total.MemoryMiB, l.PerRun.CPUMillis, l.PerRun.MemoryMiB = 4000, 8192, 1000, 1024
 	b, _ := json.Marshal(types.RunnerUpdateRequest{Limits: l})
 	return string(b)
 }
