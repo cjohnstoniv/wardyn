@@ -115,8 +115,8 @@ if [ -z "$BINARY" ]; then
     BINARY="$(command -v wardyn-runnerd || true)"
   fi
 fi
-[ -n "$BINARY" ] && [ -e "$BINARY" ] || die "wardyn-runnerd not found: pass --binary <path>"
-[ -f "$BINARY" ] && [ -r "$BINARY" ] || die "wardyn-runnerd is not a readable file: $BINARY"
+if ! { [ -n "$BINARY" ] && [ -e "$BINARY" ]; }; then die "wardyn-runnerd not found: pass --binary <path>"; fi
+if ! { [ -f "$BINARY" ] && [ -r "$BINARY" ]; }; then die "wardyn-runnerd is not a readable file: $BINARY"; fi
 # A release download has no exec bit. Work from a private 0755 copy, so the
 # version check can run it and the install copies a runnable file.
 STAGE="$(mktemp -d)"
@@ -163,6 +163,9 @@ mv -f "$INSTALLED.new" "$INSTALLED"
 echo "Installed $INSTALLED"
 
 if [ "$HAVE_IDENTITY" = 0 ]; then
+  # register asks only when both its input and output are a terminal; say so first, so a person watching
+  # knows the questions are coming and a log shows why none were asked.
+  echo "Registering this computer. At a terminal it asks for the runner's limits (Enter takes each suggestion); otherwise it registers with the limits it suggests."
   "$INSTALLED" register --org "$ORG" --token-file "$TOKEN_FILE"
 fi
 

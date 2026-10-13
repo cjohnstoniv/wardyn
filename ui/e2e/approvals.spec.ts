@@ -98,9 +98,9 @@ function uniqueMarker(prefix: string): string {
   return `${prefix}-${randomUUID().slice(0, 8)}.example.test`;
 }
 
-// Build a literal-dot regex that matches a marker string anywhere on screen.
+// Build a literal regex that matches a marker string anywhere on screen.
 function markerRe(marker: string): RegExp {
-  return new RegExp(marker.replace(/[.]/g, "\\."));
+  return new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 }
 
 // The sidebar entry is a react-router <NavLink> (role="link"). Once the

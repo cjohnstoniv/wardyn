@@ -14,6 +14,10 @@ attribution.owner
 attribution.request_text
 attribution.request_url
 attribution.source
+azure_arm
+azure_arm.subscriptions
+azure_arm.tenant_id
+azure_arm.write
 azure_gates
 azure_gates.body_cap
 azure_gates.host

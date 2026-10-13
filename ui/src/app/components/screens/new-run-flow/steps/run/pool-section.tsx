@@ -6,20 +6,19 @@
 import * as React from "react";
 import { Label } from "../../../../ui/label";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
-import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
-import { Chip } from "../../../../wardyn/primitives";
 import { RUNNER_POOL_REFUSAL } from "../../../../../lib/runner-pool-refusals";
 import type { RunnerPoolRunType } from "../../../../../lib/types/runner-pools";
 import type { RunIntent } from "../../draft/run-intent";
 import { poolChoices, selectedPoolId, usablePools } from "./pool-model";
 import type { PoolsState } from "./pool-source";
+import { PoolNotes } from "./pool-notes";
 import { PoolSummary } from "./pool-summary";
 
 export const POOL_ID = "nr-pool";
 const SELECT_CLASS =
   "border-input bg-input-background dark:bg-input/30 focus-visible:border-ring focus-visible:ring-ring h-9 w-full rounded-md border px-3 text-base outline-none focus-visible:ring-[3px] md:text-sm aria-invalid:border-destructive";
 
-/** Where it runs: the pools the person may use, each disabled one with its reason, and what the chosen pool offers. */
+/** The pool field of "Where should it run?": the pools the person may use, each disabled one with its reason, and what the chosen pool offers. */
 export function PoolSection({ state, runType, intent, onChoose }: {
   state: PoolsState; runType: RunnerPoolRunType | undefined; intent: RunIntent; onChoose: (id: string) => void;
 }) {
@@ -30,11 +29,7 @@ export function PoolSection({ state, runType, intent, onChoose }: {
   const chosen = pools.find((p) => p.id === value);
   const missing = flagged && !!list && !value;
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-2">
-        <span className="label-eyebrow">{NR_RUN.WHERE_LABEL}</span>
-        <Chip>{NR_SHARED.REQUIRED}</Chip>
-      </div>
+    <div>
       <div className="flex flex-col gap-2">
         <Label htmlFor={POOL_ID}>{NR_RUN.POOL_LABEL}</Label>
         <select
@@ -54,6 +49,7 @@ export function PoolSection({ state, runType, intent, onChoose }: {
         {missing && <p role="alert" className="text-xs text-danger">{RUNNER_POOL_REFUSAL.REQUIRED()}</p>}
         {state.status === "error" && <p role="alert" className="text-xs text-danger">{state.message}</p>}
         <p id={`${POOL_ID}-help`} className="text-xs leading-snug text-muted-foreground">{NR_RUN.POOL_HELP}</p>
+        {list && <PoolNotes pools={pools} chosen={chosen} runType={runType} />}
       </div>
       {chosen && <PoolSummary pool={chosen} runType={runType} allowance={list?.allowance} />}
     </div>

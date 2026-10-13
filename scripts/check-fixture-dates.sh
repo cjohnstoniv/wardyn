@@ -112,7 +112,6 @@ declare -A ALLOWLIST=(
   # code comment (line 147) that names the OLD literal in prose, explaining
   # why the test below it now uses aheadByHours instead — matched by this
   # script's regex incidentally, same as any other date-shaped text.
-  ["ui/src/app/components/screens/new-run/new-run-rail.test.tsx"]=1
   ["ui/src/app/components/wardyn/model-access-banner.test.tsx"]=2
   ["ui/src/app/lib/model-access.test.ts"]=5
   # #1425: the run policy view fixture's created_at/updated_at and a restart

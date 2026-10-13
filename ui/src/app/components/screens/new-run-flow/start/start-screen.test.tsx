@@ -51,7 +51,7 @@ describe("Start screen", () => {
 
   it("opens the Shape step from Start guided setup", async () => {
     show();
-    await userEvent.click(await screen.findByRole("button", { name: NR_START.GUIDED_FOOT }));
+    await userEvent.click(await screen.findByRole("button", { name: new RegExp(`^${NR_START.GUIDED_TITLE}.*${NR_START.GUIDED_FOOT}$`) }));
     await waitFor(() => expect(path()).toBe("/runs/new?step=shape"));
   });
 

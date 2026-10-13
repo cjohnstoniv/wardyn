@@ -62,7 +62,7 @@ const getWorkspaceProvidersMock = vi.fn();
 vi.mock("../../../lib/api/providers", () => ({
   providers: { getWorkspaceProviders: (...a: unknown[]) => getWorkspaceProvidersMock(...a) },
 }));
-vi.mock("../../../lib/api/runs", () => ({ runs: { createRun: vi.fn(), getRun: vi.fn(), killRun: vi.fn() } }));
+vi.mock("../../../lib/api/runs", () => ({ runs: { createRunWire: vi.fn(), getRun: vi.fn(), killRun: vi.fn() } }));
 vi.mock("../../attach-terminal", () => ({ AttachTerminal: () => null }));
 vi.mock("../../wardyn/live-approvals", () => ({ LiveApprovals: () => null }));
 

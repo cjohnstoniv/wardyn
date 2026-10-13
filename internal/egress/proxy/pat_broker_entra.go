@@ -231,6 +231,9 @@ func (p *Proxy) refuseADOGit(w http.ResponseWriter, r *http.Request, host string
 		if ok, msg = p.awaitADOCapability(r.Context(), host, *held, adoGitAsk(r), msg); ok {
 			return true
 		}
+		if r.Context().Err() != nil {
+			return false // the client hung up mid-hold; it was never refused, so no row and no body
+		}
 	}
 	p.emitPATDecision(r, host, egress.Deny, ruleSourceADOGitDenied)
 	if push != nil {
@@ -381,7 +384,7 @@ func readADOGitPush(r *http.Request) (head []byte, push *adoGitPush, msg string)
 	head, err := readReceivePackCommands(io.TeeReader(r.Body, &seen), "")
 	push = &adoGitPush{}
 	for b := seen.Bytes(); len(b) >= 4; {
-		n, perr := strconv.ParseUint(string(b[:4]), 16, 32)
+		n, perr := strconv.ParseUint(string(b[:4]), 16, 16)
 		if perr != nil || n < 5 || int(n) > len(b) {
 			break
 		}

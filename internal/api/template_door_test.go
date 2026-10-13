@@ -391,7 +391,7 @@ func TestTemplateRegistryFollowsTheOwnersAccessAndModeRulings(t *testing.T) {
 		t.Error("pool_id is the C-pools carrier's working name no more: it is runner_pool_id")
 	}
 	for _, r := range slices.Concat(templateRequestRules, templatePolicyRules) {
-		if r.Tab == "info" || r.Part == "info" {
+		if r.Part == "info" {
 			t.Errorf("%s still belongs to the removed Info tab", r.Name)
 		}
 	}

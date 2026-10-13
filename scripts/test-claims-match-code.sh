@@ -97,11 +97,11 @@ trivy_cells="$(grep -oE '^[[:space:]]+name: trivy \([a-z0-9-]+\)$' "${CI_YML}" \
                | sed -E 's/.*\(([a-z0-9-]+)\)$/\1/' | sort -u || true)"
 [ -n "${trivy_cells}" ] || fail "could not derive ci.yml's trivy jobs — this guard would compare against an empty list"
 for want in notices; do
-  printf '%s' "${contexts}" | grep -qF "\"${want}\"" \
+  grep -qF "\"${want}\"" <<<"${contexts}" \
     || fail "RELEASING.md's required contexts omit '${want}' — the copyleft / unreviewed-dependency gate merges red (F121)"
 done
 for cell in ${trivy_cells}; do
-  printf '%s' "${contexts}" | grep -qF "\"trivy (${cell})\"" \
+  grep -qF "\"trivy (${cell})\"" <<<"${contexts}" \
     || fail "RELEASING.md's required contexts omit 'trivy (${cell})' — ci.yml scans that image and branch protection would let it merge red. Each trivy job reports its own context (F121)"
 done
 pass "C6 RELEASING.md's required contexts cover notices + every ci.yml trivy job"
@@ -126,9 +126,9 @@ pg_pw="$(awk '/^  postgres:/{f=1} f&&/^  [a-z]/&&!/^  postgres:/{f=0} f&&/POSTGR
 [ -n "${pg_pw}" ] || fail "could not read POSTGRES_PASSWORD out of ${COMPOSE_YAML}"
 second_user="$(awk '/^## Second user, same host/{f=1;next} f&&/^## /{f=0} f' "${ROOT}/docs/OPERATIONS.md")"
 [ -n "${second_user}" ] || fail "docs/OPERATIONS.md has no 'Second user, same host' section — C7's F155 half is pointing at nothing"
-printf '%s' "${second_user}" | grep -qF "${pg_pw}" \
+grep -qF "${pg_pw}" <<<"${second_user}" \
   || fail "docs/OPERATIONS.md's 'Second user, same host' recipe never mentions that Postgres publishes on loopback with the PUBLISHED literal password '${pg_pw}' — the second person psql's straight past every admin/member control the section is about (F155)"
-printf '%s' "${second_user}" | grep -qi 'registry' \
+grep -qi 'registry' <<<"${second_user}" \
   || fail "docs/OPERATIONS.md's 'Second user, same host' recipe never mentions the unauthenticated loopback registry — any local user can push a layer a later envbuild run executes (F155)"
 pass "C7 ENV.md/VERIFY.md/THREAT-MODEL/OPERATIONS.md match the code they describe"
 
@@ -184,7 +184,7 @@ for f in "${MIGDIR}"/00[5-9]*.sql "${MIGDIR}"/0[1-9]*.sql; do
   # replaces a function an earlier release created — no ownership needed.
   grep -i 'CREATE OR REPLACE FUNCTION' "${f}" | grep -viq 'FUNCTION pg_temp\.' && hazard=yes
   [ "${hazard}" = yes ] || continue
-  printf '%s' "${ops_para}" | grep -qF "\`${num}\`" \
+  grep -qF "\`${num}\`" <<<"${ops_para}" \
     || fail "migration ${num} ALTERs a table an earlier release created (or replaces a function it created), so it needs the migrator to OWN that object — and docs/OPERATIONS.md's migrator/app-role rationale never names it. That enumeration is the whole justification for the one-way role split (F034)"
 done
 pass "C8c the migrator rationale names every ownership-requiring migration on the upgrade path"
@@ -214,7 +214,7 @@ for f in "${MIGDIR}"/[0-9][0-9][0-9][0-9]_*.sql; do
   while read -r tbl; do
     [ -n "${tbl}" ] || continue
     checked=$((checked + 1))
-    printf '%s' "${split_note}" | grep -qF "\`${tbl}\`" \
+    grep -qF "\`${tbl}\`" <<<"${split_note}" \
       || fail "migration ${num} creates table ${tbl}, and the newest CHANGELOG \"Split-role installs\" bullet does not grant it: a split-role install that follows the note cannot use the table (C8h). Name it there with its grant; after a release cut, start a new bullet and move UNRELEASED_FROM"
   done <<< "$(grep -ioE 'CREATE TABLE (IF NOT EXISTS )?[a-z_]+' "${f}" | awk '{print tolower($NF)}' | sort -u || true)"
 done

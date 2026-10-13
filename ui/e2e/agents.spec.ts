@@ -7,10 +7,25 @@ import {
   test,
   expect,
   ADMIN_TOKEN,
+  chooseFiles,
+  chooseRunMode,
+  chooseShape,
+  continueNewRun,
   expandCard,
+  firstHarness,
   gotoConsole,
+  launchRun,
+  mockPreflightClear,
   navToRoute,
+  openNewRun,
+  startGuided,
+  submitLaunch,
+  walkGuidedToFiles,
+  walkGuidedToReview,
 } from "./fixtures";
+import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
+import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
+import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 import {
   AGENTS,
   PROVIDERS,
@@ -46,6 +61,17 @@ async function gotoAgentsTab(page: Page): Promise<void> {
   await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
   await expect(page).toHaveURL(/\/admin\/providers$/);
   await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
+}
+
+// An Autonomous agent task's Harnesses step with the harness it opens with: its picker is the roster as the
+// server sends it. The options that cannot join say why in the list under the picker.
+async function openHarnessPicker(page: Page) {
+  await openNewRun(page);
+  await startGuided(page);
+  await chooseShape(page, "agent_task");
+  await chooseRunMode(page, "autonomous");
+  await continueNewRun(page, NR_HARNESSES.TITLE);
+  return firstHarness(page);
 }
 
 async function getAgentProviders(page: Page): Promise<{ providers: { agents?: unknown[] }; etag: string | null }> {
@@ -89,17 +115,14 @@ async function putDoc(page: Page, path: string, body: unknown): Promise<void> {
 test.describe.configure({ mode: "serial" });
 
 test.describe("agents — legacy open mode (no agent_providers row saved yet)", () => {
-  test("both catalog agents render enabled, nothing marked unavailable in New Run's picker", async ({ page }) => {
+  test("both catalog agents render enabled, nothing marked unavailable in New Run's harness picker", async ({ page }) => {
     const before = await getAgentProviders(page);
     expect(before.providers.agents ?? []).toEqual([]);
 
     await gotoConsole(page);
-    await page.getByRole("button", { name: "New run" }).click();
-    await page.getByRole("radio", { name: /^Autonomous/ }).click();
-    const agentSelect = page.getByRole("combobox", { name: "Agent" });
-    await agentSelect.click();
-    await expect(page.getByRole("option", { name: "Claude Code" })).toBeEnabled();
-    await expect(page.getByRole("option", { name: "Codex CLI" })).toBeEnabled();
+    const picker = await openHarnessPicker(page);
+    await expect(picker.getByRole("option", { name: "Claude Code" })).toBeEnabled();
+    await expect(picker.getByRole("option", { name: "Codex CLI" })).toBeEnabled();
     await expect(page.getByText(AGENTS.UNAVAILABLE)).toHaveCount(0);
   });
 });
@@ -170,7 +193,51 @@ test.describe("agents — the admin authoring walk (real writes, real reload)", 
     }
   });
 
-  test("disabling codex-cli renders it unavailable in the New Run picker, and refuses a real launch naming it", async ({
+  test("the provider picked on Tools and access reaches the create, on the harness's own entry", async ({ page }) => {
+    // Two candidates for Claude Code and no default, so the choice is the person's.
+    await putDoc(page, "/api/v1/model-providers", {
+      providers: [
+        {
+          id: "bedrock-prod",
+          name: "Bedrock (prod)",
+          kind: "bedrock_sso",
+          bedrock: { region: "us-east-1", sso_start_url: "https://acme.awsapps.com/start" },
+          harnesses: [{ harness: "claude-code", model: "acme.claude-sonnet" }],
+        },
+        {
+          id: "corp-gateway",
+          name: "Corp gateway",
+          kind: "custom_endpoint",
+          base_url: "https://gateway.corp.example",
+          harnesses: [{ harness: "claude-code", path: "/anthropic" }],
+        },
+      ],
+    });
+    try {
+      // The check and the create are answered here: the subject is the body the console sends.
+      let created: { tools?: { id: string; kind: string; model_provider?: string }[] } | undefined;
+      await page.route("**/api/v1/runs/e2e-provider-run", (route) => route.fulfill({ json: { id: "e2e-provider-run", state: "PENDING" } }));
+      await page.route("**/api/v1/runs", async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        created = route.request().postDataJSON() as typeof created;
+        await route.fulfill({ status: 201, json: { id: "e2e-provider-run", state: "PENDING" } });
+      });
+      await mockPreflightClear(page);
+      await gotoConsole(page);
+      await openNewRun(page);
+      await walkGuidedToFiles(page, { shape: "agent_task", mode: "autonomous" });
+      await chooseFiles(page);
+      await continueNewRun(page, NR_TOOLS.TITLE);
+      await page.locator("#nr-provider-claude-code").selectOption("corp-gateway");
+      await continueNewRun(page, NR_REVIEW.TITLE);
+      await submitLaunch(page, "e2e provider pick");
+      await expect.poll(() => created?.tools?.find((t) => t.kind === "harness")).toMatchObject({ id: "claude-code", model_provider: "corp-gateway" });
+    } finally {
+      await putDoc(page, "/api/v1/model-providers", {});
+    }
+  });
+
+  test("disabling codex-cli renders it unavailable in the New Run harness picker, and refuses a real launch naming it", async ({
     page,
   }) => {
     await gotoAgentsTab(page);
@@ -180,15 +247,14 @@ test.describe("agents — the admin authoring walk (real writes, real reload)", 
     await expect(row.getByText(AGENTS.AGENT_ROW_DISABLED_HINT)).toBeVisible();
     await saveAgents(page);
 
-    // The picker: disabled, WITH its reason (never hidden).
+    // The picker: disabled, WITH its reason (never hidden). The reason sits in the list under the
+    // picker, since a native option cannot carry visible text of its own.
     await gotoConsole(page);
-    await page.getByRole("button", { name: "New run" }).click();
-    await page.getByRole("radio", { name: /^Autonomous/ }).click();
-    await page.getByRole("combobox", { name: "Agent" }).click();
-    const codexOption = page.getByRole("option", { name: new RegExp(`Codex CLI.*${AGENTS.UNAVAILABLE}`) });
-    await expect(codexOption).toBeVisible();
-    await expect(codexOption).toHaveAttribute("aria-disabled", "true");
-    await page.keyboard.press("Escape");
+    const picker = await openHarnessPicker(page);
+    await expect(picker.getByRole("option", { name: "Codex CLI" })).toBeDisabled();
+    await expect(page.locator("#nr-harness-unavailable").filter({ hasText: "Codex CLI" })).toContainText(
+      NR_HARNESSES.NOT_ENABLED,
+    );
 
     // The real refusal — agentRosterRefusal, no operator exemption.
     const res = await page.request.post("/api/v1/runs", {
@@ -211,17 +277,16 @@ test.describe("agents — the admin authoring walk (real writes, real reload)", 
   });
 });
 
-// A launch whose 201 carries warnings[] (#125): the run page renders them
-// immediately — the console navigates there in the SAME TICK, no held screen,
-// no toast, no timer — and Dismiss clears them client-side. Spliced on the
+// A launch whose 201 carries warnings[] (#125): the Launched screen's "View run" lands on the run
+// page, which renders them, and Dismiss clears them client-side. Spliced on the
 // create response (route.fetch() + patch + refulfill): this harness's
 // admin-token caller is never member-clamped for real (isOperator
 // short-circuits governance resolution, drives.spec.ts's own documented
 // reason), so a genuine 201-with-warnings needs a member session this
 // harness cannot mint. The CLIENT behavior this pins is C-UI's; the clamping
 // itself is B-α/A2's, Go-tested.
-test.describe("agents — a 201 carrying warnings navigates straight to the run", () => {
-  test("navigates immediately, renders the warnings on the run page, and Dismiss clears them", async ({ page }) => {
+test.describe("agents — a 201 carrying warnings reaches the run page", () => {
+  test("View run renders the warnings on the run page, and Dismiss clears them", async ({ page }) => {
     // The prior describe block left claude-code declared as bedrock_bearer
     // with nothing configured — a real launch would now itself 422 at the
     // declared-mechanism gate, before ever reaching the splice below. Back to
@@ -238,13 +303,13 @@ test.describe("agents — a 201 carrying warnings navigates straight to the run"
       await route.fulfill({ response, json });
     });
 
+    // The hermetic backend builds no barrier, which the real check holds Launch for.
+    await mockPreflightClear(page);
     await gotoConsole(page);
-    await page.getByRole("button", { name: "New run" }).click();
-    await page.getByLabel("Title").fill("e2e launch warnings");
-    await page.getByRole("button", { name: "Launch run" }).click();
+    await openNewRun(page);
+    await walkGuidedToReview(page);
+    await launchRun(page, "e2e launch warnings");
 
-    // Navigates in the same tick — no held /runs/new, no "Open run".
-    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByText(AGENTS.LAUNCH_WARNING_TITLE)).toBeVisible();
     await expect(page.getByText("Egress narrowed to api.anthropic.com by member policy.")).toBeVisible();
     await expect(page.getByText(RUN_DETAIL.LAUNCH_WARNING_EPHEMERAL)).toBeVisible();

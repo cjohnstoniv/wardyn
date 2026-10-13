@@ -7,6 +7,8 @@ import * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { adoCapName } from "../../../../../lib/ado-access-copy";
+import { ADO_PAT } from "../../../../../lib/ado-pat-copy";
 import { secrets } from "../../../../../lib/api/secrets";
 import { SCENARIO_ACCESS, SETUP_ITEMS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
 import { CLAUDE_UNGATED, withFacts } from "../../../../../lib/new-run-fixtures/scenarios/tools-harness";
@@ -22,17 +24,23 @@ const h = vi.hoisted(() => ({
   params: vi.fn(),
   providers: [] as unknown[],
   checks: { preview: { result: undefined as unknown, current: false }, invalidateChecks: vi.fn() },
+  scm: undefined as unknown,
+  refresh: vi.fn(),
+  connect: vi.fn(),
 }));
 vi.mock("../../draft/use-intent-checks", () => ({
   useDraftIdentity: () => ({ principal: "alice", resolved: true, revision: 1, authGeneration: 0 }),
   useIntentChecks: (params: unknown) => { h.params(params); return h.checks; },
 }));
 vi.mock("../../../../wardyn/model-access-context", () => ({
-  useModelAccessDoor: () => ({ openDoor: vi.fn(), open: false }),
+  useModelAccessDoor: () => ({ openDoor: vi.fn(), open: false, refresh: h.refresh }),
   useShellSetupStatus: () => ({
-    status: { harnesses: [{ id: "claude-code", display: "Claude Code" }, { id: "codex-cli", display: "Codex CLI" }], model_providers: h.providers },
+    status: { harnesses: [{ id: "claude-code", display: "Claude Code" }, { id: "codex-cli", display: "Codex CLI" }], model_providers: h.providers, scm_access: h.scm },
     refresh: () => {},
   }),
+}));
+vi.mock("../../../../../lib/hooks/use-ado-connect", () => ({
+  useAdoConnect: () => ({ connecting: false, connect: h.connect, connectFallback: h.connect, cancel: () => {}, blockedUrl: null }),
 }));
 
 const READY: RunIntent = { shape: "environment", experience: "interactive", no_repositories_or_drives: true, tools: [{ id: "claude-code", kind: "harness" }] };
@@ -63,6 +71,9 @@ const network = () => within(screen.getByRole("heading", { name: NR_TOOLS.NETWOR
 
 beforeEach(() => {
   h.providers = [];
+  h.scm = undefined;
+  h.refresh.mockReset();
+  h.connect.mockReset().mockResolvedValue(true);
   answer(undefined, false);
   vi.spyOn(secrets, "setSecret").mockResolvedValue(undefined);
 });
@@ -100,6 +111,10 @@ describe("Tools and access step", () => {
     answer(SCENARIO_ACCESS.app, true);
     show();
     await screen.findByText(NR_TOOLS.STICKY_ONE);
+    // The prototype's sticky bar: Back, the count, then Review run.
+    const bar = screen.getByRole("contentinfo");
+    expect(bar).toHaveClass("sticky");
+    expect(bar.textContent).toMatch(new RegExp(`^${NR_SHARED.BACK}${NR_TOOLS.STICKY_ONE}${NR_TOOLS.REVIEW_RUN}`));
     expect(screen.getByRole("button", { name: NR_TOOLS.REVIEW_RUN })).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.REVIEW_RUN }));
     expect(go).toHaveBeenCalledWith({ screen: "review", view: "pretty" });
@@ -227,5 +242,23 @@ describe("Tools and access step", () => {
     await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_CHOOSE }));
     expect(screen.getByTestId("revision").textContent).toBe(before);
     expect(screen.queryByRole("button", { name: NR_TOOLS.CARD_ADD })).not.toBeInTheDocument();
+  });
+
+  it("a run carrying the Azure DevOps credential on a row that creates its token: the Credentials total says what it carries, and Connect re-reads the person and the run", async () => {
+    const access: AccessFacts = {
+      ...SCENARIO_ACCESS.member,
+      rows: [...SCENARIO_ACCESS.member.rows, { id: "repo:ado", kind: "repository", from: "repository", name: "contoso", status: "needs_setup", hosts: [], credentials: ["repo:ado:credential"], source: { kind: "workspace" } }],
+      credentials: [...SCENARIO_ACCESS.member.credentials, { id: "repo:ado:credential", row: "repo:ado", kind: "ado_signin", owner: "own", delivery: "proxy", after_end: "gone" }],
+    };
+    h.scm = { org: "https://dev.azure.com/contoso", kind: "azure_devops", token_mode: "minted_pat", state: "not_configured", default_profile: ["code_read"] };
+    h.checks.preview = { result: { access, spec: { azure_devops_capabilities: ["code_read", "code_write"] } }, current: true };
+    show();
+    const line = await screen.findByTestId("ado-run-token-line");
+    expect(line).toHaveTextContent(`${ADO_PAT.NEWRUN_LINE_PREFIX}${["code_read", "code_write"].map(adoCapName).join(", ")}${ADO_PAT.NEWRUN_LINE_SUFFIX}`);
+    const note = screen.getByTestId("ado-launch-note");
+    await userEvent.click(within(note).getByRole("button", { name: ADO_PAT.MEMBER_CONNECT }));
+    expect(h.connect).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(h.refresh).toHaveBeenCalledTimes(1));
+    expect(h.checks.invalidateChecks).toHaveBeenCalledTimes(1);
   });
 });

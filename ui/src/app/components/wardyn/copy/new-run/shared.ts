@@ -23,7 +23,7 @@ export const NR_SHARED = {
   STEP_HARNESSES: "Harnesses",
   STEP_FILES: "Files",
   STEP_TOOLS: "Tools and access",
-  CONTINUE_TO: (step: string | number) => `Continue to ${step}`,
+  CONTINUE_TO: (step: string | number) => `Continue to ${String(step).toLowerCase()}`,
   REVIEW_RUN: "Review run",
   BARRIER_FENCE: "Fence",
   BARRIER_WALL: "Wall",

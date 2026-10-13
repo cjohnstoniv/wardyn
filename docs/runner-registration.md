@@ -3,7 +3,7 @@
 A runner holds its own Ed25519 key. Registration creates an **unclaimed** runner: it cannot receive a run or relay traffic until its owner confirms the fingerprint. The organisation must configure `WARDYN_RUNNER_ORG_URL` with its public HTTPS URL; HTTP is accepted only for loopback development.
 
 1. Sign in under your personal account and run `wardyn runner token`. The token is printed once to stdout and expires after one hour. Save it in a private file for the runner.
-2. On the runner host, run `wardyn-runnerd register --org https://wardyn.example.com --token-file ./registration-token --name my-laptop`. The runner generates its key locally and prints its fingerprint and its runs at once (see [Runs at once](#runs-at-once)).
+2. On the runner host, run `wardyn-runnerd register --org https://wardyn.example.com --token-file ./registration-token --name my-laptop`. The runner generates its key locally and prints its fingerprint, what it measured and the limits it sent (see [Runner limits](#runner-limits)).
 3. Under that same owner's personal account, run `wardyn runner claim --url https://wardyn.example.com`. The CLI reads the local runner identity and confirms its fingerprint. An administrator's personal account can claim its own runner; administrator credentials cannot claim for another person.
 
 An operator can mint for a named person with `wardyn runner token --owner <principal>`. That token expires after 72 hours and still requires the named owner's fingerprint claim. Every token is single-use, including self-minted tokens. An unclaimed runner expires after 24 hours.
@@ -16,7 +16,7 @@ The API doors are `POST /api/v1/me/runners/tokens`, operator-only `POST /api/v1/
 
 Migration `0142_runner_registration` adds hashed single-use registration tokens and organisation URL bindings to the existing runners table. It does not change run placement records.
 
-Migration `0152_runner_pools` adds the runner pool catalogue: pools, their members, remote-provided use policies and the organisation defaults. It records no run binding, and a pool never claims or transfers a runner. Migration `0158_runner_pool_limits` adds the pool's `limits`: an administrator sets them with `limits` on create and replaces the whole block with `limits` on update (an omitted field, such as `max_concurrent_runs`, is removed); a pool with none adds no bound of its own. A run is admitted by its pool's run types and barriers, and the pool's lifetime bounds its end; CPU, memory, idle stop and the concurrent-run cap are stored and audited but not yet applied to runs.
+Migration `0152_runner_pools` adds the runner pool catalogue: pools, their members, the use policies of organization pools and the organization defaults. It records no run binding, and a pool never claims or transfers a runner. Migration `0158_runner_pool_limits` adds the pool's `limits`: `limits` on create sets them and `limits` on update replaces the whole block (an omitted field, such as `max_concurrent_runs`, is removed and is then set by the pool's runners). [Runner pools](operations/runner-pools.md) says what a pool is and how its limits, barriers and queue apply to a run.
 
 ## Runner enablement
 
@@ -49,7 +49,7 @@ Both lists are paged and set `X-Wardyn-Truncated` when more exist. An unclaimed 
 
 Every runner declares its limits: Runs at once (`runs_at_once`, 1 to 64 for a self-hosted runner), a total all its runs at once may use (`total`) and what one run may use (`per_run`), each in CPU (`cpu_millis`, at least one CPU), memory (`memory_mib`) and disk (`disk_mib`, whole GiB). No per-run amount is past its total. A runner with none declared takes no run: a launch that could only go there is refused `runner_limits_unset`. Migration `0174_runner_limits` gives a runner registered before it none, so its owner sets them.
 
-`wardyn-runnerd register` measures the computer: the CPUs and memory Docker reports, and the free disk of Docker's data root when the engine is local (not Docker Desktop). It proposes half of each as the total, and per run the total divided by Runs at once, at least 1 CPU and 1 GB. Runs at once defaults to half the CPUs. `--max-runs`, `--total-cpu`, `--total-memory`, `--total-disk`, `--per-run-cpu`, `--per-run-memory` and `--per-run-disk` (CPUs and GB) override any of it. A total past what the computer reports is refused, and a disk it cannot measure must be given, before the token is spent. The server refuses a registration without limits (`runner_limits_required`).
+`wardyn-runnerd register` measures the computer: the CPUs and memory Docker reports, and the free disk of Docker's data root when the engine is local (not Docker Desktop). It proposes half of each as the total, and per run the total divided by Runs at once, at least 1 CPU and 1 GB. Runs at once defaults to half the CPUs. `--max-runs`, `--total-cpu`, `--total-memory`, `--total-disk`, `--per-run-cpu`, `--per-run-memory` and `--per-run-disk` (CPUs and GB) override any of it. A total past what the computer reports is refused, and a disk it cannot measure must be given, before the token is spent. At a terminal, `register` asks for each limit not given as a flag and offers the proposal, which Enter accepts; when its input or its output is not a terminal it asks nothing and registers with the proposal. The server refuses a registration without limits (`runner_limits_required`).
 
 | Who | Can |
 |---|---|
@@ -98,7 +98,7 @@ The installer does these steps in order and stops at the first refusal:
 - It copies the binary to `~/.local/share/wardyn/bin` on Linux or `~/Library/Application Support/wardyn/bin` on macOS.
 - It sets the proxy image to `ghcr.io/cjohnstoniv/wardyn-proxy:<version>` for a release binary. A development build refuses unless `--proxy-image` is given.
 - It creates the `wardyn-internal` bridge, or the one named by `--internal-network`, when it is missing.
-- It registers the runner with `--token-file` when no identity exists, and never registers an existing identity again.
+- It registers the runner with `--token-file` when no identity exists, and never registers an existing identity again. Run at a terminal, that step asks for the runner's limits; with the output sent to a file it asks nothing.
 - It installs and starts the service.
 
 | System | Service | Settings | Logs |

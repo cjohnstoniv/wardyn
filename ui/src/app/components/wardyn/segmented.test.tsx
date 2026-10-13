@@ -34,4 +34,11 @@ describe("Segmented", () => {
     render(<Segmented value="git" options={OPTIONS} onChange={() => {}} disabled />);
     for (const b of screen.getAllByRole("button")) expect(b).toBeDisabled();
   });
+
+  it("the compact control keeps the dirty chip and the deny styling of the default one", () => {
+    render(<Segmented size="compact" value="deny" options={[{ value: "permit", label: "Permit" }, { value: "deny", label: "Deny", dirty: true }]} onChange={() => {}} />);
+    expect(screen.getByTestId("tab-dirty-chip-deny")).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getByRole("button", { name: "Deny" })).toHaveClass("text-danger");
+    expect(screen.queryByTestId("tab-dirty-chip-permit")).toBeNull();
+  });
 });

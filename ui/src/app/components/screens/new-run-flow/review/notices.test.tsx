@@ -63,10 +63,9 @@ describe("Review notices", () => {
     expect(screen.getByText(NR_REVIEW.NARROWED_BY("General"))).toBeInTheDocument();
   });
 
-  it("lists the server's warnings as it wrote them, and drops the resources-capped line when the narrowed notice says it", () => {
+  it("shows each server warning as its own notice, as written, and drops the resources-capped line when the narrowed notice says it", () => {
     const warn = ["inline_policy: allowed_domains narrowed by your ceiling", "resources capped to operator maximum"];
     render(<Notices poolName="General" applied={narrowedBy({ source: "governance", source_name: "Platform team" })} askedByYou={false} warnings={warn} />);
-    expect(screen.getByText(NR_REVIEW.WARNINGS_TITLE)).toBeInTheDocument();
     expect(screen.getByText(warn[0])).toBeInTheDocument();
     expect(screen.getByText(NR_REVIEW.NARROWED_BY("Platform team"))).toBeInTheDocument();
     expect(screen.queryByText(warn[1])).toBeNull();

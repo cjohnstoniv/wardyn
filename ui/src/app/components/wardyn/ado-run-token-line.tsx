@@ -6,9 +6,11 @@
 // New Run's Azure DevOps lines for a row that creates a token for each run
 // (#1428): what the run's own token carries, and, when the person has not
 // connected (or their organisation blocks token creation), the launch note that
-// says so before Launch is pressed. Both read the caller's own /me/scm-access
-// answer; neither says anything for a row that creates no token.
+// says so. Tools and access draws both in its Credentials card, on a run that
+// carries an Azure DevOps credential; the Name dialog draws the note under a
+// launch the token refused. Neither says anything for a row that creates no token.
 import { Loader2 } from "lucide-react";
+import { ADO } from "../../lib/ado-entra-copy";
 import { ADO_PAT } from "../../lib/ado-pat-copy";
 import { newRunTokenCaps, type PatRefusalNote } from "../../lib/ado-pat-display";
 import type { SCMAccessPAT } from "../../lib/types/ado-pat";
@@ -29,40 +31,61 @@ export function AdoRunTokenLine({ policyCaps, defaults, className }: { policyCap
   );
 }
 
+/** Which note a row that creates a token for each run calls for: the
+ *  organisation blocks token creation ("blocked"), the person has to connect
+ *  ("connect"), or nothing. A refusal names the row as one that creates tokens
+ *  even when the answer above could not be read. */
+export function adoLaunchNoteKind(access: SCMAccessPAT | undefined, refusal?: PatRefusalNote | null): PatRefusalNote | null {
+  if (access?.token_mode !== "minted_pat" && !refusal) return null;
+  if ((access?.state === "expired_signin" && access.cause === "blocked") || refusal === "blocked") return "blocked";
+  // A row the console cannot redeem is the admin's to fix: no Connect to press.
+  if (access?.cause === "ado_pat_needs_console_app") return null;
+  if (refusal !== "connect" && access?.state !== "not_configured" && access?.state !== "expired_signin") return null;
+  return "connect";
+}
+
 /** The note beside the token line when a launch on this row would be refused:
- *  connect once first, or the organisation blocks token creation. */
+ *  connect once first, or the organisation blocks token creation. Drawn as a
+ *  row of whatever holds it: the sentence, and Connect at its right. */
 export function AdoLaunchNote({
   access,
   refusal,
   connecting,
   onConnect,
+  blockedUrl,
+  onFallbackClick,
 }: {
   access: SCMAccessPAT | undefined;
   /** What the last refused launch said about the token (patRefusalNote). */
   refusal?: PatRefusalNote | null;
   connecting: boolean;
   onConnect: () => void;
+  /** The sign-in URL when the browser blocked the popup: a plain link to it. */
+  blockedUrl?: string | null;
+  onFallbackClick?: () => void;
 }) {
-  // A refusal names the row as one that creates tokens even when the answer
-  // above could not be read.
-  if (access?.token_mode !== "minted_pat" && !refusal) return null;
-  if ((access?.state === "expired_signin" && access.cause === "blocked") || refusal === "blocked") {
+  const kind = adoLaunchNoteKind(access, refusal);
+  if (!kind) return null;
+  if (kind === "blocked") {
     return (
-      <div role="alert" className="rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-body text-foreground" data-testid="ado-launch-note">
+      <p role="alert" className="text-sm" data-testid="ado-launch-note">
         {ADO_PAT.LAUNCH_POLICY_REFUSED}
-      </div>
+      </p>
     );
   }
-  // A row the console cannot redeem is the admin's to fix: no Connect to press.
-  if (access?.cause === "ado_pat_needs_console_app") return null;
-  if (refusal !== "connect" && access?.state !== "not_configured" && access?.state !== "expired_signin") return null;
   return (
-    <div role="status" className="rounded-lg border border-info/30 bg-info-subtle px-3 py-2 text-body text-foreground" data-testid="ado-launch-note">
-      <p className="font-medium">{ADO_PAT.LAUNCH_NOT_CONNECTED}</p>
-      <Button type="button" size="sm" variant="outline" className="mt-2" disabled={connecting} onClick={onConnect}>
+    <div role="status" className="flex flex-wrap items-center justify-between gap-2 text-sm" data-testid="ado-launch-note">
+      <p className="min-w-0 flex-1 basis-60">{ADO_PAT.LAUNCH_NOT_CONNECTED}</p>
+      <Button type="button" size="sm" variant="outline" disabled={connecting} onClick={onConnect}>
         <Loader2 className={connecting ? "size-4 animate-spin" : "hidden"} />
         {ADO_PAT.MEMBER_CONNECT}
       </Button>
+      {blockedUrl && (
+        <p className="basis-full text-muted-foreground">
+          {ADO.CONNECT_POPUP_BLOCKED}{" "}
+          <a href={blockedUrl} target="_blank" rel="noopener noreferrer" className="underline" onClick={onFallbackClick}>{ADO.CONNECT_POPUP_OPEN}</a>
+        </p>
+      )}
     </div>
   );
 }
