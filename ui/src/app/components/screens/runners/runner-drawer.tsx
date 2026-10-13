@@ -128,7 +128,7 @@ export function RunnerDrawer({
                     RUNNER.NOT_REPORTED
                   )}
                 </Section>
-                <Section label={RUNNER.RUNS_NOW}>{RUNNER.RUNS_COUNT(runner.runs_active)}</Section>
+                <Section label={RUNNER.RUNS_NOW}>{RUNNER.RUNS_COUNT(runner.usage.in_use.runs)}</Section>
               </>
             )}
             <Section label={RUNNER.FINGERPRINT}>
@@ -153,7 +153,7 @@ export function RunnerDrawer({
         open={confirming}
         onOpenChange={setConfirming}
         title={RUNNERS.REVOKE_TITLE(runner.name)}
-        body={[RUNNERS.REVOKE_BODY, ...(runner.runs_active > 0 ? [RUNNER.REVOKE_RUNS(runner.runs_active)] : [])]}
+        body={[RUNNERS.REVOKE_BODY, ...(runner.usage.in_use.runs > 0 ? [RUNNER.REVOKE_RUNS(runner.usage.in_use.runs)] : [])]}
         confirmLabel={RUNNER.REVOKE_CONFIRM}
         onConfirm={() => runnersApi.revoke(runner.id)}
         onDone={() => {

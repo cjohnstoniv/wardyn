@@ -627,7 +627,7 @@ func (s *Server) writeAuditDelivery(ctx context.Context, w io.Writer) {
 				}
 				return float64(d.AckedAt.Unix())
 			}},
-		{"wardyn_audit_delivery_halted", "gauge", "1 when the collector refused a batch definitively and delivery is halted until wardynd restarts, by destination.",
+		{"wardyn_audit_delivery_halted", "gauge", "1 when the collector refused a batch definitively and delivery is halted until wardynd restarts or another replica takes over delivery, by destination.",
 			func(d store.AuditDeliveryStatus) float64 {
 				if d.Halted {
 					return 1

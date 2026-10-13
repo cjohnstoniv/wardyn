@@ -7,7 +7,6 @@ import (
 	"cmp"
 	"context"
 
-	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -91,28 +90,5 @@ func appliedAmount(l types.EffectiveLimit, asked int, names map[types.LimitSourc
 		out.Source = l.DefaultSource
 	}
 	out.SourceName = names[out.Source]
-	return out
-}
-
-// advertisesSize reports whether a candidate advertised a usable size. A runner that reports 0 for
-// either field is no runner-capacity source, so a missing fact never turns a launch into a server
-// error; it is still held to that bound of nothing per candidate (placementDemand.refusal).
-func advertisesSize(f runner.TargetFacts) bool {
-	return f.CapacityAdvertised && f.CPUMillisMax > 0 && f.MemoryMiBMax > 0
-}
-
-// selfHostedCapacity is runner capacity's candidates: the online, class-eligible candidates of a
-// self-hosted pool that advertise a size, narrowed to the pinned runner when the request names one.
-// A remote pool's executors are not a capacity source; their size is held per candidate.
-func selfHostedCapacity(pool types.RunnerPool, fit []poolTarget, pin string) []runnerpool.RunnerCapacity {
-	if pool.Scope != types.RunnerPoolUser {
-		return nil
-	}
-	var out []runnerpool.RunnerCapacity
-	for _, t := range fit {
-		if advertisesSize(t.facts) && (pin == "" || t.id == pin) {
-			out = append(out, runnerpool.RunnerCapacity{CPUMillis: t.facts.CPUMillisMax, MemoryMiB: t.facts.MemoryMiBMax})
-		}
-	}
 	return out
 }

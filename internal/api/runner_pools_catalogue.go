@@ -47,6 +47,8 @@ type poolListInput struct {
 	org types.RunnerPoolDefaults
 	// slots are the counts of every pool the caller may use, read once per list.
 	slots map[uuid.UUID]store.PoolCounts
+	// fits are the runners' declared limits and In use, read once per list (runnerFits).
+	fits map[string]runnerFit
 }
 
 func (s *Server) poolList(r *http.Request, ps store.RunnerPoolStore, rows []store.RunnerPoolCatalogueRow, subj callerSubjects,
@@ -71,6 +73,7 @@ func (s *Server) poolList(r *http.Request, ps store.RunnerPoolStore, rows []stor
 		}
 	}
 	in.slots = s.slotCounts(ctx, usable)
+	in.fits = s.runnerFits(ctx)
 	for _, row := range rows {
 		if !subj.permits(row, owner) {
 			// Listed for a manager only: they may manage it (or, another person's user pool, oversee
@@ -127,9 +130,9 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 		}
 	}
 	e.MainDrive = s.poolMainDriveFor(row, st.own, func(x string) (runner.TargetFacts, bool) { return in.executorFacts(ctx, s, x) })
-	fit, _ := eligibleTargets(targets, placementDemand{floor: in.ceiling.Spec, reqCCOK: true})
+	fit, _ := eligibleTargets(targets, placementDemand{floor: in.ceiling.Spec, reqCCOK: true, fits: in.fits})
 	for _, rt := range want {
-		sources, ref, err := s.limitSources(ctx, rt, &row.Pool, in.ceiling, in.untouched, selfHostedCapacity(row.Pool, fit, ""))
+		sources, ref, err := s.limitSources(ctx, rt, &row.Pool, in.ceiling, in.untouched, runnerSource(fit, ""))
 		if err != nil {
 			return client.RunnerPoolCatalogueEntry{}, runServerError("resolve pool limits", err)
 		}
@@ -150,6 +153,13 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 		}
 		e.Slots = poolSlots(row.Pool, c, waitSec)
 	}
+	e.Capacity = s.poolCapacity(row, in.fits, func(key string) bool {
+		if id, err := uuid.Parse(key); err == nil {
+			return s.runnerOnline(id)
+		}
+		_, known := in.executorFacts(ctx, s, key)
+		return known && s.remoteRunnerConfigured(key)
+	})
 	// Membership, not candidacy: every runner of the caller's in the pool, whether or not it could take a
 	// run now, so a person can read which pools each of their runners is in.
 	if len(row.OwnRunnerIDs) > 0 {

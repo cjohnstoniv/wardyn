@@ -51,7 +51,7 @@ function Fact({ label, reported, children }: { label: string; reported?: string;
 
 function ClaimedRow({ r, onRevoke }: { r: RunnerView; onRevoke: () => void }) {
   const offline = runnerChipKind(r) === "offline";
-  const runs = RUNNER.RUNS_COUNT(r.runs_active);
+  const runs = RUNNER.RUNS_COUNT(r.usage.in_use.runs);
   return (
     <li className="space-y-2 border-t border-border py-3 first:border-t-0">
       <div className="flex flex-wrap items-center gap-2">
@@ -380,7 +380,7 @@ export function MyRunnerCard() {
         body={
           revoking?.notMine
             ? [MY_RUNNER.NOT_MINE_BODY]
-            : [MY_RUNNER.REVOKE_OWN_BODY, ...((revoking?.runner.runs_active ?? 0) > 0 ? [RUNNER.REVOKE_RUNS(revoking?.runner.runs_active ?? 0)] : [])]
+            : [MY_RUNNER.REVOKE_OWN_BODY, ...((revoking?.runner.usage.in_use.runs ?? 0) > 0 ? [RUNNER.REVOKE_RUNS(revoking?.runner.usage.in_use.runs ?? 0)] : [])]
         }
         confirmLabel={RUNNER.REVOKE_CONFIRM}
         onConfirm={() => runnersApi.revokeMine(revoking?.runner.id ?? "", revoking?.notMine)}

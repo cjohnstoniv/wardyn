@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,8 +47,8 @@ func (e *placementEnv) sizedPool(name string, cpu types.RunnerPoolAmount) types.
 	p := e.createPool(name, types.RunnerPoolOrganization)
 	e.addExecutors(p.ID, "alpha", "beta")
 	limits := types.RunnerPoolLimits{
-		Background: &types.RunnerPoolBackgroundLimits{CPUMillis: cpu, MemoryMiB: types.RunnerPoolAmount{Default: 1024, Cap: 8192},
-			Lifetime: types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}},
+		Background: &types.RunnerPoolBackgroundLimits{CPUMillis: &cpu, MemoryMiB: &types.RunnerPoolAmount{Default: 1024, Cap: 8192},
+			Lifetime: &types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}},
 		Barriers: []types.ConfinementClass{types.CC1, types.CC2, types.CC3},
 	}
 	out, err := e.pg.UpdateRunnerPool(context.Background(), p.ID, e.revision(p.ID), nil, nil, &limits)
@@ -211,7 +212,7 @@ func TestCreateAndDispatchAgreeOnAppliedSize_RunnerCapacity(t *testing.T) {
 	// placement nor dispatch cuts the runner's 1200.
 	e.assignSizedProfile("under", nil, types.GovernanceLimits{MaxCPUMillis: 1000})
 	plan, ceiling := e.placeOnOwnRunner(laptops, small, &client.RunResources{CPUMillis: 4000})
-	wantAmount(t, "cpu", plan.applied.CPUMillis, 1200, true, types.LimitSourceRunnerCapacity, "")
+	wantAmount(t, "cpu", plan.applied.CPUMillis, 1200, true, types.LimitSourceRunner, "")
 	policy := types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: plan.applied.CPUMillis.Applied, MemoryMiB: plan.applied.MemoryMiB.Applied}}
 	res, _, _ := ephemeralDispatch(t, policy, types.SiteConfig{}, ceiling)
 	if int(res.CPUMillis) != plan.applied.CPUMillis.Applied || int(res.MemoryMiB) != plan.applied.MemoryMiB.Applied {
@@ -228,8 +229,8 @@ func TestOverAskOnSmallRunnerIsReducedNotRefused(t *testing.T) {
 	e.addToPool(e.person, laptops.ID, small)
 	e.assignSizedProfile("eight", &types.ResourceLimits{CPUMillis: 8000, MemoryMiB: 16384}, types.GovernanceLimits{})
 	plan, _ := e.placeOnOwnRunner(laptops, small, &client.RunResources{CPUMillis: 4000, MemoryMiB: 8192})
-	wantAmount(t, "cpu", plan.applied.CPUMillis, 2000, true, types.LimitSourceRunnerCapacity, "")
-	wantAmount(t, "memory", plan.applied.MemoryMiB, 2048, true, types.LimitSourceRunnerCapacity, "")
+	wantAmount(t, "cpu", plan.applied.CPUMillis, 2000, true, types.LimitSourceRunner, "")
+	wantAmount(t, "memory", plan.applied.MemoryMiB, 2048, true, types.LimitSourceRunner, "")
 	if len(plan.eligible) != 1 || plan.eligible[0].id != small.String() {
 		t.Errorf("eligible = %+v, want the person's runner", plan.eligible)
 	}
@@ -297,7 +298,10 @@ func TestPoolListLimitsMatchPreflight(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			sources, refusal, err := e.srv.limitSources(ctx, types.RunnerPoolRunBackground, &pool, ceiling, types.ResourceLimits{}, nil)
+			// The pool's one runner is the test's remote-hosted runner with roomy limits: its per-run limit is the runner source.
+			each := roomyRemoteLimits().PerRun
+			runners := []runnerpool.RunnerCapacity{{CPUMillis: each.CPUMillis, MemoryMiB: each.MemoryMiB, DiskMiB: each.DiskMiB}}
+			sources, refusal, err := e.srv.limitSources(ctx, types.RunnerPoolRunBackground, &pool, ceiling, types.ResourceLimits{}, runners)
 			if err != nil || refusal != nil {
 				t.Fatalf("limitSources: %v %v", refusal, err)
 			}
@@ -459,28 +463,58 @@ func TestCreateAndDispatchAgreeOnAppliedSize_DeploymentDefaultAbovePlatform(t *t
 	}
 }
 
-// A self-hosted runner that advertises a size of 0 is no runner-capacity source (L-1), so its
-// placement answers the per-candidate refusal for a bound of nothing (422 placement_capability), and
-// no door answers a server error.
-func TestRunnerAdvertisingZeroCapacityIsNoServerError(t *testing.T) {
+// A runner of either kind that declares no limits is never a candidate: a launch that could only go
+// there is refused runner_limits_unset at every door, never a server error, and a pool with a runner
+// that declares them places on it alone. No resource of the run that does place is unlimited: the
+// placed runner's per-run limit bounds CPU, memory and the main drive.
+func TestRunnerWithoutLimitsIsNeverACandidate(t *testing.T) {
 	e := newPlacementEnv(t)
 	laptops := e.createPool("Laptops", types.RunnerPoolUser)
-	zero := e.laptop(e.personP, 0, 0, types.CC1, types.CC2, types.CC3)
-	e.addToPool(e.person, laptops.ID, zero)
+	bare := e.laptop(e.personP, 0, 0, types.CC1, types.CC2, types.CC3)
+	e.addToPool(e.person, laptops.ID, bare)
 	ctx := operatorCtx(e.personP, "person@corp.example", oidc.RoleUser)
 	ceiling, err := e.srv.effectiveCeiling(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := createRunRequest{Agent: "claude-code", Placement: types.PlacementLocal, RunnerID: zero.String(), RunnerPoolID: laptops.ID.String()}
+	req := createRunRequest{Agent: "claude-code", Placement: types.PlacementLocal, RunnerPoolID: laptops.ID.String()}
 	_, refusal := e.srv.resolvePlacement(ctx, placementInput{req: &req, reqCCOK: true, ceiling: ceiling})
-	if refusal == nil || refusal.status != http.StatusUnprocessableEntity || refusal.body.Reason != string(placement.ReasonPlacementCapability) {
-		t.Fatalf("placement on a zero-capacity runner = %+v, want 422 placement_capability", refusal)
+	if refusal == nil || refusal.status != http.StatusUnprocessableEntity || refusal.body.Reason != string(placement.ReasonRunnerLimitsUnset) ||
+		refusal.body.Error != runnerpool.RunnerLimitsUnsetMsg("Laptops") {
+		t.Fatalf("placement on a runner with no limits = %+v, want 422 runner_limits_unset", refusal)
 	}
-	body := runBody(fmt.Sprintf(`"placement":"local","runner_id":%q,"runner_pool_id":%q,"resources":{"cpu_millis":4000}`, zero, laptops.ID))
+	body := runBody(fmt.Sprintf(`"placement":"local","runner_pool_id":%q`, laptops.ID))
 	for _, door := range placementDoors {
-		if w := e.call(e.person, http.MethodPost, door, body); w.Code >= http.StatusInternalServerError {
-			t.Errorf("%s = %d %s, want no server error", door, w.Code, w.Body)
+		if w := e.call(e.person, http.MethodPost, door, body); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), string(placement.ReasonRunnerLimitsUnset)) {
+			t.Errorf("%s = %d %s, want 422 runner_limits_unset", door, w.Code, w.Body)
 		}
+	}
+
+	sized := e.laptop(e.personP, 2000, 4096, types.CC1, types.CC2, types.CC3)
+	e.addToPool(e.person, laptops.ID, sized)
+	plan, refusal := e.srv.resolvePlacement(ctx, placementInput{req: &req, reqCCOK: true, ceiling: ceiling})
+	if refusal != nil {
+		t.Fatalf("placement beside a runner with limits = %+v", refusal.body)
+	}
+	if len(plan.eligible) != 1 || plan.eligible[0].id != sized.String() {
+		t.Fatalf("eligible = %v, want only the runner that declares limits", ids(plan.eligible))
+	}
+	for name, l := range map[string]types.EffectiveLimit{"cpu": plan.limits.CPUMillis, "memory": plan.limits.MemoryMiB, "disk": plan.limits.DiskMiB} {
+		if l.Cap.Unlimited || l.Cap.Value < 1 {
+			t.Errorf("%s cap = %+v, want bounded by the placed runner", name, l.Cap)
+		}
+	}
+
+	// A remote-hosted runner that declares no limits is no candidate either.
+	remote := e.srv.configuredExecutors()[0]
+	if _, err := e.pool.Exec(context.Background(), `UPDATE remote_runners SET max_runs = NULL, total_cpu_millis = NULL, total_memory_mib = NULL,
+		total_disk_mib = NULL, run_cpu_millis = NULL, run_memory_mib = NULL, run_disk_mib = NULL WHERE id = $1`, remote); err != nil {
+		t.Fatal(err)
+	}
+	org := e.createPool("Org", types.RunnerPoolOrganization)
+	e.addExecutors(org.ID, remote)
+	w := e.call(e.person, http.MethodPost, "/api/v1/runs/preflight", runBody(fmt.Sprintf(`"runner_pool_id":%q`, org.ID)))
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), string(placement.ReasonRunnerLimitsUnset)) {
+		t.Fatalf("a remote-hosted runner with no limits = %d %s, want 422 runner_limits_unset", w.Code, w.Body)
 	}
 }

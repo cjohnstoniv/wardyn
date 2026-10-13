@@ -149,10 +149,12 @@ func (r sealingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 	}
 	sealer := r.src.sealer.Load()
 	if sealer == nil {
+		slog.WarnContext(ctx, "audit row not recorded", "action", ev.Action, "why", "keys_not_ready")
 		return fmt.Errorf("audit seal: %s not recorded: the sealing keys are not available yet and the row has personal fields; it is never written in the clear", ev.Action)
 	}
 	sealed, pending, err := sealer.Seal(ctx, ev)
 	if err != nil {
+		slog.WarnContext(ctx, "audit row not recorded", "action", ev.Action, "why", "seal_refused")
 		return fmt.Errorf("audit seal: %s not recorded: %w", ev.Action, err)
 	}
 	if !pending {

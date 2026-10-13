@@ -37,8 +37,8 @@ description: Generate a Wardyn sandbox policy + CLI invocation (or full pipeline
    - Keep `auto_stop_after_sec` bounded (baseline: 3600).
 
 3. **Model access (harness mode only).**
-   - A model credential is a **person's own**: a dedicated CI principal stores it once through `PUT /model-providers/{id}/credential` (or the console) on the deployment CI launches on.
-   - The pipeline sets `WARDYN_URL`, `WARDYN_CI_TOKEN` (that principal's own `wdn_` token) and `WARDYN_CI_MODEL_PROVIDER=<id>`; `ci-run.sh` checks the credential is usable and launches on that provider ([`docs/CI.md`](../../../docs/CI.md#cis-identity) § "CI's identity").
+   - A model credential is its **owner's own**: a dedicated CI service identity (`service:<name>`, with a named sponsor) stores it once through `PUT /model-providers/{id}/credential`, with its own token, on the deployment CI launches on. That is the only secret it can store: the same token is refused `secret set`.
+   - The pipeline sets `WARDYN_URL`, `WARDYN_CI_TOKEN` (that service identity's `wdn_` token, not a person's) and `WARDYN_CI_MODEL_PROVIDER=<id>`; `ci-run.sh` checks the credential is usable and launches on that provider ([`docs/CI.md`](../../../docs/CI.md#cis-identity) § "CI's identity").
    - Nothing in the policy or the env block carries the key.
    - `ci-run.sh`'s throwaway stack has no person on it, so it runs `exec` mode only.
    - Subscription modes are refused in CI — do not propose them.
@@ -63,7 +63,7 @@ description: Generate a Wardyn sandbox policy + CLI invocation (or full pipeline
      [--image <ref>] [--task-mode exec] [--repo org/name]
      [--model-provider <id>] --task '<t>' --policy-file <f> --wait
      --timeout 30m` with `WARDYN_URL` + `WARDYN_TOKEN` set — the CI
-     principal's own `wdn_` token, not the shared `WARDYN_ADMIN_TOKEN`.
+     service identity's `wdn_` token, not a person's or the shared `WARDYN_ADMIN_TOKEN`.
    - State the exit-code contract (0 / task's code / 2 / 124 — table in [`docs/CI.md`](../../../docs/CI.md#exit-codes)) so the pipeline gate is explicit.
 
 ## Sanity checks before handing over

@@ -289,7 +289,7 @@ func TestADOGitRefusalIsAttributed(t *testing.T) {
 	refuse := func(p *Proxy) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		r := mustLocalReq(t, http.MethodGet, "/wardyn/git/dev.azure.com/acme/proj/_git/app/info/refs", nil)
-		if p.refuseADOGit(rec, r, "dev.azure.com", nil, nil, "Wardyn refused this git request: no capability") {
+		if p.refuseADOGit(rec, r, "dev.azure.com", nil, nil, "Wardyn refused this git request: no capability", true) {
 			t.Fatal("refused request reported as forwarded")
 		}
 		return rec

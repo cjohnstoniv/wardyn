@@ -42,7 +42,7 @@ func runnerExitAPIFixture(t *testing.T) (*pgxpool.Pool, Config, types.Runner, ty
 	st := store.NewPG(pool)
 	ctx := t.Context()
 	id := uuid.New()
-	rn, err := st.CreateRunner(ctx, types.Runner{ID: id, Owner: "exit-owner", Name: "exit-test", PublicKey: make([]byte, 32), KeyFingerprint: id.String(), Version: "0.9.0"})
+	rn, err := st.CreateRunner(ctx, types.Runner{ID: id, Owner: "exit-owner", Name: "exit-test", PublicKey: make([]byte, 32), KeyFingerprint: id.String(), Version: "0.9.0", Limits: roomyRunnerLimits()})
 	if err != nil {
 		t.Fatal(err)
 	}

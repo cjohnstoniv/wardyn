@@ -128,11 +128,16 @@ func NewWebhookSink(cfg WebhookConfig) (*WebhookSink, error) {
 }
 
 // keepPOST stops a redirect that would turn the POST into a bodyless GET
-// (301, 302, 303): the collector never saw the batch, so its 3xx must count as
-// a failed delivery, not the redirect target's 2xx. A 307 or 308 keeps the
-// method and body and is still followed, within net/http's usual ten hops.
+// (301, 302, 303) or that would move an https collector to a plain-http one:
+// either way the collector never saw the batch, so its 3xx must count as a
+// failed delivery, not the redirect target's 2xx. A 307 or 308 within the same
+// security keeps the method and body and is still followed, within net/http's
+// usual ten hops.
 func keepPOST(req *http.Request, via []*http.Request) error {
 	if req.Method != via[0].Method {
+		return http.ErrUseLastResponse
+	}
+	if strings.EqualFold(via[0].URL.Scheme, "https") && !strings.EqualFold(req.URL.Scheme, "https") {
 		return http.ErrUseLastResponse
 	}
 	if len(via) >= 10 {
@@ -156,18 +161,22 @@ func (c WebhookConfig) validate() (interval, base, timeout time.Duration, err er
 	if c.URL == "" {
 		return 0, 0, 0, fmt.Errorf("sinks.webhook: URL is required")
 	}
+	u, err := url.Parse(c.URL)
+	if err != nil {
+		// Do NOT echo the raw URL — it may carry user:pass credentials.
+		return 0, 0, 0, fmt.Errorf("sinks.webhook: malformed url (redacted)")
+	}
+	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
+		return 0, 0, 0, fmt.Errorf("sinks.webhook: url must be an http:// or https:// url (scheme %q)", u.Scheme)
+	}
+	if u.Host == "" {
+		return 0, 0, 0, fmt.Errorf("sinks.webhook: url has no host")
+	}
 	// The bearer is a long-lived, replayable SIEM credential resent on every
 	// POST, so the gate is on the credential, not the scheme: a tokenless
 	// http:// collector still boots (matches the syslog sink over plaintext).
-	if c.BearerToken != "" {
-		u, err := url.Parse(c.URL)
-		if err != nil {
-			// Do NOT echo the raw URL — it may carry user:pass credentials.
-			return 0, 0, 0, fmt.Errorf("sinks.webhook: malformed url (redacted)")
-		}
-		if !strings.EqualFold(u.Scheme, "https") {
-			return 0, 0, 0, fmt.Errorf("sinks.webhook: bearer_token requires an https:// url (scheme %q would send the SIEM credential in cleartext)", u.Scheme)
-		}
+	if c.BearerToken != "" && !strings.EqualFold(u.Scheme, "https") {
+		return 0, 0, 0, fmt.Errorf("sinks.webhook: bearer_token requires an https:// url (scheme %q would send the SIEM credential in cleartext)", u.Scheme)
 	}
 	interval, err = time.ParseDuration(c.FlushInterval)
 	if err != nil {
