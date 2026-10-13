@@ -174,6 +174,8 @@ export const NR_FILES = {
   SUBFOLDER_LABEL: "Subfolder",
   /** pending W-48: the recommended text until the owner answers. */
   FOLDERS_NONE: "No folders onboarded yet. Add one in Workspaces.",
+  /** pending W-49: the recommended text until the owner answers. */
+  FOLDER_WITH_REPOS: (workspace: string | number) => `This folder comes with ${workspace}'s repositories. Remove them to remove it.`,
   SUBFOLDER_PLACEHOLDER: "e.g. src",
   SUBFOLDER_ERROR: (name: string | number) => `Use a folder inside ${name}.`,
   LIST_COMMA: (a: string | number, b: string | number) => `${a}, ${b}`,

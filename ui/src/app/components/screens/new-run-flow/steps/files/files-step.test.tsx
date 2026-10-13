@@ -436,6 +436,39 @@ describe("folders", () => {
     expect(within(c).getByTitle("/srv/datasets")).toBeInTheDocument();
   });
 
+  it("(a) shows every folder a repository's workspace brings, one card each", async () => {
+    workspaceList = [...SCENARIO_FILES_WORKSPACES.member, { ...FOLDER_WS, sources: [...FOLDER_WS.sources!, { type: "local_dir", path: "/srv/models", writable: true }] }];
+    show(BACKGROUND);
+    await add(NR_FILES.REPOSITORY_BADGE, "data");
+    expect(drawn().workspaces).toEqual([{ workspace_id: "ws-data", repos: [{ repo: "github.com/acme/data" }] }]);
+    expect(card("datasets")).toBeDefined();
+    expect(card("models")).toBeDefined();
+    expect(screen.getAllByTestId("nr-attach-card")).toHaveLength(3);
+  });
+
+  it("(b) a folder that comes with attached repositories cannot be removed, and says why on a tap", async () => {
+    show({ ...BACKGROUND, workspaces: [{ workspace_id: "ws-data", repos: [{ repo: "github.com/acme/data" }] }], start_folder: { kind: "attachment", attachment: "ws-data", repo: "github.com/acme/data" } });
+    const remove = await screen.findByRole("button", { name: NR_FILES.REMOVE_NAMED("datasets") });
+    expect(remove).toBeDisabled();
+    await userEvent.click(within(card("datasets")).getByRole("button", { name: NR_FILES.FOLDER_WITH_REPOS("data") }));
+    expect(await screen.findByText(NR_FILES.FOLDER_WITH_REPOS("data"), { selector: ":not(button)" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: NR_FILES.REMOVE_NAMED("data") })).toBeEnabled();
+  });
+
+  it("(c) removing a workspace's last repository detaches it, unless the person added one of its folders", async () => {
+    show(BACKGROUND);
+    await add(NR_FILES.REPOSITORY_BADGE, "data");
+    await userEvent.click(screen.getByRole("button", { name: NR_FILES.REMOVE_NAMED("data") }));
+    expect(drawn().workspaces).toBeUndefined();
+    expect(screen.queryAllByTestId("nr-attach-card")).toHaveLength(0);
+    await add(NR_FILES.FOLDER_TITLE, "datasets");
+    await add(NR_FILES.REPOSITORY_BADGE, "data");
+    expect(screen.getByRole("button", { name: NR_FILES.REMOVE_NAMED("datasets") })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: NR_FILES.REMOVE_NAMED("data") }));
+    expect(drawn().workspaces).toEqual([{ workspace_id: "ws-data", repos: [], target: "/home/agent/folders/datasets" }]);
+    expect(card("datasets")).toBeDefined();
+  });
+
   it("says none are onboarded when no workspace has a folder (W-48)", async () => {
     workspaceList = [...SCENARIO_FILES_WORKSPACES.member];
     show(BACKGROUND);

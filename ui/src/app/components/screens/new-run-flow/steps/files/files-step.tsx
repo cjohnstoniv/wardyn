@@ -76,6 +76,10 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
   // Cards keep the order they were added in this visit; anything the draft already held comes first, in its own order.
   // The order is the step's own (the run document has no field for it), so a later visit shows the draft's order.
   const [added, setAdded] = React.useState<readonly string[]>([]);
+  // Workspaces the person added a folder from; one already in the draft for its folders only (repos: []) counts.
+  const [foldersAdded, setFoldersAdded] = React.useState<ReadonlySet<string>>(
+    () => new Set((intent.workspaces ?? []).filter((w) => w.repos?.length === 0).map((w) => w.workspace_id)),
+  );
   const byAdded = (a: FileItem, b: FileItem) => added.indexOf(a.key) - added.indexOf(b.key);
   const items = [...fileItems(intent, src)].sort(byAdded);
   const legacyId = legacyIdOf(drives.catalogue);
@@ -107,6 +111,8 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
       return added ? startIn(added, legacyId)(next) : next;
     });
     if (mode === "add") setExpanded((e) => [...e, saved.key]);
+    const folderWs = folders.find((f) => f.key === saved.key)?.workspaceId;
+    if (folderWs) setFoldersAdded((set) => new Set([...set, folderWs]));
     setAdded((order) =>
       mode === "add" ? (order.includes(saved.key) ? order : [...order, saved.key]) : order.map((k) => (k === saved.previousKey ? saved.key : k)));
     announce(mode === "add" ? NR_FILES.ADDED(saved.name) : NR_FILES.UPDATED(saved.name));
@@ -114,7 +120,7 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
   };
   const remove = (item: FileItem) => {
     edit((i) => {
-      const next = removeItem(item, src)(i);
+      const next = removeItem(item, src, foldersAdded)(i);
       if (!item.starts) return next;
       // The start moves to the first item left.
       const first = [...fileItems(next, src)].sort(byAdded)[0];
@@ -248,6 +254,7 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
         driveReason={drives.reason}
         operator={operator}
         onSave={onSave}
+        foldersAdded={foldersAdded}
         createUserDrive={createUserDrive}
         reloadDrives={drives.reload}
       />
