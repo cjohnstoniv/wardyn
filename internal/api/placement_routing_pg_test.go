@@ -58,7 +58,7 @@ func TestPG_PlacementRouting_RefusedBeforeCreateNeverSubstituted(t *testing.T) {
 		{
 			name: "1 local placement on an offline runner is runner_offline",
 			setup: func(e *placementEnv, _ string) string {
-				laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+				laptops := e.createPool("Laptops", types.RunnerPoolUser)
 				asleep := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
 				e.addToPool(e.person, laptops.ID, asleep)
 				e.online[asleep] = false
@@ -70,7 +70,7 @@ func TestPG_PlacementRouting_RefusedBeforeCreateNeverSubstituted(t *testing.T) {
 			name: "2a a profile that denies local refuses placement local",
 			setup: func(e *placementEnv, _ string) string {
 				e.assignProfile(walled, types.GovernanceLimits{DenyPlacements: []types.Placement{types.PlacementLocal}})
-				laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+				laptops := e.createPool("Laptops", types.RunnerPoolUser)
 				awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
 				e.addToPool(e.person, laptops.ID, awake)
 				return runBody(`"placement":"local","runner_id":"` + awake.String() + `","runner_pool_id":"` + laptops.ID.String() + `"`)
@@ -90,7 +90,7 @@ func TestPG_PlacementRouting_RefusedBeforeCreateNeverSubstituted(t *testing.T) {
 			// enabled the local gate answers, and the run is never moved to the remote pool.
 			name: "3 a size the asked runner cannot hold is reduced on that runner, not refused nor run on the remote pool that can",
 			setup: func(e *placementEnv, _ string) string {
-				laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+				laptops := e.createPool("Laptops", types.RunnerPoolUser)
 				small := e.laptop(e.personP, 1000, 1024, types.CC1, types.CC2, types.CC3)
 				e.addToPool(e.person, laptops.ID, small)
 				return runBody(`"placement":"local","resources":{"cpu_millis":4000,"memory_mib":8192},"runner_id":"` + small.String() + `","runner_pool_id":"` + laptops.ID.String() + `"`)
@@ -101,7 +101,7 @@ func TestPG_PlacementRouting_RefusedBeforeCreateNeverSubstituted(t *testing.T) {
 			name: "4 a profile that pauses idle runs is placement_capability on a runner that cannot pause, not a remote run",
 			setup: func(e *placementEnv, _ string) string {
 				e.assignProfile(walled, types.GovernanceLimits{RunLimits: types.RunLimits{PauseIdleAfterSec: 300}})
-				laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+				laptops := e.createPool("Laptops", types.RunnerPoolUser)
 				awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
 				e.stream(awake, types.CC1, types.CC2, types.CC3)
 				e.addToPool(e.person, laptops.ID, awake)
@@ -113,7 +113,7 @@ func TestPG_PlacementRouting_RefusedBeforeCreateNeverSubstituted(t *testing.T) {
 		{
 			name: "5 a barrier the runner lacks is placement_capability, not a run on the remote pool that has it",
 			setup: func(e *placementEnv, _ string) string {
-				laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+				laptops := e.createPool("Laptops", types.RunnerPoolUser)
 				weak := e.laptop(e.personP, 4000, 8192, types.CC1)
 				e.addToPool(e.person, laptops.ID, weak)
 				return runBody(`"placement":"local","confinement_class":"CC3","runner_id":"` + weak.String() + `","runner_pool_id":"` + laptops.ID.String() + `"`)
@@ -123,7 +123,7 @@ func TestPG_PlacementRouting_RefusedBeforeCreateNeverSubstituted(t *testing.T) {
 		{
 			name: "6 a local run on the person's own online runner is created there",
 			setup: func(e *placementEnv, _ string) string {
-				laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+				laptops := e.createPool("Laptops", types.RunnerPoolUser)
 				awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
 				e.addToPool(e.person, laptops.ID, awake)
 				return runBody(`"placement":"local","runner_id":"` + awake.String() + `","runner_pool_id":"` + laptops.ID.String() + `"`)
@@ -133,9 +133,9 @@ func TestPG_PlacementRouting_RefusedBeforeCreateNeverSubstituted(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newPlacementEnv(t)
-			remote := e.createPool("Remote", types.RunnerPoolRemoteProvided)
+			remote := e.createPool("Remote", types.RunnerPoolOrganization)
 			e.addExecutors(remote.ID, "alpha", "beta")
-			e.orgDefaults(fmt.Sprintf(`{"preferred_hosting":"remote_provided","remote_provided":%q}`, remote.ID))
+			e.orgDefaults(fmt.Sprintf(`{"pool_id":%q}`, remote.ID))
 			body := tc.setup(e, remote.ID.String())
 
 			stored := func() []types.AgentRun {

@@ -122,6 +122,7 @@ export const NR_TOOLS = {
   MCP_CARD_TITLE: "Add an MCP server",
   MCP_CARD_BODY: "Connect a remote MCP server by URL. Its token stays with the proxy.",
   MCP_CARD_BUTTON: "Add MCP server",
+  CLI_GITHUB_BODY: "Actions and the REST API with gh; issue and pull request lists aren't supported yet.",
   CARD_ADDED: (name: string | number) => `${name} added. Its hosts and credential are included.`,
   COMPONENT_ADDED: "Added to this run.",
   COMPONENT_ADDED_NAMED: (name: string | number) => `${name} added to this run.`,

@@ -848,6 +848,21 @@ func TestADOOrgConflictEveryPair(t *testing.T) {
 			}
 		}
 	}
+	// A repository dropped from the comparison list for sharing an earlier one's organisation must
+	// share its carrier set too: a2 (acme) is carried by beta alone, so g (globex, carried by
+	// alpha) conflicts with it even though a1 (acme, alpha) already answers for acme.
+	const a1, a2, a3, g = "https://dev.azure.com/acme/p/_git/a1", "https://dev.azure.com/acme/p/_git/a2", "https://dev.azure.com/acme/p/_git/a3", "https://dev.azure.com/globex/p/_git/g"
+	one, two := repoWS("one", a1, g), repoWS("two", a2, a3)
+	fourBody := policyCarriedBody([]types.Workspace{one, two}, []string{a1, a2, a3, g}, "")
+	for order, store := range storeOrders(one, two) {
+		srv := attachFixture(t, site, store...)
+		for _, door := range runDoors {
+			w := do(t, srv, http.MethodPost, door.path, adminToken, fourBody)
+			if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), reasonWorkspaceADOOrgConflict) {
+				t.Fatalf("four repositories, %s, %s: %d %s, want the acme/globex conflict", order, door.name, w.Code, w.Body.String())
+			}
+		}
+	}
 	// Two organisations inside one workspace stay allowed.
 	srv := attachFixture(t, site, alpha)
 	if w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, policyCarriedBody([]types.Workspace{alpha}, []string{x, y}, "")); w.Code != http.StatusOK {

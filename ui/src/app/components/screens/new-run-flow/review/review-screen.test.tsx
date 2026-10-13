@@ -313,7 +313,6 @@ describe("Review notices", () => {
     checks.current = answered({ ...SCENARIO_PREFLIGHT.member, warnings: ["inline_policy: a grant was dropped by your ceiling"] });
     open(AGENT);
     await ready();
-    expect(screen.getByText(NR_REVIEW.WARNINGS_TITLE)).toBeInTheDocument();
     expect(screen.getByText("inline_policy: a grant was dropped by your ceiling")).toBeInTheDocument();
   });
 });

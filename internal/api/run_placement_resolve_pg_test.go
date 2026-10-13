@@ -85,6 +85,7 @@ func newPlacementEnv(t *testing.T) *placementEnv {
 	e.srv.cfg.Runner = e.runner
 	e.srv.cfg.RunnerOnline = func(id uuid.UUID) bool { return e.online[id] }
 	e.srv.cfg.AgentImages = composeAgentImages
+	e.ensureRemoteRunners()
 	if _, err := e.pg.PutSiteConfig(context.Background(), types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true}}); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +111,7 @@ func (e *placementEnv) addToPool(c *http.Cookie, pool, runnerID uuid.UUID) {
 func (e *placementEnv) addExecutors(pool uuid.UUID, names ...string) {
 	e.t.Helper()
 	for _, n := range names {
-		if w := e.admin(http.MethodPut, "/api/v1/runner-pools/"+pool.String()+"/executors/"+n, ""); w.Code != http.StatusOK {
+		if w := e.admin(http.MethodPut, "/api/v1/runner-pools/"+pool.String()+"/remote-runners/"+n, ""); w.Code != http.StatusOK {
 			e.t.Fatalf("add executor %s = %d %s", n, w.Code, w.Body)
 		}
 	}
@@ -179,15 +180,15 @@ func sameEverywhere(t *testing.T, name string, got map[string]*httptest.Response
 // that cannot hold pools (TestPlacement_StoreWithoutPoolsKeepsUnpooledBehaviour).
 func TestPG_PoolReasonsAreTheSameAtEveryDoor(t *testing.T) {
 	e := newPlacementEnv(t)
-	remote := e.createPool("Remote", types.RunnerPoolRemoteProvided)
+	remote := e.createPool("Remote", types.RunnerPoolOrganization)
 	e.addExecutors(remote.ID, "alpha", "beta")
-	dead := e.createPool("Switched off", types.RunnerPoolRemoteProvided)
+	dead := e.createPool("Switched off", types.RunnerPoolOrganization)
 	e.addExecutors(dead.ID, "alpha")
 	if w := e.admin(http.MethodPut, "/api/v1/runner-pools/"+dead.ID.String(), fmt.Sprintf(`{"revision":%d,"state":"disabled"}`, e.revision(dead.ID))); w.Code != http.StatusOK {
 		t.Fatalf("disable = %d %s", w.Code, w.Body)
 	}
-	empty := e.createPool("Empty remote", types.RunnerPoolRemoteProvided)
-	laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	empty := e.createPool("Empty remote", types.RunnerPoolOrganization)
+	laptops := e.createPool("Laptops", types.RunnerPoolUser)
 	handled := map[runnerpool.Reason]bool{runnerpool.ReasonStale: true, runnerpool.ReasonPoolsUnavailable: true}
 
 	check := func(name string, c *http.Cookie, extra string, status int, reason runnerpool.Reason) {
@@ -203,7 +204,7 @@ func TestPG_PoolReasonsAreTheSameAtEveryDoor(t *testing.T) {
 	check("a self-hosted pool with none of the caller's runners", e.person, `"runner_pool_id":"`+laptops.ID.String()+`"`, http.StatusUnprocessableEntity, runnerpool.ReasonNoEligibleMember)
 	check("local placement against a remote pool", e.person, `"placement":"local","runner_pool_id":"`+remote.ID.String()+`"`, http.StatusUnprocessableEntity, runnerpool.ReasonMemberMismatch)
 	check("a pin that is not the caller's", e.person, `"placement":"local","runner_id":"`+uuid.NewString()+`","runner_pool_id":"`+laptops.ID.String()+`"`, http.StatusUnprocessableEntity, runnerpool.ReasonMemberMismatch)
-	soon := e.createPool("Soon off", types.RunnerPoolRemoteProvided)
+	soon := e.createPool("Soon off", types.RunnerPoolOrganization)
 	e.addExecutors(soon.ID, "alpha")
 	limited := e.limitedPool("Background only", types.CC1, types.CC2)
 	const background = `"title":"t","experience":"background","workload":{"kind":"agent_task","agent":"claude-code","task":"fix the build"},"tools":[{"id":"claude-code","kind":"harness"}],"no_repositories_or_drives":true`
@@ -219,12 +220,12 @@ func TestPG_PoolReasonsAreTheSameAtEveryDoor(t *testing.T) {
 	// D-1319 carry: a request that names no experience (an older client) is never read as Background by a
 	// pool that sets limits; it is refused at every door, and the same request in a pool with no limits is fine.
 	checkBody("an older-shape request in a pool with limits", runBody(pinned), http.StatusUnprocessableEntity, runnerpool.ReasonRunTypeNotAllowed)
-	e.orgDefaults(fmt.Sprintf(`{"preferred_hosting":"remote_provided","remote_provided":%q}`, soon.ID))
+	e.orgDefaults(fmt.Sprintf(`{"pool_id":%q}`, soon.ID))
 	if w := e.admin(http.MethodPut, "/api/v1/runner-pools/"+soon.ID.String(), fmt.Sprintf(`{"revision":%d,"state":"disabled"}`, e.revision(soon.ID))); w.Code != http.StatusOK {
 		t.Fatalf("disable = %d %s", w.Code, w.Body)
 	}
 	check("an organisation default that is switched off", e.person, "", http.StatusUnprocessableEntity, runnerpool.ReasonDefaultUnavailable)
-	e.personDefaults(e.person, fmt.Sprintf(`{"preferred_hosting":"remote_provided","remote_provided":%q}`, remote.ID))
+	e.personDefaults(e.person, fmt.Sprintf(`{"pool_id":%q}`, remote.ID))
 	if _, err := e.pg.DeleteRunnerPool(context.Background(), remote.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +246,7 @@ func TestPG_PoolReasonsAreTheSameAtEveryDoor(t *testing.T) {
 // barriers.
 func (e *placementEnv) limitedPool(name string, barriers ...types.ConfinementClass) types.RunnerPool {
 	e.t.Helper()
-	p := e.createPool(name, types.RunnerPoolRemoteProvided)
+	p := e.createPool(name, types.RunnerPoolOrganization)
 	e.addExecutors(p.ID, "alpha", "beta")
 	limits := types.RunnerPoolLimits{
 		Background: &types.RunnerPoolBackgroundLimits{CPUMillis: types.RunnerPoolAmount{Default: 1000, Cap: 2000}, MemoryMiB: types.RunnerPoolAmount{Default: 1024, Cap: 2048}, Lifetime: types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}},
@@ -262,12 +263,12 @@ func (e *placementEnv) limitedPool(name string, barriers ...types.ConfinementCla
 // pool or to the other hosting type, even when a perfectly good one exists.
 func TestPG_StaleDefaultNeverFallsBack(t *testing.T) {
 	e := newPlacementEnv(t)
-	good := e.createPool("Good", types.RunnerPoolRemoteProvided)
+	good := e.createPool("Good", types.RunnerPoolOrganization)
 	e.addExecutors(good.ID, "alpha")
-	gone := e.createPool("Gone", types.RunnerPoolRemoteProvided)
+	gone := e.createPool("Gone", types.RunnerPoolOrganization)
 	e.addExecutors(gone.ID, "beta")
-	e.orgDefaults(fmt.Sprintf(`{"preferred_hosting":"remote_provided","remote_provided":%q}`, good.ID))
-	e.personDefaults(e.person, fmt.Sprintf(`{"remote_provided":%q}`, gone.ID))
+	e.orgDefaults(fmt.Sprintf(`{"pool_id":%q}`, good.ID))
+	e.personDefaults(e.person, fmt.Sprintf(`{"pool_id":%q}`, gone.ID))
 
 	if w := e.call(e.person, http.MethodPost, "/api/v1/runs", runBody("")); w.Code != http.StatusCreated {
 		t.Fatalf("a valid personal default = %d %s", w.Code, w.Body)
@@ -296,11 +297,11 @@ func TestPG_StaleDefaultNeverFallsBack(t *testing.T) {
 func TestPG_RunRowCarriesThePoolBinding(t *testing.T) {
 	e := newPlacementEnv(t)
 	ctx := context.Background()
-	orgPool := e.createPool("Org", types.RunnerPoolRemoteProvided)
+	orgPool := e.createPool("Org", types.RunnerPoolOrganization)
 	e.addExecutors(orgPool.ID, "alpha", "beta")
-	named := e.createPool("Named", types.RunnerPoolRemoteProvided)
+	named := e.createPool("Named", types.RunnerPoolOrganization)
 	e.addExecutors(named.ID, "beta")
-	e.orgDefaults(fmt.Sprintf(`{"preferred_hosting":"remote_provided","remote_provided":%q}`, orgPool.ID))
+	e.orgDefaults(fmt.Sprintf(`{"pool_id":%q}`, orgPool.ID))
 
 	created := func(c *http.Cookie, extra string) types.AgentRun {
 		t.Helper()
@@ -328,7 +329,7 @@ func TestPG_RunRowCarriesThePoolBinding(t *testing.T) {
 		}
 	}
 	check("organisation default", created(e.person, ""), orgPool, types.RunnerPoolSelectedOrg, "alpha", "beta")
-	e.personDefaults(e.person, fmt.Sprintf(`{"remote_provided":%q}`, named.ID))
+	e.personDefaults(e.person, fmt.Sprintf(`{"pool_id":%q}`, named.ID))
 	check("a person's default beats the organisation's", created(e.person, ""), named, types.RunnerPoolSelectedPersonal, "beta")
 	run := created(e.person, `"runner_pool_id":"`+orgPool.ID.String()+`"`)
 	check("an explicit pool beats both", run, orgPool, types.RunnerPoolSelectedExplicit, "alpha", "beta")
@@ -361,7 +362,7 @@ func TestPG_RunRowCarriesThePoolBinding(t *testing.T) {
 func TestPG_PoolMovingBeforeTheInsertRefusesTheLaunch(t *testing.T) {
 	e := newPlacementEnv(t)
 	ctx := context.Background()
-	pool := e.createPool("Moving", types.RunnerPoolRemoteProvided)
+	pool := e.createPool("Moving", types.RunnerPoolOrganization)
 	e.addExecutors(pool.ID, "alpha")
 	at := e.revision(pool.ID)
 	row := func(rev int64) types.AgentRun {
@@ -398,7 +399,7 @@ func TestPG_PoolMovingBeforeTheInsertRefusesTheLaunch(t *testing.T) {
 // exactly as a launch into a pool that does not exist.
 func TestPlacement_SelfHostedCandidatesAreTheLaunchersOwn(t *testing.T) {
 	e := newPlacementEnv(t)
-	pool := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	pool := e.createPool("Laptops", types.RunnerPoolUser)
 	mine := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
 	theirs := e.laptop(e.otherP, 8000, 16384, types.CC1, types.CC2, types.CC3)
 	e.addToPool(e.person, pool.ID, mine)
@@ -472,14 +473,14 @@ func TestPlacement_SelfHostedCandidatesAreTheLaunchersOwn(t *testing.T) {
 // target; and a pool the caller may not use, and a default naming one, read as an unknown id.
 func TestPG_PreviewShowsPoolsNotTargetsAndLeaksNothing(t *testing.T) {
 	e := newPlacementEnv(t)
-	open := e.createPool("Open", types.RunnerPoolRemoteProvided)
+	open := e.createPool("Open", types.RunnerPoolOrganization)
 	e.addExecutors(open.ID, "alpha", "beta")
-	secret := e.createPool("Finance only", types.RunnerPoolRemoteProvided)
+	secret := e.createPool("Finance only", types.RunnerPoolOrganization)
 	e.addExecutors(secret.ID, "alpha")
 	if w := e.call(e.alice, http.MethodPut, "/api/v1/runner-pools/"+secret.ID.String()+"/use-policy", `{"subjects":[{"subject_type":"user","subject":"sub-someone-else"}]}`); w.Code != http.StatusOK {
 		t.Fatalf("use policy = %d %s", w.Code, w.Body)
 	}
-	e.orgDefaults(fmt.Sprintf(`{"preferred_hosting":"remote_provided","remote_provided":%q}`, open.ID))
+	e.orgDefaults(fmt.Sprintf(`{"pool_id":%q}`, open.ID))
 
 	for _, door := range placementDoors[1:] {
 		w := e.call(e.person, http.MethodPost, door, runBody(""))
@@ -518,15 +519,15 @@ func TestPG_PreviewShowsPoolsNotTargetsAndLeaksNothing(t *testing.T) {
 		}
 	}
 	// A default naming it is the same as a default naming a deleted pool.
-	e.personDefaults(e.person, fmt.Sprintf(`{"remote_provided":%q}`, open.ID))
-	if _, err := e.pool.Exec(context.Background(), `UPDATE principal_prefs SET value = jsonb_build_object('remote_provided', $2::text) WHERE principal = $1 AND key = $3`,
-		e.personP, secret.ID.String(), types.RunnerPoolDefaultsPrefKey); err != nil {
+	e.personDefaults(e.person, fmt.Sprintf(`{"pool_id":%q}`, open.ID))
+	if _, err := e.pool.Exec(context.Background(), `UPDATE principal_prefs SET value = jsonb_build_object('pool_id', $2::text) WHERE principal = $1 AND key = $3`,
+		e.personP, secret.ID.String(), types.RunnerPoolDefaultPrefKey); err != nil {
 		t.Fatal(err)
 	}
 	inaccessible := e.answers(e.person, runBody(""))
 	sameEverywhere(t, "a default naming a pool the caller may not use", inaccessible, http.StatusUnprocessableEntity, string(runnerpool.ReasonDefaultUnavailable))
-	if _, err := e.pool.Exec(context.Background(), `UPDATE principal_prefs SET value = jsonb_build_object('remote_provided', $2::text) WHERE principal = $1 AND key = $3`,
-		e.personP, uuid.NewString(), types.RunnerPoolDefaultsPrefKey); err != nil {
+	if _, err := e.pool.Exec(context.Background(), `UPDATE principal_prefs SET value = jsonb_build_object('pool_id', $2::text) WHERE principal = $1 AND key = $3`,
+		e.personP, uuid.NewString(), types.RunnerPoolDefaultPrefKey); err != nil {
 		t.Fatal(err)
 	}
 	deleted := e.answers(e.person, runBody(""))
@@ -541,7 +542,7 @@ func TestPG_PreviewShowsPoolsNotTargetsAndLeaksNothing(t *testing.T) {
 // it, whatever the other member can do, and a class no member enforces refuses.
 func TestPG_HeterogeneousRemotePoolNeverWidens(t *testing.T) {
 	e := newPlacementEnv(t)
-	pool := e.createPool("Mixed", types.RunnerPoolRemoteProvided)
+	pool := e.createPool("Mixed", types.RunnerPoolOrganization)
 	e.addExecutors(pool.ID, "alpha", "beta")
 	e.runner.execFacts["beta"] = runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1, types.CC2}}
 	body := func(cc string) string {
@@ -572,7 +573,7 @@ func TestPG_HeterogeneousRemotePoolNeverWidens(t *testing.T) {
 // A member that is unknown or unreachable refuses; with one reachable executor the run goes there.
 func TestPG_UnknownExecutorFactsRefuseNeverRouteElsewhere(t *testing.T) {
 	e := newPlacementEnv(t)
-	pool := e.createPool("Flaky", types.RunnerPoolRemoteProvided)
+	pool := e.createPool("Flaky", types.RunnerPoolOrganization)
 	e.addExecutors(pool.ID, "alpha", "beta")
 	delete(e.runner.execFacts, "beta")
 	e.runner.silent = map[string]bool{"beta": true} // beta is run by the deployment but cannot report
@@ -600,9 +601,9 @@ func TestPG_UnknownExecutorFactsRefuseNeverRouteElsewhere(t *testing.T) {
 // enforces CC1-CC3 and beta CC1-CC2; a pool of beta only must never promise or choose CC3.
 func TestPG_DefaultClassComesFromThePoolsCandidatesAtEveryDoor(t *testing.T) {
 	e := newPlacementEnv(t)
-	betaOnly := e.createPool("Beta only", types.RunnerPoolRemoteProvided)
+	betaOnly := e.createPool("Beta only", types.RunnerPoolOrganization)
 	e.addExecutors(betaOnly.ID, "beta")
-	both := e.createPool("Both", types.RunnerPoolRemoteProvided)
+	both := e.createPool("Both", types.RunnerPoolOrganization)
 	e.addExecutors(both.ID, "alpha", "beta")
 	e.runner.execFacts["beta"] = runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1, types.CC2}}
 
@@ -645,7 +646,7 @@ func TestPG_DefaultClassComesFromThePoolsCandidatesAtEveryDoor(t *testing.T) {
 // another of your runners in the pool is online; a foreign or unknown pin keeps the identical mismatch body.
 func TestPG_OwnOfflinePinAnswersRunnerOffline(t *testing.T) {
 	e := newPlacementEnv(t)
-	pool := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	pool := e.createPool("Laptops", types.RunnerPoolUser)
 	asleep := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
 	awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
 	theirs := e.laptop(e.otherP, 4000, 8192, types.CC1, types.CC2)

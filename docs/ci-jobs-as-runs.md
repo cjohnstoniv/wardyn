@@ -1,7 +1,7 @@
 # CI jobs as confined one-shot runs
 
 - Run each CI job as its own Wardyn run:
-  - one sandbox per job, an image nobody can swap, egress limited to a list you wrote, the job's exit code becoming your pipeline's, and every job on the audit trail.
+  - one sandbox per job, an image nobody can swap, egress limited to a list you wrote, the job's pass or fail becoming your pipeline's, and every job on the audit trail.
 - This is a recipe over pieces that are documented separately, put in the order you need them. The worked example is a self-hosted Actions-compatible runner (Forgejo's) that registers, takes exactly one job and exits, all inside a confined run.
 - This is not [CI.md](CI.md). That page is about running Wardyn *in* your pipeline ([`scripts/ci-run.sh`](../scripts/ci-run.sh), a throwaway control plane). This one is about running *your pipeline's jobs* on a Wardyn control plane you already operate.
 - Exit codes, the CI principal and the `--policy-file` schema are defined there and in [POLICIES.md](POLICIES.md); this page does not repeat them.
@@ -13,17 +13,17 @@
 | Deployment default policy | The policy for every principal no profile binds, and the grant eligibility a profile can only narrow (which secret a grant may name) | Operator, at boot | `WARDYN_DEFAULT_POLICY` |
 | Governance profile | The CI principal's ceiling: egress list, confinement floor, eligible grants; no interactive runs, no user drive, a cap on concurrent runs | Admin | `wardyn governance set` |
 | Image capability | The one custom image the CI principal may launch | Admin | `/permissions` |
-| Runner token | Stored by the CI principal, delivered to the run as an `env_secret` grant | CI principal | `wardyn secret set` |
+| Runner token | Stored by an admin as a shared secret, because a service identity's token is refused `secret set`; delivered to the run as an `env_secret` grant | Admin | `wardyn secret set --shared` |
 | Run policy | This job's own egress list and grants, inside the ceiling | Your repo | `--policy-file` |
-| Launch | `wardyn run --wait`: the job's exit code is the command's | Your launcher | `wardyn run` |
+| Launch | `wardyn run --wait`: the exit status is the job's pass or fail | Your launcher | `wardyn run` |
 
 ## Before you start
 
 1. **A control plane with sign-in, and a CI principal that is not an admin.**
    - A profile binds a signed-in principal below `admin`; the admin token and local mode are exempt from every ceiling ([three-roles.md](operations/three-roles.md#three-roles-and-who-sets-the-walls)).
-   - Give CI a dedicated person (role `user`) and mint that person's own `wdn_` token, as [CI.md](CI.md#cis-identity) describes.
+   - Give CI a dedicated service identity, `service:<name>`, with a named person as its sponsor, and have the sponsor mint its `wdn_` token, as [CI.md](CI.md#cis-identity) describes. A person's token is not the CI credential.
    - Export it as `WARDYN_TOKEN` on the launcher.
-   - `CI_USER` below is that person's email or sign-in subject.
+   - `CI_USER` below is the identity's principal, `service:<name>`.
 2. **The CLI on the launcher**, with `WARDYN_URL` set to the control plane.
 3. **The forge's address as `host:port`**, in `FORGE`.
    - A forge on a private address is refused by the proxy's private-address guard unless it is declared.
@@ -51,8 +51,7 @@ cat > deployment-default.json <<'EOF'
   "eligible_grants": [
     {
       "kind": "env_secret",
-      "scope": {"name": "RUNNER_TOKEN", "secret_name": "runner-registration-token"},
-      "owner_only": true
+      "scope": {"name": "RUNNER_TOKEN", "secret_name": "runner-registration-token"}
     }
   ],
   "auto_stop_after_sec": 3600
@@ -99,8 +98,7 @@ cat > ci-governance.json <<EOF
         "eligible_grants": [
           {
             "kind": "env_secret",
-            "scope": {"name": "RUNNER_TOKEN", "secret_name": "runner-registration-token"},
-            "owner_only": true
+            "scope": {"name": "RUNNER_TOKEN", "secret_name": "runner-registration-token"}
           }
         ],
         "auto_stop_after_sec": 3600
@@ -161,19 +159,20 @@ curl -sS -X PUT "$WARDYN_URL/api/v1/permissions/availability/image/${RUNNER_IMAG
 
 ## 4. Store the runner token
 
-- The CI principal stores its own row.
-- `owner_only` in the grant means a run reads that row and never the operator's.
+- A service identity's token cannot store a secret: `secret set` answers `403` `service_scope`, and no route stores a named secret in its namespace for it (only its model-provider credential, through `PUT /model-providers/{id}/credential`).
+- So an admin stores the row as a shared secret, in the operator namespace.
+- The grants above leave out `owner_only`, so the run reads the CI principal's own namespace first and falls back to that shared row. An `owner_only` grant would fail closed on every run.
+- That is a weaker posture: the pairing now lives in the deployment default without `owner_only`, so any principal that default covers could be given the shared forge token. Bind every other principal to a profile that leaves the pairing out, or keep CI on a dedicated control plane.
 - The value is the registration token your forge issues (see the worked example below), and it comes from stdin because argv is readable in `ps`.
 
 ```sh
-# ci
-printf '%s' "$RUNNER_TOKEN_VALUE" | wardyn secret set runner-registration-token
-wardyn secret list
+# admin
+printf '%s' "$RUNNER_TOKEN_VALUE" | wardyn secret set runner-registration-token --shared
+wardyn secret list --shared
 ```
 
-- `secret list` shows `runner-registration-token (mine)`.
 - There is no command that reads the value back.
-- Rotate it by running `secret set` again.
+- Rotate it by running `secret set --shared` again.
 
 ## 5. Write the run policy
 
@@ -190,8 +189,7 @@ cat > ci-runner-policy.json <<EOF
   "eligible_grants": [
     {
       "kind": "env_secret",
-      "scope": {"name": "RUNNER_TOKEN", "secret_name": "runner-registration-token"},
-      "owner_only": true
+      "scope": {"name": "RUNNER_TOKEN", "secret_name": "runner-registration-token"}
     }
   ],
   "auto_stop_after_sec": 3600
@@ -225,14 +223,15 @@ wardyn run --image "$RUNNER_IMAGE" --task-mode exec \
 echo "exit $?"
 ```
 
-- That prints `exit 7`: a `FAILED` run exits with the task's own code.
+- That prints `exit 1`: the CI principal is a service identity, and its token has no audit read (`403` `service_scope`), so `run --wait` cannot read the task's own code and reports a `FAILED` run as `1` ([CI.md](CI.md#cis-identity)).
+- With a token that can read the audit (an admin's, or the sponsor signed in), the same run prints `exit 7`.
 - The full table is in [CI.md](CI.md#exit-codes).
 - The ones a launcher acts on:
 
 | Exit | Meaning |
 |---|---|
 | `0` | The run `COMPLETED`. |
-| the task's code | The run `FAILED`; this is what the job exited with. |
+| `1` | The run `FAILED`. With an audit-reading token the exit is the task's own code instead. |
 | `2` | The run was `KILLED` or `STOPPED`, or the launch was refused for who you are (an image not granted, an interactive run). |
 | `3` | The launch was refused for what you asked (a policy or class the runner cannot meet, the run cap). |
 | `124` | The wait timed out. **The run is still running.** |
@@ -249,7 +248,8 @@ echo "exit $code"
 ```
 
 - `--json` puts the created run on stdout and progress on stderr, so `jq -r .id` is safe.
-- The same launch from Go, without the token grant (it omits `eligible_grants`), with the exit code read the way the CLI reads it (from the `run.complete` event):
+- The same launch from Go, without the token grant (it omits `eligible_grants`), reads the exit code the way the CLI does, from the `run.complete` event.
+- A service token cannot read that event, so run this with an audit-reading token:
 
 ```go
 package main
@@ -332,10 +332,11 @@ echo "exit $?"
 
 ## 8. Read what the job did
 
-- Every job leaves one trail, keyed by run id:
+- Every job leaves one trail, keyed by run id.
+- A service token has no audit read (`403` `service_scope`), so these `wardyn audit` commands run with the admin token or as the sponsor signed in, not as the CI principal:
 
 ```sh
-# ci
+# admin
 RUN_ID="$(jq -r .id run.json)"
 wardyn audit "$RUN_ID"
 ```
@@ -345,7 +346,7 @@ wardyn audit "$RUN_ID"
 | `run.create` | Who launched it, the task mode, the confinement class, whether the policy was inline, and any clamp warnings |
 | `run.build` | The wrapped image and, as `byoi_base`, the exact image ref the job started from |
 | `run.ceiling.reassert` | The governance profile that bounded it, by name |
-| `run.env_secret.resolve` | The variable name, the secret name and whose row was read (`own`). Never the value |
+| `run.env_secret.resolve` | The variable name, the secret name and whose row was read (`own` or `operator`). Never the value |
 | `run.policy.resolve` | The effective policy after clamping |
 | `run.exec` | The command the sandbox ran |
 | `egress.allow` / `egress.deny` | Every outbound decision: host, path, port, method and the `rule_source` that decided it. A repeated decision collapses into one row with a repeat count |
@@ -355,7 +356,7 @@ wardyn audit "$RUN_ID"
 - Three queries a pipeline asks:
 
 ```sh
-# ci
+# admin
 RUN_ID="$(jq -r .id run.json)"
 wardyn audit "$RUN_ID" --json | jq -r '.[] | select(.action=="run.complete") | .data.exit_code'
 wardyn audit "$RUN_ID" --json | jq -r '.[] | select(.action=="run.build") | .data.byoi_base'
@@ -450,6 +451,6 @@ echo "exit $?"
 - Every command above ran, as written, against a throwaway compose install of this tree
   - (`wardynd` built from source, the `sso` profile with Dex as the identity provider, Docker as the runner so only the Fence class exists)
   - and a Forgejo 11 container, using Forgejo runner v11.3.1.
-- The CI principal was a real signed-in `user` with its own token.
+- The CI principal was a real signed-in `user` with its own token, which stored its own row; the service-identity form was not re-run. It changes steps 1 and 4 (who holds the token and how the runner token is stored), step 6 (a `FAILED` run exits `1`) and step 8 (the audit reads need an admin or sponsor token).
 - The step 1 settings were applied to that install as described, and the workflow file was pushed through Forgejo's API rather than `git push`.
 - The Helm chart route is named, not run.

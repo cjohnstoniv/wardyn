@@ -7,6 +7,7 @@
 // Change disclosure. A document-only field is a read-only row with its chip.
 
 import * as React from "react";
+import { Check } from "lucide-react";
 import { Button } from "../../../ui/button";
 import { Chip } from "../../../wardyn/primitives";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
@@ -17,7 +18,7 @@ export interface ReviewGroupProps {
   id: ReviewGroupId;
   label: string;
   value?: React.ReactNode;
-  /** A mark shown beside the value (the barrier). */
+  /** A mark shown under the value (the barrier). */
   mark?: React.ReactNode;
   detail?: React.ReactNode;
   /** Who put the value there. */
@@ -33,40 +34,39 @@ export function ReviewGroup({ id, label, value, mark, detail, provenance, childr
   const [open, setOpen] = React.useState(false);
   const regionId = `nr-edit-${id}`;
   return (
-    <div data-review-group={id} className="flex flex-col gap-2 border-t border-border py-3 first:border-t-0">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <h3 className="label-eyebrow">{label}</h3>
-          <div className="flex flex-wrap items-center gap-2">
-            {value !== undefined && <strong className="font-medium text-foreground">{value}</strong>}
-            {mark}
+    <div data-review-group={id} className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-start gap-2.5 border-t border-border py-4 pr-4 pl-5 first:border-t-0">
+      <span aria-hidden="true" className="grid size-[22px] place-items-center rounded-full border border-success/35 bg-success-subtle text-success">
+        <Check className="size-3" />
+      </span>
+      <div className="flex min-w-0 flex-col gap-1">
+        <h3 className="label-eyebrow">{label}</h3>
+        {value !== undefined && <strong className="font-medium break-words text-foreground">{value}</strong>}
+        {mark && <div className="my-1">{mark}</div>}
+        {detail && <p className="text-sm text-muted-foreground">{detail}</p>}
+        {children}
+        {docRows.map((r) => (
+          <div key={r.path} className="flex flex-wrap items-center gap-2 text-sm">
+            <code className="font-mono text-xs">{r.path}</code>
+            <span className="min-w-0 break-all">{r.value}</span>
+            <Chip>{NR_REVIEW.DOC_ONLY_CHIP}</Chip>
           </div>
-          {detail && <p className="text-sm text-muted-foreground">{detail}</p>}
-          {children}
-          {docRows.map((r) => (
-            <div key={r.path} className="flex flex-wrap items-center gap-2 text-sm">
-              <code className="font-mono text-xs">{r.path}</code>
-              <span className="min-w-0 break-all">{r.value}</span>
-              <Chip>{NR_REVIEW.DOC_ONLY_CHIP}</Chip>
-            </div>
-          ))}
-          {provenance && <small className="text-muted-foreground">{provenance}</small>}
-        </div>
-        {editor && (
-          <Button
-            type="button"
-            variant="ghost"
-            aria-expanded={open}
-            aria-controls={open ? regionId : undefined}
-            aria-label={`${open ? NR_REVIEW.CLOSE : NR_REVIEW.CHANGE} ${label}`}
-            onClick={() => setOpen((o) => !o)}
-          >
-            {open ? NR_REVIEW.CLOSE : NR_REVIEW.CHANGE}
-          </Button>
-        )}
+        ))}
+        {provenance && <small className="text-primary">{provenance}</small>}
       </div>
+      {editor ? (
+        <Button
+          type="button"
+          variant="ghost"
+          aria-expanded={open}
+          aria-controls={open ? regionId : undefined}
+          aria-label={`${open ? NR_REVIEW.CLOSE : NR_REVIEW.CHANGE} ${label}`}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {open ? NR_REVIEW.CLOSE : NR_REVIEW.CHANGE}
+        </Button>
+      ) : <span />}
       {editor && open && (
-        <div id={regionId} role="group" aria-label={label} className="flex flex-col gap-3 rounded-lg bg-surface-2/60 p-3">
+        <div id={regionId} role="group" aria-label={label} className="col-span-full flex flex-col gap-3 rounded-lg bg-surface-2/60 p-3.5">
           {editor(() => setOpen(false))}
         </div>
       )}
