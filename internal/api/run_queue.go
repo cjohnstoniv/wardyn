@@ -402,6 +402,8 @@ func (s *Server) auditPoolRemovalCancels(ctx context.Context, ids []uuid.UUID) {
 const (
 	queueCancelSessionRevoked = "session_revoked"
 	queueCancelServiceRetired = "service_identity_retired"
+	// queueCancelRunnerRevoked is a run waiting for the one runner its launch named, revoked since.
+	queueCancelRunnerRevoked = "runner_revoked"
 	// queueCancelCreateAborted is a run a promoter took before its create had recorded it in full.
 	queueCancelCreateAborted = "create_aborted"
 )
