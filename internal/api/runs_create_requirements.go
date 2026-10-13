@@ -105,7 +105,11 @@ func resolveWorkspaceSelections(req createRunRequest) map[string]client.Workspac
 // Returns one entry per auto-attached secret grant and one per workspace with
 // a non-empty egress addition, for the CALLER to audit (launch does; preflight
 // discards them — see requirementAuditEntry).
-func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) []requirementAuditEntry {
+//
+// A non-nil refusal means a write:<path> row made a mount writable that the
+// member mount gate does not allow (requirementWriteRefusal): the caller
+// answers it and neither persists nor dispatches the spec.
+func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) ([]requirementAuditEntry, *sourceRefusal) {
 	return s.applyWorkspaceRequirementsFor(ctx, nil, spec, agent, wsRefs, selections)
 }
 
@@ -115,8 +119,14 @@ func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.Run
 // workspace's integration requirement resolves a member's own key exactly as
 // their run will; nil means the operator namespace, computed lazily — the
 // record route and every existing test keep that.
-func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[string]bool, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) []requirementAuditEntry {
+func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[string]bool, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) ([]requirementAuditEntry, *sourceRefusal) {
 	var events []requirementAuditEntry
+	// The member mount gate ran on these mounts as they stand now. One a
+	// write: row below makes writable meets it again before this returns.
+	wasReadOnly := make([]bool, len(spec.WorkspaceMounts))
+	for i, wm := range spec.WorkspaceMounts {
+		wasReadOnly[i] = wm.ReadOnlyOrDefault()
+	}
 	// Resolved at most once per call, lazily on the first integration key
 	// found — effectiveIntegrations reads the site-config
 	// store, a full secret listing, and peeks the subscription/Bedrock state,
@@ -206,7 +216,7 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 			})
 		}
 	}
-	return events
+	return events, s.requirementWriteRefusal(ctx, spec.WorkspaceMounts, wasReadOnly)
 }
 
 // effectiveRequirements is the contract a run actually consumes: the store's

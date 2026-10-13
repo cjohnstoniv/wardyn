@@ -5,8 +5,10 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -113,6 +115,68 @@ func userMountAllowed(policy runner.UserMountPolicy, owner string, wm types.Work
 	}
 	if err := policy.ValidateUserMount(owner, wm.Source, !wm.ReadOnlyOrDefault()); err != nil {
 		return fmt.Errorf("member workspace mount: %w", err)
+	}
+	return nil
+}
+
+// sourceRefusal is validateWorkspaceSources' (status, reason, error) answer as
+// one error, for the requirements fold: its record-session caller holds no
+// ResponseWriter and hands the refusal back to its handler as an error.
+type sourceRefusal struct {
+	status int
+	reason string
+	err    error
+}
+
+// Error carries the "workspace: " prefix the create door answers with.
+func (e *sourceRefusal) Error() string { return "workspace: " + e.err.Error() }
+
+// requirementWriteRefusal holds every mount a requirements fold made writable
+// to the member mount gate. The door ran that gate while the mount was still
+// read-only (validateWorkspaceSources), and a write:<path> row turns any mount
+// at its path writable, whichever workspace the row came from. So the owner is
+// read here from the workspaces that hold the directory, not from the one
+// being folded: every member who holds it must be allowed to write it, and an
+// operator-owned holder passes as it always has. A directory no workspace
+// holds, or a list that cannot be read, refuses, since no owner can be named.
+// wasReadOnly is each mount's state before the fold, by index.
+func (s *Server) requirementWriteRefusal(ctx context.Context, mounts []types.WorkspaceMount, wasReadOnly []bool) *sourceRefusal {
+	var widened []types.WorkspaceMount
+	for i, wm := range mounts {
+		if i < len(wasReadOnly) && wasReadOnly[i] && !wm.ReadOnlyOrDefault() {
+			widened = append(widened, wm)
+		}
+	}
+	if len(widened) == 0 {
+		return nil
+	}
+	refuse := func(reason string, err error) *sourceRefusal {
+		return &sourceRefusal{status: http.StatusUnprocessableEntity, reason: reason, err: err}
+	}
+	if s.cfg.Store == nil {
+		return refuse(reasonWorkspaceSourcesStoreUnavailable, errors.New("workspace onboarding requires a store, but none is configured"))
+	}
+	all, err := s.cfg.Store.ListWorkspaces(ctx)
+	if err != nil {
+		return refuse(reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err))
+	}
+	for _, wm := range widened {
+		held := false
+		for _, ws := range all {
+			if !slices.ContainsFunc(ws.Sources, func(src types.WorkspaceSource) bool {
+				return src.Type == types.WorkspaceSourceTypeLocalDir && src.Path == wm.Source
+			}) {
+				continue
+			}
+			held = true
+			if err := userMountAllowed(s.cfg.UserMounts, ws.OwnedBy, wm); err != nil {
+				return refuse(reasonWorkspaceSourceMountNotAllowed, err)
+			}
+		}
+		if !held {
+			return refuse(reasonWorkspaceSourceNotOnboarded, fmt.Errorf(
+				"mount source %q is not an onboarded local directory (onboard it first via the workspaces API)", wm.Source))
+		}
 	}
 	return nil
 }

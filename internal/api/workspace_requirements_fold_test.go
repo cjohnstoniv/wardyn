@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -66,7 +67,7 @@ func TestApplyWorkspaceRequirements_EmptyRequirementsIsNoOp(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			events := srv.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
+			events, _ := srv.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
 			after, err := json.Marshal(spec)
 			if err != nil {
 				t.Fatal(err)
@@ -185,7 +186,7 @@ func TestApplyWorkspaceRequirements_SecretNeverGrants(t *testing.T) {
 
 	t.Run("required + present grants nothing, opens nothing, and records the skip", func(t *testing.T) {
 		spec := &types.RunPolicySpec{}
-		events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("required"), nil)
+		events, _ := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("required"), nil)
 		if len(spec.EligibleGrants) != 0 || len(spec.AllowedDomains) != 0 {
 			t.Fatalf("grants=%+v domains=%v, want neither", spec.EligibleGrants, spec.AllowedDomains)
 		}
@@ -196,7 +197,7 @@ func TestApplyWorkspaceRequirements_SecretNeverGrants(t *testing.T) {
 		sel := map[string]client.WorkspaceSelection{
 			wsID.String(): {WorkspaceID: wsID.String(), EnabledOptional: []string{"secret:acme-key"}},
 		}
-		events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("optional"), sel)
+		events, _ := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("optional"), sel)
 		if len(spec.EligibleGrants) != 0 {
 			t.Fatalf("grants = %+v, want none", spec.EligibleGrants)
 		}
@@ -204,13 +205,13 @@ func TestApplyWorkspaceRequirements_SecretNeverGrants(t *testing.T) {
 	})
 	t.Run("optional not enabled records nothing", func(t *testing.T) {
 		spec := &types.RunPolicySpec{}
-		if events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("optional"), nil); len(events) != 0 || len(spec.EligibleGrants) != 0 {
+		if events, _ := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("optional"), nil); len(events) != 0 || len(spec.EligibleGrants) != 0 {
 			t.Errorf("events=%+v grants=%+v, want neither", events, spec.EligibleGrants)
 		}
 	})
 	t.Run("a non-model agent has nothing to bind to and records nothing", func(t *testing.T) {
 		spec := &types.RunPolicySpec{}
-		if events := srv.applyWorkspaceRequirements(context.Background(), spec, "some-other-agent", wsWith("required"), nil); len(events) != 0 || len(spec.EligibleGrants) != 0 {
+		if events, _ := srv.applyWorkspaceRequirements(context.Background(), spec, "some-other-agent", wsWith("required"), nil); len(events) != 0 || len(spec.EligibleGrants) != 0 {
 			t.Errorf("events=%+v grants=%+v, want neither", events, spec.EligibleGrants)
 		}
 	})
@@ -228,7 +229,7 @@ func TestApplyWorkspaceRequirements_IntegrationSkipsModelHosts(t *testing.T) {
 		"integration:" + integ.ID: {Level: "required", Provenance: "operator_set"},
 	}}}
 	spec := &types.RunPolicySpec{}
-	events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", ws, nil)
+	events, _ := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", ws, nil)
 	if _, ok := apiKeyGrantForHost(spec, "api.anthropic.com"); ok {
 		t.Fatalf("the integration's credential was granted on the model host: %+v", spec.EligibleGrants)
 	}
@@ -267,7 +268,7 @@ func TestApplyWorkspaceRequirements_TrustBoundary(t *testing.T) {
 	srv := New(Config{Secrets: sec})
 	t.Run("scan_seeded required secret records nothing at all", func(t *testing.T) {
 		spec := &types.RunPolicySpec{}
-		events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("scan_seeded"), nil)
+		events, _ := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("scan_seeded"), nil)
 		if len(spec.EligibleGrants) != 0 || len(events) != 0 {
 			t.Fatalf("scan_seeded must never auto-grant a secret (trust boundary): grants=%+v events=%+v",
 				spec.EligibleGrants, events)
@@ -275,7 +276,7 @@ func TestApplyWorkspaceRequirements_TrustBoundary(t *testing.T) {
 	})
 	t.Run("the SAME key as operator_set is an audited skip, never a grant", func(t *testing.T) {
 		spec := &types.RunPolicySpec{}
-		events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("operator_set"), nil)
+		events, _ := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("operator_set"), nil)
 		if len(spec.EligibleGrants) != 0 || len(events) != 1 || events[0].action != "run.requirement.skip" {
 			t.Fatalf("operator_set must be skipped, not granted: grants=%+v events=%+v", spec.EligibleGrants, events)
 		}
@@ -306,11 +307,17 @@ func TestApplyWorkspaceRequirements_WriteNarrowing(t *testing.T) {
 		}
 		return *spec.WorkspaceMounts[0].ReadOnly
 	}
-	srv := New(Config{})
+	// The directory is an operator's: a write the fold grants is held to the
+	// owner of every stored workspace that holds it.
+	st := newOwnerStore()
+	st.put(types.Workspace{ID: wsID, Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: path}}})
+	srv := New(Config{Store: st})
 
 	t.Run("required defaults to read-write", func(t *testing.T) {
 		spec := mkSpec()
-		srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("required"), nil)
+		if _, refusal := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("required"), nil); refusal != nil {
+			t.Fatalf("an operator's Required write was refused: %v", refusal)
+		}
 		if mountRO(spec) {
 			t.Error("a Required write must default to read-write")
 		}
@@ -334,7 +341,9 @@ func TestApplyWorkspaceRequirements_WriteNarrowing(t *testing.T) {
 	t.Run("optional enabled becomes read-write", func(t *testing.T) {
 		spec := mkSpec()
 		sel := map[string]client.WorkspaceSelection{wsID.String(): {WorkspaceID: wsID.String(), EnabledOptional: []string{"write:" + path}}}
-		srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("optional"), sel)
+		if _, refusal := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsWith("optional"), sel); refusal != nil {
+			t.Fatalf("an operator's enabled Optional write was refused: %v", refusal)
+		}
 		if mountRO(spec) {
 			t.Error("an enabled Optional write must become read-write")
 		}
@@ -355,6 +364,73 @@ func TestApplyWorkspaceRequirements_WriteNarrowing(t *testing.T) {
 			t.Errorf("WorkspaceMounts = %+v, want untouched (nothing to narrow)", spec.WorkspaceMounts)
 		}
 	})
+}
+
+// TestApplyWorkspaceRequirements_WriteHeldToMemberWritableRoots: a write:<path>
+// row may not make a member's directory writable outside the member writable
+// roots (WARDYN_USER_WRITABLE_ROOTS). The fold answers for the directory's
+// owner, read from every stored workspace that holds it, so a row another
+// workspace supplies is held to the same roots, and an operator's directory
+// stays writable as before.
+func TestApplyWorkspaceRequirements_WriteHeldToMemberWritableRoots(t *testing.T) {
+	root, project := memberProjectRoot(t)
+	disjoint, _ := memberProjectRoot(t)
+	holder := func(owner string) types.Workspace {
+		return types.Workspace{ID: uuid.New(), OwnedBy: owner,
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: project}}}
+	}
+	// supplier carries the row; it holds the directory only when it is a holder.
+	supplier := func(ws types.Workspace, level string) types.Workspace {
+		ws.Requirements = map[string]types.WorkspaceRequirement{"write:" + project: {Level: level, Provenance: "scan_seeded"}}
+		return ws
+	}
+	member, operator := holder(ownerMemberSub), holder("")
+	bystander := types.Workspace{ID: uuid.New()} // operator-owned, holds no directory
+	for _, tc := range []struct {
+		name       string
+		writable   []string
+		stored     []types.Workspace
+		folded     types.Workspace
+		level      string
+		wantReason string // "" = admitted, and the mount is writable
+	}{
+		{"no writable roots, optional enabled", nil, []types.Workspace{member}, member, "optional", reasonWorkspaceSourceMountNotAllowed},
+		{"no writable roots, required", nil, []types.Workspace{member}, member, "required", reasonWorkspaceSourceMountNotAllowed},
+		{"disjoint writable roots, optional enabled", []string{disjoint}, []types.Workspace{member}, member, "optional", reasonWorkspaceSourceMountNotAllowed},
+		{"disjoint writable roots, required", []string{disjoint}, []types.Workspace{member}, member, "required", reasonWorkspaceSourceMountNotAllowed},
+		{"row supplied by another workspace", nil, []types.Workspace{member, bystander}, bystander, "required", reasonWorkspaceSourceMountNotAllowed},
+		{"an operator and a member both hold it", nil, []types.Workspace{operator, member}, operator, "required", reasonWorkspaceSourceMountNotAllowed},
+		{"no workspace holds it", nil, []types.Workspace{bystander}, bystander, "required", reasonWorkspaceSourceNotOnboarded},
+		{"inside the writable roots", []string{root}, []types.Workspace{member}, member, "optional", ""},
+		{"operator-owned, no writable roots", nil, []types.Workspace{operator}, operator, "required", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newOwnerStore()
+			for _, ws := range tc.stored {
+				st.put(ws)
+			}
+			srv := New(Config{Store: st, UserMounts: runner.UserMountPolicy{Roots: []string{root}, WritableRoots: tc.writable}})
+			ro := true
+			spec := &types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: project, Target: "/home/agent/work", ReadOnly: &ro}}}
+			folded := supplier(tc.folded, tc.level)
+			sel := map[string]client.WorkspaceSelection{folded.ID.String(): {WorkspaceID: folded.ID.String(), EnabledOptional: []string{"write:" + project}}}
+
+			_, refusal := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", []types.Workspace{folded}, sel)
+
+			if tc.wantReason == "" {
+				if refusal != nil || spec.WorkspaceMounts[0].ReadOnlyOrDefault() {
+					t.Fatalf("refusal = %v, read-only = %v; want the write granted", refusal, spec.WorkspaceMounts[0].ReadOnlyOrDefault())
+				}
+				return
+			}
+			if refusal == nil {
+				t.Fatalf("the fold made %s writable for a run; want it refused with %s", project, tc.wantReason)
+			}
+			if refusal.status != http.StatusUnprocessableEntity || refusal.reason != tc.wantReason {
+				t.Errorf("refusal = %d %s (%v), want 422 %s", refusal.status, refusal.reason, refusal, tc.wantReason)
+			}
+		})
+	}
 }
 
 // preflight/launch agreement
@@ -405,7 +481,7 @@ func TestWorkspaceRequirements_PreflightLaunchAgreement(t *testing.T) {
 		t.Fatalf("seed: %d %v", code, err)
 	}
 	wsRefs := h.srv.referencedWorkspaces(ctx, spec)
-	events := h.srv.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
+	events, _ := h.srv.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
 	if len(events) != 1 || events[0].action != "run.requirement.skip" {
 		t.Fatalf("launch-side fold events = %+v, want ONE run.requirement.skip", events)
 	}

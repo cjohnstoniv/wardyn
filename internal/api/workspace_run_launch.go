@@ -618,6 +618,30 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	if werr != nil {
 		return types.AgentRun{}, false, abort(werr)
 	}
+	// The workspace's REQUIRED contract rows ride a session the SAME way they
+	// ride a real run: a confined replay whose install step needs
+	// Artifactory (say) or a declared secret must reach AND authenticate to
+	// it, not merely reach it — without this the held-then-approved request
+	// the operator approves below goes out credential-less and 401s, and the
+	// approve hook (learnVerifyEgress) durably writes a DUPLICATE egress: row
+	// for a host a integration: or secret: row already provides. Folded
+	// through the SAME chokepoint a real run uses (applyWorkspaceRequirements,
+	// runs_create.go) — not a hand-rolled integration:-only loop, which
+	// silently dropped required secret: rows even though the Verify carry
+	// card promises "N required secrets ride proxy-side". nil
+	// selections: only Required rows apply — a confined replay has no per-run
+	// optional opt-in surface. Independent of the LLM mode below — a
+	// requirement credential is never skipped just because this session
+	// happens to be subscription-mounted.
+	//
+	// Folded before the run row is written: the fold refuses a write: row that
+	// would make a member's directory writable past the member writable roots,
+	// and a refused session leaves no run behind.
+	before := len(policy.EligibleGrants)
+	reqEvents, refusal := s.applyWorkspaceRequirements(ctx, &policy, "claude-code", []types.Workspace{ws}, nil)
+	if refusal != nil {
+		return types.AgentRun{}, false, abort(refusal)
+	}
 	created, err := s.createRun(ctx, run)
 	if err != nil {
 		return types.AgentRun{}, false, abort(fmt.Errorf("create record run: %w", err))
@@ -646,23 +670,6 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// they approve.
 	var injections []runner.InjectionGrant
 
-	// The workspace's REQUIRED contract rows ride a session the SAME way they
-	// ride a real run: a confined replay whose install step needs
-	// Artifactory (say) or a declared secret must reach AND authenticate to
-	// it, not merely reach it — without this the held-then-approved request
-	// the operator approves below goes out credential-less and 401s, and the
-	// approve hook (learnVerifyEgress) durably writes a DUPLICATE egress: row
-	// for a host a integration: or secret: row already provides. Folded
-	// through the SAME chokepoint a real run uses (applyWorkspaceRequirements,
-	// runs_create.go) — not a hand-rolled integration:-only loop, which
-	// silently dropped required secret: rows even though the Verify carry
-	// card promises "N required secrets ride proxy-side". nil
-	// selections: only Required rows apply — a confined replay has no per-run
-	// optional opt-in surface. Independent of the LLM mode below — a
-	// requirement credential is never skipped just because this session
-	// happens to be subscription-mounted.
-	before := len(policy.EligibleGrants)
-	reqEvents := s.applyWorkspaceRequirements(ctx, &policy, "claude-code", []types.Workspace{ws}, nil)
 	// Audited the way POST /runs audits them, before any grant is minted.
 	s.recordCreateFolds(ctx, runID, reqEvents)
 	minted, ierr := s.mintRecordAPIKeyInjections(ctx, runID, now, policy.EligibleGrants[before:])

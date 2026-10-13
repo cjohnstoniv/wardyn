@@ -197,7 +197,9 @@ func (s *Server) stepDerivedEgress(f *runFold, rec *foldRecorder) bool {
 // into the spec before the confinement floor and the grade read it: a
 // workspace's integration:<id> requirement is a credential grant the CC3
 // blast-radius floor must see, or invariant 5 is silently bypassed. This is
-// the audit-free half; create records reqEvents once its run id exists.
+// the audit-free half; create records reqEvents once its run id exists. The
+// fold's own refusal (a write: row past the member writable roots) answers at
+// every door.
 func (s *Server) stepRequirements(f *runFold, rec *foldRecorder) bool {
 	ctx := f.r.Context()
 	// Caller-scoped secret names, resolved once: the requirement fold and
@@ -207,7 +209,11 @@ func (s *Server) stepRequirements(f *runFold, rec *foldRecorder) bool {
 	// One workspace at a time, so each one's additions are its own.
 	for _, ws := range f.wsRefs {
 		before := f.spec.Clone()
-		f.reqEvents = append(f.reqEvents, s.applyWorkspaceRequirementsFor(ctx, f.present, &f.spec, f.req.Agent, []types.Workspace{ws}, selections)...)
+		events, refusal := s.applyWorkspaceRequirementsFor(ctx, f.present, &f.spec, f.req.Agent, []types.Workspace{ws}, selections)
+		if refusal != nil {
+			return !runError(refusal.status, refusal.reason, refusal.Error()).write(s, f.w, f.r)
+		}
+		f.reqEvents = append(f.reqEvents, events...)
 		recordRequirementFold(rec, before, f.spec, ws, selections[ws.ID.String()])
 	}
 	return true

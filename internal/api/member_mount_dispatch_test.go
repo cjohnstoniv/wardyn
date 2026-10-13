@@ -171,6 +171,91 @@ func TestCreateRun_MemberSourceOutsideRootsIs422(t *testing.T) {
 	}
 }
 
+// writeRowWorkspace is memberOwnedWorkspace with a write:<path> row on its own
+// directory at level, the row a scan seeds as optional.
+func writeRowWorkspace(owner, path, level string) types.Workspace {
+	return types.Workspace{
+		ID: uuid.New(), OwnedBy: owner, Status: types.WorkspaceScanned,
+		Sources:      []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: path}},
+		Requirements: map[string]types.WorkspaceRequirement{"write:" + path: {Level: level, Provenance: "scan_seeded"}},
+	}
+}
+
+// TestRunDoors_RequirementWriteOutsideMemberWritableRootsIs422: a member who
+// enables the optional write:<path> row on their own directory is refused at
+// every door when the directory is outside the member writable roots, before
+// anything is dispatched. Inside them, the same request binds read-write.
+func TestRunDoors_RequirementWriteOutsideMemberWritableRootsIs422(t *testing.T) {
+	root, project := memberProjectRoot(t)
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
+	body := func(wsID uuid.UUID) string {
+		return `{"agent":"claude-code","task":"do the thing","workspaces":[{"workspace_id":"` + wsID.String() +
+			`","enabled_optional":["write:` + project + `"]}]}`
+	}
+
+	srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
+	wsID := st.put(writeRowWorkspace(ownerMemberSub, project, "optional"))
+	for _, door := range componentDoors {
+		w := doSSO(t, srv, http.MethodPost, door, member, body(wsID))
+		if w.Code != http.StatusUnprocessableEntity || reasonOf(t, w) != reasonWorkspaceSourceMountNotAllowed {
+			t.Errorf("%s: code = %d, want 422 %s; body=%s", door, w.Code, reasonWorkspaceSourceMountNotAllowed, w.Body.String())
+		}
+	}
+	if fr.createCalls != 0 {
+		t.Errorf("CreateSandbox calls = %d, want 0: the refusal must happen before dispatch", fr.createCalls)
+	}
+
+	srv, st, fr = userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}, WritableRoots: []string{root}})
+	wsID = st.put(writeRowWorkspace(ownerMemberSub, project, "optional"))
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member, body(wsID)); w.Code != http.StatusCreated {
+		t.Fatalf("inside the writable roots: code = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	fr.waitForSandbox(t)
+	if m := mountFor(t, fr.lastSpec, composerWorkspaceTarget); m.ReadOnly {
+		t.Errorf("inside the writable roots the bind %q is read-only; the enabled write row must reach the driver", m.Source)
+	}
+}
+
+// recordListStore is recordLLMModeStore plus the two workspace reads the
+// record door makes: its own load, and the list the requirements fold reads a
+// directory's owner from.
+type recordListStore struct{ *recordLLMModeStore }
+
+func (s recordListStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
+	return s.ws, nil
+}
+
+func (s recordListStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
+	return []types.Workspace{s.ws}, nil
+}
+
+// TestRecordDoor_RequirementWriteOutsideMemberWritableRootsIs422: a record
+// session folds only required rows, and has no create door in front of it. A
+// required write:<path> row on a member's directory outside the member
+// writable roots refuses the session with the create door's status and
+// reason, and leaves no run and no sandbox behind.
+func TestRecordDoor_RequirementWriteOutsideMemberWritableRootsIs422(t *testing.T) {
+	root, project := memberProjectRoot(t)
+	h := newHarness(t)
+	ws := writeRowWorkspace(ownerMemberSub, project, "required")
+	fake := newRecordLLMModeStore(ws)
+	cfg := baseTestConfig(h, recordListStore{fake})
+	fr := &fakeRunner{}
+	cfg.Runner = fr
+	cfg.Broker = h.broker
+	cfg.UserMounts = runner.UserMountPolicy{Roots: []string{root}}
+	srv := New(cfg)
+
+	w := do(t, srv, http.MethodPost, "/api/v1/workspaces/"+ws.ID.String()+"/record", adminToken, `{"name":"capture"}`)
+
+	if w.Code != http.StatusUnprocessableEntity || reasonOf(t, w) != reasonWorkspaceSourceMountNotAllowed {
+		t.Fatalf("record: code = %d, want 422 %s; body=%s", w.Code, reasonWorkspaceSourceMountNotAllowed, w.Body.String())
+	}
+	if fr.createCalls != 0 || len(fake.runs) != 0 {
+		t.Errorf("CreateSandbox calls = %d, run rows = %d; want 0 and 0: a refused session leaves nothing behind", fr.createCalls, len(fake.runs))
+	}
+}
+
 // TestLaunchRecordRun_ThreadsMemberMountPosture is the third production wire:
 // an ADMIN-launched record/verify session against a MEMBER-owned workspace
 // still carries the member's roots and the member-authored stamp, because the
