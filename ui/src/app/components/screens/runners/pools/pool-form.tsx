@@ -120,7 +120,7 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
       return;
     }
     const name = values.name;
-    const limits = toLimits(values);
+    const limits = toLimits(values, pool?.limits);
     setSaving(true);
     try {
       if (!pool) await runnerPools.createMine({ name, limits });

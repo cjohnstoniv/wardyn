@@ -188,3 +188,27 @@ describe("runnersBiggest", () => {
     expect(runnersBiggest([]).count).toBe(0);
   });
 });
+
+// An edit sends the pool's limits whole, and the form shows durations in whole minutes, hours or days with
+// an unset default as 1 hour. A duration the person did not touch goes back as it was read.
+describe("an edit keeps the durations it did not touch", () => {
+  const ODD: RunnerPoolLimits = {
+    background: { lifetime: { default_sec: 90, max_sec: 150 } },
+    interactive: { lifetime: { default_sec: 45, max_sec: 86400 }, idle: { default_sec: 0, unlimited: true } },
+    barriers: ["CC1"],
+  };
+
+  it("a rename sends 90 s, 150 s, 45 s and an idle stop that never stops by default exactly as read", () => {
+    const v = fromPool({ name: "odd", limits: ODD });
+    expect(toLimits({ ...v, name: "odder" }, ODD)).toEqual(ODD);
+  });
+
+  it("a duration the person changes converts as typed, the others stay as read", () => {
+    const v = fromPool({ name: "odd", limits: ODD });
+    const l = toLimits({ ...v, bg: { ...v.bg, lifeDn: "3", lifeDu: "minutes", lifeMn: "1", lifeMu: "hours" } }, ODD);
+    expect(l.background?.lifetime).toEqual({ default_sec: 180, max_sec: 3600 });
+    expect(l.interactive).toEqual(ODD.interactive);
+    const never = toLimits({ ...v, it: { ...v.it, idleDn: "15", idleDu: "minutes" } }, ODD);
+    expect(never.interactive?.idle).toEqual({ default_sec: 900, unlimited: true });
+  });
+});
