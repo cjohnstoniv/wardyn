@@ -147,15 +147,14 @@ func TestTemplateFieldRegistryCoversEveryReachableField(t *testing.T) {
 func TestTemplateRulesAreComplete(t *testing.T) {
 	validOmit := []string{templateOmitBaseline, templateOmitRequired, templateOmitOptional}
 	validEmpty := []string{templateEmptySame, templateEmptyValue, templateEmptyAll, templateEmptyNever}
-	validTab := []string{templateTabRunner, templateTabRepoDrives, templateTabToolsImage, templateTabAccess}
 	for _, r := range slices.Concat(templateRequestRules, templatePolicyRules) {
 		if r.Excluded != "" {
-			if r.Why == "" || r.Tab != "" || r.Omitted != "" || r.Pending != "" {
+			if r.Why == "" || r.Omitted != "" || r.Pending != "" {
 				t.Errorf("excluded rule %s carries owner fields or lacks a reason", r.Name)
 			}
 			continue
 		}
-		if !slices.Contains(validOmit, r.Omitted) || !slices.Contains(validEmpty, r.Empty) || !slices.Contains(validTab, r.Tab) || r.Meaning == "" {
+		if !slices.Contains(validOmit, r.Omitted) || !slices.Contains(validEmpty, r.Empty) || r.Meaning == "" {
 			t.Errorf("rule %s is incomplete: %+v", r.Name, r)
 		}
 		if r.Part == "" && r.Name != "inline_policy" {

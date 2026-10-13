@@ -32,7 +32,7 @@ import {
   statusDetailChip,
   statusDetailSentence,
 } from "./run-status-detail";
-import { titleFromTask } from "./new-run/wizard-types";
+import { titleFromTask } from "../../lib/run-title";
 
 
 // Exported for the failure block (run-detail/failure-block.tsx), which states

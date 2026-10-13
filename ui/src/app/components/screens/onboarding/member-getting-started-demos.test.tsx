@@ -56,7 +56,7 @@ const getGrantsMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
   runs: {
     listRuns: (...a: unknown[]) => listRunsMock(...a),
-    createRun: (...a: unknown[]) => createRunMock(...a),
+    createRunWire: (...a: unknown[]) => createRunMock(...a),
     getRun: (...a: unknown[]) => getRunMock(...a),
     killRun: (...a: unknown[]) => killRunMock(...a),
     getGrants: (...a: unknown[]) => getGrantsMock(...a),

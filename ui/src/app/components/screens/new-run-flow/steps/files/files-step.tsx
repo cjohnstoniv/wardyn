@@ -157,7 +157,8 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
   ];
   const keptNote = life.kind === "deleted" ? NR_FILES.NO_EXTRA_DELETED : life.kind === "kept" ? NR_FILES.NO_EXTRA_KEPT(life.grace) : undefined;
   const sizeMib = parseGiB(size.text);
-  const sizeText = sizeMib === undefined ? "0" : mibToGibText(sizeMib);
+  // No size is no number: the summary asks for one, and the map names the drive alone.
+  const sizeText = sizeMib === undefined ? undefined : mibToGibText(sizeMib);
   const settled = noExtra || (items.length > 0 && !!start);
   const empty = !noExtra && items.length === 0;
 
@@ -253,8 +254,8 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
         />
         <MountMap attachments={inCardOrder(attachments, items)} size={sizeText} />
         <FilesSummary
-          tone={settled ? "done" : attempted ? "error" : "prompt"}
-          text={summaryText({
+          tone={settled && sizeText !== undefined ? "done" : attempted ? "error" : "prompt"}
+          text={sizeText === undefined ? NR_FILES.SIZE_ERROR : summaryText({
             size: sizeText,
             noExtra,
             chosen: items.length > 0,

@@ -10,6 +10,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SCMAccessPAT } from "../../lib/types/ado-pat";
+import { ADO } from "../../lib/ado-entra-copy";
 import { ADO_PAT } from "../../lib/ado-pat-copy";
 import { adoCapName } from "../../lib/ado-access-copy";
 import { AdoLaunchNote, AdoRunTokenLine } from "./ado-run-token-line";
@@ -72,6 +73,17 @@ describe("AdoLaunchNote", () => {
     expect(screen.getByText(ADO_PAT.LAUNCH_NOT_CONNECTED)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: ADO_PAT.MEMBER_CONNECT }));
     expect(onConnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("a blocked popup leaves a plain link to the sign-in, which starts the same wait", async () => {
+    const onFallbackClick = vi.fn();
+    render(<AdoLaunchNote access={access({})} connecting={false} onConnect={vi.fn()} blockedUrl="https://wardyn.test/signin" onFallbackClick={onFallbackClick} />);
+    expect(screen.getByText(ADO.CONNECT_POPUP_BLOCKED, { exact: false })).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: ADO.CONNECT_POPUP_OPEN });
+    expect(link).toHaveAttribute("href", "https://wardyn.test/signin");
+    link.addEventListener("click", (e) => e.preventDefault());
+    await userEvent.click(link);
+    expect(onFallbackClick).toHaveBeenCalledTimes(1);
   });
 
   it("a row the console cannot redeem is the admin's to fix: no Connect to press", () => {

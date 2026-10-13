@@ -70,7 +70,7 @@
  *
  * Selectors are getByRole + accessible name, matching the rest of the suite:
  * every literal below exists in ui/src today (re-read 2026-08-18 against
- * demo-screen.tsx, live-approvals.tsx + copy.ts, new-run-screen.tsx and
+ * demo-screen.tsx, live-approvals.tsx + copy.ts, the New Run copy modules and
  * allowed-hosts-card.tsx).
  */
 
@@ -92,10 +92,23 @@ import {
 // (one browser, one context, one recorded page), and every beat reads the page
 // out of stage() inside a test body rather than closing over a module binding.
 import { stage } from "./stage";
-import { APPROVAL_APPEARS, decide, newRunEditPolicy, newRunPanel } from "./funnel";
+import { APPROVAL_APPEARS, decide } from "./funnel";
+import {
+  addRepository,
+  chooseShape,
+  confirmLaunchButton,
+  launchRunButton,
+  nextStep,
+  NEW_RUN_HEADING,
+  newRunHeading,
+  openNameDialog,
+  runTitleField,
+  startGuided,
+} from "./new-run";
+import { bootRun } from "./runs";
 import { sweepStaleState } from "./sweep";
 import { termText } from "../terminal-text";
-import { SPEC_LABEL } from "../policy-source";
+import { NR_TOOLS } from "../../src/app/components/wardyn/copy/new-run/tools";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -224,6 +237,50 @@ async function waitUnlessGone(
       ? `${why} — the run ENDED before this beat could land.`
       : `${why} — the wait timed out (${timeout / 1000}s) with the run still live.`,
   ).toBe("ok");
+}
+
+// ---------------------------------------------------------------------------
+// New Run, the guided flow, for the two real-workspace runs (beats 6 and 8).
+// ---------------------------------------------------------------------------
+
+/**
+ * Start to Review for an Environment sandbox on WORKSPACE: a shell with no
+ * agent, which is all a curl needs and keeps the video keyless. Every click is
+ * silent — the owner's lines for these beats wait until there is something to
+ * decide. `atTools` runs on Tools and access, before Review.
+ */
+async function walkEnvironmentToReview(page: Page, atTools?: () => Promise<void>): Promise<void> {
+  await startGuided(page);
+  await chooseShape(page, "environment");
+  await nextStep(page, NEW_RUN_HEADING.harnesses);
+  await nextStep(page, NEW_RUN_HEADING.files);
+
+  // OPEN: egress-lab is a local-directory workspace, and Files lists only
+  // repositories (a local directory is never offered). The whole video rests on
+  // a run that resolves to THIS workspace, so Always has somewhere to land.
+  // Lead: where does a local-directory workspace attach in the guided flow?
+  await addRepository(page, WORKSPACE);
+  // The main drive's size is prefilled only when the pool offers a default.
+  const mainDriveSize = page.locator("#nr-main-drive-size");
+  if ((await mainDriveSize.count()) > 0 && (await mainDriveSize.inputValue()) === "") await mainDriveSize.fill("10");
+  await nextStep(page, NEW_RUN_HEADING.tools);
+
+  await atTools?.();
+  await nextStep(page, NEW_RUN_HEADING.review);
+}
+
+/** Review's Launch run, the Name dialog's title (ringed once typed) and its Launch. */
+async function launchNamed(page: Page, title: string): Promise<void> {
+  await expect(launchRunButton(page)).toBeEnabled({ timeout: 60_000 });
+  await openNameDialog(page);
+  const titleBox = runTitleField(page);
+  // Fill BEFORE ringing: a ring that lands before the fill sits on an empty
+  // box for its whole visible span — .fill() is instant, so "ring then fill"
+  // never actually shows content inside it (S3: point at content).
+  await titleBox.fill(title);
+  await spotlight(page, titleBox);
+  await spotlight(page, null);
+  await act(page, confirmLaunchButton(page));
 }
 
 // ---------------------------------------------------------------------------
@@ -743,87 +800,43 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   await act(page, page.getByRole("button", { name: "New run" }), "The demo cards have no workspace, so Always was greyed out. Create a new run on our real workspace, where Always is allowed.");
   await expect(page).toHaveURL(/\/runs\/new/, { timeout: 30_000 });
 
-  const titleBox = page.getByLabel("Title");
-  // Fill BEFORE ringing: a ring that lands before the fill sits on an empty
-  // box for its whole visible span — .fill() is instant, so "ring then fill"
-  // never actually shows content inside it (S3: point at content).
-  await titleBox.fill(ALWAYS_RUN_TITLE);
-  await spotlight(page, titleBox);
-  await spotlight(page, null);
+  await expect(newRunHeading(page, NEW_RUN_HEADING.start)).toBeVisible({ timeout: 30_000 });
 
-  // Terminal, not the agent: this video is keyless, and a shell is all a curl
-  // needs. The wizard's own default is an INTERACTIVE agent run
-  // (initialWizardState: runType "agent", mode "interactive"), so the "Start
-  // with" segment is already on screen — this click only swaps which of its two
-  // options is chosen ("Terminal — a shell in the workspace dir"). Real radios:
-  // Seg renders role=radio buttons inside a radiogroup and the accessible name
-  // is the FULL option label, so prefix-match it. Nothing else on this page has
-  // a radio whose name starts with "Terminal".
-  //
-  // The startup field the segment reveals ("Startup command (optional)") is
-  // deliberately LEFT BLANK: the run comes up idle with a shell, which is
-  // exactly what beats 6 and 8 type into. It is also why Title is the only
-  // required field here (new-run-screen's `problem`: needsTask is false for an
-  // interactive agent run), so Launch is live the moment the title is in.
+  // Environment sandbox, not the agent: this video is keyless, and a shell is
+  // all a curl needs. The run comes up idle with a shell, which is exactly what
+  // beats 6 and 8 type into, and the Name dialog's title is the only text it
+  // asks for.
   //
   // Deliberately UNNARRATED from here through the launch and the boot below:
   // the owner's B6 line names only the FIRST click ("Create a new run…"),
   // and the next spoken line waits until there is something to decide.
-  await newRunPanel(page, "run");
-  await act(page, page.getByRole("radio", { name: /^Terminal/ }));
-
-  // The workspace trigger has NO accessible name (the Agent select beside it is
-  // labelled, this one was never wired up), so it is addressed by its
-  // placeholder text — an honest workaround for a real a11y gap, not a test
-  // convenience.
-  await newRunPanel(page, "workspace");
-  await act(page, page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" }));
-  await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE, "i") }).first());
-
-  // EVERYTHING ELSE IS LEFT ALONE, and that is the beat: Confined, the model
-  // host allow-listed (allowedDomains: ["api.anthropic.com"]), unlisted hosts on
-  // "Deny, but ask" (deny_with_review) — the shipped defaults. So example.org
-  // fails FAST here rather than hanging, which is a visible difference from the
-  // demo sandbox above.
   //
-  // The Confinement/Network cards and their on-card "Unlisted hosts" Seg are
-  // GONE — the same rule now lives IN the policy spec, as the Policy card's
-  // shipped default (policy-panel.tsx's Minimal template, which is what a
-  // fresh /runs/new opens on: first_use_approval: "deny_with_review").
-  // Asserted straight off the JSON textarea rather than a radio's
-  // aria-checked, because a changed default would make the approval below
-  // never fire while the take still went green.
-  await newRunEditPolicy(page);
-  await expect(
-    page.getByLabel(SPEC_LABEL),
-    "the default first_use_approval is no longer deny_with_review",
-  ).toHaveValue(/"?first_use_approval"?: "?deny_with_review"?/);
+  // EVERYTHING ELSE IS LEFT ALONE, and that is the beat: the shipped defaults —
+  // the model host allow-listed, unlisted hosts on "Deny, but ask"
+  // (deny_with_review). So example.org fails FAST here rather than hanging,
+  // which is a visible difference from the demo sandbox above. The policy
+  // editor that used to show that default is GONE; "What this run can reach"
+  // on Tools and access states it in words, and a changed default would make
+  // the approval below never fire while the take still went green.
+  await walkEnvironmentToReview(page, async () => {
+    await expect(
+      page.getByText(NR_TOOLS.NET_POLICY_DENY_REVIEW_YOU).or(page.getByText(NR_TOOLS.NET_POLICY_DENY_REVIEW_ADMIN)),
+      "the default first_use_approval is no longer deny_with_review",
+    ).toBeVisible({ timeout: 30_000 });
+  });
 
-  // Silent launch, same reasoning as the Terminal click above.
-  await act(page, page.getByRole("button", { name: "Launch run" }));
+  // Silent launch, same reasoning as above.
+  await launchNamed(page, ALWAYS_RUN_TITLE);
 
   // FAST-FORWARD. POST /runs dispatches SYNCHRONOUSLY (runs_dispatch.go:
   // "dispatch is invoked synchronously from the create-run handler"), so the
-  // navigate to /runs/<id> does not happen until the container is provisioned:
-  // the URL change and the terminal mount are ONE stretch of dead air, and the
-  // URL wait therefore carries SANDBOX_UP, not a minute. Nothing is spoken
-  // inside the span — this whole beat stays unnarrated until there is an
-  // approval to decide.
-  await beat(page, 200);
-  await ffwdStart(page);
-  try {
-    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: SANDBOX_UP });
-    await waitUnlessGone(
-      expect(page.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP }),
-      page.getByText(RUN_OVER).first(),
-      SANDBOX_UP,
-      "the run never came up as an attached terminal",
-    );
-  } finally {
-    await ffwdEnd(page);
-  }
-  // The PTY websocket lands a moment after AttachTerminal mounts — see B0.
-  await beat(page, PACE.read);
+  // Launched screen's View run does not appear until the container is
+  // provisioned: the click, the URL change and the terminal mount are ONE
+  // stretch of dead air. Nothing is spoken inside the span — this whole beat
+  // stays unnarrated until there is an approval to decide.
+  await bootRun(page, "the run never came up as an attached terminal");
+  // The PTY websocket lands a moment after AttachTerminal mounts — bootRun's
+  // closing beat covers it.
   await typeInTerminal(page, REACH_HELD);
 
   // The passive-pending header, NOT the held one — the run's own policy says
@@ -903,40 +916,18 @@ test("beat 8 — a new run, and nothing to click", async () => {
   await caption(page, "Same command.");
   await beat(page, BEAT_SHORT);
 
-  const titleBox = page.getByLabel("Title");
-  // Fill before ringing — see beat 6's identical fix (S3: point at content).
-  await newRunPanel(page, "run");
-  await titleBox.fill(PROOF_RUN_TITLE);
-  await spotlight(page, titleBox);
-  await spotlight(page, null);
-
-  await act(page, page.getByRole("radio", { name: /^Terminal/ }));
-  await newRunPanel(page, "workspace");
-  await act(page, page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" }));
-  await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE, "i") }).first());
+  await expect(newRunHeading(page, NEW_RUN_HEADING.start)).toBeVisible({ timeout: 30_000 });
 
   // Network is DELIBERATELY untouched — that omission IS the beat. The
   // workspace's approved_egress is unioned into this run's allowlist
   // server-side (unionWorkspaceEgress, runs_create.go), so there is nothing to
-  // configure. Silent: the owner's lines for this beat land before the form
-  // and after the run answers, not on the form or the launch itself.
-  await act(page, page.getByRole("button", { name: "Launch run" }));
+  // configure. Silent: the owner's lines for this beat land before the flow
+  // and after the run answers, not on the flow or the launch itself.
+  await walkEnvironmentToReview(page);
+  await launchNamed(page, PROOF_RUN_TITLE);
 
   // FAST-FORWARD, for beat 6's reason: this create dispatches synchronously too.
-  await beat(page, 200);
-  await ffwdStart(page);
-  try {
-    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: SANDBOX_UP });
-    await waitUnlessGone(
-      expect(page.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP }),
-      page.getByText(RUN_OVER).first(),
-      SANDBOX_UP,
-      "the proof run never came up as an attached terminal",
-    );
-  } finally {
-    await ffwdEnd(page);
-  }
-  await beat(page, PACE.read);
+  await bootRun(page, "the proof run never came up as an attached terminal");
   await typeInTerminal(page, REACH_HELD);
 
   // BOTH halves of the claim, asserted. The response proves it got through;
