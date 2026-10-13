@@ -170,6 +170,7 @@ var envDocShellOnly = map[string]bool{
 	// Real configuration, documented in ENV.md's "Setup / operator scripts
 	// (shell-only)" table, with no Go reader by design.
 	"WARDYN_FORCE_STOP_HOST": true, "WARDYN_UP_NO_BROWSER": true,
+	"WARDYN_SETUP_RUNNER_DISK_GB": true, "WARDYN_SETUP_RUNNER_LIMITS": true,
 	"WARDYN_UP_SKIP_RUN_IMAGES": true, "WARDYN_SCM_SSH_HOSTS": true,
 	"WARDYN_GEN_DEPLOY_KEY": true, "WARDYN_DEPLOY_KEY_HOST": true,
 	// install.sh's own three: the one-line installer's version pin, its target

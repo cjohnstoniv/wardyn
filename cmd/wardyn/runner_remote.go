@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -19,8 +20,9 @@ import (
 // pools ("Available to people's pools") is set by an admin or security admin, and may be held for a
 // second person's approval.
 //
-//	wardyn runner remote list [--mine]
+//	wardyn runner remote list [--mine] [--no-limits]
 //	wardyn runner remote show <id>
+//	wardyn runner remote propose <id> [--free-disk GB]
 //	wardyn runner remote set <id> --name "Build host"
 //	wardyn runner remote people set <id> --everyone | --user <subject> --group <group> --role <user-type>
 //	wardyn runner remote people clear <id>
@@ -29,7 +31,7 @@ import (
 // policy; `people set` is the only way to list people, groups and roles.
 func runnerRemoteCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{Use: "remote", Short: "List and manage remote-hosted runners, the Docker host or Kubernetes cluster this server is set up with"}
-	var mine, asJSON bool
+	var mine, asJSON, noLimits bool
 	list := &cobra.Command{Use: "list", Short: "List the remote-hosted runners (admin), or with --mine those you may add to your own user pools",
 		Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 			list := client().ListRemoteRunners
@@ -40,12 +42,16 @@ func runnerRemoteCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if noLimits {
+				out = slices.DeleteFunc(out, func(rr sdk.RemoteRunnerView) bool { return rr.Limits != nil })
+			}
 			if asJSON {
 				return emitJSON(cmd.OutOrStdout(), out)
 			}
 			return printRemoteRunners(cmd.OutOrStdout(), out)
 		}}
 	list.Flags().BoolVar(&mine, "mine", false, "only the ones you may add to your own user pools")
+	list.Flags().BoolVar(&noLimits, "no-limits", false, "only the ones with no limits set, which take no run until an admin sets them")
 	list.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	var showJSON bool
 	show := &cobra.Command{Use: "show <id>", Short: "Show one remote-hosted runner (admin)", Args: cobra.ExactArgs(1),
@@ -60,6 +66,22 @@ func runnerRemoteCmd(client clientFn) *cobra.Command {
 			return printRemoteRunners(cmd.OutOrStdout(), []sdk.RemoteRunnerView{rr})
 		}}
 	show.Flags().BoolVar(&showJSON, "json", false, "emit raw JSON")
+	var freeDisk int64
+	propose := &cobra.Command{Use: "propose <id> [--free-disk GB]", Args: cobra.ExactArgs(1),
+		Short: "Print the limits setup proposes for a remote-hosted runner, half of what it reports, as `wardyn runner set` flags; sets nothing (admin)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rr, err := client().GetRemoteRunner(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			flags, err := proposedLimitFlags(rr.Usage.Reported, freeDisk)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), flags)
+			return err
+		}}
+	propose.Flags().Int64Var(&freeDisk, "free-disk", 0, "GB of disk free for runs on the runner's host, in place of what the runner reports (no amount is ever guessed)")
 	var name string
 	set := &cobra.Command{Use: "set <id> --name <name>", Short: "Rename a remote-hosted runner (admin)", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -82,7 +104,7 @@ func runnerRemoteCmd(client clientFn) *cobra.Command {
 			return printRemoteRunners(cmd.OutOrStdout(), []sdk.RemoteRunnerView{out})
 		}}
 	set.Flags().StringVar(&name, "name", "", "the runner's new name, 1 to 64 characters")
-	cmd.AddCommand(list, show, set, runnerRemotePeopleCmd(client))
+	cmd.AddCommand(list, show, propose, set, runnerRemotePeopleCmd(client))
 	return subcommandGroup(cmd)
 }
 
