@@ -75,8 +75,9 @@ func TestRepoTransportCharset_StoredSourceSeeding(t *testing.T) {
 	ws := types.Workspace{ID: id, Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: "acme/app", Target: "/home/agent/work/my app"}}}
 	srv := New(baseTestConfig(h, &workspaceStoreFake{ws: ws}))
 	spec, req := types.RunPolicySpec{}, createRunRequest{Agent: "claude-code", WorkspaceID: &id}
-	if _, _, code, _, err := seedLegacy(srv, context.Background(), &spec, &req); err == nil || code != http.StatusUnprocessableEntity || !strings.Contains(err.Error(), charsetRefusal) {
-		t.Fatalf("seed = %d, %v; want a 422 naming the charset rule", code, err)
+	if _, _, code, reason, err := seedLegacy(srv, context.Background(), &spec, &req); err == nil || code != http.StatusUnprocessableEntity ||
+		!strings.Contains(err.Error(), charsetRefusal) || reason != reasonWorkspaceSeedSourceTargetInvalid {
+		t.Fatalf("seed = %d, %q, %v; want a 422 naming the charset rule", code, reason, err)
 	}
 }
 
@@ -97,7 +98,9 @@ func TestRepoTransportCharset_DispatchDrops(t *testing.T) {
 	}{
 		{"every structured record dropped, run repo named", "acme/app", []types.WorkspaceRepo{repoWithSpace}, nil, false, "was NOT cloned"},
 		{"a dropped ref, run repo named", "acme/app", []types.WorkspaceRepo{{Repo: "acme/app", Ref: "a b"}}, nil, false, ""},
-		{"one of several dropped", "acme/app", []types.WorkspaceRepo{repoWithSpace, {Repo: "acme/two", Target: "/home/agent/work/two"}}, []string{"/home/agent/work/two"}, false, "was NOT cloned"},
+		{"one of several dropped", "acme/app", []types.WorkspaceRepo{repoWithSpace, {Repo: "acme/two", Target: "/home/agent/work/two"}}, []string{"/home/agent/work/two"}, true, "was NOT cloned"},
+		{"a healthy workspace launch", "acme/app", []types.WorkspaceRepo{{Repo: "acme/app", Target: "/home/agent/work/app", Ref: "main"}}, []string{"/home/agent/work/app"}, true, ""},
+		{"the run's own repo on a reserved target", "acme/app", []types.WorkspaceRepo{{Repo: "acme/app", Target: "/home/agent/drive"}}, nil, false, "was NOT cloned"},
 		{"a legacy repo alone", "acme/app", nil, []string{"/home/agent/work/app"}, true, ""},
 		{"a legacy repo beside a different structured one", "acme/app", []types.WorkspaceRepo{{Repo: "acme/two", Target: "/home/agent/work/two"}}, []string{"/home/agent/work/app", "/home/agent/work/two"}, true, ""},
 	} {
@@ -113,8 +116,8 @@ func TestRepoTransportCharset_DispatchDrops(t *testing.T) {
 			if strings.Join(dests, ",") != strings.Join(tc.wantRepos, ",") {
 				t.Errorf("WARDYN_REPOS dests = %v, want %v", dests, tc.wantRepos)
 			}
-			if got := env["WARDYN_REPO_URL"] == url; got != tc.wantLegacy {
-				t.Errorf("legacy WARDYN_REPO_URL set = %v, want %v (env %v)", got, tc.wantLegacy, env)
+			if got := env["WARDYN_REPO_URL"] == url && env["WARDYN_REPO_SLUG"] == tc.legacy; got != tc.wantLegacy {
+				t.Errorf("legacy WARDYN_REPO_URL and _SLUG set = %v, want %v (env %v)", got, tc.wantLegacy, env)
 			}
 			if _, warns := buildRepoRecords(tc.legacy, tc.repos); tc.wantWarn != "" && !strings.Contains(strings.Join(warns, "\n"), tc.wantWarn) {
 				t.Errorf("warnings = %v, want one saying %q", warns, tc.wantWarn)
