@@ -6,6 +6,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -352,4 +353,112 @@ func TestPG_UserDriveGrantWithinTier_WaitsForTheSubjectsOtherWriter(t *testing.T
 			t.Errorf("writable_override = %v, want the other writer's false kept", got.WritableOverride)
 		}
 	})
+}
+
+// TestPG_UserDriveGrantWithinTier_WaitsForAnOpenDriveEdit: a drive edit that makes a read-only
+// drive writable is held open; the tier write of either verb that drops a read-only override
+// waits for it and is judged against the drive as committed, so it is refused.
+func TestPG_UserDriveGrantWithinTier_WaitsForAnOpenDriveEdit(t *testing.T) {
+	pool := runsPGPool(t)
+	st := store.NewPG(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	fls := false
+	for _, additional := range []bool{false, true} {
+		d := tierDrive(ctx, t, st, false)
+		subject := tierSubject(t, st)
+		g := types.UserDriveGrant{SubjectType: types.CapabilitySubjectUser, Subject: subject, DriveID: d.ID, Enabled: true, WritableOverride: &fls}
+		if _, err := st.AddUserDriveGrant(ctx, g, false); err != nil {
+			t.Fatal(err)
+		}
+		plain := g
+		plain.WritableOverride = nil
+		err := whileOperatorEditIsOpen(ctx, t, pool, func(ctx context.Context, q pgx.Tx) error {
+			_, err := q.Exec(ctx, `UPDATE user_drives SET writable = true WHERE id = $1`, d.ID)
+			return err
+		}, func() error {
+			_, _, err := st.UpsertUserDriveGrantWithinTier(ctx, plain, false, additional)
+			return err
+		})
+		wantWidens(t, fmt.Sprintf("additional=%v: dropping read-only while the drive becomes writable", additional), err, "writable_override")
+		if got := tierGrants(ctx, t, st, subject)[d.ID]; got.WritableOverride == nil || *got.WritableOverride {
+			t.Errorf("additional=%v: writable_override = %v, want the read-only override kept", additional, got.WritableOverride)
+		}
+	}
+}
+
+// TestPG_UserDriveGrantWithinTier_AddOverARowInsertedMeanwhileIsNotWritten: an add beside judged
+// against there being no row for the subject and drive, while a writer that takes no subject lock
+// (the super admin's own add) inserts a read-only row there, is not written over that row.
+func TestPG_UserDriveGrantWithinTier_AddOverARowInsertedMeanwhileIsNotWritten(t *testing.T) {
+	pool := runsPGPool(t)
+	st := store.NewPG(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	d := tierDrive(ctx, t, st, true)
+	subject := tierSubject(t, st)
+	err := whileOperatorEditIsOpen(ctx, t, pool, func(ctx context.Context, q pgx.Tx) error {
+		_, err := q.Exec(ctx, `INSERT INTO user_drive_grants (id, subject_type, subject, drive_id, priority,
+			size_mib_override, writable_override, home_override, enabled, created_by)
+			VALUES ($1, 'user', $2, $3, 0, 0, false, '', true, 'root')`, uuid.New(), subject, d.ID)
+		return err
+	}, func() error {
+		_, _, err := st.UpsertUserDriveGrantWithinTier(ctx, types.UserDriveGrant{
+			SubjectType: types.CapabilitySubjectUser, Subject: subject, DriveID: d.ID, Enabled: true}, false, true)
+		return err
+	})
+	if !errors.Is(err, store.ErrUserDriveGrantChanged) {
+		t.Errorf("add over a row inserted meanwhile = %v, want ErrUserDriveGrantChanged", err)
+	}
+	if got := tierGrants(ctx, t, st, subject)[d.ID]; got.WritableOverride == nil || *got.WritableOverride {
+		t.Errorf("writable_override = %v, want the inserted false kept", got.WritableOverride)
+	}
+}
+
+// TestPG_UserDriveGrantWithinTier_EnablingADisabledExceptionIsWidening: a disabled row's writable
+// exception or directory name is not in force. A security-tier re-send of either verb that turns
+// the row on with it is refused and the row stays disabled; the same re-send that leaves it
+// disabled is written, and so is turning on a row that holds neither.
+func TestPG_UserDriveGrantWithinTier_EnablingADisabledExceptionIsWidening(t *testing.T) {
+	st := store.NewPG(runsPGPool(t))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tru := true
+	for _, additional := range []bool{false, true} {
+		for _, held := range []struct {
+			field string
+			set   func(*types.UserDriveGrant)
+		}{
+			{"writable_override", func(g *types.UserDriveGrant) { g.WritableOverride = &tru }},
+			{"home_override", func(g *types.UserDriveGrant) { g.HomeOverride = "home-" + uuid.NewString()[:8] }},
+		} {
+			what := fmt.Sprintf("additional=%v, a disabled row holding %s", additional, held.field)
+			d := tierDrive(ctx, t, st, false)
+			subject := tierSubject(t, st)
+			g := types.UserDriveGrant{SubjectType: types.CapabilitySubjectUser, Subject: subject, DriveID: d.ID}
+			held.set(&g)
+			if _, err := st.AddUserDriveGrant(ctx, g, true); err != nil {
+				t.Fatalf("%s: seed: %v", what, err)
+			}
+			on := g
+			on.Enabled = true
+			_, _, err := st.UpsertUserDriveGrantWithinTier(ctx, on, true, additional)
+			wantWidens(t, what+": re-sent enabled", err, held.field)
+			if got := tierGrants(ctx, t, st, subject)[d.ID]; got.Enabled {
+				t.Errorf("%s: the row is enabled after the refused re-send", what)
+			}
+			g.Priority = 2
+			if out, _, err := st.UpsertUserDriveGrantWithinTier(ctx, g, true, additional); err != nil || out.Enabled || out.Priority != 2 {
+				t.Errorf("%s: re-sent still disabled = %+v, %v; want it written and still disabled", what, out, err)
+			}
+		}
+		plain := types.UserDriveGrant{SubjectType: types.CapabilitySubjectUser, Subject: tierSubject(t, st), DriveID: tierDrive(ctx, t, st, true).ID}
+		if _, err := st.AddUserDriveGrant(ctx, plain, false); err != nil {
+			t.Fatalf("seed a disabled plain row: %v", err)
+		}
+		plain.Enabled = true
+		if out, _, err := st.UpsertUserDriveGrantWithinTier(ctx, plain, false, additional); err != nil || !out.Enabled {
+			t.Errorf("additional=%v: turning on a row with no exception = %+v, %v; want it enabled", additional, out, err)
+		}
+	}
 }
