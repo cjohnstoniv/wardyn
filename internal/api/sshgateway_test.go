@@ -1568,3 +1568,30 @@ func TestSSHGatewayHealthz_ProxyCommandOnlyWhenSet(t *testing.T) {
 		t.Fatalf("ssh keys with the proxy command unset = %v, want exactly %v", keys, want)
 	}
 }
+
+// sshPeer is the one ConnMetadata method sshAuditAuthFailure reads.
+type sshPeer struct{ ssh.ConnMetadata }
+
+func (sshPeer) RemoteAddr() net.Addr { return &net.TCPAddr{IP: net.IPv4(203, 0, 113, 9), Port: 4444} }
+
+// TestSSHAuditAuthFailure_IsRateBounded: a refused key writes its ssh.authenticate failure row only
+// within the shared auth-failure burst, so a caller with no credential cannot make the trail grow with
+// its attempts; the drops are counted in wardyn_auth_failed_suppressed_total.
+func TestSSHAuditAuthFailure_IsRateBounded(t *testing.T) {
+	audit := &recRecorder{}
+	frozen := time.Now()
+	srv := New(Config{BaseCtx: testBaseCtx(t), Store: runFilesStore{}, Audit: audit, Now: func() time.Time { return frozen }})
+	const attempts = 20
+	for range attempts {
+		srv.sshAuditAuthFailure(context.Background(), sshPeer{}, nil, "unknown", "SHA256:probe", "unregistered key")
+	}
+	if got := len(audit.snapshot()); got != int(authFailedBurst) {
+		t.Errorf("%d refused keys wrote %d ssh.authenticate rows, want the burst of %d", attempts, got, int(authFailedBurst))
+	}
+	srv.metrics.mu.Lock()
+	suppressed := srv.metrics.authFailedSuppressed
+	srv.metrics.mu.Unlock()
+	if want := int64(attempts - int(authFailedBurst)); suppressed != want {
+		t.Errorf("wardyn_auth_failed_suppressed_total = %d, want %d", suppressed, want)
+	}
+}
