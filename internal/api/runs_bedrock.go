@@ -559,10 +559,9 @@ func (s *Server) bedrockSSOAuth(ctx context.Context, runID uuid.UUID, blob awsSS
 	// until it ends, so flipping the switch is a change to NEW dispatches
 	// and never a change under a running sandbox.
 	proxyInjected := s.cfg.AWSSSOProxyInject
-	s.stageAWSSSOFiles(env, awsSSOConfigFileContents(blob), blob, proxyInjected)
-	hosts = append(hosts, ssoEgressHosts(blob.Region, s.cfg.AWSSSOEndpointOverride)...)
-	// An error is carried on the result: the dispatch that built it refuses the
-	// run rather than start it with a credential that is not on record.
+	// Recorded before anything is staged, and an error is carried on the
+	// result: the dispatch that built it refuses the run rather than start it
+	// with a credential that is not on record.
 	maskErr := s.maskSSOBlob(blob, sso)
 	if maskErr == nil && !proxyInjected {
 		// The cache file carries these into the sandbox, so they are this run's
@@ -570,6 +569,10 @@ func (s *Server) bedrockSSOAuth(ctx context.Context, runID uuid.UUID, blob awsSS
 		// and a run that is still going still holds them.
 		maskErr = s.maskDispatchValue(ctx, runID, awsSSOCacheSecrets(blob)...)
 	}
+	if maskErr == nil {
+		s.stageAWSSSOFiles(env, awsSSOConfigFileContents(blob), blob, proxyInjected)
+	}
+	hosts = append(hosts, ssoEgressHosts(blob.Region, s.cfg.AWSSSOEndpointOverride)...)
 	// The POST-refresh blob's own pair: a refresh=true pass is the one allowed
 	// to redeem the rotating refresh token, and the identity the gate
 	// compares must be the one this run will actually present.

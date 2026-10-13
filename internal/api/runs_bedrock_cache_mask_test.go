@@ -6,6 +6,8 @@ package api
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -131,6 +133,33 @@ func TestBedrockSSO_APlaceholderCacheFileAddsNothingForTheRun(t *testing.T) {
 	}
 }
 
+// The values are recorded before anything is staged. A run whose cache file
+// cannot be put on record is refused by the dispatch phase itself, failed, and
+// its sandbox env carries no SSO file at all.
+func TestDispatchWiring_AnUnrecordedCacheFileRefusesTheRunAndStagesNothing(t *testing.T) {
+	s := ssoInjectServer(t, false)
+	s.cfg.MaskRegistry.SetBackend(&gapCovMaskBackend{putRunErr: errors.New("the run's values could not be committed")})
+	st := &mpRefuseStore{integStore: &integStore{govEscapeStore: newGovEscapeStore(&capStore{})}}
+	s.cfg.Store = st
+	ctx := context.Background()
+	run, err := st.CreateRun(ctx, types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: wiringOwner,
+		ModelProviderID: reauthProviderID, State: types.RunStarting})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandboxEnv := map[string]string{}
+	if _, ok := s.resolveLLMInjections(ctx, run, dispatchParams{}, &types.RunPolicySpec{}, sandboxEnv, nil, "",
+		artifactRedirectPlan{}, false, reauthProviderSite(reauthProvider()), true, false, bedrockCredUngraded()); ok {
+		t.Error("the dispatch phase went on with a cache file whose secrets are not on record for the run")
+	}
+	if got, _ := st.GetRun(ctx, run.ID); got.State != types.RunFailed || st.hint != fmt.Sprintf(mpBRMaskFailed, reauthProviderID) {
+		t.Errorf("run = %s %q, want FAILED with the masking refusal", got.State, st.hint)
+	}
+	if staged, found := sandboxEnv[awsSSOConfigEnvVar]; found {
+		t.Errorf("an SSO file was staged for a run that was refused: %q", staged)
+	}
+}
+
 // The same through the masking manifests every deployment keeps, against a real
 // Postgres: the file's secrets are committed to the run's manifest at dispatch,
 // every replica that loads it masks them for the run after the shared
@@ -147,7 +176,12 @@ func TestMaskRegistry_ABedrockSSOCacheFilesSecretsAreInTheRunsManifest(t *testin
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
 	staged := func(run types.AgentRun) error {
-		return a.srv.providerBedrockTransport(ctx, run, &types.RunPolicySpec{}, map[string]string{}, c, blob).bedrock.maskErr
+		env := map[string]string{}
+		err := a.srv.providerBedrockTransport(ctx, run, &types.RunPolicySpec{}, env, c, blob).bedrock.maskErr
+		if _, found := env[awsSSOConfigEnvVar]; found == (err != nil) {
+			t.Errorf("an SSO file staged = %v with the masking error %v: a file is staged exactly when its secrets are on record", found, err)
+		}
+		return err
 	}
 
 	run := l.run()
