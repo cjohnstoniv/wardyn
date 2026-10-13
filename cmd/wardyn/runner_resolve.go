@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -20,6 +21,18 @@ type runnerRef struct {
 	self   *uuid.UUID
 	remote string
 	name   string
+	// unclaimed is set when the runner was read among your own and its owner has not claimed it yet.
+	unclaimed bool
+}
+
+// in reports whether the pool's members include this runner.
+func (r runnerRef) in(members []sdk.RunnerPoolMemberView) bool {
+	for _, m := range members {
+		if (r.self != nil && m.ID == r.self.String()) || (r.self == nil && m.ID == r.remote) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r runnerRef) kind() string {
@@ -45,7 +58,7 @@ func resolveRunner(cmd *cobra.Command, c *sdk.Client, arg string, remotes func()
 	for _, r := range own {
 		if r.Name == arg {
 			id := r.ID
-			found = append(found, runnerRef{self: &id, name: arg})
+			found = append(found, runnerRef{self: &id, name: arg, unclaimed: r.State == types.RunnerUnclaimed})
 		}
 	}
 	rs, err := remotes()

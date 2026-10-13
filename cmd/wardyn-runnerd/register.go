@@ -86,8 +86,8 @@ func newRegisterCommand() *cobra.Command {
 		if err := runneridentity.Save(stateDir, runneridentity.Identity{RunnerID: registered.RunnerID, PrivateKey: key, Fingerprint: fingerprint, OrgURLSHA256: registered.OrgURLSHA256}); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Runner %s is unclaimed.\nFingerprint: %s\n%s\nSign in as its owner and run wardyn runner claim with this state directory.\n",
-			registered.RunnerID, fingerprint, limitsLine(limits))
+		// The limits it registered with stay on screen: with every limit given as a flag nothing else shows them.
+		fmt.Fprintf(cmd.OutOrStdout(), "registered %s; key fingerprint %s\n  %s\n  claim it: wardyn runner claim   (or in Your account → My runner)\n", name, fingerprint, limitsLine(limits))
 		return nil
 	}
 	cmd.Flags().StringVar(&org, "org", "", "organisation public HTTPS URL")

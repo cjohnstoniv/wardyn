@@ -58,7 +58,9 @@ func TestRegisterCreatesPrivateBoundIdentity(t *testing.T) {
 	if err != nil || got.RunnerID != id {
 		t.Fatalf("identity:%+v %v", got, err)
 	}
-	if !strings.Contains(out.String(), got.Fingerprint) || strings.Contains(out.String(), token) {
+	text := out.String()
+	if !strings.Contains(text, "registered laptop; key fingerprint "+got.Fingerprint+"\n  limits: runs at once ") ||
+		!strings.HasSuffix(text, "\n  claim it: wardyn runner claim   (or in Your account → My runner)\n") || strings.Contains(text, token) {
 		t.Fatal("fingerprint absent or token printed")
 	}
 }
