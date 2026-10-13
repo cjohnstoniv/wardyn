@@ -43,7 +43,7 @@ function useAccess() {
     autoCheck: NO_AUTO_PREFLIGHT, doorOpen: door.open, adoDoorOpen: false,
   });
   // While the next answer is out, the last one stays on screen with every host back at Requested.
-  const last = React.useRef<{ access: AccessFacts; harnessSet?: HarnessSetFact }>();
+  const last = React.useRef<{ access: AccessFacts; harnessSet?: HarnessSetFact } | undefined>(undefined);
   const current = checks.preview.result?.access;
   if (current) last.current = { access: current, harnessSet: checks.preview.result?.harness_set };
   return { access: current ?? last.current?.access, harnessSet: last.current?.harnessSet, answered: checks.preview.current && !!current, recheck: checks.invalidateChecks };

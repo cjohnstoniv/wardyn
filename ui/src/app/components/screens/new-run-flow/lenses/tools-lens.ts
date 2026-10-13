@@ -45,7 +45,7 @@ export function hostBadge(host: Pick<AccessHost, "verdict">, answered: boolean):
 export const startsWithRun = (intent: RunIntent, harness: string): boolean =>
   (intent.startup?.kind === "harness" ? intent.startup.tool : harnessIds(intent)[0]) === harness;
 
-export type SetupDoor = "sign_in" | "choose" | "add";
+export type SetupDoor = "sign_in" | "choose" | "add" | "connect";
 
 /** The id Harness setup gives a harness's model-provider control: the Choose door focuses it. */
 export const providerControlId = (tool: string): string => `nr-provider-${tool}`;
@@ -53,13 +53,14 @@ export const providerControlId = (tool: string): string => `nr-provider-${tool}`
 /**
  * The in-place door for a setup item, if this console has one. An add-secret
  * item has the same door wherever its secret came from: a component, an added
- * secret, or a template or Run again that names one. Signing in to anything
- * but a model provider has no door here yet.
+ * secret, or a template or Run again that names one. Signing in to Azure DevOps
+ * is the existing connect popup; any other sign-in but a model provider's has
+ * no door here yet.
  */
 export function setupDoor(item: SetupItem): SetupDoor | undefined {
   const fix = item.fix;
   if (fix?.action === "choose_model_provider") return fix.tool ? "choose" : undefined;
-  if (fix?.action === "sign_in") return fix.target === "model_provider" ? "sign_in" : undefined;
+  if (fix?.action === "sign_in") return fix.target === "model_provider" ? "sign_in" : fix.target === "azure_devops" ? "connect" : undefined;
   if (fix?.action === "add_secret") return fix.secret_name ? "add" : undefined;
   return undefined;
 }

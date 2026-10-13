@@ -244,6 +244,10 @@ func TestSCIMGroupMemberRemoveRevokesTheMoversTokens(t *testing.T) {
 		t.Run(strings.TrimSuffix(fixture, ".json"), func(t *testing.T) {
 			w := newMoverWorld(t)
 			e := w.e
+			// The sessions to be revoked were issued clearly before the removal.
+			for i, c := range w.moverCookies {
+				w.moverCookies[i] = backdated(t, c, clockStepMargin)
+			}
 			for _, c := range w.moverCookies {
 				if !e.cookieWorks(e.a, c) {
 					t.Fatal("control: a session does not work before the removal")
