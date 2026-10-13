@@ -630,6 +630,69 @@ func TestAzureCLI_LaunchStagesProfileNotToken(t *testing.T) {
 	}
 }
 
+// A governance profile that denies Resource Manager withholds the lane's
+// credential, and the door with it. The Entra host the lane opened for that
+// door must close too: with no door in front of it, it would be an ordinary
+// allowed host the person's policy never listed. A host the run's own policy
+// lists stays.
+func TestAzureCLI_CeilingDenyClosesTheHostsTheLaneOpened(t *testing.T) {
+	const id = "6f0c1d2e-0000-4000-8000-0000000c0a0a"
+	login := proxy.AzureLoginHost + ":443"
+	for _, tc := range []struct {
+		name      string
+		own       []string
+		wantLogin []string
+	}{
+		{"the lane's own additions go", nil, nil},
+		{"the same entry in the run's own policy stays", []string{login}, []string{login}},
+		{"another spelling in the run's own policy stays", []string{proxy.AzureLoginHost}, []string{proxy.AzureLoginHost}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newComponentFixture(t)
+			f.srv.cfg.AzureCLIEntra = func(row string) ADOEntraConfig {
+				return ADOEntraConfig{RowID: row, TenantID: "tenant-1", ClientID: "console-app", RedirectURL: adoCallbackURL,
+					LoginClientID: "console-app", LoginTenantID: "tenant-1"}
+			}
+			f.srv.cfg.DefaultPolicy.AllowedDomains = append(slices.Clone(f.srv.cfg.DefaultPolicy.AllowedDomains), tc.own...)
+			f.cs.govProfile = &types.GovernanceProfile{ID: uuid.New(), Name: "no-azure",
+				Ceiling: types.RunPolicySpec{AllowedDomains: tc.own, DeniedDomains: []string{armscope.Host}}}
+			ref := f.org(id, azCLIRowDef(types.ComponentAccessRead, azCLISubA))
+			blob := adoEntraBlob{RefreshToken: "refresh", Scopes: []string{azARMScope}, TenantID: "tenant-1", ClientID: "console-app",
+				Subject: capSub, CapturedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour).UTC()}
+			if err := f.srv.cfg.Secrets.For(capSub).Put(context.Background(), cliSecretName(id, providerEntraPart), mustJSON(blob)); err != nil {
+				t.Fatal(err)
+			}
+			fr := f.srv.cfg.Runner.(*fakeRunner)
+			if w := f.ask(t, componentDoors[0], componentBody(ref)); w.Code != http.StatusCreated {
+				t.Fatalf("create = %d %s, want 201", w.Code, w.Body.String())
+			}
+			fr.waitForSandbox(t)
+			fr.mu.Lock()
+			pc := fr.lastSpec.ProxyConfig
+			fr.mu.Unlock()
+
+			if pc.AzureARM != nil || slices.ContainsFunc(pc.Injection, func(g runner.InjectionGrant) bool { return hostEqual(g.Rule.Host, armscope.Host) }) {
+				t.Fatalf("the profile denies Resource Manager, yet the run kept the door or its credential: %+v %+v", pc.AzureARM, pc.Injection)
+			}
+			if !ceilingDenies(pc.Policy.DeniedDomains, armscope.Host) {
+				t.Errorf("denied domains %v lack %s", pc.Policy.DeniedDomains, armscope.Host)
+			}
+			var got []string
+			for _, entry := range pc.Policy.AllowedDomains {
+				if hostEqual(egressEntryHost(entry), proxy.AzureLoginHost) {
+					got = append(got, entry)
+				}
+			}
+			if !slices.Equal(got, tc.wantLogin) {
+				t.Errorf("allowed entries for the Entra host = %v, want %v (all allowed: %v)", got, tc.wantLogin, pc.Policy.AllowedDomains)
+			}
+			if slices.Contains(pc.Policy.AllowedDomains, armscope.Host+":443") {
+				t.Errorf("the lane's Resource Manager entry outlived its door: %v", pc.Policy.AllowedDomains)
+			}
+		})
+	}
+}
+
 // Dispatch stages the profile and the inert cache, allows the door's two hosts
 // on 443, and authors one TLS-only grant whose snapshot pins the row, the
 // owner, the tenant, the audience, the subscriptions and the access.

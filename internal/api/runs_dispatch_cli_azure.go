@@ -231,6 +231,9 @@ func azureCLIFiles(tenantID string, subscriptions []string, now time.Time) map[s
 // azureCLIPlan is what the lane adds to one run's sidecar configuration.
 type azureCLIPlan struct {
 	gate *proxy.AzureARMGrant
+	// opened is the allowlist entries the lane itself added for its door, and
+	// only those: an entry the run's policy already carried is not one.
+	opened []string
 }
 
 // gateFor is the door's grant while its credential is still one of the run's
@@ -242,6 +245,20 @@ func (pl azureCLIPlan) gateFor(injections []runner.InjectionGrant) *proxy.AzureA
 		return nil
 	}
 	return pl.gate
+}
+
+// closeWithheld takes back the allowlist entries the lane opened when a later
+// phase withheld its credential, and so its door. Both hosts are safe to allow
+// only behind the door: without it the proxy would treat the Entra sign-in
+// host as an ordinary allowed host the run's own policy never listed. An entry
+// the policy carried on its own is not the lane's and stays.
+func (pl azureCLIPlan) closeWithheld(policy *types.RunPolicySpec, injections []runner.InjectionGrant) {
+	if pl.gate == nil || pl.gateFor(injections) != nil {
+		return
+	}
+	policy.AllowedDomains = slices.DeleteFunc(slices.Clone(policy.AllowedDomains), func(entry string) bool {
+		return slices.Contains(pl.opened, entry)
+	})
 }
 
 // authorAzureCLI stages the run's Azure CLI row: the profile and the inert
@@ -308,10 +325,10 @@ func (s *Server) authorAzureCLI(ctx context.Context, run types.AgentRun, cli *az
 	sandboxEnv[azureCLIConfigEnvVar] = encodeArtifactConfig(azureCLIFiles(cfg.TenantID, subs, s.cfg.Now()))
 	sandboxEnv[envAzureTelemetry] = "0"
 	// Port-qualified: the door terminates 443 alone, and refuses a tunnel to either host on any other port.
-	unionAllowedDomains(policy, []string{
+	opened := unionAllowedDomains(policy, []string{
 		net.JoinHostPort(armscope.Host, azureCLIHTTPSPort), net.JoinHostPort(proxy.AzureLoginHost, azureCLIHTTPSPort),
 	})
-	return injections, azureCLIPlan{gate: &proxy.AzureARMGrant{
+	return injections, azureCLIPlan{opened: opened, gate: &proxy.AzureARMGrant{
 		TenantID: cfg.TenantID, Subscriptions: subs, Write: cli.Azure.Access == types.ComponentAccessWrite,
 	}}, true
 }
