@@ -35,8 +35,10 @@ export interface FolderSource {
   workspaceName: string;
   name: string;
   hostPath?: string;
-  /** Where it appears when the person does not move it. */
+  /** Where the dialog offers to place it: its source's own target, else /home/agent/folders/<name>. Sent as the target. */
   defaultPath: string;
+  /** Where the server mounts it when the request names no target: its source's own target, else /home/agent/work. */
+  serverPath: string;
   /** Its workspace's only folder: the request may place it (`workspaces[].target`). */
   single: boolean;
   /** Its workspace's first folder: where a start on the workspace with no repository opens. */
@@ -48,6 +50,12 @@ export interface FolderSource {
 const baseName = (path: string): string => path.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || path;
 const slug = (text: string): string => text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
+/**
+ * The server's mount target for a folder whose source names none (internal/api `composerWorkspaceTarget`).
+ * A request can place only a workspace's one folder, so any other folder appears here or at its source's target.
+ */
+export const SERVER_FOLDER_TARGET = "/home/agent/work";
+
 /** Owner ruling 2026-10-13: a folder appears at /home/agent/folders/<name> unless its source names a place. */
 export const folderPath = (name: string): string => `/home/agent/folders/${slug(name) || "folder"}`;
 
@@ -58,7 +66,9 @@ export function folderSources(workspaces: readonly Workspace[]): FolderSource[] 
       const name = d.path ? baseName(d.path) : w.name;
       return {
         key: `folder:${w.id}:${i}`, workspaceId: w.id, workspaceName: w.name, name, hostPath: d.path,
-        defaultPath: d.target || folderPath(name), single: dirs.length === 1, first: i === 0, writable: d.writable !== false,
+        defaultPath: d.target || folderPath(name), serverPath: d.target || SERVER_FOLDER_TARGET, single: dirs.length === 1, first: i === 0,
+        // The server mounts a folder read-only unless its source says writable.
+        writable: d.writable === true,
         unavailable: w.available_to_you === false ? DENIED.WORKSPACE_NOT_AVAILABLE : undefined,
       };
     });
@@ -140,7 +150,7 @@ export function fileItems(intent: RunIntent, src: ItemSources): FileItem[] {
       const served = src.attachments.filter((a) => a.kind === "folder" && a.workspace_id === ws)[folders.indexOf(folder)]?.target;
       const alone = folder.single && rows.length === 0;
       out.push({
-        key: folder.key, kind: "folder", name: folder.name, path: (alone && entry.target) || served || folder.defaultPath,
+        key: folder.key, kind: "folder", name: folder.name, path: (alone && entry.target) || served || folder.serverPath,
         readOnly: !folder.writable || entry.read_only === true, locked: !folder.writable, pathEditable: alone,
         storedOn: [NR_FILES.FAMILY_HOST_FOLDER], hostPath: folder.hostPath,
         starts: folder.first && f?.attachment === ws && !f.repo && !f.drive_id, canStart: folder.first, workspaceId: ws,
