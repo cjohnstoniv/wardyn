@@ -124,6 +124,7 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request, ado adoHosts
 	}
 
 	seenTargets := make(map[string]int, len(req.Sources))
+	mountTargets := make(map[string]int, len(req.Sources))
 	for i, src := range req.Sources {
 		if msg := validateWorkspaceSource(src, adoServerHosts); msg != "" {
 			return workspaceRequest{}, fmt.Sprintf("sources[%d]: %s", i, storeNamedLocatorRefusal(msg, "source", src.Source, hostsErr))
@@ -136,19 +137,27 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request, ado adoHosts
 		// even possible to run. A repository's EMPTY target (no explicit
 		// choice — the caller relies on the per-attach default) is deliberately
 		// not checked here, same as validatePolicyWorkspaces: the default dest
-		// isn't derived until attach/clone time (buildRepoRecords). A folder's
-		// empty target is known now: every one mounts at composerWorkspaceTarget.
-		target := src.Target
-		if target == "" && src.Type == types.WorkspaceSourceTypeLocalDir {
-			target = composerWorkspaceTarget
+		// isn't derived until attach/clone time (buildRepoRecords).
+		if src.Target != "" {
+			if j, dup := seenTargets[src.Target]; dup {
+				return workspaceRequest{}, fmt.Sprintf("sources[%d]: target %q duplicates sources[%d]", i, src.Target, j)
+			}
+			seenTargets[src.Target] = i
 		}
-		if target == "" {
+		// A folder's empty target is known now: it mounts at composerWorkspaceTarget,
+		// and a launch refuses it beside another folder or a repository there. A scratch
+		// directory at that path is not a mount, so it is left to the check above.
+		mounted := src.Target
+		if mounted == "" && src.Type == types.WorkspaceSourceTypeLocalDir {
+			mounted = composerWorkspaceTarget
+		}
+		if mounted == "" || src.Type == types.WorkspaceSourceTypeEphemeral {
 			continue
 		}
-		if j, dup := seenTargets[target]; dup {
-			return workspaceRequest{}, fmt.Sprintf("sources[%d]: target %q duplicates sources[%d]", i, target, j)
+		if j, dup := mountTargets[mounted]; dup {
+			return workspaceRequest{}, fmt.Sprintf("sources[%d]: target %q duplicates sources[%d]", i, mounted, j)
 		}
-		seenTargets[target] = i
+		mountTargets[mounted] = i
 	}
 	if msg := validateWorkspaceBaseImage(req.BaseImage); msg != "" {
 		return workspaceRequest{}, msg
