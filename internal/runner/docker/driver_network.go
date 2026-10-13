@@ -597,6 +597,9 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 		if perr != nil {
 			continue // not a wardyn agent container we can key teardown on
 		}
+		if c.Labels[runner.LabelRunnerID] != d.cfg.RunnerID {
+			continue // another runner's sandbox, or one this runner did not create
+		}
 		if time.Unix(c.Created, 0).After(cutoff) {
 			continue // too young: a dispatch may still be about to SetSandboxRef
 		}

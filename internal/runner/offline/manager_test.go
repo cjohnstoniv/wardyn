@@ -24,11 +24,21 @@ type localSub struct {
 	stops, kills int
 	statuses     int
 	stopErr      error
-	status       runner.Status
-	agent        runner.Status
+	// foreign is what ProveRunnerSandbox answers: a container the runner did
+	// not create when set.
+	foreign   error
+	provedFor string
+	status    runner.Status
+	agent     runner.Status
 }
 
 func (s *localSub) Name() string { return "docker" }
+func (s *localSub) ProveRunnerSandbox(_ context.Context, _, runnerID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.provedFor = runnerID
+	return s.foreign
+}
 func (s *localSub) StopProxy(context.Context, string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

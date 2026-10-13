@@ -42,7 +42,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 		slog.WarnContext(ctx, "runner relay unavailable: every run create is refused until it can listen", "error", err)
 	}
 	relay := newLocalRelay(ctx, gateway, bridge, err)
-	sub, err := docker.New(docker.Config{ProxyImage: opts.proxyImage, InternalNetwork: opts.network, Record: record, RunnerStateDir: stateDir,
+	sub, err := docker.New(docker.Config{RunnerID: identity.RunnerID.String(), ProxyImage: opts.proxyImage, InternalNetwork: opts.network, Record: record, RunnerStateDir: stateDir,
 		ControlPlaneRelay: relay.Ensure})
 	if err != nil {
 		return runnerRuntime{}, err
