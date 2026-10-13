@@ -438,12 +438,13 @@ func (b *Broker) maskMinted(runID uuid.UUID, minted Minted) error {
 	if b.maskReg == nil {
 		return nil
 	}
-	for what, v := range map[string]string{"token": minted.Token, "known_hosts": minted.KnownHosts} {
-		if v == "" {
+	// Fixed order, token first: a failure stops at a known point.
+	for _, f := range [...]struct{ what, v string }{{"token", minted.Token}, {"known_hosts", minted.KnownHosts}} {
+		if f.v == "" {
 			continue
 		}
-		if err := b.maskReg.Add(runID, []byte(v)); err != nil {
-			return fmt.Errorf("broker: record the minted %s for masking: %w", what, err)
+		if err := b.maskReg.Add(runID, []byte(f.v)); err != nil {
+			return fmt.Errorf("broker: record the minted %s for masking: %w", f.what, err)
 		}
 	}
 	return nil
