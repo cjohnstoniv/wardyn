@@ -29,8 +29,27 @@
 // ado-launch-door.spec.ts's own comment) — neither pin here touches that
 // surface.
 import { createHash, randomBytes } from "node:crypto";
-import { test, expect, ADMIN_TOKEN, TOKEN_KEY, gotoConsole, navTo, navToRoute, sql, goToNewRunPanel } from "./fixtures";
+import {
+  test,
+  expect,
+  ADMIN_TOKEN,
+  TOKEN_KEY,
+  chooseFiles,
+  chooseShape,
+  continueNewRun,
+  gotoConsole,
+  navTo,
+  navToRoute,
+  sql,
+  startGuided,
+} from "./fixtures";
 import { DENIED } from "../src/app/lib/permissions-copy";
+import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
+import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
+import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
+import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
+import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
+import type { Page } from "@playwright/test";
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
@@ -43,6 +62,36 @@ const LISTED_TYPE = "e2e-922-portfolio-manager";
 
 function adoRepoURL(project: string, repo: string): string {
   return `${ORG_BASE_URL}/${project}/_git/${repo}`;
+}
+
+// The Files step is where New Run offers a workspace's repositories, and it offers only the workspaces the
+// caller may launch (`available_to_you`). A repository is listed under the name its URL ends in, so the
+// workspaces below are made with one repository each, named after the workspace.
+const NR_REPO_ORG = "https://dev.azure.com/contoso/nr/_git";
+
+async function openFilesAs(page: Page, token: string): Promise<void> {
+  await page.addInitScript(([key, tok]) => localStorage.setItem(key, tok), [TOKEN_KEY, token]);
+  await gotoConsole(page);
+  await navToRoute(page, "/runs/new");
+  await startGuided(page);
+  await chooseShape(page, "environment");
+  await continueNewRun(page, NR_RUN.TITLE_ENV);
+  await continueNewRun(page, NR_HARNESSES.TITLE);
+  // Registered before Continue: the Files step reads the workspace list when it mounts, and "not offered"
+  // only means something once that answer is in.
+  const listed = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/workspaces" && r.request().method() === "GET");
+  await continueNewRun(page, NR_FILES.TITLE);
+  await listed;
+  await expect(page.getByRole("heading", { name: NR_FILES.REPOS_TITLE })).toBeVisible();
+}
+
+// The listed type can include the repository and reach Review with Launch ready; the sentence never renders.
+async function expectLaunchable(page: Page, repo: string): Promise<void> {
+  await chooseFiles(page, [repo]);
+  await continueNewRun(page, NR_TOOLS.TITLE);
+  await continueNewRun(page, NR_REVIEW.TITLE);
+  await expect(page.getByRole("button", { name: NR_REVIEW.LAUNCH_RUN })).toBeEnabled();
+  await expect(page.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toHaveCount(0);
 }
 
 // seedUserToken mirrors available-to.spec.ts's own helper byte-for-byte
@@ -179,16 +228,10 @@ test.describe("Available to — a person's git provider (#922)", () => {
   });
 });
 
-// New Run's own Launch button, the half this file's earlier round held back
-// (new-run-screen.tsx's `problem` derivation was DO NOT TOUCH while #1228/
-// #1229 — the shared TierPicker/barrier lanes — were still open; both landed
-// on main via batch 08-13, 37ba7e78a). This exercises the "workspace itself
-// carries no allow" reason (capabilityAllowed's existing "workspace" kind,
-// now ALSO wired to Launch, not just the picker's own advisory line) — a
-// REAL backend capability restriction, not the model-provider half
-// (workspace-card.test.tsx / new-run-screen-form.test.tsx already pin that
-// one as a component test, same reasoning as available-to.spec.ts's own
-// "component test, not e2e" note for wire-shaped states).
+// New Run's own Launch path, the half this file's earlier round held back. This exercises the "workspace
+// itself carries no allow" reason: a REAL backend capability restriction, read as the workspace's
+// `available_to_you`. The guided flow offers only a workspace the caller may launch, on the Files step, so
+// the outsider's arm asserts the repository is absent there and the listed type's arm launches with it.
 test.describe("Available to — New Run's Launch button (#922)", () => {
   test.describe.configure({ mode: "serial" });
   const WORKSPACE_KIND_TYPE = "e2e-922-nr-listed";
@@ -199,7 +242,7 @@ test.describe("Available to — New Run's Launch button (#922)", () => {
   test.beforeAll(async ({ request }) => {
     const created = await request.post("/api/v1/workspaces", {
       headers: auth,
-      data: { name: "e2e-922-nr-workspace", sources: [{ type: "ephemeral", target: "/home/agent/work" }] },
+      data: { name: "e2e-922-nr-workspace", sources: [{ type: "repo", source: `${NR_REPO_ORG}/e2e-922-nr-workspace` }] },
     });
     expect(created.status(), await created.text()).toBe(201);
     workspaceId = (await created.json()).id;
@@ -243,33 +286,14 @@ test.describe("Available to — New Run's Launch button (#922)", () => {
     if (workspaceId) await request.delete(`/api/v1/workspaces/${workspaceId}`, { headers: auth });
   });
 
-  test("a caller with no allow for the workspace: Launch is disabled with the canon sentence", async ({ page }) => {
-    await page.addInitScript(([key, tok]) => localStorage.setItem(key, tok), [TOKEN_KEY, seedUserTokenRaw("standard")]);
-    await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
-    await goToNewRunPanel(page, "workspace");
-    await page.getByRole("combobox", { name: "Workspace" }).click();
-    await page.getByRole("option", { name: "e2e-922-nr-workspace" }).click();
-
-    const launch = page.getByRole("button", { name: "Launch run" });
-    await expect(launch).toBeDisabled();
-    await expect(page.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeVisible();
+  test("a caller with no allow for the workspace: its repository is not offered, so it cannot be attached", async ({ page }) => {
+    await openFilesAs(page, seedUserTokenRaw("standard"));
+    await expect(page.getByRole("checkbox", { name: NR_FILES.INCLUDE_ARIA("e2e-922-nr-workspace") })).toHaveCount(0);
   });
 
-  test("the listed type: Launch stays enabled, the sentence never renders", async ({ page }) => {
-    await page.addInitScript(([key, tok]) => localStorage.setItem(key, tok), [TOKEN_KEY, seedUserTokenRaw(WORKSPACE_KIND_TYPE)]);
-    await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
-    await goToNewRunPanel(page, "workspace");
-    await page.getByRole("combobox", { name: "Workspace" }).click();
-    await page.getByRole("option", { name: "e2e-922-nr-workspace" }).click();
-
-    // The title is required (#1922); with it given, nothing else holds Launch.
-    await goToNewRunPanel(page, "run");
-    await page.getByLabel("Title").fill("e2e available");
-    const launch = page.getByRole("button", { name: "Launch run" });
-    await expect(launch).toBeEnabled();
-    await expect(page.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toHaveCount(0);
+  test("the listed type: the repository is offered, Launch stays enabled, the sentence never renders", async ({ page }) => {
+    await openFilesAs(page, seedUserTokenRaw(WORKSPACE_KIND_TYPE));
+    await expectLaunchable(page, "e2e-922-nr-workspace");
   });
 });
 
@@ -288,7 +312,7 @@ test.describe("Available to — a workspace's own per-value restriction (#1267)"
   test.beforeAll(async ({ request }) => {
     const created = await request.post("/api/v1/workspaces", {
       headers: auth,
-      data: { name: "e2e-1267-workspace", sources: [{ type: "ephemeral", target: "/home/agent/work" }] },
+      data: { name: "e2e-1267-workspace", sources: [{ type: "repo", source: `${NR_REPO_ORG}/e2e-1267-workspace` }] },
     });
     expect(created.status(), await created.text()).toBe(201);
     workspaceId = (await created.json()).id;
@@ -326,33 +350,14 @@ test.describe("Available to — a workspace's own per-value restriction (#1267)"
     if (workspaceId) await request.delete(`/api/v1/workspaces/${workspaceId}`, { headers: auth });
   });
 
-  test("a member outside the restriction: Launch is disabled with the canon sentence", async ({ page }) => {
-    await page.addInitScript(([key, tok]) => localStorage.setItem(key, tok), [TOKEN_KEY, seedUserTokenRaw("standard")]);
-    await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
-    await goToNewRunPanel(page, "workspace");
-    await page.getByRole("combobox", { name: "Workspace" }).click();
-    await page.getByRole("option", { name: "e2e-1267-workspace" }).click();
-
-    const launch = page.getByRole("button", { name: "Launch run" });
-    await expect(launch).toBeDisabled();
-    await expect(page.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeVisible();
+  test("a member outside the restriction: the repository is not offered, so it cannot be attached", async ({ page }) => {
+    await openFilesAs(page, seedUserTokenRaw("standard"));
+    await expect(page.getByRole("checkbox", { name: NR_FILES.INCLUDE_ARIA("e2e-1267-workspace") })).toHaveCount(0);
   });
 
-  test("the listed type: Launch stays enabled, the sentence never renders", async ({ page }) => {
-    await page.addInitScript(([key, tok]) => localStorage.setItem(key, tok), [TOKEN_KEY, seedUserTokenRaw(LISTED_TYPE)]);
-    await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
-    await goToNewRunPanel(page, "workspace");
-    await page.getByRole("combobox", { name: "Workspace" }).click();
-    await page.getByRole("option", { name: "e2e-1267-workspace" }).click();
-
-    // The title is required (#1922); with it given, nothing else holds Launch.
-    await goToNewRunPanel(page, "run");
-    await page.getByLabel("Title").fill("e2e available");
-    const launch = page.getByRole("button", { name: "Launch run" });
-    await expect(launch).toBeEnabled();
-    await expect(page.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toHaveCount(0);
+  test("the listed type: the repository is offered, Launch stays enabled, the sentence never renders", async ({ page }) => {
+    await openFilesAs(page, seedUserTokenRaw(LISTED_TYPE));
+    await expectLaunchable(page, "e2e-1267-workspace");
   });
 
   test("an admin still sees it available on the Workspaces list", async ({ page }) => {

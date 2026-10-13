@@ -12,6 +12,17 @@ import {
   type Locator,
   type Page,
 } from "@playwright/test";
+import { RUN_DOCUMENT_KIND, TEMPLATE_API_VERSION } from "../src/app/lib/types/templates";
+import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
+import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
+import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
+import { NR_LAUNCH } from "../src/app/components/wardyn/copy/new-run/launch";
+import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
+import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
+import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
+import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
+import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
+import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 
 // Shared Playwright fixtures for the Wardyn UI e2e suite. Specs run against the
 // seeded test backend booted by scripts/e2e-backend.sh (real wardynd + Postgres +
@@ -192,10 +203,175 @@ export async function navTo(page: Page, label: NavLabel): Promise<void> {
 // that has already installed a failing route intercept would never mount the
 // shell at all. React Router listens to popstate, so pushState + popstate is
 // exactly what a <NavLink> click does.
-// launchRun clicks the wizard's Launch and lands on the run's detail page.
-// #125: a launch that answers 2xx always navigates in the same tick now,
-// warnings or not — there is no longer a held screen to click through, so
-// this is just the click and the wait.
+export async function navToRoute(page: Page, path: string): Promise<void> {
+  await page.evaluate((p) => {
+    window.history.pushState({}, "", p);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, path);
+}
+
+// ---------------------------------------------------------------------------
+// New Run, the guided flow: Start, then Shape, Run, Harnesses, Files, Tools
+// and access, Review, the Name dialog and the Launched screen. Every string is
+// the copy module's, so a wording change breaks nothing here. A spec that is
+// about something other than New Run reaches Review through walkGuidedToReview
+// and launches through launchRun; a spec about one step drives that step itself.
+// ---------------------------------------------------------------------------
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const startsWith = (s: string) => new RegExp(`^${escapeRe(s)}`);
+
+export type NewRunShape = "agent_task" | "environment" | "application";
+export type NewRunMode = "interactive" | "autonomous";
+
+const SHAPE_TITLE: Record<NewRunShape, string> = {
+  agent_task: NR_SHAPE.AGENT_TITLE,
+  environment: NR_SHAPE.ENV_TITLE,
+  application: NR_SHAPE.APP_TITLE,
+};
+const RUN_TITLE: Record<NewRunShape, string> = {
+  agent_task: NR_RUN.TITLE_AGENT,
+  environment: NR_RUN.TITLE_ENV,
+  application: NR_RUN.TITLE_APP,
+};
+// The footer's one primary action: "Continue to <step>", and "Review run" from the last step.
+const CONTINUE = new RegExp(`^(${escapeRe(NR_SHARED.CONTINUE_TO(""))}.+|${escapeRe(NR_SHARED.REVIEW_RUN)})$`);
+
+/** A screen's h1: focus moves to it on every screen change, so it is the "arrived" signal. */
+export const newRunHeading = (page: Page, title: string): Locator => page.getByRole("heading", { name: title, level: 1 });
+
+/** Opens New Run from the shell's button, as a person does, and waits for the Start screen. */
+export async function openNewRun(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "New run" }).click();
+  await expect(newRunHeading(page, NR_START.TITLE)).toBeVisible();
+}
+
+/** Start screen, "Start guided setup": lands on Shape. */
+export async function startGuided(page: Page): Promise<void> {
+  await page.getByRole("button", { name: NR_START.GUIDED_FOOT }).click();
+  await expect(newRunHeading(page, NR_SHAPE.TITLE)).toBeVisible();
+}
+
+export async function chooseShape(page: Page, shape: NewRunShape): Promise<void> {
+  await page.getByRole("radio", { name: startsWith(SHAPE_TITLE[shape]) }).click();
+}
+
+/** The footer's primary action, then the next screen's heading as the arrived signal. */
+export async function continueNewRun(page: Page, nextHeading: string): Promise<void> {
+  await page.getByRole("button", { name: CONTINUE }).click();
+  await expect(newRunHeading(page, nextHeading)).toBeVisible();
+}
+
+export async function chooseRunMode(page: Page, mode: NewRunMode): Promise<void> {
+  const label = mode === "autonomous" ? NR_RUN.MODE_AUTONOMOUS : NR_RUN.MODE_INTERACTIVE;
+  await page.getByRole("radio", { name: startsWith(label) }).click();
+}
+
+/** Harnesses step: one harness (the first the roster offers), and an Autonomous run's task. */
+export async function addHarness(page: Page, task?: string): Promise<void> {
+  await page.getByRole("button", { name: NR_HARNESSES.ADD_HARNESS, exact: true }).click();
+  if (task !== undefined) await page.locator("#nr-task").fill(task);
+}
+
+/**
+ * Files step: "No extra files" when `repos` is empty, otherwise each repository ticked and the first one
+ * marked "Starts here". An untouched main drive size is filled, since a run with no size is not complete.
+ */
+export async function chooseFiles(page: Page, repos: readonly string[] = []): Promise<void> {
+  if (repos.length === 0) {
+    await page.getByRole("radio", { name: startsWith(NR_FILES.NO_EXTRA) }).check();
+  } else {
+    for (const repo of repos) await page.getByRole("checkbox", { name: NR_FILES.INCLUDE_ARIA(repo) }).check();
+    await page.getByRole("radio", { name: new RegExp(`${escapeRe(repos[0])}.*${escapeRe(NR_FILES.STARTS_HERE)}`) }).check();
+  }
+  const size = page.locator("#nr-main-drive-size");
+  if ((await size.count()) > 0 && (await size.inputValue()) === "") await size.fill("10");
+}
+
+export interface GuidedPlan {
+  /** Default "environment": it needs no harness, task or command. */
+  shape?: NewRunShape;
+  /** An agent task's mode; default "interactive". */
+  mode?: NewRunMode;
+  /** An application's command. */
+  command?: string;
+  /** An Autonomous run's task. */
+  task?: string;
+  /** Repository names to include on Files; none means "No extra files". */
+  repos?: readonly string[];
+}
+
+/**
+ * From the Start screen to the Files step with the fewest choices a complete run needs, nothing chosen on
+ * Files yet. A spec about the Files step drives it from here.
+ */
+export async function walkGuidedToFiles(page: Page, plan: GuidedPlan = {}): Promise<void> {
+  const shape = plan.shape ?? "environment";
+  const mode = plan.mode ?? "interactive";
+  await startGuided(page);
+  await chooseShape(page, shape);
+  await continueNewRun(page, RUN_TITLE[shape]);
+  if (shape === "agent_task") await chooseRunMode(page, mode);
+  if (shape === "application") await page.getByLabel(NR_RUN.COMMAND_LABEL).fill(plan.command ?? "echo e2e");
+  await continueNewRun(page, NR_HARNESSES.TITLE);
+  if (shape === "agent_task") await addHarness(page, mode === "autonomous" ? (plan.task ?? "e2e task") : undefined);
+  await continueNewRun(page, NR_FILES.TITLE);
+}
+
+/** From the Start screen to Review. Stops there, so a spec can read the page, change a setting or launch. */
+export async function walkGuidedToReview(page: Page, plan: GuidedPlan = {}): Promise<void> {
+  await walkGuidedToFiles(page, plan);
+  await chooseFiles(page, plan.repos);
+  await continueNewRun(page, NR_TOOLS.TITLE);
+  await continueNewRun(page, NR_REVIEW.TITLE);
+}
+
+/** Start's JSON door: paste a run document (the intent only), validate it and continue to Review. */
+export async function reviewRunDocument(page: Page, intent: Record<string, unknown>): Promise<void> {
+  await page.getByRole("button", { name: NR_START.DOC_JSON }).click();
+  const doc = { api_version: TEMPLATE_API_VERSION, kind: RUN_DOCUMENT_KIND, intent };
+  await page.getByLabel(NR_DOCUMENT.EDITOR_ARIA(NR_DOCUMENT.FORMAT_JSON)).fill(JSON.stringify(doc));
+  await page.getByRole("button", { name: NR_DOCUMENT.VALIDATE }).click();
+  await page.getByRole("button", { name: NR_DOCUMENT.CONTINUE_REVIEW }).click();
+  await expect(newRunHeading(page, NR_REVIEW.TITLE)).toBeVisible();
+}
+
+/**
+ * Answers New Run's own preflight clear. Review keeps Launch shut until the server's check passes, and
+ * the hermetic backend's real answer (no model providers, no barrier) can hold it, so a case about what a
+ * LAUNCH does answers the check itself.
+ */
+export async function mockPreflightClear(page: Page): Promise<void> {
+  await page.route("**/api/v1/runs/preflight", (route) =>
+    route.fulfill({ json: { enforced_confinement_class: "CC1", setup_items: [] } }),
+  );
+}
+
+/** Review's Launch run, which opens the Name dialog. */
+export async function openLaunchDialog(page: Page): Promise<Locator> {
+  await page.getByRole("button", { name: NR_REVIEW.LAUNCH_RUN }).click();
+  const dialog = page.getByRole("dialog", { name: NR_LAUNCH.TITLE });
+  await expect(dialog).toBeVisible();
+  return dialog;
+}
+
+/** Names the run in the dialog and presses Launch. The dialog stays open on a refusal. */
+export async function submitLaunch(page: Page, title = "e2e run"): Promise<Locator> {
+  const dialog = await openLaunchDialog(page);
+  await dialog.getByLabel(NR_LAUNCH.TITLE_LABEL).fill(title);
+  await dialog.getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true }).click();
+  return dialog;
+}
+
+/** Launches from Review and follows "View run" to the run's detail page. */
+export async function launchRun(page: Page, title = "e2e run"): Promise<void> {
+  await submitLaunch(page, title);
+  await page.getByRole("button", { name: NR_LAUNCH.VIEW_RUN }).or(page.getByRole("link", { name: NR_LAUNCH.VIEW_RUN })).click();
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/, { timeout: 15_000 });
+}
+
+// LEGACY: the old four-panel wizard's helpers. new-run.spec.ts (E10b) is their last caller; delete
+// this block with that spec at the cutover.
 /** New Run's four panels (#1922). */
 export type NewRunPanel = "run" | "workspace" | "access" | "policy";
 
@@ -229,17 +405,6 @@ export async function editNewRunPolicy(page: Page): Promise<Locator> {
   return source;
 }
 
-export async function launchRun(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Launch run" }).click();
-  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/, { timeout: 15_000 });
-}
-
-export async function navToRoute(page: Page, path: string): Promise<void> {
-  await page.evaluate((p) => {
-    window.history.pushState({}, "", p);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }, path);
-}
 
 // #1200 compact cards: every CollapsibleCard on Admin Settings/Your account
 // (collapsible-card.tsx) starts collapsed, so a spec that reads a card's

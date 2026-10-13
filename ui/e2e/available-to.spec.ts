@@ -9,7 +9,23 @@
 // list refused), and on a model provider (the editor asking). Each write is
 // read back from the wire, not only from the screen.
 import { createHash, randomBytes } from "node:crypto";
-import { test, expect, ADMIN_TOKEN, TOKEN_KEY, expandCard, gotoConsole, navTo, navToRoute, sql } from "./fixtures";
+import {
+  test,
+  expect,
+  ADMIN_TOKEN,
+  TOKEN_KEY,
+  addHarness,
+  chooseShape,
+  continueNewRun,
+  expandCard,
+  gotoConsole,
+  navTo,
+  navToRoute,
+  sql,
+  startGuided,
+} from "./fixtures";
+import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
+import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { AVAILABILITY, IMAGES } from "../src/app/lib/availability-copy";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR } from "../src/app/lib/model-providers-copy";
@@ -314,12 +330,12 @@ test.describe("Available to — the person's New Run picker (G7)", () => {
     if (grantId) await request.delete(`/api/v1/permissions/grants/${grantId}`, { headers: auth });
   });
 
-  // The New Run agent picker's options, as the holder of token sees them.
+  // The Harnesses step's picker options, as the holder of token sees them.
   //
-  // Until the screen's own GET /setup/status lands, the picker shows its
-  // built-in fallback list, which names Codex CLI whatever the server says. So
-  // the options are read only once every /setup/status request made since the
-  // screen opened has finished: the list under test is then the server's.
+  // The step offers only the roster GET /setup/status sends, and Add a harness
+  // stays disabled until it lands. The options are still read only once every
+  // /setup/status request made since the screen opened has finished, so the
+  // list under test is the server's final answer.
   async function agentOptions(page: Page, token: string): Promise<string[]> {
     await page.addInitScript(([key, tok]) => localStorage.setItem(key, tok), [TOKEN_KEY, token]);
     await gotoConsole(page);
@@ -335,15 +351,15 @@ test.describe("Available to — the person's New Run picker (G7)", () => {
     page.on("requestfinished", done);
     page.on("requestfailed", done);
     await navToRoute(page, "/runs/new");
-    const picker = page.getByRole("combobox", { name: "Agent" });
+    await startGuided(page);
+    await chooseShape(page, "agent_task");
+    await continueNewRun(page, NR_RUN.TITLE_AGENT);
+    await continueNewRun(page, NR_HARNESSES.TITLE);
+    await addHarness(page);
+    const picker = page.locator("#nr-harness-0");
     await expect(picker).toBeVisible();
     await expect.poll(() => finished > 0 && inflight.size === 0).toBe(true);
-    await picker.click();
-    const options = page.getByRole("option");
-    await expect(options.first()).toBeVisible();
-    const names = await options.allInnerTexts();
-    await page.keyboard.press("Escape");
-    return names;
+    return picker.locator("option").allInnerTexts();
   }
 
   test("a person outside the list never sees the agent; the rest of the roster is still offered", async ({ page }) => {
