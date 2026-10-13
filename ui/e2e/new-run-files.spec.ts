@@ -195,7 +195,9 @@ test.describe("New Run, Files: the main drive", () => {
     await toFiles(page);
     await sizeInput(page).fill("");
     await sizeInput(page).blur();
-    await expect(page.getByText(NR_FILES.SIZE_ERROR)).toBeVisible();
+    // Under the field, and in the summary, which asks for the size too.
+    await expect(page.getByText(NR_FILES.SIZE_ERROR).first()).toBeVisible();
+    await expect(page.getByTestId("nr-files-summary")).toHaveText(NR_FILES.SIZE_ERROR);
     await next(page, NR_SHARED.STEP_TOOLS);
     await expect(sizeInput(page)).toBeFocused();
     await expect(page).toHaveURL(/step=files/);
