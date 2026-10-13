@@ -599,6 +599,36 @@ func TestClamp_AllowedMethods(t *testing.T) {
 	if hasWarn(warns, "allowed_methods") {
 		t.Errorf("unexpected allowed_methods warning with no ceiling opinion: %v", warns)
 	}
+
+	// A proposal that leaves nothing the proxy would read (it trims, upper-cases and drops blanks, and
+	// reads an empty set as every method) takes the ceiling's list, as the empty proposal does.
+	blankCeiling := operatorCeiling(t)
+	blankCeiling.AllowedMethods = []string{"GET", " "}
+	for _, tc := range []struct {
+		name     string
+		ceiling  types.RunPolicySpec
+		proposed []string
+		dropped  string
+	}{
+		{"disjoint", ceiling, []string{"DELETE", "put"}, "dropped 2 method"},
+		{"unknown token", ceiling, []string{"FROB"}, "dropped 1 method"},
+		{"blank proposal entries", ceiling, []string{"", "  "}, "dropped 2 method"},
+		{"a blank entry the ceiling also holds", blankCeiling, []string{" "}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, warns := Clamp(types.RunPolicySpec{AllowedMethods: tc.proposed}, tc.ceiling, types.GovernanceLimits{})
+			if !slices.Equal(got.AllowedMethods, tc.ceiling.AllowedMethods) || len(normMethods(got.AllowedMethods)) == 0 {
+				t.Fatalf("allowed_methods = %q, want the ceiling's %q", got.AllowedMethods, tc.ceiling.AllowedMethods)
+			}
+			if !hasWarn(warns, "allowed_methods restricted") || (tc.dropped != "" && !hasWarn(warns, tc.dropped)) {
+				t.Errorf("warnings = %v, want the restriction named (and %q)", warns, tc.dropped)
+			}
+			got.AllowedMethods[0] = "DELETE"
+			if tc.ceiling.AllowedMethods[0] != "GET" {
+				t.Error("the result shares the ceiling's list")
+			}
+		})
+	}
 }
 
 // TestClamp_AllowedMethodsOverlapAndSilentCeiling pins the two readings a change to the method clamp
