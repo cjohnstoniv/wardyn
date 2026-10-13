@@ -5,6 +5,7 @@ package api
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"time"
@@ -579,7 +580,13 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 	if f.queued && f.place.pooled && req.Placement == types.PlacementRemote {
 		req.Placement = types.PlacementLocal
 		_, local := s.localPlacementRefusal(f.r, req, true, f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
-		f.place.noLocal = local != nil && local.status < http.StatusInternalServerError
+		// A read that failed answers nothing (a server error carries its error, not a status): the launch
+		// then behaves as one with nothing recorded.
+		failed := local != nil && (local.err != nil || local.status >= http.StatusInternalServerError)
+		f.place.noLocal = local != nil && !failed
+		if failed {
+			slog.WarnContext(f.r.Context(), "wardynd: read a waiting run's local eligibility; the queue may offer it a runner of the person's own", slog.Any("err", local.err))
+		}
 	}
 	return true
 }
