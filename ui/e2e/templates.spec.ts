@@ -23,14 +23,18 @@ import { NR_TEMPLATES as T } from "../src/app/components/wardyn/copy/new-run/tem
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
 import { TEMPLATE_REFUSAL } from "../src/app/lib/template-refusals";
 import type { Template, TemplateList, TemplatePublish, TemplateSummary } from "../src/app/lib/types/templates";
+import { aheadByHours } from "../src/app/lib/test-clock";
 
 const ME_ONLY: TemplatePublish = { org: false, groups: [], groups_unverified: false };
 const PLATFORM = "g-platform";
 const intent = { shape: "environment", experience: "interactive", no_repositories_or_drives: true };
 
+// Relative to the run of the test: a literal date ages into a different "saved … ago".
+const SAVED_AT = aheadByHours(-48);
+
 const summary = (over: Partial<TemplateSummary> & Pick<TemplateSummary, "id" | "name">): TemplateSummary => ({
   scope: "person", kind: "template", revision: 1, coverage: "full", includes: ["runner"], fields: [], needs_setup: [],
-  writable: true, updated_at: "2026-10-10T09:00:00Z", ...over,
+  writable: true, updated_at: SAVED_AT, ...over,
 });
 const NIGHTLY = summary({ id: "a0000000-0000-4000-8000-000000000001", name: "Nightly tests", revision: 2, includes: ["runner", "tools_image"] });
 const WEEKLY = summary({ id: "a0000000-0000-4000-8000-000000000002", name: "Weekly report" });
@@ -394,7 +398,7 @@ test.describe("Save as template and Save as policy", () => {
 
 test.describe("Start from a saved template and Run again", () => {
   const RUN_ID = "b0000000-0000-4000-8000-000000000001";
-  const PREVIOUS = { run_id: RUN_ID, title: "Fix the flaky retry", shape: "environment", created_at: "2026-10-11T08:00:00Z" };
+  const PREVIOUS = { run_id: RUN_ID, title: "Fix the flaky retry", shape: "environment", created_at: aheadByHours(-24) };
 
   async function startFrom(page: Page, source: string) {
     await gotoConsole(page);
