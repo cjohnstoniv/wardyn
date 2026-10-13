@@ -285,6 +285,17 @@ func TestGovCovApplyRoleMappingDelete(t *testing.T) {
 		}
 	})
 
+	// A change held before the acknowledged effect was stored carries none: its acknowledgement covers
+	// no known effect, so the approval is stale and nothing is written.
+	t.Run("an acknowledged change with no stored effect is stale", func(t *testing.T) {
+		s := govCovAccessServer(t, &govCovStore{}, nil)
+		q := &govCovQuerier{}
+		_, err := s.applyRoleMappingDelete(approver("ops-group"), q, govCovDeleteChange(true), rows, userTypes)
+		if !errors.Is(err, store.ErrGovernanceChangeStale) || len(q.seen) != 0 {
+			t.Errorf("error = %v after %v, want ErrGovernanceChangeStale and no statement", err, q.seen)
+		}
+	})
+
 	t.Run("a failing delete statement is a plain error", func(t *testing.T) {
 		s := govCovAccessServer(t, &govCovStore{}, nil)
 		boom := errors.New("pg: down")
