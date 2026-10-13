@@ -62,6 +62,7 @@ import {
   SANDBOX_UP,
   WALK_PROVIDER,
   dexSignIn,
+  launchFromReview,
   makeMemberActionable,
   modelAccess,
   openLoginPane,
@@ -69,6 +70,8 @@ import {
   putProvider,
   seen,
   signInThroughPane,
+  viewLaunchedRun,
+  walkNewRunToReview,
 } from "./helpers";
 
 test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TEST_K8S=1 (scripts/kind-sso-walk.sh)");
@@ -104,16 +107,14 @@ function proxyPodIP(runID: string): string {
   }
 }
 
-/** Launch an autonomous run from the New Run form and return its id as soon
- *  as the launch has navigated — without waiting for it to run, so a member's
- *  three runs are in flight together. */
+/** Launch an autonomous run through New Run and return its id as soon as the
+ *  launch has reached the run page — without waiting for it to run, so a
+ *  member's three runs are in flight together. */
 async function launchRun(page: Page, title: string): Promise<string> {
   await page.goto("/runs/new");
-  await page.getByRole("combobox", { name: "Title" }).fill(title);
-  await page.getByRole("radio", { name: /^Autonomous/ }).click();
-  await page.locator("#nr-task").fill("Reply with the single word: ready.");
-  await page.getByRole("button", { name: /^Launch/ }).click();
-  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/, { timeout: SANDBOX_UP });
+  await walkNewRunToReview(page, { task: "Reply with the single word: ready." });
+  await launchFromReview(page, title);
+  await viewLaunchedRun(page);
   return new URL(page.url()).pathname.split("/").pop() ?? "";
 }
 

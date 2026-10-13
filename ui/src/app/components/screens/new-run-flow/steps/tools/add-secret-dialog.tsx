@@ -14,7 +14,7 @@ import type { SecretOverride } from "../../../../../lib/types/new-run-contract";
 import { Input } from "../../../../ui/input";
 import { CUSTOM_COMPONENT as CC } from "../../../../wardyn/copy/components";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
-import { envNameError, hostError } from "../../../new-run/custom-component-form-model";
+import { envNameError, hostError } from "../../checks/custom-component-form-model";
 import { residentSecretRef } from "./catalogue-edits";
 import { SELECT_CLASS, ToolDialog, ToolField } from "./tool-dialog";
 

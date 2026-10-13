@@ -78,8 +78,8 @@ vi.mock("../../../lib/api/providers", () => ({
 }));
 vi.mock("../../../lib/api/runs", () => ({
   // The demo step's useDemoRuns calls getRun (reload re-attach) + killRun (end) in
-  // addition to createRun; stub all three so the lazily-loaded step mounts cleanly.
-  runs: { createRun: vi.fn(), getRun: vi.fn(), killRun: vi.fn() },
+  // addition to createRunWire; stub all three so the lazily-loaded step mounts cleanly.
+  runs: { createRunWire: vi.fn(), getRun: vi.fn(), killRun: vi.fn() },
 }));
 // The connection step's cards derive from the SetupStatus/site-config/secrets
 // mocks above — there is no separate GET /integrations fetch to stub any more

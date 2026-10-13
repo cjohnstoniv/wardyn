@@ -1066,6 +1066,28 @@ func TestAdmittedProjectionAbsentInLegacyOpenMode(t *testing.T) {
 	}
 }
 
+// TestCloneTargetProjectedInLegacyOpenMode: where a clone lands needs no
+// provider row, so both reads carry it with no provider configured. New Run's
+// Files step offers it as the repository's mount path; without it a person on
+// a stock install would have to type one.
+func TestCloneTargetProjectedInLegacyOpenMode(t *testing.T) {
+	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
+	admin := admitAdminSession(t)
+	id := st.put(types.Workspace{Sources: []types.WorkspaceSource{
+		{Type: types.WorkspaceSourceTypeRepo, Source: "octocat/Hello-World"},
+	}})
+
+	for _, path := range []string{"/api/v1/workspaces", "/api/v1/workspaces/" + id.String()} {
+		got := doSSO(t, srv, http.MethodGet, path, admin, "").Body.String()
+		if !strings.Contains(got, `"clone_target":"/home/agent/work/Hello-World"`) {
+			t.Errorf("%s = %s, want the default clone target in legacy open mode", path, got)
+		}
+		if strings.Contains(got, `"admitted"`) {
+			t.Errorf("%s = %s, must carry no admitted key in legacy open mode", path, got)
+		}
+	}
+}
+
 // TestAdmittedIsNeverTakenFromAWriteBody: the projection is the server's, so a
 // client round-tripping a GET cannot persist a provider verdict.
 func TestAdmittedIsNeverTakenFromAWriteBody(t *testing.T) {
