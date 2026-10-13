@@ -28,11 +28,39 @@ func (e *queueEnv) settles(id uuid.UUID) types.AgentRun {
 	return got
 }
 
-// The queue offers a waiting run only the runners its start would keep. Two of a person's runners: a
-// enforces Wall and is full, b enforces only Fence and is idle. A Wall launch waits for a; it is never
-// promoted onto b and ended there, and it starts on a once a has room.
-func TestPG_WaitingRunIsNotEndedForARunnerThatCannotEnforceItsBarrier(t *testing.T) {
-	e := newQueueEnv(t)
+// endOccupant ends the run a test inserted RUNNING on runner (a self-hosted runner's id, or a
+// remote-hosted runner's), as the server ends any run, so the freed place kicks the queue. The occupant
+// is inserted, never launched: no dispatch moves its state under the swap.
+func (e *queueEnv) endOccupant(runner string) {
+	e.t.Helper()
+	ctx := context.Background()
+	var id uuid.UUID
+	if err := e.pool.QueryRow(ctx, `SELECT id FROM agent_runs WHERE state = 'RUNNING' AND $1 IN (runner_id::text, runner_pool_executor)`, runner).Scan(&id); err != nil {
+		e.t.Fatalf("the occupant of %s: %v", runner, err)
+	}
+	if ok, err := e.srv.casRunState(ctx, id, types.RunRunning, types.RunCompleted); err != nil || !ok {
+		e.t.Fatalf("end the occupant of %s: %v %v", runner, ok, err)
+	}
+}
+
+// waitsFor launches body, which must wait, and returns the run still QUEUED for its runners after a sweep.
+func (e *queueEnv) waitsFor(body, why string) types.AgentRun {
+	e.t.Helper()
+	w := e.call(e.person, http.MethodPost, "/api/v1/runs", body)
+	if w.Code != http.StatusCreated {
+		e.t.Fatalf("launch = %d %s", w.Code, w.Body)
+	}
+	got := e.settles(decodeJSON[types.AgentRun](e.t, w).ID)
+	if got.State != types.RunQueued || got.StatusDetail != statusDetailQueuePrefix+string(runnerpool.WaitRunnersAtCapacity) {
+		e.t.Fatalf("the launch is %s (%q) on runner %v executor %q; want it QUEUED for its runners: %s", got.State, got.StatusDetail, got.RunnerID, got.RunnerPoolExecutor, why)
+	}
+	return got
+}
+
+// wallAndFence is a pool of two of the person's runners: a enforces Wall, takes one run and is full with
+// an inserted run; b enforces only Fence and is idle.
+func wallAndFence(e *queueEnv) (types.RunnerPool, uuid.UUID, uuid.UUID) {
+	e.t.Helper()
 	laptops := e.createPool("Laptops", types.RunnerPoolUser)
 	a := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
 	b := e.laptop(e.personP, 4000, 8192, types.CC1)
@@ -42,28 +70,20 @@ func TestPG_WaitingRunIsNotEndedForARunnerThatCannotEnforceItsBarrier(t *testing
 	e.stream(a, types.CC1, types.CC2)
 	e.stream(b, types.CC1)
 	e.maxRuns(a, e.personP, 1)
-	body := runBody(fmt.Sprintf(`"confinement_class":"CC2","runner_pool_id":%q`, laptops.ID))
-	launch := func() types.AgentRun {
-		t.Helper()
-		w := e.call(e.person, http.MethodPost, "/api/v1/runs", body)
-		if w.Code != http.StatusCreated {
-			t.Fatalf("launch = %d %s", w.Code, w.Body)
-		}
-		return decodeJSON[types.AgentRun](t, w)
-	}
-	first := launch()
-	if first.RunnerID == nil || *first.RunnerID != a || first.ConfinementClass != types.CC2 {
-		t.Fatalf("with room on a the launch is on %v at %s, want a at CC2", first.RunnerID, first.ConfinementClass)
-	}
-	waiting := launch()
-	got := e.settles(waiting.ID)
-	if got.State != types.RunQueued || got.StatusDetail != statusDetailQueuePrefix+string(runnerpool.WaitRunnersAtCapacity) {
-		t.Fatalf("with a full the Wall launch is %s (%q) on %v; want it QUEUED for a, the only runner that enforces Wall", got.State, got.StatusDetail, got.RunnerID)
-	}
-	if ok, err := e.srv.casRunState(context.Background(), first.ID, e.run(first.ID).State, types.RunCompleted); err != nil || !ok {
-		t.Fatalf("end the first run: %v %v", ok, err)
-	}
-	if got = e.settles(waiting.ID); got.State != types.RunRunning || got.RunnerID == nil || *got.RunnerID != a || got.ConfinementClass != types.CC2 {
+	laptops = e.reread(laptops)
+	occupyRunner(e, laptops, a)
+	return laptops, a, b
+}
+
+// The queue offers a waiting run only the runners its start would keep. A launch that asks for Wall waits
+// for a, the one runner that enforces it; it is never promoted onto the idle b and ended there, and it
+// starts on a once a has room.
+func TestPG_WaitingRunIsNotEndedForARunnerThatCannotEnforceItsBarrier(t *testing.T) {
+	e := newQueueEnv(t)
+	laptops, a, _ := wallAndFence(e)
+	waiting := e.waitsFor(runBody(fmt.Sprintf(`"confinement_class":"CC2","runner_pool_id":%q`, laptops.ID)), "a is the only runner that enforces Wall")
+	e.endOccupant(a.String())
+	if got := e.settles(waiting.ID); got.State != types.RunRunning || got.RunnerID == nil || *got.RunnerID != a || got.ConfinementClass != types.CC2 {
 		t.Fatalf("once a has room the run is %s on %v at %s (%s); want it RUNNING on a at CC2", got.State, got.RunnerID, got.ConfinementClass, got.StatusDetail)
 	}
 }
@@ -74,7 +94,7 @@ func TestPG_WaitingRunIsNotEndedForARunnerThatCannotEnforceItsBarrier(t *testing
 func TestPG_WaitingRunWithADriveIsNotEndedForThePersonsOwnRunner(t *testing.T) {
 	e := newQueueEnv(t)
 	ctx := context.Background()
-	pool, laptop := e.mixedPool("Mixed")
+	pool, _ := e.mixedPool("Mixed")
 	drive, err := e.pg.UpsertUserDrive(ctx, *driveFixture(nil), false)
 	if err != nil {
 		t.Fatal(err)
@@ -83,24 +103,9 @@ func TestPG_WaitingRunWithADriveIsNotEndedForThePersonsOwnRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	occupyRemote(e.placementEnv, pool, "alpha")
-	w := e.call(e.person, http.MethodPost, "/api/v1/runs", runBody(fmt.Sprintf(`"drive":{"enabled":true},"runner_pool_id":%q`, pool.ID)))
-	if w.Code != http.StatusCreated {
-		t.Fatalf("launch with a drive = %d %s", w.Code, w.Body)
-	}
-	waiting := decodeJSON[types.AgentRun](t, w)
-	got := e.settles(waiting.ID)
-	if got.State != types.RunQueued || got.StatusDetail != statusDetailQueuePrefix+string(runnerpool.WaitRunnersAtCapacity) {
-		t.Fatalf("with alpha full the run with a drive is %s (%q) on runner %v; want it QUEUED for alpha: no drive mounts on the laptop %s",
-			got.State, got.StatusDetail, got.RunnerID, laptop)
-	}
-	var occupant uuid.UUID
-	if err := e.pool.QueryRow(ctx, `SELECT id FROM agent_runs WHERE runner_pool_executor = 'alpha' AND state = 'RUNNING'`).Scan(&occupant); err != nil {
-		t.Fatal(err)
-	}
-	if ok, err := e.srv.casRunState(ctx, occupant, types.RunRunning, types.RunCompleted); err != nil || !ok {
-		t.Fatalf("end alpha's run: %v %v", ok, err)
-	}
-	if got = e.settles(waiting.ID); got.State != types.RunRunning || got.RunnerID != nil || got.RunnerPoolExecutor != "alpha" {
+	waiting := e.waitsFor(runBody(fmt.Sprintf(`"drive":{"enabled":true},"runner_pool_id":%q`, pool.ID)), "no drive mounts on the idle laptop")
+	e.endOccupant("alpha")
+	if got := e.settles(waiting.ID); got.State != types.RunRunning || got.RunnerID != nil || got.RunnerPoolExecutor != "alpha" {
 		t.Fatalf("once alpha has room the run is %s on runner %v executor %q (%s); want it RUNNING on alpha", got.State, got.RunnerID, got.RunnerPoolExecutor, got.StatusDetail)
 	}
 }
