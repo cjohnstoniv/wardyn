@@ -335,6 +335,8 @@ describe("the list and the Add dialog", () => {
     expect(within(dialog()).getByRole("heading", { name: NR_FILES.EDIT_NAMED("docs") })).toBeInTheDocument();
     const path = within(dialog()).getByRole("textbox", { name: NR_FILES.STEP_MOUNT });
     expect(path).toHaveValue("/home/agent/work/docs");
+    // Focus starts in the open step, on its first control, not on the step list.
+    expect(path).toHaveFocus();
     await userEvent.clear(path);
     await userEvent.type(path, "/home/agent/work/payments/sub");
     await userEvent.click(dialogButton(NR_FILES.SAVE));
