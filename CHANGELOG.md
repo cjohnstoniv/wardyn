@@ -804,7 +804,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Removed
 
-- The old New Run wizard and its side rail. `/runs/new` opens the guided flow (see Changed).
+- The old New Run wizard and its side rail. `/runs/new` opens the guided flow (see Changed). New Run no longer says
+  whether a run is recorded (the Recordings screen still does) or which causes tie for a run's autonomy level
+  (`bound_by`); a Bedrock sign-in's residency is the "In the sandbox, short-lived" line on Tools and access, and the
+  quota near-full and node-size advisories show among Review's server warnings.
 - The `member` role value: `WARDYN_OIDC_ROLE_MAP` entries ending `=member` and
   `WARDYN_OIDC_DEFAULT_ROLE=member` refuse boot with `invalid role "member"`, naming the entry (#623).
 - The `auth.member_mode` audit action, dual-emitted beside `auth.user_view.set` since 0.8 (#623).

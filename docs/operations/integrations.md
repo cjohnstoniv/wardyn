@@ -177,6 +177,18 @@ Since 0.8.2 a model run is credentialed by the model provider it chose (`enforce
 - Turn it on with `persistence.enabled=true` (the `fs` store on the PVC) or `env.WARDYN_RECORDING_STORE=pg` (no PVC needed).
 - `WARDYN_RECORDING_DIR` only moves the `fs` store's path — it doesn't turn recording on or off.
 
+## Signing in for a CLI component
+
+The console has no door for an AWS or Azure CLI component's sign-in yet. Tools and access lists it under **Setup still needed** with no button; send each person to the route below.
+
+| Component | How a person signs in | Where it lands |
+| --- | --- | --- |
+| AWS CLI | `POST /api/v1/components/{id}/sign-in`, which starts a sign-in sandbox seeded with the component's portal, region, account and role | Their own namespace, as `wardyn-cli-<component id>-sso`, audited `cli.signin.capture` |
+| Azure CLI | Open `GET /api/v1/components-entra/signin?component=<id>` in the signed-in browser. It returns to `/?azure_cli_signin=connected&component=<id>`, or `/?azure_cli_signin_error=<code>&component=<id>` | Their own namespace, as `wardyn-cli-<component id>-entra`, audited `cli.signin.capture` |
+
+- The Azure sign-in needs the console's Entra application to hold the delegated permission "Azure Service Management · user_impersonation" with admin consent.
+- Changing a component's pins, or deleting it, deletes everyone's sign-in for it. There is no per-person disconnect.
+
 ## What an admin can put a fence around
 
 | Kind | Narrows or widens |

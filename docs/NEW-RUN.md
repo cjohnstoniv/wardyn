@@ -224,7 +224,7 @@ The Launched screen opens at `?launched=<run id>`. It refreshes every 4 seconds 
 | **Waiting** | `QUEUED` | **Position** ("Nth in line"), **Waiting since**, **Gives up** and **Cancel run** |
 | The run's state | Any other | The run's state badge |
 
-- A waiting run says why: none of your runners is online (`runner_pool_no_runner_free`), or the pool is running its limit.
+- A waiting run says why: none of your runners is online (`runner_pool_no_runner_free`), every runner is at its limit (`runner_pool_runners_at_capacity`), or the pool is running its limit.
 - **Cancel run** asks you to confirm, then calls `POST /api/v1/runs/{id}/kill`. The run leaves the queue and ends as killed. A failure shows under the waiting card.
 - The owner, an admin or, for a service identity's run, its sponsor can cancel. A run that already ended otherwise answers `run_kill_already_terminal`.
 - **View run** opens the run's page. **Start another run** returns to the Start screen.
@@ -235,7 +235,7 @@ What you configure changes what members see. Each row links to the section that 
 
 | You configure | Members see | Read |
 |---|---|---|
-| Runner pools, enablement, run caps | Step 2 pools, reasons and the queue | [Runs at once](runner-registration.md#runs-at-once) |
+| Runner pools, runner limits, run caps | Step 2 pools, reasons and the queue | [Runner pools](operations/runner-pools.md), [Runner limits](runner-registration.md#runner-limits) |
 | Governance profile and ceilings | **Set by …** limits and narrowed sizes at Review | [Decision scopes, the clamp, and the first run](operations/member-runs.md#decision-scopes-the-clamp-and-the-first-run) |
 | Harness images (`WARDYN_AGENT_IMAGES`) | Which harnesses step 3 can pick | [The image a run's harnesses start from](operations/build-images.md#the-image-a-runs-harnesses-start-from) |
 | Model providers | The provider list and sign-in items on step 5 | [Model access comes from a model provider](operations/integrations.md#model-access-comes-from-a-model-provider) |
