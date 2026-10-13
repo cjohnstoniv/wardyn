@@ -13,6 +13,7 @@ import { SCENARIO_TEMPLATES } from "../../../lib/new-run-fixtures/scenarios/temp
 import { expectNoOwnCopy } from "../../../lib/test-fixtures";
 import type { TemplateList, TemplateSummary } from "../../../lib/types/templates";
 import { NR_TEMPLATES as T } from "../../wardyn/copy/new-run/templates";
+import { NR_RUN } from "../../wardyn/copy/new-run/run";
 import { TemplatesScreen } from "./templates-screen";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
@@ -184,7 +185,7 @@ describe("Templates screen: filters and empty states", () => {
 });
 
 describe("Templates screen: who can change a row", () => {
-  it("a row the caller cannot write keeps Rename and Delete focusable but inert, with the reason as visible text", async () => {
+  it("a row the caller cannot write keeps Rename and Delete focusable but inert, with the reason behind a tap-open info tip", async () => {
     mount({ templates: [ORG, GROUP], publish: MEMBER });
     await screen.findByText("Organisation baseline");
     const org = within(rowOf("Organisation baseline"));
@@ -194,7 +195,11 @@ describe("Templates screen: who can change a row", () => {
       expect(b).toHaveAttribute("aria-disabled", "true");
       expect(b).not.toBeDisabled();
       expect(b).toHaveAccessibleDescription(expect.stringContaining(T.WHY_ORG));
+      expect(b).not.toHaveAttribute("title");
     }
+    await userEvent.click(org.getByRole("button", { name: NR_RUN.ABOUT_ARIA("Organisation baseline") }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent(T.WHY_ORG);
+    await userEvent.keyboard("{Escape}");
     await userEvent.click(org.getByRole("button", { name: T.RENAME }));
     await userEvent.click(org.getByRole("button", { name: T.DELETE }));
     expect(screen.queryByRole("dialog")).toBeNull();

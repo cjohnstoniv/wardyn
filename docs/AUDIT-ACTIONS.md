@@ -845,7 +845,7 @@ These are emitted by background sweepers, not request handlers — `ActorType` i
 - `full` is `fields` and also stores the `actor` of a human row as `subject:<uuid>`, the id of the person's oldest `principal_identities` row (aliases resolve to the person first).
 - The person's `audit-seal` key is created when the first such row is written, so an erasure always has one to destroy.
 - A reader shows the person while no key of theirs was destroyed after the row was written, and `[erased]` after: a person erased and later seen again reads as themself only on the rows written since. A device-forwarded row's target and sealed fields read as the device sent them.
-- `?actor=<person>` on `GET /audit` and `GET /audit/export` matches both the person's name (rows written before `full` was on) and their subject. The subject form never matches a device-forwarded row, which keeps the name the device sent.
+- `?actor=<person>` on `GET /audit` and `GET /audit/export` matches both the person's name (rows written before `full` was on) and their subject. Neither form matches a device-forwarded row, whose actor reads `device:<id>/<name sent>`.
 - **SIEM rules keyed on `actor` see subject ids from the moment `full` is turned on**; the sinks never see the name.
 - A person with no identity row (one who never signed in through SSO) keeps their name in `actor`, and `person.erasure`, `credential.erase` and `principal_key.destroyed` keep theirs.
 - A row whose subject could not be had waits in the spool with the actor sealed under the pending key and `subject:pending` in the column, and the drain stores the subject.

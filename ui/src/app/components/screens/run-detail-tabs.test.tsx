@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 const getRunMock = vi.fn();
 const getPolicyMock = vi.fn();
@@ -28,6 +28,11 @@ vi.mock("../../lib/api/runs", () => ({
     getAttachHolder: vi.fn().mockResolvedValue({ held: false }),
     takeoverAttach: vi.fn(),
   },
+}));
+// Run again: a run that kept its setup opens by id; the default is "kept none".
+const readIntentMock = vi.fn().mockRejectedValue(new Error("launch_intent_not_found"));
+vi.mock("./new-run-flow/steps/shape/shape-sources", () => ({
+  launchIntentSource: { read: (...a: unknown[]) => readIntentMock(...a) },
 }));
 const listApprovalsMock = vi.fn().mockResolvedValue([]);
 vi.mock("../../lib/api/approvals", () => ({
@@ -234,6 +239,27 @@ describe("RunDetailScreen — onClone refuses on an unreadable audit row (review
       ),
     );
     expect(screen.queryByText("NEW RUN PAGE")).not.toBeInTheDocument();
+  });
+
+  it("opens Run again by id, never the audit fallback, when the run kept its setup", async () => {
+    getRunMock.mockResolvedValue({ ...RUN, state: "COMPLETED" });
+    readIntentMock.mockResolvedValueOnce({ run_id: RUN.id, document: { intent: {} } });
+    vi.mocked(toast.warning).mockClear();
+    const user = userEvent.setup();
+    const Where = () => <div>{useLocation().pathname + useLocation().search}</div>;
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <Routes>
+          <Route path="/runs/:id" element={<RunDetailScreen />} />
+          <Route path="/runs/new" element={<Where />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Start a run like this one" }));
+
+    expect(await screen.findByText(`/runs/new?again=${RUN.id}&step=review`)).toBeInTheDocument();
+    expect(toast.warning).not.toHaveBeenCalled();
   });
 });
 

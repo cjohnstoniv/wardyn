@@ -5,44 +5,45 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
-import { RECORDING_DISABLED_TITLE } from "../../../../wardyn/copy";
+import { SCENARIO_POOLS } from "../../../../../lib/new-run-fixtures/scenarios/pools";
 import { SCENARIO_PREFLIGHT } from "../../../../../lib/new-run-fixtures/scenarios/preflight";
-import { initialDraft } from "../../draft/run-intent";
+import type { DraftAction } from "../../draft/draft-reducer";
+import { initialDraft, type RunIntent } from "../../draft/run-intent";
 import { WhereGroup } from "./where-group";
 
-// undefined = /healthz has not answered, or carried no recording component.
-const recording = vi.hoisted(() => ({ selected: "fs" as string | undefined }));
-vi.mock("../../../../../lib/api/health", () => ({
-  health: { health: () => Promise.resolve({ components: { recording: { selected: recording.selected } } }) },
+vi.mock("../../steps/run/pool-source", async (orig) => ({
+  ...(await orig<typeof import("../../steps/run/pool-source")>()),
+  loadPools: () => Promise.resolve(SCENARIO_POOLS.member),
 }));
 
 afterEach(cleanup);
 
-const renderWhere = () =>
-  render(<WhereGroup draft={initialDraft("alice")} pre={SCENARIO_PREFLIGHT.member} preview={null} docRows={[]} go={vi.fn()} dispatch={vi.fn()} />);
+const AGENT: RunIntent = { shape: "agent_task", experience: "interactive" };
 
-describe("Review: where it runs, recording row", () => {
-  it("says what is recorded when the deployment records", async () => {
-    recording.selected = "pg";
-    renderWhere();
-    expect(await screen.findByText(NR_REVIEW.RECORDING_ON)).toBeInTheDocument();
-    expect(screen.getByText(NR_REVIEW.RECORDING_LABEL)).toBeInTheDocument();
-    expect(screen.queryByText(RECORDING_DISABLED_TITLE)).toBeNull();
-  });
+function renderWhere() {
+  const dispatch = vi.fn<(a: DraftAction) => void>();
+  const draft = { ...initialDraft("alice"), intent: AGENT };
+  render(<WhereGroup draft={draft} pre={SCENARIO_PREFLIGHT.member} preview={null} docRows={[]} go={vi.fn()} dispatch={dispatch} />);
+  /** What the draft would become after every edit dispatched so far. */
+  const edited = () => dispatch.mock.calls.reduce((i, [a]) => (a.type === "edit" ? a.apply(i) : i), AGENT);
+  return { edited };
+}
 
-  it("says recording is off when the deployment has no recording store", async () => {
-    recording.selected = "none";
-    renderWhere();
-    expect(await screen.findByText(RECORDING_DISABLED_TITLE)).toBeInTheDocument();
-    expect(screen.queryByText(NR_REVIEW.RECORDING_ON)).toBeNull();
-  });
-
-  it("makes no claim when /healthz does not say", async () => {
-    recording.selected = undefined;
-    const { container } = renderWhere();
-    await screen.findByText(NR_REVIEW.GROUP_WHERE);
-    await new Promise((r) => setTimeout(r, 0));
-    expect(container.querySelector("[data-review-recording]")).toBeNull();
+describe("Review: where it runs, Change", () => {
+  it("edits the pool and the barrier in place, then Done closes the editor", async () => {
+    const user = userEvent.setup();
+    const { edited } = renderWhere();
+    await user.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_WHERE}` }));
+    const pool = await screen.findByLabelText(NR_REVIEW.POOL_LABEL);
+    const barrier = screen.getByLabelText(NR_REVIEW.BARRIER_LABEL);
+    await vi.waitFor(() => expect(pool).toBeEnabled());
+    expect(pool).toHaveValue(SCENARIO_POOLS.member.pools[0].id);
+    await user.selectOptions(barrier, "CC3");
+    expect(edited().confinement_class).toBe("CC3");
+    await user.click(screen.getByRole("button", { name: NR_REVIEW.DONE }));
+    expect(screen.queryByLabelText(NR_REVIEW.BARRIER_LABEL)).toBeNull();
+    expect(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_WHERE}` })).toHaveAttribute("aria-expanded", "false");
   });
 });

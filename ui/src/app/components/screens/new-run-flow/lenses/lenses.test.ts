@@ -83,6 +83,19 @@ describe("lens edits", () => {
     expect(shapeCarriers("application", undefined, one)).toEqual({ experience: "background", workload: { kind: "command", command: "" }, startup: undefined });
   });
 
+  it("choosing the shape the draft already has changes nothing: the starter, its prompt and the task stay", () => {
+    const tools: RunIntent["tools"] = [{ id: "claude-code", kind: "harness" }, { id: "codex-cli", kind: "harness" }];
+    const interactive: RunIntent = { shape: "agent_task", experience: "interactive", tools, startup: { kind: "harness", tool: "codex-cli", prompt: "Review the diff" } };
+    expect(chooseShape(interactive, "agent_task")).toBe(interactive);
+    const autonomous: RunIntent = { shape: "agent_task", experience: "background", tools, workload: { kind: "agent_task", agent: "codex-cli", task: "fix it" } };
+    expect(chooseShape(autonomous, "agent_task")).toBe(autonomous);
+    const environment: RunIntent = { shape: "environment", experience: "interactive", tools, startup: { kind: "harness", tool: "claude-code" } };
+    expect(chooseShape(environment, "environment")).toBe(environment);
+    // Another shape still writes its own carriers.
+    expect(chooseShape(interactive, "environment")).toMatchObject({ shape: "environment", experience: "interactive" });
+    expect(chooseShape(interactive, "environment").startup).toBeUndefined();
+  });
+
   it("never removes an agent task's last harness, and moves the task to the next one", () => {
     const one = removeHarness(START, "codex-cli");
     expect(removeHarness(one, "claude-code")).toBe(one);

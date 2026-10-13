@@ -9,30 +9,32 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { relativeTime } from "../../../../../lib/format";
 import type { LaunchIntentSummary } from "../../../../../lib/new-run-fixtures/scenarios/templates";
 import { launchIntentSource } from "./shape-sources";
+import { INLINE_CHOICE, INLINE_LABEL, useShown } from "./inline-choice";
 import { useLoaded } from "./use-loaded";
 
 const list = (signal: AbortSignal) => launchIntentSource.list(signal);
 
-/** The creator's own runs that kept a setup. Choosing one opens Review on it. */
+/** The creator's own runs that kept a setup (Make App.tsx:1229-1241). The shown row is reported up as in TemplatePicker. */
 export function AgainPicker({ selectedRunId, onPick }: { selectedRunId?: string; onPick: (intent: LaunchIntentSummary) => void }) {
   const loaded = useLoaded(list);
-  if (loaded.status === "error") return <p role="alert" className="text-sm text-danger">{loaded.message}</p>;
-  if (loaded.status === "ready" && loaded.value.intents.length === 0) {
-    return <p className="text-sm text-muted-foreground">{NR_SHAPE.EMPTY_AGAIN}</p>;
-  }
   const intents = loaded.status === "ready" ? loaded.value.intents : [];
+  const shown = useShown(intents, (i) => i.run_id === selectedRunId, onPick);
+  if (loaded.status === "error") return <div className={INLINE_CHOICE}><p role="alert" className="text-sm text-danger">{loaded.message}</p></div>;
+  if (loaded.status === "ready" && intents.length === 0) {
+    return <div className={INLINE_CHOICE}><p className="text-sm text-muted-foreground">{NR_SHAPE.EMPTY_AGAIN}</p></div>;
+  }
   return (
-    <div className="flex flex-col gap-2">
-      <Label htmlFor="nr-previous-run">{NR_SHAPE.PREVIOUS_LABEL}</Label>
+    <div className={INLINE_CHOICE}>
+      <Label htmlFor="nr-previous-run" className={INLINE_LABEL}>{NR_SHAPE.PREVIOUS_LABEL}</Label>
       <Select
-        value={selectedRunId ?? ""}
+        value={shown?.run_id ?? ""}
         disabled={loaded.status === "loading"}
         onValueChange={(runId) => {
           const picked = intents.find((i) => i.run_id === runId);
           if (picked) onPick(picked);
         }}
       >
-        <SelectTrigger id="nr-previous-run" aria-busy={loaded.status === "loading"} className="w-full">
+        <SelectTrigger id="nr-previous-run" aria-busy={loaded.status === "loading"} className="w-full bg-card dark:bg-card">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -43,7 +45,7 @@ export function AgainPicker({ selectedRunId, onPick }: { selectedRunId?: string;
           ))}
         </SelectContent>
       </Select>
-      <p className="text-xs text-muted-foreground">{NR_SHAPE.AGAIN_NOTE}</p>
+      <p className="mt-2 text-meta text-muted-foreground">{NR_SHAPE.AGAIN_NOTE}</p>
     </div>
   );
 }

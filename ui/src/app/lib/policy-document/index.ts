@@ -214,8 +214,9 @@ function readSource(source: string):
 }
 
 const JSON_SPACE = /[ \t\n\r]*/y;
-// A string up to, not including, its closing quote.
-const JSON_STRING = /"(?:[ !#-[\]-\uffff]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*/y;
+// A string up to, not including, its closing quote. Unescaped, anything but a
+// quote, a backslash or a control character (RFC 8259 §7).
+const JSON_STRING = /"(?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*/y;
 const JSON_ATOM = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null/y;
 
 // JSON.parse judges whether source is JSON; engines disagree on whether their

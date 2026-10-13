@@ -90,16 +90,17 @@ describe("run document editor", () => {
     type(MOCK_YAML);
     press(C.VALIDATE);
     expect(await screen.findByText(RUN_DOCUMENT_CANON.TITLE_OR_DESCRIPTION)).toBeInTheDocument();
-    expect(within(screen.getByRole("list")).getAllByText(RUN_DOCUMENT_CANON.END_CONFLICT, { exact: false })).toHaveLength(2);
+    // the end conflict marks both keys but is one problem, said once
+    expect(screen.getAllByText(RUN_DOCUMENT_CANON.END_CONFLICT)).toHaveLength(1);
     expect(screen.getByText(RUN_DOCUMENT_CANON.API_VERSION)).toBeInTheDocument();
     expect(screen.getByText("agent is not a field the server reads")).toBeInTheDocument();
     expect(screen.queryByText("server end sentence")).toBeNull();
     // title, api_version, the agent key, and both end keys
     expect(markedLines()).toEqual(["1", "3", "5", "6", "7"]);
-    expect(screen.getByText(C.ISSUES(5))).toBeInTheDocument();
+    expect(screen.getByText(C.ISSUES(4))).toBeInTheDocument();
     expect(editor()).toHaveAttribute("aria-invalid", "true");
-    // every sentence is on its line; the panel adds only the headline, and no pending-copy line
-    expect(screen.getByTestId("validation-panel").querySelectorAll("p")).toHaveLength(1);
+    // Make's panel: the headline, then each problem once, and no pending-copy line
+    expect(screen.getByTestId("validation-panel").querySelectorAll("p")).toHaveLength(5);
     expect(importDocument).toHaveBeenCalledWith("yaml", MOCK_YAML, expect.any(AbortSignal));
   });
 
@@ -111,8 +112,7 @@ describe("run document editor", () => {
     expect(await screen.findByText(RUN_DOCUMENT_CANON.JSON_INVALID)).toBeInTheDocument();
     expect(screen.getAllByText(RUN_DOCUMENT_CANON.JSON_INVALID)).toHaveLength(1);
     expect(importDocument).not.toHaveBeenCalled();
-    // the format switch states the parser's reason; the editor adds no second line of its own
-    expect(screen.getByTestId("document-switch-reason")).toBeInTheDocument();
+    // the editor adds no second line of its own
     expect(screen.queryByTestId("document-gutter")?.querySelector("[data-error]")).toBeNull();
   });
 
@@ -237,14 +237,35 @@ describe("run document editor", () => {
     expect(screen.getByTestId("validation-panel")).toHaveAttribute("data-status", "ready");
   });
 
-  it("converts through the editor's switch and keeps the URL on the format shown", async () => {
+  it("switches format at once, with no confirm, and keeps the URL on the format shown", async () => {
     open();
     await screen.findByRole("textbox");
     type("agent: claude-code\n");
-    fireEvent.click(screen.getByRole("button", { name: "JSON" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Switch to JSON" }));
+    fireEvent.click(within(screen.getByRole("group", { name: C.FORMAT_ARIA })).getByRole("button", { name: C.FORMAT_JSON }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     await waitFor(() => expect(text("path")).toContain("format=json"));
     expect((screen.getByRole("textbox", { name: C.EDITOR_ARIA("JSON") }) as HTMLTextAreaElement).value).toBe('{\n  "agent": "claude-code"\n}');
+  });
+
+  it("leaves text that does not parse in its format and says why", async () => {
+    const { importDocument } = open();
+    await screen.findByRole("textbox");
+    type("a: [1,\n");
+    fireEvent.click(screen.getByRole("button", { name: C.FORMAT_JSON }));
+    expect(editor().value).toBe("a: [1,\n");
+    expect(text("path")).toContain("format=yaml");
+    expect(screen.getByTestId("validation-panel")).toHaveTextContent(C.YAML_INVALID);
+    expect(importDocument).not.toHaveBeenCalled();
+  });
+
+  it("lays out Make's heading, toolbar and footer", async () => {
+    open();
+    await screen.findByRole("textbox");
+    const footer = screen.getByRole("contentinfo");
+    expect(within(footer).getAllByRole("button").map((b) => b.textContent)).toEqual([NR_SHARED.BACK, C.VALIDATE, `${C.CONTINUE_REVIEW}→`]);
+    const guided = screen.getByRole("button", { name: C.OPEN_IN_GUIDED });
+    expect(footer.contains(guided)).toBe(false);
+    expect(guided.compareDocumentPosition(screen.getByRole("group", { name: C.FORMAT_ARIA })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("Back returns to Start", async () => {

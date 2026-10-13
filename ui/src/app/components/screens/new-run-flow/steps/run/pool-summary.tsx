@@ -8,31 +8,59 @@
 
 import type { ReactNode } from "react";
 import type { PersonAllowance, PoolSlots, RunnerPoolCatalogueEntry, RunnerPoolRunType } from "../../../../../lib/types/runner-pools";
+import { cn } from "../../../../ui/utils";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
-import { UsageMeter } from "../../../../wardyn/usage-meter";
 import { limitCells, limitsFor, limitsNote, runTypesText } from "./pool-model";
 
-function Metric({ label, children }: { label?: string; children: ReactNode }) {
+// Make's .pool-summary (App.tsx:1710-1808; snapshot index.css:176-192): a 2 x 2 grid of metrics, then the
+// per-run limits four across, each cell a small upper-case label over its value.
+const LABEL = "text-[9px] font-semibold tracking-[0.08em] text-muted-foreground uppercase";
+
+function Metric({ children }: { children: ReactNode }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1">
-      {label && <span className="text-xs text-muted-foreground">{label}</span>}
+    <div className="flex min-w-0 flex-col gap-1 border-b border-border px-4 py-3.5 min-[521px]:odd:border-r">
       {children}
     </div>
   );
 }
-const Sub = ({ children }: { children: ReactNode }) => <small className="text-xs text-muted-foreground">{children}</small>;
+const Label = ({ children }: { children: ReactNode }) => <span className={LABEL}>{children}</span>;
+const Value = ({ children }: { children: ReactNode }) => <strong className="text-xs leading-[1.4] font-semibold [overflow-wrap:anywhere]">{children}</strong>;
+const Sub = ({ children }: { children: ReactNode }) => <small className="text-[10px] leading-[1.4] text-muted-foreground">{children}</small>;
+
+/** A count against a maximum, as text and a thin bar; with no maximum, text only (and no meter role). */
+function Usage({ label, used, max, valueText, personal }: { label: string; used: number; max?: number; valueText: string; personal?: boolean }) {
+  return (
+    <>
+      <Label>{label}</Label>
+      <Value>{valueText}</Value>
+      {max !== undefined && (
+        <span
+          role="meter"
+          aria-label={label}
+          aria-valuemin={0}
+          aria-valuemax={max}
+          aria-valuenow={Math.min(Math.max(used, 0), max)}
+          aria-valuetext={valueText}
+          className="mt-1 mb-0.5 block h-[5px] w-full overflow-hidden rounded-full bg-border"
+        >
+          <span className={cn("block h-full rounded-full", personal ? "bg-info" : "bg-primary")} style={{ width: `${max > 0 ? Math.min(100, (used / max) * 100) : 0}%` }} />
+        </span>
+      )}
+    </>
+  );
+}
 
 function Capacity({ slots }: { slots: PoolSlots }) {
   return (
     <Metric>
       {slots.max === undefined ? (
         <>
-          <UsageMeter label={NR_RUN.CAPACITY_LABEL} used={slots.used} valueText={NR_RUN.RUNNING_ONLY(slots.used)} />
+          <Usage label={NR_RUN.CAPACITY_LABEL} used={slots.used} valueText={NR_RUN.RUNNING_ONLY(slots.used)} />
           <Sub>{NR_RUN.POOL_LIMIT_FROM_RUNNERS}</Sub>
         </>
       ) : (
         <>
-          <UsageMeter label={NR_RUN.CAPACITY_LABEL} used={slots.used} max={slots.max} valueText={NR_RUN.USED_OF_MAX(slots.used, slots.max)} />
+          <Usage label={NR_RUN.CAPACITY_LABEL} used={slots.used} max={slots.max} valueText={NR_RUN.USED_OF_MAX(slots.used, slots.max)} />
           <Sub>{NR_RUN.MAX_RUNS(slots.max)}</Sub>
         </>
       )}
@@ -46,12 +74,12 @@ function Allowance({ allowance }: { allowance: PersonAllowance }) {
     <Metric>
       {allowance.max === undefined ? (
         <>
-          <UsageMeter label={NR_RUN.ALLOWANCE_LABEL} used={allowance.active} valueText={NR_RUN.RUNNING_ONLY(allowance.active)} />
+          <Usage label={NR_RUN.ALLOWANCE_LABEL} used={allowance.active} valueText={NR_RUN.RUNNING_ONLY(allowance.active)} personal />
           <Sub>{NR_RUN.NO_PERSONAL_LIMIT}</Sub>
         </>
       ) : (
         <>
-          <UsageMeter label={NR_RUN.ALLOWANCE_LABEL} used={allowance.active} max={allowance.max} valueText={NR_RUN.ALLOWANCE_USED(allowance.active, allowance.max)} />
+          <Usage label={NR_RUN.ALLOWANCE_LABEL} used={allowance.active} max={allowance.max} valueText={NR_RUN.ALLOWANCE_USED(allowance.active, allowance.max)} personal />
           <Sub>{includes}</Sub>
         </>
       )}
@@ -64,33 +92,39 @@ export function PoolSummary({ pool, runType, allowance }: { pool: RunnerPoolCata
   const limits = limitsFor(pool, runType);
   const cells = limits ? limitCells(limits, allowance) : [];
   return (
-    <section aria-label={pool.name} className="flex flex-col gap-4 rounded-lg border border-border p-4">
-      <div className="grid gap-4 sm:grid-cols-2">
+    <section aria-label={pool.name} className="mt-4 overflow-hidden rounded-[10px] border border-border-strong bg-surface-2">
+      <div className="grid grid-cols-1 min-[521px]:grid-cols-2">
         {slots && <Capacity slots={slots} />}
         {allowance && <Allowance allowance={allowance} />}
         {slots && (
-          <Metric label={NR_RUN.WAITING_LABEL}>
-            <strong className="text-sm font-medium">{slots.waiting > 0 ? NR_RUN.IN_QUEUE(slots.waiting) : NR_RUN.NO_RUNS_WAITING}</strong>
+          <Metric>
+            <Label>{NR_RUN.WAITING_LABEL}</Label>
+            <Value>{slots.waiting > 0 ? NR_RUN.IN_QUEUE(slots.waiting) : NR_RUN.NO_RUNS_WAITING}</Value>
             <Sub>{slots.verdict === "waits" ? NR_RUN.JOIN_QUEUE : NR_RUN.START_WHEN_LAUNCHED}</Sub>
           </Metric>
         )}
-        <Metric label={NR_RUN.RUN_TYPES_LABEL}>
-          <strong className="text-sm font-medium">{runTypesText(pool)}</strong>
+        <Metric>
+          <Label>{NR_RUN.RUN_TYPES_LABEL}</Label>
+          <Value>{runTypesText(pool)}</Value>
           {pool.run_types_source && <Sub>{pool.run_types_source === "pool" ? NR_RUN.SET_BY_POOL : NR_RUN.NO_RESTRICTION}</Sub>}
         </Metric>
       </div>
       {cells.length > 0 && (
-        <div className="flex flex-col gap-3 border-t border-border pt-4">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <span className="text-sm font-medium">{NR_RUN.LIMITS_LABEL}</span>
+        <div>
+          <div className="flex items-baseline justify-between gap-3 border-b border-border px-4 py-[13px]">
+            <span className={LABEL}>{NR_RUN.LIMITS_LABEL}</span>
             <Sub>{limitsNote(allowance)}</Sub>
           </div>
-          <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <dl className="grid grid-cols-2 min-[521px]:grid-cols-4">
             {cells.map((c) => (
-              <div key={c.key} data-limit={c.key} className="flex min-w-0 flex-col gap-1">
-                <dt className="text-xs text-muted-foreground">{c.label}</dt>
+              <div
+                key={c.key}
+                data-limit={c.key}
+                className="flex min-w-0 flex-col gap-1 border-border px-3.5 py-[13px] max-[520px]:nth-[-n+2]:border-b max-[520px]:odd:border-r min-[521px]:border-r min-[521px]:last:border-r-0"
+              >
+                <dt className={LABEL}>{c.label}</dt>
                 <dd className="flex flex-col gap-1">
-                  <strong className="text-sm font-medium">{c.value}</strong>
+                  <strong className="font-mono text-[11px] leading-[1.4] font-medium [overflow-wrap:anywhere]">{c.value}</strong>
                   <Sub>{c.note}</Sub>
                   {c.source && <Sub>{c.source}</Sub>}
                 </dd>

@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { shortTime } from "../../../../lib/format";
 import type { RunQueue } from "../../../../lib/types/runs";
 import { givesUp, ordinal, placeInLine, waitingBody, waitingSince } from "./launched-model";
 
@@ -26,18 +27,17 @@ describe("the place in line", () => {
 });
 
 describe("since and gives up", () => {
-  it("says Just now inside the first minute, then the time as words", () => {
+  it("says Just now inside the first minute, then the time the run joined the line", () => {
     expect(waitingSince(at(-20_000), NOW)).toBe("Just now");
-    expect(waitingSince(at(-5 * MIN), NOW)).toBe("5 minutes ago");
-    expect(waitingSince(at(-3 * HOUR), NOW)).toBe("3 hours ago");
-    expect(waitingSince(at(-72 * HOUR), NOW)).toBe("3 days ago");
+    expect(waitingSince(at(-5 * MIN), NOW)).toBe(shortTime(at(-5 * MIN)));
+    expect(waitingSince(at(-72 * HOUR), NOW)).toBe(shortTime(at(-72 * HOUR)));
   });
 
-  it("reads the time left from deadline_at, in the canon hour words and then minutes", () => {
+  it("reads the hours left from deadline_at in the canon hour words, then the time it gives up", () => {
     expect(givesUp(at(24 * HOUR), NOW)).toBe("In 24 hours");
     expect(givesUp(at(HOUR), NOW)).toBe("In 1 hour");
-    expect(givesUp(at(20 * MIN), NOW)).toBe("In 20 minutes");
-    expect(givesUp(at(-5 * MIN), NOW)).toBe("In 1 minute");
+    expect(givesUp(at(20 * MIN), NOW)).toBe(shortTime(at(20 * MIN)));
+    expect(givesUp(at(-5 * MIN), NOW)).toBe(shortTime(at(-5 * MIN)));
   });
 });
 
