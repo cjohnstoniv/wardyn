@@ -127,8 +127,10 @@ func (s *Server) serviceTokenAuth(w http.ResponseWriter, r *http.Request, t type
 	}
 	_ = s.cfg.Store.TouchAPIToken(ctx, t.ID, s.cfg.Now().UTC())
 	// Role and type come from the live identity on every request, not a sign-in stamp, so refuseStaleRoleStamp
-	// has nothing to compare. Member reach, no groups, a complete (empty) snapshot.
-	ctx = withHumanIdentity(ctx, t.Principal, "", oidc.RoleUser, si.UserType, []string{}, false)
+	// has nothing to compare. Member reach, no groups, a complete (empty) snapshot. The token's revocation
+	// sequence rides the request as an API token's does, so a queued launch, an event stream or a terminal
+	// this request opens is ordered against the sponsor's cuts by that sequence and not by two clocks.
+	ctx = oidc.WithRevocationSeq(withHumanIdentity(ctx, t.Principal, "", oidc.RoleUser, si.UserType, []string{}, false), t.Principal, t.RevSeq)
 	r = r.WithContext(withAPITokenID(withServiceIdentity(ctx, si.Name, si.Sponsor), t.ID))
 	if rctx := chi.RouteContext(r.Context()); rctx == nil || !serviceAllowed[r.Method+" "+rctx.RoutePattern()] {
 		d := authz.Deny(authz.ReasonServiceScope, r.URL.Path, serviceScopeRefusal)
@@ -241,6 +243,9 @@ func (s *Server) serviceEndedSince(r *http.Request, name, sponsor string, opened
 	if s.cfg.SessionRevocations == nil {
 		return true
 	}
-	status, err := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, sponsor, "", oidc.Issue{At: openedAt}, -1)
+	// The sequence is the one the service token recorded against its sponsor's cuts (serviceTokenAuth); a
+	// token from before the sequence existed carries none and is compared on openedAt alone.
+	issue := oidc.Issue{At: openedAt, Seq: oidc.RevocationSeqFor(r.Context(), types.ServicePrincipalPrefix+name)}
+	status, err := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, sponsor, "", issue, -1)
 	return err != nil || status != oidc.SessionLive
 }

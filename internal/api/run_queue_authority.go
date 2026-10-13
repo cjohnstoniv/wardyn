@@ -144,7 +144,8 @@ func (s *Server) queueOwnerLive(ctx context.Context, a queueAuthority, queuedAt 
 	case err != nil || !still:
 		return false, err
 	}
-	status, err := oidc.CheckSession(ctx, s.cfg.SessionRevocations, a.Sponsor, "", oidc.Issue{At: queuedAt}, -1)
+	// a.Seq is the service token's sequence, drawn against the sponsor's cuts when the token was minted.
+	status, err := oidc.CheckSession(ctx, s.cfg.SessionRevocations, a.Sponsor, "", oidc.Issue{At: queuedAt, Seq: a.Seq}, -1)
 	return err == nil && status == oidc.SessionLive, err
 }
 
