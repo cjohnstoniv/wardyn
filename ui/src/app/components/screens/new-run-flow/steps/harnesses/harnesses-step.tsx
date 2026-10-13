@@ -7,6 +7,7 @@
 // starts in at most one harness; an Autonomous one holds one harness and its
 // task; an Environment or Application takes optional harnesses and starts none.
 
+import * as React from "react";
 import { Button } from "../../../../ui/button";
 import { NR_HARNESSES } from "../../../../wardyn/copy/new-run/harnesses";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
@@ -15,6 +16,7 @@ import type { RunIntent } from "../../draft/run-intent";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import { addHarness, clearStarter, removeHarness, setStartPrompt, setStarter, setTask, swapHarness } from "../../lenses/harness-lens";
 import { harnessIds } from "../../lenses/lens-keys";
+import { modeOf } from "../../lenses/shape-lens";
 import { stepIssues } from "../../lenses/local-issues";
 import { flowSteps, StepShell, useAnnounce } from "../step-shell";
 import { useLoaded } from "../shape/use-loaded";
@@ -51,6 +53,14 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
   });
   const addable = roster.harnesses.find((h) => !ids.includes(h.id) && !unavailableReason(h, taken, roster));
   const comingSoon = mode === "autonomous" && ids.length > 0;
+
+  // Make gives a new Agent task one harness that starts the run (App.tsx:1258-1270). The roster's first addable
+  // harness stands in for Make's fixed Claude Code (A14e). A template, a rerun or an import keeps what it carries.
+  const seed = draft.origin.kind === "scratch" && intent.shape === "agent_task" && ids.length === 0 ? addable?.id : undefined;
+  React.useEffect(() => {
+    if (!seed) return;
+    dispatch({ type: "edit", apply: (i) => (modeOf(i) === "interactive" ? setStarter(addHarness(i, seed), seed) : addHarness(i, seed)) });
+  }, [seed, dispatch]);
 
   return (
     <StepShell
