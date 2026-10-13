@@ -87,6 +87,8 @@ done
 
 # ── colour helpers ────────────────────────────────────────────────────────────
 source "${REPO_ROOT}/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/runner-limits.sh
+source "${REPO_ROOT}/scripts/lib/runner-limits.sh"
 ok()   { printf '\033[1;32m  PASS\033[0m %s\n' "$*"; pass=$((pass+1)); }
 bad()  { printf '\033[1;31m  FAIL\033[0m %s\n' "$*"; fail=$((fail+1)); }
 note() { printf '\033[1;33m  NOTE\033[0m %s\n' "$*"; }
@@ -236,6 +238,10 @@ if [[ "${OPT_UP}" -eq 1 ]]; then
     sleep 2
   done
   ok "stack is healthy"
+  # The stack's Docker runner takes no run until it has limits (scripts/lib/runner-limits.sh).
+  # shellcheck disable=SC2317 # called by wardyn_ensure_runner_limits
+  wardyn() { "${COMPOSE[@]}" exec -T -e WARDYN_URL=http://localhost:8080 wardynd /usr/local/bin/wardyn "$@"; }
+  wardyn_ensure_runner_limits || die "the stack's runner has no limits, so the test-drive's runs cannot start"
 fi
 
 # Sanity-check that wardynd is reachable. curl -w always prints the code (000

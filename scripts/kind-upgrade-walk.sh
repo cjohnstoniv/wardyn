@@ -391,6 +391,7 @@ tip_helm_upgrade() {
     --set k8s.enabled=true \
     --set k8s.proxyImage="${TIP_PROXY_IMAGE}" \
     --set k8s.runsNamespace=wardyn-runs \
+    --set k8s.readNodes=true \
     --set serviceAccount.automount=true \
     "$@" || return 1
   kubectl -n "${NS}" patch service "${RELEASE}" -p \
