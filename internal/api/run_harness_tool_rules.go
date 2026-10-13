@@ -195,10 +195,7 @@ func inheritedMCPHoldRefusal(req createRunRequest, spec types.RunPolicySpec, com
 	sentence := accessSentences["harness_no_hold"]
 	switch {
 	case req.TaskMode == "exec":
-		sentence = accessSentences["command_no_hold"]
-		for _, t := range req.Tools {
-			harnesses = append(harnesses, t.ID)
-		}
+		sentence, harnesses = accessSentences["command_no_hold"], mcpIncludedHarnesses(req)
 	case req.Agent == codexHarness && !requestIsInteractive(req):
 		harnesses = []string{codexHarness}
 	}
