@@ -181,7 +181,7 @@ function NameRunForm({ onOpenChange, onCreated }: Pick<NameRunDialogProps, "onOp
                   <strong>{NR_LAUNCH.CHECKED_JUST_NOW}</strong>
                   <span className="text-muted-foreground">{summaryLine(pre, draft.intent)}</span>
                 </p>
-                <BarrierMark cc={pre.enforced_confinement_class} size="sm" />
+                <BarrierMark cc={pre.enforced_confinement_class} size="sm" strength />
               </div>
             </>
           )}

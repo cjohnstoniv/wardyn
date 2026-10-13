@@ -85,7 +85,7 @@ export function WhereGroup({ draft, pre, docRows, dispatch }: GroupProps) {
       id="where"
       label={NR_REVIEW.GROUP_WHERE}
       value={pool && NR_REVIEW.WHERE_VALUE(pool.name)}
-      mark={cc && <BarrierMark cc={cc} size="sm" />}
+      mark={cc && <BarrierMark cc={cc} size="sm" strength />}
       detail={detail}
       provenance={provenance}
       docRows={docRows}

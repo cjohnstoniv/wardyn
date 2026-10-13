@@ -95,7 +95,7 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
       <h1 ref={heading} tabIndex={-1} className="font-semibold tracking-tight outline-none">{runHeadline(run)}</h1>
       {body && <p className="text-muted-foreground">{body}</p>}
       {starting && (
-        <div role="progressbar" aria-label={NR_LAUNCH.BADGE_STARTING} className="my-4 h-1.5 w-64 overflow-hidden rounded-full bg-muted">
+        <div role="progressbar" aria-label={NR_LAUNCH.BADGE_STARTING} className="my-4 h-[3px] w-[260px] overflow-hidden bg-muted">
           <div className="h-full w-full animate-pulse rounded-full bg-primary motion-reduce:animate-none" />
         </div>
       )}

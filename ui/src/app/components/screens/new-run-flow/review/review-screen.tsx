@@ -139,9 +139,9 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} />
       <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} />
       {view === "pretty" ? (
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-          <section className="flex flex-col rounded-lg border border-border p-4">
-            <header className="flex items-start justify-between gap-3 pb-2">
+        <div className="grid items-start gap-3.5 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
+          <section className="flex flex-col overflow-hidden rounded-xl border border-border bg-card">
+            <header className="flex min-h-[78px] items-start justify-between gap-3 border-b border-border px-5 py-[18px]">
               <div>
                 <h2 className="font-medium">{NR_REVIEW.SETUP_TITLE}</h2>
                 <p className="text-sm text-muted-foreground">{setupTitle(draft.intent)}</p>
