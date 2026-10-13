@@ -321,13 +321,12 @@ const envRequireRefRuleset = "WARDYN_GITHUB_REQUIRE_REF_RULESET"
 var ErrRefRulesetRequired = errors.New("broker: " + envRequireRefRuleset + " is set and the repo is not confined by a GitHub ruleset")
 
 // refRulesetProbeTimeout bounds ONE repo's verification. checkRefRuleset runs
-// inside mint()'s transaction, holding SELECT ... FOR UPDATE on the grant row
-// and a pooled Postgres connection, and VerifyRefRuleset makes several
+// while mint() prepares the credential, and VerifyRefRuleset makes several
 // api.github.com round trips (a token mint, two rule reads, one ruleset read per
 // ruleset found, a revoke). Neither github client sets an http.Client timeout
 // and the API server sets no Read/WriteTimeout, so without a deadline here the
-// only bound is the caller's request ctx and a blackholed api.github.com pins
-// the row lock and the connection for as long as it stays black. The advisory
+// only bound is the caller's request ctx and a blackholed api.github.com holds
+// the mint for as long as it stays black. The advisory
 // /setup/status path already does the same with 5s (api.refRulesetTimeout); this
 // one is longer only because exceeding it fails the mint rather than greying out
 // a checklist row.
@@ -646,9 +645,8 @@ func (b *Broker) checkRefRuleset(ctx context.Context, repos []string) error {
 		return nil
 	}
 	// ONE deadline for the whole grant, not one fresh refRulesetProbeTimeout per
-	// repo: the loop runs inside mint()'s transaction, holding the grant row's
-	// FOR UPDATE lock and a pooled connection for as long as it takes, and a
-	// per-repo deadline lets that grow unbounded with the repo count (12 repos
+	// repo: the loop holds the mint for as long as it takes, and a per-repo
+	// deadline lets that grow unbounded with the repo count (12 repos
 	// against a blackholed api.github.com = 12 independent 15s waits). Sized
 	// from len(repos) so a legitimately large grant still gets each repo its
 	// existing budget, just under one shared, explicit ceiling.
