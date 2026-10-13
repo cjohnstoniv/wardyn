@@ -464,7 +464,7 @@ func applyRunMode(req *createRunRequest) *runRefusal {
 		return nil
 	}
 	for _, check := range []func(createRunRequest) *runRefusal{
-		runModeShapeRefusal, runModeConflictRefusal, runModeRequiredRefusal, startFolderRefusal, runModeUnavailableRefusal, attendedToolRulesRefusal,
+		runModeShapeRefusal, runModeConflictRefusal, runModeRequiredRefusal, startFolderRefusal, runModeUnavailableRefusal, attendedToolRulesRefusal, commandToolRulesRefusal,
 	} {
 		if refusal := check(*req); refusal != nil {
 			return refusal
@@ -489,6 +489,20 @@ func attendedToolRulesRefusal(req createRunRequest) *runRefusal {
 			return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
 				runModeUnavailableMsg(fmt.Sprintf("tools[%d]: tool rules in an interactive run", i)))
 		}
+	}
+	return nil
+}
+
+// commandToolRulesRefusal: a background command starts its harnesses itself,
+// off the gated lane, with no managed settings, so nothing reads a person's rule
+// or default on a harness it includes.
+func commandToolRulesRefusal(req createRunRequest) *runRefusal {
+	if req.Experience != client.ExperienceBackground || req.Workload == nil || req.Workload.Kind != client.WorkloadCommand {
+		return nil
+	}
+	if i := slices.IndexFunc(req.Tools, hasPersonalToolRules); i >= 0 {
+		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
+			runModeUnavailableMsg(fmt.Sprintf("tools[%d]: tool rules in a background command", i)))
 	}
 	return nil
 }

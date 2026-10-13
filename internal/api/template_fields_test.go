@@ -579,7 +579,6 @@ func TestTemplateImportValidation(t *testing.T) {
 		{"needs setup for a present field", `{` + head + `"coverage":"partial","intent":{"agent":"a"},"needs_setup":[{"field":"agent"}]}`, reasonTemplateFieldInvalid + "@needs_setup[0].field"},
 		{"needs setup for an unknown field", `{` + head + `"coverage":"partial","intent":{"agent":"a"},"needs_setup":[{"field":"nope"}]}`, reasonTemplateFieldInvalid + "@needs_setup[0].field"},
 		{"shape check shared with the run", `{` + head + `"coverage":"partial","intent":{"workspaces":[{"workspace_id":"11111111-1111-1111-1111-111111111111","target":"work"}]}}`, reasonWorkspaceTargetInvalid + "@intent"},
-		{"unavailable: local placement", `{` + head + `"coverage":"partial","intent":{"placement":"local"}}`, reasonTemplateFieldUnavailable + "@intent.placement"},
 		{"unavailable: allowed image", `{` + head + `"coverage":"partial","intent":{"allowed_image":"img"}}`, reasonTemplateFieldUnavailable + "@intent.allowed_image"},
 		{"unavailable: built-in azure_devops component", `{` + head + `"coverage":"partial","intent":{"components":[{"builtin":"azure_devops","org":"acme"}]}}`, reasonTemplateFieldUnavailable + "@intent.components[0]"},
 		{"plain setting named like a secret is a plain setting", ``, ""},
@@ -636,9 +635,7 @@ func TestTemplateUnavailableMirrorsRunRefusal(t *testing.T) {
 			if err := json.Unmarshal([]byte(body), &req); err != nil {
 				t.Fatal(err)
 			}
-			// placement: local is refused by stepLocalEligibility (placement_unavailable)
-			// until own-runner routing lands, not by unappliedFieldsRefusal.
-			runRefuses := unappliedFieldsRefusal(req) != nil || req.Placement == client.PlacementLocal
+			runRefuses := unappliedFieldsRefusal(req) != nil
 			d := &templateDecoder{}
 			d.checkAvailable(req)
 			if templateRefuses := len(d.diags) > 0; templateRefuses != runRefuses {
