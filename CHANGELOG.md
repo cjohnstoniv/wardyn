@@ -1097,6 +1097,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The Azure CLI sign-in's resolve door no longer hands a run its bearer token when the token could not be recorded
   for output masking: it answers 503 `mask_state_unavailable` and audits the refusal, as the other credential doors
   do.
+- Review and policy preview show the managed-settings document launch writes in two more cases: an interactive
+  Claude Code run whose policy carries tool rules, and a run whose started agent has no document while another
+  harness in its set does.
 
 
 ## [0.8.9] — 2026-10-09
