@@ -55,6 +55,10 @@ type QueueVerdict struct {
 	// locks, else to such a remote-hosted runner, and leaves the run waiting when none has room.
 	Runners []uuid.UUID
 	Remotes []string
+	// Needs is the size the run would start with on each of those runners, by runner key: the promotion
+	// holds that size to the runner under its lock and writes it as the run's reservation. A runner
+	// with none is held to the size the run joined the queue with.
+	Needs map[string]types.RunnerAmounts
 }
 
 // QueueAdmit judges one waiting run before the pass takes any lock (pool-queue.md section 7 step 4), so it
@@ -181,7 +185,7 @@ func (s PG) judgeQueue(ctx context.Context, pass PromotePass, pool types.RunnerP
 			case v.Stop:
 				return admitted, held, nil
 			case v.Admit:
-				if admitted = append(admitted, admittedRun{entry: e, runners: v.Runners, remotes: v.Remotes}); len(admitted) >= room {
+				if admitted = append(admitted, admittedRun{entry: e, runners: v.Runners, remotes: v.Remotes, needs: v.Needs}); len(admitted) >= room {
 					return admitted, held, nil
 				}
 			default:
@@ -201,6 +205,7 @@ type admittedRun struct {
 	entry   RunQueueEntry
 	runners []uuid.UUID
 	remotes []string
+	needs   map[string]types.RunnerAmounts
 }
 
 // keys are its runners' keys, self-hosted first.
@@ -275,12 +280,23 @@ func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []ad
 			if runnerpool.AtCapacity(pool, running) != nil || (pass.DeploymentCap > 0 && deployment >= pass.DeploymentCap) {
 				break
 			}
-			need := needs[e.RunID]
+			// The run's size on each runner is the one it would start with there (the verdict's); a runner
+			// the verdict sized none for is held to the size the run joined the queue with.
+			needOn := func(key string) types.RunnerAmounts {
+				if n, ok := a.needs[key]; ok {
+					return n
+				}
+				return needs[e.RunID]
+			}
 			var bind *uuid.UUID
 			var remote, key string
+			var sized *types.RunnerAmounts
 			if len(a.runners)+len(a.remotes) > 0 {
-				if key = roomiest(a.keys(), rooms, need); key == "" {
+				if key = roomiest(a.keys(), rooms, needOn); key == "" {
 					continue
+				}
+				if n, ok := a.needs[key]; ok {
+					sized = &n
 				}
 				if id, err := uuid.Parse(key); err == nil {
 					bind = &id
@@ -288,7 +304,7 @@ func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []ad
 					remote = key
 				}
 			}
-			run, ok, err := promoteQueuedRun(ctx, q, e.RunID, pass.WatcherOwner, bind, remote)
+			run, ok, err := promoteQueuedRun(ctx, q, e.RunID, pass.WatcherOwner, bind, remote, sized)
 			if err != nil {
 				return err
 			}
@@ -305,7 +321,7 @@ func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []ad
 			deployment++
 			if key != "" {
 				room := rooms[key]
-				room.take(need)
+				room.take(needOn(key))
 				rooms[key] = room
 			}
 		}
@@ -314,10 +330,10 @@ func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []ad
 	return promoted, err
 }
 
-// roomiest is the runner of keys that fits a run reserving need with the most runs left, the first of
-// them on a tie, a self-hosted runner before any remote-hosted one, "" when none fits: a pass spreads
-// its runs over the runners rather than filling the first.
-func roomiest(keys []string, rooms map[string]runnerRoom, need types.RunnerAmounts) string {
+// roomiest is the runner of keys that fits the run at the size it reserves there (need) with the most
+// runs left, the first of them on a tie, a self-hosted runner before any remote-hosted one, "" when none
+// fits: a pass spreads its runs over the runners rather than filling the first.
+func roomiest(keys []string, rooms map[string]runnerRoom, need func(key string) types.RunnerAmounts) string {
 	best := ""
 	for _, remote := range []bool{false, true} {
 		for _, k := range keys {
@@ -325,7 +341,7 @@ func roomiest(keys []string, rooms map[string]runnerRoom, need types.RunnerAmoun
 				continue
 			}
 			room := rooms[k]
-			if room.fits(need) && (best == "" || room.runsLeft() > rooms[best].runsLeft()) {
+			if room.fits(need(k)) && (best == "" || room.runsLeft() > rooms[best].runsLeft()) {
 				best = k
 			}
 		}
@@ -360,19 +376,26 @@ func reservedOf(ctx context.Context, q Querier, ids []uuid.UUID) (map[uuid.UUID]
 
 // promoteQueuedRun is the promotion CAS: QUEUED to PENDING, admitted_at and the watcher lease stamped,
 // the runner it now holds a place on written when runner or remote is set (and the other kind's cleared, so
-// the run is counted on that one runner alone), and the run_queue row deleted in the
+// the run is counted on that one runner alone), its reservation set to the size it was admitted at there
+// (sized) when the promotion sized it, and the run_queue row deleted in the
 // same statement, the run row before its queue row as every exit from the queue takes them. ok is false
 // when another exit won first.
-func promoteQueuedRun(ctx context.Context, q Querier, id uuid.UUID, owner string, runner *uuid.UUID, remote string) (types.AgentRun, bool, error) {
+func promoteQueuedRun(ctx context.Context, q Querier, id uuid.UUID, owner string, runner *uuid.UUID, remote string, sized *types.RunnerAmounts) (types.AgentRun, bool, error) {
+	var cpu, mem, disk *int64
+	if sized != nil {
+		cpu, mem, disk = &sized.CPUMillis, &sized.MemoryMiB, &sized.DiskMiB
+	}
 	run, err := scanRun(q.QueryRow(ctx, `
 		WITH moved AS (
 			UPDATE agent_runs SET state=$2, updated_at=now(), admitted_at=now(), watcher_owner=$3, watcher_heartbeat=now(),
 				runner_id=CASE WHEN $6 <> '' THEN NULL ELSE COALESCE($5, runner_id) END,
-				runner_pool_executor=CASE WHEN $5::uuid IS NOT NULL THEN '' ELSE COALESCE(NULLIF($6, ''), runner_pool_executor) END
+				runner_pool_executor=CASE WHEN $5::uuid IS NOT NULL THEN '' ELSE COALESCE(NULLIF($6, ''), runner_pool_executor) END,
+				reserved_cpu_millis=COALESCE($7, reserved_cpu_millis), reserved_memory_mib=COALESCE($8, reserved_memory_mib),
+				reserved_disk_mib=COALESCE($9, reserved_disk_mib)
 			WHERE id=$1 AND state=$4 RETURNING `+runCols+`),
 		gone AS (DELETE FROM run_queue WHERE run_id IN (SELECT id FROM moved) RETURNING run_id)
 		SELECT `+runCols+` FROM moved`,
-		id, string(types.RunPending), owner, string(types.RunQueued), runner, remote))
+		id, string(types.RunPending), owner, string(types.RunQueued), runner, remote, cpu, mem, disk))
 	if errors.Is(err, ErrNotFound) {
 		return types.AgentRun{}, false, nil
 	}

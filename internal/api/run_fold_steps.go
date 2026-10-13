@@ -610,6 +610,11 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	if f.mode != foldPreview {
 		f.queued = plan.queues() && !f.promoted
 	}
+	// A launch that waits records the size it gets before any runner bounds it, so the queue sizes it for
+	// each runner that could take it (startSizeOn) instead of holding it to the runner it met first.
+	if f.place.unbound, refusal = s.unboundSize(f.r.Context(), in, plan.row, f.queued); refusal.write(s, f.w, f.r) {
+		return false
+	}
 	return true
 }
 
