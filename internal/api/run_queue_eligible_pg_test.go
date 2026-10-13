@@ -200,3 +200,32 @@ func TestPG_WaitingRunThatCanRunLocallyTakesTheFreedLaptop(t *testing.T) {
 		t.Fatalf("with the laptop freed the run is %s on runner %v executor %q (%s); want it RUNNING on the laptop", got.State, got.RunnerID, got.RunnerPoolExecutor, got.FailureHint)
 	}
 }
+
+// A run kept off the person's own runners is kept off them only while the pool has a remote-hosted runner
+// for it. Once the pool has none and the laptop can take the run, the waiting run starts on the laptop,
+// as a fresh launch would: what was recorded when it joined never strands it.
+func TestPG_WaitingRunKeptOffItsOwnRunnerTakesItOnceNoRemoteRunnerIsLeft(t *testing.T) {
+	e := newQueueEnv(t)
+	ctx := context.Background()
+	site := func(upstream string) {
+		t.Helper()
+		if _, err := e.pg.PutSiteConfig(ctx, types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true}, UpstreamProxySecretRef: upstream}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	site("corporate-parent")
+	pool, laptop := bothFull(e)
+	waiting := e.waitsFor(runBody(fmt.Sprintf(`"runner_pool_id":%q`, pool.ID)), "both runners are full")
+	if !e.waitingLaunch(waiting.ID).NoLocal {
+		t.Fatal("the launch does not record that the person's own runner cannot take it")
+	}
+	site("")
+	if w := e.call(e.person, http.MethodDelete, myRemotePath(pool.ID, "alpha"), ""); w.Code/100 != 2 {
+		t.Fatalf("remove alpha from the pool = %d %s", w.Code, w.Body)
+	}
+	e.endOccupant(laptop.String())
+	if got := e.settles(waiting.ID); got.State != types.RunRunning || got.RunnerID == nil || *got.RunnerID != laptop {
+		t.Fatalf("with no remote-hosted runner left and the laptop free the run is %s on runner %v (%s: %s); want it RUNNING on the laptop",
+			got.State, got.RunnerID, got.StatusDetail, got.FailureHint)
+	}
+}

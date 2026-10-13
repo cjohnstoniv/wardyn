@@ -83,6 +83,14 @@ func New(socket, conf string) (*Substrate, error) {
 
 func (s *Substrate) Name() string { return Name }
 
+// Measure implements runner.Measurer, as the Docker and Kubernetes substrates do: the stand-in says what
+// it has, so boot proposes its limits and the harness's seeded launches are taken. A substrate that
+// measures nothing gets no limits and takes no run. The size is the largest whose proposal the limits
+// allow; this substrate confines nothing and caps nothing.
+func (s *Substrate) Measure(context.Context) (types.RunnerAmounts, error) {
+	return types.RunnerAmounts{CPUMillis: 2 * types.RunnerPoolCPUMillisMax, MemoryMiB: 2 * types.RunnerPoolMemoryMiBMax, DiskMiB: 2 * types.RunnerPoolDiskMiBMax}, nil
+}
+
 func (s *Substrate) Classes(context.Context) (substrate.ClassSupport, error) {
 	return substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC1}}, nil
 }
