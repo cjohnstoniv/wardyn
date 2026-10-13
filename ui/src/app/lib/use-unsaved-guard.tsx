@@ -132,7 +132,7 @@ function installUnsavedGuard(): void {
       return;
     }
     // A move between places where every unsaved draft still lives (one form's own steps) loses nothing.
-    if (historyIndex === null || newIndex === historyIndex || unsavedSnapshot() === null || !activeRequestLeave || unsavedStaysAt(window.location.pathname)) {
+    if (historyIndex === null || newIndex === historyIndex || unsavedSnapshot() === null || !activeRequestLeave || unsavedStaysAt(window.location.pathname + window.location.search)) {
       // No established baseline yet, no actual move, nothing dirty, or no
       // mounted provider to ask through — accept it as the new baseline and
       // let react-router see it normally.
