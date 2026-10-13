@@ -370,6 +370,18 @@ describe("while the next answer is out", () => {
   });
 });
 
+describe("a catalogue that cannot be read", () => {
+  it("says why, and the greyed Custom component points at that sentence rather than reading as a refusal", async () => {
+    h.mine.mockRejectedValue(new Error("Wardyn couldn't load your components."));
+    await show();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Wardyn couldn't load your components.");
+    const custom = screen.getByRole("button", { name: NR_TOOLS.CUSTOM_COMPONENT });
+    expect(custom).toBeDisabled();
+    expect(custom).toHaveAttribute("aria-describedby", alert.id);
+  });
+});
+
 describe("Added to this run", () => {
   it("removes a host, a header secret and a component by the carrier that added each", async () => {
     const access: AccessFacts = {
