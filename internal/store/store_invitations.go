@@ -198,3 +198,30 @@ func (s PG) ClaimInvitation(ctx context.Context, c InvitationClaim) (InvitationC
 	out.Invitation.State = types.InvitationClaimed
 	return out, nil
 }
+
+// EraseInvitationsOf removes person from person_invitations in one transaction. Every invitation that
+// targets them is deleted, whatever its state, since a target is never blank. Where they created or
+// revoked another person's, their name is cleared and the row stays: a claimed one is what tells that
+// person's replaced token apart (TokenDispositionFacts), and a pending one can still be claimed.
+func (s PG) EraseInvitationsOf(ctx context.Context, person string) (deleted, cleared int, err error) {
+	if person == "" {
+		return 0, 0, errors.New("store: erase invitations: a person is required")
+	}
+	err = s.inTx(ctx, func(q Querier) error {
+		tag, err := q.Exec(ctx, `DELETE FROM person_invitations WHERE target = $1`, person)
+		if err != nil {
+			return err
+		}
+		deleted = int(tag.RowsAffected())
+		tag, err = q.Exec(ctx, `UPDATE person_invitations
+			SET created_by = CASE WHEN created_by = $1 THEN '' ELSE created_by END,
+			    revoked_by = CASE WHEN revoked_by = $1 THEN '' ELSE revoked_by END
+			WHERE created_by = $1 OR revoked_by = $1`, person)
+		cleared = int(tag.RowsAffected())
+		return err
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("store: erase invitations: %w", err)
+	}
+	return deleted, cleared, nil
+}
