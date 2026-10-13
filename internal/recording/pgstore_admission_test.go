@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -81,10 +82,12 @@ func (g *gatedSaves) finish(id int) error {
 	return <-g.done
 }
 
-// fill starts one SaveCast per slot and waits until each is reading.
-func (g *gatedSaves) fill(run string) []int {
+// fill starts one SaveCast per stream slot, each for its own run, and waits
+// until each is reading.
+func (g *gatedSaves) fill() []int {
 	var ids []int
 	for range recording.CastSaveSlots {
+		run := uuid.NewString()
 		ids = append(ids, g.start(func(r io.Reader) error { return g.s.SaveCast(g.t.Context(), run, r) }))
 	}
 	for range ids {
@@ -105,16 +108,20 @@ func (g *gatedSaves) expectWait(what string) {
 
 func TestPGStore_SaveAdmissionQueuesOverBudget(t *testing.T) {
 	g := newGatedSaves(t)
-	run := uuid.NewString()
-	held := g.fill(run)
-	attach := g.start(func(r io.Reader) error { return g.s.SaveCastNamed(t.Context(), run, uuid.NewString(), r) })
-	g.expectWait("attach save")
+	held := g.fill()
+	attach := g.start(func(r io.Reader) error {
+		return g.s.SaveCastNamed(t.Context(), uuid.NewString(), uuid.NewString(), r)
+	})
+	g.expectWait("named save")
 	part := g.start(func(r io.Reader) error {
-		return g.s.SaveCastNamed(t.Context(), run, recording.PartSuffix(2), r)
+		return g.s.SaveCastNamed(t.Context(), uuid.NewString(), recording.PartSuffix(2), r)
 	})
 	g.expectWait("part save")
 	if n := recording.CastSaveSlotsHeld(); n != recording.CastSaveSlots {
 		t.Fatalf("slots held = %d, want %d", n, recording.CastSaveSlots)
+	}
+	if recording.InMemorySaveSlotHeld() {
+		t.Fatal("a stream save took the in-memory slot")
 	}
 
 	// Each finished save admits exactly one waiter.
@@ -145,7 +152,7 @@ func TestPGStore_SaveAdmissionQueuesOverBudget(t *testing.T) {
 func TestPGStore_SaveAdmissionCancelLeavesNoReservation(t *testing.T) {
 	g := newGatedSaves(t)
 	run := uuid.NewString()
-	held := g.fill(run)
+	held := g.fill()
 	ctx, cancel := context.WithCancel(t.Context())
 	g.start(func(r io.Reader) error { return g.s.SaveCastNamed(ctx, run, "ssh-"+uuid.NewString(), r) })
 	g.expectWait("cancelled save")
@@ -165,10 +172,15 @@ func TestPGStore_SaveAdmissionCancelLeavesNoReservation(t *testing.T) {
 	if n := recording.CastSaveSlotsHeld(); n != 0 {
 		t.Fatalf("slots held after every save returned = %d", n)
 	}
-	// A fresh save is admitted at once: nothing was left reserved.
+	// A fresh save of the same run is admitted at once: nothing was left reserved.
 	id := g.start(func(r io.Reader) error { return g.s.SaveCast(t.Context(), run, r) })
-	if got := <-g.entered; got != id {
-		t.Fatalf("save %d entered, want %d", got, id)
+	select {
+	case got := <-g.entered:
+		if got != id {
+			t.Fatalf("save %d entered, want %d", got, id)
+		}
+	case <-g.waits:
+		t.Fatal("the cancelled waiter left its run or a slot held")
 	}
 	if err := g.finish(id); !errors.Is(err, errGate) {
 		t.Fatalf("fresh save = %v", err)
@@ -216,5 +228,99 @@ func TestPGStore_SaveAdmissionSmallAndMaxStreams(t *testing.T) {
 	}
 	if n := recording.CastSaveSlotsHeld(); n != 0 {
 		t.Errorf("slots held after a refused save = %d", n)
+	}
+}
+
+// One run holds at most one stream slot: its second save waits for its first,
+// while another run's save is admitted.
+func TestPGStore_SaveAdmissionOneSlotPerRun(t *testing.T) {
+	g := newGatedSaves(t)
+	run := uuid.NewString()
+	first := g.start(func(r io.Reader) error { return g.s.SaveCast(t.Context(), run, r) })
+	if got := <-g.entered; got != first {
+		t.Fatalf("save %d entered, want %d", got, first)
+	}
+	second := g.start(func(r io.Reader) error {
+		return g.s.SaveCastNamed(t.Context(), run, recording.PartSuffix(2), r)
+	})
+	g.expectWait("second save of one run")
+	other := g.start(func(r io.Reader) error { return g.s.SaveCast(t.Context(), uuid.NewString(), r) })
+	select {
+	case got := <-g.entered:
+		if got != other {
+			t.Fatalf("save %d entered, want the other run's %d", got, other)
+		}
+	case <-g.waits:
+		t.Fatal("another run's save waited behind this run")
+	}
+	if err := g.finish(first); !errors.Is(err, errGate) {
+		t.Fatalf("first save = %v", err)
+	}
+	if got := <-g.entered; got != second {
+		t.Fatalf("save %d entered, want the run's second save %d", got, second)
+	}
+	for _, id := range []int{second, other} {
+		if err := g.finish(id); !errors.Is(err, errGate) {
+			t.Fatalf("save %d = %v", id, err)
+		}
+	}
+	if n := recording.CastSaveSlotsHeld(); n != 0 {
+		t.Fatalf("slots held after every save returned = %d", n)
+	}
+}
+
+// An in-memory save (an attach or SSH session snapshot) completes while
+// trickling uploads hold every stream slot.
+func TestPGStore_InMemorySaveDoesNotWaitBehindUploads(t *testing.T) {
+	pg := recording.NewPGStore(pgPool(t))
+	g := newGatedSaves(t)
+	held := g.fill()
+	run := uuid.NewString()
+	done := make(chan error, 1)
+	go func() {
+		done <- pg.SaveCastNamed(t.Context(), run, "ssh-"+uuid.NewString(), bytes.NewReader([]byte("snapshot")))
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("in-memory save = %v", err)
+		}
+	case <-g.waits:
+		t.Fatal("an in-memory save waited behind uploads")
+	}
+	if recording.InMemorySaveSlotHeld() {
+		t.Fatal("in-memory slot still held after its save returned")
+	}
+	for _, id := range held {
+		if err := g.finish(id); !errors.Is(err, errGate) {
+			t.Fatalf("upload = %v", err)
+		}
+	}
+}
+
+// A save waits at most castSaveAdmitWait for admission, even on a context that
+// never ends, and leaves holding nothing.
+func TestPGStore_SaveAdmissionWaitIsBounded(t *testing.T) {
+	recording.ShortenCastSaveAdmitWait(t, 50*time.Millisecond)
+	g := newGatedSaves(t)
+	held := g.fill()
+	g.start(func(r io.Reader) error { return g.s.SaveCast(context.Background(), uuid.NewString(), r) })
+	g.expectWait("save over the budget")
+	select {
+	case err := <-g.done:
+		g.pending--
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("over-budget save = %v, want its admission wait to end", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("admission wait outlived its bound")
+	}
+	if n := recording.CastSaveSlotsHeld(); n != recording.CastSaveSlots {
+		t.Fatalf("slots held = %d, want %d", n, recording.CastSaveSlots)
+	}
+	for _, id := range held {
+		if err := g.finish(id); !errors.Is(err, errGate) {
+			t.Fatalf("finished save = %v", err)
+		}
 	}
 }

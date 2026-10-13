@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -59,38 +60,102 @@ func readCapped(r io.Reader, limit int) ([]byte, error) {
 	}
 }
 
-// castSaveSlots is the process's payload-buffer budget for PGStore saves, shared
-// by every PGStore: an admitted save may regrow its buffer once to the full
-// cap, so two slots spend 2 x 64 MiB = 128 MiB of read buffers. pgx then
-// copies the bytea twice while sending it (parameter buffer, wire buffer), so
-// two maximum saves can briefly hold about 2 x 192 MiB = 384 MiB, which leaves
-// room inside the chart's 512 MiB limit for caller snapshots (an attach
-// session's is at most 8 MiB) and the rest of the daemon. Two is also the
-// number of concurrent maximum uploads readCapped is written to survive.
+// PGStore saves are admitted against a process-wide payload-buffer budget,
+// shared by every PGStore. A save holds one slot from before it buffers a byte
+// until its row is sent, and may regrow its buffer once to the 64 MiB cap.
 //
-// ponytail: a slot is held while the upload streams in, so slow uploads queue
-// faster ones behind them; a byte-weighted admission at the regrow would lift
-// that if small casts ever need to pass large ones.
-var castSaveSlots = make(chan struct{}, 2)
+//   - streamSaveSlots: saves read from a source that sets its own pace, such
+//     as an upload body. A run holds at most one (runSaves), so one sandbox
+//     never holds the whole budget.
+//   - inMemorySaveSlot: saves whose reader reports Len, so its bytes are
+//     already in memory and its read cannot stall: an attach or SSH session
+//     snapshot. A stream save never takes it, so these never wait behind an
+//     upload.
+//
+// Three slots spend 3 x 64 MiB = 192 MiB of read buffers. pgx copies the bytea
+// twice more while sending it (parameter buffer, wire buffer; an estimate read
+// from the driver, not measured), so two maximum uploads peak near 2 x 192 MiB
+// and an attach save (snapshot at most 8 MiB) near 64 + 2 x 8 + 8 MiB: about
+// 472 MiB, sized to fit within the chart's 512 MiB limit.
+//
+// A save waits at most castSaveAdmitWait to be admitted, and the upload route
+// bounds how long an admitted upload's body may take to arrive.
+//
+// ponytail: a slot is held while an upload streams in; a byte-weighted
+// admission at the regrow would let small casts pass large ones.
+var (
+	streamSaveSlots  = make(chan struct{}, 2)
+	inMemorySaveSlot = make(chan struct{}, 1)
+	runSavesMu       sync.Mutex
+	runSaves         = map[string]chan struct{}{} // closed when the run's save lets go
+)
 
-// castSaveWait runs when a save finds every slot held and is about to wait.
+// castSaveAdmitWait bounds a save's wait for admission. Below the proxy's
+// 130 s upload timeout together with the upload route's 60 s read window.
+var castSaveAdmitWait = 60 * time.Second
+
+// castSaveWait runs each time a save finds what it needs held and is about to wait.
 var castSaveWait = func() {}
 
-// admitCastSave takes a castSaveSlots slot, waiting until one frees or ctx
-// ends; a waiter that leaves holds nothing.
-func admitCastSave(ctx context.Context) (release func(), err error) {
-	release = func() { <-castSaveSlots }
+// admitCastSave admits a save of key read from r, waiting until it may run or
+// ctx ends; a waiter that leaves holds nothing.
+func admitCastSave(ctx context.Context, key string, r io.Reader) (release func(), err error) {
+	ctx, cancel := context.WithTimeout(ctx, castSaveAdmitWait)
+	defer cancel()
+	if _, ok := r.(interface{ Len() int }); ok {
+		return takeSlot(ctx, inMemorySaveSlot)
+	}
+	releaseRun, err := holdRun(ctx, castRun(key))
+	if err != nil {
+		return nil, err
+	}
+	releaseSlot, err := takeSlot(ctx, streamSaveSlots)
+	if err != nil {
+		releaseRun()
+		return nil, err
+	}
+	return func() { releaseSlot(); releaseRun() }, nil
+}
+
+func takeSlot(ctx context.Context, slots chan struct{}) (func(), error) {
+	release := func() { <-slots }
 	select {
-	case castSaveSlots <- struct{}{}:
+	case slots <- struct{}{}:
 		return release, nil
 	default:
 	}
 	castSaveWait()
 	select {
-	case castSaveSlots <- struct{}{}:
+	case slots <- struct{}{}:
 		return release, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	}
+}
+
+// holdRun waits until no other stream save of run is admitted or waiting for a slot.
+func holdRun(ctx context.Context, run string) (func(), error) {
+	for {
+		runSavesMu.Lock()
+		held, busy := runSaves[run]
+		if !busy {
+			mine := make(chan struct{})
+			runSaves[run] = mine
+			runSavesMu.Unlock()
+			return func() {
+				runSavesMu.Lock()
+				delete(runSaves, run)
+				runSavesMu.Unlock()
+				close(mine)
+			}, nil
+		}
+		runSavesMu.Unlock()
+		castSaveWait()
+		select {
+		case <-held:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 }
 
@@ -125,7 +190,7 @@ func (s *PGStore) SaveCast(ctx context.Context, runID string, r io.Reader) error
 		return err
 	}
 	// Admitted before the first byte is buffered, held until the row is sent.
-	release, err := admitCastSave(ctx)
+	release, err := admitCastSave(ctx, runID, r)
 	if err != nil {
 		return err
 	}

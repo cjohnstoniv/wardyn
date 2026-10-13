@@ -3,17 +3,30 @@
 
 package recording
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
-// CastSaveSlots is the number of PGStore saves admitted at once.
-var CastSaveSlots = cap(castSaveSlots)
+// CastSaveSlots is the number of PGStore stream saves admitted at once.
+var CastSaveSlots = cap(streamSaveSlots)
 
-// CastSaveSlotsHeld reports how many admission slots are held right now.
-func CastSaveSlotsHeld() int { return len(castSaveSlots) }
+// CastSaveSlotsHeld reports how many stream save slots are held right now.
+func CastSaveSlotsHeld() int { return len(streamSaveSlots) }
+
+// InMemorySaveSlotHeld reports whether the in-memory save slot is held.
+func InMemorySaveSlotHeld() bool { return len(inMemorySaveSlot) > 0 }
 
 // OnCastSaveWait calls f each time a save starts waiting for a slot.
 func OnCastSaveWait(t testing.TB, f func()) {
 	old := castSaveWait
 	castSaveWait = f
 	t.Cleanup(func() { castSaveWait = old })
+}
+
+// ShortenCastSaveAdmitWait sets the admission wait to d for one test.
+func ShortenCastSaveAdmitWait(t testing.TB, d time.Duration) {
+	old := castSaveAdmitWait
+	castSaveAdmitWait = d
+	t.Cleanup(func() { castSaveAdmitWait = old })
 }

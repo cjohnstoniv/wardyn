@@ -33,13 +33,25 @@ func (r *delayedCast) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// recordingErasureContract pauses a late writer on each of the first paused
-// keys; a store that admits only so many saves at once is given that number.
-func recordingErasureContract(t *testing.T, paused int, newStore func() recording.Store) string {
+// recordingErasureContract pauses a late writer on every key of a run family
+// while the run is erased, in waves of at most paused writers (a store that
+// admits only so many of one run's saves at once is given that number), each
+// wave on a fresh run. It returns the runs.
+func recordingErasureContract(t *testing.T, paused int, newStore func() recording.Store) []string {
+	t.Helper()
+	var runs []string
+	for lo := 0; lo < 5; lo += paused {
+		runs = append(runs, erasureWave(t, newStore, lo, min(lo+paused, 5)))
+	}
+	return runs
+}
+
+// erasureWave pauses late writers on keys[lo:hi] of a fresh run's family.
+func erasureWave(t *testing.T, newStore func() recording.Store, lo, hi int) string {
 	t.Helper()
 	a, b := newStore(), newStore()
 	run := uuid.NewString()
-	keys := []string{run + "~attach-part-2", run, run + "~attach", run + "~part-2", run + "~part-2048"}
+	keys := []string{run, run + "~attach", run + "~attach-part-2", run + "~part-2", run + "~part-2048"}
 	done := make(chan error, len(keys))
 	var releases []func()
 	for _, key := range keys {
@@ -47,7 +59,7 @@ func recordingErasureContract(t *testing.T, paused int, newStore func() recordin
 			t.Fatal(err)
 		}
 	}
-	for _, key := range keys[:paused] {
+	for _, key := range keys[lo:hi] {
 		r := &delayedCast{r: strings.NewReader("late bytes"), read: make(chan struct{}), release: make(chan struct{})}
 		release := sync.OnceFunc(func() { close(r.release) })
 		defer release()
@@ -67,7 +79,7 @@ func recordingErasureContract(t *testing.T, paused int, newStore func() recordin
 	for _, release := range releases {
 		release()
 	}
-	for range keys[:paused] {
+	for range keys[lo:hi] {
 		select {
 		case err := <-done:
 			if !errors.Is(err, recording.ErrErased) {
@@ -105,7 +117,7 @@ func assertErased(t *testing.T, s recording.Store, key string) {
 
 func TestFSStore_ErasureDelayedStreams(t *testing.T) {
 	root := t.TempDir()
-	run := recordingErasureContract(t, 5, func() recording.Store {
+	runs := recordingErasureContract(t, 5, func() recording.Store {
 		s, err := recording.NewFSStore(root)
 		if err != nil {
 			t.Fatal(err)
@@ -117,17 +129,23 @@ func TestFSStore_ErasureDelayedStreams(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if (strings.HasPrefix(e.Name(), run) && strings.HasSuffix(e.Name(), ".cast")) || strings.HasPrefix(e.Name(), ".tmp-cast-") {
+		if (strings.HasPrefix(e.Name(), runs[0]) && strings.HasSuffix(e.Name(), ".cast")) || strings.HasPrefix(e.Name(), ".tmp-cast-") {
 			t.Errorf("late writer left physical recording data: %s", e.Name())
 		}
 	}
 }
 
 func TestPGStore_ErasureDelayedStreamsAcrossReplicas(t *testing.T) {
-	run := recordingErasureContract(t, recording.CastSaveSlots, func() recording.Store { return recording.NewPGStore(pgPool(t)) })
-	var n int
-	if err := pgPool(t).QueryRow(t.Context(), `SELECT count(*) FROM recordings WHERE cast_key = $1 OR starts_with(cast_key, $1 || '~')`, run).Scan(&n); err != nil || n != 0 {
-		t.Fatalf("physical rows after late writers = %d, %v", n, err)
+	// A run's stream saves are admitted one at a time, so each wave pauses one.
+	runs := recordingErasureContract(t, 1, func() recording.Store { return recording.NewPGStore(pgPool(t)) })
+	if len(runs) != 5 {
+		t.Fatalf("waves = %d, want one per key", len(runs))
+	}
+	for _, run := range runs {
+		var n int
+		if err := pgPool(t).QueryRow(t.Context(), `SELECT count(*) FROM recordings WHERE cast_key = $1 OR starts_with(cast_key, $1 || '~')`, run).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("physical rows after late writers = %d, %v", n, err)
+		}
 	}
 }
 

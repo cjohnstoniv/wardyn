@@ -35,7 +35,7 @@ func uploadErasureContract(t *testing.T, s recording.Store) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			panicFails(t, h.srv.Handler()).ServeHTTP(w, req)
+			panicFails(t, h.srv.Handler()).ServeHTTP(deadlineRecorder{w}, req)
 		}()
 		written := make(chan error, 1)
 		go func() { _, err := writer.Write([]byte("stream before erase")); written <- err }()
