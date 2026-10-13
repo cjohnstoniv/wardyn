@@ -256,3 +256,41 @@ func TestPG_LocalRun_OverAskReducedToRunnerCapacity(t *testing.T) {
 		t.Errorf("dispatched to %q with %+v, want %s at 2000 m / 2048 MiB", spec.RunnerID, spec.Resources, small)
 	}
 }
+
+// A run's effective CPU, memory and disk are within the per-run limit of the runner it is placed on and
+// the strictest of governance and the pool: the runner source is the largest per-run limit of the pool's
+// runners, so the doors offer the biggest run one can take, and placement keeps only a runner whose own
+// per-run limit holds the applied size. What the run reserves on that runner is that size.
+func TestEffectiveLimitsIncludePlacedRunner(t *testing.T) {
+	e := newPlacementEnv(t)
+	laptops := e.createPool("Laptops", types.RunnerPoolUser)
+	small := e.laptop(e.personP, 2000, 2048, types.CC1, types.CC2, types.CC3)
+	big := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
+	for _, id := range []uuid.UUID{small, big} {
+		e.addToPool(e.person, laptops.ID, id)
+		e.stream(id, types.CC1, types.CC2, types.CC3)
+	}
+	narrow := types.RunnerPoolLimits{Background: &types.RunnerPoolBackgroundLimits{MemoryMiB: &types.RunnerPoolAmount{Default: 1024, Cap: 6144}}}
+	if _, err := e.pg.UpdateRunnerPool(context.Background(), laptops.ID, e.revision(laptops.ID), nil, nil, &narrow); err != nil {
+		t.Fatal(err)
+	}
+	e.assignSizedProfile("eight", &types.ResourceLimits{CPUMillis: 8000, MemoryMiB: 16384}, types.GovernanceLimits{})
+	created := e.create(limitsBody(`"placement":"local","runner_pool_id":"` + laptops.ID.String() + `","resources":{"cpu_millis":8000,"memory_mib":16384}`))
+	if created.RunnerID == nil || *created.RunnerID != big || created.ResourcesApplied == nil {
+		t.Fatalf("created = %+v, want the run on the runner whose per-run limit holds it, %s", created, big)
+	}
+	wantAmount(t, "cpu", created.ResourcesApplied.CPUMillis, 4000, true, types.LimitSourceRunner, "")
+	wantAmount(t, "memory", created.ResourcesApplied.MemoryMiB, 6144, true, types.LimitSourcePool, "Laptops")
+	row, err := e.pg.GetRunner(context.Background(), big)
+	if err != nil || row.Limits == nil {
+		t.Fatal(err)
+	}
+	var cpu, mem, disk int64
+	if err := e.pool.QueryRow(context.Background(), `SELECT reserved_cpu_millis, reserved_memory_mib, reserved_disk_mib FROM agent_runs WHERE id = $1`,
+		created.ID).Scan(&cpu, &mem, &disk); err != nil {
+		t.Fatal(err)
+	}
+	if cpu != 4000 || mem != 6144 || disk < 1 || disk > row.Limits.PerRun.DiskMiB {
+		t.Fatalf("reserved %d m / %d MiB / %d MiB disk, want 4000 / 6144 / at most the runner's per-run %d", cpu, mem, disk, row.Limits.PerRun.DiskMiB)
+	}
+}
