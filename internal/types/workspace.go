@@ -97,6 +97,11 @@ type WorkspaceSource struct {
 	// write body: does policy admit this clone URL today? A pointer so
 	// "no answer" (absent, no provider row) differs from "not admitted".
 	Admitted *bool `json:"admitted,omitempty"`
+	// CloneTarget is a server-owned read projection on a repo source, never
+	// persisted or from a write body: the absolute path the clone lands at by
+	// default (Target, else /home/agent/work/<name>). A run's own selection
+	// target, when it sets one, wins over it.
+	CloneTarget string `json:"clone_target,omitempty"`
 }
 
 // WorkspaceBaseImage is a Workspace's base-image choice: what the sandbox's
@@ -186,6 +191,8 @@ type Workspace struct {
 	// BuiltProfileHash is the profile hash ImageRef was built from, the
 	// build-once/reuse-many cache key (rebuild only when it changes).
 	BuiltProfileHash string `json:"built_profile_hash,omitempty"`
+	// ImageBuild records what built ImageRef; written only by SetWorkspaceBuiltImage.
+	ImageBuild *ImageBuild `json:"-"`
 	// ApprovedEgress is the operator-owned list of egress hosts explicitly
 	// promoted, unioned into a run's allowlist. Never written by a scan;
 	// cleared when the composition changes.

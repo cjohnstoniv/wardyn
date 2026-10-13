@@ -39,7 +39,7 @@
     "kind": "tool_rule_allow",
     "op": "add",
     "direction": "widen",
-    "rule": "refused"
+    "rule": "within_policy"
   },
   {
     "kind": "ado_capability",

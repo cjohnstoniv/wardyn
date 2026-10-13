@@ -25,20 +25,23 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// podDeadlineGrace is added to Config.RunMaxAge to make a run pod's
-// activeDeadlineSeconds. The control plane's own max-age stop fires first and
-// tears the run down; the deadline is the backstop for a run whose control
-// plane is gone, so the grace only has to outlast the reaper's scan interval.
+// podDeadlineGrace is added to a run's own lifetime cap to make its pods'
+// activeDeadlineSeconds. The control plane's lease sweep KILLS the run at its cap
+// and tears it down; the deadline is the backstop for a run whose control plane
+// is gone, so the grace only has to outlast the sweep interval.
 const podDeadlineGrace = 10 * time.Minute
 
-// activeDeadline returns the pod deadline for Config.RunMaxAge, or nil when no
-// max age is set. activeDeadlineSeconds fails a pod and deletes nothing: the
-// reconciler finalizes the run from the failed pod and tears the rest down.
-func (d *Driver) activeDeadline() *int64 {
-	if d.cfg.RunMaxAge <= 0 {
+// activeDeadline returns the pod deadline for a run with lifetimeCap left to
+// live (runner.Resources.LifetimeCap), or nil for a run with no cap: only a run
+// whose lifetime is bounded has a deadline, and a run with none is
+// NotTerminating-scoped for the quota. activeDeadlineSeconds fails a pod and
+// deletes nothing: the reconciler finalizes the run from the failed pod and
+// tears the rest down.
+func activeDeadline(lifetimeCap time.Duration) *int64 {
+	if lifetimeCap <= 0 {
 		return nil
 	}
-	secs := int64((d.cfg.RunMaxAge + podDeadlineGrace) / time.Second)
+	secs := int64((lifetimeCap + podDeadlineGrace) / time.Second)
 	return &secs
 }
 
@@ -97,8 +100,11 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err := runner.ValidateManagedFiles(spec.ManagedFiles); err != nil {
 		return runner.Sandbox{}, fmt.Errorf("k8s: %w", err)
 	}
-	if err := agentSecretsAllowDrive(spec.ManagedFiles, spec.Drive); err != nil {
+	if err := agentSecretsAllowDrive(spec.ManagedFiles, spec.Drives); err != nil {
 		return runner.Sandbox{}, fmt.Errorf("k8s: %w", err)
+	}
+	if err := validateDriveSet(spec.Drives); err != nil {
+		return runner.Sandbox{}, err
 	}
 	runtimeClassName, runtimeHandler, err := d.resolveRuntimeClassName(ctx, spec.ConfinementClass)
 	if err != nil {
@@ -112,11 +118,11 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if d.cfg.ProxyImage == "" {
 		return runner.Sandbox{}, errProxyImageUnset
 	}
-	// The user drive comes LAST in preflight since it's the only step that
-	// writes; its PVC outlives the run on purpose and carries no
+	// The drives come LAST in preflight since it's the only step that
+	// writes; their PVCs outlive the run on purpose and carry no
 	// wardyn.run-id label, so rollback can never delete the person's storage.
-	if spec.Drive != nil {
-		if err := ensureDrivePVC(ctx, d.clientset, ns, spec.Drive); err != nil {
+	for i := range spec.Drives {
+		if err := ensureDrivePVC(ctx, d.clientset, ns, &spec.Drives[i]); err != nil {
 			return runner.Sandbox{}, err
 		}
 	}
@@ -227,7 +233,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	proxyPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: proxyPodName(spec.RunID), Namespace: ns},
 		Spec: corev1.PodSpec{
-			ActiveDeadlineSeconds:        d.activeDeadline(),
+			ActiveDeadlineSeconds:        activeDeadline(spec.Resources.LifetimeCap),
 			AutomountServiceAccountToken: boolPtr(false),
 			// FSGroup makes proxyConfigSecretFileMode's group-read bit effective
 			// for the init container; without it, "permission denied".
@@ -329,7 +335,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		// No BlockOwnerDeletion: that would need an extra permission on pods/finalizers.
 		ObjectMeta: metav1.ObjectMeta{Name: agentPodName(spec.RunID), Namespace: ns, OwnerReferences: ownedByPod(createdProxy)},
 		Spec: corev1.PodSpec{
-			ActiveDeadlineSeconds:        d.activeDeadline(),
+			ActiveDeadlineSeconds:        activeDeadline(spec.Resources.LifetimeCap),
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
 			EnableServiceLinks:           boolPtr(false), // SECURITY: same service-topology-leak reason as the proxy pod above.
@@ -362,10 +368,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	managedVols, managedMounts := managedFileVolumes(spec.RunID, spec.ManagedFiles)
 	addMainContainerVolumes(agentPod, managedVols, managedMounts)
 	applyAgentSecretFSGroup(agentPod, spec.ManagedFiles)
-	// The drive, only when the pod has one, so a drive-less pod keeps its nil
+	// The drives, only when the pod has one, so a drive-less pod keeps its nil
 	// pod-level SecurityContext unchanged.
-	if spec.Drive != nil {
-		applyDriveToPod(agentPod, spec.Drive, runtimeHandler)
+	for i := range spec.Drives {
+		applyDriveToPod(agentPod, &spec.Drives[i], i, runtimeHandler)
 	}
 	if runtimeClassName != "" {
 		agentPod.Spec.RuntimeClassName = &runtimeClassName

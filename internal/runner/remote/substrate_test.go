@@ -6,6 +6,7 @@ package remote_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -58,6 +59,22 @@ func TestNameAndClassesServedFromCaps(t *testing.T) {
 	caps, _ := rig.Sub.Caps()
 	if caps.CPUMillisMax != 4000 || caps.MemoryMiBMax != 8192 || caps.AllowedRoots[0] != "/work" || caps.Version != "test" {
 		t.Fatalf("caps = %+v", caps)
+	}
+}
+
+// A runner's advertised facts carry its own disk word and drive support, and the remote substrate keeps
+// an ended sandbox.
+func TestAdvertisedCarriesDiskWordKeepAndDrives(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	data, err := json.Marshal(runnerwire.Caps{Support: substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC1},
+		EphemeralDiskEnforcement: types.StorageEnforcementEviction, UserDrives: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.Sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+	f, ok := rig.Sub.Advertised()
+	if !ok || f.EphemeralDiskEnforcement != types.StorageEnforcementEviction || !f.KeepsEnded || !f.UserDrives {
+		t.Fatalf("Advertised = %+v, %v", f, ok)
 	}
 }
 
@@ -555,4 +572,26 @@ func TestFinishedOutputStreamsAreReleasedOnBothPeers(t *testing.T) {
 		t.Fatalf("Attach after %d output streams: %v", runnerwire.MaxStreams+40, err)
 	}
 	_ = sess.Close()
+}
+
+// A caps event with no capacity in it (as a runner that cannot read its engine sends) or a zero one is a
+// capacity the runner did not report: unknown, so a sized run is never held to a bound of nothing, while
+// a reported capacity still bounds it.
+func TestAdvertisedCapacityIsUnknownUntilBothSizesAreReported(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	for _, c := range []placement.Capacity{{}, {CPUMillisMax: 4000}, {MemoryMiBMax: 8192}} {
+		data, err := json.Marshal(runnerwire.Caps{Support: substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC1}}, Capacity: c})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rig.Sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+		if f, ok := rig.Sub.Advertised(); !ok || f.CapacityAdvertised {
+			t.Fatalf("caps capacity %+v = advertised %+v, %v; want facts with the capacity unknown", c, f, ok)
+		}
+	}
+	data, _ := json.Marshal(runnerwire.Caps{Capacity: placement.Capacity{CPUMillisMax: 4000, MemoryMiBMax: 8192}})
+	rig.Sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+	if f, _ := rig.Sub.Advertised(); !f.CapacityAdvertised || f.CPUMillisMax != 4000 || f.MemoryMiBMax != 8192 {
+		t.Fatalf("a reported capacity = %+v, want it advertised", f)
+	}
 }

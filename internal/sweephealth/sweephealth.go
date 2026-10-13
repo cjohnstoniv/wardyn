@@ -34,12 +34,13 @@ const (
 	RunWatcher         = "run_watcher"
 	OrphanedBuild      = "orphaned_build"
 	RunOutput          = "run_output"
+	RunQueue           = "run_queue"
 )
 
 // Names lists every sweep, in the order the status output uses.
 var Names = []string{
 	IdleReaper, TerminalSandbox, ApprovalExpiry, RunSecret,
-	CredentialExpiry, RecordingRetention, RunWatcher, OrphanedBuild, RunOutput,
+	CredentialExpiry, RecordingRetention, RunWatcher, OrphanedBuild, RunOutput, RunQueue,
 }
 
 // StaleAfterIntervals is how many of its own intervals a sweep may go without a

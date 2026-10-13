@@ -265,7 +265,13 @@ func TestPG_RunnerAcceptedExitStampsEndedAt(t *testing.T) {
 func TestPG_RunnerCurrentActivityBoundsLockWait(t *testing.T) {
 	f := newSettledFixture(t)
 	ctx := context.Background()
-	tx, err := f.pool.Begin(ctx)
+	// The hold is on a pool of its own: the touch asks f.pool for a connection on this goroutine (WARDYN_TEST_POOL_GUARD).
+	holder, err := pgxpool.New(ctx, f.pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	tx, err := holder.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

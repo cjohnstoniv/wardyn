@@ -43,6 +43,17 @@ var ReservedV4 = []netip.Prefix{
 var ReservedV6 = []netip.Prefix{
 	netip.MustParsePrefix("fec0::/10"), // deprecated site-local (RFC3879) — still configured on some enterprise LANs
 	netip.MustParsePrefix("2002::/16"), // 6to4 (RFC7526, deprecated) — embeds an IPv4 at bits 16..48
+	// IANA IPv6 Special-Purpose registry rows whose "Globally Reachable" column is False (Teredo's reads N/A and is
+	// denied with them: it tunnels to an embedded IPv4). 2001::/23 is
+	// NOT listed wholesale: 2001:1::1/128, 2001:1::2/128, 2001:3::/32, 2001:4:112::/48, 2001:20::/28 and
+	// 2001:30::/28 inside it are globally reachable.
+	netip.MustParsePrefix("2001::/32"),     // TEREDO (RFC4380)
+	netip.MustParsePrefix("2001:2::/48"),   // benchmarking (RFC5180)
+	netip.MustParsePrefix("2001:10::/28"),  // deprecated ORCHID (RFC4843)
+	netip.MustParsePrefix("2001:db8::/32"), // documentation (RFC3849)
+	netip.MustParsePrefix("3fff::/20"),     // documentation (RFC9637)
+	netip.MustParsePrefix("5f00::/16"),     // SRv6 SIDs (RFC9602)
+	netip.MustParsePrefix("100::/64"),      // discard-only (RFC6666)
 }
 
 // NAT64Prefixes are the well-known + local-use NAT64 translation prefixes (RFC 6052 / RFC 8215).
@@ -86,10 +97,20 @@ var Liftable = []netip.Prefix{
 	netip.MustParsePrefix("100.64.0.0/10"), // CGNAT (RFC6598)
 }
 
-// InLiftable reports whether ip falls inside the Liftable set.
+// NeverLift carves the cloud instance-metadata endpoints out of Liftable: they sit inside the ULA and
+// CGNAT ranges an operator may lift, but lifting one would hand a sandbox the host's cloud credentials.
+var NeverLift = []netip.Prefix{
+	netip.MustParsePrefix("fd00:ec2::/64"),      // AWS IMDS / ECS / DNS IPv6 endpoints
+	netip.MustParsePrefix("100.100.100.200/32"), // Alibaba Cloud metadata
+}
+
+// InLiftable reports whether ip falls inside the Liftable set and outside NeverLift.
 func InLiftable(ip net.IP) bool {
 	addr, ok := addrOf(ip)
 	if !ok {
+		return false
+	}
+	if slices.ContainsFunc(NeverLift, func(p netip.Prefix) bool { return p.Contains(addr) }) {
 		return false
 	}
 	return slices.ContainsFunc(Liftable, func(p netip.Prefix) bool { return p.Contains(addr) })

@@ -141,12 +141,16 @@ func (s *Server) providerSubscriptionTransport(run types.AgentRun,
 
 // providerGrantSnapshot is what dispatch records on a provider grant it
 // authors (a Claude sign-in sentinel, a Bedrock key): which provider's
-// credential it is and whose. It grants nothing: the sink still requires the
-// owner to be the run token's own subject and the provider to be the run's,
-// live.
+// credential it is, whose, and for which harness of the run. It grants
+// nothing: the sink still requires the owner to be the run token's own subject
+// and the provider to be the one the run was launched with for that harness,
+// live (sinkHarnessProvider).
 type providerGrantSnapshot struct {
 	ProviderUID  string `json:"provider_uid"`
 	OwnerSubject string `json:"owner_subject"`
+	// Harness is the harness the grant serves; "" on a grant authored before
+	// the harness set, which served the run's own agent.
+	Harness string `json:"harness,omitempty"`
 }
 
 // authorProviderSubscriptionInjection authors the per-person subscription
@@ -171,7 +175,7 @@ func (s *Server) authorProviderSubscriptionInjection(ctx context.Context, run ty
 		source:   "provider",
 		detail:   "the run owner's own Claude sign-in injected proxy-side; sandbox holds only an inert sentinel delivered via env",
 		provider: c.provider.ID,
-		snapshot: providerGrantSnapshot{ProviderUID: c.provider.UID, OwnerSubject: c.owner},
+		snapshot: providerGrantSnapshot{ProviderUID: c.provider.UID, OwnerSubject: c.owner, Harness: run.Agent},
 	})
 	return injections, mitmHosts, ok
 }
@@ -228,8 +232,12 @@ func (s *Server) resolveProviderSubscriptionInjection(w http.ResponseWriter, r *
 	if err != nil {
 		return fail(http.StatusServiceUnavailable, "providers_unreadable", mpRunUnreadable)
 	}
-	p, found := modelProviderByID(sc.ModelProviders, run.ModelProviderID)
-	if !found || p.UID != uid || p.Kind != types.ModelProviderAnthropicSubscription || p.Disabled || !p.Serves(run.Agent) {
+	harness, providerID, launched, err := s.sinkHarnessProvider(ctx, run, rec.Harness)
+	if err != nil {
+		return fail(http.StatusServiceUnavailable, "run_unreadable", credentialReauthRunUnreadableBody)
+	}
+	p, found := modelProviderByID(sc.ModelProviders, providerID)
+	if !launched || !found || p.UID != uid || p.Kind != types.ModelProviderAnthropicSubscription || p.Disabled || !p.Serves(harness) {
 		return fail(http.StatusForbidden, "provider_changed", mpSubSinkChanged)
 	}
 	if !hostEqual(minted.Injection.Host, gatewayHost(providerSubscriptionBase(p))) {

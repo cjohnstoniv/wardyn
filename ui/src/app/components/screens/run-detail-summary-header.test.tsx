@@ -100,6 +100,30 @@ describe("SummaryHeader — attachable chip predicate", () => {
   });
 });
 
+// 0.9 (M-RN-3 RS3, #111): a neutral chip names the computer of a LOCAL run beside the barrier; a remote run's
+// default place needs none (RN-Q14), so its header is what it was.
+describe("SummaryHeader — where a local run is", () => {
+  const onLaptop = { ...runningInteractive, placement: "local", runner_id: "11111111-2222-3333-4444-555555555555", runner_name: "laptop-7" } as AgentRun;
+
+  it("shows 'On {name}' for a local run", () => {
+    renderHeader(
+      <OperatorProvider operator={false}>
+        <SummaryHeader run={onLaptop} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("On laptop-7")).toBeInTheDocument();
+  });
+
+  it.each([["remote"], [""]] as const)("shows no chip for a run whose placement is %j", (placement) => {
+    renderHeader(
+      <OperatorProvider operator={false}>
+        <SummaryHeader run={{ ...onLaptop, placement } as AgentRun} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByText(/^On /)).toBeNull();
+  });
+});
+
 // Command-bar reshape (design board seg2a): the fat identity card became a
 // 52px single row at xl and up (wraps below). These pin the
 // shape that survived the squeeze — task as the page's h1, terminal-disabled

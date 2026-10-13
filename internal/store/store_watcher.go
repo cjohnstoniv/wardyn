@@ -48,7 +48,7 @@ var _ RunWatcherLeaser = PG{}
 // so the sweep claims runs sitting in it — a future human-in-the-loop pause
 // built as "the agent exits and the run parks" must keep the agent
 // in-process, or drop this state here (and from the index).
-const nonTerminalRunStates = `'PENDING','STARTING','RUNNING','WAITING_FOR_CONFIRMATION'`
+const nonTerminalRunStates = `'QUEUED','PENDING','STARTING','RUNNING','WAITING_FOR_CONFIRMATION'`
 
 // ClaimStaleRunWatchers atomically takes the watcher lease, for owner, on
 // every non-terminal run with a sandbox whose lease has been silent longer

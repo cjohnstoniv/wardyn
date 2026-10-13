@@ -5,6 +5,11 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 597 adds 48: the page now leads with the client-mode claim flow and offline table; legacy enrolment is condensed under it.
 # 622 adds 25: the Azure DevOps bullet below "Where each thing lives" (#475).
 # 635 adds 13: the one-line link to the runner service install (#1968).
+# 673 adds 38: the via_org row of "Where each thing lives" (#1964).
 # 649 adds 27: the note under "Offline and revocation" on rate limits at a shared ingress.
 # docs/operations/hybrid-laptops.md 662 measured after R2-runner-2 merge.
-docs/operations/hybrid-laptops.md=662 share=35
+# docs/operations/hybrid-laptops.md 662 adds 98 (0.9 H13): the "Resident credentials and posture" section and the keystore cell.
+# docs/operations/hybrid-laptops.md 700 measured after the 0.9.0 batch merge.
+# docs/operations/hybrid-laptops.md 798 measured after H13 merge-prep.
+# docs/operations/hybrid-laptops.md 827 adds 29 over 798 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
+docs/operations/hybrid-laptops.md=827 share=35

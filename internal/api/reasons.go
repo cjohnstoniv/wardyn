@@ -140,7 +140,7 @@ const (
 	// workspace_refusals.go's, with a TypeScript twin.
 	reasonPlacementInvalid        = "placement_invalid"          // placement is neither remote nor local, or runner_id has no local placement
 	reasonWorkspaceTargetInvalid  = "workspace_target_invalid"   // a workspace selection's target is not an absolute, cleaned path under /home/agent
-	reasonWorkspaceTargetOverlap  = "workspace_target_overlap"   // two different workspaces' targets are equal or nested (a drive's included)
+	reasonWorkspaceTargetOverlap  = "workspace_target_overlap"   // two different workspaces' targets are equal or nested (a drive's included), or two repositories clone into one directory
 	reasonWorkspacePinConflict    = "workspace_pin_conflict"     // the attached workspaces pin two different model providers
 	reasonImageConflict           = "image_conflict"             // the attached workspaces use two different base images: a refusal about the run's image, not a workspace field
 	reasonAllowedImageInvalid     = "allowed_image_invalid"      // allowed_image is malformed, or is combined with image or devcontainer_repo
@@ -149,11 +149,18 @@ const (
 	reasonOverrideInvalid         = "override_invalid"           // an overrides entry is malformed
 	reasonOverrideRefused         = "override_refused"           // an override the narrowing table never allows from a request
 	reasonRequestFieldUnavailable = "request_field_unavailable"  // a field that changes the run's posture, which this server cannot honour yet: refused, never dropped
+	// The run's attached workspaces (run_attachments.go).
+	reasonWorkspaceSelectionInvalid = "workspace_selection_invalid" // workspaces[] names an id twice or a malformed one, or workspace_id is not workspaces[0]
+	reasonWorkspaceRepoUnknown      = "workspace_repo_unknown"      // a workspaces[].repos entry names a repository the workspace does not carry
+	reasonRunRefInvalid             = "run_ref_invalid"             // a workspaces[].repos entry is malformed: a repo named twice, or a ref that is not a branch, tag or commit name
 	// validateImageBuildRequest (#656 M1: split from reasonInvalidImageBuildRequest,
 	// one cause was the caller's own request shape, the other a deployment
 	// capability neither request field can fix).
 	reasonImageDevcontainerExclusive = "image_devcontainer_exclusive" // image and devcontainer_repo were both set
 	reasonImageBuilderUnavailable    = "image_builder_unavailable"    // a custom image was requested but this control plane has no image builder wired
+	// The policy overlay (run_policy_overlay.go): a document's partial policy laid onto the caller's default.
+	reasonPolicyOverlayInvalid  = "policy_overlay_invalid"  // policy_overlay is not a non-empty object of carried policy keys with usable values
+	reasonPolicyOverlayConflict = "policy_overlay_conflict" // policy_overlay was sent beside policy_id or inline_policy
 	// The 0.9 run-mode contract (run_mode.go): what a person is starting. The
 	// sentences are run_mode_refusals.go's, with a TypeScript twin.
 	reasonRunModeRequired    = "run_mode_required"    // a new client's mode or background workload is unset, and is never inferred
@@ -161,6 +168,16 @@ const (
 	reasonRunModeConflict    = "run_mode_conflict"    // run-mode carriers contradict each other, or an older field that replaced them
 	reasonStartFolderInvalid = "start_folder_invalid" // start_folder is malformed, names an attachment the run lacks, or escapes its mount
 	reasonRunBackgroundOnly  = "run_background_only"  // a background run has no interactive door: attach, exec, SSH, UI gateway, desktop
+	// The main drive (run_main_drive.go). The sentence is mainDriveUnenforceableMsg's, with a TypeScript twin.
+	reasonMainDriveUnenforceable = "main_drive_unenforceable" // the run's policy writes a disk size the runner it lands on cannot cap
+	// The run shape (run_shape.go): New Run's choice, checked against the carriers.
+	reasonRunShapeConflict = "run_shape_conflict" // shape does not fit the run's experience, workload or tools
+	// The harness set (run_harness_set.go): the harnesses a run includes and the
+	// image that carries them. Each body names the harness in `tool`.
+	reasonHarnessNotInstalled      = "harness_not_installed"      // a run-mode request includes a harness no sandbox image here carries
+	reasonHarnessSetNoImage        = "harness_set_no_image"       // no declared sandbox image carries every included harness
+	reasonHarnessSetCustomImage    = "harness_set_custom_image"   // a run with two or more harnesses names a custom image
+	reasonHarnessProvidersConflict = "harness_providers_conflict" // two harnesses' different model providers share an injection host, or two Azure Foundry providers
 	// validateWorkspaceSources / authorizeSpecWorkspaceSources (#656 M1: split
 	// from reasonWorkspaceSourcesInvalid/reasonWorkspaceSourcesUnauthorized —
 	// except the not-onboarded arm, which STAYS one shared reason across both
@@ -189,6 +206,8 @@ const (
 	reasonIntegrationIDRetired                 = "integration_id_retired"                   // integration_id no longer chooses a model credential; a run's model provider does
 	reasonRunKillAlreadyTerminal               = "run_kill_already_terminal"                // the run is already in a terminal state other than killed
 	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run moved to another state between the read and the write
+	reasonRunMaxWaitInvalid                    = "run_max_wait_invalid"                     // max_wait_sec is below 1
+	reasonRunQueued                            = "run_queued"                               // the run is waiting for a slot in its pool: its end is set when it starts
 
 	// POST /runs/{id}/revive and each run's result in POST /admin/runs/restart
 	// (#1342): the run's substrate cannot replace a proxy in place
@@ -247,6 +266,10 @@ const (
 	// GET/PUT /governance/egress-baseline.
 	reasonEgressBaselineInvalid = "egress_baseline_invalid" // a baseline host is not an exact hostname, or the set is too large
 	reasonEgressBaselineStale   = "egress_baseline_stale"   // If-Match does not match the current baseline ETag
+
+	// PUT /governance/credential-delivery.
+	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds, or require_posture without runner_resident
+	reasonCredentialDeliveryUnavailable = "credential_delivery_unavailable" // the store keeps no delivery policy (not the Postgres store)
 
 	// POST /site-config/probe-proxy and PUT/DELETE .../egress-redirects.
 	reasonSiteConfigProbeRequestInvalid = "site_config_probe_request_invalid" // the probe body did not decode
@@ -446,6 +469,16 @@ const (
 	driveRefusalDrivesDisabled = "drives_disabled"
 )
 
+// The drives[] carrier (run_drives.go); the sentences are drive_refusals.go's.
+const (
+	reasonDriveSelectionConflict = "drive_selection_conflict" // drive and drives were both sent
+	reasonDriveInvalid           = "drive_invalid"            // a drives[] entry is malformed or repeated, or there are too many
+	// drive_not_found, drive_not_in_pool and drive_target_conflict are authz
+	// reasons (authz.ReasonDrive*): each is also an authz.denied row.
+	// reasonDriveShareBesideManaged: a shared and a managed Kubernetes drive in one run.
+	reasonDriveShareBesideManaged = "drive_share_beside_managed"
+)
+
 // git_pat narrowing (runs_dispatch_pat_scope.go): a run is refused when a
 // narrowed git_pat grant's repos, access or api could not be enforced.
 const (
@@ -477,4 +510,7 @@ const (
 	reasonTemplateNotFound           = "template_not_found"            // no such template, or the caller may not see it
 	reasonTemplateRevisionConflict   = "template_revision_conflict"    // the template changed since the revision the caller read
 	reasonTemplatesUnavailable       = "templates_unavailable"         // 501: the template store is not available on this server yet
+	reasonTemplateNameTaken          = "template_name_taken"           // another template of the same audience already uses the name (case-insensitive)
+	reasonTemplateLimitReached       = "template_limit_reached"        // the audience already holds the most templates it may
+	reasonTemplatePolicyFieldRefused = "template_policy_field_refused" // a policy holds only run-wide network, credential and access-rule keys
 )

@@ -54,9 +54,14 @@ var errDriveNameInvalid = errors.New("this drive cannot be mounted on Kubernetes
 // member is pointed at the size field, not the name field.
 var errDriveAllocationInvalid = errors.New("this drive cannot be mounted on Kubernetes: its allocation is not a size a volume claim can request (ask an administrator to set the size on the allocation)")
 
-// errDriveTargetInvalid: the mount's Target isn't runner.DriveTarget, the
-// only in-container path a drive may bind at.
-var errDriveTargetInvalid = errors.New("this drive cannot be mounted on Kubernetes: it did not arrive addressed to the reserved drive path; report the run to your administrator (no setting on the allocation produces this)")
+// errDriveTargetInvalid: the mount's Target isn't a derived drive path
+// (runner.ValidateDriveTarget), or another drive of the run mounts there.
+var errDriveTargetInvalid = errors.New("this drive cannot be mounted on Kubernetes: it did not arrive addressed to its own drive path; report the run to your administrator (no setting on the allocation produces this)")
+
+// errDriveShareBesideManaged: a run mounts a shared drive and a managed one
+// together. The managed drive needs the pod's fsGroup, which is never set
+// beside a share (applyDriveToPod).
+var errDriveShareBesideManaged = errors.New("a shared drive and a managed drive cannot be mounted in one Kubernetes run: the managed drive needs the pod's fsGroup, which is never set beside a shared drive (it would re-own other people's files on it); attach one of them")
 
 var errDriveClaimTerminating = errors.New("your drive's volume claim is being deleted and cannot be mounted; wait for the deletion to finish, or ask an administrator whether it should have been deleted at all") // reuseDriveClaim's refusal; re-creating it would undo an operator's deliberate reclaim
 

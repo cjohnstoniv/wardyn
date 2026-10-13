@@ -98,15 +98,28 @@ func normalizeConfinement(s string) string {
 	return s
 }
 
+// interactiveLine says what the new interactive sandbox does at start: it is idle
+// only when no startup was asked for or the startup is none.
+func interactiveLine(startup *sdk.RunStartup, id string) string {
+	attach := "attach with `wardyn run attach " + id + "`"
+	switch {
+	case startup == nil || startup.Kind == sdk.StartupNone:
+		return "  interactive: sandbox is idle; " + attach
+	case startup.Kind == sdk.StartupHarness:
+		return "  interactive: starts " + startup.Tool + "; " + attach
+	}
+	return "  interactive: starts " + startup.Command + "; " + attach
+}
+
 // runCmd is the single "run" noun: a bare invocation creates a run, and the
 // subcommands inspect, stop and export runs. "runs" stays as an alias so
 // `wardyn runs list` keeps working.
 func runCmd(client clientFn) *cobra.Command {
 	var repo, agent, task, policyID, confinement, policyFile, image, taskMode, workspaceID string
-	var title, description string
+	var title, description, file string
 	var devcontainerRepo, devcontainerRef, modelProvider string
 	var interactive, wait, createJSON, dryRun bool
-	var timeout time.Duration
+	var timeout, maxWait time.Duration
 	var mode runModeFlags
 	var where runPlacementFlags
 	var ends runEndFlags
@@ -151,14 +164,25 @@ func runCmd(client clientFn) *cobra.Command {
 			if err := applyRunModeFlags(&body, mode); err != nil {
 				return err
 			}
-			if wait && body.Experience == sdk.ExperienceInteractive {
-				return fmt.Errorf("--wait and --experience interactive are mutually exclusive (an interactive run never finishes on its own)")
-			}
 			if err := where.apply(&body); err != nil {
 				return err
 			}
 			if err := ends.apply(&body); err != nil {
 				return err
+			}
+			// The document replaces everything the flags built; the checks above ran
+			// on flags it refuses to stand beside, so it is read after them.
+			if file != "" {
+				var err error
+				if body, err = runFileRequest(cmd, client(), file, title, description); err != nil {
+					return err
+				}
+			}
+			if err := applyQueueWait(&body, cmd.Flags().Changed("max-wait"), maxWait, wait, timeout); err != nil {
+				return err
+			}
+			if wait && body.Experience == sdk.ExperienceInteractive {
+				return fmt.Errorf("--wait and --experience interactive are mutually exclusive (an interactive run never finishes on its own)")
 			}
 			// --policy-file supplies a JSON RunPolicySpec applied inline. It is
 			// mutually exclusive with --policy; the server enforces that XOR — we
@@ -206,7 +230,7 @@ func runCmd(client clientFn) *cobra.Command {
 				// The image is resolved after the 201 (the build runs server-side),
 				// so it is read back later with `wardyn run get`, never printed here.
 				if interactive || body.Experience == sdk.ExperienceInteractive {
-					fmt.Fprintf(cmd.OutOrStdout(), "  interactive: sandbox is idle; attach with `wardyn run attach %s`\n", run.ID)
+					fmt.Fprintln(cmd.OutOrStdout(), interactiveLine(body.Startup, run.ID.String()))
 				}
 			}
 			// Advisory server warnings (workspace collision, dropped ssh grant):
@@ -221,6 +245,7 @@ func runCmd(client clientFn) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; only --title, --description, --wait, --timeout, --json and --dry-run go with it. A document that sets inline_policy is refused for now: sent as inline_policy it would replace your default policy")
 	cmd.Flags().StringVar(&repo, "repo", "", "repository (org/name; optional — omit for an ephemeral scratch run)")
 	cmd.Flags().StringVar(&agent, "agent", "", "agent name (e.g. claude-code)")
 	cmd.Flags().StringVar(&task, "task", "", "human task description")
@@ -241,6 +266,7 @@ func runCmd(client clientFn) *cobra.Command {
 	mode.bind(cmd.Flags())
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "resolve and check the run without launching it: prints the setup checklist and the confinement class that would be enforced")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the run reaches a terminal state and exit with the run's outcome (COMPLETED=0, FAILED=agent exit code, KILLED/STOPPED=2, timeout=124)")
+	cmd.Flags().DurationVar(&maxWait, "max-wait", 0, "how long the run may wait for a free slot in a pool at its run limit (at least 1s; over 7 days is cut to 7). With --wait and no --max-wait: --timeout minus 60s (at least 60s), so queue_timeout (exit 1) lands before --timeout (exit 124)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long (with --wait; exit 124). Bounds the requests too, and does not stop the run: it keeps running, and holds its sandbox and credentials until it ends (kill it with 'wardyn run kill'). Must be positive")
 	cmd.Flags().BoolVar(&createJSON, "json", false, "emit the created run (or the --dry-run checklist) as JSON (progress goes to stderr)")
 
@@ -272,6 +298,34 @@ func printPreflight(ctx context.Context, w io.Writer, c *sdk.Client, body sdk.Cr
 	return tw.Flush()
 }
 
+// applyQueueWait sets the request's max_wait_sec from --max-wait or, with --wait, from --timeout. A
+// --max-wait under a second is refused; a document's own max_wait_sec stands unless --max-wait is given.
+func applyQueueWait(body *sdk.CreateRunRequest, given bool, maxWait time.Duration, wait bool, timeout time.Duration) error {
+	if given && maxWait < time.Second {
+		return fmt.Errorf("--max-wait must be at least 1s, got %s", maxWait)
+	}
+	if sec := queueWaitSec(maxWait, wait, timeout); sec != nil && (given || body.MaxWaitSec == nil) {
+		body.MaxWaitSec = sec
+	}
+	return nil
+}
+
+// queueWaitSec is the max_wait_sec to send: --max-wait when given, else with --wait the --timeout minus
+// 60s (at least 60s), so the server ends a run that waits too long (queue_timeout, exit 1) before the
+// CLI gives up on it (exit 124). nil sends nothing and leaves the server's default.
+func queueWaitSec(maxWait time.Duration, wait bool, timeout time.Duration) *int {
+	d := maxWait
+	switch {
+	case d > 0:
+	case wait:
+		d = max(timeout-time.Minute, time.Minute)
+	default:
+		return nil
+	}
+	sec := int(d / time.Second)
+	return &sec
+}
+
 // waitPollInterval is how often --wait polls the run state (var for tests).
 var waitPollInterval = 2 * time.Second
 
@@ -296,6 +350,7 @@ func waitForRun(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.U
 	defer cancel()
 	consecutiveErrs := 0
 	var lastState types.RunState
+	lastAhead := -1
 	for {
 		run, err := c.GetRun(waitCtx, runID)
 		if err != nil {
@@ -311,7 +366,12 @@ func waitForRun(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.U
 		} else {
 			consecutiveErrs = 0
 			lastState = run.State
+			lastAhead = reportQueuePlace(errW, run, lastAhead)
 			if run.State.IsTerminal() {
+				if sentence := queueEndSentence(run); sentence != "" {
+					fmt.Fprintf(errW, "run %s finished: state %s\n  reason: %s\n", runID, run.State, sentence)
+					return &exitError{code: 1, err: fmt.Errorf("run %s FAILED: %s", runID, sentence)}
+				}
 				code := agentExitCode(waitCtx, c, runID)
 				if run.State == types.RunFailed && code == 0 {
 					// The terminal state commits just before the run.complete
@@ -356,6 +416,27 @@ func waitForRun(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.U
 		case <-time.After(waitPollInterval):
 		}
 	}
+}
+
+// reportQueuePlace says on stderr where a waiting run stands whenever its place changes, and returns
+// the place last reported. A run that is not waiting leaves it unchanged.
+func reportQueuePlace(w io.Writer, run types.AgentRun, last int) int {
+	q := run.Queue
+	if run.State != types.RunQueued || q == nil || q.Position == last {
+		return last
+	}
+	fmt.Fprintf(w, "queued: %d ahead in pool %s; gives up %s\n", q.Position, q.PoolID, q.DeadlineAt.Format(time.RFC3339))
+	return q.Position
+}
+
+// queueEndSentence is the sentence of a run the platform failed while it waited or before it started
+// (queue_timeout, a changed profile or policy, a revoked portal, a deactivated account): no agent ran,
+// so there is no agent exit code to read. "" for any other run.
+func queueEndSentence(run types.AgentRun) string {
+	if run.State != types.RunFailed || !types.RunEndReason(run.StatusReason).Valid() {
+		return ""
+	}
+	return types.RunEndReason(run.StatusReason).Sentence()
 }
 
 // agentExitCode reads the agent's real exit code from the last run.complete

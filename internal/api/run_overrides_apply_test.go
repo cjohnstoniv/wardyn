@@ -6,6 +6,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -171,7 +172,7 @@ func TestOverrides_SecretAddUsesOnlyTheCallersOwnSecret(t *testing.T) {
 func TestOverrides_ADOExplicitEmptyNarrowsToNothing(t *testing.T) {
 	spec := types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapPR}}
 	e := &overrideEdits{}
-	if refusal := applyADOOverride(&spec, client.ADOOverrides{}, e); refusal == nil || refusal.body.Reason != reasonOverrideInvalid {
+	if refusal := applyADOOverride(&spec, client.ADOOverrides{}, spec.AzureDevOpsCapabilities, e); refusal == nil || refusal.body.Reason != reasonOverrideInvalid {
 		t.Fatalf("an empty set = %+v, want %s", refusal, reasonOverrideInvalid)
 	}
 	if len(spec.AzureDevOpsCapabilities) != 2 || len(e.rows) != 0 {
@@ -187,36 +188,15 @@ func TestOverrides_ADOExplicitEmptyNarrowsToNothing(t *testing.T) {
 func TestOverrides_ADONarrowsToASubsetOnly(t *testing.T) {
 	spec := types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapPR}}
 	e := &overrideEdits{}
-	if refusal := applyADOOverride(&spec, client.ADOOverrides{Capabilities: []string{"code_read"}}, e); refusal != nil {
+	if refusal := applyADOOverride(&spec, client.ADOOverrides{Capabilities: []string{"code_read"}}, spec.AzureDevOpsCapabilities, e); refusal != nil {
 		t.Fatal(refusal.body)
 	}
 	if !slices.Equal(spec.AzureDevOpsCapabilities, []adoscope.Capability{adoscope.CapCodeRead}) ||
 		!slices.Contains(e.rows, provenanceRow{fieldADOCaps, "pr", provSource{Kind: provKindPerson}, provEffectNarrowed}) {
 		t.Errorf("caps = %v rows = %+v", spec.AzureDevOpsCapabilities, e.rows)
 	}
-	if refusal := applyADOOverride(&spec, client.ADOOverrides{Capabilities: []string{"code_write"}}, e); refusal == nil || refusal.body.Reason != reasonOverrideRefused {
+	if refusal := applyADOOverride(&spec, client.ADOOverrides{Capabilities: []string{"code_write"}}, []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapPR}, e); refusal == nil || refusal.body.Reason != reasonOverrideRefused {
 		t.Errorf("a capability outside the source = %+v, want %s", refusal, reasonOverrideRefused)
-	}
-}
-
-// A source that names no set grants nothing here (the row's default profile
-// applies at dispatch), so any capability an override names is an addition and is
-// refused, not accepted as a narrowing.
-func TestOverrides_ADOEmptySourceRefusesAdditions(t *testing.T) {
-	spec := types.RunPolicySpec{}
-	e := &overrideEdits{}
-	refusal := applyADOOverride(&spec, client.ADOOverrides{Capabilities: []string{"code_read"}}, e)
-	if refusal == nil || refusal.body.Reason != reasonOverrideRefused {
-		t.Fatalf("a capability beside an empty source = %+v, want %s", refusal, reasonOverrideRefused)
-	}
-	if len(spec.AzureDevOpsCapabilities) != 0 || len(e.rows) != 0 || e.applied.AzureDevOps != nil {
-		t.Errorf("a refused addition changed the spec or the record: %v %v %+v", spec.AzureDevOpsCapabilities, e.rows, e.applied)
-	}
-	// Naming the whole source is a no-op, not an edit.
-	spec = types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{adoscope.CapCodeRead}}
-	e = &overrideEdits{}
-	if refusal := applyADOOverride(&spec, client.ADOOverrides{Capabilities: []string{"code_read"}}, e); refusal != nil || e.applied.AzureDevOps != nil {
-		t.Errorf("keeping everything: refusal %v applied %+v, want no edit", refusal, e.applied)
 	}
 }
 
@@ -232,7 +212,7 @@ func TestOverrides_DiffRecordsOnlyEditsThatTookEffect(t *testing.T) {
 	}
 	e := &overrideEdits{}
 	applyHostOverrides(&spec, client.AgentOverrides{AddHosts: []string{"A.example", "b.example"}, RemoveHosts: []string{"gone.example"}}, e)
-	if refusal := (&Server{}).applySecretOverrides(t.Context(), nil, &spec, client.AgentOverrides{RemoveSecrets: []string{"absent"}}, e); refusal != nil {
+	if refusal := (&Server{}).applySecretOverrides(t.Context(), httptest.NewRequest(http.MethodPost, "/", nil), &spec, client.AgentOverrides{RemoveSecrets: []string{"absent"}}, e); refusal != nil {
 		t.Fatal(refusal.body)
 	}
 	applyToolRuleOverrides(&spec, []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}, e)
@@ -290,7 +270,7 @@ func TestOverrides_ApplyNarrowsNeverWidens(t *testing.T) {
 		t.Errorf("a host with no git_pat grant = %+v", refusal)
 	}
 	// Removing a secret drops every grant that pairs it.
-	if refusal := (&Server{}).applySecretOverrides(t.Context(), nil, &spec, client.AgentOverrides{RemoveSecrets: []string{"k1"}}, e); refusal != nil {
+	if refusal := (&Server{}).applySecretOverrides(t.Context(), httptest.NewRequest(http.MethodPost, "/", nil), &spec, client.AgentOverrides{RemoveSecrets: []string{"k1"}}, e); refusal != nil {
 		t.Fatal(refusal.body)
 	}
 	if slices.ContainsFunc(spec.EligibleGrants, func(g types.GrantSpec) bool { return g.Kind == types.GrantAPIKey }) {

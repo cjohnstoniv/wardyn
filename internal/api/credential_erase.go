@@ -37,7 +37,7 @@ import (
 const (
 	eraseUnresolvedMsg = "That email address doesn't match anyone this deployment knows, so nothing was erased. " +
 		"Use the person's subject, as the Audit log shows it."
-	eraseAmbiguousMsg = "That matches more than one person, so nothing was erased. Use the person's subject exactly."
+	eraseAmbiguousMsg = "That matches more than one person, so nothing was erased. Use the person's subject exactly, as the Audit log shows it."
 )
 
 // eraseRefusalMsg reworks one of resolveSecretOwner's ?owner= refusals into

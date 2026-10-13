@@ -93,6 +93,10 @@ type Config struct {
 	// is also what happens when no GitHub App is configured, so the vast majority
 	// of deployments never make the call.
 	GitHubRulesets RefRulesetVerifier
+	// GitHubBranches lists a github.com repository's branches through the
+	// organisation's GitHub App (workspace_branches.go). Nil: GitHub
+	// repositories answer the branch list with no_credential.
+	GitHubBranches BranchLister
 	// Audit records control-plane-originated audit events. The recorder handed in
 	// is the shared masking → spooling → store/fanout chain (see cmd/wardynd), so a
 	// failed durable write is masked, logged loudly, and spooled to the local
@@ -690,6 +694,8 @@ type Server struct {
 	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is
 	// ready to use.
 	metrics metrics
+	// viaOrg is the organisation's via_org egress state (via_org_streams.go).
+	viaOrg viaOrgState
 	// fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).
 	fleet fleetSnapshot
 	// capRowsScanned counts capability-grant rows compared inside capBatch (see
@@ -775,6 +781,8 @@ type Server struct {
 	attachHolders attachHolderRegistry
 	// creates lets a kill cancel a STARTING run's CreateSandbox (runs_create_cancel.go).
 	creates inflightCreates
+	// queue is the pool queue's in-process state: kick coalescing and the gauge snapshot (metrics_queue.go).
+	queue runQueueState
 	// replica is this server's identity when no LiveBus names one (replicaName).
 	replica         string
 	replicaOnce     sync.Once
@@ -822,6 +830,9 @@ type Server struct {
 	// hit once per keystroke, and each miss is an upstream Graph call
 	// (directory_search.go). Zero value is ready to use.
 	dirLimiter principalLimiter
+	// branchLimiter rate-bounds GET /workspaces/{id}/branches per person
+	// (workspace_branches.go): each call can use a forge credential.
+	branchLimiter principalLimiter
 	// preflightLimiter rate-bounds POST /runs/preflight per person
 	// (preflight.go); nil when Config.PreflightRatePerMin is 0 (off).
 	preflightLimiter     *principalLimiter
@@ -911,6 +922,7 @@ func New(cfg Config) *Server {
 		cfg.BaseCtx = context.Background()
 	}
 	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
+		branchLimiter: principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
 		deviceRouteState: deviceRouteState{
 			enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
 			ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},

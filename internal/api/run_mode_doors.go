@@ -81,6 +81,7 @@ var passiveRunRoutes = map[string]string{
 	"GET /runs/{id}/attach-holder":       "read who holds the terminal; opens nothing",
 	"GET /runs/{id}/attach/holder":       "read who holds the terminal; opens nothing",
 	"GET /runs/{id}/events":              "read",
+	"GET /runs/{id}/launch-intent":       "read the setup the run was launched with; opens nothing",
 	"GET /runs/{id}/files":               "read",
 	"GET /runs/{id}/grants":              "read",
 	"GET /runs/{id}/output":              "logs and output stay available",

@@ -127,6 +127,34 @@ func (s PG) BindRunnerExecution(ctx context.Context, runnerID, runID, generation
 	return tx.Commit(ctx)
 }
 
+// RunnerExecutionOf is the run's persisted execution intent, ErrNotFound while it has none. It is the
+// check an issued generation is verified against, never a source for one.
+func (s PG) RunnerExecutionOf(ctx context.Context, runID uuid.UUID) (RunnerExecution, error) {
+	var out RunnerExecution
+	err := s.Pool.QueryRow(ctx, `SELECT run_id,runner_id,generation,operation,exec_id FROM runner_executions WHERE run_id=$1`, runID).Scan(&out.RunID, &out.RunnerID, &out.Generation, &out.Operation, &out.ExecID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return out, ErrNotFound
+	}
+	return out, err
+}
+
+// RunTokenRenewedAt is the run's token renewal stamp, the one the lapsed-token sweep reads.
+func (s PG) RunTokenRenewedAt(ctx context.Context, runID uuid.UUID) (time.Time, error) {
+	var at time.Time
+	err := s.Pool.QueryRow(ctx, `SELECT token_renewed_at FROM agent_runs WHERE id=$1`, runID).Scan(&at)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return at, ErrNotFound
+	}
+	return at, err
+}
+
+// ListLiveRunnerRuns is every run bound to the runner that is starting, running or held for a confirmation
+// and not lost: the runs a runner's new session must be leased again.
+func (s PG) ListLiveRunnerRuns(ctx context.Context, runnerID uuid.UUID) ([]types.AgentRun, error) {
+	return collect(ctx, s.Pool, "list", "live runner runs", `SELECT `+runCols+` FROM agent_runs WHERE runner_id=$1 AND placement='local'
+		AND state IN ('STARTING','RUNNING','WAITING_FOR_CONFIRMATION') AND lost_at IS NULL ORDER BY id`, []any{runnerID}, scanRun)
+}
+
 func readRunnerExecution(ctx context.Context, tx pgx.Tx, runID uuid.UUID) (RunnerExecution, error) {
 	var out RunnerExecution
 	err := tx.QueryRow(ctx, `SELECT run_id,runner_id,generation,operation,exec_id FROM runner_executions WHERE run_id=$1 FOR UPDATE`, runID).Scan(&out.RunID, &out.RunnerID, &out.Generation, &out.Operation, &out.ExecID)

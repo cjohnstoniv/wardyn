@@ -33,8 +33,8 @@ import (
 //     posture and that nothing applies yet. It never drops one: a person who
 //     asked to narrow a run must not be handed a wider one with a 201.
 //
-// Fields that only tune a run (resources, a workspace target) are accepted and
-// not yet applied; their doc comments on pkg/client say so. Each behaviour lane
+// A field that only tunes a run (resources) is accepted and not yet applied;
+// its doc comment on pkg/client says so. Each behaviour lane
 // deletes its case in unappliedFieldsRefusal and adds its own step to
 // runFoldSteps:
 //
@@ -43,14 +43,17 @@ import (
 //	built-in components           -> A-L14
 //	allowed_image, image facts     -> the image lane (A-L4/A-L6)
 //	placement local               -> the placement lane (#117)
-//	resources clamp, targets      -> A-L5, A-L4 (accepted, applied nowhere yet)
 const (
 	maxRunOverrideEntries  = 64
 	maxRunOverrideValueLen = 256
-	maxRunResourceCPU      = 1_000_000 // milli-CPU: a thousand CPUs
-	maxRunResourceMemory   = 16 << 20  // MiB: 16 TiB
+	maxRunResourceCPU      = 1_000_000                  // milli-CPU: a thousand CPUs
+	maxRunResourceMemory   = 16 << 20                   // MiB: 16 TiB
+	maxRunResourceDisk     = types.RunnerPoolDiskMiBMax // MiB: 16 TiB, the pool disk limit's bound
 	runUserHome            = "/home/agent"
 	runDriveName           = "your drive"
+	// maxRunWorkspaces bounds workspaces[]: each entry is a store read and an
+	// authorization before anything is folded.
+	maxRunWorkspaces = 32
 )
 
 // runContractRefusal answers the first refusal of the contract fields, shape
@@ -68,8 +71,8 @@ func (s *Server) runContractRefusal(req createRunRequest) *runRefusal {
 // runContractShapeChecks are the contract's shape checks, in answer order. A
 // template document is held to the same list when it is imported.
 var runContractShapeChecks = []func(createRunRequest) *runRefusal{
-	placementShapeRefusal, runnerPoolShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, runOverridesRefusal, builtinComponentsRefusal,
-	runModeShapeRefusal, runEndShapeRefusal,
+	placementShapeRefusal, runnerPoolShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, driveSelectionRefusal, runOverridesRefusal, builtinComponentsRefusal,
+	runModeShapeRefusal, runShapeRefusal, runEndShapeRefusal,
 }
 
 func placementShapeRefusal(req createRunRequest) *runRefusal {
@@ -113,9 +116,10 @@ func resourcesRefusal(req createRunRequest) *runRefusal {
 	if r == nil {
 		return nil
 	}
-	if r.CPUMillis < 0 || r.CPUMillis > maxRunResourceCPU || r.MemoryMiB < 0 || r.MemoryMiB > maxRunResourceMemory {
+	if r.CPUMillis < 0 || r.CPUMillis > maxRunResourceCPU || r.MemoryMiB < 0 || r.MemoryMiB > maxRunResourceMemory ||
+		r.DiskMiB < 0 || r.DiskMiB > maxRunResourceDisk {
 		return runError(http.StatusBadRequest, reasonResourcesInvalid, fmt.Sprintf(
-			"resources: cpu_millis must be 0 to %d and memory_mib 0 to %d", maxRunResourceCPU, maxRunResourceMemory))
+			"resources: cpu_millis must be 0 to %d, memory_mib 0 to %d and disk_mib 0 to %d", maxRunResourceCPU, maxRunResourceMemory, maxRunResourceDisk))
 	}
 	return nil
 }
@@ -136,116 +140,84 @@ func pathWithin(inner, outer string) bool {
 	return inner == outer || strings.HasPrefix(inner, outer+"/")
 }
 
-// placedMount is one validated selection target; seq is its position among them.
-type placedMount struct {
-	id, target string
-	seq        int
-}
-
-// firstMounts keeps the earliest mount added and the earliest one whose id
-// differs from it, which is enough to answer "earliest mount not owned by id".
-type firstMounts struct{ first, other *placedMount }
-
-func (f *firstMounts) add(m *placedMount) {
-	switch {
-	case f.first == nil:
-		f.first = m
-	case f.other == nil && m.id != f.first.id:
-		f.other = m
-	}
-}
-
-func (f *firstMounts) notOwnedBy(id string) *placedMount {
-	if f.first != nil && f.first.id != id {
-		return f.first
-	}
-	return f.other
-}
-
-// mountNode is one path element of the targets placed so far: exact holds the
-// mounts at this path, tree those at or below it.
-type mountNode struct {
-	children    map[string]*mountNode
-	exact, tree firstMounts
-}
-
-// workspaceTargetsRefusal validates each selection's target and refuses equal or
-// nested targets across different workspaces (OD-3), a drive's included. Only the
-// targets the request names are compared: the multi-workspace lane widens the
-// check to every resolved default.
+// workspaceTargetsRefusal checks the shape of the workspaces[] list: at most
+// maxRunWorkspaces, each id once, workspace_id equal to the first entry when both are sent, each target
+// and each repos entry well formed. Whether the targets collide is answered
+// over every resolved target once the workspaces are seeded (stepWorkspaces).
 //
-// Each target is compared with the earlier ones through a tree of path elements,
-// so the cost follows the size of the list rather than its square (the list is
-// bounded only by the request body). The refusal is the one a pairwise scan in
-// request order gives: the first selection that overlaps an earlier mount of
-// another workspace, naming the earliest such mount.
+// A target inside the drive's own path, with the drive on, answers
+// workspace_target_overlap rather than _invalid: the drive mounts there.
 func workspaceTargetsRefusal(req createRunRequest) *runRefusal {
-	root := &mountNode{}
+	if len(req.Workspaces) > maxRunWorkspaces {
+		return runError(http.StatusBadRequest, reasonWorkspaceSelectionInvalid, fmt.Sprintf("workspaces: attach at most %d workspaces.", maxRunWorkspaces))
+	}
 	drive := req.Drive != nil && req.Drive.Enabled
-	seq := 0
+	seen := make(map[uuid.UUID]bool, len(req.Workspaces))
 	for i, sel := range req.Workspaces {
-		t := sel.Target
-		if t == "" {
-			continue
+		id, err := uuid.Parse(sel.WorkspaceID)
+		switch {
+		case err != nil || id == uuid.Nil || id.String() != sel.WorkspaceID:
+			// The canonical spelling only: the selection's options are keyed by it,
+			// so another spelling of the same id would drop them.
+			return runError(http.StatusBadRequest, reasonWorkspaceSelectionInvalid, fmt.Sprintf("workspaces[%d].workspace_id: give a workspace id.", i))
+		case seen[id]:
+			return runError(http.StatusBadRequest, reasonWorkspaceSelectionInvalid, fmt.Sprintf("workspaces[%d]: %s is listed twice.", i, sel.WorkspaceID))
+		case i == 0 && req.WorkspaceID != nil && *req.WorkspaceID != id:
+			return runError(http.StatusBadRequest, reasonWorkspaceSelectionInvalid,
+				"workspace_id and workspaces[0] name different workspaces. Send one primary workspace.")
 		}
-		if drive && pathWithin(t, runner.DriveTarget) && path.IsAbs(t) && path.Clean(t) == t {
-			return overlapRefusal(t, sel.WorkspaceID, runDriveName, runner.DriveTarget)
-		}
-		if err := workspaceTargetShape(t); err != nil {
-			return runError(http.StatusBadRequest, reasonWorkspaceTargetInvalid, fmt.Sprintf("workspaces[%d].target: %v", i, err))
-		}
-		// t is absolute and cleaned, so its elements are the ones after the leading "/".
-		elems := strings.Split(t[1:], "/")
-		var earliest *placedMount
-		consider := func(m *placedMount) {
-			if m != nil && (earliest == nil || m.seq < earliest.seq) {
-				earliest = m
+		seen[id] = true
+		if t := sel.Target; t != "" {
+			if drive && pathWithin(t, runner.DriveTarget) && path.IsAbs(t) && path.Clean(t) == t {
+				return overlapRefusal(t, "", runDriveName, runner.DriveTarget)
+			}
+			if err := workspaceTargetShape(t); err != nil {
+				return runError(http.StatusBadRequest, reasonWorkspaceTargetInvalid, fmt.Sprintf("workspaces[%d].target: %v", i, err))
 			}
 		}
-		node := root
-		for _, e := range elems {
-			consider(node.exact.notOwnedBy(sel.WorkspaceID)) // an enclosing mount
-			if node = node.children[e]; node == nil {
-				break
-			}
+		if refusal := repoSelectionsRefusal(i, sel.Repos); refusal != nil {
+			return refusal
 		}
-		if node != nil {
-			consider(node.tree.notOwnedBy(sel.WorkspaceID)) // an equal or enclosed mount
-		}
-		if earliest != nil {
-			return overlapRefusal(t, sel.WorkspaceID, earliest.id, earliest.target)
-		}
-		m := &placedMount{id: sel.WorkspaceID, target: t, seq: seq}
-		seq++
-		node = root
-		for _, e := range elems {
-			if node.children == nil {
-				node.children = map[string]*mountNode{}
-			}
-			if node.children[e] == nil {
-				node.children[e] = &mountNode{}
-			}
-			node.tree.add(m)
-			node = node.children[e]
-		}
-		node.tree.add(m)
-		node.exact.add(m)
 	}
 	return nil
 }
 
-// overlapRefusal words an overlap of this selection's target t with another
-// mount, otherPath. A nested pair names the inner path and the outer mount.
-func overlapRefusal(t, self, other, otherPath string) *runRefusal {
-	msg := workspaceOverlapEqualMsg(t, other)
-	switch {
-	case t == otherPath:
-	case pathWithin(t, otherPath):
-		msg = workspaceOverlapNestedMsg(t, other, otherPath)
-	default:
-		msg = workspaceOverlapNestedMsg(otherPath, self, t)
+// repoSelectionsRefusal checks one selection's repos: each repo named once,
+// each ref one validRunRef accepts.
+func repoSelectionsRefusal(i int, repos *[]client.RepoSelection) *runRefusal {
+	if repos == nil {
+		return nil
 	}
-	return runError(http.StatusUnprocessableEntity, reasonWorkspaceTargetOverlap, msg)
+	seen := make(map[string]bool, len(*repos))
+	for j, rs := range *repos {
+		switch {
+		case rs.Repo == "" || len(rs.Repo) > maxRunRepoLen || !controlCharFree(rs.Repo):
+			return runError(http.StatusBadRequest, reasonRunRefInvalid, fmt.Sprintf("workspaces[%d].repos[%d].repo: name a repository of this workspace.", i, j))
+		case seen[rs.Repo]:
+			return runError(http.StatusBadRequest, reasonRunRefInvalid, fmt.Sprintf("workspaces[%d].repos: %s is listed twice.", i, rs.Repo))
+		case rs.Ref != "" && !validRunRef(rs.Ref):
+			return runError(http.StatusBadRequest, reasonRunRefInvalid, fmt.Sprintf("workspaces[%d].repos[%d].ref: give a branch, tag or commit name.", i, j))
+		}
+		seen[rs.Repo] = true
+	}
+	return nil
+}
+
+// validRunRef is the shape of a per-run ref: what git check-ref-format accepts
+// for a branch or tag name, or a commit. The leading "-" rule is the one that
+// matters most: clone_one passes the ref to `git fetch ... origin "$ref"`,
+// where a leading "-" is read as an option (--upload-pack=...).
+func validRunRef(ref string) bool {
+	if len(ref) > 255 || strings.HasPrefix(ref, "-") || strings.Contains(ref, "..") || strings.Contains(ref, "@{") ||
+		strings.ContainsAny(ref, " ~^:?*[\\") || strings.HasSuffix(ref, "/") || strings.HasSuffix(ref, ".lock") {
+		return false
+	}
+	for _, r := range ref {
+		if r < 0x21 || r > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 func overrideInvalid(format string, args ...any) *runRefusal {
@@ -509,9 +481,8 @@ func unappliedFieldsRefusal(req createRunRequest) *runRefusal {
 			"allowed_image: this server does not apply an image choice yet, so the run was not created.")
 	}
 	for i, ref := range req.Components {
-		if ref.Builtin != "" {
-			return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, fmt.Sprintf(
-				"components[%d]: built-in %s access is not available on this server yet, so the run was not created.", i, ref.Builtin))
+		if ref.Builtin == types.ComponentBuiltinAzureDevOps {
+			return builtinUnavailable(i, ref.Builtin)
 		}
 	}
 	return nil

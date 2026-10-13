@@ -266,8 +266,9 @@ func TestValidateAuthoredTargetReservesTheDriveTarget(t *testing.T) {
 		}
 	}
 	// A NEIGHBOUR under the same allowed prefix is untouched: the reservation is
-	// the subtree, not a string prefix over /home/agent/drive*.
-	for _, tgt := range []string{"/home/agent/drives", "/home/agent/drive-report", "/home/agent/work"} {
+	// the subtree, not a string prefix over /home/agent/drive* (/home/agent/drives
+	// is a drive root of its own, reserved by the same rule).
+	for _, tgt := range []string{"/home/agent/drive-report", "/home/agent/drivesx", "/home/agent/work"} {
 		if err := ValidateAuthoredTarget(tgt); err != nil {
 			t.Errorf("ValidateAuthoredTarget(%q) = %v, want nil", tgt, err)
 		}
@@ -659,7 +660,7 @@ func TestRefuseUserDriveBind_SplitsTheAudience(t *testing.T) {
 // naming cmd/wardyn-runner's -spec JSON as a reachable DriveMount input.
 //
 // It is not one. fileSpec declares no drive field and loadSpec never assigns
-// SandboxSpec.Drive (cmd/wardyn-runner/main_test.go's TestSpecJSON_CannotCarryADrive
+// SandboxSpec.Drives (cmd/wardyn-runner/main_test.go's TestSpecJSON_CannotCarryADrive
 // pins that from the source), so a hand-written spec cannot deliver a drive at
 // all. The checks are right and stay; what was wrong was the only evidence a
 // reader had for keeping them, and evidence that does not survive a two-minute

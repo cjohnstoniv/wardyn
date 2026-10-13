@@ -79,7 +79,7 @@ func buildStub(t *testing.T) string {
 // Those comments justified drive defence-in-depth checks by naming "a
 // hand-written -spec for the standalone runner" as a reachable
 // types.DriveMount input. fileSpec declares no drive field and loadSpec never
-// assigns SandboxSpec.Drive, so the JSON decodes it into nothing: the reachable
+// assigns SandboxSpec.Drives, so the JSON decodes it into nothing: the reachable
 // inputs are a control-plane bug and an in-process caller that builds a
 // SandboxSpec itself. The checks are correct and stay; the evidence a reader
 // had for keeping them was not, and evidence that does not survive a check is
@@ -113,7 +113,7 @@ func TestSpecJSON_CannotCarryADrive(t *testing.T) {
 		t.Errorf("fileSpec now decodes a drive field:\n%s\n"+
 			"A hand-written -spec can then deliver a types.DriveMount, which internal/runner's drive comments state it cannot.", decl)
 	}
-	if strings.Contains(text, "Drive:") || strings.Contains(text, ".Drive =") {
-		t.Error("main.go assigns SandboxSpec.Drive — the standalone runner can now produce a drive, and internal/runner's drive comments say it cannot")
+	if strings.Contains(text, "Drives:") || strings.Contains(text, ".Drives =") || strings.Contains(text, ".Drives, ") {
+		t.Error("main.go assigns SandboxSpec.Drives — the standalone runner can now produce a drive, and internal/runner's drive comments say it cannot")
 	}
 }

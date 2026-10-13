@@ -105,7 +105,9 @@ func newMDFixture(t *testing.T, kind types.ApprovalKind, scope json.RawMessage, 
 	return &mdFixture{srv: srv, ap: ap, run: ast.runs[runID]}
 }
 
-func (f *mdFixture) path(verb string) string { return "/api/v1/approvals/" + f.ap.ID.String() + "/" + verb }
+func (f *mdFixture) path(verb string) string {
+	return "/api/v1/approvals/" + f.ap.ID.String() + "/" + verb
+}
 
 // mdCase is one row of TestMayDecideAgreesWithDecide's matrix.
 type mdCase struct {

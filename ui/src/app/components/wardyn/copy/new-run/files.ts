@@ -1,0 +1,183 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// New Run canon strings for step 4, Files, byte for byte from docs/design/new-run-canon.md.
+// Lazy-only: imported by the New Run flow and never re-exported through copy.ts, whose barrel is in the eager
+// entry chunk. new-run-copy.test.ts keeps this file and the doc equal in both directions.
+
+export const NR_FILES = {
+  TITLE: "What files does it need?",
+  LEDE:
+    "Pick the repositories, drives and folders it can open. It starts in the one you mark. Anything not on a drive is deleted when the run ends.",
+  MAIN_TITLE: "Main drive",
+  MAIN_BODY: "The sandbox's own disk: system, tools and /home/agent. Every run has one.",
+  SIZE_LABEL: "Size",
+  UP_TO: (cap: string | number) => `Up to ${cap} GiB in this pool`,
+  CLAMP_POOL: (cap: string | number, pool: string | number) => `Clamped to ${cap} GiB by the ${pool} pool.`,
+  /** pending W-11: the recommended text until the owner answers. */
+  CLAMP_PROFILE: (cap: string | number, profile: string | number) => `Clamped to ${cap} GiB by ${profile}.`,
+  /** pending W-11: the recommended text until the owner answers. */
+  CLAMP_SERVER: (cap: string | number) => `Clamped to ${cap} GiB by this server.`,
+  /** pending W-11: the recommended text until the owner answers. */
+  CLAMP_POLICY: (cap: string | number) => `Clamped to ${cap} GiB by this run's policy.`,
+  /** pending W-11: the recommended text until the owner answers. */
+  CLAMP_ORG: (cap: string | number) => `Clamped to ${cap} GiB by your organisation's limits.`,
+  SIZE_ERROR: "Set a size for the main drive.",
+  ENFORCED: "Enforced",
+  ENFORCED_TIP: "Writes past this size fail.",
+  ENFORCED_BY_STOP: "Enforced by stopping the run",
+  ENFORCED_BY_STOP_TIP:
+    "If /tmp, /home/agent/work and /home/agent/.cache together pass this size, Kubernetes stops the run. Other paths aren't counted.",
+  NOT_ENFORCED: "Not enforced on this runner",
+  NOT_ENFORCED_ARIA: "Disk size is not enforced on this runner",
+  NOT_ENFORCED_TIP: "This runner's storage can't cap a container's disk; the size is a target, not a limit.",
+  REPORTED_BY_RUNNER: "(reported by the runner)",
+  LIFE_LABEL: "What happens to it",
+  LIFE_DELETED: "Deleted when the run ends.",
+  LIFE_KEPT: (max: string | number, grace: string | number) =>
+    `Kept after its end time so you can extend and resume it, up to its ${max} maximum lifetime. Deleted when you end the run, or ${grace} after its end time.`,
+  /** pending W-12: the recommended text until the owner answers. */
+  LIFE_KEPT_UNLIMITED: (grace: string | number) =>
+    `Kept after its end time so you can extend and resume it. Deleted when you end the run, or ${grace} after its end time.`,
+  LIFE_NO_END: "Kept until you end the run.",
+  REUSE_LABEL: "Reuse it across runs",
+  REUSE_ARIA: "About reusing this drive",
+  REUSE_TIP: "Save this disk when the run ends and start another run from it.",
+  REPOS_TITLE: "Repositories",
+  REPOS_BODY: "Copied onto the main drive. Changes leave only as commits you push.",
+  REPOSITORY_BADGE: "Repository",
+  INCLUDE_ARIA: (name: string | number) => `Include ${name}`,
+  BRANCH_ARIA: (name: string | number) => `Branch for ${name}`,
+  STARTS_HERE: "Starts here",
+  ADD_REPOSITORY: "+ Add repository",
+  /** pending W-13: the recommended text until the owner answers. */
+  BRANCH_PLACEHOLDER: "default branch",
+  /** pending W-13: the recommended text until the owner answers. */
+  BRANCH_FALLBACK:
+    "Branches couldn't be listed. Type a branch, tag or commit; leave it empty for the default branch.",
+  /** pending W-13: the recommended text until the owner answers. */
+  BRANCH_OTHER: "Other…",
+  /** pending W-14: the recommended text until the owner answers. */
+  REF_NOT_CHECKED: "Not checked until the run starts.",
+  USER_DRIVES_TITLE: "Remote user drives",
+  SHARED_DRIVES_TITLE: "Remote shared drives",
+  DRIVES_BODY: "Live storage. Changes are kept.",
+  /** pending W-16: the recommended text until the owner answers. */
+  SHARED_DRIVES_BODY: "Live storage. Changes are kept. Each person gets their own folder on the share.",
+  SOURCE_PERSONAL: "Personal",
+  SOURCE_TEAM: "Team",
+  /** pending W-15: the recommended text until the owner answers. */
+  SOURCE_ORG: "Organisation",
+  FAMILY_DOCKER_VOLUME: "Docker volume",
+  FAMILY_HOST_FOLDER: "Host folder",
+  FAMILY_CLUSTER_VOLUME: "Cluster volume",
+  ACCESS_EDIT: "Can edit",
+  ACCESS_READ: "Read-only",
+  ACCESS_ARIA: (name: string | number) => `Access for ${name}`,
+  LOCKED_ARIA: "Why this drive is read-only",
+  LOCKED_TIP: "Set by your admin",
+  NOT_IN_POOL: "Not available in this pool's runners.",
+  CREATE_USER_DRIVE: "+ Create user drive",
+  CREATE_SHARED_DRIVE: "+ Create shared drive",
+  MANAGE_DRIVES: "Manage drives →",
+  /** pending W-17: the recommended text until the owner answers. */
+  CREATE_DISABLED: "Your organisation doesn't let people create drives. Ask an admin.",
+  /** pending W-17: the recommended text until the owner answers. */
+  CREATE_DENIED: (profile: string | number) => `Not allowed by ${profile}.`,
+  /** pending W-17: the recommended text until the owner answers. */
+  CREATE_LIMIT: (n: string | number, limit: string | number) => `You have ${n} of ${limit} drives.`,
+  /** pending W-17: the recommended text until the owner answers. */
+  CREATE_UNSUPPORTED: "This server can't create drives.",
+  /** pending W-17: the recommended text until the owner answers. */
+  CREATE_NO_DELETE: "This server can't delete drives, so it can't create them.",
+  /** pending W-17: the recommended text until the owner answers. */
+  DELETE_DRIVE: "Delete drive",
+  /** pending W-17: the recommended text until the owner answers. */
+  DELETE_CONFIRM: (name: string | number) => `Delete ${name}? Its files are deleted and can't be recovered.`,
+  /** pending W-17: the recommended text until the owner answers. */
+  DRIVE_DELETED: (name: string | number) => `${name} deleted.`,
+  CREATE_TITLE: "Create user drive",
+  CREATE_INTRO: "Wardyn assigns the mount path. You can attach the drive to this run after it is created.",
+  DRIVE_NAME: "Drive name",
+  DRIVE_NAME_PLACEHOLDER: "e.g. Investigation files",
+  CREATE_CONFIRM: "Create drive",
+  DRIVE_CREATED: (name: string | number) => `${name} created and added to this run.`,
+  COMPUTER_TITLE: "Your computer",
+  COMPUTER_BODY: "Folders on your laptop, desktop or VDI.",
+  COMPUTER_SOON: "A sandbox can't use folders on your computer yet.",
+  NO_EXTRA: "No extra files — only the main drive",
+  NO_EXTRA_DELETED: "Only the main drive. Nothing from this run is kept.",
+  /** pending W-12: the recommended text until the owner answers. */
+  NO_EXTRA_KEPT: (grace: string | number) =>
+    `Only the main drive. It is deleted ${grace} after the run's end time.`,
+  CHOOSE_FILES: "Add what it needs, or choose No extra files.",
+  MOUNT_TITLE: "Mount map",
+  MOUNT_BODY: "Read-only view of where files appear in the sandbox.",
+  MOUNT_MAIN: (n: string | number) => `Main drive · ${n} GiB`,
+  MOUNT_ITEM: (name: string | number) => `← ${name}`,
+  MOUNT_STARTS: "(Starts here)",
+  MOUNT_READ_ONLY: "(read-only)",
+  SUMMARY_MAIN: (n: string | number) => `Main drive ${n} GiB`,
+  SUMMARY_STARTS: (name: string | number) => `starts in ${name}`,
+  SUMMARY_KEPT_ONE: (names: string | number) => `${names} is kept`,
+  SUMMARY_KEPT_MANY: (names: string | number) => `${names} are kept`,
+  SUMMARY_DELETED: "the main drive is deleted when the run ends",
+  /** pending W-12: the recommended text until the owner answers. */
+  SUMMARY_KEPT: (grace: string | number) => `the main drive is kept ${grace} after its end time`,
+  /** pending W-12: the recommended text until the owner answers. */
+  SUMMARY_NO_END: "the main drive is kept until you end the run",
+  SUMMARY_NO_EXTRA: (n: string | number, life: string | number) =>
+    `Main drive ${n} GiB · no extra files · ${life}.`,
+  // Owner-approved Files prototype (2026-10-13): one list of cards, the Add / Edit dialog and the starting folder.
+  ATTACH_TITLE: "Repositories, drives and folders",
+  ATTACH_BODY: "Each one appears in the sandbox at its mount path.",
+  ADD: "+ Add",
+  ADD_ARIA: "Add a repository, drive or folder",
+  KIND_USER_DRIVE: "User drive",
+  KIND_SHARED_DRIVE: "Shared drive",
+  KIND_FOLDER: "Folder",
+  FOLDER_TITLE: "Folder on this machine",
+  FOLDER_BODY: "A folder on the computer running Wardyn.",
+  SHARED_SUB: "Provided by your admin. You get your own folder on it.",
+  FOLDER_REMOTE: "Wardyn runs on a remote server, so it can't open folders on this machine.",
+  EDIT: "Edit",
+  EDIT_NAMED: (name: string | number) => `Edit ${name}`,
+  REMOVE_NAMED: (name: string | number) => `Remove ${name}`,
+  STORED_ON: "Stored on",
+  ADDED: (name: string | number) => `${name} added.`,
+  UPDATED: (name: string | number) => `${name} updated.`,
+  REMOVED: (name: string | number) => `${name} removed.`,
+  DIALOG_TITLE: "Add to this run",
+  ADD_REPO_TITLE: "Add repository",
+  ADD_USER_DRIVE_TITLE: "Add user drive",
+  ADD_SHARED_DRIVE_TITLE: "Add shared drive",
+  ADD_FOLDER_TITLE: "Add folder",
+  STEPS_ARIA: "Steps",
+  STEP_TYPE: "Type",
+  STEP_CHOOSE: "Choose",
+  STEP_MOUNT: "Mount path",
+  ALREADY_ADDED: "Already added to this run.",
+  BRANCH_LABEL: "Branch",
+  MOUNT_HINT: "Where it appears in the sandbox.",
+  PATH_INVALID: "Use a path inside /home/agent.",
+  PATH_TAKEN: (name: string | number, path: string | number) => `${name} is already mounted at ${path}.`,
+  ACCESS_LABEL: "Access",
+  SAVE: "Save",
+  ADD_CONFIRM: "Add",
+  START_TITLE: "Starting folder",
+  START_BODY: "Where it starts. Choose from what you added above.",
+  START_FOLDER_LABEL: "Folder",
+  START_OPTION: (name: string | number, path: string | number) => `${name} · ${path}`,
+  START_MAIN: "Main drive · /home/agent",
+  SUBFOLDER_LABEL: "Subfolder",
+  /** pending W-48: the recommended text until the owner answers. */
+  FOLDERS_NONE: "No folders onboarded yet. Add one in Workspaces.",
+  /** pending W-49: the recommended text until the owner answers. */
+  FOLDER_WITH_REPOS: (workspace: string | number) => `This folder comes with ${workspace}'s repositories. Remove them to remove it.`,
+  SUBFOLDER_PLACEHOLDER: "e.g. src",
+  SUBFOLDER_ERROR: (name: string | number) => `Use a folder inside ${name}.`,
+  LIST_COMMA: (a: string | number, b: string | number) => `${a}, ${b}`,
+  LIST_AND: (a: string | number, b: string | number) => `${a} and ${b}`,
+} as const;

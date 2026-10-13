@@ -140,3 +140,45 @@ func TestPG_MaxAgeStopsAnOutageKeptLiveAgent(t *testing.T) {
 		}
 	}
 }
+
+// TestPG_MaxAgeSkipsARunCarryingALifetimeCapThroughTheRealAdapter: the adapter reads
+// lifetime_cap_at into the reaper's summary, so the lease sweep, not the reaper,
+// ends a run that carries a cap; an old run with none is still stopped. Guarded by
+// WARDYN_TEST_PG.
+func TestPG_MaxAgeSkipsARunCarryingALifetimeCapThroughTheRealAdapter(t *testing.T) {
+	pool := revocationPool(t)
+	ctx := context.Background()
+	pg := store.PG{Pool: pool}
+	mk := func(capped bool) uuid.UUID {
+		id := uuid.New()
+		now := time.Now().UTC()
+		r := types.AgentRun{
+			ID: id, CreatedAt: now.Add(-3 * time.Hour), UpdatedAt: now,
+			CreatedBy: "op@example.com", Agent: "claude-code", Task: "max-age cap probe",
+			ConfinementClass: types.CC2, State: types.RunRunning,
+			SPIFFEID: "spiffe://wardyn.test/agent-run/" + id.String(), RunnerTarget: "docker",
+			SandboxRef: "wardyn-agent-" + id.String(),
+		}
+		if capped {
+			at := now.Add(time.Hour)
+			r.LifetimeCapAt, r.LifetimeCapSource = &at, types.LimitSourceDeployment
+		}
+		if _, err := pg.CreateRun(ctx, r); err != nil {
+			t.Fatalf("create run: %v", err)
+		}
+		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id=$1`, id) })
+		return id
+	}
+	capped, older := mk(true), mk(false)
+
+	own := ownRuns{Store: lifecycleStore{pool: pool}, ids: map[uuid.UUID]bool{capped: true, older: true}}
+	reaper := lifecycle.New(own, lifecycleStopper{pool: pool, runner: &countingRunner{}}, &fakeAuditRecorder{},
+		lifecycle.Config{MaxAge: time.Hour})
+	reaper.Tick(ctx)
+
+	for id, want := range map[uuid.UUID]types.RunState{capped: types.RunRunning, older: types.RunStopped} {
+		if got, err := pg.GetRun(ctx, id); err != nil || got.State != want {
+			t.Errorf("run %s state = %v (err %v), want %s", id, got.State, err, want)
+		}
+	}
+}

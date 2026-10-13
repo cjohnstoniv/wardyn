@@ -83,7 +83,7 @@ func TestBuild_SmokeDockerd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
 
-	ref, err := b.Build(ctx, BuildSpec{
+	built, err := b.Build(ctx, BuildSpec{
 		RepoURL:        gitURL,
 		OutputImageTag: tag,
 		LogSink:        &logs,
@@ -108,8 +108,8 @@ func TestBuild_SmokeDockerd(t *testing.T) {
 			t.Fatalf("Build failed: %v\nlogs:\n%s", err, log)
 		}
 	}
-	if ref != tag {
-		t.Errorf("returned ref %q != tag %q", ref, tag)
+	if built.Ref != tag {
+		t.Errorf("returned ref %q != tag %q", built.Ref, tag)
 	}
 
 	// Non-empty build log is a sanity signal that envbuilder actually ran.

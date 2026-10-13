@@ -29,6 +29,19 @@ func gitFactOrg(repo previewRepo) string {
 	return org
 }
 
+// gitFactPushRules are the push rules enforcement applies to a repo: those of the
+// entry that owns it (the run's resolved per-entry sets, keyed as the dispatch
+// plan keys them), else the run's base rules as the proxy falls back to for an
+// entry with no set.
+func gitFactPushRules(f componentFactInputs, repo previewRepo) *types.PushRulesSpec {
+	if _, key, err := pushRuleEntryOf(f.scmSite, repoCloneURL(repo.locator)); err == nil {
+		if i := slices.IndexFunc(f.pushSets, func(set types.PushRuleSet) bool { return set.Key() == key }); i >= 0 {
+			return &f.pushSets[i].Rules
+		}
+	}
+	return f.spec.PushRules
+}
+
 // enrichGitFacts reads the same admitted snapshots and standing-capability
 // meet the doors use. It never widens them, probes a forge or mints a token.
 func enrichGitFacts(f componentFactInputs, facts []componentFact) {
@@ -41,7 +54,7 @@ func enrichGitFacts(f componentFactInputs, facts []componentFact) {
 			continue
 		}
 		fact := &facts[i]
-		fact.PushRules = f.spec.PushRules // current global block; keyed overrides remain refused
+		fact.PushRules = gitFactPushRules(f, repo)
 		installURL := gitFactInstallURL(repo)
 		if f.ceiling.Operator {
 			fact.InstallURL = installURL

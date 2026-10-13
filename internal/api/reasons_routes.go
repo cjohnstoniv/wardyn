@@ -98,6 +98,7 @@ const (
 	reasonRunWaitBudgetNotANumber    = "run_wait_budget_not_a_number"   // wait_budget_sec was present but null
 	reasonRunEndWaitAlreadyFinished  = "run_end_wait_already_finished"  // the run is already in a terminal state
 	reasonRunEndWaitFilesGone        = "run_end_wait_files_gone"        // the run ended and its files are no longer kept
+	reasonRunEndWaitMaxLifetime      = "run_end_wait_max_lifetime"      // the run has reached its maximum lifetime and is being ended, so its end and wait cannot move
 	reasonRunEndWaitStoreUnavailable = "run_end_wait_store_unavailable" // this store cannot change a run's end
 	// reasonRunLimitsGateDenied is planRunEndWait's own shared cause: the
 	// user_changes_limits gate refused this change, for any of the 4 fields
@@ -272,6 +273,7 @@ const (
 	reasonRunRenewStoreUnavailable            = "run_renew_store_unavailable" // no store configured to verify the run is still alive
 	reasonRunRenewReadFailed                  = "run_renew_read_failed"       // reading the run for the renew gate failed
 	reasonRunRenewStampFailed                 = "run_renew_stamp_failed"      // stamping the run's token-renewed marker failed
+	reasonRunRenewLeaseBusy                   = "run_renew_lease_busy"        // the run's runner lease is being sent by another holder; retry
 	// reasonInternalLivenessReadFailed is refuseTerminalRun's own 503
 	// (internal_live_run.go) — the shared /internal/* liveness gate every
 	// sidecar door runs through.
@@ -719,6 +721,10 @@ const (
 // per-person rate limit, so not an authz.denied reason and not audited.
 const reasonPreflightRateLimited = "preflight_rate_limited"
 
+// GET /api/v1/workspaces/{id}/branches (workspace_branches.go). It also answers
+// reasonWorkspaceRepoUnknown (reasons.go) for a repository the workspace does not carry.
+const reasonBranchListRateLimited = "branch_list_rate_limited"
+
 // POST /api/v1/runs and POST /api/v1/runs/preflight (run_fit.go): the runs namespace's
 // ResourceQuota cannot hold this run. A 422 before the mint, not audited, like run_quota.
 const reasonNamespaceQuotaExceeded = "namespace_quota_exceeded"
@@ -890,15 +896,34 @@ const reasonIdentityDeactivated = "identity_deactivated"
 // POST /runs, its Review and the policy preview. Who may attach a component is
 // not here — that is authz's capability_component / capability_feature.
 const (
-	reasonComponentRefInvalid             = "component_ref_invalid"              // components[] is malformed: too many entries, an entry naming both or neither of id and inline, or one component twice
-	reasonComponentStoreUnavailable       = "component_store_unavailable"        // this deployment's store cannot record components
-	reasonComponentDefinitionInvalid      = "component_definition_invalid"       // the component's definition breaks a rule: a host, a delivery, a name Wardyn manages, a model provider's variable
-	reasonComponentSecretNotOwned         = "component_secret_not_owned"         // a secret the component delivers is not one the caller holds in their own namespace
-	reasonComponentSecretMissing          = "component_secret_missing"           // a secret the organisation provides for the component has not been stored
-	reasonComponentHostDenied             = "component_host_denied"              // a host of the component is on a deny list, or is not one the caller's egress_host rows allow
-	reasonComponentHostServesModel        = "component_host_serves_model"        // a host of the component serves a model on this deployment
-	reasonComponentHostCollision          = "component_host_collision"           // a header delivery names a host that already carries a credential on the run
-	reasonComponentResidentDeliveryDenied = "component_resident_delivery_denied" // the organisation turned off env and file delivery (components.deny_resident_delivery)
+	reasonComponentRefInvalid              = "component_ref_invalid"              // components[] is malformed: too many entries, an entry naming both or neither of id and inline, or one component twice
+	reasonComponentStoreUnavailable        = "component_store_unavailable"        // this deployment's store cannot record components
+	reasonComponentDefinitionInvalid       = "component_definition_invalid"       // the component's definition breaks a rule: a host, a delivery, a name Wardyn manages, a model provider's variable
+	reasonComponentSecretNotOwned          = "component_secret_not_owned"         // a secret the component delivers is not one the caller holds in their own namespace
+	reasonComponentSecretMissing           = "component_secret_missing"           // a secret the organisation provides for the component has not been stored
+	reasonComponentHostDenied              = "component_host_denied"              // a host of the component is on a deny list, or is not one the caller's egress_host rows allow
+	reasonComponentHostServesModel         = "component_host_serves_model"        // a host of the component serves a model on this deployment
+	reasonComponentHostCollision           = "component_host_collision"           // a header delivery names a host that already carries a credential on the run
+	reasonComponentResidentDeliveryDenied  = "component_resident_delivery_denied" // the organisation turned off env and file delivery (components.deny_resident_delivery)
+	reasonComponentCLIAWSInjectOff         = "component_cli_aws_inject_off"       // an AWS CLI row while WARDYN_AWS_SSO_PROXY_INJECT is off, which would put the SSO token in the sandbox
+	reasonComponentCLISignInRequired       = "component_cli_sign_in_required"     // the caller has not signed in for an AWS CLI row the run attaches
+	reasonComponentCLIAWSWithBedrockSignIn = "component_cli_aws_bedrock_sign_in"  // an AWS CLI row on a run whose model comes through an AWS sign-in: one AWS profile per sandbox
+	reasonCLINoGitHubRepo                  = "cli_no_github_repo"                 // a GitHub CLI row is attached, and the run has no GitHub repository on the App lane for it to act on
+)
+
+// The AWS CLI row's sign-in door (POST /components/{id}/sign-in) and its
+// capture (cli_aws_signin.go).
+const (
+	reasonCLISignInNotAWS         = "cli_sign_in_not_aws"         // the component is not an AWS CLI row
+	reasonCLISignInPreviewBlocked = "cli_sign_in_preview_blocked" // a previewing admin cannot capture into the previewed identity
+	reasonCLISignInCaptureChanged = "cli_sign_in_capture_changed" // the row was removed or re-pinned while its sign-in was open
+)
+
+// A built-in Git provider component's own refusals; its repositories meet the
+// workspace doors' reasons (workspace_repo_not_admitted, capability_workspace_provider).
+const (
+	reasonComponentBuiltinLaneOff            = "component_builtin_lane_off"             // the GitHub provider row that admits a repository has the GitHub App lane off
+	reasonComponentBuiltinAccessAboveCeiling = "component_builtin_access_above_ceiling" // the caller's ceiling does not allow the asked access to GitHub repositories
 )
 
 // reasonCredentialHostCollision: two of a run's credentials are bound to one
@@ -923,6 +948,7 @@ const (
 // retain the shared placement enum values.
 const (
 	reasonRunnerRegistrationUnavailable = "runner_registration_unavailable"
+	reasonRemoteRunnerNotFound          = "remote_runner_not_found" // no remote-hosted runner has that id (the operators' /remote-runners routes)
 	reasonRunnerRegistrationRateLimited = "runner_registration_rate_limited"
 	reasonRunnerRegistrationInvalid     = "runner_registration_invalid"
 	reasonRunnerOwnerInvalid            = "runner_owner_invalid"
@@ -937,6 +963,7 @@ const (
 	reasonRunnerSessionRequired  = "runner_session_required"
 	reasonRunnersOrgURLInvalid   = "runners_org_url_invalid"
 	reasonRunnersEnabledRequired = "runners_enabled_required"
+	reasonRunnerMaxRunsInvalid   = "runner_max_runs_invalid"
 )
 
 // Runner route admission fails closed on absent or unreadable configuration.
@@ -947,4 +974,9 @@ const (
 	reasonRunnerStreamRateLimited  = "runner_stream_rate_limited"
 	// reasonRunnerRevokeReasonInvalid: an owner's revoke names a reason other than not_mine.
 	reasonRunnerRevokeReasonInvalid = "runner_revoke_reason_invalid"
+)
+
+// GET /runs/{id}/launch-intent (launch_intent.go).
+const (
+	reasonLaunchIntentNotFound = "launch_intent_not_found" // the run kept no setup, or the caller may not see it
 )

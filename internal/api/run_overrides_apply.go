@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -151,11 +152,12 @@ func withoutClamped(o client.RunOverrides, row provenanceRow) client.RunOverride
 //
 // It re-runs runOverridesRefusal so the fold never applies an edit the
 // narrowing table refuses, whichever door called it.
-func (s *Server) applyRunOverrides(ctx context.Context, r *http.Request, spec types.RunPolicySpec, o *client.RunOverrides) (types.RunPolicySpec, *overrideEdits, *runRefusal) {
+func (s *Server) applyRunOverrides(ctx context.Context, r *http.Request, spec types.RunPolicySpec, req *createRunRequest) (types.RunPolicySpec, *overrideEdits, *runRefusal) {
+	o := req.Overrides
 	if o == nil || len(o.Items()) == 0 {
 		return spec, nil, nil
 	}
-	if refusal := runOverridesRefusal(createRunRequest{Overrides: o}); refusal != nil {
+	if refusal := runOverridesRefusal(*req); refusal != nil {
 		return spec, nil, refusal
 	}
 	spec = spec.Clone()
@@ -174,7 +176,11 @@ func (s *Server) applyRunOverrides(ctx context.Context, r *http.Request, spec ty
 		applyRunEgressOverrides(&spec, *eg, e)
 	}
 	if o.AzureDevOps != nil {
-		if refusal := applyADOOverride(&spec, *o.AzureDevOps, e); refusal != nil {
+		base, refusal := s.adoOverrideBase(ctx, r, spec, req)
+		if refusal == nil {
+			refusal = applyADOOverride(&spec, *o.AzureDevOps, base, e)
+		}
+		if refusal != nil {
 			return spec, nil, refusal
 		}
 	}
@@ -247,8 +253,8 @@ func applyRunEgressOverrides(spec *types.RunPolicySpec, eg client.RunEgressOverr
 }
 
 // applySecretOverrides turns each added secret into an api_key header grant and
-// drops every grant that pairs a removed one. An added secret must be the
-// caller's own stored secret: the operator's names and another person's are
+// drops every grant that pairs a removed one. An added or removed secret must be
+// the caller's own stored secret: the operator's names and another person's are
 // refused, whatever the ceiling would later say, because naming a secret is
 // itself the claim of ownership (OwnerOnly then pins the lookup to their row).
 func (s *Server) applySecretOverrides(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, a client.AgentOverrides, e *overrideEdits) *runRefusal {
@@ -270,7 +276,16 @@ func (s *Server) applySecretOverrides(ctx context.Context, r *http.Request, spec
 		e.agent().AddSecrets = append(e.agent().AddSecrets, sec)
 		e.add(fieldGrants, grantKey(g), provEffectAdded)
 	}
-	for _, name := range a.RemoveSecrets {
+	for i, name := range a.RemoveSecrets {
+		// A member's ownership first, and the same refusal for a name that is
+		// someone else's and for one nobody has (an operator reads the names, so
+		// is not asked): matching the policy's grants before this would
+		// tell a person which operator secrets it pairs, which a member never
+		// reads (policy reads strip the references).
+		if !s.isOperator(r.Context()) && !s.ownsSecretMemoized(ctx, s.secretOwnerFromRequest(r), name) {
+			return runError(http.StatusUnprocessableEntity, reasonOverrideRefused, fmt.Sprintf(
+				"overrides.agent.remove_secrets[%d]: %s is not one of your stored secrets.", i, name))
+		}
 		removed := false
 		spec.EligibleGrants = slices.DeleteFunc(spec.EligibleGrants, func(g types.GrantSpec) bool {
 			_, ref, _, covered, err := storedSecretGrantPairing(g)
@@ -309,21 +324,36 @@ func applyToolRuleOverrides(spec *types.RunPolicySpec, rules []types.ToolRule, e
 	}
 }
 
+// adoOverrideBase is the Azure DevOps capability set an override can narrow: the
+// set the policy names, or, where it names none (every governed no-policy run),
+// the default profile of the provider row that admits the run's repository,
+// resolved the way dispatch resolves it (resolveADOEntraRun). With no such row
+// there is no Azure DevOps access to narrow and the override is refused.
+func (s *Server) adoOverrideBase(ctx context.Context, r *http.Request, spec types.RunPolicySpec, req *createRunRequest) ([]adoscope.Capability, *runRefusal) {
+	if len(spec.AzureDevOpsCapabilities) > 0 {
+		return spec.AzureDevOpsCapabilities, nil
+	}
+	site, err := s.scmLaneSiteConfig(ctx, spec, req.Repo)
+	if err != nil {
+		return nil, runServerError("get site config", err)
+	}
+	lane, on := resolveADOEntraRun(site, presentRepos(append(repoLocatorsOf(spec.WorkspaceRepos), req.Repo)), runIdentitySubject(ctx, principalFromRequest(r)))
+	if !on {
+		return nil, runError(http.StatusUnprocessableEntity, reasonOverrideRefused,
+			"azure_devops.capabilities can only narrow Azure DevOps access this run has, and this run's repository resolves to no per-person Azure DevOps access.")
+	}
+	return lane.caps, nil
+}
+
 // applyADOOverride narrows the run's Azure DevOps capability set to a subset of
-// the one the policy names. An empty set keeps nothing, and the spec cannot say
-// so: an empty azure_devops_capabilities reads as "the provider row's default
-// profile" at dispatch, which would widen the run the person meant to narrow.
-// So it is refused here, never folded into the source's default.
-func applyADOOverride(spec *types.RunPolicySpec, o client.ADOOverrides, e *overrideEdits) *runRefusal {
+// base, the set the run would hold (adoOverrideBase). An empty set keeps nothing,
+// and the spec cannot say so: an empty azure_devops_capabilities reads as "the
+// provider row's default profile" at dispatch, which would widen the run the
+// person meant to narrow. So it is refused here, never folded into the source's
+// default.
+func applyADOOverride(spec *types.RunPolicySpec, o client.ADOOverrides, base []adoscope.Capability, e *overrideEdits) *runRefusal {
 	if len(o.Capabilities) == 0 {
 		return overrideInvalid("azure_devops.capabilities: keeping no capability is not something this run can express; name at least one capability to keep")
-	}
-	if len(spec.AzureDevOpsCapabilities) == 0 {
-		// The policy names no set (the provider row's default profile applies at
-		// dispatch), so there is nothing here to narrow to a subset of: any
-		// capability named would be an addition, and additions are refused.
-		return runError(http.StatusUnprocessableEntity, reasonOverrideRefused,
-			"An override cannot add azure_devops.capabilities: this run's source names none, so it would give the run more reach than its source grants.")
 	}
 	var keep []adoscope.Capability
 	for _, name := range o.Capabilities {
@@ -331,14 +361,14 @@ func applyADOOverride(spec *types.RunPolicySpec, o client.ADOOverrides, e *overr
 		if !c.Grantable() {
 			return overrideInvalid("azure_devops.capabilities: %q is not a capability a run can hold", name)
 		}
-		if !slices.Contains(spec.AzureDevOpsCapabilities, c) {
+		if !slices.Contains(base, c) {
 			return runError(http.StatusUnprocessableEntity, reasonOverrideRefused, fmt.Sprintf(
-				"An override cannot add azure_devops.capabilities %s: it would give this run more reach than its source grants.", name))
+				"An override can only narrow azure_devops.capabilities, and %s is not among the capabilities this run has.", name))
 		}
 		keep = append(keep, c)
 	}
 	narrowed := false
-	for _, c := range spec.AzureDevOpsCapabilities {
+	for _, c := range base {
 		if !slices.Contains(keep, c) {
 			narrowed = true
 			e.add(fieldADOCaps, string(c), provEffectNarrowed)
@@ -346,8 +376,8 @@ func applyADOOverride(spec *types.RunPolicySpec, o client.ADOOverrides, e *overr
 	}
 	if narrowed {
 		e.applied.AzureDevOps = &o
+		spec.AzureDevOpsCapabilities = keep
 	}
-	spec.AzureDevOpsCapabilities = keep
 	return nil
 }
 
@@ -402,22 +432,28 @@ func applyGitPATOverrides(spec *types.RunPolicySpec, overrides []client.GitPATOv
 }
 
 // boundOverrideAdds bounds the hosts and grants a person added by their ceiling
-// when the policy they started from is a stored row that is not clamped as a
-// whole (an unassigned member's selection, the documented residual in
-// resolveRunPolicyFacts). Their additions must not ride on that row past the
-// ceiling their own inline_policy would meet, so the same member pipeline runs
-// on a probe holding only the additions beside the row's hosts, and whatever it
-// drops is dropped from the run. dryRun: the real run's clamp audits nothing
-// extra for a probe.
-func (s *Server) boundOverrideAdds(ctx context.Context, r *http.Request, spec types.RunPolicySpec, e *overrideEdits, ceiling governanceCeiling) (types.RunPolicySpec, []string, *runRefusal) {
+// when the policy they started from is not clamped as a whole: the no-policy
+// default (which IS the ceiling) and a stored row an unassigned member selected
+// (the documented residual in resolveRunPolicyFacts). Their additions must not
+// ride on that policy past the ceiling their own inline_policy would meet, so the
+// same member pipeline runs on a probe holding only the additions beside the
+// policy's hosts, and whatever it drops is dropped from the run. The probe's
+// drops are audited on create (dryRun false) only where they are the person's
+// own: the probe also carries the policy's hosts, which stay.
+func (s *Server) boundOverrideAdds(ctx context.Context, r *http.Request, spec types.RunPolicySpec, e *overrideEdits, ceiling governanceCeiling, dryRun bool) (types.RunPolicySpec, []string, *runRefusal) {
 	if e == nil || len(e.addedHosts)+len(e.addedGrants) == 0 && !e.setFirstUse && !e.setAllowAll {
 		return spec, nil, nil
 	}
 	probe := types.RunPolicySpec{AllowedDomains: slices.Clone(spec.AllowedDomains), EligibleGrants: slices.Clone(e.addedGrants),
 		FirstUseApproval: spec.FirstUseApproval, AllowAllEgress: spec.AllowAllEgress}
-	bounded, warns, refusal := s.boundRunUserSpec(ctx, r, probe, ceiling, "invalid policy: ", true)
+	bounded, warns, drops, refusal := s.boundRunUserSpecDrops(ctx, r, probe, ceiling, "invalid policy: ")
 	if refusal != nil {
 		return spec, nil, refusal
+	}
+	if !dryRun {
+		s.auditUserPolicyDrops(ctx, r, slices.DeleteFunc(drops, func(d capDrop) bool {
+			return d.reason == authz.ReasonCapabilityEgressHost && !slices.ContainsFunc(e.addedHosts, func(h string) bool { return hostEqual(h, d.detail) })
+		}))
 	}
 	spec = spec.Clone()
 	if e.setAllowAll && !bounded.AllowAllEgress {
@@ -451,4 +487,11 @@ func (src *policySourceRecord) recordPushRules(applied []client.PushRuleOverride
 	}
 	diff.PushRules = applied
 	src.OverridesDiff = &diff
+}
+
+// overridden reports whether the person changed the policy this run launched
+// with: a diff holding only what the ceiling clamped changed nothing, and a
+// refusal's attribution must not call the policy theirs for it.
+func (src policySourceRecord) overridden() bool {
+	return src.OverridesDiff != nil && len(src.OverridesDiff.Pruned().Items()) > 0
 }

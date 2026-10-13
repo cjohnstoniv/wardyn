@@ -65,6 +65,25 @@ type govEscapeStore struct {
 	onCreateRun func()
 	// grants is every grant CreateGrant was handed, in order.
 	grants []types.CredentialGrant
+	// harnesses is each run's run_harnesses rows (PutRunHarnesses).
+	harnesses map[uuid.UUID][]types.RunHarness
+}
+
+// PutRunHarnesses records a run-mode run's harness set, as the PG store does.
+func (s *govEscapeStore) PutRunHarnesses(_ context.Context, runID uuid.UUID, hs []types.RunHarness) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.harnesses == nil {
+		s.harnesses = map[uuid.UUID][]types.RunHarness{}
+	}
+	s.harnesses[runID] = hs
+	return nil
+}
+
+func (s *govEscapeStore) ListRunHarnesses(_ context.Context, runID uuid.UUID) ([]types.RunHarness, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.harnesses[runID], nil
 }
 
 func newGovEscapeStore(cs *capStore) *govEscapeStore {

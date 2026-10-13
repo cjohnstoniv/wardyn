@@ -30,11 +30,16 @@ type workspaceAPI struct {
 	lastPath string
 	list     []types.Workspace
 	truncate bool
+	builds   int
+	// buildBody is the last POST /build body; empty for a plain build.
+	buildBody string
 }
 
 func newWorkspaceAPI(t *testing.T, lib types.Source, ws types.Workspace) *workspaceAPI {
 	t.Helper()
 	a := &workspaceAPI{list: []types.Workspace{ws}}
+	notReproducible := false
+	buildView := sdk.WorkspaceBuild{State: "ready", Image: "wardyn-ws:abc", Detail: "image kept", RecordSHA256: "9f2c", Reproducible: &notReproducible}
 	a.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()
 		a.lastPath = r.Method + " " + r.URL.RequestURI()
@@ -61,6 +66,16 @@ func newWorkspaceAPI(t *testing.T, lib types.Source, ws types.Workspace) *worksp
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/workspaces/"+ws.ID.String()+"/scan":
 			w.WriteHeader(http.StatusAccepted)
 			fmt.Fprint(w, `{"scan_run_ids":["r1"]}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/workspaces/"+ws.ID.String()+"/build":
+			_ = json.NewEncoder(w).Encode(buildView)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/workspaces/"+ws.ID.String()+"/build":
+			body, _ := io.ReadAll(r.Body)
+			a.mu.Lock()
+			a.builds++
+			a.buildBody = string(body)
+			a.mu.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(sdk.WorkspaceBuild{State: "building"})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sources/"+lib.ID.String():
 			_ = json.NewEncoder(w).Encode(lib)
 		default:
@@ -185,4 +200,53 @@ func TestWorkspaceCommands(t *testing.T) {
 			t.Error("get of an unknown workspace succeeded")
 		}
 	})
+}
+
+// runWorkspaceBuild runs `wardyn workspace build <id> ...` against api and returns stdout and the error.
+func runWorkspaceBuild(api *workspaceAPI, id string, flags ...string) (string, error) {
+	root := rootCmd()
+	root.SetArgs(append(append([]string{"workspace", "build", id}, flags...), "--url", api.URL, "--token", "tok"))
+	var out strings.Builder
+	root.SetOut(&out)
+	root.SetErr(&strings.Builder{})
+	err := root.Execute()
+	return out.String(), err
+}
+
+func TestWorkspaceBuildCmd_PrintsNotReproducible(t *testing.T) {
+	ws := types.Workspace{ID: uuid.New(), Name: "payments", Status: types.WorkspaceScanned}
+	api := newWorkspaceAPI(t, types.Source{ID: uuid.New()}, ws)
+	id := ws.ID.String()
+
+	out, err := runWorkspaceBuild(api, id, "--status")
+	want := "workspace " + id + ": ready\nimage: wardyn-ws:abc\ndetail: image kept\nrecord: 9f2c (not reproducible)\n"
+	if err != nil || out != want {
+		t.Errorf("--status = %q, %v, want %q", out, err, want)
+	}
+	if api.lastPath != "GET /api/v1/workspaces/"+id+"/build" || api.builds != 0 {
+		t.Errorf("--status sent %q with %d POSTs, want one GET and no POST", api.lastPath, api.builds)
+	}
+	if out, err := runWorkspaceBuild(api, id, "--status", "--json"); err != nil || !strings.Contains(out, `"reproducible": false`) {
+		t.Errorf("--status --json = %q, %v", out, err)
+	}
+
+	if out, err := runWorkspaceBuild(api, id); err != nil || out != "workspace "+id+": building\n" || api.buildBody != "" {
+		t.Errorf("build = %q, %v (body %q), want a plain build with no body", out, err, api.buildBody)
+	}
+	if out, err := runWorkspaceBuild(api, id, "--refresh"); err != nil || !strings.Contains(out, "workspace "+id+": building") || api.buildBody != `{"refresh":true}` {
+		t.Errorf("build --refresh = %q, %v (body %q), want the refresh body", out, err, api.buildBody)
+	}
+}
+
+func TestWorkspaceBuildCmd_RefusesRefreshWithStatus(t *testing.T) {
+	ws := types.Workspace{ID: uuid.New(), Name: "payments", Status: types.WorkspaceScanned}
+	api := newWorkspaceAPI(t, types.Source{ID: uuid.New()}, ws)
+
+	_, err := runWorkspaceBuild(api, ws.ID.String(), "--refresh", "--status")
+	if err == nil || err.Error() != "--refresh and --status cannot be used together" {
+		t.Errorf("err = %v, want the refusal", err)
+	}
+	if api.builds != 0 {
+		t.Errorf("refused build still sent %d POSTs", api.builds)
+	}
 }
