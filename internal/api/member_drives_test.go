@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -59,6 +60,9 @@ func (s *memberDriveStore) owned(owner string) []types.UserDrive {
 }
 
 func (s *memberDriveStore) CreateMemberDrive(_ context.Context, d types.UserDrive, limit int) (types.UserDrive, error) {
+	if d.OwnerSubject == "" {
+		return types.UserDrive{}, errors.New("store: a member drive needs an owner") // as the store refuses it
+	}
 	mine := s.owned(d.OwnerSubject)
 	if len(mine) >= limit {
 		return types.UserDrive{}, store.ErrMemberDriveLimit
@@ -75,6 +79,9 @@ func (s *memberDriveStore) CreateMemberDrive(_ context.Context, d types.UserDriv
 }
 
 func (s *memberDriveStore) ListMemberDrivesOf(_ context.Context, owner string) ([]types.UserDrive, error) {
+	if owner == "" {
+		return nil, errors.New("store: a member drive needs an owner") // as the store refuses it
+	}
 	return s.owned(owner), nil
 }
 
