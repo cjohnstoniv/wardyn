@@ -208,6 +208,15 @@ func TestDo_PendingChangeIsNeverDecodedAsSuccess(t *testing.T) {
 			return err
 		},
 		"KillRun": func() error { _, err := c.KillRun(ctx, id); return err },
+		// A use policy is a covered write: held for a second approver, a set and a clear both answer 202.
+		"SetRunnerPoolUsePolicy": func() error {
+			pol, err := c.SetRunnerPoolUsePolicy(ctx, id, client.RunnerPoolUsePolicyRequest{Subjects: []client.RunnerPoolSubject{{SubjectType: "group", Subject: "platform-eng"}}})
+			if pol.PoolID != uuid.Nil || len(pol.Subjects) != 0 {
+				t.Errorf("SetRunnerPoolUsePolicy returned a populated policy on a pending answer")
+			}
+			return err
+		},
+		"ClearRunnerPoolUsePolicy": func() error { return c.ClearRunnerPoolUsePolicy(ctx, id) },
 	} {
 		err := call()
 		var pe *client.PendingApprovalError

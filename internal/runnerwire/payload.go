@@ -137,11 +137,19 @@ type PendingAction struct {
 	Ref        string                       `json:"ref"`
 }
 
+// MaxActionResultBytes bounds one encoded action_result body; the org refuses
+// a larger one. MaxRefusalReason bounds a refused result's reason.
+const (
+	MaxActionResultBytes = 1024
+	MaxRefusalReason     = 512
+)
+
 // ActionResult is the `action_result` event's data.
 type ActionResult struct {
 	ID         uuid.UUID `json:"id"`
 	Outcome    string    `json:"outcome"`
 	ObservedAt time.Time `json:"observed_at"`
+	Reason     string    `json:"reason,omitempty"` // why a refused action was refused
 }
 
 // RunState is one run's entry in the STATE payload; all runner_asserted.
