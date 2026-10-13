@@ -455,13 +455,14 @@ func unsatisfiableWrite(err error, name string) error {
 // policy invalid is the author's to fix.
 func (s *Server) checkOverlay(p types.GovernanceProfile, chain []types.GovernanceProfile) *profileWriteError {
 	base := s.deploymentAuthority()
+	var baseAuthored types.ResourceLimits
 	if len(chain) > 1 {
 		res, err := s.composeChain(chain[1:])
 		if err != nil {
 			return writeRefusal(http.StatusConflict, reasonGovernanceOverlayUnsatisfiable,
 				"the profile this one builds on cannot be applied: %s", adminResolveError(err))
 		}
-		base = composer.Authority{Ceiling: res.Ceiling, Limits: res.Limits}
+		base, baseAuthored = composer.Authority{Ceiling: res.Ceiling, Limits: res.Limits}, res.AuthoredResources
 	}
 	if p.Overlay.EligibleGrants != nil {
 		for _, g := range *p.Overlay.EligibleGrants {
@@ -480,6 +481,13 @@ func (s *Server) checkOverlay(p types.GovernanceProfile, chain []types.Governanc
 	// ceiling gets, but only when the overlay is what made it fail: a deployment default this
 	// validator dislikes is not the author's to fix.
 	if eff, _, err := composer.ApplyOverlay(base, ov); err == nil {
+		// A maximum where the base authored no size is the size, so the member cap is compared, not
+		// the maximum (memberCapOf).
+		if raises := memberCapRaises(s.memberCapOf(authoredAfter(baseAuthored, p, eff), eff.Limits, eff.Ceiling.Resources),
+			s.memberCapOf(baseAuthored, base.Limits, base.Ceiling.Resources)); len(raises) > 0 {
+			return writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,
+				"overlay_limits: raises the member size above what the profile it builds on allows: %s", strings.Join(raises, ", "))
+		}
 		if verr := validatePolicySpec(eff.Ceiling); verr != nil && validatePolicySpec(base.Ceiling) == nil {
 			return writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "invalid overlay: %v", verr)
 		}

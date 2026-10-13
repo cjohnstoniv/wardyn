@@ -92,7 +92,8 @@ type heldProfileWrite struct {
 //   - metadata only: every stored field other than the name is equal to the current row, including the
 //     base, the overlay and the overlay limits;
 //   - narrowing: the new effective profile is Leq the current effective one (composer.Leq, which
-//     carries the full git_pat dominance contract).
+//     carries the full git_pat dominance contract), and its member CPU and memory cap is no higher
+//     (memberCapOf).
 //
 // A write that changes the contact is held even when Leq holds: a contact is who a refused person is
 // told to ask, and nothing proves a new one is not a redirect. So is a rename that can change which
@@ -122,7 +123,10 @@ func (s *Server) profileWriteExempt(ctx context.Context, all []types.GovernanceP
 	if err != nil {
 		return false
 	}
-	return composer.Leq(res.Ceiling, curRes.Ceiling, res.Limits, curRes.Limits)
+	// Leq reads a maximum set where none was as tighter; the member cap reads it as the size, so the
+	// cap is compared too.
+	return composer.Leq(res.Ceiling, curRes.Ceiling, res.Limits, curRes.Limits) &&
+		len(memberCapRaises(s.resolvedMemberCap(res), s.resolvedMemberCap(curRes))) == 0
 }
 
 // renameMaySelect reports whether renaming profile id could change which profile a person resolves

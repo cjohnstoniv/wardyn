@@ -61,7 +61,7 @@ an operator follows to turn one on and run the queue.
   - A failure after the write rolls it back.
 - **Exemptions.**
   - Only these apply directly, with no second human:
-    - a profile update whose new effective profile is no more permissive than the current one (the same resolved comparison composition uses, `Leq`),
+    - a profile update whose new effective profile is no more permissive than the current one (the same resolved comparison composition uses, `Leq`) and whose member CPU and memory cap is no higher,
     - a rename that changes nothing else (unless held below),
     - an availability `PUT` that leaves the restricted bit as it is,
     - and a user type's name or description edit that leaves its priority alone.
