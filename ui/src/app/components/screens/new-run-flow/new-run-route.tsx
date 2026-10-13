@@ -112,8 +112,6 @@ const foreignLaunched = (state: unknown, principal: string): boolean => {
   return s?.created !== undefined && s.owner !== principal;
 };
 
-const inNewRun = (path: string): boolean => path.endsWith(NEW_RUN_PATH);
-
 const seedKey = (from: NewRunFrom) =>
   from.template ? `template:${from.template.id}:${from.template.revision ?? ""}` : from.again ? `again:${from.again}` : "";
 
@@ -200,9 +198,18 @@ function NewRunFlow({ loaders, screens }: { loaders: SeedLoaders; screens: Recor
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [requestLeave, navigate]);
-  // The draft lives as long as New Run is open, so moving between its own screens (Back, Forward) loses nothing.
+  // The draft lives as long as New Run is open on the same seed, so moving between its own screens (Back,
+  // Forward) loses nothing; a move to another template or run would seed over it.
+  const staysWithDraft = React.useCallback(
+    (href: string) => {
+      const url = new URL(href, window.location.origin);
+      const to = parseNewRunSearch(url.searchParams);
+      return url.pathname.endsWith(NEW_RUN_PATH) && seedKey({ template: to.template, again: to.again }) === key;
+    },
+    [key],
+  );
   useUnsavedGuard("new-run-flow", isDirty(draft), () =>
-    [draft.launch.title, draft.launch.description, draft.intent.workload?.task, draft.doc?.text].filter(Boolean).join("\n\n"), inNewRun);
+    [draft.launch.title, draft.launch.description, draft.intent.workload?.task, draft.doc?.text].filter(Boolean).join("\n\n"), staysWithDraft);
 
   const go = React.useCallback((loc: NewRunLocation, opts?: { replace?: boolean }) =>
     void navigate(newRunHref(loc, from), { replace: opts?.replace }), [navigate, from]);

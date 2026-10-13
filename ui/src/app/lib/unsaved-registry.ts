@@ -34,7 +34,7 @@ export function registerUnsaved(id: string, getText: () => string, within?: (pat
   };
 }
 
-/** True when every unsaved editor's draft lives on at `path` (a move within its own form), so nothing is lost. */
+/** True when every unsaved editor's draft lives on at `path` (pathname and search; a move within its own form), so nothing is lost. */
 export function unsavedStaysAt(path: string): boolean {
   return registry.size > 0 && [...registry.keys()].every((id) => scopes.get(id)?.(path) === true);
 }
