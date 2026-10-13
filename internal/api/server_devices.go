@@ -12,6 +12,10 @@ type deviceRouteState struct {
 	// /devices/enrol, per TCP peer (devices_auth.go's peerKey), with per-entry
 	// eviction so the map cannot grow without bound. Configured in New.
 	enrolLimiter principalLimiter
+	// registerLimiter bounds the anonymous runner registration route, POST /runners/register, per TCP
+	// peer, on its own: a flood of device enrolments cannot block runner registration, or the reverse.
+	// A registration that redeemed a valid token is refunded, so only failed attempts are charged.
+	registerLimiter principalLimiter
 	// The device routes' failure-row bounds (device_audit_bounds.go):
 	// enrolFailures is the anonymous route's one stream, ingestFailures one
 	// stream per device, ingestFailureLimiter that stream's per-device bucket.
