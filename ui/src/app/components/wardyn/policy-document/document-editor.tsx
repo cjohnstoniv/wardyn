@@ -5,12 +5,12 @@
 
 // DocumentEditor — the run document's source box: a textarea with a line gutter
 // and the caller's diagnostics marked on their lines. It holds no text of its
-// own and never repairs what was typed. The format switch is the caller's.
+// own and never repairs what was typed. The format switch and the words of each
+// problem are the caller's (Make lists them in its validation panel).
 import * as React from "react";
 import type { PolicySourceFormat } from "../../../lib/policy-document";
 import { Textarea } from "../../ui/textarea";
 import { cn } from "../../ui/utils";
-import { POLICY_DOCUMENT as D } from "../copy/policy-document";
 
 /** One problem in the source, at a 1-based line and column. */
 export interface DocumentDiagnostic {
@@ -27,6 +27,8 @@ export interface DocumentEditorProps {
   format: PolicySourceFormat;
   onChange: (value: string) => void;
   diagnostics: DocumentDiagnostic[];
+  /** Marks the box invalid for problems that have no line of their own. */
+  invalid?: boolean;
   /** The textarea's accessible name. */
   label: string;
   /** Ids of the caller's own descriptions of the editor. */
@@ -49,14 +51,14 @@ export function DocumentEditor({
   format,
   onChange,
   diagnostics,
+  invalid: invalidSource = false,
   label,
   describedBy,
   rows = 12,
   className,
 }: DocumentEditorProps) {
   const gutter = React.useRef<HTMLDivElement>(null);
-  const diagnosticsId = `${id}-diagnostics`;
-  const invalid = diagnostics.length > 0;
+  const invalid = invalidSource || diagnostics.length > 0;
   const errorLines = new Set(diagnostics.map((d) => d.line));
   const lineCount = value.split("\n").length;
 
@@ -95,7 +97,7 @@ export function DocumentEditor({
           spellCheck={false}
           aria-label={label}
           aria-invalid={invalid || undefined}
-          aria-describedby={[describedBy, invalid ? diagnosticsId : undefined].filter(Boolean).join(" ") || undefined}
+          aria-describedby={describedBy}
           className={cn(
             "min-w-0 flex-1 field-sizing-fixed resize-none overflow-auto whitespace-pre rounded-l-none border-0 bg-transparent px-3 text-xs shadow-none focus-visible:ring-0 md:text-xs",
             LINE,
@@ -103,15 +105,6 @@ export function DocumentEditor({
         />
       </div>
 
-      {invalid && (
-        <ul id={diagnosticsId} className="m-0 flex list-none flex-col gap-1 p-0">
-          {diagnostics.map((d, i) => (
-            <li key={`${d.line}:${d.column}:${i}`} className="select-text whitespace-pre-wrap break-words text-xs text-danger">
-              {d.text} <span className="font-mono text-muted-foreground">{D.SOURCE_POSITION(d.line, d.column)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
     </div>
   );
 }

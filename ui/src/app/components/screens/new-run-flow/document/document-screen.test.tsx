@@ -90,16 +90,17 @@ describe("run document editor", () => {
     type(MOCK_YAML);
     press(C.VALIDATE);
     expect(await screen.findByText(RUN_DOCUMENT_CANON.TITLE_OR_DESCRIPTION)).toBeInTheDocument();
-    expect(within(screen.getByRole("list")).getAllByText(RUN_DOCUMENT_CANON.END_CONFLICT, { exact: false })).toHaveLength(2);
+    // the end conflict marks both keys but is one problem, said once
+    expect(screen.getAllByText(RUN_DOCUMENT_CANON.END_CONFLICT)).toHaveLength(1);
     expect(screen.getByText(RUN_DOCUMENT_CANON.API_VERSION)).toBeInTheDocument();
     expect(screen.getByText("agent is not a field the server reads")).toBeInTheDocument();
     expect(screen.queryByText("server end sentence")).toBeNull();
     // title, api_version, the agent key, and both end keys
     expect(markedLines()).toEqual(["1", "3", "5", "6", "7"]);
-    expect(screen.getByText(C.ISSUES(5))).toBeInTheDocument();
+    expect(screen.getByText(C.ISSUES(4))).toBeInTheDocument();
     expect(editor()).toHaveAttribute("aria-invalid", "true");
-    // every sentence is on its line; the panel adds only the headline, and no pending-copy line
-    expect(screen.getByTestId("validation-panel").querySelectorAll("p")).toHaveLength(1);
+    // Make's panel: the headline, then each problem once, and no pending-copy line
+    expect(screen.getByTestId("validation-panel").querySelectorAll("p")).toHaveLength(5);
     expect(importDocument).toHaveBeenCalledWith("yaml", MOCK_YAML, expect.any(AbortSignal));
   });
 
@@ -255,6 +256,16 @@ describe("run document editor", () => {
     expect(text("path")).toContain("format=yaml");
     expect(screen.getByTestId("validation-panel")).toHaveTextContent(C.YAML_INVALID);
     expect(importDocument).not.toHaveBeenCalled();
+  });
+
+  it("lays out Make's heading, toolbar and footer", async () => {
+    open();
+    await screen.findByRole("textbox");
+    const footer = screen.getByRole("contentinfo");
+    expect(within(footer).getAllByRole("button").map((b) => b.textContent)).toEqual([NR_SHARED.BACK, C.VALIDATE, `${C.CONTINUE_REVIEW}→`]);
+    const guided = screen.getByRole("button", { name: C.OPEN_IN_GUIDED });
+    expect(footer.contains(guided)).toBe(false);
+    expect(guided.compareDocumentPosition(screen.getByRole("group", { name: C.FORMAT_ARIA })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("Back returns to Start", async () => {

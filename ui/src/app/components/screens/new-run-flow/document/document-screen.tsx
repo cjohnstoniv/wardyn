@@ -120,7 +120,7 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
       if (answer.diagnostics.length > 0) {
         const placed = placeDiagnostics(source, as, answer.diagnostics);
         dispatch({ type: "doc", doc: { format: as, text: source, diagnostics: placed, validated: false } });
-        announce(copy.ANNOUNCE_ERRORS(placed.length));
+        announce(copy.ANNOUNCE_ERRORS(new Set(placed.map((d) => d.text)).size));
         return undefined;
       }
       dispatch({ type: "doc", doc: buffer(source, as, { diagnostics: [], validated: true }) });
@@ -155,15 +155,21 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
   };
 
   const diagnostics: DocumentDiagnostic[] = (draft.doc?.diagnostics ?? []).map((d) => ({ line: d.line ?? 1, column: d.column ?? 1, text: d.text }));
-  const count = diagnostics.length + lines.length;
-  const status: DocumentStatus = count > 0 ? { kind: "issues", count, lines } : valid ? { kind: "valid" } : { kind: "ready" };
+  // Make lists every problem once in the panel; a problem marked on two lines (the end conflict) is still one.
+  const problems = [...new Set(diagnostics.map((d) => d.text)), ...lines];
+  const status: DocumentStatus = problems.length > 0 ? { kind: "issues", count: problems.length, lines: problems } : valid ? { kind: "valid" } : { kind: "ready" };
 
   return (
     <StepShell
       eyebrow={copy.EYEBROW}
       title={copy.TITLE}
       lede={copy.LEDE}
-      back={{ label: NR_SHARED.BACK, onBack: () => go({ screen: "start" }) }}
+      headingAside={<Button type="button" variant="outline" disabled={busy} onClick={() => void proceed({ screen: "step", step: "shape" })}>{copy.OPEN_IN_GUIDED}</Button>}
+      footerExtras={{
+        // With extras StepShell's own Back is replaced, so Back comes here: Make's order is Back · Validate + Continue.
+        start: <Button type="button" variant="ghost" onClick={() => go({ screen: "start" })}>{NR_SHARED.BACK}</Button>,
+        end: <Button type="button" variant="outline" disabled={busy} onClick={() => void validate()}>{copy.VALIDATE}</Button>,
+      }}
       primary={{ label: copy.CONTINUE_REVIEW, onActivate: () => void proceed({ screen: "review", view: "pretty" }), disabled: busy }}
     >
       <div className="flex flex-col gap-3">
@@ -195,9 +201,6 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
               onClick={() => harness && setSource(exampleDocumentText(harness, format), format)}>
               {copy.LOAD_EXAMPLE}
             </Button>
-            {/* PENDING StepShell headingAside/footerExtras: Validate goes to the footer, Open in Guided to the heading. */}
-            <Button type="button" variant="outline" disabled={busy} onClick={() => void validate()}>{copy.VALIDATE}</Button>
-            <Button type="button" variant="outline" disabled={busy} onClick={() => void proceed({ screen: "step", step: "shape" })}>{copy.OPEN_IN_GUIDED}</Button>
           </div>
         </div>
         {harness === null && MISSING_COPY.NO_HARNESS && <p id={NO_HARNESS_ID} className="text-xs text-muted-foreground">{MISSING_COPY.NO_HARNESS}</p>}
@@ -207,9 +210,10 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
           format={format}
           onChange={(next) => setSource(next, format)}
           diagnostics={diagnostics}
+          invalid={problems.length > 0}
           label={copy.EDITOR_ARIA(format.toUpperCase())}
           describedBy={STATUS_ID}
-          rows={16}
+          rows={23}
         />
         <ValidationPanel id={STATUS_ID} status={status} copy={copy} />
       </div>
