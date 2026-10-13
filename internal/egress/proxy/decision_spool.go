@@ -67,7 +67,9 @@ type spoolReservation struct {
 
 // spoolRecordEnvelope is what a decision record holds beyond its request's own
 // strings: identifiers, times, the rule source, a cause sentence and a scan
-// summary without findings (a skip or bypass).
+// summary without findings (a skip or bypass). One request without a body can
+// still carry findings: an API door scans the query string on any method when
+// forward inspection is on (forwardAPIDoor), and that record is not covered.
 const spoolRecordEnvelope = 64 << 10
 
 // spoolReservationBytes is the most a request's final decision record may take.
@@ -76,7 +78,10 @@ const spoolRecordEnvelope = 64 << 10
 // field path), which no request-derived bound covers: it reserves the largest
 // wire record. Any other request reserves its target escaped twice over (JSON
 // can expand one byte into six, and a cause sentence can name the target again)
-// plus the record's envelope, never more than the largest wire record.
+// plus the record's envelope, never more than the largest wire record. The
+// exception is an API door's query scan (forwardAPIDoor), which runs on any
+// method: a request without a body whose query yields findings can exceed this
+// bound.
 // Reserving every request at the wire maximum held a 32 MiB spool to 32
 // requests in flight.
 func (p *Proxy) spoolReservationBytes(r *http.Request) int64 {
