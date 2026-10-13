@@ -65,6 +65,7 @@
 ### `allowed_domains`
 
 - L2 egress allowlist: exact hosts or `*.` wildcards.
+- An exact host covers only itself: to wall off GitHub, deny `api.github.com` or `*.github.com` as well as `github.com`.
 - Empty under default-deny means the sandbox reaches nothing.
 - Each entry must be a shape the proxy's matcher can match.
 - A mid-label wildcard, a URL, a bad `:port`, or a non-ASCII spelling is rejected at write time rather than shipped as a rule that silently matches nothing.
