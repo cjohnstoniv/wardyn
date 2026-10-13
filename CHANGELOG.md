@@ -861,6 +861,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   approval is decided; the hold just ends, as it already did for the Azure DevOps REST lane.
 - An Azure CLI component compares subscription ids without regard to case: an uppercase id is accepted, and one id
   in two spellings is refused as listed twice.
+- The GitHub and Azure DevOps API path classifiers refuse a dot segment that carries a path parameter, such as `..;`
+  or `.;x`, in any percent-encoded spelling; a `;` elsewhere in a segment is still accepted.
 
 
 ## [0.8.9] — 2026-10-09
