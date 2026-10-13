@@ -136,7 +136,6 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       title={NR_REVIEW.TITLE}
       lede={NR_REVIEW.LEDE}
       progress={{ label: NR_SHARED.PROGRESS_ARIA, steps: flowSteps(STEP_LABELS) }}
-      back={{ label: NR_SHARED.BACK, onBack: () => go({ screen: "step", step: "tools" }) }}
       primary={{ label: NR_REVIEW.LAUNCH_RUN, onActivate: () => onLaunch?.(), disabled: !open, describedBy: BLOCKERS_ID }}
     >
       <div role="group" aria-label={NR_REVIEW.VIEW_ARIA}>
