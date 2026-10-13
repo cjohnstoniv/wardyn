@@ -263,7 +263,7 @@ func (s *Server) offerKind(ctx context.Context, f placementInput, pool types.Run
 		}
 	}
 	fit, _ := eligibleTargets(targets, demand)
-	limits, applied, refusal := s.runSize(ctx, f, &pool, selfHostedCapacity(pool, fit, f.req.RunnerID))
+	limits, applied, refusal := s.runSize(ctx, f, &pool, runnerSource(fit, f.req.RunnerID))
 	if refusal != nil {
 		return kindOffer{}, refusal
 	}
