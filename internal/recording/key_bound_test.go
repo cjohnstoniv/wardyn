@@ -49,7 +49,7 @@ func maxKey(run string, n int) string {
 }
 
 func TestHandler_OverlongKeyNotFoundWithoutStoreCall(t *testing.T) {
-	const run = "run"
+	const run = "0a000000-0000-4000-8000-000000000011"
 	for _, tc := range []struct {
 		key       string
 		storeCall bool
