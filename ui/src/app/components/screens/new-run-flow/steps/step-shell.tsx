@@ -75,13 +75,14 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
     announce(title);
   }, [title, announce]);
 
-  // The control a held Continue marked invalid. The mark is cleared once no issue points at that control.
-  const flagged = React.useRef<string | null>(null);
+  // The controls held Continues marked invalid. Each mark is cleared once no issue points at its control.
+  const flagged = React.useRef(new Set<string>());
   React.useEffect(() => {
-    const id = flagged.current;
-    if (!id || issues?.some((i) => i.focus === id)) return;
-    document.getElementById(id)?.removeAttribute("aria-invalid");
-    flagged.current = null;
+    for (const id of flagged.current) {
+      if (issues?.some((i) => i.focus === id)) continue;
+      document.getElementById(id)?.removeAttribute("aria-invalid");
+      flagged.current.delete(id);
+    }
   });
   const activate = React.useRef(() => {});
   activate.current = () => {
@@ -89,7 +90,7 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
     if (first) {
       const control = document.getElementById(first.focus);
       control?.setAttribute("aria-invalid", "true");
-      flagged.current = first.focus;
+      flagged.current.add(first.focus);
       control?.focus();
       return;
     }
