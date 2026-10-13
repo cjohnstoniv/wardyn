@@ -447,7 +447,7 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 	}
 	s.auditQueueStart(st, started, anchor, id.JTI)
 	spec := f.spec
-	s.unionRunEgress(st.base, run.ID, &spec, gw, f.wsRefs, req.Repo, f.scmSite, f.directGitHubAdded, f.comps)
+	s.unionRunEgress(st.base, run.ID, &spec, gw, f.wsRefs, req.Repo, f.scmSite, f.directGitHubAdded, f.comps, f.ceiling.Spec.AllowedDomains)
 	s.metrics.queueWait(queueOutcomeStarted, run.AdmittedAt.Sub(st.entry.QueuedAt))
 	s.finishCreateRunLaunch(st.base, f.launch(req, spec, ceiling, gw, id.Token, started))
 	return nil

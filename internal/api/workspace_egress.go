@@ -8,10 +8,12 @@ import (
 	"net"
 	"net/http"
 	neturl "net/url"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -269,11 +271,14 @@ func workspaceSuggestedEgress(workspaces []types.Workspace) []string {
 // that needs one surfaces as an observed-egress denial the operator can
 // promote. ALLOW-only by return shape: the one caller (workspace_run.go) reads
 // ws.DeniedEgress directly for the deny side.
+// trusted is the launching principal's ceiling allowlist: a member-owned workspace's private-range
+// clone host is bounded by it (runCloneEgress), on the learning session's allow-all policy too.
 // A method, so it MUST apply the operator_set provenance gate on s.cfg
 // (egressProvenanceAllowed): otherwise a scan_seeded host, derived from
 // UNTRUSTED repo content, would be auto-allowed on every confined replay.
-func (s *Server) confinedEgressDomains(ws types.Workspace) []string {
-	base := &types.RunPolicySpec{AllowedDomains: workspaceCloneEgress(ws)}
+func (s *Server) confinedEgressDomains(ws types.Workspace, trusted []string) []string {
+	clone, _ := runCloneEgress(ws, trusted)
+	base := &types.RunPolicySpec{AllowedDomains: clone}
 	unionWorkspaceEgress(base, []types.Workspace{ws})
 	// The verify loop's approvals land as REQUIRED egress: rows in the folded
 	// contract (workspace overlay ∪ attached sources) — the replay must honor
@@ -332,6 +337,36 @@ func workspaceCloneEgress(ws types.Workspace) []string {
 		}
 	}
 	return hosts
+}
+
+// runCloneEgress is workspaceCloneEgress for a run: the clone hosts the run may add for ws, and the
+// ones it may not. A member-owned workspace's clone host is the member's own entry, and the proxy
+// trusts a private-range literal named by an exact entry past its address guard, so such a host is
+// kept only where independently trusted exact authority already covers it: trusted (the run's
+// ceiling allowlist) and the workspace's operator-written ApprovedEgress, checked with
+// proxy.Policy.ExceedsLiteralTrust. A derived host is bare (every port), so an authority for one port
+// does not cover it. An operator-owned workspace's hosts, names and public literals are kept as they
+// are. Applied wherever a run unions clone hosts (deriveRunEgress, the preview, the autonomy
+// posture), since nothing clamps the derived union after it.
+func runCloneEgress(ws types.Workspace, trusted []string) (kept, dropped []string) {
+	return boundCloneHosts(workspaceCloneEgress(ws), ws, trusted)
+}
+
+// boundCloneHosts is runCloneEgress's rule for clone hosts already derived from ws's repositories,
+// for the door that clones one of them (a scan run).
+func boundCloneHosts(hosts []string, ws types.Workspace, trusted []string) (kept, dropped []string) {
+	if ws.OwnedBy == "" {
+		return hosts, nil
+	}
+	authority := proxy.CompilePolicy(types.RunPolicySpec{AllowedDomains: append(slices.Clone(trusted), ws.ApprovedEgress...)})
+	for _, h := range hosts {
+		if authority.ExceedsLiteralTrust(h) {
+			dropped = append(dropped, h)
+			continue
+		}
+		kept = append(kept, h)
+	}
+	return kept, dropped
 }
 
 // scanEgressDomains returns the egress allowlist a scan/verify run needs to clone

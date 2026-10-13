@@ -78,7 +78,7 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonSourceScanNoRunner, "no runner configured to launch a governed scan run")
 			return
 		}
-		run, lerr := s.launchSourceScanRun(r.Context(), actor, src)
+		run, lerr := s.launchSourceScanRun(r.Context(), actor, src, nil)
 		if errors.Is(lerr, store.ErrConflict) {
 			writeErrorReason(w, http.StatusConflict, reasonSourceScanAlreadyRunning, "a scan is already running for this source")
 			return
@@ -189,7 +189,10 @@ func (s *Server) scanLocalDirSource(ctx context.Context, src types.Source) (prof
 // run carries SourceID as its trusted linkage (never WorkspaceID — this run
 // belongs to the library entry, not to any one aggregate attaching it), and
 // the upload lands via handleUploadScanResult's source lane.
-func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src types.Source) (types.AgentRun, error) {
+//
+// ws is the workspace the scan was asked for, nil at the library door (operator-only): a member-owned
+// one bounds the clone host by the ceiling resolved below (boundCloneHosts).
+func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src types.Source, ws *types.Workspace) (types.AgentRun, error) {
 	url := repoCloneURL(src.Locator)
 	if url == "" {
 		return types.AgentRun{}, fmt.Errorf("repo %q has no derivable clone URL", src.Locator)
@@ -293,9 +296,13 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	// for a deny to subtract from. If a per-source deny is ever wanted, it
 	// belongs on Source itself (mirroring DeniedEgress), not borrowed from an
 	// attaching workspace.
+	clone := scanEgressDomains(url)
+	if ws != nil {
+		clone, _ = boundCloneHosts(clone, *ws, ceiling.Spec.AllowedDomains)
+	}
 	scanPolicy := types.RunPolicySpec{
 		MinConfinementClass: cc,
-		AllowedDomains:      scanEgressDomains(url),
+		AllowedDomains:      clone,
 		AutoStopAfterSec:    scanIdleCapSec,
 	}
 	return s.dispatchAndSettle(ctx, created, dc, dispatchParams{
@@ -419,7 +426,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 				writeErrorReason(w, http.StatusServiceUnavailable, reasonSourceScanNoRunner, "no runner configured to launch a governed scan run")
 				return
 			}
-			run, lerr := s.launchSourceScanRun(r.Context(), actor, src)
+			run, lerr := s.launchSourceScanRun(r.Context(), actor, src, &ws)
 			if errors.Is(lerr, store.ErrConflict) {
 				continue // raced another claim — that run covers it
 			}
