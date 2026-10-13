@@ -57,10 +57,12 @@ OS="$(uname -s)"
 case "$OS" in
   Linux)
     DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/wardyn"
-    CONFIG_ROOT="${XDG_CONFIG_HOME:-$HOME/.config}"
-    STATE_DIR="$CONFIG_ROOT/wardyn/runner"
+    # Pinned under $HOME/.config: the systemd user manager does not inherit a login shell's
+    # XDG_CONFIG_HOME, so the unit and the identity register writes must not follow it.
+    export XDG_CONFIG_HOME="$HOME/.config"
+    STATE_DIR="$HOME/.config/wardyn/runner"
     ENV_FILE="$HOME/.config/wardyn/runnerd.env"
-    UNIT_FILE="$CONFIG_ROOT/systemd/user/$UNIT"
+    UNIT_FILE="$HOME/.config/systemd/user/$UNIT"
     ;;
   Darwin)
     DATA_DIR="$HOME/Library/Application Support/wardyn"
