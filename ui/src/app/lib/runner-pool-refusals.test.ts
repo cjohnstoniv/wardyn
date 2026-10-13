@@ -35,7 +35,7 @@ const root = repoRoot();
 
 describe("runner pool refusal sentences", () => {
   it("are the golden bytes the server's twin is pinned to", () => {
-    const waits = ["WAIT_AT_CAPACITY", "WAIT_NO_RUNNER_FREE", "WAIT_RUNNERS_AT_CAPACITY", "NO_ONLINE_RUNNER", "RUNNER_AT_CAPACITY"];
+    const waits = ["WAIT_AT_CAPACITY", "WAIT_NO_RUNNER_FREE", "WAIT_RUNNERS_AT_CAPACITY", "NO_ONLINE_RUNNER", "RUNNER_AT_CAPACITY", "RUNNER_LIMITS_UNSET"];
     expect(golden.map((g) => g.key).sort()).toEqual([...Object.keys(RUNNER_POOL_REFUSAL), ...waits].sort());
     for (const g of golden.filter((x) => !waits.includes(x.key))) {
       expect(RUNNER_POOL_REFUSAL_BY_KEY[g.key as keyof typeof RUNNER_POOL_REFUSAL](...g.args), g.key).toBe(g.text);
@@ -71,6 +71,9 @@ describe("runner pool refusal sentences", () => {
     const g = golden.find((x) => x.key === "RUNNER_AT_CAPACITY")!;
     expect(RUNNER_CAPACITY.RUNNER_AT_CAPACITY(g.args[0])).toBe(g.text);
     expect(PLACEMENT_REASONS).toContain("runner_at_capacity");
+    const u = golden.find((x) => x.key === "RUNNER_LIMITS_UNSET")!;
+    expect(RUNNER_CAPACITY.RUNNER_LIMITS_UNSET(u.args[0])).toBe(u.text);
+    expect(PLACEMENT_REASONS).toContain("runner_limits_unset");
   });
 
   it("says a pool with no online runner of yours in the server's sentence", () => {

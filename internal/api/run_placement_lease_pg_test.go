@@ -103,7 +103,7 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 	pub, key, _ := ed25519.GenerateKey(rand.Reader)
 	id := uuid.New()
 	rn, err := st.CreateRunner(ctx, types.Runner{ID: id, Owner: "lease-owner", Name: "laptop", PublicKey: pub, KeyFingerprint: id.String(),
-		Version: "0.9.0", OrgURLSHA256: federation.OrgURLSHA256(admissionOrgURL), MaxRuns: types.RunnerMaxRunsCeiling})
+		Version: "0.9.0", OrgURLSHA256: federation.OrgURLSHA256(admissionOrgURL), Limits: roomyRunnerLimits()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -985,7 +985,7 @@ func (f *runnerLeaseFixture) muteRunner(t *testing.T, owner string) uuid.UUID {
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
 	id := uuid.New()
 	rn, err := f.st.CreateRunner(f.ctx, types.Runner{ID: id, Owner: owner, Name: "spare", PublicKey: pub, KeyFingerprint: id.String(),
-		Version: "0.9.0", OrgURLSHA256: federation.OrgURLSHA256(admissionOrgURL), MaxRuns: types.RunnerMaxRunsCeiling})
+		Version: "0.9.0", OrgURLSHA256: federation.OrgURLSHA256(admissionOrgURL), Limits: roomyRunnerLimits()})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -19,8 +19,8 @@ const WaitAtCapacity WaitReason = "runner_pool_at_capacity"
 // already queued: a pool whose candidates are all offline at create is refused, never queued.
 const WaitNoRunnerFree WaitReason = "runner_pool_no_runner_free"
 
-// WaitRunnersAtCapacity: the pool has room and the person's runners in it are online, but each already
-// holds as many runs as its "Runs at once" (max_runs) allows, so the run keeps its place until one has room.
+// WaitRunnersAtCapacity: the pool has room and its runners are online, but each is at one of its limits
+// (its Runs at once, or a total this run would pass), so the run keeps its place until one has room.
 const WaitRunnersAtCapacity WaitReason = "runner_pool_runners_at_capacity"
 
 // Valid reports whether w is a wait reason.
@@ -46,9 +46,9 @@ func WaitAtCapacityMsg(pool string, max int) string {
 	return fmt.Sprintf("%s is running its limit of %d. This run starts when there's room.", pool, max)
 }
 
-// WaitRunnersAtCapacityMsg is the sentence of a queued run whose owner's runners are all at their limit.
+// WaitRunnersAtCapacityMsg is the sentence of a queued run whose runners are all at one of their limits.
 func WaitRunnersAtCapacityMsg(pool string) string {
-	return fmt.Sprintf("Your runners in %s are all running as many runs as they allow at once. This run starts when one has room.", pool)
+	return fmt.Sprintf("Every runner in %s is at its limit. This run starts when one has room.", pool)
 }
 
 // WaitNoRunnerFreeMsg is the sentence of a queued run no runner of its owner can take yet.

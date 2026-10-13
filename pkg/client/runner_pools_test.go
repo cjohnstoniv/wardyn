@@ -150,9 +150,9 @@ func TestRunnerPoolMethodsHitTheirRoutes(t *testing.T) {
 func poolLimits() *client.RunnerPoolLimits {
 	return &client.RunnerPoolLimits{
 		Background: &client.RunnerPoolBackgroundLimits{
-			CPUMillis: client.RunnerPoolAmount{Default: 1000, Cap: 2000},
-			MemoryMiB: client.RunnerPoolAmount{Default: 1024, Cap: 2048},
-			Lifetime:  client.RunnerPoolDuration{Unlimited: true},
+			CPUMillis: &client.RunnerPoolAmount{Default: 1000, Cap: 2000},
+			MemoryMiB: &client.RunnerPoolAmount{Default: 1024, Cap: 2048},
+			Lifetime:  &client.RunnerPoolDuration{Unlimited: true},
 		},
 		Barriers: []types.ConfinementClass{types.CC2},
 	}
@@ -161,7 +161,7 @@ func poolLimits() *client.RunnerPoolLimits {
 func TestPoolRequestsValidateTheirLimits(t *testing.T) {
 	name := "Build farm"
 	bad := poolLimits()
-	bad.Barriers = nil
+	bad.Barriers = []types.ConfinementClass{"CC9"}
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -223,8 +223,8 @@ func TestAbsentLimitsLeaveThePoolsLimitsAlone(t *testing.T) {
 	one := 1
 	withBlock := client.UpdateRunnerPoolRequest{Revision: 2, Limits: &client.RunnerPoolLimits{
 		Background: &client.RunnerPoolBackgroundLimits{
-			CPUMillis: client.RunnerPoolAmount{Default: 1, Cap: 2}, MemoryMiB: client.RunnerPoolAmount{Default: 1, Cap: 2},
-			Lifetime: client.RunnerPoolDuration{DefaultSec: 1, MaxSec: 2}},
+			CPUMillis: &client.RunnerPoolAmount{Default: 1, Cap: 2}, MemoryMiB: &client.RunnerPoolAmount{Default: 1, Cap: 2},
+			Lifetime: &client.RunnerPoolDuration{DefaultSec: 1, MaxSec: 2}},
 		Barriers: []types.ConfinementClass{types.CC1}, MaxConcurrentRuns: &one,
 	}}
 	raw, _ = json.Marshal(withBlock)

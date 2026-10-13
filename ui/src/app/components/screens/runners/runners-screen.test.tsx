@@ -45,6 +45,11 @@ import { setField } from "../../../../test/set-field";
 const ORG = "https://org.example.com";
 const NOW_ISO = () => aheadByHours(0);
 
+function usageWith(runs: number): RunnerView["usage"] {
+  const none = { runs: 0, cpu_millis: 0, memory_mib: 0, disk_mib: 0 };
+  return { online: runs > 0, in_use: { ...none, runs }, available: none, disk_capped: true };
+}
+
 function runner(over: Partial<RunnerView> = {}): RunnerView {
   return {
     id: "r-laptop",
@@ -64,16 +69,16 @@ function runner(over: Partial<RunnerView> = {}): RunnerView {
     capacity: { cpu_millis_max: 4000, memory_mib_max: 8192 },
     classes: ["CC1", "CC2"],
     allowed_roots: ["/Users/alice/src", "/Users/alice/scratch"],
-    runs_active: 2,
-    max_runs: 2,
-    running: 1,
+    kind: "self_hosted",
+    limits: { runs_at_once: 2, total: { cpu_millis: 4000, memory_mib: 8192, disk_mib: 102400 }, per_run: { cpu_millis: 2000, memory_mib: 4096, disk_mib: 51200 } },
+    usage: usageWith(2),
     pools: [],
     ...over,
   };
 }
 
 const LAPTOP = runner();
-const DESK = runner({ id: "r-desk", name: "desk-2", online: false, last_seen_at: aheadByHours(-3), posture: undefined, capacity: undefined, classes: undefined, allowed_roots: undefined, runs_active: 0 });
+const DESK = runner({ id: "r-desk", name: "desk-2", online: false, last_seen_at: aheadByHours(-3), posture: undefined, capacity: undefined, classes: undefined, allowed_roots: undefined, usage: usageWith(0) });
 const WAITING = runner({
   id: "r-mbp",
   name: "mbp-ben",
@@ -86,9 +91,9 @@ const WAITING = runner({
   capacity: undefined,
   classes: undefined,
   allowed_roots: undefined,
-  runs_active: 0,
+  usage: usageWith(0),
 });
-const OLD = runner({ id: "r-old", name: "old-box", state: "revoked", online: false, revoked_at: aheadByHours(-48), revoked_by: "carol@example.com", runs_active: 0 });
+const OLD = runner({ id: "r-old", name: "old-box", state: "revoked", online: false, revoked_at: aheadByHours(-48), revoked_by: "carol@example.com", usage: usageWith(0) });
 
 const TOKEN: RunnerRegistrationToken = { id: "t1", owner: "dan@example.com", minted_by: "admin@corp.example", created_at: aheadByHours(-1), expires_at: aheadByHours(48) };
 

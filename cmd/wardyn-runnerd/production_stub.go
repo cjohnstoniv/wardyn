@@ -10,8 +10,14 @@ import (
 	"errors"
 
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 func productionRunnerHooks(context.Context, runneridentity.Identity, string, serveOptions) (runnerRuntime, error) {
 	return runnerRuntime{}, errors.New("runner serve requires a build with the docker tag")
+}
+
+// hostMeasure needs Docker, which this build has not: nothing is measured, so every total is asked for.
+func hostMeasure(context.Context) (types.RunnerAmounts, error) {
+	return types.RunnerAmounts{}, errors.New("measuring this computer requires a build with the docker tag")
 }

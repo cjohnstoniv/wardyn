@@ -358,7 +358,7 @@ func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run 
 		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
 			mustJSON(map[string]any{"subject": run.CreatedBy, "reason": string(placement.ReasonRunnerAtCapacity), "runner_id": run.RunnerID})))
 		return reviveRefused(placement.ReasonRunnerAtCapacity.Status(), string(placement.ReasonRunnerAtCapacity),
-			fmt.Sprintf("Your runner %s is running its limit of %d runs at once. Try again when one finishes, or raise Runs at once on your runner.", atMax.Runner, atMax.Max))
+			fmt.Sprintf("%s is at its limit, so this run cannot start there now. Try again when a run there finishes, or raise the runner's limits.", atMax.Runner))
 	}
 	if err != nil {
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, "claim the run for revive: "+err.Error())

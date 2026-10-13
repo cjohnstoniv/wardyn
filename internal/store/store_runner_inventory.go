@@ -29,15 +29,16 @@ type RunnerInventoryStore interface {
 	// owner or, with owner "", every owner.
 	ListUnusedRunnerRegistrationTokensPage(ctx context.Context, now time.Time, owner string, p Page) ([]types.RunnerRegistrationToken, error)
 	RevokeRunnerRegistrationToken(ctx context.Context, id uuid.UUID, now time.Time) (types.RunnerRegistrationToken, error)
-	// CountActiveRunsByRunner counts non-terminal runs on each of ids; a runner with none is absent.
-	CountActiveRunsByRunner(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]int, error)
 	// RunnerSlotHolders counts the runs holding a sandbox on each of ids, the count max_runs bounds.
 	RunnerSlotHolders(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]int, error)
+	// RunnerUsage is each named runner's In use, by key (a self-hosted runner's id as text, or a
+	// remote-hosted runner's id): the figures admission counts, read without a lock.
+	RunnerUsage(ctx context.Context, runners []uuid.UUID, remotes []string, except uuid.UUID) (map[string]types.RunnerTally, error)
 	// RunnerPoolsOf names, for each of ids, its owner's live Self-Hosted pools it is a member of, by
 	// name; a runner in none is absent.
 	RunnerPoolsOf(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID][]types.RunnerPoolRef, error)
-	// UpdateRunnerMaxRuns is the owner's change of their own live runner's max_runs.
-	UpdateRunnerMaxRuns(ctx context.Context, id uuid.UUID, owner string, maxRuns int) (before int, after types.Runner, err error)
+	// UpdateRunnerLimits is the owner's declaration of their own live runner's limits.
+	UpdateRunnerLimits(ctx context.Context, id uuid.UUID, owner string, limits types.RunnerLimits) (before *types.RunnerLimits, after types.Runner, err error)
 }
 
 var _ RunnerInventoryStore = PG{}
@@ -72,32 +73,6 @@ func (s PG) RevokeRunnerRegistrationToken(ctx context.Context, id uuid.UUID, now
 		WHERE id = $1 AND consumed_at IS NULL AND expires_at > $2
 		RETURNING ` + runnerRegistrationCols
 	return scanRunnerRegistrationToken(s.Pool.QueryRow(ctx, q, id, now))
-}
-
-// CountActiveRunsByRunner — see RunnerInventoryStore.
-func (s PG) CountActiveRunsByRunner(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]int, error) {
-	if len(ids) == 0 {
-		return map[uuid.UUID]int{}, nil
-	}
-	const q = `SELECT runner_id, count(*) FROM agent_runs
-		WHERE runner_id = ANY($2) AND state = ANY($1) GROUP BY runner_id`
-	type runnerRuns struct {
-		id uuid.UUID
-		n  int
-	}
-	rows, err := collect(ctx, s.Pool, "count", "active runs by runner", q, []any{nonTerminalStateStrings(), ids}, func(r pgx.Row) (runnerRuns, error) {
-		var v runnerRuns
-		err := r.Scan(&v.id, &v.n)
-		return v, err
-	})
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[uuid.UUID]int, len(rows))
-	for _, v := range rows {
-		out[v.id] = v.n
-	}
-	return out, nil
 }
 
 // RunnerInventoryResult describes committed intake, not permission to dispatch.

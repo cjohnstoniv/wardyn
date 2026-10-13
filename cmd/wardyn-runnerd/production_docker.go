@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/moby/moby/client"
@@ -27,6 +28,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 	"github.com/google/uuid"
 )
@@ -63,6 +65,24 @@ func dockerCapacity(ctx context.Context) placement.Capacity {
 		slog.WarnContext(ctx, "runner capacity unknown until the next connect: Docker did not report its size", "error", err)
 	}
 	return c
+}
+
+// hostMeasure is what this computer has for runs, as Docker reports it: its CPUs and memory, and the
+// free disk of Docker's data root when the engine is local and not Docker Desktop's VM. 0 is unknown.
+func hostMeasure(ctx context.Context) (types.RunnerAmounts, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		return types.RunnerAmounts{}, err
+	}
+	defer cli.Close()
+	info, err := cli.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return types.RunnerAmounts{}, err
+	}
+	host := os.Getenv("DOCKER_HOST")
+	return docker.MeasureInfo(info.Info, host == "" || strings.HasPrefix(host, "unix://"), docker.FreeDiskMiB), nil
 }
 
 func readDockerCapacity(ctx context.Context) (placement.Capacity, error) {

@@ -33,33 +33,34 @@ An administrator turns runners on at **Admin → Runners**, or with `PUT /api/v1
 
 | Route | Who | Answers |
 |---|---|---|
-| `GET /api/v1/runners?state=active\|revoked\|all&limit=&offset=` | admin or `security_admin` | Every person's runners, owner named; default `active` (unclaimed and claimed). `online` is the live session, and `runs_active` counts non-terminal runs on the runner. |
+| `GET /api/v1/runners?state=active\|revoked\|all&limit=&offset=` | admin or `security_admin` | Every person's runners, owner named; default `active` (unclaimed and claimed). `online` is the live session, and `usage` is what its runs hold now. |
 | `GET /api/v1/runners/{id}` | admin or `security_admin` | One runner, revoked included. |
 | `GET /api/v1/me/runners`, `GET /api/v1/me/runners/{id}` | the owner | The caller's own runners only; another person's runner and an absent id answer alike. An unclaimed runner's fingerprint is abbreviated here, so it cannot be copied from the console into the claim. |
 | `GET /api/v1/runners/tokens?owner=&limit=&offset=` | admin or `security_admin` | Unused, unexpired registration tokens, optionally one person's. No token value is ever returned. |
 | `DELETE /api/v1/runners/tokens/{id}` | admin or `security_admin` | The token stops being redeemable at once; audited as `runner.token.revoke`. Minting stays admin only. |
 | `GET /api/v1/runners/settings` | admin or `security_admin` | `{"enabled": bool}`, readable while the runner routes refuse. |
-| `PUT /api/v1/me/runners/{id}` | the owner | `{"max_runs": N}` changes the runner's runs at once; see [Runs at once](#runs-at-once). |
+| `PUT /api/v1/me/runners/{id}` | the owner | `{"limits": {...}}` declares the runner's limits; see [Runner limits](#runner-limits). |
 
 Both lists are paged and set `X-Wardyn-Truncated` when more exist. An unclaimed runner older than 24 hours is not listed, and the periodic sweep deletes it, freeing its key to register again. On a person's own list `minted_by_email` names the minter when someone else minted the token and an email is held. A runner another person revoked stays on its owner's list for seven days, with `revoked_by_email`; the owner's own revoke and older ones are hidden. Every view carries `machine_name`, the host name the runner reported at registration and again on each connect, the latest kept. It is runner-reported, never verified and never an identity; a name over 253 bytes or with a control character is refused at registration and not stored from a connect. `wardyn runner list` shows it as MACHINE. A claimed runner's view carries `capacity`, `classes` and `allowed_roots` from its last `caps` event, and omits them until it has connected to the replica that answers. The mint answers (`POST /api/v1/runners/tokens`, `POST /api/v1/me/runners/tokens`) carry `org_url`, the URL `wardyn-runnerd register --org` must match; a token list never does. The runner views report what a runner said about itself as reported, never as verified.
 
 `wardyn runner list` (`--all` for every person's runners) and `wardyn runner tokens list [--owner]|revoke` use these routes.
 
-## Runs at once
+## Runner limits
 
-A runner's `max_runs` is how many runs may hold a sandbox on it at the same time, from 1 to 64. `wardyn-runnerd register --max-runs N` sets it; without the flag registration sends half the host's CPU cores, at least 1. Migration `0172_runner_max_runs` gives a runner registered before it 2.
+Every runner declares its limits: Runs at once (`runs_at_once`, 1 to 64 for a self-hosted runner), a total all its runs at once may use (`total`) and what one run may use (`per_run`), each in CPU (`cpu_millis`, at least one CPU), memory (`memory_mib`) and disk (`disk_mib`, whole GiB). No per-run amount is past its total. A runner with none declared takes no run: a launch that could only go there is refused `runner_limits_unset`. Migration `0174_runner_limits` gives a runner registered before it none, so its owner sets them.
+
+`wardyn-runnerd register` measures the computer: the CPUs and memory Docker reports, and the free disk of Docker's data root when the engine is local (not Docker Desktop). It proposes half of each as the total, and per run the total divided by Runs at once, at least 1 CPU and 1 GB. Runs at once defaults to half the CPUs. `--max-runs`, `--total-cpu`, `--total-memory`, `--total-disk`, `--per-run-cpu`, `--per-run-memory` and `--per-run-disk` (CPUs and GB) override any of it. A total past what the computer reports is refused, and a disk it cannot measure must be given, before the token is spent. The server refuses a registration without limits (`runner_limits_required`).
 
 | Who | Can |
 |---|---|
-| The owner | Change it with `wardyn runner set --max-runs N <id>` or `PUT /api/v1/me/runners/{id}`; audited as `runner.update` with the value before and after. |
-| An administrator | Read `max_runs` and `running` on `/runners`. No route changes another person's runner, since the machine is theirs. |
+| The owner | Change them with `wardyn runner set <runner> [--max-runs N] [--total-cpu N --total-memory GB --total-disk GB] [--per-run-cpu N --per-run-memory GB --per-run-disk GB]` or `PUT /api/v1/me/runners/{id}` with the whole `limits` set; audited as `runner.update` with the set before and after. A total past the CPUs or memory the runner last reported is refused. |
+| An administrator | Read them on `/runners`. No route changes another person's runner, since the machine is theirs. |
 
-- Every runner view carries `max_runs` and `running`, the runs holding a sandbox there now.
-- Placement never puts more than `max_runs` such runs on one runner. A create, a queue promotion, a queued run's start and a revive that starts an agent each count under the runner's row lock.
-- In a pool with a concurrent-run cap, a run whose runners are all at their limit waits, with reason `runner_pool_runners_at_capacity`.
-- In a pool with no cap, the launch is refused `runner_at_capacity`, as is a revive. Preflight answers the same.
-- Lowering the limit ends no run. Raising it lets waiting runs start at once.
-- Each sandbox create carries the limit, and the runner refuses one past the runs it still holds itself. This backstop only catches a count the control plane got wrong.
+- Every runner view carries `kind`, `limits` (`null` until set) and `usage`. `usage.in_use` counts the runs holding a sandbox on the runner and adds up what they reserve: the CPU and memory each was given and its main drive. `usage.available` is the total less that, and nothing while the runner is offline. `usage.reported` is what the runner last said it has; `usage.disk_capped` is false where its disk limits are counted, not enforced.
+- Placement offers a run only to a runner whose per-run limit holds the run's size, and holds every run to the runner's Runs at once and totals. A create, a queue promotion, a queued run's start and a revive that starts an agent each count under the runner's row lock.
+- A run whose runners all lack room waits in its pool's queue, with reason `runner_pool_runners_at_capacity`, whatever the pool's own cap.
+- Lowering a limit ends no run. Any change lets waiting runs be looked at again at once.
+- Each sandbox create carries Runs at once, and the runner refuses one past the runs it still holds itself. This backstop only catches a count the control plane got wrong.
 
 Migration `0144_runner_minted_by` records on each runner who minted the registration token it redeemed, so the owner's list can tell a token they made from one an administrator made for them.
 

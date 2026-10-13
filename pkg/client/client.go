@@ -49,7 +49,7 @@
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
 //   - runners (/api/v1/runners, /api/v1/me/runners): MintRunnerToken, RegisterRunner, ClaimRunner,
-//     ListRunners, ListRunnersPage, GetRunner, ListMyRunners, GetMyRunner, SetMyRunnerMaxRuns, ListRunnerTokens,
+//     ListRunners, ListRunnersPage, GetRunner, ListMyRunners, GetMyRunner, SetMyRunnerLimits, ListRunnerTokens,
 //     ListRunnerTokensPage, RevokeRunnerToken, GetRunnerSettings, SetRunnersEnabled
 //   - runner pools (/api/v1/runner-pools, /api/v1/runner-pool-defaults; /api/v1/me/runner-pools, /api/v1/me/runner-pool-defaults):
 //     ListRunnerPools, ListRunnerPoolsFor, GetRunnerPool, CreateRunnerPool, UpdateRunnerPool, DeleteRunnerPool, CreateMyRunnerPool, UpdateMyRunnerPool, DeleteMyRunnerPool, AddMyRunnerToPool,

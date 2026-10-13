@@ -258,3 +258,21 @@ func TestProjectStatusDetail_KilledKeepsOnlyAValidEndReason(t *testing.T) {
 		})
 	}
 }
+
+// A run that came through the queue stops saying it waits the moment it leaves it: the queue's wait
+// reason is blanked for a PENDING, a STARTING and a RUNNING run alike, and a STARTING run still shows
+// the reason the substrate wrote.
+func TestStartedRunDoesNotSayItWaits(t *testing.T) {
+	for _, st := range []types.RunState{types.RunPending, types.RunStarting, types.RunRunning} {
+		runs := []types.AgentRun{{State: st, StatusDetail: "queue: runner_pool_runners_at_capacity"}}
+		projectStatusDetail(runs)
+		if runs[0].StatusDetail != "" || runs[0].StatusReason != "" {
+			t.Errorf("a %s run still says %q / %q", st, runs[0].StatusDetail, runs[0].StatusReason)
+		}
+	}
+	runs := []types.AgentRun{{State: types.RunStarting, StatusDetail: "container: ContainerCreating"}}
+	projectStatusDetail(runs)
+	if runs[0].StatusDetail != "container: ContainerCreating" || runs[0].StatusReason != "ContainerCreating" {
+		t.Errorf("a STARTING run's own detail reads %q / %q, want it kept", runs[0].StatusDetail, runs[0].StatusReason)
+	}
+}

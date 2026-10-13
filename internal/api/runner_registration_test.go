@@ -161,7 +161,7 @@ func TestRunnerRegistrationAnonymousUnclaimedAndSingleUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop"})
+	body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop", Limits: testRunnerLimits()})
 	w := do(t, srv, http.MethodPost, "/api/v1/runners/register", "", string(body))
 	if w.Code != 201 {
 		t.Fatalf("register:%d %s", w.Code, w.Body.String())
@@ -249,7 +249,7 @@ func TestRunnerRegistrationBoundTokenRefusalDoesNotConsume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop"})
+	body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop", Limits: testRunnerLimits()})
 	w := do(t, srv, http.MethodPost, "/api/v1/runners/register", "", string(body))
 	if w.Code != 401 || len(f.rows) != 0 || f.tokens[raw].ConsumedAt != nil {
 		t.Fatalf("foreign-bound token spent or admitted:%d %s", w.Code, w.Body.String())
@@ -268,7 +268,7 @@ func TestRunnerRegistrationCannotReactivateRevokedKey(t *testing.T) {
 	}
 	oldID := uuid.New()
 	f.rows[oldID] = types.Runner{ID: oldID, Owner: "alice", State: types.RunnerRevoked, KeyFingerprint: runnerwire.Fingerprint(pub), PublicKey: pub, OrgURLSHA256: orgHash}
-	body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop"})
+	body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop", Limits: testRunnerLimits()})
 	w := do(t, srv, http.MethodPost, "/api/v1/runners/register", "", string(body))
 	if w.Code != 409 || len(f.rows) != 1 || f.rows[oldID].State != types.RunnerRevoked {
 		t.Fatalf("revoked key reactivated:%d %s", w.Code, w.Body.String())
@@ -296,7 +296,7 @@ func TestRunnerRegistrationChecksExpiryAfterReadingBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop"})
+	body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop", Limits: testRunnerLimits()})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/runners/register", nil)
 	req.Body = io.NopCloser(runnerRegistrationBody{Reader: strings.NewReader(string(body)), advance: func() { now = start.Add(2 * time.Hour) }})
 	w := httptest.NewRecorder()
