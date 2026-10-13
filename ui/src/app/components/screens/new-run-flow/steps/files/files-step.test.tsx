@@ -380,7 +380,7 @@ describe("coverage kept from the old list", () => {
 });
 
 describe("where the server starts a workspace (first target: folders before repositories)", () => {
-  const TWO_FOLDERS: Workspace = { ...FOLDER_WS, sources: [...FOLDER_WS.sources!, { type: "local_dir", path: "/srv/models", writable: true }] };
+  const TWO_FOLDERS: Workspace = { ...FOLDER_WS, sources: [...FOLDER_WS.sources!, { type: "local_dir", path: "/srv/models", target: "/home/agent/models", writable: true }] };
   const starting = (name: string) => within(card(name)).queryByText(NR_FILES.STARTS_HERE);
   const folderSelect = () => screen.findByLabelText(NR_FILES.START_FOLDER_LABEL);
 
@@ -507,7 +507,7 @@ describe("folders", () => {
   });
 
   it("(a) shows every folder a repository's workspace brings, one card each", async () => {
-    workspaceList = [...SCENARIO_FILES_WORKSPACES.member, { ...FOLDER_WS, sources: [...FOLDER_WS.sources!, { type: "local_dir", path: "/srv/models", writable: true }] }];
+    workspaceList = [...SCENARIO_FILES_WORKSPACES.member, { ...FOLDER_WS, sources: [...FOLDER_WS.sources!, { type: "local_dir", path: "/srv/models", target: "/home/agent/models", writable: true }] }];
     show(BACKGROUND);
     await add(NR_FILES.REPOSITORY_BADGE, "data");
     expect(drawn().workspaces).toEqual([{ workspace_id: "ws-data", repos: [{ repo: "github.com/acme/data" }] }]);
@@ -537,6 +537,35 @@ describe("folders", () => {
     await userEvent.click(screen.getByRole("button", { name: NR_FILES.REMOVE_NAMED("data") }));
     expect(drawn().workspaces).toEqual([{ workspace_id: "ws-data", repos: [], target: "/home/agent/folders/datasets" }]);
     expect(card("datasets")).toBeDefined();
+  });
+
+  it("a folder that shares its workspace shows where the server mounts it: its source's target, else /home/agent/work", async () => {
+    show(BACKGROUND);
+    await add(NR_FILES.REPOSITORY_BADGE, "data");
+    // No target is sent for it (the request can place only a workspace's one thing), so the server's default is its path.
+    expect(drawn().workspaces).toEqual([{ workspace_id: "ws-data", repos: [{ repo: "github.com/acme/data" }] }]);
+    expect(within(card("datasets")).getByTitle("/home/agent/work")).toBeInTheDocument();
+    expect(within(card("datasets")).queryByTitle("/home/agent/folders/datasets")).toBeNull();
+    cleanup();
+    workspaceList = [...SCENARIO_FILES_WORKSPACES.member, { ...FOLDER_WS, sources: [FOLDER_WS.sources![0], { type: "local_dir", path: "/srv/datasets", target: "/home/agent/sets", writable: true }] }];
+    show(BACKGROUND);
+    await add(NR_FILES.REPOSITORY_BADGE, "data");
+    expect(within(card("datasets")).getByTitle("/home/agent/sets")).toBeInTheDocument();
+  });
+
+  it("a folder is read-only unless its source says writable, with no choice to widen it", async () => {
+    workspaceList = [...SCENARIO_FILES_WORKSPACES.member, { ...FOLDER_WS, sources: [{ type: "local_dir", path: "/srv/datasets" }] }];
+    show(BACKGROUND);
+    await openAdd();
+    await pickType(NR_FILES.FOLDER_TITLE);
+    await pickSource("datasets");
+    await userEvent.click(dialogButton(/^Continue/));
+    expect(within(dialog()).queryByRole("combobox", { name: NR_FILES.ACCESS_LABEL })).toBeNull();
+    expect(within(dialog()).queryByRole("button", { name: NR_FILES.LOCKED_ARIA })).toBeNull();
+    await userEvent.click(dialogButton(NR_FILES.ADD_CONFIRM));
+    expect(drawn().workspaces).toEqual([{ workspace_id: "ws-data", repos: [], target: "/home/agent/folders/datasets" }]);
+    expect(within(card("datasets")).getByText(NR_FILES.ACCESS_READ)).toBeInTheDocument();
+    expect(within(card("datasets")).queryByText(NR_FILES.ACCESS_EDIT)).toBeNull();
   });
 
   it("says none are onboarded when no workspace has a folder (W-48)", async () => {
