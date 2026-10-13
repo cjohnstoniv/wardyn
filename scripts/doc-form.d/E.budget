@@ -32,4 +32,4 @@
 # docs/ENV.md 36791 adds 30 over 36761 (setup-limits round 1): WARDYN_K8S_READ_NODES also lets boot measure the cluster; measured.
 # docs/ENV.md 36823 measured at merge: the final docs pass over the runner limits, pool words and Azure CLI lanes.
 # docs/ENV.md 36870 adds 47 over 36823: 0.9 final docs pass 3, measured: the governance targets held under the second-human switch.
-docs/ENV.md=36870 share=5
+docs/ENV.md=36887 share=5
