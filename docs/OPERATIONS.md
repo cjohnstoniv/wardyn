@@ -1326,10 +1326,10 @@ erases one person's retained records by explicit scope, in one audited act
 
 - An identity provider can tell Wardyn that a person has left.
 - Wardyn runs a SCIM 2.0 endpoint whose only job is to **remove access**:
-  - it suspends a person (sessions cut, API tokens revoked, SSH keys deleted, every live run killed, sign-in refused
-    on every replica)
+  - it suspends a person (sessions cut, API tokens revoked, SSH keys deleted, every live run killed, runners
+    refused, sign-in refused on every replica)
   - and, later or at once, purges them (stored credentials erased, workspaces handed to the operator, user grants
-    deleted).
+    deleted, runners revoked).
 - SCIM never grants anything: a user or group created over SCIM is stored and gives no access, and roles still come
   from the sign-in token and the role map.
 - It is off until `WARDYN_SCIM_TOKEN` is set, and it mounts only on a single-tenant, commercial-cloud Entra issuer.
@@ -1337,7 +1337,7 @@ erases one person's retained records by explicit scope, in one audited act
 | Provisioning event | What Wardyn does |
 |---|---|
 | `PATCH` with `active` false (or `POST` with `active` false) | **Suspend.** The answer is 5xx until every step is confirmed, so the identity provider retries; a restart or a failed teardown resumes the pending steps, including a run already `KILLED` whose teardown failed |
-| `PATCH` with `active` true | **Reactivate.** Clears the deactivation and the purge schedule and nothing else: no token, key, run or old session comes back, and the person signs in again |
+| `PATCH` with `active` true | **Reactivate.** Clears the deactivation and the purge schedule and nothing else: no token, key, run or old session comes back, and the person signs in again. Their runners connect again |
 | `DELETE /Users/{id}` | **Purge now**, 204 once every step is done. Suspends first if the person is not already suspended |
 | A suspended person past `WARDYN_SCIM_PURGE_AFTER` | **Purge**, by the sweeper on the elected sweeper leader; it also finishes any suspension or purge whose identity provider stopped retrying |
 
@@ -1368,7 +1368,8 @@ erases one person's retained records by explicit scope, in one audited act
 | Suspend | Completed first, if it is not already |
 | Erase | Stored credentials and their masking copies only, through the person-erasure entry point: see [Erase](#erase) |
 | Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, audited as `workspace.reassign`; `keep` leaves them |
-| Grants | User-subject grants and governance assignments, deleted by a direct store call; an email-alias row only while no other live principal holds it (a revoked or expired token holds nothing): see [Grants](#grants) |
+| Grants | User-subject grants and governance assignments: see [Grants](#grants) |
+| Runners | Revoked with their unused registration tokens (`DELETE /runners/...`) |
 | Drives | Listed by name in `person.deprovision`, never reclaimed. Reclaim storage with the steps in "Reclaiming a departed person's storage" |
 
 - The identity row stays as a tombstone with `purged_at` set.
@@ -1424,11 +1425,7 @@ lose access now, do not wait for it:
   - Rate limits are per replica, so an HA install's effective limit is the per-replica limit times the replica count.
 - **Email recycling.**
   - For a person a sign-in has bound, an email alias widens the session cutoff only while no other principal holds
-    that address
-    - (another active identity, or a live API token or person row under a different principal:
-    - only a live holder counts, so a revoked or expired token, a deactivated person row and a principal whose
-      identity is deactivated or purged hold nothing),
-    - the same rule a purge uses for grants.
+    that address, the rule a purge uses for [Grants](#grants).
   - While another principal holds it, a suspension and a SCIM group removal write no cutoff or session cut under the
     address.
   - The person's own credentials are reached through their subject and object-id forms and the identity deactivation,

@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/erasure"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -30,7 +31,8 @@ import (
 //  2. the suspension, completed if it is not already (suspendIdentity);
 //  3. every step below, each idempotent and recorded in deprovision_jobs under kind purge: stored
 //     credentials and masking copies erased through erasure.Orchestrate, workspaces handed to the
-//     operator, user-subject grants and assignments deleted, then one person.deprovision row.
+//     operator, user-subject grants and assignments deleted, runners and their unused registration
+//     tokens revoked, then one person.deprovision row.
 //
 // The grants and assignments are deleted by a direct store call, not the GOV4 apply path. That is the one
 // ungoverned delete of deny rows, and it is safe because the tombstone's subject can never authenticate
@@ -40,6 +42,7 @@ const (
 	jobStepErase      = "erase"
 	jobStepWorkspaces = "workspaces"
 	jobStepGrants     = "grants"
+	jobStepRunners    = "runners"
 
 	// scimSweepBatch caps how many identities one sweep tick handles of each kind; the rest wait a tick.
 	scimSweepBatch = 50
@@ -100,7 +103,7 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 	isEmail := func(t string) bool { return strings.Contains(t, "@") && !slices.Contains(forms.bound, t) }
 	principals := slices.DeleteFunc(slices.Clone(forms.targets), isEmail)
 	emails := slices.DeleteFunc(slices.Clone(forms.targets), func(t string) bool { return !isEmail(t) })
-	keys := []store.JobKey{{Step: jobStepWorkspaces}, {Step: jobStepGrants}}
+	keys := []store.JobKey{{Step: jobStepWorkspaces}, {Step: jobStepGrants}, {Step: jobStepRunners}}
 	for _, p := range principals {
 		keys = append(keys, store.JobKey{Step: jobStepErase, Target: p})
 	}
@@ -119,6 +122,9 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 			// An address another principal holds keeps its rows: it can be a recycled one, and those are the new holder's.
 			grants, assignments, kept, err := st.DeleteUserSubjectRows(ctx, id, principals, emails)
 			return map[string]int{"grants_deleted": int(grants), "assignments_deleted": int(assignments), "email_rows_kept": int(kept)}, err
+		}),
+		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepRunners}, func() (map[string]int, error) {
+			return s.revokeLeaverRunners(ctx, principals)
 		}),
 	}
 	for _, p := range principals {
@@ -176,6 +182,53 @@ func (s *Server) eraseForPurge(ctx context.Context, principal string) (map[strin
 		detail["runner_pools_deleted"], _ = m["runner_pools"].(int)
 	}
 	return detail, err
+}
+
+// revokeLeaverRunners revokes every runner the owners hold through the runner revoke path, as DELETE
+// /runners/{id} does, and every registration token still redeemable for them, as DELETE
+// /runners/tokens/{id} does. A store without runners holds none.
+func (s *Server) revokeLeaverRunners(ctx context.Context, owners []string) (map[string]int, error) {
+	detail := map[string]int{"runners_revoked": 0, "runner_tokens_revoked": 0}
+	st, ok := s.cfg.Store.(store.PG)
+	if !ok {
+		return detail, nil
+	}
+	now := s.cfg.Now().UTC()
+	for _, owner := range owners {
+		runners, err := st.ListRunnersByOwner(ctx, owner)
+		if err != nil {
+			return nil, err
+		}
+		for _, rn := range runners {
+			if rn.State == types.RunnerRevoked {
+				continue
+			}
+			rev, err := s.revokeRunner(ctx, rn.ID, types.ActorSystem, scimActor, "")
+			if rev.Runner.ID != uuid.Nil {
+				detail["runners_revoked"]++
+			}
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				return nil, err
+			}
+		}
+		tokens, err := st.ListUnusedRunnerRegistrationTokensPage(ctx, now, owner, store.Page{})
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range tokens {
+			t, err := st.RevokeRunnerRegistrationToken(ctx, t.ID, now)
+			if errors.Is(err, store.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, placement.ActionRunnerTokenRevoke, t.ID.String(), "success",
+				mustJSON(map[string]any{"owner": t.Owner, "minted_by": t.MintedBy, "expires_at": t.ExpiresAt})))
+			detail["runner_tokens_revoked"]++
+		}
+	}
+	return detail, nil
 }
 
 // reassignWorkspaces hands every workspace a target owns to the operator, as POST
