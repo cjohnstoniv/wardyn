@@ -164,13 +164,13 @@ type AgentRun struct {
 	EvidenceSource RunEvidenceSource `json:"evidence_source,omitempty"`
 	// RunnerPoolID is the runner pool the run was admitted into, and the next three fields say how
 	// (all written once at create). A pool is a label for a choice and never admission: the run
-	// goes to the exact target recorded in RunnerID (a self-hosted pool) or RunnerPoolExecutor (a
-	// remote-provided one), whatever the pool or anyone's defaults say later. Nil for a run from
+	// goes to the exact runner recorded in RunnerID (a self-hosted runner) or RunnerPoolExecutor (a
+	// remote-hosted runner's id), whatever the pool or anyone's defaults say later. Nil for a run from
 	// before pools and for a server-originated run that names none; RunnerPoolSelection is then empty.
 	RunnerPoolID        *uuid.UUID          `json:"runner_pool_id,omitempty"`
 	RunnerPoolRevision  int64               `json:"runner_pool_revision,omitempty"`
 	RunnerPoolSelection RunnerPoolSelection `json:"runner_pool_selection,omitempty"`
-	RunnerPoolExecutor  string              `json:"runner_pool_executor,omitempty"`
+	RunnerPoolExecutor  string              `json:"remote_runner_id,omitempty"`
 	SandboxRef          string              `json:"sandbox_ref,omitempty"`
 	Image               string              `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.

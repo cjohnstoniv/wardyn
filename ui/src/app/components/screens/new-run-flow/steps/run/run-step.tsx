@@ -21,6 +21,7 @@ import { CommandSection } from "./command-section";
 import { ModeSection } from "./mode-section";
 import { ledeOf, selectedPoolId, usablePools } from "./pool-model";
 import { PoolSection } from "./pool-section";
+import { QuestionBlock } from "./question-block";
 import { loadPools, usePools, type LoadPools } from "./pool-source";
 import { TimingSection } from "./timing-section";
 
@@ -62,8 +63,10 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
       {intent.shape === "application" && (
         <CommandSection command={intent.workload?.command ?? ""} onCommand={(command) => edit((i) => setCommand(i, command))} />
       )}
-      <PoolSection state={pools} runType={runType} intent={intent} onChoose={(id) => edit((i) => choosePool(i, id))} />
-      <BarrierSection pool={chosen} chosen={intent.confinement_class} onChoose={(cc) => edit((i) => chooseBarrier(i, cc))} />
+      <QuestionBlock label={NR_RUN.WHERE_LABEL}>
+        <PoolSection state={pools} runType={runType} intent={intent} onChoose={(id) => edit((i) => choosePool(i, id))} />
+        <BarrierSection pool={chosen} chosen={intent.confinement_class} onChoose={(cc) => edit((i) => chooseBarrier(i, cc))} />
+      </QuestionBlock>
     </StepShell>
   );
 }

@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { setField } from "../../../../../../test/set-field";
 import { MemoryRouter } from "react-router-dom";
@@ -13,7 +13,7 @@ import { NR_HARNESSES } from "../../../../wardyn/copy/new-run/harnesses";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { SCENARIO_HARNESSES, SCENARIO_HARNESS_SETS } from "../../../../../lib/new-run-fixtures/scenarios/harnesses";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
-import type { RunIntent } from "../../draft/run-intent";
+import type { NewRunOrigin, RunIntent } from "../../draft/run-intent";
 import { HarnessesStep } from "./harnesses-step";
 import type { Roster } from "./roster";
 
@@ -154,11 +154,11 @@ describe("Harnesses step: Autonomous", () => {
     expect(intentNow().startup).toBeUndefined();
   });
 
-  it("picks its one harness with Add a harness, and the select swaps it", async () => {
+  it("a new Autonomous task gets the roster's first harness as Make's Harness 1, and the select swaps it", async () => {
     const user = userEvent.setup();
     show(AUTONOMOUS);
-    await user.click(await screen.findByRole("button", { name: NR_HARNESSES.ADD_HARNESS }));
-    expect(intentNow().workload?.agent).toBe("claude-code");
+    await waitFor(() => expect(intentNow().workload?.agent).toBe("claude-code"));
+    expect(intentNow().startup).toBeUndefined();
     await user.selectOptions(screen.getByRole("combobox", { name: NR_HARNESSES.HARNESS_LABEL }), "codex-cli");
     expect(intentNow().tools?.map((t) => t.id)).toEqual(["codex-cli"]);
     expect(intentNow().workload?.agent).toBe("codex-cli");
@@ -175,6 +175,15 @@ describe("Harnesses step: Autonomous", () => {
     expect(await screen.findByText(NR_HARNESSES.TASK_ERROR)).toBeInTheDocument();
     setField(task, "x");
     expect(screen.queryByText(NR_HARNESSES.TASK_ERROR)).not.toBeInTheDocument();
+  });
+});
+
+describe("Harnesses step: Make's Harness 1", () => {
+  it("a new Interactive agent task gets the roster's first harness, started, as in Make", async () => {
+    show(INTERACTIVE);
+    expect(await screen.findByRole("switch", { name: NR_HARNESSES.START_IN_HARNESS })).toBeChecked();
+    expect(intentNow().tools?.map((t) => t.id)).toEqual(["claude-code"]);
+    expect(intentNow().startup).toEqual({ kind: "harness", tool: "claude-code" });
   });
 });
 
@@ -197,5 +206,38 @@ describe("Harnesses step: Environment and Application", () => {
     expect(intentNow().tools).toEqual([]);
     await user.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_FILES) }));
     expect(go).toHaveBeenCalledWith({ screen: "step", step: "files" });
+  });
+
+  it.each<[string, NewRunOrigin, string[] | undefined]>([
+    ["scratch", { kind: "scratch" }, ["claude-code"]],
+    ["template", { kind: "template", id: "t1", revision: 1, name: "T", templateKind: "template" }, undefined],
+    ["again", { kind: "again", runId: "r1", title: "R" }, undefined],
+    ["import", { kind: "import" }, undefined],
+    ["composer", { kind: "composer" }, undefined],
+  ])("gives an Agent task with no harness its first harness only from scratch (%s)", async (_name, origin, tools) => {
+    const load = vi.fn(async () => ROSTER);
+    function SeededFrom({ children }: { children: React.ReactNode }) {
+      const dispatch = useNewRunDispatch();
+      const [ready, setReady] = React.useState(false);
+      React.useEffect(() => {
+        dispatch({ type: "seed", origin, intent: INTERACTIVE });
+        setReady(true);
+      }, [dispatch]);
+      return ready ? children : null;
+    }
+    render(
+      <MemoryRouter>
+        <NewRunDraftProvider owner="alice">
+          <SeededFrom>
+            <HarnessesStep location={{ screen: "step", step: "harnesses" }} go={vi.fn()} startFromScratch={() => {}} deps={{ load }} />
+            <Probe />
+          </SeededFrom>
+        </NewRunDraftProvider>
+      </MemoryRouter>,
+    );
+    // The roster has answered and every effect it set off has run before the draft is read.
+    await waitFor(() => expect(load).toHaveBeenCalled());
+    await act(() => new Promise((r) => setTimeout(r, 20)));
+    expect(intentNow().tools?.map((t) => t.id)).toEqual(tools);
   });
 });

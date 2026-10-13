@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -101,12 +102,13 @@ type queueRoom struct {
 	runners []uuid.UUID
 }
 
-// queueRunnerFree reports whether one of the owner's candidate targets in the pool can take a run now:
-// at least one is online with known facts and, for a registered runner, holds fewer runs than its
-// max_runs. A pool the owner can no longer see, or a refusal of the owner's own (a user type that is
-// gone), counts as free, so the start ends the run with its reason instead of leaving it to wait. Only a
-// read that failed is an error. pinned says the launch names its runner (runner_id): on a pool of the
-// owner's own runners only that runner is asked.
+// queueRunnerFree reports whether one of the owner's candidate targets in the pool can take a run now,
+// deciding the kind as placement does: one of the owner's own runners that is online and holds fewer runs
+// than its max_runs first, else an online remote-hosted runner. The kinds are the ones the run may use:
+// the one its request asks for (a pin asks for one runner) and none the owner's profile denies. A pool
+// the owner can no longer see, or a refusal of the owner's own (a user type that is gone), counts as
+// free, so the start ends the run with its reason instead of leaving it to wait. Only a read that failed
+// is an error. pinned says the launch names its runner (runner_id): only that runner is asked.
 func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, launch queuedLaunch) (queueRoom, error) {
 	ps, ok := s.cfg.Store.(store.RunnerPoolStore)
 	if !ok {
@@ -126,32 +128,41 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	if !found {
 		return out, nil
 	}
+	// A ceiling that cannot be read denies nothing here: the start judges the run against it again.
+	var denied []types.Placement
+	if ceiling, err := s.effectiveCeiling(ctx); err == nil {
+		denied = s.deniedPlacements(ctx, ceiling)
+	}
 	targets, refusal := s.poolTargets(ctx, &req, ps, row)
 	if refusal != nil {
 		out.wait = runnerpool.WaitNoRunnerFree
 		return out, nil
 	}
-	online, executor := false, false
+	ownOnline, remoteOnline := false, false
 	for _, t := range targets {
-		if t.offline || (out.pinned && pool.HostingType == types.RunnerPoolSelfHosted && t.id != req.RunnerID) {
+		kind := t.placement()
+		if t.offline || (out.pinned && t.id != req.RunnerID) || (req.Placement != "" && kind != req.Placement) || slices.Contains(denied, kind) {
 			continue
 		}
-		online = true
 		switch {
 		case t.runnerID == nil:
-			executor = true
+			remoteOnline = true
 		case !t.full:
+			ownOnline = true
 			out.runners = append(out.runners, *t.runnerID)
+		default:
+			ownOnline = true
 		}
 	}
 	switch {
-	case executor:
-		// An online executor can take the run whatever the registered runners hold, so the promotion
-		// binds no runner and the start picks the target (a mixed pool is the runner-pool redesign's).
-		out.runners = nil
-	case !online:
+	case len(out.runners) > 0:
+		// The promotion holds one of these and the start keeps it while it still can take the run.
+	case remoteOnline:
+		// An online remote-hosted runner takes the run whatever the owner's runners hold, so the promotion
+		// binds no runner and the start places it.
+	case !ownOnline:
 		out.wait = runnerpool.WaitNoRunnerFree
-	case len(out.runners) == 0:
+	default:
 		out.wait = runnerpool.WaitRunnersAtCapacity
 	}
 	return out, nil

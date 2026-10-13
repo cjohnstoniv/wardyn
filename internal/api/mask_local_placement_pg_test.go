@@ -313,7 +313,7 @@ func TestPG_LocalRunManifestIsCompleteBeforeTheRunnerSeesCreate(t *testing.T) {
 	e.srv.cfg.MaskManifests = maskmanifest.New(e.pool, sec.SubjectKeys(), e.srv.cfg.MaskRegistry)
 	e.srv.cfg.Runner = &wireCreateRunner{poolRunner: e.runner, srv: e.srv}
 
-	laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	laptops := e.createPool("Laptops", types.RunnerPoolUser)
 	awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
 	e.addToPool(e.person, laptops.ID, awake)
 	if err := sec.For(e.personP).Put(context.Background(), "my-token", []byte(localMaskSecret)); err != nil {

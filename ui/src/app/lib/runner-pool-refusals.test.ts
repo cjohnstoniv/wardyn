@@ -10,7 +10,6 @@ import { PLACEMENT_REASONS } from "./new-run-refusals";
 import golden from "./runner-pool-refusals.golden.json";
 import {
   BARRIER_LABEL,
-  HOSTING_LABEL,
   POOL_OFFLINE,
   RUN_END_REASON_SENTENCE,
   RUN_WAIT,
@@ -79,13 +78,6 @@ describe("runner pool refusal sentences", () => {
     expect(POOL_OFFLINE.NO_ONLINE_RUNNER(g.args[0])).toBe(g.text);
   });
 
-  it("names the hosting types as the server does", () => {
-    const go = readFileSync(join(root, "internal/runnerpool/reasons.go"), "utf8");
-    for (const [wire, label] of Object.entries(HOSTING_LABEL)) {
-      expect(go, wire).toContain(`return "${label}"`);
-    }
-    expect(RUNNER_POOL_REFUSAL.REQUIRED(""), "no hosting type known").toBe(RUNNER_POOL_REFUSAL.REQUIRED_ANY());
-  });
 });
 
 describe("pool limit wording", () => {

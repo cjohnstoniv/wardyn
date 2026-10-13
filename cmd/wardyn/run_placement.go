@@ -16,7 +16,7 @@ type runPlacementFlags struct {
 }
 
 func (f *runPlacementFlags) register(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&f.placement, "placement", "", "where the run's sandbox lives: remote (an organisation executor) or local (one of your own runners in a self-hosted pool); unset lets the pool decide")
+	cmd.Flags().StringVar(&f.placement, "placement", "", "where the run's sandbox lives: remote (a remote-hosted runner) or local (one of your own computers); unset lets the pool decide")
 	cmd.Flags().StringVar(&f.runner, "runner", "", "pin a local run to this runner of yours in the pool; unset, the pool picks one of your online runners — see 'wardyn runner'")
 	cmd.Flags().StringVar(&f.pool, "pool", "", "runner pool id to start the run on; unset uses your default pool, else the organisation's — see 'wardyn runner pool list'")
 }

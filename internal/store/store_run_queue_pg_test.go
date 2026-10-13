@@ -21,7 +21,7 @@ import (
 
 func queuePool(t *testing.T, pg store.PG) types.RunnerPool {
 	t.Helper()
-	p, err := pg.CreateRunnerPool(context.Background(), types.RunnerPool{ID: uuid.New(), Name: "Queue " + uuid.NewString()[:8], HostingType: types.RunnerPoolRemoteProvided}, "test")
+	p, err := pg.CreateRunnerPool(context.Background(), types.RunnerPool{ID: uuid.New(), Name: "Queue " + uuid.NewString()[:8], Scope: types.RunnerPoolOrganization}, "test")
 	if err != nil {
 		t.Fatalf("create pool: %v", err)
 	}

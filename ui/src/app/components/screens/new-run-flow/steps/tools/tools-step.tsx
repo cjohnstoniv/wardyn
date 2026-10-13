@@ -9,6 +9,7 @@
 // anything unfinished to Review as a blocker.
 
 import * as React from "react";
+import { Button } from "../../../../ui/button";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
@@ -22,7 +23,7 @@ import { needsSetup } from "../../lenses/tools-lens";
 import { flowSteps, StepShell } from "../step-shell";
 import { AddTools } from "./catalogue";
 import { AlreadyIncluded } from "./already-included";
-import { HarnessSetup } from "./harness-setup";
+import { HarnessSetup, providerNameFor } from "./harness-setup";
 import { SetupNeeded } from "./setup-needed";
 import { Totals } from "./totals";
 
@@ -54,6 +55,10 @@ export function ToolsStep({ go }: NewRunScreenProps) {
   const { access, harnessSet, answered, recheck } = useAccess();
   const { status } = useShellSetupStatus();
   const names = React.useMemo(() => new Map((status?.harnesses ?? []).map((h) => [h.id, h.display])), [status?.harnesses]);
+  const providers = new Map((access?.harnesses ?? []).flatMap((f) => {
+    const name = providerNameFor(f.harness, draft.intent, harnessSet, status);
+    return name ? [[f.harness, name] as const] : [];
+  }));
   // Items finished here wait for the server's next answer: only that answer settles them.
   const [finished, setFinished] = React.useState<{ ids: ReadonlySet<string>; base: AccessFacts | undefined }>();
   const waiting = !!finished && (!answered || access === finished.base);
@@ -73,18 +78,24 @@ export function ToolsStep({ go }: NewRunScreenProps) {
       title={NR_TOOLS.TITLE}
       lede={NR_TOOLS.LEDE}
       progress={{ label: NR_SHARED.PROGRESS_ARIA, steps: flowSteps(STEP_LABELS, "tools") }}
-      back={{ label: NR_SHARED.BACK, onBack: () => go({ screen: "step", step: "files" }) }}
       primary={{ label: NR_TOOLS.REVIEW_RUN, onActivate: () => go({ screen: "review", view: "pretty" }) }}
       issues={stepIssues("tools", draft.intent)}
+      stickyFooter
+      // The prototype's bar: Back, how many items still need setup, then Review run. Footer extras stand in for Back, so Back is passed here.
+      footerExtras={{
+        start: <Button type="button" variant="ghost" onClick={() => go({ screen: "step", step: "files" })}>{NR_SHARED.BACK}</Button>,
+        end: (
+          <span aria-live="polite" className="self-center text-sm text-muted-foreground">
+            {access && !waiting && (missing.length === 0 ? NR_TOOLS.STICKY_DONE : missing.length === 1 ? NR_TOOLS.STICKY_ONE : NR_TOOLS.STICKY_MANY(missing.length))}
+          </span>
+        ),
+      }}
     >
-      <AlreadyIncluded access={access} answered={answered} intent={draft.intent} names={names} />
+      <AlreadyIncluded access={access} answered={answered} intent={draft.intent} names={names} providers={providers} />
       <HarnessSetup access={access} harnessSet={harnessSet} intent={draft.intent} answered={answered} names={names} onSignedIn={recheck} />
       <AddTools access={access} answered={answered} intent={draft.intent} />
-      <Totals access={access} answered={answered} names={names} />
+      <Totals access={access} answered={answered} names={names} providers={providers} />
       <SetupNeeded items={items} pending={pending} done={settled} intent={draft.intent} names={names} onDone={finish} />
-      <p aria-live="polite" className="sticky bottom-0 bg-background py-2 text-sm text-muted-foreground">
-        {access && !waiting && (missing.length === 0 ? NR_TOOLS.STICKY_DONE : missing.length === 1 ? NR_TOOLS.STICKY_ONE : NR_TOOLS.STICKY_MANY(missing.length))}
-      </p>
     </StepShell>
   );
 }

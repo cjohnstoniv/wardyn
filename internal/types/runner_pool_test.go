@@ -11,44 +11,48 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestRunnerPoolHostingMapsToOnePlacement(t *testing.T) {
-	if RunnerPoolRemoteProvided.Placement() != PlacementRemote || RunnerPoolSelfHosted.Placement() != PlacementLocal {
-		t.Fatal("each hosting type has its placement")
+func TestRunnerPoolScopeMapsToOnePlacement(t *testing.T) {
+	if RunnerPoolOrganization.Placement() != PlacementRemote || RunnerPoolUser.Placement() != PlacementLocal {
+		t.Fatal("each scope places on its own kind of runner")
 	}
-	if RunnerPoolHosting("cloud").Valid() || RunnerPoolHosting("cloud").Placement() != "" {
-		t.Fatal("an unknown hosting type is neither valid nor placed")
+	if RunnerPoolScope("cloud").Valid() || RunnerPoolScope("cloud").Placement() != "" {
+		t.Fatal("an unknown scope is neither valid nor placed")
 	}
 }
 
-func TestRunnerPoolMemberKindsAreNeverMixed(t *testing.T) {
+func TestRunnerPoolMemberOrganizationPoolsHoldRemoteHostedOnly(t *testing.T) {
 	id := uuid.New()
 	nilID := uuid.Nil
 	for _, tc := range []struct {
-		name    string
-		m       RunnerPoolMember
-		hosting RunnerPoolHosting
-		ok      bool
+		name  string
+		m     RunnerPoolMember
+		scope RunnerPoolScope
+		ok    bool
 	}{
-		{"runner in a self-hosted pool", RunnerPoolMember{RunnerID: &id}, RunnerPoolSelfHosted, true},
-		{"executor in a remote-provided pool", RunnerPoolMember{ExecutorID: "build-1"}, RunnerPoolRemoteProvided, true},
-		{"runner in a remote-provided pool", RunnerPoolMember{RunnerID: &id}, RunnerPoolRemoteProvided, false},
-		{"executor in a self-hosted pool", RunnerPoolMember{ExecutorID: "build-1"}, RunnerPoolSelfHosted, false},
-		{"both targets", RunnerPoolMember{RunnerID: &id, ExecutorID: "build-1"}, RunnerPoolSelfHosted, false},
-		{"no target", RunnerPoolMember{}, RunnerPoolSelfHosted, false},
-		{"nil runner id", RunnerPoolMember{RunnerID: &nilID}, RunnerPoolSelfHosted, false},
-		{"an address is not an executor id", RunnerPoolMember{ExecutorID: "tcp://10.0.0.1:2376"}, RunnerPoolRemoteProvided, false},
-		{"a claimed runner's substrate name is not an executor id", RunnerPoolMember{ExecutorID: "runner:" + id.String()}, RunnerPoolRemoteProvided, false},
-		{"a socket path is not an executor id", RunnerPoolMember{ExecutorID: "/var/run/docker.sock"}, RunnerPoolRemoteProvided, false},
+		{"self-hosted runner in a user pool", RunnerPoolMember{RunnerID: &id}, RunnerPoolUser, true},
+		{"remote-hosted runner in an organization pool", RunnerPoolMember{RemoteRunnerID: "build-1"}, RunnerPoolOrganization, true},
+		{"remote-hosted runner in a user pool", RunnerPoolMember{RemoteRunnerID: "build-1"}, RunnerPoolUser, true},
+		{"self-hosted runner in an organization pool", RunnerPoolMember{RunnerID: &id}, RunnerPoolOrganization, false},
+		{"both runners", RunnerPoolMember{RunnerID: &id, RemoteRunnerID: "build-1"}, RunnerPoolUser, false},
+		{"no runner", RunnerPoolMember{}, RunnerPoolUser, false},
+		{"nil runner id", RunnerPoolMember{RunnerID: &nilID}, RunnerPoolUser, false},
+		{"an address is not a remote runner id", RunnerPoolMember{RemoteRunnerID: "tcp://10.0.0.1:2376"}, RunnerPoolOrganization, false},
+		{"a claimed runner's substrate name is not a remote runner id", RunnerPoolMember{RemoteRunnerID: "runner:" + id.String()}, RunnerPoolOrganization, false},
+		{"a UUID is not a remote runner id", RunnerPoolMember{RemoteRunnerID: id.String()}, RunnerPoolOrganization, false},
+		{"a socket path is not a remote runner id", RunnerPoolMember{RemoteRunnerID: "/var/run/docker.sock"}, RunnerPoolOrganization, false},
 	} {
-		if err := tc.m.Validate(tc.hosting); (err == nil) != tc.ok {
+		if err := tc.m.Validate(tc.scope); (err == nil) != tc.ok {
 			t.Errorf("%s: err = %v, want ok=%v", tc.name, err, tc.ok)
 		}
+	}
+	if err := (RunnerPoolMember{RunnerID: &id}).Validate(RunnerPoolOrganization); err == nil || err.Error() != OrgPoolSelfHostedMsg {
+		t.Errorf("a self-hosted runner in an organization pool: %v, want the ruling's sentence", err)
 	}
 }
 
 func TestRunnerPoolDefaultsValidateAndWireShape(t *testing.T) {
 	id := uuid.New()
-	if err := (RunnerPoolDefaults{PreferredHosting: RunnerPoolSelfHosted, RemoteProvided: &id}).Validate(); err != nil {
+	if err := (RunnerPoolDefaults{PoolID: &id}).Validate(); err != nil {
 		t.Fatal(err)
 	}
 	for _, ok := range []ConfinementClass{"", CC1, CC2, CC3} {
@@ -56,7 +60,7 @@ func TestRunnerPoolDefaultsValidateAndWireShape(t *testing.T) {
 			t.Errorf("barrier %q refused: %v", ok, err)
 		}
 	}
-	for _, bad := range []RunnerPoolDefaults{{PreferredHosting: "cloud"}, {SelfHosted: &uuid.UUID{}}, {Barrier: "CC9"}, {Barrier: "cc2"}} {
+	for _, bad := range []RunnerPoolDefaults{{PoolID: &uuid.UUID{}}, {Barrier: "CC9"}, {Barrier: "cc2"}} {
 		if bad.Validate() == nil {
 			t.Errorf("%+v should be refused", bad)
 		}
@@ -65,8 +69,9 @@ func TestRunnerPoolDefaultsValidateAndWireShape(t *testing.T) {
 	if string(raw) != "{}" {
 		t.Errorf("an empty document is %s: an absent field must inherit, so it is omitted", raw)
 	}
-	if (RunnerPoolDefaults{RemoteProvided: &id}).PoolFor(RunnerPoolSelfHosted) != nil {
-		t.Error("PoolFor answers only for its own hosting type")
+	raw, _ = json.Marshal(RunnerPoolDefaults{PoolID: &id})
+	if string(raw) != `{"pool_id":"`+id.String()+`"}` {
+		t.Errorf("a default pool is %s", raw)
 	}
 }
 
@@ -91,18 +96,18 @@ func TestRunnerPoolUseSubjectsOnlyNarrow(t *testing.T) {
 	}
 }
 
-func TestRunnerPoolUsePolicyNarrowsRemoteProvidedPoolsOnly(t *testing.T) {
+func TestRunnerPoolUsePolicyNarrowsOrganizationPoolsOnly(t *testing.T) {
 	policy := RunnerPoolUsePolicy{Subjects: []RunnerPoolSubject{{CapabilitySubjectGroup, "eng"}}}
-	if err := policy.Validate(RunnerPoolRemoteProvided); err != nil {
+	if err := policy.Validate(RunnerPoolOrganization); err != nil {
 		t.Fatal(err)
 	}
-	for _, h := range []RunnerPoolHosting{RunnerPoolSelfHosted, "", "cloud"} {
+	for _, h := range []RunnerPoolScope{RunnerPoolUser, "", "cloud"} {
 		if err := policy.Validate(h); err == nil {
 			t.Errorf("a use policy on a %q pool was accepted", h)
 		}
 	}
-	if err := (RunnerPoolUsePolicy{}).Validate(RunnerPoolRemoteProvided); err == nil {
-		t.Error("an empty policy on a remote-provided pool was accepted")
+	if err := (RunnerPoolUsePolicy{}).Validate(RunnerPoolOrganization); err == nil {
+		t.Error("an empty policy on an organization pool was accepted")
 	}
 }
 

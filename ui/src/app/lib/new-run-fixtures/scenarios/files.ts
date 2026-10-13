@@ -33,7 +33,7 @@ export const MAIN_DRIVE_FACTS: Record<"filesystem" | "eviction" | "none" | "unkn
   runner: { enforcement: "filesystem", basis: "runner_asserted", coverage: "all", keep: { supported: false }, drive_mounts: false },
 };
 
-const POOL = { id: "c1111111-1111-4111-8111-111111111111", name: "Shared pool", hosting_type: "remote_provided" as const };
+const POOL = { id: "c1111111-1111-4111-8111-111111111111", name: "Shared pool", scope: "organization" as const };
 
 export const REPO_ATTACHMENT: RunAttachment = {
   kind: "repository", workspace_id: "ws-payments", repo: "github.com/acme/payments", name: "payments",

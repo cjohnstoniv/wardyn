@@ -244,7 +244,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		}
 		// Another launch took the runner's last place after placement read it.
 		if errors.Is(err, store.ErrRunnerAtCapacity) {
-			targetRefusal(placement.ReasonRunnerAtCapacity, f.place.pool.Name, f.place.pool.HostingType).write(s, w, r)
+			targetRefusal(placement.ReasonRunnerAtCapacity, f.place.pool.Name, f.place.pool.Scope).write(s, w, r)
 			return
 		}
 		writeServerError(w, r, "create run", err)

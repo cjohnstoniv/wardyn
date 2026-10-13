@@ -21,7 +21,7 @@ import (
 func cappedPool(t *testing.T, pg store.PG, maxRuns int) types.RunnerPool {
 	t.Helper()
 	p, err := pg.CreateRunnerPool(context.Background(), types.RunnerPool{ID: uuid.New(), Name: "Capped " + uuid.NewString()[:8],
-		HostingType: types.RunnerPoolRemoteProvided, Limits: poolLimitsFixture(t, maxRuns)}, "test")
+		Scope: types.RunnerPoolOrganization, Limits: poolLimitsFixture(t, maxRuns)}, "test")
 	if err != nil {
 		t.Fatalf("create capped pool: %v", err)
 	}

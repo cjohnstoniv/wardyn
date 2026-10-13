@@ -6,7 +6,7 @@
 import type { ReviewPreflight } from "../../types/new-run-review";
 import { everyScenario, type ByScenario } from "./index";
 
-const POOL = { id: "pool-general", name: "General", hosting_type: "remote_provided", revision: 1, selection: "organisation_default" } as const;
+const POOL = { id: "pool-general", name: "General", scope: "organization", revision: 1, selection: "organisation_default" } as const;
 const CHECKED: ReviewPreflight = {
   setup_items: [],
   enforced_confinement_class: "CC2",

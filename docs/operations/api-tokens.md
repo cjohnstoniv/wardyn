@@ -290,7 +290,7 @@ A service identity is automation that runs under its own name. It is not a perso
   - Every identity names one sponsor: a person with a bound sign-in identity, given by exactly their principal.
   - An email or `entra:` alias is refused `422` `service_identity_sponsor_invalid`.
   - Only the sponsor mints its tokens.
-- **Local mode** has no person to sponsor one: the service-identity routes answer `409` `needs_sso`.
+- **Local mode** has no person to sponsor one: the service-identity routes answer `409` `needs_sso`, except the sponsor's token mint, which answers `403` `api_token_no_human`.
 
 | Verb | Who | What |
 |---|---|---|

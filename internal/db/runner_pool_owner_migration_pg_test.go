@@ -43,9 +43,8 @@ func TestMigration0168_OwnerlessSelfHostedPoolsAreACleanBreak(t *testing.T) {
 	pgExec(t, pool, `INSERT INTO agent_runs (id, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target, runner_pool_id, runner_pool_selection)
 		VALUES ($1, 'sub-person', 'claude-code', 'repo', 'CC1', 'COMPLETED', 'spiffe://x/r', 'docker', $2, 'explicit')`, ran, bound)
 
-	if err := Migrate(ctx, pool); err != nil {
-		t.Fatalf("Migrate applying 0168 over a seeded catalogue: %v", err)
-	}
+	// Up to 0173, which replaces the hosting type this test reads (runner_pool_scope_migration_pg_test.go).
+	migrateBefore(t, pool, runnerPoolScopeMigration)
 
 	if n := pgScalar[int](t, pool, `SELECT count(*)::int FROM runner_pools WHERE id = $1`, waited); n != 0 {
 		t.Errorf("the unbound ownerless Self-Hosted pool survived (%d rows)", n)

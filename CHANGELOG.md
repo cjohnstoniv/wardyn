@@ -16,7 +16,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `runner_pool_use_policies`, `run_queue`, `run_templates` and `template_group_admins`, and `SELECT, INSERT, UPDATE` on `run_template_revisions`, `template_group_labels`, `credential_delivery_policy`,
   `runner_registration_tokens`, `audit_delivery_cursors`, `runner_spool_cursors`, `runner_executions`,
   `runner_execution_exits`, `runner_inventory_candidates`, `runner_inventory_observations`, `runner_pools`,
-  `runner_pool_org_defaults`, `secret_owner_generations`, `person_invitations`, `service_identities` and
+  `runner_pool_org_defaults`, `remote_runners` (migration `0173_runner_pool_scope`), `secret_owner_generations`, `person_invitations`, `service_identities` and
   `api_token_moves`, `SELECT, INSERT` on `run_harnesses` (migration `0164_run_harnesses`), and `SELECT, INSERT, DELETE` on
   `run_launch_intents` (migration `0171_run_launch_intents`). Without the `runner_pools` grants wardynd refuses to start at the runner pool bootstrap.
   Without the `provider_connection_changes` grant every secret write fails once migration 0143's trigger on
@@ -528,6 +528,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   pool the run waits with `runner_pool_runners_at_capacity`, then starts on whichever of its runners has room.
   Runners report their machine name, runner views list their pools, and `GET /runner-pools/{id}/runners` lists a
   pool's runners. Migration `0172_runner_max_runs`.
+- A user pool can mix your own runners with remote-hosted runners your admin made available to people's pools. A run
+  that names no placement goes to one of your own runners when one has room, otherwise to a remote-hosted runner;
+  `placement: local` or `placement: remote` (or a `runner_id`) fixes the kind, and a pool with no runner of that
+  kind is refused `runner_pool_member_mismatch`. A run with drives goes to the pool's remote-hosted runners. A
+  queued run that took your runner's last place keeps it when it starts.
 
 ### Changed
 
@@ -647,6 +652,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   record is current; the `run.build` audit row carries the record and its hash, and a workspace-image cache hit now
   writes a `run.build` row too. Workspace image builds do not share an envbuilder layer cache: each build pushes
   under its own tag and fetches every layer fresh.
+- `deny_placements` now holds each kind of runner in a pool, not the pool as a whole: a member denied local launches
+  can use a mixed pool's remote-hosted runners, and one denied remote launches only their own runners. Pool lists
+  and preflight judge availability the same way. A remote-hosted runner stops taking your runs as soon as its people
+  policy no longer admits you. `placement_required` is no longer returned.
+- New Run's screens follow the approved design: each screen sits in its own centred column with a numbered step
+  rail; Shape's workload choices go straight to Run; Run groups its questions with the pool's capacity and limits
+  and a barrier comparison; Review puts the view toggle beside its heading and Save, Check again and Launch in one
+  row; the run document's YAML/JSON switch changes format at once (text that does not parse stays in its format).
+  The "Recording" line, the "Before you launch" heading and relative waiting times are gone; server warnings show as
+  notices above the blockers. The GitHub CLI card says what works today: Actions and the REST API.
 
 ### Removed
 
@@ -807,6 +822,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   hangs up mid-hold no longer records a denial.
 - Proxy shutdown keeps part of its deadline for the audit drain and survives a cancelled caller, so the last
   decision rows reach the control plane; it returns both the HTTP and the sink errors.
+- `wardyn run --experience interactive --startup ...` says what the sandbox starts instead of "sandbox is idle";
+  `wardyn sync` ends a silent gateway handshake after 15 s and keeps at most 64 KiB of gateway stderr; `--ends-in
+  .5d` and `1..5d` are refused instead of being read as a fraction of an hour.
+- wardyn-tetragon-ingest no longer posts to `//api/...` when the control-plane URL ends in a slash, and
+  wardyn-runnerd exits 0 on SIGTERM.
+- A refused template-grant revoke says no grant was removed; SSH key owner refusals end "as the Audit log shows it";
+  the runner organisation URL refusal names the runner's rule.
+- Recovery verbs: manifest and cast reads refuse FIFOs without hanging, refusals name the verb that refused, source
+  ports outside 1 to 65535 are refused, the recorded host is lower case, and `-recovery-rehearse` runs behind the
+  boot transport.
+- remove_secrets now decides whether the caller is an operator by the operator check itself rather than by an empty
+  owner name (defence in depth; no known caller reached the old gap).
 
 
 ## [0.8.9] — 2026-10-09
