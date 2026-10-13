@@ -32,7 +32,13 @@ const (
 	syncSubsystem    = "wardyn-sync"
 	syncDialTimeout  = 15 * time.Second
 	syncCloseTimeout = 10 * time.Second
+	// syncStderrCap bounds the gateway's stderr kept for an error message; the rest is read and dropped.
+	syncStderrCap = 64 << 10
 )
+
+// syncHandshakeTimeout bounds the SSH handshake: a gateway that accepts the connection and never speaks
+// must not hang the sync.
+var syncHandshakeTimeout = syncDialTimeout
 
 // syncWatchEvery is how often --watch looks again.
 var syncWatchEvery = 2 * time.Second
@@ -273,11 +279,13 @@ func dialSyncGateway(ctx context.Context, gw sshGateway, runID string, signer ss
 		},
 		Timeout: syncDialTimeout,
 	}
+	_ = conn.SetDeadline(time.Now().Add(syncHandshakeTimeout))
 	cc, chans, reqs, err := ssh.NewClientConn(conn, net.JoinHostPort(gw.host, port), cfg)
 	if err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("sync: ssh handshake with the gateway: %w", err)
 	}
+	_ = conn.SetDeadline(time.Time{})
 	return ssh.NewClient(cc, chans, reqs), nil
 }
 
@@ -344,8 +352,21 @@ type syncSession struct {
 	status  int           // the exit-status, valid once exited is closed; -1 when none came
 	exited  chan struct{} // closed when the channel's requests end
 	errDone chan struct{} // closed when stderr is drained
-	stderr  bytes.Buffer
+	stderr  cappedBuffer
 }
+
+// cappedBuffer keeps the first syncStderrCap bytes written to it and discards the rest, so the channel
+// still drains and the gateway is never blocked on a full stderr.
+type cappedBuffer struct{ buf bytes.Buffer }
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if room := syncStderrCap - c.buf.Len(); room > 0 {
+		c.buf.Write(p[:min(room, len(p))])
+	}
+	return len(p), nil
+}
+
+func (c *cappedBuffer) String() string { return c.buf.String() }
 
 // stdinEOF makes the sftp client's Close send EOF on the channel's stdin
 // instead of closing the channel.
