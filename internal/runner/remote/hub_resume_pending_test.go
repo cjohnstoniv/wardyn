@@ -348,3 +348,104 @@ func TestHubResumeEndsWhenAnActionIsQueuedAfterItsPendingRead(t *testing.T) {
 		}
 	}
 }
+
+// A teardown called while the runner is away, whose queue write lands only after the resumed session
+// made both of its looks at the queue, is carried by nothing in that session: the session is ended, and
+// the runner's next, fresh session carries it.
+func TestHubResumeEndsWhenAnActionIsQueuedAfterBothItsPendingReads(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	var serving sync.WaitGroup
+	defer func() { cancel(); serving.Wait() }()
+	pub, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := types.Runner{ID: uuid.New(), PublicKey: pub, OrgURLSHA256: federation.OrgURLSHA256("https://org.example"), State: types.RunnerClaimed}
+	ref := placement.RunnerRefPrefix(row.ID.String()) + "sandbox"
+	var mu sync.Mutex
+	var open []runnerwire.PendingAction
+	reads, writeAfter := 0, 0
+	link := &Link{}
+	sub := New(row.ID.String(), link, Options{Queue: func(ctx context.Context, kind types.RunnerActionKind, ref string) error {
+		for ctx.Err() == nil {
+			mu.Lock()
+			if reads >= writeAfter {
+				open = append(open, runnerwire.PendingAction{ID: uuid.New(), Kind: kind, Ref: ref})
+				mu.Unlock()
+				return nil
+			}
+			mu.Unlock()
+			time.Sleep(time.Millisecond)
+		}
+		return ctx.Err()
+	}})
+	config := HubConfig{OrgURL: "https://org.example", Lookup: func(context.Context, uuid.UUID) (types.Runner, error) { return row, nil },
+		Admit: func(context.Context, types.Runner) (Admission, error) {
+			return Admission{Substrate: sub, Link: link,
+				Pending: func(context.Context) ([]runnerwire.PendingAction, error) {
+					mu.Lock()
+					defer mu.Unlock()
+					reads++
+					return append([]runnerwire.PendingAction(nil), open...), nil
+				},
+				BeginInventory: func(context.Context, string) error { return nil },
+				StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil },
+				Event:          func(context.Context, runnerwire.Event) error { return nil },
+			}, nil
+		},
+	}
+	hub := NewHub(ctx, config)
+	defer hub.Close()
+	hubDone := make(chan error, 3)
+	online, resumed := make(chan *runnerwire.Peer, 3), make(chan bool, 3)
+	delivered := make(chan []runnerwire.PendingAction, 3)
+	hooks := sessionHooks(online, resumed)
+	hooks.Pending = func(_ context.Context, _ *runnerwire.Peer, actions []runnerwire.PendingAction) error {
+		delivered <- actions
+		return nil
+	}
+	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: config.OrgURL, RunnerID: row.ID.String(), PrivateKey: key, Hooks: hooks,
+		Dial: func(ctx context.Context) (runnerwire.Conn, error) {
+			org, run := runnerwire.Loopback()
+			serving.Go(func() { hubDone <- hub.Serve(ctx, org, row.ID) })
+			return run, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 3)
+	go func() { done <- client.Connect(ctx) }()
+	p := awaitValue(t, ctx, online)
+	if awaitValue(t, ctx, resumed) || len(awaitValue(t, ctx, delivered)) != 0 {
+		t.Fatal("first session was not a fresh session with an empty PENDING")
+	}
+	waitOnline(t, ctx, link)
+	p.Close()
+	_ = awaitValue(t, ctx, done)
+	_ = awaitValue(t, ctx, hubDone)
+
+	// The kill finds the runner away; its queue write waits out the resume's two looks at the queue.
+	mu.Lock()
+	writeAfter = reads + 2
+	mu.Unlock()
+	queued := make(chan error, 1)
+	go func() { queued <- sub.KillSandbox(ctx, ref) }()
+	go func() { done <- client.Connect(ctx) }()
+	if err := awaitValue(t, ctx, queued); !errors.Is(err, runner.ErrPendingOnRunner) {
+		t.Fatalf("kill while the runner was away = %v, want it queued for the runner", err)
+	}
+	// The resume cannot stay up: it never carried the kill.
+	_ = awaitValue(t, ctx, done)
+	_ = awaitValue(t, ctx, hubDone)
+	go func() { done <- client.Connect(ctx) }()
+	for {
+		actions := awaitValue(t, ctx, delivered)
+		if len(actions) == 1 && actions[0].Kind == types.RunnerActionKill && actions[0].Ref == ref {
+			return
+		}
+		if len(actions) != 0 {
+			t.Fatalf("PENDING = %+v, want the kill queued after the resume's reads", actions)
+		}
+	}
+}

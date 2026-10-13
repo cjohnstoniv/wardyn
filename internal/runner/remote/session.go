@@ -69,8 +69,8 @@ func (l *Link) Close() {
 	}
 }
 
-// stateFinal records that peer's final STATE page reached the org: judging it is the org's last look at
-// the queue in this session.
+// stateFinal records that peer's final STATE page reached the org, or that peer resumed a session
+// already past it: judging that page is the org's last refusal of a session for an open action.
 func (l *Link) stateFinal(peer *runnerwire.Peer) {
 	l.mu.Lock()
 	if l.peer == peer {
