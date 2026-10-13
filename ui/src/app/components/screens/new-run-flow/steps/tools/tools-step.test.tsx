@@ -107,6 +107,23 @@ describe("Tools and access step", () => {
     await userEvent.click(await screen.findByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} Gamma` }));
     expect(JSON.parse(screen.getByTestId("components").textContent!)).toEqual([B]);
   });
+  it("while the next preview is out, the old second row removes its own component, not the one now in its place", async () => {
+    const [A, B, C] = ["Alpha", "Beta", "Gamma"].map((name) => ({ name, inline: { hosts: [`${name.toLowerCase()}.example`] } }));
+    const added = (name: string, n: number) => ({ id: `inline:${n}`, kind: "custom" as const, from: "added" as const, name, status: "ready", hosts: [], credentials: [], source: { kind: "component" as const } });
+    answer({ ...SCENARIO_ACCESS.member, rows: [...SCENARIO_ACCESS.member.rows, ...[A, B, C].map((c, n) => added(c.name, n))] }, true);
+    const Components = () => <p data-testid="components">{JSON.stringify(useNewRunDraft().intent.components ?? null)}</p>;
+    render(
+      <NewRunDraftProvider owner="alice">
+        <Seed intent={{ ...READY, components: [A, B, C] }}><ToolsStep {...props} /><Components /></Seed>
+      </NewRunDraftProvider>,
+    );
+    await screen.findByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} Alpha` });
+    // Every edit from here asks again, and no answer comes back: the rows on screen stay the first answer's.
+    answer(undefined, false);
+    await userEvent.click(screen.getByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} Alpha` }));
+    await userEvent.click(screen.getByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} Beta` }));
+    expect(JSON.parse(screen.getByTestId("components").textContent!)).toEqual([C]);
+  });
   // A fresh element each time, so a rerender is not skipped as identical.
   const tree = () => (
     <NewRunDraftProvider owner="alice">
