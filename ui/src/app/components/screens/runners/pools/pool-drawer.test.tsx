@@ -110,10 +110,23 @@ describe("user pool", () => {
     expect(onOpenRunner).toHaveBeenCalledWith("self_hosted", "r-laptop");
   });
 
+  it("says a pool with a use policy can't be deleted before the server is asked", async () => {
+    usePolicyMock.mockResolvedValue({ pool_id: "p-ci", subjects: [{ subject_type: "group", subject: "platform-eng" }], revision: 9, updated_at: "2026-10-09T10:00:00Z" });
+    renderDrawer(pool({ id: "p-ci", name: "CI jobs" }), { waiting: 3 });
+    const sheet = await screen.findByRole("dialog");
+    await within(sheet).findByText("platform-eng");
+    await userEvent.click(within(sheet).getByRole("button", { name: "Delete" }));
+    const dlg = await screen.findByRole("alertdialog");
+    expect(within(dlg).getByText(/3 runs are waiting\./)).toBeInTheDocument();
+    expect(within(dlg).getByRole("alert")).toHaveTextContent("clear the use policy first: deleting a pool would clear it without a second human");
+    expect(within(dlg).getByRole("button", { name: "Delete pool" })).toBeDisabled();
+    expect(removeMock).not.toHaveBeenCalled();
+  });
+
   it("offers Edit and Delete to its owner, and Delete goes through their own route", async () => {
     const { onEdit, onChanged, onClose } = renderDrawer(user, { mine: true, members: [member(selfRunner())] });
     const sheet = await screen.findByRole("dialog");
-    expect(within(sheet).getByText("The runners you chose for this pool. A run goes to one of your own runners with room first, then to a remote-hosted runner.")).toBeInTheDocument();
+    expect(within(sheet).getByText("The runners dana@example.com chose for this pool. A run goes to one of dana@example.com's own runners with room first, then to a remote-hosted runner.")).toBeInTheDocument();
     await userEvent.click(within(sheet).getByRole("button", { name: "Edit" }));
     expect(onEdit).toHaveBeenCalledWith(user);
     removeMineMock.mockResolvedValue(undefined);

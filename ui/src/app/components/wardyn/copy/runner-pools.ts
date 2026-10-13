@@ -21,7 +21,6 @@ export const RES = {
   AVAILABLE: "Available",
   NOT_COUNTED: "Not counted",
   FULL: "Full",
-  NOT_SET: "Not set",
   CPUS: (n: number) => `${n} ${n === 1 ? "CPU" : "CPUs"}`,
   GB: (n: number) => `${n} GB`,
   OF: (use: string | number, total: string) => `${use} of ${total}`,
@@ -198,6 +197,7 @@ export const POOL_DRAWER = {
   DUR_NO_MAX: (def: string) => `default ${def}, no maximum`,
   DUR_NEVER: (def: string) => `default ${def}, never`,
   NO_MAXIMUM: "no maximum",
+  NEVER: "never",
   NOT_APPLICABLE: "Not applicable",
   STRICTEST: "A run gets the strictest of your organization's policy, this pool's limits and its runner's per-run limits.",
   ORG_DEFAULT: "Organization default",
@@ -235,7 +235,6 @@ export const POOL_DRAWER = {
   MEMBERS_ORG_BODY: "The remote-hosted runners this pool runs on, not people's computers. Add or remove them with wardyn runner pool add and remove.",
   MEMBERS_USER_BODY: (owner: string) =>
     `The runners ${owner} chose for this pool. A run goes to one of ${owner}'s own runners with room first, then to a remote-hosted runner.`,
-  MEMBERS_YOURS_BODY: "The runners you chose for this pool. A run goes to one of your own runners with room first, then to a remote-hosted runner.",
   ORG_ONLY: "Organization pools take remote-hosted runners only. A self-hosted runner can join its owner's user pools.",
   MEMBERS_NONE: "None yet. Only its owner chooses runners.",
   MEMBER_MACHINE: (machine: string) => `Machine: ${machine}`,
@@ -253,7 +252,6 @@ export const POOL_DRAWER = {
   SWITCH_OFF: "Switch off",
   SWITCH_ON: "Switch on",
   DELETE: "Delete",
-  CLOSE: "Close",
 } as const;
 
 export const POOL_DIALOG = {
@@ -275,6 +273,8 @@ export const POOL_DIALOG = {
   DELETE_ORG_DEFAULT: "It is the organization default. That default is cleared.",
   DELETE_MY_DEFAULT: "It is your default user pool. Your default is cleared.",
   DELETE_SAVED_DEFAULT: "People who saved it as their default are asked to choose another pool next time.",
+  /** The server's own refusal, said before it is asked: a pool with a use policy is not deleted. */
+  DELETE_BLOCKED: "clear the use policy first: deleting a pool would clear it without a second human",
   DELETE_CONFIRM: "Delete pool",
   DELETED: (name: string) => `${name} deleted`,
   REMOVE_TITLE: (runner: string, pool: string) => `Remove ${runner} from ${pool}?`,

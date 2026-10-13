@@ -26,7 +26,7 @@ const shown = (k: Res, wire: number) => fmtAmount(k, k === "cpu" ? cpus(wire) : 
 /** A duration limit as the sheet words it; an absent one is set by the runners. */
 export function durLimit(d: RunnerPoolDuration | undefined, never: boolean): string {
   if (!d) return "—";
-  if (d.unlimited) return d.default_sec ? (never ? POOL_DRAWER.DUR_NEVER(fmtDur(d.default_sec)) : POOL_DRAWER.DUR_NO_MAX(fmtDur(d.default_sec))) : POOL_DRAWER.NO_MAXIMUM;
+  if (d.unlimited) return d.default_sec ? (never ? POOL_DRAWER.DUR_NEVER(fmtDur(d.default_sec)) : POOL_DRAWER.DUR_NO_MAX(fmtDur(d.default_sec))) : never ? POOL_DRAWER.NEVER : POOL_DRAWER.NO_MAXIMUM;
   return POOL_DRAWER.DUR(fmtDur(d.default_sec), fmtDur(d.max_sec ?? 0));
 }
 

@@ -80,13 +80,13 @@ function MemberCard({ m, onOpen }: { m: RunnerPoolMemberView; onOpen?: (kind: Ru
   );
 }
 
-function Members({ pool, members, mine, onOpen }: { pool: RunnerPool; members: RunnerPoolMemberView[]; mine: boolean; onOpen?: (kind: RunnerKind, id: string) => void }) {
+function Members({ pool, members, onOpen }: { pool: RunnerPool; members: RunnerPoolMemberView[]; onOpen?: (kind: RunnerKind, id: string) => void }) {
   const org = pool.scope === "organization";
   const owner = pool.owner ?? "";
   return (
     <Sec label={POOL_DRAWER.MEMBERS} meta={org ? POOL_DRAWER.MEMBERS_ORG : POOL_DRAWER.MEMBERS_USER} data-members>
       <p className="mb-1.5 text-xs text-muted-foreground">
-        {org ? POOL_DRAWER.MEMBERS_ORG_BODY : mine ? POOL_DRAWER.MEMBERS_YOURS_BODY : POOL_DRAWER.MEMBERS_USER_BODY(owner)}
+        {org ? POOL_DRAWER.MEMBERS_ORG_BODY : POOL_DRAWER.MEMBERS_USER_BODY(owner)}
       </p>
       {org && <p className="mb-1 text-xs text-muted-foreground">{POOL_DRAWER.ORG_ONLY}</p>}
       {members.length ? members.map((m) => <MemberCard key={`${m.kind}:${m.id}`} m={m} onOpen={onOpen} />) : <p>{POOL_DRAWER.MEMBERS_NONE}</p>}
@@ -286,7 +286,7 @@ export function PoolDrawer({
             ) : (
               <Sec label={POOL_DRAWER.WHO}>{POOL_DRAWER.WHO_OWNER(pool.owner ?? "")}</Sec>
             )}
-            <Members pool={pool} members={members} mine={mine} onOpen={onOpenRunner} />
+            <Members pool={pool} members={members} onOpen={onOpenRunner} />
             <Sec label={POOL_DRAWER.POOL}>
               <p className="text-xs text-muted-foreground" title={absoluteTime(pool.updated_at)}>
                 {POOL_DRAWER.REVISION(pool.revision, shortDate(pool.updated_at))}
