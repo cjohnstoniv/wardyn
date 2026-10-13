@@ -40,8 +40,10 @@ export function shapeCarriers(shape: RunShape, mode: RunMode | undefined, intent
 }
 
 export function chooseShape(intent: RunIntent, shape: RunShape): RunIntent {
-  const mode = shape === "agent_task" && intent.shape === "agent_task" ? modeOf(intent) : undefined;
-  return withKeys(intent, { shape, ...shapeCarriers(shape, mode, intent) });
+  // The shape the draft already has: choosing it again changes nothing, so the starter, its prompt and the
+  // task a document, a template or an earlier step set are still there after the workload press on Shape.
+  if (intent.shape === shape) return intent;
+  return withKeys(intent, { shape, ...shapeCarriers(shape, undefined, intent) });
 }
 
 export const shapeIssues: StepValidator = (intent) => (intent.shape ? [] : [issue("shape", "shape_required")]);

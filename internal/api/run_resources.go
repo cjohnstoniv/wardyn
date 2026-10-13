@@ -184,7 +184,7 @@ type runResourcesResponse struct {
 	// §8) is this field's only consumer: absent it, the UI shows DiskUsedBytes
 	// with no bar.
 	DiskCapBytes *int64 `json:"disk_cap_bytes,omitempty"`
-	ProcessCount *int   `json:"process_count,omitempty"`
+	ProcessCount *int64 `json:"process_count,omitempty"`
 }
 
 // runResourcesUnsupportedMsg is the honest 501 reason, shared by BOTH the
@@ -550,8 +550,7 @@ func parseRunResourcesKV(kv map[string]string) runResourcesResponse {
 	}
 
 	if v, ok := kvInt64(kv, "proc_count"); ok {
-		procCount := int(v)
-		resp.ProcessCount = &procCount
+		resp.ProcessCount = &v
 	}
 
 	return resp

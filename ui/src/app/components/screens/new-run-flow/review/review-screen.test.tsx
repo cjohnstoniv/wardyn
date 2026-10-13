@@ -55,6 +55,9 @@ const answered = (pre: PreflightResult | null, age = 1000, over: Record<string, 
   ...over,
 });
 
+// Every screen but Review stays out of the way: Change links move the URL and nothing mounts.
+const INERT = Object.fromEntries(Object.keys(NEW_RUN_SCREENS).map((name) => [name, () => null])) as unknown as typeof NEW_RUN_SCREENS;
+
 const AGENT: RunIntent = {
   shape: "agent_task", experience: "interactive", runner_pool_id: "pool-general", no_repositories_or_drives: true,
   workload: { kind: "agent_task", agent: "claude-code" },
@@ -100,7 +103,7 @@ function open(intent: RunIntent, o: Open = {}) {
         <Routes>
           <Route
             path="/runs/new"
-            element={<><NewRunRoute loaders={loaders} screens={{ ...NEW_RUN_SCREENS, review: (p) => <><ReviewScreen {...p} onLaunch={o.onLaunch} /><Probe /></> }} /><Where /></>}
+            element={<><NewRunRoute loaders={loaders} screens={{ ...INERT, review: (p) => <><ReviewScreen {...p} onLaunch={o.onLaunch} /><Probe /></> }} /><Where /></>}
           />
         </Routes>
       </OperatorProvider>
@@ -240,6 +243,34 @@ describe("Review groups", () => {
     expect(group("limits").getByText(NR_SHARED.JOIN(NR_SHARED.CPU("2"), NR_SHARED.MIB("4,096")))).toBeInTheDocument();
   });
 
+  it("shows attached drives (drives[]) by name, path and access, counts them before the server answers, and lists them as kept", async () => {
+    const DRIVE = "11111111-1111-4111-8111-111111111111";
+    const SHARE = "22222222-2222-4222-8222-222222222222";
+    const withDrives: RunIntent = {
+      ...AGENT, no_repositories_or_drives: undefined, drives: [{ drive_id: DRIVE }, { drive_id: SHARE }],
+      start_folder: { kind: "attachment", drive_id: DRIVE },
+    };
+    checks.current = answered({
+      ...SCENARIO_PREFLIGHT.member,
+      attachments: [
+        { kind: "drive", drive_id: DRIVE, name: "Your drive", target: "/home/agent/drive", read_only: false, starts_here: true },
+        { kind: "drive", drive_id: SHARE, name: "Data team share", target: "/home/agent/shared/data-team-share", read_only: true, starts_here: false },
+      ],
+    } as unknown as PreflightResult);
+    open(withDrives);
+    await ready();
+    const work = group("work");
+    expect(work.getByText(NR_REVIEW.WORK_ITEMS(2))).toBeInTheDocument();
+    expect(work.getByText("Data team share")).toBeInTheDocument();
+    expect(work.getByText("/home/agent/shared/data-team-share")).toBeInTheDocument();
+    expect(work.getByText(NR_FILES.ACCESS_READ)).toBeInTheDocument();
+    cleanup();
+    checks.current = answered(null);
+    open(withDrives);
+    await screen.findAllByText(NR_REVIEW.GROUP_WORK);
+    await waitFor(() => expect(group("work").getByText(NR_REVIEW.WORK_ITEMS(2))).toBeInTheDocument());
+  });
+
   it("shows a document-only field as a read-only row with its Run document chip, no Change on the row", async () => {
     open({ ...AGENT, image: "example/base:1", ends_after_sec: 3600 });
     await ready();
@@ -310,7 +341,6 @@ describe("Review notices", () => {
     checks.current = answered({ ...SCENARIO_PREFLIGHT.member, warnings: ["inline_policy: a grant was dropped by your ceiling"] });
     open(AGENT);
     await ready();
-    expect(screen.getByText(NR_REVIEW.WARNINGS_TITLE)).toBeInTheDocument();
     expect(screen.getByText("inline_policy: a grant was dropped by your ceiling")).toBeInTheDocument();
   });
 });

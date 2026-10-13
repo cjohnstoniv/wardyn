@@ -4,7 +4,7 @@
  */
 
 import type { Page, Route } from "@playwright/test";
-import { test, expect, expandCard, gotoConsole, mockMemberRole, navToRoute } from "./fixtures";
+import { test, expect, expandCard, gotoConsole, mockMemberRole, mockPreflightClear, navToRoute, openNewRun, submitLaunch, walkGuidedToReview } from "./fixtures";
 import { attachModeFrame, stubAttachSocket, stubAttachTicket } from "./attach-stub";
 import { MODEL_ACCESS_BANNER } from "../src/app/components/wardyn/model-access-copy";
 import { BANNER, CRED_NOTICE, KEY_DOOR, REMOVE_CONFIRM, WRITE_ONLY } from "../src/app/components/wardyn/copy/door";
@@ -12,7 +12,7 @@ import { AGENTS } from "../src/app/lib/workspace-providers-copy";
 
 // ONE door (#544, packet MP-E §5.9; the strip that opens it, #540): Your
 // model connections (#541 — Getting Started's own button, replaced), the
-// strip and the New Run rail keep their buttons, and every one of them opens
+// strip and New Run's launch keep their buttons, and every one of them opens
 // the single dialog the shell mounts — keyed by the provider it is for.
 // Nothing on a route mounts a sign-in pane of its own any more, so leaving
 // the route never takes the door (or its sign-in sandbox) with it.
@@ -207,10 +207,10 @@ test.describe("one door — keyed by provider (User view)", () => {
   // credential yet — that row lives on packet F §2's "Your model connections"
   // list, which sits on the still-open PR #1042 (#541, MP-22). So this pin
   // reaches the same KeyDoor Replace/Remove code a §2 row will once open,
-  // through a surface that DOES ship today: the New Run rail auto-opens the
+  // through a surface that DOES ship today: New Run's launch auto-opens the
   // door of the provider a launch's OWN 422 refusal names (#543/#146), which
   // is provider_access-state-independent — a stored credential can still be
-  // refused at dispatch time (design §5.8, new-run-rail.tsx).
+  // refused at dispatch time (design §5.8).
   test("Replace gets its own title, and Remove confirms first (packet F §1/§3)", async ({ page }) => {
     const GATEWAY = {
       id: "corp-gateway",
@@ -243,11 +243,12 @@ test.describe("one door — keyed by provider (User view)", () => {
       });
     });
 
+    await mockPreflightClear(page);
     await gotoConsole(page);
-    await page.getByRole("button", { name: "New run" }).click();
+    await openNewRun(page);
     await expect(page).toHaveURL(/\/runs\/new$/);
-    await page.getByLabel("Title").fill("e2e replace pin");
-    await page.getByRole("button", { name: "Launch run" }).click();
+    await walkGuidedToReview(page);
+    await submitLaunch(page, "e2e replace pin");
     const door = page.getByRole("dialog", { name: "Replace your token for Corp gateway" });
     // A stored value is never shown, and the field says so (packet F §1 b).
     await expect(door).toContainText("Your token is stored and can't be shown. Paste a new one to replace it.");
@@ -271,7 +272,8 @@ test.describe("one door — keyed by provider (User view)", () => {
     await door.getByRole("button", { name: KEY_DOOR.REMOVE }).click();
     await page.getByRole("dialog", { name: "Remove your token for Corp gateway?" }).getByRole("button", { name: REMOVE_CONFIRM.CONFIRM }).click();
     await expect(page.getByText("Token removed")).toBeVisible();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+    // The door and its confirm are gone; the Name dialog the refusal opened it over stays.
+    await expect(page.getByRole("dialog", { name: /Corp gateway/ })).toHaveCount(0);
     expect(deletes).toBe(1);
   });
 });

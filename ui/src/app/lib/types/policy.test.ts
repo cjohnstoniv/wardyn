@@ -202,6 +202,4 @@ describe("toolRulesProblem — malformed documents refuse, never throw", () => {
   });
 });
 
-// pushRulesIsSet's own tests moved to new-run-rail-push.test.tsx (bundle-split
-// fix, #181): the function now lives in new-run-rail.tsx, not here — see its
-// own doc for why.
+// pushRulesIsSet and its tests went with the New Run rail (bundle-split fix, #181).

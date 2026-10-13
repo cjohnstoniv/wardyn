@@ -252,7 +252,7 @@ describe("demo catalog", () => {
     // Egress is scoped to Anthropic, not deny-all like the keyless demos.
     const allowed = d.policy.allowed_domains ?? [];
     expect(allowed.length).toBeGreaterThan(0);
-    expect(allowed.every((h) => h.includes("anthropic.com"))).toBe(true);
+    expect(allowed.every((h) => h.endsWith(".anthropic.com"))).toBe(true);
   });
 
   // Regression: setupUi copy pointed users at a nonexistent "Access → Egress"

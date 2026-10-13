@@ -15,19 +15,21 @@ strings below are frozen, byte-for-byte.
 | `AGENTS.OPEN_RUN_CTA` | Removed | was `ui/src/app/lib/workspace-providers-copy.ts` | `Open run` |
 
 `RUN_DETAIL.LAUNCH_WARNING_TITLE` is not a second string: the run page imports and renders
-`AGENTS.LAUNCH_WARNING_TITLE` directly (`run-detail/launch-warnings-note.tsx`), so the New Run rail's
+`AGENTS.LAUNCH_WARNING_TITLE` directly (`run-detail/launch-warnings-note.tsx`), so New Run's
 retired advisory block and the run page's new one can never spell "launched with a warning" two
 different ways.
 
 ## Behaviour
 
-- `use-launch.ts`'s `launch()` always calls `navigate('/runs/' + id, { state: { launchWarnings } })`
-  on a 2xx response, in the same tick — no held screen, no timer. `launchWarnings` is `created.warnings
-  ?? []`, so the call shape is identical whether or not the 201 carried any.
+- On a 2xx response `ReviewWithLaunch` (`new-run-flow/launch/review-with-launch.tsx`) moves the flow to its
+  Launched screen, in the same tick and with no timer. That screen's "Open run" link
+  (`new-run-flow/launch/launched-screen.tsx`) navigates to `/runs/<id>` with
+  `state: { launchWarnings }`, where `launchWarnings` is `created.warnings ?? []`, so the state shape is
+  identical whether or not the 201 carried any.
 - A refusal (4xx/422) never navigates: the form stays exactly as it stood, showing the server's own
   sentence. `isCredentialRefusal` and the 422 → sign-in door path are unchanged.
-- `new-run-rail.tsx` drops the `onOpenRun` arm and its inline warnings block — there is no longer a
-  state where Launch's slot holds anything but Launch.
+- New Run carries no inline warnings block: the old rail that held one is gone, so there is no state
+  where Launch's slot holds anything but Launch.
 - `run-detail.tsx` reads `useLocation().state?.launchWarnings` once, at mount, into local state.
   While non-empty it renders `LaunchWarningsNote` (`run-detail/launch-warnings-note.tsx`) in the rail's
   own advisory-block shape: the (reused) title, the warning text(s), the ephemeral-note line, and a
@@ -38,10 +40,10 @@ different ways.
   A `PENDING` run whose `status_detail` is still empty renders `RUN_STATUS.PENDING_NO_DETAIL` instead
   of nothing; the moment the server sends a real stage line, `status_detail` stops being empty and the
   ordinary `statusDetailChip`/`statusDetailSentence` derivation takes over, superseding it.
-- `runs.ts`'s `createRun` drops the 5-minute `LAUNCH_DEADLINE_MS` and rides `wfetch`'s plain default
-  deadline instead — `POST /runs` dispatches asynchronously now (#121), so the call no longer blocks
+- `runs.ts`'s `createRunWire` rides `wfetch`'s plain default deadline instead of the 5-minute
+  `LAUNCH_DEADLINE_MS` — `POST /runs` dispatches asynchronously now (#121), so the call no longer blocks
   through `CreateSandbox` server-side the way that constant's own doc comment describes.
-  `preflightRun` is unchanged: it still runs that resolution synchronously and keeps the longer bound.
+  `preflightRunWire` is unchanged: it still runs that resolution synchronously and keeps the longer bound.
 
 ## Owner decisions
 

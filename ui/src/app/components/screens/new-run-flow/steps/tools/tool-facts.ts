@@ -10,7 +10,7 @@
 
 import reasons from "../../../../../lib/access-reasons.golden.json";
 import { effectiveToolEffect, type ToolEffect } from "../../../../../lib/tool-effect";
-import type { EffectOption, LockedToolRule, ToolPolicyFact } from "../../../../../lib/types/new-run-access";
+import type { EffectOption, ToolPolicyFact } from "../../../../../lib/types/new-run-access";
 
 const SENTENCES = new Map(reasons.map((r) => [r.key, r.text]));
 const RANK: Record<ToolEffect, number> = { allow: 0, hold: 1, deny: 2 };
@@ -75,16 +75,3 @@ export function ruleChoices(fact: ToolPolicyFact, harnessName: string, tool: str
     return { effect, available: !code, reason: reasonText(code, { harness: harnessName, tool, policy }) };
   });
 }
-
-/** A locked row as the server sends it, plus the `enforced` fact a policy rule may carry (A23). */
-export type LockedRow = LockedToolRule & { enforced?: boolean };
-
-/**
- * A locked policy row reads as enforced only when the server names something
- * that enforces it for this harness: Wardyn's gate, or the harness's own
- * settings, or the MCP broker for an MCP tool. `none`, an unknown enforcer and a
- * row the server marks `enforced:false` never do, whatever the lane.
- */
-export const lockedRowEnforced = (fact: Pick<ToolPolicyFact, "enforcer">, rule: LockedRow): boolean =>
-  rule.enforced !== false &&
-  (fact.enforcer === "wardyn_gate" || fact.enforcer === "harness_settings" || (fact.enforcer === "mcp_broker" && rule.tool.startsWith("mcp__")));

@@ -710,6 +710,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   can use a mixed pool's remote-hosted runners, and one denied remote launches only their own runners. Pool lists
   and preflight judge availability the same way. A remote-hosted runner stops taking your runs as soon as its people
   policy no longer admits you. `placement_required` is no longer returned.
+- New Run's screens follow the approved design: each screen sits in its own centred column with a numbered step
+  rail; Shape's workload choices go straight to Run; Run groups its questions with the pool's capacity and limits
+  and a barrier comparison; Review puts the view toggle beside its heading and Save, Check again and Launch in one
+  row; the run document's YAML/JSON switch changes format at once (text that does not parse stays in its format).
+  The "Recording" line, the "Before you launch" heading and relative waiting times are gone; server warnings show as
+  notices above the blockers. The GitHub CLI card says what works today: Actions and the REST API.
+- New Run's Files step follows its approved design: a main drive section (size, what happens to it), one card per
+  repository, drive and folder with its mount path and access, a starting folder picker and a read-only mount map. A
+  workspace's folders show as cards of their own and leave with its repositories. A run starts in the repository you
+  name, or in its workspace's first folder when none is named. A drive's mount path is read-only; a path outside
+  /home/agent is refused with "Use a path inside /home/agent."
 
 ### Removed
 
@@ -884,6 +895,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   owner name (defence in depth; no known caller reached the old gap).
 - As root on rootful Docker, `wardyn-runnerd` no longer runs a run's egress proxy as root: the proxy keeps its
   image's non-root user, and its spool directory is handed to that user.
+- A recording's review no longer files a host that only ends in a model provider's name (for example
+  notanthropic.com) as provider traffic; it now shows on the list you approve, as the server already treated it.
+- Adding a workspace refuses a folder with no mount path beside another such folder, or beside a folder or
+  repository placed at /home/agent/work: both would mount there, and every launch with that workspace failed. New
+  Run's Files step shows a folder that shares its workspace at the path the server mounts it, and shows a folder
+  read-only unless its source is writable.
+- An Azure DevOps git push held for approval no longer records a denied decision when the client hangs up before the
+  approval is decided; the hold just ends, as it already did for the Azure DevOps REST lane.
+
 
 ## [0.8.9] — 2026-10-09
 

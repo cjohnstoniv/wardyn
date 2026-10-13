@@ -229,7 +229,11 @@ func TestPG_CreateTakesThePoolBeforeTheRunCap(t *testing.T) {
 	}()
 	waiting := false
 	for deadline := time.Now().Add(5 * time.Second); !waiting && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if err := pool.QueryRow(ctx, `SELECT count(*) > 0 FROM pg_stat_activity
+		// pg_stat_activity is a snapshot per transaction; holder's has to be dropped for each look.
+		if _, err := holder.Exec(ctx, `SELECT pg_stat_clear_snapshot()`); err != nil {
+			t.Fatal(err)
+		}
+		if err := holder.QueryRow(ctx, `SELECT count(*) > 0 FROM pg_stat_activity
 			WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
@@ -238,13 +242,8 @@ func TestPG_CreateTakesThePoolBeforeTheRunCap(t *testing.T) {
 		t.Fatal("the create never waited on the held pool row")
 	}
 	var free bool
-	probe, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = probe.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1, 0)`, db.RunCapLockClass).Scan(&free)
-	_ = probe.Rollback(ctx)
-	if err != nil {
+	// Probed through the held connection: a second acquire from this goroutine trips WARDYN_TEST_POOL_GUARD.
+	if err := holder.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1, 0)`, db.RunCapLockClass).Scan(&free); err != nil {
 		t.Fatal(err)
 	}
 	if err := holder.Commit(ctx); err != nil {

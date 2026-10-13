@@ -14,7 +14,7 @@ import { BarrierCompareTable, type BarrierOption } from "./barrier-compare-table
 import { CAVEAT_PREFIX, CC_MATRIX_ROWS, CC_META } from "./cc-meta";
 
 const NARROW = ".hidden{display:none}";
-const WIDE = ".hidden{display:none}.md\\:block{display:block}.md\\:hidden{display:none}";
+const WIDE = ".hidden{display:none}.min-\\[521px\\]\\:block{display:block}.min-\\[521px\\]\\:hidden{display:none}";
 
 let sheet: HTMLStyleElement | undefined;
 function viewport(css: string) {
@@ -56,8 +56,8 @@ function Stateful() {
 }
 
 describe.each([
-  ["md and wider", WIDE],
-  ["below md", NARROW],
+  ["521 px and wider", WIDE],
+  ["below 521 px", NARROW],
 ])("BarrierCompareTable %s", (_name, css) => {
   it("has one radiogroup holding one live radio set", () => {
     viewport(css);
@@ -123,7 +123,7 @@ describe.each([
 });
 
 describe("BarrierCompareTable layouts", () => {
-  it("is a real table with column and row headers at md and wider", () => {
+  it("is a real table with column and row headers at 521 px and wider", () => {
     viewport(WIDE);
     renderTable();
     const table = screen.getByRole("table", { name: "Compare barriers" });
@@ -135,7 +135,7 @@ describe("BarrierCompareTable layouts", () => {
     expect(within(table).getAllByRole("radio")).toHaveLength(3);
   });
 
-  it("is a self-labelled card per barrier below md, with no table", () => {
+  it("is a self-labelled card per barrier below 521 px, with no table", () => {
     viewport(NARROW);
     renderTable();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
