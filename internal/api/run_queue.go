@@ -95,6 +95,14 @@ type queuedLaunch struct {
 	// the promotion sizes the run for each runner by it. Absent on a launch queued before it existed,
 	// which the promotion holds to the size it joined with.
 	Unbound *types.RunnerAmounts `json:"unbound,omitempty"`
+	// Barrier is the class the run was queued at and Drives whether it has drives: the queue's verdict
+	// holds each runner to them as the start's fold does, so it never offers a runner the start cannot
+	// keep. A launch queued before they existed is held to neither.
+	Barrier types.ConfinementClass `json:"barrier,omitempty"`
+	Drives  bool                   `json:"drives,omitempty"`
+	// NoLocal says the launch waits on the pool's remote-hosted runners and cannot run on the person's
+	// own (runPlacement.noLocal): the verdict and the start then keep it off them.
+	NoLocal bool `json:"no_local,omitempty"`
 }
 
 // queueWaitSec is the wait a launch gets: max_wait_sec when given, cut at seven days with a warning,
@@ -265,6 +273,7 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		Request: q.original, ProviderID: q.f.mpChoice.provider.ID, MaxWaitSec: waitSec, ConfinementDefault: q.f.confinementDefault,
 		Repos: runRepos(types.AgentRun{Repo: q.req.Repo}, nil), LifetimeCapSec: q.f.end.capSec,
 		Resources: s.runFitSpec(q.f.spec, q.f.mainDrive).Resources, Unbound: q.f.place.unbound,
+		Barrier: q.f.enforced, Drives: len(q.f.drives) > 0, NoLocal: q.f.place.noLocal,
 	}
 	launch.Repos = append(launch.Repos, repoLocatorsOf(q.f.spec.WorkspaceRepos)...)
 	if q.f.ceiling.Profile != nil {
