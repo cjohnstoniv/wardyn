@@ -420,13 +420,13 @@ type Config struct {
 	// first, so a token created through a row an admin has since disabled can
 	// still be revoked (ado_run_pat_sweep.go). Nil: the revoke uses ADOEntra.
 	ADOEntraByRow func(ctx context.Context, rowID string) (ADOEntraConfig, bool, error)
-	// AzureFoundryEntra resolves the Entra application an azure_foundry provider
-	// row signs people in against, by the row's uid (azure_foundry_entra.go). It
-	// answers found=false for a uid that is not an azure_foundry row. The
-	// application is always the console's own sign-in application, so a
-	// deployment without Entra console login answers an unusable configuration
-	// and both legs refuse. Nil: no Azure sign-in is offered.
+	// AzureFoundryEntra resolves the Entra application an azure_foundry provider row signs people in against,
+	// by the row's uid (azure_foundry_entra.go). It answers found=false for a uid that is not an azure_foundry
+	// row. The application is always the console's own sign-in application, so a deployment without Entra
+	// console login answers an unusable configuration and both legs refuse. Nil: no Azure sign-in is offered.
 	AzureFoundryEntra func(ctx context.Context, rowUID string) (ADOEntraConfig, bool, error)
+	// AzureCLIEntra is that same console application, keyed to an Azure CLI component's id (Server.azureCLIEntra).
+	AzureCLIEntra func(componentID string) ADOEntraConfig
 	// ADOLoginFacts is the console's own OIDC client, tenant and whether it holds a secret (S1; nil: none).
 	ADOLoginFacts func() (clientID, tenantID string, hasSecret bool)
 	// HostResolver is how the model-provider write boundary resolves an azure_foundry endpoint host for its

@@ -184,6 +184,8 @@ func segmentHazard(seg string) string {
 	switch {
 	case seg == "." || seg == "..":
 		return "is a dot segment — the service resolves it to a different route"
+	case isDotWithParam(seg):
+		return "is a dot segment carrying a path parameter — a layer that strips it resolves a dot segment"
 	case strings.TrimFunc(seg, unicode.IsSpace) != seg:
 		return "has leading or trailing whitespace — the service trims it before routing"
 	case strings.HasSuffix(seg, "."):
@@ -194,6 +196,13 @@ func segmentHazard(seg string) string {
 		return "still holds a separator"
 	}
 	return ""
+}
+
+// isDotWithParam reports whether seg is "." or ".." followed by a path
+// parameter (";x"), which a layer that strips parameters reads as a dot segment.
+func isDotWithParam(seg string) bool {
+	head, _, found := strings.Cut(seg, ";")
+	return found && (head == "." || head == "..")
 }
 
 // maxDecodeDepth bounds hidesStructure. Nothing legitimate on this API is
