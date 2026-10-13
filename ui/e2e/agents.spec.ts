@@ -7,6 +7,7 @@ import {
   test,
   expect,
   ADMIN_TOKEN,
+  chooseFiles,
   chooseRunMode,
   chooseShape,
   continueNewRun,
@@ -18,9 +19,13 @@ import {
   navToRoute,
   openNewRun,
   startGuided,
+  submitLaunch,
+  walkGuidedToFiles,
   walkGuidedToReview,
 } from "./fixtures";
 import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
+import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
+import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 import {
   AGENTS,
   PROVIDERS,
@@ -184,6 +189,50 @@ test.describe("agents — the admin authoring walk (real writes, real reload)", 
       // Roster first: a stored default naming a provider about to be removed
       // is refused. Both back to legacy open mode for the tests after this one.
       await putDoc(page, "/api/v1/agent-providers", {});
+      await putDoc(page, "/api/v1/model-providers", {});
+    }
+  });
+
+  test("the provider picked on Tools and access reaches the create, on the harness's own entry", async ({ page }) => {
+    // Two candidates for Claude Code and no default, so the choice is the person's.
+    await putDoc(page, "/api/v1/model-providers", {
+      providers: [
+        {
+          id: "bedrock-prod",
+          name: "Bedrock (prod)",
+          kind: "bedrock_sso",
+          bedrock: { region: "us-east-1", sso_start_url: "https://acme.awsapps.com/start" },
+          harnesses: [{ harness: "claude-code", model: "acme.claude-sonnet" }],
+        },
+        {
+          id: "corp-gateway",
+          name: "Corp gateway",
+          kind: "custom_endpoint",
+          base_url: "https://gateway.corp.example",
+          harnesses: [{ harness: "claude-code", path: "/anthropic" }],
+        },
+      ],
+    });
+    try {
+      // The check and the create are answered here: the subject is the body the console sends.
+      let created: { tools?: { id: string; kind: string; model_provider?: string }[] } | undefined;
+      await page.route("**/api/v1/runs/e2e-provider-run", (route) => route.fulfill({ json: { id: "e2e-provider-run", state: "PENDING" } }));
+      await page.route("**/api/v1/runs", async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        created = route.request().postDataJSON() as typeof created;
+        await route.fulfill({ status: 201, json: { id: "e2e-provider-run", state: "PENDING" } });
+      });
+      await mockPreflightClear(page);
+      await gotoConsole(page);
+      await openNewRun(page);
+      await walkGuidedToFiles(page, { shape: "agent_task", mode: "autonomous" });
+      await chooseFiles(page);
+      await continueNewRun(page, NR_TOOLS.TITLE);
+      await page.locator("#nr-provider-claude-code").selectOption("corp-gateway");
+      await continueNewRun(page, NR_REVIEW.TITLE);
+      await submitLaunch(page, "e2e provider pick");
+      await expect.poll(() => created?.tools?.find((t) => t.kind === "harness")).toMatchObject({ id: "claude-code", model_provider: "corp-gateway" });
+    } finally {
       await putDoc(page, "/api/v1/model-providers", {});
     }
   });
