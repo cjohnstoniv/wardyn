@@ -91,7 +91,7 @@ func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.
 	if s.runFit(ctx, types.RunPolicySpec{Resources: launch.Resources}, time.Duration(launch.LifetimeCapSec)*time.Second, false).refusal != "" {
 		return store.QueueVerdict{}, nil
 	}
-	return store.QueueVerdict{Admit: true, Runners: room.runners, Remotes: room.remotes}, nil
+	return store.QueueVerdict{Admit: true, Runners: room.runners, Remotes: room.remotes, Needs: room.needs}, nil
 }
 
 // queueRoom is queueRunnerFree's answer: why the run cannot start now ("" when it can), whether it names
@@ -102,6 +102,9 @@ type queueRoom struct {
 	pinned  bool
 	runners []uuid.UUID
 	remotes []string
+	// needs is the size the run would start with on each of those runners, by runner key; empty for a
+	// launch queued before its unbound size was recorded.
+	needs map[string]types.RunnerAmounts
 }
 
 // queueRunnerFree reports whether one of the owner's candidate targets in the pool can take a run now,
@@ -140,9 +143,11 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 		out.wait = runnerpool.WaitNoRunnerFree
 		return out, nil
 	}
-	// Room is read here without a lock, by each runner's declared limits and In use; the promotion
-	// holds the run's own size to it again under the runner rows' locks, the person's own runners first.
+	// Room is read here without a lock, by each runner's declared limits and In use, for the size the
+	// run would start with on that runner; the promotion holds that size to it again under the runner
+	// rows' locks, the person's own runners first.
 	fits := s.runnerFits(ctx)
+	out.needs = map[string]types.RunnerAmounts{}
 	online := false
 	for _, t := range targets {
 		kind := t.placement()
@@ -151,8 +156,15 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 		}
 		online = true
 		f := fits[t.id]
-		if t.full || runnerpool.Fits(f.limits, f.used, types.RunnerAmounts{}) != runnerpool.FitOK {
+		var need types.RunnerAmounts
+		if launch.Unbound != nil && f.limits != nil {
+			need = startSizeOn(*launch.Unbound, f.limits)
+		}
+		if t.full || runnerpool.Fits(f.limits, f.used, need) != runnerpool.FitOK {
 			continue
+		}
+		if launch.Unbound != nil {
+			out.needs[t.id] = need
 		}
 		if t.runnerID == nil {
 			out.remotes = append(out.remotes, t.executor)
