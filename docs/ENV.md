@@ -254,7 +254,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_ALLOW_USER_ENV_SECRET` | bool | (unset) | let MEMBERS hold `env_secret` and `file_secret` grants. Default-unset DROPS a member's `env_secret` or `file_secret` grant even when the operator's ceiling lists the exact pairing (`dropAdminOnlyEnvSecretGrants`, `inline_policy_bounds.go`). [Details](#wardyn_allow_user_env_secret) |
 | `WARDYN_EGRESS_SECOND_HUMAN` | bool | (unset) | four-eyes on egress approvals: the human who DECIDES an `egress_domain` approval must not be the human who created the run (`requireSecondHuman`, `approvals_second_human.go`). **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_egress_second_human) |
 | `WARDYN_CAPABILITY_SECOND_HUMAN` | bool | (unset) | four-eyes on Azure DevOps capability escalations: the human who DECIDES one must not be the human who created the run. **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_capability_second_human) |
-| `WARDYN_GOVERNANCE_SECOND_HUMAN` | bool | (unset) | four-eyes on governance writes: a write by a human to a governance profile, a capability grant or a key-domain assignment is stored as a pending change, and a second, distinct human must approve it. [Details](#wardyn_governance_second_human) |
+| `WARDYN_GOVERNANCE_SECOND_HUMAN` | bool | (unset) | four-eyes on governance writes: a human's write to a governance profile, a capability grant, a key-domain assignment or `local_credential_delivery` is stored as a pending change. A second, distinct human must approve it. [Details](#wardyn_governance_second_human) |
 | `WARDYN_GOVERNANCE_CHANGE_TTL` | duration | `72h` | how long a governance change held for a second human waits for approval (flag `-governance-change-ttl`); past it the change reads as `expired` and cannot be approved. [Details](#wardyn_governance_change_ttl) |
 | `WARDYN_HA` | bool | `false` | multi-replica mode (flag `-ha`): skip the single-instance lock so several wardynd replicas can serve one database; refused at boot unless the runner is the Kubernetes substrate. [Details](#wardyn_ha) |
 | `WARDYN_GOVERN_ADMIN_RUNS` | bool | (unset) | constrained-admin mode: govern every run an SSO admin or an admin-role personal API token launches, like a member's (flag `-govern-admin-runs`). **With OIDC unset the switch binds nobody**, and boot WARNs it (`warnGovernAdminRunsUnbound`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)). [Details](#wardyn_govern_admin_runs) |
@@ -761,7 +761,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - So after erasure the person's rows no longer name them.
 - **SIEM rules keyed on `actor` see subject ids, not names, from the moment it is turned on**.
 - And a person with no identity row (one who never signed in) keeps their name in `actor`.
-- Reads and the readable export show the person while their key exists and `[erased]` after; `?actor=<person>` and `?target=<person>` find both forms.
+- Reads and the readable export show the person while their key exists and `[erased]` after; `?actor=<person>` and `?target=<person>` find both forms, except that the subject form does not match a device-forwarded row.
 - Like `fields`, it applies to rows written after it is turned on.
 - A principal starting `subject:` is refused as a person everywhere (`reserved_principal`) whatever this is set to.
 
@@ -1192,7 +1192,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A Background task whose end comes before the cap is KILLED `end_reached` at its end. An Interactive run is kept at an earlier end, as always.
 - The lifecycle reaper still stops a RUNNING run older than this that carries no cap (a run from before 0.9), busy or not, and writes a `run.max_age.expire` audit row.
 - A run kept after a control-plane outage with its agent still running (before its end) is covered the same way.
-- A run kept with its agent already stopped (after its end, a reboot, or an outage past its end) is left to the reaper's files grace.
+- A run kept with its agent already stopped (after its end, a reboot, or an outage past its end) is not in the reaper's scan, because no agent runs. [`WARDYN_ENDED_RUN_GRACE`](#wardyn_ended_run_grace) decides when its files go.
 - The lease sweep still kills an outage-kept Background task at its end.
 - It is not `ends_at`, which a person may extend, but it bounds it: every new run records `lifetime_cap_at` (its creation plus this age).
 - A run launched from New Run or `POST /runs` that no source gives an end gets that cap as its end, and `no_end` at launch is refused with `403` naming this deployment.
@@ -1368,6 +1368,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A change nobody decides expires after `WARDYN_GOVERNANCE_CHANGE_TTL`.
 - Exempt, and applied directly: a profile update proven narrowing by its resolved effect, a rename, and a user type's name or description edit that leaves its priority alone.
 - No other target has a narrowing exemption.
+- The local credential delivery policy (`local_credential_delivery`, `PUT /governance/credential-delivery`) is held the same way.
 - A service identity's create (`POST /service-identities`) and any `PATCH /service-identities/{name}` that changes its sponsor are held the same way; the PATCH is held whole, so its description or suspend part applies only with it. A description or suspend `PATCH`, unsuspend and retire apply directly.
 - A role-mapping change is approved by a super admin only (a security admin is refused `admin_surface`).
 - Distinct means a different principal AND a different mailbox (case-folded), so one person holding an SSO session and an API token is not two humans.
@@ -1700,7 +1701,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The checkpoint advances only on an HTTP 2xx, which means accepted, not durable. Delivery is at-least-once: collectors deduplicate on `id`, or on `seq` + `row_hash`.
 - Each NDJSON line is the stored event (`id`, ..., `prev_hash`, `row_hash`, `seq`), plus `source` when `WARDYN_AUDIT_SOURCE` is set.
 - `buffer_size` and `max_retries` do not apply. A 408, a 429, a 5xx or a network error retries with backoff from `retry_base_delay`, doubling to 5 minutes and honouring `Retry-After` in seconds.
-- A redirect (never followed) or any other 4xx halts delivery until wardynd restarts (`wardyn_audit_delivery_halted`).
+- A redirect (never followed) or any other 4xx halts delivery until wardynd restarts or another replica takes over delivery (`wardyn_audit_delivery_halted`).
 - When retention removes rows past the checkpoint, retention is not blocked. Delivery records an `audit.delivery.reset` event, counts it in `wardyn_audit_delivery_resets_total` and resends from the oldest retained row.
 - At that ceiling you can lengthen retention, restore the collector before the drop, or accept the reported gap.
 - Turning the mode off keeps the checkpoint; re-enabling resends everything since it (or resets, if retention passed it). To start fresh at the current head, run `DELETE FROM audit_delivery_cursors WHERE destination = 'webhook'`.
@@ -1926,6 +1927,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_ARTIFACT_CONFIG_B64` 🔒 | base64 | (unset) | artifact config blob |
 | `WARDYN_CLAUDE_MANAGED_B64` 🔒 | base64 | (unset) | managed Claude credential blob |
 | `WARDYN_AWS_SSO_CONFIG_B64` 🔒 | base64 | (unset) | captured AWS SSO session, delivered as a minimal synthetic `~/.aws` (config + SSO token cache) and materialized by `agent-run`; the sandbox SDK exchanges it for short-lived Bedrock role credentials |
+| `WARDYN_AZURE_CLI_CONFIG_B64` | base64 | (unset) | an Azure CLI component's generated `~/.azure`, materialized by `agent-run`: the profile listing its subscriptions and a token cache whose access token is an inert placeholder. It carries no credential (`authorAzureCLI`, [`internal/api/runs_dispatch_cli_azure.go`](../internal/api/runs_dispatch_cli_azure.go)) |
 | `WARDYN_AWS_SSO_ACCOUNT_ID` | string | (unset) | the AWS account a sign-in in the **container-login** sandbox may capture, seeded from the agent roster row's `sso_account_id`. Set together with the role below, or not at all. [Details](#wardyn_aws_sso_account_id) |
 | `WARDYN_AWS_SSO_ROLE_NAME` | string | (unset) | the IAM role the same sign-in may capture, seeded from the roster row's `sso_role_name` and verified in the pinned account. Set together with the account above. [Details](#wardyn_aws_sso_role_name) |
 

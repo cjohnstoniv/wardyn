@@ -209,3 +209,55 @@ func TestRepoKey(t *testing.T) {
 		}
 	}
 }
+
+// pathParamDotSegments are the spellings of a dot segment carrying a path
+// parameter: a layer that strips ";params" from a segment reads each as "." or
+// "..", encoded or not.
+var pathParamDotSegments = []string{
+	"..;", ".;", "..;x=1", "..;a=b", ";", "..%3b", "..%3B", "%2e%2e;", "%2E%2E;", "%2e%2e%3b", "%2e;", "%252e%252e%253b",
+}
+
+// A dot segment with a path parameter is refused in every free-form tail.
+func TestClassifyRefusesPathParameterDotSegments(t *testing.T) {
+	for _, seg := range pathParamDotSegments {
+		if seg == ";" {
+			continue // a lone ";" is not a dot segment; admitted below
+		}
+		for _, path := range []string{
+			in + "/contents/" + seg + "/" + seg + "/other",
+			in + "/contents/" + seg + "/",
+			in + "/contents/dir/" + seg,
+			in + "/git/refs/heads/" + seg + "/x",
+			in + "/git/ref/heads/" + seg,
+			in + "/compare/" + seg + "...main",
+			in + "/compare/main.../" + seg,
+		} {
+			t.Run(path, func(t *testing.T) {
+				got, err := Classify(rest("GET " + path))
+				if err == nil {
+					t.Fatalf("Classify() = %+v, want a refusal", got)
+				}
+				if got != (Verdict{}) {
+					t.Fatalf("a refusal returned %+v — it must carry nothing", got)
+				}
+			})
+		}
+	}
+}
+
+// A ";" that does not follow a dot segment is an ordinary file-path character.
+func TestClassifyAdmitsPlainSemicolon(t *testing.T) {
+	classifyAll(t, []restCase{
+		{"GET " + in + "/contents/a;b", CapCodeRead},
+		{"GET " + in + "/contents/file;v=1.txt", CapCodeRead},
+		{"GET " + in + "/contents/.hidden;x", CapCodeRead},
+		{"GET " + in + "/contents/;x", CapCodeRead},
+		{"GET " + in + "/contents/;", CapCodeRead},
+		{"GET " + in + "/contents/..x;y", CapCodeRead},
+		{"GET " + in + "/contents/...;x", CapCodeRead},
+		{"GET " + in + "/contents/dir;a/file;b", CapCodeRead},
+		{"GET " + in + "/contents/a%3Bb", CapCodeRead},
+		{"GET " + in + "/git/refs/heads/feat;x", CapCodeRead},
+		{"GET " + in + "/contents/README.md", CapCodeRead},
+	}, "acme/app", "acme")
+}

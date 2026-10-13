@@ -573,3 +573,25 @@ func TestFinishedOutputStreamsAreReleasedOnBothPeers(t *testing.T) {
 	}
 	_ = sess.Close()
 }
+
+// A caps event with no capacity in it (as a runner that cannot read its engine sends) or a zero one is a
+// capacity the runner did not report: unknown, so a sized run is never held to a bound of nothing, while
+// a reported capacity still bounds it.
+func TestAdvertisedCapacityIsUnknownUntilBothSizesAreReported(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	for _, c := range []placement.Capacity{{}, {CPUMillisMax: 4000}, {MemoryMiBMax: 8192}} {
+		data, err := json.Marshal(runnerwire.Caps{Support: substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC1}}, Capacity: c})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rig.Sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+		if f, ok := rig.Sub.Advertised(); !ok || f.CapacityAdvertised {
+			t.Fatalf("caps capacity %+v = advertised %+v, %v; want facts with the capacity unknown", c, f, ok)
+		}
+	}
+	data, _ := json.Marshal(runnerwire.Caps{Capacity: placement.Capacity{CPUMillisMax: 4000, MemoryMiBMax: 8192}})
+	rig.Sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+	if f, _ := rig.Sub.Advertised(); !f.CapacityAdvertised || f.CPUMillisMax != 4000 || f.MemoryMiBMax != 8192 {
+		t.Fatalf("a reported capacity = %+v, want it advertised", f)
+	}
+}

@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -16,14 +17,16 @@ import (
 // poolMainDrive is what a pool's targets do with a run's main drive, as the pool list and both dry doors
 // state it. The enforcement word is the WEAKEST across the targets and unknown whenever any target's is
 // (offline, never reported) or there is no target, so a chip never claims more than every runner keeps.
-// Only a remote pool's executors can mount drives, and only when every one can.
-func poolMainDrive(targets []poolTarget, hosting types.RunnerPoolHosting, grace time.Duration) *client.MainDriveFacts {
+// The basis is the runner's own assertion when any target is a person's own runner (or a user pool has
+// no target at all); drives mount only when every target is a remote-hosted runner that mounts them.
+func poolMainDrive(targets []poolTarget, scope types.RunnerPoolScope, grace time.Duration) *client.MainDriveFacts {
 	f := &client.MainDriveFacts{Enforcement: client.MainDriveUnknown, Basis: types.RunEvidenceSubstrate}
-	if hosting == types.RunnerPoolSelfHosted {
+	selfHosted := slices.ContainsFunc(targets, func(t poolTarget) bool { return t.runnerID != nil })
+	if selfHosted || (len(targets) == 0 && scope == types.RunnerPoolUser) {
 		f.Basis = types.RunEvidenceRunnerAsserted
 	}
 	known := len(targets) > 0
-	keeps, mounts := known, known && hosting == types.RunnerPoolRemoteProvided
+	keeps, mounts := known, known && !selfHosted
 	weakest := types.StorageEnforcementFilesystem
 	for _, t := range targets {
 		known = known && !t.offline && t.facts.EphemeralDiskEnforcement != ""
@@ -55,15 +58,12 @@ func mainDriveWord(e types.StorageEnforcement) (client.MainDriveEnforcement, cli
 	return client.MainDriveNone, ""
 }
 
-// poolMainDriveFor is the facts for one permitted pool the way the list and the dry doors both ask: a
-// remote pool over the executors this deployment runs (each read through read), a self-hosted pool over
-// the caller's own runners the availability check already resolved (own).
+// poolMainDriveFor is the facts for one permitted pool the way the list and the dry doors both ask, over
+// every kind of runner in it: the remote-hosted runners this deployment runs (each read through read)
+// and, in a user pool, the caller's own runners the availability check already resolved (own).
 func (s *Server) poolMainDriveFor(row store.RunnerPoolCatalogueRow, own []poolTarget, read func(executor string) (runner.TargetFacts, bool)) *client.MainDriveFacts {
-	targets := own
-	if row.Pool.HostingType == types.RunnerPoolRemoteProvided {
-		targets, _ = executorTargets(row, s.configuredExecutors(), read)
-	}
-	return poolMainDrive(targets, row.Pool.HostingType, s.cfg.EndedRunGrace)
+	remote, _ := executorTargets(row, s.configuredExecutors(), read)
+	return poolMainDrive(append(slices.Clone(own), remote...), row.Pool.Scope, s.cfg.EndedRunGrace)
 }
 
 // onceExecutorFacts reads each executor's facts at most once per call site, so a failing executor held

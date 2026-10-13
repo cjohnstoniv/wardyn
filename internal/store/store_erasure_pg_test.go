@@ -429,3 +429,41 @@ func TestPG_PersonErasure_SubjectKeyDestroyedSince(t *testing.T) {
 		}
 	}
 }
+
+// A stored sign-in address is found by any casing of it through the alias
+// tier alone: the identity's current email is another address, so neither the
+// principal tier nor the email column can answer.
+func TestPG_PersonErasure_PrincipalsNamedAliasTierFoldsCase(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	for _, email := range []string{"Alias@Example.ORG", "current@corp.example"} {
+		if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "sub-alias", Issuer: "https://dex.example", Email: email}, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"alias@example.org", "ALIAS@Example.Org", "Alias@Example.ORG"} {
+		if got, err := st.PrincipalsNamed(ctx, name); err != nil || !slices.Equal(got, []string{"sub-alias"}) {
+			t.Errorf("PrincipalsNamed(%q) = %v, %v, want [sub-alias]", name, got, err)
+		}
+	}
+}
+
+// A people row follows only a sign-in of its own tenant: the same issuer and
+// object id under another tenant is a different person's identity.
+func TestPG_PersonErasure_PrincipalsNamedIgnoresASignInOfAnotherTenant(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	oid := uuid.NewString()
+	entra := "entra:" + idTenant + ":" + oid
+	if _, _, err := st.CreatePerson(ctx, types.Person{Principal: entra, Email: "kit@corp.example", Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "pairwise-elsewhere", Issuer: idIssuer, TenantID: uuid.NewString(), ObjectID: oid}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.PrincipalsNamed(ctx, entra); err != nil || !slices.Equal(got, []string{entra}) {
+		t.Errorf("PrincipalsNamed(%q) = %v, %v, want the people row alone", entra, got, err)
+	}
+}

@@ -87,7 +87,11 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 	// route keeps credentials only; it never reaches audit, run history or
 	// outputs.
 	var rep secretstore.EraseReport
-	orep, err := s.erasureOrchestrator(&rep).Orchestrate(r.Context(), owner, []erasure.Scope{erasure.Credentials})
+	var orep erasure.Report
+	names, err := s.erasureNamesOf(r.Context(), owner)
+	if err == nil {
+		orep, err = s.erasureOrchestrator(&rep, &names).Orchestrate(r.Context(), owner, []erasure.Scope{erasure.Credentials})
+	}
 	if errors.Is(err, errSignInConfigUnreadable) {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 			"credential.erase", owner, "failure", withSecretOwner(map[string]any{"count": 0, "reason": reasonCredentialEraseSignInConfigUnreadable}, owner, known)))
@@ -98,6 +102,12 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 	data := credentialEraseData(rep)
 	if done, ok := orep.Details[erasure.Credentials].(map[string]any); ok {
 		data = done // with runs_fenced
+	}
+	if ne, ok := notErasedDetail(names.notErased); ok {
+		data["not_erased"] = ne
+	}
+	if errors.Is(err, errErasureNameUnproved) || errors.Is(err, errErasureNamesChanged) {
+		data["error"] = err.Error()
 	}
 	resp := maps.Clone(data)
 	if err != nil {
@@ -153,7 +163,7 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 // read when the write began (beginCredentialWrite), so one that began before
 // the erase is refused with secretstore.ErrGenerationChanged and one that
 // begins after it lands. The audit row's write_fence says which held.
-func (s *Server) eraseLocked(ctx context.Context, owner, rowID string, rep *secretstore.EraseReport) error {
+func (s *Server) eraseLocked(ctx context.Context, owner, rowID string, want *erasureNames, rep *secretstore.EraseReport) error {
 	ctx, unlock, err := s.lockAWSSSOOwner(ctx, owner)
 	if err != nil {
 		return err
@@ -168,7 +178,7 @@ func (s *Server) eraseLocked(ctx context.Context, owner, rowID string, rep *secr
 		// generation when a replica first reads it. A renewal in flight writes its copy under
 		// the AWS lock, so retiring before the locks would let it land after the retire.
 		// Replicas that cached them keep masking them through grace.
-		namespaces, err := s.personNamespaces(ctx, owner)
+		namespaces, err := s.personNamespaces(ctx, owner, want)
 		if err != nil {
 			return err
 		}
@@ -187,23 +197,18 @@ func (s *Server) eraseLocked(ctx context.Context, owner, rowID string, rep *secr
 }
 
 // personNamespaces are the credential namespaces one person can hold: owner, and the
-// entra:<tenant>:<object> form the identity directory knows them by. A person an admin created by
-// object id and who then signed in under a pairwise subject has their credentials under the subject
-// now, but an install upgraded from 0.8.9 can still hold some under the object-id form, which the
-// subject alone does not reach. Both are erased, each through the fenced EraseOwner. The entra form
-// comes from the person's own tenant and object ids, never from an alias: an email claim is the
-// person's own text and can spell another person's entra:<tenant>:<object> namespace.
-func (s *Server) personNamespaces(ctx context.Context, owner string) ([]string, error) {
-	namespaces := []string{owner}
-	pe, err := s.personErasureStore()
-	if err != nil || owner == "" {
-		return namespaces, nil
-	}
-	entra, err := pe.PrincipalEntraNames(ctx, owner)
+// entra:<tenant>:<object> forms proved theirs (erasureNamesOf, re-proved here under the locks against
+// want). A person an admin created by object id and who then signed in under a pairwise subject has their
+// credentials under the subject now, but an install upgraded from 0.8.9 can still hold some under the
+// object-id form, which the subject alone does not reach. Both are erased, each through the fenced
+// EraseOwner. A form that another issuer's sign-in or another person holds is never erased.
+func (s *Server) personNamespaces(ctx context.Context, owner string, want *erasureNames) ([]string, error) {
+	proved, err := s.provedNames(ctx, owner, want)
 	if err != nil {
 		return nil, err
 	}
-	for _, a := range entra {
+	namespaces := []string{owner}
+	for _, a := range proved.entra {
 		if !slices.Contains(namespaces, a) && !s.isReservedPrincipal(a) {
 			namespaces = append(namespaces, a)
 		}

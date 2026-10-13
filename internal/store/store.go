@@ -109,6 +109,9 @@ func runInsertErr(err error) error {
 // carries a LaunchIntent is inserted with it in one transaction (store_launch_intents.go); the returned
 // run carries it only when it was kept.
 func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, error) {
+	if holdsRunnerSlot(r) {
+		return s.CreateRunUnderCap(ctx, r, 0)
+	}
 	args, err := s.createRunArgs(r)
 	if err != nil {
 		return types.AgentRun{}, err
@@ -150,22 +153,31 @@ var ErrRunCapReached = errors.New("store: deployment run cap reached")
 // runs (WARDYN_MAX_CONCURRENT_RUNS). The count and the insert share one
 // transaction-scoped advisory lock, so two replicas racing at the cap admit
 // exactly the cap. limit <= 0 is unlimited and takes no lock. Rows are counted,
-// not kept in a counter, so a crashed path cannot drift it.
+// not kept in a counter, so a crashed path cannot drift it. A run bound to a
+// registered runner is also held to that runner's max_runs under its row lock,
+// cap or none (RunnerAtCapacityError).
 func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) (types.AgentRun, error) {
-	if limit <= 0 {
+	if limit <= 0 && !holdsRunnerSlot(r) {
 		return s.CreateRun(ctx, r)
 	}
 	args, err := s.createRunArgs(r)
 	if err != nil {
 		return types.AgentRun{}, err
 	}
+	g, guarded := identityGuardFrom(ctx)
+	var since int64
+	if guarded {
+		if since, err = ReadRevocationSeq(ctx, s.Pool); err != nil {
+			return types.AgentRun{}, err
+		}
+	}
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return types.AgentRun{}, err
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
-	if g, ok := identityGuardFrom(ctx); ok {
-		if err := checkIdentityGuard(ctx, tx, g); err != nil {
+	if guarded {
+		if err := checkIdentityGuard(ctx, tx, g, since); err != nil {
 			return types.AgentRun{}, err
 		}
 	}
@@ -173,12 +185,28 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 	if err != nil {
 		return types.AgentRun{}, err
 	}
-	active, err := lockAndCountActiveRuns(ctx, tx, uuid.Nil)
-	if err != nil {
-		return types.AgentRun{}, err
+	// Every writer that adds a slot-holder takes the pool row, then the deployment cap's advisory lock,
+	// then runner rows: the insert's pool fence would take the pool row FOR SHARE after the advisory lock,
+	// the other way round from a promotion or a revive, so it is taken here first. (The launch intent's
+	// lock is a try-lock and never waits.)
+	if r.RunnerPoolID != nil {
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM runner_pools WHERE id = $1 FOR SHARE`, *r.RunnerPoolID); err != nil {
+			return types.AgentRun{}, fmt.Errorf("store: lock run pool: %w", err)
+		}
 	}
-	if active >= limit {
-		return types.AgentRun{}, ErrRunCapReached
+	if limit > 0 {
+		active, err := lockAndCountActiveRuns(ctx, tx, uuid.Nil)
+		if err != nil {
+			return types.AgentRun{}, err
+		}
+		if active >= limit {
+			return types.AgentRun{}, ErrRunCapReached
+		}
+	}
+	if holdsRunnerSlot(r) {
+		if err := admitOnRunner(ctx, tx, *r.RunnerID, uuid.Nil); err != nil {
+			return types.AgentRun{}, err
+		}
 	}
 	anchor, err := db.CaptureAppClock(ctx, tx, s.now)
 	if err != nil {

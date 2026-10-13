@@ -25,7 +25,7 @@ func TestListRunnerPoolsMainDriveForMember(t *testing.T) {
 	e.runner.execFacts["beta"] = runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1, types.CC2, types.CC3},
 		EphemeralDiskEnforcement: types.StorageEnforcementEviction, UserDrives: true}
 	remote := e.sizedPool("Remote", types.RunnerPoolAmount{Default: 1000, Cap: 2000})
-	home := e.createPool("Home server", types.RunnerPoolSelfHosted)
+	home := e.createPool("Home server", types.RunnerPoolUser)
 	laptop := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
 	e.addToPool(e.person, home.ID, laptop)
 	e.runner.runnerFacts[laptop.String()] = runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1, types.CC2},

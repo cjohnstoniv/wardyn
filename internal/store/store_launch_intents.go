@@ -95,9 +95,17 @@ func insertLaunchIntent(ctx context.Context, q queryRower, run types.AgentRun, d
 // createRunWithIntent is CreateRun's body when the run carries an intent: always one transaction, holding
 // the owner's identity rows when ctx carries a guard, as guarded does.
 func (s PG) createRunWithIntent(ctx context.Context, fn func(q queryRower) error) error {
+	g, guarded := identityGuardFrom(ctx)
+	var since int64
+	if guarded {
+		var err error
+		if since, err = ReadRevocationSeq(ctx, s.Pool); err != nil {
+			return err
+		}
+	}
 	return s.inTx(ctx, func(q Querier) error {
-		if g, ok := identityGuardFrom(ctx); ok {
-			if err := checkIdentityGuard(ctx, q.(pgx.Tx), g); err != nil {
+		if guarded {
+			if err := checkIdentityGuard(ctx, q.(pgx.Tx), g, since); err != nil {
 				return err
 			}
 		}

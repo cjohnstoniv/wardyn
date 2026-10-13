@@ -26,6 +26,7 @@ func TestADONames_ImportAndLaunch(t *testing.T) {
 		typed     = "https://dev.azure.com/contoso/Payments Platform/_git/Card Auth (v2).Service"
 		canonical = "https://dev.azure.com/contoso/Payments%20Platform/_git/Card%20Auth%20(v2).Service"
 	)
+	ownDatabase(t)
 	fr := newFakeRunner()
 	h := newHarness(t, harnessOpts{withRunner: fr})
 	ctx := context.Background()

@@ -397,7 +397,6 @@ func TestStartFolderRepoAndDrive(t *testing.T) {
 func TestRepoSelectionSubsetAndRef(t *testing.T) {
 	ws := repoWS("payments", helloRepo, spoonRepo)
 	ws.Sources[1].Ref = "stable"
-	srv := attachFixture(t, types.SiteConfig{}, ws)
 	body := func(repos string) string {
 		return `{"agent":"claude-code","task":"t","workspaces":[{"workspace_id":"` + ws.ID.String() + `","repos":` + repos + `}]}`
 	}
@@ -407,12 +406,12 @@ func TestRepoSelectionSubsetAndRef(t *testing.T) {
 		{`[{"repo":"` + spoonRepo + `"}]`, spoonRecord + "stable"},
 		{`[]`, ""},
 	} {
-		srv.cfg.Runner = &fakeRunner{}
-		if _, spec := createAndDispatch(t, srv, body(tc.repos)); spec.Env["WARDYN_REPOS"] != tc.want {
+		// A fixture per case: a run's detached watcher still reads srv.cfg.Runner.
+		if _, spec := createAndDispatch(t, attachFixture(t, types.SiteConfig{}, ws), body(tc.repos)); spec.Env["WARDYN_REPOS"] != tc.want {
 			t.Fatalf("repos %s: WARDYN_REPOS = %q, want %q", tc.repos, spec.Env["WARDYN_REPOS"], tc.want)
 		}
 	}
-	w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body(`[{"repo":"octocat/other"}]`))
+	w := do(t, attachFixture(t, types.SiteConfig{}, ws), http.MethodPost, "/api/v1/runs/preflight", adminToken, body(`[{"repo":"octocat/other"}]`))
 	var refusal errorBody
 	_ = json.Unmarshal(w.Body.Bytes(), &refusal)
 	if w.Code != http.StatusUnprocessableEntity || refusal.Reason != reasonWorkspaceRepoUnknown || refusal.Error != workspaceRepoUnknownMsg("octocat/other", "payments") {
@@ -845,6 +844,21 @@ func TestADOOrgConflictEveryPair(t *testing.T) {
 			if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), reasonWorkspaceADOOrgConflict) ||
 				!strings.Contains(w.Body.String(), "globex") || !strings.Contains(w.Body.String(), "initech") {
 				t.Fatalf("%s, %s: %d %s, want the globex/initech conflict", order, door.name, w.Code, w.Body.String())
+			}
+		}
+	}
+	// A repository dropped from the comparison list for sharing an earlier one's organisation must
+	// share its carrier set too: a2 (acme) is carried by beta alone, so g (globex, carried by
+	// alpha) conflicts with it even though a1 (acme, alpha) already answers for acme.
+	const a1, a2, a3, g = "https://dev.azure.com/acme/p/_git/a1", "https://dev.azure.com/acme/p/_git/a2", "https://dev.azure.com/acme/p/_git/a3", "https://dev.azure.com/globex/p/_git/g"
+	one, two := repoWS("one", a1, g), repoWS("two", a2, a3)
+	fourBody := policyCarriedBody([]types.Workspace{one, two}, []string{a1, a2, a3, g}, "")
+	for order, store := range storeOrders(one, two) {
+		srv := attachFixture(t, site, store...)
+		for _, door := range runDoors {
+			w := do(t, srv, http.MethodPost, door.path, adminToken, fourBody)
+			if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), reasonWorkspaceADOOrgConflict) {
+				t.Fatalf("four repositories, %s, %s: %d %s, want the acme/globex conflict", order, door.name, w.Code, w.Body.String())
 			}
 		}
 	}

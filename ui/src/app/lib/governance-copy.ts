@@ -401,6 +401,7 @@ export const CHANGES = {
     key_domain_assignment: "Key domain assignment",
     egress_baseline: "Egress baseline",
     runner_pool_use_policy: "Runner pool use policy",
+    remote_runner_people_policy: "Available to people's pools",
     service_identity: "Service identity",
     local_credential_delivery: DELIVERY.CHANGE_KIND,
   } as Record<string, string>,

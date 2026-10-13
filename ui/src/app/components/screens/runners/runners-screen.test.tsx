@@ -65,6 +65,9 @@ function runner(over: Partial<RunnerView> = {}): RunnerView {
     classes: ["CC1", "CC2"],
     allowed_roots: ["/Users/alice/src", "/Users/alice/scratch"],
     runs_active: 2,
+    max_runs: 2,
+    running: 1,
+    pools: [],
     ...over,
   };
 }

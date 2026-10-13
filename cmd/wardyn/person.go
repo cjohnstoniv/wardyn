@@ -16,9 +16,9 @@ import (
 func personCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "person",
-		Short: "Act on a person's retained records (security tier)",
+		Short: "Erase a person's retained records or invite them to create a token (security tier)",
 	}
-	cmd.AddCommand(personEraseCmd(client))
+	cmd.AddCommand(personEraseCmd(client), personInviteCmd(client), personInvitationsCmd(client))
 	return subcommandGroup(cmd)
 }
 
@@ -39,7 +39,7 @@ func personEraseCmd(client clientFn) *cobra.Command {
   run_tasks              the task text of the runs they created
   components             the components they saved and the content of each run's snapshot of one they defined; the snapshot row stays
   run_setups             their own run templates and revisions, their group template grants, and their name on shared templates
-  runner_pools           their own Self-Hosted runner pools (deleted; their runners stay)
+  runner_pools           their own user pools (deleted; their runners stay)
   member_drives          their own drives (deleted with their files; a drive a run holds fails the scope)
   audit_personal_fields  their sealed audit fields (the key is destroyed; the chain still verifies)
   credentials            their stored credentials and the key they sit under

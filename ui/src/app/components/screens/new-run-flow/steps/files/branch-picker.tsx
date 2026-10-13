@@ -15,7 +15,7 @@ import { repoBranches, type RepoBranches } from "../../../../../lib/api/repo-bra
 
 const OTHER = "\u0000other";
 const SELECT_CLASS =
-  "h-9 min-w-40 rounded-md border border-input bg-input-background px-3 font-mono text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
+  "h-[42px] w-full max-w-[220px] min-w-40 rounded-md border border-border-strong bg-input-background px-3 font-mono text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
 
 type Listing = { state: "idle" | "loading" | "failed" } | { state: "ready"; list: RepoBranches };
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -19,7 +20,7 @@ const ownerTestOrgHash = "org-hash"
 
 func ownPool(t *testing.T, pg store.PG, owner, name string) types.RunnerPool {
 	t.Helper()
-	p, err := pg.CreateRunnerPool(context.Background(), types.RunnerPool{ID: uuid.New(), Name: name, HostingType: types.RunnerPoolSelfHosted, Owner: owner}, owner)
+	p, err := pg.CreateRunnerPool(context.Background(), types.RunnerPool{ID: uuid.New(), Name: name, Scope: types.RunnerPoolUser, Owner: owner}, owner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,11 +67,11 @@ func TestPG_OversightCatalogueKeepsTheOrganisationsAndTheCallersOwnPools(t *test
 	pool := runsPGPoolIsolated(t)
 	pg := store.NewPG(pool)
 	ctx := context.Background()
-	if _, err := pool.Exec(ctx, `INSERT INTO runner_pools (id, name, hosting_type, owner)
-		SELECT gen_random_uuid(), 'a' || g, 'self_hosted', 'sub-' || g FROM generate_series(1, $1::int) g`, store.RunnerPoolsOversightMax); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO runner_pools (id, name, scope, owner)
+		SELECT gen_random_uuid(), 'a' || g, 'user', 'sub-' || g FROM generate_series(1, $1::int) g`, store.RunnerPoolsOversightMax); err != nil {
 		t.Fatal(err)
 	}
-	remote, err := pg.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "zz remote", HostingType: types.RunnerPoolRemoteProvided}, "admin")
+	remote, err := pg.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "zz remote", Scope: types.RunnerPoolOrganization}, "admin")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +96,13 @@ func TestPG_DeleteRunnerPoolsByOwnerWaitsForCreates(t *testing.T) {
 	pg := store.NewPG(pool)
 	ctx := context.Background()
 	ownPool(t, pg, "sub-leaver", "Laptop")
-	tx, err := pool.Begin(ctx)
+	// The hold is on a pool of its own: the erasure asks pool for a connection on this goroutine (WARDYN_TEST_POOL_GUARD).
+	holder, err := pgxpool.New(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	tx, err := holder.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,13 +124,16 @@ func TestPG_DeleteRunnerPoolsByOwnerWaitsForCreates(t *testing.T) {
 	}
 }
 
-// The Remote Provided bootstrap ignores person-owned pools: a member's own Self-Hosted pool made before
-// the first boot with executors does not stop the organisation's pool being made.
+// The organization pool bootstrap ignores person-owned pools: a member's own user pool made before the
+// first boot with remote-hosted runners does not stop the organisation's pool being made.
 func TestPG_BootstrapIgnoresPersonOwnedPools(t *testing.T) {
 	pg := store.NewPG(runsPGPoolIsolated(t))
 	ownPool(t, pg, "sub-early", "Laptop")
-	created, defaults, err := pg.BootstrapRunnerPools(context.Background(), []string{"docker"}, "Remote Provided")
-	if err != nil || created == nil || defaults == nil || defaults.RemoteProvided == nil || *defaults.RemoteProvided != created.ID {
+	if _, err := pg.EnsureRemoteRunners(context.Background(), []string{"docker"}); err != nil {
+		t.Fatal(err)
+	}
+	created, defaults, err := pg.BootstrapRunnerPools(context.Background(), []string{"docker"}, "Organization")
+	if err != nil || created == nil || defaults == nil || defaults.PoolID == nil || *defaults.PoolID != created.ID {
 		t.Fatalf("bootstrap beside a person's pool = %+v, %+v, %v; want the organisation's pool made and defaulted", created, defaults, err)
 	}
 }

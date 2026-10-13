@@ -197,6 +197,13 @@ func testUserDrives(t *testing.T, r runner.Runner, opts Options) {
 	}
 
 	if fx.Also != nil {
+		// The first case's sandbox would otherwise live to the end of this test, holding its agent and proxy pods'
+		// cpu requests while TwoDrives asks for two more: on a one-node kind runner that is "Insufficient cpu".
+		stopCtx, stop := context.WithTimeout(context.Background(), conformanceCleanupTimeout)
+		if err := r.StopSandbox(stopCtx, sb.Ref); err != nil {
+			t.Logf("stopping the first sandbox before TwoDrives: %v", err)
+		}
+		stop()
 		testTwoDrives(t, ctx, r, caps, opts, fx, withDrive)
 	}
 }

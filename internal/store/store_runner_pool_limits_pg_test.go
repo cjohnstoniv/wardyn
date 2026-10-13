@@ -44,11 +44,11 @@ func TestPG_RunnerPoolLimitsRoundTrip(t *testing.T) {
 	pg := store.NewPG(runsPGPoolIsolated(t))
 	ctx := context.Background()
 	want := poolLimitsFixture(t, 3)
-	limited, err := pg.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "Limited", HostingType: types.RunnerPoolRemoteProvided, Limits: want}, "test")
+	limited, err := pg.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "Limited", Scope: types.RunnerPoolOrganization, Limits: want}, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	plain, err := pg.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "Plain", HostingType: types.RunnerPoolSelfHosted, Owner: "nobody"}, "test")
+	plain, err := pg.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "Plain", Scope: types.RunnerPoolUser, Owner: "nobody"}, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestPG_RunnerPoolLimitsRoundTrip(t *testing.T) {
 func TestPG_RunnerPoolLimitsFeedTheContract(t *testing.T) {
 	pg := store.NewPG(runsPGPoolIsolated(t))
 	ctx := context.Background()
-	created, err := pg.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "Capped", HostingType: types.RunnerPoolRemoteProvided, Limits: poolLimitsFixture(t, 2)}, "test")
+	created, err := pg.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "Capped", Scope: types.RunnerPoolOrganization, Limits: poolLimitsFixture(t, 2)}, "test")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,7 +21,7 @@ import (
 
 func queuePool(t *testing.T, pg store.PG) types.RunnerPool {
 	t.Helper()
-	p, err := pg.CreateRunnerPool(context.Background(), types.RunnerPool{ID: uuid.New(), Name: "Queue " + uuid.NewString()[:8], HostingType: types.RunnerPoolRemoteProvided}, "test")
+	p, err := pg.CreateRunnerPool(context.Background(), types.RunnerPool{ID: uuid.New(), Name: "Queue " + uuid.NewString()[:8], Scope: types.RunnerPoolOrganization}, "test")
 	if err != nil {
 		t.Fatalf("create pool: %v", err)
 	}
@@ -234,7 +234,14 @@ func TestPG_QueueOrderPositionAndSkipLocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Rollback(ctx) //nolint:errcheck
-	b, err := pool.Begin(ctx)
+	// The second transaction is on a pool of its own: one goroutine holding two connections of one
+	// pool is what WARDYN_TEST_POOL_GUARD refuses.
+	other, err := pgxpool.New(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	b, err := other.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,9 +12,9 @@ import { RUNNER_POOL_REFUSAL, RUNNER_POOL_REFUSAL_REASON } from "../runner-pool-
 import type { ResolvedRunnerPool, RunnerPoolChoice } from "../types/runner-pools";
 import { noContract, preview, APPLIED_ORG, type FixtureBody } from "./base";
 
-const BUILD_FARM: RunnerPoolChoice = { id: "a1111111-1111-4111-8111-111111111111", name: "Build farm", hosting_type: "remote_provided", availability: "available" };
-const GPU_FARM: RunnerPoolChoice = { id: "a2222222-2222-4222-8222-222222222222", name: "GPU farm", hosting_type: "remote_provided", availability: "available" };
-const TEAM_LAPTOPS: RunnerPoolChoice = { id: "b1111111-1111-4111-8111-111111111111", name: "Team laptops", hosting_type: "self_hosted", availability: "available" };
+const BUILD_FARM: RunnerPoolChoice = { id: "a1111111-1111-4111-8111-111111111111", name: "Build farm", scope: "organization", availability: "available" };
+const GPU_FARM: RunnerPoolChoice = { id: "a2222222-2222-4222-8222-222222222222", name: "GPU farm", scope: "organization", availability: "available" };
+const TEAM_LAPTOPS: RunnerPoolChoice = { id: "b1111111-1111-4111-8111-111111111111", name: "Team laptops", scope: "user", availability: "available" };
 const NO_OWN_RUNNER: RunnerPoolChoice = {
   ...TEAM_LAPTOPS,
   availability: "unavailable",
@@ -24,7 +24,7 @@ const NO_OWN_RUNNER: RunnerPoolChoice = {
 const resolved = (pool: RunnerPoolChoice, selection: ResolvedRunnerPool["selection"], revision = 3): ResolvedRunnerPool => ({
   id: pool.id,
   name: pool.name,
-  hosting_type: pool.hosting_type,
+  scope: pool.scope,
   revision,
   selection,
 });
@@ -66,6 +66,6 @@ export const POOL_FIXTURES: FixtureBody[] = [
     route: "runner/pool-required",
     note: "No explicit pool and no default of any kind: the person must choose.",
     preview: answer([BUILD_FARM, GPU_FARM]),
-    refusal: { status: 422, reason: "runner_pool_required", text: RUNNER_POOL_REFUSAL.REQUIRED_ANY() },
+    refusal: { status: 422, reason: "runner_pool_required", text: RUNNER_POOL_REFUSAL.REQUIRED() },
   },
 ];

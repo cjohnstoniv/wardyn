@@ -62,6 +62,9 @@ type SuspendPlan struct {
 	// PurgeAfter schedules the automatic purge that long after the deactivation. Zero schedules
 	// none; an earlier schedule is kept.
 	PurgeAfter time.Duration
+	// PurgePrincipals are the principals whose identity rows the purge is scheduled for with IdentityID's:
+	// the person's own. A row of Principals not among them is deactivated and never scheduled.
+	PurgePrincipals []string
 	// PendingJobs are added as pending ledger rows in the same transaction, so a crash after the
 	// commit still leaves the rest of the suspension for the sweeper. Existing rows are kept.
 	PendingJobs []JobKey
@@ -105,7 +108,7 @@ type LeaverStore interface {
 	FailDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey, cause error) error
 	ReopenDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey) error
 	MarkIdentityPurged(ctx context.Context, id uuid.UUID, requireDue bool) (bool, error)
-	PurgeDueIdentities(ctx context.Context, limit int) ([]uuid.UUID, error)
+	PurgeDueIdentities(ctx context.Context, limit int) ([]DueIdentity, error)
 	PendingLeavers(ctx context.Context, idleFor time.Duration, limit int) ([]PendingLeaver, error)
 	DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals, emails []string) (grants, assignments, kept int64, err error)
 	HeldEmails(ctx context.Context, id uuid.UUID, principals, emails []string) ([]string, error)
@@ -335,16 +338,23 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 	if !found {
 		return SuspendResult{}, ErrNotFound
 	}
-	// Stamped by the database at the statement, after the locks: a sign-in that held a row finished
-	// before this reads the clock, so its cookie's issued-at is at or before the cutoff.
+	// A sign-in that held a row finished before this, so the cut below draws a greater revocation
+	// sequence than the one its cookie recorded.
 	if _, err = tx.Exec(ctx, `
 		UPDATE principal_identities
 		   SET deactivated_at = COALESCE(deactivated_at, clock_timestamp()), authority_epoch = authority_epoch + 1,
-		       purge_after = COALESCE(purge_after, CASE WHEN $3::bigint > 0 THEN clock_timestamp() + $3::bigint * interval '1 microsecond' END)
-		 WHERE id = $1 OR principal = ANY($2::text[])`, p.IdentityID, principals, p.PurgeAfter.Microseconds()); err != nil {
+		       purge_after = COALESCE(purge_after, CASE WHEN $3::bigint > 0 AND (id = $1 OR principal = ANY($4::text[]))
+		                                           THEN clock_timestamp() + $3::bigint * interval '1 microsecond' END)
+		 WHERE id = $1 OR principal = ANY($2::text[])`, p.IdentityID, principals, p.PurgeAfter.Microseconds(), nonEmptyStrings(p.PurgePrincipals)); err != nil {
 		return SuspendResult{}, fmt.Errorf("store: deactivate identities: %w", err)
 	}
-	for _, sub := range nonEmptyStrings(p.CutoffSubs) {
+	cutoffSubs := nonEmptyStrings(p.CutoffSubs)
+	if len(cutoffSubs) > 0 {
+		if err = LockRevocationOrder(ctx, tx); err != nil {
+			return SuspendResult{}, err
+		}
+	}
+	for _, sub := range cutoffSubs {
 		if _, err = tx.Exec(ctx, `
 			INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, clock_timestamp())
 			ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, sub); err != nil {
@@ -360,7 +370,7 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 			return SuspendResult{}, fmt.Errorf("store: reset deprovision jobs: %w", err)
 		}
 	}
-	detail, _ := json.Marshal(map[string]int{"sessions_cut": len(nonEmptyStrings(p.CutoffSubs))})
+	detail, _ := json.Marshal(map[string]int{"sessions_cut": len(cutoffSubs)})
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO deprovision_jobs (identity_id, kind, step, target, state, attempts, detail)
 		VALUES ($1, $2, $3, '', 'done', 1, $4)

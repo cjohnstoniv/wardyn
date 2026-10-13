@@ -70,15 +70,25 @@ func (s PG) MarkIdentityPurged(ctx context.Context, id uuid.UUID, requireDue boo
 	return true, nil
 }
 
-// PurgeDueIdentities is the identities deactivated and not yet purged whose purge_after has passed,
-// oldest first, at most limit. It is only a candidate read: MarkIdentityPurged re-checks under the lock.
-func (s PG) PurgeDueIdentities(ctx context.Context, limit int) ([]uuid.UUID, error) {
+// DueIdentity is one identity PurgeDueIdentities lists. Suspended says the identity has suspension
+// ledger rows of its own, as every identity a SCIM suspension was asked for does; one without was
+// deactivated alongside another identity's suspension, and the sweeper does not purge it.
+type DueIdentity struct {
+	ID        uuid.UUID
+	Suspended bool
+}
+
+// PurgeDueIdentities is the identities deactivated and not yet purged whose purge_after has passed, those
+// with suspension ledger rows of their own first, then oldest first, at most limit. It is only a candidate
+// read: MarkIdentityPurged re-checks under the lock.
+func (s PG) PurgeDueIdentities(ctx context.Context, limit int) ([]DueIdentity, error) {
 	return collect(ctx, s.Pool, "list", "identities due for purge", `
-		SELECT id FROM principal_identities
-		 WHERE purged_at IS NULL AND deactivated_at IS NOT NULL AND purge_after IS NOT NULL AND purge_after <= now()
-		 ORDER BY purge_after, id LIMIT $1`, []any{limit}, func(r pgx.Row) (uuid.UUID, error) {
-		var id uuid.UUID
-		return id, r.Scan(&id)
+		SELECT i.id, EXISTS (SELECT 1 FROM deprovision_jobs j WHERE j.identity_id = i.id AND j.kind = 'suspend') AS suspended
+		  FROM principal_identities i
+		 WHERE i.purged_at IS NULL AND i.deactivated_at IS NOT NULL AND i.purge_after IS NOT NULL AND i.purge_after <= now()
+		 ORDER BY suspended DESC, i.purge_after, i.id LIMIT $1`, []any{limit}, func(r pgx.Row) (DueIdentity, error) {
+		var d DueIdentity
+		return d, r.Scan(&d.ID, &d.Suspended)
 	})
 }
 
@@ -136,6 +146,9 @@ func (s PG) DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals,
 	if err = stripRunnerPoolUseSubjects(ctx, tx, subjects); err != nil {
 		return 0, 0, 0, err
 	}
+	if err = stripRemoteRunnerPeopleSubjects(ctx, tx, subjects); err != nil {
+		return 0, 0, 0, err
+	}
 	if len(held) > 0 {
 		err = tx.QueryRow(ctx, `SELECT
 			(SELECT count(*) FROM capability_grants WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[])) +
@@ -170,6 +183,24 @@ func stripRunnerPoolUseSubjects(ctx context.Context, q Querier, subjects []strin
 		FROM bumped WHERE u.pool_id = bumped.id`
 	if _, err := q.Exec(ctx, stmt, subjects); err != nil {
 		return fmt.Errorf("store: strip runner pool use policy subjects: %w", err)
+	}
+	return nil
+}
+
+// stripRemoteRunnerPeopleSubjects removes the user subjects (lower-cased forms) from every remote-hosted
+// runner's people policy and raises each changed runner's revision. A listed policy stays listed: an
+// emptied list admits nobody, never everyone.
+func stripRemoteRunnerPeopleSubjects(ctx context.Context, q Querier, subjects []string) error {
+	const stmt = `
+		UPDATE remote_runners rr
+		SET people_subjects = COALESCE((SELECT jsonb_agg(e) FROM jsonb_array_elements(rr.people_subjects) e
+		                                WHERE NOT (e->>'subject_type' = 'user' AND lower(e->>'subject') = ANY($1::text[]))), '[]'::jsonb),
+		    revision = rr.revision + 1, updated_by = 'leaver purge', updated_at = now()
+		WHERE rr.people_pools = 'listed' AND EXISTS (
+			SELECT 1 FROM jsonb_array_elements(rr.people_subjects) e
+			WHERE e->>'subject_type' = 'user' AND lower(e->>'subject') = ANY($1::text[]))`
+	if _, err := q.Exec(ctx, stmt, subjects); err != nil {
+		return fmt.Errorf("store: strip remote runner people subjects: %w", err)
 	}
 	return nil
 }

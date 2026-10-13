@@ -23,6 +23,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 const (
@@ -78,7 +79,7 @@ func (s *Server) withServiceState(r *http.Request, sis ...*types.ServiceIdentity
 			si.State = types.ServiceIdentitySponsorInactive
 			continue
 		}
-		status, err := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, si.Sponsor, "", s.cfg.Now(), -1)
+		status, err := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, si.Sponsor, "", oidc.Issue{At: s.cfg.Now()}, -1)
 		if err != nil {
 			return err
 		}
@@ -89,13 +90,8 @@ func (s *Server) withServiceState(r *http.Request, sis ...*types.ServiceIdentity
 	return nil
 }
 
-// serviceIdentityRequest is the POST /service-identities body.
-type serviceIdentityRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Sponsor     string `json:"sponsor"`
-	UserType    string `json:"user_type"`
-}
+// serviceIdentityRequest IS the SDK's body (dto_alias_test.go pins it).
+type serviceIdentityRequest = client.CreateServiceIdentityRequest
 
 func (s *Server) handleCreateServiceIdentity(w http.ResponseWriter, r *http.Request) {
 	ss, ok := s.serviceStoreOr409(w)
@@ -250,12 +246,8 @@ func (s *Server) handleGetServiceIdentity(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, si)
 }
 
-// updateServiceIdentityRequest is the PATCH body: the fields present change.
-type updateServiceIdentityRequest struct {
-	Description *string `json:"description"`
-	Sponsor     *string `json:"sponsor"`
-	Suspended   *bool   `json:"suspended"`
-}
+// updateServiceIdentityRequest IS the SDK's body (dto_alias_test.go pins it): the fields present change.
+type updateServiceIdentityRequest = client.UpdateServiceIdentityRequest
 
 func (s *Server) handleUpdateServiceIdentity(w http.ResponseWriter, r *http.Request) {
 	ss, ok := s.serviceStoreOr409(w)
@@ -397,7 +389,7 @@ func (s *Server) handleRetireServiceIdentity(w http.ResponseWriter, r *http.Requ
 	if s.cfg.Secrets != nil {
 		principal := retired.After.Principal()
 		var rep secretstore.EraseReport
-		_, eerr := s.eraseCredentialsScope(ctx, principal, &rep)
+		_, eerr := s.eraseCredentialsScope(ctx, principal, nil, &rep)
 		outcome := "success"
 		if eerr != nil {
 			outcome = "failure"
@@ -434,11 +426,8 @@ func (s *Server) sponsoredIdentity(w http.ResponseWriter, r *http.Request, sub s
 	return ss, si, true
 }
 
-// serviceTokenRequest is the POST /me/service-identities/{name}/tokens body.
-type serviceTokenRequest struct {
-	Name       string `json:"name"`
-	TTLSeconds int64  `json:"ttl_seconds,omitempty"`
-}
+// serviceTokenRequest IS the SDK's body (dto_alias_test.go pins it).
+type serviceTokenRequest = client.MintServiceTokenRequest
 
 // handleMintServiceToken is POST /api/v1/me/service-identities/{name}/tokens: the sponsor, signed in,
 // mints a token of the service identity and gets the plaintext once (D4). It shares the self-mint's
@@ -476,13 +465,36 @@ func (s *Server) handleMintServiceToken(w http.ResponseWriter, r *http.Request) 
 		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityInactive, "this deployment cannot check the sponsor's session, so a service token would never authenticate")
 		return
 	}
-	if !s.mintSessionLive(w, r, sub, authorizedAt) {
+	// An active record whose sponsor session is not live is sponsor_inactive: its tokens would be refused
+	// at once, so the mint is refused the way a suspended or retired identity's is.
+	if err := s.withServiceState(r, &si); err != nil {
+		writeServerError(w, r, "read the sponsor's session", err)
+		return
+	}
+	if si.State == types.ServiceIdentitySponsorInactive {
+		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityInactive, "this service identity's sponsor is not active; its tokens cannot be minted")
+		return
+	}
+	// The token records the revocation sequence read now, at its mint, and not the one the sponsor's
+	// session carries, so the number sits the same way against every principal's cuts: a cut of the
+	// sponsor, of the service principal or of everyone made before this read is at or below it, and one
+	// made after is above it. The read comes BEFORE the sponsor's late re-check: a cut of the sponsor the
+	// read covers has committed, so the re-check sees it and refuses the mint, and one it does not cover
+	// draws a greater sequence and ends the token.
+	issue, ierr := s.mintIssue(r.Context(), si.Principal(), authorizedAt)
+	if ierr != nil {
+		writeServerError(w, r, "create api token", ierr)
+		return
+	}
+	if _, ok := s.mintSessionLive(w, r, sub, authorizedAt); !ok {
 		return
 	}
 	expires := authorizedAt.Add(lifetime)
+	// RevSeq orders the token against its sponsor's revocation cuts (serviceTokenAuth) and its own
+	// principal's (a queued launch's owner check).
 	row := types.APIToken{
 		ID: uuid.New(), Principal: si.Principal(), Role: oidc.RoleUser, UserType: si.UserType, Groups: []string{},
-		GroupsTruncated: new(bool), Name: name, CreatedAt: authorizedAt, ExpiresAt: &expires,
+		GroupsTruncated: new(bool), Name: name, CreatedAt: authorizedAt, ExpiresAt: &expires, RevSeq: issue.Seq,
 	}
 	plaintext := newBearer(apiTokenPrefix)
 	created, err := ss.CreateServiceToken(guardOwner(r.Context(), sub), si.Name, sub, apiTokenMaxPerPrincipal, row, plaintext)

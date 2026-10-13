@@ -66,6 +66,20 @@ export interface RunnerView {
   classes?: ConfinementClass[];
   allowed_roots?: string[];
   runs_active: number;
+  /** The runner's "Runs at once" (1 to 64); only its owner changes it (PUT /me/runners/{id}). */
+  max_runs: number;
+  /** Runs holding a sandbox on the runner now: the count max_runs bounds. */
+  running: number;
+  /** The host name the runner last reported (registration, then each connect): runner-reported, never an identity. */
+  machine_name?: string;
+  /** The owner's live self-hosted pools this runner is a member of; [] for none. */
+  pools: RunnerPoolRef[];
+}
+
+/** Go: types.RunnerPoolRef: one pool a runner is a member of. */
+export interface RunnerPoolRef {
+  id: string;
+  name: string;
 }
 
 /** Go: types.RunnerRegistrationToken. The raw `token` is returned once, at mint; a list never carries it. */
@@ -92,6 +106,7 @@ export interface RunnerRegistration {
   fingerprint: string;
   state: RunnerState;
   org_url_sha256: string;
+  max_runs: number;
 }
 
 /** The revoke answers' body (an inline map in internal/api/runner_revoke.go). */
@@ -104,6 +119,11 @@ export interface RunnerRevokeAnswer {
 /** Go: types.RunnerClaimRequest. The fingerprint is the one the person read on their own computer. */
 export interface RunnerClaimRequest {
   fingerprint: string;
+}
+
+/** Go: types.RunnerUpdateRequest: an owner's change to their own runner. `max_runs` is required. */
+export interface RunnerUpdateRequest {
+  max_runs: number;
 }
 
 /** Go: types.RunnerSettingsRequest. `enabled` is required; the answer is site.ts's RunnerSettings. */
@@ -121,4 +141,5 @@ export type RunnerManagementReason =
   | "runner_filter_invalid"
   | "runner_session_required"
   | "runners_org_url_invalid"
-  | "runners_enabled_required";
+  | "runners_enabled_required"
+  | "runner_max_runs_invalid";

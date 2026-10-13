@@ -10,13 +10,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- Session, API token and SSH key revocation is now ordered by a database sequence instead of by comparing
+  clock times; the upgrade adds that sequence and records the order of the API tokens and SSH keys that already
+  exist. Sessions signed in before the upgrade keep the time comparison until they expire. During a rolling
+  upgrade a revocation written by a replica that has not been upgraded is not ordered against a sign-in that is
+  in flight, and tokens or keys it creates keep the time comparison: revoke again once the rollout finishes, or
+  upgrade one replica at a time.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `runners`,
   `runner_pending_actions`, `provider_connection_changes`, `runner_inventories`, `runner_pool_members`,
   `runner_pool_use_policies`, `run_queue`, `run_templates` and `template_group_admins`, and `SELECT, INSERT, UPDATE` on `run_template_revisions`, `template_group_labels`, `credential_delivery_policy`,
   `runner_registration_tokens`, `audit_delivery_cursors`, `runner_spool_cursors`, `runner_executions`,
   `runner_execution_exits`, `runner_inventory_candidates`, `runner_inventory_observations`, `runner_pools`,
-  `runner_pool_org_defaults`, `secret_owner_generations`, `person_invitations`, `service_identities` and
+  `runner_pool_org_defaults`, `remote_runners` (migration `0173_runner_pool_scope`), `secret_owner_generations`, `person_invitations`, `service_identities` and
   `api_token_moves`, `SELECT, INSERT` on `run_harnesses` (migration `0164_run_harnesses`), and `SELECT, INSERT, DELETE` on
   `run_launch_intents` (migration `0171_run_launch_intents`). Without the `runner_pools` grants wardynd refuses to start at the runner pool bootstrap.
   Without the `provider_connection_changes` grant every secret write fails once migration 0143's trigger on
@@ -101,6 +107,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   drive beside the old one. Remove the old allocation with `DELETE /drives/grants/{id}` or in the console.
 - `PUT /api/v1/runner-pool-defaults` replaces the whole document, so a PUT that leaves `barrier` out clears it; use
   `wardyn runner pool org-default set` (it reads first) or GET then PUT.
+- Runners registered before this release get Runs at once 2 (migration `0172_runner_max_runs`); a runner's owner
+  raises it with `wardyn runner set --max-runs N <runner-id>`.
 
 ### Added
 
@@ -501,6 +509,48 @@ and does not yet follow semantic versioning (interfaces are not stable).
   never holds Launch behind an item the Tools step cannot show; an ended sign-in, an own-token row or a missing
   console app is reported when you launch. The policy preview checks only whether a sign-in is stored, by name, and
   never reads it.
+- The Go SDK and the CLI now cover invitations and service identities: `wardyn person invite`, `person invitations`,
+  `invitation revoke`, `service-identity create|list|get|update|retire`, `service-identity token list|revoke` and
+  `token move`. There is no CLI claim and no CLI service-token mint, because both need a signed-in browser session.
+- Your account lists the invitations waiting for you and lets you claim them, and lists the service identities you
+  sponsor with a mint, a list and a revoke for each one's tokens. A new token is shown once and is held nowhere
+  after the dialog closes. Admin > Credentials gains a State column for tokens an admin created for someone else and
+  a toggle that adds the revoked ones. A moved token's row names its service identity, and minting a token for a
+  service identity whose sponsor is not active is refused like a suspended one.
+- `POST /api/v1/workspaces/{id}/build` with `{"refresh": true}` rebuilds a workspace's image from fresh inputs,
+  pulling a wrapped base image again, and swaps it in only if no other build replaced it meanwhile. The
+  `workspace.image.refresh` audit row names who asked and what changed. A build started from the build door that
+  loses that race removes its own image and reports `superseded`.
+- New Run step 2 (Run) shows the pools you can use for the run type, each unavailable pool with its reason, the
+  pool's capacity, your allowance, waiting, run types and per-run limits (with where each limit comes from), and the
+  three barriers with the reason one is unavailable. Schedule For Later and Application / server are marked Coming
+  soon.
+- `wardyn workspace build <workspace-id>` starts a workspace's image build, rebuilds it from fresh inputs with
+  `--refresh`, and prints the current state with `--status` (`--json` for the raw view, including whether the image
+  is reproducible). The Go SDK adds `BuildWorkspace` and `GetWorkspaceBuild`.
+- Runners: each runner has Runs at once (`max_runs`, 1–64), set with `wardyn-runnerd register --max-runs` (default
+  half the host's CPU cores) and changed only by its owner (`wardyn runner set --max-runs`, `PUT /me/runners/{id}`,
+  audited `runner.update`). Placement never exceeds it: a full runner refuses `runner_at_capacity`, and in a capped
+  pool the run waits with `runner_pool_runners_at_capacity`, then starts on whichever of its runners has room.
+  Runners report their machine name, runner views list their pools, and `GET /runner-pools/{id}/runners` lists a
+  pool's runners. Migration `0172_runner_max_runs`.
+- A user pool can mix your own runners with remote-hosted runners your admin made available to people's pools. A run
+  that names no placement goes to one of your own runners when one has room, otherwise to a remote-hosted runner;
+  `placement: local` or `placement: remote` (or a `runner_id`) fixes the kind, and a pool with no runner of that
+  kind is refused `runner_pool_member_mismatch`. A run with drives goes to the pool's remote-hosted runners. A
+  queued run that took your runner's last place keeps it when it starts.
+- Azure CLI signed in as you: an Azure CLI component names the subscriptions a run may reach and whether it may
+  change them. Each person signs in once with Microsoft Entra (`GET
+  /api/v1/components-entra/signin?component=<id>`); the sign-in stays with Wardyn. The sandbox holds an `~/.azure`
+  profile and a placeholder token cache; the proxy checks each `management.azure.com` request against the
+  component's subscriptions and access (`read` is GET and HEAD only) and adds a short-lived token. No Azure token is
+  placed in the sandbox. Resource Manager commands only: Storage, Key Vault and Microsoft Graph are not covered, and
+  a resource path with `;`, `?`, `#` or `%` in a name is refused (Azure Backup items and API Management revisions
+  among them). It needs the console to sign people in with Microsoft Entra, and that application to hold the
+  delegated permission "Azure Service Management · user_impersonation" with admin consent. Changing the component's
+  subscriptions, or deleting it, deletes everyone's sign-in for it.
+- The `full` and `harnesses` images include the Azure CLI (`az` 2.91.0), from Microsoft's apt repository with its
+  signing key checked by fingerprint and the version pinned.
 
 ### Changed
 
@@ -609,6 +659,32 @@ and does not yet follow semantic versioning (interfaces are not stable).
   tool rule or default, now goes through Wardyn's tool gate. Before, the policy's `tool_rules` were consulted only
   when the run asked for `tool_approvals: hold`. Tools nobody names still run without a prompt, and a blocked tool is
   refused at the proxy. The shipped default policy names no tools, so only policies that name tools change behaviour.
+- The console runs on React 19.3. Go modules (the Docker API client, go-spiffe, Kubernetes client libraries), the
+  base image digests and the console's minor and patch dependencies move to their latest releases.
+- A run that waits for a pool slot keeps the barrier its create resolved when the organisation lowers its default
+  barrier. When the organisation raises the default while the run waits, the run starts under the stronger class if
+  the pool offers it, and `run.queue.start` records `confinement_default_raised`. The `run.create` row of a launch
+  that waits now records the drives and the harness set it attaches, as a direct create does.
+- Each workspace image build records what it built from and the image it produced. `GET
+  /api/v1/workspaces/{id}/build` shows the record, its SHA-256 and whether the build is reproducible while the
+  record is current; the `run.build` audit row carries the record and its hash, and a workspace-image cache hit now
+  writes a `run.build` row too. Workspace image builds do not share an envbuilder layer cache: each build pushes
+  under its own tag and fetches every layer fresh.
+- `deny_placements` now holds each kind of runner in a pool, not the pool as a whole: a member denied local launches
+  can use a mixed pool's remote-hosted runners, and one denied remote launches only their own runners. Pool lists
+  and preflight judge availability the same way. A remote-hosted runner stops taking your runs as soon as its people
+  policy no longer admits you. `placement_required` is no longer returned.
+- New Run's screens follow the approved design: each screen sits in its own centred column with a numbered step
+  rail; Shape's workload choices go straight to Run; Run groups its questions with the pool's capacity and limits
+  and a barrier comparison; Review puts the view toggle beside its heading and Save, Check again and Launch in one
+  row; the run document's YAML/JSON switch changes format at once (text that does not parse stays in its format).
+  The "Recording" line, the "Before you launch" heading and relative waiting times are gone; server warnings show as
+  notices above the blockers. The GitHub CLI card says what works today: Actions and the REST API.
+- New Run's Files step follows its approved design: a main drive section (size, what happens to it), one card per
+  repository, drive and folder with its mount path and access, a starting folder picker and a read-only mount map. A
+  workspace's folders show as cards of their own and leave with its repositories. A run starts in the repository you
+  name, or in its workspace's first folder when none is named. A drive's mount path is read-only; a path outside
+  /home/agent is refused with "Use a path inside /home/agent."
 
 ### Removed
 
@@ -740,6 +816,62 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - `wardynd -recovery-manifest` now refuses at `pool_max_conns` below 2 and names the setting, instead of hanging.
 - `wardyn sync` and sftp now say when the runner is offline or the sandbox is gone, instead of blaming the sandbox
   image for a missing sftp-server.
+- A production runner advertised no capacity, so placement refused every sized run on it.
+- SCIM: a user create or update whose suspension cannot be read back answers 5xx so the identity provider retries,
+  instead of a 2xx with an empty identity; a PUT that omits `active` no longer reactivates a suspended user.
+- Sign-in: the session cookie's group budget counts the JSON escaping of `&`, `<` and `>`, so a group list full of
+  them cannot outgrow the cookie.
+- Directory: a failed token request no longer switches off App Role suggestions for the rest of the process.
+- People: creating a person answers 500 when the directory of known principals cannot be read, instead of skipping
+  the collision check.
+- Audit: an audit row the sealer refuses is logged by action and a fixed reason word. The webhook sink refuses a URL
+  with no scheme or host, or a scheme other than http or https, at start-up, and does not follow an https
+  collector's redirect to plain http (the batch counts as a failed delivery).
+- AWS KMS: a refused Decrypt answer (wrong key or wrong length) has its plaintext zeroed before the error returns.
+  The local-key refusal names `WARDYN_KEK=transit, azurekv or awskms`.
+- Setup: the "local-key rows remain" row appears again; it never showed in production because the store arrives
+  audit-wrapped.
+- Component config schemas refuse data after the single JSON value. Config-key secret detection also catches
+  `signing_key`, `encryption_key` and `connection_string`, and `SECRET_FILE`, `SECRET_PATH` and `SECRET_STORE` read
+  as plain settings.
+- Egress proxy: a host verdict the proxy does not recognise is denied as `policy:evaluator-error` instead of falling
+  through.
+- SSRF guard: the IANA non-globally-reachable IPv6 blocks (`2001::/32`, `2001:2::/48`, `2001:10::/28`,
+  `2001:db8::/32`, `3fff::/20`, `5f00::/16`, `100::/64`) are denied. The AWS IPv6 metadata block `fd00:ec2::/64` and
+  `100.100.100.200` are never liftable by `internal_hosts`, and the daemon proxy bypasses `fd00:ec2::254` too.
+- Egress denial text: a non-canonical literal IP (`10.1`, `127.1`, a zoned IPv6) gets the "denied unconditionally"
+  sentence, not the `internal_hosts` remedy.
+- Azure DevOps git refusals name the governing policy only when policy decided them, and a request whose client
+  hangs up mid-hold no longer records a denial.
+- Proxy shutdown keeps part of its deadline for the audit drain and survives a cancelled caller, so the last
+  decision rows reach the control plane; it returns both the HTTP and the sink errors.
+- `wardyn run --experience interactive --startup ...` says what the sandbox starts instead of "sandbox is idle";
+  `wardyn sync` ends a silent gateway handshake after 15 s and keeps at most 64 KiB of gateway stderr; `--ends-in
+  .5d` and `1..5d` are refused instead of being read as a fraction of an hour.
+- wardyn-tetragon-ingest no longer posts to `//api/...` when the control-plane URL ends in a slash, and
+  wardyn-runnerd exits 0 on SIGTERM.
+- A refused template-grant revoke says no grant was removed; SSH key owner refusals end "as the Audit log shows it";
+  the runner organisation URL refusal names the runner's rule.
+- Recovery verbs: manifest and cast reads refuse FIFOs without hanging, refusals name the verb that refused, source
+  ports outside 1 to 65535 are refused, the recorded host is lower case, and `-recovery-rehearse` runs behind the
+  boot transport.
+- remove_secrets now decides whether the caller is an operator by the operator check itself rather than by an empty
+  owner name (defence in depth; no known caller reached the old gap).
+- A recording's review no longer files a host that only ends in a model provider's name (for example
+  notanthropic.com) as provider traffic; it now shows on the list you approve, as the server already treated it.
+- Adding a workspace refuses a folder with no mount path beside another such folder, or beside a folder or
+  repository placed at /home/agent/work: both would mount there, and a launch that attached both failed. New
+  Run's Files step shows a folder that shares its workspace at the path the server mounts it, and shows a folder
+  read-only unless its source is writable.
+- An Azure DevOps git push held for approval no longer records a denied decision when the client hangs up before the
+  approval is decided; the hold just ends, as it already did for the Azure DevOps REST lane.
+- An Azure CLI component compares subscription ids without regard to case: an uppercase id is accepted, and one id
+  in two spellings is refused as listed twice.
+- The GitHub and Azure DevOps API path classifiers refuse a dot segment that carries a path parameter, such as `..;`
+  or `.;x`, in any percent-encoded spelling; a `;` elsewhere in a segment is still accepted.
+- When a governance profile denies Azure Resource Manager, a run with the Azure CLI no longer keeps the Entra
+  sign-in host open: the hosts the Azure CLI added for its door are removed with the door, and hosts the run's own
+  policy listed are untouched.
 
 
 ## [0.8.9] — 2026-10-09

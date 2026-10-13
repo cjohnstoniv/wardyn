@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -103,9 +104,18 @@ func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest, po
 	if pooled {
 		return p.Delivery, nil
 	}
-	return placement.DeliveryPolicy{}, runError(placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable),
-		"Your own runner is not available: this server does not place runs on runners.")
+	return placement.DeliveryPolicy{}, runError(placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable), localUnpooledMsg)
 }
+
+// remoteInsteadMsg follows a local refusal of a run its pool put on the person's own runner while a
+// remote-hosted runner in the pool could also take it: the pool never moves the run there by itself.
+func remoteInsteadMsg(pool string) string {
+	return "To run it on a remote-hosted runner in " + pool + " instead, launch it with placement remote."
+}
+
+// localUnpooledMsg is the refusal of a local run that no pool of the person's own places: a run reaches a
+// person's own runner only through one of their own pools.
+const localUnpooledMsg = "Your own runner is not available to this run: a local run goes to a pool of your own runners. Choose one, or create one in My pools and add your runner to it."
 
 // localPlanFacts fills what every LocalEligibility door (create, dispatch and
 // revive) judges a runner_resident credential on: the stored delivery policy,
@@ -222,12 +232,13 @@ func withinAnyRoot(path string, roots []string) bool {
 	})
 }
 
-// memberDriveNeverOnPool is a person's own drive on a self-hosted pool: never
-// placed there, permanently. Its volume or claim would live on that person's
-// machine, which deleting the drive cannot reach. No later proof a pool's
-// runners give about local paths (verifiedLocalPaths) relaxes it.
-func memberDriveNeverOnPool(pool types.RunnerPool, d types.UserDrive) bool {
-	return d.OwnerSubject != "" && pool.HostingType == types.RunnerPoolSelfHosted
+// memberDriveNeverOnPool is a person's own drive on a pool that has only
+// people's own runners: never placed there, permanently. Its volume or claim
+// would live on that person's machine, which deleting the drive cannot reach.
+// No later proof a pool's runners give about local paths (verifiedLocalPaths)
+// relaxes it.
+func memberDriveNeverOnPool(pool store.RunnerPoolCatalogueRow, d types.UserDrive) bool {
+	return d.OwnerSubject != "" && pool.Pool.Scope == types.RunnerPoolUser && len(pool.ExecutorIDs) == 0
 }
 
 func localTrustedOutputRequest(req createRunRequest) bool {

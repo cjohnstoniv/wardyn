@@ -62,7 +62,7 @@ func (rg *rehearseRig) addCasts(casts map[string]string) {
 // runSet rehearses the set at dir with the rig's key, reading the set from its manifest as main does.
 func (rg *rehearseRig) runSet(dir string) rehearsal {
 	rg.t.Helper()
-	m, err := readRecoveryManifest(dir)
+	m, err := readRecoveryManifest(dir, "verify the set")
 	if err != nil {
 		rg.t.Fatal(err)
 	}

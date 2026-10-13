@@ -99,6 +99,8 @@ type Caps struct {
 	placement.Capacity
 	AllowedRoots []string `json:"allowed_roots,omitempty"`
 	Version      string   `json:"version"`
+	// MachineName is the host's own name (os.Hostname), stored as the runner's machine_name.
+	MachineName string `json:"machine_name,omitempty"`
 }
 
 // Waiting is the `waiting` event's data.

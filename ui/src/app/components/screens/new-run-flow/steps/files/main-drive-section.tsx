@@ -10,6 +10,7 @@
 import * as React from "react";
 import { Input } from "../../../../ui/input";
 import { Label } from "../../../../ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "../../../../ui/popover";
 import { Chip } from "../../../../wardyn/primitives";
 import { InfoTip } from "../../../../wardyn/info-tip";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
@@ -19,6 +20,7 @@ import { commitSize, mainDriveMiB, mibToGibText, parseGiB, setMainDrive } from "
 import type { RunIntent } from "../../draft/run-intent";
 import { useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import type { MainDriveFacts, MainDriveView } from "./files-seams";
+import { FilesGroup } from "./kind-visuals";
 
 export const SIZE_INPUT_ID = "nr-main-drive-size";
 const UNIT = NR_SHARED.GIB("").trim();
@@ -47,7 +49,7 @@ export function lifecycleOf(intent: RunIntent, view: MainDriveView): Lifecycle {
   return { kind: "kept", grace: hoursText(keep.grace_sec), max: view.maxLifetimeSec ? hoursText(view.maxLifetimeSec) : undefined };
 }
 
-const lifecycleText = (l: Lifecycle): string | undefined =>
+export const lifecycleText = (l: Lifecycle): string | undefined =>
   l.kind === "deleted" ? NR_FILES.LIFE_DELETED
     : l.kind === "noEnd" ? NR_FILES.LIFE_NO_END
       : l.kind === "kept" ? (l.max ? NR_FILES.LIFE_KEPT(l.max, l.grace) : NR_FILES.LIFE_KEPT_UNLIMITED(l.grace))
@@ -59,15 +61,19 @@ const ENFORCEMENT = {
   none: { word: NR_FILES.NOT_ENFORCED, tip: NR_FILES.NOT_ENFORCED_TIP, label: NR_FILES.NOT_ENFORCED_ARIA, tone: "warning" },
 } as const;
 
-/** W1: one chip per enforcement word, with its tooltip; unknown says nothing. */
+/** W1: one chip per enforcement word; the chip itself opens its tooltip on a tap. Unknown says nothing. */
 function Enforcement({ facts }: { facts: MainDriveFacts }) {
   if (facts.enforcement === "unknown") return null;
   const { word, tip, label, tone } = ENFORCEMENT[facts.enforcement];
   return (
-    <span className="inline-flex items-center gap-1">
-      <Chip tone={tone}>{facts.basis === "runner_asserted" ? `${word} ${NR_FILES.REPORTED_BY_RUNNER}` : word}</Chip>
-      <InfoTip label={label}>{tip}</InfoTip>
-    </span>
+    <Popover>
+      <PopoverTrigger asChild>
+        <button type="button" aria-label={label} className="rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring">
+          <Chip tone={tone}>{facts.basis === "runner_asserted" ? `${word} ${NR_FILES.REPORTED_BY_RUNNER}` : word}</Chip>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="end" className="w-[250px] text-sm">{tip}</PopoverContent>
+    </Popover>
   );
 }
 
@@ -125,49 +131,48 @@ export function MainDriveSection({ view, size }: { view: MainDriveView; size: Re
   const life = lifecycleText(lifecycleOf(draft.intent, view));
 
   return (
-    <section aria-labelledby="nr-main-title" className="flex flex-col gap-3 rounded-lg border border-border p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 id="nr-main-title" className="font-semibold">{NR_FILES.MAIN_TITLE}</h2>
-          <p className="text-sm text-muted-foreground">{NR_FILES.MAIN_BODY}</p>
+    <FilesGroup titleId="nr-main-title" title={NR_FILES.MAIN_TITLE} body={NR_FILES.MAIN_BODY} aside={<span className="text-meta font-semibold uppercase tracking-[0.08em] text-warning">{NR_SHARED.REQUIRED}</span>}>
+      <div className="grid gap-3 px-[15px] py-3.5">
+        <div className="grid grid-cols-[70px_125px_minmax(175px,1fr)_auto] items-center gap-2.5 text-sm max-[520px]:grid-cols-[1fr_auto]">
+          <Label htmlFor={SIZE_INPUT_ID} className="font-medium text-muted-foreground max-[520px]:col-span-full">{NR_FILES.SIZE_LABEL}</Label>
+          {/* At phone width the row stacks: label, the input across the row, the cap, then the chip. */}
+          <span className="relative flex items-center max-[520px]:col-span-full">
+            <Input
+              id={SIZE_INPUT_ID}
+              type="number"
+              inputMode="decimal"
+              min={0}
+              step={0.1}
+              className="h-[42px] pr-10"
+              value={size.text}
+              aria-invalid={showError || undefined}
+              aria-describedby={showError ? errorId : undefined}
+              onChange={(e) => size.setText(e.target.value)}
+              onBlur={() => { setTouched(true); size.commit(); }}
+            />
+            <span aria-hidden="true" className="pointer-events-none absolute right-3 text-sm text-muted-foreground">{UNIT}</span>
+          </span>
+          <span className="text-muted-foreground max-[520px]:col-span-full">{view.capMib !== undefined && NR_FILES.UP_TO(mibToGibText(view.capMib, "floor"))}</span>
+          <span className="max-[520px]:col-span-full">{view.facts && <Enforcement facts={view.facts} />}</span>
         </div>
-        <Chip>{NR_SHARED.REQUIRED}</Chip>
-      </div>
-      <div className="flex flex-wrap items-center gap-3">
-        <Label htmlFor={SIZE_INPUT_ID}>{NR_FILES.SIZE_LABEL}</Label>
-        <Input
-          id={SIZE_INPUT_ID}
-          type="number"
-          inputMode="decimal"
-          min={0}
-          step={0.1}
-          className="w-28"
-          value={size.text}
-          aria-invalid={showError || undefined}
-          aria-describedby={showError ? errorId : undefined}
-          onChange={(e) => size.setText(e.target.value)}
-          onBlur={() => { setTouched(true); size.commit(); }}
-        />
-        <span className="text-sm text-muted-foreground">{UNIT}</span>
-        {view.capMib !== undefined && <span className="text-sm text-muted-foreground">{NR_FILES.UP_TO(mibToGibText(view.capMib, "floor"))}</span>}
-        {view.facts && <Enforcement facts={view.facts} />}
-      </div>
-      {size.note && <p className="text-sm text-muted-foreground">{size.note}</p>}
-      {showError && <p id={errorId} className="text-sm text-danger">{NR_FILES.SIZE_ERROR}</p>}
-      {life && (
-        <div className="flex flex-col gap-1">
-          <span className="text-sm font-medium">{NR_FILES.LIFE_LABEL}</span>
-          <p className="text-sm">{life}</p>
+        {size.note && <p className="text-sm text-muted-foreground">{size.note}</p>}
+        {showError && <p id={errorId} className="text-sm text-danger">{NR_FILES.SIZE_ERROR}</p>}
+        {life && (
+          <div className="grid grid-cols-[150px_1fr] items-start gap-3 border-t border-border pt-[11px] max-[520px]:grid-cols-1">
+            <span className="text-sm font-medium text-muted-foreground">{NR_FILES.LIFE_LABEL}</span>
+            <strong className="text-sm leading-[1.45] font-semibold">{life}</strong>
+          </div>
+        )}
+        {/* Make's rule row: a 150 px column holding the checkbox, its label and Coming soon, then the tooltip. */}
+        <div className="grid grid-cols-[150px_1fr] items-start gap-3 border-t border-border pt-[11px] text-sm max-[520px]:grid-cols-1">
+          <span className="flex flex-wrap items-center gap-2 opacity-60">
+            <input id="nr-reuse-drive" type="checkbox" disabled className="size-4" />
+            <label htmlFor="nr-reuse-drive" className="font-semibold">{NR_FILES.REUSE_LABEL}</label>
+            <Chip>{NR_SHARED.COMING_SOON}</Chip>
+          </span>
+          <span><InfoTip label={NR_FILES.REUSE_ARIA}>{NR_FILES.REUSE_TIP}</InfoTip></span>
         </div>
-      )}
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <label className="flex items-center gap-2">
-          <input type="checkbox" disabled />
-          {NR_FILES.REUSE_LABEL}
-        </label>
-        <Chip>{NR_SHARED.COMING_SOON}</Chip>
-        <InfoTip label={NR_FILES.REUSE_ARIA}>{NR_FILES.REUSE_TIP}</InfoTip>
       </div>
-    </section>
+    </FilesGroup>
   );
 }

@@ -46,11 +46,11 @@ const attachTicketTTL = 30 * time.Second
 // this stamped role is the only signal available to re-check the owner rule
 // when the ticket is consumed (see attach.go's handleAttachWS).
 //
-// now is the time the minting request was ADMITTED, and it is stamped on the
-// ticket as the authority time (#1474): redemption asks whether a revoke landed
-// since. The email is the verified identity's, from ctx — "" on the admin-token
+// issue.At is the time the minting request was ADMITTED, and it is stamped on the
+// ticket as the authority time (#1474), with issue.Seq, the revocation sequence
+// the ticket records: redemption asks whether a revoke landed since. The email is the verified identity's, from ctx — "" on the admin-token
 // and local lanes — because a revoke may name the email instead of the subject.
-func mintAttachTicket(ctx context.Context, st store.Store, runID uuid.UUID, actorType types.ActorType, principal, role string, now time.Time) (string, error) {
+func mintAttachTicket(ctx context.Context, st store.Store, runID uuid.UUID, actorType types.ActorType, principal, role string, issue oidc.Issue) (string, error) {
 	var via *types.DelegationVia
 	if v, ok := audit.DelegationFrom(ctx); ok {
 		via = &v
@@ -61,8 +61,8 @@ func mintAttachTicket(ctx context.Context, st store.Store, runID uuid.UUID, acto
 	}
 	tok := hex.EncodeToString(raw)
 	t := store.AttachTicket{RunID: runID, ActorType: actorType, Principal: principal, Role: role, Via: via,
-		AuthorizedAt: now.UTC(), Email: oidcEmailFromContext(ctx)}
-	if err := st.MintAttachTicket(ctx, tok, t, now, now.Add(attachTicketTTL)); err != nil {
+		AuthorizedAt: issue.At.UTC(), RevSeq: issue.Seq, Email: oidcEmailFromContext(ctx)}
+	if err := st.MintAttachTicket(ctx, tok, t, issue.At, issue.At.Add(attachTicketTTL)); err != nil {
 		return "", err
 	}
 	return tok, nil
@@ -84,7 +84,7 @@ func consumeAttachTicket(ctx context.Context, st store.Store, tok string, runID 
 		return ticketActor{}, false, nil
 	}
 	return ticketActor{actorType: t.ActorType, principal: t.Principal, role: t.Role, via: t.Via,
-		authorizedAt: t.AuthorizedAt, email: t.Email}, true, nil
+		authorizedAt: t.AuthorizedAt, revSeq: t.RevSeq, email: t.Email}, true, nil
 }
 
 // ticketActorCtxKey carries the ticket's minting principal through to
@@ -111,6 +111,7 @@ type ticketActor struct {
 	// (#1475, set by redeemAttachTicket). authorizedAt is zero on a row written
 	// before the column existed, which redemption refuses.
 	authorizedAt time.Time
+	revSeq       int64
 	email        string
 	grantExpires time.Time
 }
@@ -224,11 +225,19 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	if s.isOperator(r.Context()) && !asSponsor {
 		role = oidc.RoleAdmin
 	}
+	// The ticket's sequence is read before the late re-check, so a cut that commits between the two draws
+	// a sequence above the one recorded and ends the ticket (the order handleCreateAPIToken and
+	// handleAddSSHKey keep).
+	issue, err := s.mintIssue(r.Context(), principal, authorizedAt)
+	if err != nil {
+		writeServerError(w, r, "mint attach ticket", err)
+		return
+	}
 	// A revoke that landed while this request was in flight must not leave a
 	// ticket behind: the same late re-check as handleCreateAPIToken, and the same
 	// fail-closed answer when it cannot be made.
 	if s.cfg.SessionRevocations != nil {
-		revoked, rerr := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), principal, oidcEmailFromContext(r.Context()), authorizedAt)
+		revoked, rerr := oidc.IsRevoked(r.Context(), s.cfg.SessionRevocations, principal, oidcEmailFromContext(r.Context()), admittedIssue(r.Context(), principal, authorizedAt))
 		if rerr != nil {
 			writeServerError(w, r, "mint attach ticket", rerr)
 			return
@@ -238,7 +247,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	tok, err := mintAttachTicket(r.Context(), s.cfg.Store, id, at, principal, role, authorizedAt)
+	tok, err := mintAttachTicket(r.Context(), s.cfg.Store, id, at, principal, role, issue)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardynd: mint attach ticket failed", "run_id", id, "err", err)
 		writeErrorReason(w, http.StatusInternalServerError, reasonAttachTicketMintFailed, "mint attach ticket failed")

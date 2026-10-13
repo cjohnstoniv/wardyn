@@ -272,7 +272,7 @@ func TestEffectiveConcurrencyIsListedNeverFolded(t *testing.T) {
 }
 
 func testPool(l *types.RunnerPoolLimits) types.RunnerPool {
-	return types.RunnerPool{ID: uuid.New(), Name: "App servers", HostingType: types.RunnerPoolRemoteProvided, State: types.RunnerPoolActive, Revision: 1, Limits: l}
+	return types.RunnerPool{ID: uuid.New(), Name: "App servers", Scope: types.RunnerPoolOrganization, State: types.RunnerPoolActive, Revision: 1, Limits: l}
 }
 
 func appServerPool() types.RunnerPoolLimits {

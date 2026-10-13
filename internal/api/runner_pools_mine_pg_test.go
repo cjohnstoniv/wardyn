@@ -3,9 +3,9 @@
 
 package api
 
-// A person's own Self-Hosted pools against a real Postgres (H14-api): only the owner creates, changes,
+// A person's own user pools against a real Postgres (H14-api): only the owner creates, changes,
 // deletes or uses one; another person, and an administrator writing, meet the answer an unknown id gets;
-// the organisation keeps no Self-Hosted default; administrators oversee every pool read-only; erasure
+// the organisation keeps no user pool as its default; administrators oversee every pool read-only; erasure
 // removes a person's pools; and a person reads which of their pools each runner is in.
 //
 // Guarded by WARDYN_TEST_PG (throwawayPGPool): skipped cleanly when unset, must PASS when set.
@@ -30,20 +30,22 @@ import (
 
 func myPoolPath(id uuid.UUID) string { return "/api/v1/me/runner-pools/" + id.String() }
 
-// A person creates, edits and deletes their own Self-Hosted pools; names are unique per owner only.
+func myRemotePath(id uuid.UUID, rid string) string { return myPoolPath(id) + "/remote-runners/" + rid }
+
+// A person creates, edits and deletes their own user pools; names are unique per owner only.
 func TestPG_MyRunnerPoolsCreateEditDelete(t *testing.T) {
 	e := newPoolEnv(t, false)
 	laptop := e.createOwnPool(e.person, "Laptop")
-	if laptop.HostingType != types.RunnerPoolSelfHosted || laptop.Owner != e.personP || laptop.Revision != 1 {
-		t.Fatalf("created %+v, want a Self-Hosted pool owned by %s at revision 1", laptop, e.personP)
+	if laptop.Scope != types.RunnerPoolUser || laptop.Owner != e.personP || laptop.Revision != 1 {
+		t.Fatalf("created %+v, want a user pool owned by %s at revision 1", laptop, e.personP)
 	}
 	// Another person may use the same name: one person's names tell nobody else anything.
 	e.createOwnPool(e.other, "Laptop")
 	if w := e.call(e.person, http.MethodPost, "/api/v1/me/runner-pools", `{"name":"laptop"}`); w.Code != http.StatusBadRequest {
 		t.Errorf("a duplicate of one's own name = %d %s, want 400", w.Code, w.Body)
 	}
-	if w := e.call(e.person, http.MethodPost, "/api/v1/me/runner-pools", `{"name":"x","hosting_type":"remote_provided"}`); w.Code != http.StatusBadRequest {
-		t.Errorf("a hosting type on a person's create = %d %s, want 400: the route makes Self-Hosted pools only", w.Code, w.Body)
+	if w := e.call(e.person, http.MethodPost, "/api/v1/me/runner-pools", `{"name":"x","scope":"organization"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("a scope on a person's create = %d %s, want 400: the route makes user pools only", w.Code, w.Body)
 	}
 	if w := e.admin(http.MethodPost, "/api/v1/me/runner-pools", `{"name":"Bearer"}`); w.Code != http.StatusForbidden {
 		t.Errorf("the admin token creating a personal pool = %d %s, want 403", w.Code, w.Body)
@@ -67,8 +69,8 @@ func TestPG_MyRunnerPoolsCreateEditDelete(t *testing.T) {
 		if len(rows) != n {
 			t.Fatalf("%s rows = %d, want %d", action, len(rows), n)
 		}
-		if d := auditData(t, rows[0]); d["owner"] != e.personP || d["hosting_type"] != string(types.RunnerPoolSelfHosted) {
-			t.Errorf("%s row = %v, want the owner and the hosting type", action, d)
+		if d := auditData(t, rows[0]); d["owner"] != e.personP || d["scope"] != string(types.RunnerPoolUser) {
+			t.Errorf("%s row = %v, want the owner and the scope", action, d)
 		}
 	}
 }
@@ -81,11 +83,11 @@ func TestPG_MyRunnerPoolsPerPersonCap(t *testing.T) {
 		e.createOwnPool(e.person, fmt.Sprintf("Pool %d", i))
 	}
 	w := e.call(e.person, http.MethodPost, "/api/v1/me/runner-pools", `{"name":"One more"}`)
-	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "10 Self-Hosted pools") {
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "10 user pools") {
 		t.Errorf("an eleventh pool = %d %s, want 422 in plain words", w.Code, w.Body)
 	}
 	e.createOwnPool(e.other, "Theirs")
-	e.createPool("Provided", types.RunnerPoolRemoteProvided)
+	e.createPool("Provided", types.RunnerPoolOrganization)
 }
 
 // Another person's pool is a 404 on every verb, byte for byte the answer for a random id, and nothing
@@ -99,6 +101,14 @@ func TestPG_AnotherPersonsPoolIsAnUnknownID(t *testing.T) {
 	}
 	theirs := e.claimedRunner(e.otherP)
 	random := uuid.New()
+	// The remote-hosted runner is available to everyone's pools, so only the pool's owner stands between
+	// another person and its member routes.
+	if w := e.call(e.alice, http.MethodPut, "/api/v1/remote-runners/fake/people-policy", `{"people_pools":"everyone"}`); w.Code != http.StatusOK {
+		t.Fatalf("people policy = %d %s", w.Code, w.Body)
+	}
+	if w := e.call(e.person, http.MethodPut, myRemotePath(pool.ID, "fake"), ""); w.Code != http.StatusCreated {
+		t.Fatalf("own remote add = %d %s", w.Code, w.Body)
+	}
 	type verb struct{ method, path, body string }
 	verbs := func(id uuid.UUID) []verb {
 		return []verb{
@@ -107,7 +117,10 @@ func TestPG_AnotherPersonsPoolIsAnUnknownID(t *testing.T) {
 			{http.MethodDelete, myPoolPath(id), ""},
 			{http.MethodPut, addRunnerPath(id, theirs), ""},
 			{http.MethodDelete, addRunnerPath(id, mine), ""},
-			{http.MethodPut, "/api/v1/me/runner-pool-defaults", fmt.Sprintf(`{"self_hosted":%q}`, id)},
+			{http.MethodPut, "/api/v1/me/runner-pool-defaults", fmt.Sprintf(`{"pool_id":%q}`, id)},
+			{http.MethodPut, myRemotePath(id, "fake"), ""},
+			{http.MethodDelete, myRemotePath(id, "fake"), ""},
+			{http.MethodGet, "/api/v1/runner-pools/" + id.String() + "/members", ""},
 		}
 	}
 	for i, v := range verbs(pool.ID) {
@@ -121,9 +134,12 @@ func TestPG_AnotherPersonsPoolIsAnUnknownID(t *testing.T) {
 	for _, v := range []verb{
 		{http.MethodPut, poolPath(pool.ID), `{"revision":1,"state":"disabled"}`},
 		{http.MethodDelete, poolPath(pool.ID), ""},
-		{http.MethodPut, poolPath(pool.ID) + "/executors/fake", ""},
+		{http.MethodPut, poolPath(pool.ID) + "/remote-runners/fake", ""},
+		{http.MethodDelete, poolPath(pool.ID) + "/remote-runners/fake", ""},
 		{http.MethodPut, myPoolPath(pool.ID), `{"revision":1,"state":"disabled"}`},
 		{http.MethodDelete, myPoolPath(pool.ID), ""},
+		{http.MethodPut, myRemotePath(pool.ID, "fake"), ""},
+		{http.MethodDelete, myRemotePath(pool.ID, "fake"), ""},
 	} {
 		got := e.call(e.super, v.method, v.path, v.body)
 		want := e.call(e.super, v.method, strings.Replace(v.path, pool.ID.String(), random.String(), 1), v.body)
@@ -131,7 +147,7 @@ func TestPG_AnotherPersonsPoolIsAnUnknownID(t *testing.T) {
 			t.Errorf("admin %s %s on a person's pool = %d %s, a random id = %d %s", v.method, v.path, got.Code, got.Body, want.Code, want.Body)
 		}
 	}
-	if p, _ := e.pg.GetRunnerPool(context.Background(), pool.ID); p.Revision != 2 || p.State != types.RunnerPoolActive || p.Name != "Laptop" || e.members(pool.ID) != 1 {
+	if p, _ := e.pg.GetRunnerPool(context.Background(), pool.ID); p.Revision != 3 || p.State != types.RunnerPoolActive || p.Name != "Laptop" || e.members(pool.ID) != 2 {
 		t.Errorf("the pool moved: %+v, %d members", p, e.members(pool.ID))
 	}
 	if n := e.count(`SELECT count(*) FROM principal_prefs WHERE principal = $1`, e.otherP); n != 0 {
@@ -139,24 +155,30 @@ func TestPG_AnotherPersonsPoolIsAnUnknownID(t *testing.T) {
 	}
 }
 
-// An administrator cannot create a Self-Hosted pool: refused by name, nothing stored.
-func TestPG_OperatorCreateOfSelfHostedIsRefused(t *testing.T) {
+// An administrator cannot create a user pool: the organisation's route makes organization pools only,
+// a scope in the body is refused as the old hosting type is, and nothing is stored.
+func TestPG_OperatorCreateOfAUserPoolIsRefused(t *testing.T) {
 	e := newPoolEnv(t, false)
-	w := e.admin(http.MethodPost, "/api/v1/runner-pools", `{"name":"Laptops","hosting_type":"self_hosted"}`)
-	if w.Code != http.StatusBadRequest || wireReason(t, w) != string(runnerpool.ReasonInvalid) || !strings.Contains(w.Body.String(), "each person creates their own") {
-		t.Errorf("admin create of a Self-Hosted pool = %d %s, want 400 runner_pool_invalid naming why", w.Code, w.Body)
+	for _, body := range []string{`{"name":"Laptops","scope":"user"}`, `{"name":"Laptops","hosting_type":"self_hosted"}`} {
+		w := e.admin(http.MethodPost, "/api/v1/runner-pools", body)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("admin create %s = %d %s, want 400", body, w.Code, w.Body)
+		}
 	}
 	if n := e.count(`SELECT count(*) FROM runner_pools`); n != 0 {
 		t.Errorf("a refused create stored %d pools", n)
 	}
+	if p := e.createPool("Builds", types.RunnerPoolOrganization); p.Scope != types.RunnerPoolOrganization || p.Owner != "" {
+		t.Errorf("the organisation's create made %+v", p)
+	}
 }
 
-// The catalogue: a person sees the Remote Provided pools they may use and only their own Self-Hosted
+// The catalogue: a person sees the organization pools they may use and only their own user
 // pools; an administrator sees every pool, with its owner, and uses none of another person's. G5: each
 // own pool lists the person's runners in it, whether or not they could take a run now.
-func TestPG_CatalogueShowsOnlyOwnSelfHostedPoolsAndTheirRunners(t *testing.T) {
+func TestPG_CatalogueShowsOnlyOwnUserPoolsAndTheirRunners(t *testing.T) {
 	e := newPoolEnv(t, false)
-	remote := e.createPool("Provided", types.RunnerPoolRemoteProvided)
+	remote := e.createPool("Provided", types.RunnerPoolOrganization)
 	laptop := e.createOwnPool(e.person, "Laptop")
 	home := e.createOwnPool(e.person, "Home server")
 	theirs := e.createOwnPool(e.other, "Theirs")
@@ -215,19 +237,36 @@ func TestPG_CatalogueShowsOnlyOwnSelfHostedPoolsAndTheirRunners(t *testing.T) {
 	}
 }
 
-// The organisation has no Self-Hosted default; a person's own default names only their own pool.
-func TestPG_NoOrganisationSelfHostedDefault(t *testing.T) {
+// DONE WHEN (RP-1 7): the organisation's default is an organization pool, so a user pool (the
+// administrator's own included) is refused by name and nothing is stored; a person's own default names a
+// pool they may use, so another person's user pool and an organization pool a use policy withholds are
+// the unknown-id 404, byte for byte, and only their own is kept.
+func TestPG_NoOrganisationUserPoolDefault(t *testing.T) {
 	e := newPoolEnv(t, false)
 	own := e.createOwnPool(e.super, "Admin laptop")
-	w := e.admin(http.MethodPut, "/api/v1/runner-pool-defaults", fmt.Sprintf(`{"self_hosted":%q}`, own.ID))
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "no Self-Hosted default") {
-		t.Errorf("an organisation Self-Hosted default = %d %s, want 400 refused by name", w.Code, w.Body)
+	w := e.admin(http.MethodPut, "/api/v1/runner-pool-defaults", fmt.Sprintf(`{"pool_id":%q}`, own.ID))
+	if w.Code != http.StatusBadRequest || wireError(t, w) != noOrgUserPoolDefaultMsg {
+		t.Errorf("an organisation default naming a user pool = %d %s, want 400 refused by name", w.Code, w.Body)
 	}
-	if _, err := e.pool.Exec(context.Background(), `INSERT INTO runner_pool_org_defaults (self_hosted) VALUES ($1)`, own.ID); err == nil {
-		t.Error("the schema accepts an organisation Self-Hosted default")
+	if n := e.count(`SELECT count(*) FROM runner_pool_org_defaults`); n != 0 {
+		t.Errorf("the refused default stored %d rows", n)
 	}
-	if w := e.call(e.super, http.MethodPut, "/api/v1/me/runner-pool-defaults", fmt.Sprintf(`{"self_hosted":%q}`, own.ID)); w.Code != http.StatusOK {
+	if w := e.call(e.super, http.MethodPut, "/api/v1/me/runner-pool-defaults", fmt.Sprintf(`{"pool_id":%q}`, own.ID)); w.Code != http.StatusOK {
 		t.Errorf("an owner's own default = %d %s", w.Code, w.Body)
+	}
+	withheld := e.createPool("Finance", types.RunnerPoolOrganization)
+	if w := e.call(e.alice, http.MethodPut, usePolicyPath(withheld.ID), `{"subjects":[{"subject_type":"user","subject":"sub-finance"}]}`); w.Code != http.StatusOK {
+		t.Fatalf("use policy = %d %s", w.Code, w.Body)
+	}
+	unknown := e.call(e.person, http.MethodPut, "/api/v1/me/runner-pool-defaults", fmt.Sprintf(`{"pool_id":%q}`, uuid.New()))
+	for name, id := range map[string]uuid.UUID{"another person's user pool": own.ID, "a withheld organization pool": withheld.ID} {
+		w := e.call(e.person, http.MethodPut, "/api/v1/me/runner-pool-defaults", fmt.Sprintf(`{"pool_id":%q}`, id))
+		if w.Code != http.StatusNotFound || w.Body.String() != unknown.Body.String() {
+			t.Errorf("a personal default naming %s = %d %s, want the unknown-id 404 %s", name, w.Code, w.Body, unknown.Body)
+		}
+	}
+	if n := e.count(`SELECT count(*) FROM principal_prefs WHERE principal = $1`, e.personP); n != 0 {
+		t.Errorf("a refused personal default stored %d rows", n)
 	}
 }
 
@@ -244,7 +283,7 @@ func TestPG_ErasureRemovesAPersonsPools(t *testing.T) {
 	runnerID := e.claimedRunner(e.personP)
 	e.call(e.person, http.MethodPut, addRunnerPath(gone.ID, runnerID), "")
 
-	detail, err := e.srv.erasureOrchestrator(nil).Steps[erasure.RunnerPools](context.Background(), e.personP)
+	detail, err := e.srv.erasureOrchestrator(nil, nil).Steps[erasure.RunnerPools](context.Background(), e.personP)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,9 +340,9 @@ func TestPG_MyPoolLimitsAreBoundedByGovernance(t *testing.T) {
 	}
 }
 
-// A Self-Hosted pool has no use policy. Its owner, on every use-policy verb, is told so in plain words;
+// A user pool has no use policy. Its owner, on every use-policy verb, is told so in plain words;
 // anyone else, an administrator included, gets the unknown-id 404 byte for byte, and nothing is stored.
-func TestPG_UsePolicyRoutesOnASelfHostedPool(t *testing.T) {
+func TestPG_UsePolicyRoutesOnAUserPool(t *testing.T) {
 	e := newPoolEnv(t, false)
 	own := e.createOwnPool(e.alice, "Alice laptop")
 	random := uuid.New()
@@ -311,8 +350,8 @@ func TestPG_UsePolicyRoutesOnASelfHostedPool(t *testing.T) {
 	for _, m := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 		w := e.call(e.alice, m, usePolicyPath(own.ID), body)
 		if w.Code != http.StatusUnprocessableEntity || wireReason(t, w) != string(runnerpool.ReasonMemberMismatch) ||
-			!strings.Contains(w.Body.String(), "Alice laptop is your own Self-Hosted pool: only you use it, so it has no use policy.") {
-			t.Errorf("owner %s = %d %s, want 422 saying a Self-Hosted pool has no use policy", m, w.Code, w.Body)
+			!strings.Contains(w.Body.String(), "Alice laptop is your own user pool: only you use it, so it has no use policy.") {
+			t.Errorf("owner %s = %d %s, want 422 saying a user pool has no use policy", m, w.Code, w.Body)
 		}
 		got := e.call(e.super, m, usePolicyPath(own.ID), body)
 		want := e.call(e.super, m, usePolicyPath(random), body)
@@ -355,22 +394,20 @@ func TestPG_RevokedAndUnclaimedRunnersNeverJoinAPool(t *testing.T) {
 	}
 }
 
-// The state 0168 leaves an organisation that preferred Self-Hosted in: no organisation preference, its
-// Remote Provided default kept. A launch that names no pool, from a person with no preference of their
-// own, is refused runner_pool_required at every door: the clear never switches anyone to Remote Provided.
-// Once the person (or an administrator) sets a preference, the same launch resolves.
-func TestPG_ClearedOrganisationPreferenceAsksForAChoice(t *testing.T) {
+// With no organisation default and none of the person's own, a launch that names no pool is refused
+// runner_pool_required at every door: no pool is picked for them, not even the only one. Once the person
+// sets their own default, the same launch resolves.
+func TestPG_NoDefaultAsksForAChoice(t *testing.T) {
 	e := newPlacementEnv(t)
-	remote := e.createPool("Provided", types.RunnerPoolRemoteProvided)
+	remote := e.createPool("Provided", types.RunnerPoolOrganization)
 	e.addExecutors(remote.ID, "alpha")
-	e.orgDefaults(fmt.Sprintf(`{"remote_provided":%q}`, remote.ID))
 	sameEverywhere(t, "a launch naming nothing", e.answers(e.person, runBody("")), http.StatusUnprocessableEntity, string(runnerpool.ReasonRequired))
-	if w := e.call(e.person, http.MethodPut, "/api/v1/me/runner-pool-defaults", `{"preferred_hosting":"remote_provided"}`); w.Code != http.StatusOK {
-		t.Fatalf("personal preference = %d %s", w.Code, w.Body)
+	if w := e.call(e.person, http.MethodPut, "/api/v1/me/runner-pool-defaults", fmt.Sprintf(`{"pool_id":%q}`, remote.ID)); w.Code != http.StatusOK {
+		t.Fatalf("personal default = %d %s", w.Code, w.Body)
 	}
 	for door, w := range e.answers(e.person, runBody("")) {
 		if w.Code >= 300 && wireReason(t, w) == string(runnerpool.ReasonRequired) {
-			t.Errorf("%s after a personal preference = %d %s", door, w.Code, w.Body)
+			t.Errorf("%s after a personal default = %d %s", door, w.Code, w.Body)
 		}
 	}
 }

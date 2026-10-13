@@ -71,10 +71,31 @@ type RunnerView struct {
 	AllowedRoots []string           `json:"allowed_roots,omitempty"`
 	// RunsActive counts the non-terminal runs on this runner.
 	RunsActive int `json:"runs_active"`
+	// MaxRuns is the runner's "Runs at once", which only its owner changes; Running is how many runs
+	// hold a sandbox there now, the count placement holds to MaxRuns.
+	MaxRuns int `json:"max_runs"`
+	Running int `json:"running"`
+	// MachineName is the host name the runner last reported at registration or on connect. It is what
+	// the runner says, never verified and never an identity; absent until it reports one.
+	MachineName string `json:"machine_name,omitempty"`
+	// Pools are the owner's live Self-Hosted pools the runner is a member of, by name; [] for none.
+	Pools []RunnerPoolRef `json:"pools"`
+}
+
+// RunnerPoolRef names one pool a runner is a member of.
+type RunnerPoolRef struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
 }
 
 // RunnerSettingsRequest turns runners on or off. Enabled is required, so an empty body never
 // switches anything.
 type RunnerSettingsRequest struct {
 	Enabled *bool `json:"enabled"`
+}
+
+// RunnerUpdateRequest is an owner's change to their own runner (PUT /me/runners/{id}). MaxRuns is
+// required, so an empty body changes nothing.
+type RunnerUpdateRequest struct {
+	MaxRuns *int `json:"max_runs"`
 }
