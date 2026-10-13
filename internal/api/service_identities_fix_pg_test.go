@@ -158,6 +158,7 @@ func TestServiceIdentity_RenewAndReviveFollowTheIdentity(t *testing.T) {
 func TestServiceIdentity_StreamEndsWhenTheServiceDoes(t *testing.T) {
 	e := newSvcEnv(t)
 	e.mustCreate(t, svcName, svcSponsor)
+	ageSponsorships(t, e.pool) // the stream is opened by an entitled sponsor; the later sponsor change is the real cutoff
 	opened := time.Now().UTC()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/x/events", nil).
 		WithContext(withServiceIdentity(context.Background(), svcName, svcSponsor))
@@ -275,6 +276,9 @@ func TestServiceIdentity_StreamClockBehindTheDatabase(t *testing.T) {
 	e.h.srv.cfg.Store = store.PG{Pool: e.pool, Now: behind}
 	e.h.srv.cfg.Now = behind
 	e.mustCreate(t, svcName, svcSponsor)
+	// The cutoff stays on the database clock but 5s back: still later than a stream opened on the clock 10s
+	// behind (a comparison on the wrong clock would end it), earlier than any stall in the anchor's answer.
+	ageSponsorshipsBy(t, e.pool, 5*time.Second)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/x/events", nil).
 		WithContext(withServiceIdentity(context.Background(), svcName, svcSponsor))
 	if e.h.srv.sessionRevokedSince(req, svcPrin, behind()) {

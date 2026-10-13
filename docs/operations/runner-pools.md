@@ -67,6 +67,22 @@ A run's CPU, memory, main drive, lifetime and idle stop are each the strictest o
 - Runs at once across a pool is `max_concurrent_runs` (`--max-runs`). Left out, it is set by its runners: each runner's own Runs at once and totals still hold.
 - A pool none of whose runners has declared limits refuses the launch `runner_limits_unset`.
 
+### A remote-hosted runner's limits
+
+- The server proposes a remote-hosted runner's limits at its first boot from what it measures. It takes half of each as the total, Runs at once as half its CPUs, and per run the total divided by Runs at once. An amount it cannot measure is never guessed, so it sets none and the runner takes no run.
+- The usual gap is disk. Docker Desktop's disk is inside its VM, and `wardynd` in a container (the Compose stack) cannot see the host's Docker data root. A Kubernetes cluster is measured from the runs namespace's ResourceQuota, else, with `k8s.readNodes`, from the nodes; the kind quickstart sets `readNodes`.
+- `make setup`, `make demo`, `make test-drive` and the repo's walk scripts set it after boot ([`scripts/lib/runner-limits.sh`](../../scripts/lib/runner-limits.sh)), and say each number and where it came from:
+  - at a terminal, the proposal is shown to accept or change, and a free disk nothing measured is asked for, with no default;
+  - without one, the free disk comes from `WARDYN_SETUP_RUNNER_DISK_GB`, or the whole set from `WARDYN_SETUP_RUNNER_LIMITS` (the `wardyn runner set` flags), or setup stops and names the variable;
+  - a runner that already has limits is left alone.
+- A Compose stack brought up any other way (`make compose-up`, `docker compose up`) needs this one admin step:
+
+| Task | Command |
+|---|---|
+| Find runners with no limits | `wardyn runner remote list --no-limits` |
+| See the proposal, setting nothing | `wardyn runner remote propose <id>`; add `--free-disk GB` when the runner reports no free disk |
+| Set them | `wardyn runner set <id>` with the seven flags `propose` printed, or in the console: Runners, the runner, Edit limits (super admin) |
+
 ## Barriers
 
 The pool list's `barrier_options` always answers Fence, Wall and Vault (`CC1`, `CC2`, `CC3`), each `available` or with one `reason_code`. When several apply, the first in this table wins (`BarrierReasons`, [`internal/runnerpool/barrier.go`](../../internal/runnerpool/barrier.go)).
