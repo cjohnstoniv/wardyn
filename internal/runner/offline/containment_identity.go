@@ -4,9 +4,14 @@
 package offline
 
 import (
+	"context"
 	"errors"
-	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"fmt"
+	"log/slog"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -20,9 +25,13 @@ func missingIdentityAction(a runnerwire.PendingAction) bool {
 
 // containmentIdentity requires a previously checked deterministic local ref.
 // The org action may recover containment authority, never execution identity.
-func (m *Manager) containmentIdentity(a runnerwire.PendingAction, local string) (localRun, error) {
+// proof is lostProof's answer for the same action.
+func (m *Manager) containmentIdentity(a runnerwire.PendingAction, local string, proof error) (localRun, error) {
 	if !missingIdentityAction(a) {
-		return localRun{}, errors.New("missing local identity only permits exact queued containment")
+		return localRun{}, refusal(errors.New("missing local identity only permits exact queued containment"))
+	}
+	if proof != nil {
+		return localRun{}, proof
 	}
 	r := localRun{RunID: a.RunID, Ref: local, ContainmentOnly: true, Lease: runnerwire.Lease{RunID: a.RunID}}
 	m.state.Runs[a.RunID] = r
@@ -30,22 +39,63 @@ func (m *Manager) containmentIdentity(a runnerwire.PendingAction, local string) 
 	return r, m.save()
 }
 
-func (m *Manager) pendingRun(a runnerwire.PendingAction) (localRun, error) {
-	if a.ID == uuid.Nil {
+// errNoProof answers for an action whose run the runner held when lostProof
+// looked; it reaches containment only if the run was dropped since.
+var errNoProof = errors.New("lost-identity proof was not taken; retry the action")
+
+// lostProof proves, outside the manager lock and within proofTimeout, the ref
+// a queued containment action names when the runner holds no record of its
+// run, so a hung engine never holds up other manager calls.
+func (m *Manager) lostProof(ctx context.Context, a runnerwire.PendingAction) error {
+	m.mu.Lock()
+	_, held := m.state.Runs[a.RunID]
+	m.mu.Unlock()
+	local, belongs := strings.CutPrefix(a.Ref, placement.RunnerRefPrefix(m.runnerID.String()))
+	if held || !belongs || local == "" || local != m.expectedRef(a.RunID) || !missingIdentityAction(a) {
+		return errNoProof
+	}
+	prove, cancel := context.WithTimeout(ctx, m.proofTimeout)
+	defer cancel()
+	// Only a negative answer is final; an engine that could not answer, or
+	// did not in time, leaves the action for the next pass.
+	err := m.proveLost(prove, local)
+	if errors.Is(err, runner.ErrNotRunnerSandbox) {
+		return refusal(err)
+	}
+	return err
+}
+
+// proveLost refuses a lost-identity ref the substrate cannot prove a sandbox
+// this runner created, so a queued action never reaches an unrelated
+// container that happens to carry a deterministic Wardyn name.
+func (m *Manager) proveLost(ctx context.Context, local string) error {
+	prover, ok := m.sub.(runner.RunnerSandboxProver)
+	if !ok {
+		return fmt.Errorf("substrate cannot prove a sandbox is this runner's: %w", runner.ErrNotRunnerSandbox)
+	}
+	if err := prover.ProveRunnerSandbox(ctx, local, m.runnerID.String()); err != nil {
+		slog.WarnContext(ctx, "runner: left alone a container it cannot prove it created", slog.String("ref", local), slog.String("err", err.Error()))
+		return fmt.Errorf("pending action names a container this runner cannot prove it created: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) pendingRun(a runnerwire.PendingAction, proof error) (localRun, error) {
+	if a.ID == uuid.Nil || a.RunID == uuid.Nil {
 		return localRun{}, errors.New("pending action has no identity")
 	}
 	r, ok := m.state.Runs[a.RunID]
 	local, belongs := strings.CutPrefix(a.Ref, placement.RunnerRefPrefix(m.runnerID.String()))
 	if !ok && belongs && local != "" && local == m.expectedRef(a.RunID) {
 		var err error
-		r, err = m.containmentIdentity(a, local)
+		r, err = m.containmentIdentity(a, local, proof)
 		if err != nil {
 			return localRun{}, err
 		}
 		ok = true
 	}
 	if !ok || !belongs || local == "" || r.Ref != local {
-		return localRun{}, errors.New("pending action does not match a local run")
+		return localRun{}, refusal(errors.New("pending action does not match a local run"))
 	}
 	return r, nil
 }
