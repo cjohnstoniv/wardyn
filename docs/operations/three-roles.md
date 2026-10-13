@@ -98,7 +98,7 @@ derives its role.
 | `workspace_mounts` | none | intersection by source and target; read-only if either side is |
 | `workspace_repos` | none | intersection by identity |
 | `llm_inspection` | none | the side that sets it; both set and different is unsatisfiable |
-| `ui_apps` | none | intersection by name, port and path (an overlay app that serves a different path than the base's is a widening) |
+| `ui_apps` | none | intersection by name, port and path (an overlay app that serves a different path than the base's is a widening); a base with apps met to none is unsatisfiable, since an empty list is no opinion: use `deny_ui_apps` |
 | `resources` | the deployment's size | smaller, per field |
 | `tool_rules` | an unnamed tool is held | per tool named on either side, and `*`: the stricter effect |
 | `git_push_any_branch` | false | AND |
@@ -193,6 +193,7 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
   - The harness sign-in run is exempt, as it is at create.
   - `deny_ui_apps` strips `ui_apps` from a run at create, with a `clamp_warnings` sentence and a `dropped` row at target `runs.ui_apps`, and the UI gateway refuses a session into a run created under the profile.
   - An empty ceiling `ui_apps` is still no opinion, so a profile without the limit behaves as before.
+  - So emptying a profile's `ui_apps` is not a narrowing: the update waits for a second approver where one is required, and an overlay that leaves none of its base's apps is refused.
   - A super admin is exempt from both at every door, as at create; a security admin is bound.
   - A limit set later reaches new sessions but does not sever ones already open: a terminal, SSH session or UI-app session opened before the limit was set runs until it ends.
   - `deny_ui_apps` does not close an SSH port forward to the app; `deny_interactive` does.

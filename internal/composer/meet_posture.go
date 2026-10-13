@@ -162,8 +162,7 @@ func sameJSON(a, b any) bool {
 }
 
 // meetUIApps keeps the (name, port, path) apps both sides name, the same
-// identity Leq compares. An empty list is
-// "no UI apps", never "no opinion", so a base without any admits none.
+// identity Leq compares. A base without any stays without any.
 func (m *meeter) meetUIApps(base, ov []types.UIApp) []types.UIApp {
 	var out []types.UIApp
 	for _, o := range ov {
@@ -184,6 +183,11 @@ func (m *meeter) meetUIApps(base, ov []types.UIApp) []types.UIApp {
 	slices.SortFunc(out, func(a, b types.UIApp) int {
 		return cmp.Or(strings.Compare(a.Name, b.Name), cmp.Compare(a.Port, b.Port))
 	})
+	// An empty list is no opinion to Clamp, so a base that names apps met to none has no representable
+	// result, as a disjoint allowed_methods pair has none: limits.deny_ui_apps is what removes them.
+	if len(base) > 0 && len(out) == 0 {
+		m.fail(ReasonOverlayUnsatisfiable, "ui_apps", "no UI app is in both the base (%d) and the overlay; an empty ui_apps does not remove them, set limits.deny_ui_apps", len(base))
+	}
 	return out
 }
 

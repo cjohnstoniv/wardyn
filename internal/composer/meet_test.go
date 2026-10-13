@@ -308,10 +308,12 @@ func TestMeetMountsReposUIApps(t *testing.T) {
 		ReasonOverlayInvalid, "workspace_mounts")
 }
 
-// TestMeetUIAppsMatchLeq pins that the meet, strict validation and Leq agree on
+// TestMeetUIAppsMatchLeq pins that the meet, strict validation, Leq and Clamp agree on
 // a ui_app: an overlay app must serve the path the base app serves (an absent
-// path and "/" are the same path), or it is a widening.
+// path and "/" are the same path), or it is a widening. A meet that leaves none of
+// the base's apps is refused rather than read by Clamp as no opinion.
 func TestMeetUIAppsMatchLeq(t *testing.T) {
+	docs, shell := types.UIApp{Name: "docs", Port: 8000}, types.UIApp{Name: "shell", Port: 9999}
 	for _, tc := range []struct {
 		name          string
 		base, overlay string
@@ -332,21 +334,37 @@ func TestMeetUIAppsMatchLeq(t *testing.T) {
 			} else if err != nil {
 				t.Fatalf("ValidateOverlay: %v", err)
 			}
-			got, warns, err := ApplyOverlay(base, ov)
+			got, _, err := ApplyOverlay(base, ov)
+			if tc.wantWiden {
+				// Nothing of the base is left, so resolution refuses instead of handing a run no opinion.
+				wantOverlayErr(t, err, ReasonOverlayUnsatisfiable, "ui_apps")
+				return
+			}
 			if err != nil {
 				t.Fatalf("ApplyOverlay: %v", err)
 			}
 			if !Leq(got.Ceiling, base.Ceiling, got.Limits, base.Limits) {
 				t.Errorf("Leq(ApplyOverlay(base, ov), base) is false: result ui_apps = %+v", got.Ceiling.UIApps)
 			}
-			if tc.wantWiden != (len(warns) == 1) {
-				t.Errorf("warnings = %v, wantWiden = %v", warns, tc.wantWiden)
-			}
-			if tc.wantWiden && len(got.Ceiling.UIApps) != 0 {
-				t.Errorf("a path-mismatched app was kept: %+v", got.Ceiling.UIApps)
+			run, _ := Clamp(types.RunPolicySpec{UIApps: []types.UIApp{docs, shell}}, got.Ceiling, got.Limits)
+			if len(run.UIApps) != 1 || run.UIApps[0].Name != "docs" {
+				t.Errorf("a run under the result keeps ui_apps = %+v, want only docs", run.UIApps)
 			}
 		})
 	}
+	t.Run("an empty overlay over a base with apps", func(t *testing.T) {
+		base := Authority{Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, UIApps: []types.UIApp{docs}}}
+		ov := overlayOf(types.CeilingOverlay{UIApps: &[]types.UIApp{}})
+		wantOverlayErr(t, ValidateOverlay(base, ov), ReasonOverlayUnsatisfiable, "ui_apps")
+		_, _, err := ApplyOverlay(base, ov)
+		wantOverlayErr(t, err, ReasonOverlayUnsatisfiable, "ui_apps")
+	})
+	t.Run("an empty overlay over a base without apps", func(t *testing.T) {
+		got := mustApply(t, Authority{Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2}}, overlayOf(types.CeilingOverlay{UIApps: &[]types.UIApp{}}))
+		if len(got.Ceiling.UIApps) != 0 {
+			t.Errorf("ui_apps = %+v, want none", got.Ceiling.UIApps)
+		}
+	})
 }
 
 // TestMeetUIAppsNarrowingBindsThroughClamp pins a non-empty narrowing: an overlay keeps one of the

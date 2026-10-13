@@ -179,8 +179,13 @@ func leqLLMInspection(a, b *types.LLMInspectionSpec) bool {
 }
 
 // leqUIApps holds when every app of a is a (name, port) app of b serving the
-// same path.
+// same path. An empty a is not within a b that names apps: an empty ceiling
+// list is no opinion to Clamp (a run may declare any app), and deny_ui_apps is
+// the limit that removes them.
 func leqUIApps(a, b []types.UIApp) bool {
+	if len(a) == 0 && len(b) > 0 {
+		return false
+	}
 	for _, app := range a {
 		if !slices.ContainsFunc(b, func(x types.UIApp) bool {
 			return x.Name == app.Name && x.Port == app.Port && x.PathOrRoot() == app.PathOrRoot()

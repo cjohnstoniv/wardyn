@@ -261,6 +261,9 @@ func TestLeqIsFalseForEveryWidening(t *testing.T) {
 		{name: "an added ui app", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.UIApps = append(slices.Clone(c.UIApps), types.UIApp{Name: "jupyter", Port: 8888})
 		}},
+		{name: "emptied ui apps, which a run reads as no opinion", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
+			c.UIApps = nil
+		}},
 		{name: "a ui app moved to another path", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.UIApps = []types.UIApp{{Name: "docs", Port: 8000, Path: "/admin"}}
 		}},
