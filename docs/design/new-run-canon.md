@@ -624,11 +624,11 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `READY` | pending (W-18) | Ready to validate against Wardyn's run document schema. Policy and availability are checked at review. |
 | `VALID` | pending (W-18) | Valid document. Policy and availability are checked at review. |
 | `ISSUES(n)` | mock | {n} issues must be fixed |
-| `ISSUES_ONE` | deviation (singular of the mock line ISSUES(n)) | 1 issue must be fixed |
+| `ISSUES_ONE` | pending (W-53) | 1 issue must be fixed |
 | `VALIDATE` | mock | Validate |
 | `CONTINUE_REVIEW` | mock | Continue to review |
 | `ANNOUNCE_ERRORS(n)` | mock | {n} errors found. |
-| `ANNOUNCE_ERRORS_ONE` | deviation (singular of the mock line ANNOUNCE_ERRORS(n)) | 1 error found. |
+| `ANNOUNCE_ERRORS_ONE` | pending (W-53) | 1 error found. |
 | `ANNOUNCE_VALID` | mock | Document valid. |
 | `JSON_INVALID` | mock | This JSON document isn't valid. Check the highlighted structure. |
 | `YAML_INVALID` | pending (W-19) | This YAML document isn't valid. Check the highlighted structure. |
