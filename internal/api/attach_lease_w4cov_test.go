@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/cjohnstoniv/wardyn/internal/livebus"
 )
 
 var leaseCovRun = uuid.MustParse("00000000-0000-4000-8000-00000000c0de")
@@ -198,9 +196,10 @@ func TestLeaseCovLiveFencesAHolderAgainstTheStore(t *testing.T) {
 			c.h.lease.verified.Store(time.Now().Add(-long).UnixNano())
 			l.fail("holds", boom)
 		}, false, 1, true, false},
-		{"an old confirmation the store no longer backs ends the holder", func(l *leaseCovLeases, c *leaseCovClient) {
+		{"an old confirmation of a lease another client took ends the holder", func(l *leaseCovLeases, c *leaseCovClient) {
 			c.h.lease.verified.Store(time.Now().Add(-long).UnixNano())
 			l.advance(attachLeaseTTL + time.Second)
+			l.put(leaseCovRun, uuid.New(), "bob", attachSourceWeb)
 		}, false, 1, false, true},
 	}
 	for _, tc := range cases {
@@ -213,6 +212,7 @@ func TestLeaseCovLiveFencesAHolderAgainstTheStore(t *testing.T) {
 			before := alice.h.lease.verified.Load()
 
 			got := alice.h.lease.live()
+			srv.WaitBackground()
 
 			if got != tc.want || alice.h.lease.held.Load() != tc.wantHeld || leases.holdsCalls() != tc.wantHolds {
 				t.Fatalf("live=%v held=%v holdsCalls=%d, want %v/%v/%d", got, alice.h.lease.held.Load(), leases.holdsCalls(), tc.want, tc.wantHeld, tc.wantHolds)
@@ -246,7 +246,10 @@ func TestLeaseCovTickRenewsHeldLeasesAndEndsOnesThatLapsed(t *testing.T) {
 		wantKinds []string
 	}{
 		{"a live lease is renewed", func(l *leaseCovLeases) { l.advance(attachLeaseRenewEvery) }, false, nil},
-		{"a lapsed lease ends its holder and frees the slot", func(l *leaseCovLeases) { l.advance(attachLeaseTTL + time.Second) }, true, []string{livebus.KindAttachFree}},
+		{"a lease another client took ends its holder", func(l *leaseCovLeases) {
+			l.advance(attachLeaseTTL + time.Second)
+			l.put(leaseCovRun, uuid.New(), "bob", attachSourceWeb)
+		}, true, nil},
 		{"a renew that cannot be asked is not read as a loss", func(l *leaseCovLeases) { l.fail("renew", boom) }, false, nil},
 	}
 	for _, tc := range cases {
@@ -274,8 +277,8 @@ func TestLeaseCovTickRenewsHeldLeasesAndEndsOnesThatLapsed(t *testing.T) {
 				if reason := alice.displacedWith(t); reason != attachLeaseLostReason {
 					t.Errorf("displaced with %q, want %q", reason, attachLeaseLostReason)
 				}
-				if found || alice.h.lease.held.Load() || !alice.h.evicted.Load() {
-					t.Errorf("after the loss: row found=%v held=%v evicted=%v, want the row released and the holder evicted", found, alice.h.lease.held.Load(), alice.h.evicted.Load())
+				if (found && row.HolderID == alice.h.id) || alice.h.lease.held.Load() || !alice.h.evicted.Load() {
+					t.Errorf("after the loss: row holder=%s held=%v evicted=%v, want the other client's row kept and the holder evicted", row.HolderID, alice.h.lease.held.Load(), alice.h.evicted.Load())
 				}
 				return
 			}
