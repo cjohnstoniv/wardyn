@@ -148,15 +148,16 @@ export function pushRuleKey(p: Pick<PushRuleOverride, "provider" | "org"> & { ho
  * An Azure DevOps Server collection's canonical spelling (Go:
  * CanonicalPushCollection): NFKC, then lower case, or "" when it names no
  * collection. A space and letters outside ASCII are allowed; Azure DevOps
- * Server's reserved characters, "%", a leading "_" or space, a trailing dot or
- * space, other white space, control and zero-width characters, more than 64
+ * Server's reserved characters, "%", a leading "_", dot or space, two dots in a
+ * row, a trailing dot or space, other white space, control, zero-width and lone
+ * surrogate characters, more than 64
  * characters, and the two letters Go and JavaScript lower-case differently
  * (U+0130 and U+03A3) are not.
  */
 function pushRuleCollection(name: string): string {
   const n = name.normalize("NFKC");
-  if (n === "" || [...n].length > 64 || /^[_ ]/.test(n) || /[. ]$/.test(n)) return "";
-  if (/[\\/:*?"<>|;#$*{},+=[\]%\u0130\u03a3\ufffd]|[\p{Cc}\p{Cf}]|(?! )\p{White_Space}/u.test(n)) return "";
+  if (n === "" || [...n].length > 64 || /^[_ .]/.test(n) || /[. ]$/.test(n) || n.includes("..")) return "";
+  if (/[\\/:*?"<>|;#$*{},+=[\]%\u0130\u03a3\ufffd]|[\p{Cc}\p{Cf}\p{Cs}]|(?! )\p{White_Space}/u.test(n)) return "";
   return n.toLowerCase();
 }
 

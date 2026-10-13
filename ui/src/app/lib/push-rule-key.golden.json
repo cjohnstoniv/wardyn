@@ -39,5 +39,8 @@
   { "name": "a collection holds no escape", "provider": "azure_devops", "host": "tfs.corp.example", "org": "Fabrikam%20Collection", "error": true },
   { "name": "a collection holds no trailing space", "provider": "azure_devops", "host": "tfs.corp.example", "org": "Fabrikam ", "error": true },
   { "name": "a collection holds no zero-width character", "provider": "azure_devops", "host": "tfs.corp.example", "org": "Fab\u200brikam", "error": true },
-  { "name": "a collection holds no letter Go and JavaScript lower-case differently", "provider": "azure_devops", "host": "tfs.corp.example", "org": "\u0130stanbul", "error": true }
+  { "name": "a collection holds no letter Go and JavaScript lower-case differently", "provider": "azure_devops", "host": "tfs.corp.example", "org": "\u0130stanbul", "error": true },
+  { "name": "a collection does not start with a dot", "provider": "azure_devops", "host": "tfs.corp.example", "org": ".Fabrikam", "error": true },
+  { "name": "a collection holds no two dots in a row", "provider": "azure_devops", "host": "tfs.corp.example", "org": "Fab..rikam", "error": true },
+  { "name": "a collection holds no lone surrogate", "provider": "azure_devops", "host": "tfs.corp.example", "org": "Fab\ud800rikam", "error": true }
 ]
