@@ -211,21 +211,17 @@ func inheritedMCPHoldRefusal(req createRunRequest, spec types.RunPolicySpec, com
 }
 
 // policyHoldsMCPServer reports whether rules explicitly hold a tool of the MCP
-// server key: a rule naming one of its tools decides for the server (a hold
-// among them holds it, and exact rules win over the default), else a hold
-// default ("*"). No rule at all is the broker's fallback, not an explicit hold.
+// server key: a hold naming one of its tools, or a hold default ("*"). The
+// broker takes the exact rule for the tool called, else the default, and the
+// server's tools are not known here, so an exact allow lifts the default from
+// that one tool and never from the server. No rule at all is the broker's
+// fallback, not an explicit hold.
 func policyHoldsMCPServer(rules []types.ToolRule, key string) bool {
 	prefixes := proxy.MCPToolPrefixes(key)
-	named, held, byDefault := false, false, false
-	for _, r := range rules {
-		switch {
-		case r.Tool == "*":
-			byDefault = r.Effect == types.ToolHold
-		case slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(r.Tool, p) }):
-			named, held = true, held || r.Effect == types.ToolHold
-		}
-	}
-	return held || (!named && byDefault)
+	return slices.ContainsFunc(rules, func(r types.ToolRule) bool {
+		return r.Effect == types.ToolHold &&
+			(r.Tool == "*" || slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(r.Tool, p) }))
+	})
 }
 
 // harnessToolRulesRefusal refuses a rule or default the included harness has no
