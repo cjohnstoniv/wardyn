@@ -9,7 +9,7 @@
 import * as React from "react";
 import { Input } from "../../../../ui/input";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
-import { hostError } from "../../../new-run/custom-component-form-model";
+import { hostError } from "../../checks/custom-component-form-model";
 import { ToolDialog, ToolField } from "./tool-dialog";
 
 export function AllowHostDialog({ onAdd, onClose }: { onAdd: (host: string) => void; onClose: () => void }) {
