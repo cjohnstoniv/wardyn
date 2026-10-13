@@ -91,14 +91,16 @@ export function useMainDriveSize(view: MainDriveView) {
   const edited = React.useRef(false);
   // A fill the person never changed follows the pool: another pool's default replaces it.
   const fill = draft.guided.mainDriveFill;
+  // A pool with no size to offer clears it, and the next pool that has one fills it again.
   React.useEffect(() => {
-    if (committed !== undefined || view.defaultMib === undefined) return;
-    const next = mibToGibText(view.defaultMib, "floor");
-    if (!filled.current && typed === "") {
+    if (committed !== undefined) return;
+    const next = view.defaultMib === undefined ? "" : mibToGibText(view.defaultMib, "floor");
+    if (!filled.current && typed === "" && next !== "") {
       filled.current = true;
       dispatch({ type: "guided", patch: { mainDriveText: next, mainDriveFill: next } });
     } else if (typed !== "" && typed === fill && next !== typed) {
-      dispatch({ type: "guided", patch: { mainDriveText: next, mainDriveFill: next } });
+      if (next === "") filled.current = false;
+      dispatch({ type: "guided", patch: { mainDriveText: next, mainDriveFill: next === "" ? undefined : next } });
     }
   }, [typed, fill, committed, view.defaultMib, dispatch]);
 

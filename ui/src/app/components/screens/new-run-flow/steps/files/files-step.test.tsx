@@ -233,6 +233,20 @@ describe("a filled size follows the pool", () => {
     expect(drawn().resources).toBeUndefined();
   });
 
+  it("a pool with no size to offer clears a size the person never changed", async () => {
+    checks.result = withDefault(20480);
+    show();
+    await waitFor(() => expect(size()).toHaveValue(20));
+    // The run is moved to a pool with no default and no cap: an untouched run gets no size there.
+    const open = withDefault(0);
+    const none = { value: 0, unlimited: true };
+    open.runner_pools![0].limits![0].disk_mib = { default: none, cap: none, cap_source: "pool" };
+    checks.result = open;
+    act(() => external.edit((i) => ({ ...i, runner_pool_id: "pool-b" })));
+    await waitFor(() => expect(size()).toHaveValue(null));
+    expect(drawn().resources).toBeUndefined();
+  });
+
   it("keeps a size the person typed when the pool changes", async () => {
     checks.result = withDefault(20480);
     show();
