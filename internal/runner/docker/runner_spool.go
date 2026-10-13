@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"syscall"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/google/uuid"
@@ -34,7 +35,7 @@ var (
 )
 
 // chownSpoolTree gives the spool directory and every entry in it (the spool holds no subdirectory) to
-// uid:gid, never following a link.
+// uid:gid, never following a link and never a file that has a second link.
 func chownSpoolTree(dir string, uid, gid int) error {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -51,6 +52,15 @@ func chownSpoolTree(dir string, uid, gid int) error {
 		return err
 	}
 	for _, name := range append(names, ".") {
+		// A file with another link is left as it is (spoolowner.Keep's rule): a file outside the spool
+		// is never handed over through a link to it.
+		info, err := root.Lstat(name)
+		if err != nil {
+			return err
+		}
+		if st, ok := info.Sys().(*syscall.Stat_t); ok && !info.IsDir() && st.Nlink != 1 {
+			continue
+		}
 		if err := root.Lchown(name, uid, gid); err != nil {
 			return err
 		}
