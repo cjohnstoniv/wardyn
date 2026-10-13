@@ -15,7 +15,8 @@ docs/USERS.md=4433 share=35
 # docs/UI-SANDBOXES.md 5341 adds 4 over 5337 (0.9 C-mode-doors): a background task's UI apps cannot be opened.
 # docs/SSH.md 5602 measured after C-mode-doors merge.
 # docs/SSH.md 5633 adds 31 over 5602 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
-docs/SSH.md=5633 share=35
+# docs/SSH.md 5655 adds 22 (FR-0148: the SSH refusal rate bound).
+docs/SSH.md=5655 share=35
 # docs/UI-SANDBOXES.md 5341 measured after C-mode-doors merge.
 docs/UI-SANDBOXES.md=5341 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
