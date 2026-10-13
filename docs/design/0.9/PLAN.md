@@ -867,7 +867,7 @@ The release asset for `wardyn-runnerd` joins `release.yml`, `verify-release.sh` 
 | Checkpoint | Flag |
 |---|---|
 | CP2 | `placement: local` refuses `placement_unavailable` when no runner is registered |
-| CP3 | Site-config `runners.enabled` (default `false`, admin-only, audited) gates registration, claim, the runner stream and a person's own runner routes. The admin inventory, token list and revoke, and the settings routes stay ungated |
+| CP3 | Site-config `runners.enabled` (default `false`, admin-only, audited) gates registration token minting (a person's and an admin's), registration, claim, the runner stream and a person's own runner routes. The admin inventory, token list and revoke, and the settings routes stay ungated |
 
 ### 10.5 Migrations
 

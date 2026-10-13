@@ -469,9 +469,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   new session is leased again, and reviving such a run starts its agent under a fresh generation. A run is placed
   only on the launcher's own claimed runners, and a Self-Hosted pool is available while one of them in it is online.
   A barrier, size or idle-pause demand that none of the person's runners meets is refused with the pool's
-  `placement_capability` sentence, and asking for another person's runner answers `runner_not_found`. Repositories
-  reach such a run only through the organisation's git broker, once an administrator delivers `github_token`
-  `via_org`; by default the grant is refused there.
+  `placement_capability` sentence, and asking for another person's runner answers `runner_not_found`. The
+  organisation's GitHub App token reaches such a run only through its git broker, once an administrator delivers
+  `github_token` `via_org`; by default that grant is refused there. A person's own stored key or PAT is delivered
+  as on any run.
   deny_placements is also held at dispatch and revive; managed-harness sign-in runs stay exempt at every door, and
   site-config probe runs at create and dispatch.
 - Self-Hosted runner pools are each person's own: a person creates, edits and deletes their pools

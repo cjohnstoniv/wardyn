@@ -12,21 +12,21 @@ Open **New run** (`/runs/new`) for three cards.
 | **Guided setup** (**Fastest**) | Opens step 1, Shape. Your organisation's defaults fill what you skip. |
 | **YAML / JSON** (**Advanced**) | Opens the [run document](#the-run-document) editor. |
 
-Two more starting points sit outside the Start screen.
+The other starting points sit outside the Start screen's cards.
 
 | Start from | How you get there | Where you land |
 |---|---|---|
 | **Saved template** | **Use** on the [Templates screen](#templates), or **Start from** on the Shape step | Review, on the revision you picked |
 | **Run again** | **Start from** on the Shape step, then **Previous run** | Review, on that run's kept setup |
-| **From scratch** | The Shape step default, or **New run from scratch** on the Templates screen | A blank draft at step 1 |
+| **From scratch** | The Shape step default. **New run from scratch** on the Templates screen opens the Start screen | A blank draft |
 
 - A scratch draft cannot skip ahead. Opening a later step or Review sends you back to the first step with a missing answer.
-- **Run again** lists your own earlier runs (`GET /api/v1/me/launch-intents`). Only the creator reads a kept setup; anyone else gets `launch_intent_not_found`.
+- **Run again** lists your own earlier runs (`GET /api/v1/me/launch-intents`). Only the creator reads a kept setup. Anyone else gets the `404` a missing run gets; the creator of a run that kept none gets `launch_intent_not_found`.
 - A kept setup omits the title, description and wait limit. See [Run again](sdk.md#run-again).
 
 ## The steps
 
-Guided setup has five steps, then Review. The progress bar reads "Guided setup · N of 5".
+Guided setup has five steps, then Review. The progress bar names the five steps, and "Guided setup · N of 5" sits above each step's heading.
 
 | # | Step | What it asks | Required |
 |---|---|---|---|
@@ -87,15 +87,17 @@ Press **+ Add** to open a dialog with three stages: **Type**, **Choose**, **Moun
 | **Repository** | One of your onboarded repositories and its **Branch**. **+ Add repository** opens Workspaces |
 | **User drive** | An existing drive of yours |
 | **Shared drive** | An existing shared drive. You get your own folder on it |
-| **Folder on this machine** | A folder on the computer running Wardyn. Disabled when the server runs its sandboxes on Kubernetes |
+| **Folder on this machine** | A folder already onboarded in Workspaces, on the computer running Wardyn; with none it reads "No folders onboarded yet. Add one in Workspaces." Disabled when the server runs its sandboxes on Kubernetes |
 | **Your computer** | Marked **Coming soon** |
 
 - A drive that cannot attach is greyed with its reason, such as paused by your admin or not available in this pool's runners.
-- **Mount path** sits inside the sandbox user's home directory, and no two items may overlap. A drive's path is fixed.
+- **Mount path** sits inside the sandbox user's home directory, and no two items may overlap. A drive's path is fixed. A repository's or folder's path is fixed too, unless it is its workspace's only item.
+- A folder that shares its workspace with other items mounts at its source's own target, else `/home/agent/work`. It is read-only unless its source is writable. Onboarding refuses a second folder on that default path.
 - **Access** is **Can edit** or **Read-only**. A drive your admin made read-only shows a lock and **Set by your admin**.
-- Each card has **Edit** and **Remove**; open one to see **Stored on**.
+- Each card has **Edit** and **Remove**. Open one to see **What happens to it** and, for a drive or folder, **Stored on**.
+- **Remove** is disabled for a folder that comes with its workspace's repositories; remove those to remove it.
 - The first item you add is where the run starts. Change it under **Starting folder**, with an optional **Subfolder** inside that item. With nothing attached the run starts in the main drive.
-- With nothing added, choose **No extra files — only the main drive**. A held **Continue** says "Add what it needs, or choose No extra files."
+- With nothing added, choose **No extra files — only the main drive**. A held **Continue to tools and access** says "Add what it needs, or choose No extra files."
 - An Environment sandbox opens with your own drive attached when it can attach.
 
 ### Step 5: Tools and access
@@ -108,7 +110,7 @@ The step reads the server's policy preview for the draft ([the `access` block](s
 | **Harness setup** | Each harness's model provider, default for tools with no rule, **Tool rules** and MCP servers |
 | **Add tools and access** | The catalogue of things you can add |
 | **Network** and **Credentials** | The total the run can reach |
-| **Setup still needed** | Open items, each with a button: **Sign in**, **Choose** or **Add** |
+| **Setup still needed** | Open items, each with a button: **Sign in**, **Choose**, **Add** or **Connect Azure DevOps** |
 
 - Hosts read **Requested** until the server has answered this exact draft. Then each reads **Allowed**, **Needs approval** or **Not allowed** against the clamped policy.
 - A line under the host list says what happens to a host nothing lists: refused, held for review, or allowed. It follows your organisation's `first_use_approval` mode.
@@ -144,7 +146,10 @@ Review shows what Wardyn will create and where each value came from. The **Prett
 
 ### Blockers and notices
 
-Notices report a pool at its limit, a size narrowed by the pool, your ceiling, the server or your runners ("Your request was narrowed by …"), and the server's own warnings.
+Notices report a pool at its limit, a CPU or memory request that was narrowed, and the server's own warnings.
+
+- A request narrowed by a named pool or profile is titled "Your request was narrowed by …".
+- The server's own limit reads "Not allowed on this server.", and your runners' limit reads "More than your runners can give."
 
 Blockers hold **Launch run**. They appear in this order, each linking to its fix.
 
@@ -153,7 +158,7 @@ Blockers hold **Launch run**. They appear in this order, each linking to its fix
 3. A template's setup you have not specified, shown as "Needs setup: …".
 4. The server's refusal of the draft, in its own sentence.
 5. Setup items still missing from step 5.
-6. A stale result.
+6. A stale result, shown only when nothing else holds **Launch run**.
 
 **Launch run** opens only with no blockers and a preflight answer for exactly this draft that is under 60 seconds old. **Check again** refreshes it. The create call decides in the end.
 
@@ -187,7 +192,7 @@ On Review, **Save as template** and **Save as policy** open one dialog.
 
 A `kind: Run` document is the draft written as text. Choose **YAML / JSON** on the Start screen, or **Edit YAML** or **Edit JSON** on Review.
 
-- **Document format** switches between YAML and JSON. **Import file** reads a `.yaml`, `.yml` or `.json` file of up to 1 MiB. **Load example** writes an interactive agent task for the first enabled harness.
+- The format switch changes the document between YAML and JSON. **Import file** reads a `.yaml`, `.yml` or `.json` file of up to 1 MiB. **Load example** writes an interactive agent task for the first enabled harness.
 - **Validate** sends the text to the import door, `POST /api/v1/templates/import`, which stores nothing. Each problem is placed on its line.
 - Unsupported input is reported, never discarded. "N issues must be fixed" blocks **Continue to review**. **Open in Guided setup** validates, then opens step 1.
 - [Run documents](sdk.md#run-documents) lists the fields. A title or description is refused as `template_field_excluded`; you name the run at launch.
@@ -211,8 +216,8 @@ The Launched screen opens at `?launched=<run id>`. It refreshes every 4 seconds 
 | **Waiting** | `QUEUED` | **Position** ("Nth in line"), **Waiting since**, **Gives up** and **Cancel run** |
 | The run's state | Any other | The run's state badge |
 
-- A waiting run says why: the pool is at its limit (`runner_pool_at_capacity`), none of your runners is online (`runner_pool_no_runner_free`), or your runners are all busy (`runner_pool_runners_at_capacity`).
-- **Cancel run** calls `POST /api/v1/runs/{id}/kill`. The run leaves the queue and ends as killed. A failure shows under the buttons.
+- A waiting run says why: none of your runners is online (`runner_pool_no_runner_free`), or the pool is running its limit.
+- **Cancel run** asks you to confirm, then calls `POST /api/v1/runs/{id}/kill`. The run leaves the queue and ends as killed. A failure shows under the waiting card.
 - The owner, an admin or, for a service identity's run, its sponsor can cancel. A run that already ended otherwise answers `run_kill_already_terminal`.
 - **View run** opens the run's page. **Start another run** returns to the Start screen.
 

@@ -16,5 +16,5 @@ docs/USERS.md=4394 share=35
 docs/SSH.md=5633 share=35
 # docs/UI-SANDBOXES.md 5341 measured after C-mode-doors merge.
 docs/UI-SANDBOXES.md=5341 share=35
-# docs/NEW-RUN.md 2513 measured (0.9 final docs pass): the New run guide.
-docs/NEW-RUN.md=2513 share=35
+# docs/NEW-RUN.md 2674 measured (0.9 final docs pass): the New run guide.
+docs/NEW-RUN.md=2674 share=35
