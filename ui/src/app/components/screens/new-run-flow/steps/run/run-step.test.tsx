@@ -120,6 +120,39 @@ describe("Run step: pool select", () => {
     expect(load).toHaveBeenCalledWith("interactive", expect.any(AbortSignal));
   });
 
+  it("keeps a composer draft's task and names it Autonomous when the step mounts with no mode", async () => {
+    const { load } = show({ shape: "agent_task", workload: { kind: "agent_task", task: "fix the flaky test" } });
+    await poolSelect();
+    expect(intentNow()).toMatchObject({ experience: "background", workload: { kind: "agent_task", task: "fix the flaky test" } });
+    expect(intentNow().startup).toBeUndefined();
+    expect(screen.getByRole("radio", { name: NR_RUN.MODE_AUTONOMOUS })).toBeChecked();
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(load).toHaveBeenCalledWith("background", expect.any(AbortSignal));
+  });
+
+  it("never shows the answer for the run type it replaced, however late it arrives", async () => {
+    const answers: Record<string, (l: RunnerPoolList) => void> = {};
+    const load = vi.fn((runType?: string) => new Promise<RunnerPoolList>((resolve) => { answers[runType ?? ""] = resolve; }));
+    render(
+      <MemoryRouter>
+        <NewRunDraftProvider owner="alice">
+          <Seeded intent={AGENT}>
+            <RunStep location={{ screen: "step", step: "run" }} go={vi.fn()} startFromScratch={() => {}} deps={{ load }} />
+          </Seeded>
+        </NewRunDraftProvider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(load).toHaveBeenCalledWith("interactive", expect.any(AbortSignal)));
+    await userEvent.click(screen.getByRole("radio", { name: NR_RUN.MODE_AUTONOMOUS }));
+    await waitFor(() => expect(load).toHaveBeenCalledWith("background", expect.any(AbortSignal)));
+    answers.background(list([{ ...SHARED, name: "Background pool" }]));
+    expect(await screen.findByRole("option", { name: "Background pool" })).toBeInTheDocument();
+    answers.interactive(list([{ ...SHARED, name: "Interactive pool" }]));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByRole("option", { name: "Interactive pool" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Background pool" })).toBeInTheDocument();
+  });
+
   it("with no default and no choice, Continue focuses the pool and says one is required", async () => {
     const { go } = show(AGENT, list([SHARED, TEAM_LAPTOPS], { default: {} }));
     const select = await poolSelect();

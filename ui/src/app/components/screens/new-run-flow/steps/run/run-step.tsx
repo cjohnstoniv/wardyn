@@ -14,7 +14,7 @@ import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../..
 import type { RunIntent } from "../../draft/run-intent";
 import { stepIssues } from "../../lenses/local-issues";
 import { chooseBarrier, chooseMode, choosePool, setCommand } from "../../lenses/run-lens";
-import { modeOf } from "../../lenses/shape-lens";
+import { modeOf, type RunMode } from "../../lenses/shape-lens";
 import { flowSteps, StepShell } from "../step-shell";
 import { BarrierSection } from "./barrier-section";
 import { CommandSection } from "./command-section";
@@ -34,12 +34,14 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
   const dispatch = useNewRunDispatch();
   const edit = (apply: (i: RunIntent) => RunIntent) => dispatch({ type: "edit", apply });
   const agent = intent.shape === "agent_task";
-  // The server never infers a mode, so an agent run that has not chosen one is Interactive and the draft says so.
+  // The server never infers a mode, so an agent run that has not chosen one gets one and the draft says so. A task
+  // already in the draft (the Runs composer's) is the Autonomous carrier, so the draft is named Autonomous and keeps it.
   const unnamed = agent && intent.experience === undefined;
+  const fallback: RunMode = intent.workload?.kind === "agent_task" ? "autonomous" : "interactive";
   React.useEffect(() => {
-    if (unnamed) dispatch({ type: "edit", apply: (i) => chooseMode(i, "interactive") });
-  }, [unnamed, dispatch]);
-  const runType: RunnerPoolRunType | undefined = intent.experience ?? (unnamed ? "interactive" : undefined);
+    if (unnamed) dispatch({ type: "edit", apply: (i) => chooseMode(i, fallback) });
+  }, [unnamed, fallback, dispatch]);
+  const runType: RunnerPoolRunType | undefined = intent.experience ?? (unnamed ? (fallback === "autonomous" ? "background" : "interactive") : undefined);
 
   const pools = usePools(deps?.load ?? loadPools, runType);
   const list = pools.status === "ready" ? pools.list : undefined;
@@ -55,7 +57,7 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
       primary={{ label: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES), onActivate: () => go({ screen: "step", step: "harnesses" }) }}
       issues={stepIssues("run", intent, { poolDefault: list ? !!list.default?.pool_id : undefined })}
     >
-      {agent && <ModeSection mode={modeOf(intent) ?? "interactive"} onChange={(mode) => edit((i) => chooseMode(i, mode))} />}
+      {agent && <ModeSection mode={modeOf(intent) ?? fallback} onChange={(mode) => edit((i) => chooseMode(i, mode))} />}
       {agent && modeOf(intent) === "autonomous" && <TimingSection />}
       {intent.shape === "application" && (
         <CommandSection command={intent.workload?.command ?? ""} onCommand={(command) => edit((i) => setCommand(i, command))} />
