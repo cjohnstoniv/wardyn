@@ -184,7 +184,21 @@ export function validate(v: FormValues): FormErrors {
 const amount = (d: string, c: string, per: number): RunnerPoolAmount | undefined =>
   blank(d) && blank(c) ? undefined : { default: Math.round(num(d) * per), cap: Math.round(num(c) * per) };
 
-function duration(x: RtValues, pre: "life" | "idle", noEnd: boolean): RunnerPoolDuration | undefined {
+const DUR_FIELDS = ["Dn", "Du", "Mn", "Mu", "Unl"] as const;
+
+/**
+ * Whether a duration's fields are still as the form loaded them from `from`. The form shows a duration in
+ * whole minutes, hours or days and an unset default as 1 hour, so an untouched one goes back as it was
+ * read (90 s stays 90 s; an idle stop that never stops by default stays default 0) rather than as shown.
+ */
+function untouched(x: RtValues, pre: "life" | "idle", from: RtLimits | undefined): from is RtLimits {
+  if (!from) return false;
+  const o = rtFrom(from);
+  return DUR_FIELDS.every((f) => x[`${pre}${f}`] === o[`${pre}${f}`]) && (pre !== "life" || x.lifeNoEnd === o.lifeNoEnd);
+}
+
+function duration(x: RtValues, pre: "life" | "idle", noEnd: boolean, from?: RtLimits): RunnerPoolDuration | undefined {
+  if (untouched(x, pre, from)) return pre === "life" ? from.lifetime : from.idle;
   if (durEmpty(x, pre, noEnd)) return undefined;
   const d = Math.round(num(x[`${pre}Dn`]) * SECS[x[`${pre}Du`]]);
   if (x[`${pre}Unl`]) return { default_sec: noEnd ? 0 : d, unlimited: true };
@@ -193,22 +207,25 @@ function duration(x: RtValues, pre: "life" | "idle", noEnd: boolean): RunnerPool
 
 const defined = <T extends object>(o: T): T => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
 
-function rtLimits(x: RtValues, interactive: boolean): RtLimits {
+function rtLimits(x: RtValues, interactive: boolean, from?: RtLimits): RtLimits {
   const base = defined({
     cpu_millis: amount(x.cpuD, x.cpuC, 1000),
     memory_mib: amount(x.memD, x.memC, 1024),
     disk_mib: amount(x.diskD, x.diskC, 1024),
-    lifetime: duration(x, "life", !interactive && x.lifeUnl && x.lifeNoEnd),
+    lifetime: duration(x, "life", !interactive && x.lifeUnl && x.lifeNoEnd, from),
   });
-  return interactive ? defined({ ...base, idle: duration(x, "idle", false) }) : base;
+  return interactive ? defined({ ...base, idle: duration(x, "idle", false, from) }) : base;
 }
 
-/** The form's values as the wire's limits (the values must have passed validate). */
-export function toLimits(v: FormValues): RunnerPoolLimits {
+/**
+ * The form's values as the wire's limits (the values must have passed validate). `loaded` is the pool's
+ * limits as the form read them: a duration left as loaded is sent as read. Amounts round-trip exactly.
+ */
+export function toLimits(v: FormValues, loaded?: RunnerPoolLimits): RunnerPoolLimits {
   const limits: RunnerPoolLimits = { barriers: (["CC1", "CC2", "CC3"] as const).filter((_, i) => v[`cc${i + 1}` as "cc1" | "cc2" | "cc3"]) };
   if (!blank(v.maxruns)) limits.max_concurrent_runs = Number(v.maxruns);
-  if (v.bgOn) limits.background = rtLimits(v.bg, false);
-  if (v.itOn) limits.interactive = rtLimits(v.it, true);
+  if (v.bgOn) limits.background = rtLimits(v.bg, false, loaded?.background);
+  if (v.itOn) limits.interactive = rtLimits(v.it, true, loaded?.interactive);
   return limits;
 }
 
