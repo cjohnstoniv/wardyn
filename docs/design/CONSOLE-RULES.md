@@ -251,6 +251,12 @@ Bind `disabled` the instant the action fires; reveal the spinner later.
 - **Canonical strings are the app's strings.** `copy.ts` and `cc-meta.ts` own the shared
   vocabulary so a chip and the sentence beside it cannot disagree. A copy change is
   called out as one — tests and demo narration read them.
+- **Pool words.** A runner is a **self-hosted runner** (a person's computer) or a **remote-hosted
+  runner** (the server's Docker host or Kubernetes cluster); a pool is an **organization pool** or
+  a **user pool**; every runner has **Runs at once**, and a pool's limits come from its runners.
+  "Executor", "Remote Provided", "Self-Hosted pool" and "No pool limit" are retired, and the
+  New Run Review pool line reads "Organization pool · 6 of 10 running" where the approved mock
+  read "Remote Provided · 6 of 10 running" (`new-run-canon.md`, source `deviation (pool words)`).
 
 ## 11. Screen review rubric
 

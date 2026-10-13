@@ -162,12 +162,13 @@ export const MY_RUNNER = {
 } as const;
 
 // Run detail (packet M-RN-3). The packet's "Placement" is not a console word (DECISIONS 2026-10-09), so the
-// Identity row reads "Runs on" and the values use the hosting names a pool carries: a remote run is "Remote
-// Provided", a local run on its owner's computer "{name} · Self-Hosted" (DECISIONS 2026-10-10 D-UI-b ruling).
+// Identity row reads "Runs on" and the values name the kind of runner: a run on its owner's computer is
+// "{name} · your computer", a run on a remote-hosted runner "Remote-hosted runner" (the run read carries that
+// runner's id, not its name).
 export const RUN_PLACEMENT = {
   LABEL: "Runs on",
-  ORG: "Remote Provided",
-  MINE: (name: string) => `${name} · Self-Hosted`,
+  REMOTE: "Remote-hosted runner",
+  MINE: (name: string) => `${name} · your computer`,
   OTHERS: (name: string, owner: string) => `${name} · ${owner}'s runner`,
   /**
    * pending H11-P1: recommended text until the owner answers. The approved FILLED text, "The only placement
