@@ -18,7 +18,6 @@ import type { LaunchIntentSummary } from "../../../../../lib/new-run-fixtures/sc
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import { newRunHref } from "../../draft/new-run-url";
 import { chooseShape } from "../../lenses/shape-lens";
-import { stepIssues } from "../../lenses/local-issues";
 import { flowSteps, StepShell } from "../step-shell";
 import { QUESTION_BLOCK, StartFrom } from "./start-from";
 
@@ -79,12 +78,7 @@ export function ShapeStep({ go, startFromScratch }: NewRunScreenProps) {
       lede={NR_SHAPE.LEDE}
       progress={{ label: NR_SHARED.PROGRESS_ARIA, steps: flowSteps(STEP_LABELS, "shape") }}
       back={{ label: NR_SHARED.BACK, onBack: () => go({ screen: "start" }) }}
-      primary={
-        scratch
-          ? { label: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_RUN), onActivate: () => go({ screen: "step", step: "run" }) }
-          : { label: NR_SHARED.CONTINUE, onActivate: openPick, disabled: pick === undefined }
-      }
-      issues={scratch ? stepIssues("shape", draft.intent) : []}
+      primary={scratch ? undefined : { label: NR_SHARED.CONTINUE, onActivate: openPick, disabled: pick === undefined }}
     >
       <StartFrom
         startFrom={draft.guided.startFrom}
