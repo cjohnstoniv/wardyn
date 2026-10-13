@@ -47,6 +47,10 @@ const FILES_CHOICE = "files_choice_required";
 const ADD_ID = "nr-files-choice";
 const list = () => workspaces.listWorkspaces();
 
+/** Which attachment the run starts in, whatever its subfolder: "" when it starts in none. */
+const startIdentity = (f: RunIntent["start_folder"]): string =>
+  f ? [f.kind, f.attachment ?? "", f.repo ?? "", f.drive_id ?? ""].join("\u0000") : "";
+
 /** The card an attachment belongs to: a repository or drive by its own ids, a folder by its place among its workspace's folders. */
 function cardKey(a: RunAttachment, all: readonly RunAttachment[]): string {
   if (a.kind === "drive") return `drive:${a.drive_id ?? ""}`;
@@ -117,6 +121,14 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
   const [dialog, setDialog] = React.useState<DialogOpen | null>(null);
   const [attempted, setAttempted] = React.useState(false);
   const [subText, setSubText] = React.useState(intent.start_folder?.subpath ?? "");
+  // The subfolder field follows the draft's start: when the run starts somewhere else, or nowhere, it shows that
+  // start's own subfolder (none, usually), never one typed for the start before it.
+  const startKey = startIdentity(intent.start_folder);
+  const [subFor, setSubFor] = React.useState(startKey);
+  if (subFor !== startKey) {
+    setSubFor(startKey);
+    setSubText(intent.start_folder?.subpath ?? "");
+  }
   const sub = cleanSubfolder(subText);
 
   const onSave: AddDialogProps["onSave"] = (apply, saved, mode) => {
@@ -146,7 +158,6 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
       const first = [...fileItems(next, src)].sort(byAdded).find((x) => x.canStart);
       return first ? startIn(first, legacyId)(next) : next;
     });
-    if (item.starts) setSubText("");
     announce(NR_FILES.REMOVED(item.name));
   };
 
