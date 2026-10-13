@@ -5,7 +5,9 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -63,7 +65,6 @@ func TestRunnerPoolDefaultCommands(t *testing.T) {
 	n := len(srv.reqs)
 	for _, bad := range [][]string{
 		{"set"},
-		{"set", "nope"},
 		{"set", "--hosting", "self_hosted", pool.String()},
 	} {
 		if err := execCmd(t, append(append([]string{"runner", "pool", "default"}, bad...), base...)...); err == nil {
@@ -135,7 +136,7 @@ func TestRunnerPoolManageCommandsTakeTheOwnersRoute(t *testing.T) {
 	}
 	srv := newCmdServer(t, http.StatusCreated, sdk.RunnerPool{ID: id, Name: "Laptop", Scope: sdk.RunnerPoolUser})
 	base := []string{"--url", srv.URL, "--token", "t"}
-	for args, want := range map[string]string{"--name Laptop": "/api/v1/me/runner-pools", "--name Builds --org": "/api/v1/runner-pools"} {
+	for args, want := range map[string]string{"--name Laptop": "/api/v1/me/runner-pools", "--name Builds --scope organization": "/api/v1/runner-pools"} {
 		if err := execCmd(t, append(append([]string{"runner", "pool", "create"}, strings.Fields(args)...), base...)...); err != nil {
 			t.Fatal(err)
 		}
@@ -150,117 +151,13 @@ func TestRunnerPoolManageCommandsTakeTheOwnersRoute(t *testing.T) {
 		}
 	}
 	n := len(srv.reqs)
-	for _, bad := range [][]string{{"create"}, {"update", "not-an-id", "--name", "x"}, {"update", id.String()}, {"update", id.String(), "--switch", "maybe"}} {
+	for _, bad := range [][]string{{"create"}, {"create", "--name", "x", "--scope", "shared"}, {"create", "--name", "x", "--org"}, {"update", id.String()}, {"update", id.String(), "--switch", "maybe"}} {
 		if err := execCmd(t, append(append([]string{"runner", "pool"}, bad...), base...)...); err == nil {
 			t.Errorf("%v was accepted", bad)
 		}
 	}
 	if len(srv.reqs) != n {
 		t.Error("an invalid command reached the server")
-	}
-}
-
-func TestRunnerPoolOrgDefaultSetKeepsThePoolAndSetsTheBarrier(t *testing.T) {
-	remote := uuid.New()
-	srv := newCmdServer(t, http.StatusOK, sdk.RunnerPoolDefaults{PoolID: &remote})
-	base := []string{"--url", srv.URL, "--token", "t"}
-	if err := execCmd(t, append([]string{"runner", "pool", "org-default", "set", "--barrier", "CC2"}, base...)...); err != nil {
-		t.Fatal(err)
-	}
-	req := srv.last()
-	var got sdk.RunnerPoolDefaults
-	if err := json.Unmarshal(req.body, &got); err != nil || req.method != http.MethodPut || req.path != "/api/v1/runner-pool-defaults" ||
-		got.Barrier != sdk.CC2 || got.PoolID == nil || *got.PoolID != remote {
-		t.Fatalf("set sent %s %s %s", req.method, req.path, req.body)
-	}
-	if err := execCmd(t, append([]string{"runner", "pool", "org-default", "set", "--barrier", "none"}, base...)...); err != nil {
-		t.Fatal(err)
-	}
-	if body := srv.last().body; strings.Contains(string(body), "barrier") {
-		t.Errorf("none sent %s, want no barrier", body)
-	}
-	other := uuid.New()
-	if err := execCmd(t, append([]string{"runner", "pool", "org-default", "set", other.String()}, base...)...); err != nil {
-		t.Fatal(err)
-	}
-	if body := string(srv.last().body); body != `{"pool_id":"`+other.String()+`","barrier":"CC1"}` && !strings.Contains(body, `"pool_id":"`+other.String()+`"`) {
-		t.Errorf("a pool sent %s", body)
-	}
-	if err := execCmd(t, append([]string{"runner", "pool", "org-default", "set", "none"}, base...)...); err != nil {
-		t.Fatal(err)
-	}
-	if body := string(srv.last().body); strings.Contains(body, "pool_id") {
-		t.Errorf("none sent %s, want no default pool", body)
-	}
-	n := len(srv.reqs)
-	for _, bad := range [][]string{{"set"}, {"set", "--barrier", "CC9"}, {"set", "not-a-pool"}} {
-		if err := execCmd(t, append(append([]string{"runner", "pool", "org-default"}, bad...), base...)...); err == nil {
-			t.Errorf("%v was accepted", bad)
-		}
-	}
-	for _, r := range srv.reqs[n:] {
-		if r.method == http.MethodPut {
-			t.Fatal("an invalid barrier reached the server")
-		}
-	}
-}
-
-// add and remove send one of your runners to your own pool's member route and print the server's
-// sentence when it refuses.
-func TestRunnerPoolAddAndRemoveOwnRunner(t *testing.T) {
-	pool, runnerID := uuid.New(), uuid.New()
-	path := "/api/v1/me/runner-pools/" + pool.String() + "/runners/" + runnerID.String()
-	srv := newCmdServer(t, http.StatusCreated, sdk.RunnerPoolMember{PoolID: pool, RunnerID: &runnerID})
-	base := []string{"--url", srv.URL, "--token", "t"}
-	for verb, method := range map[string]string{"add": http.MethodPut, "remove": http.MethodDelete} {
-		if err := execCmd(t, append([]string{"runner", "pool", verb, pool.String(), runnerID.String()}, base...)...); err != nil {
-			t.Fatalf("%s: %v", verb, err)
-		}
-		if r := srv.last(); r.method != method || r.path != path {
-			t.Errorf("%s sent %s %s, want %s %s", verb, r.method, r.path, method, path)
-		}
-	}
-	n := len(srv.reqs)
-	for _, bad := range [][]string{{"add", pool.String()}, {"add", "not-a-pool", runnerID.String()}, {"remove", pool.String(), "not-a-runner"}} {
-		if err := execCmd(t, append(append([]string{"runner", "pool"}, bad...), base...)...); err == nil {
-			t.Errorf("%v was accepted", bad)
-		}
-	}
-	if len(srv.reqs) != n {
-		t.Error("an invalid command reached the server")
-	}
-	sentence := runnerID.String() + " is not one of your runners in Laptop."
-	refusing := newCmdServer(t, http.StatusUnprocessableEntity, map[string]string{"error": sentence, "reason": "runner_pool_member_mismatch"})
-	err := execCmd(t, "runner", "pool", "add", pool.String(), runnerID.String(), "--url", refusing.URL, "--token", "t")
-	if err == nil || !strings.Contains(err.Error(), sentence) {
-		t.Errorf("a refused add = %v, want the server's sentence", err)
-	}
-}
-
-// add and remove --remote read the pool and take the organisation's route for an organization pool and
-// the caller's own for one of their user pools.
-func TestRunnerPoolRemoteMemberTakesThePoolsRoute(t *testing.T) {
-	id := uuid.New()
-	for scope, prefix := range map[sdk.RunnerPoolScope]string{sdk.RunnerPoolOrganization: "/api/v1/runner-pools/", sdk.RunnerPoolUser: "/api/v1/me/runner-pools/"} {
-		srv := newCmdServer(t, http.StatusOK, sdk.RunnerPool{ID: id, Name: "P", Scope: scope, Revision: 1})
-		base := []string{"--url", srv.URL, "--token", "t"}
-		for verb, method := range map[string]string{"add": http.MethodPut, "remove": http.MethodDelete} {
-			if err := execCmd(t, append([]string{"runner", "pool", verb, id.String(), "--remote", "docker"}, base...)...); err != nil {
-				t.Fatalf("%s %s: %v", scope, verb, err)
-			}
-			if r := srv.last(); r.method != method || r.path != prefix+id.String()+"/remote-runners/docker" {
-				t.Errorf("%s %s sent %s %s", scope, verb, r.method, r.path)
-			}
-		}
-		n := len(srv.reqs)
-		for _, bad := range [][]string{{"add", id.String()}, {"add", id.String(), uuid.NewString(), "--remote", "docker"}} {
-			if err := execCmd(t, append(append([]string{"runner", "pool"}, bad...), base...)...); err == nil {
-				t.Errorf("%v was accepted", bad)
-			}
-		}
-		if len(srv.reqs) != n {
-			t.Error("an invalid command reached the server")
-		}
 	}
 }
 
@@ -308,5 +205,194 @@ func TestRunnerRemoteCommands(t *testing.T) {
 	}
 	if len(srv.reqs) != n {
 		t.Error("an invalid command reached the server")
+	}
+}
+
+// poolRoutes is a test server that answers each "METHOD /path" it knows with its body (and 404 for any
+// other), recording every request.
+type poolRoutes struct {
+	*cmdServer
+}
+
+func newPoolRoutes(t *testing.T, routes map[string]any) poolRoutes {
+	t.Helper()
+	cs := &cmdServer{}
+	cs.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		cs.mu.Lock()
+		cs.reqs = append(cs.reqs, recordedReq{method: r.Method, path: r.URL.Path, body: body})
+		cs.mu.Unlock()
+		resp, ok := routes[r.Method+" "+r.URL.Path]
+		if !ok {
+			resp, ok = routes[r.Method+" *"]
+		}
+		if !ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found","reason":"runner_pool_not_found"}`))
+			return
+		}
+		if resp == nil {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(cs.Close)
+	return poolRoutes{cs}
+}
+
+func (p poolRoutes) sent(method, path string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, r := range p.reqs {
+		if r.method == method && r.path == path {
+			return true
+		}
+	}
+	return false
+}
+
+// add and remove take a pool by id or name and runners by id or name: your own self-hosted runner goes
+// through your own route, and a remote-hosted runner through the organization's route for an
+// organization pool and through your own for your user pool. A name nothing answers to goes on as a
+// remote-hosted runner's id, and the server's sentence is printed.
+func TestRunnerPoolAddAndRemoveResolveRunnersByName(t *testing.T) {
+	laptop, mine := uuid.New(), uuid.New()
+	for _, c := range []struct {
+		scope  sdk.RunnerPoolScope
+		prefix string
+		remote string
+	}{{sdk.RunnerPoolUser, "/api/v1/me/runner-pools/", "GET /api/v1/me/remote-runners"}, {sdk.RunnerPoolOrganization, "/api/v1/runner-pools/", "GET /api/v1/remote-runners"}} {
+		pool := sdk.RunnerPool{ID: laptop, Name: "Laptop", Scope: c.scope, Revision: 1}
+		srv := newPoolRoutes(t, map[string]any{
+			"GET /api/v1/runner-pools":                    sdk.RunnerPoolList{Pools: []sdk.RunnerPoolCatalogueEntry{{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: laptop, Name: "Laptop", Scope: c.scope}}}},
+			"GET /api/v1/runner-pools/" + laptop.String(): pool,
+			"GET /api/v1/me/runners":                      []sdk.RunnerView{{ID: mine, Name: "laptop-7"}},
+			c.remote:                                      []sdk.RemoteRunnerView{{RemoteRunner: sdk.RemoteRunner{ID: "docker", Name: "shared-docker"}}},
+			"PUT *":                                       sdk.RunnerPoolMember{PoolID: laptop},
+			"DELETE *":                                    nil,
+		})
+		base := []string{"--url", srv.URL, "--token", "t"}
+		out, err := execCmdCapture(t, append([]string{"runner", "pool", "add", "Laptop", "laptop-7", "shared-docker"}, base...)...)
+		if err != nil {
+			t.Fatalf("%s add: %v", c.scope, err)
+		}
+		if !srv.sent(http.MethodPut, "/api/v1/me/runner-pools/"+laptop.String()+"/runners/"+mine.String()) ||
+			!srv.sent(http.MethodPut, c.prefix+laptop.String()+"/remote-runners/docker") || !strings.Contains(out, "added to Laptop") {
+			t.Errorf("%s add sent %+v and printed %q", c.scope, srv.reqs, out)
+		}
+		if _, err := execCmdCapture(t, append([]string{"runner", "pool", "remove", laptop.String(), "shared-docker"}, base...)...); err != nil ||
+			!srv.sent(http.MethodDelete, c.prefix+laptop.String()+"/remote-runners/docker") {
+			t.Errorf("%s remove: %v", c.scope, err)
+		}
+	}
+	if err := execCmd(t, "runner", "pool", "add", "Laptop", "--url", "http://127.0.0.1:1", "--token", "t"); err == nil {
+		t.Error("add with no runner was accepted")
+	}
+	sentence := "eu-cluster is not available to people's pools. Ask your admin to make it available."
+	srv := newCmdServer(t, http.StatusUnprocessableEntity, map[string]string{"error": sentence, "reason": "runner_pool_member_mismatch"})
+	if err := execCmd(t, "runner", "pool", "add", laptop.String(), "eu-cluster", "--url", srv.URL, "--token", "t"); err == nil || !strings.Contains(err.Error(), sentence) {
+		t.Errorf("a refused add = %v, want the server's sentence", err)
+	}
+}
+
+// create --scope organization --runner makes the organization's pool and then puts each runner in it.
+func TestRunnerPoolCreateWithRunners(t *testing.T) {
+	id := uuid.New()
+	srv := newPoolRoutes(t, map[string]any{
+		"POST /api/v1/runner-pools":                                       sdk.RunnerPool{ID: id, Name: "General", Scope: sdk.RunnerPoolOrganization, Revision: 1},
+		"GET /api/v1/remote-runners":                                      []sdk.RemoteRunnerView{{RemoteRunner: sdk.RemoteRunner{ID: "k8s", Name: "eu-cluster"}}},
+		"PUT /api/v1/runner-pools/" + id.String() + "/remote-runners/k8s": sdk.RunnerPoolMember{PoolID: id},
+	})
+	out, err := execCmdCapture(t, "runner", "pool", "create", "--name", "General", "--scope", "organization", "--runner", "eu-cluster", "--url", srv.URL, "--token", "t")
+	if err != nil || !srv.sent(http.MethodPut, "/api/v1/runner-pools/"+id.String()+"/remote-runners/k8s") || !strings.Contains(out, "eu-cluster added to General") {
+		t.Fatalf("create --runner = %v, sent %+v, printed %q", err, srv.reqs, out)
+	}
+}
+
+// org-default set --pool takes an organization pool by name and keeps the barrier; a user pool is
+// refused before any write, in the canon's words; none and clear take the default pool away.
+func TestRunnerPoolOrgDefaultSetByPool(t *testing.T) {
+	org, user, keep := uuid.New(), uuid.New(), uuid.New()
+	srv := newPoolRoutes(t, map[string]any{
+		"GET /api/v1/runner-pool-defaults": sdk.RunnerPoolDefaults{PoolID: &keep, Barrier: sdk.CC2},
+		"PUT /api/v1/runner-pool-defaults": sdk.RunnerPoolDefaults{},
+		"GET /api/v1/runner-pools": sdk.RunnerPoolList{Pools: []sdk.RunnerPoolCatalogueEntry{
+			{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: org, Name: "CI jobs", Scope: sdk.RunnerPoolOrganization}},
+			{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: user, Name: "Laptop", Scope: sdk.RunnerPoolUser}}}},
+		"GET /api/v1/runner-pools/" + org.String():  sdk.RunnerPool{ID: org, Name: "CI jobs", Scope: sdk.RunnerPoolOrganization},
+		"GET /api/v1/runner-pools/" + user.String(): sdk.RunnerPool{ID: user, Name: "Laptop", Scope: sdk.RunnerPoolUser},
+	})
+	base := []string{"--url", srv.URL, "--token", "t"}
+	if err := execCmd(t, append([]string{"runner", "pool", "org-default", "set", "--pool", "CI jobs"}, base...)...); err != nil {
+		t.Fatal(err)
+	}
+	if body := string(srv.last().body); body != `{"pool_id":"`+org.String()+`","barrier":"CC2"}` {
+		t.Errorf("set --pool sent %s", body)
+	}
+	if err := execCmd(t, append([]string{"runner", "pool", "org-default", "set", "--barrier", "CC1"}, base...)...); err != nil {
+		t.Fatal(err)
+	}
+	if body := string(srv.last().body); body != `{"pool_id":"`+keep.String()+`","barrier":"CC1"}` {
+		t.Errorf("set --barrier sent %s", body)
+	}
+	for _, args := range [][]string{{"set", "--pool", "none"}, {"clear"}} {
+		if err := execCmd(t, append(append([]string{"runner", "pool", "org-default"}, args...), base...)...); err != nil {
+			t.Fatal(err)
+		}
+		if body := string(srv.last().body); body != `{"barrier":"CC2"}` {
+			t.Errorf("%v sent %s, want the barrier kept and no pool", args, body)
+		}
+	}
+	n := len(srv.reqs)
+	err := execCmd(t, append([]string{"runner", "pool", "org-default", "set", "--pool", "Laptop"}, base...)...)
+	if err == nil || !strings.Contains(err.Error(), "there is no organization default for user pools; people choose their own") {
+		t.Errorf("a user pool = %v", err)
+	}
+	for _, r := range srv.reqs[n:] {
+		if r.method == http.MethodPut {
+			t.Error("a user pool as the organization default reached a write")
+		}
+	}
+	for _, bad := range [][]string{{"set"}, {"set", "--barrier", "CC9"}, {"set", "CI jobs"}} {
+		if err := execCmd(t, append(append([]string{"runner", "pool", "org-default"}, bad...), base...)...); err == nil {
+			t.Errorf("%v was accepted", bad)
+		}
+	}
+}
+
+// runner set --available-to-people turns a remote-hosted runner's people policy on (everyone) or off; a
+// held write exits 0 saying so; --max-runs keeps working on your own runner.
+func TestRunnerSetAvailableToPeople(t *testing.T) {
+	srv := newPoolRoutes(t, map[string]any{
+		"GET /api/v1/me/runners":                          []sdk.RunnerView{},
+		"GET /api/v1/remote-runners":                      []sdk.RemoteRunnerView{{RemoteRunner: sdk.RemoteRunner{ID: "k8s", Name: "sandbox-cluster"}}},
+		"PUT /api/v1/remote-runners/k8s/people-policy":    sdk.RemoteRunner{ID: "k8s"},
+		"DELETE /api/v1/remote-runners/k8s/people-policy": nil,
+	})
+	base := []string{"--url", srv.URL, "--token", "t"}
+	out, err := execCmdCapture(t, append([]string{"runner", "set", "sandbox-cluster", "--available-to-people", "on"}, base...)...)
+	if err != nil || string(srv.last().body) != `{"people_pools":"everyone"}` || !strings.Contains(out, "sandbox-cluster is now available to people's pools") {
+		t.Fatalf("on = %v, sent %s, printed %q", err, srv.last().body, out)
+	}
+	if _, err := execCmdCapture(t, append([]string{"runner", "set", "k8s", "--available-to-people", "off"}, base...)...); err != nil ||
+		!srv.sent(http.MethodDelete, "/api/v1/remote-runners/k8s/people-policy") {
+		t.Fatalf("off = %v", err)
+	}
+	n := len(srv.reqs)
+	for _, bad := range [][]string{{"k8s"}, {"k8s", "--available-to-people", "maybe"}, {"k8s", "--available-to-people", "on", "--max-runs", "2"}} {
+		if err := execCmd(t, append(append([]string{"runner", "set"}, bad...), base...)...); err == nil {
+			t.Errorf("%v was accepted", bad)
+		}
+	}
+	if len(srv.reqs) != n {
+		t.Error("an invalid runner set reached the server")
+	}
+	held := newCmdServer(t, http.StatusAccepted, map[string]any{"pending_change": map[string]any{"id": uuid.NewString(), "state": "pending"}})
+	out, err = execCmdCapture(t, "runner", "remote", "people", "set", "k8s", "--everyone", "--url", held.URL, "--token", "t")
+	if err != nil || !strings.Contains(out, "pending approval: 1 change(s) stored") {
+		t.Errorf("a held people policy = %v, printed %q, want exit 0 saying it waits", err, out)
 	}
 }
