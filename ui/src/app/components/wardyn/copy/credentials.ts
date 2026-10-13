@@ -134,7 +134,44 @@ export const MINTED = {
   REVOKE_CANCEL: "Cancel",
   REVOKE_CONFIRM: "Revoke token",
   REVOKED_TOAST: "Token revoked.",
+  // #1508 (mock M-SVC v2, approved 2026-10-12): the State column and the toggle that adds the revoked rows.
+  COL_STATE: "State",
+  NONE_LIVE: "No token an admin created for someone else still works.",
+  INCLUDE_REVOKED: "Also show revoked tokens",
+  SHOWING_REVOKED: (n: number) => (n === 1 ? "Showing 1 revoked token as well." : `Showing ${n} revoked tokens as well.`),
+  SERVICE_IDENTITY: "Service identity:",
+  // The footnote's two command names render mono; the parts join into the sentence.
+  FOOTNOTE: ["Invite the owner with ", "wardyn person invite", ", or move the token with ", "wardyn token move", ". The console does neither."],
 } as const;
+
+/** What the State column says for each `disposition` value. `sub` takes the revoked-at stamp ("9 days ago"). */
+export const DISPOSITION: Record<
+  string,
+  { label: string; tone: "warning" | "info" | "success" | "neutral"; sub: (revokedAgo: string) => string }
+> = {
+  needs_decision: {
+    label: "Needs a decision",
+    tone: "warning",
+    sub: () => "Still works as the person. Invite them, or move it to a service identity.",
+  },
+  awaiting_owner: { label: "Waiting for the owner", tone: "info", sub: () => "An invitation to replace it is pending." },
+  linked_to_service_identity: {
+    label: "Linked to a service identity",
+    tone: "info",
+    sub: () => "Still works. Revoke it once the job uses the new token.",
+  },
+  replaced_by_owner: {
+    label: "Replaced by the owner",
+    tone: "success",
+    sub: (ago) => `Revoked ${ago}, when they claimed their own.`,
+  },
+  moved_to_service_identity: {
+    label: "Moved to a service identity",
+    tone: "success",
+    sub: (ago) => `Revoked ${ago}, after the move.`,
+  },
+  revoked: { label: "Revoked", tone: "neutral", sub: (ago) => `Revoked ${ago}, with no replacement.` },
+};
 
 // Key custody on the Credentials screen (mock packet M5, approved 2026-10-03; the strings are the
 // packet's, character for character). The keys marked "not in M5" are the few words the dialog and

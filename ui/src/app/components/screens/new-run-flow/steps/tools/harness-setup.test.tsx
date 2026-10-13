@@ -76,6 +76,12 @@ describe("HarnessSetup", () => {
     expect(screen.getByText(NR_TOOLS.NO_HARNESSES)).toBeTruthy();
   });
 
+  it("heads each harness with whether it starts with the run", () => {
+    show([CLAUDE_UNGATED, CODEX], { tools: [{ id: "claude-code", kind: "harness" }, { id: "codex-cli", kind: "harness" }] });
+    expect(card("Claude Code").getByText(NR_TOOLS.SUB_STARTS)).toBeTruthy();
+    expect(card("Codex CLI").getByText(NR_TOOLS.SUB_AVAILABLE)).toBeTruthy();
+  });
+
   describe("model provider", () => {
     it("lists the providers that serve the harness by record name, and never a switched-off one", () => {
       show([CLAUDE_UNGATED], CLAUDE, [MCP_DOCS], { setup: [CHOOSE] });
@@ -186,38 +192,17 @@ describe("HarnessSetup", () => {
   });
 
   describe("tool rules", () => {
-    it("shows a locked row on the gated lane as enforced", () => {
+    it("shows the policy's rows locked, with no enforcement note, on any lane (A23 a)", () => {
       show([CLAUDE_GATED_LOCKED]);
-      const rows = screen.getAllByRole("listitem").filter((li) => li.hasAttribute("data-locked"));
-      expect(rows.map((r) => r.textContent)).toEqual(["WebFetchBlock it", "BashAsk first"]);
-      expect(screen.queryByText(/Not enforced on this run/)).toBeNull();
-    });
-
-    it("never shows a locked row on an ungated lane as enforced", () => {
+      const locked = () => screen.getAllByRole("listitem").filter((li) => li.hasAttribute("data-locked")).map((r) => r.textContent);
+      expect(locked()).toEqual(["WebFetchBlock it", "BashAsk first"]);
+      cleanup();
       show([CLAUDE_UNGATED_LOCKED]);
-      const row = screen.getAllByRole("listitem").find((li) => li.hasAttribute("data-locked")) as HTMLElement;
-      expect(row.textContent).toBe("WebFetchBlock itNot enforced on this run");
-    });
-
-    it("shows a row the server marks unenforced as not enforced, even on the gated lane", () => {
-      const fact = { ...CLAUDE_GATED_LOCKED, policy_rules: [{ ...CLAUDE_GATED_LOCKED.policy_rules[0], enforced: false }, CLAUDE_GATED_LOCKED.policy_rules[1]] };
-      show([fact]);
-      const rows = screen.getAllByRole("listitem").filter((li) => li.hasAttribute("data-locked"));
-      expect(rows[0].textContent).toContain("Not enforced on this run");
-      expect(rows[1].textContent).not.toContain("Not enforced on this run");
-    });
-
-    it("never shows an attended row as enforced when the server names no enforcer (R)", () => {
-      show([{ ...CLAUDE_GATED_LOCKED, lane: "attended", enforcer: "none" }]);
-      const rows = screen.getAllByRole("listitem").filter((li) => li.hasAttribute("data-locked"));
-      expect(rows.map((r) => r.textContent)).toEqual(["WebFetchBlock itNot enforced on this run", "BashAsk firstNot enforced on this run"]);
-    });
-
-    it("claims neither way while the next answer is out", () => {
+      expect(locked()).toEqual(["WebFetchBlock it"]);
+      cleanup();
       h.answered = false;
       show([CLAUDE_UNGATED_LOCKED]);
-      const row = screen.getAllByRole("listitem").find((li) => li.hasAttribute("data-locked")) as HTMLElement;
-      expect(row.textContent).toBe(`WebFetchBlock it${NR_TOOLS.NET_REQUESTED}`);
+      expect(locked()).toEqual(["WebFetchBlock it"]);
     });
 
     it("keeps the person's Run it selected while the next answer is out", async () => {

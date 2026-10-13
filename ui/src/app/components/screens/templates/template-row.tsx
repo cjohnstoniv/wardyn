@@ -10,13 +10,16 @@ import { absoluteTime, shortDate } from "../../../lib/format";
 import type { TemplateSummary } from "../../../lib/types/templates";
 import { Button } from "../../ui/button";
 import { cn } from "../../ui/utils";
+import { NR_RUN } from "../../wardyn/copy/new-run/run";
 import { NR_TEMPLATES as T } from "../../wardyn/copy/new-run/templates";
+import { InfoTip } from "../../wardyn/info-tip";
 import { Chip } from "../../wardyn/primitives";
 import { NEW_RUN_PATH } from "../new-run-flow/draft/new-run-url";
 import { includedGroups, needsSetupLabel, ownerLine, scopeLabel, whyReadOnly } from "./template-display";
 
 // The five columns of the list at md and up; below that the cells stack, each under its own label.
-export const ROW_GRID = "md:grid-cols-[minmax(0,2.2fr)_minmax(0,1.2fr)_minmax(0,1.6fr)_minmax(0,1fr)_auto]";
+// The actions column is fixed so a row with a reason tip lines up with one without, and with the header.
+export const ROW_GRID = "md:grid-cols-[minmax(0,2.2fr)_minmax(0,1.2fr)_minmax(0,1.6fr)_minmax(0,1fr)_15rem]";
 
 const startHref = (t: TemplateSummary) =>
   `${NEW_RUN_PATH}?${new URLSearchParams({ template: t.id, rev: String(t.revision) })}`;
@@ -45,7 +48,8 @@ export function TemplateRow({
   const needs = needsSetupLabel(t);
   const owner = ownerLine(t);
   const why = t.writable ? null : whyReadOnly(t);
-  // aria-disabled, not disabled: the control stays focusable so the reason beside it is reachable.
+  // aria-disabled, not disabled: the control stays focusable and describes itself by the reason. Sighted readers
+  // open the same reason from the info tip beside the actions, on tap, click or keyboard (tooltips open on tap).
   const locked = !t.writable;
   const guard = (act: () => void) => (locked ? undefined : act);
   const lockedProps = locked
@@ -72,7 +76,7 @@ export function TemplateRow({
       </div>
       <div className="min-w-0 space-y-1">
         <CellLabel>{T.COL_AVAILABLE}</CellLabel>
-        <Chip>{scopeLabel(t)}</Chip>
+        <Chip tone={t.scope === "person" ? "primary" : "neutral"}>{scopeLabel(t)}</Chip>
         {owner && <p className="text-xs text-muted-foreground">{owner}</p>}
       </div>
       <div className="min-w-0">
@@ -92,7 +96,7 @@ export function TemplateRow({
       </div>
       <div className="space-y-1.5 md:justify-self-end">
         <div className="flex flex-wrap gap-1.5 md:justify-end">
-          <Button asChild variant="outline" size="sm">
+          <Button asChild size="sm">
             <Link to={startHref(t)} aria-describedby={nameId}>
               {T.USE}
             </Link>
@@ -103,6 +107,7 @@ export function TemplateRow({
           <Button type="button" variant="ghost" size="sm" className={lockedClass} {...lockedProps} onClick={guard(onDelete)}>
             {T.DELETE}
           </Button>
+          {why && <InfoTip label={NR_RUN.ABOUT_ARIA(t.name)}>{why}</InfoTip>}
           {canPublish && (
             <Button type="button" variant="outline" size="sm" disabled={busy} aria-describedby={nameId} onClick={onPublish}>
               {T.PUBLISH}
@@ -110,9 +115,9 @@ export function TemplateRow({
           )}
         </div>
         {why && (
-          <p id={whyId} className="max-w-[28ch] text-xs text-muted-foreground md:text-right">
+          <span id={whyId} className="sr-only">
             {why}
-          </p>
+          </span>
         )}
       </div>
     </li>

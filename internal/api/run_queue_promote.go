@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -76,13 +77,13 @@ func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.
 	}
 	var auth queueAuthority
 	_ = json.Unmarshal(e.Authority, &auth) //nolint:errcheck // an unreadable authority fails the start's own checks
-	free, pinned, err := s.queueRunnerFree(auth.context(ctx), pool, launch)
+	room, err := s.queueRunnerFree(auth.context(ctx), pool, launch)
 	if err != nil {
 		return store.QueueVerdict{}, err
 	}
-	if !free {
+	if room.wait != "" {
 		// Only an unpinned run's wait is its owner's: a run pinned to one runner waits for that runner alone.
-		return store.QueueVerdict{Wait: string(runnerpool.WaitNoRunnerFree), Owner: !pinned}, nil
+		return store.QueueVerdict{Wait: string(room.wait), Owner: !room.pinned}, nil
 	}
 	if s.admitHostCapacity(ctx, e.Owner, "runs", false) != nil {
 		return store.QueueVerdict{Stop: true}, nil
@@ -90,43 +91,81 @@ func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.
 	if s.runFit(ctx, types.RunPolicySpec{Resources: launch.Resources}, time.Duration(launch.LifetimeCapSec)*time.Second, false).refusal != "" {
 		return store.QueueVerdict{}, nil
 	}
-	return store.QueueVerdict{Admit: true}, nil
+	return store.QueueVerdict{Admit: true, Runners: room.runners}, nil
 }
 
-// queueRunnerFree reports whether one of the owner's candidate targets in the pool can take a run now:
-// at least one is online with known facts. A pool the owner can no longer see, or a refusal of the
-// owner's own (a user type that is gone), counts as free, so the start ends the run with its reason
-// instead of leaving it to wait. Only a read that failed is an error. pinned says the launch names its
-// runner (runner_id): on a pool of the owner's own runners only that runner is asked.
-func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, launch queuedLaunch) (free, pinned bool, err error) {
+// queueRoom is queueRunnerFree's answer: why the run cannot start now ("" when it can), whether it names
+// its runner, and the owner's runners it may be bound to, each online with room as last read.
+type queueRoom struct {
+	wait    runnerpool.WaitReason
+	pinned  bool
+	runners []uuid.UUID
+}
+
+// queueRunnerFree reports whether one of the owner's candidate targets in the pool can take a run now,
+// deciding the kind as placement does: one of the owner's own runners that is online and holds fewer runs
+// than its max_runs first, else an online remote-hosted runner. The kinds are the ones the run may use:
+// the one its request asks for (a pin asks for one runner) and none the owner's profile denies. A pool
+// the owner can no longer see, or a refusal of the owner's own (a user type that is gone), counts as
+// free, so the start ends the run with its reason instead of leaving it to wait. Only a read that failed
+// is an error. pinned says the launch names its runner (runner_id): only that runner is asked.
+func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, launch queuedLaunch) (queueRoom, error) {
 	ps, ok := s.cfg.Store.(store.RunnerPoolStore)
 	if !ok {
-		return true, false, nil
+		return queueRoom{}, nil
 	}
 	var req createRunRequest
 	_ = json.Unmarshal(launch.Request, &req) //nolint:errcheck // an unreadable request pins no runner
-	pinned = req.RunnerID != ""
+	out := queueRoom{pinned: req.RunnerID != ""}
 	rows, refusal := s.permittedPools(ctx, ps, true)
 	if refusal != nil {
 		if refusal.err != nil && !errors.Is(refusal.err, errUserTypeUnknown) {
-			return false, pinned, fmt.Errorf("read the owner's pools: %w", refusal.err)
+			return out, fmt.Errorf("read the owner's pools: %w", refusal.err)
 		}
-		return true, pinned, nil
+		return out, nil
 	}
 	row, found := catalogueRow(rows, pool.ID)
 	if !found {
-		return true, pinned, nil
+		return out, nil
+	}
+	// A ceiling that cannot be read denies nothing here: the start judges the run against it again.
+	var denied []types.Placement
+	if ceiling, err := s.effectiveCeiling(ctx); err == nil {
+		denied = s.deniedPlacements(ctx, ceiling)
 	}
 	targets, refusal := s.poolTargets(ctx, &req, ps, row)
 	if refusal != nil {
-		return false, pinned, nil
+		out.wait = runnerpool.WaitNoRunnerFree
+		return out, nil
 	}
+	ownOnline, remoteOnline := false, false
 	for _, t := range targets {
-		if !t.offline && (!pinned || pool.HostingType != types.RunnerPoolSelfHosted || t.id == req.RunnerID) {
-			return true, pinned, nil
+		kind := t.placement()
+		if t.offline || (out.pinned && t.id != req.RunnerID) || (req.Placement != "" && kind != req.Placement) || slices.Contains(denied, kind) {
+			continue
+		}
+		switch {
+		case t.runnerID == nil:
+			remoteOnline = true
+		case !t.full:
+			ownOnline = true
+			out.runners = append(out.runners, *t.runnerID)
+		default:
+			ownOnline = true
 		}
 	}
-	return false, pinned, nil
+	switch {
+	case len(out.runners) > 0:
+		// The promotion holds one of these and the start keeps it while it still can take the run.
+	case remoteOnline:
+		// An online remote-hosted runner takes the run whatever the owner's runners hold, so the promotion
+		// binds no runner and the start places it.
+	case !ownOnline:
+		out.wait = runnerpool.WaitNoRunnerFree
+	default:
+		out.wait = runnerpool.WaitRunnersAtCapacity
+	}
+	return out, nil
 }
 
 // kickQueue asks every pool with waiting runs to promote, off the caller's path. Concurrent kicks

@@ -21,7 +21,8 @@
 //   - policies (/api/v1/policies):       CreatePolicy, GetPolicy, GetDefaultPolicy, ListPolicies,
 //     ListPoliciesPage, UpdatePolicy, DeletePolicy
 //   - workspaces (/api/v1/workspaces):   CreateWorkspace, GetWorkspace, ListWorkspaces,
-//     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
+//     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask,
+//     GetWorkspaceBuild, BuildWorkspace
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
 //     ExportAuditPartition, AuditRetention, DropAuditPartition
@@ -48,14 +49,23 @@
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
 //   - runners (/api/v1/runners, /api/v1/me/runners): MintRunnerToken, RegisterRunner, ClaimRunner,
-//     ListRunners, ListRunnersPage, GetRunner, ListMyRunners, GetMyRunner, ListRunnerTokens,
+//     ListRunners, ListRunnersPage, GetRunner, ListMyRunners, GetMyRunner, SetMyRunnerMaxRuns, ListRunnerTokens,
 //     ListRunnerTokensPage, RevokeRunnerToken, GetRunnerSettings, SetRunnersEnabled
 //   - runner pools (/api/v1/runner-pools, /api/v1/runner-pool-defaults; /api/v1/me/runner-pools, /api/v1/me/runner-pool-defaults):
 //     ListRunnerPools, ListRunnerPoolsFor, GetRunnerPool, CreateRunnerPool, UpdateRunnerPool, DeleteRunnerPool, CreateMyRunnerPool, UpdateMyRunnerPool, DeleteMyRunnerPool, AddMyRunnerToPool,
 //     RemoveMyRunnerFromPool, GetOrgRunnerPoolDefaults, SetOrgRunnerPoolDefaults, GetMyRunnerPoolDefaults,
-//     SetMyRunnerPoolDefaults, ClearMyRunnerPoolDefaults. The executor-membership and use-policy sub-routes are NOT wrapped (the console authors them)
+//     SetMyRunnerPoolDefaults, ClearMyRunnerPoolDefaults, AddRunnerPoolRemoteRunner, RemoveRunnerPoolRemoteRunner,
+//     AddMyPoolRemoteRunner, RemoveMyPoolRemoteRunner, ListRunnerPoolMembers. The use-policy sub-routes are NOT wrapped (the console authors them)
+//   - remote-hosted runners (/api/v1/remote-runners, /api/v1/me/remote-runners): ListRemoteRunners, GetRemoteRunner,
+//     UpdateRemoteRunner, SetRemoteRunnerPeoplePolicy, ClearRemoteRunnerPeoplePolicy, ListMyRemoteRunners
 //   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDeviceEnrolmentTokens, RevokeDeviceEnrolmentToken, ListDevices, RevokeDevice
 //   - people (/api/v1/people):           ListPeople, and ErasePerson (a person's retained records, by scope, 0.8.6); the other writes below stay unwrapped
+//   - invitations (/api/v1/invitations, /api/v1/people/{principal}/invitations, /api/v1/me/invitations): CreateInvitation, ListInvitations,
+//     ListPersonInvitations, ListPersonInvitationsPage, ListMyInvitations, RevokeInvitation, ClaimInvitation (a signed-in session only)
+//   - service identities (/api/v1/service-identities, /api/v1/me/service-identities): CreateServiceIdentity, ListServiceIdentities,
+//     ListServiceIdentitiesPage, GetServiceIdentity, UpdateServiceIdentity, RetireServiceIdentity, ListMyServiceIdentities, and the
+//     sponsor's token routes MintServiceToken (a signed-in session only), ListServiceTokens, ListServiceTokensPage, RevokeServiceToken;
+//     with MoveToken (POST /api/v1/tokens/{id}/move)
 //   - components (/api/v1/components):   ListComponents, PutComponent, DeleteComponent (the organisation's, admin) — and, on
 //     /api/v1/me/components, the caller's own: MyComponents, SaveMyComponent, UpdateMyComponent, DeleteMyComponent
 //
@@ -71,11 +81,9 @@
 //     Security tier, and read by the console's Settings card rather than by tooling
 //   - /api/v1/permissions    — capability grants and per-kind enforcement (0.7)
 //   - /api/v1/access         — directory search and group->role mappings (0.7)
-//   - /api/v1/service-identities — an admin's service identities (0.9); /api/v1/me/service-identities is the sponsor's token mint, also unwrapped
-//   - /api/v1/invitations    — an admin's invitations to a person to mint their own token (0.9); /api/v1/me/invitations is the claim, also unwrapped
-//   - /api/v1/tokens         — admin-tier API tokens (0.7); /api/v1/me/tokens is the
+//   - /api/v1/tokens         — admin-tier API tokens (0.7), but for MoveToken (0.9); /api/v1/me/tokens is the
 //     self-service half, also unwrapped
-//   - /api/v1/people         — the writes: creating a person, erasing their stored credentials (0.8, offboarding)
+//   - /api/v1/people         — the writes: creating a person, erasing their stored credentials (0.8, offboarding); its invitations are wrapped above
 //   - /api/v1/scim           — the Settings SCIM card's read-only status (0.8.6); the SCIM server itself is /scim/v2
 //   - /api/v1/workspace-providers — the org's git-provider policy (allowed base
 //     URLs, credential lanes) and storage ceilings (0.7.2). Admin-only, and

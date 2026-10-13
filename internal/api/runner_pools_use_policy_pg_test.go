@@ -47,8 +47,8 @@ func (e *poolEnv) policySubjects(pool uuid.UUID) []types.RunnerPoolSubject {
 
 func TestPG_RunnerPoolUsePolicyOnlyNarrowsARemoteProvidedPool(t *testing.T) {
 	e := newPoolEnv(t, false)
-	remote := e.createPool("Provided", types.RunnerPoolRemoteProvided)
-	self := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	remote := e.createPool("Provided", types.RunnerPoolOrganization)
+	self := e.createPool("Laptops", types.RunnerPoolUser)
 	if _, err := e.pg.CreateUserType(context.Background(), types.UserType{ID: "contractor", Name: "Contractor"}); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestPG_RunnerPoolUsePolicyOnlyNarrowsARemoteProvidedPool(t *testing.T) {
 
 func TestPG_RunnerPoolUsePolicyIsHeldForASecondHuman(t *testing.T) {
 	e := newPoolEnv(t, true)
-	remote := e.createPool("Provided", types.RunnerPoolRemoteProvided)
+	remote := e.createPool("Provided", types.RunnerPoolOrganization)
 	const set = `{"subjects":[{"subject_type":"user","subject":"sub-named"}]}`
 
 	held := e.pending(e.call(e.alice, http.MethodPut, usePolicyPath(remote.ID), set))
@@ -228,7 +228,7 @@ func TestPG_RunnerPoolHeldPolicyChangeGoesStaleWhenThePolicyAppearsOrDisappears(
 	const set = `{"subjects":[{"subject_type":"user","subject":"sub-named"}]}`
 	t.Run("open, then emptied by a purge", func(t *testing.T) {
 		e := newPoolEnv(t, true)
-		pool := e.createPool("Provided", types.RunnerPoolRemoteProvided)
+		pool := e.createPool("Provided", types.RunnerPoolOrganization)
 		held := e.pending(e.call(e.alice, http.MethodPut, usePolicyPath(pool.ID), set))
 		e.emptiedByLeaverPurge(pool.ID)
 		e.approveIsStale(held.ID)
@@ -238,7 +238,7 @@ func TestPG_RunnerPoolHeldPolicyChangeGoesStaleWhenThePolicyAppearsOrDisappears(
 	})
 	t.Run("emptied by a purge, then opened", func(t *testing.T) {
 		e := newPoolEnv(t, true)
-		pool := e.createPool("Provided", types.RunnerPoolRemoteProvided)
+		pool := e.createPool("Provided", types.RunnerPoolOrganization)
 		e.emptiedByLeaverPurge(pool.ID)
 		held := e.pending(e.call(e.alice, http.MethodPut, usePolicyPath(pool.ID), set))
 		if w := e.admin(http.MethodDelete, usePolicyPath(pool.ID), ""); w.Code != http.StatusNoContent {
@@ -251,7 +251,7 @@ func TestPG_RunnerPoolHeldPolicyChangeGoesStaleWhenThePolicyAppearsOrDisappears(
 	})
 	t.Run("presence unchanged", func(t *testing.T) {
 		e := newPoolEnv(t, true)
-		pool := e.createPool("Provided", types.RunnerPoolRemoteProvided)
+		pool := e.createPool("Provided", types.RunnerPoolOrganization)
 		e.emptiedByLeaverPurge(pool.ID)
 		e.approve(e.pending(e.call(e.alice, http.MethodPut, usePolicyPath(pool.ID), set)).ID)
 		if got := e.policySubjects(pool.ID); len(got) != 1 || got[0].Subject != "sub-named" {

@@ -96,7 +96,7 @@ func TestRehearseTarget_ScratchDatabaseOnTheLiveServerPassesEveryCheck(t *testin
 
 func TestRehearseTarget_T0RefusesMoreThanOneHost(t *testing.T) {
 	live, target := migratedDatabase(t), migratedDatabase(t)
-	multi := strings.Replace(target, "127.0.0.1", "127.0.0.1:"+mustPort(t, target)+",localhost", 1)
+	multi := withHost(t, target, "127.0.0.1:"+mustPort(t, target)+",localhost") // whatever host the DSN names
 	_, err := runChain(t, chainFor(t, live, multi))
 	requireExit(t, err, exitMigrateRefused, "T0")
 }

@@ -90,8 +90,11 @@ func TestPG_GovernanceChanges_EgressBaselineIsHeldThenApplied(t *testing.T) {
 			t.Fatal(err)
 		}
 		moved := state()
-		if w := e.call(e.bob, http.MethodPost, "/api/v1/governance/changes/"+stale.ID.String()+"/approve", ""); w.Code == http.StatusOK {
-			t.Fatalf("approving a change gone stale on %s = %d, want a refusal", move.name, w.Code)
+		if w := e.call(e.bob, http.MethodPost, "/api/v1/governance/changes/"+stale.ID.String()+"/approve", ""); w.Code != http.StatusConflict || errorReason(w) != reasonGovernanceChangeStale {
+			t.Fatalf("approving a change gone stale on %s = %d %s, want 409 %s", move.name, w.Code, w.Body.String(), reasonGovernanceChangeStale)
+		}
+		if got := e.changeState(stale.ID); got != types.GovernanceChangeStale {
+			t.Errorf("stale on %s: the proposal is stored as %q, want %q", move.name, got, types.GovernanceChangeStale)
 		}
 		if got := state(); !slices.Equal(got.BaselineHosts, moved.BaselineHosts) || !slices.Equal(got.InternalHostSuffixes, moved.InternalHostSuffixes) {
 			t.Errorf("stale on %s: declaration %+v, a stale approval changed it (was %+v, moved to %+v)", move.name, got, before, moved)

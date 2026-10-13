@@ -10,7 +10,7 @@
 // opens the existing door for it; signing in re-checks, and Launch is pressed again.
 
 import * as React from "react";
-import { Loader2 } from "lucide-react";
+import { Check, Loader2 } from "lucide-react";
 import { HttpError } from "../../../../lib/api/core";
 import { isCredentialRefusal } from "../../../../lib/api/runs";
 import type { CreateRunResult } from "../../../../lib/types/run-create";
@@ -22,13 +22,13 @@ import { Textarea } from "../../../ui/textarea";
 import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
-import { BarrierMark } from "../../../wardyn/barrier-mark";
 import { useModelAccessDoor } from "../../../wardyn/model-access-context";
 import { useAdoLaunchDoor } from "../../new-run/use-ado-launch-door";
 import { intentToWire } from "../draft/intent-to-wire";
 import type { RunIntent } from "../draft/run-intent";
 import { useDraftIdentity, useIntentChecks } from "../draft/use-intent-checks";
 import { useNewRunDispatch, useNewRunDraft } from "../new-run-route";
+import { BarrierChip } from "../review/barrier-chip";
 import { cpuNumber, lifetimeText } from "../review/format";
 import type { ReviewPreflight } from "../review/review-seams";
 import { AdoLaunchDialog } from "./ado-launch-dialog";
@@ -168,15 +168,21 @@ function NameRunForm({ onOpenChange, onCreated }: Pick<NameRunDialogProps, "onOp
           />
         </div>
 
-        <div className="flex flex-col gap-2 rounded-md border border-border p-3" data-testid="name-run-summary">
+        <div
+          className={!checking && answered ? "flex gap-3 rounded-lg border border-success/25 bg-success-subtle p-3" : "flex flex-col gap-2 rounded-md border border-border p-3"}
+          data-testid="name-run-summary"
+        >
           {checking && <p id="name-run-checking" role="status" className="text-sm text-muted-foreground">{NR_LAUNCH.CHECKING}</p>}
           {!checking && answered && (
             <>
-              <p className="flex flex-wrap items-baseline gap-x-2 text-sm">
-                <strong>{NR_LAUNCH.CHECKED_JUST_NOW}</strong>
-                <span className="text-muted-foreground">{summaryLine(pre, draft.intent)}</span>
-              </p>
-              <BarrierMark cc={pre.enforced_confinement_class} size="sm" />
+              <Check aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-success" />
+              <div className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-3">
+                <p className="flex flex-col gap-0.5 text-sm">
+                  <strong>{NR_LAUNCH.CHECKED_JUST_NOW}</strong>
+                  <span className="text-muted-foreground">{summaryLine(pre, draft.intent)}</span>
+                </p>
+                <BarrierChip cc={pre.enforced_confinement_class} />
+              </div>
             </>
           )}
           {!checking && !answered && checks.preflightError !== null && (

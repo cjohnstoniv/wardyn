@@ -65,7 +65,7 @@ const pending = (name: NewRunScreenName): Screen => function PendingScreen() {
 export const NEW_RUN_SCREENS: Record<NewRunScreenName, Screen> = {
   start: React.lazy(() => import("./start/start-screen").then((m) => ({ default: m.StartScreen }))),
   shape: React.lazy(() => import("./steps/shape/shape-step").then((m) => ({ default: m.ShapeStep }))),
-  run: pending("run"),
+  run: React.lazy(() => import("./steps/run/run-step").then((m) => ({ default: m.RunStep }))),
   harnesses: React.lazy(() => import("./steps/harnesses/harnesses-step").then((m) => ({ default: m.HarnessesStep }))),
   files: pending("files"),
   tools: pending("tools"),
@@ -76,6 +76,24 @@ export const NEW_RUN_SCREENS: Record<NewRunScreenName, Screen> = {
 };
 
 const screenOf = (loc: NewRunLocation): NewRunScreenName => (loc.screen === "step" ? loc.step : loc.screen);
+
+// Make's centred page column (snapshot CSS .center-stage, .flow-shell/.editor-shell, .review-shell):
+// Start 1040 px, the Guided steps and the document editor 900 px, Review 1120 px, Launched 580 px, a 20 px gutter each
+// side, and Make's top and bottom padding; a phone narrows the gutter and the top padding as Make does.
+const COLUMN = "mx-auto pb-[110px] max-[520px]:w-[calc(100%-24px)]";
+const STEP_COLUMN = `${COLUMN} w-[min(900px,calc(100%-40px))] pt-11 max-[520px]:pt-7`;
+const FRAME: Partial<Record<NewRunScreenName, string>> = {
+  start: `${COLUMN} w-[min(1040px,calc(100%-40px))] pt-[clamp(65px,9vh,110px)] max-[520px]:pt-11`,
+  shape: STEP_COLUMN,
+  run: STEP_COLUMN,
+  harnesses: STEP_COLUMN,
+  files: STEP_COLUMN,
+  tools: STEP_COLUMN,
+  document: STEP_COLUMN,
+  review: `${COLUMN} w-[min(1120px,calc(100%-40px))] pt-11 max-[520px]:pt-7`,
+  // Make's .success-shell (index.css:489): 580 px, the top padding scales with the viewport.
+  launched: "mx-auto w-[min(580px,calc(100%-40px))] pt-[clamp(80px,13vh,140px)] pb-[110px]",
+};
 
 /** Where the guard sends a scratch or composer draft, or undefined when the screen may open. */
 function guardTarget(draft: NewRunDraft, loc: NewRunLocation): NewRunLocation | undefined {
@@ -198,7 +216,11 @@ function NewRunFlow({ loaders, screens }: { loaders: SeedLoaders; screens: Recor
   if (key && seeded.key !== key) return null;
   const name = seeded.error !== undefined && key ? "seedFailed" : screenOf(parsed.location);
   const Current = screens[name];
-  return <Current location={parsed.location} go={go} seedError={seeded.error} startFromScratch={startFromScratch} />;
+  return (
+    <div className={FRAME[name]}>
+      <Current location={parsed.location} go={go} seedError={seeded.error} startFromScratch={startFromScratch} />
+    </div>
+  );
 }
 
 export function NewRunRoute({ loaders = seedLoaders, screens = NEW_RUN_SCREENS }: { loaders?: SeedLoaders; screens?: Record<NewRunScreenName, Screen> }) {

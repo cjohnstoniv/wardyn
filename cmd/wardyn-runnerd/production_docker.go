@@ -12,10 +12,12 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"os"
 	"time"
 
 	"github.com/moby/moby/client"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
 	"github.com/cjohnstoniv/wardyn/internal/runner/keystore"
 	"github.com/cjohnstoniv/wardyn/internal/runner/offline"
@@ -47,7 +49,33 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	if err != nil {
 		return runnerRuntime{}, err
 	}
-	return localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay)
+	return localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity)
+}
+
+// dockerCapacity is the Docker engine's CPUs and memory as the runner's advertised capacity, the size
+// placement holds one run on this runner to, read again on every connect. An engine that does not answer
+// within ten seconds leaves the capacity unreported (unknown, never zero) until the next connect.
+func dockerCapacity(ctx context.Context) placement.Capacity {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	c, err := readDockerCapacity(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "runner capacity unknown until the next connect: Docker did not report its size", "error", err)
+	}
+	return c
+}
+
+func readDockerCapacity(ctx context.Context) (placement.Capacity, error) {
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		return placement.Capacity{}, err
+	}
+	defer cli.Close()
+	info, err := cli.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return placement.Capacity{}, err
+	}
+	return engineCapacity(info.Info.NCPU, info.Info.MemTotal), nil
 }
 
 // dockerHostGateway is the address a native engine resolves host-gateway to
@@ -101,7 +129,7 @@ func dockerHostGateway(ctx context.Context) (netip.Addr, []netip.Addr, error) {
 // postureInterval is how often a connected runner re-reads its posture.
 const postureInterval = 15 * time.Minute
 
-func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay *localRelay) (_ runnerRuntime, retErr error) {
+func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay *localRelay, capacity func(context.Context) placement.Capacity) (_ runnerRuntime, retErr error) {
 	streams, err := runnerio.New(sub, identity.RunnerID.String(), stateDir)
 	if err != nil {
 		return runnerRuntime{}, err
@@ -156,7 +184,9 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 			if err != nil {
 				return err
 			}
-			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String()})
+			// A host that cannot say its name reports none, and keeps the machine name it had.
+			machine, _ := os.Hostname()
+			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Capacity: capacity(ctx)})
 			if err != nil {
 				return err
 			}

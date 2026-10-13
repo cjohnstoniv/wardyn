@@ -137,6 +137,15 @@ declare -A ALLOWLIST=(
   # nothing compares it against the clock.
   ["cmd/wardyn/run_inspect_test.go"]=1
   ["cmd/wardyn/run_queue_wait_test.go"]=1
+  # New Run Launched: the wait/elapsed words are computed from a fixed reference instant passed in as now;
+  # nothing reads the real clock.
+  ["ui/src/app/components/screens/new-run-flow/launch/launched-model.test.ts"]=1
+  # Invitations and service identities: a fixed instant that is wire passthrough (CLI table rows, the account
+  # lists) or the frozen clock the token dialog and the copy formatters are tested against; nothing reads the real clock.
+  ["cmd/wardyn/service_identity_test.go"]=1
+  ["ui/src/app/components/screens/settings/token-dialog.test.tsx"]=1
+  ["ui/src/app/components/screens/settings/your-account-screen.test.tsx"]=2
+  ["ui/src/app/components/wardyn/copy/service-tokens.test.ts"]=4
   # #541 fix review: connectionRowCopy's C5 (expiring) test pins a LITERAL
   # expected string for absoluteTime's clock-time rendering, deliberately not
   # a recomputation through absoluteTime itself (that would let the

@@ -108,6 +108,19 @@ func (s *countingShellSession) writtenBytes() int {
 	return n
 }
 
+// resizedOtherThan lists every Resize whose size is not want.
+func (s *countingShellSession) resizedOtherThan(want [2]uint16) [][2]uint16 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var other [][2]uint16
+	for _, sz := range s.sizes {
+		if sz != want {
+			other = append(other, sz)
+		}
+	}
+	return other
+}
+
 func (s *countingShellSession) resizeCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

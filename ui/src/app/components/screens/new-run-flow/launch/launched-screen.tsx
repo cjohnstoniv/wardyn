@@ -6,9 +6,10 @@
 // Launched: where a create lands, at ?launched=<id>. It reads the run by its id,
 // so a reload shows the same screen and the draft is not involved. Starting shows
 // an indeterminate bar; Waiting shows the place in line, since when and when the
-// run gives up, and the run can be cancelled through the kill dialog.
+// run gives up, and Cancel run cancels it after the kill confirm.
 
 import * as React from "react";
+import { Check } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { runs } from "../../../../lib/api/runs";
 import { getErrorMessage } from "../../../../lib/format";
@@ -84,35 +85,45 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
   };
 
   return (
-    <section className="mx-auto flex w-full max-w-xl flex-col items-center gap-4 text-center">
+    <section className="flex flex-col items-center gap-4 text-center">
+      {badge && <span
+        aria-hidden="true"
+        className={waiting
+          ? "grid size-[54px] place-items-center rounded-full border border-info/40 bg-info-subtle text-[22px] text-info"
+          : "grid size-[54px] place-items-center rounded-full border border-success/40 bg-success-subtle text-success"}
+      >
+        {waiting ? "…" : <Check className="size-[26px]" />}
+      </span>}
       {badge ? <Chip tone={waiting ? "info" : "success"}>{badge}</Chip> : <RunStateBadge state={run.state} />}
-      <h1 ref={heading} tabIndex={-1} className="font-semibold tracking-tight outline-none">{runHeadline(run)}</h1>
+      <h1 ref={heading} tabIndex={-1} className="text-[30px] leading-[1.08] font-normal tracking-[-0.04em] outline-none">{runHeadline(run)}</h1>
       {body && <p className="text-muted-foreground">{body}</p>}
       {starting && (
-        <div role="progressbar" aria-label={NR_LAUNCH.BADGE_STARTING} className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+        <div role="progressbar" aria-label={NR_LAUNCH.BADGE_STARTING} className="my-4 h-[3px] w-[260px] overflow-hidden bg-muted">
           <div className="h-full w-full animate-pulse rounded-full bg-primary motion-reduce:animate-none" />
         </div>
       )}
-      {waiting && queue && (
-        <dl className="grid w-full gap-3 rounded-lg border border-border p-4 text-left sm:grid-cols-3">
-          <div>
-            <dt className="text-sm text-muted-foreground">{NR_LAUNCH.POSITION}</dt>
-            <dd className="font-medium">{placeInLine(queue)}</dd>
-          </div>
-          <div>
-            <dt className="text-sm text-muted-foreground">{NR_LAUNCH.WAITING_SINCE}</dt>
-            <dd className="font-medium">{waitingSince(queue.queued_at, now)}</dd>
-          </div>
-          <div>
-            <dt className="text-sm text-muted-foreground">{NR_LAUNCH.GIVES_UP}</dt>
-            <dd className="font-medium">{givesUp(queue.deadline_at, now)}</dd>
-          </div>
-        </dl>
-      )}
       {waiting && (
-        <Button type="button" variant="destructive" onClick={() => setKilling(run.id)}>
-          {NR_LAUNCH.CANCEL_RUN}
-        </Button>
+        <div className="my-4 grid w-full gap-3.5 rounded-lg border border-border bg-card p-4 text-left sm:grid-cols-3">
+          {queue && (
+            <dl className="contents">
+              <div>
+                <dt className="text-xs text-muted-foreground">{NR_LAUNCH.POSITION}</dt>
+                <dd className="font-medium">{placeInLine(queue)}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">{NR_LAUNCH.WAITING_SINCE}</dt>
+                <dd className="font-medium">{waitingSince(queue.queued_at, now)}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">{NR_LAUNCH.GIVES_UP}</dt>
+                <dd className="font-medium">{givesUp(queue.deadline_at, now)}</dd>
+              </div>
+            </dl>
+          )}
+          <Button type="button" variant="outline" className="col-span-full border-danger/30 bg-danger-subtle text-danger hover:bg-danger-subtle hover:text-danger dark:border-danger/30 dark:bg-danger-subtle dark:hover:bg-danger-subtle" onClick={() => setKilling(run.id)}>
+            {NR_LAUNCH.CANCEL_RUN}
+          </Button>
+        </div>
       )}
       {killFailed && (
         <p role="alert" className="text-sm text-danger">

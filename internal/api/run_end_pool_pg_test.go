@@ -20,9 +20,9 @@ import (
 // RunnerPoolDuration as JSON); an empty lifetime is a pool with no limits.
 func (e *placementEnv) lifetimePool(name, lifetime string) types.RunnerPool {
 	e.t.Helper()
-	body := fmt.Sprintf(`{"name":%q,"hosting_type":"remote_provided"}`, name)
+	body := fmt.Sprintf(`{"name":%q}`, name)
 	if lifetime != "" {
-		body = fmt.Sprintf(`{"name":%q,"hosting_type":"remote_provided","limits":{"background":{"cpu_millis":{"default":500,"cap":4000},`+
+		body = fmt.Sprintf(`{"name":%q,"limits":{"background":{"cpu_millis":{"default":500,"cap":4000},`+
 			`"memory_mib":{"default":512,"cap":8192},"lifetime":%s},"barriers":["CC1","CC2","CC3"]}}`, name, lifetime)
 	}
 	w := e.admin(http.MethodPost, "/api/v1/runner-pools", body)

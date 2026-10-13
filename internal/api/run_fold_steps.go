@@ -525,7 +525,8 @@ func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
 // whose placement the caller's governance profile denies is refused 403
 // placement_denied, naming the profile, before any local-eligibility work. Where
 // pools place runs, the request's placement is not the run's: resolvePlacement
-// asks the same door with the placement the pool decides. An unassigned member
+// holds the list against each kind of runner in the pool and asks the same door
+// when it leaves none (kindTargets). An unassigned member
 // has no profile and an operator's runs stand outside governance, so for both
 // the list is absent and every placement is permitted.
 func (s *Server) stepPlacementDenied(f *runFold, rec *foldRecorder) bool {
@@ -555,23 +556,29 @@ func (s *Server) stepResources(f *runFold, rec *foldRecorder) bool {
 // stepLocalEligibility is before confinement/provider liveness: create may
 // renew a one-use AWS credential there. No local refusal may reach that phase.
 // The admitted plan supplies specific refusals; an unpooled local request has
-// no runner to go to and is refused before mint/persistence.
+// no runner to go to and is refused before mint/persistence. A pooled run is
+// judged at the placement stepPlacement decided, and is never moved to the
+// other kind when it is refused: where the pool chose the person's own runner
+// and a remote-hosted one could also have taken it, the sentence says how.
 func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
-	// A self-hosted pool decides the placement when the request left it out.
 	req := *f.req
 	if f.place.pooled {
 		req.Placement = f.place.placement
 	}
 	var refusal *runRefusal
 	f.localDelivery, refusal = s.localPlacementRefusal(f.r, req, f.place.pooled, f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
+	if refusal != nil && refusal.status < http.StatusInternalServerError && f.place.remoteOffered {
+		refusal.body.Error += " " + remoteInsteadMsg(f.place.pool.Name)
+	}
 	return !refusal.write(s, f.w, f.r)
 }
 
-// stepDriveEligibility holds the run's drives to its resolved pool: no drive
-// mounts on a self-hosted pool's runners (driveNotInPool), so one drive there
-// refuses the run, named, before anything is sized or minted.
+// stepDriveEligibility holds the run's drives to the kind of runner it got: no
+// drive mounts on a person's own runner, so a run stepPlacement left on one (its
+// pool has no remote-hosted runner for it, or the request asked for its own
+// runner) is refused, named, before anything is sized or minted.
 func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
-	if len(f.drives) == 0 || !f.place.pooled || !driveNotInPool(f.place.row) {
+	if len(f.drives) == 0 || !f.place.pooled || f.place.placement != types.PlacementLocal {
 		return true
 	}
 	msg := driveNotInPoolMsg(f.drives[0].resolved.Drive.Name)
@@ -582,7 +589,8 @@ func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
 // floor it reads is the policy's and the components', and the plan it gates is the one that step judges.
 func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
-		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling))}
+		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling)),
+		promoted: f.promoted, drives: len(f.drives) > 0}
 	if f.mode != foldCreate {
 		in.dryDoor = true
 	}

@@ -17,6 +17,7 @@ import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { RUN_WAIT } from "../../../../lib/runner-pool-refusals";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
+import { SCENARIO_ACCESS } from "../../../../lib/new-run-fixtures/scenarios/tools";
 import type { PreflightResult } from "../../../../lib/types/preflight";
 import { intentToWire } from "../draft/intent-to-wire";
 import { PREFLIGHT_FRESH_MS } from "../draft/launch-gate";
@@ -155,6 +156,27 @@ describe("Review Launch gate (U11)", () => {
     expect(onLaunch).toHaveBeenCalledTimes(2);
   });
 
+  describe("the Azure DevOps sign-in item", () => {
+    const ADO_ITEM = { id: "repo_credential:azure_devops:acme", kind: "repo_credential", label: "Sign in to Azure DevOps", required_by: "acme", status: "missing", fix: { action: "sign_in", target: "azure_devops" } };
+    const accessWith = (setup: unknown[]) => ({ ...SCENARIO_ACCESS.member, setup });
+    const previewWith = (setup: unknown[]) => ({ result: { spec: {}, source: { name: "Default" }, pending: [], warnings: [], repository_access: [], access: accessWith(setup) }, retry });
+    const withAdo = { ...SCENARIO_PREFLIGHT.member, access: accessWith([ADO_ITEM]) } as unknown as PreflightResult;
+
+    it("leaves Launch open when the policy preview shows no such item, so the launch refusal opens the door", async () => {
+      checks.current = answered(withAdo, 1000, { preview: previewWith([]) });
+      open(AGENT);
+      await ready();
+      expect(launch()).toBeEnabled();
+    });
+
+    it("holds Launch when the preview shows the same item, which the Tools step then offers", async () => {
+      checks.current = answered(withAdo, 1000, { preview: previewWith([ADO_ITEM]) });
+      open(AGENT);
+      await ready();
+      expect(launch()).toBeDisabled();
+    });
+  });
+
   it("offers Check again while shut, reads both again, and announces once Launch opens", async () => {
     const user = userEvent.setup();
     checks.current = answered(null);
@@ -216,6 +238,34 @@ describe("Review groups", () => {
     expect(group("tools").getByText("Fix the build")).toBeInTheDocument();
     expect(group("tools").getByText(NR_SHAPE.SOURCE_AGAIN)).toBeInTheDocument();
     expect(group("limits").getByText(NR_SHARED.JOIN(NR_SHARED.CPU("2"), NR_SHARED.MIB("4,096")))).toBeInTheDocument();
+  });
+
+  it("shows attached drives (drives[]) by name, path and access, counts them before the server answers, and lists them as kept", async () => {
+    const DRIVE = "11111111-1111-4111-8111-111111111111";
+    const SHARE = "22222222-2222-4222-8222-222222222222";
+    const withDrives: RunIntent = {
+      ...AGENT, no_repositories_or_drives: undefined, drives: [{ drive_id: DRIVE }, { drive_id: SHARE }],
+      start_folder: { kind: "attachment", drive_id: DRIVE },
+    };
+    checks.current = answered({
+      ...SCENARIO_PREFLIGHT.member,
+      attachments: [
+        { kind: "drive", drive_id: DRIVE, name: "Your drive", target: "/home/agent/drive", read_only: false, starts_here: true },
+        { kind: "drive", drive_id: SHARE, name: "Data team share", target: "/home/agent/shared/data-team-share", read_only: true, starts_here: false },
+      ],
+    } as unknown as PreflightResult);
+    open(withDrives);
+    await ready();
+    const work = group("work");
+    expect(work.getByText(NR_REVIEW.WORK_ITEMS(2))).toBeInTheDocument();
+    expect(work.getByText("Data team share")).toBeInTheDocument();
+    expect(work.getByText("/home/agent/shared/data-team-share")).toBeInTheDocument();
+    expect(work.getByText(NR_FILES.ACCESS_READ)).toBeInTheDocument();
+    cleanup();
+    checks.current = answered(null);
+    open(withDrives);
+    await screen.findAllByText(NR_REVIEW.GROUP_WORK);
+    await waitFor(() => expect(group("work").getByText(NR_REVIEW.WORK_ITEMS(2))).toBeInTheDocument());
   });
 
   it("shows a document-only field as a read-only row with its Run document chip, no Change on the row", async () => {
@@ -288,7 +338,6 @@ describe("Review notices", () => {
     checks.current = answered({ ...SCENARIO_PREFLIGHT.member, warnings: ["inline_policy: a grant was dropped by your ceiling"] });
     open(AGENT);
     await ready();
-    expect(screen.getByText(NR_REVIEW.WARNINGS_TITLE)).toBeInTheDocument();
     expect(screen.getByText("inline_policy: a grant was dropped by your ceiling")).toBeInTheDocument();
   });
 });

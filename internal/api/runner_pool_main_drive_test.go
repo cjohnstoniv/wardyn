@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -19,19 +21,25 @@ func diskTarget(id string, word types.StorageEnforcement, keeps, drives bool) po
 		EphemeralDiskEnforcement: word, KeepsEnded: keeps, UserDrives: drives}}
 }
 
-// The pool says the WEAKEST word of its targets, unknown when any target's is, and claims keep and drive
-// mounts only when every target does.
+// ownDiskTarget is a person's own runner reporting word.
+func ownDiskTarget(word types.StorageEnforcement) poolTarget {
+	id := uuid.New()
+	return poolTarget{id: id.String(), runnerID: &id, facts: runner.TargetFacts{EphemeralDiskEnforcement: word, KeepsEnded: true, UserDrives: true}}
+}
+
+// The pool says the WEAKEST word of its targets of both kinds, unknown when any target's is, and claims keep
+// and drive mounts only when every target does; a person's own runner never mounts a drive.
 func TestPoolMainDriveWeakest(t *testing.T) {
 	const grace = 30 * time.Minute
 	fs, ev, none := types.StorageEnforcementFilesystem, types.StorageEnforcementEviction, types.StorageEnforcementNone
 	offline := diskTarget("off", fs, true, true)
 	offline.offline = true
-	remote, self := types.RunnerPoolRemoteProvided, types.RunnerPoolSelfHosted
+	remote, self := types.RunnerPoolOrganization, types.RunnerPoolUser
 	keep := client.MainDriveKeep{Supported: true, GraceSec: 1800}
 	for _, tc := range []struct {
 		name    string
 		targets []poolTarget
-		hosting types.RunnerPoolHosting
+		hosting types.RunnerPoolScope
 		grace   time.Duration
 		want    client.MainDriveFacts
 	}{
@@ -49,8 +57,14 @@ func TestPoolMainDriveWeakest(t *testing.T) {
 			client.MainDriveFacts{Enforcement: client.MainDriveUnknown, Basis: types.RunEvidenceSubstrate, Keep: keep, DriveMounts: true}},
 		{"no target at all is unknown", nil, remote, grace,
 			client.MainDriveFacts{Enforcement: client.MainDriveUnknown, Basis: types.RunEvidenceSubstrate}},
-		{"a self-hosted runner's report is runner_asserted and mounts no drive", []poolTarget{diskTarget("r", fs, true, true)}, self, grace,
+		{"a self-hosted runner's report is runner_asserted and mounts no drive", []poolTarget{ownDiskTarget(fs)}, self, grace,
 			client.MainDriveFacts{Enforcement: client.MainDriveFilesystem, Basis: types.RunEvidenceRunnerAsserted, Coverage: client.MainDriveCoverageAll, Keep: keep}},
+		{"a mixed pool says the weakest of both kinds, runner_asserted, and mounts no drive", []poolTarget{ownDiskTarget(ev), diskTarget("a", fs, true, true)}, self, grace,
+			client.MainDriveFacts{Enforcement: client.MainDriveEviction, Basis: types.RunEvidenceRunnerAsserted, Coverage: client.MainDriveCoverageScratch, Keep: keep}},
+		{"a user pool of remote-hosted runners only is the substrate's word and mounts drives", []poolTarget{diskTarget("a", fs, true, true)}, self, grace,
+			client.MainDriveFacts{Enforcement: client.MainDriveFilesystem, Basis: types.RunEvidenceSubstrate, Coverage: client.MainDriveCoverageAll, Keep: keep, DriveMounts: true}},
+		{"a user pool with no runner at all is the runner's word, unknown", nil, self, grace,
+			client.MainDriveFacts{Enforcement: client.MainDriveUnknown, Basis: types.RunEvidenceRunnerAsserted}},
 		{"grace zero keeps nothing", []poolTarget{diskTarget("a", fs, true, true)}, remote, 0,
 			client.MainDriveFacts{Enforcement: client.MainDriveFilesystem, Basis: types.RunEvidenceSubstrate, Coverage: client.MainDriveCoverageAll, DriveMounts: true}},
 		{"one target that cannot keep a stopped sandbox (kubernetes) keeps nothing", []poolTarget{diskTarget("d", fs, true, true), diskTarget("k", ev, false, true)}, remote, grace,

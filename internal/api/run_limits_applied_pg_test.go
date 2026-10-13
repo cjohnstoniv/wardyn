@@ -43,7 +43,7 @@ func limitsBody(extra string) string {
 // sizedPool is a remote pool over both executors that takes Background runs with the given CPU limits.
 func (e *placementEnv) sizedPool(name string, cpu types.RunnerPoolAmount) types.RunnerPool {
 	e.t.Helper()
-	p := e.createPool(name, types.RunnerPoolRemoteProvided)
+	p := e.createPool(name, types.RunnerPoolOrganization)
 	e.addExecutors(p.ID, "alpha", "beta")
 	limits := types.RunnerPoolLimits{
 		Background: &types.RunnerPoolBackgroundLimits{CPUMillis: cpu, MemoryMiB: types.RunnerPoolAmount{Default: 1024, Cap: 8192},
@@ -155,7 +155,7 @@ func TestCreateAndDispatchAgreeOnAppliedSize(t *testing.T) {
 	}{{
 		name: "(a) profile max 8, no ceiling size, an ask of 8",
 		setup: func(e *placementEnv) string {
-			remote := e.createPool("Remote", types.RunnerPoolRemoteProvided)
+			remote := e.createPool("Remote", types.RunnerPoolOrganization)
 			e.addExecutors(remote.ID, "alpha", "beta")
 			e.assignSizedProfile("max-eight", nil, types.GovernanceLimits{MaxCPUMillis: 8000})
 			return runBody(fmt.Sprintf(`"runner_pool_id":%q,"resources":{"cpu_millis":8000}`, remote.ID))
@@ -172,7 +172,7 @@ func TestCreateAndDispatchAgreeOnAppliedSize(t *testing.T) {
 	}, {
 		name: "(d) a profile maximum under the default, no ask",
 		setup: func(e *placementEnv) string {
-			remote := e.createPool("Remote", types.RunnerPoolRemoteProvided)
+			remote := e.createPool("Remote", types.RunnerPoolOrganization)
 			e.addExecutors(remote.ID, "alpha", "beta")
 			e.assignSizedProfile("under", nil, types.GovernanceLimits{MaxCPUMillis: def / 2})
 			return runBody(fmt.Sprintf(`"runner_pool_id":%q`, remote.ID))
@@ -204,7 +204,7 @@ func TestCreateAndDispatchAgreeOnAppliedSize(t *testing.T) {
 // handed to dispatch's size path directly.
 func TestCreateAndDispatchAgreeOnAppliedSize_RunnerCapacity(t *testing.T) {
 	e := newPlacementEnv(t)
-	laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	laptops := e.createPool("Laptops", types.RunnerPoolUser)
 	small := e.laptop(e.personP, 1200, 2048, types.CC1, types.CC2, types.CC3)
 	e.addToPool(e.person, laptops.ID, small)
 	// A profile maximum under the runner's size: the member cap is never below the default, so neither
@@ -223,7 +223,7 @@ func TestCreateAndDispatchAgreeOnAppliedSize_RunnerCapacity(t *testing.T) {
 // placement_capability; the runner stays eligible.
 func TestOverAskOnSmallRunnerIsReducedNotRefused(t *testing.T) {
 	e := newPlacementEnv(t)
-	laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	laptops := e.createPool("Laptops", types.RunnerPoolUser)
 	small := e.laptop(e.personP, 2000, 2048, types.CC1, types.CC2, types.CC3)
 	e.addToPool(e.person, laptops.ID, small)
 	e.assignSizedProfile("eight", &types.ResourceLimits{CPUMillis: 8000, MemoryMiB: 16384}, types.GovernanceLimits{})
@@ -355,7 +355,7 @@ func TestCapWarningAgreesWithAppliedResources(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newPlacementEnv(t)
-			remote := e.createPool("Remote", types.RunnerPoolRemoteProvided)
+			remote := e.createPool("Remote", types.RunnerPoolOrganization)
 			e.addExecutors(remote.ID, "alpha", "beta")
 			e.assignSizedProfile("sized", nil, types.GovernanceLimits{MaxCPUMillis: tc.max})
 			created := e.create(runBody(fmt.Sprintf(`"runner_pool_id":%q,"inline_policy":{"min_confinement_class":"CC2","resources":{"cpu_millis":8000}}`, remote.ID)))
@@ -424,7 +424,7 @@ func TestCreateAndDispatchAgreeOnAppliedSize_DeploymentDefaultAbovePlatform(t *t
 		t.Run(tc.name, func(t *testing.T) {
 			e := newPlacementEnv(t)
 			e.srv.cfg.DefaultPolicy.Resources = &types.ResourceLimits{CPUMillis: 4000, MemoryMiB: 8192}
-			remote := e.createPool("Remote", types.RunnerPoolRemoteProvided)
+			remote := e.createPool("Remote", types.RunnerPoolOrganization)
 			e.addExecutors(remote.ID, "alpha", "beta")
 			if tc.profile != nil {
 				e.assignSizedProfile("plain", nil, *tc.profile)
@@ -464,7 +464,7 @@ func TestCreateAndDispatchAgreeOnAppliedSize_DeploymentDefaultAbovePlatform(t *t
 // no door answers a server error.
 func TestRunnerAdvertisingZeroCapacityIsNoServerError(t *testing.T) {
 	e := newPlacementEnv(t)
-	laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	laptops := e.createPool("Laptops", types.RunnerPoolUser)
 	zero := e.laptop(e.personP, 0, 0, types.CC1, types.CC2, types.CC3)
 	e.addToPool(e.person, laptops.ID, zero)
 	ctx := operatorCtx(e.personP, "person@corp.example", oidc.RoleUser)

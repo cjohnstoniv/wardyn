@@ -159,20 +159,21 @@ func (s *Server) driveUnavailableHere(ctx context.Context, d reachableDrive, poo
 		return client.MeDriveUnavailablePaused
 	case d.resolved == nil || d.target() == "" || s.driveBindFailureHere(ctx, *d.resolved) != nil:
 		return client.MeDriveUnavailableUnmountable
-	case checked && driveNotInPool(pool.Pool):
+	case checked && driveNotInPool(pool):
 		return client.MeDriveUnavailableNotInPool
 	}
 	return ""
 }
 
 // driveNotInPool is the pool half of a drive's availability: no drive mounts on
-// a self-hosted pool's runners, whose substrates hold no organisation storage.
+// a person's own runner, whose substrate holds no organisation storage, so a
+// user pool with no remote-hosted runner has nowhere to mount one.
 //
-// ponytail: a remote-provided pool whose executors cannot mount drives waits
-// for per-executor pool facts; until then the deployment-wide runner
-// capability decides it, as unmountable.
-func driveNotInPool(pool types.RunnerPool) bool {
-	return pool.HostingType == types.RunnerPoolSelfHosted
+// ponytail: a pool whose remote-hosted runners cannot mount drives waits for
+// per-executor pool facts; until then the deployment-wide runner capability
+// decides it, as unmountable.
+func driveNotInPool(pool store.RunnerPoolCatalogueRow) bool {
+	return pool.Pool.Scope == types.RunnerPoolUser && len(pool.ExecutorIDs) == 0
 }
 
 // catalogueDrivePool resolves runner_pool_id to a pool the caller may use, or

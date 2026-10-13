@@ -3786,6 +3786,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0162` (`0162_run_queue`) widens `agent_runs`' state check with `QUEUED`, adds `agent_runs.admitted_at` and rebuilds its watcher sweep index (`0001`'s table) beside its new `run_queue` table, and re-creates `audit_retention_partitions` (as `0123` does).
 - `0163` (`0163_workspace_image_build`) adds `workspaces.image_build` (`0008`'s table), the image build record.
 - `0168` (`0168_runner_pool_owner`) adds `runner_pools.owner` and checks on `runner_pools` and `runner_pool_org_defaults` (`0152`'s tables), removes the ownerless Self-Hosted pools made before it, and clears an organisation preference for Self-Hosted.
+- `0173` (`0173_runner_pool_scope`) replaces `runner_pools.hosting_type` with `scope`, renames `runner_pool_members.executor_id` to `remote_runner_id` with a foreign key to its new `remote_runners` table and adds a generated `kind`, keeps one pool and the barrier on `runner_pool_org_defaults` (`0152`'s tables), rewrites each person's `runner_pool_defaults.v1` preference to `runner_pool_default.v2`, and rewrites a held remote-hosted runner add on `governance_changes` (`0126`'s table).
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

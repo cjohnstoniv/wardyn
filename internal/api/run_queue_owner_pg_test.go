@@ -287,7 +287,7 @@ func TestPG_QueueAdmitHoldsAPinnedRunAlone(t *testing.T) {
 // same run pinned to the online runner is admitted.
 func TestPG_QueuePinnedRunWaitsForItsOwnRunner(t *testing.T) {
 	e := newQueueEnv(t)
-	pool := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	pool := e.createPool("Laptops", types.RunnerPoolUser)
 	asleep := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
 	awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
 	e.addToPool(e.person, pool.ID, asleep)

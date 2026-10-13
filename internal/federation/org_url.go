@@ -17,5 +17,8 @@ func CheckOrgURL(raw string) error {
 	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(raw, "#") {
 		return errors.New("runner organisation URL must be an absolute HTTP(S) URL without user info, query or fragment")
 	}
-	return hoptls.CheckURL(raw)
+	if hoptls.CheckURL(raw) != nil {
+		return errors.New("runner organisation URL must be https:// (http:// only to localhost, 127.0.0.1 or ::1)")
+	}
+	return nil
 }
