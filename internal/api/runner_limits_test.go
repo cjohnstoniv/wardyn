@@ -31,9 +31,15 @@ func (f *runnerRegistrationFake) SetRunnerMachineName(_ context.Context, id uuid
 	return nil
 }
 
-// registerWith redeems a fresh token with req's max_runs and machine name, and returns the answer and
-// whether the token is still unspent.
-func registerWith(t *testing.T, srv *Server, f *runnerRegistrationFake, maxRuns int, machine string) (int, types.RunnerRegistration, bool, string) {
+// testRunnerLimits is a valid limit set: 2 runs at once, each of them half the totals.
+func testRunnerLimits() *types.RunnerLimits {
+	return &types.RunnerLimits{RunsAtOnce: 2, Total: types.RunnerAmounts{CPUMillis: 4000, MemoryMiB: 8192, DiskMiB: 102400},
+		PerRun: types.RunnerAmounts{CPUMillis: 2000, MemoryMiB: 4096, DiskMiB: 51200}}
+}
+
+// registerWith redeems a fresh token with limits and machine name, and returns the answer and whether
+// the token is still unspent.
+func registerWith(t *testing.T, srv *Server, f *runnerRegistrationFake, limits *types.RunnerLimits, machine string) (int, types.RunnerRegistration, bool, string) {
 	t.Helper()
 	raw := newBearer("wdr_")
 	now := time.Now().UTC()
@@ -44,7 +50,7 @@ func registerWith(t *testing.T, srv *Server, f *runnerRegistrationFake, maxRuns 
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop", MaxRuns: maxRuns, MachineName: machine})
+	body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop", Limits: limits, MachineName: machine})
 	w := do(t, srv, http.MethodPost, "/api/v1/runners/register", "", string(body))
 	var out types.RunnerRegistration
 	_ = json.Unmarshal(w.Body.Bytes(), &out)
@@ -54,80 +60,86 @@ func registerWith(t *testing.T, srv *Server, f *runnerRegistrationFake, maxRuns 
 	return w.Code, out, unspent, w.Body.String()
 }
 
-// Registration stores the runs at once and machine name it is sent, the default when an older runner
-// sends none, and refuses a value out of bounds before it spends the token.
-func TestRunnerRegistrationStoresMaxRunsAndMachineName(t *testing.T) {
+// Registration stores the limit set and machine name it is sent, and refuses a register that declares
+// no limits (an older wardyn-runnerd's) or limits out of bounds before it spends the token.
+func TestRunnerRegistrationRequiresLimits(t *testing.T) {
 	srv, f, _ := newRunnerRegistrationServer(t)
-	code, reg, _, _ := registerWith(t, srv, f, 5, "alice-mbp.corp")
-	if code != http.StatusCreated || reg.MaxRuns != 5 || f.rows[reg.RunnerID].MaxRuns != 5 || f.rows[reg.RunnerID].MachineName != "alice-mbp.corp" {
-		t.Fatalf("explicit: %d %+v row %+v", code, reg, f.rows[reg.RunnerID])
+	want := testRunnerLimits()
+	code, reg, _, _ := registerWith(t, srv, f, want, "alice-mbp.corp")
+	row := f.rows[reg.RunnerID]
+	if code != http.StatusCreated || reg.Limits == nil || *reg.Limits != *want || row.Limits == nil || *row.Limits != *want || row.MachineName != "alice-mbp.corp" {
+		t.Fatalf("explicit: %d %+v row %+v", code, reg, row)
 	}
-	code, reg, _, _ = registerWith(t, srv, f, 0, "")
-	if code != http.StatusCreated || f.rows[reg.RunnerID].MaxRuns != types.RunnerMaxRunsDefault {
-		t.Fatalf("omitted max_runs: %d, stored %d, want the default", code, f.rows[reg.RunnerID].MaxRuns)
-	}
+	past := *want
+	past.RunsAtOnce = types.RunnerMaxRunsCeiling + 1
+	wide := *want
+	wide.PerRun.DiskMiB = wide.Total.DiskMiB + 1024
 	for _, tc := range []struct {
 		name    string
-		maxRuns int
+		limits  *types.RunnerLimits
 		machine string
 		reason  string
 	}{
-		{"max_runs past the ceiling", types.RunnerMaxRunsCeiling + 1, "", reasonRunnerRegistrationInvalid},
-		{"negative max_runs", -1, "", reasonRunnerRegistrationInvalid},
-		{"over-long machine name", 2, strings.Repeat("m", types.MachineNameMax+1), reasonRunnerRegistrationInvalid},
-		{"control character in machine name", 2, "box\x1b[31m", reasonRunnerRegistrationInvalid},
+		{"no limits", nil, "", reasonRunnerLimitsRequired},
+		{"runs at once past the ceiling", &past, "", reasonRunnerLimitsRequired},
+		{"a per-run limit past its total", &wide, "", reasonRunnerLimitsRequired},
+		{"over-long machine name", want, strings.Repeat("m", types.MachineNameMax+1), reasonRunnerRegistrationInvalid},
+		{"control character in machine name", want, "box\x1b[31m", reasonRunnerRegistrationInvalid},
 	} {
-		code, _, unspent, body := registerWith(t, srv, f, tc.maxRuns, tc.machine)
+		code, _, unspent, body := registerWith(t, srv, f, tc.limits, tc.machine)
 		if code != http.StatusUnprocessableEntity || !unspent || !strings.Contains(body, `"reason":"`+tc.reason+`"`) {
 			t.Errorf("%s: %d %s, token unspent %v; want 422 %s keeping the token", tc.name, code, body, unspent, tc.reason)
 		}
 	}
 }
 
-// Only the runner's owner changes its runs at once, audited with the value before and after; another
-// person, an administrator's own session and an administrator's token cannot.
-func TestRunnerMaxRunsIsTheOwnersToChange(t *testing.T) {
+// Only the runner's owner declares its limits, audited with the set before and after; another person,
+// an administrator's own session and an administrator's token cannot.
+func TestRunnerLimitsAreTheOwnersToChange(t *testing.T) {
 	srv, f, h := newRunnerRegistrationServer(t)
 	row := f.addRunner(srv, "alice", "laptop", types.RunnerClaimed, time.Hour)
-	f.lock.Lock()
-	r := f.rows[row.ID]
-	r.MaxRuns = 2
-	f.rows[row.ID] = r
-	f.lock.Unlock()
 	path := "/api/v1/me/runners/" + row.ID.String()
+	want := testRunnerLimits()
+	body, _ := json.Marshal(types.RunnerUpdateRequest{Limits: want})
 
 	alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
-	w := doSSO(t, srv, http.MethodPut, path, alice, `{"max_runs":4}`)
+	w := doSSO(t, srv, http.MethodPut, path, alice, string(body))
 	var v types.RunnerView
-	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &v) != nil || v.MaxRuns != 4 || f.rows[row.ID].MaxRuns != 4 {
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &v) != nil || v.Limits == nil || *v.Limits != *want || *f.rows[row.ID].Limits != *want {
 		t.Fatalf("owner update = %d %s", w.Code, w.Body.String())
 	}
 	ev := lastAuditEvent(t, h.audit.snapshot(), "runner.update")
 	var data struct {
-		MaxRuns struct{ Before, After int } `json:"max_runs"`
+		Limits struct{ Before, After *types.RunnerLimits } `json:"limits"`
 	}
-	if err := json.Unmarshal(ev.Data, &data); err != nil || data.MaxRuns.Before != 2 || data.MaxRuns.After != 4 || ev.Actor != "alice" || ev.Target != row.ID.String() {
+	if err := json.Unmarshal(ev.Data, &data); err != nil || data.Limits.Before != nil || data.Limits.After == nil || *data.Limits.After != *want ||
+		ev.Actor != "alice" || ev.Target != row.ID.String() {
 		t.Fatalf("runner.update row = %+v %s", ev, ev.Data)
 	}
 
+	other := *want
+	other.RunsAtOnce = 1
+	otherBody, _ := json.Marshal(types.RunnerUpdateRequest{Limits: &other})
 	for name, cookie := range map[string]*http.Cookie{
 		"another person": memberModeSSOSession(t, "bob", "bob@example.com", oidc.RoleUser, false),
 		"an admin":       memberModeSSOSession(t, "carol", "carol@example.com", oidc.RoleAdmin, false),
 	} {
-		if w := doSSO(t, srv, http.MethodPut, path, cookie, `{"max_runs":9}`); w.Code != http.StatusNotFound {
+		if w := doSSO(t, srv, http.MethodPut, path, cookie, string(otherBody)); w.Code != http.StatusNotFound {
 			t.Errorf("%s = %d %s, want the unknown-id 404", name, w.Code, w.Body.String())
 		}
 	}
-	if w := do(t, srv, http.MethodPut, path, adminToken, `{"max_runs":9}`); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), reasonRunnerSessionRequired) {
+	if w := do(t, srv, http.MethodPut, path, adminToken, string(otherBody)); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), reasonRunnerSessionRequired) {
 		t.Errorf("admin token = %d %s", w.Code, w.Body.String())
 	}
-	for _, body := range []string{`{}`, `{"max_runs":0}`, `{"max_runs":65}`, `{"max_runs":2,"name":"x"}`} {
-		if w := doSSO(t, srv, http.MethodPut, path, alice, body); w.Code != http.StatusBadRequest {
-			t.Errorf("owner body %s = %d %s, want 400", body, w.Code, w.Body.String())
+	for _, bad := range []string{`{}`, `{"max_runs":2}`, `{"limits":{"runs_at_once":0}}`,
+		`{"limits":{"runs_at_once":65,"total":{"cpu_millis":4000,"memory_mib":8192,"disk_mib":102400},"per_run":{"cpu_millis":2000,"memory_mib":4096,"disk_mib":51200}}}`,
+		`{"limits":{"runs_at_once":2,"total":{"cpu_millis":4000,"memory_mib":8192,"disk_mib":102400},"per_run":{"cpu_millis":2000,"memory_mib":4096,"disk_mib":51201}}}`} {
+		if w := doSSO(t, srv, http.MethodPut, path, alice, bad); w.Code != http.StatusBadRequest {
+			t.Errorf("owner body %s = %d %s, want 400", bad, w.Code, w.Body.String())
 		}
 	}
-	if f.rows[row.ID].MaxRuns != 4 {
-		t.Fatalf("a refused update changed max_runs to %d", f.rows[row.ID].MaxRuns)
+	if *f.rows[row.ID].Limits != *want {
+		t.Fatalf("a refused update changed the limits to %+v", f.rows[row.ID].Limits)
 	}
 }
 

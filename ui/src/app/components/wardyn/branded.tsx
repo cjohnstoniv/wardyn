@@ -41,7 +41,7 @@ export default function Branded({ part, brand }: { part: Part; brand: Branding }
       return (
         <span className="inline-flex items-center gap-2 select-none">
           <BrandMark brand={brand} />
-          <span className="hidden text-base font-semibold tracking-tight text-foreground sm:inline">{productName(brand)}</span>
+          <span className="sr-only text-base font-semibold tracking-tight text-foreground sm:not-sr-only">{productName(brand)}</span>
         </span>
       );
     case "link":

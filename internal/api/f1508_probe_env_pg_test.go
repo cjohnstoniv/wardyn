@@ -53,6 +53,7 @@ func newProbeEnv(t *testing.T) probeEnv {
 		e.bind(t, sub, "https://idp.example", "", "")
 	}
 	e.mustCreate(t, plusBot, svcSponsor2)
+	ageSponsorships(t, e.pool)
 	e.grant(t, "user", "sponsor2@corp.example", "allow", featureServiceAttach)
 
 	e.patWdn = e.seedLegacyToken(t, personSub, oidc.RoleUser, "").Token

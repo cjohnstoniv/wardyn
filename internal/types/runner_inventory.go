@@ -69,12 +69,13 @@ type RunnerView struct {
 	Capacity     *RunnerCapacity    `json:"capacity,omitempty"`
 	Classes      []ConfinementClass `json:"classes,omitempty"`
 	AllowedRoots []string           `json:"allowed_roots,omitempty"`
-	// RunsActive counts the non-terminal runs on this runner.
-	RunsActive int `json:"runs_active"`
-	// MaxRuns is the runner's "Runs at once", which only its owner changes; Running is how many runs
-	// hold a sandbox there now, the count placement holds to MaxRuns.
-	MaxRuns int `json:"max_runs"`
-	Running int `json:"running"`
+	// Kind is always RunnerKindSelfHosted: the one shape both kinds' reads share.
+	Kind RunnerKind `json:"kind"`
+	// Limits is what the runner's owner declared, which only they change; nil when not all of them are
+	// set, and then the runner takes no run. Usage is what its runs hold now, the figures placement
+	// counts, shown to its owner and to operators only.
+	Limits *RunnerLimits `json:"limits"`
+	Usage  RunnerUsage   `json:"usage"`
 	// MachineName is the host name the runner last reported at registration or on connect. It is what
 	// the runner says, never verified and never an identity; absent until it reports one.
 	MachineName string `json:"machine_name,omitempty"`
@@ -94,8 +95,8 @@ type RunnerSettingsRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
-// RunnerUpdateRequest is an owner's change to their own runner (PUT /me/runners/{id}). MaxRuns is
-// required, so an empty body changes nothing.
+// RunnerUpdateRequest is an owner's change to their own runner (PUT /me/runners/{id}): the whole limit
+// set, required, so an empty body changes nothing.
 type RunnerUpdateRequest struct {
-	MaxRuns *int `json:"max_runs"`
+	Limits *RunnerLimits `json:"limits"`
 }
