@@ -779,8 +779,8 @@ type Server struct {
 	// and lastTouch above, and correct for the same reason: replicas>1 is
 	// refused by construction (deployment.yaml). Zero value is ready to use.
 	attachHolders attachHolderRegistry
-	// creates lets a kill cancel a STARTING run's CreateSandbox (runs_create_cancel.go).
-	creates inflightCreates
+	// creates lets a kill cancel a STARTING run's CreateSandbox, and runBuilds its image build (runs_create_cancel.go).
+	creates, runBuilds inflightCreates
 	// queue is the pool queue's in-process state: kick coalescing and the gauge snapshot (metrics_queue.go).
 	queue runQueueState
 	// replica is this server's identity when no LiveBus names one (replicaName).
