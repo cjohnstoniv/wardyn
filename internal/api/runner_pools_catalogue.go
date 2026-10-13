@@ -73,7 +73,7 @@ func (s *Server) poolList(r *http.Request, ps store.RunnerPoolStore, rows []stor
 	in.slots = s.slotCounts(ctx, usable)
 	for _, row := range rows {
 		if !subj.permits(row, owner) {
-			// Listed for a manager only: they may manage it (or, another person's Self-Hosted pool, oversee
+			// Listed for a manager only: they may manage it (or, another person's user pool, oversee
 			// it), not use it, so nothing is computed for it.
 			out.Pools = append(out.Pools, client.RunnerPoolCatalogueEntry{
 				RunnerPoolChoice: poolState{availability: client.RunnerPoolUnavailable, reason: runnerpool.ReasonNotFound}.choice(row),
@@ -120,7 +120,7 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 		}
 	}
 	targets := st.own
-	if row.Pool.HostingType == types.RunnerPoolRemoteProvided && st.availability == client.RunnerPoolAvailable {
+	if row.Pool.Scope == types.RunnerPoolOrganization && st.availability == client.RunnerPoolAvailable {
 		// Only through the inspector's facts, never a lone driver's own probe.
 		if _, ok := s.targetInspector(); ok {
 			targets, _ = executorTargets(row, s.configuredExecutors(), func(e string) (runner.TargetFacts, bool) { return in.executorFacts(ctx, s, e) })
@@ -219,10 +219,10 @@ func barrierFacts(pool types.RunnerPool, targets []poolTarget, floor, org types.
 	return f
 }
 
-// kvmExplainsNoVault: a remote-provided pool every one of whose executors without Vault is this
+// kvmExplainsNoVault: an organization pool every one of whose executors without Vault is this
 // deployment's Docker substrate, on a host with no KVM, the fact /setup/status reports.
 func kvmExplainsNoVault(pool types.RunnerPool, targets []poolTarget) bool {
-	if pool.HostingType != types.RunnerPoolRemoteProvided {
+	if pool.Scope != types.RunnerPoolOrganization {
 		return false
 	}
 	for _, t := range targets {

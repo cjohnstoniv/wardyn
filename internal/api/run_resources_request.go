@@ -105,7 +105,7 @@ func advertisesSize(f runner.TargetFacts) bool {
 // self-hosted pool that advertise a size, narrowed to the pinned runner when the request names one.
 // A remote pool's executors are not a capacity source; their size is held per candidate.
 func selfHostedCapacity(pool types.RunnerPool, fit []poolTarget, pin string) []runnerpool.RunnerCapacity {
-	if pool.HostingType != types.RunnerPoolSelfHosted {
+	if pool.Scope != types.RunnerPoolUser {
 		return nil
 	}
 	var out []runnerpool.RunnerCapacity

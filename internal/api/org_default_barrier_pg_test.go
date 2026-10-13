@@ -80,7 +80,7 @@ func (e *placementEnv) listedDefault(pool uuid.UUID) (types.ConfinementClass, ru
 // (TestDefaultBarrierRule); a run on a person's own runner is not placeable in this tree.
 func TestOrgDefaultBarrierApplies(t *testing.T) {
 	e := newPlacementEnv(t)
-	remote := e.createPool("Provided", types.RunnerPoolRemoteProvided)
+	remote := e.createPool("Provided", types.RunnerPoolOrganization)
 	e.addExecutors(remote.ID, "alpha", "beta")
 	e.setOrgBarrier("CC2")
 
@@ -107,7 +107,7 @@ func TestOrgDefaultBarrierApplies(t *testing.T) {
 // (the strongest offered at or above the floor) applies and the audit says the server chose.
 func TestOrgDefaultBelowFloorFallsBack(t *testing.T) {
 	e := newPlacementEnv(t)
-	remote := e.createPool("Provided", types.RunnerPoolRemoteProvided)
+	remote := e.createPool("Provided", types.RunnerPoolOrganization)
 	e.addExecutors(remote.ID, "alpha", "beta")
 	e.setOrgBarrier("CC1")
 	floor := limitsBody(`"runner_pool_id":"` + remote.ID.String() + `","inline_policy":{"min_confinement_class":"CC2"}`)

@@ -159,7 +159,7 @@ describe("Run step: pool select", () => {
     expect(select).toHaveValue("");
     await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES) }));
     expect(select).toHaveFocus();
-    expect(await screen.findByText(RUNNER_POOL_REFUSAL.REQUIRED_ANY())).toBeInTheDocument();
+    expect(await screen.findByText(RUNNER_POOL_REFUSAL.REQUIRED())).toBeInTheDocument();
     expect(go).not.toHaveBeenCalled();
     await userEvent.selectOptions(select, SHARED.id);
     await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES) }));
@@ -334,9 +334,9 @@ describe("Run step: barrier", () => {
     expect((await screen.findAllByText(NR_RUN.ROW_WHERE)).length).toBeGreaterThan(0);
   });
 
-  it("maps today's hosting type to the console's pool scope in one place", () => {
-    expect(poolScope("remote_provided")).toBe("organization");
-    expect(poolScope("self_hosted")).toBe("user");
+  it("reads the pool's scope as the console's pool word", () => {
+    expect(poolScope("organization")).toBe("organization");
+    expect(poolScope("user")).toBe("user");
   });
 });
 

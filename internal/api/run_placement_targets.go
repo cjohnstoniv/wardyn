@@ -45,7 +45,7 @@ func (s *Server) personalPoolDefaults(ctx context.Context) (types.RunnerPoolDefa
 	if owner == "" || !ok {
 		return d, nil
 	}
-	raw, err := prefs.GetPrincipalPref(ctx, owner, types.RunnerPoolDefaultsPrefKey)
+	raw, err := prefs.GetPrincipalPref(ctx, owner, types.RunnerPoolDefaultPrefKey)
 	if errors.Is(err, store.ErrNotFound) {
 		return d, nil
 	}
@@ -94,7 +94,7 @@ func (s *Server) placementDemand(ctx context.Context, in placementInput) placeme
 // remote pool. A pinned runner must be one of the candidates; one that is not is answered like an
 // unknown id and a runner that is not the caller's is never named.
 func (s *Server) poolTargets(ctx context.Context, req *createRunRequest, ps store.RunnerPoolStore, row store.RunnerPoolCatalogueRow) ([]poolTarget, *runRefusal) {
-	if row.Pool.HostingType == types.RunnerPoolRemoteProvided {
+	if row.Pool.Scope == types.RunnerPoolOrganization {
 		return executorTargets(row, s.configuredExecutors(), func(e string) (runner.TargetFacts, bool) { return s.executorFacts(ctx, e) })
 	}
 	return s.ownRunnerTargets(ctx, req, ps, row)
@@ -111,18 +111,18 @@ func executorTargets(row store.RunnerPoolCatalogueRow, configured []string, read
 		out = append(out, poolTarget{id: e, executor: e, facts: facts, offline: !known})
 	}
 	if len(out) == 0 {
-		return nil, poolRefusal(&runnerpool.Refusal{Reason: runnerpool.ReasonNoEligibleMember, Name: row.Pool.Name, Hosting: row.Pool.HostingType})
+		return nil, poolRefusal(&runnerpool.Refusal{Reason: runnerpool.ReasonNoEligibleMember, Name: row.Pool.Name, Scope: row.Pool.Scope})
 	}
 	return out, nil
 }
 
 func (s *Server) ownRunnerTargets(ctx context.Context, req *createRunRequest, ps store.RunnerPoolStore, row store.RunnerPoolCatalogueRow) ([]poolTarget, *runRefusal) {
 	none := func() *runRefusal {
-		return poolRefusal(&runnerpool.Refusal{Reason: runnerpool.ReasonNoEligibleMember, Name: row.Pool.Name, Hosting: row.Pool.HostingType})
+		return poolRefusal(&runnerpool.Refusal{Reason: runnerpool.ReasonNoEligibleMember, Name: row.Pool.Name, Scope: row.Pool.Scope})
 	}
 	switch err := s.runnersEnabled(ctx); {
 	case errors.Is(err, errRunnersDisabled):
-		return nil, targetRefusal(placement.ReasonPlacementUnavailable, row.Pool.Name, row.Pool.HostingType)
+		return nil, targetRefusal(placement.ReasonPlacementUnavailable, row.Pool.Name, row.Pool.Scope)
 	case err != nil:
 		return nil, runError(503, reasonRunnersConfigUnavailable, "runner configuration is unavailable; retry later")
 	}

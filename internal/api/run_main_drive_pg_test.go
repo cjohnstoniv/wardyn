@@ -25,7 +25,7 @@ import (
 // bound when capMiB is set.
 func (e *placementEnv) diskPool(name string, defMiB, capMiB int, executors ...string) types.RunnerPool {
 	e.t.Helper()
-	p := e.createPool(name, types.RunnerPoolRemoteProvided)
+	p := e.createPool(name, types.RunnerPoolOrganization)
 	if len(executors) == 0 {
 		executors = []string{"alpha", "beta"}
 	}
