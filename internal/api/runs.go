@@ -242,9 +242,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: f.place.pool.Name})
 			return
 		}
-		// Another launch took the runner's last place after placement read it.
-		if errors.Is(err, store.ErrRunnerAtCapacity) {
-			targetRefusal(placement.ReasonRunnerAtCapacity, f.place.pool.Name, f.place.pool.Scope).write(s, w, r)
+		if refusal := insertRoomRefusal(err, f.place.pool); refusal != nil {
+			refusal.write(s, w, r)
 			return
 		}
 		writeServerError(w, r, "create run", err)
@@ -469,8 +468,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		RunnerPoolID: placed.RunnerPoolID, RunnerPoolRevision: placed.RunnerPoolRevision,
 		RunnerPoolSelection: placed.RunnerPoolSelection, RunnerPoolExecutor: placed.RunnerPoolExecutor,
 		// What it holds on that runner: the CPU and memory it gets and its main drive (runner limits).
-		Reserved: types.RunnerAmounts{CPUMillis: int64(f.place.applied.CPUMillis.Applied), MemoryMiB: int64(f.place.applied.MemoryMiB.Applied),
-			DiskMiB: int64(f.mainDrive.MiB)},
+		Reserved: f.place.reserved(f.mainDrive),
 	}
 }
 

@@ -6,10 +6,13 @@ package runnerspool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -318,5 +321,66 @@ func TestSpoolRefusesCorruptionAndUnsafeState(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The spool has two writers that may be different users: wardyn-runnerd, and the proxy as the user the
+// directory was handed to. Every file one of them creates (each rewrite of state.json is a new file
+// renamed into place) is given to the directory's owner before it replaces anything and stays 0600, so
+// the other writer can still open it: append, acknowledge, append again all succeed.
+func TestRewriteKeepsTheSpoolOwner(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "spool")
+	id := uuid.New()
+	ctx := context.Background()
+	owner := os.Geteuid()
+	var handed []string
+	chownFile = func(f *os.File, uid, gid int) error {
+		handed = append(handed, fmt.Sprintf("%s %d", filepath.Base(f.Name()), uid))
+		return f.Chown(uid, gid)
+	}
+	t.Cleanup(func() {
+		processUID, chownFile = os.Geteuid, func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }
+	})
+
+	proxy, err := Open(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+	if err := proxy.Append(ctx, decision(id)); err != nil {
+		t.Fatal(err)
+	}
+	if len(handed) != 0 {
+		t.Fatalf("the spool's own owner handed files over: %v", handed)
+	}
+
+	// wardyn-runnerd, as another user than the spool's owner, replays and acknowledges.
+	processUID = func() int { return owner + 1 }
+	runnerd, err := Open(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runnerd.Close()
+	if err := runnerd.Replay(ctx, func(context.Context, []Record) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(handed, fmt.Sprintf("write.tmp %d", owner)) {
+		t.Fatalf("the acknowledgement's rewrite was handed to %v, want its new file given to the spool's owner %d before the rename", handed, owner)
+	}
+	st, err := os.Stat(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := int(st.Sys().(*syscall.Stat_t).Uid); got != owner || st.Mode().Perm() != 0o600 {
+		t.Fatalf("state.json after the acknowledgement: owner %d mode %v, want the spool's owner %d and 0600", got, st.Mode().Perm(), owner)
+	}
+
+	// The proxy, the spool's owner again, records the next decision.
+	processUID = os.Geteuid
+	if err := proxy.CanRecord(ctx); err != nil {
+		t.Fatalf("the proxy after an acknowledgement: %v", err)
+	}
+	if err := proxy.Append(ctx, decision(id)); err != nil {
+		t.Fatalf("the proxy's next append after an acknowledgement: %v", err)
 	}
 }

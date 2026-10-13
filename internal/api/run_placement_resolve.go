@@ -82,6 +82,9 @@ type placementInput struct {
 	promoted bool
 	// drives: the run mounts drives, which no person's own runner does.
 	drives bool
+	// policyDiskMiB is the main-drive size the run's policy writes (spec.resources.disk_mib), 0 for none:
+	// with the request's own it sizes the disk each candidate is held to.
+	policyDiskMiB int
 }
 
 // poolsPlaceRuns reports whether runner pools decide where this deployment's runs go: a store that holds
@@ -159,8 +162,10 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	// The kind is decided here, once, before local eligibility judges a run bound for the person's own
 	// runner: nothing after this step moves a run to the other kind.
 	decision := placementFor(f.req.PlacementRequest(), offers, s.deniedPlacements(ctx, f.ceiling))
+	// A launch waits when a kind it may use is refused only for room: an offline laptop does not hide a
+	// remote-hosted runner that is merely full.
 	waits := false
-	if decision.Refusal == placement.ReasonRunnerAtCapacity && demand.holdRunnerCapacity {
+	if decision.Refusal != "" && demand.holdRunnerCapacity && anyAtCapacity(offers) {
 		demand.holdRunnerCapacity, waits = false, true
 		if offered, offers, refusal = s.offerKinds(ctx, f, row.Pool, kinds, demand); refusal != nil {
 			return runPlacement{}, refusal
@@ -182,6 +187,16 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	return runPlacement{pooled: true, pool: pool, row: row.Pool, placement: decision.Placement, filled: decision.Filled, remoteOffered: remoteOffered,
 		eligible: picked, targets: chosen.targets, orgBarrier: org.Barrier, choices: choices, limits: chosen.limits, applied: chosen.applied,
 		waitsForRoom: waits, runnersFull: (capped || waits) && len(picked) > 0 && !slices.ContainsFunc(picked, func(t poolTarget) bool { return !t.full })}, nil
+}
+
+// anyAtCapacity reports whether one of the kinds was refused only because its runners have no room now.
+func anyAtCapacity(offers map[types.Placement]placementOffer) bool {
+	for _, o := range offers {
+		if o.Refusal == placement.ReasonRunnerAtCapacity {
+			return true
+		}
+	}
+	return false
 }
 
 // offerKinds is offerKind for each kind the run may use, in kindOrder.
@@ -262,12 +277,22 @@ func (s *Server) offerKind(ctx context.Context, f placementInput, pool types.Run
 			demand.reqCCOK = true
 		}
 	}
+	// The disk the run asks for is its request's, else its policy's (mainDriveFor's order).
+	requestDisk := 0
+	if f.req.Resources != nil {
+		requestDisk = f.req.Resources.DiskMiB
+	}
+	ask := types.RunnerAmounts{CPUMillis: int64(f.ask.CPUMillis), MemoryMiB: int64(f.ask.MemoryMiB), DiskMiB: int64(cmp.Or(requestDisk, f.policyDiskMiB))}
 	fit, _ := eligibleTargets(targets, demand)
-	limits, applied, refusal := s.runSize(ctx, f, &pool, runnerSource(fit, f.req.RunnerID))
+	limits, applied, refusal := s.runSize(ctx, f, &pool, runnerSource(fit, f.req.RunnerID, ask))
 	if refusal != nil {
 		return kindOffer{}, refusal
 	}
+	// The main drive is sized here as stepMainDrive sizes it (mainDriveFor on this kind's disk limit), so
+	// each candidate is held to the disk the run reserves: one whose per-run disk is under it is passed
+	// over, and one whose disk total is spent has no room, as for CPU and memory.
 	demand.cpu, demand.mem = int64(applied.CPUMillis.Applied), int64(applied.MemoryMiB.Applied)
+	demand.disk = int64(mainDriveFor(f.policyDiskMiB, requestDisk, limits.DiskMiB).MiB)
 	eligible, reason := eligibleTargets(targets, demand)
 	// A pin names one of the caller's own candidates (pinRefusal has refused every other id), so when that
 	// candidate fails the demand the answer is ITS reason, not "no such runner" because another is fine.
@@ -417,17 +442,17 @@ type poolBinding struct {
 // bind picks the run's one target among the eligible ones that can also enforce the class the run
 // ended up at, by the deterministic selection over the run id. The class check is the last
 // intersection: the enforced class is known only after the confinement step. An empty set refuses; it
-// never falls back to a candidate that cannot. prefer, when one of them, is kept: the runner a
-// promotion bound the run to and found room on.
-func (p runPlacement) bind(runID uuid.UUID, enforced types.ConfinementClass, prefer *uuid.UUID) (poolBinding, *runRefusal) {
+// never falls back to a candidate that cannot. prefer (a target id, "" for none), when one of them, is
+// kept: the runner of either kind a promotion bound the run to and found room on.
+func (p runPlacement) bind(runID uuid.UUID, enforced types.ConfinementClass, prefer string) (poolBinding, *runRefusal) {
 	able := p.able(enforced)
 	ids := make([]string, len(able))
 	for i, t := range able {
 		ids[i] = t.id
 	}
 	chosen := runnerpool.Select(p.pool.ID, runID, runnerpool.SortedUnique(ids))
-	if prefer != nil && slices.Contains(ids, prefer.String()) {
-		chosen = prefer.String()
+	if prefer != "" && slices.Contains(ids, prefer) {
+		chosen = prefer
 	}
 	i := slices.IndexFunc(able, func(t poolTarget) bool { return t.id == chosen })
 	if i < 0 {
@@ -454,6 +479,18 @@ func (p runPlacement) otherRunners(enforced types.ConfinementClass, chosen *uuid
 	for _, t := range p.able(enforced) {
 		if t.runnerID != nil && (chosen == nil || *t.runnerID != *chosen) {
 			out = append(out, *t.runnerID)
+		}
+	}
+	return out
+}
+
+// otherRemotes is the remote-hosted runners the run could be bound to in place of chosen, for the same
+// fall-back at its start.
+func (p runPlacement) otherRemotes(enforced types.ConfinementClass, chosen string) []string {
+	var out []string
+	for _, t := range p.able(enforced) {
+		if t.runnerID == nil && t.executor != chosen {
+			out = append(out, t.executor)
 		}
 	}
 	return out
@@ -523,13 +560,17 @@ func (p runPlacement) offeredClasses() []types.ConfinementClass {
 }
 
 // apply stamps the placement, the evidence source and the pool binding on the run row, once, before
-// the row is inserted. An unpooled run is left exactly as it was. A runner already on run is kept when
-// it is still one the run can be bound to.
+// the row is inserted. An unpooled run is left exactly as it was. A runner of either kind already on run
+// is kept when it is still one the run can be bound to.
 func (p runPlacement) apply(run *types.AgentRun, enforced types.ConfinementClass) *runRefusal {
 	if !p.pooled {
 		return nil
 	}
-	b, refusal := p.bind(run.ID, enforced, run.RunnerID)
+	prefer := run.RunnerPoolExecutor
+	if run.RunnerID != nil {
+		prefer = run.RunnerID.String()
+	}
+	b, refusal := p.bind(run.ID, enforced, prefer)
 	if refusal != nil {
 		return refusal
 	}

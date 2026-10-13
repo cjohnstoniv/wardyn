@@ -388,8 +388,52 @@ func TestPG_RunnerTotalsHoldUnderRace(t *testing.T) {
 	// A run larger than the runner's per-run limit never lands there, room or not.
 	big := sized(onRunner(p, runner, types.RunPending))
 	big.Reserved.MemoryMiB++
-	if _, err := pg.CreateRun(ctx, big); !errors.Is(err, store.ErrRunnerAtCapacity) {
-		t.Fatalf("a run past the per-run limit = %v, want refused", err)
+	var never *store.RunnerAtCapacityError
+	if _, err := pg.CreateRun(ctx, big); !errors.As(err, &never) || !never.NeverFits {
+		t.Fatalf("a run past the per-run limit = %v, want refused as one that never fits there", err)
+	}
+	// A run within the per-run limit refused for room alone is not one that never fits.
+	var full *store.RunnerAtCapacityError
+	if _, err := pg.CreateRun(ctx, sized(onRunner(p, runner, types.RunPending))); !errors.As(err, &full) || full.NeverFits {
+		t.Fatalf("a run with no room = %v, want refused for room, not for size", err)
+	}
+}
+
+// A run the server launched itself is counted on its remote-hosted runner and never held to its limits:
+// its revive is claimed on a runner that is full, where a pooled run's revive is refused.
+func TestPG_ServerRunReviveIsExemptFromRunnerLimits(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	p := queuePool(t, pg)
+	remote := "rp3-server"
+	remoteRunner(t, pg, remote, sizedLimits(1, 1))
+	server, err := pg.CreateRun(ctx, newRun(types.RunRunning))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.StampServerRun(ctx, server.ID, remote, oneRun()); err != nil {
+		t.Fatal(err)
+	}
+	pooled := poolRun(p, types.RunRunning, "alice")
+	pooled.RunnerPoolExecutor, pooled.Reserved = remote, oneRun()
+	if _, err := pg.CreateRun(ctx, pooled); !errors.Is(err, store.ErrRunnerAtCapacity) {
+		t.Fatalf("a pooled run beside the counted server run = %v, want refused: the runner takes one", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at=now(), lost_reason='reboot' WHERE id=$1`, server.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.CreateRun(ctx, pooled); err != nil {
+		t.Fatalf("a pooled run once the server run is kept = %v, want admitted", err)
+	}
+	if claimed, err := pg.MarkRunRevived(ctx, server.ID, types.LostReboot, nil, 0, true); err != nil || !claimed {
+		t.Fatalf("the server run's revive onto the full runner = %v, %v; want claimed", claimed, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at=now(), lost_reason='reboot' WHERE id=$1`, pooled.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.MarkRunRevived(ctx, pooled.ID, types.LostReboot, nil, 0, true); !errors.Is(err, store.ErrRunnerAtCapacity) {
+		t.Fatalf("a pooled run's revive onto the full runner = %v, want refused", err)
 	}
 }
 
@@ -467,5 +511,59 @@ func TestRunnerUsageMatchesAdmission(t *testing.T) {
 	}
 	if admitted != 6 {
 		t.Fatalf("admitted %d more runs across both runners, want 3 each: admission and the read disagree about in use", admitted)
+	}
+}
+
+// A promotion binds a waiting run to a remote-hosted runner with room, and the start keeps that runner:
+// the promoted run does not count against itself there (its own place and what it reserves), it starts
+// with the size the start names and reserves exactly that, and when the runner it names is full it
+// lands on the other remote-hosted runner it is offered.
+func TestPG_RemoteStartKeepsItsOwnPlaceAndReservesItsStartSize(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	p := cappedPool(t, pg, 10)
+	full, roomy := "rp3-full", "rp3-roomy"
+	remoteRunner(t, pg, full, sizedLimits(1, 1))
+	size := types.RunnerAmounts{CPUMillis: 1000, MemoryMiB: 4096, DiskMiB: 2048}
+	remoteRunner(t, pg, roomy, &types.RunnerLimits{RunsAtOnce: 1, Total: size, PerRun: size})
+	occupant := poolRun(p, types.RunRunning, "alice")
+	occupant.RunnerPoolExecutor, occupant.Reserved = full, oneRun()
+	if _, err := pg.CreateRun(ctx, occupant); err != nil {
+		t.Fatal(err)
+	}
+	waiting := poolRun(p, types.RunQueued, "alice")
+	waiting.Reserved = oneRun()
+	now := time.Now().UTC()
+	queued, err := pg.CreateQueuedRun(ctx, waiting, store.RunQueueEntry{QueuedAt: now, DeadlineAt: now.Add(time.Hour)}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	both := func(context.Context, types.RunnerPool, store.RunQueueEntry) (store.QueueVerdict, error) {
+		return store.QueueVerdict{Admit: true, Remotes: []string{full, roomy}}, nil
+	}
+	got, _, err := pg.PromoteRunQueue(ctx, pass(p), both)
+	if err != nil || len(got) != 1 || got[0].Run.RunnerPoolExecutor != roomy || got[0].Run.RunnerID != nil {
+		t.Fatalf("promoted %+v (%v), want the run bound to the remote-hosted runner with room", got, err)
+	}
+	// The start names a size larger than the run joined the queue with. The roomy runner takes one run of
+	// exactly that size, so it fits only because the promoted run's own place there is not counted.
+	start := func(remote string, fallbacks ...string) (types.AgentRun, bool, error) {
+		return pg.StartQueuedRun(ctx, queued.ID, store.QueueStart{RunnerPoolExecutor: remote, RemoteFallbacks: fallbacks, Reserved: size,
+			Placement: types.PlacementRemote, ConfinementClass: types.CC2})
+	}
+	if _, _, err := start(full); !errors.Is(err, store.ErrRunnerAtCapacity) {
+		t.Fatalf("a start onto the full remote-hosted runner alone = %v, want ErrRunnerAtCapacity", err)
+	}
+	started, ok, err := start(full, roomy)
+	if err != nil || !ok || started.RunnerPoolExecutor != roomy {
+		t.Fatalf("a start offered the roomy runner too = %v %v on %q, want it on %s: its own place there is its own", ok, err, started.RunnerPoolExecutor, roomy)
+	}
+	used, err := pg.RunnerUsage(ctx, nil, []string{roomy}, uuid.Nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := used[roomy], (types.RunnerTally{Runs: 1, CPUMillis: size.CPUMillis, MemoryMiB: size.MemoryMiB, DiskMiB: size.DiskMiB}); got != want {
+		t.Fatalf("in use after the start = %+v, want the size the run started with %+v", got, want)
 	}
 }

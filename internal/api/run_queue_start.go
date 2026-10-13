@@ -382,9 +382,9 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 	f := st.f
 	qs, _ := s.queueStore()
 	run := st.run
-	// The promotion bound the run to a runner it found room on; the start keeps it while it can still
-	// take the run, and otherwise the store picks another of the run's runners that has room.
-	placed := types.AgentRun{ID: run.ID, RunnerID: run.RunnerID}
+	// The promotion bound the run to a runner of either kind it found room on; the start keeps it while
+	// it can still take the run, and otherwise the store picks another of the run's runners that has room.
+	placed := types.AgentRun{ID: run.ID, RunnerID: run.RunnerID, RunnerPoolExecutor: run.RunnerPoolExecutor}
 	if ref := f.place.apply(&placed, f.enforced); ref.write(s, st.cw, st.r) {
 		return st.refusalEnd()
 	}
@@ -404,6 +404,7 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 		LifetimeCapAt: anchor.LifetimeCapAt, LifetimeCapSource: anchor.LifetimeCapSource,
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID,
 		EvidenceSource: placed.EvidenceSource, RunnerPoolExecutor: placed.RunnerPoolExecutor, RunnerFallbacks: f.place.otherRunners(f.enforced, placed.RunnerID),
+		RemoteFallbacks: f.place.otherRemotes(f.enforced, placed.RunnerPoolExecutor), Reserved: f.place.reserved(f.mainDrive),
 	})
 	switch {
 	case errors.Is(err, store.ErrRunnerAtCapacity):
