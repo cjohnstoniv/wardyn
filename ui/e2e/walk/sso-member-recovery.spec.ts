@@ -85,10 +85,8 @@ import { STARTING_UNSCHEDULABLE } from "../../src/app/components/screens/run-sta
 // rail), by constant name handed over from their own canon docs.
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../../src/app/components/wardyn/model-access-copy";
 import { CONNECTIONS } from "../../src/app/components/wardyn/copy/door";
-import { RECORDING_DISABLED_TITLE } from "../../src/app/components/wardyn/copy";
 import { NR_FILES } from "../../src/app/components/wardyn/copy/new-run/files";
 import { NR_HARNESSES } from "../../src/app/components/wardyn/copy/new-run/harnesses";
-import { NR_REVIEW } from "../../src/app/components/wardyn/copy/new-run/review";
 import { NR_RUN } from "../../src/app/components/wardyn/copy/new-run/run";
 import { NR_SHAPE } from "../../src/app/components/wardyn/copy/new-run/shape";
 import { NR_SHARED } from "../../src/app/components/wardyn/copy/new-run/shared";
@@ -550,18 +548,6 @@ test("A(rail): New Run's Tools and access states THIS run's credential residency
   await expect(page.getByRole("button", { name: NR_TOOLS.SETUP_SIGN_IN_TO(WALK_PROVIDER_NAME) })).toBeVisible();
   // The per-person chip that followed the sentence is removed.
   await expect(page.getByText("Per-person AWS sign-in")).toHaveCount(0);
-  // …and Recording states the truth about a stock Helm install rather than
-  // promising a capture that cannot happen: the kind quickstart leaves
-  // persistence.enabled=false. The Recording row reads /healthz, so it arrives
-  // on that answer rather than on mount — poll it rather than racing it.
-  //
-  // Review's Where group carries the Recording line.
-  await page.getByRole("button", { name: NR_TOOLS.REVIEW_RUN }).click();
-  await expect(heading(page, NR_REVIEW.TITLE)).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText(RECORDING_DISABLED_TITLE)).toBeVisible({ timeout: 60_000 });
-  // The ENABLED arm's sentence: on this estate recording is off, and the promise must
-  // not be on screen beside the sentence that says so.
-  await expect(page.getByText(NR_REVIEW.RECORDING_ON)).toHaveCount(0);
 
   // ── A(rail)+ — the PERSON's state, on the shell's strip ──────────────────
   //

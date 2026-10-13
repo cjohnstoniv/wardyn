@@ -14,7 +14,6 @@ import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
 import { NR_LAUNCH } from "../src/app/components/wardyn/copy/new-run/launch";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
-import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 import { SCENARIO_HARNESSES, SCENARIO_HARNESS_SETS } from "../src/app/lib/new-run-fixtures/scenarios/harnesses";
@@ -64,7 +63,7 @@ async function stub(page: Page, missing: boolean): Promise<Bodies> {
   return bodies;
 }
 
-/** Start, the document path to Review with a complete application draft, then Back to step 5. */
+/** Start, the document path to Review with a complete application draft, then Access's own way back to step 5. */
 async function openTools(page: Page) {
   await gotoConsole(page);
   await navToRoute(page, "/runs/new");
@@ -72,7 +71,9 @@ async function openTools(page: Page) {
   await page.getByRole("textbox", { name: NR_DOCUMENT.EDITOR_ARIA("YAML") }).fill(DOCUMENT);
   await press(page, NR_DOCUMENT.CONTINUE_REVIEW);
   await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();
-  await press(page, NR_SHARED.BACK);
+  // Review has no Back: a group's Change opens the way to the step that owns it.
+  await press(page, `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_ACCESS}`);
+  await press(page, NR_REVIEW.EDIT_TOOLS_ACCESS);
   await expect(page.getByRole("heading", { name: NR_TOOLS.TITLE })).toBeVisible();
 }
 

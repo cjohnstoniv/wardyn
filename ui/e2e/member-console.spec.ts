@@ -21,10 +21,11 @@ import {
   sql,
   startGuided,
   chooseShape,
+  openRepositoryPicker,
+  repositoryOption,
 } from "./fixtures";
 import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
 import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
-import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
 import { DENIED } from "../src/app/lib/permissions-copy";
 
 test.describe("member console — real member navigation", () => {
@@ -184,14 +185,12 @@ test.describe("member why-denied (mocked /me role, real enforcement)", () => {
       await openNewRun(page);
       await startGuided(page);
       await chooseShape(page, "environment");
-      await continueNewRun(page, NR_RUN.TITLE_ENV);
       await continueNewRun(page, NR_HARNESSES.TITLE);
       const listed = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/workspaces" && r.request().method() === "GET");
       await continueNewRun(page, NR_FILES.TITLE);
       await listed;
 
-      await expect(page.getByRole("heading", { name: NR_FILES.REPOS_TITLE })).toBeVisible();
-      await expect(page.getByRole("checkbox", { name: NR_FILES.INCLUDE_ARIA("e2e-mc-ungranted") })).toHaveCount(0);
+      await expect(repositoryOption(await openRepositoryPicker(page), "e2e-mc-ungranted")).toHaveCount(0);
       // Nothing about it is annotated either: it is simply not on offer.
       await expect(page.getByText(DENIED.WORKSPACE_CHIP)).toHaveCount(0);
       await expect(page.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toHaveCount(0);

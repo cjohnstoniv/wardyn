@@ -17,6 +17,7 @@ import { UNSAVED_GUARD } from "../src/app/components/wardyn/copy/shell";
 import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
 import { NR_LAUNCH } from "../src/app/components/wardyn/copy/new-run/launch";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
+import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
 import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
 import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
 import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
@@ -82,15 +83,15 @@ async function openGuided(page: Page) {
   await gotoConsole(page);
   await navToRoute(page, "/runs/new");
   await expect(page.getByRole("heading", { name: NR_START.TITLE, level: 1 })).toBeVisible();
-  await press(page, NR_START.GUIDED_FOOT);
+  await page.getByRole("button", { name: NR_START.GUIDED_FOOT }).click();
   await expect(page.getByRole("heading", { name: NR_SHAPE.TITLE })).toBeVisible();
 }
 
 /** Shape and Run, up to the Harnesses step. The Run step's pool and barrier stay on the server's defaults. */
 async function toHarnesses(page: Page, workload: "agent" | "environment" | "application", mode?: "interactive" | "autonomous") {
   const title = { agent: NR_SHAPE.AGENT_TITLE, environment: NR_SHAPE.ENV_TITLE, application: NR_SHAPE.APP_TITLE }[workload];
-  await page.getByRole("radio", { name: title }).click();
-  await next(page, NR_SHARED.STEP_RUN);
+  // A workload button writes the shape and opens Run.
+  await press(page, title);
   if (mode) await page.getByRole("radio", { name: mode === "interactive" ? NR_RUN.MODE_INTERACTIVE : NR_RUN.MODE_AUTONOMOUS }).click();
   if (workload === "application") await page.locator("#nr-command").fill("npm test");
   await next(page, NR_SHARED.STEP_HARNESSES);
@@ -100,7 +101,7 @@ async function toHarnesses(page: Page, workload: "agent" | "environment" | "appl
 /** Files and Tools with nothing extra, then Review once the server's check has landed. */
 async function toReview(page: Page) {
   await next(page, NR_SHARED.STEP_FILES);
-  await page.locator("#nr-files-choice").check();
+  await page.getByRole("radio", { name: NR_FILES.NO_EXTRA }).check();
   await next(page, NR_SHARED.STEP_TOOLS);
   await press(page, NR_TOOLS.REVIEW_RUN);
   await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();
@@ -135,8 +136,8 @@ test.describe("New Run, Guided setup: each workload end to end", () => {
     const bodies = await stubFlow(page);
     await openGuided(page);
     await toHarnesses(page, "agent", "interactive");
-    await press(page, NR_HARNESSES.ADD_HARNESS);
-    await page.getByRole("switch", { name: NR_HARNESSES.START_IN_HARNESS }).click();
+    // A new agent task opens with the roster's first harness added and starting the run.
+    await expect(page.getByRole("switch", { name: NR_HARNESSES.START_IN_HARNESS })).toBeChecked();
     await page.getByLabel(NR_HARNESSES.STARTING_PROMPT).fill("Find the flaky retry");
     await toReview(page);
     await launchThroughNameDialog(page, "guided interactive");
@@ -152,7 +153,6 @@ test.describe("New Run, Guided setup: each workload end to end", () => {
     const bodies = await stubFlow(page);
     await openGuided(page);
     await toHarnesses(page, "agent", "autonomous");
-    await press(page, NR_HARNESSES.ADD_HARNESS);
     await page.locator("#nr-task").fill("Fix the flaky retry");
     await toReview(page);
     await launchThroughNameDialog(page, "guided autonomous");
@@ -195,7 +195,6 @@ test.describe("New Run, Guided setup: the Harnesses step (NR-11)", () => {
     await openGuided(page);
     await toHarnesses(page, "agent", "autonomous");
     await expect(page.getByText(NR_HARNESSES.LEDE_AUTONOMOUS)).toBeVisible();
-    await press(page, NR_HARNESSES.ADD_HARNESS);
     const another = page.getByRole("button", { name: NR_HARNESSES.ADD_ANOTHER });
     await expect(another).toBeDisabled();
     await expect(page.getByText(NR_SHARED.COMING_SOON)).toBeVisible();
@@ -212,7 +211,6 @@ test.describe("New Run, Guided setup: the Harnesses step (NR-11)", () => {
     await openGuided(page);
     await toHarnesses(page, "agent", "interactive");
     await expect(page.getByText(NR_HARNESSES.LEDE_INTERACTIVE)).toBeVisible();
-    await press(page, NR_HARNESSES.ADD_HARNESS);
     await press(page, NR_HARNESSES.ADD_ANOTHER);
     await expect(page.getByRole("region", { name: NR_HARNESSES.EYEBROW(2) })).toBeVisible();
 
@@ -233,7 +231,6 @@ test.describe("New Run, Guided setup: the Harnesses step (NR-11)", () => {
     await stubFlow(page, { sets: [] });
     await openGuided(page);
     await toHarnesses(page, "agent", "interactive");
-    await press(page, NR_HARNESSES.ADD_HARNESS);
     await expect(page.getByRole("button", { name: NR_HARNESSES.ADD_ANOTHER })).toBeDisabled();
     await expect(page.getByText(NR_HARNESSES.NO_COMBINATION(CLAUDE.display, CODEX.display))).toBeVisible();
   });
@@ -248,7 +245,6 @@ test.describe("New Run, Guided setup: the Harnesses step (NR-11)", () => {
     await stubFlow(page, { harnesses: roster });
     await openGuided(page);
     await toHarnesses(page, "agent", "interactive");
-    await press(page, NR_HARNESSES.ADD_HARNESS);
     const reasons = page.locator("#nr-harness-unavailable");
     await expect(reasons.getByText(NR_HARNESSES.NOT_INSTALLED(CODEX.display))).toBeVisible();
     await expect(reasons.getByText(NR_HARNESSES.NO_PROVIDER("Custom agent"))).toBeVisible();
@@ -260,13 +256,14 @@ test.describe("New Run, Guided setup: leaving", () => {
   test("Esc and Runs ask before leaving a changed draft, and leave an untouched one", async ({ page }) => {
     await stubFlow(page);
     await openGuided(page);
-    await page.getByRole("radio", { name: NR_SHAPE.ENV_TITLE }).click();
+    await press(page, NR_SHAPE.ENV_TITLE);
+    await expect(page.getByRole("heading", { name: NR_RUN.TITLE_ENV })).toBeVisible();
     await page.keyboard.press("Escape");
     const dialog = page.getByRole("alertdialog", { name: UNSAVED_GUARD.TITLE });
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: UNSAVED_GUARD.STAY }).click();
     await expect(dialog).toBeHidden();
-    await expect(page.getByRole("radio", { name: NR_SHAPE.ENV_TITLE })).toBeChecked();
+    await expect(page.getByRole("heading", { name: NR_RUN.TITLE_ENV })).toBeVisible();
 
     await sidebarLink(page, "Runs").click();
     await expect(dialog).toBeVisible();
@@ -275,7 +272,7 @@ test.describe("New Run, Guided setup: leaving", () => {
 
     // Untouched: opening Start and choosing Guided setup changes nothing, so Esc just leaves.
     await navToRoute(page, "/runs/new");
-    await press(page, NR_START.GUIDED_FOOT);
+    await page.getByRole("button", { name: NR_START.GUIDED_FOOT }).click();
     await expect(page.getByRole("heading", { name: NR_SHAPE.TITLE })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page).toHaveURL(/\/runs$/);
