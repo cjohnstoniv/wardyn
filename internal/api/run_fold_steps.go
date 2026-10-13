@@ -570,7 +570,18 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 	if refusal != nil && refusal.status < http.StatusInternalServerError && f.place.remoteOffered {
 		refusal.body.Error += " " + remoteInsteadMsg(f.place.pool.Name)
 	}
-	return !refusal.write(s, f.w, f.r)
+	if refusal.write(s, f.w, f.r) {
+		return false
+	}
+	// A launch that waits on the pool's remote-hosted runners records this step's answer for the person's
+	// own: the queue then never offers it a runner of theirs that frees first, which the start would
+	// refuse here, ending a run that was accepted to wait.
+	if f.queued && f.place.pooled && req.Placement == types.PlacementRemote {
+		req.Placement = types.PlacementLocal
+		_, local := s.localPlacementRefusal(f.r, req, true, f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
+		f.place.noLocal = local != nil && local.status < http.StatusInternalServerError
+	}
+	return true
 }
 
 // stepDriveEligibility holds the run's drives to the kind of runner it got: no
@@ -590,7 +601,7 @@ func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
 func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
 		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling)),
-		promoted: f.promoted, drives: len(f.drives) > 0}
+		promoted: f.promoted, drives: len(f.drives) > 0, noLocal: promotedNoLocal(f.r.Context())}
 	if f.spec.Resources != nil {
 		in.policyDiskMiB = f.spec.Resources.DiskMiB
 	}
@@ -609,6 +620,11 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	// The queue's own start replays the fold as promoted, and must not queue again.
 	if f.mode != foldPreview {
 		f.queued = plan.queues() && !f.promoted
+	}
+	// A launch that waits records the size it gets before any runner bounds it, so the queue sizes it for
+	// each runner that could take it (startSizeOn) instead of holding it to the runner it met first.
+	if f.place.unbound, refusal = s.unboundSize(f.r.Context(), in, plan.row, f.queued); refusal.write(s, f.w, f.r) {
+		return false
 	}
 	return true
 }
