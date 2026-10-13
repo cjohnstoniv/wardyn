@@ -60,7 +60,7 @@ func (s *buildEventStore) SetWorkspaceBuiltImage(context.Context, uuid.UUID, str
 // buildEventBuilder records which builder method ran into the same log.
 type buildEventBuilder struct{ log *buildEventLog }
 
-func (b buildEventBuilder) FinalizeBase(_ context.Context, _, tag string, _ io.Writer) (BuiltImage, error) {
+func (b buildEventBuilder) FinalizeBase(_ context.Context, _, tag string, _ io.Writer, _ bool) (BuiltImage, error) {
 	b.log.add("build:FinalizeBase")
 	return BuiltImage{Ref: tag}, nil
 }
@@ -262,7 +262,7 @@ func TestBuildAnnounce_WorkspaceBuildPassesNoAnnounce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(src), "s.resolveWorkspaceImage(ctx, buildID, ws, logSink, nil)") {
-		t.Error("workspace_build.go must call resolveWorkspaceImage with a nil announce")
+	if !strings.Contains(string(src), "s.resolveWorkspaceImageWith(ctx, buildID, ws, logSink, nil,") {
+		t.Error("workspace_build.go must call resolveWorkspaceImageWith with a nil announce")
 	}
 }

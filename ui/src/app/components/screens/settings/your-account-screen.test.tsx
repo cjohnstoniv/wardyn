@@ -6,7 +6,7 @@
 // Your account (M-5, #636) — the user-view half of the settings split. Was
 // part of the unsplit settings-screen.test.tsx until M-5 split the page in
 // two (issue #636's own "Check": "the settings specs split per view").
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -244,4 +244,46 @@ it("model re-check refreshes the shared snapshot once and keeps the recovery dia
   await userEvent.click(screen.getByRole("button", { name: CONNECTIONS.REVIEW_RECONNECT }));
   const dialog = await screen.findByRole("dialog");
   expect(within(dialog).getByText(CONNECTIONS.DESTINATION_CHANGED(MODEL_PROVIDERS.gateway.host))).toBeInTheDocument();
+});
+
+// #1508: the Invitations card leads the page and the service identities the person sponsors come last; with
+// nothing waiting and nothing sponsored, neither card is drawn.
+describe("the token cards (#1508)", () => {
+  const answer = (invitations: unknown[], identities: unknown[]) =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string) => {
+        const p = String(path);
+        const body = p.startsWith("/api/v1/me/invitations") ? invitations : p.startsWith("/api/v1/me/service-identities") ? identities : null;
+        // Every other read on the page (components, runners) is not this test's concern: it fails, as the card tolerates.
+        if (body === null) return new Response(JSON.stringify({ error: "not stubbed" }), { status: 404, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+      }),
+    );
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("draws Invitations first and Service identities I sponsor after the SSH keys", async () => {
+    answer(
+      [{ id: "i1", target: "me", created_by: "ops@example.com", created_at: "2026-10-12T00:00:00Z", expires_at: "2099-01-01T00:00:00Z", state: "pending" }],
+      [{ name: "ci-nightly", sponsor: "me", sponsor_since: "", user_type: "standard", created_by: "a", created_at: "", state: "active" }],
+    );
+    renderScreen();
+    const cards = await waitFor(() => {
+      const found = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent ?? "");
+      expect(found.some((t) => t.startsWith("Invitations"))).toBe(true);
+      expect(found.some((t) => t.startsWith("Service identities I sponsor"))).toBe(true);
+      return found;
+    });
+    const at = (prefix: string) => cards.findIndex((t) => t.startsWith(prefix));
+    expect(at("Invitations")).toBe(0);
+    expect(at("Service identities I sponsor")).toBeGreaterThan(at("Your SSH keys"));
+  });
+
+  it("draws neither when nothing is waiting and nothing is sponsored", async () => {
+    answer([], []);
+    renderScreen();
+    expect(await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId("invitations-card")).not.toBeInTheDocument());
+    expect(screen.queryByTestId("service-identities-card")).not.toBeInTheDocument();
+  });
 });

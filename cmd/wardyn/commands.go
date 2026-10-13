@@ -98,6 +98,19 @@ func normalizeConfinement(s string) string {
 	return s
 }
 
+// interactiveLine says what the new interactive sandbox does at start: it is idle
+// only when no startup was asked for or the startup is none.
+func interactiveLine(startup *sdk.RunStartup, id string) string {
+	attach := "attach with `wardyn run attach " + id + "`"
+	switch {
+	case startup == nil || startup.Kind == sdk.StartupNone:
+		return "  interactive: sandbox is idle; " + attach
+	case startup.Kind == sdk.StartupHarness:
+		return "  interactive: starts " + startup.Tool + "; " + attach
+	}
+	return "  interactive: starts " + startup.Command + "; " + attach
+}
+
 // runCmd is the single "run" noun: a bare invocation creates a run, and the
 // subcommands inspect, stop and export runs. "runs" stays as an alias so
 // `wardyn runs list` keeps working.
@@ -217,7 +230,7 @@ func runCmd(client clientFn) *cobra.Command {
 				// The image is resolved after the 201 (the build runs server-side),
 				// so it is read back later with `wardyn run get`, never printed here.
 				if interactive || body.Experience == sdk.ExperienceInteractive {
-					fmt.Fprintf(cmd.OutOrStdout(), "  interactive: sandbox is idle; attach with `wardyn run attach %s`\n", run.ID)
+					fmt.Fprintln(cmd.OutOrStdout(), interactiveLine(body.Startup, run.ID.String()))
 				}
 			}
 			// Advisory server warnings (workspace collision, dropped ssh grant):
@@ -232,7 +245,7 @@ func runCmd(client clientFn) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; only --title, --description, --wait, --timeout, --json and --dry-run go with it.. A document that sets inline_policy is refused for now: sent as inline_policy it would replace your default policy")
+	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; only --title, --description, --wait, --timeout, --json and --dry-run go with it. A document that sets inline_policy is refused for now: sent as inline_policy it would replace your default policy")
 	cmd.Flags().StringVar(&repo, "repo", "", "repository (org/name; optional — omit for an ephemeral scratch run)")
 	cmd.Flags().StringVar(&agent, "agent", "", "agent name (e.g. claude-code)")
 	cmd.Flags().StringVar(&task, "task", "", "human task description")

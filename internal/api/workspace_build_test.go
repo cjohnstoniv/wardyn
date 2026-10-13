@@ -18,7 +18,7 @@ import (
 func TestBuildTracker_LogRingBounded(t *testing.T) {
 	var tr buildTracker
 	id := uuid.New()
-	tr.begin(id, time.Now())
+	tr.begin(id, time.Now(), false)
 	for i := 0; i < maxBuildLogLines+10; i++ {
 		tr.appendLog(id, "line")
 	}
@@ -34,7 +34,7 @@ func TestBuildTracker_LogRingBounded(t *testing.T) {
 func TestBuildTracker_FinishCarriesLogForward(t *testing.T) {
 	var tr buildTracker
 	id := uuid.New()
-	tr.begin(id, time.Now())
+	tr.begin(id, time.Now(), false)
 	tr.appendLog(id, "step 1")
 	tr.appendLog(id, "step 2 failed")
 	tr.finish(id, "", "build failed with exit code 1")
@@ -53,11 +53,11 @@ func TestBuildTracker_FinishCarriesLogForward(t *testing.T) {
 func TestBuildTracker_BeginResetsLog(t *testing.T) {
 	var tr buildTracker
 	id := uuid.New()
-	tr.begin(id, time.Now())
+	tr.begin(id, time.Now(), false)
 	tr.appendLog(id, "attempt 1 line")
 	tr.finish(id, "", "failed")
 
-	tr.begin(id, time.Now()) // retry
+	tr.begin(id, time.Now(), false) // retry
 	got := tr.get(id)
 	if len(got.Log) != 0 {
 		t.Fatalf("Log after retry begin() = %v, want empty", got.Log)
@@ -70,7 +70,7 @@ func TestBuildTracker_BeginResetsLog(t *testing.T) {
 func TestBuildTracker_GetSnapshotDoesNotAliasTracker(t *testing.T) {
 	var tr buildTracker
 	id := uuid.New()
-	tr.begin(id, time.Now())
+	tr.begin(id, time.Now(), false)
 	tr.appendLog(id, "first")
 	snap := tr.get(id)
 	tr.appendLog(id, "second")
@@ -85,7 +85,7 @@ func TestBuildTracker_GetSnapshotDoesNotAliasTracker(t *testing.T) {
 func TestBuildLogWriter_SplitsCompleteLinesOnly(t *testing.T) {
 	var tr buildTracker
 	id := uuid.New()
-	tr.begin(id, time.Now())
+	tr.begin(id, time.Now(), false)
 	w := &buildLogWriter{t: &tr, id: id}
 
 	if _, err := w.Write([]byte("hello\nwor")); err != nil {
@@ -108,7 +108,7 @@ func TestBuildLogWriter_SplitsCompleteLinesOnly(t *testing.T) {
 func TestBuildLogWriter_StripsANSIEscapes(t *testing.T) {
 	var tr buildTracker
 	id := uuid.New()
-	tr.begin(id, time.Now())
+	tr.begin(id, time.Now(), false)
 	w := &buildLogWriter{t: &tr, id: id}
 
 	if _, err := w.Write([]byte("\x1b[32mgreen text\x1b[0m\n")); err != nil {
@@ -125,7 +125,7 @@ func TestBuildLogWriter_StripsANSIEscapes(t *testing.T) {
 func TestBuildLogWriter_ClampsOversizedLine(t *testing.T) {
 	var tr buildTracker
 	id := uuid.New()
-	tr.begin(id, time.Now())
+	tr.begin(id, time.Now(), false)
 	w := &buildLogWriter{t: &tr, id: id}
 
 	long := strings.Repeat("x", maxBuildLogLineLen+100)
@@ -183,7 +183,7 @@ func TestResolveBuildView_ExplicitImageNeedsBuilder(t *testing.T) {
 func TestBuildLogWriter_FlushesUnterminatedOverflow(t *testing.T) {
 	var tr buildTracker
 	id := uuid.New()
-	tr.begin(id, time.Now())
+	tr.begin(id, time.Now(), false)
 	w := &buildLogWriter{t: &tr, id: id}
 
 	huge := strings.Repeat("y", maxBuildLogBufBytes+1)

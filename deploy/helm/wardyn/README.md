@@ -67,7 +67,7 @@ Platform requirements, in one breath: **Kubernetes 1.20+, Helm 3, a NetworkPolic
 - A wardynd image:
   - the chart's default pulls the CI-published one for a released version (see the callout at the top), or **build and push your own** (see below) for a fork, a private registry, or an unreleased change.
   - Each release also publishes `ghcr.io/cjohnstoniv/wardynd-fips`, the same daemon built against a pinned Go cryptographic module snapshot:
-      - set `image.repository` to it, give it non-age key custody (`kek.provider` `transit`, `azurekv` or `awskms`, or store mode), and see [Secrets and keys](../../../docs/operations/secrets-and-keys.md) for what it does and does not claim.
+      - set `image.repository` to it, give it non-age key custody: a key service (`kek.provider` `transit`, `azurekv` or `awskms`), alone or with store mode, and see [Secrets and keys](../../../docs/operations/secrets-and-keys.md) for what it does and does not claim.
 - Optional: **RuntimeClasses** delivering gVisor/Kata isolation, pinned via `k8s.runtimeClasses.CC2`/`.CC3`, to advertise the stronger confinement tiers — CC1 works out of the box.
 - An **OIDC issuer** for SSO and admin/member RBAC (see [Multi-user](#multi-user-adminmember-rbac)).
 

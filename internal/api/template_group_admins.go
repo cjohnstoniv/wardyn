@@ -27,7 +27,7 @@ const maxTemplateGroupLabelRunes = 64
 // kept as written, and an email that pairs with no principal, or with more than
 // one, is refused. So every grant is keyed by the subject the person's revoke
 // and erasure name, never by an email that someone else may later carry.
-func (s *Server) templateGrantFromRequest(w http.ResponseWriter, r *http.Request) (types.TemplateGroupAdmin, bool) {
+func (s *Server) templateGrantFromRequest(w http.ResponseWriter, r *http.Request, outcome string) (types.TemplateGroupAdmin, bool) {
 	var g types.TemplateGroupAdmin
 	if !decodeStrict(w, r, &g) {
 		return g, false
@@ -38,7 +38,7 @@ func (s *Server) templateGrantFromRequest(w http.ResponseWriter, r *http.Request
 		return g, false
 	}
 	if refusal != "" {
-		writeErrorReason(w, http.StatusUnprocessableEntity, ownerRefusalReason(refusal), templateGrantOwnerRefusalMsg(refusal))
+		writeErrorReason(w, http.StatusUnprocessableEntity, ownerRefusalReason(refusal), templateGrantOwnerRefusalMsg(refusal, outcome))
 		return g, false
 	}
 	g.Person = owner
@@ -83,7 +83,7 @@ func (s *Server) handlePutTemplateGroupAdmin(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	g, ok := s.templateGrantFromRequest(w, r)
+	g, ok := s.templateGrantFromRequest(w, r, templateGrantWritten)
 	if !ok {
 		return
 	}
@@ -111,7 +111,7 @@ func (s *Server) handleDeleteTemplateGroupAdmin(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	g, ok := s.templateGrantFromRequest(w, r)
+	g, ok := s.templateGrantFromRequest(w, r, templateGrantRemoved)
 	if !ok {
 		return
 	}
