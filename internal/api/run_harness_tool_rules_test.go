@@ -27,7 +27,7 @@ func TestHarnessToolRules_ProductAfterTheCeiling(t *testing.T) {
 		{ID: "codex-cli", Kind: client.IncludedToolHarness},
 		{ID: "mcp", Kind: client.IncludedToolComponent},
 	}
-	_, got := applyHarnessToolRules(spec, tools)
+	_, got := applyHarnessToolRules(spec, tools, types.ToolHold)
 	if len(got) != 2 {
 		t.Fatalf("sets = %+v, want one per harness and none for a component", got)
 	}
@@ -47,17 +47,18 @@ func TestHarnessToolRules_ProductAfterTheCeiling(t *testing.T) {
 		t.Errorf("codex-cli Bash = %q, want the policy's deny", eff)
 	}
 	plain := []client.IncludedTool{{ID: "a", Kind: client.IncludedToolHarness}, {ID: "b", Kind: client.IncludedToolHarness}}
-	if _, none := applyHarnessToolRules(types.RunPolicySpec{}, plain); none != nil {
+	if _, none := applyHarnessToolRules(types.RunPolicySpec{}, plain, types.ToolHold); none != nil {
 		t.Error("a run with no rule anywhere left the older regime")
 	}
-	if _, none := applyHarnessToolRules(spec, nil); none != nil {
+	if _, none := applyHarnessToolRules(spec, nil, types.ToolHold); none != nil {
 		t.Error("a run with no harness tool left the older regime")
 	}
 }
 
-// Dispatch gives the proxy digests and the started harness its plaintext, as
-// secret env: the plaintext is in no config, no audit row and no non-secret env,
-// and the run-wide tool_rules leave the sidecar's policy.
+// Dispatch gives the proxy digests and the started harness its plaintext, as an
+// agent-owned file under a reserved name: the plaintext is in no config, no audit
+// row and no env, secret or not, and the run-wide tool_rules leave the sidecar's
+// policy.
 func TestHarnessToolRules_DispatchCarriesDigestsNeverThePlaintext(t *testing.T) {
 	sets := []types.HarnessToolRules{
 		{Harness: "claude-code", Rules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}},
@@ -69,15 +70,14 @@ func TestHarnessToolRules_DispatchCarriesDigestsNeverThePlaintext(t *testing.T) 
 	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy:           types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}}},
-		HarnessToolRules: sets,
+		HarnessToolRules: sets, ToolApprovals: "hold",
 	})
 	spec := fr.lastSpec
-	cred := spec.SecretEnv[toolgateCredentialEnv]
-	if cred == "" {
-		t.Fatalf("the started harness got no credential: %v", spec.SecretEnv)
-	}
-	if _, inEnv := spec.Env[toolgateCredentialEnv]; inEnv {
-		t.Error("the credential is in the non-secret env")
+	cred := toolgateCredentialOf(t, spec)
+	for k, v := range spec.SecretEnv {
+		if strings.Contains(v, cred) {
+			t.Errorf("secret env %s carries the plaintext credential", k)
+		}
 	}
 	sum := sha256.Sum256([]byte(cred))
 	pc := spec.ProxyConfig
@@ -109,9 +109,9 @@ func TestHarnessToolRules_DispatchCarriesDigestsNeverThePlaintext(t *testing.T) 
 	srv2, _, _, run2 := dispatchTeardownFixture(t, fr2, types.RunPending)
 	run2.Task, run2.Agent = "", "gemini-cli"
 	srv2.dispatchRun(context.Background(), run2, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
-		RunToken: "run-token", Image: "img", HarnessToolRules: sets})
-	if _, ok := fr2.lastSpec.SecretEnv[toolgateCredentialEnv]; ok || len(fr2.lastSpec.ProxyConfig.HarnessCredentials) != 2 {
-		t.Errorf("a harness the run does not start was handed a credential: %v", fr2.lastSpec.SecretEnv)
+		RunToken: "run-token", Image: "img", HarnessToolRules: sets, ToolApprovals: "hold"})
+	if len(fr2.lastSpec.ManagedFiles) != 0 || len(fr2.lastSpec.ProxyConfig.HarnessCredentials) != 2 {
+		t.Errorf("a harness the run does not start was handed a credential: %+v", fr2.lastSpec.ManagedFiles)
 	}
 }
 
@@ -125,7 +125,7 @@ func TestHarnessToolRules_NamedHoldNeverShadowsAWildcardDeny(t *testing.T) {
 		{ID: "claude-code", Kind: client.IncludedToolHarness, ToolRules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}},
 		{ID: "codex-cli", Kind: client.IncludedToolHarness},
 	}
-	_, sets := applyHarnessToolRules(spec, tools)
+	_, sets := applyHarnessToolRules(spec, tools, types.ToolHold)
 	for _, h := range []string{"claude-code", "codex-cli"} {
 		if eff, _ := types.ToolEffectForHarness(sets, h, "Bash"); eff != types.ToolDeny {
 			t.Errorf("%s Bash = %q after a hold on it, want the policy's deny (sets %+v)", h, eff, sets)
@@ -150,25 +150,26 @@ func TestHarnessToolRules_NamedHoldNeverShadowsAWildcardDeny(t *testing.T) {
 }
 
 // With one harness the run keeps the run-wide regime: the tool's rules and default
-// narrow spec.ToolRules and nothing per-harness is carried; the per-harness sets
-// start at two harnesses.
+// are compiled into spec.ToolRules and nothing per-harness is carried; the
+// per-harness sets start at two harnesses. The person's default reaches a tool
+// the policy allows, since each tool takes the stricter of the two layers.
 func TestHarnessToolRules_OneHarnessKeepsTheRunWideRegime(t *testing.T) {
 	spec := types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "Read", Effect: types.ToolAllow}}}
 	one := []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness,
 		ToolRules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}, DefaultEffect: types.ToolHold}}
-	out, sets := applyHarnessToolRules(spec, one)
+	out, sets := applyHarnessToolRules(spec, one, types.ToolHold)
 	if sets != nil {
 		t.Fatalf("one harness carried per-harness sets: %+v", sets)
 	}
 	if effectiveToolEffect(out.ToolRules, "Bash") != types.ToolHold || effectiveToolEffect(out.ToolRules, "Other") != types.ToolHold ||
-		effectiveToolEffect(out.ToolRules, "Read") != types.ToolAllow {
-		t.Errorf("run-wide rules = %+v, want the tool's hold and default beside the policy's allow", out.ToolRules)
+		effectiveToolEffect(out.ToolRules, "Read") != types.ToolHold {
+		t.Errorf("run-wide rules = %+v, want the tool's hold and its default, which is stricter than the policy's allow", out.ToolRules)
 	}
 	if len(spec.ToolRules) != 1 {
 		t.Error("the caller's spec was edited in place")
 	}
 	two := append(one, client.IncludedTool{ID: "codex-cli", Kind: client.IncludedToolHarness})
-	if _, sets := applyHarnessToolRules(spec, two); len(sets) != 2 {
+	if _, sets := applyHarnessToolRules(spec, two, types.ToolHold); len(sets) != 2 {
 		t.Errorf("two harnesses carried %d sets, want 2", len(sets))
 	}
 }

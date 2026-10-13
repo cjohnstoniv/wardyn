@@ -9,6 +9,11 @@ declare module "*.woff2?url" {
   export default url;
 }
 
+declare module "*.png" {
+  const url: string;
+  export default url;
+}
+
 // import.meta.env.MODE: "e2e" only in the e2e UI build (attach-terminal-e2e-seam.ts).
 interface ImportMeta {
   readonly env: { readonly MODE: string };

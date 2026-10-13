@@ -83,7 +83,7 @@ const fullInput: WireInput & { workspaces: NonNullable<WireInput["workspaces"]> 
   interactive_start: "agent" as const,
   seed_auto_tools: true,
   tool_approvals: "hold" as const,
-  workspaces: [{ workspace_id: "ws-1", enabled_optional: ["egress:api.stripe.com"], read_only: true, target: "/home/agent/work" }],
+  workspaces: [{ workspace_id: "ws-1", enabled_optional: ["egress:api.stripe.com"], read_only: true, target: "/home/agent/work", repos: [{ repo: "acme/web", ref: "main" }] }],
   workspace_id: "22222222-2222-2222-2222-222222222222",
   integration_id: "anthropic_api_key",
   // The member's drive request (D5): forwarded verbatim by runWireBody — a
@@ -173,6 +173,9 @@ const UI_NEVER_SENDS = new Set([
   // CLI and API send these today.
   "ends_after_sec",
   "no_end",
+  // How long a run may wait for a slot in a full pool (pool-queue.md section 13): the console has no wait
+  // picker in 0.9; the CLI and API send it.
+  "max_wait_sec",
   "devcontainer_repo",
   "devcontainer_ref",
   "model_provider",
@@ -180,7 +183,16 @@ const UI_NEVER_SENDS = new Set([
   "preset_version",
   // The new flow forwards it through the field registry; the old wizard never sends it.
   "shape",
+  // The plural drive carrier (GET /me/drives ids): the console's drive rows are a later slice.
+  "drives",
+  // A document's partial policy, laid onto the default: no screen sends it yet,
+  // and the old wizard sends a whole inline_policy instead.
+  "policy_overlay",
 ]);
+
+// Nested request fields the old wizard's form never sets, as "carrier.field". resources.disk_mib: the
+// new flow forwards it through the field registry. runWireBody still passes it if an input carries it.
+const UI_NEVER_SENDS_NESTED = new Set(["resources.disk_mib"]);
 
 // ui_apps used to sit on this set as a TS AgentRun key with no Go AgentRun
 // json tag (handleGetRun's anonymous wrapper struct, runs_policy.go:172-175,
@@ -428,6 +440,20 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     for (const key of REPLACED_BY_RUN_MODE.filter((k) => k !== "model_provider")) expect(body).toHaveProperty(key);
   });
 
+  it("every RunResources json tag is what runWireBody forwards, or is on the nested never-sends list", () => {
+    const goTags = goJSONTags(clientGo, "RunResources");
+    // Each tag, set alone, must come out of runWireBody on the wire (so a disk-only block is not dropped);
+    // a tag on the never-sends list is one the form never sets, but the body still carries it.
+    for (const tag of goTags) {
+      const body = runWireBody({ ...fullInput, resources: { [tag]: 1 } });
+      expect(body.resources, `resources.${tag} is dropped by runWireBody`).toEqual({ [tag]: 1 });
+    }
+    const set = new Set(Object.keys(fullInput.resources ?? {}));
+    const missing = goTags.filter((t) => !set.has(t) && !UI_NEVER_SENDS_NESTED.has(`resources.${t}`));
+    expect(missing).toEqual([]);
+    for (const path of UI_NEVER_SENDS_NESTED) expect(goTags, `${path} is no longer a Go field`).toContain(path.slice("resources.".length));
+  });
+
   it("WorkspaceSelection: the TS wire entry's keys are exactly Go's json tags", () => {
     const goTags = goJSONTags(clientGo, "WorkspaceSelection").sort();
     const sent = Object.keys(fullInput.workspaces[0]).sort();
@@ -495,7 +521,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     const typesGoSrc = readFileSync(join(root, "pkg/client/types.go"), "utf8");
     expect(typesGoSrc).toMatch(/ComponentRef\s*=\s*types\.ComponentRef/);
     const refGo = goJSONTags(readFileSync(join(root, "internal/types/component.go"), "utf8"), "ComponentRef");
-    expect(refGo.sort()).toEqual(["access", "builtin", "id", "inline", "name", "org", "repos"]);
+    expect(refGo.sort()).toEqual(["access", "builtin", "id", "inline", "mcp_harnesses", "name", "org", "repos"]);
     const componentsTs = readFileSync(join(root, "ui/src/app/lib/types/components.ts"), "utf8");
     expect(tsInterfaceKeys(componentsTs, "ComponentRef").sort()).toEqual(refGo);
   });

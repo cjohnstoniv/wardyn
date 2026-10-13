@@ -100,7 +100,7 @@ func TestTemplateCommandsCheckTheirArguments(t *testing.T) {
 func TestTemplateSaveBuildsTheRequest(t *testing.T) {
 	cmd := templateSaveCmd(func() *sdk.Client { return nil })
 	file := writeTemplateFile(t, "t.yaml", templateYAML)
-	req, id, err := templateSaveRequest(cmd, file, "group", "eng", "", "d", "", 0)
+	req, id, err := templateSaveRequest(cmd, file, "group", "eng", "", "d", "", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestTemplateSaveBuildsTheRequest(t *testing.T) {
 		t.Errorf("the explicit empty allowlist was lost: %s", req.Document.Intent.Raw("inline_policy"))
 	}
 	want := uuid.New()
-	req, id, err = templateSaveRequest(cmd, file, "person", "", "flag name", "", want.String(), 4)
+	req, id, err = templateSaveRequest(cmd, file, "person", "", "flag name", "", want.String(), "", 4)
 	if err != nil || id != want || req.Name != "flag name" || req.ExpectedRevision == nil || *req.ExpectedRevision != 4 {
 		t.Errorf("update request = %+v id=%s err=%v", req, id, err)
 	}

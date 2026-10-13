@@ -20,9 +20,8 @@ import (
 // Run templates (0.9): a reusable run setup, whole or partial, that a person
 // keeps for themselves (person scope), an organisation administrator
 // publishes (org scope) or a group's administrator publishes to that group
-// (group scope). These shapes are the contract the template store fills in:
-// until it lands, the routes answer 501 templates_unavailable, and the typed
-// methods below make the real calls and return that error.
+// (group scope). A server whose store keeps no templates answers 501
+// templates_unavailable.
 //
 // A template is content. It is never an admission: using one re-checks the
 // launcher's current policy, credentials, components, pools and drives, and a
@@ -49,6 +48,16 @@ const (
 	TemplateScopePerson = types.TemplateScopePerson
 	TemplateScopeOrg    = types.TemplateScopeOrg
 	TemplateScopeGroup  = types.TemplateScopeGroup
+)
+
+// TemplateKind says what a template holds: a run setup, or a policy (only
+// run-wide network, credential and access-rule keys under inline_policy).
+type TemplateKind = types.TemplateKind
+
+// The template kinds.
+const (
+	TemplateKindTemplate = types.TemplateKindTemplate
+	TemplateKindPolicy   = types.TemplateKindPolicy
 )
 
 // TemplateGroupAdmin is a bounded grant letting one person manage one group's
@@ -242,7 +251,10 @@ type Template struct {
 	// OwnerID is the owning person's subject, for person scope.
 	OwnerID string `json:"owner_id,omitempty"`
 	// GroupID is the group's canonical subject, for group scope.
-	GroupID     string           `json:"group_id,omitempty"`
+	GroupID string `json:"group_id,omitempty"`
+	// GroupLabel is the group's display label, when an administrator set one.
+	GroupLabel  string           `json:"group_label,omitempty"`
+	Kind        TemplateKind     `json:"kind"`
 	Name        string           `json:"name"`
 	Description string           `json:"description,omitempty"`
 	Revision    int              `json:"revision"`
@@ -252,8 +264,10 @@ type Template struct {
 	Writable  bool      `json:"writable"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-	CreatedBy string    `json:"created_by,omitempty"`
-	UpdatedBy string    `json:"updated_by,omitempty"`
+	// CreatedBy and UpdatedBy are set only for a caller who may write it:
+	// the people a template is offered to are not told who published it.
+	CreatedBy string `json:"created_by,omitempty"`
+	UpdatedBy string `json:"updated_by,omitempty"`
 }
 
 // TemplateSummary is one row of the picker: what the template is and what it
@@ -262,19 +276,39 @@ type TemplateSummary struct {
 	ID          uuid.UUID        `json:"id"`
 	Scope       TemplateScope    `json:"scope"`
 	GroupID     string           `json:"group_id,omitempty"`
+	GroupLabel  string           `json:"group_label,omitempty"`
+	Kind        TemplateKind     `json:"kind"`
 	Name        string           `json:"name"`
 	Description string           `json:"description,omitempty"`
 	Revision    int              `json:"revision"`
 	Coverage    TemplateCoverage `json:"coverage"`
 	Includes    []TemplatePart   `json:"includes"`
-	NeedsSetup  []string         `json:"needs_setup"`
-	Writable    bool             `json:"writable"`
-	UpdatedAt   time.Time        `json:"updated_at"`
+	// Fields are the intent fields it specifies, inline_policy expanded to
+	// inline_policy.<key>, sorted.
+	Fields     []string  `json:"fields"`
+	NeedsSetup []string  `json:"needs_setup"`
+	Writable   bool      `json:"writable"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
-// TemplateList is GET /api/v1/templates: the templates the caller may use.
+// TemplatePublish says where the caller may save a template: always their own
+// scope, the organisation only as an organisation administrator in the Admin
+// view, and each group only as a verified member who holds that group's grant.
+type TemplatePublish struct {
+	Org    bool     `json:"org"`
+	Groups []string `json:"groups"`
+	// GroupLabels holds the display label of each of Groups that has one.
+	GroupLabels map[string]string `json:"group_labels,omitempty"`
+	// GroupsUnverified: the sign-in's group list is missing or incomplete, so
+	// no group is offered until the person signs in again.
+	GroupsUnverified bool `json:"groups_unverified"`
+}
+
+// TemplateList is GET /api/v1/templates: the templates the caller may use, and
+// where they may save one.
 type TemplateList struct {
 	Templates []TemplateSummary `json:"templates"`
+	Publish   TemplatePublish   `json:"publish"`
 }
 
 // TemplateSaveRequest creates a template, or updates one when ExpectedRevision
@@ -282,12 +316,22 @@ type TemplateList struct {
 // a conflict. Scope and GroupID say where it is published; the server checks
 // the caller's authority for exactly that scope.
 type TemplateSaveRequest struct {
-	Scope            TemplateScope    `json:"scope"`
-	GroupID          string           `json:"group_id,omitempty"`
-	Name             string           `json:"name"`
-	Description      string           `json:"description,omitempty"`
+	Scope       TemplateScope `json:"scope"`
+	GroupID     string        `json:"group_id,omitempty"`
+	Name        string        `json:"name"`
+	Description string        `json:"description,omitempty"`
+	// Kind is template when empty. An update keeps the template's kind.
+	Kind             TemplateKind     `json:"kind,omitempty"`
 	Document         TemplateDocument `json:"document"`
 	ExpectedRevision *int             `json:"expected_revision,omitempty"`
+}
+
+// TemplateSaveRefusal is the body of a save, update or copy the document door
+// refused: the first diagnostic's reason and sentence, and every diagnostic.
+type TemplateSaveRefusal struct {
+	Error       string               `json:"error"`
+	Reason      string               `json:"reason"`
+	Diagnostics []TemplateDiagnostic `json:"diagnostics"`
 }
 
 // TemplateImportRequest asks the server to read an import document and say

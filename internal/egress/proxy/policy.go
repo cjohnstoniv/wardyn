@@ -492,6 +492,12 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) s
 	}
 	ip := net.ParseIP(h)
 	if ip == nil {
+		// A non-canonical spelling (inet_aton form, zoned IPv6) is refused by the
+		// step-0 guard unconditionally, so the internal_hosts remedy is never true
+		// for it even when the decoded address is in a liftable range.
+		if dec := nonCanonicalLiteralIP(h); dec != nil {
+			return "literal IP " + h + " decodes to " + dec.String() + ", " + egressNeverLiftableRemedy
+		}
 		if never := neverLiftableDetail("this host's address", kind); never != "" {
 			return never
 		}

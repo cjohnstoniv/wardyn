@@ -5,6 +5,7 @@ package api
 
 import (
 	"encoding/json"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -32,6 +34,7 @@ const (
 	bgAgentTask   = `"experience":"background",` + agentTask + `,"tools":[` + claudeTool + `],` + noRepos
 	interactiveOK = `"experience":"interactive","tools":[` + claudeTool + `],` + noRepos
 	wsID          = "11111111-1111-1111-1111-111111111111"
+	listedDrive   = "22222222-2222-2222-2222-222222222222"
 )
 
 // TestRunModeRefusals pins every refusal of the run-mode contract at all three
@@ -61,7 +64,7 @@ func TestRunModeRefusals(t *testing.T) {
 		{"an interactive environment keeps its idle stop", interactiveOK + `,"inline_policy":{"auto_stop_after_sec":600,"allowed_domains":["a.example.com"],"first_use_approval":"always_deny","min_confinement_class":"CC2"}`, "", "", 200},
 		{"background has no web gateway", `"experience":"background",` + agentTask + `,"inline_policy":{"ui_apps":[{"name":"ide","port":8080}]},` + noRepos, reasonRunModeConflict, "", 422},
 		{"background runs only the harness it names", `"experience":"background",` + agentTask + `,"tools":[` + codexTool + `],` + noRepos, reasonRunModeConflict, "", 422},
-		{"background command includes no tool", `"experience":"background","workload":{"kind":"command","command":"make"},"tools":[` + claudeTool + `],` + noRepos, reasonRunModeConflict, "", 422},
+		{"a background command may include a harness", `"experience":"background","workload":{"kind":"command","command":"make"},"tools":[` + claudeTool + `],` + noRepos, "", "", 200},
 		{"interactive has no workload", `"experience":"interactive",` + agentTask + `,"tools":[` + claudeTool + `],` + noRepos, reasonRunModeConflict, "", 422},
 
 		{"a legacy model provider does not ride beside the carriers", `"experience":"background",` + agentTask + `,"model_provider":"bedrock-team",` + noRepos, reasonRunModeConflict, runModeConflictMsg("model_provider", "Use tools[].model_provider."), 422},
@@ -82,13 +85,23 @@ func TestRunModeRefusals(t *testing.T) {
 		{"a startup is one choice: none with a tool", interactiveOK + `,"startup":{"kind":"none","tool":"claude-code"}`, reasonRunModeInvalid, "", 400},
 		{"a startup is one choice: command with a tool", interactiveOK + `,"startup":{"kind":"command","command":"x","tool":"claude-code"}`, reasonRunModeInvalid, "", 400},
 		{"a startup kind is closed", interactiveOK + `,"startup":{"kind":"both"}`, reasonRunModeInvalid, "", 400},
-		{"an interactive environment with no tool waits for its lane", `"experience":"interactive",` + noRepos, reasonRequestFieldUnavailable, "", 422},
-		{"two harnesses wait for the harness set", `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools: more than one harness"), 422},
-		{"personal tool rules wait for their enforcing lane", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"hold"}]}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: personal tool rules wait for their enforcing lane"), 422},
-		{"nor a background run's rule while it is off the gated lane", `"experience":"background",` + agentTask + `,"tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"hold"}]}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: personal tool rules wait for their enforcing lane"), 422},
-		{"a tool rule that allows widens the policy", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"allow"}]}],` + noRepos, reasonOverrideRefused, toolAllowRefusedMsg(0), 422},
-		{"a default that allows widens the policy", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"allow"}],` + noRepos, reasonOverrideRefused, toolAllowRefusedMsg(0), 422},
-		{"a per-tool default waits for its enforcing lane", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"deny"}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: personal tool rules wait for their enforcing lane"), 422},
+		{"an interactive environment with no harness starts from the base image", `"experience":"interactive",` + noRepos, "", "", 200},
+		{"a harness startup takes a starting prompt", interactiveOK + `,"startup":{"kind":"harness","tool":"claude-code","prompt":"fix the build"}`, "", "", 200},
+		{"a starting prompt needs a harness startup", interactiveOK + `,"startup":{"kind":"none","prompt":"fix the build"}`, reasonRunModeInvalid, startupPromptShapeMsg(), 400},
+		{"a command startup takes no starting prompt", interactiveOK + `,"startup":{"kind":"command","command":"make","prompt":"x"}`, reasonRunModeInvalid, startupPromptShapeMsg(), 400},
+		{"two harnesses need an image declared for them", `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],` + noRepos, reasonHarnessSetNoImage, harnessSetNoImageMsg("Claude Code", "Codex CLI"), 422},
+		{"an interactive run's tool rule goes to Claude Code's settings", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"deny"}]}],` + noRepos, "", "", 200},
+		{"an interactive run's Codex CLI rule waits", `"experience":"interactive","tools":[{"id":"codex-cli","kind":"harness","tool_rules":[{"tool":"mcp__github__create_issue","effect":"deny"}]}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: tool rules in an interactive run"), 422},
+		{"a background run's rule is honoured on the gated lane", `"experience":"background",` + agentTask + `,"tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"hold"},{"tool":"Read","effect":"allow"}],"default_effect":"deny"}],` + noRepos, "", "", 200},
+		{"a rule names one tool exactly", `"experience":"background",` + agentTask + `,"tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash(git push:*)","effect":"deny"}]}],` + noRepos, reasonRunModeInvalid, "", 400},
+		{"Codex CLI cannot pause a call", `"experience":"background","workload":{"kind":"agent_task","agent":"codex-cli","task":"t"},"tools":[{"id":"codex-cli","kind":"harness","default_effect":"hold"}],` + noRepos, reasonRequestFieldUnavailable, accessSentences["harness_no_hold"], 422},
+		{"Codex CLI's own tools have no block", `"experience":"background","workload":{"kind":"agent_task","agent":"codex-cli","task":"t"},"tools":[{"id":"codex-cli","kind":"harness","tool_rules":[{"tool":"shell","effect":"deny"}]}],` + noRepos, reasonRequestFieldUnavailable, codexBuiltinRuleMsg("shell"), 422},
+		{"nor a Codex CLI default block", `"experience":"background","workload":{"kind":"agent_task","agent":"codex-cli","task":"t"},"tools":[{"id":"codex-cli","kind":"harness","default_effect":"deny"}],` + noRepos, reasonRequestFieldUnavailable, accessSentences["harness_no_block_builtin"], 422},
+		{"your own tools take no rules", `"experience":"interactive","tools":[{"id":"none","kind":"harness","tool_rules":[{"tool":"Bash","effect":"deny"}]}],` + noRepos, reasonRequestFieldUnavailable, "Wardyn can't set tool rules for Your own tools.", 422},
+		{"an interactive run's allow stands only where the policy allows the tool", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"allow"}]}],` + noRepos, reasonOverrideRefused, policyStricterMsg("Bash", types.ToolHold), 422},
+		{"an interactive run's default allow has no setting", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"allow"}],` + noRepos, reasonRequestFieldUnavailable, accessSentences["attended_rules_unavailable"], 422},
+		{"an interactive run's own default, asking, is honoured", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"hold"}],` + noRepos, "", "", 200},
+		{"an interactive run's default block has no setting", `"experience":"interactive","tools":[{"id":"claude-code","kind":"harness","default_effect":"deny"}],` + noRepos, reasonRequestFieldUnavailable, accessSentences["attended_rules_unavailable"], 422},
 		{"a component tool is not dropped", `"experience":"interactive","tools":[{"id":"lint","kind":"component","component":{"inline":{"hosts":["a.example.com"]}}}],` + noRepos, reasonRequestFieldUnavailable, "", 422},
 		{"a tool id is one token", `"experience":"interactive","tools":[{"id":"a b","kind":"harness"}],` + noRepos, reasonRunModeInvalid, "", 400},
 		{"a tool is included once", `"experience":"interactive","tools":[` + claudeTool + `,` + claudeTool + `],` + noRepos, reasonRunModeInvalid, "", 400},
@@ -105,7 +118,10 @@ func TestRunModeRefusals(t *testing.T) {
 		{"the drive is an attachment only when attached", `"experience":"interactive","tools":[` + claudeTool + `],"start_folder":{"kind":"attachment","attachment":"drive"}`, reasonStartFolderInvalid, startFolderAttachmentMsg("drive"), 400},
 		{"a start folder cannot leave its mount", `"experience":"interactive","tools":[` + claudeTool + `],"drive":{"enabled":true},"start_folder":{"kind":"attachment","attachment":"drive","subpath":"../etc"}`, reasonStartFolderInvalid, startFolderShapeMsg("../etc"), 400},
 		{"a start folder is relative", `"experience":"interactive","tools":[` + claudeTool + `],"drive":{"enabled":true},"start_folder":{"kind":"attachment","attachment":"drive","subpath":"/etc"}`, reasonStartFolderInvalid, "", 400},
-		{"a start folder inside an attachment is not dropped", `"experience":"interactive","tools":[` + claudeTool + `],"drive":{"enabled":true},"start_folder":{"kind":"attachment","attachment":"drive","subpath":"src"}`, reasonRequestFieldUnavailable, "", 422},
+		{"a start folder on a drive names one of drives[]", `"experience":"interactive","tools":[` + claudeTool + `],"start_folder":{"kind":"attachment","drive_id":"d1","subpath":"src"}`, reasonStartFolderInvalid, startFolderAttachmentMsg("d1"), 400},
+		{"a listed drive the caller's grants do not reach", `"experience":"interactive","tools":[` + claudeTool + `],"drives":[{"drive_id":"` + listedDrive + `"}],"start_folder":{"kind":"attachment","drive_id":"` + listedDrive + `","subpath":"src"}`, string(authz.ReasonDriveNotFound), driveNotFoundMsg(listedDrive), 422},
+		{"drive and drives are one choice", `"experience":"interactive","tools":[` + claudeTool + `],"drive":{"enabled":true},"drives":[{"drive_id":"` + listedDrive + `"}]`, reasonDriveSelectionConflict, driveSelectionConflictMsg(), 400},
+		{"no repositories beside a listed drive", interactiveOK + `,"drives":[{"drive_id":"` + listedDrive + `"}]`, reasonRunModeConflict, noRepositoriesConflictMsg(), 422},
 		{"a subpath cannot step out through its mount's target", `"experience":"interactive","tools":[` + claudeTool + `],"workspaces":[{"workspace_id":"` + wsID + `","target":"/home/agent/work"}],"start_folder":{"kind":"attachment","attachment":"` + wsID + `","subpath":"a/../../../etc"}`, reasonStartFolderInvalid, "", 400},
 		{"an unavailable carrier answers before the older gates read the projection", `"experience":"interactive","tools":[` + claudeTool + `,{"id":"c","kind":"component","component":{"inline":{"hosts":["a.example.com"]}}}],"startup":{"kind":"command","command":"harness login"},` + noRepos, reasonRequestFieldUnavailable, "", 422},
 		{"a start folder kind is closed", `"experience":"interactive","tools":[` + claudeTool + `],"start_folder":{"kind":"home"},` + noRepos, reasonStartFolderInvalid, "", 400},
@@ -116,6 +132,7 @@ func TestRunModeRefusals(t *testing.T) {
 			}
 			t.Run(tc.name+"/"+door.name, func(t *testing.T) {
 				h := newHarness(t)
+				h.srv.cfg.AgentImages = composeAgentImages
 				w := do(t, h.srv, http.MethodPost, door.path, adminToken, modeBody(tc.body))
 				if w.Code != tc.status || errorReason(w) != tc.reason {
 					t.Fatalf("got %d %s, want %d reason %q", w.Code, w.Body.String(), tc.status, tc.reason)
@@ -131,23 +148,67 @@ func TestRunModeRefusals(t *testing.T) {
 	}
 }
 
-// TestPersonalToolRulesAreHeldOnlyOffTheGatedLane pins the guard's lane test: a
-// background agent run that holds tools is the gated lane and keeps its rules,
-// and the same rules on any other run are refused.
-func TestPersonalToolRulesAreHeldOnlyOffTheGatedLane(t *testing.T) {
-	ruled := []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness, ToolRules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}}}
-	for name, tc := range map[string]struct {
-		req     createRunRequest
-		refused bool
-	}{
-		"gated background run":   {createRunRequest{Experience: client.ExperienceBackground, ToolApprovals: "hold", Tools: ruled}, false},
-		"ungated background run": {createRunRequest{Experience: client.ExperienceBackground, Tools: ruled}, true},
-		"interactive, even held": {createRunRequest{Experience: client.ExperienceInteractive, ToolApprovals: "hold", Tools: ruled}, true},
-		"a run with no rule":     {createRunRequest{Experience: client.ExperienceInteractive, Tools: []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness}}}, false},
-	} {
-		if got := personalToolRulesRefusal(tc.req) != nil; got != tc.refused {
-			t.Errorf("%s: refused = %v, want %v", name, got, tc.refused)
+// TestRunMode_TwoHarnessesStartFromTheSetImage (T0, inverted at DS1-S4): two
+// harnesses are honoured at every door, and create launches them from the
+// image declared for the set, with both recorded and the started one marked.
+func TestRunMode_TwoHarnessesStartFromTheSetImage(t *testing.T) {
+	images := map[string]string{"claude-code": "wardyn/agent-claude-code:local", "claude-code+codex-cli": setImage}
+	body := `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],"startup":{"kind":"harness","tool":"codex-cli"},` + noRepos
+	for _, door := range harnessDoors {
+		srv, st, _ := harnessSetFixture(t, &capStore{}, images, nil)
+		w := harnessSetCall{"sub-plain", body}.ask(t, srv, door)
+		if door != harnessDoors[0] {
+			if w.Code != http.StatusOK {
+				t.Fatalf("%s: %d %s, want 200", door, w.Code, w.Body.String())
+			}
+			continue
 		}
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create: %d %s, want 201", w.Code, w.Body.String())
+		}
+		srv.WaitBackground()
+		id := st.onlyRun(t)
+		if st.images[id] != setImage {
+			t.Errorf("run image = %q, want the declared set image %q", st.images[id], setImage)
+		}
+		rows := st.rows[id]
+		if len(rows) != 2 || !slices.ContainsFunc(rows, func(h types.RunHarness) bool { return h.Harness == "codex-cli" && h.Starts }) ||
+			!slices.ContainsFunc(rows, func(h types.RunHarness) bool { return h.Harness == "claude-code" && !h.Starts }) {
+			t.Errorf("run_harnesses = %+v, want claude-code and codex-cli, codex-cli started", rows)
+		}
+	}
+}
+
+// TestPersonalToolRulesPutABackgroundRunOnTheGatedLane pins the posture that
+// replaced the refusal of a person's rules off the gated lane: a background run
+// of a gated harness with any rule or default goes on the gated lane with
+// "*: allow" under the person's layer, a run already there keeps its own default,
+// and nothing else moves.
+func TestPersonalToolRulesPutABackgroundRunOnTheGatedLane(t *testing.T) {
+	ruled := []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness, ToolRules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}}}}
+	for name, tc := range map[string]struct {
+		req       createRunRequest
+		approvals string
+		rules     []types.ToolRule
+	}{
+		"ungated background run": {createRunRequest{Agent: "claude-code", Task: "t", Tools: ruled}, "hold", []types.ToolRule{{Tool: "*", Effect: types.ToolAllow}}},
+		"gated background run":   {createRunRequest{Agent: "claude-code", Task: "t", ToolApprovals: "hold", Tools: ruled}, "hold", nil},
+		"no rule":                {createRunRequest{Agent: "claude-code", Task: "t", Tools: []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness}}}, "", nil},
+		"interactive":            {createRunRequest{Agent: "claude-code", Interactive: true, Tools: ruled}, "", nil},
+		"a gateless harness":     {createRunRequest{Agent: "codex-cli", Task: "t", Tools: ruled}, "", nil},
+		"a command":              {createRunRequest{Agent: "claude-code", Task: "t", TaskMode: "exec", Tools: ruled}, "", nil},
+	} {
+		req, spec := tc.req, types.RunPolicySpec{}
+		(&Server{}).applyToolPosture(&req, &spec)
+		if req.ToolApprovals != tc.approvals || !slices.Equal(spec.ToolRules, tc.rules) {
+			t.Errorf("%s: tool_approvals %q rules %v, want %q %v", name, req.ToolApprovals, spec.ToolRules, tc.approvals, tc.rules)
+		}
+	}
+	// A policy's own "*" is never replaced: the posture lies under it.
+	req, spec := createRunRequest{Agent: "claude-code", Task: "t", Tools: ruled}, types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "*", Effect: types.ToolHold}}}
+	(&Server{}).applyToolPosture(&req, &spec)
+	if req.ToolApprovals != "hold" || len(spec.ToolRules) != 1 || spec.ToolRules[0].Effect != types.ToolHold {
+		t.Errorf("a policy default under the posture: %q %v", req.ToolApprovals, spec.ToolRules)
 	}
 }
 
@@ -192,11 +253,10 @@ func TestRunModeProjection(t *testing.T) {
 			if refusal := applyRunMode(&got); refusal != nil {
 				t.Fatalf("refused: %+v", refusal.body)
 			}
-			if tc.name == "background command" {
-				// The projected command meets the older engine's own rule for task_mode exec.
-				if msg := agentRequirementError(got); msg == "" || got.TaskMode != "exec" {
-					t.Fatalf("a projected command is not an exec run: %q %+v", msg, got)
-				}
+			if tc.name == "background command" && got.TaskMode != "exec" {
+				// The projected command is an exec run; its image comes from the
+				// harness set, so agentRequirementError asks for no agent.
+				t.Fatalf("a projected command is not an exec run: %+v", got)
 			}
 			// The carriers stay on the request: the fold and the create audit read them.
 			tc.want.Experience, tc.want.Workload, tc.want.Tools, tc.want.Startup, tc.want.NoRepositoriesOrDrives =
@@ -638,17 +698,26 @@ func TestRunModeRefusalSentencesMatchGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := map[string]func(a []string) string{
-		"RUN_MODE_REQUIRED":        func([]string) string { return runModeRequiredMsg() },
-		"RUN_WORKLOAD_REQUIRED":    func([]string) string { return runWorkloadRequiredMsg() },
-		"RUN_MODE_CONFLICT":        func(a []string) string { return runModeConflictMsg(a[0], a[1]) },
-		"STARTUP_TOOL_UNKNOWN":     func(a []string) string { return startupToolUnknownMsg(a[0]) },
-		"START_FOLDER_ATTACHMENT":  func(a []string) string { return startFolderAttachmentMsg(a[0]) },
-		"START_FOLDER_SHAPE":       func(a []string) string { return startFolderShapeMsg(a[0]) },
-		"NO_REPOSITORIES_CONFLICT": func([]string) string { return noRepositoriesConflictMsg() },
-		"FIELD_UNAVAILABLE":        func(a []string) string { return runModeUnavailableMsg(a[0]) },
-		"BACKGROUND_ONLY":          func(a []string) string { return runBackgroundOnlyMsg(a[0]) },
-		"IDLE_STOP_BACKGROUND":     func([]string) string { return idleStopBackgroundMsg() },
-		"RUN_SHAPE_CONFLICT":       func(a []string) string { return runShapeConflictMsg(a[0], a[1]) },
+		"RUN_MODE_REQUIRED":          func([]string) string { return runModeRequiredMsg() },
+		"RUN_WORKLOAD_REQUIRED":      func([]string) string { return runWorkloadRequiredMsg() },
+		"RUN_MODE_CONFLICT":          func(a []string) string { return runModeConflictMsg(a[0], a[1]) },
+		"STARTUP_TOOL_UNKNOWN":       func(a []string) string { return startupToolUnknownMsg(a[0]) },
+		"START_FOLDER_ATTACHMENT":    func(a []string) string { return startFolderAttachmentMsg(a[0]) },
+		"START_FOLDER_SHAPE":         func(a []string) string { return startFolderShapeMsg(a[0]) },
+		"NO_REPOSITORIES_CONFLICT":   func([]string) string { return noRepositoriesConflictMsg() },
+		"FIELD_UNAVAILABLE":          func(a []string) string { return runModeUnavailableMsg(a[0]) },
+		"BACKGROUND_ONLY":            func(a []string) string { return runBackgroundOnlyMsg(a[0]) },
+		"IDLE_STOP_BACKGROUND":       func([]string) string { return idleStopBackgroundMsg() },
+		"RUN_SHAPE_CONFLICT":         func(a []string) string { return runShapeConflictMsg(a[0], a[1]) },
+		"STARTUP_PROMPT_SHAPE":       func([]string) string { return startupPromptShapeMsg() },
+		"HARNESS_NOT_INSTALLED":      func(a []string) string { return harnessNotInstalledMsg(a[0]) },
+		"HARNESS_SET_NO_IMAGE":       func(a []string) string { return harnessSetNoImageMsg(a...) },
+		"HARNESS_SET_CUSTOM_IMAGE":   func([]string) string { return harnessSetCustomImageMsg() },
+		"HARNESS_PROVIDERS_CONFLICT": func(a []string) string { return harnessProvidersConflictMsg(a[0], a[1]) },
+		"MAIN_DRIVE_UNENFORCEABLE":   func([]string) string { return mainDriveUnenforceableMsg() },
+		"CODEX_BUILTIN_RULE":         func(a []string) string { return codexBuiltinRuleMsg(a[0]) },
+		"POLICY_OVERLAY_INVALID":     func(a []string) string { return policyOverlayInvalidMsg(a[0], a[1]) },
+		"POLICY_OVERLAY_CONFLICT":    func([]string) string { return policyOverlayConflictMsg() },
 	}
 	if len(golden) != len(got) {
 		t.Fatalf("golden has %d sentences, the server has %d", len(golden), len(got))
@@ -666,7 +735,9 @@ func TestRunModeRefusalSentencesMatchGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, reason := range []string{reasonRunModeRequired, reasonRunModeInvalid, reasonRunModeConflict, reasonStartFolderInvalid, reasonRunBackgroundOnly, reasonRunShapeConflict} {
+	for _, reason := range []string{reasonRunModeRequired, reasonRunModeInvalid, reasonRunModeConflict, reasonStartFolderInvalid, reasonRunBackgroundOnly, reasonRunShapeConflict,
+		reasonHarnessNotInstalled, reasonHarnessSetNoImage, reasonHarnessSetCustomImage, reasonHarnessProvidersConflict,
+		reasonPolicyOverlayInvalid, reasonPolicyOverlayConflict, reasonMainDriveUnenforceable} {
 		if !strings.Contains(string(ts), `"`+reason+`"`) {
 			t.Errorf("run-mode-refusals.ts does not carry the reason %q", reason)
 		}

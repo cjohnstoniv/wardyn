@@ -441,7 +441,7 @@ func TestStoreAWSSSOBlobCallersHoldTheOwnerLock(t *testing.T) {
 				switch name := sel.Sel.Name; name {
 				case "lockAWSSSOOwner", "tryLockAWSSSOOwner", "lockAWSSSORenewal":
 					locks[fn.Name.Name] = append(locks[fn.Name.Name], c.Pos())
-				case "storeAWSSSOBlob", "persistRenewedAWSSSOBlob", "storeProviderSignIn":
+				case "storeAWSSSOBlob", "persistRenewedAWSSSOBlob", "storeProviderSignIn", "storeCLISignIn":
 					calls = append(calls, call{fn.Name.Name, name, c.Pos()})
 				}
 				return true
@@ -449,9 +449,10 @@ func TestStoreAWSSSOBlobCallersHoldTheOwnerLock(t *testing.T) {
 		}
 	}
 	for callee, want := range map[string][]string{
-		"storeAWSSSOBlob":          {"persistRenewedAWSSSOBlob", "storeProviderSignIn"},
+		"storeAWSSSOBlob":          {"persistRenewedAWSSSOBlob", "storeProviderSignIn", "storeCLISignIn"},
 		"persistRenewedAWSSSOBlob": {"refreshAWSSSOBlob"},
 		"storeProviderSignIn":      {"handleUploadSSOToken"},
+		"storeCLISignIn":           {"handleUploadSSOToken"},
 	} {
 		var got []string
 		for _, c := range calls {

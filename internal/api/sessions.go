@@ -198,7 +198,7 @@ type personRevocation struct {
 // revokePersonCredentials is the credential sequence POST /sessions/revoke runs
 // for one person, callable without a request: the session cutoff, then the
 // person's API tokens, then their SSH keys, then the cutoff again under the
-// principal the keys resolved to. Audit rows name the actor withActor attached
+// principal the keys resolved to, and the runs they have waiting in a queue. Audit rows name the actor withActor attached
 // to ctx.
 //
 // An empty principal is refused and changes nothing: the helpers below read ""
@@ -221,12 +221,15 @@ func (s *Server) revokePersonCredentials(ctx context.Context, principal string) 
 	// A sponsor is stored by subject, so an email-form revoke sweeps under the subject the key resolver found too.
 	n, serr := s.revokeSponsoredTokens(ctx, principal)
 	res.Tokens += n
+	// A run waiting in a pool's queue holds the person's authority as of its launch; it goes with the rest.
+	_, qerr := s.cancelQueuedRunsOf(ctx, principal, queueCancelSessionRevoked)
 	if res.KeyPrincipal != "" && res.KeyPrincipal != principal {
 		n, kerr := s.revokeSponsoredTokens(ctx, res.KeyPrincipal)
 		res.Tokens += n
-		serr = errors.Join(serr, kerr)
+		_, kqerr := s.cancelQueuedRunsOf(ctx, res.KeyPrincipal, queueCancelSessionRevoked)
+		serr = errors.Join(serr, kerr, kqerr)
 	}
-	return res, errors.Join(err, serr)
+	return res, errors.Join(err, serr, qerr)
 }
 
 // revokeSponsoredTokens revokes every live token of each non-retired service identity principal sponsors

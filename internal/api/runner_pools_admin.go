@@ -18,18 +18,27 @@ import (
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// The administrator's half of the catalogue: pools, the executors a remote pool holds, and the
-// organisation's defaults. Every route is operatorOnly (routes.go). These are not governance-held
-// writes: only the pool-use policy is (runner_pools_use_policy.go).
+// The administrator's half of the catalogue: organization pools, the remote-hosted runners they hold,
+// and the organisation's default. Every route is operatorOnly (routes.go). These are not governance-held
+// writes: only the pool-use policy is (runner_pools_use_policy.go). A user pool is its owner's alone
+// (runner_pools_mine.go): every route here answers a person's pool as an unknown id, though the
+// oversight list shows it.
 
-// livePool reads a pool for an administrator's write; ok=false: the 404 or 500 is written.
+// noOrgUserPoolDefaultMsg refuses an organisation default naming a user pool.
+const noOrgUserPoolDefaultMsg = "There is no organization default for user pools; people choose their own."
+
+// personalBarrierDefaultMsg refuses a person's own defaults naming a barrier.
+const personalBarrierDefaultMsg = "barrier is an organisation setting; an admin sets it"
+
+// livePool reads an organization pool for an administrator's write; ok=false: the 404 or 500 is
+// written. A person's user pool is the 404 an unknown id gets: no administrator writes one.
 func (s *Server) livePool(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore) (types.RunnerPool, bool) {
 	id, ok := parseIDParam(w, r, "id", "runner pool")
 	if !ok {
 		return types.RunnerPool{}, false
 	}
 	p, err := ps.GetRunnerPool(r.Context(), id)
-	if errors.Is(err, store.ErrNotFound) || (err == nil && p.State == types.RunnerPoolDeleted) {
+	if errors.Is(err, store.ErrNotFound) || (err == nil && (p.State == types.RunnerPoolDeleted || p.Scope != types.RunnerPoolOrganization)) {
 		writePoolNotFound(w)
 		return types.RunnerPool{}, false
 	}
@@ -53,34 +62,44 @@ func (s *Server) handleCreateRunnerPool(w http.ResponseWriter, r *http.Request) 
 		writePoolInvalid(w, err.Error())
 		return
 	}
-	if !req.HostingType.Valid() {
-		writePoolInvalid(w, "hosting_type is remote_provided or self_hosted")
-		return
-	}
-	if req.Limits != nil {
-		if err := req.Limits.Validate(); err != nil {
+	s.createPool(w, r, ps, types.RunnerPool{ID: uuid.New(), Name: req.Name, Scope: types.RunnerPoolOrganization, Limits: req.Limits},
+		http.StatusBadRequest, "the catalogue holds at most 200 pools")
+}
+
+// createPool validates p's limits, stores it and audits it; fullStatus and full answer a pool cap.
+func (s *Server) createPool(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore, p types.RunnerPool, fullStatus int, full string) {
+	if p.Limits != nil {
+		if err := p.Limits.Validate(); err != nil {
 			writePoolInvalid(w, err.Error())
 			return
 		}
 	}
-	p, err := ps.CreateRunnerPool(r.Context(), types.RunnerPool{ID: uuid.New(), Name: req.Name, HostingType: req.HostingType, Limits: req.Limits}, principalFromRequest(r))
+	p, err := ps.CreateRunnerPool(r.Context(), p, principalFromRequest(r))
 	switch {
 	case errors.Is(err, store.ErrConflict):
 		writePoolInvalid(w, "a pool with that name already exists")
 		return
 	case errors.Is(err, store.ErrRunnerPoolLimit):
-		writePoolInvalid(w, "the catalogue holds at most 200 pools")
+		writeErrorReason(w, fullStatus, string(runnerpool.ReasonInvalid), full)
 		return
 	case err != nil:
 		writeServerError(w, r, "create runner pool", err)
 		return
 	}
-	data := map[string]any{"name": p.Name, "hosting_type": p.HostingType, "revision": p.Revision}
+	data := map[string]any{"name": p.Name, "scope": p.Scope, "revision": p.Revision}
 	if p.Limits != nil {
 		data["limits"] = p.Limits
 	}
-	s.auditPool(r, auditPoolCreate, p.ID.String(), data)
+	s.auditPool(r, auditPoolCreate, p.ID.String(), withPoolOwner(data, p))
 	writeJSON(w, http.StatusCreated, p)
+}
+
+// withPoolOwner adds a user pool's owner to its audit data.
+func withPoolOwner(data map[string]any, p types.RunnerPool) map[string]any {
+	if p.Owner != "" {
+		data["owner"] = p.Owner
+	}
+	return data
 }
 
 func (s *Server) handleUpdateRunnerPool(w http.ResponseWriter, r *http.Request) {
@@ -88,10 +107,13 @@ func (s *Server) handleUpdateRunnerPool(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	cur, ok := s.livePool(w, r, ps)
-	if !ok {
-		return
+	if cur, ok := s.livePool(w, r, ps); ok {
+		s.updatePool(w, r, ps, cur)
 	}
+}
+
+// updatePool applies an update request to cur, a live pool the caller may write.
+func (s *Server) updatePool(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore, cur types.RunnerPool) {
 	var req client.UpdateRunnerPoolRequest
 	if !decodeStrict(w, r, &req) {
 		return
@@ -129,13 +151,15 @@ func (s *Server) handleUpdateRunnerPool(w http.ResponseWriter, r *http.Request) 
 	}
 	if p.Revision != cur.Revision {
 		data := map[string]any{
-			"hosting_type": p.HostingType, "name_before": cur.Name, "name": p.Name,
+			"scope": p.Scope, "name_before": cur.Name, "name": p.Name,
 			"state_before": cur.State, "state": p.State, "revision": p.Revision,
 		}
 		if !reflect.DeepEqual(cur.Limits, p.Limits) {
 			data["limits_before"], data["limits"] = cur.Limits, p.Limits
 		}
-		s.auditPool(r, auditPoolUpdate, p.ID.String(), data)
+		s.auditPool(r, auditPoolUpdate, p.ID.String(), withPoolOwner(data, p))
+		// A raised cap, or a pool switched back on, may have room for a waiting run.
+		s.kickQueue()
 	}
 	writeJSON(w, http.StatusOK, p)
 }
@@ -145,10 +169,13 @@ func (s *Server) handleDeleteRunnerPool(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	cur, ok := s.livePool(w, r, ps)
-	if !ok {
-		return
+	if cur, ok := s.livePool(w, r, ps); ok {
+		s.deletePool(w, r, ps, cur)
 	}
+}
+
+// deletePool deletes cur, a live pool the caller may write.
+func (s *Server) deletePool(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore, cur types.RunnerPool) {
 	d, err := ps.DeleteRunnerPool(r.Context(), cur.ID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -161,18 +188,25 @@ func (s *Server) handleDeleteRunnerPool(w http.ResponseWriter, r *http.Request) 
 		writeServerError(w, r, "delete runner pool", err)
 		return
 	}
-	s.auditPool(r, auditPoolDelete, d.Pool.ID.String(), map[string]any{
-		"name": d.Pool.Name, "hosting_type": d.Pool.HostingType, "revision": d.Pool.Revision,
-		"executor_ids": nonNilStrings(d.ExecutorIDs), "runner_count": d.RunnerCount})
-	if d.OrgDefaultsBefore != nil {
-		s.auditPool(r, auditPoolDefaultSet, "organisation", map[string]any{"before": d.OrgDefaultsBefore, "after": d.OrgDefaultsAfter, "cause": "pool_deleted"})
-	}
+	s.auditPoolDeletion(r, d)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleAddRunnerPoolExecutor attaches a configured executor. Attaching an executor to a pool puts it in
-// front of that pool's audience, so when another live pool already holds it under a use policy the
-// attach is a widening of that policy and is held for a second human, as the policy itself is.
+// auditPoolDeletion writes a delete's rows: the pool, the runs it ended and any organisation default it cleared.
+func (s *Server) auditPoolDeletion(r *http.Request, d store.RunnerPoolDeletion) {
+	s.auditPool(r, auditPoolDelete, d.Pool.ID.String(), withPoolOwner(map[string]any{
+		"name": d.Pool.Name, "scope": d.Pool.Scope, "revision": d.Pool.Revision,
+		"remote_runner_ids": nonNilStrings(d.ExecutorIDs), "runner_count": d.RunnerCount}, d.Pool))
+	s.auditPoolRemovalCancels(r.Context(), d.CancelledRuns)
+	if d.OrgDefaultsBefore != nil {
+		s.auditPool(r, auditPoolDefaultSet, "organisation", map[string]any{"before": d.OrgDefaultsBefore, "after": d.OrgDefaultsAfter, "cause": "pool_deleted"})
+	}
+}
+
+// handleAddRunnerPoolExecutor puts a configured remote-hosted runner in an organization pool. Adding a
+// runner to a pool puts it in front of that pool's audience, so when another live pool already holds it
+// under a use policy the add is a widening of that policy and is held for a second human, as the policy
+// itself is.
 func (s *Server) handleAddRunnerPoolExecutor(w http.ResponseWriter, r *http.Request) {
 	ps, ok := s.runnerPoolStore(w)
 	if !ok {
@@ -182,18 +216,8 @@ func (s *Server) handleAddRunnerPoolExecutor(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	executor := chi.URLParam(r, "executor")
-	if err := (types.RunnerPoolMember{PoolID: pool.ID, ExecutorID: executor}).Validate(pool.HostingType); err != nil {
-		if pool.HostingType != types.RunnerPoolRemoteProvided {
-			writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonMemberMismatch, Name: pool.Name, Hosting: pool.HostingType})
-			return
-		}
-		writePoolInvalid(w, err.Error())
-		return
-	}
-	if !slices.Contains(s.configuredExecutors(), executor) {
-		writeErrorReason(w, runnerpool.ReasonMemberMismatch.Status(), string(runnerpool.ReasonMemberMismatch),
-			"executor "+executor+" is not configured on this server; a remote-provided pool holds configured executors only")
+	executor := chi.URLParam(r, "rid")
+	if s.refuseRemoteMember(w, pool, executor) {
 		return
 	}
 	rows, ok := s.poolCatalogue(w, r, ps, false)
@@ -217,11 +241,11 @@ func (s *Server) handleAddRunnerPoolExecutor(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err != nil {
-		writeServerError(w, r, "add runner pool executor", err)
+		writeServerError(w, r, "add runner pool remote runner", err)
 		return
 	}
 	if added {
-		s.auditPool(r, auditPoolExecutorAdd, pool.ID.String(), map[string]any{"executor_id": executor, "hosting_type": pool.HostingType, "revision": rev})
+		s.auditPool(r, auditPoolRunnerAdd, pool.ID.String(), remoteMemberAudit(pool, executor, rev))
 		if mode == govBypass {
 			s.recordGovernanceBypass(r, govKindRunnerPoolUsePolicy, pool.ID.String(), "success", nil)
 		}
@@ -229,17 +253,18 @@ func (s *Server) handleAddRunnerPoolExecutor(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, m)
 }
 
-// executorUnderOtherPolicy reports whether a live pool other than poolID holds executor under a use policy.
+// executorUnderOtherPolicy reports whether a live pool other than poolID holds remote-hosted runner
+// executor under a use policy.
 func executorUnderOtherPolicy(rows []store.RunnerPoolCatalogueRow, poolID uuid.UUID, executor string) bool {
 	return slices.ContainsFunc(rows, func(row store.RunnerPoolCatalogueRow) bool {
 		return row.Pool.ID != poolID && row.Policy != nil && slices.Contains(row.ExecutorIDs, executor)
 	})
 }
 
-// handleRemoveRunnerPoolExecutor needs no configured check: an executor that is no longer configured
-// must still be removable. Detaching an executor from a pool that carries a use policy is held for a
-// second human like an attach: otherwise one administrator could detach it, so that no policy pool holds
-// it any more, and attach it to an open pool.
+// handleRemoveRunnerPoolExecutor needs no configured check: a remote-hosted runner that is no longer
+// configured must still be removable. Taking one out of a pool that carries a use policy is held for a
+// second human like an add: otherwise one administrator could remove it, so that no policy pool holds
+// it any more, and add it to an open pool.
 func (s *Server) handleRemoveRunnerPoolExecutor(w http.ResponseWriter, r *http.Request) {
 	ps, ok := s.runnerPoolStore(w)
 	if !ok {
@@ -249,7 +274,7 @@ func (s *Server) handleRemoveRunnerPoolExecutor(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	executor := chi.URLParam(r, "executor")
+	executor := chi.URLParam(r, "rid")
 	mode, governed, done := s.detachGovernance(w, r, ps, pool.ID, executor)
 	if done {
 		return
@@ -272,11 +297,11 @@ func (s *Server) handleRemoveRunnerPoolExecutor(w http.ResponseWriter, r *http.R
 		return
 	}
 	if err != nil {
-		writeServerError(w, r, "remove runner pool executor", err)
+		writeServerError(w, r, "remove runner pool remote runner", err)
 		return
 	}
 	if removed {
-		s.auditPool(r, auditPoolExecutorRemove, pool.ID.String(), map[string]any{"executor_id": executor, "hosting_type": pool.HostingType, "revision": rev})
+		s.auditPool(r, auditPoolRunnerRemove, pool.ID.String(), remoteMemberAudit(pool, executor, rev))
 		if mode == govBypass {
 			s.recordGovernanceBypass(r, govKindRunnerPoolUsePolicy, pool.ID.String(), "success", nil)
 		}
@@ -284,8 +309,9 @@ func (s *Server) handleRemoveRunnerPoolExecutor(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// detachGovernance decides how a detach of executor from the pool is written, on the catalogue as it
-// stands. governed: the pool has a use policy and holds the executor, so the write mode was asked for.
+// detachGovernance decides how taking remote-hosted runner executor out of the pool is written, on the
+// catalogue as it stands. governed: the pool has a use policy and holds the runner, so the write mode
+// was asked for.
 // done: the answer is already written (the detach was held, or the mode refused).
 func (s *Server) detachGovernance(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore, poolID uuid.UUID, executor string) (mode govWriteMode, governed, done bool) {
 	rows, ok := s.poolCatalogue(w, r, ps, false)
@@ -306,47 +332,36 @@ func (s *Server) detachGovernance(w http.ResponseWriter, r *http.Request, ps sto
 	return mode, true, false
 }
 
-// checkDefaultPools revalidates the pools a defaults document names, as each write of a default does:
-// the pool must be in rows (the writer's own catalogue), be of the hosting type of its slot, and be
-// switched on. A default only seeds a choice, so this is a convenience for the writer and never the
-// admission: every read and launch revalidates. ok=false: the refusal is written.
-func checkDefaultPools(w http.ResponseWriter, d types.RunnerPoolDefaults, rows []store.RunnerPoolCatalogueRow) bool {
-	for _, slot := range []struct {
-		id      *uuid.UUID
-		hosting types.RunnerPoolHosting
-	}{{d.RemoteProvided, types.RunnerPoolRemoteProvided}, {d.SelfHosted, types.RunnerPoolSelfHosted}} {
-		if slot.id == nil {
-			continue
-		}
-		row, found := catalogueRow(rows, *slot.id)
-		switch {
-		case !found:
-			writePoolNotFound(w)
-		case row.Pool.HostingType != slot.hosting:
-			writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonMemberMismatch, Name: row.Pool.Name, Hosting: row.Pool.HostingType})
-		case row.Pool.State != types.RunnerPoolActive:
-			writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonUnavailable, Name: row.Pool.Name})
-		default:
-			continue
-		}
-		return false
+// checkDefaultPool revalidates the pool a default names, as each write of a default does: the pool
+// must be in rows (the writer's own catalogue), an organization pool for the organisation's default
+// (orgOnly), and switched on. A default only seeds a choice, so this is a convenience for the writer and
+// never the admission: every read and launch revalidates. ok=false: the refusal is written.
+func checkDefaultPool(w http.ResponseWriter, d types.RunnerPoolDefaults, rows []store.RunnerPoolCatalogueRow, orgOnly bool) bool {
+	if d.PoolID == nil {
+		return true
 	}
-	return true
+	row, found := catalogueRow(rows, *d.PoolID)
+	switch {
+	case !found:
+		writePoolNotFound(w)
+	case orgOnly && row.Pool.Scope != types.RunnerPoolOrganization:
+		writePoolInvalid(w, noOrgUserPoolDefaultMsg)
+	case row.Pool.State != types.RunnerPoolActive:
+		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonUnavailable, Name: row.Pool.Name})
+	default:
+		return true
+	}
+	return false
 }
 
-// defaultsView keeps the ids of d the catalogue lists: a default naming a pool the caller may not use
-// reads as unset, so the read tells nobody a pool exists.
+// defaultsView keeps the pool d names only when the catalogue lists it: a default naming a pool the
+// caller may not use reads as unset, so the read tells nobody a pool exists.
 func defaultsView(d types.RunnerPoolDefaults, rows []store.RunnerPoolCatalogueRow) types.RunnerPoolDefaults {
-	keep := func(id *uuid.UUID) *uuid.UUID {
-		if id == nil {
-			return nil
+	if d.PoolID != nil {
+		if _, found := catalogueRow(rows, *d.PoolID); !found {
+			d.PoolID = nil
 		}
-		if _, found := catalogueRow(rows, *id); !found {
-			return nil
-		}
-		return id
 	}
-	d.RemoteProvided, d.SelfHosted = keep(d.RemoteProvided), keep(d.SelfHosted)
 	return d
 }
 
@@ -381,7 +396,7 @@ func (s *Server) handlePutOrgRunnerPoolDefaults(w http.ResponseWriter, r *http.R
 		return
 	}
 	rows, ok := s.poolCatalogue(w, r, ps, false)
-	if !ok || !checkDefaultPools(w, d, rows) {
+	if !ok || !checkDefaultPool(w, d, rows, true) {
 		return
 	}
 	before, err := ps.GetRunnerPoolOrgDefaults(r.Context())

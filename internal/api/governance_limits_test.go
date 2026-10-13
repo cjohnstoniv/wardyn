@@ -176,14 +176,17 @@ func TestGovernanceToolApprovalsOnCreate(t *testing.T) {
 		}
 	})
 
-	t.Run("the same rules with NO assignment leave the run alone", func(t *testing.T) {
-		// The counterfactual again, end to end: only the assignment differs.
+	t.Run("the same rules with NO assignment gate the run as the policy's own rules", func(t *testing.T) {
+		// The counterfactual end to end: with no assignment there is no
+		// profile derivation, but the run's policy holds and blocks tools, so
+		// the tool lane puts a background Claude Code run on the gated lane
+		// (applyToolPosture) with "*: allow" under the rules.
 		srv, st, audit := govEscapeFixture(t, &capStore{})
 		srv.cfg.DefaultPolicy.ToolRules = holdProfile("x").Ceiling.ToolRules
 		govCreateAndDispatch(t, srv, st, audit, govSession(t, "sub-plain", []string{"eng"}, false),
 			`{"agent":"claude-code","task":"t"}`)
-		if got := toolApprovalsOf(t, audit); got != "" {
-			t.Errorf("run.create tool_approvals = %q for an UNASSIGNED member, want empty — that is not byte-for-byte today", got)
+		if got := toolApprovalsOf(t, audit); got != "hold" {
+			t.Errorf("run.create tool_approvals = %q for an UNASSIGNED member under a policy that holds, want hold", got)
 		}
 	})
 

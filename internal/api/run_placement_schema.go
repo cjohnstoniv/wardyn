@@ -18,30 +18,34 @@ import (
 // Nil/empty child carriers are inspected too. A new provider, grant, config or
 // control field therefore needs an explicit classification before local use.
 var localDispatchFields = map[reflect.Type][]string{
-	reflect.TypeFor[providerGrantSnapshot](): strings.Fields("ProviderUID OwnerSubject"),
+	reflect.TypeFor[providerGrantSnapshot](): strings.Fields("ProviderUID OwnerSubject Harness"),
 	reflect.TypeFor[azureGrantSnapshot]():    strings.Fields("ProviderUID OwnerSubject Audience"),
-	reflect.TypeFor[awsSSOScopeSnapshot]():   strings.Fields("OwnerSubject CredentialSource Mechanism SSOAccountID SSORoleName Region ProviderUID"),
+	reflect.TypeFor[awsSSOScopeSnapshot]():   strings.Fields("OwnerSubject CredentialSource Mechanism SSOAccountID SSORoleName Region ProviderUID ComponentID SSOStartURL"),
 	reflect.TypeFor[adoEntraScopeSnapshot](): strings.Fields("ProviderRowID Organisation OwnerSubject CredentialSource TenantID ClientID TokenMode Capabilities"),
 
 	reflect.TypeFor[time.Time]():             nil, // opaque timestamp, not credential authority
 	reflect.TypeFor[adoEntraGrade]():         strings.Fields("graded rowID org tokenMode"),
-	reflect.TypeFor[adoEntraRun]():           strings.Fields("rowID org owner tenantID clientID tokenMode credentialSource caps capsFromPolicy ceiling patHours serverHost"),
+	reflect.TypeFor[adoEntraRun]():           strings.Fields("rowID org owner tenantID clientID tokenMode credentialSource caps capsFromPolicy ceiling patHours serverHost residentOptIn"),
 	reflect.TypeFor[adoStandingBound]():      strings.Fields("operator governance"),
 	reflect.TypeFor[bedrockAuth]():           strings.Fields("env egressHosts ready bearer runtimeHost runtimePort region model ssoInject ssoAccountID ssoRoleName ssoRegion ssoProxyInject maskErr"),
 	reflect.TypeFor[bedrockCredGrade]():      strings.Fields("graded host"),
 	reflect.TypeFor[bedrockTransportAudit](): strings.Fields("region model endpoint mode detail hosts"),
 	reflect.TypeFor[chosenProvider]():        strings.Fields("provider owner"),
 	reflect.TypeFor[componentConfig]():       strings.Fields("ordinal source selfDefined env"),
-	reflect.TypeFor[componentDispatch]():     strings.Fields("HeaderHosts MITMHosts Config"),
-	reflect.TypeFor[dispatchCeiling]():       strings.Fields("localSelfDefinedComponents resolved deny profile maxEphemeralDiskMiB maxCPUMillis maxMemoryMiB adoEntra bedrock adoStanding agentGuardrailLocks"),
-	reflect.TypeFor[dispatchParams](): strings.Fields("TrustedOutput RunToken Image Policy FirstGitHubGrantID GitGrants PATBroker PATAPI GitPATGrants SSHGrants Injections Interactive TaskMode InteractiveStart SeedAutoTools ToolApprovals ApprovalExpiryAfter ExtraEnv Toolchains UserMounts EphemeralDirs Drive Components " +
-		"PolicyOverridden PushRuleSets HarnessToolRules"),
+	reflect.TypeFor[componentMCP]():          strings.Fields("Ordinal Key URL Host Harnesses Credentialed"),
+	reflect.TypeFor[componentDispatch]():     strings.Fields("HeaderHosts MITMHosts Config GitHubAPI AWSCLI MCP"),
+	reflect.TypeFor[awsCLIDispatch]():        strings.Fields("ComponentID AWS"),
+	reflect.TypeFor[types.CLIAWS]():          strings.Fields("StartURL SSORegion AccountID RoleName Region"),
+	reflect.TypeFor[dispatchCeiling]():       strings.Fields("localSelfDefinedComponents resolved deny profile maxEphemeralDiskMiB maxCPUMillis maxMemoryMiB adoEntra bedrock adoStanding agentGuardrailLocks denyPlacements"),
+	reflect.TypeFor[dispatchParams](): strings.Fields("TrustedOutput RunToken Image Policy FirstGitHubGrantID GitGrants PATBroker PATAPI GitPATGrants SSHGrants Injections Interactive TaskMode InteractiveStart SeedAutoTools ToolApprovals ApprovalExpiryAfter ExtraEnv Toolchains UserMounts EphemeralDirs Drives MainDrive Components " +
+		"PolicyOverridden PushRuleSets HarnessToolRules Harnesses"),
+	reflect.TypeFor[mainDriveDecision]():    strings.Fields("MiB Soft Basis DefaultSource"),
 	reflect.TypeFor[llmTransport]():         strings.Fields("bedrock bedrockReady injectBedrockBearer injectBedrockSSO azure provider secretEnvKeys bedrockAudit"),
 	reflect.TypeFor[providerAzureLane]():    strings.Fields("provider owner harness endpoint host route audience model fast"),
 	reflect.TypeFor[toolchainNeeds]():       strings.Fields("goTools jvmTools"),
 	reflect.TypeFor[userMountPosture]():     strings.Fields("Roots Sources"),
 	reflect.TypeFor[policyref.Contact]():    strings.Fields("Owner Email RequestURL RequestText"),
-	reflect.TypeFor[types.ADOEntraConfig](): strings.Fields("TenantID ClientID CapabilityCeiling DefaultProfile TokenMode PATMaxHours PATMaxDays RESTAPI"),
+	reflect.TypeFor[types.ADOEntraConfig](): strings.Fields("TenantID ClientID CapabilityCeiling DefaultProfile TokenMode PATMaxHours PATMaxDays RESTAPI RunnerResident RunnerResidentSandbox"),
 	reflect.TypeFor[types.AgentProvider]():  strings.Fields("ID Disabled DefaultProvider"),
 	reflect.TypeFor[types.AgentProviders](): strings.Fields("Agents"),
 	//lint:ignore SA1019 the legacy override type is still a SiteConfig field, so its manifest is required
@@ -59,6 +63,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.ModelProviders]():      strings.Fields("Providers"),
 	reflect.TypeFor[types.ProviderAuth]():        strings.Fields("Header Format"),
 	reflect.TypeFor[types.ProviderHarness]():     strings.Fields("Harness Model FastModel Path AuthHeader AuthFormat"),
+	reflect.TypeFor[types.RunHarness]():          strings.Fields("Harness ModelProviderID Starts"),
 	reflect.TypeFor[types.RunnerSettings]():      strings.Fields("Enabled"),
 	reflect.TypeFor[types.SiteBranding]():        strings.Fields("LogoPath"),
 	reflect.TypeFor[types.SiteConfig](): strings.Fields("Runners UpstreamProxySecretRef UpstreamProxyURL UpstreamProxyNoProxy ArtifactOverrides EgressRedirects ScmHosts Integrations InternalHosts Egress " +

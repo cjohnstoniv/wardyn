@@ -28,8 +28,7 @@ import (
 func TestSeedRequestWorkspace(t *testing.T) {
 	h := newHarness(t)
 	seed := func(ws types.Workspace, spec *types.RunPolicySpec, req *createRunRequest) ([]string, string, int, string, error) {
-		return New(baseTestConfig(h, &workspaceStoreFake{ws: ws})).
-			seedRequestWorkspace(context.Background(), spec, req)
+		return seedLegacy(New(baseTestConfig(h, &workspaceStoreFake{ws: ws})), context.Background(), spec, req)
 	}
 	localDirWS := func(id uuid.UUID, path string) types.Workspace {
 		return types.Workspace{ID: id, Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: path}}}
@@ -83,7 +82,7 @@ func TestSeedRequestWorkspace(t *testing.T) {
 			Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
 			BaseImage: &types.WorkspaceBaseImage{Kind: "custom", Image: "ghcr.io/acme/base:1"},
 		}}))
-		if _, _, code, _, err := srv.seedRequestWorkspace(context.Background(), &spec, &req); err != nil {
+		if _, _, code, _, err := seedLegacy(srv, context.Background(), &spec, &req); err != nil {
 			t.Fatalf("seed: %d %v", code, err)
 		}
 		if req.Image != "ghcr.io/acme/base:1" {
@@ -118,7 +117,7 @@ func TestSeedRequestWorkspace(t *testing.T) {
 		// identical reason; New(...) is for tests that need its full wiring —
 		// e.g. a live runner/background reconciliation — which this does not.)
 		srv := &Server{}
-		dirs, _, code, _, err := srv.seedRequestWorkspace(context.Background(), &spec, &req)
+		dirs, _, code, _, err := seedLegacy(srv, context.Background(), &spec, &req)
 		if err != nil || code != 0 {
 			t.Fatalf("seed: %d %v, want a clean no-op", code, err)
 		}
@@ -175,7 +174,7 @@ func TestSeedRequestWorkspace(t *testing.T) {
 // dispatched verbatim.
 type wrapEchoImageBuilder struct{ fakeImageBuilder }
 
-func (wrapEchoImageBuilder) FinalizeBase(_ context.Context, baseRef, outputTag string, _ io.Writer) (BuiltImage, error) {
+func (wrapEchoImageBuilder) FinalizeBase(_ context.Context, baseRef, outputTag string, _ io.Writer, _ bool) (BuiltImage, error) {
 	return BuiltImage{Ref: outputTag}, nil
 }
 
@@ -706,7 +705,7 @@ type capturingByoiImageBuilder struct {
 	calls []string // base refs FinalizeBase was called with, in order
 }
 
-func (b *capturingByoiImageBuilder) FinalizeBase(_ context.Context, baseRef, _ string, _ io.Writer) (BuiltImage, error) {
+func (b *capturingByoiImageBuilder) FinalizeBase(_ context.Context, baseRef, _ string, _ io.Writer, _ bool) (BuiltImage, error) {
 	b.calls = append(b.calls, baseRef)
 	return BuiltImage{Ref: "wardyn-byoi/cached:" + baseRef}, nil
 }

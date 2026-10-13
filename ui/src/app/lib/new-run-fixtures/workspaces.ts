@@ -6,11 +6,11 @@
 // M-NR-1: the Workspaces panel's frames (/m-nr/workspaces/…). The refusal
 // sentences are the server's, in the console's bytes (new-run-refusals.ts).
 import { NEW_RUN_REASON, WORKSPACE_REFUSAL } from "../new-run-refusals";
-import { adoComponent, githubComponent, preview, RESOURCES_ORG, type FixtureBody, type FixtureWorkspace } from "./base";
+import { adoComponent, githubComponent, preview, APPLIED_ORG, type FixtureBody, type FixtureWorkspace } from "./base";
 
 const payments: FixtureWorkspace = { id: "ws-payments", name: "payments", target: "/home/agent/work" };
 const docs: FixtureWorkspace = { id: "ws-docs", name: "docs", target: "/home/agent/docs" };
-const base = { preview: preview({ resources: [RESOURCES_ORG] }) };
+const base = { preview: preview({ resources_applied: APPLIED_ORG }) };
 const refusal = (reason: string, text: string) => ({ status: 422, reason, text });
 
 export const WORKSPACE_FIXTURES: FixtureBody[] = [
@@ -84,7 +84,7 @@ export const WORKSPACE_FIXTURES: FixtureBody[] = [
     route: "workspaces/ado-org",
     note: "Two Azure DevOps organisations in one run.",
     workspaces: [{ ...payments, adoOrg: "globex" }, { ...docs, adoOrg: "initech" }],
-    preview: preview({ resources: [RESOURCES_ORG], components: [adoComponent(), githubComponent()] }),
+    preview: preview({ resources_applied: APPLIED_ORG, components: [adoComponent(), githubComponent()] }),
     refusal: refusal(NEW_RUN_REASON.WORKSPACE_ADO_ORG_CONFLICT, WORKSPACE_REFUSAL.ADO_ORG_CONFLICT("payments", "globex", "docs", "initech")),
   },
   {

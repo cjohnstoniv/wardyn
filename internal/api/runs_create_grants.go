@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -30,6 +31,8 @@ type grantWiring struct {
 	// grant id, from each github_token grant's scope.repos. Delivered proxy-side
 	// only (never the sandbox) so the /wardyn/gh/ route serves exactly these repos.
 	gitGrants map[string]uuid.UUID
+	// githubAPI is the GitHub CLI door's grant (persistGitHubCLIGrants); nil without one.
+	githubAPI *proxy.GitHubAPIGrant
 	// injections are the proxy injection configs for auto-mintable api_key
 	// grants: the proxy resolves their secret VALUES at startup via the internal
 	// injection endpoint (values live only in proxy memory, never in the sandbox).
@@ -74,9 +77,10 @@ type grantDeliveryRecord struct {
 // writeServerError, so the driver text behind it reaches the LOG and not the
 // member who called POST /runs. That chokepoint is why the request is a
 // parameter beside the writer: it is what names the method and path in the log
-// line an operator is already reading.
+// line an operator is already reading. delivery is the credential delivery
+// policy a local run's plan was judged on; a remote run never reads it.
 // Extracted verbatim from handleCreateRun.
-func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, runID uuid.UUID, now time.Time, spec types.RunPolicySpec, runPlacement types.Placement) (grantWiring, bool) {
+func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, runID uuid.UUID, now time.Time, spec types.RunPolicySpec, runPlacement types.Placement, delivery placement.DeliveryPolicy) (grantWiring, bool) {
 	if !remotePlacement(runPlacement) && runPlacement != types.PlacementLocal {
 		writeErrorReason(w, placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable), "unclassified stored run placement")
 		return grantWiring{}, false
@@ -84,7 +88,7 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 	var deliveries []localGrantDelivery
 	if runPlacement == types.PlacementLocal {
 		var refusal *runRefusal
-		spec, deliveries, refusal = s.ownLocalGrantSpecs(r, spec)
+		spec, deliveries, refusal = s.ownLocalGrantSpecs(r, spec, delivery)
 		if refusal.write(s, w, r) {
 			return grantWiring{}, false
 		}
@@ -149,12 +153,13 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 			// union of the rows claiming it. The broker mints per <org>/<repo> on
 			// github.com alone (gitBrokerKey answers for no other host), which is what
 			// GitLaneApp's own doc says.
-			if msg, vetoed := s.laneVetoedForGrantHost(ctx, sc, runID, types.GitLaneApp, g.Kind,
-				"github.com", append(githubScopeRepos(g.Scope), specRepos...)); vetoed {
-				gw.warnings = append(gw.warnings, msg)
+			if drop := gitGrantLaneDrop(sc, specRepos, g); drop.vetoedBy != nil {
+				gw.warnings = append(gw.warnings, s.recordLaneVeto(ctx, runID, drop.lane, g.Kind, *drop.vetoedBy))
 				continue
 			}
-			if gw.firstGitHubGrantID == nil {
+			// A built-in's grant is scoped to its own repositories: the run's
+			// other GitHub repositories are never mapped to it (augmentGitBrokerGrants).
+			if gw.firstGitHubGrantID == nil && !isBuiltinGitHubGrant(g) {
 				id := grantID // copy loop var
 				gw.firstGitHubGrantID = &id
 			}
@@ -173,8 +178,8 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 				// have left behind. Nothing but this arm adds those domains, so
 				// dropping the lane has to drop them in the same breath or the run
 				// carries reachability for a forge it can no longer authenticate to.
-				if msg, vetoed := s.laneVetoedForGrantHost(ctx, sc, runID, types.GitLanePAT, g.Kind, host, specRepos); vetoed {
-					gw.warnings = append(gw.warnings, msg)
+				if drop := gitGrantLaneDrop(sc, specRepos, g); drop.vetoedBy != nil {
+					gw.warnings = append(gw.warnings, s.recordLaneVeto(ctx, runID, drop.lane, g.Kind, *drop.vetoedBy))
 					continue
 				}
 				gw.gitPATGrants[host] = grantID.String()
@@ -187,15 +192,15 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 			if host, _, _, _, derr := sshKeyScopeFields(g.Scope); derr == nil {
 				// Azure DevOps has no SSH lane (#1429): the grant row stays as an
 				// eligibility record, and nothing is wired, so no key reaches the sandbox.
-				if adoGrantHost(sc, host) {
-					gw.warnings = append(gw.warnings, adoSSHGrantDropped)
-					continue
-				}
 				// The `ssh` lane, vetoed: no WARDYN_SSH_GRANTS entry and no :443
 				// endpoint added — so no private key is ever written into the sandbox
 				// for a clone the admin said must not use one.
-				if msg, vetoed := s.laneVetoedForGrantHost(ctx, sc, runID, types.GitLaneSSH, g.Kind, host, specRepos); vetoed {
-					gw.warnings = append(gw.warnings, msg)
+				switch drop := gitGrantLaneDrop(sc, specRepos, g); {
+				case drop.adoSSH:
+					gw.warnings = append(gw.warnings, adoSSHGrantDropped)
+					continue
+				case drop.vetoedBy != nil:
+					gw.warnings = append(gw.warnings, s.recordLaneVeto(ctx, runID, drop.lane, g.Kind, *drop.vetoedBy))
 					continue
 				}
 				gw.sshGrants[host] = grantID.String()
@@ -245,6 +250,69 @@ func grantLaneEgress(g types.GrantSpec) []string {
 	return nil
 }
 
+// gitLaneDrop is why create does not wire one git grant's lane: the provider
+// row that turned the lane off, or an ssh_key for Azure DevOps, which has no
+// SSH lane (#1429). Zero when the lane is wired. The agent's own missing SSH
+// lane is agentHasSSHLane's, applied after it.
+type gitLaneDrop struct {
+	lane     types.GitLane
+	vetoedBy *types.GitProvider
+	adoSSH   bool
+}
+
+func (d gitLaneDrop) dropped() bool { return d.vetoedBy != nil || d.adoSSH }
+
+// gitGrantLaneDrop decides a git grant's lane from the site config, the grant
+// and the run's repositories alone, so persistRunGrants wires by it and the dry
+// doors derive egress from it (lanesWiredFor) without either restating a rule.
+//
+// A github_token's app lane is decided by the row that admitted the grant's own
+// repositories: its scope names them, and a scope whose list is the empty
+// TEMPLATE (the common case for `--repo` and the example policies) falls back
+// to this run's repositories on github.com, then to the rows claiming it. The
+// broker mints per <org>/<repo> on github.com alone (gitBrokerKey).
+func gitGrantLaneDrop(sc types.SiteConfig, specRepos []string, g types.GrantSpec) gitLaneDrop {
+	d := gitLaneDrop{}
+	veto := func(lane types.GitLane, host string, repos []string) gitLaneDrop {
+		d.lane = lane
+		if row, vetoed := grantHostVetoRow(sc, lane, host, repos); vetoed {
+			d.vetoedBy = &row
+		}
+		return d
+	}
+	switch g.Kind {
+	case types.GrantGitHubToken:
+		return veto(types.GitLaneApp, "github.com", append(githubScopeRepos(g.Scope), specRepos...))
+	case types.GrantGitPAT:
+		if pat, err := types.DecodeGitPATScope(g.Scope); err == nil {
+			return veto(types.GitLanePAT, pat.Host, specRepos)
+		}
+	case types.GrantSSHKey:
+		if host, _, _, _, err := sshKeyScopeFields(g.Scope); err == nil {
+			if adoGrantHost(sc, host) {
+				return gitLaneDrop{lane: types.GitLaneSSH, adoSSH: true}
+			}
+			return veto(types.GitLaneSSH, host, specRepos)
+		}
+	}
+	return d
+}
+
+// agentHasSSHLane reports whether an agent's image can clone over SSH:
+// codex-cli has no openssh or corkscrew and its agent-run never reads
+// WARDYN_SSH_GRANTS.
+func agentHasSSHLane(agent string) bool { return agent != "codex-cli" }
+
+// lanesWiredFor is grants without the git grants whose lane create would not
+// wire for agent (gitGrantLaneDrop, then agentHasSSHLane): the dry doors'
+// answer to which lanes add hosts. A placement's local grant narrowing
+// (ownLocalGrantSpecs) is create's alone.
+func lanesWiredFor(sc types.SiteConfig, agent string, specRepos []string, grants []types.GrantSpec) []types.GrantSpec {
+	return slices.DeleteFunc(slices.Clone(grants), func(g types.GrantSpec) bool {
+		return gitGrantLaneDrop(sc, specRepos, g).dropped() || (g.Kind == types.GrantSSHKey && !agentHasSSHLane(agent))
+	})
+}
+
 // augmentGitBrokerGrants maps the run's DECLARED GitHub clone set (legacy run.Repo +
 // WorkspaceRepos) to the run's github grant, so the git-broker serves those repos
 // even when the github_token grant's scope.repos is an empty template (the common
@@ -285,7 +353,7 @@ func (gw *grantWiring) augmentGitBrokerGrants(legacyRepo string, wsRepos []types
 // in-sandbox if the tools are missing. Extracted verbatim from handleCreateRun.
 func (s *Server) applySSHLaneWarnings(ctx context.Context, req createRunRequest, runID uuid.UUID, gw *grantWiring) []string {
 	var warnings []string
-	if req.Agent == "codex-cli" && len(gw.sshGrants) > 0 {
+	if !agentHasSSHLane(req.Agent) && len(gw.sshGrants) > 0 {
 		hosts := make([]string, 0, len(gw.sshGrants))
 		for h := range gw.sshGrants {
 			hosts = append(hosts, h)

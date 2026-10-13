@@ -209,8 +209,8 @@ var routeMatrix = map[string]classifiedRoute{
 	// which the shipped image does (ENV WARDYN_UI_DIR=/srv/ui). Anonymous by
 	// necessity: the console shell has to load before anyone can sign in. It is
 	// mounted on the TOP-LEVEL router, outside every auth group and after the
-	// whole /api/v1 tree, so it can shadow nothing; mountUI's own withinDir
-	// check is what keeps it from serving outside the directory.
+	// whole /api/v1 tree, so it can shadow nothing; mountUI's rooted clean of
+	// the path is what keeps it from serving outside the directory.
 	"GET /*":             {class: classAnonymous},
 	"GET /healthz":       {class: classAnonymous},
 	"GET /readyz":        {class: classAnonymous},
@@ -238,28 +238,45 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/runners/settings":       {class: classAdmin},
 	"GET /api/v1/me/runners":             {class: classMember},
 	"GET /api/v1/me/runners/{id}":        {class: classMember},
+	// The owner's change of their own runner's runs at once (runner_limits.go), scoped to the caller's
+	// own runners inside the handler.
+	"PUT /api/v1/me/runners/{id}": {class: classMember},
 	// Runner pools (runner_pools.go): 501 until the pool storage lands. The
 	// catalogue reads and the person's own runner membership and defaults are
-	// member routes scoped to the caller's own data; pool writes, executor
-	// membership and the organisation default are SUPER; the pool-use policy is
-	// the security tier.
-	"GET /api/v1/runner-pools":                              {class: classMember},
-	"GET /api/v1/runner-pools/{id}":                         {class: classMember},
-	"POST /api/v1/runner-pools":                             {class: classAdmin},
-	"PUT /api/v1/runner-pools/{id}":                         {class: classAdmin},
-	"DELETE /api/v1/runner-pools/{id}":                      {class: classAdmin},
-	"PUT /api/v1/runner-pools/{id}/executors/{executor}":    {class: classAdmin},
-	"DELETE /api/v1/runner-pools/{id}/executors/{executor}": {class: classAdmin},
-	"PUT /api/v1/me/runner-pools/{id}/runners/{runner}":     {class: classMember},
-	"DELETE /api/v1/me/runner-pools/{id}/runners/{runner}":  {class: classMember},
-	"GET /api/v1/runner-pools/{id}/use-policy":              {class: classSecurity},
-	"PUT /api/v1/runner-pools/{id}/use-policy":              {class: classSecurity},
-	"DELETE /api/v1/runner-pools/{id}/use-policy":           {class: classSecurity},
-	"GET /api/v1/runner-pool-defaults":                      {class: classMember},
-	"PUT /api/v1/runner-pool-defaults":                      {class: classAdmin},
-	"GET /api/v1/me/runner-pool-defaults":                   {class: classMember},
-	"PUT /api/v1/me/runner-pool-defaults":                   {class: classMember},
-	"DELETE /api/v1/me/runner-pool-defaults":                {class: classMember},
+	// member routes scoped to the caller's own data; organization pool writes,
+	// their remote-hosted runner membership and the organisation default are
+	// SUPER; the pool-use policy is the security tier.
+	"GET /api/v1/runner-pools":                                 {class: classMember},
+	"GET /api/v1/runner-pools/{id}":                            {class: classMember},
+	"POST /api/v1/runner-pools":                                {class: classAdmin},
+	"PUT /api/v1/runner-pools/{id}":                            {class: classAdmin},
+	"DELETE /api/v1/runner-pools/{id}":                         {class: classAdmin},
+	"GET /api/v1/runner-pools/{id}/members":                    {class: classMember},
+	"PUT /api/v1/runner-pools/{id}/remote-runners/{rid}":       {class: classAdmin},
+	"DELETE /api/v1/runner-pools/{id}/remote-runners/{rid}":    {class: classAdmin},
+	"PUT /api/v1/me/runner-pools/{id}/remote-runners/{rid}":    {class: classMember},
+	"DELETE /api/v1/me/runner-pools/{id}/remote-runners/{rid}": {class: classMember},
+	// Remote-hosted runners (remote_runners.go): the operators read them and write the people policy
+	// (held for a second human); only an admin renames one; a person lists the ones they may add.
+	"GET /api/v1/remote-runners":                           {class: classSecurity},
+	"GET /api/v1/remote-runners/{rid}":                     {class: classSecurity},
+	"PUT /api/v1/remote-runners/{rid}":                     {class: classAdmin},
+	"PUT /api/v1/remote-runners/{rid}/people-policy":       {class: classSecurity},
+	"DELETE /api/v1/remote-runners/{rid}/people-policy":    {class: classSecurity},
+	"GET /api/v1/me/remote-runners":                        {class: classMember},
+	"POST /api/v1/me/runner-pools":                         {class: classMember},
+	"PUT /api/v1/me/runner-pools/{id}":                     {class: classMember},
+	"DELETE /api/v1/me/runner-pools/{id}":                  {class: classMember},
+	"PUT /api/v1/me/runner-pools/{id}/runners/{runner}":    {class: classMember},
+	"DELETE /api/v1/me/runner-pools/{id}/runners/{runner}": {class: classMember},
+	"GET /api/v1/runner-pools/{id}/use-policy":             {class: classSecurity},
+	"PUT /api/v1/runner-pools/{id}/use-policy":             {class: classSecurity},
+	"DELETE /api/v1/runner-pools/{id}/use-policy":          {class: classSecurity},
+	"GET /api/v1/runner-pool-defaults":                     {class: classMember},
+	"PUT /api/v1/runner-pool-defaults":                     {class: classAdmin},
+	"GET /api/v1/me/runner-pool-defaults":                  {class: classMember},
+	"PUT /api/v1/me/runner-pool-defaults":                  {class: classMember},
+	"DELETE /api/v1/me/runner-pool-defaults":               {class: classMember},
 	// Console branding (#1125): the sign-in page draws the brand before anyone
 	// has signed in, so its read and the logo it names are anonymous. The
 	// read is the public subset only (TestBrandingAnonymousReadIsThePublicSubset).
@@ -594,6 +611,8 @@ var routeMatrix = map[string]classifiedRoute{
 	// own doc) — classMember, not classOwner: there is no foreign-id path to
 	// distinguish.
 	"GET /api/v1/me/attention": {class: classMember},
+	// The caller's own drive catalogue: only drives their own grants reach.
+	"GET /api/v1/me/drives": {class: classMember},
 	// The Support link the header shows every signed-in person (#1125).
 	"GET /api/v1/branding/settings": {class: classMember},
 	// /me/ssh-keys (SSH lane, C2): classMember, NOT classOwner — this is a
@@ -655,16 +674,19 @@ var routeMatrix = map[string]classifiedRoute{
 	// /me/run-layout is the same shape as /me/ssh-keys above: classMember, not
 	// classOwner. It names no entity in its path — the STORE scopes it to the
 	// caller's own principal, so there is no foreign row to 404 on.
-	"GET /api/v1/me/run-layout":    {class: classMember},
-	"PUT /api/v1/me/run-layout":    {class: classMember},
-	"GET /api/v1/policies":         {class: classMember},
-	"GET /api/v1/policies/default": {class: classMember},
-	"GET /api/v1/policies/{id}":    {class: classMember},
-	// Run templates (template_routes.go): 501 until the template store lands, except
-	// POST /templates/import, which validates a document and stores nothing. Every
-	// /templates route is a member route whose handler scopes by the template's own
-	// scope (types.TemplateRoutes); the grant that lets one person publish to one
-	// group is SUPER.
+	"GET /api/v1/me/run-layout": {class: classMember},
+	"PUT /api/v1/me/run-layout": {class: classMember},
+	// The same shape again: the store scopes the list to the caller's own runs.
+	"GET /api/v1/me/launch-intents": {class: classMember},
+	"GET /api/v1/policies":          {class: classMember},
+	"GET /api/v1/policies/default":  {class: classMember},
+	"GET /api/v1/policies/{id}":     {class: classMember},
+	// Run templates (template_routes.go). Every /templates route is a member route
+	// whose handler scopes by the template's own scope (types.TemplateRoutes); a
+	// template the caller cannot read is the missing-id 404, probed per route, scope
+	// and caller by TestTemplateForeignIDIsTheMissingID404. POST /templates/import
+	// validates a document and stores nothing. The grant that lets one person
+	// publish to one group is SUPER.
 	"GET /api/v1/templates":                           {class: classMember},
 	"POST /api/v1/templates":                          {class: classMember},
 	"POST /api/v1/templates/import":                   {class: classMember},
@@ -707,6 +729,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// given provider is provider_signin_test.go's job.
 	"POST /api/v1/model-providers/{id}/sign-in": {class: classMember},
 	"PUT /api/v1/model-providers/{id}/sign-in":  {class: classMember},
+	"POST /api/v1/components/{id}/sign-in":      {class: classMember},
 
 	// The workspace READS stay member-class: an operator-owned workspace — every
 	// pre-0048 row — is readable by any authenticated caller exactly as before.
@@ -765,6 +788,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"DELETE /api/v1/workspaces/{id}":          {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"POST /api/v1/workspaces/{id}/scan":       {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"POST /api/v1/workspaces/{id}/build":      {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
+	"GET /api/v1/workspaces/{id}/branches":    {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"GET /api/v1/runs/{id}":                   {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/events":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/output":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
@@ -780,7 +804,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// The title (#1197 L2): OWNER ONLY, no admin bypass at all (packet H-5 =
 	// A) — a rename is a display-field write with no security or
 	// incident-response warrant behind it. See run_title.go's doc comment.
-	"PATCH /api/v1/runs/{id}/title":           {class: classOwner, entity: entityRun, ownerTier: tierOwnerOnly},
+	"PATCH /api/v1/runs/{id}/title": {class: classOwner, entity: entityRun, ownerTier: tierOwnerOnly},
+	// A run's launch intent holds its task text: its creator only, no admin bypass
+	// (launch_intent.go). seedRun gives every fixture run one, so the owner arm reads 200.
+	"GET /api/v1/runs/{id}/launch-intent":     {class: classOwner, entity: entityRun, ownerTier: tierOwnerOnly},
 	"GET /api/v1/runs/{id}/recording/{runID}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/attach-ticket":    {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// /attach/ticket, /attach/holder and /profile/synthesize (below) are the
@@ -1046,7 +1073,8 @@ func TestAuthzMatrix(t *testing.T) {
 	seedRun := func(createdBy string) uuid.UUID {
 		id := uuid.New()
 		ast.mu.Lock()
-		ast.runs[id] = types.AgentRun{ID: id, CreatedBy: createdBy, State: types.RunRunning, Agent: "claude-code"}
+		ast.runs[id] = types.AgentRun{ID: id, CreatedBy: createdBy, State: types.RunRunning, Agent: "claude-code",
+			LaunchIntent: json.RawMessage(`{"api_version":"wardyn/v1","kind":"Run","intent":{"agent":"claude-code","task":"t"}}`)}
 		ast.mu.Unlock()
 		_ = rs.SaveCast(context.Background(), id.String(), strings.NewReader(`{"version":2}`+"\n"))
 		return id
@@ -1556,9 +1584,11 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// since #1232 added GET /runs/{id}/output; 28 since #1425 added GET
 		// /runs/{id}/policy; 29 since #1428 added GET /runs/{id}/ado-tokens; 30
 		// since #1891 added GET /runs/{id}/sign-in; 32 since 0.8.9 added PUT and
-		// DELETE /me/components/{id}.
-		if probed != 32 {
-			t.Errorf("probed %d classOwner routes, want 32 — a route that left classOwner takes its tier "+
+		// DELETE /me/components/{id}; 33 since 0.9 added GET
+		// /workspaces/{id}/branches; 34 since 0.9 added GET
+		// /runs/{id}/launch-intent.
+		if probed != 34 {
+			t.Errorf("probed %d classOwner routes, want 34 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
@@ -1676,8 +1706,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// 0.9 invitations add the security tier's create, two lists and revoke, and service identities its five
 	// routes (= 77 SEC). POST /tokens/{id}/move adds one more (= 78 SEC).
 	// 0.9 H12's GET and PUT /governance/credential-delivery are the security tier's (= 80 SEC).
-	if sec != 80 || super != 67 {
-		t.Errorf("tier split = %d security / %d admin, want 80 / 67 (the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes)", sec, super)
+	// 0.9 RP-1's remote-hosted runners: the two reads and the people-policy pair are the security tier's
+	// (= 84 SEC), the rename is SUPER (= 68 SUPER).
+	if sec != 84 || super != 68 {
+		t.Errorf("tier split = %d security / %d admin, want 84 / 68 (the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
 	}
 }
 
@@ -1808,6 +1840,46 @@ func (s *authzStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, er
 		return types.AgentRun{}, store.ErrNotFound
 	}
 	return r, nil
+}
+
+// The launch-intent capability (store.LaunchIntentStore), read off the runs a
+// fixture seeded or created with one.
+var _ store.LaunchIntentStore = (*authzStore)(nil)
+
+func (s *authzStore) ListLaunchIntents(_ context.Context, createdBy string, limit int) ([]store.LaunchIntentRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.LaunchIntentRecord
+	for _, r := range s.runs {
+		if r.CreatedBy == createdBy && r.LaunchIntent != nil && len(out) < limit {
+			out = append(out, store.LaunchIntentRecord{RunID: r.ID, Title: r.Title, CreatedAt: r.CreatedAt})
+		}
+	}
+	return out, nil
+}
+
+func (s *authzStore) GetLaunchIntent(_ context.Context, id uuid.UUID, createdBy string) (store.LaunchIntentRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.runs[id]
+	if !ok || r.CreatedBy != createdBy || r.LaunchIntent == nil {
+		return store.LaunchIntentRecord{}, store.ErrNotFound
+	}
+	return store.LaunchIntentRecord{RunID: r.ID, Title: r.Title, CreatedAt: r.CreatedAt, Document: r.LaunchIntent}, nil
+}
+
+func (s *authzStore) DeleteLaunchIntentsCreatedBy(_ context.Context, createdBy string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for id, r := range s.runs {
+		if r.CreatedBy == createdBy && r.LaunchIntent != nil {
+			r.LaunchIntent = nil
+			s.runs[id] = r
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (s *authzStore) ListRuns(context.Context) ([]types.AgentRun, error) {

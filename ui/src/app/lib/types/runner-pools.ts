@@ -3,20 +3,27 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The runner pool contract (types only). A pool is an organisation-defined set of
-// execution targets: choosing one narrows where a run may go and grants nothing.
-// Every interface mirrors one Go struct (internal/types/runner_pool.go or
-// pkg/client/runner_pools.go) and runner-pools.wire.test.ts pins its json tags to
-// that struct's source. Nothing here is stored yet; the server refuses what it
-// cannot honour with runner_pools_unavailable or request_field_unavailable.
+// The runner pool contract (types only). A pool is a set of runners: choosing one
+// narrows where a run may go and grants nothing. Every interface mirrors one Go
+// struct (internal/types/runner_pool.go, internal/types/remote_runner.go,
+// pkg/client/runner_pools.go or pkg/client/remote_runners.go) and
+// runner-pools.wire.test.ts pins its json tags to that struct's source.
 //
-// The UI words are "Remote Provided" (`remote_provided`) and "Self-Hosted"
-// (`self_hosted`); the run's transport value stays `placement` remote / local.
+// The UI words are "Organization pools" (`organization`) and "User pools" (`user`);
+// a runner is a self-hosted runner (`self_hosted`) or a remote-hosted runner
+// (`remote_hosted`); the run's transport value stays `placement` remote / local.
 
-import type { RunnerPoolReason } from "../runner-pool-refusals";
+import type { BarrierReason, PoolAvailabilityReason, RunnerPoolReason } from "../runner-pool-refusals";
+import type { RunnerView } from "./runners";
 import type { ConfinementClass } from "./runs";
 
-export type RunnerPoolHosting = "remote_provided" | "self_hosted";
+export type RunnerPoolScope = "organization" | "user";
+
+/** The kind of a runner (Go: types.RunnerKind). */
+export type RunnerKind = "self_hosted" | "remote_hosted";
+
+/** Who may add a remote-hosted runner to their own user pools (Go: types.RemoteRunnerPeoplePools). */
+export type RemoteRunnerPeoplePools = "off" | "everyone" | "listed";
 
 export type RunnerPoolState = "active" | "disabled" | "deleted";
 
@@ -65,6 +72,8 @@ export interface RunnerPoolDuration {
 export interface RunnerPoolBackgroundLimits {
   cpu_millis: RunnerPoolAmount;
   memory_mib: RunnerPoolAmount;
+  /** The main drive's default and cap in MiB, each a whole number of GiB. Absent: the pool sets no main-drive bound. */
+  disk_mib?: RunnerPoolAmount;
   lifetime: RunnerPoolDuration;
 }
 
@@ -72,6 +81,7 @@ export interface RunnerPoolBackgroundLimits {
 export interface RunnerPoolInteractiveLimits {
   cpu_millis: RunnerPoolAmount;
   memory_mib: RunnerPoolAmount;
+  disk_mib?: RunnerPoolAmount;
   lifetime: RunnerPoolDuration;
   idle: RunnerPoolDuration;
 }
@@ -115,6 +125,8 @@ export interface EffectiveRunLimits {
   run_type: RunnerPoolRunType;
   cpu_millis: EffectiveLimit;
   memory_mib: EffectiveLimit;
+  /** The main drive's size in MiB; an unlimited default means an untouched run gets no size. */
+  disk_mib: EffectiveLimit;
   lifetime_sec: EffectiveLimit;
   lifetime_span_sec: EffectiveLimit;
   lifetime_lease_sec: EffectiveLimit;
@@ -127,7 +139,9 @@ export interface EffectiveRunLimits {
 export interface RunnerPool {
   id: string;
   name: string;
-  hosting_type: RunnerPoolHosting;
+  scope: RunnerPoolScope;
+  /** A user pool's owner (their subject); absent on an organization pool. */
+  owner?: string;
   state: RunnerPoolState;
   revision: number;
   limits?: RunnerPoolLimits;
@@ -135,26 +149,30 @@ export interface RunnerPool {
   updated_at: string;
 }
 
-/** Go: types.RunnerPoolMember. Exactly one of runner_id and executor_id is set. */
+/** Go: types.RunnerPoolMember. Exactly one of runner_id (self_hosted) and remote_runner_id (remote_hosted) is set. */
 export interface RunnerPoolMember {
   pool_id: string;
+  kind: RunnerKind;
   runner_id?: string;
-  executor_id?: string;
+  remote_runner_id?: string;
   added_at: string;
 }
 
-/** Go: types.RunnerPoolDefaults. An absent field inherits; it never widens what the person may use. */
+/**
+ * Go: types.RunnerPoolDefaults. The default pool: a person's own wins over the organization's, and it
+ * never widens what the person may use. The organization's names an organization pool only.
+ */
 export interface RunnerPoolDefaults {
-  preferred_hosting?: RunnerPoolHosting;
-  remote_provided?: string;
-  self_hosted?: string;
+  pool_id?: string;
+  /** The organisation's default barrier; a person's own document never carries one (the server refuses it). */
+  barrier?: ConfinementClass;
 }
 
 /** Go: types.ResolvedRunnerPool. A label for the choice, never admission. */
 export interface ResolvedRunnerPool {
   id: string;
   name: string;
-  hosting_type: RunnerPoolHosting;
+  scope: RunnerPoolScope;
   revision: number;
   selection: RunnerPoolSelection;
 }
@@ -174,26 +192,122 @@ export interface RunnerPoolUsePolicy {
   updated_by?: string;
 }
 
-/** Go: client.RunnerPoolChoice. Only pools the caller may use are ever sent. */
+/**
+ * Go: client.RunnerPoolChoice, as the preflight and the policy preview send it. Only pools the caller may
+ * use are ever sent. `limits` and `barriers` are never filled on those doors.
+ */
 export interface RunnerPoolChoice {
   id: string;
   name: string;
-  hosting_type: RunnerPoolHosting;
+  scope: RunnerPoolScope;
   availability: RunnerPoolAvailability;
-  reason?: RunnerPoolReason;
+  // The server sends one of POOL_AVAILABILITY_REASONS; RunnerPoolReason stays for older fixtures.
+  reason?: PoolAvailabilityReason | RunnerPoolReason;
   limits?: EffectiveRunLimits[];
   barriers?: ConfinementClass[];
+  /** What this pool's runners do with the main drive's size; absent on a pool the caller may only manage. */
+  main_drive?: MainDriveFacts;
+}
+
+/** Go: client.MainDriveEnforcement. The weakest word across the pool's targets; never request or external. */
+export type MainDriveEnforcement = "filesystem" | "eviction" | "none" | "unknown";
+
+/** Go: client.MainDriveCoverage. Absent when enforcement is none or unknown. */
+export type MainDriveCoverage = "all" | "scratch_paths";
+
+/** Go: client.MainDriveKeep. `grace_sec` is set only when supported. */
+export interface MainDriveKeep {
+  supported: boolean;
+  grace_sec?: number;
+}
+
+/** Go: client.MainDriveFacts. */
+export interface MainDriveFacts {
+  enforcement: MainDriveEnforcement;
+  basis: "substrate" | "runner_asserted";
+  coverage?: MainDriveCoverage;
+  keep: MainDriveKeep;
+  drive_mounts: boolean;
+}
+
+/** Go: runnerpool.BarrierOption. Always CC1, CC2, CC3, in that order. */
+export interface BarrierOption {
+  class: ConfinementClass;
+  available: boolean;
+  default?: boolean;
+  /** "organisation" arrives with the organisation default barrier; Review already reads it. */
+  default_source?: "server" | "organisation";
+  reason_code?: BarrierReason;
+  reason_detail?: "kvm_missing";
+  floor?: ConfinementClass;
+}
+
+/** Go: client.PoolRunner. One of the caller's OWN self-hosted runners in a user pool. */
+export interface PoolRunner {
+  id: string;
+  name: string;
+  online: boolean;
+}
+
+/**
+ * Go: client.PoolSlots. A pool's slot counts, everyone's and never saying whose. The verdict is advisory:
+ * the launch decides. `max_wait_sec` is the wait a run of the asked type gets (86400 Background, 3600
+ * Interactive); on the pool list only with ?run_type=.
+ */
+export interface PoolSlots {
+  used: number;
+  waiting: number;
+  /** Absent: the pool has no limit. */
+  max?: number;
+  verdict: "starts_now" | "waits";
+  max_wait_sec?: number;
+}
+
+/**
+ * Go: client.RunnerPoolCatalogueEntry, one row of GET /runner-pools: the dry doors' fields plus what the
+ * pool offers. A row the caller may only manage (runner_pool_not_found) carries none of these.
+ */
+export interface RunnerPoolCatalogueEntry extends RunnerPoolChoice {
+  run_types: RunnerPoolRunType[];
+  run_types_source?: "pool" | "none";
+  barrier_options: BarrierOption[];
+  /** Every one of the caller's own runners in the pool, whether or not it can take a run now. */
+  my_runners?: PoolRunner[];
+  slots?: PoolSlots;
+  /** A user pool's owner: the caller, or the person on an administrator's oversight row. */
+  owner?: string;
+}
+
+/** Go: client.PersonAllowance. Counts only; absent for a caller outside governance. */
+export interface PersonAllowance {
+  active: number;
+  max?: number;
+  profile_name?: string;
+}
+
+/** Go: client.PoolDefault. The pool an untouched run resolves to, or the default that no longer applies. */
+export interface PoolDefault {
+  pool_id?: string;
+  selection?: RunnerPoolSelection;
+  reason?: RunnerPoolReason;
 }
 
 /** Go: client.RunnerPoolList. */
 export interface RunnerPoolList {
-  pools: RunnerPoolChoice[];
+  pools: RunnerPoolCatalogueEntry[];
+  allowance?: PersonAllowance;
+  default?: PoolDefault;
 }
 
-/** Go: client.CreateRunnerPoolRequest. */
+/** Go: client.CreateRunnerPoolRequest: an organization pool (admin). */
 export interface CreateRunnerPoolRequest {
   name: string;
-  hosting_type: RunnerPoolHosting;
+  limits?: RunnerPoolLimits;
+}
+
+/** Go: client.CreateMyRunnerPoolRequest: a user pool of the caller's own. */
+export interface CreateMyRunnerPoolRequest {
+  name: string;
   limits?: RunnerPoolLimits;
 }
 
@@ -206,4 +320,60 @@ export interface UpdateRunnerPoolRequest {
   name?: string;
   state?: RunnerPoolSwitch;
   limits?: RunnerPoolLimits;
+}
+
+/** Go: types.RemoteRunnerPoolRef. One live pool a remote-hosted runner is in; owner only on the operators' reads. */
+export interface RemoteRunnerPoolRef {
+  id: string;
+  name: string;
+  scope: RunnerPoolScope;
+  owner?: string;
+}
+
+/** Go: types.RemoteRunner. The Docker host or Kubernetes cluster this server is set up with. */
+export interface RemoteRunner {
+  id: string;
+  kind: "remote_hosted";
+  name: string;
+  people_pools: RemoteRunnerPeoplePools;
+  /** Set when people_pools is listed; an emptied list admits nobody. Never on a person's own list. */
+  people_subjects?: RunnerPoolSubject[];
+  revision: number;
+  updated_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Go: client.RemoteRunnerView. GET /remote-runners (operators) and /me/remote-runners (those the caller may add). */
+export interface RemoteRunnerView extends RemoteRunner {
+  /** This server runs it; one that is not configured stays listed and never takes a run. */
+  configured: boolean;
+  online: boolean;
+  pools: RemoteRunnerPoolRef[];
+}
+
+/** Go: client.UpdateRemoteRunnerRequest (admin). */
+export interface UpdateRemoteRunnerRequest {
+  revision: number;
+  name?: string;
+}
+
+/** Go: client.RemoteRunnerPeoplePolicyRequest. Turning it off is the DELETE route. */
+export interface RemoteRunnerPeoplePolicyRequest {
+  revision?: number;
+  people_pools: "everyone" | "listed";
+  subjects?: RunnerPoolSubject[];
+}
+
+/** Go: client.RunnerPoolMemberView. One runner of a pool, either kind (GET /runner-pools/{id}/members). */
+export interface RunnerPoolMemberView {
+  kind: RunnerKind;
+  /** The self-hosted runner's id or the remote-hosted runner's. */
+  id: string;
+  name: string;
+  online: boolean;
+  /** A remote-hosted member this server runs. */
+  configured?: boolean;
+  /** A self-hosted member's runner view; its owner is named on an operator's read. */
+  runner?: RunnerView;
 }

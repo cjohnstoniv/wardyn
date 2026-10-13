@@ -380,6 +380,27 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goJSONTags(go, goName)));
   });
 
+  // Step 5's access block: the SDK structs and their TS twins.
+  it.each([
+    ["AccessFacts"], ["AccessRow"], ["AccessMCP"], ["AccessHost"], ["AccessCredential"], ["AccessUnlisted"],
+    ["ToolPolicyFact"], ["ToolDefaultFact"], ["EffectOption"], ["LockedToolRule"],
+  ])("access: %s mirrors pkg/client", (name) => {
+    const go = readFileSync(join(root, "pkg/client/runs_access.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/new-run-access.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(ts, name))).toEqual(new Set(goJSONTags(go, name)));
+  });
+
+  it("access source kinds are provenance's plus the access facts' own", () => {
+    const go = readFileSync(join(root, "internal/api/run_access_facts.go"), "utf8");
+    const ts = stripComments(readFileSync(join(root, "ui/src/app/lib/types/new-run-access.ts"), "utf8"));
+    const own = new Set([...go.matchAll(/\bprovKind\w+\s+=\s*"([a-z_]+)"/g)].map((m) => m[1]));
+    const kind = /kind: ([^;]+);/.exec(tsInterfaceBody(ts, "AccessSource"))![1];
+    expect(own).toEqual(new Set(["harness", "posture"]));
+    expect(kind).toContain('ProvenanceSource["kind"]');
+    const added = kind.replace('ProvenanceSource["kind"]', "");
+    expect(new Set([...added.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]))).toEqual(own);
+  });
+
   it("provenance source kinds and effects are the Go closed sets", () => {
     const go = readFileSync(join(root, "internal/api/run_fold_provenance.go"), "utf8");
     const ts = stripComments(readFileSync(join(root, "ui/src/app/lib/types/policy-preview.ts"), "utf8"));
@@ -403,15 +424,24 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["internal/types/component.go", "ComponentDefinition", "ComponentDefinition"],
     ["internal/types/component.go", "Component", "Component"],
     ["internal/types/component.go", "ComponentRef", "ComponentRef"],
+    ["internal/types/component.go", "ComponentCLI", "ComponentCLI"],
+    ["internal/types/component.go", "CLIAWS", "CLIAWS"],
+    ["internal/types/component.go", "CLIAzure", "CLIAzure"],
     ["pkg/client/components.go", "ComponentRequest", "ComponentRequest"],
     ["pkg/client/components.go", "ComponentRequirement", "ComponentRequirement"],
     ["pkg/client/components.go", "ComponentSecretView", "ComponentSecretView"],
     ["pkg/client/components.go", "OrgComponentView", "OrgComponentView"],
+    ["pkg/client/components.go", "CLIView", "CLIView"],
+    ["pkg/client/components.go", "MCPView", "MCPView"],
+    ["pkg/client/components.go", "CatalogueCLI", "CatalogueCLI"],
     ["pkg/client/components.go", "MyComponents", "MyComponents"],
     ["internal/api/components_facts.go", "componentFact", "ComponentFact"],
     ["internal/api/components_facts.go", "componentSecretFact", "ComponentSecretFact"],
     ["internal/types/site_config.go", "ComponentSettings", "ComponentSettings", "site.ts"],
     ["internal/api/preflight.go", "preflightResponse", "PreflightResult", "preflight.ts"],
+    ["internal/api/compose_setup.go", "SetupItem", "SetupItem", "preflight.ts"],
+    ["internal/api/compose_setup.go", "SetupFix", "SetupFix", "preflight.ts"],
+    ["internal/api/run_access_facts.go", "accessBlock", "AccessFacts", "new-run-access.ts"],
     ["internal/api/permissions.go", "meCapabilitiesResponse", "MeCapabilities", "permissions.ts"],
     ["internal/api/run_revive.go", "adminRestartResult", "AdminRestartResult", "runs.ts"],
   ])("%s %s: full parity with the TS %s mirror", (goFile, goName, tsName, tsFile = "components.ts") => {
@@ -425,8 +455,9 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   // the dry-run facts, each pinned to its TS mirror in types/new-run-contract.ts.
   it.each([
     ["RunResources", "RequestedResources"],
-    ["ResourceAmounts", "ResourceAmounts"],
-    ["PlacementResources", "PlacementResources"],
+    ["MainDriveApplied", "MainDriveApplied"],
+    ["AppliedResources", "AppliedResources"],
+    ["AppliedAmount", "AppliedAmount"],
     ["RunOverrides", "RunOverrides"],
     ["AgentOverrides", "AgentOverrides"],
     ["SecretOverride", "SecretOverride"],
@@ -444,11 +475,26 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["AgentFact", "AgentFact"],
     ["ImageSource", "ImageSource"],
     ["ImageFact", "ImageFact"],
+    ["HarnessSetFact", "HarnessSetFact"],
+    ["HarnessFact", "HarnessFact"],
+    ["HarnessModelCredential", "HarnessModelCredential"],
     ["AllowedImage", "AllowedImage"],
   ])("pkg/client %s: full parity with the TS %s mirror", (goName, tsName) => {
     const goTags = goJSONTags(readFileSync(join(root, "pkg/client/runs_new_run.go"), "utf8"), goName);
     expect(goTags.length).toBeGreaterThanOrEqual(1);
     const ts = readFileSync(join(root, "ui/src/app/lib/types/new-run-contract.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
+  });
+
+  // The drive carrier and catalogue (pkg/client/runs_create.go, pkg/client/me_drives.go).
+  it.each([
+    ["runs_create.go", "DriveAttachment", "types/new-run-contract.ts", "DriveAttachment"],
+    ["me_drives.go", "MeDrive", "api/me-drives.ts", "MeDrive"],
+    ["me_drives.go", "MeDriveCatalogue", "api/me-drives.ts", "MeDriveCatalogue"],
+  ])("pkg/client/%s %s: full parity with the TS %s mirror", (goFile, goName, tsFile, tsName) => {
+    const goTags = goJSONTags(readFileSync(join(root, "pkg/client", goFile), "utf8"), goName);
+    expect(goTags.length).toBeGreaterThanOrEqual(2);
+    const ts = readFileSync(join(root, "ui/src/app/lib", tsFile), "utf8");
     expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
   });
 
@@ -508,7 +554,9 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["pkg/client/templates.go", "Template"],
     ["pkg/client/templates.go", "TemplateSummary"],
     ["pkg/client/templates.go", "TemplateList"],
+    ["pkg/client/templates.go", "TemplatePublish"],
     ["pkg/client/templates.go", "TemplateSaveRequest"],
+    ["pkg/client/templates.go", "TemplateSaveRefusal"],
     ["pkg/client/templates.go", "TemplateImportRequest"],
     ["pkg/client/templates.go", "TemplateDiagnostic"],
     ["pkg/client/templates.go", "TemplateImportResult"],
@@ -541,6 +589,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     const template = readFileSync(join(root, "internal/types/template.go"), "utf8");
     const consts = (src: string, re: RegExp) => new Set([...src.matchAll(re)].map((m) => m[1]));
     expect(union("TemplateScope")).toEqual(consts(template, /\bTemplateScope\w+\s+TemplateScope = "([a-z_]+)"/g));
+    expect(union("TemplateKind")).toEqual(consts(template, /\bTemplateKind\w+\s+TemplateKind = "([a-z_]+)"/g));
     expect(union("TemplateCoverage")).toEqual(consts(client, /\bTemplateCoverage\w+\s+TemplateCoverage = "([a-z_]+)"/g));
     expect(union("TemplateFormat")).toEqual(consts(client, /\bTemplateFormat\w+\s+TemplateFormat = "([a-z_]+)"/g));
     expect(union("TemplatePart")).toEqual(consts(client, /\bTemplatePart\w+\s+TemplatePart = "([a-z_]+)"/g));
@@ -650,6 +699,43 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set([...m[1].matchAll(/"([A-Z_]+)"/g)].map((x) => x[1]))).toEqual(goStates);
     expect(tsInterfaceBody(runsTs, "AgentRun")).toMatch(/admitted_at\?: string;/);
     expect(go).toMatch(/AdmittedAt \*time\.Time\s+`json:"admitted_at,omitempty"`/);
+  });
+
+  // Q-c: the queue's surface. A waiting run's place and a pool's slot counts are the same fields in Go and TS.
+  it.each([
+    ["internal/types/types.go", "RunQueue", "runs.ts", "RunQueue"],
+    ["pkg/client/runner_pools.go", "PoolSlots", "runner-pools.ts", "PoolSlots"],
+    ["pkg/client/runner_pools.go", "RunnerPoolCatalogueEntry", "runner-pools.ts", "RunnerPoolCatalogueEntry"],
+  ])("%s %s: full parity with the TS %s %s mirror", (goFile, goName, tsFile, tsName) => {
+    const go = readFileSync(join(root, goFile), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types", tsFile), "utf8");
+    const goTags = goJSONTags(go, goName);
+    expect(goTags.length).toBeGreaterThanOrEqual(5);
+    expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
+  });
+
+  it("AgentRun.queue and the slot fields are on the wire in Go and TS", () => {
+    const go = readFileSync(join(root, "internal/types/types.go"), "utf8");
+    expect(go).toMatch(/Queue\s+\*RunQueue\s+`json:"queue,omitempty"`/);
+    expect(tsInterfaceBody(runsTs, "AgentRun")).toMatch(/queue\?: RunQueue;/);
+    const pf = readFileSync(join(root, "ui/src/app/lib/types/preflight.ts"), "utf8");
+    const pv = readFileSync(join(root, "ui/src/app/lib/types/policy-preview.ts"), "utf8");
+    expect(tsInterfaceBody(pf, "PreflightResult")).toMatch(/runner_pool_slots\?: PoolSlots;/);
+    expect(tsInterfaceBody(pv, "PolicyPreviewResult")).toMatch(/runner_pool_slots\?: PoolSlots;/);
+    expect(readFileSync(join(root, "pkg/client/runs_create.go"), "utf8")).toMatch(/RunnerPoolSlots \*PoolSlots\s+`json:"runner_pool_slots,omitempty"`/);
+  });
+
+  // The three read-side runner facts: runner_online is a pointer on the Go side because false is a fact
+  // (offline) and absent is unknown, so the console reads `runner_online === false` for its offline arms.
+  it("AgentRun carries the runner name, liveness and last seen, with liveness a pointer", () => {
+    const go = readFileSync(join(root, "internal/types/types.go"), "utf8");
+    expect(go).toMatch(/RunnerOnline\s+\*bool\s+`json:"runner_online,omitempty"`/);
+    expect(go).toMatch(/RunnerName\s+string\s+`json:"runner_name,omitempty"`/);
+    expect(go).toMatch(/RunnerLastSeenAt\s+\*time\.Time\s+`json:"runner_last_seen_at,omitempty"`/);
+    const body = tsInterfaceBody(runsTs, "AgentRun");
+    expect(body).toMatch(/runner_online\?: boolean;/);
+    expect(body).toMatch(/runner_name\?: string;/);
+    expect(body).toMatch(/runner_last_seen_at\?: string;/);
   });
 
   // AutonomyResolution.bound_by names a rubric row or the org's component cap.

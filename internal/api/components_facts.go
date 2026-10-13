@@ -34,7 +34,8 @@ type componentFact struct {
 	Provider string `json:"provider,omitempty"`
 	// ID keys the row within one response: a stored component's id in its
 	// canonical spelling, "inline:<position in the request>" for one defined on
-	// the request, "git_provider:<provider>:<lane>[:<org>]" for a Git provider.
+	// the request (a built-in Git provider's too), "git_provider:<provider>:<lane>[:<org>]"
+	// for a Git provider.
 	ID      string `json:"id"`
 	Name    string `json:"name,omitempty"`
 	Version int    `json:"version,omitempty"` // a stored component's, as attached
@@ -45,6 +46,9 @@ type componentFact struct {
 	// Requirements is what the person has still to supply, as the checklist
 	// rows Review shows for the same grants. Never nil.
 	Requirements []SetupItem `json:"requirements"`
+	// signIn: an Azure DevOps row whose person has no Entra sign-in stored, the
+	// one cause the connect door fixes (not on the wire; accessFacts reads it).
+	signIn bool
 
 	// A git_provider's lane, the address its row clones from, and the draft's
 	// repositories on it.
@@ -132,8 +136,8 @@ type componentFactInputs struct {
 // componentFacts is the `components` of Review and of the policy preview: the
 // Git providers the draft's repositories live on, its agent, then attached
 // components in request order. Everything was decided by the caller's gates.
-// scm is Review's git_credential fact; the preview reads no credential and
-// passes nil. Nil when an exec run has no Git provider or attached component.
+// scm is Review's git_credential fact; the preview passes a presence-only one
+// (adoSignInPresenceFact) or nil. Nil when an exec run has no Git provider or attached component.
 func componentFacts(f componentFactInputs, scm *SCMAccess) []componentFact {
 	facts := gitProviderFacts(*f.req, f.spec, f.scmSite, scm)
 	enrichGitFacts(f, facts)
@@ -141,6 +145,10 @@ func componentFacts(f componentFactInputs, scm *SCMAccess) []componentFact {
 		facts = append(facts, agent)
 	}
 	for i, a := range f.comps.attached {
+		if a.builtin != nil {
+			facts = append(facts, a.builtin.fact(i, a.snapshot.Name, f))
+			continue
+		}
 		facts = append(facts, a.fact(i, f.comps, f.baseline))
 	}
 	return facts
@@ -168,7 +176,7 @@ func (a attachedComponent) fact(ordinal int, comps runComponents, baseline compo
 		f.Secrets = append(f.Secrets, componentSecretFact{Delivery: sec.Delivery.Mode, Shared: sec.Shared})
 		g := componentGrant(sec)
 		grants = append(grants, g)
-		if sec.Delivery.Mode == types.ComponentDeliveryHeader && !sec.Delivery.PlainHTTP {
+		if sec.Delivery.Mode == types.ComponentDeliveryHeader && !sec.Delivery.PlainHTTP && def.MCP == nil {
 			f.TLSIntercept = true
 		}
 		if !sec.Shared && slices.Contains(a.needsOwnSecrets, sec.SecretName) {
@@ -176,6 +184,9 @@ func (a attachedComponent) fact(ordinal int, comps runComponents, baseline compo
 		}
 	}
 	f.Requirements = append(f.Requirements, setupSecretItems(types.RunPolicySpec{EligibleGrants: missing}, nil)...)
+	if a.needsSignIn {
+		f.Requirements = append(f.Requirements, cliSignInItem(f.ID, f.Name))
+	}
 	switch {
 	case a.needsAdminSecret:
 		f.Status = componentUnavailable
@@ -211,6 +222,7 @@ func gitProviderFacts(req createRunRequest, spec types.RunPolicySpec, site types
 			facts = append(facts, componentFact{
 				Kind: types.ComponentGitProvider, Provider: repo.kind, ID: id, Reason: "workspace",
 				Status: gitProviderStatus(repo, scm), Requirements: []SetupItem{}, Lane: lane, Org: repo.org,
+				signIn: adoSignInFixable(repo, scm),
 			})
 			i = len(facts) - 1
 		}
@@ -275,9 +287,10 @@ func gitGrantServes(g types.GrantSpec, repo previewRepo) bool {
 }
 
 // gitProviderStatus is the person's connection to the provider where the door
-// read it: Review's git_credential fact, for the Azure DevOps organisation it
-// graded. Every other row — the preview's, and a GitHub one, which no door
-// grades yet — is unknown rather than a guess. A caller that is no person (the
+// read it: Review's git_credential fact, or the preview's presence-only one
+// (needs_input when none is stored), for the Azure DevOps organisation it
+// graded. Every other row — a stored sign-in the preview did not grade, and a
+// GitHub one, which no door grades yet — is unknown rather than a guess. A caller that is no person (the
 // shared admin token) has no connection to make: unavailable, never a prompt
 // to sign in.
 func gitProviderStatus(repo previewRepo, scm *SCMAccess) string {
@@ -291,4 +304,12 @@ func gitProviderStatus(repo previewRepo, scm *SCMAccess) string {
 		return componentUnavailable
 	}
 	return componentNeedsInput
+}
+
+// adoSignInFixable is whether the person's missing Azure DevOps sign-in is the
+// Entra one the connect popup captures: not an own-token row (the fix is a pasted
+// token) and not an ended or short sign-in, which Launch's refusal names.
+func adoSignInFixable(repo previewRepo, scm *SCMAccess) bool {
+	return scm != nil && scm.Kind == repo.kind && scm.Org == repo.org && scm.State == modelAccessNotConfigured &&
+		scm.TokenMode != string(types.ADOTokenModeOwnPAT)
 }

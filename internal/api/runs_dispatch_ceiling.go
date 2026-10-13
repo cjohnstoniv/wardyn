@@ -14,7 +14,9 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // The dispatch-time half of a governance profile: the phase that re-asserts an
@@ -64,8 +66,11 @@ type dispatchCeiling struct {
 	// would kill every broker lane on a deployment with no profile at all.
 	deny []string
 	// profile is the assigned profile's NAME, for the run.ceiling.reassert audit
-	// event. Nothing branches on it.
+	// event and the placement_denied sentence.
 	profile string
+	// denyPlacements is the profile's deny_placements, held against the run's placement once more at
+	// dispatch (dispatchPlacementDenied).
+	denyPlacements []types.Placement
 	// maxEphemeralDiskMiB is GovernanceLimits.MaxEphemeralDiskMiB — the profile's
 	// ceiling on the writable scratch a run gets, 0 = unlimited. It rides here for
 	// the same reason deny does: applyEphemeralDisk is a dispatch phase, and the
@@ -76,10 +81,12 @@ type dispatchCeiling struct {
 	// authored on POLICIES (a refusal would break every stored policy the day an
 	// admin first writes a limit — internal/types/governance.go says so).
 	maxEphemeralDiskMiB int
-	// maxCPUMillis and maxMemoryMiB are GovernanceLimits.MaxCPUMillis/MaxMemoryMiB, 0 =
-	// unlimited, carried for the same reason: applySandboxSize is a dispatch phase and
-	// re-applies what create and preflight already bound, so a lane that resolved its
-	// spec some other way still cannot hand out more than the profile allows.
+	// maxCPUMillis and maxMemoryMiB are GovernanceLimits.MaxCPUMillis/MaxMemoryMiB as the
+	// member cap reads them (memberBound: never below the member default), 0 = unlimited,
+	// carried for the same reason: applySandboxSize is a dispatch phase and re-applies what
+	// create and preflight already bound, so a lane that resolved its spec some other way
+	// still cannot hand out more than the profile allows, and dispatch never cuts what the
+	// fold applied.
 	maxCPUMillis, maxMemoryMiB int
 	// adoEntra is what the autonomy gate RESOLVED about this run's per-person
 	// Azure DevOps lane at create (adoEntraGrade, runs_dispatch_ado_inject.go).
@@ -130,10 +137,10 @@ func ceilingForDispatch(c governanceCeiling, ado adoEntraGrade, bedrock bedrockC
 		return dispatchCeiling{resolved: true, adoEntra: ado, bedrock: bedrock, adoStanding: standing}
 	}
 	return dispatchCeiling{
-		resolved: true, deny: c.Spec.DeniedDomains, profile: c.Profile.Name,
+		resolved: true, deny: c.Spec.DeniedDomains, profile: c.Profile.Name, denyPlacements: c.Limits.DenyPlacements,
 		localSelfDefinedComponents: c.Limits.LocalSelfDefinedComponents,
-		maxEphemeralDiskMiB:        c.Limits.MaxEphemeralDiskMiB, maxCPUMillis: c.Limits.MaxCPUMillis,
-		maxMemoryMiB: c.Limits.MaxMemoryMiB, adoEntra: ado, bedrock: bedrock, adoStanding: standing,
+		maxEphemeralDiskMiB:        c.Limits.MaxEphemeralDiskMiB, maxCPUMillis: memberBound(c.Limits.MaxCPUMillis, c.memberSize().CPUMillis),
+		maxMemoryMiB: memberBound(c.Limits.MaxMemoryMiB, c.memberSize().MemoryMiB), adoEntra: ado, bedrock: bedrock, adoStanding: standing,
 		agentGuardrailLocks: c.Limits.AutonomyRubric != nil && c.Limits.AutonomyRubric.AgentGuardrailLocks,
 	}
 }
@@ -146,37 +153,36 @@ func ceilingForDispatch(c governanceCeiling, ado adoEntraGrade, bedrock bedrockC
 // docs/AUDIT-ACTIONS.md calls this datum "(full policy snapshot)" and the
 // run-detail Effective-policy widget reads it.
 //
-// disk_mib_filled rather than an enforcement WORD: the provenance of the size is
-// what dispatch actually holds. Whether a cap binds is the host's answer, decided
-// per driver inside applyDiskQuota from `docker info`, and the orchestrator
-// aggregates only the WEAKEST word across substrates — so naming one here would
-// disclose a guess. The bit says the thing that follows from it: this size was
-// filled in from the org default, so a host that cannot keep it runs UNCAPPED
-// instead of refusing the run.
+// disk_mib_filled rather than an enforcement WORD: whether the size is soft is what dispatch
+// actually holds. Whether a cap binds is the host's answer, decided per driver inside
+// applyDiskQuota from `docker info`, and the orchestrator aggregates only the WEAKEST word across
+// substrates — so naming one here would disclose a guess. The bit says what follows from it: no
+// policy wrote this size, so a host that cannot keep it runs UNCAPPED instead of refusing the run.
+// It is still written for readers that predate disk_mib_basis, which says where the size came from.
 type effectivePolicyDatum struct {
 	types.RunPolicySpec
-	DiskMiBFilled bool `json:"disk_mib_filled,omitempty"`
+	DiskMiBFilled bool                  `json:"disk_mib_filled,omitempty"`
+	DiskMiBBasis  client.MainDriveBasis `json:"disk_mib_basis,omitempty"`
+	// DiskMiBDefaultSource is the layer whose default sized the run (pool or deployment), with basis default.
+	DiskMiBDefaultSource types.LimitSource `json:"disk_mib_default_source,omitempty"`
 }
 
-// applyEphemeralDisk is THE site where a run's ephemeral scratch size is decided,
-// and it decides it for every dispatch lane there is. Returns whether the number
-// it left on the policy was FILLED IN rather than asked for (runner.Resources.
-// DiskMiBFilled — the bit a driver that cannot enforce a cap needs).
+// applyEphemeralDisk is where the org and profile maximums bind a run's ephemeral scratch size at
+// dispatch, and where the lanes with no fold decision (scans, record, verify, logins, probes) get
+// theirs. A create has already decided its size (mainDriveFor) and dispatch writes that first, so
+// this is then a re-assertion. Returns whether the number it left on the policy was FILLED IN
+// rather than asked for (runner.Resources.DiskMiBSoft — the bit a driver that cannot enforce a
+// cap needs).
 //
 // Precedence, once: the request/policy's own resources.disk_mib → FILLED from the
 // org's storage.ephemeral.default_disk_mib when that is zero → CLAMPED to
 // min(storage.ephemeral.max_disk_mib, the profile's MaxEphemeralDiskMiB), zeros
 // meaning "no bound" on either side.
 //
-// A zero request with no org default stays zero — unbounded scratch, byte-for-byte
-// today. A maximum bounds a REQUEST; it never invents one, and this is not
-// composer.Clamp's capField idiom (which does fill a zero up to a SPEC cap):
-// filling from a maximum would give every request-less run a non-zero DiskMiB, and
-// the docker driver fails a create closed on overlay2-over-ext4 — Docker Desktop,
-// WSL2, stock Ubuntu — so a single admin number would have bricked every laptop
-// run in the estate. The FILL itself is bounded by the same asymmetry on the other
-// side: it degrades to uncapped there rather than failing the run closed, which is
-// what DiskMiBFilled buys (see applyDiskQuota).
+// A zero request with no org default stays zero here. A create does differently: its size is a
+// soft request, so mainDriveFor gives a run with a cap and no default that cap, and a host that
+// cannot keep a soft size runs uncapped rather than failing the run closed (see applyDiskQuota).
+// That is why a maximum may now size a run at create; these lanes keep their own rule.
 //
 // WHY HERE and not on the create path: resolvePolicy deliberately does not clamp
 // an admin-authored STORED policy, and resourceLimitsToRunner is a pure mapper
@@ -192,11 +198,9 @@ type effectivePolicyDatum struct {
 // ceilingForDispatch above returns no limits at all for Profile == nil (an
 // operator short-circuits earlier still, at effectiveCeiling's step 1).
 //
-// The WHOLE expression is ephemeralDiskFor below, which POST /runs/preflight
-// also calls (previewEphemeralDisk): the preview reports the number this run
-// will get, org fill and both ceilings included.
-// TestPreflightAndDispatchAgreeOnEphemeralDisk is the pin; a comment claiming
-// the two "cannot disagree" is not one.
+// The dry doors report the number a create's run gets from the fold's mainDriveFor, not from here.
+// TestPreflightAndDispatchAgreeOnEphemeralDisk is the pin; a comment claiming the two "cannot
+// disagree" is not one.
 func applyEphemeralDisk(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec,
 	siteCfg types.SiteConfig, c dispatchCeiling,
 ) bool {
@@ -231,27 +235,48 @@ func applyEphemeralDisk(ctx context.Context, run types.AgentRun, policy *types.R
 	return false
 }
 
+// settleMainDrive is dispatch's disk step. A create's fold decided the main drive (mainDriveFor):
+// its size is written here and its soft bit rides along, then the org and profile maximums
+// re-apply (a no-op on a decided size). A lane with no decision (md nil) keeps applyEphemeralDisk.
+// It returns whether the size is soft.
+func settleMainDrive(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, siteCfg types.SiteConfig,
+	c dispatchCeiling, md *mainDriveDecision,
+) bool {
+	if md != nil {
+		md.apply(policy)
+	}
+	return applyEphemeralDisk(ctx, run, policy, siteCfg, c) || (md != nil && md.Soft)
+}
+
+// memberBound is a profile maximum as the member cap reads it (runnerpool.MemberCap with no ceiling
+// size): never below the member default; 0, no maximum, is left alone.
+func memberBound(profileMax, memberDefault int) int {
+	if profileMax <= 0 {
+		return 0
+	}
+	return runnerpool.MemberCap(0, profileMax, memberDefault)
+}
+
 // applySandboxSize is the dispatch half of the profile's CPU/memory maximums: the same
 // composer.CapResources create and preflight ran, applied once more to the policy the sandbox
-// is about to be built from. It writes a FRESH block (see CapResources), never the caller's.
+// is about to be built from. c's maximums are already the member cap (memberBound), so no further
+// floor applies. It writes a FRESH block (see CapResources), never the caller's.
 func applySandboxSize(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, c dispatchCeiling) {
 	capped, changed := composer.CapResources(policy.Resources,
-		types.GovernanceLimits{MaxCPUMillis: c.maxCPUMillis, MaxMemoryMiB: c.maxMemoryMiB})
+		types.GovernanceLimits{MaxCPUMillis: c.maxCPUMillis, MaxMemoryMiB: c.maxMemoryMiB}, types.ResourceLimits{})
 	if !changed {
 		return
 	}
 	policy.Resources = capped
 	slog.InfoContext(ctx, "wardynd: "+composer.WarnResourcesCapped,
 		slog.String("run_id", run.ID.String()), slog.Int("cpu_millis", capped.CPUMillis), slog.Int("memory_mib", capped.MemoryMiB),
-		slog.Int("profile_max_cpu_millis", c.maxCPUMillis), slog.Int("profile_max_memory_mib", c.maxMemoryMiB))
+		slog.Int("member_cap_cpu_millis", c.maxCPUMillis), slog.Int("member_cap_memory_mib", c.maxMemoryMiB))
 }
 
-// ephemeralDiskFor is §6.3's precedence, as ONE expression with TWO callers that
-// must never disagree: applyEphemeralDisk above (what the sandbox gets) and
-// previewEphemeralDisk (what POST /runs/preflight reports). request/policy
-// disk_mib → FILLED from the org's default_disk_mib when that is zero → CLAMPED
-// to min(the org's max_disk_mib, the profile's MaxEphemeralDiskMiB), zeros
-// meaning "no bound" on either ceiling.
+// ephemeralDiskFor is applyEphemeralDisk's precedence: the policy's disk_mib →
+// FILLED from the org's default_disk_mib when that is zero → CLAMPED to
+// min(the org's max_disk_mib, the profile's MaxEphemeralDiskMiB), zeros meaning
+// "no bound" on either ceiling.
 //
 // SCOPE is the CALLER's to decide and differs per ceiling on purpose: eph is the
 // ORG's block and binds every caller, operators and unassigned members included;
@@ -259,7 +284,7 @@ func applySandboxSize(ctx context.Context, run types.AgentRun, policy *types.Run
 //
 // `filled` is the provenance bit, not a second number: a size the org filled in
 // degrades to uncapped on a host that cannot keep it (runner.Resources.
-// DiskMiBFilled → applyDiskQuota), while a policy-authored one fails the create
+// DiskMiBSoft → applyDiskQuota), while a policy-authored one fails the create
 // closed there. Only the ORG DEFAULT is a fill — a maximum bounds a request and
 // never invents one.
 func ephemeralDiskFor(requested int, eph types.EphemeralProvider, profileMaxDiskMiB int) (disk int, filled bool) {
@@ -281,88 +306,32 @@ func orgEphemeralOf(siteCfg types.SiteConfig) types.EphemeralProvider {
 	return types.EphemeralProvider{}
 }
 
-// boundResources is the sandbox-size half of resolveRunPolicy (ephemeral disk, CPU, memory), called
-// identically from its inline arm and its stored/default arm (the drift that
-// let one of them preview a size the other did not).
+// boundResources is the CPU and memory half of resolveRunPolicy, called identically from its inline
+// arm and its stored/default arm (the drift that let one of them preview a size the other did not).
+// The main drive is not here: stepMainDrive sizes it once, for every door (run_main_drive.go).
 //
-// Scope, per ceiling: the profile's MaxEphemeralDiskMiB, MaxCPUMillis and MaxMemoryMiB bind an ASSIGNED MEMBER
-// only — an operator short-circuits at effectiveCeiling's step 1 and an
-// unassigned member resolves no limits — so it is ZEROED for anyone else rather
-// than the block being skipped, because the ORG's numbers bind every caller.
-//
-// PREVIEW (dryRun) gets the WHOLE dispatch expression, org fill and org clamp
-// included, so POST /runs/preflight reports the number the run will get. LAUNCH
-// gets the clamp half only, and there it is a provable no-op: composer.Clamp (or
-// the stored arm's boundUserSpec) already applied the same profile min(), and
-// applyEphemeralDisk applies all of it again at dispatch. The FILL is dispatch's
-// alone — written into a spec that goes on to launch it would reach the driver
-// as a POLICY-AUTHORED size and be refused at create on every overlay2-over-ext4
-// host, which is the whole reason runner.Resources carries DiskMiBFilled.
-func (s *Server) boundResources(ctx context.Context, r *http.Request, spec *types.RunPolicySpec,
-	ceiling governanceCeiling, dryRun bool,
-) []string {
-	profileMax := 0
-	var limits types.GovernanceLimits
-	if ceiling.Profile != nil && !s.runUngoverned(r.Context()) {
-		profileMax = ceiling.Limits.MaxEphemeralDiskMiB
-		limits = types.GovernanceLimits{MaxCPUMillis: ceiling.Limits.MaxCPUMillis, MaxMemoryMiB: ceiling.Limits.MaxMemoryMiB}
+// Scope, per ceiling: the profile's MaxCPUMillis and MaxMemoryMiB bind an ASSIGNED MEMBER only — an
+// operator short-circuits at effectiveCeiling's step 1 and an unassigned member resolves no limits —
+// so they are ZEROED for anyone else rather than the block being skipped.
+func (s *Server) boundResources(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, ceiling governanceCeiling) {
+	// The member who sent no policy never reaches composer.Clamp (it would drop their workspace
+	// mounts), so this resource-only bound is the only thing between their ceiling's own size and
+	// their sandbox. Its cut is not warned here: stepResources applies the run's ask within every
+	// limit and says when it was cut.
+	if bounded, changed := s.memberResources(ctx, spec.Resources, ceiling); changed {
+		spec.Resources = bounded
 	}
-	// CPU and memory first, and on BOTH arms of both call sites: the member who sent no policy
-	// never reaches composer.Clamp (it would drop their workspace mounts), so this resource-only
-	// bound is the only thing between their ceiling's own size and their sandbox.
-	capped := false
-	if bounded, changed := composer.CapResources(spec.Resources, limits); changed {
-		spec.Resources, capped = bounded, true
-	}
-	if dryRun {
-		capped = s.previewEphemeralDisk(ctx, spec, profileMax) || capped
-	} else {
-		capped = capEphemeralDiskPreview(spec, profileMax) || capped
-	}
-	if capped {
-		return []string{composer.WarnResourcesCapped}
-	}
-	return nil
 }
 
-// previewEphemeralDisk writes the number dispatch will settle on into a PREVIEW
-// spec and reports whether that was a CLAMP (a fill is a difference, but it is
-// not "capped to operator maximum" and must not borrow that sentence).
-//
-// Preview only — resolveRunPolicy calls it on the dryRun arm alone. A fill
-// written into a spec that goes on to LAUNCH would reach the driver as a
-// POLICY-AUTHORED size and be refused at create on every overlay2-over-ext4
-// host; the fill is dispatch's precisely so DiskMiBFilled can carry the
-// provenance with it. The clamp half is safe on either arm and the create arm
-// keeps doing its own (capEphemeralDiskPreview), so the asymmetry stays.
-//
-// A FRESH Resources block, never an in-place write — the same aliasing rule
-// applyEphemeralDisk obeys. A site-config read that fails degrades to "no org
-// block": the preview is advisory and never blocks Review.
-func (s *Server) previewEphemeralDisk(ctx context.Context, spec *types.RunPolicySpec, profileMaxDiskMiB int) bool {
-	var siteCfg types.SiteConfig
-	if s.cfg.Store != nil {
-		got, err := s.cfg.Store.GetSiteConfig(ctx)
-		if err != nil {
-			slog.WarnContext(ctx, "wardynd: preflight could not read the org storage block; previewing without it", slog.Any("error", err))
-		}
-		siteCfg = got
+// memberResources is a spec's CPU and memory under the caller's profile maximums (composer.CapResources
+// at the member default): what boundResources leaves on every run's spec, and the size the pool list
+// takes as an untouched run's, so the two answer one size. Anyone not under a profile is unchanged.
+func (s *Server) memberResources(ctx context.Context, res *types.ResourceLimits, ceiling governanceCeiling) (*types.ResourceLimits, bool) {
+	var limits types.GovernanceLimits
+	if ceiling.Profile != nil && !s.runUngoverned(ctx) {
+		limits = types.GovernanceLimits{MaxCPUMillis: ceiling.Limits.MaxCPUMillis, MaxMemoryMiB: ceiling.Limits.MaxMemoryMiB}
 	}
-	requested := 0
-	if spec.Resources != nil {
-		requested = spec.Resources.DiskMiB
-	}
-	disk, filled := ephemeralDiskFor(requested, orgEphemeralOf(siteCfg), profileMaxDiskMiB)
-	if disk == requested {
-		return false
-	}
-	rl := types.ResourceLimits{}
-	if spec.Resources != nil {
-		rl = *spec.Resources
-	}
-	rl.DiskMiB = disk
-	spec.Resources = &rl
-	return !filled
+	return composer.CapResources(res, limits, ceiling.memberSize())
 }
 
 // resolveDispatchCeiling is effectiveCeiling + ceilingForDispatch, for the lanes

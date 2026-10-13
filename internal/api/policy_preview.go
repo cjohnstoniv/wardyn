@@ -54,14 +54,26 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	response := policyPreviewFacts(req, f.spec, f.source, f.policyWarns, f.scmSite, f.mpChoice)
 	response.Provenance = f.prov
+	response.Attachments = f.attachments
 	response.RunnerPool, response.RunnerPools = f.place.facts()
+	response.Image, response.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
+	response.Limits, response.ResourcesApplied = f.place.sizeFacts()
+	response.RunnerPoolSlots = s.runnerPoolSlots(r.Context(), f.place, *f.req)
+	response.MainDrive = f.mainDrive.applied()
+	runRepos := append([]string{f.req.Repo, f.req.DevcontainerRepo}, repoLocatorsOf(f.spec.WorkspaceRepos)...)
 	response.Components = componentFacts(componentFactInputs{
 		req: f.req, spec: f.spec, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
 		ceiling: f.ceiling, mpChoice: f.mpChoice, pushSets: f.pushSets,
-	}, nil)
+	}, s.adoSignInPresenceFact(r.Context(), f.scmSite, oidcHumanFromContext(r.Context()), runRepos))
 	// After the facts' own warnings, which previewSafeWarnings has already filtered.
 	if f.adoNarrowed != "" {
 		response.Warnings = append(response.Warnings, f.adoNarrowed)
+	}
+	var err error
+	if response.Access, err = s.accessFor(r, accessInputs{req: f.req, spec: f.spec, prov: f.prov, source: f.source,
+		scmSite: f.scmSite, mpChoice: f.mpChoice, comps: f.comps, facts: response.Components, level: f.autonomy.Level}); err != nil {
+		writeServerError(w, r, "resolve capability", err)
+		return
 	}
 	writeJSON(w, http.StatusOK, response)
 }
@@ -73,7 +85,7 @@ func (s *Server) authorizePreviewRequest(r *http.Request, req createRunRequest) 
 	if msg, err := s.agentRosterRefusal(r.Context(), req.Agent); err != nil {
 		return governanceCeiling{}, "", runServerError("get site config", err)
 	} else if msg != "" {
-		return governanceCeiling{}, "", runError(http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg)
+		return governanceCeiling{}, "", runError(http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg).forTool(harnessRefusalTool(req))
 	}
 	if reservedRunTasks[req.Task] {
 		return governanceCeiling{}, "", runError(http.StatusBadRequest, reasonRunTaskReserved, fmt.Sprintf("task %q is set by the server and cannot be requested directly", req.Task))
@@ -115,8 +127,10 @@ func (s *Server) authorizePreviewRequest(r *http.Request, req createRunRequest) 
 	return ceiling, cc, nil
 }
 
-// Only workspace declarations and their clone hosts are safe before dispatch;
-// site-config, SSH, PAT and ADO host unions remain pending.
+// unionPreviewWorkspaceEgress is the workspace half of deriveRunEgress, unioned
+// before the requirements fold so Review grades it; stepDerivedEgress adds the
+// grant lanes after every gate. The site-config, ADO and model-provider host
+// unions remain pending.
 func unionPreviewWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.Workspace) {
 	unionWorkspaceEgress(spec, workspaces)
 	for _, ws := range workspaces {
@@ -132,7 +146,7 @@ func previewPending(req createRunRequest, choice runProviderChoice) []policyPrev
 	if _, model := agentLLMProvider(req.Agent); model && createDoorIsModelRun(req) && !choice.chosen {
 		pending = append(pending, previewProvider)
 	}
-	if req.Drive != nil && req.Drive.Enabled {
+	if req.Drive != nil && req.Drive.Enabled || len(req.Drives) > 0 {
 		pending = append(pending, previewDrive)
 	}
 	return pending

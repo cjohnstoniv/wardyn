@@ -47,6 +47,7 @@ func (t RunnerPoolRunType) Plural() string {
 const (
 	RunnerPoolCPUMillisMax = 1_000_000     // milli-CPU: a thousand CPUs
 	RunnerPoolMemoryMiBMax = 16 << 20      // MiB: 16 TiB
+	RunnerPoolDiskMiBMax   = 16 << 20      // MiB: 16 TiB, the request contract's disk bound
 	RunnerPoolSecondsMax   = math.MaxInt32 // about 68 years
 )
 
@@ -65,6 +66,23 @@ func (a RunnerPoolAmount) validate(field, unit string, bound int) error {
 		return fmt.Errorf("%s: the cap is at most %d %s", field, bound, unit)
 	case a.Default > a.Cap:
 		return fmt.Errorf("%s: the default (%d) is past the cap (%d)", field, a.Default, a.Cap)
+	}
+	return nil
+}
+
+// validateDisk is the main-drive size's check: an amount like memory's, and a
+// whole number of GiB, because the console sizes a drive in GiB. A nil size is a
+// pool that sets no main-drive bound.
+func validateDisk(runType string, a *RunnerPoolAmount) error {
+	if a == nil {
+		return nil
+	}
+	field := runType + ".disk_mib"
+	if err := a.validate(field, "MiB", RunnerPoolDiskMiBMax); err != nil {
+		return err
+	}
+	if a.Default%1024 != 0 || a.Cap%1024 != 0 {
+		return fmt.Errorf("%s: set a default and a cap in whole GiB (multiples of 1024 MiB)", field)
 	}
 	return nil
 }
@@ -105,18 +123,24 @@ func (d RunnerPoolDuration) validate(field string) error {
 // idle stop: a Background task ends when its command or agent exits, or at its
 // maximum lifetime. Decoding a body that sends `idle` here fails.
 type RunnerPoolBackgroundLimits struct {
-	CPUMillis RunnerPoolAmount   `json:"cpu_millis"`
-	MemoryMiB RunnerPoolAmount   `json:"memory_mib"`
-	Lifetime  RunnerPoolDuration `json:"lifetime"`
+	CPUMillis RunnerPoolAmount `json:"cpu_millis"`
+	MemoryMiB RunnerPoolAmount `json:"memory_mib"`
+	// DiskMiB bounds the main drive of this run type's runs: what an untouched run
+	// gets and the most a request may ask for, in MiB, each a whole number of GiB.
+	// Nil: the pool sets no main-drive bound.
+	DiskMiB  *RunnerPoolAmount  `json:"disk_mib,omitempty"`
+	Lifetime RunnerPoolDuration `json:"lifetime"`
 }
 
 // RunnerPoolInteractiveLimits are a pool's limits for Interactive environments,
 // which alone have an idle stop.
 type RunnerPoolInteractiveLimits struct {
-	CPUMillis RunnerPoolAmount   `json:"cpu_millis"`
-	MemoryMiB RunnerPoolAmount   `json:"memory_mib"`
-	Lifetime  RunnerPoolDuration `json:"lifetime"`
-	Idle      RunnerPoolDuration `json:"idle"`
+	CPUMillis RunnerPoolAmount `json:"cpu_millis"`
+	MemoryMiB RunnerPoolAmount `json:"memory_mib"`
+	// DiskMiB is the main drive's bound, as on RunnerPoolBackgroundLimits.
+	DiskMiB  *RunnerPoolAmount  `json:"disk_mib,omitempty"`
+	Lifetime RunnerPoolDuration `json:"lifetime"`
+	Idle     RunnerPoolDuration `json:"idle"`
 }
 
 // RunnerPoolLimits is everything a pool limits. A run type with limits is a run
@@ -145,6 +169,7 @@ func (l RunnerPoolLimits) Validate() error {
 		if err := errors.Join(
 			b.CPUMillis.validate("background.cpu_millis", "milli-CPU", RunnerPoolCPUMillisMax),
 			b.MemoryMiB.validate("background.memory_mib", "MiB", RunnerPoolMemoryMiBMax),
+			validateDisk("background", b.DiskMiB),
 			b.Lifetime.validate("background.lifetime"),
 		); err != nil {
 			return err
@@ -154,6 +179,7 @@ func (l RunnerPoolLimits) Validate() error {
 		if err := errors.Join(
 			i.CPUMillis.validate("interactive.cpu_millis", "milli-CPU", RunnerPoolCPUMillisMax),
 			i.MemoryMiB.validate("interactive.memory_mib", "MiB", RunnerPoolMemoryMiBMax),
+			validateDisk("interactive", i.DiskMiB),
 			i.Lifetime.validate("interactive.lifetime"),
 			i.Idle.validate("interactive.idle"),
 		); err != nil {
@@ -273,9 +299,13 @@ type ConcurrencyBound struct {
 // must allow it, and governance allows it only when its profile does, whatever
 // finite maximum it also sets.
 type EffectiveRunLimits struct {
-	RunType       RunnerPoolRunType  `json:"run_type"`
-	CPUMillis     EffectiveLimit     `json:"cpu_millis"`
-	MemoryMiB     EffectiveLimit     `json:"memory_mib"`
+	RunType   RunnerPoolRunType `json:"run_type"`
+	CPUMillis EffectiveLimit    `json:"cpu_millis"`
+	MemoryMiB EffectiveLimit    `json:"memory_mib"`
+	// DiskMiB is the main drive's size in MiB. An unlimited Default means an untouched
+	// run gets no size (its scratch is unbounded); with no default but a cap, an
+	// untouched run gets the cap (foldField's rule).
+	DiskMiB       EffectiveLimit     `json:"disk_mib"`
 	Lifetime      EffectiveLimit     `json:"lifetime_sec"`
 	LifetimeSpan  EffectiveLimit     `json:"lifetime_span_sec"`
 	LifetimeLease EffectiveLimit     `json:"lifetime_lease_sec"`

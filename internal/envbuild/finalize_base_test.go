@@ -34,7 +34,7 @@ func TestFinalizeBase_WrapsPresentBase(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	built, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-1:latest", nil)
+	built, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-1:latest", nil, false)
 	if err != nil {
 		t.Fatalf("FinalizeBase: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestFinalizeBase_PullsAbsentBase(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	if _, err := b.FinalizeBase(context.Background(), "myco/dev:latest", "wardyn-byoi/run-2:latest", nil); err != nil {
+	if _, err := b.FinalizeBase(context.Background(), "myco/dev:latest", "wardyn-byoi/run-2:latest", nil, false); err != nil {
 		t.Fatalf("FinalizeBase: %v", err)
 	}
 	if !f.pullCalled {
@@ -75,7 +75,7 @@ func TestFinalizeBase_PrePulledDigestBaseIsNotRePulled(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	if _, err := b.FinalizeBase(context.Background(), ref, "wardyn-byoi/run-d:latest", nil); err != nil {
+	if _, err := b.FinalizeBase(context.Background(), ref, "wardyn-byoi/run-d:latest", nil, false); err != nil {
 		t.Fatalf("FinalizeBase on a pre-pulled digest base: %v", err)
 	}
 	if f.pullCalled {
@@ -90,7 +90,7 @@ func TestFinalizeBase_FailsClosedOnBuildError(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	_, err := b.FinalizeBase(context.Background(), "distroless/static", "wardyn-byoi/run-3:latest", nil)
+	_, err := b.FinalizeBase(context.Background(), "distroless/static", "wardyn-byoi/run-3:latest", nil, false)
 	if err == nil {
 		t.Fatal("expected FinalizeBase to fail closed on a wrap-build error")
 	}
@@ -112,7 +112,7 @@ func TestFinalizeBase_RefusesBaseWithOnBuildTriggers(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	_, err := b.FinalizeBase(context.Background(), "evil/base:latest", "wardyn-byoi/run-5:latest", nil)
+	_, err := b.FinalizeBase(context.Background(), "evil/base:latest", "wardyn-byoi/run-5:latest", nil, false)
 	if err == nil {
 		t.Fatal("expected FinalizeBase to refuse a base carrying ONBUILD triggers")
 	}
@@ -188,7 +188,7 @@ func TestFinalizeBase_FailsWhenToolsDirMissing(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	// No ToolsDir configured (and no env var in this test).
 	t.Setenv(envToolsDir, "")
-	if _, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-4:latest", nil); err == nil {
+	if _, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-4:latest", nil, false); err == nil {
 		t.Fatal("expected FinalizeBase to fail closed with no tools dir")
 	}
 }
@@ -209,7 +209,7 @@ func TestFinalizeBase_AppliesOwnDeadline(t *testing.T) {
 	b.ToolsDir = toolsDirWithRequired(t)
 	b.BuildTimeout = time.Hour // any positive value; the assertion is presence, not the exact deadline
 
-	if _, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-6:latest", nil); err != nil {
+	if _, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-6:latest", nil, false); err != nil {
 		t.Fatalf("FinalizeBase: %v", err)
 	}
 	if !f.lastImageListHadDeadline {
@@ -237,7 +237,7 @@ func TestFinalizeBase_PrePulledTagAndDigestBaseIsNotRePulled(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	if _, err := b.FinalizeBase(context.Background(), ref, "wardyn-byoi/run-t:latest", nil); err != nil {
+	if _, err := b.FinalizeBase(context.Background(), ref, "wardyn-byoi/run-t:latest", nil, false); err != nil {
 		t.Fatalf("FinalizeBase on a pre-pulled repo:tag@sha256 base: %v", err)
 	}
 	if f.pullCalled {
@@ -257,7 +257,7 @@ func TestFinalizeBase_AbsentDigestBasePullsExactlyOnce(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	if _, err := b.FinalizeBase(context.Background(), ref, "wardyn-byoi/run-a:latest", nil); err != nil {
+	if _, err := b.FinalizeBase(context.Background(), ref, "wardyn-byoi/run-a:latest", nil, false); err != nil {
 		t.Fatalf("FinalizeBase on an absent digest base: %v", err)
 	}
 	pulls := 0
@@ -337,7 +337,7 @@ func TestFinalizeBase_DigestInspectDaemonErrorIsNotAPull(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	_, err := b.FinalizeBase(context.Background(), ref, "wardyn-byoi/run-e:latest", nil)
+	_, err := b.FinalizeBase(context.Background(), ref, "wardyn-byoi/run-e:latest", nil, false)
 	if err == nil {
 		t.Fatal("FinalizeBase with an unanswerable daemon: got nil error")
 	}
@@ -346,5 +346,38 @@ func TestFinalizeBase_DigestInspectDaemonErrorIsNotAPull(t *testing.T) {
 	}
 	if f.pullCalled {
 		t.Errorf("a daemon that could not answer is not an absent image — it must not trigger a pull (pulled %v)", f.pulledRefs)
+	}
+}
+
+// TestFinalizeBase_ForcePullPullsAPresentBase: a refresh pulls the base again although the host
+// has it (a mutable tag the registry has since moved), and a pull that fails fails the wrap with
+// the kept image untouched.
+func TestFinalizeBase_ForcePullPullsAPresentBase(t *testing.T) {
+	newBuilder := func() (*fakeEnvbuilderDocker, *Builder) {
+		f := newFakeEnvbuilderDocker()
+		f.imagesPresent["ubuntu:24.04"] = true
+		b := newWithClient(f, "envbuilder:test", "")
+		b.ToolsDir = toolsDirWithRequired(t)
+		return f, b
+	}
+
+	f, b := newBuilder()
+	if _, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-fp:latest", nil, true); err != nil {
+		t.Fatalf("FinalizeBase(forcePull): %v", err)
+	}
+	if len(f.pulledRefs) != 1 || f.pulledRefs[0] != "ubuntu:24.04" {
+		t.Fatalf("pulled %v, want [ubuntu:24.04] although the base was present", f.pulledRefs)
+	}
+	if !f.imageBuildCalled {
+		t.Fatal("the wrap did not run after the pull")
+	}
+
+	f, b = newBuilder()
+	f.pullErr = errors.New("registry unreachable")
+	if _, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-fq:latest", nil, true); err == nil {
+		t.Fatal("a failed forced pull must fail the wrap")
+	}
+	if f.imageBuildCalled {
+		t.Fatal("the wrap ran after the forced pull failed")
 	}
 }

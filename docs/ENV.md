@@ -254,7 +254,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_ALLOW_USER_ENV_SECRET` | bool | (unset) | let MEMBERS hold `env_secret` and `file_secret` grants. Default-unset DROPS a member's `env_secret` or `file_secret` grant even when the operator's ceiling lists the exact pairing (`dropAdminOnlyEnvSecretGrants`, `inline_policy_bounds.go`). [Details](#wardyn_allow_user_env_secret) |
 | `WARDYN_EGRESS_SECOND_HUMAN` | bool | (unset) | four-eyes on egress approvals: the human who DECIDES an `egress_domain` approval must not be the human who created the run (`requireSecondHuman`, `approvals_second_human.go`). **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_egress_second_human) |
 | `WARDYN_CAPABILITY_SECOND_HUMAN` | bool | (unset) | four-eyes on Azure DevOps capability escalations: the human who DECIDES one must not be the human who created the run. **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_capability_second_human) |
-| `WARDYN_GOVERNANCE_SECOND_HUMAN` | bool | (unset) | four-eyes on governance writes: a write by a human to a governance profile, a capability grant or a key-domain assignment is stored as a pending change, and a second, distinct human must approve it. [Details](#wardyn_governance_second_human) |
+| `WARDYN_GOVERNANCE_SECOND_HUMAN` | bool | (unset) | four-eyes on governance writes: a human's write to a governance profile, a capability grant, a key-domain assignment or `local_credential_delivery` is stored as a pending change. A second, distinct human must approve it. [Details](#wardyn_governance_second_human) |
 | `WARDYN_GOVERNANCE_CHANGE_TTL` | duration | `72h` | how long a governance change held for a second human waits for approval (flag `-governance-change-ttl`); past it the change reads as `expired` and cannot be approved. [Details](#wardyn_governance_change_ttl) |
 | `WARDYN_HA` | bool | `false` | multi-replica mode (flag `-ha`): skip the single-instance lock so several wardynd replicas can serve one database; refused at boot unless the runner is the Kubernetes substrate. [Details](#wardyn_ha) |
 | `WARDYN_GOVERN_ADMIN_RUNS` | bool | (unset) | constrained-admin mode: govern every run an SSO admin or an admin-role personal API token launches, like a member's (flag `-govern-admin-runs`). **With OIDC unset the switch binds nobody**, and boot WARNs it (`warnGovernAdminRunsUnbound`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)). [Details](#wardyn_govern_admin_runs) |
@@ -761,7 +761,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - So after erasure the person's rows no longer name them.
 - **SIEM rules keyed on `actor` see subject ids, not names, from the moment it is turned on**.
 - And a person with no identity row (one who never signed in) keeps their name in `actor`.
-- Reads and the readable export show the person while their key exists and `[erased]` after; `?actor=<person>` and `?target=<person>` find both forms.
+- Reads and the readable export show the person while their key exists and `[erased]` after; `?actor=<person>` and `?target=<person>` find both forms, except that the subject form does not match a device-forwarded row.
 - Like `fields`, it applies to rows written after it is turned on.
 - A principal starting `subject:` is refused as a person everywhere (`reserved_principal`) whatever this is set to.
 
@@ -1192,7 +1192,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A Background task whose end comes before the cap is KILLED `end_reached` at its end. An Interactive run is kept at an earlier end, as always.
 - The lifecycle reaper still stops a RUNNING run older than this that carries no cap (a run from before 0.9), busy or not, and writes a `run.max_age.expire` audit row.
 - A run kept after a control-plane outage with its agent still running (before its end) is covered the same way.
-- A run kept with its agent already stopped (after its end, a reboot, or an outage past its end) is left to the reaper's files grace.
+- A run kept with its agent already stopped (after its end, a reboot, or an outage past its end) is not in the reaper's scan, because no agent runs. [`WARDYN_ENDED_RUN_GRACE`](#wardyn_ended_run_grace) decides when its files go.
 - The lease sweep still kills an outage-kept Background task at its end.
 - It is not `ends_at`, which a person may extend, but it bounds it: every new run records `lifetime_cap_at` (its creation plus this age).
 - A run launched from New Run or `POST /runs` that no source gives an end gets that cap as its end, and `no_end` at launch is refused with `403` naming this deployment.
@@ -1368,6 +1368,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A change nobody decides expires after `WARDYN_GOVERNANCE_CHANGE_TTL`.
 - Exempt, and applied directly: a profile update proven narrowing by its resolved effect, a rename, and a user type's name or description edit that leaves its priority alone.
 - No other target has a narrowing exemption.
+- The local credential delivery policy (`local_credential_delivery`, `PUT /governance/credential-delivery`) is held the same way.
 - A service identity's create (`POST /service-identities`) and any `PATCH /service-identities/{name}` that changes its sponsor are held the same way; the PATCH is held whole, so its description or suspend part applies only with it. A description or suspend `PATCH`, unsuspend and retire apply directly.
 - A role-mapping change is approved by a super admin only (a security admin is refused `admin_surface`).
 - Distinct means a different principal AND a different mailbox (case-folded), so one person holding an SSO session and an API token is not two humans.
@@ -1441,6 +1442,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The real access token is set on the wire as `x-amz-sso_bearer_token` at the run's own `portal.sso.<region>` host (TLS-MITM, paired injection grant).
 - And a session that lapses **mid-run HOLDS** the sandbox's next `GetRoleCredentials` call while its owner signs in again (`WARDYN_CREDENTIAL_REAUTH_TIMEOUT`, below) instead of failing the run.
 - `off`: the pre-0.7.6 behaviour — the token is written into the sandbox, no `portal.sso` MITM, no hold, no sign-in requests.
+- An AWS CLI component has no `off` lane: with the switch off, every run door refuses it (`component_cli_aws_inject_off`), and so does dispatch.
 - **`off` applies to NEW dispatches only**: the placeholder cache, the injection grant and the MITM entry are all authored at dispatch.
 - So a run already running keeps the lane it was authored with until it ends.
 - Flip it, then relaunch the runs that matter or wait them out.
@@ -1699,7 +1701,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The checkpoint advances only on an HTTP 2xx, which means accepted, not durable. Delivery is at-least-once: collectors deduplicate on `id`, or on `seq` + `row_hash`.
 - Each NDJSON line is the stored event (`id`, ..., `prev_hash`, `row_hash`, `seq`), plus `source` when `WARDYN_AUDIT_SOURCE` is set.
 - `buffer_size` and `max_retries` do not apply. A 408, a 429, a 5xx or a network error retries with backoff from `retry_base_delay`, doubling to 5 minutes and honouring `Retry-After` in seconds.
-- A redirect (never followed) or any other 4xx halts delivery until wardynd restarts (`wardyn_audit_delivery_halted`).
+- A redirect (never followed) or any other 4xx halts delivery until wardynd restarts or another replica takes over delivery (`wardyn_audit_delivery_halted`).
 - When retention removes rows past the checkpoint, retention is not blocked. Delivery records an `audit.delivery.reset` event, counts it in `wardyn_audit_delivery_resets_total` and resends from the oldest retained row.
 - At that ceiling you can lengthen retention, restore the collector before the drop, or accept the reported gap.
 - Turning the mode off keeps the checkpoint; re-enabling resends everything since it (or resets, if retention passed it). To start fresh at the current head, run `DELETE FROM audit_delivery_cursors WHERE destination = 'webhook'`.
@@ -1899,6 +1901,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_REPO_SLUG` | string | (unset) | repo slug for the run |
 | `WARDYN_REPOS` | string (JSON) | (unset) | multi-repo spec for the run |
 | `WARDYN_EPHEMERAL_DIRS` | string (CSV) | (unset) | scratch targets a workspace's ephemeral sources ask for: `agent-run` mkdirs them in the sandbox. No host path is involved — they die with the run |
+| `WARDYN_START_FOLDER` | string | (unset) | the run's `start_folder`: a folder inside one attachment, or `image_default` for the image's own directory. `agent-run` fails rather than start elsewhere |
 | `WARDYN_USER_DRIVE` | string (`<target>:ro\|rw`) | (unset) | the run's USER DRIVE, present ONLY when one is mounted: the in-container target and the mode. An ANNOUNCEMENT, never the mechanism: the mount is made by the runner (`applyUserDriveEnv`, [`internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)). [Details](#wardyn_user_drive) |
 | `WARDYN_SSH_GRANTS` 🔒 | string (JSON) | (unset) | brokered SSH grants |
 | `WARDYN_MITM_CA_PEM` | string (PEM bundle) | (unset) | CA certificate(s) the sandbox trusts: the per-run TLS-MITM CA when active, with the operator's `WARDYN_TRUSTED_CA_FILE` bundle appended when configured (`installSandboxTrustedCA`, [`internal/api/runs_dispatch_llm.go`](../internal/api/runs_dispatch_llm.go)). [Details](#wardyn_mitm_ca_pem) |
@@ -1906,10 +1909,13 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_INTERACTIVE_START` | string | (unset) | `agent` makes an INTERACTIVE run's attach shell open in the image's agent CLI in the prepared workspace; unset/`shell` is a bare shell. Only ever set for interactive runs. [Details](#wardyn_interactive_start) |
 | `WARDYN_INTERACTIVE_SEED` | string | (unset) | the run's optional boot seed, its `task`, exported verbatim for an interactive run only; fires once at sandbox boot. [Details](#wardyn_interactive_seed) |
 | `WARDYN_SEED_AUTO_TOOLS` | bool | (unset) | `1` starts the boot seed above with `--dangerously-skip-permissions` (opt-in, for that pre-attach span only); unset/absent is supervised. [Details](#wardyn_seed_auto_tools) |
+| `WARDYN_HARNESSES` | string | (unset) | the harnesses a run launched with the harness set carries, space-separated in set order (`applyHarnessSetEnv`, [`internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)). Unset for a run launched without the set |
+| `WARDYN_START_HARNESS` | string | (unset) | the one harness of `WARDYN_HARNESSES` that starts with the run; empty when none does. Set together with `WARDYN_HARNESSES` |
 | `WARDYN_CODEX_BASE_URL` | string (URL) | (unset) | the base URL a `codex-cli` run's codex is pointed at: the brokered `<proxy>/wardyn/llm/openai` route plus the path the final upstream needs (`codexBaseURL`, [`internal/api/runs_dispatch_provider.go`](../internal/api/runs_dispatch_provider.go)). [Details](#wardyn_codex_base_url) |
 | `WARDYN_CODEX_MODEL` | string | (unset) | **Switched off in 0.8.6:** a provider write of the `azure_foundry` kind answers `400` "the azure_foundry kind is not available in this release", so no run sets this yet (`providerAzureLane.env`, [`internal/api/provider_azure.go`](../internal/api/provider_azure.go)). [Details](#wardyn_codex_model) |
+| `WARDYN_MCP_SERVERS_JSON` 🔒 | string (JSON) | (unset) | a `codex-cli` run's MCP servers as `{"<server key>":"<broker URL>"}`, set only when a server is on for Codex CLI; each URL carries Codex's own broker token, so it rides the secret env (`dispatchMCP`, [`internal/api/run_mcp.go`](../internal/api/run_mcp.go)). [Details](#wardyn_mcp_servers_json) |
 | `WARDYN_TOOL_APPROVALS` | string | (unset) | `hold` routes an AUTONOMOUS (non-interactive) Claude Code run's own tool calls to a Wardyn approval instead of running unsupervised; unset/`auto` is today's `--dangerously-skip-permissions` behavior. Never set for an interactive run or for codex-cli. [Details](#wardyn_tool_approvals) |
-| `WARDYN_TOOLGATE_CREDENTIAL` | secret | (unset) | The approval credential dispatch gives the started harness of a run with two or more included harnesses; `wardyn-toolgate` sends it as a Bearer token. Never set by hand |
+| `WARDYN_TOOLGATE_CREDENTIAL` | secret | (unset) | The started harness's approval credential (two or more harnesses), sent by `wardyn-toolgate` as a Bearer. Not container env: the file `/run/wardyn/secrets/wardyn-toolgate-<harness>` its launch reads; Docker 0400 agent uid, Kubernetes 0440 fsGroup 1000 from the run Secret. Never set by hand |
 | `WARDYN_AUTONOMY_LEVEL` | string | (unset) | the run's RESOLVED autonomy level (`L0` attended, `L1` gated, `L2` unattended, `L3`), frozen on the run row by the launch gate. An ANNOUNCEMENT, never the mechanism. [Details](#wardyn_autonomy_level) |
 | `WARDYN_RECORDING` | bool | (unset) | `1` tells the sandbox that session recording is configured, stamped into the agent container's env by the docker driver when its Record config is on. [Details](#wardyn_recording) |
 | `WARDYN_PROBE_TO_URL` | string | (unset) | site-config test-redirect: the stored egress redirect's `to` URL the probe fetches through wardyn-proxy |
@@ -1978,6 +1984,13 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - So every other codex run is unchanged.
 - A repo config or the interactive model picker can still ask for another model; the proxy's route gate then refuses that request.
 - No real credential is in the sandbox.
+
+### `WARDYN_MCP_SERVERS_JSON`
+
+- A `codex-cli` run's remote MCP servers: `{"<server key>":"<broker URL>"}`, where each URL is `<proxy>/wardyn/mcp/<token>/<server key>` (`dispatchMCP`, [`internal/api/run_mcp.go`](../internal/api/run_mcp.go)).
+- Set by dispatch only when an MCP component's server is turned on for Codex CLI. The token is Codex's own; the proxy holds only its digest, so the variable rides the secret env.
+- The codex image's `prepare_codex_config` ([`deploy/images/codex-cli/agent-run`](../deploy/images/codex-cli/agent-run)) writes one `[mcp_servers.<key>]` table with that `url` per entry, replacing a table of the same key.
+- Never a server's own address or credential: the broker route is the only path to a server, and it decides which servers Codex reaches whatever `config.toml` says.
 
 ### `WARDYN_TOOL_APPROVALS`
 

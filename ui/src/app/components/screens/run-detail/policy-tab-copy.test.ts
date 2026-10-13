@@ -46,6 +46,7 @@ describe("Policy tab copy (S-1..S-48)", () => {
     expect(CHANGE_HEADING.profile("walled")).toBe("Limited by the walled governance profile");
     expect(CHANGE_HEADING.restart("Sep 29, 2026")).toBe("Blocked when the run was restarted on Sep 29, 2026");
     expect(CHANGE_HEADING.org_disk).toBe("Disk size set from your organization's default");
+    expect(CHANGE_HEADING.pool_disk).toBe("Disk size set from this pool's default");
     expect(CHANGE_HEADING.launch).toBe("Set by Wardyn when the run started");
   });
 

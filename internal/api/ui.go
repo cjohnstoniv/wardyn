@@ -41,11 +41,11 @@ func (s *Server) mountUI(r chi.Router) {
 	fs := http.FileServer(http.Dir(dir))
 	r.Get("/*", func(w http.ResponseWriter, req *http.Request) {
 		// Serve the file if it exists; otherwise fall back to index.html so the
-		// SPA router can handle client-side paths (history API mode).
-		clean := filepath.Clean(strings.TrimPrefix(req.URL.Path, "/"))
-		full := filepath.Join(dir, clean)
-		if clean != "." && withinDir(dir, full) {
-			if info, err := os.Stat(full); err == nil && !info.IsDir() {
+		// SPA router can handle client-side paths (history API mode). The path is
+		// cleaned rooted, as http.FileServer cleans it: no ".." survives, so the
+		// file checked is inside dir and is the one fs would serve.
+		if clean := filepath.Clean("/" + req.URL.Path); clean != "/" {
+			if info, err := os.Stat(filepath.Join(dir, clean)); err == nil && !info.IsDir() {
 				// Hashed build artifacts under /assets/ are content-addressed and
 				// safe to cache forever; everything else (favicon, manifest) revalidates.
 				if strings.HasPrefix(req.URL.Path, "/assets/") {
@@ -91,10 +91,4 @@ func (s *Server) serveIndex(w http.ResponseWriter, req *http.Request, index stri
 	base := s.cfg.BasePath
 	html := strings.NewReplacer(`="./`, `="`+base+`/`, `data-wardyn-base=""`, `data-wardyn-base="`+base+`"`).Replace(string(raw))
 	http.ServeContent(w, req, "index.html", info.ModTime(), strings.NewReader(html))
-}
-
-// withinDir guards against path traversal escaping the UI directory.
-func withinDir(dir, full string) bool {
-	rel, err := filepath.Rel(dir, full)
-	return err == nil && filepath.IsLocal(rel)
 }
