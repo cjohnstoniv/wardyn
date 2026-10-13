@@ -12,6 +12,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 type sizingStore struct {
@@ -73,6 +74,38 @@ func TestRecordRunSizingWriteFailureIsBestEffort(t *testing.T) {
 	s = &Server{cfg: Config{Store: struct{ store.Store }{}}}
 	s.recordRunSizing(context.Background(), uuid.New(), runner.Resources{}, false)
 }
+
+// Only a run bound to a placement of this deployment has its sizing recorded: not one on a registered
+// runner (stamped or not), not one on an executor the deployment does not run, and a multi-executor
+// deployment's executor is matched by name, never against the aggregate driver's own name.
+func TestRunOnDeployment(t *testing.T) {
+	rid := uuid.New()
+	s := &Server{cfg: Config{Runner: multiExecutorRunner{names: []string{"docker", "k8s"}}}}
+	for _, tc := range []struct {
+		name string
+		run  types.AgentRun
+		want bool
+	}{
+		{"unplaced run", types.AgentRun{}, true},
+		{"deployment executor", types.AgentRun{Placement: types.PlacementRemote, RunnerPoolExecutor: "k8s"}, true},
+		{"registered runner", types.AgentRun{Placement: types.PlacementLocal, RunnerID: &rid}, false},
+		{"registered runner since erased", types.AgentRun{Placement: types.PlacementLocal}, false},
+		{"executor of another deployment", types.AgentRun{Placement: types.PlacementRemote, RunnerPoolExecutor: "elsewhere"}, false},
+	} {
+		if got := s.runOnDeployment(tc.run); got != tc.want {
+			t.Errorf("%s: runOnDeployment = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// multiExecutorRunner is an aggregate driver: it names itself "orchestrator" and lists its executors.
+type multiExecutorRunner struct {
+	runner.Runner
+	names []string
+}
+
+func (multiExecutorRunner) Name() string          { return "orchestrator" }
+func (m multiExecutorRunner) Executors() []string { return m.names }
 
 // A run with an Azure route gate records the 400 MiB proxy envelope the drivers apply, not the
 // 256 MiB default; any other run keeps the default, and a configured value above 400 wins.

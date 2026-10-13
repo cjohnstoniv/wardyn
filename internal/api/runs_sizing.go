@@ -43,6 +43,16 @@ func runSizing(kind string, res runner.Resources, azure bool) store.RunSizing {
 	return z
 }
 
+// runOnDeployment reports whether run's bound placement is one of this deployment's own substrates, the
+// only runs whose dispatch-time sizing is the deployment's to record. A run bound to a registered runner,
+// or to an executor this deployment does not run, is not, and a run no pool placed is.
+func (s *Server) runOnDeployment(run types.AgentRun) bool {
+	if run.RunnerID != nil || run.Placement == types.PlacementLocal {
+		return false
+	}
+	return run.RunnerPoolExecutor == "" || s.deploymentExecutor(run.RunnerPoolExecutor)
+}
+
 // recordRunSizing writes the dispatch-time sizing record. A failure is logged and leaves the
 // row NULL; it never blocks dispatch.
 func (s *Server) recordRunSizing(ctx context.Context, runID uuid.UUID, res runner.Resources, azure bool) {

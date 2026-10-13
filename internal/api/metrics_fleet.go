@@ -30,7 +30,7 @@ type fleetSnapshot struct {
 
 // get returns the snapshot, refreshing it when older than the TTL. ok is false when the store
 // cannot report capacity or the refresh failed.
-func (f *fleetSnapshot) get(ctx context.Context, reader runCapacityReader, kind string) (store.RunCapacity, bool) {
+func (f *fleetSnapshot) get(ctx context.Context, reader runCapacityReader, kind string, local func(string) bool) (store.RunCapacity, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.at.IsZero() && time.Since(f.at) < fleetSnapshotTTL {
@@ -38,6 +38,7 @@ func (f *fleetSnapshot) get(ctx context.Context, reader runCapacityReader, kind 
 	}
 	c, err := reader.RunCapacity(ctx, store.RunCapacityOpts{
 		Now: time.Now().UTC(), CurrentKind: kind, UnschedulableReason: capacityBlockerReason,
+		LocalExecutor: local,
 	})
 	if err != nil {
 		f.at = time.Time{}
@@ -57,7 +58,7 @@ func (s *Server) writeFleetGauges(r *http.Request, w io.Writer) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), storePingTimeout)
 	defer cancel()
-	c, ok := s.fleet.get(ctx, reader, s.cfg.RunnerTarget)
+	c, ok := s.fleet.get(ctx, reader, s.cfg.RunnerTarget, s.deploymentExecutor)
 	if !ok {
 		return
 	}
