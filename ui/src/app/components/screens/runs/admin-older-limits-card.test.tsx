@@ -77,7 +77,7 @@ describe("AdminOlderLimitsCard", () => {
     renderCard();
     await screen.findByText("Older limits · 1");
     await user.click(screen.getByRole("button", { name: "Restart with current limits" }));
-    await waitFor(() => expect(restartAdminRunsMock).toHaveBeenCalledWith(["r1"], 30_000));
+    await waitFor(() => expect(restartAdminRunsMock).toHaveBeenCalledWith(["r1"], 210_000));
     expect(await screen.findByText(/Restarted/)).toBeInTheDocument();
     // Re-lists after a restart (best-effort refresh).
     await waitFor(() => expect(getAdminProxyWindowMock).toHaveBeenCalledTimes(2));
@@ -126,7 +126,7 @@ describe("AdminOlderLimitsCard", () => {
     await user.click(screen.getByRole("button", { name: "Restart with current limits" }));
     await waitFor(() => expect(restartAdminRunsMock).toHaveBeenCalledTimes(30));
     expect(restartAdminRunsMock.mock.calls.every(([batch]) => batch.length === 5)).toBe(true);
-    expect(restartAdminRunsMock.mock.calls.every(([batch, timeoutMs]) => timeoutMs === batch.length * 30_000)).toBe(true);
+    expect(restartAdminRunsMock.mock.calls.every(([batch, timeoutMs]) => timeoutMs === batch.length * 210_000)).toBe(true);
   });
 
   it("keeps the first batch's results when a later batch fails, and refreshes the listing", async () => {
