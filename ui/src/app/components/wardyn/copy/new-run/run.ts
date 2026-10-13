@@ -62,6 +62,7 @@ export const NR_RUN = {
   USED_OF_MAX: (used: string | number, max: string | number) => `${used} of ${max} running`,
   RUNNING_ONLY: (used: string | number) => `${used} running`,
   MAX_RUNS: (max: string | number) => `${max} runs maximum in this pool`,
+  /** pending W-50: the recommended text until the owner answers. */
   POOL_LIMIT_FROM_RUNNERS: "Set by its runners",
   ALLOWANCE_LABEL: "Your allowance",
   ALLOWANCE_ARIA: "Your allowance used",
