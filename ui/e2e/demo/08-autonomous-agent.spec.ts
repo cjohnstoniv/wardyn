@@ -41,9 +41,9 @@
  *    a MEMBER's first_use_approval down to the ceiling's deny_with_review, and
  *    only an operator's `wait_for_review` survives. Beat 8's whole claim —
  *    "held at the proxy, waiting on me" — is true only on the operator path.
- *  - A model provider is connected (V01 did it). Asserted before Launch,
- *    because the rail renders "No model provider is connected…" and beat 6
- *    spotlights that rail on camera.
+ *  - A model provider is connected (V01 did it). Asserted on Tools and
+ *    access, where a harness with no provider to choose leaves the picker
+ *    disabled and the run could not do its task.
  *  - Per SV16/SV20 this take is shot after V07's interactive take (the quota window), so it
  *    is recorded with `scripts/record-demo.sh --video 08 --no-reset`. A reset
  *    would destroy the policy episode's reused run, the connected model lane
@@ -68,9 +68,31 @@ import { act, beat, caption, centerInFrame, chapter, ffwdEnd, ffwdStart, PACE, s
 // importing it is what registers this file's beforeAll/afterAll, and each beat
 // reads the page out of stage() rather than closing over a module-level `let`.
 import { stage } from "./stage";
-import { clearWorkspace, decide, newRunEditPolicy, newRunPanel } from "./funnel";
+import { clearWorkspace, decide } from "./funnel";
+import {
+  addHarnessButton,
+  confirmLaunchButton,
+  harnessPicker,
+  launchRunButton,
+  modeCard,
+  nextStep,
+  NEW_RUN_HEADING,
+  newRunHeading,
+  openNameDialog,
+  providerPicker,
+  repoCheckbox,
+  runDescriptionField,
+  runTitleField,
+  shapeCard,
+  startGuided,
+  startsHere,
+  taskField,
+  viewRunButton,
+} from "./new-run";
 import { sweepStaleState } from "./sweep";
-import { readSpec, SPEC_LABEL } from "../policy-source";
+import { NR_DOCUMENT } from "../../src/app/components/wardyn/copy/new-run/document";
+import { NR_REVIEW } from "../../src/app/components/wardyn/copy/new-run/review";
+import { NR_TOOLS } from "../../src/app/components/wardyn/copy/new-run/tools";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -279,78 +301,50 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
 
   await act(page, page.getByRole("button", { name: "New run" }), "New run.");
   await expect(page).toHaveURL(/\/runs\/new/, { timeout: 30_000 });
+  await expect(newRunHeading(page, NEW_RUN_HEADING.start)).toBeVisible({ timeout: 30_000 });
 
-  // --- B1 Name the run ----------------------------------------------------
+  // --- B1 Shape -----------------------------------------------------------
   //
-  // The title is required (Launch stays disabled without one) and it is the key
-  // the Runs board groups by, so it is also what this run is called everywhere
-  // it appears afterwards — including in the verifier.
-  const titleBox = page.getByLabel("Title");
-  await spotlight(page, titleBox);
-  await newRunPanel(page, "run");
-  await titleBox.fill(RUN_TITLE);
-  await caption(page, "Give it a name.");
-  await beat(page, BEAT_SHORT);
+  // The title and description are typed in the Name dialog at launch (B7), not
+  // on a form panel. OPEN: the owner line "Give it a name." used to play here,
+  // ahead of "Then choose Agent Task."; it now plays at the Name dialog.
+  // Lead: confirm moving the line, or reword it.
+  await startGuided(page);
   await caption(page, "Then choose Agent Task.");
   await beat(page, BEAT_SHORT + 400);
-  await spotlight(page, null);
-
-  // No owner line names the Description field, so it fills silently.
-  const descBox = page.getByLabel("Description");
-  await descBox.fill(RUN_DESCRIPTION);
-  await beat(page, 900);
 
   // --- B2 What to run -----------------------------------------------------
-  //
-  // "Agent task" and "Claude Code" are both already the wizard's defaults
-  // (wizard-types.ts initialWizardState: runType "agent", agent "claude-code").
-  // Clicking the radio anyway gives the camera a ring on the choice being
-  // named; the Agent select is SPOTLIT rather than opened, because opening a
-  // Select to re-pick the value it already holds is two extra clicks and a
-  // portal for no visible gain.
-  await act(page, page.getByRole("radio", { name: "Agent task" }), "Agent task.");
-  // By id, not getByLabel("Agent"): the trigger is a <button>, and a label/for
-  // pointing at a button is not the form-control association getByLabel
-  // resolves. #nr-agent is the SelectTrigger's own id (new-run-screen.tsx).
-  await spotlight(page, page.locator("#nr-agent"));
-  await caption(page, "Claude Code will do the work.");
-  await beat(page, BEAT_SHORT);
-  await spotlight(page, null);
+  await act(page, shapeCard(page, "agent_task"), "Agent task.");
+  await nextStep(page, NEW_RUN_HEADING.runAgent);
 
-  // ORDER IS LOAD-BEARING, twice over.
-  //
-  // (1) initialWizardState() defaults to mode "interactive", which launches an
-  // IDLE sandbox waiting for a human to type. The agent never executes the
+  // ORDER IS LOAD-BEARING. The mode defaults to Interactive, which launches an
+  // IDLE sandbox waiting for a human to type: the agent never executes the
   // task, so nothing reaches for example.com and the held approval beats 7-8
-  // are built around can never appear.
-  // (2) This must be clicked BEFORE the task is filled: an interactive run has
-  // no Task field at all (new-run-screen.tsx's isInteractive branch renders
-  // "Start with" instead), so the box does not exist until this click.
-  //
-  // B-DEPENDENT (flagged in the script, and REAL as of today): the option in
-  // ui/src renders "Batch — run it unattended" (new-run-screen.tsx:478) while
-  // the click caption below — verbatim from the script — says "Autonomous".
-  // copy.ts's RUN_MODE.autonomous.label is already "Autonomous" and Track B's
-  // BB2 renames the option to match; the alternation here survives that
-  // rename instead of killing a shoot-day take. Until B lands, the button
-  // label and the narration disagree ON CAMERA — see the report.
-  await act(page, page.getByRole("radio", { name: /^(Autonomous|Batch)/ }), "Autonomous.");
+  // are built around can never appear. Autonomous is chosen on the Run step,
+  // before Harnesses, where the Task field only exists for an Autonomous run.
+  await act(page, modeCard(page, "autonomous"), "Autonomous.");
   await caption(page, "Autonomous means the agent keeps working until it finishes...");
   await beat(page, PACE.read);
   await caption(page, "or until policy gets in the way.");
   await beat(page, PACE.read);
   await caption(page, "And today, we're going to deliberately give it something to hit.");
   await beat(page, PACE.read + 400);
+  await nextStep(page, NEW_RUN_HEADING.harnesses);
 
-  // "Hold in Wardyn" is the biggest governance dial on this screen and the
-  // series has never once named it — today's default ("Auto") keeps the
-  // sandbox itself as the only boundary. No owner line covers it this pass,
-  // so it goes unremarked and unrung (see the report).
+  // OPEN: the flow orders the mode (Run) ahead of the harness (Harnesses), so
+  // "Claude Code will do the work." now plays after the Autonomous lines, not
+  // before them. Lead: confirm the order, or reword the line.
+  await act(page, addHarnessButton(page));
+  await harnessPicker(page).selectOption("claude-code");
+  await spotlight(page, harnessPicker(page));
+  await caption(page, "Claude Code will do the work.");
+  await beat(page, BEAT_SHORT);
+  await spotlight(page, null);
 
   // Fill first, THEN ring it: both captions below are spoken with the box
   // already full and ringed, not over an empty, unspotlit field (persona
   // round 1's complaint about this exact beat).
-  const taskBox = page.getByLabel("Task");
+  const taskBox = taskField(page);
   await taskBox.fill(DEMO_TASK);
   await spotlight(page, taskBox);
 
@@ -367,85 +361,89 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   await caption(page, "It gets the workspace, the policy, and the job.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
+  await nextStep(page, NEW_RUN_HEADING.files);
 
   // --- B3 Workspace -------------------------------------------------------
   //
-  // Selected by its VISIBLE TEXT, not its accessible name: this trigger has no
-  // accessible name at all (the Agent select beside it is labelled "Agent" via
-  // Field/Label htmlFor; this one was never wired up), so
-  // getByRole("combobox", {name}) can never match it. Filtering on the
-  // placeholder text is the honest workaround until the control gets a label —
-  // an unnamed combobox is a real a11y gap, not just a test inconvenience.
-  await newRunPanel(page, "workspace");
-  await act(page, page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" }), "Attach the workspace.");
-  await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE_NAME, "i") }).first());
+  // OPEN: slugify is a local-directory workspace, and Files lists only
+  // repositories (a local directory is never offered). Lead: where does a
+  // local-directory workspace attach in the guided flow?
+  await act(page, repoCheckbox(page, WORKSPACE_NAME), "Attach the workspace.");
+  await act(page, startsHere(page, WORKSPACE_NAME));
   await caption(page, "Same workspace as before — real code, writable because we granted it.");
   await beat(page, PACE.read + 400);
+  // The main drive's size is prefilled only when the pool offers a default.
+  const mainDriveSize = page.locator("#nr-main-drive-size");
+  if ((await mainDriveSize.count()) > 0 && (await mainDriveSize.inputValue()) === "") await mainDriveSize.fill("10");
+  await nextStep(page, NEW_RUN_HEADING.tools);
 
   // --- B4 Confinement -----------------------------------------------------
   //
-  // The Confinement card and its "Confined" radio are GONE — policy-panel.tsx
-  // replaces the Confinement + Network cards with one spec-JSON Policy card,
-  // which already OPENS on the Minimal template (allowed_domains:
-  // [api.anthropic.com], first_use_approval: deny_with_review) — confined by
-  // construction, the same default the old "Confined" radio asserted. The
-  // click below is still for the camera, same as the old one: it re-asserts
-  // the Minimal chip rather than changing anything.
-  await newRunEditPolicy(page);
-  await act(page, page.getByRole("button", { name: "Minimal" }), "Confined — the network starts closed.");
+  // The old Confinement card and the policy editor's Minimal chip are GONE.
+  // "What this run can reach" lists the network the run starts with: the
+  // harness's model host and nothing else, everything else default-deny. The
+  // beat points at it rather than clicking a template.
+  //
+  // A model provider must be chosen here before launch, and it is the same
+  // fact the old "No model provider is connected" notice stood for: a picker
+  // with nothing to choose is disabled, and the run could not do its task.
+  // OPEN: index 1 is the first provider after the "Choose a model provider"
+  // placeholder. Lead: is that V01's provider on the recording stack?
+  const provider = providerPicker(page, "claude-code");
+  await expect(
+    provider,
+    "no model provider is connected — V01's model step did not stick, and this run cannot do its task",
+  ).toBeEnabled({ timeout: 20_000 });
+  await provider.selectOption({ index: 1 });
+  const reach = page.getByRole("region", { name: NR_TOOLS.TOTALS_ARIA });
+  // The read view lists what the run will be allowed to reach: the one host.
+  await expect(reach.getByText("api.anthropic.com", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+  await spotlight(page, reach);
+  await caption(page, "Confined — the network starts closed.");
+  await beat(page, BEAT_SHORT);
+  await spotlight(page, null);
   await caption(page, "We'll give it the one destination it needs and let everything else ask.");
   await beat(page, PACE.read + 400);
 
   // --- B5 Network -----------------------------------------------------
   //
-  // network-dialog.tsx (Edit hosts…, the model-host toggle chip, the "Hold it
-  // for approval" unlisted-host radio) is DELETED — the same choices are now
-  // made IN the policy spec's JSON. Minimal already scopes allowed_domains to
-  // exactly api.anthropic.com; the one edit left is first_use_approval:
-  // deny_with_review -> wait_for_review, the field that makes beat 8's hold
-  // genuine (a HELD connection, not a denied-then-retried one). Read-modify-
-  // fill rather than a hardcoded literal so the floor (min_confinement_class)
-  // stays whatever is actually on screen — same pattern policies.spec.ts's
-  // fillEditor uses for this textarea.
-  const specBox = page.getByLabel(SPEC_LABEL);
-  const heldSpec = JSON.stringify(
-    { ...(await readSpec(specBox)), first_use_approval: "wait_for_review" },
-    null,
-    2,
+  // The one edit left is first_use_approval -> wait_for_review, the field that
+  // makes beat 8's hold genuine (a HELD connection, not a denied-then-retried
+  // one). Tools and access has no control for it: its "Allow a host" and tool
+  // rules do not carry it. OPEN: the nearest home is the run document, reached
+  // from Review (JSON, then Edit JSON), as inline_policy.first_use_approval.
+  // Lead: is the document door the approved place to author this, or does
+  // Review's Effective policy card get a hold control?
+  await nextStep(page, NEW_RUN_HEADING.review);
+  await act(
+    page,
+    page.getByRole("group", { name: NR_REVIEW.VIEW_ARIA }).getByRole("button", { name: NR_REVIEW.VIEW_JSON }),
   );
-  await spotlight(page, specBox);
-  await specBox.fill(heldSpec);
+  await act(page, page.getByRole("button", { name: NR_REVIEW.EDIT_FORMAT("JSON") }));
+  const documentBox = page.getByLabel(NR_DOCUMENT.EDITOR_ARIA("JSON"));
+  await expect(documentBox).toBeVisible();
+  // Read-modify-fill rather than a hardcoded literal, so everything the guided
+  // steps set stays whatever is actually on screen.
+  const runDocument = JSON.parse(await documentBox.inputValue()) as { intent: { inline_policy?: Record<string, unknown> } };
+  runDocument.intent.inline_policy = { ...runDocument.intent.inline_policy, first_use_approval: "wait_for_review" };
+  await spotlight(page, documentBox);
+  await documentBox.fill(JSON.stringify(runDocument, null, 2));
   await spotlight(page, null);
   // DIALOG-NEW-BEAT (dialog review, A4): the owner's "Save hosts." named the
-  // deleted Network dialog's own Save button — the panel has no separate save
-  // step, and the JSON edit above IS the save, so the line pointed at nothing
-  // on screen. Replaced with a drafted pair that names what the edit produced
-  // and ties it back to 05's spec beat.
-  await caption(page, "Save the spec.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "That spec is the contract — the same four lines we read in 'What it stops'.");
+  // deleted Network dialog's own Save button. The drafted pair below names what
+  // the edit produced and ties it back to 05's spec beat; the document's
+  // Continue to review is the save.
+  await act(page, page.getByRole("button", { name: NR_DOCUMENT.CONTINUE_REVIEW }), "Save the run document.");
+  await expect(newRunHeading(page, NEW_RUN_HEADING.review)).toBeVisible();
+  await caption(page, "That policy is the contract — the same four lines we read in 'What it stops'.");
   await beat(page, BEAT_SHORT);
 
-  // --- B6 The rail is the contract ----------------------------------------
-  const rail = page.locator("aside").filter({ hasText: "What this run can do" }).first();
-  // The host count lives on the Policy card now, not the rail — the rail's
-  // own "Network" section died with the Confinement/Network cards
-  // (policy-panel.tsx's egress chip renders "N domain(s) allowed" instead).
-  // The rail itself still carries the credential warning this beat depends
-  // on staying absent: the model warning in particular ("No model provider is
-  // connected. This run launches; its first model call fails.") would sit in
-  // frame for the whole beat and make a liar of the next line — and of the
-  // entire run, which would launch and fail its first model call.
-  // The read view lists what the run will be allowed to reach: the one host.
-  await expect(
-    page.getByTestId("policy-document").getByText("api.anthropic.com", { exact: true }).first(),
-  ).toBeVisible({ timeout: 20_000 });
-  await expect(
-    page.getByText(/No model provider is connected/),
-    "no model provider is connected — V01's model step did not stick, and this run cannot do its task",
-  ).toHaveCount(0);
-
-  await spotlight(page, rail);
+  // --- B6 The Effective policy is the contract ----------------------------
+  // The old rail ("What this run can do") is gone; Review's Effective policy
+  // card is where the run's whole envelope is read before launch.
+  const policyCard = page.getByRole("complementary", { name: NR_REVIEW.POLICY_TITLE });
+  await expect(policyCard).toBeVisible({ timeout: 20_000 });
+  await spotlight(page, policyCard);
   await caption(page, "This panel is the contract.");
   await beat(page, BEAT_SHORT);
   await caption(page, "What can this run do?");
@@ -467,7 +465,25 @@ test("V08 beats 7-9 — launch, held at the boundary, files changed", async () =
   const page = stage();
 
   // --- B7 Launch, let it work ---------------------------------------------
-  await act(page, page.getByRole("button", { name: "Launch run" }), "Launch.");
+  //
+  // The title is required (the dialog's Launch stays disabled without one) and
+  // it is the key the Runs board groups by, so it is also what this run is
+  // called everywhere it appears afterwards — including in the verifier.
+  await expect(launchRunButton(page)).toBeEnabled({ timeout: 60_000 });
+  await openNameDialog(page);
+  const titleBox = runTitleField(page);
+  await titleBox.fill(RUN_TITLE);
+  await spotlight(page, titleBox);
+  await caption(page, "Give it a name.");
+  await beat(page, BEAT_SHORT);
+  await spotlight(page, null);
+  // No owner line names the Description field, so it fills silently.
+  await runDescriptionField(page).fill(RUN_DESCRIPTION);
+  await beat(page, 900);
+  await act(page, confirmLaunchButton(page), "Launch.");
+  // POST /runs dispatches synchronously: the Launched screen offers View run
+  // only once the sandbox is provisioned, so the click waits that long.
+  await viewRunButton(page).click({ timeout: 240_000 });
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
   // So the closing recap (beat 10) can navigate back to this run rather than
   // speaking over the throwaway proof run's page.

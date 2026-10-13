@@ -11,20 +11,20 @@
  * onboarded — governed by the POLICY WE SAVED IN EPISODE 05. That reuse is the
  * whole point: episode 05 wrote "first-policy" and named it; this run does not
  * author a new one, it REUSES that one BY REFERENCE. The video's job is to
- * teach the New Run form while nothing else is moving: what a run is, the three
+ * teach New Run while nothing else is moving: what a run is, the three
  * kinds of task, how a saved policy attaches by name (nothing on the page is
- * merged into it), what Preflight promises before launch, and then the receipts
+ * merged into it), what Review's server check promises before launch, and then the receipts
  * a finished run leaves behind — its exit code, the file it really wrote to the
  * host, and the audit trail from create to complete. Driving an agent is video
  * 07; autonomy with a human decision mid-run is video 08.
  *
- * THE 05 -> 06 PAYOFF. Episode 05 ends on the reuse-by-reference beat on this
- * same form; episode 06 opens by USING it. The narrative arc is "write the
- * rules once, reuse them for every run." So the OPENING is reworked from the
- * old inline-authoring choreography (template chips + a hand-edited spec doc)
- * into the "Reuse a saved policy" mode row (policy_id path) — and every old
- * inline-authoring line that went false under reuse is DIALOG-STALE-marked,
- * never reworded (see below).
+ * THE 05 -> 06 PAYOFF. Episode 05 ends on the reuse-by-reference beat in New
+ * Run; episode 06 USES it. The narrative arc is "write the rules once, reuse
+ * them for every run." So the OPENING is reworked from the old
+ * inline-authoring choreography (template chips + a hand-edited spec doc)
+ * into reuse by policy_id, set through Review's JSON door (New Run has no
+ * saved-policy mode row) — and every old inline-authoring line that went false
+ * under reuse is DIALOG-STALE-marked, never reworded (see below).
  *
  * THE DIALOG. Owner lines that SURVIVE the rework are carried VERBATIM, in
  * order — do not reword; wording changes go through the owner. The NEW opening
@@ -53,7 +53,7 @@
  * SEEDS first-policy off camera (POST /policies with 05's exact spec) so a take
  * shot independently of 05 still has a policy to reuse; if the workspace is
  * missing it fails loudly with the staging instruction instead of filming a
- * broken form. first-policy floors at CC2/Wall, so the filming host MUST be able
+ * broken screen. first-policy floors at CC2/Wall, so the filming host MUST be able
  * to build Wall — the launch beat 422s loudly on a host that cannot.
  *
  * OWNERSHIP OF NOUNS. This video launches one run titled RUN_TITLE (unique to
@@ -82,7 +82,25 @@ import { act, beat, caption, centerInFrame, chapter, PACE, spotlight } from "./o
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll
 // (one browser, one context, one recorded page).
 import { stage } from "./stage";
-import { newRunPanel } from "./funnel";
+import { NR_DOCUMENT } from "../../src/app/components/wardyn/copy/new-run/document";
+import { NR_REVIEW } from "../../src/app/components/wardyn/copy/new-run/review";
+import { NR_START } from "../../src/app/components/wardyn/copy/new-run/start";
+import {
+  NEW_RUN_HEADING,
+  commandField,
+  confirmLaunchButton,
+  launchRunButton,
+  newRunHeading,
+  nextStep,
+  openNameDialog,
+  repoCheckbox,
+  runDescriptionField,
+  runTitleField,
+  shapeCard,
+  startGuided,
+  startsHere,
+  viewRunButton,
+} from "./new-run";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -115,6 +133,9 @@ const POLICY_SPEC = {
   eligible_grants: [],
 } as const;
 
+/** The id of the policy preflight() seeds: the run document names the policy by id. */
+let policyId = "";
+
 /** The artifact the run writes into the workspace — the proof a background
  *  run really touched the host. Deleted before the take so the diff is real. */
 const ARTIFACT = "NOTES-INVENTORY.txt";
@@ -123,8 +144,8 @@ const ARTIFACT = "NOTES-INVENTORY.txt";
  * The command. Offline on purpose — first-policy grants two hosts this command
  * never touches, and an off-list curl would PARK a held approval (the policy is
  * deny_with_review) into a video that has not taught approvals yet. It ends by
- * writing the artifact so the finished run has a diff. Multi-line: the console's
- * Shell-command field takes a script.
+ * writing the artifact so the finished run has a diff. Multi-line: the Run step's
+ * Command field takes a script.
  */
 const COMMAND = [
   "echo taking inventory of the workspace...",
@@ -172,8 +193,8 @@ async function preflight(page: Page): Promise<void> {
   // Seed first-policy so the reuse beat has something to pick. Episode 05 saves
   // it ON CAMERA, but takes may run independently, so 06 must be self-sufficient:
   // clear any stale row of that name and POST a fresh one with 05's EXACT spec,
-  // off camera, before the first beat. (Looked up by NAME in the reuse beat, so
-  // a changed id across a re-seed is harmless.)
+  // off camera, before the first beat. (The reuse beat names the policy by the
+  // id this POST returns, so a changed id across a re-seed is harmless.)
   const pol = await page.request.get("/api/v1/policies", { headers: apiHeaders() });
   expect(pol.ok(), `GET /api/v1/policies failed (${pol.status()}) — is the stack up on :8080?`).toBe(true);
   const polBody = await pol.json();
@@ -191,6 +212,8 @@ async function preflight(page: Page): Promise<void> {
     seeded.ok(),
     `could not seed the "${POLICY_NAME}" policy (${seeded.status()}) — the reuse beat would have nothing to pick`,
   ).toBe(true);
+  policyId = ((await seeded.json()) as { id?: string }).id ?? "";
+  expect(policyId, `the seeded "${POLICY_NAME}" policy came back without an id`).not.toBe("");
 
   // Clear any PENDING approval an earlier video deliberately left undecided —
   // video 01's "once, or for good" demo ends on a fresh re-raise it never
@@ -222,6 +245,23 @@ test.beforeAll(async () => {
   await preflight(stage());
 });
 
+/**
+ * Reuse the seeded policy BY REFERENCE through Review's JSON door: policy_id is
+ * the run document's own key for a stored policy, and New Run has no
+ * saved-policy mode row. Ends back on Review, which reads the policy back.
+ */
+async function referencePolicy(page: Page): Promise<void> {
+  const editor = page.getByLabel(NR_DOCUMENT.EDITOR_ARIA(NR_DOCUMENT.FORMAT_JSON));
+  await expect(editor).toBeVisible();
+  const doc = JSON.parse(await editor.inputValue()) as { intent?: Record<string, unknown> };
+  doc.intent = { ...doc.intent, policy_id: policyId };
+  await editor.fill(JSON.stringify(doc, null, 2));
+  await act(page, page.getByRole("button", { name: NR_DOCUMENT.VALIDATE, exact: true }));
+  await expect(page.getByText(NR_DOCUMENT.VALID), "the run document with this policy_id did not validate").toBeVisible({ timeout: 30_000 });
+  await act(page, page.getByRole("button", { name: NR_DOCUMENT.CONTINUE_REVIEW, exact: true }));
+  await expect(newRunHeading(page, NEW_RUN_HEADING.review)).toBeVisible({ timeout: 30_000 });
+}
+
 // ---------------------------------------------------------------------------
 // Cold open + Beat 1 — the form, taught while nothing is moving
 // ---------------------------------------------------------------------------
@@ -235,22 +275,25 @@ test("V06 beat 1 — name it, aim it", async () => {
   await expect
     .poll(() => page.evaluate(() => typeof (window as unknown as Record<string, unknown>).__demo), { timeout: 15_000 })
     .toBe("object");
-  await expect(page.getByRole("heading", { name: "New run", level: 1 })).toBeVisible({ timeout: 30_000 });
+  await expect(newRunHeading(page, NEW_RUN_HEADING.start)).toBeVisible({ timeout: 30_000 });
 
   await chapter(page, "Your first run", "A governed command, in the background");
 
   // Two ring moves across the cold-open lines (no text changes) — the static
-  // form otherwise sits still with nothing pointing at it.
-  const formCard = page.getByRole("heading", { name: "This run", level: 3 }).locator("xpath=ancestor::section[1]");
-  const rail = page.getByText("What this run can do");
-  await spotlight(page, formCard);
+  // screen otherwise sits still with nothing pointing at it.
+  const startHeading = newRunHeading(page, NEW_RUN_HEADING.start);
+  // OPEN: the "What this run can do" rail is gone and the guided flow has no
+  // standing summary of a run; this ring lands on Start's trust line for "And a
+  // record of what happened." Which element should carry that line?
+  const record = page.getByText(NR_START.TRUST_LINE);
+  await spotlight(page, startHeading);
   await caption(page, "Everything Wardyn does starts with a run.");
   await beat(page, PACE.read);
   await caption(page, "A sandbox.");
   await beat(page, BEAT_SHORT);
   await caption(page, "A set of rules.");
   await beat(page, BEAT_SHORT);
-  await spotlight(page, rail);
+  await spotlight(page, record);
   await caption(page, "And a record of what happened.");
   await beat(page, BEAT_SHORT);
   await spotlight(page, null);
@@ -268,39 +311,31 @@ test("V06 beat 1 — name it, aim it", async () => {
   await caption(page, "Because before we make this complicated, it's worth seeing what the basic contract looks like.");
   await beat(page, PACE.read);
 
-  // Title first — the board groups by it, and an untitled run is a loose card.
-  const title = page.getByLabel("Title");
-  await newRunPanel(page, "run");
-  await spotlight(page, title);
-  await caption(page, "Give the run a name.");
-  await beat(page, BEAT_SHORT);
-  await title.fill(RUN_TITLE);
-  await caption(page, "That's how we'll find it later.");
-  await beat(page, BEAT_SHORT);
-  await spotlight(page, null);
+  // OPEN: the run's title and description are typed in the Name dialog now, after
+  // Review, so "Give the run a name." / "That's how we'll find it later." move to
+  // the launch beat, after the policy and Check lines they used to precede. The
+  // episode-06 proposal holds them in take order, here: move the dialog lines or
+  // accept the new order?
+  await startGuided(page);
   await caption(page, "Then choose what kind of work it should do.");
   await beat(page, PACE.read);
 
-  // Description too, filmed silently — no owner line covers it; the field
-  // being on camera at all is the teaching (Dana: "that field is what my
-  // auditor reads first").
-  await page.getByLabel("Description").fill("Inventory only — nothing should leave the box.");
-
-  // The three kinds of task. Shell command is the radio this video picks; the
-  // other two get one owner line each so the viewer knows the map — ringed in
-  // turn, since both are visible while Agent task is still the default pick.
-  await spotlight(page, page.getByRole("radio", { name: /Agent task/ }));
+  // The three kinds of task. Application sandbox (the old Shell command) is the
+  // card this video picks; the other two get one owner line each so the viewer
+  // knows the map — ringed in turn, since all three are visible on Shape.
+  await spotlight(page, shapeCard(page, "agent_task"));
   await caption(page, "An agent can work on its own.");
   await beat(page, PACE.read);
-  await spotlight(page, page.getByRole("radio", { name: /Terminal/ }));
+  await spotlight(page, shapeCard(page, "environment"));
   await caption(page, "A terminal puts you inside the sandbox.");
   await beat(page, PACE.read);
-  await spotlight(page, page.getByRole("radio", { name: /Shell command/ }));
+  await spotlight(page, shapeCard(page, "application"));
   await caption(page, "And a shell command simply runs from beginning to end.");
   await beat(page, PACE.read);
-  await act(page, page.getByRole("radio", { name: /Shell command/ }), "Shell command.");
+  await act(page, shapeCard(page, "application"), "Application sandbox.");
+  await nextStep(page, NEW_RUN_HEADING.runApplication);
 
-  const cmd = page.getByLabel("Command");
+  const cmd = commandField(page);
   await cmd.fill(COMMAND);
   await spotlight(page, cmd);
   await caption(page, "This one will take stock of the project and write the results to a file.");
@@ -309,18 +344,24 @@ test("V06 beat 1 — name it, aim it", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Beat 2 — the workspace, the reused policy, the rail
+// Beat 2 — the workspace, the reused policy, the Effective policy card
 // ---------------------------------------------------------------------------
 
 test("V06 beat 2 — the envelope, by reference", async () => {
   test.setTimeout(180_000);
   const page = stage();
 
-  // The workspace video 04 built, on New Run's Workspace panel (#1922). The
-  // combobox's option carries the name.
-  await newRunPanel(page, "workspace");
-  const wsPicker = page.getByRole("combobox", { name: "Workspace" });
-  await act(page, wsPicker, "Attach the workspace we just created.");
+  // The workspace video 04 built, on the Files step. Nothing is filmed on
+  // Harnesses: an Application sandbox's harnesses are optional and this run
+  // adds none.
+  await nextStep(page, NEW_RUN_HEADING.harnesses);
+  await nextStep(page, NEW_RUN_HEADING.files);
+  // OPEN: Files lists a workspace's REPOSITORY sources only and never a
+  // local-directory workspace, and slugify (video 04) is a local directory. The
+  // checkbox and "Starts here" radio below are where the approved flow puts an
+  // attached workspace, and the NOTES-INVENTORY.txt receipt in beat 4 depends on
+  // it. How does this episode attach slugify?
+  await act(page, repoCheckbox(page, WORKSPACE_NAME), "Attach the workspace we just created.");
   // DIALOG-STALE: "This is the blast radius we established in the last episode."
   // — the workspace is episode 04's; the LAST episode (05) established the
   // POLICY, not the blast radius. Off-by-one under the restructure. Pulled, not
@@ -330,19 +371,30 @@ test("V06 beat 2 — the envelope, by reference", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "Nothing else.");
   await beat(page, BEAT_SHORT);
-  await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE_NAME) }).first(), "Choose the workspace.");
+  await act(page, startsHere(page, WORKSPACE_NAME), "Choose the workspace.");
+  // The main drive's size is required once it is shown and empty; a plain
+  // default, filmed silently.
+  const driveSize = page.locator("#nr-main-drive-size");
+  if ((await driveSize.count()) > 0 && (await driveSize.inputValue()) === "") await driveSize.fill("10");
+  await nextStep(page, NEW_RUN_HEADING.tools);
+  await nextStep(page, NEW_RUN_HEADING.review);
 
   // ── THE POLICY, BY REFERENCE (the 05 -> 06 payoff) ────────────────────
   //
   // Episode 05 authored and saved "first-policy"; this run REUSES it by
-  // reference rather than authoring a fresh spec inline. "Reuse a saved policy"
-  // is the Policy panel's mode row (policy-panel.tsx) — an aria-pressed <button>
-  // whose accessible name is its title plus its hint, so prefix-match the title.
-  // Switching to it hides the template chips and the spec-JSON textarea
-  // (usingSaved renders only the picker), which is why every inline-authoring
-  // locator the old beat drove — the spec box, the CI-baseline chip, the "No
-  // egress" chip, the first_use_approval "Insert" rail row — is gone here, and
-  // every inline-authoring line is DIALOG-STALE.
+  // reference rather than authoring a fresh spec inline. New Run has no
+  // saved-policy mode row, so the reference is the run document's policy_id,
+  // set in Review's JSON view. Reuse hides nothing inline: no spec box or
+  // template chips exist in the guided flow, which is why every
+  // inline-authoring locator the old beat drove is gone and every
+  // inline-authoring line is DIALOG-STALE.
+  //
+  // OPEN: is the JSON door the route to film for "reuse first-policy by
+  // reference"? A policy saved on the Policies screen is not a saved template,
+  // so Shape's "Saved template" source does not list it; if first-policy should
+  // instead be saved with Review's "Save as policy", this beat would start from
+  // Shape -> Saved template and open on Review with the shape and command
+  // already set.
   //
   // DIALOG-STALE (the inline-authoring block, in original take order; all pulled,
   // none reworded — see the episode-06 proposal):
@@ -358,63 +410,60 @@ test("V06 beat 2 — the envelope, by reference", async () => {
   //     happens." / "We can hold it for approval." / "We can deny it, but let it
   //     ask." / "Or we can deny it silently.") — the stored policy already fixed
   //     the mode (deny_with_review); the run does not re-choose it
-  await newRunPanel(page, "policy");
   await caption(page, "In 'Your first policy', we saved our rules as first-policy.");
   await beat(page, PACE.read);
   await caption(page, "This run doesn't need a new policy — it can reuse first-policy.");
   await beat(page, PACE.read);
-  await act(page, page.getByRole("button", { name: /^Reuse a saved policy/ }), "Reuse a saved policy.");
-  // The picker renders once this half is lit; the picks are silent (the rail
-  // lines narrate the result). Same drive as 05's A4 reuse beat.
-  await act(page, page.getByRole("combobox", { name: "Saved policy" }));
-  await act(page, page.getByRole("option", { name: POLICY_NAME }));
+  await act(page, page.getByRole("button", { name: NR_REVIEW.VIEW_JSON, exact: true }), "Reuse a saved policy.");
+  await act(page, page.getByRole("button", { name: NR_REVIEW.EDIT_FORMAT("JSON") }));
+  await referencePolicy(page);
 
-  // The rail names the STORED policy, its floor and host count, and says the
-  // attached workspace (only) still merges into it (new-run-rail.tsx). Scoped
-  // to the rail (an <aside>) because the name also shows in the Select trigger.
-  const rail = page.locator("aside").filter({ hasText: "What this run can do" });
+  // Review's Effective policy card names the STORED policy as the source of its
+  // network row, beside the barrier the run will get. Located by the card's own
+  // label because the policy name also shows inside the run document.
+  const card = page.getByRole("complementary", { name: NR_REVIEW.POLICY_TITLE });
   await expect(
-    rail.getByText(POLICY_NAME, { exact: true }),
-    `the rail does not name "${POLICY_NAME}" — the reuse pick never attached the saved policy`,
-  ).toBeVisible();
-  const railPolicy = rail.getByText(/^The stored spec governs this run/);
-  await expect(railPolicy, "the rail isn't showing the reused policy by reference").toBeVisible();
-  await centerInFrame(railPolicy);
-  await spotlight(page, railPolicy);
+    card.getByText(POLICY_NAME).first(),
+    `the Effective policy card does not name "${POLICY_NAME}" — the policy_id never attached the saved policy`,
+  ).toBeVisible({ timeout: 30_000 });
+  const cardPolicy = card.getByText(NR_REVIEW.PROV_SOURCE_POLICY).first();
+  await expect(cardPolicy, "the card isn't showing the reused policy by reference").toBeVisible();
+  await centerInFrame(cardPolicy);
+  await spotlight(page, cardPolicy);
   await caption(page, "There it is — first-policy, the one we just built.");
   await beat(page, PACE.read);
   await caption(page, "The run points to that saved policy. Its rules come from the policy itself.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
-  // The barrier rides along as a SEPARATE per-run field (its own Seg, not part of
+  // The barrier rides along as a SEPARATE per-run field (its own row, not part of
   // the stored spec). first-policy floors at CC2/Wall, so the form auto-clamps
   // the requested barrier UP to the floor and greys Fence beneath it — which is
   // exactly why "Same choices." is DIALOG-STALE: the original spec's OWN note
   // said a CC2 floor "would grey out Fence on the Barrier Seg and make 'Same
   // choices.' false." 05 already filmed the floor greying Fence, so this beat
   // only names the barrier riding along.
-  await spotlight(page, page.getByRole("radiogroup", { name: "Barrier" }));
+  await spotlight(page, card.getByText(NR_REVIEW.POLICY_BARRIER, { exact: true }));
   await caption(page, "The sandbox barrier comes along with the run too.");
   await beat(page, PACE.read);
   await caption(page, "Same governance.");
   await beat(page, BEAT_SHORT);
   await spotlight(page, null);
 
-  // PREFLIGHT — a dry run of the exact body Launch will send. It stays enabled
-  // once a saved policy is picked (policy-panel.tsx: preflightDisabled only while
-  // the saved lane has nothing selected). Clicked SILENTLY; the lines below
-  // narrate the result, which renders beside Launch (new-run-screen.tsx) as the
-  // enforced-barrier chip plus either clamp warnings or "No adjustments." — one
-  // panel, NOT two columns (so the reuse re-draft names the chip, not a
-  // side-by-side the UI never renders).
-  await act(page, page.getByRole("button", { name: "Check again" }));
-  const preflight = page.getByTestId("preflight-result");
+  // THE SERVER'S CHECK — a dry run of the exact body Launch will send. Review
+  // runs it on arrival and again after an edit; "Check again" exists only while
+  // the result is stale, so it is clicked SILENTLY when present. The result is
+  // Launch run turning enabled (fresh and clean) and the Effective policy card
+  // reading the enforced barrier — one card, NOT two columns (so the reuse
+  // re-draft names the barrier, not a side-by-side the UI never renders). The
+  // lines below narrate it.
+  const checkAgain = page.getByRole("button", { name: NR_REVIEW.CHECK_AGAIN });
+  if (await checkAgain.isVisible()) await act(page, checkAgain);
   await expect(
-    preflight,
-    "preflight returned nothing — the control plane refused the dry run, so the reused policy is not launchable here",
-  ).toBeVisible({ timeout: 30_000 });
-  await spotlight(page, preflight);
+    launchRunButton(page),
+    "the server's check never came back clean — the control plane refused the dry run, so the reused policy is not launchable here",
+  ).toBeEnabled({ timeout: 30_000 });
+  await spotlight(page, card);
   await caption(page, "That's the important part of this screen.");
   await beat(page, PACE.read);
   await caption(page, "Before launch, we can see what this run is allowed to do.");
@@ -425,13 +474,15 @@ test("V06 beat 2 — the envelope, by reference", async () => {
   // the panel never rendered.
   await caption(page, "It reads that policy and shows the barrier this run will actually use.");
   await beat(page, PACE.read);
-  // An operator's own saved spec is not clamped, so this reads "No adjustments."
-  // Asserted BEFORE it is spoken — a stack that clamped something must not be
-  // narrated as if it hadn't.
+  // An operator's own saved spec is not clamped, so Review shows no "narrowed
+  // by" notice. Asserted BEFORE it is spoken — a stack that clamped something
+  // must not be narrated as if it hadn't.
+  // OPEN: Review has no "No adjustments." line to assert; its absence of a
+  // narrowing notice is the same fact. Is that the intended re-point?
   await expect(
-    preflight.getByText("No adjustments."),
-    "preflight came back with adjustments — the policy that runs is not the stored policy",
-  ).toBeVisible();
+    page.getByText(NR_REVIEW.NARROWED_BY("").replace(/\.$/, "").trim()),
+    "the server's check came back with adjustments — the policy that runs is not the stored policy",
+  ).toHaveCount(0);
   // [OWNER SLOT — drafted] names what "No adjustments." says (carried from the
   // old drafted "They match. Nothing was added or widened when the policy was applied.", trimmed to
   // drop the "they match" two-column framing).
@@ -446,15 +497,17 @@ test("V06 beat 2 — the envelope, by reference", async () => {
   // approval, and 06 has not taught approvals), and deny_with_review is not a
   // silent deny anyway.
 
-  // The envelope recap — re-pointed at the reused policy in the rail (its old
-  // targets, the "No egress" chip and the first_use_approval rail row, exist only
-  // in inline mode). The workspace is its own panel now (#1922); the rail stays
-  // beside every panel.
-  await newRunPanel(page, "workspace");
-  await spotlight(page, page.getByRole("heading", { name: "Workspace", level: 2 }).locator("xpath=ancestor::section[1]"));
+  // The envelope recap — re-pointed at the reused policy on the Effective
+  // policy card (its old targets, the "No egress" chip and the first_use_approval
+  // rail row, exist only in inline mode). The workspace is Review's "What it works
+  // on" group.
+  const workGroup = page
+    .getByRole("heading", { name: NR_REVIEW.GROUP_WORK, level: 3 })
+    .locator("xpath=ancestor::div[@data-review-group][1]");
+  await spotlight(page, workGroup);
   await caption(page, "The workspace defines what it can touch.");
   await beat(page, PACE.read);
-  await spotlight(page, railPolicy);
+  await spotlight(page, cardPolicy);
   await caption(page, "The network defines where it can go.");
   await beat(page, PACE.read);
   await caption(page, "And the policy defines what happens when it tries something else.");
@@ -472,9 +525,28 @@ test("V06 beat 3 — launch, walk away", async () => {
   test.setTimeout(RUN_FINISHES + 120_000);
   const page = stage();
 
-  await act(page, page.getByRole("button", { name: "Launch run" }), "Launch.");
+  // Launch is two clicks: Review's "Launch run" opens the Name dialog, and the
+  // dialog's Launch creates the run. The title is typed in the dialog, so the
+  // two naming lines are spoken here (see the OPEN note in beat 1). The first
+  // click is silent; "Launch." rides the click that really launches.
+  await openNameDialog(page);
+  await spotlight(page, runTitleField(page));
+  await caption(page, "Give the run a name.");
+  await beat(page, BEAT_SHORT);
+  await runTitleField(page).fill(RUN_TITLE);
+  await caption(page, "That's how we'll find it later.");
+  await beat(page, BEAT_SHORT);
+  await spotlight(page, null);
 
-  // The cockpit opens on the new run.
+  // Description too, filmed silently — no owner line covers it; the field
+  // being on camera at all is the teaching (Dana: "that field is what my
+  // auditor reads first").
+  await runDescriptionField(page).fill("Inventory only — nothing should leave the box.");
+  await act(page, confirmLaunchButton(page), "Launch.");
+
+  // The Launched screen offers "View run" once the create has answered (the
+  // create is synchronous with provisioning), and the cockpit opens on the run.
+  await viewRunButton(page).click({ timeout: SANDBOX_UP });
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
   await caption(page, "Once it's launched, the envelope is set.");
   await beat(page, PACE.read);
