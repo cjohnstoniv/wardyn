@@ -90,6 +90,7 @@ func TestPG_QueueRetiredServiceIdentityNeverStarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ageSponsorships(t, e.pg.Pool)
 	auth := queueAuthority{Sub: si.Principal(), Role: oidc.RoleUser, UserType: types.UserTypeStandard, Groups: []string{}, Service: si.Name, Sponsor: e.personP}
 	if end := e.srv.queueOwnerStanding(e.startOf(auth, types.AgentRun{ID: uuid.New()})); end != nil {
 		t.Fatalf("a live service identity's start ended: %+v", end)

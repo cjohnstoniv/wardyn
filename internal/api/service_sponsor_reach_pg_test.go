@@ -84,7 +84,13 @@ func newSponsorEnv(t *testing.T) sponsorEnv {
 // switch, not the cutoff, age the sponsorship; the ones that exercise the cutoff do not call this until after.
 func ageSponsorships(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(), `UPDATE service_identities SET sponsor_since = sponsor_since - interval '1 hour'`); err != nil {
+	ageSponsorshipsBy(t, pool, time.Hour)
+}
+
+// ageSponsorshipsBy is ageSponsorships by d, for a test whose own clock skew must stay larger than the age.
+func ageSponsorshipsBy(t *testing.T, pool *pgxpool.Pool, d time.Duration) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `UPDATE service_identities SET sponsor_since = sponsor_since - make_interval(secs => $1)`, d.Seconds()); err != nil {
 		t.Fatalf("age sponsorships: %v", err)
 	}
 }

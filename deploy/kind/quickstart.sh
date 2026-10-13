@@ -260,6 +260,11 @@ k8s:
   # every other workload); created in step 3 above, because the chart never
   # creates one.
   runsNamespace: ${RUNS_NAMESPACE}
+  # The cluster runner takes no run until it has limits, which wardynd proposes at its first boot from what
+  # it measures: with no ResourceQuota in the runs namespace, that is the nodes' allocatable CPU, memory and
+  # ephemeral storage, read with this list on nodes. A throwaway cluster of your own; read the value's
+  # comment in the chart before setting it on a shared one.
+  readNodes: true
 ssh:
   enabled: true
   port: ${SSH_PORT}

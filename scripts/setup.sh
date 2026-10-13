@@ -50,6 +50,8 @@ cd "$ROOT"
 # file is on check-file-size.sh's frozen allowlist (see that file's own
 # comment for why).
 . "$ROOT/scripts/lib/setup-launch.sh"
+# shellcheck source=scripts/lib/runner-limits.sh
+. "$ROOT/scripts/lib/runner-limits.sh"
 
 # WSL2 must be detected BEFORE any native-Windows guard: some WSL2 shells (e.g.
 # via WSLENV/interop) inherit $OS=Windows_NT from Windows even though this is a
@@ -440,6 +442,8 @@ ensure_postgres
 # Already running? Leave it as-is and don't double-launch on the port.
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
   ok "Wardyn is already running (host mode) — PID $(cat "$PIDFILE"), UI ${URL}."
+  # A re-run finishes what a first run stopped at: the runner's limits (a runner with them is left alone).
+  host_runner_limits "$URL"
   ok "Stop it with:  make stop-host"
   exit 0
 fi
@@ -508,6 +512,9 @@ if ! $healthy && grep -q 'no identity matched any of the recipients' "$LOGFILE" 
 fi
 
 if $healthy; then
+  # The server's Docker runner takes no run until it has limits; on Docker Desktop the server cannot measure
+  # its disk (scripts/lib/runner-limits.sh).
+  host_runner_limits "$URL"
   # Opt-in SCM credential import. SECURITY/PRIVACY: never copies a private key or
   # PAT without explicit consent (an env flag or an interactive yes; default No).
   # Detects a host GitHub/Azure DevOps PAT (env) and a private ~/.ssh key, and —

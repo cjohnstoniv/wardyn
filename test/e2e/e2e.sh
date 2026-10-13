@@ -36,6 +36,8 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 . "${REPO_ROOT}/scripts/lib/common.sh"   # skip_lane only; log/die are redefined below
+# shellcheck source=scripts/lib/runner-limits.sh
+. "${REPO_ROOT}/scripts/lib/runner-limits.sh"
 
 # ── guard ────────────────────────────────────────────────────────────────────
 if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
@@ -226,6 +228,12 @@ until [[ "$(docker inspect -f '{{.State.Health.Status}}' "${NS}-api" 2>/dev/null
   sleep 2
 done
 ok "stack healthy ($(hc "${BASE}/healthz"))"
+# The stack's Docker runner takes no run until it has limits (scripts/lib/runner-limits.sh); this suite
+# declares its own, sized for its few runs.
+# shellcheck disable=SC2317 # called by wardyn_ensure_runner_limits
+wardyn() { e2e_wardyn "$@"; }
+WARDYN_SETUP_RUNNER_LIMITS="${WARDYN_SETUP_RUNNER_LIMITS:---max-runs 4 --total-cpu 8 --total-memory 16 --total-disk 80 --per-run-cpu 2 --per-run-memory 4 --per-run-disk 20}" \
+  wardyn_ensure_runner_limits </dev/null || die "could not give the e2e stack's runner its limits"
 
 # ── 2. create a governed run against the fixture image ─────────────────────--
 log "Creating a governed run (agent=${FIXTURE_AGENT})"
