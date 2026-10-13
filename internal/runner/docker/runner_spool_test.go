@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/google/uuid"
@@ -128,5 +129,54 @@ func TestChownSpoolTreeStaysInTheSpool(t *testing.T) {
 	// To this process's own uid, which needs no privilege: every entry is reached and none errors.
 	if err := chownSpoolTree(dir, os.Getuid(), os.Getgid()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A file in the spool that has a second link is not handed over: the file it is linked to outside the
+// spool keeps its owner, while the spool's own single-link files are handed over.
+func TestChownSpoolTreeSkipsAHardLinkedFile(t *testing.T) {
+	// A group this process may hand a file to without privilege: any other group of its own, or any
+	// group at all as root.
+	gid := -1
+	if os.Geteuid() == 0 {
+		gid = os.Getgid() + 1
+	} else if groups, err := os.Getgroups(); err == nil {
+		for _, g := range groups {
+			if g != os.Getgid() {
+				gid = g
+			}
+		}
+	}
+	if gid < 0 {
+		t.Skip("this user has no second group to hand a file to")
+	}
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(outside, filepath.Join(dir, "lock")); err != nil {
+		t.Skipf("hard links are not available here: %v", err)
+	}
+	group := func(path string) int {
+		t.Helper()
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return int(info.Sys().(*syscall.Stat_t).Gid)
+	}
+	before := group(outside)
+	if err := chownSpoolTree(dir, os.Getuid(), gid); err != nil {
+		t.Fatal(err)
+	}
+	if got := group(filepath.Join(dir, "state.json")); got != gid {
+		t.Fatalf("the spool's own file has group %d, want it handed to %d", got, gid)
+	}
+	if got := group(outside); got != before {
+		t.Fatalf("a file outside the spool, hard-linked into it, was handed to group %d (was %d)", got, before)
 	}
 }
