@@ -28,7 +28,7 @@ function Capacity({ slots }: { slots: PoolSlots }) {
       {slots.max === undefined ? (
         <>
           <UsageMeter label={NR_RUN.CAPACITY_LABEL} used={slots.used} valueText={NR_RUN.RUNNING_ONLY(slots.used)} />
-          <Sub>{NR_RUN.NO_POOL_LIMIT}</Sub>
+          <Sub>{NR_RUN.POOL_LIMIT_FROM_RUNNERS}</Sub>
         </>
       ) : (
         <>
