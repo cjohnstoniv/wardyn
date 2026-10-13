@@ -20,8 +20,9 @@ export function BarrierSection({ pool, chosen, onChoose }: {
   const { options, pick } = barrierRows(pool);
   const selected = chosen ?? pick?.cc;
   return (
-    <div className="flex flex-col gap-3">
-      <span className="label-eyebrow">{NR_RUN.BARRIER_LABEL}</span>
+    // Make's .barrier-field (App.tsx:1798-1912; snapshot index.css:193-194, 239).
+    <div className="mt-[18px]">
+      <span className="mb-[9px] block text-xs font-semibold">{NR_RUN.BARRIER_LABEL}</span>
       <BarrierCompareTable
         label={NR_RUN.BARRIER_LABEL}
         options={options}
@@ -31,7 +32,7 @@ export function BarrierSection({ pool, chosen, onChoose }: {
         badges={{ CC3: NR_RUN.BADGE_EXPERIMENTAL }}
         showWhere={!!pool && poolScope(pool.scope) === "user"}
       />
-      <p className="text-xs leading-snug text-muted-foreground">{NR_RUN.POLICY_NOTE}</p>
+      <p className="mx-0.5 mt-3 text-[11px] leading-normal text-muted-foreground">{NR_RUN.POLICY_NOTE}</p>
     </div>
   );
 }

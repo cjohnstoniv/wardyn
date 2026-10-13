@@ -184,7 +184,7 @@ describe("Templates screen: filters and empty states", () => {
 });
 
 describe("Templates screen: who can change a row", () => {
-  it("a row the caller cannot write keeps Rename and Delete focusable but inert, with the reason as visible text", async () => {
+  it("a row the caller cannot write keeps Rename and Delete focusable but inert, with the reason as their hover title", async () => {
     mount({ templates: [ORG, GROUP], publish: MEMBER });
     await screen.findByText("Organisation baseline");
     const org = within(rowOf("Organisation baseline"));
@@ -194,6 +194,7 @@ describe("Templates screen: who can change a row", () => {
       expect(b).toHaveAttribute("aria-disabled", "true");
       expect(b).not.toBeDisabled();
       expect(b).toHaveAccessibleDescription(expect.stringContaining(T.WHY_ORG));
+      expect(b).toHaveAttribute("title", T.WHY_ORG);
     }
     await userEvent.click(org.getByRole("button", { name: T.RENAME }));
     await userEvent.click(org.getByRole("button", { name: T.DELETE }));
