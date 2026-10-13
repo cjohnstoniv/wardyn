@@ -67,25 +67,23 @@ type spoolReservation struct {
 
 // spoolRecordEnvelope is what a decision record holds beyond its request's own
 // strings: identifiers, times, the rule source, a cause sentence and a scan
-// summary without findings (a skip or bypass). One request without a body can
-// still carry findings: an API door scans the query string on any method when
-// forward inspection is on (forwardAPIDoor), and that record is not covered.
+// summary without findings (a skip or bypass).
 const spoolRecordEnvelope = 64 << 10
 
 // spoolReservationBytes is the most a request's final decision record may take.
-// A body-bearing request while content inspection is on may be scanned, and a
-// scanned record carries its findings (up to the scanner's cap, each with a
-// field path), which no request-derived bound covers: it reserves the largest
-// wire record. Any other request reserves its target escaped twice over (JSON
-// can expand one byte into six, and a cause sentence can name the target again)
-// plus the record's envelope, never more than the largest wire record. The
-// exception is an API door's query scan (forwardAPIDoor), which runs on any
-// method: a request without a body whose query yields findings can exceed this
-// bound.
+// A request that may be scanned while content inspection is on (a body-bearing
+// one, or one with a query when forward egress is inspected: an API door scans
+// the query on any method) carries its findings in its record, up to the
+// scanner's cap and each with a field path, which no request-derived bound
+// covers: it reserves the largest wire record. Any other request reserves its
+// target escaped twice over (JSON can expand one byte into six, and a cause
+// sentence can name the target again) plus the record's envelope, never more
+// than the largest wire record.
 // Reserving every request at the wire maximum held a 32 MiB spool to 32
 // requests in flight.
 func (p *Proxy) spoolReservationBytes(r *http.Request) int64 {
-	if p.scanner != nil && p.scanner.Mode() != contentscan.ModeOff && bodyBearingMethod(r.Method) {
+	if p.scanner != nil && p.scanner.Mode() != contentscan.ModeOff &&
+		(bodyBearingMethod(r.Method) || p.scanner.InspectForwardEgress() && r.URL.RawQuery != "") {
 		return runnerspool.MaxRecordBytes
 	}
 	return min(int64(2*6*(len(r.URL.String())+len(r.Host)+len(r.Method))+spoolRecordEnvelope), runnerspool.MaxRecordBytes)
