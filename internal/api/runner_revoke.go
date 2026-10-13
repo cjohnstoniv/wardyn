@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -84,7 +85,7 @@ func (s *Server) revokeRunnerAndAnswer(w http.ResponseWriter, r *http.Request, i
 	}
 	body := map[string]any{"id": id, "state": types.RunnerRevoked, "runs_killed": len(rev.Killed) + queued}
 	if err != nil {
-		body["error"] = "runner revoked, but closing its session or ending a run on it did not complete; the kill-tail sweep retries the run steps"
+		body["error"] = msgRunnerRevokeIncomplete
 		writeJSON(w, http.StatusInternalServerError, body)
 		return
 	}
@@ -92,6 +93,12 @@ func (s *Server) revokeRunnerAndAnswer(w http.ResponseWriter, r *http.Request, i
 }
 
 const msgRunnerRevokeUnavailable = "runner revocation requires the Postgres runner store"
+
+// msgRunnerRevokeIncomplete is the 500 of a revoke that committed but left a step undone, with what
+// finishes each: recoverAbandonedKillTail for a run that was on the runner, the queue sweep
+// (endQueuedRunsOfRevokedRunners) for one waiting for it.
+const msgRunnerRevokeIncomplete = "runner revoked, but closing its session, ending a run on it or ending a run waiting for it did not complete; " +
+	"the kill-tail sweep retries the steps of a run that was on it, and the queue sweep ends a run still waiting for it"
 
 var errRunnerRevokeUnavailable = errors.New(msgRunnerRevokeUnavailable)
 
@@ -152,12 +159,7 @@ func (s *Server) endQueuedRunsPinnedTo(ctx context.Context, owner string, id uui
 		if json.Unmarshal(e.Launch, &launch) != nil || json.Unmarshal(launch.Request, &req) != nil || req.RunnerID != id.String() {
 			continue
 		}
-		run, err := s.cfg.Store.GetRun(ctx, e.RunID)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		applied, _, err := s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": queueCancelRunnerRevoked})
+		applied, err := s.endRunQueuedForRevokedRunner(ctx, e.RunID)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -168,6 +170,38 @@ func (s *Server) endQueuedRunsPinnedTo(ctx context.Context, owner string, id uui
 	}
 	return n, errors.Join(errs...)
 }
+
+// endRunQueuedForRevokedRunner ends one waiting run, as the system, with reason runner_revoked on its
+// run.kill row, and reports whether this call ended it.
+func (s *Server) endRunQueuedForRevokedRunner(ctx context.Context, runID uuid.UUID) (bool, error) {
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	applied, _, err := s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": queueCancelRunnerRevoked})
+	return applied, err
+}
+
+// endQueuedRunsOfRevokedRunners is the queue sweep's retry of endQueuedRunsPinnedTo, from the durable
+// state alone: it ends each waiting run whose launch names a revoked runner. A revoke whose own pass
+// failed for a run, or never ran because the server stopped after the revoke committed, so converges
+// within a tick, with nobody revoking again. A run that still cannot be ended is tried at the next tick.
+func (s *Server) endQueuedRunsOfRevokedRunners(ctx context.Context) {
+	qs, _ := s.queueStore()
+	entries, err := qs.QueueEntriesOfRevokedRunners(ctx, queueRevokedScanLimit)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: list waiting runs of revoked runners", slog.Any("err", err))
+		return
+	}
+	for _, e := range entries {
+		if _, err := s.endRunQueuedForRevokedRunner(ctx, e.RunID); err != nil {
+			slog.WarnContext(ctx, "wardynd: end a run waiting for a revoked runner", slog.String("run_id", e.RunID.String()), slog.Any("err", err))
+		}
+	}
+}
+
+// queueRevokedScanLimit bounds one tick's work list of runs waiting for revoked runners.
+const queueRevokedScanLimit = 200
 
 // revokedRunKillTail is the kill cascade of a run its runner's revocation
 // ended KILLED: the transition's own effects, the run's approvals, then
