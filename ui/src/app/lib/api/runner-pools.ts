@@ -28,7 +28,7 @@ const memberPath = (poolId: string, runnerId: string) =>
 export const runnerPools = {
   list: () => send<RunnerPoolList>("/runner-pools", { method: "GET" }),
   get: (id: string) => send<RunnerPool>(`/runner-pools/${encodeURIComponent(id)}`, { method: "GET" }),
-  /** Puts the caller's own claimed runner into a self-hosted pool; nobody adds another person's. */
+  /** Puts the caller's own claimed runner into a user pool; nobody adds another person's. */
   addMyRunner: (poolId: string, runnerId: string) => send<RunnerPoolMember>(memberPath(poolId, runnerId), { method: "PUT" }),
   removeMyRunner: (poolId: string, runnerId: string) => sendNoBody(memberPath(poolId, runnerId), "DELETE"),
   orgDefaults: () => send<RunnerPoolDefaults>("/runner-pool-defaults", { method: "GET" }),

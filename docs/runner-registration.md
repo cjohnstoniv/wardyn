@@ -3,7 +3,7 @@
 A runner holds its own Ed25519 key. Registration creates an **unclaimed** runner: it cannot receive a run or relay traffic until its owner confirms the fingerprint. The organisation must configure `WARDYN_RUNNER_ORG_URL` with its public HTTPS URL; HTTP is accepted only for loopback development.
 
 1. Sign in under your personal account and run `wardyn runner token`. The token is printed once to stdout and expires after one hour. Save it in a private file for the runner.
-2. On the runner host, run `wardyn-runnerd register --org https://wardyn.example.com --token-file ./registration-token --name my-laptop`. The runner generates its key locally and prints its fingerprint and its runs at once (see [Runs at once](#runs-at-once)).
+2. On the runner host, run `wardyn-runnerd register --org https://wardyn.example.com --token-file ./registration-token --name my-laptop`. The runner generates its key locally and prints its fingerprint, what it measured and the limits it sent (see [Runner limits](#runner-limits)).
 3. Under that same owner's personal account, run `wardyn runner claim --url https://wardyn.example.com`. The CLI reads the local runner identity and confirms its fingerprint. An administrator's personal account can claim its own runner; administrator credentials cannot claim for another person.
 
 An operator can mint for a named person with `wardyn runner token --owner <principal>`. That token expires after 72 hours and still requires the named owner's fingerprint claim. Every token is single-use, including self-minted tokens. An unclaimed runner expires after 24 hours.
@@ -16,7 +16,7 @@ The API doors are `POST /api/v1/me/runners/tokens`, operator-only `POST /api/v1/
 
 Migration `0142_runner_registration` adds hashed single-use registration tokens and organisation URL bindings to the existing runners table. It does not change run placement records.
 
-Migration `0152_runner_pools` adds the runner pool catalogue: pools, their members, the use policies of organization pools and the organization defaults. It records no run binding, and a pool never claims or transfers a runner. Migration `0158_runner_pool_limits` adds the pool's `limits`: an administrator sets them with `limits` on create and replaces the whole block with `limits` on update (an omitted field, such as `max_concurrent_runs`, is removed); a pool with none adds no bound of its own. A run is admitted by its pool's run types and barriers, and the pool's lifetime bounds its end; CPU, memory, idle stop and the concurrent-run cap are stored and audited but not yet applied to runs.
+Migration `0152_runner_pools` adds the runner pool catalogue: pools, their members, the use policies of organization pools and the organization defaults. It records no run binding, and a pool never claims or transfers a runner. Migration `0158_runner_pool_limits` adds the pool's `limits`: `limits` on create sets them and `limits` on update replaces the whole block (an omitted field, such as `max_concurrent_runs`, is removed and is then set by the pool's runners). [Runner pools](operations/runner-pools.md) says what a pool is and how its limits, barriers and queue apply to a run.
 
 ## Runner enablement
 
