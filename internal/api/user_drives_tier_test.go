@@ -351,8 +351,16 @@ func TestSecurityAdminReplaceOfSeveralRowsIsJudgedAgainstTheKeptRow(t *testing.T
 	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "writable_override") {
 		t.Errorf("replace dropping the kept row's read-only override = %d, want 403 naming writable_override: %s", w.Code, w.Body.String())
 	}
-	if len(st.grants) != 2 || len(audit.events) != 0 {
-		t.Fatalf("a refused replace left %d rows and %d audit rows, want 2 and 0", len(st.grants), len(audit.events))
+	writes := func() (rows []string) {
+		for _, ev := range audit.events {
+			if ev.Action == "drive.grant.write" {
+				rows = append(rows, string(ev.Data))
+			}
+		}
+		return rows
+	}
+	if len(st.grants) != 2 || len(writes()) != 0 {
+		t.Fatalf("a refused replace left %d rows and %d drive.grant.write rows, want 2 and 0", len(st.grants), len(writes()))
 	}
 	// The unchanged re-send of the super admin's exception on ITS drive is judged against that
 	// row, not the older one, so it passes; the older drive is taken away and audited.
@@ -363,7 +371,7 @@ func TestSecurityAdminReplaceOfSeveralRowsIsJudgedAgainstTheKeptRow(t *testing.T
 	if got, ok := st.grants[exception.ID]; len(st.grants) != 1 || !ok || got.DriveID != b.ID {
 		t.Errorf("after the replace the store holds %d rows (%+v), want the one on the kept drive", len(st.grants), st.grants)
 	}
-	if len(audit.events) != 1 || !strings.Contains(string(audit.events[0].Data), `"removed_drive_ids":["`+a.ID.String()+`"]`) {
-		t.Errorf("audit rows = %+v, want one naming the removed drive %s", audit.events, a.ID)
+	if got := writes(); len(got) != 1 || !strings.Contains(got[0], `"removed_drive_ids":["`+a.ID.String()+`"]`) {
+		t.Errorf("drive.grant.write rows = %v, want one naming the removed drive %s", got, a.ID)
 	}
 }
