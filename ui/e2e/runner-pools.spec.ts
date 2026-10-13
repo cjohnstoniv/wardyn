@@ -17,7 +17,7 @@ test("Runners has one tab strip, and the tab is in the address", async ({ page }
   await page.goto("/admin/runners");
   const strip = page.getByRole("navigation", { name: RUNNER_V6.TABS_LABEL });
   await expect(strip.getByRole("button", { name: RUNNER_V6.TAB_RUNNERS })).toHaveAttribute("aria-current", "page");
-  await expect(page.getByText(RUNNER_V6.LEAD)).toBeVisible();
+  await expect(page.getByText(RUNNERS.LEAD)).toBeVisible();
   await expect(page.getByText(RUNNER_V6.TAB_PURPOSE)).toBeVisible();
   // No remote-hosted runner is set up, and people's runners are off.
   await expect(page.getByRole("heading", { name: RUNNERS.OFF_TITLE })).toBeVisible();
