@@ -68,7 +68,7 @@ export function limitsNote(allowance: PersonAllowance | undefined): string {
 export function sourceText(source: LimitSource | undefined, allowance: PersonAllowance | undefined): string | undefined {
   switch (source) {
     case "pool": return NR_RUN.SET_BY_POOL;
-    case "runner_capacity": return NR_RUN.SET_BY_RUNNERS;
+    case "runner": return NR_RUN.SET_BY_RUNNERS;
     case "governance": return allowance?.profile_name ? NR_RUN.SET_BY(allowance.profile_name) : NR_RUN.SET_BY_ORG;
     default: return undefined;
   }

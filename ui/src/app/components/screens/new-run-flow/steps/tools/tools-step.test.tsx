@@ -14,10 +14,12 @@ import { SCENARIO_ACCESS, SETUP_ITEMS } from "../../../../../lib/new-run-fixture
 import { CLAUDE_UNGATED, withFacts } from "../../../../../lib/new-run-fixtures/scenarios/tools-harness";
 import type { AccessFacts } from "../../../../../lib/types/new-run-access";
 import type { HarnessSetFact } from "../../../../../lib/types/new-run-contract";
+import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import type { RunIntent } from "../../draft/run-intent";
+import { checkFailureText } from "../../draft/use-intent-checks";
 import { ToolsStep } from "./tools-step";
 
 const h = vi.hoisted(() => ({
@@ -28,7 +30,8 @@ const h = vi.hoisted(() => ({
   refresh: vi.fn(),
   connect: vi.fn(),
 }));
-vi.mock("../../draft/use-intent-checks", () => ({
+vi.mock("../../draft/use-intent-checks", async (orig) => ({
+  ...(await orig<typeof import("../../draft/use-intent-checks")>()),
   useDraftIdentity: () => ({ principal: "alice", resolved: true, revision: 1, authGeneration: 0 }),
   useIntentChecks: (params: unknown) => { h.params(params); return h.checks; },
 }));
@@ -86,6 +89,105 @@ afterEach(() => {
 });
 
 describe("Tools and access step", () => {
+  const SENTENCE = "This tool cannot be added to this run.";
+  // A fresh element each time, so a rerender is not skipped as identical.
+  const tree = () => (
+    <NewRunDraftProvider owner="alice">
+      <Seed intent={READY}><ToolsStep {...props} /><Revision /></Seed>
+    </NewRunDraftProvider>
+  );
+
+  it("Check again stays mounted and focused while the re-check is out, with no all-clear and no cards", async () => {
+    const retry = vi.fn().mockResolvedValue(undefined);
+    h.checks.preview = { result: undefined, current: false, error: new Error(SENTENCE), busy: false, retry } as never;
+    const view = render(tree());
+    const button = screen.getByRole("button", { name: NR_REVIEW.CHECK_AGAIN });
+    await userEvent.click(button);
+    expect(retry).toHaveBeenCalledTimes(1);
+    // The hook keeps the old error and turns busy on the moment the retry starts.
+    h.checks.preview = { result: undefined, current: false, error: new Error(SENTENCE), busy: true, retry } as never;
+    view.rerender(tree());
+    expect(screen.getByRole("alert")).toHaveTextContent(SENTENCE);
+    expect(screen.getByRole("button", { name: NR_REVIEW.CHECK_AGAIN })).toBe(button);
+    expect(button).toHaveFocus();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    await userEvent.click(button);
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(NR_TOOLS.SETUP_ALL_SET)).toBeNull();
+    expect(screen.queryByRole("heading", { name: NR_TOOLS.INCLUDED_TITLE })).toBeNull();
+  });
+
+  it("a refusal after an earlier answer shows no all-clear anywhere, footer included", () => {
+    const retry = vi.fn();
+    answer(SCENARIO_ACCESS.member, true);
+    const view = render(tree());
+    expect(screen.getByText(NR_TOOLS.STICKY_DONE)).toBeInTheDocument();
+    h.checks.preview = { result: undefined, current: false, error: new Error(SENTENCE), busy: false, retry } as never;
+    view.rerender(tree());
+    expect(screen.getByRole("alert")).toHaveTextContent(SENTENCE);
+    expect(screen.queryByText(NR_TOOLS.STICKY_DONE)).toBeNull();
+    expect(screen.queryByText(NR_TOOLS.SETUP_ALL_SET)).toBeNull();
+  });
+
+  it("when Check again succeeds, focus moves to the step heading instead of dropping to the body", async () => {
+    const retry = vi.fn().mockResolvedValue(undefined);
+    h.checks.preview = { result: undefined, current: false, error: new Error(SENTENCE), busy: false, retry } as never;
+    const view = render(tree());
+    await userEvent.click(screen.getByRole("button", { name: NR_REVIEW.CHECK_AGAIN }));
+    h.checks.preview = { result: undefined, current: false, error: new Error(SENTENCE), busy: true, retry } as never;
+    view.rerender(tree());
+    answer(SCENARIO_ACCESS.member, true);
+    view.rerender(tree());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("heading", { level: 1 })).toHaveFocus();
+  });
+
+  it("a failure that clears while focus is on another live control leaves focus there", () => {
+    h.checks.preview = { result: undefined, current: false, error: new Error(SENTENCE), busy: false, retry: vi.fn() } as never;
+    const view = render(tree());
+    const elsewhere = screen.getByRole("button", { name: NR_SHARED.BACK });
+    elsewhere.focus();
+    answer(SCENARIO_ACCESS.member, true);
+    view.rerender(tree());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(elsewhere).toHaveFocus();
+  });
+
+  it("a failure with no sentence uses the shared fallback", () => {
+    h.checks.preview = { result: undefined, current: false, error: new Error(""), busy: false, retry: vi.fn() } as never;
+    render(tree());
+    expect(screen.getByRole("alert")).toHaveTextContent(checkFailureText(new Error("")));
+    expect(screen.getByRole("alert")).toHaveTextContent("No reason was given.");
+  });
+
+  it("before the first answer there is no \"Nothing else to set up\"", () => {
+    answer(undefined, false);
+    render(tree());
+    expect(screen.queryByText(NR_TOOLS.SETUP_ALL_SET)).toBeNull();
+  });
+
+  it("a refused or failed preview shows the server's sentence and a way to ask again, never an all-clear", async () => {
+    const retry = vi.fn().mockResolvedValue(undefined);
+    const sentence = "No sandbox image on this server includes Claude Code and Codex CLI together, so the run was not created.";
+    h.checks.preview = { result: undefined, current: false, error: new Error(sentence), busy: false, retry } as never;
+    show();
+    expect(screen.getByRole("alert")).toHaveTextContent(sentence);
+    expect(screen.queryByText(NR_TOOLS.SETUP_ALL_SET)).toBeNull();
+    expect(screen.queryByRole("heading", { name: NR_TOOLS.INCLUDED_TITLE })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: NR_REVIEW.CHECK_AGAIN }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows no harness row, tool-rules card or MCP card for a harness the run does not have", () => {
+    const NAMELESS_ROW = { id: "agent:", kind: "harness", from: "harness", name: "", status: "ready", hosts: [], credentials: [], source: { kind: "harness", name: "" } } as unknown as AccessFacts["rows"][number];
+    answer(withFacts(SCENARIO_ACCESS.app, [{ ...CLAUDE_UNGATED, harness: "" }], [NAMELESS_ROW]), true);
+    show({ shape: "environment", experience: "interactive", no_repositories_or_drives: true });
+    expect(screen.queryByText(NR_TOOLS.FROM_HARNESS)).toBeNull();
+    expect(screen.queryByRole("heading", { name: NR_TOOLS.HARNESS_SETUP_TITLE })).not.toBeNull();
+    expect(screen.queryByText(NR_TOOLS.MCP_FOR_HARNESS)).toBeNull();
+    expect(document.body.textContent).not.toMatch(/for \./);
+  });
+
   it("frames step 5 of 5, with Review run as the one primary action and Back to Files", async () => {
     show();
     expect(await screen.findByRole("heading", { level: 1, name: NR_TOOLS.TITLE })).toHaveFocus();

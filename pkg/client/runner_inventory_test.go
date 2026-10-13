@@ -32,7 +32,7 @@ func TestRunnerInventoryMethodsHitTheirRoutes(t *testing.T) {
 		case r.URL.Path == "/api/v1/runners/settings":
 			_, _ = w.Write([]byte(`{"enabled":true}`))
 		case r.URL.Path == "/api/v1/runners/"+id.String(), r.URL.Path == "/api/v1/me/runners/"+id.String():
-			_, _ = w.Write([]byte(`{"id":"` + id.String() + `","state":"claimed","online":true,"runs_active":2}`))
+			_, _ = w.Write([]byte(`{"id":"` + id.String() + `","state":"claimed","online":true,"usage":{"in_use":{"runs":2}}}`))
 		default:
 			_, _ = w.Write([]byte(`[]`))
 		}
@@ -48,7 +48,7 @@ func TestRunnerInventoryMethodsHitTheirRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	v, err := c.GetRunner(ctx, id)
-	if err != nil || v.ID != id || !v.Online || v.RunsActive != 2 {
+	if err != nil || v.ID != id || !v.Online || v.Usage.InUse.Runs != 2 {
 		t.Fatalf("GetRunner = %+v, %v", v, err)
 	}
 	if _, err := c.ListMyRunners(ctx); err != nil {
@@ -90,10 +90,13 @@ func TestRunnerInventoryMethodsHitTheirRoutes(t *testing.T) {
 		t.Fatalf("turning off must send an explicit enabled:false, sent %q", putBody)
 	}
 	got = nil
-	if _, err := c.SetMyRunnerMaxRuns(ctx, id, 3); err != nil {
+	lim := client.RunnerLimits{RunsAtOnce: 3, Total: client.RunnerAmounts{CPUMillis: 4000, MemoryMiB: 8192, DiskMiB: 102400},
+		PerRun: client.RunnerAmounts{CPUMillis: 1000, MemoryMiB: 2048, DiskMiB: 20480}}
+	if _, err := c.SetMyRunnerLimits(ctx, id, lim); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0] != "PUT /api/v1/me/runners/"+id.String() || putBody != `{"max_runs":3}` {
-		t.Fatalf("SetMyRunnerMaxRuns sent %v %q", got, putBody)
+	wantBody := `{"limits":{"runs_at_once":3,"total":{"cpu_millis":4000,"memory_mib":8192,"disk_mib":102400},"per_run":{"cpu_millis":1000,"memory_mib":2048,"disk_mib":20480}}}`
+	if len(got) != 1 || got[0] != "PUT /api/v1/me/runners/"+id.String() || putBody != wantBody {
+		t.Fatalf("SetMyRunnerLimits sent %v %q", got, putBody)
 	}
 }

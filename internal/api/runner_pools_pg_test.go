@@ -60,10 +60,14 @@ func newPoolEnv(t *testing.T, secondHuman bool) *poolEnv {
 }
 
 // ensureRemoteRunners gives each remote-hosted runner the server is set up with its row, as every boot
-// does, without the boot's pool bootstrap.
+// does, without the boot's pool bootstrap, with roomy limits where it declares none.
 func (e *poolEnv) ensureRemoteRunners() {
 	e.t.Helper()
-	if _, err := e.pg.EnsureRemoteRunners(context.Background(), e.srv.configuredExecutors()); err != nil {
+	proposals := map[string]types.RunnerLimits{}
+	for _, id := range e.srv.configuredExecutors() {
+		proposals[id] = roomyRemoteLimits()
+	}
+	if _, _, err := e.pg.EnsureRemoteRunners(context.Background(), e.srv.configuredExecutors(), proposals); err != nil {
 		e.t.Fatal(err)
 	}
 }
@@ -107,7 +111,7 @@ func (e *poolEnv) claimedRunner(owner string) uuid.UUID {
 	id := uuid.New()
 	fp := "fp-" + id.String()
 	if _, err := e.pg.CreateRunner(ctx, types.Runner{ID: id, Owner: owner, Name: "laptop", PublicKey: append(id[:], id[:]...), KeyFingerprint: fp,
-		OrgURLSHA256: federation.OrgURLSHA256(poolTestOrgURL)}); err != nil {
+		OrgURLSHA256: federation.OrgURLSHA256(poolTestOrgURL), Limits: roomyRunnerLimits()}); err != nil {
 		e.t.Fatal(err)
 	}
 	if _, err := e.pg.ClaimRunner(ctx, id, owner, fp, time.Now()); err != nil {
