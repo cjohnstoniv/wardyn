@@ -4,7 +4,6 @@
 package api
 
 import (
-	"cmp"
 	"crypto/ed25519"
 	"errors"
 	"net/http"
@@ -44,7 +43,10 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// An older wardyn-runnerd sends no max_runs; the runner gets the default its owner can change.
-	maxRuns := cmp.Or(req.MaxRuns, types.RunnerMaxRunsDefault)
+	maxRuns := types.RunnerMaxRunsDefault
+	if req.Limits != nil {
+		maxRuns = req.Limits.RunsAtOnce
+	}
 	req.MachineName = strings.TrimSpace(req.MachineName)
 	if !types.ValidMachineName(req.MachineName) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerRegistrationInvalid, "machine_name must be at most 253 bytes of printable characters")
@@ -78,5 +80,5 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, types.ActorSystem, "runner:"+registered.ID.String(),
 		placement.ActionRunnerEnrol, registered.ID.String(), "success", mustJSON(map[string]any{"token_id": token.ID, "fingerprint": registered.KeyFingerprint, "max_runs": registered.MaxRuns})))
-	writeJSON(w, http.StatusCreated, types.RunnerRegistration{RunnerID: registered.ID, Fingerprint: registered.KeyFingerprint, State: registered.State, OrgURLSHA256: orgHash, MaxRuns: registered.MaxRuns})
+	writeJSON(w, http.StatusCreated, types.RunnerRegistration{RunnerID: registered.ID, Fingerprint: registered.KeyFingerprint, State: registered.State, OrgURLSHA256: orgHash})
 }

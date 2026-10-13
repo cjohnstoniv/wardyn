@@ -4,7 +4,6 @@
 package main
 
 import (
-	"cmp"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
@@ -67,7 +66,7 @@ func newRegisterCommand() *cobra.Command {
 		client.HTTPClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errors.New("runner registration does not follow redirects")
 		}}
-		registered, err := client.RegisterRunner(cmd.Context(), sdk.RunnerRegisterRequest{Token: token, PublicKey: key.Public().(ed25519.PublicKey), Name: name, MaxRuns: maxRuns, MachineName: machine})
+		registered, err := client.RegisterRunner(cmd.Context(), sdk.RunnerRegisterRequest{Token: token, PublicKey: key.Public().(ed25519.PublicKey), Name: name, Limits: &types.RunnerLimits{RunsAtOnce: maxRuns}, MachineName: machine})
 		if err != nil {
 			return registrationFailure(err)
 		}
@@ -79,7 +78,7 @@ func newRegisterCommand() *cobra.Command {
 			return err
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Runner %s is unclaimed.\nFingerprint: %s\nRuns at once: %d\nSign in as its owner and run wardyn runner claim with this state directory.\n",
-			registered.RunnerID, fingerprint, cmp.Or(registered.MaxRuns, maxRuns))
+			registered.RunnerID, fingerprint, maxRuns)
 		return nil
 	}
 	cmd.Flags().StringVar(&org, "org", "", "organisation public HTTPS URL")

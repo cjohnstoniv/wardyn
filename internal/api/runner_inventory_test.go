@@ -282,7 +282,7 @@ func TestRunnersListIsTheSecurityTiersAndNamesTheOwner(t *testing.T) {
 	if len(active) != 2 || active[claimed.ID].ID == uuid.Nil || active[waiting.ID].ID == uuid.Nil {
 		t.Fatalf("default filter must be active (claimed and waiting): %d rows", len(active))
 	}
-	if v := active[claimed.ID]; v.Owner != "alice" || !v.Online || v.RunsActive != 2 || v.KeyFingerprint != claimed.KeyFingerprint {
+	if v := active[claimed.ID]; v.Owner != "alice" || !v.Online || v.Usage.InUse.Runs != 2 || v.KeyFingerprint != claimed.KeyFingerprint {
 		t.Fatalf("claimed row: %+v", v)
 	}
 	if v := active[waiting.ID]; v.Owner != "bob" || v.Online || v.KeyFingerprintAbbreviated || v.KeyFingerprint != waiting.KeyFingerprint {

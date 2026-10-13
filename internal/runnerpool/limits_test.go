@@ -19,7 +19,7 @@ const (
 )
 
 var allSources = []types.LimitSource{
-	types.LimitSourcePool, types.LimitSourceGovernance, types.LimitSourceDeployment, types.LimitSourceRunnerCapacity,
+	types.LimitSourcePool, types.LimitSourceGovernance, types.LimitSourceDeployment, types.LimitSourceRunner,
 }
 
 // field is one of the four per-run fields, with how to set a bound on it and read its answer.
@@ -258,7 +258,7 @@ func TestEffectiveConcurrencyIsListedNeverFolded(t *testing.T) {
 		SourceLimits{Source: types.LimitSourceDeployment, ConcurrentRuns: Int(100)},
 		SourceLimits{Source: types.LimitSourceGovernance, ConcurrentRuns: Int(3)},
 		SourceLimits{Source: types.LimitSourcePool, ConcurrentRuns: Int(20)},
-		SourceLimits{Source: types.LimitSourceRunnerCapacity},
+		SourceLimits{Source: types.LimitSourceRunner},
 	)
 	want := []types.ConcurrencyBound{
 		{Source: types.LimitSourcePool, Max: 20}, {Source: types.LimitSourceGovernance, Max: 3}, {Source: types.LimitSourceDeployment, Max: 100},
@@ -438,7 +438,7 @@ func TestGovernanceSource(t *testing.T) {
 
 func TestRunnerCapacitySource(t *testing.T) {
 	s, err := RunnerCapacitySource(RunnerCapacity{8000, 16384}, RunnerCapacity{4000, 32768}, RunnerCapacity{6000, 8192})
-	if err != nil || s.Source != types.LimitSourceRunnerCapacity || *s.CPUMillis.Max != 4000 || *s.MemoryMiB.Max != 8192 {
+	if err != nil || s.Source != types.LimitSourceRunner || *s.CPUMillis.Max != 4000 || *s.MemoryMiB.Max != 8192 {
 		t.Fatalf("the weakest candidate bounds each field: %+v, %v", s, err)
 	}
 	if s.LifetimeSec != (Bound{}) || s.IdleSec != (Bound{}) {
@@ -512,8 +512,8 @@ func TestEffectiveOwnerScenarios(t *testing.T) {
 		t.Fatal(err)
 	}
 	e = mustEffective(t, bg, poolSrc(bg), cap4)
-	if e.CPUMillis.Cap.Value != 4000 || e.CPUMillis.CapSource != types.LimitSourceRunnerCapacity ||
-		e.MemoryMiB.Cap.Value != 4096 || e.MemoryMiB.CapSource != types.LimitSourceRunnerCapacity ||
+	if e.CPUMillis.Cap.Value != 4000 || e.CPUMillis.CapSource != types.LimitSourceRunner ||
+		e.MemoryMiB.Cap.Value != 4096 || e.MemoryMiB.CapSource != types.LimitSourceRunner ||
 		e.MemoryMiB.Default.Value != 4096 || e.MemoryMiB.DefaultSource != types.LimitSourcePool {
 		t.Fatalf("runner capacity: cpu %+v memory %+v", e.CPUMillis, e.MemoryMiB)
 	}

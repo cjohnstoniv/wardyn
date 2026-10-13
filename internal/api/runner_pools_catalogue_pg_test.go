@@ -151,7 +151,7 @@ func TestPoolListNeverNamesAnotherPersonsRunner(t *testing.T) {
 		}
 	}
 	for _, l := range got.Limits {
-		if l.CPUMillis.CapSource == types.LimitSourceRunnerCapacity {
+		if l.CPUMillis.CapSource == types.LimitSourceRunner {
 			t.Errorf("another person's runner is counted as capacity: %+v", l.CPUMillis)
 		}
 	}
@@ -166,7 +166,7 @@ func TestPoolListNeverNamesAnotherPersonsRunner(t *testing.T) {
 		t.Fatalf("with the caller's runner online: %+v", got)
 	}
 	for _, l := range got.Limits {
-		if l.CPUMillis.Cap.Value != 1000 || l.CPUMillis.CapSource != types.LimitSourceRunnerCapacity {
+		if l.CPUMillis.Cap.Value != 1000 || l.CPUMillis.CapSource != types.LimitSourceRunner {
 			t.Errorf("%s cpu = %+v, want the caller's own 1000 from runner_capacity", l.RunType, l.CPUMillis)
 		}
 	}

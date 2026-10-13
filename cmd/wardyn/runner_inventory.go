@@ -79,12 +79,15 @@ func printRunners(w io.Writer, rows []sdk.RunnerView, admin bool) error {
 		if r.LastSeenAt != nil {
 			lastSeen = r.LastSeenAt.Format(time.RFC3339)
 		}
-		atOnce := fmt.Sprintf("%d/%d", r.Running, r.MaxRuns)
+		atOnce := fmt.Sprintf("%d/-", r.Usage.InUse.Runs)
+		if r.Limits != nil {
+			atOnce = fmt.Sprintf("%d/%d", r.Usage.InUse.Runs, r.Limits.RunsAtOnce)
+		}
 		machine := cmp.Or(r.MachineName, "-")
 		if admin {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", r.ID, r.Owner, r.Name, machine, runnerStateWord(r), lastSeen, r.RunsActive, atOnce, r.KeyFingerprint)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", r.ID, r.Owner, r.Name, machine, runnerStateWord(r), lastSeen, r.Usage.InUse.Runs, atOnce, r.KeyFingerprint)
 		} else {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", r.ID, r.Name, machine, runnerStateWord(r), lastSeen, r.RunsActive, atOnce, r.KeyFingerprint)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", r.ID, r.Name, machine, runnerStateWord(r), lastSeen, r.Usage.InUse.Runs, atOnce, r.KeyFingerprint)
 		}
 	}
 	return tw.Flush()
@@ -102,11 +105,11 @@ func runnerSetCmd(client clientFn) *cobra.Command {
 		if !cmd.Flags().Changed("max-runs") {
 			return fmt.Errorf("nothing to change: pass --max-runs")
 		}
-		v, err := client().SetMyRunnerMaxRuns(cmd.Context(), id, maxRuns)
+		v, err := client().SetMyRunnerLimits(cmd.Context(), id, sdk.RunnerLimits{RunsAtOnce: maxRuns})
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "runner %s now runs at most %d at once (%d running)\n", v.Name, v.MaxRuns, v.Running)
+		fmt.Fprintf(cmd.OutOrStdout(), "runner %s now runs at most %d at once (%d running)\n", v.Name, maxRuns, v.Usage.InUse.Runs)
 		return nil
 	}}
 	cmd.Flags().IntVar(&maxRuns, "max-runs", 0, "how many runs the runner may hold at once, 1 to 64")

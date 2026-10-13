@@ -253,10 +253,10 @@ func BarrierLabel(c ConfinementClass) string {
 type LimitSource string
 
 const (
-	LimitSourcePool           LimitSource = "pool"
-	LimitSourceGovernance     LimitSource = "governance"
-	LimitSourceDeployment     LimitSource = "deployment"
-	LimitSourceRunnerCapacity LimitSource = "runner_capacity"
+	LimitSourcePool       LimitSource = "pool"
+	LimitSourceGovernance LimitSource = "governance"
+	LimitSourceDeployment LimitSource = "deployment"
+	LimitSourceRunner     LimitSource = "runner"
 )
 
 // LimitAmount is an effective number. Unlimited is its own value, never a zero.

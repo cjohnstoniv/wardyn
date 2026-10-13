@@ -40,10 +40,10 @@ func Int(n int) *int { return &n }
 // sourceRank orders sources for a tie: the most specific source is named as the
 // one that bound a value two sources both bound, whatever order they came in.
 var sourceRank = map[types.LimitSource]int{
-	types.LimitSourcePool:           0,
-	types.LimitSourceGovernance:     1,
-	types.LimitSourceRunnerCapacity: 2,
-	types.LimitSourceDeployment:     3,
+	types.LimitSourcePool:       0,
+	types.LimitSourceGovernance: 1,
+	types.LimitSourceRunner:     2,
+	types.LimitSourceDeployment: 3,
 }
 
 // Effective is the one function that decides a run's CPU, memory, main-drive
@@ -389,7 +389,7 @@ type RunnerCapacity struct{ CPUMillis, MemoryMiB int64 }
 // candidate, or one that reports no capacity, is an error: a missing fact refuses
 // the run, it is never read as zero or as unlimited.
 func RunnerCapacitySource(candidates ...RunnerCapacity) (SourceLimits, error) {
-	out := SourceLimits{Source: types.LimitSourceRunnerCapacity}
+	out := SourceLimits{Source: types.LimitSourceRunner}
 	if len(candidates) == 0 {
 		return out, errors.New("no candidate runner to take a capacity from")
 	}
