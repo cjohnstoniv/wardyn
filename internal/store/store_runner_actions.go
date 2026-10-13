@@ -308,9 +308,7 @@ func (s PG) RunHeldContainedOnRunner(ctx context.Context, runID uuid.UUID) (bool
 // one is ErrConflict.
 func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actionID uuid.UUID, outcome, reason string, observedAt time.Time,
 	prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (types.RunnerPendingAction, bool, error) {
-	if runnerID == uuid.Nil || runID == uuid.Nil || actionID == uuid.Nil || observedAt.IsZero() || prepare == nil ||
-		(outcome != types.RunnerActionSuccess && outcome != types.RunnerActionDeferred && outcome != types.RunnerActionRefused) ||
-		(outcome == types.RunnerActionRefused) != (reason != "") || len(reason) > maxRunnerRefusalReason {
+	if !validRunnerActionResult(runnerID, runID, actionID, outcome, reason, observedAt) || prepare == nil {
 		return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
 	}
 	observedAt = observedAt.UTC().Truncate(time.Microsecond)

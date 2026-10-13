@@ -18,6 +18,22 @@ import (
 // maxRunnerRefusalReason bounds the reason a refused action_result carries.
 const maxRunnerRefusalReason = 1024
 
+// validRunnerActionResult reports whether a result names its runner, run,
+// action and observed time, its outcome is in the closed set, and a reason
+// accompanies a refusal and nothing else.
+func validRunnerActionResult(runnerID, runID, actionID uuid.UUID, outcome, reason string, observedAt time.Time) bool {
+	if runnerID == uuid.Nil || runID == uuid.Nil || actionID == uuid.Nil || observedAt.IsZero() {
+		return false
+	}
+	switch outcome {
+	case types.RunnerActionSuccess, types.RunnerActionDeferred:
+		return reason == ""
+	case types.RunnerActionRefused:
+		return reason != "" && len(reason) <= maxRunnerRefusalReason
+	}
+	return false
+}
+
 // recordRunnerActionRefusalTx writes runner.action.refuse for the first refused
 // receipt of a, inside the receipt's transaction. runID is nil for an asserted
 // subject, which has no run row. The run itself is left as it was.
