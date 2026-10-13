@@ -222,6 +222,14 @@ func withinAnyRoot(path string, roots []string) bool {
 	})
 }
 
+// memberDriveNeverOnPool is a person's own drive on a self-hosted pool: never
+// placed there, permanently. Its volume or claim would live on that person's
+// machine, which deleting the drive cannot reach. No later proof a pool's
+// runners give about local paths (verifiedLocalPaths) relaxes it.
+func memberDriveNeverOnPool(pool types.RunnerPool, d types.UserDrive) bool {
+	return d.OwnerSubject != "" && pool.HostingType == types.RunnerPoolSelfHosted
+}
+
 func localTrustedOutputRequest(req createRunRequest) bool {
 	switch req.Task {
 	case harnessLoginTask, "workspace record", "workspace verify":

@@ -31,7 +31,46 @@ type MeDriveCatalogue struct {
 	// so UnavailableReason includes not_in_pool. False for no pool and for one
 	// the caller cannot use; the pool is checked again at launch.
 	PoolChecked bool `json:"pool_checked"`
+	// Create is whether the caller may create a drive now (POST /me/drives).
+	// Absent when the caller is not a person: a device, a delegated caller,
+	// SCIM, a service identity, the admin token or local mode.
+	Create *MemberDriveCreate `json:"create,omitempty"`
 }
+
+// MemberDriveCreate is the catalogue's create availability, decided by the
+// same gates as POST /me/drives except the name.
+type MemberDriveCreate struct {
+	Allowed bool `json:"allowed"`
+	// Reason is set exactly when Allowed is false.
+	Reason MemberDriveCreateReason `json:"reason,omitempty"`
+	// DeniedByProfile names the profile, with reason denied_by_profile.
+	DeniedByProfile string `json:"denied_by_profile,omitempty"`
+	// Count is the caller's drives, one being deleted included.
+	Count int `json:"count"`
+	// Limit is the switch's drives per person; 0 when the switch is off.
+	Limit int `json:"limit"`
+}
+
+// MemberDriveCreateReason is why a person cannot create a drive now. Closed;
+// the TS twin is MemberDriveCreateReason in ui/src/app/lib/api/me-drives.ts.
+type MemberDriveCreateReason string
+
+const (
+	// MemberDriveCreateDisabled: the org switch is off, or drives are off.
+	MemberDriveCreateDisabled MemberDriveCreateReason = "disabled"
+	// MemberDriveCreateDeniedByProfile: deny_member_drives or deny_user_drive.
+	MemberDriveCreateDeniedByProfile MemberDriveCreateReason = "denied_by_profile"
+	// MemberDriveCreateLimitReached: Count has reached Limit.
+	MemberDriveCreateLimitReached MemberDriveCreateReason = "limit_reached"
+	// MemberDriveCreateUnsupported: no managed backend for this deployment.
+	MemberDriveCreateUnsupported MemberDriveCreateReason = "unsupported"
+	// MemberDriveCreateDeleteUnavailable: the substrate could not delete one.
+	MemberDriveCreateDeleteUnavailable MemberDriveCreateReason = "delete_unavailable"
+	// MemberDriveCreateGovernance: the caller's governance could not be read.
+	MemberDriveCreateGovernance MemberDriveCreateReason = "governance_unavailable"
+	// MemberDriveCreateGroupsStale: the caller's group snapshot is stale.
+	MemberDriveCreateGroupsStale MemberDriveCreateReason = "groups_snapshot_stale"
+)
 
 // MeDrive is one drive of the catalogue.
 type MeDrive struct {

@@ -156,11 +156,25 @@ func (s *Server) handleCreateMemberDrive(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusCreated, memberMeDrive(saved))
 }
 
-// memberDriveCreateGates runs create's gates after the name rule, in order: the
-// org switch, the profile doors, the backend and size, the substrate's
-// lifecycle, and the caller's own view of drive names. It returns the row to
-// insert and the switch's policy, or the refusal.
+// memberDriveCreateGates runs create's gates after the name rule: the doors
+// (memberDriveCreateDoors), then the caller's own view of drive names. It
+// returns the row to insert and the switch's policy, or the refusal.
 func (s *Server) memberDriveCreateGates(r *http.Request, name string) (types.UserDrive, types.MemberDrivePolicy, *runRefusal) {
+	d, policy, f := s.memberDriveCreateDoors(r)
+	if f == nil {
+		f = s.memberDriveNameRefusal(r.Context(), name)
+	}
+	if f != nil {
+		return types.UserDrive{}, policy, f
+	}
+	d.Name = name
+	return d, policy, nil
+}
+
+// memberDriveCreateDoors runs every create gate that does not need the name,
+// in order: the org switch, the profile doors, the backend and size, and the
+// substrate's lifecycle. The catalogue's create block reads the same answer.
+func (s *Server) memberDriveCreateDoors(r *http.Request) (types.UserDrive, types.MemberDrivePolicy, *runRefusal) {
 	ctx := r.Context()
 	provider, err := s.userDriveProvider(ctx)
 	if err != nil {
@@ -177,15 +191,12 @@ func (s *Server) memberDriveCreateGates(r *http.Request, name string) (types.Use
 	if f := s.memberDriveDoorRefusal(r, ceiling); f != nil {
 		return types.UserDrive{}, policy, f
 	}
-	d, f := s.memberDriveRow(name, policy, provider.MaxSizeMiB, ceiling.Limits.MaxDriveSizeMiB)
+	d, f := s.memberDriveRow(policy, provider.MaxSizeMiB, ceiling.Limits.MaxDriveSizeMiB)
 	if f != nil {
 		return types.UserDrive{}, policy, f
 	}
 	if !s.memberDrivesDeletable(ctx) {
 		return types.UserDrive{}, policy, runError(http.StatusUnprocessableEntity, reasonMemberDriveDeleteUnavailable, memberDriveDeleteUnavailableCreateMsg())
-	}
-	if f := s.memberDriveNameRefusal(ctx, name); f != nil {
-		return types.UserDrive{}, policy, f
 	}
 	return d, policy, nil
 }
@@ -210,8 +221,8 @@ func (s *Server) memberDriveDoorRefusal(r *http.Request, ceiling governanceCeili
 // and profile ceilings. A Docker volume has no size, so it gets none. A stored
 // Kubernetes switch with no size is refused rather than made into an unsized
 // claim.
-func (s *Server) memberDriveRow(name string, policy types.MemberDrivePolicy, deploymentMiB, profileMiB int) (types.UserDrive, *runRefusal) {
-	d := types.UserDrive{Name: name}
+func (s *Server) memberDriveRow(policy types.MemberDrivePolicy, deploymentMiB, profileMiB int) (types.UserDrive, *runRefusal) {
+	var d types.UserDrive
 	switch s.cfg.RunnerTarget {
 	case "docker":
 		d.Backend = types.DriveBackendDockerVolume

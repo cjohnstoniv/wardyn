@@ -38,6 +38,30 @@ export interface MeDriveCatalogue {
   denied_by_profile?: string;
   unavailable?: string;
   pool_checked: boolean;
+  /** Whether the caller may create a drive now; absent when the caller is not a person. */
+  create?: MemberDriveCreate;
+}
+
+/** Why a person cannot create a drive now (pkg/client.MemberDriveCreateReason). */
+export type MemberDriveCreateReason =
+  | "disabled"
+  | "denied_by_profile"
+  | "limit_reached"
+  | "unsupported"
+  | "delete_unavailable"
+  | "governance_unavailable"
+  | "groups_snapshot_stale";
+
+/** The catalogue's create availability (pkg/client.MemberDriveCreate). */
+export interface MemberDriveCreate {
+  allowed: boolean;
+  /** Set exactly when allowed is false. */
+  reason?: MemberDriveCreateReason;
+  denied_by_profile?: string;
+  /** The caller's drives, one being deleted included. */
+  count: number;
+  /** Drives per person; 0 when the switch is off. */
+  limit: number;
 }
 
 /** Reads the caller's drive catalogue, checked against runnerPoolId when given. */

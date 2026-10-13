@@ -106,6 +106,8 @@ type dispatchParams struct {
 	// runs inline in the create request, so the snapshot has no staleness window
 	// to be stale in. See user_drives_run.go.
 	Drives []types.DriveMount
+	// MemberDrives are the Drives that are people's own, id to owner, which dispatch re-reads (memberDrivesStillThere).
+	MemberDrives map[uuid.UUID]string
 	// MainDrive is the main drive create's fold decided (stepMainDrive): its size and whether it
 	// is soft. NIL for every lane that has no fold decision (scans, record, verify, logins, probes).
 	MainDrive *mainDriveDecision
@@ -660,7 +662,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.completeMaskManifestWithFileSecrets(ctx, run, policy, &spec) {
 		return
 	}
-	if !s.classifyLocalDispatch(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, adoRun, p.TrustedOutput) {
+	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, adoRun, p) {
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)

@@ -567,14 +567,15 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 	return !refusal.write(s, f.w, f.r)
 }
 
-// stepDriveEligibility holds the run's drives to its resolved pool: no drive
-// mounts on a self-hosted pool's runners (driveNotInPool), so one drive there
-// refuses the run, named, before anything is sized or minted.
+// stepDriveEligibility holds the run's drives to its resolved pool: one drive
+// that does not mount on the pool's runners (driveNotInPool) refuses the run,
+// named, before anything is sized or minted.
 func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
-	if len(f.drives) == 0 || !f.place.pooled || !driveNotInPool(f.place.row) {
+	i := slices.IndexFunc(f.drives, func(d runDrive) bool { return driveNotInPool(f.place.row, d.resolved.Drive) })
+	if !f.place.pooled || i < 0 {
 		return true
 	}
-	msg := driveNotInPoolMsg(f.drives[0].resolved.Drive.Name)
+	msg := driveNotInPoolMsg(f.drives[i].resolved.Drive.Name)
 	return !driveDenied(authz.Deny(authz.ReasonDriveNotInPool, "runs.drive", msg), msg).write(s, f.w, f.r)
 }
 

@@ -354,7 +354,7 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 	s.metrics.queueWait(queueOutcomeStarted, run.AdmittedAt.Sub(st.entry.QueuedAt))
 	s.finishCreateRunLaunch(st.base, createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
-		wsRefs: f.wsRefs, driveMounts: f.driveMounts, ephemeralDirs: f.ephemeralDirs,
+		wsRefs: f.wsRefs, driveMounts: f.driveMounts, memberDrives: memberDriveOwners(f.drives), ephemeralDirs: f.ephemeralDirs,
 		runToken: id.Token, created: started, comps: f.comps, overridden: f.source.overridden(), pushSets: f.pushSets, harnessRules: harnessRules,
 	})
 	return nil
