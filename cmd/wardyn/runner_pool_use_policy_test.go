@@ -111,7 +111,8 @@ func TestRunnerPoolUsePolicyHeldForASecondPerson(t *testing.T) {
 func TestRunnerPoolShowWhoMayUseAnOrganizationPool(t *testing.T) {
 	id := uuid.New()
 	pool := sdk.RunnerPool{ID: id, Name: "CI jobs", Scope: sdk.RunnerPoolOrganization, State: types.RunnerPoolActive, Revision: 9}
-	at := time.Date(2026, 10, 9, 14, 2, 11, 0, time.UTC)
+	// show prints no time: a policy's UpdatedAt only says one was written (the zero time means none).
+	at := time.Now().Add(-72 * time.Hour)
 	for _, tc := range []struct {
 		name   string
 		policy any
