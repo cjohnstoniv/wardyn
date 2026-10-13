@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, ADMIN_TOKEN, gotoConsole, navTo } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, newRunHeading } from "./fixtures";
+import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { RUN, RUN_SIGN_IN } from "../src/app/components/wardyn/copy";
 import { LOGIN_SANDBOX_NOTE } from "../src/app/components/screens/run-detail/login-sandbox-note";
 import { STATES } from "../src/app/components/wardyn/states";
@@ -33,8 +34,8 @@ test.describe("Run detail (/runs/:id)", () => {
     // none` (this file's default), which #214's shell banner now reads as
     // no-barrier on EVERY page; its extra row pushes the terminal pane below
     // this test's <=300px above-the-fold bound. Spliced to a settled host
-    // with a barrier, the same fix new-run.spec.ts's own 1280x650 rail test
-    // already uses for the identical shape.
+    // with a barrier, the same splice the specs with a short viewport use
+    // for the identical shape.
     await page.route("**/api/v1/setup/status*", async (route) => {
       const response = await route.fetch();
       const json = await response.json();
@@ -154,17 +155,19 @@ test.describe("Run detail (/runs/:id)", () => {
     await expect(page.getByRole("button", { name: "Kill", exact: true })).toBeDisabled();
 
     await cloneBtn.click();
-    await expect(page).toHaveURL(/\/runs\/new$/);
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
-    await expect(page.getByLabel("Task")).toHaveValue("e2e fixture 4");
+    // A clone opens New Run on Review, with the run's setup already in the draft (title and description
+    // are not cloned).
+    await expect(page).toHaveURL(/\/runs\/new\?again=[0-9a-f-]{8,}&step=review$/);
+    await expect(newRunHeading(page, NR_REVIEW.TITLE)).toBeVisible();
+    // The draft as the document the server will be sent: the YAML view is the whole of it.
+    await page.getByRole("group", { name: NR_REVIEW.VIEW_ARIA }).getByRole("button", { name: NR_REVIEW.VIEW_YAML }).click();
+    const doc = page.locator("pre code");
+    await expect(doc).toContainText("e2e fixture 4");
     // review C-02: an AUDIT-derived field (never on the run row itself) —
     // proves the clone actually reads fixture 4's run.create row, not just
-    // the row, which carries no tool_approvals at all.
-    await expect(
-      page
-        .getByRole("radiogroup", { name: "Tool approvals" })
-        .getByRole("radio", { name: /Hold in Wardyn/ }),
-    ).toHaveAttribute("aria-checked", "true");
+    // the row, which carries no tool_approvals at all. A held tool call is
+    // the harness's default effect "hold" (or the older tool_approvals).
+    await expect(doc).toContainText(/(default_effect|tool_approvals): hold/);
   });
 
   // #1197 D2 (design.md §4): the Runs-list kebab (Kill, Clone, Open) is gone
