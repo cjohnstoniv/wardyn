@@ -44,7 +44,8 @@ export interface StepShellProps {
   eyebrow?: string;
   progress?: { label: string; steps: FlowStep[] };
   back?: { label: string; onBack: () => void };
-  primary: StepShellPrimary;
+  /** None: no primary button and no Ctrl/Cmd+Enter (Shape from scratch, where a choice moves on). */
+  primary?: StepShellPrimary;
   /** Local issues: the primary action then focuses the first one's control instead of running. */
   issues?: readonly StepIssue[];
   /** Beside the heading, at its right (Review's view toggle). */
@@ -73,9 +74,11 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
       control?.focus();
       return;
     }
-    if (!primary.disabled) primary.onActivate();
+    if (primary && !primary.disabled) primary.onActivate();
   };
+  const hasPrimary = primary !== undefined;
   React.useEffect(() => {
+    if (!hasPrimary) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.defaultPrevented || modalLayerOpen()) return;
       e.preventDefault();
@@ -83,7 +86,7 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, []);
+  }, [hasPrimary]);
 
   const header = (
     <header className="flex max-w-[680px] flex-col gap-2.5">
@@ -92,7 +95,7 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
       {lede && <p className="max-w-[620px] text-muted-foreground">{lede}</p>}
     </header>
   );
-  const primaryButton = (
+  const primaryButton = primary && (
     <Button type="button" disabled={primary.disabled} aria-describedby={primary.describedBy} onClick={() => activate.current()}>
       {primary.label}
       {primary.arrow !== false && <span aria-hidden="true">→</span>}
