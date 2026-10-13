@@ -261,6 +261,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ADOGrants:            newADOGrantsByHost(cfg.ADOGrant),
 		AzureGates:           cfg.AzureGates,
 		GitHubAPI:            cfg.GitHubAPI,
+		AzureARM:             cfg.AzureARM,
 		ControlPlaneURL:      cfg.ControlPlaneURL,
 		RunToken:             ts,
 		Upstream:             up,

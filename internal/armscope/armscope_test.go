@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	pinned = "11111111-2222-3333-4444-555555555555"
+	pinned = "1111aaaa-2222-3333-4444-5555bbbbcccc"
 	other  = "99999999-8888-7777-6666-555555555555"
 	keys   = "/subscriptions/" + pinned + "/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/acct/listKeys"
 )
