@@ -296,6 +296,18 @@ describe("Name this run: a create the check did not foresee", () => {
     expect(within(box).queryByRole("button", { name: ADO_PAT.MEMBER_CONNECT })).not.toBeInTheDocument();
   });
 
+  it("when the server's sentence is the blocked note's own, the dialog says it once, as the refusal", async () => {
+    create.mockRejectedValueOnce(refusal(403, ADO_PAT.LAUNCH_POLICY_REFUSED, "ado_pat_policy_blocked"));
+    open();
+    const box = await dialog();
+    await userEvent.type(within(box).getByLabelText(NR_LAUNCH.TITLE_LABEL), "ado blocked once");
+    await within(box).findByText(NR_LAUNCH.CHECKED_JUST_NOW);
+    await userEvent.click(launchButton());
+    expect(await within(box).findByTestId("ado-launch-note")).toHaveTextContent(ADO_PAT.LAUNCH_POLICY_REFUSED);
+    expect(within(box).getAllByText(ADO_PAT.LAUNCH_POLICY_REFUSED)).toHaveLength(1);
+    expect(within(box).getAllByRole("alert")).toHaveLength(1);
+  });
+
   it("a launch refused for want of a usable sign-in asks to connect again, and connecting asks the server again", async () => {
     create.mockRejectedValueOnce(refusal(403, BREACH, "ado_pat_consent_needed"));
     open();

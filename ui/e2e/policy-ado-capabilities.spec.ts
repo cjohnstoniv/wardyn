@@ -136,7 +136,7 @@ test("New Run summarises the picked saved policy's Azure DevOps access", async (
     for (const [i, [, , line]] of policies.entries()) {
       await gotoConsole(page);
       await openNewRun(page);
-      await reviewRunDocument(page, { shape: "environment", experience: "interactive", policy_id: ids[i] });
+      await reviewRunDocument(page, { shape: "environment", experience: "interactive", no_repositories_or_drives: true, policy_id: ids[i] });
       await expect(page.getByTestId("ado-access-summary")).toHaveText(line);
     }
     await expect(page.getByTestId("ado-access-summary").getByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE)).toBeVisible();
