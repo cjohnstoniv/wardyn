@@ -23,6 +23,11 @@ import (
 const userDriveCols = `id, name, backend, host_root, storage_class, home_template, ` +
 	`size_mib, writable, reclaim, created_at, updated_at, created_by, object_scheme`
 
+// driveRowCols is userDriveCols plus the member-drive columns: every read that
+// can return a member drive scans these, so the owner always travels with it.
+// The resolvers keep userDriveCols, since a member drive has no grant to win.
+const driveRowCols = userDriveCols + `, owner_subject, delete_started_at`
+
 const userDriveGrantCols = `id, subject_type, subject, drive_id, priority, ` +
 	`size_mib_override, writable_override, home_override, enabled, created_at, created_by`
 
@@ -52,7 +57,8 @@ var driveHomeNamespaceClashSQL = `SELECT ` + fmt.Sprintf(driveHomeNamespaceClash
 // above. An empty result means a guard refused, not that the row is missing.
 // object_scheme is never a caller value: INSERT writes 'id', and ON CONFLICT
 // SET keeps the target row's existing value rather than EXCLUDED's, so it's
-// fixed at creation and never changes on later edits.
+// fixed at creation and never changes on later edits. The DO UPDATE's WHERE
+// refuses a member drive (owner_subject set): the admin write path never edits one.
 var userDriveUpsertSQL = `
 		INSERT INTO user_drives (id, name, backend, host_root, storage_class,
 			home_template, size_mib, writable, reclaim, created_by, name_slug, object_scheme)
@@ -69,6 +75,7 @@ var userDriveUpsertSQL = `
 			    writable = EXCLUDED.writable, reclaim = EXCLUDED.reclaim,
 			    name_slug = EXCLUDED.name_slug, updated_at = now(),
 			    object_scheme = user_drives.object_scheme
+			WHERE user_drives.owner_subject = ''
 		RETURNING ` + userDriveCols
 
 // userDriveDest is the scan target list for userDriveCols, written ONCE so the
@@ -76,6 +83,11 @@ var userDriveUpsertSQL = `
 func userDriveDest(d *types.UserDrive) []any {
 	return []any{&d.ID, &d.Name, &d.Backend, &d.HostRoot, &d.StorageClass, &d.HomeTemplate,
 		&d.SizeMiB, &d.Writable, &d.Reclaim, &d.CreatedAt, &d.UpdatedAt, &d.CreatedBy, &d.ObjectScheme}
+}
+
+// driveRowDest is the scan target list for driveRowCols.
+func driveRowDest(d *types.UserDrive) []any {
+	return append(userDriveDest(d), &d.OwnerSubject, &d.DeleteStartedAt)
 }
 
 // userDriveGrantDest is the same for userDriveGrantCols. writable_override
@@ -230,16 +242,17 @@ func (s PG) driveHomeNamespaceClash(ctx context.Context, q driveQuerier, d types
 
 // GetUserDrive returns one drive by id, or ErrNotFound.
 func (s PG) GetUserDrive(ctx context.Context, id uuid.UUID) (types.UserDrive, error) {
-	const q = `SELECT ` + userDriveCols + ` FROM user_drives WHERE id = $1`
-	return scanUserDrive(s.Pool.QueryRow(ctx, q, id))
+	const q = `SELECT ` + driveRowCols + ` FROM user_drives WHERE id = $1`
+	return scanDriveRow(s.Pool.QueryRow(ctx, q, id))
 }
 
-// DeleteUserDrive removes one drive by id. ErrNotFound if no row matched;
+// DeleteUserDrive removes one admin drive by id. ErrNotFound if no row matched,
+// including a member drive, which only the member-drive delete removes;
 // ErrConflict if it's still allocated (user_drive_grants.drive_id is ON
 // DELETE RESTRICT — Postgres refuses rather than cascading away grants whose
 // directories may still hold someone's work).
 func (s PG) DeleteUserDrive(ctx context.Context, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM user_drives WHERE id = $1`, id)
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM user_drives WHERE id = $1 AND owner_subject = ''`, id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
@@ -257,11 +270,12 @@ func (s PG) DeleteUserDrive(ctx context.Context, id uuid.UUID) error {
 // with its grant count, in one read — the console's whole table. The count
 // rides along so the delete affordance is honest (a drive with grants answers
 // 409, visible before clicking); a grouped subquery, not a JOIN, keeps the
-// drive row single.
+// drive row single. Member drives are listed too, for the recovery rehearsal;
+// the admin handler filters them out.
 func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, error) {
 	const q = `SELECT d.id, d.name, d.backend, d.host_root, d.storage_class, d.home_template,
 			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by, d.object_scheme,
-			COALESCE(c.n, 0)
+			d.owner_subject, d.delete_started_at, COALESCE(c.n, 0)
 		FROM user_drives d
 		LEFT JOIN (SELECT drive_id, COUNT(*) AS n FROM user_drive_grants GROUP BY drive_id) c
 			ON c.drive_id = d.id
@@ -269,7 +283,7 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 	return collect(ctx, s.Pool, "list", "user drives", q, nil,
 		func(row pgx.Row) (types.UserDriveListItem, error) {
 			var item types.UserDriveListItem
-			dest := append(userDriveDest(&item.UserDrive), &item.GrantCount)
+			dest := append(driveRowDest(&item.UserDrive), &item.GrantCount)
 			if err := row.Scan(dest...); err != nil {
 				return types.UserDriveListItem{}, fmt.Errorf("store: scan user drive: %w", err)
 			}
@@ -514,6 +528,18 @@ func (s PG) HasGroupTierDriveGrants(ctx context.Context) (bool, error) {
 func scanUserDrive(row pgx.Row) (types.UserDrive, error) {
 	var d types.UserDrive
 	err := row.Scan(userDriveDest(&d)...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return types.UserDrive{}, ErrNotFound
+	}
+	if err != nil {
+		return types.UserDrive{}, fmt.Errorf("store: scan user drive: %w", err)
+	}
+	return d, nil
+}
+
+func scanDriveRow(row pgx.Row) (types.UserDrive, error) {
+	var d types.UserDrive
+	err := row.Scan(driveRowDest(&d)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.UserDrive{}, ErrNotFound
 	}

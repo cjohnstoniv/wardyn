@@ -81,6 +81,11 @@ const GovernanceTargetLockClass int32 = 0x57474754 // ASCII "WGGT"
 // domains) sees every assignment written before it, including another group's.
 const KeyDomainAssignmentLockClass int32 = 0x574B4441 // ASCII "WKDA"
 
+// MemberDriveLockClass is the classid of the TRANSACTION-scoped two-argument lock (second key: one
+// owner's subject folded with crc32) store.CreateMemberDrive takes around its per-person count and
+// insert, so two creates by one person cannot both pass the count.
+const MemberDriveLockClass int32 = 0x574D4452 // ASCII "WMDR"
+
 // LoginSupersedeLockWait is the TOTAL budget one caller spends trying to take
 // a keyed lock before being REFUSED (retry) rather than let through unlocked;
 // only ErrAdvisoryLockNoCapacity proceeds unlocked. Matches

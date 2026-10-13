@@ -456,6 +456,34 @@ type RunHarnessStore interface {
 // Compile-time assertion: PG satisfies RunHarnessStore.
 var _ RunHarnessStore = PG{}
 
+// MemberDriveStore persists member drives: a person's own user_drives row,
+// owned by its owner_subject, with no grant rows. Bodies in member_drives.go.
+// Optional like RunnerStore: callers type-assert.
+type MemberDriveStore interface {
+	// CreateMemberDrive inserts d for d.OwnerSubject (non-empty) unless the owner
+	// already holds limit rows: ErrMemberDriveLimit, or ErrMemberDriveNameTaken
+	// when the owner has a drive whose name folds to the same slug.
+	CreateMemberDrive(ctx context.Context, d types.UserDrive, limit int) (types.UserDrive, error)
+	// ListMemberDrivesOf returns owner's drives, tombstoned ones included.
+	ListMemberDrivesOf(ctx context.Context, owner string) ([]types.UserDrive, error)
+	// GetMemberDriveOf returns drive id only if owner owns it, else ErrNotFound.
+	GetMemberDriveOf(ctx context.Context, owner string, id uuid.UUID) (types.UserDrive, error)
+	// BeginMemberDriveDelete tombstones owner's drive and returns the tombstone:
+	// ErrNotFound when not owned, ErrMemberDriveBusy while another delete holds it.
+	BeginMemberDriveDelete(ctx context.Context, owner string, id uuid.UUID) (types.UserDrive, time.Time, error)
+	// BeginMemberDriveDeleteAdmin is BeginMemberDriveDelete for any owner's drive.
+	BeginMemberDriveDeleteAdmin(ctx context.Context, id uuid.UUID) (types.UserDrive, time.Time, error)
+	// AbortMemberDriveDelete clears only the tombstone started names.
+	AbortMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error
+	// FinishMemberDriveDelete removes the row only while it carries started.
+	FinishMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error
+	// ListMemberDrives returns one page of every person's drives and the total.
+	ListMemberDrives(ctx context.Context, p Page) ([]types.UserDrive, int, error)
+}
+
+// Compile-time assertion: PG satisfies MemberDriveStore.
+var _ MemberDriveStore = PG{}
+
 // TemplateStore persists run templates (migration 0165_run_templates); bodies in
 // store_run_templates.go. Optional like ComponentStore: callers type-assert, and a
 // caller that finds it absent answers 501 templates_unavailable rather than

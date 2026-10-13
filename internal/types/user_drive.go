@@ -228,8 +228,8 @@ func EnforcementFor(b DriveBackend) StorageEnforcement {
 
 // ─── the rows ─────────────────────────────────────────────────────────────────
 
-// UserDrive is one admin-registered drive (migration 0054's user_drives row).
-// Name is the UNIQUE human handle: what an admin allocates by, what the
+// UserDrive is one drive (migration 0054's user_drives row), admin-registered unless OwnerSubject is set.
+// Name is the human handle, unique among admin drives and per owner among member drives: what an admin allocates by, what the
 // console lists, and the last tie-break in the resolver's ORDER BY. Writable
 // defaults to FALSE; a grant or run may narrow it, never widen it.
 type UserDrive struct {
@@ -256,6 +256,13 @@ type UserDrive struct {
 	CreatedAt time.Time    `json:"created_at"`
 	UpdatedAt time.Time    `json:"updated_at"`
 	CreatedBy string       `json:"created_by,omitempty"`
+	// OwnerSubject is set only on a member drive: the canonical subject of the
+	// one person who owns it. Written once on create and never decoded from a
+	// request; "" on every admin row.
+	OwnerSubject string `json:"owner,omitempty"`
+	// DeleteStartedAt is a member drive's delete tombstone: while set, the
+	// drive is being destroyed and is treated as absent.
+	DeleteStartedAt *time.Time `json:"-"`
 }
 
 // UserDriveGrant allocates one drive to one subject (migration 0054's
