@@ -163,6 +163,10 @@ var configSecretWordRE = regexp.MustCompile(`(?:^|[^a-z0-9])(?:pass(?:word|wd|ph
 var configSecretNamesNotValues = map[string]bool{"name": true, "names": true, "ref": true, "refs": true, "id": true, "ids": true, "patterns": true,
 	"file": true, "files": true, "path": true, "paths": true, "store": true, "stores": true}
 
+// configSecretLocationWords name where a secret lives only as the key's last word: SECRET_FILE is a
+// path, SECRET_FILE_CONTENTS is the secret itself.
+var configSecretLocationWords = map[string]bool{"file": true, "files": true, "path": true, "paths": true, "store": true, "stores": true}
+
 // ConfigKeyLooksSecret reports whether a config key names a secret by one of
 // its words (GITHUB_TOKEN, apiKey, db-password, CLIENT_SECRET,
 // JWT_SECRET, a secret access key). Whole words only: MAX_TOKENS and BYPASS_CACHE are
@@ -185,7 +189,8 @@ func ConfigKeyLooksSecret(key string) bool {
 	}
 	words := strings.FieldsFunc(folded, func(r rune) bool { return (r < 'a' || r > 'z') && (r < '0' || r > '9') })
 	for i, w := range words {
-		if w == "secret" && (i+1 == len(words) || !configSecretNamesNotValues[words[i+1]]) {
+		if w == "secret" && (i+1 == len(words) || !configSecretNamesNotValues[words[i+1]] ||
+			configSecretLocationWords[words[i+1]] && i+2 < len(words)) {
 			return true
 		}
 	}
