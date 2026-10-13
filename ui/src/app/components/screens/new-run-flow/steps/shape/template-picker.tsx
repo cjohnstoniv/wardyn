@@ -3,13 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Chip } from "../../../../wardyn/primitives";
 import { NR_SHAPE } from "../../../../wardyn/copy/new-run/shape";
 import { NR_TEMPLATES } from "../../../../wardyn/copy/new-run/templates";
 import { Label } from "../../../../ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../../ui/select";
 import type { TemplateSummary } from "../../../../../lib/types/templates";
 import { templateSource } from "./shape-sources";
+import { INLINE_CHOICE, INLINE_LABEL, useShown } from "./inline-choice";
 import { useLoaded } from "./use-loaded";
 
 const scopeLabel = (t: TemplateSummary): string =>
@@ -17,34 +17,35 @@ const scopeLabel = (t: TemplateSummary): string =>
 
 const list = (signal: AbortSignal) => templateSource.list(signal);
 
-/** Both kinds, a policy marked as one. Choosing a row opens Review on that revision. */
+/**
+ * Both kinds, as plain options (Make App.tsx:1216-1228). The shown row is the one picked, else the
+ * first; it is reported up so Continue knows where to go.
+ */
 export function TemplatePicker({ selectedId, onPick }: { selectedId?: string; onPick: (template: TemplateSummary) => void }) {
   const loaded = useLoaded(list);
-  if (loaded.status === "error") return <p role="alert" className="text-sm text-danger">{loaded.message}</p>;
-  if (loaded.status === "ready" && loaded.value.templates.length === 0) {
-    return <p className="text-sm text-muted-foreground">{NR_SHAPE.EMPTY_TEMPLATES}</p>;
-  }
   const templates = loaded.status === "ready" ? loaded.value.templates : [];
+  const shown = useShown(templates, (t) => t.id === selectedId, onPick);
+  if (loaded.status === "error") return <div className={INLINE_CHOICE}><p role="alert" className="text-sm text-danger">{loaded.message}</p></div>;
+  if (loaded.status === "ready" && templates.length === 0) {
+    return <div className={INLINE_CHOICE}><p className="text-sm text-muted-foreground">{NR_SHAPE.EMPTY_TEMPLATES}</p></div>;
+  }
   return (
-    <div className="flex flex-col gap-2">
-      <Label htmlFor="nr-template">{NR_SHAPE.TEMPLATE_LABEL}</Label>
+    <div className={INLINE_CHOICE}>
+      <Label htmlFor="nr-template" className={INLINE_LABEL}>{NR_SHAPE.TEMPLATE_LABEL}</Label>
       <Select
-        value={selectedId ?? ""}
+        value={shown?.id ?? ""}
         disabled={loaded.status === "loading"}
         onValueChange={(id) => {
           const picked = templates.find((t) => t.id === id);
           if (picked) onPick(picked);
         }}
       >
-        <SelectTrigger id="nr-template" aria-busy={loaded.status === "loading"} className="w-full">
+        <SelectTrigger id="nr-template" aria-busy={loaded.status === "loading"} className="w-full bg-card dark:bg-card">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
           {templates.map((t) => (
-            <SelectItem key={t.id} value={t.id}>
-              {NR_SHAPE.TEMPLATE_OPTION(t.name, scopeLabel(t))}
-              {t.kind === "policy" && <Chip>{NR_TEMPLATES.POLICY_BADGE}</Chip>}
-            </SelectItem>
+            <SelectItem key={t.id} value={t.id}>{NR_SHAPE.TEMPLATE_OPTION(t.name, scopeLabel(t))}</SelectItem>
           ))}
         </SelectContent>
       </Select>
