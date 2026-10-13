@@ -147,6 +147,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   check): the runner answers an action it can never apply, such as a stop or kill naming a container it cannot prove
   it created, instead of failing its session on every reconnect. The action closes and `runner.action.refuse` is
   recorded.
+- A repository locator, ref or target that contains whitespace or a control character is now refused where it used
+  to be stored and then silently not cloned: in the default policy file at startup, in a stored or inline policy's
+  `workspace_repos`, and in a workspace's repository source. A stored workspace with such a target answers 422
+  `workspace_seed_source_target_invalid` when a run uses it. Edit the field before upgrading. Folder mounts and
+  scratch paths with spaces are unaffected.
 
 ### Added
 
@@ -1041,6 +1046,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   erasure scope.
 - A guarded secret delete (`If-Match` revision) no longer removes a row that was replaced while the delete waited.
   Building a run's masker no longer slows with the square of the number of stored credential values.
+- A run that is stopped but kept no longer answers 500 to the console's Files and Resources polls or writes a
+  `run.files.fail` audit row each time: both reads answer 409 `run_inspect_agent_stopped`. A failed run that had
+  waited in a queue no longer shows the queue's wait reason as its status reason. A bulk restart with current limits
+  is sent in batches of five, so a long list no longer outlives the browser's request deadline.
+- Review and policy preview refuse a narrowed github.com `git_pat` exactly when launch would, including a run whose
+  only GitHub access is a declared clone beside a GitHub App grant. A model provider or Git API host given as an
+  IPv6 literal on port 443 is reached; before, every request to it failed with 502.
 
 
 ## [0.8.9] — 2026-10-09
