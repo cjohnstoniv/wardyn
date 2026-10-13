@@ -535,6 +535,23 @@ describe("Admin -> Runners remote-hosted runner", () => {
   });
 });
 
+describe("Admin -> Runners remote-hosted runner available to listed people", () => {
+  it("shows it as available, says where the list changes, and offers no switch that would discard the list", async () => {
+    remoteListMock.mockResolvedValue([{ ...SHARED, people_pools: "listed", people_subjects: [{ subject_type: "group", subject: "platform-eng" }] }]);
+    const user = userEvent.setup();
+    renderScreen();
+    await user.click(await screen.findByRole("button", { name: "shared-docker" }));
+    const drawer = await screen.findByRole("dialog");
+    const box = within(drawer).getByRole("checkbox", { name: "People can add this runner to their own user pools" });
+    expect(box).toBeChecked();
+    expect(box).toBeDisabled();
+    expect(within(drawer).getByText("Only the people, groups and roles an admin listed can add it. Change the list with wardyn runner remote people.")).toBeInTheDocument();
+    await user.click(box);
+    expect(clearPeopleMock).not.toHaveBeenCalled();
+    expect(setPeopleMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("Admin -> Runners tabs", () => {
   it("has one tab strip; Pools keeps the page title, changes the lede and drops the token button", async () => {
     const user = userEvent.setup();
