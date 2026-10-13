@@ -315,8 +315,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   <name> [--everyone]` publishes a launch preset to the organisation as a template (a preset limited to user types
   needs `--everyone`; its `inline_policy` is laid onto the default policy instead of replacing it).
   `wardyn template import --kind Run|RunTemplate` checks either document kind, and `wardyn run --file <doc>` launches a
-  `kind: Run` document; for now a document that sets `inline_policy` is refused. `wardyn person erase --scope` names
-  `run_setups`.
+  `kind: Run` document, laying a document's `inline_policy` onto the default policy. `wardyn person erase --scope`
+  names `run_setups`.
 - New Run picks a run's harnesses and the run follows them: the harness that starts is the one chosen, with its own model
   provider; an optional starting prompt becomes its first message; Environment and Application runs launch with no
   harness on the agent base image, and a command may include harnesses. Each harness's agent permission, model provider
