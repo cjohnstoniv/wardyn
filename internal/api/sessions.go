@@ -306,8 +306,8 @@ func (s *Server) revokeCredentials(ctx context.Context, principal string) (perso
 // `t.RevokedAt == nil` loop is the proof), so a target with nothing but revoked
 // rows would otherwise suppress the email arm too.
 //
-// Cost: one extra ListAPITokens call in the sub-form case, buying correctness
-// on the identity-straddling shape this lever exists to cover.
+// Cost: one indexed read (store.APITokensByIdentityLister) covers both forms, so a group
+// removal's per-member sweep no longer reads the whole table; a store without it scans.
 //
 // The sweep is not the only closure. A token may carry an expiry, but most carry none, and
 // apiTokenAuth now compares each row's created_at against the SAME cutoff this
@@ -326,33 +326,18 @@ func (s *Server) revokeAPITokensMatching(ctx context.Context, principal string, 
 		toks []types.APIToken
 		err  error
 	)
-	if principal == "" {
+	switch lister, indexed := s.cfg.Store.(store.APITokensByIdentityLister); {
+	case principal == "":
 		toks, err = s.cfg.Store.ListAPITokens(ctx)
-	} else {
-		toks, err = s.cfg.Store.ListAPITokensByPrincipal(ctx, principal)
+	case indexed:
+		// Both identities in one indexed read, matching email as the session cut does (PG lower()); the scan
+		// below returns the same rows except for non-ASCII case pairs, where strings.EqualFold can differ.
+		toks, err = lister.ListAPITokensByIdentity(ctx, principal)
+	default:
+		toks, err = s.listAPITokensByIdentityScan(ctx, principal)
 	}
 	if err != nil {
 		return 0, err
-	}
-	if principal != "" {
-		// The caller may have named either identity, so BOTH are matched, every
-		// time. Case-insensitively on email, exactly as IsSessionRevoked's email
-		// arm does, so the two halves of one revoke cannot disagree about who
-		// was named.
-		all, aerr := s.cfg.Store.ListAPITokens(ctx)
-		if aerr != nil {
-			return 0, aerr
-		}
-		seen := make(map[uuid.UUID]bool, len(toks))
-		for _, t := range toks {
-			seen[t.ID] = true
-		}
-		for _, t := range all {
-			if t.Email != "" && strings.EqualFold(t.Email, principal) && !seen[t.ID] {
-				seen[t.ID] = true
-				toks = append(toks, t)
-			}
-		}
 	}
 	now := time.Now().UTC()
 	n := 0
@@ -380,4 +365,60 @@ func (s *Server) revokeAPITokensMatching(ctx context.Context, principal string, 
 		n++
 	}
 	return n, nil
+}
+
+// listAPITokensByIdentityScan is the store-agnostic form of store.APITokensByIdentityLister. The caller may
+// have named either identity, so BOTH are matched, every time: principal exactly, email case-insensitively,
+// exactly as IsSessionRevoked's email arm does, so the two halves of one revoke cannot disagree about who
+// was named.
+func (s *Server) listAPITokensByIdentityScan(ctx context.Context, principal string) ([]types.APIToken, error) {
+	toks, err := s.cfg.Store.ListAPITokensByPrincipal(ctx, principal)
+	if err != nil {
+		return nil, err
+	}
+	all, err := s.cfg.Store.ListAPITokens(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[uuid.UUID]bool, len(toks))
+	for _, t := range toks {
+		seen[t.ID] = true
+	}
+	for _, t := range all {
+		if t.Email != "" && strings.EqualFold(t.Email, principal) && !seen[t.ID] {
+			seen[t.ID] = true
+			toks = append(toks, t)
+		}
+	}
+	return toks, nil
+}
+
+// handleLogout terminates the human session. FIX #6: it is mounted as
+// POST /api/v1/auth/logout inside the humanOrAdminAuth group so the UI's existing
+// POST actually kills the session (the old code only had a root GET /auth/logout,
+// which the POST never reached — 404 — leaving the HttpOnly OIDC cookie valid).
+//
+//   - OIDC session mode: delegate to the OIDC LogoutHandler, which clears the
+//     HttpOnly wardyn_session cookie, cuts the person's browser sessions
+//     server-side so a copy of the cookie stops working (and redirects to "/").
+//   - Admin-token / local mode (OIDC not configured): there is NO server-side
+//     session to kill — the client just drops its local bearer token. Return 204
+//     (no content). The nil-OIDC guard is REQUIRED so this never panics in
+//     local/token mode.
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.OIDC != nil {
+		// Clears the HttpOnly session cookie and, for a live session, cuts the person's browser sessions;
+		// the cut is audited like the session-only cut an admin makes (handleRevokeSessions).
+		sub, err := s.cfg.OIDC.SignOut(w, r)
+		if sub != "" {
+			outcome, data := "success", map[string]any{"scope": "sub", "sub": sub, "tokens_revoked": 0, "ssh_keys_deleted": 0, "sessions_only": true}
+			if err != nil {
+				outcome, data["error"] = "failure", err.Error()
+			}
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+				"session.revoke", sub, outcome, mustJSON(data)))
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

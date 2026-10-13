@@ -76,6 +76,9 @@
   --info-subtle: rgba(29, 78, 216, 0.13);
   --cyan: #0e7490;
   --cyan-subtle: rgba(14, 116, 144, 0.1);
+  /* Shared drives (owner-approved Files prototype 2026-10-13): the one kind colour no existing pair matches. */
+  --violet: #6646c9;
+  --violet-subtle: #eee8ff;
 
   /* agent brand accent — Claude Code monogram avatar (same hue both modes).
      #d97757 is only 3.12:1 with white text (BOTH themes — same hex), so the
@@ -184,6 +187,8 @@
   --info-subtle: rgba(96, 165, 250, 0.13);
   --cyan: #06b6d4;
   --cyan-subtle: rgba(6, 182, 212, 0.1);
+  --violet: #b9a2ff;
+  --violet-subtle: #221c38;
 
   /* agent brand accent — Claude Code monogram avatar (same hue both modes).
      3.12:1 with white text here too — same near-black foreground as light. */
@@ -271,6 +276,8 @@
   --color-info-subtle: var(--info-subtle);
   --color-cyan: var(--cyan);
   --color-cyan-subtle: var(--cyan-subtle);
+  --color-violet: var(--violet);
+  --color-violet-subtle: var(--violet-subtle);
 
   --color-agent-claude: var(--agent-claude);
   --color-agent-claude-foreground: var(--agent-claude-foreground);

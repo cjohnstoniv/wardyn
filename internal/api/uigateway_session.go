@@ -116,6 +116,9 @@ type uiSession struct {
 	// the verified identity's, for a revoke that names it.
 	AuthorizedAt int64  `json:"t"`
 	Email        string `json:"m,omitempty"`
+	// RevSeq is the revocation sequence the entry ticket recorded: a cut with a greater one ends this
+	// session whatever the clock says. Absent, the session is ordered on AuthorizedAt.
+	RevSeq int64 `json:"q,omitempty"`
 	// Via is the portal the entry ticket was minted through (#1142), nil
 	// otherwise. The relay audits on the daemon's context, so the session
 	// carries it onto every row it writes after the entry (#1234).
@@ -258,7 +261,7 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 // The cookie is valid for up to the session TTL, which is long enough for a
 // human to lose the run or be revoked outright inside one session. The console
 // session stops on its very next request when an admin revokes it, attach
-// re-checks per connect behind a 30s ticket, and SSH bounds a stale admin
+// re-checks while the terminal is open (attach_authority.go), and SSH bounds a stale admin
 // stamp with WARDYN_SSH_ROLE_TTL — the relay was the one lane where
 // "authorized at enter" meant "authorized until the cookie expires", while
 // holding an editor with an in-sandbox terminal.
@@ -307,8 +310,8 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 	// The cutoff is compared against the ticket's authority time, never the
 	// redemption time, and both identities ride the cookie, so a revoke that
 	// names the email reaches an open relay session as it does the console's.
-	revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(ctx, sess.Principal, sess.Email,
-		time.Unix(sess.AuthorizedAt, 0).UTC())
+	revoked, err := oidc.IsRevoked(ctx, s.cfg.SessionRevocations, sess.Principal, sess.Email,
+		oidc.Issue{At: time.Unix(sess.AuthorizedAt, 0).UTC(), Seq: sess.RevSeq})
 	if err != nil {
 		// Fail CLOSED. A revocation lookup that cannot answer is the one case
 		// where continuing would serve the credential the admin just cancelled,

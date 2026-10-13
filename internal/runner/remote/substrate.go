@@ -123,7 +123,10 @@ func (s *Substrate) Advertised() (runner.TargetFacts, bool) {
 	if !ok || !s.t.Online() {
 		return runner.TargetFacts{}, false
 	}
-	return runner.TargetFacts{Classes: slices.Clone(c.Support.Classes), CapacityAdvertised: true, CPUMillisMax: c.CPUMillisMax, MemoryMiBMax: c.MemoryMiBMax,
+	// A capacity the runner did not report (either size zero or absent) is unknown, never zero: placement
+	// then holds no candidate to it.
+	advertised := c.CPUMillisMax > 0 && c.MemoryMiBMax > 0
+	return runner.TargetFacts{Classes: slices.Clone(c.Support.Classes), CapacityAdvertised: advertised, CPUMillisMax: c.CPUMillisMax, MemoryMiBMax: c.MemoryMiBMax,
 		EphemeralDiskEnforcement: c.Support.EphemeralDiskEnforcement, KeepsEnded: true, UserDrives: c.Support.UserDrives}, true
 }
 

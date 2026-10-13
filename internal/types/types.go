@@ -89,7 +89,7 @@ var SlotHoldingRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWa
 
 // RunQueue is what a QUEUED run says about its wait: the pool, when it joined, when its wait ends,
 // how many runs are ahead of it in that pool (a count, never whose) and the wait reason token
-// (runner_pool_at_capacity or runner_pool_no_runner_free).
+// (runner_pool_at_capacity, runner_pool_no_runner_free or runner_pool_runners_at_capacity).
 type RunQueue struct {
 	PoolID     uuid.UUID `json:"pool_id"`
 	QueuedAt   time.Time `json:"queued_at"`
@@ -164,13 +164,13 @@ type AgentRun struct {
 	EvidenceSource RunEvidenceSource `json:"evidence_source,omitempty"`
 	// RunnerPoolID is the runner pool the run was admitted into, and the next three fields say how
 	// (all written once at create). A pool is a label for a choice and never admission: the run
-	// goes to the exact target recorded in RunnerID (a self-hosted pool) or RunnerPoolExecutor (a
-	// remote-provided one), whatever the pool or anyone's defaults say later. Nil for a run from
+	// goes to the exact runner recorded in RunnerID (a self-hosted runner) or RunnerPoolExecutor (a
+	// remote-hosted runner's id), whatever the pool or anyone's defaults say later. Nil for a run from
 	// before pools and for a server-originated run that names none; RunnerPoolSelection is then empty.
 	RunnerPoolID        *uuid.UUID          `json:"runner_pool_id,omitempty"`
 	RunnerPoolRevision  int64               `json:"runner_pool_revision,omitempty"`
 	RunnerPoolSelection RunnerPoolSelection `json:"runner_pool_selection,omitempty"`
-	RunnerPoolExecutor  string              `json:"runner_pool_executor,omitempty"`
+	RunnerPoolExecutor  string              `json:"remote_runner_id,omitempty"`
 	SandboxRef          string              `json:"sandbox_ref,omitempty"`
 	Image               string              `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.
@@ -500,6 +500,10 @@ type SSHPublicKey struct {
 	RoleCheckedAt *time.Time `json:"role_checked_at,omitempty"`
 	Capped        bool       `json:"capped"`
 	CreatedAt     time.Time  `json:"created_at"`
+	// RevSeq is the revocation sequence read when the key was registered; migration 0194 gave the keys
+	// that existed their order once. 0 only for a key written by a replica that predates it, which a
+	// revocation cutoff orders on CreatedAt. Never on the wire.
+	RevSeq int64 `json:"-"`
 }
 
 // APIToken is a per-user, long-lived bearer credential a human mints for scripts/CI, replacing
@@ -528,10 +532,17 @@ type APIToken struct {
 	MintedBy        string     `json:"minted_by,omitempty"`  // admin who minted this for its owner; empty when the owner minted it
 	// Disposition is where an admin-minted token stands, derived at read (#1508); empty on any other token.
 	Disposition TokenDisposition `json:"disposition,omitempty"`
-	Token       string           `json:"token,omitempty"` // plaintext, create response ONLY
+	// ServiceIdentity names the service identity an admin linked this token to, set with Disposition on
+	// a token that has a move row (#1508); empty on any other token.
+	ServiceIdentity string `json:"service_identity,omitempty"`
+	Token           string `json:"token,omitempty"` // plaintext, create response ONLY
 	// IdentityStampedAt is when Role and Groups were last stamped: at mint, then at each sign-in of
 	// the owner. Nil reads as stale under WARDYN_ROLE_STAMP_TTL. Never on the wire.
 	IdentityStampedAt *time.Time `json:"-"`
+	// RevSeq is the revocation sequence read when the token was minted; migration 0194 gave the tokens
+	// that existed their order once. 0 only for a token written by a replica that predates it, which a
+	// revocation cutoff orders on CreatedAt. Never on the wire.
+	RevSeq int64 `json:"-"`
 }
 
 // Person is an identity an admin created or confirmed before its first sign-in, keyed by the

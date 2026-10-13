@@ -147,6 +147,7 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
 |---|---|---|---|---|
 | `runner_pool_at_capacity` | Wait | None, ever | `status_detail` `queue: …` → `status_reason`; `run.create` | `RUN_WAIT.AT_CAPACITY` (exists) |
 | `runner_pool_no_runner_free` | Wait, for a run already queued whose runners cannot take it now (busy, or offline since it queued) | None, ever | As above | New `RUN_WAIT.NO_RUNNER_FREE` |
+| `runner_pool_runners_at_capacity` | Wait, for a run already queued whose owner's runners are online but each holds its `max_runs` | None, ever | As above | New `RUN_WAIT.RUNNERS_AT_CAPACITY` |
 | `runner_pool_queue_full` | Refusal, create | `422` | Error body; no row, no audit row | New `RUNNER_POOL_REFUSAL.QUEUE_FULL`, golden-pinned |
 | `runner_pool_full` | Refusal, revive | `422` | Error body; revive refusal audit row | New `RUNNER_POOL_REFUSAL.FULL`, golden-pinned |
 | `queue_timeout` | End, `FAILED` | None (no request open); `GET` is `200` | `status_detail`, `failure_hint`, `run.queue.expire` | New `RUN_END_REASON_SENTENCE` entry |

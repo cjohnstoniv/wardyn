@@ -101,17 +101,23 @@ func advertisesSize(f runner.TargetFacts) bool {
 	return f.CapacityAdvertised && f.CPUMillisMax > 0 && f.MemoryMiBMax > 0
 }
 
-// selfHostedCapacity is runner capacity's candidates: the online, class-eligible candidates of a
-// self-hosted pool that advertise a size, narrowed to the pinned runner when the request names one.
-// A remote pool's executors are not a capacity source; their size is held per candidate.
+// selfHostedCapacity is runner capacity's candidate: of the online, class-eligible self-hosted
+// candidates that advertise a size (the pinned runner alone when the request names one), the largest,
+// by CPU and then memory, so the run is offered the biggest size one of them can take; the placement
+// fit then keeps only the candidates the applied size fits. A remote-hosted runner is not a capacity
+// source; its size is held per candidate.
 func selfHostedCapacity(pool types.RunnerPool, fit []poolTarget, pin string) []runnerpool.RunnerCapacity {
-	if pool.HostingType != types.RunnerPoolSelfHosted {
+	if pool.Scope != types.RunnerPoolUser {
 		return nil
 	}
 	var out []runnerpool.RunnerCapacity
 	for _, t := range fit {
-		if advertisesSize(t.facts) && (pin == "" || t.id == pin) {
-			out = append(out, runnerpool.RunnerCapacity{CPUMillis: t.facts.CPUMillisMax, MemoryMiB: t.facts.MemoryMiBMax})
+		if t.runnerID == nil || !advertisesSize(t.facts) || (pin != "" && t.id != pin) {
+			continue
+		}
+		c := runnerpool.RunnerCapacity{CPUMillis: t.facts.CPUMillisMax, MemoryMiB: t.facts.MemoryMiBMax}
+		if len(out) == 0 || c.CPUMillis > out[0].CPUMillis || (c.CPUMillis == out[0].CPUMillis && c.MemoryMiB > out[0].MemoryMiB) {
+			out = []runnerpool.RunnerCapacity{c}
 		}
 	}
 	return out

@@ -21,6 +21,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -337,8 +338,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 
 // claimRevive is reviveRunProxy's claim (store.RunReviver.MarkRunRevived). A
 // revive that starts the run's stopped agent (startsAgent, reviveNeedsAgentStart)
-// takes a slot under its pool's cap and WARDYN_MAX_CONCURRENT_RUNS, pool lock first, then
-// the cap's lock, and at either cap is refused as a create is, the run left kept.
+// takes a slot under its pool's cap, WARDYN_MAX_CONCURRENT_RUNS and its runner's
+// max_runs, pool lock first, then the cap's lock, then the runner's, and at any of
+// them is refused as a create is, the run left kept.
 func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run types.AgentRun, startsAgent bool, actorType types.ActorType, actor string) *reviveError {
 	claimed, err := reviver.MarkRunRevived(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()), s.cfg.MaxConcurrentRuns, startsAgent)
 	if errors.Is(err, store.ErrRunCapReached) {
@@ -350,6 +352,13 @@ func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run 
 		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
 			mustJSON(map[string]any{"subject": run.CreatedBy, "reason": string(runnerpool.ReasonFull), "pool_id": run.RunnerPoolID})))
 		return reviveRefused(runnerpool.ReasonFull.Status(), string(runnerpool.ReasonFull), runnerpool.FullMsg(full.Pool, full.Max))
+	}
+	var atMax *store.RunnerAtCapacityError
+	if errors.As(err, &atMax) {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
+			mustJSON(map[string]any{"subject": run.CreatedBy, "reason": string(placement.ReasonRunnerAtCapacity), "runner_id": run.RunnerID})))
+		return reviveRefused(placement.ReasonRunnerAtCapacity.Status(), string(placement.ReasonRunnerAtCapacity),
+			fmt.Sprintf("Your runner %s is running its limit of %d runs at once. Try again when one finishes, or raise Runs at once on your runner.", atMax.Runner, atMax.Max))
 	}
 	if err != nil {
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, "claim the run for revive: "+err.Error())

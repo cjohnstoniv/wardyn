@@ -147,7 +147,8 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
   - `POST /api/v1/people/{principal}/tokens` answers every caller `403` with reason `person_token_mint_removed` ("No one can create a token that acts as another person. They sign in and create their own."), whether or not the person exists.
   - No role, flag or environment variable turns it back on.
   - A token an admin created for someone else acted as that person while the admin held its plaintext, which is the reach this closes.
-- For people who never open the console, the interim path is that the person signs in once and creates their own token (`POST /api/v1/me/tokens`, or the console; see [CI.md](../CI.md)).
+- For people who never open the console, the person signs in once and creates their own token (`POST /api/v1/me/tokens`, or the console), or claims an [invitation](#invitations-and-service-identities) you send them.
+  - Pipelines use a [service identity](#service-identities) instead of a person's token; see [CI.md](../CI.md).
   - It is never the deployment's admin token.
   - A trusted front-end that acts for people who ARE signed in to it uses [delegation](#delegated-run-management-portals) instead: it never holds a long-lived token for anyone.
 
@@ -157,7 +158,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
 | `POST /api/v1/people` `{"tenant_id":"<tid>","object_id":"<oid>","email":"<email>"}` | Entra ID only: the same, keyed by the tenant and object id (see below); the principal is `entra:<tid>:<oid>` |
 | `POST /api/v1/people/{principal}/tokens` | refused: `403` `person_token_mint_removed`, one `person.token.create` audit row with outcome `denied` |
 | `GET /api/v1/people/{principal}/tokens` | that person's tokens, revoked ones included |
-| `GET /api/v1/tokens?minted_for_others=true` | every live token an admin created for someone else before this change (metadata only, never a plaintext); also on the console's Admin > Credentials page |
+| `GET /api/v1/tokens?minted_for_others=true` | every live token an admin created for someone else before this change, each with a [`disposition`](#what-happens-to-a-token-an-admin-created) (metadata only, never a plaintext); also on the console's Admin > Credentials page |
 
 - **Tokens already minted keep working until you revoke them.**
   - Nothing is revoked by the upgrade.
@@ -215,6 +216,152 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
   - That happens when the email already names another known subject, when the subject is already known under a different email, when the subject differs from a known one only by case, or when the subject is another person's email.
   - It answers `422` for the reserved subjects `admin-token`, the local-mode operator, `local:…`, `device:…`, `delegate:…` and `subject:…`, in any case — the same set a sign-in is refused for (see "Some subjects never sign in").
 - Revocation of any such token is immediate either way: `DELETE /api/v1/tokens/{id}`, or the person's own `DELETE /api/v1/me/tokens/{id}`.
+## Invitations and service identities
+
+A person gets their own credential through an invitation only they can claim.
+Automation runs as a named, sponsored service identity, never as a person.
+Both replace a token an admin created for someone else, and nothing that works today stops working.
+
+### Invite a person
+
+1. Make sure the person exists: `POST /api/v1/people` (above). An unknown principal is refused `422` `invitation_target_unknown`.
+2. Invite them with `wardyn person invite <principal>` or `POST /api/v1/people/{principal}/invitations` (security tier). The answer carries `console_path`.
+3. Send them that link. They sign in as themselves and claim the invitation on Account, under Invitations.
+4. The token is shown to them once. You never see it.
+
+| Option | CLI flag | Meaning |
+|---|---|---|
+| `expires_in_seconds` | `--expires-in` | How long it stays claimable: default `72h`, at most `14d`. |
+| `token_name` | `--token-name` | The name the token starts with; the person may change it. |
+| `token_ttl_seconds` | `--token-ttl` | Upper bound on the token's lifetime; `WARDYN_API_TOKEN_MAX_TTL` still caps it. |
+| `replaces_token_id` | `--replaces` | A live token an admin created for that person; the claim revokes it. |
+
+| State | Meaning |
+|---|---|
+| `pending` | Claimable now. |
+| `claimed` | Claimed once; `token_id` names the token, never its value. |
+| `expired` | Past `expires_at`. |
+| `revoked` | Withdrawn by an admin. |
+
+- **The invitation holds no secret.**
+  - Only the target, signed in as themselves, can claim it, so a forwarded link reaches nothing.
+  - Anyone else who is signed in, an admin included, gets `404` `invitation_not_found`, the answer for a missing id.
+  - The target's own claim of a dead invitation is `409` `invitation_not_pending`, with its `state`.
+- **A claim is a self-mint.**
+  - The token carries the claimer's own role, user type and groups, exactly as `POST /me/tokens` does, and has no `minted_by`.
+  - Claiming never grants the `api_token` feature: a person without it is refused `403` `capability_feature`.
+  - The self-mint refusals apply unchanged: a `wdn_` token, the admin token, local mode and a portal's token cannot claim (`api_token_from_api_token`, `api_token_no_human`, `delegation_scope`), nor can a service identity's token (`service_scope`).
+- **There is no CLI claim,** because the CLI has no browser sign-in.
+- Ten pending invitations may name one person (`422` `invitation_cap_reached`).
+- `wardyn person invitations <principal> [--state pending|claimed|expired|revoked]` and `GET /api/v1/invitations?state=` list them, never with a token.
+- `wardyn invitation revoke <id>` or `DELETE /api/v1/invitations/{id}` withdraws a pending one; any other state answers `404`.
+- Each step is audited: `invitation.create`, `invitation.claim` (with `token.create`) and `invitation.revoke` ([AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md)).
+
+### What happens to a token an admin created
+
+Each row of `GET /api/v1/tokens?minted_for_others=true` carries a `disposition`, derived when you read it.
+Revoked rows stay out unless you add `&include_revoked=true`, so a finished move stays visible.
+Admin > Credentials shows it as a State column and an "Also show revoked tokens" toggle.
+
+| `disposition` | Condition |
+|---|---|
+| `needs_decision` | Live; no pending invitation replaces it; not moved. |
+| `awaiting_owner` | Live; a pending invitation names it in `replaces_token_id`. |
+| `replaced_by_owner` | Revoked by that invitation's claim. |
+| `linked_to_service_identity` | Live; moved to a service identity. |
+| `moved_to_service_identity` | Revoked after a move. |
+| `revoked` | Revoked, neither of the above. |
+
+- **To hand the token to its owner,** invite the token's principal with `--replaces <token-id>`. The owner is the token's principal, never `minted_by`.
+- **To hand it to automation,** link it to a service identity: `wardyn token move <token-id> <service-identity>`, or `POST /api/v1/tokens/{id}/move` with `{"service_identity":"<name>"}` (security tier, audited `token.update`).
+  - A move only links: it revokes nothing, and the token keeps working.
+  - Another move to a different identity is allowed. A retired or unknown identity, or a token that is revoked, expired or not admin-created, is refused `422` `token_move_invalid`.
+- **Nothing revokes the old token for you.** Revoke it with `DELETE /api/v1/tokens/{id}` once the job uses the new one.
+
+### Service identities
+
+A service identity is automation that runs under its own name. It is not a person, never an administrator, and never an operator.
+
+- **Principal.**
+  - `service:<name>`, with `name` matching `^[a-z][a-z0-9-]{2,62}$`.
+  - A name is never reused or renamed, and a retired identity stays on record, so no later identity inherits its grants or history.
+  - `POST /service-identities` refuses a name any principal-keyed table already holds (`409` `service_identity_name_taken`).
+- **Sponsor.**
+  - Every identity names one sponsor: a person with a bound sign-in identity, given by exactly their principal.
+  - An email or `entra:` alias is refused `422` `service_identity_sponsor_invalid`.
+  - Only the sponsor mints its tokens.
+- **Local mode** has no person to sponsor one: the service-identity routes answer `409` `needs_sso`, except the sponsor's token mint, which answers `403` `api_token_no_human`.
+
+| Verb | Who | What |
+|---|---|---|
+| `wardyn service-identity create --name N --sponsor P [--user-type T] [--description D]` | security tier | create it; `--user-type` is an existing user type, default `standard`. It has no token yet. |
+| `wardyn service-identity list`, `get <name>` | security tier | the identity with its state: `active`, `suspended`, `retired` or `sponsor_inactive`. |
+| `wardyn service-identity update <name> [--description D] [--sponsor P] [--suspend] [--resume]` | security tier | change it. A new sponsor revokes every token of the identity. |
+| `wardyn service-identity retire <name>` | security tier | end it for good. |
+| `wardyn service-identity token list <name>`, `token revoke <name> <token-id>` | the sponsor | read and revoke its tokens, never their values. |
+
+- **No CLI mint.** The sponsor mints in the console, signed in, from Account under "Service identities I sponsor", in the show-once dialog.
+- **Four-eyes.**
+  - With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, a create and any `PATCH` that changes the sponsor are held as governance change kind `service_identity` until a distinct human on the security tier approves ([governance writes](governance-writes.md)).
+  - The `PATCH` is held whole. Description, suspend, resume and retire stay direct.
+  - An approval applies only against the state the reviewer saw, otherwise `409` `governance_change_stale`.
+
+| Caller of `POST /api/v1/me/service-identities/{name}/tokens` | Answer |
+|---|---|
+| The current sponsor, signed in, identity active, sponsor's session live | `201`, the token once |
+| The sponsor, identity suspended or retired, or the sponsor's session not live | `409` `service_identity_inactive` |
+| Another person, any role | `404` `service_identity_not_found`, the answer for a missing name |
+| The admin token, or local mode | `403` `api_token_no_human` |
+| Any `wdn_` token, the sponsor's included | `403` `api_token_from_api_token` |
+| A portal's token | `403` `delegation_scope` |
+| A service identity's token | `403` `service_scope` |
+| The sponsor without the `api_token` feature | `403` `capability_feature` |
+| The sponsor in member mode | `409` `api_token_member_mode_mint` |
+| The sponsor, with `20` live tokens on the identity | `422` `api_token_cap_reached` |
+
+- **A service token** is an ordinary `wdn_` token with principal `service:<name>`, role `user` and no email or groups.
+  - It must expire: the default and maximum are `90d`, or the deployment cap if lower.
+  - It is a bearer. Wardyn does not bind it to a workload or a network.
+- **Every request is re-checked** against the live identity and its sponsor.
+  - A missing, suspended or retired identity, a token older than the current sponsor, or a sponsor whose session is not live is refused with the one `401` of an unknown token.
+  - The `auth.fail` row says why: `service_identity_inactive` or `service_sponsor_inactive`.
+  - A sponsor disabled only at the identity provider is not seen. Without SCIM or a session revoke the service's tokens work until they expire, and its live runs continue either way.
+
+| A service identity's token may reach | Why |
+|---|---|
+| `POST /runs`, `POST /runs/preflight` | launch, and the dry run CI uses |
+| `GET /runs`, `GET /runs/{id}`, `/events`, `/output` | read its own runs |
+| `PATCH /runs/{id}`, `POST /runs/{id}/kill` | manage its own runs |
+| `GET /me`, `GET /setup/status` | who am I, and which providers are live |
+| `PUT`, `DELETE /model-providers/{id}/credential` | its own model key, in its own namespace |
+
+- Every other route, including any added later, answers `403` `service_scope` with an `authz.denied` row.
+  - That covers attach, approvals, secrets, tokens, SSH keys, invitations, audit reads and every admin route.
+- **Grants and credentials.**
+  - Capability grants and governance assignments bind to the `user` subject type with the subject `service:<name>`.
+  - It has no groups, so only `all` and user-type rows reach it.
+  - Its secrets live in its own namespace. An `owner_only` grant fails closed on its runs when it has stored nothing.
+  - Its ceiling is its user type and grants, and is not bounded by its sponsor's: whoever holds a service token acts with the service's reach.
+- **Runs.**
+  - A run it launches belongs to `service:<name>` and is never operator-owned. The sponsor is the run's accountable human.
+  - The current sponsor can list, read and kill its runs, and nothing more: not the held approvals, sandbox files or run tokens.
+  - Entering one (a terminal or a UI app) needs an explicit `service_attach` grant ([Capabilities](capabilities.md#service_attach)), off for everyone by default, super admins included. SSH never admits it.
+  - A portal's delegated token has none of this reach.
+
+**Lifecycle.**
+
+| Event | Effect |
+|---|---|
+| The sponsor changes | Every live token of the identity is revoked in the same transaction. |
+| The sponsor's sessions are revoked in full | Their sponsored tokens stop at once and are marked revoked. |
+| The sponsor is suspended through SCIM | State `sponsor_inactive`; tokens refused; live runs continue. |
+| The sponsor's sign-in identity is unbound | Refused `409` `identity_principal_in_use` while they sponsor an identity or hold a pending invitation. |
+| An admin suspends it | Tokens refused; live runs continue until killed. |
+| An admin retires it | Tokens revoked and its stored credentials erased (`credential.erase`); the name stays taken. |
+
+- Rows a service's own request writes have actor type `service`, actor `service:<name>` and `data.sponsor` ([AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md#service-identities)).
+  - They name the service and its sponsor, not whoever holds the token.
+
 ## Delegated run management (portals)
 
 - A trusted front-end — a portal — can create, list, extend, stop and open runs for the person signed in to it, without holding that person's API token.

@@ -28,11 +28,18 @@
 # and "Delegated run management (portals)".
 # docs/operations/denials.md=4636 is "Every denial that isn't a 404" — the `| reason |` table
 # authz_denied_doc_test.go and docs_r3_guard_test.go read.
-docs/operations/who-gets-in.md=1453 share=35
+# docs/operations/who-gets-in.md 1454 adds 1 over 1453 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
+docs/operations/who-gets-in.md=1454 share=35
 # docs/operations/admin-only-writes.md 3173 measured after F-1511-1510 merge.
 # docs/operations/admin-only-writes.md 3182 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
-docs/operations/admin-only-writes.md=3182 share=35
-docs/operations/three-roles.md=4012 share=35
+# docs/operations/admin-only-writes.md 3299 adds 117 over 3182 (0.9 F-1508-M3): the invitation, service-identity and token-move tier rows.
+# docs/operations/admin-only-writes.md 3242 adds 60 over 3182 (0.9 RP-1): organization pools, the remote-hosted runner rename and the /remote-runners reads and people-policy row.
+# docs/operations/admin-only-writes.md 3359 measured after RP-1: organization and user pools, remote-hosted runners.
+# docs/operations/three-roles.md 4024 adds 12 over 4012 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
+# docs/operations/admin-only-writes.md 3359 measured after G-090-cleanup slice F: docs rows that contradicted the code.
+docs/operations/admin-only-writes.md=3359 share=35
+# docs/operations/three-roles.md 4024 measured after G-090-cleanup slice F: docs rows that contradicted the code.
+docs/operations/three-roles.md=4024 share=35
 docs/operations/provider-policy.md=1278 share=35
 docs/operations/ownership-and-offboarding.md=2370 share=35
 # 0.9 F-1515: governance-writes.md 2754 adds 28 over 2726 for the `governance plan` bullet and example.
@@ -43,14 +50,18 @@ docs/operations/user-drives.md=4804 share=35
 docs/operations/capabilities.md=3963 share=35
 docs/operations/custom-components.md=1184 share=35
 # G-1423: docs/operations/api-tokens.md 4002 adds 11 over 3991 for GET /runs/{id}/output on the delegated-token list.
-docs/operations/api-tokens.md=4002 share=35
+# docs/operations/api-tokens.md 5466 adds 1464 over 4002 (0.9 F-1508-M3): invitations, dispositions and service identities.
+# docs/operations/api-tokens.md 5475 adds 9 over 5466 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
+docs/operations/api-tokens.md=5475 share=35
 # G-1423 r1: docs/operations/denials.md 4709 adds 32 over 4677 for the audit-only delegation_scope source.
 # docs/operations/denials.md 4786 adds 77 (0.9 G-sec-rest): the exec relay rows (#1976) and the audit_retention_actor_reserved row.
 # D-108-114 merge: docs/operations/denials.md 4806 adds 20 over 4786 for the runs.placement cause of governance_profile.
 # docs/operations/denials.md 4836 adds 50 over 4786 (0.9 F-1508 C2): the `service_scope` reason row.
 # docs/operations/denials.md 4856 measured after train 5 merge.
 # docs/operations/denials.md 4877 adds 21 over 4856 (0.9 DS1-S1b): the governance_profile row's runs.tools cause, a New Run command that includes a harness.
-docs/operations/denials.md=4877 share=35
+# docs/operations/denials.md 4882 adds 5 over 4877 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
+# docs/operations/denials.md 4931 adds 49 over 4882 (0.9 member drives): the drive refusals a person's own drive adds; measured at merge.
+docs/operations/denials.md=4931 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

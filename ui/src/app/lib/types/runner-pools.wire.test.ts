@@ -42,6 +42,8 @@ const typesGo = read("internal/types/runner_pool.go");
 const clientGo = read("pkg/client/runner_pools.go");
 const limitsGo = read("internal/types/runner_pool_limits.go");
 const barrierGo = read("internal/runnerpool/barrier.go");
+const remoteGo = read("internal/types/remote_runner.go");
+const remoteClientGo = read("pkg/client/remote_runners.go");
 
 describe("runner pool carriers", () => {
   it.each([
@@ -72,6 +74,12 @@ describe("runner pool carriers", () => {
     [clientGo, "CreateRunnerPoolRequest", "CreateRunnerPoolRequest"],
     [clientGo, "CreateMyRunnerPoolRequest", "CreateMyRunnerPoolRequest"],
     [clientGo, "UpdateRunnerPoolRequest", "UpdateRunnerPoolRequest"],
+    [remoteGo, "RemoteRunner", "RemoteRunner"],
+    [remoteGo, "RemoteRunnerPoolRef", "RemoteRunnerPoolRef"],
+    [remoteClientGo, "RemoteRunnerView", "RemoteRunnerView"],
+    [remoteClientGo, "UpdateRemoteRunnerRequest", "UpdateRemoteRunnerRequest"],
+    [remoteClientGo, "RemoteRunnerPeoplePolicyRequest", "RemoteRunnerPeoplePolicyRequest"],
+    [remoteClientGo, "RunnerPoolMemberView", "RunnerPoolMemberView"],
   ])("%#: %s has full parity with its TS mirror", (go, goName, tsName) => {
     const tags = goJSONTags(go, goName);
     expect(tags.length).toBeGreaterThanOrEqual(1);
@@ -99,11 +107,15 @@ describe("runner pool carriers", () => {
       return new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]));
     };
     const consts = (src: string, pattern: string) => new Set([...src.matchAll(new RegExp(pattern, "g"))].map((m) => m[1]));
-    expect(union("RunnerPoolHosting")).toEqual(consts(typesGo, '\\bRunnerPool\\w+\\s+RunnerPoolHosting = "([a-z_]+)"'));
+    expect(union("RunnerPoolScope")).toEqual(consts(typesGo, '\\bRunnerPool\\w+\\s+RunnerPoolScope = "([a-z_]+)"'));
+    expect(union("RunnerKind")).toEqual(consts(typesGo, '\\bRunnerKind\\w+\\s+RunnerKind = "([a-z_]+)"'));
+    expect(union("RemoteRunnerPeoplePools")).toEqual(consts(remoteGo, '\\bPeoplePools\\w+\\s+RemoteRunnerPeoplePools = "([a-z_]+)"'));
+    expect(union("RunnerKind").size).toBe(2);
+    expect(union("RemoteRunnerPeoplePools").size).toBe(3);
     expect(union("RunnerPoolState")).toEqual(consts(typesGo, '\\bRunnerPool\\w+\\s+RunnerPoolState = "([a-z_]+)"'));
     expect(union("RunnerPoolSelection")).toEqual(consts(typesGo, '\\bRunnerPoolSelected\\w+\\s+RunnerPoolSelection = "([a-z_]+)"'));
     expect(union("RunnerPoolAvailability")).toEqual(consts(clientGo, '\\bRunnerPool(?:Available|Unavailable|Unknown)\\s*=\\s*"([a-z_]+)"'));
-    expect(union("RunnerPoolHosting").size).toBe(2);
+    expect(union("RunnerPoolScope").size).toBe(2);
     expect(union("RunnerPoolState").size).toBe(3);
     expect(union("RunnerPoolSelection").size).toBe(3);
     expect(union("RunnerPoolAvailability").size).toBe(3);

@@ -26,9 +26,12 @@ func recoveryRehearseMode(f *bootFlags) error {
 		return errors.New("-recovery-rehearse needs " + rehearseDSNEnv + " set to the scratch database the dump was loaded into")
 	}
 	dir := filepath.Clean(*f.recoverySet)
-	m, err := readRecoveryManifest(dir)
+	m, err := readRecoveryManifest(dir, "rehearse")
 	if err != nil {
 		return err
+	}
+	if m.Source.Port < 1 || m.Source.Port > 65535 {
+		return refusedTo("rehearse", "%s names source port %d, outside 1 to 65535", recoveryManifestFile, m.Source.Port)
 	}
 	return rehearse(context.Background(), f, rehearseSetOf(dir, m), dsn, os.Stdout, os.Stderr)
 }

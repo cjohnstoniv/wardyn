@@ -104,6 +104,10 @@ spec:
       env:
         - name: WARDYN_REHEARSE_PG_DSN
           valueFrom: {secretKeyRef: {name: rehearse-scratch-db, key: dsn}}
+        - name: WARDYN_PG_DSN
+          valueFrom: {secretKeyRef: {name: wardyn-postgres-dsn, key: dsn}}
+        - name: WARDYN_AGE_KEY
+          valueFrom: {secretKeyRef: {name: wardyn-postgres-dsn, key: age-key}}
       volumeMounts:
         - {name: set, mountPath: /set, readOnly: true}
   volumes:
@@ -111,7 +115,7 @@ spec:
       persistentVolumeClaim: {claimName: restored-recovery-set, readOnly: true}
 ```
 
-- The pod also needs `WARDYN_PG_DSN` for the live database: the target checks probe it, and the two audit rows are written to it.
+- `WARDYN_PG_DSN` is the live database: the target checks probe it, and the two audit rows are written to it. Both `secretKeyRef` entries name the DSN Secret, under `postgres.dsn.key` and `age-key`; an external DSN Secret holds `age-key` only with `secrets.ageKeyFromSecret`, so use the `secrets.ageKeySecretRef` Secret for `WARDYN_AGE_KEY` if you set one.
 - Delete the pod and the scratch database when the report is saved.
 
 ## What a pass proves

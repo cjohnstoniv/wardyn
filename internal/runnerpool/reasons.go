@@ -8,7 +8,6 @@
 package runnerpool
 
 import (
-	"cmp"
 	"fmt"
 	"net/http"
 	"strings"
@@ -91,17 +90,6 @@ func Reasons() []Reason {
 	return out
 }
 
-// HostingLabel is the name the console gives a hosting type.
-func HostingLabel(h types.RunnerPoolHosting) string {
-	switch h {
-	case types.RunnerPoolSelfHosted:
-		return "Self-Hosted"
-	case types.RunnerPoolRemoteProvided:
-		return "Remote Provided"
-	}
-	return ""
-}
-
 // The sentences. The console prints the server's sentence on a refusal, so each
 // has a TypeScript twin in runner-pool-refusals.ts, and
 // TestRefusalSentencesMatchGolden pins both to runner-pool-refusals.golden.json.
@@ -109,10 +97,8 @@ func HostingLabel(h types.RunnerPoolHosting) string {
 
 func InvalidMsg() string { return "runner_pool_id must be the id of a pool from your pool list." }
 
-// RequiredMsg names the hosting type when one is known and says "runner" otherwise.
-func RequiredMsg(label string) string {
-	return fmt.Sprintf("Choose a %s pool. No default pool applies to this run.", cmp.Or(label, "runner"))
-}
+// RequiredMsg: no pool was named and no default applies.
+func RequiredMsg() string { return "Choose a runner pool. No default pool applies to this run." }
 
 func NotFoundMsg() string { return "That pool isn't available to you. Choose one from the list." }
 
@@ -140,10 +126,16 @@ func NoOwnRunnerMsg(name string) string {
 	return fmt.Sprintf("None of your own runners in %s can run this right now.", name)
 }
 
-// NoOnlineRunnerMsg is the one sentence for a self-hosted pool whose own runners are all offline: the
+// NoOnlineRunnerMsg is the one sentence for a user pool whose own runners are all offline: the
 // pool list's reason, the dry doors' blocker and the create refusal.
 func NoOnlineRunnerMsg(name string) string {
 	return fmt.Sprintf("None of your runners in %s is online.", name)
+}
+
+// RunnerAtCapacityMsg is the create and preflight refusal (runner_at_capacity) for a run that would
+// start at once while each of the person's runners in the pool holds its max_runs.
+func RunnerAtCapacityMsg(name string) string {
+	return fmt.Sprintf("Your runners in %s are all running as many runs as they allow at once. Try again when one finishes, or raise Runs at once on your runner.", name)
 }
 
 // MemberMismatchMsg names the runner the caller asked for: their own runner's
@@ -153,8 +145,9 @@ func MemberMismatchMsg(runner, name string) string {
 	return fmt.Sprintf("%s is not one of your runners in %s.", runner, name)
 }
 
-func HostingMismatchMsg(name, label string) string {
-	return fmt.Sprintf("%s is a %s pool, so it can't be used with this runner choice.", name, label)
+// KindMismatchMsg: the pool has no runner of the kind the request's placement asks for.
+func KindMismatchMsg(name string) string {
+	return fmt.Sprintf("%s has no runner of the kind this run asks for. Choose another pool.", name)
 }
 
 func RunTypeNotAllowedMsg(name string, t types.RunnerPoolRunType) string {
@@ -188,4 +181,19 @@ func QueueFullMsg(name string, n int) string {
 // FullMsg: a revive finds the pool at its limit of n, or others waiting ahead of it.
 func FullMsg(name string, n int) string {
 	return fmt.Sprintf("%s is running its limit of %d, and others are waiting. Try again when one finishes.", name, n)
+}
+
+// OrgPoolSelfHostedMsg refuses a self-hosted runner offered to an organization pool.
+func OrgPoolSelfHostedMsg() string { return types.OrgPoolSelfHostedMsg }
+
+// RemoteNotConfiguredMsg refuses an administrator's add of a runner id this server is not set up with
+// as a remote-hosted runner, the id as they sent it.
+func RemoteNotConfiguredMsg(id string) string {
+	return fmt.Sprintf("%s isn't a remote-hosted runner this server is set up with.", id)
+}
+
+// RemoteNotAvailableMsg refuses a person's add of a remote-hosted runner to their own user pool when
+// its people policy does not admit them; an unknown id is answered the same, as they sent it.
+func RemoteNotAvailableMsg(id string) string {
+	return fmt.Sprintf("%s is not available to people's pools. Ask your admin to make it available.", id)
 }

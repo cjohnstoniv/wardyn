@@ -12,4 +12,3 @@ export { default as RunSignInStrip } from "../ui/src/app/components/screens/run-
 export { Note } from "../ui/src/app/components/screens/governance/display";
 export { SectionCard } from "../ui/src/app/components/wardyn/primitives";
 export { Note as SetupAccessNote } from "../ui/src/app/components/screens/setup/access-panel";
-export { SectionCard as NewRunSectionCard } from "../ui/src/app/components/screens/new-run/new-run-primitives";

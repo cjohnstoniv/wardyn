@@ -265,9 +265,11 @@ func TestAWSCLI_SignInNameReserved(t *testing.T) {
 	}
 	srv, _, _ := componentsServer(t)
 	member := ssoSession(t, "sub-member", "m@corp.example", oidc.RoleUser)
-	w := doSSO(t, srv, http.MethodPut, "/api/v1/me/secrets/"+cliSecretName(cliAWSID, providerSSOPart), member, `{"value":"planted"}`)
-	if w.Code != http.StatusForbidden || reasonOf(t, w) != reasonSecretNameReserved {
-		t.Fatalf("PUT of a CLI sign-in name through the secrets API = %d %s, want the reserved-name refusal", w.Code, w.Body.String())
+	for _, part := range []string{providerSSOPart, providerEntraPart} {
+		w := doSSO(t, srv, http.MethodPut, "/api/v1/me/secrets/"+cliSecretName(cliAWSID, part), member, `{"value":"planted"}`)
+		if w.Code != http.StatusForbidden || reasonOf(t, w) != reasonSecretNameReserved {
+			t.Fatalf("PUT of the CLI %s sign-in name through the secrets API = %d %s, want the reserved-name refusal", part, w.Code, w.Body.String())
+		}
 	}
 }
 
@@ -275,7 +277,7 @@ func TestAWSCLI_SignInNameReserved(t *testing.T) {
 func TestAWSCLI_PersonErasureRemovesSignIn(t *testing.T) {
 	f := newReauthFixture(t, nil)
 	putCLIBlobIn(t, f, subOwner, cliAWSBlob())
-	if _, err := f.srv.erasureOrchestrator(&secretstore.EraseReport{}).Orchestrate(context.Background(), subOwner,
+	if _, err := f.srv.erasureOrchestrator(&secretstore.EraseReport{}, nil).Orchestrate(context.Background(), subOwner,
 		[]erasure.Scope{erasure.Credentials}); err != nil {
 		t.Fatal(err)
 	}

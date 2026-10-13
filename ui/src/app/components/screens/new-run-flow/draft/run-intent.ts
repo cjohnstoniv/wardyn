@@ -7,6 +7,7 @@
 // and Review all read and write it; intentToWire is its only way to the wire.
 
 import type { RunWireInput } from "../../../../lib/api/runs";
+import type { DriveAttachment } from "../../../../lib/types/new-run-contract";
 import type { RunPolicySpec } from "../../../../lib/types/policy";
 import type { CreateRunInput } from "../../../../lib/types/run-create";
 import type { RunShape } from "../../../../lib/types/runs";
@@ -25,6 +26,8 @@ export type RunIntent = Partial<Omit<CreateRunRequestFields, "title" | "descript
   /** Registry fields a document may carry that the older request type does not declare. */
   devcontainer_repo?: string;
   devcontainer_ref?: string;
+  /** Drives from GET /me/drives by id (pkg/client.CreateRunRequest.Drives); never sent beside `drive`. */
+  drives?: DriveAttachment[];
   /** Overlay onto the caller's default policy. Never a whole policy. */
   inline_policy?: Partial<RunPolicySpec>;
 };

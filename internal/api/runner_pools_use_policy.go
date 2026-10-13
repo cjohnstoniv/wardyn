@@ -17,14 +17,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// A remote-provided pool's use policy narrows who may use it: with none, everyone who may launch remote
+// An organization pool's use policy narrows who may use it: with none, everyone who may launch remote
 // runs may; with one, only the listed people, groups and roles. Written by a security admin or an
 // admin (securityOps), and held for a second human under WARDYN_GOVERNANCE_SECOND_HUMAN. Both a set
 // and a clear are held, with no narrowing exemption: a clear widens, and nothing proves a replacement
-// only narrows. Attaching an executor that another live pool holds under a policy is held too (it puts
-// that executor in front of a wider audience), and a pool with a policy is not deleted until the
+// only narrows. Adding a remote-hosted runner that another live pool holds under a policy is held too
+// (it puts that runner in front of a wider audience), and a pool with a policy is not deleted until the
 // policy is cleared. A held change applies in the decision transaction and goes stale when the policy
-// or the pool's executors it reviewed have moved.
+// or the pool's remote-hosted runners it reviewed have moved.
 
 const govKindRunnerPoolUsePolicy = types.GovernanceTargetRunnerPoolUsePolicy
 
@@ -35,21 +35,21 @@ type runnerPoolUsePolicyRequest struct {
 	Subjects []types.RunnerPoolSubject `json:"subjects"`
 }
 
-// runnerPoolHeldChange is a held change's payload: a use policy set (Subjects), a clear (nothing), an
-// executor attach (Executor) or an executor detach (Executor and Detach).
+// runnerPoolHeldChange is a held change's payload: a use policy set (Subjects), a clear (nothing), a
+// remote-hosted runner add (Executor, its id) or its removal (Executor and Detach).
 type runnerPoolHeldChange struct {
 	Subjects []types.RunnerPoolSubject `json:"subjects,omitempty"`
-	Executor string                    `json:"executor,omitempty"`
+	Executor string                    `json:"remote_runner_id,omitempty"`
 	Detach   bool                      `json:"detach,omitempty"`
 }
 
 // runnerPoolUsePolicyState is the target of a change as it stands, hashed by proposal and approval
-// alike: whether a policy exists, its subjects and the executors, so a change goes stale when who may
+// alike: whether a policy exists, its subjects and the remote-hosted runners, so a change goes stale when who may
 // use the pool or what it holds moved, and a member adding their own runner elsewhere cannot make one
 // stale. Presence is its own field: no policy opens the pool, while a stored empty list (what a leaver
 // purge leaves) permits nobody, and both read as no subjects.
 func runnerPoolUsePolicyState(present bool, subjects []types.RunnerPoolSubject, executors []string) any {
-	return map[string]any{"policy_present": present, "subjects": subjects, "executor_ids": nonNilStrings(executors)}
+	return map[string]any{"policy_present": present, "subjects": subjects, "remote_runner_ids": nonNilStrings(executors)}
 }
 
 // canonicalPoolSubjects folds each subject to the form the caller's identities are matched in, and
@@ -81,12 +81,12 @@ func (s *Server) canonicalPoolSubjects(w http.ResponseWriter, r *http.Request, i
 	return out, true
 }
 
-// usePolicyPool resolves {id} for a use-policy route: a Remote Provided pool from the caller's
-// management catalogue. A Self-Hosted pool has no use policy: its owner is told so in plain words, and
-// anyone else's answers exactly as an unknown id. ok=false: the answer is written.
+// usePolicyPool resolves {id} for a use-policy route: an organization pool from the caller's management
+// catalogue. A user pool has no use policy: its owner is told so in plain words, and anyone else's
+// answers exactly as an unknown id. ok=false: the answer is written.
 func (s *Server) usePolicyPool(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore) (store.RunnerPoolCatalogueRow, bool) {
 	row, ok := s.poolFromPath(w, r, ps, false)
-	if !ok || row.Pool.HostingType == types.RunnerPoolRemoteProvided {
+	if !ok || row.Pool.Scope == types.RunnerPoolOrganization {
 		return row, ok
 	}
 	if owner := poolOwner(r.Context()); owner == "" || row.Pool.Owner != owner {
@@ -94,7 +94,7 @@ func (s *Server) usePolicyPool(w http.ResponseWriter, r *http.Request, ps store.
 		return store.RunnerPoolCatalogueRow{}, false
 	}
 	writeErrorReason(w, runnerpool.ReasonMemberMismatch.Status(), string(runnerpool.ReasonMemberMismatch),
-		row.Pool.Name+" is your own Self-Hosted pool: only you use it, so it has no use policy.")
+		row.Pool.Name+" is your own user pool: only you use it, so it has no use policy.")
 	return store.RunnerPoolCatalogueRow{}, false
 }
 
@@ -139,7 +139,7 @@ func (s *Server) handlePutRunnerPoolUsePolicy(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	if err := (types.RunnerPoolUsePolicy{Subjects: subjects}).Validate(row.Pool.HostingType); err != nil {
+	if err := (types.RunnerPoolUsePolicy{Subjects: subjects}).Validate(row.Pool.Scope); err != nil {
 		writePoolInvalid(w, err.Error())
 		return
 	}
@@ -237,8 +237,8 @@ func usePolicyAuditData(before, after []types.RunnerPoolSubject) map[string]any 
 	return map[string]any{"before": before, "after": after}
 }
 
-// holdExecutorChange stores an executor attach or detach as a pending change on the pool, under the
-// same kind and the same state hash as its use policy.
+// holdExecutorChange stores a remote-hosted runner add or removal as a pending change on the pool, under
+// the same kind and the same state hash as its use policy.
 func (s *Server) holdExecutorChange(w http.ResponseWriter, r *http.Request, row store.RunnerPoolCatalogueRow, executor string, detach bool) {
 	subjects := []types.RunnerPoolSubject{}
 	if row.Policy != nil {
@@ -256,12 +256,13 @@ func (s *Server) holdExecutorChange(w http.ResponseWriter, r *http.Request, row 
 	})
 }
 
-// opExecutorAttach is the op of an executor attach or detach: migration 0126 closes the set of ops, so
-// it is a "set" and the payload (Executor, no Subjects) tells it from a policy set.
+// opExecutorAttach is the op of a remote-hosted runner add or removal: migration 0126 closes the set of
+// ops, so it is a "set" and the payload (a runner, no Subjects) tells it from a policy set.
 const opExecutorAttach = "set"
 
-// applyRunnerPoolUsePolicyChange applies a held use policy set or clear, or executor attach, inside the
-// decision transaction: the target lock, then the pool's policy and executors read as they now stand
+// applyRunnerPoolUsePolicyChange applies a held use policy set or clear, or remote-hosted runner add or
+// removal, inside the decision transaction: the target lock, then the pool's policy and remote-hosted
+// runners read as they now stand
 // and compared with what the proposal reviewed, and the write through the pool row lock.
 func applyRunnerPoolUsePolicyChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	ctx := r.Context()
@@ -308,7 +309,7 @@ func applyRunnerPoolUsePolicyChange(s *Server, r *http.Request, q store.Querier,
 	if ch.Op == "delete" {
 		action = auditPoolUsePolicyClear
 		err = store.DeleteRunnerPoolUsePolicyQ(ctx, q, poolID)
-	} else if err = (types.RunnerPoolUsePolicy{Subjects: held.Subjects}).Validate(types.RunnerPoolRemoteProvided); err == nil {
+	} else if err = (types.RunnerPoolUsePolicy{Subjects: held.Subjects}).Validate(types.RunnerPoolOrganization); err == nil {
 		_, err = store.PutRunnerPoolUsePolicyQ(ctx, q, poolID, nil, held.Subjects, principalFromRequest(r))
 	}
 	if errors.Is(err, store.ErrNotFound) {
@@ -321,8 +322,8 @@ func applyRunnerPoolUsePolicyChange(s *Server, r *http.Request, q store.Querier,
 }
 
 func (s *Server) applyExecutorAttach(ctx context.Context, q store.Querier, poolID uuid.UUID, executor string) (govApplied, error) {
-	if !slices.Contains(s.configuredExecutors(), executor) {
-		return govApplied{}, writeRefusal(http.StatusUnprocessableEntity, string(runnerpool.ReasonMemberMismatch), "executor %s is not configured on this server", executor)
+	if !s.remoteRunnerConfigured(executor) {
+		return govApplied{}, writeRefusal(http.StatusUnprocessableEntity, string(runnerpool.ReasonMemberMismatch), "%s", runnerpool.RemoteNotConfiguredMsg(executor))
 	}
 	_, _, rev, err := store.AddRunnerPoolExecutorQ(ctx, q, poolID, executor)
 	if errors.Is(err, store.ErrNotFound) {
@@ -331,8 +332,8 @@ func (s *Server) applyExecutorAttach(ctx context.Context, q store.Querier, poolI
 	if err != nil {
 		return govApplied{}, err
 	}
-	return govApplied{action: auditPoolExecutorAdd, target: poolID.String(), data: map[string]any{
-		"executor_id": executor, "hosting_type": types.RunnerPoolRemoteProvided, "revision": rev}}, nil
+	return govApplied{action: auditPoolRunnerAdd, target: poolID.String(), data: map[string]any{
+		"runner_kind": types.RunnerKindRemoteHosted, "remote_runner_id": executor, "scope": types.RunnerPoolOrganization, "revision": rev}}, nil
 }
 
 func applyExecutorDetach(ctx context.Context, q store.Querier, poolID uuid.UUID, executor string) (govApplied, error) {
@@ -343,6 +344,6 @@ func applyExecutorDetach(ctx context.Context, q store.Querier, poolID uuid.UUID,
 	if err != nil {
 		return govApplied{}, err
 	}
-	return govApplied{action: auditPoolExecutorRemove, target: poolID.String(), data: map[string]any{
-		"executor_id": executor, "hosting_type": types.RunnerPoolRemoteProvided, "revision": rev}}, nil
+	return govApplied{action: auditPoolRunnerRemove, target: poolID.String(), data: map[string]any{
+		"runner_kind": types.RunnerKindRemoteHosted, "remote_runner_id": executor, "scope": types.RunnerPoolOrganization, "revision": rev}}, nil
 }

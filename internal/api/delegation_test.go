@@ -432,7 +432,7 @@ func TestDelegation_UIGatewayEntryCarriesVia(t *testing.T) {
 	_, via := seedDelegation(t, ds, h.owner)
 	delegated := audit.WithDelegation(context.Background(), via)
 	ticket := func() string {
-		tok, err := mintAttachTicket(delegated, h.store, h.run.ID, types.ActorHuman, h.owner, oidc.RoleUser, time.Now())
+		tok, err := mintAttachTicket(delegated, h.store, h.run.ID, types.ActorHuman, h.owner, oidc.RoleUser, oidc.Issue{At: time.Now()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -548,7 +548,7 @@ func TestDelegation_UIGatewayRelayRowsCarryVia(t *testing.T) {
 	paused, pausedAt := h.run, h.clock.now()
 	paused.PausedAt, paused.PausedReason = &pausedAt, types.PauseReason("idle")
 	h.store.putRun(paused)
-	tok, err := mintAttachTicket(audit.WithDelegation(context.Background(), via), h.store, h.run.ID, types.ActorHuman, h.owner, oidc.RoleUser, time.Now())
+	tok, err := mintAttachTicket(audit.WithDelegation(context.Background(), via), h.store, h.run.ID, types.ActorHuman, h.owner, oidc.RoleUser, oidc.Issue{At: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}

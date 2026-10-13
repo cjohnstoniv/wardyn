@@ -233,6 +233,9 @@ func (s PG) UnbindIdentity(ctx context.Context, id uuid.UUID, principal string) 
 		return fmt.Errorf("store: unbind identity: %w", err)
 	}
 	// As a suspension does, so a cookie the released sub still holds dies with its binding.
+	if err = LockRevocationOrder(ctx, tx); err != nil {
+		return err
+	}
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, clock_timestamp())
 		ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, principal); err != nil {

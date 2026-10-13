@@ -13,7 +13,24 @@
 // ado-pat-copy.ts, never retyped: the vitest pin owns the characters, this
 // spec owns that a browser draws them and that no state scrolls sideways at 390px.
 import type { Page } from "@playwright/test";
-import { test, expect, gotoConsole, navToRoute, expandCard, sql, goToNewRunPanel } from "./fixtures";
+import {
+  test,
+  expect,
+  chooseFiles,
+  continueNewRun,
+  expandCard,
+  gotoConsole,
+  mockPreflightClear,
+  navToRoute,
+  openNewRun,
+  sql,
+  submitLaunch,
+  walkGuidedToFiles,
+  walkGuidedToReview,
+} from "./fixtures";
+import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
+import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
+import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 import { ADO_PAT } from "../src/app/lib/ado-pat-copy";
 import { adoCapName } from "../src/app/lib/ado-access-copy";
 
@@ -276,16 +293,35 @@ test.describe("the person's Azure DevOps card, a row where each person adds thei
   });
 });
 
+// New Run's two Azure DevOps lines for a row that creates a token for each run. A token is created only for
+// a run that carries an Azure DevOps repository, so Tools and access says what it carries, and asks the
+// person to connect, on that repository's own credential row; a launch the token refuses says why in the
+// Name dialog. The hermetic backend has no such repository, so its row and credential are spliced onto the
+// real policy preview, as the server lists them (a repository row and its `ado_signin` credential).
+async function spliceAdoRepository(page: Page): Promise<void> {
+  await page.route("**/api/v1/runs/policy-preview", async (route) => {
+    const response = await route.fetch();
+    if (!response.ok()) return route.fulfill({ response });
+    const json = (await response.json()) as { access?: { rows?: object[]; credentials?: object[] } };
+    const access = json.access ?? {};
+    json.access = {
+      ...access,
+      rows: [...(access.rows ?? []), { id: "repo:ado", kind: "repository", from: "repository", name: "wardyn-e2e", status: "ready", hosts: [], credentials: ["repo:ado:credential"], source: { kind: "workspace" } }],
+      credentials: [...(access.credentials ?? []), { id: "repo:ado:credential", row: "repo:ado", kind: "ado_signin", owner: "own", delivery: "proxy", after_end: "gone" }],
+    };
+    await route.fulfill({ response, json });
+  });
+}
+
 test.describe("New Run, a row that creates a token for each run", () => {
-  // `saved`: the token line sits under the saved-policy picker, so the tests
-  // that read it open that; a launch needs the ordinary form, where Launch is
-  // enabled without picking a policy.
-  async function openNewRun(page: Page, saved = true): Promise<void> {
+  // Step 5 is where the token line and the not-connected note sit; a launch needs the whole way to Review.
+  async function openToolsStep(page: Page): Promise<void> {
+    await spliceAdoRepository(page);
     await gotoConsole(page);
-    await page.getByRole("button", { name: "New run" }).click();
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
-    await goToNewRunPanel(page, "policy");
-    if (saved) await page.getByRole("button", { name: /^Reuse a saved policy/ }).click();
+    await openNewRun(page);
+    await walkGuidedToFiles(page);
+    await chooseFiles(page);
+    await continueNewRun(page, NR_TOOLS.TITLE);
   }
 
   test("the run's token line names the row's default access, and not connected says to connect first", async ({ page, context }) => {
@@ -294,8 +330,7 @@ test.describe("New Run, a row that creates a token for each run", () => {
     await page.route("**/api/v1/me/scm-access", (route) =>
       route.fulfill({ json: access.state === "live" ? [{ state: "live", source: "org" }] : [] }),
     );
-    await openNewRun(page);
-    await goToNewRunPanel(page, "access");
+    await openToolsStep(page);
     await expect(page.getByTestId("ado-run-token-line")).toHaveText(
       `${ADO_PAT.NEWRUN_LINE_PREFIX}${adoCapName("code_read")}${ADO_PAT.NEWRUN_LINE_SUFFIX}`,
     );
@@ -313,14 +348,13 @@ test.describe("New Run, a row that creates a token for each run", () => {
       if (route.request().method() !== "POST") return route.fallback();
       await route.fulfill({ status: 403, json: { error: ADO_PAT.LAUNCH_POLICY_REFUSED, reason: "ado_pat_policy_blocked" } });
     });
-    await openNewRun(page, false);
-    await goToNewRunPanel(page, "access");
+    await mockPreflightClear(page);
+    await gotoConsole(page);
+    await openNewRun(page);
+    await walkGuidedToReview(page);
     await expect(page.getByTestId("ado-launch-note")).toHaveCount(0);
-    await goToNewRunPanel(page, "run");
-    await page.getByLabel("Title").fill("e2e ado token policy");
-    await page.getByRole("button", { name: "Launch run" }).click();
-    await goToNewRunPanel(page, "access");
-    await expect(page.getByTestId("ado-launch-note")).toHaveText(ADO_PAT.LAUNCH_POLICY_REFUSED);
+    const naming = await submitLaunch(page, "e2e ado token policy");
+    await expect(naming.getByTestId("ado-launch-note")).toHaveText(ADO_PAT.LAUNCH_POLICY_REFUSED);
   });
 
   test("a launch refused for want of a usable sign-in asks to connect again", async ({ page }) => {
@@ -329,18 +363,17 @@ test.describe("New Run, a row that creates a token for each run", () => {
       if (route.request().method() !== "POST") return route.fallback();
       await route.fulfill({ status: 403, json: { error: "cannot create a token", reason: "ado_pat_consent_needed" } });
     });
-    await openNewRun(page, false);
-    await goToNewRunPanel(page, "run");
-    await page.getByLabel("Title").fill("e2e ado consent");
-    await page.getByRole("button", { name: "Launch run" }).click();
-    await goToNewRunPanel(page, "access");
-    await expect(page.getByTestId("ado-launch-note").getByText(ADO_PAT.LAUNCH_NOT_CONNECTED)).toBeVisible();
+    await mockPreflightClear(page);
+    await gotoConsole(page);
+    await openNewRun(page);
+    await walkGuidedToReview(page);
+    const naming = await submitLaunch(page, "e2e ado consent");
+    await expect(naming.getByTestId("ado-launch-note").getByText(ADO_PAT.LAUNCH_NOT_CONNECTED)).toBeVisible();
   });
 
   test("a row on the Entra sign-in lane draws neither line", async ({ page }) => {
     await spliceAccess(page, () => ({ token_mode: "bearer", state: "live", source: "org" }));
-    await openNewRun(page);
-    await goToNewRunPanel(page, "access");
+    await openToolsStep(page);
     await expect(page.getByTestId("ado-run-token-line")).toHaveCount(0);
     await expect(page.getByTestId("ado-launch-note")).toHaveCount(0);
   });
@@ -461,15 +494,30 @@ test.describe("no horizontal scroll at 390px", () => {
 
     access = { token_mode: "minted_pat", state: "not_configured" };
     await page.goto("/runs/new");
-    await goToNewRunPanel(page, "policy");
-    await page.getByRole("button", { name: /^Reuse a saved policy/ }).click();
-    await goToNewRunPanel(page, "access");
-    await expect(page.getByTestId("ado-launch-note")).toBeVisible();
+    await expect(page.getByRole("heading", { name: NR_START.TITLE })).toBeVisible();
+    expect(await noHorizontalScroll(page)).toBe(true);
+    await walkGuidedToFiles(page);
+    await chooseFiles(page);
+    await continueNewRun(page, NR_TOOLS.TITLE);
+    expect(await noHorizontalScroll(page)).toBe(true);
+    await continueNewRun(page, NR_REVIEW.TITLE);
     expect(await noHorizontalScroll(page)).toBe(true);
 
     await page.goto(`/runs/${runId}`);
     await expect(page.getByTestId("ado-run-tokens")).toBeVisible();
     expect(await noHorizontalScroll(page)).toBe(true);
     clearRunTokens(runId);
+  });
+
+  test("the not-connected note on step 5 fits the screen", async ({ page }) => {
+    await spliceAccess(page, () => ({ token_mode: "minted_pat", state: "not_configured" }));
+    await spliceAdoRepository(page);
+    await page.goto("/runs/new");
+    await expect(page.getByRole("heading", { name: NR_START.TITLE })).toBeVisible();
+    await walkGuidedToFiles(page);
+    await chooseFiles(page);
+    await continueNewRun(page, NR_TOOLS.TITLE);
+    await expect(page.getByTestId("ado-launch-note")).toBeVisible();
+    expect(await noHorizontalScroll(page)).toBe(true);
   });
 });

@@ -9,6 +9,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -288,6 +289,62 @@ func workspaceCmd(client clientFn) *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(create, list, get, del, scan)
+	cmd.AddCommand(create, list, get, del, scan, workspaceBuildCmd(client))
 	return subcommandGroup(cmd)
+}
+
+// workspaceBuildCmd starts, refreshes or reads a workspace's image build.
+func workspaceBuildCmd(client clientFn) *cobra.Command {
+	var buildRefresh, buildStatus, buildJSON bool
+	build := &cobra.Command{
+		Use:   "build <workspace-id>",
+		Short: "Build a workspace's image (--refresh rebuilds it from fresh inputs) and print its build state",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if buildRefresh && buildStatus {
+				return fmt.Errorf("--refresh and --status cannot be used together")
+			}
+			id, err := parseID("workspace", args[0])
+			if err != nil {
+				return err
+			}
+			var b sdk.WorkspaceBuild
+			if buildStatus {
+				b, err = client().GetWorkspaceBuild(cmd.Context(), id)
+			} else {
+				b, err = client().BuildWorkspace(cmd.Context(), id, buildRefresh)
+			}
+			if err != nil {
+				return err
+			}
+			if buildJSON {
+				return emitJSON(cmd.OutOrStdout(), b)
+			}
+			printWorkspaceBuild(cmd.OutOrStdout(), id.String(), b)
+			return nil
+		},
+	}
+	build.Flags().BoolVar(&buildRefresh, "refresh", false, "rebuild from fresh inputs even when an image is kept; the new image replaces the old one only if no other build replaced it meanwhile")
+	build.Flags().BoolVar(&buildStatus, "status", false, "print the current build state without starting a build")
+	build.Flags().BoolVar(&buildJSON, "json", false, "emit the build state as JSON")
+	return build
+}
+
+// printWorkspaceBuild writes the build state one line per set field; the record line says whether the
+// image is reproducible.
+func printWorkspaceBuild(w io.Writer, id string, b sdk.WorkspaceBuild) {
+	fmt.Fprintf(w, "workspace %s: %s\n", id, b.State)
+	if b.Image != "" {
+		fmt.Fprintf(w, "image: %s\n", b.Image)
+	}
+	if b.Detail != "" {
+		fmt.Fprintf(w, "detail: %s\n", b.Detail)
+	}
+	if b.RecordSHA256 != "" {
+		repro := "not reproducible"
+		if b.Reproducible != nil && *b.Reproducible {
+			repro = "reproducible"
+		}
+		fmt.Fprintf(w, "record: %s (%s)\n", b.RecordSHA256, repro)
+	}
 }

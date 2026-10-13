@@ -97,6 +97,10 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 	if err != nil {
 		return err
 	}
+	if forms.unproved != "" {
+		return s.refuseUnproved(ctx, st, ident, forms.unproved)
+	}
+	forms = forms.destructive()
 	isEmail := func(t string) bool { return strings.Contains(t, "@") && !slices.Contains(forms.bound, t) }
 	principals := slices.DeleteFunc(slices.Clone(forms.targets), isEmail)
 	emails := slices.DeleteFunc(slices.Clone(forms.targets), func(t string) bool { return !isEmail(t) })
@@ -130,11 +134,33 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 		slog.WarnContext(ctx, "api: a purge step failed and stays pending", slog.String("identity", id.String()), slog.Any("err", err))
 		return fmt.Errorf("%w: %w", errDeprovisionIncomplete, err)
 	}
-	if err := s.auditPurge(ctx, st, id, forms.targets); err != nil {
+	if err := s.auditPurge(ctx, st, id, forms); err != nil {
 		slog.WarnContext(ctx, "api: a purge's audit row was not written and stays pending", slog.String("identity", id.String()), slog.Any("err", err))
 		return fmt.Errorf("%w: %w", errDeprovisionIncomplete, err)
 	}
 	return nil
+}
+
+// refuseUnproved stops a purge whose leaver's entra form c is not proved theirs. The refusal is held on the
+// ledger's audit step, where /scim/status lists it; a retry that finds it there writes no second denied row.
+// No retry finishes it, so the refusal says what an admin does instead.
+func (s *Server) refuseUnproved(ctx context.Context, st scimStore, ident store.PrincipalIdentity, c string) error {
+	id := ident.ID
+	remedy := "an admin erases what is under that form by subject"
+	if ident.Principal == "" {
+		remedy = "an admin binds the SCIM user to the person's sign-in, or removes the other issuer's sign-in bound to that form"
+	}
+	refused := fmt.Errorf("%w: the person's entra form %s is not proved theirs; %s", errDeprovisionHeld, c, remedy)
+	key := store.JobKey{Step: store.JobStepAuditDeprovision}
+	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindPurge)
+	if err != nil {
+		return err
+	}
+	if j, ok := jobByKey(jobs, key.Step, key.Target); !ok || j.LastError != refused.Error() {
+		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", id.String(), "denied",
+			mustJSON(map[string]any{"kind": store.JobKindPurge, "reason": reasonOwnerAmbiguous, "unproved": c})))
+	}
+	return errors.Join(refused, st.FailDeprovisionJob(ctx, id, store.JobKindPurge, key, refused))
 }
 
 // purgeStep runs fn unless the ledger already holds key done, and records the outcome.
@@ -153,7 +179,7 @@ func (s *Server) purgeStep(ctx context.Context, st scimStore, id uuid.UUID, jobs
 // not configured on this server holds nothing of the person's, so it is skipped rather than failing
 // the purge; a configured scope that fails keeps the step pending.
 func (s *Server) eraseForPurge(ctx context.Context, principal string) (map[string]int, error) {
-	orch := s.erasureOrchestrator(nil)
+	orch := s.erasureOrchestrator(nil, nil)
 	scopes := slices.DeleteFunc(slices.Clone(scimPurgeScopes), func(sc erasure.Scope) bool { return orch.Steps[sc] == nil })
 	detail := map[string]int{}
 	if len(scopes) == 0 {
@@ -229,7 +255,7 @@ func (s *Server) personDrives(ctx context.Context, subjects []string) ([]string,
 
 // auditPurge writes the person.deprovision row of a purge, once, after every other step is done. A
 // failed write leaves the step pending, so the retry writes it.
-func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, subjects []string) error {
+func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, forms leaverForms) error {
 	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindPurge)
 	if err != nil {
 		return err
@@ -243,7 +269,7 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, sub
 			counts[k] += v
 		}
 	}
-	drives, err := s.personDrives(ctx, subjects)
+	drives, err := s.personDrives(ctx, forms.targets)
 	if err != nil {
 		return err
 	}
@@ -252,6 +278,9 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, sub
 		"kind": store.JobKindPurge, "credentials_erased": counts["credentials_erased"], "masks_fenced": counts["masks_fenced"], "components_erased": counts["components_erased"],
 		"templates_erased": counts["templates_erased"], "workspaces_reassigned": counts["workspaces_reassigned"], "grants_deleted": counts["grants_deleted"],
 		"assignments_deleted": counts["assignments_deleted"], "email_rows_kept": counts["email_rows_kept"], "drives": drives,
+	}
+	if ne, ok := notErasedDetail(forms.notErased); ok {
+		data["not_erased"] = ne
 	}
 	ev := s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", id.String(), "success", mustJSON(data))
 	if err := s.recordAuditStrict(ctx, ev); err != nil {
@@ -274,11 +303,18 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 	if s.cfg.SCIM.PurgeAfter > 0 {
 		due, err := st.PurgeDueIdentities(ctx, scimSweepBatch)
 		errs = append(errs, err)
-		for _, id := range due {
-			if purged, err := s.purgeIdentity(ctx, st, id, scimSweeperSlot, true); err != nil {
+		for _, d := range due {
+			// A schedule on an identity no suspension of its own was recorded for came with another identity's
+			// suspension; it is left for an admin, and /scim/status keeps it listed as deactivated.
+			if !d.Suspended {
+				slog.WarnContext(ctx, "api: scim: not purging a deactivated identity with no suspension of its own on the ledger",
+					slog.String("identity", d.ID.String()))
+				continue
+			}
+			if purged, err := s.purgeIdentity(ctx, st, d.ID, scimSweeperSlot, true); err != nil {
 				errs = append(errs, err)
 			} else if purged {
-				slog.InfoContext(ctx, "api: scim: purged a suspended person past the purge delay", slog.String("identity", id.String()))
+				slog.InfoContext(ctx, "api: scim: purged a suspended person past the purge delay", slog.String("identity", d.ID.String()))
 			}
 		}
 	}

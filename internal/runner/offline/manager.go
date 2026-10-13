@@ -271,6 +271,9 @@ func (m *Manager) BeforeCreate(ctx context.Context, spec runner.SandboxSpec) err
 	if _, exists := m.state.Runs[spec.RunID]; exists {
 		return errors.New("runner run already has a creation intent")
 	}
+	if n := m.liveRuns(); spec.RunnerMaxRuns > 0 && n >= spec.RunnerMaxRuns {
+		return runnerwire.Refuse("this runner already holds %d runs, its limit of runs at once (%d)", n, spec.RunnerMaxRuns)
+	}
 	l, ok := m.pending[spec.RunID]
 	if !ok || m.expired(spec.RunID) {
 		return errors.New("runner create requires a live initial lease")
@@ -288,6 +291,19 @@ func (m *Manager) BeforeCreate(ctx context.Context, spec runner.SandboxSpec) err
 	delete(m.pending, spec.RunID)
 	m.beginMutation(runnerwire.MethodCreateSandbox, ref, uuid.Nil)
 	return nil
+}
+
+// liveRuns counts the runs whose sandbox this runner still holds: created or being created, not failed,
+// retired, quarantined, exited or stopped. It errs low, so the backstop to the control plane's count
+// never refuses a run the control plane rightly placed. m.mu must be held.
+func (m *Manager) liveRuns() int {
+	n := 0
+	for _, r := range m.state.Runs {
+		if !r.Retired && !r.FailedCreation && !r.ContainmentOnly && r.Quarantine == nil && r.Exit == nil && r.ProxyStoppedAt == nil {
+			n++
+		}
+	}
+	return n
 }
 
 // Created durably binds the substrate ref before the dispatcher acknowledges

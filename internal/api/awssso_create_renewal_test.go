@@ -308,7 +308,7 @@ func TestCreateRenewal_EraseDuringPutRetryWinsAndBootstrapFailsClosed(t *testing
 				go func() {
 					defer close(erased)
 					var rep secretstore.EraseReport
-					_ = f.srv.eraseLocked(context.Background(), "alice@example.com", "", &rep)
+					_ = f.srv.eraseLocked(context.Background(), "alice@example.com", "", nil, &rep)
 				}()
 				time.Sleep(50 * time.Millisecond) // let the erase reach the lock
 				return errors.New("transient")

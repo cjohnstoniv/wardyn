@@ -50,6 +50,7 @@ import {
   toolRuleDecision,
 } from "../wardyn/audit-decision";
 import { PolicyRemedy } from "../wardyn/policy-remedy";
+import { newRunHref } from "./new-run-flow/draft/new-run-url";
 import { AUDIT } from "./audit-copy";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { isHeld } from "../wardyn/live-approvals";
@@ -69,7 +70,8 @@ import { PolicyTab } from "./run-detail/policy-tab";
 import { POLICY_TAB } from "./run-detail/policy-tab-copy";
 import { RecordingTab } from "./run-detail/recording-tab";
 import { OutputTab } from "./run-detail/output-tab";
-import { cloneFromAudit, CLONE_UNREADABLE } from "./new-run/wizard-types";
+import { cloneFromAudit, CLONE_UNREADABLE } from "./new-run-flow/draft/clone-prefill";
+import { launchIntentSource } from "./new-run-flow/steps/shape/shape-sources";
 import { useRunDetail, type Tab } from "./run-detail/use-run-detail";
 import { Cockpit } from "./run-detail/cockpit";
 
@@ -150,11 +152,18 @@ function RunDetailPage({ id }: { id: string }) {
     }
   };
 
-  // 0.7.3 F7 / review U-01 — the header's clone door, same cloneFromAudit
-  // refusal as the Runs-list kebab (run-card.tsx): no run.create row, no
-  // navigation.
-  const onClone = () => {
+  // The header's clone door. A run that kept its setup opens through Run again;
+  // any other run falls back to what its row and audit trail hold, and with no
+  // run.create row there is nothing honest to clone: it toasts and stays.
+  const onClone = async () => {
     if (!run) return;
+    try {
+      await launchIntentSource.read(run.id);
+      void navigate(newRunHref({ screen: "review", view: "pretty" }, { again: run.id }));
+      return;
+    } catch {
+      // Kept no setup, or it could not be read: the audit trail answers below.
+    }
     const prefill = cloneFromAudit(run, audit);
     if (!prefill) {
       toast.warning(CLONE_UNREADABLE);
@@ -270,7 +279,7 @@ function RunDetailPage({ id }: { id: string }) {
             linkCopied={copied}
             onKill={kill}
             canKillAgain={killAgain}
-            onClone={view === "user" ? onClone : undefined}
+            onClone={view === "user" ? () => void onClone() : undefined}
             onRename={view === "user" ? rename : undefined}
           />
 

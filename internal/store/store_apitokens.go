@@ -61,10 +61,10 @@ func (s PG) insertAPIToken(ctx context.Context, qr queryRower, t types.APIToken,
 		return types.APIToken{}, err
 	}
 	const q = `
-		INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, expires_at, minted_by, identity_stamped_at)
+		INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, expires_at, minted_by, identity_stamped_at, rev_seq)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
 		        CASE WHEN $11::bigint IS NULL THEN NULL ELSE $10::timestamptz + $11::bigint * interval '1 microsecond' END,
-		        NULLIF($12, ''), now())
+		        NULLIF($12, ''), now(), $13)
 		RETURNING ` + apiTokenCols
 	anchor, err := db.CaptureAppClock(ctx, qr, s.now)
 	if err != nil {
@@ -84,7 +84,7 @@ func (s PG) insertAPIToken(ctx context.Context, qr queryRower, t types.APIToken,
 		lifetime = &us
 	}
 	return scanAPIToken(qr.QueryRow(ctx, q,
-		t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), createdAt, lifetime, t.MintedBy))
+		t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), createdAt, lifetime, t.MintedBy, t.RevSeq))
 }
 
 // GetAPITokenByRaw is the auth-time lookup: given a bearer string, resolve
@@ -133,6 +133,30 @@ func (s PG) ListAPITokensByPrincipal(ctx context.Context, principal string) ([]t
 		SELECT ` + apiTokenCols + `
 		FROM api_tokens WHERE principal = $1 ORDER BY created_at DESC, id`
 	return queryAPITokens(ctx, s, q, principal)
+}
+
+// APITokensByIdentityLister is the indexed read behind a per-person revocation: the tokens one name
+// owns under either form. An absent implementation falls back to ListAPITokensByPrincipal plus a scan of
+// ListAPITokens (see ListAPITokensByIdentity for the one place the two differ).
+type APITokensByIdentityLister interface {
+	ListAPITokensByIdentity(ctx context.Context, name string) ([]types.APIToken, error)
+}
+
+var _ APITokensByIdentityLister = PG{}
+
+// ListAPITokensByIdentity returns the tokens whose principal is name or whose email equals it ignoring
+// case (the match IsSessionRevoked's email arm makes), revoked rows included. The principal matches come
+// first, newest first, then the rows only the email names. It reads api_tokens_principal_idx and
+// api_tokens_lower_email_idx (migration 0194), not the whole table. The email arm follows the session-cut
+// rule (lower(sub) = lower($2)), so for non-ASCII case pairs PG lower() can differ from the scan fallback's
+// strings.EqualFold. name must not be empty: "" is
+// the revoke-all arm, which lists everything.
+func (s PG) ListAPITokensByIdentity(ctx context.Context, name string) ([]types.APIToken, error) {
+	const q = `
+		SELECT ` + apiTokenCols + `
+		FROM api_tokens WHERE principal = $1 OR lower(email) = lower($1)
+		ORDER BY (principal = $1) DESC, created_at DESC, id`
+	return queryAPITokens(ctx, s, q, name)
 }
 
 // ListAPITokens returns every token in the deployment, newest first (admin
@@ -241,13 +265,13 @@ const apiTokenLive = `revoked_at IS NULL AND (expires_at IS NULL OR expires_at >
 // The INSERT list stays spelled out separately: it names token_sha256 (never
 // read back) and omits last_used_at/revoked_at (never inserted) — deriving
 // one list from the other would hide that difference.
-const apiTokenCols = `id, principal, email, role, user_type, groups, groups_truncated, name, created_at, last_used_at, revoked_at, expires_at, COALESCE(minted_by, ''), identity_stamped_at`
+const apiTokenCols = `id, principal, email, role, user_type, groups, groups_truncated, name, created_at, last_used_at, revoked_at, expires_at, COALESCE(minted_by, ''), identity_stamped_at, rev_seq`
 
 func scanAPIToken(row pgx.Row) (types.APIToken, error) {
 	var t types.APIToken
 	var groups []byte
 	err := row.Scan(&t.ID, &t.Principal, &t.Email, &t.Role, &t.UserType, &groups, &t.GroupsTruncated, &t.Name,
-		&t.CreatedAt, &t.LastUsedAt, &t.RevokedAt, &t.ExpiresAt, &t.MintedBy, &t.IdentityStampedAt)
+		&t.CreatedAt, &t.LastUsedAt, &t.RevokedAt, &t.ExpiresAt, &t.MintedBy, &t.IdentityStampedAt, &t.RevSeq)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.APIToken{}, ErrNotFound
 	}

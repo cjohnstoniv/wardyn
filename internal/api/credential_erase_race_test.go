@@ -278,7 +278,7 @@ func TestEraseThenReconnectKeepsTheCredential(t *testing.T) {
 	d := newOwnPATDoor(t, adoSite(ownPATTestRow()), nil)
 	d.putBlob(t, capSub, ownPATRowID, ownPATToken)
 	var rep secretstore.EraseReport
-	if err := d.srv.eraseLocked(context.Background(), capSub, "", &rep); err != nil || rep.Count != 1 {
+	if err := d.srv.eraseLocked(context.Background(), capSub, "", nil, &rep); err != nil || rep.Count != 1 {
 		t.Fatalf("erase = %+v, %v", rep, err)
 	}
 	if code, body := d.put(t, ownPATOrgKey, ownPATToken, days(10)); code != http.StatusOK {
@@ -289,7 +289,7 @@ func TestEraseThenReconnectKeepsTheCredential(t *testing.T) {
 	}
 	s, _, blob := ssoRefreshServer(t)
 	var awsRep secretstore.EraseReport
-	if err := s.eraseLocked(context.Background(), awsSSOTestOwner, "", &awsRep); err != nil || awsRep.Count != 1 {
+	if err := s.eraseLocked(context.Background(), awsSSOTestOwner, "", nil, &awsRep); err != nil || awsRep.Count != 1 {
 		t.Fatalf("aws erase = %+v, %v", awsRep, err)
 	}
 	if err := s.storeAWSSSOBlob(context.Background(), awsSSOTestScope(), blob); err != nil {
@@ -376,7 +376,7 @@ func TestEraseRace_FourWayNoDeadlock(t *testing.T) {
 		})
 		run(func() {
 			var rep secretstore.EraseReport
-			_ = s.eraseLocked(context.Background(), owner, "entra-row", &rep)
+			_ = s.eraseLocked(context.Background(), owner, "entra-row", nil, &rep)
 		})
 	}
 	done := make(chan struct{})
@@ -388,7 +388,7 @@ func TestEraseRace_FourWayNoDeadlock(t *testing.T) {
 	}
 	// One more erase with nothing else running: it must leave the namespace empty.
 	var rep secretstore.EraseReport
-	if err := s.eraseLocked(context.Background(), owner, "entra-row", &rep); err != nil {
+	if err := s.eraseLocked(context.Background(), owner, "entra-row", nil, &rep); err != nil {
 		t.Fatal(err)
 	}
 	if names := namesOf(t, s.cfg.Secrets, owner); len(names) != 0 {

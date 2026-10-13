@@ -160,22 +160,22 @@ func TestMemberDriveNeverOnSelfHosted(t *testing.T) {
 		HomeTemplate: types.HomeTemplateHash, ObjectScheme: types.DriveObjectSchemeID, Writable: true, OwnerSubject: aliceSub}
 	admin := member
 	admin.OwnerSubject = ""
-	self := types.RunnerPool{HostingType: types.RunnerPoolSelfHosted}
-	remote := types.RunnerPool{HostingType: types.RunnerPoolRemoteProvided}
+	self := store.RunnerPoolCatalogueRow{Pool: types.RunnerPool{Scope: types.RunnerPoolUser}}
+	remote := store.RunnerPoolCatalogueRow{Pool: types.RunnerPool{Scope: types.RunnerPoolUser}, ExecutorIDs: []string{uuid.NewString()}}
 	if !driveNotInPool(self, member) || driveNotInPool(remote, member) {
 		t.Error("driveNotInPool must hold a person's own drive off a self-hosted pool, and only there")
 	}
 
 	srv, _ := multiDriveServer()
 	d := reachableDrive{owned: true, winner: store.UserDriveWinner{Drive: member}, resolved: &types.ResolvedDrive{Drive: member, Writable: true}}
-	if got := srv.driveUnavailableHere(context.Background(), d, store.RunnerPoolCatalogueRow{Pool: self}, true); got != client.MeDriveUnavailableNotInPool {
+	if got := srv.driveUnavailableHere(context.Background(), d, self, true); got != client.MeDriveUnavailableNotInPool {
 		t.Errorf("catalogue on a self-hosted pool = %q, want not_in_pool", got)
 	}
 
 	w := httptest.NewRecorder()
 	f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil),
 		drives: []runDrive{{resolved: types.ResolvedDrive{Drive: member}, target: d.target()}},
-		place:  runPlacement{pooled: true, row: self}}
+		place:  runPlacement{pooled: true, placement: types.PlacementLocal}}
 	if (&Server{}).stepDriveEligibility(f, &foldRecorder{}) || w.Code != http.StatusUnprocessableEntity ||
 		!strings.Contains(w.Body.String(), string(authz.ReasonDriveNotInPool)) || !strings.Contains(w.Body.String(), driveNotInPoolMsg("Mine")) {
 		t.Errorf("attach on a self-hosted pool = %d %s, want 422 drive_not_in_pool", w.Code, w.Body)

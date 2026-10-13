@@ -488,6 +488,7 @@ if [[ "${1:-}" == "--prepare-only" ]]; then
     seed_claude_onboarding
     materialize_managed_claude_config
     materialize_aws_sso_config
+    materialize_azure_cli_config
     exit 0
 fi
 
@@ -513,6 +514,7 @@ if [[ "${1:-}" == "--idle" || "${1:-}" == "--revive" ]]; then
     materialize_managed_claude_config  # sentinel creds for managed subscription (compose)
     install_artifact_config
     materialize_aws_sso_config
+    materialize_azure_cli_config
     provision_git_helper_secret
     provision_ssh_grants
     trap wipe_ssh_grants EXIT
@@ -692,6 +694,7 @@ materialize_managed_claude_config
 # unless WARDYN_ARTIFACT_CONFIG_B64 is set) before the clone/install/verify below.
 install_artifact_config
 materialize_aws_sso_config
+materialize_azure_cli_config
 
 # Provision the git credential helper caller-auth secret BEFORE any git runs
 # (the clone below and the agent's own git both need it).  Called directly so the

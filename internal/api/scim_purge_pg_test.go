@@ -318,13 +318,13 @@ func TestSCIMSweeperSkipsAReactivatedCandidate(t *testing.T) {
 
 	ctx := context.Background()
 	due, err := e.st.PurgeDueIdentities(ctx, 10)
-	if err != nil || len(due) != 1 || due[0].String() != f.id {
+	if err != nil || len(due) != 1 || due[0].ID.String() != f.id || !due[0].Suspended {
 		t.Fatalf("candidates = %v, %v", due, err)
 	}
 	if w := e.patch(e.b, f.id, patchOf("true")); w.Code != http.StatusOK {
 		t.Fatalf("reactivate = %d", w.Code)
 	}
-	purged, err := e.a.srv.purgeIdentity(ctx, e.st, due[0], scimSweeperSlot, true)
+	purged, err := e.a.srv.purgeIdentity(ctx, e.st, due[0].ID, scimSweeperSlot, true)
 	if err != nil || purged {
 		t.Fatalf("purgeIdentity of a reactivated candidate = %v, %v, want skipped", purged, err)
 	}
