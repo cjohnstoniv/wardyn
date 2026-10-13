@@ -70,10 +70,10 @@ const (
 	RunnerPoolRunBackground  = types.RunnerPoolRunBackground
 	RunnerPoolRunInteractive = types.RunnerPoolRunInteractive
 
-	LimitSourcePool           = types.LimitSourcePool
-	LimitSourceGovernance     = types.LimitSourceGovernance
-	LimitSourceDeployment     = types.LimitSourceDeployment
-	LimitSourceRunnerCapacity = types.LimitSourceRunnerCapacity
+	LimitSourcePool       = types.LimitSourcePool
+	LimitSourceGovernance = types.LimitSourceGovernance
+	LimitSourceDeployment = types.LimitSourceDeployment
+	LimitSourceRunner     = types.LimitSourceRunner
 
 	// RunEndMaxLifetimeReached is the reason a run is KILLED at its maximum lifetime.
 	RunEndMaxLifetimeReached = types.RunEndMaxLifetimeReached
@@ -174,6 +174,8 @@ type RunnerPoolCatalogueEntry struct {
 	MyRunners []PoolRunner `json:"my_runners,omitempty"`
 	// Slots is how busy the pool is; absent on a row the caller may only manage.
 	Slots *PoolSlots `json:"slots,omitempty"`
+	// Capacity is its runners' limits and usage added up; absent on a row the caller may only manage.
+	Capacity *PoolCapacity `json:"capacity,omitempty"`
 	// Owner is a user pool's owner: the caller on their own pools, and the
 	// person each other pool belongs to on an administrator's oversight rows.
 	Owner string `json:"owner,omitempty"`
@@ -197,6 +199,19 @@ type PoolSlots struct {
 	Verdict string `json:"verdict"`
 	// MaxWaitSec is how long a run of that type waits by default: 86400 Background, 3600 Interactive.
 	MaxWaitSec int `json:"max_wait_sec,omitempty"`
+}
+
+// PoolCapacity is a pool's runners added up, numbers only and never saying whose runs they are. Total
+// and InUse add every member that declares limits; Available adds only those that are online, and is
+// zero for a pool that is switched off. LargestPerRun is the biggest run any such member takes. Runners
+// counts the members, RunnersOnline those that can take a run now.
+type PoolCapacity struct {
+	Total         types.RunnerTally   `json:"total"`
+	InUse         types.RunnerTally   `json:"in_use"`
+	Available     types.RunnerTally   `json:"available"`
+	LargestPerRun types.RunnerAmounts `json:"largest_per_run"`
+	Runners       int                 `json:"runners"`
+	RunnersOnline int                 `json:"runners_online"`
 }
 
 // PoolRunner is one of the caller's own self-hosted runners in a user pool.

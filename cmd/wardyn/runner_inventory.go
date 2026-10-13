@@ -79,75 +79,18 @@ func printRunners(w io.Writer, rows []sdk.RunnerView, admin bool) error {
 		if r.LastSeenAt != nil {
 			lastSeen = r.LastSeenAt.Format(time.RFC3339)
 		}
-		atOnce := fmt.Sprintf("%d/%d", r.Running, r.MaxRuns)
+		atOnce := fmt.Sprintf("%d/-", r.Usage.InUse.Runs)
+		if r.Limits != nil {
+			atOnce = fmt.Sprintf("%d/%d", r.Usage.InUse.Runs, r.Limits.RunsAtOnce)
+		}
 		machine := cmp.Or(r.MachineName, "-")
 		if admin {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", r.ID, r.Owner, r.Name, machine, runnerStateWord(r), lastSeen, r.RunsActive, atOnce, r.KeyFingerprint)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", r.ID, r.Owner, r.Name, machine, runnerStateWord(r), lastSeen, r.Usage.InUse.Runs, atOnce, r.KeyFingerprint)
 		} else {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", r.ID, r.Name, machine, runnerStateWord(r), lastSeen, r.RunsActive, atOnce, r.KeyFingerprint)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", r.ID, r.Name, machine, runnerStateWord(r), lastSeen, r.Usage.InUse.Runs, atOnce, r.KeyFingerprint)
 		}
 	}
 	return tw.Flush()
-}
-
-// runnerSetCmd changes the caller's own runner. Only the owner may: an administrator's token is refused
-// by the server, since the runner is the person's machine.
-func runnerSetCmd(client clientFn) *cobra.Command {
-	var maxRuns int
-	var people string
-	cmd := &cobra.Command{Use: "set <runner> [--max-runs N] [--available-to-people on|off]",
-		Short: "Change your own runner's runs at once, or (an admin) whether a remote-hosted runner is available to people's pools",
-		Args:  cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-			runs, avail := cmd.Flags().Changed("max-runs"), cmd.Flags().Changed("available-to-people")
-			switch {
-			case !runs && !avail:
-				return fmt.Errorf("name something to change: --max-runs or --available-to-people")
-			case runs && avail:
-				return fmt.Errorf("--max-runs is a self-hosted runner's and --available-to-people a remote-hosted runner's; set them one at a time")
-			case avail && people != "on" && people != "off":
-				return fmt.Errorf("--available-to-people is on or off")
-			case runs && maxRuns < 1:
-				return fmt.Errorf("--max-runs is a whole number, 1 or more")
-			}
-			c := client()
-			if avail {
-				ref, err := resolveRunner(cmd, c, args[0], func() ([]sdk.RemoteRunnerView, error) { return c.ListRemoteRunners(cmd.Context()) })
-				if err != nil {
-					return err
-				}
-				if ref.self != nil {
-					return fmt.Errorf("%s is a self-hosted runner: only remote-hosted runners are made available to people's pools", args[0])
-				}
-				msg := "%s is now available to people's pools\n"
-				if people == "on" {
-					_, err = c.SetRemoteRunnerPeoplePolicy(cmd.Context(), ref.remote, sdk.RemoteRunnerPeoplePolicyRequest{PeoplePools: sdk.PeoplePoolsEveryone})
-				} else {
-					msg = "%s is no longer available to people's pools\n"
-					err = c.ClearRemoteRunnerPeoplePolicy(cmd.Context(), ref.remote)
-				}
-				if held, err := heldForApproval(cmd, err); held || err != nil {
-					return err
-				}
-				_, err = fmt.Fprintf(cmd.OutOrStdout(), msg, args[0])
-				return err
-			}
-			ref, err := resolveRunner(cmd, c, args[0], func() ([]sdk.RemoteRunnerView, error) { return nil, nil })
-			if err != nil {
-				return err
-			}
-			if ref.self == nil {
-				return fmt.Errorf("%s is not one of your runners: name it by id or as `wardyn runner list` shows it", args[0])
-			}
-			v, err := c.SetMyRunnerMaxRuns(cmd.Context(), *ref.self, maxRuns)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "runner %s now runs at most %d at once (%d running)\n", v.Name, v.MaxRuns, v.Running)
-			return nil
-		}}
-	cmd.Flags().IntVar(&maxRuns, "max-runs", 0, "how many runs your self-hosted runner may hold at once, 1 to 64")
-	cmd.Flags().StringVar(&people, "available-to-people", "", "on: anyone may add this remote-hosted runner to their own user pools; off: nobody (admin or security admin; for listed people use `wardyn runner remote people set`)")
-	return cmd
 }
 
 func runnerTokensCmd(client clientFn) *cobra.Command {

@@ -33,10 +33,10 @@ var (
 )
 
 func poolWithLifetime(name string, bg, ia types.RunnerPoolDuration) *types.RunnerPool {
-	amount := func(def, c int) types.RunnerPoolAmount { return types.RunnerPoolAmount{Default: def, Cap: c} }
+	amount := func(def, c int) *types.RunnerPoolAmount { return &types.RunnerPoolAmount{Default: def, Cap: c} }
 	return &types.RunnerPool{ID: uuid.New(), Name: name, Limits: &types.RunnerPoolLimits{
-		Background:  &types.RunnerPoolBackgroundLimits{CPUMillis: amount(1000, 4000), MemoryMiB: amount(1024, 8192), Lifetime: bg},
-		Interactive: &types.RunnerPoolInteractiveLimits{CPUMillis: amount(1000, 4000), MemoryMiB: amount(1024, 8192), Lifetime: ia, Idle: types.RunnerPoolDuration{DefaultSec: 1800, MaxSec: 7200}},
+		Background:  &types.RunnerPoolBackgroundLimits{CPUMillis: amount(1000, 4000), MemoryMiB: amount(1024, 8192), Lifetime: &bg},
+		Interactive: &types.RunnerPoolInteractiveLimits{CPUMillis: amount(1000, 4000), MemoryMiB: amount(1024, 8192), Lifetime: &ia, Idle: &types.RunnerPoolDuration{DefaultSec: 1800, MaxSec: 7200}},
 		Barriers:    []types.ConfinementClass{types.CC1},
 	}}
 }

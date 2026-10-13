@@ -60,7 +60,7 @@ func TestPG_AddRemoteRunnerToUserPoolHoldsThePolicyRevision(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	pg := store.NewPG(pool)
 	ctx := context.Background()
-	if _, err := pg.EnsureRemoteRunners(ctx, []string{"docker"}); err != nil {
+	if _, _, err := pg.EnsureRemoteRunners(ctx, []string{"docker"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	mine := ownPool(t, pg, "sub-a", "Mine")

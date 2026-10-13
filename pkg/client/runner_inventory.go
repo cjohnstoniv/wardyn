@@ -71,11 +71,20 @@ func (c *Client) GetMyRunner(ctx context.Context, id uuid.UUID) (RunnerView, err
 	return out, err
 }
 
-// SetMyRunnerMaxRuns changes one of the caller's own runners' "Runs at once" (1 to 64). Only the
-// runner's owner may; another person's runner answers as an absent id, an administrator's included.
-func (c *Client) SetMyRunnerMaxRuns(ctx context.Context, id uuid.UUID, maxRuns int) (RunnerView, error) {
+// RunnerLimits is a runner's declared limit set; RunnerUsage is what its runs hold now.
+type (
+	RunnerLimits  = types.RunnerLimits
+	RunnerAmounts = types.RunnerAmounts
+	RunnerTally   = types.RunnerTally
+	RunnerUsage   = types.RunnerUsage
+)
+
+// SetMyRunnerLimits declares one of the caller's own runners' limits: Runs at once (1 to 64), the
+// total and the per-run CPU, memory and disk, all of them. Only the runner's owner may; another
+// person's runner answers as an absent id, an administrator's included.
+func (c *Client) SetMyRunnerLimits(ctx context.Context, id uuid.UUID, limits RunnerLimits) (RunnerView, error) {
 	var out RunnerView
-	err := c.do(ctx, http.MethodPut, "/api/v1/me/runners/"+id.String(), types.RunnerUpdateRequest{MaxRuns: &maxRuns}, &out)
+	err := c.do(ctx, http.MethodPut, "/api/v1/me/runners/"+id.String(), types.RunnerUpdateRequest{Limits: &limits}, &out)
 	return out, err
 }
 
