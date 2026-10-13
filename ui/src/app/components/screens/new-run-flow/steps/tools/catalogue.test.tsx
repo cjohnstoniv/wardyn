@@ -23,7 +23,7 @@ import { AddTools } from "./catalogue";
 const h = vi.hoisted(() => ({ mine: vi.fn(), names: vi.fn(), saveMine: vi.fn(), answered: true }));
 vi.mock("../../../../../lib/api/components", () => ({ components: { mine: h.mine, saveMine: h.saveMine } }));
 vi.mock("../../../../../lib/api/secrets", () => ({ secrets: { listSecrets: h.names } }));
-vi.mock("../../../new-run/custom-component-dialog", () => ({
+vi.mock("../../checks/custom-component-dialog", () => ({
   CustomComponentDialog: (p: { context: string }) => <div role="dialog" aria-label="full editor">{p.context}</div>,
 }));
 

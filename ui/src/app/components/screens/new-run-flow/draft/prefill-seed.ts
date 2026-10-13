@@ -10,7 +10,7 @@
 import type { ConfinementClass } from "../../../../lib/types/runs";
 import type { NewRunOrigin, RunIntent } from "./run-intent";
 
-interface PrefillState {
+export interface PrefillState {
   task?: string;
   command?: string;
   startupCommand?: string;
