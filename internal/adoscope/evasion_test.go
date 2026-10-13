@@ -444,3 +444,37 @@ func TestEvasionEdgeWhitespaceAndDots(t *testing.T) {
 		},
 	})
 }
+
+// A dot segment carrying a path parameter (".;", "..;x=1") is refused wherever
+// it sits: a layer that strips ";params" before resolving reads it as a dot
+// segment, in every spelling the percent-decoding rules already cover.
+func TestEvasionDotSegmentsWithPathParameter(t *testing.T) {
+	var cases []caseT
+	for _, seg := range []string{
+		"..;", ".;", "..;x=1", "..;a=b", "..%3b", "..%3B", "%2e%2e;", "%2E%2E;", "%2e%2e%3b", "%2e;", "%252e%252e%253b",
+	} {
+		for _, path := range []string{
+			"/acme/_apis/wit/" + seg + "/hooks/subscriptions",
+			"/acme/" + seg + "/evil/_apis/projects",
+			"/acme/proj/_apis/git/repositories/r1/" + seg + "/" + seg + "/pushes",
+			"/acme/proj/_apis/git/repositories/r1/refs/" + seg,
+			"/acme/proj/_apis/wit/workitems/" + seg + "/",
+			"/acme/proj/_apis/" + seg + "/tokens/pats",
+		} {
+			cases = append(cases, caseT{name: path, req: adoReq(http.MethodGet, path, ""), wantErr: true})
+		}
+	}
+	runCases(t, cases)
+}
+
+// A ";" that does not follow a dot segment is an ordinary name character.
+func TestEvasionPlainSemicolonAdmitted(t *testing.T) {
+	runCases(t, []caseT{
+		{name: "a semicolon in a repository name", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/a;b", ""), want: CapCodeRead},
+		{name: "a name like file;v=1", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/file;v=1.txt", ""), want: CapCodeRead},
+		{name: "a leading dot name with a parameter", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/.hidden;x", ""), want: CapCodeRead},
+		{name: "a lone semicolon", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/;x", ""), want: CapCodeRead},
+		{name: "three dots with a parameter", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/...;x", ""), want: CapCodeRead},
+		{name: "an ordinary repository", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/r1", ""), want: CapCodeRead},
+	})
+}
