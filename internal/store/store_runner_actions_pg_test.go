@@ -296,7 +296,7 @@ func TestPG_RunnerActions_ResultIsAClosedAuthenticatedCAS(t *testing.T) {
 	}
 	for name, c := range refusals {
 		t.Run(name, func(t *testing.T) {
-			if _, _, err := f.st.RecordRunnerActionResult(ctx, c.runner, c.run, c.action, c.outcome, c.observed, prepareSpoolTest); !errors.Is(err, c.want) {
+			if _, _, err := f.st.RecordRunnerActionResult(ctx, c.runner, c.run, c.action, c.outcome, "", c.observed, prepareSpoolTest); !errors.Is(err, c.want) {
 				t.Fatalf("result = %v, want %v", err, c.want)
 			}
 			open(t, a.ID)
@@ -306,25 +306,25 @@ func TestPG_RunnerActions_ResultIsAClosedAuthenticatedCAS(t *testing.T) {
 	if _, err := f.pool.Exec(ctx, `UPDATE agent_runs SET runner_id=$2 WHERE id=$1`, unexecuted.ID, sibling.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.st.RecordRunnerActionResult(ctx, sibling.ID, unexecuted.ID, b.ID, types.RunnerActionSuccess, observed, prepareSpoolTest); !errors.Is(err, store.ErrRunnerActionRefused) {
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, sibling.ID, unexecuted.ID, b.ID, types.RunnerActionSuccess, "", observed, prepareSpoolTest); !errors.Is(err, store.ErrRunnerActionRefused) {
 		t.Fatalf("another runner's result = %v, want ErrRunnerActionRefused", err)
 	}
 	open(t, b.ID)
 
 	before := time.Now().Add(-time.Minute)
-	done, first, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionSuccess, observed, prepareSpoolTest)
+	done, first, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionSuccess, "", observed, prepareSpoolTest)
 	if err != nil || !first || done.Outcome != types.RunnerActionSuccess || done.AppliedAt == nil || done.AppliedAt.Before(before) ||
 		!done.ObservedAt.Equal(observed.UTC().Truncate(time.Microsecond)) {
 		t.Fatalf("first result = %+v first=%v err=%v", done, first, err)
 	}
-	again, first, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionSuccess, observed, prepareSpoolTest)
+	again, first, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionSuccess, "", observed, prepareSpoolTest)
 	if err != nil || first || !again.AppliedAt.Equal(*done.AppliedAt) {
 		t.Fatalf("an identical repeat: first=%v err=%v", first, err)
 	}
-	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionDeferred, observed, prepareSpoolTest); !errors.Is(err, store.ErrConflict) {
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionDeferred, "", observed, prepareSpoolTest); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("a changed outcome = %v, want ErrConflict", err)
 	}
-	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionSuccess, observed.Add(time.Second), prepareSpoolTest); !errors.Is(err, store.ErrConflict) {
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionSuccess, "", observed.Add(time.Second), prepareSpoolTest); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("a changed observed time = %v, want ErrConflict", err)
 	}
 }
@@ -343,7 +343,7 @@ func TestPG_RunnerActions_LegacyRowFencesButGrantsNothing(t *testing.T) {
 	if page, more, err := f.st.ListPendingRunnerActions(ctx, f.rn.ID); err != nil || len(page) != 0 || more {
 		t.Fatalf("a legacy row was delivered: %d %v %v", len(page), more, err)
 	}
-	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, id, types.RunnerActionSuccess, time.Now(), prepareSpoolTest); !errors.Is(err, store.ErrRunnerActionRefused) {
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, id, types.RunnerActionSuccess, "", time.Now(), prepareSpoolTest); !errors.Is(err, store.ErrRunnerActionRefused) {
 		t.Fatalf("a legacy row was settled: %v", err)
 	}
 	for name, q := range map[string]string{
@@ -365,7 +365,7 @@ func TestPG_RunnerActions_DeferredReceiptKeepsTheFence(t *testing.T) {
 	run := f.run(t)
 	gen := f.issue(t, run)
 	a := f.mustQueue(t, f.action(run, types.RunnerActionKill, gen))
-	if _, first, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionDeferred, time.Now(), prepareSpoolTest); err != nil || !first {
+	if _, first, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionDeferred, "", time.Now(), prepareSpoolTest); err != nil || !first {
 		t.Fatalf("deferred: %v %v", first, err)
 	}
 	restarted := store.NewPG(f.pool)
@@ -381,7 +381,7 @@ func TestPG_RunnerActions_DeferredReceiptKeepsTheFence(t *testing.T) {
 	// Deferred is final for its action ID; convergence takes a fresh action, and
 	// settling the earlier obligation is not this queue's to infer.
 	fresh := f.mustQueue(t, f.action(run, types.RunnerActionKill, gen))
-	if _, first, err := restarted.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, fresh.ID, types.RunnerActionSuccess, time.Now(), prepareSpoolTest); err != nil || !first {
+	if _, first, err := restarted.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, fresh.ID, types.RunnerActionSuccess, "", time.Now(), prepareSpoolTest); err != nil || !first {
 		t.Fatalf("fresh success: %v %v", first, err)
 	}
 	if has, _ := restarted.RunHasPendingRunnerAction(ctx, run.ID); !has {
@@ -405,16 +405,16 @@ func TestPG_RunnerActions_StopProxySuccessAuditsInTheSameTransaction(t *testing.
 			audits := func() int {
 				return f.count(t, `SELECT count(*) FROM audit_events WHERE run_id=$1 AND action='run.containment.reassert'`, run.ID)
 			}
-			if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionSuccess, observed, failPrepare); err == nil {
+			if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionSuccess, "", observed, failPrepare); err == nil {
 				t.Fatal("a success whose audit failed was recorded")
 			}
 			if n := f.count(t, `SELECT count(*) FROM runner_pending_actions WHERE id=$1 AND applied_at IS NULL`, a.ID); n != 1 || audits() != 0 {
 				t.Fatalf("the receipt or audit escaped rollback: open=%d audits=%d", n, audits())
 			}
-			if _, first, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionSuccess, observed, prepareSpoolTest); err != nil || !first {
+			if _, first, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionSuccess, "", observed, prepareSpoolTest); err != nil || !first {
 				t.Fatalf("success: %v %v", first, err)
 			}
-			if _, first, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionSuccess, observed, prepareSpoolTest); err != nil || first {
+			if _, first, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionSuccess, "", observed, prepareSpoolTest); err != nil || first {
 				t.Fatalf("duplicate: %v %v", first, err)
 			}
 			if audits() != 1 {
@@ -437,7 +437,7 @@ func TestPG_RunnerActions_StopProxyResultEdges(t *testing.T) {
 
 	deferred := f.lose(t, f.run(t))
 	d := f.mustQueue(t, f.action(deferred, types.RunnerActionStopProxy, uuid.Nil))
-	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, deferred.ID, d.ID, types.RunnerActionDeferred, time.Now(), failPrepare); err != nil {
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, deferred.ID, d.ID, types.RunnerActionDeferred, "", time.Now(), failPrepare); err != nil {
 		t.Fatalf("deferred ran the success hook: %v", err)
 	}
 	if has, _ := f.st.RunHasPendingRunnerAction(ctx, deferred.ID); !has || audits(deferred.ID) != 0 {
@@ -450,7 +450,7 @@ func TestPG_RunnerActions_StopProxyResultEdges(t *testing.T) {
 	if _, err := f.pool.Exec(ctx, `INSERT INTO runner_executions (run_id, runner_id, generation, operation) VALUES ($1,$2,$3,'exec')`, absent.ID, f.rn.ID, uuid.New()); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, absent.ID, n.ID, types.RunnerActionSuccess, time.Now(), prepareSpoolTest); !errors.Is(err, store.ErrRunnerActionRefused) {
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, absent.ID, n.ID, types.RunnerActionSuccess, "", time.Now(), prepareSpoolTest); !errors.Is(err, store.ErrRunnerActionRefused) {
 		t.Fatalf("a no-execution binding settled over an issued execution: %v", err)
 	}
 
@@ -460,7 +460,7 @@ func TestPG_RunnerActions_StopProxyResultEdges(t *testing.T) {
 	if _, err := f.pool.Exec(ctx, `UPDATE agent_runs SET sandbox_ref=$2 WHERE id=$1`, moved.ID, "runner:"+f.rn.ID.String()+"/elsewhere"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, moved.ID, mk.ID, types.RunnerActionSuccess, time.Now(), prepareSpoolTest); !errors.Is(err, store.ErrRunnerActionRefused) {
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, moved.ID, mk.ID, types.RunnerActionSuccess, "", time.Now(), prepareSpoolTest); !errors.Is(err, store.ErrRunnerActionRefused) {
 		t.Fatalf("a receipt for a run whose ref changed = %v, want ErrRunnerActionRefused", err)
 	}
 	if n := f.count(t, `SELECT count(*) FROM runner_pending_actions WHERE id=$1 AND applied_at IS NULL`, mk.ID); n != 1 {
@@ -473,7 +473,7 @@ func TestPG_RunnerActions_StopProxyResultEdges(t *testing.T) {
 	if _, err := f.pool.Exec(ctx, `UPDATE agent_runs SET state='KILLED' WHERE id=$1`, killed.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, first, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, killed.ID, k.ID, types.RunnerActionSuccess, time.Now(), failPrepare); err != nil || !first {
+	if _, first, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, killed.ID, k.ID, types.RunnerActionSuccess, "", time.Now(), failPrepare); err != nil || !first {
 		t.Fatalf("receipt after kill: %v %v", first, err)
 	}
 	if audits(killed.ID) != 0 {
@@ -501,7 +501,7 @@ func TestPG_RunnerActions_PendingIsABoundedOldestFirstPage(t *testing.T) {
 		}
 	}
 	for _, a := range page {
-		if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, a.RunID, a.ID, types.RunnerActionSuccess, time.Now(), prepareSpoolTest); err != nil {
+		if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, a.RunID, a.ID, types.RunnerActionSuccess, "", time.Now(), prepareSpoolTest); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -517,7 +517,7 @@ func TestPG_RunnerActions_RevokeKillsRunsAndSettlesActionsInOneCommit(t *testing
 	kill := f.mustQueue(t, f.action(open, types.RunnerActionKill, uuid.Nil))
 	deferred := f.run(t)
 	end := f.mustQueue(t, f.action(deferred, types.RunnerActionEnd, uuid.Nil))
-	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, deferred.ID, end.ID, types.RunnerActionDeferred, time.Now(), prepareSpoolTest); err != nil {
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, deferred.ID, end.ID, types.RunnerActionDeferred, "", time.Now(), prepareSpoolTest); err != nil {
 		t.Fatal(err)
 	}
 	done := f.run(t)
@@ -689,7 +689,7 @@ func TestPG_RunnerActions_DeferredStopProxyIsNeverReissued(t *testing.T) {
 	gen := f.issue(t, run)
 	run = f.lose(t, run)
 	first := f.mustQueue(t, f.action(run, types.RunnerActionStopProxy, gen))
-	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, first.ID, types.RunnerActionDeferred, time.Now(), prepareSpoolTest); err != nil {
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, first.ID, types.RunnerActionDeferred, "", time.Now(), prepareSpoolTest); err != nil {
 		t.Fatal(err)
 	}
 	again, queued, err := f.st.QueueRunnerAction(ctx, f.action(run, types.RunnerActionStopProxy, gen))

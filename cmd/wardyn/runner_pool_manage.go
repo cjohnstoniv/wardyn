@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -46,18 +47,46 @@ func runnerPoolMemberCmd(client clientFn, add bool) *cobra.Command {
 	if !add {
 		use, short = "remove <pool> <runner>...", "Take runners out of a pool"
 	}
-	return &cobra.Command{Use: use, Short: short, Args: cobra.MinimumNArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+	var makeDefault bool
+	cmd := &cobra.Command{Use: use, Short: short, Args: cobra.MinimumNArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
 		pool, err := readPoolArg(cmd, client, args[0])
 		if err != nil {
 			return err
 		}
-		return poolMembers(cmd, client(), pool, args[1:], add)
+		if err := poolMembers(cmd, client(), pool, args[1:], add, false); err != nil || !makeDefault {
+			return err
+		}
+		return makePoolDefault(cmd, client(), pool)
 	}}
+	if add {
+		cmd.Flags().BoolVar(&makeDefault, "default", false, "also make the pool your default, the one New Run starts with")
+	}
+	return cmd
+}
+
+// makePoolDefault makes pool the caller's default pool; whatever else the read carried is sent back as read.
+func makePoolDefault(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool) error {
+	d, err := c.GetMyRunnerPoolDefaults(cmd.Context())
+	if err != nil {
+		return err
+	}
+	d.PoolID = &pool.ID
+	if _, err := c.SetMyRunnerPoolDefaults(cmd.Context(), d); err != nil {
+		return err
+	}
+	kind := "pool"
+	if pool.Scope == sdk.RunnerPoolUser {
+		kind = "user pool"
+	}
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "default %s set to %s\n", kind, pool.Name)
+	return err
 }
 
 // poolMembers adds or removes each runner, through the organization's routes for a remote-hosted runner
-// in an organization pool and through your own otherwise, and says what is now true.
-func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerArgs []string, add bool) error {
+// in an organization pool and through your own otherwise, and says what is now true. Every runner is
+// read, and an unclaimed one refused, before the first write; one already in the pool is said so and not
+// added again. fresh says the pool was just made, so there is nothing to read.
+func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerArgs []string, add, fresh bool) error {
 	ctx := cmd.Context()
 	mine := pool.Scope == sdk.RunnerPoolUser
 	remotes := func() ([]sdk.RemoteRunnerView, error) {
@@ -67,13 +96,13 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 		return c.ListRemoteRunners(ctx)
 	}
 	var members []sdk.RunnerPoolMemberView
-	if !add {
+	if !fresh {
 		var err error
 		if members, err = c.ListRunnerPoolMembers(ctx, pool.ID); err != nil {
 			return err
 		}
 	}
-	var done []string
+	refs := make([]runnerRef, 0, len(runnerArgs))
 	for _, arg := range runnerArgs {
 		var ref runnerRef
 		var err error
@@ -85,6 +114,27 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 		if err != nil {
 			return err
 		}
+		refs = append(refs, ref)
+	}
+	if add {
+		if err := readClaims(cmd, c, refs); err != nil {
+			return err
+		}
+		for _, ref := range refs {
+			if ref.unclaimed {
+				return fmt.Errorf("%s is not claimed yet; claim it first with `wardyn runner claim`", ref.name)
+			}
+		}
+	}
+	var done []string
+	for _, ref := range refs {
+		if add && ref.in(members) {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s is already in %s\n", ref.name, pool.Name); err != nil {
+				return err
+			}
+			continue
+		}
+		var err error
 		switch {
 		case ref.self != nil && add:
 			_, err = c.AddMyRunnerToPool(ctx, pool.ID, *ref.self)
@@ -128,12 +178,13 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 }
 
 func runnerPoolCreateCmd(client clientFn) *cobra.Command {
-	var name, limitsFile, scope string
+	var name, scope string
 	var runners []string
 	var asJSON bool
+	var lf poolLimitFlags
 	cmd := &cobra.Command{Use: "create", Short: "Create a user pool of your own (or, an admin, an organization pool with --scope organization)",
 		Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-			limits, err := readPoolLimits(limitsFile)
+			limits, err := lf.build(nil)
 			if err != nil {
 				return err
 			}
@@ -158,36 +209,23 @@ func runnerPoolCreateCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := printRunnerPool(cmd.OutOrStdout(), p, asJSON); err != nil || len(runners) == 0 {
+			if err := printPoolCreated(cmd.OutOrStdout(), p, asJSON, len(runners) > 0); err != nil || len(runners) == 0 {
 				return err
 			}
-			return poolMembers(cmd, c, p, runners, true)
+			return poolMembers(cmd, c, p, runners, true, true)
 		}}
 	cmd.Flags().StringVar(&name, "name", "", "the pool's name, 1 to 64 characters")
 	cmd.Flags().StringVar(&scope, "scope", string(sdk.RunnerPoolUser), "user (your own) or organization (an admin's; remote-hosted runners only)")
 	cmd.Flags().StringArrayVar(&runners, "runner", nil, "a runner to put in the new pool, by id or name (repeatable)")
-	cmd.Flags().StringVar(&limitsFile, "limits-file", "", "the pool's limits as JSON (\"-\" for stdin)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
-	return cmd
-}
-
-func runnerPoolShowCmd(client clientFn) *cobra.Command {
-	var asJSON bool
-	cmd := &cobra.Command{Use: "show <pool>", Short: "Show one pool you may use or administer", Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			p, err := readPoolArg(cmd, client, args[0])
-			if err != nil {
-				return err
-			}
-			return printRunnerPool(cmd.OutOrStdout(), p, asJSON)
-		}}
-	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
+	lf.register(cmd, "own")
 	return cmd
 }
 
 func runnerPoolUpdateCmd(client clientFn) *cobra.Command {
-	var name, onOff, limitsFile string
+	var name, onOff string
 	var asJSON bool
+	var lf poolLimitFlags
 	cmd := &cobra.Command{Use: "update <pool>", Short: "Rename, switch or re-limit your own user pool (or, an admin, an organization pool)",
 		Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 			var req sdk.UpdateRunnerPoolRequest
@@ -202,15 +240,17 @@ func runnerPoolUpdateCmd(client clientFn) *cobra.Command {
 			default:
 				return fmt.Errorf("--switch is on or off")
 			}
-			var err error
-			if req.Limits, err = readPoolLimits(limitsFile); err != nil {
-				return err
-			}
-			if err := (sdk.UpdateRunnerPoolRequest{Revision: 1, Name: req.Name, State: req.State, Limits: req.Limits}).Validate(); err != nil {
-				return err
+			if req.Name == nil && req.State == nil && !lf.given() && lf.limitsFile == "" {
+				return errors.New("name something to change: --name, --switch, --max-runs or a limit flag")
 			}
 			cur, err := readPoolArg(cmd, client, args[0])
 			if err != nil {
+				return err
+			}
+			if req.Limits, err = lf.build(cur.Limits); err != nil {
+				return err
+			}
+			if err := (sdk.UpdateRunnerPoolRequest{Revision: 1, Name: req.Name, State: req.State, Limits: req.Limits}).Validate(); err != nil {
 				return err
 			}
 			req.Revision = cur.Revision
@@ -222,12 +262,12 @@ func runnerPoolUpdateCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return printRunnerPool(cmd.OutOrStdout(), p, asJSON)
+			return printPoolUpdated(cmd.OutOrStdout(), p, asJSON)
 		}}
 	cmd.Flags().StringVar(&name, "name", "", "the new name")
 	cmd.Flags().StringVar(&onOff, "switch", "", "on or off: whether new runs may choose the pool")
-	cmd.Flags().StringVar(&limitsFile, "limits-file", "", "the pool's new limits as JSON, replacing them whole (\"-\" for stdin)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
+	lf.register(cmd, "new")
 	return cmd
 }
 
@@ -237,16 +277,20 @@ func runnerPoolDeleteCmd(client clientFn) *cobra.Command {
 		Long: "Delete a pool. Its runners leave it, and runs waiting for it end; runs already running are not touched.",
 		Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 			if !yes {
-				return fmt.Errorf("deleting a pool ends the runs waiting for it: pass --yes to confirm")
+				return errors.New("refusing without --yes: this ends every run waiting for the pool, takes every runner out of it and clears it as your default")
 			}
 			cur, err := readPoolArg(cmd, client, args[0])
 			if err != nil {
 				return err
 			}
+			del := client().DeleteRunnerPool
 			if cur.Scope == sdk.RunnerPoolUser {
-				return client().DeleteMyRunnerPool(cmd.Context(), cur.ID)
+				del = client().DeleteMyRunnerPool
 			}
-			return client().DeleteRunnerPool(cmd.Context(), cur.ID)
+			if err := del(cmd.Context(), cur.ID); err != nil {
+				return err
+			}
+			return printPoolDeleted(cmd.OutOrStdout(), cur)
 		}}
 	cmd.Flags().BoolVar(&yes, "yes", false, "confirm the delete")
 	return cmd
@@ -309,24 +353,4 @@ func readPoolLimits(path string) (*sdk.RunnerPoolLimits, error) {
 		return nil, fmt.Errorf("parse limits file: %w", err)
 	}
 	return &l, l.Validate()
-}
-
-func printRunnerPool(w io.Writer, p sdk.RunnerPool, asJSON bool) error {
-	if asJSON {
-		return emitJSON(w, p)
-	}
-	tw := newTab(w)
-	owner := p.Owner
-	if owner == "" {
-		owner = "the organization"
-	}
-	limits := "none of its own"
-	if p.Limits != nil {
-		limits = "set (show --json prints them)"
-	}
-	for _, row := range [][2]string{{"ID", p.ID.String()}, {"NAME", p.Name}, {"SCOPE", string(p.Scope)}, {"OWNER", owner},
-		{"STATE", string(p.State)}, {"REVISION", fmt.Sprint(p.Revision)}, {"LIMITS", limits}} {
-		fmt.Fprintf(tw, "%s\t%s\n", row[0], row[1])
-	}
-	return tw.Flush()
 }

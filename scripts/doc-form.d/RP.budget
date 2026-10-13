@@ -1,0 +1,3 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words of the page, so growth fails.
+# docs/operations/runner-pools.md 1589 adds 140 over 1449: when each wait reason applies, and which runners a waiting run may start on and at what size.
+docs/operations/runner-pools.md=1589 share=35

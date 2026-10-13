@@ -25,6 +25,10 @@ import (
 
 // Config configures the Docker driver.
 type Config struct {
+	// RunnerID, set only by wardyn-runnerd, is the self-hosted runner this
+	// driver serves. The orphan sweep removes only sandboxes labelled with it,
+	// so an empty id never sweeps a runner's sandboxes.
+	RunnerID string
 	// RunnerStateDir enables a private per-run audit spool mounted only into
 	// the proxy. Set only by the registered runner daemon's local composition.
 	RunnerStateDir string

@@ -91,6 +91,18 @@ type queuedLaunch struct {
 	LifetimeCapSec int                   `json:"lifetime_cap_sec,omitempty"`
 	// MaxWaitSec is the wait the run was given, after the cut, for the audit row.
 	MaxWaitSec int `json:"max_wait_sec"`
+	// Unbound is the size the run gets before a runner's per-run limit bounds it (runPlacement.unbound):
+	// the promotion sizes the run for each runner by it. Absent on a launch queued before it existed,
+	// which the promotion holds to the size it joined with.
+	Unbound *types.RunnerAmounts `json:"unbound,omitempty"`
+	// Barrier is the class the run was queued at and Drives whether it has drives: the queue's verdict
+	// holds each runner to them as the start's fold does, so it never offers a runner the start cannot
+	// keep. A launch queued before they existed is held to neither.
+	Barrier types.ConfinementClass `json:"barrier,omitempty"`
+	Drives  bool                   `json:"drives,omitempty"`
+	// NoLocal says the launch waits on the pool's remote-hosted runners and cannot run on the person's
+	// own (runPlacement.noLocal): the verdict and the start then keep it off them.
+	NoLocal bool `json:"no_local,omitempty"`
 }
 
 // queueWaitSec is the wait a launch gets: max_wait_sec when given, cut at seven days with a warning,
@@ -214,7 +226,7 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 	if row := q.f.place.row; row.Limits != nil && row.Limits.MaxConcurrentRuns != nil {
 		capMax = *row.Limits.MaxConcurrentRuns
 	}
-	if err := qs.SetQueueWait(ctx, created.ID, statusDetailQueuePrefix+string(runnerpool.WaitAtCapacity)); err != nil {
+	if err := qs.SetQueueWait(ctx, created.ID, statusDetailQueuePrefix+string(q.waitReason())); err != nil {
 		slog.WarnContext(ctx, "wardynd: record queue wait", slog.String("run_id", created.ID.String()), slog.Any("err", err))
 	}
 	// One bounded promotion attempt for this pool: a free slot starts the run now. On the bound it rolls
@@ -225,13 +237,26 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		created = got
 	}
 	if created.State == types.RunQueued {
-		warnings = append(warnings, runnerpool.WaitAtCapacityMsg(pool.Name, capMax))
+		sentence := runnerpool.WaitAtCapacityMsg(pool.Name, capMax)
+		if q.f.place.waitsForRoom {
+			sentence = runnerpool.WaitRunnersAtCapacityMsg(pool.Name)
+		}
+		warnings = append(warnings, sentence)
 		runs := []types.AgentRun{created}
 		s.projectStatusDetailFor(r, runs) // the 201 carries the same wait reason and place a GET does
 		created = runs[0]
 	}
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+created.ID.String())
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
+}
+
+// waitReason is why the launch waits: the pool is at its own cap, or (a pool with none) every runner
+// that could take the run is at one of its limits.
+func (q queuedCreate) waitReason() runnerpool.WaitReason {
+	if q.f.place.waitsForRoom {
+		return runnerpool.WaitRunnersAtCapacity
+	}
+	return runnerpool.WaitAtCapacity
 }
 
 // entry is the run_queue row a launch is stored with.
@@ -247,7 +272,8 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 	launch := queuedLaunch{
 		Request: q.original, ProviderID: q.f.mpChoice.provider.ID, MaxWaitSec: waitSec, ConfinementDefault: q.f.confinementDefault,
 		Repos: runRepos(types.AgentRun{Repo: q.req.Repo}, nil), LifetimeCapSec: q.f.end.capSec,
-		Resources: s.runFitSpec(q.f.spec, q.f.mainDrive).Resources,
+		Resources: s.runFitSpec(q.f.spec, q.f.mainDrive).Resources, Unbound: q.f.place.unbound,
+		Barrier: q.f.enforced, Drives: len(q.f.drives) > 0, NoLocal: q.f.place.noLocal,
 	}
 	launch.Repos = append(launch.Repos, repoLocatorsOf(q.f.spec.WorkspaceRepos)...)
 	if q.f.ceiling.Profile != nil {
@@ -277,8 +303,8 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	stampDriveAudit(createData, q.f.drives)
 	stampHarnessSet(createData, q.f.harnesses, q.f.image)
 	createData["queue"] = map[string]any{
-		"pool_id": e.PoolID, "position": position, "max_wait_sec": waitSec, "deadline_at": e.DeadlineAt, "capped": true,
-		"reason": string(runnerpool.WaitAtCapacity),
+		"pool_id": e.PoolID, "position": position, "max_wait_sec": waitSec, "deadline_at": e.DeadlineAt, "capped": !q.f.place.waitsForRoom,
+		"reason": string(q.waitReason()),
 	}
 	q.f.comps.stampRunCreate(createData)
 	maps.Copy(createData, q.f.place.auditFields(created))
