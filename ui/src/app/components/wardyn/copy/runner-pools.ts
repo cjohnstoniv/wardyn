@@ -83,7 +83,6 @@ export const RUNNER_V6 = {
   AVAILABLE_LISTED: "Only the people, groups and roles an admin listed can add it. Change the list with wardyn runner remote people.",
   AVAILABLE_ON: (name: string) => `${name} is now available to people's pools`,
   AVAILABLE_OFF: (name: string) => `${name} is no longer available to people's pools`,
-  REVOKE_NA: "Revoke does not apply: a remote-hosted runner is removed in the server's configuration.",
   MINT_ONE_PER_COMPUTER: "One runner per computer is enough: it runs several of their runs at the same time, up to its Runs at once.",
   MINT_ASKS_LIMITS: "It then asks for the runner's limits on that computer, prefilled with what it reports. Its owner can change them later in Your account → My runner.",
 } as const;
@@ -337,7 +336,8 @@ export const POOL_FORM = {
   ERR_DEFAULT_ABOVE_ZERO: (section: string, resource: string) => `${section}, ${resource}: set a default above 0, or leave it empty.`,
   ERR_DEFAULT_OVER_MAX: (section: string, resource: string, def: number, max: number) =>
     `${section}, ${resource}: the default (${def}) can't be more than the maximum (${max}).`,
-  ERR_DEFAULT_NEEDS_MAX: (section: string, resource: string) => `${section}, ${resource}: a default needs a maximum.`,
+  ERR_BOTH: (section: string, resource: string) => `${section}, ${resource}: set both a default and a maximum, or leave both empty.`,
+  ERR_DISK_WHOLE: (section: string) => `${section}, disk: set whole numbers of GB.`,
   ERR_DUR_DEFAULT: (section: string, what: string) => `${section}, ${what}: set a default of at least 1 minute.`,
   ERR_DUR_MAX: (section: string, what: string, never: string) => `${section}, ${what}: set a maximum, or choose ${never}.`,
   ERR_DUR_ORDER: (section: string, what: string, def: string, max: string) => `${section}, ${what}: the default (${def}) can't be longer than the maximum (${max}).`,

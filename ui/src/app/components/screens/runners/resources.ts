@@ -10,8 +10,8 @@
 // GB (the wire's MiB over 1024), one decimal at most.
 
 import { BARRIER_LABEL } from "../../../lib/runner-pool-refusals";
-import type { RunnerPool, RunnerPoolLimits, RunnerPoolMemberView, RunnerPoolRunType } from "../../../lib/types/runner-pools";
-import type { RunnerAmounts, RunnerLimits, RunnerTally, RunnerUsage } from "../../../lib/types/runners";
+import type { RemoteRunnerView, RunnerPool, RunnerPoolLimits, RunnerPoolMemberView, RunnerPoolRunType } from "../../../lib/types/runner-pools";
+import type { RunnerAmounts, RunnerLimits, RunnerTally, RunnerUsage, RunnerView } from "../../../lib/types/runners";
 import { POOL_DRAWER, POOLS, RES } from "../../wardyn/copy/runner-pools";
 
 const round1 = (n: number) => Number(n.toFixed(1));
@@ -180,3 +180,19 @@ export const toAmounts = (v: { cpu: number; mem: number; disk: number }): Runner
   memory_mib: Math.round(v.mem * 1024),
   disk_mib: Math.round(v.disk * 1024),
 });
+
+/**
+ * A pool's members from the runner reads an administrator already has: every runner names the pools it
+ * is in, so the Pools tab asks nothing more per pool. A revoked runner is in no pool.
+ */
+export function membersOf(poolId: string, runners: RunnerView[], remote: RemoteRunnerView[]): RunnerPoolMemberView[] {
+  const inPool = (pools: { id: string }[]) => pools.some((p) => p.id === poolId);
+  return [
+    ...runners
+      .filter((r) => r.state !== "revoked" && inPool(r.pools))
+      .map((r): RunnerPoolMemberView => ({ kind: "self_hosted", id: r.id, name: r.name, online: r.online, runner: r, limits: r.limits, usage: r.usage })),
+    ...remote
+      .filter((r) => inPool(r.pools))
+      .map((r): RunnerPoolMemberView => ({ kind: "remote_hosted", id: r.id, name: r.name, online: r.online, configured: r.configured, limits: r.limits, usage: r.usage })),
+  ];
+}
