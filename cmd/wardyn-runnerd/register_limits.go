@@ -39,15 +39,60 @@ func (f *registerLimits) register(cmd *cobra.Command) {
 	fl.Int64Var(&f.runDisk, "per-run-disk", 0, "GB of disk one run may use (defaults to the total divided by runs at once)")
 }
 
+// defaultRuns is the Runs at once proposed for what this computer reports.
+func defaultRuns(measured types.RunnerAmounts) int {
+	if measured.CPUMillis > 0 {
+		return types.SuggestedRunnerMaxRuns(int(measured.CPUMillis / 1000))
+	}
+	return types.SuggestedRunnerMaxRuns(runtime.NumCPU())
+}
+
+// amountField is one of the six amounts: the flag that sets it, the prompt's label for it, the value the
+// flag holds, where it lands in a limit set, and (for a total) what this computer reports.
+type amountField struct {
+	flag, label string
+	cpu         bool
+	v           float64
+	dst         *int64
+	reported    int64
+	unit        string
+}
+
+func (f *registerLimits) totalFields(dst *types.RunnerAmounts, m types.RunnerAmounts) []amountField {
+	return []amountField{
+		{"total-cpu", "CPU", true, f.totalCPU, &dst.CPUMillis, m.CPUMillis, "CPUs"},
+		{"total-memory", "memory GB", false, float64(f.totalMem), &dst.MemoryMiB, m.MemoryMiB, "GB"},
+		{"total-disk", "disk GB", false, float64(f.totalDisk), &dst.DiskMiB, m.DiskMiB, "GB"},
+	}
+}
+
+func (f *registerLimits) perRunFields(dst *types.RunnerAmounts) []amountField {
+	return []amountField{
+		{"per-run-cpu", "CPU", true, f.runCPU, &dst.CPUMillis, 0, ""},
+		{"per-run-memory", "memory GB", false, float64(f.runMem), &dst.MemoryMiB, 0, ""},
+		{"per-run-disk", "disk GB", false, float64(f.runDisk), &dst.DiskMiB, 0, ""},
+	}
+}
+
+// apply lays the field's value into its limit set; a total past what the computer reports is refused.
+func (a amountField) apply() error {
+	v, err := scaled(a.flag, a.v, a.cpu)
+	if err != nil {
+		return err
+	}
+	if a.reported > 0 && v > a.reported {
+		return fmt.Errorf("--%s %s is more than this computer reports (%s %s)", a.flag, strings.TrimSuffix(fmt.Sprint(a.v), ".0"), show(a.reported, a.cpu), a.unit)
+	}
+	*a.dst = v
+	return nil
+}
+
 // limits is the limit set to register with: the proposal for what this computer reports, each flag
 // given laid over it. A total past what the computer reports is refused, and one it cannot measure must
 // be given.
 func (f *registerLimits) limits(cmd *cobra.Command, measured types.RunnerAmounts) (types.RunnerLimits, error) {
 	set := cmd.Flags().Changed
-	runs := types.SuggestedRunnerMaxRuns(runtime.NumCPU())
-	if measured.CPUMillis > 0 {
-		runs = types.SuggestedRunnerMaxRuns(int(measured.CPUMillis / 1000))
-	}
+	runs := defaultRuns(measured)
 	if set("max-runs") {
 		if f.maxRuns < 1 {
 			return types.RunnerLimits{}, errors.New("--max-runs is a whole number, 1 or more")
@@ -55,45 +100,20 @@ func (f *registerLimits) limits(cmd *cobra.Command, measured types.RunnerAmounts
 		runs = f.maxRuns
 	}
 	l := types.ProposeRunnerLimits(measured, runs)
-	for _, a := range []struct {
-		flag     string
-		cpu      bool
-		v        float64
-		dst      *int64
-		reported int64
-		unit     string
-	}{
-		{"total-cpu", true, f.totalCPU, &l.Total.CPUMillis, measured.CPUMillis, "CPUs"},
-		{"total-memory", false, float64(f.totalMem), &l.Total.MemoryMiB, measured.MemoryMiB, "GB"},
-		{"total-disk", false, float64(f.totalDisk), &l.Total.DiskMiB, measured.DiskMiB, "GB"},
-	} {
-		if !set(a.flag) {
-			continue
+	for _, a := range f.totalFields(&l.Total, measured) {
+		if set(a.flag) {
+			if err := a.apply(); err != nil {
+				return l, err
+			}
 		}
-		v, err := scaled(a.flag, a.v, a.cpu)
-		if err != nil {
-			return l, err
-		}
-		if a.reported > 0 && v > a.reported {
-			return l, fmt.Errorf("--%s %s is more than this computer reports (%s %s)", a.flag, strings.TrimSuffix(fmt.Sprint(a.v), ".0"), show(a.reported, a.cpu), a.unit)
-		}
-		*a.dst = v
 	}
 	l.PerRun = types.PerRunShare(l.Total, runs)
-	for _, a := range []struct {
-		flag string
-		cpu  bool
-		v    float64
-		dst  *int64
-	}{{"per-run-cpu", true, f.runCPU, &l.PerRun.CPUMillis}, {"per-run-memory", false, float64(f.runMem), &l.PerRun.MemoryMiB}, {"per-run-disk", false, float64(f.runDisk), &l.PerRun.DiskMiB}} {
-		if !set(a.flag) {
-			continue
+	for _, a := range f.perRunFields(&l.PerRun) {
+		if set(a.flag) {
+			if err := a.apply(); err != nil {
+				return l, err
+			}
 		}
-		v, err := scaled(a.flag, a.v, a.cpu)
-		if err != nil {
-			return l, err
-		}
-		*a.dst = v
 	}
 	if measured.DiskMiB <= 0 && !set("total-disk") {
 		return l, errors.New("this computer's free disk for Docker could not be measured: pass --total-disk (and --per-run-disk if you like) in GB")
