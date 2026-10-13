@@ -72,4 +72,12 @@ describe("StepShell", () => {
     expect([...footer.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Save", "Check again", "Launch run"]);
     expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
   });
+
+  it("pins the footer to the bottom only when asked", () => {
+    render(<StepShell title="Tools" primary={{ label: "Review run", onActivate: vi.fn() }} />);
+    expect(screen.getByRole("contentinfo")).not.toHaveClass("sticky");
+    cleanup();
+    render(<StepShell title="Tools" stickyFooter primary={{ label: "Review run", onActivate: vi.fn() }} />);
+    expect(screen.getByRole("contentinfo")).toHaveClass("sticky", "bottom-0");
+  });
 });

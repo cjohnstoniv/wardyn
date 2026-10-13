@@ -14,6 +14,7 @@
 import * as React from "react";
 import { modalLayerOpen } from "../../../../lib/modal-layer-open";
 import { Button } from "../../../ui/button";
+import { cn } from "../../../ui/utils";
 import { FlowProgress, type FlowStep } from "../../../wardyn/flow-progress";
 import { NEW_RUN_STEPS, type NewRunStep, type StepIssue } from "../lenses/step-issues";
 
@@ -50,10 +51,12 @@ export interface StepShellProps {
   headingAside?: React.ReactNode;
   /** More footer actions: `start` on the left in place of Back, `end` just before the primary (Review's Save and Check again). */
   footerExtras?: { start?: React.ReactNode; end?: React.ReactNode };
+  /** Pins the footer to the bottom of the view while the step scrolls (Tools and access's bar). */
+  stickyFooter?: boolean;
   children?: React.ReactNode;
 }
 
-export function StepShell({ title, lede, eyebrow, progress, back, primary, issues, headingAside, footerExtras, children }: StepShellProps) {
+export function StepShell({ title, lede, eyebrow, progress, back, primary, issues, headingAside, footerExtras, stickyFooter, children }: StepShellProps) {
   const heading = React.useRef<HTMLHeadingElement>(null);
   const announce = useAnnounce();
   React.useEffect(() => {
@@ -106,7 +109,7 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
         </div>
       ) : header}
       {children}
-      <footer className="mt-1 flex items-center justify-between gap-3 border-t border-border pt-[18px]">
+      <footer className={cn("mt-1 flex items-center justify-between gap-3 border-t border-border", stickyFooter ? "sticky bottom-0 z-10 bg-background py-3" : "pt-[18px]")}>
         {/* With extras the footer keeps one shape, so the primary is never remounted as an extra comes and goes. */}
         {footerExtras ? <div className="flex flex-wrap gap-2">{footerExtras.start}</div>
           : back ? <Button type="button" variant="ghost" onClick={back.onBack}>{back.label}</Button> : <span />}
