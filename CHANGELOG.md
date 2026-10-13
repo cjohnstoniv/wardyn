@@ -1053,6 +1053,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Review and policy preview refuse a narrowed github.com `git_pat` exactly when launch would, including a run whose
   only GitHub access is a declared clone beside a GitHub App grant. A model provider or Git API host given as an
   IPv6 literal on port 443 is reached; before, every request to it failed with 502.
+- Killing a run now stops its image build, including when another replica serves the kill; the build's audit row is
+  still written.
+- A run whose sandbox reference cannot be saved is stopped and failed instead of running untracked.
+- A kill recovered by the sweep now settles for a run on an offline or revoked self-hosted runner; its `run.kill`
+  row carries `sandbox_stop` = `queued` or `runner_revoked`, and neither says the sandbox is gone.
+- A resumed run restarts its quiet clock, so the idle-pause sweep no longer freezes it again straight away.
 
 
 ## [0.8.9] — 2026-10-09
