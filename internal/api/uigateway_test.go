@@ -1316,11 +1316,11 @@ func TestUIGateway_SessionCookieIsSignedAndBounded(t *testing.T) {
 	}
 }
 
-// TestUIGateway_UnauthenticatedRefusalsAreRateBounded: the refusals that happen before any ticket
+// TestUIGateway_TicketRefusalsAreRateBounded: the refusals that happen before any ticket
 // proves who is asking (a ticket that does not resolve, one with no binding cookie, an enter on the
 // wrong host) write their ui.authorize/denied row only within the shared auth-failure burst, and the
 // drops are counted in wardyn_auth_failed_suppressed_total. The harness clock is not advanced.
-func TestUIGateway_UnauthenticatedRefusalsAreRateBounded(t *testing.T) {
+func TestUIGateway_TicketRefusalsAreRateBounded(t *testing.T) {
 	const probes = 20
 	for name, probe := range map[string]func(h *uiHarness){
 		"invalid ticket": func(h *uiHarness) {

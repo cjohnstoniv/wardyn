@@ -67,12 +67,12 @@ func TestRunSizingParity(t *testing.T) {
 func TestRecordRunSizingWriteFailureIsBestEffort(t *testing.T) {
 	st := &sizingStore{err: errors.New("db down")}
 	s := &Server{cfg: Config{Store: st, RunnerTarget: "docker"}}
-	s.recordRunSizing(context.Background(), uuid.New(), runner.Resources{}, false)
+	s.recordRunSizing(context.Background(), types.AgentRun{ID: uuid.New()}, runner.Resources{}, false)
 	if st.n != 1 {
 		t.Errorf("SetRunSizing calls = %d, want 1", st.n)
 	}
 	s = &Server{cfg: Config{Store: struct{ store.Store }{}}}
-	s.recordRunSizing(context.Background(), uuid.New(), runner.Resources{}, false)
+	s.recordRunSizing(context.Background(), types.AgentRun{ID: uuid.New()}, runner.Resources{}, false)
 }
 
 // Only a run bound to a placement of this deployment has its sizing recorded: not one on a registered
@@ -106,6 +106,21 @@ type multiExecutorRunner struct {
 
 func (multiExecutorRunner) Name() string          { return "orchestrator" }
 func (m multiExecutorRunner) Executors() []string { return m.names }
+
+// A run bound outside the deployment records no sizing; one on it does.
+func TestRecordRunSizingSkipsARunOffTheDeployment(t *testing.T) {
+	rid := uuid.New()
+	st := &sizingStore{}
+	s := &Server{cfg: Config{Store: st, RunnerTarget: "docker"}}
+	s.recordRunSizing(context.Background(), types.AgentRun{ID: uuid.New(), RunnerID: &rid, Placement: types.PlacementLocal}, runner.Resources{}, false)
+	if st.n != 0 {
+		t.Errorf("SetRunSizing calls for a registered runner's run = %d, want 0", st.n)
+	}
+	s.recordRunSizing(context.Background(), types.AgentRun{ID: uuid.New()}, runner.Resources{}, false)
+	if st.n != 1 {
+		t.Errorf("SetRunSizing calls after a deployment run = %d, want 1", st.n)
+	}
+}
 
 // A run with an Azure route gate records the 400 MiB proxy envelope the drivers apply, not the
 // 256 MiB default; any other run keeps the default, and a configured value above 400 wins.

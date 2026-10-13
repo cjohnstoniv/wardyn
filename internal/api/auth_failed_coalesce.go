@@ -19,6 +19,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -67,6 +69,14 @@ func (s *Server) authFailedAllowed() bool {
 	}
 	s.metrics.authFailedSuppressedInc()
 	return false
+}
+
+// auditUIRefusedBounded writes the ui.authorize/denied row of a refusal made before any ticket proved who
+// is asking (the actor is "unknown"), within authFailedAllowed's bound.
+func (s *Server) auditUIRefusedBounded(runID uuid.UUID, app string, data map[string]any) {
+	if s.authFailedAllowed() {
+		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied", data)
+	}
 }
 
 // authFailedKey is what makes two auth.fail rows "identical" for coalescing:
