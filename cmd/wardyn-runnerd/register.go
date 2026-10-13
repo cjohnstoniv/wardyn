@@ -38,6 +38,11 @@ func newRegisterCommand() *cobra.Command {
 			measured = types.RunnerAmounts{}
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), reports(measured))
+		if in := cmd.InOrStdin(); isTerminal(in) {
+			if err := flags.ask(cmd, in, cmd.OutOrStdout(), measured); err != nil {
+				return err
+			}
+		}
 		limits, err := flags.limits(cmd, measured)
 		if err != nil {
 			return err

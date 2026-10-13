@@ -168,6 +168,7 @@ func registerWith(t *testing.T, args ...string) (types.RunnerRegisterRequest, bo
 	cmd := newRegisterCommand()
 	var out strings.Builder
 	cmd.SetOut(&out)
+	cmd.SetIn(strings.NewReader(""))
 	cmd.SetArgs(append([]string{"--org", org, "--token-file", tokenFile, "--state-dir", filepath.Join(root, "identity")}, args...))
 	err := cmd.Execute()
 	return sent, called, out.String(), err
