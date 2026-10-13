@@ -158,6 +158,10 @@ func runnerSetCmd(client clientFn) *cobra.Command {
 			case cmd.Flags().Changed("max-runs") && limits.maxRuns < 1:
 				return errors.New("--max-runs is a whole number, 1 or more")
 			}
+			// What the flags alone say is checked before any request; the rest once the runner is read.
+			if _, err := limits.apply(roomyLimits()); err != nil {
+				return err
+			}
 			c := client()
 			ref, err := resolveRunner(cmd, c, args[0], func() ([]sdk.RemoteRunnerView, error) { return c.ListRemoteRunners(cmd.Context()) })
 			if err != nil {
@@ -225,4 +229,11 @@ func setPeoplePools(cmd *cobra.Command, c *sdk.Client, ref runnerRef, arg string
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), msg, arg)
 	return err
+}
+
+// roomyLimits is a limit set no flag can be refused against for being past it: the flags' own checks
+// (a per-run amount past a total both given) run on it before any request.
+func roomyLimits() *sdk.RunnerLimits {
+	most := sdk.RunnerAmounts{CPUMillis: math.MaxInt32, MemoryMiB: math.MaxInt32, DiskMiB: math.MaxInt32}
+	return &sdk.RunnerLimits{RunsAtOnce: 1, Total: most, PerRun: sdk.RunnerAmounts{CPUMillis: 1000, MemoryMiB: 1, DiskMiB: 1024}}
 }

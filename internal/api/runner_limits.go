@@ -6,8 +6,10 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -85,6 +87,12 @@ func (s *Server) handleUpdateMyRunner(w http.ResponseWriter, r *http.Request) {
 	if err == nil && (row.Owner != owner || runnerLapsed(row, s.cfg.Now().UTC())) {
 		err = store.ErrNotFound
 	}
+	if err == nil {
+		if msg := s.pastReported(row, *req.Limits); msg != "" {
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerLimitsInvalid, msg)
+			return
+		}
+	}
 	var before *types.RunnerLimits
 	if err == nil {
 		before, row, err = rs.UpdateRunnerLimits(r.Context(), id, owner, *req.Limits)
@@ -103,4 +111,19 @@ func (s *Server) handleUpdateMyRunner(w http.ResponseWriter, r *http.Request) {
 	if views, ok := s.runnerViews(w, r, rs, []types.Runner{row}, false); ok {
 		writeJSON(w, http.StatusOK, views[0])
 	}
+}
+
+// pastReported refuses a total past what the runner last reported it has, where this replica holds its
+// report: a runner never offers more than its computer has. "" when the totals fit or nothing is known.
+func (s *Server) pastReported(row types.Runner, l types.RunnerLimits) string {
+	caps, _, _ := s.runnerReportedCaps(row.ID)
+	switch {
+	case caps == nil:
+		return ""
+	case l.Total.CPUMillis > caps.CPUMillisMax:
+		return fmt.Sprintf("Not allowed: %s reports %s CPUs, so its total can't be higher.", row.Name, strconv.FormatFloat(float64(caps.CPUMillisMax)/1000, 'f', -1, 64))
+	case l.Total.MemoryMiB > caps.MemoryMiBMax:
+		return fmt.Sprintf("Not allowed: %s reports %s GB memory, so its total can't be higher.", row.Name, strings.TrimSuffix(strconv.FormatFloat(float64(caps.MemoryMiBMax)/1024, 'f', 1, 64), ".0"))
+	}
+	return ""
 }

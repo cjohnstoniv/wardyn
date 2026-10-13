@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -128,12 +129,13 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 }
 
 func runnerPoolCreateCmd(client clientFn) *cobra.Command {
-	var name, limitsFile, scope string
+	var name, scope string
 	var runners []string
 	var asJSON bool
+	var lf poolLimitFlags
 	cmd := &cobra.Command{Use: "create", Short: "Create a user pool of your own (or, an admin, an organization pool with --scope organization)",
 		Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-			limits, err := readPoolLimits(limitsFile)
+			limits, err := lf.build(nil)
 			if err != nil {
 				return err
 			}
@@ -166,8 +168,8 @@ func runnerPoolCreateCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "the pool's name, 1 to 64 characters")
 	cmd.Flags().StringVar(&scope, "scope", string(sdk.RunnerPoolUser), "user (your own) or organization (an admin's; remote-hosted runners only)")
 	cmd.Flags().StringArrayVar(&runners, "runner", nil, "a runner to put in the new pool, by id or name (repeatable)")
-	cmd.Flags().StringVar(&limitsFile, "limits-file", "", "the pool's limits as JSON (\"-\" for stdin)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
+	lf.register(cmd, "own")
 	return cmd
 }
 
@@ -186,8 +188,9 @@ func runnerPoolShowCmd(client clientFn) *cobra.Command {
 }
 
 func runnerPoolUpdateCmd(client clientFn) *cobra.Command {
-	var name, onOff, limitsFile string
+	var name, onOff string
 	var asJSON bool
+	var lf poolLimitFlags
 	cmd := &cobra.Command{Use: "update <pool>", Short: "Rename, switch or re-limit your own user pool (or, an admin, an organization pool)",
 		Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 			var req sdk.UpdateRunnerPoolRequest
@@ -202,15 +205,17 @@ func runnerPoolUpdateCmd(client clientFn) *cobra.Command {
 			default:
 				return fmt.Errorf("--switch is on or off")
 			}
-			var err error
-			if req.Limits, err = readPoolLimits(limitsFile); err != nil {
-				return err
-			}
-			if err := (sdk.UpdateRunnerPoolRequest{Revision: 1, Name: req.Name, State: req.State, Limits: req.Limits}).Validate(); err != nil {
-				return err
+			if req.Name == nil && req.State == nil && !lf.given() && lf.limitsFile == "" {
+				return errors.New("name something to change: --name, --switch, --max-runs or a limit flag")
 			}
 			cur, err := readPoolArg(cmd, client, args[0])
 			if err != nil {
+				return err
+			}
+			if req.Limits, err = lf.build(cur.Limits); err != nil {
+				return err
+			}
+			if err := (sdk.UpdateRunnerPoolRequest{Revision: 1, Name: req.Name, State: req.State, Limits: req.Limits}).Validate(); err != nil {
 				return err
 			}
 			req.Revision = cur.Revision
@@ -226,8 +231,8 @@ func runnerPoolUpdateCmd(client clientFn) *cobra.Command {
 		}}
 	cmd.Flags().StringVar(&name, "name", "", "the new name")
 	cmd.Flags().StringVar(&onOff, "switch", "", "on or off: whether new runs may choose the pool")
-	cmd.Flags().StringVar(&limitsFile, "limits-file", "", "the pool's new limits as JSON, replacing them whole (\"-\" for stdin)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
+	lf.register(cmd, "new")
 	return cmd
 }
 

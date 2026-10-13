@@ -47,8 +47,8 @@ func (e *placementEnv) sizedPool(name string, cpu types.RunnerPoolAmount) types.
 	p := e.createPool(name, types.RunnerPoolOrganization)
 	e.addExecutors(p.ID, "alpha", "beta")
 	limits := types.RunnerPoolLimits{
-		Background: &types.RunnerPoolBackgroundLimits{CPUMillis: cpu, MemoryMiB: types.RunnerPoolAmount{Default: 1024, Cap: 8192},
-			Lifetime: types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}},
+		Background: &types.RunnerPoolBackgroundLimits{CPUMillis: &cpu, MemoryMiB: &types.RunnerPoolAmount{Default: 1024, Cap: 8192},
+			Lifetime: &types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}},
 		Barriers: []types.ConfinementClass{types.CC1, types.CC2, types.CC3},
 	}
 	out, err := e.pg.UpdateRunnerPool(context.Background(), p.ID, e.revision(p.ID), nil, nil, &limits)
