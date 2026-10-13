@@ -75,3 +75,23 @@ func TestPG_QueuedRunLaunchesWhatAnImmediateStartLaunches(t *testing.T) {
 		}
 	}
 }
+
+// A launch into a full pool whose harness set cannot be recorded does not wait in the queue: it is
+// refused, and its run is FAILED and out of the queue, never started without its set.
+func TestPG_QueuedRunIsAbortedWhenItsHarnessesCannotBeRecorded(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Shared", 1)
+	e.occupy(pool)
+	e.exec(`ALTER TABLE run_harnesses ADD CONSTRAINT refuse_all CHECK (false) NOT VALID`)
+	if _, w := e.launch(nil, e.reread(pool), ""); w.Code != 500 {
+		t.Fatalf("a launch whose harnesses cannot be recorded = %d %s, want 500", w.Code, w.Body)
+	}
+	var id uuid.UUID
+	var state string
+	if err := e.pool.QueryRow(context.Background(), `SELECT id, state FROM agent_runs WHERE failure_hint = $1`, createRunHarnessesAbortHint).Scan(&id, &state); err != nil {
+		t.Fatalf("no run carries the abort hint: %v", err)
+	}
+	if state != string(types.RunFailed) || e.queueRows(id) != 0 {
+		t.Errorf("the aborted run is %s with %d queue rows, want FAILED and none", state, e.queueRows(id))
+	}
+}
