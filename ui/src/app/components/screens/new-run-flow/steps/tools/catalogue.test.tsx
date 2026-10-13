@@ -17,10 +17,11 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import type { RunIntent } from "../../draft/run-intent";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
+import { AnnounceContext } from "../step-shell";
 import { CLI_CARD } from "./catalogue-pending";
 import { AddTools } from "./catalogue";
 
-const h = vi.hoisted(() => ({ mine: vi.fn(), names: vi.fn(), saveMine: vi.fn(), answered: true }));
+const h = vi.hoisted(() => ({ mine: vi.fn(), names: vi.fn(), saveMine: vi.fn(), answered: true, announce: vi.fn() }));
 vi.mock("../../../../../lib/api/components", () => ({ components: { mine: h.mine, saveMine: h.saveMine } }));
 vi.mock("../../../../../lib/api/secrets", () => ({ secrets: { listSecrets: h.names } }));
 vi.mock("../../checks/custom-component-dialog", () => ({
@@ -36,9 +37,17 @@ function Seed({ intent, children }: { intent: RunIntent; children: React.ReactNo
   React.useEffect(() => { dispatch({ type: "seed", origin: { kind: "import" }, intent }); setSeeded(true); }, [dispatch, intent]);
   return seeded ? <>{children}</> : null;
 }
+// `access` is the answer for the seeded draft, and stays on screen across edits as a pending preview's rows do.
 function Live({ access }: { access: AccessFacts | undefined }) {
   const { intent } = useNewRunDraft();
-  return <AddTools access={access} answered={h.answered} intent={intent} />;
+  const [answeredFor] = React.useState(intent.components);
+  return <AddTools access={access} answered={h.answered} intent={intent} answeredFor={answeredFor} />;
+}
+// Edits the draft's second component in place, as a later edit would, without a new answer.
+function Replace() {
+  const dispatch = useNewRunDispatch();
+  const apply = (i: RunIntent): RunIntent => ({ ...i, components: i.components?.map((c, n) => (n === 1 ? { ...c, inline: { hosts: ["edited.example"] } } : c)) });
+  return <button type="button" onClick={() => dispatch({ type: "edit", apply })}>replace second</button>;
 }
 function Draft() {
   const { intent } = useNewRunDraft();
@@ -46,7 +55,9 @@ function Draft() {
 }
 async function show(intent: RunIntent = {}, access: AccessFacts | undefined = BASE) {
   const view = render(
-    <NewRunDraftProvider owner="alice"><Seed intent={intent}><Live access={access} /><Draft /></Seed></NewRunDraftProvider>,
+    <AnnounceContext.Provider value={h.announce}>
+      <NewRunDraftProvider owner="alice"><Seed intent={intent}><Live access={access} /><Draft /><Replace /></Seed></NewRunDraftProvider>
+    </AnnounceContext.Provider>,
   );
   await screen.findByRole("heading", { name: NR_TOOLS.ADD_TITLE });
   await waitFor(() => expect(h.mine).toHaveBeenCalled());
@@ -414,5 +425,57 @@ describe("Added to this run", () => {
     const unnamed = (await screen.findAllByRole("button", { name: NR_TOOLS.ROW_REMOVE })).find((b) => b.getAttribute("aria-label")?.trim() === NR_TOOLS.ROW_REMOVE);
     await userEvent.click(unnamed!);
     expect(draft().components).toEqual([{ name: "Billing", inline: { hosts: ["b.example"] } }]);
+  });
+
+  describe("while the next preview is out, a row removes the component it was answered for", () => {
+    const A = { name: "Alpha", inline: { hosts: ["a.example"] } };
+    const B = { name: "Beta", inline: { hosts: ["b.example"] } };
+    const C = { name: "Gamma", inline: { hosts: ["c.example"] } };
+    const rows = (...names: string[]) => names.map((name, i) => row({ id: `inline:${i}`, kind: "custom", name }));
+    const remove = (name: string) => userEvent.click(screen.getByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} ${name}` }));
+
+    it("removing the first and then the old second row removes the second, never the third", async () => {
+      await show({ components: [A, B, C] }, { ...BASE, rows: [...BASE.rows, ...rows("Alpha", "Beta", "Gamma")] });
+      await screen.findByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} Alpha` });
+      await remove("Alpha");
+      await remove("Beta");
+      expect(draft().components).toEqual([C]);
+    });
+
+    it("a second press on the same row removes nothing more", async () => {
+      await show({ components: [A, B, C] }, { ...BASE, rows: [...BASE.rows, ...rows("Alpha", "Beta", "Gamma")] });
+      await screen.findByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} Alpha` });
+      await remove("Alpha");
+      await remove("Alpha");
+      expect(draft().components).toEqual([B, C]);
+    });
+
+    it("a repeated press announces nothing", async () => {
+      await show({ components: [A, B, C] }, { ...BASE, rows: [...BASE.rows, ...rows("Alpha", "Beta", "Gamma")] });
+      await screen.findByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} Alpha` });
+      await remove("Alpha");
+      await remove("Alpha");
+      expect(h.announce.mock.calls.filter(([m]) => m === NR_TOOLS.COMPONENT_REMOVED)).toHaveLength(1);
+    });
+
+    it("a row whose component was edited since the answer removes nothing", async () => {
+      await show({ components: [A, B] }, { ...BASE, rows: [...BASE.rows, ...rows("Alpha", "Beta")] });
+      await screen.findByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} Beta` });
+      await userEvent.click(screen.getByRole("button", { name: "replace second" }));
+      const edited = draft().components;
+      await remove("Beta");
+      expect(draft().components).toEqual(edited);
+      expect(edited).toEqual([A, { ...B, inline: { hosts: ["edited.example"] } }]);
+    });
+
+    it("stored and inline components side by side: each row removes its own", async () => {
+      const stored = { id: ORG_BILLING.id };
+      const access: AccessFacts = { ...BASE, rows: [...BASE.rows, row({ id: ORG_BILLING.id, name: "Stored" }), row({ id: "inline:1", kind: "custom", name: "Beta" }), row({ id: "inline:2", kind: "custom", name: "Gamma" })] };
+      await show({ components: [stored, B, C] }, access);
+      await screen.findByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} Stored` });
+      await remove("Stored");
+      await remove("Gamma");
+      expect(draft().components).toEqual([B]);
+    });
   });
 });
