@@ -41,7 +41,7 @@ func (l *buildEventLog) events() []string {
 }
 
 // buildEventStore records status_detail writes into the shared log. Every other
-// store method panics (embedded nil interface) except the three the image
+// store method panics (embedded nil interface) except the four the image
 // resolvers touch.
 type buildEventStore struct {
 	store.Store
@@ -53,6 +53,11 @@ func (s *buildEventStore) SetRunStatusDetail(_ context.Context, _ uuid.UUID, det
 	return nil
 }
 func (s *buildEventStore) SetRunImage(context.Context, uuid.UUID, string) error { return nil }
+
+// GetRun serves a live run: a build door reads its run before it builds.
+func (s *buildEventStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
+	return types.AgentRun{ID: id, State: types.RunPending}, nil
+}
 func (s *buildEventStore) SetWorkspaceBuiltImage(context.Context, uuid.UUID, string, string, string, *types.ImageBuild) (bool, error) {
 	return true, nil
 }
