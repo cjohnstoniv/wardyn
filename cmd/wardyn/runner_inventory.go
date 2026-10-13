@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -47,7 +48,14 @@ func runnerListCmd(client clientFn) *cobra.Command {
 			}
 			return emitJSON(cmd.OutOrStdout(), rows)
 		}
-		return printRunners(cmd.OutOrStdout(), rows, all)
+		if all {
+			return printRunners(cmd.OutOrStdout(), rows)
+		}
+		remote, err := remoteRunnersToAdd(cmd.Context(), client())
+		if err != nil {
+			return err
+		}
+		return printOwnRunners(cmd.OutOrStdout(), rows, remote)
 	}}
 	cmd.Flags().BoolVar(&all, "all", false, "every person's runners (admin or security_admin)")
 	cmd.Flags().StringVar(&state, "state", "", "with --all: active (default), revoked or all")
@@ -67,13 +75,11 @@ func runnerStateWord(r sdk.RunnerView) string {
 	return "offline"
 }
 
-func printRunners(w io.Writer, rows []sdk.RunnerView, admin bool) error {
+// printRunners is the --all table: every person's runners, with the columns an admin reads a runner by,
+// then the same resource columns as your own list.
+func printRunners(w io.Writer, rows []sdk.RunnerView) error {
 	tw := newTab(w)
-	head := "ID\tNAME\tMACHINE\tSTATE\tLAST SEEN\tRUNS\tAT ONCE\tFINGERPRINT"
-	if admin {
-		head = "ID\tOWNER\tNAME\tMACHINE\tSTATE\tLAST SEEN\tRUNS\tAT ONCE\tFINGERPRINT"
-	}
-	fmt.Fprintln(tw, head)
+	fmt.Fprintln(tw, "ID\tOWNER\tNAME\tMACHINE\tSTATE\tLAST SEEN\tRUNS\tAT ONCE\tFINGERPRINT\t"+resourceHeads)
 	for _, r := range rows {
 		lastSeen := "never"
 		if r.LastSeenAt != nil {
@@ -83,12 +89,9 @@ func printRunners(w io.Writer, rows []sdk.RunnerView, admin bool) error {
 		if r.Limits != nil {
 			atOnce = fmt.Sprintf("%d/%d", r.Usage.InUse.Runs, r.Limits.RunsAtOnce)
 		}
-		machine := cmp.Or(r.MachineName, "-")
-		if admin {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", r.ID, r.Owner, r.Name, machine, runnerStateWord(r), lastSeen, r.Usage.InUse.Runs, atOnce, r.KeyFingerprint)
-		} else {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", r.ID, r.Name, machine, runnerStateWord(r), lastSeen, r.Usage.InUse.Runs, atOnce, r.KeyFingerprint)
-		}
+		cells := resourceCells(r.Limits, r.Usage)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n", r.ID, r.Owner, r.Name, cmp.Or(r.MachineName, "-"), runnerStateWord(r), lastSeen,
+			r.Usage.InUse.Runs, atOnce, r.KeyFingerprint, strings.Join(cells[1:], "\t"))
 	}
 	return tw.Flush()
 }

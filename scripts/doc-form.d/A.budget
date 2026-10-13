@@ -96,7 +96,9 @@
 # docs/AUDIT-ACTIONS.md 45344 adds 355 over 44989 (the Azure CLI component): measured at merge.
 # docs/AUDIT-ACTIONS.md 45069 adds 80 over 44989 (0.9 RP-3): runner limits in runner.enrol/update, remote_runner.create/update and run.create `reserved`.
 # docs/AUDIT-ACTIONS.md 45424 measured at merge: the Azure CLI component and runner limits together.
-docs/AUDIT-ACTIONS.md=45424 share=8
+# docs/AUDIT-ACTIONS.md 45424 measured after merging the runner limits lane (adds 80: runner limits in runner.enrol/update, remote_runner.create/update and run.create `reserved`) with the Azure CLI component (adds 355), both over 44989.
+# docs/AUDIT-ACTIONS.md 45531 measured at merge: runner limits, the dispatch verbs' refusal and the self-hosted pool console together.
+docs/AUDIT-ACTIONS.md=45531 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
