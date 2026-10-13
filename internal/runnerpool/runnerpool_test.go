@@ -58,6 +58,7 @@ func TestRefusalSentencesMatchGolden(t *testing.T) {
 		"FULL":                     func(a []string) string { n, _ := strconv.Atoi(a[1]); return FullMsg(a[0], n) },
 		"NO_ONLINE_RUNNER":         func(a []string) string { return NoOnlineRunnerMsg(a[0]) },
 		"RUNNER_AT_CAPACITY":       func(a []string) string { return RunnerAtCapacityMsg(a[0]) },
+		"RUNNER_LIMITS_UNSET":      func(a []string) string { return RunnerLimitsUnsetMsg(a[0]) },
 		"WAIT_RUNNERS_AT_CAPACITY": func(a []string) string { return WaitRunnersAtCapacityMsg(a[0]) },
 	}
 	var golden []struct {

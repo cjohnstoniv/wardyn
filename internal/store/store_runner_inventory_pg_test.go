@@ -155,12 +155,12 @@ func TestPG_RunnerMintedByAndActiveRunCounts(t *testing.T) {
 		id := run.ID
 		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id=$1`, id) })
 	}
-	counts, err := st.CountActiveRunsByRunner(ctx, []uuid.UUID{r.ID})
+	used, err := st.RunnerUsage(ctx, []uuid.UUID{r.ID}, nil, uuid.Nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if counts[r.ID] != 2 {
-		t.Fatalf("active runs = %d, want 2 (running and waiting, not completed)", counts[r.ID])
+	if n := used[r.ID.String()].Runs; n != 2 {
+		t.Fatalf("runs in use = %d, want 2 (running and waiting, not completed)", n)
 	}
 }
 

@@ -54,7 +54,7 @@ func newAdmissionFixture(t *testing.T) *admissionFixture {
 	pub, key, _ := ed25519.GenerateKey(rand.Reader)
 	id := uuid.New()
 	rn, err := st.CreateRunner(ctx, types.Runner{ID: id, Owner: "admission-owner", Name: "laptop", PublicKey: pub, KeyFingerprint: id.String(),
-		Version: "0.9.0", OrgURLSHA256: federation.OrgURLSHA256(admissionOrgURL), MaxRuns: types.RunnerMaxRunsCeiling})
+		Version: "0.9.0", OrgURLSHA256: federation.OrgURLSHA256(admissionOrgURL), Limits: roomyRunnerLimits()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func (r *registryRunner) Remove(s substrate.Substrate) {
 
 func TestRunnerAdmissionPG_BootRegistersClaimedRunnersOnly(t *testing.T) {
 	f := newAdmissionFixture(t)
-	unclaimed, err := f.st.CreateRunner(f.ctx, types.Runner{ID: uuid.New(), Owner: f.rn.Owner, Name: "new", PublicKey: make([]byte, 32), KeyFingerprint: uuid.NewString()})
+	unclaimed, err := f.st.CreateRunner(f.ctx, types.Runner{ID: uuid.New(), Owner: f.rn.Owner, Name: "new", PublicKey: make([]byte, 32), KeyFingerprint: uuid.NewString(), Limits: roomyRunnerLimits()})
 	if err != nil {
 		t.Fatal(err)
 	}
