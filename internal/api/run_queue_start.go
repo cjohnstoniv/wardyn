@@ -37,18 +37,28 @@ const (
 	queueStartFailedLogName = "wardynd: queue start"
 )
 
-// promotedStartCtxKey marks a request context as the queue's start replaying a promoted run.
+// promotedStartCtxKey marks a request context as the queue's start replaying a promoted run. Its value
+// is the runner the promotion bound the run to, nil when it bound none.
 type promotedStartCtxKey struct{}
 
-func withPromotedStart(ctx context.Context) context.Context {
-	return context.WithValue(ctx, promotedStartCtxKey{}, true)
+type promotedStart struct{ runner *uuid.UUID }
+
+func withPromotedStart(ctx context.Context, runner *uuid.UUID) context.Context {
+	return context.WithValue(ctx, promotedStartCtxKey{}, promotedStart{runner: runner})
 }
 
 // startingPromoted reports whether ctx is a promoted run's start, whose capacity was admitted by the
 // promotion; the fold reads it as runFold.promoted.
 func startingPromoted(ctx context.Context) bool {
-	v, _ := ctx.Value(promotedStartCtxKey{}).(bool)
-	return v
+	_, ok := ctx.Value(promotedStartCtxKey{}).(promotedStart)
+	return ok
+}
+
+// promotedRunner is the runner a promoted run's start finds the run already holding a place on: the one
+// its promotion bound it to. nil outside a promoted start, or when the promotion bound no runner.
+func promotedRunner(ctx context.Context) *uuid.UUID {
+	v, _ := ctx.Value(promotedStartCtxKey{}).(promotedStart)
+	return v.runner
 }
 
 // queueEnd is how a start that cannot go on ends the run: the queue reason (the status_detail token,
@@ -127,7 +137,7 @@ func newQueuedStart(base, prep context.Context, p store.PromotedRun) (*queuedSta
 func (st *queuedStart) bind(a queueAuthority) error {
 	st.auth = a
 	st.base = a.context(st.daemon)
-	st.ctx = withPromotedStart(withCeilingMemo(withCapBatch(a.context(st.prep))))
+	st.ctx = withPromotedStart(withCeilingMemo(withCapBatch(a.context(st.prep))), st.run.RunnerID)
 	r, err := http.NewRequestWithContext(st.ctx, http.MethodPost, "/api/v1/runs", nil)
 	if err != nil {
 		return err
