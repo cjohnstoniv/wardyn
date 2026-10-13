@@ -50,6 +50,8 @@ cd "$ROOT"
 # file is on check-file-size.sh's frozen allowlist (see that file's own
 # comment for why).
 . "$ROOT/scripts/lib/setup-launch.sh"
+# shellcheck source=scripts/lib/runner-limits.sh
+. "$ROOT/scripts/lib/runner-limits.sh"
 
 # WSL2 must be detected BEFORE any native-Windows guard: some WSL2 shells (e.g.
 # via WSLENV/interop) inherit $OS=Windows_NT from Windows even though this is a
@@ -508,6 +510,13 @@ if ! $healthy && grep -q 'no identity matched any of the recipients' "$LOGFILE" 
 fi
 
 if $healthy; then
+  # The server's Docker runner takes no run until it has limits; on Docker Desktop the server cannot measure
+  # its disk (scripts/lib/runner-limits.sh).
+  # shellcheck disable=SC2317 # called by wardyn_ensure_runner_limits
+  wardyn() { WARDYN_URL="$URL" ./bin/wardyn "$@"; }
+  wardyn_ensure_runner_limits \
+    || die "the server's runner has no limits, so no run can start — set WARDYN_SETUP_RUNNER_DISK_GB and re-run, or set them by hand: ./bin/wardyn runner set docker ... (docs/OPERATIONS.md \"Runner limits\"); wardynd keeps running (make stop-host)"
+  unset -f wardyn
   # Opt-in SCM credential import. SECURITY/PRIVACY: never copies a private key or
   # PAT without explicit consent (an env flag or an interactive yes; default No).
   # Detects a host GitHub/Azure DevOps PAT (env) and a private ~/.ssh key, and —
