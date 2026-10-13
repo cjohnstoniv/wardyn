@@ -133,6 +133,16 @@ func TestPG_WaitingRunWithADriveIsNotEndedForThePersonsOwnRunner(t *testing.T) {
 	}
 	occupyRemote(e.placementEnv, pool, "alpha")
 	waiting := e.waitsFor(runBody(fmt.Sprintf(`"drive":{"enabled":true},"runner_pool_id":%q`, pool.ID)), "no drive mounts on the idle laptop")
+	// The drive rule holds by itself, apart from what the local-eligibility step recorded for the run.
+	launch := e.waitingLaunch(waiting.ID)
+	if !launch.Drives {
+		t.Fatal("the launch does not record that the run has a drive")
+	}
+	launch.NoLocal = false
+	room, err := e.srv.queueRunnerFree(withOIDCHuman(ctx, e.personP), e.reread(pool), launch)
+	if err != nil || room.wait != runnerpool.WaitRunnersAtCapacity || len(room.runners)+len(room.remotes) != 0 {
+		t.Fatalf("the queue's verdict on a run with a drive = %+v, %v; want it held for alpha, never offered the laptop", room, err)
+	}
 	e.endOccupant("alpha")
 	if got := e.settles(waiting.ID); got.State != types.RunRunning || got.RunnerID != nil || got.RunnerPoolExecutor != "alpha" {
 		t.Fatalf("once alpha has room the run is %s on runner %v executor %q (%s); want it RUNNING on alpha", got.State, got.RunnerID, got.RunnerPoolExecutor, got.StatusDetail)
