@@ -212,6 +212,39 @@ describe("main drive", () => {
   });
 });
 
+describe("a filled size follows the pool", () => {
+  // A pool with a 40 GiB cap and `mib` as its default.
+  const withDefault = (mib: number) => ({
+    ...filesPreflight(MAIN_DRIVE_FACTS.filesystem),
+    runner_pools: [{
+      ...filesPreflight(MAIN_DRIVE_FACTS.filesystem).runner_pools![0],
+      limits: [{ ...limitsFor("interactive", 40960), disk_mib: { default: { value: mib }, cap: { value: 40960 }, cap_source: "pool" as const } }],
+    }],
+  });
+
+  it("another pool's default replaces a size the person never changed", async () => {
+    checks.result = withDefault(20480);
+    show();
+    await waitFor(() => expect(size()).toHaveValue(20));
+    // The run is moved to a pool whose default is 10 GiB.
+    checks.result = withDefault(10240);
+    act(() => external.edit((i) => ({ ...i, runner_pool_id: "pool-b" })));
+    await waitFor(() => expect(size()).toHaveValue(10));
+    expect(drawn().resources).toBeUndefined();
+  });
+
+  it("keeps a size the person typed when the pool changes", async () => {
+    checks.result = withDefault(20480);
+    show();
+    await waitFor(() => expect(size()).toHaveValue(20));
+    await userEvent.clear(size());
+    await userEvent.type(size(), "6");
+    checks.result = withDefault(10240);
+    act(() => external.edit((i) => ({ ...i, runner_pool_id: "pool-b" })));
+    expect(size()).toHaveValue(6);
+  });
+});
+
 describe("enforcement chip (W1)", () => {
   it.each([
     ["eviction", NR_FILES.ENFORCED_BY_STOP],

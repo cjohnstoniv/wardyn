@@ -89,12 +89,18 @@ export function useMainDriveSize(view: MainDriveView) {
   const filled = React.useRef(false);
   // A prefill is shown, never sent: only a size the person typed becomes the request.
   const edited = React.useRef(false);
+  // A fill the person never changed follows the pool: another pool's default replaces it.
+  const fill = draft.guided.mainDriveFill;
   React.useEffect(() => {
-    if (!filled.current && typed === "" && committed === undefined && view.defaultMib !== undefined) {
+    if (committed !== undefined || view.defaultMib === undefined) return;
+    const next = mibToGibText(view.defaultMib, "floor");
+    if (!filled.current && typed === "") {
       filled.current = true;
-      dispatch({ type: "guided", patch: { mainDriveText: mibToGibText(view.defaultMib, "floor") } });
+      dispatch({ type: "guided", patch: { mainDriveText: next, mainDriveFill: next } });
+    } else if (typed !== "" && typed === fill && next !== typed) {
+      dispatch({ type: "guided", patch: { mainDriveText: next, mainDriveFill: next } });
     }
-  }, [typed, committed, view.defaultMib, dispatch]);
+  }, [typed, fill, committed, view.defaultMib, dispatch]);
 
   const commit = React.useCallback(() => {
     if (!edited.current) return;
@@ -105,6 +111,7 @@ export function useMainDriveSize(view: MainDriveView) {
       type: "guided",
       patch: {
         mainDriveText: mibToGibText(mib, clamped ? "floor" : "round"),
+        mainDriveFill: undefined,
         mainDriveClampNote: clamped ? clampText(mibToGibText(mib, "floor"), view.capSource, view.poolName) : undefined,
       },
     });
@@ -117,7 +124,7 @@ export function useMainDriveSize(view: MainDriveView) {
     setText: (next: string) => {
       filled.current = true;
       edited.current = true;
-      dispatch({ type: "guided", patch: { mainDriveText: next, mainDriveClampNote: undefined } });
+      dispatch({ type: "guided", patch: { mainDriveText: next, mainDriveFill: undefined, mainDriveClampNote: undefined } });
     },
     commit,
   };
