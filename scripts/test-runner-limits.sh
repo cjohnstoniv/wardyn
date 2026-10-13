@@ -29,16 +29,17 @@ calls="${dir}/calls"; err="${dir}/err"
 
 HEADER="ID  NAME  SET UP HERE  ONLINE  PEOPLE'S POOLS  POOLS"
 # What the fake server says: the runners with no limits, and whether the runner reports its free disk.
-unset_runners="" reports_disk=0 set_rc=0
+unset_runners="" reports_disk=0 reports_size=1 set_rc=0
 # The proposal the fake CLI prints: half of the free disk it was handed, everything else fixed.
 proposal() { echo "--max-runs 4 --total-cpu 4 --total-memory 8 --total-disk $(($1 / 2)) --per-run-cpu 1 --per-run-memory 2 --per-run-disk $(($1 / 8))"; }
 wardyn() {
   echo "$*" >>"${calls}"
   case "$*" in
     "runner remote list --no-limits") echo "${HEADER}"; for r in ${unset_runners}; do echo "${r}  ${r}  yes  yes  off  Organization"; done ;;
-    "runner remote propose docker")
+    "runner remote propose docker"*)
+      if [ "${reports_size}" = 0 ]; then echo "wardyn: the runner reports no CPU or memory to propose from: set its limits with \`wardyn runner set\`" >&2; return 1; fi
+      case "$*" in *--free-disk*) proposal "${!#}"; return ;; esac
       if [ "${reports_disk}" = 1 ]; then proposal 400; else echo "wardyn: the runner does not report its free disk: pass --free-disk" >&2; return 1; fi ;;
-    "runner remote propose docker --free-disk "*) proposal "${!#}" ;;
     "runner set docker "*) return "${set_rc}" ;;
     *) fail "the helper ran an unexpected command: wardyn $*" ;;
   esac
@@ -94,6 +95,25 @@ set_rc=1
 if [ "$(WARDYN_SETUP_RUNNER_LIMITS="${walk}" run)" = 0 ] || ! grep -q "takes no run until" "${err}"; then fail "a refused set was reported as done: $(cat "${err}")"; fi
 set_rc=0
 
+# 7b) The given flags split into words but never into file names, and the caller's own glob setting
+# survives the call.
+touch "${dir}/--max-runs-glob-bait"
+cd "${dir}"
+[ "$(WARDYN_SETUP_RUNNER_LIMITS='--max-runs 2 --total-cpu *' run)" = 0 ] || fail "flags holding a glob were refused: $(cat "${err}")"
+[ "$(set_call)" = "runner set docker --max-runs 2 --total-cpu *" ] || fail "a glob in WARDYN_SETUP_RUNNER_LIMITS expanded to file names: '$(set_call)'"
+cd - >/dev/null
+case $- in *f*) fail "the helper left globbing off for its caller" ;; esac
+
+# 7c) A runner that reports no CPU or memory has no proposal: it says so, names WARDYN_SETUP_RUNNER_LIMITS,
+# and sets nothing, even with the disk given.
+reports_size=0
+[ "$(run)" != 0 ] || fail "a runner with no CPU or memory reported was given limits"
+if ! grep -q "no CPU or memory" "${err}" || ! grep -q "WARDYN_SETUP_RUNNER_LIMITS" "${err}"; then
+  fail "the failure for a runner with no CPU or memory reported does not say so and name WARDYN_SETUP_RUNNER_LIMITS: $(cat "${err}")"
+fi
+if [ "$(WARDYN_SETUP_RUNNER_DISK_GB=100 run)" = 0 ] || [ -n "$(set_call)" ]; then fail "the disk alone gave limits to a runner with no CPU or memory reported: $(set_call)"; fi
+reports_size=1
+
 # 8) At a keyboard: the disk is asked for (no default: an empty answer sets nothing), the proposal is
 # shown, and declining it asks for each amount, Enter keeping the one shown.
 _rl_interactive() { return 0; }
@@ -104,5 +124,15 @@ want="runner set docker --max-runs 3 --total-cpu 4 --total-memory 8 --total-disk
 [ "$(set_call)" = "${want}" ] || fail "after typing 200 GB and Runs at once 3, set ran as '$(set_call)', want '${want}'"
 : >"${calls}"; printf '200\n\n' | wardyn_ensure_runner_limits 2>"${err}" || fail "accepting the proposal failed: $(cat "${err}")"
 [ "$(set_call)" = "runner set docker $(proposal 200)" ] || fail "accepting the proposal set '$(set_call)'"
+# With WARDYN_SETUP_RUNNER_DISK_GB given there is nothing to ask: no prompt waits on a recorded or scripted terminal.
+: >"${calls}"; WARDYN_SETUP_RUNNER_DISK_GB=200 wardyn_ensure_runner_limits </dev/null 2>"${err}" || fail "a given disk at a terminal was refused: $(cat "${err}")"
+if grep -q "Set these limits?" "${err}" || [ "$(set_call)" != "runner set docker $(proposal 200)" ]; then fail "with the disk given at a terminal it asked, or set '$(set_call)'"; fi
+
+# 9) setup.sh's host mode gives the runner its limits on its already-running branch too, so a re-run with
+# WARDYN_SETUP_RUNNER_DISK_GB set finishes what a first run stopped at.
+already="$(awk '/^# Already running\?/,/^fi$/' "${REPO_ROOT}/scripts/setup.sh")"
+# shellcheck disable=SC2016 # the literal text of the call in setup.sh
+grep -q 'host_runner_limits "\$URL"' <<<"${already}" \
+  || fail "scripts/setup.sh's already-running branch no longer calls host_runner_limits: a re-run would report success with a runner that takes no run"
 
 echo "test-runner-limits: self-test PASS"

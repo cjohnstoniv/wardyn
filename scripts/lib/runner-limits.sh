@@ -26,8 +26,9 @@
 # The free disk is, in order: WARDYN_SETUP_RUNNER_DISK_GB when set; what the runner reports; for the
 # Docker runner, the free space under Docker's data root when this shell's docker is a local engine that
 # is not Docker Desktop; on a terminal, what the person types (there is no default). With none of these
-# it fails and names the variable. On a terminal the person is shown the proposal and may accept it or
-# type each amount. A runner that already has limits is left as it is. It returns non-zero when a runner
+# it fails and names the variable. On a terminal, with no variable given, the person is shown the
+# proposal and may accept it or type each amount. A runner that reports no CPU or memory has no
+# proposal: only WARDYN_SETUP_RUNNER_LIMITS (or a person at `wardyn runner set`) gives it limits. A runner that already has limits is left as it is. It returns non-zero when a runner
 # is left without limits; the caller decides whether that ends it.
 
 _rl_say() { printf '  runner limits: %s\n' "$*" >&2; }
@@ -65,11 +66,17 @@ _rl_propose() {
     wardyn runner remote propose "$1" --free-disk "${WARDYN_SETUP_RUNNER_DISK_GB}" </dev/null
     return
   fi
-  if _rl_flags="$(wardyn runner remote propose "$1" </dev/null 2>/dev/null)" && [ -n "${_rl_flags}" ]; then
+  if _rl_flags="$(wardyn runner remote propose "$1" </dev/null 2>&1)" && [ -n "${_rl_flags}" ]; then
     _rl_say "$1: CPU, memory and free disk as the runner reports them"
     printf '%s\n' "${_rl_flags}"
     return
   fi
+  case "${_rl_flags}" in
+    *"no CPU or memory"*)
+      _rl_say "$1 reports no CPU or memory to propose from, so there is no proposal. Set WARDYN_SETUP_RUNNER_LIMITS to the whole set of \`wardyn runner set\` flags."
+      return 1
+      ;;
+  esac
   if _rl_disk="$(_rl_host_free_disk_gb "$1")"; then
     _rl_say "$1: free disk ${_rl_disk} GB, measured under Docker's data root on this host (the server could not see it)"
   elif _rl_interactive; then
@@ -107,7 +114,8 @@ _rl_set() {
       _rl_say "$1 has no limits and takes no run until they are set: wardyn runner set $1 --max-runs N --total-cpu N --total-memory GB --total-disk GB --per-run-cpu N --per-run-memory GB --per-run-disk GB"
       return 1
     fi
-    if _rl_interactive; then
+    # Asked to accept only when nothing was given: WARDYN_SETUP_RUNNER_DISK_GB is an answer already.
+    if _rl_interactive && [ -z "${WARDYN_SETUP_RUNNER_DISK_GB:-}" ]; then
       _rl_say "$1: proposed, half of what it has: ${_rl_flags}"
       printf '  Set these limits? [Y/n] (n: type each amount) ' >&2
       read -r _rl_ans || _rl_ans=""
@@ -120,8 +128,13 @@ _rl_set() {
     fi
   fi
   _rl_say "$1: wardyn runner set $1 ${_rl_flags}"
+  # The flags split into words; never into file names (WARDYN_SETUP_RUNNER_LIMITS is the caller's text).
+  _rl_opts=$-
+  set -f
   # shellcheck disable=SC2086 # the flags are words: --flag value pairs
-  if ! wardyn runner set "$1" ${_rl_flags} </dev/null >&2; then
+  if wardyn runner set "$1" ${_rl_flags} </dev/null >&2; then _rl_rc=0; else _rl_rc=$?; fi
+  case "${_rl_opts}" in *f*) ;; *) set +f ;; esac
+  if [ "${_rl_rc}" -ne 0 ]; then
     _rl_say "$1: these limits were not set; it takes no run until they are"
     return 1
   fi
