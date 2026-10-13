@@ -112,6 +112,10 @@ func TestDecodeWorkspaceRequest_TwoFoldersOnTheDefaultTargetRejected(t *testing.
 			{"type":"local_dir","path":"/srv/a","target":"/home/agent/work"},
 			{"type":"local_dir","path":"/srv/b"}
 		]}`,
+		`{"name":"w","sources":[
+			{"type":"repo","source":"acme/api","target":"/home/agent/work"},
+			{"type":"local_dir","path":"/srv/b"}
+		]}`,
 	} {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
 		w := httptest.NewRecorder()
@@ -138,6 +142,11 @@ func TestDecodeWorkspaceRequest_DistinctOrEmptyTargetsAccepted(t *testing.T) {
 		`{"name":"w","sources":[
 			{"type":"local_dir","path":"/srv/a"},
 			{"type":"local_dir","path":"/srv/b","target":"/home/agent/b"}
+		]}`,
+		// A scratch directory is not a mount: a folder on the default path beside one launches.
+		`{"name":"w","sources":[
+			{"type":"ephemeral","target":"/home/agent/work"},
+			{"type":"local_dir","path":"/srv/a"}
 		]}`,
 	} {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
