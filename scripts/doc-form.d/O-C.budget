@@ -52,7 +52,11 @@
 # docs/OPERATIONS.md 52568 measured after train 10 F-1508-author merge.
 # docs/OPERATIONS.md 52498 measured after the 0161 renumber merge.
 # docs/OPERATIONS.md 52578 measured after train 10 F-1516 B1+B3 merge.
-docs/OPERATIONS.md=52578
+# docs/OPERATIONS.md 52959 measured after train 13: DS2-S3 merge.
+# docs/OPERATIONS.md 53011 adds 52 (0.9 H14-api): the 0168 migration line and the runner_pools erasure scope.
+# 0.9 DS2-S4: docs/OPERATIONS.md 53138 adds 127 over 53011: launch intents in three erasure rows, the erase/launch lock and its boundary, and migration 0171.
+# docs/OPERATIONS.md 53190 adds 52 over 53138 (0.9 RP-1): the 0173_runner_pool_scope migrator line.
+docs/OPERATIONS.md=53190
 # docs/OPERATIONS.md 84747 adds 1534 over 83186 for the 0.8.9 component docs: 1158 (the Custom components section, including settings, attach rules, requirements, what a launch leaves behind, one credential per host and the shared secret), 90+7+5 (the `custom_component` feature value), 18 (nine kinds need only the absence of a deny), 17 (the audit log shrinks only by the partition drop), 31 (the `components` erasure row keeps the run's policy and grants), 58+30 (A46 on the run-scoped and export reads), 9 (`capability_feature` names components), 46 (a shared-secret run's policy export is a record), 58 (Azure DevOps lane redirects lose their token), 10 (buildInjector refuses a second rule for a host). The diff tool counts 1537, the gate 1534.
 # 0.9 runner registration: +27 words for the guarded admin token route tier row.
 # Combined runner registration, baseline and identity changes: measured docs/OPERATIONS.md 85164 prose words.

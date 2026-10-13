@@ -403,6 +403,7 @@ func run() error {
 		// confines the App to the run branch namespace. nil when no App is
 		// configured, which omits the row.
 		GitHubRulesets: gh,
+		GitHubBranches: gh,
 		Audit:          maskedRec,
 		RunnerAuditPrepare: func(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
 			return prepareRunnerAudit(ctx, ev, maskingRecorder{reg: maskReg, scope: maskScopes}, sealSrc)

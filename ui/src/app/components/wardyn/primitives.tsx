@@ -174,6 +174,7 @@ const runStateMeta: Record<
   string,
   { tone: Tone; label: string; pulse?: boolean; Icon?: React.ElementType; solid?: boolean }
 > = {
+  QUEUED: { tone: "neutral", label: "Queued" },
   PENDING: { tone: "neutral", label: "Pending" },
   STARTING: { tone: "info", label: "Starting", pulse: true },
   RUNNING: { tone: "success", label: "Running", pulse: true },

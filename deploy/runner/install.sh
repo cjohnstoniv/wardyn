@@ -115,8 +115,8 @@ if [ -z "$BINARY" ]; then
     BINARY="$(command -v wardyn-runnerd || true)"
   fi
 fi
-[ -n "$BINARY" ] && [ -e "$BINARY" ] || die "wardyn-runnerd not found: pass --binary <path>"
-[ -f "$BINARY" ] && [ -r "$BINARY" ] || die "wardyn-runnerd is not a readable file: $BINARY"
+if ! { [ -n "$BINARY" ] && [ -e "$BINARY" ]; }; then die "wardyn-runnerd not found: pass --binary <path>"; fi
+if ! { [ -f "$BINARY" ] && [ -r "$BINARY" ]; }; then die "wardyn-runnerd is not a readable file: $BINARY"; fi
 # A release download has no exec bit. Work from a private 0755 copy, so the
 # version check can run it and the install copies a runnable file.
 STAGE="$(mktemp -d)"

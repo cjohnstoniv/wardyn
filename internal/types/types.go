@@ -87,6 +87,17 @@ var NonTerminalRunStates = []RunState{RunQueued, RunPending, RunStarting, RunRun
 // deployment or host slot, and the only ones a sandbox reaper may age. A waiting run holds nothing.
 var SlotHoldingRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWaiting}
 
+// RunQueue is what a QUEUED run says about its wait: the pool, when it joined, when its wait ends,
+// how many runs are ahead of it in that pool (a count, never whose) and the wait reason token
+// (runner_pool_at_capacity, runner_pool_no_runner_free or runner_pool_runners_at_capacity).
+type RunQueue struct {
+	PoolID     uuid.UUID `json:"pool_id"`
+	QueuedAt   time.Time `json:"queued_at"`
+	DeadlineAt time.Time `json:"deadline_at"`
+	Position   int       `json:"position"`
+	Reason     string    `json:"reason"`
+}
+
 // PauseReason says why a run's agent is frozen (AgentRun.PausedReason).
 type PauseReason string
 
@@ -137,19 +148,29 @@ type AgentRun struct {
 	// RunnerID names the runner a local run landed on. NULL for a remote run and
 	// for every run from before 0.9; omitted on the wire when NULL, never "".
 	RunnerID *uuid.UUID `json:"runner_id,omitempty"`
+	// RunnerName, RunnerOnline and RunnerLastSeenAt are read-side facts about that runner, projected on
+	// the run routes and never stored. They are absent for a remote run and when the runner could not be
+	// read. The name is the runner's current one, which equals the name at create: a runner is never
+	// renamed and a claimed row is never deleted, so a revoked runner's run keeps it. RunnerOnline is
+	// this process's live view, so a pointer: absent is unknown. false is a fact on a single replica (also
+	// when the hub cannot be asked); under WARDYN_HA it is never sent, because a replica that does not hold
+	// the runner's session cannot tell offline from connected elsewhere.
+	RunnerName       string     `json:"runner_name,omitempty"`
+	RunnerOnline     *bool      `json:"runner_online,omitempty"`
+	RunnerLastSeenAt *time.Time `json:"runner_last_seen_at,omitempty"`
 	// EvidenceSource says who can attest this run's evidence (OD-8): substrate or
 	// runner_asserted, empty for a legacy or unresolved record. Not
 	// `confinement_source`, which says who CHOSE the class.
 	EvidenceSource RunEvidenceSource `json:"evidence_source,omitempty"`
 	// RunnerPoolID is the runner pool the run was admitted into, and the next three fields say how
 	// (all written once at create). A pool is a label for a choice and never admission: the run
-	// goes to the exact target recorded in RunnerID (a self-hosted pool) or RunnerPoolExecutor (a
-	// remote-provided one), whatever the pool or anyone's defaults say later. Nil for a run from
+	// goes to the exact runner recorded in RunnerID (a self-hosted runner) or RunnerPoolExecutor (a
+	// remote-hosted runner's id), whatever the pool or anyone's defaults say later. Nil for a run from
 	// before pools and for a server-originated run that names none; RunnerPoolSelection is then empty.
 	RunnerPoolID        *uuid.UUID          `json:"runner_pool_id,omitempty"`
 	RunnerPoolRevision  int64               `json:"runner_pool_revision,omitempty"`
 	RunnerPoolSelection RunnerPoolSelection `json:"runner_pool_selection,omitempty"`
-	RunnerPoolExecutor  string              `json:"runner_pool_executor,omitempty"`
+	RunnerPoolExecutor  string              `json:"remote_runner_id,omitempty"`
 	SandboxRef          string              `json:"sandbox_ref,omitempty"`
 	Image               string              `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.
@@ -175,7 +196,9 @@ type AgentRun struct {
 	AutonomyLevel AutonomyLevel `json:"autonomy_level,omitempty"`
 	// AdmittedAt is when a queued run was promoted out of the queue; written by promotion only, so nil for a run that never waited.
 	AdmittedAt *time.Time `json:"admitted_at,omitempty"`
-	EndsAt     *time.Time `json:"ends_at"` // run's lease end, captured once at create from RunLimits, never re-resolved
+	// Queue is a waiting run's place in its pool's queue, derived at read from the queue row and never stored on the run; absent once the run leaves QUEUED.
+	Queue  *RunQueue  `json:"queue,omitempty"`
+	EndsAt *time.Time `json:"ends_at"` // run's lease end, captured once at create from RunLimits, never re-resolved
 	// LifetimeCapAt is the latest end the pool and the deployment allow, measured from launch (created_at plus the lowest of their maximums); absent when neither bounds the lifetime or for a run from before this column. LifetimeCapSource names which one bound it (pool or deployment) and stays off the wire.
 	LifetimeCapAt     *time.Time  `json:"lifetime_cap_at,omitempty"`
 	LifetimeCapSource LimitSource `json:"-"`
@@ -216,6 +239,10 @@ type AgentRun struct {
 	// record of accountability, not proof that a person was present. Empty for a run from before it was recorded.
 	// Read by the second-human rules only.
 	HumanAuthor string `json:"-"`
+	// LaunchIntent is the setup kept for Run again (a kind Run document), written in the run row's own
+	// transaction when set. Never on the wire and never read back onto a listed run: the creator reads it by
+	// run id. On a created run it is set only when the store kept it.
+	LaunchIntent json.RawMessage `json:"-"`
 }
 
 // GrantKind enumerates broker-mintable credential kinds.
@@ -501,7 +528,10 @@ type APIToken struct {
 	MintedBy        string     `json:"minted_by,omitempty"`  // admin who minted this for its owner; empty when the owner minted it
 	// Disposition is where an admin-minted token stands, derived at read (#1508); empty on any other token.
 	Disposition TokenDisposition `json:"disposition,omitempty"`
-	Token       string           `json:"token,omitempty"` // plaintext, create response ONLY
+	// ServiceIdentity names the service identity an admin linked this token to, set with Disposition on
+	// a token that has a move row (#1508); empty on any other token.
+	ServiceIdentity string `json:"service_identity,omitempty"`
+	Token           string `json:"token,omitempty"` // plaintext, create response ONLY
 	// IdentityStampedAt is when Role and Groups were last stamped: at mint, then at each sign-in of
 	// the owner. Nil reads as stale under WARDYN_ROLE_STAMP_TTL. Never on the wire.
 	IdentityStampedAt *time.Time `json:"-"`

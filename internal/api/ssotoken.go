@@ -140,7 +140,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		// A sign-in that names no provider (launched before the conversion), or
 		// whose stamp names no owner or another one, is refused.
 		msg := ssoTokenUnstampedScopeRefusal
-		if stamp.ModelProviderUID != "" {
+		if stamp.ModelProviderUID != "" || stamp.CLIComponentID != "" {
 			msg = mpsCaptureNotOwner
 		}
 		s.refuseCapture(w, r, claims, http.StatusConflict, reasonCaptureUnstampedScope, msg, nil)
@@ -267,9 +267,18 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	blob.SourceRunID = claims.RunID.String()
 
 	// A provider sign-in lands only while that provider is still the one it
-	// was launched for (storeProviderSignIn).
-	if changed, err := s.storeProviderSignIn(r.Context(), stamp, scope, blob); changed {
-		s.refuseCapture(w, r, claims, http.StatusConflict, reasonCaptureProviderChanged, mpsCaptureChanged, &scope)
+	// was launched for (storeProviderSignIn), and a CLI row's while that row is
+	// (storeCLISignIn).
+	changedReason, changedMsg := reasonCaptureProviderChanged, mpsCaptureChanged
+	var changed bool
+	if scope.cli != "" {
+		changedReason, changedMsg = reasonCLISignInCaptureChanged, cliSignInCaptureChange
+		changed, err = s.storeCLISignIn(r.Context(), stamp, scope, blob)
+	} else {
+		changed, err = s.storeProviderSignIn(r.Context(), stamp, scope, blob)
+	}
+	if changed {
+		s.refuseCapture(w, r, claims, http.StatusConflict, changedReason, changedMsg, &scope)
 		return
 	} else if db.LockRefused(err) {
 		w.Header().Set("Retry-After", "5")
@@ -293,8 +302,12 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		"owner": scope.owner, "credential_source": awsSSOCredentialSourceLabel(scope),
 		"model_provider": stamp.ModelProvider,
 	}
-	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-		"harness.credential.capture", scope.ssoSecret(), "success", mustJSON(captured)))
+	if scope.cli != "" {
+		s.auditCLICapture(r, claims.RunID, claims.SPIFFEID, scope, "success", "")
+	} else {
+		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+			"harness.credential.capture", scope.ssoSecret(), "success", mustJSON(captured)))
+	}
 
 	// A sign-in answers any held run. Every PENDING credential_reauth
 	// this capture satisfies moves to APPROVED, so the sidecar holding that run's
@@ -488,8 +501,14 @@ func (b awsSSOBlob) missingFields() []string {
 // run it is. ok=false refuses: a stamp that names no provider (a sign-in
 // launched before the conversion), or no owner, or another one.
 func loginRunScope(stamp loginRunStamp, subject string) (awsSSOScope, bool) {
-	if stamp.ModelProviderUID == "" || stamp.Owner == "" || stamp.Owner != subject {
+	if stamp.Owner == "" || stamp.Owner != subject {
 		return awsSSOScope{}, false
 	}
-	return awsSSOScope{perUser: true, owner: stamp.Owner, provider: stamp.ModelProviderUID}, true
+	switch {
+	case stamp.CLIComponentID != "":
+		return cliAWSScope(stamp.CLIComponentID, stamp.Owner), true
+	case stamp.ModelProviderUID != "":
+		return awsSSOScope{perUser: true, owner: stamp.Owner, provider: stamp.ModelProviderUID}, true
+	}
+	return awsSSOScope{}, false
 }

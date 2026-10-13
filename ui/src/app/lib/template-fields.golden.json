@@ -34,7 +34,8 @@
       "hosts",
       "secrets",
       "config",
-      "cli"
+      "cli",
+      "mcp"
     ],
     "ComponentDelivery": [
       "mode",
@@ -45,6 +46,10 @@
       "var",
       "file"
     ],
+    "ComponentMCP": [
+      "url",
+      "transport"
+    ],
     "ComponentRef": [
       "id",
       "inline",
@@ -52,12 +57,17 @@
       "builtin",
       "org",
       "repos",
-      "access"
+      "access",
+      "mcp_harnesses"
     ],
     "ComponentSecret": [
       "secret_name",
       "shared",
       "delivery"
+    ],
+    "DriveAttachment": [
+      "drive_id",
+      "read_only"
     ],
     "DriveSelection": [
       "enabled",
@@ -116,6 +126,10 @@
       "deny_new_executables",
       "max_file_size_mib"
     ],
+    "RepoSelection": [
+      "repo",
+      "ref"
+    ],
     "ResourceLimits": [
       "cpu_millis",
       "memory_mib",
@@ -142,12 +156,14 @@
     ],
     "RunResources": [
       "cpu_millis",
-      "memory_mib"
+      "memory_mib",
+      "disk_mib"
     ],
     "RunStartup": [
       "kind",
       "tool",
-      "command"
+      "command",
+      "prompt"
     ],
     "RunWorkload": [
       "kind",
@@ -164,6 +180,8 @@
     "StartFolder": [
       "kind",
       "attachment",
+      "repo",
+      "drive_id",
       "subpath"
     ],
     "ToolRule": [
@@ -189,7 +207,8 @@
       "workspace_id",
       "enabled_optional",
       "read_only",
-      "target"
+      "target",
+      "repos"
     ]
   },
   "nested_excluded": [
@@ -471,6 +490,11 @@
       "section": "run_wide"
     },
     {
+      "name": "policy_overlay",
+      "excluded": "origin",
+      "why": "In a document the overlay is written under inline_policy; policy_overlay is how a client sends it."
+    },
+    {
       "name": "devcontainer_repo",
       "tab": "tools_image",
       "part": "tools_image",
@@ -569,6 +593,15 @@
       "section": "run_wide"
     },
     {
+      "name": "drives",
+      "tab": "repositories_drives",
+      "part": "drives",
+      "omitted": "unset_optional",
+      "empty": "value",
+      "meaning": "No drive from the drive list is attached. Each drive is checked against the launching person's own grants.",
+      "section": "run_wide"
+    },
+    {
       "name": "components",
       "tab": "access",
       "part": "components",
@@ -659,6 +692,11 @@
       "section": "run_wide"
     },
     {
+      "name": "max_wait_sec",
+      "excluded": "launch",
+      "why": "How long a run may wait for a slot in a full pool is chosen at each launch; the default wait suits a template's runs."
+    },
+    {
       "name": "no_end",
       "tab": "runner",
       "part": "runner",
@@ -701,7 +739,7 @@
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "value",
-      "meaning": "No tool is included. An interactive environment may include several, and including none is valid. Each harness has its own model provider, tool rules and default effect, and nothing is shared between tools.",
+      "meaning": "No tool is included, which is valid: the sandbox starts from the agent base image. An interactive environment or a command may include several harnesses, and at most one starts. Each harness has its own model provider, tool rules and default effect, and nothing is shared between tools.",
       "section": "harness",
       "keyed_by": "harness"
     },
@@ -711,7 +749,7 @@
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
-      "meaning": "Nothing starts automatically unless chosen: one included harness, one command, or none. A removed startup tool is never replaced by another.",
+      "meaning": "Nothing starts automatically unless chosen: one included harness, which may open with a starting prompt, one command, or none. A removed startup tool is never replaced by another.",
       "sensitive": true,
       "section": "run_wide"
     },

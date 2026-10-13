@@ -80,14 +80,18 @@ func TestMigration0157_TokensAndRunsUnchanged(t *testing.T) {
 // collision check reads: the migration aborts, names that table and leaves nothing behind.
 func TestMigration0157_ServicePrefixAbortsNamingTheTable(t *testing.T) {
 	seeds := []struct{ table, sql string }{
+		{"principal_identities", `INSERT INTO principal_identities (principal, issuer) VALUES ('service:ci', 'https://idp.example')`},
 		{"people", `INSERT INTO people (principal, created_by) VALUES ('Service:ci', 'admin')`},
 		{"api_tokens", `INSERT INTO api_tokens (id, principal, token_sha256) VALUES (gen_random_uuid(), 'service:ci', 'h')`},
 		{"ssh_public_keys", `INSERT INTO ssh_public_keys (fingerprint, principal, public_key) VALUES ('fp', 'service:ci', 'k')`},
 		{"agent_runs", `INSERT INTO agent_runs (id, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target)
 			VALUES (gen_random_uuid(), 'service:ci', 'a', 'r', 'CC1', 'STOPPED', 's', 'docker')`},
+		{"workspaces", `INSERT INTO workspaces (id, name, owned_by, attachments) VALUES (gen_random_uuid(), 'w', 'service:ci', '[]')`},
 		{"secrets", `INSERT INTO secrets (name, ciphertext, owned_by) VALUES ('n', '\x00', 'service:ci')`},
 		{"capability_grants", `INSERT INTO capability_grants (id, subject_type, subject, capability, value, effect)
 			VALUES (gen_random_uuid(), 'user', 'service:ci', 'c', 'v', 'allow')`},
+		{"governance_assignments", `WITH p AS (INSERT INTO governance_profiles (id, name, ceiling) VALUES (gen_random_uuid(), 'g', '{}') RETURNING id)
+			INSERT INTO governance_assignments (id, subject_type, subject, profile_id) SELECT gen_random_uuid(), 'user', 'service:ci', id FROM p`},
 	}
 	for _, seed := range seeds {
 		t.Run(seed.table, func(t *testing.T) {
@@ -104,6 +108,21 @@ func TestMigration0157_ServicePrefixAbortsNamingTheTable(t *testing.T) {
 				t.Error("the aborted migration left person_invitations behind")
 			}
 		})
+	}
+}
+
+// TestMigration0157_ServicePrefixInANonUserSubjectDoesNotAbort: a group or user-type subject is no
+// principal, so only the user subject type of the two grant tables counts as a collision.
+func TestMigration0157_ServicePrefixInANonUserSubjectDoesNotAbort(t *testing.T) {
+	pool, _ := partialSchemaPool(t, invitationsMigration)
+	for _, subjectType := range []string{"group", "user_type"} {
+		pgExec(t, pool, `INSERT INTO capability_grants (id, subject_type, subject, capability, value, effect)
+			VALUES (gen_random_uuid(), $1, 'service:ci', 'c', 'v', 'allow')`, subjectType)
+		pgExec(t, pool, `WITH p AS (INSERT INTO governance_profiles (id, name, ceiling) VALUES (gen_random_uuid(), $1, '{}') RETURNING id)
+			INSERT INTO governance_assignments (id, subject_type, subject, profile_id) SELECT gen_random_uuid(), $1, 'service:ci', id FROM p`, subjectType)
+	}
+	if err := Migrate(context.Background(), pool); err != nil {
+		t.Fatalf("Migrate over service: subjects of a non-user type: %v", err)
 	}
 }
 

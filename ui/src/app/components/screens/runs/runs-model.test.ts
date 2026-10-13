@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import type { AgentRun, RunState } from "../../../lib/types";
-import { rowPresentation, sectionRuns, isTopQuiet, nonAttentionRuns } from "./runs-model";
+import { rowPresentation, sectionRuns, isTopQuiet, nonAttentionRuns, isLiveRunState } from "./runs-model";
 import { glyphKindFor } from "./row-glyph";
 
 // Relative to the moment the suite runs, not a literal date (scripts/
@@ -346,5 +346,27 @@ describe("isTopQuiet", () => {
   it("false when only an owner's sign-in is waiting (#1197 L4 H-3) — that is not quiet either", () => {
     const s = sectionRuns([run({ state: "RUNNING", attention: { kind: "reauth", by: "owner", pending: 1 } })], NOW);
     expect(isTopQuiet(s)).toBe(false);
+  });
+});
+
+describe("isLiveRunState — a waiting run is live", () => {
+  it("counts QUEUED with the other non-terminal states and no terminal one", () => {
+    for (const s of ["QUEUED", "PENDING", "STARTING", "RUNNING", "WAITING_FOR_CONFIRMATION"]) expect(isLiveRunState(s as RunState), s).toBe(true);
+    for (const s of ["COMPLETED", "STOPPED", "ARCHIVED", "FAILED", "KILLED"]) expect(isLiveRunState(s as RunState), s).toBe(false);
+  });
+});
+
+// 0.9 (M-RN-3 RS8): a run on a person's computer is named in the row's meta line only. Its hue, word and action
+// are what they are for any run in that state, whether its computer is online, offline or unknown.
+describe("rowPresentation — a local run is presented as any other (RS8)", () => {
+  const local = (over: Partial<AgentRun>) => run({ placement: "local", runner_id: "11111111-2222-3333-4444-555555555555", runner_name: "laptop-7", ...over });
+
+  it.each([true, false, undefined])("a running local run reads the same with runner_online=%s", (online) => {
+    expect(rowPresentation(local({ runner_online: online }), false)).toEqual(rowPresentation(run(), false));
+  });
+
+  it("a lost local run keeps the lost word and action", () => {
+    const attention = { kind: "lost", by: "you", pending: 0 } as const;
+    expect(rowPresentation(local({ runner_online: false, attention }), false)).toEqual(rowPresentation(run({ attention }), false));
   });
 });

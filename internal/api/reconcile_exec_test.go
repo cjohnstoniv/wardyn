@@ -519,7 +519,7 @@ func TestSweepRunWatchers_ExecLessRunNotFinalized(t *testing.T) {
 
 	// The dispatch phase under test: persists the real post-Exec value for an
 	// exec-less launch, exactly as it does mid-dispatchRun.
-	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false, nil)
+	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false, runnerExecution{}, nil)
 
 	if err := srv.sweepRunWatchers(context.Background()); err != nil {
 		t.Fatalf("sweepRunWatchers: %v", err)
@@ -553,7 +553,7 @@ func (*sweepableImageBuilder) BuildDevcontainer(context.Context, string, string,
 func (*sweepableImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (BuiltImage, error) {
 	return BuiltImage{}, errors.New("not implemented")
 }
-func (*sweepableImageBuilder) FinalizeBase(context.Context, string, string, io.Writer) (BuiltImage, error) {
+func (*sweepableImageBuilder) FinalizeBase(context.Context, string, string, io.Writer, bool) (BuiltImage, error) {
 	return BuiltImage{}, errors.New("not implemented")
 }
 func (s *sweepableImageBuilder) SweepOrphanedBuilds(context.Context) error {
@@ -664,7 +664,7 @@ func TestDispatchExecIDWriteLostFailsTheRunLoudly(t *testing.T) {
 	cfg.BaseCtx = testBaseCtx(t)
 	srv := New(cfg)
 
-	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false, nil)
+	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false, runnerExecution{}, nil)
 
 	// Retried exactly once before giving up — a single attempt turns a blip into
 	// a dead run, and an unbounded loop holds the dispatcher open forever.
@@ -719,7 +719,7 @@ func TestDispatchExecIDWritePersistsOnTheHappyPath(t *testing.T) {
 	cfg.BaseCtx = testBaseCtx(t)
 	srv := New(cfg)
 
-	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false, nil)
+	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false, runnerExecution{}, nil)
 
 	if fake.setExecIDCalls != 1 {
 		t.Errorf("SetRunAgentExecID attempts = %d, want 1 on the happy path", fake.setExecIDCalls)

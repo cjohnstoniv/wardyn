@@ -46,7 +46,7 @@ func (rg *rehearseRig) stagedSetWith(recordingStore string, fill func(dir string
 func (rg *rehearseRig) editManifest(dir string, edit func(*recoveryManifest)) {
 	rg.t.Helper()
 	path := filepath.Join(dir, recoveryManifestFile)
-	m, err := readRecoveryManifest(dir)
+	m, err := readRecoveryManifest(dir, "verify the set")
 	if err != nil {
 		rg.t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestRecoveryManifest_NoSecretValueInManifestOrOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := readRecoveryManifest(dir)
+	m, err := readRecoveryManifest(dir, "verify the set")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestRecoveryManifest_NeverCallsTheKeyService(t *testing.T) {
 	if err := createRecoveryManifest(context.Background(), in); err != nil {
 		t.Fatal(err)
 	}
-	m, err := readRecoveryManifest(dir)
+	m, err := readRecoveryManifest(dir, "verify the set")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -33,7 +33,7 @@ func TestBootDaemonProxy_LinkLocalCredentialEndpointsBypass(t *testing.T) {
 	if got, err := tr.Proxy(&http.Request{URL: mustParseURL(t, "https://kms.us-east-1.amazonaws.com/")}); err != nil || got == nil {
 		t.Fatalf("Proxy(kms) = %v, %v; want the configured proxy", got, err)
 	}
-	for _, host := range []string{"169.254.169.254", "169.254.170.2", "169.254.170.23", "[fd00:ec2::23]"} {
+	for _, host := range []string{"169.254.169.254", "169.254.170.2", "169.254.170.23", "[fd00:ec2::23]", "[fd00:ec2::254]"} {
 		if got, err := tr.Proxy(&http.Request{URL: mustParseURL(t, "http://"+host+"/v1/credentials")}); err != nil || got != nil {
 			t.Errorf("Proxy(%s) = %v, %v; want a direct call", host, got, err)
 		}

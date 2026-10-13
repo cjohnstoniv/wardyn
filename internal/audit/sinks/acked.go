@@ -122,7 +122,7 @@ func AckedTerms(cfg WebhookConfig, st DeliveryStore, rec audit.Recorder) (func(c
 }
 
 // Run delivers until ctx ends or the collector refuses definitively (a
-// terminal 4xx or an unfollowed redirect halts until wardynd restarts). It
+// terminal 4xx or an unfollowed redirect halts until wardynd restarts or another replica takes over delivery). It
 // must be called at most once per AckedWebhook; AckedTerms gives each leader
 // term its own.
 func (a *AckedWebhook) Run(ctx context.Context) {
@@ -213,11 +213,13 @@ func (a *AckedWebhook) retry(ctx context.Context, err error, retryAfter time.Dur
 
 // halt records a terminal refusal and stops the loop: the collector answered a
 // 4xx it will answer the same way on every retry, so retrying is noise. The
-// flag is durable, so the halt survives a restart until wardynd is restarted.
+// flag is durable, so the gauge keeps reading halted until a later run (after
+// a wardynd restart, or another replica's leader term) delivers a batch and
+// clears it.
 func (a *AckedWebhook) halt(ctx context.Context, err error) {
 	msg := errorText(err)
 	a.recordError(ctx, msg, true)
-	slog.Error("sinks.acked: the collector refused an audit batch definitively; delivery is halted until wardynd restarts",
+	slog.Error("sinks.acked: the collector refused an audit batch definitively; delivery is halted until wardynd restarts or another replica takes over delivery",
 		"destination", AckedDestination, "error", msg)
 }
 

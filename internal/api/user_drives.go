@@ -750,10 +750,11 @@ func (s *Server) handleDeleteUserDrive(w http.ResponseWriter, r *http.Request) {
 // all TRI-STATE pointers, lives there.
 type userDriveGrantRequest = client.DriveGrantRequest
 
-// handleUpsertUserDriveGrant allocates one drive to one subject, keyed on the
-// natural (subject_type, subject): re-allocating a subject REPOINTS its single
-// row rather than accumulating a second — which is also what makes "one drive
-// per principal" true in the schema and not only in the resolver's LIMIT 1.
+// handleUpsertUserDriveGrant allocates one drive to one subject and REPLACES
+// the subject's allocation: re-allocating repoints the subject's row rather than
+// accumulating a second, so the admin's last write decides which drive they
+// get. With `additional` the drive is allocated beside the subject's others
+// instead (writeUserDriveGrant; migration 0169 keys on subject and drive).
 //
 // 201 for a genuinely new allocation, 200 when an existing one was repointed —
 // the same created/updated signal handleUpsertGovernanceAssignment gives,
@@ -859,7 +860,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	}
 	g.ID = uuid.New()
 	g.CreatedBy = principalFromRequest(r)
-	saved, err := s.cfg.Store.UpsertUserDriveGrant(r.Context(), g, homeOverrideStated)
+	saved, removed, err := s.writeUserDriveGrant(r.Context(), g, homeOverrideStated, req.Additional)
 	// ErrNotFound here is the FK refusing an unknown drive_id — a 404 naming the
 	// drive, not a 500, and not a silent no-op.
 	if notFoundIf(w, err, "user drive", reasonUserDriveNotFound) {
@@ -891,17 +892,22 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	// directory NAME on a corporate share, which is their username as often as
 	// not. Whether an admin pinned one is the governance fact; what they pinned
 	// it to is in the row, readable by anyone who may read the row.
+	data := map[string]any{
+		"subject_type":      saved.SubjectType,
+		"subject":           saved.Subject,
+		"drive_id":          saved.DriveID,
+		"priority":          saved.Priority,
+		"size_mib_override": saved.SizeMiBOverride,
+		"writable_override": saved.WritableOverride,
+		"home_override_set": saved.HomeOverride != "",
+		"enabled":           saved.Enabled,
+	}
+	// A replacing write that took drives away from the subject says which.
+	if len(removed) > 0 {
+		data["removed_drive_ids"] = removed
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"drive.grant.write", saved.ID.String(), "success", mustJSON(map[string]any{
-			"subject_type":      saved.SubjectType,
-			"subject":           saved.Subject,
-			"drive_id":          saved.DriveID,
-			"priority":          saved.Priority,
-			"size_mib_override": saved.SizeMiBOverride,
-			"writable_override": saved.WritableOverride,
-			"home_override_set": saved.HomeOverride != "",
-			"enabled":           saved.Enabled,
-		})))
+		"drive.grant.write", saved.ID.String(), "success", mustJSON(data)))
 	writeJSON(w, status, saved)
 }
 

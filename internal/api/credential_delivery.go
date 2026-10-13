@@ -40,7 +40,9 @@ func deliveryPolicyOf(raw json.RawMessage) (placement.DeliveryPolicy, error) {
 // storedDeliveryPolicy reads the document every local eligibility decision is judged on. A store
 // without it is the default: every class refuses.
 func (s *Server) storedDeliveryPolicy(ctx context.Context) (placement.DeliveryPolicy, error) {
-	st, ok := s.cfg.Store.(store.RunnerStore)
+	st, ok := s.cfg.Store.(interface {
+		GetCredentialDeliveryPolicy(context.Context) (types.CredentialDeliveryPolicyDoc, error)
+	})
 	if !ok {
 		return placement.DeliveryPolicy{Classes: map[string]placement.ClassPolicy{}}, nil
 	}
@@ -48,7 +50,16 @@ func (s *Server) storedDeliveryPolicy(ctx context.Context) (placement.DeliveryPo
 	if err != nil {
 		return placement.DeliveryPolicy{}, err
 	}
-	return deliveryPolicyOf(doc.Policy)
+	p, err := deliveryPolicyOf(doc.Policy)
+	if err != nil {
+		return placement.DeliveryPolicy{}, err
+	}
+	// Both writers validate, but a document written out of band or by another version is judged
+	// before it decides anything: an invalid one fails every door closed.
+	if err := p.Validate(); err != nil {
+		return placement.DeliveryPolicy{}, fmt.Errorf("stored credential delivery policy: %w", err)
+	}
+	return p, nil
 }
 
 // handleGetCredentialDelivery returns the stored document. securityOps (routes.go).

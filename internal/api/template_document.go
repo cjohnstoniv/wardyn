@@ -393,7 +393,7 @@ func documentAvailabilityRefusal(req createRunRequest) []string {
 		paths = append(paths, "allowed_image")
 	}
 	for i, ref := range req.Components {
-		if ref.Builtin != "" {
+		if ref.Builtin == types.ComponentBuiltinAzureDevOps {
 			paths = append(paths, fmt.Sprintf("components[%d]", i))
 		}
 	}
@@ -444,20 +444,66 @@ func templateIncludes(doc client.TemplateDocument) []client.TemplatePart {
 	return sortedKeys(parts)
 }
 
+// templatePolicyKeys are the inline_policy keys a policy may hold: the
+// carried, run-wide keys of the network, credential and access-rule parts,
+// read from the registry. TestTemplatePolicyKeysArePinned holds the set.
+func templatePolicyKeys() []string {
+	var keys []string
+	for _, r := range templatePolicyRules {
+		policyPart := r.Part == client.TemplatePartEgress || r.Part == client.TemplatePartCredentials || r.Part == client.TemplatePartAccessRules
+		if policyPart && r.Section == templateSectionRunWide && r.Excluded == "" && r.Pending == "" {
+			keys = append(keys, r.Name)
+		}
+	}
+	return keys
+}
+
+// templatePolicyKindRefusals holds a door-normalised document to the policy
+// kind: its intent is inline_policy alone, holding only templatePolicyKeys, and
+// it is partial with nothing left for setup (it is laid onto the user's
+// defaults, so it never stands alone).
+func templatePolicyKindRefusals(doc client.TemplateDocument) []client.TemplateDiagnostic {
+	d := &templateDecoder{}
+	refuse := func(path string) { d.add(path, reasonTemplatePolicyFieldRefused, templatePolicyFieldRefusedMsg(path)) }
+	for _, name := range doc.Intent.Names() {
+		if name != "inline_policy" {
+			refuse("intent." + name)
+		}
+	}
+	var spec map[string]json.RawMessage
+	_ = json.Unmarshal(doc.Intent.Raw("inline_policy"), &spec)
+	allowed := templatePolicyKeys()
+	for _, key := range sortedKeys(spec) {
+		if !slices.Contains(allowed, key) {
+			refuse("intent.inline_policy." + key)
+		}
+	}
+	if len(spec) == 0 {
+		d.invalid("intent.inline_policy", "must hold at least one network, credential or access rule")
+	}
+	if doc.Coverage != client.TemplateCoveragePartial {
+		d.invalid("coverage", "must be partial: a policy is laid onto your defaults")
+	}
+	if len(doc.NeedsSetup) > 0 {
+		d.invalid("needs_setup", "must be empty for a policy")
+	}
+	return d.diags
+}
+
 // templateReasonStatus is the HTTP status of a template refusal reason. The
 // storage lane's handlers answer through it.
 func templateReasonStatus(reason string) int {
 	switch reason {
 	case reasonTemplateNotFound:
 		return http.StatusNotFound
-	case reasonTemplateRevisionConflict:
+	case reasonTemplateRevisionConflict, reasonTemplateNameTaken, reasonTemplateLimitReached:
 		return http.StatusConflict
 	case reasonTemplatesUnavailable:
 		return http.StatusNotImplemented
 	case reasonTemplateScopeForbidden, reasonTemplateGroupUnverified:
 		return http.StatusForbidden
 	case reasonTemplateFieldUnavailable, reasonTemplateVersionUnsupported, reasonTemplateDependencyMissing,
-		reasonTemplateCoverageInvalid, reasonTemplateSharedFieldRefused:
+		reasonTemplateCoverageInvalid, reasonTemplateSharedFieldRefused, reasonTemplatePolicyFieldRefused:
 		return http.StatusUnprocessableEntity
 	}
 	return http.StatusBadRequest

@@ -277,10 +277,12 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 		})
 }
 
-// UpsertUserDriveGrant allocates one drive to one subject, keyed on UNIQUE(subject_type, subject):
-// re-allocating REPOINTS the existing row rather than leaving a second one, so a subject's
-// allocation is always the admin's last write. On conflict the returned id is the EXISTING row's,
-// not g.ID. Returns ErrNotFound when drive_id names no drive (FK, 23503).
+// UpsertUserDriveGrant allocates one drive to one subject and REPLACES whatever the subject was
+// allocated before: the subject ends with exactly this drive, and an existing row is repointed
+// rather than a second left beside it, so the admin's last write decides which drive the subject
+// gets. Since migration 0169 a subject may hold several rows (AddUserDriveGrant); this keeps one,
+// repoints it, and removes the others, in one transaction. On a repoint the returned id is the
+// EXISTING row's, not g.ID. Returns ErrNotFound when drive_id names no drive (FK, 23503).
 //
 // SECURITY: refuses (ErrConflict) if another subject already holds the same home_override in the
 // same object-name NAMESPACE (host_root, not drive — see shareBackend) — one home_override must
@@ -302,10 +304,78 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 // returned, read as ErrConflict); stating it IS the confirmation, no ?confirm= to invent. The zero
 // value is safe — a caller that forgets the argument gets a refusal, not a silent clear.
 func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error) {
+	out, _, err := s.ReplaceUserDriveGrant(ctx, g, homeOverrideStated)
+	return out, err
+}
+
+// ReplaceUserDriveGrant is UpsertUserDriveGrant that also returns the drives the subject lost:
+// the drive ids of the rows it removed and of the kept row's drive before the repoint.
+func (s PG) ReplaceUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, []uuid.UUID, error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return types.UserDriveGrant{}, nil, fmt.Errorf("store: begin drive grant write: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	// Serialises replacing writes for one subject, including the first one for
+	// a subject with no row yet, which the FOR UPDATE below has nothing to lock:
+	// without it two concurrent replaces both insert and the subject keeps both.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('user_drive_grants:' || $1 || '/' || $2, 0))`,
+		g.SubjectType, g.Subject); err != nil {
+		return types.UserDriveGrant{}, nil, fmt.Errorf("store: lock drive grants: %w", err)
+	}
+	var keep, keptDrive uuid.UUID
+	var removed []uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT id, drive_id FROM user_drive_grants WHERE subject_type = $1 AND subject = $2
+		ORDER BY (drive_id = $3) DESC, created_at, id LIMIT 1 FOR UPDATE`, g.SubjectType, g.Subject, g.DriveID).Scan(&keep, &keptDrive)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return types.UserDriveGrant{}, nil, fmt.Errorf("store: read drive grants: %w", err)
+	default:
+		rows, err := tx.Query(ctx, `DELETE FROM user_drive_grants WHERE subject_type = $1 AND subject = $2 AND id <> $3 RETURNING drive_id`,
+			g.SubjectType, g.Subject, keep)
+		if err == nil {
+			removed, err = pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+		}
+		if err != nil {
+			return types.UserDriveGrant{}, nil, fmt.Errorf("store: replace drive grants: %w", err)
+		}
+		if keptDrive != g.DriveID {
+			removed = append(removed, keptDrive)
+			if _, err := tx.Exec(ctx, `UPDATE user_drive_grants SET drive_id = $2 WHERE id = $1`, keep, g.DriveID); err != nil {
+				return types.UserDriveGrant{}, nil, grantWriteErr(err)
+			}
+		}
+	}
+	out, err := upsertUserDriveGrant(ctx, tx, g, homeOverrideStated)
+	if err != nil {
+		return types.UserDriveGrant{}, nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.UserDriveGrant{}, nil, fmt.Errorf("store: commit drive grant write: %w", err)
+	}
+	return out, removed, nil
+}
+
+// AddUserDriveGrant allocates one drive to one subject BESIDE the subject's other drives, keyed
+// on UNIQUE(subject_type, subject, drive_id) (migration 0169): writing the same subject and drive
+// again updates that row and returns its id; another drive is another row. The guards and error
+// mapping are UpsertUserDriveGrant's.
+func (s PG) AddUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error) {
+	return upsertUserDriveGrant(ctx, s.Pool, g, homeOverrideStated)
+}
+
+// rowQuerier is the one call upsertUserDriveGrant makes, on a pool or a transaction.
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// upsertUserDriveGrant is the guarded per-(subject, drive) write both grant verbs share.
+func upsertUserDriveGrant(ctx context.Context, q rowQuerier, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error) {
 	if g.ID == uuid.Nil {
 		g.ID = uuid.New()
 	}
-	const q = `
+	const stmt = `
 		INSERT INTO user_drive_grants (id, subject_type, subject, drive_id, priority,
 			size_mib_override, writable_override, home_override, enabled, created_by)
 		SELECT $1::uuid,$2::text,$3::text,$4::uuid,$5::int,$6::int,$7::boolean,$8::text,$9::boolean,$10::text
@@ -320,39 +390,44 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, ho
 			       OR (nd.backend = '` + shareBackend + `' AND od.backend = '` + shareBackend + `'
 			           AND nd.host_root <> '' AND od.host_root = nd.host_root))
 		)
-		ON CONFLICT (subject_type, subject) DO UPDATE
-			SET drive_id = EXCLUDED.drive_id, priority = EXCLUDED.priority,
+		ON CONFLICT (subject_type, subject, drive_id) DO UPDATE
+			SET priority = EXCLUDED.priority,
 			    size_mib_override = EXCLUDED.size_mib_override,
 			    writable_override = EXCLUDED.writable_override,
 			    home_override = EXCLUDED.home_override, enabled = EXCLUDED.enabled
 			WHERE $11::boolean OR user_drive_grants.home_override = ''
 		RETURNING ` + userDriveGrantCols
-	out, err := scanUserDriveGrant(s.Pool.QueryRow(ctx, q,
+	out, err := scanUserDriveGrant(q.QueryRow(ctx, stmt,
 		g.ID, g.SubjectType, g.Subject, g.DriveID, g.Priority,
 		g.SizeMiBOverride, g.WritableOverride, g.HomeOverride, g.Enabled, g.CreatedBy,
 		homeOverrideStated))
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
-			return types.UserDriveGrant{}, ErrNotFound
-		}
-		// 23505 is the same guard, won by the database on a race between two concurrent inserts
-		// that both passed NOT EXISTS. Must map to the same refusal as the single-threaded path, or
-		// the race's loser gets a raw driver error. Not reachable by a Go fixture; internal/db's own
-		// test asserts the SQLSTATE and this maps it.
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return types.UserDriveGrant{}, ErrConflict
-		}
-		// No rows means one of the two guards fired (FK handled above, natural key absorbed by ON
-		// CONFLICT). The two are mutually exclusive by construction — the INSERT guard needs a
-		// non-empty home_override, the UPDATE guard is disabled by a stated one — so
-		// homeOverrideStated alone tells them apart without a second read.
-		if errors.Is(err, ErrNotFound) {
-			return types.UserDriveGrant{}, ErrConflict
-		}
-		return types.UserDriveGrant{}, err
+		return types.UserDriveGrant{}, grantWriteErr(err)
 	}
 	return out, nil
+}
+
+// grantWriteErr maps a grant write's failure onto the store's refusals.
+func grantWriteErr(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		return ErrNotFound
+	}
+	// 23505 is the same guard, won by the database on a race between two concurrent inserts
+	// that both passed NOT EXISTS. Must map to the same refusal as the single-threaded path, or
+	// the race's loser gets a raw driver error. Not reachable by a Go fixture; internal/db's own
+	// test asserts the SQLSTATE and this maps it.
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return ErrConflict
+	}
+	// No rows means one of the two guards fired (FK handled above, natural key absorbed by ON
+	// CONFLICT). The two are mutually exclusive by construction — the INSERT guard needs a
+	// non-empty home_override, the UPDATE guard is disabled by a stated one — so
+	// homeOverrideStated alone tells them apart without a second read.
+	if errors.Is(err, ErrNotFound) {
+		return ErrConflict
+	}
+	return fmt.Errorf("store: write drive grant: %w", err)
 }
 
 // DeleteUserDriveGrant removes one grant by id and returns it (ErrNotFound if

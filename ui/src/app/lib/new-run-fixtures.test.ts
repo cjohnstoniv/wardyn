@@ -33,7 +33,6 @@ describe("New Run fixtures", () => {
 
   it("answers the way the server does: arrays, known reasons, sentences the server would send", () => {
     for (const f of NEW_RUN_FIXTURES) {
-      expect(f.preview.resources ?? [], f.route).toBeInstanceOf(Array);
       expect(f.preview.allowed_images, f.route).toBeInstanceOf(Array);
       for (const row of f.preview.local_placement ?? []) {
         if (!row.local_placeable) expect(PLACEMENT_REASONS, f.route).toContain(row.reason);
@@ -126,8 +125,10 @@ describe("New Run fixtures", () => {
     expect(wire("v17/repos-none-chosen").no_repositories_or_drives).toBe(true);
     // A removed attachment is repaired, not silently switched.
     expect(newRunFixture("v16/starting-folder-missing").refusal?.reason).toBe(RUN_MODE_REASON.START_FOLDER_INVALID);
-    // What the server cannot honour yet is drawn as the refusal it answers.
-    for (const route of ["v16/interactive-empty", "v16/interactive-multiple", "v19/harness-rules", "v16/starting-folder"]) {
+    // A starting folder inside an attachment is honoured; what the server cannot
+    // honour yet is drawn as the refusal it answers.
+    expect(newRunFixture("v16/starting-folder").refusal).toBeUndefined();
+    for (const route of ["v16/interactive-empty", "v16/interactive-multiple", "v19/harness-rules"]) {
       expect(newRunFixture(route).refusal?.reason, route).toBe(NEW_RUN_REASON.REQUEST_FIELD_UNAVAILABLE);
     }
     expect(newRunFixture("v16/mode-unset").tab).toBe("runner");

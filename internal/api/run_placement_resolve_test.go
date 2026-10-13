@@ -4,8 +4,11 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -74,7 +77,7 @@ func TestPlacement_PoolIntersectionNeverWidens(t *testing.T) {
 func TestPlacement_PoolBindingNeverWidensEvidenceOrBarrier(t *testing.T) {
 	runA, runB := uuid.New(), uuid.New()
 	pool := uuid.New()
-	local := runPlacement{pooled: true, pool: types.ResolvedRunnerPool{ID: pool, Name: "Laptops", HostingType: types.RunnerPoolSelfHosted, Revision: 3, Selection: types.RunnerPoolSelectedPersonal},
+	local := runPlacement{pooled: true, pool: types.ResolvedRunnerPool{ID: pool, Name: "Laptops", Scope: types.RunnerPoolUser, Revision: 3, Selection: types.RunnerPoolSelectedPersonal},
 		placement: types.PlacementLocal, filled: true,
 		eligible: []poolTarget{
 			{id: runA.String(), runnerID: &runA, facts: runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1}}},
@@ -96,7 +99,7 @@ func TestPlacement_PoolBindingNeverWidensEvidenceOrBarrier(t *testing.T) {
 		t.Fatalf("no bound target enforces CC2, got %v", r)
 	}
 
-	remote := runPlacement{pooled: true, pool: types.ResolvedRunnerPool{ID: pool, Name: "Remote", HostingType: types.RunnerPoolRemoteProvided, Selection: types.RunnerPoolSelectedOrg},
+	remote := runPlacement{pooled: true, pool: types.ResolvedRunnerPool{ID: pool, Name: "Remote", Scope: types.RunnerPoolOrganization, Selection: types.RunnerPoolSelectedOrg},
 		placement: types.PlacementRemote, eligible: []poolTarget{target("docker", false, false, 0, 0, types.CC2)}}
 	run := types.AgentRun{ID: uuid.New()}
 	if r := remote.apply(&run, types.CC2); r != nil || run.RunnerID != nil || run.RunnerPoolExecutor != "docker" || run.EvidenceSource != types.RunEvidenceSubstrate || run.PlacementFilled {
@@ -128,15 +131,15 @@ func TestPlacement_OfflineCandidateRefuses(t *testing.T) {
 	if got, _ := eligibleTargets([]poolTarget{exec}, demand(types.CC1, "", 1000, 1000)); len(got) != 1 {
 		t.Fatalf("an executor with no advertised bound was refused")
 	}
-	if r := targetRefusal(placement.ReasonRunnerOffline, "Laptops", types.RunnerPoolSelfHosted); r.status != http.StatusUnprocessableEntity || r.body.Reason != "runner_offline" {
+	if r := targetRefusal(placement.ReasonRunnerOffline, "Laptops", types.RunnerPoolUser); r.status != http.StatusUnprocessableEntity || r.body.Reason != "runner_offline" {
 		t.Fatalf("offline refusal = %+v", r)
 	}
-	if r := targetRefusal(placement.ReasonRunnerOffline, "Remote", types.RunnerPoolRemoteProvided); r.body.Reason != string(runnerpool.ReasonNoEligibleMember) {
+	if r := targetRefusal(placement.ReasonRunnerOffline, "Remote", types.RunnerPoolOrganization); r.body.Reason != string(runnerpool.ReasonNoEligibleMember) {
 		t.Fatalf("remote offline is no eligible member, got %+v", r)
 	}
 }
 
-// §6.2, with pools: one placement is on offer, so the table is run for it.
+// §6.2, with pools: the table is run for the kinds of runner the pool holds.
 func TestPlacementForTable(t *testing.T) {
 	two := []string{"a", "b"}
 	offers := func(remote, local placementOffer) map[types.Placement]placementOffer {
@@ -154,10 +157,8 @@ func TestPlacementForTable(t *testing.T) {
 			placementDecision{Placement: types.PlacementRemote, Filled: true, Targets: two}},
 		{"empty, only local", placement.Request{}, offers(none(""), placementOffer{Targets: two}), nil,
 			placementDecision{Placement: types.PlacementLocal, Filled: true, Targets: two}},
-		{"empty, both", placement.Request{}, offers(placementOffer{Targets: two}, placementOffer{Targets: two}), nil,
-			placementDecision{Refusal: placement.ReasonPlacementRequired}},
-		{"empty, none names the first refusal", placement.Request{}, offers(none(placement.ReasonRunnerOffline), none(placement.ReasonPlacementCapability)), nil,
-			placementDecision{Refusal: placement.ReasonRunnerOffline}},
+		{"empty, none names the first refusal, the person's own runners first", placement.Request{}, offers(none(placement.ReasonRunnerOffline), none(placement.ReasonPlacementCapability)), nil,
+			placementDecision{Refusal: placement.ReasonPlacementCapability}},
 		{"empty, none and no reason", placement.Request{}, map[types.Placement]placementOffer{}, nil,
 			placementDecision{Refusal: placement.ReasonPlacementUnavailable}},
 		{"remote not eligible", placement.Request{Placement: types.PlacementRemote}, offers(none(""), placementOffer{Targets: two}), nil,
@@ -184,6 +185,87 @@ func TestPlacementForTable(t *testing.T) {
 	}
 }
 
+// RP-2 DONE 5: a mixed pool puts an unasked run on the person's own runner when one of them has room, and
+// on a remote-hosted runner otherwise; a placement the request asks for, or a pin, fixes the kind whatever
+// the room, and a denied kind is never chosen.
+func TestPlacementForUnasked_SelfHostedFirstThenRemote(t *testing.T) {
+	own, remote := []string{"laptop"}, []string{"alpha"}
+	mixed := func(ownRoom bool) map[types.Placement]placementOffer {
+		return map[types.Placement]placementOffer{
+			types.PlacementLocal:  {Targets: own, Room: ownRoom},
+			types.PlacementRemote: {Targets: remote, Room: true},
+		}
+	}
+	onlyOwn := map[types.Placement]placementOffer{types.PlacementLocal: {Targets: own}}
+	for _, tc := range []struct {
+		name   string
+		req    placement.Request
+		offers map[types.Placement]placementOffer
+		denied []types.Placement
+		want   placementDecision
+	}{
+		{"own runner has room", placement.Request{}, mixed(true), nil,
+			placementDecision{Placement: types.PlacementLocal, Filled: true, Targets: own}},
+		{"own runners have no room", placement.Request{}, mixed(false), nil,
+			placementDecision{Placement: types.PlacementRemote, Filled: true, Targets: remote}},
+		{"own runners only, no room: they are still the kind, the run waits for one", placement.Request{}, onlyOwn, nil,
+			placementDecision{Placement: types.PlacementLocal, Filled: true, Targets: own}},
+		{"own runner has room, local denied", placement.Request{}, mixed(true), []types.Placement{types.PlacementLocal},
+			placementDecision{Placement: types.PlacementRemote, Filled: true, Targets: remote}},
+		{"own runners have no room, remote denied", placement.Request{}, mixed(false), []types.Placement{types.PlacementRemote},
+			placementDecision{Placement: types.PlacementLocal, Filled: true, Targets: own}},
+		{"asked remote while an own runner has room", placement.Request{Placement: types.PlacementRemote}, mixed(true), nil,
+			placementDecision{Placement: types.PlacementRemote, Targets: remote}},
+		{"asked local while no own runner has room", placement.Request{Placement: types.PlacementLocal}, mixed(false), nil,
+			placementDecision{Placement: types.PlacementLocal, Targets: own}},
+		{"a pin fixes the kind and the runner", placement.Request{Placement: types.PlacementLocal, RunnerID: "laptop"}, mixed(false), nil,
+			placementDecision{Placement: types.PlacementLocal, Targets: own}},
+	} {
+		got := placementFor(tc.req, tc.offers, tc.denied)
+		a, _ := json.Marshal(got)
+		b, _ := json.Marshal(tc.want)
+		if string(a) != string(b) {
+			t.Errorf("%s: %s, want %s", tc.name, a, b)
+		}
+	}
+	if o := offerOf([]poolTarget{{id: "a", full: true}, {id: "b"}}, ""); !o.Room {
+		t.Error("an offer with one runner below its max_runs has room")
+	}
+	if o := offerOf([]poolTarget{{id: "a", full: true}}, ""); o.Room {
+		t.Error("an offer whose every runner holds its max_runs has no room")
+	}
+}
+
+// A run with drives goes to the pool's remote-hosted runners when it has some, as no drive mounts on a
+// person's own runner; a pool with none keeps the person's own runners for the drive step to refuse,
+// as does a request that asks for its own runner.
+func TestKindTargets_DrivesKeepRemoteWhenThePoolHasIt(t *testing.T) {
+	s := &Server{}
+	laptop := uuid.New()
+	own := poolTarget{id: laptop.String(), runnerID: &laptop}
+	remote := poolTarget{id: "alpha", executor: "alpha"}
+	pool := types.RunnerPool{Name: "Mixed", Scope: types.RunnerPoolUser}
+	for _, tc := range []struct {
+		name    string
+		asked   types.Placement
+		targets []poolTarget
+		want    []types.Placement
+	}{
+		{"mixed pool", "", []poolTarget{own, remote}, []types.Placement{types.PlacementRemote}},
+		{"own runners only", "", []poolTarget{own}, []types.Placement{types.PlacementLocal}},
+		{"asked for its own runner", types.PlacementLocal, []poolTarget{own, remote}, []types.Placement{types.PlacementLocal}},
+	} {
+		kinds, refusal := s.kindTargets(context.Background(), placementInput{req: &createRunRequest{Placement: tc.asked}, drives: true}, pool, tc.targets)
+		if refusal != nil {
+			t.Fatalf("%s: %+v", tc.name, refusal)
+		}
+		got := slices.Sorted(maps.Keys(kinds))
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: kinds %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 // A store that cannot hold pools keeps today's unpooled behaviour: a run without a pool is created with
 // no binding, and a run that names a pool is refused in the pool vocabulary, never silently unpooled.
 func TestPlacement_StoreWithoutPoolsKeepsUnpooledBehaviour(t *testing.T) {
@@ -205,5 +287,44 @@ func TestPlacement_StoreWithoutPoolsKeepsUnpooledBehaviour(t *testing.T) {
 		if w.Code != http.StatusNotImplemented || errorReason(w) != string(runnerpool.ReasonPoolsUnavailable) {
 			t.Errorf("%s: %d %s", door, w.Code, w.Body)
 		}
+	}
+}
+
+// bind keeps the runner a run was already bound to (the one its promotion found room on) whenever that
+// runner can still take it, rather than re-picking by the run id.
+func TestBindKeepsThePreferredRunner(t *testing.T) {
+	a, b := uuid.New(), uuid.New()
+	p := runPlacement{pooled: true, eligible: []poolTarget{
+		{id: a.String(), runnerID: &a, facts: runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1}}},
+		{id: b.String(), runnerID: &b, facts: runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1}}},
+	}}
+	runID := uuid.New()
+	picked, refusal := p.bind(runID, types.CC1, nil)
+	if refusal != nil || picked.runnerID == nil {
+		t.Fatalf("bind = %+v %+v", picked, refusal)
+	}
+	other := a
+	if *picked.runnerID == a {
+		other = b
+	}
+	if got, _ := p.bind(runID, types.CC1, &other); got.runnerID == nil || *got.runnerID != other {
+		t.Fatalf("bind preferring %s = %v; want the preferred runner kept", other, got.runnerID)
+	}
+	gone := uuid.New()
+	if got, _ := p.bind(runID, types.CC1, &gone); got.runnerID == nil || *got.runnerID != *picked.runnerID {
+		t.Fatalf("bind preferring a runner no longer eligible = %v; want the run's own pick %s", got.runnerID, *picked.runnerID)
+	}
+}
+
+// A promoted start falls back only to the run's other runners that enforce its class, never to the one it
+// was bound to or to a runner that cannot hold its barrier.
+func TestOtherRunnersAreTheClassCapableOthers(t *testing.T) {
+	bound, able, weak := uuid.New(), uuid.New(), uuid.New()
+	target := func(id uuid.UUID, classes ...types.ConfinementClass) poolTarget {
+		return poolTarget{id: id.String(), runnerID: &id, facts: runner.TargetFacts{Classes: classes}}
+	}
+	p := runPlacement{pooled: true, eligible: []poolTarget{target(bound, types.CC1, types.CC2), target(able, types.CC1, types.CC2), target(weak, types.CC1)}}
+	if got := p.otherRunners(types.CC2, &bound); len(got) != 1 || got[0] != able {
+		t.Fatalf("fallbacks for a CC2 run bound to %s = %v, want only %s", bound, got, able)
 	}
 }

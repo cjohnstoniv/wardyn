@@ -6,7 +6,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"regexp"
@@ -47,6 +46,11 @@ type buildState struct {
 	// Build again or wardynd restarted. Never serialised — it is an internal
 	// freshness fact, not something a caller can act on.
 	Key string `json:"-"`
+	// Refresh marks the entry of a build asked for with {"refresh": true}. It outlives the
+	// build (until the next begin) so GET /build keeps answering for a workspace whose
+	// state the row alone cannot report: a refreshed byoi base reads `nothing_to_build`
+	// without it.
+	Refresh bool `json:"-"`
 }
 
 type buildTracker struct {
@@ -74,7 +78,7 @@ func (t *buildTracker) get(id uuid.UUID) buildState {
 // begin claims the single-flight slot; ok=false when a build is already
 // running for this workspace. A fresh buildState means a fresh (empty) Log —
 // a retried build's pane starts clean, not appended to the failed attempt's.
-func (t *buildTracker) begin(id uuid.UUID, now time.Time) bool {
+func (t *buildTracker) begin(id uuid.UUID, now time.Time, refresh bool) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.by == nil {
@@ -83,7 +87,7 @@ func (t *buildTracker) begin(id uuid.UUID, now time.Time) bool {
 	if st, ok := t.by[id]; ok && st.Building {
 		return false
 	}
-	t.by[id] = &buildState{Building: true, StartedAt: now}
+	t.by[id] = &buildState{Building: true, StartedAt: now, Refresh: refresh}
 	return true
 }
 
@@ -131,10 +135,11 @@ func (t *buildTracker) finish(id uuid.UUID, image, errMsg string) {
 	// debugging story for a failure, so it must survive Building true->false.
 	var log []string
 	var key string
+	var refresh bool
 	if st, ok := t.by[id]; ok {
-		log, key = st.Log, st.Key
+		log, key, refresh = st.Log, st.Key, st.Refresh
 	}
-	t.by[id] = &buildState{Building: false, Image: image, Error: errMsg, Log: log, Key: key}
+	t.by[id] = &buildState{Building: false, Image: image, Error: errMsg, Log: log, Key: key, Refresh: refresh}
 }
 
 const (
@@ -308,12 +313,24 @@ func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) bu
 	// exists and has a build record, so the row-derived `done` below answers
 	// instead: "no build involved" would be false, and the record would never show.
 	key, keyed := s.workspaceBuiltImageKey(ws)
+	st := s.builds.get(ws.ID)
+	// A refresh's own entry answers before the explicit-image branch below: a refreshed base
+	// has nothing the row could report while it builds, and a failed refresh would otherwise
+	// read `nothing_to_build`. A finished refresh is answered by the row, like any build: its
+	// image_ref and key are what a rescan invalidates.
+	if st.Refresh {
+		switch {
+		case st.Building:
+			return buildResponse{State: "building", StartedAt: &st.StartedAt, Log: buildLog(st.Log)}
+		case st.Error != "" && st.Key == key:
+			return buildResponse{State: "failed", Detail: builderError(st.Error), Log: buildLog(st.Log)}
+		}
+	}
 	wrapped := keyed && ws.ImageRef != "" && ws.BuiltProfileHash == key
 	if b := ws.BaseImage; b != nil && b.Kind != "recommended" && b.Kind != "custom" && b.Image != "" && s.cfg.ImageBuilder != nil && !wrapped {
 		return buildResponse{State: "nothing_to_build", Image: authoredImage(b.Image),
 			Detail: "this image boots as-is — no build involved"}
 	}
-	st := s.builds.get(ws.ID)
 	switch {
 	case st.Building:
 		return buildResponse{State: "building", StartedAt: &st.StartedAt, Log: buildLog(st.Log)}
@@ -418,6 +435,10 @@ func (s *Server) handleGetWorkspaceBuild(w http.ResponseWriter, r *http.Request)
 // so the cache/hash/audit semantics are exactly the run path's — a session
 // launched after a successful build hits the cache and starts immediately.
 //
+// The optional body {"refresh": true} rebuilds a `done` or `nothing_to_build` workspace from
+// fresh inputs and swaps the result in only if no other build replaced the image meanwhile.
+// An empty body is the plain build.
+//
 //	POST /api/v1/workspaces/{id}/build
 func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "workspace")
@@ -428,9 +449,13 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	refresh, ok := readBuildRefresh(w, r)
+	if !ok {
+		return
+	}
 	tier := s.workspaceReadTierFor(r, ws)
 	view := s.resolveBuildView(ws, tier)
-	if view.State == "nothing_to_build" || view.State == "done" {
+	if !refresh && (view.State == "nothing_to_build" || view.State == "done") {
 		writeJSON(w, http.StatusOK, s.withBuildRecord(r.Context(), view, ws, tier))
 		return
 	}
@@ -439,7 +464,7 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 	// SERVER-SIDE (repoOwnDevcontainerURL -> envbuilder). A workspace onboarded
 	// before a provider row narrowed it, or owned by a member whose grant was
 	// taken away, must not keep that clone running through the wizard's Build
-	// step. Sited after the two early returns above, which clone nothing.
+	// step. Sited after the early return above, which clones nothing.
 	if s.admitRepoSources(w, r, repoSourceLocators(ws.Sources)...) {
 		return
 	}
@@ -458,7 +483,7 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.cfg.Now().UTC()
-	if !s.builds.begin(ws.ID, now) {
+	if !s.builds.begin(ws.ID, now, refresh) {
 		already := s.builds.get(ws.ID)
 		writeJSON(w, http.StatusAccepted, buildResponse{State: "building", StartedAt: &already.StartedAt})
 		return
@@ -470,33 +495,38 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 	buildKey, _ := s.workspaceBuiltImageKey(ws)
 	s.builds.bindKey(ws.ID, buildKey)
 	buildID := uuid.New() // audit correlation for a build with no run
+	// The requester is read here, off the request: the goroutine below outlives it, and the
+	// refresh row it writes must name who asked. The previous record is read now too, before
+	// the build can move the row.
+	actorType, principal := actorTypeFromRequest(r), principalFromRequest(r)
+	var prev *types.ImageBuild
+	if refresh {
+		prev, _, _ = s.imageBuildView(r.Context(), ws)
+	}
 	go func() {
 		ctx := context.WithoutCancel(r.Context())
 		logSink := &buildLogWriter{t: &s.builds, id: ws.ID}
-		built, okBuild := s.resolveWorkspaceImage(ctx, buildID, ws, logSink, nil)
-		if !okBuild {
-			// resolveWorkspaceImage audited the specific failure under buildID —
-			// read it back so the wizard shows the REAL reason, not a pointer
-			// at the audit trail.
-			detail := "build failed — see the run.build audit trail for the reason"
-			if evs, qerr := s.cfg.Store.QueryAuditEvents(ctx, buildID, 5); qerr == nil {
-				for _, ev := range evs {
-					if ev.Action != "run.build" || ev.Outcome != "failure" {
-						continue
-					}
-					var d struct {
-						Error string `json:"error"`
-					}
-					if json.Unmarshal(ev.Data, &d) == nil && d.Error != "" {
-						detail = d.Error
-					}
-					break
-				}
-			}
-			s.builds.finish(ws.ID, "", detail)
-			return
+		res := s.resolveWorkspaceImageWith(ctx, buildID, ws, logSink, nil,
+			imageResolveOpts{Refresh: refresh, ObservedRef: ws.ImageRef, ReclaimLoser: true})
+		failure := ""
+		switch {
+		case res.OK:
+			s.builds.finish(ws.ID, res.Image, "")
+		case res.Superseded:
+			failure = refreshFailureSuperseded
+			s.builds.finish(ws.ID, "", supersededDetail(refresh))
+		default:
+			failure = refreshFailureBuild
+			s.builds.finish(ws.ID, "", s.buildFailureDetail(ctx, buildID))
 		}
-		s.builds.finish(ws.ID, built, "")
+		if refresh {
+			outcome := "success"
+			if failure != "" {
+				outcome = "failure"
+			}
+			s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, "workspace.image.refresh", ws.ID.String(), outcome,
+				refreshAuditData(principal, ws, buildID, res, prev, failure)))
+		}
 	}()
 	writeJSON(w, http.StatusAccepted, buildResponse{State: "building", StartedAt: &now})
 }

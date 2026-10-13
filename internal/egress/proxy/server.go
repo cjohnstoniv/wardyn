@@ -236,8 +236,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 
 	ap := newApprovalClient(cfg.ControlPlaneURL, ts, cfg.RunID, client)
 	// 0/absent for either knob keeps configureHold's built-in defaults (30s / 16).
-	ap.configureHold(cfg.Policy.FirstUseApproval.Normalize(),
-		time.Duration(cfg.Policy.FirstUseHoldSeconds)*time.Second, cfg.Policy.MaxHolds)
+	ap.configureHold(cfg.Policy.FirstUseApproval.Normalize(), time.Duration(cfg.Policy.FirstUseHoldSeconds)*time.Second, cfg.Policy.MaxHolds)
 
 	// Corporate CA trust (WARDYN_TRUSTED_CA_FILE): additive to the system
 	// roots for THIS sidecar's egress TLS. Each transport that may EDIT it
@@ -261,6 +260,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		BrokeredPATGrantIDs:  cfg.BrokeredPATGrantIDs,
 		ADOGrants:            newADOGrantsByHost(cfg.ADOGrant),
 		AzureGates:           cfg.AzureGates,
+		GitHubAPI:            cfg.GitHubAPI,
 		ControlPlaneURL:      cfg.ControlPlaneURL,
 		RunToken:             ts,
 		Upstream:             up,
@@ -278,7 +278,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ExclusionUnknown:     exclusionUnknown,
 		ViaOrgRoutes:         cfg.ViaOrgRoutes,
 	})
-	p.pushSets, p.pushBase, p.harnessRules, p.harnessCreds = cfg.PushRuleSets, compilePushRules(cfg.PushRuleBase), cfg.HarnessToolRules, cfg.HarnessCredentials
+	p.pushSets, p.pushBase, p.harnessRules, p.harnessCreds, p.mcp = cfg.PushRuleSets, compilePushRules(cfg.PushRuleBase), cfg.HarnessToolRules, cfg.HarnessCredentials, newMCPBroker(cfg.MCPServers, cfg.MCPBindings)
 	if ca != nil && len(cfg.MITMHosts) > 0 {
 		slog.InfoContext(ctx, "wardyn-proxy: TLS-MITM also enabled for operator-configured corp artifact host(s) (token injection)",
 			slog.Int("host_count", len(cfg.MITMHosts)))
@@ -336,6 +336,9 @@ func (s *Server) ListenAndServe() error {
 	return nil
 }
 
+// shutdownDrainReserve is the most of Shutdown's deadline held back for the sink drain.
+const shutdownDrainReserve = 2 * time.Second
+
 // Shutdown gracefully stops the HTTP server, stops the token renewer, and drains
 // the decision sink.
 func (s *Server) Shutdown(ctx context.Context) error {
@@ -343,7 +346,22 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.renewStop()
 		<-s.renewStopped
 	}
-	httpErr := s.http.Shutdown(ctx)
+	// Before http.Shutdown, which waits on open sandbox connections: the
+	// runtime's stop timeout may kill the process before anything after it.
+	s.proxy.revokeGitHubAPITokens(ctx)
+	// http.Shutdown waits on open sandbox connections for as long as it is allowed, so it gets only
+	// part of a deadline: the rest is the drain reserve, which the final rows (the memo flush
+	// below among them) need to reach the control plane. The drain context also outlives a
+	// cancelled ctx, so a signal that cancels the caller does not discard the audit tail.
+	reserve := shutdownDrainReserve
+	httpCtx := ctx
+	if dl, ok := ctx.Deadline(); ok {
+		reserve = min(max(time.Until(dl), 0)/4, shutdownDrainReserve)
+		var cancel context.CancelFunc
+		httpCtx, cancel = context.WithDeadline(ctx, dl.Add(-reserve))
+		defer cancel()
+	}
+	httpErr := s.http.Shutdown(httpCtx)
 	// End any open credential re-auth hold: its poll loop is detached from the
 	// request that opened it (so a hung-up SDK can't end a hold its owner is
 	// still signing in for), which also means nothing else would stop it
@@ -352,7 +370,15 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// Run end closes every open private-ip streak BEFORE the sink drains, so
 	// a repeat count that never hit the eviction path is still recorded.
 	s.proxy.flushPrivateIPMemo()
-	sinkErr := s.sink.close(ctx)
+	// The drain keeps whatever the caller's deadline still allows (at least the reserve): a backlog that
+	// outlasts the reserve on an idle proxy must still reach the control plane.
+	drain := reserve
+	if dl, ok := ctx.Deadline(); ok {
+		drain = max(time.Until(dl), reserve)
+	}
+	drainCtx, cancelDrain := context.WithTimeout(context.WithoutCancel(ctx), drain)
+	defer cancelDrain()
+	sinkErr := s.sink.close(drainCtx)
 	// An engine's own secrets leave with it, after its last row is masked: a
 	// close that gave up waiting leaves the sink's worker posting its queue, so
 	// the key is evicted only once that worker has finished. A sidecar's
@@ -363,10 +389,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			procRegistry.Evict(key)
 		}()
 	}
-	if httpErr != nil {
-		return httpErr
-	}
-	return sinkErr
+	return errors.Join(httpErr, sinkErr)
 }
 
 // Addr returns the configured listen address.

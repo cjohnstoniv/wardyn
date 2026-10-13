@@ -278,7 +278,9 @@ func (d *entraDirectory) searchAppRoles(ctx context.Context, q string) ([]Entry,
 	// A plain $filter query — no $search, so no ConsistencyLevel/$count pair needed.
 	if err := d.graphGet(ctx, "approles", "/servicePrincipals", v, false, &body); err != nil {
 		var pe *ProviderError
-		if errors.As(err, &pe) && (pe.Status == http.StatusForbidden || pe.Status == http.StatusUnauthorized) {
+		// Only the servicePrincipals call itself says the registration lacks the permission; a token-phase
+		// 401 is a credential problem for every kind and must not latch App Roles off.
+		if errors.As(err, &pe) && pe.Op == "approles" && (pe.Status == http.StatusForbidden || pe.Status == http.StatusUnauthorized) {
 			d.markAppRolesDenied(pe)
 			return nil, nil
 		}

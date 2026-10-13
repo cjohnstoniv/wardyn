@@ -8,7 +8,6 @@
 package runnerpool
 
 import (
-	"cmp"
 	"fmt"
 	"net/http"
 	"strings"
@@ -36,6 +35,11 @@ const (
 	// refusal: see Wait.
 	ReasonRunTypeNotAllowed Reason = "runner_pool_run_type_not_allowed"
 	ReasonBarrierNotAllowed Reason = "runner_pool_barrier_not_allowed"
+	// The pool queue's two refusals (a wait is never one: see Wait). QueueFull answers a create when the
+	// person already has the most runs waiting for the pool; Full answers a revive into a pool at its cap
+	// or with others waiting.
+	ReasonQueueFull Reason = "runner_pool_queue_full"
+	ReasonFull      Reason = "runner_pool_full"
 )
 
 var reasonStatus = map[Reason]int{
@@ -50,6 +54,25 @@ var reasonStatus = map[Reason]int{
 	ReasonPoolsUnavailable:   http.StatusNotImplemented,
 	ReasonRunTypeNotAllowed:  http.StatusUnprocessableEntity,
 	ReasonBarrierNotAllowed:  http.StatusUnprocessableEntity,
+	ReasonQueueFull:          http.StatusUnprocessableEntity,
+	ReasonFull:               http.StatusUnprocessableEntity,
+}
+
+// What a pool row's reason holds when the pool cannot take a run for the caller, beyond the refusal
+// reasons above: GET /runner-pools and the dry doors answer 200 with them. A launch on such a pool
+// answers the same token, except a pool whose own runners are all offline, which create answers
+// runner_offline with NoOnlineRunnerMsg. The two placement tokens are placement.Reason's.
+const (
+	AvailabilityNoOnlineRunner       Reason = "runner_pool_no_online_runner"
+	AvailabilityPlacementDenied      Reason = "placement_denied"
+	AvailabilityPlacementUnavailable Reason = "placement_unavailable"
+)
+
+// AvailabilityReasons is the closed set a pool row's reason may hold, in the order the list checks
+// them. runner-pool-refusals.ts repeats it as POOL_AVAILABILITY_REASONS.
+func AvailabilityReasons() []Reason {
+	return []Reason{ReasonUnavailable, AvailabilityPlacementDenied, AvailabilityPlacementUnavailable, ReasonNoEligibleMember,
+		AvailabilityNoOnlineRunner, ReasonRunTypeNotAllowed, ReasonNotFound}
 }
 
 // Status is the HTTP status the reason answers with; 0 for a reason outside the set.
@@ -67,17 +90,6 @@ func Reasons() []Reason {
 	return out
 }
 
-// HostingLabel is the name the console gives a hosting type.
-func HostingLabel(h types.RunnerPoolHosting) string {
-	switch h {
-	case types.RunnerPoolSelfHosted:
-		return "Self-Hosted"
-	case types.RunnerPoolRemoteProvided:
-		return "Remote Provided"
-	}
-	return ""
-}
-
 // The sentences. The console prints the server's sentence on a refusal, so each
 // has a TypeScript twin in runner-pool-refusals.ts, and
 // TestRefusalSentencesMatchGolden pins both to runner-pool-refusals.golden.json.
@@ -85,10 +97,8 @@ func HostingLabel(h types.RunnerPoolHosting) string {
 
 func InvalidMsg() string { return "runner_pool_id must be the id of a pool from your pool list." }
 
-// RequiredMsg names the hosting type when one is known and says "runner" otherwise.
-func RequiredMsg(label string) string {
-	return fmt.Sprintf("Choose a %s pool. No default pool applies to this run.", cmp.Or(label, "runner"))
-}
+// RequiredMsg: no pool was named and no default applies.
+func RequiredMsg() string { return "Choose a runner pool. No default pool applies to this run." }
 
 func NotFoundMsg() string { return "That pool isn't available to you. Choose one from the list." }
 
@@ -116,6 +126,18 @@ func NoOwnRunnerMsg(name string) string {
 	return fmt.Sprintf("None of your own runners in %s can run this right now.", name)
 }
 
+// NoOnlineRunnerMsg is the one sentence for a user pool whose own runners are all offline: the
+// pool list's reason, the dry doors' blocker and the create refusal.
+func NoOnlineRunnerMsg(name string) string {
+	return fmt.Sprintf("None of your runners in %s is online.", name)
+}
+
+// RunnerAtCapacityMsg is the create and preflight refusal (runner_at_capacity) for a run that would
+// start at once while each of the person's runners in the pool holds its max_runs.
+func RunnerAtCapacityMsg(name string) string {
+	return fmt.Sprintf("Your runners in %s are all running as many runs as they allow at once. Try again when one finishes, or raise Runs at once on your runner.", name)
+}
+
 // MemberMismatchMsg names the runner the caller asked for: their own runner's
 // name, or the id as they sent it. Never another person's runner's name; a
 // runner that is not the caller's is answered exactly like an unknown one.
@@ -123,8 +145,9 @@ func MemberMismatchMsg(runner, name string) string {
 	return fmt.Sprintf("%s is not one of your runners in %s.", runner, name)
 }
 
-func HostingMismatchMsg(name, label string) string {
-	return fmt.Sprintf("%s is a %s pool, so it can't be used with this runner choice.", name, label)
+// KindMismatchMsg: the pool has no runner of the kind the request's placement asks for.
+func KindMismatchMsg(name string) string {
+	return fmt.Sprintf("%s has no runner of the kind this run asks for. Choose another pool.", name)
 }
 
 func RunTypeNotAllowedMsg(name string, t types.RunnerPoolRunType) string {
@@ -149,3 +172,28 @@ func BarrierNotAllowedMsg(name string, asked types.ConfinementClass, allowed []t
 }
 
 func UnavailableServerMsg() string { return "This server does not manage runner pools yet." }
+
+// QueueFullMsg: the person already has n runs waiting for the pool.
+func QueueFullMsg(name string, n int) string {
+	return fmt.Sprintf("You already have %d runs waiting for %s. Cancel one or wait for one to start.", n, name)
+}
+
+// FullMsg: a revive finds the pool at its limit of n, or others waiting ahead of it.
+func FullMsg(name string, n int) string {
+	return fmt.Sprintf("%s is running its limit of %d, and others are waiting. Try again when one finishes.", name, n)
+}
+
+// OrgPoolSelfHostedMsg refuses a self-hosted runner offered to an organization pool.
+func OrgPoolSelfHostedMsg() string { return types.OrgPoolSelfHostedMsg }
+
+// RemoteNotConfiguredMsg refuses an administrator's add of a runner id this server is not set up with
+// as a remote-hosted runner, the id as they sent it.
+func RemoteNotConfiguredMsg(id string) string {
+	return fmt.Sprintf("%s isn't a remote-hosted runner this server is set up with.", id)
+}
+
+// RemoteNotAvailableMsg refuses a person's add of a remote-hosted runner to their own user pool when
+// its people policy does not admit them; an unknown id is answered the same, as they sent it.
+func RemoteNotAvailableMsg(id string) string {
+	return fmt.Sprintf("%s is not available to people's pools. Ask your admin to make it available.", id)
+}

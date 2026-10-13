@@ -92,7 +92,7 @@ func (b *recordingBuilder) BuildFromDevcontainerFiles(_ context.Context, files m
 	return b.built(tag), nil
 }
 
-func (b *recordingBuilder) FinalizeBase(_ context.Context, _, tag string, _ io.Writer) (BuiltImage, error) {
+func (b *recordingBuilder) FinalizeBase(_ context.Context, _, tag string, _ io.Writer, _ bool) (BuiltImage, error) {
 	b.note(tag)
 	return b.built(tag), nil
 }
@@ -220,6 +220,10 @@ type idBuilder struct {
 
 func (b *idBuilder) LocalImage(context.Context, string) (string, bool, error) {
 	return b.id, b.found, b.err
+}
+
+func (b *idBuilder) RemoteDigest(context.Context, string) (string, error) {
+	return "", errors.New("idBuilder resolves nothing")
 }
 
 func recCurrentWorkspace() types.Workspace {

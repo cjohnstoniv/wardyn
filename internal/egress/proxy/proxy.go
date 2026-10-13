@@ -123,6 +123,8 @@ type Proxy struct {
 	// patAPI is the run's git_pat grants with api: true, by host (pat_api.go): each host's
 	// connection on 443 is terminated and every request judged by its forge's operation table.
 	patAPI map[string]PATGrant
+	// ghAPI is the run's GitHub CLI door (github_api.go). Nil == no door.
+	ghAPI *GitHubAPIGrant
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -229,6 +231,9 @@ type Proxy struct {
 	// (tool_rules.go); empty means the older run-wide policy.ToolRules.
 	harnessRules []types.HarnessToolRules
 	harnessCreds []types.HarnessCredential
+	// mcp is the run's MCP servers and harness bindings (mcp_broker.go); nil
+	// for a run with none.
+	mcp *mcpBroker
 	// gatewayVendor is the REVERSE of llmUpstreams (gateway host -> vendor
 	// public host), feeding isLLMHost/channelForHost so gateway traffic is
 	// recognised as LLM traffic (coverage/classification only — the SSRF vet
@@ -292,6 +297,8 @@ type Options struct {
 	ADOGrants adoGrantsByHost
 	// AzureGates backs the Azure route gate (azure_gate.go). Empty == off.
 	AzureGates []AzureGateConfig
+	// GitHubAPI backs the GitHub CLI door (github_api.go). Nil == off.
+	GitHubAPI *GitHubAPIGrant
 	// ControlPlaneURL and RunToken back the local brokered routes. The run
 	// token is injected only toward the control plane and never reaches the
 	// sandbox or any LLM upstream.
@@ -445,6 +452,7 @@ func newProxy(opts Options) *Proxy {
 		adoGrants:            opts.ADOGrants,
 		azure:                newAzureGates(opts.AzureGates),
 		patAPI:               patAPI,
+		ghAPI:                newGitHubAPIDoor(opts.GitHubAPI, mitmHosts, mitmPorts),
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      controlPlaneEndpoint(opts.ControlPlaneURL, ""),
 		runToken:             opts.RunToken,
@@ -639,6 +647,11 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	if denied != nil {
 		return egress.Deny, "", denied
 	}
+	// An attached MCP server's host is the broker's alone, above every allow.
+	if p.mcp.mcpDirectOrigin(host) {
+		log := decisionLog(req, egress.Deny, ruleSourceMCPDirect)
+		return egress.Deny, "", &log
+	}
 
 	// 1. Policy host verdict (deny beats allow, default-deny) — delegated to the
 	// pluggable Evaluator (default: builtin RunPolicySpec). An evaluator error
@@ -732,6 +745,11 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		}
 	case egress.VerdictAllow:
 		// fall through.
+	default:
+		// A verdict the proxy does not recognise is as unevaluatable as an
+		// error: fail closed under the same rule source.
+		log := decisionLog(req, egress.Deny, "policy:evaluator-error")
+		return egress.Deny, "", &log
 	}
 
 	// 4. IP vetting (unconditional private/loopback/link-local/metadata deny).
@@ -867,7 +885,8 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Never a blind tunnel to an Azure DevOps grant host (refuseADOTunnel).
-	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) {
+	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
+		p.refuseGitHubAPITunnel(w, r, host, port) {
 		return
 	}
 

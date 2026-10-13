@@ -15,7 +15,7 @@ import (
 
 const (
 	cliGitHubDef = `{"hosts":["api.github.com"],"cli":{"kind":"github","github":{"capabilities":["issues_read"]}}}`
-	cliAWSDef    = `{"hosts":[],"cli":{"kind":"aws","aws":{"start_url":"https://portal-secret.awsapps.example/start","sso_region":"eu-west-1","account_id":"123456789012","role_name":"ReadOnly","region":"eu-west-2"}}}`
+	cliAWSDef    = `{"hosts":[],"cli":{"kind":"aws","aws":{"start_url":"https://portal-secret.awsapps.com/start","sso_region":"eu-west-1","account_id":"123456789012","role_name":"ReadOnly","region":"eu-west-2"}}}`
 	cliAzureDef  = `{"hosts":[],"cli":{"kind":"azure","azure":{"subscriptions":["11111111-2222-3333-4444-555555555555"],"access":"read"}}}`
 )
 

@@ -36,6 +36,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -200,6 +201,15 @@ type GitHubMinter interface {
 	// a minter that silently did nothing would leave the discard doors leaking
 	// exactly as they leaked before, and the compiler must ask.
 	Revoke(ctx context.Context, token string) error
+	// ListBranches lists repo's ("owner/name") branches for the New Run branch
+	// picker (github.go). It mints its own one-repo, read-only token outside
+	// mint(), like VerifyRefRuleset's probe.
+	ListBranches(ctx context.Context, repo string, limit int) (branches []string, defaultBranch string, truncated bool, err error)
+	// InstallationPermissions is the App's own grant on the installation that
+	// covers repo ("owner/name"): each permission it holds, at its level. A
+	// GitHub CLI token asks for no more (githubAPIPermissions), since GitHub
+	// refuses the whole token request for one permission the App lacks.
+	InstallationPermissions(ctx context.Context, repo string) (map[string]string, error)
 }
 
 // Querier is the minimal transaction surface the broker needs. It is satisfied
@@ -529,6 +539,12 @@ func (b *Broker) mintKind(ctx context.Context, caller *identity.Claims, spec typ
 type githubScope struct {
 	Repos       []string          `json:"repos"`
 	Permissions map[string]string `json:"permissions"`
+	// API marks the GitHub CLI's grant, which the run's proxy mints for its
+	// api.github.com door. Only create authors it (ValidateGitHubScopeShape
+	// refuses it on a policy). Its permissions come from Capabilities, never
+	// from Permissions or the git lane's clamp.
+	API          bool                 `json:"api,omitempty"`
+	Capabilities []ghscope.Capability `json:"capabilities,omitempty"`
 }
 
 func (b *Broker) mintGitHub(ctx context.Context, caller *identity.Claims, spec types.GrantSpec, ttl time.Duration) (Minted, error) {
@@ -544,6 +560,12 @@ func (b *Broker) mintGitHub(ctx context.Context, caller *identity.Claims, spec t
 	// pull_requests:write MAX. Requested perms are intersected DOWN to this
 	// ceiling; anything outside is dropped (fail closed, never widen).
 	clamped := clampGitHubPermissions(sc.Permissions)
+	if sc.API {
+		var err error
+		if clamped, err = b.githubAPIPermissions(ctx, sc); err != nil {
+			return Minted{}, err
+		}
+	}
 
 	if err := b.checkRefRuleset(ctx, sc.Repos); err != nil {
 		return Minted{}, err
@@ -568,6 +590,42 @@ func (b *Broker) mintGitHub(ctx context.Context, caller *identity.Claims, spec t
 			"permissions":      string(clampedJSON),
 		},
 	}, nil
+}
+
+// githubAPIPermissions is the GitHub CLI grant's permission set: what its
+// capabilities need (ghscope.PermissionsFor, the one capability-to-permission
+// table) narrowed to the App's own grant on the installation, so a permission
+// the App lacks is left off rather than failing the token request. The
+// request then meets GitHub's own 403, which is the honest answer until the
+// installation's owners approve the App's wider permissions.
+//
+// The capabilities are refused, not filtered, when one is missing or not
+// available to the CLI: the scope is server-authored, so a mismatch is a
+// broken scope, not a narrower one. The result always holds metadata: read,
+// so it is never the empty map GitHub reads as every permission.
+func (b *Broker) githubAPIPermissions(ctx context.Context, sc githubScope) (map[string]string, error) {
+	caps := types.CLIGitHubCapabilities(sc.Capabilities)
+	if len(caps) == 0 || len(caps) != len(sc.Capabilities) {
+		return nil, fmt.Errorf("broker: github api grant: capabilities %v are empty or include one the GitHub CLI may not hold", sc.Capabilities)
+	}
+	want, err := ghscope.PermissionsFor(caps)
+	if err != nil {
+		return nil, fmt.Errorf("broker: github api grant: %w", err)
+	}
+	if len(sc.Repos) == 0 {
+		return nil, errors.New("broker: github api grant names no repository")
+	}
+	app, err := b.github.InstallationPermissions(ctx, sc.Repos[0])
+	if err != nil {
+		return nil, fmt.Errorf("broker: read the GitHub App's permissions: %w", err)
+	}
+	out := map[string]string{"metadata": "read"}
+	for perm, level := range want {
+		if have, ok := app[perm]; ok && perm != "metadata" {
+			out[perm] = minLevel(level, have)
+		}
+	}
+	return out, nil
 }
 
 // checkRefRuleset enforces the OPT-IN envRequireRefRuleset gate: every repo in
@@ -672,7 +730,7 @@ var reservedBrokerSecretNames = map[string]bool{
 
 // reservedBrokerSecret mirrors internal/api.reservedSecret (secrets.go): the
 // static keys above PLUS the managed-harness OAuth-blob pattern
-// (wardyn-harness-<provider>-oauth) PLUS every model-provider credential name. The static map alone missed the pattern, so
+// (wardyn-harness-<provider>-oauth) PLUS every model-provider credential name PLUS every CLI sign-in name. The static map alone missed the pattern, so
 // a policy could name e.g. "wardyn-harness-anthropic-oauth" as a git_pat/ssh_key
 // secret and have the broker resolve the resident OAuth token into the sandbox.
 func reservedBrokerSecret(name string) bool {
@@ -680,8 +738,13 @@ func reservedBrokerSecret(name string) bool {
 		return true
 	}
 	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth") ||
-		strings.HasPrefix(name, providerSecretPrefix)
+		strings.HasPrefix(name, providerSecretPrefix) || strings.HasPrefix(name, cliSecretPrefix)
 }
+
+// cliSecretPrefix mirrors internal/api's: every person's CLI sign-in capture
+// (wardyn-cli-<component id>-{sso,entra}). The proxy injects it through its
+// own grant; minted, it would hand the whole sign-in record to the sandbox.
+const cliSecretPrefix = "wardyn-cli-"
 
 // providerSecretPrefix mirrors internal/api's: every per-person model-provider
 // credential (wardyn-provider-<uid>-{key,oauth,sso,entra}). A model key is injected

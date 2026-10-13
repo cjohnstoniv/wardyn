@@ -31,7 +31,7 @@ export function BarrierStrengthStrip({
           aria-hidden="true"
           className={cn(
             "h-1.5 w-4 rounded-full",
-            n <= ordinal ? (muted ? "bg-muted-foreground/40" : fillClass) : "bg-muted",
+            n <= ordinal ? (muted ? "bg-muted-foreground/40" : fillClass) : "bg-muted-foreground/25",
           )}
         />
       ))}

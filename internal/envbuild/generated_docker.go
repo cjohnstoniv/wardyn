@@ -55,7 +55,13 @@ func (b *Builder) BuildFromDevcontainerFiles(ctx context.Context, files map[stri
 	}
 	// A fresh per-build push ref: see Builder.newPushRef.
 	pushRepo, buildTag := b.newPushRef()
-	return b.runBuildAndFinalize(ctx, localBuildEnv(pushRepo), nil, tarCtx, "/", logSink, outputTag, buildTag)
+	built, err := b.runBuildAndFinalize(ctx, localBuildEnv(pushRepo), nil, tarCtx, "/", logSink, outputTag, buildTag)
+	if err != nil {
+		return built, err
+	}
+	// Only this lane's image was built from the files that write the pin file, so only here is it read.
+	built.PinFile = b.readPinFile(ctx, built.Ref)
+	return built, nil
 }
 
 // generatedFilesTar packs files under destDir into an in-memory tar for

@@ -58,12 +58,12 @@ func TestUpdateRunnerPoolRequestNeverDeletes(t *testing.T) {
 func TestPreflightResultDecodesThePoolFacts(t *testing.T) {
 	var res client.PreflightResult
 	body := `{"setup_items":[],"provenance":[],"resources":[],"local_placement":[],"allowed_images":[],
-	  "runner_pool":{"id":"11111111-1111-1111-1111-111111111111","name":"Build farm","hosting_type":"remote_provided","revision":4,"selection":"organisation_default"},
-	  "runner_pools":[{"id":"11111111-1111-1111-1111-111111111111","name":"Build farm","hosting_type":"remote_provided","availability":"unavailable","reason":"runner_pool_unavailable"}]}`
+	  "runner_pool":{"id":"11111111-1111-1111-1111-111111111111","name":"Build farm","scope":"organization","revision":4,"selection":"organisation_default"},
+	  "runner_pools":[{"id":"11111111-1111-1111-1111-111111111111","name":"Build farm","scope":"organization","availability":"unavailable","reason":"runner_pool_unavailable"}]}`
 	if err := json.Unmarshal([]byte(body), &res); err != nil {
 		t.Fatal(err)
 	}
-	if res.RunnerPool == nil || res.RunnerPool.Selection != client.RunnerPoolSelectedOrg || res.RunnerPool.HostingType != client.RunnerPoolRemoteProvided || res.RunnerPool.Revision != 4 {
+	if res.RunnerPool == nil || res.RunnerPool.Selection != client.RunnerPoolSelectedOrg || res.RunnerPool.Scope != client.RunnerPoolOrganization || res.RunnerPool.Revision != 4 {
 		t.Fatalf("runner_pool = %+v", res.RunnerPool)
 	}
 	if len(res.RunnerPools) != 1 || res.RunnerPools[0].Availability != client.RunnerPoolUnavailable || res.RunnerPools[0].Reason != runnerpool.ReasonUnavailable {
@@ -94,7 +94,7 @@ func TestRunnerPoolMethodsHitTheirRoutes(t *testing.T) {
 		{"GET", "/api/v1/runner-pools", func() error { _, err := c.ListRunnerPools(ctx); return err }},
 		{"GET", "/api/v1/runner-pools/" + pool.String(), func() error { _, err := c.GetRunnerPool(ctx, pool); return err }},
 		{"POST", "/api/v1/runner-pools", func() error {
-			_, err := c.CreateRunnerPool(ctx, client.CreateRunnerPoolRequest{Name: name, HostingType: client.RunnerPoolSelfHosted})
+			_, err := c.CreateRunnerPool(ctx, client.CreateRunnerPoolRequest{Name: name})
 			return err
 		}},
 		{"PUT", "/api/v1/runner-pools/" + pool.String(), func() error {
@@ -102,6 +102,15 @@ func TestRunnerPoolMethodsHitTheirRoutes(t *testing.T) {
 			return err
 		}},
 		{"DELETE", "/api/v1/runner-pools/" + pool.String(), func() error { return c.DeleteRunnerPool(ctx, pool) }},
+		{"POST", "/api/v1/me/runner-pools", func() error {
+			_, err := c.CreateMyRunnerPool(ctx, client.CreateMyRunnerPoolRequest{Name: name})
+			return err
+		}},
+		{"PUT", "/api/v1/me/runner-pools/" + pool.String(), func() error {
+			_, err := c.UpdateMyRunnerPool(ctx, pool, client.UpdateRunnerPoolRequest{Revision: 1, Name: &name})
+			return err
+		}},
+		{"DELETE", "/api/v1/me/runner-pools/" + pool.String(), func() error { return c.DeleteMyRunnerPool(ctx, pool) }},
 		{"PUT", "/api/v1/me/runner-pools/" + pool.String() + "/runners/" + runner.String(), func() error { _, err := c.AddMyRunnerToPool(ctx, pool, runner); return err }},
 		{"DELETE", "/api/v1/me/runner-pools/" + pool.String() + "/runners/" + runner.String(), func() error { return c.RemoveMyRunnerFromPool(ctx, pool, runner) }},
 		{"GET", "/api/v1/runner-pool-defaults", func() error { _, err := c.GetOrgRunnerPoolDefaults(ctx); return err }},
@@ -109,6 +118,23 @@ func TestRunnerPoolMethodsHitTheirRoutes(t *testing.T) {
 		{"GET", "/api/v1/me/runner-pool-defaults", func() error { _, err := c.GetMyRunnerPoolDefaults(ctx); return err }},
 		{"PUT", "/api/v1/me/runner-pool-defaults", func() error { _, err := c.SetMyRunnerPoolDefaults(ctx, client.RunnerPoolDefaults{}); return err }},
 		{"DELETE", "/api/v1/me/runner-pool-defaults", func() error { return c.ClearMyRunnerPoolDefaults(ctx) }},
+		{"PUT", "/api/v1/runner-pools/" + pool.String() + "/remote-runners/docker", func() error { _, err := c.AddRunnerPoolRemoteRunner(ctx, pool, "docker"); return err }},
+		{"DELETE", "/api/v1/runner-pools/" + pool.String() + "/remote-runners/docker", func() error { return c.RemoveRunnerPoolRemoteRunner(ctx, pool, "docker") }},
+		{"PUT", "/api/v1/me/runner-pools/" + pool.String() + "/remote-runners/docker", func() error { _, err := c.AddMyPoolRemoteRunner(ctx, pool, "docker"); return err }},
+		{"DELETE", "/api/v1/me/runner-pools/" + pool.String() + "/remote-runners/docker", func() error { return c.RemoveMyPoolRemoteRunner(ctx, pool, "docker") }},
+		{"GET", "/api/v1/runner-pools/" + pool.String() + "/members", func() error { _, err := c.ListRunnerPoolMembers(ctx, pool); return err }},
+		{"GET", "/api/v1/remote-runners", func() error { _, err := c.ListRemoteRunners(ctx); return err }},
+		{"GET", "/api/v1/remote-runners/docker", func() error { _, err := c.GetRemoteRunner(ctx, "docker"); return err }},
+		{"PUT", "/api/v1/remote-runners/docker", func() error {
+			_, err := c.UpdateRemoteRunner(ctx, "docker", client.UpdateRemoteRunnerRequest{Revision: 1, Name: &name})
+			return err
+		}},
+		{"PUT", "/api/v1/remote-runners/docker/people-policy", func() error {
+			_, err := c.SetRemoteRunnerPeoplePolicy(ctx, "docker", client.RemoteRunnerPeoplePolicyRequest{PeoplePools: client.PeoplePoolsEveryone})
+			return err
+		}},
+		{"DELETE", "/api/v1/remote-runners/docker/people-policy", func() error { return c.ClearRemoteRunnerPeoplePolicy(ctx, "docker") }},
+		{"GET", "/api/v1/me/remote-runners", func() error { _, err := c.ListMyRemoteRunners(ctx); return err }},
 	} {
 		err := tc.call()
 		var apiErr *client.APIError
@@ -141,11 +167,10 @@ func TestPoolRequestsValidateTheirLimits(t *testing.T) {
 		err  error
 		ok   bool
 	}{
-		{"create without limits", client.CreateRunnerPoolRequest{Name: name, HostingType: client.RunnerPoolRemoteProvided}.Validate(), true},
-		{"create with limits", client.CreateRunnerPoolRequest{Name: name, HostingType: client.RunnerPoolSelfHosted, Limits: poolLimits()}.Validate(), true},
-		{"create with bad limits", client.CreateRunnerPoolRequest{Name: name, HostingType: client.RunnerPoolSelfHosted, Limits: bad}.Validate(), false},
-		{"create with a bad hosting type", client.CreateRunnerPoolRequest{Name: name, HostingType: "cloud"}.Validate(), false},
-		{"create with a bad name", client.CreateRunnerPoolRequest{Name: " x", HostingType: client.RunnerPoolSelfHosted}.Validate(), false},
+		{"create without limits", client.CreateRunnerPoolRequest{Name: name}.Validate(), true},
+		{"create with limits", client.CreateRunnerPoolRequest{Name: name, Limits: poolLimits()}.Validate(), true},
+		{"create with bad limits", client.CreateRunnerPoolRequest{Name: name, Limits: bad}.Validate(), false},
+		{"create with a bad name", client.CreateRunnerPoolRequest{Name: " x"}.Validate(), false},
 		{"update only the limits", client.UpdateRunnerPoolRequest{Revision: 2, Limits: poolLimits()}.Validate(), true},
 		{"update with bad limits", client.UpdateRunnerPoolRequest{Revision: 2, Limits: bad}.Validate(), false},
 		{"update with a good name and bad limits", client.UpdateRunnerPoolRequest{Revision: 2, Name: &name, Limits: bad}.Validate(), false},

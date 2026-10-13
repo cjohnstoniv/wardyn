@@ -482,6 +482,40 @@ func scimCookieAt(t *testing.T, sub, email string, epoch int64, issuedAt time.Ti
 	}
 }
 
+// clockStepMargin is how far before a revoke the sessions it must reach are issued: more than any step
+// the host clock takes between two instants of one test.
+const clockStepMargin = 5 * time.Second
+
+// backdated returns c re-signed with its issue time moved d earlier. A session that must be revoked is
+// issued clearly before the revoke, so the ordering the test asserts does not depend on the wall clock
+// holding still across the two instants.
+func backdated(t *testing.T, c *http.Cookie, d time.Duration) *http.Cookie {
+	t.Helper()
+	enc, _, ok := strings.Cut(c.Value, ".")
+	if !ok {
+		t.Fatalf("cookie %q has no signature", c.Name)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(enc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s oidc.Session
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	s.IssuedAt = s.IssuedAt.Add(-d)
+	payload, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mac := hmac.New(sha256.New, accessTestHMACKey)
+	mac.Write(payload)
+	return &http.Cookie{
+		Name:  c.Name,
+		Value: base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)),
+	}
+}
+
 // cookieWorks reports whether the cookie authenticates a request on n.
 func (e *scimEnv) cookieWorks(n *scimNode, c *http.Cookie) bool {
 	e.t.Helper()

@@ -47,6 +47,18 @@ func TestRequestDTOs_AreClientDTOAliases(t *testing.T) {
 	var _ client.DriveRequest = userDriveRequest{}
 	var _ userDriveGrantRequest = client.DriveGrantRequest{}
 	var _ client.DriveGrantRequest = userDriveGrantRequest{}
+	var _ createInvitationRequest = client.CreateInvitationRequest{}
+	var _ client.CreateInvitationRequest = createInvitationRequest{}
+	var _ claimInvitationRequest = client.ClaimInvitationRequest{}
+	var _ client.ClaimInvitationRequest = claimInvitationRequest{}
+	var _ serviceIdentityRequest = client.CreateServiceIdentityRequest{}
+	var _ client.CreateServiceIdentityRequest = serviceIdentityRequest{}
+	var _ updateServiceIdentityRequest = client.UpdateServiceIdentityRequest{}
+	var _ client.UpdateServiceIdentityRequest = updateServiceIdentityRequest{}
+	var _ serviceTokenRequest = client.MintServiceTokenRequest{}
+	var _ client.MintServiceTokenRequest = serviceTokenRequest{}
+	var _ moveTokenRequest = client.MoveTokenRequest{}
+	var _ client.MoveTokenRequest = moveTokenRequest{}
 }
 
 // jsonTagNames returns the wire names of a struct's json-tagged, exported

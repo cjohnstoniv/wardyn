@@ -10,7 +10,6 @@ import "net/http"
 type Reason string
 
 const (
-	ReasonPlacementRequired            Reason = "placement_required"
 	ReasonPlacementUnavailable         Reason = "placement_unavailable"
 	ReasonPlacementDenied              Reason = "placement_denied"
 	ReasonPlacementCredential          Reason = "placement_credential"
@@ -19,6 +18,7 @@ const (
 	ReasonPlacementCapability          Reason = "placement_capability"
 	ReasonPlacementLocalPath           Reason = "placement_local_path"
 	ReasonRunnerOffline                Reason = "runner_offline"
+	ReasonRunnerAtCapacity             Reason = "runner_at_capacity"
 	ReasonRunnerAmbiguous              Reason = "runner_ambiguous"
 	ReasonRunnerNotFound               Reason = "runner_not_found"
 	ReasonRunnerUnclaimed              Reason = "runner_unclaimed"
@@ -40,7 +40,6 @@ const (
 
 // reasonStatus is the HTTP status each reason answers with.
 var reasonStatus = map[Reason]int{
-	ReasonPlacementRequired:            http.StatusUnprocessableEntity,
 	ReasonPlacementUnavailable:         http.StatusUnprocessableEntity,
 	ReasonPlacementDenied:              http.StatusForbidden,
 	ReasonPlacementCredential:          http.StatusUnprocessableEntity,
@@ -49,6 +48,7 @@ var reasonStatus = map[Reason]int{
 	ReasonPlacementCapability:          http.StatusUnprocessableEntity,
 	ReasonPlacementLocalPath:           http.StatusUnprocessableEntity,
 	ReasonRunnerOffline:                http.StatusUnprocessableEntity,
+	ReasonRunnerAtCapacity:             http.StatusUnprocessableEntity,
 	ReasonRunnerAmbiguous:              http.StatusUnprocessableEntity,
 	ReasonRunnerNotFound:               http.StatusNotFound,
 	ReasonRunnerUnclaimed:              http.StatusConflict,

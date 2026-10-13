@@ -206,7 +206,8 @@ func TestServiceIdentity_UserTypeCreateDeleteRace(t *testing.T) {
 		}
 		var orphans int
 		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM service_identities si WHERE si.retired_at IS NULL
-			AND NOT EXISTS (SELECT 1 FROM user_types ut WHERE ut.id = si.user_type)`).Scan(&orphans); err != nil {
+			AND si.name = $1
+			AND NOT EXISTS (SELECT 1 FROM user_types ut WHERE ut.id = si.user_type)`, name).Scan(&orphans); err != nil {
 			t.Fatal(err)
 		}
 		if orphans != 0 {

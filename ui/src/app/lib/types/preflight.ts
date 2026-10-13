@@ -9,9 +9,10 @@
 
 import type { AutonomyResolution } from "../api/governance";
 import type { ComponentFact } from "./components";
-import type { AllowedImage, ImageFact, LocalPlacementFact, PlacementResources } from "./new-run-contract";
+import type { AccessFacts } from "./new-run-access";
+import type { AllowedImage, AppliedResources, HarnessSetFact, ImageFact, LocalPlacementFact, MainDriveApplied, RunAttachment } from "./new-run-contract";
 import type { ProvenanceEntry } from "./policy-preview";
-import type { ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
+import type { BarrierOption, EffectiveRunLimits, PoolSlots, ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
 import type { ConfinementClass, RiskItem, RiskLevel } from "./runs";
 import type { SCMAccess } from "./setup";
 
@@ -51,7 +52,7 @@ export type SetupItemKind =
   | "workspace_integration"
   | (string & {});
 export type SetupItemStatus = "satisfied" | "missing" | "unverified" | (string & {});
-export type SetupFixAction = "add_secret" | "scan_workspace" | "none" | (string & {});
+export type SetupFixAction = "add_secret" | "scan_workspace" | "sign_in" | "choose_model_provider" | "none" | (string & {});
 
 // WHERE the credential this item concerns actually lives at run time, derived
 // from the FINAL spec's own delivery mechanism (compose_setup.go's Residency
@@ -78,6 +79,11 @@ export interface SetupFix {
   secret_name?: string;
   // A Workspace.id, NOT a source path — api.scanWorkspace takes an id.
   workspace_id?: string;
+  // sign_in: what to sign in to (model_provider, azure_devops, azure_cli or aws_cli) and its id.
+  target?: string;
+  id?: string;
+  // choose_model_provider: the included harness that has none.
+  tool?: string;
 }
 
 export interface SetupItem {
@@ -150,10 +156,13 @@ export interface PreflightResult {
   // Why each entry of the resolved spec is there; the policy preview returns the same rows
   // for the same request. Absent on an older server.
   provenance?: ProvenanceEntry[];
-  // What each placement offers this run, keyed by placement and runner; empty
-  // until the resources lane fills it (internal/api's preflightResponse.Resources;
-  // optional here so an older server still types, the server always sends the array).
-  resources?: PlacementResources[];
+  // What this run may get (the resolved pool's, the person's governance and the
+  // deployment's limits for its type) and the CPU and memory it asked for and
+  // gets. Absent on an older server.
+  limits?: EffectiveRunLimits;
+  resources_applied?: AppliedResources;
+  // The main-drive size it asked for and gets; absent on an older server.
+  main_drive?: MainDriveApplied;
   // Whether each host, workspace source and component can run on the person's
   // runner; empty until the placement lane fills it.
   local_placement?: LocalPlacementFact[];
@@ -161,11 +170,24 @@ export interface PreflightResult {
   // lane resolves it), and the images the organisation lets the person choose.
   image?: ImageFact;
   allowed_images?: AllowedImage[];
+  // The run's included harnesses (absent for a run with none).
+  harness_set?: HarnessSetFact;
   // The pool the request resolves to and how it was chosen (absent until the
   // pool lane resolves one), and the pools the person may choose, each with
   // whether it is available; empty until that lane fills it.
   runner_pool?: ResolvedRunnerPool;
   runner_pools?: RunnerPoolChoice[];
+  // The resolved pool's three barriers under this draft's floors; empty when unpooled.
+  barrier_options?: BarrierOption[];
+  // The resolved pool's slot counts and this run's max_wait_sec; absent when unpooled. Advisory.
+  runner_pool_slots?: PoolSlots;
+  // What the run brings in (rows, hosts, credentials, the unlisted line, setup);
+  // the policy preview answers the same block. Optional so an older server still types.
+  access?: AccessFacts;
+  // The run's mount map: each repository, folder and drive at the path the run
+  // uses it at, the one holding the starting folder marked. The server always
+  // sends the array; optional here so an older server still types.
+  attachments?: RunAttachment[];
 }
 
 // Where a run's MODEL credential lands (internal/api.modelCredentialResidency).

@@ -28,6 +28,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -511,6 +512,10 @@ type governanceCeiling struct {
 	Limits   types.GovernanceLimits
 	Profile  *ResolvedProfile
 	Warnings []string
+	// MemberDefault is a governed member's size before any ask (composer.MemberDefault from the
+	// deployment's own size, lowered by this ceiling), set when the ceiling is resolved. Read it
+	// through memberSize.
+	MemberDefault types.ResourceLimits
 	// Operator is true when this principal is not clamped (isOperator: the
 	// admin view, the admin token, local mode). The zero value is the clamped
 	// member, so a ceiling built without asking stays bounded. Dispatch reads it
@@ -680,7 +685,7 @@ func (s *Server) effectiveCeiling(ctx context.Context) (governanceCeiling, error
 // order its doc comment describes. Split out so the memo above wraps it exactly
 // once and no call site can reach the raw resolve by accident.
 func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling, error) {
-	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone()}
+	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone(), MemberDefault: s.memberDefaultFor(s.cfg.DefaultPolicy.Resources)}
 	if s.runUngoverned(ctx) {
 		deployment.Operator = true
 		return deployment, nil
@@ -757,7 +762,38 @@ func (s *Server) ceilingFromProfile(ctx context.Context, p *ResolvedProfile, err
 	if p == nil {
 		return deployment, nil
 	}
-	return governanceCeiling{Spec: p.Ceiling.Clone(), Limits: p.Limits, Profile: p, Warnings: p.Warnings}, nil
+	return governanceCeiling{Spec: p.Ceiling.Clone(), Limits: p.Limits, Profile: p, Warnings: p.Warnings,
+		MemberDefault: s.memberDefaultFor(p.Ceiling.Resources)}, nil
+}
+
+// authoredSize is the ceiling policy's own CPU and memory as the member cap reads it (#1949): a
+// profile's AUTHORED size, zero where it inherited the deployment's, so a maximum with no size of its
+// own is the size; any other ceiling (the deployment's, an operator's) inherits nothing, so its spec
+// is its own.
+func (c governanceCeiling) authoredSize() types.ResourceLimits {
+	if c.Profile != nil {
+		return c.Profile.AuthoredResources
+	}
+	if r := c.Spec.Resources; r != nil {
+		return types.ResourceLimits{CPUMillis: r.CPUMillis, MemoryMiB: r.MemoryMiB}
+	}
+	return types.ResourceLimits{}
+}
+
+// memberDefaultFor is the member default under a ceiling of this size: the deployment's own size
+// (inheritDeploymentResources), lowered by the ceiling.
+func (s *Server) memberDefaultFor(ceiling *types.ResourceLimits) types.ResourceLimits {
+	d := s.inheritDeploymentResources(nil)
+	return composer.MemberDefault(types.ResourceLimits{CPUMillis: d.CPUMillis, MemoryMiB: d.MemoryMiB}, ceiling)
+}
+
+// memberSize is the member default the member cap starts from. A ceiling that was not resolved (a
+// hand-built one) carries none and falls back to the platform default lowered by its own size.
+func (c governanceCeiling) memberSize() types.ResourceLimits {
+	if c.MemberDefault.CPUMillis > 0 && c.MemberDefault.MemoryMiB > 0 {
+		return c.MemberDefault
+	}
+	return composer.MemberDefault(types.ResourceLimits{}, c.Spec.Resources)
 }
 
 // inheritDeploymentResources fills what a profile's ceiling leaves unset (no resources block, or a
